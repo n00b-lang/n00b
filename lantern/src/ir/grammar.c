@@ -24,10 +24,9 @@
 static parse_grammar_t *grammar;
 static int32_t        ir_unit;
 
-static int64_t tid_of_name(parse_grammar_t *g, const char *name)
+static int64_t tid_of_name(parse_grammar_t *g, core_string_t name)
 {
-    return parse_lookup_terminal(g, core_string_borrow(name,
-                                                    strlen(name)));
+    return parse_lookup_terminal(g, name);
 }
 
 static const core_string_t DECLARED[] = {
@@ -55,10 +54,11 @@ parse_grammar_t *ir_grammar(void)
     }
 
 
-    bool ok = parse_bnf_load(CORE_STRING_STATIC(TYPELANG_BNF),
+    bool ok = parse_bnf_load(core_string_borrow(TYPELANG_BNF,
+                                                sizeof(TYPELANG_BNF) - 1),
                            CORE_STRING_STATIC("module"), g);
 
-    ok = parse_bnf_load(CORE_STRING_STATIC(IR_BNF),
+    ok = parse_bnf_load(core_string_borrow(IR_BNF, sizeof(IR_BNF) - 1),
                       CORE_STRING_STATIC("module"), g)
       && ok;
 
@@ -76,14 +76,11 @@ parse_grammar_t *ir_grammar(void)
     return grammar;
 }
 
-int64_t ir_grammar_nt(const char *name)
+int64_t ir_grammar_nt(core_string_t name)
 {
     parse_grammar_t *g = ir_grammar();
 
-    parse_nonterm_t *nt = g ? parse_find_nonterm(g,
-                                             core_string_borrow(name,
-                                                               strlen(name)))
-                          : nullptr;
+    parse_nonterm_t *nt = g ? parse_find_nonterm(g, name) : nullptr;
 
     return nt ? nt->id : -1;
 }
@@ -95,7 +92,7 @@ int32_t ir_grammar_unit(void)
     return ir_unit;
 }
 
-int64_t ir_grammar_tid(const char *name)
+int64_t ir_grammar_tid(core_string_t name)
 {
     parse_grammar_t *g = ir_grammar();
 
@@ -225,21 +222,21 @@ restart:
 
 static void learn_ir_tids(parse_grammar_t *g)
 {
-    tid_int   = (int32_t)tid_of_name(g, "INT_LIT");
-    tid_float = (int32_t)tid_of_name(g, "FLOAT_LIT");
-    tid_str   = (int32_t)tid_of_name(g, "STRING_LIT");
-    tid_nl    = (int32_t)tid_of_name(g, "NEWLINE");
+    tid_int   = (int32_t)tid_of_name(g, CORE_STRING_STATIC("INT_LIT"));
+    tid_float = (int32_t)tid_of_name(g, CORE_STRING_STATIC("FLOAT_LIT"));
+    tid_str   = (int32_t)tid_of_name(g, CORE_STRING_STATIC("STRING_LIT"));
+    tid_nl    = (int32_t)tid_of_name(g, CORE_STRING_STATIC("NEWLINE"));
 }
 
-parse_token_stream_t *ir_lex(const char *src, size_t len)
+parse_token_stream_t *ir_lex(core_string_t src)
 {
     parse_grammar_t *g = ir_grammar();
 
-    if (!g || !src) {
+    if (!g || !src.data) {
         return nullptr;
     }
 
     learn_ir_tids(g);
 
-    return scan_tokenize(g, src, len, nullptr, nullptr);
+    return scan_tokenize(g, src, nullptr, nullptr);
 }

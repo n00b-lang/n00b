@@ -5,7 +5,7 @@
 
 bool ir_pass_declares(const ir_pass_t *p)
 {
-    if (!p || !p->name || !p->run) {
+    if (!p || !p->name.data || !p->run) {
         return false;
     }
 
@@ -29,19 +29,20 @@ ir_pass_result_t ir_pass_run(const ir_pass_t *p, ir_module_t *m, void *state,
 
     if (r == IR_PASS_FAILED && d && ir_diags_count(d) == said) {
         ir_diag_t *dg = ir_diag_begin_at(d, IR_DIAG_INTERNAL, nullptr, nullptr,
-                                         nullptr, "this pass");
+                                         nullptr,
+                                         CORE_STRING_STATIC("this pass"));
 
         if (dg) {
             core_buffer_t *b = core_buffer_empty();
 
-            core_buffer_printf(b, "%s failed and said nothing: a pass reports what "
-                          "it could not do",
-                      p->name);
+            core_buffer_append_string(b, p->name);
+            core_buffer_puts(b, " failed and said nothing: a pass reports "
+                                "what it could not do");
 
-            char *msg = core_buffer_take(b);
+            core_string_t msg = core_buffer_take_string(b);
 
             ir_diag_message(dg, d, msg);
-            core_free(msg);
+            core_free(msg.data);
         }
     }
 

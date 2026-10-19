@@ -369,8 +369,8 @@ extern bool                  scan_lex_register(const scan_lex_spec_t *spec);
 extern const scan_lex_spec_t *scan_lex_for(core_string_t name);
 
 extern void                  scan_lex_spec_free(const scan_lex_spec_t *spec);
-extern const char           *scan_lex_build_error(void);
-extern const char           *scan_lex_compile_error(void);
+extern core_string_t         scan_lex_build_error(void);
+extern core_string_t         scan_lex_compile_error(void);
 extern void                  scan_lex_compile_error_reset(void);
 
 extern bool scan_lex_literal_hook_register_pure(core_string_t name,

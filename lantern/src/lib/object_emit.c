@@ -19,6 +19,12 @@ static int compare_relocations(const void *left, const void *right)
     return a->section_offset < b->section_offset ? -1 : 1;
 }
 
+static bool valid_name(core_string_t name)
+{
+    return name.data && name.u8_bytes &&
+           core_string_find_byte(name, '\0') < 0;
+}
+
 static bool valid_inputs(const core_target_desc_t *target,
                          const core_object_emit_section_t *sections,
                          size_t section_count,
@@ -36,29 +42,32 @@ static bool valid_inputs(const core_target_desc_t *target,
         return false;
     for (size_t i = 0; i < section_count; i++) {
         const core_object_emit_section_t *section = &sections[i];
-        if (!section->name || !section->name[0] ||
+        if (!valid_name(section->name) ||
             (section->size && !section->bytes) ||
             !section->alignment ||
             (section->alignment & (section->alignment - 1))) return false;
         if (section->is_thread_local
             && (!section->writable || section->executable
                 || (target->object_format == CORE_TARGET_OBJECT_MACH_O
-                    && strcmp(section->segment ? section->segment : "",
-                              "__DATA"))
+                    && !core_string_eq(section->segment,
+                                       CORE_STRING_STATIC("__DATA")))
                 || (target->object_format == CORE_TARGET_OBJECT_COFF
-                    && strncmp(section->name, ".tls$", 5)))) return false;
+                    && !core_string_starts_with(
+                        section->name, CORE_STRING_STATIC(".tls$")))))
+            return false;
         if (section->is_thread_local_descriptor
             && (target->object_format != CORE_TARGET_OBJECT_MACH_O
                 || section->is_thread_local || !section->writable
                 || section->executable
-                || strcmp(section->segment ? section->segment : "", "__DATA")))
+                || !core_string_eq(section->segment,
+                                   CORE_STRING_STATIC("__DATA"))))
             return false;
         if (target->object_format == CORE_TARGET_OBJECT_MACH_O &&
-            (!section->segment || !section->segment[0])) return false;
+            !valid_name(section->segment)) return false;
     }
     for (size_t i = 0; i < symbol_count; i++) {
         const core_object_emit_symbol_t *symbol = &symbols[i];
-        if (!symbol->name || !symbol->name[0] ||
+        if (!valid_name(symbol->name) ||
             symbol->section_index > section_count ||
             (!symbol->section_index && (!symbol->exported ||
                                         symbol->section_offset)) ||

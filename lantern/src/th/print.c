@@ -29,36 +29,39 @@ static void varname(core_buffer_t *b, size_t depth, uint64_t pos)
 static void emit(pctx *c, core_buffer_t *b, const th_type *t);
 
 static const struct {
-    const char *name;
-    uint8_t     attrs;
+    core_string_t name;
+    uint8_t       attrs;
 } sugar[] = {
-    {"ref", 0x00},
-    {"ptr", TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE},
-    {"mutref", TH_EXCLUSIVE},
-    {"own", TH_OWNING},
-    {"gcref", TH_NULLABLE | TH_RESEATABLE},
-    {"tmpref", TH_TEMPORARY},
+    {CORE_STRING_STATIC("ref"), 0x00},
+    {CORE_STRING_STATIC("ptr"), TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE},
+    {CORE_STRING_STATIC("mutref"), TH_EXCLUSIVE},
+    {CORE_STRING_STATIC("own"), TH_OWNING},
+    {CORE_STRING_STATIC("gcref"), TH_NULLABLE | TH_RESEATABLE},
+    {CORE_STRING_STATIC("tmpref"), TH_TEMPORARY},
 };
 
 static const struct {
-    const char *name;
-    uint8_t     bit;
+    core_string_t name;
+    uint8_t       bit;
 } attr_names[] = {
-    {"nullable", TH_NULLABLE},   {"reseatable", TH_RESEATABLE},
-    {"indexable", TH_INDEXABLE}, {"owning", TH_OWNING},
-    {"exclusive", TH_EXCLUSIVE}, {"temporary", TH_TEMPORARY},
-    {"foreign", TH_FOREIGN},
+    {CORE_STRING_STATIC("nullable"), TH_NULLABLE},
+    {CORE_STRING_STATIC("reseatable"), TH_RESEATABLE},
+    {CORE_STRING_STATIC("indexable"), TH_INDEXABLE},
+    {CORE_STRING_STATIC("owning"), TH_OWNING},
+    {CORE_STRING_STATIC("exclusive"), TH_EXCLUSIVE},
+    {CORE_STRING_STATIC("temporary"), TH_TEMPORARY},
+    {CORE_STRING_STATIC("foreign"), TH_FOREIGN},
 };
 
-static const char *mode_name(th_mode m)
+static core_string_t mode_name(th_mode m)
 {
     switch (m) {
-    case TH_OUT:     return "out ";
-    case TH_INOUT:   return "inout ";
-    case TH_CONSUME: return "consume ";
-    case TH_IN:      return "";
+    case TH_OUT:     return CORE_STRING_STATIC("out ");
+    case TH_INOUT:   return CORE_STRING_STATIC("inout ");
+    case TH_CONSUME: return CORE_STRING_STATIC("consume ");
+    case TH_IN:      return CORE_STRING_STATIC("");
     }
-    return "";
+    return CORE_STRING_STATIC("");
 }
 
 typedef struct {
@@ -89,8 +92,7 @@ typedef struct {
     wkind          kind;
     const th_type *t;
     const th_arg  *arg;
-    const char    *p;
-    size_t         n;
+    core_string_t  s;
 } witem;
 
 core_option_decl(witem);
@@ -101,15 +103,12 @@ static void wpush(core_list_t(witem) *w, witem it)
     core_list_push(*w, it);
 }
 
-static void wlit(core_list_t(witem) *w, const char *s)
+static void wtext(core_list_t(witem) *w, core_string_t s)
 {
-    wpush(w, (witem){.kind = W_LIT, .p = s, .n = strlen(s)});
+    wpush(w, (witem){.kind = W_LIT, .s = s});
 }
 
-static void wtext(core_list_t(witem) *w, const char *s, size_t n)
-{
-    wpush(w, (witem){.kind = W_LIT, .p = s, .n = n});
-}
+#define wlit(w, lit) wtext((w), CORE_STRING_STATIC(lit))
 
 static void wtype(core_list_t(witem) *w, const th_type *t)
 {
@@ -127,7 +126,7 @@ static void emit_arg_scalar(core_buffer_t *b, const th_arg *a)
         break;
     case TH_ARG_STR:
         core_buffer_puts(b, "\"");
-        core_buffer_append(b, a->str.p, a->str.n);
+        core_buffer_append_string(b, a->str);
         core_buffer_puts(b, "\"");
         break;
     default:
@@ -143,7 +142,10 @@ static void emit_attrs(core_buffer_t *b, const th_type *t)
 
     for (size_t i = 0; i < sizeof(attr_names) / sizeof(attr_names[0]); i++) {
         if (t->ind.attrs & attr_names[i].bit) {
-            core_buffer_printf(b, "%s%s", first ? "" : ", ", attr_names[i].name);
+            if (!first) {
+                core_buffer_puts(b, ", ");
+            }
+            core_buffer_append_string(b, attr_names[i].name);
             first = false;
         }
     }
@@ -167,9 +169,9 @@ static size_t *sorted_members(pctx *c, const th_type *t)
     size_t  *ix = core_alloc_array(size_t, n);
 
     for (size_t i = 0; i < n; i++) {
-        const char *nm  = t->record.members[i].name;
-        size_t      len = strlen(nm);
-        uint8_t     hdr[8];
+        core_string_t nm  = t->record.members[i].name;
+        size_t        len = nm.u8_bytes;
+        uint8_t       hdr[8];
         core_buffer_t key = {0};
         core_buffer_t enc = {0};
 
@@ -177,7 +179,7 @@ static size_t *sorted_members(pctx *c, const th_type *t)
             hdr[k] = (uint8_t)(len >> (56 - 8 * k));
         }
         core_buffer_append(&key, (const char *)hdr, 8);
-        core_buffer_append(&key, nm, len);
+        core_buffer_append_string(&key, nm);
 
         th_full_encode(c->ctx, t->record.members[i].type, &enc);
         core_buffer_append(&key, enc.data, enc.byte_len);
@@ -236,7 +238,7 @@ static void plan_record(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const 
 
         wtype(w, m->type);
         wlit(w, ": ");
-        wtext(w, m->name, strlen(m->name));
+        wtext(w, m->name);
 
         if (k) {
             wlit(w, ", ");
@@ -249,7 +251,8 @@ static void plan_sum(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_
 {
     size_t      n  = t->sum.n;
     size_t     *ix = sorted_arms(c, t);
-    const char *op = t->sum.comb == TH_UNION ? " | " : " & ";
+    core_string_t op = t->sum.comb == TH_UNION ? CORE_STRING_STATIC(" | ")
+                                               : CORE_STRING_STATIC(" & ");
 
     core_buffer_puts(b, "(");
     wlit(w, ")");
@@ -258,7 +261,7 @@ static void plan_sum(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_
         wtype(w, t->sum.arms[ix[k]]);
 
         if (k) {
-            wlit(w, op);
+            wtext(w, op);
         }
     }
     core_free(ix);
@@ -289,9 +292,9 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
 
     for (size_t k = t->fn.nkw; k-- > 0;) {
         wtype(w, kw[k].type);
-        wlit(w, mode_name(kw[k].mode));
+        wtext(w, mode_name(kw[k].mode));
         wlit(w, ": ");
-        wtext(w, kw[k].name, strlen(kw[k].name));
+        wtext(w, kw[k].name);
 
         if (--slot) {
             wlit(w, ", ");
@@ -302,7 +305,7 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
     if (t->fn.rest) {
         wtype(w, t->fn.rest->type);
         wlit(w, "*");
-        wlit(w, mode_name(t->fn.rest->mode));
+        wtext(w, mode_name(t->fn.rest->mode));
 
         if (--slot) {
             wlit(w, ", ");
@@ -311,7 +314,7 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
 
     for (size_t k = t->fn.np; k-- > 0;) {
         wtype(w, t->fn.params[k].type);
-        wlit(w, mode_name(t->fn.params[k].mode));
+        wtext(w, mode_name(t->fn.params[k].mode));
 
         if (--slot) {
             wlit(w, ", ");
@@ -338,8 +341,7 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         }
 
         if (!t->named.is_variant && all_types
-            && t->named.nlen == strlen(TH_TUPLE)
-            && !memcmp(t->named.name, TH_TUPLE, t->named.nlen)) {
+            && core_string_eq(t->named.name, CORE_STRING_STATIC(TH_TUPLE))) {
             core_buffer_puts(b, "t(");
             wlit(w, ")");
 
@@ -355,20 +357,18 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         }
 
         th_type *option_item = th_option_item(t);
-        if (c->options && c->options->option_suffix && option_item) {
-            wlit(w, c->options->option_suffix);
+        if (c->options && c->options->option_suffix.data && option_item) {
+            wtext(w, c->options->option_suffix);
             wtype(w, option_item);
             return;
         }
         if (t->named.is_variant) {
             core_buffer_puts(b, "variant ");
         }
-        const char *mapped = c->options && c->options->named
-            ? c->options->named(t->named.name, t->named.nlen,
-                                c->options->context)
-            : nullptr;
-        if (mapped) core_buffer_puts(b, mapped);
-        else core_buffer_append(b, t->named.name, t->named.nlen);
+        core_string_t mapped = c->options && c->options->named
+            ? c->options->named(t->named.name, c->options->context)
+            : (core_string_t){};
+        core_buffer_append_string(b, mapped.data ? mapped : t->named.name);
 
         if (!t->named.nargs) {
             return;
@@ -391,37 +391,41 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         if (t->bitint.flavor == TH_BITINT_BITS)
             core_buffer_printf(b, "bits:%" PRIu64, t->bitint.width);
         else
-            core_buffer_printf(b, "%s[%" PRIu64 "]",
-                t->bitint.flavor == TH_BITINT_SIGNED ? "bitint" : "ubitint",
-                t->bitint.width);
+            core_buffer_printf(b, t->bitint.flavor == TH_BITINT_SIGNED
+                                      ? "bitint[%" PRIu64 "]"
+                                      : "ubitint[%" PRIu64 "]",
+                               t->bitint.width);
 
         return;
 
     case TH_INDIRECTION:
         for (size_t i = 0; i < sizeof(sugar) / sizeof(sugar[0]); i++) {
             if (sugar[i].attrs == t->ind.attrs) {
-                const char *name = !t->ind.attrs && c->options
-                    && c->options->reference
+                core_string_t name = !t->ind.attrs && c->options
+                    && c->options->reference.data
                     ? c->options->reference : sugar[i].name;
-                core_buffer_printf(b, "%s[", name);
+                core_buffer_append_string(b, name);
+                core_buffer_puts(b, "[");
                 wlit(w, "]");
                 wtype(w, t->ind.referent);
 
                 return;
             }
         }
-        core_buffer_printf(b, "%s[",
-            c->options && c->options->reference
-                ? c->options->reference : "ref");
+        core_buffer_append_string(b,
+            c->options && c->options->reference.data
+                ? c->options->reference : CORE_STRING_STATIC("ref"));
+        core_buffer_puts(b, "[");
         wpush(w, (witem){.kind = W_ATTRS, .t = t});
         wtype(w, t->ind.referent);
 
         return;
 
     case TH_SEQUENCE:
-        core_buffer_printf(b, "%s[",
-            c->options && c->options->sequence
-                ? c->options->sequence : "array");
+        core_buffer_append_string(b,
+            c->options && c->options->sequence.data
+                ? c->options->sequence : CORE_STRING_STATIC("array"));
+        core_buffer_puts(b, "[");
         wpush(w, (witem){.kind = W_SEQTAIL, .t = t});
         wtype(w, t->seq.elem);
 
@@ -433,7 +437,8 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         return;
 
     case TH_TRAIT:
-        core_buffer_printf(b, "trait %s", t->trait.name);
+        core_buffer_puts(b, "trait ");
+        core_buffer_append_string(b, t->trait.name);
         return;
 
     case TH_FUNCTION:
@@ -445,7 +450,12 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         core_buffer_puts(b, "forall[");
 
         for (uint64_t i = 0; i < t->binder.arity; i++) {
-            core_buffer_puts(b, i ? ", `" : "`");
+            if (i) {
+                core_buffer_puts(b, ", `");
+            }
+            else {
+                core_buffer_puts(b, "`");
+            }
             varname(b, c->depth, i);
         }
         core_buffer_puts(b, "] ");
@@ -500,7 +510,7 @@ static void emit(pctx *c, core_buffer_t *b, const th_type *root)
 
         switch (it.kind) {
         case W_LIT:
-            core_buffer_append(b, (const char *)it.p, it.n);
+            core_buffer_append_string(b, it.s);
             break;
         case W_DEPTH_DOWN:
             c->depth--;
@@ -535,7 +545,7 @@ static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
         core_buffer_printf(b, "kind(%u)", (unsigned)k->type_kind);
         break;
     case TH_CON_IMPLEMENTS:
-        core_buffer_puts(b, k->iface);
+        core_buffer_append_string(b, k->iface);
         break;
 
     case TH_CON_UNIFIES:
@@ -566,8 +576,14 @@ static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
         break;
 
     case TH_CON_HAS_FIELD:
-        core_buffer_printf(b, k->field.auto_deref
-            ? "has_field_auto_deref(%s: " : "has_field(%s: ", k->field.name);
+        if (k->field.auto_deref) {
+            core_buffer_puts(b, "has_field_auto_deref(");
+        }
+        else {
+            core_buffer_puts(b, "has_field(");
+        }
+        core_buffer_append_string(b, k->field.name);
+        core_buffer_puts(b, ": ");
         emit(c, b, k->field.type);
         core_buffer_puts(b, ")");
         break;
@@ -580,7 +596,9 @@ static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
         break;
 
     case TH_CON_METHOD:
-        core_buffer_printf(b, "method(%s: ", k->method.name);
+        core_buffer_puts(b, "method(");
+        core_buffer_append_string(b, k->method.name);
+        core_buffer_puts(b, ": ");
         emit(c, b, k->method.result);
         if (k->method.call) {
             core_buffer_puts(b, ", args: ");
@@ -600,7 +618,8 @@ static void emit_where(pctx *c, core_buffer_t *b, th_type *type)
     }
 
     core_buffer_puts(b, " where `");
-    core_buffer_puts(b, r->var.name ? r->var.name : "t");
+    core_buffer_append_string(b, r->var.name.data ? r->var.name
+                                                  : CORE_STRING_STATIC("t"));
     core_buffer_puts(b, ": ");
 
     for (size_t i = 0; i < r->var.cons.len; i++) {
@@ -628,9 +647,12 @@ static void emit_free_where(pctx *c, core_buffer_t *b, th_type *type)
         const th_type *var = th_resolve_c(vars[i]);
         if (!var || var->kind != TH_VAR || !var->var.cons.len) continue;
 
-        core_buffer_puts(b, started ? ", `" : " where `");
+        if (started) core_buffer_puts(b, ", `");
+        else core_buffer_puts(b, " where `");
         if (var->var.has_index) varname(b, 0, var->var.index);
-        else core_buffer_puts(b, var->var.name ? var->var.name : "t");
+        else core_buffer_append_string(b, var->var.name.data
+                                              ? var->var.name
+                                              : CORE_STRING_STATIC("t"));
         core_buffer_puts(b, ": ");
         for (size_t j = 0; j < var->var.cons.len; j++) {
             if (j) core_buffer_puts(b, " + ");
@@ -666,12 +688,12 @@ static void emit_binder_where(pctx *c, core_buffer_t *b, th_type *type)
     }
 }
 
-const char *
+core_string_t
 th_print_with_options(th_ctx *ctx, th_type *type,
                       const th_print_options_t *options)
 {
     if (!ctx || !type) {
-        return nullptr;
+        return (core_string_t){};
     }
     th_normalize(type);
 
@@ -685,17 +707,17 @@ th_print_with_options(th_ctx *ctx, th_type *type,
     }
 
     if (!b.data) {
-        return th_strdup(ctx, "", 0);
+        return th_strdup(ctx, CORE_STRING_STATIC(""));
     }
 
-    char *out = th_strdup(ctx, b.data, b.byte_len);
+    core_string_t out = th_strdup(ctx, core_buffer_string(&b));
 
     core_buffer_release(&b);
 
     return out;
 }
 
-const char *th_print(th_ctx *ctx, th_type *type)
+core_string_t th_print(th_ctx *ctx, th_type *type)
 {
     return th_print_with_options(ctx, type, nullptr);
 }

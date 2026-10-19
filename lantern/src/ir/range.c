@@ -173,7 +173,7 @@ post_instruction(ir_range_analysis_t *a, ir_instr_t *in)
     }
 
     if ((in->op == IR_OP_ADD || in->op == IR_OP_SUB)
-        && in->n_operands == 2 && ir_instr_has_mod(in, "trap")
+        && in->n_operands == 2 && ir_instr_has_mod(in, CORE_STRING_STATIC("trap"))
         && in->operands[0].kind == IR_OPD_VALUE
         && in->operands[1].kind == IR_OPD_VALUE) {
         const value_var_t *left = find_value(a, in->operands[0].value);
@@ -592,9 +592,10 @@ ir_range_analyze_function(ir_func_t *function, ir_diags_t *diagnostics)
         && result->failure) {
         ir_diag_t *dg = ir_diag_begin_at(diagnostics, IR_DIAG_RANGE_UNSAT,
             result->failure, result->failure->block, function,
-            "inconsistent integer ranges");
+            CORE_STRING_STATIC("inconsistent integer ranges"));
         ir_diag_message(dg, diagnostics,
-                        "integer value constraints have no solution");
+                        CORE_STRING_STATIC(
+                            "integer value constraints have no solution"));
     }
     free(blocks);
     free(edges);

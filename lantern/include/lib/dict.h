@@ -112,17 +112,6 @@ _core_dict_ptr_eq(const void *a, const void *b)
     return a == b;
 }
 
-static inline bool
-core_dict_cstr_eq(const void *a, const void *b)
-{
-    if (a == b) {
-        return true;
-    }
-    if (!a || !b) {
-        return false;
-    }
-    return strcmp((const char *)a, (const char *)b) == 0;
-}
 
 static inline void
 core_dict_init(core_dict_t *dict,

@@ -1,35 +1,37 @@
 #include "ir/libir.h"
 #include "harness.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 static void
 test_shape_metadata(void)
 {
     int source_expression;
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "shape", &ir_profile_bce,
-                                        "test");
-    th_type *i32 = module ? ir_type_parse(module, "i32") : nullptr;
-    th_type *array_type = module ? ir_type_parse(module, "array[i32]")
+    ir_module_t *module = ir_module_new(ctx, S("shape"), &ir_profile_bce,
+                                        S("test"));
+    th_type *i32 = module ? ir_type_parse(module, S("i32")) : nullptr;
+    th_type *array_type = module ? ir_type_parse(module, S("array[i32]"))
                                  : nullptr;
     ir_global_t *global = module
-        ? ir_global_add(module, "matrix", array_type) : nullptr;
+        ? ir_global_add(module, S("matrix"), array_type) : nullptr;
     ir_func_t *function = module
-        ? ir_func_add(module, "bounds", ir_type_parse(module,
-            "(i64, i64) -> nil"), IR_LINK_INTERNAL) : nullptr;
+        ? ir_func_add(module, S("bounds"), ir_type_parse(module,
+            S("(i64, i64) -> nil")), IR_LINK_INTERNAL) : nullptr;
     ir_func_t *product_function = module
-        ? ir_func_add(module, "shape_product", ir_type_parse(module,
-            "() -> u64"), IR_LINK_INTERNAL) : nullptr;
+        ? ir_func_add(module, S("shape_product"), ir_type_parse(module,
+            S("() -> u64")), IR_LINK_INTERNAL) : nullptr;
     bool comptime_function = function
         && ir_func_set_execution_phase(ctx, function, IR_PHASE_COMPTIME);
     bool comptime_product = product_function
         && ir_func_set_execution_phase(ctx, product_function,
                                        IR_PHASE_COMPTIME);
     ir_value_t *comptime_bound = function
-        ? ir_param_add(function, "comptime_bound", ir_type_parse(module,
-            "i64")) : nullptr;
+        ? ir_param_add(function, S("comptime_bound"), ir_type_parse(module,
+            S("i64"))) : nullptr;
     ir_value_t *runtime_bound = function
-        ? ir_param_add(function, "runtime_bound", ir_type_parse(module,
-            "i64")) : nullptr;
+        ? ir_param_add(function, S("runtime_bound"), ir_type_parse(module,
+            S("i64"))) : nullptr;
     ir_shape_t *shape = ir_shape_new(ctx, i32, 2);
     uint64_t type_id_before = module && global
         ? ir_type_id(module, global->type) : 0;
@@ -115,16 +117,16 @@ test_shape_metadata(void)
           static_value_retained);
 
     ir_func_t *locals = module
-        ? ir_func_add(module, "local", ir_type_parse(module, "() -> nil"),
+        ? ir_func_add(module, S("local"), ir_type_parse(module, S("() -> nil")),
                       IR_LINK_INTERNAL) : nullptr;
     ir_local_t *local = locals
-        ? ir_local_add(locals, "view", array_type) : nullptr;
+        ? ir_local_add(locals, S("view"), array_type) : nullptr;
     ir_value_t *local_value = locals && local
         ? ir_local_value(locals, local) : nullptr;
     ir_instr_t *move = locals
-        ? ir_instr_add(ir_block_add(locals, "entry"), IR_OP_COPY) : nullptr;
+        ? ir_instr_add(ir_block_add(locals, S("entry")), IR_OP_COPY) : nullptr;
     bool has_derived = move
-        && ir_instr_set_dest(move, "derived", array_type);
+        && ir_instr_set_dest(move, S("derived"), array_type);
     ir_value_t *derived = has_derived ? move->dest : nullptr;
     has_derived = has_derived && ir_instr_operand_value(move, local_value);
     bool projected = local && local_value && derived
@@ -278,13 +280,13 @@ static void
 test_invalid_shape_metadata(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "invalid_shape",
-                                        &ir_profile_bce, "test");
-    th_type *i32 = module ? ir_type_parse(module, "i32") : nullptr;
+    ir_module_t *module = ir_module_new(ctx, S("invalid_shape"),
+                                        &ir_profile_bce, S("test"));
+    th_type *i32 = module ? ir_type_parse(module, S("i32")) : nullptr;
     ir_shape_t *shape = ir_shape_new(ctx, i32, 1);
     ir_func_t *runtime_producer = module
-        ? ir_func_add(module, "runtime_producer",
-            ir_type_parse(module, "() -> nil"), IR_LINK_INTERNAL) : nullptr;
+        ? ir_func_add(module, S("runtime_producer"),
+            ir_type_parse(module, S("() -> nil")), IR_LINK_INTERNAL) : nullptr;
     ir_value_t *value = nullptr;
     ir_shape_t *zero_rank = ir_shape_new(ctx, i32, 0);
     bool zero_extent_valid = shape

@@ -84,8 +84,8 @@ same_address(const ir_value_t *left, const ir_value_t *right,
         || right->def->n_operands != 2
         || left->def->operands[1].kind != IR_OPD_NAME
         || right->def->operands[1].kind != IR_OPD_NAME
-        || strcmp(left->def->operands[1].name,
-                  right->def->operands[1].name)) return false;
+        || !core_string_eq(left->def->operands[1].name,
+                           right->def->operands[1].name)) return false;
     return same_address(value_operand(left->def, 0),
                         value_operand(right->def, 0), depth - 1);
 }
@@ -135,8 +135,8 @@ extracted_path_matches(const ir_value_t *value,
         || field->n_operands != 2
         || extract->operands[1].kind != IR_OPD_NAME
         || field->operands[1].kind != IR_OPD_NAME
-        || strcmp(extract->operands[1].name,
-                  field->operands[1].name)) return false;
+        || !core_string_eq(extract->operands[1].name,
+                           field->operands[1].name)) return false;
     return extracted_path_matches(value_operand(extract, 0), parameter,
                                   actual, value_operand(field, 0),
                                   depth - 1);
@@ -216,8 +216,8 @@ element_or_sibling_write(const ir_instr_t *effect,
         || target_def->n_operands != 2
         || source_field->operands[1].kind != IR_OPD_NAME
         || target_def->operands[1].kind != IR_OPD_NAME
-        || !strcmp(source_field->operands[1].name,
-                   target_def->operands[1].name)) return false;
+        || core_string_eq(source_field->operands[1].name,
+                          target_def->operands[1].name)) return false;
     const ir_value_t *source_parent = value_operand(source_field, 0);
     const ir_value_t *target_parent = value_operand(target_def, 0);
     th_type *record = source_parent
@@ -380,7 +380,8 @@ mask_below_limit(ir_module_t *module, const ir_value_t *mask,
             && mask_width >= source_width
             && mask_below_limit(module, source, limit, depth - 1);
     }
-    return in->op == IR_OP_SUB && ir_instr_has_mod(in, "trap")
+    return in->op == IR_OP_SUB
+        && ir_instr_has_mod(in, CORE_STRING_STATIC("trap"))
         && same_value(value_operand(in, 0), limit)
         && constant_one(value_operand(in, 1));
 }
@@ -486,14 +487,15 @@ bool
 ir_unsigned_sub_proven_safe(const ir_instr_t *sub)
 {
     if (!sub || sub->op != IR_OP_SUB || !sub->dest
-        || !ir_instr_has_mod(sub, "trap")
+        || !ir_instr_has_mod(sub, CORE_STRING_STATIC("trap"))
         || !(ir_module_props(sub->block->owner->owner) & IR_PROP_SSA))
         return false;
     const ir_value_t *limit = value_operand(sub, 0);
     const ir_value_t *difference = uncopied(value_operand(sub, 1));
     const ir_instr_t *inner = difference ? difference->def : nullptr;
     if (!inner || inner->op != IR_OP_SUB
-        || !ir_instr_has_mod(inner, "trap")) return false;
+        || !ir_instr_has_mod(inner, CORE_STRING_STATIC("trap")))
+        return false;
     const ir_value_t *bounded = value_operand(inner, 0);
     uint64_t width = 0, other_width = 0;
     ir_module_t *module = sub->block->owner->owner;

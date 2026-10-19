@@ -7,11 +7,12 @@
 
 #include <string.h>
 
-static const char *const kind_spellings[PARSE_ANNOT_KIND_COUNT] = {
-#define PARSE_ANNOT_NAME(sym, spelling) [PARSE_ANNOT_##sym] = spelling,
+static const core_string_t kind_spellings[PARSE_ANNOT_KIND_COUNT] = {
+#define PARSE_ANNOT_NAME(sym, spelling) \
+    [PARSE_ANNOT_##sym] = CORE_STRING_STATIC(spelling),
     PARSE_ANNOT_KINDS(PARSE_ANNOT_NAME)
 #undef PARSE_ANNOT_NAME
-        [PARSE_ANNOT_NONE] = "none",
+        [PARSE_ANNOT_NONE] = CORE_STRING_STATIC("none"),
 };
 
 parse_annotation_t *
@@ -157,11 +158,11 @@ parse_annot_free(parse_annotation_t *a)
     core_free(a);
 }
 
-const char *
+core_string_t
 parse_annot_kind_name(parse_annot_kind_t kind)
 {
     if (kind < 0 || kind >= PARSE_ANNOT_KIND_COUNT) {
-        return "?";
+        return CORE_STRING_STATIC("?");
     }
 
     return kind_spellings[kind];
@@ -175,10 +176,7 @@ parse_annot_kind_from_name(core_string_t name)
     }
 
     for (int i = 0; i < PARSE_ANNOT_NONE; i++) {
-        const char *s = kind_spellings[i];
-
-        if (strlen(s) == name.u8_bytes
-            && memcmp(s, name.data, name.u8_bytes) == 0) {
+        if (core_string_eq(kind_spellings[i], name)) {
             return (parse_annot_kind_t)i;
         }
     }

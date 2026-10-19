@@ -1,11 +1,10 @@
-#include <string.h>
-
 #include "ir/ir.h"
 
 #define VAR IR_VAR_ARITY
 
 #define IR_OP(id, spelling, lo, hi, res, pat, mods, flags)                     \
-    [IR_OP_##id] = {spelling, lo, hi, IR_RES_##res, pat, mods, (flags)},
+    [IR_OP_##id] = {CORE_STRING_STATIC(spelling), lo, hi, IR_RES_##res,        \
+                    CORE_STRING_STATIC(pat), mods, (flags)},
 
 #define HASRESULT  IR_OPF_HASRESULT
 #define SIDEEFFECT IR_OPF_SIDEEFFECT
@@ -28,14 +27,14 @@ const ir_opinfo_t *ir_op_info(ir_op_t op)
     return op < IR_OP_COUNT ? &table[op] : nullptr;
 }
 
-bool ir_op_lookup(const char *spelling, ir_op_t *out)
+bool ir_op_lookup(core_string_t spelling, ir_op_t *out)
 {
-    if (!spelling) {
+    if (!spelling.data) {
         return false;
     }
 
     for (uint16_t i = 0; i < IR_OP_COUNT; i++) {
-        if (!strcmp(table[i].spelling, spelling)) {
+        if (core_string_eq(table[i].spelling, spelling)) {
             if (out) {
                 *out = (ir_op_t)i;
             }
@@ -47,9 +46,9 @@ bool ir_op_lookup(const char *spelling, ir_op_t *out)
     return false;
 }
 
-const char *ir_op_spelling(ir_op_t op)
+core_string_t ir_op_spelling(ir_op_t op)
 {
-    return op < IR_OP_COUNT ? table[op].spelling : nullptr;
+    return op < IR_OP_COUNT ? table[op].spelling : (core_string_t){};
 }
 
 bool ir_opinfo_has_result(const ir_opinfo_t *i)
@@ -72,37 +71,37 @@ bool ir_op_is_terminator(ir_op_t op)
     return ir_opinfo_is_terminator(ir_op_info(op));
 }
 
-const char *ir_opdkind_name(ir_opdkind_t k)
+core_string_t ir_opdkind_name(ir_opdkind_t k)
 {
     switch (k) {
     case IR_OPD_VALUE:
-        return "value";
+        return CORE_STRING_STATIC("value");
     case IR_OPD_SPREAD:
-        return "spread argument";
+        return CORE_STRING_STATIC("spread argument");
     case IR_OPD_TYPE:
-        return "type";
+        return CORE_STRING_STATIC("type");
     case IR_OPD_NAME:
-        return "name";
+        return CORE_STRING_STATIC("name");
     case IR_OPD_BLOCK:
-        return "block";
+        return CORE_STRING_STATIC("block");
     case IR_OPD_DEFAULT_BLOCK:
-        return "default block";
+        return CORE_STRING_STATIC("default block");
     case IR_OPD_CONST:
-        return "literal";
+        return CORE_STRING_STATIC("literal");
     case IR_OPD_PHI_ARM:
-        return "phi arm";
+        return CORE_STRING_STATIC("phi arm");
     case IR_OPD_SWITCH_ARM:
-        return "switch arm";
+        return CORE_STRING_STATIC("switch arm");
     case IR_OPD_NAMED_ARG:
-        return "named argument";
+        return CORE_STRING_STATIC("named argument");
     case IR_OPD_OUT:
-        return "out argument";
+        return CORE_STRING_STATIC("out argument");
     case IR_OPD_FRESH:
-        return "fresh construction target";
+        return CORE_STRING_STATIC("fresh construction target");
     case IR_OPD_MISSING:
-        return "omitted optional argument";
+        return CORE_STRING_STATIC("omitted optional argument");
     default:
-        return "argument";
+        return CORE_STRING_STATIC("argument");
     }
 }
 
@@ -140,8 +139,8 @@ ir_opdkind_t ir_opinfo_operand_kind(const ir_opinfo_t *info, uint32_t i)
         return IR_OPD_VALUE;
     }
 
-    const char *p   = info->pattern;
-    size_t      len = strlen(p);
+    const char *p   = info->pattern.data;
+    size_t      len = info->pattern.u8_bytes;
 
     if (!len) {
         return IR_OPD_VALUE;
@@ -163,28 +162,38 @@ ir_opdkind_t ir_opinfo_operand_kind(const ir_opinfo_t *info, uint32_t i)
 
 static const struct {
     ir_modgroup_t group;
-    const char   *name;
+    core_string_t name;
 } mods[] = {
-    {IR_MOD_OVERFLOW, "wrap"},     {IR_MOD_OVERFLOW, "trap"},
-    {IR_MOD_OVERFLOW, "sat"},      {IR_MOD_OVERFLOW, "undef"},
-    {IR_MOD_DIVZERO, "trap"},      {IR_MOD_DIVZERO, "undef"},
-    {IR_MOD_SHIFT, "mask"},        {IR_MOD_CMPORDER, "ordered"},
-    {IR_MOD_CMPORDER, "unordered"},{IR_MOD_ACCESS, "volatile"},
-    {IR_MOD_ACCESS, "atomic"},     {IR_MOD_FIT, "wrap"},
-    {IR_MOD_FIT, "trap"},          {IR_MOD_FIT, "sat"},
-    {IR_MOD_FIT, "undef"},         {IR_MOD_ROUND, "to_zero"},
-    {IR_MOD_ROUND, "nearest"},     {IR_MOD_ROUND, "floor"},
-    {IR_MOD_ROUND, "ceil"},        {IR_MOD_ATOMIC_ORDER, "release"},
-    {IR_MOD_ATOMIC_ORDER, "relaxed"},
-    {IR_MOD_ATOMIC_ORDER, "acquire"},
+    {IR_MOD_OVERFLOW, CORE_STRING_STATIC("wrap")},
+    {IR_MOD_OVERFLOW, CORE_STRING_STATIC("trap")},
+    {IR_MOD_OVERFLOW, CORE_STRING_STATIC("sat")},
+    {IR_MOD_OVERFLOW, CORE_STRING_STATIC("undef")},
+    {IR_MOD_DIVZERO, CORE_STRING_STATIC("trap")},
+    {IR_MOD_DIVZERO, CORE_STRING_STATIC("undef")},
+    {IR_MOD_SHIFT, CORE_STRING_STATIC("mask")},
+    {IR_MOD_CMPORDER, CORE_STRING_STATIC("ordered")},
+    {IR_MOD_CMPORDER, CORE_STRING_STATIC("unordered")},
+    {IR_MOD_ACCESS, CORE_STRING_STATIC("volatile")},
+    {IR_MOD_ACCESS, CORE_STRING_STATIC("atomic")},
+    {IR_MOD_FIT, CORE_STRING_STATIC("wrap")},
+    {IR_MOD_FIT, CORE_STRING_STATIC("trap")},
+    {IR_MOD_FIT, CORE_STRING_STATIC("sat")},
+    {IR_MOD_FIT, CORE_STRING_STATIC("undef")},
+    {IR_MOD_ROUND, CORE_STRING_STATIC("to_zero")},
+    {IR_MOD_ROUND, CORE_STRING_STATIC("nearest")},
+    {IR_MOD_ROUND, CORE_STRING_STATIC("floor")},
+    {IR_MOD_ROUND, CORE_STRING_STATIC("ceil")},
+    {IR_MOD_ATOMIC_ORDER, CORE_STRING_STATIC("release")},
+    {IR_MOD_ATOMIC_ORDER, CORE_STRING_STATIC("relaxed")},
+    {IR_MOD_ATOMIC_ORDER, CORE_STRING_STATIC("acquire")},
 };
 
-static uintptr_t mod_groups(const char *name)
+static uintptr_t mod_groups(core_string_t name)
 {
     uintptr_t groups = 0;
 
     for (size_t i = 0; i < sizeof(mods) / sizeof(mods[0]); i++) {
-        if (!strcmp(mods[i].name, name)) {
+        if (core_string_eq(mods[i].name, name)) {
             groups |= (uintptr_t)mods[i].group;
         }
     }
@@ -192,23 +201,23 @@ static uintptr_t mod_groups(const char *name)
     return groups;
 }
 
-bool ir_opinfo_accepts_mod(const ir_opinfo_t *info, const char *name)
+bool ir_opinfo_accepts_mod(const ir_opinfo_t *info, core_string_t name)
 {
-    if (!info || !name) {
+    if (!info || !name.data) {
         return false;
     }
 
     return (info->mods & mod_groups(name)) != 0;
 }
 
-bool ir_op_accepts_mod(ir_op_t op, const char *name)
+bool ir_op_accepts_mod(ir_op_t op, core_string_t name)
 {
     return ir_opinfo_accepts_mod(ir_op_info(op), name);
 }
 
-bool ir_mod_exists(const char *name)
+bool ir_mod_exists(core_string_t name)
 {
-    return name && mod_groups(name) != 0;
+    return name.data && mod_groups(name) != 0;
 }
 
 bool ir_opinfo_accepts_operands(const ir_opinfo_t *i, uint32_t n)
@@ -236,19 +245,19 @@ bool ir_op_is_extension(ir_op_t op)
     return op >= IR_OP_COUNT;
 }
 
-bool ir_op_spelling_is_namespaced(const char *spelling, const char *profile)
+bool ir_op_spelling_is_namespaced(core_string_t spelling,
+                                  core_string_t profile)
 {
-    if (!spelling || !profile) {
+    if (!spelling.data || !profile.data) {
         return false;
     }
 
-    const char *dot = strchr(spelling, '.');
+    int64_t dot = core_string_find_byte(spelling, '.');
 
-    if (!dot || dot == spelling || !dot[1]) {
+    if (dot <= 0 || (size_t)dot + 1 >= spelling.u8_bytes) {
         return false;
     }
 
-    size_t n = (size_t)(dot - spelling);
-
-    return strlen(profile) == n && !strncmp(spelling, profile, n);
+    return core_string_eq(core_string_slice(spelling, 0, (size_t)dot),
+                          profile);
 }

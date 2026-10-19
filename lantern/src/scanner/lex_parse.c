@@ -5,26 +5,47 @@
 #include "parse/tree_util.h"
 #include "scanner/scanner.h"
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 
 #include <stdio.h>
 #include <string.h>
 
-static _Thread_local char lex_parse_err[256];
+static _Thread_local core_string_t lex_parse_err;
 
-const char *
-scan_lex_parse_error(void)
+static void
+lex_parse_err_set(core_string_t message)
 {
-    return lex_parse_err[0] ? lex_parse_err : nullptr;
+    core_free(lex_parse_err.data);
+    lex_parse_err = message;
 }
 
-const char *
+__attribute__((format(printf, 1, 2))) static void
+lex_parse_err_printf(const char *fmt, ...)
+{
+    core_buffer_t *buf = core_buffer_empty();
+    va_list        ap;
+
+    va_start(ap, fmt);
+    core_buffer_vprintf(buf, fmt, ap);
+    va_end(ap);
+    lex_parse_err_set(core_buffer_take_string(buf));
+}
+
+core_string_t
+scan_lex_parse_error(void)
+{
+    return lex_parse_err;
+}
+
+core_string_t
 scan_lex_kind_name(scan_lex_kind_t kind)
 {
     switch (kind) {
-#define SCAN_LEX_NAME(name, spelling) case SCAN_LEX_##name: return spelling;
+#define SCAN_LEX_NAME(name, spelling) \
+    case SCAN_LEX_##name: return CORE_STRING_STATIC(spelling);
         SCAN_LEX_DIRECTIVES(SCAN_LEX_NAME)
 #undef SCAN_LEX_NAME
-    default: return "lex-unknown";
+    default: return CORE_STRING_STATIC("lex-unknown");
     }
 }
 
@@ -134,7 +155,7 @@ collect_declarations(decl_ctx_t *ctx, parse_tree_t *node)
             .lex_opts = core_list_new(scan_lex_opt_t),
         };
         if (!lex_kind(leaves.first_identifier, &decl.kind)) {
-            snprintf(lex_parse_err, sizeof(lex_parse_err),
+            lex_parse_err_printf(
                      "lexer '%.*s': unknown directive '%.*s'",
                      (int)ctx->origin.u8_bytes, ctx->origin.data,
                      (int)leaves.first_identifier.u8_bytes,
@@ -159,7 +180,7 @@ bool
 scan_lex_parse_file(core_string_t text, core_string_t origin,
                     core_list_t(scan_lex_decl_t) *decls)
 {
-    lex_parse_err[0] = '\0';
+    lex_parse_err_set((core_string_t){0});
     if (!decls || !text.data) {
         return false;
     }
@@ -168,7 +189,7 @@ scan_lex_parse_file(core_string_t text, core_string_t origin,
         = grammar ? parse_find_nonterm(grammar, CORE_STRING_STATIC("lex-file"))
                   : nullptr;
     if (!start) {
-        snprintf(lex_parse_err, sizeof(lex_parse_err),
+        lex_parse_err_printf(
                  "lexer grammar is unavailable");
         return false;
     }
@@ -177,7 +198,7 @@ scan_lex_parse_file(core_string_t text, core_string_t origin,
     parse_scanner_t *scanner = nullptr;
     parse_token_stream_t *tokens = parse_annot_lex(text, &buffer, &scanner);
     if (!tokens) {
-        snprintf(lex_parse_err, sizeof(lex_parse_err),
+        lex_parse_err_printf(
                  "cannot tokenize lexer '%.*s'",
                  (int)origin.u8_bytes, origin.data);
         return false;
@@ -196,7 +217,7 @@ scan_lex_parse_file(core_string_t text, core_string_t origin,
         ok = !ctx.failed;
     }
     else {
-        snprintf(lex_parse_err, sizeof(lex_parse_err),
+        lex_parse_err_printf(
                  "lexer '%.*s': syntax error near token %d",
                  (int)origin.u8_bytes, origin.data,
                  parser ? parse_pwz_error_pos(parser) : 0);

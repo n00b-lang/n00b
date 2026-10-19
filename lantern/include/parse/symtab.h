@@ -352,7 +352,7 @@ void parse_sym_set_storage_class(parse_sym_entry_t *symbol,
                                 core_string_t selected);
 void parse_sym_set_storage_duration(
     parse_sym_entry_t *symbol, parse_sym_storage_duration_t duration);
-const char *parse_sym_storage_duration_name(
+core_string_t parse_sym_storage_duration_name(
     parse_sym_storage_duration_t duration);
 void parse_sym_set_lifetime(parse_sym_entry_t *symbol,
                             parse_sym_lifetime_t lifetime);

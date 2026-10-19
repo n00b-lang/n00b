@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/string.h"
+
 typedef enum {
     CORE_TARGET_LITTLE_ENDIAN,
     CORE_TARGET_BIG_ENDIAN,
@@ -38,7 +40,7 @@ typedef struct {
  * Integer and floating widths increase strictly; atomic widths may repeat
  * for alternate feature requirements. Feature bits are target-specific. */
 typedef struct {
-    const char *triple;
+    core_string_t triple;
     core_target_endian_t endian;
     core_target_object_format_t object_format;
     core_target_call_abi_t call_abi;
@@ -60,7 +62,7 @@ typedef struct {
 /* Fill one of the known target profiles. The feature mask is a guarantee
  * supplied by the caller, not a CPU probe. Unknown triples or features fail
  * without modifying `out`; clients may also provide their own descriptors. */
-bool core_target_profile(const char *triple, uint64_t enabled_features,
+bool core_target_profile(core_string_t triple, uint64_t enabled_features,
                          core_target_desc_t *out);
 bool core_target_validate(const core_target_desc_t *target);
 const core_target_scalar_t *core_target_integer_for_bits(

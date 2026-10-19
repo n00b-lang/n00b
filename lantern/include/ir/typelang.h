@@ -1,17 +1,19 @@
 #pragma once
 
 #include "ir/ir.h"
+#include "lib/string.h"
 #include "parse/tree_visit.h"
 #include "parse/symtab.h"
 
-th_type *ir_typelang_parse(th_ctx *ctx, const char *src, char **err);
+th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
+                           core_string_t *err);
 /* The returned function type owns the failure channel; `failure` mirrors it
  * for callers that need to inspect the channels separately. */
-th_type *ir_typelang_parse_function(th_ctx *ctx, const char *src,
-                                    th_type **failure, char **err);
+th_type *ir_typelang_parse_function(th_ctx *ctx, core_string_t src,
+                                    th_type **failure, core_string_t *err);
 
-th_type *ir_typelang_parse_prefix(th_ctx *ctx, const char *src, size_t len,
-                                  size_t *consumed, char **err);
+th_type *ir_typelang_parse_prefix(th_ctx *ctx, core_string_t src,
+                                  size_t *consumed, core_string_t *err);
 
 void ir_typelang_shutdown(void);
 

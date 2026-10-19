@@ -9,7 +9,7 @@ static th_type *ptr_to(th_ctx *ctx, th_type *t)
     return th_ind(ctx, TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE, t);
 }
 
-static th_type *rec_self(th_ctx *ctx, const char *field)
+static th_type *rec_self(th_ctx *ctx, core_string_t field)
 {
     th_type  *r = th_record_stub(ctx);
     th_member m = {.name = field, .type = ptr_to(ctx, r)};
@@ -19,14 +19,14 @@ static th_type *rec_self(th_ctx *ctx, const char *field)
     return r;
 }
 
-static th_type *rec_var(th_ctx *ctx, const char *field, th_type **out_var)
+static th_type *rec_var(th_ctx *ctx, core_string_t field, th_type **out_var)
 {
     th_type  *r = th_record_stub(ctx);
     th_type  *v = th_var(ctx);
     th_member m[2];
 
     m[0] = (th_member){.name = field, .type = ptr_to(ctx, r)};
-    m[1] = (th_member){.name = "payload", .type = v};
+    m[1] = (th_member){.name = CORE_STRING_STATIC("payload"), .type = v};
 
     th_record_fill(ctx, r, m, 2);
     *out_var = v;
@@ -38,7 +38,7 @@ int main(void)
 {
     th_ctx *ctx = th_ctx_new();
 
-    th_type *a = rec_self(ctx, "next");
+    th_type *a = rec_self(ctx, CORE_STRING_STATIC("next"));
 
     check("free_vars terminates on a cyclic closed type",
           th_free_vars(ctx, a, nullptr) == 0);
@@ -66,7 +66,7 @@ int main(void)
     }
 
     th_type *v1;
-    th_type *b = rec_var(ctx, "next", &v1);
+    th_type *b = rec_var(ctx, CORE_STRING_STATIC("next"), &v1);
 
     check("free_vars finds the variable inside a cycle",
           th_free_vars(ctx, b, nullptr) == 1);
@@ -74,13 +74,13 @@ int main(void)
     check("occurs finds a variable inside a cycle", th_occurs(ctx, v1, b));
 
     th_type *v2;
-    th_type *c = rec_var(ctx, "next", &v2);
+    th_type *c = rec_var(ctx, CORE_STRING_STATIC("next"), &v2);
 
     th_type *bc = th_unify(ctx, b, c);
 
     check("two cyclic types with variables unify", bc != nullptr);
 
-    th_type *d   = rec_self(ctx, "next");
+    th_type *d   = rec_self(ctx, CORE_STRING_STATIC("next"));
     th_type *bad = th_unify(ctx, b, d);
 
     check("cyclic types with differing field sets do not unify",

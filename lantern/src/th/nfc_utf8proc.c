@@ -9,26 +9,24 @@ typedef struct {
 
 static _Thread_local nfc_state g_nfc;
 
-static bool nfc(void *state, const char *in, size_t inlen, const char **out,
-                size_t *outlen)
+static bool nfc(void *state, core_string_t in, core_string_t *out)
 {
     (void)state;
     bool ascii = true;
-    for (size_t i = 0; i < inlen; i++) {
-        if ((unsigned char)in[i] >= 0x80) {
+    for (size_t i = 0; i < in.u8_bytes; i++) {
+        if ((unsigned char)in.data[i] >= 0x80) {
             ascii = false;
             break;
         }
     }
     if (ascii) {
         *out = in;
-        *outlen = inlen;
         return true;
     }
     nfc_state        *st = &g_nfc;
     utf8proc_uint8_t *r  = nullptr;
-    utf8proc_ssize_t  n  = utf8proc_map((const utf8proc_uint8_t *)in,
-                                        (utf8proc_ssize_t)inlen, &r,
+    utf8proc_ssize_t  n  = utf8proc_map((const utf8proc_uint8_t *)in.data,
+                                        (utf8proc_ssize_t)in.u8_bytes, &r,
                                         UTF8PROC_STABLE | UTF8PROC_COMPOSE);
 
     if (n < 0) {
@@ -37,8 +35,7 @@ static bool nfc(void *state, const char *in, size_t inlen, const char **out,
 
     free(st->buf);
     st->buf = r;
-    *out    = (const char *)r;
-    *outlen = (size_t)n;
+    *out    = core_string_borrow((const char *)r, (size_t)n);
 
     return true;
 }

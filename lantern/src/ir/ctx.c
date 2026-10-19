@@ -26,18 +26,18 @@ size_t ir_ctx_bytes(const ir_ctx_t *ctx)
     return n;
 }
 
-char *ir_strdup(ir_ctx_t *ctx, const char *s)
+core_string_t ir_strdup(ir_ctx_t *ctx, core_string_t s)
 {
-    if (!s) {
-        return nullptr;
+    if (!s.data) {
+        return (core_string_t){};
     }
 
-    size_t n = strlen(s);
-    char  *d = ir_alloc(ctx, n + 1);
+    char *d = ir_alloc(ctx, s.u8_bytes + 1);
 
-    memcpy(d, s, n + 1);
+    memcpy(d, s.data, s.u8_bytes);
+    d[s.u8_bytes] = 0;
 
-    return d;
+    return (core_string_t){.data = d, .u8_bytes = s.u8_bytes};
 }
 
 void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem)
@@ -109,10 +109,10 @@ static void free_symtab(void *p)
     parse_symtab_free(m->symtab);
 }
 
-ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
-                           const ir_profile_t *profile, const char *target)
+ir_module_t *ir_module_new(ir_ctx_t *ctx, core_string_t name,
+                           const ir_profile_t *profile, core_string_t target)
 {
-    if (!ctx || !name || !profile) {
+    if (!ctx || !name.data || !profile) {
         return nullptr;
     }
 
@@ -120,7 +120,7 @@ ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
 
     m->ctx     = ctx;
     m->name    = ir_strdup(ctx, name);
-    m->target  = target ? ir_strdup(ctx, target) : nullptr;
+    m->target  = ir_strdup(ctx, target);
     m->profile = profile;
     m->span    = IR_SPAN_UNKNOWN;
     m->symtab  = parse_symtab_new();
@@ -191,14 +191,14 @@ th_ctx *ir_module_types(ir_module_t *m)
     return m ? ir_ctx_types(m->ctx) : nullptr;
 }
 
-const char *ir_module_name(const ir_module_t *m)
+core_string_t ir_module_name(const ir_module_t *m)
 {
-    return m ? m->name : nullptr;
+    return m ? m->name : (core_string_t){};
 }
 
-const char *ir_module_target(const ir_module_t *m)
+core_string_t ir_module_target(const ir_module_t *m)
 {
-    return m ? m->target : nullptr;
+    return m ? m->target : (core_string_t){};
 }
 
 const ir_profile_t *ir_module_profile(const ir_module_t *m)
@@ -305,9 +305,9 @@ void ir_module_set_span(ir_module_t *m, ir_span_t s)
     }
 }
 
-void ir_module_set_target(ir_module_t *m, const char *target)
+void ir_module_set_target(ir_module_t *m, core_string_t target)
 {
-    if (m && target) {
+    if (m && target.data) {
         m->target = ir_strdup(m->ctx, target);
     }
 }
@@ -317,28 +317,28 @@ ir_annots_t *ir_module_annots(ir_module_t *m)
     return m ? &m->annots : nullptr;
 }
 
-const char *ir_mutability_name(ir_mutability_t m)
+core_string_t ir_mutability_name(ir_mutability_t m)
 {
     switch (m) {
     case IR_MUT_MUTABLE:
-        return "mutable";
+        return CORE_STRING_STATIC("mutable");
     case IR_MUT_IMMUTABLE:
-        return "immutable";
+        return CORE_STRING_STATIC("immutable");
     case IR_MUT_CONST:
-        return "const";
+        return CORE_STRING_STATIC("const");
     default:
-        return nullptr;
+        return (core_string_t){};
     }
 }
 
-bool ir_mutability_from_name(const char *s, ir_mutability_t *out)
+bool ir_mutability_from_name(core_string_t s, ir_mutability_t *out)
 {
-    if (!s) {
+    if (!s.data) {
         return false;
     }
 
     for (ir_mutability_t m = IR_MUT_MUTABLE; m <= IR_MUT_CONST; m++) {
-        if (!strcmp(s, ir_mutability_name(m))) {
+        if (core_string_eq(s, ir_mutability_name(m))) {
             if (out) {
                 *out = m;
             }
@@ -355,7 +355,7 @@ bool ir_func_set_execution_phase(ir_ctx_t *ctx, ir_func_t *function,
 {
     if (!ctx || !function || phase > IR_PHASE_COMPTIME) return false;
     return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = "ir.execution_phase",
+        .key = CORE_STRING_STATIC("ir.execution_phase"),
         .kind = IR_ANNOT_INT,
         .i = {.mag = (ir_uint_t)phase},
     });
@@ -365,7 +365,7 @@ ir_execution_phase_t ir_func_execution_phase(const ir_func_t *function)
 {
     if (!function) return IR_PHASE_RUNTIME;
     ir_annot_t *phase = ir_annot_get(
-        (ir_annots_t *)&function->annots, "ir.execution_phase");
+        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.execution_phase"));
     if (!phase || phase->kind != IR_ANNOT_INT || phase->i.neg
         || phase->i.mag > IR_PHASE_COMPTIME)
         return IR_PHASE_RUNTIME;
@@ -377,7 +377,7 @@ bool ir_func_set_initializer(ir_ctx_t *ctx, ir_func_t *function,
 {
     if (!ctx || !function) return false;
     return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = "ir.initializer",
+        .key = CORE_STRING_STATIC("ir.initializer"),
         .kind = IR_ANNOT_BOOL,
         .b = is_initializer,
     });
@@ -387,7 +387,7 @@ bool ir_func_is_initializer(const ir_func_t *function)
 {
     if (!function) return false;
     ir_annot_t *initializer = ir_annot_get(
-        (ir_annots_t *)&function->annots, "ir.initializer");
+        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.initializer"));
     return initializer && initializer->kind == IR_ANNOT_BOOL
         && initializer->b;
 }
@@ -397,7 +397,7 @@ bool ir_func_set_always_inline(ir_ctx_t *ctx, ir_func_t *function,
 {
     if (!ctx || !function) return false;
     return ir_annot_set(ctx, &function->annots, (ir_annot_t){
-        .key = "ir.always_inline",
+        .key = CORE_STRING_STATIC("ir.always_inline"),
         .kind = IR_ANNOT_BOOL,
         .b = enabled,
     });
@@ -407,7 +407,7 @@ bool ir_func_is_always_inline(const ir_func_t *function)
 {
     if (!function) return false;
     ir_annot_t *inline_attr = ir_annot_get(
-        (ir_annots_t *)&function->annots, "ir.always_inline");
+        (ir_annots_t *)&function->annots, CORE_STRING_STATIC("ir.always_inline"));
     return inline_attr && inline_attr->kind == IR_ANNOT_BOOL
         && inline_attr->b;
 }
@@ -425,32 +425,32 @@ bool ir_value_set_phase_access(ir_ctx_t *ctx, ir_value_t *value,
     ir_annots_t *annots = ir_value_annots(value);
     return annots
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.binding_phases",
+               .key = CORE_STRING_STATIC("ir.binding_phases"),
                .kind = IR_ANNOT_INT,
                .i = {.mag = available},
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.binding_mutable_phases",
+               .key = CORE_STRING_STATIC("ir.binding_mutable_phases"),
                .kind = IR_ANNOT_INT,
                .i = {.mag = mutable_in},
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.binding_initializer_phases",
+               .key = CORE_STRING_STATIC("ir.binding_initializer_phases"),
                .kind = IR_ANNOT_INT,
                .i = {.mag = initializable_in},
            });
 }
 
-static bool value_phase_allows(const ir_value_t *value, const char *key,
+static bool value_phase_allows(const ir_value_t *value, core_string_t key,
                                ir_execution_phase_t phase)
 {
     if (!value || phase > IR_PHASE_COMPTIME) return false;
     ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
-    ir_annot_t *available = ir_annot_get(annots, "ir.binding_phases");
+    ir_annot_t *available = ir_annot_get(annots, CORE_STRING_STATIC("ir.binding_phases"));
     ir_annot_t *mutable = ir_annot_get(
-        annots, "ir.binding_mutable_phases");
+        annots, CORE_STRING_STATIC("ir.binding_mutable_phases"));
     ir_annot_t *initializable = ir_annot_get(
-        annots, "ir.binding_initializer_phases");
+        annots, CORE_STRING_STATIC("ir.binding_initializer_phases"));
     if (!available && !mutable && !initializable) return true;
     if (!available || !mutable || !initializable) return false;
     ir_annot_t *access = ir_annot_get(annots, key);
@@ -465,26 +465,26 @@ static bool value_phase_allows(const ir_value_t *value, const char *key,
 
 bool ir_value_can_read(const ir_value_t *value, ir_execution_phase_t phase)
 {
-    return value_phase_allows(value, "ir.binding_phases", phase);
+    return value_phase_allows(value, CORE_STRING_STATIC("ir.binding_phases"), phase);
 }
 
 bool ir_value_can_write(const ir_value_t *value, ir_execution_phase_t phase)
 {
     return ir_value_can_read(value, phase)
-        && value_phase_allows(value, "ir.binding_mutable_phases", phase);
+        && value_phase_allows(value, CORE_STRING_STATIC("ir.binding_mutable_phases"), phase);
 }
 
 bool ir_value_can_initialize(const ir_value_t *value,
                              ir_execution_phase_t phase)
 {
-    return value_phase_allows(value, "ir.binding_initializer_phases", phase);
+    return value_phase_allows(value, CORE_STRING_STATIC("ir.binding_initializer_phases"), phase);
 }
 
 bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value)
 {
     ir_annots_t *annots = value ? ir_value_annots(value) : nullptr;
     return ctx && annots && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.external_writable_storage", .kind = IR_ANNOT_BOOL,
+        .key = CORE_STRING_STATIC("ir.external_writable_storage"), .kind = IR_ANNOT_BOOL,
         .b = true,
     });
 }
@@ -494,7 +494,7 @@ bool ir_value_has_external_writable_storage(const ir_value_t *value)
     ir_annots_t *annots = value ? ir_value_annots((ir_value_t *)value)
                                 : nullptr;
     ir_annot_t *marker = annots
-        ? ir_annot_get(annots, "ir.external_writable_storage") : nullptr;
+        ? ir_annot_get(annots, CORE_STRING_STATIC("ir.external_writable_storage")) : nullptr;
     return marker && marker->kind == IR_ANNOT_BOOL && marker->b;
 }
 
@@ -510,7 +510,7 @@ bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
         || access < IR_INDIRECT_ACCESS_READ
         || access > IR_INDIRECT_ACCESS_READ_WRITE) return false;
     return ir_annot_set(ctx, ir_value_annots(value), (ir_annot_t){
-        .key = "ir.indirect_access",
+        .key = CORE_STRING_STATIC("ir.indirect_access"),
         .kind = IR_ANNOT_INT,
         .i = {.mag = access},
     });
@@ -520,7 +520,7 @@ ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value)
 {
     if (!value || !value->type) return IR_INDIRECT_ACCESS_UNSPECIFIED;
     ir_annot_t *access = ir_annot_get(
-        ir_value_annots((ir_value_t *)value), "ir.indirect_access");
+        ir_value_annots((ir_value_t *)value), CORE_STRING_STATIC("ir.indirect_access"));
     if (!access || access->kind != IR_ANNOT_INT || access->i.neg
         || access->i.mag < IR_INDIRECT_ACCESS_READ
         || access->i.mag > IR_INDIRECT_ACCESS_READ_WRITE)
@@ -533,7 +533,7 @@ bool ir_global_set_comptime_mutability(ir_ctx_t *ctx, ir_global_t *global,
 {
     if (!ctx || !global || mutability > IR_MUT_CONST) return false;
     return ir_annot_set(ctx, &global->annots, (ir_annot_t){
-        .key = "ir.comptime_mutability",
+        .key = CORE_STRING_STATIC("ir.comptime_mutability"),
         .kind = IR_ANNOT_INT,
         .i = {.mag = (ir_uint_t)mutability},
     });
@@ -543,7 +543,7 @@ ir_mutability_t ir_global_comptime_mutability(const ir_global_t *global)
 {
     if (!global) return IR_MUT_MUTABLE;
     ir_annot_t *mutability = ir_annot_get(
-        (ir_annots_t *)&global->annots, "ir.comptime_mutability");
+        (ir_annots_t *)&global->annots, CORE_STRING_STATIC("ir.comptime_mutability"));
     if (!mutability || mutability->kind != IR_ANNOT_INT
         || mutability->i.neg || mutability->i.mag > IR_MUT_CONST)
         return global->mutability;
@@ -564,33 +564,33 @@ bool ir_global_set_phase_access(ir_ctx_t *ctx, ir_global_t *global,
         || !valid_phase_access(mutable_in)
         || !valid_phase_access(initializable_in)) return false;
     return ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = "ir.global_available_phases",
+               .key = CORE_STRING_STATIC("ir.global_available_phases"),
                .kind = IR_ANNOT_INT,
                .i = {.mag = available},
            })
         && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = "ir.global_mutable_phases",
+               .key = CORE_STRING_STATIC("ir.global_mutable_phases"),
                .kind = IR_ANNOT_INT,
                .i = {.mag = mutable_in},
            })
         && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = "ir.global_initializer_phases",
+               .key = CORE_STRING_STATIC("ir.global_initializer_phases"),
                .kind = IR_ANNOT_INT,
                .i = {.mag = initializable_in},
            });
 }
 
-static bool global_phase_allows(const ir_global_t *global, const char *key,
+static bool global_phase_allows(const ir_global_t *global, core_string_t key,
                                 ir_execution_phase_t phase)
 {
     if (!global || phase > IR_PHASE_COMPTIME) return false;
     ir_annots_t *annots = (ir_annots_t *)&global->annots;
     ir_annot_t *available = ir_annot_get(
-        annots, "ir.global_available_phases");
+        annots, CORE_STRING_STATIC("ir.global_available_phases"));
     ir_annot_t *mutable = ir_annot_get(
-        annots, "ir.global_mutable_phases");
+        annots, CORE_STRING_STATIC("ir.global_mutable_phases"));
     ir_annot_t *initializable = ir_annot_get(
-        annots, "ir.global_initializer_phases");
+        annots, CORE_STRING_STATIC("ir.global_initializer_phases"));
     if (!available && !mutable && !initializable) return true;
     if (!available || !mutable || !initializable) return false;
     ir_annot_t *access = ir_annot_get(annots, key);
@@ -605,66 +605,69 @@ static bool global_phase_allows(const ir_global_t *global, const char *key,
 
 bool ir_global_can_read(const ir_global_t *global, ir_execution_phase_t phase)
 {
-    return global_phase_allows(global, "ir.global_available_phases", phase);
+    return global_phase_allows(global, CORE_STRING_STATIC("ir.global_available_phases"), phase);
 }
 
 bool ir_global_can_write(const ir_global_t *global,
                          ir_execution_phase_t phase)
 {
     return ir_global_can_read(global, phase)
-        && global_phase_allows(global, "ir.global_mutable_phases", phase);
+        && global_phase_allows(global, CORE_STRING_STATIC("ir.global_mutable_phases"), phase);
 }
 
 bool ir_global_can_initialize(const ir_global_t *global,
                               ir_execution_phase_t phase)
 {
-    return global_phase_allows(global, "ir.global_initializer_phases", phase);
+    return global_phase_allows(global, CORE_STRING_STATIC("ir.global_initializer_phases"), phase);
 }
 
 bool ir_global_set_storage_class(ir_ctx_t *ctx, ir_global_t *global,
-                                 const char *requested, bool required,
-                                 const char *selected)
+                                 core_string_t requested, bool required,
+                                 core_string_t selected)
 {
     if (!ctx || !global
-        || (required && (!requested || !*requested || !selected
-                         || strcmp(requested, selected)))) return false;
-    const char *request = ir_strdup(ctx, requested ? requested : "");
-    const char *selection = ir_strdup(ctx, selected ? selected : "");
-    return request && selection
+        || (required && (!requested.u8_bytes || !selected.data
+                         || !core_string_eq(requested, selected))))
+        return false;
+    core_string_t request = ir_strdup(
+        ctx, requested.data ? requested : CORE_STRING_STATIC(""));
+    core_string_t selection = ir_strdup(
+        ctx, selected.data ? selected : CORE_STRING_STATIC(""));
+    return request.data && selection.data
         && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = "ir.storage_requested",
+               .key = CORE_STRING_STATIC("ir.storage_requested"),
                .kind = IR_ANNOT_STR,
                .s = request,
            })
         && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = "ir.storage_selected",
+               .key = CORE_STRING_STATIC("ir.storage_selected"),
                .kind = IR_ANNOT_STR,
                .s = selection,
            })
         && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-               .key = "ir.storage_required",
+               .key = CORE_STRING_STATIC("ir.storage_required"),
                .kind = IR_ANNOT_BOOL,
                .b = required,
            });
 }
 
-const char *ir_global_storage_class(const ir_global_t *global,
-                                    bool *required,
-                                    const char **requested)
+core_string_t ir_global_storage_class(const ir_global_t *global,
+                                      bool *required,
+                                      core_string_t *requested)
 {
     if (required) *required = false;
-    if (requested) *requested = nullptr;
-    if (!global) return nullptr;
+    if (requested) *requested = (core_string_t){};
+    if (!global) return (core_string_t){};
     ir_annots_t *annots = (ir_annots_t *)&global->annots;
-    ir_annot_t *need = ir_annot_get(annots, "ir.storage_required");
-    ir_annot_t *request = ir_annot_get(annots, "ir.storage_requested");
-    ir_annot_t *selection = ir_annot_get(annots, "ir.storage_selected");
+    ir_annot_t *need = ir_annot_get(annots, CORE_STRING_STATIC("ir.storage_required"));
+    ir_annot_t *request = ir_annot_get(annots, CORE_STRING_STATIC("ir.storage_requested"));
+    ir_annot_t *selection = ir_annot_get(annots, CORE_STRING_STATIC("ir.storage_selected"));
     if (required && need && need->kind == IR_ANNOT_BOOL)
         *required = need->b;
     if (requested && request && request->kind == IR_ANNOT_STR
-        && request->s && *request->s) *requested = request->s;
-    return selection && selection->kind == IR_ANNOT_STR && selection->s
-        && *selection->s ? selection->s : nullptr;
+        && request->s.u8_bytes) *requested = request->s;
+    return selection && selection->kind == IR_ANNOT_STR
+        && selection->s.u8_bytes ? selection->s : (core_string_t){};
 }
 
 bool ir_global_set_storage_duration(ir_ctx_t *ctx, ir_global_t *global,
@@ -673,7 +676,7 @@ bool ir_global_set_storage_duration(ir_ctx_t *ctx, ir_global_t *global,
     if (!ctx || !global || duration > IR_STORAGE_DURATION_DYNAMIC)
         return false;
     return ir_annot_set(ctx, &global->annots, (ir_annot_t){
-        .key = "ir.storage_duration",
+        .key = CORE_STRING_STATIC("ir.storage_duration"),
         .kind = IR_ANNOT_INT,
         .i = {.mag = duration},
     });
@@ -684,52 +687,56 @@ ir_storage_duration_t ir_global_storage_duration(
 {
     if (!global) return IR_STORAGE_DURATION_UNSPECIFIED;
     ir_annot_t *duration = ir_annot_get(
-        (ir_annots_t *)&global->annots, "ir.storage_duration");
+        (ir_annots_t *)&global->annots, CORE_STRING_STATIC("ir.storage_duration"));
     if (!duration || duration->kind != IR_ANNOT_INT || duration->i.neg
         || duration->i.mag > IR_STORAGE_DURATION_DYNAMIC)
         return IR_STORAGE_DURATION_UNSPECIFIED;
     return (ir_storage_duration_t)duration->i.mag;
 }
 
-const char *ir_prop_name(ir_props_t one)
+core_string_t ir_prop_name(ir_props_t one)
 {
     switch (one) {
     case IR_PROP_PARSED:
-        return "parsed";
+        return CORE_STRING_STATIC("parsed");
     case IR_PROP_TYPED:
-        return "typed";
+        return CORE_STRING_STATIC("typed");
     case IR_PROP_SSA:
-        return "ssa";
+        return CORE_STRING_STATIC("ssa");
     case IR_PROP_STRUCTURED:
-        return "structured";
+        return CORE_STRING_STATIC("structured");
     case IR_PROP_LAID_OUT:
-        return "laid-out";
+        return CORE_STRING_STATIC("laid-out");
     case IR_PROP_NO_CRIT_EDGE:
-        return "no-critical-edges";
+        return CORE_STRING_STATIC("no-critical-edges");
     case IR_PROP_VERIFIED:
-        return "verified";
+        return CORE_STRING_STATIC("verified");
     case IR_PROP_TREE:
-        return "tree";
+        return CORE_STRING_STATIC("tree");
     case IR_PROP_SCOPED:
-        return "scoped";
+        return CORE_STRING_STATIC("scoped");
     case IR_PROP_SYMBOLS:
-        return "symbols";
+        return CORE_STRING_STATIC("symbols");
     case IR_PROP_CFLOW:
-        return "control-flow";
+        return CORE_STRING_STATIC("control-flow");
     case IR_PROP_TREE_TYPED:
-        return "tree-typed";
+        return CORE_STRING_STATIC("tree-typed");
     default:
-        return nullptr;
+        return (core_string_t){};
     }
 }
 
-static core_dict_t *index_of(ir_ctx_t *ctx, void **slot, core_hash_fn hash,
-                            core_dict_key_eq_fn eq)
+static core_dict_t *index_of(ir_ctx_t *ctx, void **slot, bool string_keys)
 {
     if (!*slot) {
         core_dict_t *ix = core_alloc(core_dict_t);
 
-        core_dict_init(ix, hash, eq);
+        if (string_keys) {
+            core_dict_init_string(ix);
+        }
+        else {
+            core_dict_init(ix, core_hash_word, nullptr);
+        }
         ir_ctx_on_free(ctx, drop_dict, ix);
         *slot = ix;
     }
@@ -739,7 +746,7 @@ static core_dict_t *index_of(ir_ctx_t *ctx, void **slot, core_hash_fn hash,
 
 static ir_typeslot_t *type_find(ir_module_t *m, uint64_t h)
 {
-    core_dict_t *ix = index_of(m->ctx, &m->type_index, core_hash_word, nullptr);
+    core_dict_t *ix = index_of(m->ctx, &m->type_index, false);
     bool        found = false;
     size_t      at    = (size_t)(uintptr_t)core_dict_get(ix, h, &found);
 
@@ -894,14 +901,18 @@ th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
     th_type *key = th_tuple(m->ctx->types, parts, 2);
     if (!key) return nullptr;
     char name[64];
-    snprintf(name, sizeof(name), "__lantern_call_outcome_%016llx",
-             (unsigned long long)ir_type_id(m, key));
+    int name_length = snprintf(name, sizeof(name),
+                               "__lantern_call_outcome_%016llx",
+                               (unsigned long long)ir_type_id(m, key));
     th_arg arguments[] = {
         {.kind = TH_ARG_TYPE, .type = ret},
         {.kind = TH_ARG_TYPE, .type = error},
     };
-    th_type *outcome = th_variant(m->ctx->types, name, arguments, 2);
-    th_member arms[] = {{"ok", ret}, {"error", error}};
+    th_type *outcome = th_variant(
+        m->ctx->types, core_string_borrow(name, (size_t)name_length),
+        arguments, 2);
+    th_member arms[] = {{CORE_STRING_STATIC("ok"), ret},
+                        {CORE_STRING_STATIC("error"), error}};
     th_type *definition = th_record(m->ctx->types, arms, 2);
     th_type *existing = ir_type_definition(m, outcome);
     if (!existing && !ir_type_define(m, outcome, definition)) return nullptr;
@@ -910,16 +921,16 @@ th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
     return ir_type_intern(m, outcome);
 }
 
-th_type *ir_type_parse(ir_module_t *m, const char *text)
+th_type *ir_type_parse(ir_module_t *m, core_string_t text)
 {
-    if (!m || !text) {
+    if (!m || !text.data) {
         return nullptr;
     }
 
-    char    *err = nullptr;
-    th_type *t   = ir_typelang_parse(m->ctx->types, text, &err);
+    core_string_t err = {};
+    th_type      *t   = ir_typelang_parse(m->ctx->types, text, &err);
 
-    core_free(err);
+    core_free(err.data);
 
     return t ? ir_type_intern(m, t) : nullptr;
 }
@@ -948,7 +959,7 @@ uint64_t ir_type_id(ir_module_t *m, th_type *t)
         return h;
     }
 
-    ix = index_of(m->ctx, &m->id_index, core_hash_word, nullptr);
+    ix = index_of(m->ctx, &m->id_index, false);
 
     if (!ix) {
         return th_hash(m->ctx->types, t);
@@ -981,39 +992,41 @@ size_t ir_type_count(const ir_module_t *m)
     return m ? m->n_types : 0;
 }
 
-int32_t ir_file_add(ir_module_t *m, const char *path)
+int32_t ir_file_add(ir_module_t *m, core_string_t path)
 {
-    if (!m || !path) {
+    if (!m || !path.data) {
         return -1;
     }
 
-    core_dict_t *ix = index_of(m->ctx, &m->file_index, core_hash_cstring,
-                              core_dict_cstr_eq);
+    core_dict_t *ix = index_of(m->ctx, &m->file_index, true);
 
     if (!ix) {
         return -1;
     }
 
     bool   found = false;
-    size_t at    = (size_t)(uintptr_t)core_dict_get(ix, path, &found);
+    size_t at    = (size_t)(uintptr_t)core_dict_get(ix, &path, &found);
 
     if (found) {
         return (int32_t)at;
     }
 
     m->files = ir_grow(m->ctx, m->files, &m->cap_files, m->n_files + 1,
-                       sizeof(char *));
-    m->files[m->n_files] = ir_strdup(m->ctx, path);
-    core_dict_put((core_dict_t *)m->file_index, m->files[m->n_files],
-                 m->n_files);
+                       sizeof(core_string_t));
+
+    core_string_t *key = ir_alloc(m->ctx, sizeof(core_string_t));
+
+    *key                 = ir_strdup(m->ctx, path);
+    m->files[m->n_files] = *key;
+    core_dict_put((core_dict_t *)m->file_index, key, m->n_files);
 
     return (int32_t)m->n_files++;
 }
 
-const char *ir_file_path(const ir_module_t *m, int32_t id)
+core_string_t ir_file_path(const ir_module_t *m, int32_t id)
 {
     if (!m || id < 0 || (size_t)id >= m->n_files) {
-        return nullptr;
+        return (core_string_t){};
     }
 
     return m->files[id];

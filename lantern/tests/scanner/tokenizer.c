@@ -11,11 +11,7 @@
 #include "private/parse/grammar.h"
 #include "harness.h"
 
-static core_string_t
-S(const char *s)
-{
-    return core_string_from_cstr(s);
-}
+#define S(x) CORE_STRING_STATIC(x)
 
 static int shouty_calls;
 
@@ -56,12 +52,14 @@ scan_shouty(parse_scanner_t *s)
     return true;
 }
 
+#define count_tokens(g, src) count_tokens_in((g), S(src))
+
 static size_t
-count_tokens(parse_grammar_t *g, const char *src)
+count_tokens_in(parse_grammar_t *g, core_string_t src)
 {
     core_buffer_t       *buf = nullptr;
     parse_scanner_t      *sc  = nullptr;
-    parse_token_stream_t *ts  = scan_tokenize(g, src, strlen(src), &buf, &sc);
+    parse_token_stream_t *ts  = scan_tokenize(g, src, &buf, &sc);
     size_t              n   = 0;
 
     if (!ts) {
@@ -98,10 +96,11 @@ test_the_grammar_is_the_operator_table(void)
     parse_grammar_t *g = parse_grammar_new();
 
 
-    static const char *const OPS[] = {"<<=", "->", "==", "<", "=", "-", ">"};
+    static const core_string_t OPS[] = {S("<<="), S("->"), S("=="), S("<"),
+                                        S("="),   S("-"),  S(">")};
 
     for (size_t i = 0; i < sizeof(OPS) / sizeof(OPS[0]); i++) {
-        parse_register_terminal(g, S(OPS[i]));
+        parse_register_terminal(g, OPS[i]);
     }
 
     check("declaring it makes it one token, longest match first",
@@ -122,7 +121,7 @@ test_stream_token_to_trivia(void)
 
     core_buffer_t *buf = nullptr;
     parse_scanner_t *scanner = nullptr;
-    parse_token_stream_t *stream = scan_tokenize(g, "a + b", 5,
+    parse_token_stream_t *stream = scan_tokenize(g, S("a + b"),
                                                   &buf, &scanner);
     parse_token_info_t *first = scan_stream_get(stream, 0);
     parse_token_info_t *middle = scan_stream_get(stream, 1);
@@ -184,15 +183,14 @@ main(void)
 
     parse_grammar_free(plain);
 
-    static const char *const G = "@tokenizer(\"shouty\")\n"
-                                 "<top> ::= %IDENTIFIER\n";
-
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
     check("a grammar naming a tokenizer loads",
-          parse_bnf_load(S(G), S("top"), g));
+          parse_bnf_load(S("@tokenizer(\"shouty\")\n"
+                           "<top> ::= %IDENTIFIER\n"),
+                         S("top"), g));
 
     check("@tokenizer sets the grammar's tokenizer",
           core_string_eq(scan_grammar_tokenizer(g), S("shouty")));
@@ -206,13 +204,12 @@ main(void)
 
     parse_grammar_free(g);
 
-    static const char *const MISSING = "@tokenizer(\"absent\")\n"
-                                       "<top> ::= %IDENTIFIER\n";
-
     parse_grammar_t *m = parse_grammar_new();
 
     parse_grammar_set_error_recovery(m, false);
-    parse_bnf_load(S(MISSING), S("top"), m);
+    parse_bnf_load(S("@tokenizer(\"absent\")\n"
+                     "<top> ::= %IDENTIFIER\n"),
+                   S("top"), m);
 
     check("a grammar naming an unregistered tokenizer resolves to nothing",
           scan_grammar_tokenizer_fn(m) == nullptr);

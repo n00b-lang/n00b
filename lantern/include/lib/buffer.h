@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "lib/alloc.h"
+#include "lib/string.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -16,20 +17,6 @@ static inline core_buffer_t *
 core_buffer_empty(void)
 {
     core_buffer_t *buf = core_alloc(core_buffer_t);
-    return buf;
-}
-
-static inline core_buffer_t *
-core_buffer_from_cstr(const char *s)
-{
-    core_buffer_t *buf = core_alloc(core_buffer_t);
-    size_t len = strlen(s);
-
-    buf->data      = (char *)core_alloc_size(1, len + 1);
-    memcpy(buf->data, s, len);
-    buf->byte_len  = len;
-    buf->alloc_len = len + 1;
-
     return buf;
 }
 
@@ -87,11 +74,18 @@ core_buffer_putc(core_buffer_t *buf, char c)
 }
 
 static inline void
-core_buffer_puts(core_buffer_t *buf, const char *s)
+core_buffer_append_string(core_buffer_t *buf, core_string_t s)
 {
-    if (s) {
-        core_buffer_append(buf, s, strlen(s));
-    }
+    core_buffer_append(buf, s.data, s.u8_bytes);
+}
+
+#define core_buffer_puts(buf, lit) \
+    core_buffer_append((buf), "" lit, sizeof(lit) - 1)
+
+static inline core_string_t
+core_buffer_string(const core_buffer_t *buf)
+{
+    return (core_string_t){.data = buf->data, .u8_bytes = buf->byte_len};
 }
 
 static inline void
@@ -140,6 +134,14 @@ core_buffer_take(core_buffer_t *buf)
 
     core_free(buf);
     return result;
+}
+
+static inline core_string_t
+core_buffer_take_string(core_buffer_t *buf)
+{
+    size_t length = buf->byte_len;
+
+    return (core_string_t){.data = core_buffer_take(buf), .u8_bytes = length};
 }
 
 static inline void

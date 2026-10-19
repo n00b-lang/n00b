@@ -69,8 +69,8 @@ bool parse_ambiguity_confirm_finding(parse_grammar_t *grammar,
                                      parse_ambiguity_tokenize_fn tokenize,
                                      void *user_data);
 
-const char *parse_ambiguity_kind_name(parse_ambiguity_kind_t kind);
-const char *parse_ambiguity_severity_name(parse_ambiguity_severity_t severity);
+core_string_t parse_ambiguity_kind_name(parse_ambiguity_kind_t kind);
+core_string_t parse_ambiguity_severity_name(parse_ambiguity_severity_t severity);
 
 core_string_t parse_ambiguity_format_json(
     const parse_ambiguity_list_t *findings);

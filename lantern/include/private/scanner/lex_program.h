@@ -53,7 +53,7 @@ core_list_decl(lex_term_edge_t);
 
 bool scan_lex_analyze_spec(const scan_lex_spec_t *spec,
                            parse_grammar_t *grammar,
-                           char *error, size_t error_bytes,
+                           core_string_t *error,
                            scan_lex_issue_t **issues, size_t *issue_count);
 void scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
                                         parse_grammar_t *grammar);

@@ -1,3 +1,5 @@
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -18,7 +20,7 @@ static core_dict_t *index_of(ir_ctx_t *ctx, void **slot)
     if (!d) {
         d = core_alloc(core_dict_t);
 
-        core_dict_init(d, core_hash_cstring, core_dict_cstr_eq);
+        core_dict_init_string(d);
         ir_ctx_on_free(ctx, drop_index, d);
         *slot = d;
     }
@@ -26,26 +28,29 @@ static core_dict_t *index_of(ir_ctx_t *ctx, void **slot)
     return d;
 }
 
-void ir_index_add(ir_ctx_t *ctx, void **slot, const char *name, void *node)
+void ir_index_add(ir_ctx_t *ctx, void **slot, core_string_t name, void *node)
 {
     core_dict_t *d = index_of(ctx, slot);
 
     if (d) {
-        core_dict_put(d, name, node);
+        core_string_t *key = ir_alloc(ctx, sizeof(core_string_t));
+
+        *key = name;
+        core_dict_put(d, key, node);
     }
 }
 
-void *ir_index_find(void *slot, const char *name)
+void *ir_index_find(void *slot, core_string_t name)
 {
     bool found = false;
 
-    return slot ? core_dict_get((core_dict_t *)slot, name, &found) : nullptr;
+    return slot ? core_dict_get((core_dict_t *)slot, &name, &found) : nullptr;
 }
 
 
-ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type)
+ir_global_t *ir_global_add(ir_module_t *m, core_string_t name, th_type *type)
 {
-    if (!m || !name || !type || ir_global_find(m, name)) {
+    if (!m || !name.data || !type || ir_global_find(m, name)) {
         return nullptr;
     }
 
@@ -90,7 +95,7 @@ bool ir_global_set_identity(ir_ctx_t *ctx, ir_global_t *global,
         return false;
     ir_global_t *root = global_identity_root(identity);
     if (!root || root->owner->ctx != ctx
-        || strcmp(global->name, root->name)
+        || !core_string_eq(global->name, root->name)
         || !ir_type_eq(global->owner, global->type, root->type))
         return false;
     ir_global_t *current = global_identity_root(global);
@@ -111,18 +116,18 @@ ir_module_t *ir_global_owner(const ir_global_t *global)
 }
 
 bool ir_global_set_string_initializer(ir_module_t *m, ir_global_t *global,
-                                      const char *bytes, size_t length)
+                                      core_string_t bytes)
 {
     ir_global_init_value_t value = {
         .kind = IR_GLOBAL_INIT_STRING,
-        .string = {.bytes = bytes, .length = length},
+        .string = bytes,
     };
     return ir_global_set_static_initializer(m, global, &value);
 }
 
-ir_global_t *ir_global_find(ir_module_t *m, const char *name)
+ir_global_t *ir_global_find(ir_module_t *m, core_string_t name)
 {
-    if (!m || !name) {
+    if (!m || !name.data) {
         return nullptr;
     }
 
@@ -186,7 +191,7 @@ ir_func_set_callable_contract(ir_func_t *function, th_type *contract)
         return false;
     return ir_annot_set(function->owner->ctx, &function->annots,
         (ir_annot_t){
-            .key = "ir.callable_contract",
+            .key = CORE_STRING_STATIC("ir.callable_contract"),
             .kind = IR_ANNOT_TYPE,
             .t = contract,
         });
@@ -197,7 +202,8 @@ ir_func_callable_contract(const ir_func_t *function)
 {
     ir_annot_t *annotation = function
         ? ir_annot_get((ir_annots_t *)&function->annots,
-                       "ir.callable_contract") : nullptr;
+                       CORE_STRING_STATIC("ir.callable_contract"))
+                 : nullptr;
     return annotation && annotation->kind == IR_ANNOT_TYPE
         && annotation->t
         && (th_kind_of(th_resolve(annotation->t)) == TH_BINDER
@@ -291,7 +297,7 @@ static bool global_init_value_matches(ir_module_t *module,
         return machine.class == IR_CLASS_FLOAT;
     case IR_GLOBAL_INIT_STRING:
         return th_builtin_kind(types, type) == TH_BUILTIN_STRING
-            && (!value->string.length || value->string.bytes);
+            && (!value->string.u8_bytes || value->string.data);
     case IR_GLOBAL_INIT_SYMBOL: {
         ir_value_t *symbol = value->symbol;
         th_type *referent = th_kind_of(type) == TH_INDIRECTION
@@ -301,8 +307,8 @@ static bool global_init_value_matches(ir_module_t *module,
             && ir_type_eq(module, referent, symbol->type);
     }
     case IR_GLOBAL_INIT_PHASE_RESULT:
-        return value->phase_result.identifier
-            && value->phase_result.identifier[0];
+        return value->phase_result.identifier.data
+            && value->phase_result.identifier.u8_bytes;
     case IR_GLOBAL_INIT_TYPE:
         return value->descriptor_type != nullptr;
     case IR_GLOBAL_INIT_NIL:
@@ -333,7 +339,7 @@ static bool global_init_value_matches(ir_module_t *module,
             return false;
         for (size_t i = 0; i < value->aggregate.count; i++) {
             const th_type *element = global_init_named_arg(type, i);
-            if (!element || value->aggregate.items[i].member
+            if (!element || value->aggregate.items[i].member.data
                 || !global_init_value_matches(module,
                     &value->aggregate.items[i], element, depth + 1))
                 return false;
@@ -347,12 +353,13 @@ static bool global_init_value_matches(ir_module_t *module,
             || (count && !value->aggregate.items)) return false;
         for (size_t i = 0; i < count; i++) {
             const ir_global_init_value_t *item = &value->aggregate.items[i];
-            const th_type *member = item->member
+            const th_type *member = item->member.data
                 ? th_record_lookup(record, item->member) : nullptr;
             if (!member) return false;
             for (size_t j = 0; j < i; j++) {
-                const char *previous = value->aggregate.items[j].member;
-                if (previous && !strcmp(item->member, previous)) return false;
+                core_string_t previous = value->aggregate.items[j].member;
+                if (previous.data && core_string_eq(item->member, previous))
+                    return false;
             }
             if (!global_init_value_matches(module, item, member, depth + 1))
                 return false;
@@ -362,12 +369,12 @@ static bool global_init_value_matches(ir_module_t *module,
     case IR_GLOBAL_INIT_VARIANT: {
         bool variant = false;
         const th_type *shape = global_init_record_type(module, type);
-        if (!th_named_info(type, nullptr, nullptr, &variant, nullptr)
+        if (!th_named_info(type, nullptr, &variant, nullptr)
             || !variant || !shape || th_kind_of(shape) != TH_RECORD
             || value->aggregate.count != 1 || !value->aggregate.items)
             return false;
         const ir_global_init_value_t *item = value->aggregate.items;
-        const th_type *arm = item->member
+        const th_type *arm = item->member.data
             ? th_record_lookup(shape, item->member) : nullptr;
         return arm && global_init_value_matches(module, item, arm,
                                                  depth + 1);
@@ -378,7 +385,7 @@ static bool global_init_value_matches(ir_module_t *module,
         if (!element || (value->aggregate.count && !value->aggregate.items))
             return false;
         for (size_t i = 0; i < value->aggregate.count; i++)
-            if (value->aggregate.items[i].member
+            if (value->aggregate.items[i].member.data
                 || !global_init_value_matches(module,
                     &value->aggregate.items[i], element, depth + 1))
                 return false;
@@ -392,7 +399,7 @@ static bool global_init_value_matches(ir_module_t *module,
         if (!key || !element || (count & 1u)
             || (count && !value->aggregate.items)) return false;
         for (size_t i = 0; i < count; i++)
-            if (value->aggregate.items[i].member
+            if (value->aggregate.items[i].member.data
                 || !global_init_value_matches(module,
                     &value->aggregate.items[i], i & 1u ? element : key,
                     depth + 1)) return false;
@@ -409,18 +416,17 @@ static bool clone_global_init_value(ir_ctx_t *ctx,
 {
     if (!ctx || !destination || !source || depth > 64) return false;
     *destination = *source;
-    destination->member = source->member
-        ? ir_strdup(ctx, source->member) : nullptr;
-    if (source->member && !destination->member) return false;
+    destination->member = ir_strdup(ctx, source->member);
+    if (source->member.data && !destination->member.data) return false;
     switch (source->kind) {
     case IR_GLOBAL_INIT_STRING: {
-        if (source->string.length && !source->string.bytes) return false;
-        char *copy = ir_alloc(ctx, source->string.length
-                                  ? source->string.length : 1);
+        if (source->string.u8_bytes && !source->string.data) return false;
+        char *copy = ir_alloc(ctx, source->string.u8_bytes
+                                  ? source->string.u8_bytes : 1);
         if (!copy) return false;
-        if (source->string.length)
-            memcpy(copy, source->string.bytes, source->string.length);
-        destination->string.bytes = copy;
+        if (source->string.u8_bytes)
+            memcpy(copy, source->string.data, source->string.u8_bytes);
+        destination->string.data = copy;
         return true;
     }
     case IR_GLOBAL_INIT_SYMBOL:
@@ -428,15 +434,14 @@ static bool clone_global_init_value(ir_ctx_t *ctx,
         destination->symbol = ir_alloc(ctx, sizeof(*destination->symbol));
         if (!destination->symbol) return false;
         *destination->symbol = *source->symbol;
-        destination->symbol->name = source->symbol->name
-            ? ir_strdup(ctx, source->symbol->name) : nullptr;
-        return !source->symbol->name || destination->symbol->name;
+        destination->symbol->name = ir_strdup(ctx, source->symbol->name);
+        return !source->symbol->name.data || destination->symbol->name.data;
     case IR_GLOBAL_INIT_PHASE_RESULT:
-        if (!source->phase_result.identifier
-            || !source->phase_result.identifier[0]) return false;
+        if (!source->phase_result.identifier.data
+            || !source->phase_result.identifier.u8_bytes) return false;
         destination->phase_result.identifier = ir_strdup(
             ctx, source->phase_result.identifier);
-        return destination->phase_result.identifier != nullptr;
+        return destination->phase_result.identifier.data != nullptr;
     case IR_GLOBAL_INIT_SEQUENCE:
     case IR_GLOBAL_INIT_TUPLE:
     case IR_GLOBAL_INIT_RECORD:
@@ -492,15 +497,17 @@ bool ir_global_set_static_initializer(ir_module_t *module,
 
 bool ir_global_set_phase_result_initializer(ir_module_t *module,
                                             ir_global_t *global,
-                                            const char *identifier)
+                                            core_string_t identifier)
 {
     if (!module || !global || ir_global_find(module, global->name) != global
-        || global->is_extern || !identifier || !identifier[0]) return false;
+        || global->is_extern || !identifier.data || !identifier.u8_bytes)
+        return false;
     if (global->has_static_initializer) {
         const ir_global_init_value_t *existing = global->static_initializer;
         if (existing && existing->kind == IR_GLOBAL_INIT_PHASE_RESULT)
-            return existing->phase_result.identifier
-                && !strcmp(existing->phase_result.identifier, identifier);
+            return existing->phase_result.identifier.data
+                && core_string_eq(existing->phase_result.identifier,
+                                  identifier);
     }
     ir_global_init_value_t value = {
         .kind = IR_GLOBAL_INIT_PHASE_RESULT,
@@ -517,16 +524,16 @@ bool ir_global_set_phase_result_initializer(ir_module_t *module,
 }
 
 bool ir_global_materialize_phase_result(
-    ir_module_t *module, ir_global_t *global, const char *identifier,
+    ir_module_t *module, ir_global_t *global, core_string_t identifier,
     const ir_global_init_value_t *value)
 {
     if (!module || !global || ir_global_find(module, global->name) != global
-        || !identifier || !value || !global->has_static_initializer
+        || !identifier.data || !value || !global->has_static_initializer
         || !global->static_initializer
         || global->static_initializer->kind != IR_GLOBAL_INIT_PHASE_RESULT
-        || !global->static_initializer->phase_result.identifier
-        || strcmp(global->static_initializer->phase_result.identifier,
-                  identifier)
+        || !global->static_initializer->phase_result.identifier.data
+        || !core_string_eq(global->static_initializer->phase_result.identifier,
+                           identifier)
         || !global_init_value_matches(module, value, global->type, 0))
         return false;
     ir_global_init_value_t *copy = ir_alloc(module->ctx, sizeof(*copy));
@@ -557,10 +564,10 @@ ir_global_t *ir_global_at(ir_module_t *m, size_t i)
     return m && i < m->n_globals ? m->globals[i] : nullptr;
 }
 
-ir_func_t *ir_func_add(ir_module_t *m, const char *name, th_type *type,
+ir_func_t *ir_func_add(ir_module_t *m, core_string_t name, th_type *type,
                        ir_linkage_t linkage)
 {
-    if (!m || !name || !type || ir_func_find(m, name)) {
+    if (!m || !name.data || !type || ir_func_find(m, name)) {
         return nullptr;
     }
 
@@ -589,9 +596,9 @@ ir_func_t *ir_func_add(ir_module_t *m, const char *name, th_type *type,
     return f;
 }
 
-ir_func_t *ir_func_find(ir_module_t *m, const char *name)
+ir_func_t *ir_func_find(ir_module_t *m, core_string_t name)
 {
-    if (!m || !name) {
+    if (!m || !name.data) {
         return nullptr;
     }
 
@@ -608,9 +615,9 @@ ir_func_t *ir_func_at(ir_module_t *m, size_t i)
     return m && i < m->n_funcs ? m->funcs[i] : nullptr;
 }
 
-ir_value_t *ir_param_add(ir_func_t *f, const char *name, th_type *type)
+ir_value_t *ir_param_add(ir_func_t *f, core_string_t name, th_type *type)
 {
-    if (!f || !name || !type) {
+    if (!f || !name.data || !type) {
         return nullptr;
     }
 
@@ -645,7 +652,7 @@ bool ir_param_set_optional(ir_value_t *parameter, bool optional)
                                         optional)) return false;
     parameter->is_optional = optional;
     return ir_annot_set(parameter->owner->owner->ctx, &parameter->annots,
-        (ir_annot_t){.key = "ir.optional_parameter",
+        (ir_annot_t){.key = CORE_STRING_STATIC("ir.optional_parameter"),
                      .kind = IR_ANNOT_BOOL, .b = optional});
 }
 
@@ -653,16 +660,16 @@ bool ir_param_is_optional(const ir_value_t *parameter)
 {
     if (!parameter || parameter->kind != IR_VAL_PARAM) return false;
     ir_annot_t *annotation = ir_annot_get(
-        (ir_annots_t *)&parameter->annots, "ir.optional_parameter");
+        (ir_annots_t *)&parameter->annots, CORE_STRING_STATIC("ir.optional_parameter"));
     return parameter->is_optional
         || ir_func_parameter_is_optional(parameter->owner, parameter->index)
         || (annotation && annotation->kind == IR_ANNOT_BOOL
             && annotation->b);
 }
 
-ir_value_t *ir_kwparam_add(ir_func_t *f, const char *name, th_type *type)
+ir_value_t *ir_kwparam_add(ir_func_t *f, core_string_t name, th_type *type)
 {
-    if (!f || !name || !type || ir_value_find(f, name)) return nullptr;
+    if (!f || !name.data || !type || ir_value_find(f, name)) return nullptr;
     const th_kwparam *declared = th_func_kw_lookup(f->type, name);
     if (!declared || !ir_type_eq(f->owner, declared->type, type))
         return nullptr;
@@ -671,10 +678,11 @@ ir_value_t *ir_kwparam_add(ir_func_t *f, const char *name, th_type *type)
     return value;
 }
 
-ir_value_t *ir_restparam_add(ir_func_t *f, const char *name, th_type *type)
+ir_value_t *ir_restparam_add(ir_func_t *f, core_string_t name, th_type *type)
 {
     const th_param *rest = f ? th_func_rest(f->type) : nullptr;
-    if (!rest || !name || !*name || !type || ir_value_find(f, name) ||
+    if (!rest || !name.data || !name.u8_bytes || !type
+        || ir_value_find(f, name) ||
         !ir_type_eq(f->owner, rest->type, type))
         return nullptr;
     for (uint32_t i = 0; i < f->n_params; i++)
@@ -685,9 +693,9 @@ ir_value_t *ir_restparam_add(ir_func_t *f, const char *name, th_type *type)
     return value;
 }
 
-ir_value_t *ir_value_find(ir_func_t *f, const char *name)
+ir_value_t *ir_value_find(ir_func_t *f, core_string_t name)
 {
-    if (!f || !name) {
+    if (!f || !name.data) {
         return nullptr;
     }
 
@@ -729,10 +737,30 @@ ir_annots_t *ir_value_annots(ir_value_t *value)
     return nullptr;
 }
 
-static bool alias_annotation_count(ir_annots_t *annots, const char *key,
+[[gnu::format(printf, 3, 4)]]
+static core_string_t format_key(char *buffer, size_t size,
+                                const char *format, ...)
+{
+    va_list arguments;
+
+    va_start(arguments, format);
+    int length = vsnprintf(buffer, size, format, arguments);
+    va_end(arguments);
+
+    if (length < 0) {
+        length = 0;
+    }
+    if ((size_t)length >= size) {
+        length = size ? (int)(size - 1) : 0;
+    }
+
+    return core_string_borrow(buffer, (size_t)length);
+}
+
+static bool alias_annotation_count(ir_annots_t *annots, core_string_t key,
                                    uint32_t *count)
 {
-    if (!annots || !key || !count) return false;
+    if (!annots || !key.data || !count) return false;
     ir_annot_t *annotation = ir_annot_get(annots, key);
     if (!annotation) {
         *count = 0;
@@ -755,7 +783,7 @@ bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
         || target_count > UINT32_MAX) return false;
 
     uint32_t existing = 0;
-    if (!alias_annotation_count(annots, "ir.alias_count", &existing)
+    if (!alias_annotation_count(annots, CORE_STRING_STATIC("ir.alias_count"), &existing)
         || existing) return false;
 
     size_t unique_count = 0;
@@ -770,7 +798,7 @@ bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
         if (duplicate) continue;
         uint32_t reverse_count = 0;
         if (!alias_annotation_count(target_annots,
-                "ir.aliased_by_count", &reverse_count)
+                CORE_STRING_STATIC("ir.aliased_by_count"), &reverse_count)
             || reverse_count == UINT32_MAX) return false;
         unique_count++;
         escapes |= targets[i].escapes;
@@ -784,30 +812,32 @@ bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
         ir_annots_t *target_annots = ir_value_annots(target);
         uint32_t reverse_count = 0;
         if (!alias_annotation_count(target_annots,
-                "ir.aliased_by_count", &reverse_count)) return false;
+                CORE_STRING_STATIC("ir.aliased_by_count"), &reverse_count)) return false;
         char key[48];
-        snprintf(key, sizeof(key), "ir.aliased_by%u", reverse_count);
+        core_string_t text = format_key(key, sizeof(key), "ir.aliased_by%u",
+                                        reverse_count);
         if (!ir_annot_set(ctx, target_annots, (ir_annot_t){
-                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_VALUE,
+                .key = ir_strdup(ctx, text), .kind = IR_ANNOT_VALUE,
                 .v = value,
             })) return false;
-        snprintf(key, sizeof(key), "ir.aliased_by%u_escapes", reverse_count);
+        text = format_key(key, sizeof(key), "ir.aliased_by%u_escapes",
+                          reverse_count);
         if (!ir_annot_set(ctx, target_annots, (ir_annot_t){
-                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_BOOL,
+                .key = ir_strdup(ctx, text), .kind = IR_ANNOT_BOOL,
                 .b = targets[i].escapes,
             })
             || !ir_annot_set(ctx, target_annots, (ir_annot_t){
-                .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+                .key = CORE_STRING_STATIC("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
                 .i = {.mag = reverse_count + 1},
             })) return false;
     }
 
     if (!ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+            .key = CORE_STRING_STATIC("ir.alias_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = unique_count},
         })
         || !ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+            .key = CORE_STRING_STATIC("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = 0},
         })) return false;
     size_t alias_index = 0;
@@ -817,27 +847,29 @@ bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
             duplicate |= targets[j].value == targets[i].value;
         if (duplicate) continue;
         char key[48];
-        snprintf(key, sizeof(key), "ir.alias%zu", alias_index);
+        core_string_t text = format_key(key, sizeof(key), "ir.alias%zu",
+                                        alias_index);
         if (!ir_annot_set(ctx, annots, (ir_annot_t){
-                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_VALUE,
+                .key = ir_strdup(ctx, text), .kind = IR_ANNOT_VALUE,
                 .v = targets[i].value,
             })) return false;
-        snprintf(key, sizeof(key), "ir.alias%zu_escapes", alias_index++);
+        text = format_key(key, sizeof(key), "ir.alias%zu_escapes",
+                          alias_index++);
         if (!ir_annot_set(ctx, annots, (ir_annot_t){
-                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_BOOL,
+                .key = ir_strdup(ctx, text), .kind = IR_ANNOT_BOOL,
                 .b = targets[i].escapes,
             })) return false;
     }
     return ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
                .b = escapes,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
                .b = complete,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
                .b = !complete,
            });
 }
@@ -851,25 +883,25 @@ bool ir_value_add_alias_target(ir_ctx_t *ctx, ir_value_t *value,
         || target.value == value || !target_annots) return false;
 
     uint32_t count = 0;
-    if (!alias_annotation_count(annots, "ir.alias_count", &count))
+    if (!alias_annotation_count(annots, CORE_STRING_STATIC("ir.alias_count"), &count))
         return false;
-    if (!count && !ir_annot_get(annots, "ir.alias_analysis_complete"))
+    if (!count && !ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_analysis_complete")))
         return ir_value_set_alias_targets(ctx, value, &target, 1, false);
 
     ir_annot_t *analysis = ir_annot_get(annots,
-                                        "ir.alias_analysis_complete");
+                                        CORE_STRING_STATIC("ir.alias_analysis_complete"));
     ir_annot_t *escape_summary = ir_annot_get(annots,
-                                              "ir.lifetime_escapes");
+                                              CORE_STRING_STATIC("ir.lifetime_escapes"));
     if (!analysis || analysis->kind != IR_ANNOT_BOOL
         || !escape_summary || escape_summary->kind != IR_ANNOT_BOOL)
         return false;
 
     for (uint32_t i = 0; i < count; i++) {
         char key[48];
-        snprintf(key, sizeof(key), "ir.alias%u", i);
-        ir_annot_t *existing = ir_annot_get(annots, key);
-        snprintf(key, sizeof(key), "ir.alias%u_escapes", i);
-        ir_annot_t *existing_escapes = ir_annot_get(annots, key);
+        core_string_t text = format_key(key, sizeof(key), "ir.alias%u", i);
+        ir_annot_t *existing = ir_annot_get(annots, text);
+        text = format_key(key, sizeof(key), "ir.alias%u_escapes", i);
+        ir_annot_t *existing_escapes = ir_annot_get(annots, text);
         if (!existing || existing->kind != IR_ANNOT_VALUE || !existing->v
             || !existing_escapes
             || existing_escapes->kind != IR_ANNOT_BOOL) return false;
@@ -877,27 +909,28 @@ bool ir_value_add_alias_target(ir_ctx_t *ctx, ir_value_t *value,
         if (!target.escapes || existing_escapes->b) return true;
 
         if (!ir_annot_set(ctx, annots, (ir_annot_t){
-                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_BOOL,
+                .key = ir_strdup(ctx, text), .kind = IR_ANNOT_BOOL,
                 .b = true,
             })) return false;
         uint32_t reverse_count = 0;
         if (!alias_annotation_count(target_annots,
-                "ir.aliased_by_count", &reverse_count)) return false;
+                CORE_STRING_STATIC("ir.aliased_by_count"), &reverse_count)) return false;
         for (uint32_t r = 0; r < reverse_count; r++) {
             char reverse_key[48];
-            snprintf(reverse_key, sizeof(reverse_key), "ir.aliased_by%u", r);
-            ir_annot_t *reverse = ir_annot_get(target_annots, reverse_key);
-            snprintf(reverse_key, sizeof(reverse_key),
-                     "ir.aliased_by%u_escapes", r);
+            core_string_t reverse_text = format_key(
+                reverse_key, sizeof(reverse_key), "ir.aliased_by%u", r);
+            ir_annot_t *reverse = ir_annot_get(target_annots, reverse_text);
+            reverse_text = format_key(reverse_key, sizeof(reverse_key),
+                                      "ir.aliased_by%u_escapes", r);
             ir_annot_t *reverse_escapes = ir_annot_get(target_annots,
-                                                       reverse_key);
+                                                       reverse_text);
             if (!reverse || reverse->kind != IR_ANNOT_VALUE
                 || !reverse_escapes || reverse_escapes->kind != IR_ANNOT_BOOL)
                 return false;
             if (reverse->v == value)
                 return reverse_escapes->b || ir_annot_set(ctx,
                     target_annots, (ir_annot_t){
-                        .key = ir_strdup(ctx, reverse_key),
+                        .key = ir_strdup(ctx, reverse_text),
                         .kind = IR_ANNOT_BOOL, .b = true,
                     });
         }
@@ -905,50 +938,52 @@ bool ir_value_add_alias_target(ir_ctx_t *ctx, ir_value_t *value,
     }
 
     uint32_t reverse_count = 0;
-    if (!alias_annotation_count(target_annots, "ir.aliased_by_count",
+    if (!alias_annotation_count(target_annots, CORE_STRING_STATIC("ir.aliased_by_count"),
                                  &reverse_count)
         || reverse_count == UINT32_MAX || count == UINT32_MAX) return false;
     char key[48];
-    snprintf(key, sizeof(key), "ir.aliased_by%u", reverse_count);
+    core_string_t text = format_key(key, sizeof(key), "ir.aliased_by%u",
+                                    reverse_count);
     if (!ir_annot_set(ctx, target_annots, (ir_annot_t){
-            .key = ir_strdup(ctx, key), .kind = IR_ANNOT_VALUE, .v = value,
+            .key = ir_strdup(ctx, text), .kind = IR_ANNOT_VALUE, .v = value,
         })) return false;
-    snprintf(key, sizeof(key), "ir.aliased_by%u_escapes", reverse_count);
+    text = format_key(key, sizeof(key), "ir.aliased_by%u_escapes",
+                      reverse_count);
     if (!ir_annot_set(ctx, target_annots, (ir_annot_t){
-            .key = ir_strdup(ctx, key), .kind = IR_ANNOT_BOOL,
+            .key = ir_strdup(ctx, text), .kind = IR_ANNOT_BOOL,
             .b = target.escapes,
         })
         || !ir_annot_set(ctx, target_annots, (ir_annot_t){
-            .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+            .key = CORE_STRING_STATIC("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = reverse_count + 1},
         })) return false;
 
-    snprintf(key, sizeof(key), "ir.alias%u", count);
+    text = format_key(key, sizeof(key), "ir.alias%u", count);
     if (!ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = ir_strdup(ctx, key), .kind = IR_ANNOT_VALUE,
+            .key = ir_strdup(ctx, text), .kind = IR_ANNOT_VALUE,
             .v = target.value,
         })) return false;
-    snprintf(key, sizeof(key), "ir.alias%u_escapes", count);
+    text = format_key(key, sizeof(key), "ir.alias%u_escapes", count);
     if (!ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = ir_strdup(ctx, key), .kind = IR_ANNOT_BOOL,
+            .key = ir_strdup(ctx, text), .kind = IR_ANNOT_BOOL,
             .b = target.escapes,
         })
         || !ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+            .key = CORE_STRING_STATIC("ir.alias_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = count + 1},
         })) return false;
 
     bool escapes = escape_summary->b || target.escapes;
     return ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
                .b = escapes,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
                .b = false,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
                .b = true,
            });
 }
@@ -958,21 +993,21 @@ bool ir_value_complete_alias_targets(ir_ctx_t *ctx, ir_value_t *value)
     ir_annots_t *annots = ir_value_annots(value);
     uint32_t count = 0;
     if (!ctx || !annots
-        || !alias_annotation_count(annots, "ir.alias_count", &count)
+        || !alias_annotation_count(annots, CORE_STRING_STATIC("ir.alias_count"), &count)
         || !count) return false;
     for (uint32_t i = 0; i < count; i++) {
         char key[48];
-        snprintf(key, sizeof(key), "ir.alias%u", i);
-        ir_annot_t *target = ir_annot_get(annots, key);
+        ir_annot_t *target = ir_annot_get(
+            annots, format_key(key, sizeof(key), "ir.alias%u", i));
         if (!target || target->kind != IR_ANNOT_VALUE || !target->v)
             return false;
     }
     return ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
                .b = true,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .key = CORE_STRING_STATIC("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
                .b = false,
            });
 }
@@ -985,13 +1020,13 @@ bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
     if (destination == source) return true;
     ir_annots_t *source_annots = ir_value_annots((ir_value_t *)source);
     ir_annot_t *count_annot = source_annots
-        ? ir_annot_get(source_annots, "ir.alias_count") : nullptr;
+        ? ir_annot_get(source_annots, CORE_STRING_STATIC("ir.alias_count")) : nullptr;
     if (!count_annot) return true;
     if (count_annot->kind != IR_ANNOT_INT || count_annot->i.neg
         || count_annot->i.mag > UINT32_MAX
         || count_annot->i.mag > ir_annot_count(source_annots)) return false;
     ir_annot_t *complete_annot = ir_annot_get(source_annots,
-        "ir.alias_analysis_complete");
+        CORE_STRING_STATIC("ir.alias_analysis_complete"));
     if (!complete_annot || complete_annot->kind != IR_ANNOT_BOOL)
         return false;
 
@@ -1002,10 +1037,11 @@ bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
     bool valid = true;
     for (size_t i = 0; valid && i < count; i++) {
         char key[48];
-        snprintf(key, sizeof(key), "ir.alias%zu", i);
-        ir_annot_t *target = ir_annot_get(source_annots, key);
-        snprintf(key, sizeof(key), "ir.alias%zu_escapes", i);
-        ir_annot_t *escapes = ir_annot_get(source_annots, key);
+        ir_annot_t *target = ir_annot_get(
+            source_annots, format_key(key, sizeof(key), "ir.alias%zu", i));
+        ir_annot_t *escapes = ir_annot_get(
+            source_annots,
+            format_key(key, sizeof(key), "ir.alias%zu_escapes", i));
         valid = target && target->kind == IR_ANNOT_VALUE && target->v
             && escapes && escapes->kind == IR_ANNOT_BOOL;
         if (valid) targets[i] = (ir_alias_target_t){
@@ -1019,9 +1055,9 @@ bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
     return copied;
 }
 
-ir_local_t *ir_local_add(ir_func_t *f, const char *name, th_type *type)
+ir_local_t *ir_local_add(ir_func_t *f, core_string_t name, th_type *type)
 {
-    if (!f || !name || !type || ir_local_find(f, name)) {
+    if (!f || !name.data || !type || ir_local_find(f, name)) {
         return nullptr;
     }
 
@@ -1044,18 +1080,18 @@ ir_local_t *ir_local_add(ir_func_t *f, const char *name, th_type *type)
     return l;
 }
 
-ir_local_t *ir_local_find(ir_func_t *f, const char *name)
+ir_local_t *ir_local_find(ir_func_t *f, core_string_t name)
 {
-    if (!f || !name) {
+    if (!f || !name.data) {
         return nullptr;
     }
 
     return ir_index_find(f->local_index, name);
 }
 
-ir_block_t *ir_block_add(ir_func_t *f, const char *name)
+ir_block_t *ir_block_add(ir_func_t *f, core_string_t name)
 {
-    if (!f || !name || ir_block_find(f, name)) {
+    if (!f || !name.data || ir_block_find(f, name)) {
         return nullptr;
     }
 
@@ -1078,9 +1114,9 @@ ir_block_t *ir_block_add(ir_func_t *f, const char *name)
     return b;
 }
 
-ir_block_t *ir_block_find(ir_func_t *f, const char *name)
+ir_block_t *ir_block_find(ir_func_t *f, core_string_t name)
 {
-    if (!f || !name) {
+    if (!f || !name.data) {
         return nullptr;
     }
 
@@ -1165,23 +1201,24 @@ ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op)
 }
 
 bool ir_instr_set_storage_class(ir_instr_t *allocation,
-                                const char *storage_class, bool required)
+                                core_string_t storage_class, bool required)
 {
     if (!allocation || allocation->op != IR_OP_ALLOC
-        || (required && (!storage_class || !*storage_class))) {
+        || (required && !storage_class.u8_bytes)) {
         return false;
     }
 
-    ir_ctx_t *ctx = allocation->block->owner->owner->ctx;
-    const char *value = storage_class ? ir_strdup(ctx, storage_class)
-                                      : ir_strdup(ctx, "");
+    ir_ctx_t     *ctx   = allocation->block->owner->owner->ctx;
+    core_string_t value = ir_strdup(ctx, storage_class.data
+                                             ? storage_class
+                                             : CORE_STRING_STATIC(""));
 
     return ir_annot_set(ctx, &allocation->annots, (ir_annot_t){
-        .key = "ir.storage_class",
+        .key = CORE_STRING_STATIC("ir.storage_class"),
         .kind = IR_ANNOT_STR,
         .s = value,
     }) && ir_annot_set(ctx, &allocation->annots, (ir_annot_t){
-        .key = "ir.storage_required",
+        .key = CORE_STRING_STATIC("ir.storage_required"),
         .kind = IR_ANNOT_BOOL,
         .b = required,
     });
@@ -1198,11 +1235,11 @@ address_of_set_alias(ir_instr_t *in)
     ir_ctx_t *ctx = in->block->owner->owner->ctx;
     ir_annots_t *target_annots = ir_value_annots(target);
     ir_annot_t *target_complete = target_annots
-        ? ir_annot_get(target_annots, "ir.alias_analysis_complete") : nullptr;
+        ? ir_annot_get(target_annots, CORE_STRING_STATIC("ir.alias_analysis_complete")) : nullptr;
     ir_annot_t *target_escapes = target_annots
-        ? ir_annot_get(target_annots, "ir.lifetime_escapes") : nullptr;
+        ? ir_annot_get(target_annots, CORE_STRING_STATIC("ir.lifetime_escapes")) : nullptr;
     ir_annot_t *target_unresolved = target_annots
-        ? ir_annot_get(target_annots, "ir.alias_unresolved") : nullptr;
+        ? ir_annot_get(target_annots, CORE_STRING_STATIC("ir.alias_unresolved")) : nullptr;
     bool complete = target_complete
         && target_complete->kind == IR_ANNOT_BOOL && target_complete->b;
     bool escapes = !target_escapes
@@ -1211,49 +1248,49 @@ address_of_set_alias(ir_instr_t *in)
         && (target_unresolved->kind != IR_ANNOT_BOOL
             || target_unresolved->b));
     return ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+        .key = CORE_STRING_STATIC("ir.alias_count"), .kind = IR_ANNOT_INT,
         .i = {.mag = 1},
     }) && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.alias0", .kind = IR_ANNOT_VALUE, .v = target,
+        .key = CORE_STRING_STATIC("ir.alias0"), .kind = IR_ANNOT_VALUE, .v = target,
     }) && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.alias0_escapes", .kind = IR_ANNOT_BOOL,
+        .key = CORE_STRING_STATIC("ir.alias0_escapes"), .kind = IR_ANNOT_BOOL,
         .b = escapes || unresolved,
     }) && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+        .key = CORE_STRING_STATIC("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
         .i = {.mag = 0},
     }) && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+        .key = CORE_STRING_STATIC("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
         .b = escapes,
     }) && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+        .key = CORE_STRING_STATIC("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
         .b = complete && !unresolved,
     }) && ir_annot_set(ctx, annots, (ir_annot_t){
-        .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+        .key = CORE_STRING_STATIC("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
         .b = unresolved,
     });
 }
 
-const char *ir_instr_storage_class(const ir_instr_t *allocation,
-                                   bool *required)
+core_string_t ir_instr_storage_class(const ir_instr_t *allocation,
+                                     bool *required)
 {
     if (required) {
         *required = false;
     }
     if (!allocation || allocation->op != IR_OP_ALLOC) {
-        return nullptr;
+        return (core_string_t){};
     }
 
     ir_annot_t *storage = ir_annot_get(
-        (ir_annots_t *)&allocation->annots, "ir.storage_class");
+        (ir_annots_t *)&allocation->annots, CORE_STRING_STATIC("ir.storage_class"));
     ir_annot_t *is_required = ir_annot_get(
-        (ir_annots_t *)&allocation->annots, "ir.storage_required");
+        (ir_annots_t *)&allocation->annots, CORE_STRING_STATIC("ir.storage_required"));
 
     if (required && is_required && is_required->kind == IR_ANNOT_BOOL) {
         *required = is_required->b;
     }
 
-    return storage && storage->kind == IR_ANNOT_STR && storage->s
-        && *storage->s ? storage->s : nullptr;
+    return storage && storage->kind == IR_ANNOT_STR && storage->s.u8_bytes
+        ? storage->s : (core_string_t){};
 }
 
 bool ir_instr_set_binding_initialization(ir_instr_t *instruction,
@@ -1264,7 +1301,7 @@ bool ir_instr_set_binding_initialization(ir_instr_t *instruction,
         || !instruction->block->owner->owner) return false;
     ir_ctx_t *ctx = instruction->block->owner->owner->ctx;
     return ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
-               .key = "ir.binding_initialization",
+               .key = CORE_STRING_STATIC("ir.binding_initialization"),
                .kind = IR_ANNOT_BOOL,
                .b = initializes,
            });
@@ -1274,7 +1311,7 @@ bool ir_instr_is_binding_initialization(const ir_instr_t *instruction)
 {
     if (!instruction) return false;
     ir_annot_t *initializes = ir_annot_get(
-        (ir_annots_t *)&instruction->annots, "ir.binding_initialization");
+        (ir_annots_t *)&instruction->annots, CORE_STRING_STATIC("ir.binding_initialization"));
     return initializes && initializes->kind == IR_ANNOT_BOOL
         && initializes->b;
 }
@@ -1298,9 +1335,10 @@ bool ir_instr_set_aggregate_form(ir_instr_t *instruction,
         return false;
     return ir_annot_set(instruction->block->owner->owner->ctx,
         &instruction->annots, (ir_annot_t){
-            .key = "ir.aggregate.form",
+            .key = CORE_STRING_STATIC("ir.aggregate.form"),
             .kind = IR_ANNOT_STR,
-            .s = form == IR_AGGREGATE_ELEMENTS ? "elements" : "pairs",
+            .s = form == IR_AGGREGATE_ELEMENTS
+                ? CORE_STRING_STATIC("elements") : CORE_STRING_STATIC("pairs"),
         });
 }
 
@@ -1310,14 +1348,15 @@ bool ir_instr_aggregate_form(const ir_instr_t *instruction,
     if (!instruction || !form || instruction->op != IR_OP_AGGREGATE)
         return false;
     ir_annot_t *annotation = ir_annot_get(
-        (ir_annots_t *)&instruction->annots, "ir.aggregate.form");
-    if (!annotation || annotation->kind != IR_ANNOT_STR || !annotation->s)
+        (ir_annots_t *)&instruction->annots, CORE_STRING_STATIC("ir.aggregate.form"));
+    if (!annotation || annotation->kind != IR_ANNOT_STR
+        || !annotation->s.data)
         return false;
-    if (!strcmp(annotation->s, "elements")) {
+    if (core_string_eq(annotation->s, CORE_STRING_STATIC("elements"))) {
         *form = IR_AGGREGATE_ELEMENTS;
         return true;
     }
-    if (!strcmp(annotation->s, "pairs")) {
+    if (core_string_eq(annotation->s, CORE_STRING_STATIC("pairs"))) {
         *form = IR_AGGREGATE_PAIRS;
         return true;
     }
@@ -1342,11 +1381,10 @@ bool ir_instr_set_const_bytes(ir_instr_t *instruction,
         hex[i * 2] = digits[bytes[i] >> 4];
         hex[i * 2 + 1] = digits[bytes[i] & 0xf];
     }
-    hex[byte_len * 2] = '\0';
     if (!ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
-        .key = "ir.const.bytes",
+        .key = CORE_STRING_STATIC("ir.const.bytes"),
         .kind = IR_ANNOT_STR,
-        .s = hex,
+        .s = core_string_borrow(hex, byte_len * 2),
     })) return false;
     instruction->const_bytes = raw;
     instruction->const_byte_len = byte_len;
@@ -1362,17 +1400,14 @@ const uint8_t *ir_instr_const_bytes(const ir_instr_t *instruction,
     return instruction->const_bytes;
 }
 
-const char *ir_instr_const_bytes_hex(const ir_instr_t *instruction,
-                                     size_t *byte_len)
+core_string_t ir_instr_const_bytes_hex(const ir_instr_t *instruction)
 {
     ir_annot_t *annotation = instruction && instruction->op == IR_OP_CONST
         ? ir_annot_get((ir_annots_t *)&instruction->annots,
-                       "ir.const.bytes") : nullptr;
-    if (!annotation || annotation->kind != IR_ANNOT_STR || !annotation->s)
-        return nullptr;
-    size_t hex_length = strlen(annotation->s);
-    if (hex_length & 1u) return nullptr;
-    if (byte_len) *byte_len = hex_length / 2;
+                       CORE_STRING_STATIC("ir.const.bytes")) : nullptr;
+    if (!annotation || annotation->kind != IR_ANNOT_STR
+        || !annotation->s.data || (annotation->s.u8_bytes & 1u))
+        return (core_string_t){};
     return annotation->s;
 }
 
@@ -1386,7 +1421,7 @@ bool ir_instr_set_call_signature(ir_instr_t *call, th_type *signature)
         && call->block->owner->owner
         ? call->block->owner->owner->ctx : nullptr;
     return ctx && ir_annot_set(ctx, &call->annots, (ir_annot_t){
-        .key = "ir.call_signature",
+        .key = CORE_STRING_STATIC("ir.call_signature"),
         .kind = IR_ANNOT_TYPE,
         .t = signature,
     });
@@ -1410,14 +1445,14 @@ ir_instr_set_callback_contract(ir_instr_t *construction,
         ? construction->block->owner->owner->ctx : nullptr;
     return ctx
         && ir_annot_set(ctx, &construction->annots, (ir_annot_t){
-            .key = "ir.callback.call", .kind = IR_ANNOT_TYPE,
+            .key = CORE_STRING_STATIC("ir.callback.call"), .kind = IR_ANNOT_TYPE,
             .t = call_signature})
         && ir_annot_set(ctx, &construction->annots, (ir_annot_t){
-            .key = "ir.callback.handler", .kind = IR_ANNOT_TYPE,
+            .key = CORE_STRING_STATIC("ir.callback.handler"), .kind = IR_ANNOT_TYPE,
             .t = handler_signature})
         && (!setup_signature
             || ir_annot_set(ctx, &construction->annots, (ir_annot_t){
-                .key = "ir.callback.setup", .kind = IR_ANNOT_TYPE,
+                .key = CORE_STRING_STATIC("ir.callback.setup"), .kind = IR_ANNOT_TYPE,
                 .t = setup_signature}));
 }
 
@@ -1433,11 +1468,11 @@ ir_instr_callback_contract(const ir_instr_t *construction,
     if (!construction || construction->op != IR_OP_CALLBACK_CREATE)
         return false;
     ir_annot_t *call = ir_annot_get(
-        (ir_annots_t *)&construction->annots, "ir.callback.call");
+        (ir_annots_t *)&construction->annots, CORE_STRING_STATIC("ir.callback.call"));
     ir_annot_t *handler = ir_annot_get(
-        (ir_annots_t *)&construction->annots, "ir.callback.handler");
+        (ir_annots_t *)&construction->annots, CORE_STRING_STATIC("ir.callback.handler"));
     ir_annot_t *setup = ir_annot_get(
-        (ir_annots_t *)&construction->annots, "ir.callback.setup");
+        (ir_annots_t *)&construction->annots, CORE_STRING_STATIC("ir.callback.setup"));
     if (!call || call->kind != IR_ANNOT_TYPE || !call->t
         || !handler || handler->kind != IR_ANNOT_TYPE || !handler->t
         || (setup && (setup->kind != IR_ANNOT_TYPE || !setup->t)))
@@ -1460,7 +1495,7 @@ ir_instr_set_callback_invoke_handler(ir_instr_t *invocation,
         && invocation->block->owner->owner
         ? invocation->block->owner->owner->ctx : nullptr;
     return ctx && ir_annot_set(ctx, &invocation->annots, (ir_annot_t){
-        .key = "ir.callback.handler",
+        .key = CORE_STRING_STATIC("ir.callback.handler"),
         .kind = IR_ANNOT_TYPE,
         .t = handler_signature,
     });
@@ -1472,7 +1507,7 @@ ir_instr_callback_invoke_handler(const ir_instr_t *invocation)
     ir_annot_t *annotation = invocation
         && invocation->op == IR_OP_CALLBACK_INVOKE
         ? ir_annot_get((ir_annots_t *)&invocation->annots,
-                       "ir.callback.handler") : nullptr;
+                       CORE_STRING_STATIC("ir.callback.handler")) : nullptr;
     return annotation && annotation->kind == IR_ANNOT_TYPE
         ? annotation->t : nullptr;
 }
@@ -1480,7 +1515,7 @@ ir_instr_callback_invoke_handler(const ir_instr_t *invocation)
 th_type *ir_instr_call_signature(const ir_instr_t *call)
 {
     ir_annot_t *annotation = call
-        ? ir_annot_get((ir_annots_t *)&call->annots, "ir.call_signature")
+        ? ir_annot_get((ir_annots_t *)&call->annots, CORE_STRING_STATIC("ir.call_signature"))
         : nullptr;
     return annotation && annotation->kind == IR_ANNOT_TYPE
         && annotation->t ? annotation->t : nullptr;
@@ -1488,7 +1523,7 @@ th_type *ir_instr_call_signature(const ir_instr_t *call)
 
 bool
 ir_instr_set_phase_result(ir_ctx_t *ctx, ir_instr_t *instruction,
-                          const char *identifier)
+                          core_string_t identifier)
 {
     if (!ctx || !instruction || !instruction->block
         || !instruction->block->owner
@@ -1496,28 +1531,29 @@ ir_instr_set_phase_result(ir_ctx_t *ctx, ir_instr_t *instruction,
         || instruction->block->owner->owner->ctx != ctx
         || instruction->op != IR_OP_PHASE_RESULT
         || instruction->dest_kind != IR_DEST_VALUE || !instruction->dest
-        || !identifier || !identifier[0]) return false;
+        || !identifier.data || !identifier.u8_bytes) return false;
     ir_annot_t *existing = ir_annot_get(&instruction->annots,
-                                        "ir.phase_result");
+                                        CORE_STRING_STATIC("ir.phase_result"));
     if (existing)
-        return existing->kind == IR_ANNOT_STR && existing->s
-            && !strcmp(existing->s, identifier);
-    const char *stored = ir_strdup(ctx, identifier);
-    return stored && ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
-        .key = "ir.phase_result",
+        return existing->kind == IR_ANNOT_STR && existing->s.data
+            && core_string_eq(existing->s, identifier);
+    core_string_t stored = ir_strdup(ctx, identifier);
+    return stored.data
+        && ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
+        .key = CORE_STRING_STATIC("ir.phase_result"),
         .kind = IR_ANNOT_STR,
         .s = stored,
     });
 }
 
-const char *
+core_string_t
 ir_instr_phase_result(const ir_instr_t *instruction)
 {
     ir_annot_t *annotation = instruction
         ? ir_annot_get((ir_annots_t *)&instruction->annots,
-                       "ir.phase_result") : nullptr;
+                       CORE_STRING_STATIC("ir.phase_result")) : nullptr;
     return annotation && annotation->kind == IR_ANNOT_STR
-        ? annotation->s : nullptr;
+        ? annotation->s : (core_string_t){};
 }
 
 bool ir_value_set_binding_reentry(ir_value_t *value,
@@ -1530,19 +1566,20 @@ bool ir_value_set_binding_reentry(ir_value_t *value,
         || loop_header->owner != value->owner
         || loop_header->index >= value->owner->n_blocks
         || value->owner->blocks[loop_header->index] != loop_header
-        || !loop_header->name) return false;
+        || !loop_header->name.data) return false;
     ir_ctx_t *ctx = value->owner->owner->ctx;
-    const char *name = ir_strdup(ctx, loop_header->name);
-    return name && ir_annot_set(ctx, ir_value_annots(value), (ir_annot_t){
-        .key = "ir.binding_reentry_header",
+    core_string_t name = ir_strdup(ctx, loop_header->name);
+    return name.data
+        && ir_annot_set(ctx, ir_value_annots(value), (ir_annot_t){
+        .key = CORE_STRING_STATIC("ir.binding_reentry_header"),
         .kind = IR_ANNOT_STR,
         .s = name,
     });
 }
 
-bool ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type)
+bool ir_instr_set_dest(ir_instr_t *in, core_string_t name, th_type *type)
 {
-    if (!in || !name || !type
+    if (!in || !name.data || !type
         || !ir_opinfo_has_result(
                ir_module_op_info(in->block->owner->owner, in->op))) {
         return false;
@@ -1644,9 +1681,10 @@ bool ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v)
     return o != nullptr;
 }
 
-bool ir_instr_operand_named(ir_instr_t *in, const char *name, ir_value_t *v)
+bool ir_instr_operand_named(ir_instr_t *in, core_string_t name,
+                            ir_value_t *v)
 {
-    ir_operand_t *o = name && v ? push(in, IR_OPD_NAMED_ARG) : nullptr;
+    ir_operand_t *o = name.data && v ? push(in, IR_OPD_NAMED_ARG) : nullptr;
 
     if (o) {
         o->named.name  = ir_strdup(in->block->owner->owner->ctx, name);
@@ -1656,12 +1694,12 @@ bool ir_instr_operand_named(ir_instr_t *in, const char *name, ir_value_t *v)
     return o != nullptr;
 }
 
-bool ir_instr_operand_named_out(ir_instr_t *in, const char *name)
+bool ir_instr_operand_named_out(ir_instr_t *in, core_string_t name)
 {
-    ir_operand_t *operand = name ? push(in, IR_OPD_NAMED_ARG) : nullptr;
+    ir_operand_t *operand = name.data ? push(in, IR_OPD_NAMED_ARG) : nullptr;
     if (!operand) return false;
     operand->named.name = ir_strdup(in->block->owner->owner->ctx, name);
-    return operand->named.name != nullptr;
+    return operand->named.name.data != nullptr;
 }
 
 bool ir_instr_operand_out(ir_instr_t *in)
@@ -1711,9 +1749,9 @@ bool ir_instr_operand_type(ir_instr_t *in, th_type *t)
     return o != nullptr;
 }
 
-bool ir_instr_operand_name(ir_instr_t *in, const char *n)
+bool ir_instr_operand_name(ir_instr_t *in, core_string_t n)
 {
-    ir_operand_t *o = n ? push(in, IR_OPD_NAME) : nullptr;
+    ir_operand_t *o = n.data ? push(in, IR_OPD_NAME) : nullptr;
 
     if (o) {
         o->name = ir_strdup(in->block->owner->owner->ctx, n);
@@ -1805,16 +1843,19 @@ bool ir_instr_operand_float(ir_instr_t *in, double v)
     return o != nullptr;
 }
 
-bool ir_instr_operand_float_text(ir_instr_t *in, const char *text)
+bool ir_instr_operand_float_text(ir_instr_t *in, core_string_t text)
 {
-    if (!text) {
+    if (!text.data) {
         return false;
     }
 
     ir_operand_t *o = push(in, IR_OPD_CONST);
 
     if (o) {
-        o->lit.f        = strtod(text, nullptr);
+        double value = 0.0;
+
+        core_string_parse_f64(text, &value, nullptr);
+        o->lit.f        = value;
         o->lit.text     = ir_strdup(in->block->owner->owner->ctx, text);
         o->lit.is_float = true;
     }
@@ -1851,9 +1892,9 @@ bool ir_instr_operand_switch_arm(ir_instr_t *in, ir_int_t v, ir_block_t *b)
     return ir_instr_operand_switch_arm_lit(in, ir_lit_of(v), b);
 }
 
-bool ir_instr_add_mod(ir_instr_t *in, const char *mod)
+bool ir_instr_add_mod(ir_instr_t *in, core_string_t mod)
 {
-    if (!in || !mod) {
+    if (!in || !mod.data) {
         return false;
     }
 
@@ -1866,7 +1907,8 @@ bool ir_instr_add_mod(ir_instr_t *in, const char *mod)
     ir_ctx_t *ctx = m->ctx;
     size_t    cap = in->cap_mods;
 
-    in->mods = ir_grow(ctx, in->mods, &cap, in->n_mods + 1u, sizeof(char *));
+    in->mods = ir_grow(ctx, in->mods, &cap, in->n_mods + 1u,
+                       sizeof(core_string_t));
 
     if (!in->mods) {
         return false;
@@ -1877,14 +1919,14 @@ bool ir_instr_add_mod(ir_instr_t *in, const char *mod)
     return true;
 }
 
-bool ir_instr_has_mod(const ir_instr_t *in, const char *mod)
+bool ir_instr_has_mod(const ir_instr_t *in, core_string_t mod)
 {
-    if (!in || !mod) {
+    if (!in || !mod.data) {
         return false;
     }
 
     for (uint32_t i = 0; i < in->n_mods; i++) {
-        if (!strcmp(in->mods[i], mod)) {
+        if (core_string_eq(in->mods[i], mod)) {
             return true;
         }
     }

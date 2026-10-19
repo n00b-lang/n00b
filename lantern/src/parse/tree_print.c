@@ -34,8 +34,7 @@ typedef struct doc_t doc_t;
 struct doc_t {
     dkind_t  kind;
     gap_t    gap;
-    char    *text;
-    size_t   len;
+    core_string_t text;
     doc_t  **kids;
     size_t   n;
     size_t   source_indent;
@@ -438,18 +437,18 @@ static doc_t *assemble(pr_t *p, core_list_t(item_t) *items)
     return d;
 }
 
-static doc_t *doc_text(pr_t *p, const char *s, size_t len)
+static doc_t *doc_text(pr_t *p, core_string_t s)
 {
     doc_t *d = doc_new(p, D_TEXT);
 
-    if (!s || !len) {
+    if (!s.data || !s.u8_bytes) {
         return d;
     }
 
-    d->text = core_arena_alloc(&p->arena, len + 1);
-    memcpy(d->text, s, len);
-    d->len   = len;
-    d->empty = false;
+    d->text.data = core_arena_alloc(&p->arena, s.u8_bytes);
+    memcpy(d->text.data, s.data, s.u8_bytes);
+    d->text.u8_bytes = s.u8_bytes;
+    d->empty         = false;
 
     return d;
 }
@@ -484,7 +483,7 @@ has_comment(parse_trivia_t *trivia)
 static doc_t *
 doc_comment(pr_t *p, parse_trivia_t *item)
 {
-    doc_t *d = doc_text(p, item->text.data, item->text.u8_bytes);
+    doc_t *d = doc_text(p, item->text);
     d->kind = D_COMMENT;
     if (!p->source.data || item->end_byte > p->source.u8_bytes
         || item->start_byte >= item->end_byte
@@ -582,9 +581,8 @@ static void *reduce_leaf(parse_reduce_t *r)
         return doc_new(p, D_TEXT);
     }
 
-    const char *s   = nullptr;
-    size_t      len = 0;
-    char        one[2];
+    core_string_t s = {};
+    char          one;
 
     core_option_t(core_string_t) value = parse_token_value(t);
     size_t start = parse_token_start_byte(t);
@@ -592,29 +590,23 @@ static void *reduce_leaf(parse_reduce_t *r)
     int32_t tid  = parse_token_tid(t);
 
     if (core_option_is_set(value)) {
-        core_string_t v = core_option_get(value);
-
-        s   = v.data;
-        len = v.u8_bytes;
+        s = core_option_get(value);
 
         if (p->source.data && end > start && end <= p->source.u8_bytes) {
-            s   = p->source.data + start;
-            len = end - start;
+            s = core_string_slice(p->source, start, end - start);
         }
     }
 
-    if (!s && !core_option_is_set(value) && tid > 0 && tid < 128) {
-        one[0] = (char)tid;
-        one[1] = '\0';
-        s      = one;
-        len    = 1;
+    if (!s.data && !core_option_is_set(value) && tid > 0 && tid < 128) {
+        one = (char)tid;
+        s   = core_string_borrow(&one, 1);
     }
 
     bool leading_comments  = has_comment(parse_token_leading_trivia(t));
     bool trailing_comments = has_comment(parse_token_trailing_trivia(t));
 
     if (!leading_comments && !trailing_comments) {
-        return doc_text(p, s, len);
+        return doc_text(p, s);
     }
 
     core_list_t(doc_ptr_t) parts = core_list_new(doc_ptr_t);
@@ -623,7 +615,7 @@ static void *reduce_leaf(parse_reduce_t *r)
         put_leading_trivia(p, &parts, parse_token_leading_trivia(t));
     }
 
-    core_list_push(parts, doc_text(p, s, len));
+    core_list_push(parts, doc_text(p, s));
 
     if (trailing_comments) {
         put_trailing_trivia(p, &parts, parse_token_trailing_trivia(t));
@@ -759,7 +751,7 @@ static bool fits(pr_t *p, doc_t *d, int32_t avail)
 
         if (f->next == 0) {
             if (f->doc->kind == D_TEXT || f->doc->kind == D_COMMENT) {
-                avail -= (int32_t)f->doc->len;
+                avail -= (int32_t)f->doc->text.u8_bytes;
                 ok = avail >= 0;
                 p->fit.len--;
 
@@ -796,7 +788,7 @@ static bool fits(pr_t *p, doc_t *d, int32_t avail)
     return ok;
 }
 
-static char *render(pr_t *p, doc_t *root)
+static core_string_t render(pr_t *p, doc_t *root)
 {
     core_buffer_t *out = core_buffer_empty();
 
@@ -816,7 +808,7 @@ static char *render(pr_t *p, doc_t *root)
         switch (f.doc->kind) {
         case D_TEXT:
         case D_COMMENT:
-            if (!f.doc->len) {
+            if (!f.doc->text.u8_bytes) {
                 break;
             }
 
@@ -846,24 +838,25 @@ static char *render(pr_t *p, doc_t *root)
             spaces = 0;
 
             if (f.doc->kind == D_COMMENT && f.doc->standalone) {
-                int32_t base = f.ind + f.trivia_indent;
-                size_t at = 0;
-                while (at < f.doc->len) {
+                int32_t       base = f.ind + f.trivia_indent;
+                core_string_t text = f.doc->text;
+                size_t        at   = 0;
+                while (at < text.u8_bytes) {
                     size_t end = at;
-                    while (end < f.doc->len && f.doc->text[end] != '\n')
+                    while (end < text.u8_bytes && text.data[end] != '\n')
                         end++;
-                    core_buffer_append(out, f.doc->text + at, end - at);
+                    core_buffer_append(out, text.data + at, end - at);
                     col += (int32_t)(end - at);
-                    if (end == f.doc->len) break;
+                    if (end == text.u8_bytes) break;
                     core_buffer_putc(out, '\n');
                     col = 0;
                     at = end + 1;
                     size_t original = 0;
-                    while (at < f.doc->len && f.doc->text[at] == ' ') {
+                    while (at < text.u8_bytes && text.data[at] == ' ') {
                         original++;
                         at++;
                     }
-                    if (at < f.doc->len && f.doc->text[at] != '\n') {
+                    if (at < text.u8_bytes && text.data[at] != '\n') {
                         size_t relative = original > f.doc->source_indent
                             ? original - f.doc->source_indent : 0;
                         for (size_t i = 0; i < (size_t)base + relative; i++)
@@ -873,8 +866,8 @@ static char *render(pr_t *p, doc_t *root)
                 }
             }
             else {
-                core_buffer_append(out, f.doc->text, f.doc->len);
-                col += (int32_t)f.doc->len;
+                core_buffer_append_string(out, f.doc->text);
+                col += (int32_t)f.doc->text.u8_bytes;
             }
             started = true;
             break;
@@ -972,14 +965,14 @@ static char *render(pr_t *p, doc_t *root)
 
     core_list_free(stack);
 
-    return core_buffer_take(out);
+    return core_buffer_take_string(out);
 }
 
-char *parse_tree_print(parse_grammar_t *g, parse_tree_t *tree,
-                     const parse_print_opts_t *opts)
+core_string_t parse_tree_print(parse_grammar_t *g, parse_tree_t *tree,
+                               const parse_print_opts_t *opts)
 {
     if (!g || !tree) {
-        return nullptr;
+        return (core_string_t){};
     }
 
     pr_t p = {
@@ -998,7 +991,7 @@ char *parse_tree_print(parse_grammar_t *g, parse_tree_t *tree,
     parse_walk_reduce_leaf(w, reduce_leaf, &p);
 
     doc_t *root = parse_tree_walk_reduce(w, tree);
-    char  *text = root ? render(&p, root) : nullptr;
+    core_string_t text = root ? render(&p, root) : (core_string_t){};
 
     parse_tree_walk_free(w);
     core_list_free(p.fit);

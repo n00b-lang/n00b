@@ -79,10 +79,10 @@ void core_module_spec_set_user_data(core_module_spec_t *spec, void *data,
 void *core_module_spec_user_data(const core_module_spec_t *spec);
 
 bool core_source_file_init(core_source_file_t *file, core_string_t path,
-                           const char *contents, size_t byte_len);
+                           core_string_t contents);
 void core_source_file_release(core_source_file_t *file);
 core_string_t core_source_file_path(const core_source_file_t *file);
-const char *core_source_file_contents(const core_source_file_t *file);
+core_string_t core_source_file_contents(const core_source_file_t *file);
 size_t core_source_file_size(const core_source_file_t *file);
 void core_source_file_set_user_data(core_source_file_t *file, void *data,
                                     core_module_user_data_free_fn free_fn);

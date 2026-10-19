@@ -68,11 +68,9 @@ ns_default(void)
 }
 
 static bool
-name_is(core_string_t s, const char *want)
+name_is(core_string_t s, core_string_t want)
 {
-    size_t n = strlen(want);
-
-    return s.data && s.u8_bytes == n && memcmp(s.data, want, n) == 0;
+    return s.data && core_string_eq(s, want);
 }
 
 static core_string_t
@@ -141,7 +139,7 @@ scope_open(parse_visit_t *v)
     }
     parse_symtab_set_scope_node_all(a->out->symtab, v->node);
 
-    if (name_is(an->scope_tag, "function")) {
+    if (name_is(an->scope_tag, CORE_STRING_STATIC("function"))) {
         parse_sym_entry_t *result = parse_symtab_add(a->out->symtab,
             ns_default(), CORE_STRING_STATIC("$return"),
             PARSE_SYM_VARIABLE, v->node);
@@ -270,15 +268,15 @@ subject(actx_t *a, parse_visit_t *v)
 static parse_sym_kind_t
 sym_kind_of(core_string_t spec)
 {
-    if (name_is(spec, "param")) {
+    if (name_is(spec, CORE_STRING_STATIC("param"))) {
         return PARSE_SYM_PARAM;
     }
 
-    if (name_is(spec, "function")) {
+    if (name_is(spec, CORE_STRING_STATIC("function"))) {
         return PARSE_SYM_FUNCTION;
     }
 
-    if (name_is(spec, "module")) {
+    if (name_is(spec, CORE_STRING_STATIC("module"))) {
         return PARSE_SYM_MODULE;
     }
 
@@ -491,10 +489,10 @@ annot_mutability(parse_visit_t *v)
         return true;
     }
 
-    if (name_is(m, "immutable")) {
+    if (name_is(m, CORE_STRING_STATIC("immutable"))) {
         sym->mutability = PARSE_SYM_IMMUTABLE;
     }
-    else if (name_is(m, "const")) {
+    else if (name_is(m, CORE_STRING_STATIC("const"))) {
         sym->mutability = PARSE_SYM_CONST;
     }
     else {
@@ -555,8 +553,10 @@ annot_pass_by(parse_visit_t *v)
     actx_t *a = v->thunk;
     parse_sym_entry_t *sym = subject(a, v);
     core_string_t mode = v->annot->pass_by;
-    static const char *const allowed[] = {
-        "in", "out", "inout", "ref", "consume"
+    static const core_string_t allowed[] = {
+        CORE_STRING_STATIC("in"),  CORE_STRING_STATIC("out"),
+        CORE_STRING_STATIC("inout"), CORE_STRING_STATIC("ref"),
+        CORE_STRING_STATIC("consume"),
     };
 
     if (!sym || !mode.data) return true;
@@ -622,7 +622,7 @@ annot_constrain(parse_visit_t *v)
             if (nt != 1) {
                 continue;
             }
-            c.field.name = s->name.data;
+            c.field.name = s->name;
             c.field.type = ir_type_from_text(a->types, s->types.data[0]);
             break;
 
@@ -635,7 +635,7 @@ annot_constrain(parse_visit_t *v)
             break;
 
         case TH_CON_IMPLEMENTS:
-            c.iface = s->name.data;
+            c.iface = s->name;
             break;
 
         case TH_CON_METHOD:
@@ -674,11 +674,8 @@ annot_repr(parse_visit_t *v)
             core_string_t s = core_option_get(value);
 
             if (s.data) {
-                char *digits = core_strndup(s.data, s.u8_bytes);
-
-                val  = strtoll(digits, nullptr, 10);
+                val  = core_string_strtoll(s, 10);
                 have = true;
-                core_free(digits);
             }
         }
     }
@@ -741,7 +738,7 @@ annot_literal(parse_visit_t *v)
     th_type *t = type_of_child(a, v, an->type_ref);
 
     if (!t && an->op_kind.data && an->op_kind.u8_bytes) {
-        t = th_name(a->types, an->op_kind.data);
+        t = th_name(a->types, an->op_kind);
     }
 
     if (!t) {
@@ -791,7 +788,7 @@ annot_adt_close(parse_visit_t *v)
         return true;
     }
 
-    th_type *var = th_variant(a->types, nm.data, arms.data, arms.len);
+    th_type *var = th_variant(a->types, nm, arms.data, arms.len);
 
     core_list_free(arms);
 
@@ -817,7 +814,7 @@ collect_record_members(actx_t *a, parse_tree_t *node, parse_scope_t *scope,
     if (field && field->is_field && field->scope == scope) {
         if (!field->type) field->type = th_var(a->types);
         core_list_push(*members, ((th_member){
-            .name = field->name.data,
+            .name = field->name,
             .type = field->type,
         }));
     }
@@ -869,7 +866,7 @@ annot_record(parse_visit_t *v)
                 e->type = th_var(a->types);
             }
 
-            th_register_method(a->types, rec, e->name.data, e->type);
+            th_register_method(a->types, rec, e->name, e->type);
         }
     }
 
@@ -882,7 +879,7 @@ annot_record(parse_visit_t *v)
                     continue;
                 }
 
-                ir_layout_pin_member(a->module, rec, e->name.data,
+                ir_layout_pin_member(a->module, rec, e->name,
                                      e->bit_offset, e->bit_width);
             }
         }
@@ -977,14 +974,12 @@ annot_implements(parse_visit_t *v)
         return true;
     }
 
-    char *interface = core_strndup(nm.data, nm.u8_bytes);
-
-    if (!th_implements(a->types, sym->type, interface)) {
-        th_err(a->types, TH_ERR_CONSTRAINT, "implements", sym->type,
-               nullptr, "the declared type does not satisfy the interface");
+    if (!th_implements(a->types, sym->type, nm)) {
+        th_err(a->types, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("implements"),
+               sym->type, nullptr,
+               CORE_STRING_STATIC(
+                   "the declared type does not satisfy the interface"));
     }
-
-    core_free(interface);
 
     return true;
 }
@@ -1206,7 +1201,7 @@ cf_varref(parse_visit_t *v)
 static bool
 cf_operator(parse_visit_t *v)
 {
-    if (name_is(v->annot->op_kind, "unwrap_result")) {
+    if (name_is(v->annot->op_kind, CORE_STRING_STATIC("unwrap_result"))) {
         cf_label(v, PARSE_CF_UNWRAP_RESULT);
     }
 
@@ -1240,8 +1235,9 @@ annot_report_infer_failure(parse_visit_t *v, actx_t *a, size_t errors_before)
     th_error_t reason = {0};
     size_t errors = th_error_count(a->types);
     core_string_t message = errors > errors_before
-            && th_error_at(a->types, errors - 1, &reason) && reason.message
-        ? core_string_from_cstr(reason.message)
+            && th_error_at(a->types, errors - 1, &reason)
+            && reason.message.data
+        ? reason.message
         : CORE_STRING_STATIC("type inference failed");
     core_diagnostics_report_at(a->out->diagnostics,
         a->out->diagnostic_unit, CORE_DIAG_FATAL,

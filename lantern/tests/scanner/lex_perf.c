@@ -86,12 +86,12 @@ static parse_grammar_t *
 grammar(bool compiled)
 {
     parse_grammar_t *g = parse_grammar_new();
-    static const char *const names[] = {
-        "IDENTIFIER", "INTEGER", "FLOAT", "STRING", nullptr,
+    static const core_string_t names[] = {
+        S("IDENTIFIER"), S("INTEGER"), S("FLOAT"), S("STRING"), {0},
     };
 
-    for (size_t i = 0; names[i]; i++) {
-        parse_register_terminal(g, core_string_from_cstr(names[i]));
+    for (size_t i = 0; names[i].data; i++) {
+        parse_register_terminal(g, names[i]);
     }
 
     if (compiled) {
@@ -142,7 +142,7 @@ run(parse_grammar_t *g, core_buffer_t *source, size_t repetitions)
     clock_gettime(CLOCK_MONOTONIC, &begin);
     for (size_t i = 0; i < repetitions; i++) {
         parse_token_stream_t *ts = scan_tokenize(
-            g, source->data, source->byte_len, nullptr, nullptr);
+            g, core_buffer_string(source), nullptr, nullptr);
         parse_token_info_t *tok = nullptr;
 
         while ((tok = scan_stream_next(ts))) {

@@ -1,5 +1,3 @@
-#include <string.h>
-
 #include "private/th/internal.h"
 #include "lib/alloc.h"
 
@@ -27,9 +25,9 @@ put_bytes(core_buffer_t *out, const void *data, size_t length)
 }
 
 static void
-put_text(core_buffer_t *out, const char *text)
+put_text(core_buffer_t *out, core_string_t text)
 {
-    put_bytes(out, text, text ? strlen(text) : 0);
+    put_bytes(out, text.data, text.u8_bytes);
 }
 
 bool
@@ -151,14 +149,15 @@ get_bytes(cursor_t *c, size_t *length)
     return start;
 }
 
-static const char *
+static core_string_t
 get_text(cursor_t *c)
 {
     size_t length = 0;
     const uint8_t *bytes = get_bytes(c, &length);
-    if (!bytes) return nullptr;
-    char *text = th_strdup(c->ctx, (const char *)bytes, length);
-    if (!text) c->failed = true;
+    if (!bytes) return (core_string_t){};
+    core_string_t text =
+        th_strdup(c->ctx, core_string_borrow((const char *)bytes, length));
+    if (!text.data) c->failed = true;
     return text;
 }
 
@@ -201,9 +200,9 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
     bool ok = true;
     uint64_t count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        const char *name = get_text(&c);
-        const char *module = get_text(&c);
-        const char *package = get_text(&c);
+        core_string_t name = get_text(&c);
+        core_string_t module = get_text(&c);
+        core_string_t package = get_text(&c);
         th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
         th_env_type_shape_kind_t shape_kind =
             (th_env_type_shape_kind_t)get_u32(&c);
@@ -215,9 +214,9 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
     }
     count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        const char *name = get_text(&c);
-        const char *module = get_text(&c);
-        const char *package = get_text(&c);
+        core_string_t name = get_text(&c);
+        core_string_t module = get_text(&c);
+        core_string_t package = get_text(&c);
         th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
         th_type *contracts = get_type(&c);
         ok = !c.failed && th_env_register_trait_contracts(env, name, module,
@@ -225,10 +224,10 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
     }
     count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        const char *qualified = get_text(&c);
-        const char *root = get_text(&c);
-        const char *module = get_text(&c);
-        const char *package = get_text(&c);
+        core_string_t qualified = get_text(&c);
+        core_string_t root = get_text(&c);
+        core_string_t module = get_text(&c);
+        core_string_t package = get_text(&c);
         th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
         th_type *contract = get_type(&c);
         ok = !c.failed && th_env_register_function_contract(env, qualified,
@@ -236,10 +235,10 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
     }
     count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        const char *qualified = get_text(&c);
-        const char *root = get_text(&c);
-        const char *module = get_text(&c);
-        const char *package = get_text(&c);
+        core_string_t qualified = get_text(&c);
+        core_string_t root = get_text(&c);
+        core_string_t module = get_text(&c);
+        core_string_t package = get_text(&c);
         th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
         th_type *type = get_type(&c);
         ok = !c.failed && th_env_register_value(env, qualified, root, module,
@@ -247,7 +246,7 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
     }
     count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
-        const char *trait = get_text(&c);
+        core_string_t trait = get_text(&c);
         th_type *receiver = get_type(&c);
         ok = !c.failed && th_env_register_intrinsic_type_pattern(env, trait,
                                                                  receiver);
@@ -255,8 +254,8 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
     count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {
         th_env_metadata_owner_t kind = (th_env_metadata_owner_t)get_u32(&c);
-        const char *owner = get_text(&c);
-        const char *key = get_text(&c);
+        core_string_t owner = get_text(&c);
+        core_string_t key = get_text(&c);
         uint32_t version = get_u32(&c);
         size_t size = 0;
         const uint8_t *bytes = get_bytes(&c, &size);

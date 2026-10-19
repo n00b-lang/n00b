@@ -9,8 +9,12 @@
 #include <unistd.h>
 
 #include "core.h"
+#include "lib/alloc.h"
+#include "lib/buffer.h"
 #include "lib/snapshot_inventory.h"
 #include "harness.h"
+
+#define S(x) CORE_STRING_STATIC(x)
 
 typedef struct {
     const core_source_snapshot_t *source;
@@ -21,8 +25,7 @@ static bool
 accept_source(void *context, core_string_t relative)
 {
     (void)context;
-    return relative.u8_bytes >= 2
-        && !memcmp(relative.data + relative.u8_bytes - 2, ".n", 2);
+    return core_string_ends_with(relative, S(".n"));
 }
 
 static bool
@@ -31,154 +34,209 @@ observe(void *context, size_t root, core_string_t relative,
 {
     observed_t *result = context;
     result->count++;
-    if (root == 0 && core_string_eq(relative, CORE_STRING_STATIC("pkg/manifest.n")))
+    if (root == 0 && core_string_eq(relative, S("pkg/manifest.n")))
         result->source = source;
     return true;
 }
 
-static bool
-write_file(const char *path, const char *contents)
+static core_string_t
+join(core_string_t parent, core_string_t child)
 {
-    FILE *file = fopen(path, "wb");
+    core_buffer_t *buffer = core_buffer_empty();
+    core_buffer_append_string(buffer, parent);
+    core_buffer_puts(buffer, "/");
+    core_buffer_append_string(buffer, child);
+    return core_buffer_take_string(buffer);
+}
+
+static bool
+write_file(core_string_t path, core_string_t contents)
+{
+    char *native = core_string_to_cstr(path);
+    FILE *file = fopen(native, "wb");
+    core_free(native);
     if (!file) return false;
-    size_t size = strlen(contents);
-    bool ok = fwrite(contents, 1, size, file) == size;
+    bool ok = fwrite(contents.data, 1, contents.u8_bytes, file)
+        == contents.u8_bytes;
     return fclose(file) == 0 && ok;
+}
+
+static bool
+make_directory(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    bool ok = mkdir(native, 0700) == 0;
+    core_free(native);
+    return ok;
+}
+
+static bool
+remove_file(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    bool ok = unlink(native) == 0;
+    core_free(native);
+    return ok;
+}
+
+static bool
+remove_directory(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    bool ok = rmdir(native) == 0;
+    core_free(native);
+    return ok;
+}
+
+static bool
+path_exists(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    bool ok = access(native, F_OK) == 0;
+    core_free(native);
+    return ok;
+}
+
+static void
+remove_directory_files(core_string_t directory)
+{
+    char *native = core_string_to_cstr(directory);
+    DIR *files = opendir(native);
+    core_free(native);
+    if (!files) return;
+    struct dirent *item;
+    while ((item = readdir(files))) {
+        core_string_t name = core_string_from_cstr(item->d_name);
+        if (!core_string_eq(name, S(".")) && !core_string_eq(name, S(".."))) {
+            core_string_t path = join(directory, name);
+            remove_file(path);
+            core_free(path.data);
+        }
+        core_free(name.data);
+    }
+    closedir(files);
 }
 
 static void
 test_local_persistence(void)
 {
     char directory[] = "/tmp/lantern-persist-XXXXXX";
-    char *root = mkdtemp(directory);
-    check("persistent test root exists", root != nullptr);
-    if (!root) return;
-    char package[256], source[256], metadata[256], cache[256];
-    char nested[256], added[256];
-    snprintf(package, sizeof package, "%s/demo", root);
-    snprintf(source, sizeof source, "%s/facade.n", package);
-    snprintf(metadata, sizeof metadata, "%s/.n00b-cache", package);
-    snprintf(cache, sizeof cache, "%s/inventory-v1", metadata);
-    snprintf(nested, sizeof nested, "%s/inner", package);
-    snprintf(added, sizeof added, "%s/added.n", nested);
-    check("persistent package directory exists", mkdir(package, 0700) == 0);
-    check("persistent source writes", write_file(source, "package demo {}"));
-    core_string_t root_name = core_string_from_cstr(root);
+    char *created = mkdtemp(directory);
+    check("persistent test root exists", created != nullptr);
+    if (!created) return;
+    core_string_t root = core_string_from_cstr(created);
+    core_string_t package = join(root, S("demo"));
+    core_string_t source = join(package, S("facade.n"));
+    core_string_t metadata = join(package, S(".n00b-cache"));
+    core_string_t cache = join(metadata, S("inventory-v1"));
+    core_string_t nested = join(package, S("inner"));
+    core_string_t added = join(nested, S("added.n"));
+    check("persistent package directory exists", make_directory(package));
+    check("persistent source writes",
+          write_file(source, S("package demo {}")));
     core_snapshot_inventory_t *first = core_snapshot_inventory_new(
-        &root_name, 1, accept_source, nullptr);
+        &root, 1, accept_source, nullptr);
     check("package-local cache enables", core_snapshot_inventory_enable_local_cache(
-        first, CORE_STRING_STATIC(".n00b-cache"), 1));
+        first, S(".n00b-cache"), 1));
     check("cold package refresh succeeds", core_snapshot_inventory_refresh(first));
-    check("cold refresh writes metadata inside the package", access(cache, F_OK) == 0);
+    check("cold refresh writes metadata inside the package", path_exists(cache));
     check("cold refresh reads its source", core_snapshot_inventory_stats(first).source_reads == 1);
     check("derived package names persist beside the package",
           core_snapshot_inventory_product_write(first, 0,
-              CORE_STRING_STATIC("demo/facade.n"),
-              CORE_STRING_STATIC("package-syntax"), 7, "demo", 4));
+              S("demo/facade.n"), S("package-syntax"), 7, "demo", 4));
     core_snapshot_inventory_free(first);
 
     core_snapshot_inventory_t *second = core_snapshot_inventory_new(
-        &root_name, 1, accept_source, nullptr);
-    core_snapshot_inventory_enable_local_cache(second,
-        CORE_STRING_STATIC(".n00b-cache"), 1);
+        &root, 1, accept_source, nullptr);
+    core_snapshot_inventory_enable_local_cache(second, S(".n00b-cache"), 1);
     check("warm package refresh succeeds", core_snapshot_inventory_refresh(second));
     core_snapshot_inventory_stats_t warm = core_snapshot_inventory_stats(second);
     check("new process reuses package metadata without reading source",
           warm.package_cache_hits == 1 && warm.source_reads == 0);
     const core_source_snapshot_t *snapshot = core_snapshot_inventory_find(
-        second, 0, CORE_STRING_STATIC("demo/facade.n"));
+        second, 0, S("demo/facade.n"));
     check("warm snapshot retains source contents",
-          snapshot && !strcmp(core_source_snapshot_contents(snapshot),
-                              "package demo {}"));
+          snapshot && core_string_eq(core_source_snapshot_contents(snapshot),
+                                     S("package demo {}")));
     core_buffer_t product = {0};
     check("derived product survives a new inventory instance",
           core_snapshot_inventory_product_read(second, 0,
-              CORE_STRING_STATIC("demo/facade.n"),
-              CORE_STRING_STATIC("package-syntax"), 7, &product)
+              S("demo/facade.n"), S("package-syntax"), 7, &product)
           && product.byte_len == 4 && !memcmp(product.data, "demo", 4));
     core_buffer_release(&product);
     check("a different grammar profile misses the product",
           !core_snapshot_inventory_product_read(second, 0,
-              CORE_STRING_STATIC("demo/facade.n"),
-              CORE_STRING_STATIC("package-syntax"), 8, &product));
+              S("demo/facade.n"), S("package-syntax"), 8, &product));
 
-    check("source edit writes", write_file(source, "package changed {}"));
+    check("source edit writes", write_file(source, S("package changed {}")));
     check("source edit refresh succeeds", core_snapshot_inventory_refresh(second));
-    snapshot = core_snapshot_inventory_find(second, 0,
-        CORE_STRING_STATIC("demo/facade.n"));
+    snapshot = core_snapshot_inventory_find(second, 0, S("demo/facade.n"));
     check("edited package is rebuilt", snapshot
-          && !strcmp(core_source_snapshot_contents(snapshot),
-                     "package changed {}")
+          && core_string_eq(core_source_snapshot_contents(snapshot),
+                            S("package changed {}"))
           && core_snapshot_inventory_stats(second).source_reads > 0);
     check("source edit invalidates its derived product",
           !core_snapshot_inventory_product_read(second, 0,
-              CORE_STRING_STATIC("demo/facade.n"),
-              CORE_STRING_STATIC("package-syntax"), 7, &product));
+              S("demo/facade.n"), S("package-syntax"), 7, &product));
 
-    check("new nested directory exists", mkdir(nested, 0700) == 0);
-    check("new nested source writes", write_file(added, "package added {}"));
+    check("new nested directory exists", make_directory(nested));
+    check("new nested source writes", write_file(added, S("package added {}")));
     check("addition refresh succeeds", core_snapshot_inventory_refresh(second));
     check("new source appears", core_snapshot_inventory_find(second, 0,
-        CORE_STRING_STATIC("demo/inner/added.n")) != nullptr);
-    check("nested source removes", unlink(added) == 0);
-    check("nested directory removes", rmdir(nested) == 0);
+        S("demo/inner/added.n")) != nullptr);
+    check("nested source removes", remove_file(added));
+    check("nested directory removes", remove_directory(nested));
     check("removal refresh succeeds", core_snapshot_inventory_refresh(second));
     check("removed source disappears", core_snapshot_inventory_find(second, 0,
-        CORE_STRING_STATIC("demo/inner/added.n")) == nullptr);
+        S("demo/inner/added.n")) == nullptr);
     core_snapshot_inventory_free(second);
 
-    check("corrupt metadata writes", write_file(cache, "broken"));
+    check("corrupt metadata writes", write_file(cache, S("broken")));
     core_snapshot_inventory_t *third = core_snapshot_inventory_new(
-        &root_name, 1, accept_source, nullptr);
-    core_snapshot_inventory_enable_local_cache(third,
-        CORE_STRING_STATIC(".n00b-cache"), 1);
+        &root, 1, accept_source, nullptr);
+    core_snapshot_inventory_enable_local_cache(third, S(".n00b-cache"), 1);
     check("corrupt metadata falls back to source scan",
           core_snapshot_inventory_refresh(third)
           && core_snapshot_inventory_find(third, 0,
-              CORE_STRING_STATIC("demo/facade.n")) != nullptr
+              S("demo/facade.n")) != nullptr
           && core_snapshot_inventory_stats(third).source_reads > 0);
     core_snapshot_inventory_free(third);
-    free(root_name.data);
-    unlink(source);
-    unlink(cache);
-    char derived[256];
-    snprintf(derived, sizeof derived, "%s/derived", metadata);
-    DIR *files = opendir(derived);
-    if (files) {
-        struct dirent *item;
-        while ((item = readdir(files))) {
-            if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, ".."))
-                continue;
-            char path[512];
-            snprintf(path, sizeof path, "%s/%s", derived, item->d_name);
-            unlink(path);
-        }
-        closedir(files);
-        rmdir(derived);
-    }
-    rmdir(metadata);
-    rmdir(package);
-    rmdir(root);
+    remove_file(source);
+    remove_file(cache);
+    core_string_t derived = join(metadata, S("derived"));
+    remove_directory_files(derived);
+    remove_directory(derived);
+    remove_directory(metadata);
+    remove_directory(package);
+    remove_directory(root);
+    core_free(derived.data);
+    core_free(added.data);
+    core_free(nested.data);
+    core_free(cache.data);
+    core_free(metadata.data);
+    core_free(source.data);
+    core_free(package.data);
+    core_free(root.data);
 }
 
 int
 main(void)
 {
     char directory[] = "/tmp/lantern-inventory-XXXXXX";
-    char *root = mkdtemp(directory);
-    check("temporary root exists", root != nullptr);
-    if (!root) return report("source snapshot inventory");
-    char subdir[256], source_path[256], ignored_path[256];
-    snprintf(subdir, sizeof(subdir), "%s/pkg", root);
-    snprintf(source_path, sizeof(source_path), "%s/manifest.n", subdir);
-    snprintf(ignored_path, sizeof(ignored_path), "%s/notes.txt", root);
-    check("source directory exists", mkdir(subdir, 0700) == 0);
-    check("initial source writes", write_file(source_path, "package one {}"));
-    check("ignored file writes", write_file(ignored_path, "ignored"));
+    char *created = mkdtemp(directory);
+    check("temporary root exists", created != nullptr);
+    if (!created) return report("source snapshot inventory");
+    core_string_t root = core_string_from_cstr(created);
+    core_string_t subdir = join(root, S("pkg"));
+    core_string_t source_path = join(subdir, S("manifest.n"));
+    core_string_t ignored_path = join(root, S("notes.txt"));
+    check("source directory exists", make_directory(subdir));
+    check("initial source writes",
+          write_file(source_path, S("package one {}")));
+    check("ignored file writes", write_file(ignored_path, S("ignored")));
 
-    core_string_t root_name = core_string_from_cstr(root);
     core_snapshot_inventory_t *inventory = core_snapshot_inventory_new(
-        &root_name, 1, accept_source, nullptr);
+        &root, 1, accept_source, nullptr);
     check("inventory initializes", inventory != nullptr);
     check("first refresh succeeds", core_snapshot_inventory_refresh(inventory));
     observed_t first = {0};
@@ -187,10 +245,10 @@ main(void)
     check("filter retains only the source", first.count == 1 && first.source);
     check("lookup returns the visited snapshot",
           core_snapshot_inventory_find(inventory, 0,
-              CORE_STRING_STATIC("pkg/manifest.n")) == first.source);
+              S("pkg/manifest.n")) == first.source);
     check("lookup does not return an ignored file",
           core_snapshot_inventory_find(inventory, 0,
-              CORE_STRING_STATIC("notes.txt")) == nullptr);
+              S("notes.txt")) == nullptr);
     uint64_t generation = core_snapshot_inventory_generation(inventory);
     uint64_t revision = core_source_snapshot_revision(first.source);
     core_source_snapshot_t *held = core_source_snapshot_retain(first.source);
@@ -202,7 +260,8 @@ main(void)
           same.source == first.source
           && core_snapshot_inventory_generation(inventory) == generation);
 
-    check("edited source writes", write_file(source_path, "package second {}"));
+    check("edited source writes",
+          write_file(source_path, S("package second {}")));
     check("edited refresh succeeds", core_snapshot_inventory_refresh(inventory));
     observed_t edited = {0};
     core_snapshot_inventory_visit(inventory, observe, &edited);
@@ -210,19 +269,22 @@ main(void)
           edited.source && core_source_snapshot_revision(edited.source) > revision
           && core_snapshot_inventory_generation(inventory) > generation);
     check("pinned old snapshot keeps its contents",
-          core_source_snapshot_size(held) == strlen("package one {}")
-          && !memcmp(core_source_snapshot_contents(held), "package one {}",
-                     strlen("package one {}")));
+          core_source_snapshot_size(held) == S("package one {}").u8_bytes
+          && core_string_eq(core_source_snapshot_contents(held),
+                            S("package one {}")));
 
-    check("source removes", unlink(source_path) == 0);
+    check("source removes", remove_file(source_path));
     check("removed refresh succeeds", core_snapshot_inventory_refresh(inventory));
     check("removed source leaves inventory", core_snapshot_inventory_count(inventory) == 0);
     core_source_snapshot_release(held);
     core_snapshot_inventory_free(inventory);
-    free(root_name.data);
-    unlink(ignored_path);
-    rmdir(subdir);
-    rmdir(root);
+    remove_file(ignored_path);
+    remove_directory(subdir);
+    remove_directory(root);
+    core_free(ignored_path.data);
+    core_free(source_path.data);
+    core_free(subdir.data);
+    core_free(root.data);
     test_local_persistence();
     return report("source snapshot inventory");
 }

@@ -259,9 +259,12 @@ create_one_error_rule_set(parse_grammar_t *g, int32_t rule_ix)
 
         core_buffer_t nb = {0};
 
+        core_string_t cur_name = cur_nt->name.data
+            ? cur_nt->name : CORE_STRING_STATIC("?");
+
         core_buffer_printf(&nb,
-                           "$term-%s-%d-%d",
-                           cur_nt->name.data ? cur_nt->name.data : "?",
+                           "$term-%.*s-%d-%d",
+                           (int)cur_name.u8_bytes, cur_name.data,
                            rule_ix,
                            tok_ct);
 

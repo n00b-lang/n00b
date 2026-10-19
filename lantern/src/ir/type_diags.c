@@ -6,8 +6,6 @@
 #include "lib/buffer.h"
 #include "th/typehash.h"
 
-#include <string.h>
-
 static ir_diagcode_t
 code_for(th_err_kind kind)
 {
@@ -44,11 +42,11 @@ span_from(ir_module_t *m, th_span_t s)
 
     int32_t file = -1;
 
-    if (m && s.file) {
+    if (m && s.file.data) {
         for (size_t i = 0; i < ir_file_count(m); i++) {
-            const char *path = ir_file_path(m, (int32_t)i);
+            core_string_t path = ir_file_path(m, (int32_t)i);
 
-            if (path && !strcmp(path, s.file)) {
+            if (path.data && core_string_eq(path, s.file)) {
                 file = (int32_t)i;
 
                 break;
@@ -68,24 +66,35 @@ span_from(ir_module_t *m, th_span_t s)
 static void
 describe(core_buffer_t *sb, ir_module_t *m, const th_error_t *e)
 {
-    core_buffer_printf(sb, "%s", e->message ? e->message
-                                           : th_err_kind_name(e->kind));
+    core_buffer_append_string(sb, e->message.data ? e->message
+                                                  : th_err_kind_name(e->kind));
 
-    if (e->constraint) {
-        core_buffer_printf(sb, " (%s)", e->constraint);
+    if (e->constraint.data) {
+        core_buffer_puts(sb, " (");
+        core_buffer_append_string(sb, e->constraint);
+        core_buffer_puts(sb, ")");
     }
 
     if (e->expected) {
-        const char *want = m ? ir_type_text(m, e->expected) : nullptr;
+        core_string_t want = m ? ir_type_text(m, e->expected)
+                               : (core_string_t){};
 
-        core_buffer_printf(sb, ": expected %s", want ? want : "?");
+        core_buffer_puts(sb, ": expected ");
+        core_buffer_append_string(sb, want.data ? want
+                                                : CORE_STRING_STATIC("?"));
     }
 
     if (e->got) {
-        const char *got = m ? ir_type_text(m, e->got) : nullptr;
+        core_string_t got = m ? ir_type_text(m, e->got) : (core_string_t){};
 
-        core_buffer_printf(sb, e->expected ? ", got %s" : ": got %s",
-                          got ? got : "?");
+        if (e->expected) {
+            core_buffer_puts(sb, ", got ");
+        }
+        else {
+            core_buffer_puts(sb, ": got ");
+        }
+        core_buffer_append_string(sb, got.data ? got
+                                              : CORE_STRING_STATIC("?"));
     }
 }
 
@@ -118,13 +127,14 @@ uint32_t ir_import_type_errors(ir_module_t *m, ir_diags_t *d)
 
         describe(sb, m, &e);
 
-        char *msg = core_buffer_take(sb);
+        core_string_t msg = core_buffer_take_string(sb);
 
         ir_diag_message(dg, d, msg);
-        core_free(msg);
+        core_free(msg.data);
 
         if (e.has_related) {
-            ir_diag_secondary(d, dg, span_from(m, e.related), "related");
+            ir_diag_secondary(d, dg, span_from(m, e.related),
+                              CORE_STRING_STATIC("related"));
         }
 
         made++;

@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir/layout.h"
 #include "ir/pass.h"
@@ -8,7 +7,10 @@
 #include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/verify.h"
+#include "lib/buffer.h"
 #include "harness.h"
+
+#define S(x) CORE_STRING_STATIC(x)
 
 static bool produced[IR_DIAG_COUNT];
 
@@ -20,7 +22,7 @@ typedef struct {
     ir_diags_t  *d;
 } run_t;
 
-static run_t *load(const char *src)
+static run_t *load(core_string_t src)
 {
     run_t *r = calloc(1, sizeof(run_t));
 
@@ -44,36 +46,22 @@ static void done(run_t *r)
     free(r);
 }
 
-static bool told(run_t *r, const char *text)
+static bool contains(core_string_t hay, core_string_t needle)
+{
+    return hay.data && core_string_find(hay, needle) >= 0;
+}
+
+static bool told(run_t *r, core_string_t text)
 {
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         const ir_diag_t *dg = ir_diags_at(r->d, i);
 
-        if ((dg->primary.label && strstr(dg->primary.label, text))
-            || (dg->message && strstr(dg->message, text))) {
+        if (contains(dg->primary.label, text) || contains(dg->message, text)) {
             return true;
         }
     }
 
     return false;
-}
-
-typedef struct {
-    char  *p;
-    size_t n;
-    size_t cap;
-} buf;
-
-static void put(buf *b, const char *s)
-{
-    size_t n = strlen(s);
-
-    if (b->n + n + 1 > b->cap) {
-        b->cap = (b->n + n + 1) * 2;
-        b->p   = realloc(b->p, b->cap);
-    }
-    memcpy(b->p + b->n, s, n + 1);
-    b->n += n;
 }
 
 static bool holds(const ir_region_t *r, const ir_block_t *b)
@@ -95,55 +83,55 @@ static bool holds(const ir_region_t *r, const ir_block_t *b)
     return false;
 }
 
-static void sketch(buf *b, const ir_region_t *r)
+static void sketch(core_buffer_t *b, const ir_region_t *r)
 {
     if (!r) {
         return;
     }
 
     if (r->kind == IR_REGION_BLOCK) {
-        put(b, "[");
-        put(b, r->head ? r->head->name : "?");
-        put(b, "]");
+        core_buffer_puts(b, "[");
+        core_buffer_append_string(b, r->head ? r->head->name : S("?"));
+        core_buffer_puts(b, "]");
 
         return;
     }
-    put(b, ir_region_kind_name(r->kind));
-    put(b, "(");
+    core_buffer_append_string(b, ir_region_kind_name(r->kind));
+    core_buffer_puts(b, "(");
 
     for (uint32_t i = 0; i < r->n_kids; i++) {
         sketch(b, r->kids[i]);
     }
-    put(b, ")");
+    core_buffer_puts(b, ")");
 }
 
-static char *shape(ir_func_t *f)
+static core_string_t shape(ir_func_t *f)
 {
-    buf b = {0};
+    core_buffer_t *b = core_buffer_empty();
 
-    put(&b, "");
-    sketch(&b, ir_region_root(f));
+    sketch(b, ir_region_root(f));
 
-    return b.p;
+    return core_buffer_take_string(b);
 }
 
-#define MOD(...) "module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n"
+#define MOD(...) \
+    S("module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n")
 
-static const char *AN_IF = MOD(
+static const core_string_t AN_IF = MOD(
     "  func @f(%c: bool, %a: i32) -> i32 {\n"
     "    block entry:\n      branch %c, t, e\n"
     "    block t:\n      jump join\n"
     "    block e:\n      jump join\n"
     "    block join:\n      return %a\n  }\n");
 
-static const char *A_LOOP = MOD(
+static const core_string_t A_LOOP = MOD(
     "  func @f(%c: bool, %a: i32) -> i32 {\n"
     "    block entry:\n      jump head\n"
     "    block head:\n      branch %c, body, out\n"
     "    block body:\n      jump head\n"
     "    block out:\n      return %a\n  }\n");
 
-static const char *A_SWITCH = MOD(
+static const core_string_t A_SWITCH = MOD(
     "  func @f(%s: i32) -> i32 {\n"
     "    block entry:\n"
     "      switch %s, default: d, [1: one], [2: two]\n"
@@ -152,7 +140,7 @@ static const char *A_SWITCH = MOD(
     "    block d:\n      jump join\n"
     "    block join:\n      return %s\n  }\n");
 
-static const char *IRREDUCIBLE = MOD(
+static const core_string_t IRREDUCIBLE = MOD(
     "  func @f(%c: bool, %a: i32) -> i32 {\n"
     "    block entry:\n      branch %c, x, y\n"
     "    block x:\n      jump y\n"
@@ -162,17 +150,18 @@ static const char *IRREDUCIBLE = MOD(
 static void test_reducible_shapes(void)
 {
     struct {
-        const char *what;
-        const char *src;
-        const char *shape;
+        core_string_t what;
+        core_string_t src;
+        core_string_t shape;
     } cases[] = {
-        {"an if", AN_IF, "seq(if([entry][t][e])[join])"},
-        {"a loop", A_LOOP, "seq([entry]loop([head][body])[out])"},
-        {"a switch", A_SWITCH, "seq(switch([entry][d][one][two])[join])"},
-        {"a sequence", MOD("  func @f(%a: i32) -> i32 {\n"
-                           "    block entry:\n      jump second\n"
-                           "    block second:\n      return %a\n  }\n"),
-         "seq([entry][second])"},
+        {S("an if"), AN_IF, S("seq(if([entry][t][e])[join])")},
+        {S("a loop"), A_LOOP, S("seq([entry]loop([head][body])[out])")},
+        {S("a switch"), A_SWITCH,
+         S("seq(switch([entry][d][one][two])[join])")},
+        {S("a sequence"), MOD("  func @f(%a: i32) -> i32 {\n"
+                              "    block entry:\n      jump second\n"
+                              "    block second:\n      return %a\n  }\n"),
+         S("seq([entry][second])")},
     };
 
     for (size_t i = 0; i < 4; i++) {
@@ -180,31 +169,35 @@ static void test_reducible_shapes(void)
 
         ir_structure(r->m, r->d);
 
-        char *got = shape(ir_func_at(r->m, 0));
+        core_string_t got = shape(ir_func_at(r->m, 0));
 
-        if (!got || strcmp(got, cases[i].shape)) {
-            printf("FAIL  %s structures as %s, wanted %s\n", cases[i].what,
-                   got ? got : "(nothing)", cases[i].shape);
+        if (!got.data || !core_string_eq(got, cases[i].shape)) {
+            core_string_t shown = got.data ? got : S("(nothing)");
+
+            printf("FAIL  %.*s structures as %.*s, wanted %.*s\n",
+                   (int)cases[i].what.u8_bytes, cases[i].what.data,
+                   (int)shown.u8_bytes, shown.data,
+                   (int)cases[i].shape.u8_bytes, cases[i].shape.data);
             fails++;
         }
-        free(got);
+        core_free(got.data);
         done(r);
     }
 }
 
 static void test_the_overlay_is_metadata(void)
 {
-    run_t *r      = load(A_LOOP);
-    char  *before = ir_module_print(r->m);
+    run_t        *r      = load(A_LOOP);
+    core_string_t before = ir_module_print(r->m);
 
     check("structure runs", ir_structure(r->m, r->d));
 
-    char *after = ir_module_print(r->m);
+    core_string_t after = ir_module_print(r->m);
 
     check("and changes no instruction, block or anything else printable",
-          before && after && !strcmp(before, after));
-    free(before);
-    free(after);
+          before.data && after.data && core_string_eq(before, after));
+    core_free(before.data);
+    core_free(after.data);
     done(r);
 }
 
@@ -227,20 +220,20 @@ static void test_the_pass_declares_what_the_spec_says(void)
 
 static void test_irreducible_still_succeeds(void)
 {
-    run_t *r      = load(IRREDUCIBLE);
-    char  *before = ir_module_print(r->m);
+    run_t        *r      = load(IRREDUCIBLE);
+    core_string_t before = ir_module_print(r->m);
 
     check("structure succeeds on irreducible control flow",
           ir_structure(r->m, r->d));
 
-    char *after = ir_module_print(r->m);
+    core_string_t after = ir_module_print(r->m);
 
     check("without rewriting control flow to avoid the problem",
-          before && after && !strcmp(before, after));
+          before.data && after.data && core_string_eq(before, after));
     ir_func_t   *f    = ir_func_at(r->m, 0);
     ir_region_t *site = ir_region_dispatch_site(f);
-    ir_block_t  *x    = ir_block_find(f, "x");
-    ir_block_t  *y    = ir_block_find(f, "y");
+    ir_block_t  *x    = ir_block_find(f, S("x"));
+    ir_block_t  *y    = ir_block_find(f, S("y"));
 
     check("and it records that a dispatch loop is needed", site != nullptr);
 
@@ -261,8 +254,8 @@ static void test_irreducible_still_succeeds(void)
           site == ir_region_root(f)
               || !ir_region_needs_dispatch(ir_region_root(f)));
 
-    free(before);
-    free(after);
+    core_free(before.data);
+    core_free(after.data);
     done(r);
 
     run_t *ok = load(A_LOOP);
@@ -278,7 +271,7 @@ static void test_irreducible_still_succeeds(void)
 
 static void test_every_block_exactly_once(void)
 {
-    const char *all[] = {AN_IF, A_LOOP, A_SWITCH, IRREDUCIBLE};
+    const core_string_t all[] = {AN_IF, A_LOOP, A_SWITCH, IRREDUCIBLE};
 
     for (size_t i = 0; i < 4; i++) {
         run_t *r = load(all[i]);
@@ -289,7 +282,9 @@ static void test_every_block_exactly_once(void)
 
         for (uint32_t k = 0; k < f->n_blocks; k++) {
             if (!ir_region_of_block(f, f->blocks[k])) {
-                printf("FAIL  block %s is in no region\n", f->blocks[k]->name);
+                printf("FAIL  block %.*s is in no region\n",
+                       (int)f->blocks[k]->name.u8_bytes,
+                       f->blocks[k]->name.data);
                 fails++;
             }
         }
@@ -317,9 +312,9 @@ static void test_a_broken_overlay_is_caught(void)
 
     check("an overlay that stopped covering the blocks is caught",
           !(held & IR_PROP_STRUCTURED));
-    check("and the rule is named", told(r, "structured.overlay"));
+    check("and the rule is named", told(r, S("structured.overlay")));
     check("and says how many times the block was covered",
-          told(r, "0 times"));
+          told(r, S("0 times")));
     done(r);
 
     run_t *none = load(AN_IF);
@@ -327,13 +322,13 @@ static void test_a_broken_overlay_is_caught(void)
     ir_module_establish(none->m, IR_PROP_STRUCTURED);
     check("so is claiming structured with no overlay at all",
           !(ir_verify(none->m, none->d) & IR_PROP_STRUCTURED));
-    check("and it says so", told(none, "no region overlay"));
+    check("and it says so", told(none, S("no region overlay")));
     done(none);
 }
 
 static void test_the_overlay_is_deterministic(void)
 {
-    const char *all[] = {AN_IF, A_LOOP, A_SWITCH, IRREDUCIBLE};
+    const core_string_t all[] = {AN_IF, A_LOOP, A_SWITCH, IRREDUCIBLE};
 
     for (size_t i = 0; i < 4; i++) {
         run_t *a = load(all[i]);
@@ -342,33 +337,36 @@ static void test_the_overlay_is_deterministic(void)
         ir_structure(a->m, a->d);
         ir_structure(a->m, a->d);
 
-        char *twice = shape(ir_func_at(a->m, 0));
+        core_string_t twice = shape(ir_func_at(a->m, 0));
 
         ir_structure(b->m, b->d);
 
-        char *once = shape(ir_func_at(b->m, 0));
+        core_string_t once = shape(ir_func_at(b->m, 0));
 
-        if (!once || !twice || strcmp(once, twice)) {
+        if (!once.data || !twice.data || !core_string_eq(once, twice)) {
             printf("FAIL  running structure twice changes the tree\n");
             fails++;
         }
 
-        char  *text  = ir_module_print(b->m);
-        run_t *again = load(text);
+        core_string_t text  = ir_module_print(b->m);
+        run_t        *again = load(text);
 
         ir_structure(again->m, again->d);
 
-        char *after = shape(ir_func_at(again->m, 0));
+        core_string_t after = shape(ir_func_at(again->m, 0));
 
-        if (!after || strcmp(after, once)) {
-            printf("FAIL  the tree differs after a round trip: %s vs %s\n",
-                   after ? after : "(nothing)", once);
+        if (!after.data || !core_string_eq(after, once)) {
+            core_string_t shown = after.data ? after : S("(nothing)");
+
+            printf("FAIL  the tree differs after a round trip: %.*s vs %.*s\n",
+                   (int)shown.u8_bytes, shown.data, (int)once.u8_bytes,
+                   once.data);
             fails++;
         }
-        free(text);
-        free(after);
-        free(once);
-        free(twice);
+        core_free(text.data);
+        core_free(after.data);
+        core_free(once.data);
+        core_free(twice.data);
         done(again);
         done(a);
         done(b);
@@ -381,23 +379,24 @@ static void test_the_nested_form_is_a_rendering(void)
 
     ir_structure(r->m, r->d);
 
-    char *drawn = ir_module_render_nested(r->m);
+    core_string_t drawn = ir_module_render_nested(r->m);
 
-    check("the rendering exists", drawn != nullptr);
+    check("the rendering exists", drawn.data != nullptr);
     check("it names every block it draws",
-          drawn && strstr(drawn, "block entry") && strstr(drawn, "block head")
-              && strstr(drawn, "block body") && strstr(drawn, "block out"));
+          contains(drawn, S("block entry")) && contains(drawn, S("block head"))
+              && contains(drawn, S("block body"))
+              && contains(drawn, S("block out")));
     check("it draws the regions around them",
-          drawn && strstr(drawn, "loop at head {"));
+          contains(drawn, S("loop at head {")));
     check("and says outright that it is not the format",
-          drawn && strstr(drawn, "not its format"));
+          contains(drawn, S("not its format")));
 
     ir_diags_t  *d2 = ir_diags_new(r->ctx, nullptr);
     ir_module_t *m2 = ir_module_parse(r->ctx, drawn, 0, PROFILES, 1, d2);
 
     check("it is a rendering, not a second syntax: it does not parse",
           m2 == nullptr);
-    free(drawn);
+    core_free(drawn.data);
     done(r);
 }
 
@@ -420,8 +419,8 @@ static void test_every_named_pass_declares_what_the_spec_lists(void)
         if (p->requires != table[i].requires
             || p->establishes != table[i].establishes
             || !ir_pass_declares(p)) {
-            printf("FAIL  %s does not declare what it needs and gives\n",
-                   p->name);
+            printf("FAIL  %.*s does not declare what it needs and gives\n",
+                   (int)p->name.u8_bytes, p->name.data);
             fails++;
         }
     }
@@ -441,7 +440,7 @@ static void test_a_created_block_takes_its_construct_s_span(void)
     check("the branching block has a location", ir_span_known(was));
     check("split-edges runs", ir_split_edges(r->m, r->d));
 
-    ir_block_t *made = ir_block_find(f, "entry.to.join");
+    ir_block_t *made = ir_block_find(f, S("entry.to.join"));
 
     check("a block was created", made != nullptr);
     check("and it takes the span of the construct it implements",
@@ -449,7 +448,8 @@ static void test_a_created_block_takes_its_construct_s_span(void)
               && made->span.start_byte == was.start_byte);
     check("its jump is attributed to the pass that made it",
           made && made->n_instrs && made->instrs[0]->origin
-              && !strcmp(made->instrs[0]->origin->agent, "split-edges"));
+              && core_string_eq(made->instrs[0]->origin->agent,
+                                S("split-edges")));
     done(r);
 }
 
@@ -490,7 +490,8 @@ static void test_a_loop_with_a_body_of_several_blocks(void)
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
         if (!ir_region_of_block(f, f->blocks[i])) {
-            printf("FAIL  block %s is in no region\n", f->blocks[i]->name);
+            printf("FAIL  block %.*s is in no region\n",
+                   (int)f->blocks[i]->name.u8_bytes, f->blocks[i]->name.data);
             fails++;
         }
     }
@@ -499,7 +500,7 @@ static void test_a_loop_with_a_body_of_several_blocks(void)
     check("and the overlay covers every one of its blocks exactly once",
           (ir_verify(r->m, r->d) & IR_PROP_STRUCTURED) != 0);
     check("the loop is recognised as a loop",
-          ir_region_of_block(f, ir_block_find(f, "latch")) != nullptr);
+          ir_region_of_block(f, ir_block_find(f, S("latch"))) != nullptr);
     check("and nothing in it is marked irreducible",
           ir_region_dispatch_site(f) == nullptr);
     done(r);

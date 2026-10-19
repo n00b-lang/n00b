@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir/ir.h"
 #include "ir/typelang.h"
 
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 #include "parse/annot_walk.h"
 #include "parse/bnf.h"
 #include "parse/pwz.h"
@@ -13,23 +13,19 @@
 #include "scanner/token_stream.h"
 #include "harness.h"
 
-static core_string_t S(const char *s)
+#define S(x) CORE_STRING_STATIC(x)
+
+static th_type *want(th_ctx *th, core_string_t spec)
 {
-    return core_string_from_cstr(s);
-}
+    core_string_t err = {};
+    th_type      *t   = ir_typelang_parse(th, spec, &err);
 
-
-static th_type *want(th_ctx *th, const char *spec)
-{
-    char    *err = nullptr;
-    th_type *t   = ir_typelang_parse(th, spec, &err);
-
-    core_free(err);
+    core_free(err.data);
 
     return t;
 }
 
-static bool same(th_ctx *th, th_type *a, const char *spec)
+static bool same(th_ctx *th, th_type *a, core_string_t spec)
 {
     th_type *b = want(th, spec);
 
@@ -38,12 +34,19 @@ static bool same(th_ctx *th, th_type *a, const char *spec)
 
 int main(int argc, char **argv)
 {
-    const char *dir = argc > 1 ? argv[1] : ".";
-    char        path[1024];
+    core_string_t  dir = argc > 1 ? core_string_from_cstr(argv[1])
+                                  : core_string_dup(S("."));
+    core_buffer_t *pb  = core_buffer_empty();
 
-    snprintf(path, sizeof(path), "%s/typemap.bnf", dir);
+    core_buffer_printf(pb, "%.*s/typemap.bnf", (int)dir.u8_bytes, dir.data);
+    core_free(dir.data);
 
-    core_string_t text = slurp(path);
+    core_string_t paths = core_buffer_take_string(pb);
+    char         *path  = core_string_to_cstr(paths);
+    core_string_t text  = slurp(path);
+
+    core_free(path);
+    core_free(paths.data);
 
     if (!text.data) {
         return 1;
@@ -110,10 +113,10 @@ int main(int argc, char **argv)
     parse_scope_t *blk = nullptr;
 
     for (parse_scope_t *s = r->symtab->all_scopes; s; s = s->all_next) {
-        if (s->scope_tag.data && !strcmp(s->scope_tag.data, "module")) {
+        if (s->scope_tag.data && core_string_eq(s->scope_tag, S("module"))) {
             mod = s;
         }
-        if (s->scope_tag.data && !strcmp(s->scope_tag.data, "block")) {
+        if (s->scope_tag.data && core_string_eq(s->scope_tag, S("block"))) {
             blk = s;
         }
     }
@@ -138,13 +141,13 @@ int main(int argc, char **argv)
 
     if (a && b && c && e) {
         check("an unquoted type in the annotation becomes that type",
-              same(types, a->type, "int"));
+              same(types, a->type, S("int")));
         check("a quoted type still becomes that type",
-              same(types, b->type, "string"));
+              same(types, b->type, S("string")));
         check("a parameterized type becomes that type",
-              same(types, c->type, "list[int]"));
+              same(types, c->type, S("list[int]")));
         check("a comma inside the type's brackets is not an argument comma",
-              same(types, e->type, "dict[int,string]"));
+              same(types, e->type, S("dict[int,string]")));
         check("and the two scalars do not collide",
               th_hash(types, a->type) != th_hash(types, b->type));
     }
@@ -157,7 +160,8 @@ int main(int argc, char **argv)
                                    S("d"))
               == nullptr);
 
-    ir_module_t *m = ir_module_new(ctx, "m", &ir_profile_bce, nullptr);
+    ir_module_t *m = ir_module_new(ctx, S("m"), &ir_profile_bce,
+                                   (core_string_t){});
 
     ir_module_set_tree(m, g, tree);
 
@@ -168,15 +172,15 @@ int main(int argc, char **argv)
     check("and reaches the one type universe",
           ir_module_types(m) == types);
 
-    ir_global_t *old_global = ir_global_add(m, "old", want(types, "int"));
-    ir_func_t *old_function = ir_func_add(m, "old_function",
-        th_func(types, want(types, "int"), nullptr, 0, nullptr, nullptr, 0),
+    ir_global_t *old_global = ir_global_add(m, S("old"), want(types, S("int")));
+    ir_func_t *old_function = ir_func_add(m, S("old_function"),
+        th_func(types, want(types, S("int")), nullptr, 0, nullptr, nullptr, 0),
         IR_LINK_INTERNAL);
     parse_sym_entry_t *old_symbol = parse_symtab_add(ir_module_symtab(m),
         S(""), S("old_symbol"), PARSE_SYM_VARIABLE, tree);
     ir_module_set_span(m, (ir_span_t){.file = 7});
     bool old_annotation = ir_annot_set(ctx, ir_module_annots(m),
-        (ir_annot_t){.key = "old.tree.note", .kind = IR_ANNOT_BOOL,
+        (ir_annot_t){.key = S("old.tree.note"), .kind = IR_ANNOT_BOOL,
                      .b = true});
     ir_module_establish(m, IR_PROP_SCOPED | IR_PROP_SYMBOLS
                               | IR_PROP_CFLOW | IR_PROP_TREE_TYPED);
@@ -187,28 +191,29 @@ int main(int argc, char **argv)
     check("replacing a tree drops derived properties and IR",
           ir_module_props(m) == IR_PROP_TREE
               && ir_module_tree(m) == second_tree
-              && ir_global_find(m, "old") == nullptr
+              && ir_global_find(m, S("old")) == nullptr
               && ir_global_count(m) == 0
-              && ir_func_find(m, "old_function") == nullptr
+              && ir_func_find(m, S("old_function")) == nullptr
               && ir_func_count(m) == 0
               && ir_module_span(m).file == -1
-              && ir_annot_get(ir_module_annots(m), "old.tree.note") == nullptr
+              && ir_annot_get(ir_module_annots(m), S("old.tree.note"))
+                     == nullptr
               && parse_symtab_lookup_scoped(ir_module_symtab(m), nullptr,
                   S(""), S("old_symbol")) == nullptr);
     check("the replacement can define the old name afresh",
-          old_global && ir_global_add(m, "old", want(types, "int"))
+          old_global && ir_global_add(m, S("old"), want(types, S("int")))
               != nullptr && old_function && old_symbol && old_annotation);
     bool replacement_annotation = ir_annot_set(ctx, ir_module_annots(m),
-        (ir_annot_t){.key = "replacement.tree.note", .kind = IR_ANNOT_BOOL,
+        (ir_annot_t){.key = S("replacement.tree.note"), .kind = IR_ANNOT_BOOL,
                      .b = true});
     ir_module_set_tree(m, g, nullptr);
     check("clearing a tree drops its IR and grammar",
           ir_module_props(m) == 0 && ir_module_tree(m) == nullptr
               && ir_module_grammar(m) == nullptr
-              && ir_global_find(m, "old") == nullptr
+              && ir_global_find(m, S("old")) == nullptr
               && replacement_annotation
               && ir_annot_get(ir_module_annots(m),
-                              "replacement.tree.note") == nullptr);
+                              S("replacement.tree.note")) == nullptr);
 
     parse_tree_t *decl = nullptr;
 

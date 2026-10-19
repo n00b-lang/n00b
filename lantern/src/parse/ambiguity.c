@@ -16,34 +16,35 @@ core_list_decl(int64_t);
 typedef core_list_t(int64_t) ambig_sequence_t;
 core_list_decl(ambig_sequence_t);
 
-const char *parse_ambiguity_kind_name(parse_ambiguity_kind_t kind) {
+core_string_t parse_ambiguity_kind_name(parse_ambiguity_kind_t kind) {
   switch (kind) {
   case PARSE_AMBIG_DUPLICATE:
-    return "duplicate";
+    return CORE_STRING_STATIC("duplicate");
   case PARSE_AMBIG_FIRST_OVERLAP:
-    return "first-overlap";
+    return CORE_STRING_STATIC("first-overlap");
   case PARSE_AMBIG_NULLABLE_PREFIX:
-    return "nullable-prefix";
+    return CORE_STRING_STATIC("nullable-prefix");
   case PARSE_AMBIG_COMMON_PREFIX:
-    return "common-prefix";
+    return CORE_STRING_STATIC("common-prefix");
   case PARSE_AMBIG_CONFIRMED:
-    return "confirmed";
+    return CORE_STRING_STATIC("confirmed");
   }
 
-  return "unknown";
+  return CORE_STRING_STATIC("unknown");
 }
 
-const char *parse_ambiguity_severity_name(parse_ambiguity_severity_t severity) {
+core_string_t
+parse_ambiguity_severity_name(parse_ambiguity_severity_t severity) {
   switch (severity) {
   case PARSE_AMBIG_INFO:
-    return "info";
+    return CORE_STRING_STATIC("info");
   case PARSE_AMBIG_WARNING:
-    return "warning";
+    return CORE_STRING_STATIC("warning");
   case PARSE_AMBIG_ERROR:
-    return "error";
+    return CORE_STRING_STATIC("error");
   }
 
-  return "unknown";
+  return CORE_STRING_STATIC("unknown");
 }
 
 static void json_string(core_buffer_t *buffer, core_string_t value) {
@@ -95,19 +96,26 @@ parse_ambiguity_format_json(const parse_ambiguity_list_t *findings) {
         core_buffer_putc(&buffer, ',');
       }
 
+      core_string_t kind = parse_ambiguity_kind_name(finding->kind);
+      core_string_t severity =
+          parse_ambiguity_severity_name(finding->severity);
       core_buffer_printf(&buffer,
-                         "{\"kind\":\"%s\",\"severity\":\"%s\","
+                         "{\"kind\":\"%.*s\",\"severity\":\"%.*s\","
                          "\"nonterminal\":%lld,\"nonterminal_name\":",
-                         parse_ambiguity_kind_name(finding->kind),
-                         parse_ambiguity_severity_name(finding->severity),
+                         (int)kind.u8_bytes, kind.data,
+                         (int)severity.u8_bytes, severity.data,
                          (long long)finding->nonterminal);
       json_string(&buffer, finding->nonterminal_name);
       core_buffer_printf(&buffer,
                          ",\"rule_a\":%d,"
-                         "\"rule_b\":%d,\"witness_is_prefix\":%s,"
-                         "\"source_origin_a\":",
-                         finding->rule_a, finding->rule_b,
-                         finding->witness_is_prefix ? "true" : "false");
+                         "\"rule_b\":%d,\"witness_is_prefix\":",
+                         finding->rule_a, finding->rule_b);
+      if (finding->witness_is_prefix) {
+        core_buffer_puts(&buffer, "true");
+      } else {
+        core_buffer_puts(&buffer, "false");
+      }
+      core_buffer_puts(&buffer, ",\"source_origin_a\":");
       json_string(&buffer, finding->source_origin_a);
       core_buffer_puts(&buffer, ",\"source_origin_b\":");
       json_string(&buffer, finding->source_origin_b);
@@ -174,31 +182,31 @@ static core_string_t witness_for_token(parse_grammar_t *g, int64_t token) {
     return core_string_dup(name);
   }
 
-  const char *builtin = nullptr;
+  core_string_t builtin = {};
   switch (token) {
   case PARSE_TOK_IDENTIFIER:
-    builtin = "<identifier>";
+    builtin = CORE_STRING_STATIC("<identifier>");
     break;
   case PARSE_TOK_TYPEDEF_NAME:
-    builtin = "<typedef-name>";
+    builtin = CORE_STRING_STATIC("<typedef-name>");
     break;
   case PARSE_TOK_INTEGER:
-    builtin = "<integer>";
+    builtin = CORE_STRING_STATIC("<integer>");
     break;
   case PARSE_TOK_FLOAT:
-    builtin = "<float>";
+    builtin = CORE_STRING_STATIC("<float>");
     break;
   case PARSE_TOK_CHAR_LIT:
-    builtin = "<char-literal>";
+    builtin = CORE_STRING_STATIC("<char-literal>");
     break;
   case PARSE_TOK_STRING_LIT:
-    builtin = "<string-literal>";
+    builtin = CORE_STRING_STATIC("<string-literal>");
     break;
   default:
     break;
   }
-  if (builtin) {
-    return core_string_from_cstr(builtin);
+  if (builtin.data) {
+    return core_string_dup(builtin);
   }
 
   char text[48];
@@ -232,8 +240,8 @@ static core_string_t common_prefix_witness(const parse_rule_t *a,
       break;
     }
 
-    int n = snprintf(text + used, sizeof(text) - used, "%s<terminal:%lld>",
-                     used ? " " : "", (long long)ma->terminal_id);
+    int n = snprintf(text + used, sizeof(text) - used, "%.*s<terminal:%lld>",
+                     used ? 1 : 0, " ", (long long)ma->terminal_id);
     if (n <= 0 || (size_t)n >= sizeof(text) - used) {
       break;
     }
@@ -255,16 +263,20 @@ static void append_derivation_tree(parse_grammar_t *grammar, parse_tree_t *tree,
     core_string_t label =
         witness_for_token(grammar,
                           token ? parse_token_tid(token) : PARSE_TOK_OTHER);
-    core_buffer_printf(buffer, "%*s%s\n", (int)(depth * 2), "",
-                       label.data ? label.data : "<terminal>");
+    core_string_t shown =
+        label.data ? label : CORE_STRING_STATIC("<terminal>");
+    core_buffer_printf(buffer, "%*s%.*s\n", (int)(depth * 2), "",
+                       (int)shown.u8_bytes, shown.data);
     core_free(label.data);
     return;
   }
 
   parse_nt_node_t *node = &core_tree_node_value(tree);
   parse_rule_t *rule = parse_get_node_rule(grammar, node);
-  core_buffer_printf(buffer, "%*s%s [rule %d]\n", (int)(depth * 2), "",
-                     node->name.data ? node->name.data : "<anonymous>",
+  core_string_t name =
+      node->name.data ? node->name : CORE_STRING_STATIC("<anonymous>");
+  core_buffer_printf(buffer, "%*s%.*s [rule %d]\n", (int)(depth * 2), "",
+                     (int)name.u8_bytes, name.data,
                      rule ? (int)(rule - grammar->rules.data) : -1);
   for (size_t i = 0; i < core_tree_num_children(tree); i++) {
     append_derivation_tree(grammar, core_tree_child(tree, i), buffer,
@@ -667,8 +679,8 @@ static core_string_t sequence_witness(parse_grammar_t *g,
   for (size_t i = 0; i < sequence->len; i++) {
     core_string_t label = witness_for_token(g, sequence->data[i]);
     int n =
-        snprintf(text + used, sizeof(text) - used, "%s%.*s", used ? " " : "",
-                 (int)label.u8_bytes, label.data ? label.data : "?");
+        snprintf(text + used, sizeof(text) - used, "%.*s%.*s", used ? 1 : 0,
+                 " ", (int)label.u8_bytes, label.data ? label.data : "?");
     core_free(label.data);
     if (n <= 0 || (size_t)n >= sizeof(text) - used) {
       return (core_string_t){0};
@@ -888,7 +900,8 @@ static void add_finding(parse_ambiguity_list_t *out,
                         core_string_t nt_name, int32_t rule_a, int32_t rule_b,
                         core_string_t source_a, core_string_t source_b,
                         core_string_t witness, bool witness_is_prefix,
-                        const char *explanation, const char *prescription) {
+                        core_string_t explanation,
+                        core_string_t prescription) {
   if (options && options->max_findings && out->len >= options->max_findings) {
     return;
   }
@@ -916,8 +929,8 @@ static void add_finding(parse_ambiguity_list_t *out,
       .source_origin_b = source_b,
       .witness = witness,
       .witness_is_prefix = witness_is_prefix,
-      .explanation = core_string_from_cstr(explanation),
-      .prescription = core_string_from_cstr(prescription),
+      .explanation = core_string_dup(explanation),
+      .prescription = core_string_dup(prescription),
   };
 
   core_list_push(*out, finding);
@@ -973,17 +986,19 @@ parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
                       core_string_dup(nt->name), rule_a_id, rule_b_id,
                       rule_source_origin(rule_a), rule_source_origin(rule_b),
                       (core_string_t){0}, false,
-                      "two alternatives have identical bodies",
-                      "remove the duplicate alternative");
+                      CORE_STRING_STATIC(
+                          "two alternatives have identical bodies"),
+                      CORE_STRING_STATIC("remove the duplicate alternative"));
         } else if (first_sets_overlap(rule_a, rule_b)) {
           int64_t token = 0;
           bool has_token = false;
           bool witness_is_prefix = false;
           core_string_t witness = {0};
           parse_ambiguity_kind_t kind = PARSE_AMBIG_FIRST_OVERLAP;
-          const char *explanation = "alternatives have overlapping FIRST sets";
-          const char *prescription =
-              "left-factor the shared prefix or add explicit precedence";
+          core_string_t explanation = CORE_STRING_STATIC(
+              "alternatives have overlapping FIRST sets");
+          core_string_t prescription = CORE_STRING_STATIC(
+              "left-factor the shared prefix or add explicit precedence");
 
           uint32_t max_tokens = options && options->max_witness_tokens
                                     ? options->max_witness_tokens
@@ -1023,15 +1038,16 @@ parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
             if (has_nullable_prefix(work, rule_a) ||
                 has_nullable_prefix(work, rule_b)) {
               kind = PARSE_AMBIG_NULLABLE_PREFIX;
-              explanation =
-                  "a nullable prefix derives the same bounded token sequence";
-              prescription =
-                  "make optionality explicit or separate the follow rule";
+              explanation = CORE_STRING_STATIC(
+                  "a nullable prefix derives the same bounded token sequence");
+              prescription = CORE_STRING_STATIC(
+                  "make optionality explicit or separate the follow rule");
             } else {
-              explanation =
-                  "alternatives derive the same bounded token sequence";
-              prescription = "remove the duplicate derivation or add explicit "
-                             "disambiguation";
+              explanation = CORE_STRING_STATIC(
+                  "alternatives derive the same bounded token sequence");
+              prescription = CORE_STRING_STATIC(
+                  "remove the duplicate derivation or add explicit "
+                  "disambiguation");
             }
           }
 
@@ -1071,10 +1087,11 @@ parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
                 has_token = true;
                 core_free(witness.data);
                 witness = sequence_witness(work, &sequence_a);
-                explanation =
-                    "alternatives derive the same bounded token sequence";
-                prescription = "remove the duplicate derivation or add "
-                               "explicit disambiguation";
+                explanation = CORE_STRING_STATIC(
+                    "alternatives derive the same bounded token sequence");
+                prescription = CORE_STRING_STATIC(
+                    "remove the duplicate derivation or add "
+                    "explicit disambiguation");
                 break;
               }
             }
@@ -1092,14 +1109,16 @@ parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
             witness_is_prefix = true;
             witness = common_prefix_witness(
                 rule_a, rule_b, options ? options->max_witness_tokens : 0);
-            explanation = "alternatives begin with the same terminal";
-            prescription = "left-factor the common prefix";
+            explanation = CORE_STRING_STATIC(
+                "alternatives begin with the same terminal");
+            prescription = CORE_STRING_STATIC("left-factor the common prefix");
           } else if (has_nullable_prefix(work, rule_a) ||
                      has_nullable_prefix(work, rule_b)) {
             kind = PARSE_AMBIG_NULLABLE_PREFIX;
-            explanation = "a nullable prefix overlaps another alternative";
-            prescription =
-                "make optionality explicit or separate the follow rule";
+            explanation = CORE_STRING_STATIC(
+                "a nullable prefix overlaps another alternative");
+            prescription = CORE_STRING_STATIC(
+                "make optionality explicit or separate the follow rule");
           } else if (first_overlap_token(rule_a, rule_b, &token)) {
             has_token = true;
             /* The FIRST-set witness is still useful even when
@@ -1125,9 +1144,10 @@ parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
 
           if (confirmed) {
             kind = PARSE_AMBIG_CONFIRMED;
-            explanation = "PWZ produces multiple parse trees for this witness";
-            prescription =
-                "remove one derivation or add explicit disambiguation";
+            explanation = CORE_STRING_STATIC(
+                "PWZ produces multiple parse trees for this witness");
+            prescription = CORE_STRING_STATIC(
+                "remove one derivation or add explicit disambiguation");
           }
 
           if (!confirmed && (!options || !options->include_candidates)) {
@@ -1175,31 +1195,50 @@ int parse_ambiguity_cli(int argc, char **argv, FILE *out, FILE *err) {
   bool candidates = false;
   int arg = 1;
 
-  while (argc > arg && argv[arg][0] == '-') {
-    if (strcmp(argv[arg], "--json") == 0) {
+  while (argc > arg) {
+    core_string_t option = core_string_from_cstr(argv[arg]);
+    bool is_option = option.u8_bytes && option.data[0] == '-';
+
+    if (is_option && core_string_eq(option, CORE_STRING_STATIC("--json"))) {
       json = true;
-    } else if (strcmp(argv[arg], "--candidates") == 0) {
+    } else if (is_option &&
+               core_string_eq(option, CORE_STRING_STATIC("--candidates"))) {
       candidates = true;
     } else {
+      core_free(option.data);
       break;
     }
+    core_free(option.data);
     arg++;
   }
 
   if (argc - arg != 2) {
-    fprintf(err, "usage: %s [--json] [--candidates] GRAMMAR.bnf START_SYMBOL\n",
-            argc > 0 ? argv[0] : "ambiguity-audit");
+    core_string_t program = argc > 0
+                                ? core_string_from_cstr(argv[0])
+                                : CORE_STRING_STATIC("ambiguity-audit");
+    fprintf(err,
+            "usage: %.*s [--json] [--candidates] GRAMMAR.bnf START_SYMBOL\n",
+            (int)program.u8_bytes, program.data);
+    if (argc > 0) {
+      core_free(program.data);
+    }
     return 2;
   }
 
   parse_grammar_t *grammar = parse_grammar_new();
   parse_grammar_set_error_recovery(grammar, false);
 
-  if (!parse_bnf_load_file(
-          argv[arg], core_string_borrow(argv[arg + 1], strlen(argv[arg + 1])),
-          grammar)) {
-    fprintf(err, "failed to load %s: %s\n", argv[arg], parse_bnf_error());
+  core_string_t grammar_path = core_string_from_cstr(argv[arg]);
+  core_string_t start_symbol = core_string_from_cstr(argv[arg + 1]);
+  bool loaded = parse_bnf_load_file(grammar_path, start_symbol, grammar);
+
+  if (!loaded) {
+    core_string_t error = parse_bnf_error();
+    fprintf(err, "failed to load %.*s: %.*s\n", (int)grammar_path.u8_bytes,
+            grammar_path.data, (int)error.u8_bytes, error.data);
     parse_grammar_free(grammar);
+    core_free(grammar_path.data);
+    core_free(start_symbol.data);
     return 1;
   }
 
@@ -1219,17 +1258,20 @@ int parse_ambiguity_cli(int argc, char **argv, FILE *out, FILE *err) {
   } else {
     for (size_t i = 0; i < findings.len; i++) {
       parse_ambiguity_finding_t *finding = &findings.data[i];
+      core_string_t severity = parse_ambiguity_severity_name(finding->severity);
+      core_string_t kind = parse_ambiguity_kind_name(finding->kind);
       fprintf(out,
-              "%s: nonterminal %.*s (#%lld), rules %d and %d: %s\n"
-              "  %s\n"
-              "  suggestion: %s\n",
-              parse_ambiguity_severity_name(finding->severity),
+              "%.*s: nonterminal %.*s (#%lld), rules %d and %d: %.*s\n"
+              "  %.*s\n"
+              "  suggestion: %.*s\n",
+              (int)severity.u8_bytes, severity.data,
               (int)finding->nonterminal_name.u8_bytes,
               finding->nonterminal_name.data ? finding->nonterminal_name.data
                                              : "?",
               (long long)finding->nonterminal, finding->rule_a, finding->rule_b,
-              parse_ambiguity_kind_name(finding->kind),
-              finding->explanation.data, finding->prescription.data);
+              (int)kind.u8_bytes, kind.data,
+              (int)finding->explanation.u8_bytes, finding->explanation.data,
+              (int)finding->prescription.u8_bytes, finding->prescription.data);
       if (finding->source_origin_a.data || finding->source_origin_b.data) {
         fprintf(out, "  sources: %.*s / %.*s\n",
                 (int)finding->source_origin_a.u8_bytes,
@@ -1240,8 +1282,10 @@ int parse_ambiguity_cli(int argc, char **argv, FILE *out, FILE *err) {
                                               : "?");
       }
       if (finding->witness.data) {
-        fprintf(out, "  %s: %.*s\n",
-                finding->witness_is_prefix ? "prefix" : "witness",
+        core_string_t label = finding->witness_is_prefix
+                                  ? CORE_STRING_STATIC("prefix")
+                                  : CORE_STRING_STATIC("witness");
+        fprintf(out, "  %.*s: %.*s\n", (int)label.u8_bytes, label.data,
                 (int)finding->witness.u8_bytes, finding->witness.data);
       }
       if (finding->kind == PARSE_AMBIG_CONFIRMED) {
@@ -1259,6 +1303,8 @@ int parse_ambiguity_cli(int argc, char **argv, FILE *out, FILE *err) {
   int result = findings.len ? 1 : 0;
   parse_ambiguity_list_free(&findings);
   parse_grammar_free(grammar);
+  core_free(grammar_path.data);
+  core_free(start_symbol.data);
   return result;
 }
 

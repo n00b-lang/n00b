@@ -24,11 +24,11 @@ static void ready_scalars(ir_module_t *m)
     m->scalar_types  = ir_alloc(m->ctx, n * sizeof(th_type *));
 
     for (size_t i = 0; i < p->n_scalars; i++) {
-        char    *err = nullptr;
-        th_type *t   = ir_typelang_parse(m->ctx->types,
-                                         p->scalars[i].type_text, &err);
+        core_string_t err = {};
+        th_type      *t   = ir_typelang_parse(m->ctx->types,
+                                              p->scalars[i].type_text, &err);
 
-        core_free(err);
+        core_free(err.data);
         m->scalar_hashes[i] = t ? th_hash(m->ctx->types, t) : 0;
         m->scalar_types[i]  = t ? ir_type_intern(m, t) : nullptr;
     }
@@ -52,13 +52,13 @@ static const ir_scalar_t *find_scalar(ir_module_t *m, th_type *t)
 }
 
 static const th_builtin_type_t IR_CONSTRUCTORS[] = {
-    {"string", TH_BUILTIN_STRING, 0, nullptr},
-    {"atomic", TH_BUILTIN_ATOMIC, 1, nullptr},
-    {"any", TH_BUILTIN_ANY, 0, nullptr},
-    {"array", TH_BUILTIN_ARRAY, 1, nullptr},
-    {"list", TH_BUILTIN_LIST, 1, nullptr},
-    {"set", TH_BUILTIN_SET, 1, nullptr},
-    {"dict", TH_BUILTIN_DICT, 2, nullptr},
+    {CORE_STRING_STATIC("string"), TH_BUILTIN_STRING, 0, nullptr},
+    {CORE_STRING_STATIC("atomic"), TH_BUILTIN_ATOMIC, 1, nullptr},
+    {CORE_STRING_STATIC("any"), TH_BUILTIN_ANY, 0, nullptr},
+    {CORE_STRING_STATIC("array"), TH_BUILTIN_ARRAY, 1, nullptr},
+    {CORE_STRING_STATIC("list"), TH_BUILTIN_LIST, 1, nullptr},
+    {CORE_STRING_STATIC("set"), TH_BUILTIN_SET, 1, nullptr},
+    {CORE_STRING_STATIC("dict"), TH_BUILTIN_DICT, 2, nullptr},
 };
 
 void ir_profile_install_builtins(ir_ctx_t *ctx, const ir_profile_t *p)
@@ -109,20 +109,21 @@ const ir_opinfo_t *ir_module_op_info(ir_module_t *m, ir_op_t op)
     return i < m->profile->n_ext_ops ? &m->profile->ext_ops[i] : nullptr;
 }
 
-const char *ir_module_op_spelling(ir_module_t *m, ir_op_t op)
+core_string_t ir_module_op_spelling(ir_module_t *m, ir_op_t op)
 {
     const ir_opinfo_t *info = ir_module_op_info(m, op);
 
-    return info ? info->spelling : nullptr;
+    return info ? info->spelling : (core_string_t){};
 }
 
-bool ir_module_op_lookup(ir_module_t *m, const char *spelling, ir_op_t *out)
+bool ir_module_op_lookup(ir_module_t *m, core_string_t spelling,
+                         ir_op_t *out)
 {
     if (ir_op_lookup(spelling, out)) {
         return true;
     }
 
-    if (!m || !m->profile || !spelling) {
+    if (!m || !m->profile || !spelling.data) {
         return false;
     }
 
@@ -260,25 +261,25 @@ bool ir_profile_has(ir_module_t *m, th_type *t)
 }
 
 static const ir_scalar_t bce_scalars[] = {
-    {"i8", IR_CLASS_SINT, 8, IR_ROLE_NONE},
-    {"i16", IR_CLASS_SINT, 16, IR_ROLE_NONE},
-    {"i32", IR_CLASS_SINT, 32, IR_ROLE_NONE},
-    {"i64", IR_CLASS_SINT, 64, IR_ROLE_NONE},
-    {"i128", IR_CLASS_SINT, 128, IR_ROLE_NONE},
-    {"u8", IR_CLASS_UINT, 8, IR_ROLE_NONE},
-    {"u16", IR_CLASS_UINT, 16, IR_ROLE_NONE},
-    {"u32", IR_CLASS_UINT, 32, IR_ROLE_NONE},
-    {"u64", IR_CLASS_UINT, 64, IR_ROLE_NONE},
-    {"u128", IR_CLASS_UINT, 128, IR_ROLE_NONE},
-    {"f32", IR_CLASS_FLOAT, 32, IR_ROLE_NONE},
-    {"f64", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
-    {"bool", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
-    {"char", IR_CLASS_SINT, 8, IR_ROLE_CHAR},
-    {"void", IR_CLASS_VOID, 0, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("i8"), IR_CLASS_SINT, 8, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("i16"), IR_CLASS_SINT, 16, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("i32"), IR_CLASS_SINT, 32, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("i64"), IR_CLASS_SINT, 64, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("i128"), IR_CLASS_SINT, 128, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("u8"), IR_CLASS_UINT, 8, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("u16"), IR_CLASS_UINT, 16, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("u32"), IR_CLASS_UINT, 32, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("u64"), IR_CLASS_UINT, 64, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("u128"), IR_CLASS_UINT, 128, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("f32"), IR_CLASS_FLOAT, 32, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("f64"), IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("bool"), IR_CLASS_BOOL, 1, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("char"), IR_CLASS_SINT, 8, IR_ROLE_CHAR},
+    {CORE_STRING_STATIC("void"), IR_CLASS_VOID, 0, IR_ROLE_NONE},
 };
 
 const ir_profile_t ir_profile_bce = {
-    .name      = "bce",
+    .name      = CORE_STRING_STATIC("bce"),
     .n_scalars = sizeof(bce_scalars) / sizeof(bce_scalars[0]),
     .scalars   = bce_scalars,
 };
@@ -295,7 +296,8 @@ static ir_rule_result_t synth_concat(ir_module_t *m, ir_instr_t *in,
 
     return (ir_rule_result_t){
         .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_intern(m, th_name(m->ctx->types, "str")),
+        .result  = ir_type_intern(m, th_name(m->ctx->types,
+                                             CORE_STRING_STATIC("str"))),
     };
 }
 
@@ -308,7 +310,8 @@ static ir_rule_result_t synth_seq_len(ir_module_t *m, ir_instr_t *in,
 
     return (ir_rule_result_t){
         .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_intern(m, th_name(m->ctx->types, "word")),
+        .result  = ir_type_intern(m, th_name(m->ctx->types,
+                                             CORE_STRING_STATIC("word"))),
     };
 }
 
@@ -343,7 +346,8 @@ static ir_rule_result_t synth_ext_concat(ir_module_t *m, ir_instr_t *in,
 
     return (ir_rule_result_t){
         .verdict = IR_RULE_ACCEPT,
-        .result  = ir_type_intern(m, th_name(m->ctx->types, "str")),
+        .result  = ir_type_intern(m, th_name(m->ctx->types,
+                                             CORE_STRING_STATIC("str"))),
     };
 }
 
@@ -360,33 +364,33 @@ static ir_rule_result_t synth_ext_trace(ir_module_t *m, ir_instr_t *in,
 
 static const ir_rule_t synth_rules[] = {
     {
-        .name      = "synth.concat.op",
+        .name      = CORE_STRING_STATIC("synth.concat.op"),
         .op        = (ir_op_t)(IR_OP_COUNT + 0),
         .match     = IR_MATCH_DEFAULT,
         .type_rule = synth_ext_concat,
     },
     {
-        .name      = "synth.trace.op",
+        .name      = CORE_STRING_STATIC("synth.trace.op"),
         .op        = (ir_op_t)(IR_OP_COUNT + 1),
         .match     = IR_MATCH_DEFAULT,
         .type_rule = synth_ext_trace,
     },
     {
-        .name      = "synth.concat",
+        .name      = CORE_STRING_STATIC("synth.concat"),
         .op        = IR_OP_ADD,
         .match     = IR_MATCH_EXACT,
-        .type_text = "str",
+        .type_text = CORE_STRING_STATIC("str"),
         .type_rule = synth_concat,
     },
     {
-        .name      = "synth.list.index",
+        .name      = CORE_STRING_STATIC("synth.list.index"),
         .op        = IR_OP_INDEX,
         .match     = IR_MATCH_CONSTRUCTOR,
-        .type_text = "list",
+        .type_text = CORE_STRING_STATIC("list"),
         .type_rule = synth_list_index,
     },
     {
-        .name      = "synth.seq.len",
+        .name      = CORE_STRING_STATIC("synth.seq.len"),
         .op        = IR_OP_CLZ,
         .match     = IR_MATCH_KIND,
         .kind      = TH_SEQUENCE,
@@ -395,23 +399,24 @@ static const ir_rule_t synth_rules[] = {
 };
 
 static const ir_opinfo_t synth_ext_ops[] = {
-    {"synth.concat", 2, 2, IR_RES_ANNOTATED, "vv", 0, IR_OPF_HASRESULT},
-    {"synth.trace", 0, IR_VAR_ARITY, IR_RES_NONE, "v*", 0,
-     IR_OPF_SIDEEFFECT},
+    {CORE_STRING_STATIC("synth.concat"), 2, 2, IR_RES_ANNOTATED,
+     CORE_STRING_STATIC("vv"), 0, IR_OPF_HASRESULT},
+    {CORE_STRING_STATIC("synth.trace"), 0, IR_VAR_ARITY, IR_RES_NONE,
+     CORE_STRING_STATIC("v*"), 0, IR_OPF_SIDEEFFECT},
 };
 
 static const ir_scalar_t synth_scalars[] = {
-    {"str", IR_CLASS_OPAQUE, 0, IR_ROLE_NONE},
-    {"int", IR_CLASS_SINT, 64, IR_ROLE_NONE},
-    {"word", IR_CLASS_UINT, 32, IR_ROLE_NONE},
-    {"byte", IR_CLASS_UINT, 8, IR_ROLE_NONE},
-    {"real", IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
-    {"flag", IR_CLASS_BOOL, 1, IR_ROLE_NONE},
-    {"unit", IR_CLASS_VOID, 0, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("str"), IR_CLASS_OPAQUE, 0, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("int"), IR_CLASS_SINT, 64, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("word"), IR_CLASS_UINT, 32, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("byte"), IR_CLASS_UINT, 8, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("real"), IR_CLASS_FLOAT, 64, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("flag"), IR_CLASS_BOOL, 1, IR_ROLE_NONE},
+    {CORE_STRING_STATIC("unit"), IR_CLASS_VOID, 0, IR_ROLE_NONE},
 };
 
 const ir_profile_t ir_profile_synth = {
-    .name      = "synth",
+    .name      = CORE_STRING_STATIC("synth"),
     .n_scalars = sizeof(synth_scalars) / sizeof(synth_scalars[0]),
     .scalars   = synth_scalars,
     .n_rules   = sizeof(synth_rules) / sizeof(synth_rules[0]),

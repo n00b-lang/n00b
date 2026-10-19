@@ -43,8 +43,7 @@ typedef struct {
 struct parse_scanner_t {
     core_buffer_t     *buffer;
     bool               owns_buffer;
-    const char       *input;
-    size_t            input_len;
+    core_string_t     input;
     size_t            input_offset;
     size_t            cursor;
     size_t            source_base;
@@ -146,8 +145,7 @@ extern scan_status_t scan_status(const parse_scanner_t *s);
 
 extern bool scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out);
 
-extern bool scan_scanner_append(parse_scanner_t *s, const char *data,
-                                size_t len);
+extern bool scan_scanner_append(parse_scanner_t *s, core_string_t data);
 
 extern bool scan_scanner_finish(parse_scanner_t *s);
 

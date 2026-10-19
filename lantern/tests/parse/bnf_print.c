@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "lib/alloc.h"
 #include "parse/annot_args.h"
@@ -8,26 +7,22 @@
 #include "private/parse/grammar.h"
 #include "harness.h"
 
-static core_string_t
-S(const char *s)
-{
-    return core_string_from_cstr(s);
-}
+#define S(x) CORE_STRING_STATIC(x)
 
-static const char *const EXTRA_TOKENS[] = {
-    "CHAR_LIT",  "EMBED",      "FLOAT_LIT", "HEX_LIT", "i", "u",
-    "bits",      "INT_LIT",    "LITERAL_PREFIX", "NEWLINE", "STRING_LIT",
-    "INDENT",    "DEDENT",
+static const core_string_t EXTRA_TOKENS[] = {
+    S("CHAR_LIT"),  S("EMBED"),      S("FLOAT_LIT"), S("HEX_LIT"), S("i"),
+    S("u"),         S("bits"),       S("INT_LIT"),   S("LITERAL_PREFIX"),
+    S("NEWLINE"),   S("STRING_LIT"), S("INDENT"),    S("DEDENT"),
 };
 
 static bool
-load_ok(const char *text, const char *start)
+load_ok(core_string_t text, core_string_t start)
 {
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
-    bool ok = parse_bnf_load(S(text), S(start), g);
+    bool ok = parse_bnf_load(text, start, g);
 
     parse_grammar_free(g);
 
@@ -50,8 +45,8 @@ annot_total(parse_grammar_t *g)
     return n;
 }
 
-static char *
-reprint_counting(core_string_t text, const char *start, const char *what,
+static core_string_t
+reprint_counting(core_string_t text, core_string_t start, core_string_t what,
                  size_t *annots, size_t *rules)
 {
     parse_grammar_t *g = parse_grammar_new();
@@ -60,18 +55,21 @@ reprint_counting(core_string_t text, const char *start, const char *what,
 
     for (size_t i = 0; i < sizeof(EXTRA_TOKENS) / sizeof(EXTRA_TOKENS[0]);
          i++) {
-        parse_register_terminal(g, S(EXTRA_TOKENS[i]));
+        parse_register_terminal(g, EXTRA_TOKENS[i]);
     }
 
-    if (!parse_bnf_load(text, S(start), g)) {
-        printf("FAIL  %s does not load: %s\n", what, parse_bnf_error());
+    if (!parse_bnf_load(text, start, g)) {
+        core_string_t err = parse_bnf_error();
+
+        printf("FAIL  %.*s does not load: %.*s\n", (int)what.u8_bytes,
+               what.data, (int)err.u8_bytes, err.data);
         fails++;
         parse_grammar_free(g);
 
-        return nullptr;
+        return (core_string_t){};
     }
 
-    char *out = parse_bnf_print(g, parse_bnf_last_unit());
+    core_string_t out = parse_bnf_print(g, parse_bnf_last_unit());
 
     if (annots) {
         *annots = annot_total(g);
@@ -86,16 +84,16 @@ reprint_counting(core_string_t text, const char *start, const char *what,
     return out;
 }
 
-static char *
-reprint(core_string_t text, const char *start, const char *what)
+static core_string_t
+reprint(core_string_t text, core_string_t start, core_string_t what)
 {
     return reprint_counting(text, start, what, nullptr, nullptr);
 }
 
 static void
-round_trips(const char *path, const char *start)
+round_trips_s(const char *file, core_string_t path, core_string_t start)
 {
-    core_string_t text = slurp(path);
+    core_string_t text = slurp(file);
 
     if (!text.data) {
         return;
@@ -103,133 +101,145 @@ round_trips(const char *path, const char *start)
 
     size_t a1 = 0, a2 = 0, r1 = 0, r2 = 0;
 
-    char *once = reprint_counting(text, start, path, &a1, &r1);
+    core_string_t once = reprint_counting(text, start, path, &a1, &r1);
 
-    if (!once) {
+    if (!once.data) {
         return;
     }
 
-    char *twice = reprint_counting(core_string_from_cstr(once), start,
-                                   "the reprint", &a2, &r2);
+    core_string_t twice = reprint_counting(once, start, S("the reprint"),
+                                           &a2, &r2);
 
-    if (!twice) {
-        printf("---- %s reprinted ----\n%s\n", path, once);
-        core_free(once);
+    if (!twice.data) {
+        printf("---- %.*s reprinted ----\n%.*s\n", (int)path.u8_bytes,
+               path.data, (int)once.u8_bytes, once.data);
+        core_free(once.data);
 
         return;
     }
 
     if (!a1) {
-        printf("FAIL  %s has no annotations, so it proves nothing\n", path);
+        printf("FAIL  %.*s has no annotations, so it proves nothing\n",
+               (int)path.u8_bytes, path.data);
         fails++;
     }
 
     if (a1 != a2) {
-        printf("FAIL  %s: %zu annotations became %zu across the reprint\n",
-               path,
+        printf("FAIL  %.*s: %zu annotations became %zu across the reprint\n",
+               (int)path.u8_bytes,
+               path.data,
                a1,
                a2);
         fails++;
     }
 
     if (r1 != r2) {
-        printf("FAIL  %s: %zu rules became %zu across the reprint\n",
-               path,
+        printf("FAIL  %.*s: %zu rules became %zu across the reprint\n",
+               (int)path.u8_bytes,
+               path.data,
                r1,
                r2);
         fails++;
     }
 
-    if (strcmp(once, twice) != 0) {
-        printf("FAIL  %s does not reach a fixpoint\n", path);
+    if (!core_string_eq(once, twice)) {
+        printf("FAIL  %.*s does not reach a fixpoint\n", (int)path.u8_bytes,
+               path.data);
         fails++;
 
-        const char *a = once;
-        const char *b = twice;
+        size_t at = 0;
 
-        while (*a && *a == *b) {
-            a++;
-            b++;
+        while (at < once.u8_bytes && at < twice.u8_bytes
+               && once.data[at] == twice.data[at]) {
+            at++;
         }
 
-        printf("  first difference at byte %zu\n", (size_t)(a - once));
-        printf("  once:  %.90s\n", a);
-        printf("  twice: %.90s\n", b);
+        size_t a_rest = once.u8_bytes - at;
+        size_t b_rest = twice.u8_bytes - at;
+
+        printf("  first difference at byte %zu\n", at);
+        printf("  once:  %.*s\n", (int)(a_rest < 90 ? a_rest : 90),
+               once.data + at);
+        printf("  twice: %.*s\n", (int)(b_rest < 90 ? b_rest : 90),
+               twice.data + at);
     }
 
-    core_free(once);
-    core_free(twice);
+    core_free(once.data);
+    core_free(twice.data);
 }
 
-static void
-one_line(const char *src, const char *start, const char *want)
-{
-    char *out = reprint(S(src), start, src);
+#define round_trips(path, start) round_trips_s((path), S(path), S(start))
 
-    if (!out) {
+static void
+one_line(core_string_t src, core_string_t start, core_string_t want)
+{
+    core_string_t out = reprint(src, start, src);
+
+    if (!out.data) {
         return;
     }
 
-    if (!strstr(out, want)) {
-        printf("FAIL  reprinting %s", src);
-        printf("  wanted to see: %s\n", want);
-        printf("  got:\n%s\n", out);
+    if (core_string_find(out, want) < 0) {
+        printf("FAIL  reprinting %.*s", (int)src.u8_bytes, src.data);
+        printf("  wanted to see: %.*s\n", (int)want.u8_bytes, want.data);
+        printf("  got:\n%.*s\n", (int)out.u8_bytes, out.data);
         fails++;
     }
 
-    core_free(out);
+    core_free(out.data);
 }
 
 int
 main(void)
 {
-    one_line("<top> @nospace($1) ::= <n> <n>\n<n> ::= __LOWER\n",
-             "top",
-             "<top> @nospace($1) ::= <n> <n>");
+    one_line(S("<top> @nospace($1) ::= <n> <n>\n<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @nospace($1) ::= <n> <n>"));
 
-    one_line("<top> @declares($1, $2, \"var\") ::= <n> <n>\n"
-             "<n> ::= __LOWER\n",
-             "top",
-             "<top> @declares($1, $2, \"var\") ::= <n> <n>");
+    one_line(S("<top> @declares($1, $2, \"var\") ::= <n> <n>\n"
+               "<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @declares($1, $2, \"var\") ::= <n> <n>"));
 
-    one_line("<top> @scope(\"module\", $1) ::= <n>\n<n> ::= __LOWER\n",
-             "top",
-             "<top> @scope(\"module\", $1) ::= <n>");
+    one_line(S("<top> @scope(\"module\", $1) ::= <n>\n<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @scope(\"module\", $1) ::= <n>"));
 
-    one_line("<top> @literal(\"int\", $n) ::= <n>\n<n> ::= __LOWER\n",
-             "top",
-             "<top> @literal(\"int\", $n) ::= <n>");
+    one_line(S("<top> @literal(\"int\", $n) ::= <n>\n<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @literal(\"int\", $n) ::= <n>"));
 
-    one_line("<top> @infer($0 unify $1) ::= <n> <n>\n<n> ::= __LOWER\n",
-             "top",
-             "<top> @infer($0 unify $1) ::= <n> <n>");
+    one_line(S("<top> @infer($0 unify $1) ::= <n> <n>\n<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @infer($0 unify $1) ::= <n> <n>"));
 
-    one_line("<top> @infer(\"$0 unify $1\") ::= <n> <n>\n<n> ::= __LOWER\n",
-             "top",
-             "<top> @infer(\"$0 unify $1\") ::= <n> <n>");
+    one_line(S("<top> @infer(\"$0 unify $1\") ::= <n> <n>\n"
+               "<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @infer(\"$0 unify $1\") ::= <n> <n>"));
 
-    one_line("<top> @disambig(pred(a, 2), 5) ::= <n>\n<n> ::= __LOWER\n",
-             "top",
-             "<top> @disambig(pred(a, 2), 5) ::= <n>");
+    one_line(S("<top> @disambig(pred(a, 2), 5) ::= <n>\n<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @disambig(pred(a, 2), 5) ::= <n>"));
 
-    one_line("<top> @adt(\"enum\", $1, \"arms\", $0) ::= <n> <n>\n"
-             "<n> ::= __LOWER\n",
-             "top",
-             "<top> @adt(\"enum\", $1, \"arms\", $0) ::= <n> <n>");
+    one_line(S("<top> @adt(\"enum\", $1, \"arms\", $0) ::= <n> <n>\n"
+               "<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> @adt(\"enum\", $1, \"arms\", $0) ::= <n> <n>"));
 
-    one_line("<top> ::= <n>? <n>* <n>+\n<n> ::= __LOWER\n",
-             "top",
-             "<top> ::= (<n>)? (<n>)* (<n>)+");
+    one_line(S("<top> ::= <n>? <n>* <n>+\n<n> ::= __LOWER\n"),
+             S("top"),
+             S("<top> ::= (<n>)? (<n>)* (<n>)+"));
 
-    one_line("<top> ::= %\"kw\" | \"b\"\n", "top",
-             "<top> ::= %\"kw\"\n    | \"b\"");
+    one_line(S("<top> ::= %\"kw\" | \"b\"\n"), S("top"),
+             S("<top> ::= %\"kw\"\n    | \"b\""));
 
     check("an empty string literal is not a production",
-          !load_ok("<top> ::= %\"kw\" | \"\"\n", "top"));
+          !load_ok(S("<top> ::= %\"kw\" | \"\"\n"), S("top")));
     check("and neither is one on its own",
-          !load_ok("<top> ::= <e>\n<e> ::= \"\"\n", "top"));
+          !load_ok(S("<top> ::= <e>\n<e> ::= \"\"\n"), S("top")));
     check("a one-character literal still loads",
-          load_ok("<top> ::= \"b\"\n", "top"));
+          load_ok(S("<top> ::= \"b\"\n"), S("top")));
 
     round_trips("toy.bnf", "prog");
     round_trips("../../grammars/c_ncc.bnf", "translation_unit");

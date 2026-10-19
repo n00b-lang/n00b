@@ -14,17 +14,18 @@ is_line_terminator(core_codepoint_t cp)
 static core_codepoint_t
 decode_at(parse_scanner_t *s, size_t off, int *cp_len)
 {
-    if (off >= s->input_len) {
+    if (off >= s->input.u8_bytes) {
         *cp_len = 0;
         return 0;
     }
 
     uint32_t pos = (uint32_t)off;
-    int32_t  cp  = unicode_utf8_decode(s->input, (uint32_t)s->input_len, &pos);
+    int32_t  cp  = unicode_utf8_decode(s->input.data,
+                                       (uint32_t)s->input.u8_bytes, &pos);
 
     if (cp < 0) {
         *cp_len = 1;
-        return (core_codepoint_t)(uint8_t)s->input[off];
+        return (core_codepoint_t)(uint8_t)s->input.data[off];
     }
 
     *cp_len = (int)(pos - (uint32_t)off);
@@ -34,12 +35,12 @@ decode_at(parse_scanner_t *s, size_t off, int *cp_len)
 static bool
 partial_utf8_at_end(const parse_scanner_t *s)
 {
-    if (!s || s->source_final || s->cursor >= s->input_len) {
+    if (!s || s->source_final || s->cursor >= s->input.u8_bytes) {
         return false;
     }
 
-    const uint8_t *p = (const uint8_t *)s->input + s->cursor;
-    size_t remaining = s->input_len - s->cursor;
+    const uint8_t *p = (const uint8_t *)s->input.data + s->cursor;
+    size_t remaining = s->input.u8_bytes - s->cursor;
     size_t width = p[0] >= 0xC2 && p[0] <= 0xDF ? 2
                  : p[0] >= 0xE0 && p[0] <= 0xEF ? 3
                  : p[0] >= 0xF0 && p[0] <= 0xF4 ? 4 : 1;
@@ -160,8 +161,7 @@ scan_scanner_new(core_buffer_t                *buf,
     parse_scanner_t *s = core_alloc(parse_scanner_t);
 
     s->buffer    = buf;
-    s->input     = buf->data;
-    s->input_len = buf->byte_len;
+    s->input     = core_buffer_string(buf);
     s->input_offset = 0;
     s->cursor    = 0;
     s->line      = 1;
@@ -179,7 +179,7 @@ scan_scanner_new(core_buffer_t                *buf,
     s->mark_line = 1;
     s->mark_col  = 1;
     s->source    = parse_source_new(file);
-    parse_source_append(s->source, buf->data, buf->byte_len);
+    parse_source_append(s->source, core_buffer_string(buf));
 
     return s;
 }
@@ -271,15 +271,15 @@ bool
 scan_scanner_discard_consumed(parse_scanner_t *s)
 {
     if (!s || !s->buffer || s->source_final || s->append_closed
-        || !s->mark || s->mark > s->cursor || s->mark > s->input_len) {
+        || !s->mark || s->mark > s->cursor || s->mark > s->input.u8_bytes) {
         return false;
     }
 
     size_t removed  = s->mark;
-    size_t remain   = s->input_len - removed;
+    size_t remain   = s->input.u8_bytes - removed;
 
     s->input_offset += removed;
-    s->input_len  = remain;
+    s->input.u8_bytes  = remain;
     s->cursor    -= removed;
     s->mark       = 0;
     s->source_base += removed;
@@ -293,7 +293,7 @@ scan_scanner_discard_consumed(parse_scanner_t *s)
         s->input_offset = 0;
     }
 
-    s->input = s->buffer->data + s->input_offset;
+    s->input = core_string_borrow(s->buffer->data + s->input_offset, remain);
 
     if (s->compact_cb) {
         s->compact_cb(s, removed);
@@ -397,20 +397,21 @@ scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out)
 }
 
 bool
-scan_scanner_append(parse_scanner_t *s, const char *data, size_t len)
+scan_scanner_append(parse_scanner_t *s, core_string_t data)
 {
     if (!s || !s->buffer || s->append_closed
         || (s->source_final && s->status != SCAN_STATUS_INCOMPLETE)
         || (!s->source_final && s->status == SCAN_STATUS_INVALID)
-        || !data || !len) {
+        || !data.data || !data.u8_bytes) {
         return false;
     }
 
-    core_buffer_append(s->buffer, data, len);
-    parse_source_append(s->source, data, len);
+    core_buffer_append_string(s->buffer, data);
+    parse_source_append(s->source, data);
 
-    s->input             = s->buffer->data + s->input_offset;
-    s->input_len         = s->buffer->byte_len - s->input_offset;
+    s->input             = core_string_borrow(
+        s->buffer->data + s->input_offset,
+        s->buffer->byte_len - s->input_offset);
     s->at_eof            = false;
     s->status            = SCAN_STATUS_ACTIVE;
     s->status_message    = (core_string_t){0};
@@ -510,27 +511,27 @@ scan_peek_byte(parse_scanner_t *s, int32_t offset)
 
     size_t pos = s->cursor + (size_t)offset;
 
-    if (pos >= s->input_len) {
+    if (pos >= s->input.u8_bytes) {
         return 0;
     }
 
-    return (uint8_t)s->input[pos];
+    return (uint8_t)s->input.data[pos];
 }
 
 bool
 scan_at_eof(parse_scanner_t *s)
 {
-    return s->cursor >= s->input_len || partial_utf8_at_end(s);
+    return s->cursor >= s->input.u8_bytes || partial_utf8_at_end(s);
 }
 
 size_t
 scan_remaining(parse_scanner_t *s)
 {
-    if (s->cursor >= s->input_len) {
+    if (s->cursor >= s->input.u8_bytes) {
         return 0;
     }
 
-    return s->input_len - s->cursor;
+    return s->input.u8_bytes - s->cursor;
 }
 
 size_t
@@ -548,7 +549,7 @@ scan_work_bytes(const parse_scanner_t *s)
 void
 scan_advance(parse_scanner_t *s)
 {
-    if (s->cursor >= s->input_len) {
+    if (s->cursor >= s->input.u8_bytes) {
         return;
     }
 
@@ -570,7 +571,7 @@ scan_advance(parse_scanner_t *s)
 void
 scan_advance_n(parse_scanner_t *s, int32_t n)
 {
-    for (int32_t i = 0; i < n && s->cursor < s->input_len; i++) {
+    for (int32_t i = 0; i < n && s->cursor < s->input.u8_bytes; i++) {
         scan_advance(s);
     }
 }
@@ -581,8 +582,8 @@ scan_advance_bytes(parse_scanner_t *s, size_t n)
     size_t start = s->cursor;
     size_t end = s->cursor + n;
 
-    if (end > s->input_len) {
-        end = s->input_len;
+    if (end > s->input.u8_bytes) {
+        end = s->input.u8_bytes;
     }
 
     for (size_t i = s->cursor; i < end;) {
@@ -607,11 +608,11 @@ scan_match_str(parse_scanner_t *s, core_string_t lit)
 {
     size_t len = lit.u8_bytes;
 
-    if (s->cursor + len > s->input_len) {
+    if (s->cursor + len > s->input.u8_bytes) {
         return 0;
     }
 
-    if (memcmp(s->input + s->cursor, lit.data, len) != 0) {
+    if (memcmp(s->input.data + s->cursor, lit.data, len) != 0) {
         s->work_bytes += len;
         return 0;
     }
@@ -640,7 +641,7 @@ scan_match_str(parse_scanner_t *s, core_string_t lit)
 size_t
 scan_match_if(parse_scanner_t *s, scan_cp_predicate_fn pred)
 {
-    if (s->cursor >= s->input_len) {
+    if (s->cursor >= s->input.u8_bytes) {
         return 0;
     }
 
@@ -668,7 +669,7 @@ scan_match_if(parse_scanner_t *s, scan_cp_predicate_fn pred)
 size_t
 scan_match_class(parse_scanner_t *s, parse_char_class_t cc)
 {
-    if (s->cursor >= s->input_len) {
+    if (s->cursor >= s->input.u8_bytes) {
         return 0;
     }
 
@@ -696,7 +697,7 @@ scan_match_class(parse_scanner_t *s, parse_char_class_t cc)
 size_t
 scan_match_cp(parse_scanner_t *s, core_codepoint_t target)
 {
-    if (s->cursor >= s->input_len) {
+    if (s->cursor >= s->input.u8_bytes) {
         return 0;
     }
 
@@ -726,7 +727,7 @@ scan_skip_while(parse_scanner_t *s, scan_cp_predicate_fn pred)
 {
     int32_t count = 0;
 
-    while (s->cursor < s->input_len) {
+    while (s->cursor < s->input.u8_bytes) {
         int              cp_len;
         core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
 
@@ -756,7 +757,7 @@ scan_skip_class(parse_scanner_t *s, parse_char_class_t cc)
 {
     int32_t count = 0;
 
-    while (s->cursor < s->input_len) {
+    while (s->cursor < s->input.u8_bytes) {
         int              cp_len;
         core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
 
@@ -794,7 +795,7 @@ scan_extract(parse_scanner_t *s)
 {
     size_t len = s->cursor - s->mark;
 
-    return core_string_from_raw(s->input + s->mark, (int64_t)len);
+    return core_string_from_raw(s->input.data + s->mark, (int64_t)len);
 }
 
 size_t
@@ -908,7 +909,7 @@ void
 scan_emit_marked(parse_scanner_t *s, int32_t tid)
 {
     core_string_t val = {
-        .data = (char *)s->input + s->mark,
+        .data = s->input.data + s->mark,
         .u8_bytes = s->cursor - s->mark,
     };
 
@@ -1013,7 +1014,7 @@ scan_skip_whitespace(parse_scanner_t *s)
     size_t  start = s->cursor;
     int32_t count = 0;
 
-    while (s->cursor < s->input_len) {
+    while (s->cursor < s->input.u8_bytes) {
         int              cp_len;
         core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
 
@@ -1037,7 +1038,7 @@ scan_skip_whitespace(parse_scanner_t *s)
     if (count > 0) {
         size_t byte_len = s->cursor - start;
 
-        core_string_t text = core_string_from_raw(s->input + start,
+        core_string_t text = core_string_from_raw(s->input.data + start,
                                                    (int64_t)byte_len);
         scan_add_leading_trivia_kind(s, text, PARSE_TRIVIA_SPACE);
     }
@@ -1050,7 +1051,7 @@ scan_skip_line_comment(parse_scanner_t *s)
 {
     size_t start = s->cursor;
 
-    while (s->cursor < s->input_len) {
+    while (s->cursor < s->input.u8_bytes) {
         int              cp_len;
         core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
 
@@ -1065,7 +1066,7 @@ scan_skip_line_comment(parse_scanner_t *s)
     size_t byte_len = s->cursor - start;
 
     if (byte_len > 0) {
-        core_string_t text = core_string_from_raw(s->input + start,
+        core_string_t text = core_string_from_raw(s->input.data + start,
                                                    (int64_t)byte_len);
         scan_add_trivia(s, text, PARSE_TRIVIA_COMMENT);
     }
@@ -1080,8 +1081,8 @@ scan_skip_block_comment(parse_scanner_t *s,
     size_t closer_len = closer.u8_bytes;
     size_t start      = s->cursor;
 
-    if (s->cursor + opener_len > s->input_len
-        || memcmp(s->input + s->cursor, opener.data, opener_len) != 0) {
+    if (s->cursor + opener_len > s->input.u8_bytes
+        || memcmp(s->input.data + s->cursor, opener.data, opener_len) != 0) {
         return false;
     }
 
@@ -1101,8 +1102,8 @@ scan_skip_block_comment(parse_scanner_t *s,
         }
     }
 
-    while (s->cursor + closer_len <= s->input_len) {
-        if (memcmp(s->input + s->cursor, closer.data, closer_len) == 0) {
+    while (s->cursor + closer_len <= s->input.u8_bytes) {
+        if (memcmp(s->input.data + s->cursor, closer.data, closer_len) == 0) {
             for (size_t i = 0; i < closer_len; ) {
                 int              cp_len;
                 core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
@@ -1121,7 +1122,7 @@ scan_skip_block_comment(parse_scanner_t *s,
 
             size_t byte_len = s->cursor - start;
 
-            core_string_t text = core_string_from_raw(s->input + start,
+            core_string_t text = core_string_from_raw(s->input.data + start,
                                                        (int64_t)byte_len);
             scan_add_trivia(s, text, PARSE_TRIVIA_COMMENT);
             return true;
@@ -1141,13 +1142,13 @@ scan_skip_block_comment(parse_scanner_t *s,
         }
     }
 
-    while (s->cursor < s->input_len) {
+    while (s->cursor < s->input.u8_bytes) {
         scan_advance(s);
     }
 
     size_t byte_len = s->cursor - start;
 
-    core_string_t text = core_string_from_raw(s->input + start,
+    core_string_t text = core_string_from_raw(s->input.data + start,
                                                (int64_t)byte_len);
     scan_add_trivia(s, text, PARSE_TRIVIA_COMMENT);
     return false;

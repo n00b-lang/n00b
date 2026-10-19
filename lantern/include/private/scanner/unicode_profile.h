@@ -13,7 +13,7 @@ typedef struct {
 
 scan_unicode_profile_t *
 scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
-                             char *error, size_t error_size);
+                             core_string_t *error);
 void scan_unicode_profile_free(scan_unicode_profile_t *profile);
 bool scan_unicode_profile_is_start(const scan_unicode_profile_t *profile,
                                    core_codepoint_t cp);

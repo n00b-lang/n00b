@@ -49,9 +49,11 @@ static ir_doms_t *doms(V *v, ir_func_t *f)
     return v->dom;
 }
 
+#define SARG(s) (int)(s).u8_bytes, (s).data
+
 __attribute__((format(printf, 6, 7))) static void
-broke(V *v, ir_diagcode_t code, ir_instr_t *in, ir_block_t *b,
-      const char *rule, const char *fmt, ...)
+broke_at(V *v, ir_diagcode_t code, ir_instr_t *in, ir_block_t *b,
+         core_string_t rule, const char *fmt, ...)
 {
     v->bad = true;
 
@@ -75,11 +77,14 @@ broke(V *v, ir_diagcode_t code, ir_instr_t *in, ir_block_t *b,
     core_buffer_vprintf(sb, fmt, ap);
     va_end(ap);
 
-    char *msg = core_buffer_take(sb);
+    core_string_t msg = core_buffer_take_string(sb);
 
-    ir_diag_message(dg, v->d, msg ? msg : rule);
-    core_free(msg);
+    ir_diag_message(dg, v->d, msg);
+    core_free(msg.data);
 }
+
+#define broke(v, code, in, b, rule, ...) \
+    broke_at((v), (code), (in), (b), CORE_STRING_STATIC(rule), __VA_ARGS__)
 
 static bool names_block(ir_func_t *f, ir_block_t *b)
 {
@@ -96,10 +101,10 @@ static void check_origins(V *v, ir_origin_t *o, ir_instr_t *in, ir_block_t *b)
     ir_origin_t *slow = o;
 
     for (uint32_t n = 0; o; n++) {
-        if (o->kind != IR_ORIGIN_SOURCE && !o->agent) {
+        if (o->kind != IR_ORIGIN_SOURCE && !o->agent.data) {
             broke(v, IR_DIAG_VERIFY_ORIGIN, in, b, "origin.agent",
-                  "an origin of kind %s names no agent",
-                  ir_origin_kind_name(o->kind));
+                  "an origin of kind %.*s names no agent",
+                  SARG(ir_origin_kind_name(o->kind)));
         }
 
         o = o->parent;
@@ -120,12 +125,13 @@ static void check_origins(V *v, ir_origin_t *o, ir_instr_t *in, ir_block_t *b)
 static void check_annots(V *v, ir_annots_t *a, ir_instr_t *in, ir_block_t *b)
 {
     for (uint32_t i = 0; i < ir_annot_count(a); i++) {
-        const char *key = ir_annot_at(a, i)->key;
+        core_string_t key = ir_annot_at(a, i)->key;
 
-        if (!ir_annot_key_ok(key, v->m->profile ? v->m->profile->name : "")) {
+        if (!ir_annot_key_ok(key, v->m->profile ? v->m->profile->name
+                                                : CORE_STRING_STATIC(""))) {
             broke(v, IR_DIAG_BAD_ANNOT_KEY, in, b, "annot.namespace",
-                  "the annotation key %s is not namespaced by ir or by the "
-                  "profile", key);
+                  "the annotation key %.*s is not namespaced by ir or by the "
+                  "profile", SARG(key));
         }
     }
 }
@@ -161,18 +167,18 @@ static bool parsed_func(ir_visit_t *vi)
 
     if (f->n_blocks && ir_pred_count(doms(v, f), ir_block_entry(f))) {
         broke(v, IR_DIAG_VERIFY_PARSED, nullptr, ir_block_entry(f),
-              "parsed.entry", "the entry block of %s has a predecessor",
-              f->name);
+              "parsed.entry", "the entry block of %.*s has a predecessor",
+              SARG(f->name));
     }
 
     v->arms = ir_alloc(v->m->ctx, (f->n_blocks + 1) * sizeof(uint32_t));
 
     core_dict_init(&v->defined, nullptr, nullptr);
     core_dict_init(&v->locals, nullptr, nullptr);
-    core_dict_init(&v->names, core_hash_cstring, core_dict_cstr_eq);
+    core_dict_init_string(&v->names);
 
     for (uint32_t i = 0; i < f->n_params; i++) {
-        core_dict_add(&v->names, f->params[i]->name, f->params[i]);
+        core_dict_add(&v->names, &f->params[i]->name, f->params[i]);
     }
 
     ir_walk_run_func(v->collect, f);
@@ -211,8 +217,8 @@ static bool parsed_block_end(ir_visit_t *vi)
     if (v->terms != 1) {
         broke(v, IR_DIAG_VERIFY_PARSED, nullptr, vi->block,
               "parsed.terminator",
-              "block %s has %u terminators and needs exactly one",
-              vi->block->name, v->terms);
+              "block %.*s has %u terminators and needs exactly one",
+              SARG(vi->block->name), v->terms);
     }
 
     return true;
@@ -234,8 +240,9 @@ static void check_phi_arms(V *v, ir_instr_t *in, ir_block_t *b)
 
         if (v->arms[pred->index] != 1) {
             broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.arms",
-                  "this phi names block %s %u times and %s is a predecessor "
-                  "once", pred->name, v->arms[pred->index], pred->name);
+                  "this phi names block %.*s %u times and %.*s is a "
+                  "predecessor once", SARG(pred->name), v->arms[pred->index],
+                  SARG(pred->name));
         }
         v->arms[pred->index] = 0;
     }
@@ -250,8 +257,8 @@ static void check_phi_arms(V *v, ir_instr_t *in, ir_block_t *b)
         }
         v->arms[arm->index] = 0;
         broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.arms",
-              "this phi names block %s, which is not a predecessor",
-              arm->name);
+              "this phi names block %.*s, which is not a predecessor",
+              SARG(arm->name));
     }
 }
 
@@ -264,8 +271,7 @@ static bool parsed_instr(ir_visit_t *vi)
     check_annots(v, &in->annots, in, b);
     check_origins(v, in->origin, in, b);
     if (in->op == IR_OP_PHASE_RESULT
-        && (!ir_instr_phase_result(in)
-            || !ir_instr_phase_result(in)[0])) {
+        && !ir_instr_phase_result(in).u8_bytes) {
         broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phase-result-id",
               "phase.result requires a nonempty ir.phase_result identifier");
     }
@@ -275,14 +281,15 @@ static bool parsed_instr(ir_visit_t *vi)
 
         if (in != b->instrs[b->n_instrs - 1]) {
             broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.terminator",
-                  "%s terminates block %s but is not its last instruction",
-                  ir_module_op_spelling(v->m, in->op), b->name);
+                  "%.*s terminates block %.*s but is not its last instruction",
+                  SARG(ir_module_op_spelling(v->m, in->op)), SARG(b->name));
         }
     }
 
     if (is_phi(in) && !v->phis_run) {
         broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.phi.leading",
-              "a phi follows a non-phi instruction in block %s", b->name);
+              "a phi follows a non-phi instruction in block %.*s",
+              SARG(b->name));
     }
     v->phis_run = v->phis_run && is_phi(in);
 
@@ -294,7 +301,8 @@ static bool parsed_instr(ir_visit_t *vi)
 
     if (!ir_opinfo_accepts_operands(info, in->n_operands)) {
         broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.arity",
-              "%s takes %u to %u operands and has %u", info->spelling,
+              "%.*s takes %u to %u operands and has %u",
+              SARG(info->spelling),
               info->min_operands,
               info->max_operands == IR_VAR_ARITY ? info->min_operands
                                                  : info->max_operands,
@@ -304,8 +312,8 @@ static bool parsed_instr(ir_visit_t *vi)
     for (uint32_t o = 0; o < in->n_mods; o++) {
         if (!ir_opinfo_accepts_mod(info, in->mods[o])) {
             broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.modifier",
-                  "%s does not take the modifier %s", info->spelling,
-                  in->mods[o]);
+                  "%.*s does not take the modifier %.*s",
+                  SARG(info->spelling), SARG(in->mods[o]));
         }
     }
 
@@ -334,9 +342,9 @@ static bool parsed_operand(ir_visit_t *vi)
 
         if (!fits) {
             broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.operand",
-                  "operand %u of %s is a %s where the table says %s",
-                  vi->index, info->spelling, ir_opdkind_name(got),
-                  ir_opdkind_name(want));
+                  "operand %u of %.*s is a %.*s where the table says %.*s",
+                  vi->index, SARG(info->spelling),
+                  SARG(ir_opdkind_name(got)), SARG(ir_opdkind_name(want)));
         }
 
         ir_block_t *to = od->kind == IR_OPD_BLOCK         ? od->block
@@ -347,7 +355,8 @@ static bool parsed_operand(ir_visit_t *vi)
 
         if (to && !names_block(b->owner, to)) {
             broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.block-ref",
-                  "block %s is not a block of %s", to->name, b->owner->name);
+                  "block %.*s is not a block of %.*s", SARG(to->name),
+                  SARG(b->owner->name));
         }
     }
 
@@ -381,8 +390,9 @@ static bool parsed_operand(ir_visit_t *vi)
 
     if (!ok) {
         broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.value-ref",
-              "%%%s is not a parameter, local or instruction of %s",
-              val->name ? val->name : "?", b->owner->name);
+              "%%%.*s is not a parameter, local or instruction of %.*s",
+              SARG(val->name.data ? val->name : CORE_STRING_STATIC("?")),
+              SARG(b->owner->name));
     }
 
     return true;
@@ -395,10 +405,10 @@ static bool parsed_instr_end(ir_visit_t *vi)
     ir_block_t *b  = vi->block;
 
     if (in->dest_kind == IR_DEST_VALUE && in->dest
-        && !core_dict_add(&v->names, in->dest->name, in)) {
+        && !core_dict_add(&v->names, &in->dest->name, in)) {
         broke(v, IR_DIAG_VERIFY_PARSED, in, b, "parsed.one-def",
-              "%%%s is defined more than once in %s, or shadows a parameter",
-              in->dest->name, b->owner->name);
+              "%%%.*s is defined more than once in %.*s, or shadows a "
+              "parameter", SARG(in->dest->name), SARG(b->owner->name));
     }
 
     if (is_phi(in) && ir_module_op_info(v->m, in->op)) {
@@ -414,8 +424,8 @@ static bool typed_param(ir_visit_t *vi)
 
     if (!vi->param->type) {
         broke(v, IR_DIAG_VERIFY_TYPED, nullptr, ir_block_entry(vi->func),
-              "typed.value", "parameter %s of %s has no type",
-              vi->param->name, vi->func->name);
+              "typed.value", "parameter %.*s of %.*s has no type",
+              SARG(vi->param->name), SARG(vi->func->name));
     }
 
     return true;
@@ -430,18 +440,22 @@ static bool typed_global(ir_visit_t *vi)
         if (v->d) {
             ir_diag_t *diagnostic = ir_diag_begin(v->d,
                 IR_DIAG_VERIFY_TYPED, vi->global->span,
-                "this global static initializer");
+                CORE_STRING_STATIC("this global static initializer"));
             if (diagnostic) {
-                char message[256];
-                snprintf(message, sizeof(message),
-                    "static initializer for global %s does not match its declared type",
-                    vi->global->name);
-                ir_diag_message(diagnostic, v->d, message);
+                core_buffer_t *sb = core_buffer_empty();
+                core_buffer_printf(sb,
+                    "static initializer for global %.*s does not match its declared type",
+                    SARG(vi->global->name));
+                core_string_t message = core_buffer_take_string(sb);
+                ir_diag_message(diagnostic, v->d,
+                                core_string_slice(message, 0, 255));
+                core_free(message.data);
             }
         }
     }
     ir_annot_t *requirement = ir_annot_get(
-        (ir_annots_t *)&vi->global->annots, "ir.storage_required");
+        (ir_annots_t *)&vi->global->annots,
+        CORE_STRING_STATIC("ir.storage_required"));
     if (!requirement) return true;
 
     bool valid_requirement = requirement->kind == IR_ANNOT_BOOL;
@@ -449,26 +463,30 @@ static bool typed_global(ir_visit_t *vi)
     if (!required) return true;
 
     bool reported_required = false;
-    const char *requested = nullptr;
-    const char *selected = ir_global_storage_class(
+    core_string_t requested = {};
+    core_string_t selected = ir_global_storage_class(
         vi->global, &reported_required, &requested);
-    if (valid_requirement && reported_required && requested && selected
-        && !strcmp(requested, selected)) return true;
+    if (valid_requirement && reported_required && requested.data
+        && selected.data && core_string_eq(requested, selected)) return true;
 
     v->bad = true;
     if (v->d) {
         ir_diag_t *diagnostic = ir_diag_begin(v->d,
             IR_DIAG_VERIFY_STORAGE, vi->global->span,
-            "this global storage requirement");
+            CORE_STRING_STATIC("this global storage requirement"));
         if (diagnostic) {
-            char message[320];
-            snprintf(message, sizeof(message),
-                "global %s requires storage class %s, but selected class is %s",
-                vi->global->name,
-                valid_requirement && requested ? requested : "(missing)",
-                selected ? selected : "(missing)");
+            core_buffer_t *sb = core_buffer_empty();
+            core_buffer_printf(sb,
+                "global %.*s requires storage class %.*s, but selected class is %.*s",
+                SARG(vi->global->name),
+                SARG(valid_requirement && requested.data
+                         ? requested : CORE_STRING_STATIC("(missing)")),
+                SARG(selected.data ? selected
+                                   : CORE_STRING_STATIC("(missing)")));
+            core_string_t message = core_buffer_take_string(sb);
             ir_diag_message(diagnostic, v->d,
-                            message);
+                            core_string_slice(message, 0, 319));
+            core_free(message.data);
         }
     }
     return true;
@@ -479,8 +497,8 @@ static bool typed_allocation_storage(ir_visit_t *vi)
     ir_instr_t *allocation = vi->instr;
     if (allocation->op != IR_OP_ALLOC) return true;
 
-    ir_annot_t *required = ir_annot_get(&allocation->annots,
-                                        "ir.storage_required");
+    ir_annot_t *required = ir_annot_get(
+        &allocation->annots, CORE_STRING_STATIC("ir.storage_required"));
     if (!required) return true;
     if (required->kind != IR_ANNOT_BOOL) {
         broke(vi->user, IR_DIAG_VERIFY_STORAGE, allocation, vi->block,
@@ -490,10 +508,10 @@ static bool typed_allocation_storage(ir_visit_t *vi)
     }
     if (!required->b) return true;
 
-    ir_annot_t *storage = ir_annot_get(&allocation->annots,
-                                      "ir.storage_class");
-    if (storage && storage->kind == IR_ANNOT_STR && storage->s
-        && *storage->s) return true;
+    ir_annot_t *storage = ir_annot_get(
+        &allocation->annots, CORE_STRING_STATIC("ir.storage_class"));
+    if (storage && storage->kind == IR_ANNOT_STR && storage->s.u8_bytes)
+        return true;
 
     broke(vi->user, IR_DIAG_VERIFY_STORAGE, allocation, vi->block,
           "storage.required",
@@ -563,13 +581,15 @@ static bool store_target_annotation_edges(store_target_set_t *set,
                                           ir_value_t *value)
 {
     ir_annots_t *annots = ir_value_annots(value);
-    ir_annot_t *count = ir_annot_get(annots, "ir.alias_count");
+    ir_annot_t *count = ir_annot_get(annots,
+                                     CORE_STRING_STATIC("ir.alias_count"));
     if (!count || count->kind != IR_ANNOT_INT || count->i.neg
         || count->i.mag > UINT32_MAX
         || count->i.mag > ir_annot_count(annots)) return false;
-    ir_annot_t *resolved = ir_annot_get(annots,
-                                        "ir.alias_analysis_complete");
-    ir_annot_t *unresolved = ir_annot_get(annots, "ir.alias_unresolved");
+    ir_annot_t *resolved = ir_annot_get(
+        annots, CORE_STRING_STATIC("ir.alias_analysis_complete"));
+    ir_annot_t *unresolved = ir_annot_get(
+        annots, CORE_STRING_STATIC("ir.alias_unresolved"));
     if (!resolved || resolved->kind != IR_ANNOT_BOOL
         || !unresolved || unresolved->kind != IR_ANNOT_BOOL
         || (resolved->b && unresolved->b)
@@ -580,9 +600,11 @@ static bool store_target_annotation_edges(store_target_set_t *set,
 
     for (uint64_t i = 0; i < count->i.mag; i++) {
         char key[48];
-        snprintf(key, sizeof(key), "ir.alias%llu",
-                 (unsigned long long)i);
-        ir_annot_t *edge = ir_annot_get(annots, key);
+        int length = snprintf(key, sizeof(key), "ir.alias%llu",
+                              (unsigned long long)i);
+        ir_annot_t *edge = length > 0
+            ? ir_annot_get(annots, core_string_borrow(key, (size_t)length))
+            : nullptr;
         if (!edge || edge->kind != IR_ANNOT_VALUE || !edge->v
             || !store_target_enqueue(set, edge->v)) return false;
     }
@@ -602,9 +624,12 @@ static bool store_target_root_has_no_known_aliases(
 {
     ir_annots_t *annots = ir_value_annots((ir_value_t *)value);
     ir_annot_t *count = annots
-        ? ir_annot_get(annots, "ir.alias_count") : nullptr;
+        ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_count"))
+        : nullptr;
     ir_annot_t *complete = annots
-        ? ir_annot_get(annots, "ir.alias_analysis_complete") : nullptr;
+        ? ir_annot_get(annots,
+                       CORE_STRING_STATIC("ir.alias_analysis_complete"))
+        : nullptr;
     return value
         && (value->kind == IR_VAL_PARAM || value->kind == IR_VAL_GLOBAL)
         && count && count->kind == IR_ANNOT_INT && !count->i.neg
@@ -648,8 +673,9 @@ static bool store_target_collect(store_target_set_t *set,
                     set->complete = store_target_finish(set, value);
                     continue;
                 }
-                ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
-                                                    "ir.alias_count");
+                ir_annot_t *aliases = ir_annot_get(
+                    ir_value_annots(value),
+                    CORE_STRING_STATIC("ir.alias_count"));
                 if (aliases && store_target_root_has_no_known_aliases(
                         value) && (store_target_reference_is_writable(value)
                                   || set->writable_projection))
@@ -727,8 +753,9 @@ static bool store_target_collect(store_target_set_t *set,
             break;
         default:
             if (store_target_carries_reference(set, value->type)) {
-                ir_annot_t *aliases = ir_annot_get(ir_value_annots(value),
-                                                    "ir.alias_count");
+                ir_annot_t *aliases = ir_annot_get(
+                    ir_value_annots(value),
+                    CORE_STRING_STATIC("ir.alias_count"));
                 if (aliases)
                     set->complete = store_target_annotation_edges(set, value);
                 else if (store_target_reference_is_writable(value)
@@ -836,7 +863,8 @@ static bool initialization_event(const ir_instr_t *instruction,
         ir_value_t *target = ir_operand_value(&instruction->operands[0]);
         ir_global_t *global = target && target->kind == IR_VAL_GLOBAL
             ? target->global ? target->global
-                             : ir_global_find(function->owner, target->name)
+                             : ir_global_find(function->owner,
+                                              target->name)
             : nullptr;
         matches = global == binding->global;
     }
@@ -860,9 +888,9 @@ static bool binding_reentry_header(V *v, ir_func_t *function,
     *out = nullptr;
     ir_annot_t *annot = ir_annot_get(
         ir_value_annots((ir_value_t *)binding),
-        "ir.binding_reentry_header");
+        CORE_STRING_STATIC("ir.binding_reentry_header"));
     if (!annot) return true;
-    ir_block_t *header = annot->kind == IR_ANNOT_STR && annot->s
+    ir_block_t *header = annot->kind == IR_ANNOT_STR && annot->s.data
         ? ir_block_find(function, annot->s) : nullptr;
     bool has_backedge = false;
     for (uint32_t i = 0; header && i < ir_pred_count(graph, header); i++) {
@@ -873,8 +901,9 @@ static bool binding_reentry_header(V *v, ir_func_t *function,
     if (!header || !ir_block_reachable(graph, header) || !has_backedge) {
         broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
               "phase.binding-reentry-region",
-              "binding %s names an invalid loop re-entry header",
-              binding->name ? binding->name : "(unnamed)");
+              "binding %.*s names an invalid loop re-entry header",
+              SARG(binding->name.data ? binding->name
+                                      : CORE_STRING_STATIC("(unnamed)")));
         return false;
     }
     *out = header;
@@ -887,7 +916,8 @@ static void verify_binding_initialization_events(
 {
     uint32_t block_count = function->n_blocks;
     ir_execution_phase_t phase = ir_func_execution_phase(function);
-    const char *name = binding->name ? binding->name : "(unnamed)";
+    core_string_t name = binding->name.data
+        ? binding->name : CORE_STRING_STATIC("(unnamed)");
     if (initialization_binding_can_write(binding, phase)
         || !initialization_binding_can_initialize(binding, phase)) return;
 
@@ -998,8 +1028,8 @@ static void verify_binding_initialization_events(
             if (prior_distinct_site) {
                 broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
                       "phase.binding-initialized-once",
-                      "immutable binding %s has multiple initialization sites on a reachable path",
-                      name);
+                      "immutable binding %.*s has multiple initialization sites on a reachable path",
+                      SARG(name));
                 diagnosed = true;
                 break;
             }
@@ -1077,8 +1107,9 @@ static bool typed_instr(ir_visit_t *vi)
     }
 
     broke(v, IR_DIAG_MISSING_PROFILE, vi->instr, vi->block, "typed.extension",
-          "this extension opcode is not one profile %s supplies",
-          v->m->profile ? v->m->profile->name : "(none)");
+          "this extension opcode is not one profile %.*s supplies",
+          SARG(v->m->profile ? v->m->profile->name
+                             : CORE_STRING_STATIC("(none)")));
 
     return false;
 }
@@ -1104,8 +1135,8 @@ static bool typed_operand(ir_visit_t *vi)
             if (global && !ir_global_can_read(global, phase)) {
                 broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
                       "phase.global-read",
-                      "global %s is unavailable during %s execution",
-                      global->name,
+                      "global %.*s is unavailable during %s execution",
+                      SARG(global->name),
                       phase == IR_PHASE_COMPTIME
                           ? "compile-time" : "runtime");
             }
@@ -1123,8 +1154,9 @@ static bool typed_operand(ir_visit_t *vi)
         if (!ir_value_can_read(val, phase)) {
             broke(v, IR_DIAG_VERIFY_PHASE, vi->instr, vi->block,
                   "phase.binding-read",
-                  "binding %s is unavailable during %s execution",
-                  val->name ? val->name : "(unnamed)",
+                  "binding %.*s is unavailable during %s execution",
+                  SARG(val->name.data ? val->name
+                                      : CORE_STRING_STATIC("(unnamed)")),
                   phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
         }
     }
@@ -1141,11 +1173,13 @@ static bool check_binding_write(V *v, ir_instr_t *in, ir_block_t *block,
         || (ir_instr_is_binding_initialization(in)
             && ir_value_can_initialize(binding, phase));
     if (allowed) return true;
-    broke(v, IR_DIAG_VERIFY_PHASE, in, block,
-          ir_instr_is_binding_initialization(in)
-              ? "phase.binding-initialize" : "phase.binding-write",
-          "binding %s cannot be %s during %s execution",
-          binding->name ? binding->name : "(unnamed)",
+    broke_at(v, IR_DIAG_VERIFY_PHASE, in, block,
+             ir_instr_is_binding_initialization(in)
+                 ? CORE_STRING_STATIC("phase.binding-initialize")
+                 : CORE_STRING_STATIC("phase.binding-write"),
+          "binding %.*s cannot be %s during %s execution",
+          SARG(binding->name.data ? binding->name
+                                  : CORE_STRING_STATIC("(unnamed)")),
           ir_instr_is_binding_initialization(in)
               ? "initialized" : "written",
           phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
@@ -1176,9 +1210,10 @@ static void check_contents_write(V *v, ir_instr_t *in, ir_block_t *block,
                 continue;
             broke(v, IR_DIAG_VERIFY_PHASE, in, block,
                   "phase.constant-contents-write",
-                  "the contents of constant %s cannot be written during %s execution",
-                  owner->global ? owner->global->name
-                      : owner->name ? owner->name : "(unnamed)",
+                  "the contents of constant %.*s cannot be written during %s execution",
+                  SARG(owner->global ? owner->global->name
+                       : owner->name.data ? owner->name
+                                          : CORE_STRING_STATIC("(unnamed)")),
                   phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
         }
         store_target_set_free(&owners);
@@ -1222,9 +1257,11 @@ static void check_store_target_write(V *v, ir_instr_t *in,
                      && ir_global_can_initialize(global, phase)))) {
                 broke(v, IR_DIAG_VERIFY_PHASE, in, block,
                       "phase.binding-write",
-                      "global %s cannot be written through its address during %s execution",
-                      global ? global->name
-                             : target->name ? target->name : "(unnamed)",
+                      "global %.*s cannot be written through its address during %s execution",
+                      SARG(global ? global->name
+                           : target->name.data
+                               ? target->name
+                               : CORE_STRING_STATIC("(unnamed)")),
                       phase == IR_PHASE_COMPTIME
                           ? "compile-time" : "runtime");
             }
@@ -1262,8 +1299,8 @@ static bool typed_instr_end(ir_visit_t *vi)
 
     if (verdict == IR_RULE_DECLINE) {
         broke(v, IR_DIAG_VERIFY_TYPED, in, vi->block, "typed.rule",
-              "no typing rule resolves for %s with these operand types",
-              ir_module_op_spelling(v->m, in->op));
+              "no typing rule resolves for %.*s with these operand types",
+              SARG(ir_module_op_spelling(v->m, in->op)));
     }
     else if (verdict != IR_RULE_ACCEPT) {
         v->bad = true;
@@ -1286,16 +1323,18 @@ static bool lifetime_instr(ir_visit_t *vi)
     if (direct == IR_LIVENESS_LIVE) {
         broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
               "lifetime.no-live-use",
-              "%s has a reachable use after this %s",
-              value->name ? value->name : "the value",
+              "%.*s has a reachable use after this %s",
+              SARG(value->name.data ? value->name
+                                    : CORE_STRING_STATIC("the value")),
               in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
         return true;
     }
     if (direct == IR_LIVENESS_UNKNOWN) {
         broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
               "lifetime.unknown-direct",
-              "cannot prove that %s has no reachable use after this %s",
-              value->name ? value->name : "the value",
+              "cannot prove that %.*s has no reachable use after this %s",
+              SARG(value->name.data ? value->name
+                                    : CORE_STRING_STATIC("the value")),
               in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
         return true;
     }
@@ -1304,15 +1343,17 @@ static bool lifetime_instr(ir_visit_t *vi)
     if (aliases == IR_LIVENESS_LIVE) {
         broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
               "lifetime.no-live-alias",
-              "an alias of %s has a reachable use after this %s",
-              value->name ? value->name : "the value",
+              "an alias of %.*s has a reachable use after this %s",
+              SARG(value->name.data ? value->name
+                                    : CORE_STRING_STATIC("the value")),
               in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
     }
     else if (aliases == IR_LIVENESS_UNKNOWN) {
         broke(vi->user, IR_DIAG_VERIFY_LIFETIME, in, vi->block,
               "lifetime.unknown-alias",
-              "cannot prove that %s has no live aliases at this %s",
-              value->name ? value->name : "the value",
+              "cannot prove that %.*s has no live aliases at this %s",
+              SARG(value->name.data ? value->name
+                                    : CORE_STRING_STATIC("the value")),
               in->op == IR_OP_FINALIZE ? "finalize" : "dealloc");
     }
 
@@ -1328,8 +1369,8 @@ static bool ssa_func(ir_visit_t *vi)
         if (!local->address_taken) {
             broke(v, IR_DIAG_VERIFY_SSA, nullptr, ir_block_entry(vi->func),
                   "ssa.locals",
-                  "%s is in SSA form but local $%s is not address-taken",
-                  vi->func->name, local->name);
+                  "%.*s is in SSA form but local $%.*s is not address-taken",
+                  SARG(vi->func->name), SARG(local->name));
         }
     }
 
@@ -1344,8 +1385,9 @@ static bool ssa_instr(ir_visit_t *vi)
         && (!vi->instr->dest_local
             || !vi->instr->dest_local->address_taken)) {
         broke(v, IR_DIAG_VERIFY_SSA, vi->instr, vi->block, "ssa.locals",
-              "this instruction writes local $%s in SSA form",
-              vi->instr->dest_local ? vi->instr->dest_local->name : "?");
+              "this instruction writes local $%.*s in SSA form",
+              SARG(vi->instr->dest_local ? vi->instr->dest_local->name
+                                         : CORE_STRING_STATIC("?")));
     }
 
     return true;
@@ -1367,8 +1409,8 @@ static bool ssa_operand(ir_visit_t *vi)
     if (val && val->kind == IR_VAL_LOCAL
         && (!val->local || !val->local->address_taken)) {
         broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.locals",
-              "this instruction reads local $%s in SSA form",
-              val->local ? val->local->name : "?");
+              "this instruction reads local $%.*s in SSA form",
+              SARG(val->local ? val->local->name : CORE_STRING_STATIC("?")));
         return true;
     }
 
@@ -1387,8 +1429,9 @@ static bool ssa_operand(ir_visit_t *vi)
 
     if (!ir_dominates(dom, val->def->block, from)) {
         broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.dominance",
-              "%%%s is used here but its definition in block %s does not "
-              "dominate %s", val->name, val->def->block->name, from->name);
+              "%%%.*s is used here but its definition in block %.*s does not "
+              "dominate %.*s", SARG(val->name), SARG(val->def->block->name),
+              SARG(from->name));
 
         return true;
     }
@@ -1396,8 +1439,8 @@ static bool ssa_operand(ir_visit_t *vi)
     if (val->def->block == from && od->kind != IR_OPD_PHI_ARM
         && val->def->index >= in->index) {
         broke(v, IR_DIAG_VERIFY_SSA, in, b, "ssa.dominance",
-              "%%%s is used before it is defined in block %s", val->name,
-              b->name);
+              "%%%.*s is used before it is defined in block %.*s",
+              SARG(val->name), SARG(b->name));
     }
 
     return true;
@@ -1405,7 +1448,7 @@ static bool ssa_operand(ir_visit_t *vi)
 
 static bool settled_for(V *v, th_type *t, uint64_t *bytes)
 {
-    ir_descriptor_t *d = ir_layout_of(v->m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_of(v->m, t, (core_string_t){});
 
     if (!d || !ir_layout_is_settled(&d->size)) {
         return false;
@@ -1416,9 +1459,9 @@ static bool settled_for(V *v, th_type *t, uint64_t *bytes)
 }
 
 typedef struct {
-    uint64_t    at;
-    uint64_t    end;
-    const char *name;
+    uint64_t      at;
+    uint64_t      end;
+    core_string_t name;
 } mspan;
 
 static int by_offset(const void *a, const void *b)
@@ -1440,25 +1483,27 @@ static void check_laid_out_type(V *v, th_type *t, ir_instr_t *in,
         return;
     }
 
-    ir_descriptor_t *d = ir_layout_of(v->m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_of(v->m, t, (core_string_t){});
+    core_string_t    target = v->m->target.data
+        ? v->m->target : CORE_STRING_STATIC("(none)");
 
     if (!d) {
         broke(v, IR_DIAG_VERIFY_LAID_OUT, in, b, "laid-out.descriptor",
-              "%s has no descriptor for target %s", ir_type_text(v->m, t),
-              v->m->target ? v->m->target : "(none)");
+              "%.*s has no descriptor for target %.*s",
+              SARG(ir_type_text(v->m, t)), SARG(target));
 
         return;
     }
 
     if (!ir_layout_is_settled(&d->size) || !ir_layout_is_settled(&d->align)) {
         broke(v, IR_DIAG_VERIFY_LAID_OUT, in, b, "laid-out.descriptor",
-              "the %s of %s is still %s for target %s",
+              "the %s of %.*s is still %.*s for target %.*s",
               ir_layout_is_settled(&d->size) ? "alignment" : "size",
-              ir_type_text(v->m, t),
-              ir_layout_state_name(ir_layout_is_settled(&d->size)
-                                       ? d->align.state
-                                       : d->size.state),
-              v->m->target ? v->m->target : "(none)");
+              SARG(ir_type_text(v->m, t)),
+              SARG(ir_layout_state_name(ir_layout_is_settled(&d->size)
+                                            ? d->align.state
+                                            : d->size.state)),
+              SARG(target));
     }
 
     if (d->variant.niche || d->n_members < 2) {
@@ -1484,9 +1529,9 @@ static void check_laid_out_type(V *v, th_type *t, ir_instr_t *in,
     for (uint32_t i = 0; i + 1 < n; i++) {
         if (s[i].end > s[i + 1].at) {
             broke(v, IR_DIAG_VERIFY_LAID_OUT, in, b, "laid-out.overlap",
-                  "members %s and %s of %s share bits, and no niche "
-                  "encoding says they may", s[i].name, s[i + 1].name,
-                  ir_type_text(v->m, t));
+                  "members %.*s and %.*s of %.*s share bits, and no niche "
+                  "encoding says they may", SARG(s[i].name),
+                  SARG(s[i + 1].name), SARG(ir_type_text(v->m, t)));
         }
     }
 }
@@ -1550,10 +1595,11 @@ static bool laid_out_bitcast(ir_visit_t *vi)
     if (settled_for(v, in->operands[0].value->type, &from)
         && settled_for(v, in->dest->type, &to) && from != to) {
         broke(v, IR_DIAG_VERIFY_LAID_OUT, in, vi->block, "laid-out.bitcast",
-              "bitcast turns %llu bytes of %s into %llu bytes of %s",
+              "bitcast turns %llu bytes of %.*s into %llu bytes of %.*s",
               (unsigned long long)from,
-              ir_type_text(v->m, in->operands[0].value->type),
-              (unsigned long long)to, ir_type_text(v->m, in->dest->type));
+              SARG(ir_type_text(v->m, in->operands[0].value->type)),
+              (unsigned long long)to,
+              SARG(ir_type_text(v->m, in->dest->type)));
     }
 
     return true;
@@ -1576,9 +1622,9 @@ static bool no_critical_edges(ir_visit_t *vi)
 
         if (to && ir_pred_count(dom, to) > 1) {
             broke(v, IR_DIAG_VERIFY_EDGE, t, b, "no-critical-edges.edge",
-                  "the edge from %s to %s is critical: %s has several "
-                  "successors and %s several predecessors", b->name, to->name,
-                  b->name, to->name);
+                  "the edge from %.*s to %.*s is critical: %.*s has several "
+                  "successors and %.*s several predecessors", SARG(b->name),
+                  SARG(to->name), SARG(b->name), SARG(to->name));
         }
     }
 
@@ -1620,7 +1666,8 @@ static bool check_structured(ir_visit_t *vi)
 
     if (!root) {
         broke(v, IR_DIAG_VERIFY_STRUCTURE, nullptr, ir_block_entry(f),
-              "structured.overlay", "%s has no region overlay", f->name);
+              "structured.overlay", "%.*s has no region overlay",
+              SARG(f->name));
 
         return false;
     }
@@ -1633,8 +1680,8 @@ static bool check_structured(ir_visit_t *vi)
         if (seen[f->blocks[i]->index] != 1) {
             broke(v, IR_DIAG_VERIFY_STRUCTURE, nullptr, f->blocks[i],
                   "structured.overlay",
-                  "the overlay covers block %s %u times, and must cover it "
-                  "exactly once", f->blocks[i]->name,
+                  "the overlay covers block %.*s %u times, and must cover it "
+                  "exactly once", SARG(f->blocks[i]->name),
                   seen[f->blocks[i]->index]);
         }
     }
@@ -1665,12 +1712,15 @@ static void audit_spans(V *v)
 
         ir_diag_t *bug = ir_diag_begin(v->d, IR_DIAG_NO_PRIMARY_SPAN,
                                        ir_module_span(v->m),
-                                       "reported without a location");
+                                       CORE_STRING_STATIC(
+                                           "reported without a location"));
 
         if (bug) {
             ir_diag_message(bug, v->d,
-                            "a diagnostic was reported with no primary span, "
-                            "which is a bug in whatever reported it");
+                            CORE_STRING_STATIC(
+                                "a diagnostic was reported with no primary "
+                                "span, which is a bug in whatever reported "
+                                "it"));
         }
 
         return;
@@ -1830,18 +1880,20 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
         lost = (ir_props_t)(lost & ~bit);
 
         ir_diag_t *dg = ir_diag_begin(out, IR_DIAG_VERIFY_CLAIM,
-                                      ir_module_span(m), "claimed here");
+                                      ir_module_span(m),
+                                      CORE_STRING_STATIC("claimed here"));
 
         if (dg) {
             core_buffer_t *sb = core_buffer_empty();
 
-            core_buffer_printf(sb, "module %s claims %s, which the verifier finds "
-                           "does not hold", m->name, ir_prop_name(bit));
+            core_buffer_printf(sb, "module %.*s claims %.*s, which the "
+                               "verifier finds does not hold",
+                               SARG(m->name), SARG(ir_prop_name(bit)));
 
-            char *msg = core_buffer_take(sb);
+            core_string_t msg = core_buffer_take_string(sb);
 
             ir_diag_message(dg, out, msg);
-            core_free(msg);
+            core_free(msg.data);
         }
     }
 
@@ -1854,10 +1906,10 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
 }
 
 typedef struct {
-    ir_span_t    span;
-    ir_instr_t  *in;
-    ir_block_t  *b;
-    const char  *what;
+    ir_span_t     span;
+    ir_instr_t   *in;
+    ir_block_t   *b;
+    core_string_t what;
 } ir_locrec_t;
 
 struct ir_locsnap_t {
@@ -1874,7 +1926,7 @@ static bool live_instr(ir_visit_t *vi)
 }
 
 static void snap_one(ir_ctx_t *ctx, ir_locsnap_t *s, ir_span_t span,
-                     ir_instr_t *in, ir_block_t *b, const char *what)
+                     ir_instr_t *in, ir_block_t *b, core_string_t what)
 {
     if (!ir_span_known(span)) {
         return;
@@ -1890,7 +1942,7 @@ static void snap_one(ir_ctx_t *ctx, ir_locsnap_t *s, ir_span_t span,
 static bool snap_func(ir_visit_t *vi)
 {
     snap_one(vi->module->ctx, vi->user, vi->func->span, nullptr, nullptr,
-             "a function");
+             CORE_STRING_STATIC("a function"));
 
     return true;
 }
@@ -1898,7 +1950,7 @@ static bool snap_func(ir_visit_t *vi)
 static bool snap_local(ir_visit_t *vi)
 {
     snap_one(vi->module->ctx, vi->user, vi->local->span, nullptr, nullptr,
-             "a local");
+             CORE_STRING_STATIC("a local"));
 
     return true;
 }
@@ -1906,7 +1958,7 @@ static bool snap_local(ir_visit_t *vi)
 static bool snap_block(ir_visit_t *vi)
 {
     snap_one(vi->module->ctx, vi->user, vi->block->span, nullptr, vi->block,
-             "a block");
+             CORE_STRING_STATIC("a block"));
 
     return true;
 }
@@ -1914,7 +1966,7 @@ static bool snap_block(ir_visit_t *vi)
 static bool snap_instr(ir_visit_t *vi)
 {
     snap_one(vi->module->ctx, vi->user, vi->instr->span, vi->instr, vi->block,
-             "an instruction");
+             CORE_STRING_STATIC("an instruction"));
 
     return false;
 }
@@ -1938,8 +1990,8 @@ ir_locsnap_t *ir_loc_snapshot(ir_module_t *m)
     return s;
 }
 
-bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m, const char *agent,
-                     ir_diags_t *out)
+bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m,
+                     core_string_t agent, ir_diags_t *out)
 {
     bool ok = true;
 
@@ -1977,18 +2029,21 @@ bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m, const char *agent,
         ok = false;
 
         ir_diag_t *dg = ir_diag_begin_at(out, IR_DIAG_LOCATION_LOST, r->in,
-                                         r->b, nullptr, "here");
+                                         r->b, nullptr,
+                                         CORE_STRING_STATIC("here"));
 
         if (dg) {
             core_buffer_t *sb = core_buffer_empty();
 
-            core_buffer_printf(sb, "%s had a known location before %s ran and has "
-                           "none after", r->what, agent ? agent : "a pass");
+            core_buffer_printf(sb, "%.*s had a known location before %.*s "
+                               "ran and has none after", SARG(r->what),
+                               SARG(agent.data ? agent
+                                               : CORE_STRING_STATIC("a pass")));
 
-            char *msg = core_buffer_take(sb);
+            core_string_t msg = core_buffer_take_string(sb);
 
             ir_diag_message(dg, out, msg);
-            core_free(msg);
+            core_free(msg.data);
         }
     }
     core_dict_free(&here);

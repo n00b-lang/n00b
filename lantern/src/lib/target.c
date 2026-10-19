@@ -15,10 +15,10 @@ static const core_target_atomic_t initial_atomic_storage[] = {
     {128, 16, CORE_TARGET_FEATURE_NATIVE_ATOMIC128},
 };
 
-bool core_target_profile(const char *triple, uint64_t enabled_features,
+bool core_target_profile(core_string_t triple, uint64_t enabled_features,
                          core_target_desc_t *out)
 {
-    if (!triple || !out
+    if (!triple.data || !out
         || (enabled_features & ~CORE_TARGET_FEATURE_NATIVE_ATOMIC128))
         return false;
 
@@ -39,18 +39,18 @@ bool core_target_profile(const char *triple, uint64_t enabled_features,
         .atomic_storage_count = sizeof(initial_atomic_storage)
                                 / sizeof(initial_atomic_storage[0]),
     };
-    if (!strcmp(triple, "x86_64-linux")) {
-        profile.triple = "x86_64-linux";
+    if (core_string_eq(triple, CORE_STRING_STATIC("x86_64-linux"))) {
+        profile.triple = CORE_STRING_STATIC("x86_64-linux");
         profile.object_format = CORE_TARGET_OBJECT_ELF;
         profile.call_abi = CORE_TARGET_CALL_SYSV_AMD64;
     }
-    else if (!strcmp(triple, "arm64-macos")) {
-        profile.triple = "arm64-macos";
+    else if (core_string_eq(triple, CORE_STRING_STATIC("arm64-macos"))) {
+        profile.triple = CORE_STRING_STATIC("arm64-macos");
         profile.object_format = CORE_TARGET_OBJECT_MACH_O;
         profile.call_abi = CORE_TARGET_CALL_DARWIN_AARCH64;
     }
-    else if (!strcmp(triple, "x86_64-windows")) {
-        profile.triple = "x86_64-windows";
+    else if (core_string_eq(triple, CORE_STRING_STATIC("x86_64-windows"))) {
+        profile.triple = CORE_STRING_STATIC("x86_64-windows");
         profile.object_format = CORE_TARGET_OBJECT_COFF;
         profile.call_abi = CORE_TARGET_CALL_WINDOWS_X64;
     }
@@ -68,7 +68,7 @@ static bool power_of_two(uint32_t value)
 
 bool core_target_validate(const core_target_desc_t *target)
 {
-    if (!target || !target->triple || !target->triple[0]
+    if (!target || !target->triple.data || !target->triple.u8_bytes
         || target->endian > CORE_TARGET_BIG_ENDIAN
         || target->object_format > CORE_TARGET_OBJECT_OTHER
         || target->call_abi > CORE_TARGET_CALL_OTHER

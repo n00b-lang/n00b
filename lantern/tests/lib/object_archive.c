@@ -34,7 +34,7 @@ typedef struct {
 
 static size_t saved_first_payload_size;
 
-static bool mutate_first_record(const char *path, uint64_t field,
+static bool mutate_first_record(core_string_t path, uint64_t field,
                                 size_t payload_size)
 {
   core_persist_arena_t *arena = nullptr;
@@ -62,7 +62,7 @@ static bool mutate_first_record(const char *path, uint64_t field,
 
 typedef struct test_node {
   uint64_t value;
-  char *label;
+  core_string_t label;
   struct test_node *left;
   struct test_node *right;
 } test_node_t;
@@ -115,22 +115,26 @@ static void node_destroy(void *object, void *user_data) {
 }
 
 int main(void) {
-  char path[] = "/tmp/lantern-object-archive-XXXXXX";
-  char path2[] = "/tmp/lantern-object-archive-second-XXXXXX";
-  int fd = mkstemp(path);
-  int fd2 = mkstemp(path2);
+  char path_bytes[] = "/tmp/lantern-object-archive-XXXXXX";
+  char path2_bytes[] = "/tmp/lantern-object-archive-second-XXXXXX";
+  core_string_t path = core_string_borrow(path_bytes, sizeof path_bytes - 1);
+  core_string_t path2 = core_string_borrow(path2_bytes,
+                                           sizeof path2_bytes - 1);
+  int fd = mkstemp(path_bytes);
+  int fd2 = mkstemp(path2_bytes);
   check("temporary archive path is available", fd >= 0);
   check("second temporary archive path is available", fd2 >= 0);
   if (fd < 0 || fd2 < 0)
     return report("object archive");
   close(fd);
   close(fd2);
-  unlink(path);
-  unlink(path2);
+  unlink(path_bytes);
+  unlink(path2_bytes);
 
-  test_node_t shared = {.value = 29, .label = "shared"};
+  test_node_t shared = {.value = 29, .label = CORE_STRING_STATIC("shared")};
   test_node_t root = {
-      .value = 17, .label = "root", .left = &shared, .right = &shared};
+      .value = 17, .label = CORE_STRING_STATIC("root"), .left = &shared,
+      .right = &shared};
   shared.left = &root;
 
   core_object_archive_registry_t *registry =
@@ -151,7 +155,8 @@ int main(void) {
         core_object_archive_save(path, 65536, TEST_ARCHIVE_ABI, registry,
                                  TEST_NODE_TYPE, &root, &error) &&
             error == CORE_OBJECT_ARCHIVE_OK);
-  test_node_t second_root = {.value = 91, .label = "second"};
+  test_node_t second_root = {.value = 91,
+                             .label = CORE_STRING_STATIC("second")};
   check("save a separate library archive",
         core_object_archive_save(path2, 65536, TEST_ARCHIVE_ABI, registry,
                                  TEST_NODE_TYPE, &second_root, &error) &&
@@ -168,8 +173,9 @@ int main(void) {
         !core_object_archive_load(path, TEST_ARCHIVE_ABI, missing_codec,
                                   &archive, &error) &&
             error == CORE_OBJECT_ARCHIVE_UNKNOWN_TYPE && !archive &&
-            !strcmp(core_object_archive_error_string(error),
-                    "archive contains an unregistered object type"));
+            core_string_eq(core_object_archive_error_string(error),
+                           CORE_STRING_STATIC(
+                               "archive contains an unregistered object type")));
   core_object_archive_registry_free(missing_codec);
 
   core_object_archive_registry_t *newer_codec =
@@ -287,11 +293,12 @@ int main(void) {
     test_node_t *loaded = core_object_archive_root(archive, &root_type);
     check("round-trip preserves root type and values",
           root_type == TEST_NODE_TYPE && loaded && loaded->value == 17 &&
-              !strcmp(loaded->label, "root"));
+              core_string_eq(loaded->label, CORE_STRING_STATIC("root")));
     check("object IDs preserve sharing and cycles",
           loaded && loaded->left && loaded->left == loaded->right &&
               loaded->left->value == 29 &&
-              !strcmp(loaded->left->label, "shared") &&
+              core_string_eq(loaded->left->label,
+                             CORE_STRING_STATIC("shared")) &&
               loaded->left->left == loaded);
     core_object_archive_t *second_archive = nullptr;
     bool second_loaded = core_object_archive_load(
@@ -326,12 +333,13 @@ int main(void) {
   check("relocated restoration leaves the saved archive unchanged",
         reopened_second_ok && reopened_second_type == TEST_NODE_TYPE &&
             reopened_second_root && reopened_second_root->value == 91 &&
-            !strcmp(reopened_second_root->label, "second"));
+            core_string_eq(reopened_second_root->label,
+                           CORE_STRING_STATIC("second")));
   if (reopened_second)
     core_object_archive_close(reopened_second, nullptr);
 
   core_object_archive_registry_free(registry);
-  unlink(path);
-  unlink(path2);
+  unlink(path_bytes);
+  unlink(path2_bytes);
   return report("object archive");
 }

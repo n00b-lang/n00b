@@ -202,19 +202,19 @@ static int by_index(const void *a, const void *b)
     return x < y ? -1 : x > y ? 1 : 0;
 }
 
-const char *ir_region_kind_name(ir_region_kind_t k)
+core_string_t ir_region_kind_name(ir_region_kind_t k)
 {
     switch (k) {
     case IR_REGION_IF:
-        return "if";
+        return CORE_STRING_STATIC("if");
     case IR_REGION_LOOP:
-        return "loop";
+        return CORE_STRING_STATIC("loop");
     case IR_REGION_SWITCH:
-        return "switch";
+        return CORE_STRING_STATIC("switch");
     case IR_REGION_BLOCK:
-        return "block";
+        return CORE_STRING_STATIC("block");
     default:
-        return "seq";
+        return CORE_STRING_STATIC("seq");
     }
 }
 
@@ -761,7 +761,7 @@ static bool structure_run(ir_module_t *m, ir_diags_t *d, void *state)
 }
 
 const ir_pass_t ir_pass_structure = {
-    .name        = "structure",
+    .name        = CORE_STRING_STATIC("structure"),
     .requires    = IR_PROP_PARSED,
     .establishes = IR_PROP_STRUCTURED,
     .run         = structure_run,
@@ -771,8 +771,11 @@ static bool draw_block(ir_region_visit_t *v)
 {
     core_buffer_t *b = v->user;
 
-    core_buffer_printf(b, "%*sblock %s\n", v->depth * 2 + 4, "",
-              v->region->head ? v->region->head->name : "?");
+    core_string_t name = v->region->head ? v->region->head->name
+                                         : CORE_STRING_STATIC("?");
+
+    core_buffer_printf(b, "%*sblock %.*s\n", v->depth * 2 + 4, "",
+                       (int)name.u8_bytes, name.data);
 
     return false;
 }
@@ -785,11 +788,15 @@ static bool draw_open(ir_region_visit_t *v)
         return true;
     }
 
-    core_buffer_printf(b, "%*s%s", v->depth * 2 + 4, "",
-              ir_region_kind_name(v->region->kind));
+    core_string_t kind = ir_region_kind_name(v->region->kind);
+
+    core_buffer_printf(b, "%*s%.*s", v->depth * 2 + 4, "",
+                       (int)kind.u8_bytes, kind.data);
 
     if (v->region->head) {
-        core_buffer_printf(b, " at %s", v->region->head->name);
+        core_buffer_printf(b, " at %.*s",
+                           (int)v->region->head->name.u8_bytes,
+                           v->region->head->name.data);
     }
 
     if (v->region->dispatch) {
@@ -819,21 +826,23 @@ static void draw(core_buffer_t *b, ir_region_t *r)
     ir_region_walk_free(w);
 }
 
-char *ir_module_render_nested(ir_module_t *m)
+core_string_t ir_module_render_nested(ir_module_t *m)
 {
     if (!m) {
-        return nullptr;
+        return (core_string_t){};
     }
 
-    core_buffer_t *b = core_buffer_empty();
+    core_buffer_t *b     = core_buffer_empty();
+    core_string_t  mname = ir_module_name(m);
 
-    core_buffer_printf(b, "# a rendering of module %s, not its format\n",
-              ir_module_name(m));
+    core_buffer_printf(b, "# a rendering of module %.*s, not its format\n",
+                       (int)mname.u8_bytes, mname.data);
 
     for (size_t i = 0; i < ir_func_count(m); i++) {
         ir_func_t *f = ir_func_at(m, i);
 
-        core_buffer_printf(b, "\n  func @%s\n", f->name);
+        core_buffer_printf(b, "\n  func @%.*s\n", (int)f->name.u8_bytes,
+                           f->name.data);
 
         if (!ir_region_root(f)) {
             core_buffer_puts(b, "    # no overlay; run structure first\n");
@@ -842,5 +851,5 @@ char *ir_module_render_nested(ir_module_t *m)
         draw(b, ir_region_root(f));
     }
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }

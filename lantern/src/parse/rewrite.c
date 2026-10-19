@@ -106,15 +106,15 @@ typedef struct {
     size_t                                   rule_count;
     parse_type_syntax_builder_fn             build_syntax;
     void                                    *state;
-    char                                   **err;
+    core_string_t                           *err;
     bool                                     failed;
 } type_materialization_t;
 
 static void
-materialization_error(type_materialization_t *m, const char *message)
+materialization_error(type_materialization_t *m, core_string_t message)
 {
-    if (m->err && !*m->err) {
-        *m->err = core_strdup(message);
+    if (m->err && !m->err->data) {
+        *m->err = core_string_dup(message);
     }
 
     m->failed = true;
@@ -132,7 +132,8 @@ materialization_rules_valid(type_materialization_t *m)
             || (size_t)rule->implicit_rule_index >= nt->rule_ids.len
             || (size_t)rule->explicit_rule_index >= nt->rule_ids.len
             || rule->implicit_rule_index == rule->explicit_rule_index) {
-            materialization_error(m, "invalid type materialization rule");
+            materialization_error(m, CORE_STRING_STATIC(
+                                         "invalid type materialization rule"));
 
             return false;
         }
@@ -142,8 +143,8 @@ materialization_rules_valid(type_materialization_t *m)
 
             if (core_string_eq(rule->node_name, prior->node_name)
                 && rule->implicit_rule_index == prior->implicit_rule_index) {
-                materialization_error(m,
-                                      "duplicate type materialization rule");
+                materialization_error(m, CORE_STRING_STATIC(
+                                      "duplicate type materialization rule"));
 
                 return false;
             }
@@ -247,8 +248,8 @@ materialize_node(type_materialization_t *m, parse_tree_t *node)
     }
 
     if (rule->insert_before_child > child_count) {
-        materialization_error(m,
-                              "type insertion is outside the node's children");
+        materialization_error(m, CORE_STRING_STATIC(
+                              "type insertion is outside the node's children"));
 
         return false;
     }
@@ -257,8 +258,8 @@ materialize_node(type_materialization_t *m, parse_tree_t *node)
         ? th_resolve(parse_tree_type(node)) : nullptr;
 
     if (!type || !th_is_closed(m->types, type)) {
-        materialization_error(m,
-                              "type materialization requires a resolved type");
+        materialization_error(m, CORE_STRING_STATIC(
+                              "type materialization requires a resolved type"));
 
         return false;
     }
@@ -270,7 +271,7 @@ materialize_node(type_materialization_t *m, parse_tree_t *node)
                                                 m->state,
                                                 m->err);
 
-    if (m->err && *m->err) {
+    if (m->err && m->err->data) {
         free_syntax(&syntax);
         m->failed = true;
 
@@ -280,9 +281,9 @@ materialize_node(type_materialization_t *m, parse_tree_t *node)
     if (!syntax.data || !syntax.len) {
         core_array_free(syntax);
 
-        if (!m->err || !*m->err) {
-            materialization_error(m,
-                                  "type syntax builder returned no syntax");
+        if (!m->err || !m->err->data) {
+            materialization_error(m, CORE_STRING_STATIC(
+                                  "type syntax builder returned no syntax"));
         }
         else {
             m->failed = true;
@@ -294,8 +295,8 @@ materialize_node(type_materialization_t *m, parse_tree_t *node)
     for (size_t i = 0; i < syntax.len; i++) {
         if (!syntax.data[i]) {
             free_syntax(&syntax);
-            materialization_error(m,
-                                  "type syntax builder returned a null node");
+            materialization_error(m, CORE_STRING_STATIC(
+                                  "type syntax builder returned a null node"));
 
             return false;
         }
@@ -323,10 +324,10 @@ parse_tree_materialize_types(
     size_t                                   rule_count,
     parse_type_syntax_builder_fn             build_syntax,
     void                                    *state,
-    char                                   **err)
+    core_string_t                           *err)
 {
     if (err) {
-        *err = nullptr;
+        *err = (core_string_t){};
     }
 
     type_materialization_t m = {
@@ -341,8 +342,8 @@ parse_tree_materialize_types(
 
     if (!grammar || !types || !source || !rules || !rule_count
         || !build_syntax) {
-        materialization_error(&m,
-                              "type materialization requires all arguments");
+        materialization_error(&m, CORE_STRING_STATIC(
+                              "type materialization requires all arguments"));
 
         return nullptr;
     }
@@ -375,17 +376,18 @@ parse_template_parse(parse_grammar_t *g,
                    core_string_t   start_nt,
                    core_string_t   source,
                    parse_scan_cb_t  tokenize,
-                   char         **err)
+                   core_string_t  *err)
 {
     if (err) {
-        *err = nullptr;
+        *err = (core_string_t){};
     }
 
     parse_nonterm_t *start = g ? parse_find_nonterm(g, start_nt) : nullptr;
 
     if (!start) {
         if (err) {
-            *err = core_strdup("no such non-terminal to start from");
+            *err = core_string_dup(
+                CORE_STRING_STATIC("no such non-terminal to start from"));
         }
 
         return nullptr;
@@ -393,7 +395,8 @@ parse_template_parse(parse_grammar_t *g,
 
     if (!tokenize || !source.data) {
         if (err) {
-            *err = core_strdup("a template needs a tokenizer and a source");
+            *err = core_string_dup(CORE_STRING_STATIC(
+                "a template needs a tokenizer and a source"));
         }
 
         return nullptr;
@@ -416,7 +419,8 @@ parse_template_parse(parse_grammar_t *g,
 
     if (!ok) {
         if (err) {
-            *err = core_strdup("the template does not parse");
+            *err = core_string_dup(
+                CORE_STRING_STATIC("the template does not parse"));
         }
 
         parse_template_free(t);

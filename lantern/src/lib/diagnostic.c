@@ -180,17 +180,22 @@ core_diagnostics_has_fatal(const core_diagnostics_t *d)
     return core_diagnostics_count_severity(d, CORE_DIAG_FATAL) != 0;
 }
 
-char *
+core_string_t
 core_diagnostics_render_text(const core_diagnostics_t *d)
 {
-    if (!d) return nullptr;
+    if (!d) return (core_string_t){};
     core_buffer_t *out = core_buffer_empty();
-    static const char *names[] = {"fatal", "error", "warning", "note", "help"};
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("fatal"), CORE_STRING_STATIC("error"),
+        CORE_STRING_STATIC("warning"), CORE_STRING_STATIC("note"),
+        CORE_STRING_STATIC("help"),
+    };
     for (size_t i = 0; i < d->items.len; i++) {
         const core_diagnostic_t *item = &d->items.data[i];
-        const char *severity = item->severity <= CORE_DIAG_HELP
-            ? names[item->severity] : "diagnostic";
-        core_buffer_printf(out, "%s[%.*s]: %.*s\n", severity,
+        core_string_t severity = item->severity <= CORE_DIAG_HELP
+            ? names[item->severity] : CORE_STRING_STATIC("diagnostic");
+        core_buffer_printf(out, "%.*s[%.*s]: %.*s\n",
+            (int)severity.u8_bytes, severity.data,
             (int)item->code.u8_bytes, item->code.data,
             (int)item->message.u8_bytes, item->message.data);
         if (item->module.data)
@@ -204,5 +209,5 @@ core_diagnostics_render_text(const core_diagnostics_t *d)
             core_buffer_printf(out, "  --> %.*s\n",
                 (int)item->path.u8_bytes, item->path.data);
     }
-    return core_buffer_take(out);
+    return core_buffer_take_string(out);
 }

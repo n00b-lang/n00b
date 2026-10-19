@@ -18,14 +18,22 @@ void *th_alloc(th_ctx *ctx, size_t n)
     return core_arena_alloc(&ctx->arena, n);
 }
 
-char *th_strdup(th_ctx *ctx, const char *s, size_t n)
+core_string_t th_strdup(th_ctx *ctx, core_string_t s)
 {
-    char *d = th_alloc(ctx, n + 1);
+    if (!s.data) {
+        return (core_string_t){};
+    }
 
-    memcpy(d, s, n);
-    d[n] = 0;
+    char *d = th_alloc(ctx, s.u8_bytes + 1);
 
-    return d;
+    if (!d) {
+        return (core_string_t){};
+    }
+
+    memcpy(d, s.data, s.u8_bytes);
+    d[s.u8_bytes] = 0;
+
+    return core_string_borrow(d, s.u8_bytes);
 }
 
 void th_var_cons_push(th_type *var, th_constraint constraint)
@@ -66,7 +74,8 @@ bool th_probe_end(th_ctx *ctx, const th_probe_t *probe)
         ctx->errors.len = probe->errors;
         ctx->err        = probe->err;
     }
-    bool observable = ctx->err != probe->err
+    bool observable = ctx->err.data != probe->err.data
+        || ctx->err.u8_bytes != probe->err.u8_bytes
         || ctx->errors.len != probe->errors
         || ctx->coercions.len != probe->coercions
         || ctx->pending_environment_constraints.len
@@ -112,7 +121,7 @@ void th_ctx_free(th_ctx *ctx)
 
     if (ctx->promo_index) {
         core_dict_foreach (ctx->promo_index, e) {
-            core_list_t(core_const_charptr_t) *edges = e->value;
+            core_list_t(core_string_t) *edges = e->value;
 
             core_list_free(*edges);
             core_free(edges);
@@ -155,10 +164,10 @@ typedef struct {
 } th_clone_entry_t;
 core_list_decl(th_clone_entry_t);
 
-static const char *
-clone_string(th_ctx *destination, const char *source)
+static core_string_t
+clone_string(th_ctx *destination, core_string_t source)
 {
-    return source ? th_strdup(destination, source, strlen(source)) : nullptr;
+    return th_strdup(destination, source);
 }
 
 #define clone_array(destination, T, n) \
@@ -196,14 +205,14 @@ clone_constraint_graph(th_ctx *destination, const th_constraint *source,
         return true;
     case TH_CON_IMPLEMENTS:
         copy->iface = clone_string(destination, source->iface);
-        return !source->iface || copy->iface;
+        return !source->iface.data || copy->iface.data;
     case TH_CON_KIND:
         return true;
     case TH_CON_HAS_FIELD:
         copy->field.name = clone_string(destination, source->field.name);
         copy->field.type = clone_type_graph(destination, source->field.type,
                                              seen);
-        return (!source->field.name || copy->field.name)
+        return (!source->field.name.data || copy->field.name.data)
             && (!source->field.type || copy->field.type);
     case TH_CON_HAS_PARAM:
         copy->param.type = clone_type_graph(destination, source->param.type,
@@ -215,7 +224,7 @@ clone_constraint_graph(th_ctx *destination, const th_constraint *source,
             source->method.result, seen);
         copy->method.call = clone_type_graph(destination,
             source->method.call, seen);
-        return (!source->method.name || copy->method.name)
+        return (!source->method.name.data || copy->method.name.data)
             && (!source->method.result || copy->method.result)
             && (!source->method.call || copy->method.call);
     }
@@ -260,14 +269,14 @@ clone_type_graph(th_ctx *destination, const th_type *source,
                 if (!copy->named.args[i].type) return nullptr;
             }
             else if (source->named.args[i].kind == TH_ARG_STR) {
-                size_t len = source->named.args[i].str.n;
-                char *text = th_strdup(destination,
-                    source->named.args[i].str.p, len);
-                if (!text) return nullptr;
-                copy->named.args[i].str.p = text;
+                core_string_t text = th_strdup(destination,
+                    source->named.args[i].str);
+                if (source->named.args[i].str.data && !text.data)
+                    return nullptr;
+                copy->named.args[i].str = text;
             }
         }
-        return copy->named.name ? copy : nullptr;
+        return copy->named.name.data ? copy : nullptr;
     case TH_BITINT:
         copy->bitint = source->bitint;
         return copy;
@@ -290,13 +299,12 @@ clone_type_graph(th_ctx *destination, const th_type *source,
                 source->record.members[i].name);
             copy->record.members[i].type = clone_type_graph(destination,
                 source->record.members[i].type, seen);
-            if (!copy->record.members[i].name
+            if (!copy->record.members[i].name.data
                 || !copy->record.members[i].type) return nullptr;
         }
         return copy;
     case TH_TRAIT:
         copy->trait.name = clone_string(destination, source->trait.name);
-        copy->trait.nlen = source->trait.nlen;
         copy->trait.n = source->trait.n;
         copy->trait.nr = source->trait.nr;
         copy->trait.methods = source->trait.n
@@ -306,13 +314,14 @@ clone_type_graph(th_ctx *destination, const th_type *source,
             ? clone_array(destination, th_trait_requirement,
                           source->trait.nr)
             : nullptr;
-        if (!copy->trait.name) return nullptr;
+        if (!copy->trait.name.data) return nullptr;
         for (size_t i = 0; i < source->trait.n; i++) {
             copy->trait.methods[i].name = clone_string(destination,
                 source->trait.methods[i].name);
             copy->trait.methods[i].type = clone_type_graph(destination,
                 source->trait.methods[i].type, seen);
-            if (!copy->trait.methods[i].name || !copy->trait.methods[i].type)
+            if (!copy->trait.methods[i].name.data
+                || !copy->trait.methods[i].type)
                 return nullptr;
         }
         for (size_t i = 0; i < source->trait.nr; i++) {
@@ -328,7 +337,8 @@ clone_type_graph(th_ctx *destination, const th_type *source,
             requirement->iface = clone_string(destination, original->iface);
             if (!requirement->subject
                 || (original->target && !requirement->target)
-                || (original->iface && !requirement->iface)) return nullptr;
+                || (original->iface.data && !requirement->iface.data))
+                return nullptr;
         }
         return copy;
     case TH_FUNCTION:
@@ -361,7 +371,7 @@ clone_type_graph(th_ctx *destination, const th_type *source,
                 source->fn.kw[i].name);
             copy->fn.kw[i].type = clone_type_graph(destination,
                 source->fn.kw[i].type, seen);
-            if (!copy->fn.kw[i].name || !copy->fn.kw[i].type)
+            if (!copy->fn.kw[i].name.data || !copy->fn.kw[i].type)
                 return nullptr;
         }
         return copy->fn.ret ? copy : nullptr;
@@ -556,7 +566,7 @@ void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state)
     ctx->norm_state = state;
 }
 
-const char *th_last_error(const th_ctx *ctx)
+core_string_t th_last_error(const th_ctx *ctx)
 {
     return ctx->err;
 }
@@ -587,10 +597,10 @@ static void u64(core_buffer_t *b, uint64_t v)
     core_buffer_append(b, t, 8);
 }
 
-static void str(core_buffer_t *b, const char *s, size_t n)
+static void str(core_buffer_t *b, core_string_t s)
 {
-    u64(b, n);
-    core_buffer_append(b, s, n);
+    u64(b, s.u8_bytes);
+    core_buffer_append_string(b, s);
 }
 
 static bool is_start(unsigned char c)
@@ -604,17 +614,19 @@ static bool is_cont(unsigned char c)
     return is_start(c) || (c >= '0' && c <= '9');
 }
 
-bool th_name_syntax_valid(const char *s, size_t n)
+bool th_name_syntax_valid(core_string_t s)
 {
-    if (!s || !n || n > UINT32_MAX
-        || !unicode_utf8_validate(s, (uint32_t)n)) {
+    size_t n = s.u8_bytes;
+
+    if (!s.data || !n || n > UINT32_MAX
+        || !unicode_utf8_validate(s.data, (uint32_t)n)) {
         return false;
     }
 
     size_t seg = 0;
 
     for (size_t i = 0; i < n; i++) {
-        unsigned char c = (unsigned char)s[i];
+        unsigned char c = (unsigned char)s.data[i];
 
         if (c == '.') {
             if (!seg) {
@@ -632,42 +644,42 @@ bool th_name_syntax_valid(const char *s, size_t n)
     return seg != 0;
 }
 
-static bool name(th_ctx *ctx, core_buffer_t *b, const char *s, size_t n)
+static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
 {
-    if (!th_name_syntax_valid(s, n)) {
-        th_err(ctx, TH_ERR_BAD_NAME, nullptr, nullptr, nullptr,
-               "not a valid type name");
+    if (!th_name_syntax_valid(s)) {
+        th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
+               CORE_STRING_STATIC("not a valid type name"));
 
         return false;
     }
 
     if (ctx->norm) {
-        const char *o;
-        size_t      on;
+        core_string_t o;
 
-        if (!ctx->norm(ctx->norm_state, s, n, &o, &on)) {
-            th_err(ctx, TH_ERR_BAD_NAME, nullptr, nullptr, nullptr,
-                   "name normalization failed");
+        if (!ctx->norm(ctx->norm_state, s, &o)) {
+            th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
+                   CORE_STRING_STATIC("name normalization failed"));
 
             return false;
         }
 
-        str(b, o, on);
+        str(b, o);
 
         return true;
     }
 
-    for (size_t i = 0; i < n; i++) {
-        if ((unsigned char)s[i] >= 0x80) {
-            th_err(ctx, TH_ERR_BAD_NAME, nullptr, nullptr, nullptr,
-                   "non-ASCII name requires an NFC normalizer; "
-                   "call th_ctx_set_normalizer");
+    for (size_t i = 0; i < s.u8_bytes; i++) {
+        if ((unsigned char)s.data[i] >= 0x80) {
+            th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
+                   CORE_STRING_STATIC(
+                       "non-ASCII name requires an NFC normalizer; "
+                       "call th_ctx_set_normalizer"));
 
             return false;
         }
     }
 
-    str(b, s, n);
+    str(b, s);
 
     return true;
 }
@@ -789,7 +801,7 @@ static bool enc_plan(th_enc *e, eframe *f)
     case TH_NAMED:
         u8(&s->pre, t->named.is_variant ? 1 : 0);
 
-        if (!name(e->ctx, &s->pre, t->named.name, t->named.nlen)) {
+        if (!name(e->ctx, &s->pre, t->named.name)) {
             return false;
         }
 
@@ -815,7 +827,7 @@ static bool enc_plan(th_enc *e, eframe *f)
                 break;
             case TH_ARG_STR:
                 u8(&s->pre, 3);
-                str(&s->pre, a->str.p, a->str.n);
+                str(&s->pre, a->str);
                 break;
             }
         }
@@ -851,7 +863,7 @@ static bool enc_plan(th_enc *e, eframe *f)
 
             s = step_add(&f->steps, m->type);
 
-            if (!name(e->ctx, &s->pre, m->name, strlen(m->name))) {
+            if (!name(e->ctx, &s->pre, m->name)) {
                 return false;
             }
         }
@@ -860,13 +872,13 @@ static bool enc_plan(th_enc *e, eframe *f)
         break;
 
     case TH_TRAIT:
-        if (!name(e->ctx, &s->pre, t->trait.name, t->trait.nlen))
+        if (!name(e->ctx, &s->pre, t->trait.name))
             return false;
         u64(&s->pre, t->trait.n);
         for (size_t i = 0; i < t->trait.n; i++) {
             const th_member *m = &t->trait.methods[i];
             s = step_add(&f->steps, m->type);
-            if (!name(e->ctx, &s->pre, m->name, strlen(m->name)))
+            if (!name(e->ctx, &s->pre, m->name))
                 return false;
         }
         f->ninline = f->steps.len;
@@ -878,9 +890,8 @@ static bool enc_plan(th_enc *e, eframe *f)
             u8(&s->pre, requirement->kind);
             enc_node(e, &s->pre, requirement->subject);
             if (!e->ok) return false;
-            if (requirement->iface
-                && !name(e->ctx, &s->pre, requirement->iface,
-                         strlen(requirement->iface))) return false;
+            if (requirement->iface.data
+                && !name(e->ctx, &s->pre, requirement->iface)) return false;
         }
         break;
 
@@ -917,7 +928,7 @@ static bool enc_plan(th_enc *e, eframe *f)
 
             s = step_add(&f->steps, k->type);
 
-            if (!name(e->ctx, &s->pre, k->name, strlen(k->name))) {
+            if (!name(e->ctx, &s->pre, k->name)) {
                 return false;
             }
 
@@ -948,8 +959,10 @@ static bool enc_plan(th_enc *e, eframe *f)
             u64(&s->pre, 0);
         }
         else if (!t->var.has_index) {
-            th_err(e->ctx, TH_ERR_FREE_VAR, nullptr, nullptr, (th_type *)t,
-                   "free variable has no index; normalize first");
+            th_err(e->ctx, TH_ERR_FREE_VAR, (core_string_t){}, nullptr,
+                   (th_type *)t,
+                   CORE_STRING_STATIC(
+                       "free variable has no index; normalize first"));
 
             return false;
         }
@@ -1185,28 +1198,27 @@ static th_type **norm_children_sum(th_norm *s, th_type *t, size_t *out)
     return th_sort_arms(s->ctx, t->sum.arms, t->sum.n);
 }
 
+static int cmp_length_first(core_string_t x, core_string_t y)
+{
+    if (x.u8_bytes != y.u8_bytes) {
+        return x.u8_bytes < y.u8_bytes ? -1 : 1;
+    }
+
+    return x.u8_bytes ? memcmp(x.data, y.data, x.u8_bytes) : 0;
+}
+
 int th_cmp_member(const void *a, const void *b)
 {
     const th_member *x = a, *y = b;
-    size_t           xn = strlen(x->name), yn = strlen(y->name);
 
-    if (xn != yn) {
-        return xn < yn ? -1 : 1;
-    }
-
-    return memcmp(x->name, y->name, xn);
+    return cmp_length_first(x->name, y->name);
 }
 
 int th_cmp_kw(const void *a, const void *b)
 {
     const th_kwparam *x = a, *y = b;
-    size_t            xn = strlen(x->name), yn = strlen(y->name);
 
-    if (xn != yn) {
-        return xn < yn ? -1 : 1;
-    }
-
-    return memcmp(x->name, y->name, xn);
+    return cmp_length_first(x->name, y->name);
 }
 
 typedef struct {
@@ -1408,8 +1420,7 @@ bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
         switch (resolved->kind) {
         case TH_NAMED:
             u8(encoded, resolved->named.is_variant ? 1 : 0);
-            if (!name(ctx, encoded, resolved->named.name,
-                      resolved->named.nlen)) return false;
+            if (!name(ctx, encoded, resolved->named.name)) return false;
             u64(encoded, 0);
             break;
         case TH_BITINT:
@@ -1463,17 +1474,17 @@ uint64_t th_hash(th_ctx *ctx, th_type *t)
     return XXH3_128bits_digest(&st).low64;
 }
 
-uint64_t th_arm_tag(const char *n)
+uint64_t th_arm_tag(core_string_t n)
 {
-    uint64_t t = XXH3_64bits(n, strlen(n));
+    uint64_t t = XXH3_64bits(n.data, n.u8_bytes);
 
     return t ? t : 1;
 }
 
-const char *th_anon_name(th_ctx *ctx, const char *path, uint64_t line,
-                         uint64_t col)
+core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
+                           uint64_t col)
 {
-    size_t       plen = strlen(path);
+    size_t       plen = path.u8_bytes;
     uint8_t      head[8];
     XXH3_state_t st;
 
@@ -1483,7 +1494,7 @@ const char *th_anon_name(th_ctx *ctx, const char *path, uint64_t line,
 
     XXH3_128bits_reset(&st);
     XXH3_128bits_update(&st, head, sizeof head);
-    XXH3_128bits_update(&st, path, plen);
+    XXH3_128bits_update(&st, path.data, plen);
 
     uint64_t at[2] = {line, col};
 
@@ -1499,10 +1510,9 @@ const char *th_anon_name(th_ctx *ctx, const char *path, uint64_t line,
     d = d ? d : 1;
 
     char *s = th_alloc(ctx, 32);
+    int   n = snprintf(s, 32, "_anon_%016llx", (unsigned long long)d);
 
-    snprintf(s, 32, "_anon_%016llx", (unsigned long long)d);
-
-    return s;
+    return core_string_borrow(s, n > 0 ? (size_t)n : 0);
 }
 
 static th_type *node(th_ctx *ctx, th_kind k)
@@ -1514,12 +1524,12 @@ static th_type *node(th_ctx *ctx, th_kind k)
     return t;
 }
 
-th_type *th_name(th_ctx *ctx, const char *n)
+th_type *th_name(th_ctx *ctx, core_string_t n)
 {
     return th_apply(ctx, n, nullptr, 0);
 }
 
-static th_type *make_named(th_ctx *ctx, const char *n, const th_arg *a,
+static th_type *make_named(th_ctx *ctx, core_string_t n, const th_arg *a,
                            size_t cnt, bool variant)
 {
     th_type *t = node(ctx, TH_NAMED);
@@ -1528,10 +1538,7 @@ static th_type *make_named(th_ctx *ctx, const char *n, const th_arg *a,
         return nullptr;
     }
 
-    size_t ln = strlen(n);
-
-    t->named.name       = th_strdup(ctx, n, ln);
-    t->named.nlen       = ln;
+    t->named.name       = th_strdup(ctx, n);
     t->named.is_variant = variant;
     t->named.nargs      = cnt;
 
@@ -1541,8 +1548,7 @@ static th_type *make_named(th_ctx *ctx, const char *n, const th_arg *a,
 
         for (size_t i = 0; i < cnt; i++) {
             if (t->named.args[i].kind == TH_ARG_STR) {
-                t->named.args[i].str.p = th_strdup(ctx, a[i].str.p,
-                                                   a[i].str.n);
+                t->named.args[i].str = th_strdup(ctx, a[i].str);
             }
         }
     }
@@ -1552,12 +1558,13 @@ static th_type *make_named(th_ctx *ctx, const char *n, const th_arg *a,
     return t;
 }
 
-th_type *th_apply(th_ctx *ctx, const char *n, const th_arg *a, size_t cnt)
+th_type *th_apply(th_ctx *ctx, core_string_t n, const th_arg *a, size_t cnt)
 {
     return make_named(ctx, n, a, cnt, false);
 }
 
-th_type *th_variant(th_ctx *ctx, const char *n, const th_arg *a, size_t cnt)
+th_type *th_variant(th_ctx *ctx, core_string_t n, const th_arg *a,
+                    size_t cnt)
 {
     return make_named(ctx, n, a, cnt, true);
 }
@@ -1592,16 +1599,20 @@ th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *r)
     return t;
 }
 
-bool th_indirection_attrs(const char *name, uint8_t *attrs)
+bool th_indirection_attrs(core_string_t name, uint8_t *attrs)
 {
-    if (!name || !attrs) return false;
-    if (!strcmp(name, "ref")) *attrs = 0;
-    else if (!strcmp(name, "ptr"))
+    if (!name.data || !attrs) return false;
+    if (core_string_eq(name, CORE_STRING_STATIC("ref"))) *attrs = 0;
+    else if (core_string_eq(name, CORE_STRING_STATIC("ptr")))
         *attrs = TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE;
-    else if (!strcmp(name, "mutref")) *attrs = TH_EXCLUSIVE;
-    else if (!strcmp(name, "own")) *attrs = TH_OWNING;
-    else if (!strcmp(name, "gcref")) *attrs = TH_NULLABLE | TH_RESEATABLE;
-    else if (!strcmp(name, "tmpref")) *attrs = TH_TEMPORARY;
+    else if (core_string_eq(name, CORE_STRING_STATIC("mutref")))
+        *attrs = TH_EXCLUSIVE;
+    else if (core_string_eq(name, CORE_STRING_STATIC("own")))
+        *attrs = TH_OWNING;
+    else if (core_string_eq(name, CORE_STRING_STATIC("gcref")))
+        *attrs = TH_NULLABLE | TH_RESEATABLE;
+    else if (core_string_eq(name, CORE_STRING_STATIC("tmpref")))
+        *attrs = TH_TEMPORARY;
     else return false;
     return true;
 }
@@ -1635,8 +1646,7 @@ th_type *th_record(th_ctx *ctx, const th_member *m, size_t n)
         t->record.members = th_alloc(ctx, n * sizeof(th_member));
 
         for (size_t i = 0; i < n; i++) {
-            t->record.members[i].name = th_strdup(ctx, m[i].name,
-                                                  strlen(m[i].name));
+            t->record.members[i].name = th_strdup(ctx, m[i].name);
             t->record.members[i].type = m[i].type;
         }
     }
@@ -1667,61 +1677,57 @@ static bool trait_requirement_key(th_ctx *ctx,
     enc_node(&encoder, out, requirement->subject);
     if (encoder.ok && requirement->target)
         enc_node(&encoder, out, requirement->target);
-    if (encoder.ok && requirement->iface)
-        encoder.ok = name(ctx, out, requirement->iface,
-                          strlen(requirement->iface));
+    if (encoder.ok && requirement->iface.data)
+        encoder.ok = name(ctx, out, requirement->iface);
     pm_free(&encoder.path);
     return encoder.ok;
 }
 
-th_type *th_trait(th_ctx *ctx, const char *qualified_name,
+th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
                   const th_member *methods, size_t n,
                   const th_trait_requirement *requirements, size_t nr)
 {
-    if (!ctx || !qualified_name || !th_name_syntax_valid(qualified_name,
-            strlen(qualified_name)) || (n && !methods)
+    if (!ctx || !qualified_name.data
+        || !th_name_syntax_valid(qualified_name) || (n && !methods)
         || (nr && !requirements)) return nullptr;
     for (size_t i = 0; i < n; i++) {
-        if (!methods[i].name || !methods[i].type ||
-            !th_name_syntax_valid(methods[i].name,
-                                  strlen(methods[i].name)) ||
-            strchr(methods[i].name, '.')) return nullptr;
+        if (!methods[i].name.data || !methods[i].type ||
+            !th_name_syntax_valid(methods[i].name) ||
+            core_string_find_byte(methods[i].name, '.') >= 0) return nullptr;
         for (size_t j = 0; j < i; j++)
-            if (!strcmp(methods[j].name, methods[i].name)) return nullptr;
+            if (core_string_eq(methods[j].name, methods[i].name))
+                return nullptr;
     }
     for (size_t i = 0; i < nr; i++) {
         const th_trait_requirement *requirement = &requirements[i];
         if (!requirement->subject) return nullptr;
         if (requirement->kind == TH_CON_EXCLUDES) {
-            if (!requirement->target || requirement->iface) return nullptr;
+            if (!requirement->target || requirement->iface.data)
+                return nullptr;
         }
         else if (requirement->kind == TH_CON_IMPLEMENTS) {
-            if (requirement->target || !requirement->iface
-                || !th_name_syntax_valid(requirement->iface,
-                                         strlen(requirement->iface)))
+            if (requirement->target || !requirement->iface.data
+                || !th_name_syntax_valid(requirement->iface))
                 return nullptr;
         }
         else return nullptr;
     }
     th_type *t = node(ctx, TH_TRAIT);
     if (!t) return nullptr;
-    t->trait.name = th_strdup(ctx, qualified_name, strlen(qualified_name));
-    t->trait.nlen = strlen(qualified_name);
+    t->trait.name = th_strdup(ctx, qualified_name);
     t->trait.n = n;
     t->trait.nr = nr;
     t->trait.methods = n ? th_alloc(ctx, n * sizeof(th_member)) : nullptr;
     t->trait.requirements = nr
         ? th_alloc(ctx, nr * sizeof(th_trait_requirement)) : nullptr;
     for (size_t i = 0; i < n; i++) {
-        t->trait.methods[i].name = th_strdup(ctx, methods[i].name,
-            strlen(methods[i].name));
+        t->trait.methods[i].name = th_strdup(ctx, methods[i].name);
         t->trait.methods[i].type = methods[i].type;
     }
     for (size_t i = 0; i < nr; i++) {
         t->trait.requirements[i] = requirements[i];
-        if (requirements[i].iface)
-            t->trait.requirements[i].iface = th_strdup(ctx,
-                requirements[i].iface, strlen(requirements[i].iface));
+        t->trait.requirements[i].iface = th_strdup(ctx,
+                                                   requirements[i].iface);
     }
     if (nr) {
         th_normalize(t);
@@ -1763,8 +1769,7 @@ void th_record_fill(th_ctx *ctx, th_type *stub, const th_member *m, size_t n)
         stub->record.members = th_alloc(ctx, n * sizeof(th_member));
 
         for (size_t i = 0; i < n; i++) {
-            stub->record.members[i].name = th_strdup(ctx, m[i].name,
-                                                     strlen(m[i].name));
+            stub->record.members[i].name = th_strdup(ctx, m[i].name);
             stub->record.members[i].type = m[i].type;
         }
     }
@@ -1797,7 +1802,7 @@ th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
         t->fn.kw = th_alloc(ctx, nkw * sizeof(th_kwparam));
 
         for (size_t i = 0; i < nkw; i++) {
-            t->fn.kw[i].name = th_strdup(ctx, kw[i].name, strlen(kw[i].name));
+            t->fn.kw[i].name = th_strdup(ctx, kw[i].name);
             t->fn.kw[i].mode = kw[i].mode;
             t->fn.kw[i].type = kw[i].type;
         }
@@ -1846,18 +1851,16 @@ th_type *th_var(th_ctx *ctx)
     t->var.index     = ctx->next_var++;
     t->var.origin    = atomic_fetch_add(&next_var_origin, 1);
     t->var.ref       = nullptr;
-    t->var.name      = nullptr;
+    t->var.name      = (core_string_t){};
 
     return t;
 }
 
-th_type *th_var_named(th_ctx *ctx, const char *name)
+th_type *th_var_named(th_ctx *ctx, core_string_t name)
 {
     th_type *t = th_var(ctx);
 
-    if (name) {
-        t->var.name = th_strdup(ctx, name, strlen(name));
-    }
+    t->var.name = th_strdup(ctx, name);
 
     return t;
 }
@@ -1871,7 +1874,7 @@ th_type *th_tuple(th_ctx *ctx, th_type *const *e, size_t n)
         a[i].type = e[i];
     }
 
-    th_type *t = th_apply(ctx, TH_TUPLE, a, n);
+    th_type *t = th_apply(ctx, CORE_STRING_STATIC(TH_TUPLE), a, n);
 
     core_free(a);
 

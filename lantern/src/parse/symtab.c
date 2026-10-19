@@ -446,12 +446,10 @@ bool
 parse_symtab_bind_nominal_type(parse_symtab_t *st, th_type *type,
                                parse_sym_entry_t *symbol)
 {
-    const char *name = nullptr;
-    size_t length = 0;
+    core_string_t key = {};
     if (!st || !type || !symbol || symbol->kind != PARSE_SYM_TYPEDEF
-        || !th_named_info(th_resolve(type), &name, &length, nullptr, nullptr))
+        || !th_named_info(th_resolve(type), &key, nullptr, nullptr))
         return false;
-    core_string_t key = core_string_borrow(name, length);
     parse_sym_entry_t *existing = core_dict_get(st->nominal_types, &key,
                                                 nullptr);
     if (existing) return existing == symbol;
@@ -465,11 +463,9 @@ parse_symtab_bind_nominal_type(parse_symtab_t *st, th_type *type,
 parse_sym_entry_t *
 parse_symtab_nominal_type(parse_symtab_t *st, th_type *type)
 {
-    const char *name = nullptr;
-    size_t length = 0;
-    if (!st || !type || !th_named_info(th_resolve(type), &name, &length, nullptr,
-                              nullptr)) return nullptr;
-    core_string_t key = core_string_borrow(name, length);
+    core_string_t key = {};
+    if (!st || !type || !th_named_info(th_resolve(type), &key, nullptr,
+                                       nullptr)) return nullptr;
     return core_dict_get(st->nominal_types, &key, nullptr);
 }
 
@@ -835,16 +831,17 @@ parse_sym_set_storage_duration(parse_sym_entry_t *symbol,
         symbol->storage_duration = duration;
 }
 
-const char *
+core_string_t
 parse_sym_storage_duration_name(parse_sym_storage_duration_t duration)
 {
-    static const char *const names[] = {
-        "unspecified", "comptime", "automatic", "module", "thread",
-        "dynamic",
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("unspecified"), CORE_STRING_STATIC("comptime"),
+        CORE_STRING_STATIC("automatic"),   CORE_STRING_STATIC("module"),
+        CORE_STRING_STATIC("thread"),      CORE_STRING_STATIC("dynamic"),
     };
     return duration >= PARSE_SYM_STORAGE_UNSPECIFIED
         && duration <= PARSE_SYM_STORAGE_DYNAMIC ? names[duration]
-        : "invalid";
+        : CORE_STRING_STATIC("invalid");
 }
 
 void

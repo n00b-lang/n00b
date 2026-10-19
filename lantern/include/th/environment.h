@@ -8,6 +8,7 @@
 #include "lib/object_archive.h"
 #include "lib/diagnostic.h"
 #include "lib/buffer.h"
+#include "lib/string.h"
 #include "th/typehash.h"
 
 typedef enum {
@@ -17,10 +18,10 @@ typedef enum {
 } th_env_visibility_t;
 
 typedef struct {
-  const char *qualified_name;
-  const char *root_name;
-  const char *module;
-  const char *package;
+  core_string_t qualified_name;
+  core_string_t root_name;
+  core_string_t module;
+  core_string_t package;
   th_type *signature;
   th_type *error_type;
   /* Canonical callable contract; jointly quantifies both channels. */
@@ -28,7 +29,7 @@ typedef struct {
 } th_env_method_t;
 
 typedef struct {
-  const char *trait_name;
+  core_string_t trait_name;
   th_type *signature;
   th_type *error_type;
   th_type *contract;
@@ -40,12 +41,12 @@ typedef struct {
 } th_env_dispatch_entry_t;
 
 typedef struct {
-  const char *method_name;
+  core_string_t method_name;
   th_env_method_t implementation;
 } th_env_vtable_slot_t;
 
 typedef struct {
-  const char *trait_name;
+  core_string_t trait_name;
   th_type *concrete_type;
   uint64_t concrete_type_hash;
   th_env_vtable_slot_t *slots;
@@ -79,14 +80,14 @@ typedef enum {
 
 typedef struct {
   th_env_compose_status_t status;
-  const char *identity;
-  const char *metadata_key;
+  core_string_t identity;
+  core_string_t metadata_key;
 } th_env_compose_error_t;
 
 typedef struct {
   th_env_metadata_owner_t owner_kind;
-  const char *owner_name;
-  const char *key;
+  core_string_t owner_name;
+  core_string_t key;
   uint32_t version;
   const uint8_t *data;
   size_t size;
@@ -116,10 +117,10 @@ typedef enum {
  * environment and remain valid while it is alive. */
 typedef struct {
   th_env_declaration_kind_t kind;
-  const char *qualified_name;
-  const char *root_name;
-  const char *module;
-  const char *package;
+  core_string_t qualified_name;
+  core_string_t root_name;
+  core_string_t module;
+  core_string_t package;
   th_env_visibility_t visibility;
   th_type *contract;
   th_env_type_shape_kind_t type_shape_kind;
@@ -166,16 +167,17 @@ th_env *th_env_compose_report_in_context(
 
 /* Save requires a frozen environment. A zero mapping_capacity selects an
  * automatic size with transient room for reconstituting the loaded graph. */
-bool th_env_save(const th_env *environment, const char *path,
+bool th_env_save(const th_env *environment, core_string_t path,
                  size_t mapping_capacity,
                  core_object_archive_error_t *error);
-th_env *th_env_load(const char *path, core_object_archive_error_t *error);
+th_env *th_env_load(core_string_t path, core_object_archive_error_t *error);
 
 typedef struct {
-  bool (*module)(void *context, const char *module);
+  bool (*module)(void *context, core_string_t module);
   bool (*metadata)(void *context, th_env_metadata_owner_t kind,
-                   const char *owner);
-  bool (*intrinsic)(void *context, const char *trait, const th_type *receiver);
+                   core_string_t owner);
+  bool (*intrinsic)(void *context, core_string_t trait,
+                    const th_type *receiver);
   void *context;
 } th_env_filter_t;
 
@@ -187,40 +189,41 @@ size_t th_env_declaration_count(const th_env *environment);
 bool th_env_declaration_at(const th_env *environment, size_t index,
                            th_env_declaration_view_t *out);
 
-bool th_env_register_type(th_env *environment, const char *qualified_type_name,
-                          const char *module, const char *package,
+bool th_env_register_type(th_env *environment,
+                          core_string_t qualified_type_name,
+                          core_string_t module, core_string_t package,
                           th_env_visibility_t visibility);
 /* A structural type definition is borrowed like a signature term and must
  * remain alive while the environment is queried. It is archived with the
  * frozen environment and reconciled when snapshots are composed. */
 bool th_env_register_type_shape(th_env *environment,
-                                const char *qualified_type_name,
+                                core_string_t qualified_type_name,
                                 th_env_type_shape_kind_t shape_kind,
                                 th_type *shape);
 th_type *th_env_type_shape(const th_ctx *context,
-                           const char *qualified_type_name,
+                           core_string_t qualified_type_name,
                            th_env_type_shape_kind_t *shape_kind);
 /* Trait method signatures use Lantern's canonical receiver-first shape:
  * parameter zero is the receiver, and its type must be an unbound type
  * variable. A frontend for a language with another receiver convention can
  * normalize the signature and provide an adapter for its source ABI. */
-bool th_env_register_trait(th_env *environment, const char *qualified_name,
-                           const char *module, const char *package,
+bool th_env_register_trait(th_env *environment, core_string_t qualified_name,
+                           core_string_t module, core_string_t package,
                            th_env_visibility_t visibility, th_type *methods);
 /* `methods` and `errors` are records with the same method names. The error
  * entries are attached to each function type before the reusable method
  * patterns are registered together. */
 bool th_env_register_trait_channels(
-    th_env *environment, const char *qualified_name, const char *module,
-    const char *package, th_env_visibility_t visibility, th_type *methods,
+    th_env *environment, core_string_t qualified_name, core_string_t module,
+    core_string_t package, th_env_visibility_t visibility, th_type *methods,
     th_type *errors);
 /* The method map holds reusable function-type patterns, including their
  * failure channels, with each value built by th_env_signature_contract().
  * Matching clones open graphs; explicit binders remain supported for
  * frontends that choose to provide them. */
 bool th_env_register_trait_contracts(
-    th_env *environment, const char *qualified_name, const char *module,
-    const char *package, th_env_visibility_t visibility,
+    th_env *environment, core_string_t qualified_name, core_string_t module,
+    core_string_t package, th_env_visibility_t visibility,
     th_type *method_contracts);
 /* Register an intrinsic type-pattern fact for a methodless marker trait.
  * This is for language/runtime builtins whose implementation cannot be
@@ -228,24 +231,26 @@ bool th_env_register_trait_contracts(
  * universally instantiated for each query; ordinary traits must continue to
  * derive implementations from matching functions. */
 bool th_env_register_intrinsic_type_pattern(th_env *environment,
-                                           const char *trait_name,
+                                           core_string_t trait_name,
                                            th_type *receiver_pattern);
-bool th_env_register_function(th_env *environment, const char *qualified_name,
-                              const char *root_name, const char *module,
-                              const char *package,
+bool th_env_register_function(th_env *environment,
+                              core_string_t qualified_name,
+                              core_string_t root_name, core_string_t module,
+                              core_string_t package,
                               th_env_visibility_t visibility,
                               th_type *signature);
 bool th_env_register_function_channels(
-    th_env *environment, const char *qualified_name, const char *root_name,
-    const char *module, const char *package,
+    th_env *environment, core_string_t qualified_name, core_string_t root_name,
+    core_string_t module, core_string_t package,
     th_env_visibility_t visibility, th_type *signature, th_type *error_type);
 bool th_env_register_function_contract(
-    th_env *environment, const char *qualified_name, const char *root_name,
-    const char *module, const char *package,
+    th_env *environment, core_string_t qualified_name, core_string_t root_name,
+    core_string_t module, core_string_t package,
     th_env_visibility_t visibility, th_type *contract);
-bool th_env_register_value(th_env *environment, const char *qualified_name,
-                           const char *root_name, const char *module,
-                           const char *package, th_env_visibility_t visibility,
+bool th_env_register_value(th_env *environment, core_string_t qualified_name,
+                           core_string_t root_name, core_string_t module,
+                           core_string_t package,
+                           th_env_visibility_t visibility,
                            th_type *value_type);
 th_type *th_env_signature_contract(th_ctx *context, th_type *signature,
                                    th_type *error_type);
@@ -259,13 +264,13 @@ bool th_env_signature_channels(th_ctx *context, th_type *contract,
  * process-local pointers. Views borrow storage owned by the environment. */
 bool th_env_register_metadata(th_env *environment,
                               th_env_metadata_owner_t owner_kind,
-                              const char *owner_name, const char *key,
+                              core_string_t owner_name, core_string_t key,
                               uint32_t version, const void *data, size_t size);
 /* Replace an existing metadata payload before freezing the environment.
  * The original owner and key must already exist. */
 bool th_env_replace_metadata(th_env *environment,
                              th_env_metadata_owner_t owner_kind,
-                             const char *owner_name, const char *key,
+                             core_string_t owner_name, core_string_t key,
                              uint32_t version, const void *data, size_t size);
 size_t th_env_metadata_count(const th_env *environment);
 bool th_env_metadata_at(const th_env *environment, size_t index,
@@ -284,31 +289,31 @@ bool th_env_is_frozen(const th_env *environment);
 
 /* Attach once, after the environment is frozen. It remains borrowed. */
 bool th_ctx_set_environment(th_ctx *context, const th_env *environment,
-                            const char *module, const char *package);
+                            core_string_t module, core_string_t package);
 const th_env *th_ctx_environment(const th_ctx *context);
 /* Changes the visibility perspective while retaining the attached snapshot. */
-bool th_ctx_set_environment_scope(th_ctx *context, const char *module,
-                                 const char *package);
+bool th_ctx_set_environment_scope(th_ctx *context, core_string_t module,
+                                 core_string_t package);
 bool th_env_type_visible(const th_ctx *context,
-                         const char *qualified_type_name);
+                         core_string_t qualified_type_name);
 bool th_env_implements(th_ctx *context, th_type *receiver,
-                       const char *trait_name);
+                       core_string_t trait_name);
 /* Resolves only against the receiver's concrete type. Origin and import
  * ordering only break ties between equivalent patterns; incomparable maximal
  * patterns are reported as ambiguous. */
 bool th_env_method_lookup(th_ctx *context, th_type *receiver,
-                          const char *trait_name, const char *method_name,
+                          core_string_t trait_name, core_string_t method_name,
                           th_env_method_t *method);
 th_env_method_status_t th_env_method_resolve(th_ctx *context, th_type *receiver,
-                                             const char *trait_name,
-                                             const char *method_name,
+                                             core_string_t trait_name,
+                                             core_string_t method_name,
                                              th_env_method_t *method);
 /* Resolve receiver.method_name across visible traits implemented by receiver.
  * The candidate with the most specific first-parameter type wins. Equivalent
  * candidates use type-origin priority; incomparable winners are ambiguous. */
 th_env_method_status_t th_env_method_resolve_by_name(
-    th_ctx *context, th_type *receiver, const char *method_name,
-    th_env_method_t *method, const char **trait_name);
+    th_ctx *context, th_type *receiver, core_string_t method_name,
+    th_env_method_t *method, core_string_t *trait_name);
 /* Structural pattern subsumption; constraints on variables are not checked.
  * Neither input is bound. */
 bool th_env_type_pattern_subsumes(const th_type *general,
@@ -323,8 +328,8 @@ bool th_env_type_pattern_accepts(th_ctx *context, const th_type *pattern,
  * layer. This is the candidate set for building a trait-value runtime dispatch
  * table; unlike method_resolve(), it does not select for one receiver type.
  * Returns the total count even when `max_methods` is smaller. */
-size_t th_env_method_candidates(th_ctx *context, const char *trait_name,
-                                const char *method_name,
+size_t th_env_method_candidates(th_ctx *context, core_string_t trait_name,
+                                core_string_t method_name,
                                 th_env_method_t *methods, size_t max_methods);
 /* Resolve one target for every concrete receiver type a compiler knows can
  * reach a trait-valued call. On success, entries preserve receiver order;
@@ -332,7 +337,7 @@ size_t th_env_method_candidates(th_ctx *context, const char *trait_name,
  * every receiver selects the same function, `direct_call` is true and codegen
  * may omit a runtime type switch. No partial plan is written on failure. */
 th_env_method_status_t th_env_method_plan_dispatch(
-    th_ctx *context, const char *trait_name, const char *method_name,
+    th_ctx *context, core_string_t trait_name, core_string_t method_name,
     th_type *const *receiver_types, size_t receiver_count,
     th_env_dispatch_entry_t *entries, size_t capacity,
     size_t *required_count, bool *direct_call);
@@ -341,7 +346,7 @@ th_env_method_status_t th_env_method_plan_dispatch(
  * plan is validated before any caller buffer is written; required_count is
  * set only on success and may exceed capacity. */
 th_env_method_status_t th_env_trait_vtable_plan(
-    th_ctx *context, const char *trait_name, th_type *concrete_type,
+    th_ctx *context, core_string_t trait_name, th_type *concrete_type,
     th_env_vtable_slot_t *slots, size_t capacity, size_t *required_count,
     th_env_vtable_plan_t *plan);
 /* Enumerate visible trait contracts declaring `method_name`. Returned
@@ -350,7 +355,7 @@ th_env_method_status_t th_env_trait_vtable_plan(
  * are preserved. Names borrow from the frozen environment. Returns the total
  * count even when `max_requirements` is smaller. */
 size_t th_env_method_requirements(
-    th_ctx *context, const char *method_name,
+    th_ctx *context, core_string_t method_name,
     th_env_method_requirement_t *requirements, size_t max_requirements);
 
 #endif

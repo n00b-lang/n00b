@@ -170,12 +170,13 @@ literal_result_own(scan_lex_literal_borrowed_result_t borrowed,
         || result.diagnostic_end > spelling_bytes) {
         scan_lex_literal_result_free(&result);
         result.accepted = false;
-        result.diagnostic = core_string_from_cstr(
-            "literal hook returned an invalid diagnostic span");
+        result.diagnostic = core_string_dup(CORE_STRING_STATIC(
+            "literal hook returned an invalid diagnostic span"));
         result.diagnostic_end = spelling_bytes;
     }
     if (!result.accepted && !result.diagnostic.data) {
-        result.diagnostic = core_string_from_cstr("literal hook rejected input");
+        result.diagnostic =
+            core_string_dup(CORE_STRING_STATIC("literal hook rejected input"));
         result.diagnostic_end = spelling_bytes;
     }
     return result;

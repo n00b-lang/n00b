@@ -6,8 +6,8 @@
 #include "ir/walk.h"
 
 static void say(ir_diags_t *d, ir_diagcode_t code, const ir_instr_t *in,
-                const ir_block_t *b, const ir_func_t *f, const char *label,
-                const char *fmt, const char *name)
+                const ir_block_t *b, const ir_func_t *f, core_string_t label,
+                core_string_t prefix, core_string_t name, core_string_t suffix)
 {
     ir_diag_t *dg = ir_diag_begin_at(d, code, in, b, f, label);
 
@@ -17,12 +17,14 @@ static void say(ir_diags_t *d, ir_diagcode_t code, const ir_instr_t *in,
 
     core_buffer_t *sb = core_buffer_empty();
 
-    core_buffer_printf(sb, fmt, name);
+    core_buffer_append_string(sb, prefix);
+    core_buffer_append_string(sb, name);
+    core_buffer_append_string(sb, suffix);
 
-    char *msg = core_buffer_take(sb);
+    core_string_t msg = core_buffer_take_string(sb);
 
     ir_diag_message(dg, d, msg);
-    core_free(msg);
+    core_free(msg.data);
 }
 
 typedef struct {
@@ -57,8 +59,9 @@ static bool analyze_block(ir_visit_t *vi)
 
     if (b->index) {
         say(a->d, IR_DIAG_DEAD_CODE, b->n_instrs ? b->instrs[0] : nullptr, b,
-            vi->func, "this block",
-            "no path from the entry block reaches %s", b->name);
+            vi->func, CORE_STRING_STATIC("this block"),
+            CORE_STRING_STATIC("no path from the entry block reaches "),
+            b->name, CORE_STRING_STATIC(""));
     }
 
     return false;
@@ -72,8 +75,8 @@ static bool analyze_operand(ir_visit_t *vi)
     if (l && !ir_local_read_earlier(vi->instr, vi->index, l)
         && ir_rd_maybe_unset(a->rd, vi->instr, l)) {
         say(a->d, IR_DIAG_UNSET_LOCAL, vi->instr, vi->block, vi->func,
-            "this read", "$%s is read on a path that does not assign it",
-            l->name);
+            CORE_STRING_STATIC("this read"), CORE_STRING_STATIC("$"), l->name,
+            CORE_STRING_STATIC(" is read on a path that does not assign it"));
     }
 
     return true;
@@ -87,9 +90,9 @@ static bool analyze_instr_end(ir_visit_t *vi)
     if (in->dest_kind == IR_DEST_LOCAL && in->dest_local
         && !ir_rd_reaches_a_use(a->rd, in)) {
         say(a->d, IR_DIAG_UNUSED_LOCAL, in, vi->block, vi->func,
-            "this assignment",
-            "$%s is assigned here and no read of it is reached",
-            in->dest_local->name);
+            CORE_STRING_STATIC("this assignment"), CORE_STRING_STATIC("$"),
+            in->dest_local->name,
+            CORE_STRING_STATIC(" is assigned here and no read of it is reached"));
     }
 
     return true;

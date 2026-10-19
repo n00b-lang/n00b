@@ -7,7 +7,7 @@ typedef struct {
     ir_func_t *source;
     ir_func_t *copy;
     th_type_cloner_t *cloner;
-    const char **failure;
+    core_string_t *failure;
 } clone_t;
 
 static th_type *clone_type(clone_t *c, th_type *type)
@@ -15,7 +15,7 @@ static th_type *clone_type(clone_t *c, th_type *type)
     if (!type) return nullptr;
     th_type *result = th_type_cloner_clone(c->cloner, type);
     if (!result) {
-        if (c->failure) *c->failure = "type substitution";
+        if (c->failure) *c->failure = CORE_STRING_STATIC("type substitution");
         return nullptr;
     }
     result = ir_type_intern(c->copy->owner, result);
@@ -25,11 +25,11 @@ static th_type *clone_type(clone_t *c, th_type *type)
     if (!definition) return result;
     th_type *bound = th_type_cloner_clone(c->cloner, definition);
     if (!bound) {
-        if (c->failure) *c->failure = "record definition substitution";
+        if (c->failure) *c->failure = CORE_STRING_STATIC("record definition substitution");
         return nullptr;
     }
     if (!ir_type_define(c->copy->owner, result, bound)) {
-        if (c->failure) *c->failure = "record definition conflict";
+        if (c->failure) *c->failure = CORE_STRING_STATIC("record definition conflict");
         return nullptr;
     }
     return result;
@@ -107,11 +107,15 @@ static bool clone_annots(clone_t *c, ir_annots_t *destination,
 {
     for (uint32_t i = 0; i < source->n; i++) {
         ir_annot_t annotation = source->a[i];
-        if (!strncmp(annotation.key, "ir.alias", 8)
-            || !strncmp(annotation.key, "ir.aliased_by", 13)
-            || !strncmp(annotation.key, "ir.lifetime", 11)) continue;
+        if (core_string_starts_with(annotation.key,
+                                    CORE_STRING_STATIC("ir.alias"))
+            || core_string_starts_with(annotation.key,
+                                       CORE_STRING_STATIC("ir.lifetime")))
+            continue;
         if (c->failure) *c->failure = annotation.key;
-        if (!strcmp(annotation.key, "ir.callable_contract")) continue;
+        if (core_string_eq(annotation.key,
+                           CORE_STRING_STATIC("ir.callable_contract")))
+            continue;
         if (annotation.kind == IR_ANNOT_TYPE) {
             annotation.t = clone_type(c, annotation.t);
             if (!annotation.t) return false;
@@ -131,7 +135,7 @@ static bool clone_value_details(clone_t *c, ir_value_t *source,
     copy->is_keyword = source->is_keyword;
     copy->is_rest = source->is_rest;
     copy->is_optional = source->is_optional;
-    if (c->failure) *c->failure = "value shape";
+    if (c->failure) *c->failure = CORE_STRING_STATIC("value shape");
     copy->shape = source->shape ? clone_shape(c, source->shape) : nullptr;
     return (!source->shape || copy->shape)
         && clone_annots(c, &copy->annots, &source->annots);
@@ -173,35 +177,35 @@ static bool clone_operand(clone_t *c, ir_operand_t *operand)
     }
 }
 
-ir_func_t *ir_func_clone_replacing(ir_func_t *source, const char *name,
+ir_func_t *ir_func_clone_replacing(ir_func_t *source, core_string_t name,
                                   const th_type *const *from,
                                   th_type *const *to, size_t count,
-                                  const char **failure)
+                                  core_string_t *failure)
 {
     return ir_func_clone_into(source, source ? source->owner : nullptr, name,
                               from, to, count, failure);
 }
 
 static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
-                                 const char *name, th_type_cloner_t *cloner,
-                                 const char **failure)
+                                 core_string_t name, th_type_cloner_t *cloner,
+                                 core_string_t *failure)
 {
     clone_t c = {.source = source, .cloner = cloner, .failure = failure};
-    if (failure) *failure = "function signature";
+    if (failure) *failure = CORE_STRING_STATIC("function signature");
     th_type *signature = th_type_cloner_clone(cloner, source->type);
     if (!signature) return nullptr;
     c.copy = ir_func_add(module, name, signature, IR_LINK_INTERNAL);
     if (!c.copy) return nullptr;
     c.copy->span = source->span;
     c.copy->origin = source->origin;
-    if (failure) *failure = "parameters";
+    if (failure) *failure = CORE_STRING_STATIC("parameters");
     for (uint32_t i = 0; i < source->n_params; i++) {
         ir_value_t *original = source->params[i];
         th_type *type = clone_type(&c, original->type);
         if (!type || !ir_param_add(c.copy, original->name, type))
             return nullptr;
     }
-    if (failure) *failure = "locals";
+    if (failure) *failure = CORE_STRING_STATIC("locals");
     for (uint32_t i = 0; i < source->n_locals; i++) {
         ir_local_t *original = source->locals[i];
         th_type *type = clone_type(&c, original->type);
@@ -210,12 +214,12 @@ static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
         if (original->value && !ir_local_value(c.copy, c.copy->locals[i]))
             return nullptr;
     }
-    if (failure) *failure = "blocks";
+    if (failure) *failure = CORE_STRING_STATIC("blocks");
     for (uint32_t b = 0; b < source->n_blocks; b++) {
         ir_block_t *original = source->blocks[b];
         if (!ir_block_add(c.copy, original->name)) return nullptr;
     }
-    if (failure) *failure = "instruction destinations";
+    if (failure) *failure = CORE_STRING_STATIC("instruction destinations");
     for (uint32_t b = 0; b < source->n_blocks; b++) {
         ir_block_t *original = source->blocks[b];
         ir_block_t *copy = c.copy->blocks[b];
@@ -227,7 +231,9 @@ static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
                 th_type *type = clone_type(&c, old->dest->type);
                 if (!type) return nullptr;
                 if (!ir_instr_set_dest(new, old->dest->name, type)) {
-                    if (failure) *failure = "instruction destination rejected";
+                    if (failure)
+                        *failure = CORE_STRING_STATIC(
+                            "instruction destination rejected");
                     return nullptr;
                 }
             } else if (old->dest_local) {
@@ -236,19 +242,19 @@ static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
             }
         }
     }
-    if (failure) *failure = "function metadata";
+    if (failure) *failure = CORE_STRING_STATIC("function metadata");
     if (!ir_func_set_callable_contract(c.copy, c.copy->type)) return nullptr;
     if (!clone_annots(&c, &c.copy->annots, &source->annots)) return nullptr;
-    if (failure) *failure = "parameter metadata";
+    if (failure) *failure = CORE_STRING_STATIC("parameter metadata");
     for (uint32_t i = 0; i < source->n_params; i++) {
-        if (failure) *failure = "optional parameter";
+        if (failure) *failure = CORE_STRING_STATIC("optional parameter");
         if (ir_func_parameter_is_optional(source, i)
             && !ir_func_set_parameter_optional(c.copy, i, true))
             return nullptr;
         if (!clone_value_details(&c, source->params[i], c.copy->params[i]))
             return nullptr;
     }
-    if (failure) *failure = "local metadata";
+    if (failure) *failure = CORE_STRING_STATIC("local metadata");
     for (uint32_t i = 0; i < source->n_locals; i++) {
         ir_local_t *old = source->locals[i];
         ir_local_t *new = c.copy->locals[i];
@@ -267,7 +273,8 @@ static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
         if (old->value && !clone_value_details(&c, old->value, new->value))
             return nullptr;
     }
-    if (failure) *failure = "instruction metadata or operands";
+    if (failure)
+        *failure = CORE_STRING_STATIC("instruction metadata or operands");
     for (uint32_t b = 0; b < source->n_blocks; b++) {
         ir_block_t *old_block = source->blocks[b];
         ir_block_t *new_block = c.copy->blocks[b];
@@ -303,18 +310,18 @@ static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
             }
         }
     }
-    if (failure) *failure = nullptr;
+    if (failure) *failure = (core_string_t){};
     return c.copy;
 }
 
 ir_func_t *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
-                              const char *name, const th_type *const *from,
+                              core_string_t name, const th_type *const *from,
                               th_type *const *to, size_t count,
-                              const char **failure)
+                              core_string_t *failure)
 {
-    if (failure) *failure = "invalid clone request";
-    if (!source || !module || module->ctx != source->owner->ctx || !name
-        || !*name || (count && (!from || !to)))
+    if (failure) *failure = CORE_STRING_STATIC("invalid clone request");
+    if (!source || !module || module->ctx != source->owner->ctx || !name.data
+        || !name.u8_bytes || (count && (!from || !to)))
         return nullptr;
     th_type_cloner_t *cloner = th_type_cloner_new(
         ir_ctx_types(source->owner->ctx), from, to, count);

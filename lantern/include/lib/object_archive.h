@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "lib/persist_arena.h"
+#include "lib/string.h"
 
 typedef struct core_object_archive_registry core_object_archive_registry_t;
 typedef struct core_object_archive core_object_archive_t;
@@ -22,7 +23,7 @@ typedef enum {
   CORE_OBJECT_ARCHIVE_CALLBACK_FAILED,
   CORE_OBJECT_ARCHIVE_OUT_OF_SPACE,
 } core_object_archive_error_t;
-const char *core_object_archive_error_string(
+core_string_t core_object_archive_error_string(
     core_object_archive_error_t error);
 
 typedef void *(*core_object_allocate_fn)(core_persist_arena_t *arena,
@@ -60,7 +61,7 @@ bool core_object_writer_bytes(core_object_writer_t *writer, const void *data,
 bool core_object_writer_u32(core_object_writer_t *writer, uint32_t value);
 bool core_object_writer_u64(core_object_writer_t *writer, uint64_t value);
 bool core_object_writer_string(core_object_writer_t *writer,
-                               const char *value);
+                               core_string_t value);
 /* A null reference may use type_id 0; non-null references require a registered
  * nonzero type ID. */
 bool core_object_writer_ref(core_object_writer_t *writer, uint64_t type_id,
@@ -72,7 +73,8 @@ void *core_object_reader_alloc(core_object_reader_t *reader, size_t size,
                                size_t alignment);
 bool core_object_reader_u32(core_object_reader_t *reader, uint32_t *out);
 bool core_object_reader_u64(core_object_reader_t *reader, uint64_t *out);
-bool core_object_reader_string(core_object_reader_t *reader, char **out);
+bool core_object_reader_string(core_object_reader_t *reader,
+                               core_string_t *out);
 /* A nonzero type ID requires an exact match. Zero accepts any registered type;
  * null references are accepted for either form. */
 bool core_object_reader_ref(core_object_reader_t *reader, uint64_t type_id,
@@ -86,12 +88,12 @@ bool core_object_reader_ref(core_object_reader_t *reader, uint64_t type_id,
  * All loaded object pointers are borrowed from the archive and expire on close;
  * optional finalize hooks run after every object's references are restored;
  * destroy hooks release codec-owned external resources on failure or close. */
-bool core_object_archive_save(const char *path, size_t capacity,
+bool core_object_archive_save(core_string_t path, size_t capacity,
                              uint64_t abi_tag,
                              core_object_archive_registry_t *registry,
                              uint64_t root_type_id, const void *root,
                              core_object_archive_error_t *error);
-bool core_object_archive_load(const char *path, uint64_t abi_tag,
+bool core_object_archive_load(core_string_t path, uint64_t abi_tag,
                              core_object_archive_registry_t *registry,
                              core_object_archive_t **out,
                              core_object_archive_error_t *error);

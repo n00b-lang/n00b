@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/string.h"
 #include "lib/target.h"
 
 typedef struct {
@@ -49,7 +50,7 @@ typedef struct {
  * object is invalid or the requested section is absent. */
 bool core_object_section_find(const void *image, size_t image_size,
                               core_target_object_format_t format,
-                              const char *segment, const char *name,
+                              core_string_t segment, core_string_t name,
                               core_object_section_t *out);
 
 /* Native section indexes are one-based. `count` is the largest native

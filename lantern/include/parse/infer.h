@@ -53,9 +53,9 @@ struct parse_infer_expr_t {
 parse_infer_expr_t *parse_infer_parse(core_string_t expr);
 parse_infer_expr_t *parse_infer_clone(const parse_infer_expr_t *e);
 void              parse_infer_free(parse_infer_expr_t *e);
-char             *parse_infer_print(const parse_infer_expr_t *e);
-const char       *parse_infer_kind_name(parse_infer_kind_t k);
-const char       *parse_infer_proj_name(parse_infer_proj_t p);
+core_string_t     parse_infer_print(const parse_infer_expr_t *e);
+core_string_t     parse_infer_kind_name(parse_infer_kind_t k);
+core_string_t     parse_infer_proj_name(parse_infer_proj_t p);
 
 typedef struct parse_infer_lower_t parse_infer_lower_t;
 

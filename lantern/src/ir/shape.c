@@ -20,19 +20,19 @@ ir_instr_set_array_init(ir_ctx_t *ctx, ir_instr_t *instruction,
         || (instruction->op != IR_OP_ARRAY_NEW
             && instruction->op != IR_OP_ARRAY_NEW_USING))
         return false;
-    const char *name = nullptr;
+    core_string_t name = {};
     switch (initialization) {
     case IR_ARRAY_INIT_LANGUAGE_ZERO:
-        name = "language_zero";
+        name = CORE_STRING_STATIC("language_zero");
         break;
     case IR_ARRAY_INIT_UNINITIALIZED:
-        name = "uninitialized";
+        name = CORE_STRING_STATIC("uninitialized");
         break;
     default:
         return false;
     }
     return ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
-        .key = "ir.array.element_initialization",
+        .key = CORE_STRING_STATIC("ir.array.element_initialization"),
         .kind = IR_ANNOT_STR,
         .s = name,
     });
@@ -48,14 +48,15 @@ ir_instr_array_init(const ir_instr_t *instruction,
         || !initialization) return false;
     ir_annot_t *annotation = ir_annot_get(
         (ir_annots_t *)&instruction->annots,
-        "ir.array.element_initialization");
-    if (!annotation || annotation->kind != IR_ANNOT_STR || !annotation->s)
+        CORE_STRING_STATIC("ir.array.element_initialization"));
+    if (!annotation || annotation->kind != IR_ANNOT_STR
+        || !annotation->s.data)
         return false;
-    if (!strcmp(annotation->s, "language_zero")) {
+    if (core_string_eq(annotation->s, CORE_STRING_STATIC("language_zero"))) {
         *initialization = IR_ARRAY_INIT_LANGUAGE_ZERO;
         return true;
     }
-    if (!strcmp(annotation->s, "uninitialized")) {
+    if (core_string_eq(annotation->s, CORE_STRING_STATIC("uninitialized"))) {
         *initialization = IR_ARRAY_INIT_UNINITIALIZED;
         return true;
     }
@@ -124,16 +125,16 @@ ir_shape_set_extent(ir_shape_t *shape, uint32_t dimension,
     switch (extent.kind) {
     case IR_SHAPE_EXTENT_UNRESOLVED:
         if (extent.value || extent.expression || extent.producer
-            || extent.producer_identifier) return false;
+            || extent.producer_identifier.data) return false;
         break;
     case IR_SHAPE_EXTENT_STATIC:
         if (extent.expression || extent.producer
-            || extent.producer_identifier)
+            || extent.producer_identifier.data)
             return false;
         break;
     case IR_SHAPE_EXTENT_COMPTIME:
         if (!extent.value && !extent.expression && !extent.producer
-            && !extent.producer_identifier)
+            && !extent.producer_identifier.data)
             return false;
         if (extent.producer
             && ir_func_execution_phase(extent.producer)
@@ -141,7 +142,7 @@ ir_shape_set_extent(ir_shape_t *shape, uint32_t dimension,
         break;
     case IR_SHAPE_EXTENT_RUNTIME:
         if (extent.producer
-            || extent.producer_identifier)
+            || extent.producer_identifier.data)
             return false;
         break;
     default:

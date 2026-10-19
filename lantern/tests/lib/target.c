@@ -23,7 +23,7 @@ static const core_target_atomic_t alternate_atomics[] = {
 int main(void)
 {
     core_target_desc_t target = {
-        .triple = "test-64",
+        .triple = CORE_STRING_STATIC("test-64"),
         .endian = CORE_TARGET_LITTLE_ENDIAN,
         .object_format = CORE_TARGET_OBJECT_ELF,
         .call_abi = CORE_TARGET_CALL_OTHER,
@@ -86,15 +86,15 @@ int main(void)
           !core_target_validate(&target));
 
     static const struct {
-        const char *triple;
+        core_string_t triple;
         core_target_object_format_t object_format;
         core_target_call_abi_t call_abi;
     } profiles[] = {
-        {"x86_64-linux", CORE_TARGET_OBJECT_ELF,
+        {CORE_STRING_STATIC("x86_64-linux"), CORE_TARGET_OBJECT_ELF,
          CORE_TARGET_CALL_SYSV_AMD64},
-        {"arm64-macos", CORE_TARGET_OBJECT_MACH_O,
+        {CORE_STRING_STATIC("arm64-macos"), CORE_TARGET_OBJECT_MACH_O,
          CORE_TARGET_CALL_DARWIN_AARCH64},
-        {"x86_64-windows", CORE_TARGET_OBJECT_COFF,
+        {CORE_STRING_STATIC("x86_64-windows"), CORE_TARGET_OBJECT_COFF,
          CORE_TARGET_CALL_WINDOWS_X64},
     };
     for (size_t i = 0; i < sizeof(profiles) / sizeof(profiles[0]); i++) {
@@ -102,7 +102,7 @@ int main(void)
         check("known profile", core_target_profile(profiles[i].triple, 0,
                                                      &profile));
         check("profile identity and native convention",
-              !strcmp(profile.triple, profiles[i].triple)
+              core_string_eq(profile.triple, profiles[i].triple)
                   && profile.endian == CORE_TARGET_LITTLE_ENDIAN
                   && profile.object_format == profiles[i].object_format
                   && profile.call_abi == profiles[i].call_abi
@@ -125,13 +125,17 @@ int main(void)
                   CORE_TARGET_FEATURE_NATIVE_ATOMIC128, &profile)
                   && core_target_atomic_for_bits(&profile, 128));
     }
-    core_target_desc_t untouched = {.triple = "unchanged"};
+    core_target_desc_t untouched = {
+        .triple = CORE_STRING_STATIC("unchanged"),
+    };
     check("unknown profile leaves output untouched",
-          !core_target_profile("unknown", 0, &untouched)
-              && !strcmp(untouched.triple, "unchanged"));
+          !core_target_profile(CORE_STRING_STATIC("unknown"), 0, &untouched)
+              && core_string_eq(untouched.triple,
+                                CORE_STRING_STATIC("unchanged")));
     check("unknown feature leaves output untouched",
-          !core_target_profile("x86_64-linux", UINT64_C(1) << 63,
-                               &untouched)
-              && !strcmp(untouched.triple, "unchanged"));
+          !core_target_profile(CORE_STRING_STATIC("x86_64-linux"),
+                               UINT64_C(1) << 63, &untouched)
+              && core_string_eq(untouched.triple,
+                                CORE_STRING_STATIC("unchanged")));
     return report("lib-target");
 }

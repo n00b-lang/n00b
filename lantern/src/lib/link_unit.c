@@ -460,18 +460,17 @@ finish_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
 
 static bool
 link_report_at(core_link_unit_t *link, const core_translation_unit_t *unit,
-               core_diag_location_t location, const char *code,
-               const char *message)
+               core_diag_location_t location, core_string_t code,
+               core_string_t message)
 {
     link->validated = false;
     return core_diagnostics_report_at(link->diagnostics, unit,
-        CORE_DIAG_FATAL, core_string_from_cstr(code),
-        core_string_from_cstr(message), location);
+        CORE_DIAG_FATAL, code, message, location);
 }
 
 static bool
 link_report(core_link_unit_t *link, const core_translation_unit_t *unit,
-            const char *code, const char *message)
+            core_string_t code, core_string_t message)
 {
     return link_report_at(link, unit, (core_diag_location_t){0}, code,
                           message);
@@ -495,8 +494,8 @@ collect_one(core_link_unit_t *link, core_translation_unit_t *unit,
     bool found = false;
     core_dict_get(&link->module_index, &unit->module.identifier, &found);
     if (found) {
-        link_report(link, unit, "LANTERN-L0001",
-            "link unit contains distinct translation units with the same module identity");
+        link_report(link, unit, CORE_STRING_STATIC("LANTERN-L0001"),
+            CORE_STRING_STATIC("link unit contains distinct translation units with the same module identity"));
         *valid = false;
     }
     else core_dict_add(&link->module_index, &unit->module.identifier, unit);
@@ -764,13 +763,13 @@ core_link_unit_add_root(core_link_unit_t *link, core_translation_unit_t *root)
     if (core_dict_contains(&link->root_index, root)) return true;
     if (core_dict_contains(&link->root_module_index,
                            &root->module.identifier)) {
-        link_report(link, root, "LANTERN-L0001",
-            "link unit contains distinct translation units with the same module identity");
+        link_report(link, root, CORE_STRING_STATIC("LANTERN-L0001"),
+            CORE_STRING_STATIC("link unit contains distinct translation units with the same module identity"));
         return false;
     }
     if (link->graph_finalized) {
-        link_report(link, root, "LANTERN-L0005",
-            "cannot add a root after the link-unit graph is finalized");
+        link_report(link, root, CORE_STRING_STATIC("LANTERN-L0005"),
+            CORE_STRING_STATIC("cannot add a root after the link-unit graph is finalized"));
         return false;
     }
     if (!core_list_reserve_raw((void **)&link->roots, &link->root_capacity,
@@ -806,8 +805,8 @@ core_link_unit_collect(core_link_unit_t *link)
         return link->collection_valid;
     if (graph_snapshot_current(link)) return link->collection_valid;
     if (link->graph_finalized) {
-        link_report(link, nullptr, "LANTERN-L0006",
-            "finalized link-unit graph changed unexpectedly");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0006"),
+            CORE_STRING_STATIC("finalized link-unit graph changed unexpectedly"));
         return false;
     }
     link->collected = false;
@@ -825,8 +824,8 @@ core_link_unit_collect(core_link_unit_t *link)
     invalidate_stages(link);
     link->collection_valid = true;
     if (!link->root_count) {
-        link_report(link, nullptr, "LANTERN-L0002",
-                    "link unit requires at least one root translation unit");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0002"),
+                    CORE_STRING_STATIC("link unit requires at least one root translation unit"));
         link->collection_valid = false;
     }
     for (size_t i = 0; i < link->root_count; i++)
@@ -910,8 +909,8 @@ run_stage_at(core_link_unit_t *link, size_t index)
         || stage->state == CORE_LINK_STAGE_UNAVAILABLE) return false;
     if (stage->state == CORE_LINK_STAGE_RUNNING) {
         stage->state = CORE_LINK_STAGE_FAILED;
-        link_report(link, nullptr, "LANTERN-L0007",
-                    "link-unit analysis stages contain a prerequisite cycle");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0007"),
+                    CORE_STRING_STATIC("link-unit analysis stages contain a prerequisite cycle"));
         return false;
     }
     stage->state = CORE_LINK_STAGE_RUNNING;
@@ -923,8 +922,8 @@ run_stage_at(core_link_unit_t *link, size_t index)
             find_stage(link, stage->prerequisites[i]);
         if (!prereq) {
             stage->state = CORE_LINK_STAGE_FAILED;
-            link_report(link, nullptr, "LANTERN-L0008",
-                        "link-unit analysis stage has an unregistered prerequisite");
+            link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0008"),
+                        CORE_STRING_STATIC("link-unit analysis stage has an unregistered prerequisite"));
             return false;
         }
         size_t prereq_index = (size_t)(prereq - link->stages);
@@ -933,16 +932,16 @@ run_stage_at(core_link_unit_t *link, size_t index)
                 ? CORE_LINK_STAGE_UNAVAILABLE : CORE_LINK_STAGE_FAILED;
             if (stage->state == CORE_LINK_STAGE_FAILED
                 && !link_has_failures(link))
-                link_report(link, nullptr, "LANTERN-L0009",
-                            "link-unit analysis stage prerequisite failed");
+                link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0009"),
+                            CORE_STRING_STATIC("link-unit analysis stage prerequisite failed"));
             return false;
         }
     }
 
     if (stage->requires_finalized_graph && !link->graph_finalized) {
         stage->state = CORE_LINK_STAGE_FAILED;
-        link_report(link, nullptr, "LANTERN-L0010",
-                    "link-unit analysis stage requires a finalized import graph");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0010"),
+                    CORE_STRING_STATIC("link-unit analysis stage requires a finalized import graph"));
         return false;
     }
     if (link->stage_failed || core_link_unit_has_fatal_diagnostics(link)) {
@@ -963,8 +962,8 @@ run_stage_at(core_link_unit_t *link, size_t index)
                                    CORE_LINK_STAGE_RESULT_FAILED);
         remove_stage_artifacts(link, nullptr, kind);
         finish_stage_dependencies(link, kind);
-        link_report(link, nullptr, "LANTERN-L0013",
-                    "link-unit graph changed while an analysis stage was running");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0013"),
+                    CORE_STRING_STATIC("link-unit graph changed while an analysis stage was running"));
         return false;
     }
     if (core_link_unit_has_fatal_diagnostics(link)) {
@@ -994,8 +993,8 @@ run_stage_at(core_link_unit_t *link, size_t index)
         finish_stage_dependencies(link, kind);
         link->stage_failed = true;
         if (!link_has_failures(link))
-            link_report(link, nullptr, "LANTERN-L0011",
-                        "link-unit analysis stage failed without a diagnostic");
+            link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0011"),
+                        CORE_STRING_STATIC("link-unit analysis stage failed without a diagnostic"));
         return false;
     }
 }
@@ -1006,8 +1005,8 @@ core_link_unit_run_stage(core_link_unit_t *link, uint32_t stage_kind)
     if (!link || !core_link_unit_collect(link)) return false;
     core_link_stage_record_t *stage = find_stage(link, stage_kind);
     if (!stage) {
-        link_report(link, nullptr, "LANTERN-L0012",
-                    "requested link-unit analysis stage is not registered");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0012"),
+                    CORE_STRING_STATIC("requested link-unit analysis stage is not registered"));
         return false;
     }
     return run_stage_at(link, (size_t)(stage - link->stages));
@@ -1280,31 +1279,34 @@ register_declaration(core_link_unit_t *link, core_string_t module,
         ? decl->compatible : metadata->compatible;
     void *compare_context = decl->compatible
         ? decl->compatibility_context : metadata->compatibility_context;
-    const char *mismatch = decl->kind != metadata->kind ? "kind"
-        : decl->visibility != metadata->visibility ? "visibility"
+    core_string_t mismatch = decl->kind != metadata->kind
+            ? CORE_STRING_STATIC("kind")
+        : decl->visibility != metadata->visibility
+            ? CORE_STRING_STATIC("visibility")
         : !core_string_eq(decl->overload_group, metadata->overload_group)
-            ? "overload group"
+            ? CORE_STRING_STATIC("overload group")
         : !(decl->external == external || decl->external_requirement
-            || external_requirement) ? "linkage"
+            || external_requirement) ? CORE_STRING_STATIC("linkage")
         : !(compare
             ? compare(decl->contract, metadata->contract, compare_context)
-            : decl->contract == metadata->contract) ? "contract"
-        : nullptr;
-    if (mismatch) {
+            : decl->contract == metadata->contract)
+            ? CORE_STRING_STATIC("contract")
+        : (core_string_t){};
+    if (mismatch.data) {
         core_buffer_t message = {0};
         core_buffer_printf(&message,
-            "two declarations of '%.*s' in module '%.*s' disagree on %s",
+            "two declarations of '%.*s' in module '%.*s' disagree on %.*s",
             (int)key.u8_bytes, key.data, (int)module.u8_bytes, module.data,
-            mismatch);
+            (int)mismatch.u8_bytes, mismatch.data);
         link_report_at(link, owner, metadata->source_location,
-            "LANTERN-L0014", message.data);
+            CORE_STRING_STATIC("LANTERN-L0014"), core_buffer_string(&message));
         core_buffer_release(&message);
         return false;
     }
     if (is_definition && decl->is_defined) {
         link_report_at(link, owner, metadata->source_location,
-            "LANTERN-L0003",
-            "link unit has duplicate definitions for one module declaration identity");
+            CORE_STRING_STATIC("LANTERN-L0003"),
+            CORE_STRING_STATIC("link unit has duplicate definitions for one module declaration identity"));
         return false;
     }
 
@@ -1313,8 +1315,8 @@ register_declaration(core_link_unit_t *link, core_string_t module,
         && ownership == CORE_LINK_PAYLOAD_OWNED
         && decl->free_fn != free_fn) {
         link_report_at(link, owner, metadata->source_location,
-            "LANTERN-L0015",
-            "one declaration payload cannot have conflicting release handlers");
+            CORE_STRING_STATIC("LANTERN-L0015"),
+            CORE_STRING_STATIC("one declaration payload cannot have conflicting release handlers"));
         return false;
     }
 
@@ -1367,8 +1369,8 @@ core_link_unit_define(core_link_unit_t *link,
 {
     if (!link || !owner || !core_link_unit_collect(link)) return false;
     if (!core_dict_contains(&link->unit_index, owner)) {
-        link_report(link, owner, "LANTERN-L0004",
-                    "declaration owner is not part of this link unit");
+        link_report(link, owner, CORE_STRING_STATIC("LANTERN-L0004"),
+                    CORE_STRING_STATIC("declaration owner is not part of this link unit"));
         return false;
     }
     core_link_declaration_metadata_t metadata = {
@@ -1388,8 +1390,8 @@ core_link_unit_register_declaration(
 {
     if (!link || !owner || !core_link_unit_collect(link)) return false;
     if (!core_dict_contains(&link->unit_index, owner)) {
-        link_report(link, owner, "LANTERN-L0004",
-                    "declaration owner is not part of this link unit");
+        link_report(link, owner, CORE_STRING_STATIC("LANTERN-L0004"),
+                    CORE_STRING_STATIC("declaration owner is not part of this link unit"));
         return false;
     }
     return register_declaration(link, owner->module.identifier, owner, false,
@@ -1624,8 +1626,8 @@ reference_at_internal(core_link_unit_t *link,
                 || prior->has_expected_kind != has_expected_kind
                 || (has_expected_kind
                     && prior->expected_kind != expected_kind)) {
-                link_report(link, referrer, "LANTERN-L0016",
-                    "one source reference has conflicting expected declaration kinds");
+                link_report(link, referrer, CORE_STRING_STATIC("LANTERN-L0016"),
+                    CORE_STRING_STATIC("one source reference has conflicting expected declaration kinds"));
                 return false;
             }
             if (out) *out = prior;
@@ -1733,24 +1735,24 @@ core_link_unit_validate(core_link_unit_t *link)
         core_link_declaration_t *decl = link->declarations[i];
         if (decl->owner
             && !core_dict_contains(&link->unit_index, decl->owner)) {
-            link_report(link, decl->owner, "LANTERN-L0004",
-                        "declaration owner is not part of this link unit");
+            link_report(link, decl->owner, CORE_STRING_STATIC("LANTERN-L0004"),
+                        CORE_STRING_STATIC("declaration owner is not part of this link unit"));
             link->validation_valid = false;
         }
         if (!decl->is_defined && !decl->external_requirement) {
             core_diag_location_t location = decl->site_count
                 ? decl->sites[decl->site_count - 1].location
                 : (core_diag_location_t){0};
-            link_report_at(link, decl->owner, location, "LANTERN-L0018",
-                "link unit contains a declaration without a definition or external requirement");
+            link_report_at(link, decl->owner, location, CORE_STRING_STATIC("LANTERN-L0018"),
+                CORE_STRING_STATIC("link unit contains a declaration without a definition or external requirement"));
             link->validation_valid = false;
         }
     }
     for (size_t i = 0; i < link->reference_count; i++) {
         core_link_reference_t *ref = link->references[i];
         if (!core_dict_contains(&link->unit_index, ref->referrer)) {
-            link_report(link, ref->referrer, "LANTERN-L0004",
-                        "reference source is not part of this link unit");
+            link_report(link, ref->referrer, CORE_STRING_STATIC("LANTERN-L0004"),
+                        CORE_STRING_STATIC("reference source is not part of this link unit"));
             link->validation_valid = false;
         }
         if (ref->deferred) {
@@ -1758,14 +1760,14 @@ core_link_unit_validate(core_link_unit_t *link)
                 find_stage(link, ref->deferral_prerequisite);
             if (!prerequisite) {
                 link_report_at(link, ref->referrer, ref->source_location,
-                    "LANTERN-L0019",
-                    "deferred reference names an unregistered prerequisite stage");
+                    CORE_STRING_STATIC("LANTERN-L0019"),
+                    CORE_STRING_STATIC("deferred reference names an unregistered prerequisite stage"));
                 link->validation_valid = false;
             }
             else if (prerequisite->state == CORE_LINK_STAGE_COMPLETE) {
                 link_report_at(link, ref->referrer, ref->source_location,
-                    "LANTERN-L0020",
-                    "reference remains deferred after its prerequisite completed");
+                    CORE_STRING_STATIC("LANTERN-L0020"),
+                    CORE_STRING_STATIC("reference remains deferred after its prerequisite completed"));
                 link->validation_valid = false;
             }
             ref->target = nullptr;
@@ -1775,15 +1777,15 @@ core_link_unit_validate(core_link_unit_t *link)
                                        ref->declaration_key);
         if (!ref->target) {
             link_report_at(link, ref->referrer, ref->source_location,
-                "LANTERN-L0005",
-                        "link unit contains an unresolved declaration reference");
+                CORE_STRING_STATIC("LANTERN-L0005"),
+                CORE_STRING_STATIC("link unit contains an unresolved declaration reference"));
             link->validation_valid = false;
         }
         else if (ref->has_expected_kind
                  && ref->expected_kind != ref->target->kind) {
             link_report_at(link, ref->referrer, ref->source_location,
-                "LANTERN-L0017",
-                        "reference resolves to a declaration of the wrong kind");
+                CORE_STRING_STATIC("LANTERN-L0017"),
+                CORE_STRING_STATIC("reference resolves to a declaration of the wrong kind"));
             link->validation_valid = false;
         }
     }
@@ -1843,8 +1845,8 @@ core_link_declaration_set_binding(
         if (!core_string_eq(binding->role, role)) continue;
         if (binding->handle == handle
             && binding->producer_stage == producer_stage) return true;
-        link_report(link, declaration->owner, "LANTERN-L0022",
-            "canonical declaration binding conflicts with an existing handle");
+        link_report(link, declaration->owner, CORE_STRING_STATIC("LANTERN-L0022"),
+            CORE_STRING_STATIC("canonical declaration binding conflicts with an existing handle"));
         return false;
     }
     if (!core_list_reserve_raw((void **)&declaration->bindings,
@@ -2001,8 +2003,8 @@ core_link_reference_set_source_info(core_link_unit_t *link,
         if (!same_location
             || !core_string_eq(reference->provenance, provenance)) {
             link_report_at(link, reference->referrer, location,
-                "LANTERN-L0021",
-                "one source reference has conflicting provenance metadata");
+                CORE_STRING_STATIC("LANTERN-L0021"),
+                CORE_STRING_STATIC("one source reference has conflicting provenance metadata"));
             return false;
         }
         return true;
@@ -2069,8 +2071,8 @@ add_artifact(core_link_unit_t *link, core_string_t module,
         .module = module, .format = format, .unit_wide = unit_wide,
     };
     if (core_dict_contains(&link->artifact_index, &probe)) {
-        link_report(link, nullptr, "LANTERN-L0006",
-            "link unit contains duplicate artifacts for one module and format");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0006"),
+            CORE_STRING_STATIC("link unit contains duplicate artifacts for one module and format"));
         return false;
     }
     core_link_artifact_t *artifact = core_alloc(core_link_artifact_t);
@@ -2132,8 +2134,8 @@ core_link_unit_require_artifact(core_link_unit_t *link, core_string_t module,
         &link->artifact_index, &probe, nullptr);
     if (artifact) {
         if (artifact->version != required_version) {
-            link_report(link, nullptr, "LANTERN-L0007",
-                        "linked semantic artifact has an incompatible version");
+            link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0007"),
+                        CORE_STRING_STATIC("linked semantic artifact has an incompatible version"));
             link->validated = false;
             return false;
         }
@@ -2148,8 +2150,8 @@ core_link_unit_require_artifact(core_link_unit_t *link, core_string_t module,
         }
         return true;
     }
-    link_report(link, nullptr, "LANTERN-L0008",
-                "required linked semantic artifact is missing");
+    link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0008"),
+                CORE_STRING_STATIC("required linked semantic artifact is missing"));
     link->validated = false;
     return false;
 }
@@ -2269,32 +2271,37 @@ core_link_unit_require_contribution(
     if (!link || !required_version
         || !core_link_unit_contribution(link, module, domain, &contribution)) {
         if (link)
-            link_report(link, nullptr, "LANTERN-L0014",
-                "required link-unit analysis contribution is missing");
+            link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0014"),
+                CORE_STRING_STATIC("required link-unit analysis contribution is missing"));
         return false;
     }
     if (contribution.version != required_version) {
-        link_report(link, nullptr, "LANTERN-L0015",
-            "link-unit analysis contribution has an incompatible version");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0015"),
+            CORE_STRING_STATIC("link-unit analysis contribution has an incompatible version"));
         return false;
     }
     if (contribution.state != CORE_LINK_CONTRIBUTION_COMPLETE) {
         core_buffer_t message = {0};
-        const char *state = contribution.state == CORE_LINK_CONTRIBUTION_PENDING
-            ? "pending" : contribution.state == CORE_LINK_CONTRIBUTION_UNAVAILABLE
-            ? "unavailable" : "failed";
+        core_string_t state =
+            contribution.state == CORE_LINK_CONTRIBUTION_PENDING
+                ? CORE_STRING_STATIC("pending")
+            : contribution.state == CORE_LINK_CONTRIBUTION_UNAVAILABLE
+                ? CORE_STRING_STATIC("unavailable")
+                : CORE_STRING_STATIC("failed");
         core_buffer_printf(&message,
-            "required link-unit analysis contribution '%.*s' is %s",
-            (int)domain.u8_bytes, domain.data, state);
-        link_report(link, nullptr, "LANTERN-L0016", message.data);
+            "required link-unit analysis contribution '%.*s' is %.*s",
+            (int)domain.u8_bytes, domain.data,
+            (int)state.u8_bytes, state.data);
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0016"),
+                    core_buffer_string(&message));
         core_buffer_release(&message);
         return false;
     }
     if (contribution.producer_stage
         && core_link_unit_stage_state(link, contribution.producer_stage)
             != CORE_LINK_STAGE_COMPLETE) {
-        link_report(link, nullptr, "LANTERN-L0017",
-            "analysis contribution producer stage is not complete");
+        link_report(link, nullptr, CORE_STRING_STATIC("LANTERN-L0017"),
+            CORE_STRING_STATIC("analysis contribution producer stage is not complete"));
         return false;
     }
     if (out) *out = contribution;
@@ -2345,8 +2352,8 @@ core_link_unit_add_dependency(
     if ((from && !has_from) || (to && !has_to) || !source_is_member
         || (producer_stage && (!producer
             || producer->state != CORE_LINK_STAGE_RUNNING))) {
-        link_report_at(link, source_unit, source_location, "LANTERN-L0018",
-            "dependency fact has an endpoint, source, or producer outside its link analysis");
+        link_report_at(link, source_unit, source_location, CORE_STRING_STATIC("LANTERN-L0018"),
+            CORE_STRING_STATIC("dependency fact has an endpoint, source, or producer outside its link analysis"));
         return false;
     }
     core_link_dependency_t probe = {

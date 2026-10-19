@@ -56,7 +56,7 @@ first_leaf_text(parse_tree_t *node)
 
 static parse_token_info_t *
 make_token(int32_t tid, int32_t index, size_t start, size_t end,
-           uint32_t line, uint32_t column, const char *text)
+           uint32_t line, uint32_t column, core_string_t text)
 {
     parse_token_info_t *tok = parse_token_new();
 
@@ -64,10 +64,10 @@ make_token(int32_t tid, int32_t index, size_t start, size_t end,
     parse_token_set_index(tok, index);
     parse_token_set_span(tok, start, end);
     parse_token_set_position(tok, line, column, 0, 0);
-    if (text) {
+    if (text.data) {
         parse_token_set_value(tok,
                               core_option_set(core_string_t,
-                                              core_string_from_cstr(text)),
+                                              core_string_dup(text)),
                               false);
     }
     return tok;
@@ -100,9 +100,9 @@ test_basic_parse(void)
 
 
     parse_token_info_t *ptrs[3] = {
-        make_token(TOK_ID, 0, 0, 0, 1, 1, "a"),
-        make_token(TOK_PLUS, 1, 0, 0, 1, 3, "+"),
-        make_token(TOK_ID, 2, 0, 0, 1, 5, "b"),
+        make_token(TOK_ID, 0, 0, 0, 1, 1, CORE_STRING_STATIC("a")),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 3, CORE_STRING_STATIC("+")),
+        make_token(TOK_ID, 2, 0, 0, 1, 5, CORE_STRING_STATIC("b")),
     };
 
     parse_token_stream_t *ts = scan_token_stream_from_array(ptrs, 3);
@@ -258,12 +258,12 @@ test_set_match(void)
     parse_add_rule_v(g, S, 2, rule);
 
     parse_token_info_t *okp[2] = {
-        make_token(TOK_ID, 0, 0, 0, 1, 1, nullptr),
-        make_token(TOK_PLUS, 1, 0, 0, 1, 2, nullptr),
+        make_token(TOK_ID, 0, 0, 0, 1, 1, (core_string_t){}),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 2, (core_string_t){}),
     };
     parse_token_info_t *badp[2] = {
-        make_token(TOK_PLUS, 0, 0, 0, 1, 1, nullptr),
-        make_token(TOK_PLUS, 1, 0, 0, 1, 2, nullptr),
+        make_token(TOK_PLUS, 0, 0, 0, 1, 1, (core_string_t){}),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 2, (core_string_t){}),
     };
 
     parse_token_stream_t *ts = scan_token_stream_from_array(okp, 2);
@@ -367,13 +367,13 @@ typedef struct {
 
 static bool
 count_disambig_calls(void             *ud,
-                     const char       *predicate,
+                     core_string_t      predicate,
                      parse_token_info_t *tok)
 {
     disambig_probe_t *probe = ud;
 
-    assert(probe && predicate && tok);
-    assert(strcmp(predicate, "shared") == 0);
+    assert(probe && predicate.data && tok);
+    assert(core_string_eq(predicate, CORE_STRING_STATIC("shared")));
     probe->calls++;
     return false;
 }
@@ -393,8 +393,8 @@ test_memoized_disambiguation(void)
 
     for (int i = 0; i < ALTERNATIVES; i++) {
         char alt[64];
-        int n = snprintf(alt, sizeof(alt), "%s<P> <B%d>",
-                         i == 0 ? "" : " | ", i);
+        int n = i == 0 ? snprintf(alt, sizeof(alt), "<P> <B%d>", i)
+                       : snprintf(alt, sizeof(alt), " | <P> <B%d>", i);
         assert(n > 0 && used + (size_t)n + 1 < sizeof(grammar_text));
         memcpy(grammar_text + used, alt, (size_t)n);
         used += (size_t)n;
@@ -445,16 +445,16 @@ test_adjacency_annotation(void)
     assert(p);
 
     parse_token_info_t *adjacent_ptrs[2] = {
-        make_token('(', 0, 0, 1, 0, 0, nullptr),
-        make_token('x', 1, 1, 2, 0, 0, nullptr),
+        make_token('(', 0, 0, 1, 0, 0, (core_string_t){}),
+        make_token('x', 1, 1, 2, 0, 0, (core_string_t){}),
     };
     parse_token_stream_t *ts = scan_token_stream_from_array(adjacent_ptrs, 2);
     assert(ts && parse_pwz_parse(p, ts));
     scan_token_stream_free(ts);
 
     parse_token_info_t *spaced_ptrs[2] = {
-        make_token('(', 0, 0, 1, 0, 0, nullptr),
-        make_token('x', 1, 2, 3, 0, 0, nullptr),
+        make_token('(', 0, 0, 1, 0, 0, (core_string_t){}),
+        make_token('x', 1, 2, 3, 0, 0, (core_string_t){}),
     };
     ts = scan_token_stream_from_array(spaced_ptrs, 2);
     assert(ts && !parse_pwz_parse(p, ts));
@@ -484,9 +484,9 @@ test_nullable_nonterminal_before_following_token(void)
     assert(p);
 
     parse_token_info_t *ptrs[3] = {
-        make_token('a', 0, 0, 0, 0, 0, nullptr),
-        make_token('b', 1, 0, 0, 0, 0, nullptr),
-        make_token('c', 2, 0, 0, 0, 0, nullptr),
+        make_token('a', 0, 0, 0, 0, 0, (core_string_t){}),
+        make_token('b', 1, 0, 0, 0, 0, (core_string_t){}),
+        make_token('c', 2, 0, 0, 0, 0, (core_string_t){}),
     };
     parse_token_stream_t *ts = scan_token_stream_from_array(ptrs, 3);
     assert(ts && parse_pwz_parse(p, ts));

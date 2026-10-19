@@ -20,11 +20,12 @@ static bool cross_thread_nfc_hash(void)
 {
     th_ctx *ctx = th_ctx_new();
     th_install_nfc(ctx);
-    nfc_worker_t worker = {.ctx = ctx, .type = th_name(ctx, "cafe\xcc\x81")};
+    nfc_worker_t worker = {
+        .ctx = ctx, .type = th_name(ctx, CORE_STRING_STATIC("cafe\xcc\x81"))};
     pthread_t thread;
     bool ok = pthread_create(&thread, nullptr, hash_on_worker, &worker) == 0;
     if (ok) ok = pthread_join(thread, nullptr) == 0;
-    if (ok) ok = worker.hash == th_hash(ctx, th_name(ctx, "caf\xc3\xa9"));
+    if (ok) ok = worker.hash == th_hash(ctx, th_name(ctx, CORE_STRING_STATIC("caf\xc3\xa9")));
     th_ctx_free(ctx);
     return ok;
 }
@@ -36,7 +37,7 @@ int main(void)
 
     th_type  *A  = th_record_stub(ctx);
     th_type  *pA = th_ind(ctx, TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE, A);
-    th_member ma = {.name = "next", .type = pA};
+    th_member ma = {.name = CORE_STRING_STATIC("next"), .type = pA};
 
     th_record_fill(ctx, A, &ma, 1);
 
@@ -44,8 +45,8 @@ int main(void)
     th_type  *C  = th_record_stub(ctx);
     th_type  *pC = th_ind(ctx, TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE, C);
     th_type  *pB = th_ind(ctx, TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE, B);
-    th_member mb = {.name = "next", .type = pC};
-    th_member mc = {.name = "next", .type = pB};
+    th_member mb = {.name = CORE_STRING_STATIC("next"), .type = pC};
+    th_member mc = {.name = CORE_STRING_STATIC("next"), .type = pB};
 
     th_record_fill(ctx, B, &mb, 1);
     th_record_fill(ctx, C, &mc, 1);

@@ -359,12 +359,12 @@ core_datalog_symbol_integer(const core_datalog_engine_t *engine,
   core_string_t name = core_datalog_symbol_name(engine, symbol);
   if (!name.data || !name.u8_bytes)
     return core_result_err(core_datalog_int_result_t, EINVAL);
-  char *end = nullptr;
-  errno = 0;
-  long long value = strtoll(name.data, &end, 10);
-  if (errno == ERANGE || end != name.data + name.u8_bytes)
+  int64_t value = 0;
+  size_t consumed = 0;
+  if (!core_string_parse_i64(name, 10, &value, &consumed) ||
+      consumed != name.u8_bytes)
     return core_result_err(core_datalog_int_result_t, EINVAL);
-  return core_result_ok(core_datalog_int_result_t, (int64_t)value);
+  return core_result_ok(core_datalog_int_result_t, value);
 }
 
 bool core_datalog_add_fact(core_datalog_engine_t *engine,

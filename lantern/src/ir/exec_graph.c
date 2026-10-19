@@ -7,7 +7,7 @@
 #include "lib/list.h"
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     uint32_t entry_node;
 } exec_phase_t;
 core_list_decl(exec_phase_t);
@@ -17,7 +17,7 @@ typedef struct {
     uint32_t phase;
     ir_exec_graph_node_kind_t kind;
     ir_exec_graph_outcome_t outcome;
-    const char *label;
+    core_string_t label;
     ir_func_t *function;
     ir_block_t *block;
 } exec_node_t;
@@ -42,7 +42,7 @@ typedef struct {
 core_list_decl(exec_edge_t);
 
 typedef struct {
-    const char *identifier;
+    core_string_t identifier;
     uint32_t producer_function;
     uint32_t consumer_function;
     ir_instr_t *consumer;
@@ -51,7 +51,7 @@ typedef struct {
 core_list_decl(exec_phase_result_t);
 
 typedef struct {
-    const char *identifier;
+    core_string_t identifier;
     uint32_t source_phase;
     uint32_t target_phase;
     ir_module_t *source_module;
@@ -113,7 +113,7 @@ ir_exec_graph_new(ir_ctx_t *ctx)
 static bool
 node_add(ir_exec_graph_t *graph, uint32_t phase,
          ir_exec_graph_node_kind_t kind, ir_exec_graph_outcome_t outcome,
-         const char *label, ir_func_t *function, ir_block_t *block,
+         core_string_t label, ir_func_t *function, ir_block_t *block,
          uint32_t *node_id)
 {
     if (node_id) *node_id = UINT32_MAX;
@@ -128,7 +128,8 @@ node_add(ir_exec_graph_t *graph, uint32_t phase,
         .phase = phase,
         .kind = kind,
         .outcome = outcome,
-        .label = label ? ir_strdup(graph->ctx, label) : nullptr,
+        .label = label.data ? ir_strdup(graph->ctx, label)
+                            : (core_string_t){},
         .function = function,
         .block = block,
     }));
@@ -137,15 +138,16 @@ node_add(ir_exec_graph_t *graph, uint32_t phase,
 }
 
 bool
-ir_exec_graph_add_phase(ir_exec_graph_t *graph, const char *name,
+ir_exec_graph_add_phase(ir_exec_graph_t *graph, core_string_t name,
                         uint32_t *phase_id, uint32_t *entry_node)
 {
     if (phase_id) *phase_id = UINT32_MAX;
     if (entry_node) *entry_node = UINT32_MAX;
-    if (!graph || !name || !name[0] || graph->phases.len >= UINT32_MAX)
+    if (!graph || !name.data || !name.u8_bytes
+        || graph->phases.len >= UINT32_MAX)
         return false;
     for (size_t i = 0; i < graph->phases.len; i++)
-        if (!strcmp(graph->phases.data[i].name, name)) return false;
+        if (core_string_eq(graph->phases.data[i].name, name)) return false;
 
     uint32_t id = (uint32_t)graph->phases.len;
     core_list_push(graph->phases, ((exec_phase_t){
@@ -164,7 +166,7 @@ ir_exec_graph_add_phase(ir_exec_graph_t *graph, const char *name,
 
 bool
 ir_exec_graph_add_phase_exit(ir_exec_graph_t *graph, uint32_t phase_id,
-                             const char *label,
+                             core_string_t label,
                              ir_exec_graph_outcome_t outcome,
                              uint32_t *node_id)
 {
@@ -390,12 +392,12 @@ ir_exec_graph_add_edge(ir_exec_graph_t *graph, uint32_t from, uint32_t to,
 
 bool
 ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
-                               const char *identifier,
+                               core_string_t identifier,
                                uint32_t producer_function,
                                uint32_t consumer_function,
                                ir_instr_t *consumer)
 {
-    if (!graph || !identifier || !identifier[0]
+    if (!graph || !identifier.data || !identifier.u8_bytes
         || producer_function >= graph->functions.len
         || consumer_function >= graph->functions.len || !consumer
         || !consumer->block || !consumer->block->owner
@@ -403,8 +405,9 @@ ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
         || consumer->block->owner->owner->ctx != graph->ctx
         || consumer->op != IR_OP_PHASE_RESULT || !consumer->dest
         || consumer->dest_kind != IR_DEST_VALUE
-        || !ir_instr_phase_result(consumer)
-        || strcmp(identifier, ir_instr_phase_result(consumer))) return false;
+        || !ir_instr_phase_result(consumer).data
+        || !core_string_eq(identifier, ir_instr_phase_result(consumer)))
+        return false;
 
     exec_function_t *producer = &graph->functions.data[producer_function];
     exec_function_t *consumer_region =
@@ -440,7 +443,7 @@ ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
     for (size_t i = 0; i < graph->phase_results.len; i++) {
         exec_phase_result_t *existing = &graph->phase_results.data[i];
         if (existing->consumer == consumer) return false;
-        if (!strcmp(existing->identifier, identifier)
+        if (core_string_eq(existing->identifier, identifier)
             && (existing->producer_function != producer_function
                 || th_hash(types, existing->type)
                     != th_hash(types, result_type))) return false;
@@ -460,8 +463,8 @@ static bool
 global_result_valid(const ir_exec_graph_t *graph,
                     const exec_global_result_t *result)
 {
-    if (!graph || !result || !result->identifier
-        || !result->identifier[0]
+    if (!graph || !result || !result->identifier.data
+        || !result->identifier.u8_bytes
         || result->source_phase >= graph->phases.len
         || result->target_phase >= graph->phases.len
         || result->source_phase >= result->target_phase
@@ -480,9 +483,11 @@ global_result_valid(const ir_exec_graph_t *graph,
         || !result->target_global->static_initializer
         || result->target_global->static_initializer->kind
             != IR_GLOBAL_INIT_PHASE_RESULT
-        || !result->target_global->static_initializer->phase_result.identifier
-        || strcmp(result->identifier,
-            result->target_global->static_initializer->phase_result.identifier))
+        || !result->target_global->static_initializer->phase_result
+                .identifier.data
+        || !core_string_eq(result->identifier,
+            result->target_global->static_initializer->phase_result
+                .identifier))
         return false;
 
     th_ctx *types = ir_ctx_types(graph->ctx);
@@ -576,7 +581,7 @@ phase_successes_gate_target(const ir_exec_graph_t *graph,
 
 bool
 ir_exec_graph_add_global_result(ir_exec_graph_t *graph,
-                                const char *identifier,
+                                core_string_t identifier,
                                 uint32_t source_phase,
                                 uint32_t target_phase,
                                 ir_module_t *source_module,
@@ -584,7 +589,7 @@ ir_exec_graph_add_global_result(ir_exec_graph_t *graph,
                                 ir_module_t *target_module,
                                 ir_global_t *target_global)
 {
-    if (!graph || !identifier || !identifier[0]
+    if (!graph || !identifier.data || !identifier.u8_bytes
         || !source_global || !target_global) return false;
     exec_global_result_t result = {
         .identifier = identifier,
@@ -601,10 +606,10 @@ ir_exec_graph_add_global_result(ir_exec_graph_t *graph,
         const exec_global_result_t *existing =
             &graph->global_results.data[i];
         if (existing->target_global == target_global
-            || !strcmp(existing->identifier, identifier)) return false;
+            || core_string_eq(existing->identifier, identifier)) return false;
     }
     result.identifier = ir_strdup(graph->ctx, identifier);
-    if (!result.identifier) return false;
+    if (!result.identifier.data) return false;
     core_list_push(graph->global_results, result);
     return true;
 }
@@ -652,13 +657,13 @@ ir_exec_graph_validate(const ir_exec_graph_t *graph)
     if (!graph || !graph->phases.len) return false;
     for (size_t i = 0; i < graph->phases.len; i++) {
         exec_phase_t *phase = &graph->phases.data[i];
-        if (!phase->name || !phase->name[0]
+        if (!phase->name.data || !phase->name.u8_bytes
             || phase->entry_node >= graph->nodes.len
             || graph->nodes.data[phase->entry_node].kind
                 != IR_EXEC_GRAPH_NODE_PHASE_ENTRY)
             return false;
         for (size_t j = i + 1; j < graph->phases.len; j++)
-            if (!strcmp(phase->name, graph->phases.data[j].name))
+            if (core_string_eq(phase->name, graph->phases.data[j].name))
                 return false;
     }
     for (size_t i = 0; i < graph->nodes.len; i++) {
@@ -692,7 +697,7 @@ ir_exec_graph_validate(const ir_exec_graph_t *graph)
     }
     for (size_t i = 0; i < graph->phase_results.len; i++) {
         const exec_phase_result_t *result = &graph->phase_results.data[i];
-        if (!result->identifier || !result->identifier[0]
+        if (!result->identifier.data || !result->identifier.u8_bytes
             || result->producer_function >= graph->functions.len
             || result->consumer_function >= graph->functions.len
             || !result->consumer || !result->consumer->block
@@ -701,9 +706,10 @@ ir_exec_graph_validate(const ir_exec_graph_t *graph)
             || !result->consumer->dest || !result->type
             || result->consumer->block->owner
                 != graph->functions.data[result->consumer_function].function
-            || !ir_instr_phase_result(result->consumer)
-            || strcmp(result->identifier,
-                      ir_instr_phase_result(result->consumer))) return false;
+            || !ir_instr_phase_result(result->consumer).data
+            || !core_string_eq(result->identifier,
+                               ir_instr_phase_result(result->consumer)))
+            return false;
         const exec_function_t *producer =
             &graph->functions.data[result->producer_function];
         const exec_function_t *consumer =
@@ -754,7 +760,7 @@ ir_exec_graph_validate(const ir_exec_graph_t *graph)
             const exec_phase_result_t *other =
                 &graph->phase_results.data[j];
             if (other->consumer == result->consumer
-                || (!strcmp(other->identifier, result->identifier)
+                || (core_string_eq(other->identifier, result->identifier)
                     && (other->producer_function != result->producer_function
                         || th_hash(ir_ctx_types(graph->ctx), other->type)
                             != th_hash(ir_ctx_types(graph->ctx),
@@ -771,7 +777,7 @@ ir_exec_graph_validate(const ir_exec_graph_t *graph)
             const exec_global_result_t *other =
                 &graph->global_results.data[j];
             if (other->target_global == result->target_global
-                || !strcmp(other->identifier, result->identifier))
+                || core_string_eq(other->identifier, result->identifier))
                 return false;
         }
     }
@@ -901,54 +907,68 @@ ir_exec_graph_global_result_at(const ir_exec_graph_t *graph, size_t index,
     return true;
 }
 
-static const char *
+static core_string_t
 node_kind_name(ir_exec_graph_node_kind_t kind)
 {
     switch (kind) {
-    case IR_EXEC_GRAPH_NODE_PHASE_ENTRY: return "phase-entry";
-    case IR_EXEC_GRAPH_NODE_FUNCTION_ENTRY: return "function-entry";
-    case IR_EXEC_GRAPH_NODE_FUNCTION_EXIT: return "function-exit";
-    case IR_EXEC_GRAPH_NODE_PHASE_EXIT: return "phase-exit";
+    case IR_EXEC_GRAPH_NODE_PHASE_ENTRY:
+        return CORE_STRING_STATIC("phase-entry");
+    case IR_EXEC_GRAPH_NODE_FUNCTION_ENTRY:
+        return CORE_STRING_STATIC("function-entry");
+    case IR_EXEC_GRAPH_NODE_FUNCTION_EXIT:
+        return CORE_STRING_STATIC("function-exit");
+    case IR_EXEC_GRAPH_NODE_PHASE_EXIT:
+        return CORE_STRING_STATIC("phase-exit");
     }
-    return "invalid";
+    return CORE_STRING_STATIC("invalid");
 }
 
-static const char *
+static core_string_t
 outcome_name(ir_exec_graph_outcome_t outcome)
 {
     switch (outcome) {
-    case IR_EXEC_GRAPH_OUTCOME_NONE: return "none";
-    case IR_EXEC_GRAPH_OUTCOME_SUCCESS: return "success";
-    case IR_EXEC_GRAPH_OUTCOME_FAILURE: return "failure";
-    case IR_EXEC_GRAPH_OUTCOME_NONRETURNING: return "nonreturning";
-    case IR_EXEC_GRAPH_OUTCOME_OTHER: return "other";
-    case IR_EXEC_GRAPH_OUTCOME_UNCLASSIFIED: return "unclassified";
+    case IR_EXEC_GRAPH_OUTCOME_NONE: return CORE_STRING_STATIC("none");
+    case IR_EXEC_GRAPH_OUTCOME_SUCCESS: return CORE_STRING_STATIC("success");
+    case IR_EXEC_GRAPH_OUTCOME_FAILURE: return CORE_STRING_STATIC("failure");
+    case IR_EXEC_GRAPH_OUTCOME_NONRETURNING:
+        return CORE_STRING_STATIC("nonreturning");
+    case IR_EXEC_GRAPH_OUTCOME_OTHER: return CORE_STRING_STATIC("other");
+    case IR_EXEC_GRAPH_OUTCOME_UNCLASSIFIED:
+        return CORE_STRING_STATIC("unclassified");
     }
-    return "invalid";
+    return CORE_STRING_STATIC("invalid");
 }
 
 static void
-put_quoted(core_buffer_t *buffer, const char *text)
+put_quoted(core_buffer_t *buffer, core_string_t text)
 {
     core_buffer_putc(buffer, '"');
-    for (const unsigned char *at = (const unsigned char *)text;
-         at && *at; at++) {
-        if (*at == '\\' || *at == '"') {
+    for (size_t i = 0; text.data && i < text.u8_bytes; i++) {
+        unsigned char at = (unsigned char)text.data[i];
+        if (at == '\\' || at == '"') {
             core_buffer_putc(buffer, '\\');
-            core_buffer_putc(buffer, (char)*at);
+            core_buffer_putc(buffer, (char)at);
         }
-        else if (*at == '\n') core_buffer_puts(buffer, "\\n");
-        else if (*at == '\r') core_buffer_puts(buffer, "\\r");
-        else if (*at == '\t') core_buffer_puts(buffer, "\\t");
-        else core_buffer_putc(buffer, (char)*at);
+        else if (at == '\n') core_buffer_puts(buffer, "\\n");
+        else if (at == '\r') core_buffer_puts(buffer, "\\r");
+        else if (at == '\t') core_buffer_puts(buffer, "\\t");
+        else core_buffer_putc(buffer, (char)at);
     }
     core_buffer_putc(buffer, '"');
 }
 
-char *
+static void
+put_dotted(core_buffer_t *buffer, core_string_t left, core_string_t right)
+{
+    core_buffer_append_string(buffer, left);
+    core_buffer_putc(buffer, '.');
+    core_buffer_append_string(buffer, right);
+}
+
+core_string_t
 ir_exec_graph_print(const ir_exec_graph_t *graph)
 {
-    if (!ir_exec_graph_validate(graph)) return nullptr;
+    if (!ir_exec_graph_validate(graph)) return (core_string_t){};
     core_buffer_t *buffer = core_buffer_empty();
     core_buffer_puts(buffer, "execution-graph:\n");
     for (size_t i = 0; i < graph->phases.len; i++) {
@@ -959,27 +979,34 @@ ir_exec_graph_print(const ir_exec_graph_t *graph)
     }
     for (size_t i = 0; i < graph->nodes.len; i++) {
         exec_node_t *node = &graph->nodes.data[i];
-        core_buffer_printf(buffer, "  node #%u %s phase=", node->id,
-                           node_kind_name(node->kind));
+        core_buffer_printf(buffer, "  node #%u ", node->id);
+        core_buffer_append_string(buffer, node_kind_name(node->kind));
+        core_buffer_puts(buffer, " phase=");
         put_quoted(buffer, graph->phases.data[node->phase].name);
         if (node->function) {
-            core_buffer_printf(buffer, " function=%s.%s block=%s",
-                ir_module_name(node->function->owner), node->function->name,
-                node->block ? node->block->name : "<external>");
+            core_buffer_puts(buffer, " function=");
+            put_dotted(buffer, ir_module_name(node->function->owner),
+                       node->function->name);
+            core_buffer_puts(buffer, " block=");
+            core_buffer_append_string(buffer,
+                node->block ? node->block->name
+                            : CORE_STRING_STATIC("<external>"));
         }
-        else if (node->label) {
+        else if (node->label.data) {
             core_buffer_puts(buffer, " label=");
             put_quoted(buffer, node->label);
         }
-        core_buffer_printf(buffer, " outcome=%s\n",
-                           outcome_name(node->outcome));
+        core_buffer_puts(buffer, " outcome=");
+        core_buffer_append_string(buffer, outcome_name(node->outcome));
+        core_buffer_puts(buffer, "\n");
     }
     for (size_t i = 0; i < graph->edges.len; i++) {
         exec_edge_t edge = graph->edges.data[i];
-        core_buffer_printf(buffer, "  edge %s #%u -> #%u\n",
-            edge.kind == IR_EXEC_GRAPH_EDGE_SEQUENCE
-                ? "sequence" : "requires",
-            edge.from, edge.to);
+        if (edge.kind == IR_EXEC_GRAPH_EDGE_SEQUENCE)
+            core_buffer_puts(buffer, "  edge sequence");
+        else
+            core_buffer_puts(buffer, "  edge requires");
+        core_buffer_printf(buffer, " #%u -> #%u\n", edge.from, edge.to);
     }
     for (size_t i = 0; i < graph->phase_results.len; i++) {
         const exec_phase_result_t *result = &graph->phase_results.data[i];
@@ -989,22 +1016,34 @@ ir_exec_graph_print(const ir_exec_graph_t *graph)
             graph->functions.data[result->consumer_function].function;
         core_buffer_puts(buffer, "  phase-result ");
         put_quoted(buffer, result->identifier);
-        core_buffer_printf(buffer, " producer=@%s.%s consumer=@%s.%s.%s#%u result=%%%s\n",
-            ir_module_name(producer->owner), producer->name,
-            ir_module_name(consumer->owner), consumer->name,
-            result->consumer->block->name, result->consumer->index,
-            result->consumer->dest->name);
+        core_buffer_puts(buffer, " producer=@");
+        put_dotted(buffer, ir_module_name(producer->owner), producer->name);
+        core_buffer_puts(buffer, " consumer=@");
+        put_dotted(buffer, ir_module_name(consumer->owner), consumer->name);
+        core_buffer_putc(buffer, '.');
+        core_buffer_append_string(buffer, result->consumer->block->name);
+        core_buffer_printf(buffer, "#%u result=%%", result->consumer->index);
+        core_buffer_append_string(buffer, result->consumer->dest->name);
+        core_buffer_puts(buffer, "\n");
     }
     for (size_t i = 0; i < graph->global_results.len; i++) {
         const exec_global_result_t *result = &graph->global_results.data[i];
         core_buffer_puts(buffer, "  global-result ");
         put_quoted(buffer, result->identifier);
-        core_buffer_printf(buffer,
-            " phase=\"%s\" source=@%s.%s target=@%s.%s type=%s\n",
-            graph->phases.data[result->source_phase].name,
-            ir_module_name(result->source_module), result->source_global->name,
-            ir_module_name(result->target_module), result->target_global->name,
-            th_print(ir_ctx_types(graph->ctx), result->type));
+        core_buffer_puts(buffer, " phase=\"");
+        core_buffer_append_string(buffer,
+                                  graph->phases.data[result->source_phase].name);
+        core_buffer_puts(buffer, "\" source=@");
+        put_dotted(buffer, ir_module_name(result->source_module),
+                   result->source_global->name);
+        core_buffer_puts(buffer, " target=@");
+        put_dotted(buffer, ir_module_name(result->target_module),
+                   result->target_global->name);
+        core_buffer_puts(buffer, " type=");
+        core_buffer_append_string(buffer,
+                                  th_print(ir_ctx_types(graph->ctx),
+                                           result->type));
+        core_buffer_puts(buffer, "\n");
     }
-    return core_buffer_take(buffer);
+    return core_buffer_take_string(buffer);
 }

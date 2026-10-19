@@ -72,7 +72,9 @@ dump_produced_codes(const char *leaf, const bool *produced)
 
     for (uint16_t i = 0; i < IR_DIAG_COUNT; i++) {
         if (produced[i]) {
-            fprintf(f, "%s\n", ir_diag_code((ir_diagcode_t)i));
+            core_string_t code = ir_diag_code((ir_diagcode_t)i);
+
+            fprintf(f, "%.*s\n", (int)code.u8_bytes, code.data);
         }
     }
 

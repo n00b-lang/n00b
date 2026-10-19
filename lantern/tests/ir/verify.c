@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir/rule.h"
 #include "ir/text.h"
@@ -15,23 +14,27 @@ typedef struct {
     ir_module_t *m;
     ir_diags_t  *d;
     ir_props_t   held;
-    char        *report;
+    core_string_t report;
+    core_string_t src;
 } run_t;
+
+#define S(x) CORE_STRING_STATIC(x)
 
 static const ir_profile_t *const PROFILES[] = {&ir_profile_bce,
                                                &ir_profile_synth};
 
-static const char *body(void *u, int32_t file, size_t *n)
+static core_string_t body(void *u, int32_t file)
 {
     (void)file;
-    *n = strlen((const char *)u);
 
-    return (const char *)u;
+    return *(const core_string_t *)u;
 }
 
-static run_t *verify(const char *src, ir_props_t claim)
+static run_t *verify(core_string_t src, ir_props_t claim)
 {
     run_t *r = calloc(1, sizeof(run_t));
+
+    r->src = src;
 
     r->ctx = ir_ctx_new();
     r->d   = ir_diags_new(r->ctx, nullptr);
@@ -53,7 +56,7 @@ static run_t *verify(const char *src, ir_props_t claim)
     }
 
     ir_render_t rd = {.module = r->m, .source = body,
-                      .state  = (void *)src};
+                      .state  = (void *)&r->src};
 
     r->report = ir_diags_render_text(r->d, &rd);
 
@@ -62,18 +65,22 @@ static run_t *verify(const char *src, ir_props_t claim)
 
 static void done(run_t *r)
 {
-    free(r->report);
+    free(r->report.data);
     ir_ctx_free(r->ctx);
     free(r);
 }
 
-static bool told(ir_diags_t *d, const char *text)
+static bool contains(core_string_t haystack, core_string_t needle)
+{
+    return haystack.data && core_string_find(haystack, needle) >= 0;
+}
+
+static bool told(ir_diags_t *d, core_string_t text)
 {
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         const ir_diag_t *dg = ir_diags_at(d, i);
 
-        if ((dg->primary.label && strstr(dg->primary.label, text))
-            || (dg->message && strstr(dg->message, text))) {
+        if (contains(dg->primary.label, text) || contains(dg->message, text)) {
             return true;
         }
     }
@@ -81,7 +88,7 @@ static bool told(ir_diags_t *d, const char *text)
     return false;
 }
 
-static bool said(run_t *r, const char *rule)
+static bool said(run_t *r, core_string_t rule)
 {
     return told(r->d, rule);
 }
@@ -95,8 +102,8 @@ static bool every_diag_is_placed_and_named(ir_diags_t *d)
             continue;
         }
 
-        if (!ir_span_known(dg->primary.span) || !dg->primary.label
-            || !dg->message) {
+        if (!ir_span_known(dg->primary.span) || !dg->primary.label.data
+            || !dg->message.data) {
             return false;
         }
     }
@@ -119,9 +126,9 @@ static bool ssa(run_t *r)
     return (r->held & IR_PROP_SSA) != 0;
 }
 
-#define MOD(...) "module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n"
+#define MOD(...) S("module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n")
 
-static const char *CLEAN = MOD(
+static const core_string_t CLEAN = MOD(
     "  func @f(%a: i32, %c: bool) -> i32 {\n"
     "    block entry:\n"
     "      branch %c, l, r\n"
@@ -139,7 +146,8 @@ static void test_graded(void)
 
     check("a well formed SSA module holds all three properties",
           parsed(ok) && typed(ok) && ssa(ok));
-    check("and reports nothing", ok->report && !strstr(ok->report, "error"));
+    check("and reports nothing",
+          ok->report.data && !contains(ok->report, S("error")));
     done(ok);
 
     run_t *nonssa = verify(MOD("  func @f(%a: i32) -> i32 {\n"
@@ -154,7 +162,7 @@ static void test_graded(void)
           parsed(nonssa) && typed(nonssa));
     check("but is not in SSA form", !ssa(nonssa));
     check("and is not diagnosed for it, since non-SSA is not degraded",
-          nonssa->report && !strstr(nonssa->report, "error"));
+          nonssa->report.data && !contains(nonssa->report, S("error")));
     done(nonssa);
 }
 
@@ -165,7 +173,8 @@ static void test_failure_channel_ops(void)
         "    block entry:\n      fail %e\n  }\n"),
         IR_PROP_PARSED | IR_PROP_TYPED);
     check("a failure terminator matches the function failure channel",
-          parsed(valid) && typed(valid) && !strstr(valid->report, "error"));
+          parsed(valid) && typed(valid)
+              && !contains(valid->report, S("error")));
     done(valid);
 
     run_t *wrong_type = verify(MOD(
@@ -174,7 +183,7 @@ static void test_failure_channel_ops(void)
         IR_PROP_PARSED | IR_PROP_TYPED);
     check("a failure terminator rejects a mismatched failure value",
           parsed(wrong_type) && !typed(wrong_type)
-              && said(wrong_type, "failure value"));
+              && said(wrong_type, S("failure value")));
     done(wrong_type);
 
     run_t *no_channel = verify(MOD(
@@ -183,7 +192,7 @@ static void test_failure_channel_ops(void)
         IR_PROP_PARSED | IR_PROP_TYPED);
     check("a failure terminator requires a function failure channel",
           parsed(no_channel) && !typed(no_channel)
-              && said(no_channel, "failure exit"));
+              && said(no_channel, S("failure exit")));
     done(no_channel);
 
     run_t *unhandled_call = verify(MOD(
@@ -195,39 +204,39 @@ static void test_failure_channel_ops(void)
         IR_PROP_PARSED | IR_PROP_TYPED);
     check("a call must represent the callee error channel",
           parsed(unhandled_call) && !typed(unhandled_call)
-              && said(unhandled_call, "error channel"));
+              && said(unhandled_call, S("error channel")));
     done(unhandled_call);
 }
 
 static void test_parsed_rules(void)
 {
     struct {
-        const char *what;
-        const char *rule;
-        const char *src;
+        core_string_t what;
+        core_string_t rule;
+        core_string_t src;
     } cases[] = {
-        {"a block with two terminators", "parsed.terminator",
+        {S("a block with two terminators"), S("parsed.terminator"),
          MOD("  func @f() -> void {\n    block entry:\n"
              "      unreachable\n      unreachable\n  }\n")},
-        {"a block with no terminator", "parsed.terminator",
+        {S("a block with no terminator"), S("parsed.terminator"),
          MOD("  func @f(%a: i32) -> void {\n    block entry:\n"
              "      %s: i32 = add wrap %a, %a\n  }\n")},
-        {"a terminator that is not last", "parsed.terminator",
+        {S("a terminator that is not last"), S("parsed.terminator"),
          MOD("  func @f(%a: i32) -> void {\n    block entry:\n"
              "      unreachable\n      %s: i32 = add wrap %a, %a\n  }\n")},
-        {"a value defined twice", "parsed.one-def",
+        {S("a value defined twice"), S("parsed.one-def"),
          MOD("  func @f(%a: i32) -> void {\n    block entry:\n"
              "      %s: i32 = add wrap %a, %a\n"
              "      %s: i32 = add wrap %a, %a\n      unreachable\n  }\n")},
-        {"a destination that shadows a parameter", "parsed.one-def",
+        {S("a destination that shadows a parameter"), S("parsed.one-def"),
          MOD("  func @f(%a: i32) -> void {\n    block entry:\n"
              "      %a: i32 = add wrap %a, %a\n      unreachable\n  }\n")},
-        {"a phi after a non-phi", "parsed.phi.leading",
+        {S("a phi after a non-phi"), S("parsed.phi.leading"),
          MOD("  func @f(%a: i32, %c: bool) -> void {\n    block entry:\n"
              "      branch %c, l, l\n    block l:\n"
              "      %y: i32 = add wrap %a, %a\n"
              "      %p: i32 = phi [entry: %a]\n      unreachable\n  }\n")},
-        {"a phi that misses a predecessor", "parsed.phi.arms",
+        {S("a phi that misses a predecessor"), S("parsed.phi.arms"),
          MOD("  func @f(%a: i32, %c: bool) -> void {\n    block entry:\n"
              "      branch %c, l, r\n    block l:\n      jump r\n"
              "    block r:\n      %p: i32 = phi [entry: %a]\n"
@@ -238,14 +247,15 @@ static void test_parsed_rules(void)
         run_t *r = verify(cases[i].src, IR_PROP_PARSED);
 
         if (parsed(r) || !said(r, cases[i].rule)) {
-            printf("FAIL  %s is caught and names %s\n", cases[i].what,
-                   cases[i].rule);
+            printf("FAIL  %.*s is caught and names %.*s\n",
+                   (int)cases[i].what.u8_bytes, cases[i].what.data,
+                   (int)cases[i].rule.u8_bytes, cases[i].rule.data);
             fails++;
         }
 
         if (!every_diag_is_placed_and_named(r->d)) {
-            printf("FAIL  %s is reported with a location and a rule\n",
-                   cases[i].what);
+            printf("FAIL  %.*s is reported with a location and a rule\n",
+                   (int)cases[i].what.u8_bytes, cases[i].what.data);
             fails++;
         }
         done(r);
@@ -255,43 +265,45 @@ static void test_parsed_rules(void)
 static void test_typed_rules(void)
 {
     struct {
-        const char *what;
-        const char *rule;
-        const char *src;
+        core_string_t what;
+        core_string_t rule;
+        core_string_t src;
     } cases[] = {
-        {"an instruction that breaks its rule", "arithmetic operands",
+        {S("an instruction that breaks its rule"), S("arithmetic operands"),
          MOD("  func @f(%a: i32, %b: u64) -> void {\n    block entry:\n"
              "      %s: i32 = add wrap %a, %b\n      unreachable\n  }\n")},
-        {"a member name that does not resolve", "has no member",
+        {S("a member name that does not resolve"), S("has no member"),
          MOD("  func @f(%p: ptr[(x: i32)]) -> void {\n    block entry:\n"
              "      %q: ptr[i32] = field %p, \"nope\"\n      unreachable\n  }\n")},
-        {"a call whose argument is wrong", "and the argument is",
+        {S("a call whose argument is wrong"), S("and the argument is"),
          MOD("  func @g(%x: i32) -> void {\n    block entry:\n"
              "      unreachable\n  }\n"
              "  func @f(%a: u64) -> void {\n    block entry:\n"
              "      %r: void = call @g, %a\n      unreachable\n  }\n")},
-        {"a return that does not match", "returns i32, and this value is",
+        {S("a return that does not match"),
+         S("returns i32, and this value is"),
          MOD("  func @f(%a: u64) -> i32 {\n    block entry:\n"
              "      return %a\n  }\n")},
-        {"a switch on a non-integer", "scrutinee",
+        {S("a switch on a non-integer"), S("scrutinee"),
          MOD("  func @f(%a: f64) -> void {\n    block entry:\n"
              "      switch %a, default: out\n    block out:\n"
              "      unreachable\n  }\n")},
-        {"an opaque named type used as a scalar", "arithmetic needs",
+        {S("an opaque named type used as a scalar"), S("arithmetic needs"),
          MOD("  func @f(%a: Widget) -> void {\n    block entry:\n"
              "      %s: Widget = add wrap %a, %a\n      unreachable\n  }\n")},
-        {"a constant that does not fit", "does not fit in",
+        {S("a constant that does not fit"), S("does not fit in"),
          MOD("  func @f() -> void {\n    block entry:\n"
              "      %k: i8 = const 300\n      unreachable\n  }\n")},
-        {"an extract name that does not resolve", "has no member",
+        {S("an extract name that does not resolve"), S("has no member"),
          MOD("  func @f(%v: (x: i32)) -> void {\n    block entry:\n"
              "      %q: i32 = extract %v, \"nope\"\n"
              "      unreachable\n  }\n")},
-        {"a case value the scrutinee cannot hold", "not representable in i8",
+        {S("a case value the scrutinee cannot hold"),
+         S("not representable in i8"),
          MOD("  func @f(%a: i8) -> void {\n    block entry:\n"
              "      switch %a, default: out, [300: out]\n"
              "    block out:\n      unreachable\n  }\n")},
-        {"a duplicated switch case", "two cases both match",
+        {S("a duplicated switch case"), S("two cases both match"),
          MOD("  func @f(%a: i32) -> void {\n    block entry:\n"
              "      switch %a, default: out, [1: out], [1: out]\n"
              "    block out:\n      unreachable\n  }\n")},
@@ -301,20 +313,21 @@ static void test_typed_rules(void)
         run_t *r = verify(cases[i].src, IR_PROP_PARSED | IR_PROP_TYPED);
 
         if (typed(r) || !said(r, cases[i].rule)) {
-            printf("FAIL  %s is caught and says %s\n", cases[i].what,
-                   cases[i].rule);
+            printf("FAIL  %.*s is caught and says %.*s\n",
+                   (int)cases[i].what.u8_bytes, cases[i].what.data,
+                   (int)cases[i].rule.u8_bytes, cases[i].rule.data);
             fails++;
         }
 
         if (!parsed(r)) {
-            printf("FAIL  %s is still structurally well formed\n",
-                   cases[i].what);
+            printf("FAIL  %.*s is still structurally well formed\n",
+                   (int)cases[i].what.u8_bytes, cases[i].what.data);
             fails++;
         }
 
         if (!every_diag_is_placed_and_named(r->d)) {
-            printf("FAIL  %s is reported with a location and a rule\n",
-                   cases[i].what);
+            printf("FAIL  %.*s is reported with a location and a rule\n",
+                   (int)cases[i].what.u8_bytes, cases[i].what.data);
             fails++;
         }
         done(r);
@@ -329,9 +342,9 @@ static void test_ssa_rules(void)
                         IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
 
     check("a local in a module claiming SSA is caught",
-          !ssa(loc) && said(loc, "ssa.locals"));
+          !ssa(loc) && said(loc, S("ssa.locals")));
     check("and the false claim is reported as such",
-          said(loc, "claims ssa, which the verifier finds does not hold"));
+          said(loc, S("claims ssa, which the verifier finds does not hold")));
     done(loc);
 
     run_t *dom = verify(MOD("  func @f(%c: bool) -> i32 {\n    block entry:\n"
@@ -341,7 +354,7 @@ static void test_ssa_rules(void)
                         IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
 
     check("a use its definition does not dominate is caught",
-          !ssa(dom) && said(dom, "ssa.dominance"));
+          !ssa(dom) && said(dom, S("ssa.dominance")));
     done(dom);
 
     run_t *order = verify(MOD("  func @f(%a: i32) -> i32 {\n    block entry:\n"
@@ -350,7 +363,7 @@ static void test_ssa_rules(void)
                           IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
 
     check("a use before its definition in one block is caught",
-          !ssa(order) && said(order, "ssa.dominance"));
+          !ssa(order) && said(order, S("ssa.dominance")));
     done(order);
 
     run_t *arm = verify(MOD("  func @f(%a: i32, %c: bool) -> i32 {\n"
@@ -373,17 +386,17 @@ static void test_ssa_rules(void)
                         IR_PROP_PARSED | IR_PROP_TYPED);
 
     check("a phi arm of the wrong type is a typing failure",
-          !typed(bad) && said(bad, "incoming value"));
+          !typed(bad) && said(bad, S("incoming value")));
     done(bad);
 }
 
 static void test_extension_opcodes(void)
 {
-    const char *src = "module m {\n  profile synth\n  target t\n\n"
-                      "  func @f(%a: str, %b: str) -> str {\n"
-                      "    block entry:\n"
-                      "      %s: str = synth.concat %a, %b\n"
-                      "      return %s\n  }\n}\n";
+    core_string_t src = S("module m {\n  profile synth\n  target t\n\n"
+                          "  func @f(%a: str, %b: str) -> str {\n"
+                          "    block entry:\n"
+                          "      %s: str = synth.concat %a, %b\n"
+                          "      return %s\n  }\n}\n");
 
     run_t *r = verify(src, IR_PROP_PARSED | IR_PROP_TYPED);
 
@@ -409,14 +422,14 @@ static void test_extension_opcodes(void)
         }
 
         ir_render_t rd = {.module = m};
-        char       *rp = ir_diags_render_text(d, &rd);
+        core_string_t rp = ir_diags_render_text(d, &rd);
 
         check("rebound to a profile without it, the module is still parsed",
               (held & IR_PROP_PARSED) != 0);
         check("but is no longer typed", !(held & IR_PROP_TYPED));
         check("and it is reported as a missing profile, not an unknown opcode",
-              told(d, "not one profile bce supplies"));
-        free(rp);
+              told(d, S("not one profile bce supplies")));
+        free(rp.data);
     }
     ir_ctx_free(ctx);
 
@@ -424,10 +437,10 @@ static void test_extension_opcodes(void)
 
 static ir_module_t *built(ir_ctx_t *ctx, ir_func_t **out)
 {
-    ir_module_t *m = ir_module_new(ctx, "m", &ir_profile_bce, "t");
-    ir_func_t   *f = ir_func_add(m, "f", ir_type_parse(m, "() -> void"),
+    ir_module_t *m = ir_module_new(ctx, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t   *f = ir_func_add(m, S("f"), ir_type_parse(m, S("() -> void")),
                                  IR_LINK_EXTERNAL);
-    ir_block_t  *b = ir_block_add(f, "entry");
+    ir_block_t  *b = ir_block_add(f, S("entry"));
     ir_instr_t  *u = ir_instr_add(b, IR_OP_UNREACHABLE);
 
     ir_module_set_span(m, ir_span_make(0, 0, 6, 1, 1, 1, 7));
@@ -445,37 +458,37 @@ static ir_module_t *built(ir_ctx_t *ctx, ir_func_t **out)
 static void test_parsed_rules_the_builder_prevents(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "t");
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("t"));
 
     ir_module_set_span(m, ir_span_make(0, 0, 6, 1, 1, 1, 7));
 
-    ir_func_t  *f  = ir_func_add(m, "f", ir_type_parse(m, "(i32) -> void"),
+    ir_func_t  *f  = ir_func_add(m, S("f"), ir_type_parse(m, S("(i32) -> void")),
                                  IR_LINK_EXTERNAL);
-    ir_value_t *a  = ir_param_add(f, "a", ir_type_parse(m, "i32"));
-    ir_block_t *b  = ir_block_add(f, "entry");
-    ir_func_t  *g  = ir_func_add(m, "g", ir_type_parse(m, "() -> void"),
+    ir_value_t *a  = ir_param_add(f, S("a"), ir_type_parse(m, S("i32")));
+    ir_block_t *b  = ir_block_add(f, S("entry"));
+    ir_func_t  *g  = ir_func_add(m, S("g"), ir_type_parse(m, S("() -> void")),
                                  IR_LINK_EXTERNAL);
-    ir_block_t *gb = ir_block_add(g, "elsewhere");
+    ir_block_t *gb = ir_block_add(g, S("elsewhere"));
 
     ir_instr_add(gb, IR_OP_UNREACHABLE);
 
     ir_instr_t *few = ir_instr_add(b, IR_OP_ADD);
 
-    ir_instr_set_dest(few, "s", ir_type_parse(m, "i32"));
-    ir_instr_add_mod(few, "wrap");
+    ir_instr_set_dest(few, S("s"), ir_type_parse(m, S("i32")));
+    ir_instr_add_mod(few, S("wrap"));
     ir_instr_operand_value(few, a);
 
     ir_instr_t *kind = ir_instr_add(b, IR_OP_ADD);
 
-    ir_instr_set_dest(kind, "k", ir_type_parse(m, "i32"));
-    ir_instr_add_mod(kind, "wrap");
+    ir_instr_set_dest(kind, S("k"), ir_type_parse(m, S("i32")));
+    ir_instr_add_mod(kind, S("wrap"));
 
     check("the builder refuses an operand of the wrong kind",
-          !ir_instr_operand_type(kind, ir_type_parse(m, "i32")));
+          !ir_instr_operand_type(kind, ir_type_parse(m, S("i32"))));
     ir_instr_operand_value(kind, a);
     ir_instr_operand_value(kind, a);
     kind->operands[0].kind = IR_OPD_TYPE;
-    kind->operands[0].type = ir_type_parse(m, "i32");
+    kind->operands[0].type = ir_type_parse(m, S("i32"));
 
     ir_instr_t *away = ir_instr_add(b, IR_OP_JUMP);
 
@@ -484,10 +497,10 @@ static void test_parsed_rules_the_builder_prevents(void)
     ir_instr_t *ld = ir_instr_add(b, IR_OP_LOAD);
 
     check("the builder refuses a modifier the opcode does not take",
-          !ir_instr_add_mod(ld, "sat"));
+          !ir_instr_add_mod(ld, S("sat")));
 
-    ld->mods   = ir_alloc(ctx, sizeof(char *));
-    ld->mods[0] = "sat";
+    ld->mods   = ir_alloc(ctx, sizeof(core_string_t));
+    ld->mods[0] = S("sat");
     ld->n_mods  = 1;
 
     ir_diags_t *d = ir_diags_new(ctx, nullptr);
@@ -503,20 +516,24 @@ static void test_parsed_rules_the_builder_prevents(void)
     check("a module in this state is not structurally well formed",
           !(held & IR_PROP_PARSED));
     check("an instruction with too few operands is caught",
-          told(d, "takes 2 to 2 operands and has 1"));
+          told(d, S("takes 2 to 2 operands and has 1")));
     check("an operand of the wrong kind is caught",
-          told(d, "is a type where the table says value"));
+          told(d, S("is a type where the table says value")));
     check("a branch to a block of another function is caught",
-          told(d, "parsed.block-ref"));
+          told(d, S("parsed.block-ref")));
     check("a modifier the opcode does not take is caught",
-          told(d, "does not take the modifier sat"));
+          told(d, S("does not take the modifier sat")));
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         const ir_diag_t *dg = ir_diags_at(d, i);
 
-        if (!ir_span_known(dg->primary.span) || !dg->primary.label) {
-            printf("FAIL  unplaced or unnamed: %s / %s\n",
-                   ir_diag_code(dg->code),
-                   dg->message ? dg->message : "(no message)");
+        if (!ir_span_known(dg->primary.span) || !dg->primary.label.data) {
+            core_string_t code    = ir_diag_code(dg->code);
+            core_string_t message = dg->message.data ? dg->message
+                                                     : S("(no message)");
+
+            printf("FAIL  unplaced or unnamed: %.*s / %.*s\n",
+                   (int)code.u8_bytes, code.data, (int)message.u8_bytes,
+                   message.data);
             fails++;
         }
     }
@@ -527,20 +544,20 @@ static void test_parsed_rules_the_builder_prevents(void)
 static void test_value_references_resolve(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "t");
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("t"));
 
     ir_module_set_span(m, ir_span_make(0, 0, 6, 1, 1, 1, 7));
 
-    ir_func_t  *f = ir_func_add(m, "f", ir_type_parse(m, "() -> void"),
+    ir_func_t  *f = ir_func_add(m, S("f"), ir_type_parse(m, S("() -> void")),
                                 IR_LINK_EXTERNAL);
-    ir_func_t  *g = ir_func_add(m, "g", ir_type_parse(m, "(i32) -> void"),
+    ir_func_t  *g = ir_func_add(m, S("g"), ir_type_parse(m, S("(i32) -> void")),
                                 IR_LINK_EXTERNAL);
-    ir_value_t *a = ir_param_add(g, "a", ir_type_parse(m, "i32"));
-    ir_block_t *b = ir_block_add(f, "entry");
+    ir_value_t *a = ir_param_add(g, S("a"), ir_type_parse(m, S("i32")));
+    ir_block_t *b = ir_block_add(f, S("entry"));
     ir_instr_t *c = ir_instr_add(b, IR_OP_COPY);
 
-    ir_block_add(g, "entry");
-    ir_instr_set_dest(c, "s", ir_type_parse(m, "i32"));
+    ir_block_add(g, S("entry"));
+    ir_instr_set_dest(c, S("s"), ir_type_parse(m, S("i32")));
     ir_instr_operand_value(c, a);
     ir_instr_add(b, IR_OP_UNREACHABLE);
 
@@ -555,7 +572,7 @@ static void test_value_references_resolve(void)
     }
 
     check("a use of a value belonging to another function is caught",
-          !(held & IR_PROP_PARSED) && told(d, "parsed.value-ref"));
+          !(held & IR_PROP_PARSED) && told(d, S("parsed.value-ref")));
     check("and is placed and named", every_diag_is_placed_and_named(d));
     ir_ctx_free(ctx);
 }
@@ -569,16 +586,16 @@ static void test_entry_block_rules(void)
                       IR_PROP_PARSED);
 
     check("a branch back to entry gives it a predecessor, which is caught",
-          !parsed(r) && said(r, "parsed.entry"));
+          !parsed(r) && said(r, S("parsed.entry")));
     done(r);
 
     ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "t");
-    ir_func_t   *f   = ir_func_add(m, "f", ir_type_parse(m, "() -> void"),
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t   *f   = ir_func_add(m, S("f"), ir_type_parse(m, S("() -> void")),
                                    IR_LINK_EXTERNAL);
-    ir_block_t  *e   = ir_block_add(f, "entry");
+    ir_block_t  *e   = ir_block_add(f, S("entry"));
 
-    ir_block_add(f, "other");
+    ir_block_add(f, S("other"));
 
     check("the entry block is the first block by construction, so there is "
           "nothing to verify", ir_block_entry(f) == f->blocks[0]
@@ -588,12 +605,12 @@ static void test_entry_block_rules(void)
 
 static void test_phi_names_its_predecessors(void)
 {
-    const char *twice = MOD("  func @f(%a: i32, %c: bool) -> void {\n"
+    core_string_t twice = MOD("  func @f(%a: i32, %c: bool) -> void {\n"
                             "    block entry:\n      branch %c, l, l\n"
                             "    block l:\n"
                             "      %p: i32 = phi [entry: %a], [entry: %a]\n"
                             "      unreachable\n  }\n");
-    const char *stranger = MOD("  func @f(%a: i32, %c: bool) -> void {\n"
+    core_string_t stranger = MOD("  func @f(%a: i32, %c: bool) -> void {\n"
                                "    block entry:\n      branch %c, l, r\n"
                                "    block l:\n      jump r\n"
                                "    block r:\n"
@@ -603,30 +620,30 @@ static void test_phi_names_its_predecessors(void)
     run_t *t = verify(twice, IR_PROP_PARSED);
 
     check("a phi that names one predecessor twice is caught",
-          !parsed(t) && said(t, "parsed.phi.arms"));
+          !parsed(t) && said(t, S("parsed.phi.arms")));
     done(t);
 
     run_t *sx = verify(stranger, IR_PROP_PARSED);
 
     check("a phi that names a block that is not a predecessor is caught",
-          !parsed(sx) && said(sx, "parsed.phi.arms"));
+          !parsed(sx) && said(sx, S("parsed.phi.arms")));
     done(sx);
 }
 
 static void test_values_carry_types(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "t");
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("t"));
 
     ir_module_set_span(m, ir_span_make(0, 0, 6, 1, 1, 1, 7));
 
-    ir_func_t  *f = ir_func_add(m, "f", ir_type_parse(m, "() -> void"),
+    ir_func_t  *f = ir_func_add(m, S("f"), ir_type_parse(m, S("() -> void")),
                                 IR_LINK_EXTERNAL);
-    ir_block_t *b = ir_block_add(f, "entry");
+    ir_block_t *b = ir_block_add(f, S("entry"));
 
     ir_instr_add(b, IR_OP_UNREACHABLE);
 
-    ir_value_t *p = ir_param_add(f, "a", ir_type_parse(m, "i32"));
+    ir_value_t *p = ir_param_add(f, S("a"), ir_type_parse(m, S("i32")));
 
     p->type = nullptr;
 
@@ -641,7 +658,7 @@ static void test_values_carry_types(void)
     }
 
     check("a value with no type is caught",
-          !(held & IR_PROP_TYPED) && told(d, "has no type"));
+          !(held & IR_PROP_TYPED) && told(d, S("has no type")));
     ir_ctx_free(ctx);
 }
 
@@ -671,11 +688,11 @@ static void test_dominators(void)
 
     ir_func_t  *f    = ir_func_at(m, 0);
     ir_doms_t  *dom  = ir_doms_of(f);
-    ir_block_t *e    = ir_block_find(f, "entry");
-    ir_block_t *l    = ir_block_find(f, "l");
-    ir_block_t *r    = ir_block_find(f, "r");
-    ir_block_t *j    = ir_block_find(f, "join");
-    ir_block_t *orph = ir_block_find(f, "orphan");
+    ir_block_t *e    = ir_block_find(f, S("entry"));
+    ir_block_t *l    = ir_block_find(f, S("l"));
+    ir_block_t *r    = ir_block_find(f, S("r"));
+    ir_block_t *j    = ir_block_find(f, S("join"));
+    ir_block_t *orph = ir_block_find(f, S("orphan"));
 
     check("every block dominates itself", ir_dominates(dom, l, l));
     check("entry dominates every reachable block",
@@ -718,7 +735,7 @@ static void test_no_rule_resolves(void)
           (held & IR_PROP_PARSED) != 0);
     check("but is not typed", !(held & IR_PROP_TYPED));
     check("and the verifier says no rule resolved rather than staying quiet",
-          told(d, "no typing rule resolves for unreachable"));
+          told(d, S("no typing rule resolves for unreachable")));
     check("every diagnostic is placed and names its rule",
           every_diag_is_placed_and_named(d));
     ir_ctx_free(ctx);
@@ -732,18 +749,19 @@ static void test_origins(void)
     ir_instr_t  *in  = ir_block_entry(f)->instrs[0];
 
     check("an origin that is not SOURCE and names no agent cannot be built",
-          ir_origin_new(ctx, IR_ORIGIN_INLINED_FROM, in->span, nullptr,
-                        nullptr) == nullptr);
+          ir_origin_new(ctx, IR_ORIGIN_INLINED_FROM, in->span,
+                        (core_string_t){}, nullptr) == nullptr);
     check("a SOURCE origin needs no agent",
-          ir_origin_new(ctx, IR_ORIGIN_SOURCE, in->span, nullptr, nullptr)
+          ir_origin_new(ctx, IR_ORIGIN_SOURCE, in->span, (core_string_t){},
+                        nullptr)
               != nullptr);
 
     ir_module_establish(m, IR_PROP_PARSED);
 
-    ir_origin_t *a = ir_origin_new(ctx, IR_ORIGIN_INLINED_FROM, in->span, "p",
-                                   nullptr);
-    ir_origin_t *b = ir_origin_new(ctx, IR_ORIGIN_INLINED_FROM, in->span, "p",
-                                   a);
+    ir_origin_t *a = ir_origin_new(ctx, IR_ORIGIN_INLINED_FROM, in->span,
+                                   S("p"), nullptr);
+    ir_origin_t *b = ir_origin_new(ctx, IR_ORIGIN_INLINED_FROM, in->span,
+                                   S("p"), a);
 
     a->parent  = b;
     in->origin = a;
@@ -756,7 +774,7 @@ static void test_origins(void)
     }
 
     check("an origin chain that loops is caught rather than followed forever",
-          !(h2 & IR_PROP_PARSED) && told(d2, "origin.acyclic"));
+          !(h2 & IR_PROP_PARSED) && told(d2, S("origin.acyclic")));
     check("and the verifier places and names every diagnostic it makes",
           every_diag_is_placed_and_named(d2));
     ir_ctx_free(ctx);
@@ -771,7 +789,7 @@ static void test_annotations(void)
     ir_instr_t  *in  = ir_block_entry(f)->instrs[0];
 
     ir_annot_set(ctx, &in->annots,
-                 (ir_annot_t){.key = "bare", .kind = IR_ANNOT_BOOL, .b = true});
+                 (ir_annot_t){.key = S("bare"), .kind = IR_ANNOT_BOOL, .b = true});
     ir_module_establish(m, IR_PROP_PARSED);
 
     ir_props_t held = ir_verify(m, d);
@@ -781,11 +799,11 @@ static void test_annotations(void)
     }
 
     ir_render_t rd = {.module = m};
-    char       *rp = ir_diags_render_text(d, &rd);
+    core_string_t rp = ir_diags_render_text(d, &rd);
 
     check("an annotation key with no namespace is caught",
-          !(held & IR_PROP_PARSED) && told(d, "annot.namespace"));
-    free(rp);
+          !(held & IR_PROP_PARSED) && told(d, S("annot.namespace")));
+    free(rp.data);
     ir_ctx_free(ctx);
 }
 
@@ -802,12 +820,12 @@ static void test_annotation_invalidation(void)
 
     for (size_t i = 0; i < 4; i++) {
         ir_annot_set(ctx, maps[i],
-                     (ir_annot_t){.key          = "ir.mark",
+                     (ir_annot_t){.key          = S("ir.mark"),
                                   .kind         = IR_ANNOT_BOOL,
                                   .b            = true,
                                   .derived_from = IR_PROP_TYPED});
         ir_annot_set(ctx, maps[i],
-                     (ir_annot_t){.key  = "bce.kept",
+                     (ir_annot_t){.key  = S("bce.kept"),
                                   .kind = IR_ANNOT_BOOL,
                                   .b    = true});
     }
@@ -820,8 +838,8 @@ static void test_annotation_invalidation(void)
     bool kept    = true;
 
     for (size_t i = 0; i < 4; i++) {
-        dropped = dropped && !ir_annot_get(maps[i], "ir.mark");
-        kept    = kept && ir_annot_get(maps[i], "bce.kept");
+        dropped = dropped && !ir_annot_get(maps[i], S("ir.mark"));
+        kept    = kept && ir_annot_get(maps[i], S("bce.kept"));
     }
 
     check("invalidating a property drops what was derived from it, on every "
@@ -856,7 +874,7 @@ static bool add_a_local(ir_module_t *m, ir_diags_t *d, void *state)
     (void)d;
     (void)state;
 
-    ir_local_add(ir_func_at(m, 0), "t", ir_type_parse(m, "i32"));
+    ir_local_add(ir_func_at(m, 0), S("t"), ir_type_parse(m, S("i32")));
 
     return true;
 }
@@ -890,16 +908,16 @@ static void test_a_pass_leaves_foreign_annotations_alone(void)
     ir_instr_t  *in  = ir_block_entry(f)->instrs[0];
 
     ir_annot_set(ctx, &in->annots,
-                 (ir_annot_t){.key  = "bce.mine",
+                 (ir_annot_t){.key  = S("bce.mine"),
                               .kind = IR_ANNOT_STR,
-                              .s    = "keep me"});
+                              .s    = S("keep me")});
     ir_annot_set(ctx, &f->annots,
-                 (ir_annot_t){.key  = "bce.mine",
+                 (ir_annot_t){.key  = S("bce.mine"),
                               .kind = IR_ANNOT_STR,
-                              .s    = "keep me"});
+                              .s    = S("keep me")});
     ir_module_establish(m, IR_PROP_PARSED);
 
-    ir_pass_t edits = {.name        = "edits",
+    ir_pass_t edits = {.name        = S("edits"),
                        .requires    = IR_PROP_PARSED,
                        .invalidates = IR_PROP_SSA,
                        .run         = a_pass_that_edits};
@@ -907,11 +925,12 @@ static void test_a_pass_leaves_foreign_annotations_alone(void)
     check("a pass that does not know a namespace still runs",
           ir_pass_run(&edits, m, nullptr, nullptr, nullptr) == IR_PASS_OK);
 
-    ir_annot_t *kept  = ir_annot_get(&in->annots, "bce.mine");
-    ir_annot_t *kept2 = ir_annot_get(&f->annots, "bce.mine");
+    ir_annot_t *kept  = ir_annot_get(&in->annots, S("bce.mine"));
+    ir_annot_t *kept2 = ir_annot_get(&f->annots, S("bce.mine"));
 
     check("and leaves an annotation in a namespace it does not understand",
-          kept && kept->s && !strcmp(kept->s, "keep me") && kept2);
+          kept && kept->s.data && core_string_eq(kept->s, S("keep me"))
+              && kept2);
     ir_ctx_free(ctx);
 }
 
@@ -924,10 +943,10 @@ static void test_passes(void)
 
     ir_module_establish(m, IR_PROP_PARSED);
 
-    ir_pass_t losing = {.name        = "loses-locations",
+    ir_pass_t losing = {.name        = S("loses-locations"),
                         .requires    = IR_PROP_PARSED,
                         .run         = drop_spans};
-    ir_pass_t honest = {.name        = "keeps-locations",
+    ir_pass_t honest = {.name        = S("keeps-locations"),
                         .requires    = IR_PROP_PARSED,
                         .run         = keep_spans};
 
@@ -938,7 +957,7 @@ static void test_passes(void)
           ir_pass_run(&losing, m, nullptr, nullptr, d)
               == IR_PASS_FAILED);
 
-    ir_pass_t mute = {.name     = "gives-up",
+    ir_pass_t mute = {.name     = S("gives-up"),
                       .requires = IR_PROP_PARSED,
                       .run      = a_pass_that_gives_up};
     uint32_t  said = ir_diags_count(d);
@@ -950,18 +969,18 @@ static void test_passes(void)
           ir_diags_count(d) > said
               && ir_diags_at(d, said)->code == IR_DIAG_INTERNAL);
     check("and it names the pass that went quiet",
-          told(d, "gives-up failed and said nothing"));
+          told(d, S("gives-up failed and said nothing")));
 
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         produced[ir_diags_at(d, i)->code] = true;
     }
 
     ir_render_t rd = {.module = m};
-    char       *rp = ir_diags_render_text(d, &rd);
+    core_string_t rp = ir_diags_render_text(d, &rd);
 
     check("and says what it lost",
-          told(d, "had a known location before loses-locations ran"));
-    free(rp);
+          told(d, S("had a known location before loses-locations ran")));
+    free(rp.data);
     ir_ctx_free(ctx);
 }
 
@@ -976,11 +995,11 @@ static void test_undeclared_invalidation(void)
     check("the module holds ssa to begin with",
           (ir_verify(m, d) & IR_PROP_SSA) != 0);
 
-    ir_pass_t sneaky = {.name     = "adds-a-local",
+    ir_pass_t sneaky = {.name     = S("adds-a-local"),
                         .requires = IR_PROP_PARSED,
                         .run      = add_a_local};
 
-    ir_pass_t honest = {.name     = "does-nothing",
+    ir_pass_t honest = {.name     = S("does-nothing"),
                         .requires = IR_PROP_PARSED,
                         .run      = keep_spans};
 
@@ -1000,11 +1019,11 @@ static void test_undeclared_invalidation(void)
     }
 
     ir_render_t rd = {.module = m};
-    char       *rp = ir_diags_render_text(d, &rd);
+    core_string_t rp = ir_diags_render_text(d, &rd);
 
     check("a pass that edited without declaring invalidation is caught",
-          told(d, "claims ssa, which the verifier finds does not hold"));
-    free(rp);
+          told(d, S("claims ssa, which the verifier finds does not hold")));
+    free(rp.data);
     ir_ctx_free(ctx);
 }
 
@@ -1015,7 +1034,7 @@ static void test_spanless_diagnostic_is_a_bug(void)
     ir_func_t   *f   = nullptr;
     ir_module_t *m   = built(ctx, &f);
 
-    ir_diag_begin(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, nullptr);
+    ir_diag_begin(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, (core_string_t){});
     ir_verify(m, d);
 
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
@@ -1023,22 +1042,22 @@ static void test_spanless_diagnostic_is_a_bug(void)
     }
 
     ir_render_t rd = {.module = m};
-    char       *rp = ir_diags_render_text(d, &rd);
+    core_string_t rp = ir_diags_render_text(d, &rd);
 
     check("a diagnostic reported with no location is itself reported as a bug",
-          told(d, "no primary span"));
-    free(rp);
+          told(d, S("no primary span")));
+    free(rp.data);
     ir_ctx_free(ctx);
 }
 
 static void test_address_of_local(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "t");
-    ir_func_t   *f   = ir_func_add(m, "f", ir_type_parse(m, "() -> void"),
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t   *f   = ir_func_add(m, S("f"), ir_type_parse(m, S("() -> void")),
                                    IR_LINK_EXTERNAL);
-    ir_block_t  *b   = ir_block_add(f, "entry");
-    ir_local_t  *l   = ir_local_add(f, "t", ir_type_parse(m, "i32"));
+    ir_block_t  *b   = ir_block_add(f, S("entry"));
+    ir_local_t  *l   = ir_local_add(f, S("t"), ir_type_parse(m, S("i32")));
     ir_instr_t  *address = ir_instr_add(b, IR_OP_ADDRESS_OF);
 
     ir_instr_operand_local(address, l);
@@ -1049,7 +1068,7 @@ static void test_address_of_local(void)
     ir_rule_result_t typed = ir_rule_apply(m, rs, address, d);
     check("address.of yields a pointer to the local's type",
           typed.verdict == IR_RULE_ACCEPT
-              && ir_type_eq(m, typed.result, ir_type_parse(m, "ref[i32]")));
+              && ir_type_eq(m, typed.result, ir_type_parse(m, S("ref[i32]"))));
     ir_ctx_free(ctx);
 }
 
@@ -1059,50 +1078,50 @@ static bool set_alias_analysis_complete(ir_ctx_t *ctx, ir_value_t *value,
 {
     ir_annots_t *annots = ir_value_annots(value);
     if (!ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
             .b = true,
         })
         || !ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
             .b = false,
         })
         || !ir_annot_set(ctx, annots, (ir_annot_t){
-            .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
             .b = false,
         })) return false;
 
     if (is_alias) {
         return ir_annot_set(ctx, annots, (ir_annot_t){
-                   .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+                   .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
                    .i = {.mag = 0},
                })
             && ir_annot_set(ctx, annots, (ir_annot_t){
-                   .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+                   .key = S("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
                    .i = {.mag = 1},
                })
             && ir_annot_set(ctx, annots, (ir_annot_t){
-                   .key = "ir.aliased_by0", .kind = IR_ANNOT_VALUE,
+                   .key = S("ir.aliased_by0"), .kind = IR_ANNOT_VALUE,
                    .v = alias,
                })
             && ir_annot_set(ctx, annots, (ir_annot_t){
-                   .key = "ir.aliased_by0_escapes", .kind = IR_ANNOT_BOOL,
+                   .key = S("ir.aliased_by0_escapes"), .kind = IR_ANNOT_BOOL,
                    .b = false,
                });
     }
 
     return ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+               .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
                .i = {.mag = 1},
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+               .key = S("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
                .i = {.mag = 0},
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias0", .kind = IR_ANNOT_VALUE, .v = alias,
+               .key = S("ir.alias0"), .kind = IR_ANNOT_VALUE, .v = alias,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias0_escapes", .kind = IR_ANNOT_BOOL,
+               .key = S("ir.alias0_escapes"), .kind = IR_ANNOT_BOOL,
                .b = false,
            });
 }
@@ -1112,23 +1131,23 @@ static bool set_empty_alias_analysis_complete(ir_ctx_t *ctx,
 {
     ir_annots_t *annots = ir_value_annots(value);
     return ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .key = S("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
                .b = true,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+               .key = S("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
                .b = false,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .key = S("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
                .b = false,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+               .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
                .i = {.mag = 0},
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+               .key = S("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
                .i = {.mag = 0},
            });
 }
@@ -1143,7 +1162,7 @@ static void test_release_liveness(void)
         "      return\n"
         "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
     check("dealloc rejects a later direct use of its address",
-          !typed(direct) && said(direct, "lifetime.no-live-use"));
+          !typed(direct) && said(direct, S("lifetime.no-live-use")));
     done(direct);
 
     run_t *alias = verify(MOD(
@@ -1153,15 +1172,15 @@ static void test_release_liveness(void)
         "      dealloc %alias\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
-    ir_func_t *function = ir_func_find(alias->m, "f");
-    ir_value_t *owner = function ? ir_value_find(function, "owner") : nullptr;
-    ir_value_t *other = function ? ir_value_find(function, "alias") : nullptr;
+    ir_func_t *function = ir_func_find(alias->m, S("f"));
+    ir_value_t *owner = function ? ir_value_find(function, S("owner")) : nullptr;
+    ir_value_t *other = function ? ir_value_find(function, S("alias")) : nullptr;
     bool facts = owner && other
         && set_alias_analysis_complete(alias->ctx, owner, other, false)
         && set_alias_analysis_complete(alias->ctx, other, owner, true);
     alias->held = ir_verify(alias->m, alias->d);
     check("finalize rejects a later use through a complete alias component",
-          facts && !typed(alias) && said(alias, "lifetime.no-live-alias"));
+          facts && !typed(alias) && said(alias, S("lifetime.no-live-alias")));
     done(alias);
 
     run_t *unknown = verify(MOD(
@@ -1171,10 +1190,10 @@ static void test_release_liveness(void)
         "      return\n"
         "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
     check("dealloc rejects incomplete alias information",
-          !typed(unknown) && said(unknown, "lifetime.unknown-alias"));
+          !typed(unknown) && said(unknown, S("lifetime.unknown-alias")));
     done(unknown);
 
-    const char *safe_source = MOD(
+    core_string_t safe_source = MOD(
         "  func @f(%p: ptr[i32]) -> void {\n"
         "    block entry:\n"
         "      dealloc %p\n"
@@ -1185,9 +1204,9 @@ static void test_release_liveness(void)
     ir_module_t *module = ir_module_parse(ctx, safe_source, 0, PROFILES, 2,
                                           diags);
     ir_func_t *safe_function = module
-        ? ir_func_find(module, "f") : nullptr;
+        ? ir_func_find(module, S("f")) : nullptr;
     ir_value_t *safe_value = safe_function
-        ? ir_value_find(safe_function, "p") : nullptr;
+        ? ir_value_find(safe_function, S("p")) : nullptr;
     bool safe_facts = safe_value
         && set_empty_alias_analysis_complete(ctx, safe_value);
     if (module && safe_facts) {
@@ -1204,7 +1223,7 @@ static void test_release_liveness(void)
 
 static void test_global_phase_access(void)
 {
-    const char *source = MOD(
+    core_string_t source = MOD(
         "  global @runtime_only: i32\n\n"
         "  func @init() -> void !ir.execution_phase(1) {\n"
         "    block entry:\n"
@@ -1216,9 +1235,9 @@ static void test_global_phase_access(void)
     ir_module_t *module = ir_module_parse(ctx, source, 0, PROFILES, 2,
                                           diags);
     ir_global_t *global = module
-        ? ir_global_find(module, "runtime_only") : nullptr;
+        ? ir_global_find(module, S("runtime_only")) : nullptr;
     bool partial_contract = global && ir_annot_set(ctx, &global->annots,
-        (ir_annot_t){.key = "ir.global_available_phases",
+        (ir_annot_t){.key = S("ir.global_available_phases"),
             .kind = IR_ANNOT_INT, .i = {.mag = IR_PHASE_ACCESS_RUNTIME}})
         && !ir_global_can_read(global, IR_PHASE_RUNTIME);
     check("partial global phase metadata fails conservatively",
@@ -1267,7 +1286,7 @@ static void test_global_phase_access(void)
 
 static void test_binding_phase_access(void)
 {
-    const char *source = MOD(
+    core_string_t source = MOD(
         "  func @init(%input: i32) -> i32 !ir.execution_phase(1) {\n"
         "    block entry:\n"
         "      return %input\n"
@@ -1276,8 +1295,8 @@ static void test_binding_phase_access(void)
     ir_diags_t *diags = ir_diags_new(ctx, nullptr);
     ir_module_t *module = ir_module_parse(ctx, source, 0, PROFILES, 2,
                                           diags);
-    ir_func_t *function = module ? ir_func_find(module, "init") : nullptr;
-    ir_value_t *input = function ? ir_value_find(function, "input") : nullptr;
+    ir_func_t *function = module ? ir_func_find(module, S("init")) : nullptr;
+    ir_value_t *input = function ? ir_value_find(function, S("input")) : nullptr;
     bool access = input && ir_value_set_phase_access(ctx, input,
         IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
         IR_PHASE_ACCESS_NONE);
@@ -1314,8 +1333,8 @@ static void test_store_through_address_phase_access(void)
         "      store %address, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_func_t *function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
     bool configured = local && ir_value_set_phase_access(r->ctx,
         ir_local_value(function, local), IR_PHASE_ACCESS_RUNTIME,
         IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_NONE);
@@ -1341,7 +1360,7 @@ static void test_store_through_address_phase_access(void)
         "      store %address, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    ir_global_t *global = r->m ? ir_global_find(r->m, "x") : nullptr;
+    ir_global_t *global = r->m ? ir_global_find(r->m, S("x")) : nullptr;
     configured = global && ir_global_set_phase_access(r->ctx, global,
         IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
         IR_PHASE_ACCESS_NONE);
@@ -1367,8 +1386,8 @@ static void test_store_through_address_phase_access(void)
         "      store %address, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    global = r->m ? ir_global_find(r->m, "x") : nullptr;
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    global = r->m ? ir_global_find(r->m, S("x")) : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
     ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
     ir_instr_t *store = nullptr;
     for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
@@ -1397,9 +1416,9 @@ static void test_store_through_forwarded_addresses(void)
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
     ir_func_t *option_function = option->m
-        ? ir_func_find(option->m, "f") : nullptr;
+        ? ir_func_find(option->m, S("f")) : nullptr;
     ir_value_t *extracted = option_function
-        ? ir_value_find(option_function, "address") : nullptr;
+        ? ir_value_find(option_function, S("address")) : nullptr;
     bool option_configured = extracted
         && ir_value_set_indirect_access(option->ctx, extracted,
                                         IR_INDIRECT_ACCESS_READ_WRITE);
@@ -1417,9 +1436,9 @@ static void test_store_through_forwarded_addresses(void)
         "      store %address, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_func_t *function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
     ir_value_t *parameter = function
-        ? ir_value_find(function, "address") : nullptr;
+        ? ir_value_find(function, S("address")) : nullptr;
     bool configured = parameter && ir_value_set_indirect_access(r->ctx,
         parameter, IR_INDIRECT_ACCESS_WRITE);
     if (configured) {
@@ -1438,8 +1457,8 @@ static void test_store_through_forwarded_addresses(void)
         "      store %address, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    parameter = function ? ir_value_find(function, "address") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    parameter = function ? ir_value_find(function, S("address")) : nullptr;
     configured = parameter
         && ir_value_set_indirect_access(r->ctx, parameter,
                                         IR_INDIRECT_ACCESS_READ_WRITE)
@@ -1461,8 +1480,8 @@ static void test_store_through_forwarded_addresses(void)
         "      store %copy, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
     configured = local && ir_value_set_phase_access(r->ctx,
         ir_local_value(function, local), IR_PHASE_ACCESS_RUNTIME,
         IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_NONE);
@@ -1471,10 +1490,10 @@ static void test_store_through_forwarded_addresses(void)
         r->held = ir_verify(r->m, r->d);
     }
     check("typed IR follows copied addresses to their binding phase",
-          configured && !typed(r) && said(r, "phase.binding-write"));
+          configured && !typed(r) && said(r, S("phase.binding-write")));
     done(r);
 
-    const char *const element_store = MOD(
+    const core_string_t element_store = MOD(
         "  func @f(%items: array[i32], %slot: i64, %input: i32) -> void {\n"
         "    local $x: array[i32]\n"
         "    block entry:\n"
@@ -1484,7 +1503,7 @@ static void test_store_through_forwarded_addresses(void)
         "      store %element, %input\n"
         "      return\n"
         "  }\n");
-    const char *const binding_store = MOD(
+    const core_string_t binding_store = MOD(
         "  func @f(%items: array[i32], %slot: i64, %input: i32) -> void {\n"
         "    local $x: array[i32]\n"
         "    block entry:\n"
@@ -1493,12 +1512,12 @@ static void test_store_through_forwarded_addresses(void)
         "      store %address, %items\n"
         "      return\n"
         "  }\n");
-    const char *const sources[] = {element_store, binding_store};
+    const core_string_t sources[] = {element_store, binding_store};
     bool held[2] = {0};
     for (size_t i = 0; i < 2; i++) {
         r = verify(sources[i], IR_PROP_PARSED);
-        function = r->m ? ir_func_find(r->m, "f") : nullptr;
-        local = function ? ir_local_find(function, "x") : nullptr;
+        function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+        local = function ? ir_local_find(function, S("x")) : nullptr;
         ir_instr_t *initializer = function && function->n_blocks
             && function->blocks[0]->n_instrs
             ? function->blocks[0]->instrs[0] : nullptr;
@@ -1514,13 +1533,13 @@ static void test_store_through_forwarded_addresses(void)
         held[i] = configured && typed(r);
         if (i == 1)
             check("a store over an immutable array binding is a binding write",
-                  configured && !held[i] && said(r, "phase.binding-write"));
+                  configured && !held[i] && said(r, S("phase.binding-write")));
         done(r);
     }
     check("an element store writes array contents, not the immutable binding",
           held[0]);
 
-    const char *const global_sources[] = {
+    const core_string_t global_sources[] = {
         MOD("  const global @g: array[i32]\n"
             "  func @f(%slot: i64, %input: i32) -> void {\n"
             "    block entry:\n"
@@ -1541,7 +1560,7 @@ static void test_store_through_forwarded_addresses(void)
     bool constant_rejected = false, immutable_held = false;
     for (size_t i = 0; i < 2; i++) {
         r = verify(global_sources[i], IR_PROP_PARSED);
-        ir_global_t *global = r->m ? ir_global_find(r->m, "g") : nullptr;
+        ir_global_t *global = r->m ? ir_global_find(r->m, S("g")) : nullptr;
         configured = global && ir_global_set_phase_access(r->ctx, global,
             IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
             IR_PHASE_ACCESS_RUNTIME);
@@ -1551,7 +1570,7 @@ static void test_store_through_forwarded_addresses(void)
         }
         if (i == 0)
             constant_rejected = configured && !typed(r)
-                && said(r, "phase.constant-contents-write");
+                && said(r, S("phase.constant-contents-write"));
         else
             immutable_held = configured && typed(r);
         done(r);
@@ -1579,9 +1598,9 @@ static void test_store_through_forwarded_addresses(void)
         "      store %address, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    ir_local_t *left = function ? ir_local_find(function, "x") : nullptr;
-    ir_local_t *right = function ? ir_local_find(function, "y") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    ir_local_t *left = function ? ir_local_find(function, S("x")) : nullptr;
+    ir_local_t *right = function ? ir_local_find(function, S("y")) : nullptr;
     configured = left && right
         && ir_value_set_phase_access(r->ctx,
             ir_local_value(function, left), IR_PHASE_ACCESS_RUNTIME,
@@ -1594,7 +1613,7 @@ static void test_store_through_forwarded_addresses(void)
         r->held = ir_verify(r->m, r->d);
     }
     check("typed IR checks every binding reached through a phi address",
-          configured && !typed(r) && said(r, "phase.binding-write"));
+          configured && !typed(r) && said(r, S("phase.binding-write")));
     done(r);
 }
 
@@ -1624,7 +1643,7 @@ static void test_store_target_visitor(void)
         "      return\n"
         "    }\n"
         ), IR_PROP_PARSED);
-    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    ir_func_t *function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
     ir_instr_t *store = nullptr;
     ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
     for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
@@ -1632,7 +1651,7 @@ static void test_store_target_visitor(void)
     store_target_capture_t capture = {0};
     bool complete = store && ir_value_visit_store_targets(
         ir_operand_value(&store->operands[0]), capture_store_target, &capture);
-    ir_global_t *shared = r->m ? ir_global_find(r->m, "shared") : nullptr;
+    ir_global_t *shared = r->m ? ir_global_find(r->m, S("shared")) : nullptr;
     check("the store-target visitor fixture parses and finds its store",
           store && shared);
     check("the store-target visitor completes with one binding target",
@@ -1651,7 +1670,7 @@ static void test_store_target_visitor(void)
         "    }\n"
         ), IR_PROP_PARSED);
     ir_func_t *allocated_function = allocated->m
-        ? ir_func_find(allocated->m, "f") : nullptr;
+        ? ir_func_find(allocated->m, S("f")) : nullptr;
     ir_block_t *allocated_entry = allocated_function
         ? ir_block_entry(allocated_function) : nullptr;
     ir_instr_t *allocated_store = nullptr;
@@ -1668,8 +1687,8 @@ static void test_store_target_visitor(void)
               && capture.targets[0] == allocated_store->operands[0].value);
     done(allocated);
 
-    ir_local_t *returned = ir_local_add(function, "returned",
-                                        ir_type_parse(r->m, "ref[i32]"));
+    ir_local_t *returned = ir_local_add(function, S("returned"),
+                                        ir_type_parse(r->m, S("ref[i32]")));
     ir_value_t *returned_value = returned
         ? ir_local_value(function, returned) : nullptr;
     ir_value_t *shared_value = ir_global_address(r->m, shared);
@@ -1684,12 +1703,12 @@ static void test_store_target_visitor(void)
           complete && capture.count == 1
               && capture.targets[0]->kind == IR_VAL_GLOBAL
               && capture.targets[0]->global == shared);
-    ir_global_t *items = ir_global_add(r->m, "items",
-        ir_type_parse(r->m, "array[i32]"));
+    ir_global_t *items = ir_global_add(r->m, S("items"),
+        ir_type_parse(r->m, S("array[i32]")));
     ir_value_t *items_address = items
         ? ir_global_address(r->m, items) : nullptr;
-    ir_local_t *view = ir_local_add(function, "view",
-        ir_type_parse(r->m, "view[i32]"));
+    ir_local_t *view = ir_local_add(function, S("view"),
+        ir_type_parse(r->m, S("view[i32]")));
     ir_value_t *view_value = view ? ir_local_value(function, view) : nullptr;
     ir_alias_target_t view_alias = {
         .value = items_address,
@@ -1699,28 +1718,29 @@ static void test_store_target_visitor(void)
         && ir_value_set_alias_targets(r->ctx, view_value, &view_alias, 1,
                                       true);
     ir_annot_t *view_target = view_value
-        ? ir_annot_get(ir_value_annots(view_value), "ir.alias0") : nullptr;
+        ? ir_annot_get(ir_value_annots(view_value), S("ir.alias0"))
+        : nullptr;
     ir_annot_t *view_escape = view_value
-        ? ir_annot_get(ir_value_annots(view_value), "ir.alias0_escapes")
+        ? ir_annot_get(ir_value_annots(view_value), S("ir.alias0_escapes"))
         : nullptr;
     check("non-pointer view values retain backing-storage provenance",
           view_aliased && view_target
               && view_target->kind == IR_ANNOT_VALUE
               && view_target->v == items_address && view_escape
               && view_escape->kind == IR_ANNOT_BOOL && view_escape->b);
-    ir_local_t *projected_view = ir_local_add(function, "projected_view",
-        ir_type_parse(r->m, "view[i32]"));
+    ir_local_t *projected_view = ir_local_add(function, S("projected_view"),
+        ir_type_parse(r->m, S("view[i32]")));
     ir_value_t *projected_view_value = projected_view
         ? ir_local_value(function, projected_view) : nullptr;
     bool copied_view_alias = projected_view_value
         && ir_value_copy_alias_targets(r->ctx, projected_view_value,
                                       view_value);
     ir_annot_t *projected_target = projected_view_value
-        ? ir_annot_get(ir_value_annots(projected_view_value), "ir.alias0")
+        ? ir_annot_get(ir_value_annots(projected_view_value), S("ir.alias0"))
         : nullptr;
     ir_annot_t *projected_escape = projected_view_value
         ? ir_annot_get(ir_value_annots(projected_view_value),
-                       "ir.alias0_escapes") : nullptr;
+                       S("ir.alias0_escapes")) : nullptr;
     check("alias provenance survives value-preserving result projections",
           copied_view_alias && projected_target
               && projected_target->kind == IR_ANNOT_VALUE
@@ -1730,8 +1750,8 @@ static void test_store_target_visitor(void)
     check("view provenance is not treated as an indirect store address",
           view_value && !ir_value_visit_store_targets(view_value,
               capture_store_target, &capture));
-    ir_global_t *other_items = ir_global_add(r->m, "other_items",
-        ir_type_parse(r->m, "array[i32]"));
+    ir_global_t *other_items = ir_global_add(r->m, S("other_items"),
+        ir_type_parse(r->m, S("array[i32]")));
     ir_value_t *other_items_address = other_items
         ? ir_global_address(r->m, other_items) : nullptr;
     bool appended_alias = other_items_address
@@ -1742,18 +1762,19 @@ static void test_store_target_visitor(void)
             (ir_alias_target_t){.value = other_items_address,
                                 .escapes = true});
     ir_annot_t *alias_count = view_value
-        ? ir_annot_get(ir_value_annots(view_value), "ir.alias_count") : nullptr;
+        ? ir_annot_get(ir_value_annots(view_value), S("ir.alias_count"))
+        : nullptr;
     ir_annot_t *second_alias = view_value
-        ? ir_annot_get(ir_value_annots(view_value), "ir.alias1") : nullptr;
+        ? ir_annot_get(ir_value_annots(view_value), S("ir.alias1")) : nullptr;
     ir_annot_t *second_escape = view_value
-        ? ir_annot_get(ir_value_annots(view_value), "ir.alias1_escapes")
+        ? ir_annot_get(ir_value_annots(view_value), S("ir.alias1_escapes"))
         : nullptr;
     ir_annot_t *alias_complete = view_value
         ? ir_annot_get(ir_value_annots(view_value),
-                       "ir.alias_analysis_complete") : nullptr;
+                       S("ir.alias_analysis_complete")) : nullptr;
     ir_annot_t *reverse_count = other_items_address
         ? ir_annot_get(ir_value_annots(other_items_address),
-                       "ir.aliased_by_count") : nullptr;
+                       S("ir.aliased_by_count")) : nullptr;
     check("incremental alias discovery retains distinct targets and reverse edges",
           duplicate_alias && alias_count && alias_count->kind == IR_ANNOT_INT
               && alias_count->i.mag == 2 && second_alias
@@ -1763,7 +1784,7 @@ static void test_store_target_visitor(void)
               && reverse_count->i.mag == 1);
     ir_annot_t *reverse_escape = other_items_address
         ? ir_annot_get(ir_value_annots(other_items_address),
-                       "ir.aliased_by0_escapes") : nullptr;
+                       S("ir.aliased_by0_escapes")) : nullptr;
     check("duplicate alias discovery upgrades escape provenance",
           second_escape && second_escape->kind == IR_ANNOT_BOOL
               && second_escape->b && reverse_escape
@@ -1775,7 +1796,7 @@ static void test_store_target_visitor(void)
         && ir_value_complete_alias_targets(r->ctx, view_value);
     ir_annot_t *alias_unresolved = view_value
         ? ir_annot_get(ir_value_annots(view_value),
-                       "ir.alias_unresolved") : nullptr;
+                       S("ir.alias_unresolved")) : nullptr;
     check("incremental alias sets can be closed when all origins are known",
           closed_alias && alias_complete && alias_complete->b
               && alias_unresolved && alias_unresolved->kind == IR_ANNOT_BOOL
@@ -1789,7 +1810,7 @@ static void test_store_target_visitor(void)
         "      return\n"
         "    }\n"
         ), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
     entry = function ? ir_block_entry(function) : nullptr;
     store = nullptr;
     for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
@@ -1819,8 +1840,8 @@ static void test_store_target_visitor(void)
               && capture.targets[0]->kind == IR_VAL_PARAM
               && capture.targets[0]->index == 0);
 
-    ir_global_t *origin = ir_global_add(r->m, "origin",
-                                        ir_type_parse(r->m, "i32"));
+    ir_global_t *origin = ir_global_add(r->m, S("origin"),
+                                        ir_type_parse(r->m, S("i32")));
     ir_value_t *origin_value = origin ? ir_global_address(r->m, origin)
                                       : nullptr;
     ir_value_t *address = function && function->n_params
@@ -1853,8 +1874,8 @@ static void test_store_target_visitor(void)
 
 static bool configure_indirect_initializations(run_t *r)
 {
-    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_func_t *function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
     if (!local || !ir_value_set_phase_access(r->ctx,
             ir_local_value(function, local), IR_PHASE_ACCESS_BOTH,
             IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_RUNTIME)) return false;
@@ -1879,18 +1900,18 @@ static bool set_single_alias_target(ir_ctx_t *ctx, ir_value_t *holder,
     ir_annots_t *annots = ir_value_annots(holder);
     return annots && target
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+               .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
                .i = {.mag = 1},
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias0", .kind = IR_ANNOT_VALUE, .v = target,
+               .key = S("ir.alias0"), .kind = IR_ANNOT_VALUE, .v = target,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+               .key = S("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
                .b = complete,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+               .key = S("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
                .b = !complete,
            });
 }
@@ -1904,8 +1925,8 @@ static void test_alias_store_target_phase_access(void)
         "      store %p, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_func_t *function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
     ir_value_t *target = function && local
         ? ir_local_value(function, local) : nullptr;
     ir_value_t *pointer = nullptr;
@@ -1914,14 +1935,14 @@ static void test_alias_store_target_phase_access(void)
             IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
             IR_PHASE_ACCESS_NONE)
         && set_single_alias_target(r->ctx,
-            function ? ir_value_find(function, "p") : nullptr,
+            function ? ir_value_find(function, S("p")) : nullptr,
             target, true);
     if (configured) {
         ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
         r->held = ir_verify(r->m, r->d);
     }
     check("typed IR applies write permissions through a complete alias target",
-          configured && !typed(r) && said(r, "phase.binding-write"));
+          configured && !typed(r) && said(r, S("phase.binding-write")));
     done(r);
 
     r = verify(MOD(
@@ -1931,12 +1952,12 @@ static void test_alias_store_target_phase_access(void)
         "      store %p, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    local = function ? ir_local_find(function, "x") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    local = function ? ir_local_find(function, S("x")) : nullptr;
     target = function && local ? ir_local_value(function, local) : nullptr;
     configured = target
         && set_single_alias_target(r->ctx,
-            function ? ir_value_find(function, "p") : nullptr,
+            function ? ir_value_find(function, S("p")) : nullptr,
             target, false);
     if (configured) {
         ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -1944,7 +1965,7 @@ static void test_alias_store_target_phase_access(void)
     }
     check("typed IR rejects stores through an incomplete alias set",
           configured && !typed(r)
-              && said(r, "phase.store-alias-incomplete"));
+              && said(r, S("phase.store-alias-incomplete")));
     done(r);
 
     r = verify(MOD(
@@ -1954,10 +1975,10 @@ static void test_alias_store_target_phase_access(void)
         "      store %p, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    local = function ? ir_local_find(function, "x") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    local = function ? ir_local_find(function, S("x")) : nullptr;
     target = function && local ? ir_local_value(function, local) : nullptr;
-    pointer = function ? ir_value_find(function, "p") : nullptr;
+    pointer = function ? ir_value_find(function, S("p")) : nullptr;
     configured = pointer && target
         && set_single_alias_target(r->ctx, pointer, target, false)
         && ir_value_set_indirect_access(r->ctx, pointer,
@@ -1977,10 +1998,10 @@ static void test_alias_store_target_phase_access(void)
         "      store %p, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    local = function ? ir_local_find(function, "x") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    local = function ? ir_local_find(function, S("x")) : nullptr;
     target = function && local ? ir_local_value(function, local) : nullptr;
-    pointer = function ? ir_value_find(function, "p") : nullptr;
+    pointer = function ? ir_value_find(function, S("p")) : nullptr;
     configured = pointer && target
         && ir_value_set_phase_access(r->ctx, target,
             IR_PHASE_ACCESS_RUNTIME, IR_PHASE_ACCESS_NONE,
@@ -1993,7 +2014,7 @@ static void test_alias_store_target_phase_access(void)
         r->held = ir_verify(r->m, r->d);
     }
     check("writable references still reject known read-only aliases",
-          configured && !typed(r) && said(r, "phase.binding-write"));
+          configured && !typed(r) && said(r, S("phase.binding-write")));
     done(r);
 
     r = verify(MOD(
@@ -2002,17 +2023,17 @@ static void test_alias_store_target_phase_access(void)
         "      store %p, %input\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = r->m ? ir_func_find(r->m, "f") : nullptr;
-    pointer = function ? ir_value_find(function, "p") : nullptr;
+    function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+    pointer = function ? ir_value_find(function, S("p")) : nullptr;
     configured = pointer && ir_annot_set(r->ctx,
         ir_value_annots(pointer), (ir_annot_t){
-            .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+            .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = UINT32_MAX},
         }) && ir_annot_set(r->ctx, ir_value_annots(pointer),
-            (ir_annot_t){.key = "ir.alias_analysis_complete",
+            (ir_annot_t){.key = S("ir.alias_analysis_complete"),
                          .kind = IR_ANNOT_BOOL, .b = true})
         && ir_annot_set(r->ctx, ir_value_annots(pointer),
-            (ir_annot_t){.key = "ir.alias_unresolved",
+            (ir_annot_t){.key = S("ir.alias_unresolved"),
                          .kind = IR_ANNOT_BOOL, .b = false});
     if (configured) {
         ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -2020,7 +2041,7 @@ static void test_alias_store_target_phase_access(void)
     }
     check("typed IR bounds malformed alias target counts",
           configured && !typed(r)
-              && said(r, "phase.store-alias-incomplete"));
+              && said(r, S("phase.store-alias-incomplete")));
     done(r);
 }
 
@@ -2029,8 +2050,8 @@ static bool has_multiple_initialization_diagnostic(ir_diags_t *diagnostics)
     for (uint32_t i = 0; i < ir_diags_count(diagnostics); i++) {
         const ir_diag_t *diagnostic = ir_diags_at(diagnostics, i);
         if (diagnostic->code == IR_DIAG_VERIFY_PHASE
-            && strstr(diagnostic->message,
-                      "multiple initialization sites")) return true;
+            && contains(diagnostic->message,
+                        S("multiple initialization sites"))) return true;
     }
     return false;
 }
@@ -2118,15 +2139,15 @@ static void test_indirect_local_initialization(void)
         "      store %q, %two\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    ir_func_t *function = aliases->m ? ir_func_find(aliases->m, "f") : nullptr;
-    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_func_t *function = aliases->m ? ir_func_find(aliases->m, S("f")) : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
     ir_value_t *target = function && local
         ? ir_local_value(function, local) : nullptr;
     configured = function && target
         && set_single_alias_target(aliases->ctx,
-                                   ir_value_find(function, "p"), target, true)
+                                   ir_value_find(function, S("p")), target, true)
         && set_single_alias_target(aliases->ctx,
-                                   ir_value_find(function, "q"), target, true)
+                                   ir_value_find(function, S("q")), target, true)
         && configure_indirect_initializations(aliases);
     if (configured) {
         ir_module_establish(aliases->m, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -2147,7 +2168,7 @@ static void test_indirect_local_initialization(void)
         "      store %address, %two\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    function = allocated->m ? ir_func_find(allocated->m, "f") : nullptr;
+    function = allocated->m ? ir_func_find(allocated->m, S("f")) : nullptr;
     ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
     ir_instr_t *allocation = nullptr;
     size_t stores = 0;
@@ -2187,8 +2208,8 @@ static void test_global_single_initialization(void)
         "      global.store @x, %two\n"
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
-    ir_global_t *global = r->m ? ir_global_find(r->m, "x") : nullptr;
-    ir_func_t *function = r->m ? ir_func_find(r->m, "init") : nullptr;
+    ir_global_t *global = r->m ? ir_global_find(r->m, S("x")) : nullptr;
+    ir_func_t *function = r->m ? ir_func_find(r->m, S("init")) : nullptr;
     ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
     bool configured = global && function && entry
         && ir_global_set_phase_access(r->ctx, global,
@@ -2215,7 +2236,7 @@ static void test_global_single_initialization(void)
 
 static void test_loop_binding_reentry(void)
 {
-    const char *source = MOD(
+    core_string_t source = MOD(
         "  func @f(%condition: bool, %again: bool) -> void {\n"
         "    local $x: i32\n"
         "    block entry:\n"
@@ -2237,9 +2258,9 @@ static void test_loop_binding_reentry(void)
         "  }\n");
     for (bool reenters = false; ; reenters = true) {
         run_t *r = verify(source, IR_PROP_PARSED);
-        ir_func_t *function = r->m ? ir_func_find(r->m, "f") : nullptr;
-        ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
-        ir_block_t *header = function ? ir_block_find(function, "loop")
+        ir_func_t *function = r->m ? ir_func_find(r->m, S("f")) : nullptr;
+        ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
+        ir_block_t *header = function ? ir_block_find(function, S("loop"))
                                      : nullptr;
         ir_value_t *binding = function && local
             ? ir_local_value(function, local) : nullptr;
@@ -2263,21 +2284,21 @@ static void test_loop_binding_reentry(void)
         }
         configured = configured && events == 2;
         if (configured && reenters) {
-            char *serialized = ir_module_print(r->m);
-            ir_module_t *copy = serialized
+            core_string_t serialized = ir_module_print(r->m);
+            ir_module_t *copy = serialized.data
                 ? ir_module_parse(r->ctx, serialized, 0, PROFILES, 2, r->d)
                 : nullptr;
-            free(serialized);
+            free(serialized.data);
             r->m = copy;
-            function = copy ? ir_func_find(copy, "f") : nullptr;
-            local = function ? ir_local_find(function, "x") : nullptr;
+            function = copy ? ir_func_find(copy, S("f")) : nullptr;
+            local = function ? ir_local_find(function, S("x")) : nullptr;
             binding = function && local
                 ? ir_local_value(function, local) : nullptr;
             ir_annot_t *reentry = binding
                 ? ir_annot_get(ir_value_annots(binding),
-                               "ir.binding_reentry_header") : nullptr;
+                               S("ir.binding_reentry_header")) : nullptr;
             configured = reentry && reentry->kind == IR_ANNOT_STR
-                && !strcmp(reentry->s, "loop");
+                && reentry->s.data && core_string_eq(reentry->s, S("loop"));
         }
         if (configured) {
             ir_module_establish(r->m, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -2309,9 +2330,9 @@ static void test_loop_binding_reentry(void)
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
     ir_func_t *function = same_iteration->m
-        ? ir_func_find(same_iteration->m, "f") : nullptr;
-    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
-    ir_block_t *header = function ? ir_block_find(function, "loop") : nullptr;
+        ? ir_func_find(same_iteration->m, S("f")) : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
+    ir_block_t *header = function ? ir_block_find(function, S("loop")) : nullptr;
     ir_value_t *binding = function && local
         ? ir_local_value(function, local) : nullptr;
     bool configured = binding && header
@@ -2341,7 +2362,7 @@ static void test_loop_binding_reentry(void)
 
 static void test_local_phase_writes(void)
 {
-    const char *valid_source = MOD(
+    core_string_t valid_source = MOD(
         "  func @f() -> void {\n"
         "    local $x: i32\n"
         "    block entry:\n"
@@ -2353,8 +2374,8 @@ static void test_local_phase_writes(void)
     ir_diags_t *diags = ir_diags_new(ctx, nullptr);
     ir_module_t *module = ir_module_parse(ctx, valid_source, 0, PROFILES, 2,
                                           diags);
-    ir_func_t *function = module ? ir_func_find(module, "f") : nullptr;
-    ir_local_t *local = function ? ir_local_find(function, "x") : nullptr;
+    ir_func_t *function = module ? ir_func_find(module, S("f")) : nullptr;
+    ir_local_t *local = function ? ir_local_find(function, S("x")) : nullptr;
     ir_instr_t *copy = nullptr;
     ir_block_t *entry = function ? ir_block_entry(function) : nullptr;
     for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
@@ -2375,7 +2396,7 @@ static void test_local_phase_writes(void)
     }
     ir_ctx_free(ctx);
 
-    const char *invalid_source = MOD(
+    core_string_t invalid_source = MOD(
         "  func @f() -> void {\n"
         "    local $x: i32\n"
         "    block entry:\n"
@@ -2388,8 +2409,8 @@ static void test_local_phase_writes(void)
     ctx = ir_ctx_new();
     diags = ir_diags_new(ctx, nullptr);
     module = ir_module_parse(ctx, invalid_source, 0, PROFILES, 2, diags);
-    function = module ? ir_func_find(module, "f") : nullptr;
-    local = function ? ir_local_find(function, "x") : nullptr;
+    function = module ? ir_func_find(module, S("f")) : nullptr;
+    local = function ? ir_local_find(function, S("x")) : nullptr;
     entry = function ? ir_block_entry(function) : nullptr;
     copy = nullptr;
     for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
@@ -2413,8 +2434,8 @@ static void test_local_phase_writes(void)
             const ir_diag_t *diagnostic = ir_diags_at(diags, i);
             produced[diagnostic->code] = true;
             duplicate_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE
-                && strstr(diagnostic->message,
-                          "multiple initialization sites") != nullptr;
+                && contains(diagnostic->message,
+                            S("multiple initialization sites"));
         }
         check("typed IR rejects multiple immutable initialization sites on one path",
               !(held & IR_PROP_TYPED) && duplicate_diagnostic);
@@ -2424,7 +2445,7 @@ static void test_local_phase_writes(void)
     }
     ir_ctx_free(ctx);
 
-    const char *branch_source = MOD(
+    core_string_t branch_source = MOD(
         "  func @f(%condition: bool) -> void {\n"
         "    local $x: i32\n"
         "    block entry:\n"
@@ -2443,8 +2464,8 @@ static void test_local_phase_writes(void)
     ctx = ir_ctx_new();
     diags = ir_diags_new(ctx, nullptr);
     module = ir_module_parse(ctx, branch_source, 0, PROFILES, 2, diags);
-    function = module ? ir_func_find(module, "f") : nullptr;
-    local = function ? ir_local_find(function, "x") : nullptr;
+    function = module ? ir_func_find(module, S("f")) : nullptr;
+    local = function ? ir_local_find(function, S("x")) : nullptr;
     setup = local && ir_value_set_phase_access(ctx,
         ir_local_value(function, local), IR_PHASE_ACCESS_BOTH,
         IR_PHASE_ACCESS_NONE, IR_PHASE_ACCESS_RUNTIME);
@@ -2469,7 +2490,7 @@ static void test_local_phase_writes(void)
     }
     ir_ctx_free(ctx);
 
-    const char *loop_source = MOD(
+    core_string_t loop_source = MOD(
         "  func @f(%condition: bool) -> void {\n"
         "    local $x: i32\n"
         "    block entry:\n"
@@ -2484,9 +2505,9 @@ static void test_local_phase_writes(void)
     ctx = ir_ctx_new();
     diags = ir_diags_new(ctx, nullptr);
     module = ir_module_parse(ctx, loop_source, 0, PROFILES, 2, diags);
-    function = module ? ir_func_find(module, "f") : nullptr;
-    local = function ? ir_local_find(function, "x") : nullptr;
-    entry = function ? ir_block_find(function, "loop") : nullptr;
+    function = module ? ir_func_find(module, S("f")) : nullptr;
+    local = function ? ir_local_find(function, S("x")) : nullptr;
+    entry = function ? ir_block_find(function, S("loop")) : nullptr;
     copy = nullptr;
     for (uint32_t i = 0; entry && i < entry->n_instrs; i++)
         if (entry->instrs[i]->op == IR_OP_COPY) copy = entry->instrs[i];
@@ -2509,7 +2530,7 @@ static void test_local_phase_writes(void)
 
 static void test_global_storage_requirement(void)
 {
-    const char *source = MOD(
+    core_string_t source = MOD(
         "  global @state: i32\n"
         "  func @f() -> void {\n"
         "    block entry:\n      return\n  }\n");
@@ -2517,18 +2538,20 @@ static void test_global_storage_requirement(void)
     ir_diags_t *diags = ir_diags_new(ctx, nullptr);
     ir_module_t *module = ir_module_parse(ctx, source, 0, PROFILES, 2,
                                           diags);
-    ir_global_t *global = module ? ir_global_find(module, "state") : nullptr;
+    ir_global_t *global = module ? ir_global_find(module, S("state")) : nullptr;
     bool malformed = global
-        && ir_global_set_storage_class(ctx, global, "pool", false, "gc")
+        && ir_global_set_storage_class(ctx, global, S("pool"), false,
+                                       S("gc"))
         && ir_annot_set(ctx, &global->annots, (ir_annot_t){
-            .key = "ir.storage_required", .kind = IR_ANNOT_BOOL, .b = true,
+            .key = S("ir.storage_required"), .kind = IR_ANNOT_BOOL, .b = true,
         });
-    char *serialized = malformed ? ir_module_print(module) : nullptr;
-    module = serialized
+    core_string_t serialized = malformed ? ir_module_print(module)
+                                         : (core_string_t){};
+    module = serialized.data
         ? ir_module_parse(ctx, serialized, 0, PROFILES, 2, diags) : nullptr;
-    global = module ? ir_global_find(module, "state") : nullptr;
+    global = module ? ir_global_find(module, S("state")) : nullptr;
     malformed = malformed && module && global;
-    free(serialized);
+    free(serialized.data);
     if (module && malformed) {
         ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
         ir_props_t held = ir_verify(module, diags);
@@ -2569,7 +2592,7 @@ static void test_allocation_storage_requirement(void)
         "      return\n"
         "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
     check("typed IR rejects alloc with a missing required storage class",
-          !typed(missing) && said(missing, "storage.required"));
+          !typed(missing) && said(missing, S("storage.required")));
     done(missing);
 
     run_t *malformed = verify(MOD(
@@ -2579,7 +2602,7 @@ static void test_allocation_storage_requirement(void)
         "      return\n"
         "  }\n"), IR_PROP_PARSED | IR_PROP_TYPED);
     check("typed IR rejects malformed required storage metadata",
-          !typed(malformed) && said(malformed, "storage.required"));
+          !typed(malformed) && said(malformed, S("storage.required")));
     done(malformed);
 
     run_t *valid = verify(MOD(
@@ -2589,12 +2612,12 @@ static void test_allocation_storage_requirement(void)
         "      return\n"
         "  }\n"), IR_PROP_PARSED);
     ir_func_t *function = valid->m
-        ? ir_func_find(valid->m, "f") : nullptr;
-    ir_block_t *entry = function ? ir_block_find(function, "entry") : nullptr;
+        ? ir_func_find(valid->m, S("f")) : nullptr;
+    ir_block_t *entry = function ? ir_block_find(function, S("entry")) : nullptr;
     ir_instr_t *allocation = entry && entry->n_instrs
         ? entry->instrs[0] : nullptr;
     bool configured = allocation
-        && ir_instr_set_storage_class(allocation, "pool", true);
+        && ir_instr_set_storage_class(allocation, S("pool"), true);
     if (configured) {
         ir_module_establish(valid->m, IR_PROP_PARSED | IR_PROP_TYPED);
         valid->held = ir_verify(valid->m, valid->d);
@@ -2607,7 +2630,7 @@ static void test_allocation_storage_requirement(void)
 
 static void test_a_phase_can_be_asked_for_on_its_own(void)
 {
-    const char *src = MOD("  func @f(%a: i32) -> i32 {\n"
+    core_string_t src = MOD("  func @f(%a: i32) -> i32 {\n"
                           "    local $t: i32\n    block entry:\n"
                           "      $t = copy %a\n      return %a\n  }\n");
 
@@ -2639,7 +2662,7 @@ static void test_a_phase_can_be_asked_for_on_its_own(void)
     check("asking for ssa runs typed and parsed, which it needs",
           (ssa & IR_PROP_PARSED) && (ssa & IR_PROP_TYPED));
     check("the module is not in ssa form and is told so",
-          !(ssa & IR_PROP_SSA) && told(sd, "ssa.locals"));
+          !(ssa & IR_PROP_SSA) && told(sd, S("ssa.locals")));
     check("and it is told so though the module never claimed ssa",
           !(ir_module_props(m) & IR_PROP_SSA));
     check("asking for ssa does not run the phases ssa does not need",

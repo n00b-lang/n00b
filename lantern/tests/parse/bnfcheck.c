@@ -36,18 +36,28 @@ main(int argc, char **argv)
         parse_register_terminal(g, core_string_from_cstr(argv[i]));
     }
 
-    bool ok = parse_bnf_load_file(argv[1], core_string_from_cstr(argv[2]), g);
+    core_string_t path  = core_string_from_cstr(argv[1]);
+    core_string_t start = core_string_from_cstr(argv[2]);
+    bool          ok    = parse_bnf_load_file(path, start, g);
 
-    printf("load %s: %s\n", argv[1], ok ? "OK" : "FAILED");
+    core_string_t status = ok ? CORE_STRING_STATIC("OK")
+                              : CORE_STRING_STATIC("FAILED");
+
+    printf("load %.*s: %.*s\n", (int)path.u8_bytes, path.data,
+           (int)status.u8_bytes, status.data);
 
     if (!ok) {
-        fprintf(stderr, "%s\n", parse_bnf_error());
+        core_string_t err = parse_bnf_error();
+
+        fprintf(stderr, "%.*s\n", (int)err.u8_bytes, err.data);
         parse_grammar_free(g);
         return 1;
     }
 
     if (imports_lexer(g) && !scan_grammar_lex_compiled(g)) {
-        fprintf(stderr, "%s\n", scan_lex_build_error());
+        core_string_t err = scan_lex_build_error();
+
+        fprintf(stderr, "%.*s\n", (int)err.u8_bytes, err.data);
         parse_grammar_free(g);
         return 1;
     }
@@ -60,14 +70,16 @@ main(int argc, char **argv)
         if (nt->group_nt) {
             continue;
         }
-        if (!nt->name.data || nt->name.data[0] == '$') {
+        if (!nt->name.data
+            || (nt->name.u8_bytes && nt->name.data[0] == '$')) {
             continue;
         }
 
         total++;
 
         if (core_list_len(nt->rule_ids) == 0) {
-            printf("  undefined nonterminal: <%s>\n", nt->name.data);
+            printf("  undefined nonterminal: <%.*s>\n", (int)nt->name.u8_bytes,
+                   nt->name.data);
             empty++;
         }
     }
@@ -76,7 +88,9 @@ main(int argc, char **argv)
     printf("  named terminals:");
 
     for (size_t i = 0; i < core_list_len(g->named_terms); i++) {
-        printf(" %s", g->named_terms.data[i].value.data);
+        core_string_t term = g->named_terms.data[i].value;
+
+        printf(" %.*s", (int)term.u8_bytes, term.data);
     }
 
     printf("\n");

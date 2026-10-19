@@ -23,8 +23,10 @@ typedef struct {
     ir_ctx_t          *ctx;
     ir_diags_t        *d;
     ir_module_t       *m;
-    char              *text;
-    const char        *path;
+    core_string_t      text;
+    core_string_t      path;
+    core_string_t     *argv;
+    int                argc;
     parse_cmdr_t        *cmdr;
     parse_cmdr_result_t *args;
 } job;
@@ -42,20 +44,20 @@ static const ir_props_t PROPS[] = {
     IR_PROP_VERIFIED,
 };
 
-typedef int (*cmd_fn)(job *j, FILE *out, FILE *err, const char *list);
+typedef int (*cmd_fn)(job *j, FILE *out, FILE *err, core_string_t list);
 
-static int cmd_parse(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_print(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_verify(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_analyze(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_explain(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_pass(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_cfg(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_dom(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_cdg(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_dfg(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_pdg(job *j, FILE *out, FILE *err, const char *list);
-static int cmd_regions(job *j, FILE *out, FILE *err, const char *list);
+static int cmd_parse(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_print(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_verify(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_analyze(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_explain(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_pass(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_cfg(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_dom(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_cdg(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_dfg(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_pdg(job *j, FILE *out, FILE *err, core_string_t list);
+static int cmd_regions(job *j, FILE *out, FILE *err, core_string_t list);
 
 static const struct {
     core_string_t name;
@@ -81,11 +83,11 @@ static const struct {
 #define N_COMMANDS (sizeof(COMMANDS) / sizeof(COMMANDS[0]))
 
 static const struct {
-    const char         *name;
+    core_string_t       name;
     const ir_profile_t *p;
 } PROFILES[] = {
-    {"bce",   &ir_profile_bce  },
-    {"synth", &ir_profile_synth},
+    {CORE_STRING_STATIC("bce"),   &ir_profile_bce  },
+    {CORE_STRING_STATIC("synth"), &ir_profile_synth},
 };
 
 #define N_PROFILES (sizeof(PROFILES) / sizeof(PROFILES[0]))
@@ -147,26 +149,39 @@ static parse_cmdr_t *build_cli(void)
     return parse_cmdr_new(&spec);
 }
 
-static const char *source_of(void *state, int32_t file, size_t *len)
+static void put(FILE *out, core_string_t s)
+{
+    if (s.data && s.u8_bytes) {
+        fwrite(s.data, 1, s.u8_bytes, out);
+    }
+}
+
+static core_string_t source_of(void *state, int32_t file)
 {
     job *j = state;
 
-    if (file != 0 || !j->text) {
-        return nullptr;
+    if (file != 0 || !j->text.data) {
+        return (core_string_t){};
     }
-    *len = strlen(j->text);
 
     return j->text;
 }
 
-static char *slurp(const char *path, FILE *err)
+static core_string_t slurp(core_string_t path, FILE *err)
 {
-    FILE *f = strcmp(path, "-") ? fopen(path, "rb") : stdin;
+    FILE *f = stdin;
+
+    if (!core_string_eq(path, CORE_STRING_STATIC("-"))) {
+        char *native = core_string_to_cstr(path);
+
+        f = fopen(native, "rb");
+        core_free(native);
+    }
 
     if (!f) {
-        fprintf(err, "ir: cannot open %s\n", path);
+        fprintf(err, "ir: cannot open %.*s\n", (int)path.u8_bytes, path.data);
 
-        return nullptr;
+        return (core_string_t){};
     }
 
     core_buffer_t *b = core_buffer_empty();
@@ -185,7 +200,7 @@ static char *slurp(const char *path, FILE *err)
         fclose(f);
     }
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }
 
 static void report(job *j, FILE *out, bool json)
@@ -194,23 +209,23 @@ static void report(job *j, FILE *out, bool json)
         return;
     }
 
-    ir_render_t r = {.source = source_of, .state = j, .module = j->m};
-    char *text = json ? ir_diags_render_json(j->d, &r)
-                      : ir_diags_render_text(j->d, &r);
+    ir_render_t   r    = {.source = source_of, .state = j, .module = j->m};
+    core_string_t text = json ? ir_diags_render_json(j->d, &r)
+                              : ir_diags_render_text(j->d, &r);
 
-    if (text) {
-        fputs(text, out);
-        core_free(text);
+    if (text.data) {
+        put(out, text);
+        core_free(text.data);
     }
 }
 
-static bool load(job *j, const char *path, const ir_profile_t *const *ps,
+static bool load(job *j, core_string_t path, const ir_profile_t *const *ps,
                  size_t n, FILE *err)
 {
     j->path = path;
     j->text = slurp(path, err);
 
-    if (!j->text) {
+    if (!j->text.data) {
         return false;
     }
     j->ctx = ir_ctx_new();
@@ -229,7 +244,7 @@ static void unload(job *j)
     if (j->ctx) {
         ir_ctx_free(j->ctx);
     }
-    core_free(j->text);
+    core_free(j->text.data);
 
     if (j->args) {
         parse_cmdr_result_free(j->args);
@@ -238,20 +253,26 @@ static void unload(job *j)
     if (j->cmdr) {
         parse_cmdr_free(j->cmdr);
     }
+
+    for (int i = 0; j->argv && i < j->argc; i++) {
+        core_free(j->argv[i].data);
+    }
+    core_free(j->argv);
 }
 
-static char *tag(ir_instr_t *in)
+static core_string_t tag(ir_instr_t *in)
 {
-    const char *name = in->dest_kind == IR_DEST_VALUE && in->dest
-                         ? in->dest->name
-                     : in->dest_kind == IR_DEST_LOCAL && in->dest_local
-                         ? in->dest_local->name
-                         : ir_op_spelling(in->op);
+    core_string_t name = in->dest_kind == IR_DEST_VALUE && in->dest
+                           ? in->dest->name
+                       : in->dest_kind == IR_DEST_LOCAL && in->dest_local
+                           ? in->dest_local->name
+                           : ir_op_spelling(in->op);
 
     core_buffer_t *buf = core_buffer_empty();
-    core_buffer_printf(buf, "%s#%u:%s", in->block->name, in->index,
-                       name);
-    return core_buffer_take(buf);
+    core_buffer_append_string(buf, in->block->name);
+    core_buffer_printf(buf, "#%u:", in->index);
+    core_buffer_append_string(buf, name);
+    return core_buffer_take_string(buf);
 }
 
 typedef struct {
@@ -276,12 +297,18 @@ static int dump_run(job *j, dump *u, void (*install)(ir_walk_t *w))
     return IR_CLI_OK;
 }
 
+static void put_func(FILE *out, ir_func_t *f)
+{
+    fprintf(out, "func @%.*s", (int)f->name.u8_bytes, f->name.data);
+}
+
 static bool cfg_func(ir_visit_t *vi)
 {
     dump *u = vi->user;
 
     u->pdg = ir_pdg_of(vi->func);
-    fprintf(u->out, "func @%s\n", vi->func->name);
+    put_func(u->out, vi->func);
+    fputc('\n', u->out);
 
     return true;
 }
@@ -296,13 +323,18 @@ static bool cfg_block(ir_visit_t *vi)
         ir_block_t *to = ir_succ_of(&t->operands[s]);
 
         if (to) {
-            fprintf(u->out, "  %s -> %s %s\n", bb->name, to->name,
-                    ir_edge_kind_name(ir_edge_kind(u->pdg, bb, s)));
+            core_string_t kind = ir_edge_kind_name(ir_edge_kind(u->pdg, bb, s));
+
+            fprintf(u->out, "  %.*s -> %.*s %.*s\n",
+                    (int)bb->name.u8_bytes, bb->name.data,
+                    (int)to->name.u8_bytes, to->name.data,
+                    (int)kind.u8_bytes, kind.data);
         }
     }
 
     if (!ir_succ_count(t)) {
-        fprintf(u->out, "  %s -> exit\n", bb->name);
+        fprintf(u->out, "  %.*s -> exit\n", (int)bb->name.u8_bytes,
+                bb->name.data);
     }
 
     return false;
@@ -314,7 +346,7 @@ static void install_cfg(ir_walk_t *w)
     ir_walk_on_block(w, cfg_block, nullptr, nullptr);
 }
 
-static int cmd_cfg(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_cfg(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -329,7 +361,8 @@ static bool dom_func(ir_visit_t *vi)
     dump *u = vi->user;
 
     u->dom = ir_doms_of(vi->func);
-    fprintf(u->out, "func @%s\n", vi->func->name);
+    put_func(u->out, vi->func);
+    fputc('\n', u->out);
 
     return true;
 }
@@ -342,15 +375,25 @@ static bool dom_block(ir_visit_t *vi)
     ir_block_t *ip = ir_ipdom_of(u->dom, bb);
 
     if (!ir_block_reachable(u->dom, bb)) {
-        fprintf(u->out, "  %s unreachable\n", bb->name);
+        fprintf(u->out, "  %.*s unreachable\n", (int)bb->name.u8_bytes,
+                bb->name.data);
 
         return false;
     }
-    fprintf(u->out, "  %s idom %s ipdom %s\n", bb->name,
-            id ? id->name : "-", ip ? ip->name : "-");
+
+    core_string_t idom  = id ? id->name : CORE_STRING_STATIC("-");
+    core_string_t ipdom = ip ? ip->name : CORE_STRING_STATIC("-");
+
+    fprintf(u->out, "  %.*s idom %.*s ipdom %.*s\n",
+            (int)bb->name.u8_bytes, bb->name.data,
+            (int)idom.u8_bytes, idom.data,
+            (int)ipdom.u8_bytes, ipdom.data);
 
     for (uint32_t k = 0; k < ir_df_count(u->dom, bb); k++) {
-        fprintf(u->out, "    frontier %s\n", ir_df_at(u->dom, bb, k)->name);
+        core_string_t frontier = ir_df_at(u->dom, bb, k)->name;
+
+        fprintf(u->out, "    frontier %.*s\n", (int)frontier.u8_bytes,
+                frontier.data);
     }
 
     return false;
@@ -362,7 +405,7 @@ static void install_dom(ir_walk_t *w)
     ir_walk_on_block(w, dom_block, nullptr, nullptr);
 }
 
-static int cmd_dom(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_dom(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -378,8 +421,10 @@ static bool cdg_block(ir_visit_t *vi)
     ir_block_t *bb = vi->block;
 
     for (uint32_t k = 0; k < ir_controllers_of(u->pdg, bb); k++) {
-        fprintf(u->out, "  %s on %s\n", bb->name,
-                ir_controller_at(u->pdg, bb, k)->name);
+        core_string_t on = ir_controller_at(u->pdg, bb, k)->name;
+
+        fprintf(u->out, "  %.*s on %.*s\n", (int)bb->name.u8_bytes,
+                bb->name.data, (int)on.u8_bytes, on.data);
     }
 
     return false;
@@ -391,7 +436,7 @@ static void install_cdg(ir_walk_t *w)
     ir_walk_on_block(w, cdg_block, nullptr, nullptr);
 }
 
-static int cmd_cdg(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_cdg(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -410,16 +455,18 @@ static void put_edges(FILE *out, ir_pdg_t *g, bool control, bool data)
         if ((is && !control) || (!is && !data)) {
             continue;
         }
-        char *from = tag(e->from);
-        char *to = tag(e->to);
-        fprintf(out, "  %-8s %s %s %s", is ? "control" : "data", from,
+        core_string_t from = tag(e->from);
+        core_string_t to   = tag(e->to);
+        fprintf(out, "  %-8s %.*s %s %.*s", is ? "control" : "data",
+                (int)from.u8_bytes, from.data,
                 e->certainty == IR_DEP_EXACT ? "=>" : "~>",
-                to);
-        core_free(from);
-        core_free(to);
+                (int)to.u8_bytes, to.data);
+        core_free(from.data);
+        core_free(to.data);
 
         if (e->via) {
-            fprintf(out, " via $%s", e->via->name);
+            fprintf(out, " via $%.*s", (int)e->via->name.u8_bytes,
+                    e->via->name.data);
         }
         fputc('\n', out);
     }
@@ -429,23 +476,24 @@ static bool explain_func(ir_visit_t *vi)
 {
     dump *u = vi->user;
 
-    fprintf(u->out, "func @%s\n", vi->func->name);
+    put_func(u->out, vi->func);
+    fputc('\n', u->out);
 
     return true;
 }
 
 static bool explain_instr(ir_visit_t *vi)
 {
-    dump *u   = vi->user;
-    char *why = ir_rule_explain(u->m, u->rules, vi->instr);
-    char *nm = tag(vi->instr);
+    dump         *u   = vi->user;
+    core_string_t why = ir_rule_explain(u->m, u->rules, vi->instr);
+    core_string_t nm  = tag(vi->instr);
 
-    fprintf(u->out, "  %s\n", nm);
-    core_free(nm);
+    fprintf(u->out, "  %.*s\n", (int)nm.u8_bytes, nm.data);
+    core_free(nm.data);
 
-    if (why) {
-        fputs(why, u->out);
-        core_free(why);
+    if (why.data) {
+        put(u->out, why);
+        core_free(why.data);
     }
 
     return false;
@@ -462,8 +510,8 @@ static bool graph_func(ir_visit_t *vi)
     dump     *u = vi->user;
     ir_pdg_t *g = ir_pdg_of(vi->func);
 
-    fprintf(u->out, "func @%s %s\n", vi->func->name,
-            ir_pdg_is_exact(g) ? "exact" : "may");
+    put_func(u->out, vi->func);
+    fprintf(u->out, " %s\n", ir_pdg_is_exact(g) ? "exact" : "may");
     put_edges(u->out, g, u->control, u->data);
 
     return false;
@@ -481,7 +529,7 @@ static int cmd_graph(job *j, FILE *out, bool control, bool data)
     return dump_run(j, &u, install_graph);
 }
 
-static int cmd_regions(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_regions(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -493,17 +541,17 @@ static int cmd_regions(job *j, FILE *out, FILE *err, const char *list)
     }
     ir_module_establish(j->m, IR_PROP_STRUCTURED);
 
-    char *text = ir_module_render_nested(j->m);
+    core_string_t text = ir_module_render_nested(j->m);
 
-    if (text) {
-        fputs(text, out);
-        core_free(text);
+    if (text.data) {
+        put(out, text);
+        core_free(text.data);
     }
 
     return IR_CLI_OK;
 }
 
-static int cmd_explain(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_explain(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -513,7 +561,7 @@ static int cmd_explain(job *j, FILE *out, FILE *err, const char *list)
     return dump_run(j, &u, install_explain);
 }
 
-static int cmd_verify(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_verify(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -521,17 +569,19 @@ static int cmd_verify(job *j, FILE *out, FILE *err, const char *list)
     ir_props_t held = ir_verify(j->m, j->d);
 
     for (size_t i = 0; i < sizeof(PROPS) / sizeof(PROPS[0]); i++) {
-        fprintf(out, "%-18s %s\n", ir_prop_name(PROPS[i]),
+        core_string_t name = ir_prop_name(PROPS[i]);
+
+        fprintf(out, "%-18.*s %s\n", (int)name.u8_bytes, name.data,
                 held & PROPS[i] ? "holds" : "does not hold");
     }
 
     return IR_CLI_OK;
 }
 
-static const ir_pass_t *pass_named(const char *name, size_t n)
+static const ir_pass_t *pass_named(core_string_t name)
 {
     for (size_t i = 0; i < sizeof(PASSES) / sizeof(PASSES[0]); i++) {
-        if (strlen(PASSES[i]->name) == n && !memcmp(PASSES[i]->name, name, n)) {
+        if (core_string_eq(PASSES[i]->name, name)) {
             return PASSES[i];
         }
     }
@@ -539,7 +589,18 @@ static const ir_pass_t *pass_named(const char *name, size_t n)
     return nullptr;
 }
 
-static int cmd_dfg(job *j, FILE *out, FILE *err, const char *list)
+static core_string_t next_pass(core_string_t list, size_t *at)
+{
+    core_string_t rest  = core_string_slice(list, *at, list.u8_bytes - *at);
+    int64_t       comma = core_string_find_byte(rest, ',');
+    size_t        n     = comma < 0 ? rest.u8_bytes : (size_t)comma;
+
+    *at = comma < 0 ? list.u8_bytes : *at + n + 1;
+
+    return core_string_slice(rest, 0, n);
+}
+
+static int cmd_dfg(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -547,7 +608,7 @@ static int cmd_dfg(job *j, FILE *out, FILE *err, const char *list)
     return cmd_graph(j, out, false, true);
 }
 
-static int cmd_pdg(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_pdg(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
@@ -555,33 +616,39 @@ static int cmd_pdg(job *j, FILE *out, FILE *err, const char *list)
     return cmd_graph(j, out, true, true);
 }
 
-static int cmd_parse(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_parse(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
 
-    fprintf(out, "parsed %s: %zu function%s\n", j->path, ir_func_count(j->m),
+    fprintf(out, "parsed %.*s: %zu function%s\n", (int)j->path.u8_bytes,
+            j->path.data, ir_func_count(j->m),
             ir_func_count(j->m) == 1 ? "" : "s");
 
     return IR_CLI_OK;
 }
 
-static int cmd_print(job *j, FILE *out, FILE *err, const char *list)
+static void print_module(job *j, FILE *out)
+{
+    core_string_t text = ir_module_print(j->m);
+
+    if (text.data) {
+        put(out, text);
+        core_free(text.data);
+    }
+}
+
+static int cmd_print(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)err;
     (void)list;
 
-    char *text = ir_module_print(j->m);
-
-    if (text) {
-        fputs(text, out);
-        core_free(text);
-    }
+    print_module(j, out);
 
     return IR_CLI_OK;
 }
 
-static int cmd_analyze(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_analyze(job *j, FILE *out, FILE *err, core_string_t list)
 {
     (void)out;
     (void)err;
@@ -592,15 +659,15 @@ static int cmd_analyze(job *j, FILE *out, FILE *err, const char *list)
     return IR_CLI_OK;
 }
 
-static int cmd_pass(job *j, FILE *out, FILE *err, const char *list)
+static int cmd_pass(job *j, FILE *out, FILE *err, core_string_t list)
 {
-    for (const char *at = list; at && *at;) {
-        const char *comma = strchr(at, ',');
-        size_t      n     = comma ? (size_t)(comma - at) : strlen(at);
-        const ir_pass_t *p = pass_named(at, n);
+    for (size_t at = 0; list.data && at < list.u8_bytes;) {
+        core_string_t    name = next_pass(list, &at);
+        const ir_pass_t *p    = pass_named(name);
 
         if (!p) {
-            fprintf(err, "ir: no pass named %.*s\n", (int)n, at);
+            fprintf(err, "ir: no pass named %.*s\n", (int)name.u8_bytes,
+                    name.data);
 
             return IR_CLI_USAGE;
         }
@@ -609,11 +676,14 @@ static int cmd_pass(job *j, FILE *out, FILE *err, const char *list)
         ir_pass_result_t r = ir_pass_run(p, j->m, nullptr, &unmet, j->d);
 
         if (r == IR_PASS_UNMET) {
-            fprintf(err, "ir: %s needs", p->name);
+            fprintf(err, "ir: %.*s needs", (int)p->name.u8_bytes,
+                    p->name.data);
 
             for (size_t i = 0; i < sizeof(PROPS) / sizeof(PROPS[0]); i++) {
                 if (unmet & PROPS[i]) {
-                    fprintf(err, " %s", ir_prop_name(PROPS[i]));
+                    core_string_t prop = ir_prop_name(PROPS[i]);
+
+                    fprintf(err, " %.*s", (int)prop.u8_bytes, prop.data);
                 }
             }
             fputs(", which does not hold\n", err);
@@ -622,20 +692,15 @@ static int cmd_pass(job *j, FILE *out, FILE *err, const char *list)
         }
 
         if (r != IR_PASS_OK) {
-            fprintf(err, "ir: %s did not run\n", p->name);
+            fprintf(err, "ir: %.*s did not run\n", (int)p->name.u8_bytes,
+                    p->name.data);
 
             return IR_CLI_DIAG;
         }
-        fprintf(out, "ran %s\n", p->name);
-        at = comma ? comma + 1 : nullptr;
+        fprintf(out, "ran %.*s\n", (int)p->name.u8_bytes, p->name.data);
     }
 
-    char *text = ir_module_print(j->m);
-
-    if (text) {
-        fputs(text, out);
-        core_free(text);
-    }
+    print_module(j, out);
 
     return IR_CLI_OK;
 }
@@ -645,17 +710,26 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
     const ir_profile_t *const BOTH[] = {&ir_profile_bce, &ir_profile_synth};
     const ir_profile_t *only    = nullptr;
     core_string_t        cmd     = {0};
-    const char         *path    = nullptr;
-    const char         *list    = nullptr;
+    core_string_t        path    = {0};
+    core_string_t        list    = {0};
     bool                json    = false;
     bool                help    = false;
 
     job j  = {0};
 
+    j.argc = argc > 0 ? argc : 0;
+    j.argv = core_alloc_array(core_string_t, j.argc ? (size_t)j.argc : 1);
+
+    for (int i = 0; i < j.argc; i++) {
+        j.argv[i] = core_string_from_cstr(argv[i]);
+    }
+
     j.cmdr = build_cli();
 
     for (int i = 1; i < argc; i++) {
-        help = help || !strcmp(argv[i], "-h") || !strcmp(argv[i], "--help");
+        help = help
+            || core_string_eq(j.argv[i], CORE_STRING_STATIC("-h"))
+            || core_string_eq(j.argv[i], CORE_STRING_STATIC("--help"));
     }
 
     if (help || argc < 2) {
@@ -669,19 +743,23 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
     if (!parse_cmdr_result_ok(j.args)
         || !parse_cmdr_result_command(j.args).data) {
-        const char *bad = argv[1];
+        core_string_t bad = j.argv[1];
 
         for (int i = 1; i < argc; i++) {
-            if (argv[i][0] == '-' && argv[i][1] && strcmp(argv[i], "-")) {
-                bad = argv[i];
+            if (j.argv[i].u8_bytes > 1 && j.argv[i].data[0] == '-') {
+                bad = j.argv[i];
                 break;
             }
         }
 
-        fprintf(err,
-                bad[0] == '-' ? "ir: unknown option %s\n"
-                              : "ir: no command named %s\n",
-                bad);
+        if (bad.u8_bytes && bad.data[0] == '-') {
+            fprintf(err, "ir: unknown option %.*s\n", (int)bad.u8_bytes,
+                    bad.data);
+        }
+        else {
+            fprintf(err, "ir: no command named %.*s\n", (int)bad.u8_bytes,
+                    bad.data);
+        }
         parse_cmdr_print_usage(j.cmdr, err);
         unload(&j);
 
@@ -691,19 +769,19 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
     cmd = parse_cmdr_result_command(j.args);
 
     if (parse_cmdr_flag_present(j.args, CORE_STRING_STATIC("--profile"))) {
-        const char *want
-            = parse_cmdr_flag_str(j.args,
-                                CORE_STRING_STATIC("--profile")).data;
+        core_string_t want
+            = parse_cmdr_flag_str(j.args, CORE_STRING_STATIC("--profile"));
 
-        for (size_t i = 0; want && i < N_PROFILES; i++) {
-            if (!strcmp(want, PROFILES[i].name)) {
+        for (size_t i = 0; want.data && i < N_PROFILES; i++) {
+            if (core_string_eq(want, PROFILES[i].name)) {
                 only = PROFILES[i].p;
                 break;
             }
         }
 
         if (!only) {
-            fprintf(err, "ir: no profile named %s\n", want ? want : "");
+            fprintf(err, "ir: no profile named %.*s\n", (int)want.u8_bytes,
+                    want.data ? want.data : "");
             unload(&j);
 
             return IR_CLI_USAGE;
@@ -712,37 +790,35 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
 
     json = parse_cmdr_flag_present(j.args, CORE_STRING_STATIC("--json"));
     list = parse_cmdr_flag_present(j.args, CORE_STRING_STATIC("--passes"))
-             ? parse_cmdr_flag_str(j.args,
-                                 CORE_STRING_STATIC("--passes")).data
-             : nullptr;
+             ? parse_cmdr_flag_str(j.args, CORE_STRING_STATIC("--passes"))
+             : (core_string_t){};
     path = parse_cmdr_arg_count(j.args) > 0
-             ? parse_cmdr_arg_str(j.args, 0).data
-             : nullptr;
+             ? parse_cmdr_arg_str(j.args, 0)
+             : (core_string_t){};
 
     if (core_string_eq(cmd, CORE_STRING_STATIC("pass"))) {
-        if (!list) {
+        if (!list.data) {
             fprintf(err, "ir: pass needs --passes\n");
             unload(&j);
 
             return IR_CLI_USAGE;
         }
 
-        for (const char *at = list; at && *at;) {
-            const char *comma = strchr(at, ',');
-            size_t      n     = comma ? (size_t)(comma - at) : strlen(at);
+        for (size_t at = 0; at < list.u8_bytes;) {
+            core_string_t name = next_pass(list, &at);
 
-            if (!pass_named(at, n)) {
-                fprintf(err, "ir: no pass named %.*s\n", (int)n, at);
+            if (!pass_named(name)) {
+                fprintf(err, "ir: no pass named %.*s\n", (int)name.u8_bytes,
+                        name.data);
                 unload(&j);
 
                 return IR_CLI_USAGE;
             }
-            at = comma ? comma + 1 : nullptr;
         }
     }
 
-    if (!path) {
-        fprintf(err, "ir: %s needs a file\n", cmd.data);
+    if (!path.data) {
+        fprintf(err, "ir: %.*s needs a file\n", (int)cmd.u8_bytes, cmd.data);
         unload(&j);
 
         return IR_CLI_USAGE;
@@ -751,7 +827,7 @@ int ir_cli(int argc, char **argv, FILE *out, FILE *err)
     bool ok = load(&j, path, only ? &only : BOTH, only ? 1 : 2, err);
 
     if (!ok) {
-        int rc = j.text ? IR_CLI_DIAG : IR_CLI_USAGE;
+        int rc = j.text.data ? IR_CLI_DIAG : IR_CLI_USAGE;
 
         report(&j, out, json);
         unload(&j);

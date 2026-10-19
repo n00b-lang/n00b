@@ -14,31 +14,34 @@ put_str(core_buffer_t *b, core_string_t s)
     }
 }
 
-static const char *
+static core_string_t
 class_name(parse_char_class_t cc)
 {
     switch (cc) {
-    case PARSE_CC_ASCII_DIGIT:       return "__DIGIT";
-    case PARSE_CC_ASCII_ALPHA:       return "__ALPHA";
-    case PARSE_CC_ASCII_UPPER:       return "__UPPER";
-    case PARSE_CC_ASCII_LOWER:       return "__LOWER";
-    case PARSE_CC_HEX_DIGIT:         return "__HEX";
-    case PARSE_CC_NONZERO_DIGIT:     return "__NONZERO_DIGIT";
-    case PARSE_CC_WHITESPACE:        return "__WHITESPACE";
-    case PARSE_CC_ID_START:          return "__ID_START";
-    case PARSE_CC_ID_CONTINUE:       return "__ID_CONTINUE";
-    case PARSE_CC_PRINTABLE:         return "__PRINTABLE";
-    case PARSE_CC_UNICODE_DIGIT:     return "__UNICODE_DIGIT";
-    case PARSE_CC_JSON_STRING_CHAR:  return "__JSON_STR";
-    case PARSE_CC_REGEX_BODY_CHAR:   return "__REGEX_STR";
-    default:                       return nullptr;
+    case PARSE_CC_ASCII_DIGIT:      return CORE_STRING_STATIC("__DIGIT");
+    case PARSE_CC_ASCII_ALPHA:      return CORE_STRING_STATIC("__ALPHA");
+    case PARSE_CC_ASCII_UPPER:      return CORE_STRING_STATIC("__UPPER");
+    case PARSE_CC_ASCII_LOWER:      return CORE_STRING_STATIC("__LOWER");
+    case PARSE_CC_HEX_DIGIT:        return CORE_STRING_STATIC("__HEX");
+    case PARSE_CC_NONZERO_DIGIT:
+        return CORE_STRING_STATIC("__NONZERO_DIGIT");
+    case PARSE_CC_WHITESPACE:       return CORE_STRING_STATIC("__WHITESPACE");
+    case PARSE_CC_ID_START:         return CORE_STRING_STATIC("__ID_START");
+    case PARSE_CC_ID_CONTINUE:      return CORE_STRING_STATIC("__ID_CONTINUE");
+    case PARSE_CC_PRINTABLE:        return CORE_STRING_STATIC("__PRINTABLE");
+    case PARSE_CC_UNICODE_DIGIT:
+        return CORE_STRING_STATIC("__UNICODE_DIGIT");
+    case PARSE_CC_JSON_STRING_CHAR: return CORE_STRING_STATIC("__JSON_STR");
+    case PARSE_CC_REGEX_BODY_CHAR:  return CORE_STRING_STATIC("__REGEX_STR");
+    default:                        return (core_string_t){};
     }
 }
 
 static void
 put_annot(core_buffer_t *b, const parse_annotation_t *a)
 {
-    core_buffer_printf(b, "@%s", parse_annot_kind_name(a->kind));
+    core_buffer_putc(b, '@');
+    core_buffer_append_string(b, parse_annot_kind_name(a->kind));
 
     if (a->args_text.data) {
         core_buffer_putc(b, '(');
@@ -240,9 +243,14 @@ put_items(core_buffer_t *b, parse_grammar_t *g,
             break;
 
         case PARSE_MATCH_CLASS: {
-            const char *nm = class_name(m->char_class);
+            core_string_t nm = class_name(m->char_class);
 
-            core_buffer_puts(b, nm ? nm : "__PRINTABLE");
+            if (nm.data) {
+                core_buffer_append_string(b, nm);
+            }
+            else {
+                core_buffer_puts(b, "__PRINTABLE");
+            }
             break;
         }
 
@@ -257,11 +265,11 @@ put_items(core_buffer_t *b, parse_grammar_t *g,
     }
 }
 
-char *
+core_string_t
 parse_bnf_print(parse_grammar_t *g, int32_t unit)
 {
     if (!g) {
-        return nullptr;
+        return (core_string_t){};
     }
 
     core_buffer_t *b = core_buffer_empty();
@@ -338,5 +346,5 @@ parse_bnf_print(parse_grammar_t *g, int32_t unit)
         }
     }
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }

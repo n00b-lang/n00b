@@ -20,14 +20,14 @@
 
 #include "typelang_bnf.h"
 
-static char *msg(const char *what)
+static core_string_t msg(core_string_t what)
 {
-    size_t n = strlen(what) + 12;
-    char  *p = core_alloc_size(1, n);
+    core_buffer_t *b = core_buffer_empty();
 
-    snprintf(p, n, "typelang: %s", what);
+    core_buffer_puts(b, "typelang: ");
+    core_buffer_append_string(b, what);
 
-    return p;
+    return core_buffer_take_string(b);
 }
 
 static parse_grammar_t *grammar;
@@ -52,7 +52,8 @@ static parse_grammar_t *load_grammar(void)
     parse_register_terminal(g, CORE_STRING_STATIC("INT_LIT"));
     parse_register_terminal(g, CORE_STRING_STATIC("STRING_LIT"));
 
-    if (!parse_bnf_load(CORE_STRING_STATIC(TYPELANG_BNF),
+    if (!parse_bnf_load(core_string_borrow(TYPELANG_BNF,
+                                           sizeof(TYPELANG_BNF) - 1),
                         CORE_STRING_STATIC("union-type"), g)) {
         parse_grammar_free(g);
 
@@ -166,25 +167,25 @@ typedef struct {
     th_type *error_type;
     th_type *success_type;
     union {
-        th_type  *type;
-        char     *name;
-        th_arg    arg;
-        th_member member;
-        uint8_t   attr;
-        th_mode   mode;
-        uint64_t  u;
+        th_type      *type;
+        core_string_t name;
+        th_arg        arg;
+        th_member     member;
+        uint8_t       attr;
+        th_mode       mode;
+        uint64_t      u;
         struct {
-            th_mode     mode;
-            const char *name;
-            th_type    *type;
-            bool        is_rest;
+            th_mode       mode;
+            core_string_t name;
+            th_type      *type;
+            bool          is_rest;
         } param;
     };
 } tl_node;
 
 typedef struct {
-    char    *name;
-    th_type *type;
+    core_string_t *name;
+    th_type       *type;
 } freev;
 
 core_list_decl(th_arg);
@@ -194,8 +195,8 @@ core_list_decl(th_kwparam);
 core_list_decl(freev);
 
 typedef struct {
-    char **names;
-    size_t n;
+    core_string_t *names;
+    size_t         n;
 } binding;
 
 core_list_decl(binding);
@@ -203,7 +204,7 @@ core_list_decl(binding);
 typedef struct {
     th_ctx          *th;
     parse_grammar_t *g;
-    const char      *err;
+    core_string_t    err;
 
     core_list_t(freev) free_vars;
     core_dict_t fv_index;
@@ -332,12 +333,12 @@ static void *r_qualified_name(parse_reduce_t *r)
             }
 
             core_buffer_putc(buf, '.');
-            core_buffer_puts(buf, part->name);
+            core_buffer_append_string(buf, part->name);
         }
     }
 
     tl_node *n = node_new(c, TL_NAME);
-    n->name    = core_buffer_take(buf);
+    n->name    = core_buffer_take_string(buf);
 
     return n;
 }
@@ -352,7 +353,7 @@ static void *r_name_segment(parse_reduce_t *r)
     }
 
     tl_node *n = node_new(c, TL_NAME);
-    n->name    = core_strndup(text.data, text.u8_bytes);
+    n->name    = core_string_dup(text);
 
     return n;
 }
@@ -371,9 +372,8 @@ static void *r_type_arg(parse_reduce_t *r)
     }
 
     if (only && only->kind == TL_NAME) {
-        n->arg.kind  = TH_ARG_STR;
-        n->arg.str.p = only->name;
-        n->arg.str.n = strlen(only->name);
+        n->arg.kind = TH_ARG_STR;
+        n->arg.str  = only->name;
 
         return n;
     }
@@ -424,7 +424,7 @@ static void *r_named_type(parse_reduce_t *r)
     nm = kid(r, at);
 
     if (!nm || nm->kind != TL_NAME) {
-        c->err = "a named type needs a name";
+        c->err = CORE_STRING_STATIC("a named type needs a name");
 
         return nullptr;
     }
@@ -491,17 +491,14 @@ static void *r_tvar(parse_reduce_t *r)
     core_string_t name = parse_tree_leaf_text(core_tree_child(r->node, 1));
 
     if (!name.data) {
-        c->err = "a type variable needs a name";
+        c->err = CORE_STRING_STATIC("a type variable needs a name");
 
         return nullptr;
     }
 
-    char *spelled = core_strndup(name.data, name.u8_bytes);
-
     for (size_t d = c->binders.len; d > 0; d--) {
         for (size_t i = 0; i < c->binders.data[d - 1].n; i++) {
-            if (!strcmp(c->binders.data[d - 1].names[i], spelled)) {
-                core_free(spelled);
+            if (core_string_eq(c->binders.data[d - 1].names[i], name)) {
                 return node_type(c, th_bound(c->th, c->binders.len - d + 1, i));
             }
         }
@@ -509,23 +506,22 @@ static void *r_tvar(parse_reduce_t *r)
 
     bool   found = false;
     size_t at =
-        (size_t)(uintptr_t)core_dict_get(&c->fv_index, spelled, &found);
+        (size_t)(uintptr_t)core_dict_get(&c->fv_index, &name, &found);
 
     if (found) {
-        core_free(spelled);
         return node_type(c, c->free_vars.data[at].type);
     }
 
-    th_type *t = th_var(c->th);
+    th_type       *t   = th_var(c->th);
+    core_string_t *key = core_dict_string_key_copy(name);
 
-    core_list_push(c->free_vars, ((freev){.name = spelled, .type = t}));
-    core_dict_put(&c->fv_index, c->free_vars.data[c->free_vars.len - 1].name,
-                  c->free_vars.len - 1);
+    core_list_push(c->free_vars, ((freev){.name = key, .type = t}));
+    core_dict_put(&c->fv_index, key, c->free_vars.len - 1);
 
     return node_type(c, t);
 }
 
-typedef char *tvar_name_t;
+typedef core_string_t tvar_name_t;
 core_list_decl(tvar_name_t);
 typedef core_list_t(tvar_name_t) tvar_names_t;
 
@@ -544,7 +540,7 @@ static void collect_tvar_names(parse_grammar_t *g, parse_tree_t *n,
         core_string_t s = parse_tree_leaf_text(core_tree_child(n, 1));
 
         if (s.data) {
-            core_list_push(*found, core_strndup(s.data, s.u8_bytes));
+            core_list_push(*found, core_string_dup(s));
         }
 
         return;
@@ -579,7 +575,7 @@ static void *r_binder(parse_reduce_t *r)
 
     if (at) {
         for (size_t i = 0; i < n; i++) {
-            core_free(c->binders.data[at - 1].names[i]);
+            core_free(c->binders.data[at - 1].names[i].data);
         }
 
         core_free(c->binders.data[at - 1].names);
@@ -587,7 +583,7 @@ static void *r_binder(parse_reduce_t *r)
     }
 
     if (!body) {
-        c->err = "forall needs a body";
+        c->err = CORE_STRING_STATIC("forall needs a body");
 
         return nullptr;
     }
@@ -673,9 +669,8 @@ static uint8_t sugar_attrs(parse_grammar_t *g, int32_t alt)
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         if (parse_alt_leads_with(g, CORE_STRING_STATIC("ind-name"), alt,
                                  names[i])) {
-            const char *name = names[i].data;
             uint8_t attrs = 0;
-            th_indirection_attrs(name, &attrs);
+            th_indirection_attrs(names[i], &attrs);
             return attrs;
         }
     }
@@ -705,7 +700,7 @@ static void *r_indirection(parse_reduce_t *r)
     th_type *referent = kid_type(r, 2);
 
     if (!referent) {
-        c->err = "an indirection needs a referent";
+        c->err = CORE_STRING_STATIC("an indirection needs a referent");
 
         return nullptr;
     }
@@ -757,16 +752,14 @@ static void *r_anon_site(parse_reduce_t *r)
     tl_node      *col  = kid(r, 5);
 
     if (!path.data || !line || !col) {
-        c->err = "an anonymous site needs a path, a line and a column";
+        c->err = CORE_STRING_STATIC(
+            "an anonymous site needs a path, a line and a column");
 
         return nullptr;
     }
 
-    char    *spelled = core_strndup(path.data, path.u8_bytes);
-    th_type *named   = th_name(c->th, th_anon_name(c->th, spelled, line->u,
-                                                   col->u));
-
-    core_free(spelled);
+    th_type *named = th_name(c->th, th_anon_name(c->th, path, line->u,
+                                                 col->u));
 
     return node_type(c, named);
 }
@@ -778,14 +771,14 @@ static void *r_field(parse_reduce_t *r)
     th_type      *type = kid_type(r, 2);
 
     if (!name.data || !type) {
-        c->err = "a field needs a name and a type";
+        c->err = CORE_STRING_STATIC("a field needs a name and a type");
 
         return nullptr;
     }
 
     tl_node *n = node_new(c, TL_MEMBER);
 
-    n->member.name = core_strndup(name.data, name.u8_bytes);
+    n->member.name = core_string_dup(name);
     n->member.type = type;
 
     return n;
@@ -979,8 +972,8 @@ static void *r_param(parse_reduce_t *r)
             }
         }
 
-        n->param.name = named.data ? core_strndup(named.data, named.u8_bytes)
-                                   : nullptr;
+        n->param.name = named.data ? core_string_dup(named)
+                                   : (core_string_t){};
     }
 
     n->param.mode = mode;
@@ -1004,23 +997,23 @@ static void *r_param_list(parse_reduce_t *r)
     return list;
 }
 
-static th_type *function_tvar(bctx *c, const char *name)
+static th_type *function_tvar(bctx *c, core_string_t name)
 {
     bool   found = false;
-    size_t at    = (size_t)(uintptr_t)core_dict_get(&c->fv_index, name, &found);
+    size_t at    = (size_t)(uintptr_t)core_dict_get(&c->fv_index, &name,
+                                                    &found);
     if (found)
         return c->free_vars.data[at].type;
 
-    th_type *type = th_var(c->th);
-    core_list_push(c->free_vars,
-                   ((freev){.name = core_strdup(name), .type = type}));
-    core_dict_put(&c->fv_index, c->free_vars.data[c->free_vars.len - 1].name,
-                  c->free_vars.len - 1);
+    th_type       *type = th_var(c->th);
+    core_string_t *key  = core_dict_string_key_copy(name);
+    core_list_push(c->free_vars, ((freev){.name = key, .type = type}));
+    core_dict_put(&c->fv_index, key, c->free_vars.len - 1);
     return type;
 }
 
 static void constrain_function_items(bctx *c, void *value,
-                                     const char **variable, th_type **type)
+                                     core_string_t *variable, th_type **type)
 {
     parse_reduce_list_t *list = parse_reduce_as_list(value);
     if (list) {
@@ -1033,7 +1026,7 @@ static void constrain_function_items(bctx *c, void *value,
     if (!node || node->magic != TL_NODE_MAGIC)
         return;
     if (node->kind == TL_NAME) {
-        if (!*variable) {
+        if (!variable->data) {
             *variable = node->name;
             *type     = function_tvar(c, node->name);
         } else {
@@ -1062,9 +1055,8 @@ static void *r_function_constraint(parse_reduce_t *r)
     }
     if (!subject.data)
         return nullptr;
-    char       *spelled  = core_strndup(subject.data, subject.u8_bytes);
-    const char *variable = spelled;
-    th_type    *type     = function_tvar(c, variable);
+    core_string_t variable = subject;
+    th_type      *type     = function_tvar(c, variable);
     for (size_t i = 0; i < r->n_kids; i++) {
         parse_tree_t *child = core_tree_child(r->node, i);
         if (core_tree_is_leaf(child) &&
@@ -1073,7 +1065,6 @@ static void *r_function_constraint(parse_reduce_t *r)
             continue;
         constrain_function_items(c, kid(r, i), &variable, &type);
     }
-    core_free(spelled);
     return nullptr;
 }
 
@@ -1136,7 +1127,7 @@ static void *r_function(parse_reduce_t *r)
                     rest.mode = p->param.mode;
                     rest.type = p->param.type;
                     have_rest = true;
-                } else if (p->param.name) {
+                } else if (p->param.name.data) {
                     core_list_push(kws, ((th_kwparam){
                                             .name = p->param.name,
                                             .mode = p->param.mode,
@@ -1167,7 +1158,7 @@ static void *r_function(parse_reduce_t *r)
             : nullptr;
 
     if (!ret) {
-        c->err = "a function needs a return type";
+        c->err = CORE_STRING_STATIC("a function needs a return type");
 
         core_list_free(params);
         core_list_free(kws);
@@ -1221,10 +1212,7 @@ static void *r_int_leaf_or_str(parse_reduce_t *r)
     if (tid == tid_int) {
         tl_node *n = node_new(c, TL_INT);
 
-        char *digits = core_strndup(text.data, text.u8_bytes);
-
-        n->u = strtoull(digits, nullptr, 10);
-        core_free(digits);
+        n->u = core_string_strtoull(text, 10);
 
         return n;
     }
@@ -1232,7 +1220,7 @@ static void *r_int_leaf_or_str(parse_reduce_t *r)
     if (tid == tid_str || tid == tid_ident) {
         tl_node *n = node_new(c, TL_NAME);
 
-        n->name = core_strndup(text.data, text.u8_bytes);
+        n->name = core_string_dup(text);
 
         return n;
     }
@@ -1304,7 +1292,7 @@ static th_type *lower(bctx *c, parse_tree_t *tree, th_type **failure_out)
     parse_tree_walk_t *w = parse_tree_walk_new(c->g, c);
 
     if (!ir_typelang_install(w, c->g, (ir_typelang_lower_t *)c)) {
-        c->err = "could not install typelang reducers";
+        c->err = CORE_STRING_STATIC("could not install typelang reducers");
         parse_tree_walk_free(w);
         return nullptr;
     }
@@ -1318,22 +1306,23 @@ static th_type *lower(bctx *c, parse_tree_t *tree, th_type **failure_out)
 
     return out;
 }
-static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
-                    char **err, th_type **failure_out)
+static th_type *run(th_ctx *ctx, core_string_t src, size_t *consumed,
+                    core_string_t *err, th_type **failure_out)
 {
     if (err) {
-        *err = nullptr;
+        *err = (core_string_t){};
     }
     if (failure_out)
         *failure_out = nullptr;
 
     parse_grammar_t *g = load_grammar();
 
-    if (!g || !src) {
+    if (!g || !src.data) {
         return nullptr;
     }
 
-    core_buffer_t   *buf = core_buffer_from_bytes(src, (int64_t)len);
+    core_buffer_t   *buf = core_buffer_from_bytes(src.data,
+                                                  (int64_t)src.u8_bytes);
     parse_scanner_t *sc  = scan_scanner_new(
         buf, tl_scan, g, core_option_none(core_string_t), nullptr, nullptr);
     parse_token_stream_t *ts = scan_token_stream_new(sc);
@@ -1353,23 +1342,25 @@ static th_type *run(th_ctx *ctx, const char *src, size_t len, size_t *consumed,
     if (ok) {
         bctx c = {.th = ctx, .g = g};
 
-        core_dict_init(&c.fv_index, core_hash_cstring, core_dict_cstr_eq);
+        core_dict_init_string(&c.fv_index);
 
         out = lower(&c, parse_pwz_get_tree(p), failure_out);
 
         if (!out && err) {
-            *err = msg(c.err ? c.err : "cannot build this type");
+            *err = msg(c.err.data
+                           ? c.err
+                           : CORE_STRING_STATIC("cannot build this type"));
         }
 
         for (size_t i = 0; i < c.free_vars.len; i++) {
-            core_free(c.free_vars.data[i].name);
+            core_dict_string_key_free(c.free_vars.data[i].name);
         }
 
         core_dict_free(&c.fv_index);
         core_list_free(c.free_vars);
         core_list_free(c.binders);
     } else if (err) {
-        *err = msg("cannot parse a type here");
+        *err = msg(CORE_STRING_STATIC("cannot parse a type here"));
     }
 
     if (out && consumed) {
@@ -1392,7 +1383,7 @@ ir_typelang_lower_t *ir_typelang_lower_new(th_ctx *ctx)
     c->th = ctx;
     c->g  = load_grammar();
 
-    core_dict_init(&c->fv_index, core_hash_cstring, core_dict_cstr_eq);
+    core_dict_init_string(&c->fv_index);
 
     return (ir_typelang_lower_t *)c;
 }
@@ -1430,7 +1421,7 @@ void ir_typelang_lower_free(ir_typelang_lower_t *l)
     }
 
     for (size_t i = 0; i < c->free_vars.len; i++) {
-        core_free(c->free_vars.data[i].name);
+        core_dict_string_key_free(c->free_vars.data[i].name);
     }
 
     core_dict_free(&c->fv_index);
@@ -1439,15 +1430,16 @@ void ir_typelang_lower_free(ir_typelang_lower_t *l)
     core_free(c);
 }
 
-th_type *ir_typelang_parse(th_ctx *ctx, const char *src, char **err)
+th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
+                           core_string_t *err)
 {
-    return src ? run(ctx, src, strlen(src), nullptr, err, nullptr) : nullptr;
+    return src.data ? run(ctx, src, nullptr, err, nullptr) : nullptr;
 }
 
-th_type *ir_typelang_parse_function(th_ctx *ctx, const char *src,
-                                    th_type **failure, char **err)
+th_type *ir_typelang_parse_function(th_ctx *ctx, core_string_t src,
+                                    th_type **failure, core_string_t *err)
 {
-    return src ? run(ctx, src, strlen(src), nullptr, err, failure) : nullptr;
+    return src.data ? run(ctx, src, nullptr, err, failure) : nullptr;
 }
 
 th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
@@ -1456,16 +1448,16 @@ th_type *ir_type_from_text(th_ctx *types, core_string_t spec)
         return nullptr;
     }
 
-    char    *err = nullptr;
-    th_type *t   = run(types, spec.data, spec.u8_bytes, nullptr, &err, nullptr);
+    core_string_t err = {};
+    th_type      *t   = run(types, spec, nullptr, &err, nullptr);
 
-    core_free(err);
+    core_free(err.data);
 
     return t;
 }
 
-th_type *ir_typelang_parse_prefix(th_ctx *ctx, const char *src, size_t len,
-                                  size_t *consumed, char **err)
+th_type *ir_typelang_parse_prefix(th_ctx *ctx, core_string_t src,
+                                  size_t *consumed, core_string_t *err)
 {
-    return run(ctx, src, len, consumed, err, nullptr);
+    return run(ctx, src, consumed, err, nullptr);
 }

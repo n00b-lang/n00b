@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 
 #include "ir/libir.h"
 #include "parse/bnf.h"
@@ -8,6 +7,8 @@
 #include "parse/tree_util.h"
 #include "scanner/token_stream.h"
 #include "harness.h"
+
+#define S(x) CORE_STRING_STATIC(x)
 
 static bool produced[IR_DIAG_COUNT];
 
@@ -135,15 +136,14 @@ suppress_nonterminal_emit(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 static bool
-parse_lowering_fixture(parse_grammar_t *grammar, const char *start,
-                       const char *source, parse_pwz_parser_t **parser_out,
+parse_lowering_fixture(parse_grammar_t *grammar, core_string_t start,
+                       core_string_t source, parse_pwz_parser_t **parser_out,
                        parse_token_stream_t **tokens_out,
                        parse_tree_t **tree_out)
 {
     *parser_out = parse_pwz_new_for_start(grammar, parse_nonterm_id(
-        parse_find_nonterm(grammar, core_string_from_cstr(start))));
-    *tokens_out = scan_token_stream_from_codepoints(
-        core_string_from_cstr(source));
+        parse_find_nonterm(grammar, start)));
+    *tokens_out = scan_token_stream_from_codepoints(source);
     bool parsed = *parser_out && *tokens_out
         && parse_pwz_parse(*parser_out, *tokens_out);
     *tree_out = parsed ? parse_pwz_get_tree(*parser_out) : nullptr;
@@ -153,30 +153,31 @@ parse_lowering_fixture(parse_grammar_t *grammar, const char *start,
 static void
 test_nonterminal_lowering_callbacks(void)
 {
-    static const char *const grammar_text =
+    static const core_string_t grammar_text = S(
         "@tokenizer(\"toy\")\n"
         "<prune_root> ::= <pruned>\n"
         "<pruned> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n"
         "<published> @emit(\"identity\", $0) ::= <literal>\n"
         "<suppressed> @emit(\"identity\", $0) ::= <literal>\n"
-        "<literal> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n";
+        "<literal> @literal(\"int\") @emit(\"literal\") ::= \"7\"\n");
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "nt-lower-test",
-                                         &ir_profile_bce, "host");
-    th_type *i32 = ir_type_parse(module, "i32");
+    ir_module_t *module = ir_module_new(ctx, S("nt-lower-test"),
+                                         &ir_profile_bce, S("host"));
+    th_type *i32 = ir_type_parse(module, S("i32"));
     parse_grammar_t *grammar = parse_grammar_new();
-    bool loaded = parse_bnf_load(core_string_from_cstr(grammar_text),
+    bool loaded = parse_bnf_load(grammar_text,
         CORE_STRING_STATIC("prune_root"), grammar);
     ir_lowerer_t *lowerer = ir_lowerer_new(ctx);
     bool registered = loaded && lowerer
-        && ir_lowerer_register(lowerer, "identity", lower_identity, nullptr);
+        && ir_lowerer_register(lowerer, S("identity"), lower_identity,
+                               nullptr);
 
-    th_type *void_signature = ir_type_parse(module, "() -> void");
+    th_type *void_signature = ir_type_parse(module, S("() -> void"));
     ir_func_t *prune_function = void_signature
-        ? ir_func_add(module, "pruned", void_signature, IR_LINK_INTERNAL)
+        ? ir_func_add(module, S("pruned"), void_signature, IR_LINK_INTERNAL)
         : nullptr;
     ir_block_t *prune_block = prune_function
-        ? ir_block_add(prune_function, "entry") : nullptr;
+        ? ir_block_add(prune_function, S("entry")) : nullptr;
     ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
     ir_lower_context_t prune_context = {
         .module = module, .function = prune_function, .block = prune_block,
@@ -186,11 +187,11 @@ test_nonterminal_lowering_callbacks(void)
     parse_token_stream_t *tokens = nullptr;
     parse_tree_t *tree = nullptr;
     bool parsed = registered && prune_block
-        && parse_lowering_fixture(grammar, "prune_root", "7", &parser,
+        && parse_lowering_fixture(grammar, S("prune_root"), S("7"), &parser,
                                   &tokens, &tree);
     nt_visit_state_t prune_state = {0};
     bool prune_registered = parsed
-        && ir_lowerer_register_nt_visit(lowerer, "pruned",
+        && ir_lowerer_register_nt_visit(lowerer, S("pruned"),
             prune_nonterminal, &prune_state);
     ir_lower_result_t pruned = parsed
         ? ir_lower_tree(lowerer, &prune_context, grammar, tree)
@@ -202,12 +203,13 @@ test_nonterminal_lowering_callbacks(void)
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
 
-    th_type *value_signature = ir_type_parse(module, "() -> i32");
+    th_type *value_signature = ir_type_parse(module, S("() -> i32"));
     ir_func_t *value_function = value_signature
-        ? ir_func_add(module, "published", value_signature, IR_LINK_INTERNAL)
+        ? ir_func_add(module, S("published"), value_signature,
+                      IR_LINK_INTERNAL)
         : nullptr;
     ir_block_t *value_block = value_function
-        ? ir_block_add(value_function, "entry") : nullptr;
+        ? ir_block_add(value_function, S("entry")) : nullptr;
     ir_lower_context_t value_context = {
         .module = module, .function = value_function, .block = value_block,
         .diagnostics = diagnostics, .file_id = -1, .reachable = true,
@@ -215,8 +217,9 @@ test_nonterminal_lowering_callbacks(void)
     parser = nullptr;
     tokens = nullptr;
     tree = nullptr;
-    parsed = value_block && parse_lowering_fixture(grammar, "published", "7",
-                                                   &parser, &tokens, &tree);
+    parsed = value_block && parse_lowering_fixture(grammar, S("published"),
+                                                   S("7"), &parser, &tokens,
+                                                   &tree);
     parse_tree_t *literal = parsed
         ? core_tree_child(tree, 0) : nullptr;
     if (parsed) {
@@ -225,7 +228,7 @@ test_nonterminal_lowering_callbacks(void)
     }
     nt_visit_state_t publish_state = {0};
     bool publish_registered = parsed
-        && ir_lowerer_register_nt_visit(lowerer, "published",
+        && ir_lowerer_register_nt_visit(lowerer, S("published"),
             publish_nonterminal_value, &publish_state);
     ir_lower_result_t published = parsed
         ? ir_lower_tree(lowerer, &value_context, grammar, tree)
@@ -239,23 +242,24 @@ test_nonterminal_lowering_callbacks(void)
     value_context.next_value_id = 0;
     ir_instr_t *first_temp = ir_instr_add(value_block, IR_OP_CONST);
     bool first_named = ir_lower_set_temp_dest(&value_context, first_temp,
-                                              "temporary_", i32);
+                                              S("temporary_"), i32);
     value_context.next_value_id = 0;
     ir_instr_t *second_temp = ir_instr_add(value_block, IR_OP_CONST);
     bool second_named = ir_lower_set_temp_dest(&value_context, second_temp,
-                                               "temporary_", i32);
+                                               S("temporary_"), i32);
     check("temporary destinations skip names already used by the function",
           first_named && second_named
-              && !strcmp(first_temp->dest->name, "temporary_0")
-              && !strcmp(second_temp->dest->name, "temporary_1"));
+              && core_string_eq(first_temp->dest->name, S("temporary_0"))
+              && core_string_eq(second_temp->dest->name, S("temporary_1")));
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
 
     ir_func_t *suppressed_function = void_signature
-        ? ir_func_add(module, "suppressed", void_signature, IR_LINK_INTERNAL)
+        ? ir_func_add(module, S("suppressed"), void_signature,
+                      IR_LINK_INTERNAL)
         : nullptr;
     ir_block_t *suppressed_block = suppressed_function
-        ? ir_block_add(suppressed_function, "entry") : nullptr;
+        ? ir_block_add(suppressed_function, S("entry")) : nullptr;
     ir_lower_context_t suppressed_context = {
         .module = module, .function = suppressed_function,
         .block = suppressed_block, .diagnostics = diagnostics,
@@ -265,7 +269,7 @@ test_nonterminal_lowering_callbacks(void)
     tokens = nullptr;
     tree = nullptr;
     parsed = suppressed_block
-        && parse_lowering_fixture(grammar, "suppressed", "7", &parser,
+        && parse_lowering_fixture(grammar, S("suppressed"), S("7"), &parser,
                                   &tokens, &tree);
     literal = parsed ? core_tree_child(tree, 0) : nullptr;
     if (parsed) {
@@ -274,7 +278,7 @@ test_nonterminal_lowering_callbacks(void)
     }
     nt_visit_state_t suppressed_state = {0};
     bool suppressed_registered = parsed
-        && ir_lowerer_register_nt_visit(lowerer, "suppressed",
+        && ir_lowerer_register_nt_visit(lowerer, S("suppressed"),
             suppress_nonterminal_emit, &suppressed_state);
     ir_lower_result_t suppressed = parsed
         ? ir_lower_tree(lowerer, &suppressed_context, grammar, tree)
@@ -286,7 +290,7 @@ test_nonterminal_lowering_callbacks(void)
               && suppressed_block->n_instrs == 1);
     uint32_t before_missing = ir_diags_count(diagnostics);
     bool missing_registered = ir_lowerer_register_nt_visit(lowerer,
-        "absent_nt", publish_nonterminal_value, &suppressed_state);
+        S("absent_nt"), publish_nonterminal_value, &suppressed_state);
     ir_lower_result_t missing = missing_registered
         ? ir_lower_tree(lowerer, &suppressed_context, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
@@ -295,8 +299,9 @@ test_nonterminal_lowering_callbacks(void)
     check("an absent nonterminal callback reports a lowering error",
           missing_registered && missing.status == IR_LOWER_FAILED
               && ir_diags_count(diagnostics) == before_missing + 1
-              && missing_diagnostic && missing_diagnostic->message
-              && strstr(missing_diagnostic->message, "absent_nt"));
+              && missing_diagnostic && missing_diagnostic->message.data
+              && core_string_find(missing_diagnostic->message,
+                                  S("absent_nt")) >= 0);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
     parse_grammar_free(grammar);
@@ -305,11 +310,10 @@ test_nonterminal_lowering_callbacks(void)
 
 static parse_tree_t *
 find_nonterminal(parse_grammar_t *grammar, parse_tree_t *node,
-                const char *name)
+                core_string_t name)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
-    if (core_string_eq(parse_tree_nt_name(grammar, node),
-                       core_string_from_cstr(name)))
+    if (core_string_eq(parse_tree_nt_name(grammar, node), name))
         return node;
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *found = find_nonterminal(
@@ -320,10 +324,10 @@ find_nonterminal(parse_grammar_t *grammar, parse_tree_t *node,
 }
 
 static parse_annotation_t *
-emit_annotation(const char *action, size_t operand_count)
+emit_annotation(core_string_t action, size_t operand_count)
 {
     parse_annotation_t *annotation = parse_annot_new(PARSE_ANNOT_EMIT);
-    annotation->emit_action = core_string_from_cstr(action);
+    annotation->emit_action = core_string_dup(action);
     if (operand_count) {
         annotation->emit_operands = core_list_new(parse_child_ref_t);
         for (size_t i = 0; i < operand_count; i++)
@@ -337,21 +341,21 @@ int
 main(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "lower-test", &ir_profile_bce,
-                                        "host");
-    th_type *i32 = ir_type_parse(module, "i32");
-    th_type *signature = ir_type_parse(module, "(i32, i32) -> i32");
-    ir_func_t *function = ir_func_add(module, "f", signature,
+    ir_module_t *module = ir_module_new(ctx, S("lower-test"), &ir_profile_bce,
+                                        S("host"));
+    th_type *i32 = ir_type_parse(module, S("i32"));
+    th_type *signature = ir_type_parse(module, S("(i32, i32) -> i32"));
+    ir_func_t *function = ir_func_add(module, S("f"), signature,
                                       IR_LINK_EXTERNAL);
-    ir_value_t *left = ir_param_add(function, "left", i32);
-    ir_value_t *right = ir_param_add(function, "right", i32);
-    ir_local_t *local = ir_local_add(function, "local", i32);
-    th_type *callee_signature = ir_type_parse(module, "(i32) -> i32");
-    ir_func_t *callee_function = ir_func_add(module, "callee",
+    ir_value_t *left = ir_param_add(function, S("left"), i32);
+    ir_value_t *right = ir_param_add(function, S("right"), i32);
+    ir_local_t *local = ir_local_add(function, S("local"), i32);
+    th_type *callee_signature = ir_type_parse(module, S("(i32) -> i32"));
+    ir_func_t *callee_function = ir_func_add(module, S("callee"),
         callee_signature, IR_LINK_EXTERN);
     ir_value_t *callee_value = ir_func_address(module, callee_function);
-    ir_block_t *block = ir_block_add(function, "entry");
-    int32_t file_id = ir_file_add(module, "lower.n00b");
+    ir_block_t *block = ir_block_add(function, S("entry"));
+    int32_t file_id = ir_file_add(module, S("lower.n00b"));
     ir_diags_t *diagnostics = ir_diags_new(ctx, nullptr);
     ir_lowerer_t *lowerer = ir_lowerer_new(ctx);
     ir_lower_context_t lower = {
@@ -364,8 +368,8 @@ main(void)
     };
     ir_value_t *operands[] = {left, right};
 
-    static const char *const grammar_text
-        = "@tokenizer(\"toy\")\n"
+    static const core_string_t grammar_text
+        = S("@tokenizer(\"toy\")\n"
           "<sum> @scope(\"sum\") @emit(\"add\", $left, $right) ::= <left> \"+\" <right>\n"
           "<left> @emit(\"reference\") ::= \"a\"\n"
           "<right> @emit(\"reference\") ::= \"b\"\n"
@@ -381,11 +385,10 @@ main(void)
           "<callee> @emit(\"reference\") ::= \"f\"\n"
           "<argument> @emit(\"reference\") ::= \"a\"\n"
           "<ret> @emit(\"return\", $1) ::= \"r\" <literal>\n"
-          "<publish> @scope(\"publish\") ::= <left>\n";
+          "<publish> @scope(\"publish\") ::= <left>\n");
     parse_grammar_t *grammar = parse_grammar_new();
     bool grammar_loaded = parse_bnf_load(
-        core_string_from_cstr(grammar_text), CORE_STRING_STATIC("sum"),
-        grammar);
+        grammar_text, CORE_STRING_STATIC("sum"), grammar);
     parse_token_stream_t *tokens = scan_token_stream_from_codepoints(
         CORE_STRING_STATIC("a+b"));
     parse_pwz_parser_t *parser = grammar_loaded
@@ -423,13 +426,13 @@ main(void)
     parse_sym_entry_t rebound_symbol = {
         .name = CORE_STRING_STATIC("rebound_symbol"), .type = i32,
     };
-    ir_local_t *rebound_local = ir_local_add(function, "rebound", i32);
+    ir_local_t *rebound_local = ir_local_add(function, S("rebound"), i32);
     parse_sym_entry_t callee_symbol = {
         .name = CORE_STRING_STATIC("callee"),
         .kind = PARSE_SYM_FUNCTION,
         .type = callee_signature,
     };
-    ir_global_t *global = ir_global_add(module, "global", i32);
+    ir_global_t *global = ir_global_add(module, S("global"), i32);
     parse_sym_entry_t global_symbol = {
         .name = CORE_STRING_STATIC("global"), .type = i32,
     };
@@ -439,8 +442,8 @@ main(void)
         &left_symbol, &right_symbol, PARSE_SYM_ALIAS_DERIVED, 3, 7, false);
     parse_sym_set_alias_analysis_complete(&left_symbol, true);
     parse_sym_set_alias_analysis_complete(&right_symbol, true);
-    parse_tree_t *left_node = find_nonterminal(grammar, tree, "left");
-    parse_tree_t *right_node = find_nonterminal(grammar, tree, "right");
+    parse_tree_t *left_node = find_nonterminal(grammar, tree, S("left"));
+    parse_tree_t *right_node = find_nonterminal(grammar, tree, S("right"));
     parse_tree_set_sym(left_node, &left_symbol);
     parse_tree_set_sym(right_node, &right_symbol);
     visit_counts_t visit_counts = {0};
@@ -473,14 +476,14 @@ main(void)
               && ir_lowerer_register_visit(lowerer,
                   PARSE_ANNOT_SCOPE_OPEN, publish_external_value,
                   callee_value));
-    th_type *comptime_signature = ir_type_parse(module, "() -> void");
+    th_type *comptime_signature = ir_type_parse(module, S("() -> void"));
     ir_func_t *comptime_function = comptime_signature
-        ? ir_func_add(module, "comptime_binding", comptime_signature,
+        ? ir_func_add(module, S("comptime_binding"), comptime_signature,
                       IR_LINK_INTERNAL) : nullptr;
     ir_block_t *comptime_block = comptime_function
-        ? ir_block_add(comptime_function, "entry") : nullptr;
+        ? ir_block_add(comptime_function, S("entry")) : nullptr;
     ir_local_t *comptime_local = comptime_function
-        ? ir_local_add(comptime_function, "phase_local", i32) : nullptr;
+        ? ir_local_add(comptime_function, S("phase_local"), i32) : nullptr;
     parse_sym_entry_t comptime_symbol = {
         .name = CORE_STRING_STATIC("phase_local"),
         .kind = PARSE_SYM_VARIABLE,
@@ -511,29 +514,29 @@ main(void)
           comptime_binding_set);
     ir_annots_t *left_facts = ir_value_annots(left);
     ir_annot_t *available = ir_annot_get(left_facts,
-                                         "ir.binding_phases");
+                                         S("ir.binding_phases"));
     ir_annot_t *mutable = ir_annot_get(left_facts,
-                                       "ir.binding_mutable_phases");
-    ir_annot_t *storage = ir_annot_get(left_facts, "ir.storage_selected");
+                                       S("ir.binding_mutable_phases"));
+    ir_annot_t *storage = ir_annot_get(left_facts, S("ir.storage_selected"));
     ir_annot_t *requested_storage = ir_annot_get(left_facts,
-                                                 "ir.storage_requested");
+                                                 S("ir.storage_requested"));
     ir_annot_t *storage_required = ir_annot_get(left_facts,
-                                                "ir.storage_required");
-    ir_annot_t *duration = ir_annot_get(left_facts, "ir.storage_duration");
-    ir_annot_t *region = ir_annot_get(left_facts, "ir.lifetime_region");
-    ir_annot_t *alias = ir_annot_get(left_facts, "ir.alias0");
+                                                S("ir.storage_required"));
+    ir_annot_t *duration = ir_annot_get(left_facts, S("ir.storage_duration"));
+    ir_annot_t *region = ir_annot_get(left_facts, S("ir.lifetime_region"));
+    ir_annot_t *alias = ir_annot_get(left_facts, S("ir.alias0"));
     ir_annot_t *last_use = ir_annot_get(left_facts,
-                                        "ir.alias0_last_use");
+                                        S("ir.alias0_last_use"));
     check("symbol phase, storage, lifetime, and alias facts project to IR",
           available && available->kind == IR_ANNOT_INT
               && available->i.mag == PARSE_SYM_PHASE_BOTH
               && mutable && mutable->kind == IR_ANNOT_INT
               && mutable->i.mag == PARSE_SYM_PHASE_RUNTIME
               && storage && storage->kind == IR_ANNOT_STR
-              && !strcmp(storage->s, "pool")
+              && core_string_eq(storage->s, S("pool"))
               && requested_storage
               && requested_storage->kind == IR_ANNOT_STR
-              && !strcmp(requested_storage->s, "pool")
+              && core_string_eq(requested_storage->s, S("pool"))
               && storage_required
               && storage_required->kind == IR_ANNOT_BOOL
               && storage_required->b
@@ -560,7 +563,7 @@ main(void)
         &unresolved_source, &unresolved_target, PARSE_SYM_ALIAS_MAY, 4,
         false);
     ir_local_t *unresolved_local =
-        ir_local_add(function, "unresolved_local", i32);
+        ir_local_add(function, S("unresolved_local"), i32);
     bool unresolved_bound = unresolved_edge && unresolved_local
         && ir_lower_bind_local(&lower, &unresolved_source,
                                unresolved_local);
@@ -568,11 +571,11 @@ main(void)
         ? ir_local_value(function, unresolved_local) : nullptr;
     ir_annots_t *unresolved_facts = ir_value_annots(unresolved_value);
     ir_annot_t *unresolved_flag = ir_annot_get(
-        unresolved_facts, "ir.alias_unresolved");
+        unresolved_facts, S("ir.alias_unresolved"));
     ir_annot_t *incomplete = ir_annot_get(
-        unresolved_facts, "ir.alias_analysis_complete");
+        unresolved_facts, S("ir.alias_analysis_complete"));
     ir_annot_t *possibly_escaping = ir_annot_get(
-        unresolved_facts, "ir.lifetime_escapes");
+        unresolved_facts, S("ir.lifetime_escapes"));
     check("unprojected aliases remain incomplete and escaping in IR",
           unresolved_flag && unresolved_flag->kind == IR_ANNOT_BOOL
               && unresolved_flag->b && incomplete
@@ -593,11 +596,12 @@ main(void)
     bool cross_scope_edge = parse_symtab_add_alias(
         &global_holder_symbol, &cross_scope_target,
         PARSE_SYM_ALIAS_DERIVED, 5, true);
-    ir_global_t *global_holder = ir_global_add(module, "global_holder", i32);
+    ir_global_t *global_holder = ir_global_add(module, S("global_holder"),
+                                               i32);
     ir_value_t *global_holder_value = global_holder
         ? ir_global_address(module, global_holder) : nullptr;
     ir_local_t *cross_scope_local =
-        ir_local_add(function, "cross_scope_local", i32);
+        ir_local_add(function, S("cross_scope_local"), i32);
     bool cross_scope_bound = cross_scope_edge && global_holder_value
         && cross_scope_local
         && ir_lower_bind_value(&lower, &global_holder_symbol,
@@ -607,9 +611,9 @@ main(void)
     ir_annots_t *global_holder_facts =
         ir_value_annots(global_holder_value);
     ir_annot_t *cross_scope_unresolved = ir_annot_get(
-        global_holder_facts, "ir.alias_unresolved");
+        global_holder_facts, S("ir.alias_unresolved"));
     ir_annot_t *cross_scope_complete = ir_annot_get(
-        global_holder_facts, "ir.alias_analysis_complete");
+        global_holder_facts, S("ir.alias_analysis_complete"));
     check("global facts never point at function-local values",
           cross_scope_bound && cross_scope_unresolved
               && cross_scope_unresolved->kind == IR_ANNOT_BOOL
@@ -617,10 +621,10 @@ main(void)
               && cross_scope_complete
               && cross_scope_complete->kind == IR_ANNOT_BOOL
               && !cross_scope_complete->b
-              && !ir_annot_get(global_holder_facts, "ir.alias0")
+              && !ir_annot_get(global_holder_facts, S("ir.alias0"))
               && !ir_value_can_finalize_at(global_holder_value, 100));
-    ir_global_t *cycle_a_global = ir_global_add(module, "cycle_a", i32);
-    ir_global_t *cycle_b_global = ir_global_add(module, "cycle_b", i32);
+    ir_global_t *cycle_a_global = ir_global_add(module, S("cycle_a"), i32);
+    ir_global_t *cycle_b_global = ir_global_add(module, S("cycle_b"), i32);
     ir_value_t *cycle_a = cycle_a_global
         ? ir_global_address(module, cycle_a_global) : nullptr;
     ir_value_t *cycle_b = cycle_b_global
@@ -629,11 +633,11 @@ main(void)
     ir_annots_t *cycle_b_facts = ir_value_annots(cycle_b);
     bool cycle_facts_added = cycle_a_facts && cycle_b_facts
         && ir_annot_set(ctx, cycle_a_facts, (ir_annot_t){
-            .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
             .b = true,
         })
         && ir_annot_set(ctx, cycle_b_facts, (ir_annot_t){
-            .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
             .b = true,
         });
     ir_value_t *cycle_values[] = {cycle_a, cycle_b};
@@ -641,39 +645,39 @@ main(void)
         ir_annots_t *facts = ir_value_annots(cycle_values[i]);
         ir_value_t *target = cycle_values[1 - i];
         cycle_facts_added = ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+            .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = 1},
         })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+                .key = S("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
                 .i = {.mag = 0},
             })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+                .key = S("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
                 .b = false,
             })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+                .key = S("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
                 .b = false,
             })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.lifetime_end", .kind = IR_ANNOT_INT,
+                .key = S("ir.lifetime_end"), .kind = IR_ANNOT_INT,
                 .i = {.mag = 10},
             })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.alias0", .kind = IR_ANNOT_VALUE,
+                .key = S("ir.alias0"), .kind = IR_ANNOT_VALUE,
                 .v = target,
             })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.alias0_escapes", .kind = IR_ANNOT_BOOL,
+                .key = S("ir.alias0_escapes"), .kind = IR_ANNOT_BOOL,
                 .b = false,
             })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.alias0_has_last_use", .kind = IR_ANNOT_BOOL,
+                .key = S("ir.alias0_has_last_use"), .kind = IR_ANNOT_BOOL,
                 .b = true,
             })
             && ir_annot_set(ctx, facts, (ir_annot_t){
-                .key = "ir.alias0_last_use", .kind = IR_ANNOT_INT,
+                .key = S("ir.alias0_last_use"), .kind = IR_ANNOT_INT,
                 .i = {.mag = 5},
             });
     }
@@ -686,7 +690,7 @@ main(void)
               && ir_lower_bindings_restore(&lower, binding_checkpoint)
               && ir_lower_bound_local(&lower, &left_symbol) == nullptr);
     ir_annot_t *right_phases = ir_annot_get(ir_value_annots(right),
-                                            "ir.binding_phases");
+                                            S("ir.binding_phases"));
     check("scoped bindings do not overwrite durable symbol facts",
           right_phases && right_phases->kind == IR_ANNOT_INT
               && right_phases->i.mag == PARSE_SYM_PHASE_RUNTIME);
@@ -743,7 +747,7 @@ main(void)
     scan_token_stream_free(tokens);
 
     bool parsed_external = parse_lowering_fixture(
-        grammar, "external_value", "f", &parser, &tokens, &tree);
+        grammar, S("external_value"), S("f"), &parser, &tokens, &tree);
     ir_lower_result_t external_result = parsed_external
         ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -758,7 +762,7 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("a"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    left_node = find_nonterminal(grammar, tree, "left");
+    left_node = find_nonterminal(grammar, tree, S("left"));
     parse_tree_set_sym(left_node, &left_symbol);
     parse_tree_set_type(left_node, i32);
     ir_lower_result_t published = tree
@@ -774,8 +778,9 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("f(a)"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    parse_tree_t *callee_node = find_nonterminal(grammar, tree, "callee");
-    parse_tree_t *argument_node = find_nonterminal(grammar, tree, "argument");
+    parse_tree_t *callee_node = find_nonterminal(grammar, tree, S("callee"));
+    parse_tree_t *argument_node = find_nonterminal(grammar, tree,
+                                                   S("argument"));
     parse_tree_set_sym(callee_node, &callee_symbol);
     parse_tree_set_type(callee_node, callee_signature);
     parse_tree_set_sym(argument_node, &left_symbol);
@@ -811,9 +816,10 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x=7"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    parse_tree_t *target_node = find_nonterminal(grammar, tree, "target");
+    parse_tree_t *target_node = find_nonterminal(grammar, tree, S("target"));
     parse_tree_set_sym(target_node, &local_symbol);
-    parse_tree_t *assigned_literal = find_nonterminal(grammar, tree, "literal");
+    parse_tree_t *assigned_literal = find_nonterminal(grammar, tree,
+                                                      S("literal"));
     parse_tree_set_type(assigned_literal, i32);
     size_t assignment_start = block->n_instrs;
     ir_lower_result_t assigned = tree
@@ -833,7 +839,7 @@ main(void)
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
     parse_tree_set_sym(tree, &local_symbol);
-    assigned_literal = find_nonterminal(grammar, tree, "literal");
+    assigned_literal = find_nonterminal(grammar, tree, S("literal"));
     parse_tree_set_type(assigned_literal, i32);
     assignment_start = block->n_instrs;
     assigned = tree ? ir_lower_tree(lowerer, &lower, grammar, tree)
@@ -846,9 +852,9 @@ main(void)
     scan_token_stream_free(tokens);
 
     ir_func_t *return_function = ir_func_add(
-        module, "returning", ir_type_parse(module, "() -> i32"),
+        module, S("returning"), ir_type_parse(module, S("() -> i32")),
         IR_LINK_EXTERNAL);
-    ir_block_t *return_block = ir_block_add(return_function, "entry");
+    ir_block_t *return_block = ir_block_add(return_function, S("entry"));
     ir_lower_context_t return_context = {
         .module = module,
         .function = return_function,
@@ -862,7 +868,8 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("r7"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    parse_tree_t *return_literal = find_nonterminal(grammar, tree, "literal");
+    parse_tree_t *return_literal = find_nonterminal(grammar, tree,
+                                                    S("literal"));
     parse_tree_set_type(return_literal, i32);
     ir_lower_result_t returned = tree
         ? ir_lower_tree(lowerer, &return_context, grammar, tree)
@@ -874,13 +881,14 @@ main(void)
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
     check("a custom lowering action registers once",
-          ir_lowerer_register(lowerer, "identity", lower_identity, nullptr)
-              && !ir_lowerer_register(lowerer, "identity", lower_identity,
+          ir_lowerer_register(lowerer, S("identity"), lower_identity, nullptr)
+              && !ir_lowerer_register(lowerer, S("identity"), lower_identity,
                                       nullptr));
     check("a custom terminator action registers",
-          ir_lowerer_register(lowerer, "terminate", lower_terminate, nullptr));
+          ir_lowerer_register(lowerer, S("terminate"), lower_terminate,
+                              nullptr));
 
-    parse_annotation_t *identity = emit_annotation("identity", 1);
+    parse_annotation_t *identity = emit_annotation(S("identity"), 1);
     ir_lower_result_t custom = ir_lower_emit(lowerer, &lower, identity, nullptr,
         operands, 1, i32, IR_SPAN_UNKNOWN);
     check("a frontend callback can return a child value",
@@ -888,7 +896,7 @@ main(void)
               && lower.reachable);
     parse_annot_free(identity);
 
-    parse_annotation_t *add = emit_annotation("add", 2);
+    parse_annotation_t *add = emit_annotation(S("add"), 2);
     ir_lower_result_t sum = ir_lower_emit(lowerer, &lower, add, nullptr,
         operands, 2, i32, IR_SPAN_UNKNOWN);
     check("an unregistered action falls back to a builtin IR operation",
@@ -897,14 +905,14 @@ main(void)
               && sum.value->def->n_operands == 2);
     parse_annot_free(add);
 
-    parse_annotation_t *bad_arity = emit_annotation("add", 0);
+    parse_annotation_t *bad_arity = emit_annotation(S("add"), 0);
     ir_lower_result_t rejected = ir_lower_emit(lowerer, &lower, bad_arity,
         nullptr, operands, 1, i32, IR_SPAN_UNKNOWN);
     check("emit lowering rejects a child-result count mismatch",
           rejected.status == IR_LOWER_FAILED);
     parse_annot_free(bad_arity);
 
-    parse_annotation_t *ret = emit_annotation("return", 1);
+    parse_annotation_t *ret = emit_annotation(S("return"), 1);
     ir_value_t *return_value[] = {sum.value};
     ir_lower_result_t terminated = ir_lower_emit(lowerer, &lower, ret, nullptr,
         return_value, 1, nullptr, IR_SPAN_UNKNOWN);
@@ -915,10 +923,10 @@ main(void)
     parse_annot_free(ret);
 
     ir_func_t *callback_function = ir_func_add(
-        module, "callback_terminator", ir_type_parse(module, "() -> nil"),
+        module, S("callback_terminator"), ir_type_parse(module, S("() -> nil")),
         IR_LINK_EXTERNAL);
     ir_block_t *callback_block = callback_function
-        ? ir_block_add(callback_function, "entry") : nullptr;
+        ? ir_block_add(callback_function, S("entry")) : nullptr;
     ir_lower_context_t callback_context = {
         .module = module,
         .function = callback_function,
@@ -927,7 +935,7 @@ main(void)
         .file_id = file_id,
         .reachable = true,
     };
-    parse_annotation_t *terminate = emit_annotation("terminate", 0);
+    parse_annotation_t *terminate = emit_annotation(S("terminate"), 0);
     ir_lower_result_t callback_terminated = ir_lower_emit(
         lowerer, &callback_context, terminate, nullptr, nullptr, 0, nullptr,
         IR_SPAN_UNKNOWN);
@@ -940,28 +948,28 @@ main(void)
     parse_annot_free(terminate);
 
     lower.reachable = true;
-    parse_annotation_t *unknown = emit_annotation("not_a_real_op", 0);
+    parse_annotation_t *unknown = emit_annotation(S("not_a_real_op"), 0);
     ir_lower_result_t failed = ir_lower_emit(lowerer, &lower, unknown, nullptr,
         nullptr, 0, nullptr, IR_SPAN_UNKNOWN);
     check("an unknown action fails through the IR diagnostics API",
           failed.status == IR_LOWER_FAILED && ir_diags_count(diagnostics) == 2);
     parse_annot_free(unknown);
 
-    th_type *storage_signature = ir_type_parse(module, "(i32) -> void");
+    th_type *storage_signature = ir_type_parse(module, S("(i32) -> void"));
     ir_func_t *storage_function = storage_signature
-        ? ir_func_add(module, "address_backed", storage_signature,
+        ? ir_func_add(module, S("address_backed"), storage_signature,
                       IR_LINK_INTERNAL) : nullptr;
     ir_block_t *storage_block = storage_function
-        ? ir_block_add(storage_function, "entry") : nullptr;
+        ? ir_block_add(storage_function, S("entry")) : nullptr;
     ir_value_t *storage_input = storage_function
-        ? ir_param_add(storage_function, "storage_input", i32) : nullptr;
+        ? ir_param_add(storage_function, S("storage_input"), i32) : nullptr;
     ir_local_t *storage_local = storage_function
-        ? ir_local_add(storage_function, "storage_local", i32) : nullptr;
-    th_type *storage_address_type = ir_type_parse(module, "ref[i32]");
+        ? ir_local_add(storage_function, S("storage_local"), i32) : nullptr;
+    th_type *storage_address_type = ir_type_parse(module, S("ref[i32]"));
     ir_instr_t *allocation = storage_block
         ? ir_instr_add(storage_block, IR_OP_ALLOC) : nullptr;
     bool storage_allocated = allocation && storage_address_type
-        && ir_instr_set_dest(allocation, "storage_address",
+        && ir_instr_set_dest(allocation, S("storage_address"),
                              storage_address_type)
         && ir_instr_operand_type(allocation, i32);
     parse_sym_entry_t storage_symbol = {
@@ -1013,7 +1021,8 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    parse_tree_t *storage_target = find_nonterminal(grammar, tree, "target");
+    parse_tree_t *storage_target = find_nonterminal(grammar, tree,
+                                                    S("target"));
     parse_tree_set_sym(storage_target, &storage_symbol);
     parse_tree_set_type(tree, i32);
     ir_lower_result_t storage_read = tree
@@ -1031,8 +1040,9 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x=7"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    storage_target = find_nonterminal(grammar, tree, "target");
-    parse_tree_t *storage_literal = find_nonterminal(grammar, tree, "literal");
+    storage_target = find_nonterminal(grammar, tree, S("target"));
+    parse_tree_t *storage_literal = find_nonterminal(grammar, tree,
+                                                     S("literal"));
     parse_tree_set_sym(storage_target, &storage_symbol);
     parse_tree_set_type(storage_literal, i32);
     ir_lower_result_t storage_write = tree
@@ -1063,7 +1073,7 @@ main(void)
     check("Lantern builds a dependence graph from the lowered instructions",
           pdg && ir_pdg_node_count(pdg) == 9);
 
-    lower.block = ir_block_add(function, "compound_rejection");
+    lower.block = ir_block_add(function, S("compound_rejection"));
     lower.reachable = lower.block != nullptr;
 
     parser = parse_pwz_new_for_start(grammar, parse_nonterm_id(
@@ -1071,7 +1081,7 @@ main(void)
     tokens = scan_token_stream_from_codepoints(CORE_STRING_STATIC("x[7]=7"));
     parsed = parser && parse_pwz_parse(parser, tokens);
     tree = parsed ? parse_pwz_get_tree(parser) : nullptr;
-    parse_tree_t *base_node = find_nonterminal(grammar, tree, "base");
+    parse_tree_t *base_node = find_nonterminal(grammar, tree, S("base"));
     parse_tree_set_sym(base_node, &local_symbol);
     assigned = tree ? ir_lower_tree(lowerer, &lower, grammar, tree)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
@@ -1083,14 +1093,13 @@ main(void)
     scan_token_stream_free(tokens);
     parse_grammar_free(grammar);
 
-    static const char *const invalid_emit_grammar
-        = "<sum> @emit(\"add\", $4) ::= <left> \"+\" <right>\n"
-          "<left> @emit(\"reference\") ::= \"a\"\n"
-          "<right> @emit(\"reference\") ::= \"b\"\n";
+    static const core_string_t invalid_emit_grammar
+        = S("<sum> @emit(\"add\", $4) ::= <left> \"+\" <right>\n"
+            "<left> @emit(\"reference\") ::= \"a\"\n"
+            "<right> @emit(\"reference\") ::= \"b\"\n");
     grammar = parse_grammar_new();
     bool invalid_grammar_loaded = parse_bnf_load(
-        core_string_from_cstr(invalid_emit_grammar),
-        CORE_STRING_STATIC("sum"), grammar);
+        invalid_emit_grammar, CORE_STRING_STATIC("sum"), grammar);
     parser = invalid_grammar_loaded ? parse_pwz_new_for_start(
         grammar, parse_nonterm_id(parse_find_nonterm(
             grammar, CORE_STRING_STATIC("sum")))) : nullptr;

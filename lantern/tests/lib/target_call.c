@@ -22,9 +22,11 @@ int main(void)
 {
     core_target_desc_t linux = {0}, macos = {0}, windows = {0};
     check("three target call profiles",
-          core_target_profile("x86_64-linux", 0, &linux)
-          && core_target_profile("arm64-macos", 0, &macos)
-          && core_target_profile("x86_64-windows", 0, &windows));
+          core_target_profile(CORE_STRING_STATIC("x86_64-linux"), 0, &linux)
+          && core_target_profile(CORE_STRING_STATIC("arm64-macos"), 0,
+                                 &macos)
+          && core_target_profile(CORE_STRING_STATIC("x86_64-windows"), 0,
+                                 &windows));
 
     const core_target_call_atom_t pair_atoms[] = {
         {0, 64, 64, CORE_TARGET_ATOM_INTEGER},

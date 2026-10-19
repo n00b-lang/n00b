@@ -9,6 +9,7 @@
 #include "lib/dict.h"
 #include "lib/list.h"
 #include "lib/object_archive.h"
+#include "lib/string.h"
 #include "logic/datalog.h"
 #include "th/environment.h"
 #include "th/typehash.h"
@@ -19,12 +20,12 @@ typedef struct {
 } th_slice;
 
 typedef struct {
-  const char *from;
-  const char *to;
+  core_string_t from;
+  core_string_t to;
 } th_promo;
 
 typedef struct {
-  const char *name;
+  core_string_t name;
   th_type *methods;
 } th_iface;
 
@@ -37,7 +38,7 @@ typedef struct {
 
 typedef struct {
   th_type *receiver;
-  const char *name;
+  core_string_t name;
   th_type *signature;
 } th_method;
 
@@ -47,9 +48,9 @@ typedef struct {
 } th_method_resolver;
 
 typedef struct {
-  const char *name;
-  const char *module;
-  const char *package;
+  core_string_t name;
+  core_string_t module;
+  core_string_t package;
   th_env_visibility_t visibility;
   th_type *scheme;
   th_type *errors;
@@ -58,10 +59,10 @@ typedef struct {
 } th_env_trait_t;
 
 typedef struct {
-  const char *qualified_name;
-  const char *root_name;
-  const char *module;
-  const char *package;
+  core_string_t qualified_name;
+  core_string_t root_name;
+  core_string_t module;
+  core_string_t package;
   th_env_visibility_t visibility;
   size_t order;
   th_type *scheme;
@@ -71,30 +72,30 @@ typedef struct {
 } th_env_function_t;
 
 typedef struct {
-  const char *qualified_name;
-  const char *root_name;
-  const char *module;
-  const char *package;
+  core_string_t qualified_name;
+  core_string_t root_name;
+  core_string_t module;
+  core_string_t package;
   th_env_visibility_t visibility;
   th_type *type;
 } th_env_value_t;
 
 typedef struct {
-  const char *trait_name;
+  core_string_t trait_name;
   th_type *receiver_pattern;
   core_datalog_symbol_t logic_symbol;
 } th_env_intrinsic_type_t;
 
 typedef struct {
   size_t trait_index;
-  const char *method_name;
+  core_string_t method_name;
   core_datalog_symbol_t logic_symbol;
 } th_env_method_symbol_t;
 
 typedef struct {
-  const char *name;
-  const char *module;
-  const char *package;
+  core_string_t name;
+  core_string_t module;
+  core_string_t package;
   th_env_visibility_t visibility;
   th_env_type_shape_kind_t shape_kind;
   th_type *shape;
@@ -102,8 +103,8 @@ typedef struct {
 
 typedef struct {
   th_env_metadata_owner_t owner_kind;
-  const char *owner_name;
-  const char *key;
+  core_string_t owner_name;
+  core_string_t key;
   uint32_t version;
   const uint8_t *data;
   size_t size;
@@ -128,8 +129,7 @@ struct th_type {
   uint64_t revision;
   union {
     struct {
-      const char *name;
-      size_t nlen;
+      core_string_t name;
       bool is_variant;
       bool builtin_known;
       th_arg *args;
@@ -154,8 +154,7 @@ struct th_type {
       size_t n;
     } record;
     struct {
-      const char *name;
-      size_t nlen;
+      core_string_t name;
       th_member *methods;
       size_t n;
       th_trait_requirement *requirements;
@@ -190,7 +189,7 @@ struct th_type {
       bool has_index;
       bool cons_borrowed;
       th_type *ref;
-      const char *name;
+      core_string_t name;
       core_list_t(th_constraint) cons;
     } var;
   };
@@ -203,9 +202,9 @@ core_list_decl(th_type_ptr_t);
 
 typedef struct {
   th_con_kind kind;
-  const char *name;
-  const char *module;
-  const char *package;
+  core_string_t name;
+  core_string_t module;
+  core_string_t package;
   uint64_t receiver_hash;
 } th_active_constraint_t;
 core_list_decl(th_active_constraint_t);
@@ -215,7 +214,7 @@ struct th_ctx {
   core_buffer_t scratch;
   th_normalizer norm;
   void *norm_state;
-  const char *err;
+  core_string_t err;
   uint64_t next_var;
   core_list_t(th_promo) promos;
   core_list_t(th_iface) ifaces;
@@ -243,8 +242,8 @@ struct th_ctx {
   bool has_related;
   bool probe_errors_discarded;
   const th_env *environment;
-  const char *module;
-  const char *package;
+  core_string_t module;
+  core_string_t package;
   core_dict_t *implements_memo;
   core_dict_t *method_memo;
   core_arena_t memo_arena;
@@ -270,7 +269,7 @@ struct th_env {
 
 typedef struct {
   core_arena_mark_t arena;
-  const char *err;
+  core_string_t err;
   size_t errors;
   size_t coercions;
   size_t pending_environment_constraints;
@@ -286,12 +285,12 @@ void th_var_cons_push(th_type *var, th_constraint constraint);
 th_probe_t th_probe_begin(th_ctx *ctx);
 bool th_probe_end(th_ctx *ctx, const th_probe_t *probe);
 
-void th_err(th_ctx *ctx, th_err_kind kind, const char *constraint,
-            th_type *expected, th_type *got, const char *message);
+void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
+            th_type *expected, th_type *got, core_string_t message);
 
 void *th_alloc(th_ctx *ctx, size_t n);
 uint64_t th_var_fresh_origin(void);
-char *th_strdup(th_ctx *ctx, const char *s, size_t n);
+core_string_t th_strdup(th_ctx *ctx, core_string_t s);
 int th_cmp_slice(const void *a, const void *b);
 int th_cmp_member(const void *a, const void *b);
 int th_cmp_kw(const void *a, const void *b);

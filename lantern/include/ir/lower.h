@@ -3,6 +3,7 @@
 
 #include "ir/diag.h"
 #include "ir/ir.h"
+#include "lib/string.h"
 #include "parse/annotation.h"
 #include "parse/tree_visit.h"
 
@@ -74,7 +75,7 @@ ir_instr_t *ir_lower_emit_instruction(ir_lower_context_t *context,
 ir_instr_t *ir_lower_emit_terminator(ir_lower_context_t *context,
                                      ir_op_t op, ir_span_t span);
 bool ir_lower_set_temp_dest(ir_lower_context_t *context,
-                            ir_instr_t *instruction, const char *prefix,
+                            ir_instr_t *instruction, core_string_t prefix,
                             th_type *type);
 ir_value_t *ir_lower_value_as(ir_lower_context_t *context, ir_value_t *value,
                               th_type *target, ir_span_t span);
@@ -103,7 +104,7 @@ ir_value_t *ir_lower_local_address(ir_lower_context_t *context,
                                    ir_local_t *local);
 ir_value_t *ir_lower_bound_value(ir_lower_context_t *context,
                                  parse_sym_entry_t *symbol);
-bool ir_lowerer_register(ir_lowerer_t *lowerer, const char *action,
+bool ir_lowerer_register(ir_lowerer_t *lowerer, core_string_t action,
                          ir_lower_action_fn callback, void *state);
 bool ir_lowerer_register_visit(ir_lowerer_t *lowerer,
                                parse_annot_kind_t kind,
@@ -111,7 +112,7 @@ bool ir_lowerer_register_visit(ir_lowerer_t *lowerer,
 /* Nonterminal callbacks run before annotations on entry and after child
  * lowering on exit. A callback may prune its current subtree on entry. */
 bool ir_lowerer_register_nt_visit(ir_lowerer_t *lowerer,
-                                 const char *nonterminal,
+                                 core_string_t nonterminal,
                                  ir_lower_visit_fn callback, void *state);
 bool ir_lower_prune_node(ir_lower_context_t *context, parse_tree_t *node);
 ir_lower_result_t ir_lower_emit(

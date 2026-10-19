@@ -19,19 +19,19 @@ struct ir_rules_t {
     bool       keys_ready;
 };
 
-const char *ir_match_name(ir_match_t m)
+core_string_t ir_match_name(ir_match_t m)
 {
     switch (m) {
     case IR_MATCH_EXACT:
-        return "exact type";
+        return CORE_STRING_STATIC("exact type");
     case IR_MATCH_CONSTRUCTOR:
-        return "constructor";
+        return CORE_STRING_STATIC("constructor");
     case IR_MATCH_KIND:
-        return "type kind";
+        return CORE_STRING_STATIC("type kind");
     case IR_MATCH_CLASS:
-        return "machine class";
+        return CORE_STRING_STATIC("machine class");
     default:
-        return "opcode default";
+        return CORE_STRING_STATIC("opcode default");
     }
 }
 
@@ -92,7 +92,7 @@ ir_rules_t *ir_rules_from_profile(ir_ctx_t *ctx, const ir_profile_t *p)
 
 bool ir_rules_add(ir_rules_t *rs, ir_rule_t rule)
 {
-    if (!rs || !rule.name) {
+    if (!rs || !rule.name.data) {
         return false;
     }
 
@@ -101,7 +101,7 @@ bool ir_rules_add(ir_rules_t *rs, ir_rule_t rule)
     }
 
     if ((rule.match == IR_MATCH_EXACT || rule.match == IR_MATCH_CONSTRUCTOR)
-        && !rule.type_text) {
+        && !rule.type_text.data) {
         return false;
     }
 
@@ -112,8 +112,8 @@ bool ir_rules_add(ir_rules_t *rs, ir_rule_t rule)
     }
 
     rule.name      = ir_strdup(rs->ctx, rule.name);
-    rule.type_text = rule.type_text ? ir_strdup(rs->ctx, rule.type_text)
-                                    : nullptr;
+    rule.type_text = rule.type_text.data ? ir_strdup(rs->ctx, rule.type_text)
+                                         : (core_string_t){};
     rs->v[rs->n++] = rule;
     rs->keys_ready = false;
 
@@ -181,7 +181,7 @@ static void ready_keys(ir_module_t *m, ir_rules_t *rs)
     for (size_t i = 0; i < rs->n; i++) {
         rs->keys[i] = 0;
 
-        if (rs->v[i].match != IR_MATCH_EXACT || !rs->v[i].type_text) {
+        if (rs->v[i].match != IR_MATCH_EXACT || !rs->v[i].type_text.data) {
             continue;
         }
 
@@ -220,18 +220,17 @@ static void ready_keys(ir_module_t *m, ir_rules_t *rs)
     rs->keys_ready = true;
 }
 
-static bool constructor_is(ir_module_t *m, th_type *t, const char *name)
+static bool constructor_is(ir_module_t *m, th_type *t, core_string_t name)
 {
-    const char *n   = nullptr;
-    size_t      len = 0;
+    core_string_t n = {};
 
     (void)m;
 
-    if (!th_named_info(t, &n, &len, nullptr, nullptr)) {
+    if (!th_named_info(t, &n, nullptr, nullptr)) {
         return false;
     }
 
-    return strlen(name) == len && !memcmp(n, name, len);
+    return core_string_eq(n, name);
 }
 
 static bool rule_matches(ir_module_t *m, ir_rules_t *rs, size_t i,
@@ -343,12 +342,12 @@ static ir_uint_t boxed_operands(ir_module_t *m, ir_instr_t *in, uint32_t win)
     return mask;
 }
 
-static void kept_authored(ir_diags_t *d, ir_instr_t *in, const char *key,
-                          const char *rule)
+static void kept_authored(ir_diags_t *d, ir_instr_t *in, core_string_t key,
+                          core_string_t rule)
 {
     ir_diag_t *dg = ir_diag_begin_at(d, IR_DIAG_AUTHORED_ANNOT, in, in->block,
                                      in->block ? in->block->owner : nullptr,
-                                     "this instruction");
+                                     CORE_STRING_STATIC("this instruction"));
 
     if (!dg) {
         return;
@@ -356,17 +355,20 @@ static void kept_authored(ir_diags_t *d, ir_instr_t *in, const char *key,
 
     core_buffer_t *b = core_buffer_empty();
 
-    core_buffer_printf(b, "%s would have written %s, which is already there and was "
-                  "authored, so the authored one stands", rule, key);
+    core_buffer_append_string(b, rule);
+    core_buffer_puts(b, " would have written ");
+    core_buffer_append_string(b, key);
+    core_buffer_puts(b, ", which is already there and was "
+                        "authored, so the authored one stands");
 
-    char *msg = core_buffer_take(b);
+    core_string_t msg = core_buffer_take_string(b);
 
     ir_diag_message(dg, d, msg);
-    core_free(msg);
+    core_free(msg.data);
 }
 
 static void set_derived(ir_module_t *m, ir_diags_t *d, ir_instr_t *in,
-                        ir_annot_t a, const char *rule)
+                        ir_annot_t a, core_string_t rule)
 {
     if (!ir_annot_set(m->ctx, &in->annots, a) && a.derived_from
         && ir_annot_get(&in->annots, a.key)) {
@@ -375,10 +377,10 @@ static void set_derived(ir_module_t *m, ir_diags_t *d, ir_instr_t *in,
 }
 
 static void record_accepted(ir_module_t *m, ir_diags_t *d, ir_instr_t *in,
-                            const char *name, ir_rule_result_t *r)
+                            core_string_t name, ir_rule_result_t *r)
 {
     set_derived(m, d, in,
-                (ir_annot_t){.key          = "ir.rule",
+                (ir_annot_t){.key          = CORE_STRING_STATIC("ir.rule"),
                              .kind         = IR_ANNOT_STR,
                              .s            = name,
                              .derived_from = IR_PROP_TYPED},
@@ -389,19 +391,26 @@ static void record_accepted(ir_module_t *m, ir_diags_t *d, ir_instr_t *in,
     for (uint32_t w = 0; w < wins; w++) {
         ir_uint_t boxed = boxed_operands(m, in, w);
         char      key[32];
+        int       written;
 
         if (!boxed) {
             continue;
         }
 
         if (w) {
-            snprintf(key, sizeof key, "ir.boxed.%u", w);
+            written = snprintf(key, sizeof key, "ir.boxed.%u", w);
         }
         else {
-            snprintf(key, sizeof key, "ir.boxed");
+            written = snprintf(key, sizeof key, "ir.boxed");
+        }
+
+        size_t length = written < 0 ? 0 : (size_t)written;
+
+        if (length >= sizeof key) {
+            length = sizeof key - 1;
         }
         set_derived(m, d, in,
-                    (ir_annot_t){.key          = key,
+                    (ir_annot_t){.key = core_string_borrow(key, length),
                                  .kind         = IR_ANNOT_INT,
                                  .i            = {.mag = boxed},
                                  .derived_from = IR_PROP_TYPED},
@@ -452,20 +461,21 @@ ir_rule_result_t ir_rule_apply(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
                                                  in->block,
                                                  in->block ? in->block->owner
                                                            : nullptr,
-                                                 "destination type");
+                                                 CORE_STRING_STATIC(
+                                                     "destination type"));
 
                 if (dg) {
                     core_buffer_t *b = core_buffer_empty();
 
-                    core_buffer_printf(b,
-                              "the destination is %s and the result is %s",
-                              ir_type_text(m, want),
-                              ir_type_text(m, r.result));
+                    core_buffer_puts(b, "the destination is ");
+                    core_buffer_append_string(b, ir_type_text(m, want));
+                    core_buffer_puts(b, " and the result is ");
+                    core_buffer_append_string(b, ir_type_text(m, r.result));
 
-                    char *msg = core_buffer_take(b);
+                    core_string_t msg = core_buffer_take_string(b);
 
                     ir_diag_message(dg, d, msg);
-                    core_free(msg);
+                    core_free(msg.data);
                 }
 
                 return (ir_rule_result_t){.verdict = IR_RULE_REJECT};
@@ -511,23 +521,25 @@ bool ir_rule_lower(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
     return false;
 }
 
-char *ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in)
+core_string_t ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in)
 {
     core_buffer_t *b = core_buffer_empty();
 
     if (!m || !rs || !in) {
         core_buffer_puts(b, "no instruction\n");
 
-        return core_buffer_take(b);
+        return core_buffer_take_string(b);
     }
 
     th_type *key = ir_instr_key_type(in);
 
-    core_buffer_printf(b, "opcode %s\n", ir_op_spelling(in->op));
+    core_buffer_puts(b, "opcode ");
+    core_buffer_append_string(b, ir_op_spelling(in->op));
+    core_buffer_puts(b, "\n");
     core_buffer_puts(b, "key type ");
 
     if (key) {
-        core_buffer_puts(b, ir_type_text(m, key));
+        core_buffer_append_string(b, ir_type_text(m, key));
     }
     else {
         core_buffer_puts(b, "none");
@@ -537,7 +549,10 @@ char *ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in)
     ready_keys(m, rs);
 
     for (size_t rung = 0; rung < sizeof(LADDER) / sizeof(LADDER[0]); rung++) {
-        core_buffer_printf(b, "  %-16s", ir_match_name(LADDER[rung]));
+        core_string_t rung_name = ir_match_name(LADDER[rung]);
+
+        core_buffer_printf(b, "  %-16.*s", (int)rung_name.u8_bytes,
+                           rung_name.data);
 
         bool any = false;
 
@@ -546,10 +561,13 @@ char *ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in)
                 continue;
             }
             any = true;
-            core_buffer_printf(b, "%s%s", rule_matches(m, rs, i, in, key, ir_type_id(m, key))
-                                      ? " MATCH "
-                                      : " miss ",
-                      rs->v[i].name);
+            if (rule_matches(m, rs, i, in, key, ir_type_id(m, key))) {
+                core_buffer_puts(b, " MATCH ");
+            }
+            else {
+                core_buffer_puts(b, " miss ");
+            }
+            core_buffer_append_string(b, rs->v[i].name);
         }
 
         if (!any) {
@@ -562,11 +580,15 @@ char *ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in)
     const ir_rule_t *r   = ir_rule_resolve(m, rs, in, &how);
 
     if (r) {
-        core_buffer_printf(b, "resolves to %s by %s\n", r->name, ir_match_name(how));
+        core_string_t how_name = ir_match_name(how);
+
+        core_buffer_printf(b, "resolves to %.*s by %.*s\n",
+                           (int)r->name.u8_bytes, r->name.data,
+                           (int)how_name.u8_bytes, how_name.data);
     }
     else {
         core_buffer_puts(b, "resolves to nothing\n");
     }
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }

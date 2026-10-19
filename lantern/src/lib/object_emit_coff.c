@@ -41,8 +41,8 @@ bool core_object_emit_coff(const core_target_desc_t *target,
         const core_object_emit_section_t *section = &sections[i];
         if (section->size > UINT32_MAX || section->alignment > 8192)
             goto done;
-        if (strlen(section->name) > 8) {
-            size_t length = strlen(section->name);
+        if (section->name.u8_bytes > 8) {
+            size_t length = section->name.u8_bytes;
             if (length == SIZE_MAX || string_size > 9999999 ||
                 !core_object_size_add(string_size, length + 1,
                                       &string_size) ||
@@ -51,8 +51,8 @@ bool core_object_emit_coff(const core_target_desc_t *target,
     }
     for (size_t i = 0; i < symbol_count; i++) {
         if (symbols[i].section_offset > UINT32_MAX) goto done;
-        if (strlen(symbols[i].name) > 8) {
-            size_t length = strlen(symbols[i].name);
+        if (symbols[i].name.u8_bytes > 8) {
+            size_t length = symbols[i].name.u8_bytes;
             if (length == SIZE_MAX ||
                 !core_object_size_add(string_size, length + 1,
                                       &string_size) ||
@@ -103,13 +103,14 @@ bool core_object_emit_coff(const core_target_desc_t *target,
     for (size_t i = 0; i < section_count; i++) {
         const core_object_emit_section_t *section = &sections[i];
         uint8_t *header = image + COFF_HEADER_BYTES + i * COFF_SECTION_BYTES;
-        size_t name_length = strlen(section->name);
-        if (name_length <= 8) memcpy(header, section->name, name_length);
+        size_t name_length = section->name.u8_bytes;
+        if (name_length <= 8) memcpy(header, section->name.data, name_length);
         else {
             section_name_offsets[i] = (uint32_t)(string_cursor - string_offset);
             if (snprintf((char *)header, 8, "/%u",
                          section_name_offsets[i]) >= 8) goto done;
-            memcpy(image + string_cursor, section->name, name_length + 1);
+            memcpy(image + string_cursor, section->name.data, name_length);
+            image[string_cursor + name_length] = 0;
             string_cursor += name_length + 1;
         }
         core_le_store_u32(header + 16, (uint32_t)section->size);
@@ -139,12 +140,13 @@ bool core_object_emit_coff(const core_target_desc_t *target,
     for (size_t i = 0; i < symbol_count; i++) {
         const core_object_emit_symbol_t *symbol = &symbols[i];
         uint8_t *entry = image + symtab_offset + i * COFF_SYMBOL_BYTES;
-        size_t name_length = strlen(symbol->name);
-        if (name_length <= 8) memcpy(entry, symbol->name, name_length);
+        size_t name_length = symbol->name.u8_bytes;
+        if (name_length <= 8) memcpy(entry, symbol->name.data, name_length);
         else {
             symbol_name_offsets[i] = (uint32_t)(string_cursor - string_offset);
             core_le_store_u32(entry + 4, symbol_name_offsets[i]);
-            memcpy(image + string_cursor, symbol->name, name_length + 1);
+            memcpy(image + string_cursor, symbol->name.data, name_length);
+            image[string_cursor + name_length] = 0;
             string_cursor += name_length + 1;
         }
         core_le_store_u32(entry + 8, (uint32_t)symbol->section_offset);

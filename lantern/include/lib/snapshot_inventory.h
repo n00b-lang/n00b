@@ -63,7 +63,7 @@ core_source_snapshot_t *core_source_snapshot_retain(
     const core_source_snapshot_t *snapshot);
 void core_source_snapshot_release(core_source_snapshot_t *snapshot);
 core_string_t core_source_snapshot_path(const core_source_snapshot_t *snapshot);
-const char *core_source_snapshot_contents(
+core_string_t core_source_snapshot_contents(
     const core_source_snapshot_t *snapshot);
 size_t core_source_snapshot_size(const core_source_snapshot_t *snapshot);
 uint64_t core_source_snapshot_revision(

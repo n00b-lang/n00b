@@ -99,8 +99,10 @@ static const scan_lex_spec_t JSON = {
     .tok_ident = S("IDENTIFIER"),
 };
 
-static scan_status_t source_status(parse_grammar_t *g, const char *source);
-static parse_grammar_t *unicode_identifier_grammar(const char *version);
+static scan_status_t source_status_of(parse_grammar_t *g,
+                                      core_string_t source);
+#define source_status(g, source) source_status_of((g), S(source))
+static parse_grammar_t *unicode_identifier_grammar(core_string_t version);
 static atomic_size_t literal_hook_calls;
 
 static bool
@@ -544,11 +546,11 @@ static void register_spec_outputs(parse_grammar_t *g,
 }
 
 static parse_grammar_t *mk(const scan_lex_spec_t *spec,
-                           const char *const *terms) {
+                           const core_string_t *terms) {
   parse_grammar_t *g = parse_grammar_new();
 
-  for (size_t i = 0; terms && terms[i]; i++) {
-    parse_register_terminal(g, core_string_from_cstr(terms[i]));
+  for (size_t i = 0; terms && terms[i].data; i++) {
+    parse_register_terminal(g, terms[i]);
   }
   register_spec_outputs(g, spec);
 
@@ -558,50 +560,46 @@ static parse_grammar_t *mk(const scan_lex_spec_t *spec,
   return g;
 }
 
-static parse_grammar_t *bare_grammar(const char *const *terms) {
+static parse_grammar_t *bare_grammar(const core_string_t *terms) {
   parse_grammar_t *g = parse_grammar_new();
 
-  for (size_t i = 0; terms && terms[i]; i++) {
-    parse_register_terminal(g, core_string_from_cstr(terms[i]));
+  for (size_t i = 0; terms && terms[i].data; i++) {
+    parse_register_terminal(g, terms[i]);
   }
   return g;
 }
 
-static char *render(parse_grammar_t *g, const char *src) {
-  static char out[2048];
+static core_string_t render(parse_grammar_t *g, core_string_t src) {
+  core_buffer_t *out = core_buffer_empty();
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
 
-  out[0] = '\0';
-
-  parse_token_stream_t *ts = scan_tokenize(g, src, strlen(src), &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, src, &buf, &sc);
 
   if (!ts) {
-    return out;
+    return core_buffer_take_string(out);
   }
 
-  size_t at = 0;
-
   scan_stream_foreach(ts, tok) {
-    const char *nm = nullptr;
+    core_string_t nm = {0};
 
     for (size_t i = 0; i < core_list_len(g->named_terms); i++) {
       if (g->named_terms.data[i].id == parse_token_tid(tok)) {
-        nm = g->named_terms.data[i].value.data;
+        nm = g->named_terms.data[i].value;
 
         break;
       }
     }
 
-    if (nm) {
-      at += (size_t)snprintf(out + at, sizeof(out) - at, "%s%s", at ? " " : "",
-                             nm);
+    if (out->byte_len) {
+      core_buffer_putc(out, ' ');
+    }
+    if (nm.data) {
+      core_buffer_append_string(out, nm);
     } else if (parse_token_tid(tok) > 0 && parse_token_tid(tok) < 128) {
-      at += (size_t)snprintf(out + at, sizeof(out) - at, "%s%c", at ? " " : "",
-                             (char)parse_token_tid(tok));
+      core_buffer_putc(out, (char)parse_token_tid(tok));
     } else {
-      at += (size_t)snprintf(out + at, sizeof(out) - at, "%s?%d", at ? " " : "",
-                             parse_token_tid(tok));
+      core_buffer_printf(out, "?%d", parse_token_tid(tok));
     }
   }
 
@@ -609,27 +607,36 @@ static char *render(parse_grammar_t *g, const char *src) {
   scan_scanner_free(sc);
   core_buffer_free(buf);
 
-  return out;
+  return core_buffer_take_string(out);
 }
 
-static void kinds(parse_grammar_t *g, const char *what, const char *src,
-                  const char *want) {
-  char *got = render(g, src);
+static void kinds_check(parse_grammar_t *g, core_string_t what,
+                        core_string_t src, core_string_t want) {
+  core_string_t got = render(g, src);
 
-  if (strcmp(got, want)) {
+  if (!core_string_eq(got, want)) {
     fails++;
-    printf("FAIL  %s\n   want: %s\n    got: %s\n", what, want, got);
+    printf("FAIL  %.*s\n   want: %.*s\n    got: %.*s\n", (int)what.u8_bytes,
+           what.data, (int)want.u8_bytes, want.data, (int)got.u8_bytes,
+           got.data);
   }
+  core_free(got.data);
 }
 
-static const char *const PY_TERMS[] = {
-    "NEWLINE",        "INDENT",      "DEDENT", "ENDMARKER", "IDENTIFIER",
-    "INTEGER",        "FLOAT",       "STRING", "IMAGINARY", "FSTRING_START",
-    "FSTRING_MIDDLE", "FSTRING_END", "def",    "if",        "return",
-    nullptr,
+#define kinds(g, what, src, want) kinds_check((g), S(what), S(src), S(want))
+
+static const core_string_t PY_TERMS[] = {
+    S("NEWLINE"),        S("INDENT"),      S("DEDENT"), S("ENDMARKER"),
+    S("IDENTIFIER"),     S("INTEGER"),     S("FLOAT"),  S("STRING"),
+    S("IMAGINARY"),      S("FSTRING_START"), S("FSTRING_MIDDLE"),
+    S("FSTRING_END"),    S("def"),         S("if"),     S("return"),
+    {0},
 };
 
-static parse_grammar_t *indent_policy_grammar(const char *policies) {
+#define indent_policy_grammar(policies) \
+  indent_policy_grammar_text(S(policies))
+
+static parse_grammar_t *indent_policy_grammar_text(core_string_t policies) {
   core_buffer_t *text = core_buffer_empty();
 
   core_buffer_printf(
@@ -637,10 +644,11 @@ static parse_grammar_t *indent_policy_grammar(const char *policies) {
       "@lex-comment(\"#\")\n"
       "@lex-layout(indent(\"INDENT\", \"DEDENT\"), "
       "newline(\"NEWLINE\"), eof(\"ENDMARKER\"), continue(\"\\\\\"), "
-      "brackets(\"()[]{}\")%s%s)\n"
+      "brackets(\"()[]{}\")%s%.*s)\n"
       "@lex-ident(as(\"IDENTIFIER\"))\n"
       "<file> ::= %%IDENTIFIER %%NEWLINE %%INDENT %%DEDENT %%ENDMARKER\n",
-      policies && policies[0] ? ", " : "", policies ? policies : "");
+      policies.u8_bytes ? ", " : "", (int)policies.u8_bytes,
+      policies.data ? policies.data : "");
 
   parse_grammar_t *g = parse_grammar_new();
   core_string_t source = core_string_borrow(text->data, text->byte_len);
@@ -649,7 +657,9 @@ static parse_grammar_t *indent_policy_grammar(const char *policies) {
   parse_bnf_declare_terminals(g, source);
 
   if (!load_test_grammar(source, CORE_STRING_STATIC("file"), g)) {
-    fprintf(stderr, "indent policy grammar: %s\n", parse_bnf_error());
+    core_string_t error = parse_bnf_error();
+    fprintf(stderr, "indent policy grammar: %.*s\n", (int)error.u8_bytes,
+            error.data);
     parse_grammar_free(g);
     g = nullptr;
   }
@@ -692,9 +702,8 @@ static void test_indentation_becomes_tokens(void) {
 
   parse_grammar_t *layout =
       indent_policy_grammar("unmatched_dedent(\"allow\")");
-  static const char *const ALIGNED = "a\n    b\n        c\nx\n";
   parse_token_stream_t *ts =
-      scan_tokenize_owned(layout, ALIGNED, strlen(ALIGNED));
+      scan_tokenize_owned(layout, S("a\n    b\n        c\nx\n"));
   parse_token_info_t *dedents[4] = {0};
   size_t dedent_count = 0;
   parse_token_info_t *tok;
@@ -710,8 +719,7 @@ static void test_indentation_becomes_tokens(void) {
             layout_depth(dedents[1]) == 0 && layout_column(dedents[1]) == 0);
   scan_token_stream_free(ts);
 
-  static const char *const MISALIGNED = "a\n    b\n        c\n  x\n";
-  ts = scan_tokenize_owned(layout, MISALIGNED, strlen(MISALIGNED));
+  ts = scan_tokenize_owned(layout, S("a\n    b\n        c\n  x\n"));
   dedent_count = 0;
   while ((tok = scan_stream_next(ts))) {
     if (parse_token_tid(tok) == parse_terminal_id(layout, S("DEDENT")) &&
@@ -760,7 +768,7 @@ static void test_indentation_policies(void) {
   }
 
   parse_grammar_t *tabs = indent_policy_grammar("tabs(\"reject\")");
-  parse_token_stream_t *ts = scan_tokenize_owned(tabs, "a\n\tb\n", 5);
+  parse_token_stream_t *ts = scan_tokenize_owned(tabs, S("a\n\tb\n"));
 
   while (scan_stream_next(ts)) {
   }
@@ -774,7 +782,7 @@ static void test_indentation_policies(void) {
   parse_grammar_free(tabs);
 
   tabs = indent_policy_grammar("tabs(\"reject\")");
-  ts = scan_tokenize_owned(tabs, "a\tb", 3);
+  ts = scan_tokenize_owned(tabs, S("a\tb"));
   while (scan_stream_next(ts)) {
   }
   diagnostic = (scan_diagnostic_t){0};
@@ -786,7 +794,7 @@ static void test_indentation_policies(void) {
   parse_grammar_free(tabs);
 
   parse_grammar_t *mixed = indent_policy_grammar("mixed_indent(\"reject\")");
-  ts = scan_tokenize_owned(mixed, "a\n \tb\n", 6);
+  ts = scan_tokenize_owned(mixed, S("a\n \tb\n"));
 
   while (scan_stream_next(ts)) {
   }
@@ -801,7 +809,7 @@ static void test_indentation_policies(void) {
 
   parse_grammar_t *unmatched =
       indent_policy_grammar("unmatched_dedent(\"reject\")");
-  ts = scan_tokenize_owned(unmatched, "a\n  b\n c\n", 10);
+  ts = scan_tokenize_owned(unmatched, S("a\n  b\n c\n"));
 
   while (scan_stream_next(ts)) {
   }
@@ -815,7 +823,7 @@ static void test_indentation_policies(void) {
   parse_grammar_free(unmatched);
 
   parse_grammar_t *alignment = indent_policy_grammar("alignment(\"reject\")");
-  ts = scan_tokenize_owned(alignment, "a = (\n  b)\n", 12);
+  ts = scan_tokenize_owned(alignment, S("a = (\n  b)\n"));
 
   while (scan_stream_next(ts)) {
   }
@@ -827,7 +835,7 @@ static void test_indentation_policies(void) {
             diagnostic.start_byte == 6 && diagnostic.end_byte == 8);
   scan_token_stream_free(ts);
 
-  ts = scan_tokenize_owned(alignment, "a \\\n  b\n", 8);
+  ts = scan_tokenize_owned(alignment, S("a \\\n  b\n"));
 
   while (scan_stream_next(ts)) {
   }
@@ -856,32 +864,33 @@ static void test_indentation_policies(void) {
   parse_grammar_t *bad = indent_policy_grammar("tab_width(\"0\")");
 
   check("invalid indentation policy values fail lexer construction",
-        bad && scan_grammar_lex(bad) == nullptr && scan_lex_build_error() &&
-            strstr(scan_lex_build_error(), "tab_width") != nullptr);
+        bad && scan_grammar_lex(bad) == nullptr &&
+            core_string_find(scan_lex_build_error(), S("tab_width")) >= 0);
   parse_grammar_free(bad);
 }
 
 static parse_grammar_t *layout_matching_grammar(bool colon_block) {
-  static const char *const OUTSIDE =
-      "@lex-layout(indent(\"INDENT\", \"DEDENT\"), "
-      "newline(\"NEWLINE\"), eof(\"END\"))\n"
-      "@lex-ident(as(\"IDENTIFIER\"))\n"
-      "<file> ::= %IDENTIFIER %NEWLINE %IDENTIFIER %NEWLINE %END\n";
-  static const char *const BLOCK =
-      "@lex-layout(indent(\"INDENT\", \"DEDENT\"), "
-      "newline(\"NEWLINE\"), eof(\"END\"))\n"
-      "@lex-ident(as(\"IDENTIFIER\"))\n"
-      "<file> ::= %IDENTIFIER %\":\" %NEWLINE %INDENT %IDENTIFIER "
-      "%NEWLINE %DEDENT %IDENTIFIER %NEWLINE %END\n";
+  core_string_t outside =
+      S("@lex-layout(indent(\"INDENT\", \"DEDENT\"), "
+        "newline(\"NEWLINE\"), eof(\"END\"))\n"
+        "@lex-ident(as(\"IDENTIFIER\"))\n"
+        "<file> ::= %IDENTIFIER %NEWLINE %IDENTIFIER %NEWLINE %END\n");
+  core_string_t block =
+      S("@lex-layout(indent(\"INDENT\", \"DEDENT\"), "
+        "newline(\"NEWLINE\"), eof(\"END\"))\n"
+        "@lex-ident(as(\"IDENTIFIER\"))\n"
+        "<file> ::= %IDENTIFIER %\":\" %NEWLINE %INDENT %IDENTIFIER "
+        "%NEWLINE %DEDENT %IDENTIFIER %NEWLINE %END\n");
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(colon_block ? BLOCK : OUTSIDE);
+  core_string_t text = colon_block ? block : outside;
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, S("file"), g);
   if (!loaded) {
-    fprintf(stderr, "layout grammar load failed: %s\n", parse_bnf_error());
+    core_string_t error = parse_bnf_error();
+    fprintf(stderr, "layout grammar load failed: %.*s\n",
+            (int)error.u8_bytes, error.data);
   }
-  core_free(text.data);
   if (!loaded) {
     parse_grammar_free(g);
     return nullptr;
@@ -893,8 +902,7 @@ static parse_grammar_t *layout_matching_grammar(bool colon_block) {
 
 static void test_layout_tokens_ignore_only_when_unmatched(void) {
   parse_grammar_t *g = layout_matching_grammar(false);
-  static const char *const OUTSIDE = "a\n  b\n";
-  parse_token_stream_t *ts = scan_tokenize_owned(g, OUTSIDE, strlen(OUTSIDE));
+  parse_token_stream_t *ts = scan_tokenize_owned(g, S("a\n  b\n"));
   parse_pwz_parser_t *parser = parse_pwz_new_for_start(
       g, parse_nonterm_id(parse_find_nonterm(g, S("file"))));
   bool parsed = parse_pwz_parse(parser, ts);
@@ -904,8 +912,7 @@ static void test_layout_tokens_ignore_only_when_unmatched(void) {
   parse_grammar_free(g);
 
   g = layout_matching_grammar(true);
-  static const char *const BLOCK = "a:\n  b\nc\n";
-  ts = scan_tokenize_owned(g, BLOCK, strlen(BLOCK));
+  ts = scan_tokenize_owned(g, S("a:\n  b\nc\n"));
   parse_token_info_t *tok;
   parse_token_info_t *block_indent = nullptr;
   parse_token_info_t *block_dedent = nullptr;
@@ -928,12 +935,12 @@ static void test_layout_tokens_ignore_only_when_unmatched(void) {
   parse_grammar_free(g);
 
   g = layout_matching_grammar(true);
-  static const char *const BLOCK_U2028 = "a:\n  b\xE2\x80\xA8"
-                                         "c\n";
-  ts = scan_tokenize_owned(g, BLOCK_U2028, strlen(BLOCK_U2028));
-  kinds(g, "U+2028 layout token sequence", BLOCK_U2028,
-        "IDENTIFIER : NEWLINE INDENT IDENTIFIER NEWLINE DEDENT IDENTIFIER "
-        "NEWLINE END");
+  core_string_t block_u2028 = S("a:\n  b\xE2\x80\xA8"
+                                "c\n");
+  ts = scan_tokenize_owned(g, block_u2028);
+  kinds_check(g, S("U+2028 layout token sequence"), block_u2028,
+              S("IDENTIFIER : NEWLINE INDENT IDENTIFIER NEWLINE DEDENT "
+                "IDENTIFIER NEWLINE END"));
   parser = parse_pwz_new_for_start(
       g, parse_nonterm_id(parse_find_nonterm(g, S("file"))));
   check("U+2028 terminates an indentation block",
@@ -948,7 +955,7 @@ static void test_incremental_indentation_waits_for_content(void) {
   parse_token_stream_t *ts = scan_tokenize_incremental_owned(g);
 
   check("an incremental indentation prefix can be appended",
-        scan_stream_append(ts, "a\n  ", 4));
+        scan_stream_append(ts, S("a\n  ")));
   check("tokens before an unfinished indentation prefix remain available",
         scan_stream_next(ts) != nullptr && scan_stream_next(ts) != nullptr);
   check("indentation waits without consuming its temporary boundary",
@@ -956,7 +963,7 @@ static void test_incremental_indentation_waits_for_content(void) {
             scan_status(ts->scanner) == SCAN_STATUS_INCOMPLETE &&
             ts->scanner->cursor == 2);
   check("the completed indentation still emits its indent token",
-        scan_stream_append(ts, "b\n", 2) && scan_stream_next(ts) != nullptr);
+        scan_stream_append(ts, S("b\n")) && scan_stream_next(ts) != nullptr);
 
   parse_token_info_t *b = scan_stream_next(ts);
   check("content follows the resumed indent token",
@@ -972,12 +979,12 @@ static void test_incremental_indentation_waits_for_content(void) {
 
   ts = scan_tokenize_incremental_owned(g);
   check("a line-continuation prefix can end an incremental chunk",
-        scan_stream_append(ts, "a \\", 3) && scan_stream_next(ts) != nullptr &&
+        scan_stream_append(ts, S("a \\")) && scan_stream_next(ts) != nullptr &&
             scan_stream_next(ts) == nullptr &&
             scan_status(ts->scanner) == SCAN_STATUS_INCOMPLETE &&
             ts->scanner->cursor == 2);
   check("continued-line alignment resumes without indentation tokens",
-        scan_stream_append(ts, "\n  b\n", 5) &&
+        scan_stream_append(ts, S("\n  b\n")) &&
             scan_stream_next(ts) != nullptr);
   scan_stream_finish(ts);
   while (scan_stream_next(ts)) {
@@ -989,18 +996,18 @@ static void test_incremental_indentation_waits_for_content(void) {
   parse_grammar_free(g);
 }
 
-static parse_grammar_t *embedded_grammar(const char *lexer, bool tokens) {
+static parse_grammar_t *embedded_grammar(core_string_t lexer, bool tokens) {
   core_buffer_t *text = core_buffer_empty();
 
   core_buffer_printf(
       text,
-      "@lex-embed(\"{{\", \"}}\", lexer(\"%s\"), %s)\n"
+      "@lex-embed(\"{{\", \"}}\", lexer(\"%.*s\"), %s)\n"
       "@lex-ident(as(\"OUTER_ID\"))\n"
       "<file> ::= %%OUTER_ID | %%EMBED | %%EMBED_OPEN | %%EMBED_CLOSE | "
       "%%INNER_OPEN | %%INNER_CLOSE | %%MIDDLE_ID | %%IDENTIFIER | "
       "%%INT_LIT | %%FLOAT_LIT | %%STRING | %%A_OPEN | %%A_CLOSE | "
       "%%B_OPEN | %%B_CLOSE\n",
-      lexer,
+      (int)lexer.u8_bytes, lexer.data,
       tokens ? "tokens, open_as(\"EMBED_OPEN\"), close_as(\"EMBED_CLOSE\")"
              : "as(\"EMBED\")");
 
@@ -1019,9 +1026,10 @@ static parse_grammar_t *embedded_grammar(const char *lexer, bool tokens) {
   return g;
 }
 
-static void embed_error(const char *label, const char *declaration,
-                        const char *expected) {
-  core_buffer_t *text = core_buffer_from_cstr(declaration);
+static void embed_error(const char *label, core_string_t declaration,
+                        core_string_t expected) {
+  core_buffer_t *text = core_buffer_empty();
+  core_buffer_append_string(text, declaration);
   core_buffer_puts(text, "\n<file> ::= %EMBED | %EMBED_OPEN | %EMBED_CLOSE\n");
   core_string_t source = core_string_borrow(text->data, text->byte_len);
   parse_grammar_t *g = parse_grammar_new();
@@ -1030,9 +1038,9 @@ static void embed_error(const char *label, const char *declaration,
   parse_bnf_declare_terminals(g, source);
   bool loaded = load_test_grammar(source, CORE_STRING_STATIC("file"), g);
   scan_lex_t *compiled = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  const char *error = scan_lex_build_error();
+  core_string_t error = scan_lex_build_error();
 
-  check(label, loaded && !compiled && error && strstr(error, expected));
+  check(label, loaded && !compiled && core_string_find(error, expected) >= 0);
   parse_grammar_free(g);
   core_buffer_free(text);
 }
@@ -1041,7 +1049,7 @@ static void register_deep_embed_chain(void) {
   static bool initialized;
   static scan_lex_spec_t specs[80];
   static scan_lex_embed_t embeds[80][2];
-  static char names[80][32];
+  static core_string_t names[80];
 
   if (initialized) {
     return;
@@ -1049,8 +1057,12 @@ static void register_deep_embed_chain(void) {
 
   initialized = true;
   for (size_t i = 0; i < 80; i++) {
-    int len = snprintf(names[i], sizeof(names[i]), "embed-depth-%zu", i);
-    specs[i].name = core_string_borrow(names[i], (size_t)len);
+    core_buffer_t *name = core_buffer_empty();
+    core_buffer_printf(name, "embed-depth-%zu", i);
+    names[i] = core_buffer_take_string(name);
+  }
+  for (size_t i = 0; i < 80; i++) {
+    specs[i].name = names[i];
 
     if (i + 1 < 80) {
       embeds[i][0] = (scan_lex_embed_t){
@@ -1060,9 +1072,7 @@ static void register_deep_embed_chain(void) {
           .close_tok = S("EMBED_CLOSE"),
           .tokens = true,
       };
-      int next_len = snprintf(names[i + 1], sizeof(names[i + 1]),
-                              "embed-depth-%zu", i + 1);
-      embeds[i][0].lexer = core_string_borrow(names[i + 1], (size_t)next_len);
+      embeds[i][0].lexer = names[i + 1];
       specs[i].embeds = embeds[i];
     }
   }
@@ -1075,13 +1085,13 @@ static void register_deep_embed_chain(void) {
 static void test_embedded_lexer_switching(void) {
   scan_lex_register(&NESTED);
 
-  parse_grammar_t *tokens = embedded_grammar("json", true);
+  parse_grammar_t *tokens = embedded_grammar(S("json"), true);
   kinds(tokens, "an embedded lexer emits its own token sequence",
         "before {{1 \"x\"}} after",
         "OUTER_ID EMBED_OPEN INT_LIT STRING_LIT EMBED_CLOSE OUTER_ID");
 
   parse_token_stream_t *ts =
-      scan_tokenize_owned(tokens, "before {{1 \"x\"}} after", 22);
+      scan_tokenize_owned(tokens, S("before {{1 \"x\"}} after"));
   parse_token_info_t *tok = nullptr;
   size_t count = 0;
   bool spans = true;
@@ -1105,10 +1115,10 @@ static void test_embedded_lexer_switching(void) {
 
   ts = scan_tokenize_incremental_owned(tokens);
   count = 0;
-  const char *source = "before {{1 \"x\"}} after";
+  core_string_t source = S("before {{1 \"x\"}} after");
 
-  for (size_t i = 0; source[i]; i++) {
-    scan_stream_append(ts, source + i, 1);
+  for (size_t i = 0; i < source.u8_bytes; i++) {
+    scan_stream_append(ts, core_string_slice(source, i, 1));
     while (scan_stream_next(ts)) {
       count++;
     }
@@ -1121,7 +1131,7 @@ static void test_embedded_lexer_switching(void) {
         count == 6 && scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
   scan_token_stream_free(ts);
 
-  ts = scan_tokenize_owned(tokens, "x {{\"open}}", 12);
+  ts = scan_tokenize_owned(tokens, S("x {{\"open}}\0"));
   while (scan_stream_next(ts)) {
   }
   scan_diagnostic_t diagnostic = {0};
@@ -1133,8 +1143,8 @@ static void test_embedded_lexer_switching(void) {
   scan_token_stream_free(ts);
   parse_grammar_free(tokens);
 
-  parse_grammar_t *single = embedded_grammar("json", false);
-  ts = scan_tokenize_owned(single, "x {{1}} y", 9);
+  parse_grammar_t *single = embedded_grammar(S("json"), false);
+  ts = scan_tokenize_owned(single, S("x {{1}} y"));
   parse_token_info_t *outer = scan_stream_next(ts);
   parse_token_info_t *block = scan_stream_next(ts);
 
@@ -1146,7 +1156,7 @@ static void test_embedded_lexer_switching(void) {
             content_start(block) == 4 && content_end(block) == 5);
   scan_token_stream_free(ts);
 
-  ts = scan_tokenize_owned(single, "x {{\"open}} y", 13);
+  ts = scan_tokenize_owned(single, S("x {{\"open}} y"));
   while (scan_stream_next(ts)) {
   }
   diagnostic = (scan_diagnostic_t){0};
@@ -1158,7 +1168,7 @@ static void test_embedded_lexer_switching(void) {
   scan_token_stream_free(ts);
   parse_grammar_free(single);
 
-  parse_grammar_t *nested = embedded_grammar("nested-embed-test", true);
+  parse_grammar_t *nested = embedded_grammar(S("nested-embed-test"), true);
 
   kinds(nested, "embedded lexers can nest without mutable shared state",
         "a {{middle [1] tail}} z",
@@ -1168,27 +1178,28 @@ static void test_embedded_lexer_switching(void) {
 
   scan_lex_register(&CYCLE_A);
   scan_lex_register(&CYCLE_B);
-  parse_grammar_t *cycle = embedded_grammar("embed-cycle-a", true);
+  parse_grammar_t *cycle = embedded_grammar(S("embed-cycle-a"), true);
   scan_lex_t *compiled = scan_grammar_lex_compiled(cycle);
 
   check("embedded lexer cycles are rejected during construction",
-        !compiled && scan_lex_compile_error() &&
-            strstr(scan_lex_compile_error(), "cycle"));
+        !compiled &&
+            core_string_find(scan_lex_compile_error(), S("cycle")) >= 0);
   parse_grammar_free(cycle);
 
   register_deep_embed_chain();
-  parse_grammar_t *deep = embedded_grammar("embed-depth-0", true);
+  parse_grammar_t *deep = embedded_grammar(S("embed-depth-0"), true);
   compiled = scan_grammar_lex_compiled(deep);
   check("embedded lexer nesting is not limited to 64 levels",
         compiled != nullptr);
   parse_grammar_free(deep);
 
   embed_error("delegated embeds name unknown lexers",
-              "@lex-embed(\"{{\", \"}}\", lexer(\"missing\"), "
-              "as(\"EMBED\"))",
-              "unknown lexer");
+              S("@lex-embed(\"{{\", \"}}\", lexer(\"missing\"), "
+                "as(\"EMBED\"))"),
+              S("unknown lexer"));
   embed_error("token-sequence embeds require explicit delimiter tokens",
-              "@lex-embed(\"{{\", \"}}\", lexer(\"json\"), tokens)", "open_as");
+              S("@lex-embed(\"{{\", \"}}\", lexer(\"json\"), tokens)"),
+              S("open_as"));
 
 }
 
@@ -1210,9 +1221,8 @@ static void test_interpolation_pushes_a_mode(void) {
 
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  const char *multiline = "\"\"\"a\nb\"\"\"";
   parse_token_stream_t *ts =
-      scan_tokenize(g, multiline, strlen(multiline), &buf, &sc);
+      scan_tokenize(g, S("\"\"\"a\nb\"\"\""), &buf, &sc);
   parse_token_info_t *string = ts ? scan_stream_next(ts) : nullptr;
 
   check("a multiline token records both endpoint lines",
@@ -1229,10 +1239,10 @@ static void test_interpolation_pushes_a_mode(void) {
 }
 
 static void test_templates_and_regex(void) {
-  static const char *const T[] = {
-      "IDENTIFIER",      "INTEGER",       "STRING",    "TEMPLATE_HEAD",
-      "TEMPLATE_MIDDLE", "TEMPLATE_TAIL", "REGEX_LIT", "true",
-      nullptr,
+  static const core_string_t T[] = {
+      S("IDENTIFIER"),      S("INTEGER"),       S("STRING"),
+      S("TEMPLATE_HEAD"),   S("TEMPLATE_MIDDLE"), S("TEMPLATE_TAIL"),
+      S("REGEX_LIT"),       S("true"),          {0},
   };
 
   parse_grammar_t *g = mk(&JS, T);
@@ -1269,8 +1279,9 @@ static void test_templates_and_regex(void) {
 }
 
 static void test_sigils_and_heredocs(void) {
-  static const char *const T[] = {
-      "IDENTIFIER", "INTEGER", "HEREDOC", "CVAR", "IVAR", "GVAR", nullptr,
+  static const core_string_t T[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("HEREDOC"), S("CVAR"),
+      S("IVAR"),       S("GVAR"),    {0},
   };
 
   parse_grammar_t *g = mk(&RUBY, T);
@@ -1302,14 +1313,14 @@ static void test_attached_postfix_sigil(void) {
       .tok_ident = S("IDENTIFIER"),
       .number_forms = INTEGER_NUMBERS,
   };
-  static const char *const terms[] = {
-      "[", "]", "INTEGER", "CHAR", "STRING", "IDENTIFIER", nullptr,
+  static const core_string_t terms[] = {
+      S("["),    S("]"),      S("INTEGER"), S("CHAR"),
+      S("STRING"), S("IDENTIFIER"), {0},
   };
   parse_grammar_t *g = mk(&spec, terms);
-  const char *source = "[1]'array \"x\"'rich 'A' value[0]";
+  core_string_t source = S("[1]'array \"x\"'rich 'A' value[0]");
   parse_scanner_t *scanner = nullptr;
-  parse_token_stream_t *stream = scan_tokenize(g, source, strlen(source),
-                                               nullptr, &scanner);
+  parse_token_stream_t *stream = scan_tokenize(g, source, nullptr, &scanner);
   parse_token_info_t *tokens[16] = {0};
   size_t count = 0;
   tokens[count++] = scan_stream_next(stream);
@@ -1341,16 +1352,15 @@ static void test_attached_postfix_sigil(void) {
 }
 
 static void test_heredoc_families(void) {
-  static const char *const SPEC =
-      "@lex-heredoc-header(\"shell-word\", quotes(\"single\"), "
-      "tag_start(\"_\"), tag_continue(\"_-\"))\n"
-      "@lex-heredoc(\"<<\", header(\"shell-word\"), queue, "
-      "interpolate(\"unquoted\", \"double\"), "
-      "interpolated_as(\"INTERPOLATED\"), as(\"RAW\"), "
-      "terminator_indent(\"allow\"), body_indent(\"strip\"))\n"
-      "@lex-ident(as(\"IDENTIFIER\"))\n"
-      "<file> ::= %IDENTIFIER | %INTERPOLATED | %RAW\n";
-  core_string_t source = core_string_from_cstr(SPEC);
+  core_string_t source =
+      S("@lex-heredoc-header(\"shell-word\", quotes(\"single\"), "
+        "tag_start(\"_\"), tag_continue(\"_-\"))\n"
+        "@lex-heredoc(\"<<\", header(\"shell-word\"), queue, "
+        "interpolate(\"unquoted\", \"double\"), "
+        "interpolated_as(\"INTERPOLATED\"), as(\"RAW\"), "
+        "terminator_indent(\"allow\"), body_indent(\"strip\"))\n"
+        "@lex-ident(as(\"IDENTIFIER\"))\n"
+        "<file> ::= %IDENTIFIER | %INTERPOLATED | %RAW\n");
   parse_grammar_t *g = parse_grammar_new();
 
   parse_grammar_set_error_recovery(g, false);
@@ -1358,13 +1368,13 @@ static void test_heredoc_families(void) {
   check("named heredoc header profiles load",
         load_test_grammar(source, S("file"), g));
 
-  const char *input = "call <<A <<'B'\n"
-                      "  one\n"
-                      "  A\n"
-                      "    two\n"
-                      "  B\n"
-                      "after";
-  parse_token_stream_t *ts = scan_tokenize_owned(g, input, strlen(input));
+  core_string_t input = S("call <<A <<'B'\n"
+                          "  one\n"
+                          "  A\n"
+                          "    two\n"
+                          "  B\n"
+                          "after");
+  parse_token_stream_t *ts = scan_tokenize_owned(g, input);
   parse_token_info_t *call = scan_stream_next(ts);
   parse_token_info_t *first = scan_stream_next(ts);
   parse_token_info_t *second = scan_stream_next(ts);
@@ -1391,9 +1401,9 @@ static void test_heredoc_families(void) {
 
   ts = scan_tokenize_incremental_owned(g);
   size_t token_count = 0;
-  for (size_t i = 0; input[i]; i++) {
+  for (size_t i = 0; i < input.u8_bytes; i++) {
     check("queued heredoc input accepts a one-byte append",
-          scan_stream_append(ts, input + i, 1));
+          scan_stream_append(ts, core_string_slice(input, i, 1)));
     while (scan_stream_next(ts)) {
       token_count++;
     }
@@ -1404,15 +1414,15 @@ static void test_heredoc_families(void) {
   }
   check("queued heredocs resume across every header and body boundary",
         token_count == 4 && scan_status(ts->scanner) == SCAN_STATUS_COMPLETE &&
-            scan_work_bytes(ts->scanner) < strlen(input) * 5);
+            scan_work_bytes(ts->scanner) < input.u8_bytes * 5);
   scan_token_stream_free(ts);
 
-  const char *unicode_input = "x <<λ\nbody\nλ\n";
+  core_string_t unicode_input = S("x <<λ\nbody\nλ\n");
   ts = scan_tokenize_incremental_owned(g);
   token_count = 0;
-  for (size_t i = 0; i < strlen(unicode_input); i++) {
+  for (size_t i = 0; i < unicode_input.u8_bytes; i++) {
     check("a Unicode heredoc tag accepts split UTF-8 input",
-          scan_stream_append(ts, unicode_input + i, 1));
+          scan_stream_append(ts, core_string_slice(unicode_input, i, 1)));
     while (scan_stream_next(ts)) {
       token_count++;
     }
@@ -1427,13 +1437,13 @@ static void test_heredoc_families(void) {
 
   ts = scan_tokenize_incremental_owned(g);
   check("queued headers can be consumed before their bodies arrive",
-        scan_stream_append(ts, "x <<A <<B\n", strlen("x <<A <<B\n")) &&
+        scan_stream_append(ts, S("x <<A <<B\n")) &&
             scan_stream_next(ts) && scan_stream_next(ts) &&
             scan_stream_next(ts));
   check("discarding an earlier queued token does not retain a raw pointer",
         scan_stream_discard_consumed(ts));
   check("discarded queued tokens do not impede later body scanning",
-        scan_stream_append(ts, "one\nA\ntwo\nB\n", 12));
+        scan_stream_append(ts, S("one\nA\ntwo\nB\n")));
   scan_stream_finish(ts);
   while (scan_stream_next(ts)) {
   }
@@ -1441,44 +1451,41 @@ static void test_heredoc_families(void) {
         scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
   scan_token_stream_free(ts);
 
-  ts = scan_tokenize_owned(g, "x <<\"BAD\"\nBAD\n", 14);
+  ts = scan_tokenize_owned(g, S("x <<\"BAD\"\nBAD\n"));
   while (scan_stream_next(ts)) {
   }
   scan_diagnostic_t diagnostic = {0};
   check("disallowed heredoc quote forms are malformed headers",
         scan_diagnostic(ts->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INVALID &&
-            strstr(diagnostic.message.data, "quoted heredoc tag"));
+            core_string_find(diagnostic.message, S("quoted heredoc tag")) >= 0);
   scan_token_stream_free(ts);
 
-  ts = scan_tokenize_owned(g, "x <<A\nbody\n", 11);
+  ts = scan_tokenize_owned(g, S("x <<A\nbody\n"));
   while (scan_stream_next(ts)) {
   }
   diagnostic = (scan_diagnostic_t){0};
   check("missing queued bodies remain distinguishably incomplete",
         scan_diagnostic(ts->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INCOMPLETE &&
-            strstr(diagnostic.message.data, "queued heredoc"));
+            core_string_find(diagnostic.message, S("queued heredoc")) >= 0);
   scan_token_stream_free(ts);
 
   parse_grammar_free(g);
-  core_free(source.data);
 }
 
 static parse_grammar_t *literal_hook_grammar(void) {
-  static const char *const SPEC =
-      "@lex-string('\"', '\"', as(\"STRING\"))\n"
-      "@lex-literal-hook(\"STRING\", hook(\"test-literal-hook\"), "
-      "modifier(\"unit\"), outputs(\"SPECIAL\"), "
-      "types(\"duration\"))\n"
-      "<file> ::= %STRING | %SPECIAL\n";
-  core_string_t source = core_string_from_cstr(SPEC);
+  core_string_t source =
+      S("@lex-string('\"', '\"', as(\"STRING\"))\n"
+        "@lex-literal-hook(\"STRING\", hook(\"test-literal-hook\"), "
+        "modifier(\"unit\"), outputs(\"SPECIAL\"), "
+        "types(\"duration\"))\n"
+        "<file> ::= %STRING | %SPECIAL\n");
   parse_grammar_t *g = parse_grammar_new();
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, source);
   bool loaded = load_test_grammar(source, S("file"), g);
-  core_free(source.data);
 
   if (!loaded) {
     parse_grammar_free(g);
@@ -1500,7 +1507,7 @@ static void test_literal_postprocessing_hooks(void) {
   }
 
   parse_token_stream_t *ts =
-      scan_tokenize_owned(g, "\"ok\" \"ok\"", strlen("\"ok\" \"ok\""));
+      scan_tokenize_owned(g, S("\"ok\" \"ok\""));
   parse_token_info_t *first = scan_stream_next(ts);
   parse_token_info_t *second = scan_stream_next(ts);
 
@@ -1518,7 +1525,7 @@ static void test_literal_postprocessing_hooks(void) {
         literal_hook_calls == 1);
   scan_token_stream_free(ts);
 
-  ts = scan_tokenize_owned(g, "\"bad\"", 5);
+  ts = scan_tokenize_owned(g, S("\"bad\""));
   while (scan_stream_next(ts)) {
   }
   scan_diagnostic_t diagnostic = {0};
@@ -1529,14 +1536,14 @@ static void test_literal_postprocessing_hooks(void) {
             core_string_eq(diagnostic.message, S("bad literal")));
   scan_token_stream_free(ts);
 
-  ts = scan_tokenize_owned(g, "\"wrong\"", 7);
+  ts = scan_tokenize_owned(g, S("\"wrong\""));
   while (scan_stream_next(ts)) {
   }
   diagnostic = (scan_diagnostic_t){0};
   check("hooks cannot select undeclared token metadata",
         scan_diagnostic(ts->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INVALID &&
-            strstr(diagnostic.message.data, "undeclared token"));
+            core_string_find(diagnostic.message, S("undeclared token")) >= 0);
   scan_token_stream_free(ts);
   parse_grammar_free(g);
 
@@ -1564,7 +1571,7 @@ static void test_literal_postprocessing_hooks(void) {
 
   size_t calls_before_plain_scan = literal_hook_calls;
   parse_grammar_t *plain = mk(&PYTHON, PY_TERMS);
-  ts = scan_tokenize_owned(plain, "123 \"plain\"", 11);
+  ts = scan_tokenize_owned(plain, S("123 \"plain\""));
   while (scan_stream_next(ts)) {
   }
   check("lexers without hook bindings pay no callback cost",
@@ -1572,25 +1579,22 @@ static void test_literal_postprocessing_hooks(void) {
   scan_token_stream_free(ts);
   parse_grammar_free(plain);
 
-  static const char *const UNKNOWN =
-      "@lex-string('\"', '\"', as(\"STRING\"))\n"
-      "@lex-literal-hook(\"STRING\", hook(\"missing-hook\"))\n"
-      "<file> ::= %STRING\n";
-  core_string_t unknown_source = core_string_from_cstr(UNKNOWN);
+  core_string_t unknown_source =
+      S("@lex-string('\"', '\"', as(\"STRING\"))\n"
+        "@lex-literal-hook(\"STRING\", hook(\"missing-hook\"))\n"
+        "<file> ::= %STRING\n");
   parse_grammar_t *unknown = parse_grammar_new();
   parse_grammar_set_error_recovery(unknown, false);
   parse_bnf_declare_terminals(unknown, unknown_source);
   bool loaded = load_test_grammar(unknown_source, S("file"), unknown);
   check("unknown literal hooks fail during lexer construction",
         loaded && !scan_grammar_lex_compiled(unknown) &&
-            scan_lex_compile_error() &&
-            strstr(scan_lex_compile_error(), "unknown hook"));
+            core_string_find(scan_lex_compile_error(), S("unknown hook")) >= 0);
   parse_grammar_free(unknown);
-  core_free(unknown_source.data);
 }
 
 static void test_a_grammar_declares_its_own_lexis(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-comment(\"#\")\n"
       "@lex-comment(\"/*\", \"*/\", nested)\n"
       "@lex-string('\"', '\"', escape('\\\\'), as(\"STRING\"))\n"
@@ -1610,7 +1614,7 @@ static void test_a_grammar_declares_its_own_lexis(void) {
       "%FSTRING_MIDDLE %FSTRING_END %\"def\" %\"return\"\n";
 
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -1631,25 +1635,26 @@ static void test_a_grammar_declares_its_own_lexis(void) {
   kinds(g, "a nested block comment closes once", "a /* x /* y */ z */ b",
         "IDENTIFIER IDENTIFIER NEWLINE ENDMARKER");
 
-  check("nothing was rejected", scan_lex_build_error() == nullptr);
+  check("nothing was rejected", scan_lex_build_error().data == nullptr);
 
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
 static parse_grammar_t *region_grammar(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-region(\"#[\", \"#]\", \"#\")\n"
       "@lex-comment(\"#\")\n"
       "@lex-ident(as(\"IDENTIFIER\"))\n"
       "<file> ::= %IDENTIFIER*\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, S("region.lex"), g);
-  if (!loaded)
-    fprintf(stderr, "region grammar load failed: %s\n", parse_bnf_error());
-  core_free(text.data);
+  if (!loaded) {
+    core_string_t error = parse_bnf_error();
+    fprintf(stderr, "region grammar load failed: %.*s\n",
+            (int)error.u8_bytes, error.data);
+  }
   if (!loaded) {
     parse_grammar_free(g);
     return nullptr;
@@ -1662,11 +1667,10 @@ static void test_comment_region_anchors_are_trivia(void) {
   check("a comment-region lexer declaration loads", g != nullptr);
   if (!g) return;
 
-  const char *source = "#[outer#\n# note\n#]outer#\nname";
   core_buffer_t *buffer = nullptr;
   parse_scanner_t *scanner = nullptr;
   parse_token_stream_t *stream = scan_tokenize(
-      g, source, strlen(source), &buffer, &scanner);
+      g, S("#[outer#\n# note\n#]outer#\nname"), &buffer, &scanner);
   parse_token_info_t *name = scan_stream_next(stream);
   while (scan_stream_next(stream)) {
   }
@@ -1710,9 +1714,8 @@ static void test_comment_region_anchors_are_trivia(void) {
   check("an open region at EOF is rejected",
         source_status(g, "#[open#\nname") == SCAN_STATUS_INVALID);
 
-  const char *crossing =
-      "#[a#\n#[b#\n# both\n#]a#\n# b-only\n#]b#\nname";
-  stream = scan_tokenize_owned(g, crossing, strlen(crossing));
+  stream = scan_tokenize_owned(
+      g, S("#[a#\n#[b#\n# both\n#]a#\n# b-only\n#]b#\nname"));
   while (scan_stream_next(stream)) {
   }
   name = scan_stream_get(stream, 0);
@@ -1735,13 +1738,12 @@ static void test_comment_region_anchors_are_trivia(void) {
             && parse_trivia_in_region(comment_b, open_b->region_id));
   scan_token_stream_free(stream);
 
-  const char *normalized = "#[e\xCC\x81#\n# note\n#]\xC3\xA9#\nname";
   check("comment-region names match after NFC normalization",
-        source_status(g, normalized) == SCAN_STATUS_COMPLETE);
+        source_status(g, "#[e\xCC\x81#\n# note\n#]\xC3\xA9#\nname") ==
+            SCAN_STATUS_COMPLETE);
 
-  const char *grouped =
-      "# before\n#[r#\n# content\n#]r#\n# after\n\nname";
-  stream = scan_tokenize_owned(g, grouped, strlen(grouped));
+  stream = scan_tokenize_owned(
+      g, S("# before\n#[r#\n# content\n#]r#\n# after\n\nname"));
   while (scan_stream_next(stream)) {
   }
   name = scan_stream_get(stream, 0);
@@ -1765,14 +1767,13 @@ static void test_comment_region_anchors_are_trivia(void) {
         source_status(g, "#[r#\xE2\x80\xA8# note\xE2\x80\xA8#]r#\xE2\x80\xA8name")
             == SCAN_STATUS_COMPLETE);
 
-  const char *editable = "#[old#\n# note\n#]old#\nname";
-  stream = scan_tokenize_owned(g, editable, strlen(editable));
+  stream = scan_tokenize_owned(g, S("#[old#\n# note\n#]old#\nname"));
   check("comment-region streams support incremental edits",
         scan_stream_enable_edits(stream));
   while (scan_stream_next(stream)) {
   }
   check("incremental edits recompute region pairing",
-        scan_stream_replace(stream, 2, 19, "new#\n# note\n#]new", 17)
+        scan_stream_replace(stream, 2, 19, S("new#\n# note\n#]new"))
             && scan_stream_get(stream, 100) == nullptr
             && scan_status(stream->scanner) == SCAN_STATUS_COMPLETE);
   name = scan_stream_get(stream, 0);
@@ -1786,12 +1787,12 @@ static void test_comment_region_anchors_are_trivia(void) {
 }
 
 static void test_string_families_expand_once(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-string-family(plain, prefixes(\"r\", \"R\"), "
       "quotes(\"'\", '\"'), raw, as(\"STRING\"))\n"
       "<file> ::= %STRING\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -1804,31 +1805,31 @@ static void test_string_families_expand_once(void) {
 
   parse_token_stream_t *ts = scan_tokenize_incremental_owned(g);
   check("a family prefix waits across an incremental boundary",
-        scan_stream_append(ts, "R", 1) && scan_stream_next(ts) == nullptr);
+        scan_stream_append(ts, S("R")) && scan_stream_next(ts) == nullptr);
   check("a family string resumes without rescanning its prefix",
-        scan_stream_append(ts, "\"body\" ", 7) &&
+        scan_stream_append(ts, S("\"body\" ")) &&
             scan_stream_next(ts) != nullptr);
 
   scan_token_stream_free(ts);
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
-static void family_error(const char *label, const char *source,
-                         const char *expected) {
+#define family_error(label, source, expected) \
+  family_error_check((label), S(source), S(expected))
+
+static void family_error_check(const char *label, core_string_t text,
+                               core_string_t expected) {
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(source);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  const char *error = scan_lex_build_error();
+  core_string_t error = scan_lex_build_error();
 
-  check(label, loaded && !lex && error && strstr(error, expected));
+  check(label, loaded && !lex && core_string_find(error, expected) >= 0);
 
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
 static void test_string_families_diagnose_invalid_declarations(void) {
@@ -1864,14 +1865,14 @@ static void test_string_families_diagnose_invalid_declarations(void) {
 }
 
 static void test_paired_string_families_nest(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-string-family(prefixes(\"%q\", \"%w\"), "
       "pair(\"(\", \")\"), pair(\"[\", \"]\"), "
       "pair(\"{\", \"}\"), pair(\"<\", \">\"), nested, "
       "multiline, escape(\"\\\\\"), as(\"Q\"))\n"
       "<file> ::= %Q\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -1886,20 +1887,20 @@ static void test_paired_string_families_nest(void) {
   parse_token_stream_t *ts = scan_tokenize_incremental_owned(g);
   check(
       "nested paired strings retain depth across chunks",
-      scan_stream_append(ts, "%q(a(b", 6) && scan_stream_next(ts) == nullptr &&
-          scan_stream_append(ts, ")c) ", 4) && scan_stream_next(ts) != nullptr);
+      scan_stream_append(ts, S("%q(a(b")) && scan_stream_next(ts) == nullptr &&
+          scan_stream_append(ts, S(")c) ")) && scan_stream_next(ts) != nullptr);
   scan_token_stream_free(ts);
 
   ts = scan_tokenize_incremental_owned(g);
   bool deep =
-      scan_stream_append(ts, "%q(", 3) && scan_stream_next(ts) == nullptr;
+      scan_stream_append(ts, S("%q(")) && scan_stream_next(ts) == nullptr;
   for (size_t i = 0; deep && i < 512; i++) {
-    deep = scan_stream_append(ts, "(", 1) && scan_stream_next(ts) == nullptr;
+    deep = scan_stream_append(ts, S("(")) && scan_stream_next(ts) == nullptr;
   }
   for (size_t i = 0; deep && i < 512; i++) {
-    deep = scan_stream_append(ts, ")", 1) && scan_stream_next(ts) == nullptr;
+    deep = scan_stream_append(ts, S(")")) && scan_stream_next(ts) == nullptr;
   }
-  deep = deep && scan_stream_append(ts, ") ", 2) &&
+  deep = deep && scan_stream_append(ts, S(") ")) &&
          scan_stream_next(ts) != nullptr;
   check("deep paired nesting is iterative and incrementally resumable", deep);
   scan_token_stream_free(ts);
@@ -1908,11 +1909,10 @@ static void test_paired_string_families_nest(void) {
         source_status(g, "%q(a(b)c") == SCAN_STATUS_INCOMPLETE);
 
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
 static void test_composable_string_escape_profiles(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-string-family(plain, quotes('\"', \"'\"), "
       "escape(\"\\\\\"), use_escapes(\"simple\", \"unicode\"), "
       "as(\"STRING\"))\n"
@@ -1922,7 +1922,7 @@ static void test_composable_string_escape_profiles(void) {
       "escape_digits(\"u\", \"0123456789abcdefABCDEF\", \"4\"))\n"
       "<file> ::= %STRING\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -1938,14 +1938,13 @@ static void test_composable_string_escape_profiles(void) {
 
   parse_token_stream_t *ts = scan_tokenize_incremental_owned(g);
   check("a profiled escape waits across an incremental boundary",
-        scan_stream_append(ts, "\"\\u00", 5) &&
+        scan_stream_append(ts, S("\"\\u00")) &&
             scan_stream_next(ts) == nullptr &&
-            scan_stream_append(ts, "41\" ", 4) &&
+            scan_stream_append(ts, S("41\" ")) &&
             scan_stream_next(ts) != nullptr);
   scan_token_stream_free(ts);
 
   parse_grammar_free(g);
-  core_free(text.data);
 
   family_error("string recipes name unknown escape profiles",
                "@lex-string('\"', '\"', escape(\"\\\\\"), "
@@ -1984,7 +1983,7 @@ static void test_composable_string_escape_profiles(void) {
 }
 
 static void test_literal_string_escape_prefixes(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-string-escapes(\"rich\", escapes(\"n\"), "
       "escape_literal(\"«\"), escape_literal(\"»\"), "
       "escape_literal(\"[\"))\n"
@@ -1992,7 +1991,7 @@ static void test_literal_string_escape_prefixes(void) {
       "use_escapes(\"rich\"), as(\"STRING\"))\n"
       "<file> ::= %STRING\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -2005,20 +2004,16 @@ static void test_literal_string_escape_prefixes(void) {
   check("exact escape prefixes do not admit unrelated escapes",
         loaded && source_status(g, "\"\\q\"") == SCAN_STATUS_INVALID);
   parse_grammar_free(g);
-  core_free(text.data);
 
-  static const char *const BAD =
-      "@lex-string-escapes(\"bad\", escape_literal(\"\"))\n"
-      "<file> ::= %STRING\n";
   g = parse_grammar_new();
-  text = core_string_from_cstr(BAD);
+  text = S("@lex-string-escapes(\"bad\", escape_literal(\"\"))\n"
+           "<file> ::= %STRING\n");
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
   bool bad_loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   bool rejected = !bad_loaded || !scan_grammar_lex_compiled(g);
   check("exact string escape prefixes cannot be empty", rejected);
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
 static void test_large_string_family_dispatch_is_bounded(void) {
@@ -2046,10 +2041,9 @@ static void test_large_string_family_dispatch_is_bounded(void) {
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  static const char input[] = "p079\"body\"";
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts =
-      lex ? scan_tokenize(g, input, sizeof(input) - 1, nullptr, &sc) : nullptr;
+      lex ? scan_tokenize(g, S("p079\"body\""), nullptr, &sc) : nullptr;
 
   while (ts && scan_stream_next(ts)) {
   }
@@ -2092,10 +2086,9 @@ static void test_large_number_suffix_dispatch_is_bounded(void) {
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  static const char input[] = "1z079";
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts =
-      lex ? scan_tokenize(g, input, sizeof(input) - 1, nullptr, &sc) : nullptr;
+      lex ? scan_tokenize(g, S("1z079"), nullptr, &sc) : nullptr;
   while (ts && scan_stream_next(ts)) {
   }
   check("numeric suffix dispatch work is independent of set size",
@@ -2140,12 +2133,12 @@ static void test_long_numeric_trie_paths_resume_linearly(void) {
   parse_token_stream_t *ts =
       loaded ? scan_tokenize_incremental_owned(g) : nullptr;
   bool suffix_ok =
-      ts && scan_stream_append(ts, "1", 1) && scan_stream_next(ts) == nullptr;
+      ts && scan_stream_append(ts, S("1")) && scan_stream_next(ts) == nullptr;
   for (size_t i = 0; suffix_ok && i < 512; i++) {
     suffix_ok =
-        scan_stream_append(ts, "z", 1) && scan_stream_next(ts) == nullptr;
+        scan_stream_append(ts, S("z")) && scan_stream_next(ts) == nullptr;
   }
-  suffix_ok = suffix_ok && scan_stream_append(ts, " ", 1) &&
+  suffix_ok = suffix_ok && scan_stream_append(ts, S(" ")) &&
               scan_stream_next(ts) != nullptr &&
               scan_work_bytes(ts->scanner) < 2048;
   check("a long numeric suffix resumes in linear work", suffix_ok);
@@ -2153,12 +2146,12 @@ static void test_long_numeric_trie_paths_resume_linearly(void) {
 
   ts = loaded ? scan_tokenize_incremental_owned(g) : nullptr;
   bool prefix_ok =
-      ts && scan_stream_append(ts, "0", 1) && scan_stream_next(ts) == nullptr;
+      ts && scan_stream_append(ts, S("0")) && scan_stream_next(ts) == nullptr;
   for (size_t i = 1; prefix_ok && i < 512; i++) {
     prefix_ok =
-        scan_stream_append(ts, "x", 1) && scan_stream_next(ts) == nullptr;
+        scan_stream_append(ts, S("x")) && scan_stream_next(ts) == nullptr;
   }
-  prefix_ok = prefix_ok && scan_stream_append(ts, "1 ", 2) &&
+  prefix_ok = prefix_ok && scan_stream_append(ts, S("1 ")) &&
               scan_stream_next(ts) != nullptr &&
               scan_work_bytes(ts->scanner) < 2048;
   check("a long numeric prefix resumes in linear work", prefix_ok);
@@ -2169,11 +2162,11 @@ static void test_long_numeric_trie_paths_resume_linearly(void) {
 }
 
 static void test_an_unknown_option_is_named(void) {
-  static const char *const G = "@lex-string(\"'\", \"'\", bogus)\n"
+  static const char G[] = "@lex-string(\"'\", \"'\", bogus)\n"
                                "<file> ::= %IDENTIFIER\n";
 
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -2182,13 +2175,14 @@ static void test_an_unknown_option_is_named(void) {
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
 
-  parse_token_stream_t *ts = scan_tokenize(g, "a", 1, &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, S("a"), &buf, &sc);
 
-  const char *err = scan_lex_build_error();
+  core_string_t err = scan_lex_build_error();
 
-  check("an unknown @lex- option is reported", err != nullptr);
+  check("an unknown @lex- option is reported", err.data != nullptr);
   check("and the message names it",
-        err && strstr(err, "bogus") && strstr(err, "lex-string"));
+        core_string_find(err, S("bogus")) >= 0 &&
+            core_string_find(err, S("lex-string")) >= 0);
 
   if (ts) {
     scan_token_stream_free(ts);
@@ -2197,23 +2191,20 @@ static void test_an_unknown_option_is_named(void) {
   }
 
   parse_grammar_free(g);
-  core_free(text.data);
-
-  static const char *const R =
-      "@lex-regex(\"/\", \"/\", not_after(\"TYPO\"), as(\"REGEX\"))\n"
-      "<file> ::= %REGEX\n";
 
   g = parse_grammar_new();
-  text = core_string_from_cstr(R);
+  text = S("@lex-regex(\"/\", \"/\", not_after(\"TYPO\"), as(\"REGEX\"))\n"
+           "<file> ::= %REGEX\n");
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
   load_test_grammar(text, CORE_STRING_STATIC("file"), g);
 
-  ts = scan_tokenize(g, "/x/", 3, &buf, &sc);
+  ts = scan_tokenize(g, S("/x/"), &buf, &sc);
   err = scan_lex_build_error();
 
   check("an unknown regex predecessor token is rejected",
-        err && strstr(err, "TYPO") && strstr(err, "not_after"));
+        core_string_find(err, S("TYPO")) >= 0 &&
+            core_string_find(err, S("not_after")) >= 0);
 
   if (ts) {
     scan_token_stream_free(ts);
@@ -2222,7 +2213,6 @@ static void test_an_unknown_option_is_named(void) {
   }
 
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
 static void test_lex_declarations_have_no_fixed_limit(void) {
@@ -2295,13 +2285,13 @@ static void test_lex_declarations_have_no_fixed_limit(void) {
 }
 
 static parse_grammar_t *fence_grammar(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-fence(\"[\", \"]\", fill(\"=\"), body(\"[\", \"]\"), "
       "minimum(\"1\"), label, as(\"EMBED\"))\n"
       "<file> ::= %EMBED\n";
 
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -2311,12 +2301,11 @@ static parse_grammar_t *fence_grammar(void) {
     g = nullptr;
   }
 
-  core_free(text.data);
   return g;
 }
 
 static parse_grammar_t *hash_fence_grammar(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-fence(\"#\", \"#\", fill(\"#\"), body('\"', '\"'), "
       "minimum(\"0\"), as(\"RAW\"))\n"
       "@lex-sigil(\"r#\", as(\"IDENTIFIER\"))\n"
@@ -2324,7 +2313,7 @@ static parse_grammar_t *hash_fence_grammar(void) {
       "<file> ::= %RAW | %IDENTIFIER\n";
 
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -2334,7 +2323,6 @@ static parse_grammar_t *hash_fence_grammar(void) {
     g = nullptr;
   }
 
-  core_free(text.data);
   return g;
 }
 
@@ -2352,7 +2340,7 @@ static void test_zero_minimum_hash_fences(void) {
 
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts =
-      scan_tokenize(g, source->data, source->byte_len, nullptr, &sc);
+      scan_tokenize(g, core_buffer_string(source), nullptr, &sc);
   while (scan_stream_next(ts)) {
   }
 
@@ -2367,23 +2355,27 @@ static void test_zero_minimum_hash_fences(void) {
 }
 
 static void test_symmetric_fences_preserve_source_spans(void) {
-  const char *src = "[==codec[one ]=] two]==]";
+  core_string_t source = S("[==codec[one ]=] two]==]");
   parse_grammar_t *g = fence_grammar();
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts = scan_tokenize(g, src, strlen(src), &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, source, &buf, &sc);
   parse_token_info_t *tok = scan_stream_next(ts);
 
   check("a parameterized symmetric fence is one token",
         tok && scan_stream_next(ts) == nullptr);
   check("a fence retains its exact body span",
         tok && has_content(tok) &&
-            content_end(tok) - content_start(tok) == 11 &&
-            !memcmp(src + content_start(tok), "one ]=] two", 11));
+            core_string_eq(core_string_slice(source, content_start(tok),
+                                             content_end(tok) -
+                                                 content_start(tok)),
+                           S("one ]=] two")));
   check("a fence retains its optional label span",
         tok && has_label(tok) &&
-            label_end(tok) - label_start(tok) == 5 &&
-            !memcmp(src + label_start(tok), "codec", 5));
+            core_string_eq(core_string_slice(source, label_start(tok),
+                                             label_end(tok) -
+                                                 label_start(tok)),
+                           S("codec")));
   check("a closed fence is complete", scan_status(sc) == SCAN_STATUS_COMPLETE);
 
   scan_token_stream_free(ts);
@@ -2393,18 +2385,16 @@ static void test_symmetric_fences_preserve_source_spans(void) {
 }
 
 static void test_fence_padding_requires_both_boundaries(void) {
-  static const char *const GRAMMAR =
-      "@lex-fence(\"[\", \"]\", fill(\"-\"), pad(\"required\"), "
-      "as(\"FENCE\"))\n"
-      "@lex-fallback(\"reject\")\n"
-      "<file> ::= %FENCE\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(GRAMMAR);
+  core_string_t text =
+      S("@lex-fence(\"[\", \"]\", fill(\"-\"), pad(\"required\"), "
+        "as(\"FENCE\"))\n"
+        "@lex-fallback(\"reject\")\n"
+        "<file> ::= %FENCE\n");
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, S("file"), g);
   check("a padded fence declaration loads", loaded);
-  core_free(text.data);
   if (!loaded) {
     parse_grammar_free(g);
     return;
@@ -2412,7 +2402,7 @@ static void test_fence_padding_requires_both_boundaries(void) {
 
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts = scan_tokenize(g, "[- -]", 5, &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, S("[- -]"), &buf, &sc);
   parse_token_info_t *tok = scan_stream_next(ts);
   check("required padding accepts a space-padded empty literal",
         tok && has_content(tok) &&
@@ -2424,7 +2414,7 @@ static void test_fence_padding_requires_both_boundaries(void) {
 
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "[- f-]", 6, &buf, &sc);
+  ts = scan_tokenize(g, S("[- f-]"), &buf, &sc);
   bool emitted_fence = false;
   while ((tok = scan_stream_next(ts))) {
     emitted_fence |= parse_token_tid(tok) == parse_terminal_id(g, S("FENCE"));
@@ -2438,20 +2428,20 @@ static void test_fence_padding_requires_both_boundaries(void) {
 }
 
 static void test_incomplete_fences_resume_after_append(void) {
-  const char *src = "[=ffi[body";
+  core_string_t src = S("[=ffi[body");
   parse_grammar_t *g = fence_grammar();
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts = scan_tokenize(g, src, strlen(src), &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, src, &buf, &sc);
 
   check("an incomplete fence emits no provisional token",
         scan_stream_next(ts) == nullptr && scan_stream_token_count(ts) == 0);
   check("an incomplete fence retains its source span",
         scan_status(sc) == SCAN_STATUS_INCOMPLETE &&
             sc->status_start_byte == 0 &&
-            sc->status_end_byte == strlen(src));
+            sc->status_end_byte == src.u8_bytes);
   check("an incomplete stream accepts more source",
-        scan_stream_append(ts, "]=]", 3));
+        scan_stream_append(ts, S("]=]")));
 
   parse_token_info_t *tok = scan_stream_next(ts);
 
@@ -2465,7 +2455,7 @@ static void test_incomplete_fences_resume_after_append(void) {
   check("the resumed stream completes",
         scan_status(sc) == SCAN_STATUS_COMPLETE);
   check("a complete stream rejects further append",
-        !scan_stream_append(ts, "x", 1));
+        !scan_stream_append(ts, S("x")));
 
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
@@ -2474,23 +2464,23 @@ static void test_incomplete_fences_resume_after_append(void) {
 }
 
 static void test_incomplete_strings_and_comments_resume(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER",
-      "STRING",
-      nullptr,
+  static const core_string_t TERMS[] = {
+      S("IDENTIFIER"),
+      S("STRING"),
+      {0},
   };
   parse_grammar_t *g = mk(&JS, TERMS);
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts = scan_tokenize(g, "\"hel", 4, &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, S("\"hel"), &buf, &sc);
 
   check("an incomplete string emits no provisional token",
         scan_stream_next(ts) == nullptr && scan_stream_token_count(ts) == 0);
   check("a string can remain incomplete across appends",
-        scan_stream_append(ts, "lo", 2) && scan_stream_next(ts) == nullptr &&
+        scan_stream_append(ts, S("lo")) && scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE);
   check("a later append can complete the string",
-        scan_stream_append(ts, "\"", 1));
+        scan_stream_append(ts, S("\"")));
 
   parse_token_info_t *string = scan_stream_next(ts);
 
@@ -2505,13 +2495,13 @@ static void test_incomplete_strings_and_comments_resume(void) {
 
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "/* open", 7, &buf, &sc);
+  ts = scan_tokenize(g, S("/* open"), &buf, &sc);
 
   check("an incomplete block comment emits no token",
         scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE);
   check("a block comment can resume after append",
-        scan_stream_append(ts, " */ name", 8));
+        scan_stream_append(ts, S(" */ name")));
 
   parse_token_info_t *name = scan_stream_next(ts);
 
@@ -2536,26 +2526,23 @@ static void test_incomplete_strings_and_comments_resume(void) {
 }
 
 static void test_filled_block_comment_delimiters(void) {
-  static const char *const GRAMMAR = "@lex-comment(\"/\", \"/\", fill(\"*\"))\n"
-                                     "@lex-ident(as(\"IDENTIFIER\"))\n"
-                                     "<file> ::= %IDENTIFIER\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t grammar_text = core_string_from_cstr(GRAMMAR);
+  core_string_t grammar_text = S("@lex-comment(\"/\", \"/\", fill(\"*\"))\n"
+                                 "@lex-ident(as(\"IDENTIFIER\"))\n"
+                                 "<file> ::= %IDENTIFIER\n");
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, grammar_text);
   bool loaded = load_test_grammar(grammar_text, S("file"), g);
   check("a repeated-fill block comment declaration loads", loaded);
-  core_free(grammar_text.data);
   if (!loaded) {
     parse_grammar_free(g);
     return;
   }
 
-  const char *source = "/** /* Hi! */ **/ name";
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts =
-      scan_tokenize(g, source, strlen(source), &buf, &sc);
+      scan_tokenize(g, S("/** /* Hi! */ **/ name"), &buf, &sc);
   parse_token_info_t *name = scan_stream_next(ts);
   check("the closing star count matches the opening star count",
         name && parse_token_has_value(name) &&
@@ -2566,10 +2553,9 @@ static void test_filled_block_comment_delimiters(void) {
   scan_scanner_free(sc);
   core_buffer_free(buf);
 
-  const char *mismatched = "/** body */";
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, mismatched, strlen(mismatched), &buf, &sc);
+  ts = scan_tokenize(g, S("/** body */"), &buf, &sc);
   check("a closing star count that differs is not accepted",
         scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE);
@@ -2579,11 +2565,11 @@ static void test_filled_block_comment_delimiters(void) {
 
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "/** body **", 11, &buf, &sc);
+  ts = scan_tokenize(g, S("/** body **"), &buf, &sc);
   check("a repeated-fill close may be split across input chunks",
         scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE &&
-            scan_stream_append(ts, "/ name", 6));
+            scan_stream_append(ts, S("/ name")));
   name = scan_stream_next(ts);
   check("the resumed filled comment closes at the matching count",
         name && parse_token_has_value(name) &&
@@ -2595,14 +2581,14 @@ static void test_filled_block_comment_delimiters(void) {
 }
 
 static void test_interpolation_regex_and_heredoc_resume(void) {
-  static const char *const JS_TERMS[] = {
-      "IDENTIFIER",    "TEMPLATE_HEAD", "TEMPLATE_MIDDLE",
-      "TEMPLATE_TAIL", "REGEX_LIT",     nullptr,
+  static const core_string_t JS_TERMS[] = {
+      S("IDENTIFIER"),    S("TEMPLATE_HEAD"), S("TEMPLATE_MIDDLE"),
+      S("TEMPLATE_TAIL"), S("REGEX_LIT"),     {0},
   };
   parse_grammar_t *g = mk(&JS, JS_TERMS);
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts = scan_tokenize(g, "`a${x}", 6, &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, S("`a${x}"), &buf, &sc);
   parse_token_info_t *head = scan_stream_next(ts);
   parse_token_info_t *hole = scan_stream_next(ts);
 
@@ -2610,7 +2596,7 @@ static void test_interpolation_regex_and_heredoc_resume(void) {
         head && hole && scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE);
   check("an interpolated tail can resume after append",
-        scan_stream_append(ts, "b`", 2));
+        scan_stream_append(ts, S("b`")));
 
   parse_token_info_t *tail = scan_stream_next(ts);
 
@@ -2627,12 +2613,12 @@ static void test_interpolation_regex_and_heredoc_resume(void) {
 
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "/ab", 3, &buf, &sc);
+  ts = scan_tokenize(g, S("/ab"), &buf, &sc);
 
   check("an unterminated regex emits no provisional token",
         scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE);
-  check("a regex can resume after append", scan_stream_append(ts, "+/gi", 4));
+  check("a regex can resume after append", scan_stream_append(ts, S("+/gi")));
 
   parse_token_info_t *regex = scan_stream_next(ts);
 
@@ -2646,23 +2632,23 @@ static void test_interpolation_regex_and_heredoc_resume(void) {
   core_buffer_free(buf);
   parse_grammar_free(g);
 
-  static const char *const RB_TERMS[] = {
-      "IDENTIFIER",
-      "HEREDOC",
-      nullptr,
+  static const core_string_t RB_TERMS[] = {
+      S("IDENTIFIER"),
+      S("HEREDOC"),
+      {0},
   };
 
   g = mk(&RUBY, RB_TERMS);
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "<<~END\nbody\n", 12, &buf, &sc);
+  ts = scan_tokenize(g, S("<<~END\nbody\n"), &buf, &sc);
 
   check("an unterminated heredoc emits no provisional token",
         scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE &&
             sc->status_end_byte == 12);
   check("a heredoc can resume after append",
-        scan_stream_append(ts, "END\nnext", 8));
+        scan_stream_append(ts, S("END\nnext")));
 
   parse_token_info_t *heredoc = scan_stream_next(ts);
   parse_token_info_t *next = scan_stream_next(ts);
@@ -2680,53 +2666,53 @@ static void test_interpolation_regex_and_heredoc_resume(void) {
 }
 
 static void test_incremental_stream_accepts_arbitrary_chunks(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "FLOAT", "STRING", nullptr,
+  static const core_string_t TERMS[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("FLOAT"), S("STRING"), {0},
   };
   parse_grammar_t *g = mk(&JS, TERMS);
-  parse_register_terminal(g, core_string_from_cstr("==="));
+  parse_register_terminal(g, S("==="));
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts = scan_tokenize_incremental(g, &buf, &sc);
 
-  bool first_append = scan_stream_append(ts, "iden", 4);
+  bool first_append = scan_stream_append(ts, S("iden"));
   parse_token_info_t *first_token = scan_stream_next(ts);
   check("an identifier waits at a temporary buffer boundary",
         first_append && first_token == nullptr &&
             scan_status(sc) == SCAN_STATUS_INCOMPLETE);
   check("an identifier continues in the next chunk",
-        scan_stream_append(ts, "t ", 2) && scan_stream_next(ts) != nullptr);
+        scan_stream_append(ts, S("t ")) && scan_stream_next(ts) != nullptr);
 
   check("a terminal prefix waits for a longer terminal",
-        scan_stream_append(ts, "=", 1) && scan_stream_next(ts) == nullptr);
+        scan_stream_append(ts, S("=")) && scan_stream_next(ts) == nullptr);
   check("the longest terminal completes across chunks",
-        scan_stream_append(ts, "==", 2) && scan_stream_next(ts) != nullptr);
+        scan_stream_append(ts, S("==")) && scan_stream_next(ts) != nullptr);
 
   check("a radix number waits across chunks",
-        scan_stream_append(ts, " 0", 2) && scan_stream_next(ts) == nullptr &&
-            scan_stream_append(ts, "x1", 2) && scan_stream_next(ts) == nullptr);
+        scan_stream_append(ts, S(" 0")) && scan_stream_next(ts) == nullptr &&
+            scan_stream_append(ts, S("x1")) && scan_stream_next(ts) == nullptr);
   parse_token_info_t *hex = nullptr;
   check("a radix number ends when a delimiter arrives",
-        scan_stream_append(ts, "f ", 2) &&
+        scan_stream_append(ts, S("f ")) &&
             (hex = scan_stream_next(ts)) != nullptr &&
             core_option_get(parse_token_value(hex)).u8_bytes == 4);
 
   check("an exponent resumes after its sign",
-        scan_stream_append(ts, "1.2e", 4) && scan_stream_next(ts) == nullptr &&
-            scan_stream_append(ts, "+", 1) && scan_stream_next(ts) == nullptr &&
-            scan_stream_append(ts, "3 ", 2) && scan_stream_next(ts) != nullptr);
+        scan_stream_append(ts, S("1.2e")) && scan_stream_next(ts) == nullptr &&
+            scan_stream_append(ts, S("+")) && scan_stream_next(ts) == nullptr &&
+            scan_stream_append(ts, S("3 ")) && scan_stream_next(ts) != nullptr);
 
   check("a line comment continues across chunks",
-        scan_stream_append(ts, "// com", 6) &&
+        scan_stream_append(ts, S("// com")) &&
             scan_stream_next(ts) == nullptr &&
-            scan_stream_append(ts, "ment\nname ", 10) &&
+            scan_stream_append(ts, S("ment\nname ")) &&
             scan_stream_next(ts) != nullptr);
 
   check("finishing converts a temporary boundary to final EOF",
         scan_stream_finish(ts) && scan_stream_next(ts) == nullptr &&
             scan_status(sc) == SCAN_STATUS_COMPLETE);
   check("a finished stream rejects more input",
-        !scan_stream_append(ts, "x", 1));
+        !scan_stream_append(ts, S("x")));
 
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
@@ -2735,34 +2721,33 @@ static void test_incremental_stream_accepts_arbitrary_chunks(void) {
 }
 
 static void test_incremental_utf8_and_source_compaction(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "FLOAT", "STRING", nullptr,
+  static const core_string_t TERMS[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("FLOAT"), S("STRING"), {0},
   };
   parse_grammar_t *g = mk(&JS, TERMS);
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts = scan_tokenize_incremental(g, &buf, &sc);
-  const char lambda[] = "\xCE\xBB";
+  core_string_t lambda = S("\xCE\xBB");
 
   check("a partial UTF-8 scalar waits for its remaining bytes",
-        scan_stream_append(ts, lambda, 1) && scan_stream_next(ts) == nullptr &&
-            sc->cursor == 0);
+        scan_stream_append(ts, core_string_slice(lambda, 0, 1)) &&
+            scan_stream_next(ts) == nullptr && sc->cursor == 0);
   check("a Unicode identifier resumes across a byte boundary",
-        scan_stream_append(ts, lambda + 1, 1) &&
-            scan_stream_next(ts) == nullptr && scan_stream_append(ts, " ", 1));
+        scan_stream_append(ts, core_string_slice(lambda, 1, 1)) &&
+            scan_stream_next(ts) == nullptr && scan_stream_append(ts, S(" ")));
 
   parse_token_info_t *first = scan_stream_next(ts);
   check("the resumed Unicode token preserves its complete spelling",
         first && parse_token_has_value(first) &&
-            core_string_eq(core_option_get(parse_token_value(first)),
-                           core_string_borrow(lambda, 2)));
+            core_string_eq(core_option_get(parse_token_value(first)), lambda));
   check("consumed incremental source can be discarded",
         scan_stream_discard_consumed(ts) && sc->source_base == 2 &&
             buf->byte_len == 1);
 
   parse_token_info_t *second = nullptr;
   check("absolute source spans survive compaction",
-        scan_stream_append(ts, "name ", 5) &&
+        scan_stream_append(ts, S("name ")) &&
             (second = scan_stream_next(ts)) != nullptr);
   check("a post-compaction token uses the original byte coordinate space",
         second && parse_token_start_byte(second) == 3 &&
@@ -2777,8 +2762,8 @@ static void test_incremental_utf8_and_source_compaction(void) {
 }
 
 static void test_source_compaction_is_amortized(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "FLOAT", "STRING", nullptr,
+  static const core_string_t TERMS[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("FLOAT"), S("STRING"), {0},
   };
   parse_grammar_t *g = mk(&JS, TERMS);
   core_buffer_t *buf = nullptr;
@@ -2791,12 +2776,12 @@ static void test_source_compaction_is_amortized(void) {
   }
 
   size_t original = source->byte_len;
-  scan_stream_append(ts, source->data, source->byte_len);
+  scan_stream_append(ts, core_buffer_string(source));
   check("the first token in a large incremental window is available",
         scan_stream_next(ts) != nullptr);
   check("discard advances the logical window without shifting its suffix",
         scan_stream_discard_consumed(ts) && sc->input_offset == 1 &&
-            sc->input_len == original - 1 && buf->byte_len == original);
+            sc->input.u8_bytes == original - 1 && buf->byte_len == original);
 
   size_t tokens = 1;
   while (scan_stream_next(ts)) {
@@ -2806,7 +2791,7 @@ static void test_source_compaction_is_amortized(void) {
 
   check("geometric compaction preserves every token", tokens == 4096);
   check("geometric compaction bounds the retained source prefix",
-        sc->input_offset < sc->input_len || sc->input_len <= 1);
+        sc->input_offset < sc->input.u8_bytes || sc->input.u8_bytes <= 1);
 
   core_buffer_free(source);
   scan_token_stream_free(ts);
@@ -2815,18 +2800,24 @@ static void test_source_compaction_is_amortized(void) {
   parse_grammar_free(g);
 }
 
-static bool token_value_is(parse_token_info_t *token, const char *text) {
+static bool token_value_matches(parse_token_info_t *token,
+                                core_string_t text) {
   if (!token || !parse_token_has_value(token)) {
     return false;
   }
-  core_string_t value = core_option_get(parse_token_value(token));
-  return value.u8_bytes == strlen(text) &&
-         !memcmp(value.data, text, value.u8_bytes);
+  return core_string_eq(core_option_get(parse_token_value(token)), text);
+}
+
+#define token_value_is(token, text) token_value_matches((token), S(text))
+
+static size_t buffer_offset(parse_token_stream_t *ts, core_string_t needle) {
+  return (size_t)core_string_find(core_buffer_string(ts->scanner->buffer),
+                                  needle);
 }
 
 static void test_incremental_source_edits(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "FLOAT", "STRING", nullptr,
+  static const core_string_t TERMS[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("FLOAT"), S("STRING"), {0},
   };
   parse_grammar_t *g = mk(&JS, TERMS);
   core_buffer_t *source = core_buffer_empty();
@@ -2834,18 +2825,17 @@ static void test_incremental_source_edits(void) {
     core_buffer_printf(source, "a%zu ", i);
   }
   parse_token_stream_t *ts =
-      scan_tokenize_owned(g, source->data, source->byte_len);
+      scan_tokenize_owned(g, core_buffer_string(source));
   check("source editing can be enabled before tokenization",
         scan_stream_enable_edits(ts));
   while (scan_stream_next(ts)) {
   }
   parse_token_info_t *stable_prefix = scan_stream_get(ts, 5);
   parse_token_info_t *stable_suffix = scan_stream_get(ts, 70);
-  char *at = strstr(ts->scanner->buffer->data, "a40");
-  size_t start = (size_t)(at - ts->scanner->buffer->data);
+  size_t start = buffer_offset(ts, S("a40"));
 
   check("a replacement restarts from a lexical checkpoint",
-        scan_stream_replace(ts, start, start + 3, "renamed", 7));
+        scan_stream_replace(ts, start, start + 3, S("renamed")));
   parse_token_info_t *changed = scan_stream_get(ts, 40);
   check("replacement preserves stable prefix token identities",
         scan_stream_get(ts, 5) == stable_prefix &&
@@ -2854,16 +2844,14 @@ static void test_incremental_source_edits(void) {
   check("replacement reconciles unchanged suffix token identities",
         scan_stream_get(ts, 70) == stable_suffix);
 
-  at = strstr(ts->scanner->buffer->data, "a41 ");
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("a41 "));
   check("deletion retokenizes the affected suffix",
         scan_stream_delete(ts, start, start + 4) &&
             token_value_is(scan_stream_get(ts, 41), "a42"));
 
-  at = strstr(ts->scanner->buffer->data, "a42");
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("a42"));
   check("insertion participates in normal longest-match scanning",
-        scan_stream_insert(ts, start, "inserted ", 9) &&
+        scan_stream_insert(ts, start, S("inserted ")) &&
             token_value_is(scan_stream_get(ts, 41), "inserted") &&
             token_value_is(scan_stream_get(ts, 42), "a42"));
   while (scan_stream_next(ts)) {
@@ -2875,18 +2863,18 @@ static void test_incremental_source_edits(void) {
   parse_grammar_free(g);
 
   g = mk(&JS, TERMS);
-  ts = scan_tokenize_owned(g, "\"open", 5);
+  ts = scan_tokenize_owned(g, S("\"open"));
   scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
   check("an edit can complete a formerly incomplete construct",
         scan_status(ts->scanner) == SCAN_STATUS_INCOMPLETE &&
-            scan_stream_replace(ts, 5, 5, "\"", 1));
+            scan_stream_replace(ts, 5, 5, S("\"")));
   scan_stream_get(ts, 1000);
   check("completion state is recomputed after insertion",
         scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
   check("deleting a closer can make a construct incomplete again",
-        scan_stream_replace(ts, 5, 6, nullptr, 0));
+        scan_stream_replace(ts, 5, 6, (core_string_t){0}));
   scan_stream_get(ts, 1000);
   check("incomplete diagnostics are rebuilt after deletion",
         scan_status(ts->scanner) == SCAN_STATUS_INCOMPLETE);
@@ -2898,7 +2886,7 @@ static void test_incremental_source_edits(void) {
   for (size_t i = 0; i < 4096; i++) {
     core_buffer_puts(source, "aaaa ");
   }
-  ts = scan_tokenize_owned(g, source->data, source->byte_len);
+  ts = scan_tokenize_owned(g, core_buffer_string(source));
   scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
@@ -2906,9 +2894,9 @@ static void test_incremental_source_edits(void) {
   bool bounded = true;
   size_t edit_at = 2048 * 5;
   for (size_t i = 0; i < 100; i++) {
-    const char *byte = i & 1 ? "a" : "b";
+    core_string_t byte = i & 1 ? S("a") : S("b");
     bounded = bounded &&
-              scan_stream_replace(ts, edit_at, edit_at + 1, byte, 1) &&
+              scan_stream_replace(ts, edit_at, edit_at + 1, byte) &&
               scan_stream_get(ts, 4095) != nullptr;
   }
   size_t edit_work = scan_work_bytes(ts->scanner) - work_before;
@@ -2918,9 +2906,10 @@ static void test_incremental_source_edits(void) {
   core_buffer_free(source);
   parse_grammar_free(g);
 
-  static const char *const JS_TERMS[] = {
-      "IDENTIFIER",    "INTEGER",         "FLOAT",         "STRING",
-      "TEMPLATE_HEAD", "TEMPLATE_MIDDLE", "TEMPLATE_TAIL", nullptr,
+  static const core_string_t JS_TERMS[] = {
+      S("IDENTIFIER"),    S("INTEGER"),         S("FLOAT"),
+      S("STRING"),        S("TEMPLATE_HEAD"),   S("TEMPLATE_MIDDLE"),
+      S("TEMPLATE_TAIL"), {0},
   };
   g = mk(&JS, JS_TERMS);
   source = core_buffer_empty();
@@ -2928,14 +2917,13 @@ static void test_incremental_source_edits(void) {
     core_buffer_puts(source, "p ");
   }
   core_buffer_puts(source, "`head${x}tail`");
-  ts = scan_tokenize_owned(g, source->data, source->byte_len);
+  ts = scan_tokenize_owned(g, core_buffer_string(source));
   scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
-  at = strstr(ts->scanner->buffer->data, "tail");
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("tail"));
   check("an edit resumes from checkpointed interpolation state",
-        scan_stream_replace(ts, start, start + 4, "ending", 6));
+        scan_stream_replace(ts, start, start + 4, S("ending")));
   while (scan_stream_next(ts)) {
   }
   check("interpolation state recovers after an edit",
@@ -2944,50 +2932,46 @@ static void test_incremental_source_edits(void) {
   core_buffer_free(source);
   parse_grammar_free(g);
 
-  static const char *const PY_EDIT_TERMS[] = {
-      "NEWLINE",        "INDENT",      "DEDENT", "ENDMARKER", "IDENTIFIER",
-      "INTEGER",        "FLOAT",       "STRING", "IMAGINARY", "FSTRING_START",
-      "FSTRING_MIDDLE", "FSTRING_END", nullptr,
+  static const core_string_t PY_EDIT_TERMS[] = {
+      S("NEWLINE"),        S("INDENT"),      S("DEDENT"), S("ENDMARKER"),
+      S("IDENTIFIER"),     S("INTEGER"),     S("FLOAT"),  S("STRING"),
+      S("IMAGINARY"),      S("FSTRING_START"), S("FSTRING_MIDDLE"),
+      S("FSTRING_END"),    {0},
   };
   g = mk(&PYTHON, PY_EDIT_TERMS);
-  source = core_buffer_from_cstr("root\n  a\n  b\n  c\nend\n");
-  ts = scan_tokenize_owned(g, source->data, source->byte_len);
+  ts = scan_tokenize_owned(g, S("root\n  a\n  b\n  c\nend\n"));
   scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
-  at = strstr(ts->scanner->buffer->data, "  b");
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("  b"));
   check("indentation state is rebuilt after an edit",
-        scan_stream_replace(ts, start, start + 2, "    ", 4));
+        scan_stream_replace(ts, start, start + 2, S("    ")));
   while (scan_stream_next(ts)) {
   }
   check("edited indentation produces a deterministic result",
         scan_status(ts->scanner) != SCAN_STATUS_INCOMPLETE);
   scan_token_stream_free(ts);
-  core_buffer_free(source);
   parse_grammar_free(g);
 
-  g = embedded_grammar("json", true);
+  g = embedded_grammar(S("json"), true);
   source = core_buffer_empty();
   for (size_t i = 0; i < 40; i++) {
     core_buffer_puts(source, "outer ");
   }
   core_buffer_puts(source, "{{1}} tail");
-  ts = scan_tokenize_owned(g, source->data, source->byte_len);
+  ts = scan_tokenize_owned(g, core_buffer_string(source));
   scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
-  at = strstr(ts->scanner->buffer->data, "{{1}}") + 2;
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("{{1}}")) + 2;
   check("embedded lexer state recovers after an inner edit",
-        scan_stream_replace(ts, start, start + 1, "22", 2));
+        scan_stream_replace(ts, start, start + 1, S("22")));
   scan_stream_get(ts, 1000);
   check("an edited embedded stream converges and completes",
         scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
-  at = strstr(ts->scanner->buffer->data, "22");
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("22"));
   check("a second inner edit can invalidate an embedded language",
-        scan_stream_replace(ts, start, start + 2, "\"open", 5));
+        scan_stream_replace(ts, start, start + 2, S("\"open")));
   scan_stream_get(ts, 1000);
   scan_diagnostic_t edited_embed_diagnostic = {0};
   check("post-edit inner diagnostics retain embedded lexer identity",
@@ -2998,15 +2982,13 @@ static void test_incremental_source_edits(void) {
   parse_grammar_free(g);
 
   g = fence_grammar();
-  const char *fence_source = "[==ffi[body]==]";
-  ts = scan_tokenize_owned(g, fence_source, strlen(fence_source));
+  ts = scan_tokenize_owned(g, S("[==ffi[body]==]"));
   scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
-  at = strstr(ts->scanner->buffer->data, "body");
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("body"));
   check("an edit inside a variable-width fence invalidates that token",
-        scan_stream_replace(ts, start, start + 4, "changed", 7));
+        scan_stream_replace(ts, start, start + 4, S("changed")));
   parse_token_info_t *fence = scan_stream_get(ts, 0);
   scan_stream_get(ts, 1000);
   check("fence state and content spans recover after an edit",
@@ -3015,19 +2997,18 @@ static void test_incremental_source_edits(void) {
   scan_token_stream_free(ts);
   parse_grammar_free(g);
 
-  static const char *const RB_EDIT_TERMS[] = {
-      "IDENTIFIER", "INTEGER", "HEREDOC", "CVAR", "IVAR", "GVAR", nullptr,
+  static const core_string_t RB_EDIT_TERMS[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("HEREDOC"), S("CVAR"),
+      S("IVAR"),       S("GVAR"),    {0},
   };
   g = mk(&RUBY, RB_EDIT_TERMS);
-  const char *heredoc_source = "x = <<~END\n  body\nEND\ny\n";
-  ts = scan_tokenize_owned(g, heredoc_source, strlen(heredoc_source));
+  ts = scan_tokenize_owned(g, S("x = <<~END\n  body\nEND\ny\n"));
   scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
-  at = strstr(ts->scanner->buffer->data, "body");
-  start = (size_t)(at - ts->scanner->buffer->data);
+  start = buffer_offset(ts, S("body"));
   check("an edit inside a heredoc invalidates and rebuilds its body",
-        scan_stream_replace(ts, start, start + 4, "revised", 7));
+        scan_stream_replace(ts, start, start + 4, S("revised")));
   scan_stream_get(ts, 1000);
   check("heredoc queues recover after an edit",
         scan_status(ts->scanner) == SCAN_STATUS_COMPLETE);
@@ -3035,13 +3016,12 @@ static void test_incremental_source_edits(void) {
   parse_grammar_free(g);
 }
 
-static size_t scan_one_byte_chunks(parse_grammar_t *g, const char *source) {
+static size_t scan_one_byte_chunks(parse_grammar_t *g, core_string_t source) {
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts = scan_tokenize_incremental(g, nullptr, &sc);
-  size_t len = strlen(source);
 
-  for (size_t i = 0; i < len; i++) {
-    if (!scan_stream_append(ts, source + i, 1)) {
+  for (size_t i = 0; i < source.u8_bytes; i++) {
+    if (!scan_stream_append(ts, core_string_slice(source, i, 1))) {
       break;
     }
     (void)scan_stream_next(ts);
@@ -3057,13 +3037,13 @@ static size_t scan_one_byte_chunks(parse_grammar_t *g, const char *source) {
 }
 
 static size_t count_one_byte_chunk_tokens(parse_grammar_t *g,
-                                          const char *source,
+                                          core_string_t source,
                                           int32_t wanted_tid) {
   parse_token_stream_t *ts = scan_tokenize_incremental(g, nullptr, nullptr);
   size_t count = 0;
 
-  for (size_t i = 0; source[i]; i++) {
-    scan_stream_append(ts, source + i, 1);
+  for (size_t i = 0; i < source.u8_bytes; i++) {
+    scan_stream_append(ts, core_string_slice(source, i, 1));
     parse_token_info_t *tok = nullptr;
     while ((tok = scan_stream_next(ts))) {
       count += parse_token_tid(tok) == wanted_tid;
@@ -3079,8 +3059,8 @@ static size_t count_one_byte_chunk_tokens(parse_grammar_t *g,
 }
 
 static void test_incremental_scanning_is_linear(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "FLOAT", "STRING", nullptr,
+  static const core_string_t TERMS[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("FLOAT"), S("STRING"), {0},
   };
   parse_grammar_t *js = mk(&JS, TERMS);
   parse_grammar_t *ruby = mk(&RUBY, TERMS);
@@ -3092,45 +3072,56 @@ static void test_incremental_scanning_is_linear(void) {
     core_buffer_putc(body, 'a');
   }
 
-  core_buffer_t *string = core_buffer_from_cstr("\"");
+  core_buffer_t *string = core_buffer_empty();
+  core_buffer_puts(string, "\"");
   core_buffer_append(string, body->data, body->byte_len);
   core_buffer_puts(string, "\" ");
-  core_buffer_t *comment = core_buffer_from_cstr("//");
+  core_buffer_t *comment = core_buffer_empty();
+  core_buffer_puts(comment, "//");
   core_buffer_append(comment, body->data, body->byte_len);
   core_buffer_puts(comment, "\nname ");
-  core_buffer_t *heredoc = core_buffer_from_cstr("<<~END\n");
+  core_buffer_t *heredoc = core_buffer_empty();
+  core_buffer_puts(heredoc, "<<~END\n");
   core_buffer_append(heredoc, body->data, body->byte_len);
   core_buffer_puts(heredoc, "\nEND\nname ");
-  core_buffer_t *fenced = core_buffer_from_cstr("[=ffi[");
+  core_buffer_t *fenced = core_buffer_empty();
+  core_buffer_puts(fenced, "[=ffi[");
   core_buffer_append(fenced, body->data, body->byte_len);
   core_buffer_puts(fenced, "]=] ");
-  core_buffer_t *hash_fenced = core_buffer_from_cstr("###\"");
+  core_buffer_t *hash_fenced = core_buffer_empty();
+  core_buffer_puts(hash_fenced, "###\"");
   core_buffer_append(hash_fenced, body->data, body->byte_len);
   core_buffer_puts(hash_fenced, "\"### ");
 
   check("one-byte string chunks take linear scanner work",
-        scan_one_byte_chunks(js, string->data) < string->byte_len * 5);
+        scan_one_byte_chunks(js, core_buffer_string(string)) <
+            string->byte_len * 5);
   check("one-byte comment chunks take linear scanner work",
-        scan_one_byte_chunks(js, comment->data) < comment->byte_len * 5);
+        scan_one_byte_chunks(js, core_buffer_string(comment)) <
+            comment->byte_len * 5);
   check("one-byte heredoc chunks take linear scanner work",
-        scan_one_byte_chunks(ruby, heredoc->data) < heredoc->byte_len * 5);
+        scan_one_byte_chunks(ruby, core_buffer_string(heredoc)) <
+            heredoc->byte_len * 5);
   check("one-byte fenced chunks take linear scanner work",
-        scan_one_byte_chunks(fence, fenced->data) < fenced->byte_len * 5);
+        scan_one_byte_chunks(fence, core_buffer_string(fenced)) <
+            fenced->byte_len * 5);
   check("one-byte variable hash fences take linear scanner work",
-        scan_one_byte_chunks(hash_fence, hash_fenced->data) <
+        scan_one_byte_chunks(hash_fence, core_buffer_string(hash_fenced)) <
             hash_fenced->byte_len * 5);
   check("a split comment opener is not mistaken for a regex",
-        count_one_byte_chunk_tokens(js, "//body\n", PARSE_TOK_STRING_LIT) == 0);
+        count_one_byte_chunk_tokens(js, S("//body\n"), PARSE_TOK_STRING_LIT) ==
+            0);
   check("a split string opener still produces one string token",
         count_one_byte_chunk_tokens(
-            js, "\"body\"", (int32_t)parse_terminal_id(js, S("STRING"))) == 1);
+            js, S("\"body\""), (int32_t)parse_terminal_id(js, S("STRING"))) ==
+            1);
   check("a split heredoc opener still produces one heredoc token",
         count_one_byte_chunk_tokens(
-            ruby, "<<~END\nbody\nEND\n",
+            ruby, S("<<~END\nbody\nEND\n"),
             (int32_t)parse_terminal_id(ruby, S("HEREDOC"))) == 1);
   check("a split fence opener still produces one fence token",
         count_one_byte_chunk_tokens(
-            fence, "[=ffi[body]=]",
+            fence, S("[=ffi[body]=]"),
             (int32_t)parse_terminal_id(fence, S("EMBED"))) == 1);
 
   core_buffer_free(string);
@@ -3146,9 +3137,9 @@ static void test_incremental_scanning_is_linear(void) {
 }
 
 static void test_convenience_tokenization_owns_its_resources(void) {
-  static const char *const TERMS[] = {"IDENTIFIER", nullptr};
+  static const core_string_t TERMS[] = {S("IDENTIFIER"), {0}};
   parse_grammar_t *g = mk(&JS, TERMS);
-  parse_token_stream_t *ts = scan_tokenize_owned(g, "name", 4);
+  parse_token_stream_t *ts = scan_tokenize_owned(g, S("name"));
 
   check("convenience tokenization returns a usable owned stream",
         ts && scan_stream_next(ts) != nullptr);
@@ -3156,24 +3147,24 @@ static void test_convenience_tokenization_owns_its_resources(void) {
 
   ts = scan_tokenize_incremental_owned(g);
   check("owned incremental tokenization needs no side-channel handles",
-        ts && scan_stream_append(ts, "name ", 5) &&
+        ts && scan_stream_append(ts, S("name ")) &&
             scan_stream_next(ts) != nullptr);
   scan_token_stream_free(ts);
   parse_grammar_free(g);
 }
 
 static void test_terminals_have_no_byte_width_limit(void) {
-  static const char *const TERMS[] = {"IDENTIFIER", nullptr};
+  static const core_string_t TERMS[] = {S("IDENTIFIER"), {0}};
   parse_grammar_t *g = mk(&JS, TERMS);
   core_buffer_t *op = core_buffer_empty();
 
   for (size_t i = 0; i < 1024; i++) {
     core_buffer_putc(op, '<');
   }
-  parse_register_terminal(g, core_string_borrow(op->data, op->byte_len));
+  parse_register_terminal(g, core_buffer_string(op));
 
   parse_token_stream_t *ts =
-      scan_tokenize(g, op->data, op->byte_len, nullptr, nullptr);
+      scan_tokenize(g, core_buffer_string(op), nullptr, nullptr);
   parse_token_info_t *tok = scan_stream_next(ts);
   check("the terminal trie matches a terminal longer than 255 bytes",
         tok && parse_token_has_value(tok) &&
@@ -3205,11 +3196,11 @@ static void test_grammar_finalization_is_thread_safe(void) {
   parse_grammar_free(g);
 }
 
-static scan_status_t source_status(parse_grammar_t *g, const char *source) {
+static scan_status_t source_status_of(parse_grammar_t *g,
+                                      core_string_t source) {
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts =
-      scan_tokenize(g, source, strlen(source), &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, source, &buf, &sc);
 
   while (scan_stream_next(ts)) {
   }
@@ -3223,34 +3214,34 @@ static scan_status_t source_status(parse_grammar_t *g, const char *source) {
   return result;
 }
 
-static bool recovery_declaration_fails(const char *source,
-                                       const char *expected) {
-  core_string_t text = core_string_from_cstr(source);
+#define recovery_declaration_fails(source, expected) \
+  recovery_declaration_check(S(source), S(expected))
+
+static bool recovery_declaration_check(core_string_t text,
+                                       core_string_t expected) {
   parse_grammar_t *grammar = parse_grammar_new();
 
   parse_grammar_set_error_recovery(grammar, false);
   parse_bnf_declare_terminals(grammar, text);
   bool loaded = load_test_grammar(text, S("file"), grammar);
   scan_lex_t *program = loaded ? scan_grammar_lex_compiled(grammar) : nullptr;
-  const char *error = scan_lex_build_error();
-  if (!error) {
+  core_string_t error = scan_lex_build_error();
+  if (!error.data) {
     error = scan_lex_compile_error();
   }
-  bool result = !program && error && strstr(error, expected);
+  bool result = !program && core_string_find(error, expected) >= 0;
 
-  core_free(text.data);
   parse_grammar_free(grammar);
   return result;
 }
 
 static void test_malformed_token_recovery(void) {
-  static const char *const TERMS[] = {
-      "IDENTIFIER", "INTEGER", "STRING", "ERROR", ";", nullptr,
+  static const core_string_t TERMS[] = {
+      S("IDENTIFIER"), S("INTEGER"), S("STRING"), S("ERROR"), S(";"), {0},
   };
-  const char *source = "1__oops; next";
+  core_string_t source = S("1__oops; next");
   parse_grammar_t *strict = mk(&RECOVERY_LEXER, TERMS);
-  parse_token_stream_t *ts =
-      scan_tokenize_owned(strict, source, strlen(source));
+  parse_token_stream_t *ts = scan_tokenize_owned(strict, source);
 
   while (scan_stream_next(ts)) {
   }
@@ -3262,7 +3253,7 @@ static void test_malformed_token_recovery(void) {
   parse_grammar_t *editor = mk(&RECOVERY_LEXER, TERMS);
   core_buffer_t *buffer = nullptr;
   parse_scanner_t *scanner = nullptr;
-  ts = scan_tokenize(editor, source, strlen(source), &buffer, &scanner);
+  ts = scan_tokenize(editor, source, &buffer, &scanner);
   scan_scanner_set_recovery(scanner, true);
 
   parse_token_info_t *error = scan_stream_next(ts);
@@ -3286,7 +3277,7 @@ static void test_malformed_token_recovery(void) {
   check("recovery retains the original malformed-token diagnostic",
         scan_diagnostic(scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_RECOVERED &&
-            strstr(diagnostic.message.data, "numeric") != nullptr &&
+            core_string_find(diagnostic.message, S("numeric")) >= 0 &&
             diagnostic.start_byte == 0);
 
   scan_token_stream_free(ts);
@@ -3297,8 +3288,8 @@ static void test_malformed_token_recovery(void) {
   editor = mk(&RECOVERY_LEXER, TERMS);
   buffer = nullptr;
   scanner = nullptr;
-  source = "\"bad\\q\" trailing\nnext";
-  ts = scan_tokenize(editor, source, strlen(source), &buffer, &scanner);
+  source = S("\"bad\\q\" trailing\nnext");
+  ts = scan_tokenize(editor, source, &buffer, &scanner);
   scan_scanner_set_recovery(scanner, true);
   error = scan_stream_next(ts);
   identifier = scan_stream_next(ts);
@@ -3321,12 +3312,12 @@ static void test_malformed_token_recovery(void) {
   scanner = nullptr;
   ts = scan_tokenize_incremental(incremental, &buffer, &scanner);
   scan_scanner_set_recovery(scanner, true);
-  bool first_chunk = scan_stream_append(ts, "1__oops;", 8);
+  bool first_chunk = scan_stream_append(ts, S("1__oops;"));
   error = scan_stream_next(ts);
   check("a split synchronization delimiter keeps recovery incomplete",
         first_chunk && !error && scan_stream_token_count(ts) == 0 &&
             scan_status(scanner) == SCAN_STATUS_INCOMPLETE);
-  bool second_chunk = scan_stream_append(ts, "; next", 6);
+  bool second_chunk = scan_stream_append(ts, S("; next"));
   bool finished = scan_stream_finish(ts);
   error = scan_stream_next(ts);
   while (scan_stream_next(ts)) {
@@ -3345,8 +3336,8 @@ static void test_malformed_token_recovery(void) {
   parse_grammar_t *consuming = mk(&CONSUMING_RECOVERY_LEXER, TERMS);
   buffer = nullptr;
   scanner = nullptr;
-  source = "1__oops;next";
-  ts = scan_tokenize(consuming, source, strlen(source), &buffer, &scanner);
+  source = S("1__oops;next");
+  ts = scan_tokenize(consuming, source, &buffer, &scanner);
   scan_scanner_set_recovery(scanner, true);
   error = scan_stream_next(ts);
   identifier = scan_stream_next(ts);
@@ -3362,7 +3353,8 @@ static void test_malformed_token_recovery(void) {
   core_buffer_free(buffer);
   parse_grammar_free(consuming);
 
-  core_buffer_t *large_recovery = core_buffer_from_cstr("1__");
+  core_buffer_t *large_recovery = core_buffer_empty();
+  core_buffer_puts(large_recovery, "1__");
   for (size_t i = 0; i < 1 << 18; i++) {
     core_buffer_putc(large_recovery, 'a');
   }
@@ -3370,8 +3362,8 @@ static void test_malformed_token_recovery(void) {
   editor = mk(&RECOVERY_LEXER, TERMS);
   buffer = nullptr;
   scanner = nullptr;
-  ts = scan_tokenize(editor, large_recovery->data, large_recovery->byte_len,
-                     &buffer, &scanner);
+  ts = scan_tokenize(editor, core_buffer_string(large_recovery), &buffer,
+                     &scanner);
   scan_scanner_set_recovery(scanner, true);
   while (scan_stream_next(ts)) {
   }
@@ -3385,14 +3377,14 @@ static void test_malformed_token_recovery(void) {
   core_buffer_free(large_recovery);
 
   editor = mk(&RECOVERY_LEXER, TERMS);
-  source = "1__oops; next";
-  ts = scan_tokenize_owned(editor, source, strlen(source));
+  source = S("1__oops; next");
+  ts = scan_tokenize_owned(editor, source);
   bool recovery_enabled = scan_scanner_set_recovery(ts->scanner, true);
   bool edits_enabled = scan_stream_enable_edits(ts);
   while (scan_stream_next(ts)) {
   }
   bool initially_recovered = scan_status(ts->scanner) == SCAN_STATUS_RECOVERED;
-  bool repaired = scan_stream_replace(ts, 0, 7, "1", 1);
+  bool repaired = scan_stream_replace(ts, 0, 7, S("1"));
   scan_stream_get(ts, 1000);
   check("editing can repair a recovered token and clear recovery status",
         recovery_enabled && edits_enabled && initially_recovered && repaired &&
@@ -3403,7 +3395,7 @@ static void test_malformed_token_recovery(void) {
   editor = mk(&REJECT_RECOVERY_LEXER, TERMS);
   buffer = nullptr;
   scanner = nullptr;
-  ts = scan_tokenize(editor, "@", 1, &buffer, &scanner);
+  ts = scan_tokenize(editor, S("@"), &buffer, &scanner);
   scan_scanner_set_recovery(scanner, true);
   while (scan_stream_next(ts)) {
   }
@@ -3414,26 +3406,23 @@ static void test_malformed_token_recovery(void) {
   core_buffer_free(buffer);
   parse_grammar_free(editor);
 
-  static const char *const GRAMMAR_TEXT =
-      "@lex-number(digits(\"0123456789\"), sep(\"_\"), "
-      "int(\"INTEGER\"))\n"
-      "@lex-ident(as(\"IDENTIFIER\"))\n"
-      "@lex-recover(\"INTEGER\", as(\"ERROR\"), sync(\";\"))\n"
-      "@lex-fallback(\"reject\")\n"
-      "<file> ::= %ERROR %\";\" %IDENTIFIER\n";
-  core_string_t grammar_text = core_string_from_cstr(GRAMMAR_TEXT);
+  core_string_t grammar_text =
+      S("@lex-number(digits(\"0123456789\"), sep(\"_\"), "
+        "int(\"INTEGER\"))\n"
+        "@lex-ident(as(\"IDENTIFIER\"))\n"
+        "@lex-recover(\"INTEGER\", as(\"ERROR\"), sync(\";\"))\n"
+        "@lex-fallback(\"reject\")\n"
+        "<file> ::= %ERROR %\";\" %IDENTIFIER\n");
   parse_grammar_t *declared = parse_grammar_new();
   parse_grammar_set_error_recovery(declared, false);
   parse_bnf_declare_terminals(declared, grammar_text);
   bool grammar_loaded = load_test_grammar(grammar_text, S("file"), declared);
-  core_free(grammar_text.data);
 
   buffer = nullptr;
   scanner = nullptr;
-  source = "1__oops; next";
-  ts = grammar_loaded
-           ? scan_tokenize(declared, source, strlen(source), &buffer, &scanner)
-           : nullptr;
+  source = S("1__oops; next");
+  ts = grammar_loaded ? scan_tokenize(declared, source, &buffer, &scanner)
+                      : nullptr;
   if (scanner) {
     scan_scanner_set_recovery(scanner, true);
   }
@@ -3476,14 +3465,15 @@ static void test_malformed_token_recovery(void) {
   parse_grammar_t *invalid = bare_grammar(TERMS);
   scan_lex_t *invalid_program = scan_lex_compile(&EMPTY_RECOVERY_SPEC, invalid);
   check("recovery declarations reject empty synchronization delimiters",
-        !invalid_program && scan_lex_compile_error() &&
-            strstr(scan_lex_compile_error(), "cannot be empty"));
+        !invalid_program &&
+            core_string_find(scan_lex_compile_error(), S("cannot be empty")) >=
+                0);
   scan_lex_free(invalid_program);
   parse_grammar_free(invalid);
 }
 
 static parse_grammar_t *number_form_grammar(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-number(digits(\"0123456789\"), sep(\"_\"), "
       "point(\"leading\", \"trailing\"), exp(\"eE\"), "
       "int(\"INTEGER\"), float(\"FLOAT\"), "
@@ -3500,7 +3490,7 @@ static parse_grammar_t *number_form_grammar(void) {
       "suffix(\"u\", \"INTEGER\", \"integer\"), suffix(\"L\"))\n"
       "<file> ::= %INTEGER | %FLOAT | %IMAGINARY\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -3508,7 +3498,6 @@ static parse_grammar_t *number_form_grammar(void) {
     parse_grammar_free(g);
     g = nullptr;
   }
-  core_free(text.data);
   return g;
 }
 
@@ -3540,18 +3529,18 @@ static void test_self_contained_number_forms(void) {
 
   parse_token_stream_t *ts = scan_tokenize_incremental_owned(g);
   check("a numeric suffix waits while a longer suffix can match",
-        scan_stream_append(ts, "1i", 2) && scan_stream_next(ts) == nullptr);
+        scan_stream_append(ts, S("1i")) && scan_stream_next(ts) == nullptr);
   check("a numeric suffix resumes through its compiled trie",
-        scan_stream_append(ts, "mag ", 4) && scan_stream_next(ts) != nullptr);
+        scan_stream_append(ts, S("mag ")) && scan_stream_next(ts) != nullptr);
   scan_token_stream_free(ts);
 
   ts = scan_tokenize_incremental_owned(g);
   bool linear = true;
   for (size_t i = 0; i < 4096; i++) {
-    linear = linear && scan_stream_append(ts, "1", 1) &&
+    linear = linear && scan_stream_append(ts, S("1")) &&
              scan_stream_next(ts) == nullptr;
   }
-  linear = linear && scan_stream_append(ts, " ", 1) &&
+  linear = linear && scan_stream_append(ts, S(" ")) &&
            scan_stream_next(ts) != nullptr &&
            scan_work_bytes(ts->scanner) < 8192;
   check("one-byte numeric streaming remains linear", linear);
@@ -3560,20 +3549,21 @@ static void test_self_contained_number_forms(void) {
   parse_grammar_free(g);
 }
 
-static void number_error(const char *label, const char *source,
-                         const char *expected) {
+#define number_error(label, source, expected) \
+  number_error_check((label), S(source), S(expected))
+
+static void number_error_check(const char *label, core_string_t text,
+                               core_string_t expected) {
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(source);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
   bool loaded = load_test_grammar(text, CORE_STRING_STATIC("file"), g);
   scan_lex_t *lex = loaded ? scan_grammar_lex_compiled(g) : nullptr;
-  const char *error = scan_lex_build_error();
+  core_string_t error = scan_lex_build_error();
 
-  check(label, loaded && !lex && error && strstr(error, expected));
+  check(label, loaded && !lex && core_string_find(error, expected) >= 0);
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
 static void test_number_forms_diagnose_invalid_declarations(void) {
@@ -3605,7 +3595,7 @@ static void test_number_forms_diagnose_invalid_declarations(void) {
 }
 
 static void test_reusable_lexical_packages(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-operator-set(\"derived-ops\", use(\"base-ops\"), "
       "remove(\"!=\"), remove(\"==\"), add(\"==\", \"??\"))\n"
       "@lex-string-escapes(\"derived-escapes\", "
@@ -3626,7 +3616,7 @@ static void test_reusable_lexical_packages(void) {
       "@lex-operators(use(\"derived-ops\"))\n"
       "@lex-fallback(\"reject\")\n"
       "<file> ::= %STRING | %INTEGER | %\"==\" | %\"??\"\n";
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
   parse_grammar_t *g = parse_grammar_new();
 
   parse_grammar_set_error_recovery(g, false);
@@ -3645,7 +3635,6 @@ static void test_reusable_lexical_packages(void) {
           source_status(g, "!=") == SCAN_STATUS_INVALID);
   }
   parse_grammar_free(g);
-  core_free(text.data);
 
   family_error("packages reject removal of absent members",
                "@lex-operator-set(\"bad\", remove(\"+\"))\n"
@@ -3665,14 +3654,13 @@ static void test_reusable_lexical_packages(void) {
 typedef struct {
   parse_grammar_t *grammar;
   parse_nt_id_t start;
-  const char *source;
+  core_string_t source;
   bool parsed;
 } soft_keyword_parse_t;
 
 static void *parse_soft_keyword_start(void *arg) {
   soft_keyword_parse_t *run = arg;
-  parse_token_stream_t *ts =
-      scan_tokenize_owned(run->grammar, run->source, strlen(run->source));
+  parse_token_stream_t *ts = scan_tokenize_owned(run->grammar, run->source);
   parse_pwz_parser_t *parser =
       parse_pwz_new_for_start(run->grammar, run->start);
 
@@ -3683,13 +3671,13 @@ static void *parse_soft_keyword_start(void *arg) {
 }
 
 static void test_soft_keywords(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-ident(as(\"IDENTIFIER\"))\n"
       "@lex-soft-keywords(\"match\", \"case\")\n"
       "@lex-fallback(\"reject\")\n"
       "<statement> ::= %\"match\" %IDENTIFIER %\"case\"\n"
       "<name> ::= %IDENTIFIER\n";
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
   parse_grammar_t *g = parse_grammar_new();
 
   parse_grammar_set_error_recovery(g, false);
@@ -3699,7 +3687,7 @@ static void test_soft_keywords(void) {
 
   if (loaded) {
     parse_token_stream_t *tokens =
-        scan_tokenize_owned(g, "match case ordinary", 19);
+        scan_tokenize_owned(g, S("match case ordinary"));
     parse_token_info_t *match = scan_stream_next(tokens);
     parse_token_info_t *case_word = scan_stream_next(tokens);
     parse_token_info_t *ordinary = scan_stream_next(tokens);
@@ -3716,8 +3704,8 @@ static void test_soft_keywords(void) {
     soft_keyword_parse_t runs[] = {
         {.grammar = g,
          .start = parse_nonterm_id(statement),
-         .source = "match subject case"},
-        {.grammar = g, .start = parse_nonterm_id(name), .source = "match"},
+         .source = S("match subject case")},
+        {.grammar = g, .start = parse_nonterm_id(name), .source = S("match")},
     };
     pthread_t threads[2];
 
@@ -3731,13 +3719,13 @@ static void test_soft_keywords(void) {
     soft_keyword_parse_t wrong = {
         .grammar = g,
         .start = parse_nonterm_id(statement),
-        .source = "other subject case",
+        .source = S("other subject case"),
     };
     parse_soft_keyword_start(&wrong);
     check("contextual terminals still require their declared spelling",
           !wrong.parsed);
 
-    parse_token_stream_t *ts = scan_tokenize_owned(g, "match subject case", 18);
+    parse_token_stream_t *ts = scan_tokenize_owned(g, S("match subject case"));
     parse_pwz_parser_t *parser =
         parse_pwz_new_for_start(g, parse_nonterm_id(statement));
     bool parsed = parser && parse_pwz_parse(parser, ts);
@@ -3753,7 +3741,6 @@ static void test_soft_keywords(void) {
   }
 
   parse_grammar_free(g);
-  core_free(text.data);
 
   family_error("soft keywords must name grammar terminals",
                "@lex-soft-keywords(\"missing\")\n"
@@ -3771,14 +3758,14 @@ static void test_soft_keywords(void) {
 }
 
 static void test_strings_distinguish_incomplete_from_invalid(void) {
-  static const char *const PY_TERMS[] = {
-      "IDENTIFIER",
-      "STRING",
-      nullptr,
+  static const core_string_t PY_TERMS[] = {
+      S("IDENTIFIER"),
+      S("STRING"),
+      {0},
   };
-  static const char *const JS_TERMS[] = {
-      "IDENTIFIER",      "STRING",        "TEMPLATE_HEAD",
-      "TEMPLATE_MIDDLE", "TEMPLATE_TAIL", nullptr,
+  static const core_string_t JS_TERMS[] = {
+      S("IDENTIFIER"),      S("STRING"),        S("TEMPLATE_HEAD"),
+      S("TEMPLATE_MIDDLE"), S("TEMPLATE_TAIL"), {0},
   };
   parse_grammar_t *py = mk(&PYTHON, PY_TERMS);
   parse_grammar_t *js = mk(&JS, JS_TERMS);
@@ -3789,7 +3776,7 @@ static void test_strings_distinguish_incomplete_from_invalid(void) {
         source_status(py, "\"bad\n") == SCAN_STATUS_INVALID);
   check("an interpolated string tail at EOF is incomplete",
         source_status(js, "`a${x}") == SCAN_STATUS_INCOMPLETE);
-  parse_token_stream_t *stream = scan_tokenize_owned(js, "\"open", 5);
+  parse_token_stream_t *stream = scan_tokenize_owned(js, S("\"open"));
   while (scan_stream_next(stream)) {
   }
   scan_diagnostic_t diagnostic = {0};
@@ -3805,9 +3792,9 @@ static void test_strings_distinguish_incomplete_from_invalid(void) {
 }
 
 static void test_reject_fallback_accepts_declared_codepoints_only(void) {
-  static const char *const G = "@lex-fallback(\"reject\")\n"
+  static const char G[] = "@lex-fallback(\"reject\")\n"
                                "<file> ::= %\"+\"\n";
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
   parse_grammar_t *g = parse_grammar_new();
 
   parse_grammar_set_error_recovery(g, false);
@@ -3817,7 +3804,7 @@ static void test_reject_fallback_accepts_declared_codepoints_only(void) {
 
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts = scan_tokenize(g, "+@", 2, &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, S("+@"), &buf, &sc);
   parse_token_info_t *declared = scan_stream_next(ts);
   parse_token_info_t *unknown = scan_stream_next(ts);
 
@@ -3832,21 +3819,20 @@ static void test_reject_fallback_accepts_declared_codepoints_only(void) {
   scan_scanner_free(sc);
   core_buffer_free(buf);
   parse_grammar_free(g);
-  core_free(text.data);
 }
 
-static parse_grammar_t *unicode_identifier_grammar(const char *version) {
+static parse_grammar_t *unicode_identifier_grammar(core_string_t version) {
   core_buffer_t *source = core_buffer_empty();
 
   core_buffer_printf(
       source,
-      "@lex-ident-profile(\"safe\"%s%s%s, normalize(\"nfc\"), "
+      "@lex-ident-profile(\"safe\"%s%.*s%s, normalize(\"nfc\"), "
       "scripts(\"Latin\", \"Greek\"), mixed_scripts(\"diagnose\"), "
       "confusables(\"allow\"), emoji(\"diagnose\"))\n"
       "@lex-ident(as(\"IDENTIFIER\"), profile(\"safe\"))\n"
       "<file> ::= %%IDENTIFIER\n",
-      version ? ", unicode(\"" : "", version ? version : "",
-      version ? "\")" : "");
+      version.data ? ", unicode(\"" : "", (int)version.u8_bytes,
+      version.data ? version.data : "", version.data ? "\")" : "");
   parse_grammar_t *g = parse_grammar_new();
   core_string_t text = core_string_borrow(source->data, source->byte_len);
 
@@ -3861,14 +3847,14 @@ static parse_grammar_t *unicode_identifier_grammar(const char *version) {
 }
 
 static parse_grammar_t *unicode_confusable_grammar(void) {
-  static const char *const G =
+  static const char G[] =
       "@lex-ident-profile(\"confusable\", "
       "scripts(\"Latin\", \"Cyrillic\"), "
       "mixed_scripts(\"allow\"), confusables(\"diagnose\"))\n"
       "@lex-ident(as(\"IDENTIFIER\"), profile(\"confusable\"))\n"
       "<file> ::= %IDENTIFIER\n";
   parse_grammar_t *g = parse_grammar_new();
-  core_string_t text = core_string_from_cstr(G);
+  core_string_t text = core_string_borrow(G, sizeof(G) - 1);
 
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, text);
@@ -3876,7 +3862,6 @@ static parse_grammar_t *unicode_confusable_grammar(void) {
     parse_grammar_free(g);
     g = nullptr;
   }
-  core_free(text.data);
   return g;
 }
 
@@ -3884,23 +3869,18 @@ static void test_unicode_identifier_profiles(void) {
   core_string_t version = scan_lex_unicode_version();
 
   if (!version.data) {
-    parse_grammar_t *g = unicode_identifier_grammar(nullptr);
+    parse_grammar_t *g = unicode_identifier_grammar((core_string_t){0});
     check("Unicode profiles fail clearly without a provider",
-          g && !scan_grammar_lex_compiled(g) && scan_lex_build_error() &&
-              strstr(scan_lex_build_error(), "ICU-enabled"));
+          g && !scan_grammar_lex_compiled(g) &&
+              core_string_find(scan_lex_build_error(), S("ICU-enabled")) >= 0);
     parse_grammar_free(g);
     return;
   }
 
-  char version_text[32];
-  snprintf(version_text, sizeof(version_text), "%.*s", (int)version.u8_bytes,
-           version.data);
-  parse_grammar_t *g = unicode_identifier_grammar(version_text);
-  const char decomposed[] = "e\xCC\x81 ";
+  parse_grammar_t *g = unicode_identifier_grammar(version);
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
-  parse_token_stream_t *ts =
-      scan_tokenize(g, decomposed, sizeof(decomposed) - 1, &buf, &sc);
+  parse_token_stream_t *ts = scan_tokenize(g, S("e\xCC\x81 "), &buf, &sc);
   parse_token_info_t *tok = scan_stream_next(ts);
   core_string_t value = tok && parse_token_has_value(tok)
                             ? core_option_get(parse_token_value(tok))
@@ -3917,9 +3897,9 @@ static void test_unicode_identifier_profiles(void) {
 
   ts = scan_tokenize_incremental_owned(g);
   bool resumed =
-      scan_stream_append(ts, "e", 1) && scan_stream_next(ts) == nullptr &&
-      scan_stream_append(ts, "\xCC", 1) && scan_stream_next(ts) == nullptr &&
-      scan_stream_append(ts, "\x81 ", 2);
+      scan_stream_append(ts, S("e")) && scan_stream_next(ts) == nullptr &&
+      scan_stream_append(ts, S("\xCC")) && scan_stream_next(ts) == nullptr &&
+      scan_stream_append(ts, S("\x81 "));
   tok = resumed ? scan_stream_next(ts) : nullptr;
   value = tok && parse_token_has_value(tok)
               ? core_option_get(parse_token_value(tok))
@@ -3930,7 +3910,7 @@ static void test_unicode_identifier_profiles(void) {
 
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "a\xCE\xB1", 3, &buf, &sc);
+  ts = scan_tokenize(g, S("a\xCE\xB1"), &buf, &sc);
   scan_stream_next(ts);
   check("mixed-script diagnostics identify the introducing scalar",
         scan_status(sc) == SCAN_STATUS_INVALID && sc->status_start_byte == 1 &&
@@ -3941,7 +3921,7 @@ static void test_unicode_identifier_profiles(void) {
 
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "\xD0\xB0", 2, &buf, &sc);
+  ts = scan_tokenize(g, S("\xD0\xB0"), &buf, &sc);
   scan_stream_next(ts);
   check("script restrictions report a narrow source span",
         scan_status(sc) == SCAN_STATUS_INVALID && sc->status_start_byte == 0 &&
@@ -3952,7 +3932,7 @@ static void test_unicode_identifier_profiles(void) {
 
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "\xF0\x9F\x8E\x89", 4, &buf, &sc);
+  ts = scan_tokenize(g, S("\xF0\x9F\x8E\x89"), &buf, &sc);
   tok = scan_stream_next(ts);
   check("emoji policy can diagnose an otherwise tokenized identifier",
         tok && scan_status(sc) == SCAN_STATUS_INVALID &&
@@ -3965,7 +3945,7 @@ static void test_unicode_identifier_profiles(void) {
   g = unicode_confusable_grammar();
   buf = nullptr;
   sc = nullptr;
-  ts = scan_tokenize(g, "\xD0\xB0", 2, &buf, &sc);
+  ts = scan_tokenize(g, S("\xD0\xB0"), &buf, &sc);
   scan_stream_next(ts);
   check("confusable checking is an optional narrow diagnostic",
         scan_status(sc) == SCAN_STATUS_INVALID && sc->status_start_byte == 0 &&
@@ -3975,31 +3955,30 @@ static void test_unicode_identifier_profiles(void) {
   core_buffer_free(buf);
   parse_grammar_free(g);
 
-  g = unicode_identifier_grammar("0.0");
+  g = unicode_identifier_grammar(S("0.0"));
   check("identifier profiles reject unavailable Unicode versions",
-        g && !scan_grammar_lex_compiled(g) && scan_lex_build_error() &&
-            strstr(scan_lex_build_error(), "requests version"));
+        g && !scan_grammar_lex_compiled(g) &&
+            core_string_find(scan_lex_build_error(), S("requests version")) >=
+                0);
   parse_grammar_free(g);
 
-  static const char *const UNKNOWN_SCRIPT =
-      "@lex-ident-profile(\"bad\", scripts(\"NotAScript\"))\n"
-      "@lex-ident(as(\"IDENTIFIER\"), profile(\"bad\"))\n"
-      "<file> ::= %IDENTIFIER\n";
-  core_string_t bad_text = core_string_from_cstr(UNKNOWN_SCRIPT);
+  core_string_t bad_text =
+      S("@lex-ident-profile(\"bad\", scripts(\"NotAScript\"))\n"
+        "@lex-ident(as(\"IDENTIFIER\"), profile(\"bad\"))\n"
+        "<file> ::= %IDENTIFIER\n");
   g = parse_grammar_new();
   parse_grammar_set_error_recovery(g, false);
   parse_bnf_declare_terminals(g, bad_text);
   bool loaded = load_test_grammar(bad_text, CORE_STRING_STATIC("file"), g);
   check("identifier profiles reject unknown script names at construction",
-        loaded && !scan_grammar_lex_compiled(g) && scan_lex_build_error() &&
-            strstr(scan_lex_build_error(), "unknown script"));
+        loaded && !scan_grammar_lex_compiled(g) &&
+            core_string_find(scan_lex_build_error(), S("unknown script")) >= 0);
   parse_grammar_free(g);
-  core_free(bad_text.data);
 }
 
 typedef struct {
   parse_grammar_t *grammar;
-  const char *source;
+  core_string_t source;
   size_t expected_tokens;
   core_string_t expected_token;
   core_string_t expected_value;
@@ -4015,8 +3994,8 @@ static void *tokenize_concurrently(void *arg) {
   for (size_t i = 0; i < 200; i++) {
     core_buffer_t *buf = nullptr;
     parse_scanner_t *sc = nullptr;
-    parse_token_stream_t *ts = scan_tokenize(run->grammar, run->source,
-                                             strlen(run->source), &buf, &sc);
+    parse_token_stream_t *ts =
+        scan_tokenize(run->grammar, run->source, &buf, &sc);
     size_t count = 0;
 
     parse_token_info_t *token = nullptr;
@@ -4059,10 +4038,10 @@ static void test_compiled_lexers_are_safe_to_share(void) {
         g->lex_compiled != nullptr);
 
   concurrent_lex_t runs[] = {
-      {.grammar = g, .source = "[=[alpha]=]"},
-      {.grammar = g, .source = "[==ffi[beta]==]"},
-      {.grammar = g, .source = "[===bnf[gamma]===]"},
-      {.grammar = g, .source = "[=json[delta]=]"},
+      {.grammar = g, .source = S("[=[alpha]=]")},
+      {.grammar = g, .source = S("[==ffi[beta]==]")},
+      {.grammar = g, .source = S("[===bnf[gamma]===]")},
+      {.grammar = g, .source = S("[=json[delta]=]")},
   };
   pthread_t threads[sizeof(runs) / sizeof(runs[0])];
 
@@ -4080,12 +4059,12 @@ static void test_compiled_lexers_are_safe_to_share(void) {
   check("one compiled lexical program serves concurrent tokenizations", ok);
   parse_grammar_free(g);
 
-  parse_grammar_t *embedded = embedded_grammar("json", true);
+  parse_grammar_t *embedded = embedded_grammar(S("json"), true);
   concurrent_lex_t embedded_runs[] = {
-      {.grammar = embedded, .source = "a {{1 \"x\"}} b", .expected_tokens = 6},
-      {.grammar = embedded, .source = "c {{2 \"y\"}} d", .expected_tokens = 6},
-      {.grammar = embedded, .source = "e {{3 \"z\"}} f", .expected_tokens = 6},
-      {.grammar = embedded, .source = "g {{4 \"w\"}} h", .expected_tokens = 6},
+      {.grammar = embedded, .source = S("a {{1 \"x\"}} b"), .expected_tokens = 6},
+      {.grammar = embedded, .source = S("c {{2 \"y\"}} d"), .expected_tokens = 6},
+      {.grammar = embedded, .source = S("e {{3 \"z\"}} f"), .expected_tokens = 6},
+      {.grammar = embedded, .source = S("g {{4 \"w\"}} h"), .expected_tokens = 6},
   };
   pthread_t embedded_threads[sizeof(embedded_runs) / sizeof(embedded_runs[0])];
 
@@ -4111,22 +4090,22 @@ static void test_compiled_lexers_are_safe_to_share(void) {
   parse_grammar_t *hooked = literal_hook_grammar();
   concurrent_lex_t hook_runs[] = {
       {.grammar = hooked,
-       .source = "\"parallel\"",
+       .source = S("\"parallel\""),
        .expected_token = S("SPECIAL"),
        .expected_value = S("decoded"),
        .expected_type = S("duration")},
       {.grammar = hooked,
-       .source = "\"parallel\"",
+       .source = S("\"parallel\""),
        .expected_token = S("SPECIAL"),
        .expected_value = S("decoded"),
        .expected_type = S("duration")},
       {.grammar = hooked,
-       .source = "\"parallel\"",
+       .source = S("\"parallel\""),
        .expected_token = S("SPECIAL"),
        .expected_value = S("decoded"),
        .expected_type = S("duration")},
       {.grammar = hooked,
-       .source = "\"parallel\"",
+       .source = S("\"parallel\""),
        .expected_token = S("SPECIAL"),
        .expected_value = S("decoded"),
        .expected_type = S("duration")},
@@ -4151,10 +4130,10 @@ static void test_compiled_lexers_are_safe_to_share(void) {
   if (scan_lex_unicode_version().data) {
     parse_grammar_t *unicode = unicode_confusable_grammar();
     concurrent_lex_t unicode_runs[] = {
-        {.grammar = unicode, .source = "abc"},
-        {.grammar = unicode, .source = "abc"},
-        {.grammar = unicode, .source = "abc"},
-        {.grammar = unicode, .source = "abc"},
+        {.grammar = unicode, .source = S("abc")},
+        {.grammar = unicode, .source = S("abc")},
+        {.grammar = unicode, .source = S("abc")},
+        {.grammar = unicode, .source = S("abc")},
     };
     pthread_t unicode_threads[sizeof(unicode_runs) / sizeof(unicode_runs[0])];
 
@@ -4186,10 +4165,9 @@ static void test_lexer_spec_conflict_analysis(void) {
                "@lex-string(\"/*\", \"*/\", as(\"STRING\"))\n"
                "<file> ::= %STRING\n",
                "unreachable lexer declaration");
-  static const char *const shadowed_source =
-      "@lex-string(\"/\", \"/\", as(\"STRING\"))\n"
-      "<file> ::= %STRING | %\"/\"\n";
-  core_string_t shadowed_text = core_string_from_cstr(shadowed_source);
+  core_string_t shadowed_text =
+      S("@lex-string(\"/\", \"/\", as(\"STRING\"))\n"
+        "<file> ::= %STRING | %\"/\"\n");
   parse_grammar_t *shadowed = parse_grammar_new();
   parse_grammar_set_error_recovery(shadowed, false);
   parse_bnf_declare_terminals(shadowed, shadowed_text);
@@ -4209,7 +4187,6 @@ static void test_lexer_spec_conflict_analysis(void) {
   check("shadowed grammar terminals are reported without rejection",
         found_shadow);
   parse_grammar_free(shadowed);
-  core_free(shadowed_text.data);
   static const scan_lex_comment_t prefix_comments[] = {
       {.kind = SCAN_LEX_BLOCK, .opener = S("/*"), .closer = S("*/")},
       {},
@@ -4223,7 +4200,7 @@ static void test_lexer_spec_conflict_analysis(void) {
       .comments = prefix_comments,
       .regexes = prefix_regexes,
   };
-  static const char *const prefix_terms[] = {"REGEX", nullptr};
+  static const core_string_t prefix_terms[] = {S("REGEX"), {0}};
   parse_grammar_t *g = mk(&valid_prefixes, prefix_terms);
   check("an earlier longer opener and later prefix remain reachable",
         scan_grammar_lex_compiled(g) != nullptr);
@@ -4238,7 +4215,7 @@ static void test_lexer_spec_conflict_analysis(void) {
       .name = S("analysis-longest-prefix"),
       .sigils = sigils,
   };
-  static const char *const sigil_terms[] = {"SHORT", "LONG", nullptr};
+  static const core_string_t sigil_terms[] = {S("SHORT"), S("LONG"), {0}};
   g = mk(&longest, sigil_terms);
   kinds(g, "same-family prefixes choose the longest opener", "$$name $other",
         "LONG SHORT");
@@ -4255,8 +4232,8 @@ static void test_lexer_spec_conflict_analysis(void) {
   g = parse_grammar_new();
   scan_lex_t *lex = scan_lex_compile(&unknown_output, g);
   check("explicit output names must belong to the grammar",
-        !lex && scan_lex_compile_error() &&
-            strstr(scan_lex_compile_error(), "unknown token 'NOT_DECLARED'"));
+        !lex && core_string_find(scan_lex_compile_error(),
+                                 S("unknown token 'NOT_DECLARED'")) >= 0);
   parse_grammar_free(g);
 
   static const core_string_t duplicate_hook_outputs[] = {
@@ -4279,8 +4256,8 @@ static void test_lexer_spec_conflict_analysis(void) {
   lex = scan_lex_compile(&duplicate_output, g);
   check(
       "duplicate output declarations are rejected deterministically",
-      !lex && scan_lex_compile_error() &&
-          strstr(scan_lex_compile_error(), "duplicate output token 'SPECIAL'"));
+      !lex && core_string_find(scan_lex_compile_error(),
+                               S("duplicate output token 'SPECIAL'")) >= 0);
   parse_grammar_free(g);
 
   static const core_string_t missing_operator[] = {S("missing-op"), {}};
@@ -4291,8 +4268,8 @@ static void test_lexer_spec_conflict_analysis(void) {
   g = parse_grammar_new();
   lex = scan_lex_compile(&bad_operator, g);
   check("programmatic operators must name grammar terminals",
-        !lex && scan_lex_compile_error() &&
-            strstr(scan_lex_compile_error(), "unknown token"));
+        !lex &&
+            core_string_find(scan_lex_compile_error(), S("unknown token")) >= 0);
   parse_grammar_free(g);
 
   static const scan_lex_string_t duplicate_a[] = {
@@ -4322,15 +4299,17 @@ static void test_lexer_spec_conflict_analysis(void) {
   };
   g = parse_grammar_new();
   lex = scan_lex_compile(&first, g);
-  char first_error[256] = {0};
-  if (!lex && scan_lex_compile_error()) {
-    snprintf(first_error, sizeof(first_error), "%s", scan_lex_compile_error());
+  core_string_t first_error = {0};
+  if (!lex) {
+    first_error = core_string_dup(scan_lex_compile_error());
   }
   lex = scan_lex_compile(&second, g);
   check("conflict diagnostics are independent of declaration order",
-        !lex && scan_lex_compile_error() &&
-            !strcmp(first_error, scan_lex_compile_error()) &&
-            strstr(first_error, "a.lex") && strstr(first_error, "z.lex"));
+        !lex && first_error.data &&
+            core_string_eq(first_error, scan_lex_compile_error()) &&
+            core_string_find(first_error, S("a.lex")) >= 0 &&
+            core_string_find(first_error, S("z.lex")) >= 0);
+  core_free(first_error.data);
   parse_grammar_free(g);
 
   static const scan_lex_string_t outputs[] = {
@@ -4349,10 +4328,10 @@ static void test_lexer_spec_conflict_analysis(void) {
       .tok_ident = S("IDENTIFIER"),
       .declarations = output_origins,
   };
-  static const char *const output_terms[] = {
-      "IDENTIFIER",
-      "STRING",
-      nullptr,
+  static const core_string_t output_terms[] = {
+      S("IDENTIFIER"),
+      S("STRING"),
+      {0},
   };
   g = bare_grammar(output_terms);
   parse_nonterm_t *file = parse_nonterm(g, S("file"));
@@ -4374,10 +4353,13 @@ static void test_lexer_spec_conflict_analysis(void) {
   scan_lex_sigil_t *many = core_alloc_array(scan_lex_sigil_t, MANY + 1);
   scan_lex_declaration_t *many_origins =
       core_alloc_array(scan_lex_declaration_t, MANY + 1);
-  char (*spellings)[16] = core_alloc_size(MANY + 1, sizeof(*spellings));
+  core_buffer_t *spellings = core_buffer_empty();
   for (size_t i = 0; i < MANY; i++) {
-    int bytes = snprintf(spellings[i], sizeof(spellings[i]), "p%08zu", i);
-    core_string_t spelling = core_string_borrow(spellings[i], (size_t)bytes);
+    core_buffer_printf(spellings, "p%08zu", i);
+  }
+  for (size_t i = 0; i < MANY; i++) {
+    core_string_t spelling = core_string_slice(core_buffer_string(spellings),
+                                               i * 9, 9);
     many[i] = (scan_lex_sigil_t){
         .prefix = spelling,
         .tok = S("IDENTIFIER"),
@@ -4398,7 +4380,7 @@ static void test_lexer_spec_conflict_analysis(void) {
   check("large declaration sets complete conflict analysis", lex != nullptr);
   scan_lex_free(lex);
   parse_grammar_free(g);
-  core_free(spellings);
+  core_buffer_free(spellings);
   core_free(many_origins);
   core_free(many);
 }

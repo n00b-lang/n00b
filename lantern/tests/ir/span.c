@@ -1,16 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir/ir.h"
 #include "harness.h"
 
-static uint32_t scalars_in(const char *s, size_t n)
+#define S(x) CORE_STRING_STATIC(x)
+
+static uint32_t scalars_in(core_string_t s)
 {
     uint32_t k = 0;
 
-    for (size_t i = 0; i < n; i++) {
-        if (((unsigned char)s[i] & 0xC0) != 0x80) {
+    for (size_t i = 0; i < s.u8_bytes; i++) {
+        if (((unsigned char)s.data[i] & 0xC0) != 0x80) {
             k++;
         }
     }
@@ -18,28 +19,30 @@ static uint32_t scalars_in(const char *s, size_t n)
     return k;
 }
 
-static void locate(const char *src, uint32_t byte, uint32_t *line,
+static void locate(core_string_t src, uint32_t byte, uint32_t *line,
                    uint32_t *col)
 {
     uint32_t ln = 1;
     uint32_t start = 0;
 
-    for (uint32_t i = 0; i < byte; i++) {
-        if (src[i] == '\n') {
+    for (uint32_t i = 0; i < byte && i < src.u8_bytes; i++) {
+        if (src.data[i] == '\n') {
             ln++;
             start = i + 1;
         }
     }
 
     *line = ln;
-    *col  = scalars_in(src + start, byte - start) + 1;
+    *col  = scalars_in(core_string_slice(src, start, byte - start)) + 1;
 }
 
-static bool byte_of(const char *src, size_t n, uint32_t line, uint32_t col,
+static bool byte_of(core_string_t text, uint32_t line, uint32_t col,
                     uint32_t *out)
 {
-    uint32_t ln = 1;
-    size_t   i  = 0;
+    const char *src = text.data;
+    size_t      n   = text.u8_bytes;
+    uint32_t    ln  = 1;
+    size_t      i   = 0;
 
     while (ln < line) {
         if (i >= n) {
@@ -81,34 +84,34 @@ static uint32_t rnd(uint32_t bound)
     return bound ? (uint32_t)(seed % bound) : 0;
 }
 
-static const char *corpus[] = {
-    "func f() {\n  x = 1\n}\n",
-    "a\nbb\nccc\ndddd\n",
-    "caf\xc3\xa9 = 1\nna\xc3\xafve = 2\n",
-    "\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e = 3\nx = 4\n",
-    "\xf0\x9f\x8e\x89 party\nline two\n",
-    "no trailing newline",
+static const core_string_t corpus[] = {
+    S("func f() {\n  x = 1\n}\n"),
+    S("a\nbb\nccc\ndddd\n"),
+    S("caf\xc3\xa9 = 1\nna\xc3\xafve = 2\n"),
+    S("\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e = 3\nx = 4\n"),
+    S("\xf0\x9f\x8e\x89 party\nline two\n"),
+    S("no trailing newline"),
 };
 
 static void test_roundtrip(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "test");
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("test"));
 
     for (size_t c = 0; c < sizeof(corpus) / sizeof(corpus[0]); c++) {
-        const char *src = corpus[c];
-        size_t      len = strlen(src);
-        int32_t     f   = ir_file_add(m, "probe");
+        core_string_t src = corpus[c];
+        size_t        len = src.u8_bytes;
+        int32_t       f   = ir_file_add(m, S("probe"));
 
         for (int trial = 0; trial < 400; trial++) {
             uint32_t sb = rnd((uint32_t)len + 1);
             uint32_t eb = sb + rnd((uint32_t)len + 1 - sb);
 
-            while (sb < len && ((unsigned char)src[sb] & 0xC0) == 0x80) {
+            while (sb < len && ((unsigned char)src.data[sb] & 0xC0) == 0x80) {
                 sb++;
             }
 
-            while (eb < len && ((unsigned char)src[eb] & 0xC0) == 0x80) {
+            while (eb < len && ((unsigned char)src.data[eb] & 0xC0) == 0x80) {
                 eb++;
             }
 
@@ -131,7 +134,7 @@ static void test_roundtrip(void)
 
             uint32_t back;
 
-            if (!byte_of(src, len, s.start_line, s.start_col, &back)
+            if (!byte_of(src, s.start_line, s.start_col, &back)
                 || back != s.start_byte) {
                 printf("FAIL  start %u:%u resolves to byte %u, span says %u "
                        "(corpus %zu)\n",
@@ -141,7 +144,7 @@ static void test_roundtrip(void)
                 return;
             }
 
-            if (!byte_of(src, len, s.end_line, s.end_col, &back)
+            if (!byte_of(src, s.end_line, s.end_col, &back)
                 || back != s.end_byte) {
                 printf("FAIL  end %u:%u resolves to byte %u, span says %u "
                        "(corpus %zu)\n",
@@ -164,8 +167,8 @@ static void test_roundtrip(void)
 
 static void test_columns_are_scalars(void)
 {
-    const char *src = "caf\xc3\xa9 = 1\n";
-    uint32_t    line, col;
+    core_string_t src = S("caf\xc3\xa9 = 1\n");
+    uint32_t      line, col;
 
     locate(src, 5, &line, &col);
     check("a two-byte scalar counts as one column",
@@ -175,13 +178,13 @@ static void test_columns_are_scalars(void)
     check("columns before a multibyte scalar are unaffected",
           line == 1 && col == 4);
 
-    const char *emoji = "\xf0\x9f\x8e\x89 x\n";
+    core_string_t emoji = S("\xf0\x9f\x8e\x89 x\n");
 
     locate(emoji, 4, &line, &col);
     check("a four-byte scalar counts as one column",
           line == 1 && col == 2);
 
-    const char *two = "a\nb\n";
+    core_string_t two = S("a\nb\n");
 
     locate(two, 2, &line, &col);
     check("lines are 1-based and reset the column",
@@ -193,18 +196,17 @@ static void test_columns_are_scalars(void)
 
 static void test_oracle_disagrees_when_it_should(void)
 {
-    const char *src = "ab\ncaf\xc3\xa9 x\n";
-    size_t      n   = strlen(src);
-    uint32_t    b;
+    core_string_t src = S("ab\ncaf\xc3\xa9 x\n");
+    uint32_t      b;
 
     check("the reverse oracle finds a known position",
-          byte_of(src, n, 2, 1, &b) && b == 3);
+          byte_of(src, 2, 1, &b) && b == 3);
     check("the reverse oracle counts a multibyte scalar as one column",
-          byte_of(src, n, 2, 5, &b) && b == 8);
+          byte_of(src, 2, 5, &b) && b == 8);
     check("the reverse oracle rejects a column past end of line",
-          !byte_of(src, n, 1, 9, &b));
+          !byte_of(src, 1, 9, &b));
     check("the reverse oracle rejects a line past end of input",
-          !byte_of(src, n, 9, 1, &b));
+          !byte_of(src, 9, 1, &b));
 
     uint32_t line, col;
 

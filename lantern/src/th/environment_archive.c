@@ -60,9 +60,9 @@ static bool read_type_ref(core_object_reader_t *reader, th_type **type) {
 }
 
 static bool write_string_arg(core_object_writer_t *writer,
-                             const char *data, size_t size) {
-  return write_count(writer, size) &&
-         core_object_writer_bytes(writer, data, size);
+                             core_string_t value) {
+  return write_count(writer, value.u8_bytes) &&
+         core_object_writer_bytes(writer, value.data, value.u8_bytes);
 }
 
 static bool save_constraint_scope(core_object_writer_t *writer,
@@ -80,25 +80,24 @@ static bool read_constraint_scope(core_object_reader_t *reader,
     return false;
   constraint->has_scope = has_scope;
   if (!constraint->has_scope) return true;
-  return core_object_reader_string(reader,
-             (char **)&constraint->scope_module) &&
-         core_object_reader_string(reader,
-             (char **)&constraint->scope_package);
+  return core_object_reader_string(reader, &constraint->scope_module) &&
+         core_object_reader_string(reader, &constraint->scope_package);
 }
 
 static uint32_t type_archive_version(const th_type *type) {
   return *(const uint32_t *)((const char *)type + sizeof(*type));
 }
 
-static bool read_string_arg(core_object_reader_t *reader, const char **data,
-                            size_t *size) {
-  if (!read_count(reader, size))
+static bool read_string_arg(core_object_reader_t *reader,
+                            core_string_t *out) {
+  size_t size;
+  if (!read_count(reader, &size))
     return false;
-  char *copy = core_object_reader_alloc(reader, *size ? *size : 1,
+  char *copy = core_object_reader_alloc(reader, size ? size : 1,
                                         alignof(char));
-  if (!copy || !core_object_reader_bytes(reader, copy, *size))
+  if (!copy || !core_object_reader_bytes(reader, copy, size))
     return false;
-  *data = copy;
+  *out = core_string_borrow(copy, size);
   return true;
 }
 
@@ -172,10 +171,10 @@ static bool read_constraint(core_object_reader_t *reader,
       if (!read_type_ref(reader, &constraint->one_of.types[i])) return false;
     return true;
   case TH_CON_IMPLEMENTS:
-    return core_object_reader_string(reader, (char **)&constraint->iface) &&
+    return core_object_reader_string(reader, &constraint->iface) &&
            (version < 5 || read_constraint_scope(reader, constraint));
   case TH_CON_HAS_FIELD:
-    if (!core_object_reader_string(reader, (char **)&constraint->field.name) ||
+    if (!core_object_reader_string(reader, &constraint->field.name) ||
         !read_type_ref(reader, &constraint->field.type)) return false;
     if (version < 6) return true;
     uint32_t auto_deref;
@@ -187,14 +186,14 @@ static bool read_constraint(core_object_reader_t *reader,
     return core_object_reader_u64(reader, &constraint->param.index) &&
            read_type_ref(reader, &constraint->param.type);
   case TH_CON_METHOD:
-    return core_object_reader_string(reader, (char **)&constraint->method.name) &&
-           constraint->method.name &&
+    return core_object_reader_string(reader, &constraint->method.name) &&
+           constraint->method.name.data &&
            read_type_ref(reader, &constraint->method.result) &&
            constraint->method.result &&
            (version < 3 || read_type_ref(reader, &constraint->method.call)) &&
            (version < 5 || read_constraint_scope(reader, constraint)) &&
            (version < 7 || core_object_reader_string(reader,
-               (char **)&constraint->method.in_place));
+               &constraint->method.in_place));
   }
   return false;
 }
@@ -208,7 +207,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
   switch (kind) {
   case TH_NAMED:
     if (!core_object_writer_string(writer, type->named.name) ||
-        !write_count(writer, type->named.nlen) ||
+        !write_count(writer, type->named.name.u8_bytes) ||
         !core_object_writer_u32(writer, type->named.is_variant) ||
         !write_count(writer, type->named.nargs)) return false;
     for (size_t i = 0; i < type->named.nargs; i++) {
@@ -225,7 +224,7 @@ static bool save_type(core_object_writer_t *writer, const void *object,
         if (!core_object_writer_u64(writer, (uint64_t)arg->s)) return false;
         break;
       case TH_ARG_STR:
-        if (!write_string_arg(writer, arg->str.p, arg->str.n)) return false;
+        if (!write_string_arg(writer, arg->str)) return false;
         break;
       }
     }
@@ -353,12 +352,12 @@ static bool restore_type(core_object_reader_t *reader, void *object,
   size_t count;
   switch (kind) {
   case TH_NAMED:
-    if (!core_object_reader_string(reader, (char **)&type->named.name) ||
-        !read_count(reader, &type->named.nlen) ||
+    if (!core_object_reader_string(reader, &type->named.name) ||
+        !read_count(reader, &count) ||
         !core_object_reader_u32(reader, &flag) || flag > 1 ||
         !read_count(reader, &type->named.nargs)) return false;
     type->named.is_variant = flag;
-    if (!type->named.name || strlen(type->named.name) != type->named.nlen ||
+    if (!type->named.name.data || type->named.name.u8_bytes != count ||
         type->named.nargs > SIZE_MAX / sizeof(th_arg)) return false;
     type->named.args = read_array(reader, type->named.nargs, sizeof(th_arg),
                                   alignof(th_arg));
@@ -382,7 +381,7 @@ static bool restore_type(core_object_reader_t *reader, void *object,
         break;
       }
       case TH_ARG_STR:
-        if (!read_string_arg(reader, &arg->str.p, &arg->str.n)) return false;
+        if (!read_string_arg(reader, &arg->str)) return false;
         break;
       }
     }
@@ -412,26 +411,25 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     if (type->record.n && !type->record.members) return false;
     for (size_t i = 0; i < type->record.n; i++)
       if (!core_object_reader_string(reader,
-              (char **)&type->record.members[i].name) ||
-          !type->record.members[i].name ||
+              &type->record.members[i].name) ||
+          !type->record.members[i].name.data ||
           !read_type_ref(reader, &type->record.members[i].type) ||
           !type->record.members[i].type) return false;
     return true;
   case TH_TRAIT:
-    if (!core_object_reader_string(reader, (char **)&type->trait.name) ||
-        !type->trait.name ||
+    if (!core_object_reader_string(reader, &type->trait.name) ||
+        !type->trait.name.data ||
         !read_count(reader, &type->trait.n) ||
         type->trait.n > SIZE_MAX / sizeof(th_member)) return false;
-    type->trait.nlen = strlen(type->trait.name);
-    if (!th_name_syntax_valid(type->trait.name, type->trait.nlen))
+    if (!th_name_syntax_valid(type->trait.name))
       return false;
     type->trait.methods = read_array(reader, type->trait.n,
         sizeof(th_member), alignof(th_member));
     if (type->trait.n && !type->trait.methods) return false;
     for (size_t i = 0; i < type->trait.n; i++)
       if (!core_object_reader_string(reader,
-              (char **)&type->trait.methods[i].name) ||
-          !type->trait.methods[i].name ||
+              &type->trait.methods[i].name) ||
+          !type->trait.methods[i].name.data ||
           !read_type_ref(reader, &type->trait.methods[i].type) ||
           !type->trait.methods[i].type) return false;
     if (!read_count(reader, &type->trait.nr) ||
@@ -446,17 +444,15 @@ static bool restore_type(core_object_reader_t *reader, void *object,
       if (!core_object_reader_u32(reader, &kind) ||
           !read_type_ref(reader, &requirement->subject) ||
           !read_type_ref(reader, &requirement->target) ||
-          !core_object_reader_string(reader,
-              (char **)&requirement->iface) ||
+          !core_object_reader_string(reader, &requirement->iface) ||
           !requirement->subject) return false;
       requirement->kind = (th_con_kind)kind;
       if (kind == TH_CON_EXCLUDES) {
-        if (!requirement->target || requirement->iface) return false;
+        if (!requirement->target || requirement->iface.data) return false;
       }
       else if (kind == TH_CON_IMPLEMENTS) {
-        if (requirement->target || !requirement->iface ||
-            !th_name_syntax_valid(requirement->iface,
-                                  strlen(requirement->iface))) return false;
+        if (requirement->target || !requirement->iface.data ||
+            !th_name_syntax_valid(requirement->iface)) return false;
       }
       else return false;
     }
@@ -486,8 +482,8 @@ static bool restore_type(core_object_reader_t *reader, void *object,
                              alignof(th_kwparam));
     if (type->fn.nkw && !type->fn.kw) return false;
     for (size_t i = 0; i < type->fn.nkw; i++)
-      if (!core_object_reader_string(reader, (char **)&type->fn.kw[i].name) ||
-          !type->fn.kw[i].name || !read_mode(reader, &type->fn.kw[i].mode) ||
+      if (!core_object_reader_string(reader, &type->fn.kw[i].name) ||
+          !type->fn.kw[i].name.data || !read_mode(reader, &type->fn.kw[i].mode) ||
           !read_type_ref(reader, &type->fn.kw[i].type) ||
           !type->fn.kw[i].type) return false;
     return true;
@@ -525,7 +521,7 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     if (!core_object_reader_u64(reader, &type->var.index) ||
         !core_object_reader_u32(reader, &flag) || flag > 1 ||
         !read_type_ref(reader, &type->var.ref) ||
-        !core_object_reader_string(reader, (char **)&type->var.name) ||
+        !core_object_reader_string(reader, &type->var.name) ||
         !read_count(reader, &count) || count > SIZE_MAX / sizeof(th_constraint))
       return false;
     type->var.has_index = flag;
@@ -641,9 +637,9 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
     th_env_type_origin_t origin = {0};
     uint32_t visibility = TH_ENV_PUBLIC;
     uint32_t shape_kind = TH_ENV_TYPE_SHAPE_NONE;
-    if (!core_object_reader_string(reader, (char **)&origin.name) ||
-        !core_object_reader_string(reader, (char **)&origin.module) ||
-        !core_object_reader_string(reader, (char **)&origin.package) ||
+    if (!core_object_reader_string(reader, &origin.name) ||
+        !core_object_reader_string(reader, &origin.module) ||
+        !core_object_reader_string(reader, &origin.package) ||
         (env->archive_schema_version >= 2 &&
          !core_object_reader_u32(reader, &visibility)) ||
         visibility > TH_ENV_PUBLIC ||
@@ -662,9 +658,9 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
   for (size_t i = 0; i < count; i++) {
     th_env_trait_t trait = {0};
     uint32_t visibility;
-    if (!core_object_reader_string(reader, (char **)&trait.name) ||
-        !core_object_reader_string(reader, (char **)&trait.module) ||
-        !core_object_reader_string(reader, (char **)&trait.package) ||
+    if (!core_object_reader_string(reader, &trait.name) ||
+        !core_object_reader_string(reader, &trait.module) ||
+        !core_object_reader_string(reader, &trait.package) ||
         !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
         !read_type_ref(reader, &trait.scheme) ||
@@ -709,10 +705,10 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
     th_env_function_t function = {0};
     uint32_t visibility;
     if (!core_object_reader_string(reader,
-            (char **)&function.qualified_name) ||
-        !core_object_reader_string(reader, (char **)&function.root_name) ||
-        !core_object_reader_string(reader, (char **)&function.module) ||
-        !core_object_reader_string(reader, (char **)&function.package) ||
+            &function.qualified_name) ||
+        !core_object_reader_string(reader, &function.root_name) ||
+        !core_object_reader_string(reader, &function.module) ||
+        !core_object_reader_string(reader, &function.package) ||
         !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
         !read_type_ref(reader, &function.scheme) ||
@@ -738,10 +734,10 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
       th_env_value_t value = {0};
       uint32_t visibility;
       if (!core_object_reader_string(reader,
-              (char **)&value.qualified_name) ||
-          !core_object_reader_string(reader, (char **)&value.root_name) ||
-          !core_object_reader_string(reader, (char **)&value.module) ||
-          !core_object_reader_string(reader, (char **)&value.package) ||
+              &value.qualified_name) ||
+          !core_object_reader_string(reader, &value.root_name) ||
+          !core_object_reader_string(reader, &value.module) ||
+          !core_object_reader_string(reader, &value.package) ||
           !core_object_reader_u32(reader, &visibility) ||
           visibility > TH_ENV_PUBLIC || !read_type_ref(reader, &value.type) ||
           !value.type) return false;
@@ -755,8 +751,8 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
     th_env_metadata_record_t metadata = {0};
     uint32_t owner_kind;
     if (!core_object_reader_u32(reader, &owner_kind) ||
-        !core_object_reader_string(reader, (char **)&metadata.owner_name) ||
-        !core_object_reader_string(reader, (char **)&metadata.key) ||
+        !core_object_reader_string(reader, &metadata.owner_name) ||
+        !core_object_reader_string(reader, &metadata.key) ||
         !core_object_reader_u32(reader, &metadata.version) ||
         !read_count(reader, &metadata.size) ||
         owner_kind < TH_ENV_METADATA_TYPE ||
@@ -776,8 +772,8 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         count > SIZE_MAX / sizeof(th_env_intrinsic_type_t)) return false;
     for (size_t i = 0; i < count; i++) {
       th_env_intrinsic_type_t fact = {0};
-      if (!core_object_reader_string(reader, (char **)&fact.trait_name) ||
-          !fact.trait_name || !read_type_ref(reader, &fact.receiver_pattern) ||
+      if (!core_object_reader_string(reader, &fact.trait_name) ||
+          !fact.trait_name.data || !read_type_ref(reader, &fact.receiver_pattern) ||
           !fact.receiver_pattern) return false;
       core_list_push(env->intrinsic_types, fact);
     }
@@ -874,9 +870,9 @@ static bool register_environment_codecs(
   return true;
 }
 
-bool th_env_save(const th_env *env, const char *path, size_t mapping_capacity,
-                 core_object_archive_error_t *error) {
-  if (!env || !env->frozen || !path) {
+bool th_env_save(const th_env *env, core_string_t path,
+                 size_t mapping_capacity, core_object_archive_error_t *error) {
+  if (!env || !env->frozen || !path.data) {
     if (error) *error = CORE_OBJECT_ARCHIVE_INVALID_ARGUMENT;
     return false;
   }
@@ -897,8 +893,8 @@ bool th_env_save(const th_env *env, const char *path, size_t mapping_capacity,
   return ok;
 }
 
-th_env *th_env_load(const char *path, core_object_archive_error_t *error) {
-  if (!path) {
+th_env *th_env_load(core_string_t path, core_object_archive_error_t *error) {
+  if (!path.data) {
     if (error) *error = CORE_OBJECT_ARCHIVE_INVALID_ARGUMENT;
     return nullptr;
   }

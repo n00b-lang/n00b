@@ -9,45 +9,45 @@
 
 #include "lib/dict.h"
 
-const char *ir_layout_state_name(ir_layout_state_t s)
+core_string_t ir_layout_state_name(ir_layout_state_t s)
 {
     switch (s) {
     case IR_LAYOUT_PINNED:
-        return "pinned";
+        return CORE_STRING_STATIC("pinned");
     case IR_LAYOUT_SYMBOLIC:
-        return "symbolic";
+        return CORE_STRING_STATIC("symbolic");
     case IR_LAYOUT_RESOLVED:
-        return "resolved";
+        return CORE_STRING_STATIC("resolved");
     default:
-        return "unset";
+        return CORE_STRING_STATIC("unset");
     }
 }
 
-const char *ir_symkind_name(ir_symkind_t k)
+core_string_t ir_symkind_name(ir_symkind_t k)
 {
     switch (k) {
     case IR_SYM_ALIGNOF:
-        return "alignof";
+        return CORE_STRING_STATIC("alignof");
     case IR_SYM_OFFSETOF:
-        return "offsetof";
+        return CORE_STRING_STATIC("offsetof");
     default:
-        return "sizeof";
+        return CORE_STRING_STATIC("sizeof");
     }
 }
 
-bool ir_symkind_from_name(const char *s, ir_symkind_t *out)
+bool ir_symkind_from_name(core_string_t s, ir_symkind_t *out)
 {
     static const struct {
-        const char  *name;
-        ir_symkind_t k;
+        core_string_t name;
+        ir_symkind_t  k;
     } table[] = {
-        {"sizeof", IR_SYM_SIZEOF},
-        {"alignof", IR_SYM_ALIGNOF},
-        {"offsetof", IR_SYM_OFFSETOF},
+        {CORE_STRING_STATIC("sizeof"), IR_SYM_SIZEOF},
+        {CORE_STRING_STATIC("alignof"), IR_SYM_ALIGNOF},
+        {CORE_STRING_STATIC("offsetof"), IR_SYM_OFFSETOF},
     };
 
-    for (size_t i = 0; s && i < sizeof(table) / sizeof(table[0]); i++) {
-        if (!strcmp(table[i].name, s)) {
+    for (size_t i = 0; s.data && i < sizeof(table) / sizeof(table[0]); i++) {
+        if (core_string_eq(table[i].name, s)) {
             if (out) {
                 *out = table[i].k;
             }
@@ -64,13 +64,13 @@ bool ir_layout_is_settled(const ir_layout_val_t *v)
     return v && (v->state == IR_LAYOUT_PINNED || v->state == IR_LAYOUT_RESOLVED);
 }
 
-static bool same_target(const char *a, const char *b)
+static bool same_target(core_string_t a, core_string_t b)
 {
-    return a && b ? !strcmp(a, b) : a == b;
+    return a.data && b.data ? core_string_eq(a, b) : !a.data && !b.data;
 }
 
 static ir_descriptor_t *layout_of_exact(ir_module_t *m, th_type *t,
-                                        const char *target)
+                                        core_string_t target)
 {
     ir_typeslot_t *s = ir_type_slot(m, t);
 
@@ -87,14 +87,15 @@ static ir_descriptor_t *layout_of_exact(ir_module_t *m, th_type *t,
     return nullptr;
 }
 
-ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t, const char *target)
+ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t,
+                              core_string_t target)
 {
-    return layout_of_exact(m, t, target ? target : m->target);
+    return layout_of_exact(m, t, target.data ? target : m->target);
 }
 
 ir_descriptor_t *ir_layout_of_targetless(ir_module_t *m, th_type *t)
 {
-    return layout_of_exact(m, t, nullptr);
+    return layout_of_exact(m, t, (core_string_t){});
 }
 
 static void invalidate_value(ir_layout_val_t *value)
@@ -124,7 +125,7 @@ void ir_layout_invalidate_type(ir_module_t *m, th_type *t)
 }
 
 static ir_descriptor_t *layout_ensure_exact(ir_module_t *m, th_type *t,
-                                            const char *target)
+                                            core_string_t target)
 {
     ir_descriptor_t *found = layout_of_exact(m, t, target);
 
@@ -147,7 +148,8 @@ static ir_descriptor_t *layout_ensure_exact(ir_module_t *m, th_type *t,
 
     ir_descentry_t *e = &s->descs[s->n_descs++];
 
-    *e = (ir_descentry_t){.target = ir_strdup(m->ctx, target)};
+    *e = (ir_descentry_t){.target = target.data ? ir_strdup(m->ctx, target)
+                                                : (core_string_t){}};
 
     e->d.type   = t;
     e->d.target = e->target;
@@ -156,14 +158,14 @@ static ir_descriptor_t *layout_ensure_exact(ir_module_t *m, th_type *t,
 }
 
 ir_descriptor_t *ir_layout_ensure(ir_module_t *m, th_type *t,
-                                  const char *target)
+                                  core_string_t target)
 {
-    return layout_ensure_exact(m, t, target ? target : m->target);
+    return layout_ensure_exact(m, t, target.data ? target : m->target);
 }
 
 ir_descriptor_t *ir_layout_ensure_targetless(ir_module_t *m, th_type *t)
 {
-    return layout_ensure_exact(m, t, nullptr);
+    return layout_ensure_exact(m, t, (core_string_t){});
 }
 
 static bool valid_runs(const ir_layout_bit_run_t *runs, size_t count,
@@ -265,7 +267,7 @@ static ir_layout_access_t *copy_accesses(ir_ctx_t *ctx,
     return copy;
 }
 
-bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
+bool ir_layout_publish_final(ir_module_t *m, th_type *t, core_string_t target,
                              const ir_final_layout_t *layout)
 {
     if (!m || !t || !layout || !layout->alignment_bytes
@@ -292,7 +294,7 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
 
     for (size_t i = 0; i < layout->n_members; i++) {
         const ir_final_member_layout_t *member = &layout->members[i];
-        if (!member->name || !member->type
+        if (!member->name.data || !member->type
             || ((member->inline_element_count != 0)
                 != (member->inline_element_type != nullptr))
             || ((member->inline_element_count != 0)
@@ -347,7 +349,7 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
                 layout->members[i].occupied, layout->members[i].n_occupied);
             members[i].accesses = copy_accesses(ctx,
                 layout->members[i].accesses, layout->members[i].n_accesses);
-            if (!members[i].name
+            if (!members[i].name.data
                 || (layout->members[i].n_occupied
                     && !members[i].occupied)
                 || (layout->members[i].n_accesses
@@ -360,14 +362,14 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, const char *target,
 }
 
 const ir_final_layout_t *ir_layout_final(ir_module_t *m, th_type *t,
-                                        const char *target)
+                                        core_string_t target)
 {
     ir_descriptor_t *d = m && t ? ir_layout_of(m, t, target) : nullptr;
     return d ? d->final : nullptr;
 }
 
 const ir_final_layout_t *ir_layout_final_visible(ir_module_t *m, th_type *t,
-                                                const char *target)
+                                                core_string_t target)
 {
     const ir_final_layout_t *local = ir_layout_final(m, t, target);
     if (local) return local;
@@ -379,7 +381,7 @@ const ir_final_layout_t *ir_layout_final_visible(ir_module_t *m, th_type *t,
 static bool pin(ir_layout_val_t *v, uint64_t value);
 
 bool ir_layout_copy_final(ir_module_t *m, th_type *destination,
-                          th_type *source, const char *target)
+                          th_type *source, core_string_t target)
 {
     if (!m || !destination || !source || destination == source
         || ir_layout_final(m, destination, target)) return false;
@@ -447,7 +449,7 @@ static bool pin(ir_layout_val_t *v, uint64_t value)
 
 bool ir_layout_pin_size(ir_module_t *m, th_type *t, uint64_t bytes)
 {
-    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
     if (!d || !pin(&d->size, bytes)) return false;
     d->final = nullptr;
     return true;
@@ -455,7 +457,7 @@ bool ir_layout_pin_size(ir_module_t *m, th_type *t, uint64_t bytes)
 
 bool ir_layout_pin_stride(ir_module_t *m, th_type *t, uint64_t bytes)
 {
-    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
 
     if (!d || !pin(&d->stride, bytes)) return false;
     d->final = nullptr;
@@ -464,7 +466,7 @@ bool ir_layout_pin_stride(ir_module_t *m, th_type *t, uint64_t bytes)
 
 bool ir_layout_pin_align(ir_module_t *m, th_type *t, uint64_t bytes)
 {
-    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
 
     if (!d || !bytes || (bytes & (bytes - 1))) {
         return false;
@@ -482,12 +484,12 @@ static void drop_members(void *p)
 }
 
 static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
-                                       const char *field)
+                                       core_string_t field)
 {
     if (!d->member_index) {
         core_dict_t *ix = core_alloc(core_dict_t);
 
-        core_dict_init(ix, core_hash_cstring, core_dict_cstr_eq);
+        core_dict_init_string(ix);
         ir_ctx_on_free(m->ctx, drop_members, ix);
         d->member_index = ix;
     }
@@ -495,7 +497,7 @@ static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
     bool   found = false;
     size_t at    = (size_t)(uintptr_t)core_dict_get((core_dict_t *)
                                                        d->member_index,
-                                                   field, &found);
+                                                   &field, &found);
 
     if (found) {
         return &d->members[at];
@@ -514,28 +516,35 @@ static ir_member_layout_t *member_slot(ir_module_t *m, ir_descriptor_t *d,
 
     ir_member_layout_t *slot = &d->members[d->n_members];
 
+    core_string_t *key = ir_alloc(m->ctx, sizeof(*key));
+
+    if (!key) {
+        return nullptr;
+    }
+
     *slot = (ir_member_layout_t){.name = ir_strdup(m->ctx, field)};
-    core_dict_put((core_dict_t *)d->member_index, slot->name, d->n_members);
+    *key  = slot->name;
+    core_dict_put((core_dict_t *)d->member_index, key, d->n_members);
     d->n_members++;
 
     return slot;
 }
 
-bool ir_layout_pin_member(ir_module_t *m, th_type *t, const char *field,
+bool ir_layout_pin_member(ir_module_t *m, th_type *t, core_string_t field,
                           uint64_t bit_offset, uint64_t bit_width)
 {
-    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
 
     return ir_layout_descriptor_pin_member(m, d, field, bit_offset,
                                            bit_width);
 }
 
 bool ir_layout_descriptor_pin_member(ir_module_t *m, ir_descriptor_t *d,
-                                     const char *field, uint64_t bit_offset,
+                                     core_string_t field, uint64_t bit_offset,
                                      uint64_t bit_width)
 {
 
-    if (!d || !field) {
+    if (!d || !field.data) {
         return false;
     }
 
@@ -549,7 +558,7 @@ bool ir_layout_descriptor_pin_member(ir_module_t *m, ir_descriptor_t *d,
 
 bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r)
 {
-    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
 
     if (!d) {
         return false;
@@ -567,7 +576,7 @@ bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r)
 
 bool ir_layout_pin_indirect(ir_module_t *m, th_type *t, ir_indirect_repr_t r)
 {
-    ir_descriptor_t *d = ir_layout_ensure(m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_ensure(m, t, (core_string_t){});
 
     if (!d || !r.words.value) {
         return false;
@@ -601,7 +610,8 @@ static void refuse(L *l, th_type *t, const char *what, ...)
     }
 
     ir_diag_t *dg = ir_diag_begin(l->d, IR_DIAG_LAYOUT_PIN,
-                                  ir_module_span(l->m), "this layout");
+                                  ir_module_span(l->m),
+                                  CORE_STRING_STATIC("this layout"));
 
     if (!dg) {
         return;
@@ -614,12 +624,14 @@ static void refuse(L *l, th_type *t, const char *what, ...)
     core_buffer_vprintf(b, what, ap);
     va_end(ap);
 
-    core_buffer_printf(b, " (laying out %s)", ir_type_text(l->m, t));
+    core_buffer_puts(b, " (laying out ");
+    core_buffer_append_string(b, ir_type_text(l->m, t));
+    core_buffer_puts(b, ")");
 
-    char *msg = core_buffer_take(b);
+    core_string_t msg = core_buffer_take_string(b);
 
     ir_diag_message(dg, l->d, msg);
-    core_free(msg);
+    core_free(msg.data);
 }
 
 static ir_layout_val_t resolved(uint64_t v)
@@ -627,13 +639,11 @@ static ir_layout_val_t resolved(uint64_t v)
     return (ir_layout_val_t){.state = IR_LAYOUT_RESOLVED, .value = v};
 }
 
-static ir_layout_val_t symbolic(ir_symkind_t k, th_type *of,
-                                const char *member)
+static ir_layout_val_t symbolic(ir_symkind_t k, th_type *of)
 {
-    return (ir_layout_val_t){.state  = IR_LAYOUT_SYMBOLIC,
-                             .sym    = k,
-                             .of     = of,
-                             .member = member};
+    return (ir_layout_val_t){.state = IR_LAYOUT_SYMBOLIC,
+                             .sym   = k,
+                             .of    = of};
 }
 
 static uint64_t round_up(uint64_t v, uint64_t to)
@@ -696,11 +706,11 @@ static bool lay_out_scalar(L *l, th_type *t, ir_descriptor_t *d)
 
     if (k.class == IR_CLASS_PTR || k.class == IR_CLASS_OPAQUE) {
         if (d->size.state == IR_LAYOUT_UNSET) {
-            d->size = symbolic(IR_SYM_SIZEOF, t, nullptr);
+            d->size = symbolic(IR_SYM_SIZEOF, t);
         }
 
         if (d->align.state == IR_LAYOUT_UNSET) {
-            d->align = symbolic(IR_SYM_ALIGNOF, t, nullptr);
+            d->align = symbolic(IR_SYM_ALIGNOF, t);
         }
 
         return true;
@@ -762,11 +772,11 @@ static bool lay_out_record(L *l, th_type *t, th_type *rec, ir_descriptor_t *d)
 
     if (!firm) {
         if (d->size.state == IR_LAYOUT_UNSET) {
-            d->size = symbolic(IR_SYM_SIZEOF, t, nullptr);
+            d->size = symbolic(IR_SYM_SIZEOF, t);
         }
 
         if (d->align.state == IR_LAYOUT_UNSET) {
-            d->align = symbolic(IR_SYM_ALIGNOF, t, nullptr);
+            d->align = symbolic(IR_SYM_ALIGNOF, t);
         }
 
         return true;
@@ -806,11 +816,11 @@ static bool lay_out_sequence(L *l, th_type *t, ir_descriptor_t *d)
 
     if (!elem || !settled_size(l, elem, &size, &algn)) {
         if (d->size.state == IR_LAYOUT_UNSET) {
-            d->size = symbolic(IR_SYM_SIZEOF, t, nullptr);
+            d->size = symbolic(IR_SYM_SIZEOF, t);
         }
 
         if (d->align.state == IR_LAYOUT_UNSET) {
-            d->align = symbolic(IR_SYM_ALIGNOF, t, nullptr);
+            d->align = symbolic(IR_SYM_ALIGNOF, t);
         }
 
         return true;
@@ -826,7 +836,7 @@ static bool lay_out_sequence(L *l, th_type *t, ir_descriptor_t *d)
 
     if (!th_seq_extent(t, &n)) {
         if (d->size.state == IR_LAYOUT_UNSET) {
-            d->size = symbolic(IR_SYM_SIZEOF, t, nullptr);
+            d->size = symbolic(IR_SYM_SIZEOF, t);
         }
 
         return true;
@@ -881,11 +891,11 @@ static bool lay_out_variant(L *l, th_type *t, ir_descriptor_t *d)
 
     if (!firm) {
         if (d->size.state == IR_LAYOUT_UNSET) {
-            d->size = symbolic(IR_SYM_SIZEOF, t, nullptr);
+            d->size = symbolic(IR_SYM_SIZEOF, t);
         }
 
         if (d->align.state == IR_LAYOUT_UNSET) {
-            d->align = symbolic(IR_SYM_ALIGNOF, t, nullptr);
+            d->align = symbolic(IR_SYM_ALIGNOF, t);
         }
 
         return true;
@@ -915,7 +925,7 @@ static bool lay_out(L *l, th_type *t, ir_descriptor_t **out)
         return false;
     }
 
-    ir_descriptor_t *d = ir_layout_ensure(l->m, t, nullptr);
+    ir_descriptor_t *d = ir_layout_ensure(l->m, t, (core_string_t){});
 
     if (out) {
         *out = d;
@@ -945,7 +955,7 @@ static bool lay_out(L *l, th_type *t, ir_descriptor_t **out)
     bool     is_variant = false;
 
     if (th_kind_of(t) == TH_NAMED) {
-        th_named_info(t, nullptr, nullptr, &is_variant, nullptr);
+        th_named_info(t, nullptr, &is_variant, nullptr);
     }
 
     bool ok;
@@ -1101,7 +1111,7 @@ static bool layout_pass(ir_module_t *m, ir_diags_t *d, void *state)
 }
 
 const ir_pass_t ir_pass_layout = {
-    .name         = "layout",
+    .name         = CORE_STRING_STATIC("layout"),
     .requires     = IR_PROP_TYPED,
     .establishes  = IR_PROP_LAID_OUT,
     .run          = layout_pass,

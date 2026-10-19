@@ -1,5 +1,4 @@
 #include <ctype.h>
-#include <errno.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +14,7 @@
 #include "parse/tree_util.h"
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     ir_lower_action_fn callback;
     void *state;
 } ir_lower_action_entry_t;
@@ -27,7 +26,7 @@ typedef struct {
 } ir_lower_visit_entry_t;
 
 typedef struct {
-    const char *nonterminal;
+    core_string_t nonterminal;
     ir_lower_visit_fn callback;
     void *state;
 } ir_lower_nt_visit_entry_t;
@@ -135,7 +134,7 @@ static ir_lower_symbol_binding_t *lower_find_binding(
     ir_lower_context_t *context, parse_sym_entry_t *symbol);
 
 static bool
-lower_set_int_annot(ir_ctx_t *ctx, ir_annots_t *annots, const char *key,
+lower_set_int_annot(ir_ctx_t *ctx, ir_annots_t *annots, core_string_t key,
                     uint64_t value)
 {
     return ir_annot_set(ctx, annots, (ir_annot_t){
@@ -146,7 +145,7 @@ lower_set_int_annot(ir_ctx_t *ctx, ir_annots_t *annots, const char *key,
 }
 
 static bool
-lower_set_bool_annot(ir_ctx_t *ctx, ir_annots_t *annots, const char *key,
+lower_set_bool_annot(ir_ctx_t *ctx, ir_annots_t *annots, core_string_t key,
                      bool value)
 {
     return ir_annot_set(ctx, annots, (ir_annot_t){
@@ -157,14 +156,26 @@ lower_set_bool_annot(ir_ctx_t *ctx, ir_annots_t *annots, const char *key,
 }
 
 static bool
-lower_set_string_annot(ir_ctx_t *ctx, ir_annots_t *annots, const char *key,
+lower_set_string_annot(ir_ctx_t *ctx, ir_annots_t *annots, core_string_t key,
                        core_string_t value)
 {
     return !value.data || ir_annot_set(ctx, annots, (ir_annot_t){
         .key = key,
         .kind = IR_ANNOT_STR,
-        .s = ir_strdup(ctx, value.data),
+        .s = ir_strdup(ctx, value),
     });
+}
+
+static core_string_t
+lower_alias_key(char *buffer, size_t capacity, core_string_t prefix,
+                size_t index, core_string_t suffix)
+{
+    int written = snprintf(buffer, capacity, "ir.%.*s%zu%.*s",
+                           (int)prefix.u8_bytes, prefix.data, index,
+                           (int)suffix.u8_bytes, suffix.data);
+    size_t length = written < 0 ? 0 : (size_t)written;
+    if (length >= capacity) length = capacity - 1;
+    return core_string_borrow(buffer, length);
 }
 
 static ir_value_t *
@@ -179,7 +190,7 @@ lower_binding_value(ir_lower_context_t *context,
 
 static bool
 lower_set_alias_annots(ir_lower_context_t *context, ir_annots_t *annots,
-                       const ir_value_t *source, const char *prefix,
+                       const ir_value_t *source, core_string_t prefix,
                        const parse_sym_alias_t *aliases, size_t count,
                        bool *unresolved, size_t *resolved_count)
 {
@@ -210,28 +221,37 @@ lower_set_alias_annots(ir_lower_context_t *context, ir_annots_t *annots,
             continue;
         }
         size_t index = (*resolved_count)++;
-        snprintf(key, sizeof(key), "ir.%s%zu", prefix, index);
         if (!ir_annot_set(ctx, annots, (ir_annot_t){
-                .key = key,
+                .key = lower_alias_key(key, sizeof(key), prefix, index,
+                                       CORE_STRING_STATIC("")),
                 .kind = IR_ANNOT_VALUE,
                 .v = target,
             })) return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_kind", prefix, index);
-        if (!lower_set_int_annot(ctx, annots, key, aliases[i].kind))
+        if (!lower_set_int_annot(ctx, annots,
+                lower_alias_key(key, sizeof(key), prefix, index,
+                                CORE_STRING_STATIC("_kind")),
+                aliases[i].kind))
             return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_derived", prefix, index);
-        if (!lower_set_int_annot(ctx, annots, key, aliases[i].derived_at))
+        if (!lower_set_int_annot(ctx, annots,
+                lower_alias_key(key, sizeof(key), prefix, index,
+                                CORE_STRING_STATIC("_derived")),
+                aliases[i].derived_at))
             return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_last_use", prefix, index);
         if (aliases[i].has_last_use) {
-            if (!lower_set_int_annot(ctx, annots, key, aliases[i].last_use))
+            if (!lower_set_int_annot(ctx, annots,
+                    lower_alias_key(key, sizeof(key), prefix, index,
+                                    CORE_STRING_STATIC("_last_use")),
+                    aliases[i].last_use))
                 return false;
         }
-        snprintf(key, sizeof(key), "ir.%s%zu_has_last_use", prefix, index);
-        if (!lower_set_bool_annot(ctx, annots, key,
-                                  aliases[i].has_last_use)) return false;
-        snprintf(key, sizeof(key), "ir.%s%zu_escapes", prefix, index);
-        if (!lower_set_bool_annot(ctx, annots, key, aliases[i].escapes))
+        if (!lower_set_bool_annot(ctx, annots,
+                lower_alias_key(key, sizeof(key), prefix, index,
+                                CORE_STRING_STATIC("_has_last_use")),
+                aliases[i].has_last_use)) return false;
+        if (!lower_set_bool_annot(ctx, annots,
+                lower_alias_key(key, sizeof(key), prefix, index,
+                                CORE_STRING_STATIC("_escapes")),
+                aliases[i].escapes))
             return false;
     }
     return true;
@@ -249,8 +269,8 @@ lower_project_symbol_facts(ir_lower_context_t *context,
 
     ir_ctx_t *ctx = context->module->ctx;
     bool unresolved = false;
-    ir_annot_t *assignment_source = ir_annot_get(annots,
-                                                "ir.alias_from_assignment");
+    ir_annot_t *assignment_source = ir_annot_get(
+        annots, CORE_STRING_STATIC("ir.alias_from_assignment"));
     bool preserve_assignment_aliases = assignment_source
         && assignment_source->kind == IR_ANNOT_BOOL
         && assignment_source->b;
@@ -275,49 +295,64 @@ lower_project_symbol_facts(ir_lower_context_t *context,
         initializable_in |= available;
     if (!ir_value_set_phase_access(ctx, value, available, mutable_in,
                                    initializable_in)
-        || !lower_set_string_annot(ctx, annots, "ir.storage_requested",
+        || !lower_set_string_annot(ctx, annots,
+                                   CORE_STRING_STATIC("ir.storage_requested"),
                                    symbol->requested_storage_class)
-        || !lower_set_string_annot(ctx, annots, "ir.storage_selected",
+        || !lower_set_string_annot(ctx, annots,
+                                   CORE_STRING_STATIC("ir.storage_selected"),
                                    symbol->selected_storage_class)
-        || !lower_set_bool_annot(ctx, annots, "ir.storage_required",
+        || !lower_set_bool_annot(ctx, annots,
+                                 CORE_STRING_STATIC("ir.storage_required"),
                                  symbol->storage_class_required)
-        || !lower_set_int_annot(ctx, annots, "ir.storage_duration",
+        || !lower_set_int_annot(ctx, annots,
+                                CORE_STRING_STATIC("ir.storage_duration"),
                                 symbol->storage_duration)) return false;
     if (symbol->lifetime.has_region
-        && !lower_set_int_annot(ctx, annots, "ir.lifetime_region",
+        && !lower_set_int_annot(ctx, annots,
+                                CORE_STRING_STATIC("ir.lifetime_region"),
                                 symbol->lifetime.region)) return false;
     if (symbol->lifetime.has_start
-        && !lower_set_int_annot(ctx, annots, "ir.lifetime_start",
+        && !lower_set_int_annot(ctx, annots,
+                                CORE_STRING_STATIC("ir.lifetime_start"),
                                 symbol->lifetime.start_point)) return false;
     if (symbol->lifetime.has_end
-        && !lower_set_int_annot(ctx, annots, "ir.lifetime_end",
+        && !lower_set_int_annot(ctx, annots,
+                                CORE_STRING_STATIC("ir.lifetime_end"),
                                 symbol->lifetime.end_point)) return false;
     if (symbol->lifetime.has_finalization_point
-        && !lower_set_int_annot(ctx, annots, "ir.finalization_point",
+        && !lower_set_int_annot(ctx, annots,
+                                CORE_STRING_STATIC("ir.finalization_point"),
                                 symbol->lifetime.finalization_point))
         return false;
 
     if ((!preserve_assignment_aliases
-         && !lower_set_alias_annots(context, annots, value, "alias",
+         && !lower_set_alias_annots(context, annots, value,
+                                    CORE_STRING_STATIC("alias"),
                                     symbol->aliases, symbol->alias_count,
                                     &unresolved, &resolved_aliases))
-        || !lower_set_alias_annots(context, annots, value, "aliased_by",
+        || !lower_set_alias_annots(context, annots, value,
+                                   CORE_STRING_STATIC("aliased_by"),
                                    symbol->aliased_by, symbol->aliased_by_count,
                                    &unresolved, &resolved_reverse_aliases)
         || (!preserve_assignment_aliases
-            && !lower_set_int_annot(ctx, annots, "ir.alias_count",
+            && !lower_set_int_annot(ctx, annots,
+                                    CORE_STRING_STATIC("ir.alias_count"),
                                     resolved_aliases))
-        || !lower_set_int_annot(ctx, annots, "ir.aliased_by_count",
+        || !lower_set_int_annot(ctx, annots,
+                                CORE_STRING_STATIC("ir.aliased_by_count"),
                                 resolved_reverse_aliases)
-        || !lower_set_bool_annot(ctx, annots, "ir.lifetime_escapes",
+        || !lower_set_bool_annot(ctx, annots,
+                                 CORE_STRING_STATIC("ir.lifetime_escapes"),
                                  symbol->lifetime.escapes || unresolved)
         || (!preserve_assignment_aliases
             && (!lower_set_bool_annot(ctx, annots,
-                                      "ir.alias_analysis_complete",
+                                      CORE_STRING_STATIC(
+                                          "ir.alias_analysis_complete"),
                                       symbol->alias_analysis_complete
                                           && !unresolved)
                 || !lower_set_bool_annot(ctx, annots,
-                                         "ir.alias_unresolved",
+                                         CORE_STRING_STATIC(
+                                             "ir.alias_unresolved"),
                                          unresolved)))) return false;
     return true;
 }
@@ -666,12 +701,13 @@ ir_lower_bound_value(ir_lower_context_t *context, parse_sym_entry_t *symbol)
 }
 
 bool
-ir_lowerer_register(ir_lowerer_t *lowerer, const char *action,
+ir_lowerer_register(ir_lowerer_t *lowerer, core_string_t action,
                     ir_lower_action_fn callback, void *state)
 {
-    if (!lowerer || !action || !*action || !callback) return false;
+    if (!lowerer || !action.data || !action.u8_bytes || !callback)
+        return false;
     for (size_t i = 0; i < lowerer->action_count; i++) {
-        if (!strcmp(lowerer->actions[i].name, action)) return false;
+        if (core_string_eq(lowerer->actions[i].name, action)) return false;
     }
     size_t cap = lowerer->action_capacity;
     lowerer->actions = ir_grow(lowerer->ctx, lowerer->actions, &cap,
@@ -710,10 +746,11 @@ ir_lowerer_register_visit(ir_lowerer_t *lowerer, parse_annot_kind_t kind,
 }
 
 bool
-ir_lowerer_register_nt_visit(ir_lowerer_t *lowerer, const char *nonterminal,
+ir_lowerer_register_nt_visit(ir_lowerer_t *lowerer, core_string_t nonterminal,
                              ir_lower_visit_fn callback, void *state)
 {
-    if (!lowerer || !nonterminal || !*nonterminal || !callback) return false;
+    if (!lowerer || !nonterminal.data || !nonterminal.u8_bytes || !callback)
+        return false;
     size_t cap = lowerer->nt_visitor_capacity;
     lowerer->nt_visitors = ir_grow(lowerer->ctx, lowerer->nt_visitors, &cap,
         lowerer->nt_visitor_count + 1, sizeof(*lowerer->nt_visitors));
@@ -729,16 +766,19 @@ ir_lowerer_register_nt_visit(ir_lowerer_t *lowerer, const char *nonterminal,
 }
 
 static ir_lower_result_t
-lower_failure(ir_lower_context_t *context, ir_diagcode_t code,
-              ir_span_t span, const char *message)
+lower_failure_text(ir_lower_context_t *context, ir_diagcode_t code,
+                   ir_span_t span, core_string_t message)
 {
     if (context && context->diagnostics) {
         ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics, code,
-                                              span, nullptr);
+                                              span, (core_string_t){});
         ir_diag_message(diagnostic, context->diagnostics, message);
     }
     return (ir_lower_result_t){.status = IR_LOWER_FAILED};
 }
+
+#define lower_failure(context, code, span, literal) \
+    lower_failure_text((context), (code), (span), CORE_STRING_STATIC(literal))
 
 static ir_instr_t *
 lower_append_instruction(ir_lower_context_t *context, ir_op_t op,
@@ -757,10 +797,12 @@ lower_append_instruction(ir_lower_context_t *context, ir_op_t op,
         return nullptr;
     }
     if (ir_op_is_terminator(op) != terminator) {
-        lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
-                      terminator
-                          ? "terminator helper requires a terminator operation"
-                          : "instruction helper cannot emit a terminator operation");
+        lower_failure_text(context, IR_DIAG_VERIFY_PARSED, span,
+            terminator
+                ? CORE_STRING_STATIC(
+                      "terminator helper requires a terminator operation")
+                : CORE_STRING_STATIC(
+                      "instruction helper cannot emit a terminator operation"));
         return nullptr;
     }
     ir_instr_t *instruction = ir_instr_add(context->block, op);
@@ -790,19 +832,21 @@ ir_lower_emit_terminator(ir_lower_context_t *context, ir_op_t op,
 
 bool
 ir_lower_set_temp_dest(ir_lower_context_t *context, ir_instr_t *instruction,
-                       const char *prefix, th_type *type)
+                       core_string_t prefix, th_type *type)
 {
-    if (!context || !context->function || !instruction || !prefix || !type
-        || instruction->block->owner != context->function)
+    if (!context || !context->function || !instruction || !prefix.data
+        || !type || instruction->block->owner != context->function)
         return false;
     for (;;) {
         core_buffer_t name = {0};
-        core_buffer_printf(&name, "%s%llu", prefix,
+        core_buffer_append_string(&name, prefix);
+        core_buffer_printf(&name, "%llu",
             (unsigned long long)context->next_value_id++);
+        core_string_t text = core_buffer_string(&name);
         bool exists = name.data
-            && ir_value_find(context->function, name.data);
+            && ir_value_find(context->function, text);
         bool bound = name.data && !exists
-            && ir_instr_set_dest(instruction, name.data, type);
+            && ir_instr_set_dest(instruction, text, type);
         core_buffer_release(&name);
         if (!exists) return bound;
     }
@@ -821,7 +865,9 @@ ir_lower_value_as(ir_lower_context_t *context, ir_value_t *value,
         || !ir_type_eq(context->module, th_ind_referent(source), target))
         return value;
     ir_instr_t *load = ir_lower_emit_instruction(context, IR_OP_LOAD, span);
-    if (!load || !ir_lower_set_temp_dest(context, load, "__deref_", target)
+    if (!load
+        || !ir_lower_set_temp_dest(context, load,
+                                   CORE_STRING_STATIC("__deref_"), target)
         || !ir_instr_operand_value(load, value)) return nullptr;
     return load->dest;
 }
@@ -874,8 +920,10 @@ lower_emit_local_read(ir_lower_context_t *context, ir_local_t *local,
 {
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_COPY,
                                                         span);
-    if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__lowered_", local->type)
+    if (!instruction
+        || !ir_lower_set_temp_dest(context, instruction,
+                                   CORE_STRING_STATIC("__lowered_"),
+                                   local->type)
         || !ir_instr_operand_local(instruction, local))
         return nullptr;
     return instruction->dest;
@@ -888,8 +936,9 @@ lower_emit_address_read(ir_lower_context_t *context, ir_value_t *address,
     if (!address || !type) return nullptr;
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_LOAD,
                                                         span);
-    if (!instruction || !ir_lower_set_temp_dest(context, instruction,
-                                                "__lowered_", type)
+    if (!instruction
+        || !ir_lower_set_temp_dest(context, instruction,
+                                   CORE_STRING_STATIC("__lowered_"), type)
         || !ir_instr_operand_value(instruction, address)) return nullptr;
     return instruction->dest;
 }
@@ -937,12 +986,12 @@ lower_parse_integer(core_string_t text, ir_lit_t *literal)
 }
 
 static ir_lower_result_t
-lower_builtin_action(ir_lower_context_t *context, const char *action,
+lower_builtin_action(ir_lower_context_t *context, core_string_t action,
                      parse_visit_t *visit, size_t operand_count,
                      ir_value_t *const *operands, th_type *result_type,
                      ir_span_t span)
 {
-    if (!strcmp(action, "identity")) {
+    if (core_string_eq(action, CORE_STRING_STATIC("identity"))) {
         if (operand_count == 1 && operands && operands[0])
             return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
         if (operand_count == 1 && operands && !operands[0])
@@ -950,7 +999,7 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
         return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
                              "identity lowering requires one child value");
     }
-    if (!strcmp(action, "reference")) {
+    if (core_string_eq(action, CORE_STRING_STATIC("reference"))) {
         parse_node_resolution_t resolution = visit && visit->node
             ? parse_tree_resolution(visit->node)
             : (parse_node_resolution_t){0};
@@ -992,7 +1041,7 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
                                  "reference and inferred node types differ");
         return (ir_lower_result_t){IR_LOWER_VALUE, value};
     }
-    if (!strcmp(action, "literal")) {
+    if (core_string_eq(action, CORE_STRING_STATIC("literal"))) {
         if (operand_count || !result_type)
             return lower_failure(context, IR_DIAG_VERIFY_TYPED, span,
                                  "literal lowering needs a result type and no child values");
@@ -1009,7 +1058,8 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
         ir_instr_t *instruction = ir_lower_emit_instruction(
             context, IR_OP_CONST, span);
         if (!instruction) return (ir_lower_result_t){.status = IR_LOWER_FAILED};
-        if (!ir_lower_set_temp_dest(context, instruction, "__lowered_",
+        if (!ir_lower_set_temp_dest(context, instruction,
+                                    CORE_STRING_STATIC("__lowered_"),
                                     result_type))
             return lower_failure(context, IR_DIAG_INTERNAL, span,
                                  "could not emit a literal value");
@@ -1035,12 +1085,13 @@ lower_builtin_action(ir_lower_context_t *context, const char *action,
             size_t length = 0;
             for (size_t i = 0; digits && i < text.u8_bytes; i++)
                 if (text.data[i] != '_') digits[length++] = text.data[i];
-            if (digits) digits[length] = 0;
-            errno = 0;
-            char *end = nullptr;
-            double value = digits ? strtod(digits, &end) : 0.0;
-            emitted = digits && !errno && end == digits + length
-                && ir_instr_operand_float(instruction, value);
+            double value = 0.0;
+            size_t consumed = 0;
+            bool parsed = digits
+                && core_string_parse_f64(core_string_borrow(digits, length),
+                                         &value, &consumed)
+                && consumed == length;
+            emitted = parsed && ir_instr_operand_float(instruction, value);
             free(digits);
         }
         if (!emitted)
@@ -1070,10 +1121,10 @@ ir_lower_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
         return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
                              "resolved operand count does not match the emit annotation");
 
-    const char *action = annotation->emit_action.data;
+    core_string_t action = annotation->emit_action;
     for (size_t i = 0; i < lowerer->action_count; i++) {
         ir_lower_action_entry_t *entry = &lowerer->actions[i];
-        if (strcmp(entry->name, action)) continue;
+        if (!core_string_eq(entry->name, action)) continue;
         ir_lower_result_t result = entry->callback(
             context, visit, operands, operand_count, result_type, span,
             entry->state);
@@ -1087,8 +1138,9 @@ ir_lower_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
         return result;
     }
 
-    if (!strcmp(action, "identity") || !strcmp(action, "reference")
-        || !strcmp(action, "literal")) {
+    if (core_string_eq(action, CORE_STRING_STATIC("identity"))
+        || core_string_eq(action, CORE_STRING_STATIC("reference"))
+        || core_string_eq(action, CORE_STRING_STATIC("literal"))) {
         ir_lower_result_t result = lower_builtin_action(
             context, action, visit, operand_count, operands, result_type, span);
         if (result.status == IR_LOWER_TERMINATED)
@@ -1109,11 +1161,13 @@ ir_lower_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
         if (!operands || !lower_value_accessible(context, operands[i])
             || (kind != IR_OPD_VALUE && kind != IR_OPD_ARG)) {
             char message[160];
-            snprintf(message, sizeof(message),
-                     "declarative action '%s' has no accessible value for operand %zu",
-                     action, i);
-            return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
-                                 message);
+            int written = snprintf(message, sizeof(message),
+                     "declarative action '%.*s' has no accessible value for operand %zu",
+                     (int)action.u8_bytes, action.data, i);
+            size_t length = written < 0 ? 0 : (size_t)written;
+            if (length >= sizeof(message)) length = sizeof(message) - 1;
+            return lower_failure_text(context, IR_DIAG_VERIFY_PARSED, span,
+                                      core_string_borrow(message, length));
         }
     }
     bool has_result = ir_op_has_result(op);
@@ -1133,7 +1187,8 @@ ir_lower_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
 
     ir_lower_result_t result = {.status = IR_LOWER_NO_VALUE};
     if (has_result) {
-        if (!ir_lower_set_temp_dest(context, instruction, "__lowered_",
+        if (!ir_lower_set_temp_dest(context, instruction,
+                                    CORE_STRING_STATIC("__lowered_"),
                                     result_type))
             return lower_failure(context, IR_DIAG_INTERNAL, span,
                                  "could not bind the lowered IR result");
@@ -1419,12 +1474,16 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
             ir_annots_t *annots = destination
                 ? ir_value_annots(destination) : nullptr;
             ir_annot_t *count = annots
-                ? ir_annot_get(annots, "ir.alias_count") : nullptr;
+                ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_count"))
+                : nullptr;
             ir_annot_t *complete = annots
-                ? ir_annot_get(annots, "ir.alias_analysis_complete")
+                ? ir_annot_get(annots, CORE_STRING_STATIC(
+                                           "ir.alias_analysis_complete"))
                 : nullptr;
             ir_annot_t *unresolved = annots
-                ? ir_annot_get(annots, "ir.alias_unresolved") : nullptr;
+                ? ir_annot_get(annots,
+                               CORE_STRING_STATIC("ir.alias_unresolved"))
+                : nullptr;
             bool can_complete = !unresolved
                 || (unresolved->kind == IR_ANNOT_BOOL && !unresolved->b);
             ir_value_t *alias_value = value;
@@ -1459,7 +1518,7 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
             if (attached)
                 attached = lower_set_bool_annot(
                     state->context->module->ctx, annots,
-                    "ir.alias_from_assignment", true);
+                    CORE_STRING_STATIC("ir.alias_from_assignment"), true);
             if (!attached)
                 return lower_failure(state->context, IR_DIAG_INTERNAL, span,
                     "could not attach the local reference source");
@@ -1643,10 +1702,10 @@ lower_ref_valid_for_rule(parse_grammar_t *grammar, const parse_rule_t *rule,
 }
 
 static bool
-lower_has_action(const ir_lowerer_t *lowerer, const char *action)
+lower_has_action(const ir_lowerer_t *lowerer, core_string_t action)
 {
     for (size_t i = 0; i < lowerer->action_count; i++)
-        if (!strcmp(lowerer->actions[i].name, action)) return true;
+        if (core_string_eq(lowerer->actions[i].name, action)) return true;
     return false;
 }
 
@@ -1656,7 +1715,7 @@ lower_validate_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
                     const parse_annotation_t *annotation)
 {
     if (!annotation || annotation->kind != PARSE_ANNOT_EMIT) return true;
-    const char *action = annotation->emit_action.data;
+    core_string_t action = annotation->emit_action;
     size_t operand_count = core_list_len(annotation->emit_operands);
     for (size_t i = 0; i < operand_count; i++) {
         if (!lower_ref_valid_for_rule(grammar, rule,
@@ -1666,17 +1725,18 @@ lower_validate_emit(ir_lowerer_t *lowerer, ir_lower_context_t *context,
             return false;
         }
     }
-    if (!action) {
+    if (!action.data) {
         lower_failure(context, IR_DIAG_VERIFY_PARSED, IR_SPAN_UNKNOWN,
                       "emit annotation has no action name");
         return false;
     }
 
     if (lower_has_action(lowerer, action)) return true;
-    if (!strcmp(action, "identity")) {
+    if (core_string_eq(action, CORE_STRING_STATIC("identity"))) {
         if (operand_count == 1) return true;
     }
-    else if (!strcmp(action, "reference") || !strcmp(action, "literal")) {
+    else if (core_string_eq(action, CORE_STRING_STATIC("reference"))
+             || core_string_eq(action, CORE_STRING_STATIC("literal"))) {
         if (!operand_count) return true;
     }
     else {
@@ -1762,15 +1822,15 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
                         nullptr, nullptr);
     for (size_t i = 0; i < lowerer->nt_visitor_count; i++) {
         ir_lower_nt_visit_entry_t *entry = &lowerer->nt_visitors[i];
-        if (!parse_walk_on_nt(walk,
-                core_string_from_cstr(entry->nonterminal), lower_tree_nt_pre,
+        if (!parse_walk_on_nt(walk, entry->nonterminal, lower_tree_nt_pre,
                 lower_tree_nt_post, entry)) {
             core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "lowering callback names absent nonterminal '%s'",
-                entry->nonterminal);
-            lower_failure(context, IR_DIAG_VERIFY_PARSED, IR_SPAN_UNKNOWN,
-                          message.data);
+            core_buffer_puts(&message,
+                "lowering callback names absent nonterminal '");
+            core_buffer_append_string(&message, entry->nonterminal);
+            core_buffer_puts(&message, "'");
+            lower_failure_text(context, IR_DIAG_VERIFY_PARSED,
+                               IR_SPAN_UNKNOWN, core_buffer_string(&message));
             core_buffer_release(&message);
             state.failed = true;
             break;

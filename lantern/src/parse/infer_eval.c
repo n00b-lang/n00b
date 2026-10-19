@@ -36,7 +36,7 @@ typedef struct {
 static th_type *eval(ictx *c, const parse_infer_expr_t *e);
 static th_type *fresh(ictx *c);
 
-static th_type *named_application(ictx *c, const char *name,
+static th_type *named_application(ictx *c, core_string_t name,
                                   const th_arg *args, size_t n)
 {
     uint8_t attrs;
@@ -46,13 +46,15 @@ static th_type *named_application(ictx *c, const char *name,
     return th_apply(c->tc, name, args, n);
 }
 
-static bool node_is(parse_grammar_t *grammar, parse_tree_t *node,
-                    const char *name)
+static bool node_is_named(parse_grammar_t *grammar, parse_tree_t *node,
+                          core_string_t name)
 {
     return node && !core_tree_is_leaf(node) &&
-        core_string_eq(parse_tree_nt_name(grammar, node),
-                       core_string_from_cstr(name));
+        core_string_eq(parse_tree_nt_name(grammar, node), name);
 }
+
+#define node_is(grammar, node, lit) \
+    node_is_named((grammar), (node), CORE_STRING_STATIC(lit))
 
 static th_type *node_type(ictx *c, parse_tree_t *node)
 {
@@ -169,7 +171,7 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
             continue;
         }
         core_list_push(kwparams, ((th_kwparam){
-            .name = th_strdup(c->tc, name.data, name.u8_bytes),
+            .name = th_strdup(c->tc, name),
             .mode = TH_IN,
             .type = parse_tree_argument_type(value)
                 ? parse_tree_argument_type(value)
@@ -244,7 +246,7 @@ static th_type *slice_call_shape(ictx *c, th_type *result)
     bool colon = false;
     size_t lower_count = 0;
     size_t upper_count = 0;
-    th_type *integer = th_name(c->tc, "int");
+    th_type *integer = th_name(c->tc, CORE_STRING_STATIC("int"));
     for (size_t i = 0; contents && !core_tree_is_leaf(contents) &&
          i < core_tree_num_children(contents); i++) {
         parse_tree_t *part = core_tree_child(contents, i);
@@ -336,21 +338,23 @@ static th_type *slice_store_call_shape(ictx *c, th_type *result,
         return nullptr;
     parse_tree_t *value = core_tree_child(assignment, 2);
     if (!node_is(c->v->grammar, value, "expression")) return nullptr;
-    th_type *bound = th_option(c->tc, th_name(c->tc, "int"));
+    th_type *bound = th_option(c->tc,
+                               th_name(c->tc, CORE_STRING_STATIC("int")));
     th_param parameters[] = {
         {.mode = TH_IN, .type = bound},
         {.mode = TH_IN, .type = bound},
-        {.mode = TH_IN, .type = th_name(c->tc, "bool")},
+        {.mode = TH_IN, .type = th_name(c->tc, CORE_STRING_STATIC("bool"))},
         {.mode = TH_IN, .type = node_type(c, value)},
     };
     return th_func(c->tc, result, parameters, 4, nullptr, nullptr, 0);
 }
 
 static th_type *infer_method_obligation(ictx *c, th_type *receiver,
-                                        const char *method_name,
+                                        core_string_t method_name,
                                         th_type *result, th_type *call_shape)
 {
-    if (!th_require_method_at(c->tc, receiver, method_name, nullptr, result,
+    if (!th_require_method_at(c->tc, receiver, method_name,
+                              (core_string_t){}, result,
                               call_shape, c->v->node))
         c->failed = true;
     return result;
@@ -552,7 +556,8 @@ tvar(ictx *c, core_string_t name)
         }
     }
 
-    th_type *t = th_var_named(c->tc, name.data ? name.data : "t");
+    th_type *t = th_var_named(c->tc,
+                              name.data ? name : CORE_STRING_STATIC("t"));
 
     core_list_push(c->tvars, ((tvar_t){.name = name, .var = t}));
 
@@ -654,34 +659,37 @@ named_arg_first(const th_type *t)
 }
 
 static bool
-named_is(const th_type *t, const char *want)
+named_is(const th_type *t, core_string_t want)
 {
-    const char *nm    = nullptr;
-    size_t      nlen  = 0;
-    size_t      nargs = 0;
-    bool        var   = false;
+    core_string_t nm    = {};
+    size_t        nargs = 0;
+    bool          var   = false;
 
-    if (!th_named_info(t, &nm, &nlen, &var, &nargs) || !nm) {
+    if (!th_named_info(t, &nm, &var, &nargs) || !nm.data) {
         return false;
     }
 
-    return nlen == strlen(want) && !memcmp(nm, want, nlen);
+    return core_string_eq(nm, want);
 }
 
 static bool
 builtin_comparable(const th_type *type)
 {
     if (th_kind_of(type) == TH_BITINT) return true;
-    const char *name = nullptr;
-    size_t nlen = 0;
-    if (!th_named_info(type, &name, &nlen, nullptr, nullptr)) return false;
-    static const char *const names[] = {
-        "int", "uint", "i8", "i16", "i32", "i64", "i128",
-        "u8", "u16", "u32", "u64", "u128", "float", "f64", "f32",
-        "string",
+    core_string_t name = {};
+    if (!th_named_info(type, &name, nullptr, nullptr)) return false;
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC("int"),   CORE_STRING_STATIC("uint"),
+        CORE_STRING_STATIC("i8"),    CORE_STRING_STATIC("i16"),
+        CORE_STRING_STATIC("i32"),   CORE_STRING_STATIC("i64"),
+        CORE_STRING_STATIC("i128"),  CORE_STRING_STATIC("u8"),
+        CORE_STRING_STATIC("u16"),   CORE_STRING_STATIC("u32"),
+        CORE_STRING_STATIC("u64"),   CORE_STRING_STATIC("u128"),
+        CORE_STRING_STATIC("float"), CORE_STRING_STATIC("f64"),
+        CORE_STRING_STATIC("f32"),   CORE_STRING_STATIC("string"),
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
-        if (strlen(names[i]) == nlen && !memcmp(name, names[i], nlen))
+        if (core_string_eq(name, names[i]))
             return true;
     return false;
 }
@@ -717,13 +725,9 @@ field_projection(ictx *c, th_type *receiver, core_string_t name,
                  bool auto_deref)
 {
     if (!name.data) return fresh(c);
-    char *field_name = core_alloc_array(char, name.u8_bytes + 1);
-    memcpy(field_name, name.data, name.u8_bytes);
-    field_name[name.u8_bytes] = 0;
     th_type *result = fresh(c);
-    th_type *field = th_record_lookup_in(c->tc, receiver, field_name);
+    th_type *field = th_record_lookup_in(c->tc, receiver, name);
     if (field) {
-        core_free(field_name);
         return field;
     }
     th_type *resolved = th_resolve(receiver);
@@ -731,25 +735,23 @@ field_projection(ictx *c, th_type *receiver, core_string_t name,
         && th_var_constrain(c->tc, resolved,
             (th_constraint){
                 .kind = TH_CON_HAS_FIELD,
-                .field = {.name = field_name, .type = result,
+                .field = {.name = name, .type = result,
                           .auto_deref = auto_deref}});
-    core_free(field_name);
     if (!constrained) {
         c->failed = true;
-        th_err(c->tc, TH_ERR_NO_SUCH_FIELD, "has_field", nullptr, receiver,
+        th_err(c->tc, TH_ERR_NO_SUCH_FIELD, CORE_STRING_STATIC("has_field"),
+               nullptr, receiver,
                resolved && th_option_item(resolved)
-                   ? "an option has no fields; unwrap its value before reading a field"
-                   : "this type has no field with that name");
+                   ? CORE_STRING_STATIC("an option has no fields; unwrap its value before reading a field")
+                   : CORE_STRING_STATIC("this type has no field with that name"));
     }
     return result;
 }
 
 static bool
-text_is(core_string_t text, const char *want)
+text_is(core_string_t text, core_string_t want)
 {
-    size_t n = strlen(want);
-
-    return text.u8_bytes == n && !memcmp(text.data, want, n);
+    return core_string_eq(text, want);
 }
 
 static th_type *
@@ -806,8 +808,9 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             th_type *element = th_seq_elem(container);
             if (!element) {
                 c->failed = true;
-                th_err(c->tc, TH_ERR_CONSTRAINT, "element_address", nullptr, t,
-                       "only array elements have addresses; this container cannot be indexed by reference");
+                th_err(c->tc, TH_ERR_CONSTRAINT,
+                       CORE_STRING_STATIC("element_address"), nullptr, t,
+                       CORE_STRING_STATIC("only array elements have addresses; this container cannot be indexed by reference"));
                 return result;
             }
             return element;
@@ -817,14 +820,14 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             th_type *call_shape = index_store_call_shape(c, result,
                                                          assignment);
             if (call_shape && other_name.data)
-                return infer_method_obligation(c, t, other_name.data, result,
+                return infer_method_obligation(c, t, other_name, result,
                                                call_shape);
             c->failed = true;
             return result;
         }
         th_type *call_shape = index_call_shape(c, result);
         if (call_shape && explicit_name.data)
-            return infer_method_obligation(c, t, explicit_name.data, result,
+            return infer_method_obligation(c, t, explicit_name, result,
                                            call_shape);
         if (call_shape) {
             c->failed = true;
@@ -860,7 +863,7 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             th_type *call_shape = slice_store_call_shape(c, result,
                                                          assignment);
             if (call_shape && other_name.data)
-                return infer_method_obligation(c, t, other_name.data,
+                return infer_method_obligation(c, t, other_name,
                                                result, call_shape);
             c->failed = true;
             return result;
@@ -870,7 +873,7 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             c->failed = true;
             return result;
         }
-        return infer_method_obligation(c, t, explicit_name.data, result,
+        return infer_method_obligation(c, t, explicit_name, result,
                                        call_shape);
     }
 
@@ -889,25 +892,24 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
 
         th_type *option_item = th_option_item(t);
 
-        if (option_item || named_is(t, "result")) {
-            if (text_is(name, "is_set?") || text_is(name, "ok?")
-                || text_is(name, "is_ok?")) {
-                return th_name(c->tc, "bool");
+        if (option_item || named_is(t, CORE_STRING_STATIC("result"))) {
+            if (text_is(name, CORE_STRING_STATIC("is_set?"))
+                || text_is(name, CORE_STRING_STATIC("ok?"))
+                || text_is(name, CORE_STRING_STATIC("is_ok?"))) {
+                return th_name(c->tc, CORE_STRING_STATIC("bool"));
             }
-            if (text_is(name, "unwrap")) {
+            if (text_is(name, CORE_STRING_STATIC("unwrap"))) {
                 th_type *inner = named_arg_first(t);
 
                 return inner ? inner : fresh(c);
             }
         }
 
-        char *method_name = core_alloc_array(char, name.u8_bytes + 1);
-
-        memcpy(method_name, name.data, name.u8_bytes);
-        method_name[name.u8_bytes] = 0;
+        core_string_t method_name = name;
 
         th_type *call_result = option_item
-            && (text_is(name, "get") || text_is(name, "get_or_else"))
+            && (text_is(name, CORE_STRING_STATIC("get"))
+                || text_is(name, CORE_STRING_STATIC("get_or_else")))
                 ? option_item : fresh(c);
         th_type *call = method_call_shape(c, call_result);
         th_type *signature = th_method_lookup(c->tc, t, method_name);
@@ -917,7 +919,6 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             bool matched = call
                 ? unify_method_call_shape(c, instance, t, call_result, call)
                 : true;
-            core_free(method_name);
             if (!matched) {
                 c->failed = true;
                 return call_result;
@@ -930,7 +931,6 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             th_type *instance = th_instantiate(
                 c->tc, th_generalize(c->tc, signature));
             bool matched = !call || th_unify_in_place(c->tc, instance, call);
-            core_free(method_name);
             if (!matched) {
                 c->failed = true;
                 return call_result;
@@ -949,7 +949,6 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
                 th_type *resolved = method_requirement_return(
                     c, t, &requirement, call_result, call);
                 if (resolved) {
-                    core_free(method_name);
                     return call ? call : resolved;
                 }
             } else if (requirement_count > 1) {
@@ -961,7 +960,6 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
                                 .method = {.name = method_name,
                                            .result = call_result,
                                            .call = call}})) {
-                        core_free(method_name);
                         return call ? call : call_result;
                     }
                     else
@@ -974,19 +972,18 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
                                                requirements,
                                                requirement_count);
                     th_env_method_t selected = {0};
-                    const char *trait_name = nullptr;
+                    core_string_t trait_name = {};
                     th_env_method_status_t status =
                         th_env_method_resolve_by_name(
                             c->tc, t, method_name, &selected, &trait_name);
                     if (status == TH_ENV_METHOD_FOUND) {
                         for (size_t i = 0; i < requirement_count; i++) {
-                            if (strcmp(requirements[i].trait_name,
-                                       trait_name))
+                            if (!core_string_eq(requirements[i].trait_name,
+                                                trait_name))
                                 continue;
                             th_type *resolved = method_requirement_return(
                                 c, t, &requirements[i], call_result, call);
                             core_free(requirements);
-                            core_free(method_name);
                             return resolved
                                 ? (call ? call : resolved) : fresh(c);
                         }
@@ -999,16 +996,12 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             } else {
                 th_type *resolved = infer_method_obligation(
                     c, t, method_name, call_result, call);
-                core_free(method_name);
                 return call ? call : resolved;
             }
-            core_free(method_name);
             return call ? call : call_result;
         }
 
         th_type *ret = signature ? th_func_ret(signature) : nullptr;
-
-        core_free(method_name);
 
         return ret ? ret : fresh(c);
     }
@@ -1138,7 +1131,8 @@ eval(ictx *c, const parse_infer_expr_t *e)
         return tvar(c, e->name);
 
     case PARSE_INFER_NAMED:
-        return th_name(c->tc, e->name.data ? e->name.data : "");
+        return th_name(c->tc,
+                       e->name.data ? e->name : CORE_STRING_STATIC(""));
 
     case PARSE_INFER_NAMED_APP: {
         core_list_t(th_arg) args = core_list_new(th_arg);
@@ -1146,7 +1140,8 @@ eval(ictx *c, const parse_infer_expr_t *e)
         app_args(c, e, &args);
 
         th_type *r = named_application(c,
-            e->name.data ? e->name.data : "", args.data, args.len);
+            e->name.data ? e->name : CORE_STRING_STATIC(""), args.data,
+            args.len);
 
         core_list_free(args);
 
@@ -1167,7 +1162,7 @@ eval(ictx *c, const parse_infer_expr_t *e)
 
         app_args(c, e, &args);
 
-        th_type *r = named_application(c, nm.data, args.data, args.len);
+        th_type *r = named_application(c, nm, args.data, args.len);
 
         core_list_free(args);
 
@@ -1195,12 +1190,12 @@ eval(ictx *c, const parse_infer_expr_t *e)
         th_type *right = eval(c, e->rhs);
         if (!left || !right) {
             c->failed = true;
-            return th_name(c->tc, "bool");
+            return th_name(c->tc, CORE_STRING_STATIC("bool"));
         }
         if (builtin_comparable(left)) {
             if (!th_custom_coerces(c->tc, right, left)
                 && !th_unify_in_place(c->tc, left, right)) c->failed = true;
-            return th_name(c->tc, "bool");
+            return th_name(c->tc, CORE_STRING_STATIC("bool"));
         }
         th_type *comparison = nullptr;
         if (e->other_name.data) {
@@ -1214,15 +1209,16 @@ eval(ictx *c, const parse_infer_expr_t *e)
                     CORE_STRING_STATIC("type"), e->other_name)
                 : nullptr;
             comparison = type && type->type
-                ? type->type : th_name(c->tc, e->other_name.data);
+                ? type->type : th_name(c->tc, e->other_name);
         }
         else comparison = th_bitint(c->tc, 2, true);
         th_param parameter = {.mode = TH_IN, .type = right};
         th_type *call_shape = th_func(c->tc, comparison, &parameter, 1,
                                       nullptr, nullptr, 0);
         infer_method_obligation(c, left,
-            e->name.data ? e->name.data : "cmp", comparison, call_shape);
-        return th_name(c->tc, "bool");
+            e->name.data ? e->name : CORE_STRING_STATIC("cmp"), comparison,
+            call_shape);
+        return th_name(c->tc, CORE_STRING_STATIC("bool"));
     }
 
     case PARSE_INFER_METHOD_RESULT: {
@@ -1240,8 +1236,8 @@ eval(ictx *c, const parse_infer_expr_t *e)
             c->failed = true;
             return result;
         }
-        if (!th_require_method_at(c->tc, receiver, e->name.data,
-                                  e->other_name.data, result, call,
+        if (!th_require_method_at(c->tc, receiver, e->name,
+                                  e->other_name, result, call,
                                   c->v->node))
             c->failed = true;
         return result;
@@ -1307,9 +1303,9 @@ parse_infer_eval_with_type_node_resolver(
 
     if (first) {
         core_option_t(core_string_t) first_file = parse_token_file(first);
-        const char *file = core_option_is_set(first_file)
-                               ? core_option_get(first_file).data
-                               : nullptr;
+        core_string_t file = core_option_is_set(first_file)
+                               ? core_option_get(first_file)
+                               : (core_string_t){};
         uint32_t first_line   = parse_token_line(first);
         uint32_t first_column = parse_token_column(first);
         uint32_t last_line    = parse_token_line(last);

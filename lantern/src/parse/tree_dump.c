@@ -94,7 +94,7 @@ print_node(parse_grammar_t *g, parse_tree_t *node, core_buffer_t *b,
     }
 }
 
-char *
+core_string_t
 parse_tree_dump_str(parse_grammar_t *g, parse_tree_t *tree, bool raw)
 {
     core_buffer_t *b = core_buffer_empty();
@@ -103,7 +103,7 @@ parse_tree_dump_str(parse_grammar_t *g, parse_tree_t *tree, bool raw)
         print_node(g, tree, b, 0, raw);
     }
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }
 
 void
@@ -114,8 +114,8 @@ parse_tree_dump(parse_grammar_t *g, parse_tree_t *tree,
         return;
     }
 
-    char *s = parse_tree_dump_str(g, tree, raw);
+    core_string_t s = parse_tree_dump_str(g, tree, raw);
 
-    fputs(s, out);
-    core_free(s);
+    fwrite(s.data, 1, s.u8_bytes, out);
+    core_free(s.data);
 }

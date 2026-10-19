@@ -6,15 +6,15 @@
 #include "lib/link_unit.h"
 #include "harness.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 static bool
-init_unit(core_translation_unit_t *unit, const char *module_name)
+init_unit(core_translation_unit_t *unit, core_string_t module_name)
 {
     core_module_spec_t module = {0};
     core_source_file_t source = {0};
-    bool ok = core_module_spec_init(&module,
-        core_string_from_cstr(module_name))
-        && core_source_file_init(&source,
-            core_string_from_cstr(module_name), "", 0)
+    bool ok = core_module_spec_init(&module, module_name)
+        && core_source_file_init(&source, module_name, S(""))
         && core_translation_unit_init(unit, &module, &source);
     core_module_spec_release(&module);
     core_source_file_release(&source);
@@ -61,11 +61,11 @@ test_link_unit_closure_and_linkage(void)
     core_translation_unit_t shared = {0};
     core_translation_unit_t cycle_a = {0};
     core_translation_unit_t cycle_b = {0};
-    init_unit(&root_a, "pkg.root_a");
-    init_unit(&root_b, "pkg.root_b");
-    init_unit(&shared, "pkg.shared");
-    init_unit(&cycle_a, "pkg.cycle_a");
-    init_unit(&cycle_b, "pkg.cycle_b");
+    init_unit(&root_a, S("pkg.root_a"));
+    init_unit(&root_b, S("pkg.root_b"));
+    init_unit(&shared, S("pkg.shared"));
+    init_unit(&cycle_a, S("pkg.cycle_a"));
+    init_unit(&cycle_b, S("pkg.cycle_b"));
     core_translation_unit_add_import(&root_a, &shared);
     core_translation_unit_add_import(&root_b, &shared);
     core_translation_unit_add_import(&shared, &cycle_a);
@@ -271,8 +271,8 @@ test_link_unit_conflicts_and_payload_ownership(void)
 {
     core_translation_unit_t owner = {0};
     core_translation_unit_t duplicate = {0};
-    init_unit(&owner, "pkg.conflict");
-    init_unit(&duplicate, "pkg.conflict");
+    init_unit(&owner, S("pkg.conflict"));
+    init_unit(&duplicate, S("pkg.conflict"));
     core_link_unit_t *conflict = core_link_unit_new();
     core_link_unit_add_root(conflict, &owner);
     check("distinct roots with one canonical module id are rejected",
@@ -282,7 +282,7 @@ test_link_unit_conflicts_and_payload_ownership(void)
     core_link_unit_free(conflict);
 
     core_translation_unit_t root = {0};
-    init_unit(&root, "pkg.owner");
+    init_unit(&root, S("pkg.owner"));
     core_link_unit_t *link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_unit_collect(link);
@@ -341,10 +341,10 @@ test_link_unit_graph_refresh(void)
     core_translation_unit_t dependency = {0};
     core_translation_unit_t late_dependency = {0};
     core_translation_unit_t after_finalize = {0};
-    init_unit(&root, "pkg.refresh_root");
-    init_unit(&dependency, "pkg.refresh_dependency");
-    init_unit(&late_dependency, "pkg.refresh_late");
-    init_unit(&after_finalize, "pkg.refresh_after_finalize");
+    init_unit(&root, S("pkg.refresh_root"));
+    init_unit(&dependency, S("pkg.refresh_dependency"));
+    init_unit(&late_dependency, S("pkg.refresh_late"));
+    init_unit(&after_finalize, S("pkg.refresh_after_finalize"));
     core_translation_unit_add_import(&root, &dependency);
 
     core_link_unit_t *link = core_link_unit_new();
@@ -398,7 +398,7 @@ static void
 test_link_unit_typed_declarations(void)
 {
     core_translation_unit_t root = {0};
-    init_unit(&root, "pkg.typed_declarations");
+    init_unit(&root, S("pkg.typed_declarations"));
     core_link_unit_t *link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
 
@@ -501,7 +501,7 @@ test_link_unit_typed_declarations(void)
     core_link_unit_free(link);
     core_translation_unit_release(&root);
 
-    init_unit(&root, "pkg.external_requirement");
+    init_unit(&root, S("pkg.external_requirement"));
     link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     int external_payload = 4;
@@ -545,7 +545,7 @@ test_link_unit_typed_declarations(void)
     core_link_unit_free(link);
     core_translation_unit_release(&root);
 
-    init_unit(&root, "pkg.incomplete_declaration");
+    init_unit(&root, S("pkg.incomplete_declaration"));
     link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     check("validation rejects declarations with no definition or external requirement",
@@ -558,7 +558,7 @@ test_link_unit_typed_declarations(void)
     core_link_unit_free(link);
     core_translation_unit_release(&root);
 
-    init_unit(&root, "pkg.wrong_kind_reference");
+    init_unit(&root, S("pkg.wrong_kind_reference"));
     link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_declaration_t *target = nullptr;
@@ -646,7 +646,7 @@ static void
 test_link_unit_declaration_bindings(void)
 {
     core_translation_unit_t root = {0};
-    init_unit(&root, "pkg.binding_root");
+    init_unit(&root, S("pkg.binding_root"));
     core_link_unit_t *link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_unit_finalize_graph(link);
@@ -730,7 +730,7 @@ static void
 test_link_unit_stage_driver(void)
 {
     core_translation_unit_t root = {0};
-    init_unit(&root, "pkg.stage_driver");
+    init_unit(&root, S("pkg.stage_driver"));
     core_link_unit_t *link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_unit_finalize_graph(link);
@@ -779,7 +779,7 @@ test_link_unit_stage_driver(void)
     core_link_unit_free(link);
     core_translation_unit_release(&root);
 
-    init_unit(&root, "pkg.cyclic_stages");
+    init_unit(&root, S("pkg.cyclic_stages"));
     link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     uint32_t prereq_a[] = {52};
@@ -801,8 +801,8 @@ test_link_unit_stage_driver(void)
     core_translation_unit_release(&root);
 
     core_translation_unit_t late = {0};
-    init_unit(&root, "pkg.graph_mutation_during_stage");
-    init_unit(&late, "pkg.graph_mutation_during_stage_late");
+    init_unit(&root, S("pkg.graph_mutation_during_stage"));
+    init_unit(&late, S("pkg.graph_mutation_during_stage_late"));
     link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     graph_mutation_probe_t mutation = {
@@ -821,7 +821,7 @@ test_link_unit_stage_driver(void)
     core_translation_unit_release(&root);
     core_translation_unit_release(&late);
 
-    init_unit(&root, "pkg.unfinalized_stage");
+    init_unit(&root, S("pkg.unfinalized_stage"));
     link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     stage_probe_t guarded = {.result = CORE_LINK_STAGE_RESULT_COMPLETE};
@@ -845,10 +845,10 @@ test_link_unit_stage_refresh(void)
     core_translation_unit_t second_root = {0};
     core_translation_unit_t added = {0};
     core_translation_unit_t unrelated = {0};
-    init_unit(&root, "pkg.refresh_stage");
-    init_unit(&second_root, "pkg.refresh_stage_second_root");
-    init_unit(&added, "pkg.refresh_stage_dependency");
-    init_unit(&unrelated, "pkg.unrelated_stage");
+    init_unit(&root, S("pkg.refresh_stage"));
+    init_unit(&second_root, S("pkg.refresh_stage_second_root"));
+    init_unit(&added, S("pkg.refresh_stage_dependency"));
+    init_unit(&unrelated, S("pkg.unrelated_stage"));
     core_translation_unit_add_import(&added, &root);
     core_link_unit_t *changed = core_link_unit_new();
     core_link_unit_t *other = core_link_unit_new();
@@ -916,7 +916,7 @@ static void
 test_link_unit_deferred_references(void)
 {
     core_translation_unit_t root = {0};
-    init_unit(&root, "pkg.deferred_reference");
+    init_unit(&root, S("pkg.deferred_reference"));
     core_link_unit_t *link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_unit_finalize_graph(link);
@@ -979,7 +979,7 @@ test_link_unit_deferred_references(void)
     core_link_unit_free(link);
     core_translation_unit_release(&root);
 
-    init_unit(&root, "pkg.stale_deferred_reference");
+    init_unit(&root, S("pkg.stale_deferred_reference"));
     link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_unit_finalize_graph(link);
@@ -1005,7 +1005,7 @@ static void
 test_link_unit_contributions(void)
 {
     core_translation_unit_t root = {0};
-    init_unit(&root, "pkg.contribution_root");
+    init_unit(&root, S("pkg.contribution_root"));
     core_link_unit_t *link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_unit_finalize_graph(link);
@@ -1117,15 +1117,15 @@ test_link_unit_contributions(void)
         CORE_LINK_CONTRIBUTION_UNAVAILABLE,
         CORE_LINK_CONTRIBUTION_FAILED,
     };
-    const char *rejected_domains[] = {
-        "consumer.pending", "consumer.unavailable", "consumer.failed",
+    const core_string_t rejected_domains[] = {
+        S("consumer.pending"), S("consumer.unavailable"), S("consumer.failed"),
     };
     bool rejected_noncomplete_states = true;
     for (size_t i = 0; i < sizeof(rejected_states)
             / sizeof(rejected_states[0]); i++) {
         rejected_noncomplete_states &= core_link_unit_set_contribution(link,
             CORE_STRING_STATIC("pkg.contribution"),
-            core_string_from_cstr(rejected_domains[i]), 1, 0,
+            rejected_domains[i], 1, 0,
             rejected_states[i], CORE_STRING_STATIC("test.consumer-state"),
             1, nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr);
         view = (core_link_contribution_view_t){
@@ -1134,7 +1134,7 @@ test_link_unit_contributions(void)
         };
         rejected_noncomplete_states &= !core_link_unit_require_contribution(
             link, CORE_STRING_STATIC("pkg.contribution"),
-            core_string_from_cstr(rejected_domains[i]), 1, &view)
+            rejected_domains[i], 1, &view)
             && !view.payload && !view.version;
     }
     check("consumers reject deferred, unavailable, and failed contributions",
@@ -1169,7 +1169,7 @@ static void
 test_link_unit_dependencies(void)
 {
     core_translation_unit_t root = {0};
-    init_unit(&root, "pkg.dependency_root");
+    init_unit(&root, S("pkg.dependency_root"));
     core_link_unit_t *link = core_link_unit_new();
     core_link_unit_add_root(link, &root);
     core_link_unit_finalize_graph(link);

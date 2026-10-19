@@ -36,14 +36,6 @@ core_hash_raw(const void *data, size_t len)
 }
 
 core_hash_value_t
-core_hash_cstring(void *value)
-{
-    const char *s = (const char *)value;
-
-    return core_hash_raw(s, s ? strlen(s) : 0);
-}
-
-core_hash_value_t
 core_hash_word(void *value)
 {
     uintptr_t w = (uintptr_t)value;

@@ -26,11 +26,18 @@ bool core_object_emit_elf_native_section_index(size_t section_count,
     return true;
 }
 
-static bool add_cstring(size_t *size, const char *value)
+static bool add_name(size_t *size, core_string_t value)
 {
-    size_t length = strlen(value);
+    size_t length = value.u8_bytes;
     return length < SIZE_MAX && core_object_size_add(*size, length + 1, size) &&
            *size <= UINT32_MAX;
+}
+
+static void put_name(uint8_t *image, size_t *cursor, core_string_t value)
+{
+    memcpy(image + *cursor, value.data, value.u8_bytes);
+    image[*cursor + value.u8_bytes] = 0;
+    *cursor += value.u8_bytes + 1;
 }
 
 static void write_section_header(uint8_t *header, uint32_t name, uint32_t type,
@@ -87,17 +94,17 @@ bool core_object_emit_elf(const core_target_desc_t *target,
         !core_object_size_add(section_headers, rel_section_count,
                               &section_headers) ||
         section_headers > UINT32_MAX ||
-        !add_cstring(&shstr_size, ".shstrtab") ||
-        !add_cstring(&shstr_size, ".strtab") ||
-        !add_cstring(&shstr_size, ".symtab")) goto done;
+        !add_name(&shstr_size, CORE_STRING_STATIC(".shstrtab")) ||
+        !add_name(&shstr_size, CORE_STRING_STATIC(".strtab")) ||
+        !add_name(&shstr_size, CORE_STRING_STATIC(".symtab"))) goto done;
     for (size_t i = 0; i < section_count; i++) {
-        if (!add_cstring(&shstr_size, sections[i].name)) goto done;
+        if (!add_name(&shstr_size, sections[i].name)) goto done;
         if (rel_counts[i] &&
             (!core_object_size_add(shstr_size, 5, &shstr_size) ||
-             !add_cstring(&shstr_size, sections[i].name))) goto done;
+             !add_name(&shstr_size, sections[i].name))) goto done;
     }
     for (size_t i = 0; i < symbol_count; i++)
-        if (!add_cstring(&str_size, symbols[i].name)) goto done;
+        if (!add_name(&str_size, symbols[i].name)) goto done;
 
     size_t symtab_bytes, shdr_bytes, offset = ELF_HEADER_BYTES;
     if (!core_object_size_mul(symbol_count + 1, ELF_SYMBOL_BYTES,
@@ -157,24 +164,19 @@ bool core_object_emit_elf(const core_target_desc_t *target,
     memcpy(image + string_cursor, ".symtab", 8);
     string_cursor += 8;
     for (size_t i = 0; i < section_count; i++) {
-        size_t length = strlen(sections[i].name) + 1;
         section_names[i] = (uint32_t)(string_cursor - shstr_offset);
-        memcpy(image + string_cursor, sections[i].name, length);
-        string_cursor += length;
+        put_name(image, &string_cursor, sections[i].name);
         if (rel_counts[i]) {
             rel_names[i] = (uint32_t)(string_cursor - shstr_offset);
             memcpy(image + string_cursor, ".rela", 5);
             string_cursor += 5;
-            memcpy(image + string_cursor, sections[i].name, length);
-            string_cursor += length;
+            put_name(image, &string_cursor, sections[i].name);
         }
     }
     string_cursor = str_offset + 1;
     for (size_t i = 0; i < symbol_count; i++) {
-        size_t length = strlen(symbols[i].name) + 1;
         symbol_names[i] = (uint32_t)(string_cursor - str_offset);
-        memcpy(image + string_cursor, symbols[i].name, length);
-        string_cursor += length;
+        put_name(image, &string_cursor, symbols[i].name);
     }
 
     uint32_t local_next = 1;

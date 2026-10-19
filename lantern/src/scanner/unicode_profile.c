@@ -1,5 +1,6 @@
 #include "private/scanner/unicode_profile.h"
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -40,6 +41,23 @@ scan_lex_unicode_version(void)
     return scan_unicode_profile_version();
 }
 
+__attribute__((format(printf, 2, 3))) static void
+set_error(core_string_t *error, const char *fmt, ...)
+{
+    if (!error) {
+        return;
+    }
+
+    core_buffer_t *buf = core_buffer_empty();
+    va_list        ap;
+
+    va_start(ap, fmt);
+    core_buffer_vprintf(buf, fmt, ap);
+    va_end(ap);
+    core_free(error->data);
+    *error = core_buffer_take_string(buf);
+}
+
 #ifdef LANTERN_HAVE_ICU
 static bool
 version_matches(core_string_t requested)
@@ -59,19 +77,19 @@ version_matches(core_string_t requested)
 
 scan_unicode_profile_t *
 scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
-                             char *error, size_t error_size)
+                             core_string_t *error)
 {
     if (!spec || !spec->name.data) {
         return nullptr;
     }
 #ifndef LANTERN_HAVE_ICU
-    snprintf(error, error_size,
-             "Unicode identifier profiles require an ICU-enabled build");
+    set_error(error,
+              "Unicode identifier profiles require an ICU-enabled build");
     return nullptr;
 #else
     if (!version_matches(spec->unicode_version)) {
         core_string_t actual = scan_unicode_profile_version();
-        snprintf(error, error_size,
+        set_error(error,
                  "Unicode profile '%.*s' requests version '%.*s'; build provides '%.*s'",
                  (int)spec->name.u8_bytes, spec->name.data,
                  (int)spec->unicode_version.u8_bytes,
@@ -85,7 +103,7 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
 
     for (const core_string_t *name = spec->scripts;
          name && name->data; name++) {
-        char *text = core_strndup(name->data, name->u8_bytes);
+        char *text = core_string_to_cstr(*name);
         UErrorCode status = U_ZERO_ERROR;
         int32_t count = uscript_getCode(text, nullptr, 0, &status);
         UScriptCode *codes = count > 0
@@ -98,7 +116,7 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
         core_free(text);
         if (!codes || U_FAILURE(status) || count < 1) {
             core_free(codes);
-            snprintf(error, error_size,
+            set_error(error,
                      "Unicode profile '%.*s' names unknown script '%.*s'",
                      (int)spec->name.u8_bytes, spec->name.data,
                      (int)name->u8_bytes, name->data);
@@ -129,7 +147,7 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
         profile->normalizer = unorm2_getNFKCInstance(&status);
     }
     if (U_FAILURE(status)) {
-        snprintf(error, error_size, "cannot initialize Unicode normalizer");
+        set_error(error, "cannot initialize Unicode normalizer");
         scan_unicode_profile_free(profile);
         return nullptr;
     }
@@ -138,7 +156,7 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
         status = U_ZERO_ERROR;
         profile->spoof = uspoof_open(&status);
         if (U_FAILURE(status)) {
-            snprintf(error, error_size, "cannot initialize confusable checks");
+            set_error(error, "cannot initialize confusable checks");
             scan_unicode_profile_free(profile);
             return nullptr;
         }

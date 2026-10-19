@@ -32,7 +32,7 @@ typedef parse_tree_array_t (*parse_type_syntax_builder_fn)(
     const parse_tree_t                      *node,
     th_type                                 *type,
     void                                    *state,
-    char                                   **err);
+    core_string_t                           *err);
 
 parse_tree_t *parse_tree_materialize_types(
     parse_grammar_t                         *grammar,
@@ -42,7 +42,7 @@ parse_tree_t *parse_tree_materialize_types(
     size_t                                   rule_count,
     parse_type_syntax_builder_fn             build_syntax,
     void                                    *state,
-    char                                   **err);
+    core_string_t                           *err);
 
 typedef struct parse_template_t parse_template_t;
 
@@ -50,7 +50,7 @@ parse_template_t *parse_template_parse(parse_grammar_t *g,
                                    core_string_t   start_nt,
                                    core_string_t   source,
                                    parse_scan_cb_t  tokenize,
-                                   char         **err);
+                                   core_string_t  *err);
 
 parse_tree_t *parse_template_instance(parse_template_t *t);
 void              parse_template_free(parse_template_t *t);

@@ -2,6 +2,7 @@
 #define TYPEHASH_H
 
 #include "lib/buffer.h"
+#include "lib/string.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -88,23 +89,22 @@ typedef struct th_ctx  th_ctx;
 typedef struct th_type th_type;
 typedef struct th_env  th_env;
 
-typedef const char *(*th_print_name_fn)(const char *name, size_t length,
-                                        void *context);
+typedef core_string_t (*th_print_name_fn)(core_string_t name, void *context);
 
 typedef struct {
     th_print_name_fn named;
     void            *context;
-    const char      *sequence;
-    const char      *reference;
-    const char      *option_suffix;
+    core_string_t    sequence;
+    core_string_t    reference;
+    core_string_t    option_suffix;
     bool             omit_constraints;
 } th_print_options_t;
 
 typedef th_type *(*th_method_resolver_fn)(th_ctx *ctx, th_type *receiver,
-                                          const char *name, void *user);
+                                          core_string_t name, void *user);
 
 typedef struct {
-    const char *file;
+    core_string_t file;
     uint32_t    start_line;
     uint32_t    start_col;
     uint32_t    end_line;
@@ -131,8 +131,8 @@ typedef enum : uint8_t {
 
 typedef struct {
     th_err_kind kind;
-    const char *message;
-    const char *constraint;
+    core_string_t message;
+    core_string_t constraint;
     th_type    *expected;
     th_type    *got;
     th_span_t   span;
@@ -161,8 +161,8 @@ typedef struct {
     th_con_kind kind;
     /* Environment-backed constraints retain the visibility perspective in
      * which they were authored, even when resolution is deferred. */
-    const char *scope_module;
-    const char *scope_package;
+    core_string_t scope_module;
+    core_string_t scope_package;
     bool has_scope;
     /* The source span active when the constraint was authored, restored
      * while a deferred check reports against it. */
@@ -170,13 +170,13 @@ typedef struct {
     union {
         th_kind type_kind;
         th_type    *target;
-        const char *iface;
+        core_string_t iface;
         struct {
             th_type **types;
             size_t    n;
         } one_of;
         struct {
-            const char *name;
+            core_string_t name;
             th_type    *type;
             bool        auto_deref;
         } field;
@@ -185,10 +185,10 @@ typedef struct {
             th_type *type;
         } param;
         struct {
-            const char *name;
+            core_string_t name;
             th_type *result;
             th_type *call;
-            const char *in_place;
+            core_string_t in_place;
             const void *site;
         } method;
     };
@@ -199,7 +199,7 @@ typedef struct {
     th_type *subject;
     th_con_kind kind;
     th_type *target;
-    const char *iface;
+    core_string_t iface;
 } th_trait_requirement;
 
 typedef struct {
@@ -208,15 +208,12 @@ typedef struct {
         th_type *type;
         uint64_t u;
         int64_t  s;
-        struct {
-            const char *p;
-            size_t      n;
-        } str;
+        core_string_t str;
     };
 } th_arg;
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     th_type    *type;
 } th_member;
 
@@ -226,7 +223,7 @@ typedef struct {
 } th_param;
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     th_mode     mode;
     th_type    *type;
 } th_kwparam;
@@ -265,30 +262,32 @@ th_type *th_type_clone_replacing(th_ctx *destination, const th_type *source,
                                  const th_type *const *from,
                                  th_type *const *to, size_t count);
 
-typedef bool (*th_normalizer)(void *state, const char *in, size_t inlen,
-                              const char **out, size_t *outlen);
+typedef bool (*th_normalizer)(void *state, core_string_t in,
+                              core_string_t *out);
 
 void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state);
 void th_install_nfc(th_ctx *ctx);
 /* Set the current module/package perspective used when new environment-backed
  * constraints are created. This may be called before an environment is
  * attached; existing constraints retain their captured scope. */
-bool th_ctx_set_scope(th_ctx *ctx, const char *module, const char *package);
+bool th_ctx_set_scope(th_ctx *ctx, core_string_t module,
+                      core_string_t package);
 
-th_type *th_name(th_ctx *ctx, const char *name);
-bool th_name_syntax_valid(const char *name, size_t length);
-th_type *th_apply(th_ctx *ctx, const char *name, const th_arg *args, size_t n);
-th_type *th_variant(th_ctx *ctx, const char *name, const th_arg *args,
+th_type *th_name(th_ctx *ctx, core_string_t name);
+bool th_name_syntax_valid(core_string_t name);
+th_type *th_apply(th_ctx *ctx, core_string_t name, const th_arg *args,
+                  size_t n);
+th_type *th_variant(th_ctx *ctx, core_string_t name, const th_arg *args,
                     size_t n);
 th_type *th_bitint(th_ctx *ctx, uint64_t width, bool is_signed);
 th_type *th_bits(th_ctx *ctx, uint64_t width);
 th_type *th_ind(th_ctx *ctx, uint8_t attrs, th_type *referent);
-bool     th_indirection_attrs(const char *name, uint8_t *attrs);
+bool     th_indirection_attrs(core_string_t name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
 th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
 /* A named interface whose method order is part of its type identity. */
-th_type *th_trait(th_ctx *ctx, const char *qualified_name,
+th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
                   const th_member *methods, size_t n,
                   const th_trait_requirement *requirements, size_t nr);
 th_type *th_record_stub(th_ctx *ctx);
@@ -318,7 +317,7 @@ typedef enum : uint8_t {
 } th_builtin_kind_t;
 
 typedef struct {
-    const char       *name;
+    core_string_t     name;
     th_builtin_kind_t kind;
     int8_t            arity;
     const void       *scalar;
@@ -348,7 +347,7 @@ th_type *th_type_definition(th_ctx *ctx, const th_type *type);
 void    *th_type_definition_owner(th_ctx *ctx, const th_type *type);
 th_type *th_auto_deref(th_ctx *ctx, th_type *type);
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
-                             const char *name);
+                             core_string_t name);
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *params, size_t np,
                  const th_param *rest, const th_kwparam *kw, size_t nkw);
 /* The optional error type is a separate callable channel, not part of ret.
@@ -361,7 +360,7 @@ th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body);
 th_type *th_bound(th_ctx *ctx, uint64_t distance, uint64_t position);
 th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n);
 th_type *th_var(th_ctx *ctx);
-th_type *th_var_named(th_ctx *ctx, const char *name);
+th_type *th_var_named(th_ctx *ctx, core_string_t name);
 th_type *th_tuple(th_ctx *ctx, th_type *const *elems, size_t n);
 th_type *th_option(th_ctx *ctx, th_type *item);
 th_type *th_option_item(const th_type *type);
@@ -372,16 +371,16 @@ void     th_normalize(th_type *type);
 bool     th_encode(th_ctx *ctx, th_type *type, const uint8_t **out,
                    size_t *len);
 uint64_t th_hash(th_ctx *ctx, th_type *type);
-const char *th_print(th_ctx *ctx, th_type *type);
-const char *th_print_with_options(th_ctx *ctx, th_type *type,
-                                  const th_print_options_t *options);
-uint64_t th_arm_tag(const char *name);
-const char *th_anon_name(th_ctx *ctx, const char *path, uint64_t line,
-                         uint64_t col);
+core_string_t th_print(th_ctx *ctx, th_type *type);
+core_string_t th_print_with_options(th_ctx *ctx, th_type *type,
+                                    const th_print_options_t *options);
+uint64_t th_arm_tag(core_string_t name);
+core_string_t th_anon_name(th_ctx *ctx, core_string_t path, uint64_t line,
+                           uint64_t col);
 
 th_kind th_kind_of(const th_type *type);
 bool    th_is_scheme(const th_type *type);
-const char *th_last_error(const th_ctx *ctx);
+core_string_t th_last_error(const th_ctx *ctx);
 
 void      th_ctx_set_span(th_ctx *ctx, th_span_t span);
 void      th_ctx_set_related(th_ctx *ctx, th_span_t span);
@@ -392,9 +391,9 @@ size_t      th_error_count(const th_ctx *ctx);
 bool        th_error_at(const th_ctx *ctx, size_t i, th_error_t *out);
 void        th_errors_clear(th_ctx *ctx);
 void        th_ctx_set_probe_errors_observable(th_ctx *ctx, bool observable);
-const char *th_err_kind_name(th_err_kind kind);
+core_string_t th_err_kind_name(th_err_kind kind);
 
-bool   th_named_info(const th_type *type, const char **name, size_t *nlen,
+bool   th_named_info(const th_type *type, core_string_t *name,
                      bool *is_variant, size_t *nargs);
 size_t th_named_nargs(const th_type *type);
 const th_arg *th_named_arg(const th_type *type, size_t i);
@@ -410,9 +409,9 @@ bool     th_seq_extent(const th_type *type, uint64_t *extent);
 
 size_t th_record_len(const th_type *type);
 const th_member *th_record_member(const th_type *type, size_t i);
-th_type *th_record_lookup(const th_type *type, const char *name);
+th_type *th_record_lookup(const th_type *type, core_string_t name);
 
-bool th_trait_name(const th_type *type, const char **name, size_t *nlen);
+bool th_trait_name(const th_type *type, core_string_t *name);
 size_t th_trait_len(const th_type *type);
 const th_member *th_trait_method(const th_type *type, size_t i);
 size_t th_trait_requirement_count(const th_type *type);
@@ -426,7 +425,7 @@ const th_param *th_func_param(const th_type *type, size_t i);
 const th_param *th_func_rest(const th_type *type);
 size_t th_func_nkw(const th_type *type);
 const th_kwparam *th_func_kw(const th_type *type, size_t i);
-const th_kwparam *th_func_kw_lookup(const th_type *type, const char *name);
+const th_kwparam *th_func_kw_lookup(const th_type *type, core_string_t name);
 
 bool     th_binder_arity(const th_type *type, uint64_t *arity);
 th_type *th_binder_body(const th_type *type);
@@ -439,34 +438,34 @@ size_t   th_sum_len(const th_type *type);
 th_type *th_sum_arm(const th_type *type, size_t i);
 
 bool th_var_index(const th_type *type, uint64_t *index);
-const char *th_var_name(const th_type *type);
+core_string_t th_var_name(const th_type *type);
 
 bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
 /* Attach a deferred method-call obligation to a concrete or unresolved
  * receiver. `call` is the positional/keyword argument shape excluding the
  * receiver; `result` is unified with the selected method's return type. */
-bool   th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
+bool   th_require_method(th_ctx *ctx, th_type *receiver, core_string_t name,
                          th_type *result, th_type *call);
 bool   th_require_method_in_place(th_ctx *ctx, th_type *receiver,
-                                  const char *name, const char *in_place,
+                                  core_string_t name, core_string_t in_place,
                                   th_type *result, th_type *call);
-bool   th_require_method_at(th_ctx *ctx, th_type *receiver, const char *name,
-                            const char *in_place, th_type *result,
+bool   th_require_method_at(th_ctx *ctx, th_type *receiver, core_string_t name,
+                            core_string_t in_place, th_type *result,
                             th_type *call, const void *site);
 /* Connect an existing deferred method-call obligation to its enclosing
  * failure channel without adding a second method constraint. */
 bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
-                                      const char *name, th_type *result,
+                                      core_string_t name, th_type *result,
                                       th_type *error);
 typedef struct {
-    const char *name;
+    core_string_t name;
     bool        optional;
 } th_formal_name;
 th_type *th_call_shape_bind_keywords(th_ctx *ctx, th_type *call,
                                      const th_formal_name *formals,
                                      size_t formal_count);
 bool   th_method_obligation_bind_keywords(th_ctx *ctx, th_type *receiver,
-                                          const char *name,
+                                          core_string_t name,
                                           const th_formal_name *formals,
                                           size_t formal_count);
 size_t th_var_constraint_count(const th_type *var);
@@ -475,8 +474,8 @@ bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
  * th_ctx_set_environment() calls this automatically. */
 bool   th_ctx_validate_constraints(th_ctx *ctx);
 
-void th_register_promotion(th_ctx *ctx, const char *from, const char *to);
-bool th_promotes_to(th_ctx *ctx, const char *from, const char *to);
+void th_register_promotion(th_ctx *ctx, core_string_t from, core_string_t to);
+bool th_promotes_to(th_ctx *ctx, core_string_t from, core_string_t to);
 bool th_type_promotes_to(th_ctx *ctx, const th_type *from,
                          const th_type *to);
 
@@ -519,17 +518,17 @@ size_t th_coercion_count(const th_ctx *ctx);
 bool   th_coercion_at(const th_ctx *ctx, size_t i, th_coercion_t *out);
 void   th_coercions_clear(th_ctx *ctx);
 
-void   th_register_iface(th_ctx *ctx, const char *name, th_type *methods);
-bool   th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
+void   th_register_iface(th_ctx *ctx, core_string_t name, th_type *methods);
+bool   th_register_method(th_ctx *ctx, th_type *receiver, core_string_t name,
                           th_type *signature);
 bool   th_register_method_resolver(th_ctx *ctx,
                                    th_method_resolver_fn resolver,
                                    void *user);
-th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name);
+th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, core_string_t name);
 /* For an unresolved constrained type variable, true means the trait is a
  * retained obligation, not proof of a concrete implementation or dispatch. */
-bool   th_implements(th_ctx *ctx, th_type *type, const char *iface);
-size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
+bool   th_implements(th_ctx *ctx, th_type *type, core_string_t iface);
+size_t th_infer_ifaces(th_ctx *ctx, th_type *type, core_string_t *out,
                        size_t max);
 
 th_type *th_resolve(th_type *type);

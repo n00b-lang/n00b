@@ -21,29 +21,29 @@
 #define S(x) CORE_STRING_STATIC(x)
 
 typedef struct {
-    const char *name;
-    const char *grammar;
-    const char *start;
-    const char *exts;
+    core_string_t name;
+    core_string_t grammar;
+    core_string_t start;
+    core_string_t exts;
 } language_t;
 
 static const language_t LANGUAGES[] = {
-    {"cel",        "cel.bnf",        "expr",                  ".cel"          },
-    {"csharp",     "csharp.bnf",     "compilation-unit",      ".cs"           },
-    {"go",         "go.bnf",         "source-file",           ".go"           },
-    {"java",       "java.bnf",       "compilation-unit",      ".java"         },
-    {"javascript", "javascript.bnf", "module",                ".js.mjs.cjs.jsx"},
-    {"json",       "json.bnf",       "json",                  ".json"         },
-    {"kotlin",     "kotlin.bnf",     "kotlin-file",           ".kt.kts"       },
-    {"lua",        "lua.bnf",        "chunk",                 ".lua"          },
-    {"php",        "php.bnf",        "top-statement-list",    ".php"          },
-    {"python",     "python.bnf",     "file",                  ".py.pyi"       },
-    {"ruby",       "ruby.bnf",       "program",               ".rb"           },
-    {"rust",       "rust.bnf",       "crate",                 ".rs"           },
-    {"swift",      "swift.bnf",      "top-level-declaration", ".swift"        },
-    {"typescript", "typescript.bnf", "source-file",           ".ts.tsx.mts"   },
-    {"c",          "c_ncc.bnf",      "translation_unit",      ".c.h"          },
-    {"bce",        "bce.bnf",        "translation_unit",      ".bce"          },
+    {S("cel"),        S("cel.bnf"),        S("expr"),                  S(".cel")          },
+    {S("csharp"),     S("csharp.bnf"),     S("compilation-unit"),      S(".cs")           },
+    {S("go"),         S("go.bnf"),         S("source-file"),           S(".go")           },
+    {S("java"),       S("java.bnf"),       S("compilation-unit"),      S(".java")         },
+    {S("javascript"), S("javascript.bnf"), S("module"),                S(".js.mjs.cjs.jsx")},
+    {S("json"),       S("json.bnf"),       S("json"),                  S(".json")         },
+    {S("kotlin"),     S("kotlin.bnf"),     S("kotlin-file"),           S(".kt.kts")       },
+    {S("lua"),        S("lua.bnf"),        S("chunk"),                 S(".lua")          },
+    {S("php"),        S("php.bnf"),        S("top-statement-list"),    S(".php")          },
+    {S("python"),     S("python.bnf"),     S("file"),                  S(".py.pyi")       },
+    {S("ruby"),       S("ruby.bnf"),       S("program"),               S(".rb")           },
+    {S("rust"),       S("rust.bnf"),       S("crate"),                 S(".rs")           },
+    {S("swift"),      S("swift.bnf"),      S("top-level-declaration"), S(".swift")        },
+    {S("typescript"), S("typescript.bnf"), S("source-file"),           S(".ts.tsx.mts")   },
+    {S("c"),          S("c_ncc.bnf"),      S("translation_unit"),      S(".c.h")          },
+    {S("bce"),        S("bce.bnf"),        S("translation_unit"),      S(".bce")          },
 };
 
 #define N_LANGUAGES (sizeof(LANGUAGES) / sizeof(LANGUAGES[0]))
@@ -73,26 +73,28 @@ static const parse_cmdr_cmd_t COMMANDS[] = {
     {{0}, {0}, nullptr, {0}, 0, 0},
 };
 
-static const char *
-ext_of(const char *path)
+static core_string_t
+ext_of(core_string_t path)
 {
-    const char *dot   = nullptr;
-    const char *slash = strrchr(path, '/');
+    int64_t slash = core_string_rfind_byte(path, '/');
+    size_t  base  = slash >= 0 ? (size_t)slash + 1 : 0;
+    int64_t dot   = core_string_rfind_byte(
+        core_string_slice(path, base, path.u8_bytes - base), '.');
 
-    for (const char *p = slash ? slash + 1 : path; *p; p++) {
-        if (*p == '.') {
-            dot = p;
-        }
+    if (dot < 0) {
+        return (core_string_t){0};
     }
 
-    return dot;
+    size_t at = base + (size_t)dot;
+
+    return core_string_slice(path, at, path.u8_bytes - at);
 }
 
 static const language_t *
-language_named(const char *name)
+language_named(core_string_t name)
 {
     for (size_t i = 0; i < N_LANGUAGES; i++) {
-        if (!strcmp(LANGUAGES[i].name, name)) {
+        if (core_string_eq(LANGUAGES[i].name, name)) {
             return &LANGUAGES[i];
         }
     }
@@ -101,31 +103,29 @@ language_named(const char *name)
 }
 
 static const language_t *
-language_for_path(const char *path)
+language_for_path(core_string_t path)
 {
-    const char *ext = ext_of(path);
+    core_string_t ext = ext_of(path);
 
-    if (!ext) {
+    if (!ext.data) {
         return nullptr;
     }
 
-    size_t n = strlen(ext);
-
     for (size_t i = 0; i < N_LANGUAGES; i++) {
-        const char *list = LANGUAGES[i].exts;
+        core_string_t list = LANGUAGES[i].exts;
 
-        for (const char *p = list; *p; p++) {
-            if (*p != '.') {
+        for (size_t p = 0; p < list.u8_bytes; p++) {
+            if (list.data[p] != '.') {
                 continue;
             }
 
             size_t len = 1;
 
-            while (p[len] && p[len] != '.') {
+            while (p + len < list.u8_bytes && list.data[p + len] != '.') {
                 len++;
             }
 
-            if (len == n && !strncmp(p, ext, n)) {
+            if (core_string_eq(core_string_slice(list, p, len), ext)) {
                 return &LANGUAGES[i];
             }
         }
@@ -134,13 +134,16 @@ language_for_path(const char *path)
     return nullptr;
 }
 
-static char *
-slurp(const char *path, size_t *len)
+static core_string_t
+slurp(core_string_t path)
 {
-    FILE *f = fopen(path, "rb");
+    char *cpath = core_string_to_cstr(path);
+    FILE *f     = fopen(cpath, "rb");
+
+    core_free(cpath);
 
     if (!f) {
-        return nullptr;
+        return (core_string_t){0};
     }
 
     fseek(f, 0, SEEK_END);
@@ -152,16 +155,15 @@ slurp(const char *path, size_t *len)
     if (n < 0) {
         fclose(f);
 
-        return nullptr;
+        return (core_string_t){0};
     }
 
-    char *p = core_alloc_size(1, (size_t)n + 1);
+    char  *p   = core_alloc_size(1, (size_t)n + 1);
+    size_t len = fread(p, 1, (size_t)n, f);
 
-    *len = fread(p, 1, (size_t)n, f);
-    p[*len] = '\0';
     fclose(f);
 
-    return p;
+    return (core_string_t){.data = p, .u8_bytes = len};
 }
 
 static void
@@ -170,14 +172,18 @@ list_languages(FILE *out)
     fprintf(out, "%-12s %-22s %s\n", "language", "grammar", "extensions");
 
     for (size_t i = 0; i < N_LANGUAGES; i++) {
-        fprintf(out, "%-12s %-22s ", LANGUAGES[i].name, LANGUAGES[i].grammar);
+        core_string_t exts = LANGUAGES[i].exts;
 
-        for (const char *p = LANGUAGES[i].exts; *p; p++) {
-            if (*p == '.' && p != LANGUAGES[i].exts) {
+        fprintf(out, "%-12.*s %-22.*s ",
+                (int)LANGUAGES[i].name.u8_bytes, LANGUAGES[i].name.data,
+                (int)LANGUAGES[i].grammar.u8_bytes, LANGUAGES[i].grammar.data);
+
+        for (size_t p = 0; p < exts.u8_bytes; p++) {
+            if (exts.data[p] == '.' && p != 0) {
                 fputc(' ', out);
             }
 
-            fputc(*p, out);
+            fputc(exts.data[p], out);
         }
 
         fputc('\n', out);
@@ -185,30 +191,26 @@ list_languages(FILE *out)
 }
 
 static parse_grammar_t *
-load_grammar(const char *path, const char *start, FILE *err)
+load_grammar(core_string_t path, core_string_t start, FILE *err)
 {
-    size_t n    = 0;
-    char  *text = slurp(path, &n);
+    core_string_t text = slurp(path);
 
-    if (!text) {
-        fprintf(err, "pp: cannot read grammar %s\n", path);
+    if (!text.data) {
+        fprintf(err, "pp: cannot read grammar %.*s\n",
+                (int)path.u8_bytes, path.data);
 
         return nullptr;
     }
 
     parse_grammar_t *g = parse_grammar_new();
-    core_string_t   s = core_string_borrow(text, n);
 
     parse_grammar_set_error_recovery(g, false);
-    parse_bnf_declare_terminals(g, s);
+    parse_bnf_declare_terminals(g, text);
 
-    core_string_t start_s = start ? core_string_borrow(start, strlen(start))
-                                 : (core_string_t){0};
-
-    if (!parse_bnf_load_file(path, start_s, g)) {
-        fprintf(err, "pp: %s did not load\n", path);
+    if (!parse_bnf_load_file(path, start, g)) {
+        fprintf(err, "pp: %.*s did not load\n", (int)path.u8_bytes, path.data);
         parse_grammar_free(g);
-        core_free(text);
+        core_free(text.data);
 
         return nullptr;
     }
@@ -221,8 +223,8 @@ load_grammar(const char *path, const char *start, FILE *err)
 
         undefined.len = parse_grammar_undefined(g, undefined.data, n_undef);
 
-        fprintf(err, "pp: %s references %zu undefined nonterminal(s):",
-                path, undefined.len);
+        fprintf(err, "pp: %.*s references %zu undefined nonterminal(s):",
+                (int)path.u8_bytes, path.data, undefined.len);
 
         for (size_t i = 0; i < undefined.len; i++) {
             fprintf(err, " <%.*s>", (int)undefined.data[i].u8_bytes,
@@ -232,26 +234,28 @@ load_grammar(const char *path, const char *start, FILE *err)
         fputc('\n', err);
         core_list_free(undefined);
         parse_grammar_free(g);
-        core_free(text);
+        core_free(text.data);
 
         return nullptr;
     }
 
     if (!scan_grammar_lex(g)) {
-        fprintf(err, "pp: %s declares no lexis\n", path);
+        fprintf(err, "pp: %.*s declares no lexis\n",
+                (int)path.u8_bytes, path.data);
     }
 
-    const char *lex_err = scan_lex_build_error();
+    core_string_t lex_err = scan_lex_build_error();
 
-    if (lex_err) {
-        fprintf(err, "pp: %s: %s\n", path, lex_err);
+    if (lex_err.data) {
+        fprintf(err, "pp: %.*s: %.*s\n", (int)path.u8_bytes, path.data,
+                (int)lex_err.u8_bytes, lex_err.data);
         parse_grammar_free(g);
-        core_free(text);
+        core_free(text.data);
 
         return nullptr;
     }
 
-    core_free(text);
+    core_free(text.data);
 
     return g;
 }
@@ -331,39 +335,35 @@ main(int argc, char **argv)
         return PP_USAGE;
     }
 
-    core_string_t arg = parse_cmdr_arg_str(r, 0);
-    const char *path = arg.data;
-
-    const char *dir = getenv("PP_GRAMMAR_DIR");
+    core_string_t path      = parse_cmdr_arg_str(r, 0);
+    core_string_t env_dir   = core_string_from_cstr(getenv("PP_GRAMMAR_DIR"));
+    core_string_t dir       = env_dir;
 
     if (parse_cmdr_flag_present(r, S("--grammar-dir"))) {
-        core_string_t d = parse_cmdr_flag_str(r, S("--grammar-dir"));
-        dir = d.data;
+        dir = parse_cmdr_flag_str(r, S("--grammar-dir"));
     }
-
 
     const language_t *lang = nullptr;
 
     if (parse_cmdr_flag_present(r, S("--language"))) {
         core_string_t l = parse_cmdr_flag_str(r, S("--language"));
-        lang = language_named(l.data);
+        lang = language_named(l);
 
         if (!lang) {
             fprintf(stderr, "pp: no language named '%.*s'\n",
                     (int)l.u8_bytes, l.data);
             list_languages(stderr);
+            core_free(env_dir.data);
 
             return PP_USAGE;
         }
     }
 
-    char *owned_grammar_path = nullptr;
-    const char *grammar_path = nullptr;
+    core_string_t owned_grammar_path = {0};
+    core_string_t grammar_path       = {0};
 
     if (parse_cmdr_flag_present(r, S("--grammar"))) {
-        core_string_t gp = parse_cmdr_flag_str(r, S("--grammar"));
-
-        grammar_path = gp.data;
+        grammar_path = parse_cmdr_flag_str(r, S("--grammar"));
     }
     else {
         if (!lang) {
@@ -371,80 +371,93 @@ main(int argc, char **argv)
         }
 
         if (!lang) {
-            const char *ext = ext_of(path);
+            core_string_t ext = ext_of(path);
 
-            fprintf(stderr,
-                    "pp: no language for %s%s%s; pass --language or "
-                    "--grammar\n",
-                    ext ? "extension " : "",
-                    ext ? ext : path,
-                    "");
+            if (ext.data) {
+                fprintf(stderr,
+                        "pp: no language for extension %.*s; pass --language "
+                        "or --grammar\n",
+                        (int)ext.u8_bytes, ext.data);
+            }
+            else {
+                fprintf(stderr,
+                        "pp: no language for %.*s; pass --language or "
+                        "--grammar\n",
+                        (int)path.u8_bytes, path.data);
+            }
             list_languages(stderr);
+            core_free(env_dir.data);
 
             return PP_USAGE;
         }
 
-        const char *where[] = {
+        const core_string_t where[] = {
             dir,
 #ifdef PP_GRAMMAR_DIR
-            PP_GRAMMAR_DIR,
+            S(PP_GRAMMAR_DIR),
 #endif
-            "grammars",
-            "../grammars",
-            "../../grammars",
+            S("grammars"),
+            S("../grammars"),
+            S("../../grammars"),
         };
 
         bool found = false;
 
-        for (size_t i = dir ? 0 : 1;
+        for (size_t i = dir.data ? 0 : 1;
              !found && i < sizeof(where) / sizeof(where[0]);
              i++) {
             core_buffer_t *candidate = core_buffer_empty();
-            core_buffer_printf(candidate, "%s/%s", where[i], lang->grammar);
-            char *candidate_path = core_buffer_take(candidate);
+            core_buffer_printf(candidate, "%.*s/%.*s",
+                               (int)where[i].u8_bytes, where[i].data,
+                               (int)lang->grammar.u8_bytes,
+                               lang->grammar.data);
+            core_string_t candidate_path = core_buffer_take_string(candidate);
+            char         *probe_path     = core_string_to_cstr(candidate_path);
+            FILE         *probe          = fopen(probe_path, "r");
 
-            FILE *probe = fopen(candidate_path, "r");
+            core_free(probe_path);
 
             if (probe) {
                 fclose(probe);
                 owned_grammar_path = candidate_path;
-                grammar_path = owned_grammar_path;
-                found = true;
+                grammar_path       = owned_grammar_path;
+                found              = true;
             }
             else {
-                core_free(candidate_path);
+                core_free(candidate_path.data);
             }
         }
 
         if (!found) {
             fprintf(stderr,
-                    "pp: cannot find %s; pass --grammar-dir or set "
+                    "pp: cannot find %.*s; pass --grammar-dir or set "
                     "PP_GRAMMAR_DIR\n",
-                    lang->grammar);
+                    (int)lang->grammar.u8_bytes, lang->grammar.data);
+            core_free(env_dir.data);
 
             return PP_ERROR;
         }
     }
 
-    const char *start = lang ? lang->start : nullptr;
+    core_free(env_dir.data);
+
+    core_string_t start = lang ? lang->start : (core_string_t){0};
 
     if (parse_cmdr_flag_present(r, S("--start"))) {
-        core_string_t st = parse_cmdr_flag_str(r, S("--start"));
-        start = st.data;
+        start = parse_cmdr_flag_str(r, S("--start"));
     }
 
     parse_grammar_t *g = load_grammar(grammar_path, start, stderr);
-    core_free(owned_grammar_path);
+    core_free(owned_grammar_path.data);
 
     if (!g) {
         return PP_ERROR;
     }
 
-    size_t src_len = 0;
-    char  *src     = slurp(path, &src_len);
+    core_string_t src = slurp(path);
 
-    if (!src) {
-        fprintf(stderr, "pp: cannot read %s\n", path);
+    if (!src.data) {
+        fprintf(stderr, "pp: cannot read %.*s\n", (int)path.u8_bytes, path.data);
         parse_grammar_free(g);
 
         return PP_ERROR;
@@ -452,11 +465,12 @@ main(int argc, char **argv)
 
     core_buffer_t       *buf = nullptr;
     parse_scanner_t      *sc  = nullptr;
-    parse_token_stream_t *ts  = scan_tokenize(g, src, src_len, &buf, &sc);
+    parse_token_stream_t *ts  = scan_tokenize(g, src, &buf, &sc);
 
     if (!ts) {
-        fprintf(stderr, "pp: %s did not tokenize\n", path);
-        core_free(src);
+        fprintf(stderr, "pp: %.*s did not tokenize\n",
+                (int)path.u8_bytes, path.data);
+        core_free(src.data);
         parse_grammar_free(g);
 
         return PP_ERROR;
@@ -468,9 +482,8 @@ main(int argc, char **argv)
         rc = write_tokens(g, ts, stdout);
     }
     else {
-        parse_nt_id_t start_id = start
-            ? parse_nonterm_id(parse_find_nonterm(
-                  g, core_string_from_cstr(start)))
+        parse_nt_id_t start_id = start.data
+            ? parse_nonterm_id(parse_find_nonterm(g, start))
             : g->nt_list.data[0]->id;
         parse_pwz_parser_t *p = parse_pwz_new_for_start(g, start_id);
 
@@ -491,8 +504,8 @@ main(int argc, char **argv)
                                       : (core_string_t){0};
 
                 fprintf(stderr,
-                        "pp: %s:%u:%u: no rule accepts ",
-                        path,
+                        "pp: %.*s:%u:%u: no rule accepts ",
+                        (int)path.u8_bytes, path.data,
                         parse_token_line(tok),
                         parse_token_column(tok));
 
@@ -514,7 +527,8 @@ main(int argc, char **argv)
                         scan_stream_token_count(ts));
             }
             else {
-                fprintf(stderr, "pp: %s did not parse\n", path);
+                fprintf(stderr, "pp: %.*s did not parse\n",
+                        (int)path.u8_bytes, path.data);
             }
 
             rc = PP_ERROR;
@@ -527,24 +541,25 @@ main(int argc, char **argv)
             indent = (int32_t)parse_cmdr_flag_int(r, S("--indent"), indent);
 
             parse_print_opts_t o = {
-                .source = core_string_borrow(src, src_len),
+                .source = src,
                 .width  = width,
                 .indent = indent,
             };
 
-            char *text = parse_tree_print(g, parse_pwz_get_tree(p), &o);
+            core_string_t text = parse_tree_print(g, parse_pwz_get_tree(p), &o);
 
-            if (text) {
-                fputs(text, stdout);
+            if (text.data) {
+                fwrite(text.data, 1, text.u8_bytes, stdout);
 
-                if (text[0] && text[strlen(text) - 1] != '\n') {
+                if (text.u8_bytes && text.data[text.u8_bytes - 1] != '\n') {
                     fputc('\n', stdout);
                 }
 
-                core_free(text);
+                core_free(text.data);
             }
             else {
-                fprintf(stderr, "pp: %s produced no output\n", path);
+                fprintf(stderr, "pp: %.*s produced no output\n",
+                        (int)path.u8_bytes, path.data);
                 rc = PP_ERROR;
             }
         }
@@ -555,7 +570,7 @@ main(int argc, char **argv)
     scan_token_stream_free(ts);
     scan_scanner_free(sc);
     core_buffer_free(buf);
-    core_free(src);
+    core_free(src.data);
     parse_grammar_free(g);
     parse_cmdr_result_free(r);
     parse_cmdr_free(c);

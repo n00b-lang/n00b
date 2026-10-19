@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir/analyze.h"
 #include "ir/pass.h"
@@ -8,16 +7,22 @@
 #include "ir/text.h"
 #include "ir/doms.h"
 #include "ir/verify.h"
+#include "lib/buffer.h"
 #include "harness.h"
+
+#define S(x) CORE_STRING_STATIC(x)
 
 static bool produced[IR_DIAG_COUNT];
 
-static void same(const char *what, const char *got, const char *want)
+static void same(core_string_t what, core_string_t got, core_string_t want)
 {
-    if (!got || strcmp(got, want)) {
+    if (!got.data || !core_string_eq(got, want)) {
+        core_string_t shown = got.data ? got : S("(null)");
+
         fails++;
-        printf("FAIL  %s\n  want: %s\n  got:  %s\n", what, want,
-               got ? got : "(null)");
+        printf("FAIL  %.*s\n  want: %.*s\n  got:  %.*s\n", (int)what.u8_bytes,
+               what.data, (int)want.u8_bytes, want.data,
+               (int)shown.u8_bytes, shown.data);
     }
 }
 
@@ -29,7 +34,7 @@ typedef struct {
     ir_diags_t  *d;
 } run_t;
 
-static run_t *load(const char *src)
+static run_t *load(core_string_t src)
 {
     run_t *r = calloc(1, sizeof(run_t));
 
@@ -64,13 +69,17 @@ static uint32_t counted(run_t *r, ir_diagcode_t code)
     return n;
 }
 
-static bool told(run_t *r, const char *text)
+static bool contains(core_string_t hay, core_string_t needle)
+{
+    return hay.data && core_string_find(hay, needle) >= 0;
+}
+
+static bool told(run_t *r, core_string_t text)
 {
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         const ir_diag_t *dg = ir_diags_at(r->d, i);
 
-        if ((dg->primary.label && strstr(dg->primary.label, text))
-            || (dg->message && strstr(dg->message, text))) {
+        if (contains(dg->primary.label, text) || contains(dg->message, text)) {
             return true;
         }
     }
@@ -78,47 +87,36 @@ static bool told(run_t *r, const char *text)
     return false;
 }
 
-typedef struct {
-    char  *p;
-    size_t n;
-    size_t cap;
-} buf;
-
-static void put(buf *b, const char *s)
-{
-    size_t n = strlen(s);
-
-    if (b->n + n + 1 > b->cap) {
-        b->cap = (b->n + n + 1) * 2;
-        b->p   = realloc(b->p, b->cap);
-    }
-    memcpy(b->p + b->n, s, n + 1);
-    b->n += n;
-}
-
 static ir_func_t *func_of(run_t *r)
 {
     return r->m ? ir_func_at(r->m, 0) : nullptr;
 }
 
-static const char *tag(ir_instr_t *in, char *out, size_t n)
+static void tag(core_buffer_t *b, ir_instr_t *in)
 {
-    const char *name = in->dest_kind == IR_DEST_VALUE && in->dest
-                         ? in->dest->name
-                     : in->dest_kind == IR_DEST_LOCAL && in->dest_local
-                         ? in->dest_local->name
-                         : ir_op_spelling(in->op);
+    core_string_t name = in->dest_kind == IR_DEST_VALUE && in->dest
+                           ? in->dest->name
+                       : in->dest_kind == IR_DEST_LOCAL && in->dest_local
+                           ? in->dest_local->name
+                           : ir_op_spelling(in->op);
 
-    snprintf(out, n, "%s#%u:%s", in->block->name, in->index, name);
-
-    return out;
+    core_buffer_printf(b, "%.*s#%u:%.*s", (int)in->block->name.u8_bytes,
+                       in->block->name.data, in->index, (int)name.u8_bytes,
+                       name.data);
 }
 
-static char *data_sketch(ir_pdg_t *g)
+static core_string_t sketch_result(core_buffer_t *b)
 {
-    buf  b = {0};
-    char l[128];
-    char rr[128];
+    if (!b->data) {
+        return core_string_empty();
+    }
+
+    return (core_string_t){.data = b->data, .u8_bytes = b->byte_len};
+}
+
+static core_string_t data_sketch(ir_pdg_t *g)
+{
+    core_buffer_t b = {0};
 
     for (uint32_t i = 0; i < ir_pdg_node_count(g); i++) {
         ir_instr_t *in = ir_pdg_node_at(g, i);
@@ -129,14 +127,16 @@ static char *data_sketch(ir_pdg_t *g)
             if (e->kind != IR_DEP_DATA) {
                 continue;
             }
-            put(&b, tag(e->from, l, sizeof l));
-            put(&b, e->certainty == IR_DEP_EXACT ? " => " : " ~> ");
-            put(&b, tag(e->to, rr, sizeof rr));
-            put(&b, "\n");
+            tag(&b, e->from);
+            core_buffer_append_string(&b, e->certainty == IR_DEP_EXACT
+                                              ? S(" => ")
+                                              : S(" ~> "));
+            tag(&b, e->to);
+            core_buffer_puts(&b, "\n");
         }
     }
 
-    return b.p ? b.p : strdup("");
+    return sketch_result(&b);
 }
 
 static bool controlled_by(const ir_pdg_t *g, ir_block_t *b, ir_block_t *on)
@@ -150,25 +150,26 @@ static bool controlled_by(const ir_pdg_t *g, ir_block_t *b, ir_block_t *on)
     return false;
 }
 
-static char *cdg_sketch(ir_pdg_t *g, ir_func_t *f)
+static core_string_t cdg_sketch(ir_pdg_t *g, ir_func_t *f)
 {
-    buf b = {0};
+    core_buffer_t b = {0};
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
         ir_block_t *bl = f->blocks[i];
 
         for (uint32_t k = 0; k < ir_controllers_of(g, bl); k++) {
-            put(&b, bl->name);
-            put(&b, " on ");
-            put(&b, ir_controller_at(g, bl, k)->name);
-            put(&b, "\n");
+            core_buffer_append_string(&b, bl->name);
+            core_buffer_puts(&b, " on ");
+            core_buffer_append_string(&b, ir_controller_at(g, bl, k)->name);
+            core_buffer_puts(&b, "\n");
         }
     }
 
-    return b.p ? b.p : strdup("");
+    return sketch_result(&b);
 }
 
-#define MOD(...) "module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n"
+#define MOD(...) \
+    S("module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n")
 
 static void test_the_cfg_is_the_blocks_and_the_terminators(void)
 {
@@ -210,8 +211,8 @@ static void test_all_seven_edge_kinds(void)
         "  }\n"));
     ir_func_t *f    = func_of(r);
     ir_pdg_t  *g    = ir_pdg_of(f);
-    bool       saw[7] = {0};
-    buf        b     = {0};
+    bool          saw[7] = {0};
+    core_buffer_t b      = {0};
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
         ir_instr_t *t = ir_block_terminator(f->blocks[i]);
@@ -224,17 +225,18 @@ static void test_all_seven_edge_kinds(void)
             ir_edge_kind_t k = ir_edge_kind(g, f->blocks[i], s);
 
             saw[k] = true;
-            put(&b, f->blocks[i]->name);
-            put(&b, " -> ");
-            put(&b, ir_succ_of(&t->operands[s])->name);
-            put(&b, " ");
-            put(&b, ir_edge_kind_name(k));
-            put(&b, "\n");
+            core_buffer_append_string(&b, f->blocks[i]->name);
+            core_buffer_puts(&b, " -> ");
+            core_buffer_append_string(&b, ir_succ_of(&t->operands[s])->name);
+            core_buffer_puts(&b, " ");
+            core_buffer_append_string(&b, ir_edge_kind_name(k));
+            core_buffer_puts(&b, "\n");
         }
     }
 
-    same("every edge kind is derived from the shape, not recorded", b.p,
-         "entry -> head fallthrough\n"
+    same(S("every edge kind is derived from the shape, not recorded"),
+         core_buffer_string(&b),
+         S("entry -> head fallthrough\n"
          "head -> body branch-true\n"
          "head -> out loop-exit\n"
          "body -> other case\n"
@@ -247,16 +249,18 @@ static void test_all_seven_edge_kinds(void)
          "out -> yes branch-true\n"
          "out -> no branch-false\n"
          "yes -> end jump\n"
-         "no -> end fallthrough\n");
+         "no -> end fallthrough\n"));
 
     for (uint32_t k = 0; k < 7; k++) {
         if (!saw[k]) {
-            printf("FAIL  no edge of kind %s occurs in the fixture\n",
-                   ir_edge_kind_name((ir_edge_kind_t)k));
+            core_string_t kind = ir_edge_kind_name((ir_edge_kind_t)k);
+
+            printf("FAIL  no edge of kind %.*s occurs in the fixture\n",
+                   (int)kind.u8_bytes, kind.data);
             fails++;
         }
     }
-    free(b.p);
+    core_buffer_release(&b);
     done(r);
 }
 
@@ -271,8 +275,8 @@ static void test_a_loop_inside_a_loop(void)
                         "    block done:\n      return\n"
                         "  }\n"));
     ir_func_t *f = func_of(r);
-    ir_pdg_t  *g = ir_pdg_of(f);
-    buf        b = {0};
+    ir_pdg_t     *g = ir_pdg_of(f);
+    core_buffer_t b = {0};
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
         ir_instr_t *t = ir_block_terminator(f->blocks[i]);
@@ -281,23 +285,25 @@ static void test_a_loop_inside_a_loop(void)
             if (!ir_succ_of(&t->operands[s])) {
                 continue;
             }
-            put(&b, f->blocks[i]->name);
-            put(&b, " -> ");
-            put(&b, ir_succ_of(&t->operands[s])->name);
-            put(&b, " ");
-            put(&b, ir_edge_kind_name(ir_edge_kind(g, f->blocks[i], s)));
-            put(&b, "\n");
+            core_buffer_append_string(&b, f->blocks[i]->name);
+            core_buffer_puts(&b, " -> ");
+            core_buffer_append_string(&b, ir_succ_of(&t->operands[s])->name);
+            core_buffer_puts(&b, " ");
+            core_buffer_append_string(
+                &b, ir_edge_kind_name(ir_edge_kind(g, f->blocks[i], s)));
+            core_buffer_puts(&b, "\n");
         }
     }
-    same("leaving the inner loop is an exit, and staying in it is not", b.p,
-         "entry -> outer fallthrough\n"
-         "outer -> inner branch-true\n"
-         "outer -> done loop-exit\n"
-         "inner -> spin branch-true\n"
-         "inner -> latch loop-exit\n"
-         "spin -> inner loop-back\n"
-         "latch -> outer loop-back\n");
-    free(b.p);
+    same(S("leaving the inner loop is an exit, and staying in it is not"),
+         core_buffer_string(&b),
+         S("entry -> outer fallthrough\n"
+           "outer -> inner branch-true\n"
+           "outer -> done loop-exit\n"
+           "inner -> spin branch-true\n"
+           "inner -> latch loop-exit\n"
+           "spin -> inner loop-back\n"
+           "latch -> outer loop-back\n"));
+    core_buffer_release(&b);
     done(r);
 }
 
@@ -337,7 +343,7 @@ static void test_keyed_by_identity_not_by_name(void)
     check("a local edge names the ir_local_t it flows through", by_local);
     check("a value edge is the defining instruction itself", by_value);
     check("the local is found by identity, not by its spelling",
-          f->locals[0] == ir_local_find(f, "x"));
+          f->locals[0] == ir_local_find(f, S("x")));
     done(r);
 }
 
@@ -351,12 +357,12 @@ static void test_reaching_definitions_are_the_data_edges(void)
                         "      %res: i32 = copy $x\n"
                         "      return %res\n"
                         "  }\n"));
-    char *s = data_sketch(ir_pdg_of(func_of(r)));
+    core_string_t s = data_sketch(ir_pdg_of(func_of(r)));
 
-    same("the killed definition does not reach the use", s,
-         "entry#1:x => entry#2:res\n"
-         "entry#2:res => entry#3:return\n");
-    free(s);
+    same(S("the killed definition does not reach the use"), s,
+         S("entry#1:x => entry#2:res\n"
+           "entry#2:res => entry#3:return\n"));
+    core_free(s.data);
     done(r);
 
     r = load(MOD("  func @f(%c: bool, %a: i32) -> i32 {\n"
@@ -374,11 +380,11 @@ static void test_reaching_definitions_are_the_data_edges(void)
                  "      return %res\n"
                  "  }\n"));
     s = data_sketch(ir_pdg_of(func_of(r)));
-    same("both the entry definition and the loop-carried one reach", s,
-         "entry#0:x ~> out#0:res\n"
-         "body#0:x ~> out#0:res\n"
-         "out#0:res => out#1:return\n");
-    free(s);
+    same(S("both the entry definition and the loop-carried one reach"), s,
+         S("entry#0:x ~> out#0:res\n"
+           "body#0:x ~> out#0:res\n"
+           "out#0:res => out#1:return\n"));
+    core_free(s.data);
     done(r);
 }
 
@@ -468,13 +474,13 @@ static void test_a_definition_reaching_through_two_joins(void)
                         "      %res: i32 = copy $x\n"
                         "      return %res\n"
                         "  }\n"));
-    char *s = data_sketch(ir_pdg_of(func_of(r)));
+    core_string_t s = data_sketch(ir_pdg_of(func_of(r)));
 
-    same("a definition reaches through a join inside a loop", s,
-         "entry#0:x ~> out#0:res\n"
-         "then#0:x ~> out#0:res\n"
-         "out#0:res => out#1:return\n");
-    free(s);
+    same(S("a definition reaches through a join inside a loop"), s,
+         S("entry#0:x ~> out#0:res\n"
+           "then#0:x ~> out#0:res\n"
+           "out#0:res => out#1:return\n"));
+    core_free(s.data);
     done(r);
 }
 
@@ -542,20 +548,22 @@ static void test_the_cdg_is_over_blocks(void)
         check("the nested-branch function parses", false);
         for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
             const ir_diag_t *diag = ir_diags_at(r->d, i);
-            printf("  parse diagnostic at %u:%u: %s\n",
+            core_string_t    msg  = diag->message.data ? diag->message
+                                                       : S("(no message)");
+            printf("  parse diagnostic at %u:%u: %.*s\n",
                    diag->primary.span.start_line,
                    diag->primary.span.start_col,
-                   diag->message ? diag->message : "(no message)");
+                   (int)msg.u8_bytes, msg.data);
         }
         done(r);
         return;
     }
-    ir_pdg_t  *g = ir_pdg_of(f);
-    char      *s = cdg_sketch(g, f);
+    ir_pdg_t     *g = ir_pdg_of(f);
+    core_string_t s = cdg_sketch(g, f);
 
-    same("control dependence is recorded per block", s,
-         "t on entry\n"
-         "u on t\n");
+    same(S("control dependence is recorded per block"), s,
+         S("t on entry\n"
+           "u on t\n"));
     check("and asking directly agrees",
           controlled_by(g, f->blocks[1], f->blocks[0])
               && controlled_by(g, f->blocks[2], f->blocks[1])
@@ -568,7 +576,7 @@ static void test_the_cdg_is_over_blocks(void)
     }
     check("the control edges are in the one graph, not a second structure",
           control > 0);
-    free(s);
+    core_free(s.data);
     done(r);
 }
 
@@ -665,7 +673,7 @@ static void test_where_the_other_three_live(void)
           !(ir_verify(r->m, r->d) & IR_PROP_PARSED));
     check("and the verifier says which instruction",
           counted(r, IR_DIAG_VERIFY_PARSED) == 1
-              && told(r, "is not its last instruction"));
+              && told(r, S("is not its last instruction")));
     check("so ir_analyze has nothing of its own to say",
           ir_diags_count(r->d) == 3 && !ir_analyze(r->m, r->d)
               && ir_diags_count(r->d) == 3);
@@ -678,7 +686,7 @@ static void test_where_the_other_three_live(void)
                  "  }\n"));
     check("E001 a read of an undeclared local never becomes a module",
           r->m == nullptr && counted(r, IR_DIAG_PARSE) == 1
-              && told(r, "unknown local"));
+              && told(r, S("unknown local")));
     done(r);
 
     r = load(MOD("  func @f(%a: i32) -> i32 {\n"
@@ -690,7 +698,7 @@ static void test_where_the_other_three_live(void)
                  "  }\n"));
     check("W005 shadowing has no IR form: a second $x is a parse error",
           r->m == nullptr && counted(r, IR_DIAG_PARSE) == 1
-              && told(r, "duplicate local"));
+              && told(r, S("duplicate local")));
     done(r);
 }
 
@@ -718,18 +726,19 @@ static void test_every_analysis_diagnostic_has_a_place(void)
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         const ir_diag_t *dg = ir_diags_at(r->d, i);
 
-        check("the diagnostic has a code", ir_diag_code(dg->code) != nullptr);
+        check("the diagnostic has a code",
+              ir_diag_code(dg->code).data != nullptr);
         check("and a span that names a place in the source",
               dg->primary.span.file >= 0
                   && dg->primary.span.start_line > 0);
     }
 
-    char *text = ir_diags_render_text(r->d, nullptr);
+    core_string_t text = ir_diags_render_text(r->d, nullptr);
 
     check("and it renders with that place",
-          text && strstr(text, "orphan") && strstr(text, "$x")
-              && strstr(text, "$y"));
-    free(text);
+          contains(text, S("orphan")) && contains(text, S("$x"))
+              && contains(text, S("$y")));
+    core_free(text.data);
     done(r);
 }
 

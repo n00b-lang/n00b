@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "parse/bnf.h"
 #include "parse/grammar.h"
@@ -12,20 +11,22 @@
 #include "private/parse/grammar.h"
 #include "harness.h"
 
-static const char *const TYPES =
-    "<type>  ::= <name> | <ptr>\n"
-    "<ptr>   ::= %\"ptr\" %\"[\" <type> %\"]\"\n"
-    "<name>  ::= %IDENTIFIER\n";
+#define S(x) CORE_STRING_STATIC(x)
 
-static const char *const LANG =
-    "<decl>  ::= %\"local\" %IDENTIFIER %\":\" <type>\n"
-    "<decls> ::= <decl> | <decl> <decls>\n";
+#define TYPES                                             \
+    S("<type>  ::= <name> | <ptr>\n"                      \
+      "<ptr>   ::= %\"ptr\" %\"[\" <type> %\"]\"\n"       \
+      "<name>  ::= %IDENTIFIER\n")
 
-static int64_t nt_id(parse_grammar_t *g, const char *name)
+#define LANG                                              \
+    S("<decl>  ::= %\"local\" %IDENTIFIER %\":\" <type>\n" \
+      "<decls> ::= <decl> | <decl> <decls>\n")
+
+static int64_t nt_id_s(parse_grammar_t *g, core_string_t name)
 {
     for (size_t i = 0; i < core_list_len(g->nt_list); i++) {
         if (g->nt_list.data[i]->name.data
-            && !strcmp(g->nt_list.data[i]->name.data, name)) {
+            && core_string_eq(g->nt_list.data[i]->name, name)) {
             return g->nt_list.data[i]->id;
         }
     }
@@ -33,7 +34,9 @@ static int64_t nt_id(parse_grammar_t *g, const char *name)
     return -1;
 }
 
-static parse_token_info_t *tk(int64_t tid, const char *text, int i)
+#define nt_id(g, name) nt_id_s((g), S(name))
+
+static parse_token_info_t *tk_s(int64_t tid, core_string_t text, int i)
 {
     parse_token_info_t *t = parse_token_new();
 
@@ -41,18 +44,20 @@ static parse_token_info_t *tk(int64_t tid, const char *text, int i)
     parse_token_set_index(t, i);
     parse_token_set_position(t, 1, 0, 0, 0);
     parse_token_set_value(t, core_option_set(core_string_t,
-                                             core_string_from_cstr(text)),
+                                             core_string_dup(text)),
                           false);
 
     return t;
 }
 
-static bool parses(parse_grammar_t *g, const char *start,
-                   parse_token_info_t **toks, int n)
+#define tk(tid, text, i) tk_s((tid), S(text), (i))
+
+static bool parses_s(parse_grammar_t *g, core_string_t start,
+                     parse_token_info_t **toks, int n)
 {
     parse_token_stream_t *ts = scan_token_stream_from_array(toks, n);
     parse_pwz_parser_t   *p
-        = parse_pwz_new_for_start(g, nt_id(g, start));
+        = parse_pwz_new_for_start(g, nt_id_s(g, start));
     bool                ok = parse_pwz_parse(p, ts);
 
     parse_pwz_free(p);
@@ -61,40 +66,42 @@ static bool parses(parse_grammar_t *g, const char *start,
     return ok;
 }
 
-static parse_grammar_t *compose(const char *first, const char *second,
-                              const char *start)
+#define parses(g, start, toks, n) parses_s((g), S(start), (toks), (n))
+
+static parse_grammar_t *compose_s(core_string_t first, core_string_t second,
+                                  core_string_t start)
 {
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
-    bool a = parse_bnf_load(core_string_from_cstr(first),
-                          core_string_from_cstr(start), g);
-    bool b = parse_bnf_load(core_string_from_cstr(second),
-                          core_string_from_cstr(start), g);
+    bool a = parse_bnf_load(first, start, g);
+    bool b = parse_bnf_load(second, start, g);
 
     check("both parts load into one grammar", a && b);
 
     return g;
 }
 
+#define compose(first, second, start) compose_s((first), (second), S(start))
+
 static void test_the_parts_load_in_either_order(void)
 {
-    static const struct {
-        const char *what;
-        const char *first;
-        const char *second;
+    const struct {
+        core_string_t what;
+        core_string_t first;
+        core_string_t second;
     } orders[] = {
-        {"types first",    TYPES, LANG },
-        {"the user first", LANG,  TYPES},
+        {S("types first"),    TYPES, LANG },
+        {S("the user first"), LANG,  TYPES},
     };
 
     for (size_t i = 0; i < sizeof(orders) / sizeof(orders[0]); i++) {
         parse_grammar_t *g = compose(orders[i].first, orders[i].second, "decls");
 
         if (!parse_grammar_report_undefined(g, stdout)) {
-            printf("FAIL  %s leaves nonterminals undefined\n",
-                   orders[i].what);
+            printf("FAIL  %.*s leaves nonterminals undefined\n",
+                   (int)orders[i].what.u8_bytes, orders[i].what.data);
             fails++;
         }
 
@@ -102,8 +109,7 @@ static void test_the_parts_load_in_either_order(void)
     }
     parse_grammar_t *partial = parse_grammar_new();
     parse_grammar_set_error_recovery(partial, false);
-    parse_bnf_load(core_string_from_cstr(LANG), CORE_STRING_STATIC("decls"),
-                   partial);
+    parse_bnf_load(LANG, CORE_STRING_STATIC("decls"), partial);
     check("a missing grammar part remains undefined",
           core_list_len(parse_get_nonterm(partial,
               nt_id(partial, "type"))->rule_ids) == 0);
@@ -177,7 +183,7 @@ static void test_a_failed_load_changes_nothing(void)
               && core_list_len(g->named_terms) == terminals
               && core_list_len(g->annotations) == annotations);
     check("a rejected load does not change the tokenizer",
-          !strcmp(scan_grammar_tokenizer(g).data, "text"));
+          core_string_eq(scan_grammar_tokenizer(g), S("text")));
 
     check("an empty literal is rejected before installing its production",
           !parse_bnf_load(CORE_STRING_STATIC("<empty> ::= \"\"\n"),
@@ -225,14 +231,13 @@ static void *r_sum(parse_reduce_t *r)
 
 static void test_a_reduce_folds_children_into_a_value(void)
 {
-    static const char *const G =
-        "<list> ::= <item> (%\",\" <item>)*\n"
-        "<item> ::= %IDENTIFIER\n";
+    core_string_t G = S("<list> ::= <item> (%\",\" <item>)*\n"
+                        "<item> ::= %IDENTIFIER\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
-    parse_bnf_load(core_string_from_cstr(G), CORE_STRING_STATIC("list"), g);
+    parse_bnf_load(G, CORE_STRING_STATIC("list"), g);
 
     parse_token_info_t *toks[] = {
         tk(PARSE_TOK_IDENTIFIER, "a", 0),
@@ -286,14 +291,13 @@ static bool stop_at_item(parse_visit_t *v)
 
 static void test_a_visitor_can_stop_a_reduce(void)
 {
-    static const char *const G =
-        "<list> ::= <item> (%\",\" <item>)*\n"
-        "<item> ::= %IDENTIFIER\n";
+    core_string_t G = S("<list> ::= <item> (%\",\" <item>)*\n"
+                        "<item> ::= %IDENTIFIER\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
-    parse_bnf_load(core_string_from_cstr(G), CORE_STRING_STATIC("list"), g);
+    parse_bnf_load(G, CORE_STRING_STATIC("list"), g);
 
     parse_token_info_t *toks[] = {
         tk(PARSE_TOK_IDENTIFIER, "a", 0),
@@ -401,7 +405,9 @@ static void test_tree_editing_keeps_shifted_siblings(void)
     parse_walk_on_stage(walk, PARSE_WALK_PREPARE, edit_children, nullptr);
     parse_tree_walk_run(walk, root);
     check("removal revisits the shifted sibling and replacement is prepared",
-          !strcmp(edit.visits, "abrc") && !parse_tree_walk_failed(walk));
+          core_string_eq(core_string_borrow(edit.visits, edit.count),
+                         S("abrc"))
+              && !parse_tree_walk_failed(walk));
     check("active ancestry follows leaf replacement and not detached nodes",
           edit.ancestry_ok
               && parse_visit_ancestor(&edit.removed_visit, 0) == nullptr);

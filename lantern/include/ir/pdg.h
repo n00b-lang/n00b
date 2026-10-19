@@ -3,6 +3,7 @@
 
 #include "ir/diag.h"
 #include "ir/ir.h"
+#include "lib/string.h"
 
 typedef enum : uint8_t {
     IR_DEP_CONTROL,
@@ -53,7 +54,7 @@ typedef enum : uint8_t {
     IR_EDGE_CASE,
 } ir_edge_kind_t;
 
-const char    *ir_edge_kind_name(ir_edge_kind_t k);
+core_string_t  ir_edge_kind_name(ir_edge_kind_t k);
 ir_edge_kind_t ir_edge_kind(const ir_pdg_t *g, ir_block_t *from,
                             uint32_t slot);
 

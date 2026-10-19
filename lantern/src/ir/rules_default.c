@@ -52,16 +52,18 @@ static th_type *declared(ir_instr_t *in)
     return nullptr;
 }
 
-static const char *typed(ir_module_t *m, th_type *t)
-{
-    const char *s = t ? ir_type_text(m, t) : nullptr;
+#define SARG(s) (int)(s).u8_bytes, (s).data
 
-    return s ? s : "an unknown type";
+static core_string_t typed(ir_module_t *m, th_type *t)
+{
+    core_string_t s = t ? ir_type_text(m, t) : (core_string_t){};
+
+    return s.data ? s : CORE_STRING_STATIC("an unknown type");
 }
 
 __attribute__((format(printf, 6, 7))) static ir_diag_t *
-complain(ir_module_t *m, ir_diags_t *d, ir_diagcode_t code, ir_instr_t *in,
-         const char *label, const char *fmt, ...)
+complain_at(ir_module_t *m, ir_diags_t *d, ir_diagcode_t code,
+            ir_instr_t *in, core_string_t label, const char *fmt, ...)
 {
     (void)m;
 
@@ -85,16 +87,22 @@ complain(ir_module_t *m, ir_diags_t *d, ir_diagcode_t code, ir_instr_t *in,
     core_buffer_vprintf(b, fmt, ap);
     va_end(ap);
 
-    char *msg = core_buffer_take(b);
+    core_string_t msg = core_buffer_take_string(b);
 
-    ir_diag_message(dg, d, msg ? msg : fmt);
-    core_free(msg);
+    ir_diag_message(dg, d, msg);
+    core_free(msg.data);
 
     return dg;
 }
 
-static void blame(ir_diags_t *d, ir_diag_t *dg, ir_instr_t *in, uint32_t i,
-                  const char *label)
+#define complain(m, d, code, in, label, ...) \
+    complain_at((m), (d), (code), (in), CORE_STRING_STATIC(label), __VA_ARGS__)
+
+#define blame(d, dg, in, i, label) \
+    blame_at((d), (dg), (in), (i), CORE_STRING_STATIC(label))
+
+static void blame_at(ir_diags_t *d, ir_diag_t *dg, ir_instr_t *in,
+                     uint32_t i, core_string_t label)
 {
     if (!dg || !in || i >= in->n_operands) {
         return;
@@ -129,7 +137,7 @@ static bool is_int(ir_class_t c)
     return c == IR_CLASS_SINT || c == IR_CLASS_UINT;
 }
 
-static bool has_any_mod(ir_instr_t *in, const char *const *names, size_t n)
+static bool has_any_mod(ir_instr_t *in, const core_string_t *names, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
         if (ir_instr_has_mod(in, names[i])) {
@@ -140,25 +148,41 @@ static bool has_any_mod(ir_instr_t *in, const char *const *names, size_t n)
     return false;
 }
 
-static const char *const FIT[]   = {"wrap", "trap", "sat", "undef"};
-static const char *const ZERO[]  = {"trap", "undef"};
-static const char *const ORDER[] = {"ordered", "unordered"};
-static const char *const ROUND[] = {"to_zero", "nearest", "floor", "ceil"};
+static const core_string_t FIT[] = {
+    CORE_STRING_STATIC("wrap"),
+    CORE_STRING_STATIC("trap"),
+    CORE_STRING_STATIC("sat"),
+    CORE_STRING_STATIC("undef"),
+};
+static const core_string_t ZERO[] = {
+    CORE_STRING_STATIC("trap"),
+    CORE_STRING_STATIC("undef"),
+};
+static const core_string_t ORDER[] = {
+    CORE_STRING_STATIC("ordered"),
+    CORE_STRING_STATIC("unordered"),
+};
+static const core_string_t ROUND[] = {
+    CORE_STRING_STATIC("to_zero"),
+    CORE_STRING_STATIC("nearest"),
+    CORE_STRING_STATIC("floor"),
+    CORE_STRING_STATIC("ceil"),
+};
 
 typedef struct {
-    const char *const *names;
-    size_t             n;
-    const char        *what;
+    const core_string_t *names;
+    size_t               n;
+    core_string_t        what;
 } axis_t;
 
-static const axis_t AX_FIT   = {FIT, 4, "overflow"};
-static const axis_t AX_ZERO  = {ZERO, 2, "divide-by-zero"};
-static const axis_t AX_ROUND = {ROUND, 4, "rounding"};
+static const axis_t AX_FIT   = {FIT, 4, CORE_STRING_STATIC("overflow")};
+static const axis_t AX_ZERO  = {ZERO, 2, CORE_STRING_STATIC("divide-by-zero")};
+static const axis_t AX_ROUND = {ROUND, 4, CORE_STRING_STATIC("rounding")};
 
-static bool axis_has(const axis_t *ax, const char *name)
+static bool axis_has(const axis_t *ax, core_string_t name)
 {
     for (size_t i = 0; i < ax->n; i++) {
-        if (!strcmp(ax->names[i], name)) {
+        if (core_string_eq(ax->names[i], name)) {
             return true;
         }
     }
@@ -191,27 +215,30 @@ static void say_axes(ir_module_t *m, ir_diags_t *d, ir_instr_t *in,
 {
     core_buffer_t *b = core_buffer_empty();
 
+    core_buffer_append_string(b, ir_module_op_spelling(m, in->op));
+
     if (!n_ax) {
-        core_buffer_printf(b, "%s takes no modifiers here",
-                  ir_module_op_spelling(m, in->op));
+        core_buffer_puts(b, " takes no modifiers here");
     }
     else {
-        core_buffer_printf(b, "%s takes exactly one ", ir_module_op_spelling(m, in->op));
+        core_buffer_puts(b, " takes exactly one ");
 
         for (size_t i = 0; i < n_ax; i++) {
             if (i) {
-                core_buffer_puts(b, i + 1 == n_ax ? " and one " : ", one ");
+                core_buffer_printf(b, "%s",
+                                   i + 1 == n_ax ? " and one " : ", one ");
             }
-            core_buffer_puts(b, ax[i]->what);
+            core_buffer_append_string(b, ax[i]->what);
         }
-        core_buffer_puts(b, n_ax == 1 ? " modifier" : " modifier of each");
+        core_buffer_printf(b, "%s",
+                           n_ax == 1 ? " modifier" : " modifier of each");
     }
 
-    char *msg = core_buffer_take(b);
+    core_string_t msg = core_buffer_take_string(b);
 
-    complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "these modifiers", "%s",
-             msg ? msg : "wrong modifiers");
-    core_free(msg);
+    complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "these modifiers", "%.*s",
+             SARG(msg));
+    core_free(msg.data);
 }
 
 static bool mods_exact(ir_module_t *m, ir_instr_t *in, ir_diags_t *d,
@@ -231,7 +258,7 @@ static ir_rule_result_t accept_const(ir_module_t *m, th_type *result,
 {
     ir_annot_t *slot = ir_alloc(m->ctx, sizeof(ir_annot_t));
 
-    a.key          = "ir.const";
+    a.key          = CORE_STRING_STATIC("ir.const");
     a.derived_from = IR_PROP_TYPED;
     *slot          = a;
 
@@ -259,7 +286,7 @@ static ir_rule_result_t rule_arith(ir_module_t *m, ir_instr_t *in,
     if (!is_int(c) && c != IR_CLASS_FLOAT) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                  "arithmetic needs an integer or floating-point operand, "
-                 "but this one is %s", typed(m, a));
+                 "but this one is %.*s", SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -267,8 +294,9 @@ static ir_rule_result_t rule_arith(ir_module_t *m, ir_instr_t *in,
     if (in->n_operands == 2 && !same(m, a, opd_type(in, 1))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "these operands",
                            "arithmetic operands must have the same type, "
-                           "but the first is %s and the second is %s",
-                           typed(m, a), typed(m, opd_type(in, 1))),
+                           "but the first is %.*s and the second is %.*s",
+                           SARG(typed(m, a)),
+                           SARG(typed(m, opd_type(in, 1)))),
               in, 1, "the second operand is defined here");
 
         return REJECT;
@@ -294,8 +322,8 @@ static ir_rule_result_t rule_arith(ir_module_t *m, ir_instr_t *in,
     }
     else if (in->n_mods) {
         complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this modifier",
-                 "floating-point arithmetic takes no modifiers, but %s is "
-                 "present", in->mods[0]);
+                 "floating-point arithmetic takes no modifiers, but %.*s is "
+                 "present", SARG(in->mods[0]));
 
         return REJECT;
     }
@@ -317,7 +345,7 @@ static ir_rule_result_t rule_bitwise(ir_module_t *m, ir_instr_t *in,
     if (!is_int(ir_machine_of(m, a).class)) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                  "bitwise operations need an integer operand, but this one "
-                 "is %s", typed(m, a));
+                 "is %.*s", SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -325,8 +353,9 @@ static ir_rule_result_t rule_bitwise(ir_module_t *m, ir_instr_t *in,
     if (in->n_operands == 2 && !same(m, a, opd_type(in, 1))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "these operands",
                            "bitwise operands must have the same type, but "
-                           "the first is %s and the second is %s",
-                           typed(m, a), typed(m, opd_type(in, 1))),
+                           "the first is %.*s and the second is %.*s",
+                           SARG(typed(m, a)),
+                           SARG(typed(m, opd_type(in, 1)))),
               in, 1, "the second operand is defined here");
 
         return REJECT;
@@ -349,8 +378,8 @@ static ir_rule_result_t rule_shift(ir_module_t *m, ir_instr_t *in,
 
     if (!is_int(ir_machine_of(m, a).class)) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "the value shifted",
-                 "a shift needs an integer value, but this one is %s",
-                 typed(m, a));
+                 "a shift needs an integer value, but this one is %.*s",
+                 SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -358,7 +387,7 @@ static ir_rule_result_t rule_shift(ir_module_t *m, ir_instr_t *in,
     if (!is_int(ir_machine_of(m, b).class)) {
         blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "the shift amount",
                            "a shift amount must be an integer, but this one "
-                           "is %s", typed(m, b)),
+                           "is %.*s", SARG(typed(m, b))),
               in, 1, "the shift amount is defined here");
 
         return REJECT;
@@ -380,8 +409,8 @@ static ir_rule_result_t rule_count(ir_module_t *m, ir_instr_t *in,
 
     if (!is_int(ir_machine_of(m, a).class)) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "a bit count needs an integer operand, but this one is %s",
-                 typed(m, a));
+                 "a bit count needs an integer operand, but this one is %.*s",
+                 SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -391,7 +420,7 @@ static ir_rule_result_t rule_count(ir_module_t *m, ir_instr_t *in,
     if (!u32) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
                  "a bit count yields a 32-bit unsigned integer, and profile "
-                 "%s declares no such type", m->profile->name);
+                 "%.*s declares no such type", SARG(m->profile->name));
 
         return REJECT;
     }
@@ -413,8 +442,9 @@ static ir_rule_result_t rule_compare(ir_module_t *m, ir_instr_t *in,
     if (!same(m, a, opd_type(in, 1))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "these operands",
                            "comparison operands must have the same type, but "
-                           "the first is %s and the second is %s",
-                           typed(m, a), typed(m, opd_type(in, 1))),
+                           "the first is %.*s and the second is %.*s",
+                           SARG(typed(m, a)),
+                           SARG(typed(m, opd_type(in, 1)))),
               in, 1, "the second operand is defined here");
 
         return REJECT;
@@ -423,16 +453,16 @@ static ir_rule_result_t rule_compare(ir_module_t *m, ir_instr_t *in,
     if (ir_machine_of(m, a).class == IR_CLASS_FLOAT) {
         if (!has_any_mod(in, ORDER, 2)) {
             complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this comparison",
-                     "comparing %s needs the ordered or unordered modifier",
-                     typed(m, a));
+                     "comparing %.*s needs the ordered or unordered modifier",
+                     SARG(typed(m, a)));
 
             return REJECT;
         }
     }
     else if (in->n_mods) {
         complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this modifier",
-                 "%s is a float comparison modifier, and these operands are "
-                 "%s", in->mods[0], typed(m, a));
+                 "%.*s is a float comparison modifier, and these operands "
+                 "are %.*s", SARG(in->mods[0]), SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -441,8 +471,8 @@ static ir_rule_result_t rule_compare(ir_module_t *m, ir_instr_t *in,
 
     if (!b) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
-                 "a comparison yields a boolean, and profile %s declares no "
-                 "such type", m->profile->name);
+                 "a comparison yields a boolean, and profile %.*s declares "
+                 "no such type", SARG(m->profile->name));
 
         return REJECT;
     }
@@ -529,8 +559,8 @@ static ir_rule_result_t rule_const(ir_module_t *m, ir_instr_t *in,
 
     if (k.class == IR_CLASS_OPAQUE) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this constant",
-                 "%s has no machine class in profile %s, so it has no "
-                 "constants", typed(m, t), m->profile->name);
+                 "%.*s has no machine class in profile %.*s, so it has no "
+                 "constants", SARG(typed(m, t)), SARG(m->profile->name));
 
         return REJECT;
     }
@@ -549,8 +579,9 @@ static ir_rule_result_t rule_const(ir_module_t *m, ir_instr_t *in,
 
     if (is_float != (k.class == IR_CLASS_FLOAT)) {
         complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this literal",
-                 "%s literal in %s, which is %s",
-                 is_float ? "a floating-point" : "an integer", typed(m, t),
+                 "%s literal in %.*s, which is %s",
+                 is_float ? "a floating-point" : "an integer",
+                 SARG(typed(m, t)),
                  is_float ? "not a floating-point type"
                           : "a floating-point type");
 
@@ -558,11 +589,11 @@ static ir_rule_result_t rule_const(ir_module_t *m, ir_instr_t *in,
     }
 
     if (!is_float && !int_fits(in->operands[0].lit.i, k)) {
-        char *lit = ir_lit_text(in->operands[0].lit.i);
+        core_string_t lit = ir_lit_text(in->operands[0].lit.i);
 
         complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this literal",
-                 "%s does not fit in %s", lit, typed(m, t));
-        core_free(lit);
+                 "%.*s does not fit in %.*s", SARG(lit), SARG(typed(m, t)));
+        core_free(lit.data);
 
         return REJECT;
     }
@@ -571,18 +602,19 @@ static ir_rule_result_t rule_const(ir_module_t *m, ir_instr_t *in,
         switch (float_fits(in->operands[0].lit.f, k)) {
         case FLOAT_TOO_WIDE:
             complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this literal",
-                     "%s is not representable in %s",
-                     in->operands[0].lit.text ? in->operands[0].lit.text
-                                              : "this value",
-                     typed(m, t));
+                     "%.*s is not representable in %.*s",
+                     SARG(in->operands[0].lit.text.data
+                              ? in->operands[0].lit.text
+                              : CORE_STRING_STATIC("this value")),
+                     SARG(typed(m, t)));
 
             return REJECT;
 
         case FLOAT_UNCHECKABLE:
             complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this literal",
-                     "%s is %u bits wide, and a literal can only be checked "
+                     "%.*s is %u bits wide, and a literal can only be checked "
                      "against a 32-bit or wider floating-point type",
-                     typed(m, t), k.width);
+                     SARG(typed(m, t)), k.width);
 
             return REJECT;
 
@@ -607,8 +639,8 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
 
         if (has_extent && extent != in->n_operands) {
             complain(m, d, IR_DIAG_TYPE_ARGS, in, "these operands",
-                     "%s has extent %" PRIu64 " and %u values were given",
-                     typed(m, t), extent, in->n_operands);
+                     "%.*s has extent %" PRIu64 " and %u values were given",
+                     SARG(typed(m, t)), extent, in->n_operands);
             return REJECT;
         }
 
@@ -618,9 +650,10 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
                 blame(d,
                       complain(m, d, IR_DIAG_TYPE_MISMATCH, in,
                                "this sequence element",
-                               "element %u of %s is %s, and the value given "
-                               "is %s", i, typed(m, t), typed(m, element),
-                               typed(m, opd_type(in, i))),
+                               "element %u of %.*s is %.*s, and the value "
+                               "given is %.*s", i, SARG(typed(m, t)),
+                               SARG(typed(m, element)),
+                               SARG(typed(m, opd_type(in, i)))),
                       in, i, "the value is defined here");
                 return REJECT;
             }
@@ -636,8 +669,8 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
             == TH_BUILTIN_TUPLE) {
             if (in->n_operands != aggregate_args) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "these operands",
-                         "%s has %zu elements and %u values were given",
-                         typed(m, t), aggregate_args, in->n_operands);
+                         "%.*s has %zu elements and %u values were given",
+                         SARG(typed(m, t)), aggregate_args, in->n_operands);
                 return REJECT;
             }
             for (size_t i = 0; i < aggregate_args; i++) {
@@ -650,9 +683,11 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
                     blame(d,
                           complain(m, d, IR_DIAG_TYPE_MISMATCH, in,
                                    "this tuple element",
-                                   "element %zu of %s has type %s, but its value has type %s",
-                                   i, typed(m, t), typed(m, element),
-                                   typed(m, opd_type(in, (uint32_t)i))),
+                                   "element %zu of %.*s has type %.*s, but its value has type %.*s",
+                                   i, SARG(typed(m, t)),
+                                   SARG(typed(m, element)),
+                                   SARG(typed(m,
+                                              opd_type(in, (uint32_t)i)))),
                           in, (uint32_t)i, "the value is defined here");
                     return REJECT;
                 }
@@ -667,8 +702,8 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
             if (th_kind_of(aggregate) != TH_NAMED || nargs != expected) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in,
                          "this aggregate destination",
-                         "the aggregate form requires %zu type arguments, but %s has %zu",
-                         expected, typed(m, t), nargs);
+                         "the aggregate form requires %zu type arguments, but %.*s has %zu",
+                         expected, SARG(typed(m, t)), nargs);
                 return REJECT;
             }
             if (form == IR_AGGREGATE_PAIRS && (in->n_operands & 1u)) {
@@ -688,9 +723,10 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
                     blame(d,
                           complain(m, d, IR_DIAG_TYPE_MISMATCH, in,
                                    "this aggregate element",
-                                   "value %u of %s has type %s, not %s", i,
-                                   typed(m, t), typed(m, opd_type(in, i)),
-                                   typed(m, element)),
+                                   "value %u of %.*s has type %.*s, not %.*s",
+                                   i, SARG(typed(m, t)),
+                                   SARG(typed(m, opd_type(in, i))),
+                                   SARG(typed(m, element))),
                           in, i, "the value is defined here");
                     return REJECT;
                 }
@@ -698,7 +734,8 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
             return ACCEPT(t);
         }
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this destination",
-                 "aggregate builds a record, and %s is not one", typed(m, t));
+                 "aggregate builds a record, and %.*s is not one",
+                 SARG(typed(m, t)));
 
         return REJECT;
     }
@@ -707,8 +744,8 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
 
     if (in->n_operands != n) {
         complain(m, d, IR_DIAG_TYPE_ARGS, in, "these operands",
-                 "%s has %zu members and %u values were given", typed(m, t), n,
-                 in->n_operands);
+                 "%.*s has %zu members and %u values were given",
+                 SARG(typed(m, t)), n, in->n_operands);
 
         return REJECT;
     }
@@ -720,10 +757,12 @@ static ir_rule_result_t rule_aggregate(ir_module_t *m, ir_instr_t *in,
                           opd_type(in, (uint32_t)i))) {
             blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in,
                                "this member",
-                               "member %s of %s is %s, and the value given "
-                               "is %s", mem ? mem->name : "?", typed(m, t),
-                               typed(m, mem ? mem->type : nullptr),
-                               typed(m, opd_type(in, (uint32_t)i))),
+                               "member %.*s of %.*s is %.*s, and the value "
+                               "given is %.*s",
+                               SARG(mem ? mem->name : CORE_STRING_STATIC("?")),
+                               SARG(typed(m, t)),
+                               SARG(typed(m, mem ? mem->type : nullptr)),
+                               SARG(typed(m, opd_type(in, (uint32_t)i)))),
                   in, (uint32_t)i, "the value is defined here");
 
             return REJECT;
@@ -766,7 +805,8 @@ static ir_rule_result_t rule_param_present(ir_module_t *m, ir_instr_t *in,
                  "param.present requires an optional function parameter");
         return REJECT;
     }
-    return ACCEPT(ir_type_intern(m, th_name(m->ctx->types, "bool")));
+    return ACCEPT(ir_type_intern(
+        m, th_name(m->ctx->types, CORE_STRING_STATIC("bool"))));
 }
 
 static uint32_t sequence_rank(th_type *type)
@@ -818,9 +858,9 @@ static ir_rule_result_t rule_array_new(ir_module_t *m, ir_instr_t *in,
     if (!element_type
         || !same(m, element_type, ir_shape_element_type(shape))) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this array shape",
-                 "the shape element type is %s, but the result stores %s",
-                 typed(m, ir_shape_element_type(shape)),
-                 typed(m, element_type));
+                 "the shape element type is %.*s, but the result stores %.*s",
+                 SARG(typed(m, ir_shape_element_type(shape))),
+                 SARG(typed(m, element_type)));
         return REJECT;
     }
 
@@ -922,7 +962,7 @@ rule_sequence_shape_check(ir_module_t *m, ir_instr_t *in, ir_diags_t *d,
         constrained = true;
         if (!extent.value && extent.kind != IR_SHAPE_EXTENT_STATIC
             && !extent.expression && !extent.producer
-            && !extent.producer_identifier) {
+            && !extent.producer_identifier.data) {
             complain(m, d, IR_DIAG_TYPE_ARGS, in, "this expected extent",
                      "a constrained extent needs a value or deferred producer");
             return REJECT;
@@ -952,8 +992,8 @@ static ir_rule_result_t rule_annotated(ir_module_t *m, ir_instr_t *in,
 
     if (!t) {
         complain(m, d, IR_DIAG_TYPE_DEST, in, "this instruction",
-                 "%s takes its type from its destination, and has none",
-                 ir_module_op_spelling(m, in->op));
+                 "%.*s takes its type from its destination, and has none",
+                 SARG(ir_module_op_spelling(m, in->op)));
 
         return REJECT;
     }
@@ -1055,8 +1095,8 @@ static ir_rule_result_t rule_alloca(ir_module_t *m, ir_instr_t *in,
     if (in->op != IR_OP_ALLOC_USING && in->n_operands > 1
         && !is_int(ir_machine_of(m, opd_type(in, 1)).class)) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this count",
-                 "an alloca count must be an integer, and this one is %s",
-                 typed(m, opd_type(in, 1)));
+                 "an alloca count must be an integer, and this one is %.*s",
+                 SARG(typed(m, opd_type(in, 1))));
 
         return REJECT;
     }
@@ -1067,15 +1107,15 @@ static ir_rule_result_t rule_alloca(ir_module_t *m, ir_instr_t *in,
         th_type *referent = th_ind_referent(result);
         if (!referent) {
             complain(m, d, IR_DIAG_TYPE_POINTER, in, "this result",
-                     "%s must produce an indirection to its allocated type",
-                     ir_module_op_spelling(m, in->op));
+                     "%.*s must produce an indirection to its allocated type",
+                     SARG(ir_module_op_spelling(m, in->op)));
             return REJECT;
         }
         if (!same(m, referent, t)) {
             complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this result",
-                     "%s produces an address to %s, but its result refers to %s",
-                     ir_module_op_spelling(m, in->op),
-                     typed(m, t), typed(m, referent));
+                     "%.*s produces an address to %.*s, but its result refers to %.*s",
+                     SARG(ir_module_op_spelling(m, in->op)),
+                     SARG(typed(m, t)), SARG(typed(m, referent)));
             return REJECT;
         }
         return ACCEPT(ir_type_intern(m, result));
@@ -1086,7 +1126,7 @@ static ir_rule_result_t rule_alloca(ir_module_t *m, ir_instr_t *in,
 
     if (!p) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this type",
-                 "could not form a pointer to %s", typed(m, t));
+                 "could not form a pointer to %.*s", SARG(typed(m, t)));
 
         return REJECT;
     }
@@ -1105,8 +1145,8 @@ static ir_rule_result_t rule_dealloc(ir_module_t *m, ir_instr_t *in,
     }
     if (th_kind_of(address) != TH_INDIRECTION) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this value",
-                 "deallocation requires an address, but this value has type %s",
-                 typed(m, address));
+                 "deallocation requires an address, but this value has type %.*s",
+                 SARG(typed(m, address)));
         return REJECT;
     }
     return ACCEPT(nullptr);
@@ -1127,9 +1167,10 @@ static ir_rule_result_t rule_atomic_rmw(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
     if (in->n_mods > 1
-        || (in->n_mods && !ir_instr_has_mod(in, "release")
-            && !ir_instr_has_mod(in, "relaxed")
-            && !ir_instr_has_mod(in, "acquire"))) {
+        || (in->n_mods
+            && !ir_instr_has_mod(in, CORE_STRING_STATIC("release"))
+            && !ir_instr_has_mod(in, CORE_STRING_STATIC("relaxed"))
+            && !ir_instr_has_mod(in, CORE_STRING_STATIC("acquire")))) {
         complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this order",
                  "atomic.rmw supports acquire, release, or relaxed ordering");
         return REJECT;
@@ -1148,14 +1189,17 @@ static ir_rule_result_t rule_atomic_rmw(ir_module_t *m, ir_instr_t *in,
                  "atomic.rmw needs a value matching its storage");
         return REJECT;
     }
-    const char *operation = in->operands[1].kind == IR_OPD_NAME
-        ? in->operands[1].name : nullptr;
+    core_string_t operation = in->operands[1].kind == IR_OPD_NAME
+        ? in->operands[1].name : (core_string_t){};
     bool integer = is_int(ir_machine_of(m, element).class);
-    if (!operation || (strcmp(operation, "xchg")
-        && (!integer || (strcmp(operation, "or")
-            && strcmp(operation, "and")
-            && strcmp(operation, "add")
-            && strcmp(operation, "sub"))))) {
+    if (!operation.data
+        || (!core_string_eq(operation, CORE_STRING_STATIC("xchg"))
+            && (!integer
+                || (!core_string_eq(operation, CORE_STRING_STATIC("or"))
+                    && !core_string_eq(operation, CORE_STRING_STATIC("and"))
+                    && !core_string_eq(operation, CORE_STRING_STATIC("add"))
+                    && !core_string_eq(operation,
+                                       CORE_STRING_STATIC("sub")))))) {
         complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this operation",
                  "atomic.rmw supports exchange and integer or/and/add/sub");
         return REJECT;
@@ -1194,7 +1238,8 @@ static ir_rule_result_t rule_atomic_cas(ir_module_t *m, ir_instr_t *in,
                  "atomic.cas needs scalar values matching its storage");
         return REJECT;
     }
-    return ACCEPT(ir_type_intern(m, th_name(m->ctx->types, "bool")));
+    return ACCEPT(ir_type_intern(
+        m, th_name(m->ctx->types, CORE_STRING_STATIC("bool"))));
 }
 
 static ir_rule_result_t rule_load(ir_module_t *m, ir_instr_t *in,
@@ -1202,10 +1247,10 @@ static ir_rule_result_t rule_load(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
 
-    if (((ir_instr_has_mod(in, "relaxed")
-          || ir_instr_has_mod(in, "acquire"))
-         && !ir_instr_has_mod(in, "atomic"))
-        || ir_instr_has_mod(in, "release")) {
+    if (((ir_instr_has_mod(in, CORE_STRING_STATIC("relaxed"))
+          || ir_instr_has_mod(in, CORE_STRING_STATIC("acquire")))
+         && !ir_instr_has_mod(in, CORE_STRING_STATIC("atomic")))
+        || ir_instr_has_mod(in, CORE_STRING_STATIC("release"))) {
         complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this order",
                  "load supports relaxed or acquire ordering only when atomic");
         return REJECT;
@@ -1221,12 +1266,13 @@ static ir_rule_result_t rule_load(ir_module_t *m, ir_instr_t *in,
 
     if (!to) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                 "load needs a pointer, and this one is %s", typed(m, p));
+                 "load needs a pointer, and this one is %.*s",
+                 SARG(typed(m, p)));
 
         return REJECT;
     }
 
-    th_type *atomic_value = ir_instr_has_mod(in, "atomic")
+    th_type *atomic_value = ir_instr_has_mod(in, CORE_STRING_STATIC("atomic"))
         ? atomic_item(m, to) : nullptr;
     if (atomic_value) to = atomic_value;
 
@@ -1238,10 +1284,10 @@ static ir_rule_result_t rule_store(ir_module_t *m, ir_instr_t *in,
 {
     (void)state;
 
-    if (((ir_instr_has_mod(in, "relaxed")
-          || ir_instr_has_mod(in, "release"))
-         && !ir_instr_has_mod(in, "atomic"))
-        || ir_instr_has_mod(in, "acquire")) {
+    if (((ir_instr_has_mod(in, CORE_STRING_STATIC("relaxed"))
+          || ir_instr_has_mod(in, CORE_STRING_STATIC("release")))
+         && !ir_instr_has_mod(in, CORE_STRING_STATIC("atomic")))
+        || ir_instr_has_mod(in, CORE_STRING_STATIC("acquire"))) {
         complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this order",
                  "store supports relaxed or release ordering only when atomic");
         return REJECT;
@@ -1258,19 +1304,22 @@ static ir_rule_result_t rule_store(ir_module_t *m, ir_instr_t *in,
 
     if (!to) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                 "store needs a pointer, and this one is %s", typed(m, p));
+                 "store needs a pointer, and this one is %.*s",
+                 SARG(typed(m, p)));
 
         return REJECT;
     }
 
     bool matches = same(m, ir_type_intern(m, to), v);
-    th_type *atomic_value = !matches && ir_instr_has_mod(in, "atomic")
+    th_type *atomic_value = !matches
+            && ir_instr_has_mod(in, CORE_STRING_STATIC("atomic"))
         ? atomic_item(m, to) : nullptr;
     if (atomic_value) matches = same(m, ir_type_intern(m, atomic_value), v);
     if (!matches) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
-                           "storing %s through a pointer to %s", typed(m, v),
-                           typed(m, ir_type_intern(m, to))),
+                           "storing %.*s through a pointer to %.*s",
+                           SARG(typed(m, v)),
+                           SARG(typed(m, ir_type_intern(m, to)))),
               in, 1, "the value is defined here");
 
         return REJECT;
@@ -1300,8 +1349,8 @@ static ir_rule_result_t rule_global_store(ir_module_t *m, ir_instr_t *in,
             && ir_global_can_initialize(global, phase));
     if (!phase_writable) {
         complain(m, d, IR_DIAG_VERIFY_PHASE, in, "this global",
-                 "global %s is neither mutable nor initializable during %s execution",
-                 global->name,
+                 "global %.*s is neither mutable nor initializable during %s execution",
+                 SARG(global->name),
                  phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
         return REJECT;
     }
@@ -1317,9 +1366,9 @@ static ir_rule_result_t rule_global_store(ir_module_t *m, ir_instr_t *in,
     }
     if (!same(m, global->type, value)) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
-                           "storing %s in global %s of type %s",
-                           typed(m, value), global->name,
-                           typed(m, global->type)),
+                           "storing %.*s in global %.*s of type %.*s",
+                           SARG(typed(m, value)), SARG(global->name),
+                           SARG(typed(m, global->type))),
               in, 1, "the value is defined here");
         return REJECT;
     }
@@ -1343,8 +1392,8 @@ static ir_rule_result_t rule_field(ir_module_t *m, ir_instr_t *in,
 
     if (!rc || !th_ind_attrs(p, &attrs)) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "field needs a pointer to a record, and this one is %s",
-                 typed(m, p));
+                 "field needs a pointer to a record, and this one is %.*s",
+                 SARG(typed(m, p)));
 
         return REJECT;
     }
@@ -1353,7 +1402,8 @@ static ir_rule_result_t rule_field(ir_module_t *m, ir_instr_t *in,
 
     if (!mt) {
         complain(m, d, IR_DIAG_TYPE_MEMBER, in, "this name",
-                 "%s has no member %s", typed(m, rc), in->operands[1].name);
+                 "%.*s has no member %.*s", SARG(typed(m, rc)),
+                 SARG(in->operands[1].name));
 
         return REJECT;
     }
@@ -1378,8 +1428,8 @@ static ir_rule_result_t rule_extract(ir_module_t *m, ir_instr_t *in,
 
     if (!rc) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "extract needs a record value, and this one is %s",
-                 typed(m, a));
+                 "extract needs a record value, and this one is %.*s",
+                 SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -1388,7 +1438,8 @@ static ir_rule_result_t rule_extract(ir_module_t *m, ir_instr_t *in,
 
     if (!mt) {
         complain(m, d, IR_DIAG_TYPE_MEMBER, in, "this name",
-                 "%s has no member %s", typed(m, rc), in->operands[1].name);
+                 "%.*s has no member %.*s", SARG(typed(m, rc)),
+                 SARG(in->operands[1].name));
 
         return REJECT;
     }
@@ -1410,8 +1461,8 @@ static ir_rule_result_t rule_extract_index(ir_module_t *m, ir_instr_t *in,
         || th_builtin_kind(ir_ctx_types(m->ctx), source)
             != TH_BUILTIN_TUPLE) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "extract.index needs an ordered tuple value, and this one is %s",
-                 typed(m, source));
+                 "extract.index needs an ordered tuple value, and this one is %.*s",
+                 SARG(typed(m, source)));
         return REJECT;
     }
     size_t index = (size_t)literal.mag;
@@ -1419,8 +1470,8 @@ static ir_rule_result_t rule_extract_index(ir_module_t *m, ir_instr_t *in,
         ? th_named_arg(th_resolve(source), index) : nullptr;
     if (!element || element->kind != TH_ARG_TYPE) {
         complain(m, d, IR_DIAG_TYPE_MEMBER, in, "this index",
-                 "ordered tuple %s has no element %zu", typed(m, source),
-                 index);
+                 "ordered tuple %.*s has no element %zu",
+                 SARG(typed(m, source)), index);
         return REJECT;
     }
     return ACCEPT(ir_type_intern(m, element->type));
@@ -1441,8 +1492,8 @@ static ir_rule_result_t rule_insert(ir_module_t *m, ir_instr_t *in,
 
     if (!rc) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "insert needs a record value, and this one is %s",
-                 typed(m, a));
+                 "insert needs a record value, and this one is %.*s",
+                 SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -1451,17 +1502,19 @@ static ir_rule_result_t rule_insert(ir_module_t *m, ir_instr_t *in,
 
     if (!mt) {
         complain(m, d, IR_DIAG_TYPE_MEMBER, in, "this name",
-                 "%s has no member %s", typed(m, rc), in->operands[1].name);
+                 "%.*s has no member %.*s", SARG(typed(m, rc)),
+                 SARG(in->operands[1].name));
 
         return REJECT;
     }
 
     if (!same(m, ir_type_intern(m, mt), opd_type(in, 2))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
-                          "member %s of %s is %s, and the value given is %s",
-                          in->operands[1].name, typed(m, a),
-                          typed(m, ir_type_intern(m, mt)),
-                          typed(m, opd_type(in, 2))),
+                          "member %.*s of %.*s is %.*s, and the value given "
+                          "is %.*s",
+                          SARG(in->operands[1].name), SARG(typed(m, a)),
+                          SARG(typed(m, ir_type_intern(m, mt))),
+                          SARG(typed(m, opd_type(in, 2)))),
               in, 2, "the value is defined here");
 
         return REJECT;
@@ -1484,8 +1537,8 @@ static ir_rule_result_t rule_index(ir_module_t *m, ir_instr_t *in,
 
     if (!is_int(ir_machine_of(m, i).class)) {
         blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "this index",
-                           "an index must be an integer, and this one is %s",
-                           typed(m, i)),
+                           "an index must be an integer, and this one is %.*s",
+                           SARG(typed(m, i))),
               in, 1, "the index is defined here");
 
         return REJECT;
@@ -1496,7 +1549,8 @@ static ir_rule_result_t rule_index(ir_module_t *m, ir_instr_t *in,
 
     if (!to || !th_ind_attrs(p, &attrs)) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                 "index needs a pointer, and this one is %s", typed(m, p));
+                 "index needs a pointer, and this one is %.*s",
+                 SARG(typed(m, p)));
 
         return REJECT;
     }
@@ -1511,8 +1565,8 @@ static ir_rule_result_t rule_index(ir_module_t *m, ir_instr_t *in,
     }
     else {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                 "%s is neither a sequence nor an indexable indirection",
-                 typed(m, p));
+                 "%.*s is neither a sequence nor an indexable indirection",
+                 SARG(typed(m, p)));
 
         return REJECT;
     }
@@ -1595,23 +1649,24 @@ static ir_rule_result_t rule_offset(ir_module_t *m, ir_instr_t *in,
 
     if (!th_ind_attrs(p, &attrs)) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                 "offset needs a pointer, and this one is %s", typed(m, p));
+                 "offset needs a pointer, and this one is %.*s",
+                 SARG(typed(m, p)));
 
         return REJECT;
     }
 
     if (!(attrs & TH_INDEXABLE)) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                 "offset needs an indexable indirection, and %s is not one",
-                 typed(m, p));
+                 "offset needs an indexable indirection, and %.*s is not one",
+                 SARG(typed(m, p)));
 
         return REJECT;
     }
 
     if (!is_int(ir_machine_of(m, i).class)) {
         blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "this offset",
-                           "an offset must be an integer, and this one is %s",
-                           typed(m, i)),
+                           "an offset must be an integer, and this one is %.*s",
+                           SARG(typed(m, i))),
               in, 1, "the offset is defined here");
 
         return REJECT;
@@ -1634,8 +1689,8 @@ static ir_rule_result_t rule_diff(ir_module_t *m, ir_instr_t *in,
     if (!th_ind_referent(a) || !same(m, a, opd_type(in, 1))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "these operands",
                            "diff needs two pointers of one type, and these "
-                           "are %s and %s", typed(m, a),
-                           typed(m, opd_type(in, 1))),
+                           "are %.*s and %.*s", SARG(typed(m, a)),
+                           SARG(typed(m, opd_type(in, 1)))),
               in, 1, "the second operand is defined here");
 
         return REJECT;
@@ -1645,8 +1700,8 @@ static ir_rule_result_t rule_diff(ir_module_t *m, ir_instr_t *in,
 
     if (!s) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
-                 "diff yields a 64-bit signed integer, and profile %s "
-                 "declares no such type", m->profile->name);
+                 "diff yields a 64-bit signed integer, and profile %.*s "
+                 "declares no such type", SARG(m->profile->name));
 
         return REJECT;
     }
@@ -1669,8 +1724,8 @@ static ir_rule_result_t rule_mem(ir_module_t *m, ir_instr_t *in,
 
     if (ir_machine_of(m, d0).class != IR_CLASS_PTR) {
         complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                 "%s writes through a pointer, and this one is %s",
-                 ir_module_op_spelling(m, in->op), typed(m, d0));
+                 "%.*s writes through a pointer, and this one is %.*s",
+                 SARG(ir_module_op_spelling(m, in->op)), SARG(typed(m, d0)));
 
         return REJECT;
     }
@@ -1681,7 +1736,7 @@ static ir_rule_result_t rule_mem(ir_module_t *m, ir_instr_t *in,
         if (v.class != IR_CLASS_UINT || v.width != 8) {
             blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
                            "memset fills with an 8-bit unsigned value, and "
-                           "this one is %s", typed(m, d1)),
+                           "this one is %.*s", SARG(typed(m, d1))),
               in, 1, "the fill value is defined here");
 
             return REJECT;
@@ -1689,8 +1744,9 @@ static ir_rule_result_t rule_mem(ir_module_t *m, ir_instr_t *in,
     }
     else if (ir_machine_of(m, d1).class != IR_CLASS_PTR) {
         blame(d, complain(m, d, IR_DIAG_TYPE_POINTER, in, "this operand",
-                           "%s reads through a pointer, and this one is %s",
-                           ir_module_op_spelling(m, in->op), typed(m, d1)),
+                           "%.*s reads through a pointer, and this one is %.*s",
+                           SARG(ir_module_op_spelling(m, in->op)),
+                           SARG(typed(m, d1))),
               in, 1, "the source is defined here");
 
         return REJECT;
@@ -1698,8 +1754,9 @@ static ir_rule_result_t rule_mem(ir_module_t *m, ir_instr_t *in,
 
     if (!is_int(ir_machine_of(m, d2).class)) {
         blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "this length",
-                           "%s takes an integer length, and this one is %s",
-                           ir_module_op_spelling(m, in->op), typed(m, d2)),
+                           "%.*s takes an integer length, and this one is %.*s",
+                           SARG(ir_module_op_spelling(m, in->op)),
+                           SARG(typed(m, d2))),
               in, 2, "the length is defined here");
 
         return REJECT;
@@ -1713,8 +1770,8 @@ static ir_rule_result_t rule_mem(ir_module_t *m, ir_instr_t *in,
 
     if (!s) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
-                 "memcmp yields a 32-bit signed integer, and profile %s "
-                 "declares no such type", m->profile->name);
+                 "memcmp yields a 32-bit signed integer, and profile %.*s "
+                 "declares no such type", SARG(m->profile->name));
 
         return REJECT;
     }
@@ -1738,11 +1795,10 @@ static ir_rule_result_t rule_variant_make(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    if (!th_named_info(t, nullptr, nullptr, &is_variant, nullptr)
-        || !is_variant) {
+    if (!th_named_info(t, nullptr, &is_variant, nullptr) || !is_variant) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this destination",
-                 "variant.make needs a variant type, and %s is not one",
-                 typed(m, t));
+                 "variant.make needs a variant type, and %.*s is not one",
+                 SARG(typed(m, t)));
 
         return REJECT;
     }
@@ -1751,15 +1807,15 @@ static ir_rule_result_t rule_variant_make(ir_module_t *m, ir_instr_t *in,
         return DECLINE;
     }
 
-    const char *arm  = in->operands[0].name;
-    th_type    *arms = record_of(m, t);
+    core_string_t arm  = in->operands[0].name;
+    th_type      *arms = record_of(m, t);
 
     if (arms) {
         th_type *payload = th_record_lookup(arms, arm);
 
         if (!payload) {
             complain(m, d, IR_DIAG_TYPE_ARM, in, "this name",
-                     "%s has no arm %s", typed(m, t), arm);
+                     "%.*s has no arm %.*s", SARG(typed(m, t)), SARG(arm));
 
             return REJECT;
         }
@@ -1776,10 +1832,11 @@ static ir_rule_result_t rule_variant_make(ir_module_t *m, ir_instr_t *in,
             compatible = true;
         if (!compatible) {
             blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this payload",
-                              "arm %s of %s carries %s, and this value is %s",
-                              arm, typed(m, t),
-                              typed(m, ir_type_intern(m, payload)),
-                              typed(m, opd_type(in, 1))),
+                              "arm %.*s of %.*s carries %.*s, and this value "
+                              "is %.*s",
+                              SARG(arm), SARG(typed(m, t)),
+                              SARG(typed(m, ir_type_intern(m, payload))),
+                              SARG(typed(m, opd_type(in, 1)))),
                   in, 1, "the payload is defined here");
 
             return REJECT;
@@ -1804,11 +1861,10 @@ static ir_rule_result_t rule_variant_new(ir_module_t *m, ir_instr_t *in,
                  "none");
         return REJECT;
     }
-    if (!th_named_info(type, nullptr, nullptr, &is_variant, nullptr)
-        || !is_variant) {
+    if (!th_named_info(type, nullptr, &is_variant, nullptr) || !is_variant) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this destination",
-                 "variant.new needs a variant type, and %s is not one",
-                 typed(m, type));
+                 "variant.new needs a variant type, and %.*s is not one",
+                 SARG(typed(m, type)));
         return REJECT;
     }
     if (in->op == IR_OP_VARIANT_NEW_USING
@@ -1832,11 +1888,10 @@ static ir_rule_result_t rule_variant_tag(ir_module_t *m, ir_instr_t *in,
         return DECLINE;
     }
 
-    if (!th_named_info(a, nullptr, nullptr, &is_variant, nullptr)
-        || !is_variant) {
+    if (!th_named_info(a, nullptr, &is_variant, nullptr) || !is_variant) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "variant.tag needs a variant value, and this one is %s",
-                 typed(m, a));
+                 "variant.tag needs a variant value, and this one is %.*s",
+                 SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -1846,7 +1901,7 @@ static ir_rule_result_t rule_variant_tag(ir_module_t *m, ir_instr_t *in,
     if (!u) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
                  "variant.tag yields a 64-bit unsigned integer, and profile "
-                 "%s declares no such type", m->profile->name);
+                 "%.*s declares no such type", SARG(m->profile->name));
 
         return REJECT;
     }
@@ -1866,11 +1921,10 @@ static ir_rule_result_t rule_variant_payload(ir_module_t *m, ir_instr_t *in,
         return DECLINE;
     }
 
-    if (!th_named_info(a, nullptr, nullptr, &is_variant, nullptr)
-        || !is_variant) {
+    if (!th_named_info(a, nullptr, &is_variant, nullptr) || !is_variant) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "variant.payload needs a variant value, and this one is %s",
-                 typed(m, a));
+                 "variant.payload needs a variant value, and this one is %.*s",
+                 SARG(typed(m, a)));
 
         return REJECT;
     }
@@ -1885,24 +1939,26 @@ static ir_rule_result_t rule_variant_payload(ir_module_t *m, ir_instr_t *in,
         return REJECT;
     }
 
-    const char *arm  = in->operands[1].name;
-    th_type    *arms = record_of(m, a);
+    core_string_t arm  = in->operands[1].name;
+    th_type      *arms = record_of(m, a);
 
     if (arms) {
         th_type *payload = th_record_lookup(arms, arm);
 
         if (!payload) {
             complain(m, d, IR_DIAG_TYPE_ARM, in, "this name",
-                     "%s has no arm %s", typed(m, a), arm);
+                     "%.*s has no arm %.*s", SARG(typed(m, a)), SARG(arm));
 
             return REJECT;
         }
 
         if (!same(m, ir_type_intern(m, payload), t)) {
             complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this destination",
-                     "arm %s of %s carries %s, and the destination is %s",
-                     arm, typed(m, a), typed(m, ir_type_intern(m, payload)),
-                     typed(m, t));
+                     "arm %.*s of %.*s carries %.*s, and the destination "
+                     "is %.*s",
+                     SARG(arm), SARG(typed(m, a)),
+                     SARG(typed(m, ir_type_intern(m, payload))),
+                     SARG(typed(m, t)));
 
             return REJECT;
         }
@@ -1917,8 +1973,8 @@ static ir_rule_result_t rule_option_is_nil(ir_module_t *m, ir_instr_t *in,
     (void)state;
     if (!th_option_item(opd_type(in, 0))) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "option.is_nil requires an option value, and this one is %s",
-                 typed(m, opd_type(in, 0)));
+                 "option.is_nil requires an option value, and this one is %.*s",
+                 SARG(typed(m, opd_type(in, 0))));
         return REJECT;
     }
     return ACCEPT(ir_profile_scalar(m, IR_CLASS_BOOL, 1));
@@ -1932,7 +1988,8 @@ static ir_rule_result_t rule_nil(ir_module_t *m, ir_instr_t *in,
     if (nil && th_is_nil(nil))
         return ACCEPT(nil);
     complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this result",
-             "nil produces the nil sentinel type, not %s", typed(m, nil));
+             "nil produces the nil sentinel type, not %.*s",
+             SARG(typed(m, nil)));
     return REJECT;
 }
 
@@ -1943,8 +2000,8 @@ static ir_rule_result_t rule_option_none(ir_module_t *m, ir_instr_t *in,
     th_type *option = declared(in);
     if (th_option_item(option)) return ACCEPT(option);
     complain(m, d, IR_DIAG_TYPE_CLASS, in, "this result",
-             "option.none must produce an option type, not %s",
-             typed(m, option));
+             "option.none must produce an option type, not %.*s",
+             SARG(typed(m, option)));
     return REJECT;
 }
 
@@ -1956,14 +2013,14 @@ static ir_rule_result_t rule_option_some(ir_module_t *m, ir_instr_t *in,
     th_type *element = th_option_item(option);
     if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this result",
-                 "option.some must produce an option type, not %s",
-                 typed(m, option));
+                 "option.some must produce an option type, not %.*s",
+                 SARG(typed(m, option)));
         return REJECT;
     }
     if (!ir_type_eq(m, element, opd_type(in, 0))) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this payload",
-                 "option.some payload has type %s; expected %s",
-                 typed(m, opd_type(in, 0)), typed(m, element));
+                 "option.some payload has type %.*s; expected %.*s",
+                 SARG(typed(m, opd_type(in, 0))), SARG(typed(m, element)));
         return REJECT;
     }
     return ACCEPT(option);
@@ -1976,8 +2033,8 @@ static ir_rule_result_t rule_option_get(ir_module_t *m, ir_instr_t *in,
     th_type *element = th_option_item(opd_type(in, 0));
     if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "option.get requires an option value, and this one is %s",
-                 typed(m, opd_type(in, 0)));
+                 "option.get requires an option value, and this one is %.*s",
+                 SARG(typed(m, opd_type(in, 0))));
         return REJECT;
     }
     return ACCEPT(element);
@@ -1991,15 +2048,15 @@ static ir_rule_result_t rule_option_get_or_else(ir_module_t *m,
     th_type *element = th_option_item(opd_type(in, 0));
     if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this operand",
-                 "option.get_or_else requires an option value, and this one is %s",
-                 typed(m, opd_type(in, 0)));
+                 "option.get_or_else requires an option value, and this one is %.*s",
+                 SARG(typed(m, opd_type(in, 0))));
         return REJECT;
     }
     if (ir_type_eq(m, element, opd_type(in, 1)))
         return ACCEPT(element);
     complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this operand",
-             "option.get_or_else fallback has type %s; expected %s",
-             typed(m, opd_type(in, 1)), typed(m, element));
+             "option.get_or_else fallback has type %.*s; expected %.*s",
+             SARG(typed(m, opd_type(in, 1))), SARG(typed(m, element)));
     return REJECT;
 }
 
@@ -2011,14 +2068,14 @@ static ir_rule_result_t rule_atomic_wrap(ir_module_t *m, ir_instr_t *in,
     th_type *element = atomic_item(m, atomic);
     if (!element) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this result",
-                 "atomic.wrap must produce atomic storage, not %s",
-                 typed(m, atomic));
+                 "atomic.wrap must produce atomic storage, not %.*s",
+                 SARG(typed(m, atomic)));
         return REJECT;
     }
     if (!same(m, element, opd_type(in, 0))) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
-                 "atomic.wrap needs %s, not %s",
-                 typed(m, element), typed(m, opd_type(in, 0)));
+                 "atomic.wrap needs %.*s, not %.*s",
+                 SARG(typed(m, element)), SARG(typed(m, opd_type(in, 0))));
         return REJECT;
     }
     return ACCEPT(atomic);
@@ -2058,15 +2115,15 @@ static ir_rule_result_t rule_type_test(ir_module_t *m, ir_instr_t *in,
     if (!source || !target) return DECLINE;
     if (!type_test_source(m, source, target)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this type test",
-                 "%s cannot contain a value of %s", typed(m, source),
-                 typed(m, target));
+                 "%.*s cannot contain a value of %.*s",
+                 SARG(typed(m, source)), SARG(typed(m, target)));
         return REJECT;
     }
     th_type *boolean = ir_profile_scalar(m, IR_CLASS_BOOL, 0);
     if (!boolean) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
-                 "type.test yields bool, which profile %s does not define",
-                 m->profile->name);
+                 "type.test yields bool, which profile %.*s does not define",
+                 SARG(m->profile->name));
         return REJECT;
     }
     return ACCEPT(boolean);
@@ -2081,14 +2138,14 @@ static ir_rule_result_t rule_type_narrow(ir_module_t *m, ir_instr_t *in,
     if (!source || !target) return DECLINE;
     if (!type_test_source(m, source, target)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this narrowing",
-                 "%s cannot be narrowed to %s", typed(m, source),
-                 typed(m, target));
+                 "%.*s cannot be narrowed to %.*s", SARG(typed(m, source)),
+                 SARG(typed(m, target)));
         return REJECT;
     }
     if (!ir_type_eq(m, declared(in), target)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this destination",
-                 "type.narrow targets %s, and its destination is %s",
-                 typed(m, target), typed(m, declared(in)));
+                 "type.narrow targets %.*s, and its destination is %.*s",
+                 SARG(typed(m, target)), SARG(typed(m, declared(in))));
         return REJECT;
     }
     return ACCEPT(target);
@@ -2164,8 +2221,8 @@ static ir_rule_result_t rule_cast(ir_module_t *m, ir_instr_t *in,
 
     if (!i2i && !f2i && !i2f && !f2f && !p2i && !b2i) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this cast",
-                 "cast does not convert %s to %s; bitcast reinterprets",
-                 typed(m, from), typed(m, to));
+                 "cast does not convert %.*s to %.*s; bitcast reinterprets",
+                 SARG(typed(m, from)), SARG(typed(m, to)));
 
         return REJECT;
     }
@@ -2285,7 +2342,7 @@ static ir_rule_result_t rule_bitset_value(ir_module_t *m, ir_instr_t *in,
     const axis_t *axes[] = {&AX_FIT};
     if (!mods_exact(m, in, d, axes, 1)) return REJECT;
     if (in->op == IR_OP_BITSET_FROM_VALUE
-        && !ir_instr_has_mod(in, "trap")) {
+        && !ir_instr_has_mod(in, CORE_STRING_STATIC("trap"))) {
         complain(m, d, IR_DIAG_TYPE_MODIFIER, in, "this bitset conversion",
                  "bitset.from-value must trap when the integer contains invalid bits");
         return REJECT;
@@ -2308,7 +2365,7 @@ static ir_rule_result_t rule_select(ir_module_t *m, ir_instr_t *in,
     if (ir_machine_of(m, c).class != IR_CLASS_BOOL) {
         blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "this condition",
                            "select needs a boolean condition, and this one "
-                           "is %s", typed(m, c)),
+                           "is %.*s", SARG(typed(m, c))),
               in, 0, "the condition is defined here");
 
         return REJECT;
@@ -2316,8 +2373,9 @@ static ir_rule_result_t rule_select(ir_module_t *m, ir_instr_t *in,
 
     if (!same(m, a, opd_type(in, 2))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "these arms",
-                           "select arms must have one type, and these are %s "
-                           "and %s", typed(m, a), typed(m, opd_type(in, 2))),
+                           "select arms must have one type, and these are "
+                           "%.*s and %.*s", SARG(typed(m, a)),
+                           SARG(typed(m, opd_type(in, 2)))),
               in, 2, "the second arm is defined here");
 
         return REJECT;
@@ -2345,8 +2403,9 @@ static ir_rule_result_t rule_phi(ir_module_t *m, ir_instr_t *in,
 
         if (a && !same(m, a, t)) {
             blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this arm",
-                           "this phi is %s and an incoming value is %s",
-                           typed(m, t), typed(m, opd_type(in, i))),
+                           "this phi is %.*s and an incoming value is %.*s",
+                           SARG(typed(m, t)),
+                           SARG(typed(m, opd_type(in, i)))),
               in, i, "the incoming value is defined here");
 
             return REJECT;
@@ -2379,22 +2438,22 @@ static ir_rule_result_t rule_trait_method(ir_module_t *m, ir_instr_t *in,
         ? th_func_param(signature, 0) : nullptr;
     if (!self || requirement->kind != IR_VAL_FUNC
         || !requirement->owner
-        || !in->operands[0].name || !*in->operands[0].name
-        || !in->operands[1].name || !*in->operands[1].name) {
+        || !in->operands[0].name.u8_bytes
+        || !in->operands[1].name.u8_bytes) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this trait method",
                  "trait.method needs names, a receiver, and a function requirement with a self parameter");
         return REJECT;
     }
     if (!th_unifies(ir_ctx_types(m->ctx), signature, contract)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this trait method",
-                 "selected method type %s does not match its requirement %s",
-                 typed(m, signature), typed(m, contract));
+                 "selected method type %.*s does not match its requirement %.*s",
+                 SARG(typed(m, signature)), SARG(typed(m, contract)));
         return REJECT;
     }
     if (!call_arg_matches(m, self->mode, self->type, receiver)) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this receiver",
-                 "trait method receiver %s does not match self parameter %s",
-                 typed(m, receiver), typed(m, self->type));
+                 "trait method receiver %.*s does not match self parameter %.*s",
+                 SARG(typed(m, receiver)), SARG(typed(m, self->type)));
         return REJECT;
     }
     return ACCEPT(signature);
@@ -2446,8 +2505,8 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
 
     if (!callee || th_kind_of(callee) != TH_FUNCTION) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this callee",
-                 "call needs a function or a pointer to one, and this is %s",
-                 typed(m, opd_type(in, 0)));
+                 "call needs a function or a pointer to one, and this is %.*s",
+                 SARG(typed(m, opd_type(in, 0))));
 
         return REJECT;
     }
@@ -2460,8 +2519,8 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
     if (!generic_contract && has_failure
         && !same(m, declared(in), outcome_type)) {
         complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this call",
-                 "a call with an error channel must produce its tagged outcome type %s",
-                 typed(m, outcome_type));
+                 "a call with an error channel must produce its tagged outcome type %.*s",
+                 SARG(typed(m, outcome_type)));
         return REJECT;
     }
 
@@ -2543,19 +2602,19 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
             continue;
         }
         if (in->operands[i].kind == IR_OPD_NAMED_ARG) {
-            const char *name = in->operands[i].named.name;
-            if (!name) {
+            core_string_t name = in->operands[i].named.name;
+            if (!name.data) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
                          "a keyword argument must have a name");
                 return REJECT;
             }
             for (uint32_t j = 1; j < i; j++) {
                 if (in->operands[j].kind == IR_OPD_NAMED_ARG &&
-                    in->operands[j].named.name &&
-                    !strcmp(name, in->operands[j].named.name)) {
+                    in->operands[j].named.name.data &&
+                    core_string_eq(name, in->operands[j].named.name)) {
                     complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
-                             "keyword parameter %s is supplied more than once",
-                             name);
+                             "keyword parameter %.*s is supplied more than once",
+                             SARG(name));
                     return REJECT;
                 }
             }
@@ -2564,8 +2623,8 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
 
             if (!k) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
-                         "%s has no keyword parameter %s",
-                         typed(m, callee), in->operands[i].named.name);
+                         "%.*s has no keyword parameter %.*s",
+                         SARG(typed(m, callee)), SARG(name));
 
                 return REJECT;
             }
@@ -2573,8 +2632,8 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
             bool is_out = in->operands[i].named.value == nullptr;
             if (is_out != (k->mode == TH_OUT)) {
                 complain(m, d, IR_DIAG_TYPE_ARGS, in, "this keyword argument",
-                         "keyword parameter %s must be supplied as %s",
-                         name, k->mode == TH_OUT ? "out" : "a value");
+                         "keyword parameter %.*s must be supplied as %s",
+                         SARG(name), k->mode == TH_OUT ? "out" : "a value");
                 return REJECT;
             }
             if (is_out) continue;
@@ -2582,11 +2641,11 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
             if (!call_arg_matches(m, k->mode, k->type, opd_type(in, i))) {
                 blame(d,
                       complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
-                               "keyword parameter %s is %s, and the "
-                               "argument is %s",
-                               in->operands[i].named.name,
-                               typed(m, ir_type_intern(m, k->type)),
-                               typed(m, opd_type(in, i))),
+                               "keyword parameter %.*s is %.*s, and the "
+                               "argument is %.*s",
+                               SARG(name),
+                               SARG(typed(m, ir_type_intern(m, k->type))),
+                               SARG(typed(m, opd_type(in, i)))),
                       in, i, "the argument is defined here");
 
                 return REJECT;
@@ -2611,11 +2670,12 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
         if (p && !call_arg_matches(m, p->mode, p->type, opd_type(in, i))) {
             blame(d,
                   complain(m, d, IR_DIAG_TYPE_ARGS, in, "this argument",
-                           "%s parameter %zu is %s, and the argument "
-                           "is %s",
+                           "%s parameter %zu is %.*s, and the argument "
+                           "is %.*s",
                            given < np ? "positional" : "rest",
-                           given, typed(m, ir_type_intern(m, p->type)),
-                           typed(m, opd_type(in, i))),
+                           given,
+                           SARG(typed(m, ir_type_intern(m, p->type))),
+                           SARG(typed(m, opd_type(in, i)))),
                   in, i, "the argument is defined here");
 
             return REJECT;
@@ -2625,16 +2685,16 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
 
     if (given < np) {
         complain(m, d, IR_DIAG_TYPE_ARGS, in, "this call",
-                 "%s takes %zu positional arguments and %zu were given",
-                 typed(m, callee), np, given);
+                 "%.*s takes %zu positional arguments and %zu were given",
+                 SARG(typed(m, callee)), np, given);
 
         return REJECT;
     }
 
     if (given > np && !rest) {
         complain(m, d, IR_DIAG_TYPE_ARGS, in, "this call",
-                 "%s takes %zu positional arguments, has no rest parameter, "
-                 "and %zu were given", typed(m, callee), np, given);
+                 "%.*s takes %zu positional arguments, has no rest parameter, "
+                 "and %zu were given", SARG(typed(m, callee)), np, given);
 
         return REJECT;
     }
@@ -2642,16 +2702,16 @@ static ir_rule_result_t rule_call(ir_module_t *m, ir_instr_t *in,
     if (generic_contract && !same(m, declared(in), outcome_type)) {
         if (!th_unifies(ir_ctx_types(m->ctx), outcome_type, declared(in))) {
             complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this call",
-                     "the call result does not match the instantiated return type %s",
-                     typed(m, outcome_type));
+                     "the call result does not match the instantiated return type %.*s",
+                     SARG(typed(m, outcome_type)));
             return REJECT;
         }
         return ACCEPT(declared(in));
     }
     if (has_failure && !same(m, declared(in), outcome_type)) {
         complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this call",
-                 "a call with an error channel must produce its tagged outcome type %s",
-                 typed(m, outcome_type));
+                 "a call with an error channel must produce its tagged outcome type %.*s",
+                 SARG(typed(m, outcome_type)));
         return REJECT;
     }
     return ACCEPT(outcome_type);
@@ -2671,7 +2731,8 @@ static ir_rule_result_t rule_call_output(ir_module_t *m, ir_instr_t *in,
     if (call->op == IR_OP_VARIANT_PAYLOAD) {
         if (call->n_operands != 2
             || call->operands[1].kind != IR_OPD_NAME
-            || strcmp(call->operands[1].name, "ok")) {
+            || !core_string_eq(call->operands[1].name,
+                               CORE_STRING_STATIC("ok"))) {
             complain(m, d, IR_DIAG_TYPE_ARGS, in, "this value",
                      "copy-out values are available only from a successful call result");
             return REJECT;
@@ -2727,7 +2788,7 @@ static ir_rule_result_t rule_size_like(ir_module_t *m, ir_instr_t *in,
 
     if (u && in->n_operands && in->operands[0].kind == IR_OPD_TYPE) {
         const ir_descriptor_t *dsc = ir_layout_of(m, in->operands[0].type,
-                                                  nullptr);
+                                                  (core_string_t){});
         const ir_layout_val_t *v   = nullptr;
 
         if (dsc && in->op == IR_OP_SIZEOF) {
@@ -2738,7 +2799,8 @@ static ir_rule_result_t rule_size_like(ir_module_t *m, ir_instr_t *in,
         }
         else if (dsc && in->op == IR_OP_OFFSETOF && in->n_operands > 1) {
             for (uint32_t i = 0; i < dsc->n_members; i++) {
-                if (!strcmp(dsc->members[i].name, in->operands[1].name)) {
+                if (core_string_eq(dsc->members[i].name,
+                                   in->operands[1].name)) {
                     v = &dsc->members[i].bit_offset;
 
                     break;
@@ -2758,9 +2820,10 @@ static ir_rule_result_t rule_size_like(ir_module_t *m, ir_instr_t *in,
 
     if (!u) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
-                 "%s yields a 64-bit unsigned integer, and profile %s "
-                 "declares no such type", ir_module_op_spelling(m, in->op),
-                 m->profile->name);
+                 "%.*s yields a 64-bit unsigned integer, and profile %.*s "
+                 "declares no such type",
+                 SARG(ir_module_op_spelling(m, in->op)),
+                 SARG(m->profile->name));
 
         return REJECT;
     }
@@ -2779,15 +2842,16 @@ static ir_rule_result_t rule_offsetof(ir_module_t *m, ir_instr_t *in,
 
     if (!rc) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "this type",
-                 "offsetof needs a record type, and %s is not one",
-                 typed(m, opd_type(in, 0)));
+                 "offsetof needs a record type, and %.*s is not one",
+                 SARG(typed(m, opd_type(in, 0))));
 
         return REJECT;
     }
 
     if (!th_record_lookup(rc, in->operands[1].name)) {
         complain(m, d, IR_DIAG_TYPE_MEMBER, in, "this name",
-                 "%s has no member %s", typed(m, rc), in->operands[1].name);
+                 "%.*s has no member %.*s", SARG(typed(m, rc)),
+                 SARG(in->operands[1].name));
 
         return REJECT;
     }
@@ -2835,8 +2899,8 @@ static ir_rule_result_t rule_typename(ir_module_t *m, ir_instr_t *in,
 
     if (!c) {
         complain(m, d, IR_DIAG_TYPE_CLASS, in, "here",
-                 "typename yields a pointer to a character, and profile %s "
-                 "declares no character type", m->profile->name);
+                 "typename yields a pointer to a character, and profile %.*s "
+                 "declares no character type", SARG(m->profile->name));
 
         return REJECT;
     }
@@ -2868,7 +2932,7 @@ static ir_rule_result_t rule_branch(ir_module_t *m, ir_instr_t *in,
     if (ir_machine_of(m, c).class != IR_CLASS_BOOL) {
         blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "this condition",
                            "branch needs a boolean condition, and this one "
-                           "is %s", typed(m, c)),
+                           "is %.*s", SARG(typed(m, c))),
               in, 0, "the condition is defined here");
 
         return REJECT;
@@ -2893,7 +2957,7 @@ static ir_rule_result_t rule_switch(ir_module_t *m, ir_instr_t *in,
     if (!is_int(c) && c != IR_CLASS_BOOL) {
         blame(d, complain(m, d, IR_DIAG_TYPE_CLASS, in, "this scrutinee",
                            "switch needs an integer or boolean scrutinee, "
-                           "and this one is %s", typed(m, v)),
+                           "and this one is %.*s", SARG(typed(m, v))),
               in, 0, "the scrutinee is defined here");
 
         return REJECT;
@@ -2913,12 +2977,12 @@ static ir_rule_result_t rule_switch(ir_module_t *m, ir_instr_t *in,
         ir_lit_t val = in->operands[i].arm.value;
 
         if (!int_fits(val, ir_machine_of(m, v))) {
-            char *lit = ir_lit_text(val);
+            core_string_t lit = ir_lit_text(val);
 
             complain(m, d, IR_DIAG_TYPE_LITERAL, in, "this case",
-                     "the case value %s is not representable in %s, the type "
-                     "of the scrutinee", lit, typed(m, v));
-            core_free(lit);
+                     "the case value %.*s is not representable in %.*s, the "
+                     "type of the scrutinee", SARG(lit), SARG(typed(m, v)));
+            core_free(lit.data);
 
             return REJECT;
         }
@@ -2931,11 +2995,11 @@ static ir_rule_result_t rule_switch(ir_module_t *m, ir_instr_t *in,
         }
 
         if (used[at]) {
-            char *lit = ir_lit_text(val);
+            core_string_t lit = ir_lit_text(val);
 
             complain(m, d, IR_DIAG_TYPE_ARGS, in, "this switch",
-                     "two cases both match %s", lit);
-            core_free(lit);
+                     "two cases both match %.*s", SARG(lit));
+            core_free(lit.data);
 
             return REJECT;
         }
@@ -2974,17 +3038,18 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
     uint32_t result_offset = is_void ? 0 : 1;
     if (in->n_operands != result_offset + output_count) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this return",
-                 "%s returns one value for each out or modify parameter",
-                 f->name);
+                 "%.*s returns one value for each out or modify parameter",
+                 SARG(f->name));
         return REJECT;
     }
 
     if (!is_void
         && !call_arg_matches(m, TH_IN, ret, opd_type(in, 0))) {
         blame(d, complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this value",
-                           "%s returns %s, and this value is %s", f->name,
-                           typed(m, ir_type_intern(m, ret)),
-                           typed(m, opd_type(in, 0))),
+                           "%.*s returns %.*s, and this value is %.*s",
+                           SARG(f->name),
+                           SARG(typed(m, ir_type_intern(m, ret))),
+                           SARG(typed(m, opd_type(in, 0)))),
               in, 0, "the value is defined here");
 
         return REJECT;
@@ -2997,10 +3062,10 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
         if (!same(m, ir_type_intern(m, parameter->type),
                   opd_type(in, output_index))) {
             complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",
-                     "copy-out value %u has type %s, expected %s",
+                     "copy-out value %u has type %.*s, expected %.*s",
                      output_index - result_offset,
-                     typed(m, opd_type(in, output_index)),
-                     typed(m, ir_type_intern(m, parameter->type)));
+                     SARG(typed(m, opd_type(in, output_index))),
+                     SARG(typed(m, ir_type_intern(m, parameter->type))));
             return REJECT;
         }
         output_index++;
@@ -3011,10 +3076,10 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
         if (!same(m, ir_type_intern(m, parameter->type),
                   opd_type(in, output_index))) {
             complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this copy-out value",
-                     "copy-out value %u has type %s, expected %s",
+                     "copy-out value %u has type %.*s, expected %.*s",
                      output_index - result_offset,
-                     typed(m, opd_type(in, output_index)),
-                     typed(m, ir_type_intern(m, parameter->type)));
+                     SARG(typed(m, opd_type(in, output_index))),
+                     SARG(typed(m, ir_type_intern(m, parameter->type))));
             return REJECT;
         }
         output_index++;
@@ -3038,16 +3103,19 @@ static ir_rule_result_t rule_fail(ir_module_t *m, ir_instr_t *in,
     th_type *error = function ? th_func_error(function->type) : nullptr;
     if (!error || ir_machine_of(m, error).class == IR_CLASS_VOID) {
         complain(m, d, IR_DIAG_VERIFY_TYPED, in, "this failure exit",
-                 "%s has no non-void failure channel",
-                 function ? function->name : "this function");
+                 "%.*s has no non-void failure channel",
+                 SARG(function ? function->name
+                               : CORE_STRING_STATIC("this function")));
         return REJECT;
     }
     if (in->n_operands != 1
         || !call_arg_matches(m, TH_IN, error, opd_type(in, 0))) {
+        core_string_t got = in->n_operands
+            ? typed(m, opd_type(in, 0)) : CORE_STRING_STATIC("no value");
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this failure value",
-                 "%s fails with %s, but this value is %s",
-                 function->name, typed(m, ir_type_intern(m, error)),
-                 in->n_operands ? typed(m, opd_type(in, 0)) : "no value");
+                 "%.*s fails with %.*s, but this value is %.*s",
+                 SARG(function->name),
+                 SARG(typed(m, ir_type_intern(m, error))), SARG(got));
         return REJECT;
     }
     return ACCEPT(nullptr);
@@ -3081,131 +3149,134 @@ static ir_rule_result_t rule_prefetch(ir_module_t *m, ir_instr_t *in,
 
 typedef struct {
     ir_op_t         op;
-    const char     *name;
+    core_string_t   name;
     ir_type_rule_fn fn;
 } entry;
 
+#define ENTRY(op, name, fn) {(op), CORE_STRING_STATIC(name), (fn)}
+
 static const entry DEFAULTS[] = {
-    {IR_OP_CONST, "ir.const", rule_annotated},
-    {IR_OP_ENUM_CONST, "ir.enum.const", rule_annotated},
-    {IR_OP_ENUM_VALUE, "ir.enum.value", rule_enum_value},
-    {IR_OP_ENUM_FROM_VALUE, "ir.enum.from-value", rule_enum_from_value},
-    {IR_OP_BITSET_CONST, "ir.bitset.const", rule_annotated},
-    {IR_OP_BITSET_UNION, "ir.bitset.union", rule_bitset},
-    {IR_OP_BITSET_DIFFERENCE, "ir.bitset.difference", rule_bitset},
-    {IR_OP_BITSET_INTERSECTION, "ir.bitset.intersection", rule_bitset},
-    {IR_OP_BITSET_XOR, "ir.bitset.xor", rule_bitset},
-    {IR_OP_BITSET_COMPLEMENT, "ir.bitset.complement", rule_bitset},
-    {IR_OP_BITSET_CONTAINS, "ir.bitset.contains", rule_bitset},
-    {IR_OP_BITSET_SET, "ir.bitset.set", rule_bitset},
-    {IR_OP_BITSET_IS_EMPTY, "ir.bitset.is-empty", rule_bitset},
-    {IR_OP_BITSET_VALUE, "ir.bitset.value", rule_bitset_value},
-    {IR_OP_BITSET_FROM_VALUE, "ir.bitset.from-value", rule_bitset_value},
-    {IR_OP_AGGREGATE, "ir.aggregate", rule_annotated},
-    {IR_OP_REST_COLLECT, "ir.rest.collect", rule_rest_collect},
-    {IR_OP_PARAM_PRESENT, "ir.param.present", rule_param_present},
-    {IR_OP_ARRAY_NEW, "ir.array.new", rule_annotated},
-    {IR_OP_ARRAY_NEW_USING, "ir.array.new.using", rule_annotated},
-    {IR_OP_SEQUENCE_SHAPE_CHECK, "ir.sequence.shape.check",
-     rule_sequence_shape_check},
-    {IR_OP_UNDEF, "ir.undef", rule_annotated},
-    {IR_OP_COPY, "ir.copy", rule_copy},
-    {IR_OP_CONSUME, "ir.consume", rule_copy},
-    {IR_OP_RETAIN_REF, "ir.retain-ref", rule_copy},
-    {IR_OP_ADDRESS_OF, "ir.address.of", rule_address_of},
-    {IR_OP_ALLOCA, "ir.alloca", rule_alloca},
-    {IR_OP_ALLOC, "ir.alloc", rule_alloca},
-    {IR_OP_ALLOC_USING, "ir.alloc.using", rule_alloca},
-    {IR_OP_FINALIZE, "ir.finalize", rule_finalize},
-    {IR_OP_DEALLOC, "ir.dealloc", rule_dealloc},
-    {IR_OP_LOAD, "ir.load", rule_load},
-    {IR_OP_STORE, "ir.store", rule_store},
-    {IR_OP_ATOMIC_RMW, "ir.atomic.rmw", rule_atomic_rmw},
-    {IR_OP_ATOMIC_CAS, "ir.atomic.cas", rule_atomic_cas},
-    {IR_OP_SIGNAL_FENCE, "ir.signal.fence", rule_none},
-    {IR_OP_PREFETCH, "ir.prefetch", rule_prefetch},
-    {IR_OP_GLOBAL_STORE, "ir.global.store", rule_global_store},
-    {IR_OP_FIELD, "ir.field", rule_field},
-    {IR_OP_INDEX, "ir.index", rule_index},
-    {IR_OP_SEQUENCE_LENGTH, "ir.sequence.length", rule_sequence_length},
-    {IR_OP_SEQUENCE_GET, "ir.sequence.get", rule_sequence_get},
-    {IR_OP_SEQUENCE_SET, "ir.sequence.set", rule_sequence_set},
-    {IR_OP_OFFSET, "ir.offset", rule_offset},
-    {IR_OP_DIFF, "ir.diff", rule_diff},
-    {IR_OP_MEMCPY, "ir.memcpy", rule_mem},
-    {IR_OP_MEMMOVE, "ir.memmove", rule_mem},
-    {IR_OP_MEMSET, "ir.memset", rule_mem},
-    {IR_OP_MEMCMP, "ir.memcmp", rule_mem},
-    {IR_OP_EXTRACT, "ir.extract", rule_extract},
-    {IR_OP_EXTRACT_INDEX, "ir.extract.index", rule_extract_index},
-    {IR_OP_INSERT, "ir.insert", rule_insert},
-    {IR_OP_VARIANT_NEW, "ir.variant.new", rule_variant_new},
-    {IR_OP_VARIANT_NEW_USING, "ir.variant.new.using", rule_variant_new},
-    {IR_OP_VARIANT_MAKE, "ir.variant.make", rule_variant_make},
-    {IR_OP_VARIANT_TAG, "ir.variant.tag", rule_variant_tag},
-    {IR_OP_VARIANT_PAYLOAD, "ir.variant.payload", rule_variant_payload},
-    {IR_OP_OPTION_IS_NIL, "ir.option.is_nil", rule_option_is_nil},
-    {IR_OP_NIL, "ir.nil", rule_nil},
-    {IR_OP_OPTION_NONE, "ir.option.none", rule_option_none},
-    {IR_OP_OPTION_SOME, "ir.option.some", rule_option_some},
-    {IR_OP_OPTION_GET, "ir.option.get", rule_option_get},
-    {IR_OP_OPTION_GET_OR_ELSE, "ir.option.get_or_else", rule_option_get_or_else},
-    {IR_OP_ATOMIC_WRAP, "ir.atomic.wrap", rule_atomic_wrap},
-    {IR_OP_TYPE_TEST, "ir.type.test", rule_type_test},
-    {IR_OP_TYPE_NARROW, "ir.type.narrow", rule_type_narrow},
-    {IR_OP_TYPE_OF, "ir.type.of", rule_annotated},
-    {IR_OP_BUFFER_AS_STRING, "ir.buffer.as_string", rule_annotated},
-    {IR_OP_BUFFER_BORROW_END, "ir.buffer.borrow_end", rule_none},
-    {IR_OP_ADD, "ir.add", rule_arith},
-    {IR_OP_SUB, "ir.sub", rule_arith},
-    {IR_OP_MUL, "ir.mul", rule_arith},
-    {IR_OP_DIV, "ir.div", rule_arith},
-    {IR_OP_REM, "ir.rem", rule_arith},
-    {IR_OP_NEG, "ir.neg", rule_arith},
-    {IR_OP_AND, "ir.and", rule_bitwise},
-    {IR_OP_OR, "ir.or", rule_bitwise},
-    {IR_OP_XOR, "ir.xor", rule_bitwise},
-    {IR_OP_NOT, "ir.not", rule_bitwise},
-    {IR_OP_SHL, "ir.shl", rule_shift},
-    {IR_OP_SHR, "ir.shr", rule_shift},
-    {IR_OP_ROL, "ir.rol", rule_shift},
-    {IR_OP_ROR, "ir.ror", rule_shift},
-    {IR_OP_CLZ, "ir.clz", rule_count},
-    {IR_OP_CTZ, "ir.ctz", rule_count},
-    {IR_OP_POPCOUNT, "ir.popcount", rule_count},
-    {IR_OP_BITREVERSE, "ir.bitreverse", rule_bitwise},
-    {IR_OP_BYTESWAP, "ir.byteswap", rule_bitwise},
-    {IR_OP_EQ, "ir.eq", rule_compare},
-    {IR_OP_NE, "ir.ne", rule_compare},
-    {IR_OP_LT, "ir.lt", rule_compare},
-    {IR_OP_LE, "ir.le", rule_compare},
-    {IR_OP_GT, "ir.gt", rule_compare},
-    {IR_OP_GE, "ir.ge", rule_compare},
-    {IR_OP_CAST, "ir.cast", rule_cast},
-    {IR_OP_BITCAST, "ir.bitcast", rule_cast},
-    {IR_OP_NOMINAL_CAST, "ir.nominal.cast", rule_nominal_cast},
-    {IR_OP_BOX, "ir.box", rule_box},
-    {IR_OP_SELECT, "ir.select", rule_select},
-    {IR_OP_PHI, "ir.phi", rule_phi},
-    {IR_OP_TRAIT_METHOD, "ir.trait.method", rule_trait_method},
-    {IR_OP_CALL, "ir.call", rule_call},
-    {IR_OP_CALLBACK_CREATE, "ir.callback-create", rule_annotated},
-    {IR_OP_CALLBACK_INVOKE, "ir.callback-invoke", rule_call},
-    {IR_OP_CALL_OUTPUT, "ir.call-output", rule_call_output},
-    {IR_OP_SIZEOF, "ir.sizeof", rule_size_like},
-    {IR_OP_ALIGNOF, "ir.alignof", rule_size_like},
-    {IR_OP_OFFSETOF, "ir.offsetof", rule_offsetof},
-    {IR_OP_TYPEHASH, "ir.typehash", rule_typehash},
-    {IR_OP_TYPENAME, "ir.typename", rule_typename},
-    {IR_OP_ARMTAG, "ir.armtag", rule_armtag},
-    {IR_OP_PHASE_RESULT, "ir.phase_result", rule_annotated},
-    {IR_OP_JUMP, "ir.jump", rule_none},
-    {IR_OP_BRANCH, "ir.branch", rule_branch},
-    {IR_OP_SWITCH, "ir.switch", rule_switch},
-    {IR_OP_RETURN, "ir.return", rule_return},
-    {IR_OP_FAIL, "ir.fail", rule_fail},
-    {IR_OP_TRAP, "ir.trap", rule_none},
-    {IR_OP_UNREACHABLE, "ir.unreachable", rule_none},
+    ENTRY(IR_OP_CONST, "ir.const", rule_annotated),
+    ENTRY(IR_OP_ENUM_CONST, "ir.enum.const", rule_annotated),
+    ENTRY(IR_OP_ENUM_VALUE, "ir.enum.value", rule_enum_value),
+    ENTRY(IR_OP_ENUM_FROM_VALUE, "ir.enum.from-value", rule_enum_from_value),
+    ENTRY(IR_OP_BITSET_CONST, "ir.bitset.const", rule_annotated),
+    ENTRY(IR_OP_BITSET_UNION, "ir.bitset.union", rule_bitset),
+    ENTRY(IR_OP_BITSET_DIFFERENCE, "ir.bitset.difference", rule_bitset),
+    ENTRY(IR_OP_BITSET_INTERSECTION, "ir.bitset.intersection", rule_bitset),
+    ENTRY(IR_OP_BITSET_XOR, "ir.bitset.xor", rule_bitset),
+    ENTRY(IR_OP_BITSET_COMPLEMENT, "ir.bitset.complement", rule_bitset),
+    ENTRY(IR_OP_BITSET_CONTAINS, "ir.bitset.contains", rule_bitset),
+    ENTRY(IR_OP_BITSET_SET, "ir.bitset.set", rule_bitset),
+    ENTRY(IR_OP_BITSET_IS_EMPTY, "ir.bitset.is-empty", rule_bitset),
+    ENTRY(IR_OP_BITSET_VALUE, "ir.bitset.value", rule_bitset_value),
+    ENTRY(IR_OP_BITSET_FROM_VALUE, "ir.bitset.from-value", rule_bitset_value),
+    ENTRY(IR_OP_AGGREGATE, "ir.aggregate", rule_annotated),
+    ENTRY(IR_OP_REST_COLLECT, "ir.rest.collect", rule_rest_collect),
+    ENTRY(IR_OP_PARAM_PRESENT, "ir.param.present", rule_param_present),
+    ENTRY(IR_OP_ARRAY_NEW, "ir.array.new", rule_annotated),
+    ENTRY(IR_OP_ARRAY_NEW_USING, "ir.array.new.using", rule_annotated),
+    ENTRY(IR_OP_SEQUENCE_SHAPE_CHECK, "ir.sequence.shape.check",
+          rule_sequence_shape_check),
+    ENTRY(IR_OP_UNDEF, "ir.undef", rule_annotated),
+    ENTRY(IR_OP_COPY, "ir.copy", rule_copy),
+    ENTRY(IR_OP_CONSUME, "ir.consume", rule_copy),
+    ENTRY(IR_OP_RETAIN_REF, "ir.retain-ref", rule_copy),
+    ENTRY(IR_OP_ADDRESS_OF, "ir.address.of", rule_address_of),
+    ENTRY(IR_OP_ALLOCA, "ir.alloca", rule_alloca),
+    ENTRY(IR_OP_ALLOC, "ir.alloc", rule_alloca),
+    ENTRY(IR_OP_ALLOC_USING, "ir.alloc.using", rule_alloca),
+    ENTRY(IR_OP_FINALIZE, "ir.finalize", rule_finalize),
+    ENTRY(IR_OP_DEALLOC, "ir.dealloc", rule_dealloc),
+    ENTRY(IR_OP_LOAD, "ir.load", rule_load),
+    ENTRY(IR_OP_STORE, "ir.store", rule_store),
+    ENTRY(IR_OP_ATOMIC_RMW, "ir.atomic.rmw", rule_atomic_rmw),
+    ENTRY(IR_OP_ATOMIC_CAS, "ir.atomic.cas", rule_atomic_cas),
+    ENTRY(IR_OP_SIGNAL_FENCE, "ir.signal.fence", rule_none),
+    ENTRY(IR_OP_PREFETCH, "ir.prefetch", rule_prefetch),
+    ENTRY(IR_OP_GLOBAL_STORE, "ir.global.store", rule_global_store),
+    ENTRY(IR_OP_FIELD, "ir.field", rule_field),
+    ENTRY(IR_OP_INDEX, "ir.index", rule_index),
+    ENTRY(IR_OP_SEQUENCE_LENGTH, "ir.sequence.length", rule_sequence_length),
+    ENTRY(IR_OP_SEQUENCE_GET, "ir.sequence.get", rule_sequence_get),
+    ENTRY(IR_OP_SEQUENCE_SET, "ir.sequence.set", rule_sequence_set),
+    ENTRY(IR_OP_OFFSET, "ir.offset", rule_offset),
+    ENTRY(IR_OP_DIFF, "ir.diff", rule_diff),
+    ENTRY(IR_OP_MEMCPY, "ir.memcpy", rule_mem),
+    ENTRY(IR_OP_MEMMOVE, "ir.memmove", rule_mem),
+    ENTRY(IR_OP_MEMSET, "ir.memset", rule_mem),
+    ENTRY(IR_OP_MEMCMP, "ir.memcmp", rule_mem),
+    ENTRY(IR_OP_EXTRACT, "ir.extract", rule_extract),
+    ENTRY(IR_OP_EXTRACT_INDEX, "ir.extract.index", rule_extract_index),
+    ENTRY(IR_OP_INSERT, "ir.insert", rule_insert),
+    ENTRY(IR_OP_VARIANT_NEW, "ir.variant.new", rule_variant_new),
+    ENTRY(IR_OP_VARIANT_NEW_USING, "ir.variant.new.using", rule_variant_new),
+    ENTRY(IR_OP_VARIANT_MAKE, "ir.variant.make", rule_variant_make),
+    ENTRY(IR_OP_VARIANT_TAG, "ir.variant.tag", rule_variant_tag),
+    ENTRY(IR_OP_VARIANT_PAYLOAD, "ir.variant.payload", rule_variant_payload),
+    ENTRY(IR_OP_OPTION_IS_NIL, "ir.option.is_nil", rule_option_is_nil),
+    ENTRY(IR_OP_NIL, "ir.nil", rule_nil),
+    ENTRY(IR_OP_OPTION_NONE, "ir.option.none", rule_option_none),
+    ENTRY(IR_OP_OPTION_SOME, "ir.option.some", rule_option_some),
+    ENTRY(IR_OP_OPTION_GET, "ir.option.get", rule_option_get),
+    ENTRY(IR_OP_OPTION_GET_OR_ELSE, "ir.option.get_or_else",
+          rule_option_get_or_else),
+    ENTRY(IR_OP_ATOMIC_WRAP, "ir.atomic.wrap", rule_atomic_wrap),
+    ENTRY(IR_OP_TYPE_TEST, "ir.type.test", rule_type_test),
+    ENTRY(IR_OP_TYPE_NARROW, "ir.type.narrow", rule_type_narrow),
+    ENTRY(IR_OP_TYPE_OF, "ir.type.of", rule_annotated),
+    ENTRY(IR_OP_BUFFER_AS_STRING, "ir.buffer.as_string", rule_annotated),
+    ENTRY(IR_OP_BUFFER_BORROW_END, "ir.buffer.borrow_end", rule_none),
+    ENTRY(IR_OP_ADD, "ir.add", rule_arith),
+    ENTRY(IR_OP_SUB, "ir.sub", rule_arith),
+    ENTRY(IR_OP_MUL, "ir.mul", rule_arith),
+    ENTRY(IR_OP_DIV, "ir.div", rule_arith),
+    ENTRY(IR_OP_REM, "ir.rem", rule_arith),
+    ENTRY(IR_OP_NEG, "ir.neg", rule_arith),
+    ENTRY(IR_OP_AND, "ir.and", rule_bitwise),
+    ENTRY(IR_OP_OR, "ir.or", rule_bitwise),
+    ENTRY(IR_OP_XOR, "ir.xor", rule_bitwise),
+    ENTRY(IR_OP_NOT, "ir.not", rule_bitwise),
+    ENTRY(IR_OP_SHL, "ir.shl", rule_shift),
+    ENTRY(IR_OP_SHR, "ir.shr", rule_shift),
+    ENTRY(IR_OP_ROL, "ir.rol", rule_shift),
+    ENTRY(IR_OP_ROR, "ir.ror", rule_shift),
+    ENTRY(IR_OP_CLZ, "ir.clz", rule_count),
+    ENTRY(IR_OP_CTZ, "ir.ctz", rule_count),
+    ENTRY(IR_OP_POPCOUNT, "ir.popcount", rule_count),
+    ENTRY(IR_OP_BITREVERSE, "ir.bitreverse", rule_bitwise),
+    ENTRY(IR_OP_BYTESWAP, "ir.byteswap", rule_bitwise),
+    ENTRY(IR_OP_EQ, "ir.eq", rule_compare),
+    ENTRY(IR_OP_NE, "ir.ne", rule_compare),
+    ENTRY(IR_OP_LT, "ir.lt", rule_compare),
+    ENTRY(IR_OP_LE, "ir.le", rule_compare),
+    ENTRY(IR_OP_GT, "ir.gt", rule_compare),
+    ENTRY(IR_OP_GE, "ir.ge", rule_compare),
+    ENTRY(IR_OP_CAST, "ir.cast", rule_cast),
+    ENTRY(IR_OP_BITCAST, "ir.bitcast", rule_cast),
+    ENTRY(IR_OP_NOMINAL_CAST, "ir.nominal.cast", rule_nominal_cast),
+    ENTRY(IR_OP_BOX, "ir.box", rule_box),
+    ENTRY(IR_OP_SELECT, "ir.select", rule_select),
+    ENTRY(IR_OP_PHI, "ir.phi", rule_phi),
+    ENTRY(IR_OP_TRAIT_METHOD, "ir.trait.method", rule_trait_method),
+    ENTRY(IR_OP_CALL, "ir.call", rule_call),
+    ENTRY(IR_OP_CALLBACK_CREATE, "ir.callback-create", rule_annotated),
+    ENTRY(IR_OP_CALLBACK_INVOKE, "ir.callback-invoke", rule_call),
+    ENTRY(IR_OP_CALL_OUTPUT, "ir.call-output", rule_call_output),
+    ENTRY(IR_OP_SIZEOF, "ir.sizeof", rule_size_like),
+    ENTRY(IR_OP_ALIGNOF, "ir.alignof", rule_size_like),
+    ENTRY(IR_OP_OFFSETOF, "ir.offsetof", rule_offsetof),
+    ENTRY(IR_OP_TYPEHASH, "ir.typehash", rule_typehash),
+    ENTRY(IR_OP_TYPENAME, "ir.typename", rule_typename),
+    ENTRY(IR_OP_ARMTAG, "ir.armtag", rule_armtag),
+    ENTRY(IR_OP_PHASE_RESULT, "ir.phase_result", rule_annotated),
+    ENTRY(IR_OP_JUMP, "ir.jump", rule_none),
+    ENTRY(IR_OP_BRANCH, "ir.branch", rule_branch),
+    ENTRY(IR_OP_SWITCH, "ir.switch", rule_switch),
+    ENTRY(IR_OP_RETURN, "ir.return", rule_return),
+    ENTRY(IR_OP_FAIL, "ir.fail", rule_fail),
+    ENTRY(IR_OP_TRAP, "ir.trap", rule_none),
+    ENTRY(IR_OP_UNREACHABLE, "ir.unreachable", rule_none),
 };
 
 bool ir_rules_add_defaults(ir_rules_t *rs)

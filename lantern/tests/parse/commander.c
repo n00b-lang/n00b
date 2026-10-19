@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 
 #include "parse/commander.h"
 #include "harness.h"
@@ -59,14 +58,15 @@ static void test_a_command_and_its_arguments_come_back(void)
 static void test_flags_in_every_spelling(void)
 {
     static const struct {
-        const char *what;
-        int         n;
-        const char *av[4];
+        core_string_t what;
+        int           n;
+        const char   *av[4];
     } cases[] = {
-        {"a boolean flag",      3, {"build", "--json", "a.c"}},
-        {"a valued flag",       4, {"build", "--out", "x", "a.c"}},
-        {"the --flag=value form", 3, {"build", "--out=x", "a.c"}},
-        {"a short alias",       4, {"build", "-o", "x", "a.c"}},
+        {CORE_STRING_STATIC("a boolean flag"), 3, {"build", "--json", "a.c"}},
+        {CORE_STRING_STATIC("a valued flag"), 4, {"build", "--out", "x", "a.c"}},
+        {CORE_STRING_STATIC("the --flag=value form"), 3,
+         {"build", "--out=x", "a.c"}},
+        {CORE_STRING_STATIC("a short alias"), 4, {"build", "-o", "x", "a.c"}},
     };
 
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -75,13 +75,15 @@ static void test_flags_in_every_spelling(void)
                                               (const char **)cases[i].av);
 
         if (!parse_cmdr_result_ok(r)) {
-            printf("FAIL  %s does not parse\n", cases[i].what);
+            printf("FAIL  %.*s does not parse\n", (int)cases[i].what.u8_bytes,
+                   cases[i].what.data);
             fails++;
         }
         else if (parse_cmdr_arg_count(r) != 1
                  || !core_string_eq(parse_cmdr_arg_str(r, 0),
                                   CORE_STRING_STATIC("a.c"))) {
-            printf("FAIL  %s swallows the positional\n", cases[i].what);
+            printf("FAIL  %.*s swallows the positional\n",
+                   (int)cases[i].what.u8_bytes, cases[i].what.data);
             fails++;
         }
 

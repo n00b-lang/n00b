@@ -184,7 +184,8 @@ main(void)
     core_translation_unit_t unit = {0};
     core_module_spec_init(&fatal_module,
                           CORE_STRING_STATIC("pkg.fatal_diagnostic"));
-    core_source_file_init(&source, CORE_STRING_STATIC("fatal.n00b"), "", 0);
+    core_source_file_init(&source, CORE_STRING_STATIC("fatal.n00b"),
+                          CORE_STRING_STATIC(""));
     bool unit_initialized = core_translation_unit_init(&unit, &fatal_module,
                                                        &source);
     core_work_job_t *phase = nullptr;

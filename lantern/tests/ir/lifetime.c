@@ -1,6 +1,8 @@
 #include "ir/ir.h"
 #include "harness.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 static bool set_complete_pointer_facts(ir_ctx_t *ctx, ir_value_t *value);
 
 typedef struct {
@@ -38,19 +40,19 @@ collect_lifetime_endpoint(void *opaque, ir_lifetime_endpoint_t endpoint)
 static void test_branch_paths(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "branch",
-        ir_type_parse(module, "(bool, bool) -> bool"), IR_LINK_EXTERNAL);
-    ir_value_t *value = ir_param_add(function, "value",
-                                      ir_type_parse(module, "bool"));
-    ir_value_t *condition = ir_param_add(function, "condition",
-                                          ir_type_parse(module, "bool"));
-    ir_block_t *entry = ir_block_add(function, "entry");
-    ir_block_t *left = ir_block_add(function, "left");
-    ir_block_t *right = ir_block_add(function, "right");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("branch"),
+        ir_type_parse(module, S("(bool, bool) -> bool")), IR_LINK_EXTERNAL);
+    ir_value_t *value = ir_param_add(function, S("value"),
+                                      ir_type_parse(module, S("bool")));
+    ir_value_t *condition = ir_param_add(function, S("condition"),
+                                          ir_type_parse(module, S("bool")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
+    ir_block_t *left = ir_block_add(function, S("left"));
+    ir_block_t *right = ir_block_add(function, S("right"));
     ir_instr_t *point = ir_instr_add(entry, IR_OP_CONST);
-    ir_instr_set_dest(point, "marker", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(point, S("marker"), ir_type_parse(module, S("bool")));
     ir_instr_operand_int(point, 0);
     ir_instr_t *branch = ir_instr_add(entry, IR_OP_BRANCH);
     ir_instr_operand_value(branch, condition);
@@ -108,14 +110,14 @@ static void test_branch_paths(void)
 static void test_unreachable_use(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "unreachable",
-        ir_type_parse(module, "(bool) -> bool"), IR_LINK_EXTERNAL);
-    ir_value_t *value = ir_param_add(function, "value",
-                                      ir_type_parse(module, "bool"));
-    ir_block_t *entry = ir_block_add(function, "entry");
-    ir_block_t *dead = ir_block_add(function, "dead");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("unreachable"),
+        ir_type_parse(module, S("(bool) -> bool")), IR_LINK_EXTERNAL);
+    ir_value_t *value = ir_param_add(function, S("value"),
+                                      ir_type_parse(module, S("bool")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
+    ir_block_t *dead = ir_block_add(function, S("dead"));
     ir_instr_t *point = ir_instr_add(entry, IR_OP_RETURN);
     ir_instr_t *dead_return = ir_instr_add(dead, IR_OP_RETURN);
     ir_instr_operand_value(dead_return, value);
@@ -128,14 +130,14 @@ static void test_unreachable_use(void)
 static void test_uninitialized_local_lifetime(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "uninitialized_local",
-        ir_type_parse(module, "() -> void"), IR_LINK_EXTERNAL);
-    ir_local_t *local = ir_local_add(function, "unused",
-                                     ir_type_parse(module, "i32"));
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("uninitialized_local"),
+        ir_type_parse(module, S("() -> void")), IR_LINK_EXTERNAL);
+    ir_local_t *local = ir_local_add(function, S("unused"),
+                                     ir_type_parse(module, S("i32")));
     ir_value_t *value = local ? ir_local_value(function, local) : NULL;
-    ir_block_t *entry = ir_block_add(function, "entry");
+    ir_block_t *entry = ir_block_add(function, S("entry"));
     ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
     endpoint_collector_t endpoints = {0};
     bool facts = value && set_complete_pointer_facts(ctx, value);
@@ -152,21 +154,21 @@ static void test_uninitialized_local_lifetime(void)
 static void test_incomplete_facts(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "non_dominating",
-        ir_type_parse(module, "(bool) -> bool"), IR_LINK_EXTERNAL);
-    ir_value_t *condition = ir_param_add(function, "condition",
-                                          ir_type_parse(module, "bool"));
-    ir_block_t *entry = ir_block_add(function, "entry");
-    ir_block_t *definition = ir_block_add(function, "definition");
-    ir_block_t *use = ir_block_add(function, "use");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("non_dominating"),
+        ir_type_parse(module, S("(bool) -> bool")), IR_LINK_EXTERNAL);
+    ir_value_t *condition = ir_param_add(function, S("condition"),
+                                          ir_type_parse(module, S("bool")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
+    ir_block_t *definition = ir_block_add(function, S("definition"));
+    ir_block_t *use = ir_block_add(function, S("use"));
     ir_instr_t *branch = ir_instr_add(entry, IR_OP_BRANCH);
     ir_instr_operand_value(branch, condition);
     ir_instr_operand_block(branch, definition);
     ir_instr_operand_block(branch, use);
     ir_instr_t *defined = ir_instr_add(definition, IR_OP_CONST);
-    ir_instr_set_dest(defined, "defined", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(defined, S("defined"), ir_type_parse(module, S("bool")));
     ir_instr_operand_int(defined, 1);
     ir_instr_t *definition_return = ir_instr_add(definition, IR_OP_RETURN);
     ir_instr_operand_value(definition_return, defined->dest);
@@ -179,12 +181,12 @@ static void test_incomplete_facts(void)
               && ir_value_liveness_on_edge(defined->dest, entry, use)
                      == IR_LIVENESS_UNKNOWN);
 
-    ir_func_t *incomplete = ir_func_add(module, "incomplete",
-        ir_type_parse(module, "() -> void"), IR_LINK_EXTERNAL);
-    ir_block_t *open_block = ir_block_add(incomplete, "open");
+    ir_func_t *incomplete = ir_func_add(module, S("incomplete"),
+        ir_type_parse(module, S("() -> void")), IR_LINK_EXTERNAL);
+    ir_block_t *open_block = ir_block_add(incomplete, S("open"));
     ir_instr_t *open_point = ir_instr_add(open_block, IR_OP_CONST);
-    ir_instr_set_dest(open_point, "open_value",
-                      ir_type_parse(module, "i:32"));
+    ir_instr_set_dest(open_point, S("open_value"),
+                      ir_type_parse(module, S("i:32")));
     ir_instr_operand_int(open_point, 1);
     endpoint_collector_t endpoints = {0};
     check("a reachable unterminated block has unknown liveness",
@@ -201,12 +203,12 @@ static void test_incomplete_facts(void)
                   collect_lifetime_endpoint, &endpoints));
     ir_liveness_query_free(query);
 
-    ir_func_t *malformed = ir_func_add(module, "multiple_terminators",
-        ir_type_parse(module, "(bool) -> void"), IR_LINK_EXTERNAL);
-    ir_value_t *input = ir_param_add(malformed, "input",
-                                     ir_type_parse(module, "bool"));
-    ir_block_t *bad_entry = ir_block_add(malformed, "entry");
-    ir_block_t *exit = ir_block_add(malformed, "exit");
+    ir_func_t *malformed = ir_func_add(module, S("multiple_terminators"),
+        ir_type_parse(module, S("(bool) -> void")), IR_LINK_EXTERNAL);
+    ir_value_t *input = ir_param_add(malformed, S("input"),
+                                     ir_type_parse(module, S("bool")));
+    ir_block_t *bad_entry = ir_block_add(malformed, S("entry"));
+    ir_block_t *exit = ir_block_add(malformed, S("exit"));
     ir_instr_t *jump = ir_instr_add(bad_entry, IR_OP_JUMP);
     ir_instr_operand_block(jump, exit);
     ir_instr_add(bad_entry, IR_OP_RETURN);
@@ -221,30 +223,30 @@ static void test_incomplete_facts(void)
 static void test_loop_backedge(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "loop",
-        ir_type_parse(module, "(bool) -> bool"), IR_LINK_EXTERNAL);
-    ir_value_t *value = ir_param_add(function, "value",
-                                      ir_type_parse(module, "bool"));
-    ir_block_t *entry = ir_block_add(function, "entry");
-    ir_block_t *loop = ir_block_add(function, "loop");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("loop"),
+        ir_type_parse(module, S("(bool) -> bool")), IR_LINK_EXTERNAL);
+    ir_value_t *value = ir_param_add(function, S("value"),
+                                      ir_type_parse(module, S("bool")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
+    ir_block_t *loop = ir_block_add(function, S("loop"));
     ir_instr_t *jump = ir_instr_add(entry, IR_OP_JUMP);
     ir_instr_operand_block(jump, loop);
     ir_instr_t *select = ir_instr_add(loop, IR_OP_SELECT);
-    ir_instr_set_dest(select, "used", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(select, S("used"), ir_type_parse(module, S("bool")));
     ir_instr_operand_value(select, value);
     ir_instr_operand_value(select, value);
     ir_instr_operand_value(select, value);
     ir_instr_t *point = ir_instr_add(loop, IR_OP_CONST);
-    ir_instr_set_dest(point, "marker", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(point, S("marker"), ir_type_parse(module, S("bool")));
     ir_instr_operand_int(point, 0);
     ir_instr_t *backedge = ir_instr_add(loop, IR_OP_JUMP);
     ir_instr_operand_block(backedge, loop);
-    ir_func_t *other_function = ir_func_add(module, "other",
-        ir_type_parse(module, "(bool) -> bool"), IR_LINK_EXTERNAL);
-    ir_value_t *other_value = ir_param_add(other_function, "other_value",
-                                           ir_type_parse(module, "bool"));
+    ir_func_t *other_function = ir_func_add(module, S("other"),
+        ir_type_parse(module, S("(bool) -> bool")), IR_LINK_EXTERNAL);
+    ir_value_t *other_value = ir_param_add(other_function, S("other_value"),
+                                           ir_type_parse(module, S("bool")));
 
     check("a loop backedge revisits uses before the queried point",
           ir_value_liveness_after(value, point) == IR_LIVENESS_LIVE
@@ -258,21 +260,21 @@ static void test_loop_backedge(void)
 static void test_phi_edge_liveness(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "phi_backedge",
-        ir_type_parse(module, "(bool, bool) -> bool"), IR_LINK_EXTERNAL);
-    ir_value_t *seed = ir_param_add(function, "seed",
-                                     ir_type_parse(module, "bool"));
-    ir_value_t *again = ir_param_add(function, "again",
-                                      ir_type_parse(module, "bool"));
-    ir_block_t *entry = ir_block_add(function, "entry");
-    ir_block_t *loop = ir_block_add(function, "loop");
-    ir_block_t *exit = ir_block_add(function, "exit");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("phi_backedge"),
+        ir_type_parse(module, S("(bool, bool) -> bool")), IR_LINK_EXTERNAL);
+    ir_value_t *seed = ir_param_add(function, S("seed"),
+                                     ir_type_parse(module, S("bool")));
+    ir_value_t *again = ir_param_add(function, S("again"),
+                                      ir_type_parse(module, S("bool")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
+    ir_block_t *loop = ir_block_add(function, S("loop"));
+    ir_block_t *exit = ir_block_add(function, S("exit"));
     ir_instr_t *enter = ir_instr_add(entry, IR_OP_JUMP);
     ir_instr_operand_block(enter, loop);
     ir_instr_t *phi = ir_instr_add(loop, IR_OP_PHI);
-    ir_instr_set_dest(phi, "carried", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(phi, S("carried"), ir_type_parse(module, S("bool")));
     ir_instr_operand_phi_arm(phi, entry, seed);
     ir_instr_operand_phi_arm(phi, loop, phi->dest);
     ir_instr_t *branch = ir_instr_add(loop, IR_OP_BRANCH);
@@ -300,30 +302,30 @@ static bool set_alias_facts(ir_ctx_t *ctx, ir_value_t *value,
     ir_annots_t *facts = ir_value_annots(value);
     return facts
         && ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.alias_analysis_complete", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.alias_analysis_complete"), .kind = IR_ANNOT_BOOL,
             .b = true,
         })
         && ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
             .b = false,
         })
         && ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.alias_unresolved", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.alias_unresolved"), .kind = IR_ANNOT_BOOL,
             .b = false,
         })
         && ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+            .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = 1},
         })
         && ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+            .key = S("ir.aliased_by_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = 0},
         })
         && ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.alias0", .kind = IR_ANNOT_VALUE, .v = target,
+            .key = S("ir.alias0"), .kind = IR_ANNOT_VALUE, .v = target,
         })
         && ir_annot_set(ctx, facts, (ir_annot_t){
-            .key = "ir.alias0_escapes", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.alias0_escapes"), .kind = IR_ANNOT_BOOL,
             .b = false,
         });
 }
@@ -331,17 +333,17 @@ static bool set_alias_facts(ir_ctx_t *ctx, ir_value_t *value,
 static void test_alias_component_liveness(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "aliases",
-        ir_type_parse(module, "(bool, bool) -> bool"), IR_LINK_EXTERNAL);
-    ir_value_t *source = ir_param_add(function, "source",
-                                       ir_type_parse(module, "bool"));
-    ir_value_t *alias = ir_param_add(function, "alias",
-                                      ir_type_parse(module, "bool"));
-    ir_block_t *entry = ir_block_add(function, "entry");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("aliases"),
+        ir_type_parse(module, S("(bool, bool) -> bool")), IR_LINK_EXTERNAL);
+    ir_value_t *source = ir_param_add(function, S("source"),
+                                       ir_type_parse(module, S("bool")));
+    ir_value_t *alias = ir_param_add(function, S("alias"),
+                                      ir_type_parse(module, S("bool")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
     ir_instr_t *point = ir_instr_add(entry, IR_OP_CONST);
-    ir_instr_set_dest(point, "marker", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(point, S("marker"), ir_type_parse(module, S("bool")));
     ir_instr_operand_int(point, 0);
     ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
     ir_instr_operand_value(ret, alias);
@@ -360,21 +362,22 @@ static void test_alias_component_liveness(void)
 static void test_alias_edge_liveness(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "alias_branches",
-        ir_type_parse(module, "(ptr[i32], bool) -> void"), IR_LINK_EXTERNAL);
-    ir_value_t *owner = ir_param_add(function, "owner",
-                                      ir_type_parse(module, "ptr[i32]"));
-    ir_value_t *condition = ir_param_add(function, "condition",
-                                          ir_type_parse(module, "bool"));
-    ir_block_t *entry = ir_block_add(function, "entry");
-    ir_block_t *left = ir_block_add(function, "left");
-    ir_block_t *right = ir_block_add(function, "right");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("alias_branches"),
+        ir_type_parse(module, S("(ptr[i32], bool) -> void")),
+        IR_LINK_EXTERNAL);
+    ir_value_t *owner = ir_param_add(function, S("owner"),
+                                      ir_type_parse(module, S("ptr[i32]")));
+    ir_value_t *condition = ir_param_add(function, S("condition"),
+                                          ir_type_parse(module, S("bool")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
+    ir_block_t *left = ir_block_add(function, S("left"));
+    ir_block_t *right = ir_block_add(function, S("right"));
     bool facts = set_complete_pointer_facts(ctx, owner);
     ir_instr_t *address = ir_instr_add(entry, IR_OP_ADDRESS_OF);
-    bool address_built = ir_instr_set_dest(address, "owner_address",
-            ir_type_parse(module, "ptr[ptr[i32]]"))
+    bool address_built = ir_instr_set_dest(address, S("owner_address"),
+            ir_type_parse(module, S("ptr[ptr[i32]]")))
         && ir_instr_operand_value(address, owner);
     ir_instr_t *branch = ir_instr_add(entry, IR_OP_BRANCH);
     ir_instr_operand_value(branch, condition);
@@ -382,12 +385,12 @@ static void test_alias_edge_liveness(void)
     ir_instr_operand_block(branch, right);
     ir_instr_add(left, IR_OP_RETURN);
     ir_instr_t *load = ir_instr_add(right, IR_OP_LOAD);
-    ir_instr_set_dest(load, "loaded", ir_type_parse(module, "i32"));
+    ir_instr_set_dest(load, S("loaded"), ir_type_parse(module, S("i32")));
     ir_instr_operand_value(load, owner);
     ir_instr_add(right, IR_OP_RETURN);
     ir_annot_t *address_complete = address_built
         ? ir_annot_get(ir_value_annots(address->dest),
-                       "ir.alias_analysis_complete") : nullptr;
+                       S("ir.alias_analysis_complete")) : nullptr;
 
     check("address.of inherits complete alias facts from its target",
           facts && address_built && address_complete
@@ -409,7 +412,7 @@ static void test_alias_edge_liveness(void)
                      == IR_LIVENESS_DEAD);
     bool marked_escaping = ir_annot_set(ctx, ir_value_annots(owner),
         (ir_annot_t){
-            .key = "ir.lifetime_escapes", .kind = IR_ANNOT_BOOL,
+            .key = S("ir.lifetime_escapes"), .kind = IR_ANNOT_BOOL,
             .b = true,
         });
     check("edge finalization fails closed for escaping aliases",
@@ -424,27 +427,27 @@ static bool set_complete_pointer_facts(ir_ctx_t *ctx, ir_value_t *value)
 {
     ir_annots_t *annots = ir_value_annots(value);
     return ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_analysis_complete",
+               .key = S("ir.alias_analysis_complete"),
                .kind = IR_ANNOT_BOOL,
                .b = true,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.lifetime_escapes",
+               .key = S("ir.lifetime_escapes"),
                .kind = IR_ANNOT_BOOL,
                .b = false,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_unresolved",
+               .key = S("ir.alias_unresolved"),
                .kind = IR_ANNOT_BOOL,
                .b = false,
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.alias_count",
+               .key = S("ir.alias_count"),
                .kind = IR_ANNOT_INT,
                .i = {0},
            })
         && ir_annot_set(ctx, annots, (ir_annot_t){
-               .key = "ir.aliased_by_count",
+               .key = S("ir.aliased_by_count"),
                .kind = IR_ANNOT_INT,
                .i = {0},
            });
@@ -453,15 +456,16 @@ static bool set_complete_pointer_facts(ir_ctx_t *ctx, ir_value_t *value)
 static void test_pointer_escape_stays_unknown(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "return_pointer",
-        ir_type_parse(module, "(ptr[i32]) -> ptr[i32]"), IR_LINK_EXTERNAL);
-    ir_value_t *pointer = ir_param_add(function, "pointer",
-                                        ir_type_parse(module, "ptr[i32]"));
-    ir_block_t *entry = ir_block_add(function, "entry");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("return_pointer"),
+        ir_type_parse(module, S("(ptr[i32]) -> ptr[i32]")),
+        IR_LINK_EXTERNAL);
+    ir_value_t *pointer = ir_param_add(function, S("pointer"),
+                                        ir_type_parse(module, S("ptr[i32]")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
     ir_instr_t *marker = ir_instr_add(entry, IR_OP_CONST);
-    ir_instr_set_dest(marker, "marker", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(marker, S("marker"), ir_type_parse(module, S("bool")));
     ir_instr_operand_int(marker, 0);
     ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
     ir_instr_operand_value(ret, pointer);
@@ -481,23 +485,23 @@ static void test_pointer_escape_stays_unknown(void)
 static void test_pointer_copy_aliases(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "copy_alias",
-        ir_type_parse(module, "(ptr[i32]) -> void"), IR_LINK_EXTERNAL);
-    ir_value_t *owner = ir_param_add(function, "owner",
-                                      ir_type_parse(module, "ptr[i32]"));
-    ir_block_t *entry = ir_block_add(function, "entry");
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("copy_alias"),
+        ir_type_parse(module, S("(ptr[i32]) -> void")), IR_LINK_EXTERNAL);
+    ir_value_t *owner = ir_param_add(function, S("owner"),
+                                      ir_type_parse(module, S("ptr[i32]")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
     bool facts = set_complete_pointer_facts(ctx, owner);
     ir_instr_t *copy = ir_instr_add(entry, IR_OP_COPY);
-    ir_instr_set_dest(copy, "alias", owner->type);
+    ir_instr_set_dest(copy, S("alias"), owner->type);
     facts = facts && set_complete_pointer_facts(ctx, copy->dest);
     bool copied = ir_instr_operand_value(copy, owner);
     ir_instr_t *marker = ir_instr_add(entry, IR_OP_CONST);
-    ir_instr_set_dest(marker, "marker", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(marker, S("marker"), ir_type_parse(module, S("bool")));
     ir_instr_operand_int(marker, 0);
     ir_instr_t *load = ir_instr_add(entry, IR_OP_LOAD);
-    ir_instr_set_dest(load, "loaded", ir_type_parse(module, "i32"));
+    ir_instr_set_dest(load, S("loaded"), ir_type_parse(module, S("i32")));
     ir_instr_operand_value(load, copy->dest);
     ir_instr_add(entry, IR_OP_RETURN);
 
@@ -512,57 +516,57 @@ static void test_pointer_copy_aliases(void)
 static void test_pointer_join_and_derived_aliases(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "liveness", &ir_profile_bce,
-                                         "test");
-    ir_func_t *function = ir_func_add(module, "joined_aliases",
-        ir_type_parse(module, "(ptr[i32], ptr[i32], bool, i32) -> void"),
+    ir_module_t *module = ir_module_new(ctx, S("liveness"), &ir_profile_bce,
+                                         S("test"));
+    ir_func_t *function = ir_func_add(module, S("joined_aliases"),
+        ir_type_parse(module, S("(ptr[i32], ptr[i32], bool, i32) -> void")),
         IR_LINK_EXTERNAL);
-    ir_value_t *left = ir_param_add(function, "left",
-                                     ir_type_parse(module, "ptr[i32]"));
-    ir_value_t *right = ir_param_add(function, "right",
-                                      ir_type_parse(module, "ptr[i32]"));
-    ir_value_t *condition = ir_param_add(function, "condition",
-                                          ir_type_parse(module, "bool"));
-    ir_value_t *index = ir_param_add(function, "index",
-                                      ir_type_parse(module, "i32"));
-    ir_block_t *entry = ir_block_add(function, "entry");
-    th_type *pointer = ir_type_parse(module, "ptr[i32]");
+    ir_value_t *left = ir_param_add(function, S("left"),
+                                     ir_type_parse(module, S("ptr[i32]")));
+    ir_value_t *right = ir_param_add(function, S("right"),
+                                      ir_type_parse(module, S("ptr[i32]")));
+    ir_value_t *condition = ir_param_add(function, S("condition"),
+                                          ir_type_parse(module, S("bool")));
+    ir_value_t *index = ir_param_add(function, S("index"),
+                                      ir_type_parse(module, S("i32")));
+    ir_block_t *entry = ir_block_add(function, S("entry"));
+    th_type *pointer = ir_type_parse(module, S("ptr[i32]"));
     bool facts = set_complete_pointer_facts(ctx, left)
         && set_complete_pointer_facts(ctx, right);
 
     ir_instr_t *select = ir_instr_add(entry, IR_OP_SELECT);
-    ir_instr_set_dest(select, "selected", pointer);
+    ir_instr_set_dest(select, S("selected"), pointer);
     facts = facts && set_complete_pointer_facts(ctx, select->dest);
     bool built = ir_instr_operand_value(select, condition)
         && ir_instr_operand_value(select, left)
         && ir_instr_operand_value(select, right);
 
     ir_instr_t *phi = ir_instr_add(entry, IR_OP_PHI);
-    ir_instr_set_dest(phi, "joined", pointer);
+    ir_instr_set_dest(phi, S("joined"), pointer);
     facts = facts && set_complete_pointer_facts(ctx, phi->dest);
     built = built && ir_instr_operand_phi_arm(phi, entry, left)
         && ir_instr_operand_phi_arm(phi, entry, right);
 
     ir_instr_t *field = ir_instr_add(entry, IR_OP_FIELD);
-    ir_instr_set_dest(field, "field", pointer);
+    ir_instr_set_dest(field, S("field"), pointer);
     facts = facts && set_complete_pointer_facts(ctx, field->dest);
     built = built && ir_instr_operand_value(field, left)
-        && ir_instr_operand_name(field, "member");
+        && ir_instr_operand_name(field, S("member"));
 
     ir_instr_t *indexed = ir_instr_add(entry, IR_OP_INDEX);
-    ir_instr_set_dest(indexed, "indexed", pointer);
+    ir_instr_set_dest(indexed, S("indexed"), pointer);
     facts = facts && set_complete_pointer_facts(ctx, indexed->dest);
     built = built && ir_instr_operand_value(indexed, left)
         && ir_instr_operand_value(indexed, index);
 
     ir_instr_t *offset = ir_instr_add(entry, IR_OP_OFFSET);
-    ir_instr_set_dest(offset, "offset", pointer);
+    ir_instr_set_dest(offset, S("offset"), pointer);
     facts = facts && set_complete_pointer_facts(ctx, offset->dest);
     built = built && ir_instr_operand_value(offset, left)
         && ir_instr_operand_value(offset, index);
 
     ir_instr_t *marker = ir_instr_add(entry, IR_OP_CONST);
-    ir_instr_set_dest(marker, "marker", ir_type_parse(module, "bool"));
+    ir_instr_set_dest(marker, S("marker"), ir_type_parse(module, S("bool")));
     ir_instr_operand_int(marker, 0);
     ir_value_t *derived[] = {
         select->dest, phi->dest, field->dest, indexed->dest, offset->dest,
@@ -570,8 +574,9 @@ static void test_pointer_join_and_derived_aliases(void)
     for (size_t i = 0; i < sizeof(derived) / sizeof(derived[0]); i++) {
         ir_instr_t *load = ir_instr_add(entry, IR_OP_LOAD);
         char name[32];
-        snprintf(name, sizeof(name), "load_%zu", i);
-        ir_instr_set_dest(load, name, ir_type_parse(module, "i32"));
+        int name_bytes = snprintf(name, sizeof(name), "load_%zu", i);
+        ir_instr_set_dest(load, core_string_borrow(name, (size_t)name_bytes),
+                          ir_type_parse(module, S("i32")));
         built = built && ir_instr_operand_value(load, derived[i]);
     }
     ir_instr_t *ret = ir_instr_add(entry, IR_OP_RETURN);
@@ -592,24 +597,24 @@ static void test_pointer_join_and_derived_aliases(void)
 static void test_fresh_construction_storage(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "fresh_lifetime",
-        &ir_profile_bce, "test");
-    ir_func_t *caller = ir_func_add(module, "caller",
-        ir_type_parse(module, "() -> void"), IR_LINK_INTERNAL);
-    ir_block_t *entry = ir_block_add(caller, "entry");
+    ir_module_t *module = ir_module_new(ctx, S("fresh_lifetime"),
+        &ir_profile_bce, S("test"));
+    ir_func_t *caller = ir_func_add(module, S("caller"),
+        ir_type_parse(module, S("() -> void")), IR_LINK_INTERNAL);
+    ir_block_t *entry = ir_block_add(caller, S("entry"));
     ir_instr_t *storage = ir_instr_add(entry, IR_OP_ALLOC);
-    ir_instr_operand_type(storage, ir_type_parse(module, "i32"));
-    ir_instr_set_dest(storage, "storage",
-        ir_type_parse(module, "ptr[i32]"));
+    ir_instr_operand_type(storage, ir_type_parse(module, S("i32")));
+    ir_instr_set_dest(storage, S("storage"),
+        ir_type_parse(module, S("ptr[i32]")));
     ir_value_t *initializer = ir_alloc(ctx, sizeof(*initializer));
     initializer->kind = IR_VAL_FUNC;
-    initializer->type = ir_type_parse(module, "(inout i32) -> void");
+    initializer->type = ir_type_parse(module, S("(inout i32) -> void"));
     ir_instr_t *call = ir_instr_add(entry, IR_OP_CALL);
     bool built = ir_instr_operand_value(call, initializer)
         && ir_instr_operand_fresh(call, storage->dest);
     ir_instr_t *load = ir_instr_add(entry, IR_OP_LOAD);
     built = built && ir_instr_operand_value(load, storage->dest);
-    ir_instr_set_dest(load, "result", ir_type_parse(module, "i32"));
+    ir_instr_set_dest(load, S("result"), ir_type_parse(module, S("i32")));
     ir_instr_add(entry, IR_OP_RETURN);
 
     check("fresh modify construction does not make local storage escape",

@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -11,33 +12,48 @@
 #include "ir/verify.h"
 #include "harness.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
+[[gnu::format(printf, 3, 4)]] static core_string_t
+named(char *buf, size_t cap, const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+
+    int n = vsnprintf(buf, cap, fmt, ap);
+
+    va_end(ap);
+
+    if (n < 0) {
+        return core_string_borrow(buf, 0);
+    }
+
+    return core_string_borrow(buf, (size_t)n < cap ? (size_t)n : cap - 1);
+}
+
 static ir_module_t *chain(ir_ctx_t *c, uint32_t n, uint32_t locals)
 {
-    ir_module_t *m  = ir_module_new(c, "m", &ir_profile_bce, "t");
-    ir_func_t   *f  = ir_func_add(m, "f", ir_type_parse(m, "(bool) -> void"),
+    ir_module_t *m  = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t   *f  = ir_func_add(m, S("f"),
+                                  ir_type_parse(m, S("(bool) -> void")),
                                   IR_LINK_EXTERNAL);
-    ir_value_t  *cv = ir_param_add(f, "c", ir_type_parse(m, "bool"));
+    ir_value_t  *cv = ir_param_add(f, S("c"), ir_type_parse(m, S("bool")));
     ir_block_t **hd = malloc(sizeof(ir_block_t *) * (n + 1));
     char         nm[32];
 
     for (uint32_t i = 0; i < locals; i++) {
-        snprintf(nm, sizeof nm, "v%u", i);
-        ir_local_add(f, nm, ir_type_parse(m, "bool"));
+        ir_local_add(f, named(nm, sizeof nm, "v%u", i),
+                     ir_type_parse(m, S("bool")));
     }
 
     for (uint32_t i = 0; i <= n; i++) {
-        snprintf(nm, sizeof nm, "h%u", i);
-        hd[i] = ir_block_add(f, nm);
+        hd[i] = ir_block_add(f, named(nm, sizeof nm, "h%u", i));
     }
 
     for (uint32_t i = 0; i < n; i++) {
-        snprintf(nm, sizeof nm, "t%u", i);
-
-        ir_block_t *t = ir_block_add(f, nm);
-
-        snprintf(nm, sizeof nm, "e%u", i);
-
-        ir_block_t *e  = ir_block_add(f, nm);
+        ir_block_t *t = ir_block_add(f, named(nm, sizeof nm, "t%u", i));
+        ir_block_t *e  = ir_block_add(f, named(nm, sizeof nm, "e%u", i));
         ir_instr_t *br = ir_instr_add(hd[i], IR_OP_BRANCH);
 
         ir_instr_operand_value(br, cv);
@@ -134,12 +150,13 @@ static void test_promote_stays_linear(void)
 
 static ir_module_t *staircase(ir_ctx_t *c, uint32_t n)
 {
-    ir_module_t *m  = ir_module_new(c, "m", &ir_profile_bce, "t");
-    ir_func_t   *f  = ir_func_add(m, "f", ir_type_parse(m, "(bool) -> void"),
+    ir_module_t *m  = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t   *f  = ir_func_add(m, S("f"),
+                                  ir_type_parse(m, S("(bool) -> void")),
                                   IR_LINK_EXTERNAL);
-    ir_value_t  *cv = ir_param_add(f, "c", ir_type_parse(m, "bool"));
-    ir_local_t  *x  = ir_local_add(f, "x", ir_type_parse(m, "bool"));
-    ir_block_t  *at = ir_block_add(f, "entry");
+    ir_value_t  *cv = ir_param_add(f, S("c"), ir_type_parse(m, S("bool")));
+    ir_local_t  *x  = ir_local_add(f, S("x"), ir_type_parse(m, S("bool")));
+    ir_block_t  *at = ir_block_add(f, S("entry"));
     ir_instr_t  *w0 = ir_instr_add(at, IR_OP_COPY);
     char         nm[32];
 
@@ -147,9 +164,7 @@ static ir_module_t *staircase(ir_ctx_t *c, uint32_t n)
     ir_instr_operand_value(w0, cv);
 
     for (uint32_t i = 0; i < n; i++) {
-        snprintf(nm, sizeof nm, "b%u", i);
-
-        ir_block_t *next = ir_block_add(f, nm);
+        ir_block_t *next = ir_block_add(f, named(nm, sizeof nm, "b%u", i));
         ir_instr_t *j    = ir_instr_add(at, IR_OP_JUMP);
 
         ir_instr_operand_block(j, next);
@@ -157,8 +172,8 @@ static ir_module_t *staircase(ir_ctx_t *c, uint32_t n)
 
         ir_instr_t *rd = ir_instr_add(at, IR_OP_COPY);
 
-        snprintf(nm, sizeof nm, "r%u", i);
-        ir_instr_set_dest(rd, nm, ir_type_parse(m, "bool"));
+        ir_instr_set_dest(rd, named(nm, sizeof nm, "r%u", i),
+                          ir_type_parse(m, S("bool")));
         ir_instr_operand_local(rd, x);
 
         ir_instr_t *wr = ir_instr_add(at, IR_OP_COPY);
@@ -211,32 +226,26 @@ static void test_the_dependence_graph_stays_linear(void)
 
 static ir_module_t *webbed(ir_ctx_t *c, uint32_t n, uint32_t locals)
 {
-    ir_module_t *m  = ir_module_new(c, "m", &ir_profile_bce, "t");
-    ir_func_t   *f  = ir_func_add(m, "f", ir_type_parse(m, "(bool) -> void"),
+    ir_module_t *m  = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t   *f  = ir_func_add(m, S("f"),
+                                  ir_type_parse(m, S("(bool) -> void")),
                                   IR_LINK_EXTERNAL);
-    ir_value_t  *cv = ir_param_add(f, "c", ir_type_parse(m, "bool"));
+    ir_value_t  *cv = ir_param_add(f, S("c"), ir_type_parse(m, S("bool")));
     ir_block_t **hd = malloc(sizeof(ir_block_t *) * (n + 1));
-    th_type     *bt = ir_type_parse(m, "bool");
+    th_type     *bt = ir_type_parse(m, S("bool"));
     char         nm[32];
 
     for (uint32_t i = 0; i < locals; i++) {
-        snprintf(nm, sizeof nm, "v%u", i);
-        ir_local_add(f, nm, bt);
+        ir_local_add(f, named(nm, sizeof nm, "v%u", i), bt);
     }
 
     for (uint32_t i = 0; i <= n; i++) {
-        snprintf(nm, sizeof nm, "h%u", i);
-        hd[i] = ir_block_add(f, nm);
+        hd[i] = ir_block_add(f, named(nm, sizeof nm, "h%u", i));
     }
 
     for (uint32_t i = 0; i < n; i++) {
-        snprintf(nm, sizeof nm, "t%u", i);
-
-        ir_block_t *t = ir_block_add(f, nm);
-
-        snprintf(nm, sizeof nm, "e%u", i);
-
-        ir_block_t *e  = ir_block_add(f, nm);
+        ir_block_t *t = ir_block_add(f, named(nm, sizeof nm, "t%u", i));
+        ir_block_t *e  = ir_block_add(f, named(nm, sizeof nm, "e%u", i));
         ir_instr_t *br = ir_instr_add(hd[i], IR_OP_BRANCH);
 
         ir_instr_operand_value(br, cv);
@@ -250,8 +259,7 @@ static ir_module_t *webbed(ir_ctx_t *c, uint32_t n, uint32_t locals)
 
         ir_instr_t *rd = ir_instr_add(e, IR_OP_COPY);
 
-        snprintf(nm, sizeof nm, "r%u", i);
-        ir_instr_set_dest(rd, nm, bt);
+        ir_instr_set_dest(rd, named(nm, sizeof nm, "r%u", i), bt);
         ir_instr_operand_local(rd, f->locals[i % locals]);
 
         ir_instr_t *j1 = ir_instr_add(t, IR_OP_JUMP);
@@ -348,22 +356,21 @@ static void test_a_record_is_checked_once_not_once_per_mention(void)
     for (uint32_t mentions = 50; mentions <= 400; mentions *= 8) {
         ir_ctx_t    *c   = ir_ctx_new();
         ir_diags_t  *d   = ir_diags_new(c, nullptr);
-        ir_module_t *mod = ir_module_new(c, "m", &ir_profile_bce, "t");
-        th_type     *rec = ir_type_parse(mod, "(x: i32, y: i32)");
-        ir_func_t   *f   = ir_func_add(mod, "f",
-                                       ir_type_parse(mod, "() -> void"),
+        ir_module_t *mod = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
+        th_type     *rec = ir_type_parse(mod, S("(x: i32, y: i32)"));
+        ir_func_t   *f   = ir_func_add(mod, S("f"),
+                                       ir_type_parse(mod, S("() -> void")),
                                        IR_LINK_EXTERNAL);
-        ir_block_t  *b   = ir_block_add(f, "entry");
+        ir_block_t  *b   = ir_block_add(f, S("entry"));
 
-        ir_layout_pin_member(mod, rec, "x", 0, 32);
-        ir_layout_pin_member(mod, rec, "y", 16, 32);
+        ir_layout_pin_member(mod, rec, S("x"), 0, 32);
+        ir_layout_pin_member(mod, rec, S("y"), 16, 32);
 
         for (uint32_t i = 0; i < mentions; i++) {
             char        nm[32];
             ir_instr_t *in = ir_instr_add(b, IR_OP_UNDEF);
 
-            snprintf(nm, sizeof nm, "v%u", i);
-            ir_instr_set_dest(in, nm, rec);
+            ir_instr_set_dest(in, named(nm, sizeof nm, "v%u", i), rec);
         }
         ir_instr_add(b, IR_OP_RETURN);
         ir_module_establish(mod, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -392,25 +399,18 @@ static void test_a_record_is_checked_once_not_once_per_mention(void)
 
 static ir_module_t *looped(ir_ctx_t *c, uint32_t n)
 {
-    ir_module_t *m  = ir_module_new(c, "m", &ir_profile_bce, "t");
-    ir_func_t   *f  = ir_func_add(m, "f", ir_type_parse(m, "(bool) -> void"),
+    ir_module_t *m  = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t   *f  = ir_func_add(m, S("f"),
+                                  ir_type_parse(m, S("(bool) -> void")),
                                   IR_LINK_EXTERNAL);
-    ir_value_t  *cv = ir_param_add(f, "c", ir_type_parse(m, "bool"));
-    ir_block_t  *at = ir_block_add(f, "entry");
+    ir_value_t  *cv = ir_param_add(f, S("c"), ir_type_parse(m, S("bool")));
+    ir_block_t  *at = ir_block_add(f, S("entry"));
     char         nm[32];
 
     for (uint32_t i = 0; i < n; i++) {
-        snprintf(nm, sizeof nm, "head%u", i);
-
-        ir_block_t *head = ir_block_add(f, nm);
-
-        snprintf(nm, sizeof nm, "body%u", i);
-
-        ir_block_t *body = ir_block_add(f, nm);
-
-        snprintf(nm, sizeof nm, "out%u", i);
-
-        ir_block_t *out = ir_block_add(f, nm);
+        ir_block_t *head = ir_block_add(f, named(nm, sizeof nm, "head%u", i));
+        ir_block_t *body = ir_block_add(f, named(nm, sizeof nm, "body%u", i));
+        ir_block_t *out  = ir_block_add(f, named(nm, sizeof nm, "out%u", i));
         ir_instr_t *j0  = ir_instr_add(at, IR_OP_JUMP);
         ir_instr_t *br  = ir_instr_add(head, IR_OP_BRANCH);
         ir_instr_t *j1  = ir_instr_add(body, IR_OP_JUMP);
@@ -471,27 +471,23 @@ static void test_splitting_a_wide_join_is_linear(void)
         uint32_t     n  = 800 * s;
         ir_ctx_t    *c  = ir_ctx_new();
         ir_diags_t  *d  = ir_diags_new(c, nullptr);
-        ir_module_t *m  = ir_module_new(c, "m", &ir_profile_bce, "t");
-        ir_func_t   *f  = ir_func_add(m, "f",
-                                      ir_type_parse(m, "(bool, i32) -> void"),
+        ir_module_t *m  = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
+        ir_func_t   *f  = ir_func_add(m, S("f"),
+                                      ir_type_parse(m, S("(bool, i32) -> void")),
                                       IR_LINK_EXTERNAL);
-        ir_value_t  *cv = ir_param_add(f, "c", ir_type_parse(m, "bool"));
-        ir_value_t  *av = ir_param_add(f, "a", ir_type_parse(m, "i32"));
-        ir_block_t  *e  = ir_block_add(f, "entry");
-        ir_block_t  *j  = ir_block_add(f, "join");
+        ir_value_t  *cv = ir_param_add(f, S("c"), ir_type_parse(m, S("bool")));
+        ir_value_t  *av = ir_param_add(f, S("a"), ir_type_parse(m, S("i32")));
+        ir_block_t  *e  = ir_block_add(f, S("entry"));
+        ir_block_t  *j  = ir_block_add(f, S("join"));
         ir_instr_t  *sw = ir_instr_add(e, IR_OP_SWITCH);
         char         nm[32];
 
         ir_instr_operand_value(sw, av);
 
         for (uint32_t i = 0; i < n; i++) {
-            snprintf(nm, sizeof nm, "arm%u", i);
-
-            ir_block_t *arm = ir_block_add(f, nm);
-
-            snprintf(nm, sizeof nm, "tail%u", i);
-
-            ir_block_t *tail = ir_block_add(f, nm);
+            ir_block_t *arm  = ir_block_add(f, named(nm, sizeof nm, "arm%u", i));
+            ir_block_t *tail = ir_block_add(f,
+                                            named(nm, sizeof nm, "tail%u", i));
             ir_instr_t *br   = ir_instr_add(arm, IR_OP_BRANCH);
             ir_instr_t *jt   = ir_instr_add(tail, IR_OP_JUMP);
 
@@ -506,8 +502,8 @@ static void test_splitting_a_wide_join_is_linear(void)
         for (uint32_t i = 0; i < 20; i++) {
             ir_instr_t *phi = ir_instr_add(j, IR_OP_PHI);
 
-            snprintf(nm, sizeof nm, "p%u", i);
-            ir_instr_set_dest(phi, nm, ir_type_parse(m, "i32"));
+            ir_instr_set_dest(phi, named(nm, sizeof nm, "p%u", i),
+                              ir_type_parse(m, S("i32")));
 
             for (uint32_t k = 0; k < f->n_blocks; k++) {
                 if (f->blocks[k] != j) {
@@ -562,14 +558,15 @@ static void test_parsing_is_linear_in_the_annotations(void)
                                    "      %%v%u: i32 = copy %%a "
                                    "!ir.of(%%v%u)\n", i, i);
         }
-        snprintf(src + at, room - at, "      return %%a\n  }\n}\n");
+        at += (size_t)snprintf(src + at, room - at,
+                               "      return %%a\n  }\n}\n");
 
         const ir_profile_t *const profiles[] = {&ir_profile_bce};
         ir_ctx_t                 *c          = ir_ctx_new();
         ir_diags_t               *d          = ir_diags_new(c, nullptr);
         clock_t                   a          = clock();
-        ir_module_t              *m          = ir_module_parse(c, src, 0,
-                                                               profiles, 1, d);
+        ir_module_t              *m          = ir_module_parse(
+            c, core_string_borrow(src, at), 0, profiles, 1, d);
 
         double now = ms(a, clock());
 
@@ -607,24 +604,24 @@ static void test_typing_does_not_cost_the_rule_count(void)
 
     for (uint32_t rules = 256; rules <= 16384; rules *= 64) {
         ir_ctx_t    *c  = ir_ctx_new();
-        ir_module_t *m  = ir_module_new(c, "m", &ir_profile_bce, "t");
+        ir_module_t *m  = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
         ir_rules_t  *rs = ir_rules_new(c);
-        ir_func_t   *f  = ir_func_add(m, "f",
-                                      ir_type_parse(m, "(i32) -> void"),
+        ir_func_t   *f  = ir_func_add(m, S("f"),
+                                      ir_type_parse(m, S("(i32) -> void")),
                                       IR_LINK_EXTERNAL);
-        ir_value_t  *av = ir_param_add(f, "a", ir_type_parse(m, "i32"));
-        ir_block_t  *b  = ir_block_add(f, "entry");
+        ir_value_t  *av = ir_param_add(f, S("a"), ir_type_parse(m, S("i32")));
+        ir_block_t  *b  = ir_block_add(f, S("entry"));
 
         for (uint32_t i = 0; i < rules; i++) {
             char nm[32];
 
-            snprintf(nm, sizeof nm, "filler%u", i);
-            ir_rules_add(rs, (ir_rule_t){.name      = nm,
-                                         .op        = IR_OP_SELECT,
-                                         .match     = IR_MATCH_DEFAULT,
-                                         .type_rule = decline});
+            ir_rules_add(rs, (ir_rule_t){
+                                 .name = named(nm, sizeof nm, "filler%u", i),
+                                 .op        = IR_OP_SELECT,
+                                 .match     = IR_MATCH_DEFAULT,
+                                 .type_rule = decline});
         }
-        ir_rules_add(rs, (ir_rule_t){.name      = "the-one-that-matches",
+        ir_rules_add(rs, (ir_rule_t){.name      = S("the-one-that-matches"),
                                      .op        = IR_OP_ADD,
                                      .match     = IR_MATCH_DEFAULT,
                                      .type_rule = decline});
@@ -633,10 +630,10 @@ static void test_typing_does_not_cost_the_rule_count(void)
             char        nm[32];
             ir_instr_t *in = ir_instr_add(b, IR_OP_ADD);
 
-            snprintf(nm, sizeof nm, "v%u", i);
             ir_instr_operand_value(in, av);
             ir_instr_operand_value(in, av);
-            ir_instr_set_dest(in, nm, ir_type_parse(m, "i32"));
+            ir_instr_set_dest(in, named(nm, sizeof nm, "v%u", i),
+                              ir_type_parse(m, S("i32")));
         }
         ir_instr_add(b, IR_OP_RETURN);
 
@@ -674,18 +671,18 @@ static void test_a_long_function_is_not_a_long_call_chain(void)
     const uint32_t n = 60000;
     ir_ctx_t      *c = ir_ctx_new();
     ir_diags_t    *d = ir_diags_new(c, nullptr);
-    ir_module_t   *m = ir_module_new(c, "m", &ir_profile_bce, "t");
-    ir_func_t     *f = ir_func_add(m, "f", ir_type_parse(m, "(i32) -> void"),
+    ir_module_t   *m = ir_module_new(c, S("m"), &ir_profile_bce, S("t"));
+    ir_func_t     *f = ir_func_add(m, S("f"),
+                                   ir_type_parse(m, S("(i32) -> void")),
                                    IR_LINK_EXTERNAL);
-    ir_value_t    *a = ir_param_add(f, "a", ir_type_parse(m, "i32"));
+    ir_value_t    *a = ir_param_add(f, S("a"), ir_type_parse(m, S("i32")));
     ir_block_t   **b = malloc(sizeof(ir_block_t *) * n);
     char           nm[24];
 
-    ir_local_add(f, "x", ir_type_parse(m, "i32"));
+    ir_local_add(f, S("x"), ir_type_parse(m, S("i32")));
 
     for (uint32_t i = 0; i < n; i++) {
-        snprintf(nm, sizeof nm, "b%u", i);
-        b[i] = ir_block_add(f, nm);
+        b[i] = ir_block_add(f, named(nm, sizeof nm, "b%u", i));
     }
 
     for (uint32_t i = 0; i + 1 < n; i++) {
@@ -734,12 +731,13 @@ static void test_the_shapes_that_were_quadratic(void)
             at += snprintf(src + at, cap - (size_t)at,
                            "      %%v%u: i32 = copy %%a\n", i);
         }
-        snprintf(src + at, cap - (size_t)at, "      unreachable\n  }\n}\n");
+        at += snprintf(src + at, cap - (size_t)at,
+                       "      unreachable\n  }\n}\n");
 
         const ir_profile_t *const profiles[] = {&ir_profile_bce};
         clock_t                   t   = clock();
-        ir_module_t              *m   = ir_module_parse(c, src, 0, profiles, 1,
-                                                        d);
+        ir_module_t              *m   = ir_module_parse(
+            c, core_string_borrow(src, (size_t)at), 0, profiles, 1, d);
         double                    now = ms(t, clock());
 
         check("a long straight-line block parses", m != nullptr);
@@ -756,12 +754,13 @@ static void test_the_shapes_that_were_quadratic(void)
         free(src);
     }
 
-    ir_module_t *sm = ir_module_new(c, "s", &ir_profile_bce, "t");
-    ir_func_t   *sf = ir_func_add(sm, "f", ir_type_parse(sm, "(i32) -> void"),
+    ir_module_t *sm = ir_module_new(c, S("s"), &ir_profile_bce, S("t"));
+    ir_func_t   *sf = ir_func_add(sm, S("f"),
+                                  ir_type_parse(sm, S("(i32) -> void")),
                                   IR_LINK_EXTERNAL);
-    ir_value_t  *sv = ir_param_add(sf, "s", ir_type_parse(sm, "i32"));
-    ir_block_t  *se = ir_block_add(sf, "entry");
-    ir_block_t  *so = ir_block_add(sf, "out");
+    ir_value_t  *sv = ir_param_add(sf, S("s"), ir_type_parse(sm, S("i32")));
+    ir_block_t  *se = ir_block_add(sf, S("entry"));
+    ir_block_t  *so = ir_block_add(sf, S("out"));
     ir_instr_t  *sw = ir_instr_add(se, IR_OP_SWITCH);
 
     ir_instr_operand_value(sw, sv);
@@ -780,18 +779,18 @@ static void test_the_shapes_that_were_quadratic(void)
     check("a switch of 4000 arms structures and verifies in one pass each",
           ms(t1, clock()) < BUDGET_MS);
 
-    ir_module_t *tm = ir_module_new(c, "t", &ir_profile_bce, "t");
-    ir_func_t   *tf = ir_func_add(tm, "f", ir_type_parse(tm, "() -> void"),
+    ir_module_t *tm = ir_module_new(c, S("t"), &ir_profile_bce, S("t"));
+    ir_func_t   *tf = ir_func_add(tm, S("f"),
+                                  ir_type_parse(tm, S("() -> void")),
                                   IR_LINK_EXTERNAL);
-    ir_block_t  *tb = ir_block_add(tf, "entry");
+    ir_block_t  *tb = ir_block_add(tf, S("entry"));
     char         ty[48];
 
     for (uint32_t i = 0; i < 4000; i++) {
-        snprintf(ty, sizeof ty, "array[i32; %u]", i + 1);
+        core_string_t text = named(ty, sizeof ty, "array[i32; %u]", i + 1);
+        ir_instr_t   *in   = ir_instr_add(tb, IR_OP_SIZEOF);
 
-        ir_instr_t *in = ir_instr_add(tb, IR_OP_SIZEOF);
-
-        ir_instr_operand_type(in, ir_type_parse(tm, ty));
+        ir_instr_operand_type(in, ir_type_parse(tm, text));
     }
     ir_instr_add(tb, IR_OP_UNREACHABLE);
     ir_module_establish(tm, IR_PROP_PARSED | IR_PROP_TYPED);
@@ -799,7 +798,7 @@ static void test_the_shapes_that_were_quadratic(void)
     clock_t t2 = clock();
 
     ir_layout_run(tm, d);
-    free(ir_module_print(tm));
+    core_free(ir_module_print(tm).data);
     check("4000 distinct types lay out and print in one pass each",
           ms(t2, clock()) < BUDGET_MS);
 

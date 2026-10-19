@@ -20,14 +20,14 @@ bool ir_span_known(ir_span_t s)
 }
 
 ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
-                           ir_span_t span, const char *agent,
+                           ir_span_t span, core_string_t agent,
                            ir_origin_t *parent)
 {
     if (!ctx) {
         return nullptr;
     }
 
-    if (kind != IR_ORIGIN_SOURCE && !agent) {
+    if (kind != IR_ORIGIN_SOURCE && !agent.data) {
         return nullptr;
     }
 
@@ -47,7 +47,7 @@ ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
 
     o->kind   = kind;
     o->span   = span;
-    o->agent  = agent ? ir_strdup(ctx, agent) : nullptr;
+    o->agent  = agent.data ? ir_strdup(ctx, agent) : (core_string_t){};
     o->parent = parent;
 
     return o;

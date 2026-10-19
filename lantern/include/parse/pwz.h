@@ -7,7 +7,7 @@
 typedef struct parse_token_stream_t parse_token_stream_t;
 
 typedef bool (*parse_pwz_disambig_fn)(void             *ud,
-                                    const char       *predicate,
+                                    core_string_t      predicate,
                                     parse_token_info_t *tok);
 
 typedef struct parse_pwz_parser_t parse_pwz_parser_t;

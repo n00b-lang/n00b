@@ -13,20 +13,35 @@
 #include "parse/tree_print.h"
 #include "scanner/token_stream.h"
 
-const char *ir_type_text(ir_module_t *m, th_type *t)
+core_string_t ir_type_text(ir_module_t *m, th_type *t)
 {
     if (!m || !t) {
-        return "?";
+        return CORE_STRING_STATIC("?");
     }
 
-    const char *s = th_print(ir_ctx_types(m->ctx), t);
+    core_string_t s = th_print(ir_ctx_types(m->ctx), t);
 
-    return s ? s : "?";
+    return s.data ? s : CORE_STRING_STATIC("?");
+}
+
+static void put_text(core_buffer_t *b, core_string_t s)
+{
+    core_buffer_append_string(b, s);
+}
+
+static void put_known(core_buffer_t *b, core_string_t s)
+{
+    if (s.data) {
+        core_buffer_append_string(b, s);
+    }
+    else {
+        core_buffer_puts(b, "?");
+    }
 }
 
 static void put_type(core_buffer_t *b, ir_module_t *m, th_type *t)
 {
-    core_buffer_puts(b, ir_type_text(m, t));
+    put_text(b, ir_type_text(m, t));
 }
 
 static void put_span(core_buffer_t *b, ir_module_t *m, ir_span_t s)
@@ -40,37 +55,37 @@ static void put_span(core_buffer_t *b, ir_module_t *m, ir_span_t s)
               s.end_byte, s.start_line, s.start_col, s.end_line, s.end_col);
 }
 
-const char *ir_origin_kind_name(ir_origin_kind_t k)
+core_string_t ir_origin_kind_name(ir_origin_kind_t k)
 {
     switch (k) {
     case IR_ORIGIN_SOURCE:
-        return "source";
+        return CORE_STRING_STATIC("source");
     case IR_ORIGIN_INLINED_FROM:
-        return "inlined";
+        return CORE_STRING_STATIC("inlined");
     case IR_ORIGIN_EXPANDED_FROM:
-        return "expanded";
+        return CORE_STRING_STATIC("expanded");
     case IR_ORIGIN_LOWERED_FROM:
-        return "lowered";
+        return CORE_STRING_STATIC("lowered");
     default:
-        return "generated";
+        return CORE_STRING_STATIC("generated");
     }
 }
 
-bool ir_origin_kind_from_name(const char *s, ir_origin_kind_t *out)
+bool ir_origin_kind_from_name(core_string_t s, ir_origin_kind_t *out)
 {
     static const struct {
-        const char      *name;
+        core_string_t    name;
         ir_origin_kind_t k;
     } tab[] = {
-        {"source", IR_ORIGIN_SOURCE},
-        {"inlined", IR_ORIGIN_INLINED_FROM},
-        {"expanded", IR_ORIGIN_EXPANDED_FROM},
-        {"lowered", IR_ORIGIN_LOWERED_FROM},
-        {"generated", IR_ORIGIN_GENERATED_BY},
+        {CORE_STRING_STATIC("source"), IR_ORIGIN_SOURCE},
+        {CORE_STRING_STATIC("inlined"), IR_ORIGIN_INLINED_FROM},
+        {CORE_STRING_STATIC("expanded"), IR_ORIGIN_EXPANDED_FROM},
+        {CORE_STRING_STATIC("lowered"), IR_ORIGIN_LOWERED_FROM},
+        {CORE_STRING_STATIC("generated"), IR_ORIGIN_GENERATED_BY},
     };
 
-    for (size_t i = 0; i < sizeof(tab) / sizeof(tab[0]); i++) {
-        if (!strcmp(tab[i].name, s)) {
+    for (size_t i = 0; s.data && i < sizeof(tab) / sizeof(tab[0]); i++) {
+        if (core_string_eq(tab[i].name, s)) {
             *out = tab[i].k;
 
             return true;
@@ -83,9 +98,11 @@ bool ir_origin_kind_from_name(const char *s, ir_origin_kind_t *out)
 static void put_origin(core_buffer_t *b, const ir_origin_t *o)
 {
     for (; o; o = o->parent) {
-        core_buffer_printf(b, " !origin(%s, ", ir_origin_kind_name(o->kind));
+        core_buffer_puts(b, " !origin(");
+        put_text(b, ir_origin_kind_name(o->kind));
+        core_buffer_puts(b, ", ");
 
-        if (o->agent) {
+        if (o->agent.data) {
             ir_quote(b, o->agent);
         }
         else {
@@ -102,71 +119,76 @@ static void put_annots(core_buffer_t *b, ir_module_t *m, ir_annots_t *a)
     for (uint32_t i = 0; i < ir_annot_count(a); i++) {
         ir_annot_t *an = ir_annot_at(a, i);
 
-        if (!strcmp(an->key, "ir.comment")) {
+        if (core_string_eq(an->key, CORE_STRING_STATIC("ir.comment"))) {
             continue;
         }
 
-        core_buffer_printf(b, " !%s(", an->key);
+        core_buffer_puts(b, " !");
+        put_text(b, an->key);
+        core_buffer_puts(b, "(");
 
         switch (an->kind) {
         case IR_ANNOT_BOOL:
-            core_buffer_puts(b, an->b ? "true" : "false");
+            core_buffer_printf(b, "%s", an->b ? "true" : "false");
             break;
         case IR_ANNOT_INT:
             ir_lit_into(b, an->i);
             break;
         case IR_ANNOT_STR:
-            ir_quote(b, an->s ? an->s : "");
+            ir_quote(b, an->s.data ? an->s : CORE_STRING_STATIC(""));
             break;
         case IR_ANNOT_TYPE:
             put_type(b, m, an->t);
             break;
         case IR_ANNOT_VALUE:
             if (an->v && an->v->kind == IR_VAL_LOCAL) {
-                core_buffer_printf(b, "$%s", an->v->name ? an->v->name : "?");
+                core_buffer_puts(b, "$");
+                put_known(b, an->v->name);
             }
             else if (an->v && (an->v->kind == IR_VAL_GLOBAL
                                || an->v->kind == IR_VAL_FUNC)) {
-                core_buffer_printf(b, "@%s", an->v->name ? an->v->name : "?");
+                core_buffer_puts(b, "@");
+                put_known(b, an->v->name);
             }
             else {
-                core_buffer_printf(b, "%%%s",
-                                   an->v && an->v->name ? an->v->name : "?");
+                core_buffer_puts(b, "%");
+                put_known(b, an->v ? an->v->name : (core_string_t){});
             }
             break;
         }
 
         if (an->derived_from) {
-            const char *p = ir_prop_name(an->derived_from);
-
-            core_buffer_printf(b, " from %s", p ? p : "?");
+            core_buffer_puts(b, " from ");
+            put_known(b, ir_prop_name(an->derived_from));
         }
         core_buffer_puts(b, ")");
     }
 }
 
-static void put_comment(core_buffer_t *b, ir_annots_t *a, const char *indent)
+static void put_comment(core_buffer_t *b, ir_annots_t *a,
+                        core_string_t indent)
 {
-    ir_annot_t *c = ir_annot_get(a, "ir.comment");
+    ir_annot_t *c = ir_annot_get(a, CORE_STRING_STATIC("ir.comment"));
 
-    if (!c || c->kind != IR_ANNOT_STR || !c->s) {
+    if (!c || c->kind != IR_ANNOT_STR || !c->s.data) {
         return;
     }
 
-    const char *p = c->s;
+    core_string_t rest = c->s;
 
-    while (*p) {
-        const char *nl = strchr(p, '\n');
-        size_t      n  = nl ? (size_t)(nl - p) : strlen(p);
+    while (rest.u8_bytes) {
+        int64_t nl = core_string_find_byte(rest, '\n');
+        size_t  n  = nl >= 0 ? (size_t)nl : rest.u8_bytes;
 
-        core_buffer_printf(b, "%s# ", indent);
-        core_buffer_append(b, p, n);
+        put_text(b, indent);
+        core_buffer_puts(b, "# ");
+        put_text(b, core_string_slice(rest, 0, n));
         core_buffer_puts(b, "\n");
 
-        if (!nl) {
+        if (nl < 0) {
             break;
         }
-        p = nl + 1;
+        rest = core_string_slice(rest, n + 1, rest.u8_bytes);
     }
 }
 
@@ -179,19 +201,22 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         }
         else if (o->value->kind == IR_VAL_GLOBAL
                  || o->value->kind == IR_VAL_FUNC) {
-            core_buffer_printf(b, "@%s", o->value->name);
+            core_buffer_puts(b, "@");
+            put_text(b, o->value->name);
         }
         else if (o->value->kind == IR_VAL_LOCAL) {
-            core_buffer_printf(b, "$%s", o->value->name);
+            core_buffer_puts(b, "$");
+            put_text(b, o->value->name);
         }
         else {
-            core_buffer_printf(b, "%%%s", o->value->name);
+            core_buffer_puts(b, "%");
+            put_text(b, o->value->name);
         }
         break;
 
     case IR_OPD_SPREAD:
-        core_buffer_printf(b, "*%%%s",
-                           o->value && o->value->name ? o->value->name : "?");
+        core_buffer_puts(b, "*%");
+        put_known(b, o->value ? o->value->name : (core_string_t){});
         break;
 
     case IR_OPD_TYPE:
@@ -199,21 +224,32 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         break;
 
     case IR_OPD_NAME:
-        ir_quote(b, o->name ? o->name : "");
+        ir_quote(b, o->name.data ? o->name : CORE_STRING_STATIC(""));
         break;
 
     case IR_OPD_BLOCK:
-        core_buffer_puts(b, o->block ? o->block->name : "?");
+        if (o->block) {
+            put_text(b, o->block->name);
+        }
+        else {
+            core_buffer_puts(b, "?");
+        }
         break;
 
     case IR_OPD_DEFAULT_BLOCK:
-        core_buffer_printf(b, "default: %s", o->block ? o->block->name : "?");
+        core_buffer_puts(b, "default: ");
+        if (o->block) {
+            put_text(b, o->block->name);
+        }
+        else {
+            core_buffer_puts(b, "?");
+        }
         break;
 
     case IR_OPD_CONST:
         if (o->lit.is_float) {
-            if (o->lit.text) {
-                core_buffer_puts(b, o->lit.text);
+            if (o->lit.text.data) {
+                put_text(b, o->lit.text);
             }
             else {
                 core_buffer_printf(b, "%.17g", o->lit.f);
@@ -225,37 +261,56 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         break;
 
     case IR_OPD_PHI_ARM:
-        core_buffer_printf(b, "[%s: %%%s]", o->phi.block ? o->phi.block->name : "?",
-                  o->phi.value ? o->phi.value->name : "?");
+        core_buffer_puts(b, "[");
+        if (o->phi.block) {
+            put_text(b, o->phi.block->name);
+        }
+        else {
+            core_buffer_puts(b, "?");
+        }
+        core_buffer_puts(b, ": %");
+        if (o->phi.value) {
+            put_text(b, o->phi.value->name);
+        }
+        else {
+            core_buffer_puts(b, "?");
+        }
+        core_buffer_puts(b, "]");
         break;
 
     case IR_OPD_NAMED_ARG:
-        core_buffer_printf(b, "%s = ", o->named.name ? o->named.name : "?");
+        put_known(b, o->named.name);
+        core_buffer_puts(b, " = ");
 
         if (!o->named.value) {
             core_buffer_puts(b, "out");
             break;
         }
 
-        if (o->named.value && o->named.value->kind == IR_VAL_LOCAL) {
-            core_buffer_printf(b, "$%s", o->named.value->name);
+        if (o->named.value->kind == IR_VAL_LOCAL) {
+            core_buffer_puts(b, "$");
         }
-        else if (o->named.value
-                 && (o->named.value->kind == IR_VAL_GLOBAL
-                     || o->named.value->kind == IR_VAL_FUNC)) {
-            core_buffer_printf(b, "@%s", o->named.value->name);
+        else if (o->named.value->kind == IR_VAL_GLOBAL
+                 || o->named.value->kind == IR_VAL_FUNC) {
+            core_buffer_puts(b, "@");
         }
         else {
-            core_buffer_printf(b, "%%%s",
-                      o->named.value ? o->named.value->name : "?");
+            core_buffer_puts(b, "%");
         }
+        put_text(b, o->named.value->name);
         break;
 
     case IR_OPD_SWITCH_ARM:
         core_buffer_puts(b, "[");
         ir_lit_into(b, o->arm.value);
-        core_buffer_printf(b, ": %s]",
-                  o->arm.block ? o->arm.block->name : "?");
+        core_buffer_puts(b, ": ");
+        if (o->arm.block) {
+            put_text(b, o->arm.block->name);
+        }
+        else {
+            core_buffer_puts(b, "?");
+        }
+        core_buffer_puts(b, "]");
         break;
 
     case IR_OPD_ARG:
@@ -266,8 +321,13 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         break;
 
     case IR_OPD_FRESH:
-        core_buffer_printf(b, "fresh %%%s",
-            o->value ? o->value->name : "?");
+        core_buffer_puts(b, "fresh %");
+        if (o->value) {
+            put_text(b, o->value->name);
+        }
+        else {
+            core_buffer_puts(b, "?");
+        }
         break;
 
     case IR_OPD_MISSING:
@@ -277,9 +337,8 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
 }
 
 static void put_init(core_buffer_t *b, bool has, bool is_float,
-                     bool is_string, const char *text,
-                     const char *string, size_t string_length,
-                     double f, ir_lit_t lit)
+                     bool is_string, core_string_t text,
+                     core_string_t string, double f, ir_lit_t lit)
 {
     if (!has) {
         return;
@@ -287,13 +346,13 @@ static void put_init(core_buffer_t *b, bool has, bool is_float,
     core_buffer_puts(b, " = ");
 
     if (is_string) {
-        ir_quote_n(b, string, string_length);
+        ir_quote(b, string);
         return;
     }
 
     if (is_float) {
-        if (text) {
-            core_buffer_puts(b, text);
+        if (text.data) {
+            put_text(b, text);
         }
         else {
             core_buffer_printf(b, "%.17g", f);
@@ -313,7 +372,7 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
     }
     switch (value->kind) {
     case IR_GLOBAL_INIT_BOOL:
-        core_buffer_puts(b, value->boolean ? "true" : "false");
+        core_buffer_printf(b, "%s", value->boolean ? "true" : "false");
         break;
     case IR_GLOBAL_INIT_INT:
         ir_lit_into(b, value->integer);
@@ -325,17 +384,15 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
         core_buffer_puts(b, "nil");
         break;
     case IR_GLOBAL_INIT_STRING:
-        ir_quote_n(b, value->string.bytes, value->string.length);
+        ir_quote(b, value->string);
         break;
     case IR_GLOBAL_INIT_SYMBOL:
-        core_buffer_printf(b, "@%s",
-            value->symbol && value->symbol->name ? value->symbol->name : "?");
+        core_buffer_puts(b, "@");
+        put_known(b, value->symbol ? value->symbol->name : (core_string_t){});
         break;
     case IR_GLOBAL_INIT_PHASE_RESULT:
         core_buffer_puts(b, "$");
-        ir_quote_n(b, value->phase_result.identifier,
-            value->phase_result.identifier
-                ? strlen(value->phase_result.identifier) : 0);
+        ir_quote(b, value->phase_result.identifier);
         break;
     case IR_GLOBAL_INIT_TYPE:
         core_buffer_puts(b, "type(");
@@ -363,17 +420,19 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
         core_buffer_puts(b, "{");
         for (size_t i = 0; i < value->aggregate.count; i++) {
             const ir_global_init_value_t *item = &value->aggregate.items[i];
-            core_buffer_printf(b, "%s%s = ", i ? ", " : " ",
-                item->member ? item->member : "?");
+            core_buffer_printf(b, "%s", i ? ", " : " ");
+            put_known(b, item->member);
+            core_buffer_puts(b, " = ");
             put_global_init_value(b, m, item);
         }
-        core_buffer_puts(b, value->aggregate.count ? " }" : "}");
+        core_buffer_printf(b, "%s", value->aggregate.count ? " }" : "}");
         break;
     case IR_GLOBAL_INIT_VARIANT:
-        core_buffer_printf(b, "variant{%s = ",
-            value->aggregate.count == 1 && value->aggregate.items
-                && value->aggregate.items[0].member
-                ? value->aggregate.items[0].member : "?");
+        core_buffer_puts(b, "variant{");
+        put_known(b, value->aggregate.count == 1 && value->aggregate.items
+                         ? value->aggregate.items[0].member
+                         : (core_string_t){});
+        core_buffer_puts(b, " = ");
         if (value->aggregate.count == 1 && value->aggregate.items)
             put_global_init_value(b, m, value->aggregate.items);
         else core_buffer_puts(b, "?");
@@ -402,10 +461,12 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
 
 static void put_local_slot(core_buffer_t *b, ir_module_t *m, const ir_local_t *l)
 {
-    core_buffer_printf(b, "$%s: ", l->name);
+    core_buffer_puts(b, "$");
+    put_text(b, l->name);
+    core_buffer_puts(b, ": ");
     put_type(b, m, l->type);
     put_init(b, l->has_init, l->init_is_float, false, l->init_text,
-             nullptr, 0, l->init_f, l->init);
+             (core_string_t){}, l->init_f, l->init);
 }
 
 static bool put_layout_val(core_buffer_t *b, ir_module_t *m,
@@ -418,11 +479,13 @@ static bool put_layout_val(core_buffer_t *b, ir_module_t *m,
     }
 
     if (v->state == IR_LAYOUT_SYMBOLIC) {
-        core_buffer_printf(b, "%s(%s", ir_symkind_name(v->sym), ir_type_text(m, v->of));
+        put_text(b, ir_symkind_name(v->sym));
+        core_buffer_puts(b, "(");
+        put_text(b, ir_type_text(m, v->of));
 
         if (v->sym == IR_SYM_OFFSETOF) {
             core_buffer_puts(b, ", ");
-            ir_quote(b, v->member ? v->member : "");
+            ir_quote(b, v->member);
         }
         core_buffer_puts(b, ")");
 
@@ -461,16 +524,18 @@ static void put_layouts(core_buffer_t *b, ir_module_t *m)
                 continue;
             }
 
-            core_buffer_printf(b, "\n  layout %s", ir_type_text(m, t));
+            core_buffer_puts(b, "\n  layout ");
+            put_text(b, ir_type_text(m, t));
 
-            const char *module_target = ir_module_target(m);
+            core_string_t module_target = ir_module_target(m);
 
-            if (d->target && (!module_target
-                              || strcmp(d->target, module_target))) {
+            if (d->target.data
+                && (!module_target.data
+                    || !core_string_eq(d->target, module_target))) {
                 core_buffer_puts(b, " for ");
                 ir_quote(b, d->target);
             }
-            else if (!d->target && module_target) {
+            else if (!d->target.data && module_target.data) {
                 core_buffer_puts(b, " without target");
             }
             core_buffer_puts(b, " {\n");
@@ -525,7 +590,9 @@ static void put_layouts(core_buffer_t *b, ir_module_t *m)
                 if (!ml->bit_offset.authored) {
                     continue;
                 }
-                core_buffer_printf(b, "    %s @ bits %llu..%llu\n", ml->name,
+                core_buffer_puts(b, "    ");
+                put_text(b, ml->name);
+                core_buffer_printf(b, " @ bits %llu..%llu\n",
                           (unsigned long long)ml->bit_offset.value,
                           (unsigned long long)(ml->bit_offset.value
                                                + ml->bit_width.value));
@@ -545,8 +612,11 @@ static void put_typedefs(core_buffer_t *b, ir_module_t *m)
         if (!def) {
             continue;
         }
-        core_buffer_printf(b, "\n  type %s = %s\n", ir_type_text(m, t),
-                  ir_type_text(m, def));
+        core_buffer_puts(b, "\n  type ");
+        put_text(b, ir_type_text(m, t));
+        core_buffer_puts(b, " = ");
+        put_text(b, ir_type_text(m, def));
+        core_buffer_puts(b, "\n");
     }
 }
 
@@ -556,18 +626,25 @@ static bool on_module_pre(ir_visit_t *v)
     ir_module_t *m  = v->module;
     ir_annots_t *ma = ir_module_annots(m);
 
-    put_comment(b, ma, "");
-    core_buffer_printf(b, "module %s {\n", ir_module_name(m));
-    core_buffer_printf(b, "  profile %s\n", ir_module_profile(m)->name);
+    put_comment(b, ma, CORE_STRING_STATIC(""));
+    core_buffer_puts(b, "module ");
+    put_text(b, ir_module_name(m));
+    core_buffer_puts(b, " {\n");
+    core_buffer_puts(b, "  profile ");
+    put_text(b, ir_module_profile(m)->name);
+    core_buffer_puts(b, "\n");
 
-    if (ir_module_target(m)) {
-        core_buffer_printf(b, "  target %s\n", ir_module_target(m));
+    if (ir_module_target(m).data) {
+        core_buffer_puts(b, "  target ");
+        put_text(b, ir_module_target(m));
+        core_buffer_puts(b, "\n");
     }
 
     bool any = false;
 
     for (uint32_t i = 0; i < ir_annot_count(ma); i++) {
-        if (strcmp(ir_annot_at(ma, i)->key, "ir.comment")) {
+        if (!core_string_eq(ir_annot_at(ma, i)->key,
+                            CORE_STRING_STATIC("ir.comment"))) {
             any = true;
         }
     }
@@ -598,7 +675,7 @@ static bool on_global(ir_visit_t *v)
     ir_global_t *g = v->global;
 
     core_buffer_puts(b, "\n");
-    put_comment(b, &g->annots, "  ");
+    put_comment(b, &g->annots, CORE_STRING_STATIC("  "));
     core_buffer_puts(b, "  ");
 
     if (g->is_static) {
@@ -610,9 +687,12 @@ static bool on_global(ir_visit_t *v)
     }
 
     if (g->mutability != IR_MUT_MUTABLE) {
-        core_buffer_printf(b, "%s ", ir_mutability_name(g->mutability));
+        put_text(b, ir_mutability_name(g->mutability));
+        core_buffer_puts(b, " ");
     }
-    core_buffer_printf(b, "global @%s: ", g->name);
+    core_buffer_puts(b, "global @");
+    put_text(b, g->name);
+    core_buffer_puts(b, ": ");
     put_type(b, m, g->type);
     if (g->has_static_initializer) {
         core_buffer_puts(b, " = ");
@@ -628,7 +708,9 @@ static bool on_global(ir_visit_t *v)
 
 static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
 {
-    core_buffer_printf(b, "func @%s(", f->name);
+    core_buffer_puts(b, "func @");
+    put_text(b, f->name);
+    core_buffer_puts(b, "(");
 
     bool first = true;
 
@@ -639,7 +721,9 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
         if (parameter && parameter->mode != TH_IN)
             core_buffer_printf(b, "%s ", parameter->mode == TH_OUT ? "out"
                 : parameter->mode == TH_INOUT ? "inout" : "consume");
-        core_buffer_printf(b, "%%%s: ", f->params[i]->name);
+        core_buffer_puts(b, "%");
+        put_text(b, f->params[i]->name);
+        core_buffer_puts(b, ": ");
         put_type(b, m, f->params[i]->type);
         put_annots(b, m, ir_value_annots(f->params[i]));
         first = false;
@@ -672,7 +756,9 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
         for (uint32_t i = 0; i < f->n_params; i++)
             if (f->params[i]->is_rest) rest_value = f->params[i];
         if (rest_value) {
-            core_buffer_printf(b, "%%%s: ", rest_value->name);
+            core_buffer_puts(b, "%");
+            put_text(b, rest_value->name);
+            core_buffer_puts(b, ": ");
         }
         put_type(b, m, rest->type);
         if (rest_value) put_annots(b, m, ir_value_annots(rest_value));
@@ -682,7 +768,9 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
     for (size_t i = 0; i < th_func_nkw(f->type); i++) {
         const th_kwparam *k = th_func_kw(f->type, i);
 
-        core_buffer_printf(b, "%s%s: ", first ? "" : ", ", k->name);
+        core_buffer_printf(b, "%s", first ? "" : ", ");
+        put_text(b, k->name);
+        core_buffer_puts(b, ": ");
         put_type(b, m, k->type);
         ir_value_t *kw_value = ir_value_find(f, k->name);
         if (kw_value) put_annots(b, m, ir_value_annots(kw_value));
@@ -704,7 +792,7 @@ static bool on_func_pre(ir_visit_t *v)
     ir_func_t   *f = v->func;
 
     core_buffer_puts(b, "\n");
-    put_comment(b, &f->annots, "  ");
+    put_comment(b, &f->annots, CORE_STRING_STATIC("  "));
     core_buffer_puts(b, "  ");
 
     switch (f->linkage) {
@@ -739,11 +827,12 @@ static bool on_local(ir_visit_t *v)
     core_buffer_t       *b = v->user;
     ir_local_t  *l = v->local;
 
-    put_comment(b, &l->annots, "    ");
+    put_comment(b, &l->annots, CORE_STRING_STATIC("    "));
     core_buffer_puts(b, "    ");
 
     if (l->mutability != IR_MUT_MUTABLE) {
-        core_buffer_printf(b, "%s ", ir_mutability_name(l->mutability));
+        put_text(b, ir_mutability_name(l->mutability));
+        core_buffer_puts(b, " ");
     }
     core_buffer_puts(b, "local ");
     put_local_slot(b, v->module, l);
@@ -762,8 +851,10 @@ static bool on_block_pre(ir_visit_t *v)
     if (v->index || v->func->n_locals) {
         core_buffer_puts(b, "\n");
     }
-    put_comment(b, &bb->annots, "    ");
-    core_buffer_printf(b, "    block %s:", bb->name);
+    put_comment(b, &bb->annots, CORE_STRING_STATIC("    "));
+    core_buffer_puts(b, "    block ");
+    put_text(b, bb->name);
+    core_buffer_puts(b, ":");
     put_span(b, v->module, bb->span);
     put_origin(b, bb->origin);
     put_annots(b, v->module, &bb->annots);
@@ -778,22 +869,27 @@ static bool on_instr_pre(ir_visit_t *v)
     ir_module_t *m  = v->module;
     ir_instr_t  *in = v->instr;
 
-    put_comment(b, &in->annots, "      ");
+    put_comment(b, &in->annots, CORE_STRING_STATIC("      "));
     core_buffer_puts(b, "      ");
 
     if (in->dest_kind == IR_DEST_VALUE && in->dest) {
-        core_buffer_printf(b, "%%%s: ", in->dest->name);
+        core_buffer_puts(b, "%");
+        put_text(b, in->dest->name);
+        core_buffer_puts(b, ": ");
         put_type(b, m, in->dest->type);
         core_buffer_puts(b, " = ");
     }
     else if (in->dest_kind == IR_DEST_LOCAL && in->dest_local) {
-        core_buffer_printf(b, "$%s = ", in->dest_local->name);
+        core_buffer_puts(b, "$");
+        put_text(b, in->dest_local->name);
+        core_buffer_puts(b, " = ");
     }
 
-    core_buffer_puts(b, ir_module_op_spelling(m, in->op));
+    put_text(b, ir_module_op_spelling(m, in->op));
 
     for (uint32_t i = 0; i < in->n_mods; i++) {
-        core_buffer_printf(b, " %s", in->mods[i]);
+        core_buffer_puts(b, " ");
+        put_text(b, in->mods[i]);
     }
 
     return true;
@@ -816,16 +912,21 @@ put_shape_constraint(core_buffer_t *b, const ir_shape_t *shape)
             break;
         case IR_SHAPE_EXTENT_COMPTIME:
             core_buffer_puts(b, "comptime");
-            if (extent.producer)
-                core_buffer_printf(b, ":producer=%s", extent.producer->name);
-            else if (extent.producer_identifier)
-                core_buffer_printf(b, ":producer=%s",
-                                   extent.producer_identifier);
+            if (extent.producer) {
+                core_buffer_puts(b, ":producer=");
+                put_text(b, extent.producer->name);
+            }
+            else if (extent.producer_identifier.data) {
+                core_buffer_puts(b, ":producer=");
+                put_text(b, extent.producer_identifier);
+            }
             break;
         case IR_SHAPE_EXTENT_RUNTIME:
             core_buffer_puts(b, "runtime");
-            if (extent.value)
-                core_buffer_printf(b, ":value=%%%s", extent.value->name);
+            if (extent.value) {
+                core_buffer_puts(b, ":value=%");
+                put_text(b, extent.value->name);
+            }
             break;
         case IR_SHAPE_EXTENT_UNRESOLVED:
             core_buffer_puts(b, "unresolved");
@@ -839,7 +940,7 @@ static bool on_operand(ir_visit_t *v)
 {
     core_buffer_t *b = v->user;
 
-    core_buffer_puts(b, v->index ? ", " : " ");
+    core_buffer_printf(b, "%s", v->index ? ", " : " ");
     put_operand(b, v->module, v->operand);
 
     return true;
@@ -859,10 +960,10 @@ static bool on_instr_post(ir_visit_t *v)
     return true;
 }
 
-char *ir_module_print(ir_module_t *m)
+core_string_t ir_module_print(ir_module_t *m)
 {
     if (!m) {
-        return nullptr;
+        return (core_string_t){};
     }
 
     core_buffer_t *b = core_buffer_empty();
@@ -879,26 +980,25 @@ char *ir_module_print(ir_module_t *m)
     ir_walk_run(w, m);
     ir_walk_free(w);
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }
 
-char *ir_text_format(const char *text, int32_t width)
+core_string_t ir_text_format(core_string_t text, int32_t width)
 {
-    parse_grammar_t *g = text ? ir_grammar() : nullptr;
+    parse_grammar_t *g = text.data ? ir_grammar() : nullptr;
 
     if (!g) {
-        return nullptr;
+        return (core_string_t){};
     }
 
-    size_t              len = strlen(text);
-    parse_token_stream_t *ts  = ir_lex(text, len);
+    parse_token_stream_t *ts = ir_lex(text);
     parse_pwz_parser_t   *p
-        = parse_pwz_new_for_start(g, ir_grammar_nt("module"));
-    char               *out = nullptr;
+        = parse_pwz_new_for_start(g, ir_grammar_nt(CORE_STRING_STATIC("module")));
+    core_string_t         out = {};
 
     if (parse_pwz_parse(p, ts)) {
         parse_print_opts_t o = {
-            .source = {.data = (char *)text, .u8_bytes = len},
+            .source = text,
             .width  = width,
             .indent = 2,
         };

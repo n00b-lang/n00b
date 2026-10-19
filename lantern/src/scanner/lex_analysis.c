@@ -2,6 +2,7 @@
 #include "private/parse/grammar.h"
 #include "private/scanner/lex_program.h"
 #include "lib/alloc.h"
+#include "lib/buffer.h"
 #include "unicode/encoding.h"
 
 #include <stddef.h>
@@ -49,26 +50,42 @@ enum {
     PRIORITY_COUNT,
 };
 
-static const char *
+static core_string_t
 kind_name(scan_lex_decl_kind_t kind)
 {
     switch (kind) {
-    case SCAN_LEX_DECL_COMMENT: return "comment";
-    case SCAN_LEX_DECL_STRING: return "string";
-    case SCAN_LEX_DECL_NUMBER: return "number";
-    case SCAN_LEX_DECL_SIGIL: return "sigil";
-    case SCAN_LEX_DECL_REGEX: return "regular-expression";
-    case SCAN_LEX_DECL_HEREDOC: return "heredoc";
-    case SCAN_LEX_DECL_EMBED: return "embedded-language";
-    case SCAN_LEX_DECL_FENCE: return "fence";
-    case SCAN_LEX_DECL_DIRECTIVE: return "directive";
-    case SCAN_LEX_DECL_OPERATOR: return "operator";
-    case SCAN_LEX_DECL_SOFT_KEYWORD: return "soft-keyword";
-    case SCAN_LEX_DECL_LITERAL_HOOK: return "literal-hook";
-    case SCAN_LEX_DECL_RECOVERY: return "recovery";
-    case SCAN_LEX_DECL_NONE: return "fixed-terminal";
+    case SCAN_LEX_DECL_COMMENT: return CORE_STRING_STATIC("comment");
+    case SCAN_LEX_DECL_STRING: return CORE_STRING_STATIC("string");
+    case SCAN_LEX_DECL_NUMBER: return CORE_STRING_STATIC("number");
+    case SCAN_LEX_DECL_SIGIL: return CORE_STRING_STATIC("sigil");
+    case SCAN_LEX_DECL_REGEX:
+        return CORE_STRING_STATIC("regular-expression");
+    case SCAN_LEX_DECL_HEREDOC: return CORE_STRING_STATIC("heredoc");
+    case SCAN_LEX_DECL_EMBED: return CORE_STRING_STATIC("embedded-language");
+    case SCAN_LEX_DECL_FENCE: return CORE_STRING_STATIC("fence");
+    case SCAN_LEX_DECL_DIRECTIVE: return CORE_STRING_STATIC("directive");
+    case SCAN_LEX_DECL_OPERATOR: return CORE_STRING_STATIC("operator");
+    case SCAN_LEX_DECL_SOFT_KEYWORD:
+        return CORE_STRING_STATIC("soft-keyword");
+    case SCAN_LEX_DECL_LITERAL_HOOK:
+        return CORE_STRING_STATIC("literal-hook");
+    case SCAN_LEX_DECL_RECOVERY: return CORE_STRING_STATIC("recovery");
+    case SCAN_LEX_DECL_NONE: return CORE_STRING_STATIC("fixed-terminal");
     }
-    return "token";
+    return CORE_STRING_STATIC("token");
+}
+
+__attribute__((format(printf, 2, 3))) static void
+set_error(core_string_t *error, const char *fmt, ...)
+{
+    core_buffer_t *buf = core_buffer_empty();
+    va_list        ap;
+
+    va_start(ap, fmt);
+    core_buffer_vprintf(buf, fmt, ap);
+    va_end(ap);
+    core_free(error->data);
+    *error = core_buffer_take_string(buf);
 }
 
 static int
@@ -248,25 +265,42 @@ common_prefix(core_string_t left, core_string_t right)
 }
 
 static void
-format_declaration(char *out, size_t bytes, const lex_opening_t *item)
+format_declaration(core_buffer_t *out, const lex_opening_t *item)
 {
+    core_string_t kind = kind_name(item->kind);
+
     if (item->origin.data) {
-        snprintf(out, bytes, "%s '%.*s' declared in '%.*s'",
-                 kind_name(item->kind),
-                 (int)item->spelling.u8_bytes, item->spelling.data,
-                 (int)item->origin.u8_bytes, item->origin.data);
+        core_buffer_printf(out, "%.*s '%.*s' declared in '%.*s'",
+                           (int)kind.u8_bytes, kind.data,
+                           (int)item->spelling.u8_bytes, item->spelling.data,
+                           (int)item->origin.u8_bytes, item->origin.data);
     }
     else {
-        snprintf(out, bytes, "%s '%.*s'",
-                 kind_name(item->kind),
-                 (int)item->spelling.u8_bytes, item->spelling.data);
+        core_buffer_printf(out, "%.*s '%.*s'",
+                           (int)kind.u8_bytes, kind.data,
+                           (int)item->spelling.u8_bytes, item->spelling.data);
     }
+}
+
+static void
+set_declaration_error(core_string_t *error, core_string_t prefix,
+                      const lex_opening_t *first, core_string_t relation,
+                      const lex_opening_t *second)
+{
+    core_buffer_t *buf = core_buffer_empty();
+
+    core_buffer_append_string(buf, prefix);
+    format_declaration(buf, first);
+    core_buffer_append_string(buf, relation);
+    format_declaration(buf, second);
+    core_free(error->data);
+    *error = core_buffer_take_string(buf);
 }
 
 static bool
 analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
                  lex_decl_origin_t *origins, size_t origin_count,
-                 char *error, size_t error_bytes,
+                 core_string_t *error,
                  scan_lex_issue_t **issues, size_t *issue_count)
 {
     size_t codepoint_count = 0;
@@ -403,13 +437,11 @@ analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
                 = &items[stack[depth - 1].opening];
             if (ancestor->spelling.u8_bytes == items[i].spelling.u8_bytes
                 && ancestor->kind == items[i].kind) {
-                char first[160];
-                char second[160];
-                format_declaration(first, sizeof(first), ancestor);
-                format_declaration(second, sizeof(second), &items[i]);
-                snprintf(error, error_bytes,
-                         "duplicate lexer declaration: %s conflicts with %s",
-                         first, second);
+                set_declaration_error(
+                    error,
+                    CORE_STRING_STATIC("duplicate lexer declaration: "),
+                    ancestor, CORE_STRING_STATIC(" conflicts with "),
+                    &items[i]);
                 valid = false;
                 break;
             }
@@ -448,13 +480,9 @@ analyze_openings(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
                 };
                 goto keep_opening;
             }
-            char first[160];
-            char second[160];
-            format_declaration(first, sizeof(first), &items[shadow]);
-            format_declaration(second, sizeof(second), &items[i]);
-            snprintf(error, error_bytes,
-                     "unreachable lexer declaration: %s shadows %s",
-                     first, second);
+            set_declaration_error(
+                error, CORE_STRING_STATIC("unreachable lexer declaration: "),
+                &items[shadow], CORE_STRING_STATIC(" shadows "), &items[i]);
             valid = false;
             break;
         }
@@ -572,13 +600,14 @@ scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
 
 static bool
 require_token(parse_grammar_t *grammar, core_string_t name,
-              const char *declaration, char *error, size_t error_bytes)
+              core_string_t declaration, core_string_t *error)
 {
     if (known_token(grammar, name)) {
         return true;
     }
-    snprintf(error, error_bytes, "%s emits unknown token '%.*s'",
-             declaration, (int)name.u8_bytes, name.data);
+    set_error(error, "%.*s emits unknown token '%.*s'",
+              (int)declaration.u8_bytes, declaration.data,
+              (int)name.u8_bytes, name.data);
     return false;
 }
 
@@ -590,8 +619,8 @@ string_item_compare(const void *left, const void *right)
 }
 
 static bool
-require_unique_outputs(const core_string_t *items, const char *declaration,
-                       char *error, size_t error_bytes)
+require_unique_outputs(const core_string_t *items, core_string_t declaration,
+                       core_string_t *error)
 {
     size_t count = 0;
     while (items && items[count].data) {
@@ -606,9 +635,9 @@ require_unique_outputs(const core_string_t *items, const char *declaration,
     bool unique = true;
     for (size_t i = 1; i < count; i++) {
         if (core_string_eq(sorted[i - 1], sorted[i])) {
-            snprintf(error, error_bytes,
-                     "%s declares duplicate output token '%.*s'",
-                     declaration, (int)sorted[i].u8_bytes, sorted[i].data);
+            set_error(error, "%.*s declares duplicate output token '%.*s'",
+                      (int)declaration.u8_bytes, declaration.data,
+                      (int)sorted[i].u8_bytes, sorted[i].data);
             unique = false;
             break;
         }
@@ -619,11 +648,12 @@ require_unique_outputs(const core_string_t *items, const char *declaration,
 
 static bool
 analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
-                char *error, size_t error_bytes)
+                core_string_t *error)
 {
 #define REQUIRE(name, declaration)                                            \
     do {                                                                       \
-        if (!require_token(grammar, name, declaration, error, error_bytes)) { \
+        if (!require_token(grammar, name, CORE_STRING_STATIC(declaration),    \
+                           error)) {                                           \
             return false;                                                      \
         }                                                                      \
     } while (0)
@@ -685,8 +715,9 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     for (const scan_lex_literal_hook_t *item = spec->literal_hooks;
          item && item->token.data; item++) {
         REQUIRE(item->token, "@lex-literal-hook");
-        if (!require_unique_outputs(item->outputs, "@lex-literal-hook",
-                                    error, error_bytes)) {
+        if (!require_unique_outputs(item->outputs,
+                                    CORE_STRING_STATIC("@lex-literal-hook"),
+                                    error)) {
             return false;
         }
         for (const core_string_t *output = item->outputs;
@@ -706,7 +737,7 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     for (const core_string_t *item = spec->soft_keywords;
          item && item->data; item++) {
         if (!parse_lookup_terminal(grammar, *item)) {
-            snprintf(error, error_bytes,
+            set_error(error,
                      "@lex-soft-keywords names unknown terminal '%.*s'",
                      (int)item->u8_bytes, item->data);
             return false;
@@ -941,21 +972,20 @@ collect_unused_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
 
 bool
 scan_lex_analyze_spec(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
-                      char *error, size_t error_bytes,
+                      core_string_t *error,
                       scan_lex_issue_t **issues, size_t *issue_count)
 {
-    if (!spec || !grammar || !error || !error_bytes
-        || !issues || !issue_count) {
+    if (!spec || !grammar || !error || !issues || !issue_count) {
         return false;
     }
-    error[0] = '\0';
+    *error = (core_string_t){0};
     *issues = nullptr;
     *issue_count = 0;
     size_t origin_count = 0;
     lex_decl_origin_t *origins = declaration_index(spec, &origin_count);
-    bool valid = analyze_outputs(spec, grammar, error, error_bytes)
+    bool valid = analyze_outputs(spec, grammar, error)
               && analyze_openings(spec, grammar, origins, origin_count,
-                                  error, error_bytes, issues, issue_count)
+                                  error, issues, issue_count)
               && collect_unused_outputs(spec, grammar, origins, origin_count,
                                         issues, issue_count);
     core_free(origins);

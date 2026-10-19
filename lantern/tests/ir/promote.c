@@ -1,25 +1,37 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir/pass.h"
 #include "ir/rule.h"
 #include "ir/text.h"
 #include "ir/verify.h"
+#include "lib/buffer.h"
 #include "harness.h"
+
+#define S(x) CORE_STRING_STATIC(x)
 
 static bool produced[IR_DIAG_COUNT];
 
 static const ir_profile_t *const PROFILES[] = {&ir_profile_bce};
 
 typedef struct {
-    ir_ctx_t    *ctx;
-    ir_module_t *m;
-    ir_diags_t  *d;
-    char        *out;
+    ir_ctx_t     *ctx;
+    ir_module_t  *m;
+    ir_diags_t   *d;
+    core_string_t out;
 } run_t;
 
-static run_t *load(const char *src)
+static bool has(core_string_t hay, core_string_t needle)
+{
+    return hay.data && core_string_find(hay, needle) >= 0;
+}
+
+static bool lacks(core_string_t hay, core_string_t needle)
+{
+    return hay.data && core_string_find(hay, needle) < 0;
+}
+
+static run_t *load(core_string_t src)
 {
     run_t *r = calloc(1, sizeof(run_t));
 
@@ -39,20 +51,21 @@ static void done(run_t *r)
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         produced[ir_diags_at(r->d, i)->code] = true;
     }
-    free(r->out);
+    core_free(r->out.data);
     ir_ctx_free(r->ctx);
     free(r);
 }
 
 static void snap(run_t *r)
 {
-    free(r->out);
+    core_free(r->out.data);
     r->out = ir_module_print(r->m);
 }
 
-#define MOD(...) "module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n"
+#define MOD(...) \
+    S("module m {\n  profile bce\n  target t\n\n" __VA_ARGS__ "}\n")
 
-static const char *DIAMOND = MOD(
+static const core_string_t DIAMOND = MOD(
     "  func @f(%a: i32, %c: bool) -> i32 {\n"
     "    local $x: i32\n"
     "    block entry:\n"
@@ -82,10 +95,10 @@ static void test_promote_establishes_ssa(void)
     check("the function has no locals left",
           ir_func_at(r->m, 0)->n_locals == 0);
     ir_func_t *function = ir_func_at(r->m, 0);
-    ir_value_t *write = ir_value_find(function, "x_0");
-    ir_value_t *read = ir_value_find(function, "res");
+    ir_value_t *write = ir_value_find(function, S("x_0"));
+    ir_value_t *read = ir_value_find(function, S("res"));
     ir_annot_t *write_marker = write && write->def
-        ? ir_annot_get(&write->def->annots, "ir.promoted_local_write")
+        ? ir_annot_get(&write->def->annots, S("ir.promoted_local_write"))
         : nullptr;
     check("promoted local copies retain write semantics",
           write_marker && write_marker->kind == IR_ANNOT_BOOL
@@ -93,11 +106,11 @@ static void test_promote_establishes_ssa(void)
     check("ordinary value copies do not become writes",
           read && read->def
               && !ir_annot_get(&read->def->annots,
-                               "ir.promoted_local_write"));
+                               S("ir.promoted_local_write")));
 
     snap(r);
     check("and no local destination survives in the text",
-          r->out && !strstr(r->out, "$x ="));
+          lacks(r->out, S("$x =")));
     check("the pass declares requires parsed and typed, establishes ssa",
           ir_pass_promote.requires == (IR_PROP_PARSED | IR_PROP_TYPED)
               && ir_pass_promote.establishes == IR_PROP_SSA
@@ -128,13 +141,13 @@ static void test_names_follow_the_source(void)
     snap(r);
 
     check("the first definition is named after the local",
-          r->out && strstr(r->out, "%x_0"));
+          has(r->out, S("%x_0")));
     check("the second follows it in dominance order",
-          r->out && strstr(r->out, "%x_1"));
+          has(r->out, S("%x_1")));
     check("and the phi takes the next number",
-          r->out && strstr(r->out, "%x_2: i32 = phi"));
+          has(r->out, S("%x_2: i32 = phi")));
     check("numbering starts at zero, so a reader can follow the variable",
-          r->out && !strstr(r->out, "%x_3"));
+          lacks(r->out, S("%x_3")));
     done(r);
 }
 
@@ -154,37 +167,43 @@ static void test_a_colliding_name_is_disambiguated(void)
     snap(r);
 
     check("the existing %x_0 is left alone",
-          r->out && strstr(r->out, "%x_0: i32 = copy %a"));
+          has(r->out, S("%x_0: i32 = copy %a")));
     check("and the promoted one takes a disambiguating suffix",
-          r->out && strstr(r->out, "%x_0.1"));
+          has(r->out, S("%x_0.1")));
     check("the module is still well formed",
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     done(r);
 }
 
-static const char *shout(ir_ctx_t *ctx, const char *local, uint32_t nth,
-                         void *state)
+static core_string_t shout(ir_ctx_t *ctx, core_string_t local, uint32_t nth,
+                           void *state)
 {
-    size_t n    = strlen(local) + 24;
-    char  *name = ir_alloc(ctx, n);
+    const core_string_t *prefix = state;
+    core_buffer_t        b      = {0};
 
-    snprintf(name, n, "%s_%s_%u", (const char *)state, local, nth);
+    core_buffer_printf(&b, "%.*s_%.*s_%u", (int)prefix->u8_bytes,
+                       prefix->data, (int)local.u8_bytes, local.data, nth);
+
+    core_string_t name = ir_strdup(ctx, core_buffer_string(&b));
+
+    core_buffer_release(&b);
 
     return name;
 }
 
 static void test_naming_is_overridable(void)
 {
-    run_t            *r    = load(DIAMOND);
-    ir_promote_opts_t opts = {.rename = shout, .state = (void *)"mine"};
+    static const core_string_t mine = S("mine");
+    run_t                     *r    = load(DIAMOND);
+    ir_promote_opts_t opts = {.rename = shout, .state = (void *)&mine};
 
     ir_promote(r->m, &opts);
     snap(r);
 
     check("a supplied naming function is used instead of the default",
-          r->out && strstr(r->out, "%mine_x_0"));
+          has(r->out, S("%mine_x_0")));
     check("and the default numbering does not appear",
-          r->out && !strstr(r->out, "%x_0"));
+          lacks(r->out, S("%x_0")));
     check("the result is still SSA",
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     done(r);
@@ -197,7 +216,7 @@ static void test_the_phi_carries_its_provenance(void)
     ir_promote(r->m, nullptr);
 
     ir_func_t  *f    = ir_func_at(r->m, 0);
-    ir_block_t *join = ir_block_find(f, "join");
+    ir_block_t *join = ir_block_find(f, S("join"));
     ir_instr_t *phi  = join ? join->instrs[0] : nullptr;
 
     check("a phi is placed at the join", phi && phi->op == IR_OP_PHI);
@@ -205,7 +224,7 @@ static void test_the_phi_carries_its_provenance(void)
           phi && ir_span_known(phi->span) && phi->span.start_line == 6);
     check("and an origin naming the pass that made it",
           phi && phi->origin && phi->origin->kind == IR_ORIGIN_GENERATED_BY
-              && !strcmp(phi->origin->agent, "promote"));
+              && core_string_eq(phi->origin->agent, S("promote")));
     check("it names each predecessor once",
           phi && phi->n_operands == 2);
     done(r);
@@ -223,14 +242,14 @@ static void test_promote_does_not_touch_memory(void)
 
     check("a module holding its value in memory loads", r->m);
 
-    char *before = ir_module_print(r->m);
+    core_string_t before = ir_module_print(r->m);
 
     ir_promote(r->m, nullptr);
     snap(r);
 
     check("promote leaves alloca, store and load exactly as they were",
-          before && r->out && !strcmp(before, r->out));
-    free(before);
+          before.data && r->out.data && core_string_eq(before, r->out));
+    core_free(before.data);
     done(r);
 }
 
@@ -249,15 +268,15 @@ static void test_address_taken_local_stays_in_memory(void)
                         "  }\n"));
 
     check("a function with an addressed binding loads", r->m);
-    ir_local_t *parsed_local = ir_local_find(ir_func_at(r->m, 0), "x");
+    ir_local_t *parsed_local = ir_local_find(ir_func_at(r->m, 0), S("x"));
     check("parsing address.of restores the local's address-taken fact",
           parsed_local && parsed_local->address_taken);
     ir_func_t *f = ir_func_at(r->m, 0);
-    ir_local_t *addressed = ir_local_find(f, "x");
-    ir_local_t *alias = ir_local_find(f, "y");
-    ir_value_t *address = ir_value_find(f, "addr");
+    ir_local_t *addressed = ir_local_find(f, S("x"));
+    ir_local_t *alias = ir_local_find(f, S("y"));
+    ir_value_t *address = ir_value_find(f, S("addr"));
     ir_annot_t *address_target = ir_annot_get(
-        ir_value_annots(address), "ir.alias0");
+        ir_value_annots(address), S("ir.alias0"));
     check("address.of carries its exact binding as an alias target",
           address_target && address_target->kind == IR_ANNOT_VALUE
               && address_target->v == ir_local_value(f, addressed));
@@ -266,23 +285,23 @@ static void test_address_taken_local_stays_in_memory(void)
     ir_ctx_t *ctx = r->ctx;
     bool alias_facts_set = addressed && alias_facts
         && ir_annot_set(ctx, alias_facts, (ir_annot_t){
-            .key = "ir.alias_count", .kind = IR_ANNOT_INT,
+            .key = S("ir.alias_count"), .kind = IR_ANNOT_INT,
             .i = {.mag = 1}})
         && ir_annot_set(ctx, alias_facts, (ir_annot_t){
-            .key = "ir.alias0", .kind = IR_ANNOT_VALUE,
+            .key = S("ir.alias0"), .kind = IR_ANNOT_VALUE,
             .v = ir_local_value(f, addressed)});
     check("a reference local carries an alias target before promotion",
           alias_facts_set);
     check("promotion succeeds with a memory-backed local",
           ir_promote(r->m, nullptr));
     check("the addressed binding keeps its local identity",
-          f->n_locals == 1 && ir_local_find(f, "x")
-              && ir_local_find(f, "x")->address_taken);
+          f->n_locals == 1 && ir_local_find(f, S("x"))
+              && ir_local_find(f, S("x"))->address_taken);
     check("the unrelated local is promoted",
-          f->n_locals == 1 && f->locals[0] == ir_local_find(f, "x"));
-    ir_value_t *promoted_alias = ir_value_find(f, "y_0");
+          f->n_locals == 1 && f->locals[0] == ir_local_find(f, S("x")));
+    ir_value_t *promoted_alias = ir_value_find(f, S("y_0"));
     ir_annot_t *promoted_target = ir_annot_get(
-        ir_value_annots(promoted_alias), "ir.alias0");
+        ir_value_annots(promoted_alias), S("ir.alias0"));
     check("promotion preserves the alias target on the SSA value",
           promoted_target && promoted_target->kind == IR_ANNOT_VALUE
               && promoted_target->v == ir_local_value(f, addressed));
@@ -290,8 +309,8 @@ static void test_address_taken_local_stays_in_memory(void)
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     snap(r);
     check("address.of still names the original local and no alloca was invented",
-          r->out && strstr(r->out, "address.of $x")
-              && !strstr(r->out, "alloca"));
+          has(r->out, S("address.of $x"))
+              && lacks(r->out, S("alloca")));
     done(r);
 }
 
@@ -304,19 +323,20 @@ static void test_a_local_has_no_address(void)
                         "  }\n"));
 
     ir_func_t  *f = ir_func_at(r->m, 0);
-    ir_local_t *l = ir_local_find(f, "t");
+    ir_local_t *l = ir_local_find(f, S("t"));
     ir_block_t *b = ir_block_entry(f);
     ir_instr_t *o = ir_instr_add(b, IR_OP_OFFSET);
 
     ir_instr_operand_local(o, l);
-    ir_instr_operand_value(o, ir_param_add(f, "n", ir_type_parse(r->m, "u32")));
+    ir_instr_operand_value(
+        o, ir_param_add(f, S("n"), ir_type_parse(r->m, S("u32"))));
 
     ir_rules_t *rs = ir_module_rules(r->m);
 
     check("a local read is its value, so pointer arithmetic on it is rejected",
           ir_rule_apply(r->m, rs, o, r->d).verdict == IR_RULE_REJECT);
     check("so there is no address-taken local for promote to skip",
-          ir_local_find(f, "t") != nullptr);
+          ir_local_find(f, S("t")) != nullptr);
     done(r);
 }
 
@@ -326,13 +346,14 @@ static void test_split_edges(void)
 
     ir_promote(clean->m, nullptr);
 
-    char *before = ir_module_print(clean->m);
+    core_string_t before = ir_module_print(clean->m);
 
     ir_split_edges(clean->m, clean->d);
     snap(clean);
     check("a diamond has no critical edge, so nothing is split",
-          before && clean->out && !strcmp(before, clean->out));
-    free(before);
+          before.data && clean->out.data
+              && core_string_eq(before, clean->out));
+    core_free(before.data);
     done(clean);
 
     run_t *r = load(MOD("  func @f(%a: i32, %c: bool) -> i32 {\n"
@@ -354,11 +375,11 @@ static void test_split_edges(void)
     snap(r);
 
     check("the critical edge is split by a block named for the edge",
-          r->out && strstr(r->out, "block entry.to.join"));
+          has(r->out, S("block entry.to.join")));
     check("and the block is not numbered",
-          r->out && !strstr(r->out, "block bb"));
+          lacks(r->out, S("block bb")));
     check("the phi now names the new block instead of the old predecessor",
-          r->out && strstr(r->out, "[entry.to.join:"));
+          has(r->out, S("[entry.to.join:")));
     check("the module is still SSA afterwards",
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     check("the pass declares requires parsed, establishes no-critical-edges",
@@ -366,7 +387,7 @@ static void test_split_edges(void)
               && ir_pass_split_edges.establishes == IR_PROP_NO_CRIT_EDGE
               && ir_pass_declares(&ir_pass_split_edges));
     check("and the new block carries an origin naming the pass",
-          ir_block_find(ir_func_at(r->m, 0), "entry.to.join") != nullptr);
+          ir_block_find(ir_func_at(r->m, 0), S("entry.to.join")) != nullptr);
     done(r);
 
     run_t *two = load(MOD("  func @f(%a: i32, %c: bool) -> i32 {\n"
@@ -382,11 +403,11 @@ static void test_split_edges(void)
           ir_split_edges(two->m, two->d));
     snap(two);
     check("each edge gets its own block, named apart",
-          two->out && strstr(two->out, "block entry.to.join")
-              && strstr(two->out, "block entry.to.join.1"));
+          has(two->out, S("block entry.to.join"))
+              && has(two->out, S("block entry.to.join.1")));
     check("and each new block takes one of the phi's two arms",
-          two->out && strstr(two->out, "[entry.to.join: %a]")
-              && strstr(two->out, "[entry.to.join.1: %a]"));
+          has(two->out, S("[entry.to.join: %a]"))
+              && has(two->out, S("[entry.to.join.1: %a]")));
     check("so the module still verifies",
           (ir_verify(two->m, two->d) & IR_PROP_PARSED) != 0);
     done(two);
@@ -446,16 +467,16 @@ static void test_location_propagation(void)
               && ex2->span.start_byte == was.start_byte);
 
     ir_instr_t *made = ir_instr_generated(b, IR_OP_UNREACHABLE,
-                                          IR_SPAN_UNKNOWN, "a-pass", 0);
+                                          IR_SPAN_UNKNOWN, S("a-pass"), 0);
 
     check("a pass-created node takes the nearest enclosing span",
           made && ir_span_known(made->span));
     check("and an origin naming the pass",
           made && made->origin
               && made->origin->kind == IR_ORIGIN_GENERATED_BY
-              && !strcmp(made->origin->agent, "a-pass"));
+              && core_string_eq(made->origin->agent, S("a-pass")));
 
-    ir_block_t *other = ir_block_find(f, "l");
+    ir_block_t *other = ir_block_find(f, S("l"));
     ir_span_t   kept  = rep->span;
 
     check("a move succeeds", ir_instr_move(rep, other, 0));
@@ -466,7 +487,7 @@ static void test_location_propagation(void)
     ir_span_t call = ir_span_make(0, 500, 510, 50, 1, 50, 11);
 
     check("an inlined instruction gains an origin",
-          ir_instr_inlined_from(rep, call, "inline"));
+          ir_instr_inlined_from(rep, call, S("inline")));
     check("keeps its own span",
           rep->span.start_byte == kept.start_byte);
     check("and the origin names the call site",
@@ -482,7 +503,7 @@ static void test_promote_keeps_every_location(void)
 
     ir_promote(r->m, nullptr);
     check("promote turns no known location into an unknown one",
-          ir_loc_monotone(before, r->m, "promote", r->d));
+          ir_loc_monotone(before, r->m, S("promote"), r->d));
 
     ir_func_t *f = ir_func_at(r->m, 0);
 
@@ -499,17 +520,16 @@ static void test_promote_keeps_every_location(void)
 
     ir_split_edges(r->m, r->d);
     check("and neither does split-edges",
-          ir_loc_monotone(mid, r->m, "split-edges", r->d));
+          ir_loc_monotone(mid, r->m, S("split-edges"), r->d));
     done(r);
 }
 
-static bool told(run_t *r, const char *text)
+static bool told(run_t *r, core_string_t text)
 {
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         const ir_diag_t *dg = ir_diags_at(r->d, i);
 
-        if ((dg->primary.label && strstr(dg->primary.label, text))
-            || (dg->message && strstr(dg->message, text))) {
+        if (has(dg->primary.label, text) || has(dg->message, text)) {
             return true;
         }
     }
@@ -536,14 +556,14 @@ static void test_a_local_read_before_it_is_set(void)
     snap(r);
 
     check("the unassigned path is given undef, which is what undef is for",
-          r->out && strstr(r->out, "= undef"));
+          has(r->out, S("= undef")));
     check("and the phi names both predecessors",
-          r->out && strstr(r->out, "[entry: %x_0]")
-              && strstr(r->out, "[l: %x_1]"));
+          has(r->out, S("[entry: %x_0]"))
+              && has(r->out, S("[l: %x_1]")));
     check("the result verifies as SSA",
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     check("and the reader is warned rather than left to find it later",
-          told(r, "read on a path that does not assign it"));
+          told(r, S("read on a path that does not assign it")));
     done(r);
 
     run_t            *n    = load(MOD("  func @f(%a: i32) -> i32 {\n"
@@ -559,7 +579,7 @@ static void test_a_local_read_before_it_is_set(void)
           (ir_verify(n->m, n->d) & IR_PROP_SSA) != 0);
     snap(n);
     check("with no unresolved operand printed",
-          n->out && !strstr(n->out, "%?"));
+          lacks(n->out, S("%?")));
     done(n);
 }
 
@@ -582,8 +602,8 @@ static void test_promote_handles_loops(void)
     check("a loop promotes", ir_promote(r->m, nullptr));
     snap(r);
     check("with a phi at the loop header, where the back edge merges",
-          r->out && strstr(r->out, "block head:\n      %x_")
-              && strstr(r->out, "= phi"));
+          has(r->out, S("block head:\n      %x_"))
+              && has(r->out, S("= phi")));
     check("and the result is SSA",
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     done(r);
@@ -637,7 +657,7 @@ static void test_promote_handles_unreachable_predecessors(void)
           ir_promote(r->m, nullptr));
     snap(r);
     check("the promoted phi has an undef arm for the unreachable predecessor",
-          r->out && strstr(r->out, "[dead_latch: %x_0]"));
+          has(r->out, S("[dead_latch: %x_0]")));
     check("the result verifies as SSA",
           r->m && (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     done(r);
@@ -658,7 +678,7 @@ static void test_passes_take_one_kind_of_state(void)
     done(r);
 }
 
-static const char *CRITICAL = MOD(
+static const core_string_t CRITICAL = MOD(
     "  func @f(%a: i32, %c: bool) -> i32 {\n"
     "    block entry:\n"
     "      branch %c, l, join\n"
@@ -679,9 +699,9 @@ static void test_critical_edges_are_verified(void)
     check("a module claiming no-critical-edges while having one is caught",
           !(held & IR_PROP_NO_CRIT_EDGE));
     check("and the rule is named",
-          told(r, "no-critical-edges.edge"));
+          told(r, S("no-critical-edges.edge")));
     check("and the false claim is reported",
-          told(r, "claims no-critical-edges"));
+          told(r, S("claims no-critical-edges")));
     check("the module is otherwise well formed",
           (held & IR_PROP_PARSED) && (held & IR_PROP_TYPED));
     done(r);
@@ -696,7 +716,7 @@ static void test_critical_edges_are_verified(void)
     run_t *never = load(DIAMOND);
 
     check("a module that never claimed it is not diagnosed for it",
-          !told(never, "no-critical-edges"));
+          !told(never, S("no-critical-edges")));
     done(never);
 }
 

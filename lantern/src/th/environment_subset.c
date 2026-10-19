@@ -1,38 +1,37 @@
-#include <string.h>
-
 #include "private/th/internal.h"
 
 core_list_decl(size_t);
 
-static const char *
+static core_string_t
 declaration_module(const th_env *source, th_env_metadata_owner_t kind,
-                   const char *owner)
+                   core_string_t owner)
 {
     switch (kind) {
     case TH_ENV_METADATA_TYPE:
         for (size_t i = 0; i < source->type_origins.len; i++)
-            if (!strcmp(source->type_origins.data[i].name, owner))
+            if (core_string_eq(source->type_origins.data[i].name, owner))
                 return source->type_origins.data[i].module;
-        return nullptr;
+        return (core_string_t){};
     case TH_ENV_METADATA_TRAIT:
         for (size_t i = 0; i < source->traits.len; i++)
-            if (!strcmp(source->traits.data[i].name, owner))
+            if (core_string_eq(source->traits.data[i].name, owner))
                 return source->traits.data[i].module;
-        return nullptr;
+        return (core_string_t){};
     case TH_ENV_METADATA_FUNCTION:
         for (size_t i = 0; i < source->functions.len; i++)
-            if (!strcmp(source->functions.data[i].qualified_name, owner))
+            if (core_string_eq(source->functions.data[i].qualified_name,
+                               owner))
                 return source->functions.data[i].module;
-        return nullptr;
+        return (core_string_t){};
     case TH_ENV_METADATA_VALUE:
         for (size_t i = 0; i < source->values.len; i++)
-            if (!strcmp(source->values.data[i].qualified_name, owner))
+            if (core_string_eq(source->values.data[i].qualified_name, owner))
                 return source->values.data[i].module;
-        return nullptr;
+        return (core_string_t){};
     case TH_ENV_METADATA_ENVIRONMENT:
-        return nullptr;
+        return (core_string_t){};
     }
-    return nullptr;
+    return (core_string_t){};
 }
 
 th_env *
@@ -84,7 +83,7 @@ th_env_subset(const th_env *source, const th_env_filter_t *filter)
                                   entry->receiver_pattern)) continue;
         for (size_t t = 0; ok && t < source->traits.len; t++) {
             const th_env_trait_t *trait = &source->traits.data[t];
-            if (strcmp(trait->name, entry->trait_name)) continue;
+            if (!core_string_eq(trait->name, entry->trait_name)) continue;
             bool present = filter->module
                 && filter->module(context, trait->module);
             for (size_t c = 0; !present && c < carried.len; c++)
@@ -102,12 +101,13 @@ th_env_subset(const th_env *source, const th_env_filter_t *filter)
     core_list_free(carried);
     for (size_t i = 0; ok && i < source->metadata.len; i++) {
         const th_env_metadata_record_t *entry = &source->metadata.data[i];
-        const char *module = declaration_module(source, entry->owner_kind,
-                                                entry->owner_name);
+        core_string_t module = declaration_module(source, entry->owner_kind,
+                                                  entry->owner_name);
         bool keep = entry->owner_kind == TH_ENV_METADATA_ENVIRONMENT
             ? filter->metadata && filter->metadata(context, entry->owner_kind,
                                                    entry->owner_name)
-            : module && filter->module && filter->module(context, module);
+            : module.data && filter->module
+                && filter->module(context, module);
         if (!keep) continue;
         ok = th_env_register_metadata(env, entry->owner_kind,
             entry->owner_name, entry->key, entry->version, entry->data,

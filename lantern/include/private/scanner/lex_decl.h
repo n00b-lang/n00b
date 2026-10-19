@@ -57,8 +57,8 @@ core_list_decl(scan_lex_decl_t);
 bool scan_lex_parse_file(core_string_t text, core_string_t origin,
                          core_list_t(scan_lex_decl_t) *decls);
 void scan_lex_decls_free(core_list_t(scan_lex_decl_t) *decls);
-const char *scan_lex_parse_error(void);
-const char *scan_lex_kind_name(scan_lex_kind_t kind);
+core_string_t scan_lex_parse_error(void);
+core_string_t scan_lex_kind_name(scan_lex_kind_t kind);
 void scan_lex_note_unresolved_import(void);
 
 const scan_lex_spec_t *scan_lex_spec_from_decls(

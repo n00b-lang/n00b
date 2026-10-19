@@ -27,8 +27,8 @@ bool core_object_emit_macho(const core_target_desc_t *target,
     if (target->call_abi != CORE_TARGET_CALL_DARWIN_AARCH64 ||
         section_count > UINT8_MAX) return false;
     for (size_t i = 0; i < section_count; i++) {
-        if (strlen(sections[i].name) > 16 ||
-            strlen(sections[i].segment) > 16 ||
+        if (sections[i].name.u8_bytes > 16 ||
+            sections[i].segment.u8_bytes > 16 ||
             sections[i].size > UINT32_MAX) return false;
     }
 
@@ -99,7 +99,7 @@ bool core_object_emit_macho(const core_target_desc_t *target,
         offset > UINT32_MAX) goto done;
     size_t str_offset = offset, str_size = 1;
     for (size_t i = 0; i < symbol_count; i++) {
-        size_t length = strlen(symbols[i].name);
+        size_t length = symbols[i].name.u8_bytes;
         if (length == SIZE_MAX ||
             !core_object_size_add(str_size, length + 1, &str_size) ||
             str_size > UINT32_MAX) goto done;
@@ -128,8 +128,8 @@ bool core_object_emit_macho(const core_target_desc_t *target,
         const core_object_emit_section_t *section = &sections[i];
         uint8_t *header = segment + MACH_SEGMENT_BYTES +
                           i * MACH_SECTION_BYTES;
-        memcpy(header, section->name, strlen(section->name));
-        memcpy(header + 16, section->segment, strlen(section->segment));
+        memcpy(header, section->name.data, section->name.u8_bytes);
+        memcpy(header + 16, section->segment.data, section->segment.u8_bytes);
         core_le_store_u64(header + 32, section_addresses[i]);
         core_le_store_u64(header + 40, section->size);
         core_le_store_u32(header + 48, (uint32_t)section_file_offsets[i]);
@@ -177,9 +177,10 @@ bool core_object_emit_macho(const core_target_desc_t *target,
                                                : undefined_next++;
         symbol_map[i] = index;
         symbol_names[i] = (uint32_t)(string_cursor - str_offset);
-        size_t length = strlen(symbol->name) + 1;
-        memcpy(image + string_cursor, symbol->name, length);
-        string_cursor += length;
+        size_t length = symbol->name.u8_bytes;
+        memcpy(image + string_cursor, symbol->name.data, length);
+        image[string_cursor + length] = 0;
+        string_cursor += length + 1;
         uint8_t *entry = image + symtab_offset +
                          (size_t)index * MACH_SYMBOL_BYTES;
         core_le_store_u32(entry, symbol_names[i]);

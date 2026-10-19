@@ -5,7 +5,8 @@
 
 #include <assert.h>
 #include <stdio.h>
-#include <string.h>
+
+#define S(x) CORE_STRING_STATIC(x)
 
 static void
 test_first_overlap(void)
@@ -27,17 +28,19 @@ test_first_overlap(void)
     assert(findings.len == 1);
     assert(findings.data[0].kind == PARSE_AMBIG_COMMON_PREFIX);
     assert(findings.data[0].witness_is_prefix);
-    assert(strcmp(parse_ambiguity_kind_name(findings.data[0].kind),
-                  "common-prefix") == 0);
-    assert(strcmp(parse_ambiguity_severity_name(findings.data[0].severity),
-                  "warning") == 0);
+    assert(core_string_eq(parse_ambiguity_kind_name(findings.data[0].kind),
+                          S("common-prefix")));
+    assert(core_string_eq(
+        parse_ambiguity_severity_name(findings.data[0].severity),
+        S("warning")));
     core_string_t json = parse_ambiguity_format_json(&findings);
     assert(json.data && json.data[0] == '['
-           && strstr(json.data, "common-prefix"));
+           && core_string_find(json, S("common-prefix")) >= 0);
     core_free(json.data);
     assert(findings.data[0].witness.data);
-    assert(strstr(findings.data[0].witness.data, "<terminal:97>")
-           && strstr(findings.data[0].witness.data, "<terminal:98>"));
+    assert(core_string_find(findings.data[0].witness, S("<terminal:97>")) >= 0
+           && core_string_find(findings.data[0].witness, S("<terminal:98>"))
+                  >= 0);
     assert(findings.data[0].explanation.data);
     assert(findings.data[0].prescription.data);
 
@@ -169,8 +172,10 @@ test_recursive_postfix_prefix_confirmation(void)
         found |= findings.data[i].kind == PARSE_AMBIG_CONFIRMED;
         if (findings.data[i].kind == PARSE_AMBIG_CONFIRMED) {
             assert(findings.data[i].witness.data);
-            assert(strstr(findings.data[i].witness.data, "<identifier>")
-                   || strstr(findings.data[i].witness.data, "IDENTIFIER"));
+            assert(core_string_find(findings.data[i].witness,
+                                    S("<identifier>")) >= 0
+                   || core_string_find(findings.data[i].witness,
+                                       S("IDENTIFIER")) >= 0);
             assert(findings.data[i].parse_tree_count > 1);
         }
     }
@@ -191,7 +196,7 @@ test_intentional_filter(void)
     parse_add_rule(g, s, PARSE_CHAR('a'), PARSE_CHAR('b'));
     r = parse_get_rule(g, rule_ix);
     parse_annotation_t *annotation = parse_annot_new(PARSE_ANNOT_DISAMBIG);
-    annotation->disambig_predicate = core_string_from_cstr("intentional");
+    annotation->disambig_predicate = core_string_dup(S("intentional"));
     parse_rule_annotate(r, annotation);
 
     parse_ambiguity_options_t hidden = {0};

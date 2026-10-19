@@ -1,13 +1,14 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "ir/ir.h"
 #include "ir/text.h"
 #include "ir/walk.h"
 #include "harness.h"
 
-static const char *const SRC =
+#define S(x) CORE_STRING_STATIC(x)
+
+static const core_string_t SRC = S(
     "module m {\n"
     "  profile bce\n"
     "  global @g: i32\n"
@@ -22,7 +23,7 @@ static const char *const SRC =
     "    block no:\n"
     "      return %b\n"
     "  }\n"
-    "}\n";
+    "}\n");
 
 typedef struct {
     int globals, funcs, params, locals, blocks, instrs, operands, returns;
@@ -30,6 +31,11 @@ typedef struct {
     char order[256];
     size_t at;
 } tally;
+
+static bool order_is(const tally *t, core_string_t want)
+{
+    return core_string_eq(core_string_borrow(t->order, t->at), want);
+}
 
 static void note(tally *t, char c)
 {
@@ -164,7 +170,7 @@ static void test_the_walk_reaches_every_node(void)
     check("entering and leaving are balanced",
           t.func_enter == t.func_leave && t.block_enter == t.block_leave);
     check("blocks nest inside their function",
-          !strcmp(t.order, "FBiibBibBibf"));
+          order_is(&t, S("FBiibBibBibf")));
 
     ir_ctx_free(ctx);
 }
@@ -286,7 +292,7 @@ static void test_visitors_stack_in_one_pass(void)
 
     check("three visitors on one node kind all run", t.instrs == 4);
     check("in one pass, in registration order, per node",
-          !strcmp(t.order, "abcabcabcabc"));
+          order_is(&t, S("abcabcabcabc")));
 
     ir_ctx_free(ctx);
 }
@@ -371,25 +377,25 @@ static bool collect_reachable_function(ir_func_t *function, void *user)
 static void test_reachable_function_walk_follows_live_function_references(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
-    ir_module_t *module = ir_module_new(ctx, "closure", &ir_profile_bce,
-                                        "host");
-    th_type *signature = ir_type_parse(module, "() -> void");
-    ir_func_t *root = ir_func_add(module, "root", signature,
+    ir_module_t *module = ir_module_new(ctx, S("closure"), &ir_profile_bce,
+                                        S("host"));
+    th_type *signature = ir_type_parse(module, S("() -> void"));
+    ir_func_t *root = ir_func_add(module, S("root"), signature,
                                   IR_LINK_EXTERNAL);
-    ir_func_t *middle = ir_func_add(module, "middle", signature,
+    ir_func_t *middle = ir_func_add(module, S("middle"), signature,
                                     IR_LINK_INTERNAL);
-    ir_func_t *leaf = ir_func_add(module, "leaf", signature,
+    ir_func_t *leaf = ir_func_add(module, S("leaf"), signature,
                                   IR_LINK_INTERNAL);
-    ir_func_t *referenced = ir_func_add(module, "referenced", signature,
+    ir_func_t *referenced = ir_func_add(module, S("referenced"), signature,
                                         IR_LINK_INTERNAL);
-    ir_func_t *dead = ir_func_add(module, "dead", signature,
+    ir_func_t *dead = ir_func_add(module, S("dead"), signature,
                                   IR_LINK_INTERNAL);
-    ir_block_t *root_entry = ir_block_add(root, "entry");
-    ir_block_t *root_dead = ir_block_add(root, "dead");
-    ir_block_t *middle_entry = ir_block_add(middle, "entry");
-    ir_block_t *leaf_entry = ir_block_add(leaf, "entry");
-    ir_block_t *referenced_entry = ir_block_add(referenced, "entry");
-    ir_block_t *dead_entry = ir_block_add(dead, "entry");
+    ir_block_t *root_entry = ir_block_add(root, S("entry"));
+    ir_block_t *root_dead = ir_block_add(root, S("dead"));
+    ir_block_t *middle_entry = ir_block_add(middle, S("entry"));
+    ir_block_t *leaf_entry = ir_block_add(leaf, S("entry"));
+    ir_block_t *referenced_entry = ir_block_add(referenced, S("entry"));
+    ir_block_t *dead_entry = ir_block_add(dead, S("entry"));
     ir_instr_t *root_call = ir_instr_add(root_entry, IR_OP_CALL);
     ir_instr_t *root_reference = ir_instr_add(root_entry, IR_OP_COPY);
     ir_instr_t *dead_call = ir_instr_add(root_dead, IR_OP_CALL);
@@ -398,7 +404,7 @@ static void test_reachable_function_walk_follows_live_function_references(void)
     bool built = root_call && root_reference && dead_call && middle_call
         && function_reference
         && ir_instr_operand_value(root_call, ir_func_address(module, middle))
-        && ir_instr_set_dest(root_reference, "callback",
+        && ir_instr_set_dest(root_reference, S("callback"),
                              function_reference->type)
         && ir_instr_operand_value(root_reference, function_reference)
         && ir_instr_operand_value(dead_call, ir_func_address(module, dead))

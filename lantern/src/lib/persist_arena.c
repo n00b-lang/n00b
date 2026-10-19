@@ -128,25 +128,29 @@ static core_persist_arena_t *wrap_mapping(int fd, void *mapping,
   return arena;
 }
 
-bool core_persist_arena_create(const char *path, size_t capacity,
+bool core_persist_arena_create(core_string_t path, size_t capacity,
                                uint64_t abi_tag,
                                core_persist_arena_t **out,
                                core_persist_arena_error_t *error) {
   if (out)
     *out = nullptr;
-  if (!path || !*path || !out || !capacity ||
+  if (!path.data || !path.u8_bytes || !out || !capacity ||
       capacity > SIZE_MAX - payload_offset())
     return fail(error, CORE_PERSIST_ARENA_INVALID_ARGUMENT);
 
   size_t mapping_size = payload_offset() + capacity;
   if ((uintmax_t)mapping_size > (uintmax_t)INT64_MAX)
     return fail(error, CORE_PERSIST_ARENA_INVALID_ARGUMENT);
-  int fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
-  if (fd < 0)
+  char *cpath = core_string_to_cstr(path);
+  int fd = open(cpath, O_RDWR | O_CREAT | O_EXCL, 0600);
+  if (fd < 0) {
+    core_free(cpath);
     return fail(error, CORE_PERSIST_ARENA_IO_ERROR);
+  }
   if (ftruncate(fd, (off_t)mapping_size) != 0) {
     close(fd);
-    unlink(path);
+    unlink(cpath);
+    core_free(cpath);
     return fail(error, CORE_PERSIST_ARENA_IO_ERROR);
   }
 
@@ -154,9 +158,11 @@ bool core_persist_arena_create(const char *path, size_t capacity,
                        MAP_SHARED, fd, 0);
   if (mapping == MAP_FAILED) {
     close(fd);
-    unlink(path);
+    unlink(cpath);
+    core_free(cpath);
     return fail(error, CORE_PERSIST_ARENA_IO_ERROR);
   }
+  core_free(cpath);
 
   core_persist_arena_header_t *header = mapping;
   *header = (core_persist_arena_header_t){
@@ -190,15 +196,17 @@ static bool read_header(int fd, core_persist_arena_header_t *header) {
   return true;
 }
 
-static bool open_arena(const char *path, uint64_t abi_tag, bool writable,
+static bool open_arena(core_string_t path, uint64_t abi_tag, bool writable,
                        bool relocated, core_persist_arena_t **out,
                        core_persist_arena_error_t *error) {
   if (out)
     *out = nullptr;
-  if (!path || !*path || !out)
+  if (!path.data || !path.u8_bytes || !out)
     return fail(error, CORE_PERSIST_ARENA_INVALID_ARGUMENT);
 
-  int fd = open(path, writable ? O_RDWR : O_RDONLY);
+  char *cpath = core_string_to_cstr(path);
+  int fd = open(cpath, writable ? O_RDWR : O_RDONLY);
+  core_free(cpath);
   if (fd < 0)
     return fail(error, CORE_PERSIST_ARENA_IO_ERROR);
   struct stat statbuf;
@@ -255,14 +263,14 @@ static bool open_arena(const char *path, uint64_t abi_tag, bool writable,
   return true;
 }
 
-bool core_persist_arena_open(const char *path, uint64_t abi_tag,
+bool core_persist_arena_open(core_string_t path, uint64_t abi_tag,
                              bool writable, core_persist_arena_t **out,
                              core_persist_arena_error_t *error) {
   return open_arena(path, abi_tag, writable, false, out, error);
 }
 
 bool core_persist_arena_open_relocated(
-    const char *path, uint64_t abi_tag, bool writable,
+    core_string_t path, uint64_t abi_tag, bool writable,
     core_persist_arena_t **out, core_persist_arena_error_t *error) {
   return open_arena(path, abi_tag, writable, true, out, error);
 }

@@ -38,23 +38,23 @@ struct ir_pdg_t {
     bool           exact;
 };
 
-const char *ir_edge_kind_name(ir_edge_kind_t k)
+core_string_t ir_edge_kind_name(ir_edge_kind_t k)
 {
     switch (k) {
     case IR_EDGE_BRANCH_TRUE:
-        return "branch-true";
+        return CORE_STRING_STATIC("branch-true");
     case IR_EDGE_BRANCH_FALSE:
-        return "branch-false";
+        return CORE_STRING_STATIC("branch-false");
     case IR_EDGE_LOOP_BACK:
-        return "loop-back";
+        return CORE_STRING_STATIC("loop-back");
     case IR_EDGE_LOOP_EXIT:
-        return "loop-exit";
+        return CORE_STRING_STATIC("loop-exit");
     case IR_EDGE_JUMP:
-        return "jump";
+        return CORE_STRING_STATIC("jump");
     case IR_EDGE_CASE:
-        return "case";
+        return CORE_STRING_STATIC("case");
     default:
-        return "fallthrough";
+        return CORE_STRING_STATIC("fallthrough");
     }
 }
 

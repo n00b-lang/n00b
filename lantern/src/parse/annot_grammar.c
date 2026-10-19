@@ -122,16 +122,18 @@ parse_annot_grammar(void)
 
     building = g;
 
-    bool ok = parse_bnf_load(CORE_STRING_STATIC(ANNOT_BNF),
+    bool ok = parse_bnf_load(core_string_borrow(ANNOT_BNF,
+                                                sizeof(ANNOT_BNF) - 1),
                            CORE_STRING_STATIC("a-ref"),
                            g);
 
-    ok = ok && parse_bnf_load(CORE_STRING_STATIC(LEX_BNF),
+    ok = ok && parse_bnf_load(core_string_borrow(LEX_BNF,
+                                                 sizeof(LEX_BNF) - 1),
                               CORE_STRING_STATIC("lex-file"), g);
 
     ok = ok
       && load_hook(g,
-                   CORE_STRING_STATIC(INFER_BNF),
+                   core_string_borrow(INFER_BNF, sizeof(INFER_BNF) - 1),
                    CORE_STRING_STATIC("infer-expr"),
                    CORE_STRING_STATIC("infer"));
 

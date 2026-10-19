@@ -69,25 +69,28 @@ struct core_object_reader {
   bool ok;
 };
 
-const char *core_object_archive_error_string(
+core_string_t core_object_archive_error_string(
     core_object_archive_error_t error) {
   switch (error) {
-  case CORE_OBJECT_ARCHIVE_OK: return "ok";
-  case CORE_OBJECT_ARCHIVE_INVALID_ARGUMENT: return "invalid argument";
-  case CORE_OBJECT_ARCHIVE_IO_ERROR: return "archive I/O failed";
-  case CORE_OBJECT_ARCHIVE_BAD_FORMAT: return "malformed object archive";
+  case CORE_OBJECT_ARCHIVE_OK: return CORE_STRING_STATIC("ok");
+  case CORE_OBJECT_ARCHIVE_INVALID_ARGUMENT:
+    return CORE_STRING_STATIC("invalid argument");
+  case CORE_OBJECT_ARCHIVE_IO_ERROR:
+    return CORE_STRING_STATIC("archive I/O failed");
+  case CORE_OBJECT_ARCHIVE_BAD_FORMAT:
+    return CORE_STRING_STATIC("malformed object archive");
   case CORE_OBJECT_ARCHIVE_INCOMPATIBLE:
-    return "archive ABI or object schema is incompatible";
+    return CORE_STRING_STATIC("archive ABI or object schema is incompatible");
   case CORE_OBJECT_ARCHIVE_ADDRESS_UNAVAILABLE:
-    return "archive mapping address is unavailable";
+    return CORE_STRING_STATIC("archive mapping address is unavailable");
   case CORE_OBJECT_ARCHIVE_UNKNOWN_TYPE:
-    return "archive contains an unregistered object type";
+    return CORE_STRING_STATIC("archive contains an unregistered object type");
   case CORE_OBJECT_ARCHIVE_CALLBACK_FAILED:
-    return "object archive codec rejected a record";
+    return CORE_STRING_STATIC("object archive codec rejected a record");
   case CORE_OBJECT_ARCHIVE_OUT_OF_SPACE:
-    return "object archive mapping has insufficient space";
+    return CORE_STRING_STATIC("object archive mapping has insufficient space");
   }
-  return "unknown object archive error";
+  return CORE_STRING_STATIC("unknown object archive error");
 }
 
 static void set_error(core_object_archive_error_t *out,
@@ -183,12 +186,11 @@ bool core_object_writer_u64(core_object_writer_t *writer, uint64_t value) {
 }
 
 bool core_object_writer_string(core_object_writer_t *writer,
-                               const char *value) {
-  if (!value)
+                               core_string_t value) {
+  if (!value.data)
     return core_object_writer_u64(writer, UINT64_MAX);
-  size_t size = strlen(value);
-  return core_object_writer_u64(writer, size) &&
-         core_object_writer_bytes(writer, value, size);
+  return core_object_writer_u64(writer, value.u8_bytes) &&
+         core_object_writer_bytes(writer, value.data, value.u8_bytes);
 }
 
 static uint64_t object_id_for(core_list_t(archive_object_t) *objects,
@@ -262,24 +264,24 @@ bool core_object_reader_u64(core_object_reader_t *reader, uint64_t *out) {
   return true;
 }
 
-bool core_object_reader_string(core_object_reader_t *reader, char **out) {
+bool core_object_reader_string(core_object_reader_t *reader,
+                               core_string_t *out) {
   uint64_t size;
   if (!out || !core_object_reader_u64(reader, &size))
     return false;
   if (size == UINT64_MAX) {
-    *out = nullptr;
+    *out = (core_string_t){};
     return true;
   }
   if (size >= SIZE_MAX || size > reader->size - reader->offset) {
     reader->ok = false;
     return false;
   }
-  char *string = core_object_reader_alloc(reader, (size_t)size + 1,
+  char *string = core_object_reader_alloc(reader, size ? (size_t)size : 1,
                                           alignof(char));
   if (!string || !core_object_reader_bytes(reader, string, (size_t)size))
     return false;
-  string[size] = '\0';
-  *out = string;
+  *out = (core_string_t){.data = string, .u8_bytes = (size_t)size};
   return true;
 }
 
@@ -326,12 +328,12 @@ static void discard_archive(core_object_archive_t *archive) {
   core_free(archive);
 }
 
-bool core_object_archive_save(const char *path, size_t capacity,
+bool core_object_archive_save(core_string_t path, size_t capacity,
                              uint64_t abi_tag,
                              core_object_archive_registry_t *registry,
                              uint64_t root_type_id, const void *root,
                              core_object_archive_error_t *error) {
-  if (!path || !registry || !root_type_id || !root)
+  if (!path.data || !registry || !root_type_id || !root)
     return fail(error, CORE_OBJECT_ARCHIVE_INVALID_ARGUMENT);
   core_list_t(archive_object_t) objects = core_list_new(archive_object_t);
   bool valid = true;
@@ -452,7 +454,9 @@ bool core_object_archive_save(const char *path, size_t capacity,
   core_persist_arena_close(arena, nullptr);
   release_objects(&objects);
   if (!ok) {
-    unlink(path);
+    char *cpath = core_string_to_cstr(path);
+    unlink(cpath);
+    core_free(cpath);
     return fail(error, map_arena_error(arena_error));
   }
   set_error(error, CORE_OBJECT_ARCHIVE_OK);
@@ -473,12 +477,12 @@ static core_object_reader_t make_reader(const archive_record_t *record,
   };
 }
 
-bool core_object_archive_load(const char *path, uint64_t abi_tag,
+bool core_object_archive_load(core_string_t path, uint64_t abi_tag,
                              core_object_archive_registry_t *registry,
                              core_object_archive_t **out,
                              core_object_archive_error_t *error) {
   if (out) *out = nullptr;
-  if (!path || !registry || !out)
+  if (!path.data || !registry || !out)
     return fail(error, CORE_OBJECT_ARCHIVE_INVALID_ARGUMENT);
   core_persist_arena_error_t arena_error;
   core_persist_arena_t *arena = nullptr;

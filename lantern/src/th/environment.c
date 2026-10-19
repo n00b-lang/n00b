@@ -6,9 +6,9 @@
 
 core_list_decl(th_member);
 
-static th_env_trait_t *trait_named(const th_env *env, const char *name) {
+static th_env_trait_t *trait_named(const th_env *env, core_string_t name) {
   for (size_t i = 0; i < env->traits.len; i++)
-    if (!strcmp(env->traits.data[i].name, name))
+    if (core_string_eq(env->traits.data[i].name, name))
       return &env->traits.data[i];
   return nullptr;
 }
@@ -23,12 +23,13 @@ static const th_member *contract_method(const th_type *contracts, size_t i) {
       ? th_trait_method(contracts, i) : th_record_member(contracts, i);
 }
 
-static th_type *contract_lookup(const th_type *contracts, const char *name) {
+static th_type *contract_lookup(const th_type *contracts,
+                                core_string_t name) {
   if (th_kind_of(th_resolve_c(contracts)) != TH_TRAIT)
     return th_record_lookup(contracts, name);
   for (size_t i = 0; i < th_trait_len(contracts); i++) {
     const th_member *method = th_trait_method(contracts, i);
-    if (!strcmp(method->name, name)) return method->type;
+    if (core_string_eq(method->name, name)) return method->type;
   }
   return nullptr;
 }
@@ -44,7 +45,7 @@ static th_type *first_parameter(th_type *signature) {
 
 static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
                                const th_env_function_t *function,
-                               const char *method_name);
+                               core_string_t method_name);
 
 typedef const th_env_function_t *th_env_function_ptr_t;
 core_list_decl(th_env_function_ptr_t);
@@ -148,8 +149,7 @@ static bool pattern_equal(const th_type *a, const th_type *b,
     return false;
   case TH_NAMED:
     if (a->named.is_variant != b->named.is_variant ||
-        a->named.nlen != b->named.nlen ||
-        memcmp(a->named.name, b->named.name, a->named.nlen) ||
+        !core_string_eq(a->named.name, b->named.name) ||
         a->named.nargs != b->named.nargs)
       return false;
     for (size_t i = 0; i < a->named.nargs; i++) {
@@ -163,8 +163,7 @@ static bool pattern_equal(const th_type *a, const th_type *b,
         return false;
       else if (x->kind == TH_ARG_SINT && x->s != y->s)
         return false;
-      else if (x->kind == TH_ARG_STR &&
-               (x->str.n != y->str.n || memcmp(x->str.p, y->str.p, x->str.n)))
+      else if (x->kind == TH_ARG_STR && !core_string_eq(x->str, y->str))
         return false;
     }
     return true;
@@ -183,18 +182,19 @@ static bool pattern_equal(const th_type *a, const th_type *b,
       return false;
     for (size_t i = 0; i < a->record.n; i++) {
       const th_member *x = &a->record.members[i], *y = &b->record.members[i];
-      if (strcmp(x->name, y->name) || !pattern_equal(x->type, y->type, seen))
+      if (!core_string_eq(x->name, y->name) ||
+          !pattern_equal(x->type, y->type, seen))
         return false;
     }
     return true;
   case TH_TRAIT:
-    if (a->trait.nlen != b->trait.nlen ||
-        memcmp(a->trait.name, b->trait.name, a->trait.nlen) ||
+    if (!core_string_eq(a->trait.name, b->trait.name) ||
         a->trait.n != b->trait.n)
       return false;
     for (size_t i = 0; i < a->trait.n; i++) {
       const th_member *x = &a->trait.methods[i], *y = &b->trait.methods[i];
-      if (strcmp(x->name, y->name) || !pattern_equal(x->type, y->type, seen))
+      if (!core_string_eq(x->name, y->name) ||
+          !pattern_equal(x->type, y->type, seen))
         return false;
     }
     return true;
@@ -214,7 +214,7 @@ static bool pattern_equal(const th_type *a, const th_type *b,
          !pattern_equal(a->fn.rest->type, b->fn.rest->type, seen)))
       return false;
     for (size_t i = 0; i < a->fn.nkw; i++)
-      if (strcmp(a->fn.kw[i].name, b->fn.kw[i].name) ||
+      if (!core_string_eq(a->fn.kw[i].name, b->fn.kw[i].name) ||
           a->fn.kw[i].mode != b->fn.kw[i].mode ||
           !pattern_equal(a->fn.kw[i].type, b->fn.kw[i].type, seen))
         return false;
@@ -270,9 +270,7 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
     return true;
   case TH_NAMED:
     if (general->named.is_variant != specific->named.is_variant ||
-        general->named.nlen != specific->named.nlen ||
-        memcmp(general->named.name, specific->named.name,
-               general->named.nlen) ||
+        !core_string_eq(general->named.name, specific->named.name) ||
         general->named.nargs != specific->named.nargs)
       return false;
     for (size_t i = 0; i < general->named.nargs; i++) {
@@ -286,8 +284,7 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
         return false;
       else if (x->kind == TH_ARG_SINT && x->s != y->s)
         return false;
-      else if (x->kind == TH_ARG_STR &&
-               (x->str.n != y->str.n || memcmp(x->str.p, y->str.p, x->str.n)))
+      else if (x->kind == TH_ARG_STR && !core_string_eq(x->str, y->str))
         return false;
     }
     return true;
@@ -308,22 +305,20 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
     if (general->record.n != specific->record.n)
       return false;
     for (size_t i = 0; i < general->record.n; i++)
-      if (strcmp(general->record.members[i].name,
-                 specific->record.members[i].name) ||
+      if (!core_string_eq(general->record.members[i].name,
+                          specific->record.members[i].name) ||
           !pattern_subsumes(general->record.members[i].type,
                             specific->record.members[i].type, bindings, seen))
         return false;
     return true;
   case TH_TRAIT:
-    if (general->trait.nlen != specific->trait.nlen ||
-        memcmp(general->trait.name, specific->trait.name,
-               general->trait.nlen) ||
+    if (!core_string_eq(general->trait.name, specific->trait.name) ||
         general->trait.n != specific->trait.n)
       return false;
     for (size_t i = 0; i < general->trait.n; i++) {
       const th_member *x = &general->trait.methods[i];
       const th_member *y = &specific->trait.methods[i];
-      if (strcmp(x->name, y->name) ||
+      if (!core_string_eq(x->name, y->name) ||
           !pattern_subsumes(x->type, y->type, bindings, seen))
         return false;
     }
@@ -350,7 +345,7 @@ static bool pattern_subsumes(const th_type *general, const th_type *specific,
                            bindings, seen)))
       return false;
     for (size_t i = 0; i < general->fn.nkw; i++)
-      if (strcmp(general->fn.kw[i].name, specific->fn.kw[i].name) ||
+      if (!core_string_eq(general->fn.kw[i].name, specific->fn.kw[i].name) ||
           general->fn.kw[i].mode != specific->fn.kw[i].mode ||
           !pattern_subsumes(general->fn.kw[i].type, specific->fn.kw[i].type,
                             bindings, seen))
@@ -454,43 +449,47 @@ static void report_compose_error(core_diagnostics_t *diagnostics,
                                  const th_env_compose_error_t *error) {
   if (!diagnostics || !error || error->status == TH_ENV_COMPOSE_OK)
     return;
-  const char *code = "TH-L0001";
-  const char *kind = "invalid source environment";
+  core_string_t code = CORE_STRING_STATIC("TH-L0001");
+  core_string_t kind = CORE_STRING_STATIC("invalid source environment");
   switch (error->status) {
   case TH_ENV_COMPOSE_OK:
     return;
   case TH_ENV_COMPOSE_INVALID_SOURCE:
     break;
   case TH_ENV_COMPOSE_TYPE_CONFLICT:
-    code = "TH-L0002";
-    kind = "conflicting type declaration";
+    code = CORE_STRING_STATIC("TH-L0002");
+    kind = CORE_STRING_STATIC("conflicting type declaration");
     break;
   case TH_ENV_COMPOSE_TRAIT_CONFLICT:
-    code = "TH-L0003";
-    kind = "conflicting trait declaration";
+    code = CORE_STRING_STATIC("TH-L0003");
+    kind = CORE_STRING_STATIC("conflicting trait declaration");
     break;
   case TH_ENV_COMPOSE_FUNCTION_CONFLICT:
-    code = "TH-L0004";
-    kind = "conflicting function declaration";
+    code = CORE_STRING_STATIC("TH-L0004");
+    kind = CORE_STRING_STATIC("conflicting function declaration");
     break;
   case TH_ENV_COMPOSE_METADATA_CONFLICT:
-    code = "TH-L0005";
-    kind = "conflicting metadata";
+    code = CORE_STRING_STATIC("TH-L0005");
+    kind = CORE_STRING_STATIC("conflicting metadata");
     break;
   case TH_ENV_COMPOSE_VALUE_CONFLICT:
-    code = "TH-L0006";
-    kind = "conflicting value declaration";
+    code = CORE_STRING_STATIC("TH-L0006");
+    kind = CORE_STRING_STATIC("conflicting value declaration");
     break;
   }
   char message[512];
-  int length = error->identity
-                   ? snprintf(message, sizeof(message), "%s: %s", kind,
-                              error->identity)
-                   : snprintf(message, sizeof(message), "%s", kind);
-  if (error->metadata_key && length > 0 &&
+  int length = error->identity.data
+                   ? snprintf(message, sizeof(message), "%.*s: %.*s",
+                              (int)kind.u8_bytes, kind.data,
+                              (int)error->identity.u8_bytes,
+                              error->identity.data)
+                   : snprintf(message, sizeof(message), "%.*s",
+                              (int)kind.u8_bytes, kind.data);
+  if (error->metadata_key.data && length > 0 &&
       (size_t)length < sizeof(message)) {
     int extra = snprintf(message + length, sizeof(message) - (size_t)length,
-                         " (key %s)", error->metadata_key);
+                         " (key %.*s)", (int)error->metadata_key.u8_bytes,
+                         error->metadata_key.data);
     if (extra > 0)
       length += extra;
   }
@@ -499,8 +498,7 @@ static void report_compose_error(core_diagnostics_t *diagnostics,
   size_t size = (size_t)length;
   if (size >= sizeof(message))
     size = sizeof(message) - 1;
-  core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR,
-                          core_string_borrow(code, strlen(code)),
+  core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR, code,
                           core_string_borrow(message, size));
 }
 
@@ -580,8 +578,8 @@ th_env_compose_diagnose_in_context(const th_env *const *environments,
           th_record_len(existing->contracts) == 0 &&
           contract_len(trait->contracts) == 0 &&
           existing->visibility == trait->visibility &&
-          !strcmp(existing->module, trait->module) &&
-          !strcmp(existing->package, trait->package);
+          core_string_eq(existing->module, trait->module) &&
+          core_string_eq(existing->package, trait->package);
       if (!merge_marker && !th_env_register_trait_contracts(
               composed, trait->name, trait->module, trait->package,
               trait->visibility,
@@ -694,41 +692,41 @@ void th_env_free(th_env *env) {
   core_free(env);
 }
 
-bool th_env_register_type(th_env *env, const char *name, const char *module,
-                          const char *package,
+bool th_env_register_type(th_env *env, core_string_t name,
+                          core_string_t module, core_string_t package,
                           th_env_visibility_t visibility) {
-  if (!env || env->frozen || !name || !*name || !module || !package)
+  if (!env || env->frozen || !name.u8_bytes || !module.data || !package.data)
     return false;
   if (visibility > TH_ENV_PUBLIC)
     return false;
   for (size_t i = 0; i < env->type_origins.len; i++) {
     th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (strcmp(origin->name, name))
+    if (!core_string_eq(origin->name, name))
       continue;
-    return !strcmp(origin->module, module) &&
-           !strcmp(origin->package, package) &&
+    return core_string_eq(origin->module, module) &&
+           core_string_eq(origin->package, package) &&
            origin->visibility == visibility;
   }
   core_list_push(env->type_origins,
                  ((th_env_type_origin_t){
-                     .name = th_strdup(env->types, name, strlen(name)),
-                     .module = th_strdup(env->types, module, strlen(module)),
-                     .package = th_strdup(env->types, package, strlen(package)),
+                     .name = th_strdup(env->types, name),
+                     .module = th_strdup(env->types, module),
+                     .package = th_strdup(env->types, package),
                      .visibility = visibility,
                  }));
   return true;
 }
 
-bool th_env_register_type_shape(th_env *env, const char *name,
+bool th_env_register_type_shape(th_env *env, core_string_t name,
                                 th_env_type_shape_kind_t shape_kind,
                                 th_type *shape) {
-  if (!env || env->frozen || !name || !*name || !shape ||
+  if (!env || env->frozen || !name.u8_bytes || !shape ||
       shape_kind <= TH_ENV_TYPE_SHAPE_NONE ||
       shape_kind > TH_ENV_TYPE_SHAPE_BITSET)
     return false;
   for (size_t i = 0; i < env->type_origins.len; i++) {
     th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (strcmp(origin->name, name)) continue;
+    if (!core_string_eq(origin->name, name)) continue;
     if (origin->shape_kind == TH_ENV_TYPE_SHAPE_NONE) {
       origin->shape_kind = shape_kind;
       origin->shape = shape;
@@ -740,9 +738,9 @@ bool th_env_register_type_shape(th_env *env, const char *name,
   return false;
 }
 
-bool th_env_register_trait(th_env *env, const char *name, const char *module,
-                           const char *package, th_env_visibility_t visibility,
-                           th_type *methods) {
+bool th_env_register_trait(th_env *env, core_string_t name,
+                           core_string_t module, core_string_t package,
+                           th_env_visibility_t visibility, th_type *methods) {
   return th_env_register_trait_channels(env, name, module, package,
                                         visibility, methods, nullptr);
 }
@@ -797,11 +795,13 @@ bool th_env_signature_channels(th_ctx *ctx, th_type *contract,
       ctx, fresh_pattern(ctx, contract), signature, error_type);
 }
 
-bool th_env_register_trait_channels(th_env *env, const char *name,
-                                    const char *module, const char *package,
+bool th_env_register_trait_channels(th_env *env, core_string_t name,
+                                    core_string_t module,
+                                    core_string_t package,
                                     th_env_visibility_t visibility,
                                     th_type *methods, th_type *errors) {
-  if (!env || env->frozen || !name || !*name || !module || !package ||
+  if (!env || env->frozen || !name.u8_bytes || !module.data ||
+      !package.data ||
       !methods || visibility > TH_ENV_PUBLIC ||
       th_kind_of(methods) != TH_RECORD || !th_record_len(methods) ||
       trait_named(env, name))
@@ -852,25 +852,27 @@ bool th_env_register_trait_channels(th_env *env, const char *name,
   return registered;
 }
 
-bool th_env_register_trait_contracts(th_env *env, const char *name,
-                                     const char *module, const char *package,
+bool th_env_register_trait_contracts(th_env *env, core_string_t name,
+                                     core_string_t module,
+                                     core_string_t package,
                                      th_env_visibility_t visibility,
                                      th_type *method_contracts) {
-  if (!env || env->frozen || !name || !*name || !module || !package ||
+  if (!env || env->frozen || !name.u8_bytes || !module.data ||
+      !package.data ||
       !method_contracts || visibility > TH_ENV_PUBLIC ||
       (th_kind_of(method_contracts) != TH_RECORD &&
        th_kind_of(method_contracts) != TH_TRAIT))
     return false;
   th_env_trait_t *existing = trait_named(env, name);
   if (existing)
-    return !strcmp(existing->module, module) &&
-           !strcmp(existing->package, package) &&
+    return core_string_eq(existing->module, module) &&
+           core_string_eq(existing->package, package) &&
            existing->visibility == visibility &&
            same_type_pattern(existing->contracts, method_contracts);
-  const char *contract_name = nullptr;
+  core_string_t contract_name = {};
   if (th_kind_of(method_contracts) == TH_TRAIT &&
-      (!th_trait_name(method_contracts, &contract_name, nullptr) ||
-       strcmp(contract_name, name))) return false;
+      (!th_trait_name(method_contracts, &contract_name) ||
+       !core_string_eq(contract_name, name))) return false;
   core_list_t(th_member) methods = core_list_new(th_member);
   core_list_t(th_member) errors = core_list_new(th_member);
   for (size_t i = 0; i < contract_len(method_contracts); i++) {
@@ -891,9 +893,9 @@ bool th_env_register_trait_contracts(th_env *env, const char *name,
                                         .type = error}));
   }
   core_list_push(env->traits, ((th_env_trait_t){
-      .name = th_strdup(env->types, name, strlen(name)),
-      .module = th_strdup(env->types, module, strlen(module)),
-      .package = th_strdup(env->types, package, strlen(package)),
+      .name = th_strdup(env->types, name),
+      .module = th_strdup(env->types, module),
+      .package = th_strdup(env->types, package),
       .visibility = visibility,
       .scheme = th_record(env->types, methods.data, methods.len),
       .errors = th_record(env->types, errors.data, errors.len),
@@ -905,16 +907,16 @@ bool th_env_register_trait_contracts(th_env *env, const char *name,
 }
 
 bool th_env_register_intrinsic_type_pattern(th_env *env,
-                                           const char *trait_name,
+                                           core_string_t trait_name,
                                            th_type *receiver_pattern) {
-  th_env_trait_t *trait = env && trait_name
+  th_env_trait_t *trait = env && trait_name.data
       ? trait_named(env, trait_name) : nullptr;
   if (!env || env->frozen || !trait || !receiver_pattern ||
       contract_len(trait->contracts) != 0)
     return false;
   for (size_t i = 0; i < env->intrinsic_types.len; i++) {
     const th_env_intrinsic_type_t *fact = &env->intrinsic_types.data[i];
-    if (!strcmp(fact->trait_name, trait_name) &&
+    if (core_string_eq(fact->trait_name, trait_name) &&
         same_type_pattern(fact->receiver_pattern, receiver_pattern))
       return true;
   }
@@ -926,9 +928,9 @@ bool th_env_register_intrinsic_type_pattern(th_env *env,
   return true;
 }
 
-bool th_env_register_function(th_env *env, const char *qualified_name,
-                              const char *root_name, const char *module,
-                              const char *package,
+bool th_env_register_function(th_env *env, core_string_t qualified_name,
+                              core_string_t root_name, core_string_t module,
+                              core_string_t package,
                               th_env_visibility_t visibility,
                               th_type *signature) {
   return th_env_register_function_channels(
@@ -937,8 +939,8 @@ bool th_env_register_function(th_env *env, const char *qualified_name,
 }
 
 bool th_env_register_function_channels(
-    th_env *env, const char *qualified_name, const char *root_name,
-    const char *module, const char *package,
+    th_env *env, core_string_t qualified_name, core_string_t root_name,
+    core_string_t module, core_string_t package,
     th_env_visibility_t visibility, th_type *signature, th_type *error_type) {
   if (!env || !signature || !error_type) return false;
   return th_env_register_function_contract(
@@ -947,31 +949,30 @@ bool th_env_register_function_channels(
 }
 
 bool th_env_register_function_contract(
-    th_env *env, const char *qualified_name, const char *root_name,
-    const char *module, const char *package,
+    th_env *env, core_string_t qualified_name, core_string_t root_name,
+    core_string_t module, core_string_t package,
     th_env_visibility_t visibility, th_type *contract) {
-  if (!env || env->frozen || !qualified_name || !*qualified_name ||
-      !root_name || !*root_name || !module || !package || !contract ||
+  if (!env || env->frozen || !qualified_name.u8_bytes ||
+      !root_name.u8_bytes || !module.data || !package.data || !contract ||
       visibility > TH_ENV_PUBLIC)
     return false;
   th_type *signature = nullptr, *error_type = nullptr;
   if (!th_env_signature_channels(env->types, contract, &signature,
                                  &error_type)) return false;
   for (size_t i = 0; i < env->functions.len; i++)
-    if (!strcmp(env->functions.data[i].qualified_name, qualified_name))
-      return !strcmp(env->functions.data[i].root_name, root_name) &&
-             !strcmp(env->functions.data[i].module, module) &&
-             !strcmp(env->functions.data[i].package, package) &&
+    if (core_string_eq(env->functions.data[i].qualified_name, qualified_name))
+      return core_string_eq(env->functions.data[i].root_name, root_name) &&
+             core_string_eq(env->functions.data[i].module, module) &&
+             core_string_eq(env->functions.data[i].package, package) &&
              env->functions.data[i].visibility == visibility &&
              same_type_pattern(env->functions.data[i].contract, contract);
   core_list_push(
       env->functions,
       ((th_env_function_t){
-          .qualified_name =
-              th_strdup(env->types, qualified_name, strlen(qualified_name)),
-          .root_name = th_strdup(env->types, root_name, strlen(root_name)),
-          .module = th_strdup(env->types, module, strlen(module)),
-          .package = th_strdup(env->types, package, strlen(package)),
+          .qualified_name = th_strdup(env->types, qualified_name),
+          .root_name = th_strdup(env->types, root_name),
+          .module = th_strdup(env->types, module),
+          .package = th_strdup(env->types, package),
           .visibility = visibility,
           .order = env->functions.len,
           .scheme = signature,
@@ -981,28 +982,28 @@ bool th_env_register_function_contract(
   return true;
 }
 
-bool th_env_register_value(th_env *env, const char *qualified_name,
-                           const char *root_name, const char *module,
-                           const char *package, th_env_visibility_t visibility,
+bool th_env_register_value(th_env *env, core_string_t qualified_name,
+                           core_string_t root_name, core_string_t module,
+                           core_string_t package,
+                           th_env_visibility_t visibility,
                            th_type *value_type) {
-  if (!env || env->frozen || !qualified_name || !*qualified_name ||
-      !root_name || !*root_name || !module || !package || !value_type ||
+  if (!env || env->frozen || !qualified_name.u8_bytes ||
+      !root_name.u8_bytes || !module.data || !package.data || !value_type ||
       visibility > TH_ENV_PUBLIC) return false;
   for (size_t i = 0; i < env->values.len; i++) {
     const th_env_value_t *current = &env->values.data[i];
-    if (strcmp(current->qualified_name, qualified_name)) continue;
-    return !strcmp(current->module, module) &&
-        !strcmp(current->package, package) &&
+    if (!core_string_eq(current->qualified_name, qualified_name)) continue;
+    return core_string_eq(current->module, module) &&
+        core_string_eq(current->package, package) &&
         current->visibility == visibility &&
-        !strcmp(current->root_name, root_name) &&
+        core_string_eq(current->root_name, root_name) &&
         same_type_pattern(current->type, value_type);
   }
   core_list_push(env->values, ((th_env_value_t){
-      .qualified_name = th_strdup(env->types, qualified_name,
-                                  strlen(qualified_name)),
-      .root_name = th_strdup(env->types, root_name, strlen(root_name)),
-      .module = th_strdup(env->types, module, strlen(module)),
-      .package = th_strdup(env->types, package, strlen(package)),
+      .qualified_name = th_strdup(env->types, qualified_name),
+      .root_name = th_strdup(env->types, root_name),
+      .module = th_strdup(env->types, module),
+      .package = th_strdup(env->types, package),
       .visibility = visibility,
       .type = value_type,
   }));
@@ -1011,23 +1012,23 @@ bool th_env_register_value(th_env *env, const char *qualified_name,
 
 static bool metadata_owner_exists(const th_env *env,
                                   th_env_metadata_owner_t owner_kind,
-                                  const char *owner_name) {
+                                  core_string_t owner_name) {
   switch (owner_kind) {
   case TH_ENV_METADATA_TYPE:
     for (size_t i = 0; i < env->type_origins.len; i++)
-      if (!strcmp(env->type_origins.data[i].name, owner_name))
+      if (core_string_eq(env->type_origins.data[i].name, owner_name))
         return true;
     return false;
   case TH_ENV_METADATA_TRAIT:
     return trait_named(env, owner_name) != nullptr;
   case TH_ENV_METADATA_FUNCTION:
     for (size_t i = 0; i < env->functions.len; i++)
-      if (!strcmp(env->functions.data[i].qualified_name, owner_name))
+      if (core_string_eq(env->functions.data[i].qualified_name, owner_name))
         return true;
     return false;
   case TH_ENV_METADATA_VALUE:
     for (size_t i = 0; i < env->values.len; i++)
-      if (!strcmp(env->values.data[i].qualified_name, owner_name))
+      if (core_string_eq(env->values.data[i].qualified_name, owner_name))
         return true;
     return false;
   case TH_ENV_METADATA_ENVIRONMENT:
@@ -1037,18 +1038,19 @@ static bool metadata_owner_exists(const th_env *env,
 }
 
 bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
-                              const char *owner_name, const char *key,
+                              core_string_t owner_name, core_string_t key,
                               uint32_t version, const void *data,
                               size_t size) {
   if (!env || env->frozen || owner_kind < TH_ENV_METADATA_TYPE ||
       owner_kind > TH_ENV_METADATA_ENVIRONMENT ||
-      !owner_name || !*owner_name || !key || !*key || !version ||
+      !owner_name.u8_bytes || !key.u8_bytes || !version ||
       (size && !data) || !metadata_owner_exists(env, owner_kind, owner_name))
     return false;
   for (size_t i = 0; i < env->metadata.len; i++) {
     const th_env_metadata_record_t *current = &env->metadata.data[i];
     if (current->owner_kind == owner_kind &&
-        !strcmp(current->owner_name, owner_name) && !strcmp(current->key, key))
+        core_string_eq(current->owner_name, owner_name) &&
+        core_string_eq(current->key, key))
       return current->version == version && current->size == size &&
              (!size || !memcmp(current->data, data, size));
   }
@@ -1059,9 +1061,8 @@ bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
   core_list_push(env->metadata,
                  ((th_env_metadata_record_t){
                      .owner_kind = owner_kind,
-                     .owner_name = th_strdup(env->types, owner_name,
-                                             strlen(owner_name)),
-                     .key = th_strdup(env->types, key, strlen(key)),
+                     .owner_name = th_strdup(env->types, owner_name),
+                     .key = th_strdup(env->types, key),
                      .version = version,
                      .data = owned_data,
                      .size = size,
@@ -1070,17 +1071,18 @@ bool th_env_register_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
 }
 
 bool th_env_replace_metadata(th_env *env, th_env_metadata_owner_t owner_kind,
-                             const char *owner_name, const char *key,
+                             core_string_t owner_name, core_string_t key,
                              uint32_t version, const void *data,
                              size_t size) {
   if (!env || env->frozen || owner_kind < TH_ENV_METADATA_TYPE ||
-      owner_kind > TH_ENV_METADATA_ENVIRONMENT || !owner_name ||
-      !*owner_name || !key || !*key || !version || (size && !data))
+      owner_kind > TH_ENV_METADATA_ENVIRONMENT || !owner_name.u8_bytes ||
+      !key.u8_bytes || !version || (size && !data))
     return false;
   for (size_t i = 0; i < env->metadata.len; i++) {
     th_env_metadata_record_t *current = &env->metadata.data[i];
     if (current->owner_kind != owner_kind ||
-        strcmp(current->owner_name, owner_name) || strcmp(current->key, key))
+        !core_string_eq(current->owner_name, owner_name) ||
+        !core_string_eq(current->key, key))
       continue;
     uint8_t *owned_data = size ? th_alloc(env->types, size) : nullptr;
     if (size) memcpy(owned_data, data, size);
@@ -1203,20 +1205,19 @@ bool th_env_freeze(th_env *env) {
    * intentionally recomputed by the type layer for each receiver. */
   for (size_t ti = 0; ti < env->traits.len; ti++) {
     th_env_trait_t *trait = &env->traits.data[ti];
-    trait->logic_symbol = core_datalog_constant(
-        env->logic, core_string_borrow(trait->name, strlen(trait->name)));
+    trait->logic_symbol = core_datalog_constant(env->logic, trait->name);
     th_type *methods = fresh_pattern(probe, trait->contracts);
     for (size_t mi = 0; mi < contract_len(methods); mi++) {
       const th_member *method = contract_method(methods, mi);
       const th_member *stable_method = contract_method(trait->contracts, mi);
-      core_datalog_symbol_t method_symbol = core_datalog_constant(
-          env->logic, core_string_borrow(method->name, strlen(method->name)));
+      core_datalog_symbol_t method_symbol =
+          core_datalog_constant(env->logic, method->name);
       core_list_push(
           env->method_symbols,
           ((th_env_method_symbol_t){ti, stable_method->name, method_symbol}));
       for (size_t fi = 0; fi < env->functions.len; fi++) {
         th_env_function_t *function = &env->functions.data[fi];
-        if (strcmp(function->root_name, method->name) ||
+        if (!core_string_eq(function->root_name, method->name) ||
             !function_can_match(probe, trait, function, method->name))
           continue;
         core_datalog_symbol_t tuple[] = {trait->logic_symbol, method_symbol,
@@ -1253,15 +1254,16 @@ bool th_env_freeze(th_env *env) {
 
 bool th_env_is_frozen(const th_env *env) { return env && env->frozen; }
 
-bool th_ctx_set_environment(th_ctx *ctx, const th_env *env, const char *module,
-                            const char *package) {
+bool th_ctx_set_environment(th_ctx *ctx, const th_env *env,
+                            core_string_t module, core_string_t package) {
   if (!ctx || !env || !env->frozen)
     return false;
-  module = module ? module : "";
-  package = package ? package : "";
+  if (!module.data) module = CORE_STRING_STATIC("");
+  if (!package.data) package = CORE_STRING_STATIC("");
   if (ctx->environment)
-    return ctx->environment == env && ctx->module && ctx->package &&
-           !strcmp(ctx->module, module) && !strcmp(ctx->package, package);
+    return ctx->environment == env && ctx->module.data &&
+           ctx->package.data && core_string_eq(ctx->module, module) &&
+           core_string_eq(ctx->package, package);
   ctx->environment = env;
   if (!ctx->builtin_types && env->types && env->types->builtin_types)
     th_ctx_set_builtin_types(ctx, env->types->builtin_types,
@@ -1274,54 +1276,55 @@ const th_env *th_ctx_environment(const th_ctx *ctx) {
   return ctx ? ctx->environment : NULL;
 }
 
-bool th_ctx_set_scope(th_ctx *ctx, const char *module, const char *package) {
+bool th_ctx_set_scope(th_ctx *ctx, core_string_t module,
+                      core_string_t package) {
   if (!ctx) return false;
-  module = module ? module : "";
-  package = package ? package : "";
-  if (!ctx->module || strcmp(ctx->module, module))
-    ctx->module = th_strdup(ctx, module, strlen(module));
-  if (!ctx->package || strcmp(ctx->package, package))
-    ctx->package = th_strdup(ctx, package, strlen(package));
+  if (!module.data) module = CORE_STRING_STATIC("");
+  if (!package.data) package = CORE_STRING_STATIC("");
+  if (!ctx->module.data || !core_string_eq(ctx->module, module))
+    ctx->module = th_strdup(ctx, module);
+  if (!ctx->package.data || !core_string_eq(ctx->package, package))
+    ctx->package = th_strdup(ctx, package);
   return true;
 }
 
-bool th_ctx_set_environment_scope(th_ctx *ctx, const char *module,
-                                  const char *package) {
+bool th_ctx_set_environment_scope(th_ctx *ctx, core_string_t module,
+                                  core_string_t package) {
   if (!ctx || !ctx->environment)
     return false;
   return th_ctx_set_scope(ctx, module, package);
 }
 
 static bool visible_to(const th_ctx *ctx, th_env_visibility_t visibility,
-                       const char *module, const char *package) {
+                       core_string_t module, core_string_t package) {
   if (visibility == TH_ENV_PUBLIC)
     return true;
   if (visibility == TH_ENV_PACKAGE)
-    return ctx->package && !strcmp(ctx->package, package);
-  return ctx->module && !strcmp(ctx->module, module);
+    return ctx->package.data && core_string_eq(ctx->package, package);
+  return ctx->module.data && core_string_eq(ctx->module, module);
 }
 
-bool th_env_type_visible(const th_ctx *ctx, const char *name) {
-  if (!ctx || !ctx->environment || !name)
+bool th_env_type_visible(const th_ctx *ctx, core_string_t name) {
+  if (!ctx || !ctx->environment || !name.data)
     return false;
   const th_env *env = ctx->environment;
   for (size_t i = 0; i < env->type_origins.len; i++) {
     const th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (!strcmp(origin->name, name))
+    if (core_string_eq(origin->name, name))
       return visible_to(ctx, origin->visibility, origin->module,
                         origin->package);
   }
   return false;
 }
 
-th_type *th_env_type_shape(const th_ctx *ctx, const char *name,
+th_type *th_env_type_shape(const th_ctx *ctx, core_string_t name,
                            th_env_type_shape_kind_t *shape_kind) {
   if (shape_kind) *shape_kind = TH_ENV_TYPE_SHAPE_NONE;
-  if (!ctx || !ctx->environment || !name) return nullptr;
+  if (!ctx || !ctx->environment || !name.data) return nullptr;
   const th_env *env = ctx->environment;
   for (size_t i = 0; i < env->type_origins.len; i++) {
     const th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (strcmp(origin->name, name) ||
+    if (!core_string_eq(origin->name, name) ||
         !visible_to(ctx, origin->visibility, origin->module,
                     origin->package)) continue;
     if (shape_kind) *shape_kind = origin->shape_kind;
@@ -1333,13 +1336,12 @@ th_type *th_env_type_shape(const th_ctx *ctx, const char *name,
 static th_env_type_origin_t *receiver_origin(const th_env *env,
                                              th_type *receiver) {
   receiver = th_resolve(receiver);
-  const char *name = nullptr;
-  size_t nlen = 0;
-  if (!th_named_info(receiver, &name, &nlen, nullptr, nullptr))
+  core_string_t name = {};
+  if (!th_named_info(receiver, &name, nullptr, nullptr))
     return nullptr;
   for (size_t i = 0; i < env->type_origins.len; i++) {
     th_env_type_origin_t *origin = &env->type_origins.data[i];
-    if (strlen(origin->name) == nlen && !memcmp(origin->name, name, nlen))
+    if (core_string_eq(origin->name, name))
       return origin;
   }
   return nullptr;
@@ -1347,9 +1349,9 @@ static th_env_type_origin_t *receiver_origin(const th_env *env,
 
 static int function_origin_rank(const th_env_type_origin_t *origin,
                                 const th_env_function_t *function) {
-  if (origin && !strcmp(origin->module, function->module))
+  if (origin && core_string_eq(origin->module, function->module))
     return 2;
-  if (origin && !strcmp(origin->package, function->package))
+  if (origin && core_string_eq(origin->package, function->package))
     return 1;
   return 0;
 }
@@ -1357,7 +1359,7 @@ static int function_origin_rank(const th_env_type_origin_t *origin,
 static bool function_matches(th_ctx *ctx, th_type *receiver,
                              const th_env_trait_t *trait,
                              const th_env_function_t *function,
-                             const char *method_name) {
+                             core_string_t method_name) {
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
@@ -1385,7 +1387,7 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
 
 static bool function_matches_with_promotion(
     th_ctx *ctx, th_type *receiver, const th_env_trait_t *trait,
-    const th_env_function_t *function, const char *method_name) {
+    const th_env_function_t *function, core_string_t method_name) {
   th_probe_t probe = th_probe_begin(ctx);
   bool matched = function_matches(ctx, receiver, trait, function,
                                   method_name);
@@ -1405,7 +1407,7 @@ static bool function_matches_with_promotion(
 
 static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
                                const th_env_function_t *function,
-                               const char *method_name) {
+                               core_string_t method_name) {
   th_probe_t probe = th_probe_begin(ctx);
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
   th_type *function_contract = fresh_pattern(ctx, function->contract);
@@ -1429,8 +1431,8 @@ static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
 }
 
 static const th_env_trait_t *visible_trait(const th_ctx *ctx,
-                                           const char *name) {
-  if (!ctx || !ctx->environment || !name)
+                                           core_string_t name) {
+  if (!ctx || !ctx->environment || !name.data)
     return nullptr;
   th_env_trait_t *trait = trait_named(ctx->environment, name);
   return trait && visible_to(ctx, trait->visibility, trait->module,
@@ -1467,11 +1469,11 @@ static bool collect_candidate(const core_datalog_symbol_t *tuple, int32_t arity,
 
 static core_list_t(th_env_function_ptr_t)
     candidate_functions(th_ctx *ctx, const th_env_trait_t *trait,
-                        const char *method_name) {
+                        core_string_t method_name) {
   core_list_t(th_env_function_ptr_t) functions =
       core_list_new(th_env_function_ptr_t);
   if (!ctx || !ctx->environment || !ctx->environment->frozen || !trait ||
-      !method_name)
+      !method_name.data)
     return functions;
   size_t trait_index = (size_t)(trait - ctx->environment->traits.data);
   core_datalog_symbol_t method_symbol = CORE_DATALOG_SYMBOL_INVALID;
@@ -1479,7 +1481,7 @@ static core_list_t(th_env_function_ptr_t)
     const th_env_method_symbol_t *entry =
         &ctx->environment->method_symbols.data[i];
     if (entry->trait_index == trait_index &&
-        !strcmp(entry->method_name, method_name)) {
+        core_string_eq(entry->method_name, method_name)) {
       method_symbol = entry->logic_symbol;
       break;
     }
@@ -1509,22 +1511,20 @@ typedef struct {
 
 static bool same_intrinsic_head(const th_type *pattern,
                                 const th_type *receiver) {
-  const char *pattern_name = nullptr;
-  const char *receiver_name = nullptr;
-  size_t pattern_len = 0, receiver_len = 0;
+  core_string_t pattern_name = {};
+  core_string_t receiver_name = {};
   size_t pattern_arity = 0, receiver_arity = 0;
   bool pattern_variant = false, receiver_variant = false;
-  bool pattern_named = th_named_info(pattern, &pattern_name, &pattern_len,
+  bool pattern_named = th_named_info(pattern, &pattern_name,
                                      &pattern_variant, &pattern_arity);
   bool receiver_named = th_named_info(receiver, &receiver_name,
-                                       &receiver_len, &receiver_variant,
-                                       &receiver_arity);
+                                       &receiver_variant, &receiver_arity);
   if (th_kind_of(pattern) != th_kind_of(receiver))
     return false;
   if (!pattern_named || !receiver_named) return true;
-  return pattern_len == receiver_len && pattern_arity == receiver_arity &&
+  return pattern_arity == receiver_arity &&
          pattern_variant == receiver_variant &&
-         !memcmp(pattern_name, receiver_name, pattern_len);
+         core_string_eq(pattern_name, receiver_name);
 }
 
 static bool collect_intrinsic_type(const core_datalog_symbol_t *tuple,
@@ -1627,21 +1627,22 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
 }
 
 static uint64_t implements_memo_key(th_ctx *ctx, th_type *receiver,
-                                    const char *trait_name) {
+                                    core_string_t trait_name) {
   uint64_t parts[] = {
       (uint64_t)(uintptr_t)ctx->environment,
-      core_xxh3_64bits_raw(ctx->module ? ctx->module : "",
-                           ctx->module ? strlen(ctx->module) : 0),
-      core_xxh3_64bits_raw(ctx->package ? ctx->package : "",
-                           ctx->package ? strlen(ctx->package) : 0),
+      core_xxh3_64bits_raw(ctx->module.data ? ctx->module.data : "",
+                           ctx->module.u8_bytes),
+      core_xxh3_64bits_raw(ctx->package.data ? ctx->package.data : "",
+                           ctx->package.u8_bytes),
       th_hash(ctx, receiver),
-      core_xxh3_64bits_raw(trait_name, strlen(trait_name)),
+      core_xxh3_64bits_raw(trait_name.data ? trait_name.data : "",
+                           trait_name.u8_bytes),
   };
   return core_xxh3_64bits_raw(parts, sizeof(parts));
 }
 
 static bool implements_uncached(th_ctx *ctx, th_type *receiver,
-                                const char *trait_name) {
+                                core_string_t trait_name) {
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
     return false;
@@ -1654,9 +1655,10 @@ static bool implements_uncached(th_ctx *ctx, th_type *receiver,
   return implemented;
 }
 
-bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
+bool th_env_implements(th_ctx *ctx, th_type *receiver,
+                       core_string_t trait_name) {
   if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
-      !trait_name || th_kind_of(th_resolve(receiver)) == TH_VAR)
+      !trait_name.data || th_kind_of(th_resolve(receiver)) == TH_VAR)
     return false;
   if (!th_is_closed(ctx, receiver))
     return implements_uncached(ctx, receiver, trait_name);
@@ -1677,15 +1679,16 @@ bool th_env_implements(th_ctx *ctx, th_type *receiver, const char *trait_name) {
 }
 
 static th_env_method_status_t
-method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
-                    const char *method_name,
+method_resolve_best(th_ctx *ctx, th_type *receiver, core_string_t trait_name,
+                    core_string_t method_name,
                     const th_env_function_t **best_out);
 
 th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
-                                             const char *trait_name,
-                                             const char *method_name,
+                                             core_string_t trait_name,
+                                             core_string_t method_name,
                                              th_env_method_t *out) {
-  if (!ctx || !ctx->environment || !receiver || !trait_name || !method_name ||
+  if (!ctx || !ctx->environment || !receiver || !trait_name.data ||
+      !method_name.data ||
       !th_env_implements(ctx, receiver, trait_name))
     return TH_ENV_METHOD_NOT_FOUND;
   const th_env_function_t *best = nullptr;
@@ -1699,7 +1702,7 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
     }
     uint64_t parts[] = {
         implements_memo_key(ctx, receiver, trait_name),
-        core_xxh3_64bits_raw(method_name, strlen(method_name)),
+        core_xxh3_64bits_raw(method_name.data, method_name.u8_bytes),
     };
     key = core_xxh3_64bits_raw(parts, sizeof(parts));
     bool found = false;
@@ -1744,8 +1747,8 @@ th_env_method_status_t th_env_method_resolve(th_ctx *ctx, th_type *receiver,
 }
 
 static th_env_method_status_t
-method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
-                    const char *method_name,
+method_resolve_best(th_ctx *ctx, th_type *receiver, core_string_t trait_name,
+                    core_string_t method_name,
                     const th_env_function_t **best_out) {
   th_probe_t probe = th_probe_begin(ctx);
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
@@ -1832,7 +1835,7 @@ method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
       best_origin_count = 1;
     }
     else if (origin_rank == best_origin_rank) {
-      if (strcmp(matches.data[i].function->module, best->module))
+      if (!core_string_eq(matches.data[i].function->module, best->module))
         best_origin_count++;
     }
   }
@@ -1848,7 +1851,7 @@ method_resolve_best(th_ctx *ctx, th_type *receiver, const char *trait_name,
 }
 
 bool th_env_method_lookup(th_ctx *ctx, th_type *receiver,
-                          const char *trait_name, const char *method_name,
+                          core_string_t trait_name, core_string_t method_name,
                           th_env_method_t *out) {
   return th_env_method_resolve(ctx, receiver, trait_name, method_name, out) ==
          TH_ENV_METHOD_FOUND;
@@ -1861,7 +1864,7 @@ typedef struct {
 } method_choice_t;
 
 static th_env_method_status_t method_resolve_by_name_choice(
-    th_ctx *ctx, th_type *receiver, const char *method_name,
+    th_ctx *ctx, th_type *receiver, core_string_t method_name,
     method_choice_t *choice) {
   typedef struct {
     const th_env_trait_t *trait;
@@ -1942,7 +1945,8 @@ static th_env_method_status_t method_resolve_by_name_choice(
       best_origin_rank = rank;
       tied_functions = false;
     } else if (rank == best_origin_rank && best &&
-               strcmp(candidate->function->module, best->function->module))
+               !core_string_eq(candidate->function->module,
+                               best->function->module))
       tied_functions = true;
   }
   th_probe_end(ctx, &probe);
@@ -1960,12 +1964,12 @@ static th_env_method_status_t method_resolve_by_name_choice(
 }
 
 th_env_method_status_t th_env_method_resolve_by_name(
-    th_ctx *ctx, th_type *receiver, const char *method_name,
-    th_env_method_t *out, const char **trait_name) {
+    th_ctx *ctx, th_type *receiver, core_string_t method_name,
+    th_env_method_t *out, core_string_t *trait_name) {
   if (out) *out = (th_env_method_t){0};
-  if (trait_name) *trait_name = nullptr;
+  if (trait_name) *trait_name = (core_string_t){};
   if (!ctx || !ctx->environment || !ctx->environment->frozen || !receiver ||
-      !method_name)
+      !method_name.data)
     return TH_ENV_METHOD_NOT_FOUND;
   method_choice_t local = {0};
   method_choice_t *choice = &local;
@@ -1976,8 +1980,8 @@ th_env_method_status_t th_env_method_resolve_by_name(
       core_dict_init(ctx->method_memo, core_hash_word, nullptr);
     }
     uint64_t parts[] = {
-        implements_memo_key(ctx, receiver, ""),
-        core_xxh3_64bits_raw(method_name, strlen(method_name)),
+        implements_memo_key(ctx, receiver, CORE_STRING_STATIC("")),
+        core_xxh3_64bits_raw(method_name.data, method_name.u8_bytes),
         1,
     };
     uint64_t key = core_xxh3_64bits_raw(parts, sizeof(parts));
@@ -2019,10 +2023,10 @@ th_env_method_status_t th_env_method_resolve_by_name(
   return TH_ENV_METHOD_FOUND;
 }
 
-size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
-                                const char *method_name, th_env_method_t *out,
-                                size_t max_methods) {
-  if (!ctx || !ctx->environment || !trait_name || !method_name)
+size_t th_env_method_candidates(th_ctx *ctx, core_string_t trait_name,
+                                core_string_t method_name,
+                                th_env_method_t *out, size_t max_methods) {
+  if (!ctx || !ctx->environment || !trait_name.data || !method_name.data)
     return 0;
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   th_probe_t probe = th_probe_begin(ctx);
@@ -2059,14 +2063,15 @@ size_t th_env_method_candidates(th_ctx *ctx, const char *trait_name,
 }
 
 th_env_method_status_t th_env_method_plan_dispatch(
-    th_ctx *ctx, const char *trait_name, const char *method_name,
+    th_ctx *ctx, core_string_t trait_name, core_string_t method_name,
     th_type *const *receiver_types, size_t receiver_count,
     th_env_dispatch_entry_t *entries, size_t capacity,
     size_t *required_count, bool *direct_call) {
   if (required_count) *required_count = 0;
   if (direct_call) *direct_call = false;
   if (!ctx || !ctx->environment || !ctx->environment->frozen ||
-      !trait_name || !method_name || !receiver_types || !receiver_count)
+      !trait_name.data || !method_name.data || !receiver_types ||
+      !receiver_count)
     return TH_ENV_METHOD_NOT_FOUND;
 
   th_env_dispatch_entry_t *plan =
@@ -2084,8 +2089,8 @@ th_env_method_status_t th_env_method_plan_dispatch(
       return status;
     }
     plan[i].receiver_type = receiver_types[i];
-    if (i && strcmp(plan[0].method.qualified_name,
-                    plan[i].method.qualified_name))
+    if (i && !core_string_eq(plan[0].method.qualified_name,
+                             plan[i].method.qualified_name))
       single_target = false;
   }
 
@@ -2100,13 +2105,13 @@ th_env_method_status_t th_env_method_plan_dispatch(
 }
 
 th_env_method_status_t th_env_trait_vtable_plan(
-    th_ctx *ctx, const char *trait_name, th_type *concrete_type,
+    th_ctx *ctx, core_string_t trait_name, th_type *concrete_type,
     th_env_vtable_slot_t *slots, size_t capacity, size_t *required_count,
     th_env_vtable_plan_t *out_plan) {
   if (required_count) *required_count = 0;
   if (out_plan) *out_plan = (th_env_vtable_plan_t){0};
   if (!ctx || !ctx->environment || !ctx->environment->frozen ||
-      !trait_name || !concrete_type)
+      !trait_name.data || !concrete_type)
     return TH_ENV_METHOD_NOT_FOUND;
   const th_env_trait_t *trait = visible_trait(ctx, trait_name);
   if (!trait)
@@ -2146,10 +2151,10 @@ th_env_method_status_t th_env_trait_vtable_plan(
 }
 
 size_t th_env_method_requirements(
-    th_ctx *ctx, const char *method_name,
+    th_ctx *ctx, core_string_t method_name,
     th_env_method_requirement_t *requirements, size_t max_requirements) {
   if (!ctx || !ctx->environment || !ctx->environment->frozen ||
-      !method_name)
+      !method_name.data)
     return 0;
   const th_env *env = ctx->environment;
   size_t count = 0;

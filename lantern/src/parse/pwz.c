@@ -1436,7 +1436,7 @@ score_exp(parse_pwz_parser_t *p, pwz_exp_t *root, int32_t *pos)
                     parse_token_info_t *tok = get_token(p, *pos);
 
                     if (p->disambig_cb(p->disambig_ud,
-                                       rule->disambig_predicate.data, tok)) {
+                                       rule->disambig_predicate, tok)) {
                         if (p->score_predicate_calls < UINT32_MAX)
                             p->score_predicate_calls++;
                         f->cost += rule->disambig_cost;

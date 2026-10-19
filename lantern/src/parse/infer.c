@@ -686,53 +686,61 @@ parse_infer_free(parse_infer_expr_t *e)
     core_free(e);
 }
 
-const char *
+core_string_t
 parse_infer_kind_name(parse_infer_kind_t k)
 {
     switch (k) {
-    case PARSE_INFER_CHILD:     return "child";
-    case PARSE_INFER_SELF:      return "self";
-    case PARSE_INFER_RETURN:    return "return";
-    case PARSE_INFER_TVAR:      return "tvar";
-    case PARSE_INFER_NAMED:     return "named";
-    case PARSE_INFER_NAMED_APP: return "named-app";
-    case PARSE_INFER_CHILD_APP: return "child-app";
-    case PARSE_INFER_SPREAD:    return "spread";
-    case PARSE_INFER_LOOKUP:    return "lookup";
-    case PARSE_INFER_PROJECT:   return "project";
-    case PARSE_INFER_COMPARE:   return "compare";
-    case PARSE_INFER_METHOD_RESULT: return "method-result";
-    case PARSE_INFER_UNIFY:     return "unify";
-    case PARSE_INFER_SUM:       return "sum";
-    case PARSE_INFER_CHILDREN:  return "children";
+    case PARSE_INFER_CHILD:     return CORE_STRING_STATIC("child");
+    case PARSE_INFER_SELF:      return CORE_STRING_STATIC("self");
+    case PARSE_INFER_RETURN:    return CORE_STRING_STATIC("return");
+    case PARSE_INFER_TVAR:      return CORE_STRING_STATIC("tvar");
+    case PARSE_INFER_NAMED:     return CORE_STRING_STATIC("named");
+    case PARSE_INFER_NAMED_APP: return CORE_STRING_STATIC("named-app");
+    case PARSE_INFER_CHILD_APP: return CORE_STRING_STATIC("child-app");
+    case PARSE_INFER_SPREAD:    return CORE_STRING_STATIC("spread");
+    case PARSE_INFER_LOOKUP:    return CORE_STRING_STATIC("lookup");
+    case PARSE_INFER_PROJECT:   return CORE_STRING_STATIC("project");
+    case PARSE_INFER_COMPARE:   return CORE_STRING_STATIC("compare");
+    case PARSE_INFER_METHOD_RESULT:
+        return CORE_STRING_STATIC("method-result");
+    case PARSE_INFER_UNIFY:     return CORE_STRING_STATIC("unify");
+    case PARSE_INFER_SUM:       return CORE_STRING_STATIC("sum");
+    case PARSE_INFER_CHILDREN:  return CORE_STRING_STATIC("children");
     }
 
-    return "?";
+    return CORE_STRING_STATIC("?");
 }
 
-const char *
+core_string_t
 parse_infer_proj_name(parse_infer_proj_t p)
 {
     switch (p) {
-    case PARSE_INFER_RETURN_OF:      return "return_of";
-    case PARSE_INFER_ELEMENT_OF:     return "element_of";
-    case PARSE_INFER_SLICE_OF:      return "slice_of";
-    case PARSE_INFER_UNWRAP_RESULT:  return "unwrap_result";
-    case PARSE_INFER_METHOD_RETURN:  return "method_return";
-    case PARSE_INFER_FIELD_RETURN:   return "field_return";
+    case PARSE_INFER_RETURN_OF:     return CORE_STRING_STATIC("return_of");
+    case PARSE_INFER_ELEMENT_OF:    return CORE_STRING_STATIC("element_of");
+    case PARSE_INFER_SLICE_OF:      return CORE_STRING_STATIC("slice_of");
+    case PARSE_INFER_UNWRAP_RESULT:
+        return CORE_STRING_STATIC("unwrap_result");
+    case PARSE_INFER_METHOD_RETURN:
+        return CORE_STRING_STATIC("method_return");
+    case PARSE_INFER_FIELD_RETURN:
+        return CORE_STRING_STATIC("field_return");
     case PARSE_INFER_FIELD_RETURN_AUTO_DEREF:
-        return "field_return_auto_deref";
+        return CORE_STRING_STATIC("field_return_auto_deref");
     }
 
-    return "?";
+    return CORE_STRING_STATIC("?");
 }
 
 typedef core_buffer_t sbuf;
 
+#define emit(b, lit) core_buffer_puts((b), lit)
+
 static void
-emit(sbuf *b, const char *s)
+emit_string(sbuf *b, core_string_t s)
 {
-    core_buffer_puts(b, s);
+    if (s.data) {
+        core_buffer_append_string(b, s);
+    }
 }
 
 static void
@@ -771,15 +779,15 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
 
     case PARSE_INFER_TVAR:
         emit(b, "`");
-        emit(b, e->name.data ? e->name.data : "");
+        emit_string(b, e->name);
         break;
 
     case PARSE_INFER_NAMED:
-        emit(b, e->name.data ? e->name.data : "");
+        emit_string(b, e->name);
         break;
 
     case PARSE_INFER_NAMED_APP:
-        emit(b, e->name.data ? e->name.data : "");
+        emit_string(b, e->name);
         print_args(b, e);
         break;
 
@@ -801,7 +809,7 @@ print_one(sbuf *b, const parse_infer_expr_t *e)
         break;
 
     case PARSE_INFER_PROJECT:
-        emit(b, parse_infer_proj_name(e->proj));
+        emit_string(b, parse_infer_proj_name(e->proj));
         emit(b, "(");
         print_one(b, e->lhs);
         if (e->name.data) {
@@ -880,12 +888,12 @@ print_args(sbuf *b, const parse_infer_expr_t *e)
     emit(b, "]");
 }
 
-char *
+core_string_t
 parse_infer_print(const parse_infer_expr_t *e)
 {
     sbuf *b = core_buffer_empty();
 
     print_one(b, e);
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }

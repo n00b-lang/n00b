@@ -22,7 +22,8 @@ int main(void)
     check("module identity initializes",
           core_module_spec_init(&module, CORE_STRING_STATIC("pkg.mod")));
     check("source initializes", core_source_file_init(
-        &source, CORE_STRING_STATIC("pkg/mod.n00b"), "", 0));
+        &source, CORE_STRING_STATIC("pkg/mod.n00b"),
+        CORE_STRING_STATIC("")));
     check("translation unit owns its diagnostic sink",
           core_translation_unit_init(&unit, &module, &source));
 

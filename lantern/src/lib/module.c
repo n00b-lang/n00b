@@ -122,13 +122,14 @@ core_module_spec_eq(const core_module_spec_t *a, const core_module_spec_t *b)
 
 bool
 core_source_file_init(core_source_file_t *file, core_string_t path,
-                      const char *contents, size_t byte_len)
+                      core_string_t contents)
 {
-    if (!file || !path.data || (!contents && byte_len)) return false;
+    if (!file || !path.data || (!contents.data && contents.u8_bytes))
+        return false;
     *file = (core_source_file_t){
         .path = core_string_dup(path),
-        .contents = core_buffer_from_bytes(contents ? contents : "",
-                                           (int64_t)byte_len),
+        .contents = core_buffer_from_bytes(
+            contents.data ? contents.data : "", (int64_t)contents.u8_bytes),
     };
     return true;
 }
@@ -166,10 +167,11 @@ core_source_file_path(const core_source_file_t *file)
     return file ? file->path : (core_string_t){0};
 }
 
-const char *
+core_string_t
 core_source_file_contents(const core_source_file_t *file)
 {
-    return file && file->contents ? file->contents->data : nullptr;
+    return file && file->contents ? core_buffer_string(file->contents)
+                                  : (core_string_t){};
 }
 
 size_t

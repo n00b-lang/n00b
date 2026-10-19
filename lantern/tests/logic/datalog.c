@@ -318,9 +318,9 @@ static void test_rule_bindings_are_not_capped_at_64(void) {
   for (size_t i = 0; i < 70; i++) {
     values[i] = core_datalog_integer(engine, (int64_t)i);
     char name[24];
-    snprintf(name, sizeof(name), "V%zu", i);
-    variables[i] =
-        core_datalog_variable(engine, core_string_borrow(name, strlen(name)));
+    int length = snprintf(name, sizeof(name), "V%zu", i);
+    variables[i] = core_datalog_variable(
+        engine, core_string_borrow(name, (size_t)length));
   }
   core_datalog_add_fact(engine, source, 70, values);
   core_datalog_goal_t *body = core_alloc_array(core_datalog_goal_t, 1);

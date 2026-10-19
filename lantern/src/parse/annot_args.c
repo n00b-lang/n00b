@@ -822,9 +822,7 @@ decode(parse_annotation_t *a, aa_node *args)
             return false;
         }
 
-        char *text = parse_infer_print(a->infer_ast);
-
-        a->infer_expr = core_string_from_raw(text, (int64_t)strlen(text));
+        a->infer_expr = parse_infer_print(a->infer_ast);
         break;
     }
 

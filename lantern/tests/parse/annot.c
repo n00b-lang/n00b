@@ -19,11 +19,9 @@
 #include "private/parse/grammar.h"
 #include "harness.h"
 
-static core_string_t
-S(const char *s)
-{
-    return core_string_from_cstr(s);
-}
+#define S(x) CORE_STRING_STATIC(x)
+
+#define SF(s) (int)(s).u8_bytes, (s).data
 
 static th_ctx *types;
 
@@ -48,13 +46,15 @@ annotate_new(parse_grammar_t *g, parse_tree_t *tree, th_ctx *context)
 }
 
 static bool
-is_type(th_type *t, const char *typelang)
+is_type_s(th_type *t, core_string_t typelang)
 {
     return t && types
         && th_hash(types, t) == th_hash(types, ir_type_from_text(
                                                    types,
-                                                   S(typelang)));
+                                                   typelang));
 }
+
+#define is_type(t, typelang) is_type_s((t), S(typelang))
 
 typedef struct {
     parse_tree_t *target;
@@ -501,8 +501,8 @@ test_symtab_phase_lifetime_and_alias_facts(void)
                                 CORE_STRING_STATIC("gc"));
     check("storage duration is tracked separately from storage class",
           value->storage_duration == PARSE_SYM_STORAGE_DYNAMIC
-              && !strcmp(parse_sym_storage_duration_name(
-                    value->storage_duration), "dynamic")
+              && core_string_eq(parse_sym_storage_duration_name(
+                    value->storage_duration), S("dynamic"))
               && unknown_view->storage_duration
                     == PARSE_SYM_STORAGE_UNSPECIFIED);
     check("lifetime endpoints and finalization point are retained",
@@ -714,13 +714,13 @@ load_toy(void)
 }
 
 static parse_tree_t *
-parse_toy(parse_grammar_t *g, const char *start, const char *src,
-          parse_pwz_parser_t **p_out,
-          parse_token_stream_t **ts_out)
+parse_toy_s(parse_grammar_t *g, core_string_t start, core_string_t src,
+            parse_pwz_parser_t **p_out,
+            parse_token_stream_t **ts_out)
 {
-    parse_token_stream_t *ts = scan_token_stream_from_codepoints(S(src));
+    parse_token_stream_t *ts = scan_token_stream_from_codepoints(src);
     parse_pwz_parser_t   *p = parse_pwz_new_for_start(
-        g, parse_nonterm_id(parse_find_nonterm(g, S(start))));
+        g, parse_nonterm_id(parse_find_nonterm(g, start)));
 
     if (!parse_pwz_parse(p, ts)) {
         return nullptr;
@@ -732,20 +732,22 @@ parse_toy(parse_grammar_t *g, const char *start, const char *src,
     return parse_pwz_get_tree(p);
 }
 
+#define parse_toy(g, start, src, p_out, ts_out) \
+    parse_toy_s((g), S(start), S(src), (p_out), (ts_out))
+
 static parse_tree_t *
-find_node(parse_grammar_t *g, parse_tree_t *node, const char *name)
+find_node_s(parse_grammar_t *g, parse_tree_t *node, core_string_t name)
 {
     if (!node || core_tree_is_leaf(node)) {
         return nullptr;
     }
 
-    if (core_string_eq(parse_tree_nt_name(g, node),
-                       core_string_borrow(name, strlen(name)))) {
+    if (core_string_eq(parse_tree_nt_name(g, node), name)) {
         return node;
     }
 
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *found = find_node(g, core_tree_child(node, i), name);
+        parse_tree_t *found = find_node_s(g, core_tree_child(node, i), name);
 
         if (found) {
             return found;
@@ -754,6 +756,8 @@ find_node(parse_grammar_t *g, parse_tree_t *node, const char *name)
 
     return nullptr;
 }
+
+#define find_node(g, node, name) find_node_s((g), (node), S(name))
 
 static parse_annotation_t *
 find_unique_rule_annot(parse_grammar_t *g, const parse_nonterm_t *nt,
@@ -1103,8 +1107,20 @@ test_the_walk_builds_a_symbol_table(parse_grammar_t *g)
 static void
 test_a_deep_tree_does_not_overflow_the_stack(parse_grammar_t *g)
 {
-    const char *want = getenv("IR_DEEP");
-    const int   N    = want ? atoi(want) : 600;
+    const char *env  = getenv("IR_DEEP");
+    int64_t     deep = 600;
+
+    if (env) {
+        core_string_t want     = core_string_from_cstr(env);
+        size_t        consumed = 0;
+
+        if (!core_string_parse_i64(want, 10, &deep, &consumed)) {
+            deep = 0;
+        }
+        core_free(want.data);
+    }
+
+    const int N = (int)deep;
 
     char *src = core_alloc_size(1, (size_t)N * 4 + 1);
 
@@ -1112,11 +1128,11 @@ test_a_deep_tree_does_not_overflow_the_stack(parse_grammar_t *g)
         memcpy(src + i * 4, "vaT;", 4);
     }
 
-    src[N * 4] = 0;
-
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
-    parse_tree_t   *tree = parse_toy(g, "prog", src, &p, &ts);
+    parse_tree_t   *tree = parse_toy_s(g, S("prog"),
+                                       core_string_borrow(src, (size_t)N * 4),
+                                       &p, &ts);
 
     if (!tree) {
         check("a deeply nested program parses", false);
@@ -1141,10 +1157,10 @@ test_a_deep_tree_does_not_overflow_the_stack(parse_grammar_t *g)
 }
 
 static parse_nonterm_t *
-nt_named(parse_grammar_t *g, const char *name)
+nt_named_s(parse_grammar_t *g, core_string_t name)
 {
     for (size_t i = 0; i < core_list_len(g->nt_list); i++) {
-        if (core_string_eq(g->nt_list.data[i]->name, S(name))) {
+        if (core_string_eq(g->nt_list.data[i]->name, name)) {
             return g->nt_list.data[i];
         }
     }
@@ -1152,19 +1168,21 @@ nt_named(parse_grammar_t *g, const char *name)
     return nullptr;
 }
 
+#define nt_named(g, name) nt_named_s((g), S(name))
+
 static void
 test_annotation_arguments_only_need_balanced_parens(void)
 {
-    static const char *src
-        = "<top> @declares($1,$2,\"var\") @disambig(pred(a, b, c()), 4) "
-          "::= <n> <t>\n"
-          "<n> ::= __LOWER\n"
-          "<t> ::= __UPPER\n";
+    core_string_t src
+        = S("<top> @declares($1,$2,\"var\") @disambig(pred(a, b, c()), 4) "
+            "::= <n> <t>\n"
+            "<n> ::= __LOWER\n"
+            "<t> ::= __UPPER\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     check("an annotation argument may nest balanced parentheses",
-          parse_bnf_load(S(src), S("top"), g));
+          parse_bnf_load(src, S("top"), g));
 
     parse_nonterm_t *top = nt_named(g, "top");
 
@@ -1186,15 +1204,15 @@ test_annotation_arguments_only_need_balanced_parens(void)
 
     parse_grammar_free(g);
 
-    static const char *by_name
-        = "<top> @literal(\"int\", $t) ::= <n> <t>\n"
-          "<n> ::= __LOWER\n"
-          "<t> ::= __UPPER\n";
+    core_string_t by_name
+        = S("<top> @literal(\"int\", $t) ::= <n> <t>\n"
+            "<n> ::= __LOWER\n"
+            "<t> ::= __UPPER\n");
 
     parse_grammar_t *g2 = parse_grammar_new();
 
     check("a reference may name a non-terminal instead of an index",
-          parse_bnf_load(S(by_name), S("top"), g2));
+          parse_bnf_load(by_name, S("top"), g2));
 
     parse_nonterm_t    *t2 = nt_named(g2, "top");
     parse_annotation_t *l  = t2 ? find_unique_rule_annot(g2, t2, PARSE_ANNOT_LITERAL)
@@ -1207,14 +1225,14 @@ test_annotation_arguments_only_need_balanced_parens(void)
 
     parse_grammar_free(g2);
 
-    static const char *unbalanced
-        = "<top> @disambig(pred(a) ::= <n>\n"
-          "<n> ::= __LOWER\n";
+    core_string_t unbalanced
+        = S("<top> @disambig(pred(a) ::= <n>\n"
+            "<n> ::= __LOWER\n");
 
     parse_grammar_t *bad = parse_grammar_new();
 
     check("an unbalanced argument region is not a grammar",
-          !parse_bnf_load(S(unbalanced), S("top"), bad));
+          !parse_bnf_load(unbalanced, S("top"), bad));
 
     parse_grammar_free(bad);
 }
@@ -1222,15 +1240,15 @@ test_annotation_arguments_only_need_balanced_parens(void)
 static void
 test_annotation_arguments_carry_integers(void)
 {
-    static const char *src
-        = "<top> @penalty(7) ::= <n>\n"
-          "<mid> @disambig(pred, 3) ::= <n>\n"
-          "<n> ::= __LOWER\n";
+    core_string_t src
+        = S("<top> @penalty(7) ::= <n>\n"
+            "<mid> @disambig(pred, 3) ::= <n>\n"
+            "<n> ::= __LOWER\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     check("a grammar with integer annotation arguments loads",
-          parse_bnf_load(S(src), S("top"), g));
+          parse_bnf_load(src, S("top"), g));
 
     parse_nonterm_t *top = nt_named(g, "top");
     parse_nonterm_t *mid = nt_named(g, "mid");
@@ -1250,27 +1268,27 @@ test_annotation_arguments_carry_integers(void)
 
     parse_grammar_free(g);
 
-    static const char *const BAD[] = {
-        "<top> @penalty(-4) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @penalty(a) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @penalty(1, 2) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @branch($1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @assigns($1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @scope($1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @jump($1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @adt(\"enum\", $1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @nospace($1, $2) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @declares(\"v\", $1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @literal(\"int\", t) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @nospace(n) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @varref($) ::= <n>\n<n> ::= __LOWER\n",
+    static const core_string_t BAD[] = {
+        S("<top> @penalty(-4) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @penalty(a) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @penalty(1, 2) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @branch($1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @assigns($1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @scope($1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @jump($1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @adt(\"enum\", $1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @nospace($1, $2) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @declares(\"v\", $1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @literal(\"int\", t) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @nospace(n) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @varref($) ::= <n>\n<n> ::= __LOWER\n"),
     };
 
     for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
         parse_grammar_t *bad = parse_grammar_new();
 
-        if (parse_bnf_load(S(BAD[i]), S("top"), bad)) {
-            printf("FAIL  this should not have loaded: %s", BAD[i]);
+        if (parse_bnf_load(BAD[i], S("top"), bad)) {
+            printf("FAIL  this should not have loaded: %.*s", SF(BAD[i]));
             fails++;
         }
 
@@ -1281,12 +1299,12 @@ test_annotation_arguments_carry_integers(void)
 static void
 test_emit_annotations_retain_action_and_operands(void)
 {
-    static const char *const G
-        = "<top> @emit(\"add\", $1, $right) ::= <left> <right>\n"
-          "<left> ::= __LOWER\n"
-          "<right> ::= __UPPER\n";
+    core_string_t G
+        = S("<top> @emit(\"add\", $1, $right) ::= <left> <right>\n"
+            "<left> ::= __LOWER\n"
+            "<right> ::= __UPPER\n");
     parse_grammar_t *g = parse_grammar_new();
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     parse_nonterm_t *top = loaded ? nt_named(g, "top") : nullptr;
     parse_annotation_t *emit = top
         ? find_unique_rule_annot(g, top, PARSE_ANNOT_EMIT) : nullptr;
@@ -1311,11 +1329,11 @@ test_emit_annotations_retain_action_and_operands(void)
     parse_annot_free(copy);
     parse_grammar_free(g);
 
-    static const char *const BAD
-        = "<top> @emit(add, $1) ::= <left>\n<left> ::= __LOWER\n";
+    core_string_t BAD
+        = S("<top> @emit(add, $1) ::= <left>\n<left> ::= __LOWER\n");
     parse_grammar_t *bad = parse_grammar_new();
     check("an emit action must be a quoted tag",
-          !parse_bnf_load(S(BAD), S("top"), bad));
+          !parse_bnf_load(BAD, S("top"), bad));
     parse_grammar_free(bad);
 }
 
@@ -1349,18 +1367,18 @@ test_annotation_argument_lists_are_growable(void)
 static void
 test_implements_is_checked_not_carried(void)
 {
-    static const char *const G
-        = "<top> @scope(\"module\") ::= <d>\n"
-          "<d> @declares($1,\"var\") @type($1, int) @implements($2) "
-          "::= \"v\" <n> <i> \";\"\n"
-          "<n> ::= __LOWER\n"
-          "<i> ::= __UPPER\n";
+    core_string_t G
+        = S("<top> @scope(\"module\") ::= <d>\n"
+            "<d> @declares($1,\"var\") @type($1, int) @implements($2) "
+            "::= \"v\" <n> <i> \";\"\n"
+            "<n> ::= __LOWER\n"
+            "<i> ::= __UPPER\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
-    check("an @implements grammar loads", parse_bnf_load(S(G), S("top"), g));
+    check("an @implements grammar loads", parse_bnf_load(G, S("top"), g));
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
@@ -1382,7 +1400,7 @@ test_implements_is_checked_not_carried(void)
 
     for (parse_scope_t *s = r->symtab->all_scopes; s && !d; s = s->all_next) {
         for (parse_sym_entry_t *e = s->first_in_scope; e; e = e->next_in_scope) {
-            if (e->name.data && !strcmp(e->name.data, "a")) {
+            if (e->name.data && core_string_eq(e->name, S("a"))) {
                 d = e;
                 break;
             }
@@ -1402,12 +1420,12 @@ test_implements_is_checked_not_carried(void)
 static void
 test_direct_nonterminal_annotation_lookup(void)
 {
-    static const char *const G
-        = "<top> ::= <choice>\n"
-          "<choice> @emit(\"identity\", $0) ::= <name>\n"
-          "<name> ::= __LOWER\n";
+    core_string_t G
+        = S("<top> ::= <choice>\n"
+            "<choice> @emit(\"identity\", $0) ::= <name>\n"
+            "<name> ::= __LOWER\n");
     parse_grammar_t *g = parse_grammar_new();
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     parse_nonterm_t *choice = loaded ? nt_named(g, "choice") : nullptr;
     parse_rule_t *choice_rule = choice
         ? parse_get_rule(g, choice->rule_ids.data[0]) : nullptr;
@@ -1422,18 +1440,18 @@ test_direct_nonterminal_annotation_lookup(void)
 static void
 test_an_adt_builds_a_variant_type(void)
 {
-    static const char *const G
-        = "<top> @scope(\"module\") ::= <adt>\n"
-          "<adt> @adt(\"union\", $1, \"arm\", $0) ::= \"u\" <n> \"{\" <as> \"}\"\n"
-          "<as> ::= <arm> <as> | <arm>\n"
-          "<arm> @declares($1,\"var\") @type($1, int) ::= <n> \";\"\n"
-          "<n> ::= __LOWER\n";
+    core_string_t G
+        = S("<top> @scope(\"module\") ::= <adt>\n"
+            "<adt> @adt(\"union\", $1, \"arm\", $0) ::= \"u\" <n> \"{\" <as> \"}\"\n"
+            "<as> ::= <arm> <as> | <arm>\n"
+            "<arm> @declares($1,\"var\") @type($1, int) ::= <n> \";\"\n"
+            "<n> ::= __LOWER\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
-    check("an adt grammar loads", parse_bnf_load(S(G), S("top"), g));
+    check("an adt grammar loads", parse_bnf_load(G, S("top"), g));
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
@@ -1467,7 +1485,7 @@ test_an_adt_builds_a_variant_type(void)
     bool is_variant = false;
 
     check("and the type reached th as a variant",
-          var && th_named_info(var, nullptr, nullptr, &is_variant, nullptr)
+          var && th_named_info(var, nullptr, &is_variant, nullptr)
               && is_variant);
     check("with one argument per arm", var && th_named_nargs(var) == 2);
 
@@ -1480,25 +1498,26 @@ test_an_adt_builds_a_variant_type(void)
 static void
 test_the_repr_annotations_reach_the_layout_descriptor(void)
 {
-    static const char *const G
-        = "<top> @scope(\"module\") ::= <rec> <access>\n"
-          "<rec> @scope(\"record\") @record($1) @size(8) @alignment(4) "
-          "::= \"r\" <n> \"{\" <fs> \"}\"\n"
-          "<fs> ::= <f> <fs> | <meth> <fs> | <f> | <meth>\n"
-          "<f> @field($1) @offset(0) @width(4) ::= <n> \";\"\n"
-          "<meth> @method($1) @type($1, \"() -> int\") ::= \"m\" <n>\n"
-          "<access> @infer(\"method_return($0)\") ::= <use> %\".\" <n>\n"
-          "<use> @varref($0) ::= <n>\n"
-          "<n> ::= __LOWER\n";
+    core_string_t G
+        = S("<top> @scope(\"module\") ::= <rec> <access>\n"
+            "<rec> @scope(\"record\") @record($1) @size(8) @alignment(4) "
+            "::= \"r\" <n> \"{\" <fs> \"}\"\n"
+            "<fs> ::= <f> <fs> | <meth> <fs> | <f> | <meth>\n"
+            "<f> @field($1) @offset(0) @width(4) ::= <n> \";\"\n"
+            "<meth> @method($1) @type($1, \"() -> int\") ::= \"m\" <n>\n"
+            "<access> @infer(\"method_return($0)\") ::= <use> %\".\" <n>\n"
+            "<use> @varref($0) ::= <n>\n"
+            "<n> ::= __LOWER\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
-    bool grammar_loaded = parse_bnf_load(S(G), S("top"), g);
+    bool grammar_loaded = parse_bnf_load(G, S("top"), g);
     check("a record grammar with representation pins loads", grammar_loaded);
     if (!grammar_loaded) {
-        fprintf(stderr, "record grammar load error: %s\n", parse_bnf_error());
+        fprintf(stderr, "record grammar load error: %.*s\n",
+                SF(parse_bnf_error()));
         parse_grammar_free(g);
         return;
     }
@@ -1515,7 +1534,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
     }
 
     ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = ir_module_new(ctx, "m", &ir_profile_bce, "host");
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("host"));
 
     parse_annot_result_t *r = parse_annot_result_new(nullptr);
 
@@ -1534,7 +1553,7 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
 
     check("@record established a record type", rec != nullptr);
 
-    ir_descriptor_t *d = rec ? ir_layout_of(m, rec, nullptr) : nullptr;
+    ir_descriptor_t *d = rec ? ir_layout_of(m, rec, (core_string_t){}) : nullptr;
 
     check("the annotations reached a layout descriptor", d != nullptr);
     check("@size pinned the descriptor's size",
@@ -1542,30 +1561,26 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
     check("@alignment pinned the descriptor's alignment",
           d && ir_layout_is_settled(&d->align) && d->align.value == 4);
 
-    th_type *method = rec ? th_method_lookup(ir_module_types(m), rec, "f")
+    th_type *method = rec ? th_method_lookup(ir_module_types(m), rec, S("f"))
                           : nullptr;
     th_type *method_return = method ? th_func_ret(method) : nullptr;
-    const char *return_name = nullptr;
-    size_t return_name_len = 0;
+    core_string_t return_name = {};
 
     check("@method registers its signature on the record type",
           method != nullptr);
     check("the registered method preserves its return type",
           method_return
-              && th_named_info(method_return, &return_name, &return_name_len,
-                               nullptr, nullptr)
-              && return_name_len == 3 && !memcmp(return_name, "int", 3));
+              && th_named_info(method_return, &return_name, nullptr, nullptr)
+              && core_string_eq(return_name, S("int")));
 
     parse_tree_t *access = find_node(g, tree, "access");
     th_type *access_type = access ? parse_tree_type(access) : nullptr;
-    const char *access_name = nullptr;
-    size_t access_name_len = 0;
+    core_string_t access_name = {};
 
     check("method_return resolves through the receiver method registry",
           access_type
-              && th_named_info(access_type, &access_name, &access_name_len,
-                               nullptr, nullptr)
-              && access_name_len == 3 && !memcmp(access_name, "int", 3));
+              && th_named_info(access_type, &access_name, nullptr, nullptr)
+              && core_string_eq(access_name, S("int")));
 
     parse_annot_result_free(r);
     ir_ctx_free(ctx);
@@ -1577,17 +1592,17 @@ test_the_repr_annotations_reach_the_layout_descriptor(void)
 static void
 test_trait_method_inference_uses_visible_requirement(void)
 {
-    static const char *const G =
-        "<top> @tokenizer(\"toy\") ::= <postfix-expr>\n"
-        "<postfix-expr> @infer(\"return_of($0)\") ::= "
-        "<postfix-expr> %\"(\" %\")\"\n"
-        "<postfix-expr> @infer(\"field_return($0)\") ::= "
-        "<use> %\".\" <n>\n"
-        "<use> @infer(\"`a\") ::= <n>\n"
-        "<n> ::= __LOWER\n";
+    core_string_t G =
+        S("<top> @tokenizer(\"toy\") ::= <postfix-expr>\n"
+          "<postfix-expr> @infer(\"return_of($0)\") ::= "
+          "<postfix-expr> %\"(\" %\")\"\n"
+          "<postfix-expr> @infer(\"field_return($0)\") ::= "
+          "<use> %\".\" <n>\n"
+          "<use> @infer(\"`a\") ::= <n>\n"
+          "<n> ::= __LOWER\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     check("trait method inference grammar loads", loaded);
     if (!loaded) {
         parse_grammar_free(g);
@@ -1609,45 +1624,45 @@ test_trait_method_inference_uses_visible_requirement(void)
     th_type *self = th_var(definitions);
     th_param required_param = {.mode = TH_IN, .type = self};
     th_member requirement = {
-        .name = "r",
-        .type = th_func(definitions, th_name(definitions, "string"),
+        .name = S("r"),
+        .type = th_func(definitions, th_name(definitions, S("string")),
                         &required_param, 1, nullptr, nullptr, 0),
     };
     th_env *environment = th_env_new();
     th_param implementation_param = {
-        .mode = TH_IN, .type = th_name(definitions, "int")};
+        .mode = TH_IN, .type = th_name(definitions, S("int"))};
     bool registered =
-        th_env_register_trait(environment, "Render", "traits", "base",
-                              TH_ENV_PUBLIC,
+        th_env_register_trait(environment, S("Render"), S("traits"),
+                              S("base"), TH_ENV_PUBLIC,
                               th_record(definitions, &requirement, 1)) &&
         th_env_register_function(
-            environment, "base.int.render", "r", "ints", "base",
+            environment, S("base.int.render"), S("r"), S("ints"), S("base"),
             TH_ENV_PUBLIC,
-            th_func(definitions, th_name(definitions, "string"),
+            th_func(definitions, th_name(definitions, S("string")),
                     &implementation_param, 1, nullptr, nullptr, 0)) &&
         th_env_freeze(environment);
     th_ctx *inference = th_ctx_new();
     bool attached = registered && th_ctx_set_environment(
-        inference, environment, "client", "base");
+        inference, environment, S("client"), S("base"));
     parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
     if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *access = tree;
     parse_tree_t *use = find_node(g, tree, "use");
     th_type *actual = access ? parse_tree_type(access) : nullptr;
     th_type *receiver = use ? parse_tree_type(use) : nullptr;
-    const char *obligations[1] = {0};
+    core_string_t obligations[1] = {};
     check("unique trait method infers its return and retains receiver obligation",
           attached && actual && receiver &&
               th_unify(inference, actual,
-                       th_name(inference, "string")) != nullptr &&
+                       th_name(inference, S("string"))) != nullptr &&
               th_infer_ifaces(inference, receiver, obligations, 1) == 1 &&
-              !strcmp(obligations[0], "Render"));
+              core_string_eq(obligations[0], S("Render")));
     check("trait method obligation rejects a type with no implementation",
           receiver && !th_unify(inference, receiver,
-                                th_name(inference, "string")));
+                                th_name(inference, S("string"))));
     check("later receiver unification discharges the trait obligation",
           receiver && th_unify_in_place(inference, receiver,
-                                        th_name(inference, "int")));
+                                        th_name(inference, S("int"))));
 
     parse_pwz_parser_t *multi_parser = nullptr;
     parse_token_stream_t *multi_tokens = nullptr;
@@ -1657,34 +1672,35 @@ test_trait_method_inference_uses_visible_requirement(void)
     th_type *render_self = th_var(multi_definitions);
     th_type *other_self = th_var(multi_definitions);
     th_env *multi_env = th_env_new();
-    th_type *int_type = th_name(multi_definitions, "int");
-    th_type *string_type = th_name(multi_definitions, "string");
-    th_type *bool_type = th_name(multi_definitions, "bool");
+    th_type *int_type = th_name(multi_definitions, S("int"));
+    th_type *string_type = th_name(multi_definitions, S("string"));
+    th_type *bool_type = th_name(multi_definitions, S("bool"));
     th_param render_param = {.mode = TH_IN, .type = int_type};
     bool multi_registered = multi_tree &&
         th_env_register_trait(
-            multi_env, "Render", "traits", "base", TH_ENV_PUBLIC,
+            multi_env, S("Render"), S("traits"), S("base"), TH_ENV_PUBLIC,
             th_record(multi_definitions,
-                      &(th_member){.name = "r", .type = th_func(
+                      &(th_member){.name = S("r"), .type = th_func(
                           multi_definitions, string_type,
                           (th_param[]){{.mode = TH_IN, .type = render_self}},
                           1, nullptr, nullptr, 0)}, 1)) &&
         th_env_register_trait(
-            multi_env, "OtherRender", "traits", "base", TH_ENV_PUBLIC,
+            multi_env, S("OtherRender"), S("traits"), S("base"),
+            TH_ENV_PUBLIC,
             th_record(multi_definitions,
-                      &(th_member){.name = "r", .type = th_func(
+                      &(th_member){.name = S("r"), .type = th_func(
                           multi_definitions, bool_type,
                           (th_param[]){{.mode = TH_IN, .type = other_self}},
                           1, nullptr, nullptr, 0)}, 1)) &&
         th_env_register_function(
-            multi_env, "base.int.render", "r", "ints", "base",
+            multi_env, S("base.int.render"), S("r"), S("ints"), S("base"),
             TH_ENV_PUBLIC,
             th_func(multi_definitions, string_type, &render_param, 1,
                     nullptr, nullptr, 0)) &&
         th_env_freeze(multi_env);
     th_ctx *multi_inference = th_ctx_new();
     bool multi_attached = multi_registered && th_ctx_set_environment(
-        multi_inference, multi_env, "client", "base");
+        multi_inference, multi_env, S("client"), S("base"));
     parse_annot_result_t *multi_annotations = parse_annot_result_new(nullptr);
     if (multi_attached) annotate_once(g, multi_tree, multi_annotations,
                                      multi_inference, nullptr);
@@ -1697,9 +1713,9 @@ test_trait_method_inference_uses_visible_requirement(void)
     check("ambiguous visible method names retain a deferred result obligation",
           multi_attached && multi_actual && multi_receiver &&
               th_unify_in_place(multi_inference, multi_receiver,
-                                th_name(multi_inference, "int")) &&
+                                th_name(multi_inference, S("int"))) &&
               th_unify(multi_inference, multi_actual,
-                       th_name(multi_inference, "string")));
+                       th_name(multi_inference, S("string"))));
     parse_annot_result_free(multi_annotations);
     th_ctx_free(multi_inference);
     th_env_free(multi_env);
@@ -1719,14 +1735,14 @@ test_trait_method_inference_uses_visible_requirement(void)
 static void
 test_ordering_inference_uses_comparable_trait(void)
 {
-    static const char *const G =
-        "<top> @tokenizer(\"toy\") ::= <comparison>\n"
-        "<comparison> @infer(\"compare($0, $2)\") ::= <left> %\"<\" <right>\n"
-        "<left> @infer(\"Meter\") ::= __LOWER\n"
-        "<right> @infer(\"Meter\") ::= __LOWER\n";
+    core_string_t G =
+        S("<top> @tokenizer(\"toy\") ::= <comparison>\n"
+          "<comparison> @infer(\"compare($0, $2)\") ::= <left> %\"<\" <right>\n"
+          "<left> @infer(\"Meter\") ::= __LOWER\n"
+          "<right> @infer(\"Meter\") ::= __LOWER\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     check("ordering inference grammar loads", loaded);
     if (!loaded) {
         parse_grammar_free(g);
@@ -1752,27 +1768,28 @@ test_ordering_inference_uses_comparable_trait(void)
     };
     th_type *compare_code = th_bitint(definitions, 2, true);
     th_member requirement = {
-        .name = "cmp",
+        .name = S("cmp"),
         .type = th_func(definitions,
                         compare_code, required_params, 2, nullptr, nullptr, 0),
     };
     th_param implementation_params[] = {
-        {.mode = TH_IN, .type = th_name(definitions, "Meter")},
-        {.mode = TH_IN, .type = th_name(definitions, "Meter")},
+        {.mode = TH_IN, .type = th_name(definitions, S("Meter"))},
+        {.mode = TH_IN, .type = th_name(definitions, S("Meter"))},
     };
     th_env *environment = th_env_new();
     bool trait_registered = th_env_register_trait(environment,
-        "Comparable", "traits", "base", TH_ENV_PUBLIC,
+        S("Comparable"), S("traits"), S("base"), TH_ENV_PUBLIC,
         th_record(definitions, &requirement, 1));
     bool function_registered = trait_registered &&
-        th_env_register_function(environment, "base.meter.cmp", "cmp",
-            "meter", "base", TH_ENV_PUBLIC,
+        th_env_register_function(environment, S("base.meter.cmp"), S("cmp"),
+            S("meter"), S("base"), TH_ENV_PUBLIC,
             th_func(definitions, compare_code,
                     implementation_params, 2, nullptr, nullptr, 0));
     bool registered = function_registered && th_env_freeze(environment);
     th_ctx *inference = th_ctx_new();
     bool attached = registered &&
-        th_ctx_set_environment(inference, environment, "client", "base");
+        th_ctx_set_environment(inference, environment, S("client"),
+                               S("base"));
     parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
     if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *comparison = find_node(g, tree, "comparison");
@@ -1786,7 +1803,7 @@ test_ordering_inference_uses_comparable_trait(void)
     check("comparison node receives an inferred type", actual != nullptr);
     check("ordering inference validates Comparable.cmp and returns bool",
           attached && actual &&
-              th_unify(inference, actual, th_name(inference, "bool")));
+              th_unify(inference, actual, th_name(inference, S("bool"))));
 
     parse_annot_result_free(annotations);
     th_ctx_free(inference);
@@ -1798,18 +1815,18 @@ test_ordering_inference_uses_comparable_trait(void)
 }
 
 static void
-check_index_load_result(const char *what, const char *top,
-                        const char *source)
+check_index_load_result(const char *what, core_string_t top,
+                        core_string_t source)
 {
     core_buffer_t text = {0};
     core_buffer_printf(&text,
-        "<top> @tokenizer(\"toy\") ::= %s\n"
+        "<top> @tokenizer(\"toy\") ::= %.*s\n"
         "<assign-stmt> ::= <member> %%\"=\" <expression>\n"
         "<member> ::= <access> %%\".\" __LOWER\n"
         "<access> @infer(\"element_of($0, load, store)\") ::= <receiver> %%\"[\" <index-contents> %%\"]\"\n"
         "<index-contents> ::= <expression>\n"
         "<receiver> @infer(\"OpaqueBox[int]\") ::= __LOWER\n"
-        "<expression> @infer(\"int\") ::= __LOWER\n", top);
+        "<expression> @infer(\"int\") ::= __LOWER\n", SF(top));
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
     bool loaded = parse_bnf_load(core_string_borrow(text.data,
@@ -1824,7 +1841,7 @@ check_index_load_result(const char *what, const char *top,
 
     parse_pwz_parser_t *parser = nullptr;
     parse_token_stream_t *tokens = nullptr;
-    parse_tree_t *tree = parse_toy(g, "top", source, &parser, &tokens);
+    parse_tree_t *tree = parse_toy_s(g, S("top"), source, &parser, &tokens);
     check("index inference sample parses", tree != nullptr);
     if (!tree) {
         if (parser) parse_pwz_free(parser);
@@ -1835,10 +1852,10 @@ check_index_load_result(const char *what, const char *top,
 
     th_ctx *definitions = th_ctx_new();
     th_type *receiver_var = th_var(definitions);
-    th_type *string_type = th_name(definitions, "string");
-    th_type *int_type = th_name(definitions, "int");
+    th_type *string_type = th_name(definitions, S("string"));
+    th_type *int_type = th_name(definitions, S("int"));
     th_type *indexable = th_apply(
-        definitions, "OpaqueBox",
+        definitions, S("OpaqueBox"),
         (th_arg[]){{.kind = TH_ARG_TYPE, .type = int_type}}, 1);
     th_param required_params[] = {
         {.mode = TH_IN, .type = receiver_var},
@@ -1849,29 +1866,29 @@ check_index_load_result(const char *what, const char *top,
         {.mode = TH_IN, .type = int_type},
     };
     th_member required = {
-        .name = "load",
+        .name = S("load"),
         .type = th_func(definitions, th_var(definitions), required_params, 2,
                         nullptr, nullptr, 0),
     };
     th_env *environment = th_env_new();
     bool registered = th_env_register_trait(
-        environment, "Index_Load", "builtins", "base", TH_ENV_PUBLIC,
+        environment, S("Index_Load"), S("builtins"), S("base"), TH_ENV_PUBLIC,
         th_record(definitions, &required, 1)) &&
         th_env_register_function(
-            environment, "base.opaque_box.load", "load", "opaque_box",
-            "base", TH_ENV_PUBLIC,
+            environment, S("base.opaque_box.load"), S("load"),
+            S("opaque_box"), S("base"), TH_ENV_PUBLIC,
             th_func(definitions, string_type, implementation_params, 2,
                     nullptr, nullptr, 0)) && th_env_freeze(environment);
     th_ctx *inference = th_ctx_new();
     bool attached = registered && th_ctx_set_environment(
-        inference, environment, "client", "base");
+        inference, environment, S("client"), S("base"));
     parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
     if (attached) annotate_once(g, tree, annotations, inference, nullptr);
     parse_tree_t *access = find_node(g, tree, "access");
     th_type *actual = access ? parse_tree_type(access) : nullptr;
     check(what, attached && actual &&
               th_hash(inference, actual) ==
-                  th_hash(inference, th_name(inference, "string")));
+                  th_hash(inference, th_name(inference, S("string"))));
 
     parse_annot_result_free(annotations);
     th_ctx_free(inference);
@@ -1886,27 +1903,27 @@ static void
 test_index_inference_uses_index_load_trait(void)
 {
     check_index_load_result("index result comes from the Index_Load contract",
-                            "<access>", "a[i]");
+                            S("<access>"), S("a[i]"));
     check_index_load_result(
         "an index that receives a field assignment is still a load",
-        "<assign-stmt>", "a[i].f=i");
+        S("<assign-stmt>"), S("a[i].f=i"));
 }
 
 static void
 test_slice_inference_uses_index_slice_trait(void)
 {
-    static const char *const G =
-        "<top> @tokenizer(\"toy\") ::= <access>\n"
-        "<access> @infer(\"slice_of($0, slice)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
-        "<index-contents> ::= <expression> %\":\" <expression>\n"
-        "                   | <expression> %\":\"\n"
-        "                   | %\":\" <expression>\n"
-        "                   | %\":\"\n"
-        "<receiver> @infer(\"OpaqueBox[int]\") ::= __LOWER\n"
-        "<expression> @infer(\"int\") ::= __DIGIT\n";
+    core_string_t G =
+        S("<top> @tokenizer(\"toy\") ::= <access>\n"
+          "<access> @infer(\"slice_of($0, slice)\") ::= <receiver> %\"[\" <index-contents> %\"]\"\n"
+          "<index-contents> ::= <expression> %\":\" <expression>\n"
+          "                   | <expression> %\":\"\n"
+          "                   | %\":\" <expression>\n"
+          "                   | %\":\"\n"
+          "<receiver> @infer(\"OpaqueBox[int]\") ::= __LOWER\n"
+          "<expression> @infer(\"int\") ::= __DIGIT\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     check("slice inference grammar loads", loaded);
     if (!loaded) {
         parse_grammar_free(g);
@@ -1917,23 +1934,24 @@ test_slice_inference_uses_index_slice_trait(void)
     th_type *receiver_var = th_var(definitions);
     th_type *item_var = th_var(definitions);
     th_arg view_item = {.kind = TH_ARG_TYPE, .type = item_var};
-    th_type *view_of_item = th_apply(definitions, "view", &view_item, 1);
-    th_type *integer = th_name(definitions, "int");
+    th_type *view_of_item = th_apply(definitions, S("view"), &view_item, 1);
+    th_type *integer = th_name(definitions, S("int"));
     th_param requirement_params[] = {
         {.mode = TH_IN, .type = receiver_var},
         {.mode = TH_IN, .type = integer},
         {.mode = TH_IN, .type = integer},
     };
     th_member requirement = {
-        .name = "slice",
+        .name = S("slice"),
         .type = th_func(definitions, view_of_item, requirement_params, 3,
                         nullptr, nullptr, 0),
     };
     th_type *int_box = th_apply(
-        definitions, "OpaqueBox",
+        definitions, S("OpaqueBox"),
         (th_arg[]){{.kind = TH_ARG_TYPE, .type = integer}}, 1);
     th_arg view_of_int_arg = {.kind = TH_ARG_TYPE, .type = integer};
-    th_type *view_of_int = th_apply(definitions, "view", &view_of_int_arg, 1);
+    th_type *view_of_int = th_apply(definitions, S("view"), &view_of_int_arg,
+                                    1);
     th_param implementation_params[] = {
         {.mode = TH_IN, .type = int_box},
         {.mode = TH_IN, .type = integer},
@@ -1941,22 +1959,25 @@ test_slice_inference_uses_index_slice_trait(void)
     };
     th_env *environment = th_env_new();
     bool registered = th_env_register_trait(
-        environment, "Index_Slice", "builtins", "base", TH_ENV_PUBLIC,
+        environment, S("Index_Slice"), S("builtins"), S("base"),
+        TH_ENV_PUBLIC,
         th_record(definitions, &requirement, 1)) &&
         th_env_register_function(
-            environment, "base.opaque_box.slice", "slice", "opaque_box",
-            "base", TH_ENV_PUBLIC,
+            environment, S("base.opaque_box.slice"), S("slice"),
+            S("opaque_box"), S("base"), TH_ENV_PUBLIC,
             th_func(definitions, view_of_int, implementation_params, 3,
                     nullptr, nullptr, 0)) && th_env_freeze(environment);
     th_ctx *inference = th_ctx_new();
     bool attached = registered && th_ctx_set_environment(
-        inference, environment, "client", "base");
-    const char *sources[] = {"a[2:4]", "a[2:]", "a[:4]", "a[:]"};
+        inference, environment, S("client"), S("base"));
+    const core_string_t sources[] = {S("a[2:4]"), S("a[2:]"), S("a[:4]"),
+                                     S("a[:]")};
     bool all_inferred = attached;
     for (size_t i = 0; i < sizeof(sources) / sizeof(sources[0]); i++) {
         parse_pwz_parser_t *parser = nullptr;
         parse_token_stream_t *tokens = nullptr;
-        parse_tree_t *tree = parse_toy(g, "top", sources[i], &parser, &tokens);
+        parse_tree_t *tree = parse_toy_s(g, S("top"), sources[i], &parser,
+                                         &tokens);
         parse_annot_result_t *annotations = parse_annot_result_new(nullptr);
         bool ok = tree != nullptr;
         if (ok) annotate_once(g, tree, annotations, inference, nullptr);
@@ -1981,22 +2002,22 @@ test_slice_inference_uses_index_slice_trait(void)
 static void
 test_the_representation_and_declaration_annotations(void)
 {
-    static const char *const G
-        = "<top> @scope(\"module\") ::= <d> <b> <p>\n"
-          "<d> @declares($1,\"var\") @mutability($1,\"const\") "
-          "@constrain($1, == int) @namespace(\"tag\") ::= \"v\" <n> \";\"\n"
-          "<b> @size($2) @width($2) ::= \"b\" %\":\" <num>\n"
-          "<p> @declares($1,\"param\") @direction($1,\"out\") "
-          "@alignment(8) @offset(sizeof(int)) @pass_by(\"ref\") ::= \"p\" <n> \";\"\n"
-          "<n> ::= __LOWER\n"
-          "<num> ::= __DIGIT\n";
+    core_string_t G
+        = S("<top> @scope(\"module\") ::= <d> <b> <p>\n"
+            "<d> @declares($1,\"var\") @mutability($1,\"const\") "
+            "@constrain($1, == int) @namespace(\"tag\") ::= \"v\" <n> \";\"\n"
+            "<b> @size($2) @width($2) ::= \"b\" %\":\" <num>\n"
+            "<p> @declares($1,\"param\") @direction($1,\"out\") "
+            "@alignment(8) @offset(sizeof(int)) @pass_by(\"ref\") ::= \"p\" <n> \";\"\n"
+            "<n> ::= __LOWER\n"
+            "<num> ::= __DIGIT\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
     check("a grammar using every Part 2 annotation loads",
-          parse_bnf_load(S(G), S("top"), g));
+          parse_bnf_load(G, S("top"), g));
 
     parse_pwz_parser_t   *p;
     parse_token_stream_t *ts;
@@ -2018,11 +2039,11 @@ test_the_representation_and_declaration_annotations(void)
 
     for (parse_scope_t *s = r->symtab->all_scopes; s; s = s->all_next) {
         for (parse_sym_entry_t *e = s->first_in_scope; e; e = e->next_in_scope) {
-            if (e->name.data && !strcmp(e->name.data, "a")) {
+            if (e->name.data && core_string_eq(e->name, S("a"))) {
                 a = e;
             }
 
-            if (e->name.data && !strcmp(e->name.data, "q")) {
+            if (e->name.data && core_string_eq(e->name, S("q"))) {
                 q = e;
             }
         }
@@ -2047,7 +2068,7 @@ test_the_representation_and_declaration_annotations(void)
     check("@namespace put the declaration in the namespace it named",
           a && a->scope && a->scope->ns
               && a->scope->ns->ns_name.data
-              && !strcmp(a->scope->ns->ns_name.data, "tag"));
+              && core_string_eq(a->scope->ns->ns_name, S("tag")));
 
     parse_annot_result_free(r);
     parse_pwz_free(p);
@@ -2152,7 +2173,7 @@ resolve_test_type_node(th_ctx *tc, parse_grammar_t *grammar,
     (void)grammar;
     (void)node;
     (*(size_t *)context)++;
-    return th_name(tc, "resolver_type");
+    return th_name(tc, S("resolver_type"));
 }
 
 static void
@@ -2173,12 +2194,13 @@ test_frontend_type_node_resolver(void)
     th_type *resolved = parse_annot_resolve_type_node(result, tc, grammar,
                                                        type_node);
     bool resolver_type = resolved
-        && th_hash(tc, resolved) == th_hash(tc, th_name(tc, "resolver_type"));
+        && th_hash(tc, resolved)
+               == th_hash(tc, th_name(tc, S("resolver_type")));
     check("frontend type-node resolver is invoked for a type annotation",
           type_node && resolver_calls == 1);
     check("frontend type-node resolver supplies the annotation type",
           resolver_type);
-    th_type *cached_type = th_name(tc, "cached_type");
+    th_type *cached_type = th_name(tc, S("cached_type"));
     parse_tree_set_type(type_node, cached_type);
     parse_annot_result_set_type_node_resolver(result, nullptr, nullptr);
     resolved = parse_annot_resolve_type_node(result, tc, grammar, type_node);
@@ -2198,15 +2220,15 @@ test_frontend_type_node_resolver(void)
 static void
 test_inference_result_is_propagated(void)
 {
-    static const char *const G
-        = "@tokenizer(\"toy\")\n"
-          "<top> @scope(\"module\") ::= <decl>\n"
-          "<decl> @declares($1, \"var\") @infer(\"$1 unify int\") "
-          "::= \"v\" <name> \";\"\n"
-          "<name> ::= __LOWER\n";
+    core_string_t G
+        = S("@tokenizer(\"toy\")\n"
+            "<top> @scope(\"module\") ::= <decl>\n"
+            "<decl> @declares($1, \"var\") @infer(\"$1 unify int\") "
+            "::= \"v\" <name> \";\"\n"
+            "<name> ::= __LOWER\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    check("inference propagation grammar loads", parse_bnf_load(S(G), S("top"), g));
+    check("inference propagation grammar loads", parse_bnf_load(G, S("top"), g));
     if (!parse_find_nonterm(g, S("top"))) {
         parse_grammar_free(g);
         return;
@@ -2250,17 +2272,17 @@ test_inference_result_is_propagated(void)
 static void
 test_symbol_records_declaration_definition_and_use_nodes(void)
 {
-    static const char *const G
-        = "@tokenizer(\"toy\")\n"
-          "<top> @scope(\"module\") ::= <decl> <read>\n"
-          "<decl> @declares($1, \"var\") @assigns($1, $3) ::= "
-          "\"v\" <name> \"=\" <name> \";\"\n"
-          "<read> ::= \"r\" <ref> \";\"\n"
-          "<ref> @varref($0) ::= <name>\n"
-          "<name> ::= __LOWER\n";
+    core_string_t G
+        = S("@tokenizer(\"toy\")\n"
+            "<top> @scope(\"module\") ::= <decl> <read>\n"
+            "<decl> @declares($1, \"var\") @assigns($1, $3) ::= "
+            "\"v\" <name> \"=\" <name> \";\"\n"
+            "<read> ::= \"r\" <ref> \";\"\n"
+            "<ref> @varref($0) ::= <name>\n"
+            "<name> ::= __LOWER\n");
     parse_grammar_t *grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    bool loaded = parse_bnf_load(G, S("top"), grammar);
     check("symbol site grammar loads", loaded);
     if (!loaded) {
         parse_grammar_free(grammar);
@@ -2295,18 +2317,20 @@ test_symbol_records_declaration_definition_and_use_nodes(void)
 }
 
 static parse_tree_t *
-last_node(parse_grammar_t *g, parse_tree_t *node, const char *name)
+last_node_s(parse_grammar_t *g, parse_tree_t *node, core_string_t name)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
     for (size_t i = core_tree_num_children(node); i > 0; i--) {
-        parse_tree_t *found = last_node(g, core_tree_child(node, i - 1),
-                                        name);
+        parse_tree_t *found = last_node_s(g, core_tree_child(node, i - 1),
+                                          name);
         if (found) return found;
     }
     return parse_tree_nt_name(g, node).data
-        && core_string_eq(parse_tree_nt_name(g, node), S(name))
+        && core_string_eq(parse_tree_nt_name(g, node), name)
         ? node : nullptr;
 }
+
+#define last_node(g, node, name) last_node_s((g), (node), S(name))
 
 typedef enum {
     INITIALIZER_TARGET_NONE,
@@ -2315,16 +2339,16 @@ typedef enum {
 } initializer_target_t;
 
 static initializer_target_t
-initializer_reference_target(const char *point)
+initializer_reference_target(core_string_t point)
 {
     core_buffer_t text = {0};
     core_buffer_printf(&text,
-        "@tokenizer(\"toy\")\n%s"
+        "@tokenizer(\"toy\")\n%.*s"
         "<top> @scope(\"module\") ::= <decl> <decl>\n"
         "<decl> @declares($1, \"var\") @assigns($1, $3) ::= "
         "\"v\" <name> \"=\" <ref> \";\"\n"
         "<ref> @varref($0) ::= <name>\n"
-        "<name> ::= __LOWER\n", point);
+        "<name> ::= __LOWER\n", SF(point));
     parse_grammar_t *grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar, false);
     bool loaded = parse_bnf_load(core_string_borrow(text.data,
@@ -2361,29 +2385,29 @@ static void
 test_declaration_point_hides_a_binding_in_its_initializer(void)
 {
     check("by default a binding is visible in its own initializer",
-          initializer_reference_target("") == INITIALIZER_TARGET_SELF);
+          initializer_reference_target(S("")) == INITIALIZER_TARGET_SELF);
     check("a declarator declaration point keeps the default",
           initializer_reference_target(
-              "@declaration_point(\"declarator\")\n")
+              S("@declaration_point(\"declarator\")\n"))
               == INITIALIZER_TARGET_SELF);
     check("after_initializer resolves the initializer to the earlier binding",
           initializer_reference_target(
-              "@declaration_point(\"after_initializer\")\n")
+              S("@declaration_point(\"after_initializer\")\n"))
               == INITIALIZER_TARGET_EARLIER);
 }
 
 static void
 test_symbol_lookup_instantiates_schemes(void)
 {
-    static const char *const G
-        = "@tokenizer(\"toy\")\n"
-          "<top> @scope(\"module\") ::= <expr>\n"
-          "<expr> @declares($1, \"function\") @visibility(\"public\") "
-          "::= \"v\" <name> \";\"\n"
-          "<name> ::= __LOWER\n";
+    core_string_t G
+        = S("@tokenizer(\"toy\")\n"
+            "<top> @scope(\"module\") ::= <expr>\n"
+            "<expr> @declares($1, \"function\") @visibility(\"public\") "
+            "::= \"v\" <name> \";\"\n"
+            "<name> ::= __LOWER\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    check("scheme lookup grammar loads", parse_bnf_load(S(G), S("top"), g));
+    check("scheme lookup grammar loads", parse_bnf_load(G, S("top"), g));
 
     parse_pwz_parser_t *p;
     parse_token_stream_t *ts;
@@ -2435,16 +2459,16 @@ test_symbol_lookup_instantiates_schemes(void)
 static void
 test_generic_call_result_tracks_argument_type(void)
 {
-    static const char *const G =
-        "<top> @tokenizer(\"toy\") ::= <postfix-expr>\n"
-        "<postfix-expr> ::= <postfix-expr> %\"(\" <call-args> %\")\" | <name>\n"
-        "<call-args> ::= <positional-args>\n"
-        "<positional-args> ::= <expression>\n"
-        "<expression> ::= <name>\n"
-        "<name> ::= __LOWER\n";
+    core_string_t G =
+        S("<top> @tokenizer(\"toy\") ::= <postfix-expr>\n"
+          "<postfix-expr> ::= <postfix-expr> %\"(\" <call-args> %\")\" | <name>\n"
+          "<call-args> ::= <positional-args>\n"
+          "<positional-args> ::= <expression>\n"
+          "<expression> ::= <name>\n"
+          "<name> ::= __LOWER\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     check("generic call inference grammar loads", loaded);
     if (!loaded) {
         parse_grammar_free(g);
@@ -2499,7 +2523,7 @@ test_generic_call_result_tracks_argument_type(void)
     th_type *result = call && callee && argument && inference
         ? parse_infer_eval(inference, &visit, types, nullptr, &valid)
         : nullptr;
-    th_type *uint_type = th_name(types, "uint");
+    th_type *uint_type = th_name(types, S("uint"));
     check("generic call binds its result to the argument node",
           attached && lookup_valid && valid && result && uint_type
               && th_unify_in_place(types, argument_type, uint_type)
@@ -2517,15 +2541,15 @@ test_generic_call_result_tracks_argument_type(void)
 static void
 test_error_propagation_preserves_return_type(void)
 {
-    static const char *const G =
-        "@tokenizer(\"toy\")\n"
-        "<top> ::= <postfix>\n"
-        "<postfix> ::= <inner> \"!\"\n"
-        "<inner> ::= \"x\"\n";
+    core_string_t G =
+        S("@tokenizer(\"toy\")\n"
+          "<top> ::= <postfix>\n"
+          "<postfix> ::= <inner> \"!\"\n"
+          "<inner> ::= \"x\"\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
     check("error propagation test grammar loads",
-          parse_bnf_load(S(G), S("top"), g));
+          parse_bnf_load(G, S("top"), g));
     parse_pwz_parser_t *p;
     parse_token_stream_t *ts;
     parse_tree_t *tree = parse_toy(g, "top", "x!", &p, &ts);
@@ -2539,7 +2563,7 @@ test_error_propagation_preserves_return_type(void)
     parse_tree_t *postfix = find_node(g, tree, "postfix");
     parse_tree_t *inner = postfix && core_tree_num_children(postfix)
         ? core_tree_child(postfix, 0) : nullptr;
-    parse_tree_set_type(inner, th_name(tc, "i32"));
+    parse_tree_set_type(inner, th_name(tc, S("i32")));
     parse_visit_t visit = {
         .grammar = g,
         .node = postfix,
@@ -2552,7 +2576,7 @@ test_error_propagation_preserves_return_type(void)
         ? parse_infer_eval(projection, &visit, tc, nullptr, &ok) : nullptr;
     check("postfix error propagation preserves the ordinary return type",
           ok && result && th_hash(tc, result)
-              == th_hash(tc, th_name(tc, "i32")));
+              == th_hash(tc, th_name(tc, S("i32"))));
 
     parse_infer_free(projection);
     th_ctx_free(tc);
@@ -2564,31 +2588,31 @@ test_error_propagation_preserves_return_type(void)
 static void
 test_indirection_inference_constructors(void)
 {
-    static const char *const G =
-        "@tokenizer(\"toy\")\n"
-        "<top> ::= <inner>\n"
-        "<inner> ::= \"x\"\n";
+    core_string_t G =
+        S("@tokenizer(\"toy\")\n"
+          "<top> ::= <inner>\n"
+          "<inner> ::= \"x\"\n");
     static const struct {
-        const char *name;
+        core_string_t name;
         uint8_t attrs;
     } constructors[] = {
-        {"ref", 0},
-        {"ptr", TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE},
-        {"mutref", TH_EXCLUSIVE},
-        {"own", TH_OWNING},
-        {"gcref", TH_NULLABLE | TH_RESEATABLE},
-        {"tmpref", TH_TEMPORARY},
+        {S("ref"), 0},
+        {S("ptr"), TH_NULLABLE | TH_RESEATABLE | TH_INDEXABLE},
+        {S("mutref"), TH_EXCLUSIVE},
+        {S("own"), TH_OWNING},
+        {S("gcref"), TH_NULLABLE | TH_RESEATABLE},
+        {S("tmpref"), TH_TEMPORARY},
     };
 
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     parse_pwz_parser_t *p = nullptr;
     parse_token_stream_t *ts = nullptr;
     parse_tree_t *tree = loaded ? parse_toy(g, "top", "x", &p, &ts) : nullptr;
     th_ctx *tc = th_ctx_new();
     parse_tree_t *inner = tree ? core_tree_child(tree, 0) : nullptr;
-    parse_tree_set_type(inner, th_name(tc, "int"));
+    parse_tree_set_type(inner, th_name(tc, S("int")));
     parse_visit_t visit = {
         .grammar = g,
         .node = tree,
@@ -2598,8 +2622,10 @@ test_indirection_inference_constructors(void)
     for (size_t i = 0; all && i < sizeof(constructors) / sizeof(constructors[0]);
          i++) {
         char source[32];
-        snprintf(source, sizeof(source), "%s[$0]", constructors[i].name);
-        parse_infer_expr_t *expr = parse_infer_parse(S(source));
+        int  n = snprintf(source, sizeof(source), "%.*s[$0]",
+                          SF(constructors[i].name));
+        parse_infer_expr_t *expr = parse_infer_parse(
+            core_string_borrow(source, n > 0 ? (size_t)n : 0));
         bool ok = false;
         th_type *type = expr
             ? parse_infer_eval(expr, &visit, tc, nullptr, &ok) : nullptr;
@@ -2607,7 +2633,7 @@ test_indirection_inference_constructors(void)
         all = ok && type && th_kind_of(type) == TH_INDIRECTION
             && th_ind_attrs(type, &attrs) && attrs == constructors[i].attrs
             && th_hash(tc, th_ind_referent(type))
-                   == th_hash(tc, th_name(tc, "int"));
+                   == th_hash(tc, th_name(tc, S("int")));
         parse_infer_free(expr);
     }
     check("inference applications for built-in indirections make TH_INDIRECTION types",
@@ -2621,14 +2647,14 @@ test_indirection_inference_constructors(void)
 static void
 test_binary_method_result_inference(void)
 {
-    static const char *const G =
-        "@tokenizer(\"toy\")\n"
-        "<top> ::= <left> \"+\" <right>\n"
-        "<left> ::= \"x\"\n"
-        "<right> ::= \"y\"\n";
+    core_string_t G =
+        S("@tokenizer(\"toy\")\n"
+          "<top> ::= <left> \"+\" <right>\n"
+          "<left> ::= \"x\"\n"
+          "<right> ::= \"y\"\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), g);
+    bool loaded = parse_bnf_load(G, S("top"), g);
     parse_pwz_parser_t *p = nullptr;
     parse_token_stream_t *ts = nullptr;
     parse_tree_t *tree = loaded ? parse_toy(g, "top", "x+y", &p, &ts)
@@ -2638,7 +2664,7 @@ test_binary_method_result_inference(void)
     parse_tree_t *left = tree ? core_tree_child(tree, 0) : nullptr;
     parse_tree_t *right = tree ? core_tree_child(tree, 2) : nullptr;
     parse_tree_set_type(left, receiver);
-    parse_tree_set_type(right, th_name(tc, "string"));
+    parse_tree_set_type(right, th_name(tc, S("string")));
     parse_visit_t visit = {
         .grammar = g,
         .node = tree,
@@ -2657,11 +2683,11 @@ test_binary_method_result_inference(void)
           ok && result && th_kind_of(result) == TH_VAR
               && result != receiver
               && th_var_constraint_count(receiver) == 1
-              && constraint.method.name
-              && !strcmp(constraint.method.name, "__add")
+              && constraint.method.name.data
+              && core_string_eq(constraint.method.name, S("__add"))
               && constraint.method.result == result
               && argument && th_hash(tc, argument->type)
-                  == th_hash(tc, th_name(tc, "string")));
+                  == th_hash(tc, th_name(tc, S("string"))));
     parse_infer_free(expr);
     th_ctx_free(tc);
     parse_pwz_free(p);
@@ -2672,17 +2698,17 @@ test_binary_method_result_inference(void)
 static void
 test_function_visibility_does_not_leak_to_parameters(void)
 {
-    static const char *const G =
-        "@tokenizer(\"toy\")\n"
-        "<top> @scope(\"module\") ::= <func>\n"
-        "<func> @scope(\"function\", $2) @declares($2, \"function\") ::= "
-        "<func-prelude> <name> <param> \";\"\n"
-        "<func-prelude> @visibility(\"public\") ::= \"P\"\n"
-        "<param> @declares($1, \"param\") ::= <name>\n"
-        "<name> ::= __LOWER\n";
+    core_string_t G =
+        S("@tokenizer(\"toy\")\n"
+          "<top> @scope(\"module\") ::= <func>\n"
+          "<func> @scope(\"function\", $2) @declares($2, \"function\") ::= "
+          "<func-prelude> <name> <param> \";\"\n"
+          "<func-prelude> @visibility(\"public\") ::= \"P\"\n"
+          "<param> @declares($1, \"param\") ::= <name>\n"
+          "<name> ::= __LOWER\n");
     parse_grammar_t *grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    bool loaded = parse_bnf_load(G, S("top"), grammar);
     parse_pwz_parser_t *parser = nullptr;
     parse_token_stream_t *tokens = nullptr;
     parse_tree_t *tree = loaded
@@ -2707,16 +2733,16 @@ test_function_visibility_does_not_leak_to_parameters(void)
 static void
 test_visibility_prefix_binds_to_non_function_declaration(void)
 {
-    static const char *const G =
-        "@tokenizer(\"toy\")\n"
-        "<top> @scope(\"module\") ::= <trait>\n"
-        "<trait> @scope(\"trait\", $2) @declares($2) ::= "
-        "<visibility> <name> \";\"\n"
-        "<visibility> @visibility(\"public\") ::= \"P\"\n"
-        "<name> ::= __LOWER\n";
+    core_string_t G =
+        S("@tokenizer(\"toy\")\n"
+          "<top> @scope(\"module\") ::= <trait>\n"
+          "<trait> @scope(\"trait\", $2) @declares($2) ::= "
+          "<visibility> <name> \";\"\n"
+          "<visibility> @visibility(\"public\") ::= \"P\"\n"
+          "<name> ::= __LOWER\n");
     parse_grammar_t *grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    bool loaded = parse_bnf_load(G, S("top"), grammar);
     parse_pwz_parser_t *parser = nullptr;
     parse_token_stream_t *tokens = nullptr;
     parse_tree_t *tree = loaded
@@ -2742,20 +2768,20 @@ test_visibility_prefix_binds_to_non_function_declaration(void)
 static void
 test_field_visibility_in_non_type_tagged_scope(void)
 {
-    static const char *const G =
-        "@tokenizer(\"toy\")\n"
-        "<top> @scope(\"module\") ::= <record>\n"
-        "<record> @namespace(\"type\") @scope(\"record\", $1) "
-        "@type($1) @exposes ::= "
-        "<public> <name> \"{\" <field> \"}\"\n"
-        "<field> @field($1) ::= <field-mod> <name>\n"
-        "<field-mod> ::= <private>\n"
-        "<public> @visibility(\"public\") ::= \"P\"\n"
-        "<private> @visibility(\"private\") ::= \"p\"\n"
-        "<name> ::= __LOWER\n";
+    core_string_t G =
+        S("@tokenizer(\"toy\")\n"
+          "<top> @scope(\"module\") ::= <record>\n"
+          "<record> @namespace(\"type\") @scope(\"record\", $1) "
+          "@type($1) @exposes ::= "
+          "<public> <name> \"{\" <field> \"}\"\n"
+          "<field> @field($1) ::= <field-mod> <name>\n"
+          "<field-mod> ::= <private>\n"
+          "<public> @visibility(\"public\") ::= \"P\"\n"
+          "<private> @visibility(\"private\") ::= \"p\"\n"
+          "<name> ::= __LOWER\n");
     parse_grammar_t *grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar, false);
-    bool loaded = parse_bnf_load(S(G), S("top"), grammar);
+    bool loaded = parse_bnf_load(G, S("top"), grammar);
     parse_pwz_parser_t *parser = nullptr;
     parse_token_stream_t *tokens = nullptr;
     parse_tree_t *tree = loaded
@@ -2786,15 +2812,15 @@ test_field_visibility_in_non_type_tagged_scope(void)
 static void
 test_scoped_declaration_is_bound_outside_its_body(void)
 {
-    static const char *const G
-        = "@tokenizer(\"toy\")\n"
-          "<top> @scope(\"module\") ::= <func>\n"
-          "<func> @scope(\"function\", $1) @declares($1, \"function\") "
-          "::= \"f\" <name>\n"
-          "<name> ::= __LOWER\n";
+    core_string_t G
+        = S("@tokenizer(\"toy\")\n"
+            "<top> @scope(\"module\") ::= <func>\n"
+            "<func> @scope(\"function\", $1) @declares($1, \"function\") "
+            "::= \"f\" <name>\n"
+            "<name> ::= __LOWER\n");
     parse_grammar_t *g = parse_grammar_new();
     parse_grammar_set_error_recovery(g, false);
-    check("scoped-declaration grammar loads", parse_bnf_load(S(G), S("top"), g));
+    check("scoped-declaration grammar loads", parse_bnf_load(G, S("top"), g));
 
     parse_pwz_parser_t *p;
     parse_token_stream_t *ts;
@@ -2830,23 +2856,23 @@ test_scoped_declaration_is_bound_outside_its_body(void)
 static void
 test_part_two_rejections(void)
 {
-    static const char *const BAD[] = {
-        "<top> @mutability($1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @namespace($1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @direction(\"out\") ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @constrain($1) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @constrain($1, ?? int) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @size() ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @size(sizeof) ::= <n>\n<n> ::= __LOWER\n",
-        "<top> @alignment(1, 2) ::= <n>\n<n> ::= __LOWER\n",
-        "@declaration_point(\"later\")\n<top> ::= <n>\n<n> ::= __LOWER\n",
+    static const core_string_t BAD[] = {
+        S("<top> @mutability($1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @namespace($1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @direction(\"out\") ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @constrain($1) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @constrain($1, ?? int) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @size() ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @size(sizeof) ::= <n>\n<n> ::= __LOWER\n"),
+        S("<top> @alignment(1, 2) ::= <n>\n<n> ::= __LOWER\n"),
+        S("@declaration_point(\"later\")\n<top> ::= <n>\n<n> ::= __LOWER\n"),
     };
 
     for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
         parse_grammar_t *bad = parse_grammar_new();
 
-        if (parse_bnf_load(S(BAD[i]), S("top"), bad)) {
-            printf("FAIL  this should not have loaded: %s", BAD[i]);
+        if (parse_bnf_load(BAD[i], S("top"), bad)) {
+            printf("FAIL  this should not have loaded: %.*s", SF(BAD[i]));
             fails++;
         }
 
@@ -2857,16 +2883,16 @@ test_part_two_rejections(void)
 static void
 test_pass_by_modes(void)
 {
-    static const char *const MODES[] = {
-        "in", "out", "inout", "ref", "consume"
+    static const core_string_t MODES[] = {
+        S("in"), S("out"), S("inout"), S("ref"), S("consume")
     };
     bool all_load = true;
     for (size_t i = 0; i < sizeof(MODES) / sizeof(MODES[0]); i++) {
         core_buffer_t grammar_text = {0};
         core_buffer_printf(&grammar_text,
             "<top> @tokenizer(\"toy\") @scope(\"module\") ::= <p>\n"
-            "<p> @declares($1,\"param\") @pass_by(\"%s\") ::= \"v\" <n> \";\"\n"
-            "<n> ::= __LOWER\n", MODES[i]);
+            "<p> @declares($1,\"param\") @pass_by(\"%.*s\") ::= \"v\" <n> \";\"\n"
+            "<n> ::= __LOWER\n", SF(MODES[i]));
         parse_grammar_t *g = parse_grammar_new();
         parse_grammar_set_error_recovery(g, false);
         all_load = all_load && parse_bnf_load(

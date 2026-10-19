@@ -7,6 +7,7 @@
 #include "ir/layout.h"
 #include "lib/arena.h"
 #include "lib/buffer.h"
+#include "lib/string.h"
 #include "parse/tree.h"
 #include "parse/symtab.h"
 #include "parse/annot_walk.h"
@@ -38,8 +39,8 @@ typedef struct {
 
 struct ir_module_t {
     ir_ctx_t           *ctx;
-    const char         *name;
-    const char         *target;
+    core_string_t       name;
+    core_string_t       target;
     const ir_profile_t *profile;
     ir_props_t          props;
     ir_annots_t         annots;
@@ -64,7 +65,7 @@ struct ir_module_t {
     size_t    cap_ids;
     void     *id_index;
 
-    const char **files;
+    core_string_t *files;
     size_t       n_files;
     size_t       cap_files;
 
@@ -82,7 +83,7 @@ struct ir_module_t {
 };
 
 struct ir_descentry_t {
-    const char     *target;
+    core_string_t   target;
     ir_descriptor_t d;
 };
 
@@ -92,8 +93,9 @@ ir_typeslot_t *ir_type_slot_at(ir_module_t *m, size_t i);
 
 void *ir_grow(ir_ctx_t *ctx, void *p, size_t *cap, size_t need, size_t elem);
 
-void  ir_index_add(ir_ctx_t *ctx, void **slot, const char *name, void *node);
-void *ir_index_find(void *slot, const char *name);
+void  ir_index_add(ir_ctx_t *ctx, void **slot, core_string_t name,
+                   void *node);
+void *ir_index_find(void *slot, core_string_t name);
 
 bool ir_local_read_earlier(const ir_instr_t *in, uint32_t o, ir_local_t *l);
 
@@ -123,9 +125,8 @@ ir_local_t *ir_rd_def_local(const ir_rd_t *r, uint32_t d);
 uint32_t    ir_rd_def_tok(const ir_rd_t *r, uint32_t d);
 uint32_t    ir_rd_use_tok(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 
-void  ir_quote(core_buffer_t *b, const char *s);
-void  ir_quote_n(core_buffer_t *b, const char *s, size_t length);
-void  ir_lit_into(core_buffer_t *b, ir_lit_t v);
-char *ir_lit_text(ir_lit_t v);
+void          ir_quote(core_buffer_t *b, core_string_t s);
+void          ir_lit_into(core_buffer_t *b, ir_lit_t v);
+core_string_t ir_lit_text(ir_lit_t v);
 
 #endif

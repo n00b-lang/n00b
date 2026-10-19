@@ -71,8 +71,7 @@ extern int32_t scan_stream_token_count(parse_token_stream_t *ts);
 
 extern void scan_stream_reset(parse_token_stream_t *ts);
 
-extern bool scan_stream_append(parse_token_stream_t *ts, const char *data,
-                               size_t len);
+extern bool scan_stream_append(parse_token_stream_t *ts, core_string_t data);
 
 extern bool scan_stream_finish(parse_token_stream_t *ts);
 
@@ -80,10 +79,9 @@ extern bool scan_stream_enable_edits(parse_token_stream_t *ts);
 
 extern bool scan_stream_replace(parse_token_stream_t *ts,
                                 size_t start_byte, size_t end_byte,
-                                const char *replacement,
-                                size_t replacement_len);
+                                core_string_t replacement);
 extern bool scan_stream_insert(parse_token_stream_t *ts, size_t at_byte,
-                               const char *text, size_t text_len);
+                               core_string_t text);
 extern bool scan_stream_delete(parse_token_stream_t *ts,
                                size_t start_byte, size_t end_byte);
 

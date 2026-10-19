@@ -69,7 +69,7 @@ ir_instr_t *ir_instr_derived(ir_block_t *b, ir_op_t op, const ir_instr_t *from,
 }
 
 ir_instr_t *ir_instr_generated(ir_block_t *b, ir_op_t op, ir_span_t near,
-                               const char *pass, uint32_t at)
+                               core_string_t pass, uint32_t at)
 {
     ir_instr_t *in = ir_instr_insert(b, op, at);
 
@@ -133,9 +133,9 @@ bool ir_instr_move(ir_instr_t *in, ir_block_t *to, uint32_t at)
 }
 
 bool ir_instr_inlined_from(ir_instr_t *in, ir_span_t call_site,
-                           const char *agent)
+                           core_string_t agent)
 {
-    if (!in || !in->block || !agent) {
+    if (!in || !in->block || !agent.data) {
         return false;
     }
 

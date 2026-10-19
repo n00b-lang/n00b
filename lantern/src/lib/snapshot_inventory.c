@@ -4,6 +4,7 @@
 #include "lib/snapshot_inventory.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,51 +59,66 @@ struct core_snapshot_inventory_t {
     core_snapshot_inventory_stats_t stats;
 };
 
-static char *
-join_path(const char *parent, const char *child)
+static core_string_t
+join_path(core_string_t parent, core_string_t child)
 {
-    size_t a = strlen(parent), b = strlen(child);
-    bool separator = a && parent[a - 1] != '/' && parent[a - 1] != '\\';
-    char *path = core_alloc_size(1, a + b + (separator ? 2 : 1));
-    memcpy(path, parent, a);
+    size_t a = parent.u8_bytes, b = child.u8_bytes;
+    bool separator = a && parent.data[a - 1] != '/'
+        && parent.data[a - 1] != '\\';
+    size_t length = a + b + (separator ? 1 : 0);
+    char *path = core_alloc_size(1, length + 1);
+    if (a) memcpy(path, parent.data, a);
     if (separator) path[a++] = '/';
-    memcpy(path + a, child, b);
-    return path;
+    if (b) memcpy(path + a, child.data, b);
+    return (core_string_t){.data = path, .u8_bytes = length};
+}
+
+static bool
+is_dot_entry(core_string_t name)
+{
+    return core_string_eq(name, CORE_STRING_STATIC("."))
+        || core_string_eq(name, CORE_STRING_STATIC(".."));
 }
 
 #ifdef _WIN32
 static wchar_t *
-wide_path(const char *path)
+wide_path(core_string_t path)
 {
-    int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1,
-                                    nullptr, 0);
-    if (length <= 0) return nullptr;
-    wchar_t *wide = core_alloc_array(wchar_t, length);
-    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path, -1,
-                             wide, length)) {
+    if (path.u8_bytes > INT_MAX) return nullptr;
+    int length = 0;
+    if (path.u8_bytes) {
+        length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.data,
+                                     (int)path.u8_bytes, nullptr, 0);
+        if (length <= 0) return nullptr;
+    }
+    wchar_t *wide = core_alloc_array(wchar_t, (size_t)length + 1);
+    if (length && !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                       path.data, (int)path.u8_bytes,
+                                       wide, length)) {
         core_free(wide);
         return nullptr;
     }
+    wide[length] = 0;
     return wide;
 }
 
-static char *
+static core_string_t
 utf8_name(const wchar_t *wide)
 {
     int length = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0,
                                     nullptr, nullptr);
-    if (length <= 0) return nullptr;
+    if (length <= 0) return (core_string_t){};
     char *name = core_alloc_array(char, length);
     if (!WideCharToMultiByte(CP_UTF8, 0, wide, -1, name, length,
                              nullptr, nullptr)) {
         core_free(name);
-        return nullptr;
+        return (core_string_t){};
     }
-    return name;
+    return (core_string_t){.data = name, .u8_bytes = (size_t)length - 1};
 }
 
 static FILE *
-open_binary(const char *path)
+open_binary(core_string_t path)
 {
     wchar_t *wide = wide_path(path);
     FILE *file = wide ? _wfopen(wide, L"rb") : nullptr;
@@ -117,7 +133,7 @@ filetime_value(FILETIME time)
 }
 
 static int
-path_signature(const char *path, file_signature_t *signature,
+path_signature(core_string_t path, file_signature_t *signature,
                bool *directory, bool *regular)
 {
     wchar_t *wide = wide_path(path);
@@ -143,9 +159,35 @@ path_signature(const char *path, file_signature_t *signature,
 }
 #else
 static FILE *
-open_binary(const char *path)
+open_binary(core_string_t path)
 {
-    return fopen(path, "rb");
+    char *native = core_string_to_cstr(path);
+    FILE *file = native ? fopen(native, "rb") : nullptr;
+    core_free(native);
+    return file;
+}
+
+static DIR *
+open_directory(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    DIR *directory = native ? opendir(native) : nullptr;
+    int saved = native ? errno : ENOENT;
+    core_free(native);
+    errno = saved;
+    return directory;
+}
+
+static int
+stat_path(core_string_t path, struct stat *info, bool follow)
+{
+    char *native = core_string_to_cstr(path);
+    int result = native ? (follow ? stat(native, info) : lstat(native, info))
+                        : -1;
+    int saved = native ? errno : ENOENT;
+    core_free(native);
+    errno = saved;
+    return result;
 }
 
 static uint64_t
@@ -156,11 +198,11 @@ timespec_value(time_t seconds, long nanoseconds)
 }
 
 static int
-path_signature(const char *path, file_signature_t *signature,
+path_signature(core_string_t path, file_signature_t *signature,
                bool *directory, bool *regular)
 {
     struct stat info;
-    if (lstat(path, &info) != 0)
+    if (stat_path(path, &info, false) != 0)
         return errno == ENOENT || errno == ENOTDIR ? 0 : -1;
     *directory = S_ISDIR(info.st_mode);
     *regular = S_ISREG(info.st_mode);
@@ -187,7 +229,7 @@ path_signature(const char *path, file_signature_t *signature,
 #endif
 
 static bool
-read_file(const char *path, char **bytes_out, size_t *size_out)
+read_file(core_string_t path, char **bytes_out, size_t *size_out)
 {
     FILE *file = open_binary(path);
     if (!file) return false;
@@ -237,10 +279,11 @@ core_source_snapshot_path(const core_source_snapshot_t *snapshot)
                     : (core_string_t){0};
 }
 
-const char *
+core_string_t
 core_source_snapshot_contents(const core_source_snapshot_t *snapshot)
 {
-    return snapshot ? core_source_file_contents(&snapshot->source) : nullptr;
+    return snapshot ? core_source_file_contents(&snapshot->source)
+                    : (core_string_t){};
 }
 
 size_t
@@ -346,9 +389,10 @@ old_entry(const refresh_context_t *refresh, size_t root_index,
 
 static bool
 add_file(refresh_context_t *refresh, size_t root_index,
-         const char *relative, const char *path, file_signature_t signature)
+         core_string_t relative, core_string_t path,
+         file_signature_t signature)
 {
-    core_string_t name = core_string_from_cstr(relative);
+    core_string_t name = core_string_dup(relative);
     const inventory_entry_t *old = old_entry(refresh, root_index, name);
     core_source_snapshot_t *snapshot = nullptr;
     if (old && !memcmp(&old->signature, &signature, sizeof(signature)))
@@ -376,16 +420,17 @@ add_file(refresh_context_t *refresh, size_t root_index,
             core_free(name.data);
             return false;
         }
-        if (old && core_source_snapshot_size(old->snapshot) == size
-            && !memcmp(core_source_snapshot_contents(old->snapshot),
-                       bytes, size))
+        core_string_t previous = old
+            ? core_source_snapshot_contents(old->snapshot) : (core_string_t){};
+        if (old && previous.u8_bytes == size
+            && (!size || !memcmp(previous.data, bytes, size)))
             snapshot = core_source_snapshot_retain(old->snapshot);
         else {
             snapshot = core_alloc(core_source_snapshot_t);
             snapshot->references = 1;
             snapshot->revision = ++refresh->inventory->next_revision;
-            if (!core_source_file_init(&snapshot->source,
-                    core_string_borrow(path, strlen(path)), bytes, size)) {
+            if (!core_source_file_init(&snapshot->source, path,
+                                       core_string_borrow(bytes, size))) {
                 core_free(snapshot);
                 core_free(bytes);
                 core_free(name.data);
@@ -405,80 +450,86 @@ add_file(refresh_context_t *refresh, size_t root_index,
 }
 
 static bool
-scan_directory(refresh_context_t *refresh, size_t root_index,
-               const char *relative)
+accepts(const core_snapshot_inventory_t *inventory, core_string_t relative)
 {
-    const char *root = refresh->inventory->roots.data[root_index].data;
-    char *path = *relative ? join_path(root, relative) : core_strdup(root);
+    return !inventory->accept || inventory->accept(inventory->context,
+                                                   relative);
+}
+
+static bool
+scan_directory(refresh_context_t *refresh, size_t root_index,
+               core_string_t relative)
+{
+    core_string_t root = refresh->inventory->roots.data[root_index];
+    core_string_t path = relative.u8_bytes ? join_path(root, relative)
+                                           : core_string_dup(root);
 #ifdef _WIN32
-    char *pattern = join_path(path, "*");
+    core_string_t pattern = join_path(path, CORE_STRING_STATIC("*"));
     wchar_t *wide = wide_path(pattern);
     WIN32_FIND_DATAW item;
     HANDLE search = wide ? FindFirstFileW(wide, &item) : INVALID_HANDLE_VALUE;
     DWORD error = wide && search == INVALID_HANDLE_VALUE
         ? GetLastError() : ERROR_INVALID_NAME;
     core_free(wide);
-    core_free(pattern);
+    core_free(pattern.data);
     if (search == INVALID_HANDLE_VALUE) {
-        core_free(path);
+        core_free(path.data);
         return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
     }
     bool ok = true;
     do {
         if (!wcscmp(item.cFileName, L".")
             || !wcscmp(item.cFileName, L"..")) continue;
-        char *name = utf8_name(item.cFileName);
-        if (!name) { ok = false; break; }
-        char *child = *relative ? join_path(relative, name)
-                                : core_strdup(name);
-        char *absolute = join_path(root, child);
+        core_string_t name = utf8_name(item.cFileName);
+        if (!name.data) { ok = false; break; }
+        core_string_t child = relative.u8_bytes ? join_path(relative, name)
+                                                : core_string_dup(name);
+        core_string_t absolute = join_path(root, child);
         file_signature_t signature = {0};
         bool directory = false, regular = false;
         int found = path_signature(absolute, &signature, &directory, &regular);
         if (found != 1) ok = false;
         else if (directory) ok = scan_directory(refresh, root_index, child);
-        else if (regular && (!refresh->inventory->accept
-            || refresh->inventory->accept(refresh->inventory->context,
-                                         core_string_borrow(child,
-                                                            strlen(child)))))
+        else if (regular && accepts(refresh->inventory, child))
             ok = add_file(refresh, root_index, child, absolute, signature);
-        core_free(absolute);
-        core_free(child);
-        core_free(name);
+        core_free(absolute.data);
+        core_free(child.data);
+        core_free(name.data);
     } while (ok && FindNextFileW(search, &item));
     FindClose(search);
 #else
-    DIR *directory = opendir(path);
+    DIR *directory = open_directory(path);
     if (!directory) {
         int error = errno;
-        core_free(path);
+        core_free(path.data);
         return error == ENOENT || error == ENOTDIR;
     }
     bool ok = true;
     struct dirent *item;
     while (ok && (item = readdir(directory))) {
-        if (!strcmp(item->d_name, ".")
-            || !strcmp(item->d_name, "..")) continue;
-        char *child = *relative ? join_path(relative, item->d_name)
-                                : core_strdup(item->d_name);
-        char *absolute = join_path(root, child);
+        core_string_t name = core_string_from_cstr(item->d_name);
+        if (is_dot_entry(name)) {
+            core_free(name.data);
+            continue;
+        }
+        core_string_t child = relative.u8_bytes ? join_path(relative, name)
+                                                : core_string_dup(name);
+        core_free(name.data);
+        core_string_t absolute = join_path(root, child);
         file_signature_t signature = {0};
         bool is_directory = false, regular = false;
         int found = path_signature(absolute, &signature, &is_directory,
                                    &regular);
         if (found < 0) ok = false;
         else if (is_directory) ok = scan_directory(refresh, root_index, child);
-        else if (regular && (!refresh->inventory->accept
-            || refresh->inventory->accept(refresh->inventory->context,
-                                         core_string_borrow(child,
-                                                            strlen(child)))))
+        else if (regular && accepts(refresh->inventory, child))
             ok = add_file(refresh, root_index, child, absolute, signature);
-        core_free(absolute);
-        core_free(child);
+        core_free(absolute.data);
+        core_free(child.data);
     }
     closedir(directory);
 #endif
-    core_free(path);
+    core_free(path.data);
     return ok;
 }
 
@@ -491,17 +542,14 @@ typedef struct {
 core_list_decl(inventory_directory_t);
 
 typedef struct {
-    const char *relative;
-    size_t length;
+    core_string_t relative;
     file_signature_t signature;
 } cached_directory_t;
 core_list_decl(cached_directory_t);
 
 typedef struct {
-    const char *relative;
-    size_t length;
-    const char *contents;
-    size_t size;
+    core_string_t relative;
+    core_string_t contents;
     file_signature_t signature;
 } cached_file_t;
 core_list_decl(cached_file_t);
@@ -521,29 +569,38 @@ release_directories(core_list_t(inventory_directory_t) *directories)
 }
 
 static bool
-cache_take(inventory_reader_t *reader, size_t length, const char **out)
+cache_take(inventory_reader_t *reader, size_t length, const uint8_t **out)
 {
     if (length > reader->size - reader->offset) return false;
-    *out = (const char *)reader->data + reader->offset;
+    *out = reader->data + reader->offset;
     reader->offset += length;
+    return true;
+}
+
+static bool
+cache_text(inventory_reader_t *reader, size_t length, core_string_t *out)
+{
+    const uint8_t *bytes;
+    if (!cache_take(reader, length, &bytes)) return false;
+    *out = core_string_borrow((const char *)bytes, length);
     return true;
 }
 
 static bool
 cache_u32(inventory_reader_t *reader, uint32_t *out)
 {
-    const char *bytes;
+    const uint8_t *bytes;
     if (!cache_take(reader, 4, &bytes)) return false;
-    *out = core_le_load_u32((const uint8_t *)bytes);
+    *out = core_le_load_u32(bytes);
     return true;
 }
 
 static bool
 cache_u64(inventory_reader_t *reader, uint64_t *out)
 {
-    const char *bytes;
+    const uint8_t *bytes;
     if (!cache_take(reader, 8, &bytes)) return false;
-    *out = core_le_load_u64((const uint8_t *)bytes);
+    *out = core_le_load_u64(bytes);
     return true;
 }
 
@@ -584,42 +641,44 @@ cache_put_signature(core_buffer_t *buffer, file_signature_t signature)
 }
 
 static bool
-safe_relative_path(const char *path, size_t length,
-                   const char *group, bool recursive)
+safe_relative_path(core_string_t path, core_string_t group, bool recursive)
 {
-    if (memchr(path, '\0', length) || memchr(path, '\\', length)) return false;
-    if (!length) return !*group;
-    if (path[0] == '/' || path[length - 1] == '/') return false;
-    if (*group) {
-        size_t prefix = strlen(group);
-        if (length < prefix || memcmp(path, group, prefix)) return false;
-        if (length != prefix && path[prefix] != '/') return false;
+    size_t length = path.u8_bytes;
+    if (length && (memchr(path.data, '\0', length)
+                   || memchr(path.data, '\\', length))) return false;
+    if (!length) return !group.u8_bytes;
+    if (path.data[0] == '/' || path.data[length - 1] == '/') return false;
+    if (group.u8_bytes) {
+        size_t prefix = group.u8_bytes;
+        if (!core_string_starts_with(path, group)) return false;
+        if (length != prefix && path.data[prefix] != '/') return false;
     }
-    else if (!recursive && memchr(path, '/', length)) return false;
+    else if (!recursive && memchr(path.data, '/', length)) return false;
     for (size_t start = 0; start < length;) {
         size_t end = start;
-        while (end < length && path[end] != '/') end++;
-        if (end == start || (end - start == 1 && path[start] == '.')
-            || (end - start == 2 && path[start] == '.'
-                && path[start + 1] == '.')) return false;
+        while (end < length && path.data[end] != '/') end++;
+        if (end == start || (end - start == 1 && path.data[start] == '.')
+            || (end - start == 2 && path.data[start] == '.'
+                && path.data[start + 1] == '.')) return false;
         start = end + 1;
     }
     return true;
 }
 
-static char *
+static core_string_t
 cache_file_path(const core_snapshot_inventory_t *inventory,
-                const char *group_path)
+                core_string_t group_path)
 {
-    char *metadata = join_path(group_path,
-        inventory->metadata_directory.data);
-    char *path = join_path(metadata, "inventory-v1");
-    core_free(metadata);
+    core_string_t metadata = join_path(group_path,
+                                       inventory->metadata_directory);
+    core_string_t path = join_path(metadata,
+                                   CORE_STRING_STATIC("inventory-v1"));
+    core_free(metadata.data);
     return path;
 }
 
 static bool
-same_path_signature(const char *path, file_signature_t expected,
+same_path_signature(core_string_t path, file_signature_t expected,
                     bool want_directory)
 {
     file_signature_t actual = {0};
@@ -633,8 +692,8 @@ static bool
 add_cached_file(refresh_context_t *refresh, size_t root_index,
                 const cached_file_t *cached)
 {
-    core_string_t relative = core_string_from_raw(cached->relative,
-                                                   (int64_t)cached->length);
+    core_string_t relative = core_string_from_raw(
+        cached->relative.data, (int64_t)cached->relative.u8_bytes);
     if (!relative.data) return false;
     const inventory_entry_t *old = old_entry(refresh, root_index, relative);
     core_source_snapshot_t *snapshot = nullptr;
@@ -642,15 +701,14 @@ add_cached_file(refresh_context_t *refresh, size_t root_index,
                        sizeof cached->signature))
         snapshot = core_source_snapshot_retain(old->snapshot);
     else {
-        const char *root = refresh->inventory->roots.data[root_index].data;
-        char *path = join_path(root, relative.data);
+        core_string_t root = refresh->inventory->roots.data[root_index];
+        core_string_t path = join_path(root, relative);
         snapshot = core_alloc(core_source_snapshot_t);
         snapshot->references = 1;
         snapshot->revision = ++refresh->inventory->next_revision;
-        bool ok = core_source_file_init(&snapshot->source,
-            core_string_borrow(path, strlen(path)), cached->contents,
-            cached->size);
-        core_free(path);
+        bool ok = core_source_file_init(&snapshot->source, path,
+                                        cached->contents);
+        core_free(path.data);
         if (!ok) {
             core_free(snapshot);
             core_free(relative.data);
@@ -669,17 +727,19 @@ add_cached_file(refresh_context_t *refresh, size_t root_index,
 
 static bool
 load_package_cache(refresh_context_t *refresh, size_t root_index,
-                   const char *group, bool recursive, const char *group_path)
+                   core_string_t group, bool recursive,
+                   core_string_t group_path)
 {
     core_snapshot_inventory_t *inventory = refresh->inventory;
-    char *path = cache_file_path(inventory, group_path);
+    core_string_t path = cache_file_path(inventory, group_path);
     struct stat status;
-    bool plausible = !stat(path, &status) && S_ISREG(status.st_mode)
+    bool plausible = !stat_path(path, &status, true)
+        && S_ISREG(status.st_mode)
         && status.st_size >= 40 && status.st_size <= 256 * 1024 * 1024;
     char *bytes = nullptr;
     size_t size = 0;
     bool ok = plausible && read_file(path, &bytes, &size);
-    core_free(path);
+    core_free(path.data);
     if (!ok) return false;
     const uint8_t *raw = (const uint8_t *)bytes;
     uint64_t content_hash = core_le_load_u64(raw + 8);
@@ -689,8 +749,8 @@ load_package_cache(refresh_context_t *refresh, size_t root_index,
     uint32_t file_count = core_le_load_u32(raw + 36);
     ok = !memcmp(raw, "LNSINV2", 8)
         && content_hash == core_xxh3_64bits_raw(raw + 40, size - 40)
-        && path_hash == core_xxh3_64bits_raw(group_path,
-                                             strlen(group_path))
+        && path_hash == core_xxh3_64bits_raw(group_path.data,
+                                             group_path.u8_bytes)
         && filter_revision == inventory->filter_revision
         && directory_count <= 100000 && file_count <= 100000;
     inventory_reader_t reader = {.data = raw, .size = size, .offset = 40};
@@ -700,54 +760,47 @@ load_package_cache(refresh_context_t *refresh, size_t root_index,
     for (uint32_t i = 0; ok && i < directory_count; i++) {
         uint32_t length = 0;
         file_signature_t signature = {0};
-        const char *relative = nullptr;
+        core_string_t relative = {};
         ok = cache_u32(&reader, &length)
             && cache_signature(&reader, &signature)
-            && cache_take(&reader, length, &relative)
-            && safe_relative_path(relative, length, group, recursive);
+            && cache_text(&reader, length, &relative)
+            && safe_relative_path(relative, group, recursive);
         if (ok) core_list_push(directories, ((cached_directory_t){
-            .relative = relative, .length = length, .signature = signature,
+            .relative = relative, .signature = signature,
         }));
     }
     for (uint32_t i = 0; ok && i < file_count; i++) {
         uint32_t length = 0;
         uint64_t content_size = 0;
         file_signature_t signature = {0};
-        const char *relative = nullptr, *contents = nullptr;
+        core_string_t relative = {}, contents = {};
         ok = cache_u32(&reader, &length)
             && cache_signature(&reader, &signature)
             && cache_u64(&reader, &content_size)
             && content_size <= SIZE_MAX
-            && cache_take(&reader, length, &relative)
-            && cache_take(&reader, (size_t)content_size, &contents)
-            && safe_relative_path(relative, length, group, recursive)
-            && (!inventory->accept
-                || inventory->accept(inventory->context,
-                    core_string_borrow(relative, length)));
+            && cache_text(&reader, length, &relative)
+            && cache_text(&reader, (size_t)content_size, &contents)
+            && safe_relative_path(relative, group, recursive)
+            && accepts(inventory, relative);
         if (ok) core_list_push(files, ((cached_file_t){
-            .relative = relative, .length = length,
-            .contents = contents, .size = (size_t)content_size,
+            .relative = relative, .contents = contents,
             .signature = signature,
         }));
     }
     ok = ok && reader.offset == size && directories.len > 0;
-    const char *root = inventory->roots.data[root_index].data;
+    core_string_t root = inventory->roots.data[root_index];
     for (size_t i = 0; ok && i < directories.len; i++) {
         cached_directory_t *record = &directories.data[i];
-        char *relative = core_strndup(record->relative, record->length);
-        char *absolute = record->length
-            ? join_path(root, relative) : core_strdup(root);
+        core_string_t absolute = record->relative.u8_bytes
+            ? join_path(root, record->relative) : core_string_dup(root);
         ok = same_path_signature(absolute, record->signature, true);
-        core_free(absolute);
-        core_free(relative);
+        core_free(absolute.data);
     }
     for (size_t i = 0; ok && i < files.len; i++) {
         cached_file_t *record = &files.data[i];
-        char *relative = core_strndup(record->relative, record->length);
-        char *absolute = join_path(root, relative);
+        core_string_t absolute = join_path(root, record->relative);
         ok = same_path_signature(absolute, record->signature, false);
-        core_free(absolute);
-        core_free(relative);
+        core_free(absolute.data);
     }
     if (ok) for (size_t i = 0; i < files.len; i++)
         if (!add_cached_file(refresh, root_index, &files.data[i])) {
@@ -762,35 +815,40 @@ load_package_cache(refresh_context_t *refresh, size_t root_index,
 
 static bool
 scan_package_directory(refresh_context_t *refresh, size_t root_index,
-                       const char *relative, bool recursive,
+                       core_string_t relative, bool recursive,
                        core_list_t(inventory_directory_t) *directories)
 {
-    const char *root = refresh->inventory->roots.data[root_index].data;
-    char *path = *relative ? join_path(root, relative) : core_strdup(root);
+    core_string_t root = refresh->inventory->roots.data[root_index];
+    core_string_t path = relative.u8_bytes ? join_path(root, relative)
+                                           : core_string_dup(root);
     file_signature_t signature = {0};
     bool is_directory = false, regular = false;
     int found = path_signature(path, &signature, &is_directory, &regular);
     if (found != 1 || !is_directory) {
-        core_free(path);
+        core_free(path.data);
         return found == 0;
     }
     core_list_push(*directories, ((inventory_directory_t){
-        .relative = core_string_from_cstr(relative),
+        .relative = core_string_dup(relative),
         .signature = signature,
     }));
-    DIR *directory = opendir(path);
+    DIR *directory = open_directory(path);
     if (!directory) {
-        core_free(path);
+        core_free(path.data);
         return false;
     }
     bool ok = true;
     struct dirent *item;
     while (ok && (item = readdir(directory))) {
-        if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, "..")
-            || item->d_name[0] == '.') continue;
-        char *child = *relative ? join_path(relative, item->d_name)
-                                : core_strdup(item->d_name);
-        char *absolute = join_path(root, child);
+        core_string_t name = core_string_from_cstr(item->d_name);
+        if (is_dot_entry(name) || (name.u8_bytes && name.data[0] == '.')) {
+            core_free(name.data);
+            continue;
+        }
+        core_string_t child = relative.u8_bytes ? join_path(relative, name)
+                                                : core_string_dup(name);
+        core_free(name.data);
+        core_string_t absolute = join_path(root, child);
         file_signature_t child_signature = {0};
         bool child_directory = false, child_regular = false;
         int child_found = path_signature(absolute, &child_signature,
@@ -799,28 +857,29 @@ scan_package_directory(refresh_context_t *refresh, size_t root_index,
         else if (child_directory && recursive)
             ok = scan_package_directory(refresh, root_index, child,
                                         true, directories);
-        else if (child_regular && (!refresh->inventory->accept
-            || refresh->inventory->accept(refresh->inventory->context,
-                                         core_string_borrow(child,
-                                                            strlen(child)))))
+        else if (child_regular && accepts(refresh->inventory, child))
             ok = add_file(refresh, root_index, child, absolute,
                           child_signature);
-        core_free(absolute);
-        core_free(child);
+        core_free(absolute.data);
+        core_free(child.data);
     }
     closedir(directory);
-    core_free(path);
+    core_free(path.data);
     return ok;
 }
 
 static bool
-write_atomic_cache_file(const char *directory, const char *name,
+write_atomic_cache_file(core_string_t directory, core_string_t name,
                         const void *data, size_t size)
 {
-    char *path = join_path(directory, name);
+    core_string_t path = join_path(directory, name);
     core_buffer_t pattern = {0};
-    core_buffer_printf(&pattern, "%s/%s.tmp.XXXXXX", directory, name);
-    int fd = pattern.data ? mkstemp(pattern.data) : -1;
+    core_buffer_printf(&pattern, "%.*s/%.*s.tmp.XXXXXX",
+                       (int)directory.u8_bytes, directory.data,
+                       (int)name.u8_bytes, name.data);
+    char *native_pattern = core_string_to_cstr(core_buffer_string(&pattern));
+    char *native_path = core_string_to_cstr(path);
+    int fd = native_pattern ? mkstemp(native_pattern) : -1;
     bool ok = fd >= 0;
     if (ok) ok = fchmod(fd, 0600) == 0;
     FILE *file = ok ? fdopen(fd, "wb") : nullptr;
@@ -832,30 +891,35 @@ write_atomic_cache_file(const char *directory, const char *name,
         if (fclose(file)) ok = false;
     }
     else if (fd >= 0) close(fd);
-    if (ok) ok = rename(pattern.data, path) == 0;
-    if (!ok && pattern.data) unlink(pattern.data);
-    core_free(path);
+    if (ok) ok = rename(native_pattern, native_path) == 0;
+    if (!ok && native_pattern) unlink(native_pattern);
+    core_free(native_path);
+    core_free(native_pattern);
+    core_free(path.data);
     core_buffer_release(&pattern);
     return ok;
 }
 
 static bool
 write_package_cache(refresh_context_t *refresh,
-                    const char *group_path,
+                    core_string_t group_path,
                     core_list_t(inventory_directory_t) *directories,
                     size_t first_entry)
 {
     core_snapshot_inventory_t *inventory = refresh->inventory;
-    char *metadata = join_path(group_path,
-        inventory->metadata_directory.data);
-    if (mkdir(metadata, 0700) != 0 && errno != EEXIST) {
-        core_free(metadata);
+    core_string_t metadata = join_path(group_path,
+                                       inventory->metadata_directory);
+    char *native_metadata = core_string_to_cstr(metadata);
+    bool made = mkdir(native_metadata, 0700) == 0 || errno == EEXIST;
+    core_free(native_metadata);
+    if (!made) {
+        core_free(metadata.data);
         return false;
     }
     struct stat metadata_status;
-    if (lstat(metadata, &metadata_status) != 0
+    if (stat_path(metadata, &metadata_status, false) != 0
         || !S_ISDIR(metadata_status.st_mode)) {
-        core_free(metadata);
+        core_free(metadata.data);
         return false;
     }
     file_signature_t current = {0};
@@ -863,20 +927,20 @@ write_package_cache(refresh_context_t *refresh,
     if (!directories->len
         || path_signature(group_path, &current, &is_directory, &regular) != 1
         || !is_directory) {
-        core_free(metadata);
+        core_free(metadata.data);
         return false;
     }
     directories->data[0].signature = current;
     if (directories->len > UINT32_MAX
         || refresh->entries.len - first_entry > UINT32_MAX) {
-        core_free(metadata);
+        core_free(metadata.data);
         return false;
     }
     core_buffer_t buffer = {0};
     core_buffer_append(&buffer, "LNSINV2", 8);
     cache_put_u64(&buffer, 0);
     cache_put_u64(&buffer,
-        core_xxh3_64bits_raw(group_path, strlen(group_path)));
+        core_xxh3_64bits_raw(group_path.data, group_path.u8_bytes));
     cache_put_u64(&buffer, inventory->filter_revision);
     cache_put_u32(&buffer, (uint32_t)directories->len);
     cache_put_u32(&buffer, (uint32_t)(refresh->entries.len - first_entry));
@@ -884,42 +948,42 @@ write_package_cache(refresh_context_t *refresh,
         inventory_directory_t *dir = &directories->data[i];
         cache_put_u32(&buffer, (uint32_t)dir->relative.u8_bytes);
         cache_put_signature(&buffer, dir->signature);
-        core_buffer_append(&buffer, dir->relative.data,
-                           dir->relative.u8_bytes);
+        core_buffer_append_string(&buffer, dir->relative);
     }
     for (size_t i = first_entry; i < refresh->entries.len; i++) {
         inventory_entry_t *entry = &refresh->entries.data[i];
-        size_t size = core_source_snapshot_size(entry->snapshot);
+        core_string_t contents = core_source_snapshot_contents(
+            entry->snapshot);
         cache_put_u32(&buffer, (uint32_t)entry->relative.u8_bytes);
         cache_put_signature(&buffer, entry->signature);
-        cache_put_u64(&buffer, size);
-        core_buffer_append(&buffer, entry->relative.data,
-                           entry->relative.u8_bytes);
-        core_buffer_append(&buffer,
-            core_source_snapshot_contents(entry->snapshot), size);
+        cache_put_u64(&buffer, contents.u8_bytes);
+        core_buffer_append_string(&buffer, entry->relative);
+        core_buffer_append_string(&buffer, contents);
     }
     uint8_t checksum[8];
     core_le_store_u64(checksum,
         core_xxh3_64bits_raw(buffer.data + 40, buffer.byte_len - 40));
     memcpy(buffer.data + 8, checksum, 8);
-    bool ok = write_atomic_cache_file(metadata, "inventory-v1",
+    bool ok = write_atomic_cache_file(metadata,
+                                      CORE_STRING_STATIC("inventory-v1"),
                                       buffer.data, buffer.byte_len);
-    core_free(metadata);
+    core_free(metadata.data);
     core_buffer_release(&buffer);
     return ok;
 }
 
 static bool
 refresh_package_group(refresh_context_t *refresh, size_t root_index,
-                      const char *group, bool recursive)
+                      core_string_t group, bool recursive)
 {
-    const char *root = refresh->inventory->roots.data[root_index].data;
-    char *group_path = *group ? join_path(root, group) : core_strdup(root);
+    core_string_t root = refresh->inventory->roots.data[root_index];
+    core_string_t group_path = group.u8_bytes ? join_path(root, group)
+                                              : core_string_dup(root);
     size_t first_entry = refresh->entries.len;
     if (load_package_cache(refresh, root_index, group, recursive,
                            group_path)) {
         refresh->inventory->stats.package_cache_hits++;
-        core_free(group_path);
+        core_free(group_path.data);
         return true;
     }
     refresh->inventory->stats.package_scans++;
@@ -934,38 +998,44 @@ refresh_package_group(refresh_context_t *refresh, size_t root_index,
         core_list_new(inventory_directory_t);
     bool ok = scan_package_directory(refresh, root_index, group, recursive,
                                      &directories);
-    char *path = cache_file_path(refresh->inventory, group_path);
-    bool had_cache = access(path, F_OK) == 0;
-    core_free(path);
+    core_string_t path = cache_file_path(refresh->inventory, group_path);
+    char *native_path = core_string_to_cstr(path);
+    bool had_cache = access(native_path, F_OK) == 0;
+    core_free(native_path);
+    core_free(path.data);
     if (ok && (refresh->entries.len > first_entry || had_cache))
         (void)write_package_cache(refresh, group_path,
                                   &directories, first_entry);
     release_directories(&directories);
-    core_free(group_path);
+    core_free(group_path.data);
     return ok;
 }
 
 static bool
 refresh_local_packages(refresh_context_t *refresh, size_t root_index)
 {
-    const char *root = refresh->inventory->roots.data[root_index].data;
-    if (!refresh_package_group(refresh, root_index, "", false)) return false;
-    DIR *directory = opendir(root);
+    core_string_t root = refresh->inventory->roots.data[root_index];
+    if (!refresh_package_group(refresh, root_index, CORE_STRING_STATIC(""),
+                               false)) return false;
+    DIR *directory = open_directory(root);
     if (!directory) return errno == ENOENT || errno == ENOTDIR;
     bool ok = true;
     struct dirent *item;
     while (ok && (item = readdir(directory))) {
-        if (!strcmp(item->d_name, ".") || !strcmp(item->d_name, "..")
-            || item->d_name[0] == '.') continue;
-        char *path = join_path(root, item->d_name);
+        core_string_t name = core_string_from_cstr(item->d_name);
+        if (is_dot_entry(name) || (name.u8_bytes && name.data[0] == '.')) {
+            core_free(name.data);
+            continue;
+        }
+        core_string_t path = join_path(root, name);
         file_signature_t signature = {0};
         bool is_directory = false, regular = false;
         int found = path_signature(path, &signature, &is_directory, &regular);
         if (found < 0) ok = false;
         else if (is_directory)
-            ok = refresh_package_group(refresh, root_index,
-                                       item->d_name, true);
-        core_free(path);
+            ok = refresh_package_group(refresh, root_index, name, true);
+        core_free(path.data);
+        core_free(name.data);
     }
     closedir(directory);
     return ok;
@@ -984,22 +1054,22 @@ product_source(const core_snapshot_inventory_t *inventory, size_t root_index,
     return nullptr;
 }
 
-static char *
+static core_string_t
 product_directory(const core_snapshot_inventory_t *inventory,
                   size_t root_index, core_string_t relative)
 {
-    if (root_index >= inventory->roots.len) return nullptr;
-    const char *root = inventory->roots.data[root_index].data;
-    const char *slash = memchr(relative.data, '/', relative.u8_bytes);
-    char *group = slash
-        ? core_strndup(relative.data, (size_t)(slash - relative.data))
-        : nullptr;
-    char *package = group ? join_path(root, group) : core_strdup(root);
-    char *metadata = join_path(package, inventory->metadata_directory.data);
-    char *directory = join_path(metadata, "derived");
-    core_free(group);
-    core_free(package);
-    core_free(metadata);
+    if (root_index >= inventory->roots.len) return (core_string_t){};
+    core_string_t root = inventory->roots.data[root_index];
+    int64_t slash = core_string_find_byte(relative, '/');
+    core_string_t package = slash >= 0
+        ? join_path(root, core_string_slice(relative, 0, (size_t)slash))
+        : core_string_dup(root);
+    core_string_t metadata = join_path(package,
+                                       inventory->metadata_directory);
+    core_string_t directory = join_path(metadata,
+                                        CORE_STRING_STATIC("derived"));
+    core_free(package.data);
+    core_free(metadata.data);
     return directory;
 }
 
@@ -1025,19 +1095,21 @@ core_snapshot_inventory_product_read(
     const inventory_entry_t *entry = product_source(inventory, root_index,
                                                      relative_path);
     if (!entry || !kind.data || !kind.u8_bytes || !out) return false;
-    char *directory = product_directory(inventory, root_index, relative_path);
+    core_string_t directory = product_directory(inventory, root_index,
+                                                relative_path);
     core_buffer_t name = {0};
     product_name(&name, relative_path, kind, profile);
-    char *path = join_path(directory, name.data);
+    core_string_t path = join_path(directory, core_buffer_string(&name));
     core_buffer_release(&name);
-    core_free(directory);
+    core_free(directory.data);
     struct stat status;
-    bool plausible = !stat(path, &status) && S_ISREG(status.st_mode)
+    bool plausible = !stat_path(path, &status, true)
+        && S_ISREG(status.st_mode)
         && status.st_size >= 88 && status.st_size <= 64 * 1024 * 1024;
     char *bytes = nullptr;
     size_t size = 0;
     bool ok = plausible && read_file(path, &bytes, &size);
-    core_free(path);
+    core_free(path.data);
     if (!ok) return false;
     const uint8_t *raw = (const uint8_t *)bytes;
     uint64_t relative_hash = core_xxh3_64bits_raw(relative_path.data,
@@ -1075,14 +1147,19 @@ core_snapshot_inventory_product_write(
                                                      relative_path);
     if (!entry || !kind.data || !kind.u8_bytes || (!data && size)
         || size > 64 * 1024 * 1024) return false;
-    char *directory = product_directory(inventory, root_index, relative_path);
-    if (mkdir(directory, 0700) != 0 && errno != EEXIST) {
-        core_free(directory);
+    core_string_t directory = product_directory(inventory, root_index,
+                                                relative_path);
+    char *native_directory = core_string_to_cstr(directory);
+    bool made = native_directory
+        && (mkdir(native_directory, 0700) == 0 || errno == EEXIST);
+    core_free(native_directory);
+    if (!made) {
+        core_free(directory.data);
         return false;
     }
     struct stat status;
-    if (lstat(directory, &status) != 0 || !S_ISDIR(status.st_mode)) {
-        core_free(directory);
+    if (stat_path(directory, &status, false) != 0 || !S_ISDIR(status.st_mode)) {
+        core_free(directory.data);
         return false;
     }
     core_buffer_t name = {0};
@@ -1097,11 +1174,11 @@ core_snapshot_inventory_product_write(
     cache_put_u64(&buffer, size);
     cache_put_u64(&buffer, core_xxh3_64bits_raw(data ? data : "", size));
     core_buffer_append(&buffer, data, size);
-    bool ok = write_atomic_cache_file(directory, name.data,
+    bool ok = write_atomic_cache_file(directory, core_buffer_string(&name),
                                       buffer.data, buffer.byte_len);
     core_buffer_release(&buffer);
     core_buffer_release(&name);
-    core_free(directory);
+    core_free(directory.data);
     return ok;
 }
 
@@ -1145,7 +1222,7 @@ core_snapshot_inventory_refresh(core_snapshot_inventory_t *inventory)
             ok = refresh_local_packages(&refresh, i);
         else
 #endif
-            ok = scan_directory(&refresh, i, "");
+            ok = scan_directory(&refresh, i, CORE_STRING_STATIC(""));
     }
     if (!ok) {
         release_entries(&refresh.entries);

@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 
 #include "lib/alloc.h"
 #include "lib/buffer.h"
@@ -15,15 +14,22 @@
 #include "private/parse/grammar.h"
 #include "harness.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+
 static void
-same(const char *what, char *got, const char *want)
+same(core_string_t what, core_string_t got, core_string_t want)
 {
-    if (!got || strcmp(got, want) != 0) {
+    if (!got.data || !core_string_eq(got, want)) {
+        core_string_t shown = got.data ? got : S("(null)");
+
         fails++;
-        printf("FAIL  %s\n  want: [%s]\n  got:  [%s]\n",
-               what,
-               want,
-               got ? got : "(null)");
+        printf("FAIL  %.*s\n  want: [%.*s]\n  got:  [%.*s]\n",
+               (int)what.u8_bytes,
+               what.data,
+               (int)want.u8_bytes,
+               want.data,
+               (int)shown.u8_bytes,
+               shown.data);
     }
 }
 
@@ -78,32 +84,29 @@ typedef struct {
 } run_t;
 
 static bool
-run(run_t *r, const char *bnf, const char *start, const char *src)
+run(run_t *r, core_string_t bnf, core_string_t start, core_string_t src)
 {
     *r      = (run_t){0};
     r->g    = parse_grammar_new();
-    r->start = parse_nonterm_id(parse_nonterm(
-        r->g, core_string_from_cstr(start)));
+    r->start = parse_nonterm_id(parse_nonterm(r->g, start));
 
     parse_grammar_set_error_recovery(r->g, false);
 
-    if (!parse_bnf_load(core_string_from_cstr(bnf),
-                      core_string_from_cstr(start),
-                      r->g)) {
+    if (!parse_bnf_load(bnf, start, r->g)) {
         printf("FAIL  the grammar does not load\n");
         fails++;
 
         return false;
     }
 
-    r->buf = core_buffer_from_bytes(src, (int64_t)strlen(src));
+    r->buf = core_buffer_from_bytes(src.data, (int64_t)src.u8_bytes);
     r->sc  = scan_scanner_new(r->buf, toy_scan, r->g,
                              core_option_none(core_string_t), nullptr, nullptr);
     r->ts  = scan_token_stream_new(r->sc);
     r->p   = parse_pwz_new_for_start(r->g, r->start);
 
     if (!parse_pwz_parse(r->p, r->ts)) {
-        printf("FAIL  %s does not parse\n", src);
+        printf("FAIL  %.*s does not parse\n", (int)src.u8_bytes, src.data);
         fails++;
 
         return false;
@@ -124,37 +127,37 @@ run_free(run_t *r)
     parse_grammar_free(r->g);
 }
 
-static const char *const PLAIN
-    = "<prog> ::= <stmt> | <stmt> <prog>\n"
-      "<stmt> ::= %\"let\" %IDENTIFIER \"=\" %IDENTIFIER \";\"\n";
+#define PLAIN                                                     \
+    S("<prog> ::= <stmt> | <stmt> <prog>\n"                       \
+      "<stmt> ::= %\"let\" %IDENTIFIER \"=\" %IDENTIFIER \";\"\n")
 
-static const char *const SHAPED
-    = "<prog> ::= <stmt> | <stmt> <prog>\n"
-      "<stmt> @nospace($4) @hardline ::= %\"let\" %IDENTIFIER \"=\" "
-      "%IDENTIFIER \";\"\n";
+#define SHAPED                                                          \
+    S("<prog> ::= <stmt> | <stmt> <prog>\n"                             \
+      "<stmt> @nospace($4) @hardline ::= %\"let\" %IDENTIFIER \"=\" "   \
+      "%IDENTIFIER \";\"\n")
 
 static void
 test_a_tree_dumps_without_any_annotations(void)
 {
     run_t r;
 
-    if (!run(&r, PLAIN, "prog", "let a = b;")) {
+    if (!run(&r, PLAIN, S("prog"), S("let a = b;"))) {
         return;
     }
 
-    char *d = parse_tree_dump_str(r.g, r.tree, false);
+    core_string_t d = parse_tree_dump_str(r.g, r.tree, false);
 
-    same("a parse tree dumps structurally with no annotations at all",
+    same(S("a parse tree dumps structurally with no annotations at all"),
          d,
-         "<prog> rule=0\n"
-         "  <stmt> rule=0\n"
-         "    TOKEN[1073741831] \"let\"\n"
-         "    TOKEN[1073741825] \"a\"\n"
-         "    TOKEN[61] \"=\"\n"
-         "    TOKEN[1073741825] \"b\"\n"
-         "    TOKEN[59] \";\"\n");
+         S("<prog> rule=0\n"
+           "  <stmt> rule=0\n"
+           "    TOKEN[1073741831] \"let\"\n"
+           "    TOKEN[1073741825] \"a\"\n"
+           "    TOKEN[61] \"=\"\n"
+           "    TOKEN[1073741825] \"b\"\n"
+           "    TOKEN[59] \";\"\n"));
 
-    core_free(d);
+    core_free(d.data);
     run_free(&r);
 }
 
@@ -163,19 +166,19 @@ test_formatting_falls_back_to_one_space(void)
 {
     run_t r;
 
-    if (!run(&r, PLAIN, "prog", "let a   =\n\tb;    let c = d;")) {
+    if (!run(&r, PLAIN, S("prog"), S("let a   =\n\tb;    let c = d;"))) {
         return;
     }
 
     parse_print_opts_t o = {.width = 200, .indent = 4};
-    char            *s = parse_tree_print(r.g, r.tree, &o);
+    core_string_t      s = parse_tree_print(r.g, r.tree, &o);
 
-    same("with no printing annotations every token is one space apart, "
-         "whatever the input's whitespace was",
+    same(S("with no printing annotations every token is one space apart, "
+           "whatever the input's whitespace was"),
          s,
-         "let a = b ; let c = d ;");
+         S("let a = b ; let c = d ;"));
 
-    core_free(s);
+    core_free(s.data);
     run_free(&r);
 }
 
@@ -184,19 +187,19 @@ test_annotations_win_where_they_exist(void)
 {
     run_t r;
 
-    if (!run(&r, SHAPED, "prog", "let a = b; let c = d;")) {
+    if (!run(&r, SHAPED, S("prog"), S("let a = b; let c = d;"))) {
         return;
     }
 
     parse_print_opts_t o = {.width = 200, .indent = 4};
-    char            *s = parse_tree_print(r.g, r.tree, &o);
+    core_string_t      s = parse_tree_print(r.g, r.tree, &o);
 
-    same("a production's own annotations override the fallback, and the "
-         "gap between two of them belongs to the production above",
+    same(S("a production's own annotations override the fallback, and the "
+           "gap between two of them belongs to the production above"),
          s,
-         "let\na\n=\nb; let\nc\n=\nd;");
+         S("let\na\n=\nb; let\nc\n=\nd;"));
 
-    core_free(s);
+    core_free(s.data);
     run_free(&r);
 }
 
@@ -205,7 +208,7 @@ test_a_comment_the_caller_marks_as_leading_is_kept(void)
 {
     run_t r;
 
-    if (!run(&r, PLAIN, "prog", "let a = b;")) {
+    if (!run(&r, PLAIN, S("prog"), S("let a = b;"))) {
         return;
     }
 
@@ -233,38 +236,38 @@ test_a_comment_the_caller_marks_as_leading_is_kept(void)
     parse_token_set_leading_trivia(tok, tv);
 
     parse_print_opts_t o = {.width = 200, .indent = 4};
-    char            *s = parse_tree_print(r.g, r.tree, &o);
+    core_string_t      s = parse_tree_print(r.g, r.tree, &o);
 
-    same("comment trivia is content and keeps its own line, while the "
-         "input's whitespace does not survive at all",
+    same(S("comment trivia is content and keeps its own line, while the "
+           "input's whitespace does not survive at all"),
          s,
-         "# why\nlet a = b ;");
+         S("# why\nlet a = b ;"));
 
-    core_free(s);
+    core_free(s.data);
     run_free(&r);
 }
 
 static void
 test_trivia_indent_places_standalone_comment_inside_delimiters(void)
 {
-    const char *grammar =
-        "<prog> @trivia_indent($1) ::= %\"{\" %\"}\"\n";
-    const char *source = "{\n# inside\n}";
+    core_string_t grammar =
+        S("<prog> @trivia_indent($1) ::= %\"{\" %\"}\"\n");
+    core_string_t source = S("{\n# inside\n}");
     run_t r;
 
-    if (!run(&r, grammar, "prog", source)) return;
+    if (!run(&r, grammar, S("prog"), source)) return;
 
     parse_print_opts_t options = {
-        .source = core_string_borrow(source, strlen(source)),
+        .source = source,
         .width = 80,
         .indent = 4,
     };
-    char *printed = parse_tree_print(r.g, r.tree, &options);
+    core_string_t printed = parse_tree_print(r.g, r.tree, &options);
 
-    same("trivia indentation moves the comment without moving the closer",
-         printed, "{\n    # inside\n}");
+    same(S("trivia indentation moves the comment without moving the closer"),
+         printed, S("{\n    # inside\n}"));
 
-    core_free(printed);
+    core_free(printed.data);
     run_free(&r);
 }
 
@@ -285,7 +288,7 @@ test_a_comment_attached_to_the_previous_token_is_kept(void)
 {
     run_t r;
 
-    if (!run(&r, PLAIN, "prog", "let a = b;")) {
+    if (!run(&r, PLAIN, S("prog"), S("let a = b;"))) {
         return;
     }
 
@@ -301,12 +304,12 @@ test_a_comment_attached_to_the_previous_token_is_kept(void)
     }
 
     parse_print_opts_t o = {.width = 200, .indent = 4};
-    char *s = parse_tree_print(r.g, r.tree, &o);
+    core_string_t s = parse_tree_print(r.g, r.tree, &o);
 
-    same("trailing comment trivia is printed", s,
-         "let a = b ; # after\n");
+    same(S("trailing comment trivia is printed"), s,
+         S("let a = b ; # after\n"));
 
-    core_free(s);
+    core_free(s.data);
     run_free(&r);
 }
 
@@ -315,17 +318,17 @@ test_a_final_comment_is_printed(void)
 {
     run_t r;
 
-    if (!run(&r, PLAIN, "prog", "let a = b;\n# final")) {
+    if (!run(&r, PLAIN, S("prog"), S("let a = b;\n# final"))) {
         return;
     }
 
     parse_print_opts_t o = {.width = 200, .indent = 4};
-    char *s = parse_tree_print(r.g, r.tree, &o);
+    core_string_t s = parse_tree_print(r.g, r.tree, &o);
 
-    same("a final attach-right comment survives parsing and printing", s,
-         "let a = b ;\n# final\n");
+    same(S("a final attach-right comment survives parsing and printing"), s,
+         S("let a = b ;\n# final\n"));
 
-    core_free(s);
+    core_free(s.data);
     run_free(&r);
 }
 
@@ -370,10 +373,11 @@ restart:
 }
 
 static char *
-comments_of(const char *src, scan_trivia_attach_t how, size_t *n_lead,
+comments_of(core_string_t src, scan_trivia_attach_t how, size_t *n_lead,
             size_t *n_trail)
 {
-    core_buffer_t  *buf = core_buffer_from_bytes(src, (int64_t)strlen(src));
+    core_buffer_t  *buf = core_buffer_from_bytes(src.data,
+                                                 (int64_t)src.u8_bytes);
     parse_scanner_t *sc  = scan_scanner_new(buf, comment_scan, nullptr,
                                          core_option_none(core_string_t),
                                          nullptr, nullptr);
@@ -421,12 +425,12 @@ test_trivia_attaches_right_by_default(void)
     size_t lead  = 0;
     size_t trail = 0;
 
-    comments_of("a # why\nb", SCAN_TRIVIA_ATTACH_RIGHT, &lead, &trail);
+    comments_of(S("a # why\nb"), SCAN_TRIVIA_ATTACH_RIGHT, &lead, &trail);
 
     check("by default a comment attaches to the token after it",
           lead == 1 && trail == 0);
 
-    comments_of("a # why\nb", SCAN_TRIVIA_ATTACH_LEFT, &lead, &trail);
+    comments_of(S("a # why\nb"), SCAN_TRIVIA_ATTACH_LEFT, &lead, &trail);
 
     check("and a scanner can ask for the token before it instead",
           lead == 0 && trail == 1);
@@ -438,8 +442,9 @@ test_trivia_attaches_right_by_default(void)
 static void
 test_final_trivia_attaches_to_the_last_token(void)
 {
-    const char *src = "a\n# final";
-    core_buffer_t *buf = core_buffer_from_bytes(src, (int64_t)strlen(src));
+    core_string_t src = S("a\n# final");
+    core_buffer_t *buf = core_buffer_from_bytes(src.data,
+                                                (int64_t)src.u8_bytes);
     parse_scanner_t *sc = scan_scanner_new(
         buf, comment_scan, nullptr, core_option_none(core_string_t), nullptr,
         nullptr);
@@ -470,16 +475,15 @@ test_final_trivia_attaches_to_the_last_token(void)
 static void
 test_notrivia_clears_it(void)
 {
-    static const char *const G
-        = "<top> @notrivia($1) ::= <a> <b>\n"
-          "<a> ::= %\"x\"\n"
-          "<b> ::= %\"y\"\n";
+    core_string_t G = S("<top> @notrivia($1) ::= <a> <b>\n"
+                        "<a> ::= %\"x\"\n"
+                        "<b> ::= %\"y\"\n");
 
     parse_grammar_t *g = parse_grammar_new();
 
     parse_grammar_set_error_recovery(g, false);
 
-    if (!parse_bnf_load(core_string_from_cstr(G),
+    if (!parse_bnf_load(G,
                       CORE_STRING_STATIC("top"), g)) {
         check("the @notrivia grammar loads", false);
 

@@ -3,6 +3,7 @@
 
 #include "ir/diag.h"
 #include "ir/ir.h"
+#include "lib/string.h"
 
 typedef enum : uint8_t {
     IR_RULE_ACCEPT,
@@ -25,7 +26,7 @@ typedef enum : uint8_t {
     IR_MATCH_DEFAULT,
 } ir_match_t;
 
-const char *ir_match_name(ir_match_t m);
+core_string_t ir_match_name(ir_match_t m);
 
 typedef struct ir_rules_t ir_rules_t;
 
@@ -38,10 +39,10 @@ typedef bool (*ir_lower_rule_fn)(ir_module_t *m, ir_instr_t *in,
 typedef struct ir_rule_t ir_rule_t;
 
 struct ir_rule_t {
-    const char      *name;
+    core_string_t    name;
     ir_op_t          op;
     ir_match_t       match;
-    const char      *type_text;
+    core_string_t    type_text;
     th_kind          kind;
     ir_class_t       class;
     ir_type_rule_fn  type_rule;
@@ -66,7 +67,7 @@ ir_rule_result_t ir_rule_apply(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
 bool             ir_rule_lower(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
                                ir_diags_t *d);
 
-char *ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in);
+core_string_t ir_rule_explain(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in);
 
 th_type *ir_instr_key_type(ir_instr_t *in);
 

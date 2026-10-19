@@ -59,31 +59,27 @@ w_bytes(writer_t *w, const void *data, size_t length)
 }
 
 static void
-w_text(writer_t *w, const char *text)
+w_text(writer_t *w, core_string_t text)
 {
-    w_bytes(w, text, text ? strlen(text) : 0);
+    w_bytes(w, text.data, text.u8_bytes);
 }
 
 static void
-w_text(writer_t *w, const char *text);
-
-static void
-w_module_ref(writer_t *w, const char *name)
+w_module_ref(writer_t *w, core_string_t name)
 {
     w_text(w, name);
-    if (!w->references || !name) return;
+    if (!w->references || !name.data) return;
     for (size_t i = 0; i < w->module_count; i++)
-        if (!strcmp(w->modules[i]->name, name)) return;
-    size_t length = strlen(name);
-    const char *at = w->references->data;
-    const char *end = at ? at + w->references->byte_len : nullptr;
-    while (at && at < end) {
-        const char *line = memchr(at, '\n', (size_t)(end - at));
-        size_t span = line ? (size_t)(line - at) : (size_t)(end - at);
-        if (span == length && !memcmp(at, name, length)) return;
-        at = line ? line + 1 : end;
+        if (core_string_eq(w->modules[i]->name, name)) return;
+    core_string_t rest = core_buffer_string(w->references);
+    while (rest.data && rest.u8_bytes) {
+        int64_t newline = core_string_find_byte(rest, '\n');
+        size_t span = newline >= 0 ? (size_t)newline : rest.u8_bytes;
+        if (core_string_eq(core_string_slice(rest, 0, span), name)) return;
+        rest = core_string_slice(rest, newline >= 0 ? span + 1 : span,
+                                 rest.u8_bytes);
     }
-    core_buffer_append(w->references, name, length);
+    core_buffer_append_string(w->references, name);
     core_buffer_putc(w->references, '\n');
 }
 
@@ -221,9 +217,10 @@ w_value(writer_t *w, const ir_value_t *value)
 }
 
 static bool
-reverse_alias_key(const char *key)
+reverse_alias_key(core_string_t key)
 {
-    return key && !strncmp(key, "ir.aliased_by", 13);
+    return key.data
+        && core_string_starts_with(key, CORE_STRING_STATIC("ir.aliased_by"));
 }
 
 static bool
@@ -255,21 +252,45 @@ value_live(const ir_value_t *value)
 }
 
 static bool
-alias_index(const char *key, uint32_t *index, bool *escapes)
+alias_index(core_string_t key, uint32_t *index, bool *escapes)
 {
-    if (strncmp(key, "ir.alias", 8)) return false;
-    const char *at = key + 8;
-    if (*at < '0' || *at > '9') return false;
+    if (!core_string_starts_with(key, CORE_STRING_STATIC("ir.alias")))
+        return false;
+    size_t at = sizeof("ir.alias") - 1;
+    if (at >= key.u8_bytes || key.data[at] < '0' || key.data[at] > '9')
+        return false;
     uint32_t value = 0;
-    while (*at >= '0' && *at <= '9') value = value * 10 + (uint32_t)(*at++ - '0');
-    if (*at && strcmp(at, "_escapes")) return false;
+    while (at < key.u8_bytes && key.data[at] >= '0' && key.data[at] <= '9')
+        value = value * 10 + (uint32_t)(key.data[at++] - '0');
+    core_string_t rest = core_string_slice(key, at, key.u8_bytes - at);
+    if (rest.u8_bytes
+        && !core_string_eq(rest, CORE_STRING_STATIC("_escapes")))
+        return false;
     *index = value;
-    *escapes = *at != '\0';
+    *escapes = rest.u8_bytes != 0;
     return true;
 }
 
+enum {
+    ALIAS_KEY_SIZE = 48,
+};
+
+static core_string_t
+alias_key(char *buffer, bool reverse, bool escapes, unsigned long long index)
+{
+    size_t size = ALIAS_KEY_SIZE;
+    int length = reverse
+        ? escapes ? snprintf(buffer, size, "ir.aliased_by%llu_escapes", index)
+                  : snprintf(buffer, size, "ir.aliased_by%llu", index)
+        : escapes ? snprintf(buffer, size, "ir.alias%llu_escapes", index)
+                  : snprintf(buffer, size, "ir.alias%llu", index);
+    if (length < 0) return (core_string_t){};
+    return core_string_borrow(buffer, (size_t)length < size
+                                          ? (size_t)length : size - 1);
+}
+
 static void
-w_annot(writer_t *w, const ir_annot_t *annot, const char *key)
+w_annot(writer_t *w, const ir_annot_t *annot, core_string_t key)
 {
     w_text(w, key);
     w_u8(w, (uint8_t)annot->kind);
@@ -294,21 +315,22 @@ w_annots(writer_t *w, const ir_annots_t *annots)
     uint32_t aliases = 0;
     for (uint32_t i = 0; i < annots->n; i++) {
         const ir_annot_t *annot = &annots->a[i];
-        if (!strcmp(annot->key, "ir.alias_count") && !annot->i.neg)
+        if (core_string_eq(annot->key, CORE_STRING_STATIC("ir.alias_count"))
+            && !annot->i.neg)
             aliases = (uint32_t)annot->i.mag;
     }
     for (uint32_t a = 0; renumber && a < aliases && a < annots->n; a++) {
-        char key[48];
-        snprintf(key, sizeof(key), "ir.alias%u", a);
+        char buffer[ALIAS_KEY_SIZE];
+        core_string_t key = alias_key(buffer, false, false, a);
         for (uint32_t i = 0; i < annots->n; i++)
-            if (!strcmp(annots->a[i].key, key)
+            if (core_string_eq(annots->a[i].key, key)
                 && annots->a[i].kind == IR_ANNOT_VALUE
                 && value_live(annots->a[i].v))
                 renumber[a] = live++;
     }
     uint32_t kept = 0;
     for (uint32_t i = 0; i < annots->n; i++) {
-        const char *key = annots->a[i].key;
+        core_string_t key = annots->a[i].key;
         uint32_t index = 0;
         bool escapes = false;
         if (reverse_alias_key(key)) continue;
@@ -326,14 +348,12 @@ w_annots(writer_t *w, const ir_annots_t *annots)
         if (alias_index(annot->key, &index, &escapes)) {
             if (!renumber || index >= annots->n
                 || renumber[index] == UINT32_MAX) continue;
-            char key[48];
-            snprintf(key, sizeof(key), escapes ? "ir.alias%u_escapes"
-                                               : "ir.alias%u",
-                     renumber[index]);
-            w_annot(w, annot, key);
+            char buffer[ALIAS_KEY_SIZE];
+            w_annot(w, annot,
+                    alias_key(buffer, false, escapes, renumber[index]));
             continue;
         }
-        if (!strcmp(annot->key, "ir.alias_count")) {
+        if (core_string_eq(annot->key, CORE_STRING_STATIC("ir.alias_count"))) {
             ir_annot_t count = *annot;
             count.i = (ir_lit_t){.mag = live};
             w_annot(w, &count, annot->key);
@@ -347,8 +367,9 @@ w_annots(writer_t *w, const ir_annots_t *annots)
 static void
 w_producer(writer_t *w, const ir_func_t *producer)
 {
-    w_text(w, producer && producer->owner ? producer->owner->name : nullptr);
-    w_text(w, producer ? producer->name : nullptr);
+    w_text(w, producer && producer->owner ? producer->owner->name
+                                          : (core_string_t){});
+    w_text(w, producer ? producer->name : (core_string_t){});
 }
 
 static void
@@ -414,7 +435,7 @@ w_init(writer_t *w, const ir_global_init_value_t *value)
         break;
     }
     case IR_GLOBAL_INIT_STRING:
-        w_bytes(w, value->string.bytes, value->string.length);
+        w_text(w, value->string);
         break;
     case IR_GLOBAL_INIT_SYMBOL: w_value(w, value->symbol); break;
     case IR_GLOBAL_INIT_PHASE_RESULT:
@@ -677,7 +698,8 @@ ir_modules_save_references(ir_module_t *const *modules, size_t count,
     for (size_t m = 0; m < count; m++) {
         ir_module_t *module = modules[m];
         w_text(&w, module->name);
-        w_text(&w, module->profile ? module->profile->name : nullptr);
+        w_text(&w, module->profile ? module->profile->name
+                                   : (core_string_t){});
         w_text(&w, module->target);
         w_u32(&w, (uint32_t)module->props);
         w_span(&w, module->span);
@@ -813,32 +835,35 @@ r_u64(reader_t *r)
     return value;
 }
 
-static const char *
+static const uint8_t *
 r_bytes(reader_t *r, size_t *length)
 {
     uint64_t size = r_u64(r);
-    if (length) *length = 0;
+    *length = 0;
     if (r->failed || size == UINT64_MAX) return nullptr;
     if (size > r->length - r->at) {
         r->failed = true;
         return nullptr;
     }
-    char *copy = ir_alloc(r->ctx, (size_t)size + 1);
+    uint8_t *copy = ir_alloc(r->ctx, (size_t)size + 1);
     if (!copy) {
         r->failed = true;
         return nullptr;
     }
     if (size) memcpy(copy, r->data + r->at, (size_t)size);
-    copy[size] = '\0';
+    copy[size] = 0;
     r->at += (size_t)size;
-    if (length) *length = (size_t)size;
+    *length = (size_t)size;
     return copy;
 }
 
-static const char *
+static core_string_t
 r_text(reader_t *r)
 {
-    return r_bytes(r, nullptr);
+    size_t length = 0;
+    const uint8_t *bytes = r_bytes(r, &length);
+    return bytes ? core_string_borrow((const char *)bytes, length)
+                 : (core_string_t){};
 }
 
 static uint64_t
@@ -886,7 +911,7 @@ r_origin(reader_t *r)
     for (uint32_t i = 0; !r->failed && i < depth; i++) {
         ir_origin_kind_t kind = (ir_origin_kind_t)r_u8(r);
         ir_span_t span = r_span(r);
-        const char *agent = r_text(r);
+        core_string_t agent = r_text(r);
         origin = ir_origin_new(r->ctx, kind, span, agent, origin);
         if (!origin) r->failed = true;
     }
@@ -906,13 +931,13 @@ r_lit(reader_t *r)
 }
 
 static ir_module_t *
-r_find_module(reader_t *r, const char *name)
+r_find_module(reader_t *r, core_string_t name)
 {
-    if (!name) return nullptr;
+    if (!name.data) return nullptr;
     for (size_t g = 0; g < r->group_count; g++)
         for (size_t i = 0; i < r->group[g].count; i++)
             if (r->group[g].modules[i]
-                && !strcmp(r->group[g].modules[i]->name, name))
+                && core_string_eq(r->group[g].modules[i]->name, name))
                 return r->group[g].modules[i];
     return r->lookup ? r->lookup(r->lookup_context, name) : nullptr;
 }
@@ -945,11 +970,11 @@ r_value(reader_t *r)
         return local->value ? local->value : ir_local_value(function, local);
     }
     case REF_FOREIGN: {
-        const char *module_name = r_text(r);
-        const char *function_name = r_text(r);
+        core_string_t module_name = r_text(r);
+        core_string_t function_name = r_text(r);
         uint8_t kind = r_u8(r);
         ir_module_t *module = r_find_module(r, module_name);
-        ir_func_t *owner = module && function_name
+        ir_func_t *owner = module && function_name.data
             ? ir_func_find(module, function_name) : nullptr;
         if (kind == IR_VAL_PARAM) {
             uint32_t index = r_u32(r);
@@ -973,11 +998,11 @@ r_value(reader_t *r)
     }
     case REF_FUNC:
     case REF_GLOBAL: {
-        const char *module_name = r_text(r);
-        const char *name = r_text(r);
+        core_string_t module_name = r_text(r);
+        core_string_t name = r_text(r);
         th_type *type = r_type(r);
         ir_module_t *module = r_find_module(r, module_name);
-        if (!module || !name) break;
+        if (!module || !name.data) break;
         ir_value_t *value = ir_alloc(r->ctx, sizeof(*value));
         if (!value) break;
         memset(value, 0, sizeof(*value));
@@ -1023,7 +1048,8 @@ r_annots(reader_t *r, ir_annots_t *annots)
         case IR_ANNOT_VALUE: annot.v = r_value(r); break;
         default: r->failed = true; break;
         }
-        if (!r->failed && (!annot.key || !ir_annot_set(r->ctx, annots, annot)))
+        if (!r->failed
+            && (!annot.key.data || !ir_annot_set(r->ctx, annots, annot)))
             r->failed = true;
     }
 }
@@ -1031,9 +1057,9 @@ r_annots(reader_t *r, ir_annots_t *annots)
 static ir_func_t *
 r_producer(reader_t *r)
 {
-    const char *module_name = r_text(r);
-    const char *name = r_text(r);
-    if (!module_name || !name) return nullptr;
+    core_string_t module_name = r_text(r);
+    core_string_t name = r_text(r);
+    if (!module_name.data || !name.data) return nullptr;
     ir_module_t *module = r_find_module(r, module_name);
     ir_func_t *producer = module ? ir_func_find(module, name) : nullptr;
     if (!producer) r->failed = true;
@@ -1109,7 +1135,7 @@ r_init(reader_t *r, ir_global_init_value_t *value)
         break;
     }
     case IR_GLOBAL_INIT_STRING:
-        value->string.bytes = r_bytes(r, &value->string.length);
+        value->string = r_text(r);
         break;
     case IR_GLOBAL_INIT_SYMBOL: value->symbol = r_value(r); break;
     case IR_GLOBAL_INIT_PHASE_RESULT:
@@ -1221,7 +1247,7 @@ r_layout_val(reader_t *r, ir_layout_val_t *value)
 static void
 r_descriptor(reader_t *r, ir_module_t *module, th_type *type)
 {
-    const char *target = r_text(r);
+    core_string_t target = r_text(r);
     ir_descriptor_t scratch = {0};
     r_layout_val(r, &scratch.size);
     r_layout_val(r, &scratch.align);
@@ -1251,8 +1277,9 @@ r_descriptor(reader_t *r, ir_module_t *module, th_type *type)
         else r_layout(r, final);
     }
     if (r->failed || !type) return;
-    ir_descriptor_t *d = target ? ir_layout_ensure(module, type, target)
-                                : ir_layout_ensure_targetless(module, type);
+    ir_descriptor_t *d = target.data
+        ? ir_layout_ensure(module, type, target)
+        : ir_layout_ensure_targetless(module, type);
     if (!d) {
         r->failed = true;
         return;
@@ -1267,8 +1294,8 @@ r_descriptor(reader_t *r, ir_module_t *module, th_type *type)
         }
     for (uint32_t i = 0; i < d->n_members && i < members; i++)
         for (uint32_t j = 0; j < members; j++)
-            if (d->members[i].name && items[j].name
-                && !strcmp(d->members[i].name, items[j].name)) {
+            if (d->members[i].name.data && items[j].name.data
+                && core_string_eq(d->members[i].name, items[j].name)) {
                 d->members[i].bit_offset = items[j].bit_offset;
                 d->members[i].bit_width = items[j].bit_width;
             }
@@ -1348,7 +1375,7 @@ r_function_skeleton(reader_t *r, ir_func_t *function)
     uint32_t params = r_u32(r);
     if (params > r->length) r->failed = true;
     for (uint32_t i = 0; !r->failed && i < params; i++) {
-        const char *name = r_text(r);
+        core_string_t name = r_text(r);
         th_type *type = r_type(r);
         bool optional = r_u8(r) != 0;
         ir_value_t *param = ir_param_add(function, name, type);
@@ -1360,7 +1387,7 @@ r_function_skeleton(reader_t *r, ir_func_t *function)
     uint32_t locals = r_u32(r);
     if (locals > r->length) r->failed = true;
     for (uint32_t i = 0; !r->failed && i < locals; i++) {
-        const char *name = r_text(r);
+        core_string_t name = r_text(r);
         th_type *type = r_type(r);
         bool has_value = r_u8(r) != 0;
         ir_local_t *local = ir_local_add(function, name, type);
@@ -1384,7 +1411,7 @@ r_function_skeleton(reader_t *r, ir_func_t *function)
                 break;
             }
             if (dest == 1) {
-                const char *name = r_text(r);
+                core_string_t name = r_text(r);
                 th_type *type = r_type(r);
                 if (!r->failed && !ir_instr_set_dest(instr, name, type))
                     r->failed = true;
@@ -1434,9 +1461,10 @@ r_function_details(reader_t *r, ir_func_t *function)
             r_annots(r, &instr->annots);
             if (instr->dest) r_value_details(r, instr->dest);
             size_t const_length = 0;
-            const char *bytes = r_bytes(r, &const_length);
-            if (bytes && !ir_instr_set_const_bytes(instr,
-                    (const uint8_t *)bytes, const_length)) r->failed = true;
+            const uint8_t *bytes = r_bytes(r, &const_length);
+            if (bytes && !ir_instr_set_const_bytes(instr, bytes,
+                                                   const_length))
+                r->failed = true;
             uint32_t mods = r_u32(r);
             if (mods > r->length) r->failed = true;
             for (uint32_t j = 0; !r->failed && j < mods; j++)
@@ -1458,11 +1486,11 @@ r_function_details(reader_t *r, ir_func_t *function)
 }
 
 static const ir_profile_t *
-r_profile(const char *name, const ir_profile_t *const *profiles,
+r_profile(core_string_t name, const ir_profile_t *const *profiles,
           size_t profile_count)
 {
-    for (size_t i = 0; name && i < profile_count; i++)
-        if (profiles[i] && !strcmp(profiles[i]->name, name))
+    for (size_t i = 0; name.data && i < profile_count; i++)
+        if (profiles[i] && core_string_eq(profiles[i]->name, name))
             return profiles[i];
     return nullptr;
 }
@@ -1472,11 +1500,11 @@ load_headers(reader_t *r, const ir_profile_t *const *profiles,
              size_t profile_count, uint32_t modules)
 {
     for (uint32_t m = 0; !r->failed && m < modules; m++) {
-        const char *name = r_text(r);
+        core_string_t name = r_text(r);
         const ir_profile_t *profile = r_profile(r_text(r), profiles,
                                                 profile_count);
-        const char *target = r_text(r);
-        ir_module_t *module = name && profile
+        core_string_t target = r_text(r);
+        ir_module_t *module = name.data && profile
             ? ir_module_new(r->ctx, name, profile, target) : nullptr;
         if (!module) {
             r->failed = true;
@@ -1501,7 +1529,7 @@ load_headers(reader_t *r, const ir_profile_t *const *profiles,
         r->slot_counts[m] = r->failed ? 0 : (size_t)slots;
         uint64_t functions = r_count(r);
         for (uint64_t i = 0; !r->failed && i < functions; i++) {
-            const char *function_name = r_text(r);
+            core_string_t function_name = r_text(r);
             th_type *type = r_type(r);
             ir_linkage_t linkage = (ir_linkage_t)r_u8(r);
             if (!r->failed && !ir_func_add(module, function_name, type,
@@ -1510,7 +1538,7 @@ load_headers(reader_t *r, const ir_profile_t *const *profiles,
         }
         uint64_t globals = r_count(r);
         for (uint64_t i = 0; !r->failed && i < globals; i++) {
-            const char *global_name = r_text(r);
+            core_string_t global_name = r_text(r);
             th_type *type = r_type(r);
             if (!r->failed && !ir_global_add(module, global_name, type))
                 r->failed = true;
@@ -1585,7 +1613,7 @@ load_details(reader_t *r)
 }
 
 static uint64_t
-annot_count(ir_annots_t *annots, const char *key)
+annot_count(ir_annots_t *annots, core_string_t key)
 {
     ir_annot_t *annotation = ir_annot_get(annots, key);
     return annotation && annotation->kind == IR_ANNOT_INT
@@ -1596,33 +1624,33 @@ static bool
 restore_reverse_aliases(ir_ctx_t *ctx, ir_value_t *source,
                         ir_annots_t *annots)
 {
-    uint64_t count = annots ? annot_count(annots, "ir.alias_count") : 0;
+    uint64_t count = annots
+        ? annot_count(annots, CORE_STRING_STATIC("ir.alias_count")) : 0;
     for (uint64_t i = 0; i < count; i++) {
-        char key[48];
-        snprintf(key, sizeof(key), "ir.alias%llu", (unsigned long long)i);
-        ir_annot_t *target = ir_annot_get(annots, key);
-        snprintf(key, sizeof(key), "ir.alias%llu_escapes",
-                 (unsigned long long)i);
-        ir_annot_t *escapes = ir_annot_get(annots, key);
+        char buffer[ALIAS_KEY_SIZE];
+        ir_annot_t *target = ir_annot_get(
+            annots, alias_key(buffer, false, false, i));
+        ir_annot_t *escapes = ir_annot_get(
+            annots, alias_key(buffer, false, true, i));
         ir_annots_t *reverse = target && target->kind == IR_ANNOT_VALUE
             ? ir_value_annots(target->v) : nullptr;
         if (!reverse || !escapes || escapes->kind != IR_ANNOT_BOOL)
             return false;
-        uint64_t index = annot_count(reverse, "ir.aliased_by_count");
-        snprintf(key, sizeof(key), "ir.aliased_by%llu",
-                 (unsigned long long)index);
+        uint64_t index = annot_count(
+            reverse, CORE_STRING_STATIC("ir.aliased_by_count"));
         if (!ir_annot_set(ctx, reverse, (ir_annot_t){
-                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_VALUE,
+                .key = ir_strdup(ctx, alias_key(buffer, true, false, index)),
+                .kind = IR_ANNOT_VALUE,
                 .v = source,
             })) return false;
-        snprintf(key, sizeof(key), "ir.aliased_by%llu_escapes",
-                 (unsigned long long)index);
         if (!ir_annot_set(ctx, reverse, (ir_annot_t){
-                .key = ir_strdup(ctx, key), .kind = IR_ANNOT_BOOL,
+                .key = ir_strdup(ctx, alias_key(buffer, true, true, index)),
+                .kind = IR_ANNOT_BOOL,
                 .b = escapes->b,
             })
             || !ir_annot_set(ctx, reverse, (ir_annot_t){
-                .key = "ir.aliased_by_count", .kind = IR_ANNOT_INT,
+                .key = CORE_STRING_STATIC("ir.aliased_by_count"),
+                .kind = IR_ANNOT_INT,
                 .i = {.mag = index + 1},
             })) return false;
     }

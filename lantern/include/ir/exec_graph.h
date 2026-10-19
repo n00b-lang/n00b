@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ir/ir.h"
+#include "lib/string.h"
 
 typedef struct ir_exec_graph_t ir_exec_graph_t;
 
@@ -40,7 +41,7 @@ typedef ir_exec_graph_outcome_t (*ir_exec_graph_classify_exit_fn)(
 
 typedef struct {
     uint32_t id;
-    const char *name;
+    core_string_t name;
     uint32_t entry_node;
 } ir_exec_graph_phase_view_t;
 
@@ -49,7 +50,7 @@ typedef struct {
     uint32_t phase;
     ir_exec_graph_node_kind_t kind;
     ir_exec_graph_outcome_t outcome;
-    const char *label;
+    core_string_t label;
     ir_func_t *function;
     ir_block_t *block;
 } ir_exec_graph_node_view_t;
@@ -69,7 +70,7 @@ typedef struct {
 } ir_exec_graph_edge_view_t;
 
 typedef struct {
-    const char *identifier;
+    core_string_t identifier;
     uint32_t producer_function;
     uint32_t consumer_function;
     ir_instr_t *consumer;
@@ -77,7 +78,7 @@ typedef struct {
 } ir_exec_graph_phase_result_view_t;
 
 typedef struct {
-    const char *identifier;
+    core_string_t identifier;
     uint32_t source_phase;
     uint32_t target_phase;
     ir_module_t *source_module;
@@ -88,10 +89,10 @@ typedef struct {
 } ir_exec_graph_global_result_view_t;
 
 ir_exec_graph_t *ir_exec_graph_new(ir_ctx_t *ctx);
-bool ir_exec_graph_add_phase(ir_exec_graph_t *graph, const char *name,
+bool ir_exec_graph_add_phase(ir_exec_graph_t *graph, core_string_t name,
                              uint32_t *phase_id, uint32_t *entry_node);
 bool ir_exec_graph_add_phase_exit(ir_exec_graph_t *graph, uint32_t phase_id,
-                                  const char *label,
+                                  core_string_t label,
                                   ir_exec_graph_outcome_t outcome,
                                   uint32_t *node_id);
 bool ir_exec_graph_add_function(
@@ -117,7 +118,7 @@ bool ir_exec_graph_add_edge(ir_exec_graph_t *graph, uint32_t from,
  * function result. A same-phase consumer requires the producer's successful
  * exits; it is not a call or a value evaluated by Lantern. */
 bool ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
-                                    const char *identifier,
+                                    core_string_t identifier,
                                     uint32_t producer_function,
                                     uint32_t consumer_function,
                                     ir_instr_t *consumer);
@@ -125,7 +126,7 @@ bool ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
  * an earlier phase completes. This records the typed binding without
  * evaluating either phase. */
 bool ir_exec_graph_add_global_result(
-    ir_exec_graph_t *graph, const char *identifier,
+    ir_exec_graph_t *graph, core_string_t identifier,
     uint32_t source_phase, uint32_t target_phase,
     ir_module_t *source_module, ir_global_t *source_global,
     ir_module_t *target_module, ir_global_t *target_global);
@@ -149,4 +150,4 @@ bool ir_exec_graph_global_result_at(
     const ir_exec_graph_t *graph, size_t index,
     ir_exec_graph_global_result_view_t *out);
 
-char *ir_exec_graph_print(const ir_exec_graph_t *graph);
+core_string_t ir_exec_graph_print(const ir_exec_graph_t *graph);

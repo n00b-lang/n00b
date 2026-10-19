@@ -3,8 +3,9 @@
 
 #include "ir/ir.h"
 #include "lib/buffer.h"
+#include "lib/string.h"
 
-typedef ir_module_t *(*ir_module_lookup_fn)(void *context, const char *name);
+typedef ir_module_t *(*ir_module_lookup_fn)(void *context, core_string_t name);
 
 typedef struct {
     const uint8_t *data;

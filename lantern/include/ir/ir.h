@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/string.h"
 #include "th/typehash.h"
 
 #define IR_VAR_ARITY UINT32_MAX
@@ -75,24 +76,24 @@ typedef enum : uint16_t {
 #undef IR_OP
 
 typedef struct {
-    const char  *spelling;
+    core_string_t spelling;
     uint32_t     min_operands;
     uint32_t     max_operands;
     ir_resrule_t result;
-    const char  *pattern;
+    core_string_t pattern;
     uint8_t      mods;
     uint8_t      flags;
 } ir_opinfo_t;
 
 const ir_opinfo_t *ir_op_info(ir_op_t op);
-bool               ir_op_lookup(const char *spelling, ir_op_t *out);
-const char        *ir_op_spelling(ir_op_t op);
+bool               ir_op_lookup(core_string_t spelling, ir_op_t *out);
+core_string_t      ir_op_spelling(ir_op_t op);
 bool               ir_op_has_result(ir_op_t op);
 bool               ir_op_is_terminator(ir_op_t op);
 ir_opdkind_t       ir_op_operand_kind(ir_op_t op, uint32_t i);
-const char        *ir_opdkind_name(ir_opdkind_t k);
+core_string_t      ir_opdkind_name(ir_opdkind_t k);
 bool               ir_op_accepts_operands(ir_op_t op, uint32_t n);
-bool               ir_op_accepts_mod(ir_op_t op, const char *name);
+bool               ir_op_accepts_mod(ir_op_t op, core_string_t name);
 bool               ir_op_is_extension(ir_op_t op);
 bool               ir_opinfo_has_result(const ir_opinfo_t *i);
 bool               ir_opinfo_is_terminator(const ir_opinfo_t *i);
@@ -100,10 +101,10 @@ ir_opdkind_t       ir_opinfo_operand_kind(const ir_opinfo_t *i, uint32_t k);
 bool               ir_opinfo_accepts_operands(const ir_opinfo_t *i,
                                               uint32_t n);
 bool               ir_opinfo_accepts_mod(const ir_opinfo_t *i,
-                                         const char *name);
-bool               ir_op_spelling_is_namespaced(const char *spelling,
-                                                const char *profile);
-bool               ir_mod_exists(const char *name);
+                                         core_string_t name);
+bool               ir_op_spelling_is_namespaced(core_string_t spelling,
+                                                core_string_t profile);
+bool               ir_mod_exists(core_string_t name);
 
 typedef enum : uint16_t {
     IR_PROP_PARSED       = 0x0001,
@@ -121,7 +122,7 @@ typedef enum : uint16_t {
     IR_PROP_TREE_TYPED   = 0x0800,
 } ir_props_t;
 
-const char *ir_prop_name(ir_props_t one);
+core_string_t ir_prop_name(ir_props_t one);
 
 typedef enum : uint8_t {
     IR_CLASS_OPAQUE,
@@ -183,7 +184,7 @@ typedef struct ir_origin_t ir_origin_t;
 struct ir_origin_t {
     ir_origin_kind_t kind;
     ir_span_t        span;
-    const char      *agent;
+    core_string_t    agent;
     ir_origin_t     *parent;
 };
 
@@ -205,12 +206,12 @@ typedef enum : uint8_t {
 } ir_annot_kind_t;
 
 typedef struct {
-    const char     *key;
+    core_string_t   key;
     ir_annot_kind_t kind;
     union {
         bool        b;
         ir_lit_t    i;
-        const char *s;
+        core_string_t s;
         th_type    *t;
         ir_value_t *v;
     };
@@ -225,11 +226,11 @@ typedef struct {
 } ir_annots_t;
 
 bool        ir_annot_set(ir_ctx_t *ctx, ir_annots_t *m, ir_annot_t a);
-ir_annot_t *ir_annot_get(ir_annots_t *m, const char *key);
+ir_annot_t *ir_annot_get(ir_annots_t *m, core_string_t key);
 uint32_t    ir_annot_count(const ir_annots_t *m);
 ir_annot_t *ir_annot_at(ir_annots_t *m, uint32_t i);
 void        ir_annot_invalidate(ir_annots_t *m, ir_props_t lost);
-bool        ir_annot_key_ok(const char *key, const char *profile);
+bool        ir_annot_key_ok(core_string_t key, core_string_t profile);
 
 typedef enum : uint8_t {
     IR_VAL_PARAM,
@@ -241,7 +242,7 @@ typedef enum : uint8_t {
 
 struct ir_value_t {
     ir_valkind_t kind;
-    const char  *name;
+    core_string_t name;
     th_type     *type;
     ir_instr_t  *def;
     ir_local_t  *local;
@@ -275,20 +276,17 @@ typedef enum : uint8_t {
 typedef struct ir_global_init_value ir_global_init_value_t;
 
 struct ir_global_init_value {
-    const char *member;
+    core_string_t member;
     ir_global_init_kind_t kind;
     union {
         bool boolean;
         ir_lit_t integer;
         double floating;
-        struct {
-            const char *bytes;
-            size_t length;
-        } string;
+        core_string_t string;
         ir_value_t *symbol;
         th_type *descriptor_type;
         struct {
-            const char *identifier;
+            core_string_t identifier;
         } phase_result;
         struct {
             const ir_global_init_value_t *items;
@@ -308,7 +306,7 @@ typedef struct {
     union {
         ir_value_t  *value;
         th_type     *type;
-        const char  *name;
+        core_string_t name;
         ir_block_t  *block;
         struct {
             ir_block_t *block;
@@ -319,13 +317,13 @@ typedef struct {
             ir_block_t *block;
         } arm;
         struct {
-            const char *name;
+            core_string_t name;
             ir_value_t *value;
         } named;
         struct {
             ir_lit_t    i;
             double      f;
-            const char *text;
+            core_string_t text;
             bool        is_float;
         } lit;
     };
@@ -339,7 +337,7 @@ struct ir_instr_t {
     ir_operand_t *operands;
     uint32_t      n_operands;
     uint32_t      cap_operands;
-    const char  **mods;
+    core_string_t *mods;
     uint32_t      n_mods;
     uint32_t      cap_mods;
     ir_span_t     span;
@@ -353,7 +351,7 @@ struct ir_instr_t {
 };
 
 struct ir_block_t {
-    const char   *name;
+    core_string_t name;
     ir_instr_t  **instrs;
     uint32_t      n_instrs;
     uint32_t      cap_instrs;
@@ -399,8 +397,8 @@ typedef enum : uint8_t {
     IR_STORAGE_DURATION_DYNAMIC,
 } ir_storage_duration_t;
 
-const char *ir_mutability_name(ir_mutability_t m);
-bool        ir_mutability_from_name(const char *s, ir_mutability_t *out);
+core_string_t ir_mutability_name(ir_mutability_t m);
+bool        ir_mutability_from_name(core_string_t s, ir_mutability_t *out);
 /* Functions default to runtime. Phase is retained as ordinary IR metadata. */
 bool        ir_func_set_execution_phase(ir_ctx_t *ctx, ir_func_t *function,
                                         ir_execution_phase_t phase);
@@ -450,18 +448,18 @@ bool ir_global_can_write(const ir_global_t *global,
 bool ir_global_can_initialize(const ir_global_t *global,
                               ir_execution_phase_t phase);
 bool ir_global_set_storage_class(ir_ctx_t *ctx, ir_global_t *global,
-                                 const char *requested, bool required,
-                                 const char *selected);
-const char *ir_global_storage_class(const ir_global_t *global,
+                                 core_string_t requested, bool required,
+                                 core_string_t selected);
+core_string_t ir_global_storage_class(const ir_global_t *global,
                                    bool *required,
-                                   const char **requested);
+                                   core_string_t *requested);
 bool ir_global_set_storage_duration(ir_ctx_t *ctx, ir_global_t *global,
                                     ir_storage_duration_t duration);
 ir_storage_duration_t ir_global_storage_duration(
     const ir_global_t *global);
 
 struct ir_local_t {
-    const char     *name;
+    core_string_t   name;
     th_type        *type;
     ir_value_t     *value;
     ir_mutability_t mutability;
@@ -469,7 +467,7 @@ struct ir_local_t {
     bool            has_init;
     ir_lit_t     init;
     double       init_f;
-    const char  *init_text;
+    core_string_t init_text;
     bool         init_is_float;
     ir_span_t    span;
     ir_origin_t *origin;
@@ -481,7 +479,7 @@ struct ir_local_t {
 struct ir_global_t {
     ir_module_t *owner;
     ir_global_t *identity;
-    const char  *name;
+    core_string_t name;
     th_type     *type;
     bool         is_static;
     bool         is_extern;
@@ -501,7 +499,7 @@ typedef enum : uint8_t {
 } ir_linkage_t;
 
 struct ir_func_t {
-    const char   *name;
+    core_string_t name;
     th_type      *type;
     ir_linkage_t  linkage;
     ir_value_t  **params;
@@ -531,12 +529,12 @@ void      ir_ctx_free(ir_ctx_t *ctx);
 size_t    ir_ctx_bytes(const ir_ctx_t *ctx);
 th_ctx   *ir_ctx_types(ir_ctx_t *ctx);
 void     *ir_alloc(ir_ctx_t *ctx, size_t n);
-char     *ir_strdup(ir_ctx_t *ctx, const char *s);
+core_string_t ir_strdup(ir_ctx_t *ctx, core_string_t s);
 
-ir_module_t *ir_module_new(ir_ctx_t *ctx, const char *name,
-                           const ir_profile_t *profile, const char *target);
-const char  *ir_module_name(const ir_module_t *m);
-const char  *ir_module_target(const ir_module_t *m);
+ir_module_t *ir_module_new(ir_ctx_t *ctx, core_string_t name,
+                           const ir_profile_t *profile, core_string_t target);
+core_string_t ir_module_name(const ir_module_t *m);
+core_string_t ir_module_target(const ir_module_t *m);
 const ir_profile_t *ir_module_profile(const ir_module_t *m);
 void                ir_module_set_profile(ir_module_t *m,
                                            const ir_profile_t *p);
@@ -546,10 +544,10 @@ void         ir_module_invalidate(ir_module_t *m, ir_props_t p);
 ir_annots_t *ir_module_annots(ir_module_t *m);
 ir_span_t    ir_module_span(const ir_module_t *m);
 void         ir_module_set_span(ir_module_t *m, ir_span_t s);
-void         ir_module_set_target(ir_module_t *m, const char *target);
+void         ir_module_set_target(ir_module_t *m, core_string_t target);
 
 th_type *ir_type_intern(ir_module_t *m, th_type *t);
-th_type *ir_type_parse(ir_module_t *m, const char *text);
+th_type *ir_type_parse(ir_module_t *m, core_string_t text);
 /* Returns the return type for an infallible callable, or a context-wide
  * tagged outcome type with `ok` and `error` arms for a callable with a
  * non-void error channel. */
@@ -566,19 +564,19 @@ bool     ir_type_define(ir_module_t *m, th_type *named, th_type *def);
 th_type *ir_type_definition(ir_module_t *m, th_type *named);
 ir_module_t *ir_type_definition_owner(ir_module_t *m, th_type *named);
 
-int32_t     ir_file_add(ir_module_t *m, const char *path);
-const char *ir_file_path(const ir_module_t *m, int32_t id);
+int32_t     ir_file_add(ir_module_t *m, core_string_t path);
+core_string_t ir_file_path(const ir_module_t *m, int32_t id);
 size_t      ir_file_count(const ir_module_t *m);
 
 ir_span_t    ir_span_make(int32_t file, uint32_t sb, uint32_t eb,
                           uint32_t sl, uint32_t sc, uint32_t el, uint32_t ec);
 bool         ir_span_known(ir_span_t s);
 ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
-                           ir_span_t span, const char *agent,
+                           ir_span_t span, core_string_t agent,
                            ir_origin_t *parent);
 uint32_t     ir_origin_depth(const ir_origin_t *o);
 
-ir_global_t *ir_global_add(ir_module_t *m, const char *name, th_type *type);
+ir_global_t *ir_global_add(ir_module_t *m, core_string_t name, th_type *type);
 /* Relate a module-local global declaration to its canonical cross-module
  * identity. The identity root must have the same name and type. */
 bool ir_global_set_identity(ir_ctx_t *ctx, ir_global_t *global,
@@ -587,7 +585,7 @@ ir_global_t *ir_global_identity(const ir_global_t *global);
 ir_module_t *ir_global_owner(const ir_global_t *global);
 /* Set a global's static initializer from length-delimited string bytes. */
 bool ir_global_set_string_initializer(ir_module_t *m, ir_global_t *global,
-                                     const char *bytes, size_t length);
+                                     core_string_t bytes);
 /* Returns an address for a module-owned global. A foreign canonical global
  * may be used when this module declares a same-name, same-type extern. */
 ir_value_t  *ir_global_address(ir_module_t *m, ir_global_t *global);
@@ -607,29 +605,29 @@ bool ir_global_set_static_initializer(
 /* Replace a literal initializer with a typed result supplied by another
  * compilation phase. Repeating the same identifier is idempotent. */
 bool ir_global_set_phase_result_initializer(
-    ir_module_t *m, ir_global_t *global, const char *identifier);
+    ir_module_t *m, ir_global_t *global, core_string_t identifier);
 bool ir_global_materialize_phase_result(
-    ir_module_t *m, ir_global_t *global, const char *identifier,
+    ir_module_t *m, ir_global_t *global, core_string_t identifier,
     const ir_global_init_value_t *value);
 bool ir_global_static_initializer_valid(
     ir_module_t *m, const ir_global_t *global);
-ir_global_t *ir_global_find(ir_module_t *m, const char *name);
+ir_global_t *ir_global_find(ir_module_t *m, core_string_t name);
 size_t       ir_global_count(const ir_module_t *m);
 ir_global_t *ir_global_at(ir_module_t *m, size_t i);
 
-ir_func_t   *ir_func_add(ir_module_t *m, const char *name, th_type *type,
+ir_func_t   *ir_func_add(ir_module_t *m, core_string_t name, th_type *type,
                          ir_linkage_t linkage);
 /* Copy a function's graph into its module while substituting type variables.
  * Analyses depending on value identity must be rerun for the copy. */
-ir_func_t   *ir_func_clone_replacing(ir_func_t *source, const char *name,
+ir_func_t   *ir_func_clone_replacing(ir_func_t *source, core_string_t name,
                                     const th_type *const *from,
                                     th_type *const *to, size_t count,
-                                    const char **failure);
+                                    core_string_t *failure);
 ir_func_t   *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
-                                const char *name, const th_type *const *from,
+                                core_string_t name, const th_type *const *from,
                                 th_type *const *to, size_t count,
-                                const char **failure);
-ir_func_t   *ir_func_find(ir_module_t *m, const char *name);
+                                core_string_t *failure);
+ir_func_t   *ir_func_find(ir_module_t *m, core_string_t name);
 /* Preserve a universally quantified callable contract separately from the
  * function's IR parameter/result shape. Calls instantiate this contract per
  * use; the contract itself is never refined by a call. */
@@ -642,14 +640,15 @@ bool         ir_func_parameter_is_optional(const ir_func_t *function,
                                            uint32_t index);
 size_t       ir_func_count(const ir_module_t *m);
 ir_func_t   *ir_func_at(ir_module_t *m, size_t i);
-ir_value_t  *ir_param_add(ir_func_t *f, const char *name, th_type *type);
+ir_value_t  *ir_param_add(ir_func_t *f, core_string_t name, th_type *type);
 bool         ir_param_set_optional(ir_value_t *parameter, bool optional);
 bool         ir_param_is_optional(const ir_value_t *parameter);
-ir_value_t  *ir_kwparam_add(ir_func_t *f, const char *name, th_type *type);
-ir_value_t  *ir_restparam_add(ir_func_t *f, const char *name, th_type *type);
-ir_local_t  *ir_local_add(ir_func_t *f, const char *name, th_type *type);
-ir_local_t  *ir_local_find(ir_func_t *f, const char *name);
-ir_value_t  *ir_value_find(ir_func_t *f, const char *name);
+ir_value_t  *ir_kwparam_add(ir_func_t *f, core_string_t name, th_type *type);
+ir_value_t  *ir_restparam_add(ir_func_t *f, core_string_t name,
+                              th_type *type);
+ir_local_t  *ir_local_add(ir_func_t *f, core_string_t name, th_type *type);
+ir_local_t  *ir_local_find(ir_func_t *f, core_string_t name);
+ir_value_t  *ir_value_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_local_value(ir_func_t *f, ir_local_t *local);
 ir_annots_t *ir_value_annots(ir_value_t *value);
 typedef enum : uint8_t {
@@ -745,19 +744,20 @@ bool         ir_value_can_finalize_at(const ir_value_t *value,
 bool         ir_value_can_finalize_on_edge(const ir_value_t *value,
                                             const ir_block_t *from,
                                             const ir_block_t *to);
-ir_block_t  *ir_block_add(ir_func_t *f, const char *name);
-ir_block_t  *ir_block_find(ir_func_t *f, const char *name);
+ir_block_t  *ir_block_add(ir_func_t *f, core_string_t name);
+ir_block_t  *ir_block_find(ir_func_t *f, core_string_t name);
 ir_block_t  *ir_block_entry(ir_func_t *f);
 ir_instr_t  *ir_block_terminator(ir_block_t *b);
 
 ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op);
-bool        ir_instr_set_dest(ir_instr_t *in, const char *name, th_type *type);
+bool        ir_instr_set_dest(ir_instr_t *in, core_string_t name,
+                              th_type *type);
 bool        ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l);
 /* Storage classes are extensible names. A null class clears the request. */
 bool        ir_instr_set_storage_class(ir_instr_t *allocation,
-                                       const char *storage_class,
+                                       core_string_t storage_class,
                                        bool required);
-const char *ir_instr_storage_class(const ir_instr_t *allocation,
+core_string_t ir_instr_storage_class(const ir_instr_t *allocation,
                                    bool *required);
 bool ir_allocation_has_only_local_uses(const ir_func_t *function,
                                        const ir_instr_t *allocation);
@@ -778,8 +778,7 @@ bool ir_instr_set_const_bytes(ir_instr_t *instruction,
                               const uint8_t *bytes, size_t byte_len);
 const uint8_t *ir_instr_const_bytes(const ir_instr_t *instruction,
                                    size_t *byte_len);
-const char *ir_instr_const_bytes_hex(const ir_instr_t *instruction,
-                                     size_t *byte_len);
+core_string_t ir_instr_const_bytes_hex(const ir_instr_t *instruction);
 /* Retain a generic call site's correlated, instantiated signature. A typed
  * generic call requires this so the IR does not re-infer from a frozen
  * universal declaration independently at each operand. */
@@ -797,28 +796,28 @@ bool ir_instr_set_callback_invoke_handler(ir_instr_t *invocation,
                                           th_type *handler_signature);
 th_type *ir_instr_callback_invoke_handler(const ir_instr_t *invocation);
 bool ir_instr_set_phase_result(ir_ctx_t *ctx, ir_instr_t *instruction,
-                               const char *identifier);
-const char *ir_instr_phase_result(const ir_instr_t *instruction);
+                               core_string_t identifier);
+core_string_t ir_instr_phase_result(const ir_instr_t *instruction);
 bool        ir_instr_operand_value(ir_instr_t *in, ir_value_t *v);
 /* Append a call-only spread operand for a parameter added with
  * ir_restparam_add(). */
 bool        ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v);
 bool        ir_instr_operand_local(ir_instr_t *in, ir_local_t *l);
-bool        ir_instr_operand_named(ir_instr_t *in, const char *name,
+bool        ir_instr_operand_named(ir_instr_t *in, core_string_t name,
                                    ir_value_t *v);
-bool        ir_instr_operand_named_out(ir_instr_t *in, const char *name);
+bool        ir_instr_operand_named_out(ir_instr_t *in, core_string_t name);
 bool        ir_instr_operand_out(ir_instr_t *in);
 bool        ir_instr_operand_fresh(ir_instr_t *in, ir_value_t *storage);
 bool        ir_instr_operand_missing(ir_instr_t *in);
 bool        ir_instr_operand_type(ir_instr_t *in, th_type *t);
-bool        ir_instr_operand_name(ir_instr_t *in, const char *n);
+bool        ir_instr_operand_name(ir_instr_t *in, core_string_t n);
 bool        ir_instr_operand_block(ir_instr_t *in, ir_block_t *b);
 bool        ir_instr_operand_default(ir_instr_t *in, ir_block_t *b);
 bool        ir_instr_operand_int(ir_instr_t *in, ir_int_t v);
 bool        ir_instr_operand_uint(ir_instr_t *in, ir_uint_t v);
 bool        ir_instr_operand_int_lit(ir_instr_t *in, ir_lit_t v);
 bool        ir_instr_operand_float(ir_instr_t *in, double v);
-bool        ir_instr_operand_float_text(ir_instr_t *in, const char *text);
+bool        ir_instr_operand_float_text(ir_instr_t *in, core_string_t text);
 bool        ir_instr_operand_phi_arm(ir_instr_t *in, ir_block_t *b,
                                      ir_value_t *v);
 bool        ir_instr_operand_switch_arm(ir_instr_t *in, ir_int_t v,
@@ -829,13 +828,13 @@ bool        ir_lit_eq(ir_lit_t a, ir_lit_t b);
 ir_lit_t    ir_lit_of(ir_int_t v);
 ir_lit_t    ir_lit_hex(ir_uint_t v);
 ir_int_t    ir_lit_signed(ir_lit_t v);
-bool        ir_instr_add_mod(ir_instr_t *in, const char *mod);
-bool        ir_instr_has_mod(const ir_instr_t *in, const char *mod);
+bool        ir_instr_add_mod(ir_instr_t *in, core_string_t mod);
+bool        ir_instr_has_mod(const ir_instr_t *in, core_string_t mod);
 ir_value_t *ir_operand_value(const ir_operand_t *od);
 ir_local_t *ir_operand_local(const ir_operand_t *od);
 
 struct ir_profile_t {
-    const char *name;
+    core_string_t name;
     size_t      n_scalars;
     const struct ir_scalar_t *scalars;
     size_t      n_rules;
@@ -845,15 +844,16 @@ struct ir_profile_t {
 };
 
 typedef struct ir_scalar_t {
-    const char  *type_text;
+    core_string_t type_text;
     ir_class_t   class;
     uint32_t     width;
     ir_role_t    role;
 } ir_scalar_t;
 
-bool ir_module_op_lookup(ir_module_t *m, const char *spelling, ir_op_t *out);
+bool ir_module_op_lookup(ir_module_t *m, core_string_t spelling,
+                         ir_op_t *out);
 const ir_opinfo_t *ir_module_op_info(ir_module_t *m, ir_op_t op);
-const char        *ir_module_op_spelling(ir_module_t *m, ir_op_t op);
+core_string_t      ir_module_op_spelling(ir_module_t *m, ir_op_t op);
 
 ir_machine_t ir_machine_of(ir_module_t *m, th_type *t);
 bool         ir_profile_has(ir_module_t *m, th_type *t);
@@ -865,7 +865,7 @@ typedef struct ir_diags_t ir_diags_t;
 typedef bool (*ir_pass_fn)(ir_module_t *m, ir_diags_t *d, void *state);
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     ir_props_t  requires;
     ir_props_t  establishes;
     ir_props_t  invalidates;

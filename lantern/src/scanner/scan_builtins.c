@@ -142,7 +142,7 @@ scan_quoted_string(parse_scanner_t *s, core_codepoint_t quote_cp)
             size_t after  = scan_offset(s);
             size_t nbytes = after - before;
 
-            core_buffer_append(sb, s->input + before, nbytes);
+            core_buffer_append(sb, s->input.data + before, nbytes);
         }
     }
 
@@ -167,8 +167,8 @@ scan_string_raw(parse_scanner_t *s, core_string_t quote)
 {
     size_t qlen = quote.u8_bytes;
 
-    if (s->cursor + qlen > s->input_len
-        || memcmp(s->input + s->cursor, quote.data, qlen) != 0) {
+    if (s->cursor + qlen > s->input.u8_bytes
+        || memcmp(s->input.data + s->cursor, quote.data, qlen) != 0) {
         return core_option_none(core_string_t);
     }
 
@@ -177,13 +177,13 @@ scan_string_raw(parse_scanner_t *s, core_string_t quote)
 
     size_t content_start = s->cursor;
 
-    while (s->cursor + qlen <= s->input_len) {
-        if (memcmp(s->input + s->cursor, quote.data, qlen) == 0) {
+    while (s->cursor + qlen <= s->input.u8_bytes) {
+        if (memcmp(s->input.data + s->cursor, quote.data, qlen) == 0) {
             size_t  content_end = s->cursor;
             size_t  len         = content_end - content_start;
 
-            core_string_t str = core_string_from_raw(s->input + content_start,
-                                                      (int64_t)len);
+            core_string_t str = core_string_from_raw(
+                s->input.data + content_start, (int64_t)len);
 
             scan_advance_bytes(s, qlen);
             return core_option_set(core_string_t, str);

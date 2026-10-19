@@ -16,10 +16,11 @@ static bool table_span(size_t total, uint64_t offset, uint64_t count,
            span(total, offset, count * width);
 }
 
-static bool fixed_name(const uint8_t *base, size_t width, const char *name)
+static bool fixed_name(const uint8_t *base, size_t width, core_string_t name)
 {
-    size_t length = strlen(name);
-    if (length > width || memcmp(base, name, length)) return false;
+    size_t length = name.u8_bytes;
+    if (length > width || (length && memcmp(base, name.data, length)))
+        return false;
     for (size_t i = length; i < width; i++) {
         if (base[i]) return false;
     }
@@ -62,7 +63,7 @@ static bool coff_name_view(const uint8_t *image, size_t size,
     return true;
 }
 
-static bool find_elf(const uint8_t *image, size_t size, const char *name,
+static bool find_elf(const uint8_t *image, size_t size, core_string_t name,
                      uint32_t wanted_index,
                      core_object_section_t *out)
 {
@@ -95,8 +96,9 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
         const uint8_t *start = image + names_offset + name_offset;
         const uint8_t *end = memchr(start, 0, names_size - name_offset);
         if (!end) return false;
-        if (name && ((size_t)(end - start) != strlen(name)
-            || memcmp(start, name, (size_t)(end - start)))) continue;
+        if (name.data && !core_string_eq(
+                core_string_borrow((const char *)start,
+                                   (size_t)(end - start)), name)) continue;
         uint32_t type = core_le_load_u32(header + 4);
         uint64_t offset = core_le_load_u64(header + 24);
         uint64_t length = core_le_load_u64(header + 32);
@@ -140,12 +142,13 @@ static bool find_elf(const uint8_t *image, size_t size, const char *name,
 }
 
 static bool find_macho(const uint8_t *image, size_t size,
-                       const char *segment, const char *name,
+                       core_string_t segment, core_string_t name,
                        uint32_t wanted_index,
                        core_object_section_t *out)
 {
     if (!span(size, 0, 32) || core_le_load_u32(image) != 0xfeedfacf ||
-        core_le_load_u32(image + 12) != 1 || (name && !segment)) return false;
+        core_le_load_u32(image + 12) != 1 || (name.data && !segment.data))
+        return false;
     uint32_t command_count = core_le_load_u32(image + 16);
     uint32_t command_bytes = core_le_load_u32(image + 20);
     if (!span(size, 32, command_bytes)) return false;
@@ -165,7 +168,7 @@ static bool find_macho(const uint8_t *image, size_t size,
                 section_index++;
                 const uint8_t *section = image + cursor + 72 + j * 80;
                 if (wanted_index && section_index != wanted_index) continue;
-                if (name && (!fixed_name(section, 16, name) ||
+                if (name.data && (!fixed_name(section, 16, name) ||
                     !fixed_name(section + 16, 16, segment))) continue;
                 const uint8_t *name_end = memchr(section, 0, 16);
                 const uint8_t *segment_end = memchr(section + 16, 0, 16);
@@ -204,7 +207,7 @@ static bool find_macho(const uint8_t *image, size_t size,
     return false;
 }
 
-static bool find_coff(const uint8_t *image, size_t size, const char *name,
+static bool find_coff(const uint8_t *image, size_t size, core_string_t name,
                       uint32_t wanted_index,
                       core_object_section_t *out)
 {
@@ -221,8 +224,9 @@ static bool find_coff(const uint8_t *image, size_t size, const char *name,
         size_t name_length;
         if (!coff_name_view(image, size, header, &section_name,
                             &name_length)) return false;
-        if (name && (name_length != strlen(name)
-            || memcmp(section_name, name, name_length))) continue;
+        if (name.data && !core_string_eq(
+                core_string_borrow((const char *)section_name, name_length),
+                name)) continue;
         uint32_t length = core_le_load_u32(header + 16);
         uint32_t offset = core_le_load_u32(header + 20);
         uint32_t rel_offset = core_le_load_u32(header + 24);
@@ -321,10 +325,10 @@ bool core_object_absolute64_relocation_at(
 
 bool core_object_section_find(const void *image, size_t image_size,
                               core_target_object_format_t format,
-                              const char *segment, const char *name,
+                              core_string_t segment, core_string_t name,
                               core_object_section_t *out)
 {
-    if (!image || !name || !out) return false;
+    if (!image || !name.data || !out) return false;
     const uint8_t *bytes = image;
     switch (format) {
     case CORE_TARGET_OBJECT_ELF:
@@ -413,12 +417,14 @@ bool core_object_section_at(const void *image, size_t image_size,
     const uint8_t *bytes = image;
     switch (format) {
     case CORE_TARGET_OBJECT_ELF:
-        return find_elf(bytes, image_size, nullptr, native_index, out);
+        return find_elf(bytes, image_size, (core_string_t){}, native_index,
+                        out);
     case CORE_TARGET_OBJECT_MACH_O:
-        return find_macho(bytes, image_size, nullptr, nullptr, native_index,
-                          out);
+        return find_macho(bytes, image_size, (core_string_t){},
+                          (core_string_t){}, native_index, out);
     case CORE_TARGET_OBJECT_COFF:
-        return find_coff(bytes, image_size, nullptr, native_index, out);
+        return find_coff(bytes, image_size, (core_string_t){}, native_index,
+                         out);
     default:
         return false;
     }

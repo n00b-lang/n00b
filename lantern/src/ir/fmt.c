@@ -1,13 +1,12 @@
 #include <limits.h>
 #include <stdlib.h>
-#include <string.h>
 
 #include "private/ir/internal.h"
 
-static void escape_n(core_buffer_t *b, const char *s, size_t length)
+static void escape(core_buffer_t *b, core_string_t s)
 {
-    for (size_t i = 0; s && i < length; i++) {
-        unsigned char c = (unsigned char)s[i];
+    for (size_t i = 0; s.data && i < s.u8_bytes; i++) {
+        unsigned char c = (unsigned char)s.data[i];
         switch (c) {
         case '"':
             core_buffer_puts(b, "\\\"");
@@ -29,21 +28,16 @@ static void escape_n(core_buffer_t *b, const char *s, size_t length)
                 core_buffer_printf(b, "\\u%04x", c);
             }
             else {
-                core_buffer_append(b, (const char *)&s[i], 1);
+                core_buffer_append(b, &s.data[i], 1);
             }
         }
     }
 }
 
-void ir_quote(core_buffer_t *b, const char *s)
-{
-    ir_quote_n(b, s, s ? strlen(s) : 0);
-}
-
-void ir_quote_n(core_buffer_t *b, const char *s, size_t length)
+void ir_quote(core_buffer_t *b, core_string_t s)
 {
     core_buffer_puts(b, "\"");
-    escape_n(b, s, length);
+    escape(b, s);
     core_buffer_puts(b, "\"");
 }
 
@@ -75,11 +69,11 @@ void ir_lit_into(core_buffer_t *b, ir_lit_t v)
     }
 }
 
-char *ir_lit_text(ir_lit_t v)
+core_string_t ir_lit_text(ir_lit_t v)
 {
     core_buffer_t *b = core_buffer_empty();
 
     ir_lit_into(b, v);
 
-    return core_buffer_take(b);
+    return core_buffer_take_string(b);
 }

@@ -18,6 +18,7 @@ typedef struct persist_node {
 
 static void test_native_abi_tag(void) {
   char path[] = "/tmp/lantern-persist-abi-XXXXXX";
+  core_string_t target = core_string_borrow(path, sizeof path - 1);
   int placeholder = mkstemp(path);
   check("temporary ABI-tag path is available", placeholder >= 0);
   if (placeholder < 0) return;
@@ -31,17 +32,17 @@ static void test_native_abi_tag(void) {
 
   core_persist_arena_t *arena = nullptr;
   core_persist_arena_error_t error;
-  bool created = core_persist_arena_create(path, 256, tag, &arena, &error);
+  bool created = core_persist_arena_create(target, 256, tag, &arena, &error);
   check("create arena with a derived native ABI tag", created && arena);
   if (arena) core_persist_arena_close(arena, nullptr);
   arena = nullptr;
   check("native ABI tag reopens on the same target",
-        core_persist_arena_open(path, tag, false, &arena, &error) && arena);
+        core_persist_arena_open(target, tag, false, &arena, &error) && arena);
   if (arena) core_persist_arena_close(arena, nullptr);
   arena = nullptr;
   check("different application schema tag is rejected",
         !core_persist_arena_open(
-            path, core_persist_arena_native_abi_tag(schema + 1), false,
+            target, core_persist_arena_native_abi_tag(schema + 1), false,
             &arena, &error) && error == CORE_PERSIST_ARENA_INCOMPATIBLE &&
             !arena);
   unlink(path);
@@ -49,6 +50,7 @@ static void test_native_abi_tag(void) {
 
 static void test_round_trip_and_address_collision(void) {
   char path[] = "/tmp/lantern-persist-arena-XXXXXX";
+  core_string_t target = core_string_borrow(path, sizeof path - 1);
   int placeholder = mkstemp(path);
   check("temporary snapshot path is available", placeholder >= 0);
   if (placeholder < 0)
@@ -59,7 +61,7 @@ static void test_round_trip_and_address_collision(void) {
   core_persist_arena_error_t error;
   core_persist_arena_t *arena = nullptr;
   check("create file-backed persistent arena",
-        core_persist_arena_create(path, 16384, UINT64_C(0x746573742d7631),
+        core_persist_arena_create(target, 16384, UINT64_C(0x746573742d7631),
                                   &arena, &error) &&
             error == CORE_PERSIST_ARENA_OK);
   if (!arena)
@@ -91,7 +93,7 @@ static void test_round_trip_and_address_collision(void) {
 
   core_persist_arena_t *collision = nullptr;
   check("an occupied saved address is rejected without replacing the mapping",
-        !core_persist_arena_open(path, UINT64_C(0x746573742d7631), false,
+        !core_persist_arena_open(target, UINT64_C(0x746573742d7631), false,
                                  &collision, &error) &&
             error == CORE_PERSIST_ARENA_ADDRESS_UNAVAILABLE && collision ==
                 nullptr && root->value == 17 && root->next->value == 29);
@@ -99,7 +101,7 @@ static void test_round_trip_and_address_collision(void) {
   check("close the original mapping", core_persist_arena_close(arena, &error));
   arena = nullptr;
   check("reopen the arena at its recorded address",
-        core_persist_arena_open(path, UINT64_C(0x746573742d7631), false,
+        core_persist_arena_open(target, UINT64_C(0x746573742d7631), false,
                                 &arena, &error) &&
             error == CORE_PERSIST_ARENA_OK &&
             core_persist_arena_base(arena) == saved_base);
@@ -107,9 +109,9 @@ static void test_round_trip_and_address_collision(void) {
   if (arena) {
     persist_node_t *loaded = core_persist_arena_root(arena);
     check("absolute pointers and root survive remapping at the saved base",
-          loaded && loaded->value == 17 && !strcmp(loaded->name, "first") &&
+          loaded && loaded->value == 17 && !memcmp(loaded->name, "first", 6) &&
               loaded->next && loaded->next->value == 29 &&
-              !strcmp(loaded->next->name, "last"));
+              !memcmp(loaded->next->name, "last", 5));
     check("read-only mappings reject allocation",
           !core_persist_arena_alloc(arena, 8, alignof(uint64_t), &error) &&
               error == CORE_PERSIST_ARENA_READ_ONLY);
@@ -119,13 +121,13 @@ static void test_round_trip_and_address_collision(void) {
   }
 
   check("open a writable mapping for transient restoration data",
-        core_persist_arena_open(path, UINT64_C(0x746573742d7631), true,
+        core_persist_arena_open(target, UINT64_C(0x746573742d7631), true,
                                 &arena, &error));
   if (arena) {
     void *raw_base = core_persist_arena_base(arena);
     core_persist_arena_t *relocated = nullptr;
     bool relocated_open = core_persist_arena_open_relocated(
-        path, UINT64_C(0x746573742d7631), true, &relocated, &error);
+        target, UINT64_C(0x746573742d7631), true, &relocated, &error);
     persist_node_t *relocated_root = relocated
                                          ? core_persist_arena_root(relocated)
                                          : nullptr;
@@ -136,7 +138,7 @@ static void test_round_trip_and_address_collision(void) {
           relocated_open && relocated &&
               core_persist_arena_base(relocated) != raw_base &&
               relocated_root && relocated_root->value == 17 && name_rebased &&
-              !strcmp(relocated_name, "first") &&
+              !memcmp(relocated_name, "first", 6) &&
               !core_persist_arena_rebase_pointer(
                   relocated, (const void *)UINTPTR_MAX, 1, &relocated_name));
     if (relocated)
@@ -152,14 +154,14 @@ static void test_round_trip_and_address_collision(void) {
     arena = nullptr;
   }
   check("reopen preserves the serialized allocation boundary",
-        core_persist_arena_open(path, UINT64_C(0x746573742d7631), false,
+        core_persist_arena_open(target, UINT64_C(0x746573742d7631), false,
                                 &arena, &error) && arena &&
             core_persist_arena_used(arena) == saved_used);
   if (arena)
     core_persist_arena_close(arena, nullptr);
 
   check("an incompatible object ABI is rejected before mapping",
-        !core_persist_arena_open(path, UINT64_C(0x7465732d7632), false,
+        !core_persist_arena_open(target, UINT64_C(0x7465732d7632), false,
                                  &arena, &error) &&
             error == CORE_PERSIST_ARENA_INCOMPATIBLE && arena == nullptr);
   unlink(path);
@@ -167,6 +169,7 @@ static void test_round_trip_and_address_collision(void) {
 
 static void test_malformed_file(void) {
   char path[] = "/tmp/lantern-persist-bad-XXXXXX";
+  core_string_t target = core_string_borrow(path, sizeof path - 1);
   int fd = mkstemp(path);
   check("temporary malformed-file path is available", fd >= 0);
   if (fd < 0)
@@ -176,7 +179,7 @@ static void test_malformed_file(void) {
   core_persist_arena_t *arena = nullptr;
   core_persist_arena_error_t error;
   check("truncated snapshots fail format validation",
-        !core_persist_arena_open(path, 0, false, &arena, &error) &&
+        !core_persist_arena_open(target, 0, false, &arena, &error) &&
             error == CORE_PERSIST_ARENA_BAD_FORMAT && arena == nullptr);
   unlink(path);
 }

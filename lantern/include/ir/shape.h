@@ -2,6 +2,7 @@
 #define IR_SHAPE_H
 
 #include "ir/ir.h"
+#include "lib/string.h"
 
 typedef struct ir_shape_t ir_shape_t;
 
@@ -32,7 +33,7 @@ typedef struct {
     /* Borrowed full-comptime function that produces a deferred extent. */
     ir_func_t *producer;
     /* Stable producer identity when the function is not resident locally. */
-    const char *producer_identifier;
+    core_string_t producer_identifier;
 } ir_shape_extent_t;
 
 typedef enum : uint8_t {

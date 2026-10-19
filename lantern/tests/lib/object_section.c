@@ -8,6 +8,9 @@
 
 #include "lib/byteorder.h"
 
+#define S(x) CORE_STRING_STATIC(x)
+#define NO_SEGMENT ((core_string_t){})
+
 static void elf_test(void)
 {
     uint8_t image[512] = {0};
@@ -47,7 +50,7 @@ static void elf_test(void)
 
     core_object_section_t section = {0};
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_ELF,
-                                    NULL, ".n00b.meta", &section));
+                                    NO_SEGMENT, S(".n00b.meta"), &section));
     assert(section.native_index == 2 && section.size == 8
         && section.virtual_address == 0x1234);
     assert(section.bytes == image + 104 && section.alignment == 8);
@@ -60,20 +63,20 @@ static void elf_test(void)
         &section, CORE_TARGET_OBJECT_ELF, 0, &relocation));
     core_le_store_u16(image + 18, 62);
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_ELF,
-                                    NULL, ".n00b.meta", &section));
+                                    NO_SEGMENT, S(".n00b.meta"), &section));
     assert(core_object_absolute64_relocation_at(
         &section, CORE_TARGET_OBJECT_ELF, 0, &relocation));
     assert(relocation.section_offset == 0 &&
            relocation.native_symbol_index == 5 &&
            relocation.addend_bits == 7 && !relocation.target_is_section);
     assert(!core_object_section_find(image, 120, CORE_TARGET_OBJECT_ELF,
-                                     NULL, ".n00b.meta", &section));
+                                     NO_SEGMENT, S(".n00b.meta"), &section));
     assert(section.native_index == 2);
     assert(!core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_ELF,
-                                     NULL, ".missing", &section));
+                                     NO_SEGMENT, S(".missing"), &section));
     core_le_store_u32(image + rela + 44, 99);
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_ELF,
-                                    NULL, ".n00b.meta", &section));
+                                    NO_SEGMENT, S(".n00b.meta"), &section));
     assert(section.relocation_count == 0);
 }
 
@@ -100,7 +103,7 @@ static void macho_test(void)
     memcpy(image + 184, "n00b", 4);
     core_object_section_t section = {0};
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_MACH_O,
-                                    "__DATA_CONST", "__n00b_meta", &section));
+                                    S("__DATA_CONST"), S("__n00b_meta"), &section));
     assert(section.native_index == 1 && section.size == 8
         && section.virtual_address == 0x5678);
     assert(section.bytes == image + 184 && section.alignment == 8);
@@ -111,9 +114,9 @@ static void macho_test(void)
     assert(relocation.native_symbol_index == 5 &&
            relocation.addend_bits == core_le_load_u64(image + 184));
     assert(!core_object_section_find(image, 187, CORE_TARGET_OBJECT_MACH_O,
-                                     "__DATA_CONST", "__n00b_meta", &section));
+                                     S("__DATA_CONST"), S("__n00b_meta"), &section));
     assert(!core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_MACH_O,
-                                     "__OTHER", "__n00b_meta", &section));
+                                     S("__OTHER"), S("__n00b_meta"), &section));
 }
 
 static void coff_test(void)
@@ -133,7 +136,7 @@ static void coff_test(void)
     memcpy(image + 64, "n00b", 4);
     core_object_section_t section = {0};
     assert(core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_COFF,
-                                    NULL, ".n00b$M", &section));
+                                    NO_SEGMENT, S(".n00b$M"), &section));
     assert(section.native_index == 1 && section.size == 8
         && section.virtual_address == 0x9abc);
     assert(section.bytes == image + 64 && section.alignment == 16);
@@ -147,13 +150,13 @@ static void coff_test(void)
     assert(!core_object_absolute64_relocation_at(
         &section, CORE_TARGET_OBJECT_COFF, 0, &relocation));
     assert(!core_object_section_find(image, 81, CORE_TARGET_OBJECT_COFF,
-                                     NULL, ".n00b$M", &section));
+                                     NO_SEGMENT, S(".n00b$M"), &section));
     assert(!core_object_section_find(image, sizeof image, CORE_TARGET_OBJECT_COFF,
-                                     NULL, ".missing", &section));
+                                     NO_SEGMENT, S(".missing"), &section));
 }
 
 static void real_object_test(const char *path, core_target_object_format_t format,
-                             const char *segment, const char *name)
+                             core_string_t segment, core_string_t name)
 {
     FILE *file = fopen(path, "rb");
     assert(file);
@@ -186,10 +189,12 @@ int main(int argc, char **argv)
     macho_test();
     coff_test();
     if (argc == 4) {
-        real_object_test(argv[1], CORE_TARGET_OBJECT_ELF, NULL, ".n00b.meta");
+        real_object_test(argv[1], CORE_TARGET_OBJECT_ELF, NO_SEGMENT,
+                         S(".n00b.meta"));
         real_object_test(argv[2], CORE_TARGET_OBJECT_MACH_O,
-                         "__DATA_CONST", "__n00b_meta");
-        real_object_test(argv[3], CORE_TARGET_OBJECT_COFF, NULL, ".n00b$M");
+                         S("__DATA_CONST"), S("__n00b_meta"));
+        real_object_test(argv[3], CORE_TARGET_OBJECT_COFF, NO_SEGMENT,
+                         S(".n00b$M"));
     }
     return 0;
 }

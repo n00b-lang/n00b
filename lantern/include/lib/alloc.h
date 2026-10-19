@@ -61,9 +61,3 @@ core_strndup(const char *s, size_t n)
 
     return d;
 }
-
-static inline char *
-core_strdup(const char *s)
-{
-    return s ? core_strndup(s, strlen(s)) : nullptr;
-}

@@ -246,17 +246,15 @@ core_option_t(core_string_t)
 parse_token_value(const parse_token_info_t *token)
 {
     if (token->fields.value_from_source) {
-        size_t length = token->fields.end_byte - token->fields.start_byte;
-        const char *text = parse_source_value(token->fields.source,
-                                              token->fields.value_offset);
+        core_string_t text = parse_source_value(token->fields.source,
+                                                token->fields.value_offset);
 
-        if (!text) {
+        if (!text.data) {
             return core_option_none(core_string_t);
         }
         core_string_t value = {0};
-        if (length) {
-            value.data = (char *)text;
-            value.u8_bytes = length;
+        if (text.u8_bytes) {
+            value = text;
         }
         return core_option_set(core_string_t, value);
     }

@@ -19,7 +19,23 @@
 #include <utf8proc.h>
 
 static pthread_mutex_t lex_compile_lock = PTHREAD_MUTEX_INITIALIZER;
-static _Thread_local char lex_compile_error[256];
+static _Thread_local core_string_t lex_compile_error;
+
+static void lex_compile_error_set(core_string_t message) {
+  core_free(lex_compile_error.data);
+  lex_compile_error = message;
+}
+
+__attribute__((format(printf, 1, 2))) static void
+lex_compile_error_printf(const char *fmt, ...) {
+  core_buffer_t *buf = core_buffer_empty();
+  va_list ap;
+
+  va_start(ap, fmt);
+  core_buffer_vprintf(buf, fmt, ap);
+  va_end(ap);
+  lex_compile_error_set(core_buffer_take_string(buf));
+}
 
 static bool is_line_terminator(core_codepoint_t cp) {
   return cp == '\n' || cp == 0x2028;
@@ -688,9 +704,8 @@ struct scan_lex_session_t {
   size_t pending_fence_label_end;
   bool pending_fence_open;
   bool pending_fence_fill;
-  char *pending_fence_pattern;
+  core_string_t pending_fence_pattern;
   size_t *pending_fence_prefix;
-  size_t pending_fence_pattern_len;
   size_t pending_fence_search;
   size_t pending_fence_match;
   size_t *fence_probe_skip_until;
@@ -842,9 +857,11 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   }
   scan_lex_issue_t *issues = nullptr;
   size_t issue_count = 0;
-  if (!scan_lex_analyze_spec(spec, g, lex_compile_error,
-                             sizeof(lex_compile_error), &issues,
-                             &issue_count)) {
+  core_string_t analysis_error = {};
+  bool analyzed = scan_lex_analyze_spec(spec, g, &analysis_error, &issues,
+                                        &issue_count);
+  lex_compile_error_set(analysis_error);
+  if (!analyzed) {
     return nullptr;
   }
 
@@ -889,10 +906,11 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
                        spec->ident_start_extra.data || spec->ident_extra.data ||
                        spec->identifier_profile.name.data;
   if (spec->identifier_profile.name.data) {
+    core_string_t profile_error = {};
     lex->identifier_profile = scan_unicode_profile_compile(
-        &spec->identifier_profile, lex_compile_error,
-        sizeof(lex_compile_error));
+        &spec->identifier_profile, &profile_error);
     if (!lex->identifier_profile) {
+      lex_compile_error_set(profile_error);
       scan_lex_free(lex);
       return nullptr;
     }
@@ -1116,11 +1134,11 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
       if (tid == PARSE_TOK_IGNORED ||
           !scan_lex_literal_hook_exists(hook->hook)) {
         if (tid == PARSE_TOK_IGNORED) {
-          snprintf(lex_compile_error, sizeof(lex_compile_error),
+          lex_compile_error_printf(
                    "@lex-literal-hook: unknown input token '%.*s'",
                    (int)hook->token.u8_bytes, hook->token.data);
         } else {
-          snprintf(lex_compile_error, sizeof(lex_compile_error),
+          lex_compile_error_printf(
                    "@lex-literal-hook: unknown hook '%.*s'",
                    (int)hook->hook.u8_bytes, hook->hook.data);
         }
@@ -1130,7 +1148,7 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
       for (const core_string_t *name = hook->outputs; name && name->data;
            name++) {
         if (!parse_terminal_id(g, *name)) {
-          snprintf(lex_compile_error, sizeof(lex_compile_error),
+          lex_compile_error_printf(
                    "@lex-literal-hook: unknown output token '%.*s'",
                    (int)name->u8_bytes, name->data);
           scan_lex_free(lex);
@@ -1147,7 +1165,7 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
     for (size_t i = 1; i < lex->literal_hook_count; i++) {
       if (lex->literal_hooks[i - 1].tid == lex->literal_hooks[i].tid) {
         const scan_lex_literal_hook_t *hook = lex->literal_hooks[i].recipe;
-        snprintf(lex_compile_error, sizeof(lex_compile_error),
+        lex_compile_error_printf(
                  "@lex-literal-hook: duplicate input token '%.*s'",
                  (int)hook->token.u8_bytes, hook->token.data);
         scan_lex_free(lex);
@@ -1171,7 +1189,7 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
 
       if (!tid || !replacement) {
         core_string_t unknown = tid ? recovery->replacement : recovery->token;
-        snprintf(lex_compile_error, sizeof(lex_compile_error),
+        lex_compile_error_printf(
                  "@lex-recover: unknown token '%.*s'", (int)unknown.u8_bytes,
                  unknown.data);
         scan_lex_free(lex);
@@ -1180,7 +1198,7 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
       for (const core_string_t *sync = recovery->synchronize;
            sync && sync->data; sync++) {
         if (!sync->u8_bytes) {
-          snprintf(lex_compile_error, sizeof(lex_compile_error),
+          lex_compile_error_printf(
                    "@lex-recover: synchronization delimiters "
                    "cannot be empty");
           scan_lex_free(lex);
@@ -1198,7 +1216,7 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
     for (size_t i = 1; i < lex->recovery_count; i++) {
       if (lex->recoveries[i - 1].tid == lex->recoveries[i].tid) {
         const scan_lex_recovery_t *recovery = lex->recoveries[i].recipe;
-        snprintf(lex_compile_error, sizeof(lex_compile_error),
+        lex_compile_error_printf(
                  "@lex-recover: duplicate input token '%.*s'",
                  (int)recovery->token.u8_bytes, recovery->token.data);
         scan_lex_free(lex);
@@ -1215,18 +1233,18 @@ typedef struct {
   core_list_t(lex_compile_cache_entry_t) cache;
 } lex_compile_context_t;
 
-const char *scan_lex_compile_error(void) {
-  return lex_compile_error[0] ? lex_compile_error : nullptr;
-}
+core_string_t scan_lex_compile_error(void) { return lex_compile_error; }
 
-void scan_lex_compile_error_reset(void) { lex_compile_error[0] = 0; }
+void scan_lex_compile_error_reset(void) {
+  lex_compile_error_set((core_string_t){});
+}
 
 static scan_lex_t *scan_lex_compile_tree(const scan_lex_spec_t *spec,
                                          parse_grammar_t *g,
                                          lex_compile_context_t *context) {
   for (size_t i = 0; i < core_list_len(context->stack); i++) {
     if (core_string_eq(context->stack.data[i], spec->name)) {
-      snprintf(lex_compile_error, sizeof(lex_compile_error),
+      lex_compile_error_printf(
                "embedded lexer cycle reaches '%.*s'", (int)spec->name.u8_bytes,
                spec->name.data);
       return nullptr;
@@ -1263,19 +1281,19 @@ static scan_lex_t *scan_lex_compile_tree(const scan_lex_spec_t *spec,
     }
 
     if (!e->close.data || !e->close.u8_bytes) {
-      snprintf(lex_compile_error, sizeof(lex_compile_error),
+      lex_compile_error_printf(
                "@lex-embed: a delegated embed requires a closing delimiter");
       scan_lex_free(lex);
       return nullptr;
     }
     if (e->tokens && (!e->open_tok.data || !e->close_tok.data)) {
-      snprintf(lex_compile_error, sizeof(lex_compile_error),
+      lex_compile_error_printf(
                "@lex-embed: tokens mode requires open_as() and close_as()");
       scan_lex_free(lex);
       return nullptr;
     }
     if (!e->tokens && !e->tok.data) {
-      snprintf(lex_compile_error, sizeof(lex_compile_error),
+      lex_compile_error_printf(
                "@lex-embed: single-token mode requires as()");
       scan_lex_free(lex);
       return nullptr;
@@ -1284,7 +1302,7 @@ static scan_lex_t *scan_lex_compile_tree(const scan_lex_spec_t *spec,
     const scan_lex_spec_t *child = scan_lex_for(e->lexer);
 
     if (!child) {
-      snprintf(lex_compile_error, sizeof(lex_compile_error),
+      lex_compile_error_printf(
                "@lex-embed: unknown lexer '%.*s'", (int)e->lexer.u8_bytes,
                e->lexer.data);
       scan_lex_free(lex);
@@ -1455,7 +1473,7 @@ scan_lex_session_clone_frame(const scan_lex_session_t *source,
   copy->indents = (core_list_t(int32_t)){0};
   copy->layout_blocks = (core_list_t(int32_t)){0};
   copy->heredoc_queue = (core_list_t(lex_heredoc_queue_t)){0};
-  copy->pending_fence_pattern = nullptr;
+  copy->pending_fence_pattern = (core_string_t){0};
   copy->pending_fence_prefix = nullptr;
   copy->pending_embed_prefix = nullptr;
   copy->fence_probe_skip_until = nullptr;
@@ -1492,15 +1510,13 @@ scan_lex_session_clone_frame(const scan_lex_session_t *source,
     }
     copy->heredoc_queue.len = source->heredoc_queue.len;
   }
-  if (source->pending_fence_pattern_len) {
+  if (source->pending_fence_pattern.u8_bytes) {
     copy->pending_fence_pattern =
-        core_alloc_size(1, source->pending_fence_pattern_len);
-    memcpy(copy->pending_fence_pattern, source->pending_fence_pattern,
-           source->pending_fence_pattern_len);
+        core_string_dup(source->pending_fence_pattern);
     copy->pending_fence_prefix =
-        core_alloc_array(size_t, source->pending_fence_pattern_len);
+        core_alloc_array(size_t, source->pending_fence_pattern.u8_bytes);
     memcpy(copy->pending_fence_prefix, source->pending_fence_prefix,
-           source->pending_fence_pattern_len *
+           source->pending_fence_pattern.u8_bytes *
                sizeof(*copy->pending_fence_prefix));
   }
   if (source->pending_embed && source->pending_embed_prefix) {
@@ -1560,7 +1576,7 @@ static void normalize_session_for_comparison(scan_lex_session_t *session) {
   session->indents = (core_list_t(int32_t)){0};
   session->layout_blocks = (core_list_t(int32_t)){0};
   session->heredoc_queue = (core_list_t(lex_heredoc_queue_t)){0};
-  session->pending_fence_pattern = nullptr;
+  session->pending_fence_pattern.data = nullptr;
   session->pending_fence_prefix = nullptr;
   session->pending_embed_prefix = nullptr;
   session->fence_probe_skip_until = nullptr;
@@ -1652,9 +1668,8 @@ static bool scan_lex_session_equal_frame(const scan_lex_session_t *left,
       return false;
     }
   }
-  if (left->pending_fence_pattern_len &&
-      memcmp(left->pending_fence_pattern, right->pending_fence_pattern,
-             left->pending_fence_pattern_len)) {
+  if (!core_string_eq(left->pending_fence_pattern,
+                      right->pending_fence_pattern)) {
     return false;
   }
   return scan_lex_session_equal_frame(left->child, right->child);
@@ -1750,7 +1765,7 @@ static void scan_lex_session_free_frame(scan_lex_session_t *session) {
     core_free(session->heredoc_queue.data[i].tag.data);
   }
   core_list_free(session->heredoc_queue);
-  core_free(session->pending_fence_pattern);
+  core_free(session->pending_fence_pattern.data);
   core_free(session->pending_fence_prefix);
   core_free(session->pending_embed_prefix);
   core_free(session->fence_probe_skip_until);
@@ -1843,11 +1858,10 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   lex->pending_regex = nullptr;
   lex->pending_regex_in_class = false;
   lex->pending_fence = nullptr;
-  core_free(lex->pending_fence_pattern);
+  core_free(lex->pending_fence_pattern.data);
   core_free(lex->pending_fence_prefix);
-  lex->pending_fence_pattern = nullptr;
+  lex->pending_fence_pattern = (core_string_t){0};
   lex->pending_fence_prefix = nullptr;
-  lex->pending_fence_pattern_len = 0;
   lex->pending_fence_search = 0;
   lex->pending_fence_match = 0;
   if (lex->fence_probe_skip_until) {
@@ -1981,7 +1995,8 @@ const scan_lex_spec_t *scan_grammar_lex(parse_grammar_t *g) {
       if (!g->lex_spec && core_string_eq(scan_grammar_tokenizer(g),
                            CORE_STRING_STATIC(SCAN_TOKENIZER_DEFAULT))) {
         core_list_t(scan_lex_decl_t) decls = core_list_new(scan_lex_decl_t);
-        if (scan_lex_parse_file(CORE_STRING_STATIC(DEFAULT_LEX),
+        if (scan_lex_parse_file(core_string_borrow(DEFAULT_LEX,
+                                                   sizeof(DEFAULT_LEX) - 1),
                                 CORE_STRING_STATIC("default.lex"), &decls)) {
           g->lex_spec = scan_lex_spec_from_decls(g, &decls);
           g->lex_spec_owned = g->lex_spec != nullptr;
@@ -2018,11 +2033,11 @@ static bool at_str(parse_scanner_t *s, core_string_t lit) {
     return false;
   }
 
-  if (s->cursor + lit.u8_bytes > s->input_len) {
+  if (s->cursor + lit.u8_bytes > s->input.u8_bytes) {
     return false;
   }
 
-  return memcmp(s->input + s->cursor, lit.data, lit.u8_bytes) == 0;
+  return memcmp(s->input.data + s->cursor, lit.data, lit.u8_bytes) == 0;
 }
 
 static bool at_fence_body_open(parse_scanner_t *s, const scan_lex_fence_t *f) {
@@ -2033,7 +2048,7 @@ static bool partial_at_end(parse_scanner_t *s, core_string_t lit) {
   size_t remaining = scan_remaining(s);
 
   return lit.data && remaining > 0 && remaining < lit.u8_bytes &&
-         !memcmp(s->input + s->cursor, lit.data, remaining);
+         !memcmp(s->input.data + s->cursor, lit.data, remaining);
 }
 
 static bool recipe_opener_may_continue(parse_scanner_t *s, bool resume) {
@@ -2048,8 +2063,8 @@ static bool recipe_opener_may_continue(parse_scanner_t *s, bool resume) {
     scan_mark(s);
   }
 
-  while (s->mark + consumed < s->input_len) {
-    uint8_t byte = (uint8_t)s->input[s->mark + consumed];
+  while (s->mark + consumed < s->input.u8_bytes) {
+    uint8_t byte = (uint8_t)s->input.data[s->mark + consumed];
     uint32_t child = trie_child(&((scan_lex_t *)lex)->opener_nodes,
                                 &((scan_lex_t *)lex)->opener_edges,
                                 node, byte, false);
@@ -2138,12 +2153,12 @@ static size_t fence_trim_pad_before(parse_scanner_t *s,
 
   while (at > 0) {
     size_t start = at - 1;
-    while (start > 0 && (((uint8_t)s->input[start] & 0xC0) == 0x80)) {
+    while (start > 0 && (((uint8_t)s->input.data[start] & 0xC0) == 0x80)) {
       start--;
     }
 
     uint32_t decoded = (uint32_t)start;
-    int32_t cp = unicode_utf8_decode(s->input, (uint32_t)at, &decoded);
+    int32_t cp = unicode_utf8_decode(s->input.data, (uint32_t)at, &decoded);
     if (cp < 0 || decoded != at || !fence_pad_matches(f, cp)) {
       break;
     }
@@ -2159,18 +2174,20 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
                             size_t label_start, size_t label_end) {
   scan_lex_session_t *run = s->user_state;
 
-  if (!run->pending_fence_pattern) {
+  if (!run->pending_fence_pattern.data) {
     size_t fill_bytes = f->fill.u8_bytes * (size_t)level;
     size_t pattern_len =
         f->body_close.u8_bytes + fill_bytes + f->outer_close.u8_bytes;
 
-    run->pending_fence_pattern = core_alloc_size(1, pattern_len);
+    run->pending_fence_pattern = (core_string_t){
+        .data = core_alloc_size(1, pattern_len),
+        .u8_bytes = pattern_len,
+    };
     run->pending_fence_prefix = core_alloc_array(size_t, pattern_len);
-    run->pending_fence_pattern_len = pattern_len;
     run->pending_fence_search = content_start;
     run->pending_fence_match = 0;
 
-    char *out = run->pending_fence_pattern;
+    char *out = run->pending_fence_pattern.data;
 
     memcpy(out, f->body_close.data, f->body_close.u8_bytes);
     out += f->body_close.u8_bytes;
@@ -2181,12 +2198,12 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
     memcpy(out, f->outer_close.data, f->outer_close.u8_bytes);
 
     for (size_t i = 1, matched = 0; i < pattern_len; i++) {
-      while (matched && run->pending_fence_pattern[i] !=
-                            run->pending_fence_pattern[matched]) {
+      while (matched && run->pending_fence_pattern.data[i] !=
+                            run->pending_fence_pattern.data[matched]) {
         matched = run->pending_fence_prefix[matched - 1];
       }
-      if (run->pending_fence_pattern[i] ==
-          run->pending_fence_pattern[matched]) {
+      if (run->pending_fence_pattern.data[i] ==
+          run->pending_fence_pattern.data[matched]) {
         matched++;
       }
       run->pending_fence_prefix[i] = matched;
@@ -2200,18 +2217,18 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
 
   size_t search_start = search;
 
-  while (search < s->input_len) {
-    char byte = s->input[search];
+  while (search < s->input.u8_bytes) {
+    char byte = s->input.data[search];
 
-    while (matched && byte != run->pending_fence_pattern[matched]) {
+    while (matched && byte != run->pending_fence_pattern.data[matched]) {
       matched = run->pending_fence_prefix[matched - 1];
     }
-    if (byte == run->pending_fence_pattern[matched]) {
+    if (byte == run->pending_fence_pattern.data[matched]) {
       matched++;
     }
     search++;
 
-    if (matched == run->pending_fence_pattern_len) {
+    if (matched == run->pending_fence_pattern.u8_bytes) {
       close_cursor = search - matched;
       bool has_pad = false;
       size_t trimmed = fence_trim_pad_before(s, f, close_cursor, &has_pad);
@@ -2231,11 +2248,10 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
   }
 
   if (closed) {
-    core_free(run->pending_fence_pattern);
+    core_free(run->pending_fence_pattern.data);
     core_free(run->pending_fence_prefix);
-    run->pending_fence_pattern = nullptr;
+    run->pending_fence_pattern = (core_string_t){0};
     run->pending_fence_prefix = nullptr;
-    run->pending_fence_pattern_len = 0;
     run->pending_fence_search = 0;
     run->pending_fence_match = 0;
     run->pending_fence = nullptr;
@@ -2501,8 +2517,8 @@ static void previous_token_invalid(parse_scanner_t *s, core_string_t message) {
 }
 
 static bool at_bytes(parse_scanner_t *s, size_t pos, core_string_t text) {
-  return pos + text.u8_bytes <= s->input_len &&
-         memcmp(s->input + pos, text.data, text.u8_bytes) == 0;
+  return pos + text.u8_bytes <= s->input.u8_bytes &&
+         memcmp(s->input.data + pos, text.data, text.u8_bytes) == 0;
 }
 
 static core_string_t comment_close_pattern(const scan_lex_comment_t *c,
@@ -2650,7 +2666,7 @@ static bool validate_embedded_body(parse_scanner_t *outer,
                                    size_t content_start, size_t content_end) {
   const scan_lex_t *program = embedded_program(run->program, embed);
   core_buffer_t buffer = {
-      .data = (char *)outer->input + content_start,
+      .data = (char *)outer->input.data + content_start,
       .byte_len = content_end - content_start,
       .alloc_len = content_end - content_start,
   };
@@ -2703,8 +2719,8 @@ static bool resume_embed_token(parse_scanner_t *s) {
   size_t close_at = 0;
   bool closed = false;
 
-  while (search < s->input_len) {
-    char byte = s->input[search];
+  while (search < s->input.u8_bytes) {
+    char byte = s->input.data[search];
 
     while (matched && byte != embed->close.data[matched]) {
       matched = run->pending_embed_prefix[matched - 1];
@@ -2787,7 +2803,7 @@ static inline_embed_result_t try_inline_embed(parse_scanner_t *s) {
     size_t compare =
         available < e->open.u8_bytes ? available : e->open.u8_bytes;
 
-    if (memcmp(s->input + s->cursor, e->open.data, compare)) {
+    if (memcmp(s->input.data + s->cursor, e->open.data, compare)) {
       continue;
     }
 
@@ -3281,10 +3297,10 @@ static bool try_string(parse_scanner_t *s) {
   uint32_t node = 0;
   size_t at = s->cursor;
 
-  while (at < s->input_len) {
+  while (at < s->input.u8_bytes) {
     uint32_t child = trie_child(&((scan_lex_t *)lex)->string_nodes,
                                 &((scan_lex_t *)lex)->string_edges,
-                                node, (uint8_t)s->input[at], false);
+                                node, (uint8_t)s->input.data[at], false);
 
     if (child == UINT32_MAX) {
       break;
@@ -3498,7 +3514,7 @@ static region_result_t try_region(parse_scanner_t *s) {
   }
 
   core_string_t name = core_string_borrow(
-      s->input + name_start, name_end - name_start);
+      s->input.data + name_start, name_end - name_start);
   parse_trivia_t *trivia = scan_add_trivia(
       s, scan_extract(s), opening ? PARSE_TRIVIA_REGION_OPEN
                                   : PARSE_TRIVIA_REGION_CLOSE);
@@ -3736,10 +3752,10 @@ static const scan_lex_number_form_t *number_form_at(parse_scanner_t *s,
   size_t cursor = at + run->pending_number_prefix_consumed;
 
   *partial = false;
-  while (cursor < s->input_len) {
+  while (cursor < s->input.u8_bytes) {
     uint32_t child = trie_child(&((scan_lex_t *)lex)->number_nodes,
                                 &((scan_lex_t *)lex)->number_edges,
-                                node, (uint8_t)s->input[cursor], false);
+                                node, (uint8_t)s->input.data[cursor], false);
     if (child == UINT32_MAX) {
       break;
     }
@@ -3750,7 +3766,7 @@ static const scan_lex_number_form_t *number_form_at(parse_scanner_t *s,
       best = lex->number_nodes.data[node].tid;
     }
   }
-  if (cursor == s->input_len && lex->number_nodes.data[node].edge >= 0) {
+  if (cursor == s->input.u8_bytes && lex->number_nodes.data[node].edge >= 0) {
     *partial = true;
     run->pending_number_prefix_node = node;
     run->pending_number_prefix_consumed = cursor - at;
@@ -3779,10 +3795,10 @@ number_form_suffix(parse_scanner_t *s, const scan_lex_number_form_t *form,
   size_t at = s->cursor + run->pending_number_suffix_consumed;
 
   *partial = false;
-  while (at < s->input_len) {
+  while (at < s->input.u8_bytes) {
     uint32_t child = trie_child(&((scan_lex_t *)lex)->number_suffix_nodes,
                                 &((scan_lex_t *)lex)->number_suffix_edges,
-                                node, (uint8_t)s->input[at], false);
+                                node, (uint8_t)s->input.data[at], false);
     if (child == UINT32_MAX) {
       break;
     }
@@ -3793,7 +3809,7 @@ number_form_suffix(parse_scanner_t *s, const scan_lex_number_form_t *form,
       best = lex->number_suffix_nodes.data[node].tid;
     }
   }
-  if (at == s->input_len &&
+  if (at == s->input.u8_bytes &&
       (lex->number_suffix_nodes.data[node].edge >= 0 || best)) {
     *partial = true;
     run->pending_number_suffix_node = node;
@@ -4073,7 +4089,8 @@ static bool try_number(parse_scanner_t *s) {
   run->pending_number_malformed = false;
   run->pending_number_float = false;
   run->pending_number_point = false;
-  run->pending_number_signed_only = signed_start && s->cursor == s->input_len;
+  run->pending_number_signed_only =
+      signed_start && s->cursor == s->input.u8_bytes;
 
   if (scan_peek(s, 0) == '.') {
     run->pending_number_form = plain;
@@ -4107,7 +4124,8 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
         continue;
     }
 
-    if (!s->source_final && s->cursor + g->prefix.u8_bytes == s->input_len) {
+    if (!s->source_final &&
+        s->cursor + g->prefix.u8_bytes == s->input.u8_bytes) {
       awaiting_body = true;
     }
 
@@ -4122,20 +4140,20 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
 
     if (g->unless_closed) {
       size_t at = s->cursor + g->prefix.u8_bytes;
-      while (at < s->input_len) {
+      while (at < s->input.u8_bytes) {
         uint32_t next = (uint32_t)at;
-        int32_t cp = unicode_utf8_decode(s->input,
-            (uint32_t)s->input_len, &next);
+        int32_t cp = unicode_utf8_decode(s->input.data,
+            (uint32_t)s->input.u8_bytes, &next);
         if (cp < 0 || !unicode_is_id_continue(cp)) break;
         at = next;
       }
-      if (at == s->input_len && !s->source_final) {
+      if (at == s->input.u8_bytes && !s->source_final) {
         scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
                             s->cursor);
         return false;
       }
-      if (at + g->prefix.u8_bytes <= s->input_len
-          && !memcmp(s->input + at, g->prefix.data, g->prefix.u8_bytes))
+      if (at + g->prefix.u8_bytes <= s->input.u8_bytes
+          && !memcmp(s->input.data + at, g->prefix.data, g->prefix.u8_bytes))
         continue;
     }
 
@@ -4192,7 +4210,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
       return false;
     }
     core_string_t name = core_string_from_raw(
-        s->input + s->mark + best->prefix.u8_bytes,
+        s->input.data + s->mark + best->prefix.u8_bytes,
         (int64_t)(s->cursor - s->mark - best->prefix.u8_bytes));
     parse_token_set_postfix_modifier(
         previous, core_option_set(core_string_t, name), true);
@@ -4353,7 +4371,7 @@ static core_string_t heredoc_body_value(parse_scanner_t *s,
                                         const scan_lex_heredoc_t *h,
                                         size_t body, size_t end) {
   if (!h->body_indent_strip || body >= end) {
-    return core_string_from_raw(s->input + body, (int64_t)(end - body));
+    return core_string_from_raw(s->input.data + body, (int64_t)(end - body));
   }
 
   size_t minimum = SIZE_MAX;
@@ -4361,20 +4379,21 @@ static core_string_t heredoc_body_value(parse_scanner_t *s,
 
   while (line < end) {
     size_t at = line;
-    while (at < end && (s->input[at] == ' ' || s->input[at] == '\t')) {
+    while (at < end &&
+           (s->input.data[at] == ' ' || s->input.data[at] == '\t')) {
       at++;
     }
-    if (at < end && s->input[at] != '\n' && at - line < minimum) {
+    if (at < end && s->input.data[at] != '\n' && at - line < minimum) {
       minimum = at - line;
     }
-    while (at < end && s->input[at] != '\n') {
+    while (at < end && s->input.data[at] != '\n') {
       at++;
     }
     line = at < end ? at + 1 : at;
   }
 
   if (minimum == SIZE_MAX || !minimum) {
-    return core_string_from_raw(s->input + body, (int64_t)(end - body));
+    return core_string_from_raw(s->input.data + body, (int64_t)(end - body));
   }
 
   core_buffer_t *result = core_buffer_empty();
@@ -4383,15 +4402,15 @@ static core_string_t heredoc_body_value(parse_scanner_t *s,
     size_t at = line;
     size_t remove = 0;
     while (at < end && remove < minimum &&
-           (s->input[at] == ' ' || s->input[at] == '\t')) {
+           (s->input.data[at] == ' ' || s->input.data[at] == '\t')) {
       at++;
       remove++;
     }
     size_t line_end = at;
-    while (line_end < end && s->input[line_end] != '\n') {
+    while (line_end < end && s->input.data[line_end] != '\n') {
       line_end++;
     }
-    core_buffer_append(result, s->input + at, line_end - at);
+    core_buffer_append(result, s->input.data + at, line_end - at);
     if (line_end < end) {
       core_buffer_putc(result, '\n');
       line_end++;
@@ -4436,8 +4455,8 @@ static bool scan_heredoc_lines(parse_scanner_t *s, const scan_lex_heredoc_t *h,
   size_t line_start = run->pending_heredoc_line_start;
   size_t tag_len = tag_b - tag_a;
 
-  while (scan < s->input_len) {
-    uint8_t byte = (uint8_t)s->input[scan];
+  while (scan < s->input.u8_bytes) {
+    uint8_t byte = (uint8_t)s->input.data[scan];
     if (byte == '\n') {
       if (!rejected && matched == tag_len) {
         size_t end = scan + 1;
@@ -4461,7 +4480,7 @@ static bool scan_heredoc_lines(parse_scanner_t *s, const scan_lex_heredoc_t *h,
     at_indent = false;
 
     if (!rejected && matched < tag_len &&
-        byte == (uint8_t)s->input[tag_a + matched]) {
+        byte == (uint8_t)s->input.data[tag_a + matched]) {
       matched++;
     } else {
       rejected = true;
@@ -4485,9 +4504,9 @@ static bool scan_heredoc_lines(parse_scanner_t *s, const scan_lex_heredoc_t *h,
   run->pending_heredoc_match = matched;
   run->pending_heredoc_indent = at_indent;
   run->pending_heredoc_rejected = rejected;
-  s->work_bytes += s->input_len - work_start;
+  s->work_bytes += s->input.u8_bytes - work_start;
   scan_set_incomplete(s, CORE_STRING_STATIC("unterminated heredoc"), s->mark);
-  s->status_end_byte = s->source_base + s->input_len;
+  s->status_end_byte = s->source_base + s->input.u8_bytes;
 
   return false;
 }
@@ -4527,15 +4546,15 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
   size_t work_start = scan;
 
   if (run->pending_heredoc_header_phase == HEREDOC_HEADER_LEADING) {
-    while (header->leading_space && scan < s->input_len &&
-           (s->input[scan] == ' ' || s->input[scan] == '\t')) {
+    while (header->leading_space && scan < s->input.u8_bytes &&
+           (s->input.data[scan] == ' ' || s->input.data[scan] == '\t')) {
       scan++;
     }
-    if (scan == s->input_len && !s->source_final) {
+    if (scan == s->input.u8_bytes && !s->source_final) {
       goto wait;
     }
 
-    uint8_t quote = scan < s->input_len ? (uint8_t)s->input[scan] : 0;
+    uint8_t quote = scan < s->input.u8_bytes ? (uint8_t)s->input.data[scan] : 0;
     uint8_t quote_kind = SCAN_LEX_HEREDOC_UNQUOTED;
 
     if (quote == '\'' || quote == '"') {
@@ -4561,14 +4580,15 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
     uint8_t quote = run->pending_heredoc_quote;
 
     if (quote) {
-      while (scan < s->input_len && (uint8_t)s->input[scan] != quote &&
-             s->input[scan] != '\n') {
+      while (scan < s->input.u8_bytes &&
+             (uint8_t)s->input.data[scan] != quote &&
+             s->input.data[scan] != '\n') {
         scan++;
       }
-      if (scan == s->input_len && !s->source_final) {
+      if (scan == s->input.u8_bytes && !s->source_final) {
         goto wait;
       }
-      if (scan == s->input_len || s->input[scan] == '\n') {
+      if (scan == s->input.u8_bytes || s->input.data[scan] == '\n') {
         return invalid_heredoc_header(
             s, CORE_STRING_STATIC("unterminated quoted heredoc tag"),
             run->pending_heredoc_tag_start - 1);
@@ -4579,7 +4599,8 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
       if (scan == run->pending_heredoc_tag_start) {
         uint32_t next = (uint32_t)scan;
         int32_t cp =
-            unicode_utf8_decode(s->input, (uint32_t)s->input_len, &next);
+            unicode_utf8_decode(s->input.data, (uint32_t)s->input.u8_bytes,
+                                &next);
         if (cp < 0 && !s->source_final) {
           goto wait;
         }
@@ -4591,10 +4612,11 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
         }
         scan = next;
       }
-      while (scan < s->input_len) {
+      while (scan < s->input.u8_bytes) {
         uint32_t next = (uint32_t)scan;
         int32_t cp =
-            unicode_utf8_decode(s->input, (uint32_t)s->input_len, &next);
+            unicode_utf8_decode(s->input.data, (uint32_t)s->input.u8_bytes,
+                                &next);
         if (cp < 0) {
           if (!s->source_final) {
             goto wait;
@@ -4609,7 +4631,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
         }
         scan = next;
       }
-      if (scan == s->input_len && !s->source_final) {
+      if (scan == s->input.u8_bytes && !s->source_final) {
         goto wait;
       }
       run->pending_heredoc_tag_end = scan;
@@ -4625,7 +4647,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
 
   if (h->queued) {
     core_string_t tag =
-        core_string_from_raw(s->input + run->pending_heredoc_tag_start,
+        core_string_from_raw(s->input.data + run->pending_heredoc_tag_start,
                              (int64_t)(run->pending_heredoc_tag_end -
                                        run->pending_heredoc_tag_start));
     size_t label_start = s->source_base + run->pending_heredoc_tag_start;
@@ -4652,21 +4674,21 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
     return true;
   }
 
-  while (scan < s->input_len && s->input[scan] != '\n') {
-    if (!header->trailing_text && s->input[scan] != ' ' &&
-        s->input[scan] != '\t') {
+  while (scan < s->input.u8_bytes && s->input.data[scan] != '\n') {
+    if (!header->trailing_text && s->input.data[scan] != ' ' &&
+        s->input.data[scan] != '\t') {
       return invalid_heredoc_header(
           s, CORE_STRING_STATIC("unexpected text after heredoc tag"), scan);
     }
     scan++;
   }
-  if (scan == s->input_len && !s->source_final) {
+  if (scan == s->input.u8_bytes && !s->source_final) {
     goto wait;
   }
 
   s->work_bytes += scan - work_start;
   scan_advance_bytes(s, run->pending_heredoc_token_end - s->cursor);
-  size_t body = scan < s->input_len ? scan + 1 : scan;
+  size_t body = scan < s->input.u8_bytes ? scan + 1 : scan;
   run->pending_heredoc_body = body;
   run->pending_heredoc_scan = body;
   run->pending_heredoc_line_start = body;
@@ -4729,8 +4751,8 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
   const scan_lex_t *lex = run->program;
   size_t start_consumed = consumed;
 
-  while (s->mark + consumed < s->input_len) {
-    uint8_t byte = (uint8_t)s->input[s->mark + consumed];
+  while (s->mark + consumed < s->input.u8_bytes) {
+    uint8_t byte = (uint8_t)s->input.data[s->mark + consumed];
     uint32_t child = trie_child(&((scan_lex_t *)lex)->term_nodes,
                                 &((scan_lex_t *)lex)->term_edges,
                                 node, byte, false);
@@ -4751,7 +4773,7 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
     if (candidate->word_boundary) {
       core_codepoint_t next;
 
-      if (s->mark + consumed == s->input_len && !s->source_final) {
+      if (s->mark + consumed == s->input.u8_bytes && !s->source_final) {
         continue;
       }
 
@@ -4768,7 +4790,7 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
 
   s->work_bytes += consumed - start_consumed;
 
-  if (s->mark + consumed == s->input_len && !s->source_final &&
+  if (s->mark + consumed == s->input.u8_bytes && !s->source_final &&
       (lex->term_nodes.data[node].edge >= 0 ||
        (lex->term_nodes.data[node].tid &&
         lex->term_nodes.data[node].word_boundary))) {
@@ -4976,11 +4998,11 @@ static indent_measure_t measure_indent(parse_scanner_t *s, uint8_t tab_width,
                                        indent_measure_t result) {
   uint8_t width = tab_width ? tab_width : 8;
 
-  while (result.end < s->input_len) {
-    if (s->input[result.end] == ' ') {
+  while (result.end < s->input.u8_bytes) {
+    if (s->input.data[result.end] == ' ') {
       result.has_space = true;
       result.column++;
-    } else if (s->input[result.end] == '\t') {
+    } else if (s->input.data[result.end] == '\t') {
       if (!result.has_tab) {
         result.first_tab = result.end;
       }
@@ -5026,11 +5048,11 @@ static void save_pending_indent(scan_lex_session_t *run, indent_measure_t m) {
 
 static indent_line_kind_t indent_line_kind(parse_scanner_t *s,
                                            const scan_lex_t *lex, size_t at) {
-  if (at >= s->input_len) {
+  if (at >= s->input.u8_bytes) {
     return s->source_final ? INDENT_LINE_BLANK : INDENT_LINE_INCOMPLETE;
   }
 
-  if (s->input[at] == '\n' || s->input[at] == '\r') {
+  if (s->input.data[at] == '\n' || s->input.data[at] == '\r') {
     return INDENT_LINE_BLANK;
   }
 
@@ -5042,11 +5064,11 @@ static indent_line_kind_t indent_line_kind(parse_scanner_t *s,
       continue;
     }
 
-    size_t available = s->input_len - at;
+    size_t available = s->input.u8_bytes - at;
     size_t compare =
         available < c->opener.u8_bytes ? available : c->opener.u8_bytes;
 
-    if (memcmp(s->input + at, c->opener.data, compare)) {
+    if (memcmp(s->input.data + at, c->opener.data, compare)) {
       continue;
     }
 
@@ -5216,8 +5238,8 @@ static bool process_queued_heredocs(parse_scanner_t *s) {
     size_t body_end = 0;
     size_t consumed = 0;
 
-    while (scan < s->input_len) {
-      uint8_t byte = (uint8_t)s->input[scan];
+    while (scan < s->input.u8_bytes) {
+      uint8_t byte = (uint8_t)s->input.data[scan];
       if (byte == '\n') {
         if (!rejected && matched == queued->tag.u8_bytes) {
           body_end = line_start;
@@ -5262,7 +5284,7 @@ static bool process_queued_heredocs(parse_scanner_t *s) {
       run->pending_heredoc_rejected = rejected;
       scan_set_incomplete(s, CORE_STRING_STATIC("unterminated queued heredoc"),
                           body);
-      s->status_end_byte = s->source_base + s->input_len;
+      s->status_end_byte = s->source_base + s->input.u8_bytes;
       return false;
     }
 
@@ -5317,7 +5339,7 @@ static recovery_boundary_t recovery_boundary(parse_scanner_t *s,
     size_t remaining = scan_remaining(s);
     size_t compare = remaining < sync->u8_bytes ? remaining : sync->u8_bytes;
 
-    if (memcmp(s->input + s->cursor, sync->data, compare)) {
+    if (memcmp(s->input.data + s->cursor, sync->data, compare)) {
       continue;
     }
     if (remaining < sync->u8_bytes) {
@@ -5356,7 +5378,7 @@ static bool finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
       parse_token_set_value(
           token,
           core_option_set(core_string_t,
-                          core_string_from_raw(s->input + start,
+                          core_string_from_raw(s->input.data + start,
                                                (int64_t)(s->cursor - start))),
           true);
     }
@@ -5506,7 +5528,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
       return false;
     }
     core_string_t name = core_string_from_raw(
-        s->input + s->mark + sigil->prefix.u8_bytes,
+        s->input.data + s->mark + sigil->prefix.u8_bytes,
         (int64_t)(s->cursor - s->mark - sigil->prefix.u8_bytes));
     parse_token_set_postfix_modifier(
         previous, core_option_set(core_string_t, name), true);
@@ -5676,12 +5698,12 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     if (lex->spec->line_continue.data && at_str(s, lex->spec->line_continue)) {
       size_t at = s->cursor + lex->spec->line_continue.u8_bytes;
 
-      while (at < s->input_len &&
-             (s->input[at] == ' ' || s->input[at] == '\t')) {
+      while (at < s->input.u8_bytes &&
+             (s->input.data[at] == ' ' || s->input.data[at] == '\t')) {
         at++;
       }
 
-      if (at < s->input_len && s->input[at] == '\n') {
+      if (at < s->input.u8_bytes && s->input.data[at] == '\n') {
         scan_advance_bytes(s, at + 1 - s->cursor);
         run->line_start = true;
         run->continued_line = true;
@@ -5689,7 +5711,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
         continue;
       }
 
-      if (at == s->input_len && !s->source_final) {
+      if (at == s->input.u8_bytes && !s->source_final) {
         scan_set_incomplete(
             s, CORE_STRING_STATIC("line continuation may continue"), s->cursor);
         return false;

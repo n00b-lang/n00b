@@ -5,42 +5,43 @@
 #include "ir/diag.h"
 #include "lib/dict.h"
 
-#define IR_DIAG(id, code, sev, text) {code, IR_SEV_##sev, text},
+#define IR_DIAG(id, code, sev, text) \
+    {CORE_STRING_STATIC(code), IR_SEV_##sev, CORE_STRING_STATIC(text)},
 
 static const struct {
-    const char   *code;
+    core_string_t code;
     ir_severity_t severity;
-    const char   *text;
+    core_string_t text;
 } codes[IR_DIAG_COUNT] = {
 #include "ir/ir_diags.def"
 };
 
 #undef IR_DIAG
 
-const char *ir_severity_name(ir_severity_t s)
+core_string_t ir_severity_name(ir_severity_t s)
 {
     switch (s) {
     case IR_SEV_ERROR:
-        return "error";
+        return CORE_STRING_STATIC("error");
     case IR_SEV_WARNING:
-        return "warning";
+        return CORE_STRING_STATIC("warning");
     case IR_SEV_NOTE:
-        return "note";
+        return CORE_STRING_STATIC("note");
     case IR_SEV_HELP:
-        return "help";
+        return CORE_STRING_STATIC("help");
     default:
-        return "?";
+        return CORE_STRING_STATIC("?");
     }
 }
 
-const char *ir_diag_code(ir_diagcode_t c)
+core_string_t ir_diag_code(ir_diagcode_t c)
 {
-    return c < IR_DIAG_COUNT ? codes[c].code : nullptr;
+    return c < IR_DIAG_COUNT ? codes[c].code : (core_string_t){};
 }
 
-const char *ir_diag_default_text(ir_diagcode_t c)
+core_string_t ir_diag_default_text(ir_diagcode_t c)
 {
-    return c < IR_DIAG_COUNT ? codes[c].text : nullptr;
+    return c < IR_DIAG_COUNT ? codes[c].text : (core_string_t){};
 }
 
 ir_severity_t ir_diag_default_severity(ir_diagcode_t c)
@@ -59,10 +60,10 @@ static void free_code_index(void)
 
 static void build_code_index(void)
 {
-    core_dict_init(&code_index, core_hash_cstring, core_dict_cstr_eq);
+    core_dict_init_string(&code_index);
 
     for (uint16_t i = 0; i < IR_DIAG_COUNT; i++) {
-        _core_dict_put(&code_index, (void *)codes[i].code,
+        _core_dict_put(&code_index, (void *)&codes[i].code,
                        (void *)(uintptr_t)i);
     }
 
@@ -70,9 +71,9 @@ static void build_code_index(void)
     atexit(free_code_index);
 }
 
-bool ir_diag_code_lookup(const char *code, ir_diagcode_t *out)
+bool ir_diag_code_lookup(core_string_t code, ir_diagcode_t *out)
 {
-    if (!code) {
+    if (!code.data) {
         return false;
     }
 
@@ -81,7 +82,7 @@ bool ir_diag_code_lookup(const char *code, ir_diagcode_t *out)
     }
 
     bool  found = false;
-    void *val   = _core_dict_get(&code_index, (void *)code, &found);
+    void *val   = _core_dict_get(&code_index, &code, &found);
 
     if (found && out) {
         *out = (ir_diagcode_t)(uintptr_t)val;
@@ -91,8 +92,8 @@ bool ir_diag_code_lookup(const char *code, ir_diagcode_t *out)
 }
 
 typedef struct {
-    const char  *key;
-    ir_outcome_t outcome;
+    core_string_t key;
+    ir_outcome_t  outcome;
 } ir_rule_entry_t;
 
 struct ir_policy_t {
@@ -116,9 +117,9 @@ ir_policy_t *ir_policy_new(ir_ctx_t *ctx)
     return p;
 }
 
-bool ir_policy_set(ir_policy_t *p, const char *key, ir_outcome_t outcome)
+bool ir_policy_set(ir_policy_t *p, core_string_t key, ir_outcome_t outcome)
 {
-    if (!p || !key || !*key) {
+    if (!p || !key.data || !key.u8_bytes) {
         return false;
     }
 
@@ -147,9 +148,9 @@ bool ir_policy_set(ir_policy_t *p, const char *key, ir_outcome_t outcome)
     return true;
 }
 
-ir_outcome_t ir_policy_for(const ir_policy_t *p, const char *code)
+ir_outcome_t ir_policy_for(const ir_policy_t *p, core_string_t code)
 {
-    if (!p || !code) {
+    if (!p || !code.data) {
         return IR_POLICY_DEFAULT;
     }
 
@@ -158,10 +159,10 @@ ir_outcome_t ir_policy_for(const ir_policy_t *p, const char *code)
     bool         found    = false;
 
     for (size_t i = 0; i < p->n; i++) {
-        const char *k = p->rules[i].key;
-        size_t      n = strlen(k);
+        core_string_t k = p->rules[i].key;
+        size_t        n = k.u8_bytes;
 
-        if (strncmp(code, k, n)) {
+        if (!core_string_starts_with(code, k)) {
             continue;
         }
 
@@ -238,7 +239,7 @@ static bool
 core_policy(void *context, core_diag_severity_t *severity, core_string_t code)
 {
     ir_policy_t *policy = context;
-    ir_outcome_t outcome = ir_policy_for(policy, code.data);
+    ir_outcome_t outcome = ir_policy_for(policy, code);
     bool attached = *severity == CORE_DIAG_NOTE || *severity == CORE_DIAG_HELP;
     switch (outcome) {
     case IR_POLICY_ALLOW: return false;
@@ -255,7 +256,7 @@ core_policy(void *context, core_diag_severity_t *severity, core_string_t code)
 }
 
 static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
-                       ir_span_t span, const char *label)
+                       ir_span_t span, core_string_t label)
 {
     if (!d || code >= IR_DIAG_COUNT) {
         return nullptr;
@@ -268,8 +269,9 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
 
             if (dg) {
                 ir_diag_message(dg, d,
-                                "a note or help has nothing to attach to, and "
-                                "they never stand alone");
+                                CORE_STRING_STATIC(
+                                    "a note or help has nothing to attach "
+                                    "to, and they never stand alone"));
             }
         }
 
@@ -281,8 +283,7 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
         : sev == IR_SEV_WARNING ? CORE_DIAG_WARNING : CORE_DIAG_ERROR;
     size_t core_index = core_diagnostics_count(d->core);
     if (!core_diagnostics_report(d->core, nullptr, core_severity,
-            core_string_from_cstr(ir_diag_code(code)),
-            core_string_from_cstr(ir_diag_default_text(code)))) {
+            ir_diag_code(code), ir_diag_default_text(code))) {
         return nullptr;
     }
     const core_diagnostic_t *core_item =
@@ -308,8 +309,7 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
         destination_index = core_diagnostics_count(d->destination);
         if (!core_diagnostics_report_at(d->destination, d->unit,
                 core_severity_of(sev),
-                core_string_from_cstr(ir_diag_code(code)),
-                core_string_from_cstr(ir_diag_default_text(code)), location)
+                ir_diag_code(code), ir_diag_default_text(code), location)
             || core_diagnostics_count(d->destination) == destination_index)
             destination_index = SIZE_MAX;
     }
@@ -329,7 +329,8 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     dg->code          = code;
     dg->message       = ir_diag_default_text(code);
     dg->primary.span  = span;
-    dg->primary.label = label ? ir_strdup(d->ctx, label) : nullptr;
+    dg->primary.label = label.data ? ir_strdup(d->ctx, label)
+                                   : (core_string_t){};
     dg->seq           = d->seq++;
     dg->core_index     = core_index;
     dg->destination_index = destination_index;
@@ -342,14 +343,14 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
 }
 
 ir_diag_t *ir_diag_begin(ir_diags_t *d, ir_diagcode_t code, ir_span_t span,
-                         const char *label)
+                         core_string_t label)
 {
     return push(d, code, ir_diag_default_severity(code), span, label);
 }
 
 ir_diag_t *ir_diag_begin_at(ir_diags_t *d, ir_diagcode_t code,
                             const ir_instr_t *in, const ir_block_t *b,
-                            const ir_func_t *f, const char *label)
+                            const ir_func_t *f, core_string_t label)
 {
     ir_span_t span = IR_SPAN_UNKNOWN;
 
@@ -388,7 +389,7 @@ ir_diag_t *ir_diag_begin_at(ir_diags_t *d, ir_diagcode_t code,
 }
 
 bool ir_diag_note(ir_diags_t *d, ir_severity_t sev, ir_diagcode_t code,
-                  ir_span_t span, const char *label)
+                  ir_span_t span, core_string_t label)
 {
     if (!is_attachment(sev)) {
         return false;
@@ -397,26 +398,24 @@ bool ir_diag_note(ir_diags_t *d, ir_severity_t sev, ir_diagcode_t code,
     return push(d, code, sev, span, label) != nullptr;
 }
 
-bool ir_diag_message(ir_diag_t *dg, ir_diags_t *d, const char *message)
+bool ir_diag_message(ir_diag_t *dg, ir_diags_t *d, core_string_t message)
 {
-    if (!dg || !d || !message) {
+    if (!dg || !d || !message.data) {
         return false;
     }
 
     dg->message = ir_strdup(d->ctx, message);
 
-    core_diagnostic_set_message(d->core, dg->core_index,
-                                core_string_from_cstr(message));
+    core_diagnostic_set_message(d->core, dg->core_index, message);
     if (d->destination && dg->destination_index != SIZE_MAX)
         core_diagnostic_set_message(d->destination,
-                                    dg->destination_index,
-                                    core_string_from_cstr(message));
+                                    dg->destination_index, message);
 
-    return dg->message != nullptr;
+    return dg->message.data != nullptr;
 }
 
 bool ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
-                       const char *label)
+                       core_string_t label)
 {
     if (!d || !dg) {
         return false;
@@ -433,17 +432,18 @@ bool ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
     dg->cap_secondary = (uint32_t)cap;
 
     dg->secondary[dg->n_secondary].span  = span;
-    dg->secondary[dg->n_secondary].label = label ? ir_strdup(d->ctx, label)
-                                                 : nullptr;
+    dg->secondary[dg->n_secondary].label = label.data
+                                               ? ir_strdup(d->ctx, label)
+                                               : (core_string_t){};
     dg->n_secondary++;
 
     return true;
 }
 
 bool ir_diag_suggest(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
-                     const char *replacement, const char *description)
+                     core_string_t replacement, core_string_t description)
 {
-    if (!d || !dg || !replacement) {
+    if (!d || !dg || !replacement.data) {
         return false;
     }
 
@@ -462,7 +462,8 @@ bool ir_diag_suggest(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
 
     s->span        = span;
     s->replacement = ir_strdup(d->ctx, replacement);
-    s->description = description ? ir_strdup(d->ctx, description) : nullptr;
+    s->description = description.data ? ir_strdup(d->ctx, description)
+                                      : (core_string_t){};
 
     return true;
 }
@@ -558,8 +559,7 @@ bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
                 size_t index = core_diagnostics_count(dst->destination);
                 if (core_diagnostics_report_at(dst->destination, dst->unit,
                         core_severity_of(source_diag->severity),
-                        core_string_from_cstr(
-                            ir_diag_code(source_diag->code)),
+                        ir_diag_code(source_diag->code),
                         source_core->message, location)
                     && core_diagnostics_count(dst->destination) > index)
                     dst->v[dst->n].destination_index = index;

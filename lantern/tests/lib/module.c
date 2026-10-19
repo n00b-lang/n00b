@@ -19,7 +19,7 @@ resolve_memory(void *context, const core_module_spec_t *module,
         return CORE_MODULE_NOT_FOUND;
 
     bool ok = core_source_file_init(out, CORE_STRING_STATIC("mem://pkg/math"),
-                                    "value = 42", 10);
+                                    CORE_STRING_STATIC("value = 42"));
     return ok ? CORE_MODULE_RESOLVED : CORE_MODULE_RESOLVE_ERROR;
 }
 
@@ -120,7 +120,8 @@ main(void)
                          CORE_STRING_STATIC("mem://pkg/math")));
     check("the source bytes are available",
           core_source_file_size(&source) == 10
-              && !memcmp(core_source_file_contents(&source), "value = 42", 10));
+              && core_string_eq(core_source_file_contents(&source),
+                                CORE_STRING_STATIC("value = 42")));
 
     int released = 0;
     core_module_spec_set_user_data(&spec, &released, record_user_data_release);
@@ -146,7 +147,7 @@ main(void)
     core_module_spec_t other = {0};
     core_module_spec_init(&other, CORE_STRING_STATIC("pkg.absent"));
     core_source_file_init(&dependency_source,
-        CORE_STRING_STATIC("mem://pkg/absent"), "", 0);
+        CORE_STRING_STATIC("mem://pkg/absent"), CORE_STRING_STATIC(""));
     core_translation_unit_t dependency = {0};
     core_translation_unit_init(&dependency, &other, &dependency_source);
     check("translation units retain borrowed import references",
@@ -161,7 +162,7 @@ main(void)
     core_translation_unit_t duplicate_module = {0};
     core_module_spec_init(&duplicate_spec, CORE_STRING_STATIC("pkg.absent"));
     core_source_file_init(&duplicate_source,
-        CORE_STRING_STATIC("mem://pkg/absent-copy"), "", 0);
+        CORE_STRING_STATIC("mem://pkg/absent-copy"), CORE_STRING_STATIC(""));
     core_translation_unit_init(&duplicate_module, &duplicate_spec,
                                &duplicate_source);
     check("distinct source TUs with one module identity are diagnosed",
@@ -175,7 +176,7 @@ main(void)
     core_translation_unit_t leaf = {0};
     core_module_spec_init(&leaf_spec, CORE_STRING_STATIC("pkg.leaf"));
     core_source_file_init(&leaf_source, CORE_STRING_STATIC("mem://pkg/leaf"),
-                          "", 0);
+                          CORE_STRING_STATIC(""));
     core_translation_unit_init(&leaf, &leaf_spec, &leaf_source);
     core_translation_unit_add_import(&dependency, &leaf);
     scc_trace_t trace = {0};

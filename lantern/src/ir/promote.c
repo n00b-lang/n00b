@@ -24,7 +24,7 @@ static void warn_unset(P *p, const ir_local_t *l)
 
     ir_diag_t *dg = ir_diag_begin_at(p->opts->diags, IR_DIAG_UNSET_LOCAL,
                                      nullptr, ir_block_entry(p->f), p->f,
-                                     "this local");
+                                     CORE_STRING_STATIC("this local"));
 
     if (!dg) {
         return;
@@ -32,36 +32,53 @@ static void warn_unset(P *p, const ir_local_t *l)
 
     core_buffer_t *b = core_buffer_empty();
 
-    core_buffer_printf(b, "$%s is read on a path that does not assign it, so promote "
-                  "supplied undef", l->name);
+    core_buffer_puts(b, "$");
+    core_buffer_append_string(b, l->name);
+    core_buffer_puts(b, " is read on a path that does not assign it, so "
+                        "promote supplied undef");
 
-    char *msg = core_buffer_take(b);
+    core_string_t msg = core_buffer_take_string(b);
 
     ir_diag_message(dg, p->opts->diags, msg);
-    core_free(msg);
+    core_free(msg.data);
 }
 
-static const char *derived_name(P *p, const ir_local_t *l, uint32_t nth)
+static core_string_t bounded_name(char *name, size_t capacity, int written)
+{
+    size_t length = written < 0 ? 0 : (size_t)written;
+
+    if (length >= capacity) {
+        length = capacity - 1;
+    }
+    return core_string_borrow(name, length);
+}
+
+static core_string_t derived_name(P *p, const ir_local_t *l, uint32_t nth)
 {
     if (p->opts && p->opts->rename) {
         return p->opts->rename(p->m->ctx, l->name, nth, p->opts->state);
     }
 
-    size_t n    = strlen(l->name) + 24;
-    char  *name = ir_alloc(p->m->ctx, n);
+    size_t        n    = l->name.u8_bytes + 24;
+    char         *name = ir_alloc(p->m->ctx, n);
+    core_string_t text = bounded_name(
+        name, n,
+        snprintf(name, n, "%.*s_%u", (int)l->name.u8_bytes, l->name.data,
+                 nth));
 
-    snprintf(name, n, "%s_%u", l->name, nth);
-
-    for (uint32_t bump = 1; ir_value_find(p->f, name); bump++) {
-        snprintf(name, n, "%s_%u.%u", l->name, nth, bump);
+    for (uint32_t bump = 1; ir_value_find(p->f, text); bump++) {
+        text = bounded_name(
+            name, n,
+            snprintf(name, n, "%.*s_%u.%u", (int)l->name.u8_bytes,
+                     l->name.data, nth, bump));
     }
 
-    return name;
+    return text;
 }
 
 static ir_value_t *fresh(P *p, ir_instr_t *in, const ir_local_t *l)
 {
-    const char *name = derived_name(p, l, p->counter[l->index]++);
+    core_string_t name = derived_name(p, l, p->counter[l->index]++);
     bool promoted_copy_write = in->op == IR_OP_COPY
         && in->dest_kind == IR_DEST_LOCAL;
     ir_value_t *value = ir_instr_set_dest(in, name, l->type)
@@ -72,7 +89,8 @@ static ir_value_t *fresh(P *p, ir_instr_t *in, const ir_local_t *l)
     ir_ctx_t *ctx = p->m->ctx;
     if (value && promoted_copy_write
         && !ir_annot_set(ctx, &in->annots, (ir_annot_t){
-            .key = "ir.promoted_local_write", .kind = IR_ANNOT_BOOL,
+            .key = CORE_STRING_STATIC("ir.promoted_local_write"),
+            .kind = IR_ANNOT_BOOL,
             .b = true})) {
         p->ok = false;
         return nullptr;
@@ -170,7 +188,7 @@ static bool make_phis(ir_visit_t *vi)
 
         s->phi[q] = ir_instr_generated(vi->block, IR_OP_PHI,
                                        ir_rd_phi_local(s->r, q)->span,
-                                       "promote", k);
+                                       CORE_STRING_STATIC("promote"), k);
 
         if (!s->phi[q]) {
             s->ok = false;
@@ -296,7 +314,8 @@ static bool promote_func(P *p, ir_func_t *f)
         }
 
         ir_instr_t *u = ir_instr_generated(ir_block_entry(f), IR_OP_UNDEF,
-                                           f->locals[l]->span, "promote",
+                                           f->locals[l]->span,
+                                           CORE_STRING_STATIC("promote"),
                                            at++);
 
         if (!u) {
@@ -412,7 +431,7 @@ static bool promote_run(ir_module_t *m, ir_diags_t *d, void *state)
 }
 
 const ir_pass_t ir_pass_promote = {
-    .name        = "promote",
+    .name        = CORE_STRING_STATIC("promote"),
     .requires    = IR_PROP_PARSED | IR_PROP_TYPED,
     .establishes = IR_PROP_SSA,
     .run         = promote_run,
@@ -476,16 +495,24 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                     continue;
                 }
 
-                size_t n    = strlen(b->name) + strlen(to->name) + 20;
-                char  *name = ir_alloc(m->ctx, n);
+                size_t        n    = b->name.u8_bytes + to->name.u8_bytes + 20;
+                char         *name = ir_alloc(m->ctx, n);
+                core_string_t text = bounded_name(
+                    name, n,
+                    snprintf(name, n, "%.*s.to.%.*s",
+                             (int)b->name.u8_bytes, b->name.data,
+                             (int)to->name.u8_bytes, to->name.data));
 
-                snprintf(name, n, "%s.to.%s", b->name, to->name);
-
-                for (uint32_t bump = 1; ir_block_find(f, name); bump++) {
-                    snprintf(name, n, "%s.to.%s.%u", b->name, to->name, bump);
+                for (uint32_t bump = 1; ir_block_find(f, text); bump++) {
+                    text = bounded_name(
+                        name, n,
+                        snprintf(name, n, "%.*s.to.%.*s.%u",
+                                 (int)b->name.u8_bytes, b->name.data,
+                                 (int)to->name.u8_bytes, to->name.data,
+                                 bump));
                 }
 
-                ir_block_t *cut = ir_block_add(f, name);
+                ir_block_t *cut = ir_block_add(f, text);
 
                 if (!cut) {
                     return false;
@@ -493,7 +520,9 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                 cut->span = ir_span_known(b->span) ? b->span : to->span;
 
                 ir_instr_t *jump = ir_instr_generated(cut, IR_OP_JUMP,
-                                                      cut->span, "split-edges",
+                                                      cut->span,
+                                                      CORE_STRING_STATIC(
+                                                          "split-edges"),
                                                       0);
 
                 if (!jump || !ir_instr_operand_block(jump, to)) {
@@ -557,7 +586,7 @@ static bool split_run(ir_module_t *m, ir_diags_t *d, void *state)
 }
 
 const ir_pass_t ir_pass_split_edges = {
-    .name        = "split-edges",
+    .name        = CORE_STRING_STATIC("split-edges"),
     .requires    = IR_PROP_PARSED,
     .establishes = IR_PROP_NO_CRIT_EDGE,
     .invalidates = IR_PROP_STRUCTURED,

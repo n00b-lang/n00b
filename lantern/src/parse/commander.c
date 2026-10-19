@@ -104,12 +104,6 @@ struct parse_cmdr_result_t {
 };
 
 static core_string_t
-argv_str(const char *s)
-{
-    return core_string_borrow(s, s ? strlen(s) : 0);
-}
-
-static core_string_t
 cmdr_intern(core_string_t s)
 {
     if (!s.data) {
@@ -247,14 +241,17 @@ parse_cmdr_print_usage(parse_cmdr_t *c, FILE *out)
     }
 
     if (c->banner.data) {
-        fprintf(out, "%s\n\n", c->banner.data);
+        fprintf(out, "%.*s\n\n", (int)c->banner.u8_bytes, c->banner.data);
     }
 
     int32_t n = parse_cmdr_command_count(c);
 
     for (int32_t i = 0; i < n; i++) {
-        fprintf(out, "  %-9s %s\n", parse_cmdr_command_name(c, i).data,
-                parse_cmdr_command_doc(c, i).data);
+        core_string_t name = parse_cmdr_command_name(c, i);
+        core_string_t doc  = parse_cmdr_command_doc(c, i);
+
+        fprintf(out, "  %-9.*s %.*s\n", (int)name.u8_bytes, name.data,
+                (int)doc.u8_bytes, doc.data);
     }
 
     if (n > 0) {
@@ -275,10 +272,16 @@ parse_cmdr_print_usage(parse_cmdr_t *c, FILE *out)
 
             core_buffer_t sb = {0};
 
-            core_buffer_printf(&sb, "%s%s", name.data,
-                     parse_cmdr_flag_takes_value(c, cmd, i) ? " <value>" : "");
-            fprintf(out, "  %-18s %s\n", sb.data,
-                    parse_cmdr_flag_doc(c, cmd, i).data);
+            core_buffer_append_string(&sb, name);
+            if (parse_cmdr_flag_takes_value(c, cmd, i)) {
+                core_buffer_puts(&sb, " <value>");
+            }
+
+            core_string_t label = core_buffer_string(&sb);
+            core_string_t doc   = parse_cmdr_flag_doc(c, cmd, i);
+
+            fprintf(out, "  %-18.*s %.*s\n", (int)label.u8_bytes, label.data,
+                    (int)doc.u8_bytes, doc.data);
             core_buffer_release(&sb);
         }
 
@@ -450,11 +453,13 @@ register_command_terminals(parse_cmdr_t *c, parse_cmdr_command_t *cmd)
 
 static int64_t
 build_flag_nt(parse_cmdr_t *c, [[maybe_unused]] parse_cmdr_command_t *cmd,
-              parse_cmdr_flag_spec_t *f, const char *prefix)
+              parse_cmdr_flag_spec_t *f, core_string_t prefix)
 {
     core_buffer_t nb = {0};
 
-    core_buffer_printf(&nb, "%s-flag-%s", prefix, f->name.data);
+    core_buffer_append_string(&nb, prefix);
+    core_buffer_puts(&nb, "-flag-");
+    core_buffer_append_string(&nb, f->name);
 
     int64_t nt_id = parse_nonterm_id(
         parse_nonterm(c->grammar,
@@ -517,11 +522,13 @@ static bool flag_shadowed_by_command(parse_cmdr_command_t *cmd,
                                     const parse_cmdr_flag_spec_t *flag);
 
 static int64_t
-build_items_nt(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *prefix)
+build_items_nt(parse_cmdr_t *c, parse_cmdr_command_t *cmd,
+               core_string_t prefix)
 {
     core_buffer_t nb = {0};
 
-    core_buffer_printf(&nb, "%s-items", prefix);
+    core_buffer_append_string(&nb, prefix);
+    core_buffer_puts(&nb, "-items");
 
     int64_t items_id = parse_nonterm_id(
         parse_nonterm(c->grammar,
@@ -575,7 +582,7 @@ build_items_nt(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *prefix)
 
 static void
 build_command_grammar(parse_cmdr_t *c, parse_cmdr_command_t *cmd,
-                      int64_t parent_id, const char *prefix)
+                      int64_t parent_id, core_string_t prefix)
 {
     int64_t items_id = build_items_nt(c, cmd, prefix);
     parse_match_t items_nt = {.kind = PARSE_MATCH_NT, .nt_id = items_id};
@@ -595,8 +602,10 @@ build_command_grammar(parse_cmdr_t *c, parse_cmdr_command_t *cmd,
         parse_cmdr_command_t *sub = &cmd->subcommands.data[i];
         core_buffer_t sp = {0};
 
-        core_buffer_printf(&sp, "%s-%s", prefix, sub->name.data);
-        build_command_grammar(c, sub, parent_id, sp.data);
+        core_buffer_append_string(&sp, prefix);
+        core_buffer_putc(&sp, '-');
+        core_buffer_append_string(&sp, sub->name);
+        build_command_grammar(c, sub, parent_id, core_buffer_string(&sp));
         core_buffer_release(&sp);
     }
 }
@@ -642,17 +651,20 @@ parse_cmdr_finalize(parse_cmdr_t *c)
             parse_cmdr_command_t *sub = &c->root.subcommands.data[i];
             core_buffer_t pb = {0};
 
-            core_buffer_printf(&pb, "cmd-%s", sub->name.data);
-            build_command_grammar(c, sub, start_id, pb.data);
+            core_buffer_puts(&pb, "cmd-");
+            core_buffer_append_string(&pb, sub->name);
+            build_command_grammar(c, sub, start_id, core_buffer_string(&pb));
             core_buffer_release(&pb);
         }
 
         if ((int32_t)c->root.flags.len > 0) {
-            build_command_grammar(c, &c->root, start_id, "cmd-root");
+            build_command_grammar(c, &c->root, start_id,
+                                  CORE_STRING_STATIC("cmd-root"));
         }
     }
     else {
-        build_command_grammar(c, &c->root, start_id, "cmd");
+        build_command_grammar(c, &c->root, start_id,
+                              CORE_STRING_STATIC("cmd"));
     }
 
     parse_grammar_finalize(c->grammar);
@@ -660,24 +672,24 @@ parse_cmdr_finalize(parse_cmdr_t *c)
 }
 
 static bool
-is_int_str(const char *s)
+is_int_str(core_string_t s)
 {
-    if (!s || !*s) {
+    if (!s.data || !s.u8_bytes) {
         return false;
     }
 
-    const char *p = s;
+    size_t p = 0;
 
-    if (*p == '-' || *p == '+') {
+    if (s.data[p] == '-' || s.data[p] == '+') {
         p++;
     }
 
-    if (!*p) {
+    if (p == s.u8_bytes) {
         return false;
     }
 
-    while (*p) {
-        if (!isdigit((unsigned char)*p)) {
+    while (p < s.u8_bytes) {
+        if (!isdigit((unsigned char)s.data[p])) {
             return false;
         }
         p++;
@@ -687,28 +699,34 @@ is_int_str(const char *s)
 }
 
 static bool
-is_float_str(const char *s)
+is_float_str(core_string_t s)
 {
-    if (!s || !*s) {
+    if (!s.data || !s.u8_bytes) {
         return false;
     }
 
-    char *end = nullptr;
-    strtod(s, &end);
+    double value    = 0;
+    size_t consumed = 0;
 
-    return end && *end == '\0' && end != s
-           && (strchr(s, '.') || strchr(s, 'e') || strchr(s, 'E'));
+    core_string_parse_f64(s, &value, &consumed);
+
+    return consumed == s.u8_bytes
+           && (core_string_find_byte(s, '.') >= 0
+               || core_string_find_byte(s, 'e') >= 0
+               || core_string_find_byte(s, 'E') >= 0);
 }
 
 static bool
-is_bool_str(const char *s)
+is_bool_str(core_string_t s)
 {
-    if (!s) {
+    if (!s.data) {
         return false;
     }
 
-    return strcmp(s, "true") == 0 || strcmp(s, "false") == 0
-        || strcmp(s, "yes") == 0 || strcmp(s, "no") == 0;
+    return core_string_eq(s, CORE_STRING_STATIC("true"))
+        || core_string_eq(s, CORE_STRING_STATIC("false"))
+        || core_string_eq(s, CORE_STRING_STATIC("yes"))
+        || core_string_eq(s, CORE_STRING_STATIC("no"));
 }
 
 static parse_cmdr_flag_spec_t *
@@ -733,23 +751,24 @@ flag_shadowed_by_command(parse_cmdr_command_t *cmd,
 }
 
 static int64_t
-find_flag_tid(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *name)
+find_flag_tid(parse_cmdr_t *c, parse_cmdr_command_t *cmd, core_string_t name)
 {
-    parse_cmdr_flag_spec_t *f = find_flag_scoped(c, cmd, argv_str(name));
+    parse_cmdr_flag_spec_t *f = find_flag_scoped(c, cmd, name);
 
     return f ? f->terminal_id : 0;
 }
 
 static bool
-flag_takes_value(parse_cmdr_t *c, parse_cmdr_command_t *cmd, const char *name)
+flag_takes_value(parse_cmdr_t *c, parse_cmdr_command_t *cmd,
+                 core_string_t name)
 {
-    parse_cmdr_flag_spec_t *f = find_flag_scoped(c, cmd, argv_str(name));
+    parse_cmdr_flag_spec_t *f = find_flag_scoped(c, cmd, name);
 
     return f && f->takes_value;
 }
 
 static int64_t
-classify_word(parse_cmdr_t *c, const char *s)
+classify_word(parse_cmdr_t *c, core_string_t s)
 {
     if (is_int_str(s)) {
         return c->tok_ids[PARSE_CMDR_TID_INT];
@@ -769,37 +788,37 @@ classify_word(parse_cmdr_t *c, const char *s)
 
 
 static parse_token_info_t *
-make_token(const char *value, int64_t tid, int32_t index)
+make_token(core_string_t value, int64_t tid, int32_t index)
 {
     parse_token_info_t *tok = parse_token_new();
 
-    if (value && *value) {
-        core_string_t s = cmdr_intern(argv_str(value));
+    if (value.data && value.u8_bytes) {
+        core_string_t s = cmdr_intern(value);
         parse_token_set_value(tok, core_option_set(core_string_t, s), true);
     }
 
     parse_token_set_tid(tok, (int32_t)tid);
     parse_token_set_index(tok, index);
     parse_token_set_position(tok, 1, 1, 1,
-                             value ? (uint32_t)strlen(value) + 1 : 1);
+                             value.data ? (uint32_t)value.u8_bytes + 1 : 1);
     parse_token_set_origin(tok, PARSE_TOKEN_SOURCE);
 
     return tok;
 }
 
 static parse_cmdr_command_t *
-command_in_args(parse_cmdr_t *c, const char **argv, int argc,
+command_in_args(parse_cmdr_t *c, const core_string_t *argv, int argc,
                 int *command_index)
 {
     *command_index = -1;
     for (int i = 0; i < argc; i++) {
-        const char *arg = argv[i];
-        if (!arg) continue;
-        if (strcmp(arg, "--") == 0) break;
-        if (arg[0] == '-') continue;
+        core_string_t arg = argv[i];
+        if (!arg.data) continue;
+        if (core_string_eq(arg, CORE_STRING_STATIC("--"))) break;
+        if (arg.u8_bytes && arg.data[0] == '-') continue;
         for (int32_t si = 0; si < (int32_t)c->root.subcommands.len; si++) {
             parse_cmdr_command_t *cmd = &c->root.subcommands.data[si];
-            if (cmd->name.data && strcmp(arg, cmd->name.data) == 0) {
+            if (cmd->name.data && core_string_eq(arg, cmd->name)) {
                 *command_index = i;
                 return cmd;
             }
@@ -808,26 +827,26 @@ command_in_args(parse_cmdr_t *c, const char **argv, int argc,
     return &c->root;
 }
 
-static const char **
+static core_string_t *
 move_leading_flags_after_command(parse_cmdr_command_t *scope,
                                  parse_cmdr_t *c,
-                                 const char **argv, int argc,
+                                 const core_string_t *argv, int argc,
                                  int command_index)
 {
     if (!scope || !scope->name.data || !argv || argc < 2) return nullptr;
     if (command_index <= 0) return nullptr;
     for (int i = 0; i < command_index; i++) {
-        if (!argv[i] || argv[i][0] != '-') return nullptr;
-        if (strchr(argv[i], '=')) continue;
-        parse_cmdr_flag_spec_t *flag =
-            find_flag_scoped(c, scope, argv_str(argv[i]));
+        if (!argv[i].data || !argv[i].u8_bytes || argv[i].data[0] != '-')
+            return nullptr;
+        if (core_string_find_byte(argv[i], '=') >= 0) continue;
+        parse_cmdr_flag_spec_t *flag = find_flag_scoped(c, scope, argv[i]);
         if (flag && flag->takes_value) {
             if (i + 1 >= command_index) return nullptr;
             i++;
         }
     }
 
-    const char **ordered = core_alloc_array(const char *, argc);
+    core_string_t *ordered = core_alloc_array(core_string_t, argc);
     ordered[0] = argv[command_index];
     for (int i = 0; i < command_index; i++) ordered[i + 1] = argv[i];
     for (int i = command_index + 1; i < argc; i++) ordered[i] = argv[i];
@@ -835,7 +854,7 @@ move_leading_flags_after_command(parse_cmdr_command_t *scope,
 }
 
 static int32_t
-cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
+cmdr_tokenize(const core_string_t *argv, int argc, parse_cmdr_t *c,
               parse_cmdr_command_t *scope,
               parse_token_info_t ***tokens_out, int32_t *n_tokens_out)
 {
@@ -849,15 +868,15 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
     bool past_dd = false;
 
     for (int i = 0; i < argc; i++) {
-        const char *arg = argv[i];
+        core_string_t arg = argv[i];
 
-        if (!arg) {
+        if (!arg.data) {
             continue;
         }
 
-        if (!past_dd && strcmp(arg, "--") == 0) {
+        if (!past_dd && core_string_eq(arg, CORE_STRING_STATIC("--"))) {
             past_dd = true;
-            core_list_push(tl, make_token("--",
+            core_list_push(tl, make_token(CORE_STRING_STATIC("--"),
                                            c->tok_ids[PARSE_CMDR_TID_DD],
                                            (int32_t)tl.len));
             continue;
@@ -869,13 +888,13 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
             continue;
         }
 
-        if (strncmp(arg, "--", 2) == 0 && strlen(arg) > 2) {
-            const char *eq = strchr(arg, '=');
+        if (core_string_starts_with(arg, CORE_STRING_STATIC("--"))
+            && arg.u8_bytes > 2) {
+            int64_t eq = core_string_find_byte(arg, '=');
 
-            if (eq) {
-                size_t flag_len = (size_t)(eq - arg);
-                char *flag_name = core_alloc_size(1, flag_len + 1);
-                memcpy(flag_name, arg, flag_len);
+            if (eq >= 0) {
+                core_string_t flag_name = core_string_slice(arg, 0,
+                                                            (size_t)eq);
 
                 int64_t ftid = find_flag_tid(c, scope, flag_name);
 
@@ -884,13 +903,13 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
                 }
 
                 core_list_push(tl, make_token(flag_name, ftid, (int32_t)tl.len));
-                core_free(flag_name);
 
-                core_list_push(tl, make_token("=",
+                core_list_push(tl, make_token(CORE_STRING_STATIC("="),
                                                c->tok_ids[PARSE_CMDR_TID_EQ],
                                                (int32_t)tl.len));
 
-                const char *val = eq + 1;
+                core_string_t val = core_string_slice(
+                    arg, (size_t)eq + 1, arg.u8_bytes - (size_t)eq - 1);
                 core_list_push(tl, make_token(val, classify_word(c, val),
                                                (int32_t)tl.len));
             }
@@ -907,8 +926,8 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
             continue;
         }
 
-        if (arg[0] == '-' && arg[1] != '\0'
-            && !isdigit((unsigned char)arg[1])) {
+        if (arg.u8_bytes > 1 && arg.data[0] == '-'
+            && !isdigit((unsigned char)arg.data[1])) {
             int64_t ftid = find_flag_tid(c, scope, arg);
 
             if (ftid) {
@@ -918,14 +937,16 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
 
             bool can_split = false;
 
-            if (strlen(arg) > 2) {
+            if (arg.u8_bytes > 2) {
                 can_split = true;
 
-                for (int j = 1; arg[j]; j++) {
-                    char    short_flag[3] = {'-', arg[j], '\0'};
-                    int64_t stid = find_flag_tid(c, scope, short_flag);
+                for (size_t j = 1; j < arg.u8_bytes; j++) {
+                    char          short_flag[2] = {'-', arg.data[j]};
+                    core_string_t short_name =
+                        core_string_borrow(short_flag, sizeof(short_flag));
+                    int64_t       stid = find_flag_tid(c, scope, short_name);
 
-                    if (!stid || flag_takes_value(c, scope, short_flag)) {
+                    if (!stid || flag_takes_value(c, scope, short_name)) {
                         can_split = false;
                         break;
                     }
@@ -933,10 +954,13 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
             }
 
             if (can_split) {
-                for (int j = 1; arg[j]; j++) {
-                    char    short_flag[3] = {'-', arg[j], '\0'};
-                    int64_t stid = find_flag_tid(c, scope, short_flag);
-                    core_list_push(tl, make_token(short_flag, stid, (int32_t)tl.len));
+                for (size_t j = 1; j < arg.u8_bytes; j++) {
+                    char          short_flag[2] = {'-', arg.data[j]};
+                    core_string_t short_name =
+                        core_string_borrow(short_flag, sizeof(short_flag));
+                    int64_t       stid = find_flag_tid(c, scope, short_name);
+                    core_list_push(tl, make_token(short_name, stid,
+                                                  (int32_t)tl.len));
                 }
             }
             else {
@@ -950,14 +974,15 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
 
         int64_t tid = classify_word(c, arg);
 
-        parse_cmdr_command_t *word_command = find_command(c, argv_str(arg));
+        parse_cmdr_command_t *word_command = find_command(c, arg);
         if (word_command && word_command != &c->root)
             tid = parse_register_terminal(c->grammar, word_command->name);
 
         core_list_push(tl, make_token(arg, tid, (int32_t)tl.len));
     }
 
-    core_list_push(tl, make_token("", PARSE_TOK_EOF, (int32_t)tl.len));
+    core_list_push(tl, make_token(CORE_STRING_STATIC(""), PARSE_TOK_EOF,
+                                  (int32_t)tl.len));
 
     *tokens_out   = tl.data;
     *n_tokens_out = (int32_t)tl.len;
@@ -966,7 +991,7 @@ cmdr_tokenize(const char **argv, int argc, parse_cmdr_t *c,
 }
 
 static parse_cmdr_result_t *
-make_error_result(const char *msg)
+make_error_result(core_string_t msg)
 {
     parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
     core_dict_init_string(&r->flags);
@@ -974,7 +999,7 @@ make_error_result(const char *msg)
     r->ok       = false;
     r->errors = core_list_new_cap(core_string_t, 1);
 
-    core_list_push(r->errors, cmdr_intern(argv_str(msg)));
+    core_list_push(r->errors, cmdr_intern(msg));
 
     return r;
 }
@@ -1017,35 +1042,35 @@ store_flag_value(parse_cmdr_result_t *result, core_string_t name,
     }
 }
 
-static const char *
+static core_string_t
 get_token_text(parse_tree_t *node)
 {
     if (!node || !core_tree_is_leaf(node)) {
-        return nullptr;
+        return (core_string_t){};
     }
 
     parse_token_info_t *tok = core_tree_leaf_value(node);
 
     if (!tok) {
-        return nullptr;
+        return (core_string_t){};
     }
 
     core_option_t(core_string_t) value = parse_token_value(tok);
 
     if (!core_option_is_set(value)) {
-        return nullptr;
+        return (core_string_t){};
     }
 
-    return core_option_get(value).data;
+    return core_option_get(value);
 }
 
 static bool
 collect_terminal_text(parse_visit_t *v)
 {
-    const char *text = get_token_text(v->node);
+    core_string_t text = get_token_text(v->node);
 
-    if (text && *text) {
-        core_list_t(core_const_charptr_t) *texts = v->user;
+    if (text.data && text.u8_bytes) {
+        core_list_t(core_string_t) *texts = v->user;
 
         core_list_push(*texts, text);
     }
@@ -1062,9 +1087,8 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
         return;
     }
 
-    core_list_t(core_const_charptr_t) texts
-        = core_list_new(core_const_charptr_t);
-    parse_tree_walk_t                *w = parse_tree_walk_new(c->grammar, &texts);
+    core_list_t(core_string_t) texts = core_list_new(core_string_t);
+    parse_tree_walk_t         *w     = parse_tree_walk_new(c->grammar, &texts);
 
     parse_walk_on_leaf(w, collect_terminal_text, nullptr);
     parse_tree_walk_run(w, tree);
@@ -1075,19 +1099,19 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
     bool past_dd = false;
 
     for (int32_t i = 0; i < n; i++) {
-        const char *text = texts.data[i];
+        core_string_t text = texts.data[i];
 
-        if (!text || !*text) {
+        if (!text.data || !text.u8_bytes) {
             continue;
         }
 
-        if (strcmp(text, "--") == 0) {
+        if (core_string_eq(text, CORE_STRING_STATIC("--"))) {
             past_dd = true;
             goto next;
         }
 
         if (r->command.data && !past_dd
-            && strcmp(text, r->command.data) == 0) goto next;
+            && core_string_eq(text, r->command)) goto next;
 
         if (past_dd) {
             goto add_arg;
@@ -1101,41 +1125,46 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
                 cmd = &c->root;
             }
 
-            parse_cmdr_flag_spec_t *flag = find_flag(cmd, argv_str(text));
+            parse_cmdr_flag_spec_t *flag = find_flag(cmd, text);
 
             if (!flag) {
-                flag = find_flag(&c->root, argv_str(text));
+                flag = find_flag(&c->root, text);
             }
 
             if (flag) {
                 parse_cmdr_val_t *v = core_alloc(parse_cmdr_val_t);
 
                 if (flag->takes_value && i + 1 < n) {
-                    if (i + 1 < n && strcmp(texts.data[i + 1], "=") == 0) {
+                    if (i + 1 < n
+                        && core_string_eq(texts.data[i + 1],
+                                          CORE_STRING_STATIC("="))) {
                         i++;
                     }
 
                     if (i + 1 < n) {
                         i++;
-                        const char *val = texts.data[i];
+                        core_string_t val = texts.data[i];
 
                         switch (flag->value_type) {
                         case PARSE_CMDR_TYPE_INT:
                             v->tag = PARSE_CMDR_VAL_INT;
-                            v->i   = strtoll(val, nullptr, 10);
+                            v->i   = core_string_strtoll(val, 10);
                             break;
                         case PARSE_CMDR_TYPE_FLOAT:
                             v->tag = PARSE_CMDR_VAL_FLOAT;
-                            v->f   = strtod(val, nullptr);
+                            v->f   = 0;
+                            core_string_parse_f64(val, &v->f, nullptr);
                             break;
                         case PARSE_CMDR_TYPE_BOOL:
                             v->tag = PARSE_CMDR_VAL_BOOL;
-                            v->b   = (strcmp(val, "true") == 0
-                                      || strcmp(val, "yes") == 0);
+                            v->b   = core_string_eq(val,
+                                                    CORE_STRING_STATIC("true"))
+                                  || core_string_eq(val,
+                                                    CORE_STRING_STATIC("yes"));
                             break;
                         default:
                             v->tag = PARSE_CMDR_VAL_STR;
-                            v->s   = core_string_from_cstr(val);
+                            v->s   = core_string_dup(val);
                             break;
                         }
                     }
@@ -1169,7 +1198,7 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
             }
         }
 
-        if (strcmp(text, "=") == 0) {
+        if (core_string_eq(text, CORE_STRING_STATIC("="))) {
             goto next;
         }
 
@@ -1178,9 +1207,9 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
             core_list_push(r->args, ((parse_cmdr_arg_t){0}));
 
             parse_cmdr_arg_t *arg = &r->args.data[r->args.len - 1];
-            arg->value     = core_string_from_cstr(text);
-            arg->int_val   = strtoll(text, nullptr, 10);
-            arg->float_val = strtod(text, nullptr);
+            arg->value     = core_string_dup(text);
+            arg->int_val   = core_string_strtoll(text, 10);
+            core_string_parse_f64(text, &arg->float_val, nullptr);
         }
 
     next:;
@@ -1210,12 +1239,16 @@ validate_positional_count(parse_cmdr_t *c, parse_cmdr_result_t *r)
     if (!r->errors.data) r->errors = core_list_new(core_string_t);
     core_buffer_t message = {0};
     if (r->args.len < min) {
-        core_buffer_printf(&message, "expected at least %zu argument%s",
-                           min, min == 1 ? "" : "s");
+        core_buffer_printf(&message, "expected at least %zu argument", min);
+        if (min != 1) {
+            core_buffer_putc(&message, 's');
+        }
     }
     else {
-        core_buffer_printf(&message, "expected at most %zu argument%s",
-                           max, max == 1 ? "" : "s");
+        core_buffer_printf(&message, "expected at most %zu argument", max);
+        if (max != 1) {
+            core_buffer_putc(&message, 's');
+        }
     }
     core_list_push(r->errors,
                    core_string_from_raw(message.data,
@@ -1319,7 +1352,8 @@ parse_cmdr_result_t *
 parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
 {
     if (!c) {
-        return make_error_result("commander not initialized");
+        return make_error_result(
+            CORE_STRING_STATIC("commander not initialized"));
     }
 
     if (!c->finalized) {
@@ -1327,38 +1361,57 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
     }
 
     if (!c->grammar) {
-        return make_error_result("grammar not available");
+        return make_error_result(CORE_STRING_STATIC("grammar not available"));
     }
 
     parse_token_info_t **tokens = nullptr;
     int32_t             n_tokens = 0;
 
+    if (!args) {
+        nargs = 0;
+    }
+
+    int            given = nargs > 0 ? nargs : 0;
+    core_string_t *words = args ? core_alloc_array(core_string_t, given + 1)
+                                : nullptr;
+
+    for (int i = 0; i < given; i++) {
+        words[i] = core_string_from_cstr(args[i]);
+    }
+
+    const core_string_t *argv = words;
     int command_index = -1;
-    parse_cmdr_command_t *scope = command_in_args(c, args, nargs,
+    parse_cmdr_command_t *scope = command_in_args(c, argv, nargs,
                                                    &command_index);
-    const char **defaulted = nullptr;
+    core_string_t *defaulted = nullptr;
     if (scope == &c->root && c->default_command.data
         && find_command(c, c->default_command) != &c->root) {
-        defaulted = core_alloc_array(const char *, nargs + 1);
-        defaulted[0] = c->default_command.data;
+        defaulted = core_alloc_array(core_string_t, nargs + 1);
+        defaulted[0] = c->default_command;
         for (int i = 0; i < nargs; i++) {
-            defaulted[i + 1] = args[i];
+            defaulted[i + 1] = argv[i];
         }
-        args = defaulted;
+        argv = defaulted;
         nargs++;
-        scope = command_in_args(c, args, nargs, &command_index);
+        scope = command_in_args(c, argv, nargs, &command_index);
     }
-    const char **ordered = move_leading_flags_after_command(scope, c, args,
-                                                             nargs,
-                                                             command_index);
-    const char **input = ordered ? ordered : args;
-    if (cmdr_tokenize(input, nargs, c, scope, &tokens, &n_tokens) < 0) {
-        core_free(ordered);
-        core_free(defaulted);
-        return make_error_result("tokenization failed");
-    }
+    core_string_t *ordered = move_leading_flags_after_command(scope, c, argv,
+                                                              nargs,
+                                                              command_index);
+    const core_string_t *input = ordered ? ordered : argv;
+    int32_t tokenized = cmdr_tokenize(input, nargs, c, scope, &tokens,
+                                      &n_tokens);
+
     core_free(ordered);
     core_free(defaulted);
+    for (int i = 0; i < given; i++) {
+        core_free(words[i].data);
+    }
+    core_free(words);
+
+    if (tokenized < 0) {
+        return make_error_result(CORE_STRING_STATIC("tokenization failed"));
+    }
 
     parse_token_stream_t *ts = scan_token_stream_from_array(tokens, n_tokens);
     parse_pwz_parser_t   *pp
@@ -1523,7 +1576,7 @@ parse_cmdr_flag_int(parse_cmdr_result_t *r, core_string_t flag, int64_t dflt)
     case PARSE_CMDR_VAL_FLOAT:
         return (int64_t)v->f;
     case PARSE_CMDR_VAL_STR:
-        return v->s.data ? strtoll(v->s.data, nullptr, 10) : dflt;
+        return v->s.data ? core_string_strtoll(v->s, 10) : dflt;
     default:
         return dflt;
     }

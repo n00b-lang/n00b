@@ -414,7 +414,7 @@ try_converge(parse_token_stream_t *ts)
         s->column = ts->stale_final_line == cp->line
                   ? shift_u32(ts->stale_final_column, column_delta)
                   : ts->stale_final_column;
-        s->cursor = s->input_len;
+        s->cursor = s->input.u8_bytes;
         s->mark = s->cursor;
         s->mark_line = s->line;
         s->mark_col = s->column;
@@ -698,12 +698,12 @@ scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos)
     size_t end = parse_token_end_byte(token);
     parse_scanner_t *scanner = ts->scanner;
     if (start < scanner->source_base || end < start
-        || end - scanner->source_base > scanner->input_len) {
+        || end - scanner->source_base > scanner->input.u8_bytes) {
         return false;
     }
 
-    core_string_t text = core_string_borrow(
-        scanner->input + (start - scanner->source_base), end - start);
+    core_string_t text = core_string_slice(
+        scanner->input, start - scanner->source_base, end - start);
     parse_trivia_t *trivia = core_alloc(parse_trivia_t);
     *trivia = (parse_trivia_t){
         .text = core_string_dup(text),
@@ -803,9 +803,9 @@ scan_stream_reset(parse_token_stream_t *ts)
 }
 
 bool
-scan_stream_append(parse_token_stream_t *ts, const char *data, size_t len)
+scan_stream_append(parse_token_stream_t *ts, core_string_t data)
 {
-    if (!ts || !scan_scanner_append(ts->scanner, data, len)) {
+    if (!ts || !scan_scanner_append(ts->scanner, data)) {
         return false;
     }
 
@@ -846,15 +846,17 @@ free_stream_token(parse_token_info_t *tok)
 bool
 scan_stream_replace(parse_token_stream_t *ts,
                     size_t start_byte, size_t end_byte,
-                    const char *replacement, size_t replacement_len)
+                    core_string_t replacement)
 {
+    size_t replacement_len = replacement.u8_bytes;
+
     if (!ts || !ts->scanner || !ts->scanner->buffer
         || !ts->edits_enabled || !ts->scanner->state_clone_cb
         || !ts->scanner->source_final
         || ts->scanner->source_base || ts->scanner->input_offset
         || start_byte > end_byte
         || end_byte > ts->scanner->buffer->byte_len
-        || (replacement_len && !replacement)) {
+        || (replacement_len && !replacement.data)) {
         return false;
     }
 
@@ -931,14 +933,13 @@ scan_stream_replace(parse_token_stream_t *ts,
 
     core_buffer_t *buffer = s->buffer;
     size_t removed = end_byte - start_byte;
-    char *owned_replacement = nullptr;
-    uintptr_t replacement_at = (uintptr_t)replacement;
+    core_string_t owned_replacement = {};
+    uintptr_t replacement_at = (uintptr_t)replacement.data;
     uintptr_t buffer_start = (uintptr_t)buffer->data;
     uintptr_t buffer_end = buffer_start + buffer->byte_len;
     if (replacement_len && replacement_at >= buffer_start
         && replacement_at < buffer_end) {
-        owned_replacement = core_alloc_size(1, replacement_len);
-        memcpy(owned_replacement, replacement, replacement_len);
+        owned_replacement = core_string_dup(replacement);
         replacement = owned_replacement;
     }
     if (replacement_len > removed) {
@@ -950,16 +951,14 @@ scan_stream_replace(parse_token_stream_t *ts,
                 buffer->data + end_byte, suffix);
     }
     if (replacement_len) {
-        memcpy(buffer->data + start_byte, replacement, replacement_len);
+        memcpy(buffer->data + start_byte, replacement.data, replacement_len);
     }
-    parse_source_replace(s->source, start_byte, end_byte, replacement,
-                         replacement_len);
-    core_free(owned_replacement);
+    parse_source_replace(s->source, start_byte, end_byte, replacement);
+    core_free(owned_replacement.data);
     buffer->byte_len = buffer->byte_len - removed + replacement_len;
     buffer->data[buffer->byte_len] = '\0';
 
-    s->input = buffer->data;
-    s->input_len = buffer->byte_len;
+    s->input = core_buffer_string(buffer);
     s->cursor = cp->cursor;
     s->mark = cp->mark;
     s->line = cp->line;
@@ -988,16 +987,16 @@ scan_stream_replace(parse_token_stream_t *ts,
 
 bool
 scan_stream_insert(parse_token_stream_t *ts, size_t at_byte,
-                   const char *text, size_t text_len)
+                   core_string_t text)
 {
-    return scan_stream_replace(ts, at_byte, at_byte, text, text_len);
+    return scan_stream_replace(ts, at_byte, at_byte, text);
 }
 
 bool
 scan_stream_delete(parse_token_stream_t *ts,
                    size_t start_byte, size_t end_byte)
 {
-    return scan_stream_replace(ts, start_byte, end_byte, nullptr, 0);
+    return scan_stream_replace(ts, start_byte, end_byte, (core_string_t){});
 }
 
 bool
@@ -1130,12 +1129,11 @@ scan_token_stream_from_array(parse_token_info_t **tokens, int32_t count)
 }
 
 typedef struct {
-    const char *data;
-    uint32_t    byte_len;
-    uint32_t    byte_pos;
-    int32_t     tok_index;
-    uint32_t    line;
-    uint32_t    column;
+    core_string_t input;
+    uint32_t      byte_pos;
+    int32_t       tok_index;
+    uint32_t      line;
+    uint32_t      column;
 } cp_scan_state_t;
 
 static void
@@ -1165,13 +1163,14 @@ cp_scan_cb(parse_scanner_t *s)
     cp_scan_state_t     *st = (cp_scan_state_t *)s->user_state;
     parse_token_stream_t *ts = s->stream;
 
-    if (st->byte_pos >= st->byte_len) {
+    if (st->byte_pos >= (uint32_t)st->input.u8_bytes) {
         return false;
     }
 
     uint32_t start_pos = st->byte_pos;
-    int32_t  cp = unicode_utf8_decode(st->data, st->byte_len,
-                                            &st->byte_pos);
+    int32_t  cp = unicode_utf8_decode(st->input.data,
+                                      (uint32_t)st->input.u8_bytes,
+                                      &st->byte_pos);
 
     if (cp < 0) {
         st->byte_pos = start_pos + 1;
@@ -1188,7 +1187,7 @@ cp_scan_cb(parse_scanner_t *s)
     parse_token_set_origin(tok, PARSE_TOKEN_SOURCE);
 
     uint32_t cp_byte_len = st->byte_pos - start_pos;
-    core_string_t val = core_string_from_raw(st->data + start_pos,
+    core_string_t val = core_string_from_raw(st->input.data + start_pos,
                                              (int64_t)cp_byte_len);
     parse_token_set_value(tok, core_option_set(core_string_t, val), true);
 
@@ -1220,8 +1219,7 @@ scan_token_stream_from_codepoints(core_string_t input)
 {
     cp_scan_state_t *st = core_alloc(cp_scan_state_t);
 
-    st->data      = input.data;
-    st->byte_len  = (uint32_t)input.u8_bytes;
+    st->input     = input;
     st->byte_pos  = 0;
     st->tok_index = 0;
     st->line      = 1;

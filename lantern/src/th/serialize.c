@@ -174,16 +174,11 @@ put_u64(core_buffer_t *out, uint64_t value)
 }
 
 static void
-put_bytes(core_buffer_t *out, const char *data, size_t length)
+put_text(core_buffer_t *out, core_string_t text)
 {
-    put_u64(out, data ? length : UINT64_MAX);
-    if (data && length) core_buffer_append(out, data, length);
-}
-
-static void
-put_text(core_buffer_t *out, const char *text)
-{
-    put_bytes(out, text, text ? strlen(text) : 0);
+    put_u64(out, text.data ? text.u8_bytes : UINT64_MAX);
+    if (text.data && text.u8_bytes)
+        core_buffer_append(out, text.data, text.u8_bytes);
 }
 
 static void
@@ -246,7 +241,7 @@ put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
     put_u32(out, (uint32_t)type->kind);
     switch (type->kind) {
     case TH_NAMED:
-        put_bytes(out, type->named.name, type->named.nlen);
+        put_text(out, type->named.name);
         put_u32(out, type->named.is_variant);
         put_u64(out, type->named.nargs);
         for (size_t i = 0; i < type->named.nargs; i++) {
@@ -256,7 +251,7 @@ put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
             case TH_ARG_TYPE: put_ref(writer, out, arg->type); break;
             case TH_ARG_UINT: put_u64(out, arg->u); break;
             case TH_ARG_SINT: put_u64(out, (uint64_t)arg->s); break;
-            case TH_ARG_STR: put_bytes(out, arg->str.p, arg->str.n); break;
+            case TH_ARG_STR: put_text(out, arg->str); break;
             }
         }
         break;
@@ -281,7 +276,7 @@ put_node(th_type_writer_t *writer, core_buffer_t *out, const th_type *type)
         }
         break;
     case TH_TRAIT:
-        put_bytes(out, type->trait.name, type->trait.nlen);
+        put_text(out, type->trait.name);
         put_u64(out, type->trait.n);
         for (size_t i = 0; i < type->trait.n; i++) {
             put_text(out, type->trait.methods[i].name);
@@ -397,21 +392,20 @@ get_u64(cursor_t *cursor)
     return value;
 }
 
-static const char *
-get_bytes(cursor_t *cursor, th_ctx *ctx, size_t *length)
+static core_string_t
+get_text(cursor_t *cursor, th_ctx *ctx)
 {
     uint64_t size = get_u64(cursor);
-    if (length) *length = 0;
-    if (cursor->failed || size == UINT64_MAX) return nullptr;
+    if (cursor->failed || size == UINT64_MAX) return (core_string_t){};
     if (size > cursor->length - cursor->at) {
         cursor->failed = true;
-        return nullptr;
+        return (core_string_t){};
     }
-    char *copy = th_strdup(ctx, (const char *)cursor->data + cursor->at,
-                           (size_t)size);
+    core_string_t copy = th_strdup(
+        ctx, core_string_borrow((const char *)cursor->data + cursor->at,
+                                (size_t)size));
     cursor->at += (size_t)size;
-    if (!copy) cursor->failed = true;
-    if (length) *length = (size_t)size;
+    if (!copy.data) cursor->failed = true;
     return copy;
 }
 
@@ -435,9 +429,9 @@ get_constraint(cursor_t *cursor, th_type_reader_t *reader,
     *constraint = (th_constraint){0};
     constraint->kind = (th_con_kind)get_u32(cursor);
     constraint->has_scope = get_u32(cursor) != 0;
-    constraint->scope_module = get_bytes(cursor, ctx, nullptr);
-    constraint->scope_package = get_bytes(cursor, ctx, nullptr);
-    constraint->span.file = get_bytes(cursor, ctx, nullptr);
+    constraint->scope_module = get_text(cursor, ctx);
+    constraint->scope_package = get_text(cursor, ctx);
+    constraint->span.file = get_text(cursor, ctx);
     constraint->span.start_line = get_u32(cursor);
     constraint->span.start_col = get_u32(cursor);
     constraint->span.end_line = get_u32(cursor);
@@ -447,7 +441,7 @@ get_constraint(cursor_t *cursor, th_type_reader_t *reader,
         constraint->type_kind = (th_kind)get_u32(cursor);
         break;
     case TH_CON_IMPLEMENTS:
-        constraint->iface = get_bytes(cursor, ctx, nullptr);
+        constraint->iface = get_text(cursor, ctx);
         break;
     case TH_CON_UNIFIES:
     case TH_CON_PROMOTES:
@@ -468,7 +462,7 @@ get_constraint(cursor_t *cursor, th_type_reader_t *reader,
         break;
     }
     case TH_CON_HAS_FIELD:
-        constraint->field.name = get_bytes(cursor, ctx, nullptr);
+        constraint->field.name = get_text(cursor, ctx);
         constraint->field.type = get_ref(cursor, reader);
         constraint->field.auto_deref = get_u32(cursor) != 0;
         break;
@@ -477,10 +471,10 @@ get_constraint(cursor_t *cursor, th_type_reader_t *reader,
         constraint->param.type = get_ref(cursor, reader);
         break;
     case TH_CON_METHOD:
-        constraint->method.name = get_bytes(cursor, ctx, nullptr);
+        constraint->method.name = get_text(cursor, ctx);
         constraint->method.result = get_ref(cursor, reader);
         constraint->method.call = get_ref(cursor, reader);
-        constraint->method.in_place = get_bytes(cursor, ctx, nullptr);
+        constraint->method.in_place = get_text(cursor, ctx);
         break;
     default:
         cursor->failed = true;
@@ -508,7 +502,7 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
     th_ctx *ctx = reader->ctx;
     switch (type->kind) {
     case TH_NAMED: {
-        type->named.name = get_bytes(cursor, ctx, &type->named.nlen);
+        type->named.name = get_text(cursor, ctx);
         type->named.is_variant = get_u32(cursor) != 0;
         uint64_t count = get_u64(cursor);
         type->named.args = get_array(cursor, ctx, count, sizeof(th_arg));
@@ -521,12 +515,12 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
             case TH_ARG_UINT: arg->u = get_u64(cursor); break;
             case TH_ARG_SINT: arg->s = (int64_t)get_u64(cursor); break;
             case TH_ARG_STR:
-                arg->str.p = get_bytes(cursor, ctx, &arg->str.n);
+                arg->str = get_text(cursor, ctx);
                 break;
             default: cursor->failed = true; break;
             }
         }
-        if (!type->named.name) cursor->failed = true;
+        if (!type->named.name.data) cursor->failed = true;
         else (void)th_builtin_type(ctx, type);
         break;
     }
@@ -549,19 +543,19 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
                                          sizeof(th_member));
         type->record.n = cursor->failed ? 0 : (size_t)count;
         for (size_t i = 0; i < type->record.n; i++) {
-            type->record.members[i].name = get_bytes(cursor, ctx, nullptr);
+            type->record.members[i].name = get_text(cursor, ctx);
             type->record.members[i].type = get_ref(cursor, reader);
         }
         break;
     }
     case TH_TRAIT: {
-        type->trait.name = get_bytes(cursor, ctx, &type->trait.nlen);
+        type->trait.name = get_text(cursor, ctx);
         uint64_t count = get_u64(cursor);
         type->trait.methods = get_array(cursor, ctx, count,
                                         sizeof(th_member));
         type->trait.n = cursor->failed ? 0 : (size_t)count;
         for (size_t i = 0; i < type->trait.n; i++) {
-            type->trait.methods[i].name = get_bytes(cursor, ctx, nullptr);
+            type->trait.methods[i].name = get_text(cursor, ctx);
             type->trait.methods[i].type = get_ref(cursor, reader);
         }
         uint64_t requirements = get_u64(cursor);
@@ -573,7 +567,7 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
             requirement->subject = get_ref(cursor, reader);
             requirement->kind = (th_con_kind)get_u32(cursor);
             requirement->target = get_ref(cursor, reader);
-            requirement->iface = get_bytes(cursor, ctx, nullptr);
+            requirement->iface = get_text(cursor, ctx);
         }
         break;
     }
@@ -598,7 +592,7 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
         type->fn.kw = get_array(cursor, ctx, keywords, sizeof(th_kwparam));
         type->fn.nkw = cursor->failed ? 0 : (size_t)keywords;
         for (size_t i = 0; i < type->fn.nkw; i++) {
-            type->fn.kw[i].name = get_bytes(cursor, ctx, nullptr);
+            type->fn.kw[i].name = get_text(cursor, ctx);
             type->fn.kw[i].mode = (th_mode)get_u32(cursor);
             type->fn.kw[i].type = get_ref(cursor, reader);
         }
@@ -653,7 +647,7 @@ get_node(cursor_t *cursor, th_type_reader_t *reader, th_type *type)
             type->var.origin = (uint64_t)(uintptr_t)slot;
         }
         type->var.has_index = get_u32(cursor) != 0;
-        type->var.name = get_bytes(cursor, ctx, nullptr);
+        type->var.name = get_text(cursor, ctx);
         type->var.ref = get_ref(cursor, reader);
         uint64_t count = get_u64(cursor);
         if (count > cursor->length) {

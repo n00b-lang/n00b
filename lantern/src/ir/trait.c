@@ -5,25 +5,33 @@
 #include <stdlib.h>
 #include <string.h>
 
+static core_string_t bounded_text(char *buffer, size_t capacity, int written) {
+  size_t length = written < 0 ? 0 : (size_t)written;
+  if (length >= capacity) length = capacity - 1;
+  return core_string_borrow(buffer, length);
+}
+
 th_type *ir_trait_value_type(th_ctx *types) {
   if (!types) return nullptr;
-  th_type *opaque = th_name(types, TH_ERASED);
+  th_type *opaque = th_name(types, CORE_STRING_STATIC(TH_ERASED));
   th_type *pointer = th_ind(types, 0, opaque);
   th_member fields[] = {
-      {.name = IR_TRAIT_VALUE_DATA_FIELD, .type = pointer},
-      {.name = IR_TRAIT_VALUE_VTABLE_FIELD, .type = pointer},
+      {.name = CORE_STRING_STATIC(IR_TRAIT_VALUE_DATA_FIELD), .type = pointer},
+      {.name = CORE_STRING_STATIC(IR_TRAIT_VALUE_VTABLE_FIELD),
+       .type = pointer},
   };
   return th_record(types, fields, 2);
 }
 
 ir_value_t *ir_trait_value_make(th_ctx *types, ir_block_t *block,
-                                const char *name, ir_value_t *data,
+                                core_string_t name, ir_value_t *data,
                                 ir_value_t *vtable) {
-  if (!types || !block || !name || !data || !vtable) return nullptr;
+  if (!types || !block || !name.data || !data || !vtable) return nullptr;
   th_type *object_type = ir_trait_value_type(types);
-  th_type *data_type = th_record_lookup(object_type, IR_TRAIT_VALUE_DATA_FIELD);
-  th_type *vtable_type =
-      th_record_lookup(object_type, IR_TRAIT_VALUE_VTABLE_FIELD);
+  th_type *data_type = th_record_lookup(
+      object_type, CORE_STRING_STATIC(IR_TRAIT_VALUE_DATA_FIELD));
+  th_type *vtable_type = th_record_lookup(
+      object_type, CORE_STRING_STATIC(IR_TRAIT_VALUE_VTABLE_FIELD));
   if (!data_type || !vtable_type ||
       th_hash(types, data_type) != th_hash(types, data->type) ||
       th_hash(types, vtable_type) != th_hash(types, vtable->type))
@@ -36,10 +44,11 @@ ir_value_t *ir_trait_value_make(th_ctx *types, ir_block_t *block,
   return instruction->dest;
 }
 
-static ir_value_t *trait_value_extract(ir_block_t *block, const char *name,
+static ir_value_t *trait_value_extract(ir_block_t *block, core_string_t name,
                                        ir_value_t *trait_value,
-                                       const char *field) {
-  if (!block || !name || !trait_value || !trait_value->type || !field)
+                                       core_string_t field) {
+  if (!block || !name.data || !trait_value || !trait_value->type
+      || !field.data)
     return nullptr;
   th_type *field_type = th_record_lookup(trait_value->type, field);
   if (!field_type) return nullptr;
@@ -51,35 +60,38 @@ static ir_value_t *trait_value_extract(ir_block_t *block, const char *name,
   return instruction->dest;
 }
 
-ir_value_t *ir_trait_value_data(ir_block_t *block, const char *name,
+ir_value_t *ir_trait_value_data(ir_block_t *block, core_string_t name,
                                 ir_value_t *trait_value) {
   return trait_value_extract(block, name, trait_value,
-                             IR_TRAIT_VALUE_DATA_FIELD);
+                             CORE_STRING_STATIC(IR_TRAIT_VALUE_DATA_FIELD));
 }
 
-ir_value_t *ir_trait_value_vtable(ir_block_t *block, const char *name,
+ir_value_t *ir_trait_value_vtable(ir_block_t *block, core_string_t name,
                                 ir_value_t *trait_value) {
   return trait_value_extract(block, name, trait_value,
-                             IR_TRAIT_VALUE_VTABLE_FIELD);
+                             CORE_STRING_STATIC(IR_TRAIT_VALUE_VTABLE_FIELD));
 }
 
-th_type *ir_trait_vtable_type(th_ctx *types, const char *const *method_names,
+th_type *ir_trait_vtable_type(th_ctx *types,
+                              const core_string_t *method_names,
                               th_type *const *lowered_signatures,
                               size_t method_count) {
   if (!types || !method_names || !lowered_signatures || !method_count)
     return nullptr;
-  th_type *data_type = th_record_lookup(ir_trait_value_type(types),
-                                       IR_TRAIT_VALUE_DATA_FIELD);
+  th_type *data_type = th_record_lookup(
+      ir_trait_value_type(types),
+      CORE_STRING_STATIC(IR_TRAIT_VALUE_DATA_FIELD));
   if (!data_type) return nullptr;
   th_member *slots = calloc(method_count + 1, sizeof(th_member));
   if (!slots) return nullptr;
   slots[0] = (th_member){
-      .name = IR_TRAIT_VTABLE_TYPE_INFO_FIELD,
-      .type = th_name(types, "u32"),
+      .name = CORE_STRING_STATIC(IR_TRAIT_VTABLE_TYPE_INFO_FIELD),
+      .type = th_name(types, CORE_STRING_STATIC("u32")),
   };
   for (size_t i = 0; i < method_count; i++) {
-    if (!method_names[i] || !*method_names[i] ||
-        !strcmp(method_names[i], IR_TRAIT_VTABLE_TYPE_INFO_FIELD) ||
+    if (!method_names[i].data || !method_names[i].u8_bytes ||
+        core_string_eq(method_names[i],
+                       CORE_STRING_STATIC(IR_TRAIT_VTABLE_TYPE_INFO_FIELD)) ||
         !lowered_signatures[i] ||
         th_kind_of(lowered_signatures[i]) != TH_FUNCTION) {
       free(slots);
@@ -91,7 +103,7 @@ th_type *ir_trait_vtable_type(th_ctx *types, const char *const *method_names,
       return nullptr;
     }
     for (size_t j = 0; j < i; j++)
-      if (!strcmp(method_names[i], method_names[j])) {
+      if (core_string_eq(method_names[i], method_names[j])) {
         free(slots);
         return nullptr;
       }
@@ -106,10 +118,10 @@ th_type *ir_trait_vtable_type(th_ctx *types, const char *const *method_names,
 }
 
 ir_global_t *ir_trait_vtable_global_add(
-    ir_module_t *module, const char *global_name, uint32_t type_info_index,
-    const char *const *method_names, ir_func_t *const *adapters,
+    ir_module_t *module, core_string_t global_name, uint32_t type_info_index,
+    const core_string_t *method_names, ir_func_t *const *adapters,
     size_t method_count) {
-  if (!module || !global_name || !*global_name || !method_names ||
+  if (!module || !global_name.data || !global_name.u8_bytes || !method_names ||
       !adapters || !method_count)
     return nullptr;
   th_ctx *types = ir_ctx_types(module->ctx);
@@ -134,7 +146,7 @@ ir_global_t *ir_trait_vtable_global_add(
 
   ir_global_init_value_t *values = calloc(method_count + 1, sizeof(*values));
   if (!values) return nullptr;
-  values[0].member = IR_TRAIT_VTABLE_TYPE_INFO_FIELD;
+  values[0].member = CORE_STRING_STATIC(IR_TRAIT_VTABLE_TYPE_INFO_FIELD);
   values[0].kind = IR_GLOBAL_INIT_INT;
   values[0].integer = ir_lit_of(type_info_index);
   bool ok = true;
@@ -156,14 +168,18 @@ static bool same_type(ir_module_t *module, const th_type *left,
   return left && right && ir_type_eq(module, (th_type *)left, (th_type *)right);
 }
 
-static const char *adapter_param_name(ir_func_t *function, const char *stem) {
+static core_string_t adapter_param_name(ir_func_t *function,
+                                        core_string_t stem) {
   if (!ir_value_find(function, stem))
     return ir_strdup(function->owner->ctx, stem);
   for (uint32_t suffix = 0;; suffix++) {
     char candidate[64];
-    snprintf(candidate, sizeof(candidate), "%s_%u", stem, suffix);
-    if (!ir_value_find(function, candidate))
-      return ir_strdup(function->owner->ctx, candidate);
+    core_string_t text = bounded_text(
+        candidate, sizeof(candidate),
+        snprintf(candidate, sizeof(candidate), "%.*s_%u",
+                 (int)stem.u8_bytes, stem.data, suffix));
+    if (!ir_value_find(function, text))
+      return ir_strdup(function->owner->ctx, text);
   }
 }
 
@@ -171,8 +187,8 @@ static ir_value_t *adapter_call_output(ir_module_t *module,
                                        ir_block_t *block,
                                        ir_value_t *call_result,
                                        th_type *type, size_t index,
-                                       const char *name) {
-  if (!module || !block || !call_result || !type || !name ||
+                                       core_string_t name) {
+  if (!module || !block || !call_result || !type || !name.data ||
       index > INT64_MAX)
     return nullptr;
   ir_instr_t *output = ir_instr_add(block, IR_OP_CALL_OUTPUT);
@@ -184,10 +200,11 @@ static ir_value_t *adapter_call_output(ir_module_t *module,
 }
 
 ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
-                                        const char *adapter_name,
+                                        core_string_t adapter_name,
                                         ir_func_t *implementation,
                                         th_type *slot_signature) {
-  if (!module || !adapter_name || !*adapter_name || !implementation ||
+  if (!module || !adapter_name.data || !adapter_name.u8_bytes ||
+      !implementation ||
       implementation->owner != module || !slot_signature ||
       th_kind_of(slot_signature) != TH_FUNCTION ||
       th_kind_of(implementation->type) != TH_FUNCTION ||
@@ -195,8 +212,9 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
     return nullptr;
 
   th_ctx *types = ir_ctx_types(module->ctx);
-  th_type *erased_pointer = th_record_lookup(ir_trait_value_type(types),
-                                              IR_TRAIT_VALUE_DATA_FIELD);
+  th_type *erased_pointer = th_record_lookup(
+      ir_trait_value_type(types),
+      CORE_STRING_STATIC(IR_TRAIT_VALUE_DATA_FIELD));
   size_t count = th_func_nparams(slot_signature);
   if (!count || count != th_func_nparams(implementation->type) ||
       !same_type(module, th_func_ret(slot_signature),
@@ -240,13 +258,17 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   ir_value_t **arguments =
       ir_alloc(module->ctx, count * sizeof(ir_value_t *));
   arguments[0] = ir_param_add(
-      adapter, adapter_param_name(adapter, "erased_data"), erased_pointer);
+      adapter,
+      adapter_param_name(adapter, CORE_STRING_STATIC("erased_data")),
+      erased_pointer);
   for (size_t i = 1; arguments[0] && i < count; i++) {
     char name[32];
-    snprintf(name, sizeof(name), "trait_arg_%zu", i - 1);
+    core_string_t text = bounded_text(
+        name, sizeof(name),
+        snprintf(name, sizeof(name), "trait_arg_%zu", i - 1));
     const th_param *parameter = th_func_param(slot_signature, i);
     arguments[i] = parameter && parameter->mode != TH_OUT
-        ? ir_param_add(adapter, adapter_param_name(adapter, name),
+        ? ir_param_add(adapter, adapter_param_name(adapter, text),
                        parameter->type) : nullptr;
   }
   if (!arguments[0]) return nullptr;
@@ -256,7 +278,9 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
       return nullptr;
   }
   ir_value_t *rest_value = slot_rest
-      ? ir_restparam_add(adapter, adapter_param_name(adapter, "trait_rest"),
+      ? ir_restparam_add(adapter,
+                         adapter_param_name(adapter,
+                                            CORE_STRING_STATIC("trait_rest")),
                          slot_rest->type)
       : nullptr;
   if (slot_rest && !rest_value) return nullptr;
@@ -267,18 +291,20 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
       return nullptr;
   }
 
-  ir_block_t *entry = ir_block_add(adapter, "entry");
+  ir_block_t *entry = ir_block_add(adapter, CORE_STRING_STATIC("entry"));
   if (!entry) return nullptr;
   th_type *concrete_pointer = th_ind(types, 0, concrete_receiver->type);
   ir_instr_t *cast = ir_instr_add(entry, IR_OP_BITCAST);
-  if (!cast || !ir_instr_set_dest(cast, "typed_data", concrete_pointer) ||
+  if (!cast
+      || !ir_instr_set_dest(cast, CORE_STRING_STATIC("typed_data"),
+                            concrete_pointer) ||
       !ir_instr_operand_value(cast, arguments[0]))
     return nullptr;
 
   ir_value_t *receiver = cast->dest;
   if (concrete_receiver->mode != TH_OUT) {
     ir_instr_t *load = ir_instr_add(entry, IR_OP_LOAD);
-    if (!load || !ir_instr_set_dest(load, "receiver",
+    if (!load || !ir_instr_set_dest(load, CORE_STRING_STATIC("receiver"),
                                     concrete_receiver->type) ||
         !ir_instr_operand_value(load, cast->dest))
       return nullptr;
@@ -307,7 +333,8 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
     output_count++;
   bool carries_result = !returns_void || output_count;
   if (!call || (carries_result &&
-                !ir_instr_set_dest(call, "call_result", result_type)) ||
+                !ir_instr_set_dest(call, CORE_STRING_STATIC("call_result"),
+                                   result_type)) ||
       !ir_instr_operand_value(call, function) ||
       (concrete_receiver->mode == TH_OUT
           ? !ir_instr_operand_out(call)
@@ -341,9 +368,11 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
     const th_param *parameter = th_func_param(implementation->type, i);
     if (!parameter || !th_mode_produces_output(parameter->mode)) continue;
     char output_name[48];
-    snprintf(output_name, sizeof(output_name), "trait_output_%zu", i);
+    core_string_t text = bounded_text(
+        output_name, sizeof(output_name),
+        snprintf(output_name, sizeof(output_name), "trait_output_%zu", i));
     ir_value_t *output = adapter_call_output(module, entry, call->dest,
-        parameter->type, output_index++, output_name);
+        parameter->type, output_index++, text);
     if (!output) return nullptr;
     if (i == 0) {
       ir_instr_t *store = ir_instr_add(entry, IR_OP_STORE);
@@ -357,16 +386,20 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
     const th_kwparam *parameter = th_func_kw(implementation->type, i);
     if (!parameter || !th_mode_produces_output(parameter->mode)) continue;
     char output_name[48];
-    snprintf(output_name, sizeof(output_name), "trait_keyword_output_%zu", i);
+    core_string_t text = bounded_text(
+        output_name, sizeof(output_name),
+        snprintf(output_name, sizeof(output_name),
+                 "trait_keyword_output_%zu", i));
     ir_value_t *output = adapter_call_output(module, entry, call->dest,
-        parameter->type, output_index++, output_name);
+        parameter->type, output_index++, text);
     if (!output) return nullptr;
     return_outputs[return_output_count++] = output;
   }
   if (implementation_rest
       && th_mode_produces_output(implementation_rest->mode)) {
     ir_value_t *output = adapter_call_output(module, entry, call->dest,
-        implementation_rest->type, output_index, "trait_rest_output");
+        implementation_rest->type, output_index,
+        CORE_STRING_STATIC("trait_rest_output"));
     if (!output) return nullptr;
     return_outputs[return_output_count++] = output;
   }
@@ -385,21 +418,23 @@ static ir_instr_t *trait_named_instruction(ir_block_t *block, ir_op_t op,
                                            uint32_t suffix,
                                            th_type *result_type) {
   char name[48];
-  snprintf(name, sizeof(name), "__trait_dispatch_%u", suffix);
+  core_string_t text = bounded_text(
+      name, sizeof(name),
+      snprintf(name, sizeof(name), "__trait_dispatch_%u", suffix));
   ir_instr_t *instruction = ir_instr_add(block, op);
-  return instruction && ir_instr_set_dest(instruction, name, result_type)
+  return instruction && ir_instr_set_dest(instruction, text, result_type)
       ? instruction : nullptr;
 }
 
 ir_value_t *ir_trait_method_call_with_rest(
-    th_ctx *types, ir_block_t *block, const char *result_name,
-    ir_value_t *trait_value, th_type *vtable_type, const char *method_name,
+    th_ctx *types, ir_block_t *block, core_string_t result_name,
+    ir_value_t *trait_value, th_type *vtable_type, core_string_t method_name,
     ir_value_t *const *arguments, size_t argument_count,
     ir_value_t *rest_argument, const ir_trait_named_arg_t *keywords,
     size_t keyword_count) {
   if (!types || !block || !block->owner || !block->owner->owner ||
-      !result_name || !trait_value || !vtable_type ||
-      !method_name || th_kind_of(vtable_type) != TH_RECORD ||
+      !result_name.data || !trait_value || !vtable_type ||
+      !method_name.data || th_kind_of(vtable_type) != TH_RECORD ||
       (argument_count && !arguments) || (keyword_count && !keywords) ||
       !trait_value->type ||
       th_hash(types, trait_value->type) !=
@@ -419,7 +454,8 @@ ir_value_t *ir_trait_method_call_with_rest(
   const th_param *rest = th_func_rest(signature);
   if (!same_type(block->owner->owner, receiver->type,
                  th_record_lookup(ir_trait_value_type(types),
-                                  IR_TRAIT_VALUE_DATA_FIELD)) ||
+                                  CORE_STRING_STATIC(
+                                      IR_TRAIT_VALUE_DATA_FIELD))) ||
       argument_count < fixed_arguments ||
       (argument_count > fixed_arguments && !rest) ||
       (rest_argument && (!rest || !rest_argument->is_rest ||
@@ -429,18 +465,21 @@ ir_value_t *ir_trait_method_call_with_rest(
   for (size_t i = 0; i < argument_count; i++)
     if (!arguments[i]) return nullptr;
   for (size_t i = 0; i < keyword_count; i++) {
-    if (!keywords[i].name || !keywords[i].value ||
+    if (!keywords[i].name.data || !keywords[i].value ||
         !th_func_kw_lookup(signature, keywords[i].name))
       return nullptr;
     for (size_t j = 0; j < i; j++)
-      if (!strcmp(keywords[i].name, keywords[j].name)) return nullptr;
+      if (core_string_eq(keywords[i].name, keywords[j].name)) return nullptr;
   }
 
   uint32_t suffix = block->n_instrs;
   char vtable_name[48];
-  snprintf(vtable_name, sizeof(vtable_name), "__trait_vtable_%u", suffix);
+  core_string_t vtable_text = bounded_text(
+      vtable_name, sizeof(vtable_name),
+      snprintf(vtable_name, sizeof(vtable_name), "__trait_vtable_%u",
+               suffix));
   ir_value_t *raw_vtable =
-      ir_trait_value_vtable(block, vtable_name, trait_value);
+      ir_trait_value_vtable(block, vtable_text, trait_value);
   th_type *typed_vtable = th_ind(types, 0, vtable_type);
   ir_instr_t *cast = raw_vtable
       ? trait_named_instruction(block, IR_OP_BITCAST, suffix + 1,
@@ -460,8 +499,10 @@ ir_value_t *ir_trait_method_call_with_rest(
   if (!load || !ir_instr_operand_value(load, field->dest)) return nullptr;
 
   char data_name[48];
-  snprintf(data_name, sizeof(data_name), "__trait_data_%u", suffix + 4);
-  ir_value_t *data = ir_trait_value_data(block, data_name, trait_value);
+  core_string_t data_text = bounded_text(
+      data_name, sizeof(data_name),
+      snprintf(data_name, sizeof(data_name), "__trait_data_%u", suffix + 4));
+  ir_value_t *data = ir_trait_value_data(block, data_text, trait_value);
   if (!data) return nullptr;
 
   ir_instr_t *call = ir_instr_add(block, IR_OP_CALL);
@@ -480,8 +521,8 @@ ir_value_t *ir_trait_method_call_with_rest(
 }
 
 ir_value_t *ir_trait_method_call_with_keywords(
-    th_ctx *types, ir_block_t *block, const char *result_name,
-    ir_value_t *trait_value, th_type *vtable_type, const char *method_name,
+    th_ctx *types, ir_block_t *block, core_string_t result_name,
+    ir_value_t *trait_value, th_type *vtable_type, core_string_t method_name,
     ir_value_t *const *arguments, size_t argument_count,
     const ir_trait_named_arg_t *keywords, size_t keyword_count) {
   return ir_trait_method_call_with_rest(
@@ -490,10 +531,10 @@ ir_value_t *ir_trait_method_call_with_keywords(
 }
 
 ir_value_t *ir_trait_method_call(th_ctx *types, ir_block_t *block,
-                                 const char *result_name,
+                                 core_string_t result_name,
                                  ir_value_t *trait_value,
                                  th_type *vtable_type,
-                                 const char *method_name,
+                                 core_string_t method_name,
                                  ir_value_t *const *arguments,
                                  size_t argument_count) {
   return ir_trait_method_call_with_keywords(

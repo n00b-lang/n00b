@@ -1,62 +1,57 @@
 #include <stdio.h>
-#include <string.h>
 
 #include "lib/alloc.h"
 #include "parse/annot_args.h"
 #include "parse/infer.h"
 #include "harness.h"
 
-static core_string_t
-S(const char *s)
-{
-    return core_string_from_cstr(s);
-}
+#define S(x) CORE_STRING_STATIC(x)
 
-static const char *const CORPUS[] = {
-    "`t",
-    "$0",
-    "$0 unify $1",
-    "$0 unify $2",
-    "$0 unify $2 unify int",
-    "$0 unify $4",
-    "$0 unify list[`t]|array[`t]",
-    "$0[...$0]",
-    "$1",
-    "$1 unify $2",
-    "$1 unify $3",
-    "$1 unify int",
-    "$2",
-    "$2 unify $3",
-    "$3 unify (list[$1] | array[$1])",
-    "bool",
-    "compare($0, $2)",
-    "compare($0, $2, __cmp, Comparison)",
-    "method_result($0, $2, __add)",
-    "dict[$0, $1]",
-    "element_of($0)",
-    "element_of($0, read, write)",
-    "field_return_auto_deref($0)",
-    "slice_of($0, slice)",
-    "list[`e]",
-    "list[$0]",
-    "list[$0] unify $1",
-    "lookup($0)",
-    "method_return($0)",
-    "ref[$0]",
-    "return_of($0)",
-    "set[$0]",
-    "set[$0] unify $1",
-    "unwrap_result($0)",
-    "$$",
-    "$$ unify $1",
-    "$return",
-    "$return unify $1",
-    "$$ unify $return",
-    "return",
-    "unwrap_result($0) unify $$",
-    "$0[...$1]",
-    "dict[$0, list[`t]]",
-    "$0[]",
+static const core_string_t CORPUS[] = {
+    S("`t"),
+    S("$0"),
+    S("$0 unify $1"),
+    S("$0 unify $2"),
+    S("$0 unify $2 unify int"),
+    S("$0 unify $4"),
+    S("$0 unify list[`t]|array[`t]"),
+    S("$0[...$0]"),
+    S("$1"),
+    S("$1 unify $2"),
+    S("$1 unify $3"),
+    S("$1 unify int"),
+    S("$2"),
+    S("$2 unify $3"),
+    S("$3 unify (list[$1] | array[$1])"),
+    S("bool"),
+    S("compare($0, $2)"),
+    S("compare($0, $2, __cmp, Comparison)"),
+    S("method_result($0, $2, __add)"),
+    S("dict[$0, $1]"),
+    S("element_of($0)"),
+    S("element_of($0, read, write)"),
+    S("field_return_auto_deref($0)"),
+    S("slice_of($0, slice)"),
+    S("list[`e]"),
+    S("list[$0]"),
+    S("list[$0] unify $1"),
+    S("lookup($0)"),
+    S("method_return($0)"),
+    S("ref[$0]"),
+    S("return_of($0)"),
+    S("set[$0]"),
+    S("set[$0] unify $1"),
+    S("unwrap_result($0)"),
+    S("$$"),
+    S("$$ unify $1"),
+    S("$return"),
+    S("$return unify $1"),
+    S("$$ unify $return"),
+    S("return"),
+    S("unwrap_result($0) unify $$"),
+    S("$0[...$1]"),
+    S("dict[$0, list[`t]]"),
+    S("$0[]"),
 };
 
 static void
@@ -65,42 +60,49 @@ test_the_corpus_parses(void)
     size_t n = sizeof(CORPUS) / sizeof(CORPUS[0]);
 
     for (size_t i = 0; i < n; i++) {
-        parse_infer_expr_t *e = parse_infer_parse(S(CORPUS[i]));
+        core_string_t       src = CORPUS[i];
+        parse_infer_expr_t *e   = parse_infer_parse(src);
 
         if (!e) {
-            printf("FAIL  cannot parse @infer(\"%s\")\n", CORPUS[i]);
+            printf("FAIL  cannot parse @infer(\"%.*s\")\n", (int)src.u8_bytes,
+                   src.data);
             fails++;
 
             continue;
         }
 
-        char *printed = parse_infer_print(e);
+        core_string_t printed = parse_infer_print(e);
 
-        parse_infer_expr_t *again = parse_infer_parse(S(printed));
+        parse_infer_expr_t *again = parse_infer_parse(printed);
 
         if (!again) {
-            printf("FAIL  \"%s\" prints as \"%s\", which does not parse\n",
-                   CORPUS[i],
-                   printed);
+            printf("FAIL  \"%.*s\" prints as \"%.*s\", which does not parse\n",
+                   (int)src.u8_bytes,
+                   src.data,
+                   (int)printed.u8_bytes,
+                   printed.data);
             fails++;
-            core_free(printed);
+            core_free(printed.data);
             parse_infer_free(e);
 
             continue;
         }
 
-        char *twice = parse_infer_print(again);
+        core_string_t twice = parse_infer_print(again);
 
-        if (strcmp(printed, twice) != 0) {
-            printf("FAIL  \"%s\" is not stable: \"%s\" then \"%s\"\n",
-                   CORPUS[i],
-                   printed,
-                   twice);
+        if (!core_string_eq(printed, twice)) {
+            printf("FAIL  \"%.*s\" is not stable: \"%.*s\" then \"%.*s\"\n",
+                   (int)src.u8_bytes,
+                   src.data,
+                   (int)printed.u8_bytes,
+                   printed.data,
+                   (int)twice.u8_bytes,
+                   twice.data);
             fails++;
         }
 
-        core_free(printed);
-        core_free(twice);
+        core_free(printed.data);
+        core_free(twice.data);
         parse_infer_free(e);
         parse_infer_free(again);
     }
@@ -263,41 +265,43 @@ test_shapes(void)
 static void
 test_rejections(void)
 {
-    static const char *const BAD[] = {
-        "",
-        "$",
-        "$x",
-        "list[",
-        "list[]",
-        "unify $1",
-        "$0 unify",
-        "`",
-        "lookup(0)",
-        "lookup($0",
-        "...$0",
-        "return_of($0",
-        "$0[...]",
-        "$0[...$]",
-        "$$0",
-        "$$$",
-        "$result",
-        "$0 unify $nope",
+    static const core_string_t BAD[] = {
+        S(""),
+        S("$"),
+        S("$x"),
+        S("list["),
+        S("list[]"),
+        S("unify $1"),
+        S("$0 unify"),
+        S("`"),
+        S("lookup(0)"),
+        S("lookup($0"),
+        S("...$0"),
+        S("return_of($0"),
+        S("$0[...]"),
+        S("$0[...$]"),
+        S("$$0"),
+        S("$$$"),
+        S("$result"),
+        S("$0 unify $nope"),
     };
 
     size_t n = sizeof(BAD) / sizeof(BAD[0]);
 
     for (size_t i = 0; i < n; i++) {
-        parse_infer_expr_t *e = parse_infer_parse(S(BAD[i]));
+        parse_infer_expr_t *e = parse_infer_parse(BAD[i]);
 
         if (e) {
-            char *p = parse_infer_print(e);
+            core_string_t p = parse_infer_print(e);
 
-            printf("FAIL  \"%s\" is not an @infer expression, but parsed "
-                   "as \"%s\"\n",
-                   BAD[i],
-                   p);
+            printf("FAIL  \"%.*s\" is not an @infer expression, but parsed "
+                   "as \"%.*s\"\n",
+                   (int)BAD[i].u8_bytes,
+                   BAD[i].data,
+                   (int)p.u8_bytes,
+                   p.data);
             fails++;
-            core_free(p);
+            core_free(p.data);
             parse_infer_free(e);
         }
     }

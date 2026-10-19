@@ -4,11 +4,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/string.h"
 #include "lib/target.h"
 
 typedef struct {
-    const char *name;
-    const char *segment;
+    core_string_t name;
+    core_string_t segment;
     const uint8_t *bytes;
     size_t size;
     uint32_t alignment;
@@ -20,7 +21,7 @@ typedef struct {
 } core_object_emit_section_t;
 
 typedef struct {
-    const char *name;
+    core_string_t name;
     uint32_t section_index;
     uint64_t section_offset;
     bool exported;

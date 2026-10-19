@@ -18,12 +18,28 @@ struct ir_liveness_query {
     bool complete;
 };
 
-static ir_annot_t *value_annot(const ir_value_t *value, const char *key)
+static ir_annot_t *value_annot(const ir_value_t *value, core_string_t key)
 {
     return ir_annot_get(ir_value_annots((ir_value_t *)value), key);
 }
 
-static bool annot_bool(const ir_value_t *value, const char *key, bool *out)
+static core_string_t edge_key(char *buffer, size_t capacity,
+                              core_string_t prefix, uint64_t index,
+                              core_string_t suffix)
+{
+    int written = snprintf(buffer, capacity, "ir.%.*s%llu%.*s",
+                           (int)prefix.u8_bytes, prefix.data,
+                           (unsigned long long)index,
+                           (int)suffix.u8_bytes, suffix.data);
+    size_t length = written < 0 ? 0 : (size_t)written;
+
+    if (length >= capacity) {
+        length = capacity - 1;
+    }
+    return core_string_borrow(buffer, length);
+}
+
+static bool annot_bool(const ir_value_t *value, core_string_t key, bool *out)
 {
     ir_annot_t *annot = value_annot(value, key);
     if (!annot || annot->kind != IR_ANNOT_BOOL) return false;
@@ -31,7 +47,8 @@ static bool annot_bool(const ir_value_t *value, const char *key, bool *out)
     return true;
 }
 
-static bool annot_uint(const ir_value_t *value, const char *key, uint64_t *out)
+static bool annot_uint(const ir_value_t *value, core_string_t key,
+                       uint64_t *out)
 {
     ir_annot_t *annot = value_annot(value, key);
     if (!annot || annot->kind != IR_ANNOT_INT || annot->i.neg
@@ -51,32 +68,38 @@ static bool value_set_add(value_set_t *set, const ir_value_t *value,
     return core_list_try_push(*set, value);
 }
 
-static bool check_alias_edges(const ir_value_t *value, const char *prefix,
+static bool check_alias_edges(const ir_value_t *value, core_string_t prefix,
                               uint64_t count, uint64_t point,
                               value_set_t *work)
 {
     char key[64];
     for (uint64_t i = 0; i < count; i++) {
-        snprintf(key, sizeof(key), "ir.%s%llu", prefix,
-                 (unsigned long long)i);
-        ir_annot_t *edge = value_annot(value, key);
+        ir_annot_t *edge = value_annot(
+            value, edge_key(key, sizeof(key), prefix, i,
+                            CORE_STRING_STATIC("")));
         if (!edge || edge->kind != IR_ANNOT_VALUE || !edge->v) return false;
 
-        snprintf(key, sizeof(key), "ir.%s%llu_escapes", prefix,
-                 (unsigned long long)i);
         bool escapes = false;
-        if (!annot_bool(value, key, &escapes) || escapes) return false;
+        if (!annot_bool(value,
+                        edge_key(key, sizeof(key), prefix, i,
+                                 CORE_STRING_STATIC("_escapes")),
+                        &escapes)
+            || escapes) return false;
 
-        snprintf(key, sizeof(key), "ir.%s%llu_has_last_use", prefix,
-                 (unsigned long long)i);
         bool has_last_use = false;
-        if (!annot_bool(value, key, &has_last_use) || !has_last_use)
+        if (!annot_bool(value,
+                        edge_key(key, sizeof(key), prefix, i,
+                                 CORE_STRING_STATIC("_has_last_use")),
+                        &has_last_use)
+            || !has_last_use)
             return false;
 
-        snprintf(key, sizeof(key), "ir.%s%llu_last_use", prefix,
-                 (unsigned long long)i);
         uint64_t last_use = 0;
-        if (!annot_uint(value, key, &last_use) || last_use >= point)
+        if (!annot_uint(value,
+                        edge_key(key, sizeof(key), prefix, i,
+                                 CORE_STRING_STATIC("_last_use")),
+                        &last_use)
+            || last_use >= point)
             return false;
 
         bool already_present = false;
@@ -399,20 +422,22 @@ ir_value_liveness_on_edge(const ir_value_t *value, const ir_block_t *from,
 }
 
 static bool
-collect_alias_edges(const ir_value_t *value, const char *prefix,
+collect_alias_edges(const ir_value_t *value, core_string_t prefix,
                     uint64_t count, value_set_t *work)
 {
     char key[64];
     for (uint64_t i = 0; i < count; i++) {
-        snprintf(key, sizeof(key), "ir.%s%llu", prefix,
-                 (unsigned long long)i);
-        ir_annot_t *edge = value_annot(value, key);
+        ir_annot_t *edge = value_annot(
+            value, edge_key(key, sizeof(key), prefix, i,
+                            CORE_STRING_STATIC("")));
         if (!edge || edge->kind != IR_ANNOT_VALUE || !edge->v) return false;
 
-        snprintf(key, sizeof(key), "ir.%s%llu_escapes", prefix,
-                 (unsigned long long)i);
         bool escapes = false;
-        if (!annot_bool(value, key, &escapes) || escapes) return false;
+        if (!annot_bool(value,
+                        edge_key(key, sizeof(key), prefix, i,
+                                 CORE_STRING_STATIC("_escapes")),
+                        &escapes)
+            || escapes) return false;
 
         bool already_present = false;
         if (!value_set_add(work, edge->v, &already_present)) return false;
@@ -432,15 +457,18 @@ collect_inverse_alias_edges(const ir_value_t *value, value_set_t *work)
             ir_value_t *derived = block->instrs[i]->dest;
             if (!derived || derived == value) continue;
             uint64_t count = 0;
-            if (!annot_uint(derived, "ir.alias_count", &count)) {
-                if (value_annot(derived, "ir.alias_count")) return false;
+            if (!annot_uint(derived, CORE_STRING_STATIC("ir.alias_count"),
+                            &count)) {
+                if (value_annot(derived, CORE_STRING_STATIC("ir.alias_count")))
+                    return false;
                 continue;
             }
             for (uint64_t edge = 0; edge < count; edge++) {
                 char key[64];
-                snprintf(key, sizeof(key), "ir.alias%llu",
-                         (unsigned long long)edge);
-                ir_annot_t *target = value_annot(derived, key);
+                ir_annot_t *target = value_annot(
+                    derived, edge_key(key, sizeof(key),
+                                      CORE_STRING_STATIC("alias"), edge,
+                                      CORE_STRING_STATIC("")));
                 if (!target || target->kind != IR_ANNOT_VALUE || !target->v)
                     return false;
                 if (target->v == value) {
@@ -598,17 +626,24 @@ collect_alias_closure(const ir_value_t *value, value_set_t *work)
         bool unresolved = false;
         uint64_t aliases = 0;
         uint64_t aliased_by = 0;
-        complete = annot_bool(current, "ir.alias_analysis_complete",
+        complete = annot_bool(current,
+                              CORE_STRING_STATIC("ir.alias_analysis_complete"),
                               &analysis_complete)
             && analysis_complete
-            && annot_bool(current, "ir.lifetime_escapes", &escapes)
+            && annot_bool(current, CORE_STRING_STATIC("ir.lifetime_escapes"),
+                          &escapes)
             && !escapes
-            && annot_bool(current, "ir.alias_unresolved", &unresolved)
+            && annot_bool(current, CORE_STRING_STATIC("ir.alias_unresolved"),
+                          &unresolved)
             && !unresolved
-            && annot_uint(current, "ir.alias_count", &aliases)
-            && annot_uint(current, "ir.aliased_by_count", &aliased_by)
-            && collect_alias_edges(current, "alias", aliases, work)
-            && collect_alias_edges(current, "aliased_by", aliased_by, work)
+            && annot_uint(current, CORE_STRING_STATIC("ir.alias_count"),
+                          &aliases)
+            && annot_uint(current, CORE_STRING_STATIC("ir.aliased_by_count"),
+                          &aliased_by)
+            && collect_alias_edges(current, CORE_STRING_STATIC("alias"),
+                                   aliases, work)
+            && collect_alias_edges(current, CORE_STRING_STATIC("aliased_by"),
+                                   aliased_by, work)
             && collect_inverse_alias_edges(current, work)
             && collect_structural_aliases(current, work);
     }
@@ -902,29 +937,38 @@ bool ir_value_can_finalize_at(const ir_value_t *value, uint64_t point)
         uint64_t end = 0;
         uint64_t aliases = 0;
         uint64_t aliased_by = 0;
-        if (!annot_bool(current, "ir.alias_analysis_complete", &complete)
+        if (!annot_bool(current,
+                        CORE_STRING_STATIC("ir.alias_analysis_complete"),
+                        &complete)
             || !complete
-            || !annot_bool(current, "ir.lifetime_escapes", &escapes)
+            || !annot_bool(current, CORE_STRING_STATIC("ir.lifetime_escapes"),
+                           &escapes)
             || escapes
-            || !annot_bool(current, "ir.alias_unresolved", &unresolved)
+            || !annot_bool(current, CORE_STRING_STATIC("ir.alias_unresolved"),
+                           &unresolved)
             || unresolved
-            || !annot_uint(current, "ir.lifetime_end", &end)
+            || !annot_uint(current, CORE_STRING_STATIC("ir.lifetime_end"),
+                           &end)
             || point < end
-            || !annot_uint(current, "ir.alias_count", &aliases)
-            || !annot_uint(current, "ir.aliased_by_count", &aliased_by)) {
+            || !annot_uint(current, CORE_STRING_STATIC("ir.alias_count"),
+                           &aliases)
+            || !annot_uint(current, CORE_STRING_STATIC("ir.aliased_by_count"),
+                           &aliased_by)) {
             safe = false;
             break;
         }
-        if (value_annot(current, "ir.lifetime_start")) {
-            if (!annot_uint(current, "ir.lifetime_start", &start)
+        if (value_annot(current, CORE_STRING_STATIC("ir.lifetime_start"))) {
+            if (!annot_uint(current, CORE_STRING_STATIC("ir.lifetime_start"),
+                            &start)
                 || point < start) {
                 safe = false;
                 break;
             }
         }
-        if (!check_alias_edges(current, "alias", aliases, point, &work)
-            || !check_alias_edges(current, "aliased_by", aliased_by, point,
-                                  &work)) {
+        if (!check_alias_edges(current, CORE_STRING_STATIC("alias"), aliases,
+                               point, &work)
+            || !check_alias_edges(current, CORE_STRING_STATIC("aliased_by"),
+                                  aliased_by, point, &work)) {
             safe = false;
         }
     }
@@ -960,15 +1004,25 @@ call_argument_is_noescape(const ir_instr_t *call, uint32_t operand_index,
             return false;
     ir_value_t *parameter = callee->params[operand_index - 1];
     ir_annot_t *escapes = parameter
-        ? ir_annot_get(&parameter->annots, "ir.lifetime_escapes") : nullptr;
+        ? ir_annot_get(&parameter->annots,
+                       CORE_STRING_STATIC("ir.lifetime_escapes"))
+        : nullptr;
     ir_annot_t *resolved = parameter
-        ? ir_annot_get(&parameter->annots, "ir.alias_unresolved") : nullptr;
+        ? ir_annot_get(&parameter->annots,
+                       CORE_STRING_STATIC("ir.alias_unresolved"))
+        : nullptr;
     ir_annot_t *complete = parameter
-        ? ir_annot_get(&parameter->annots, "ir.alias_analysis_complete") : nullptr;
+        ? ir_annot_get(&parameter->annots,
+                       CORE_STRING_STATIC("ir.alias_analysis_complete"))
+        : nullptr;
     ir_annot_t *aliases = parameter
-        ? ir_annot_get(&parameter->annots, "ir.alias_count") : nullptr;
+        ? ir_annot_get(&parameter->annots,
+                       CORE_STRING_STATIC("ir.alias_count"))
+        : nullptr;
     ir_annot_t *aliased_by = parameter
-        ? ir_annot_get(&parameter->annots, "ir.aliased_by_count") : nullptr;
+        ? ir_annot_get(&parameter->annots,
+                       CORE_STRING_STATIC("ir.aliased_by_count"))
+        : nullptr;
     bool no_aliases = aliases && aliases->kind == IR_ANNOT_INT
         && !aliases->i.neg && !aliases->i.mag && aliased_by
         && aliased_by->kind == IR_ANNOT_INT && !aliased_by->i.neg
@@ -1064,7 +1118,7 @@ ir_allocation_has_only_local_uses(const ir_func_t *function,
 {
     bool required = false;
     if (!allocation || allocation->op != IR_OP_ALLOC || !allocation->dest
-        || ir_instr_storage_class(allocation, &required) || required)
+        || ir_instr_storage_class(allocation, &required).data || required)
         return false;
     return address_has_only_local_uses(function, allocation->dest, nullptr);
 }

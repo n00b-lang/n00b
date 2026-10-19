@@ -170,19 +170,19 @@ scan_grammar_tokenizer_fn(parse_grammar_t *g)
 
 parse_token_stream_t *
 scan_tokenize(parse_grammar_t  *g,
-             const char     *src,
-             size_t          len,
+             core_string_t    src,
              core_buffer_t  **buf_out,
              parse_scanner_t **sc_out)
 {
     scan_lex_t    *program = scan_grammar_lex_compiled(g);
     parse_scan_cb_t fn  = program ? scan_lex_scan : scan_grammar_tokenizer_fn(g);
 
-    if (!fn || !src) {
+    if (!fn || !src.data) {
         return nullptr;
     }
 
-    core_buffer_t  *buf = core_buffer_from_bytes(src, (int64_t)len);
+    core_buffer_t  *buf = core_buffer_from_bytes(src.data,
+                                                 (int64_t)src.u8_bytes);
     scan_lex_session_t *session = program ? scan_lex_session_new(program)
                                           : nullptr;
     parse_scanner_t *sc  = scan_scanner_new(buf, fn, g,
@@ -228,7 +228,8 @@ scan_tokenize_incremental(parse_grammar_t  *g,
                           parse_scanner_t **sc_out)
 {
     parse_scanner_t *scanner = nullptr;
-    parse_token_stream_t *ts = scan_tokenize(g, "", 0, buf_out, &scanner);
+    parse_token_stream_t *ts = scan_tokenize(g, CORE_STRING_STATIC(""),
+                                             buf_out, &scanner);
 
     if (!ts) {
         return nullptr;
@@ -247,9 +248,9 @@ scan_tokenize_incremental(parse_grammar_t  *g,
 }
 
 parse_token_stream_t *
-scan_tokenize_owned(parse_grammar_t *g, const char *src, size_t len)
+scan_tokenize_owned(parse_grammar_t *g, core_string_t src)
 {
-    return scan_tokenize(g, src, len, nullptr, nullptr);
+    return scan_tokenize(g, src, nullptr, nullptr);
 }
 
 parse_token_stream_t *

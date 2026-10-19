@@ -1,32 +1,31 @@
-#include <string.h>
-
 #include "private/th/internal.h"
 
-static const char *const kind_names[TH_ERR_KIND_COUNT] = {
-    [TH_ERR_UNIFY]               = "unify",
-    [TH_ERR_CONSTRAINT]          = "constraint",
-    [TH_ERR_OCCURS]              = "occurs",
-    [TH_ERR_NO_SUCH_FIELD]       = "no-such-field",
-    [TH_ERR_PARAM_MISMATCH]      = "param-mismatch",
-    [TH_ERR_ARITY_MISMATCH]      = "arity-mismatch",
-    [TH_ERR_MISSING_KEYWORD]     = "missing-keyword",
-    [TH_ERR_UNKNOWN_KEYWORD]     = "unknown-keyword",
-    [TH_ERR_NON_EXHAUSTIVE]      = "non-exhaustive",
-    [TH_ERR_UNREACHABLE_PATTERN] = "unreachable-pattern",
-    [TH_ERR_DUPLICATE_VARIANT]   = "duplicate-variant",
-    [TH_ERR_NO_MATCHING_RULE]    = "no-matching-rule",
-    [TH_ERR_BAD_NAME]            = "bad-name",
-    [TH_ERR_FREE_VAR]            = "free-var",
+static const core_string_t kind_names[TH_ERR_KIND_COUNT] = {
+    [TH_ERR_UNIFY]               = CORE_STRING_STATIC("unify"),
+    [TH_ERR_CONSTRAINT]          = CORE_STRING_STATIC("constraint"),
+    [TH_ERR_OCCURS]              = CORE_STRING_STATIC("occurs"),
+    [TH_ERR_NO_SUCH_FIELD]       = CORE_STRING_STATIC("no-such-field"),
+    [TH_ERR_PARAM_MISMATCH]      = CORE_STRING_STATIC("param-mismatch"),
+    [TH_ERR_ARITY_MISMATCH]      = CORE_STRING_STATIC("arity-mismatch"),
+    [TH_ERR_MISSING_KEYWORD]     = CORE_STRING_STATIC("missing-keyword"),
+    [TH_ERR_UNKNOWN_KEYWORD]     = CORE_STRING_STATIC("unknown-keyword"),
+    [TH_ERR_NON_EXHAUSTIVE]      = CORE_STRING_STATIC("non-exhaustive"),
+    [TH_ERR_UNREACHABLE_PATTERN] = CORE_STRING_STATIC("unreachable-pattern"),
+    [TH_ERR_DUPLICATE_VARIANT]   = CORE_STRING_STATIC("duplicate-variant"),
+    [TH_ERR_NO_MATCHING_RULE]    = CORE_STRING_STATIC("no-matching-rule"),
+    [TH_ERR_BAD_NAME]            = CORE_STRING_STATIC("bad-name"),
+    [TH_ERR_FREE_VAR]            = CORE_STRING_STATIC("free-var"),
 };
 
-const char *th_err_kind_name(th_err_kind kind)
+core_string_t th_err_kind_name(th_err_kind kind)
 {
-    return kind < TH_ERR_KIND_COUNT && kind_names[kind] ? kind_names[kind]
-                                                        : "unknown";
+    return kind < TH_ERR_KIND_COUNT && kind_names[kind].data
+               ? kind_names[kind]
+               : CORE_STRING_STATIC("unknown");
 }
 
-void th_err(th_ctx *ctx, th_err_kind kind, const char *constraint,
-            th_type *expected, th_type *got, const char *message)
+void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
+            th_type *expected, th_type *got, core_string_t message)
 {
     if (!ctx) {
         return;
@@ -101,7 +100,7 @@ void th_errors_clear(th_ctx *ctx)
     }
 
     ctx->errors.len = 0;
-    ctx->err        = nullptr;
+    ctx->err        = (core_string_t){};
 }
 
 void th_ctx_set_probe_errors_observable(th_ctx *ctx, bool observable)

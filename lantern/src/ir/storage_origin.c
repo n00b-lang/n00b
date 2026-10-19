@@ -31,7 +31,7 @@ typedef struct {
 
 typedef ir_instr_t *storage_call_t;
 typedef const ir_func_t *storage_indirect_function_t;
-typedef const char *storage_method_t;
+typedef core_string_t storage_method_t;
 
 core_list_decl(storage_assignment_t);
 core_list_decl(storage_field_assignment_t);
@@ -94,7 +94,7 @@ append_indirect_function(ir_storage_origin_t *analysis,
 }
 
 static bool
-append_dynamic_method(ir_storage_origin_t *analysis, const char *name)
+append_dynamic_method(ir_storage_origin_t *analysis, core_string_t name)
 {
     return core_list_try_push(analysis->dynamic_methods, name);
 }
@@ -158,7 +158,7 @@ ir_storage_origin_new(ir_func_t *const *reachable, size_t count,
                 if (instruction->op == IR_OP_TRAIT_METHOD
                     && instruction->n_operands >= 2
                     && instruction->operands[1].kind == IR_OPD_NAME
-                    && instruction->operands[1].name
+                    && instruction->operands[1].name.data
                     && !append_dynamic_method(analysis,
                         instruction->operands[1].name)) goto failed;
                 for (uint32_t operand = 0;
@@ -235,10 +235,10 @@ definition(ir_storage_origin_t *analysis, const ir_func_t *target)
     for (size_t i = 0; i < analysis->function_count; i++) {
         ir_func_t *function = analysis->functions[i];
         if (function && function->n_blocks
-            && function->owner && function->name && target->name
-            && !strcmp(function->name, target->name)
-            && !strcmp(ir_module_name(function->owner),
-                       ir_module_name(target->owner))) return function;
+            && function->owner && function->name.data && target->name.data
+            && core_string_eq(function->name, target->name)
+            && core_string_eq(ir_module_name(function->owner),
+                              ir_module_name(target->owner))) return function;
     }
     return nullptr;
 }
@@ -336,8 +336,8 @@ same_field(const ir_instr_t *left, const ir_instr_t *right)
         || right->n_operands < 2
         || left->operands[1].kind != IR_OPD_NAME
         || right->operands[1].kind != IR_OPD_NAME
-        || !left->operands[1].name || !right->operands[1].name
-        || strcmp(left->operands[1].name, right->operands[1].name))
+        || !left->operands[1].name.data || !right->operands[1].name.data
+        || !core_string_eq(left->operands[1].name, right->operands[1].name))
         return false;
     const ir_value_t *left_base = ir_operand_value(&left->operands[0]);
     const ir_value_t *right_base = ir_operand_value(&right->operands[0]);
@@ -425,10 +425,11 @@ prove_parameter(ir_storage_origin_t *analysis, const ir_value_t *parameter,
         if (definition(analysis, analysis->indirect_functions.data[i]) == owner)
             return false;
     for (size_t i = 0; i < analysis->dynamic_methods.len; i++) {
-        const char *method = analysis->dynamic_methods.data[i];
-        size_t length = strlen(method);
-        if (!strncmp(owner->name, method, length)
-            && (owner->name[length] == 0 || owner->name[length] == '#'))
+        core_string_t method = analysis->dynamic_methods.data[i];
+        size_t length = method.u8_bytes;
+        if (core_string_starts_with(owner->name, method)
+            && (owner->name.u8_bytes == length
+                || owner->name.data[length] == '#'))
             return false;
     }
     bool found = false;
@@ -462,7 +463,7 @@ index_is_inline_field(const ir_instr_t *instruction)
         ? base->def : nullptr;
     if (!field || field->op != IR_OP_FIELD || field->n_operands != 2
         || field->operands[1].kind != IR_OPD_NAME
-        || !field->operands[1].name || !field->block
+        || !field->operands[1].name.data || !field->block
         || !field->block->owner || !field->block->owner->owner)
         return false;
     const ir_value_t *object = ir_operand_value(&field->operands[0]);
@@ -473,7 +474,8 @@ index_is_inline_field(const ir_instr_t *instruction)
     if (!layout) return false;
     for (size_t i = 0; i < layout->n_members; i++) {
         const ir_final_member_layout_t *member = &layout->members[i];
-        if (member->name && !strcmp(member->name, field->operands[1].name))
+        if (member->name.data
+            && core_string_eq(member->name, field->operands[1].name))
             return member->inline_element_count != 0;
     }
     return false;

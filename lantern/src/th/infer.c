@@ -6,10 +6,7 @@
 #include "lib/list.h"
 #include "lib/option.h"
 
-typedef const char *iface_name_ptr;
-core_list_decl(iface_name_ptr);
-
-static bool nullary_name(const th_type *type, const char **name);
+static bool nullary_name(const th_type *type, core_string_t *name);
 
 static void defer_environment_constraints(th_ctx *ctx, th_type *variable)
 {
@@ -20,8 +17,8 @@ static void defer_environment_constraints(th_ctx *ctx, th_type *variable)
 }
 
 typedef struct {
-    const char *module;
-    const char *package;
+    core_string_t module;
+    core_string_t package;
 } constraint_scope_t;
 
 static constraint_scope_t enter_constraint_scope(
@@ -41,13 +38,18 @@ static void leave_constraint_scope(th_ctx *ctx, constraint_scope_t previous)
     ctx->package = previous.package;
 }
 
-static bool same_text(const char *a, const char *b)
+static bool same_text(core_string_t a, core_string_t b)
 {
-    return !strcmp(a ? a : "", b ? b : "");
+    return core_string_eq(a, b);
+}
+
+static core_string_t scope_text(th_ctx *ctx, core_string_t text)
+{
+    return th_strdup(ctx, text.data ? text : CORE_STRING_STATIC(""));
 }
 
 static bool environment_constraint_active(th_ctx *ctx, th_con_kind kind,
-                                          const char *name,
+                                          core_string_t name,
                                           th_type *receiver)
 {
     uint64_t receiver_hash = th_hash(ctx, receiver);
@@ -63,7 +65,7 @@ static bool environment_constraint_active(th_ctx *ctx, th_con_kind kind,
 }
 
 static void push_environment_constraint(th_ctx *ctx, th_con_kind kind,
-                                        const char *name, th_type *receiver)
+                                        core_string_t name, th_type *receiver)
 {
     core_list_push(ctx->active_environment_constraints,
         ((th_active_constraint_t){
@@ -75,11 +77,11 @@ static void push_environment_constraint(th_ctx *ctx, th_con_kind kind,
         }));
 }
 
-static bool iface_name_seen(core_list_t(iface_name_ptr) *names,
-                            const char *name)
+static bool iface_name_seen(core_list_t(core_string_t) *names,
+                            core_string_t name)
 {
     for (size_t i = 0; i < names->len; i++) {
-        if (!strcmp(names->data[i], name)) {
+        if (core_string_eq(names->data[i], name)) {
             return true;
         }
     }
@@ -92,19 +94,17 @@ static bool same_constraint_scope(const th_constraint *a,
 {
     if (a->has_scope != b->has_scope) return false;
     return !a->has_scope
-        || (!strcmp(a->scope_module ? a->scope_module : "",
-                    b->scope_module ? b->scope_module : "")
-            && !strcmp(a->scope_package ? a->scope_package : "",
-                       b->scope_package ? b->scope_package : ""));
+        || (core_string_eq(a->scope_module, b->scope_module)
+            && core_string_eq(a->scope_package, b->scope_package));
 }
 
 static bool same_method_names(const th_constraint *a, const th_constraint *b)
 {
-    if (!a->method.name || !b->method.name
-        || strcmp(a->method.name, b->method.name)) return false;
-    if (!a->method.in_place || !b->method.in_place)
-        return a->method.in_place == b->method.in_place;
-    return !strcmp(a->method.in_place, b->method.in_place);
+    if (!a->method.name.data || !b->method.name.data
+        || !core_string_eq(a->method.name, b->method.name)) return false;
+    if (!a->method.in_place.data || !b->method.in_place.data)
+        return a->method.in_place.data == b->method.in_place.data;
+    return core_string_eq(a->method.in_place, b->method.in_place);
 }
 
 static th_constraint *con_same_slot(th_type *var, th_constraint c)
@@ -118,7 +118,7 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
 
         if (c.kind == TH_CON_HAS_FIELD
             && e->field.auto_deref == c.field.auto_deref
-            && !strcmp(e->field.name, c.field.name)) {
+            && core_string_eq(e->field.name, c.field.name)) {
             return e;
         }
 
@@ -126,8 +126,9 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
             return e;
         }
 
-        if (c.kind == TH_CON_IMPLEMENTS && e->iface && c.iface &&
-            !strcmp(e->iface, c.iface) && same_constraint_scope(e, &c)) {
+        if (c.kind == TH_CON_IMPLEMENTS && e->iface.data && c.iface.data &&
+            core_string_eq(e->iface, c.iface)
+            && same_constraint_scope(e, &c)) {
             return e;
         }
 
@@ -236,7 +237,7 @@ static bool same_method_obligation(th_ctx *ctx, const th_constraint *a,
                                      b_call->fn.rest->type, b_owner)))
         return false;
     for (size_t i = 0; i < a_call->fn.nkw; i++)
-        if (strcmp(a_call->fn.kw[i].name, b_call->fn.kw[i].name)
+        if (!core_string_eq(a_call->fn.kw[i].name, b_call->fn.kw[i].name)
             || a_call->fn.kw[i].mode != b_call->fn.kw[i].mode
             || !same_method_type_ref(ctx, a_call->fn.kw[i].type, a_owner,
                                      b_call->fn.kw[i].type, b_owner))
@@ -289,7 +290,8 @@ static bool merge_method_types(th_ctx *ctx, th_type *a, th_type *b,
     size_t before = th_error_count(ctx);
     if (!uni(ctx, a, b, seen)) {
         if (th_error_count(ctx) == before)
-            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a, "types do not unify");
+            th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
+                   CORE_STRING_STATIC("types do not unify"));
         return false;
     }
     th_normalize(th_apply_subst(ctx, a));
@@ -322,24 +324,20 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     }
     if (c.kind == TH_CON_KIND && c.type_kind > TH_TRAIT) return false;
     if (same_repeated_constraint(ctx, var, &c)) return true;
-    if (ctx && !c.span.file && !c.span.start_line) c.span = ctx->span;
+    if (ctx && !c.span.file.data && !c.span.start_line) c.span = ctx->span;
 
     if (c.kind == TH_CON_METHOD) {
-        if (!ctx || !c.method.name || !*c.method.name || !c.method.result ||
+        if (!ctx || !c.method.name.u8_bytes || !c.method.result ||
             (c.method.call &&
              th_kind_of(th_resolve(c.method.call)) != TH_FUNCTION))
             return false;
-        if (!c.has_scope && (ctx->module || ctx->package)) {
-            const char *module = ctx->module ? ctx->module : "";
-            const char *package = ctx->package ? ctx->package : "";
-            c.scope_module = th_strdup(ctx, module, strlen(module));
-            c.scope_package = th_strdup(ctx, package, strlen(package));
+        if (!c.has_scope && (ctx->module.data || ctx->package.data)) {
+            c.scope_module = scope_text(ctx, ctx->module);
+            c.scope_package = scope_text(ctx, ctx->package);
             c.has_scope = true;
         }
-        c.method.name = th_strdup(ctx, c.method.name, strlen(c.method.name));
-        if (c.method.in_place)
-            c.method.in_place = th_strdup(ctx, c.method.in_place,
-                                          strlen(c.method.in_place));
+        c.method.name = th_strdup(ctx, c.method.name);
+        c.method.in_place = th_strdup(ctx, c.method.in_place);
         for (size_t i = 0; i < var->var.cons.len; i++) {
             th_constraint *slot = &var->var.cons.data[i];
             if (slot->kind == TH_CON_METHOD && same_method_names(slot, &c)
@@ -365,9 +363,13 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
 
         if (have && want && !th_unifies(ctx, have, want)) {
             th_err(ctx, TH_ERR_CONSTRAINT,
-                   c.kind == TH_CON_HAS_FIELD ? "has_field" : "has_param",
+                   c.kind == TH_CON_HAS_FIELD
+                       ? CORE_STRING_STATIC("has_field")
+                       : CORE_STRING_STATIC("has_param"),
                    have, want,
-                   "constraint conflicts with one already on the variable");
+                   CORE_STRING_STATIC(
+                       "constraint conflicts with one already on the "
+                       "variable"));
 
             return false;
         }
@@ -376,22 +378,20 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     }
 
     if (c.kind == TH_CON_HAS_FIELD) {
-        if (!ctx || !c.field.name || !*c.field.name) return false;
-        c.field.name = th_strdup(ctx, c.field.name, strlen(c.field.name));
+        if (!ctx || !c.field.name.u8_bytes) return false;
+        c.field.name = th_strdup(ctx, c.field.name);
     }
 
     if (ctx && c.kind == TH_CON_IMPLEMENTS && !c.has_scope &&
-        (ctx->module || ctx->package)) {
-        const char *module = ctx->module ? ctx->module : "";
-        const char *package = ctx->package ? ctx->package : "";
-        c.scope_module = th_strdup(ctx, module, strlen(module));
-        c.scope_package = th_strdup(ctx, package, strlen(package));
+        (ctx->module.data || ctx->package.data)) {
+        c.scope_module = scope_text(ctx, ctx->module);
+        c.scope_package = scope_text(ctx, ctx->package);
         c.has_scope = true;
     }
 
-    if (c.kind == TH_CON_IMPLEMENTS && c.iface) {
+    if (c.kind == TH_CON_IMPLEMENTS && c.iface.data) {
         if (!ctx) return false;
-        c.iface = th_strdup(ctx, c.iface, strlen(c.iface));
+        c.iface = th_strdup(ctx, c.iface);
     }
 
     th_var_cons_push(var, c);
@@ -409,12 +409,12 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
     return result;
 }
 
-bool th_require_method_at(th_ctx *ctx, th_type *receiver, const char *name,
-                          const char *in_place, th_type *result,
+bool th_require_method_at(th_ctx *ctx, th_type *receiver, core_string_t name,
+                          core_string_t in_place, th_type *result,
                           th_type *call, const void *site)
 {
-    if (!ctx || !receiver || !name || !*name || !result ||
-        (in_place && !*in_place) ||
+    if (!ctx || !receiver || !name.u8_bytes || !result ||
+        (in_place.data && !in_place.u8_bytes) ||
         (call && th_kind_of(th_resolve(call)) != TH_FUNCTION))
         return false;
     th_type *resolved = th_resolve(receiver);
@@ -433,25 +433,25 @@ bool th_require_method_at(th_ctx *ctx, th_type *receiver, const char *name,
 }
 
 bool th_require_method_in_place(th_ctx *ctx, th_type *receiver,
-                                const char *name, const char *in_place,
+                                core_string_t name, core_string_t in_place,
                                 th_type *result, th_type *call)
 {
     return th_require_method_at(ctx, receiver, name, in_place, result, call,
                                 nullptr);
 }
 
-bool th_require_method(th_ctx *ctx, th_type *receiver, const char *name,
+bool th_require_method(th_ctx *ctx, th_type *receiver, core_string_t name,
                        th_type *result, th_type *call)
 {
-    return th_require_method_in_place(ctx, receiver, name, nullptr, result,
-                                      call);
+    return th_require_method_in_place(ctx, receiver, name, (core_string_t){},
+                                      result, call);
 }
 
 bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
-                                    const char *name, th_type *result,
+                                    core_string_t name, th_type *result,
                                     th_type *error)
 {
-    if (!ctx || !receiver || !name || !*name || !result || !error)
+    if (!ctx || !receiver || !name.u8_bytes || !result || !error)
         return false;
     th_type *variable = th_resolve(receiver);
     if (th_kind_of(variable) != TH_VAR) return false;
@@ -460,7 +460,7 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
     for (size_t i = 0; i < variable->var.cons.len; i++) {
         th_constraint *constraint = &variable->var.cons.data[i];
         if (constraint->kind != TH_CON_METHOD
-            || strcmp(constraint->method.name, name)) continue;
+            || !core_string_eq(constraint->method.name, name)) continue;
         named_count++;
         if (th_resolve(constraint->method.result) == th_resolve(result)) {
             match = constraint;
@@ -471,7 +471,7 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
         for (size_t i = 0; i < variable->var.cons.len; i++) {
             th_constraint *constraint = &variable->var.cons.data[i];
             if (constraint->kind == TH_CON_METHOD
-                && !strcmp(constraint->method.name, name)) {
+                && core_string_eq(constraint->method.name, name)) {
                 match = constraint;
                 break;
             }
@@ -485,10 +485,11 @@ bool th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
 }
 
 static size_t formal_named(const th_formal_name *formals, size_t count,
-                           const char *name)
+                           core_string_t name)
 {
-    for (size_t i = 0; name && i < count; i++)
-        if (formals[i].name && !strcmp(formals[i].name, name)) return i;
+    for (size_t i = 0; name.data && i < count; i++)
+        if (formals[i].name.data && core_string_eq(formals[i].name, name))
+            return i;
     return SIZE_MAX;
 }
 
@@ -543,18 +544,18 @@ th_type *th_call_shape_bind_keywords(th_ctx *ctx, th_type *call,
 }
 
 bool th_method_obligation_bind_keywords(th_ctx *ctx, th_type *receiver,
-                                        const char *name,
+                                        core_string_t name,
                                         const th_formal_name *formals,
                                         size_t formal_count)
 {
-    if (!ctx || !receiver || !name || !*name) return false;
+    if (!ctx || !receiver || !name.u8_bytes) return false;
     th_type *variable = th_resolve(receiver);
     if (th_kind_of(variable) != TH_VAR) return false;
     bool updated = false;
     for (size_t i = 0; i < variable->var.cons.len; i++) {
         th_constraint *constraint = &variable->var.cons.data[i];
         th_type *call = constraint->kind == TH_CON_METHOD
-            && !strcmp(constraint->method.name, name)
+            && core_string_eq(constraint->method.name, name)
             ? th_resolve(constraint->method.call) : nullptr;
         if (!call || th_kind_of(call) != TH_FUNCTION || !call->fn.nkw)
             continue;
@@ -586,80 +587,88 @@ bool th_var_constraint_at(const th_type *var, size_t i, th_constraint *out)
     return true;
 }
 
-void th_register_promotion(th_ctx *ctx, const char *from, const char *to)
+static core_string_t *arena_string_key(th_ctx *ctx, core_string_t text)
 {
-    if (!ctx || !from || !to) {
+    core_string_t *key = th_alloc(ctx, sizeof(core_string_t));
+
+    *key = text;
+
+    return key;
+}
+
+void th_register_promotion(th_ctx *ctx, core_string_t from, core_string_t to)
+{
+    if (!ctx || !from.data || !to.data) {
         return;
     }
 
-    th_promo p = {.from = th_strdup(ctx, from, strlen(from)),
-                  .to   = th_strdup(ctx, to, strlen(to))};
+    th_promo p = {.from = th_strdup(ctx, from),
+                  .to   = th_strdup(ctx, to)};
 
     core_list_push(ctx->promos, p);
 
     if (!ctx->promo_index) {
         ctx->promo_index = core_alloc(core_dict_t);
-        core_dict_init(ctx->promo_index, core_hash_cstring,
-                       core_dict_cstr_eq);
+        core_dict_init_string(ctx->promo_index);
     }
 
     bool  found = false;
-    void *have  = _core_dict_get(ctx->promo_index, (void *)p.from, &found);
+    void *have  = _core_dict_get(ctx->promo_index, &p.from, &found);
 
-    core_list_t(core_const_charptr_t) *edges = have;
+    core_list_t(core_string_t) *edges = have;
 
     if (!found) {
-        edges  = core_alloc(core_list_t(core_const_charptr_t));
-        *edges = core_list_new(core_const_charptr_t);
+        edges  = core_alloc(core_list_t(core_string_t));
+        *edges = core_list_new(core_string_t);
 
-        _core_dict_put(ctx->promo_index, (void *)p.from, edges);
+        _core_dict_put(ctx->promo_index, arena_string_key(ctx, p.from),
+                       edges);
     }
 
     core_list_push(*edges, p.to);
 }
 
-bool th_promotes_to(th_ctx *ctx, const char *from, const char *to)
+bool th_promotes_to(th_ctx *ctx, core_string_t from, core_string_t to)
 {
-    if (!ctx || !from || !to) {
+    if (!ctx || !from.data || !to.data) {
         return false;
     }
 
-    if (!strcmp(from, to)) {
+    if (core_string_eq(from, to)) {
         return true;
     }
 
     core_dict_t seen;
-    core_list_t(core_const_charptr_t) queue
-        = core_list_new(core_const_charptr_t);
+    core_list_t(core_string_t) queue = core_list_new(core_string_t);
 
-    core_dict_init(&seen, core_hash_cstring, core_dict_cstr_eq);
-    core_dict_put(&seen, from, from);
+    core_dict_init_string(&seen);
+    core_dict_put(&seen, &from, 1);
     core_list_push(queue, from);
 
     bool hit = false;
 
     for (size_t at = 0; !hit && at < queue.len; at++) {
-        const char *cur   = queue.data[at];
-        bool        found = false;
+        core_string_t cur   = queue.data[at];
+        bool          found = false;
 
         if (!ctx->promo_index) {
             break;
         }
 
-        core_list_t(core_const_charptr_t) *edges
-            = _core_dict_get(ctx->promo_index, (void *)cur, &found);
+        core_list_t(core_string_t) *edges
+            = _core_dict_get(ctx->promo_index, &cur, &found);
 
         for (size_t i = 0; found && i < edges->len; i++) {
-            const char *next = edges->data[i];
+            core_string_t *next = &edges->data[i];
 
-            if (!strcmp(next, to)) {
+            if (core_string_eq(*next, to)) {
                 hit = true;
                 break;
             }
 
-            if (!core_dict_contains(&seen, (void *)next)) {
-                core_dict_put(&seen, next, next);
-                core_list_push(queue, next);
+            if (!core_dict_contains(&seen, next)) {
+                core_dict_put(&seen, next, 1);
+                core_list_push(queue, *next);
             }
         }
     }
@@ -692,7 +701,7 @@ bool th_type_promotes_to(th_ctx *ctx, const th_type *from, const th_type *to)
         return to->bitint.flavor == TH_BITINT_UNSIGNED ||
                from->bitint.width < to->bitint.width;
     }
-    const char *from_name = nullptr, *to_name = nullptr;
+    core_string_t from_name = {}, to_name = {};
     return nullary_name(from, &from_name) &&
            nullary_name(to, &to_name) &&
            th_promotes_to(ctx, from_name, to_name);
@@ -700,31 +709,30 @@ bool th_type_promotes_to(th_ctx *ctx, const th_type *from, const th_type *to)
 
 static bool uni_in_place(th_ctx *ctx, th_type *a, th_type *b);
 
-void th_register_iface(th_ctx *ctx, const char *name, th_type *methods)
+void th_register_iface(th_ctx *ctx, core_string_t name, th_type *methods)
 {
-    if (!ctx || !name || !methods) {
+    if (!ctx || !name.data || !methods) {
         return;
     }
 
-    th_iface i = {.name    = th_strdup(ctx, name, strlen(name)),
+    th_iface i = {.name    = th_strdup(ctx, name),
                   .methods = methods};
 
     core_list_push(ctx->ifaces, i);
 
     if (!ctx->iface_index) {
         ctx->iface_index = core_alloc(core_dict_t);
-        core_dict_init(ctx->iface_index, core_hash_cstring,
-                       core_dict_cstr_eq);
+        core_dict_init_string(ctx->iface_index);
     }
 
-    _core_dict_put(ctx->iface_index, (void *)i.name,
+    _core_dict_put(ctx->iface_index, arena_string_key(ctx, i.name),
                    (void *)(uintptr_t)ctx->ifaces.len);
 }
 
-bool th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
+bool th_register_method(th_ctx *ctx, th_type *receiver, core_string_t name,
                         th_type *signature)
 {
-    if (!ctx || !receiver || !name || !*name || !signature) {
+    if (!ctx || !receiver || !name.u8_bytes || !signature) {
         return false;
     }
 
@@ -733,7 +741,8 @@ bool th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
     for (size_t i = 0; i < ctx->methods.len; i++) {
         th_method *method = &ctx->methods.data[i];
 
-        if (method->receiver == receiver && !strcmp(method->name, name)) {
+        if (method->receiver == receiver
+            && core_string_eq(method->name, name)) {
             method->signature = signature;
 
             return true;
@@ -742,7 +751,7 @@ bool th_register_method(th_ctx *ctx, th_type *receiver, const char *name,
 
     core_list_push(ctx->methods,
                    ((th_method){.receiver = receiver,
-                                .name = th_strdup(ctx, name, strlen(name)),
+                                .name = th_strdup(ctx, name),
                                 .signature = signature}));
 
     return true;
@@ -762,9 +771,9 @@ bool th_register_method_resolver(th_ctx *ctx,
     return true;
 }
 
-th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name)
+th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, core_string_t name)
 {
-    if (!ctx || !receiver || !name || !*name) {
+    if (!ctx || !receiver || !name.u8_bytes) {
         return nullptr;
     }
 
@@ -773,7 +782,8 @@ th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name)
     for (size_t i = 0; i < ctx->methods.len; i++) {
         th_method *method = &ctx->methods.data[i];
 
-        if (method->receiver == receiver && !strcmp(method->name, name)) {
+        if (method->receiver == receiver
+            && core_string_eq(method->name, name)) {
             return method->signature;
         }
     }
@@ -783,7 +793,7 @@ th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name)
     for (size_t i = 0; i < ctx->methods.len; i++) {
         th_method *method = &ctx->methods.data[i];
 
-        if (!strcmp(method->name, name)
+        if (core_string_eq(method->name, name)
             && th_hash(ctx, method->receiver) == receiver_hash) {
             return method->signature;
         }
@@ -804,14 +814,14 @@ th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, const char *name)
     return nullptr;
 }
 
-static const th_iface *iface_named(th_ctx *ctx, const char *name)
+static const th_iface *iface_named(th_ctx *ctx, core_string_t name)
 {
     if (!ctx->iface_index) {
         return nullptr;
     }
 
     bool  found = false;
-    void *slot  = _core_dict_get(ctx->iface_index, (void *)name, &found);
+    void *slot  = _core_dict_get(ctx->iface_index, &name, &found);
 
     return found ? &ctx->ifaces.data[(uintptr_t)slot - 1] : nullptr;
 }
@@ -835,9 +845,9 @@ static bool satisfies(th_ctx *ctx, th_type *type, th_type *methods)
     return satisfied;
 }
 
-bool th_implements(th_ctx *ctx, th_type *type, const char *iface)
+bool th_implements(th_ctx *ctx, th_type *type, core_string_t iface)
 {
-    if (!ctx || !type || !iface) {
+    if (!ctx || !type || !iface.data) {
         return false;
     }
 
@@ -845,8 +855,9 @@ bool th_implements(th_ctx *ctx, th_type *type, const char *iface)
     if (resolved && resolved->kind == TH_VAR) {
         for (size_t c = 0; c < resolved->var.cons.len; c++) {
             const th_constraint *constraint = &resolved->var.cons.data[c];
-            if (constraint->kind == TH_CON_IMPLEMENTS && constraint->iface &&
-                !strcmp(constraint->iface, iface)) {
+            if (constraint->kind == TH_CON_IMPLEMENTS
+                && constraint->iface.data
+                && core_string_eq(constraint->iface, iface)) {
                 return true;
             }
         }
@@ -858,7 +869,7 @@ bool th_implements(th_ctx *ctx, th_type *type, const char *iface)
         || th_env_implements(ctx, type, iface);
 }
 
-size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
+size_t th_infer_ifaces(th_ctx *ctx, th_type *type, core_string_t *out,
                        size_t max)
 {
     if (!ctx || !type) {
@@ -866,12 +877,13 @@ size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
     }
 
     size_t n = 0;
-    core_list_t(iface_name_ptr) emitted = core_list_new(iface_name_ptr);
+    core_list_t(core_string_t) emitted = core_list_new(core_string_t);
     th_type *resolved = th_resolve(type);
     if (resolved && resolved->kind == TH_VAR) {
         for (size_t c = 0; c < resolved->var.cons.len; c++) {
             const th_constraint *constraint = &resolved->var.cons.data[c];
-            if (constraint->kind != TH_CON_IMPLEMENTS || !constraint->iface ||
+            if (constraint->kind != TH_CON_IMPLEMENTS
+                || !constraint->iface.data ||
                 iface_name_seen(&emitted, constraint->iface)) {
                 continue;
             }
@@ -903,13 +915,13 @@ size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
             const th_env_trait_t *trait = &ctx->environment->traits.data[i];
             bool already_seen = false;
             for (size_t j = 0; j < ctx->ifaces.len; j++)
-                if (!strcmp(ctx->ifaces.data[j].name, trait->name)) {
+                if (core_string_eq(ctx->ifaces.data[j].name, trait->name)) {
                     already_seen = true;
                     break;
                 }
             for (size_t j = 0; !already_seen && j < i; j++)
-                if (!strcmp(ctx->environment->traits.data[j].name,
-                            trait->name)) {
+                if (core_string_eq(ctx->environment->traits.data[j].name,
+                                   trait->name)) {
                     already_seen = true;
                     break;
                 }
@@ -925,8 +937,6 @@ size_t th_infer_ifaces(th_ctx *ctx, th_type *type, const char **out,
     core_list_free(emitted);
     return n;
 }
-
-static bool nullary_name(const th_type *t, const char **name);
 
 static void record_coercion(th_ctx *ctx, th_coerce_flag kind, th_type *from,
                             th_type *to)
@@ -1001,7 +1011,7 @@ void th_ctx_set_method_argument_coercions(th_ctx *ctx, uint8_t allowed)
 }
 
 static th_type *resolve_constraint_method(th_ctx *ctx, th_type *receiver,
-                                          const char *name,
+                                          core_string_t name,
                                           th_env_method_status_t *status)
 {
     *status = TH_ENV_METHOD_NOT_FOUND;
@@ -1014,7 +1024,7 @@ static th_type *resolve_constraint_method(th_ctx *ctx, th_type *receiver,
 }
 
 static th_type *receiver_method_signature(th_ctx *ctx, th_type *bound_to,
-                                          const char *name,
+                                          core_string_t name,
                                           th_type **receiver_type,
                                           th_env_method_status_t *status)
 {
@@ -1094,7 +1104,7 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
 
 th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
 {
-    th_type *bottom = th_name(ctx, TH_BOTTOM);
+    th_type *bottom = th_name(ctx, CORE_STRING_STATIC(TH_BOTTOM));
 
     if (!ctx || !from || !policy.target) {
         return bottom;
@@ -1148,7 +1158,7 @@ th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy)
     return bottom;
 }
 
-static bool nullary_name(const th_type *t, const char **name)
+static bool nullary_name(const th_type *t, core_string_t *name)
 {
     t = th_resolve_c(t);
 
@@ -1196,20 +1206,23 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
 
     for (size_t i = 0; i < var->var.cons.len; i++) {
         const th_constraint *c = &var->var.cons.data[i];
-        if (c->span.file || c->span.start_line) ctx->span = c->span;
+        if (c->span.file.data || c->span.start_line) ctx->span = c->span;
 
         switch (c->kind) {
         case TH_CON_KIND:
             if (th_kind_of(th_resolve(bound_to)) != c->type_kind) {
-                th_err(ctx, TH_ERR_CONSTRAINT, "kind", nullptr, bound_to,
-                       "constraint kind does not match the type family");
+                th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("kind"),
+                       nullptr, bound_to,
+                       CORE_STRING_STATIC(
+                           "constraint kind does not match the type family"));
                 return false;
             }
             break;
         case TH_CON_UNIFIES:
             if (!uni(ctx, bound_to, c->target, seen)) {
-                th_err(ctx, TH_ERR_CONSTRAINT, "unifies", c->target,
-                       bound_to, "constraint unifies failed");
+                th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("unifies"),
+                       c->target, bound_to,
+                       CORE_STRING_STATIC("constraint unifies failed"));
 
                 return false;
             }
@@ -1221,10 +1234,10 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             for (size_t j = 0; !matched && j < c->one_of.n; j++) {
                 const th_type *cand = th_resolve_c(c->one_of.types[j]);
                 const th_type *bt   = th_resolve_c(bound_to);
-                const char    *a, *b;
+                core_string_t  a, b;
 
                 if (nullary_name(bt, &a) && nullary_name(cand, &b)) {
-                    matched = !strcmp(a, b);
+                    matched = core_string_eq(a, b);
                 }
                 else {
                     matched = bt == cand;
@@ -1243,8 +1256,10 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             }
 
             if (!matched) {
-                th_err(ctx, TH_ERR_CONSTRAINT, "one_of", nullptr, bound_to,
-                       "constraint one_of matched no alternative");
+                th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("one_of"),
+                       nullptr, bound_to,
+                       CORE_STRING_STATIC(
+                           "constraint one_of matched no alternative"));
 
                 return false;
             }
@@ -1253,9 +1268,10 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
 
         case TH_CON_PROMOTES: {
             if (!th_type_promotes_to(ctx, bound_to, c->target)) {
-                th_err(ctx, TH_ERR_CONSTRAINT, "promotes", c->target,
-                       bound_to,
-                       "constraint promotes has no promotion path");
+                th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("promotes"),
+                       c->target, bound_to,
+                       CORE_STRING_STATIC(
+                           "constraint promotes has no promotion path"));
 
                 return false;
             }
@@ -1265,20 +1281,21 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
         case TH_CON_EXCLUDES: {
             const th_type *ex = th_resolve_c(c->target);
             const th_type *bt = th_resolve_c(bound_to);
-            const char    *a, *b;
+            core_string_t  a, b;
             bool           same;
 
             if (nullary_name(bt, &a) && nullary_name(ex, &b)) {
-                same = !strcmp(a, b);
+                same = core_string_eq(a, b);
             }
             else {
                 same = bt == ex;
             }
 
             if (same) {
-                th_err(ctx, TH_ERR_CONSTRAINT, "excludes", c->target,
-                       bound_to,
-                       "constraint excludes matched the excluded type");
+                th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("excludes"),
+                       c->target, bound_to,
+                       CORE_STRING_STATIC(
+                           "constraint excludes matched the excluded type"));
 
                 return false;
             }
@@ -1292,9 +1309,11 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                                             c->field.name);
 
             if (!m) {
-                th_err(ctx, TH_ERR_NO_SUCH_FIELD, "has_field",
-                       c->field.type, bound_to,
-                       "constraint has_field: no such field");
+                th_err(ctx, TH_ERR_NO_SUCH_FIELD,
+                       CORE_STRING_STATIC("has_field"), c->field.type,
+                       bound_to,
+                       CORE_STRING_STATIC(
+                           "constraint has_field: no such field"));
 
                 return false;
             }
@@ -1302,8 +1321,11 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             size_t field_errors = ctx->errors.len;
             if (c->field.type && !uni(ctx, m, c->field.type, seen)) {
                 if (ctx->errors.len > field_errors) return false;
-                th_err(ctx, TH_ERR_CONSTRAINT, "has_field", c->field.type,
-                       m, "constraint has_field: field type does not unify");
+                th_err(ctx, TH_ERR_CONSTRAINT,
+                       CORE_STRING_STATIC("has_field"), c->field.type, m,
+                       CORE_STRING_STATIC(
+                           "constraint has_field: field type does not "
+                           "unify"));
 
                 return false;
             }
@@ -1314,9 +1336,12 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             size_t at = (size_t)c->param.index;
 
             if (at >= th_named_nargs(bound_to)) {
-                th_err(ctx, TH_ERR_PARAM_MISMATCH, "has_param",
-                       c->param.type, bound_to,
-                       "constraint has_param: no parameter at that index");
+                th_err(ctx, TH_ERR_PARAM_MISMATCH,
+                       CORE_STRING_STATIC("has_param"), c->param.type,
+                       bound_to,
+                       CORE_STRING_STATIC(
+                           "constraint has_param: no parameter at that "
+                           "index"));
 
                 return false;
             }
@@ -1324,9 +1349,11 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             const th_arg *a = th_named_arg(bound_to, at);
 
             if (!a || a->kind != TH_ARG_TYPE) {
-                th_err(ctx, TH_ERR_PARAM_MISMATCH, "has_param",
-                       c->param.type, bound_to,
-                       "constraint has_param: parameter is not a type");
+                th_err(ctx, TH_ERR_PARAM_MISMATCH,
+                       CORE_STRING_STATIC("has_param"), c->param.type,
+                       bound_to,
+                       CORE_STRING_STATIC(
+                           "constraint has_param: parameter is not a type"));
 
                 return false;
             }
@@ -1334,9 +1361,12 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             size_t param_errors = ctx->errors.len;
             if (c->param.type && !uni(ctx, a->type, c->param.type, seen)) {
                 if (ctx->errors.len > param_errors) return false;
-                th_err(ctx, TH_ERR_CONSTRAINT, "has_param", c->param.type,
+                th_err(ctx, TH_ERR_CONSTRAINT,
+                       CORE_STRING_STATIC("has_param"), c->param.type,
                        a->type,
-                       "constraint has_param: parameter does not unify");
+                       CORE_STRING_STATIC(
+                           "constraint has_param: parameter does not "
+                           "unify"));
 
                 return false;
             }
@@ -1361,7 +1391,9 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             leave_constraint_scope(ctx, previous);
             if (!implements) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->iface, nullptr, bound_to,
-                       "constraint implements: interface not satisfied");
+                       CORE_STRING_STATIC(
+                           "constraint implements: interface not "
+                           "satisfied"));
 
                 return false;
             }
@@ -1382,7 +1414,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                                         bound_to);
             th_env_method_status_t status = TH_ENV_METHOD_NOT_FOUND;
             th_type *receiver_type = bound_to;
-            th_type *signature = c->method.in_place
+            th_type *signature = c->method.in_place.data
                 ? receiver_method_signature(ctx, bound_to,
                       c->method.in_place, &receiver_type, &status)
                 : nullptr;
@@ -1448,8 +1480,9 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 th_err(ctx, TH_ERR_CONSTRAINT, c->method.name,
                        c->method.result, bound_to,
                        status == TH_ENV_METHOD_AMBIGUOUS
-                           ? "method dispatch is ambiguous"
-                           : "no matching method implementation");
+                           ? CORE_STRING_STATIC("method dispatch is ambiguous")
+                           : CORE_STRING_STATIC(
+                                 "no matching method implementation"));
                 return false;
             }
             break;
@@ -2177,8 +2210,7 @@ static bool arg_eq(const th_arg *x, const th_arg *y)
     case TH_ARG_SINT:
         return x->s == y->s;
     case TH_ARG_STR:
-        return x->str.n == y->str.n
-            && !memcmp(x->str.p, y->str.p, x->str.n);
+        return core_string_eq(x->str, y->str);
     default:
         return true;
     }
@@ -2200,18 +2232,18 @@ static void upush(core_list_t(tpair) *w, th_type *a, th_type *b)
 static bool uni_named(th_ctx *ctx, th_type *a, th_type *b,
                       core_list_t(tpair) *w)
 {
-    if (a->named.nlen != b->named.nlen
-        || memcmp(a->named.name, b->named.name, a->named.nlen)
+    if (!core_string_eq(a->named.name, b->named.name)
         || a->named.is_variant != b->named.is_variant) {
-        th_err(ctx, TH_ERR_UNIFY, nullptr, b, a,
-               "these are different named types");
+        th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
+               CORE_STRING_STATIC("these are different named types"));
 
         return false;
     }
 
     if (a->named.nargs != b->named.nargs) {
-        th_err(ctx, TH_ERR_ARITY_MISMATCH, nullptr, b, a,
-               "the two applications have different argument counts");
+        th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
+               CORE_STRING_STATIC(
+                   "the two applications have different argument counts"));
 
         return false;
     }
@@ -2220,8 +2252,8 @@ static bool uni_named(th_ctx *ctx, th_type *a, th_type *b,
         const th_arg *x = &a->named.args[i], *y = &b->named.args[i];
 
         if (x->kind != y->kind) {
-            th_err(ctx, TH_ERR_ARITY_MISMATCH, nullptr, b, a,
-                   "an argument differs in kind");
+            th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
+                   CORE_STRING_STATIC("an argument differs in kind"));
 
             return false;
         }
@@ -2230,8 +2262,8 @@ static bool uni_named(th_ctx *ctx, th_type *a, th_type *b,
             upush(w, x->type, y->type);
         }
         else if (!arg_eq(x, y)) {
-            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a,
-                   "a non-type argument differs");
+            th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
+                   CORE_STRING_STATIC("a non-type argument differs"));
 
             return false;
         }
@@ -2244,18 +2276,19 @@ static bool uni_record(th_ctx *ctx, th_type *a, th_type *b,
                        core_list_t(tpair) *w)
 {
     if (a->record.n != b->record.n) {
-        th_err(ctx, TH_ERR_ARITY_MISMATCH, nullptr, b, a,
-               "the two records have different member counts");
+        th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
+               CORE_STRING_STATIC(
+                   "the two records have different member counts"));
 
         return false;
     }
 
     core_dict_t by_name;
 
-    core_dict_init(&by_name, core_hash_cstring, core_dict_cstr_eq);
+    core_dict_init_string(&by_name);
 
     for (size_t i = 0; i < b->record.n; i++) {
-        core_dict_put(&by_name, b->record.members[i].name,
+        core_dict_put(&by_name, &b->record.members[i].name,
                       b->record.members[i].type);
     }
 
@@ -2264,11 +2297,12 @@ static bool uni_record(th_ctx *ctx, th_type *a, th_type *b,
     for (size_t i = a->record.n; ok && i-- > 0;) {
         bool     found = false;
         th_type *m     = core_dict_get(&by_name,
-                                       a->record.members[i].name, &found);
+                                       &a->record.members[i].name, &found);
 
         if (!found) {
             th_err(ctx, TH_ERR_NO_SUCH_FIELD, a->record.members[i].name,
-                   b, a, "the other record has no such member");
+                   b, a,
+                   CORE_STRING_STATIC("the other record has no such member"));
             ok = false;
 
             break;
@@ -2287,18 +2321,18 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
 {
     if (!a->fn.rest != !b->fn.rest || a->fn.np != b->fn.np
         || a->fn.nkw != b->fn.nkw || !a->fn.error != !b->fn.error) {
-        th_err(ctx, TH_ERR_ARITY_MISMATCH, nullptr, b, a,
-               "the two signatures differ in arity");
+        th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
+               CORE_STRING_STATIC("the two signatures differ in arity"));
 
         return false;
     }
 
     core_dict_t kw_by_name;
 
-    core_dict_init(&kw_by_name, core_hash_cstring, core_dict_cstr_eq);
+    core_dict_init_string(&kw_by_name);
 
     for (size_t i = 0; i < b->fn.nkw; i++) {
-        core_dict_put(&kw_by_name, b->fn.kw[i].name, &b->fn.kw[i]);
+        core_dict_put(&kw_by_name, &b->fn.kw[i].name, &b->fn.kw[i]);
     }
 
     bool kw_ok = true;
@@ -2306,11 +2340,12 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
     for (size_t i = a->fn.nkw; kw_ok && i-- > 0;) {
         bool              found = false;
         const th_kwparam *k     = core_dict_get(&kw_by_name,
-                                                a->fn.kw[i].name, &found);
+                                                &a->fn.kw[i].name, &found);
 
         if (!found || k->mode != a->fn.kw[i].mode) {
             th_err(ctx, TH_ERR_MISSING_KEYWORD, a->fn.kw[i].name, b, a,
-                   "the other signature lacks that keyword parameter");
+                   CORE_STRING_STATIC(
+                       "the other signature lacks that keyword parameter"));
             kw_ok = false;
 
             break;
@@ -2327,8 +2362,8 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
 
     if (a->fn.rest) {
         if (a->fn.rest->mode != b->fn.rest->mode) {
-            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a,
-                   "the rest parameters differ in mode");
+            th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
+                   CORE_STRING_STATIC("the rest parameters differ in mode"));
 
             return false;
         }
@@ -2338,8 +2373,8 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
 
     for (size_t i = a->fn.np; i-- > 0;) {
         if (a->fn.params[i].mode != b->fn.params[i].mode) {
-            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a,
-                   "a parameter differs in mode");
+            th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
+                   CORE_STRING_STATIC("a parameter differs in mode"));
 
             return false;
         }
@@ -2356,8 +2391,8 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
 static bool uni_sum(th_ctx *ctx, th_type *a, th_type *b, core_list_t(tpair) *w)
 {
     if (a->sum.comb != b->sum.comb || a->sum.n != b->sum.n) {
-        th_err(ctx, TH_ERR_ARITY_MISMATCH, nullptr, b, a,
-               "the two composites differ in shape");
+        th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
+               CORE_STRING_STATIC("the two composites differ in shape"));
 
         return false;
     }
@@ -2414,13 +2449,12 @@ static bool uni_step(th_ctx *ctx, th_type *a, th_type *b, core_list_t(tpair) *w)
         return uni_record(ctx, a, b, w);
 
     case TH_TRAIT:
-        if (a->trait.nlen != b->trait.nlen
-            || memcmp(a->trait.name, b->trait.name, a->trait.nlen)
+        if (!core_string_eq(a->trait.name, b->trait.name)
             || a->trait.n != b->trait.n
             || a->trait.nr != b->trait.nr) return false;
         for (size_t i = a->trait.n; i-- > 0;) {
-            if (strcmp(a->trait.methods[i].name,
-                       b->trait.methods[i].name)) return false;
+            if (!core_string_eq(a->trait.methods[i].name,
+                                b->trait.methods[i].name)) return false;
             upush(w, a->trait.methods[i].type,
                 b->trait.methods[i].type);
         }
@@ -2428,9 +2462,10 @@ static bool uni_step(th_ctx *ctx, th_type *a, th_type *b, core_list_t(tpair) *w)
             const th_trait_requirement *left = &a->trait.requirements[i];
             const th_trait_requirement *right = &b->trait.requirements[i];
             if (left->kind != right->kind
-                || (left->iface && !right->iface)
-                || (!left->iface && right->iface)
-                || (left->iface && strcmp(left->iface, right->iface)))
+                || (left->iface.data && !right->iface.data)
+                || (!left->iface.data && right->iface.data)
+                || (left->iface.data
+                    && !core_string_eq(left->iface, right->iface)))
                 return false;
             upush(w, left->subject, right->subject);
             if (left->target) upush(w, left->target, right->target);
@@ -2497,8 +2532,9 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
         core_dict_put(rhs, b, b);
 
         if ((a->kind != TH_VAR && b->kind == TH_VAR)
-            || (a->kind == TH_VAR && b->kind == TH_VAR && a->var.name
-                && (!b->var.name || strcmp(a->var.name, b->var.name) < 0))) {
+            || (a->kind == TH_VAR && b->kind == TH_VAR && a->var.name.data
+                && (!b->var.name.data
+                    || core_string_cmp(a->var.name, b->var.name) < 0))) {
             th_type *t = a;
 
             a = b;
@@ -2507,8 +2543,10 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
 
         if (a->kind == TH_VAR) {
             if (th_occurs(ctx, a, b)) {
-                th_err(ctx, TH_ERR_OCCURS, nullptr, a, b,
-                       "the variable occurs in the type it would be bound to");
+                th_err(ctx, TH_ERR_OCCURS, (core_string_t){}, a, b,
+                       CORE_STRING_STATIC(
+                           "the variable occurs in the type it would be "
+                           "bound to"));
                 ok = false;
                 break;
             }
@@ -2524,8 +2562,8 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
         }
 
         if (a->kind != b->kind) {
-            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a,
-                   "the two types are of different kinds");
+            th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
+                   CORE_STRING_STATIC("the two types are of different kinds"));
             ok = false;
             break;
         }
@@ -2573,8 +2611,8 @@ th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
 
     if (!uni_in_place(ctx, ia, ib)) {
         if (th_error_count(ctx) == before) {
-            th_err(ctx, TH_ERR_UNIFY, nullptr, ib, ia,
-                   "types do not unify");
+            th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, ib, ia,
+                   CORE_STRING_STATIC("types do not unify"));
         }
 
         return nullptr;
@@ -2601,7 +2639,7 @@ bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
     if (!ctx || !a || !b) return false;
     th_probe_t probe = th_probe_begin(ctx);
     bool unified = th_unify(ctx, a, b) != nullptr;
-    const char *err = ctx->err;
+    core_string_t err = ctx->err;
     if (!unified) {
         ctx->errors.len = probe.errors;
         ctx->err = probe.err;
@@ -2618,8 +2656,8 @@ th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
     size_t before = th_error_count(ctx);
     if (!uni_in_place(ctx, a, b)) {
         if (th_error_count(ctx) == before) {
-            th_err(ctx, TH_ERR_UNIFY, nullptr, b, a,
-                   "types do not unify");
+            th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
+                   CORE_STRING_STATIC("types do not unify"));
         }
         return nullptr;
     }

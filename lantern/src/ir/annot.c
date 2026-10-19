@@ -1,30 +1,28 @@
-#include <string.h>
-
 #include "private/ir/internal.h"
 
-bool ir_annot_key_ok(const char *key, const char *profile)
+bool ir_annot_key_ok(core_string_t key, core_string_t profile)
 {
-    if (!key) {
+    if (!key.data) {
         return false;
     }
 
-    const char *dot = strchr(key, '.');
+    int64_t dot = core_string_find_byte(key, '.');
 
-    if (!dot || dot == key || !dot[1]) {
+    if (dot <= 0 || (size_t)dot + 1 >= key.u8_bytes) {
         return false;
     }
 
-    size_t n = (size_t)(dot - key);
+    core_string_t head = core_string_slice(key, 0, (size_t)dot);
 
-    if (n == 2 && !strncmp(key, "ir", 2)) {
+    if (core_string_eq(head, CORE_STRING_STATIC("ir"))) {
         return true;
     }
 
-    if (!profile) {
+    if (!profile.data) {
         return true;
     }
 
-    return strlen(profile) == n && !strncmp(key, profile, n);
+    return core_string_eq(head, profile);
 }
 
 #define ANNOT_INDEX_MIN 16
@@ -38,9 +36,9 @@ static void annot_reindex(ir_ctx_t *ctx, ir_annots_t *m)
     }
 }
 
-ir_annot_t *ir_annot_get(ir_annots_t *m, const char *key)
+ir_annot_t *ir_annot_get(ir_annots_t *m, core_string_t key)
 {
-    if (!m || !key) {
+    if (!m || !key.data) {
         return nullptr;
     }
 
@@ -51,7 +49,7 @@ ir_annot_t *ir_annot_get(ir_annots_t *m, const char *key)
     }
 
     for (uint32_t i = 0; i < m->n; i++) {
-        if (!strcmp(m->a[i].key, key)) {
+        if (core_string_eq(m->a[i].key, key)) {
             return &m->a[i];
         }
     }
@@ -61,7 +59,7 @@ ir_annot_t *ir_annot_get(ir_annots_t *m, const char *key)
 
 bool ir_annot_set(ir_ctx_t *ctx, ir_annots_t *m, ir_annot_t a)
 {
-    if (!ctx || !m || !a.key) {
+    if (!ctx || !m || !a.key.data) {
         return false;
     }
 

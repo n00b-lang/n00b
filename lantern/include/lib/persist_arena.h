@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "lib/string.h"
+
 typedef struct core_persist_arena core_persist_arena_t;
 
 typedef enum {
@@ -28,11 +30,11 @@ uint64_t core_persist_arena_native_abi_tag(uint64_t application_tag);
 /* Raw arenas may contain native pointers. Their graph must be self-contained
  * and is only loadable with a compatible ABI and at the recorded virtual
  * address. Reopening never replaces an existing mapping; collisions fail. */
-bool core_persist_arena_create(const char *path, size_t capacity,
+bool core_persist_arena_create(core_string_t path, size_t capacity,
                                uint64_t abi_tag,
                                core_persist_arena_t **out,
                                core_persist_arena_error_t *error);
-bool core_persist_arena_open(const char *path, uint64_t abi_tag,
+bool core_persist_arena_open(core_string_t path, uint64_t abi_tag,
                              bool writable,
                              core_persist_arena_t **out,
                              core_persist_arena_error_t *error);
@@ -40,7 +42,7 @@ bool core_persist_arena_open(const char *path, uint64_t abi_tag,
  * image must be rebased with core_persist_arena_rebase_pointer(). Writes are
  * transient and never reach the archive file. */
 bool core_persist_arena_open_relocated(
-    const char *path, uint64_t abi_tag, bool writable,
+    core_string_t path, uint64_t abi_tag, bool writable,
     core_persist_arena_t **out, core_persist_arena_error_t *error);
 
 void *core_persist_arena_alloc(core_persist_arena_t *arena, size_t size,

@@ -1,5 +1,3 @@
-#include <string.h>
-
 #include "private/th/internal.h"
 #include "lib/hash.h"
 
@@ -10,8 +8,8 @@ static const th_type *as(const th_type *t, th_kind k)
     return t && t->kind == k ? t : nullptr;
 }
 
-bool th_named_info(const th_type *t, const char **name, size_t *nlen,
-                   bool *is_variant, size_t *nargs)
+bool th_named_info(const th_type *t, core_string_t *name, bool *is_variant,
+                   size_t *nargs)
 {
     const th_type *n = as(t, TH_NAMED);
 
@@ -21,10 +19,6 @@ bool th_named_info(const th_type *t, const char **name, size_t *nlen,
 
     if (name) {
         *name = n->named.name;
-    }
-
-    if (nlen) {
-        *nlen = n->named.nlen;
     }
 
     if (is_variant) {
@@ -130,16 +124,16 @@ const th_member *th_record_member(const th_type *t, size_t i)
     return n && i < n->record.n ? &n->record.members[i] : nullptr;
 }
 
-th_type *th_record_lookup(const th_type *t, const char *name)
+th_type *th_record_lookup(const th_type *t, core_string_t name)
 {
     const th_type *n = as(t, TH_RECORD);
 
-    if (!n || !name) {
+    if (!n || !name.data) {
         return nullptr;
     }
 
     for (size_t i = 0; i < n->record.n; i++) {
-        if (!strcmp(n->record.members[i].name, name)) {
+        if (core_string_eq(n->record.members[i].name, name)) {
             return n->record.members[i].type;
         }
     }
@@ -147,12 +141,11 @@ th_type *th_record_lookup(const th_type *t, const char *name)
     return nullptr;
 }
 
-bool th_trait_name(const th_type *t, const char **name, size_t *nlen)
+bool th_trait_name(const th_type *t, core_string_t *name)
 {
     const th_type *trait = as(t, TH_TRAIT);
     if (!trait) return false;
     if (name) *name = trait->trait.name;
-    if (nlen) *nlen = trait->trait.nlen;
     return true;
 }
 
@@ -192,24 +185,22 @@ static core_dict_t *record_index(core_dict_t **slot)
     return *slot;
 }
 
-static uint64_t head_hash(const char *name, size_t length, uint64_t arity)
+static uint64_t head_hash(core_string_t name, uint64_t arity)
 {
-    uint64_t key[] = {core_xxh3_64bits_raw(name, length), arity};
+    uint64_t key[] = {core_xxh3_64bits_raw(name.data, name.u8_bytes), arity};
     return core_xxh3_64bits_raw(key, sizeof(key));
 }
 
 static uint64_t generic_head_hash(const th_type *type, size_t *nargs)
 {
-    const char *name = nullptr;
-    size_t length = 0;
-    if (!th_named_info(type, &name, &length, nullptr, nargs)) return 0;
-    return head_hash(name, length, (uint64_t)*nargs);
+    core_string_t name = {};
+    if (!th_named_info(type, &name, nullptr, nargs)) return 0;
+    return head_hash(name, (uint64_t)*nargs);
 }
 
-static uint64_t builtin_head_key(const char *name, size_t length,
-                                 int8_t arity)
+static uint64_t builtin_head_key(core_string_t name, int8_t arity)
 {
-    return head_hash(name, length,
+    return head_hash(name,
                      arity == TH_BUILTIN_VARIADIC ? UINT64_MAX
                                                   : (uint64_t)arity);
 }
@@ -224,9 +215,7 @@ static void index_builtin_heads(core_dict_t **slot,
     }
     core_dict_t *heads = record_index(slot);
     for (size_t i = 0; i < count; i++) {
-        uint64_t key = builtin_head_key(types[i].name,
-                                        strlen(types[i].name),
-                                        types[i].arity);
+        uint64_t key = builtin_head_key(types[i].name, types[i].arity);
         core_dict_put(heads, (const void *)(uintptr_t)key,
                       (void *)(uintptr_t)(i + 1));
     }
@@ -278,37 +267,34 @@ static const th_builtin_type_t *builtin_for_head(
 }
 
 static const th_builtin_type_t TH_INTRINSIC_TUPLE = {
-    .name = TH_TUPLE,
+    .name = CORE_STRING_STATIC(TH_TUPLE),
     .kind = TH_BUILTIN_TUPLE,
     .arity = TH_BUILTIN_VARIADIC,
 };
 
 static const th_builtin_type_t TH_INTRINSIC_OPTION = {
-    .name = TH_OPTION,
+    .name = CORE_STRING_STATIC(TH_OPTION),
     .kind = TH_BUILTIN_OPTION,
     .arity = 1,
 };
 
 static const th_builtin_type_t TH_INTRINSIC_NIL = {
-    .name = TH_NIL,
+    .name = CORE_STRING_STATIC(TH_NIL),
     .kind = TH_BUILTIN_NIL,
     .arity = 0,
 };
 
-static bool named_head_is(const th_type *named, const char *name)
-{
-    size_t len = strlen(name);
-    return named->named.nlen == len && !memcmp(named->named.name, name, len);
-}
-
 static const th_builtin_type_t *intrinsic_builtin(const th_type *named)
 {
-    if (named_head_is(named, TH_TUPLE)) return &TH_INTRINSIC_TUPLE;
-    if (named_head_is(named, TH_OPTION) && !named->named.is_variant
+    if (core_string_eq(named->named.name, TH_INTRINSIC_TUPLE.name))
+        return &TH_INTRINSIC_TUPLE;
+    if (core_string_eq(named->named.name, TH_INTRINSIC_OPTION.name)
+        && !named->named.is_variant
         && named->named.nargs == 1
         && named->named.args[0].kind == TH_ARG_TYPE)
         return &TH_INTRINSIC_OPTION;
-    if (named_head_is(named, TH_NIL) && !named->named.is_variant
+    if (core_string_eq(named->named.name, TH_INTRINSIC_NIL.name)
+        && !named->named.is_variant
         && named->named.nargs == 0)
         return &TH_INTRINSIC_NIL;
     return nullptr;
@@ -316,7 +302,7 @@ static const th_builtin_type_t *intrinsic_builtin(const th_type *named)
 
 th_type *th_nil(th_ctx *ctx)
 {
-    return th_name(ctx, TH_NIL);
+    return th_name(ctx, CORE_STRING_STATIC(TH_NIL));
 }
 
 bool th_is_nil(const th_type *type)
@@ -329,7 +315,7 @@ bool th_is_nil(const th_type *type)
 th_type *th_option(th_ctx *ctx, th_type *item)
 {
     th_arg argument = {.kind = TH_ARG_TYPE, .type = item};
-    return th_apply(ctx, TH_OPTION, &argument, 1);
+    return th_apply(ctx, CORE_STRING_STATIC(TH_OPTION), &argument, 1);
 }
 
 th_type *th_option_item(const th_type *type)
@@ -347,11 +333,10 @@ static const th_builtin_type_t *classify_named(th_type *named,
 {
     if (named->named.builtin_known) return named->named.builtin;
     const th_builtin_type_t *builtin = builtin_for_head(heads, types,
-        head_hash(named->named.name, named->named.nlen,
-                  (uint64_t)named->named.nargs));
+        head_hash(named->named.name, (uint64_t)named->named.nargs));
     if (!builtin)
         builtin = builtin_for_head(heads, types,
-            head_hash(named->named.name, named->named.nlen, UINT64_MAX));
+            head_hash(named->named.name, UINT64_MAX));
     if (!builtin) builtin = intrinsic_builtin(named);
     if (builtin || types) {
         named->named.builtin = builtin;
@@ -544,7 +529,7 @@ th_type *th_type_definition(th_ctx *ctx, const th_type *type)
 }
 
 th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
-                             const char *name)
+                             core_string_t name)
 {
     th_type *member = th_record_lookup(type, name);
     if (member || !ctx) return member;
@@ -600,16 +585,16 @@ const th_kwparam *th_func_kw(const th_type *t, size_t i)
     return n && i < n->fn.nkw ? &n->fn.kw[i] : nullptr;
 }
 
-const th_kwparam *th_func_kw_lookup(const th_type *t, const char *name)
+const th_kwparam *th_func_kw_lookup(const th_type *t, core_string_t name)
 {
     const th_type *n = as(t, TH_FUNCTION);
 
-    if (!n || !name) {
+    if (!n || !name.data) {
         return nullptr;
     }
 
     for (size_t i = 0; i < n->fn.nkw; i++) {
-        if (!strcmp(n->fn.kw[i].name, name)) {
+        if (core_string_eq(n->fn.kw[i].name, name)) {
             return &n->fn.kw[i];
         }
     }
@@ -702,27 +687,26 @@ bool th_var_index(const th_type *t, uint64_t *index)
     return true;
 }
 
-const char *th_var_name(const th_type *t)
+core_string_t th_var_name(const th_type *t)
 {
     const th_type *n = as(t, TH_VAR);
 
-    return n ? n->var.name : nullptr;
+    return n ? n->var.name : (core_string_t){};
 }
 
-static bool named_is(const th_type *t, const char *name, size_t n)
+static bool named_is(const th_type *t, core_string_t name)
 {
     const th_type *v = as(t, TH_NAMED);
 
-    return v && v->named.nargs == 0 && v->named.nlen == n
-        && !memcmp(v->named.name, name, n);
+    return v && v->named.nargs == 0 && core_string_eq(v->named.name, name);
 }
 
 bool th_is_erased(const th_type *t)
 {
-    return named_is(t, TH_ERASED, sizeof(TH_ERASED) - 1);
+    return named_is(t, CORE_STRING_STATIC(TH_ERASED));
 }
 
 bool th_is_bottom(const th_type *t)
 {
-    return named_is(t, TH_BOTTOM, sizeof(TH_BOTTOM) - 1);
+    return named_is(t, CORE_STRING_STATIC(TH_BOTTOM));
 }
