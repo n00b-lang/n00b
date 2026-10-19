@@ -297,8 +297,11 @@ typedef struct {
     ir_block_t *join;
     ir_block_t *else_block;
     ir_local_t *result_local;
+    ir_block_t *jump_true;
+    ir_block_t *jump_false;
     bool expression;
     bool short_circuit;
+    bool jumping;
     bool join_reachable;
     bool active;
 } n00bb_branch_frame_t;
@@ -546,6 +549,7 @@ typedef struct {
     core_list_t(n00bb_tuple_parts_t) tuple_parts;
     n00bb_literal_frame_t active_literal;
     bool has_active_literal;
+    ir_block_t *condition_scratch;
     uint64_t next_block_id;
     uint64_t next_control_order;
 } n00bb_lower_context_t;
@@ -1243,6 +1247,125 @@ collect_elif_arms(parse_grammar_t *grammar, parse_annot_result_t *annotations,
     return true;
 }
 
+static parse_tree_t *
+condition_core(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        if (core_tree_num_children(node) == 1
+            && !core_tree_is_leaf(core_tree_child(node, 0)))
+            node = core_tree_child(node, 0);
+        else if (nt_is(grammar, node, CORE_STRING_STATIC("tuple-or-paren"))
+                 && core_tree_num_children(node) == 3)
+            node = core_tree_child(node, 1);
+        else break;
+    }
+    return node;
+}
+
+static bool
+jumping_condition(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *core = condition_core(grammar, node);
+    return core && core_tree_num_children(core) == 3
+        && (nt_is(grammar, core, CORE_STRING_STATIC("or-expr"))
+            || nt_is(grammar, core, CORE_STRING_STATIC("and-expr")));
+}
+
+static bool
+n00bb_jump_targets(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
+                   parse_tree_t *node, ir_block_t **on_true,
+                   ir_block_t **on_false)
+{
+    for (size_t i = lower->branches.len; i > 0; i--) {
+        n00bb_branch_frame_t *frame = &lower->branches.data[i - 1];
+        if (!frame->active) continue;
+        if (frame->jumping) {
+            n00bb_branch_arm_t *arm = &frame->arms.data[0];
+            bool is_or = nt_is(grammar, frame->node,
+                               CORE_STRING_STATIC("or-expr"));
+            if (condition_core(grammar, arm->condition) == node) {
+                *on_true = is_or ? frame->jump_true : arm->body_block;
+                *on_false = is_or ? arm->body_block : frame->jump_false;
+                return true;
+            }
+            if (condition_core(grammar, arm->body) == node) {
+                *on_true = frame->jump_true;
+                *on_false = frame->jump_false;
+                return true;
+            }
+            continue;
+        }
+        if (frame->short_circuit) continue;
+        for (size_t a = 0; a < frame->arms.len; a++) {
+            if (condition_core(grammar, frame->arms.data[a].condition) != node)
+                continue;
+            *on_true = frame->arms.data[a].body_block;
+            *on_false = a + 1 < frame->arms.len
+                ? frame->arms.data[a + 1].test_block
+                : frame->else_block ? frame->else_block : frame->join;
+            return true;
+        }
+    }
+    for (size_t i = lower->loops.len; i > 0; i--) {
+        n00bb_loop_frame_t *frame = &lower->loops.data[i - 1];
+        if (!frame->active || frame->is_range || frame->is_container
+            || condition_core(grammar, frame->condition) != node) continue;
+        *on_true = frame->body_block;
+        *on_false = frame->exit;
+        return true;
+    }
+    return false;
+}
+
+static bool
+n00bb_close_condition_scratch(n00bb_lower_context_t *lower)
+{
+    if (!lower->condition_scratch) return true;
+    ir_instr_t *unreachable = ir_instr_add(lower->condition_scratch,
+                                           IR_OP_UNREACHABLE);
+    lower->condition_scratch = nullptr;
+    return unreachable != nullptr;
+}
+
+static bool
+n00bb_open_condition_scratch(ir_lower_context_t *context,
+                             n00bb_lower_context_t *lower,
+                             parse_tree_t *node, ir_span_t span)
+{
+    ir_block_t *scratch = n00bb_branch_block(context, lower,
+                                             "condition_value");
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    if (!scratch || !bool_type) return false;
+    context->block = scratch;
+    context->reachable = true;
+    ir_instr_t *literal = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                    span);
+    if (!literal || !ir_lower_set_temp_dest(context, literal,
+            CORE_STRING_STATIC("__n00bb_condition_"), bool_type)
+        || !ir_instr_operand_uint(literal, 1)
+        || !ir_lower_set_node_value(context, node, literal->dest))
+        return false;
+    lower->condition_scratch = scratch;
+    return true;
+}
+
+static bool
+n00bb_emit_branch(ir_lower_context_t *context, ir_value_t *condition,
+                  ir_block_t *on_true, ir_block_t *on_false, ir_span_t span)
+{
+    ir_instr_t *branch = ir_instr_add(context->block, IR_OP_BRANCH);
+    if (!branch || !ir_instr_operand_value(branch, condition)
+        || !ir_instr_operand_block(branch, on_true)
+        || !ir_instr_operand_block(branch, on_false)) {
+        lower_error(context, IR_DIAG_INTERNAL, span,
+                    "could not emit conditional branch");
+        return false;
+    }
+    branch->span = span;
+    return true;
+}
+
 static bool
 n00bb_lower_branch_annotation(ir_lower_context_t *context,
                               parse_visit_t *visit, bool entering, void *state)
@@ -1255,6 +1378,11 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
             && lower->branches.data[lower->branches.len - 1].node == visit->node) {
             n00bb_branch_frame_t frame =
                 lower->branches.data[--lower->branches.len];
+            if (frame.jumping) {
+                core_list_free(frame.arms);
+                return n00bb_open_condition_scratch(context, lower,
+                    frame.node, lower_span_for_tree(context, frame.node));
+            }
             if (frame.active && !frame.join_reachable) {
                 ir_instr_t *unreachable =
                     ir_instr_add(frame.join, IR_OP_UNREACHABLE);
@@ -1352,6 +1480,31 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
             .expression = expression_form,
             .short_circuit = short_circuit,
             .active = false,
+        }));
+        return true;
+    }
+    ir_block_t *jump_true = nullptr, *jump_false = nullptr;
+    bool jumping = short_circuit
+        && n00bb_jump_targets(lower, visit->grammar, visit->node,
+                              &jump_true, &jump_false);
+    if (jumping) {
+        ir_block_t *rhs = n00bb_branch_block_named(context, lower,
+            nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("or-expr"))
+                ? CORE_STRING_STATIC("condition_or")
+                : CORE_STRING_STATIC("condition_and"));
+        if (!rhs) {
+            core_list_free(arms);
+            return false;
+        }
+        arms.data[0].body_block = rhs;
+        core_list_push(lower->branches, ((n00bb_branch_frame_t){
+            .node = visit->node,
+            .arms = arms,
+            .jump_true = jump_true,
+            .jump_false = jump_false,
+            .short_circuit = true,
+            .jumping = true,
+            .active = true,
         }));
         return true;
     }
@@ -2055,6 +2208,35 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 return true;
             }
             n00bb_branch_arm_t *arm = &frame->arms.data[arm_index];
+            ir_span_t span = lower_span_for_tree(context, frame->node);
+            bool nested = (!frame->short_circuit || frame->jumping)
+                && jumping_condition(visit->grammar, arm->condition);
+            if (frame->jumping || nested) {
+                if (nested && !n00bb_close_condition_scratch(lower))
+                    return false;
+                bool is_or = nt_is(visit->grammar, frame->node,
+                                   CORE_STRING_STATIC("or-expr"));
+                if (frame->jumping && !nested) {
+                    ir_value_t *operand = ir_lower_node_value(context,
+                        arm->condition);
+                    th_type *bool_type = th_name(
+                        tu_state(lower->unit)->types,
+                        CORE_STRING_STATIC("bool"));
+                    if (!operand || !bool_type || !ir_type_eq(
+                            context->module, operand->type, bool_type)) {
+                        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                                    "logical operands must be bool");
+                        return false;
+                    }
+                    if (!n00bb_emit_branch(context, operand,
+                            is_or ? frame->jump_true : arm->body_block,
+                            is_or ? arm->body_block : frame->jump_false,
+                            span)) return false;
+                }
+                context->block = arm->body_block;
+                context->reachable = true;
+                return true;
+            }
             ir_value_t *condition =
                 ir_lower_node_value(context, arm->condition);
             th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
@@ -2093,6 +2275,28 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             branch->span = lower_span_for_tree(context, frame->node);
             context->block = arm->body_block;
             context->reachable = true;
+        }
+        else if (arm_index < frame->arms.len && frame->jumping) {
+            if (jumping_condition(visit->grammar, visit->node)) {
+                if (!n00bb_close_condition_scratch(lower)) return false;
+            }
+            else if (context->reachable) {
+                ir_span_t span = lower_span_for_tree(context, frame->node);
+                ir_value_t *operand = ir_lower_node_value(context,
+                    condition_core(visit->grammar, visit->node));
+                th_type *bool_type = th_name(tu_state(lower->unit)->types,
+                                             CORE_STRING_STATIC("bool"));
+                if (!operand || !bool_type || !ir_type_eq(context->module,
+                        operand->type, bool_type)) {
+                    lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+                                "logical operands must be bool");
+                    return false;
+                }
+                if (!n00bb_emit_branch(context, operand, frame->jump_true,
+                                       frame->jump_false, span))
+                    return false;
+            }
+            context->reachable = false;
         }
         else if (arm_index < frame->arms.len) {
             if (frame->expression && context->reachable) {
@@ -2184,6 +2388,12 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             if (frame->is_container)
                 return n00bb_lower_container_body_enter(context, lower,
                                                         frame);
+            if (jumping_condition(visit->grammar, frame->condition)) {
+                if (!n00bb_close_condition_scratch(lower)) return false;
+                context->block = frame->body_block;
+                context->reachable = true;
+                return true;
+            }
             ir_value_t *condition = ir_lower_node_value(
                 context, frame->condition);
             th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
