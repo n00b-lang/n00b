@@ -196,6 +196,9 @@ scan_tokenize(parse_grammar_t  *g,
         scan_scanner_set_state_equal(sc, scan_lex_session_equal);
         scan_scanner_set_state_shift(sc, scan_lex_session_shift);
         scan_scanner_set_compact_callback(sc, scan_lex_compact_state);
+        if (scan_lex_checks_bidi(program)) {
+            scan_scanner_set_span_check(sc, scan_lex_check_span);
+        }
         if (program->spec->regions) {
             scan_scanner_set_finalize_callback(sc, scan_lex_finalize_regions);
         }

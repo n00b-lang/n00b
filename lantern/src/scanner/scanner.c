@@ -5,12 +5,6 @@
 #include <assert.h>
 #include <string.h>
 
-static bool
-is_line_terminator(core_codepoint_t cp)
-{
-    return cp == '\n' || cp == 0x2028;
-}
-
 static core_codepoint_t
 decode_at(parse_scanner_t *s, size_t off, int *cp_len)
 {
@@ -30,6 +24,14 @@ decode_at(parse_scanner_t *s, size_t off, int *cp_len)
 
     *cp_len = (int)(pos - (uint32_t)off);
     return (core_codepoint_t)cp;
+}
+
+static void
+check_span(parse_scanner_t *s, size_t start, size_t end, int32_t tid)
+{
+    if (s->span_check_cb && end > start) {
+        s->span_check_cb(s, start, end, tid);
+    }
 }
 
 static bool
@@ -193,6 +195,7 @@ scan_scanner_free(parse_scanner_t *s)
 
     parse_trivia_free(s->pending_leading);
     parse_trivia_free(s->pending_trailing);
+    core_list_free(s->warnings);
 
     if (s->state_free_cb) {
         s->state_free_cb(s->user_state);
@@ -277,6 +280,12 @@ scan_scanner_discard_consumed(parse_scanner_t *s)
 
     size_t removed  = s->mark;
     size_t remain   = s->input.u8_bytes - removed;
+
+    if (s->checked_to < removed) {
+        check_span(s, s->checked_to, removed, -1);
+        s->checked_to = removed;
+    }
+    s->checked_to -= removed;
 
     s->input_offset += removed;
     s->input.u8_bytes  = remain;
@@ -396,6 +405,68 @@ scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out)
     return true;
 }
 
+void
+scan_add_warning(parse_scanner_t *s, core_string_t message,
+                 size_t start_byte, size_t end_byte)
+{
+    if (!s) {
+        return;
+    }
+
+    core_list_push(s->warnings, ((scan_warning_t){
+                                    .message = message,
+                                    .start_byte = s->source_base + start_byte,
+                                    .end_byte = s->source_base + end_byte,
+                                }));
+}
+
+void
+scan_scanner_set_span_check(parse_scanner_t *s, scan_span_check_cb_t cb)
+{
+    if (s) {
+        s->span_check_cb = cb;
+    }
+}
+
+void
+scan_scanner_check_rest(parse_scanner_t *s)
+{
+    if (s && s->checked_to < s->input.u8_bytes) {
+        check_span(s, s->checked_to, s->input.u8_bytes, -1);
+        s->checked_to = s->input.u8_bytes;
+    }
+}
+
+void
+scan_scanner_rewind_checks(parse_scanner_t *s, size_t to)
+{
+    if (!s) {
+        return;
+    }
+
+    s->checked_to = to;
+    size_t kept = 0;
+    for (size_t i = 0; i < core_list_len(s->warnings); i++) {
+        if (s->warnings.data[i].start_byte < s->source_base + to) {
+            s->warnings.data[kept++] = s->warnings.data[i];
+        }
+    }
+    s->warnings.len = kept;
+}
+
+size_t
+scan_warning_count(const parse_scanner_t *s)
+{
+    return s ? core_list_len(s->warnings) : 0;
+}
+
+const scan_warning_t *
+scan_warning_at(const parse_scanner_t *s, size_t index)
+{
+    return s && index < core_list_len(s->warnings)
+        ? &s->warnings.data[index] : nullptr;
+}
+
 bool
 scan_scanner_append(parse_scanner_t *s, core_string_t data)
 {
@@ -465,6 +536,8 @@ scan_scanner_reset(parse_scanner_t *s)
     s->mark_line = 1;
     s->mark_col  = 1;
     s->at_eof   = false;
+    s->checked_to = 0;
+    core_list_clear(s->warnings);
     s->status   = SCAN_STATUS_ACTIVE;
     s->status_message = (core_string_t){0};
     s->status_lexer = (core_string_t){0};
@@ -559,7 +632,7 @@ scan_advance(parse_scanner_t *s)
     s->cursor += (size_t)cp_len;
     s->work_bytes += (size_t)cp_len;
 
-    if (is_line_terminator(cp)) {
+    if (core_codepoint_is_line_terminator(cp)) {
         s->line++;
         s->column = 1;
     }
@@ -589,7 +662,7 @@ scan_advance_bytes(parse_scanner_t *s, size_t n)
     for (size_t i = s->cursor; i < end;) {
         int cp_len;
         core_codepoint_t cp = decode_at(s, i, &cp_len);
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
             s->column = 1;
         }
@@ -626,7 +699,7 @@ scan_match_str(parse_scanner_t *s, core_string_t lit)
         s->cursor += (size_t)cp_len;
         i += (size_t)cp_len;
 
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
             s->column = 1;
         }
@@ -655,7 +728,7 @@ scan_match_if(parse_scanner_t *s, scan_cp_predicate_fn pred)
     s->cursor += (size_t)cp_len;
     s->work_bytes += (size_t)cp_len;
 
-    if (is_line_terminator(cp)) {
+    if (core_codepoint_is_line_terminator(cp)) {
         s->line++;
         s->column = 1;
     }
@@ -683,7 +756,7 @@ scan_match_class(parse_scanner_t *s, parse_char_class_t cc)
     s->cursor += (size_t)cp_len;
     s->work_bytes += (size_t)cp_len;
 
-    if (is_line_terminator(cp)) {
+    if (core_codepoint_is_line_terminator(cp)) {
         s->line++;
         s->column = 1;
     }
@@ -711,7 +784,7 @@ scan_match_cp(parse_scanner_t *s, core_codepoint_t target)
     s->cursor += (size_t)cp_len;
     s->work_bytes += (size_t)cp_len;
 
-    if (is_line_terminator(cp)) {
+    if (core_codepoint_is_line_terminator(cp)) {
         s->line++;
         s->column = 1;
     }
@@ -738,7 +811,7 @@ scan_skip_while(parse_scanner_t *s, scan_cp_predicate_fn pred)
         s->cursor += (size_t)cp_len;
         s->work_bytes += (size_t)cp_len;
 
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
             s->column = 1;
         }
@@ -768,7 +841,7 @@ scan_skip_class(parse_scanner_t *s, parse_char_class_t cc)
         s->cursor += (size_t)cp_len;
         s->work_bytes += (size_t)cp_len;
 
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
             s->column = 1;
         }
@@ -844,6 +917,12 @@ emit_token(parse_scanner_t *s, int32_t tid,
            core_option_t(core_string_t) value, bool owned)
 {
     assert(s->stream);
+
+    if (s->checked_to < s->mark) {
+        check_span(s, s->checked_to, s->mark, -1);
+    }
+    check_span(s, s->mark, s->cursor, tid);
+    s->checked_to = s->cursor;
 
     parse_token_stream_t *ts = s->stream;
 
@@ -1024,7 +1103,7 @@ scan_skip_whitespace(parse_scanner_t *s)
 
         s->cursor += (size_t)cp_len;
 
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
             s->column = 1;
         }
@@ -1055,7 +1134,7 @@ scan_skip_line_comment(parse_scanner_t *s)
         int              cp_len;
         core_codepoint_t cp = decode_at(s, s->cursor, &cp_len);
 
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             break;
         }
 
@@ -1093,7 +1172,7 @@ scan_skip_block_comment(parse_scanner_t *s,
         s->cursor += (size_t)cp_len;
         i += (size_t)cp_len;
 
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
             s->column = 1;
         }
@@ -1111,7 +1190,7 @@ scan_skip_block_comment(parse_scanner_t *s,
                 s->cursor += (size_t)cp_len;
                 i += (size_t)cp_len;
 
-                if (is_line_terminator(cp)) {
+                if (core_codepoint_is_line_terminator(cp)) {
                     s->line++;
                     s->column = 1;
                 }
@@ -1133,7 +1212,7 @@ scan_skip_block_comment(parse_scanner_t *s,
 
         s->cursor += (size_t)cp_len;
 
-        if (is_line_terminator(cp)) {
+        if (core_codepoint_is_line_terminator(cp)) {
             s->line++;
             s->column = 1;
         }

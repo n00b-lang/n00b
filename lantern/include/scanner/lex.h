@@ -176,6 +176,13 @@ typedef struct {
 } scan_lex_embed_t;
 
 typedef enum : uint8_t {
+    SCAN_LEX_BIDI_DEFAULT,
+    SCAN_LEX_BIDI_ALLOW,
+    SCAN_LEX_BIDI_WARN,
+    SCAN_LEX_BIDI_REJECT,
+} scan_lex_bidi_policy_t;
+
+typedef enum : uint8_t {
     SCAN_LEX_FENCE_PAD_NONE,
     SCAN_LEX_FENCE_PAD_OPTIONAL,
     SCAN_LEX_FENCE_PAD_REQUIRED,
@@ -192,6 +199,7 @@ typedef struct {
     uint32_t      minimum;
     bool          label;
     scan_lex_fence_pad_t pad;
+    scan_lex_bidi_policy_t bidi;
 } scan_lex_fence_t;
 
 typedef struct {
@@ -339,6 +347,7 @@ typedef struct {
     core_string_t tok_ident_upper;
     scan_lex_identifier_profile_t identifier_profile;
     scan_lex_fallback_t fallback;
+    scan_lex_bidi_policy_t bidi;
     scan_lex_whitespace_t whitespace;
 } scan_lex_spec_t;
 
@@ -359,6 +368,9 @@ extern void        scan_lex_session_free(void *session);
 
 extern bool scan_lex_scan(parse_scanner_t *s);
 extern bool scan_lex_finalize_regions(parse_scanner_t *s);
+extern bool scan_lex_checks_bidi(const scan_lex_t *program);
+extern void scan_lex_check_span(parse_scanner_t *s, size_t start, size_t end,
+                                int32_t tid);
 extern void scan_lex_reset_state(parse_scanner_t *s);
 extern void scan_lex_compact_state(parse_scanner_t *s, size_t removed_bytes);
 

@@ -211,3 +211,19 @@ core_diagnostics_render_text(const core_diagnostics_t *d)
     }
     return core_buffer_take_string(out);
 }
+
+core_diag_location_t
+core_diag_location_span(core_string_t text, size_t start, size_t end)
+{
+    core_text_position_t first = core_string_position_at(text, start);
+    core_text_position_t last = core_string_position_at(text,
+                                                        end > start ? end : start);
+
+    return (core_diag_location_t){
+        .line = first.line,
+        .column = first.column,
+        .end_line = last.line,
+        .end_column = last.column,
+        .has_location = true,
+    };
+}

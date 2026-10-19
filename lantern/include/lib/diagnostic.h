@@ -24,6 +24,9 @@ typedef struct {
     bool has_location;
 } core_diag_location_t;
 
+core_diag_location_t core_diag_location_span(core_string_t text, size_t start,
+                                             size_t end);
+
 typedef struct {
     core_diag_severity_t severity;
     core_string_t code;

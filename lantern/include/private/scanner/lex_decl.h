@@ -27,6 +27,7 @@
     X(OPERATORS, "lex-operators") \
     X(WHITESPACE, "lex-whitespace") \
     X(FALLBACK, "lex-fallback") \
+    X(BIDI, "lex-bidi") \
     X(DIRECTIVE, "lex-directive") \
     X(LITERAL_HOOK, "lex-literal-hook") \
     X(RECOVER, "lex-recover") \

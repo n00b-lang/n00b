@@ -1,5 +1,6 @@
 #include "lib/string.h"
 #include "lib/alloc.h"
+#include "unicode/encoding.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -388,4 +389,37 @@ core_string_strtoull(core_string_t s, int base)
     core_string_parse_u64(s, base, &value, nullptr);
 
     return value;
+}
+
+bool
+core_codepoint_is_line_terminator(core_codepoint_t cp)
+{
+    return cp == '\n' || cp == 0x2028;
+}
+
+core_text_position_t
+core_string_position_at(core_string_t text, size_t offset)
+{
+    core_text_position_t position = {.line = 1, .column = 1};
+    size_t limit = offset < text.u8_bytes ? offset : text.u8_bytes;
+    uint32_t at = 0;
+
+    while (text.data && at < limit) {
+        uint32_t next = at;
+        int32_t cp = unicode_utf8_decode(text.data, (uint32_t)text.u8_bytes,
+                                         &next);
+        if (cp < 0) {
+            next = at + 1;
+        }
+        if (cp >= 0 && core_codepoint_is_line_terminator((core_codepoint_t)cp)) {
+            position.line++;
+            position.column = 1;
+        }
+        else {
+            position.column++;
+        }
+        at = next;
+    }
+
+    return position;
 }

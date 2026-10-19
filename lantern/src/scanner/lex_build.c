@@ -1447,6 +1447,25 @@ build_number_form(lex_build_t *b, const scan_lex_decl_t *a)
     core_list_free(suffixes);
 }
 
+static bool
+bidi_policy(core_string_t mode, scan_lex_bidi_policy_t *out)
+{
+    if (core_string_eq(mode, CORE_STRING_STATIC("allow"))) {
+        *out = SCAN_LEX_BIDI_ALLOW;
+    }
+    else if (core_string_eq(mode, CORE_STRING_STATIC("warn"))) {
+        *out = SCAN_LEX_BIDI_WARN;
+    }
+    else if (core_string_eq(mode, CORE_STRING_STATIC("reject"))) {
+        *out = SCAN_LEX_BIDI_REJECT;
+    }
+    else {
+        return false;
+    }
+
+    return true;
+}
+
 static void
 build_layout(lex_build_t *b, const scan_lex_decl_t *a)
 {
@@ -1934,6 +1953,14 @@ build_fence(lex_build_t *b, const scan_lex_decl_t *a)
             f->body_open  = arg(o, 0);
             f->body_close = arg(o, 1);
         }
+        else if (named(o, "bidi")) {
+            if (core_list_len(o->args) != 1
+                || !bidi_policy(arg(o, 0), &f->bidi)) {
+                if (!b->err.data) {
+                    set_errf(b, "@lex-fence: bidi() expects allow, warn, or reject");
+                }
+            }
+        }
         else if (named(o, "pad")) {
             core_string_t policy = arg(o, 0);
             if (string_is(policy, "required")) {
@@ -2276,6 +2303,16 @@ build_ident(lex_build_t *b, const scan_lex_decl_t *a)
         else {
             oops(b, "ident", o->name);
         }
+    }
+}
+
+static void
+build_bidi(lex_build_t *b, const scan_lex_decl_t *a)
+{
+    core_string_t mode = positional(&a->lex_opts, 0);
+
+    if (!bidi_policy(mode, &b->spec.bidi)) {
+        oops(b, "bidi", mode);
     }
 }
 
@@ -2862,6 +2899,7 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
         case SCAN_LEX_OPERATORS: build_operators(b, a); break;
         case SCAN_LEX_WHITESPACE: build_whitespace(b, a); break;
         case SCAN_LEX_FALLBACK: build_fallback(b, a); break;
+        case SCAN_LEX_BIDI: build_bidi(b, a); break;
         case SCAN_LEX_DIRECTIVE: build_directive(b, a); break;
         case SCAN_LEX_LITERAL_HOOK: build_literal_hook(b, a); break;
         case SCAN_LEX_RECOVER: build_recovery(b, a); break;

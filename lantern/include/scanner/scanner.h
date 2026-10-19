@@ -15,6 +15,8 @@ typedef struct parse_token_stream_t parse_token_stream_t;
 
 typedef bool (*parse_scan_cb_t)(parse_scanner_t *s);
 typedef bool (*scan_finalize_cb_t)(parse_scanner_t *s);
+typedef void (*scan_span_check_cb_t)(parse_scanner_t *s, size_t start,
+                                     size_t end, int32_t tid);
 
 typedef void (*scan_reset_cb_t)(parse_scanner_t *s);
 typedef void (*scan_compact_cb_t)(parse_scanner_t *s, size_t removed_bytes);
@@ -39,6 +41,14 @@ typedef struct {
     size_t        start_byte;
     size_t        end_byte;
 } scan_diagnostic_t;
+
+typedef struct {
+    core_string_t message;
+    size_t        start_byte;
+    size_t        end_byte;
+} scan_warning_t;
+
+core_list_decl(scan_warning_t);
 
 struct parse_scanner_t {
     core_buffer_t     *buffer;
@@ -96,6 +106,9 @@ struct parse_scanner_t {
     core_string_t     recovery_lexer;
     size_t            recovery_start_byte;
     size_t            recovery_end_byte;
+    core_list_t(scan_warning_t) warnings;
+    scan_span_check_cb_t span_check_cb;
+    size_t            checked_to;
 };
 
 extern parse_scanner_t *
@@ -144,6 +157,16 @@ extern bool scan_scanner_recovery_enabled(const parse_scanner_t *s);
 extern scan_status_t scan_status(const parse_scanner_t *s);
 
 extern bool scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out);
+
+extern void scan_add_warning(parse_scanner_t *s, core_string_t message,
+                             size_t start_byte, size_t end_byte);
+extern size_t scan_warning_count(const parse_scanner_t *s);
+extern void scan_scanner_set_span_check(parse_scanner_t *s,
+                                        scan_span_check_cb_t cb);
+extern void scan_scanner_check_rest(parse_scanner_t *s);
+extern void scan_scanner_rewind_checks(parse_scanner_t *s, size_t to);
+extern const scan_warning_t *scan_warning_at(const parse_scanner_t *s,
+                                             size_t index);
 
 extern bool scan_scanner_append(parse_scanner_t *s, core_string_t data);
 

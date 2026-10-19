@@ -37,10 +37,6 @@ lex_compile_error_printf(const char *fmt, ...) {
   lex_compile_error_set(core_buffer_take_string(buf));
 }
 
-static bool is_line_terminator(core_codepoint_t cp) {
-  return cp == '\n' || cp == 0x2028;
-}
-
 static bool is_line_whitespace(core_codepoint_t cp) {
   return cp == ' ' || cp == '\t' || cp == '\r' || cp == '\f'
       || cp == '\v' || cp == 0x85 || cp == 0xa0 || cp == 0x1680
@@ -2106,7 +2102,7 @@ static bool in_set(const scan_lex_t *lex, core_string_t set,
 }
 
 static bool id_start_here(const scan_lex_t *lex, core_codepoint_t c) {
-  return !is_line_terminator(c) &&
+  return !core_codepoint_is_line_terminator(c) &&
          ((lex->identifier_profile
                ? scan_unicode_profile_is_start(lex->identifier_profile, c)
                : unicode_is_id_start(c)) ||
@@ -2114,7 +2110,7 @@ static bool id_start_here(const scan_lex_t *lex, core_codepoint_t c) {
 }
 
 static bool id_cont_here(const scan_lex_t *lex, core_codepoint_t c) {
-  return !is_line_terminator(c) &&
+  return !core_codepoint_is_line_terminator(c) &&
          ((lex->identifier_profile
                ? scan_unicode_profile_is_continue(lex->identifier_profile, c)
                : unicode_is_id_continue(c)) ||
@@ -3273,7 +3269,7 @@ static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
       return BODY_CLOSED;
     }
 
-    if (!multi && is_line_terminator(scan_peek(s, 0))) {
+    if (!multi && core_codepoint_is_line_terminator(scan_peek(s, 0))) {
       return BODY_INVALID_NEWLINE;
     }
 
@@ -3496,7 +3492,7 @@ static region_result_t try_region(parse_scanner_t *s) {
   scan_advance_bytes(s, prefix_bytes);
   size_t name_start = s->cursor;
   while (!scan_at_eof(s)
-         && !is_line_terminator(scan_peek(s, 0))
+         && !core_codepoint_is_line_terminator(scan_peek(s, 0))
          && !at_str(s, matched->terminator)) {
     scan_advance(s);
   }
@@ -3505,14 +3501,14 @@ static region_result_t try_region(parse_scanner_t *s) {
         CORE_STRING_STATIC("region anchor may continue"), s->mark);
     return REGION_STOP;
   }
-  if (scan_at_eof(s) || is_line_terminator(scan_peek(s, 0))) {
+  if (scan_at_eof(s) || core_codepoint_is_line_terminator(scan_peek(s, 0))) {
     scan_set_invalid(s, CORE_STRING_STATIC("malformed region anchor"),
                      s->mark);
     return REGION_STOP;
   }
   size_t name_end = s->cursor;
   scan_advance_bytes(s, matched->terminator.u8_bytes);
-  while (!scan_at_eof(s) && !is_line_terminator(scan_peek(s, 0))) {
+  while (!scan_at_eof(s) && !core_codepoint_is_line_terminator(scan_peek(s, 0))) {
     if (!is_line_whitespace(scan_peek(s, 0))) {
       scan_set_invalid(s,
           CORE_STRING_STATIC("region anchor must be the only non-whitespace text on its line"),
@@ -3560,7 +3556,7 @@ static bool try_comment(parse_scanner_t *s) {
     scan_advance_bytes(s, opener_bytes);
 
     if (c->kind == SCAN_LEX_LINE) {
-      while (!scan_at_eof(s) && !is_line_terminator(scan_peek(s, 0))) {
+      while (!scan_at_eof(s) && !core_codepoint_is_line_terminator(scan_peek(s, 0))) {
         scan_advance(s);
       }
 
@@ -3638,7 +3634,7 @@ static bool resume_comment(parse_scanner_t *s) {
   uint32_t fill_level = run->pending_comment_fill_level;
 
   if (c->kind == SCAN_LEX_LINE) {
-    while (!scan_at_eof(s) && !is_line_terminator(scan_peek(s, 0))) {
+    while (!scan_at_eof(s) && !core_codepoint_is_line_terminator(scan_peek(s, 0))) {
       scan_advance(s);
     }
 
@@ -4248,7 +4244,7 @@ static body_stop scan_regex_body(parse_scanner_t *s, const scan_lex_regex_t *r,
   while (!scan_at_eof(s)) {
     core_codepoint_t k = scan_peek(s, 0);
 
-    if (is_line_terminator(k)) {
+    if (core_codepoint_is_line_terminator(k)) {
       return BODY_INVALID_NEWLINE;
     }
 
@@ -5629,7 +5625,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
 
     core_codepoint_t c = scan_peek(s, 0);
 
-    if (is_line_terminator(c)) {
+    if (core_codepoint_is_line_terminator(c)) {
       bool significant = (lex->spec->layout &
                           (SCAN_LEX_LAYOUT_NEWLINE | SCAN_LEX_LAYOUT_INDENT)) &&
                          newlines_visible(lex, run) &&
@@ -5878,7 +5874,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
         }
       }
 
-      if (is_line_terminator(k)) {
+      if (core_codepoint_is_line_terminator(k)) {
         break;
       }
 
@@ -6037,4 +6033,110 @@ bool scan_lex_scan(parse_scanner_t *s) {
     return !((scan_lex_session_t *)s->user_state)->pending_recovery;
   }
   return emitted;
+}
+
+#define BIDI_CONTROLS(X)                                                       \
+  X(0x061C, "U+061C")                                                          \
+  X(0x200E, "U+200E")                                                          \
+  X(0x200F, "U+200F")                                                          \
+  X(0x202A, "U+202A")                                                          \
+  X(0x202B, "U+202B")                                                          \
+  X(0x202C, "U+202C")                                                          \
+  X(0x202D, "U+202D")                                                          \
+  X(0x202E, "U+202E")                                                          \
+  X(0x2066, "U+2066")                                                          \
+  X(0x2067, "U+2067")                                                          \
+  X(0x2068, "U+2068")                                                          \
+  X(0x2069, "U+2069")
+
+typedef struct {
+  core_codepoint_t codepoint;
+  core_string_t rejected;
+  core_string_t warned;
+} bidi_control_t;
+
+static const bidi_control_t bidi_controls[] = {
+#define BIDI_ENTRY(cp, name)                                                   \
+  {cp,                                                                         \
+   CORE_STRING_STATIC("bidirectional control character " name                 \
+                      " is not allowed in source text; a string literal can "  \
+                      "write it as an escape"),                                \
+   CORE_STRING_STATIC("fence literal contains bidirectional control "         \
+                      "character " name)},
+    BIDI_CONTROLS(BIDI_ENTRY)
+#undef BIDI_ENTRY
+};
+
+static const bidi_control_t *bidi_control_at(core_string_t text, size_t at,
+                                             size_t *length) {
+  uint8_t lead = at < text.u8_bytes ? (uint8_t)text.data[at] : 0;
+  if (lead != 0xD8 && lead != 0xE2) {
+    return nullptr;
+  }
+  uint32_t pos = (uint32_t)at;
+  int32_t cp = unicode_utf8_decode(text.data, (uint32_t)text.u8_bytes, &pos);
+  for (size_t i = 0; cp >= 0 && i < sizeof(bidi_controls) / sizeof(*bidi_controls);
+       i++) {
+    if (bidi_controls[i].codepoint == (core_codepoint_t)cp) {
+      *length = pos - (uint32_t)at;
+      return &bidi_controls[i];
+    }
+  }
+  return nullptr;
+}
+
+static scan_lex_bidi_policy_t bidi_policy_for(const scan_lex_t *program,
+                                              int32_t tid) {
+  for (const scan_lex_fence_t *f = program->spec->fences;
+       tid >= 0 && f && f->outer_open.data; f++) {
+    if (f->bidi != SCAN_LEX_BIDI_DEFAULT && f->tok.data &&
+        parse_terminal_id(program->g, f->tok) == tid) {
+      return f->bidi;
+    }
+  }
+  return program->spec->bidi;
+}
+
+bool scan_lex_checks_bidi(const scan_lex_t *program) {
+  if (!program) {
+    return false;
+  }
+  if (program->spec->bidi > SCAN_LEX_BIDI_ALLOW) {
+    return true;
+  }
+  for (const scan_lex_fence_t *f = program->spec->fences;
+       f && f->outer_open.data; f++) {
+    if (f->bidi > SCAN_LEX_BIDI_ALLOW) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void scan_lex_check_span(parse_scanner_t *s, size_t start, size_t end,
+                         int32_t tid) {
+  scan_lex_session_t *run = s ? s->user_state : nullptr;
+  const scan_lex_t *program = run ? run->program : nullptr;
+  if (!program) {
+    return;
+  }
+  for (size_t at = start; at < end && at < s->input.u8_bytes; at++) {
+    size_t length = 0;
+    const bidi_control_t *control = bidi_control_at(s->input, at, &length);
+    if (!control) {
+      continue;
+    }
+    scan_lex_bidi_policy_t policy = bidi_policy_for(program, tid);
+    if (policy == SCAN_LEX_BIDI_REJECT) {
+      size_t cursor = s->cursor;
+      s->cursor = at + length;
+      scan_set_invalid(s, control->rejected, at);
+      s->cursor = cursor;
+      return;
+    }
+    if (policy == SCAN_LEX_BIDI_WARN) {
+      scan_add_warning(s, control->warned, at, at + length);
+    }
+    at += length - 1;
+  }
 }

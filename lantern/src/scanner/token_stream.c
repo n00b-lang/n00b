@@ -498,6 +498,7 @@ ensure_filled(parse_token_stream_t *ts, int32_t target)
 
         if (!got) {
             ts->scanner->at_eof = true;
+            scan_scanner_check_rest(ts->scanner);
             if (ts->scanner->status == SCAN_STATUS_ACTIVE) {
                 ts->scanner->status = ts->scanner->source_final
                                           ? (ts->scanner->had_recovery
@@ -965,6 +966,7 @@ scan_stream_replace(parse_token_stream_t *ts,
     s->column = cp->column;
     s->mark_line = cp->mark_line;
     s->mark_col = cp->mark_col;
+    scan_scanner_rewind_checks(s, cp->mark);
     s->trivia_attach = cp->trivia_attach;
     s->lexer_context = cp->lexer_context;
     s->at_eof = false;

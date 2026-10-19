@@ -7,6 +7,11 @@ struct core_string_t {
     size_t u8_bytes;
 };
 
+typedef struct {
+    uint32_t line;
+    uint32_t column;
+} core_text_position_t;
+
 #define CORE_STRING_STATIC(lit) \
     ((core_string_t){.data = (char *)("" lit), .u8_bytes = sizeof(lit) - 1})
 
@@ -35,3 +40,6 @@ extern bool         core_string_parse_f64(core_string_t s, double *out,
                                           size_t *consumed);
 extern long long    core_string_strtoll(core_string_t s, int base);
 extern unsigned long long core_string_strtoull(core_string_t s, int base);
+extern bool         core_codepoint_is_line_terminator(core_codepoint_t cp);
+extern core_text_position_t core_string_position_at(core_string_t text,
+                                                    size_t offset);
