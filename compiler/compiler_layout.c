@@ -836,14 +836,20 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
 
                 th_type *type = th_apply_subst(ir_module_types(module),
                                                symbol->type);
-                ir_descriptor_t *layout = nullptr;
-                bool size_known = type
-                    && ir_layout_compute(module, type, nullptr);
-                if (size_known) {
-                    layout = ir_layout_of(module, type,
-                                          ir_module_target(module));
+                const ir_final_layout_t *published = type
+                    ? ir_layout_final_visible(module, type,
+                                              ir_module_target(module))
+                    : nullptr;
+                uint64_t size_bytes = 0;
+                bool size_known = published
+                    && ir_layout_final_byte_extent(published, &size_bytes);
+                if (!size_known && type
+                    && ir_layout_compute(module, type, nullptr)) {
+                    ir_descriptor_t *layout = ir_layout_of(module, type,
+                        ir_module_target(module));
                     size_known = layout
                         && ir_layout_is_settled(&layout->size);
+                    if (size_known) size_bytes = layout->size.value;
                 }
                 bool dynamic_duration = false;
                 n00bb_storage_decision_t decision =
@@ -857,8 +863,7 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
                             .alias_analysis_complete =
                                 symbol->alias_analysis_complete,
                             .size_known = size_known,
-                            .size_bytes = size_known
-                                ? layout->size.value : 0,
+                            .size_bytes = size_bytes,
                             .stack_limit_bytes =
                                 N00BB_STACK_OBJECT_LIMIT_BYTES,
                         }, &dynamic_duration);
