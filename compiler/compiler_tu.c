@@ -9017,9 +9017,19 @@ n00bb_blanket_receiver(th_type *contract)
 }
 
 static th_type *
+n00bb_receiver_view_hook(th_ctx *types, th_type *from, void *user)
+{
+    (void)types;
+    (void)user;
+    return from ? th_option_item(th_resolve(from)) : nullptr;
+}
+
+static th_type *
 n00bb_coercion_target_hook(th_ctx *types, th_type *from, void *user)
 {
     (void)user;
+    th_type *item = from ? th_option_item(th_resolve(from)) : nullptr;
+    if (item) return item;
     return n00bb_value_coercion_target(types, from);
 }
 
@@ -9089,6 +9099,7 @@ n00bb_register_value_coercions(n00bb_tu_state_t *state)
 {
     th_register_coercion(state->types, n00bb_coercion_hook, nullptr);
     th_register_coercion_target(state->types, n00bb_coercion_target_hook);
+    th_register_receiver_view(state->types, n00bb_receiver_view_hook);
     th_register_conversion(state->types, n00bb_conversion_hook, state);
 }
 
