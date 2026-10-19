@@ -1,4 +1,4 @@
-litmod<array> identity_static_strings, bundle_static_strings(items: Array[string]) -> Array[string] fail: string {
+litmod<sequence> identity_static_strings, bundle_static_strings(items: Array[string]) -> Array[string] fail: string {
     return items
 }
 

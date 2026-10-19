@@ -1,4 +1,4 @@
-litmod<array> identity_bool_tuple_array, bundle_bool_tuple_array(items: Array[Tuple[bool, int]]) -> Array[Tuple[bool, int]] fail: string {
+litmod<sequence> identity_bool_tuple_array, bundle_bool_tuple_array(items: Array[Tuple[bool, int]]) -> Array[Tuple[bool, int]] fail: string {
     return items
 }
 

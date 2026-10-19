@@ -775,7 +775,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 }
                 bool user_literal = !array_context
                     && user_litmod(state, CORE_STRING_STATIC("list"),
-                                   CORE_STRING_STATIC("array"), nullptr);
+                                   CORE_STRING_STATIC("sequence"), nullptr);
                 if (user_literal && !infer_literal_reporting(grammar, unit,
                         node, CORE_STRING_STATIC("N00BB-T0010"),
                         CORE_STRING_STATIC(

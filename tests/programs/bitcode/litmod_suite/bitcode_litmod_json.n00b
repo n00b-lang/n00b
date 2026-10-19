@@ -21,7 +21,7 @@ func count_string_values(pairs: Array[Tuple[string, Any]]) -> int {
     return n
 }
 
-litmod<array> json_array, json(items: Array[Any]) -> int fail: string {
+litmod<sequence> json_array, json(items: Array[Any]) -> int fail: string {
     return count_strings(items)
 }
 

@@ -2,7 +2,7 @@ litmod<dict> identity, string_mirror(items: Array[Tuple[string, int]]) -> Array[
     return items
 }
 
-litmod<array> identity_pairs, pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
+litmod<sequence> identity_pairs, pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
     return items
 }
 

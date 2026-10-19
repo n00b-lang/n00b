@@ -320,7 +320,7 @@
 <func-def> @scope("function", $1) @declares($1, "function") @nospace($3) @align($3) ::=
     <litmod-prelude> %IDENTIFIER <litmod-aliases>? <func-type-signature> <body>
 
-<litmod-prelude> ::= %"litmod" %"<" <litmod-kind> %">"
+<litmod-prelude> @nospace($1) @nospace($2) @nospace($3) ::= %"litmod" %"<" <litmod-kind> %">"
 <litmod-kind> ::= %IDENTIFIER | %"record" | %"nil"
 <litmod-aliases> ::= %"," %IDENTIFIER (%"," %IDENTIFIER)*
 

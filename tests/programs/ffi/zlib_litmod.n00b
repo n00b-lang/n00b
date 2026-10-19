@@ -1,6 +1,6 @@
 import zlib
 
-litmod<array> checksum_bytes, crc(items: Array[u8]) -> u64 fail: string {
+litmod<sequence> checksum_bytes, crc(items: Array[u8]) -> u64 fail: string {
     var sum: u64 = 0
     try {
         sum = zlib.crc32(0, items)!

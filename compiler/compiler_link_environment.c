@@ -117,7 +117,7 @@ build_import_environment(parse_grammar_t *grammar,
             n00bb_user_litmod_t *registration =
                 &state->literal_modifiers.data[r];
             bool bracket = core_string_eq(registration->kind,
-                                           CORE_STRING_STATIC("array"));
+                                           CORE_STRING_STATIC("sequence"));
             bool brace = core_string_eq(registration->kind,
                                          CORE_STRING_STATIC("dict"))
                 || core_string_eq(registration->kind,

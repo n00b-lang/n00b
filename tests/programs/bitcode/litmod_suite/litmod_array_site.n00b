@@ -1,4 +1,4 @@
-litmod<array> parse_json_array_site, json_array_site(items: Array[int]) -> Array[int] fail: string {
+litmod<sequence> parse_json_array_site, json_array_site(items: Array[int]) -> Array[int] fail: string {
     return items
 }
 

@@ -1,4 +1,4 @@
-litmod<array> identity_ints, ints(items: Array[int]) -> Array[int] fail: string {
+litmod<sequence> identity_ints, ints(items: Array[int]) -> Array[int] fail: string {
     return items
 }
 

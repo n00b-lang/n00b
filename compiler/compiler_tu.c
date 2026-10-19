@@ -2044,7 +2044,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
         modifier = CORE_STRING_STATIC("dict");
     else if (!modifier.data && set_entries)
         modifier = CORE_STRING_STATIC("set");
-    core_string_t kind = sequence ? CORE_STRING_STATIC("array")
+    core_string_t kind = sequence ? CORE_STRING_STATIC("sequence")
         : core_string_eq(scalar_kind, CORE_STRING_STATIC("STRING_LIT"))
             ? CORE_STRING_STATIC("quotes")
         : core_string_eq(scalar_kind, CORE_STRING_STATIC("INT_LIT"))
@@ -12503,11 +12503,11 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
     n00bb_literal_shape_t shape =
         core_string_eq(kind, CORE_STRING_STATIC("quotes"))
             ? N00BB_LITERAL_STRING_SHAPE
-        : core_string_eq(kind, CORE_STRING_STATIC("array"))
+        : core_string_eq(kind, CORE_STRING_STATIC("sequence"))
             ? N00BB_LITERAL_SEQUENCE_SHAPE
         : N00BB_LITERAL_BRACE_SHAPE;
     if ((core_string_eq(kind, CORE_STRING_STATIC("quotes"))
-            || core_string_eq(kind, CORE_STRING_STATIC("array"))
+            || core_string_eq(kind, CORE_STRING_STATIC("sequence"))
             || core_string_eq(kind, CORE_STRING_STATIC("dict"))
             || core_string_eq(kind, CORE_STRING_STATIC("set")))
         && n00bb_literal_handler(modifier, shape)) return false;

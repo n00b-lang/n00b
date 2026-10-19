@@ -2,7 +2,7 @@ litmod<quotes> identity_scalar_tuple, bundle(raw: string) -> Tuple[string, int] 
     return (raw, 7)
 }
 
-litmod<array> from_items, dynamic(items: Array[int]) -> Tuple[string, int] fail: string {
+litmod<sequence> from_items, dynamic(items: Array[int]) -> Tuple[string, int] fail: string {
     return ("runtime", 9)
 }
 

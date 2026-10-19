@@ -1,4 +1,4 @@
-litmod<array> always_fail, fault(items: Array[int]) -> Array[int] fail: string {
+litmod<sequence> always_fail, fault(items: Array[int]) -> Array[int] fail: string {
     fail "runtime literal failure"
 }
 

@@ -688,7 +688,7 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
     core_string_t function_name = leaf_text(ctx, primary);
     if (!core_string_eq(kind, CORE_STRING_STATIC("set"))
         && !core_string_eq(kind, CORE_STRING_STATIC("hex"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("array"))
+        && !core_string_eq(kind, CORE_STRING_STATIC("sequence"))
         && !core_string_eq(kind, CORE_STRING_STATIC("dict"))
         && !core_string_eq(kind, CORE_STRING_STATIC("int"))
         && !core_string_eq(kind, CORE_STRING_STATIC("bool"))

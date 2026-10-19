@@ -258,6 +258,6 @@ func iter(self: List[`T]) -> cursor.Cursor[`T] {
     return new[cursor.Cursor[`T]](view)
 }
 
-litmod < array > list, l(items: Array[`T]) -> List[`T] fail: string {
+litmod<sequence> list, l(items: Array[`T]) -> List[`T] fail: string {
     return new[List[`T]](items)
 }

@@ -344,6 +344,6 @@ func values(self: Dict[`K, `V],
                       cast[int]self.state.count)
 }
 
-litmod < dict > dict, d(pairs: Array[Tuple[`K, `V]]) -> Dict[`K, `V] fail: string {
+litmod<dict> dict, d(pairs: Array[Tuple[`K, `V]]) -> Dict[`K, `V] fail: string {
     return new[Dict[`K, `V]](pairs)
 }

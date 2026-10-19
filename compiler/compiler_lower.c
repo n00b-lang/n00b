@@ -6424,7 +6424,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not record the literal handler use");
     ir_lower_result_t payload = {IR_LOWER_FAILED, nullptr};
-    if (core_string_eq(site->registration->kind, CORE_STRING_STATIC("array")))
+    if (core_string_eq(site->registration->kind, CORE_STRING_STATIC("sequence")))
         payload = n00bb_lower_sequence_aggregate(context, visit, nullptr, 0,
             site->payload_type, span, nullptr);
     else if (core_string_eq(site->registration->kind,
@@ -6726,7 +6726,7 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         parse_tree_type(visit->node));
     if (!site && !default_container) return true;
     if (site && (!core_string_eq(site->registration->kind,
-                                  CORE_STRING_STATIC("array"))
+                                  CORE_STRING_STATIC("sequence"))
                   && !core_string_eq(site->registration->kind,
                                      CORE_STRING_STATIC("dict"))
                   && !core_string_eq(site->registration->kind,

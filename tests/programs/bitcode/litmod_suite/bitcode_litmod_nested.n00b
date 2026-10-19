@@ -2,7 +2,7 @@ litmod<quotes> identity_string, raw_nested(raw: string) -> string fail: string {
     return raw
 }
 
-litmod<array> identity_array, bundle_nested(items: Array[string]) -> Array[string] fail: string {
+litmod<sequence> identity_array, bundle_nested(items: Array[string]) -> Array[string] fail: string {
     return items
 }
 

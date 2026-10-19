@@ -1,4 +1,4 @@
-litmod<array> identity_nested_arrays, bundle_nested_arrays(items: Array[Array[int]]) -> Array[Array[int]] fail: string {
+litmod<sequence> identity_nested_arrays, bundle_nested_arrays(items: Array[Array[int]]) -> Array[Array[int]] fail: string {
     return items
 }
 

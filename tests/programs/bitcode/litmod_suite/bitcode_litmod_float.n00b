@@ -2,7 +2,7 @@ litmod<quotes> make_float, as_float(raw: string) -> float fail: string {
     return 1.5 + 2.0
 }
 
-litmod<array> identity_float, floats(items: Array[float]) -> Array[float] fail: string {
+litmod<sequence> identity_float, floats(items: Array[float]) -> Array[float] fail: string {
     return items
 }
 
