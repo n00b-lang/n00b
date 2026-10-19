@@ -171,11 +171,14 @@ static parse_grammar_t *load_c_grammar(void) {
 
   if (!f && srcroot) {
     core_string_t root = core_string_from_cstr(srcroot);
-    char path[1024];
-    snprintf(path, sizeof(path), "%.*s/grammars/c_ncc.bnf",
-             (int)root.u8_bytes, root.data);
+    core_buffer_t text = {0};
+    core_buffer_append_string(&text, root);
+    core_buffer_puts(&text, "/grammars/c_ncc.bnf");
     core_free(root.data);
-    f = fopen(path, "r");
+    char *path = core_string_to_cstr(core_buffer_string(&text));
+    core_buffer_release(&text);
+    f = path ? fopen(path, "r") : nullptr;
+    core_free(path);
   }
 
   if (!f) {
@@ -588,11 +591,16 @@ static void test_deep_lexer_fragment_imports(void) {
   core_string_t dir = core_string_borrow(directory, sizeof(directory) - 1);
 
   enum { IMPORT_COUNT = 80 };
-  char paths[IMPORT_COUNT][512];
-  int path_lens[IMPORT_COUNT];
+  char *paths[IMPORT_COUNT];
+  size_t path_lens[IMPORT_COUNT];
   for (size_t i = 0; i < IMPORT_COUNT; i++) {
-    path_lens[i] = snprintf(paths[i], sizeof(paths[i]), "%.*s/fragment-%zu.lex",
-                            (int)dir.u8_bytes, dir.data, i);
+    core_buffer_t text = {0};
+    core_buffer_printf(&text, "%.*s/fragment-%zu.lex", (int)dir.u8_bytes,
+                       dir.data, i);
+    path_lens[i] = text.byte_len;
+    paths[i] = core_string_to_cstr(core_buffer_string(&text));
+    core_buffer_release(&text);
+    assert(paths[i] != nullptr);
     FILE *fragment = fopen(paths[i], "w");
     assert(fragment != nullptr);
     if (i + 1 < IMPORT_COUNT) {
@@ -604,25 +612,31 @@ static void test_deep_lexer_fragment_imports(void) {
     assert(fclose(fragment) == 0);
   }
 
-  char grammar_path[512];
-  int grammar_len = snprintf(grammar_path, sizeof(grammar_path),
-                             "%.*s/root.bnf", (int)dir.u8_bytes, dir.data);
+  core_buffer_t grammar_text = {0};
+  core_buffer_append_string(&grammar_text, dir);
+  core_buffer_puts(&grammar_text, "/root.bnf");
+  size_t grammar_len = grammar_text.byte_len;
+  char *grammar_path = core_string_to_cstr(core_buffer_string(&grammar_text));
+  core_buffer_release(&grammar_text);
+  assert(grammar_path != nullptr);
   FILE *grammar_file = fopen(grammar_path, "w");
   assert(grammar_file != nullptr);
   fprintf(grammar_file, "@lexer(\"%.*s\")\n<file> ::= %%IDENTIFIER\n",
-          path_lens[0], paths[0]);
+          (int)path_lens[0], paths[0]);
   assert(fclose(grammar_file) == 0);
 
   parse_grammar_t *grammar = parse_grammar_new();
   assert(parse_bnf_load_file(
-      core_string_borrow(grammar_path, (size_t)grammar_len),
+      core_string_borrow(grammar_path, grammar_len),
       CORE_STRING_STATIC("file"), grammar));
   assert(scan_grammar_lex_compiled(grammar) != nullptr);
   parse_grammar_free(grammar);
 
   unlink(grammar_path);
+  core_free(grammar_path);
   for (size_t i = 0; i < IMPORT_COUNT; i++) {
     unlink(paths[i]);
+    core_free(paths[i]);
   }
   rmdir(directory);
 }
