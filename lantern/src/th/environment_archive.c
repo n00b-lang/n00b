@@ -574,7 +574,9 @@ static bool save_environment(core_object_writer_t *writer, const void *object,
         !core_object_writer_u32(writer, function->visibility) ||
         !write_type_ref(writer, function->scheme) ||
         !write_type_ref(writer, function->error_type) ||
-        !write_type_ref(writer, function->contract)) return false;
+        !write_type_ref(writer, function->contract) ||
+        !core_object_writer_u64(writer, function->required_params))
+      return false;
   }
   if (!write_count(writer, env->values.len)) return false;
   for (size_t i = 0; i < env->values.len; i++) {
@@ -612,7 +614,7 @@ static void *environment_allocate(core_persist_arena_t *arena,
                                   void *user_data) {
   (void)payload;
   (void)user_data;
-  if (version < 1 || version > 8) return nullptr;
+  if (version < 1 || version > 9) return nullptr;
   th_env *temporary = th_env_new();
   th_env *mapped = core_persist_arena_alloc_transient(
       arena, sizeof(*mapped), alignof(th_env), nullptr);
@@ -718,6 +720,10 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         (env->archive_schema_version >= 4
              ? !read_type_ref(reader, &function.contract)
              : false)) return false;
+    uint64_t required = SIZE_MAX;
+    if (env->archive_schema_version >= 9
+        && !core_object_reader_u64(reader, &required)) return false;
+    function.required_params = (size_t)required;
     if (env->archive_schema_version < 3)
       function.error_type = th_nil(env->types);
     if (env->archive_schema_version < 4)
@@ -815,7 +821,9 @@ static bool finalize_environment(void *object, void *user_data) {
     th_env_function_t *entry = &functions.data[i];
     ok = th_env_register_function_contract(
         env, entry->qualified_name, entry->root_name, entry->module,
-        entry->package, entry->visibility, entry->contract);
+        entry->package, entry->visibility, entry->contract)
+        && th_env_set_function_required(env, entry->qualified_name,
+                                        entry->required_params);
   }
   for (size_t i = 0; ok && i < values.len; i++) {
     th_env_value_t *entry = &values.data[i];
@@ -851,7 +859,7 @@ static bool register_environment_codecs(
     core_object_archive_registry_t *registry) {
   if (!core_object_archive_register(registry, (core_object_archive_type_t){
           .type_id = TH_ENV_ARCHIVE_ROOT_TYPE,
-          .current_version = 8,
+          .current_version = 9,
           .oldest_supported_version = 1,
           .allocate = environment_allocate,
           .save = save_environment,

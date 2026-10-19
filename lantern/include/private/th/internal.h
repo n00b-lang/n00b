@@ -68,6 +68,7 @@ typedef struct {
   th_type *scheme;
   th_type *error_type;
   th_type *contract;
+  size_t required_params;
   core_datalog_symbol_t logic_symbol;
 } th_env_function_t;
 

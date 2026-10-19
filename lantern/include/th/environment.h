@@ -247,6 +247,11 @@ bool th_env_register_function_contract(
     th_env *environment, core_string_t qualified_name, core_string_t root_name,
     core_string_t module, core_string_t package,
     th_env_visibility_t visibility, th_type *contract);
+bool th_env_set_function_required(th_env *environment,
+                                  core_string_t qualified_name,
+                                  size_t required);
+size_t th_env_function_required(const th_env *environment,
+                                core_string_t qualified_name);
 bool th_env_register_value(th_env *environment, core_string_t qualified_name,
                            core_string_t root_name, core_string_t module,
                            core_string_t package,

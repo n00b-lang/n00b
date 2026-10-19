@@ -65,6 +65,7 @@ th_env_encode(const th_env *env, core_buffer_t *out)
         put_text(&body, entry->package);
         put_u32(&body, (uint32_t)entry->visibility);
         put_u32(&body, th_type_writer_add(types, entry->contract));
+        put_u64(&body, entry->required_params);
     }
     put_u64(&body, env->values.len);
     for (size_t i = 0; i < env->values.len; i++) {
@@ -230,8 +231,10 @@ th_env_decode(th_ctx *context, const uint8_t *data, size_t length)
         core_string_t package = get_text(&c);
         th_env_visibility_t visibility = (th_env_visibility_t)get_u32(&c);
         th_type *contract = get_type(&c);
+        uint64_t required = get_u64(&c);
         ok = !c.failed && th_env_register_function_contract(env, qualified,
-            root, module, package, visibility, contract);
+            root, module, package, visibility, contract)
+            && th_env_set_function_required(env, qualified, required);
     }
     count = get_count(&c);
     for (uint64_t i = 0; ok && !c.failed && i < count; i++) {

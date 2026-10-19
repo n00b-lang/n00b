@@ -64,7 +64,9 @@ th_env_subset(const th_env *source, const th_env_filter_t *filter)
             continue;
         ok = th_env_register_function_contract(env, entry->qualified_name,
             entry->root_name, entry->module, entry->package,
-            entry->visibility, entry->contract);
+            entry->visibility, entry->contract)
+            && th_env_set_function_required(env, entry->qualified_name,
+                                            entry->required_params);
     }
     for (size_t i = 0; ok && i < source->values.len; i++) {
         const th_env_value_t *entry = &source->values.data[i];

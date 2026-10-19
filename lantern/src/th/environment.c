@@ -596,7 +596,9 @@ th_env_compose_diagnose_in_context(const th_env *const *environments,
       if (!th_env_register_function_contract(
               composed, function->qualified_name, function->root_name,
               function->module, function->package, function->visibility,
-              composition_type(source, composed, function->contract))) {
+              composition_type(source, composed, function->contract))
+          || !th_env_set_function_required(composed, function->qualified_name,
+                                           function->required_params)) {
         if (error)
           *error = (th_env_compose_error_t){
               .status = TH_ENV_COMPOSE_FUNCTION_CONFLICT,
@@ -978,8 +980,55 @@ bool th_env_register_function_contract(
           .scheme = signature,
           .error_type = error_type,
           .contract = contract,
+          .required_params = SIZE_MAX,
       }));
   return true;
+}
+
+bool th_env_set_function_required(th_env *env, core_string_t qualified_name,
+                                  size_t required) {
+  if (!env || env->frozen) return false;
+  for (size_t i = 0; i < env->functions.len; i++)
+    if (core_string_eq(env->functions.data[i].qualified_name,
+                       qualified_name)) {
+      env->functions.data[i].required_params = required;
+      return true;
+    }
+  return false;
+}
+
+size_t th_env_function_required(const th_env *env,
+                                core_string_t qualified_name) {
+  for (size_t i = 0; env && i < env->functions.len; i++)
+    if (core_string_eq(env->functions.data[i].qualified_name,
+                       qualified_name))
+      return env->functions.data[i].required_params;
+  return SIZE_MAX;
+}
+
+static th_type *fitted_contract(th_ctx *ctx,
+                                const th_env_function_t *function,
+                                th_type *required_signature) {
+  th_type *fresh = fresh_pattern(ctx, function->contract);
+  th_type *signature = nullptr;
+  size_t wanted = required_signature
+      ? th_func_nparams(required_signature) : SIZE_MAX;
+  if (function->required_params == SIZE_MAX
+      || wanted < function->required_params
+      || (required_signature && th_func_rest(required_signature))
+      || !signature_channels_raw(ctx, fresh, &signature, nullptr)
+      || th_func_rest(signature) || wanted >= th_func_nparams(signature))
+    return fresh;
+  th_param *params = th_alloc(ctx, (wanted ? wanted : 1) * sizeof(th_param));
+  size_t nkw = th_func_nkw(signature);
+  th_kwparam *kw = th_alloc(ctx, (nkw ? nkw : 1) * sizeof(th_kwparam));
+  if (!params || !kw) return fresh;
+  for (size_t i = 0; i < wanted; i++) params[i] = *th_func_param(signature, i);
+  for (size_t i = 0; i < nkw; i++) kw[i] = *th_func_kw(signature, i);
+  th_type *trimmed = th_func_with_error(ctx, th_func_ret(signature),
+                                        signature->fn.error, params, wanted,
+                                        nullptr, kw, nkw);
+  return trimmed ? trimmed : fresh;
 }
 
 bool th_env_register_value(th_env *env, core_string_t qualified_name,
@@ -1361,7 +1410,6 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
                              const th_env_function_t *function,
                              core_string_t method_name) {
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
-  th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
       contract_lookup(trait_contracts, method_name);
   required_contract = required_contract
@@ -1370,6 +1418,7 @@ static bool function_matches(th_ctx *ctx, th_type *receiver,
   th_type *required = nullptr, *required_error = nullptr;
   signature_channels_raw(ctx, required_contract, &required,
                          &required_error);
+  th_type *function_contract = fitted_contract(ctx, function, required);
   signature_channels_raw(ctx, function_contract, &provided,
                          &provided_error);
   th_type *trait_receiver = first_parameter(required);
@@ -1410,7 +1459,6 @@ static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
                                core_string_t method_name) {
   th_probe_t probe = th_probe_begin(ctx);
   th_type *trait_contracts = fresh_pattern(ctx, trait->contracts);
-  th_type *function_contract = fresh_pattern(ctx, function->contract);
   th_type *required_contract =
       contract_lookup(trait_contracts, method_name);
   required_contract = required_contract
@@ -1419,6 +1467,7 @@ static bool function_can_match(th_ctx *ctx, const th_env_trait_t *trait,
   th_type *provided = nullptr, *provided_error = nullptr;
   signature_channels_raw(ctx, required_contract, &required,
                          &required_error);
+  th_type *function_contract = fitted_contract(ctx, function, required);
   signature_channels_raw(ctx, function_contract, &provided,
                          &provided_error);
   bool matches = required && provided && first_parameter(required) &&
@@ -1577,11 +1626,11 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
     const th_env_function_t *function = candidates.data[i];
     th_type *attempt = fresh_pattern(ctx, methods);
     th_type *required = contract_lookup(attempt, method->name);
-    th_type *provided = fresh_pattern(ctx, function->contract);
     th_type *required_signature = nullptr, *required_error = nullptr;
     th_type *provided_signature = nullptr, *provided_error = nullptr;
     signature_channels_raw(ctx, required, &required_signature,
                            &required_error);
+    th_type *provided = fitted_contract(ctx, function, required_signature);
     signature_channels_raw(ctx, provided, &provided_signature,
                            &provided_error);
     th_type *needed_receiver = first_parameter(required_signature);
@@ -1600,12 +1649,13 @@ static bool trait_methods_match(th_ctx *ctx, th_type *receiver,
       if (branch_required
           && th_kind_of(th_resolve(branch_required)) == TH_BINDER)
         branch_required = fresh_pattern(ctx, branch_required);
-      th_type *branch_provided = fresh_pattern(ctx, function->contract);
       th_type *branch_signature = nullptr, *branch_error = nullptr;
       th_type *implementation_signature = nullptr,
               *implementation_error = nullptr;
       signature_channels_raw(ctx, branch_required, &branch_signature,
                              &branch_error);
+      th_type *branch_provided = fitted_contract(ctx, function,
+                                                 branch_signature);
       signature_channels_raw(ctx, branch_provided,
                              &implementation_signature,
                              &implementation_error);
