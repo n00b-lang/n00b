@@ -62,6 +62,7 @@ core_list_decl(n00bb_specialization_seed_t);
 const n00bb_llvm_mutator_classifier_t *n00bb_cache_mutator_classifier(
     const n00bb_cache_t *cache);
 void n00bb_cache_seeds(const n00bb_cache_t *cache, th_ctx *types,
+    ir_module_lookup_fn lookup, void *context,
     core_list_t(n00bb_specialization_seed_t) *seeds);
 bool n00bb_cache_instance_object(n00bb_cache_t *cache,
     core_link_unit_t *link, n00bb_link_analysis_t *analysis,

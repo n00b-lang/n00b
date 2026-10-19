@@ -3814,7 +3814,7 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_list_t(n00bb_specialization_seed_t) seeds =
         core_list_new(n00bb_specialization_seed_t);
     n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
-                      &seeds);
+                      n00bb_source_unit_module, analysis, &seeds);
     bool ok = n00bb_specialize_calls(analysis->ir_context, &callers,
         seeds.data, seeds.len, &analysis->specializations,
         &analysis->specialization_requests, &failure);

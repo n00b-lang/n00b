@@ -1478,7 +1478,8 @@ read_request_text(const uint8_t *data, size_t size, size_t *at,
 
 static bool
 entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
-            th_ctx *types, core_list_t(n00bb_specialization_seed_t) *seeds)
+            th_ctx *types, ir_module_lookup_fn lookup, void *context,
+            core_list_t(n00bb_specialization_seed_t) *seeds)
 {
     const cache_section_t *section = phase_section(entry,
         CORE_STRING_STATIC("requests"), (core_string_t){0});
@@ -1506,6 +1507,7 @@ entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
         for (int i = 0; i < 4; i++) index |= (uint32_t)data[at + i] << (8 * i);
         at += 4;
         ir_module_t *owner = n00bb_cache_module(cache, module);
+        if (!owner && lookup) owner = lookup(context, module);
         ir_func_t *generic = owner && name.data
             ? ir_func_find(owner, name) : nullptr;
         th_type *signature = th_type_reader_get(reader, index);
@@ -1521,12 +1523,13 @@ entry_seeds(const n00bb_cache_t *cache, const cache_entry_t *entry,
 
 void
 n00bb_cache_seeds(const n00bb_cache_t *cache, th_ctx *types,
+                  ir_module_lookup_fn lookup, void *context,
                   core_list_t(n00bb_specialization_seed_t) *seeds)
 {
     for (size_t e = 0; cache && e < cache->entries.len; e++) {
         const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load == ENTRY_VALID)
-            (void)entry_seeds(cache, entry, types, seeds);
+        if (entry->load == ENTRY_VALID && entry->loaded)
+            (void)entry_seeds(cache, entry, types, lookup, context, seeds);
     }
 }
 

@@ -16431,8 +16431,8 @@ attach_cached_body(ir_ctx_t *ir_context, ir_func_t *function, ir_func_t *body)
                      .v = address}));
 }
 
-static ir_module_t *
-source_unit_module(void *context, core_string_t name)
+ir_module_t *
+n00bb_source_unit_module(void *context, core_string_t name)
 {
     n00bb_link_analysis_t *analysis = context;
     for (size_t i = 0; name.data && i < analysis->units.len; i++) {
@@ -16548,7 +16548,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
 
     for (size_t k = 0; k <= units->len; k++) {
         if (k == source_count) {
-            if (!n00bb_cache_load_ir(analysis->cache, source_unit_module,
+            if (!n00bb_cache_load_ir(analysis->cache, n00bb_source_unit_module,
                     program_interface_module, analysis))
                 return ir_initialization_error(
                     units->len ? units->data[0] : nullptr, "N00BB-L0028",
