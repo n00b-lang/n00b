@@ -1906,9 +1906,12 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
             frame->join_reachable = true;
         }
         if (!frame->error_reachable) {
-            lower_error(context, IR_DIAG_TYPE_CLASS,
-                lower_span_for_tree(context, frame->node),
-                "this `try` has no failure path");
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(lower->unit), lower->unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0048"),
+                CORE_STRING_STATIC("nothing in this `try` can fail, so its"
+                                   " `else` handler can never run"),
+                link_source_location(frame->node));
             return false;
         }
         context->block = frame->handler;

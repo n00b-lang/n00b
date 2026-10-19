@@ -43,6 +43,32 @@ typedef enum {
     SEMANTIC_AFTER_EXIT,
 } semantic_step_t;
 
+static parse_tree_t *
+last_leaf(parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        size_t count = core_tree_num_children(node);
+        if (!count) return nullptr;
+        node = core_tree_child(node, count - 1);
+    }
+    return node;
+}
+
+static core_string_t
+node_source_text(core_translation_unit_t *unit, parse_tree_t *node)
+{
+    parse_token_info_t *first = parse_tree_find_first_terminal(node);
+    parse_tree_t *leaf = last_leaf(node);
+    parse_token_info_t *last = leaf ? parse_node_token(leaf) : nullptr;
+    core_string_t contents = core_source_file_contents(&unit->source);
+    if (!first || !last) return CORE_STRING_STATIC("this target");
+    size_t start = parse_token_start_byte(first);
+    size_t end = parse_token_end_byte(last);
+    if (end <= start || end > contents.u8_bytes)
+        return CORE_STRING_STATIC("this target");
+    return core_string_slice(contents, start, end - start);
+}
+
 static bool
 literal_is_whole_value(parse_grammar_t *grammar, parse_tree_t *literal)
 {
@@ -496,9 +522,11 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 core_string_t value_text = n00bb_print_type(state->types,
                                                             value_type);
                 core_string_t variable = th_var_name(target_type);
+                core_string_t target_text = node_source_text(unit, target);
                 core_buffer_printf(&message,
-                    "cannot assign %.*s to a value of type parameter `%.*s; a declared type parameter stays generic",
+                    "cannot assign %.*s to '%.*s': its type is the type parameter `%.*s, which can be any type",
                     (int)value_text.u8_bytes, value_text.data,
+                    (int)target_text.u8_bytes, target_text.data,
                     (int)variable.u8_bytes, variable.data);
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,

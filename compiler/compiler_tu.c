@@ -6923,12 +6923,45 @@ record_function_signature(parse_grammar_t *grammar,
             && th_ind_attrs(th_resolve(receiver->type), &receiver_attrs)
             && !(receiver_attrs & TH_NULLABLE);
         if (!has_receiver) {
+            core_buffer_t message = {0};
+            th_type *receiver_type = receiver && receiver->type
+                ? th_resolve(receiver->type) : nullptr;
+            th_type *element = nullptr;
+            bool is_optional = receiver_type
+                && (n00bb_option_type_element(receiver_type, &element)
+                    || (th_ind_attrs(receiver_type, &receiver_attrs)
+                        && (receiver_attrs & TH_NULLABLE)));
+            bool is_reference = receiver_type
+                && th_ind_attrs(receiver_type, &receiver_attrs);
+            core_string_t shown = receiver_type
+                ? n00bb_print_type(tu_state(unit)->types, receiver_type)
+                : (core_string_t){0};
+            if (!finalizer_type || th_kind_of(finalizer_type) != TH_FUNCTION
+                || th_func_nparams(finalizer_type) != 1
+                || th_func_nkw(finalizer_type) || th_func_rest(finalizer_type)
+                || !receiver)
+                core_buffer_printf(&message,
+                    "__finalize must take exactly one parameter, the"
+                    " `consume` receiver it finalizes");
+            else if (!core_string_eq(receiver->direction,
+                                     CORE_STRING_STATIC("consume")))
+                core_buffer_printf(&message,
+                    "the receiver of __finalize must be declared `consume`");
+            else if (!is_optional && !is_reference)
+                core_buffer_printf(&message,
+                    "the receiver of __finalize must be a Ref to the value"
+                    " being finalized, not %.*s",
+                    (int)shown.u8_bytes, shown.data);
+            else
+                core_buffer_printf(&message,
+                    "the receiver of __finalize cannot be optional (%.*s);"
+                    " a finalizer always runs on a live value",
+                    (int)shown.u8_bytes, shown.data);
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0031"),
-                CORE_STRING_STATIC(
-                    "__finalize must take one consume Ref[T] receiver and no other parameters"),
-                link_source_location(func));
+                core_buffer_string(&message), link_source_location(func));
+            core_buffer_release(&message);
         }
         if (!th_is_nil(symbol->error_type)) {
             core_diagnostics_report_at(

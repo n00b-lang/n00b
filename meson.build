@@ -1635,8 +1635,8 @@ test(
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_comptime_statement.n',
            'N00BB-P0001',
-           'bitcode_comptime_statement.n:1:10',
-           'write \'if comptime() { } else { }\''],
+           'bitcode_comptime_statement.n:1:1',
+           '`comptime` is a function, not a block keyword'],
 )
 
 test(

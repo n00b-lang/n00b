@@ -1317,9 +1317,19 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                             && core_option_is_set(parse_token_value(previous))
                             && core_string_eq(
                                 core_option_get(parse_token_value(previous)),
-                                CORE_STRING_STATIC("comptime")))
+                                CORE_STRING_STATIC("comptime"))) {
+                            message.byte_len = 0;
                             core_buffer_printf(&message,
-                                "; write 'if comptime() { } else { }'");
+                                "`comptime` is a function, not a block keyword;"
+                                " write `if comptime() { ... } else { ... }`");
+                            location = (core_diag_location_t){
+                                .line = parse_token_line(previous),
+                                .column = parse_token_column(previous),
+                                .end_line = parse_token_endline(previous),
+                                .end_column = parse_token_endcol(previous),
+                                .has_location = true,
+                            };
+                        }
                     }
                     else {
                         location = (core_diag_location_t){
@@ -1687,13 +1697,22 @@ discover_package_import(import_driver_t *driver,
                     names.byte_len);
             core_buffer_release(&names);
         }
-        if (!unit || !tree
-            || (!state->interface_module
+        if (!unit || !tree) {
+            if (failure_already_reported(unit))
+                mark_import_failure_reported(importer);
+            continue;
+        }
+        if ((!state->interface_module
                 && !package_tree_may_declare(driver->grammar, tree,
-                                             logical->identifier))
-            || !ensure_preprocessed_import(driver, driver->grammar,
-                                           job, unit, tree)
-            || !find_package_declaration(unit, logical->identifier))
+                                             logical->identifier)))
+            continue;
+        if (!ensure_preprocessed_import(driver, driver->grammar,
+                                        job, unit, tree)) {
+            if (failure_already_reported(unit))
+                mark_import_failure_reported(importer);
+            continue;
+        }
+        if (!find_package_declaration(unit, logical->identifier))
             continue;
         if (selected && selected != unit) {
             core_buffer_t message = {0};
@@ -1820,7 +1839,9 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
         if (package_job) locate_job = package_job;
         else if (!located) locate_job = nullptr;
     }
-    if (!locate_job && resolved && failure_already_reported(attempted)) {
+    n00bb_tu_state_t *importer_state = tu_state(importer);
+    if (!locate_job && ((resolved && failure_already_reported(attempted))
+            || (importer_state && importer_state->import_failure_reported))) {
         mark_import_failure_reported(importer);
         return false;
     }
@@ -3904,7 +3925,7 @@ restart_excluding_cached(char **argv, core_string_t argv0,
 
 static bool
 compile_build_time_program(int argc, char **argv, core_string_t argv0,
-                           core_string_t executable)
+                           core_string_t executable, bool *reported)
 {
     core_string_t compiler_path = n00bb_executable_path(argv0);
     char *compiler = core_string_to_cstr(compiler_path);
@@ -3951,11 +3972,18 @@ compile_build_time_program(int argc, char **argv, core_string_t argv0,
         posix_spawn_file_actions_destroy(&actions);
     }
     else ok = false;
+    *reported = false;
     if (!ok && log_fd >= 0 && lseek(log_fd, 0, SEEK_SET) == 0) {
+        core_buffer_t log = {0};
         char chunk[4096];
         ssize_t got;
         while ((got = read(log_fd, chunk, sizeof(chunk))) > 0)
-            fwrite(chunk, 1, (size_t)got, stderr);
+            core_buffer_append(&log, chunk, (size_t)got);
+        if (log.byte_len) fwrite(log.data, 1, log.byte_len, stderr);
+        core_string_t text = core_buffer_string(&log);
+        *reported = core_string_find(text, CORE_STRING_STATIC("error[")) >= 0
+            || core_string_find(text, CORE_STRING_STATIC("fatal[")) >= 0;
+        core_buffer_release(&log);
     }
     if (log_fd >= 0) close(log_fd);
     free(arguments);
@@ -4002,7 +4030,7 @@ read_capture(int capture_fd)
 
 static bool
 run_build_time_stage(int argc, char **argv, core_string_t argv0,
-                     core_diagnostics_t *diagnostics)
+                     core_diagnostics_t *diagnostics, bool *reported)
 {
     core_string_t inherited = core_string_from_cstr(
         getenv("N00BB_BUILD_TIME_CAPTURE_FD"));
@@ -4028,10 +4056,14 @@ run_build_time_stage(int argc, char **argv, core_string_t argv0,
     bool ok = capture_fd >= 0;
     if (!ok) build_time_failure(diagnostics, CORE_STRING_STATIC(
         "could not create the build-time capture file"));
+    bool child_reported = false;
     if (ok && !compile_build_time_program(argc, argv, argv0,
-                                          executable_path))
-        ok = build_time_failure(diagnostics, CORE_STRING_STATIC(
-            "the build-time compile failed"));
+                                          executable_path, &child_reported)) {
+        *reported = child_reported;
+        ok = child_reported ? false : build_time_failure(diagnostics,
+            CORE_STRING_STATIC(
+                "the build-time compile failed without reporting an error"));
+    }
     struct stat program = {0};
     bool needed = ok && !stat(executable, &program) && program.st_size;
     if (ok && needed && !run_build_time_program(executable_path, capture_fd))
@@ -4234,8 +4266,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool build_time = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--build-time"));
     n00bb_set_build_time(build_time);
+    bool build_time_reported = false;
     if (options_valid && (build_command || lower_command) && !build_time
-        && !run_build_time_stage(argc, argv, argv0, cli_diagnostics))
+        && !run_build_time_stage(argc, argv, argv0, cli_diagnostics,
+                                 &build_time_reported))
         options_valid = false;
     int32_t native_root_count = parse_cmdr_flag_value_count(args,
         CORE_STRING_STATIC("--native-root"));
@@ -4420,7 +4454,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         &link_analysis);
     if (link_analysis) link_analysis->cache = cache;
     bool optimistic_cache = n00bb_cache_optimistic(cache);
-    if (optimistic_cache) {
+    if (optimistic_cache && !build_time_reported) {
         core_string_t reason = !located
             ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
             : !n00bb_cache_assumptions_hold(cache, link, link_analysis)
@@ -4651,6 +4685,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                                    core_link_unit_diagnostics(link));
     }
     core_string_t late_retry = optimistic_cache && !located
+        && !build_time_reported
         ? strict_retry_reason(cache, queue, &requests, cli_diagnostics)
         : (core_string_t){0};
 
