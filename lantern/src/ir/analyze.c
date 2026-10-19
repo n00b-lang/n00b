@@ -92,12 +92,17 @@ static bool analyze_instr_end(ir_visit_t *vi)
     A          *a  = vi->user;
     ir_instr_t *in = vi->instr;
 
-    if (in->dest_kind == IR_DEST_LOCAL && in->dest_local
-        && !ir_rd_reaches_a_use(a->rd, in)) {
+    ir_local_t *l = in->dest_kind == IR_DEST_LOCAL ? in->dest_local : nullptr;
+
+    if (l && !l->synthetic && !ir_rd_reaches_a_use(a->rd, in)) {
         say(a->d, IR_DIAG_UNUSED_LOCAL, in, vi->block, vi->func,
-            CORE_STRING_STATIC("this assignment"), CORE_STRING_STATIC("$"),
-            in->dest_local->name,
-            CORE_STRING_STATIC(" is assigned here and no read of it is reached"));
+            CORE_STRING_STATIC("this assignment"),
+            l->source_name.data ? CORE_STRING_STATIC("'")
+                                : CORE_STRING_STATIC("$"),
+            ir_local_display_name(l),
+            l->source_name.data
+                ? CORE_STRING_STATIC("' is assigned here and never read afterward")
+                : CORE_STRING_STATIC(" is assigned here and never read afterward"));
     }
 
     return true;

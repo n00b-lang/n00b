@@ -33,3 +33,4 @@ IR_DIAG(RANGE_UNSAT,       "IR-W0035", WARNING, "numeric range constraints are i
 IR_DIAG(VERIFY_LIFETIME,  "IR-E0036", ERROR,   "value is used after finalization or deallocation")
 IR_DIAG(VERIFY_PHASE,     "IR-E0037", ERROR,   "global is unavailable in this execution phase")
 IR_DIAG(VERIFY_STORAGE,   "IR-E0038", ERROR,   "a required storage class is not honored")
+IR_DIAG(UNUSED_RESULT,    "IR-W0039", WARNING, "the value of an expression statement is never used")

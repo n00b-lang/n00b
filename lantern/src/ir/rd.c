@@ -806,6 +806,9 @@ bool ir_rd_reaches_a_use(ir_rd_t *r, ir_instr_t *def)
 {
     uint32_t at = r && def ? node_of(r, def) : RD_NONE;
 
-    return at < r->n_nodes && r->def_id[at] != RD_NONE
-        && r->def_used[r->def_id[at]];
+    if (at >= r->n_nodes || r->def_id[at] == RD_NONE) {
+        return true;
+    }
+
+    return r->def_used[r->def_id[at]];
 }

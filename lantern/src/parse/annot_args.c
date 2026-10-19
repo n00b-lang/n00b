@@ -483,6 +483,7 @@ static struct {
     {PARSE_ANNOT_DECLARATION_POINT, CORE_STRING_STATIC("a-tag")},
     {PARSE_ANNOT_STATEMENT_END, CORE_STRING_STATIC("a-tags")},
     {PARSE_ANNOT_CONTINUE_AFTER, CORE_STRING_STATIC("a-tags")},
+    {PARSE_ANNOT_DISCARDS, CORE_STRING_STATIC("a-ref")},
 };
 
 core_string_t
@@ -751,6 +752,11 @@ decode(parse_annotation_t *a, aa_node *args)
 
     case PARSE_ANNOT_NOTRIVIA:
         a->notrivia_ref = arg_ref(args, 0);
+        break;
+
+    case PARSE_ANNOT_DISCARDS:
+        a->value_ref = arg_ref(args, 0);
+        if (!parse_child_ref_is_set(a->value_ref)) return false;
         break;
 
     case PARSE_ANNOT_ADJACENT:

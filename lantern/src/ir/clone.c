@@ -260,6 +260,8 @@ static ir_func_t *clone_function(ir_func_t *source, ir_module_t *module,
         ir_local_t *new = c.copy->locals[i];
         new->mutability = old->mutability;
         new->address_taken = old->address_taken;
+        new->synthetic = old->synthetic;
+        new->source_name = old->source_name;
         new->has_init = old->has_init;
         new->init = old->init;
         new->init_f = old->init_f;

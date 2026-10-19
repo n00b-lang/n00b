@@ -130,6 +130,7 @@ lower_active_tree(ir_lower_context_t *context)
 }
 
 static parse_tree_t *lower_tree_simple_lvalue(parse_tree_t *node);
+static ir_span_t span_of_tree(ir_lower_context_t *context, parse_tree_t *node);
 static ir_lower_symbol_binding_t *lower_find_binding(
     ir_lower_context_t *context, parse_sym_entry_t *symbol);
 
@@ -1292,6 +1293,64 @@ static bool lower_tree_nt_post(parse_visit_t *visit)
     return lower_tree_run_visit(visit, false, true);
 }
 
+static parse_tree_t *
+lower_only_nonterminal_child(parse_tree_t *node)
+{
+    parse_tree_t *only = nullptr;
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *child = core_tree_child(node, i);
+        if (core_tree_is_leaf(child)) continue;
+        if (only) return nullptr;
+        only = child;
+    }
+    return only;
+}
+
+static parse_tree_t *
+lower_discarded_expression(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)) {
+        const parse_rule_t *rule = parse_tree_rule(grammar, node);
+        parse_annotation_t *emit = rule
+            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_EMIT) : nullptr;
+        parse_tree_t *inner = nullptr;
+        if (emit && core_string_eq(emit->emit_action,
+                                   CORE_STRING_STATIC("identity"))
+            && core_list_len(emit->emit_operands) == 1)
+            inner = parse_tree_resolve_child_ref(grammar, node,
+                                                 emit->emit_operands.data[0]);
+        else if (!emit)
+            inner = lower_only_nonterminal_child(node);
+        if (!inner || core_tree_is_leaf(inner)) return node;
+        node = inner;
+    }
+    return node;
+}
+
+static bool lower_tree_discard_post(parse_visit_t *visit)
+{
+    ir_lower_tree_state_t *state = visit->user;
+    if (state->failed || !state->context->reachable
+        || !state->context->diagnostics)
+        return true;
+    parse_tree_t *expression = lower_discarded_expression(visit->grammar,
+        parse_tree_resolve_child_ref(visit->grammar, visit->node,
+                                     visit->annot->value_ref));
+    const parse_rule_t *rule = expression && !core_tree_is_leaf(expression)
+        ? parse_tree_rule(visit->grammar, expression) : nullptr;
+    th_type *type = expression ? parse_tree_type(expression) : nullptr;
+    if (!expression || (type && th_is_nil(th_resolve(type)))
+        || (rule && parse_rule_find_annot(visit->grammar, rule,
+                                          PARSE_ANNOT_CALL)))
+        return true;
+    ir_diag_t *diagnostic = ir_diag_begin(state->context->diagnostics,
+        IR_DIAG_UNUSED_RESULT, span_of_tree(state->context, expression),
+        CORE_STRING_STATIC("this value"));
+    ir_diag_message(diagnostic, state->context->diagnostics,
+        CORE_STRING_STATIC("the value of this expression is never used"));
+    return true;
+}
+
 static bool lower_tree_assign_pre(parse_visit_t *visit)
 {
     ir_lower_tree_state_t *state = visit->user;
@@ -1820,6 +1879,8 @@ ir_lower_tree(ir_lowerer_t *lowerer, ir_lower_context_t *context,
     }
     parse_walk_on_annot_phase(walk, PARSE_ANNOT_ASSIGNS, 0, lower_tree_assign_pre,
                         nullptr, nullptr);
+    parse_walk_on_annot_phase(walk, PARSE_ANNOT_DISCARDS, 0, nullptr,
+                        lower_tree_discard_post, nullptr);
     for (size_t i = 0; i < lowerer->nt_visitor_count; i++) {
         ir_lower_nt_visit_entry_t *entry = &lowerer->nt_visitors[i];
         if (!parse_walk_on_nt(walk, entry->nonterminal, lower_tree_nt_pre,

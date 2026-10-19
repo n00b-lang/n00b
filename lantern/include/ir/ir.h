@@ -465,6 +465,7 @@ struct ir_local_t {
     ir_value_t     *value;
     ir_mutability_t mutability;
     bool            address_taken;
+    bool            synthetic;
     bool            has_init;
     ir_lit_t     init;
     double       init_f;

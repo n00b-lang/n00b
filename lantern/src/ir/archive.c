@@ -7,7 +7,7 @@
 #include "lib/alloc.h"
 
 #define IR_ARCHIVE_MAGIC   UINT32_C(0x4e30494c)
-#define IR_ARCHIVE_VERSION UINT32_C(2)
+#define IR_ARCHIVE_VERSION UINT32_C(3)
 
 enum {
     REF_NONE,
@@ -638,6 +638,7 @@ w_function_details(writer_t *w, ir_func_t *function)
         ir_local_t *local = function->locals[i];
         w_u8(w, (uint8_t)local->mutability);
         w_u8(w, local->address_taken);
+        w_u8(w, local->synthetic);
         w_u8(w, local->has_init);
         w_lit(w, local->init);
         uint64_t bits;
@@ -1437,6 +1438,7 @@ r_function_details(reader_t *r, ir_func_t *function)
         ir_local_t *local = function->locals[i];
         local->mutability = (ir_mutability_t)r_u8(r);
         local->address_taken = r_u8(r) != 0;
+        local->synthetic = r_u8(r) != 0;
         local->has_init = r_u8(r) != 0;
         local->init = r_lit(r);
         uint64_t bits = r_u64(r);
