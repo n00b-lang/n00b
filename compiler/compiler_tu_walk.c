@@ -138,7 +138,7 @@ infer_literal_reporting(parse_grammar_t *grammar,
 {
     size_t before = core_diagnostics_count(
         core_translation_unit_diagnostics(unit));
-    if (infer_user_literal_type(grammar, unit, node)) return true;
+    if (infer_user_literal_type(grammar, unit, node, nullptr)) return true;
     report_literal_failure(unit, node, before, code, message);
     return false;
 }

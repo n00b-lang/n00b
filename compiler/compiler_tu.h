@@ -387,6 +387,8 @@ typedef struct {
     core_string_t module;
 } n00bb_user_litmod_t;
 core_list_decl(n00bb_user_litmod_t);
+typedef n00bb_user_litmod_t *n00bb_user_litmod_ptr_t;
+core_list_decl(n00bb_user_litmod_ptr_t);
 struct n00bb_litmod_site_t {
     n00bb_user_litmod_t *registration;
     th_type *payload_type;
@@ -560,6 +562,7 @@ typedef struct {
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
+    core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
     core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;
@@ -648,7 +651,16 @@ bool infer_string_modifier_type(parse_grammar_t *grammar, parse_tree_t *node,
                                 n00bb_tu_state_t *state);
 bool infer_user_literal_type(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
-                             parse_tree_t *node);
+                             parse_tree_t *node,
+                             n00bb_user_litmod_t *chosen);
+bool n00bb_defer_shape_literal(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit,
+                               parse_tree_t *node);
+bool n00bb_resolve_shape_literal(parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *node);
+bool n00bb_resolve_shape_literals(parse_grammar_t *grammar,
+                                  core_translation_unit_t *unit);
 bool resolve_forward_literal_sites(core_translation_unit_t *unit,
                                    n00bb_tu_state_t *state);
 bool report_shadowed_litmods(core_translation_unit_t *unit,
@@ -762,6 +774,9 @@ bool n00bb_flagset_instance_access(parse_grammar_t *grammar,
 n00bb_user_litmod_t *user_litmod(n00bb_tu_state_t *state,
                                  core_string_t modifier,
                                  core_string_t kind, bool *ambiguous);
+core_list_t(n00bb_user_litmod_ptr_t)
+n00bb_visible_litmods(n00bb_tu_state_t *state, core_string_t kind);
+core_string_t n00bb_literal_shape_trait(core_string_t kind);
 core_string_t literal_modifier(parse_grammar_t *grammar,
                                parse_tree_t *node);
 bool dict_only_empty_literal(parse_grammar_t *grammar,

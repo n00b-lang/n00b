@@ -82,6 +82,50 @@ site_dispatches_method(const n00bb_link_use_site_t *site,
     return core_string_eq(name, method_name);
 }
 
+typedef struct {
+    core_string_t trait;
+    bool declared;
+    core_list_t(th_type_ptr_t) seen;
+} shape_trait_patterns_t;
+core_list_decl(shape_trait_patterns_t);
+
+static shape_trait_patterns_t *
+shape_trait_patterns(core_list_t(shape_trait_patterns_t) *shapes,
+                     core_string_t trait)
+{
+    for (size_t i = 0; i < shapes->len; i++)
+        if (core_string_eq(shapes->data[i].trait, trait))
+            return &shapes->data[i];
+    core_list_push(*shapes, ((shape_trait_patterns_t){
+        .trait = trait, .seen = core_list_new(th_type_ptr_t)}));
+    return &shapes->data[shapes->len - 1];
+}
+
+static bool
+register_shape_trait(th_ctx *types, th_env *environment,
+                     shape_trait_patterns_t *patterns)
+{
+    if (patterns->declared) return true;
+    th_type *methods = th_record(types, nullptr, 0);
+    patterns->declared = methods && th_env_register_trait_contracts(
+        environment, patterns->trait, CORE_STRING_STATIC("builtins"),
+        CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods);
+    return patterns->declared;
+}
+
+static bool
+register_shape_pattern(th_env *environment, shape_trait_patterns_t *patterns,
+                       th_type *result)
+{
+    for (size_t n = 0; n < patterns->seen.len; n++)
+        if (patterns->seen.data[n] == result) return true;
+    if (!th_env_register_intrinsic_type_pattern(environment, patterns->trait,
+                                                result))
+        return false;
+    core_list_push(patterns->seen, result);
+    return true;
+}
+
 th_env *
 build_import_environment(parse_grammar_t *grammar,
                          core_link_unit_t *link,
@@ -104,75 +148,50 @@ build_import_environment(parse_grammar_t *grammar,
                 unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0060"),
                 CORE_STRING_STATIC("could not register module declarations in the type environment"));
     }
-    core_list_t(th_type_ptr_t) bracket_results =
-        core_list_new(th_type_ptr_t);
-    core_list_t(th_type_ptr_t) brace_results =
-        core_list_new(th_type_ptr_t);
-    bool bracket_trait = false;
-    bool brace_trait = false;
+    core_list_t(shape_trait_patterns_t) shapes =
+        core_list_new(shape_trait_patterns_t);
     for (size_t i = 0; ok && i < units->len; i++) {
         n00bb_tu_state_t *state = tu_state(units->data[i]);
         if (!state) continue;
         for (size_t r = 0; ok && r < state->literal_modifiers.len; r++) {
             n00bb_user_litmod_t *registration =
                 &state->literal_modifiers.data[r];
-            bool bracket = core_string_eq(registration->kind,
-                                           CORE_STRING_STATIC("sequence"));
-            bool brace = core_string_eq(registration->kind,
-                                         CORE_STRING_STATIC("dict"))
-                || core_string_eq(registration->kind,
-                                   CORE_STRING_STATIC("set"));
-            if (!bracket && !brace) continue;
-            core_string_t trait = bracket
-                ? CORE_STRING_STATIC("Bracket_Literal")
-                : CORE_STRING_STATIC("Brace_Literal");
-            bool *declared = bracket ? &bracket_trait : &brace_trait;
-            core_list_t(th_type_ptr_t) *seen = bracket
-                ? &bracket_results : &brace_results;
-            if (!*declared) {
-                th_type *methods = th_record(root_state->types, nullptr, 0);
-                ok = methods && th_env_register_trait_contracts(
-                    source_environment, trait, CORE_STRING_STATIC("builtins"),
-                    CORE_STRING_STATIC("default"),
-                    TH_ENV_PUBLIC, methods);
-                if (!ok) break;
-                *declared = true;
-            }
-            th_type *result = registration->function
-                ? th_func_ret(registration->function->type) : nullptr;
-            result = result ? th_resolve(result) : nullptr;
-            if (result && th_kind_of(result) != TH_VAR) {
-                bool duplicate = false;
-                for (size_t n = 0; n < seen->len; n++)
-                    duplicate |= seen->data[n] == result;
-                if (!duplicate) {
-                    ok = th_env_register_intrinsic_type_pattern(
-                        source_environment, trait, result);
-                    if (ok) core_list_push(*seen, result);
-                }
-            }
-            for (size_t i = 0; i < state->literal_site_nodes.len; i++) {
-                n00bb_litmod_site_t *site = n00bb_node_literal_site(
-                    state->literal_site_nodes.data[i]);
-                if (!site || site->registration != registration)
-                    continue;
-                result = site->signature
-                    ? th_resolve(th_func_ret(site->signature)) : nullptr;
-                if (!result || th_kind_of(result) == TH_VAR) continue;
-                bool duplicate = false;
-                for (size_t n = 0; n < seen->len; n++)
-                    duplicate |= seen->data[n] == result;
-                if (!duplicate) {
-                    ok = th_env_register_intrinsic_type_pattern(
-                        source_environment, trait, result);
-                    if (!ok) break;
-                    core_list_push(*seen, result);
+            core_string_t traits[] = {
+                n00bb_literal_shape_trait(registration->kind),
+                CORE_STRING_STATIC("Brace_Literal"),
+            };
+            size_t trait_count = !traits[0].data ? 0
+                : core_string_eq(registration->kind,
+                                 CORE_STRING_STATIC("sequence")) ? 1 : 2;
+            for (size_t t = 0; ok && t < trait_count; t++) {
+                shape_trait_patterns_t *patterns = shape_trait_patterns(
+                    &shapes, traits[t]);
+                ok = patterns && register_shape_trait(root_state->types,
+                    source_environment, patterns);
+                th_type *result = registration->function
+                    ? th_func_ret(registration->function->type) : nullptr;
+                result = result ? th_resolve(result) : nullptr;
+                if (ok && result && th_kind_of(result) != TH_VAR)
+                    ok = register_shape_pattern(source_environment,
+                                                patterns, result);
+                for (size_t i = 0; ok && i < state->literal_site_nodes.len;
+                     i++) {
+                    n00bb_litmod_site_t *site = n00bb_node_literal_site(
+                        state->literal_site_nodes.data[i]);
+                    if (!site || site->registration != registration)
+                        continue;
+                    result = site->signature
+                        ? th_resolve(th_func_ret(site->signature)) : nullptr;
+                    if (result && th_kind_of(result) != TH_VAR)
+                        ok = register_shape_pattern(source_environment,
+                                                    patterns, result);
                 }
             }
         }
     }
-    core_list_free(brace_results);
-    core_list_free(bracket_results);
+    for (size_t t = 0; t < shapes.len; t++)
+        core_list_free(shapes.data[t].seen);
+    core_list_free(shapes);
     if (ok) ok = th_env_freeze(source_environment);
     if (!ok) {
         th_env_free(source_environment);

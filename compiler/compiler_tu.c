@@ -2015,7 +2015,8 @@ report_literal_item_conflict(core_translation_unit_t *unit,
 
 bool
 infer_user_literal_type(parse_grammar_t *grammar,
-                        core_translation_unit_t *unit, parse_tree_t *node)
+                        core_translation_unit_t *unit, parse_tree_t *node,
+                        n00bb_user_litmod_t *chosen)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     literal_item_group_t groups[2] = {0};
@@ -2037,7 +2038,8 @@ infer_user_literal_type(parse_grammar_t *grammar,
         && core_tree_num_children(parenthesized) == 5;
     parse_tree_t *dict_entries = CHILD_NT(grammar, braces, "dict-entries");
     parse_tree_t *set_entries = CHILD_NT(grammar, braces, "set-entries");
-    core_string_t modifier = literal_modifier(grammar, node);
+    core_string_t modifier = chosen ? chosen->modifier
+        : literal_modifier(grammar, node);
     if (!modifier.data && sequence)
         modifier = CORE_STRING_STATIC("list");
     else if (!modifier.data && dict_entries)
@@ -2064,6 +2066,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
         : set_entries ? CORE_STRING_STATIC("set")
         : record_fields ? CORE_STRING_STATIC("record")
         : tuple ? CORE_STRING_STATIC("tuple") : (core_string_t){0};
+    if (braces && !kind.data && chosen) kind = chosen->kind;
     if (braces && !kind.data) {
         bool has_dict = user_litmod(state, modifier,
             CORE_STRING_STATIC("dict"), nullptr) != nullptr;
@@ -2075,8 +2078,8 @@ infer_user_literal_type(parse_grammar_t *grammar,
     }
     if (!kind.data) return false;
     bool ambiguous = false;
-    n00bb_user_litmod_t *registration = user_litmod(state, modifier, kind,
-                                                    &ambiguous);
+    n00bb_user_litmod_t *registration = chosen ? chosen
+        : user_litmod(state, modifier, kind, &ambiguous);
     if (!registration && ambiguous) {
         core_buffer_t message = {0};
         core_buffer_printf(&message,
@@ -2191,9 +2194,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
     if (!ok) return false;
     th_type *result = specialized ? th_func_ret(specialized) : nullptr;
     if (!result) return false;
-    core_string_t required_shape = sequence
-        ? CORE_STRING_STATIC("Bracket_Literal")
-        : braces ? CORE_STRING_STATIC("Brace_Literal") : (core_string_t){};
+    core_string_t required_shape = n00bb_literal_shape_trait(kind);
     if (required_shape.data) {
         th_type *shape_type = th_var(state->types);
         if (!shape_type || !th_var_constrain(state->types, shape_type,
@@ -10702,6 +10703,7 @@ free_tu_state(void *data)
     core_list_free(state->import_aliases);
     core_dict_free(&state->import_alias_index);
     core_list_free(state->literal_site_nodes);
+    core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->declarations_typed_ahead);
     n00bb_range_state_release(state);
@@ -10734,6 +10736,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->import_aliases = core_list_new(n00bb_import_alias_t);
     core_dict_init_string(&state->import_alias_index);
     state->literal_site_nodes = core_list_new(parse_tree_ptr_t);
+    state->shape_literal_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
     core_dict_init(&state->declarations_typed_ahead, nullptr, nullptr);
     core_dict_init(&state->integer_symbol_ranges, nullptr, nullptr);
@@ -12595,13 +12598,32 @@ user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
                                                 ambiguous);
 }
 
-static n00bb_user_litmod_t *
-imported_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
-                     core_string_t kind, bool *ambiguous)
+typedef bool (*litmod_visitor_t)(n00bb_user_litmod_t *registration,
+                                 void *context);
+
+static bool
+visit_exported_litmods(n00bb_package_export_t *export, core_string_t kind,
+                       litmod_visitor_t visit, void *context)
 {
-    if (ambiguous) *ambiguous = false;
-    if (!state || !state->unit) return nullptr;
-    n00bb_user_litmod_t *found = nullptr;
+    n00bb_tu_state_t *source = tu_state(export->source_unit);
+    for (size_t i = 0; source && i < source->literal_modifiers.len; i++) {
+        n00bb_user_litmod_t *exported = &source->literal_modifiers.data[i];
+        if (!core_string_eq(exported->kind, kind)) continue;
+        parse_sym_entry_t *handler = exported->declaration
+            ? parse_tree_sym(exported->declaration) : exported->function;
+        if (!handler || (!export->module_export
+                && handler != canonical_symbol(export->symbol)))
+            continue;
+        if (!visit(exported, context)) return false;
+    }
+    return true;
+}
+
+static bool
+visit_imported_litmods(n00bb_tu_state_t *state, core_string_t kind,
+                       litmod_visitor_t visit, void *context)
+{
+    if (!state || !state->unit) return true;
     for (size_t i = 0; i < core_translation_unit_import_count(state->unit);
          i++) {
         core_translation_unit_t *imported = core_translation_unit_import(
@@ -12621,24 +12643,77 @@ imported_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
                      export_ix++) {
                     n00bb_package_export_t *export =
                         &package->exports.data[export_ix];
-                    if (!export->source_unit) continue;
-                    n00bb_user_litmod_t *exported = local_user_litmod(
-                        tu_state(export->source_unit), modifier, kind);
-                    parse_sym_entry_t *handler = exported && exported->declaration
-                        ? parse_tree_sym(exported->declaration)
-                        : exported ? exported->function : nullptr;
-                    if (!handler || (!export->module_export
-                            && handler != canonical_symbol(export->symbol)))
-                        continue;
-                    if (found && found != exported) {
-                        if (ambiguous) *ambiguous = true;
-                        return nullptr;
-                    }
-                    found = exported;
+                    if (export->source_unit && !visit_exported_litmods(
+                            export, kind, visit, context))
+                        return false;
                 }
             }
         }
     }
+    return true;
+}
+
+typedef struct {
+    core_string_t modifier;
+    n00bb_user_litmod_t *found;
+    bool ambiguous;
+} imported_litmod_search_t;
+
+static bool
+match_imported_litmod(n00bb_user_litmod_t *registration, void *context)
+{
+    imported_litmod_search_t *search = context;
+    if (!core_string_eq(registration->modifier, search->modifier))
+        return true;
+    if (search->found && search->found != registration) {
+        search->ambiguous = true;
+        return false;
+    }
+    search->found = registration;
+    return true;
+}
+
+static n00bb_user_litmod_t *
+imported_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
+                     core_string_t kind, bool *ambiguous)
+{
+    imported_litmod_search_t search = {.modifier = modifier};
+    visit_imported_litmods(state, kind, match_imported_litmod, &search);
+    if (ambiguous) *ambiguous = search.ambiguous;
+    return search.ambiguous ? nullptr : search.found;
+}
+
+static bool
+collect_visible_litmod(n00bb_user_litmod_t *registration, void *context)
+{
+    core_list_t(n00bb_user_litmod_ptr_t) *found = context;
+    for (size_t i = 0; i < found->len; i++)
+        if (found->data[i] == registration) return true;
+    core_list_push(*found, registration);
+    return true;
+}
+
+core_string_t
+n00bb_literal_shape_trait(core_string_t kind)
+{
+    return core_string_eq(kind, CORE_STRING_STATIC("sequence"))
+            ? CORE_STRING_STATIC("Sequence_Like")
+        : core_string_eq(kind, CORE_STRING_STATIC("set"))
+            ? CORE_STRING_STATIC("Set_Like")
+        : core_string_eq(kind, CORE_STRING_STATIC("dict"))
+            ? CORE_STRING_STATIC("Dict_Like")
+        : (core_string_t){0};
+}
+
+core_list_t(n00bb_user_litmod_ptr_t)
+n00bb_visible_litmods(n00bb_tu_state_t *state, core_string_t kind)
+{
+    core_list_t(n00bb_user_litmod_ptr_t) found =
+        core_list_new(n00bb_user_litmod_ptr_t);
+    for (size_t i = 0; state && i < state->literal_modifiers.len; i++)
+        if (core_string_eq(state->literal_modifiers.data[i].kind, kind))
+            collect_visible_litmod(&state->literal_modifiers.data[i], &found);
+    visit_imported_litmods(state, kind, collect_visible_litmod, &found);
     return found;
 }
 

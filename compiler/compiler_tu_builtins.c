@@ -1593,7 +1593,11 @@ register_builtin_traits(th_env *environment, th_ctx *types,
 {
     th_type *methods = th_record(types, nullptr, 0);
     if (!methods ||
-        !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Bracket_Literal"),
+        !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Sequence_Like"),
+            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods) ||
+        !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Set_Like"),
+            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods) ||
+        !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Dict_Like"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods) ||
         !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Brace_Literal"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, methods))
@@ -1856,14 +1860,24 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         {.kind = TH_ARG_TYPE, .type = dict_key},
         {.kind = TH_ARG_TYPE, .type = dict_value},
     };
+    th_type *list = th_apply(types,
+        CORE_STRING_STATIC("builtin.containers.list.List"), &list_arg, 1);
+    th_type *set = th_apply(types,
+        CORE_STRING_STATIC("builtin.containers.set.Set"), &set_arg, 1);
+    th_type *dict = th_apply(types,
+        CORE_STRING_STATIC("builtin.containers.dict.Dict"), dict_args, 2);
     return th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Bracket_Literal"), th_apply(types, CORE_STRING_STATIC("builtin.containers.list.List"), &list_arg, 1)) &&
+               CORE_STRING_STATIC("Sequence_Like"), list) &&
            th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Bracket_Literal"), th_array(types, array_element)) &&
+               CORE_STRING_STATIC("Sequence_Like"), th_array(types, array_element)) &&
            th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Brace_Literal"), th_apply(types, CORE_STRING_STATIC("builtin.containers.set.Set"), &set_arg, 1)) &&
+               CORE_STRING_STATIC("Set_Like"), set) &&
            th_env_register_intrinsic_type_pattern(environment,
-               CORE_STRING_STATIC("Brace_Literal"), th_apply(types, CORE_STRING_STATIC("builtin.containers.dict.Dict"), dict_args, 2));
+               CORE_STRING_STATIC("Brace_Literal"), set) &&
+           th_env_register_intrinsic_type_pattern(environment,
+               CORE_STRING_STATIC("Dict_Like"), dict) &&
+           th_env_register_intrinsic_type_pattern(environment,
+               CORE_STRING_STATIC("Brace_Literal"), dict);
 }
 bool
 n00bb_builtin_function(parse_sym_entry_t *symbol)
