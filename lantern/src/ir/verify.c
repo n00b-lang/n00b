@@ -1027,7 +1027,7 @@ static void verify_binding_initialization_events(
             if (prior_distinct_site) {
                 broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
                       "phase.binding-initialized-once",
-                      "immutable binding %.*s has multiple initialization sites on a reachable path",
+                      "'%.*s' is immutable, but a path through this code initializes it more than once",
                       SARG(name));
                 diagnosed = true;
                 break;
@@ -1209,11 +1209,13 @@ static void check_contents_write(V *v, ir_instr_t *in, ir_block_t *block,
                 continue;
             broke(v, IR_DIAG_VERIFY_PHASE, in, block,
                   "phase.constant-contents-write",
-                  "the contents of constant %.*s cannot be written during %s execution",
+                  "cannot write into constant '%.*s'; %s",
                   SARG(owner->global ? owner->global->name
                        : owner->name.data ? owner->name
                                           : CORE_STRING_STATIC("(unnamed)")),
-                  phase == IR_PHASE_COMPTIME ? "compile-time" : "runtime");
+                  phase == IR_PHASE_COMPTIME
+                      ? "it is not writable during compile-time evaluation"
+                      : "its contents are fixed when the program is built");
         }
         store_target_set_free(&owners);
     }

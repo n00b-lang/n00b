@@ -2051,7 +2051,7 @@ static bool has_multiple_initialization_diagnostic(ir_diags_t *diagnostics)
         const ir_diag_t *diagnostic = ir_diags_at(diagnostics, i);
         if (diagnostic->code == IR_DIAG_VERIFY_PHASE
             && contains(diagnostic->message,
-                        S("multiple initialization sites"))) return true;
+                        S("initializes it more than once"))) return true;
     }
     return false;
 }
@@ -2435,7 +2435,7 @@ static void test_local_phase_writes(void)
             produced[diagnostic->code] = true;
             duplicate_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE
                 && contains(diagnostic->message,
-                            S("multiple initialization sites"));
+                            S("initializes it more than once"));
         }
         check("typed IR rejects multiple immutable initialization sites on one path",
               !(held & IR_PROP_TYPED) && duplicate_diagnostic);
