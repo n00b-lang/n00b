@@ -20,7 +20,7 @@
 #include "th/environment.h"
 
 #define CACHE_MAGIC   UINT32_C(0x4f42304e)
-#define CACHE_VERSION UINT32_C(1)
+#define CACHE_VERSION UINT32_C(2)
 
 core_list_decl(size_t);
 
@@ -1816,6 +1816,125 @@ phase_section_name(core_buffer_t *out, core_string_t kind)
 }
 
 static void
+append_scope_path(core_buffer_t *out, const parse_scope_t *scope)
+{
+    if (!scope) return;
+    append_scope_path(out, scope->parent);
+    if (scope->name.data && scope->name.u8_bytes) {
+        core_buffer_append_string(out, scope->name);
+        core_buffer_putc(out, '.');
+    }
+}
+
+void
+n00bb_symbol_use_key(core_buffer_t *out, const core_translation_unit_t *unit,
+                     const parse_scope_t *scope,
+                     const parse_sym_entry_t *symbol)
+{
+    out->byte_len = 0;
+    core_buffer_append_string(out, unit->module.identifier);
+    core_buffer_putc(out, '|');
+    append_scope_path(out, scope);
+    core_buffer_append_string(out, symbol->name);
+}
+
+static core_translation_unit_t *
+node_owner_unit(parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_scope_t *scope = parse_tree_scope(at);
+        if (scope && scope->owner_unit) return scope->owner_unit;
+    }
+    return nullptr;
+}
+
+static bool
+used_by(const parse_sym_entry_t *symbol, core_translation_unit_t *unit)
+{
+    for (size_t u = 0; u < symbol->use_count; u++)
+        if (node_owner_unit(symbol->use_nodes[u]) == unit) return true;
+    return false;
+}
+
+static void
+put_symbol_uses(core_buffer_t *out, const n00bb_link_analysis_t *analysis,
+                core_translation_unit_t *member)
+{
+    core_buffer_t items = {0};
+    core_buffer_t key = {0};
+    uint32_t count = 0;
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        core_translation_unit_t *unit = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(unit);
+        if (unit == member || !state || !state->annotations) continue;
+        for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+             scope; scope = scope->all_next)
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                if ((symbol->kind != PARSE_SYM_FUNCTION && !symbol->is_field)
+                    || !used_by(symbol, member))
+                    continue;
+                n00bb_symbol_use_key(&key, unit, scope, symbol);
+                put_text(&items, core_buffer_string(&key));
+                count++;
+            }
+    }
+    put_u32(out, count);
+    if (items.byte_len) core_buffer_append(out, items.data, items.byte_len);
+    core_buffer_release(&items);
+    core_buffer_release(&key);
+}
+
+void
+n00bb_symbol_uses_init(n00bb_symbol_uses_t *uses)
+{
+    core_dict_init_string(&uses->keys);
+    uses->owned = core_list_new(n00bb_use_key_t);
+}
+
+void
+n00bb_symbol_uses_release(n00bb_symbol_uses_t *uses)
+{
+    for (size_t i = 0; i < uses->owned.len; i++)
+        core_dict_string_key_free(uses->owned.data[i]);
+    core_list_free(uses->owned);
+    core_dict_free(&uses->keys);
+}
+
+bool
+n00bb_symbol_uses_contains(n00bb_symbol_uses_t *uses, core_string_t key)
+{
+    return core_dict_contains(&uses->keys, &key);
+}
+
+bool
+n00bb_cache_symbol_uses(const n00bb_cache_t *cache, core_string_t module,
+                        n00bb_symbol_uses_t *into)
+{
+    const cache_entry_t *entry = nullptr;
+    const cache_member_t *member = loaded_member(cache, module, &entry);
+    const cache_section_t *section = member
+        ? phase_section(entry, CORE_STRING_STATIC("uses"), member->name)
+        : nullptr;
+    if (!section) return false;
+    manifest_reader_t reader = {
+        .data = section->data, .length = section->length,
+    };
+    uint32_t count = read_u32(&reader);
+    for (uint32_t i = 0; !reader.failed && i < count; i++) {
+        core_string_t key = read_text(&reader);
+        if (reader.failed) break;
+        if (!n00bb_symbol_uses_contains(into, key)) {
+            n00bb_use_key_t owned = core_dict_string_key_copy(key);
+            core_list_push(into->owned, owned);
+            core_dict_put(&into->keys, owned, (void *)1);
+        }
+        core_free(key.data);
+    }
+    return !reader.failed;
+}
+
+static void
 put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
 {
     const core_diagnostics_t *diagnostics =
@@ -1981,6 +2100,14 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                                               : (const uint8_t *)"",
                                 warnings.byte_len);
         core_buffer_release(&warnings);
+        core_buffer_t uses = {0};
+        put_symbol_uses(&uses, analysis, scc->members.data[m]);
+        module_section_name(&name, CORE_STRING_STATIC("uses"), module);
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                uses.data ? (const uint8_t *)uses.data
+                                          : (const uint8_t *)"",
+                                uses.byte_len);
+        core_buffer_release(&uses);
     }
     core_buffer_release(&name);
     core_buffer_t serialized = {0};

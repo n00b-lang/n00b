@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "compiler_cache.h"
 #include "compiler_link.h"
 #include "compiler_tu.h"
 #include "parse/tree_util.h"
@@ -1060,6 +1061,16 @@ field_shared_outside(parse_sym_entry_t *field)
     return request && request->policy == N00BB_RECORD_C;
 }
 
+static bool
+used_by_cached_module(n00bb_symbol_uses_t *uses, core_buffer_t *key,
+                      core_translation_unit_t *unit, parse_scope_t *scope,
+                      parse_sym_entry_t *symbol)
+{
+    if (!uses->owned.len) return false;
+    n00bb_symbol_use_key(key, unit, scope, symbol);
+    return n00bb_symbol_uses_contains(uses, core_buffer_string(key));
+}
+
 bool
 diagnose_unused_link_symbols(parse_grammar_t *grammar,
                              n00bb_link_analysis_t *analysis)
@@ -1070,16 +1081,31 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
 
     core_translation_unit_t *root = analysis->units.len
         ? analysis->units.data[0] : nullptr;
-    for (size_t i = 0; i < analysis->units.len; i++) {
+    n00bb_symbol_uses_t cached_uses;
+    n00bb_symbol_uses_init(&cached_uses);
+    for (size_t i = 0; analysis->cache && i < analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
+        if (state && state->interface_module)
+            (void)n00bb_cache_symbol_uses(analysis->cache,
+                analysis->units.data[i]->module.identifier, &cached_uses);
+    }
+    core_buffer_t key = {0};
+    bool ok = true;
+    for (size_t i = 0; ok && i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
-        if (!state || !state->annotations) return false;
+        if (!state || !state->annotations) {
+            ok = false;
+            break;
+        }
         if (!root || !n00bb_same_package(unit, root)) continue;
         for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
              scope; scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
-                if (symbol->is_field && field_shared_outside(symbol))
+                if (symbol->is_field && (field_shared_outside(symbol)
+                        || used_by_cached_module(&cached_uses, &key, unit,
+                                                 scope, symbol)))
                     continue;
                 if (symbol->is_field && symbol->decl_node
                     && nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("type-decl-one"))) {
@@ -1112,7 +1138,9 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                 if (symbol->kind != PARSE_SYM_FUNCTION
                     || !symbol->decl_node
                     || !nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("func-def"))
-                    || symbol->use_count) continue;
+                    || symbol->use_count
+                    || used_by_cached_module(&cached_uses, &key, unit, scope,
+                                             symbol)) continue;
                 if (core_string_eq(symbol->name,
                                    CORE_STRING_STATIC("__finalize"))) continue;
                 if (state->link && unit == core_link_unit_root(state->link, 0)
@@ -1150,7 +1178,9 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
             }
         }
     }
-    return true;
+    core_buffer_release(&key);
+    n00bb_symbol_uses_release(&cached_uses);
+    return ok;
 }
 
 

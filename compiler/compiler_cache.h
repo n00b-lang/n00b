@@ -31,6 +31,24 @@ typedef struct n00bb_cache_t n00bb_cache_t;
 typedef bool (*n00bb_cache_locate_fn)(void *context, core_string_t module,
                                       core_string_t *path);
 
+typedef core_string_t *n00bb_use_key_t;
+core_list_decl(n00bb_use_key_t);
+
+typedef struct {
+    core_dict_t keys;
+    core_list_t(n00bb_use_key_t) owned;
+} n00bb_symbol_uses_t;
+
+void n00bb_symbol_uses_init(n00bb_symbol_uses_t *uses);
+void n00bb_symbol_uses_release(n00bb_symbol_uses_t *uses);
+bool n00bb_symbol_uses_contains(n00bb_symbol_uses_t *uses, core_string_t key);
+void n00bb_symbol_use_key(core_buffer_t *out,
+                          const core_translation_unit_t *unit,
+                          const parse_scope_t *scope,
+                          const parse_sym_entry_t *symbol);
+bool n00bb_cache_symbol_uses(const n00bb_cache_t *cache, core_string_t module,
+                             n00bb_symbol_uses_t *into);
+
 n00bb_cache_t *n00bb_cache_open(core_string_t root_path,
                                 parse_cmdr_result_t *args,
                                 core_string_t compiler_path,
