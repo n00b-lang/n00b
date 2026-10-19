@@ -154,20 +154,21 @@ func run_checks() {
     check(cell_is(t, 0, 0, "a0") and cell_is(t, 1, 1, "b1") and
           cell_is(t, 1, 2, ""), "10")
 
-    var c0: text.Table_Col_Spec
-    var c2: text.Table_Col_Spec
     var specs_ok: bool = true
+    var specs_match: bool = false
     try {
-        c0 = text.col_spec(t, 0)!
-        c2 = text.col_spec(t, 2)!
+        let c0: text.Table_Col_Spec = text.col_spec(t, 0)!
+        let c2: text.Table_Col_Spec = text.col_spec(t, 2)!
+        specs_match = c0.mode == text.Col_Mode.flex and
+                      c0.flex_multiple == 2 and
+                      c2.mode == text.Col_Mode.fixed and c2.pref != nil and
+                      abs_of(c2.pref) == 20
     } else e: Container_Err {
         specs_ok = false
     }
     check(specs_ok, "11")
     if specs_ok {
-        check(c0.mode == text.Col_Mode.flex and c0.flex_multiple == 2 and
-              c2.mode == text.Col_Mode.fixed and c2.pref != nil and
-              abs_of(c2.pref) == 20, "12")
+        check(specs_match, "12")
     }
 
     var auto_cols: text.Table = new[text.Table]()
