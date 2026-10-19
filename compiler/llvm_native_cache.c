@@ -1,5 +1,7 @@
 #include "llvm_native_cache.h"
 
+#include "cache_location.h"
+
 #include "lib/alloc.h"
 #include "lib/hash.h"
 #include "lib/string.h"
@@ -91,29 +93,11 @@ n00bb_native_cache_root(void)
 #ifdef _WIN32
     return (core_string_t){};
 #else
-    core_string_t explicit_dir = core_string_from_cstr(
-        getenv("N00BB_NATIVE_CACHE_DIR"));
-    core_string_t home = core_string_from_cstr(getenv("HOME"));
-    core_string_t xdg = core_string_from_cstr(getenv("XDG_CACHE_HOME"));
-    core_buffer_t directory = {0};
-    if (explicit_dir.u8_bytes)
-        core_buffer_append_string(&directory, explicit_dir);
-    else if (xdg.u8_bytes) {
-        core_buffer_append_string(&directory, xdg);
-        core_buffer_puts(&directory, "/n00bb/native");
-    }
-    else if (home.u8_bytes) {
-        core_buffer_append_string(&directory, home);
-        core_buffer_puts(&directory, "/.cache/n00bb/native");
-    }
-    core_string_t root = directory.data
-            && cache_mkdirs(core_buffer_string(&directory))
-        ? core_string_dup(core_buffer_string(&directory)) : (core_string_t){};
-    core_buffer_release(&directory);
-    core_free(explicit_dir.data);
-    core_free(home.data);
-    core_free(xdg.data);
-    return root;
+    core_string_t directory = n00bb_cache_directory(
+        CORE_STRING_STATIC("native"));
+    if (directory.data && cache_mkdirs(directory)) return directory;
+    core_free(directory.data);
+    return (core_string_t){};
 #endif
 }
 

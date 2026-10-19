@@ -84,7 +84,8 @@ abi_static_graph_test = executable(
     dependencies: lantern,
 )
 
-add_test_setup('default', timeout_multiplier: 2, is_default: true)
+add_test_setup('default', timeout_multiplier: 2, is_default: true,
+    env: ['N00B_CACHE=' + (meson.current_build_dir() / 'n00b-cache')])
 
 test('abi-static-graph', abi_static_graph_test)
 
@@ -115,7 +116,7 @@ n00bb_exe = executable(
      'compiler/abi_function_rows.c', 'compiler/abi_constraint_rows.c', 'compiler/abi_storage.c',
      'compiler/abi_trait_method_rows.c',
      'compiler/abi_type_signatures.c', 'compiler/abi_decl_index.c', 'compiler/abi_declarations.c',
-     'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/llvm_stack_maps.c',
+     'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/cache_location.c', 'compiler/llvm_stack_maps.c',
      'compiler/native_frame_maps.c',
      'compiler/global_metadata.c',
      'compiler/storage_selection.c',
@@ -412,7 +413,7 @@ test('abi-type-index', abi_type_index_test)
 
 llvm_backend_test = executable(
     'llvm-backend-test',
-    ['tests/llvm_backend.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c',
+    ['tests/llvm_backend.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/cache_location.c',
      'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c'],
     dependencies: [lantern, llvm],
 )
@@ -421,7 +422,8 @@ test('llvm-backend', llvm_backend_test)
 
 llvm_native_cache_test = executable(
     'llvm-native-cache-test',
-    ['tests/llvm_native_cache.c', 'compiler/llvm_native_cache.c'],
+    ['tests/llvm_native_cache.c', 'compiler/llvm_native_cache.c',
+     'compiler/cache_location.c'],
     dependencies: [lantern, llvm],
 )
 test('llvm-native-cache', llvm_native_cache_test)
@@ -436,7 +438,7 @@ test('llvm-stack-maps', llvm_stack_maps_test)
 
 llvm_frame_roots_test = executable(
     'llvm-frame-roots-test',
-    ['tests/llvm_frame_roots.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c',
+    ['tests/llvm_frame_roots.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/cache_location.c',
      'compiler/llvm_stack_maps.c', 'compiler/native_frame_maps.c', 'runtime/runtime_native_roots.c',
      'compiler/compiler_native_roots.c'],
     dependencies: [lantern, llvm],

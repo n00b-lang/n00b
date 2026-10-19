@@ -5,6 +5,8 @@ compiler=$1
 sources=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
+N00B_CACHE="$tmp/cache"
+export N00B_CACHE
 
 fail() {
     echo "$1" >&2
@@ -85,14 +87,15 @@ prepare second
 build first main.n
 build second main_new.n
 shared=0
-for key in "$tmp/first/.n00b-cache/obj/modules"/builtin.*.runtime.key; do
+first_objects="$N00B_CACHE/obj$(cd "$tmp/first" && pwd -P)"
+second_objects="$N00B_CACHE/obj$(cd "$tmp/second" && pwd -P)"
+for key in "$first_objects/modules"/builtin.*.runtime.key; do
     name=$(basename "$key")
-    other="$tmp/second/.n00b-cache/obj/modules/$name"
+    other="$second_objects/modules/$name"
     test -f "$other" || continue
     cmp -s "$key" "$other" || fail "identical object: $name keys differ"
     object=$(cat "$key").n00bo
-    cmp -s "$tmp/first/.n00b-cache/obj/$object" \
-        "$tmp/second/.n00b-cache/obj/$object" \
+    cmp -s "$first_objects/$object" "$second_objects/$object" \
         || fail "identical object: $name objects differ"
     shared=$((shared + 1))
 done

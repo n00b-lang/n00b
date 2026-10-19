@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "cache_location.h"
 #include "compiler_cache.h"
 #include "compiler_phases.h"
 #include "compiler_tu.h"
@@ -1072,12 +1073,16 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     cache->root_path = canonical_path(root_path);
     int64_t slash = cache->root_path.data
         ? core_string_rfind_byte(cache->root_path, '/') : -1;
-    core_buffer_t directory = {0};
-    if (slash >= 0) core_buffer_append(&directory, cache->root_path.data,
-                                       (size_t)slash);
-    else core_buffer_puts(&directory, ".");
-    core_buffer_puts(&directory, "/.n00b-cache/obj");
-    cache->directory = core_buffer_string(&directory);
+    cache->directory = slash >= 0
+        ? n00bb_cache_mirror_directory(CORE_STRING_STATIC("obj"),
+              core_string_slice(cache->root_path, 0,
+                                slash ? (size_t)slash : 1))
+        : (core_string_t){0};
+    if (!cache->directory.data) {
+        core_free(cache->root_path.data);
+        core_free(cache);
+        return nullptr;
+    }
     cache->triple = core_string_dup(triple);
     cache->compiler = compiler_identity(compiler_path);
     append_flags(&cache->flags, args);

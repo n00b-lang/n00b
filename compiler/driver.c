@@ -2,6 +2,7 @@
 #define _DARWIN_C_SOURCE 1
 
 #include "driver.h"
+#include "cache_location.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -412,10 +413,14 @@ n00bb_resolver_new(core_string_t argv0)
         roots[i] = resolver->roots.data[i].path;
     resolver->inventory = core_snapshot_inventory_new(roots,
         resolver->roots.len, accept_source_path, nullptr);
-    if (resolver->inventory && !getenv("N00BB_NO_PACKAGE_CACHE"))
-        if (core_snapshot_inventory_enable_local_cache(
-                resolver->inventory, CORE_STRING_STATIC(".n00b-cache"), 1))
+    if (resolver->inventory && !getenv("N00BB_NO_PACKAGE_CACHE")) {
+        core_string_t packages = n00bb_cache_directory(
+            CORE_STRING_STATIC("packages"));
+        if (packages.data && core_snapshot_inventory_enable_cache(
+                resolver->inventory, packages, 1))
             resolver->package_syntax_profile = package_syntax_profile(argv0);
+        core_free(packages.data);
+    }
     core_free(roots);
     core_free(cwd.data);
     if (!resolver->inventory) {
