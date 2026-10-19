@@ -453,6 +453,7 @@ bool   th_require_method_in_place(th_ctx *ctx, th_type *receiver,
 bool   th_require_method_at(th_ctx *ctx, th_type *receiver, core_string_t name,
                             core_string_t in_place, th_type *result,
                             th_type *call, const void *site);
+bool   th_awaits_method_result(th_ctx *ctx, th_type *type);
 /* Connect an existing deferred method-call obligation to its enclosing
  * failure channel without adding a second method constraint. */
 bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,

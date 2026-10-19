@@ -432,6 +432,22 @@ bool th_require_method_at(th_ctx *ctx, th_type *receiver, core_string_t name,
            th_unify_in_place(ctx, obligation, receiver) != nullptr;
 }
 
+bool th_awaits_method_result(th_ctx *ctx, th_type *type)
+{
+    th_type *resolved = ctx && type ? th_resolve(type) : nullptr;
+    if (!resolved || th_kind_of(resolved) != TH_VAR) return false;
+    for (size_t i = 0; i < ctx->pending_environment_constraints.len; i++) {
+        th_type *variable = ctx->pending_environment_constraints.data[i];
+        for (size_t j = 0; variable && j < variable->var.cons.len; j++) {
+            const th_constraint *constraint = &variable->var.cons.data[j];
+            if (constraint->kind == TH_CON_METHOD
+                && th_resolve(constraint->method.result) == resolved)
+                return true;
+        }
+    }
+    return false;
+}
+
 bool th_require_method_in_place(th_ctx *ctx, th_type *receiver,
                                 core_string_t name, core_string_t in_place,
                                 th_type *result, th_type *call)

@@ -443,6 +443,8 @@ unify_function_call_shape(ictx *c, th_type *signature, th_type *call_shape)
         const th_param *actual = th_func_param(call_shape, i);
         const th_param *formal = i < formal_count
             ? th_func_param(signature, i) : rest;
+        if (actual && formal && th_awaits_method_result(c->tc, actual->type)
+            && th_kind_of(th_resolve(formal->type)) != TH_VAR) continue;
         if (!actual || !formal || !th_unify_probe(
                 c->tc, formal->type, actual->type)
             || !th_unify_in_place(c->tc, formal->type, actual->type))
