@@ -451,7 +451,7 @@ func from_raw(src: Ref[Array[u8]], byte_len: int, at: uint = 0,
         return empty_string()
     }
     let probe: string = __string_make(src, at, len, 0, true)
-    var enc: Str_Encoding = Str_Encoding.binary
+    var enc: Str_Encoding
     if unsafe {
         require encoding != nil
         enc = encoding.get_or_else(Str_Encoding.binary)
@@ -727,7 +727,7 @@ func decode_escapes(raw: string) -> string fail: string {
             len += 1
             continue
         }
-        var digits: uint = 0
+        var digits: uint
         if e == 0x78 {
             digits = 2
         }

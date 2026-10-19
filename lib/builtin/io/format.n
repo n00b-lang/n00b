@@ -287,7 +287,7 @@ private func format_dec(n: u128, spec: Int_Format, fd: int, neg: bool)
                 }
             }
         }
-        var rem: u8 = 0
+        var rem: u8
         value = u128_divmod10(value, rem)
         push_front(buf, p, 0x30 + rem)
         w += 1

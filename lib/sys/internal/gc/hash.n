@@ -160,7 +160,7 @@ func tab_delete(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
             break
         }
         let home:       uint = tab_home(tab, source.key)
-        var after_hole: bool = false
+        var after_hole: bool
         if hole <= index {
             after_hole = hole < home and home <= index
         } else {
@@ -344,7 +344,7 @@ func index_tab_delete(tab: Ref[Index_Tab], key: uint, val: uint) {
             break
         }
         let home:       uint = index_tab_home(tab, source.key)
-        var after_hole: bool = false
+        var after_hole: bool
         if hole <= index {
             after_hole = hole < home and home <= index
         } else {

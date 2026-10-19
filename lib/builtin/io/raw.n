@@ -27,14 +27,12 @@ func raw_repr(self: `T, fd: i32) -> i32 {
             return string.core.__fd_write(fd, "False")
         }
         case f32 {
-            var width: uint = 0
-            let bits: u128 = bitptr.load_bits(self, width)
+            let bits: u128 = bitptr.load_bits(self)
             return emit_float(fd, cast[f64] self, (bits >> 31) & 1 != 0,
                 (bits >> 23) & 0xff == 0xff, bits & 0x7fffff != 0)
         }
         case f64 {
-            var width: uint = 0
-            let bits: u128 = bitptr.load_bits(self, width)
+            let bits: u128 = bitptr.load_bits(self)
             return emit_float(fd, self, (bits >> 63) & 1 != 0,
                 (bits >> 52) & 0x7ff == 0x7ff,
                 bits & 0x000fffffffffffff != 0)
@@ -240,8 +238,7 @@ private func emit_default(fd: i32, self: `T) -> i32 {
     let width_bits: u32 = row.semantic_width_bits
     let primitive: bool = row.kind == cast[u32] abi.Type_Kind.primitive_type
     if primitive and width_bits != 0 and width_bits <= 128 {
-        var width: uint = 0
-        let bits: u128 = bitptr.load_bits(self, width)
+        let bits: u128 = bitptr.load_bits(self)
         return emit_integer(fd, bits, cast[uint] width_bits,
             row.flags & signed_flag != 0)
     }

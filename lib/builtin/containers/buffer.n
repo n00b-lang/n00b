@@ -175,7 +175,7 @@ func __init(modify self: Buffer, length: int = -1, hex: string = "",
         var valid_count: int = 0
         var i: uint = 0
         while i < hex_len {
-            var nibble: u8 = 0
+            var nibble: u8
             if hex_digit(string.core.byte_at(hex, i), nibble) {
                 valid_count += 1
                 if valid_count % 2 == 1 {
@@ -323,7 +323,7 @@ func put_string(self: Buffer, s: string) {
 
 func __add(self: Buffer, other: string) -> Buffer {
     let left: Ref[Buffer_State] = self.state
-    var result: Buffer = empty_buffer()
+    var result: Buffer
     with Buffer_Read(left) {
         let other_len: uint = string.core.byte_len(other)
         let new_len: uint = left.byte_len + other_len
@@ -451,7 +451,7 @@ private func set_slice_raw(state: Ref[Buffer_State], start: int, end: int,
 
 func set_slice(self: Buffer, start: int, end: int, val: string? = nil)
     fail: Buffer_Error {
-    var ok: bool = false
+    var ok: bool
     var bytes: Array[u8] = new[Array[u8]](0)
     var add_len: int = 0
     if val != nil {
@@ -486,7 +486,7 @@ func buffer_adopt(s: string) -> Buffer {
 func to_string(consume self: Buffer,
                encoding: string.core.Str_Encoding? = nil) -> string {
     let state: Ref[Buffer_State] = self.state
-    var result: string = string.core.empty_string()
+    var result: string
     with Buffer_Write(state) {
         raw_own(state)
         result = string.core.from_raw(ref state.store,

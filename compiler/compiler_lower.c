@@ -17013,8 +17013,12 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     if (!state || !module || !body || !function || !function_type)
         return false;
 
+    ir_policy_t *policy = ir_policy_new(ir_context);
+    if (!policy || !ir_policy_set(policy, CORE_STRING_STATIC("IR-W0039"),
+                                  IR_POLICY_DENY))
+        return false;
     ir_diags_t *diagnostics = ir_diags_new_attached(
-        ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
+        ir_context, policy, core_translation_unit_diagnostics(unit), unit);
     if (!diagnostics) return false;
     size_t collected_rest = rest_parameter && !th_func_rest(function_type);
     if (parameters->len + collected_rest !=
@@ -20064,6 +20068,17 @@ n00bb_instruction_reads_binding(ir_instr_t *instruction,
     return false;
 }
 
+static void
+n00bb_mark_synthetic_locals(ir_module_t *module)
+{
+    for (size_t i = 0; module && i < ir_func_count(module); i++) {
+        ir_func_t *function = ir_func_at(module, i);
+        for (uint32_t l = 0; function && l < function->n_locals; l++)
+            function->locals[l]->synthetic =
+                !function->locals[l]->source_name.data;
+    }
+}
+
 static ir_value_t *
 n00bb_symbol_binding_in_function(parse_sym_entry_t *symbol,
                                  ir_func_t *function)
@@ -20677,12 +20692,13 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         ok = policy
             && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0027"), IR_POLICY_DENY)
             && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0030"), IR_POLICY_ALLOW)
-            && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0031"), IR_POLICY_ALLOW);
+            && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0031"), IR_POLICY_WARN);
         for (size_t i = 0; ok && i < units.len; i++) {
             core_translation_unit_t *unit = units.data[i];
             ir_diags_t *diagnostics = ir_diags_new_attached(
                 ir_context, policy,
                 core_translation_unit_diagnostics(unit), unit);
+            n00bb_mark_synthetic_locals(tu_state(unit)->ir_module);
             ok = ir_analyze(tu_state(unit)->ir_module, diagnostics);
         }
     }

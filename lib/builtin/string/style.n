@@ -357,7 +357,7 @@ private func rich_body(s: string) -> Ref[Rich_Body] {
 
 private func cmp_rich_bodies(left: Ref[Rich_Body], right: Ref[Rich_Body])
     -> int {
-    var result: int = 0
+    var result: int
     let left_rich: bool = is_rich(left.s)
     let right_rich: bool = is_rich(right.s)
     if left_rich != right_rich {
@@ -524,7 +524,7 @@ private func hash_opt_style(o: Text_Style?) -> u128 {
 }
 
 private func hash_rich_body(body: Ref[Rich_Body]) -> u128 {
-    var acc: u128 = 0
+    var acc: u128
     if is_rich(body.s) {
         acc = hash_rich_body(rich_body(body.s))
     }
@@ -1226,7 +1226,7 @@ private func escape_length(raw: string, at: uint) -> uint {
     if at + 1 >= n {
         return n - at
     }
-    var digits: uint = 0
+    var digits: uint
     switch string.core.byte_at(raw, at + 1) {
         case 0x78 {
             digits = 2

@@ -939,7 +939,7 @@ func write_field_path(type_index: u32, offset: uint) {
                     cast[u32]field_index)
                 if field != nil {
                     let start: uint = cast[uint](field.get().logical_bit_offset / 8)
-                    var extent: uint = 0
+                    var extent: uint
                     if field.get().inline_element_count != 0 {
                         extent = cast[uint](field.get().inline_element_count *
                             field.get().inline_element_stride_bits / 8)

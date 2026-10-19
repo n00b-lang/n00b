@@ -445,7 +445,7 @@
 <binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_left, __shift_left_assign)") ::= <expression> <left-shift-assign-op> <expression>
 <binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_right, __shift_right_assign)") ::= <expression> <right-shift-assign-op> <expression>
 
-<expression-stmt> ::= <expression>
+<expression-stmt> @discards($0) ::= <expression>
 
 <expression> @emit("identity", $0) ::= <or-expr>
 

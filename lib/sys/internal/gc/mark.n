@@ -232,7 +232,7 @@ func visit_managed_pointer(marker: Ref[internal.gc.core.Marker]?,
                            mutator: Ref[internal.gc.core.Mutator]?,
                            pointer: Ref[byte]?) {
     if pointer != nil {
-        var heap: Ref[internal.gc.core.Heap]? = nil
+        var heap: Ref[internal.gc.core.Heap]?
         if marker != nil {
             heap = marker.get().heap
         }

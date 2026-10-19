@@ -325,8 +325,8 @@ func xxh3_128(bytes: Array[byte]) -> u128 {
 }
 
 func hash_value(self: `T) -> u128 {
-    var width: uint = 0
-    var canonical: u128 = bitptr.load_bits(self, width)
+    let width: uint = bitptr.bit_width(self)
+    var canonical: u128 = bitptr.load_bits(self)
     return xxh3_128_at(unsafe_cast[Ref[byte]] ref canonical, (width + 7) / 8)
 }
 
