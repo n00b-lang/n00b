@@ -54,7 +54,7 @@ struct core_snapshot_inventory_t {
     void *context;
     uint64_t generation;
     uint64_t next_revision;
-    core_string_t metadata_directory;
+    core_string_t cache_root;
     uint64_t filter_revision;
     core_snapshot_inventory_stats_t stats;
 };
@@ -71,6 +71,52 @@ join_path(core_string_t parent, core_string_t child)
     if (separator) path[a++] = '/';
     if (b) memcpy(path + a, child.data, b);
     return (core_string_t){.data = path, .u8_bytes = length};
+}
+
+static core_string_t
+metadata_path(const core_snapshot_inventory_t *inventory,
+              core_string_t package)
+{
+#ifdef _WIN32
+    (void)inventory;
+    (void)package;
+    return (core_string_t){0};
+#else
+    char *native = core_string_to_cstr(package);
+    char *resolved = native ? realpath(native, nullptr) : nullptr;
+    core_free(native);
+    if (!resolved) return (core_string_t){0};
+    core_string_t absolute = core_string_from_cstr(resolved);
+    free(resolved);
+    core_string_t path = absolute.u8_bytes && absolute.data[0] == '/'
+        ? join_path(inventory->cache_root,
+                    core_string_slice(absolute, 1, absolute.u8_bytes - 1))
+        : (core_string_t){0};
+    core_free(absolute.data);
+    return path;
+#endif
+}
+
+static bool
+make_directories(core_string_t path)
+{
+#ifdef _WIN32
+    (void)path;
+    return false;
+#else
+    char *native = core_string_to_cstr(path);
+    if (!native) return false;
+    bool ok = true;
+    for (char *at = native + 1; ok && *at; at++) {
+        if (*at != '/') continue;
+        *at = '\0';
+        ok = mkdir(native, 0700) == 0 || errno == EEXIST;
+        *at = '/';
+    }
+    ok = ok && (mkdir(native, 0700) == 0 || errno == EEXIST);
+    core_free(native);
+    return ok;
+#endif
 }
 
 static bool
@@ -337,31 +383,28 @@ core_snapshot_inventory_free(core_snapshot_inventory_t *inventory)
     for (size_t i = 0; i < inventory->roots.len; i++)
         core_free(inventory->roots.data[i].data);
     core_list_free(inventory->roots);
-    core_free(inventory->metadata_directory.data);
+    core_free(inventory->cache_root.data);
     core_free(inventory);
 }
 
 bool
-core_snapshot_inventory_enable_local_cache(core_snapshot_inventory_t *inventory,
-                                           core_string_t metadata_directory,
-                                           uint64_t filter_revision)
+core_snapshot_inventory_enable_cache(core_snapshot_inventory_t *inventory,
+                                     core_string_t cache_root,
+                                     uint64_t filter_revision)
 {
 #ifdef _WIN32
     (void)inventory;
-    (void)metadata_directory;
+    (void)cache_root;
     (void)filter_revision;
     return false;
 #else
-    if (!inventory || !metadata_directory.data || !metadata_directory.u8_bytes
-        || memchr(metadata_directory.data, '/', metadata_directory.u8_bytes)
-        || memchr(metadata_directory.data, '\\', metadata_directory.u8_bytes)
-        || memchr(metadata_directory.data, '\0', metadata_directory.u8_bytes)
-        || (metadata_directory.u8_bytes == 1
-            && metadata_directory.data[0] == '.')) return false;
-    core_string_t name = core_string_dup(metadata_directory);
-    if (!name.data) return false;
-    core_free(inventory->metadata_directory.data);
-    inventory->metadata_directory = name;
+    if (!inventory || !cache_root.data || !cache_root.u8_bytes
+        || cache_root.data[0] != '/'
+        || memchr(cache_root.data, '\0', cache_root.u8_bytes)) return false;
+    core_string_t root = core_string_dup(cache_root);
+    if (!root.data) return false;
+    core_free(inventory->cache_root.data);
+    inventory->cache_root = root;
     inventory->filter_revision = filter_revision;
     return true;
 #endif
@@ -669,8 +712,8 @@ static core_string_t
 cache_file_path(const core_snapshot_inventory_t *inventory,
                 core_string_t group_path)
 {
-    core_string_t metadata = join_path(group_path,
-                                       inventory->metadata_directory);
+    core_string_t metadata = metadata_path(inventory, group_path);
+    if (!metadata.data) return (core_string_t){0};
     core_string_t path = join_path(metadata,
                                    CORE_STRING_STATIC("inventory-v1"));
     core_free(metadata.data);
@@ -732,6 +775,7 @@ load_package_cache(refresh_context_t *refresh, size_t root_index,
 {
     core_snapshot_inventory_t *inventory = refresh->inventory;
     core_string_t path = cache_file_path(inventory, group_path);
+    if (!path.data) return false;
     struct stat status;
     bool plausible = !stat_path(path, &status, true)
         && S_ISREG(status.st_mode)
@@ -907,12 +951,9 @@ write_package_cache(refresh_context_t *refresh,
                     size_t first_entry)
 {
     core_snapshot_inventory_t *inventory = refresh->inventory;
-    core_string_t metadata = join_path(group_path,
-                                       inventory->metadata_directory);
-    char *native_metadata = core_string_to_cstr(metadata);
-    bool made = mkdir(native_metadata, 0700) == 0 || errno == EEXIST;
-    core_free(native_metadata);
-    if (!made) {
+    core_string_t metadata = metadata_path(inventory, group_path);
+    if (!metadata.data) return false;
+    if (!make_directories(metadata)) {
         core_free(metadata.data);
         return false;
     }
@@ -1000,7 +1041,7 @@ refresh_package_group(refresh_context_t *refresh, size_t root_index,
                                      &directories);
     core_string_t path = cache_file_path(refresh->inventory, group_path);
     char *native_path = core_string_to_cstr(path);
-    bool had_cache = access(native_path, F_OK) == 0;
+    bool had_cache = native_path && access(native_path, F_OK) == 0;
     core_free(native_path);
     core_free(path.data);
     if (ok && (refresh->entries.len > first_entry || had_cache))
@@ -1045,7 +1086,7 @@ static const inventory_entry_t *
 product_source(const core_snapshot_inventory_t *inventory, size_t root_index,
                core_string_t relative)
 {
-    if (!inventory || !inventory->metadata_directory.data) return nullptr;
+    if (!inventory || !inventory->cache_root.data) return nullptr;
     for (size_t i = 0; i < inventory->entries.len; i++) {
         const inventory_entry_t *entry = &inventory->entries.data[i];
         if (entry->root_index == root_index
@@ -1064,8 +1105,11 @@ product_directory(const core_snapshot_inventory_t *inventory,
     core_string_t package = slash >= 0
         ? join_path(root, core_string_slice(relative, 0, (size_t)slash))
         : core_string_dup(root);
-    core_string_t metadata = join_path(package,
-                                       inventory->metadata_directory);
+    core_string_t metadata = metadata_path(inventory, package);
+    if (!metadata.data) {
+        core_free(package.data);
+        return (core_string_t){0};
+    }
     core_string_t directory = join_path(metadata,
                                         CORE_STRING_STATIC("derived"));
     core_free(package.data);
@@ -1097,6 +1141,7 @@ core_snapshot_inventory_product_read(
     if (!entry || !kind.data || !kind.u8_bytes || !out) return false;
     core_string_t directory = product_directory(inventory, root_index,
                                                 relative_path);
+    if (!directory.data) return false;
     core_buffer_t name = {0};
     product_name(&name, relative_path, kind, profile);
     core_string_t path = join_path(directory, core_buffer_string(&name));
@@ -1149,11 +1194,7 @@ core_snapshot_inventory_product_write(
         || size > 64 * 1024 * 1024) return false;
     core_string_t directory = product_directory(inventory, root_index,
                                                 relative_path);
-    char *native_directory = core_string_to_cstr(directory);
-    bool made = native_directory
-        && (mkdir(native_directory, 0700) == 0 || errno == EEXIST);
-    core_free(native_directory);
-    if (!made) {
+    if (!directory.data || !make_directories(directory)) {
         core_free(directory.data);
         return false;
     }
@@ -1218,7 +1259,7 @@ core_snapshot_inventory_refresh(core_snapshot_inventory_t *inventory)
     bool ok = true;
     for (size_t i = 0; ok && i < inventory->roots.len; i++) {
 #ifndef _WIN32
-        if (inventory->metadata_directory.data)
+        if (inventory->cache_root.data)
             ok = refresh_local_packages(&refresh, i);
         else
 #endif

@@ -23,12 +23,13 @@ core_snapshot_inventory_t *core_snapshot_inventory_new(
     const core_string_t *roots, size_t root_count,
     core_snapshot_inventory_accept_fn accept, void *context);
 void core_snapshot_inventory_free(core_snapshot_inventory_t *inventory);
-/* Cache each root's immediate source-package directory in its own hidden
- * metadata directory. A matching cache avoids recursive directory scans and
- * source reads; file and directory signatures are checked on every refresh.
- * Cache I/O failure falls back to scanning and never prevents compilation. */
-bool core_snapshot_inventory_enable_local_cache(
-    core_snapshot_inventory_t *inventory, core_string_t metadata_directory,
+/* Cache each root's immediate source-package directory under the absolute
+ * cache_root, at the package's canonical absolute path. A matching cache
+ * avoids recursive directory scans and source reads; file and directory
+ * signatures are checked on every refresh. Cache I/O failure falls back to
+ * scanning and never prevents compilation. */
+bool core_snapshot_inventory_enable_cache(
+    core_snapshot_inventory_t *inventory, core_string_t cache_root,
     uint64_t filter_revision);
 
 /* Refresh publishes atomically: failure leaves the previous inventory intact.

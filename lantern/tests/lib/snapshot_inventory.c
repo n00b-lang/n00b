@@ -124,22 +124,36 @@ test_local_persistence(void)
     char *created = mkdtemp(directory);
     check("persistent test root exists", created != nullptr);
     if (!created) return;
+    char cache_directory[] = "/tmp/lantern-persist-cache-XXXXXX";
+    char *cache_created = mkdtemp(cache_directory);
+    check("persistent cache root exists", cache_created != nullptr);
+    if (!cache_created) return;
+    char *cache_resolved = realpath(cache_created, nullptr);
+    core_string_t cache_root = core_string_from_cstr(cache_resolved);
+    free(cache_resolved);
     core_string_t root = core_string_from_cstr(created);
     core_string_t package = join(root, S("demo"));
     core_string_t source = join(package, S("facade.n"));
-    core_string_t metadata = join(package, S(".n00b-cache"));
-    core_string_t cache = join(metadata, S("inventory-v1"));
     core_string_t nested = join(package, S("inner"));
     core_string_t added = join(nested, S("added.n"));
     check("persistent package directory exists", make_directory(package));
+    char *package_resolved = realpath(created, nullptr);
+    core_string_t resolved_root = core_string_from_cstr(package_resolved);
+    free(package_resolved);
+    core_string_t resolved_package = join(resolved_root, S("demo"));
+    core_string_t metadata = join(cache_root,
+        core_string_slice(resolved_package, 1, resolved_package.u8_bytes - 1));
+    core_string_t cache = join(metadata, S("inventory-v1"));
+    core_string_t in_tree = join(package, S(".n00b-cache"));
     check("persistent source writes",
           write_file(source, S("package demo {}")));
     core_snapshot_inventory_t *first = core_snapshot_inventory_new(
         &root, 1, accept_source, nullptr);
-    check("package-local cache enables", core_snapshot_inventory_enable_local_cache(
-        first, S(".n00b-cache"), 1));
+    check("out-of-tree cache enables", core_snapshot_inventory_enable_cache(
+        first, cache_root, 1));
     check("cold package refresh succeeds", core_snapshot_inventory_refresh(first));
-    check("cold refresh writes metadata inside the package", path_exists(cache));
+    check("cold refresh writes metadata under the cache root", path_exists(cache));
+    check("cold refresh writes nothing inside the package", !path_exists(in_tree));
     check("cold refresh reads its source", core_snapshot_inventory_stats(first).source_reads == 1);
     check("derived package names persist beside the package",
           core_snapshot_inventory_product_write(first, 0,
@@ -148,7 +162,7 @@ test_local_persistence(void)
 
     core_snapshot_inventory_t *second = core_snapshot_inventory_new(
         &root, 1, accept_source, nullptr);
-    core_snapshot_inventory_enable_local_cache(second, S(".n00b-cache"), 1);
+    core_snapshot_inventory_enable_cache(second, cache_root, 1);
     check("warm package refresh succeeds", core_snapshot_inventory_refresh(second));
     core_snapshot_inventory_stats_t warm = core_snapshot_inventory_stats(second);
     check("new process reuses package metadata without reading source",
@@ -194,7 +208,7 @@ test_local_persistence(void)
     check("corrupt metadata writes", write_file(cache, S("broken")));
     core_snapshot_inventory_t *third = core_snapshot_inventory_new(
         &root, 1, accept_source, nullptr);
-    core_snapshot_inventory_enable_local_cache(third, S(".n00b-cache"), 1);
+    core_snapshot_inventory_enable_cache(third, cache_root, 1);
     check("corrupt metadata falls back to source scan",
           core_snapshot_inventory_refresh(third)
           && core_snapshot_inventory_find(third, 0,
@@ -209,6 +223,18 @@ test_local_persistence(void)
     remove_directory(metadata);
     remove_directory(package);
     remove_directory(root);
+    core_string_t cache_parent = core_string_dup(metadata);
+    while (cache_parent.u8_bytes > cache_root.u8_bytes) {
+        int64_t slash = core_string_rfind_byte(cache_parent, '/');
+        if (slash <= 0) break;
+        cache_parent.u8_bytes = (size_t)slash;
+        remove_directory(cache_parent);
+    }
+    core_free(cache_parent.data);
+    core_free(in_tree.data);
+    core_free(resolved_package.data);
+    core_free(resolved_root.data);
+    core_free(cache_root.data);
     core_free(derived.data);
     core_free(added.data);
     core_free(nested.data);
