@@ -124,24 +124,30 @@ core_diagnostic_set_location(core_diagnostics_t *d, size_t index,
 }
 
 bool
+core_diagnostics_append(core_diagnostics_t *dst, const core_diagnostic_t *from)
+{
+    if (!dst || !from) return false;
+    core_diag_severity_t severity = from->severity;
+    if (dst->policy
+        && !dst->policy(dst->policy_context, &severity, from->code))
+        return true;
+    core_diagnostic_t copy = *from;
+    copy.severity = severity;
+    copy.code = core_string_dup(from->code);
+    copy.message = core_string_dup(from->message);
+    copy.module = core_string_dup(from->module);
+    copy.path = core_string_dup(from->path);
+    copy.user_data = nullptr;
+    core_list_push(dst->items, copy);
+    return true;
+}
+
+bool
 core_diagnostics_merge(core_diagnostics_t *dst, const core_diagnostics_t *src)
 {
     if (!dst || !src) return false;
-    for (size_t i = 0; i < src->items.len; i++) {
-        const core_diagnostic_t *from = &src->items.data[i];
-        core_diag_severity_t severity = from->severity;
-        if (dst->policy
-            && !dst->policy(dst->policy_context, &severity, from->code))
-            continue;
-        core_diagnostic_t copy = *from;
-        copy.severity = severity;
-        copy.code = core_string_dup(from->code);
-        copy.message = core_string_dup(from->message);
-        copy.module = core_string_dup(from->module);
-        copy.path = core_string_dup(from->path);
-        copy.user_data = nullptr;
-        core_list_push(dst->items, copy);
-    }
+    for (size_t i = 0; i < src->items.len; i++)
+        core_diagnostics_append(dst, &src->items.data[i]);
     return true;
 }
 
