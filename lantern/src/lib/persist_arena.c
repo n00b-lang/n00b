@@ -85,6 +85,15 @@ uint64_t core_persist_arena_native_abi_tag(uint64_t application_tag) {
   return hash;
 }
 
+#define CORE_PERSIST_ARENA_TRANSIENT_CHUNK ((size_t)65536)
+
+typedef struct transient_chunk {
+  struct transient_chunk *next;
+  size_t size;
+  size_t used;
+  alignas(max_align_t) unsigned char bytes[];
+} transient_chunk_t;
+
 struct core_persist_arena {
   void *mapping;
   size_t mapping_size;
@@ -93,7 +102,7 @@ struct core_persist_arena {
   bool private_mapping;
   uint64_t saved_base;
   core_persist_arena_header_t *header;
-  size_t transient_used;
+  transient_chunk_t *transient;
 };
 
 static size_t payload_offset(void) {
@@ -311,6 +320,20 @@ void *core_persist_arena_alloc(core_persist_arena_t *arena, size_t size,
   return result;
 }
 
+static void *transient_bump(transient_chunk_t *chunk, size_t size,
+                            size_t alignment) {
+  if (!chunk)
+    return nullptr;
+  uintptr_t base = (uintptr_t)chunk->bytes;
+  uintptr_t address = base + chunk->used;
+  uintptr_t aligned = (address + alignment - 1) & ~(uintptr_t)(alignment - 1);
+  size_t offset = (size_t)(aligned - base);
+  if (offset > chunk->size || size > chunk->size - offset)
+    return nullptr;
+  chunk->used = offset + size;
+  return (void *)aligned;
+}
+
 void *core_persist_arena_alloc_transient(core_persist_arena_t *arena,
                                          size_t size, size_t alignment,
                                          core_persist_arena_error_t *error) {
@@ -318,38 +341,26 @@ void *core_persist_arena_alloc_transient(core_persist_arena_t *arena,
     set_error(error, CORE_PERSIST_ARENA_INVALID_ARGUMENT);
     return nullptr;
   }
-  if (!arena->writable) {
-    set_error(error, CORE_PERSIST_ARENA_READ_ONLY);
-    return nullptr;
+  void *result = transient_bump(arena->transient, size, alignment);
+  if (!result) {
+    size_t previous = arena->transient ? arena->transient->size : 0;
+    if (size > SIZE_MAX - sizeof(transient_chunk_t) - alignment) {
+      set_error(error, CORE_PERSIST_ARENA_OUT_OF_SPACE);
+      return nullptr;
+    }
+    size_t chunk_size = size + alignment;
+    if (chunk_size < CORE_PERSIST_ARENA_TRANSIENT_CHUNK)
+      chunk_size = CORE_PERSIST_ARENA_TRANSIENT_CHUNK;
+    if (previous <= (SIZE_MAX - sizeof(transient_chunk_t)) / 2 &&
+        chunk_size < previous * 2)
+      chunk_size = previous * 2;
+    transient_chunk_t *chunk =
+        core_alloc_size(1, sizeof(transient_chunk_t) + chunk_size);
+    chunk->size = chunk_size;
+    chunk->next = arena->transient;
+    arena->transient = chunk;
+    result = transient_bump(chunk, size, alignment);
   }
-  size_t capacity = arena->mapping_size - payload_offset();
-  if (arena->header->used > capacity ||
-      arena->transient_used > capacity - arena->header->used) {
-    set_error(error, CORE_PERSIST_ARENA_OUT_OF_SPACE);
-    return nullptr;
-  }
-  size_t current_offset = (size_t)arena->header->used +
-                          arena->transient_used;
-  uintptr_t payload = (uintptr_t)arena->mapping + payload_offset();
-  if (payload > UINTPTR_MAX - current_offset) {
-    set_error(error, CORE_PERSIST_ARENA_OUT_OF_SPACE);
-    return nullptr;
-  }
-  uintptr_t address = payload + current_offset;
-  if (address > UINTPTR_MAX - (alignment - 1)) {
-    set_error(error, CORE_PERSIST_ARENA_OUT_OF_SPACE);
-    return nullptr;
-  }
-  uintptr_t aligned_address =
-      (address + alignment - 1) & ~(uintptr_t)(alignment - 1);
-  size_t padding = (size_t)(aligned_address - address);
-  if (padding > capacity - current_offset ||
-      size > capacity - current_offset - padding) {
-    set_error(error, CORE_PERSIST_ARENA_OUT_OF_SPACE);
-    return nullptr;
-  }
-  arena->transient_used += padding + size;
-  void *result = (void *)aligned_address;
   memset(result, 0, size);
   set_error(error, CORE_PERSIST_ARENA_OK);
   return result;
@@ -384,10 +395,16 @@ bool core_persist_arena_contains(const core_persist_arena_t *arena,
     return false;
   uintptr_t start = (uintptr_t)arena->mapping + payload_offset();
   uintptr_t address = (uintptr_t)pointer;
-  size_t used = (size_t)arena->header->used + arena->transient_used;
-  if (address < start || address - start > used)
-    return false;
-  return size <= used - (size_t)(address - start);
+  size_t used = (size_t)arena->header->used;
+  if (address >= start && address - start <= used)
+    return size <= used - (size_t)(address - start);
+  for (const transient_chunk_t *chunk = arena->transient; chunk;
+       chunk = chunk->next) {
+    uintptr_t base = (uintptr_t)chunk->bytes;
+    if (address >= base && address - base <= chunk->used)
+      return size <= chunk->used - (size_t)(address - base);
+  }
+  return false;
 }
 
 bool core_persist_arena_rebase_pointer(const core_persist_arena_t *arena,
@@ -453,6 +470,11 @@ bool core_persist_arena_close(core_persist_arena_t *arena,
   if (close(arena->fd) != 0) {
     set_error(error, CORE_PERSIST_ARENA_IO_ERROR);
     ok = false;
+  }
+  while (arena->transient) {
+    transient_chunk_t *next = arena->transient->next;
+    core_free(arena->transient);
+    arena->transient = next;
   }
   core_free(arena);
   if (ok)

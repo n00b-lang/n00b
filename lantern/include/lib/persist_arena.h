@@ -48,8 +48,10 @@ bool core_persist_arena_open_relocated(
 void *core_persist_arena_alloc(core_persist_arena_t *arena, size_t size,
                                size_t alignment,
                                core_persist_arena_error_t *error);
-/* Scratch allocations live inside an opened mapping but do not change its
- * persisted used boundary. Suitable for graphs reconstructed during load. */
+/* Scratch allocations are owned by an opened arena, grow without bound, and
+ * never touch its mapping or persisted used boundary. They are released on
+ * close and count as contained. Suitable for graphs reconstructed during
+ * load. */
 void *core_persist_arena_alloc_transient(core_persist_arena_t *arena,
                                          size_t size, size_t alignment,
                                          core_persist_arena_error_t *error);

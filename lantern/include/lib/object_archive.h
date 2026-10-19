@@ -84,7 +84,7 @@ bool core_object_reader_ref(core_object_reader_t *reader, uint64_t type_id,
  * uses stable type/version records and object IDs; codecs own payload schemas.
  * The image's ABI tag still applies because its record layout is native.
  * Allocate hooks use core_persist_arena_alloc_transient(); restored objects
- * then live in the archive mapping without changing its persisted boundary.
+ * then live in the archive's arena without changing its persisted boundary.
  * All loaded object pointers are borrowed from the archive and expire on close;
  * optional finalize hooks run after every object's references are restored;
  * destroy hooks release codec-owned external resources on failure or close. */

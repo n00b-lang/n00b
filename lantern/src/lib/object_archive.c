@@ -389,14 +389,8 @@ bool core_object_archive_save(core_string_t path, size_t capacity,
     }
     required += objects.data[i].payload.byte_len;
   }
-  if (!capacity) {
-    size_t reserve = required > 65536 ? required : 65536;
-    if (reserve > SIZE_MAX - required) {
-      release_objects(&objects);
-      return fail(error, CORE_OBJECT_ARCHIVE_OUT_OF_SPACE);
-    }
-    capacity = required + reserve;
-  }
+  if (!capacity)
+    capacity = required;
   if (capacity < required) {
     release_objects(&objects);
     return fail(error, CORE_OBJECT_ARCHIVE_OUT_OF_SPACE);
