@@ -1,7 +1,7 @@
 import containers.traits
 
 package containers.traits {
-    export containers.traits.Container
+    export containers.traits.Has_Length
     export containers.traits.Appendable
     export containers.traits.ListLike
     export containers.traits.Associative

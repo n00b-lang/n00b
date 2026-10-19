@@ -337,6 +337,12 @@ register_callable_parameter_metadata(parse_grammar_t *grammar,
         ok = th_env_register_metadata(environment,
             owner_kind, owner_name, key, 1,
             metadata.data, metadata.byte_len);
+    size_t required = parameters.len;
+    while (required && parameters.data[required - 1]
+           && parameters.data[required - 1]->is_optional) required--;
+    if (ok && owner_kind == TH_ENV_METADATA_FUNCTION && !rest
+        && required < parameters.len)
+        ok = th_env_set_function_required(environment, owner_name, required);
     core_buffer_release(&metadata);
     core_list_free(parameters);
     return ok;
@@ -1200,7 +1206,10 @@ copy_package_export_metadata(const th_env *source, th_env *destination,
                 metadata.key, metadata.version, metadata.data,
                 metadata.size)) return false;
     }
-    return true;
+    size_t required = kind == TH_ENV_METADATA_FUNCTION
+        ? th_env_function_required(source, source_name) : SIZE_MAX;
+    return required == SIZE_MAX
+        || th_env_set_function_required(destination, external_name, required);
 }
 
 static bool

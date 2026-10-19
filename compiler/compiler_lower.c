@@ -10158,6 +10158,37 @@ typedef struct {
     th_type *signature;
 } n00bb_closed_trait_call_t;
 
+static th_type *
+n00bb_signature_with_trailing(th_ctx *types, th_type *signature,
+                              th_type *implementation)
+{
+    signature = signature ? th_resolve(signature) : nullptr;
+    implementation = implementation ? th_resolve(implementation) : nullptr;
+    if (!signature || !implementation
+        || th_kind_of(signature) != TH_FUNCTION
+        || th_kind_of(implementation) != TH_FUNCTION
+        || th_func_rest(signature) || th_func_rest(implementation))
+        return signature;
+    size_t have = th_func_nparams(signature);
+    size_t want = th_func_nparams(implementation);
+    if (have >= want) return signature;
+    th_param *params = core_alloc_array(th_param, want);
+    size_t nkw = th_func_nkw(signature);
+    th_kwparam *kw = core_alloc_array(th_kwparam, nkw ? nkw : 1);
+    th_type *extended = nullptr;
+    if (params && kw) {
+        for (size_t i = 0; i < want; i++)
+            params[i] = *th_func_param(i < have ? signature : implementation,
+                                       i);
+        for (size_t i = 0; i < nkw; i++) kw[i] = *th_func_kw(signature, i);
+        extended = th_func_with_error(types, th_func_ret(signature),
+            th_func_error(signature), params, want, nullptr, kw, nkw);
+    }
+    core_free(params);
+    core_free(kw);
+    return extended ? extended : signature;
+}
+
 static n00bb_closed_trait_call_t
 n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
                             n00bb_lower_context_t *lower,
@@ -10187,8 +10218,13 @@ n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
     }
     ir_value_t *callee = module && function
         ? ir_func_address(module, function) : nullptr;
-    th_type *call_signature = function
-        ? th_unify(ir_module_types(context->module), function->type, signature)
+    th_ctx *types = ir_module_types(context->module);
+    th_type *implementation_type = function
+        ? th_type_clone_fresh(types, function->type) : nullptr;
+    th_type *call_signature = implementation_type
+        ? th_unify(types, implementation_type,
+                   n00bb_signature_with_trailing(types, signature,
+                                                 implementation_type))
         : nullptr;
     th_type *call_result = call_signature
         ? th_func_ret(call_signature) : nullptr;
@@ -10217,6 +10253,9 @@ n00bb_emit_closed_trait_arm(ir_lower_context_t *context,
             : known && mode == TH_OUT
                 ? ir_instr_operand_out(call) : false;
     }
+    for (size_t p = values->len; emitted && call_signature
+         && p < th_func_nparams(call_signature); p++)
+        emitted = ir_instr_operand_missing(call);
     emitted = emitted && ir_instr_set_call_signature(call, call_signature);
     if (!emitted) return result;
     ir_instr_t *last = call;

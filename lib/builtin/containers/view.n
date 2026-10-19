@@ -21,6 +21,6 @@ func __read(self: View[`T], index: int) -> `T {
     return self.items[self.start_ix + index]
 }
 
-func len(self: View[`T]) -> int {
-    return self.end_ix - self.start_ix
+func len(self: View[`T]) -> uint {
+    return cast[uint](self.end_ix - self.start_ix)
 }

@@ -22,7 +22,7 @@ func iter(self: Array[`T]) -> Cursor[`T] {
 }
 
 func next(modify self: Cursor[`T]) -> `T? {
-    if self.index >= containers.view.len(self.view) {
+    if self.index >= cast[int]containers.view.len(self.view) {
         return nil
     }
     let value: `T = self.view[self.index]

@@ -1,4 +1,4 @@
-trait Container {
+trait Has_Length {
     func len(self: `C) -> uint
 }
 
