@@ -9,6 +9,7 @@
 #include "th/environment.h"
 #include "abi_layout.h"
 #include "abi_string.h"
+#include "abi_type_index.h"
 #include "frame_roots.h"
 #include "llvm_stack_maps.h"
 #include "llvm_native_cache.h"
@@ -4930,29 +4931,183 @@ runtime_type_component(lower_state_t *state, LLVMValueRef type_index,
 }
 
 static LLVMValueRef
-open_pattern_match(lower_state_t *state, LLVMValueRef type_field,
-                   th_type *pattern)
+runtime_type_predicate(lower_state_t *state, const char *name,
+                       LLVMValueRef left, LLVMValueRef right)
 {
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMTypeRef parameters[] = {i32, i32};
     LLVMTypeRef signature = LLVMFunctionType(i32, parameters, 2, false);
-    LLVMValueRef predicate = LLVMGetNamedFunction(state->module,
-        "n00bb_bootstrap_type_specializes");
-    if (!predicate) predicate = LLVMAddFunction(state->module,
-        "n00bb_bootstrap_type_specializes", signature);
-    LLVMValueRef general = runtime_type_index(state, pattern)
-        ? runtime_type_index_value(state, pattern) : nullptr;
-    if (!general) {
-        state->failure_detail =
-            FAILURE_DETAIL("open typecase pattern has no runtime type");
-        return nullptr;
+    LLVMValueRef predicate = LLVMGetNamedFunction(state->module, name);
+    if (!predicate) predicate = LLVMAddFunction(state->module, name,
+                                                signature);
+    if (!left || !right || !predicate
+        || LLVMGlobalGetValueType(predicate) != signature) return nullptr;
+    LLVMValueRef args[] = {left, right};
+    LLVMValueRef answer = LLVMBuildCall2(state->builder, signature,
+                                         predicate, args, 2, "type.query");
+    return LLVMBuildICmp(state->builder, LLVMIntEQ, answer,
+                         LLVMConstInt(i32, 1, false), "type.query.holds");
+}
+
+static LLVMValueRef
+masked_type_index(lower_state_t *state, LLVMValueRef type_index)
+{
+    return LLVMBuildAnd(state->builder, type_index,
+        LLVMConstInt(LLVMTypeOf(type_index), UINT32_C(0x7fffffff), false),
+        "type.index.masked");
+}
+
+typedef struct {
+    th_type *variable;
+    LLVMValueRef type_index;
+} pattern_binding_t;
+
+typedef struct {
+    lower_state_t *state;
+    LLVMBasicBlockRef fail;
+    pattern_binding_t bindings[16];
+    size_t binding_count;
+} pattern_match_t;
+
+static bool
+require_pattern(pattern_match_t *match, LLVMValueRef holds)
+{
+    lower_state_t *state = match->state;
+    if (!holds) return false;
+    LLVMBasicBlockRef next = LLVMAppendBasicBlockInContext(
+        LLVMGetModuleContext(state->module), state->target_function,
+        "type.pattern.next");
+    LLVMBuildCondBr(state->builder, holds, next, match->fail);
+    LLVMPositionBuilderAtEnd(state->builder, next);
+    return true;
+}
+
+static bool
+require_same_type(pattern_match_t *match, LLVMValueRef left,
+                  LLVMValueRef right)
+{
+    lower_state_t *state = match->state;
+    return left && right && require_pattern(match, LLVMBuildICmp(
+        state->builder, LLVMIntEQ, masked_type_index(state, left),
+        masked_type_index(state, right), "type.same"));
+}
+
+static bool trait_constraint_match(lower_state_t *state,
+                                   LLVMValueRef type_field,
+                                   th_type *variable, LLVMValueRef *match);
+static LLVMValueRef variable_from_inputs(lower_state_t *state,
+                                         th_type *variable);
+
+static bool
+match_pattern(pattern_match_t *match, LLVMValueRef type_index,
+              th_type *pattern)
+{
+    lower_state_t *state = match->state;
+    th_ctx *types = ir_module_types(state->function->owner);
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    pattern = pattern ? th_resolve(pattern) : nullptr;
+    if (!pattern || !type_index) return false;
+    if (th_is_closed(types, pattern)) {
+        LLVMValueRef expected = runtime_type_index(state, pattern)
+            ? runtime_type_index_value(state, pattern) : nullptr;
+        if (!expected) state->failure_detail =
+            FAILURE_DETAIL("typecase pattern part has no runtime type");
+        return require_same_type(match, type_index, expected);
     }
-    if (!predicate || LLVMGlobalGetValueType(predicate) != signature)
-        return nullptr;
-    LLVMValueRef args[] = {type_field, general};
-    return LLVMBuildCall2(state->builder, signature, predicate, args, 2,
-                          "type.specializes");
+    switch (th_kind_of(pattern)) {
+    case TH_VAR: {
+        for (size_t i = 0; i < match->binding_count; i++)
+            if (match->bindings[i].variable == pattern)
+                return require_same_type(match, type_index,
+                                         match->bindings[i].type_index);
+        LLVMValueRef known = variable_from_inputs(state, pattern);
+        if (known) return require_same_type(match, type_index, known);
+        if (match->binding_count == sizeof(match->bindings)
+                                    / sizeof(match->bindings[0])) {
+            state->failure_detail =
+                FAILURE_DETAIL("typecase pattern binds too many variables");
+            return false;
+        }
+        match->bindings[match->binding_count++] = (pattern_binding_t){
+            pattern, type_index,
+        };
+        LLVMValueRef traits = nullptr;
+        if (!trait_constraint_match(state, type_index, pattern, &traits))
+            return false;
+        return !traits || require_pattern(match, LLVMBuildICmp(
+            state->builder, LLVMIntEQ, traits, LLVMConstInt(i32, 1, false),
+            "type.traits.hold"));
+    }
+    case TH_SEQUENCE:
+    case TH_INDIRECTION: {
+        uint32_t kind = th_kind_of(pattern) == TH_SEQUENCE
+            ? N00B_ABI_TYPE_ARRAY : N00B_ABI_TYPE_REFERENCE;
+        th_type *inner = th_kind_of(pattern) == TH_SEQUENCE
+            ? th_seq_elem(pattern) : th_ind_referent(pattern);
+        return require_pattern(match, runtime_type_predicate(state,
+                "builtin.abi.__type_has_kind", type_index,
+                LLVMConstInt(i32, kind, false)))
+            && match_pattern(match,
+                   runtime_type_component(state, type_index, 0), inner);
+    }
+    case TH_NAMED: {
+        th_type *head = n00bb_generic_head(types, pattern);
+        LLVMValueRef general = head && runtime_type_index(state, head)
+            ? runtime_type_index_value(state, head) : nullptr;
+        if (!general) {
+            state->failure_detail =
+                FAILURE_DETAIL("open typecase pattern has no runtime type");
+            return false;
+        }
+        if (!require_pattern(match, runtime_type_predicate(state,
+                "n00bb_bootstrap_type_specializes", type_index, general)))
+            return false;
+        for (size_t i = 0; i < th_named_nargs(pattern); i++) {
+            const th_arg *argument = th_named_arg(pattern, i);
+            if (!argument || argument->kind != TH_ARG_TYPE) {
+                state->failure_detail = FAILURE_DETAIL(
+                    "typecase pattern has a non-type argument");
+                return false;
+            }
+            if (!match_pattern(match, runtime_type_component(state,
+                    type_index, (uint32_t)i), argument->type)) return false;
+        }
+        return true;
+    }
+    default:
+        state->failure_detail =
+            FAILURE_DETAIL("typecase pattern shape has no runtime test");
+        return false;
+    }
+}
+
+static LLVMValueRef
+open_pattern_match(lower_state_t *state, LLVMValueRef type_field,
+                   th_type *pattern)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    pattern_match_t match = {
+        .state = state,
+        .fail = LLVMAppendBasicBlockInContext(context,
+            state->target_function, "type.pattern.fail"),
+    };
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(context,
+        state->target_function, "type.pattern.done");
+    if (!match_pattern(&match, type_field, pattern)) return nullptr;
+    LLVMBasicBlockRef matched = LLVMGetInsertBlock(state->builder);
+    LLVMBuildBr(state->builder, done);
+    LLVMPositionBuilderAtEnd(state->builder, match.fail);
+    LLVMBuildBr(state->builder, done);
+    LLVMPositionBuilderAtEnd(state->builder, done);
+    LLVMTypeRef i1 = LLVMInt1TypeInContext(context);
+    LLVMValueRef result = LLVMBuildPhi(state->builder, i1, "type.matches");
+    LLVMValueRef values[] = {LLVMConstInt(i1, 1, false),
+                             LLVMConstInt(i1, 0, false)};
+    LLVMBasicBlockRef blocks[] = {matched, match.fail};
+    LLVMAddIncoming(result, values, blocks, 2);
+    return result;
 }
 
 static bool
@@ -4990,37 +5145,6 @@ trait_constraint_match(lower_state_t *state, LLVMValueRef type_field,
                                        "type.traits") : check;
     }
     return true;
-}
-
-static LLVMValueRef
-element_trait_match(lower_state_t *state, LLVMValueRef kind_match,
-                    LLVMValueRef type_field, th_type *element)
-{
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
-    LLVMBasicBlockRef entry = LLVMGetInsertBlock(state->builder);
-    LLVMBasicBlockRef check = LLVMAppendBasicBlockInContext(context,
-        state->target_function, "type.element.check");
-    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(context,
-        state->target_function, "type.element.done");
-    LLVMValueRef kind_ok = LLVMBuildICmp(state->builder, LLVMIntEQ,
-        kind_match, LLVMConstInt(i32, 1, false), "type.kind.ok");
-    LLVMBuildCondBr(state->builder, kind_ok, check, done);
-    LLVMPositionBuilderAtEnd(state->builder, check);
-    LLVMValueRef traits = nullptr;
-    if (!trait_constraint_match(state,
-            runtime_type_component(state, type_field, 0), element, &traits))
-        return nullptr;
-    if (!traits) traits = LLVMConstInt(i32, 1, false);
-    LLVMBasicBlockRef check_end = LLVMGetInsertBlock(state->builder);
-    LLVMBuildBr(state->builder, done);
-    LLVMPositionBuilderAtEnd(state->builder, done);
-    LLVMValueRef result = LLVMBuildPhi(state->builder, i32,
-                                       "type.element.match");
-    LLVMValueRef values[] = {LLVMConstInt(i32, 0, false), traits};
-    LLVMBasicBlockRef blocks[] = {entry, check_end};
-    LLVMAddIncoming(result, values, blocks, 2);
-    return result;
 }
 
 static bool
@@ -9019,7 +9143,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 (unsigned)fixed, false));
         LLVMValueRef value = lowered_value(state, operands[0].value);
         LLVMContextRef context = LLVMGetModuleContext(state->module);
-        LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
         LLVMValueRef type_field = nullptr;
         if (value && LLVMTypeOf(value) == box_llvm_type(context))
             type_field = LLVMBuildExtractValue(state->builder, value, 2,
@@ -9037,39 +9160,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         }
         if (!th_is_closed(ir_module_types(state->function->owner),
                           operands[1].type)) {
-            th_type *pattern = th_resolve(operands[1].type);
-            th_type *element = th_kind_of(pattern) == TH_SEQUENCE
-                ? th_resolve(th_seq_elem(pattern))
-                : th_kind_of(pattern) == TH_INDIRECTION
-                ? th_resolve(th_ind_referent(pattern)) : nullptr;
-            LLVMValueRef match = nullptr;
-            if (element && th_kind_of(element) == TH_VAR) {
-                LLVMTypeRef parameters[] = {i32, i32};
-                LLVMTypeRef signature = LLVMFunctionType(i32, parameters, 2,
-                                                         false);
-                LLVMValueRef predicate = LLVMGetNamedFunction(state->module,
-                    "builtin.abi.__type_has_kind");
-                if (!predicate) predicate = LLVMAddFunction(state->module,
-                    "builtin.abi.__type_has_kind", signature);
-                uint32_t kind = th_kind_of(pattern) == TH_SEQUENCE
-                    ? N00B_ABI_TYPE_ARRAY : N00B_ABI_TYPE_REFERENCE;
-                LLVMValueRef args[] = {type_field,
-                                       LLVMConstInt(i32, kind, false)};
-                if (predicate && LLVMGlobalGetValueType(predicate) == signature)
-                    match = LLVMBuildCall2(state->builder, signature,
-                        predicate, args, 2, "type.has_kind");
-                if (match && th_var_constraint_count(element))
-                    match = element_trait_match(state, match, type_field,
-                                                element);
-            }
-            else if (th_kind_of(pattern) == TH_VAR
-                     && !trait_constraint_match(state, type_field, pattern,
-                                                &match)) match = nullptr;
-            else if (th_kind_of(pattern) != TH_VAR)
-                match = open_pattern_match(state, type_field, pattern);
-            if (!match) break;
-            result = LLVMBuildICmp(state->builder, LLVMIntEQ, match,
-                LLVMConstInt(i32, 1, false), "type.matches");
+            result = open_pattern_match(state, type_field, operands[1].type);
+            if (!result) break;
             return save_result(state, instruction, result);
         }
         uint32_t index = runtime_type_index(state, operands[1].type);
@@ -10352,8 +10444,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             ? optional_record_type(state->module, target) : nullptr;
         unsigned native_count = signature &&
             LLVMGetTypeKind(signature) == LLVMFunctionTypeKind
-            ? LLVMCountParamTypes(signature) : 0;
-        if (!callee || !signature
+            ? LLVMCountParamTypes(signature) : 0;        if (!callee || !signature
             || LLVMGetTypeKind(signature) != LLVMFunctionTypeKind
             || !formal_signature
             || th_func_nparams(formal_signature) != count - 1

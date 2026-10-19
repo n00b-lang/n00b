@@ -1,4 +1,5 @@
 #include "abi_semantics.h"
+#include "abi_type_index.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -343,6 +344,14 @@ n00bb_abi_link_semantic_rows(
         for (size_t i = 0; valid && i < ir_type_count(module); i++)
             valid = add_receiver(ctx, types, &receivers,
                 ir_type_at(module, i));
+    }
+    for (size_t r = 0; valid && r < receivers.len; r++) {
+        th_type *head = n00bb_generic_head(ctx, receivers.data[r].type);
+        uint32_t parent = head ? type_index(types, th_hash(ctx, head)) : 0;
+        if (parent && parent != receivers.data[r].index)
+            core_list_push(specializations, ((specialization_t){
+                receivers.data[r].index, parent,
+            }));
     }
     bool *matches = receivers.len
         ? core_alloc_array(bool, receivers.len) : nullptr;

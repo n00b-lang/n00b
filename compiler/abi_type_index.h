@@ -6,6 +6,7 @@
 
 #include "ir/ir.h"
 #include "parse/symtab.h"
+#include "th/environment.h"
 
 typedef struct n00bb_abi_type_index_t n00bb_abi_type_index_t;
 
@@ -35,3 +36,19 @@ th_type *n00bb_abi_type_index_at(const n00bb_abi_type_index_t *index,
                                 uint32_t row);
 bool n00bb_abi_type_index_find(n00bb_abi_type_index_t *index,
                                th_type *type, uint32_t *out_index);
+static inline th_type *
+n00bb_generic_head(th_ctx *types, th_type *type)
+{
+    core_string_t constructor = {};
+    size_t arguments = 0;
+    bool variant = false;
+    type = type ? th_resolve(type) : nullptr;
+    if (!types || th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, &constructor, &variant, &arguments)
+        || !arguments || !constructor.data) return nullptr;
+    th_env_type_shape_kind_t shape_kind = TH_ENV_TYPE_SHAPE_ALIAS;
+    if (!th_env_type_shape(types, constructor, &shape_kind)
+        || shape_kind == TH_ENV_TYPE_SHAPE_ALIAS) return nullptr;
+    return variant ? th_variant(types, constructor, nullptr, 0)
+                   : th_name(types, constructor);
+}

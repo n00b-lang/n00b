@@ -539,6 +539,15 @@ test(
 )
 
 test(
+    'generic-record-trait-dispatch', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'generic_record_trait_dispatch.n'],
+    suite: 'slow',
+)
+
+test(
     'generic-union-parameter', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),

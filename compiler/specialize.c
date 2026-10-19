@@ -4,6 +4,7 @@
 
 #include "specialize.h"
 #include "cached_body.h"
+#include "ir/doms.h"
 #include "ir/typelang.h"
 #include "lib/hash.h"
 #include "th/environment.h"
@@ -190,10 +191,63 @@ call_operand_type(ir_value_t *value, th_ctx *types)
         ? source->type : value->type;
 }
 
-static th_type *
-concrete_call_signature(ir_instr_t *call, ir_func_t *target, th_ctx *types)
+static int
+static_type_test_arm(const ir_instr_t *branch, th_ctx *types)
 {
-    th_type *signature = ir_instr_call_signature(call);
+    if (!branch || branch->op != IR_OP_BRANCH || branch->n_operands != 3
+        || branch->operands[0].kind != IR_OPD_VALUE) return -1;
+    ir_value_t *condition = branch->operands[0].value;
+    ir_instr_t *test = condition && condition->kind == IR_VAL_INSTR
+        ? condition->def : nullptr;
+    if (!test || test->op != IR_OP_TYPE_TEST || test->n_operands != 2
+        || test->operands[0].kind != IR_OPD_VALUE
+        || test->operands[1].kind != IR_OPD_TYPE
+        || !test->operands[0].value) return -1;
+    th_type *subject = test->operands[0].value->type;
+    if (!subject || !th_is_closed(types, subject)) return -1;
+    return th_env_type_pattern_accepts(types, test->operands[1].type, subject)
+        ? 0 : 1;
+}
+
+static bool *
+feasible_blocks(const ir_func_t *function, th_ctx *types)
+{
+    uint32_t count = function->n_blocks;
+    bool *feasible = core_alloc_array(bool, count ? count : 1);
+    uint32_t *stack = core_alloc_array(uint32_t, count ? count : 1);
+    ir_block_t *entry = ir_block_entry((ir_func_t *)function);
+    if (!feasible || !stack || !entry || entry->index >= count) {
+        core_free(stack);
+        if (feasible)
+            for (uint32_t b = 0; b < count; b++) feasible[b] = true;
+        return feasible;
+    }
+    uint32_t depth = 0;
+    stack[depth++] = entry->index;
+    feasible[entry->index] = true;
+    while (depth) {
+        ir_block_t *block = function->blocks[stack[--depth]];
+        ir_instr_t *term = ir_block_terminator(block);
+        int fixed = static_type_test_arm(term, types);
+        uint32_t successors = term ? ir_succ_count(term) : 0;
+        for (uint32_t s = 0; s < successors; s++) {
+            if (fixed >= 0 && s != (uint32_t)fixed) continue;
+            ir_block_t *to = ir_succ_at(term, s);
+            if (!to || to->index >= count || feasible[to->index]) continue;
+            feasible[to->index] = true;
+            stack[depth++] = to->index;
+        }
+    }
+    core_free(stack);
+    return feasible;
+}
+
+static th_type *
+concrete_call_signature(ir_instr_t *call, ir_func_t *target, th_ctx *types,
+                        bool from_operands)
+{
+    th_type *signature = from_operands ? target->type
+        : ir_instr_call_signature(call);
     if (!signature || th_is_closed(types, signature)) return signature;
     size_t count = th_func_nparams(target->type);
     if (call->n_operands != count + 1) return signature;
@@ -288,6 +342,35 @@ find_instance(const core_list_t(specialization_t) *specializations,
     return nullptr;
 }
 
+static const specialization_t *
+instance_of(const core_list_t(specialization_t) *specializations,
+            const ir_func_t *function)
+{
+    for (size_t n = 0; n < specializations->len; n++)
+        if (specializations->data[n].copy == function)
+            return &specializations->data[n];
+    return nullptr;
+}
+
+static bool
+call_fits_instance(ir_instr_t *call, const specialization_t *instance,
+                   th_ctx *types)
+{
+    size_t count = th_func_nparams(instance->signature);
+    if (call->n_operands != count + 1) return true;
+    for (size_t i = 0; i < count; i++) {
+        const th_param *wanted = th_func_param(instance->signature, i);
+        ir_operand_t *operand = &call->operands[i + 1];
+        if (operand->kind != IR_OPD_VALUE || !operand->value || !wanted)
+            continue;
+        th_type *given = operand->value->type;
+        if (th_is_closed(types, given)
+            && th_hash(types, wanted->type) != th_hash(types, given))
+            return false;
+    }
+    return true;
+}
+
 static bool
 is_instance(const core_list_t(specialization_t) *specializations,
             const ir_func_t *function)
@@ -322,8 +405,10 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
             || find_instance(&specializations, target,
                              th_hash(types, actual), types)) continue;
         core_list_t(type_binding_t) bindings = {0};
-        bool matched = match_type(types, target->type, actual, &bindings)
-            && bindings.len;
+        bool identity = th_hash(types, actual) == th_hash(types, target->type);
+        bool matched = identity
+            || (match_type(types, target->type, actual, &bindings)
+                && bindings.len);
         ir_func_t *copy = matched ? instantiate(context, target, actual,
             &bindings, types, failure) : nullptr;
         core_list_free(bindings);
@@ -340,9 +425,13 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         size_t parent = SIZE_MAX;
         for (size_t s = 0; parent == SIZE_MAX && s < specializations.len; s++)
             if (specializations.data[s].copy == caller) parent = s;
-        if (!th_is_closed(ir_module_types(caller->owner), caller->type)
-            && !is_instance(&specializations, caller)) continue;
+        th_ctx *caller_types = ir_module_types(caller->owner);
+        bool open_caller = !th_is_closed(caller_types, caller->type)
+            && !is_instance(&specializations, caller);
+        bool *feasible = feasible_blocks(caller, caller_types);
+        valid = feasible != nullptr;
         for (uint32_t b = 0; valid && b < caller->n_blocks; b++) {
+            if (!feasible[b]) continue;
             ir_block_t *block = caller->blocks[b];
             for (uint32_t i = 0; valid && i < block->n_instrs; i++) {
                 ir_instr_t *call = block->instrs[i];
@@ -350,9 +439,16 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 ir_value_t *callee = ir_operand_value(&call->operands[0]);
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
                     ? n00bb_cached_body(callee->owner) : nullptr;
-                if (!target || !target->n_blocks
-                    || is_instance(&specializations, target)) continue;
+                const specialization_t *instance = target
+                    ? instance_of(&specializations, target) : nullptr;
+                bool retargeted = instance && !call_fits_instance(call,
+                    instance, ir_module_types(target->owner));
+                if (retargeted) target = instance->source;
+                else if (instance) continue;
+                if (!target || !target->n_blocks) continue;
                 th_ctx *types = ir_module_types(target->owner);
+                if (open_caller && target == callee->owner
+                    && !th_is_closed(types, target->type)) continue;
                 if (th_is_closed(types, target->type)) {
                     bool queued = !ir_func_is_always_inline(target);
                     for (size_t q = 0; !queued && q < inline_bodies.len; q++)
@@ -363,8 +459,9 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                     }
                     continue;
                 }
-                th_type *actual = has_callback_operation(target) ? nullptr
-                    : concrete_call_signature(call, target, types);
+                th_type *actual = open_caller || has_callback_operation(target)
+                    ? nullptr : concrete_call_signature(call, target, types,
+                                                        retargeted);
                 core_list_t(type_binding_t) bindings = {0};
                 bool concrete = actual && th_is_closed(types, actual)
                     && match_type(types, target->type, actual, &bindings)
@@ -406,6 +503,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 if (valid) call->operands[0].value = bound;
             }
         }
+        core_free(feasible);
     }
     core_list_free(specializations);
     core_list_free(inline_bodies);

@@ -424,7 +424,8 @@ plan_closed_trait_dispatch(core_link_unit_t *link,
         if (!receiver) continue;
         th_type *pattern = th_resolve(receiver->type);
         if ((th_kind_of(pattern) == TH_SEQUENCE
-             || th_kind_of(pattern) == TH_INDIRECTION)
+             || th_kind_of(pattern) == TH_INDIRECTION
+             || th_kind_of(pattern) == TH_NAMED)
             && !th_is_closed(state->types, pattern)) {
             bool found = false;
             for (size_t j = 0; j < receiver_types.len; j++)

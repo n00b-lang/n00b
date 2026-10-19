@@ -221,6 +221,35 @@ add_type(n00bb_abi_type_index_t *index, th_type *type,
     return add_type_with_children(index, type, out_index, true);
 }
 
+static bool
+add_open_type_parts(n00bb_abi_type_index_t *index, th_type *type,
+                    unsigned depth)
+{
+    th_ctx *types = ir_module_types(index->module);
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || depth > 64) return !type;
+    if (th_is_closed(types, type)) return add_type(index, type, nullptr);
+    switch (th_kind_of(type)) {
+    case TH_NAMED: {
+        th_type *head = n00bb_generic_head(types, type);
+        if (head && !add_type(index, head, nullptr)) return false;
+        for (size_t i = 0; i < th_named_nargs(type); i++) {
+            const th_arg *argument = th_named_arg(type, i);
+            if (argument && argument->kind == TH_ARG_TYPE
+                && !add_open_type_parts(index, argument->type, depth + 1))
+                return false;
+        }
+        return true;
+    }
+    case TH_SEQUENCE:
+        return add_open_type_parts(index, th_seq_elem(type), depth + 1);
+    case TH_INDIRECTION:
+        return add_open_type_parts(index, th_ind_referent(type), depth + 1);
+    default:
+        return true;
+    }
+}
+
 n00bb_abi_type_index_t *
 n00bb_abi_type_index_new(ir_module_t *module)
 {
@@ -328,6 +357,8 @@ n00bb_abi_type_index_collect_module_types(n00bb_abi_type_index_t *index,
             && !th_func_error(resolved)) continue;
         if (th_is_closed(types, type)
             && !add_type(index, type, nullptr)) return false;
+        if (!th_is_closed(types, type)
+            && !add_open_type_parts(index, resolved, 0)) return false;
     }
     for (size_t i = 0; i < ir_global_count(module); i++) {
         ir_global_t *global = ir_global_at(module, i);
