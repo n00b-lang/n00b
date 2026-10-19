@@ -59,6 +59,7 @@ bool n00bb_cache_module_object(const n00bb_cache_t *cache,
                                core_string_t module,
                                n00bb_cache_module_object_t *object);
 core_list_decl(n00bb_specialization_seed_t);
+bool n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache);
 const n00bb_llvm_mutator_classifier_t *n00bb_cache_mutator_classifier(
     const n00bb_cache_t *cache);
 void n00bb_cache_seeds(const n00bb_cache_t *cache, th_ctx *types,

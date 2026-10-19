@@ -1455,6 +1455,19 @@ cached_mutator(void *context, const ir_func_t *function, bool *mutator)
     return false;
 }
 
+bool
+n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache)
+{
+    for (size_t e = 0; cache && e < cache->entries.len; e++) {
+        const cache_entry_t *entry = &cache->entries.data[e];
+        if (entry->load == ENTRY_VALID && entry->loaded
+            && phase_section(entry, CORE_STRING_STATIC("build-time-capture"),
+                             (core_string_t){0}))
+            return true;
+    }
+    return false;
+}
+
 const n00bb_llvm_mutator_classifier_t *
 n00bb_cache_mutator_classifier(const n00bb_cache_t *cache)
 {
@@ -1819,6 +1832,15 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
     ok = ok && sections_set(&sections, core_buffer_string(&name),
                             dispatch.data, dispatch.byte_len);
     core_buffer_release(&dispatch);
+    bool needs_capture = false;
+    for (size_t m = 0; m < scc->members.len; m++)
+        needs_capture = needs_capture
+            || tu_state(scc->members.data[m])->needs_build_time_capture;
+    if (needs_capture) {
+        phase_section_name(&name, CORE_STRING_STATIC("build-time-capture"));
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                (const uint8_t *)"", 0);
+    }
     for (size_t m = 0; ok && m < scc->members.len; m++) {
         core_string_t module = scc->members.data[m]->module.identifier;
         const n00bb_cache_module_object_t *object = module_object(objects,

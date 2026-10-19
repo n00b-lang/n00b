@@ -6615,6 +6615,7 @@ n00bb_declare_literal_constant(n00bb_lower_context_t *lower,
         return false;
     if (n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME) {
         tu->link_analysis->build_time_capture = true;
+        tu->needs_build_time_capture = true;
         return true;
     }
     core_string_t identifier = n00bb_baked_root_identifier(tu->link_analysis,
@@ -6657,8 +6658,10 @@ n00bb_record_literal_constant(n00bb_lower_context_t *lower,
         .producer = producer,
         .global = global,
     }));
-    if (n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME)
+    if (n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME) {
         tu->link_analysis->build_time_capture = true;
+        tu->needs_build_time_capture = true;
+    }
     *global_out = global;
     return true;
 }
@@ -15984,8 +15987,10 @@ register_module_globals(parse_grammar_t *grammar,
                         && symbol->mutability == PARSE_SYM_CONST
                         && !global->has_static_initializer;
                     if (dynamic_const
-                        && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME)
+                        && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME) {
                         analysis->build_time_capture = true;
+                        tu_state(source)->needs_build_time_capture = true;
+                    }
                     else if (dynamic_const)
                         ok = bake_const_global(source, destination, symbol,
                             global, analysis);

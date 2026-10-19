@@ -548,6 +548,7 @@ typedef struct {
     core_dict_t import_alias_index;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
     core_list_t(n00bb_dispatch_record_t) dispatch_records;
+    bool needs_build_time_capture;
     core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;

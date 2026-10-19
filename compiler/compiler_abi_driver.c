@@ -502,6 +502,7 @@ bool
 n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis)
 {
     return analysis && (analysis->build_time_capture
+        || n00bb_cache_needs_build_time_capture(analysis->cache)
         || n00bb_root_entry(analysis,
                             CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)));
 }
