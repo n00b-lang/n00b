@@ -577,7 +577,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'option_type_spelling_rejected.n',
-           '(string vs u32?)'],
+           'N00BB-T0002',
+           'option_type_spelling_rejected.n:6:9'],
     timeout: 120,
     suite: 'slow',
 )
@@ -589,7 +590,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'initializer_self_reference.n',
-           'unresolved name \'y\''],
+           'N00BB-L0014',
+           'initializer_self_reference.n:2:18'],
     timeout: 120,
     suite: 'slow',
 )
@@ -601,7 +603,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'try_without_failure.n',
-           'this `try` has no failure path',
+           'IR-E0010',
            'try_without_failure.n:2:21'],
     timeout: 120,
     suite: 'slow',
@@ -614,7 +616,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'let_array_reassign.n',
-           'has multiple initialization sites'],
+           'IR-E0037',
+           'let_array_reassign.n:3:5'],
     timeout: 120,
     suite: 'slow',
 )
@@ -626,9 +629,11 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'const_array_write_rejected.n',
-           'contents of constant const_array_write_rejected.bytes',
-           'contents of constant const_array_write_rejected.grid',
-           'contents of constant const_array_write_rejected.points'],
+           'IR-E0037',
+           'const_array_write_rejected.n:22:5',
+           'const_array_write_rejected.n:18:5',
+           'const_array_write_rejected.n:14:5',
+           'const_array_write_rejected.n:10:5'],
     timeout: 120,
     suite: 'slow',
 )
@@ -712,7 +717,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'untyped_consts' / 'untyped_const_range.n',
-           'assigned value does not match the local type'],
+           'N00BB-T0041',
+           'untyped_const_range.n:4:21'],
     timeout: 120,
     suite: 'slow',
 )
@@ -730,17 +736,17 @@ test(
 
 foreach rejected : [
     ['folded-const-range-n00b', 'folded_const_range.n',
-     'assigned value does not match the local type'],
+     'N00BB-T0041'],
     ['folded-bitwise-local-n00b', 'folded_bitwise_local.n',
-     'assigned value does not match the local type'],
+     'N00BB-T0042'],
     ['folded-bitwise-argument-n00b', 'folded_bitwise_argument.n',
-     'call type does not match its function (uint vs i16)'],
+     'N00BB-T0002'],
     ['folded-bitwise-return-n00b', 'folded_bitwise_return.n',
-     'does not match declared signature'],
+     'N00BB-T0044'],
     ['folded-bitwise-assign-n00b', 'folded_bitwise_assign.n',
-     'storing uint in global'],
+     'N00BB-T0042'],
     ['folded-bitwise-const-n00b', 'folded_bitwise_const.n',
-     'assigned value does not match the local type'],
+     'N00BB-T0042'],
 ]
     test(
         rejected[0],
@@ -762,32 +768,33 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'wide_integer_literal_range.n',
-           'operands and result have incompatible types'],
+           'N00BB-T0045',
+           'wide_integer_literal_range.n:4:9'],
     timeout: 120,
     suite: 'slow',
 )
 
 foreach rejected : [
     ['free', [
-        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'N00BB-T0002',
         'keyword_argument_free_rejected.n:5:15',
-        'N00BB-T0037]: named argument does not match a parameter',
+        'N00BB-T0037',
         'keyword_argument_free_rejected.n:6:11',
-        'N00BB-T0038]: a parameter is supplied more than once',
+        'N00BB-T0038',
         'keyword_argument_free_rejected.n:7:14']],
     ['method', [
-        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'N00BB-T0002',
         'keyword_argument_method_rejected.n:14:22']],
     ['generic', [
-        'N00BB-T0002]: call type does not match its function (string vs int)',
+        'N00BB-T0002',
         'keyword_argument_generic_rejected.n:14:28']],
     ['constructor', [
-        'N00BB-T0020]: no visible __init matches this constructed type',
+        'N00BB-T0020',
         'keyword_argument_constructor_rejected.n:9:17']],
     ['context', [
-        'N00BB-T0002]: call type does not match its function (builtin.containers.buffer.Buffer vs string)',
+        'N00BB-T0002',
         'keyword_argument_context_rejected.n:9:16',
-        'N00BB-T0002]: call type does not match its function (int vs string)',
+        'N00BB-T0002',
         'keyword_argument_context_rejected.n:12:16']],
 ]
     test(
@@ -806,30 +813,30 @@ endforeach
 
 foreach rejected : [
     ['free', [
-        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'N00BB-T0039',
         'call_arity_free_rejected.n:5:17',
-        'N00BB-T0040]: call omits the required parameter \'x\'',
+        'N00BB-T0040',
         'call_arity_free_rejected.n:6:9']],
     ['method', [
-        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'N00BB-T0039',
         'call_arity_method_rejected.n:14:20',
-        'N00BB-T0040]: call omits the required parameter \'by\'',
+        'N00BB-T0040',
         'call_arity_method_rejected.n:15:9']],
     ['generic', [
-        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'N00BB-T0039',
         'call_arity_generic_rejected.n:14:26',
-        'N00BB-T0040]: call omits the required parameter \'by\'',
+        'N00BB-T0040',
         'call_arity_generic_rejected.n:18:12']],
     ['constructor', [
-        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'N00BB-T0039',
         'call_arity_constructor_rejected.n:9:35']],
     ['constructor_missing', [
-        'N00BB-T0040]: call omits the required parameter \'count\'',
+        'N00BB-T0040',
         'call_arity_constructor_missing_rejected.n:9:19']],
     ['context', [
-        'N00BB-T0039]: call passes more arguments than its function has parameters',
+        'N00BB-T0039',
         'call_arity_context_rejected.n:8:17',
-        'N00BB-T0040]: call omits the required parameter \'s\'',
+        'N00BB-T0040',
         'call_arity_context_rejected.n:10:6']],
 ]
     test(
@@ -972,8 +979,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'import_cycles' / 'initializer' / 'initializer_cycle.n',
            'N00BB-L0040',
-           'alpha.a -> beta.b -> alpha.a',
-           'modules \'alpha\', \'beta\''],
+           'beta.n:3:21'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'import_cycles' / 'initializer')],
     timeout: 120,
@@ -986,13 +992,10 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'import_names' / 'import_name_clash.n',
-           '\'util\' cannot be declared here because this module imports module \'util\' (line 1)',
+           'N00BB-M0012',
            'import_name_clash.n:8:1',
-           '\'shape\' cannot be declared here',
            'import_name_clash.n:12:1',
-           '\'limit\' cannot be declared here',
            'import_name_clash.n:16:7',
-           '\'counter\' cannot be declared here',
            'import_name_clash.n:18:5'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'import_names')],
@@ -1006,7 +1009,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs'
                / 'import_names' / 'implicit_package_name.n',
-           '\'builtin\' cannot be declared here because it names a package this module uses',
+           'N00BB-M0012',
            'implicit_package_name.n:1:1'],
     timeout: 120,
     suite: 'slow',
@@ -1019,7 +1022,6 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'import_names' / 'import_name_nested.n',
            'N00BB-M0012',
-           'module wrapper',
            'wrapper.n:3:1'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'import_names')],
@@ -1583,7 +1585,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_uninitialized_local.n',
-           'is read on a path that does not assign it'],
+           'IR-W0027',
+           'bitcode_uninitialized_local.n:3:12'],
     suite: 'slow',
 )
 
@@ -1594,6 +1597,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_comptime_statement.n',
+           'N00BB-P0001',
+           'bitcode_comptime_statement.n:1:10',
            'write \'if comptime() { } else { }\''],
 )
 
@@ -1604,7 +1609,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_type_parameter_fixed.n',
-           'is fixed to bitcode_type_parameter_fixed.Handle by the function\'s own body'],
+           'N00BB-T0046',
+           'bitcode_type_parameter_fixed.n:13:1'],
     suite: 'slow',
 )
 
@@ -1615,7 +1621,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_type_parameter_assigned.n',
-           'cannot assign int to a value of type parameter `T'],
+           'N00BB-T0046',
+           'bitcode_type_parameter_assigned.n:2:5'],
 )
 
 test(
@@ -1625,7 +1632,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_script_comptime.n',
-           'N00BB-B0028'],
+           'N00BB-B0028',
+           'bitcode_script_comptime.n:1:6'],
     suite: 'slow',
 )
 
@@ -1636,7 +1644,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_script_const_reads_var.n',
-           'N00BB-B0029'],
+           'N00BB-B0029',
+           'bitcode_script_const_reads_var.n:2:1'],
     suite: 'slow',
 )
 
@@ -1647,7 +1656,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_start_signature.n',
-           'N00BB-B0030'],
+           'N00BB-B0030',
+           'bitcode_start_signature.n:1:1'],
     suite: 'slow',
 )
 
@@ -1658,7 +1668,10 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_finalize_signature_rejected.n',
-           'N00BB-T0031', 'N00BB-T0032', 'N00BB-T0033'],
+           'N00BB-T0031',
+           'N00BB-T0032',
+           'N00BB-T0033',
+           'bitcode_finalize_signature_rejected.n:1:1'],
     suite: 'slow',
 )
 
@@ -1679,7 +1692,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_finalize_value_rejected.n',
-           'N00BB-T0031'],
+           'N00BB-T0031',
+           'bitcode_finalize_value_rejected.n:5:1'],
 )
 
 test(
@@ -1689,7 +1703,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_finalize_nullable_rejected.n',
-           'N00BB-T0031'],
+           'N00BB-T0031',
+           'bitcode_finalize_nullable_rejected.n:5:1'],
 )
 
 test(
@@ -1707,7 +1722,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_uninitialized_global.n',
-           'N00BB-L0044'],
+           'N00BB-L0044',
+           'bitcode_uninitialized_global.n:3:46'],
     suite: 'slow',
 )
 

@@ -13244,6 +13244,8 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
     }
     ir_local_t *local = type
         ? ir_local_add(context->function, name, type) : nullptr;
+    if (local) (void)ir_local_set_source_name(context->function, local,
+                                              symbol->name);
     if (!local || !n00bb_set_reference_access(
             ((n00bb_lower_context_t *)context->user)->ir_context,
             ir_local_value(context->function, local), type)
@@ -14615,6 +14617,8 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
                                        symbol->type);
         ir_local_t *local = type
             ? ir_local_add(context->function, name, type) : nullptr;
+        if (local) (void)ir_local_set_source_name(context->function, local,
+                                                  symbol->name);
         if (!local || !n00bb_bind_local(context, symbol, local,
                                          lower_span_for_tree(context,
                                                              visit->node))) {
@@ -19886,25 +19890,27 @@ validate_uninitialized_global_reads(
             link, source_unit, target_unit);
         bool write_candidate = has_initializer_write_candidate(
             link, analysis, target);
-        core_string_t message = target->is_thread_local
-            ? same_cycle
-                ? CORE_STRING_STATIC(
-                    "initialization in an import cycle reads a thread-local global before a guaranteed initialization")
-                : CORE_STRING_STATIC(
-                    "initializer reads a thread-local global before a guaranteed initialization")
-            : same_cycle
-                ? write_candidate
-                    ? CORE_STRING_STATIC("initialization in an import cycle reads a global before a guaranteed initialization")
-                    : CORE_STRING_STATIC("initialization in an import cycle reads a global without an explicit initializer")
-                : write_candidate
-                    ? CORE_STRING_STATIC("initializer reads a global before a guaranteed initialization")
-                    : CORE_STRING_STATIC("initializer reads a global without an explicit initializer");
+        core_string_t global_kind = target->is_thread_local
+            ? CORE_STRING_STATIC("thread-local global")
+            : CORE_STRING_STATIC("global");
+        core_string_t place = same_cycle
+            ? CORE_STRING_STATIC("initialization in an import cycle")
+            : CORE_STRING_STATIC("initializer");
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "%.*s reads %.*s '%.*s' %s",
+            (int)place.u8_bytes, place.data,
+            (int)global_kind.u8_bytes, global_kind.data,
+            (int)target->name.u8_bytes, target->name.data,
+            write_candidate || target->is_thread_local
+                ? "before it is guaranteed to be initialized"
+                : "which has no explicit initializer");
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(source_unit), source_unit,
             CORE_DIAG_ERROR,
             same_cycle ? CORE_STRING_STATIC("N00BB-L0041")
                        : CORE_STRING_STATIC("N00BB-L0044"),
-            message, edge.source_location);
+            core_buffer_string(&message), edge.source_location);
+        core_buffer_release(&message);
     }
     return true;
 }
@@ -20372,13 +20378,18 @@ rigid_type_parameters_hold(core_list_t(core_translation_unit_ptr_t) *units)
                     core_buffer_t message = {0};
                     core_string_t bound_text = n00bb_print_type(state->types,
                                                                 bound);
+                    core_string_t parameter_name = {0};
+                    for (size_t k = 0; k < declared->len; k++)
+                        if (declared->data[k].type == map->declaration[i])
+                            parameter_name = declared->data[k].name;
                     core_buffer_printf(&message,
-                        "a type parameter of '%.*s' is fixed to %.*s by the function's own body; a declared type parameter stays generic",
+                        "type parameter `%.*s of '%.*s' is fixed to %.*s by the function's own body; a declared type parameter stays generic",
+                        (int)parameter_name.u8_bytes, parameter_name.data,
                         (int)symbol->name.u8_bytes, symbol->name.data,
                         (int)bound_text.u8_bytes, bound_text.data);
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0046"),
                         core_string_borrow(message.data, message.byte_len),
                         link_source_location(symbol->decl_node));
                     core_buffer_release(&message);
@@ -20642,12 +20653,15 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         fprintf(stderr, "PROFILE lower-initializers %.3f\n",
             n00bb_profile_seconds() - profile_start);
 
+    ir_policy_t *verify_policy = ok ? ir_policy_new(ir_context) : nullptr;
+    if (ok) ok = verify_policy && ir_policy_set(verify_policy,
+        CORE_STRING_STATIC("IR-E0023"), IR_POLICY_ALLOW);
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
         ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
         ir_diags_t *diagnostics = ir_diags_new_attached(
-            ir_context, nullptr,
+            ir_context, verify_policy,
             core_translation_unit_diagnostics(unit), unit);
         ir_props_t properties = ir_verify(module, diagnostics);
         ir_props_t verified = IR_PROP_PARSED | IR_PROP_TYPED

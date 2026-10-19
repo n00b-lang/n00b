@@ -301,7 +301,7 @@
 <sym-decl-list> ::= <sym-decl> %"," <sym-decl-list>
                   | <sym-decl>
 
-<sym-decl> @declares($0, $2) @assigns($0, $4) @infer("$0 unify $4") @nospace($1) ::=
+<sym-decl> @declares($0, $2) @assigns($0, $4) @infer("$4 converts ($0 unify $2)") @nospace($1) ::=
          %IDENTIFIER %":" <type-spec> <assign-op> <expression>
 <sym-decl> @declares($0, $2) @infer("$0 unify $2") @nospace($1) ::= %IDENTIFIER %":" <type-spec>
 <sym-decl> @declares($0) @assigns($0, $2) @infer("$0 unify $2") ::= %IDENTIFIER <assign-op> <expression>
@@ -429,7 +429,7 @@
                     | %"(" <flagset-value> %")"
 <flagset-name> @varref($0) ::= %IDENTIFIER
 
-<assign-stmt> @assigns($0, $2) ::= <expression> <assign-op> <expression>
+<assign-stmt> @assigns($0, $2) @infer("$2 converts $0") ::= <expression> <assign-op> <expression>
 <discard-stmt> ::= %_ <assign-op> <expression>
 
 <binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __add, __add_assign)") ::= <expression> <plus-assign-op> <expression>

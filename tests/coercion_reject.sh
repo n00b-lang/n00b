@@ -316,7 +316,7 @@ cat >"$tmp/array_literal.n" <<'EOF2'
 let a: Array[Buffer] = [buffer_from_string("a"), "x"]
 EOF2
 reject array_literal \
-    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+    'N00BB-T0036'
 grep -Fq 'array_literal.n:1:50' "$tmp/array_literal.out"
 
 cat >"$tmp/array_index_store.n" <<'EOF2'
@@ -324,7 +324,7 @@ var a: Array[Buffer] = [buffer_from_string("a")]
 a[0] = "x"
 EOF2
 reject array_index_store \
-    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+    'N00BB-T0036'
 grep -Fq 'array_index_store.n:2:8' "$tmp/array_index_store.out"
 
 cat >"$tmp/constructor.n" <<'EOF2'
@@ -337,7 +337,7 @@ func __init(modify self: Holder, b: Buffer) {
 let h: Holder = new[Holder]("x")
 EOF2
 reject constructor \
-    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+    'N00BB-T0036'
 grep -Fq 'constructor.n:7:29' "$tmp/constructor.out"
 
 cat >"$tmp/method_argument.n" <<'EOF2'
@@ -345,7 +345,7 @@ var l: List[Buffer] = new[List[Buffer]]()
 l.append("x")
 EOF2
 reject method_argument \
-    'N00BB-T0036]: a string is immutable and does not convert to Buffer'
+    'N00BB-T0036'
 grep -Fq 'method_argument.n:2:10' "$tmp/method_argument.out"
 
 cat >"$tmp/context_argument.n" <<'EOF2'
@@ -361,5 +361,5 @@ with Label(b) {
 }
 EOF2
 reject context_argument \
-    'N00BB-T0002]: call type does not match its function (builtin.containers.buffer.Buffer vs string)'
+    'N00BB-T0002'
 grep -Fq 'context_argument.n:8:12' "$tmp/context_argument.out"

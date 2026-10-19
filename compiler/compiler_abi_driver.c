@@ -641,10 +641,24 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     th_type *start_type = start ? th_resolve(start->type) : nullptr;
     if (start_type && (th_func_nparams(start_type)
                        || !th_is_nil(th_func_ret(start_type)))) {
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0030"),
-            CORE_STRING_STATIC(
-                "the root module's start must be 'func start() -> nil'"));
+        core_translation_unit_t *root = core_link_unit_root(link, 0);
+        parse_scope_t *scope = root ? module_scope(tu_state(root)) : nullptr;
+        parse_sym_entry_t *symbol = scope ? parse_symtab_lookup_in(scope,
+            CORE_STRING_STATIC(N00BB_START_NAME)) : nullptr;
+        core_diag_location_t location = symbol && symbol->decl_node
+            ? link_source_location(symbol->decl_node)
+            : (core_diag_location_t){0};
+        core_string_t found = n00bb_print_type(ir_module_types(start->owner),
+                                               start_type);
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "the root module's start must be 'func start() -> nil', not '%.*s'",
+            (int)found.u8_bytes, found.data);
+        core_diagnostics_report_at(
+            root ? core_translation_unit_diagnostics(root) : diagnostics,
+            root, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0030"),
+            core_buffer_string(&message), location);
+        core_buffer_release(&message);
         return false;
     }
     const n00bb_native_inputs_t no_native = {0};

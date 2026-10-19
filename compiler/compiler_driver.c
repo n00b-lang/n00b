@@ -1182,6 +1182,7 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                     parse_token_info_t *error_token = error_pos >= 0
                         ? scan_stream_get(result->tokens, error_pos) : nullptr;
                     core_buffer_t message = {0};
+                    core_diag_location_t location = {0};
                     if (error_token) {
                         int32_t error_tid = parse_token_tid(error_token);
                         uint32_t error_line = parse_token_line(error_token);
@@ -1189,18 +1190,21 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                             parse_token_column(error_token);
                         core_string_t token_name = parse_terminal_name(
                             context->grammar, error_tid);
+                        location = (core_diag_location_t){
+                            .line = error_line, .column = error_column,
+                            .end_line = parse_token_endline(error_token),
+                            .end_column = parse_token_endcol(error_token),
+                            .has_location = true,
+                        };
                         if (token_name.data)
                             core_buffer_printf(&message,
-                                "syntax error at line %u, column %u near %.*s",
-                                error_line, error_column,
+                                "syntax error near %.*s",
                                 (int)token_name.u8_bytes, token_name.data);
                         else if (error_tid > 0 && error_tid < 128)
                             core_buffer_printf(&message,
-                                "syntax error at line %u, column %u near '%c'",
-                                error_line, error_column, error_tid);
+                                "syntax error near '%c'", error_tid);
                         else core_buffer_printf(&message,
-                                "syntax error at line %u, column %u near token",
-                                error_line, error_column);
+                                "syntax error near this token");
                         parse_token_info_t *previous = error_pos > 0
                             ? scan_stream_get(result->tokens, error_pos - 1)
                             : nullptr;
@@ -1212,15 +1216,19 @@ process_locate_job(locate_worker_context_t *context, core_work_job_t *job)
                             core_buffer_printf(&message,
                                 "; write 'if comptime() { } else { }'");
                     }
-                    else
+                    else {
+                        location = (core_diag_location_t){
+                            .line = result->tokens->scanner->line,
+                            .column = result->tokens->scanner->column,
+                            .has_location = true,
+                        };
                         core_buffer_printf(&message,
-                            "syntax error at end of input (line %u, column %u)",
-                            result->tokens->scanner->line,
-                            result->tokens->scanner->column);
-                    core_diagnostics_report(
+                            "syntax error at end of input");
+                    }
+                    core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-P0001"),
-                        core_buffer_string(&message));
+                        core_buffer_string(&message), location);
                     core_buffer_release(&message);
                     ok = false;
                 }
@@ -1302,16 +1310,17 @@ static void
 import_report(core_translation_unit_t *unit, parse_tree_t *statement,
               core_string_t message)
 {
-    parse_token_info_t *token = parse_tree_find_first_terminal(statement);
-    core_buffer_t *text = core_buffer_empty();
-    core_buffer_append_string(text, message);
-    if (token)
-        core_buffer_printf(text, " at line %u, column %u",
-                           parse_token_line(token), parse_token_column(token));
-    core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-PP0004"),
-        core_string_borrow(text->data, text->byte_len));
-    core_buffer_free(text);
+    parse_token_info_t *token = statement
+        ? parse_tree_find_first_terminal(statement) : nullptr;
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-PP0004"), message,
+        token ? (core_diag_location_t){
+            .line = parse_token_line(token),
+            .column = parse_token_column(token),
+            .end_line = parse_token_endline(token),
+            .end_column = parse_token_endcol(token),
+            .has_location = true,
+        } : (core_diag_location_t){0});
 }
 
 static bool
@@ -1677,7 +1686,12 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
         else if (!located) locate_job = nullptr;
     }
     if (!locate_job) {
-        import_error(importer, statement, "imported module failed to load");
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "cannot find imported module '%.*s' on the module search path",
+            (int)operand.u8_bytes, operand.data);
+        import_report(importer, statement, core_buffer_string(&message));
+        core_buffer_release(&message);
         return false;
     }
     core_translation_unit_t *imported = core_work_job_result(

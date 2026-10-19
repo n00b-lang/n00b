@@ -75,8 +75,15 @@ bool register_unit_environment(parse_grammar_t *grammar,
     th_env *environment, core_translation_unit_t *unit);
 th_env *build_import_environment(parse_grammar_t *grammar,
     core_link_unit_t *link, n00bb_link_analysis_t *analysis);
+typedef enum {
+    N00BB_CALL_ARGUMENT,
+    N00BB_CALL_RECEIVER,
+    N00BB_CALL_RESULT,
+    N00BB_CALL_SIGNATURE,
+} n00bb_call_role_t;
 void report_call_type_error(core_translation_unit_t *unit,
-    parse_tree_t *call, th_ctx *types, th_type *actual, th_type *expected);
+    parse_tree_t *call, th_ctx *types, th_type *actual, th_type *expected,
+    n00bb_call_role_t role);
 typedef struct {
     parse_tree_t *argument;
     th_type *expected;
@@ -89,7 +96,11 @@ bool n00bb_bind_call_arguments(parse_grammar_t *grammar,
     parse_tree_t *site, core_list_t(n00bb_call_binding_t) *bindings);
 bool unify_call_node_type(core_translation_unit_t *unit,
     n00bb_tu_state_t *state, parse_tree_t *diagnostic_node,
-    parse_tree_t *typed_node, th_type *actual, th_type *expected);
+    parse_tree_t *typed_node, th_type *actual, th_type *expected,
+    n00bb_call_role_t role);
+bool n00bb_check_deferred_conversions(core_translation_unit_t *unit);
+void n00bb_report_conversion_error(core_translation_unit_t *unit,
+    parse_tree_t *site, th_ctx *types, th_type *value, th_type *target);
 bool dotted_receiver_prefix_node(parse_grammar_t *grammar,
     parse_tree_t *node);
 bool call_units_failed(core_translation_unit_t *const *units,

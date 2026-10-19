@@ -412,6 +412,7 @@ typedef struct {
     th_type *success;
     th_type *failure;
     bool conflict;
+    bool reported;
     parse_tree_t **return_expressions;
     size_t return_expression_count;
     size_t return_expression_capacity;
@@ -435,6 +436,13 @@ typedef struct {
     core_string_t method;
     uint64_t fingerprint;
 } n00bb_dispatch_record_t;
+
+typedef struct {
+    parse_tree_t *site;
+    th_type *value;
+    th_type *target;
+} n00bb_deferred_conversion_t;
+core_list_decl(n00bb_deferred_conversion_t);
 core_list_decl(n00bb_dispatch_record_t);
 
 struct n00bb_iteration_plan_t {
@@ -549,6 +557,7 @@ typedef struct {
     core_list_t(n00bb_link_use_site_t) link_use_sites;
     core_list_t(n00bb_dispatch_record_t) dispatch_records;
     bool needs_build_time_capture;
+    core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_option_path_t) option_paths;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_dict_t flagset_values;
@@ -826,6 +835,8 @@ bool n00bb_integer_representation(th_type *type, uint64_t *width,
 bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     n00bb_tu_state_t *state,
                                     parse_tree_t *node);
+bool n00bb_constant_misfits_type(n00bb_tu_state_t *state, parse_tree_t *node,
+                                 th_type *expected);
 bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
 bool n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
@@ -843,7 +854,7 @@ parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
                                              th_ctx *types,
                                              parse_tree_t *node,
                                              th_type *expected);
-void n00bb_register_value_coercions(th_ctx *types);
+void n00bb_register_value_coercions(n00bb_tu_state_t *state);
 th_type *n00bb_value_coercion_target(th_ctx *types, th_type *from);
 bool n00bb_blanket_receiver(th_type *contract);
 th_type *n00bb_type_materialize(parse_grammar_t *grammar,

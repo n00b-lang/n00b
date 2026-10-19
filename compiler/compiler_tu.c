@@ -3478,9 +3478,10 @@ n00bb_dereference_target(th_ctx *types, th_type *actual, th_type *wanted)
     actual = actual ? th_resolve(actual) : nullptr;
     wanted = wanted ? th_resolve(wanted) : nullptr;
     if (!actual || !wanted || th_kind_of(actual) != TH_INDIRECTION
-        || th_kind_of(wanted) == TH_INDIRECTION
-        || th_kind_of(wanted) == TH_VAR) return nullptr;
+        || th_kind_of(wanted) == TH_INDIRECTION) return nullptr;
     th_type *referent = th_ind_referent(actual);
+    if (th_kind_of(wanted) == TH_VAR)
+        return referent && th_resolve(referent) == wanted ? wanted : nullptr;
     if (th_unify_probe(types, referent, wanted))
         return th_is_closed(types, wanted) ? wanted : referent;
     th_type *element = th_option_item(wanted);
@@ -3573,9 +3574,31 @@ record_function_exit_fact(parse_grammar_t *grammar,
         th_type *expected = signature ? th_func_ret(signature) : nullptr;
         if (expected) {
             bool converted = false;
+            core_diagnostics_t *diagnostics =
+                core_translation_unit_diagnostics(unit);
+            size_t before = core_diagnostics_count(diagnostics);
             th_type *materialized = n00bb_type_materialize(grammar, state,
                 value, observed, expected, &converted);
-            if (!materialized) facts->conflict = true;
+            if (!materialized) {
+                facts->conflict = true;
+                facts->reported = true;
+                if (core_diagnostics_count(diagnostics) == before) {
+                    core_string_t actual = n00bb_print_type(state->types,
+                                                            observed);
+                    core_string_t wanted = n00bb_print_type(state->types,
+                                                            expected);
+                    core_buffer_t message = {0};
+                    core_buffer_printf(&message,
+                        "return value of type %.*s does not convert to the declared return type %.*s",
+                        (int)actual.u8_bytes, actual.data,
+                        (int)wanted.u8_bytes, wanted.data);
+                    core_diagnostics_report_at(diagnostics, unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0044"),
+                        core_buffer_string(&message),
+                        link_source_location(value));
+                    core_buffer_release(&message);
+                }
+            }
             else {
                 observed = materialized;
                 if (!converted) parse_tree_set_type(value, observed);
@@ -4061,17 +4084,132 @@ n00bb_folded_integer_expression(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
+static void
+append_wide_integer(core_buffer_t *out, __int128 value)
+{
+    char digits[48];
+    size_t at = sizeof(digits);
+    digits[--at] = '\0';
+    unsigned __int128 magnitude = value < 0
+        ? (unsigned __int128)(-(value + 1)) + 1 : (unsigned __int128)value;
+    do {
+        digits[--at] = (char)('0' + (int)(magnitude % 10));
+        magnitude /= 10;
+    } while (magnitude);
+    if (value < 0) digits[--at] = '-';
+    core_buffer_printf(out, "%s", digits + at);
+}
+
+static bool
+constant_integer_operand(parse_grammar_t *grammar, parse_tree_t *operand,
+                         int64_t *value)
+{
+    return folded_integer_operand(operand, value)
+        || n00bb_integer_constant_reference(grammar, operand, value);
+}
+
+static bool
+report_zero_divisor(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                    parse_tree_t *node)
+{
+    if (core_tree_num_children(node) != 3) return false;
+    core_string_t op = first_token_text(core_tree_child(node, 1));
+    bool divide = core_string_eq(op, CORE_STRING_STATIC("/"))
+        || core_string_eq(op, CORE_STRING_STATIC("/="));
+    bool remainder = core_string_eq(op, CORE_STRING_STATIC("%"))
+        || core_string_eq(op, CORE_STRING_STATIC("%="));
+    int64_t divisor = 1;
+    if ((!divide && !remainder)
+        || (!NT_IS(grammar, node, "mul-expr")
+            && !NT_IS(grammar, node, "binop-assign-stmt"))
+        || !constant_integer_operand(grammar, core_tree_child(node, 2),
+                                     &divisor)
+        || divisor) return false;
+    core_diagnostics_report_at(core_translation_unit_diagnostics(state->unit),
+        state->unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0043"),
+        divide ? CORE_STRING_STATIC("division by zero")
+               : CORE_STRING_STATIC("remainder by zero"),
+        link_source_location(node));
+    return true;
+}
+
+static bool
+fold_wide_integer_operation(core_string_t op, __int128 left, __int128 right,
+                            __int128 *value)
+{
+    if (core_string_eq(op, CORE_STRING_STATIC("+")))
+        return !__builtin_add_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("-")))
+        return !__builtin_sub_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("*")))
+        return !__builtin_mul_overflow(left, right, value);
+    if (core_string_eq(op, CORE_STRING_STATIC("/"))
+        || core_string_eq(op, CORE_STRING_STATIC("%"))) {
+        if (!right) return false;
+        *value = core_string_eq(op, CORE_STRING_STATIC("/"))
+            ? left / right : left % right;
+        return true;
+    }
+    if (core_string_eq(op, CORE_STRING_STATIC("<<"))) {
+        if (left < 0 || right < 0 || right >= 126
+            || left > ((__int128)1 << (126 - right))) return false;
+        *value = left << right;
+        return true;
+    }
+    return false;
+}
+
+static bool
+report_constant_overflow(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                         parse_tree_t *node)
+{
+    int64_t left = 0, right = 0;
+    __int128 value = 0;
+    if (!folded_integer_expression_node(grammar, node)
+        || !folded_integer_operand(core_tree_child(node, 0), &left)
+        || !folded_integer_operand(core_tree_child(node, 2), &right)
+        || !fold_wide_integer_operation(
+            first_token_text(core_tree_child(node, 1)), left, right, &value))
+        return false;
+    th_type *target = n00bb_integer_literal_context(grammar, state, node);
+    if (!target || !is_integer_type(target))
+        target = th_name(state->types, CORE_STRING_STATIC("int"));
+    uint64_t width = 0;
+    bool is_signed = false;
+    if (!n00bb_integer_representation(target, &width, &is_signed)
+        || !width || width > 126) return false;
+    __int128 maximum = is_signed ? ((__int128)1 << (width - 1)) - 1
+                                 : ((__int128)1 << width) - 1;
+    __int128 minimum = is_signed ? -((__int128)1 << (width - 1)) : 0;
+    if (value >= minimum && value <= maximum) return false;
+    core_string_t name = th_print(state->types, target);
+    core_buffer_t message = {0};
+    core_buffer_puts(&message, "integer constant ");
+    append_wide_integer(&message, value);
+    core_buffer_printf(&message, " does not fit %.*s",
+                       (int)name.u8_bytes, name.data);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(state->unit),
+        state->unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0041"),
+        core_buffer_string(&message), link_source_location(node));
+    core_buffer_release(&message);
+    return true;
+}
+
 bool
 n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state, parse_tree_t *node)
 {
     core_string_t trait = {0}, method = {0};
-    if (NT_IS(grammar, node, "binop-assign-stmt"))
+    if (NT_IS(grammar, node, "binop-assign-stmt")) {
+        if (report_zero_divisor(grammar, state, node)) return true;
         return !binary_operator_dispatch_for_node(grammar, node, &trait,
                                                   &method)
             || unify_literal_operand(grammar, state, node, trait, method);
+    }
     if (!n00bb_integer_range_wrapper(grammar, node)
         && !NT_IS(grammar, node, "simple-lit")) return true;
+    if (report_zero_divisor(grammar, state, node)
+        || report_constant_overflow(grammar, state, node)) return true;
     if (NT_IS(grammar, node, "simple-lit")) {
         ir_lit_t literal = {0};
         if (n00bb_parse_switch_integer(first_token_text(node), &literal)) {
@@ -4107,10 +4245,14 @@ n00bb_cache_contextual_integer(parse_grammar_t *grammar,
             && folded_integer_operand(core_tree_child(node, 2), &count)
             && (uint64_t)count >= n00bb_shift_receiver_width(operand);
         if (operand && is_integer_type(operand) && !count_outside
-            && !n00bb_integer_interval_fits_type(operand, constant, constant))
+            && !n00bb_integer_interval_fits_type(operand, constant, constant)) {
+            if (n00bb_integer_literal_context(grammar, state, node)
+                && n00bb_constant_misfits_type(state, node, operand))
+                return true;
             type_folded_operands(state, node, th_name(state->types,
                 unsigned_literal ? CORE_STRING_STATIC("uint")
                                  : CORE_STRING_STATIC("int")));
+        }
         return mark_unsigned_literal(grammar, state, node, unsigned_literal);
     }
     if (core_tree_num_children(node) == 3
@@ -5768,7 +5910,7 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
     if (state->annotations) return true;
 
     state->types = types;
-    n00bb_register_value_coercions(types);
+    n00bb_register_value_coercions(state);
     state->annotations = parse_annot_result_new(nullptr);
     parse_symtab_set_owner_unit(state->annotations->symtab, unit);
     if (!th_register_method_resolver(types, n00bb_callback_method_signature,
@@ -6615,7 +6757,7 @@ record_function_signature(parse_grammar_t *grammar,
     if (return_facts) {
         success = return_facts->success;
         failure = return_facts->failure;
-        if (return_facts->conflict)
+        if (return_facts->conflict && !return_facts->reported)
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
@@ -6662,7 +6804,8 @@ record_function_signature(parse_grammar_t *grammar,
         else unified_error = th_unify_in_place(state->types, check_error,
                                                failure);
         matches = matches && unified_error != nullptr;
-        if (check_body && !matches) {
+        if (check_body && !matches
+            && !(return_facts && return_facts->reported)) {
             core_buffer_t message = {0};
             core_string_t inferred_text = n00bb_print_type(state->types,
                                                            inferred);
@@ -6864,6 +7007,7 @@ n00bb_print_type(th_ctx *types, th_type *type)
         .sequence = CORE_STRING_STATIC("Array"),
         .reference = CORE_STRING_STATIC("Ref"),
         .option_suffix = CORE_STRING_STATIC("?"),
+        .omit_nil_failure = true,
     };
     return th_print_with_options(types, type, &options);
 }
@@ -8524,7 +8668,10 @@ integer_value_promotes(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, th_type *actual, th_type *expected)
 {
     int64_t minimum = 0, maximum = 0;
-    return node && is_integer_type(actual) && is_integer_type(expected)
+    if (!node)
+        return is_integer_type(actual) && is_integer_type(expected)
+            && n00bb_integer_type_promotes_to(actual, expected);
+    return is_integer_type(actual) && is_integer_type(expected)
         && (n00bb_bitwise_type(expected) || !n00bb_unsigned_literal_origin(
             parse_tree_integer_literal_origin(node)))
         && (n00bb_integer_type_promotes_to(actual, expected)
@@ -8829,11 +8976,73 @@ n00bb_coercion_target_hook(th_ctx *types, th_type *from, void *user)
     return n00bb_value_coercion_target(types, from);
 }
 
-void
-n00bb_register_value_coercions(th_ctx *types)
+static bool
+call_result_node(parse_tree_t *node)
 {
-    th_register_coercion(types, n00bb_coercion_hook, nullptr);
-    th_register_coercion_target(types, n00bb_coercion_target_hook);
+    while (node && !core_tree_is_leaf(node)
+           && core_tree_num_children(node) == 1)
+        node = core_tree_child(node, 0);
+    return node && !core_tree_is_leaf(node)
+        && core_tree_num_children(node) >= 3
+        && core_tree_is_leaf(core_tree_child(node, 1))
+        && parse_tree_leaf_is(core_tree_child(node, 1),
+                              CORE_STRING_STATIC("("));
+}
+
+static bool
+n00bb_conversion_hook(th_ctx *types, th_type *from, th_type *to, void *site,
+                      void *context, void *user)
+{
+    parse_grammar_t *grammar = context;
+    n00bb_tu_state_t *state = user;
+    for (parse_tree_t *at = site; at; at = parse_tree_parent(at)) {
+        parse_scope_t *scope = parse_tree_scope(at);
+        if (!scope || !scope->owner_unit) continue;
+        state = tu_state(scope->owner_unit);
+        break;
+    }
+    if (!state || state->types != types) return false;
+    if (th_is_nil(to) || (site && n00bb_node_record_literal_origin(site)))
+        return true;
+    if (site && ((!th_is_closed(types, from) && call_result_node(site))
+            || th_kind_of(th_resolve(from)) == TH_VAR
+            || (th_kind_of(th_resolve(to)) == TH_VAR && !th_is_nil(from)))
+        && n00bb_dereference_target(types, from, th_resolve(to))
+            != th_resolve(to)) {
+        core_list_push(state->deferred_conversions,
+            ((n00bb_deferred_conversion_t){site, from, to}));
+        return true;
+    }
+    if (!th_is_closed(types, from) || !th_is_closed(types, to)) {
+        th_type *resolved = th_resolve(to);
+        if (th_is_nil(from) && th_kind_of(resolved) == TH_VAR) return true;
+        th_type *element = nullptr;
+        bool option_target = n00bb_option_type_element(resolved, &element);
+        if (th_is_nil(from) && option_target) return true;
+        if (option_target && element && th_kind_of(from) != TH_VAR
+            && !n00bb_option_type_element(from, nullptr))
+            return th_unify_probe(types, from, element);
+        return th_kind_of(resolved) == TH_VAR
+            && n00bb_dereference_target(types, from, resolved) == resolved;
+    }
+    bool converted = false;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(state->unit);
+    size_t reported = core_diagnostics_count(diagnostics);
+    if (n00bb_type_materialize(grammar, state, site, from, to, &converted))
+        return true;
+    if (!site) return false;
+    if (core_diagnostics_count(diagnostics) == reported)
+        n00bb_report_conversion_error(state->unit, site, types, from, to);
+    return true;
+}
+
+void
+n00bb_register_value_coercions(n00bb_tu_state_t *state)
+{
+    th_register_coercion(state->types, n00bb_coercion_hook, nullptr);
+    th_register_coercion_target(state->types, n00bb_coercion_target_hook);
+    th_register_conversion(state->types, n00bb_conversion_hook, state);
 }
 
 static void
@@ -8891,6 +9100,36 @@ contextual_value_results(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return true;
 }
 
+bool
+n00bb_constant_misfits_type(n00bb_tu_state_t *state, parse_tree_t *node,
+                      th_type *expected)
+{
+    th_type *target = is_integer_type(expected) ? expected : nullptr;
+    th_type *element = nullptr;
+    if (!target && n00bb_option_type_element(expected, &element)
+        && is_integer_type(element)) target = element;
+    int64_t minimum = 0, maximum = 0;
+    if (!target || !node || !parse_tree_integer_literal_origin(node)
+        || !n00bb_current_integer_range(state, node, &minimum, &maximum)
+        || n00bb_integer_interval_fits_type(target, minimum, maximum))
+        return false;
+    core_string_t name = th_print(state->types, target);
+    core_buffer_t message = {0};
+    if (minimum == maximum)
+        core_buffer_printf(&message, "integer constant %lld does not fit %.*s",
+            (long long)minimum, (int)name.u8_bytes, name.data);
+    else
+        core_buffer_printf(&message,
+            "integer constant range %lld..%lld does not fit %.*s",
+            (long long)minimum, (long long)maximum,
+            (int)name.u8_bytes, name.data);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(state->unit),
+        state->unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0041"),
+        core_buffer_string(&message), link_source_location(node));
+    core_buffer_release(&message);
+    return true;
+}
+
 th_type *
 n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, th_type *actual, th_type *expected,
@@ -8912,10 +9151,12 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (n00bb_contextual_integer_literal(state, node, expected)
         || contextual_value_results(grammar, state, node, expected))
         return expected;
+    if (n00bb_constant_misfits_type(state, node, expected)) return nullptr;
     *converted = true;
     if (n00bb_value_coerces(types, actual, expected)) return expected;
     if (n00bb_string_where_buffer_expected(types, expected, actual)) {
         *converted = false;
+        if (!node) return nullptr;
         core_diagnostics_report_at(
             core_translation_unit_diagnostics(state->unit), state->unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
@@ -10396,6 +10637,7 @@ free_tu_state(void *data)
         core_free(state->dispatch_records.data[i].method.data);
     }
     core_list_free(state->dispatch_records);
+    core_list_free(state->deferred_conversions);
     for (size_t i = 0; i < state->option_paths.len; i++)
         core_free(state->option_paths.data[i].path.data);
     core_list_free(state->option_paths);
@@ -11608,7 +11850,7 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
     bool shift = operator && operator->shift;
     if (shift && !n00bb_bitwise_type(left_type)) {
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
             CORE_STRING_STATIC(
                 "built-in shifts require an unsigned or bit left operand"),
             link_source_location(node));
@@ -11634,7 +11876,7 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
             && (minimum < 0 || (uint64_t)minimum >= width)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
                 CORE_STRING_STATIC("shift count is outside the receiver width"),
                 link_source_location(right));
             return false;
@@ -11642,7 +11884,7 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         if (!right_type || !n00bb_unsigned_shift_count_type(right_type)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
                 CORE_STRING_STATIC(
                     "built-in shift count must be unsigned"),
                 link_source_location(node));
@@ -11698,20 +11940,27 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         ? th_print(state->types, right_type) : CORE_STRING_STATIC("<missing>");
     core_string_t result_text = result
         ? th_print(state->types, result) : CORE_STRING_STATIC("<missing>");
-    core_buffer_printf(&message,
-        "built-in operator operands and result have incompatible types "
-        "(left %.*s, right %.*s, result %.*s)",
-        (int)left_text.u8_bytes, left_text.data,
-        (int)right_text.u8_bytes, right_text.data,
-        (int)result_text.u8_bytes, result_text.data);
-    size_t error_count = th_error_count(state->types);
-    th_error_t detail = {0};
-    if (error_count && th_error_at(state->types, error_count - 1, &detail)
-        && detail.message.data)
-        core_buffer_printf(&message, ": %.*s",
-                           (int)detail.message.u8_bytes, detail.message.data);
+    core_string_t op_text = core_tree_num_children(node) == 3
+        ? first_token_text(core_tree_child(node, 1))
+        : CORE_STRING_STATIC("?");
+    th_type *produced = comparison
+        ? th_name(state->types, CORE_STRING_STATIC("bool")) : operand_type;
+    core_string_t produced_text = produced
+        ? th_print(state->types, produced) : CORE_STRING_STATIC("<missing>");
+    if (!compatible_operands)
+        core_buffer_printf(&message,
+            "operator '%.*s' needs operands of the same type; got %.*s and %.*s",
+            (int)op_text.u8_bytes, op_text.data,
+            (int)left_text.u8_bytes, left_text.data,
+            (int)right_text.u8_bytes, right_text.data);
+    else
+        core_buffer_printf(&message,
+            "operator '%.*s' produces %.*s, which does not match its use as %.*s",
+            (int)op_text.u8_bytes, op_text.data,
+            (int)produced_text.u8_bytes, produced_text.data,
+            (int)result_text.u8_bytes, result_text.data);
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
+        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0045"),
         core_string_borrow(message.data, message.byte_len),
         link_source_location(node));
     core_buffer_release(&message);

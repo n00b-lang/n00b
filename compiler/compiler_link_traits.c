@@ -3012,7 +3012,8 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     && th_unify_in_place(types, matched_signature, target_shape);
                 if (!target_matches)
                     report_call_type_error(call_unit, call_node, types,
-                                           target_shape, target_signature);
+                                           target_shape, target_signature,
+                                           N00BB_CALL_SIGNATURE);
                 if (target_matches && !trait_failure_declared) {
                     th_type *resolved_failure = th_func_error(
                         matched_signature);
@@ -3054,7 +3055,8 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     return false;
                 }
                 if (!unify_call_node_type(call_unit, call_state, call_node,
-                        call_node, callsite_result, copied_function_result)) {
+                        call_node, callsite_result, copied_function_result,
+                        N00BB_CALL_RESULT)) {
                     continue;
                 }
             }

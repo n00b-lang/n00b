@@ -44,6 +44,31 @@ typedef enum {
 } semantic_step_t;
 
 static bool
+literal_is_whole_value(parse_grammar_t *grammar, parse_tree_t *literal)
+{
+    parse_tree_t *child = literal;
+    for (parse_tree_t *parent = parse_tree_parent(child); parent;
+         child = parent, parent = parse_tree_parent(parent)) {
+        if (NT_IS(grammar, parent, "shift-expr")
+            && core_tree_num_children(parent) == 3)
+            return false;
+        if (NT_IS(grammar, parent, "add-expr")
+            || NT_IS(grammar, parent, "mul-expr")
+            || NT_IS(grammar, parent, "bitand-expr")
+            || NT_IS(grammar, parent, "bitxor-expr")
+            || NT_IS(grammar, parent, "bitor-expr")) {
+            if (core_tree_num_children(parent) == 3) return false;
+            continue;
+        }
+        if (NT_IS(grammar, parent, "unary-expr")
+            || n00bb_integer_range_wrapper(grammar, parent))
+            continue;
+        return true;
+    }
+    return true;
+}
+
+static bool
 untyped_module_name(n00bb_tu_state_t *state, parse_tree_t *import)
 {
     parse_node_resolution_t resolution = parse_tree_resolution(import);
@@ -349,8 +374,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (n00bb_option_type_element(expected, &element))
                 expected = element;
             if (expected && is_integer_type(expected)
-                && parse_tree_integer_literal_origin(node) == node)
-                n00bb_contextual_integer_literal(state, node, expected);
+                && parse_tree_integer_literal_origin(node) == node
+                && !n00bb_contextual_integer_literal(state, node, expected)
+                && literal_is_whole_value(grammar, node))
+                (void)n00bb_constant_misfits_type(state, node, expected);
             if (expected && is_float_type(expected))
                 n00bb_contextual_float_literal(node, expected);
         }
@@ -475,7 +502,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     (int)variable.u8_bytes, variable.data);
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
+                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0046"),
                     core_string_borrow(message.data, message.byte_len),
                     link_source_location(node));
                 core_buffer_release(&message);

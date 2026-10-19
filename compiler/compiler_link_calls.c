@@ -10,22 +10,37 @@ typedef struct {
 
 void
 report_call_type_error(core_translation_unit_t *unit, parse_tree_t *call,
-                       th_ctx *types, th_type *actual, th_type *expected)
+                       th_ctx *types, th_type *actual, th_type *expected,
+                       n00bb_call_role_t role)
 {
     core_buffer_t message = {0};
-    core_string_t detail = th_last_error(types);
     core_string_t actual_text = actual ? n00bb_print_type(types, actual)
                                        : CORE_STRING_STATIC("unknown");
     core_string_t expected_text = expected
         ? n00bb_print_type(types, expected) : CORE_STRING_STATIC("unknown");
-    bool has_detail = detail.data && detail.u8_bytes;
-    core_buffer_printf(&message,
-                       "call type does not match its function (%.*s vs %.*s)%s%.*s",
-                       (int)actual_text.u8_bytes, actual_text.data,
-                       (int)expected_text.u8_bytes, expected_text.data,
-                       has_detail ? ": " : "",
-                       has_detail ? (int)detail.u8_bytes : 0,
-                       has_detail ? detail.data : "");
+    int actual_size = (int)actual_text.u8_bytes;
+    int expected_size = (int)expected_text.u8_bytes;
+    switch (role) {
+    case N00BB_CALL_ARGUMENT:
+        core_buffer_printf(&message,
+            "argument of type %.*s does not convert to parameter type %.*s",
+            actual_size, actual_text.data, expected_size, expected_text.data);
+        break;
+    case N00BB_CALL_RECEIVER:
+        core_buffer_printf(&message,
+            "receiver of type %.*s does not match the method's receiver type %.*s",
+            actual_size, actual_text.data, expected_size, expected_text.data);
+        break;
+    case N00BB_CALL_RESULT:
+        core_buffer_printf(&message,
+            "this function returns %.*s, which does not match its use as %.*s",
+            expected_size, expected_text.data, actual_size, actual_text.data);
+        break;
+    case N00BB_CALL_SIGNATURE:
+        core_buffer_printf(&message, "call signature %.*s does not match %.*s",
+            actual_size, actual_text.data, expected_size, expected_text.data);
+        break;
+    }
     parse_token_info_t *site = parse_tree_find_first_terminal(call);
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
@@ -44,7 +59,7 @@ bool
 unify_call_node_type(core_translation_unit_t *unit,
                      n00bb_tu_state_t *state, parse_tree_t *diagnostic_node,
                      parse_tree_t *typed_node, th_type *actual,
-                     th_type *expected)
+                     th_type *expected, n00bb_call_role_t role)
 {
     if (!actual || !expected) return true;
     if (n00bb_value_coerces(state->types, expected, actual)) {
@@ -57,10 +72,54 @@ unify_call_node_type(core_translation_unit_t *unit,
         state, typed_node, actual, expected, &converted);
     if (!materialized)
         report_call_type_error(unit, diagnostic_node, state->types, actual,
-                               expected);
+                               expected, role);
     return materialized != nullptr;
 }
 
+void
+n00bb_report_conversion_error(core_translation_unit_t *unit,
+                              parse_tree_t *site, th_ctx *types,
+                              th_type *value, th_type *target)
+{
+    core_string_t actual_text = n00bb_print_type(types, value);
+    core_string_t expected_text = n00bb_print_type(types, target);
+    core_buffer_t message = {0};
+    core_buffer_printf(&message, "value of type %.*s does not convert to %.*s",
+        (int)actual_text.u8_bytes, actual_text.data,
+        (int)expected_text.u8_bytes, expected_text.data);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0042"),
+        core_buffer_string(&message), link_source_location(site));
+    core_buffer_release(&message);
+}
+
+bool
+n00bb_check_deferred_conversions(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state) return true;
+    for (size_t i = 0; i < state->deferred_conversions.len; i++) {
+        n00bb_deferred_conversion_t *pending =
+            &state->deferred_conversions.data[i];
+        th_type *value = th_resolve(pending->value);
+        th_type *target = th_resolve(pending->target);
+        if (!th_is_closed(state->types, target)) continue;
+        if (!th_is_closed(state->types, value)) {
+            (void)th_unify_in_place(state->types, value, target);
+            continue;
+        }
+        bool converted = false;
+        if (n00bb_type_materialize(state->link_analysis
+                ? state->link_analysis->grammar : nullptr, state,
+                pending->site, value, target, &converted)) continue;
+        if (core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+            continue;
+        n00bb_report_conversion_error(unit, pending->site, state->types,
+                                      value, target);
+    }
+    state->deferred_conversions.len = 0;
+    return !core_diagnostics_failed(core_translation_unit_diagnostics(unit));
+}
 
 bool
 dotted_receiver_prefix_node(parse_grammar_t *grammar, parse_tree_t *node)
@@ -293,9 +352,9 @@ unify_call_argument(core_translation_unit_t *unit, n00bb_tu_state_t *state,
     th_type *actual = parse_tree_type(argument);
     if (context_call && n00bb_value_coerces(state->types, actual, expected))
         report_call_type_error(unit, argument, state->types, actual,
-                               expected);
+                               expected, N00BB_CALL_ARGUMENT);
     else (void)unify_call_node_type(unit, state, diagnostic_node, argument,
-                                    actual, expected);
+                                    actual, expected, N00BB_CALL_ARGUMENT);
     (void)n00bb_contextual_float_literal(argument, expected);
 }
 
@@ -704,7 +763,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             th_type *receiver_type = receiver_node
                 ? parse_tree_type(receiver_node) : nullptr;
             if (!receiver || !unify_call_node_type(unit, state, label->self,
-                    receiver_node, receiver_type, receiver->type))
+                    receiver_node, receiver_type, receiver->type,
+                    N00BB_CALL_RECEIVER))
                 continue;
         }
         parse_sym_entry_t *named = context_call ? context_target
@@ -726,11 +786,13 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             && th_kind_of(th_resolve(result)) == TH_VAR) {
             if (!th_unify_in_place(state->types, result, return_type))
                 report_call_type_error(unit, label->self, state->types,
-                                       result, return_type);
+                                       result, return_type,
+                                       N00BB_CALL_RESULT);
         }
         else if (return_type)
             (void)unify_call_node_type(unit, state, label->self, label->self,
-                                       result, return_type);
+                                       result, return_type,
+                                       N00BB_CALL_RESULT);
         th_type *failure_type = th_func_error(signature);
         bool propagated = failure_type
             && n00bb_call_is_error_propagated(grammar, label->self);
