@@ -1073,7 +1073,8 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
         if (target) {
             fn->sizing_slot = writ_fn_slot_named(model, fn, node_at(model, target)->name);
             if (fn->sizing_slot == WRIT_NONE) {
-                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, target)->loc, nullptr);
+                writ_str_t text = writ_sym_str(model->session, node_at(model, target)->name);
+                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, target)->loc, "`%.*s`", S(text));
             }
         }
         return;
@@ -1280,7 +1281,8 @@ resolve_varargs(resolver_t *r, writ_fn_rec_t *fn, uint32_t id)
         fn->varargs = WRIT_VARARGS_COUNT;
         fn->varargs_count_slot = writ_fn_slot_named(model, fn, node_at(model, count)->name);
         if (fn->varargs_count_slot == WRIT_NONE) {
-            writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, count)->loc, nullptr);
+            writ_str_t text = writ_sym_str(model->session, node_at(model, count)->name);
+            writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, count)->loc, "`%.*s`", S(text));
         }
     }
 }
@@ -1577,7 +1579,8 @@ resolve_enum(resolver_t *r, uint32_t id)
                                      .loc = piece->loc};
         if (value && !(writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, value)
                        && writ_expr_eval(model, value, nullptr, &constant.value))) {
-            writ_report(model->session, WRIT_D_NOT_CONSTANT, piece->loc, nullptr);
+            writ_report(model->session, WRIT_D_NOT_CONSTANT, piece->loc, "`%.*s`",
+                        S(writ_sym_str(model->session, piece->name)));
         }
         next = constant.value + 1;
         if (declare(model, constant.name, WRIT_SCOPE_CONST, (uint32_t)model->consts.len, constant.loc)) {
@@ -1606,7 +1609,8 @@ resolve_const(resolver_t *r, uint32_t id)
     } else if (!writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, value)
                || !writ_expr_eval(model, value, nullptr, &record.value)
                || !(writ_type_is_integer(model, record.type) || writ_type_is_pointer(model, record.type))) {
-        writ_report(model->session, WRIT_D_NOT_CONSTANT, record.loc, nullptr);
+        writ_report(model->session, WRIT_D_NOT_CONSTANT, record.loc, "`%.*s`",
+                    S(writ_sym_str(model->session, record.name)));
     }
     if (declare(model, record.name, WRIT_SCOPE_CONST, (uint32_t)model->consts.len, record.loc)) {
         core_list_push(model->consts, record);
@@ -1890,7 +1894,8 @@ resolve_handle_nones(writ_model_t *model, resolver_t *r)
                         && writ_expr_eval(model, expr, nullptr, &handle->none_value)
                         && writ_type_is_integer(model, handle->base);
         if (!handle->has_none) {
-            writ_report(model->session, WRIT_D_BAD_NONE_VALUE, node_at(model, none)->loc, nullptr);
+            writ_report(model->session, WRIT_D_BAD_NONE_VALUE, node_at(model, none)->loc, "handle `%.*s`",
+                        S(writ_sym_str(model->session, node->name)));
         }
     }
 }

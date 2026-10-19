@@ -1,8 +1,8 @@
-error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+error[E0223]: invalid event: `hook_gone` is not a function of the contract
   --> tests/check/events.writ:14:45
-error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+error[E0223]: invalid event: `unknown_arg` has no parameter `dbx`
   --> tests/check/events.writ:16:46
-error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+error[E0223]: invalid event: `release(n)`: `n` is not a handle
   --> tests/check/events.writ:18:51
-error[E0223]: an event calls a function of the contract with this function's parameters or `ret`, or is `release` or `any` of one handle
+error[E0223]: invalid event: `hook_unsubscribe` takes 2 parameters, not 3
   --> tests/check/events.writ:20:43

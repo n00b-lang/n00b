@@ -1,4 +1,4 @@
-error[E0201]: `.in` and `.out` apply only to inout parameters
+error[E0201]: `.in` and `.out` apply only to inout integer parameters: `n` is not one
   --> tests/check/bad_phase.writ:3:25
-error[E0201]: `.in` and `.out` apply only to inout parameters
+error[E0201]: `.in` and `.out` apply only to inout integer parameters: `n` is not one
   --> tests/check/bad_phase.writ:3:35

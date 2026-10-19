@@ -155,7 +155,8 @@ check_member(checker_t *c, uint32_t expr, const writ_node_t *node)
     if (target.kind == WRIT_REF_SLOT && (before || after)) {
         const writ_slot_rec_t *slot = &model->slots.data[target.index];
         if (slot->mode != WRIT_MODE_INOUT || !slot_is_integer_cell(model, target.index)) {
-            writ_report(model->session, WRIT_D_BAD_PHASE, node->loc, nullptr);
+            writ_str_t name = writ_sym_str(model->session, slot->name);
+            writ_report(model->session, WRIT_D_BAD_PHASE, node->loc, "`%.*s` is not one", S(name));
             return false;
         }
         *ref_slot(model, expr) = (writ_ref_t){WRIT_REF_SLOT, before ? WRIT_REF_BEFORE : WRIT_REF_AFTER, target.index};
@@ -191,7 +192,12 @@ check_deref(checker_t *c, uint32_t expr, const writ_node_t *node)
         return false;
     }
     if (target.kind != WRIT_REF_SLOT || !slot_is_integer_cell(model, target.index)) {
-        writ_report(model->session, WRIT_D_BAD_PHASE, node->loc, "`*` reads an integer through a pointer parameter");
+        if (target.kind == WRIT_REF_SLOT) {
+            writ_str_t name = writ_sym_str(model->session, model->slots.data[target.index].name);
+            writ_report(model->session, WRIT_D_BAD_DEREF, node->loc, "`%.*s` is not a pointer to an integer", S(name));
+        } else {
+            writ_report(model->session, WRIT_D_BAD_DEREF, node->loc, nullptr);
+        }
         return false;
     }
     writ_mode_t mode = model->slots.data[target.index].mode;
