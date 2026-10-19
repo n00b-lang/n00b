@@ -20,7 +20,7 @@
 #include "th/environment.h"
 
 #define CACHE_MAGIC   UINT32_C(0x4f42304e)
-#define CACHE_VERSION UINT32_C(2)
+#define CACHE_VERSION UINT32_C(3)
 
 core_list_decl(size_t);
 

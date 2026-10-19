@@ -12038,11 +12038,6 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         collect_mutator_candidates(inline_callees.data[i], &candidates);
     select_mutator_functions(&candidates, &mutator_functions);
     core_list_free(candidates);
-    for (size_t i = 0; active_selected_mutators
-         && i < mutator_functions.len; i++)
-        if (mutator_functions.data[i]->owner == source)
-            core_list_push(*active_selected_mutators,
-                           mutator_functions.data[i]->name);
     for (size_t i = 0; i < mutator_functions.len; i++) {
         ir_func_t *function = mutator_functions.data[i];
         LLVMTypeRef signature = mutator_function_type(target, function);
@@ -12105,6 +12100,9 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
             core_list_free(member_matches);
             return false;
         }
+        if (function->n_blocks && emit_body && selected
+            && active_selected_mutators)
+            core_list_push(*active_selected_mutators, function->name);
     }
     for (size_t i = 0; i < inline_callees.len; i++) {
         ir_func_t *function = inline_callees.data[i];
