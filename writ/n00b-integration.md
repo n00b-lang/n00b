@@ -175,7 +175,7 @@ compiled by clang to **LLVM bitcode** for the target.
   writ's uninstalled pkg-config files. Its `profiledir` variable locates
   `profiles/n00b.writ`.
 - The compiler already links a static lantern (`libir.a`). libwrit carries
-  its own pinned lantern with every non-`writ_*` symbol localized
+  its own lantern copy with every non-`writ_*` symbol localized
   (`implementation.md` §4.2), so the two never collide.
   `tests/writ_coexistence.c` resolves an `'ffi` literal through libwrit and
   parses an n00b file through lantern in one process.
@@ -521,7 +521,7 @@ slice 2.
 ### 5.1 The `'ffi` spec pause
 
 The `'ffi` examples in this document only illustrate. The language itself
-is defined in `~/writ/ffi-spec.md`, and nothing that consumes it is built
+is defined in `writ/ffi-spec.md`, and nothing that consumes it is built
 until that document is approved. It covers:
 
 - **Shape.** The `'ffi` literal as an embedded writ unit (`dsl.md` §9.3),

@@ -102,42 +102,28 @@ and Linux. Windows is the final slice:
 
 ## 3. Dependencies
 
-### 3.1 Lantern, pinned
+### 3.1 Lantern, in tree
 
-writ uses its own jj workspace of the lantern repository, at
-`~/lantern-writ`. That directory is the lantern root for everything writ
-does. The pin is the revision `~/lantern`'s default workspace is on when
-this plan is approved:
+writ lives in the n00b repository at `writ/`, next to lantern at
+`lantern/`. writ builds against that in-tree lantern; there is no
+separate lantern checkout or pinned revision.
 
-```
-jj -R ~/lantern workspace add --name writ -r <revision> ~/lantern-writ
-```
-
-- The pinned commit id is recorded in `~/writ/deps/LANTERN_REVISION`,
-  which is committed to writ.
-- `build.sh` refuses to build unless both hold:
-  - the parent of the workspace's working-copy commit
-    (`jj -R ~/lantern-writ log -r @- -T commit_id`) is the pinned commit;
-  - the working copy is empty (`jj -R ~/lantern-writ diff --summary`
-    prints nothing).
-- Moving the pin is deliberate: run
-  `jj -R ~/lantern-writ new <revision>`, update `LANTERN_REVISION`, and
-  run the full suite on every supported platform.
-- The default workspace, `~/lantern`, is never built from or modified by
-  writ.
-- `LANTERN_ROOT` overrides the location, so a different machine can put
-  the workspace elsewhere.
+- `build.sh` takes lantern from `../lantern` relative to writ.
+- `LANTERN_ROOT` overrides the location.
+- A lantern change that breaks writ is fixed in the same change, since
+  both sit in one repository and n00b's build compiles both.
 
 Lantern builds one static library, `ir`, with its own `build.sh`. It needs
 ICU (`icu-uc`, `icu-i18n`) and C23 with GNU extensions. Our `build.sh`
-runs lantern's `build.sh` in `~/lantern-writ`, with `BUILD_DIR` pointing
-outside the workspace, so build output never shows up as a jj change. It
-then installs into a private prefix, `deps/prefix-<os>-<arch>`
-(`deps/prefix-darwin-arm64` on the Mac, `deps/prefix-linux-aarch64` in
-the container), stamped with the revision it was built from. On Linux,
-lantern builds with `-D_GNU_SOURCE`, because the pinned revision uses
-POSIX functions that glibc hides under strict C. A failed lantern build
-prints the tail of `deps/lantern-build-<platform>.log`.
+runs lantern's `build.sh` with `BUILD_DIR` set to
+`deps/lantern-build-<os>-<arch>`, configuring it the first time and
+recompiling incrementally after that. It then installs into a private
+prefix, `deps/prefix-<os>-<arch>` (`deps/prefix-darwin-arm64` on the Mac,
+`deps/prefix-linux-aarch64` in the container). Both directories are
+ignored by version control. On Linux, lantern builds with
+`-D_GNU_SOURCE`, because lantern uses POSIX functions that glibc hides
+under strict C. A failed lantern build prints the tail of
+`deps/lantern-build-<platform>.log`.
 
 Meson consumes the prefix through `ir.pc`.
 
@@ -215,8 +201,8 @@ list on Mach-O and a version script on ELF.
 
 ### 4.2 Lantern symbol isolation
 
-A host may link its own lantern; the n00b toolchain is one such host. A
-pinned lantern inside libwrit must not collide with it.
+A host may link its own lantern; the n00b toolchain is one such host. The
+lantern copy inside libwrit must not collide with it.
 
 - `libwrit.a` is produced by `tools/isolate.sh`: a **partial link**
   (`-r`) of writ's objects together with lantern's `libir.a`, into a
@@ -549,12 +535,12 @@ Dogfooding starts in slice 1:
 ### 4.5 Repository layout
 
 ```
-~/writ/
+writ/
   dsl.md  implementation.md  call-plan.md  n00b-integration.md  ffi-spec.md
   build.sh
   meson.build  meson.options
   deps/
-    LANTERN_REVISION  RESHARP_REVISION
+    RESHARP_REVISION
     prefix-<platform>/  lantern-build-<platform>/
   grammar/
     writ.bnf  json.bnf
@@ -970,12 +956,11 @@ slice follows from it.
 
 **Setup:**
 
-- `jj git init ~/writ`, with `.gitignore` covering `deps/prefix*/`,
-  `deps/lantern-build*/`, `build*/` and `bundle*/`.
-- Create the `~/lantern-writ` workspace and `deps/LANTERN_REVISION`
-  (§3.1).
-- `build.sh`: check the pin, build lantern into its prefix, run Meson and
-  Ninja. It takes `test` and `--sanitize`.
+- `writ/` in the n00b repository, with `.gitignore` covering
+  `deps/prefix*/`, `deps/lantern-build*/`, `build*/` and `bundle*/`.
+- `build.sh`: check the resharp pin (§3.3), build the in-tree lantern into
+  its prefix (§3.1), run Meson and Ninja. It takes `test` and
+  `--sanitize`.
 - Meson targets: `libwrit` (static), with the partial-link and
   symbol-localization step (§4.2), and the `writ` CLI.
 
@@ -1287,7 +1272,7 @@ bundle.
 
 | Risk | Mitigation |
 |---|---|
-| Lantern behavior changes | Pinned jj workspace; every lantern call is in `parse.c`; moving the pin requires every supported platform to pass |
+| Lantern behavior changes | Lantern and writ share one repository and one build; every lantern call is in `parse.c`; writ's suite runs against the in-tree lantern |
 | Symbol clashes between writ's lantern and a host's lantern | Partial link plus localization, a shared-library export list, and the `host/isolation` test |
 | Silent ambiguity resolution in PWZ | Unambiguous grammar; audit test; forest check in debug builds |
 | A construct designed in `dsl.md` turns out wrong in practice | Constructs are implemented only when a slice's library needs them, and each slice ends in a working call |
