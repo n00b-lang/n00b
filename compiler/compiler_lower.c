@@ -19563,6 +19563,37 @@ dump_ir_instr(FILE *out, const ir_instr_t *instr)
 }
 
 static void
+dump_ir_places(ir_module_t *module, ir_func_t *function)
+{
+    static const char *const kinds[] = {
+        "local", "param", "global", "thread", "heap", "unknown"};
+    ir_places_t *places = ir_func_places(function);
+    th_ctx *types = ir_module_types(module);
+    for (uint32_t i = 0; i < ir_places_count(places); i++) {
+        const ir_place_t *place = ir_place_at(places, i);
+        fprintf(stdout, "  place %u %s", i, kinds[place->kind]);
+        if (place->root)
+            fprintf(stdout, " %.*s", (int)place->root->name.u8_bytes,
+                    place->root->name.data);
+        if (place->type) {
+            core_string_t text = th_print(types, place->type);
+            fprintf(stdout, " : %.*s", (int)text.u8_bytes, text.data);
+        }
+        fputc('\n', stdout);
+    }
+    for (uint32_t i = 0; i < ir_places_access_count(places); i++) {
+        const ir_access_t *access = ir_places_access_at(places, i);
+        const uint32_t *ids = ir_places_access_places(places, access);
+        fputs(access->kind == IR_ACCESS_LOAD ? "  load " : "  store ", stdout);
+        dump_ir_instr(stdout, access->instr);
+        fputs(" @", stdout);
+        for (uint32_t p = 0; p < access->count; p++)
+            fprintf(stdout, "%s%u", p ? "," : "", ids[p]);
+        fputc('\n', stdout);
+    }
+}
+
+static void
 dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
 {
     for (size_t f = 0; f < ir_func_count(module); f++) {
@@ -19612,6 +19643,7 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
                             edge->via->name.data);
                 fputc('\n', stdout);
             }
+            dump_ir_places(module, function);
         }
     }
 }

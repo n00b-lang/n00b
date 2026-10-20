@@ -4,6 +4,7 @@
 #include "ir/doms.h"
 #include "ir/ir.h"
 #include "ir/pdg.h"
+#include "ir/places.h"
 
 ir_doms_t *ir_func_doms(ir_func_t *f);
 ir_pdg_t  *ir_func_pdg(ir_func_t *f);
