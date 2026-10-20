@@ -94,6 +94,7 @@ if created != nil {
                         sys.gc.mark.marker_init(marker, heap, false)
                         sys.gc.sync.ticket_lock(ref heap.lock)
                         sys.gc.finalize.find_dead_locked(marker)
+                        sys.gc.sync.ticket_unlock(ref heap.lock)
                         __atomic_store(ref gate_closed, true)
                         sys.gc.finalize.wake(heap)
                         wait_blocked()
@@ -101,6 +102,7 @@ if created != nil {
                     } else { require false }
                 } else { require false }
             } else { require false }
+            sys.gc.mutator.destroy(mutator)
         } else { require false }
         sys.gc.heap.destroy(heap)
         __atomic_store(ref gate_closed, false)
