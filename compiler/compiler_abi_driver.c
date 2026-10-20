@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <errno.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -536,20 +538,43 @@ typedef struct {
     size_t finalizer_count;
 } module_entry_t;
 
+typedef struct {
+    ir_module_t *module;
+    const n00bb_abi_artifact_t *artifact;
+    char **object_path;
+    core_buffer_t *bitcode;
+    const uint8_t *cached;
+    size_t cached_bytes;
+    n00bb_llvm_backend_t *backend;
+    core_buffer_t object;
+    core_diagnostics_t *diagnostics;
+    double seconds;
+    bool needs_native;
+    bool ok;
+} module_object_t;
+
+core_list_decl(module_object_t);
+
+static double
+monotonic_seconds(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+}
+
 static bool
-emit_module_object(const module_emission_t *emission, ir_module_t *module,
-                   core_diagnostics_t *module_diagnostics,
-                   const n00bb_abi_artifact_t *artifact,
-                   const module_entry_t *entry, char **object_path,
-                   core_buffer_t *bitcode)
+begin_module_object(const module_emission_t *emission, module_object_t *item,
+                    core_diagnostics_t *module_diagnostics,
+                    const module_entry_t *entry)
 {
     n00bb_link_analysis_t *analysis = emission->analysis;
-    struct timespec profile_start;
-    bool profiling = getenv("N00BB_PROFILE_COMPILE") != nullptr;
-    if (profiling) clock_gettime(CLOCK_MONOTONIC, &profile_start);
-    n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(module,
+    const n00bb_abi_artifact_t *artifact = item->artifact;
+    double started = monotonic_seconds();
+    n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(item->module,
         emission->debug_enabled, emission->native_cpu, module_diagnostics);
-    if (!backend) return false;
+    item->backend = backend;
+    if (!backend) return item->ok = false;
     n00bb_llvm_backend_bind_native_cache(backend, emission->native_cache);
     n00bb_llvm_backend_bind_mutator_classifier(backend,
         n00bb_cache_mutator_classifier(analysis->cache));
@@ -585,47 +610,117 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
             emission->global_bindings, emission->global_binding_count)
         && (!entry || n00bb_llvm_backend_bind_finalizers(backend,
             entry->finalizers, entry->finalizer_count));
-    core_buffer_t object = {0};
     const core_string_t *initializers = entry ? entry->initializers : nullptr;
     size_t initializer_count = entry ? entry->initializer_count : 0;
     size_t metadata_bytes = entry ? entry->metadata_bytes : 0;
     if (ok && emission->lto)
         ok = n00bb_llvm_backend_emit_linkable_bitcode(backend, initializers,
-            initializer_count, metadata_bytes, &object,
+            initializer_count, metadata_bytes, &item->object,
             emission->diagnostics);
-    else if (ok)
-        ok = n00bb_llvm_backend_emit_object(backend, initializers,
-            initializer_count, metadata_bytes, &object,
-            emission->diagnostics);
+    else if (ok) {
+        ok = n00bb_llvm_backend_prepare_object(backend, initializers,
+            initializer_count, metadata_bytes, emission->diagnostics);
+        item->needs_native = ok;
+    }
+    item->seconds += monotonic_seconds() - started;
+    return item->ok = ok;
+}
+
+static void
+finish_module_object(module_object_t *item)
+{
+    double started = monotonic_seconds();
+    item->diagnostics = core_diagnostics_new();
+    item->ok = item->diagnostics
+        && n00bb_llvm_backend_finish_object(item->backend, &item->object,
+                                            item->diagnostics);
+    item->seconds += monotonic_seconds() - started;
+}
+
+typedef struct {
+    module_object_t *items;
+    size_t count;
+    _Atomic size_t next;
+} native_queue_t;
+
+static void *
+native_worker(void *opaque)
+{
+    native_queue_t *queue = opaque;
+    for (;;) {
+        size_t index = atomic_fetch_add(&queue->next, 1);
+        if (index >= queue->count) return nullptr;
+        if (queue->items[index].needs_native && queue->items[index].ok)
+            finish_module_object(&queue->items[index]);
+    }
+}
+
+static void
+finish_module_objects(module_object_t *items, size_t count, size_t workers)
+{
+    native_queue_t queue = {.items = items, .count = count};
+    if (workers > count) workers = count;
+    pthread_t *threads = workers > 1
+        ? core_alloc_array(pthread_t, workers - 1) : nullptr;
+    size_t started = 0;
+    while (threads && started + 1 < workers
+           && pthread_create(&threads[started], nullptr, native_worker,
+                             &queue) == 0)
+        started++;
+    native_worker(&queue);
+    for (size_t i = 0; i < started; i++) pthread_join(threads[i], nullptr);
+    core_free(threads);
+}
+
+static bool
+complete_module_object(const module_emission_t *emission,
+                       module_object_t *item)
+{
+    if (item->cached) {
+        bool ok = n00bb_native_frames_add(emission->native_frames,
+                                          item->cached, item->cached_bytes);
+        if (ok) *item->object_path = temporary_object_argument(item->cached,
+                                                               item->cached_bytes);
+        return ok && *item->object_path;
+    }
+    bool ok = item->ok;
+    if (item->diagnostics) {
+        ok = core_diagnostics_merge(emission->diagnostics, item->diagnostics)
+            && ok;
+        core_diagnostics_free(item->diagnostics);
+        item->diagnostics = nullptr;
+    }
     core_buffer_t mutators = {0};
-    for (size_t i = 0; i < n00bb_llvm_backend_mutator_count(backend); i++) {
+    n00bb_llvm_backend_t *backend = item->backend;
+    for (size_t i = 0; backend && i < n00bb_llvm_backend_mutator_count(backend);
+         i++) {
         core_buffer_append_string(&mutators,
             n00bb_llvm_backend_mutator_name(backend, i));
         core_buffer_putc(&mutators, '\n');
     }
     n00bb_llvm_backend_free(backend);
-    if (profiling) {
-        struct timespec profile_end;
-        clock_gettime(CLOCK_MONOTONIC, &profile_end);
-        core_string_t name = ir_module_name(module);
-        fprintf(stderr, "PROFILE module-object %.3f %.*s\n",
-            (double)(profile_end.tv_sec - profile_start.tv_sec)
-                + (double)(profile_end.tv_nsec - profile_start.tv_nsec) / 1e9,
+    item->backend = nullptr;
+    if (getenv("N00BB_PROFILE_COMPILE")) {
+        core_string_t name = ir_module_name(item->module);
+        fprintf(stderr, "PROFILE module-object %.3f %.*s\n", item->seconds,
             (int)name.u8_bytes, name.data);
     }
+    core_buffer_t object = item->object;
+    item->object = (core_buffer_t){0};
     if (ok && emission->lto) {
         core_buffer_release(&mutators);
-        *bitcode = object;
+        *item->bitcode = object;
         return true;
     }
-    if (ok && emission->kept && artifact) {
+    if (ok && emission->kept && item->artifact) {
         uint8_t *copy = malloc(object.byte_len ? object.byte_len : 1);
         if (copy) {
             if (object.byte_len) memcpy(copy, object.data, object.byte_len);
             core_list_push(*emission->kept, ((n00bb_cache_module_object_t){
-                .module = ir_module_name(module),
+                .module = ir_module_name(item->module),
                 .native = copy, .native_bytes = object.byte_len,
-                .abi = artifact->object, .abi_bytes = artifact->object_bytes,
+                .abi = item->artifact->object,
+                .abi_bytes = item->artifact->object_bytes,
                 .mutators = (const uint8_t *)mutators.data,
                 .mutator_bytes = mutators.byte_len,
             }));
@@ -635,10 +730,19 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
     core_buffer_release(&mutators);
     if (ok) ok = n00bb_native_frames_add(emission->native_frames,
         object.data, object.byte_len);
-    if (ok) *object_path = temporary_object_argument(object.data,
+    if (ok) *item->object_path = temporary_object_argument(object.data,
         object.byte_len);
     core_buffer_release(&object);
-    return ok && *object_path;
+    return ok && *item->object_path;
+}
+
+static void
+release_module_object(module_object_t *item)
+{
+    n00bb_llvm_backend_free(item->backend);
+    core_diagnostics_free(item->diagnostics);
+    core_buffer_release(&item->object);
+    *item = (module_object_t){0};
 }
 
 bool
@@ -874,6 +978,12 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         .global_binding_count = global_binding_count,
         .native_frames = native_frames, .diagnostics = diagnostics,
     };
+    int64_t requested_workers = parse_cmdr_flag_int(args,
+        CORE_STRING_STATIC("--jobs"), 4);
+    size_t native_workers = requested_workers > 0
+        ? (size_t)requested_workers : 1;
+    core_list_t(module_object_t) module_objects =
+        core_list_new(module_object_t);
     for (size_t i = 0; ok && i < count; i++) {
         core_link_artifact_view_t artifact_view = {0};
         const n00bb_abi_artifact_t *artifact =
@@ -887,44 +997,62 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .metadata_bytes = metadata.size,
             .finalizers = finalizers, .finalizer_count = finalizer_count,
         };
+        module_object_t item = {
+            .module = tu_state(order.data[i])->ir_module,
+            .artifact = artifact,
+            .object_path = &objects[i],
+            .bitcode = lto ? &lto_modules[i] : nullptr,
+        };
         n00bb_cache_module_object_t cached = {0};
         if (tu_state(order.data[i])->interface_module
             && n00bb_cache_module_object(analysis->cache,
-                ir_module_name(tu_state(order.data[i])->ir_module), &cached)) {
-            ok = n00bb_native_frames_add(native_frames, cached.native,
-                                         cached.native_bytes);
-            if (ok) objects[i] = temporary_object_argument(cached.native,
-                                                              cached.native_bytes);
-            ok = ok && objects[i];
-            continue;
+                ir_module_name(item.module), &cached)) {
+            item.cached = cached.native;
+            item.cached_bytes = cached.native_bytes;
+            item.ok = true;
         }
-        ok = emit_module_object(&emission, tu_state(order.data[i])->ir_module,
-            core_translation_unit_diagnostics(order.data[i]), artifact,
+        else ok = begin_module_object(&emission, &item,
+            core_translation_unit_diagnostics(order.data[i]),
             order.data[i] == core_link_unit_root(link, 0)
-                ? &root_entry : nullptr,
-            &objects[i], lto ? &lto_modules[i] : nullptr);
+                ? &root_entry : nullptr);
+        core_list_push(module_objects, item);
     }
     for (size_t i = 0; ok && i < analysis->specializations.len; i++) {
         ir_module_t *module = analysis->specializations.data[i]
             .instance->owner;
+        module_object_t item = {
+            .module = module,
+            .object_path = &objects[count + i],
+            .bitcode = lto ? &lto_modules[count + i] : nullptr,
+        };
         n00bb_cache_module_object_t cached = {0};
         if (!lto && n00bb_cache_instance_object(analysis->cache, link,
                 analysis, &analysis->specializations.data[i], &cached)) {
-            ok = n00bb_native_frames_add(native_frames, cached.native,
-                                         cached.native_bytes);
-            if (ok) objects[count + i] = temporary_object_argument(
-                cached.native, cached.native_bytes);
-            ok = ok && objects[count + i];
-            continue;
+            item.cached = cached.native;
+            item.cached_bytes = cached.native_bytes;
+            item.ok = true;
         }
-        core_link_artifact_view_t artifact_view = {0};
-        ok = core_link_unit_require_artifact(link,
-                ir_module_name(module),
-                CORE_STRING_STATIC("n00bb.abi.object"), 1, &artifact_view)
-            && emit_module_object(&emission, module, diagnostics,
-                artifact_view.payload, nullptr, &objects[count + i],
-                lto ? &lto_modules[count + i] : nullptr);
+        else {
+            core_link_artifact_view_t artifact_view = {0};
+            ok = core_link_unit_require_artifact(link,
+                    ir_module_name(module),
+                    CORE_STRING_STATIC("n00bb.abi.object"), 1,
+                    &artifact_view);
+            item.artifact = ok ? artifact_view.payload : nullptr;
+            ok = ok && begin_module_object(&emission, &item, diagnostics,
+                                           nullptr);
+        }
+        core_list_push(module_objects, item);
     }
+    if (ok)
+        finish_module_objects(module_objects.data, module_objects.len,
+                              native_workers);
+    for (size_t i = 0; i < module_objects.len; i++) {
+        if (ok) ok = complete_module_object(&emission,
+                                            &module_objects.data[i]);
+        release_module_object(&module_objects.data[i]);
+    }
+    core_list_free(module_objects);
     if (ok && lto) {
         build_stage = "link-time optimization";
         core_string_t runtime_path = n00bb_archive_path(compiler_path,

@@ -58,6 +58,11 @@ bool n00bb_llvm_backend_bind_finalizers(
 bool n00bb_llvm_backend_bind_function_indices(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_function_binding_t *functions, size_t count);
+bool n00bb_llvm_backend_prepare_object(n00bb_llvm_backend_t *backend,
+    const core_string_t *entry_initializers, size_t initializer_count,
+    size_t metadata_bytes, core_diagnostics_t *diagnostics);
+bool n00bb_llvm_backend_finish_object(n00bb_llvm_backend_t *backend,
+    core_buffer_t *out, core_diagnostics_t *diagnostics);
 typedef struct n00bb_llvm_callback_bindings_t n00bb_llvm_callback_bindings_t;
 n00bb_llvm_callback_bindings_t *n00bb_llvm_callback_bindings_new(
     ir_func_t *const *functions, size_t count);

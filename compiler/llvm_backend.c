@@ -27,6 +27,7 @@
 #include <llvm-c/TargetMachine.h>
 #include <llvm-c/Transforms/PassBuilder.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -278,6 +279,7 @@ struct n00bb_llvm_backend_t {
     bool emit_frame_maps;
     n00bb_native_cache_t *native_cache;
     const n00bb_llvm_callback_bindings_t *callback_bindings;
+    bool prepared;
     const n00bb_llvm_mutator_classifier_t *mutator_classifier;
     core_list_t(core_string_t) selected_mutators;
 };
@@ -12522,12 +12524,13 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     return true;
 }
 
+static bool native_target_ready(void);
+
 static bool
 set_native_layout(LLVMModuleRef module, core_string_t cpu,
                   core_string_t features)
 {
-    if (LLVMInitializeNativeTarget() || LLVMInitializeNativeAsmPrinter())
-        return false;
+    if (!native_target_ready()) return false;
     char *triple = LLVMGetDefaultTargetTriple();
     LLVMTargetRef target = nullptr;
     char *message = nullptr;
@@ -13689,15 +13692,35 @@ static bool emit_native_module(n00bb_llvm_backend_t *backend,
     LLVMModuleRef module, core_buffer_t *out,
     core_diagnostics_t *diagnostics);
 
-static bool
-emit_image(n00bb_llvm_backend_t *backend,
-           const core_string_t *entry_initializers, size_t initializer_count,
-           size_t metadata_bytes, bool bitcode, core_buffer_t *out,
-           core_diagnostics_t *diagnostics)
+static pthread_once_t native_target_once = PTHREAD_ONCE_INIT;
+static bool native_target_available;
+
+static void
+initialize_native_target(void)
 {
-    if (!backend || !out || (initializer_count && !entry_initializers)
+    native_target_available = !LLVMInitializeNativeTarget()
+        && !LLVMInitializeNativeAsmPrinter()
+        && !LLVMInitializeNativeAsmParser();
+}
+
+static bool
+native_target_ready(void)
+{
+    pthread_once(&native_target_once, initialize_native_target);
+    return native_target_available;
+}
+
+static bool
+prepare_image(n00bb_llvm_backend_t *backend,
+              const core_string_t *entry_initializers,
+              size_t initializer_count, size_t metadata_bytes,
+              core_diagnostics_t *diagnostics)
+{
+    if (!backend || (initializer_count && !entry_initializers)
         || (initializer_count && !metadata_bytes))
         return backend_error(diagnostics, "invalid LLVM object arguments");
+    if (!native_target_ready())
+        return backend_error(diagnostics, "LLVM native target is unavailable");
     if (!lower_backend(backend, diagnostics)) return false;
     LLVMModuleRef module = backend->module;
     LLVMContextRef context = backend->context;
@@ -13835,7 +13858,21 @@ emit_image(n00bb_llvm_backend_t *backend,
         return false;
     }
     if (message) LLVMDisposeMessage(message);
-    message = nullptr;
+    backend->prepared = true;
+    return true;
+}
+
+static bool
+emit_image(n00bb_llvm_backend_t *backend,
+           const core_string_t *entry_initializers, size_t initializer_count,
+           size_t metadata_bytes, bool bitcode, core_buffer_t *out,
+           core_diagnostics_t *diagnostics)
+{
+    if (!out) return backend_error(diagnostics,
+                                   "invalid LLVM object arguments");
+    if (!prepare_image(backend, entry_initializers, initializer_count,
+                       metadata_bytes, diagnostics)) return false;
+    LLVMModuleRef module = backend->module;
     if (bitcode) {
         LLVMMemoryBufferRef serialized = LLVMWriteBitcodeToMemoryBuffer(module);
         if (!serialized)
@@ -13933,8 +13970,7 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     double profile_started = getenv("N00BB_PROFILE_COMPILE")
         ? profile_now() : -1;
     char *message = nullptr;
-    if (LLVMInitializeNativeTarget() || LLVMInitializeNativeAsmPrinter()
-        || LLVMInitializeNativeAsmParser())
+    if (!native_target_ready())
         return backend_error(diagnostics, "LLVM native target is unavailable");
     char *triple = LLVMGetDefaultTargetTriple();
     core_uint128_t cache_key = 0;
@@ -14087,6 +14123,27 @@ n00bb_llvm_backend_emit_object(n00bb_llvm_backend_t *backend,
 {
     return emit_image(backend, entry_initializers, initializer_count,
         metadata_bytes, false, out, diagnostics);
+}
+
+bool
+n00bb_llvm_backend_prepare_object(n00bb_llvm_backend_t *backend,
+                                  const core_string_t *entry_initializers,
+                                  size_t initializer_count,
+                                  size_t metadata_bytes,
+                                  core_diagnostics_t *diagnostics)
+{
+    return prepare_image(backend, entry_initializers, initializer_count,
+                         metadata_bytes, diagnostics);
+}
+
+bool
+n00bb_llvm_backend_finish_object(n00bb_llvm_backend_t *backend,
+                                 core_buffer_t *out,
+                                 core_diagnostics_t *diagnostics)
+{
+    if (!backend || !backend->prepared || !out)
+        return backend_error(diagnostics, "invalid LLVM object arguments");
+    return emit_native_module(backend, backend->module, out, diagnostics);
 }
 
 bool
