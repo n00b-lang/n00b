@@ -4122,7 +4122,7 @@ static bool
 specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                  core_diagnostics_t *diagnostics)
 {
-    core_buffer_t failure = {0};
+    n00bb_specialization_failure_t failure = {0};
     core_list_t(n00bb_ir_func_ptr_t) callers =
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
@@ -4160,11 +4160,27 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_list_free(callers);
     if (ok) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis);
-    if (!ok) core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-        CORE_STRING_STATIC("N00BB-B0012"),
-        failure.data ? core_buffer_string(&failure)
-                     : CORE_STRING_STATIC("could not specialize calls"));
-    core_buffer_release(&failure);
+    core_translation_unit_t *site = nullptr;
+    for (size_t i = 0; !ok && failure.located && !site
+         && i < analysis->units.len; i++)
+        if (core_string_eq(analysis->units.data[i]->module.identifier,
+                           failure.module))
+            site = analysis->units.data[i];
+    if (site)
+        core_diagnostics_report_at(core_translation_unit_diagnostics(site),
+            site, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0052"),
+            core_buffer_string(&failure.message), (core_diag_location_t){
+                .line = failure.span.start_line,
+                .column = failure.span.start_col,
+                .end_line = failure.span.end_line,
+                .end_column = failure.span.end_col,
+                .has_location = failure.span.start_line != 0,
+            });
+    else if (!ok) core_diagnostics_report(diagnostics, nullptr,
+        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0012"),
+        failure.message.data ? core_buffer_string(&failure.message)
+                             : CORE_STRING_STATIC("could not specialize calls"));
+    core_buffer_release(&failure.message);
     return ok;
 }
 

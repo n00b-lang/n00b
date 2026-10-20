@@ -26,11 +26,18 @@ typedef struct {
     th_type *signature;
 } n00bb_specialization_seed_t;
 
+typedef struct {
+    core_buffer_t message;
+    core_string_t module;
+    ir_span_t span;
+    bool located;
+} n00bb_specialization_failure_t;
+
 bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) *functions,
     const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
-    core_buffer_t *failure);
+    n00bb_specialization_failure_t *failure);
 
 #endif

@@ -539,6 +539,27 @@ test(
 )
 
 test(
+    'generic-same-type-recursion', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'generic_same_type_recursion.n'],
+    suite: 'slow',
+)
+
+test(
+    'generic-growing-recursion-rejected', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'generic_growing_recursion_rejected.n',
+           'N00BB-T0052',
+           'generic_growing_recursion_rejected.n:6:12'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'generic-record-trait-dispatch', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),

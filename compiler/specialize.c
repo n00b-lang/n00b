@@ -4,6 +4,7 @@
 
 #include "specialize.h"
 #include "cached_body.h"
+#include "compiler_tu.h"
 #include "ir/doms.h"
 #include "ir/typelang.h"
 #include "lib/hash.h"
@@ -146,18 +147,77 @@ static bool match_type(th_ctx *types, th_type *pattern, th_type *actual,
     }
 }
 
-static bool has_polymorphic_cycle(
-    const core_list_t(specialization_t) *specializations,
-    size_t parent, ir_func_t *target, th_type *signature, th_ctx *types)
+static bool
+type_strictly_contains(th_ctx *types, th_type *outer, uint64_t inner,
+                       unsigned depth)
+{
+    outer = outer ? th_resolve(outer) : nullptr;
+    if (!outer || depth > 64) return false;
+    switch (th_kind_of(outer)) {
+    case TH_SEQUENCE:
+        return th_hash(types, th_seq_elem(outer)) == inner
+            || type_strictly_contains(types, th_seq_elem(outer), inner,
+                                      depth + 1);
+    case TH_INDIRECTION:
+        return th_hash(types, th_ind_referent(outer)) == inner
+            || type_strictly_contains(types, th_ind_referent(outer), inner,
+                                      depth + 1);
+    case TH_NAMED:
+        for (size_t i = 0; i < th_named_nargs(outer); i++) {
+            const th_arg *argument = th_named_arg(outer, i);
+            if (argument && argument->kind == TH_ARG_TYPE
+                && (th_hash(types, argument->type) == inner
+                    || type_strictly_contains(types, argument->type, inner,
+                                              depth + 1))) return true;
+        }
+        return false;
+    default:
+        return false;
+    }
+}
+
+static const specialization_t *
+growing_instantiation(const core_list_t(specialization_t) *specializations,
+                      size_t parent, ir_func_t *target, th_type *signature,
+                      th_ctx *types)
 {
     for (size_t i = parent; i != SIZE_MAX;
          i = specializations->data[i].parent) {
         const specialization_t *item = &specializations->data[i];
-        if (item->source == target
-            && th_hash(types, item->signature) != th_hash(types, signature))
-            return true;
+        if (item->source != target) continue;
+        size_t count = th_func_nparams(signature);
+        for (size_t p = 0; p < count
+             && p < th_func_nparams(item->signature); p++) {
+            const th_param *earlier = th_func_param(item->signature, p);
+            const th_param *later = th_func_param(signature, p);
+            if (earlier && later && type_strictly_contains(types,
+                    later->type, th_hash(types, earlier->type), 0))
+                return item;
+        }
     }
-    return false;
+    return nullptr;
+}
+
+static void
+report_growing_instantiation(n00bb_specialization_failure_t *report,
+                             ir_instr_t *call, ir_func_t *target,
+                             const specialization_t *earlier,
+                             th_type *signature, th_ctx *types)
+{
+    if (!report) return;
+    core_string_t before = n00bb_print_type(types, earlier->signature);
+    core_string_t after = n00bb_print_type(types, signature);
+    core_buffer_printf(&report->message,
+        "'%.*s' calls itself with a type that grows on every call: its "
+        "instance %.*s makes this call, which needs %.*s, so no finite set "
+        "of instances exists; a recursive call in a generic function must "
+        "not wrap its own type arguments",
+        (int)target->name.u8_bytes, target->name.data,
+        (int)before.u8_bytes, before.data,
+        (int)after.u8_bytes, after.data);
+    report->module = ir_module_name(target->owner);
+    report->span = call->span;
+    report->located = true;
 }
 
 static bool has_callback_operation(const ir_func_t *function)
@@ -385,10 +445,11 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     const n00bb_specialization_seed_t *seeds, size_t seed_count,
     core_list_t(n00bb_specialization_t) *instances,
     core_list_t(n00bb_specialization_request_t) *requests,
-    core_buffer_t *failure)
+    n00bb_specialization_failure_t *report)
 {
     if (!context || !functions || !instances || !requests
         || (seed_count && !seeds)) return false;
+    core_buffer_t *failure = report ? &report->message : nullptr;
     core_list_t(specialization_t) specializations = {0};
     core_list_t(n00bb_ir_func_ptr_t) inline_bodies =
         core_list_new(n00bb_ir_func_ptr_t);
@@ -465,8 +526,18 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 core_list_t(type_binding_t) bindings = {0};
                 bool concrete = actual && th_is_closed(types, actual)
                     && match_type(types, target->type, actual, &bindings)
-                    && bindings.len && !has_polymorphic_cycle(
-                        &specializations, parent, target, actual, types);
+                    && bindings.len;
+                const specialization_t *grown = concrete
+                    ? growing_instantiation(&specializations, parent, target,
+                                            actual, types)
+                    : nullptr;
+                if (grown) {
+                    report_growing_instantiation(report, call, target,
+                                                 grown, actual, types);
+                    core_list_free(bindings);
+                    valid = false;
+                    break;
+                }
                 if (!concrete) {
                     actual = target->type;
                     bindings.len = 0;

@@ -1,0 +1,9 @@
+func nested(x: `T, n: int) -> int {
+    if n == 0 {
+        return 0
+    }
+    let wrapped: List[`T] = [x]
+    return nested(wrapped, n - 1)
+}
+
+require nested(5, 2) == 0
