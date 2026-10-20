@@ -60,6 +60,12 @@ n00bb_frame_pointer_free_value(ir_module_t *module, th_type *type)
     if (machine == IR_CLASS_BOOL || machine == IR_CLASS_SINT
         || machine == IR_CLASS_UINT || machine == IR_CLASS_FLOAT)
         return true;
+    th_type *option = th_builtin_applied(type, TH_BUILTIN_OPTION, 1);
+    if (option) {
+        const th_arg *element = th_named_arg(option, 0);
+        return element && element->kind == TH_ARG_TYPE
+            && n00bb_frame_pointer_free_value(module, element->type);
+    }
     th_type *definition = ir_type_definition(module, type);
     if (!definition) definition = type;
     definition = th_resolve(definition);

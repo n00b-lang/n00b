@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -542,6 +543,9 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
                    core_buffer_t *bitcode)
 {
     n00bb_link_analysis_t *analysis = emission->analysis;
+    struct timespec profile_start;
+    bool profiling = getenv("N00BB_PROFILE_COMPILE") != nullptr;
+    if (profiling) clock_gettime(CLOCK_MONOTONIC, &profile_start);
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(module,
         emission->debug_enabled, emission->native_cpu, module_diagnostics);
     if (!backend) return false;
@@ -599,6 +603,15 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
         core_buffer_putc(&mutators, '\n');
     }
     n00bb_llvm_backend_free(backend);
+    if (profiling) {
+        struct timespec profile_end;
+        clock_gettime(CLOCK_MONOTONIC, &profile_end);
+        core_string_t name = ir_module_name(module);
+        fprintf(stderr, "PROFILE module-object %.3f %.*s\n",
+            (double)(profile_end.tv_sec - profile_start.tv_sec)
+                + (double)(profile_end.tv_nsec - profile_start.tv_nsec) / 1e9,
+            (int)name.u8_bytes, name.data);
+    }
     if (ok && emission->lto) {
         core_buffer_release(&mutators);
         *bitcode = object;
