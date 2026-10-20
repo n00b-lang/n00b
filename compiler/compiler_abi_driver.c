@@ -816,7 +816,7 @@ module_emitter_start(module_emitter_t *emitter,
     *emitter = (module_emitter_t){
         .emission = emission,
         .items = core_alloc_array(module_object_t, capacity),
-        .window = 2 * workers,
+        .window = 6 * workers,
         .ok = true,
     };
     native_pipeline_start(&emitter->pipeline, emitter->items, workers);

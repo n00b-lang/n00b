@@ -1774,6 +1774,31 @@ link_kind_is_stream(uint32_t kind)
         || kind == N00B_ABI_TABLE_U64_STREAM;
 }
 
+static bool
+link_kind_is_positional(uint32_t kind)
+{
+    switch (kind) {
+    case N00B_ABI_TABLE_PACKAGE:
+    case N00B_ABI_TABLE_MODULE:
+    case N00B_ABI_TABLE_SCC:
+    case N00B_ABI_TABLE_TYPE:
+    case N00B_ABI_TABLE_LAYOUT:
+    case N00B_ABI_TABLE_FIELD:
+    case N00B_ABI_TABLE_ARM:
+    case N00B_ABI_TABLE_TRACE:
+    case N00B_ABI_TABLE_TRAIT_METHOD:
+    case N00B_ABI_TABLE_SOURCE_FILE:
+    case N00B_ABI_TABLE_STATIC_STRING:
+    case N00B_ABI_TABLE_ENUM_ITEM:
+    case N00B_ABI_TABLE_RUNTIME_CONFIG:
+    case N00B_ABI_TABLE_CALL_SIGNATURE:
+    case N00B_ABI_TABLE_TYPE_ARGUMENT:
+        return false;
+    default:
+        return true;
+    }
+}
+
 void
 n00bb_abi_index_plan_free(n00bb_abi_index_plan_t *plan)
 {
@@ -1887,6 +1912,7 @@ n00bb_abi_index_plan_build_detailed(
             return nullptr;
         }
         for (size_t j = 0; j < view->directory_count; j++) {
+            if (link_kind_is_positional(view->directory[j].kind)) continue;
             size_t rows = view->directory[j].record_count;
             if (rows > SIZE_MAX - total_rows) return nullptr;
             total_rows += rows;
@@ -1895,6 +1921,8 @@ n00bb_abi_index_plan_build_detailed(
     abi_link_key_t *keys = core_alloc_array(abi_link_key_t, total_rows);
     core_indexed_table_t **tables = core_alloc_array(
         core_indexed_table_t *, kind_count);
+    uint64_t *positional_next = core_alloc_array(uint64_t, kind_count);
+    bool *positional_seen = core_alloc_array(bool, kind_count);
     n00bb_abi_index_plan_t *plan = core_alloc(n00bb_abi_index_plan_t);
     *plan = (n00bb_abi_index_plan_t){
         .maps = core_alloc_array(core_index_remap_t *,
@@ -1925,13 +1953,18 @@ n00bb_abi_index_plan_build_detailed(
             }
             uint32_t max_index = kind == N00B_ABI_TABLE_TYPE
                 ? INT32_MAX : UINT32_MAX - 1;
-            if (!tables[kind])
-                tables[kind] = core_indexed_table_new(stream ? 0 : 1,
-                    max_index, link_key_hash, link_key_eq);
+            bool positional = link_kind_is_positional(kind);
+            if (!positional && !tables[kind])
+                tables[kind] = core_indexed_table_new(1, max_index,
+                    link_key_hash, link_key_eq);
+            if (positional && !positional_seen[kind]) {
+                positional_seen[kind] = true;
+                positional_next[kind] = stream ? 0 : 1;
+            }
             core_index_remap_t *remap = core_index_remap_new(
                 directory->record_count, max_index);
             plan->maps[input * kind_count + kind] = remap;
-            valid = tables[kind] && remap;
+            valid = (positional || tables[kind]) && remap;
             if (!valid) break;
             uint32_t first = 0;
             if (!stream) {
@@ -1960,6 +1993,19 @@ n00bb_abi_index_plan_build_detailed(
                         .reason = CORE_STRING_STATIC("invalid reserved row"),
                     };
                 first = 1;
+            }
+            if (positional) {
+                for (uint32_t local = first; valid
+                     && local < directory->record_count; local++)
+                    valid = positional_next[kind] <= max_index
+                        && core_index_remap_set(remap, local,
+                               (uint32_t)positional_next[kind]++);
+                if (!valid && failure)
+                    *failure = (n00bb_abi_index_plan_failure_t){
+                        .input = input, .table_kind = kind,
+                        .reason = CORE_STRING_STATIC("could not remap row"),
+                    };
+                continue;
             }
             for (uint32_t local = first; valid
                  && local < directory->record_count; local++) {
@@ -2037,11 +2083,14 @@ n00bb_abi_index_plan_build_detailed(
         }
     }
     for (size_t kind = 1; valid && kind < kind_count; kind++) {
-        if (!tables[kind]) continue;
-        size_t rows = core_indexed_table_len(tables[kind]);
+        if (!tables[kind] && !positional_seen[kind]) continue;
+        size_t rows = tables[kind] ? core_indexed_table_len(tables[kind])
+                                   : (size_t)positional_next[kind];
         valid = rows <= UINT32_MAX;
         if (valid) plan->counts[kind] = (uint32_t)rows;
     }
+    core_free(positional_next);
+    core_free(positional_seen);
     for (size_t i = 0; i < kind_count; i++)
         core_indexed_table_free(tables[i]);
     core_free(tables);
