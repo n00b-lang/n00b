@@ -18702,10 +18702,13 @@ effect_function_summaries_expand_calls(
                     continue;
                 ir_value_t *callee = instruction->operands[0].value;
                 if (callee && callee->kind == IR_VAL_FUNC && callee->owner
-                    && !effect_summary_add(summaries, callee->owner))
+                    && !effect_summary_add(summaries, callee->owner)) {
+                    ir_doms_free(doms);
                     return false;
+                }
             }
         }
+        ir_doms_free(doms);
     }
     return true;
 }
@@ -19179,6 +19182,7 @@ effect_analyze_targets_function(
         free(state);
         free(before_outcome);
         free(stored_after_outcome);
+        ir_doms_free(doms);
         return false;
     }
     memcpy(incoming + entry->index * target_count, initial_states,
@@ -19325,6 +19329,7 @@ effect_analyze_targets_function(
     free(state);
     free(before_outcome);
     free(stored_after_outcome);
+    ir_doms_free(doms);
     return true;
 }
 
@@ -19553,6 +19558,7 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
                     fprintf(stdout, "  %.*s -> exit\n",
                             (int)block->name.u8_bytes, block->name.data);
             }
+            ir_pdg_free(pdg);
         }
         if (full_pdg) {
             ir_pdg_t *pdg = ir_pdg_of(function);
@@ -19575,6 +19581,7 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
                             edge->via->name.data);
                 fputc('\n', stdout);
             }
+            ir_pdg_free(pdg);
         }
     }
 }
@@ -20646,6 +20653,7 @@ n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
     uint8_t *incoming = calloc(function->n_blocks, sizeof(*incoming));
     if (!entry || !doms || !incoming || entry->index >= function->n_blocks) {
         free(incoming);
+        ir_doms_free(doms);
         return false;
     }
     incoming[entry->index] = binding->kind == IR_VAL_LOCAL
@@ -20701,6 +20709,7 @@ n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
         ok = false;
     }
     free(incoming);
+    ir_doms_free(doms);
     return ok;
 }
 
@@ -21220,7 +21229,10 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
         for (size_t f = 0; ok && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
-            if (function->n_blocks && !ir_pdg_of(function)) {
+            ir_pdg_t *pdg = function->n_blocks ? ir_pdg_of(function)
+                                               : nullptr;
+            ir_pdg_free(pdg);
+            if (function->n_blocks && !pdg) {
                 ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                     IR_DIAG_INTERNAL, ir_module_span(module),
                     CORE_STRING_STATIC("this lowered function"));
