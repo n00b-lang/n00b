@@ -251,6 +251,15 @@ call_operand_type(ir_value_t *value, th_ctx *types)
         ? source->type : value->type;
 }
 
+static bool
+dynamic_subject(th_ctx *types, th_type *subject)
+{
+    th_type *resolved = th_resolve(subject);
+    th_kind  kind     = th_kind_of(resolved);
+    return kind == TH_TRAIT || kind == TH_SUM || kind == TH_VAR
+        || th_builtin_kind(types, resolved) == TH_BUILTIN_ANY;
+}
+
 static int
 static_type_test_arm(const ir_instr_t *branch, th_ctx *types)
 {
@@ -264,18 +273,19 @@ static_type_test_arm(const ir_instr_t *branch, th_ctx *types)
         || test->operands[1].kind != IR_OPD_TYPE
         || !test->operands[0].value) return -1;
     th_type *subject = test->operands[0].value->type;
-    if (!subject || !th_is_closed(types, subject)) return -1;
+    if (!subject || !th_is_closed(types, subject)
+        || dynamic_subject(types, subject)) return -1;
     return th_env_type_pattern_accepts(types, test->operands[1].type, subject)
         ? 0 : 1;
 }
 
 static bool *
-feasible_blocks(const ir_func_t *function, th_ctx *types)
+fold_static_type_tests(ir_func_t *function, th_ctx *types)
 {
     uint32_t count = function->n_blocks;
     bool *feasible = core_alloc_array(bool, count ? count : 1);
     uint32_t *stack = core_alloc_array(uint32_t, count ? count : 1);
-    ir_block_t *entry = ir_block_entry((ir_func_t *)function);
+    ir_block_t *entry = ir_block_entry(function);
     if (!feasible || !stack || !entry || entry->index >= count) {
         core_free(stack);
         if (feasible)
@@ -289,9 +299,9 @@ feasible_blocks(const ir_func_t *function, th_ctx *types)
         ir_block_t *block = function->blocks[stack[--depth]];
         ir_instr_t *term = ir_block_terminator(block);
         int fixed = static_type_test_arm(term, types);
+        if (fixed >= 0) ir_branch_fold(term, (uint32_t)fixed);
         uint32_t successors = term ? ir_succ_count(term) : 0;
         for (uint32_t s = 0; s < successors; s++) {
-            if (fixed >= 0 && s != (uint32_t)fixed) continue;
             ir_block_t *to = ir_succ_at(term, s);
             if (!to || to->index >= count || feasible[to->index]) continue;
             feasible[to->index] = true;
@@ -489,7 +499,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         th_ctx *caller_types = ir_module_types(caller->owner);
         bool open_caller = !th_is_closed(caller_types, caller->type)
             && !is_instance(&specializations, caller);
-        bool *feasible = feasible_blocks(caller, caller_types);
+        bool *feasible = fold_static_type_tests(caller, caller_types);
         valid = feasible != nullptr;
         for (uint32_t b = 0; valid && b < caller->n_blocks; b++) {
             if (!feasible[b]) continue;

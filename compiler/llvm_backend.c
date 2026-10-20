@@ -7823,7 +7823,6 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             && th_is_closed(ir_module_types(state->function->owner),
                 referent)
             && !packed_array_width(state->function->owner, element)
-            && n00bb_frame_pointer_free_value(state->function->owner, element)
             && literal_element_layout_matches(state->function->owner,
                 element, native_element,
                 LLVMGetModuleDataLayout(state->module))) {
@@ -7831,7 +7830,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 native_array, native_element,
                 ir_machine_of(state->function->owner,
                     operands[1].value->type).class == IR_CLASS_SINT);
-            return slot && LLVMBuildStore(state->builder, value, slot);
+            return slot && store_gc_barrier(state, value, element)
+                && LLVMBuildStore(state->builder, value, slot);
         }
         if (!boxed_reference && base && native_array
             && native_array != box
@@ -10555,6 +10555,30 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
             LLVMValueRef address = lowered_value(state, operands[1].value);
             LLVMValueRef index = lowered_value(state, operands[2].value);
+            th_type *cleared = th_ind_referent(operands[1].value->type);
+            th_type *element = cleared
+                && th_kind_of(th_resolve(cleared)) == TH_SEQUENCE
+                ? th_seq_elem(th_resolve(cleared)) : nullptr;
+            ir_module_t *owner = state->function->owner;
+            LLVMTypeRef native_array = element
+                ? value_type(owner, cleared, context) : nullptr;
+            LLVMTypeRef native_element = element
+                ? value_type(owner, element, context) : nullptr;
+            if (address && LLVMTypeOf(address) == pointer && index
+                && native_array && native_array != box && native_element
+                && native_element != box
+                && th_is_closed(ir_module_types(owner), cleared)
+                && !packed_array_width(owner, element)
+                && literal_element_layout_matches(owner, element,
+                    native_element, LLVMGetModuleDataLayout(state->module))) {
+                LLVMValueRef slot = native_array_slot(state, address, index,
+                    native_array, native_element,
+                    ir_machine_of(owner, operands[2].value->type).class
+                        == IR_CLASS_SINT);
+                if (!slot || !LLVMBuildStore(state->builder,
+                        LLVMConstNull(native_element), slot)) break;
+                return true;
+            }
             LLVMValueRef array_type_index = nullptr;
             if (address && LLVMTypeOf(address) == box) {
                 LLVMValueRef reference_type_index = LLVMBuildExtractValue(

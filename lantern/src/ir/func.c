@@ -1165,6 +1165,45 @@ ir_instr_t *ir_block_terminator(ir_block_t *b)
                : nullptr;
 }
 
+static void drop_phi_arms(ir_block_t *target, const ir_block_t *from)
+{
+    for (uint32_t i = 0; i < target->n_instrs; i++) {
+        ir_instr_t *phi = target->instrs[i];
+        if (phi->op != IR_OP_PHI) continue;
+        uint32_t kept = 0;
+        for (uint32_t o = 0; o < phi->n_operands; o++) {
+            ir_operand_t *arm = &phi->operands[o];
+            if (arm->kind == IR_OPD_PHI_ARM && arm->phi.block == from)
+                continue;
+            phi->operands[kept++] = *arm;
+        }
+        phi->n_operands = kept;
+    }
+}
+
+bool ir_branch_fold(ir_instr_t *branch, uint32_t taken)
+{
+    if (!branch || branch->op != IR_OP_BRANCH || branch->n_operands != 3
+        || taken > 1 || branch->operands[1].kind != IR_OPD_BLOCK
+        || branch->operands[2].kind != IR_OPD_BLOCK) {
+        return false;
+    }
+
+    ir_block_t *keep = branch->operands[1 + taken].block;
+    ir_block_t *drop = branch->operands[2 - taken].block;
+    if (!keep || keep == drop) {
+        return false;
+    }
+
+    branch->op          = IR_OP_JUMP;
+    branch->operands[0] = branch->operands[1 + taken];
+    branch->n_operands  = 1;
+    if (drop) {
+        drop_phi_arms(drop, branch->block);
+    }
+    return true;
+}
+
 ir_value_t *ir_operand_value(const ir_operand_t *od)
 {
     switch (od->kind) {

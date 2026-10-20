@@ -760,6 +760,7 @@ ir_block_t  *ir_block_add(ir_func_t *f, core_string_t name);
 ir_block_t  *ir_block_find(ir_func_t *f, core_string_t name);
 ir_block_t  *ir_block_entry(ir_func_t *f);
 ir_instr_t  *ir_block_terminator(ir_block_t *b);
+bool         ir_branch_fold(ir_instr_t *branch, uint32_t taken);
 
 ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op);
 bool        ir_instr_set_dest(ir_instr_t *in, core_string_t name,
