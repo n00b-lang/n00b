@@ -805,7 +805,11 @@ func copy_literal(source: Ref[byte], destination: Ref[byte], type_index: u32) {
         return
     }
     var graph: Graph = new_graph(true)
-    visit_value(ref graph, 0, destination, type_index)
+    let root: u32 = add_node(ref graph, destination,
+        internal.abi.size_bytes(row),
+        cast[u32]internal.abi.alignment_bytes(row), type_index,
+        internal.abi.baked_immutable, false)
+    visit_value(ref graph, root, destination, type_index)
     drain(ref graph)
 }
 
