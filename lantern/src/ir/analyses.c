@@ -10,6 +10,7 @@ struct ir_func_analyses_t {
     ir_pdg_t    *pdg;
     ir_places_t *places;
     ir_memssa_t *memssa;
+    ir_sites_t  *sites;
 };
 
 typedef ir_func_t *ir_func_ptr_t;
@@ -93,6 +94,8 @@ current_slot(ir_func_t *f)
     struct ir_func_analyses_t *slot = slot_of(f);
     uint64_t now = fingerprint(f);
     if (now == slot->fingerprint) return slot;
+    ir_sites_free(slot->sites);
+    slot->sites = nullptr;
     ir_memssa_free(slot->memssa);
     slot->memssa = nullptr;
     ir_places_free(slot->places);
@@ -142,11 +145,21 @@ ir_func_memssa(ir_func_t *f)
     return slot->memssa;
 }
 
+ir_sites_t *
+ir_func_sites(ir_func_t *f)
+{
+    if (!f || !f->n_blocks) return nullptr;
+    struct ir_func_analyses_t *slot = current_slot(f);
+    if (!slot->sites) slot->sites = ir_sites_build(f);
+    return slot->sites;
+}
+
 void
 ir_func_release_analyses(ir_func_t *f)
 {
     if (!f || !f->analyses) return;
     struct ir_func_analyses_t *slot = f->analyses;
+    ir_sites_free(slot->sites);
     ir_memssa_free(slot->memssa);
     ir_places_free(slot->places);
     ir_pdg_free(slot->pdg);

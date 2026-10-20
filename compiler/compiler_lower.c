@@ -19606,6 +19606,22 @@ dump_ir_places(ir_module_t *module, ir_func_t *function)
         }
         fputc('\n', stdout);
     }
+    static const char *const site_kinds[] = {
+        "branch", "loop_bound", "address", "divisor", "shift_amount",
+        "boxed", "call_argument", "call_result", "copy_out", "returned",
+        "trap", "failure"};
+    ir_sites_t *sites = ir_func_sites(function);
+    for (uint32_t i = 0; i < ir_sites_count(sites); i++) {
+        const ir_site_t *site = ir_site_at(sites, i);
+        fprintf(stdout, "  site %s ", site_kinds[site->kind]);
+        dump_ir_instr(stdout, site->instr);
+        if (site->operand != UINT32_MAX)
+            fprintf(stdout, " operand %u", site->operand);
+        fputc('\n', stdout);
+    }
+    fprintf(stdout, "  paths %s\n",
+            ir_paths_can_return(function, nullptr, nullptr)
+                ? "may-return" : "never-returns");
 }
 
 static void

@@ -6,6 +6,7 @@
 #include "ir/memssa.h"
 #include "ir/pdg.h"
 #include "ir/places.h"
+#include "ir/sites.h"
 
 ir_doms_t *ir_func_doms(ir_func_t *f);
 ir_pdg_t  *ir_func_pdg(ir_func_t *f);
