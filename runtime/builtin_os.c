@@ -520,7 +520,9 @@ static int64_t os_close_raw(int64_t fd)
     ExitProcess((UINT)code);
 }
 
+#ifdef _MSC_VER
 #pragma comment(lib, "synchronization")
+#endif
 
 static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
                                  uint64_t timeout_ns)
