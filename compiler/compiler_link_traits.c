@@ -512,8 +512,7 @@ plan_closed_trait_dispatch(core_link_unit_t *link,
                     CORE_STRING_STATIC("n00bb.builtin-symbol"))
                 : nullptr;
         if (!implementation
-            || !parse_sym_add_use(implementation, site->node)) {
-            ok = false;
+            || !parse_sym_add_use(implementation, site->node)) {            ok = false;
             break;
         }
         const th_param *method_receiver = entries[i].method.signature
@@ -2265,9 +2264,16 @@ register_builtin_method_declaration(core_link_unit_t *link,
     core_string_t trait_name, const th_env_method_t *method)
 {
     if (!method || !method->module.data
-        || !core_string_eq(method->module, CORE_STRING_STATIC("builtins"))
         || !method->qualified_name.data || !method->contract) return nullptr;
     n00bb_tu_state_t *state = tu_state(unit);
+    bool builtin_module = core_string_eq(method->module,
+                                         CORE_STRING_STATIC("builtins"));
+    const th_param *receiver = method->signature
+        ? th_func_param(method->signature, 0) : nullptr;
+    if (!builtin_module && !(receiver && n00bb_flagset_type(unit, state,
+            receiver->type, nullptr))) return nullptr;
+    core_string_t link_module = builtin_module
+        ? CORE_STRING_STATIC("builtins") : method->module;
     parse_symtab_t *symtab = state && state->annotations
         ? state->annotations->symtab : nullptr;
     parse_sym_entry_t *requirement =
@@ -2317,7 +2323,7 @@ register_builtin_method_declaration(core_link_unit_t *link,
     n00bb_link_payload_t *payload = core_alloc(n00bb_link_payload_t);
     if (payload) *payload = (n00bb_link_payload_t){.symbol = symbol};
     bool registered = key.data && payload && core_link_unit_define_external_typed(
-        link, CORE_STRING_STATIC("builtins"), core_buffer_string(&key),
+        link, link_module, core_buffer_string(&key),
         &metadata, payload, CORE_LINK_PAYLOAD_OWNED,
         free_n00bb_link_payload, &declaration);
     if (!registered) core_free(payload);

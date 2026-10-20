@@ -20,6 +20,18 @@ func hashed(x: `H) -> u128 where `H: Hash {
     return x.hash()
 }
 
+flagset Edge {
+    top, bottom, left, right
+}
+
+func combine(a: `T, b: `T) -> `T where `T: Add {
+    return a + b
+}
+
+func strip(a: `T, b: `T) -> `T where `T: Subtract {
+    return a - b
+}
+
 func pick(x: `T) -> int where `T: Describe {
     return x.describe()
 }
@@ -56,4 +68,8 @@ let inner: List[int] = [1]
 let outer: List[List[int]] = [inner]
 require classify(outer) == 3
 require classify(inner) == 0
+let both: Edge = combine(Edge.top, Edge.left)
+require both == Edge.top + Edge.left
+require strip(both, Edge.top) == Edge.left
+require combine(2, 3) == 5
 __fd_write(2, "ok")

@@ -10038,15 +10038,30 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
                               parse_sym_entry_t *requirement,
                               th_type *receiver_type)
 {
-    (void)receiver_type;
     if (!parse_sym_binding(implementation,
             CORE_STRING_STATIC("n00bb.builtin-operator"))) return nullptr;
     core_string_t method = requirement->name;
     bool compare = core_string_eq(method, CORE_STRING_STATIC("__cmp"));
     const n00bb_binary_operator_t *operator =
         n00bb_binary_operator_method(requirement->name);
+    n00bb_lower_context_t *lower = context->user;
+    bool flagset = lower && receiver_type && n00bb_flagset_type(lower->unit,
+        tu_state(lower->unit), receiver_type, nullptr);
     ir_op_t op;
-    if (operator && !operator->shift) op = operator->op;
+    if (flagset && (core_string_eq(method, CORE_STRING_STATIC("__add"))
+                    || core_string_eq(method, CORE_STRING_STATIC("__bit_or"))))
+        op = IR_OP_BITSET_UNION;
+    else if (flagset
+             && core_string_eq(method, CORE_STRING_STATIC("__subtract")))
+        op = IR_OP_BITSET_DIFFERENCE;
+    else if (flagset
+             && core_string_eq(method, CORE_STRING_STATIC("__bit_and")))
+        op = IR_OP_BITSET_INTERSECTION;
+    else if (flagset
+             && core_string_eq(method, CORE_STRING_STATIC("__bit_xor")))
+        op = IR_OP_BITSET_XOR;
+    else if (flagset) return nullptr;
+    else if (operator && !operator->shift) op = operator->op;
     else if (core_string_eq(method, CORE_STRING_STATIC("__equal")))
         op = IR_OP_EQ;
     else if (compare) op = IR_OP_LT;
