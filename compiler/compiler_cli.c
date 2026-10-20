@@ -59,6 +59,8 @@ static const parse_cmdr_flag_t FMT_FLAGS[] = {
          "check formatting without writing files"),
     FLAG("--normalize", NO_ALIAS, BOOL, false,
          "normalize source using inferred type information"),
+    FLAG("--ascii-tags", NO_ALIAS, BOOL, false,
+         "write rich-string tags as [: :] instead of « »"),
     END_FLAGS,
 };
 

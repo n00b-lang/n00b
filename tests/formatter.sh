@@ -115,3 +115,20 @@ grep -q 'let unsigned_value: uint' "$tmp/normalized.n00b"
 grep -q 'let signed_value: *int' "$tmp/normalized.n00b"
 ! grep -Eq '(^|[^[:alnum:]_])(u64|i64)($|[^[:alnum:]_])' \
     "$tmp/normalized.n00b"
+
+cat >"$tmp/rich.n00b" <<'EOF2'
+let a = "[:b:]bold[:/b:] «i»it«/i» \[:x:] [:odd»:]"'r
+let b = "[:plain:]"
+EOF2
+"$compiler" fmt --output "$tmp/rich_guillemets.n00b" "$tmp/rich.n00b"
+cat >"$tmp/rich_guillemets.expected" <<'EOF2'
+let a = "«b»bold«/b» «i»it«/i» \[:x:] [:odd»:]"'r
+let b = "[:plain:]"
+EOF2
+diff -u "$tmp/rich_guillemets.expected" "$tmp/rich_guillemets.n00b"
+"$compiler" fmt --ascii-tags --output "$tmp/rich_ascii.n00b" "$tmp/rich.n00b"
+cat >"$tmp/rich_ascii.expected" <<'EOF2'
+let a = "[:b:]bold[:/b:] [:i:]it[:/i:] \[:x:] [:odd»:]"'r
+let b = "[:plain:]"
+EOF2
+diff -u "$tmp/rich_ascii.expected" "$tmp/rich_ascii.n00b"

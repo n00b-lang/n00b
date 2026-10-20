@@ -3734,6 +3734,98 @@ n00bb_format_inferred_types(parse_grammar_t *grammar,
                        : core_string_dup(source);
 }
 
+static size_t
+utf8_sequence_length(unsigned char lead)
+{
+    return lead < 0x80 ? 1 : lead < 0xe0 ? 2 : lead < 0xf0 ? 3 : 4;
+}
+
+static bool
+rich_tag_closes(const char *text, size_t at, size_t end, bool guillemet)
+{
+    if (at + 1 >= end) return false;
+    return guillemet
+        ? (unsigned char)text[at] == 0xc2
+            && (unsigned char)text[at + 1] == 0xbb
+        : text[at] == ':' && text[at + 1] == ']';
+}
+
+static void
+format_rich_body(core_buffer_t *out, const char *text, size_t start,
+                 size_t end, bool ascii)
+{
+    size_t i = start;
+    while (i < end) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '\\') {
+            size_t length = i + 1 < end
+                ? 1 + utf8_sequence_length((unsigned char)text[i + 1]) : 1;
+            if (i + length > end) length = end - i;
+            core_buffer_append(out, text + i, length);
+            i += length;
+            continue;
+        }
+        bool guillemet = c == 0xc2 && i + 1 < end
+            && (unsigned char)text[i + 1] == 0xab;
+        bool colon = c == '[' && i + 1 < end && text[i + 1] == ':';
+        size_t close = i + 2;
+        while ((guillemet || colon) && close < end
+               && !rich_tag_closes(text, close, end, guillemet))
+            close++;
+        if (!(guillemet || colon) || close >= end) {
+            core_buffer_putc(out, (char)c);
+            i++;
+            continue;
+        }
+        size_t tag = i + 2;
+        bool fits = true;
+        for (size_t j = tag; fits && j < close; j++)
+            fits = !rich_tag_closes(text, j, close, !ascii);
+        if (fits) {
+            core_buffer_append(out, ascii ? "[:" : "\xc2\xab", 2);
+            core_buffer_append(out, text + tag, close - tag);
+            core_buffer_append(out, ascii ? ":]" : "\xc2\xbb", 2);
+        }
+        else core_buffer_append(out, text + i, close + 2 - i);
+        i = close + 2;
+    }
+}
+
+static core_string_t
+n00bb_format_rich_tags(parse_grammar_t *grammar, core_string_t input,
+                       bool ascii)
+{
+    parse_token_stream_t *tokens = scan_tokenize_owned(grammar, input);
+    if (!tokens) return (core_string_t){0};
+    while (scan_stream_next(tokens)) {}
+    core_buffer_t out = {0};
+    size_t copied = 0;
+    int32_t count = scan_stream_token_count(tokens);
+    for (int32_t i = 0; i < count; i++) {
+        parse_token_info_t *token = scan_stream_get(tokens, i);
+        if (!token || !core_option_is_set(parse_token_postfix_modifier(token))
+            || !core_string_eq(
+                   core_option_get(parse_token_postfix_modifier(token)),
+                   CORE_STRING_STATIC("r"))
+            || !core_string_eq(parse_terminal_name(grammar,
+                   parse_token_tid(token)), CORE_STRING_STATIC("STRING_LIT"))
+            || parse_token_start_byte(token) < copied
+            || parse_token_end_byte(token) > input.u8_bytes) continue;
+        size_t start = parse_token_start_byte(token) + 1;
+        size_t end = parse_token_end_byte(token);
+        while (end > start && input.data[end - 1] != '"') end--;
+        if (end == start) continue;
+        end--;
+        core_buffer_append(&out, input.data + copied, start - copied);
+        format_rich_body(&out, input.data, start, end, ascii);
+        copied = end;
+    }
+    core_buffer_append(&out, input.data + copied, input.u8_bytes - copied);
+    scan_token_stream_free(tokens);
+    core_buffer_ensure(&out, 1);
+    return core_buffer_string(&out);
+}
+
 static bool
 n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
                    locate_requests_t *requests, parse_cmdr_result_t *args)
@@ -3741,6 +3833,8 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     bool check = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--check"));
     bool normalize = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--normalize"));
+    bool ascii_tags = parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--ascii-tags"));
     core_string_t output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (output.data && (check || parse_cmdr_arg_count(args) != 1)) {
@@ -3799,9 +3893,13 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
         core_string_t signatures = aligned.data
             ? n00bb_format_signatures(aligned) : (core_string_t){0};
         core_free(aligned.data);
-        core_string_t formatted = signatures.data
+        core_string_t channels = signatures.data
             ? n00bb_format_channels(signatures) : (core_string_t){0};
         core_free(signatures.data);
+        core_string_t formatted = channels.data
+            ? n00bb_format_rich_tags(grammar, channels, ascii_tags)
+            : (core_string_t){0};
+        core_free(channels.data);
         if (!formatted.data || !n00bb_format_parses(grammar, formatted)) {
             fprintf(stderr, "n00bb fmt: cannot print %.*s\n",
                 (int)path.u8_bytes, path.data);
