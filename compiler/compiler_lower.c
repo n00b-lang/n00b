@@ -16302,13 +16302,16 @@ register_module_globals(parse_grammar_t *grammar,
                         ir_ctx_t *ir_context,
                         n00bb_link_analysis_t *analysis,
                         core_link_unit_t *link, core_dict_t *references,
+                        ir_diags_t **source_diagnostics,
                         uint32_t producer_stage)
 {
     n00bb_tu_state_t *source_state = tu_state(source);
     if (!source_state || !source_state->annotations || !destination)
         return false;
-    ir_diags_t *diagnostics = ir_diags_new_attached(
-        ir_context, nullptr, core_translation_unit_diagnostics(source), source);
+    if (!*source_diagnostics)
+        *source_diagnostics = ir_diags_new_attached(ir_context, nullptr,
+            core_translation_unit_diagnostics(source), source);
+    ir_diags_t *diagnostics = *source_diagnostics;
     if (!diagnostics) return false;
     int32_t source_file = source_state->ir_module
         ? ir_file_count(source_state->ir_module) - 1 : -1;
@@ -16957,20 +16960,24 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
     core_dict_t references;
     reference_pair_t *reference_pairs = index_link_references(link,
                                                               &references);
+    ir_diags_t **source_diagnostics = core_alloc_array(ir_diags_t *,
+                                                       units->len);
     for (size_t i = 0; i < units->len; i++)
         for (size_t j = 0; j < units->len; j++)
             if (!register_module_globals(grammar, units->data[j],
                     units->data[i], tu_state(units->data[i])->ir_module,
                     ir_context, analysis, link, &references,
-                    producer_stage)) {
+                    &source_diagnostics[j], producer_stage)) {
                 core_dict_free(&references);
                 core_free(reference_pairs);
+                core_free(source_diagnostics);
                 return ir_initialization_error(units->data[i],
                     "N00BB-L0028",
                     "could not register module globals in Lantern IR");
             }
     core_dict_free(&references);
     core_free(reference_pairs);
+    core_free(source_diagnostics);
     if (!bind_module_global_identities(ir_context, analysis))
         return ir_initialization_error(units->len ? units->data[0] : nullptr,
             "N00BB-L0028",

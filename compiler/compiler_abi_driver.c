@@ -551,6 +551,7 @@ typedef struct {
     double seconds;
     bool needs_native;
     bool ok;
+    bool done;
 } module_object_t;
 
 core_list_decl(module_object_t);
@@ -639,37 +640,89 @@ finish_module_object(module_object_t *item)
 
 typedef struct {
     module_object_t *items;
-    size_t count;
-    _Atomic size_t next;
-} native_queue_t;
+    size_t published;
+    size_t next;
+    bool closed;
+    pthread_mutex_t lock;
+    pthread_cond_t changed;
+    pthread_t *threads;
+    size_t thread_count;
+} native_pipeline_t;
+
+static void
+finish_if_needed(module_object_t *item)
+{
+    if (item->needs_native && item->ok) finish_module_object(item);
+}
 
 static void *
 native_worker(void *opaque)
 {
-    native_queue_t *queue = opaque;
+    native_pipeline_t *pipeline = opaque;
+    pthread_mutex_lock(&pipeline->lock);
     for (;;) {
-        size_t index = atomic_fetch_add(&queue->next, 1);
-        if (index >= queue->count) return nullptr;
-        if (queue->items[index].needs_native && queue->items[index].ok)
-            finish_module_object(&queue->items[index]);
+        while (pipeline->next >= pipeline->published && !pipeline->closed)
+            pthread_cond_wait(&pipeline->changed, &pipeline->lock);
+        if (pipeline->next >= pipeline->published) break;
+        module_object_t *item = &pipeline->items[pipeline->next++];
+        pthread_mutex_unlock(&pipeline->lock);
+        finish_if_needed(item);
+        pthread_mutex_lock(&pipeline->lock);
+        item->done = true;
+        pthread_cond_broadcast(&pipeline->changed);
     }
+    pthread_mutex_unlock(&pipeline->lock);
+    return nullptr;
 }
 
 static void
-finish_module_objects(module_object_t *items, size_t count, size_t workers)
+native_pipeline_start(native_pipeline_t *pipeline, module_object_t *items,
+                      size_t workers)
 {
-    native_queue_t queue = {.items = items, .count = count};
-    if (workers > count) workers = count;
-    pthread_t *threads = workers > 1
-        ? core_alloc_array(pthread_t, workers - 1) : nullptr;
-    size_t started = 0;
-    while (threads && started + 1 < workers
-           && pthread_create(&threads[started], nullptr, native_worker,
-                             &queue) == 0)
-        started++;
-    native_worker(&queue);
-    for (size_t i = 0; i < started; i++) pthread_join(threads[i], nullptr);
-    core_free(threads);
+    *pipeline = (native_pipeline_t){.items = items};
+    pthread_mutex_init(&pipeline->lock, nullptr);
+    pthread_cond_init(&pipeline->changed, nullptr);
+    pipeline->threads = core_alloc_array(pthread_t, workers);
+    while (pipeline->thread_count < workers
+           && pthread_create(&pipeline->threads[pipeline->thread_count],
+                             nullptr, native_worker, pipeline) == 0)
+        pipeline->thread_count++;
+}
+
+static void
+native_pipeline_publish(native_pipeline_t *pipeline, module_object_t *item)
+{
+    if (!pipeline->thread_count) {
+        finish_if_needed(item);
+        item->done = true;
+    }
+    pthread_mutex_lock(&pipeline->lock);
+    pipeline->published++;
+    pthread_cond_broadcast(&pipeline->changed);
+    pthread_mutex_unlock(&pipeline->lock);
+}
+
+static void
+native_pipeline_wait(native_pipeline_t *pipeline, module_object_t *item)
+{
+    pthread_mutex_lock(&pipeline->lock);
+    while (!item->done)
+        pthread_cond_wait(&pipeline->changed, &pipeline->lock);
+    pthread_mutex_unlock(&pipeline->lock);
+}
+
+static void
+native_pipeline_stop(native_pipeline_t *pipeline)
+{
+    pthread_mutex_lock(&pipeline->lock);
+    pipeline->closed = true;
+    pthread_cond_broadcast(&pipeline->changed);
+    pthread_mutex_unlock(&pipeline->lock);
+    for (size_t i = 0; i < pipeline->thread_count; i++)
+        pthread_join(pipeline->threads[i], nullptr);
+    core_free(pipeline->threads);
+    pthread_cond_destroy(&pipeline->changed);
+    pthread_mutex_destroy(&pipeline->lock);
 }
 
 static bool
@@ -743,6 +796,65 @@ release_module_object(module_object_t *item)
     core_diagnostics_free(item->diagnostics);
     core_buffer_release(&item->object);
     *item = (module_object_t){0};
+}
+
+typedef struct {
+    const module_emission_t *emission;
+    native_pipeline_t pipeline;
+    module_object_t *items;
+    size_t prepared;
+    size_t completed;
+    size_t window;
+    bool ok;
+} module_emitter_t;
+
+static void
+module_emitter_start(module_emitter_t *emitter,
+                     const module_emission_t *emission, size_t capacity,
+                     size_t workers)
+{
+    *emitter = (module_emitter_t){
+        .emission = emission,
+        .items = core_alloc_array(module_object_t, capacity),
+        .window = 2 * workers,
+        .ok = true,
+    };
+    native_pipeline_start(&emitter->pipeline, emitter->items, workers);
+}
+
+static module_object_t *
+module_emitter_slot(module_emitter_t *emitter)
+{
+    return &emitter->items[emitter->prepared];
+}
+
+static void
+module_emitter_complete_one(module_emitter_t *emitter)
+{
+    module_object_t *item = &emitter->items[emitter->completed++];
+    native_pipeline_wait(&emitter->pipeline, item);
+    if (emitter->ok)
+        emitter->ok = complete_module_object(emitter->emission, item);
+    release_module_object(item);
+}
+
+static void
+module_emitter_publish(module_emitter_t *emitter)
+{
+    native_pipeline_publish(&emitter->pipeline,
+                            &emitter->items[emitter->prepared++]);
+    while (emitter->prepared - emitter->completed > emitter->window)
+        module_emitter_complete_one(emitter);
+}
+
+static bool
+module_emitter_finish(module_emitter_t *emitter)
+{
+    while (emitter->completed < emitter->prepared)
+        module_emitter_complete_one(emitter);
+    native_pipeline_stop(&emitter->pipeline);
+    core_free(emitter->items);
+    return emitter->ok;
 }
 
 bool
@@ -982,9 +1094,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         CORE_STRING_STATIC("--jobs"), 4);
     size_t native_workers = requested_workers > 0
         ? (size_t)requested_workers : 1;
-    core_list_t(module_object_t) module_objects =
-        core_list_new(module_object_t);
-    for (size_t i = 0; ok && i < count; i++) {
+    module_emitter_t emitter;
+    module_emitter_start(&emitter, &emission,
+                         count + analysis->specializations.len,
+                         native_workers);
+    for (size_t i = 0; ok && emitter.ok && i < count; i++) {
         core_link_artifact_view_t artifact_view = {0};
         const n00bb_abi_artifact_t *artifact =
             core_link_unit_require_artifact(link,
@@ -997,7 +1111,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .metadata_bytes = metadata.size,
             .finalizers = finalizers, .finalizer_count = finalizer_count,
         };
-        module_object_t item = {
+        module_object_t *item = module_emitter_slot(&emitter);
+        *item = (module_object_t){
             .module = tu_state(order.data[i])->ir_module,
             .artifact = artifact,
             .object_path = &objects[i],
@@ -1006,21 +1121,23 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         n00bb_cache_module_object_t cached = {0};
         if (tu_state(order.data[i])->interface_module
             && n00bb_cache_module_object(analysis->cache,
-                ir_module_name(item.module), &cached)) {
-            item.cached = cached.native;
-            item.cached_bytes = cached.native_bytes;
-            item.ok = true;
+                ir_module_name(item->module), &cached)) {
+            item->cached = cached.native;
+            item->cached_bytes = cached.native_bytes;
+            item->ok = true;
         }
-        else ok = begin_module_object(&emission, &item,
+        else ok = begin_module_object(&emission, item,
             core_translation_unit_diagnostics(order.data[i]),
             order.data[i] == core_link_unit_root(link, 0)
                 ? &root_entry : nullptr);
-        core_list_push(module_objects, item);
+        module_emitter_publish(&emitter);
     }
-    for (size_t i = 0; ok && i < analysis->specializations.len; i++) {
+    for (size_t i = 0; ok && emitter.ok
+         && i < analysis->specializations.len; i++) {
         ir_module_t *module = analysis->specializations.data[i]
             .instance->owner;
-        module_object_t item = {
+        module_object_t *item = module_emitter_slot(&emitter);
+        *item = (module_object_t){
             .module = module,
             .object_path = &objects[count + i],
             .bitcode = lto ? &lto_modules[count + i] : nullptr,
@@ -1028,9 +1145,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         n00bb_cache_module_object_t cached = {0};
         if (!lto && n00bb_cache_instance_object(analysis->cache, link,
                 analysis, &analysis->specializations.data[i], &cached)) {
-            item.cached = cached.native;
-            item.cached_bytes = cached.native_bytes;
-            item.ok = true;
+            item->cached = cached.native;
+            item->cached_bytes = cached.native_bytes;
+            item->ok = true;
         }
         else {
             core_link_artifact_view_t artifact_view = {0};
@@ -1038,21 +1155,14 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                     ir_module_name(module),
                     CORE_STRING_STATIC("n00bb.abi.object"), 1,
                     &artifact_view);
-            item.artifact = ok ? artifact_view.payload : nullptr;
-            ok = ok && begin_module_object(&emission, &item, diagnostics,
+            item->artifact = ok ? artifact_view.payload : nullptr;
+            ok = ok && begin_module_object(&emission, item, diagnostics,
                                            nullptr);
         }
-        core_list_push(module_objects, item);
+        module_emitter_publish(&emitter);
     }
-    if (ok)
-        finish_module_objects(module_objects.data, module_objects.len,
-                              native_workers);
-    for (size_t i = 0; i < module_objects.len; i++) {
-        if (ok) ok = complete_module_object(&emission,
-                                            &module_objects.data[i]);
-        release_module_object(&module_objects.data[i]);
-    }
-    core_list_free(module_objects);
+    bool emitted = module_emitter_finish(&emitter);
+    ok = ok && emitted;
     if (ok && lto) {
         build_stage = "link-time optimization";
         core_string_t runtime_path = n00bb_archive_path(compiler_path,
