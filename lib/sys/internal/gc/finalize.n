@@ -31,18 +31,20 @@ func wake(heap: Ref[internal.gc.core.Heap]) {
     }
     __atomic_fetch_add(ref heap.fin_live, 1)
     if !__atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_running) {
-        release_live(heap)
+        __atomic_fetch_sub(ref heap.fin_live, 1)
         return
     }
     if !internal.threads.thread_start(ref thread_main, unsafe_cast[Ref[byte]] heap) {
         __atomic_store(ref heap.fin_thread, thread_idle)
-        release_live(heap)
+        __atomic_fetch_sub(ref heap.fin_live, 1)
     }
 }
 
 func release_live(heap: Ref[internal.gc.core.Heap]) {
-    __atomic_fetch_sub(ref heap.fin_live, 1)
-    internal.threads.futex_wake_all(ref heap.fin_live)
+    if __atomic_fetch_sub(ref heap.fin_live, 1) == 1 and
+        __atomic_load(ref heap.shutdown) {
+        internal.gc.heap.teardown(heap)
+    }
 }
 
 func thread_main(argument: Ref[byte]) -> Ref[byte] {
@@ -53,8 +55,8 @@ func thread_main(argument: Ref[byte]) -> Ref[byte] {
         }
         park(heap)
     }
-    internal.gc.alloc.detach_runtime_mutator()
     release_live(heap)
+    internal.gc.alloc.detach_runtime_mutator()
     return argument
 }
 
@@ -72,19 +74,9 @@ func park(heap: Ref[internal.gc.core.Heap]) {
     internal.gc.alloc.attached_leave_blocking()
 }
 
-func stop_thread(heap: Ref[internal.gc.core.Heap]) {
-    internal.gc.alloc.attached_enter_blocking()
+func close_thread(heap: Ref[internal.gc.core.Heap]) {
     __atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_closed)
     internal.gc.sync.event_wake(ref heap.fin_wake)
-    while true {
-        let live: u32 = __atomic_load(ref heap.fin_live)
-        if live == 0 {
-            break
-        }
-        internal.threads.futex_wait(ref heap.fin_live, live, 0)
-    }
-    __atomic_store(ref heap.fin_thread, thread_closed)
-    internal.gc.alloc.attached_leave_blocking()
 }
 
 func list_push(heap: Ref[internal.gc.core.Heap], block: Ref[internal.gc.core.Block_Metadata]) {

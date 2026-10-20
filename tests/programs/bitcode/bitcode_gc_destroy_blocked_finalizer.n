@@ -1,0 +1,110 @@
+import sys.abi
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.finalize
+import sys.gc.heap
+import sys.gc.mark
+import sys.gc.mutator
+import sys.gc.registry
+import sys.gc.sync
+import sys.memory
+
+type Sample {
+    value: int
+}
+
+var finalized: Atomic[uint] = 0
+var off_main: Atomic[uint] = 0
+var gate_closed: Atomic[bool] = false
+var blocked: Atomic[bool] = false
+
+func __finalize(consume self: Ref[Sample]) {
+    require self.value == 0
+    if __os_thread_is_main() == 0 {
+        __atomic_fetch_add(ref off_main, 1)
+    }
+    while __atomic_load(ref gate_closed) {
+        __atomic_store(ref blocked, true)
+        __os_thread_yield()
+    }
+    __atomic_fetch_add(ref finalized, 1)
+}
+
+func wait_finalized(count: uint) {
+    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    while __atomic_load(ref finalized) < count {
+        require __os_now_ns() < deadline
+        __os_thread_yield()
+    }
+}
+
+func wait_blocked() {
+    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    while !__atomic_load(ref blocked) {
+        require __os_now_ns() < deadline
+        __os_thread_yield()
+    }
+}
+
+let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+if created != nil {
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(
+        sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+        let registered: bool = sys.gc.registry.region_add(heap, base, end)
+        require registered
+        let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+        sys.gc.core.block_init(heap, block)
+        let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if attached != nil {
+            let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+            var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+            sys.gc.core.own(heap, mutator, block, ref owned)
+            let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+            sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+            let found: bool = sys.gc.core.bump_next_hole(ref mutator.small, 48)
+            require found
+            let sample: Ref[Sample]? = nil
+            let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(sample))
+            require option_row != nil
+            let reference_index: i64 = sys.abi.range_index(option_row.get().components, 0)
+            require reference_index > 0
+            let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
+            require reference_row != nil
+            let type_index: i64 = sys.abi.range_index(reference_row.get().components, 0)
+            require type_index > 0
+            let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                mutator, ref mutator.small, cast[u32] type_index, 8,
+                sys.gc.core.granule_bytes, true)
+            if allocated != nil {
+                let payload: Ref[byte] = allocated.get()
+                assert __atomic_load(ref block.nfinal) == 1
+                let marker_probe: Ref[sys.gc.core.Marker]? = nil
+                let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+                    typeof(marker_probe))
+                if marker_row != nil {
+                    let marker_bytes: uint = sys.abi.size_bytes(marker_row.get())
+                    let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                        marker_bytes, sys.abi.alignment_bytes(marker_row.get()))
+                    if marker_map != nil {
+                        let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                        sys.gc.mark.marker_init(marker, heap, false)
+                        sys.gc.sync.ticket_lock(ref heap.lock)
+                        sys.gc.finalize.find_dead_locked(marker)
+                        __atomic_store(ref gate_closed, true)
+                        sys.gc.finalize.wake(heap)
+                        wait_blocked()
+                        sys.memory.unmap(marker, marker_bytes)
+                    } else { require false }
+                } else { require false }
+            } else { require false }
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+        __atomic_store(ref gate_closed, false)
+        wait_finalized(1)
+        __fd_write(2, "ok")
+    } else { require false }
+} else { require false }

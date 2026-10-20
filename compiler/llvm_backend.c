@@ -12134,6 +12134,15 @@ is_mutator_allocator(ir_func_t *function)
             CORE_STRING_STATIC("allocate_runtime_known_on_mutator"));
 }
 
+static bool
+is_mutator_getter(const ir_func_t *function)
+{
+    return core_string_eq(ir_module_name(function->owner),
+                          CORE_STRING_STATIC("sys.internal.gc.alloc"))
+        && core_string_eq(function->name,
+            CORE_STRING_STATIC("mutator_for_native"));
+}
+
 static void
 select_mutator_functions(
     const core_list_t(inline_function_ptr_t) *candidates,
@@ -12413,6 +12422,13 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         collect_mutator_candidates(inline_callees.data[i], &candidates);
     select_mutator_functions(&candidates, &mutator_functions);
     core_list_free(candidates);
+    for (size_t i = 0; i < mutator_functions.len; i++) {
+        if (!is_mutator_getter(mutator_functions.data[i])) continue;
+        core_list_free(mutator_functions);
+        core_list_free(inline_callees);
+        return backend_error(diagnostics,
+            "the native mutator getter reaches code that needs a mutator");
+    }
     for (size_t i = 0; i < mutator_functions.len; i++) {
         ir_func_t *function = mutator_functions.data[i];
         LLVMTypeRef signature = mutator_function_type(target, function);
