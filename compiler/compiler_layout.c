@@ -323,29 +323,53 @@ requested_record_symbol_for_type(n00bb_link_analysis_t *analysis,
 {
     if (!analysis || !analysis->units.len || !type) return nullptr;
     th_ctx *types = tu_state(analysis->units.data[0])->types;
-    uint64_t wanted = th_hash(types, th_resolve(type));
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        core_translation_unit_t *unit = analysis->units.data[u];
-        n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
-             scope; scope = scope->all_next) {
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                n00bb_record_layout_request_t *request = parse_sym_binding(
-                    symbol, CORE_STRING_STATIC(
-                        "n00bb.record-layout-request"));
-                if (!request || request->policy != policy
-                    || request->alignment_expression || !symbol->type
-                    || th_hash(types, th_resolve(symbol->type)) != wanted)
-                    continue;
-                if (owner_out) *owner_out = unit;
-                return symbol;
+    if (!analysis->record_requests_indexed) {
+        analysis->record_requests_indexed = true;
+        for (size_t u = 0; u < analysis->units.len; u++) {
+            core_translation_unit_t *unit = analysis->units.data[u];
+            n00bb_tu_state_t *state = tu_state(unit);
+            parse_symtab_t *symtab = state && state->annotations
+                ? state->annotations->symtab : nullptr;
+            for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+                 scope; scope = scope->all_next) {
+                for (parse_sym_entry_t *symbol = scope->first_in_scope;
+                     symbol; symbol = symbol->next_in_scope) {
+                    n00bb_record_layout_request_t *request =
+                        parse_sym_binding(symbol, CORE_STRING_STATIC(
+                            "n00bb.record-layout-request"));
+                    if (!request || request->alignment_expression
+                        || !symbol->type) continue;
+                    core_list_push(analysis->record_requests,
+                        ((n00bb_record_request_site_t){
+                            .typehash = th_hash(types,
+                                                th_resolve(symbol->type)),
+                            .policy = request->policy,
+                            .symbol = symbol,
+                            .unit = unit,
+                        }));
+                }
             }
         }
+        for (size_t p = 0; p <= N00BB_RECORD_C; p++)
+            core_dict_init(&analysis->record_requests_by_type[p], nullptr,
+                           nullptr);
+        for (size_t i = 0; i < analysis->record_requests.len; i++) {
+            n00bb_record_request_site_t *site =
+                &analysis->record_requests.data[i];
+            if ((size_t)site->policy <= N00BB_RECORD_C)
+                (void)core_dict_add(
+                    &analysis->record_requests_by_type[site->policy],
+                    site->typehash, site);
+        }
     }
-    return nullptr;
+    if ((size_t)policy > N00BB_RECORD_C) return nullptr;
+    bool found = false;
+    n00bb_record_request_site_t *site = core_dict_get(
+        &analysis->record_requests_by_type[policy],
+        th_hash(types, th_resolve(type)), &found);
+    if (!found || !site) return nullptr;
+    if (owner_out) *owner_out = site->unit;
+    return site->symbol;
 }
 
 static bool

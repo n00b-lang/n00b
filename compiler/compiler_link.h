@@ -2,6 +2,7 @@
 
 #include "compiler_tu.h"
 #include "driver.h"
+#include "abi_record_layout.h"
 #include "abi_static_graph.h"
 #include "llvm_backend.h"
 #include "specialize.h"
@@ -429,6 +430,14 @@ enum {
     N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION = 16,
 };
 
+typedef struct {
+    uint64_t typehash;
+    n00bb_record_policy_t policy;
+    parse_sym_entry_t *symbol;
+    core_translation_unit_t *unit;
+} n00bb_record_request_site_t;
+core_list_decl(n00bb_record_request_site_t);
+
 typedef struct n00bb_link_analysis_t {
     parse_grammar_t *grammar;
     ir_ctx_t *ir_context;
@@ -449,6 +458,9 @@ typedef struct n00bb_link_analysis_t {
     bool baked_failure_reported;
     bool build_time_capture;
     core_dict_t declarations_by_symbol;
+    core_list_t(n00bb_record_request_site_t) record_requests;
+    core_dict_t record_requests_by_type[N00BB_RECORD_C + 1];
+    bool record_requests_indexed;
     ir_exec_graph_t *execution_graph;
     th_env *environment;
     th_env *export_environment;

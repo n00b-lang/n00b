@@ -4423,6 +4423,10 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->emitted_functions);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
+    core_list_free(analysis->record_requests);
+    for (size_t p = 0; analysis->record_requests_indexed
+         && p <= N00BB_RECORD_C; p++)
+        core_dict_free(&analysis->record_requests_by_type[p]);
     for (size_t i = 0; i < analysis->static_graph_nodes.len; i++) {
         n00bb_static_graph_node_t *node =
             &analysis->static_graph_nodes.data[i].node;
