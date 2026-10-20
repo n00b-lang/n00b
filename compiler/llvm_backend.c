@@ -179,7 +179,7 @@ debug_info_begin(debug_info_t *debug, LLVMModuleRef module,
     LLVMMetadataRef file = debug_file(debug, path.data ? path
                                                        : ir_module_name(source));
     debug->unit = LLVMDIBuilderCreateCompileUnit(debug->builder,
-        LLVMDWARFSourceLanguageC11, file, "n00bb", 5, true, "", 0, 0, "", 0,
+        LLVMDWARFSourceLanguageC11, file, "n00b", 4, true, "", 0, 0, "", 0,
         LLVMDWARFEmissionFull, 0, false, false, "", 0, "", 0);
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);

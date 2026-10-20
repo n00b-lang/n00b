@@ -149,10 +149,10 @@ parse_cmdr_t *
 n00bb_make_cli(void)
 {
     const parse_cmdr_spec_t spec = {
-        .tool = CORE_STRING_STATIC("n00bb"),
+        .tool = CORE_STRING_STATIC("n00b"),
         .usage = CORE_STRING_STATIC(
-            "usage: n00bb [options] <module|file>\n"
-            "       n00bb <command> [options] <module|file>..."),
+            "usage: n00b [options] <module|file>\n"
+            "       n00b <command> [options] <module|file>..."),
         .flags = GLOBAL_FLAGS,
         .commands = COMMANDS,
         .default_command = CORE_STRING_STATIC("build"),

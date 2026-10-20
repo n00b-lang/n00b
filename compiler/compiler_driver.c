@@ -3838,7 +3838,7 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
     core_string_t output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (output.data && (check || parse_cmdr_arg_count(args) != 1)) {
-        fprintf(stderr, "n00bb fmt: --output requires one input and no --check\n");
+        fprintf(stderr, "n00b fmt: --output requires one input and no --check\n");
         return false;
     }
     bool ok = true;
@@ -3866,7 +3866,7 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
             ? n00bb_format_parse(grammar, normalized, &normalized_tokens)
             : nullptr;
         if (normalized.data && !normalized_parser) {
-            fprintf(stderr, "n00bb fmt: cannot normalize %.*s\n",
+            fprintf(stderr, "n00b fmt: cannot normalize %.*s\n",
                 (int)path.u8_bytes, path.data);
             core_free(normalized.data);
             ok = false;
@@ -3901,7 +3901,7 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
             : (core_string_t){0};
         core_free(channels.data);
         if (!formatted.data || !n00bb_format_parses(grammar, formatted)) {
-            fprintf(stderr, "n00bb fmt: cannot print %.*s\n",
+            fprintf(stderr, "n00b fmt: cannot print %.*s\n",
                 (int)path.u8_bytes, path.data);
             core_free(formatted.data);
             ok = false;
@@ -3916,7 +3916,7 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
             else {
                 core_string_t target = output.data ? output : path;
                 if (!n00bb_format_write(target, formatted)) {
-                    fprintf(stderr, "n00bb fmt: cannot write %.*s\n",
+                    fprintf(stderr, "n00b fmt: cannot write %.*s\n",
                             TEXT_ARGS(target));
                     ok = false;
                 }
@@ -4498,7 +4498,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (!parse_cmdr_result_ok(args)) {
         for (int32_t i = 0; i < parse_cmdr_result_error_count(args); i++) {
             core_string_t error = parse_cmdr_result_error(args, i);
-            fprintf(stderr, "n00bb: %.*s\n", (int)error.u8_bytes, error.data);
+            fprintf(stderr, "n00b: %.*s\n", (int)error.u8_bytes, error.data);
         }
         parse_cmdr_print_usage(cli, stderr);
         parse_cmdr_result_free(args);
@@ -4511,7 +4511,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool requested_generic = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--generic"));
     if (requested_native && requested_generic) {
-        fprintf(stderr, "n00bb: --native and --generic are mutually exclusive\n");
+        fprintf(stderr, "n00b: --native and --generic are mutually exclusive\n");
         parse_cmdr_result_free(args);
         parse_cmdr_free(cli);
         return 2;
@@ -4655,7 +4655,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     int64_t requested_jobs = parse_cmdr_flag_int(
         args, CORE_STRING_STATIC("--jobs"), 4);
     if (requested_jobs < 0 || requested_jobs > 128) {
-        fprintf(stderr, "n00bb: --jobs must be between 0 and 128\n");
+        fprintf(stderr, "n00b: --jobs must be between 0 and 128\n");
         scheduled = false;
     }
     int32_t define_count = parse_cmdr_flag_value_count(
@@ -4718,7 +4718,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         if (!grammar_path.data || !parse_bnf_load_file(
                 grammar_path, CORE_STRING_STATIC("module"), grammar)) {
             core_string_t error = parse_bnf_error();
-            fprintf(stderr, "n00bb: cannot load n00b grammar%s%.*s\n",
+            fprintf(stderr, "n00b: cannot load n00b grammar%s%.*s\n",
                     error.data ? ": " : "",
                     (int)error.u8_bytes, error.data ? error.data : "");
             scheduled = false;
@@ -4727,7 +4727,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_grammar_finalize(grammar);
             if (!scan_grammar_lex_compiled(grammar)) {
                 core_string_t error = scan_lex_compile_error();
-                fprintf(stderr, "n00bb: cannot compile lexer%s%.*s\n",
+                fprintf(stderr, "n00b: cannot compile lexer%s%.*s\n",
                         error.data ? ": " : "",
                         (int)error.u8_bytes, error.data ? error.data : "");
                 scheduled = false;
@@ -4795,7 +4795,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                parse_cmdr_flag_str(args, CORE_STRING_STATIC("--show-ffi")))) {
         core_string_t requested = parse_cmdr_flag_str(args,
             CORE_STRING_STATIC("--show-ffi"));
-        fprintf(stderr, "n00bb: no 'ffi literal named %.*s\n",
+        fprintf(stderr, "n00b: no 'ffi literal named %.*s\n",
                 TEXT_ARGS(requested));
         located = false;
     }
@@ -4825,7 +4825,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         CORE_STRING_STATIC("--output"));
     if (located && header_output.data
         && !n00bb_ffi_write_headers(ffi, header_output)) {
-        fprintf(stderr, "n00bb: could not write the generated header next to %.*s\n",
+        fprintf(stderr, "n00b: could not write the generated header next to %.*s\n",
                 (int)header_output.u8_bytes, header_output.data);
         located = false;
     }
@@ -4982,7 +4982,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && !(library_command && emit_interface) && !abi_emitted
         && !build_command) {
         fprintf(stderr,
-                "n00bb: translation units are located; '%.*s' processing is not implemented yet\n",
+                "n00b: translation units are located; '%.*s' processing is not implemented yet\n",
                 (int)command.u8_bytes, command.data);
         located = false;
     }
