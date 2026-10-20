@@ -15,6 +15,7 @@
 #include "parse/pwz.h"
 #include "scanner/token_stream.h"
 #include "ir/libir.h"
+#include "ir/summary.h"
 #include "th/environment.h"
 #include "builtin_types.h"
 #include "compiler_module_literal.h"
@@ -262,6 +263,8 @@ bool n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal);
 parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
 parse_sym_entry_t *simple_expression_symbol(parse_tree_t *node);
 bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
+ir_summary_t *n00bb_native_axiom(ir_summaries_t *summaries,
+                                 const ir_func_t *function);
 parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *target);

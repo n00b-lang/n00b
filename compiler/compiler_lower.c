@@ -19693,6 +19693,14 @@ n00bb_summary_call_targets(void *context, const ir_instr_t *call,
     return true;
 }
 
+static ir_summary_t *
+n00bb_summary_axiom(void *context, ir_summaries_t *summaries,
+                    const ir_func_t *function)
+{
+    (void)context;
+    return n00bb_native_axiom(summaries, function);
+}
+
 static void
 dump_splace(th_ctx *types, const ir_splace_t *place)
 {
@@ -19720,7 +19728,8 @@ dump_splace(th_ctx *types, const ir_splace_t *place)
 static void
 dump_function_summaries(n00bb_link_analysis_t *analysis)
 {
-    ir_summary_hooks_t hooks = {.call_targets = n00bb_summary_call_targets};
+    ir_summary_hooks_t hooks = {.call_targets = n00bb_summary_call_targets,
+                                .axiom = n00bb_summary_axiom};
     ir_summaries_t *summaries = ir_summaries_compute(
         analysis->reachable_functions.data,
         analysis->reachable_functions.len, &hooks);
