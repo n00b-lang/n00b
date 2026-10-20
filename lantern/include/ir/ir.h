@@ -721,6 +721,11 @@ ir_liveness_t ir_liveness_query_alias_after(
 ir_liveness_t ir_liveness_query_alias_on_edge(
     const ir_liveness_query_t *query, const ir_block_t *from,
     const ir_block_t *to);
+ir_liveness_t ir_liveness_query_direct_after(
+    const ir_liveness_query_t *query, const ir_instr_t *point);
+ir_liveness_t ir_liveness_query_direct_on_edge(
+    const ir_liveness_query_t *query, const ir_block_t *from,
+    const ir_block_t *to);
 typedef struct {
     ir_func_t *function;
     ir_value_t *binding;

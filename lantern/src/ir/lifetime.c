@@ -12,12 +12,6 @@ typedef const ir_value_t *ir_value_ptr_t;
 core_list_decl(ir_value_ptr_t);
 typedef core_list_t(ir_value_ptr_t) value_set_t;
 
-struct ir_liveness_query {
-    const ir_value_t *value;
-    value_set_t aliases;
-    bool complete;
-};
-
 static ir_annot_t *value_annot(const ir_value_t *value, core_string_t key)
 {
     return ir_annot_get(ir_value_annots((ir_value_t *)value), key);
@@ -678,44 +672,6 @@ alias_liveness_on_edge_closure(const value_set_t *work,
     return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
 }
 
-ir_liveness_query_t *
-ir_liveness_query_new(const ir_value_t *value)
-{
-    if (!value) return NULL;
-    ir_liveness_query_t *query = calloc(1, sizeof(*query));
-    if (!query) return NULL;
-    query->value = value;
-    query->complete = collect_alias_closure(value, &query->aliases);
-    return query;
-}
-
-void
-ir_liveness_query_free(ir_liveness_query_t *query)
-{
-    if (!query) return;
-    core_list_free(query->aliases);
-    free(query);
-}
-
-ir_liveness_t
-ir_liveness_query_alias_after(const ir_liveness_query_t *query,
-                              const ir_instr_t *point)
-{
-    return query && query->complete
-        ? alias_liveness_after_closure(&query->aliases, point)
-        : IR_LIVENESS_UNKNOWN;
-}
-
-ir_liveness_t
-ir_liveness_query_alias_on_edge(const ir_liveness_query_t *query,
-                                const ir_block_t *from,
-                                const ir_block_t *to)
-{
-    return query && query->complete
-        ? alias_liveness_on_edge_closure(&query->aliases, from, to)
-        : IR_LIVENESS_UNKNOWN;
-}
-
 ir_liveness_t
 ir_value_alias_liveness_after(const ir_value_t *value,
                               const ir_instr_t *point)
@@ -1028,20 +984,12 @@ table_at_block_entry(const liveness_table_t *table, const ir_block_t *block)
     return found_live ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
 }
 
-bool
-ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
-    ir_lifetime_endpoint_visitor_fn visitor, void *context)
+static bool
+cfg_verified(const ir_func_t *function)
 {
-    const ir_value_t *value = query ? query->value : NULL;
-    if (!value || !visitor || !value->owner || !value->owner->n_blocks
-        || (value->kind != IR_VAL_PARAM && value->kind != IR_VAL_LOCAL
-            && value->kind != IR_VAL_INSTR)) return false;
-    ir_func_t *function = value->owner;
-    ir_block_t *entry = ir_block_entry(function);
+    ir_block_t *entry = function && function->n_blocks
+        ? ir_block_entry((ir_func_t *)function) : NULL;
     if (!entry || !block_belongs_to(function, entry)) return false;
-    bool local_starts_at_entry = value->kind == IR_VAL_LOCAL
-        && !local_has_binding_initialization(value, function);
-
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         if (!block_belongs_to(function, block) || !block->n_instrs)
@@ -1062,25 +1010,144 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
             if (!block_belongs_to(function, target)) return false;
         }
     }
+    return true;
+}
 
+struct ir_liveness_query {
+    const ir_value_t *value;
+    value_set_t aliases;
+    bool complete;
+    bool cfg_valid;
+    bool alias_tabled;
+    bool direct_tabled;
+    liveness_table_t alias_table;
+    liveness_table_t direct_table;
+};
+
+ir_liveness_query_t *
+ir_liveness_query_new(const ir_value_t *value)
+{
+    if (!value) return NULL;
+    ir_liveness_query_t *query = calloc(1, sizeof(*query));
+    if (!query) return NULL;
+    query->value = value;
+    query->complete = collect_alias_closure(value, &query->aliases);
+    query->cfg_valid = cfg_verified(value->owner);
+    if (!query->cfg_valid) return query;
+    value_set_t direct = {0};
+    if (core_list_try_push(direct, value))
+        query->direct_tabled = liveness_table_build(&query->direct_table,
+            value->owner, &direct);
+    core_list_free(direct);
+    if (query->complete)
+        query->alias_tabled = liveness_table_build(&query->alias_table,
+            value->owner, &query->aliases);
+    return query;
+}
+
+void
+ir_liveness_query_free(ir_liveness_query_t *query)
+{
+    if (!query) return;
+    if (query->alias_tabled) liveness_table_free(&query->alias_table);
+    if (query->direct_tabled) liveness_table_free(&query->direct_table);
+    core_list_free(query->aliases);
+    free(query);
+}
+
+static bool
+tabled_point(const ir_liveness_query_t *query, const ir_instr_t *point)
+{
+    return query->cfg_valid && instruction_belongs_to(query->value->owner,
+                                                      point);
+}
+
+static bool
+tabled_edge(const ir_liveness_query_t *query, const ir_block_t *from,
+            const ir_block_t *to)
+{
+    const ir_func_t *function = query->value->owner;
+    if (!query->cfg_valid || !block_belongs_to(function, from)
+        || !block_belongs_to(function, to)) return false;
+    ir_instr_t *terminator = ir_block_terminator((ir_block_t *)from);
+    for (uint32_t s = 0; s < ir_succ_count(terminator); s++)
+        if (ir_succ_at(terminator, s) == to) return true;
+    return false;
+}
+
+ir_liveness_t
+ir_liveness_query_alias_after(const ir_liveness_query_t *query,
+                              const ir_instr_t *point)
+{
+    if (!query || !query->complete) return IR_LIVENESS_UNKNOWN;
+    return query->alias_tabled && tabled_point(query, point)
+        ? table_after(&query->alias_table, point)
+        : alias_liveness_after_closure(&query->aliases, point);
+}
+
+ir_liveness_t
+ir_liveness_query_alias_on_edge(const ir_liveness_query_t *query,
+                                const ir_block_t *from,
+                                const ir_block_t *to)
+{
+    if (!query || !query->complete) return IR_LIVENESS_UNKNOWN;
+    return query->alias_tabled && tabled_edge(query, from, to)
+        ? table_on_edge(&query->alias_table, from, to)
+        : alias_liveness_on_edge_closure(&query->aliases, from, to);
+}
+
+ir_liveness_t
+ir_liveness_query_direct_after(const ir_liveness_query_t *query,
+                               const ir_instr_t *point)
+{
+    if (!query) return IR_LIVENESS_UNKNOWN;
+    return query->direct_tabled && tabled_point(query, point)
+        ? table_after(&query->direct_table, point)
+        : ir_value_liveness_after(query->value, point);
+}
+
+ir_liveness_t
+ir_liveness_query_direct_on_edge(const ir_liveness_query_t *query,
+                                 const ir_block_t *from,
+                                 const ir_block_t *to)
+{
+    if (!query) return IR_LIVENESS_UNKNOWN;
+    return query->direct_tabled && tabled_edge(query, from, to)
+        ? table_on_edge(&query->direct_table, from, to)
+        : ir_value_liveness_on_edge(query->value, from, to);
+}
+
+bool
+ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
+    ir_lifetime_endpoint_visitor_fn visitor, void *context)
+{
+    const ir_value_t *value = query ? query->value : NULL;
+    if (!value || !visitor || !value->owner || !value->owner->n_blocks
+        || (value->kind != IR_VAL_PARAM && value->kind != IR_VAL_LOCAL
+            && value->kind != IR_VAL_INSTR)) return false;
+    ir_func_t *function = value->owner;
+    ir_block_t *entry = ir_block_entry(function);
+    if (!entry || !block_belongs_to(function, entry)) return false;
+    bool local_starts_at_entry = value->kind == IR_VAL_LOCAL
+        && !local_has_binding_initialization(value, function);
+    if (!query->cfg_valid) return false;
     if (!query->complete) return true;
-    liveness_table_t table;
-    if (!liveness_table_build(&table, function, &query->aliases))
-        return false;
+    if (!query->alias_tabled) return false;
+    const liveness_table_t *table = &query->alias_table;
     bool ok = true;
     for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
         for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
             ir_instr_t *point = block->instrs[i];
-            if (table_after(&table, point) != IR_LIVENESS_DEAD) continue;
+            if (table_after(table, point) != IR_LIVENESS_DEAD) continue;
             bool starts_here = value_starts_at_instruction(
                 value, point, local_starts_at_entry);
             bool is_entry_parameter = value->kind == IR_VAL_PARAM
                 && block == entry && i == 0;
             ir_liveness_t before = i
-                ? table_after(&table, block->instrs[i - 1])
-                : table_at_block_entry(&table, block);
+                ? table_after(table, block->instrs[i - 1])
+                : table_at_block_entry(table, block);
             bool terminator_fallback = point == terminator
                 && before == IR_LIVENESS_UNKNOWN;
             if (!starts_here && !is_entry_parameter
@@ -1097,10 +1164,10 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
     for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
-        if (table_after(&table, terminator) != IR_LIVENESS_LIVE) continue;
+        if (table_after(table, terminator) != IR_LIVENESS_LIVE) continue;
         for (uint32_t s = 0; ok && s < ir_succ_count(terminator); s++) {
             ir_block_t *target = ir_succ_at(terminator, s);
-            if (table_on_edge(&table, block, target) != IR_LIVENESS_DEAD)
+            if (table_on_edge(table, block, target) != IR_LIVENESS_DEAD)
                 continue;
             ok = visitor(context, (ir_lifetime_endpoint_t){
                 .function = function,
@@ -1110,7 +1177,6 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
             });
         }
     }
-    liveness_table_free(&table);
     return ok;
 }
 
