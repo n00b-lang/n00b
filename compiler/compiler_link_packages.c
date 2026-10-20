@@ -850,8 +850,8 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                      CORE_STRING_STATIC("enter"), 1u << 0},
                     {CORE_STRING_STATIC("context-exit"),
                      CORE_STRING_STATIC("exit"), 1u << 1},
-                    {CORE_STRING_STATIC("context-error"),
-                     CORE_STRING_STATIC("error"), 1u << 2},
+                    {CORE_STRING_STATIC("context-fail"),
+                     CORE_STRING_STATIC("fail"), 1u << 2},
                     {CORE_STRING_STATIC("context-ensure"),
                      CORE_STRING_STATIC("ensure"), 1u << 3},
                 };
@@ -1262,7 +1262,7 @@ register_package_context_callables(parse_grammar_t *grammar,
     } hooks[] = {
         {CORE_STRING_STATIC("context-enter"), CORE_STRING_STATIC("enter")},
         {CORE_STRING_STATIC("context-exit"), CORE_STRING_STATIC("exit")},
-        {CORE_STRING_STATIC("context-error"), CORE_STRING_STATIC("error")},
+        {CORE_STRING_STATIC("context-fail"), CORE_STRING_STATIC("fail")},
         {CORE_STRING_STATIC("context-ensure"), CORE_STRING_STATIC("ensure")},
     };
     for (size_t i = 0; i < sizeof(hooks) / sizeof(hooks[0]); i++) {

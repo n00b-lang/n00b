@@ -1505,7 +1505,7 @@ semantic_walk_child_complete(parse_visit_t *visit)
         record_context_signature(context->grammar, unit, node,
                                  tu_state(unit));
     if ((NT_IS(context->grammar, node, "context-exit")
-         || NT_IS(context->grammar, node, "context-error")
+         || NT_IS(context->grammar, node, "context-fail")
          || NT_IS(context->grammar, node, "context-ensure"))
         && NT_IS(context->grammar, child, "context-hook-params"))
         record_context_hook_signature(context->grammar, unit, node,

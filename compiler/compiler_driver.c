@@ -785,7 +785,7 @@ dump_link_unit(core_link_unit_t *link)
         CORE_STRING_STATIC("n00bb.semantic.declaration-facts"),
         CORE_STRING_STATIC("n00bb.ir.context.enter"),
         CORE_STRING_STATIC("n00bb.ir.context.exit"),
-        CORE_STRING_STATIC("n00bb.ir.context.error"),
+        CORE_STRING_STATIC("n00bb.ir.context.fail"),
         CORE_STRING_STATIC("n00bb.ir.context.ensure"),
     };
     puts("  declarations:");

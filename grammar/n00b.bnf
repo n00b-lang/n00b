@@ -203,12 +203,12 @@
 <context-hook> ::= <pass-stmt>
                  | <context-enter>
                  | <context-exit>
-                 | <context-error>
+                 | <context-fail>
                  | <context-ensure>
 
 <context-enter> @scope("context-hook") ::= %"enter" %"(" %")" <body>
 <context-exit> @scope("context-hook") ::= %"exit" <context-hook-params> <body>
-<context-error> @scope("context-hook") ::= %"error" <context-hook-params> <body>
+<context-fail> @scope("context-hook") ::= %"fail" <context-hook-params> <body>
 <context-ensure> @scope("context-hook") ::= %"ensure" <context-hook-params> <body>
 
 <context-hook-params> ::= %"(" <pos-param>? %")"

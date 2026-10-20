@@ -7871,8 +7871,8 @@ n00bb_context_has_hook(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
             ? CORE_STRING_STATIC("enter")
         : core_string_eq(name, CORE_STRING_STATIC("context-exit"))
             ? CORE_STRING_STATIC("exit")
-        : core_string_eq(name, CORE_STRING_STATIC("context-error"))
-            ? CORE_STRING_STATIC("error")
+        : core_string_eq(name, CORE_STRING_STATIC("context-fail"))
+            ? CORE_STRING_STATIC("fail")
         : core_string_eq(name, CORE_STRING_STATIC("context-ensure"))
             ? CORE_STRING_STATIC("ensure") : (core_string_t){};
     core_buffer_t hook_name = {0};
@@ -7954,7 +7954,8 @@ n00bb_emit_context_hook_call(ir_lower_context_t *context,
         && item->captures.len == fixed_captures + has_rest_capture
         && call && (!can_fail
         || ir_instr_set_dest(call, result_name, result_type))
-        && ir_instr_operand_value(call, address);
+        && ir_instr_operand_value(call, address)
+        && ir_instr_set_call_signature(call, signature);
     for (size_t i = 0; emitted && i < fixed_captures; i++)
         emitted = ir_instr_operand_value(call, item->captures.data[i]);
     if (emitted && hook_value)
@@ -8066,20 +8067,20 @@ n00bb_propagate_context_hook_failure(ir_lower_context_t *context,
 }
 
 static bool
-n00bb_emit_context_error_handler(ir_lower_context_t *context,
-                                 n00bb_with_item_t *item,
-                                 parse_tree_t *source, ir_value_t *error,
-                                 ir_span_t span)
+n00bb_emit_context_fail_handler(ir_lower_context_t *context,
+                                n00bb_with_item_t *item,
+                                parse_tree_t *source, ir_value_t *error,
+                                ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
     if (!lower || !n00bb_context_has_hook(lower->grammar,
-            item->context_symbol, CORE_STRING_STATIC("context-error")))
+            item->context_symbol, CORE_STRING_STATIC("context-fail")))
         return n00bb_propagate_context_hook_failure(context, source, error,
                                                     span, item->order);
 
     ir_value_t *outcome = nullptr;
     th_type *failure = nullptr;
-    if (!n00bb_emit_context_hook_call(context, item, CORE_STRING_STATIC("context-error"), error,
+    if (!n00bb_emit_context_hook_call(context, item, CORE_STRING_STATIC("context-fail"), error,
                                       span, &outcome, &failure)
         || !outcome || !failure)
         return false;
@@ -8150,15 +8151,15 @@ n00bb_emit_context_exit(ir_lower_context_t *context,
                                                     failure, span);
     if (!error) return false;
     if (!n00bb_context_has_hook(lower->grammar, item->context_symbol,
-                                CORE_STRING_STATIC("context-error"))) {
+                                CORE_STRING_STATIC("context-fail"))) {
         if (!n00bb_emit_context_hook(context, item, CORE_STRING_STATIC("context-ensure"),
                                      item->provided_value, span)
             || !n00bb_propagate_context_hook_failure(context, source, error,
                                                       span, item->order))
             return false;
     }
-    else if (!n00bb_emit_context_error_handler(context, item, source, error,
-                                                span)) return false;
+    else if (!n00bb_emit_context_fail_handler(context, item, source, error,
+                                               span)) return false;
 
     context->block = join;
     context->reachable = true;
@@ -8877,7 +8878,8 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         sizeof(value_buffer), "__n00bb_context_%llu",
         (unsigned long long)context->next_value_id++);
     bool emitted = call && ir_instr_set_dest(call, value_name, outcome_type)
-        && ir_instr_operand_value(call, address);
+        && ir_instr_operand_value(call, address)
+        && ir_instr_set_call_signature(call, signature);
     for (size_t i = 0; emitted && i < captures.len; i++)
         emitted = ir_instr_operand_value(call, captures.data[i]);
     if (!emitted) {
@@ -15319,8 +15321,8 @@ context_hook_suffix(parse_grammar_t *grammar, parse_tree_t *hook)
         return CORE_STRING_STATIC("enter");
     if (nt_is(grammar, hook, CORE_STRING_STATIC("context-exit")))
         return CORE_STRING_STATIC("exit");
-    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-error")))
-        return CORE_STRING_STATIC("error");
+    if (nt_is(grammar, hook, CORE_STRING_STATIC("context-fail")))
+        return CORE_STRING_STATIC("fail");
     if (nt_is(grammar, hook, CORE_STRING_STATIC("context-ensure")))
         return CORE_STRING_STATIC("ensure");
     return (core_string_t){};
@@ -15335,8 +15337,8 @@ context_hook_binding_role(parse_grammar_t *grammar, parse_tree_t *hook)
         return CORE_STRING_STATIC("n00bb.ir.context.enter");
     if (core_string_eq(suffix, CORE_STRING_STATIC("exit")))
         return CORE_STRING_STATIC("n00bb.ir.context.exit");
-    if (core_string_eq(suffix, CORE_STRING_STATIC("error")))
-        return CORE_STRING_STATIC("n00bb.ir.context.error");
+    if (core_string_eq(suffix, CORE_STRING_STATIC("fail")))
+        return CORE_STRING_STATIC("n00bb.ir.context.fail");
     if (core_string_eq(suffix, CORE_STRING_STATIC("ensure")))
         return CORE_STRING_STATIC("n00bb.ir.context.ensure");
     return (core_string_t){};
@@ -15473,8 +15475,8 @@ add_context_hook_functions(parse_grammar_t *grammar,
                      CORE_STRING_STATIC("n00bb.ir.context.enter")},
                     {CORE_STRING_STATIC("exit"),
                      CORE_STRING_STATIC("n00bb.ir.context.exit")},
-                    {CORE_STRING_STATIC("error"),
-                     CORE_STRING_STATIC("n00bb.ir.context.error")},
+                    {CORE_STRING_STATIC("fail"),
+                     CORE_STRING_STATIC("n00bb.ir.context.fail")},
                     {CORE_STRING_STATIC("ensure"),
                      CORE_STRING_STATIC("n00bb.ir.context.ensure")},
                 };
@@ -15541,7 +15543,7 @@ add_context_hook_functions(parse_grammar_t *grammar,
             static const core_string_t hooks[] = {
                 CORE_STRING_STATIC("context-enter"),
                 CORE_STRING_STATIC("context-exit"),
-                CORE_STRING_STATIC("context-error"),
+                CORE_STRING_STATIC("context-fail"),
                 CORE_STRING_STATIC("context-ensure"),
             };
             for (size_t i = 0; ok && i < sizeof(hooks) / sizeof(hooks[0]);
@@ -21055,7 +21057,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                 static const core_string_t hooks[] = {
                     CORE_STRING_STATIC("context-enter"),
                     CORE_STRING_STATIC("context-exit"),
-                    CORE_STRING_STATIC("context-error"),
+                    CORE_STRING_STATIC("context-fail"),
                     CORE_STRING_STATIC("context-ensure"),
                 };
                 for (size_t h = 0; ok

@@ -7058,7 +7058,7 @@ record_context_signature(parse_grammar_t *grammar,
     static const core_string_t hook_names[] = {
         CORE_STRING_STATIC("context-enter"),
         CORE_STRING_STATIC("context-exit"),
-        CORE_STRING_STATIC("context-error"),
+        CORE_STRING_STATIC("context-fail"),
         CORE_STRING_STATIC("context-ensure"),
     };
     for (size_t hook_index = 0;; hook_index++) {
@@ -7084,12 +7084,12 @@ record_context_signature(parse_grammar_t *grammar,
     }
     parse_tree_t *provides = CHILD_NT(grammar, spec, "provides-clause");
     parse_tree_t *error = CHILD_NT(grammar, spec, "error-type");
-    parse_tree_t *error_hook = parse_sym_binding(symbol,
-        CORE_STRING_STATIC("n00bb.ir.context.error"));
-    if (error_hook && !error) {
+    parse_tree_t *fail_hook = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.ir.context.fail"));
+    if (fail_hook && !error) {
         core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
             CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0005"),
-            CORE_STRING_STATIC("a context error hook requires a declared context failure type"));
+            CORE_STRING_STATIC("a context fail hook requires a declared context failure type"));
         return;
     }
 
@@ -7132,7 +7132,7 @@ record_context_hook_signature(parse_grammar_t *grammar,
     if (!hook || !state || !state->types) return;
     int hook_index = NT_IS(grammar, hook, "context-enter") ? 0
         : NT_IS(grammar, hook, "context-exit") ? 1
-        : NT_IS(grammar, hook, "context-error") ? 2
+        : NT_IS(grammar, hook, "context-fail") ? 2
         : NT_IS(grammar, hook, "context-ensure") ? 3 : -1;
     if (hook_index < 0) return;
     parse_tree_t *context = parse_tree_parent(hook);
@@ -9729,8 +9729,8 @@ n00bb_context_hook_role(core_string_t name)
         return CORE_STRING_STATIC("n00bb.ir.context.enter");
     if (core_string_eq(name, CORE_STRING_STATIC("context-exit")))
         return CORE_STRING_STATIC("n00bb.ir.context.exit");
-    if (core_string_eq(name, CORE_STRING_STATIC("context-error")))
-        return CORE_STRING_STATIC("n00bb.ir.context.error");
+    if (core_string_eq(name, CORE_STRING_STATIC("context-fail")))
+        return CORE_STRING_STATIC("n00bb.ir.context.fail");
     if (core_string_eq(name, CORE_STRING_STATIC("context-ensure")))
         return CORE_STRING_STATIC("n00bb.ir.context.ensure");
     return (core_string_t){};
