@@ -51,6 +51,7 @@ struct core_snapshot_inventory_t {
     core_list_t(core_string_t) roots;
     core_list_t(inventory_entry_t) entries;
     core_snapshot_inventory_accept_fn accept;
+    core_snapshot_inventory_descend_fn descend;
     void *context;
     uint64_t generation;
     uint64_t next_revision;
@@ -387,6 +388,13 @@ core_snapshot_inventory_free(core_snapshot_inventory_t *inventory)
     core_free(inventory);
 }
 
+void
+core_snapshot_inventory_set_descend(core_snapshot_inventory_t *inventory,
+                                    core_snapshot_inventory_descend_fn descend)
+{
+    if (inventory) inventory->descend = descend;
+}
+
 bool
 core_snapshot_inventory_enable_cache(core_snapshot_inventory_t *inventory,
                                      core_string_t cache_root,
@@ -500,6 +508,13 @@ accepts(const core_snapshot_inventory_t *inventory, core_string_t relative)
 }
 
 static bool
+descends(const core_snapshot_inventory_t *inventory, core_string_t absolute)
+{
+    return !inventory->descend || inventory->descend(inventory->context,
+                                                     absolute);
+}
+
+static bool
 scan_directory(refresh_context_t *refresh, size_t root_index,
                core_string_t relative)
 {
@@ -521,8 +536,7 @@ scan_directory(refresh_context_t *refresh, size_t root_index,
     }
     bool ok = true;
     do {
-        if (!wcscmp(item.cFileName, L".")
-            || !wcscmp(item.cFileName, L"..")) continue;
+        if (item.cFileName[0] == L'.') continue;
         core_string_t name = utf8_name(item.cFileName);
         if (!name.data) { ok = false; break; }
         core_string_t child = relative.u8_bytes ? join_path(relative, name)
@@ -532,7 +546,10 @@ scan_directory(refresh_context_t *refresh, size_t root_index,
         bool directory = false, regular = false;
         int found = path_signature(absolute, &signature, &directory, &regular);
         if (found != 1) ok = false;
-        else if (directory) ok = scan_directory(refresh, root_index, child);
+        else if (directory) {
+            if (descends(refresh->inventory, absolute))
+                ok = scan_directory(refresh, root_index, child);
+        }
         else if (regular && accepts(refresh->inventory, child))
             ok = add_file(refresh, root_index, child, absolute, signature);
         core_free(absolute.data);
@@ -551,7 +568,7 @@ scan_directory(refresh_context_t *refresh, size_t root_index,
     struct dirent *item;
     while (ok && (item = readdir(directory))) {
         core_string_t name = core_string_from_cstr(item->d_name);
-        if (is_dot_entry(name)) {
+        if (is_dot_entry(name) || (name.u8_bytes && name.data[0] == '.')) {
             core_free(name.data);
             continue;
         }
@@ -564,7 +581,10 @@ scan_directory(refresh_context_t *refresh, size_t root_index,
         int found = path_signature(absolute, &signature, &is_directory,
                                    &regular);
         if (found < 0) ok = false;
-        else if (is_directory) ok = scan_directory(refresh, root_index, child);
+        else if (is_directory) {
+            if (descends(refresh->inventory, absolute))
+                ok = scan_directory(refresh, root_index, child);
+        }
         else if (regular && accepts(refresh->inventory, child))
             ok = add_file(refresh, root_index, child, absolute, signature);
         core_free(absolute.data);
@@ -898,9 +918,11 @@ scan_package_directory(refresh_context_t *refresh, size_t root_index,
         int child_found = path_signature(absolute, &child_signature,
                                         &child_directory, &child_regular);
         if (child_found < 0) ok = false;
-        else if (child_directory && recursive)
-            ok = scan_package_directory(refresh, root_index, child,
-                                        true, directories);
+        else if (child_directory && recursive) {
+            if (descends(refresh->inventory, absolute))
+                ok = scan_package_directory(refresh, root_index, child,
+                                            true, directories);
+        }
         else if (child_regular && accepts(refresh->inventory, child))
             ok = add_file(refresh, root_index, child, absolute,
                           child_signature);

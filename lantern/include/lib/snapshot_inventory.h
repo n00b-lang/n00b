@@ -15,6 +15,8 @@ typedef struct {
  * read. A snapshot is immutable and may be retained across refreshes. */
 typedef bool (*core_snapshot_inventory_accept_fn)(
     void *context, core_string_t relative_path);
+typedef bool (*core_snapshot_inventory_descend_fn)(
+    void *context, core_string_t absolute_path);
 typedef bool (*core_snapshot_inventory_visit_fn)(
     void *context, size_t root_index, core_string_t relative_path,
     const core_source_snapshot_t *snapshot);
@@ -23,6 +25,9 @@ core_snapshot_inventory_t *core_snapshot_inventory_new(
     const core_string_t *roots, size_t root_count,
     core_snapshot_inventory_accept_fn accept, void *context);
 void core_snapshot_inventory_free(core_snapshot_inventory_t *inventory);
+void core_snapshot_inventory_set_descend(
+    core_snapshot_inventory_t *inventory,
+    core_snapshot_inventory_descend_fn descend);
 /* Cache each root's immediate source-package directory under the absolute
  * cache_root, at the package's canonical absolute path. A matching cache
  * avoids recursive directory scans and source reads; file and directory
