@@ -471,6 +471,8 @@ static void check_func(ir_func_t *f, ir_diags_t *d)
     p.base = core_alloc_size(sizeof(uint32_t), f->n_blocks + 1);
     if (!p.pdg || !p.dom || !p.base) {
         core_free(p.base);
+        ir_pdg_free(p.pdg);
+        ir_doms_free(p.dom);
         return;
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
@@ -501,6 +503,8 @@ static void check_func(ir_func_t *f, ir_diags_t *d)
     core_free(p.forward);
     core_free(p.backward);
     core_free(p.base);
+    ir_pdg_free(p.pdg);
+    ir_doms_free(p.dom);
 }
 
 static bool check_visit(ir_visit_t *vi)

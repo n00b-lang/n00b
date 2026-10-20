@@ -5,6 +5,7 @@
 #include "ir/doms.h"
 
 struct ir_doms_t {
+    core_arena_t arena;
     ir_func_t   *f;
     uint32_t     n;
     ir_block_t **rpo;
@@ -78,10 +79,10 @@ ir_block_t *ir_succ_at(ir_instr_t *t, uint32_t want)
 
 static void build_preds(ir_doms_t *d, ir_func_t *f)
 {
-    ir_ctx_t *ctx   = f->owner->ctx;
+    core_arena_t *ctx = &d->arena;
     uint32_t  edges = 0;
 
-    d->pred_off = ir_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
+    d->pred_off = core_arena_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
         ir_instr_t *t = ir_block_terminator(f->blocks[i]);
@@ -100,10 +101,10 @@ static void build_preds(ir_doms_t *d, ir_func_t *f)
         d->pred_off[i + 1] += d->pred_off[i];
     }
 
-    uint32_t *fill = ir_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
+    uint32_t *fill = core_arena_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
 
     memcpy(fill, d->pred_off, (d->n + 1) * sizeof(uint32_t));
-    d->pred_at = ir_alloc(ctx, (edges ? edges : 1) * sizeof(uint32_t));
+    d->pred_at = core_arena_alloc(ctx, (edges ? edges : 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
         ir_instr_t *t = ir_block_terminator(f->blocks[i]);
@@ -120,10 +121,10 @@ static void build_preds(ir_doms_t *d, ir_func_t *f)
 
 static void build_rpo(ir_doms_t *d, ir_func_t *f)
 {
-    ir_ctx_t    *ctx   = f->owner->ctx;
-    ir_block_t **stack = ir_alloc(ctx, d->n * sizeof(ir_block_t *));
-    uint32_t    *next  = ir_alloc(ctx, d->n * sizeof(uint32_t));
-    bool        *seen  = ir_alloc(ctx, d->n * sizeof(bool));
+    core_arena_t *ctx  = &d->arena;
+    ir_block_t **stack = core_arena_alloc(ctx, d->n * sizeof(ir_block_t *));
+    uint32_t    *next  = core_arena_alloc(ctx, d->n * sizeof(uint32_t));
+    bool        *seen  = core_arena_alloc(ctx, d->n * sizeof(bool));
     uint32_t     top   = 0;
     uint32_t     post  = 0;
     ir_block_t  *entry = ir_block_entry(f);
@@ -269,7 +270,7 @@ static uint32_t lt_dfs(const lt_graph *g, lt_t *lt, uint32_t *stack,
     return at;
 }
 
-static void lt_run(ir_ctx_t *ctx, const lt_graph *g, int32_t *out)
+static void lt_run(core_arena_t *ctx, const lt_graph *g, int32_t *out)
 {
     uint32_t n  = g->n;
     lt_t     lt = {0};
@@ -278,19 +279,19 @@ static void lt_run(ir_ctx_t *ctx, const lt_graph *g, int32_t *out)
         out[i] = -1;
     }
 
-    lt.dfn      = ir_alloc(ctx, n * sizeof(uint32_t));
-    lt.vertex   = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.parent   = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.semi     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.ancestor = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.label    = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.idom     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.bucket   = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.next     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    lt.path     = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.dfn      = core_arena_alloc(ctx, n * sizeof(uint32_t));
+    lt.vertex   = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.parent   = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.semi     = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.ancestor = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.label    = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.idom     = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.bucket   = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.next     = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    lt.path     = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
-    uint32_t *stack = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    uint32_t *step  = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    uint32_t *stack = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    uint32_t *step  = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
     uint32_t  last  = lt_dfs(g, &lt, stack, step);
 
     lt.n = last;
@@ -346,10 +347,10 @@ static void lt_run(ir_ctx_t *ctx, const lt_graph *g, int32_t *out)
 
 static void build_succs(ir_doms_t *d, ir_func_t *f)
 {
-    ir_ctx_t *ctx = f->owner->ctx;
+    core_arena_t *ctx = &d->arena;
     uint32_t  n   = d->n;
 
-    d->succ_off = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    d->succ_off = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < n; i++) {
         d->succ_off[f->blocks[i]->index + 1]
@@ -360,7 +361,7 @@ static void build_succs(ir_doms_t *d, ir_func_t *f)
         d->succ_off[i + 1] += d->succ_off[i];
     }
 
-    d->succ_at = ir_alloc(ctx, (d->succ_off[n] ? d->succ_off[n] : 1)
+    d->succ_at = core_arena_alloc(ctx, (d->succ_off[n] ? d->succ_off[n] : 1)
                                    * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < n; i++) {
@@ -389,14 +390,14 @@ static void build_idoms(ir_doms_t *d, ir_func_t *f)
         .pred_at  = d->pred_at,
     };
 
-    lt_run(f->owner->ctx, &g, d->idom);
+    lt_run(&d->arena, &g, d->idom);
 }
 
-static void build_tour(ir_doms_t *d, ir_func_t *f)
+static void build_tour(ir_doms_t *d)
 {
-    ir_ctx_t *ctx      = f->owner->ctx;
-    uint32_t *kid_off  = ir_alloc(ctx, (d->n + 2) * sizeof(uint32_t));
-    uint32_t *kid_at   = ir_alloc(ctx, (d->n ? d->n : 1) * sizeof(uint32_t));
+    core_arena_t *ctx  = &d->arena;
+    uint32_t *kid_off  = core_arena_alloc(ctx, (d->n + 2) * sizeof(uint32_t));
+    uint32_t *kid_at   = core_arena_alloc(ctx, (d->n ? d->n : 1) * sizeof(uint32_t));
     uint32_t  root     = d->n_rpo ? d->rpo[0]->index : 0;
 
     for (uint32_t i = 0; i < d->n_rpo; i++) {
@@ -411,7 +412,7 @@ static void build_tour(ir_doms_t *d, ir_func_t *f)
         kid_off[i + 1] += kid_off[i];
     }
 
-    uint32_t *fill = ir_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
+    uint32_t *fill = core_arena_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
 
     memcpy(fill, kid_off, (d->n + 1) * sizeof(uint32_t));
 
@@ -423,8 +424,8 @@ static void build_tour(ir_doms_t *d, ir_func_t *f)
         }
     }
 
-    uint32_t *stack = ir_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
-    uint32_t *at    = ir_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
+    uint32_t *stack = core_arena_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
+    uint32_t *at    = core_arena_alloc(ctx, (d->n + 1) * sizeof(uint32_t));
     uint32_t  top   = 0;
     uint32_t  clock = 0;
 
@@ -455,14 +456,14 @@ static void build_tour(ir_doms_t *d, ir_func_t *f)
     }
 }
 
-static void build_postdoms(ir_doms_t *d, ir_func_t *f)
+static void build_postdoms(ir_doms_t *d)
 {
-    ir_ctx_t *ctx  = f->owner->ctx;
+    core_arena_t *ctx = &d->arena;
     uint32_t  n    = d->n;
     uint32_t  exit = n;
     uint32_t  m    = n + 1;
-    uint32_t *soff = ir_alloc(ctx, (m + 1) * sizeof(uint32_t));
-    uint32_t *poff = ir_alloc(ctx, (m + 1) * sizeof(uint32_t));
+    uint32_t *soff = core_arena_alloc(ctx, (m + 1) * sizeof(uint32_t));
+    uint32_t *poff = core_arena_alloc(ctx, (m + 1) * sizeof(uint32_t));
 
     for (uint32_t v = 0; v < n; v++) {
         soff[v + 1] = d->pred_off[v + 1] - d->pred_off[v];
@@ -483,9 +484,9 @@ static void build_postdoms(ir_doms_t *d, ir_func_t *f)
         poff[v + 1] += poff[v];
     }
 
-    uint32_t *sat = ir_alloc(ctx, (soff[m] ? soff[m] : 1) * sizeof(uint32_t));
-    uint32_t *pat = ir_alloc(ctx, (poff[m] ? poff[m] : 1) * sizeof(uint32_t));
-    uint32_t *fill = ir_alloc(ctx, (m + 1) * sizeof(uint32_t));
+    uint32_t *sat = core_arena_alloc(ctx, (soff[m] ? soff[m] : 1) * sizeof(uint32_t));
+    uint32_t *pat = core_arena_alloc(ctx, (poff[m] ? poff[m] : 1) * sizeof(uint32_t));
+    uint32_t *fill = core_arena_alloc(ctx, (m + 1) * sizeof(uint32_t));
 
     for (uint32_t v = 0; v <= m; v++) {
         fill[v] = soff[v];
@@ -533,17 +534,20 @@ ir_doms_t *ir_doms_of(ir_func_t *f)
         return nullptr;
     }
 
-    ir_ctx_t  *ctx = f->owner->ctx;
-    ir_doms_t *d   = ir_alloc(ctx, sizeof(ir_doms_t));
+    ir_doms_t *d = core_alloc(ir_doms_t);
+
+    core_arena_init(&d->arena, 16 * 1024);
+
+    core_arena_t *ctx = &d->arena;
 
     d->f     = f;
     d->n     = f->n_blocks;
-    d->rpo   = ir_alloc(ctx, d->n * sizeof(ir_block_t *));
-    d->order = ir_alloc(ctx, d->n * sizeof(uint32_t));
-    d->idom  = ir_alloc(ctx, d->n * sizeof(int32_t));
-    d->tin   = ir_alloc(ctx, d->n * sizeof(uint32_t));
-    d->tout  = ir_alloc(ctx, d->n * sizeof(uint32_t));
-    d->ipdom = ir_alloc(ctx, (d->n + 1) * sizeof(int32_t));
+    d->rpo   = core_arena_alloc(ctx, d->n * sizeof(ir_block_t *));
+    d->order = core_arena_alloc(ctx, d->n * sizeof(uint32_t));
+    d->idom  = core_arena_alloc(ctx, d->n * sizeof(int32_t));
+    d->tin   = core_arena_alloc(ctx, d->n * sizeof(uint32_t));
+    d->tout  = core_arena_alloc(ctx, d->n * sizeof(uint32_t));
+    d->ipdom = core_arena_alloc(ctx, (d->n + 1) * sizeof(int32_t));
 
     for (uint32_t i = 0; i < d->n; i++) {
         d->order[i] = UINT32_MAX;
@@ -558,8 +562,8 @@ ir_doms_t *ir_doms_of(ir_func_t *f)
         return d;
     }
     build_idoms(d, f);
-    build_tour(d, f);
-    build_postdoms(d, f);
+    build_tour(d);
+    build_postdoms(d);
 
     return d;
 }
@@ -626,11 +630,11 @@ ir_block_t *ir_ipdom_of(ir_doms_t *d, ir_block_t *b)
 
 static void build_frontiers(ir_doms_t *d)
 {
-    ir_ctx_t *ctx  = d->f->owner->ctx;
+    core_arena_t *ctx = &d->arena;
     uint32_t  n    = d->n;
-    uint32_t *mark = ir_alloc(ctx, n * sizeof(uint32_t));
+    uint32_t *mark = core_arena_alloc(ctx, n * sizeof(uint32_t));
 
-    d->df_off = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    d->df_off = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
     for (uint32_t pass = 0; pass < 2; pass++) {
         for (uint32_t i = 0; i < n; i++) {
@@ -671,7 +675,7 @@ static void build_frontiers(ir_doms_t *d)
         for (uint32_t i = 0; i < n; i++) {
             d->df_off[i + 1] += d->df_off[i];
         }
-        d->df_at = ir_alloc(ctx, (d->df_off[n] ? d->df_off[n] : 1)
+        d->df_at = core_arena_alloc(ctx, (d->df_off[n] ? d->df_off[n] : 1)
                                      * sizeof(uint32_t));
     }
 
@@ -705,10 +709,10 @@ ir_block_t *ir_df_at(ir_doms_t *d, ir_block_t *b, uint32_t i)
 
 static void build_kids(ir_doms_t *d)
 {
-    ir_ctx_t *ctx = d->f->owner->ctx;
+    core_arena_t *ctx = &d->arena;
     uint32_t  n   = d->n;
 
-    d->kid_off = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    d->kid_off = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < n; i++) {
         ir_block_t *p = ir_idom_of(d, d->f->blocks[i]);
@@ -721,10 +725,10 @@ static void build_kids(ir_doms_t *d)
     for (uint32_t i = 0; i < n; i++) {
         d->kid_off[i + 1] += d->kid_off[i];
     }
-    d->kid_at = ir_alloc(ctx, (d->kid_off[n] ? d->kid_off[n] : 1)
+    d->kid_at = core_arena_alloc(ctx, (d->kid_off[n] ? d->kid_off[n] : 1)
                                   * sizeof(uint32_t));
 
-    uint32_t *fill = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    uint32_t *fill = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
     memcpy(fill, d->kid_off, (n + 1) * sizeof(uint32_t));
 
@@ -773,8 +777,7 @@ void ir_dom_walk(ir_doms_t *d, ir_block_t *from, ir_dom_fn pre,
     }
 
     uint32_t     cap    = d->n + 1;
-    dom_frame_t *stack  = ir_alloc(d->f->owner->ctx,
-                                   cap * sizeof(dom_frame_t));
+    dom_frame_t *stack  = core_alloc_array(dom_frame_t, cap);
     uint32_t     sn     = 0;
 
     stack[sn++] = (dom_frame_t){.b = from};
@@ -794,7 +797,10 @@ void ir_dom_walk(ir_doms_t *d, ir_block_t *from, ir_dom_fn pre,
             ir_block_t *kid = ir_dom_kid_at(d, f->b, f->next++);
 
             if (sn < cap) {
-                stack[sn++] = (dom_frame_t){.b = kid};
+                stack[sn].b       = kid;
+                stack[sn].next    = 0;
+                stack[sn].entered = false;
+                sn++;
             }
 
             continue;
@@ -806,4 +812,14 @@ void ir_dom_walk(ir_doms_t *d, ir_block_t *from, ir_dom_fn pre,
 
         sn--;
     }
+    core_free(stack);
+}
+
+void ir_doms_free(ir_doms_t *d)
+{
+    if (!d) {
+        return;
+    }
+    core_arena_free(&d->arena);
+    core_free(d);
 }

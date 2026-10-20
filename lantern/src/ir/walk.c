@@ -5,6 +5,7 @@
 #include "ir/doms.h"
 #include "ir/walk.h"
 
+#include "lib/dict.h"
 #include "lib/list.h"
 
 typedef struct {
@@ -140,28 +141,21 @@ ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
     if ((!roots && root_count) || !visit) return false;
     core_list_t(ir_walk_func_ptr_t) functions =
         core_list_new(ir_walk_func_ptr_t);
-    for (size_t i = 0; i < root_count; i++) {
-        if (!roots[i]) {
-            core_list_free(functions);
-            return false;
-        }
-        bool seen = false;
-        for (size_t j = 0; j < functions.len; j++)
-            seen |= functions.data[j] == roots[i];
-        if (!seen) core_list_push(functions, roots[i]);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    bool ok = true;
+    for (size_t i = 0; ok && i < root_count; i++) {
+        ok = roots[i] != nullptr;
+        if (ok && core_dict_add(&seen, roots[i], roots[i]))
+            core_list_push(functions, roots[i]);
     }
-    for (size_t i = 0; i < functions.len; i++) {
+    for (size_t i = 0; ok && i < functions.len; i++) {
         ir_func_t *function = functions.data[i];
-        if (!visit(function, user)) {
-            core_list_free(functions);
-            return false;
-        }
-        ir_doms_t *doms = function->n_blocks ? ir_doms_of(function) : nullptr;
-        if (function->n_blocks && !doms) {
-            core_list_free(functions);
-            return false;
-        }
-        for (size_t b = 0; b < function->n_blocks; b++) {
+        ok = visit(function, user);
+        ir_doms_t *doms = ok && function->n_blocks
+            ? ir_doms_of(function) : nullptr;
+        ok = ok && (!function->n_blocks || doms);
+        for (size_t b = 0; ok && b < function->n_blocks; b++) {
             ir_block_t *block = function->blocks[b];
             if (!ir_block_reachable(doms, block)) continue;
             for (size_t n = 0; n < block->n_instrs; n++) {
@@ -172,17 +166,16 @@ ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
                         &instruction->operands[o]);
                     ir_func_t *target = value && value->kind == IR_VAL_FUNC
                         ? value->owner : nullptr;
-                    if (!target) continue;
-                    bool seen = false;
-                    for (size_t j = 0; j < functions.len; j++)
-                        seen |= functions.data[j] == target;
-                    if (!seen) core_list_push(functions, target);
+                    if (target && core_dict_add(&seen, target, target))
+                        core_list_push(functions, target);
                 }
             }
         }
+        ir_doms_free(doms);
     }
+    core_dict_free(&seen);
     core_list_free(functions);
-    return true;
+    return ok;
 }
 
 static void run_into(chain_t *c, ir_visit_t *v, bool pre, bool reverse,

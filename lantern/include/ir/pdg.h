@@ -26,6 +26,7 @@ typedef struct {
 typedef struct ir_pdg_t ir_pdg_t;
 
 ir_pdg_t *ir_pdg_of(ir_func_t *f);
+void      ir_pdg_free(ir_pdg_t *g);
 
 uint32_t             ir_pdg_node_count(const ir_pdg_t *g);
 ir_instr_t          *ir_pdg_node_at(const ir_pdg_t *g, uint32_t i);

@@ -550,6 +550,7 @@ ir_index_proofs_new(ir_func_t *function)
             if (!compute_bounds(function, length->dest, &set, 8)) {
                 core_list_free(set);
                 ir_index_proofs_free(proofs);
+                ir_doms_free(doms);
                 return nullptr;
             }
             for (uint32_t ib = 0; ib < function->n_blocks; ib++) {
@@ -593,6 +594,7 @@ ir_index_proofs_new(ir_func_t *function)
                         && !record_proof(proofs, index)) {
                         core_list_free(set);
                         ir_index_proofs_free(proofs);
+                        ir_doms_free(doms);
                         return nullptr;
                     }
                 }
@@ -600,6 +602,7 @@ ir_index_proofs_new(ir_func_t *function)
             core_list_free(set);
         }
     }
+    ir_doms_free(doms);
     return proofs;
 }
 

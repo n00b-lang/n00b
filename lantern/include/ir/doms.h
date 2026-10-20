@@ -10,6 +10,7 @@ ir_block_t *ir_succ_at(ir_instr_t *t, uint32_t i);
 typedef struct ir_doms_t ir_doms_t;
 
 ir_doms_t  *ir_doms_of(ir_func_t *f);
+void        ir_doms_free(ir_doms_t *d);
 bool        ir_dominates(ir_doms_t *d, ir_block_t *a, ir_block_t *b);
 ir_block_t *ir_idom_of(ir_doms_t *d, ir_block_t *b);
 uint32_t    ir_rpo_index(ir_doms_t *d, ir_block_t *b);

@@ -623,14 +623,14 @@ static bool structure_func(S *s, ir_func_t *f)
     }
     s->f      = f;
     s->dom    = ir_doms_of(f);
-    s->placed = ir_alloc(s->m->ctx, f->n_blocks * sizeof(bool));
-    s->mark   = ir_alloc(s->m->ctx, f->n_blocks * sizeof(uint32_t));
-    s->work   = ir_alloc(s->m->ctx, f->n_blocks * sizeof(ir_block_t *));
+    s->placed = core_alloc_array(bool, f->n_blocks);
+    s->mark   = core_alloc_array(uint32_t, f->n_blocks);
+    s->work   = core_alloc_array(ir_block_t *, f->n_blocks);
     s->loops  = 0;
 
     ir_region_t *root = region(s, IR_REGION_SEQ, ir_block_entry(f));
 
-    bool    *marked = ir_alloc(s->m->ctx, f->n_blocks * sizeof(bool));
+    bool    *marked = core_alloc_array(bool, f->n_blocks);
     uint32_t n_irr  = irreducible(s, marked);
 
     ir_region_t *body = build_seq(s, ir_block_entry(f), nullptr);
@@ -654,6 +654,16 @@ static bool structure_func(S *s, ir_func_t *f)
         mark_dispatch(root, marked, n_irr);
     }
     f->regions = root;
+
+    core_free(marked);
+    core_free(s->placed);
+    core_free(s->mark);
+    core_free(s->work);
+    ir_doms_free(s->dom);
+    s->placed = nullptr;
+    s->mark   = nullptr;
+    s->work   = nullptr;
+    s->dom    = nullptr;
 
     return true;
 }

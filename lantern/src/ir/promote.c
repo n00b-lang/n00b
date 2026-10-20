@@ -231,7 +231,7 @@ static bool number_block(ir_block_t *b, void *thunk)
     return true;
 }
 
-static bool promote_func(P *p, ir_func_t *f)
+static bool promote_func_body(P *p, ir_func_t *f)
 {
     if (!f->n_locals || !f->n_blocks) {
         return true;
@@ -402,6 +402,16 @@ static bool promote_func(P *p, ir_func_t *f)
     return p->ok;
 }
 
+static bool promote_func(P *p, ir_func_t *f)
+{
+    bool ok = promote_func_body(p, f);
+
+    ir_doms_free(p->dom);
+    p->dom = nullptr;
+
+    return ok;
+}
+
 bool ir_promote(ir_module_t *m, const ir_promote_opts_t *opts)
 {
     if (!m) {
@@ -517,6 +527,7 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                 ir_block_t *cut = ir_block_add(f, text);
 
                 if (!cut) {
+                    ir_doms_free(dom);
                     return false;
                 }
                 cut->span = ir_span_known(b->span) ? b->span : to->span;
@@ -528,6 +539,7 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                                                       0);
 
                 if (!jump || !ir_instr_operand_block(jump, to)) {
+                    ir_doms_free(dom);
                     return false;
                 }
                 retarget(t, to, cut);
@@ -573,6 +585,7 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                 count[hit[x]] = 0;
             }
         }
+        ir_doms_free(dom);
     }
     ir_module_invalidate(m, ir_pass_split_edges.invalidates);
     ir_module_establish(m, IR_PROP_NO_CRIT_EDGE);

@@ -48,6 +48,17 @@ static bool analyze_func(ir_visit_t *vi)
     return true;
 }
 
+static bool analyze_func_end(ir_visit_t *vi)
+{
+    A *a = vi->user;
+
+    ir_doms_free(a->dom);
+    a->dom = nullptr;
+    a->rd  = nullptr;
+
+    return true;
+}
+
 static bool analyze_block(ir_visit_t *vi)
 {
     A          *a = vi->user;
@@ -117,7 +128,7 @@ bool ir_analyze(ir_module_t *m, ir_diags_t *d)
     A          a = {.d = d};
     ir_walk_t *w = ir_walk_new(&a);
 
-    ir_walk_on_func(w, analyze_func, nullptr, nullptr);
+    ir_walk_on_func(w, analyze_func, analyze_func_end, nullptr);
     ir_walk_on_block(w, analyze_block, nullptr, nullptr);
     ir_walk_on_instr(w, nullptr, analyze_instr_end, nullptr);
     ir_walk_on_operand(w, analyze_operand, nullptr);

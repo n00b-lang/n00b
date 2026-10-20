@@ -42,6 +42,7 @@ static bool holds(core_dict_t *s, const void *p)
 static ir_doms_t *doms(V *v, ir_func_t *f)
 {
     if (v->dom_for != f) {
+        ir_doms_free(v->dom);
         v->dom     = ir_doms_of(f);
         v->dom_for = f;
     }
@@ -1847,6 +1848,7 @@ static ir_props_t run_phases(ir_module_t *m, ir_props_t want, ir_diags_t *out,
 
     audit_spans(&v);
 
+    ir_doms_free(v.dom);
     core_dict_free(&v.checked);
     ir_walk_free(v.collect);
 

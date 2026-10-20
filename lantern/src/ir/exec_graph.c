@@ -228,6 +228,7 @@ ir_exec_graph_add_function(
         if (outcome != IR_EXEC_GRAPH_OUTCOME_NONE)
             core_list_push(exits, ((exec_exit_spec_t){block, outcome}));
     }
+    ir_doms_free(doms);
     if (!complete) {
         core_list_free(exits);
         return false;

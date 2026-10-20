@@ -313,6 +313,16 @@ static bool cfg_func(ir_visit_t *vi)
     return true;
 }
 
+static bool cfg_func_end(ir_visit_t *vi)
+{
+    dump *u = vi->user;
+
+    ir_pdg_free(u->pdg);
+    u->pdg = nullptr;
+
+    return true;
+}
+
 static bool cfg_block(ir_visit_t *vi)
 {
     dump       *u  = vi->user;
@@ -342,7 +352,7 @@ static bool cfg_block(ir_visit_t *vi)
 
 static void install_cfg(ir_walk_t *w)
 {
-    ir_walk_on_func(w, cfg_func, nullptr, nullptr);
+    ir_walk_on_func(w, cfg_func, cfg_func_end, nullptr);
     ir_walk_on_block(w, cfg_block, nullptr, nullptr);
 }
 
@@ -363,6 +373,16 @@ static bool dom_func(ir_visit_t *vi)
     u->dom = ir_doms_of(vi->func);
     put_func(u->out, vi->func);
     fputc('\n', u->out);
+
+    return true;
+}
+
+static bool dom_func_end(ir_visit_t *vi)
+{
+    dump *u = vi->user;
+
+    ir_doms_free(u->dom);
+    u->dom = nullptr;
 
     return true;
 }
@@ -401,7 +421,7 @@ static bool dom_block(ir_visit_t *vi)
 
 static void install_dom(ir_walk_t *w)
 {
-    ir_walk_on_func(w, dom_func, nullptr, nullptr);
+    ir_walk_on_func(w, dom_func, dom_func_end, nullptr);
     ir_walk_on_block(w, dom_block, nullptr, nullptr);
 }
 
@@ -432,7 +452,7 @@ static bool cdg_block(ir_visit_t *vi)
 
 static void install_cdg(ir_walk_t *w)
 {
-    ir_walk_on_func(w, cfg_func, nullptr, nullptr);
+    ir_walk_on_func(w, cfg_func, cfg_func_end, nullptr);
     ir_walk_on_block(w, cdg_block, nullptr, nullptr);
 }
 
@@ -513,6 +533,7 @@ static bool graph_func(ir_visit_t *vi)
     put_func(u->out, vi->func);
     fprintf(u->out, " %s\n", ir_pdg_is_exact(g) ? "exact" : "may");
     put_edges(u->out, g, u->control, u->data);
+    ir_pdg_free(g);
 
     return false;
 }

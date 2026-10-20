@@ -15,6 +15,7 @@ typedef struct {
 } ir_cdp_t;
 
 struct ir_pdg_t {
+    core_arena_t   arena;
     ir_func_t     *f;
     ir_doms_t     *dom;
     ir_instr_t   **nodes;
@@ -40,6 +41,24 @@ struct ir_pdg_t {
     uint32_t      *stamp;
     bool           exact;
 };
+
+static bool pdg_grow(ir_pdg_t *g, void **data, size_t *cap, size_t need,
+                     size_t elem)
+{
+    return need <= *cap
+        || core_arena_try_reserve_raw(&g->arena, data, cap,
+                                      need < 8 ? 8 : need, elem);
+}
+
+void ir_pdg_free(ir_pdg_t *g)
+{
+    if (!g) {
+        return;
+    }
+    ir_doms_free(g->dom);
+    core_arena_free(&g->arena);
+    core_free(g);
+}
 
 core_string_t ir_edge_kind_name(ir_edge_kind_t k)
 {
@@ -89,16 +108,16 @@ static void claim(ir_pdg_t *g, uint32_t b, uint32_t h)
 
 static void mark_loops(ir_pdg_t *g)
 {
-    ir_func_t   *f     = g->f;
-    ir_ctx_t    *ctx   = f->owner->ctx;
-    uint32_t     n     = f->n_blocks;
-    uint64_t    *hdrs  = ir_alloc(ctx, n * sizeof(uint64_t));
-    uint32_t    *stamp = ir_alloc(ctx, n * sizeof(uint32_t));
-    ir_block_t **work  = ir_alloc(ctx, n * sizeof(ir_block_t *));
+    ir_func_t    *f    = g->f;
+    core_arena_t *ctx  = &g->arena;
+    uint32_t      n    = f->n_blocks;
+    uint64_t    *hdrs  = core_arena_alloc(ctx, n * sizeof(uint64_t));
+    uint32_t    *stamp = core_arena_alloc(ctx, n * sizeof(uint32_t));
+    ir_block_t **work  = core_arena_alloc(ctx, n * sizeof(ir_block_t *));
     uint32_t     n_h   = 0;
 
-    g->loop_of     = ir_alloc(ctx, n * sizeof(uint32_t));
-    g->loop_parent = ir_alloc(ctx, n * sizeof(uint32_t));
+    g->loop_of     = core_arena_alloc(ctx, n * sizeof(uint32_t));
+    g->loop_parent = core_arena_alloc(ctx, n * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < n; i++) {
         g->loop_of[i]     = NO_LOOP;
@@ -218,10 +237,8 @@ static void add_edge(ir_pdg_t *g, ir_instr_t *from, ir_instr_t *to,
     if (!from || !to || !from->block || !to->block) {
         return;
     }
-    g->edges = ir_grow(g->f->owner->ctx, g->edges, &g->cap_edges,
-                       g->n_edges + 1u, sizeof(ir_dep_edge_t));
-
-    if (!g->edges) {
+    if (!pdg_grow(g, (void **)&g->edges, &g->cap_edges, g->n_edges + 1u,
+                  sizeof(ir_dep_edge_t))) {
         return;
     }
     g->edges[g->n_edges++] = (ir_dep_edge_t){.from      = from,
@@ -253,7 +270,6 @@ static bool collect_node(ir_visit_t *vi)
 static bool control_block(ir_visit_t *vi)
 {
     ir_pdg_t   *g = vi->user;
-    ir_ctx_t   *ctx = g->f->owner->ctx;
     ir_block_t *a = vi->block;
     ir_instr_t *t = ir_block_terminator(a);
 
@@ -274,10 +290,8 @@ static bool control_block(ir_visit_t *vi)
             }
             g->slot_stamp[at->index] = key;
 
-            g->cdp = ir_grow(ctx, g->cdp, &g->cap_cdp, g->n_cdp + 1u,
-                             sizeof(ir_cdp_t));
-
-            if (!g->cdp) {
+            if (!pdg_grow(g, (void **)&g->cdp, &g->cap_cdp, g->n_cdp + 1u,
+                          sizeof(ir_cdp_t))) {
                 return false;
             }
             g->cdp[g->n_cdp++] = (ir_cdp_t){.at = at->index, .on = a->index,
@@ -300,11 +314,11 @@ static bool control_block(ir_visit_t *vi)
 
 static void control_edges(ir_pdg_t *g)
 {
-    ir_func_t *f     = g->f;
-    ir_ctx_t  *ctx   = f->owner->ctx;
-    uint32_t  *stamp = ir_alloc(ctx, f->n_blocks * sizeof(uint32_t));
+    ir_func_t    *f     = g->f;
+    core_arena_t *ctx   = &g->arena;
+    uint32_t     *stamp = core_arena_alloc(ctx, f->n_blocks * sizeof(uint32_t));
 
-    uint64_t  *slot_stamp = ir_alloc(ctx, f->n_blocks * sizeof(uint64_t));
+    uint64_t  *slot_stamp = core_arena_alloc(ctx, f->n_blocks * sizeof(uint64_t));
 
     for (uint32_t i = 0; i < f->n_blocks; i++) {
         stamp[i]      = UINT32_MAX;
@@ -370,12 +384,12 @@ static void data_edges(ir_pdg_t *g)
 
 static void index_edges(ir_pdg_t *g)
 {
-    ir_ctx_t *ctx = g->f->owner->ctx;
-    uint32_t  n   = g->n_nodes;
+    core_arena_t *ctx = &g->arena;
+    uint32_t      n   = g->n_nodes;
     uint32_t  nb  = g->f->n_blocks;
 
-    g->out_off = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    g->in_off  = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    g->out_off = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    g->in_off  = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < g->n_edges; i++) {
         g->out_off[node_of(g, g->edges[i].from) + 1]++;
@@ -387,14 +401,14 @@ static void index_edges(ir_pdg_t *g)
         g->in_off[i + 1] += g->in_off[i];
     }
 
-    uint32_t *fo = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
-    uint32_t *fi = ir_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    uint32_t *fo = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
+    uint32_t *fi = core_arena_alloc(ctx, (n + 1) * sizeof(uint32_t));
 
     memcpy(fo, g->out_off, (n + 1) * sizeof(uint32_t));
     memcpy(fi, g->in_off, (n + 1) * sizeof(uint32_t));
-    g->out_at = ir_alloc(ctx, (g->n_edges ? g->n_edges : 1)
+    g->out_at = core_arena_alloc(ctx, (g->n_edges ? g->n_edges : 1)
                                   * sizeof(uint32_t));
-    g->in_at  = ir_alloc(ctx, (g->n_edges ? g->n_edges : 1)
+    g->in_at  = core_arena_alloc(ctx, (g->n_edges ? g->n_edges : 1)
                                  * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < g->n_edges; i++) {
@@ -402,7 +416,7 @@ static void index_edges(ir_pdg_t *g)
         g->in_at[fi[node_of(g, g->edges[i].to)]++]    = i;
     }
 
-    g->cd_off = ir_alloc(ctx, (nb + 1) * sizeof(uint32_t));
+    g->cd_off = core_arena_alloc(ctx, (nb + 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < g->n_cdp; i++) {
         g->cd_off[g->cdp[i].at + 1]++;
@@ -412,11 +426,11 @@ static void index_edges(ir_pdg_t *g)
         g->cd_off[i + 1] += g->cd_off[i];
     }
 
-    uint32_t *fc = ir_alloc(ctx, (nb + 1) * sizeof(uint32_t));
+    uint32_t *fc = core_arena_alloc(ctx, (nb + 1) * sizeof(uint32_t));
 
     memcpy(fc, g->cd_off, (nb + 1) * sizeof(uint32_t));
-    g->cd_at = ir_alloc(ctx, (g->n_cdp ? g->n_cdp : 1) * sizeof(uint32_t));
-    g->cd_slot = ir_alloc(ctx, (g->n_cdp ? g->n_cdp : 1) * sizeof(uint32_t));
+    g->cd_at = core_arena_alloc(ctx, (g->n_cdp ? g->n_cdp : 1) * sizeof(uint32_t));
+    g->cd_slot = core_arena_alloc(ctx, (g->n_cdp ? g->n_cdp : 1) * sizeof(uint32_t));
 
     for (uint32_t i = 0; i < g->n_cdp; i++) {
         uint32_t at = fc[g->cdp[i].at]++;
@@ -432,12 +446,15 @@ ir_pdg_t *ir_pdg_of(ir_func_t *f)
         return nullptr;
     }
 
-    ir_ctx_t *ctx = f->owner->ctx;
-    ir_pdg_t *g   = ir_alloc(ctx, sizeof(ir_pdg_t));
+    ir_pdg_t *g = core_alloc(ir_pdg_t);
+
+    core_arena_init(&g->arena, 16 * 1024);
+
+    core_arena_t *ctx = &g->arena;
 
     g->f     = f;
     g->dom   = ir_doms_of(f);
-    g->base  = ir_alloc(ctx, (f->n_blocks + 1) * sizeof(uint32_t));
+    g->base  = core_arena_alloc(ctx, (f->n_blocks + 1) * sizeof(uint32_t));
     g->exact = true;
 
     mark_loops(g);
@@ -448,7 +465,7 @@ ir_pdg_t *ir_pdg_of(ir_func_t *f)
     ir_walk_run_func(w, f);
     ir_walk_free(w);
 
-    g->nodes = ir_alloc(ctx, (g->n_nodes ? g->n_nodes : 1)
+    g->nodes = core_arena_alloc(ctx, (g->n_nodes ? g->n_nodes : 1)
                                  * sizeof(ir_instr_t *));
     g->n_nodes = 0;
     w          = ir_walk_new(g);
