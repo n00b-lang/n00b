@@ -16251,6 +16251,44 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
     return false;
 }
 
+typedef struct {
+    const core_translation_unit_t *referrer;
+    const core_link_declaration_t *target;
+} reference_pair_t;
+
+static core_hash_value_t
+reference_pair_hash(void *key)
+{
+    return core_hash_raw(key, sizeof(reference_pair_t));
+}
+
+static bool
+reference_pair_eq(const void *left, const void *right)
+{
+    const reference_pair_t *a = left;
+    const reference_pair_t *b = right;
+    return a->referrer == b->referrer && a->target == b->target;
+}
+
+static reference_pair_t *
+index_link_references(core_link_unit_t *link, core_dict_t *references)
+{
+    size_t count = core_link_unit_reference_count(link);
+    reference_pair_t *pairs = core_alloc_array(reference_pair_t,
+                                               count ? count : 1);
+    core_dict_init(references, reference_pair_hash, reference_pair_eq);
+    for (size_t r = 0; r < count; r++) {
+        core_link_reference_t *reference =
+            core_link_unit_reference_at_index(link, r);
+        pairs[r] = (reference_pair_t){
+            .referrer = core_link_reference_referrer(reference),
+            .target = core_link_reference_target(reference),
+        };
+        core_dict_add(references, &pairs[r], &pairs[r]);
+    }
+    return pairs;
+}
+
 static bool
 register_module_globals(parse_grammar_t *grammar,
                         core_translation_unit_t *source,
@@ -16258,7 +16296,8 @@ register_module_globals(parse_grammar_t *grammar,
                         ir_module_t *destination,
                         ir_ctx_t *ir_context,
                         n00bb_link_analysis_t *analysis,
-                        core_link_unit_t *link, uint32_t producer_stage)
+                        core_link_unit_t *link, core_dict_t *references,
+                        uint32_t producer_stage)
 {
     n00bb_tu_state_t *source_state = tu_state(source);
     if (!source_state || !source_state->annotations || !destination)
@@ -16282,19 +16321,12 @@ register_module_globals(parse_grammar_t *grammar,
                 || !n00bb_unit_defines_global(analysis, source, symbol))
                 continue;
             if (source != destination_unit) {
-                core_link_declaration_t *declaration =
-                    link_declaration_for_symbol(analysis, symbol);
-                bool referenced = false;
-                for (size_t r = 0; declaration && !referenced
-                     && r < core_link_unit_reference_count(link); r++) {
-                    core_link_reference_t *reference =
-                        core_link_unit_reference_at_index(link, r);
-                    referenced = core_link_reference_referrer(reference)
-                            == destination_unit
-                        && core_link_reference_target(reference)
-                            == declaration;
-                }
-                if (!referenced) continue;
+                reference_pair_t wanted = {
+                    .referrer = destination_unit,
+                    .target = link_declaration_for_symbol(analysis, symbol),
+                };
+                if (!wanted.target
+                    || !core_dict_contains(references, &wanted)) continue;
             }
             core_buffer_t name = {0};
             append_module_symbol_name(source, symbol, &name);
@@ -16917,14 +16949,23 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         }
     }
 
+    core_dict_t references;
+    reference_pair_t *reference_pairs = index_link_references(link,
+                                                              &references);
     for (size_t i = 0; i < units->len; i++)
         for (size_t j = 0; j < units->len; j++)
             if (!register_module_globals(grammar, units->data[j],
                     units->data[i], tu_state(units->data[i])->ir_module,
-                    ir_context, analysis, link, producer_stage))
+                    ir_context, analysis, link, &references,
+                    producer_stage)) {
+                core_dict_free(&references);
+                core_free(reference_pairs);
                 return ir_initialization_error(units->data[i],
                     "N00BB-L0028",
                     "could not register module globals in Lantern IR");
+            }
+    core_dict_free(&references);
+    core_free(reference_pairs);
     if (!bind_module_global_identities(ir_context, analysis))
         return ir_initialization_error(units->len ? units->data[0] : nullptr,
             "N00BB-L0028",

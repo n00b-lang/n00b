@@ -281,12 +281,10 @@ static bool
 function_reaches(parse_grammar_t *grammar,
                  n00bb_call_site_index_t *index,
                  parse_sym_entry_t *from, parse_sym_entry_t *target,
-                 core_list_t(parse_sym_entry_ptr_t) *visited)
+                 core_dict_t *visited)
 {
     if (from == target) return true;
-    for (size_t i = 0; i < visited->len; i++)
-        if (visited->data[i] == from) return false;
-    core_list_push(*visited, from);
+    if (!core_dict_add(visited, from, from)) return false;
 
     core_list_t(n00bb_call_site_t) *sites = core_dict_get(
         &index->by_caller, from, nullptr);
@@ -305,11 +303,11 @@ call_is_recursive(parse_grammar_t *grammar,
                   parse_sym_entry_t *callee)
 {
     if (!caller || !callee) return false;
-    core_list_t(parse_sym_entry_ptr_t) visited =
-        core_list_new(parse_sym_entry_ptr_t);
+    core_dict_t visited;
+    core_dict_init(&visited, nullptr, nullptr);
     bool recursive = function_reaches(grammar, index, callee, caller,
                                       &visited);
-    core_list_free(visited);
+    core_dict_free(&visited);
     return recursive;
 }
 

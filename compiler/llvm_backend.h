@@ -58,8 +58,14 @@ bool n00bb_llvm_backend_bind_finalizers(
 bool n00bb_llvm_backend_bind_function_indices(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_function_binding_t *functions, size_t count);
+typedef struct n00bb_llvm_callback_bindings_t n00bb_llvm_callback_bindings_t;
+n00bb_llvm_callback_bindings_t *n00bb_llvm_callback_bindings_new(
+    ir_func_t *const *functions, size_t count);
+void n00bb_llvm_callback_bindings_free(
+    n00bb_llvm_callback_bindings_t *bindings);
 bool n00bb_llvm_backend_bind_reachable_functions(
-    n00bb_llvm_backend_t *backend, ir_func_t *const *functions, size_t count);
+    n00bb_llvm_backend_t *backend, ir_func_t *const *functions, size_t count,
+    const n00bb_llvm_callback_bindings_t *bindings);
 bool n00bb_llvm_backend_bind_storage_origin(
     n00bb_llvm_backend_t *backend, ir_storage_origin_t *origin);
 bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);

@@ -1128,8 +1128,11 @@ main(void)
     backend = n00bb_llvm_backend_prepare(native_runtime,
         true, true, diagnostics);
     ir_func_t *native_roots[] = {native_function, native_mutator};
-    assert(backend && n00bb_llvm_backend_bind_reachable_functions(
-        backend, native_roots, 2));
+    n00bb_llvm_callback_bindings_t *native_bindings =
+        n00bb_llvm_callback_bindings_new(native_roots, 2);
+    assert(backend && native_bindings
+        && n00bb_llvm_backend_bind_reachable_functions(backend, native_roots,
+                                                        2, native_bindings));
     core_buffer_t native_bytes = {0};
     assert(n00bb_llvm_backend_write_bitcode(backend,
         &native_bytes, diagnostics));
@@ -1150,6 +1153,7 @@ main(void)
     LLVMDisposeMemoryBuffer(native_source);
     core_buffer_release(&native_bytes);
     n00bb_llvm_backend_free(backend);
+    n00bb_llvm_callback_bindings_free(native_bindings);
 
     core_diagnostics_free(diagnostics);
     ir_ctx_free(context);

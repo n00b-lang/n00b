@@ -516,6 +516,7 @@ typedef struct {
     bool lto;
     n00bb_native_cache_t *native_cache;
     ir_storage_origin_t *storage_origin;
+    const n00bb_llvm_callback_bindings_t *callback_bindings;
     const n00bb_llvm_type_index_t *type_indices;
     size_t type_index_count;
     const n00bb_llvm_function_binding_t *function_indices;
@@ -570,7 +571,7 @@ emit_module_object(const module_emission_t *emission, ir_module_t *module,
             || n00bb_llvm_backend_bind_index_table(backend, &index_table))
         && n00bb_llvm_backend_bind_reachable_functions(backend,
             analysis->emitted_functions.data,
-            analysis->emitted_functions.len)
+            analysis->emitted_functions.len, emission->callback_bindings)
         && n00bb_llvm_backend_bind_storage_origin(backend,
             emission->storage_origin);
     if (ok && !parse_cmdr_flag_present(emission->args,
@@ -844,6 +845,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             CORE_STRING_STATIC("could not analyze native storage origins"));
         ok = false;
     }
+    n00bb_llvm_callback_bindings_t *callback_bindings = ok
+        ? n00bb_llvm_callback_bindings_new(analysis->emitted_functions.data,
+                                           analysis->emitted_functions.len)
+        : nullptr;
+    if (ok && !callback_bindings) ok = false;
     n00bb_native_frames_t *native_frames = ok
         ? n00bb_native_frames_new(analysis->target.object_format) : nullptr;
     if (ok && !native_frames) ok = false;
@@ -860,6 +866,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         .debug_enabled = debug_enabled, .native_cpu = native_cpu,
         .lto = lto, .native_cache = native_cache,
         .storage_origin = storage_origin,
+        .callback_bindings = callback_bindings,
         .type_indices = type_indices, .type_index_count = type_index_count,
         .function_indices = function_indices,
         .function_index_count = function_index_count,
@@ -1152,6 +1159,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     n00bb_native_cache_close(native_cache);
     n00bb_native_frames_free(native_frames);
     ir_storage_origin_free(storage_origin);
+    n00bb_llvm_callback_bindings_free(callback_bindings);
     core_list_free(order);
     if (!ok && !core_diagnostics_failed(diagnostics)) {
         core_buffer_t message = {0};

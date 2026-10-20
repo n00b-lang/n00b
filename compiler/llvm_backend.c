@@ -277,7 +277,7 @@ struct n00bb_llvm_backend_t {
     ir_storage_origin_t *storage_origin;
     bool emit_frame_maps;
     n00bb_native_cache_t *native_cache;
-    core_list_t(callback_binding_t) callback_bindings;
+    const n00bb_llvm_callback_bindings_t *callback_bindings;
     const n00bb_llvm_mutator_classifier_t *mutator_classifier;
     core_list_t(core_string_t) selected_mutators;
 };
@@ -12613,7 +12613,6 @@ n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
             core_free(item->key);
         core_dict_free(&backend->native_types);
     }
-    core_list_free(backend->callback_bindings);
     core_list_free(backend->selected_mutators);
     if (backend->module) LLVMDisposeModule(backend->module);
     if (backend->context) LLVMContextDispose(backend->context);
@@ -12680,16 +12679,39 @@ n00bb_llvm_backend_bind_finalizers(
     return true;
 }
 
+struct n00bb_llvm_callback_bindings_t {
+    core_list_t(callback_binding_t) list;
+};
+
+void
+n00bb_llvm_callback_bindings_free(n00bb_llvm_callback_bindings_t *bindings)
+{
+    if (!bindings) return;
+    core_list_free(bindings->list);
+    core_free(bindings);
+}
+
 bool
 n00bb_llvm_backend_bind_reachable_functions(
-    n00bb_llvm_backend_t *backend, ir_func_t *const *functions, size_t count)
+    n00bb_llvm_backend_t *backend, ir_func_t *const *functions, size_t count,
+    const n00bb_llvm_callback_bindings_t *bindings)
 {
-    if (!backend || (count && !functions) || backend->lowered) return false;
+    if (!backend || (count && !functions) || !bindings || backend->lowered)
+        return false;
     backend->reachable = functions;
     backend->reachable_count = count;
     backend->reachable_bound = true;
-    core_list_free(backend->callback_bindings);
-    backend->callback_bindings = core_list_new(callback_binding_t);
+    backend->callback_bindings = bindings;
+    return true;
+}
+
+n00bb_llvm_callback_bindings_t *
+n00bb_llvm_callback_bindings_new(ir_func_t *const *functions, size_t count)
+{
+    if (count && !functions) return nullptr;
+    n00bb_llvm_callback_bindings_t *bindings =
+        core_alloc(n00bb_llvm_callback_bindings_t);
+    bindings->list = core_list_new(callback_binding_t);
     for (size_t i = 0; i < count; i++) {
         ir_func_t *function = functions[i];
         for (uint32_t b = 0; function && b < function->n_blocks; b++) {
@@ -12712,13 +12734,13 @@ n00bb_llvm_backend_bind_reachable_functions(
                 if (!handler || handler->kind != IR_VAL_FUNC
                     || !ir_instr_callback_contract(creation, nullptr,
                         &signature, nullptr)) continue;
-                core_list_push(backend->callback_bindings,
+                core_list_push(bindings->list,
                     ((callback_binding_t){handler->owner,
                         creation->dest->type, signature}));
             }
         }
     }
-    return true;
+    return bindings;
 }
 
 bool
@@ -12795,7 +12817,9 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
         backend->function_index_count, backend->global_bindings,
         backend->global_binding_count, backend->storage_origin,
         backend->reachable, backend->reachable_count,
-        backend->reachable_bound, &backend->callback_bindings,
+        backend->reachable_bound,
+        backend->callback_bindings ? &backend->callback_bindings->list
+                                   : nullptr,
         backend->index_table, diagnostics);
     active_mutator_classifier = previous_classifier;
     active_selected_mutators = previous_selected;
