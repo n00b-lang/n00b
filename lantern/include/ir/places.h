@@ -26,6 +26,7 @@ typedef enum : uint8_t {
 typedef struct {
     ir_instr_t      *instr;
     ir_access_kind_t kind;
+    bool             whole;
     uint32_t         first;
     uint32_t         count;
 } ir_access_t;

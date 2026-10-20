@@ -3,6 +3,7 @@
 
 #include "ir/doms.h"
 #include "ir/ir.h"
+#include "ir/memssa.h"
 #include "ir/pdg.h"
 #include "ir/places.h"
 

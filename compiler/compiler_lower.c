@@ -19562,6 +19562,16 @@ dump_ir_instr(FILE *out, const ir_instr_t *instr)
             (int)spelling.u8_bytes, spelling.data);
 }
 
+static bool
+dump_memory_def(void *context, const ir_memdef_t *def)
+{
+    (void)context;
+    fputc(' ', stdout);
+    if (def->kind == IR_MEMDEF_ENTRY) fputs("entry", stdout);
+    else dump_ir_instr(stdout, def->instr);
+    return true;
+}
+
 static void
 dump_ir_places(ir_module_t *module, ir_func_t *function)
 {
@@ -19589,6 +19599,11 @@ dump_ir_places(ir_module_t *module, ir_func_t *function)
         fputs(" @", stdout);
         for (uint32_t p = 0; p < access->count; p++)
             fprintf(stdout, "%s%u", p ? "," : "", ids[p]);
+        if (access->kind == IR_ACCESS_LOAD) {
+            fputs(" <=", stdout);
+            ir_memssa_visit_clobbers(ir_func_memssa(function), i,
+                                     dump_memory_def, nullptr);
+        }
         fputc('\n', stdout);
     }
 }

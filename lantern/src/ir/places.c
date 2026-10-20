@@ -314,6 +314,34 @@ ir_places_of(ir_places_t *places, const ir_value_t *address,
     return true;
 }
 
+static bool
+whole_object(const ir_value_t *address)
+{
+    for (uint32_t depth = 0; address && depth < 64; depth++) {
+        if (address->kind != IR_VAL_INSTR || !address->def) return true;
+        const ir_instr_t *in = address->def;
+        switch (in->op) {
+        case IR_OP_ADDRESS_OF:
+        case IR_OP_ALLOCA:
+        case IR_OP_ALLOC:
+        case IR_OP_ALLOC_USING:
+            return true;
+        case IR_OP_COPY:
+        case IR_OP_CONSUME:
+        case IR_OP_RETAIN_REF:
+        case IR_OP_CAST:
+        case IR_OP_NOMINAL_CAST:
+        case IR_OP_TYPE_NARROW:
+            address = in->n_operands ? ir_operand_value(&in->operands[0])
+                                     : nullptr;
+            break;
+        default:
+            return false;
+        }
+    }
+    return false;
+}
+
 static void
 record_access(ir_places_t *places, ir_instr_t *in, ir_access_kind_t kind,
               uint32_t operand)
@@ -322,16 +350,24 @@ record_access(ir_places_t *places, ir_instr_t *in, ir_access_kind_t kind,
         ? ir_operand_value(&in->operands[operand]) : nullptr;
     const uint32_t *ids   = nullptr;
     uint32_t        count = 0;
-    uint32_t        unknown;
-    if (!address || !ir_places_of(places, address, &ids, &count) || !count) {
-        unknown = unknown_place(places);
-        ids     = &unknown;
-        count   = 1;
-    }
+    size_t          from  = SIZE_MAX;
+    if (address && ir_places_of(places, address, &ids, &count) && count)
+        from = (size_t)(ids - places->ids.data);
+    else
+        count = 1;
     ir_access_t access = {.instr = in, .kind = kind,
+                          .whole = in->op == IR_OP_GLOBAL_STORE
+                              || (in->op == IR_OP_STORE && whole_object(address)),
                           .first = (uint32_t)places->ids.len, .count = count};
-    for (uint32_t i = 0; i < count; i++)
-        core_list_push(places->ids, ids[i]);
+    if (from == SIZE_MAX) {
+        uint32_t unknown = unknown_place(places);
+        access.first     = (uint32_t)places->ids.len;
+        core_list_push(places->ids, unknown);
+    }
+    else {
+        for (uint32_t i = 0; i < count; i++)
+            core_list_push(places->ids, places->ids.data[from + i]);
+    }
     core_list_push(places->accesses, access);
 }
 
@@ -341,7 +377,7 @@ record_storage(ir_places_t *places, ir_instr_t *in, ir_access_kind_t kind,
 {
     uint32_t id = storage_place(places, storage);
     if (places->places.data[id].kind == IR_PLACE_LOCAL) return;
-    ir_access_t access = {.instr = in, .kind = kind,
+    ir_access_t access = {.instr = in, .kind = kind, .whole = true,
                           .first = (uint32_t)places->ids.len, .count = 1};
     core_list_push(places->ids, id);
     core_list_push(places->accesses, access);
