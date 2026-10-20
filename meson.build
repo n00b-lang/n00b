@@ -539,6 +539,18 @@ test(
 )
 
 test(
+    'embed-size-rejected', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'embed_size_rejected.n',
+           'not a whole number of 4-byte u32 elements',
+           'embed_size_rejected.n:1:25'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'generic-same-type-recursion', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),
@@ -892,6 +904,7 @@ foreach feature : ['fallible_without_result', 'try_error_binding',
                    'option_literal_argument', 'record_literal_return',
                    'constructor_option_argument', 'option_literal_context',
                    'packed_record_fields', 'hash_xxh3', 'data_file',
+                   'embed_tables',
                    'os_env_term', 'digit_separators',
                    'array_element_compound', 'array_read_store_index',
                    'package_named_fields', 'array_declared_bounds',

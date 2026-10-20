@@ -2159,17 +2159,24 @@ infer_user_literal_type(parse_grammar_t *grammar,
                                            : nullptr;
     th_type *expected_result = known && th_kind_of(known) != TH_VAR
         ? known : th_var(state->types);
-    th_type *expected = ok && (input_type || no_payload)
-        ? th_func_with_error(state->types,
-            expected_result,
-            th_name(state->types, CORE_STRING_STATIC("string")),
-            no_payload ? nullptr : &param, no_payload ? 0 : 1,
-            nullptr, nullptr, 0) : nullptr;
     parse_sym_entry_t *function = registration->declaration
         ? parse_tree_sym(registration->declaration)
         : registration->function;
     th_type *signature = function && function->type
         ? th_resolve(function->type) : nullptr;
+    bool takes_site = core_string_eq(kind, CORE_STRING_STATIC("fence"))
+        && n00bb_litmod_takes_site(state->types, signature);
+    th_param params[2] = {
+        param,
+        {.mode = TH_IN, .type = n00bb_literal_site_type(state->types)},
+    };
+    th_type *expected = ok && (input_type || no_payload)
+        ? th_func_with_error(state->types,
+            expected_result,
+            th_name(state->types, CORE_STRING_STATIC("string")),
+            no_payload ? nullptr : params,
+            no_payload ? 0 : takes_site ? 2 : 1,
+            nullptr, nullptr, 0) : nullptr;
     bool deferred = !signature;
     th_type *specialized = expected;
     ok = expected && (deferred || (th_kind_of(signature) == TH_FUNCTION
@@ -11260,6 +11267,26 @@ validate_type_value_namespaces(core_translation_unit_t *unit)
     return true;
 }
 
+th_type *
+n00bb_literal_site_type(th_ctx *types)
+{
+    return th_name(types,
+                   CORE_STRING_STATIC("builtin.litmod_site.Literal_Site"));
+}
+
+bool
+n00bb_litmod_takes_site(th_ctx *types, th_type *signature)
+{
+    signature = signature ? th_resolve(signature) : nullptr;
+    const th_param *site = signature
+        && th_kind_of(signature) == TH_FUNCTION
+        && th_func_nparams(signature) == 2
+        ? th_func_param(signature, 1) : nullptr;
+    return site && site->mode == TH_IN
+        && th_hash(types, th_resolve(site->type))
+            == th_hash(types, n00bb_literal_site_type(types));
+}
+
 bool
 validate_user_litmod_signatures(parse_grammar_t *grammar,
                                 core_translation_unit_t *unit)
@@ -11296,19 +11323,23 @@ validate_user_litmod_signatures(parse_grammar_t *grammar,
             : nullptr;
         bool no_payload = core_string_eq(registration->kind,
                                          CORE_STRING_STATIC("nil"));
+        bool takes_site = core_string_eq(registration->kind,
+                                         CORE_STRING_STATIC("fence"))
+            && n00bb_litmod_takes_site(state->types, signature);
+        size_t arity = no_payload ? 0 : takes_site ? 2 : 1;
         bool shape_valid = symbol && symbol->kind == PARSE_SYM_FUNCTION
             && declaration && CHILD_NT(grammar, declaration,
                                          "litmod-prelude")
             && CHILD_NT(grammar, result_syntax, "return-type")
             && CHILD_NT(grammar, result_syntax, "error-type")
             && facts && !facts->has_inferred_parameter
-            && facts->param_count == (no_payload ? 0 : 1)
+            && facts->param_count == arity
             && (no_payload || (!facts->params[0].variadic
                 && facts->params[0].node
                 && parse_tree_sym(facts->params[0].node)
                 && !parse_tree_sym(facts->params[0].node)->is_optional))
             && signature && th_kind_of(signature) == TH_FUNCTION
-            && th_func_nparams(signature) == (no_payload ? 0 : 1)
+            && th_func_nparams(signature) == arity
             && !th_func_rest(signature) && !th_func_nkw(signature);
         const th_param *param = shape_valid && !no_payload
             ? th_func_param(signature, 0) : nullptr;
@@ -11378,7 +11409,8 @@ validate_user_litmod_signatures(parse_grammar_t *grammar,
                 (int)registration->modifier.u8_bytes,
                 registration->modifier.data,
                 no_payload ? "no parameters, "
-                           : "one explicitly typed shape-compatible input, ");
+                           : "one explicitly typed shape-compatible input "
+                             "(a fence may add site: Literal_Site), ");
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0029"),

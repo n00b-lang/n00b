@@ -1,0 +1,5 @@
+record Literal_Site {
+    path:   string
+    line:   uint
+    column: uint
+}

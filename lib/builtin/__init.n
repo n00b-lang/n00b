@@ -17,6 +17,8 @@ import string.core
 import string.style
 import bitptr
 import abi
+import litmod_site
+import embed
 import text
 
 package builtin {
@@ -153,4 +155,6 @@ package builtin {
     export io.raw.Raw_Repr
     export text.len
     export text.Index_Unit
+    export litmod_site.Literal_Site
+    export embed.embed
 }

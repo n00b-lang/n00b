@@ -6660,6 +6660,67 @@ n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
     return (ir_lower_result_t){IR_LOWER_VALUE, array->dest};
 }
 
+static ir_value_t *
+n00bb_lower_literal_site_member(ir_lower_context_t *context,
+                                const th_member *member, core_string_t path,
+                                uint64_t line, uint64_t column, ir_span_t span)
+{
+    bool text = core_string_eq(member->name, CORE_STRING_STATIC("path"));
+    bool at_line = core_string_eq(member->name, CORE_STRING_STATIC("line"));
+    if (!text && !at_line
+        && !core_string_eq(member->name, CORE_STRING_STATIC("column")))
+        return nullptr;
+    ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                     span);
+    bool ok = constant && ir_lower_set_temp_dest(context, constant,
+        CORE_STRING_STATIC("__n00bb_literal_site_"), member->type)
+        && (text
+            ? ir_instr_set_const_bytes(constant, (const uint8_t *)path.data,
+                                       path.u8_bytes)
+            : ir_instr_operand_int(constant,
+                                   (int64_t)(at_line ? line : column)));
+    return ok ? constant->dest : nullptr;
+}
+
+static ir_value_t *
+n00bb_lower_literal_site(ir_lower_context_t *context, parse_visit_t *visit,
+                         ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    th_ctx *types = ir_module_types(context->module);
+    th_type *site_type = n00bb_literal_site_type(types);
+    th_type *definition = site_type
+        ? th_resolve(th_type_definition(types, site_type)) : nullptr;
+    parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
+    if (!lower || !token || !definition
+        || th_kind_of(definition) != TH_RECORD) return nullptr;
+    char *copy = core_string_to_cstr(
+        core_source_file_path(&lower->unit->source));
+    char *native = copy ? realpath(copy, nullptr) : nullptr;
+    core_free(copy);
+    core_string_t path = core_string_from_cstr(native);
+    free(native);
+    size_t count = th_record_len(definition);
+    ir_value_t **members = core_alloc_array(ir_value_t *, count ? count : 1);
+    bool ok = path.data && members;
+    for (size_t i = 0; ok && i < count; i++) {
+        const th_member *member = th_record_member(definition, i);
+        members[i] = member ? n00bb_lower_literal_site_member(context, member,
+            path, parse_token_line(token), parse_token_column(token), span)
+            : nullptr;
+        ok = members[i] != nullptr;
+    }
+    ir_instr_t *aggregate = ok
+        ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span) : nullptr;
+    ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
+        CORE_STRING_STATIC("__n00bb_literal_site_"), site_type);
+    for (size_t i = 0; ok && i < count; i++)
+        ok = ir_instr_operand_value(aggregate, members[i]);
+    core_free(members);
+    core_free(path.data);
+    return ok ? aggregate->dest : nullptr;
+}
+
 static ir_lower_result_t
 n00bb_lower_user_literal(ir_lower_context_t *context,
                                parse_visit_t *visit,
@@ -6805,6 +6866,13 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
     if (!no_payload
         && (payload.status != IR_LOWER_VALUE || !payload.value))
         return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
+    ir_value_t *literal_site = n00bb_litmod_takes_site(
+            ir_module_types(context->module), site->signature)
+        ? n00bb_lower_literal_site(context, visit, span) : nullptr;
+    if (n00bb_litmod_takes_site(ir_module_types(context->module),
+                                site->signature) && !literal_site)
+        return lower_error(context, IR_DIAG_INTERNAL, span,
+                           "could not describe the literal's source site");
     th_type *outcome_type = ir_call_outcome_type(context->module,
                                                 site->signature);
     ir_instr_t *call = outcome_type
@@ -6813,6 +6881,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
                                         CORE_STRING_STATIC("__n00bb_litmod_call_"), outcome_type)
         || !ir_instr_operand_value(call, callee)
         || (!no_payload && !ir_instr_operand_value(call, payload.value))
+        || (literal_site && !ir_instr_operand_value(call, literal_site))
         || !ir_instr_set_call_signature(call, site->signature))
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not emit the literal handler call");

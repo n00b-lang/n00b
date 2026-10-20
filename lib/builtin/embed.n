@@ -1,0 +1,159 @@
+import abi
+import string.core
+import litmod_site
+
+private const bits_flag: u32 = 1 << 4
+private const seek_set: i32 = 0
+private const seek_end: i32 = 2
+
+private inline func open_read_flags() -> int {
+    when target_os() == "linux" {
+        return 0x80000
+    } else when target_os() == "macos" {
+        return 0x1000000
+    } else {
+        return 0
+    }
+}
+
+private func decimal(n: uint) -> string {
+    if n < 10 {
+        return string.core.from_char(cast[char] (0x30 + n))
+    }
+    return decimal(n / 10) + string.core.from_char(cast[char] (0x30 + n % 10))
+}
+
+private func blank(b: u8) -> bool {
+    return b == 0x20 or b == 0x09 or b == 0x0a or b == 0x0d
+}
+
+private func trimmed(text: string) -> string {
+    var start: int = 0
+    var end: int = cast[int] string.core.byte_len(text)
+    while start < end and blank(string.core.byte_at(text, cast[u64] start)) {
+        start += 1
+    }
+    while end > start and blank(string.core.byte_at(text, cast[u64] (end - 1))) {
+        end -= 1
+    }
+    return string.core.byte_slice(text, start, end)
+}
+
+private func resolved_path(contents: string, site: litmod_site.Literal_Site)
+    -> string {
+    let path: string = trimmed(contents)
+    if string.core.byte_len(path) > 0
+        and string.core.byte_at(path, 0) == 0x2f {
+        return path
+    }
+    var slash: int = cast[int] string.core.byte_len(site.path) - 1
+    while slash >= 0 and string.core.byte_at(site.path, cast[u64] slash) != 0x2f {
+        slash -= 1
+    }
+    if slash < 0 {
+        return path
+    }
+    return string.core.byte_slice(site.path, 0, slash) + "/" + path
+}
+
+private func element_row(probe: Array[`E]) -> Ref[abi.Type_Record]? {
+    let array_row: Ref[abi.Type_Record]? = __abi_type_for(typeof(probe))
+    if array_row == nil {
+        return nil
+    }
+    let components: abi.Range = array_row.get().components
+    let index: i64 = __abi_range_index(components.first, components.count, 0)
+    if index < 0 {
+        return nil
+    }
+    return __abi_type(cast[u32] index)
+}
+
+private func stride_bytes(row: Ref[abi.Type_Record]) -> uint {
+    let alignment: uint = row.alignment_bytes
+    if alignment == 0 {
+        return 0
+    }
+    var bytes: uint = row.size_bits / 8
+    if row.size_bits % 8 != 0 {
+        bytes += 1
+    }
+    return (bytes + alignment - 1) / alignment * alignment
+}
+
+private func plain_data(row: Ref[abi.Type_Record]) -> bool {
+    let boolean: Ref[abi.Type_Record]? = __abi_type_for(typeof(false))
+    let is_bool: bool = boolean != nil
+        and boolean.get().typehash == row.typehash
+    return row.tracing_index == 0 and row.flags & bits_flag == 0 and !is_bool
+}
+
+private func open_file(path: string) -> int fail: string {
+    var bytes: Array[u8] = new[Array[u8]](1)
+    try {
+        bytes = string.core.to_cstring(path, copy = true,
+            buf = new[Array[u8]](cast[int] string.core.byte_len(path) + 1))!
+    } else failure {
+        fail "'embed path is not a valid file name: " + path
+    }
+    let fd: int = __os_open(unsafe_cast[Ref[byte]] ref bytes[0],
+                            open_read_flags(), 0)
+    if fd < 0 {
+        fail "'embed cannot open " + path
+    }
+    return fd
+}
+
+private func file_size(fd: int, path: string) -> uint fail: string {
+    let end: int = __os_seek(fd, 0, seek_end)
+    let start: int = __os_seek(fd, 0, seek_set)
+    if end < 0 or start < 0 {
+        __os_close(fd)
+        fail "'embed cannot measure " + path
+    }
+    return cast[uint] end
+}
+
+private func read_all(fd: int, at: Ref[byte], length: uint, path: string)
+    -> nil fail: string {
+    var done: uint = 0
+    while done < length {
+        let got: int = __os_read(fd, __gc_byte_offset(at, cast[int] done),
+                                 length - done)
+        if got <= 0 {
+            __os_close(fd)
+            fail "'embed could not read all of " + path
+        }
+        done += cast[uint] got
+    }
+}
+
+litmod<fence> embed(contents: string, site: litmod_site.Literal_Site)
+    -> Array[`E] fail: string {
+    let path: string = resolved_path(contents, site)
+    var items: Array[`E] = new[Array[`E]](0)
+    let found: Ref[abi.Type_Record]? = element_row(items)
+    if found == nil {
+        fail "'embed needs a concrete element type"
+    }
+    let row: Ref[abi.Type_Record] = found.get()
+    let name: string = unsafe_cast[Ref[string]] (ref row.canonical_name)
+    let stride: uint = stride_bytes(row)
+    if !plain_data(row) or stride == 0 {
+        fail "'embed cannot fill " + name +
+            ": elements must be fixed-size plain data with no references"
+    }
+    let fd: int = open_file(path)!
+    let size: uint = file_size(fd, path)!
+    if size % stride != 0 {
+        __os_close(fd)
+        fail path + " is " + decimal(size) + " bytes, not a whole number of " +
+            decimal(stride) + "-byte " + name + " elements"
+    }
+    items = new[Array[`E]](cast[int] (size / stride))
+    if size > 0 {
+        read_all(fd, unsafe_cast[Ref[byte]] ref items[0], size, path)!
+    }
+    __os_close(fd)
+    return items
+}

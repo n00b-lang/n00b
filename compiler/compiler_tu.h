@@ -1190,6 +1190,8 @@ void propagate_symbol_type(parse_sym_entry_t *symbol, th_ctx *types,
 bool validate_type_value_namespaces(core_translation_unit_t *unit);
 bool validate_user_litmod_signatures(parse_grammar_t *grammar,
                                     core_translation_unit_t *unit);
+th_type *n00bb_literal_site_type(th_ctx *types);
+bool n00bb_litmod_takes_site(th_ctx *types, th_type *signature);
 
 static inline n00bb_tu_state_t *
 tu_state(core_translation_unit_t *unit)
