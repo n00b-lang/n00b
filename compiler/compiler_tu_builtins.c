@@ -42,6 +42,10 @@ static const builtin_native_name_t builtin_native_names[] = {
     {CORE_STRING_STATIC("__os_read"), CORE_STRING_STATIC("n00b_os_read")},
     {CORE_STRING_STATIC("__os_close"), CORE_STRING_STATIC("n00b_os_close")},
     {CORE_STRING_STATIC("__os_exit"), CORE_STRING_STATIC("n00b_os_exit")},
+    {CORE_STRING_STATIC("__os_futex_wait"),
+     CORE_STRING_STATIC("n00b_os_futex_wait")},
+    {CORE_STRING_STATIC("__os_futex_wake_all"),
+     CORE_STRING_STATIC("n00b_os_futex_wake_all")},
     {CORE_STRING_STATIC("__os_seek"), CORE_STRING_STATIC("n00b_os_seek")},
     {CORE_STRING_STATIC("__write_bytes"),
      CORE_STRING_STATIC("n00bb_runtime_write_bytes")},
@@ -380,6 +384,14 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *open_args[] = {byte_reference, integer, u32};
     th_type *read_args[] = {integer, byte_reference, uint};
     th_type *close_args[] = {integer};
+    th_type *wait_item = th_var(types);
+    th_type *wake_item = th_var(types);
+    th_type *futex_wait_args[] = {
+        wait_item ? th_ind(types, 0, wait_item) : nullptr, u32, uint,
+    };
+    th_type *futex_wake_args[] = {
+        wake_item ? th_ind(types, 0, wake_item) : nullptr,
+    };
     th_type *seek_args[] = {integer, integer, i32};
     th_type *u16_reference = th_ind(types, 0, th_name(types, CORE_STRING_STATIC("u16")));
     th_type *integer_reference = th_ind(types, 0, integer);
@@ -423,6 +435,11 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__os_close"), integer, close_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_exit"), nil_type, close_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_futex_wait"), i32, futex_wait_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_futex_wake_all"), i32,
+            futex_wake_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_seek"), integer, seek_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,

@@ -24,6 +24,19 @@ func event_signal(event: Ref[internal.gc.core.Event]) {
     __atomic_fetch_add(ref event.seq, 1)
 }
 
+func event_wait(event: Ref[internal.gc.core.Event], seq: u32, timeout_ns: uint) {
+    if __atomic_load(ref event.seq) == seq {
+        internal.threads.futex_wait(ref event.seq, seq, timeout_ns)
+    }
+}
+
+func event_wake(event: Ref[internal.gc.core.Event]) {
+    __atomic_fetch_add(ref event.seq, 1)
+    if __atomic_load(ref event.sleepers) != 0 {
+        internal.threads.futex_wake_all(ref event.seq)
+    }
+}
+
 func ticket_next(value: u32) -> u32 {
     if value == max_ticket {
         return 0

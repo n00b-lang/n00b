@@ -219,6 +219,29 @@ static int64_t os_pipe_raw(int32_t fds[2])
                                   0, 0, 0, 0, 0);
 }
 
+enum {
+    LINUX_FUTEX_WAIT_PRIVATE = 128,
+    LINUX_FUTEX_WAKE_PRIVATE = 129,
+};
+
+static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
+                                 uint64_t timeout_ns)
+{
+    struct { long tv_sec; long tv_nsec; } stamp = {
+        (long)(timeout_ns / 1000000000u), (long)(timeout_ns % 1000000000u),
+    };
+    long result = n00b_linux_syscall6(__NR_futex, (long)(uintptr_t)word,
+        LINUX_FUTEX_WAIT_PRIVATE, (long)expected,
+        timeout_ns ? (long)(uintptr_t)&stamp : 0, 0, 0);
+    return result < 0 && result >= -4095 ? (int32_t)-result : 0;
+}
+
+static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
+{
+    return (int32_t)n00b_linux_syscall6(__NR_futex, (long)(uintptr_t)word,
+        LINUX_FUTEX_WAKE_PRIVATE, 0x7fffffff, 0, 0, 0);
+}
+
 #elif defined(__APPLE__)
 
 #include <sys/ioctl.h>
@@ -306,6 +329,62 @@ static int64_t os_close_raw(int64_t fd)
 [[noreturn]] static void os_exit_raw(int64_t code)
 {
     _exit((int)code);
+}
+
+enum {
+    APPLE_SYS_ULOCK_WAKE = 516,
+    APPLE_SYS_ULOCK_WAIT2 = 544,
+    APPLE_ULOCK_COMPARE_AND_WAIT = 1,
+    APPLE_ULOCK_WAKE_ALL = 0x100,
+};
+
+static long os_apple_syscall5(long number, long a, long b, long c, long d,
+                              long e)
+{
+#if defined(__aarch64__)
+    register long x16 __asm__("x16") = number;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    register long x3 __asm__("x3") = d;
+    register long x4 __asm__("x4") = e;
+    __asm__ volatile("svc #0x80"
+                     : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3), "+r"(x4)
+                     : "r"(x16)
+                     : "cc", "memory");
+    return x0;
+#elif defined(__x86_64__)
+    register long rax __asm__("rax") = 0x2000000 | number;
+    register long rdi __asm__("rdi") = a;
+    register long rsi __asm__("rsi") = b;
+    register long rdx __asm__("rdx") = c;
+    register long r10 __asm__("r10") = d;
+    register long r8 __asm__("r8") = e;
+    __asm__ volatile("syscall"
+                     : "+r"(rax)
+                     : "r"(rdi), "r"(rsi), "r"(rdx), "r"(r10), "r"(r8)
+                     : "rcx", "r11", "cc", "memory");
+    return rax;
+#else
+#error "unsupported macOS architecture"
+#endif
+}
+
+static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
+                                 uint64_t timeout_ns)
+{
+    (void)os_apple_syscall5(APPLE_SYS_ULOCK_WAIT2,
+        APPLE_ULOCK_COMPARE_AND_WAIT, (long)(uintptr_t)word, (long)expected,
+        (long)timeout_ns, 0);
+    return 0;
+}
+
+static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
+{
+    (void)os_apple_syscall5(APPLE_SYS_ULOCK_WAKE,
+        APPLE_ULOCK_COMPARE_AND_WAIT | APPLE_ULOCK_WAKE_ALL,
+        (long)(uintptr_t)word, 0, 0, 0);
+    return 0;
 }
 
 static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
@@ -441,6 +520,26 @@ static int64_t os_close_raw(int64_t fd)
     ExitProcess((UINT)code);
 }
 
+#pragma comment(lib, "synchronization")
+
+static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
+                                 uint64_t timeout_ns)
+{
+    DWORD milliseconds = INFINITE;
+    if (timeout_ns) {
+        uint64_t rounded = (timeout_ns + 999999u) / 1000000u;
+        milliseconds = rounded >= INFINITE ? INFINITE - 1 : (DWORD)rounded;
+    }
+    return WaitOnAddress((volatile void *)word, &expected, sizeof(expected),
+                         milliseconds) ? 0 : (int32_t)GetLastError();
+}
+
+static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
+{
+    WakeByAddressAll((void *)word);
+    return 0;
+}
+
 static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
 {
     return os_errno_result(_lseeki64((int)fd, offset, whence));
@@ -530,6 +629,19 @@ int64_t n00b_os_close(int64_t fd)
 void n00b_os_exit(int64_t code)
 {
     os_exit_raw(code);
+}
+
+int32_t n00b_os_futex_wait(uint8_t *word, uint32_t expected,
+                           uint64_t timeout_ns)
+{
+    return word ? os_futex_wait_raw((_Atomic uint32_t *)(void *)word,
+                                    expected, timeout_ns) : -14;
+}
+
+int32_t n00b_os_futex_wake_all(uint8_t *word)
+{
+    return word ? os_futex_wake_all_raw((_Atomic uint32_t *)(void *)word)
+                : -14;
 }
 
 int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence)

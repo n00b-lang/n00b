@@ -19,6 +19,14 @@ func thread_fence() {
     __os_thread_fence()
 }
 
+func futex_wait(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint) -> i32 {
+    return __os_futex_wait(word, expected, timeout_ns)
+}
+
+func futex_wake_all(word: Ref[Atomic[u32]]) -> i32 {
+    return __os_futex_wake_all(word)
+}
+
 func thread_id() -> uint {
     return __os_thread_id()
 }
