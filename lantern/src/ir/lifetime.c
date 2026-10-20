@@ -742,32 +742,6 @@ ir_value_alias_liveness_on_edge(const ir_value_t *value,
     return result;
 }
 
-static ir_liveness_t
-alias_liveness_at_block_entry(const value_set_t *aliases,
-                              bool alias_complete,
-                              const ir_func_t *function,
-                              const ir_block_t *block)
-{
-    if (!alias_complete) return IR_LIVENESS_UNKNOWN;
-    bool found_predecessor = false;
-    bool found_live = false;
-    bool found_unknown = false;
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *predecessor = function->blocks[b];
-        ir_instr_t *terminator = ir_block_terminator(predecessor);
-        for (uint32_t s = 0; terminator && s < ir_succ_count(terminator); s++) {
-            if (ir_succ_at(terminator, s) != block) continue;
-            found_predecessor = true;
-            ir_liveness_t state = alias_liveness_on_edge_closure(
-                aliases, predecessor, (ir_block_t *)block);
-            found_live |= state == IR_LIVENESS_LIVE;
-            found_unknown |= state == IR_LIVENESS_UNKNOWN;
-        }
-    }
-    if (found_unknown || !found_predecessor) return IR_LIVENESS_UNKNOWN;
-    return found_live ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
-}
-
 static bool
 local_has_binding_initialization(const ir_value_t *value,
                                  const ir_func_t *function)
@@ -801,6 +775,257 @@ value_starts_at_instruction(const ir_value_t *value,
     ir_block_t *entry = local_starts_at_entry
         ? ir_block_entry(value->owner) : NULL;
     return entry && instruction->block == entry && instruction->index == 0;
+}
+
+typedef struct {
+    const ir_value_t *value;
+    bool valid;
+    int64_t *last_use;
+    bool *reaches_use;
+    bool *live_out;
+    bool *after_escapes_def;
+    bool *edge_escapes_def;
+} alias_table_t;
+
+typedef struct {
+    const ir_func_t *function;
+    uint32_t block_count;
+    bool *reachable;
+    uint32_t *pred_start;
+    const ir_block_t **preds;
+    alias_table_t *aliases;
+    size_t alias_count;
+} liveness_table_t;
+
+static void
+reach_from_entry(const ir_func_t *function, const ir_block_t *entry,
+                 const ir_block_t *forbidden, bool *seen, ir_block_t **work)
+{
+    size_t work_count = 0;
+    seen[entry->index] = true;
+    work[work_count++] = (ir_block_t *)entry;
+    while (work_count) {
+        ir_block_t *block = work[--work_count];
+        ir_instr_t *terminator = ir_block_terminator(block);
+        for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
+            ir_block_t *successor = ir_succ_at(terminator, s);
+            if (successor == forbidden || seen[successor->index]) continue;
+            seen[successor->index] = true;
+            work[work_count++] = successor;
+        }
+    }
+    (void)function;
+}
+
+static void
+liveness_table_free(liveness_table_t *table)
+{
+    for (size_t i = 0; i < table->alias_count; i++) {
+        alias_table_t *alias = &table->aliases[i];
+        free(alias->last_use);
+        free(alias->reaches_use);
+        free(alias->live_out);
+        free(alias->after_escapes_def);
+        free(alias->edge_escapes_def);
+    }
+    free(table->aliases);
+    free(table->reachable);
+    free(table->pred_start);
+    free(table->preds);
+}
+
+static bool
+alias_table_build(liveness_table_t *table, alias_table_t *alias,
+                  const ir_block_t *entry, ir_block_t **work)
+{
+    const ir_func_t *function = table->function;
+    const ir_value_t *value = alias->value;
+    uint32_t count = table->block_count;
+    alias->valid = (value->kind == IR_VAL_PARAM
+                    || value->kind == IR_VAL_LOCAL
+                    || value->kind == IR_VAL_INSTR)
+        && value->owner == function
+        && (value->kind != IR_VAL_INSTR
+            || (instruction_belongs_to(function, value->def)
+                && value->def->dest == value));
+    if (!alias->valid) return true;
+    alias->last_use = malloc(count * sizeof(*alias->last_use));
+    alias->reaches_use = calloc(count, sizeof(bool));
+    alias->live_out = calloc(count, sizeof(bool));
+    if (!alias->last_use || !alias->reaches_use || !alias->live_out)
+        return false;
+    size_t work_count = 0;
+    for (uint32_t b = 0; b < count; b++) {
+        const ir_block_t *block = function->blocks[b];
+        alias->last_use[b] = -1;
+        for (uint32_t i = 0; i < block->n_instrs; i++)
+            if (instruction_uses(block->instrs[i], value))
+                alias->last_use[b] = i;
+        if (alias->last_use[b] >= 0) {
+            alias->reaches_use[b] = true;
+            work[work_count++] = (ir_block_t *)block;
+        }
+    }
+    while (work_count) {
+        const ir_block_t *block = work[--work_count];
+        for (uint32_t p = table->pred_start[block->index];
+             p < table->pred_start[block->index + 1]; p++) {
+            const ir_block_t *pred = table->preds[p];
+            alias->live_out[pred->index] = true;
+            if (alias->reaches_use[pred->index]) continue;
+            alias->reaches_use[pred->index] = true;
+            work[work_count++] = (ir_block_t *)pred;
+        }
+    }
+    if (value->kind != IR_VAL_INSTR) return true;
+    const ir_block_t *def_block = value->def->block;
+    alias->after_escapes_def = calloc(count, sizeof(bool));
+    alias->edge_escapes_def = calloc(count, sizeof(bool));
+    if (!alias->after_escapes_def || !alias->edge_escapes_def) return false;
+    if (entry != def_block)
+        reach_from_entry(function, entry, def_block,
+                         alias->after_escapes_def, work);
+    reach_from_entry(function, entry, def_block, alias->edge_escapes_def,
+                     work);
+    return true;
+}
+
+static bool
+liveness_table_build(liveness_table_t *table, const ir_func_t *function,
+                     const value_set_t *aliases)
+{
+    *table = (liveness_table_t){.function = function,
+                                .block_count = function->n_blocks};
+    uint32_t count = function->n_blocks;
+    ir_block_t *entry = ir_block_entry((ir_func_t *)function);
+    ir_block_t **work = malloc(count * sizeof(*work));
+    table->reachable = calloc(count, sizeof(bool));
+    table->pred_start = calloc((size_t)count + 1, sizeof(uint32_t));
+    table->aliases = calloc(aliases->len ? aliases->len : 1,
+                            sizeof(*table->aliases));
+    bool ok = work && table->reachable && table->pred_start
+        && table->aliases;
+    size_t edges = 0;
+    for (uint32_t b = 0; ok && b < count; b++) {
+        ir_instr_t *terminator = ir_block_terminator(function->blocks[b]);
+        for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
+            table->pred_start[ir_succ_at(terminator, s)->index + 1]++;
+            edges++;
+        }
+    }
+    for (uint32_t b = 0; ok && b < count; b++)
+        table->pred_start[b + 1] += table->pred_start[b];
+    uint32_t *fill = ok ? calloc(count ? count : 1, sizeof(uint32_t))
+                        : nullptr;
+    table->preds = ok ? malloc((edges ? edges : 1) * sizeof(*table->preds))
+                      : nullptr;
+    ok = ok && fill && table->preds;
+    for (uint32_t b = 0; ok && b < count; b++) {
+        ir_instr_t *terminator = ir_block_terminator(function->blocks[b]);
+        for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
+            uint32_t to = ir_succ_at(terminator, s)->index;
+            table->preds[table->pred_start[to] + fill[to]++] =
+                function->blocks[b];
+        }
+    }
+    free(fill);
+    if (ok) reach_from_entry(function, entry, nullptr, table->reachable,
+                             work);
+    for (size_t i = 0; ok && i < aliases->len; i++) {
+        table->aliases[i].value = aliases->data[i];
+        table->alias_count = i + 1;
+        ok = alias_table_build(table, &table->aliases[i], entry, work);
+    }
+    free(work);
+    if (!ok) liveness_table_free(table);
+    return ok;
+}
+
+static ir_liveness_t
+table_alias_after(const liveness_table_t *table, const alias_table_t *alias,
+                  const ir_instr_t *point)
+{
+    const ir_value_t *value = alias->value;
+    const ir_block_t *block = point->block;
+    if (!alias->valid || !table->reachable[block->index])
+        return IR_LIVENESS_UNKNOWN;
+    if (value->kind == IR_VAL_INSTR) {
+        const ir_block_t *def_block = value->def->block;
+        if ((def_block == block && value->def->index > point->index)
+            || !table->reachable[def_block->index]
+            || (def_block != block
+                && alias->after_escapes_def[block->index]))
+            return IR_LIVENESS_UNKNOWN;
+    }
+    return alias->last_use[block->index] > (int64_t)point->index
+        || alias->live_out[block->index]
+        ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
+}
+
+static ir_liveness_t
+table_alias_on_edge(const liveness_table_t *table,
+                    const alias_table_t *alias, const ir_block_t *from,
+                    const ir_block_t *to)
+{
+    const ir_value_t *value = alias->value;
+    if (!alias->valid || !table->reachable[from->index])
+        return IR_LIVENESS_UNKNOWN;
+    if (value->kind == IR_VAL_INSTR) {
+        const ir_block_t *def_block = value->def->block;
+        if (def_block == from) {
+            if (value->def->index
+                >= ir_block_terminator((ir_block_t *)from)->index)
+                return IR_LIVENESS_UNKNOWN;
+        }
+        else if (def_block == to
+                 || alias->edge_escapes_def[from->index]
+                 || !table->reachable[def_block->index])
+            return IR_LIVENESS_UNKNOWN;
+    }
+    return alias->reaches_use[to->index]
+        ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
+}
+
+static ir_liveness_t
+table_after(const liveness_table_t *table, const ir_instr_t *point)
+{
+    bool unknown = false;
+    for (size_t i = 0; i < table->alias_count; i++) {
+        ir_liveness_t state = table_alias_after(table, &table->aliases[i],
+                                                point);
+        if (state == IR_LIVENESS_LIVE) return IR_LIVENESS_LIVE;
+        unknown |= state == IR_LIVENESS_UNKNOWN;
+    }
+    return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
+}
+
+static ir_liveness_t
+table_on_edge(const liveness_table_t *table, const ir_block_t *from,
+              const ir_block_t *to)
+{
+    bool unknown = false;
+    for (size_t i = 0; i < table->alias_count; i++) {
+        ir_liveness_t state = table_alias_on_edge(table, &table->aliases[i],
+                                                  from, to);
+        if (state == IR_LIVENESS_LIVE) return IR_LIVENESS_LIVE;
+        unknown |= state == IR_LIVENESS_UNKNOWN;
+    }
+    return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
+}
+
+static ir_liveness_t
+table_at_block_entry(const liveness_table_t *table, const ir_block_t *block)
+{
+    uint32_t first = table->pred_start[block->index];
+    uint32_t last = table->pred_start[block->index + 1];
+    if (first == last) return IR_LIVENESS_UNKNOWN;
+    bool found_live = false;
+    for (uint32_t p = first; p < last; p++) {
+        ir_liveness_t state = table_on_edge(table, table->preds[p], block);
+        if (state == IR_LIVENESS_UNKNOWN) return IR_LIVENESS_UNKNOWN;
+        found_live |= state == IR_LIVENESS_LIVE;
+    }
+    return found_live ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
 }
 
 bool
@@ -838,62 +1063,55 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
         }
     }
 
-    const value_set_t *aliases = &query->aliases;
-    bool alias_complete = query->complete;
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
+    if (!query->complete) return true;
+    liveness_table_t table;
+    if (!liveness_table_build(&table, function, &query->aliases))
+        return false;
+    bool ok = true;
+    for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
+        for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
             ir_instr_t *point = block->instrs[i];
-            ir_liveness_t after = alias_complete
-                ? alias_liveness_after_closure(aliases, point)
-                : IR_LIVENESS_UNKNOWN;
-            if (after != IR_LIVENESS_DEAD) continue;
+            if (table_after(&table, point) != IR_LIVENESS_DEAD) continue;
             bool starts_here = value_starts_at_instruction(
                 value, point, local_starts_at_entry);
             bool is_entry_parameter = value->kind == IR_VAL_PARAM
                 && block == entry && i == 0;
             ir_liveness_t before = i
-                ? alias_liveness_after_closure(aliases,
-                    block->instrs[i - 1])
-                : alias_liveness_at_block_entry(aliases, alias_complete,
-                    function, block);
+                ? table_after(&table, block->instrs[i - 1])
+                : table_at_block_entry(&table, block);
             bool terminator_fallback = point == terminator
                 && before == IR_LIVENESS_UNKNOWN;
             if (!starts_here && !is_entry_parameter
                 && before != IR_LIVENESS_LIVE && !terminator_fallback)
                 continue;
-            if (!visitor(context, (ir_lifetime_endpoint_t){
-                    .function = function,
-                    .binding = (ir_value_t *)value,
-                    .point = point,
-                })) {
-                return false;
-            }
+            ok = visitor(context, (ir_lifetime_endpoint_t){
+                .function = function,
+                .binding = (ir_value_t *)value,
+                .point = point,
+            });
         }
     }
 
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
+    for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
-        if (!alias_complete
-            || alias_liveness_after_closure(aliases, terminator)
-            != IR_LIVENESS_LIVE) continue;
-        for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
+        if (table_after(&table, terminator) != IR_LIVENESS_LIVE) continue;
+        for (uint32_t s = 0; ok && s < ir_succ_count(terminator); s++) {
             ir_block_t *target = ir_succ_at(terminator, s);
-            if (alias_liveness_on_edge_closure(aliases, block, target)
-                != IR_LIVENESS_DEAD) continue;
-            if (!visitor(context, (ir_lifetime_endpoint_t){
-                    .function = function,
-                    .binding = (ir_value_t *)value,
-                    .from = block,
-                    .to = target,
-                })) {
-                return false;
-            }
+            if (table_on_edge(&table, block, target) != IR_LIVENESS_DEAD)
+                continue;
+            ok = visitor(context, (ir_lifetime_endpoint_t){
+                .function = function,
+                .binding = (ir_value_t *)value,
+                .from = block,
+                .to = target,
+            });
         }
     }
-    return true;
+    liveness_table_free(&table);
+    return ok;
 }
 
 bool

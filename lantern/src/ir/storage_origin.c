@@ -27,6 +27,7 @@ typedef struct {
     const ir_instr_t *field;
     origin_mode_t mode;
     uintptr_t state;
+    size_t next;
 } storage_field_proof_t;
 
 typedef ir_instr_t *storage_call_t;
@@ -58,11 +59,61 @@ struct ir_storage_origin_t {
     core_list_t(storage_call_t) calls;
     core_list_t(storage_indirect_function_t) indirect_functions;
     core_list_t(storage_method_t) dynamic_methods;
+    core_dict_t definitions;
+    core_dict_t assignment_heads;
+    size_t *assignment_next;
+    core_dict_t call_heads;
+    size_t *call_next;
+    core_dict_t indirect_definitions;
+    core_dict_t dynamic_method_names;
+    core_dict_t field_assignment_heads;
+    size_t *field_assignment_next;
+    core_dict_t field_proof_heads;
     size_t pending_global_proofs;
     size_t pending_parameter_proofs;
 };
 
 enum { ORIGIN_VISITING = 1, ORIGIN_UNKNOWN, ORIGIN_UNMANAGED };
+
+static core_hash_value_t
+function_name_hash(void *key)
+{
+    const ir_func_t *function = key;
+    return core_string_hash(ir_module_name(function->owner)) * 31
+         ^ core_string_hash(function->name);
+}
+
+static bool
+function_name_eq(const void *left, const void *right)
+{
+    const ir_func_t *a = left;
+    const ir_func_t *b = right;
+    return core_string_eq(a->name, b->name)
+        && core_string_eq(ir_module_name(a->owner), ir_module_name(b->owner));
+}
+
+static const core_string_t *
+field_name(const ir_instr_t *field)
+{
+    return field && field->op == IR_OP_FIELD && field->n_operands >= 2
+        && field->operands[1].kind == IR_OPD_NAME
+        && field->operands[1].name.data ? &field->operands[1].name : nullptr;
+}
+
+static size_t
+chain_head(core_dict_t *heads, const void *key)
+{
+    return key ? (size_t)(uintptr_t)core_dict_get(heads, key, nullptr) : 0;
+}
+
+static void
+chain_link(core_dict_t *heads, size_t *next, const void *key, size_t index)
+{
+    next[index] = chain_head(heads, key);
+    core_dict_put(heads, key, index + 1);
+}
+
+static bool build_indexes(ir_storage_origin_t *analysis);
 
 static bool
 append_assignment(ir_storage_origin_t *analysis, const void *binding,
@@ -129,6 +180,20 @@ ir_storage_origin_new(ir_func_t *const *reachable, size_t count,
         core_dict_init(&analysis->locals[mode], nullptr, nullptr);
         core_dict_init(&analysis->globals[mode], nullptr, nullptr);
         core_dict_init(&analysis->returns[mode], nullptr, nullptr);
+    }
+    core_dict_init(&analysis->definitions, function_name_hash,
+                   function_name_eq);
+    core_dict_init(&analysis->assignment_heads, nullptr, nullptr);
+    core_dict_init(&analysis->call_heads, nullptr, nullptr);
+    core_dict_init(&analysis->indirect_definitions, nullptr, nullptr);
+    core_dict_init_string(&analysis->dynamic_method_names);
+    core_dict_init_string(&analysis->field_assignment_heads);
+    core_dict_init_string(&analysis->field_proof_heads);
+    for (size_t i = 0; i < count; i++) {
+        ir_func_t *function = reachable[i];
+        if (function && function->n_blocks && function->owner
+            && function->name.data)
+            core_dict_add(&analysis->definitions, function, function);
     }
     for (size_t i = 0; i < count; i++) {
         ir_func_t *function = reachable[i];
@@ -203,6 +268,7 @@ ir_storage_origin_new(ir_func_t *const *reachable, size_t count,
             }
         }
     }
+    if (!build_indexes(analysis)) goto failed;
     return analysis;
 failed:
     ir_storage_origin_free(analysis);
@@ -219,6 +285,16 @@ ir_storage_origin_free(ir_storage_origin_t *analysis)
         core_dict_free(&analysis->globals[mode]);
         core_dict_free(&analysis->returns[mode]);
     }
+    core_dict_free(&analysis->definitions);
+    core_dict_free(&analysis->assignment_heads);
+    core_dict_free(&analysis->call_heads);
+    core_dict_free(&analysis->indirect_definitions);
+    core_dict_free(&analysis->dynamic_method_names);
+    core_dict_free(&analysis->field_assignment_heads);
+    core_dict_free(&analysis->field_proof_heads);
+    free(analysis->assignment_next);
+    free(analysis->call_next);
+    free(analysis->field_assignment_next);
     core_list_free(analysis->assignments);
     core_list_free(analysis->field_assignments);
     core_list_free(analysis->field_proofs);
@@ -231,16 +307,67 @@ ir_storage_origin_free(ir_storage_origin_t *analysis)
 static ir_func_t *
 definition(ir_storage_origin_t *analysis, const ir_func_t *target)
 {
-    if (!target || !target->owner) return nullptr;
-    for (size_t i = 0; i < analysis->function_count; i++) {
-        ir_func_t *function = analysis->functions[i];
-        if (function && function->n_blocks
-            && function->owner && function->name.data && target->name.data
-            && core_string_eq(function->name, target->name)
-            && core_string_eq(ir_module_name(function->owner),
-                              ir_module_name(target->owner))) return function;
+    if (!target || !target->owner || !target->name.data) return nullptr;
+    return core_dict_get(&analysis->definitions, target, nullptr);
+}
+
+static size_t *
+chain_array(size_t count)
+{
+    return calloc(count ? count : 1, sizeof(size_t));
+}
+
+static bool
+build_indexes(ir_storage_origin_t *analysis)
+{
+    size_t assignments = analysis->assignments.len;
+    size_t calls = analysis->calls.len;
+    size_t fields = analysis->field_assignments.len;
+    analysis->assignment_next = chain_array(assignments);
+    analysis->call_next = chain_array(calls);
+    analysis->field_assignment_next = chain_array(fields);
+    if (!analysis->assignment_next || !analysis->call_next
+        || !analysis->field_assignment_next) return false;
+    for (size_t i = assignments; i-- > 0;)
+        chain_link(&analysis->assignment_heads, analysis->assignment_next,
+                   analysis->assignments.data[i].binding, i);
+    for (size_t i = calls; i-- > 0;) {
+        const ir_instr_t *call = analysis->calls.data[i];
+        const ir_value_t *callee = call->n_operands
+            ? ir_operand_value(&call->operands[0]) : nullptr;
+        ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
+            ? definition(analysis, callee->owner) : nullptr;
+        if (target)
+            chain_link(&analysis->call_heads, analysis->call_next, target, i);
     }
-    return nullptr;
+    for (size_t i = fields; i-- > 0;) {
+        const core_string_t *name =
+            field_name(analysis->field_assignments.data[i].field);
+        if (name)
+            chain_link(&analysis->field_assignment_heads,
+                       analysis->field_assignment_next, name, i);
+    }
+    for (size_t i = 0; i < analysis->indirect_functions.len; i++) {
+        ir_func_t *target = definition(analysis,
+                                       analysis->indirect_functions.data[i]);
+        if (target) core_dict_put(&analysis->indirect_definitions, target, 1);
+    }
+    for (size_t i = 0; i < analysis->dynamic_methods.len; i++)
+        core_dict_add(&analysis->dynamic_method_names,
+                      &analysis->dynamic_methods.data[i], 1);
+    return true;
+}
+
+static bool
+dynamic_method_target(ir_storage_origin_t *analysis, core_string_t name)
+{
+    for (size_t length = 0; length <= name.u8_bytes; length++) {
+        if (length < name.u8_bytes && name.data[length] != '#') continue;
+        core_string_t prefix = {.data = name.data, .u8_bytes = length};
+        if (core_dict_contains(&analysis->dynamic_method_names, &prefix))
+            return true;
+    }
+    return false;
 }
 
 static bool prove_value(ir_storage_origin_t *analysis,
@@ -251,9 +378,10 @@ prove_assignments(ir_storage_origin_t *analysis, const void *binding,
                   bool require_assignment, origin_mode_t mode)
 {
     bool found = false;
-    for (size_t i = 0; i < analysis->assignments.len; i++) {
-        const storage_assignment_t *assignment = &analysis->assignments.data[i];
-        if (assignment->binding != binding) continue;
+    for (size_t link = chain_head(&analysis->assignment_heads, binding); link;
+         link = analysis->assignment_next[link - 1]) {
+        const storage_assignment_t *assignment =
+            &analysis->assignments.data[link - 1];
         found = true;
         if (!assignment->source
             || !prove_value(analysis, assignment->source, mode)) return false;
@@ -356,22 +484,33 @@ prove_field_content(ir_storage_origin_t *analysis,
         || !field || field->op != IR_OP_FIELD || !field->n_operands
         || !prove_value(analysis, ir_operand_value(&field->operands[0]), mode))
         return false;
-    size_t index = 0;
-    for (; index < analysis->field_proofs.len; index++)
-        if (analysis->field_proofs.data[index].mode == mode
-            && same_field(analysis->field_proofs.data[index].field, field)) break;
+    const core_string_t *name = field_name(field);
+    if (!name) return false;
+    size_t index = analysis->field_proofs.len;
+    for (size_t link = chain_head(&analysis->field_proof_heads, name); link;
+         link = analysis->field_proofs.data[link - 1].next)
+        if (analysis->field_proofs.data[link - 1].mode == mode
+            && same_field(analysis->field_proofs.data[link - 1].field,
+                          field)) {
+            index = link - 1;
+            break;
+        }
     if (index < analysis->field_proofs.len) {
         uintptr_t state = analysis->field_proofs.data[index].state;
         if (state) return state == ORIGIN_UNMANAGED;
     } else {
         if (!core_list_try_push(analysis->field_proofs,
-                ((storage_field_proof_t){field, mode, 0}))) return false;
+                ((storage_field_proof_t){field, mode, 0,
+                    chain_head(&analysis->field_proof_heads, name)})))
+            return false;
+        core_dict_put(&analysis->field_proof_heads, name, index + 1);
     }
     analysis->field_proofs.data[index].state = ORIGIN_VISITING;
     bool found = false, proven = true;
-    for (size_t i = 0; i < analysis->field_assignments.len; i++) {
+    for (size_t link = chain_head(&analysis->field_assignment_heads, name);
+         link; link = analysis->field_assignment_next[link - 1]) {
         const storage_field_assignment_t *assignment =
-            &analysis->field_assignments.data[i];
+            &analysis->field_assignments.data[link - 1];
         if (!same_field(field, assignment->field)) continue;
         found = true;
         if (!assignment->source
@@ -421,25 +560,14 @@ prove_parameter(ir_storage_origin_t *analysis, const ir_value_t *parameter,
             ? !analysis->closed_callers(owner, analysis->context)
             : owner->linkage != IR_LINK_INTERNAL))
         return false;
-    for (size_t i = 0; i < analysis->indirect_functions.len; i++)
-        if (definition(analysis, analysis->indirect_functions.data[i]) == owner)
-            return false;
-    for (size_t i = 0; i < analysis->dynamic_methods.len; i++) {
-        core_string_t method = analysis->dynamic_methods.data[i];
-        size_t length = method.u8_bytes;
-        if (core_string_starts_with(owner->name, method)
-            && (owner->name.u8_bytes == length
-                || owner->name.data[length] == '#'))
-            return false;
-    }
+    if (core_dict_contains(&analysis->indirect_definitions, owner)
+        || dynamic_method_target(analysis, owner->name))
+        return false;
     bool found = false;
     analysis->pending_parameter_proofs++;
-    for (size_t i = 0; i < analysis->calls.len; i++) {
-        const ir_instr_t *call = analysis->calls.data[i];
-        const ir_value_t *callee = call->n_operands
-            ? ir_operand_value(&call->operands[0]) : nullptr;
-        if (!callee || callee->kind != IR_VAL_FUNC
-            || definition(analysis, callee->owner) != owner) continue;
+    for (size_t link = chain_head(&analysis->call_heads, owner); link;
+         link = analysis->call_next[link - 1]) {
+        const ir_instr_t *call = analysis->calls.data[link - 1];
         found = true;
         uint32_t argument = parameter->index + 1;
         if (call->n_operands <= argument
