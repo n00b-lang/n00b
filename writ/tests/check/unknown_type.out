@@ -1,0 +1,2 @@
+error[E0102]: unknown type: `c_nope`
+  --> tests/check/unknown_type.writ:3:9

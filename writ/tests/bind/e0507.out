@@ -1,0 +1,2 @@
+error[E0507]: this item belongs to the other direction: `provide` belongs to an export binding
+  --> tests/bind/e0507.writ:3:5

@@ -1,0 +1,110 @@
+<type>       ::= <one-type>
+<union-type> ::= <isect-type> (%"|" <isect-type>)+
+              | <isect-type>
+
+<isect-type> ::= <one-type> (%"&" <one-type>)+
+               | <one-type>
+
+<one-type> ::= <base-type>
+
+<base-type> ::= <tvar>
+              | <binder>
+              | <bitint>
+              | <indirection>
+              | <sequence>
+              | <anon-site>
+              | <tuple>
+              | <paren-form>
+              | <named-type>
+
+<named-type> @nospace($2) ::= %"variant"? <qualified-name> <type-app>?
+<type-app>   @nospace ::= %"[" <type-args> %"]"
+
+<qualified-name> @nospace ::= %IDENTIFIER (%"." <name-segment>)*
+<qualified-name> @nospace ::= %"set" (%"." <name-segment>)*
+<qualified-name> @nospace ::= %"dict" (%"." <name-segment>)*
+
+<name-segment> ::= %IDENTIFIER | %"set" | %"dict" | %"variant" | %"forall"
+                 | %"bitint" | %"ubitint" | %"i" | %"u" | %"bits" | %"ptr"
+                 | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
+                 | %"nullable" | %"reseatable" | %"indexable" | %"owning"
+                 | %"exclusive" | %"temporary" | %"foreign" | %"array" | %"t" | %"fail"
+                 | %"where" | %"in" | %"out" | %"inout" | %"consume"
+
+<type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
+
+<type-arg> ::= %INT_LIT
+             | %STRING_LIT
+             | <union-type>
+
+<tvar> @nospace ::= %"`" %IDENTIFIER
+
+<binder> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"forall" %"[" <tvar> (%"," <tvar>)* %"]" <one-type>
+
+<bitint> @nospace ::= %"bitint" %"[" %INT_LIT %"]"
+           | %"ubitint" %"[" %INT_LIT %"]"
+           | %"i" %":" %INT_LIT
+           | %"u" %":" %INT_LIT
+           | %"bits" %":" %INT_LIT
+
+<indirection> @nospace ::= <ind-name> %"[" <union-type> <ind-tail>? %"]"
+<ind-tail>    ::= %";" <ind-attrs>?
+
+<ind-name> ::= %"ptr" | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
+
+<ind-attrs> @nospace($1) ::= <ind-attr> (%"," <ind-attr>)*
+
+<ind-attr> ::= %"nullable"
+             | %"reseatable"
+             | %"indexable"
+             | %"owning"
+             | %"exclusive"
+             | %"temporary"
+             | %"foreign"
+
+<sequence> @nospace($1) @nospace($2) @nospace($3) @nospace($4) ::= %"array" %"[" <union-type> (%";" %INT_LIT)? %"]"
+
+<anon-site> @nospace ::= %"@" %STRING_LIT %":" %INT_LIT %":" %INT_LIT
+
+<field-body> @nospace ::= %"(" <field-list> %")"
+               | %"(" %")"
+
+<field-list> @nospace($1) ::= <field> (%"," <field>)*
+
+<field> @nospace($1) ::= %IDENTIFIER %":" <union-type>
+
+<paren-form> @nospace ::= <record>
+               | <function>
+               | %"(" <union-type> %")"
+
+<record> ::= <field-body>
+
+<tuple> @nospace ::= %"t" %"(" <tuple-args>? %")"
+
+<tuple-args> @nospace($1) ::= <union-type> (%"," <union-type>)*
+
+<function> @nospace($1) @nospace($2) ::= %"(" <param-list>? %")" %"->" <function-result> <function-where>?
+
+<function-where> ::= %"where" <function-constraint> (%"," <function-constraint>)*
+
+<function-constraint> ::= %"`" %IDENTIFIER %":" <function-constraint-items>
+
+<function-constraint-items> ::= <function-constraint-item> (%"+" <function-constraint-item>)*
+
+<function-constraint-item> ::= %"!=" <union-type>
+                             | <qualified-name>
+
+<function-result> ::= <union-type>
+                    | <union-type> <function-error>
+
+<function-error> ::= %"fail" %":" <union-type>
+
+<param-list> @nospace($1) ::= <param> (%"," <param>)*
+
+<param> ::= <mode>? <rest-param>
+          | <mode>? %IDENTIFIER %":" <mode>? <union-type>
+          | <mode>? <union-type>
+
+<mode> ::= %"in" | %"out" | %"inout" | %"consume"
+
+<rest-param> @nospace($1) ::= %"*" <union-type>

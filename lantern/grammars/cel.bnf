@@ -1,0 +1,189 @@
+@lexer("cel.lex")
+
+# Google Common Expression Language (CEL) Grammar
+# Based on the CEL Language Definition
+# https://github.com/google/cel-spec/blob/master/doc/langdef.md
+#
+# This is a SYNTACTIC grammar only. Lexical details (string escapes, number
+# formats, raw strings, byte literals, etc.) are handled by the lexer.
+#
+# Lexer-provided token types:
+#   %IDENTIFIER  - identifiers (not a keyword or reserved word)
+#   %INTEGER     - integer literals (decimal or 0x hex)
+#   %UINT        - unsigned integer literals (e.g. 123u, 0xFFu)
+#   %FLOAT       - floating-point literals (e.g. 1.0, 1e10, .5e-3)
+#   %STRING      - string literals (single/double/triple-quoted, raw r"...")
+#   %BYTES       - byte string literals (b"...", b'...', etc.)
+#
+# Keywords are written as %"keyword".
+# Operators and punctuation are written as %"op".
+#
+# CEL keywords (cannot be used as identifiers):
+#   true, false, null, in
+#
+# CEL reserved words (reserved for future use / embedding):
+#   as, break, const, continue, else, for, function, if, import,
+#   let, loop, package, namespace, return, var, void, while
+
+# ============================================================================
+# Top-level expression
+# ============================================================================
+
+# The start symbol. A CEL program is a single expression, optionally with
+# a ternary conditional.
+<expr> ::= <conditional-or> %"?" <conditional-or> %":" <expr>
+          | <conditional-or>
+
+# ============================================================================
+# Binary operators — by precedence (lowest to highest)
+# ============================================================================
+#
+# CEL operator precedence (lowest to highest):
+#
+#   1. Ternary conditional  ? :       (right-associative)
+#   2. Logical OR           ||        (left-associative)
+#   3. Logical AND          &&        (left-associative)
+#   4. Relational      < <= >= > == != in  (left-associative)
+#   5. Addition         + -           (left-associative)
+#   6. Multiplication   * / %         (left-associative)
+#   7. Unary            ! -           (right-associative, prefix)
+#   8. Member access    . [] ()       (left-to-right)
+#
+# Each level is encoded as a left-recursive non-terminal.
+
+# Level 2: Logical OR (left-associative)
+<conditional-or> ::= <conditional-or> %"||" <conditional-and>
+                    | <conditional-and>
+
+# Level 3: Logical AND (left-associative)
+<conditional-and> ::= <conditional-and> %"&&" <relation>
+                     | <relation>
+
+# Level 4: Relational operators (left-associative)
+# Includes the `in` keyword operator for membership testing.
+<relation> ::= <relation> <relop> <addition>
+              | <addition>
+
+<relop> ::= %"<" | %"<=" | %">=" | %">" | %"==" | %"!=" | %"in"
+
+# Level 5: Addition and subtraction (left-associative)
+# Also covers string concatenation (+ on strings) and list concatenation.
+<addition> ::= <addition> <add-op> <multiplication>
+              | <multiplication>
+
+<add-op> ::= %"+" | %"-"
+
+# Level 6: Multiplication, division, modulo (left-associative)
+<multiplication> ::= <multiplication> <mul-op> <unary>
+                    | <unary>
+
+<mul-op> ::= %"*" | %"/" | %"%"
+
+# ============================================================================
+# Unary operators
+# ============================================================================
+
+# Level 7: Unary prefix operators (right-associative).
+# The CEL spec allows repeated unary operators: !!x, --x (though the latter
+# is not useful since CEL integers are not mutable). We model this by
+# allowing the unary production to recurse.
+<unary> ::= %"!" <unary>
+           | %"-" <unary>
+           | <member>
+
+# ============================================================================
+# Member access, indexing, and method calls
+# ============================================================================
+
+# Level 8: Member access (left-to-right).
+# Covers:
+#   expr.field          — field selection
+#   expr.method(args)   — method call (also how macros like .exists() parse)
+#   expr[index]         — index / map key access
+<member> ::= <member> %"." %IDENTIFIER %"(" <expr-list>? %")"
+            | <member> %"." %IDENTIFIER
+            | <member> %"[" <expr> %"]"
+            | <primary>
+
+# ============================================================================
+# Primary expressions
+# ============================================================================
+
+# The atoms of CEL expressions. Covers:
+#   - Identifiers (variable references)
+#   - Qualified identifiers with leading dot (for absolute names)
+#   - Function calls: f(args)
+#   - Qualified function calls: .pkg.func(args) or pkg.func(args)
+#   - Parenthesized expressions: (expr)
+#   - List literals: [a, b, c]
+#   - Map literals: {k1: v1, k2: v2}
+#   - Message/struct construction: Type{field: value} or a.b.Type{field: value}
+#   - Literals: integers, floats, strings, bytes, booleans, null
+<primary> ::= <qualified-ident> %"(" <expr-list>? %")"
+             | <qualified-ident> %"{" <field-inits>? %","? %"}"
+             | <qualified-ident>
+             | %"(" <expr> %")"
+             | <list-literal>
+             | <map-literal>
+             | <literal>
+
+# A possibly-qualified identifier: optional leading dot, then one or more
+# dot-separated identifiers. This handles:
+#   x              — simple variable
+#   x.y.z          — qualified name (package path or nested field path)
+#   .x.y.z         — absolute qualified name
+#
+# In CEL, qualified identifiers in primary position are used for:
+#   - Variable references
+#   - Type names for message construction: pkg.MyType{...}
+#   - Qualified function names: pkg.func(...)
+<qualified-ident> ::= %"."? %IDENTIFIER (%"." %IDENTIFIER)*
+
+# ============================================================================
+# Composite literals
+# ============================================================================
+
+# List literal with optional trailing comma.
+# Examples: [], [1, 2, 3], [a, b,]
+<list-literal> ::= %"[" <expr-list>? %","? %"]"
+
+# Map literal with optional trailing comma.
+# Examples: {}, {"a": 1, "b": 2}, {key: val,}
+<map-literal> ::= %"{" <map-inits>? %","? %"}"
+
+# ============================================================================
+# Initializer lists
+# ============================================================================
+
+# Comma-separated expression list used in function/method calls and list
+# literals.
+<expr-list> ::= <expr> (%"," <expr>)*
+
+# Field initializers for message/struct construction.
+# Fields are always identifiers (selectors), not arbitrary expressions.
+# Example: MyMessage{name: "foo", value: 42}
+<field-inits> ::= <field-init> (%"," <field-init>)*
+
+<field-init> ::= %IDENTIFIER %":" <expr>
+
+# Map entry initializers. Keys are arbitrary expressions (not just
+# identifiers), distinguishing maps from messages.
+# Example: {request.auth.claims.group: "admin", "key": value}
+<map-inits> ::= <map-init> (%"," <map-init>)*
+
+<map-init> ::= <expr> %":" <expr>
+
+# ============================================================================
+# Literals
+# ============================================================================
+
+# All literal values. Boolean and null are keywords; numeric, string, and
+# byte literals come from the lexer.
+<literal> ::= %INTEGER
+             | %UINT
+             | %FLOAT
+             | %STRING
+             | %BYTES
+             | %"true"
+             | %"false"
+             | %"null"

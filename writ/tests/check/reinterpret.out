@@ -1,0 +1,2 @@
+error[E0216]: cannot reinterpret the array's elements: `out`: the record's fields fill 9 of its 16 bytes; padding cannot be reinterpreted
+  --> tests/check/reinterpret.writ:7:11

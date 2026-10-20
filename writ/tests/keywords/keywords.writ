@@ -1,0 +1,39 @@
+library keywords
+
+opaque db_state
+handle Db = *db_state release db_close
+
+keywords OpenOpts presence mask(present) {
+    present:    u32
+    timeout_ms: u32  = 30000
+    readonly:   bool = false
+    cache_kb:   u32
+}
+
+keywords Limits presence sentinel {
+    max_rows: i64 = -1 none -1
+    min_rows: i64 none -1
+}
+
+keywords Sized presence size(size) {
+    size:  u32
+    flags: u32 = 4
+}
+
+keywords Plain presence always {
+    depth: c_int = 3
+}
+
+fn db_open(path: *cstr, opts: ?OpenOpts) -> own ?Db release db_close
+  pack keywords opts
+
+fn db_limit(db: Db, limits: *Limits) -> i64
+  pack keywords limits
+
+fn db_flags(db: Db, sized: *Sized) -> u32
+  pack keywords sized
+
+fn db_depth(db: Db, plain: *Plain) -> c_int
+  pack keywords plain
+
+fn db_close(db: consume ?Db)

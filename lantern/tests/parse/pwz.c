@@ -1,0 +1,518 @@
+
+#include "parse/pwz.h"
+#include "parse/bnf.h"
+#include "private/parse/pwz.h"
+#include "scanner/token_stream.h"
+#include "lib/alloc.h"
+
+#include <assert.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+
+#define TOK_PLUS (PARSE_TOK_START_ID + 10)
+#define TOK_ID   (PARSE_TOK_START_ID + 11)
+
+static core_string_t
+leaf_text(parse_tree_t *node)
+{
+    if (!node || !core_tree_is_leaf(node)) {
+        return (core_string_t){0};
+    }
+
+    parse_token_info_t *tok = core_tree_leaf_value(node);
+
+    if (!tok) {
+        return (core_string_t){0};
+    }
+
+    return core_option_get_or_else(parse_token_value(tok),
+                                   (core_string_t){0});
+}
+
+static core_string_t
+first_leaf_text(parse_tree_t *node)
+{
+    if (!node) {
+        return (core_string_t){0};
+    }
+
+    if (core_tree_is_leaf(node)) {
+        return leaf_text(node);
+    }
+
+    size_t nc = core_tree_num_children(node);
+
+    for (size_t i = 0; i < nc; i++) {
+        core_string_t t = first_leaf_text(core_tree_child(node, i));
+
+        if (t.data) {
+            return t;
+        }
+    }
+
+    return (core_string_t){0};
+}
+
+static parse_token_info_t *
+make_token(int32_t tid, int32_t index, size_t start, size_t end,
+           uint32_t line, uint32_t column, core_string_t text)
+{
+    parse_token_info_t *tok = parse_token_new();
+
+    parse_token_set_tid(tok, tid);
+    parse_token_set_index(tok, index);
+    parse_token_set_span(tok, start, end);
+    parse_token_set_position(tok, line, column, 0, 0);
+    if (text.data) {
+        parse_token_set_value(tok,
+                              core_option_set(core_string_t,
+                                              core_string_dup(text)),
+                              false);
+    }
+    return tok;
+}
+
+
+static void
+test_basic_parse(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+
+    int64_t E_id = parse_nonterm_id(parse_nonterm(g, CORE_STRING_STATIC("E")));
+    int64_t T_id = parse_nonterm_id(parse_nonterm(g, CORE_STRING_STATIC("T")));
+
+    parse_register_terminal(g, CORE_STRING_STATIC("PLUS"));
+    parse_register_terminal(g, CORE_STRING_STATIC("ID"));
+
+    parse_match_t rule1[] = {
+        {.kind = PARSE_MATCH_NT, .nt_id = E_id},
+        PARSE_TERMINAL(TOK_PLUS),
+        {.kind = PARSE_MATCH_NT, .nt_id = T_id},
+    };
+    parse_add_rule_v(g, E_id, 3, rule1);
+
+    parse_match_t rule2[] = {{.kind = PARSE_MATCH_NT, .nt_id = T_id}};
+    parse_add_rule_v(g, E_id, 1, rule2);
+
+    parse_match_t rule3[] = {PARSE_TERMINAL(TOK_ID)};
+    parse_add_rule_v(g, T_id, 1, rule3);
+
+
+    parse_token_info_t *ptrs[3] = {
+        make_token(TOK_ID, 0, 0, 0, 1, 1, CORE_STRING_STATIC("a")),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 3, CORE_STRING_STATIC("+")),
+        make_token(TOK_ID, 2, 0, 0, 1, 5, CORE_STRING_STATIC("b")),
+    };
+
+    parse_token_stream_t *ts = scan_token_stream_from_array(ptrs, 3);
+    assert(ts);
+
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(g, E_id);
+    assert(p);
+
+    bool ok = parse_pwz_parse(p, ts);
+    assert(ok && "parse should succeed");
+
+    parse_tree_t *tree = parse_pwz_get_tree(p);
+    assert(tree && "should have a parse tree");
+
+    assert(!core_tree_is_leaf(tree));
+    parse_nt_node_t *root = &core_tree_node_value(tree);
+    assert(root->id == E_id);
+    assert(core_tree_num_children(tree) == 3);
+
+    void *result = parse_tree_walk(g, tree, nullptr);
+    (void)result;
+
+    printf("PASS: basic parse of 'a + b'\n");
+
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    for (size_t i = 0; i < 3; i++) {
+        parse_token_free(ptrs[i]);
+    }
+    parse_grammar_free(g);
+}
+
+static void
+test_codepoint_parse(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_nonterm_t *S = parse_nonterm(g, CORE_STRING_STATIC("S"));
+
+    parse_add_rule(g, S, PARSE_CHAR('a'), PARSE_CHAR('b'));
+
+
+    core_string_t input = CORE_STRING_STATIC("ab");
+    parse_token_stream_t *ts = scan_token_stream_from_codepoints(input);
+    assert(ts);
+
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(g, parse_nonterm_id(S));
+    bool ok = parse_pwz_parse(p, ts);
+    assert(ok && "codepoint parse should succeed");
+
+    parse_tree_t *tree = parse_pwz_get_tree(p);
+    assert(tree);
+
+    printf("PASS: codepoint parse of 'ab'\n");
+
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_repetition_group_flattening(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    parse_nonterm_t *S = parse_nonterm(g, CORE_STRING_STATIC("S"));
+
+    parse_add_rule(g, S, parse_plus_group(g, PARSE_ANY()));
+
+    parse_token_stream_t *ts
+        = scan_token_stream_from_codepoints(CORE_STRING_STATIC("abcd"));
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(g, parse_nonterm_id(S));
+    assert(parse_pwz_parse(p, ts));
+
+    parse_tree_t *tree = parse_pwz_get_tree(p);
+    assert(tree && core_tree_num_children(tree) == 1);
+
+    parse_tree_t *group = core_tree_child(tree, 0);
+    assert(group && !core_tree_is_leaf(group));
+    assert(core_tree_num_children(group) == 4);
+
+    for (size_t i = 0; i < 4; i++) {
+        core_string_t text
+            = first_leaf_text(core_tree_child(group, i));
+        assert(text.data && text.u8_bytes == 1
+               && text.data[0] == "abcd"[i]);
+    }
+
+    printf("PASS: ordered repetition group flattening\n");
+
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_forest(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+
+    parse_nonterm_t *S = parse_nonterm(g, CORE_STRING_STATIC("S"));
+
+    parse_add_rule(g, S, PARSE_NT(S), PARSE_NT(S));
+    parse_add_rule(g, S, PARSE_CHAR('a'));
+
+
+    core_string_t input = CORE_STRING_STATIC("aaa");
+    parse_token_stream_t *ts = scan_token_stream_from_codepoints(input);
+
+    parse_forest_t forest
+        = parse_pwz_parse_grammar(g, parse_nonterm_id(S), ts);
+
+    int32_t count = parse_forest_count(&forest);
+    assert(count >= 1 && "should have at least one parse");
+
+    printf("PASS: ambiguous parse of 'aaa' (%d trees)\n", count);
+
+    parse_forest_free(&forest);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_set_match(void)
+{
+    static const int64_t excluded[] = {TOK_PLUS};
+
+    static const parse_match_set_t not_plus = {
+        .ids    = excluded,
+        .n      = 1,
+        .negate = true,
+    };
+
+    static const parse_match_set_t only_plus = {
+        .ids    = excluded,
+        .n      = 1,
+        .negate = false,
+    };
+
+    assert(parse_match_set_holds(&only_plus, TOK_PLUS));
+    assert(!parse_match_set_holds(&only_plus, TOK_ID));
+    assert(!parse_match_set_holds(&not_plus, TOK_PLUS));
+    assert(parse_match_set_holds(&not_plus, TOK_ID));
+
+    parse_grammar_t *g = parse_grammar_new();
+    int64_t        S = parse_nonterm_id(parse_nonterm(g,
+                                                  CORE_STRING_STATIC("S")));
+
+    parse_register_terminal(g, CORE_STRING_STATIC("PLUS"));
+    parse_register_terminal(g, CORE_STRING_STATIC("ID"));
+
+    parse_match_t rule[] = {PARSE_SET(&not_plus), PARSE_TERMINAL(TOK_PLUS)};
+
+    parse_add_rule_v(g, S, 2, rule);
+
+    parse_token_info_t *okp[2] = {
+        make_token(TOK_ID, 0, 0, 0, 1, 1, (core_string_t){}),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 2, (core_string_t){}),
+    };
+    parse_token_info_t *badp[2] = {
+        make_token(TOK_PLUS, 0, 0, 0, 1, 1, (core_string_t){}),
+        make_token(TOK_PLUS, 1, 0, 0, 1, 2, (core_string_t){}),
+    };
+
+    parse_token_stream_t *ts = scan_token_stream_from_array(okp, 2);
+    parse_pwz_parser_t   *p  = parse_pwz_new_for_start(g, S);
+
+    assert(parse_pwz_parse(p, ts) && "a token outside the excluded set matches");
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+
+    ts = scan_token_stream_from_array(badp, 2);
+    p  = parse_pwz_new_for_start(g, S);
+
+    assert(!parse_pwz_parse(p, ts) && "an excluded token does not match");
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    for (size_t i = 0; i < 2; i++) {
+        parse_token_free(okp[i]);
+        parse_token_free(badp[i]);
+    }
+
+    parse_grammar_free(g);
+
+    printf("PASS: negated and plain token sets match\n");
+}
+
+typedef struct {
+    parse_grammar_t *grammar;
+    parse_nt_id_t    start;
+    core_string_t    input;
+    bool             ok;
+} parallel_parse_t;
+
+static void *
+run_parallel_parse(void *arg)
+{
+    parallel_parse_t *run = arg;
+    parse_token_stream_t *ts = scan_token_stream_from_codepoints(run->input);
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(run->grammar, run->start);
+
+    run->ok = p && parse_pwz_parse(p, ts);
+
+    if (run->ok) {
+        parse_tree_t *tree = parse_pwz_get_tree(p);
+
+        run->ok = tree && !core_tree_is_leaf(tree)
+                  && core_tree_node_value(tree).id == run->start;
+    }
+
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+
+    return nullptr;
+}
+
+static void
+test_parallel_starts(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    parse_nonterm_t *a = parse_nonterm(g, CORE_STRING_STATIC("a-start"));
+    parse_nonterm_t *b = parse_nonterm(g, CORE_STRING_STATIC("b-start"));
+
+    parse_add_rule(g, a, PARSE_CHAR('a'));
+    parse_add_rule(g, b, PARSE_CHAR('b'));
+    parse_grammar_finalize(g);
+
+    parallel_parse_t runs[] = {
+        {.grammar = g,
+         .start = parse_nonterm_id(a),
+         .input = CORE_STRING_STATIC("a")},
+        {.grammar = g,
+         .start = parse_nonterm_id(b),
+         .input = CORE_STRING_STATIC("b")},
+    };
+    pthread_t threads[2];
+
+    assert(!pthread_create(&threads[0], nullptr, run_parallel_parse, &runs[0]));
+    assert(!pthread_create(&threads[1], nullptr, run_parallel_parse, &runs[1]));
+    assert(!pthread_join(threads[0], nullptr));
+    assert(!pthread_join(threads[1], nullptr));
+    assert(runs[0].ok && runs[1].ok);
+
+    parse_token_stream_t *ts
+        = scan_token_stream_from_codepoints(CORE_STRING_STATIC("a"));
+    parse_pwz_parser_t *p
+        = parse_pwz_new_for_start(g, parse_nonterm_id(a));
+
+    assert(p && parse_pwz_parse(p, ts));
+    assert(core_tree_node_value(parse_pwz_get_tree(p)).id
+           == parse_nonterm_id(a));
+
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+
+    parse_grammar_free(g);
+    printf("PASS: parallel parses use independent start symbols\n");
+}
+
+typedef struct {
+    int32_t calls;
+} disambig_probe_t;
+
+static bool
+count_disambig_calls(void             *ud,
+                     core_string_t      predicate,
+                     parse_token_info_t *tok)
+{
+    disambig_probe_t *probe = ud;
+
+    assert(probe && predicate.data && tok);
+    assert(core_string_eq(predicate, CORE_STRING_STATIC("shared")));
+    probe->calls++;
+    return false;
+}
+
+static void
+test_memoized_disambiguation(void)
+{
+    enum { ALTERNATIVES = 128 };
+
+    char grammar_text[8192];
+    size_t used = (size_t)snprintf(grammar_text,
+                                   sizeof(grammar_text),
+                                   "<S> ::= <P> <X>\n"
+                                   "<P> @disambig(shared, 1) ::= %%\"b\"\n"
+                                   "<X> ::= ");
+    assert(used < sizeof(grammar_text));
+
+    for (int i = 0; i < ALTERNATIVES; i++) {
+        char alt[64];
+        int n = i == 0 ? snprintf(alt, sizeof(alt), "<P> <B%d>", i)
+                       : snprintf(alt, sizeof(alt), " | <P> <B%d>", i);
+        assert(n > 0 && used + (size_t)n + 1 < sizeof(grammar_text));
+        memcpy(grammar_text + used, alt, (size_t)n);
+        used += (size_t)n;
+    }
+    grammar_text[used++] = '\n';
+    for (int i = 0; i < ALTERNATIVES; i++) {
+        int n = snprintf(grammar_text + used,
+                         sizeof(grammar_text) - used,
+                         "<B%d> ::= %%\"c\"\n",
+                         i);
+        assert(n > 0 && used + (size_t)n < sizeof(grammar_text));
+        used += (size_t)n;
+    }
+    grammar_text[used] = 0;
+
+    parse_grammar_t *g = parse_grammar_new();
+    assert(parse_bnf_load(core_string_borrow(grammar_text, used),
+                          CORE_STRING_STATIC("S"),
+                          g));
+
+    parse_token_stream_t *ts
+        = scan_token_stream_from_codepoints(CORE_STRING_STATIC("bbc"));
+    assert(ts);
+
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
+    disambig_probe_t probe = {0};
+    parse_pwz_set_disambiguator(p, count_disambig_calls, &probe);
+    assert(p && parse_pwz_parse(p, ts));
+    assert(probe.calls == 1);
+    printf("PASS: memoized disambiguation across %d alternatives\n",
+           ALTERNATIVES);
+
+    parse_pwz_free(p);
+    scan_token_stream_free(ts);
+    parse_grammar_free(g);
+}
+
+static void
+test_adjacency_annotation(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    assert(parse_bnf_load(
+        CORE_STRING_STATIC("<S> @adjacent(\"prefix\") ::= %\"(\" %\"x\"\n"),
+        CORE_STRING_STATIC("S"), g));
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
+    assert(p);
+
+    parse_token_info_t *adjacent_ptrs[2] = {
+        make_token('(', 0, 0, 1, 0, 0, (core_string_t){}),
+        make_token('x', 1, 1, 2, 0, 0, (core_string_t){}),
+    };
+    parse_token_stream_t *ts = scan_token_stream_from_array(adjacent_ptrs, 2);
+    assert(ts && parse_pwz_parse(p, ts));
+    scan_token_stream_free(ts);
+
+    parse_token_info_t *spaced_ptrs[2] = {
+        make_token('(', 0, 0, 1, 0, 0, (core_string_t){}),
+        make_token('x', 1, 2, 3, 0, 0, (core_string_t){}),
+    };
+    ts = scan_token_stream_from_array(spaced_ptrs, 2);
+    assert(ts && !parse_pwz_parse(p, ts));
+    scan_token_stream_free(ts);
+    for (size_t i = 0; i < 2; i++) {
+        parse_token_free(adjacent_ptrs[i]);
+        parse_token_free(spaced_ptrs[i]);
+    }
+
+    parse_pwz_free(p);
+    parse_grammar_free(g);
+    printf("PASS: grammar adjacency assertion\n");
+}
+
+static void
+test_nullable_nonterminal_before_following_token(void)
+{
+    parse_grammar_t *g = parse_grammar_new();
+    assert(parse_bnf_load(
+        CORE_STRING_STATIC("<S> ::= %\"a\" %\"b\" <tail> %\"c\"\n"
+                           "<tail> ::= <clause>* <otherwise>?\n"
+                           "<clause> ::= %\"d\" %\"b\"\n"
+                           "<otherwise> ::= %\"e\" %\"c\"\n"),
+        CORE_STRING_STATIC("S"), g));
+    parse_pwz_parser_t *p = parse_pwz_new_for_start(
+        g, parse_nonterm_id(parse_find_nonterm(g, CORE_STRING_STATIC("S"))));
+    assert(p);
+
+    parse_token_info_t *ptrs[3] = {
+        make_token('a', 0, 0, 0, 0, 0, (core_string_t){}),
+        make_token('b', 1, 0, 0, 0, 0, (core_string_t){}),
+        make_token('c', 2, 0, 0, 0, 0, (core_string_t){}),
+    };
+    parse_token_stream_t *ts = scan_token_stream_from_array(ptrs, 3);
+    assert(ts && parse_pwz_parse(p, ts));
+
+    scan_token_stream_free(ts);
+    for (size_t i = 0; i < 3; i++) {
+        parse_token_free(ptrs[i]);
+    }
+    parse_pwz_free(p);
+    parse_grammar_free(g);
+    printf("PASS: nullable nonterminal before following token\n");
+}
+
+int
+main(void)
+{
+    test_set_match();
+    test_basic_parse();
+    test_codepoint_parse();
+    test_repetition_group_flattening();
+    test_forest();
+    test_parallel_starts();
+    test_memoized_disambiguation();
+    test_adjacency_annotation();
+    test_nullable_nonterminal_before_following_token();
+
+    printf("\nAll PWZ smoke tests passed.\n");
+    return 0;
+}

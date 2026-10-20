@@ -1,0 +1,7 @@
+binding opaque_api for n00b import {
+    raw "read_some"
+}
+error[E0508]: the declaration reaches an `unknown` fact; hide it or bind it `raw`: `read_some`
+  --> tests/bind/e0508.writ:1:1
+  help: bind it without safety: `    raw "read_some"
+`

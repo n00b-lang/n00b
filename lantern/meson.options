@@ -1,0 +1,6 @@
+option(
+    'nfc',
+    type: 'feature',
+    value: 'auto',
+    description: 'Build the utf8proc NFC normalizer adapter',
+)

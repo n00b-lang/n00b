@@ -1,0 +1,11 @@
+<lex-file> ::= <lex-declaration>*
+
+<lex-declaration> ::= %"@" %IDENTIFIER %"(" <lex-options>? %")"
+
+<lex-options> ::= <lex-option> (%"," <lex-option>)*
+
+<lex-option> ::= %STRING
+               | %IDENTIFIER
+               | %IDENTIFIER %"(" <lex-values>? %")"
+
+<lex-values> ::= %STRING (%"," %STRING)*

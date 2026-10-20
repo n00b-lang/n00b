@@ -1,0 +1,8 @@
+@lex-comment("--[[", "]]")
+@lex-comment("--")
+@lex-string-family(plain, quotes('"', "'"), escape('\\'), as("STRING"))
+@lex-string("[[", "]]", raw, multiline, as("STRING"))
+@lex-number(digits("0123456789"), point("leading", "trailing"), exp("eE"), int("INTEGER"), float("FLOAT"))
+@lex-number(prefix("0x"), digits("0123456789abcdefABCDEF"), point("trailing"), exp("pP"), int("INTEGER"), float("FLOAT"))
+@lex-ident(as("IDENTIFIER"))
+@lex-layout(brackets("()[]{}"))

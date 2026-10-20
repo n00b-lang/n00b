@@ -1,0 +1,3 @@
+@lexer("lexer_conflict_origin.lex")
+
+<file> ::= %STRING

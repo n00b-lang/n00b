@@ -1,0 +1,3 @@
+@lexer("lexer_import.lex")
+
+<file> ::= %WORD | %CHAR

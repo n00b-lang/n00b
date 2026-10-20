@@ -1,0 +1,2 @@
+error[E0504]: the language profile cannot express this choice: `n00b` has no lifetimes
+  --> tests/bind/e0504.writ:2:5

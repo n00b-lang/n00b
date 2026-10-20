@@ -1,0 +1,427 @@
+plan error_message
+item 0 buf result bytes caller_owns
+item 1 buf_capacity input scalar none
+slot 0 out_pointer pointer buf
+slot 1 value capacity buf
+slot 2 value whole -
+local 0 buffer u8 buf
+attempt   alloc_out      buf -> L0, cap buf_capacity
+          pass           cap(L0) -> s1
+          bind_out       L0 -> s0
+          call           fixed
+          size_retry     L0 needs ret
+classify  ok: success
+ok        lift_buffer    L0 -> buf, len ((ret) < (s1) ? (ret) : (s1))
+finally   release_local  L0 unless handed over
+
+plan regex_options_free
+item 0 value input scalar callee_owns
+slot 0 in_pointer whole value
+prepare   pass           value -> s0
+attempt   call           fixed
+classify  ok: success
+ok        mark_consumed  value
+
+plan regex_free
+item 0 value input scalar callee_owns
+slot 0 in_pointer whole value
+prepare   pass           value -> s0
+attempt   call           fixed
+classify  ok: success
+ok        mark_consumed  value
+
+plan regex_options_default
+item 0 out result handle caller_owns release regex_options_free
+item 1 failed_detail error_detail text caller_owns
+item 2 panicked_detail error_detail text caller_owns
+slot 0 out_pointer whole out
+slot 1 value whole -
+local 0 cell RegexOptions out
+attempt   bind_out       L0 -> s0
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        wrap_handle    L0 -> out
+failed    fetch_detail   last_error -> failed_detail
+panicked  fetch_detail   last_error -> panicked_detail
+
+plan regex_options_unicode
+item 0 self input scalar callee_owns
+item 1 mode input view none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole mode
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           mode -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_options_case_insensitive
+item 0 self input scalar callee_owns
+item 1 yes input scalar none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole yes
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           yes -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_options_dot_matches_new_line
+item 0 self input scalar callee_owns
+item 1 yes input scalar none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole yes
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           yes -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_options_multiline
+item 0 self input scalar callee_owns
+item 1 yes input scalar none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole yes
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           yes -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_options_ignore_whitespace
+item 0 self input scalar callee_owns
+item 1 yes input scalar none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole yes
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           yes -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_options_hardened
+item 0 self input scalar callee_owns
+item 1 yes input scalar none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole yes
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           yes -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_options_unbounded_size
+item 0 self input scalar callee_owns
+item 1 yes input scalar none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole yes
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           yes -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_options_implicit_captures
+item 0 self input scalar callee_owns
+item 1 yes input scalar none
+item 2 out result handle caller_owns release regex_options_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 value whole yes
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell RegexOptions out
+prepare   pass           self -> s0
+          pass           yes -> s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  self
+          wrap_handle    L0 -> out
+failed    mark_consumed  self
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  self
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_is_match
+item 0 self input scalar borrowed
+item 1 input input bytes borrowed
+item 2 out result scalar none
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 in_pointer pointer input
+slot 2 value length input
+slot 3 out_pointer whole out
+slot 4 value whole -
+local 0 cell bool out
+prepare   pass           self -> s0
+          check          input fits s2
+          split          input -> s1, s2
+attempt   bind_out       L0 -> s3
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        lift_value     L0 -> out
+failed    fetch_detail   last_error -> failed_detail
+panicked  fetch_detail   last_error -> panicked_detail
+
+plan regex_new
+item 0 pattern input text borrowed
+item 1 out result handle caller_owns release regex_free
+item 2 failed_detail error_detail text caller_owns
+item 3 panicked_detail error_detail text caller_owns
+slot 0 in_pointer pointer pattern
+slot 1 value length pattern
+slot 2 out_pointer whole out
+slot 3 value whole -
+local 0 cell Regex out
+prepare   check          pattern fits s1
+          split          pattern -> s0, s1
+attempt   bind_out       L0 -> s2
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        wrap_handle    L0 -> out
+failed    fetch_detail   last_error -> failed_detail
+panicked  fetch_detail   last_error -> panicked_detail
+
+plan regex_with_options
+item 0 pattern input text borrowed
+item 1 opts input scalar callee_owns
+item 2 out result handle caller_owns release regex_free
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer pointer pattern
+slot 1 value length pattern
+slot 2 in_pointer whole opts
+slot 3 out_pointer whole out
+slot 4 value whole -
+local 0 cell Regex out
+prepare   check          pattern fits s1
+          split          pattern -> s0, s1
+          pass           opts -> s2
+attempt   bind_out       L0 -> s3
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        mark_consumed  opts
+          wrap_handle    L0 -> out
+failed    mark_consumed  opts
+          fetch_detail   last_error -> failed_detail
+panicked  mark_consumed  opts
+          fetch_detail   last_error -> panicked_detail
+
+plan regex_find_all
+item 0 self input scalar borrowed
+item 1 input input bytes borrowed
+item 2 out result array caller_owns
+item 3 out_capacity input scalar none
+item 4 failed_detail error_detail text caller_owns
+item 5 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 in_pointer pointer input
+slot 2 value length input
+slot 3 out_pointer pointer out
+slot 4 value capacity out
+slot 5 out_pointer length out
+slot 6 value whole -
+local 0 buffer Match out
+local 1 cell usize out
+prepare   pass           self -> s0
+          check          input fits s2
+          split          input -> s1, s2
+attempt   alloc_out      out -> L0, cap out_capacity
+          pass           cap(L0) -> s4
+          bind_out       L0 -> s3
+          bind_out       L1 -> s5
+          call           fixed
+          size_retry     L0 needs L1
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        lift_buffer    L0 -> out, len ((L1) < (s4) ? (L1) : (s4))
+failed    fetch_detail   last_error -> failed_detail
+panicked  fetch_detail   last_error -> panicked_detail
+finally   release_local  L0 unless handed over
+
+plan regex_find_anchored
+item 0 self input scalar borrowed
+item 1 input input bytes borrowed
+item 2 out result record none
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 in_pointer pointer input
+slot 2 value length input
+slot 3 out_pointer whole out
+slot 4 value whole -
+local 0 cell Match out
+prepare   pass           self -> s0
+          check          input fits s2
+          split          input -> s1, s2
+attempt   bind_out       L0 -> s3
+          call           fixed
+classify  ok: success when (ret == 0)
+          none: success when (ret == 1)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        lift_value     L0 -> out
+failed    fetch_detail   last_error -> failed_detail
+panicked  fetch_detail   last_error -> panicked_detail
+
+plan regex_is_full_match
+item 0 self input scalar borrowed
+item 1 input input bytes borrowed
+item 2 out result scalar none
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 in_pointer pointer input
+slot 2 value length input
+slot 3 out_pointer whole out
+slot 4 value whole -
+local 0 cell bool out
+prepare   pass           self -> s0
+          check          input fits s2
+          split          input -> s1, s2
+attempt   bind_out       L0 -> s3
+          call           fixed
+classify  ok: success when (ret == 0)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        lift_value     L0 -> out
+failed    fetch_detail   last_error -> failed_detail
+panicked  fetch_detail   last_error -> panicked_detail
+
+plan regex_capture_index_for_name
+item 0 self input scalar borrowed
+item 1 name input text borrowed
+item 2 out result scalar none
+item 3 failed_detail error_detail text caller_owns
+item 4 panicked_detail error_detail text caller_owns
+slot 0 in_pointer whole self
+slot 1 in_pointer pointer name
+slot 2 value length name
+slot 3 out_pointer whole out
+slot 4 value whole -
+local 0 cell usize out
+prepare   pass           self -> s0
+          check          name fits s2
+          split          name -> s1, s2
+attempt   bind_out       L0 -> s3
+          call           fixed
+classify  ok: success when (ret == 0)
+          none: success when (ret == 1)
+          failed: failure when (ret == 2)
+          panicked: failure
+ok        lift_value     L0 -> out
+failed    fetch_detail   last_error -> failed_detail
+panicked  fetch_detail   last_error -> panicked_detail
+

@@ -1,0 +1,17 @@
+library zlib
+link "z"
+header <zlib.h>
+
+const Z_OK: c_int = 0
+
+fn compressBound(sourceLen: c_ulong) -> c_ulong
+  pure
+
+fn compress2(dest: out *[u8; cap destLen.in, len destLen.out], destLen: inout *c_ulong,
+             source: bytes[sourceLen], sourceLen: c_ulong, level: c_int) -> c_int
+  sizing needs compressBound(sourceLen)
+  error ret != Z_OK via ret
+
+fn uncompress(dest: out *[u8; cap destLen.in, len destLen.out], destLen: inout *c_ulong,
+              source: bytes[sourceLen], sourceLen: c_ulong) -> c_int
+  error ret != Z_OK via ret

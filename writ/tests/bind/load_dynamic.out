@@ -1,0 +1,2 @@
+error[E0901]: not supported yet: `load dynamic`
+  --> tests/bind/load_dynamic.writ:2:5

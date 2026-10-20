@@ -1,0 +1,17 @@
+library cb
+
+callback Handler = fn(ud: *void userdata, code: c_int) -> void
+
+callback Twice = fn(a: *void userdata, b: *void userdata) -> void
+
+callback Named = fn(ud: *void userdata cb) -> void
+
+fn subscribe(cb: Handler for call, ud: ?void userdata cb) -> c_int
+
+fn missing(cb: Handler for call, ud: ?void userdata nothing) -> c_int
+
+fn not_callback(n: c_int, ud: ?void userdata n) -> c_int
+
+fn bare(cb: Handler for call, ud: ?void userdata) -> c_int
+
+fn doubled(cb: Handler for call, a: ?void userdata cb, b: ?void userdata cb) -> c_int

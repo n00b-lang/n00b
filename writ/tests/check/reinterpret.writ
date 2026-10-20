@@ -1,0 +1,7 @@
+library spans
+
+struct Span { start: usize, end: usize }
+struct Uneven { start: usize, flag: u8 }
+
+fn spans(out: out *[Span; cap n, len n] as *usize, n: usize)
+fn uneven(out: out *[Uneven; cap n, len n] as *usize, n: usize)

@@ -1,0 +1,8 @@
+%include <stdio.h>
+%if FOO
+int f(void)
+{
+    var int x = 1;
+    return x;
+}
+%endif

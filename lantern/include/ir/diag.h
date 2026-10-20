@@ -1,0 +1,118 @@
+#ifndef IR_DIAG_H
+#define IR_DIAG_H
+
+#include "ir/ir.h"
+#include "lib/diagnostic.h"
+#include "lib/string.h"
+
+typedef enum : uint8_t {
+    IR_SEV_ERROR,
+    IR_SEV_WARNING,
+    IR_SEV_NOTE,
+    IR_SEV_HELP,
+} ir_severity_t;
+
+core_string_t ir_severity_name(ir_severity_t s);
+
+#define IR_DIAG(id, code, sev, text) IR_DIAG_##id,
+
+typedef enum : uint16_t {
+#include "ir_diags.def"
+    IR_DIAG_COUNT,
+} ir_diagcode_t;
+
+#undef IR_DIAG
+
+core_string_t ir_diag_code(ir_diagcode_t c);
+core_string_t ir_diag_default_text(ir_diagcode_t c);
+ir_severity_t ir_diag_default_severity(ir_diagcode_t c);
+bool          ir_diag_code_lookup(core_string_t code, ir_diagcode_t *out);
+
+typedef struct {
+    ir_span_t     span;
+    core_string_t label;
+} ir_label_t;
+
+typedef struct {
+    ir_span_t     span;
+    core_string_t replacement;
+    core_string_t description;
+} ir_suggestion_t;
+
+typedef struct {
+    ir_severity_t    severity;
+    ir_diagcode_t    code;
+    core_string_t    message;
+    ir_label_t       primary;
+    ir_label_t      *secondary;
+    uint32_t         n_secondary;
+    uint32_t         cap_secondary;
+    ir_suggestion_t *suggestions;
+    uint32_t         n_suggestions;
+    uint32_t         cap_suggestions;
+    ir_origin_t     *origin;
+    uint64_t         seq;
+    size_t           core_index;
+    size_t           destination_index;
+} ir_diag_t;
+
+typedef enum : uint8_t {
+    IR_POLICY_DEFAULT,
+    IR_POLICY_ALLOW,
+    IR_POLICY_WARN,
+    IR_POLICY_DENY,
+    IR_POLICY_FORBID,
+} ir_outcome_t;
+
+typedef struct ir_policy_t ir_policy_t;
+
+ir_policy_t *ir_policy_new(ir_ctx_t *ctx);
+bool         ir_policy_set(ir_policy_t *p, core_string_t code_or_prefix,
+                           ir_outcome_t outcome);
+ir_outcome_t ir_policy_for(const ir_policy_t *p, core_string_t code);
+
+typedef struct ir_diags_t ir_diags_t;
+
+ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy);
+ir_diags_t *ir_diags_new_attached(
+    ir_ctx_t *ctx, ir_policy_t *policy, core_diagnostics_t *destination,
+    const core_translation_unit_t *unit);
+
+ir_diag_t *ir_diag_begin(ir_diags_t *d, ir_diagcode_t code, ir_span_t span,
+                         core_string_t label);
+ir_diag_t *ir_diag_begin_at(ir_diags_t *d, ir_diagcode_t code,
+                            const ir_instr_t *in, const ir_block_t *b,
+                            const ir_func_t *f, core_string_t label);
+bool       ir_diag_message(ir_diag_t *dg, ir_diags_t *d,
+                           core_string_t message);
+bool       ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
+                             core_string_t label);
+bool       ir_diag_suggest(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
+                           core_string_t replacement,
+                           core_string_t description);
+bool       ir_diag_origin(ir_diag_t *dg, ir_origin_t *o);
+bool       ir_diag_note(ir_diags_t *d, ir_severity_t sev, ir_diagcode_t code,
+                        ir_span_t span, core_string_t label);
+
+uint32_t         ir_diags_count(const ir_diags_t *d);
+const ir_diag_t *ir_diags_at(ir_diags_t *d, uint32_t i);
+bool             ir_diags_failed(const ir_diags_t *d);
+uint32_t         ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev);
+bool             ir_diags_merge(ir_diags_t *dst, ir_diags_t *src);
+uint32_t         ir_import_type_errors(ir_module_t *m, ir_diags_t *d);
+
+void             ir_diags_sort(ir_diags_t *d);
+
+typedef core_string_t (*ir_source_fn)(void *state, int32_t file);
+
+typedef struct {
+    ir_source_fn       source;
+    void              *state;
+    const ir_module_t *module;
+    bool               color;
+} ir_render_t;
+
+core_string_t ir_diags_render_text(ir_diags_t *d, const ir_render_t *r);
+core_string_t ir_diags_render_json(ir_diags_t *d, const ir_render_t *r);
+
+#endif

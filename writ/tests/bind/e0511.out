@@ -1,0 +1,2 @@
+error[E0511]: the binding is for a different contract: the contract is `zlib`
+  --> tests/bind/e0511.writ:1:1

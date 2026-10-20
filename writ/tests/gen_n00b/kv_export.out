@@ -1,0 +1,420 @@
+#ifndef WRIT_KV_N00B_EXPORT_H
+#define WRIT_KV_N00B_EXPORT_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+typedef struct kv_db kv_db;
+typedef struct kv_iter kv_iter;
+enum {
+    KV_OK = 0,
+    KV_NOTFOUND = 1,
+    KV_ERR = 2,
+};
+#define KV_OK 0
+#define KV_NOTFOUND 1
+#define KV_ERR 2
+typedef struct kv_entry {
+    uint8_t *key;
+    size_t key_len;
+    uint8_t *val;
+    size_t val_len;
+} kv_entry;
+
+int kv_open(const char *path, kv_db * *out_db);
+int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_t vlen);
+int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_t *out_len);
+kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen);
+kv_entry * kv_iter_next(kv_iter *it);
+const char * kv_errstr(int s);
+
+#endif
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+
+#include "kv.h"
+
+uint64_t n00b_ffi_enter(uint64_t buffer);
+void n00b_ffi_leave(uint64_t previous);
+int32_t n00b_ffi_unwind_save(uint64_t *buffer) __attribute__((returns_twice));
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void *kv_malloc(size_t size);
+
+uint64_t writ_kv_cstr_length(uint64_t address) {
+    return address ? strlen((const char *)(uintptr_t)address) : 0;
+}
+
+void writ_kv_cstr_copy(uint64_t address, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && address && length) {
+        memcpy(data, (const void *)(uintptr_t)address, length);
+    }
+    n00b_ffi_release(out);
+}
+
+uint64_t writ_kv_export_address(void *array) {
+    size_t length = 0;
+    return (uint64_t)(uintptr_t)n00b_ffi_borrow(array, &length, 0);
+}
+
+void writ_kv_export_failed(uint64_t address, uint64_t kind) {
+    *(int *)(uintptr_t)address = (int)kind;
+}
+
+void writ_kv_export_copy_in(uint64_t data, void *out) {
+    size_t length = 0;
+    uint8_t *items = n00b_ffi_borrow(out, &length, 1);
+    if (items && data && length) {
+        memcpy(items, (const void *)(uintptr_t)data, length);
+    }
+    n00b_ffi_release(out);
+}
+
+void writ_kv_export_store(uint64_t address, uint64_t value) {
+    if (address) {
+        *(void **)(uintptr_t)address = (void *)(uintptr_t)value;
+    }
+}
+
+void writ_kv_export_own_bytes(void *bytes, uint64_t data_out, uint64_t length_out) {
+    size_t length = 0;
+    const uint8_t *data = n00b_ffi_borrow(bytes, &length, 0);
+    uint8_t *copy = kv_malloc(length ? length : 1);
+    if (copy && data && length) {
+        memcpy(copy, data, length);
+    }
+    n00b_ffi_release(bytes);
+    *(uint8_t **)(uintptr_t)data_out = copy;
+    *(size_t *)(uintptr_t)length_out = length;
+}
+
+void writ_kv_export_kv_entry_fill(void *storage, void *key, void *val) {
+    size_t length = 0;
+    kv_entry *record = n00b_ffi_borrow(storage, &length, 1);
+    record->key = n00b_ffi_borrow(key, &length, 0);
+    record->key_len = length;
+    record->val = n00b_ffi_borrow(val, &length, 0);
+    record->val_len = length;
+}
+
+int64_t writ_kv___export_kv_open(uint64_t, uint64_t, uint64_t failed);
+int kv_open(const char *path, kv_db * *out_db)
+{
+    uint64_t buffer[24];
+    uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
+    if (n00b_ffi_unwind_save(buffer)) {
+        n00b_ffi_leave(previous);
+        return KV_ERR;
+    }
+    int failed = 0;
+    int64_t value = writ_kv___export_kv_open((uint64_t)(uintptr_t)path, (uint64_t)(uintptr_t)out_db, (uint64_t)(uintptr_t)&failed);
+    n00b_ffi_leave(previous);
+    if (failed == 2 || (failed && !(0 || ((value != KV_OK)))))
+    {
+        value = KV_ERR;
+    }
+    return (int)value;
+}
+
+int64_t writ_kv___export_kv_put(uint64_t, uint64_t, size_t, uint64_t, size_t, uint64_t failed);
+int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_t vlen)
+{
+    uint64_t buffer[24];
+    uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
+    if (n00b_ffi_unwind_save(buffer)) {
+        n00b_ffi_leave(previous);
+        return KV_ERR;
+    }
+    int failed = 0;
+    int64_t value = writ_kv___export_kv_put((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)key, klen, (uint64_t)(uintptr_t)val, vlen, (uint64_t)(uintptr_t)&failed);
+    n00b_ffi_leave(previous);
+    if (failed == 2 || (failed && !(0 || ((value != KV_OK)))))
+    {
+        value = KV_ERR;
+    }
+    return (int)value;
+}
+
+int64_t writ_kv___export_kv_get(uint64_t, uint64_t, size_t, uint64_t, uint64_t, uint64_t failed);
+int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_t *out_len)
+{
+    uint64_t buffer[24];
+    uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
+    if (n00b_ffi_unwind_save(buffer)) {
+        n00b_ffi_leave(previous);
+        return KV_ERR;
+    }
+    int failed = 0;
+    int64_t value = writ_kv___export_kv_get((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)key, klen, (uint64_t)(uintptr_t)out_val, (uint64_t)(uintptr_t)out_len, (uint64_t)(uintptr_t)&failed);
+    n00b_ffi_leave(previous);
+    if (failed == 2 || (failed && !(0 || ((value == KV_ERR)))))
+    {
+        value = KV_ERR;
+    }
+    return (int)value;
+}
+
+uint64_t writ_kv___export_kv_iter_new(uint64_t, uint64_t, size_t, uint64_t failed);
+kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen)
+{
+    uint64_t buffer[24];
+    uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
+    if (n00b_ffi_unwind_save(buffer)) {
+        n00b_ffi_leave(previous);
+        return 0;
+    }
+    int failed = 0;
+    uint64_t value = writ_kv___export_kv_iter_new((uint64_t)(uintptr_t)db, (uint64_t)(uintptr_t)prefix, plen, (uint64_t)(uintptr_t)&failed);
+    n00b_ffi_leave(previous);
+    return (kv_iter *)(uintptr_t)value;
+}
+
+uint64_t writ_kv___export_kv_iter_next(uint64_t, uint64_t failed);
+kv_entry * kv_iter_next(kv_iter *it)
+{
+    uint64_t buffer[24];
+    uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
+    if (n00b_ffi_unwind_save(buffer)) {
+        n00b_ffi_leave(previous);
+        return 0;
+    }
+    int failed = 0;
+    uint64_t value = writ_kv___export_kv_iter_next((uint64_t)(uintptr_t)it, (uint64_t)(uintptr_t)&failed);
+    n00b_ffi_leave(previous);
+    return (kv_entry *)(uintptr_t)value;
+}
+
+uint64_t writ_kv___export_kv_errstr(int, uint64_t failed);
+const char * kv_errstr(int s)
+{
+    uint64_t buffer[24];
+    uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
+    if (n00b_ffi_unwind_save(buffer)) {
+        n00b_ffi_leave(previous);
+        return 0;
+    }
+    int failed = 0;
+    uint64_t value = writ_kv___export_kv_errstr(s, (uint64_t)(uintptr_t)&failed);
+    n00b_ffi_leave(previous);
+    return (const char *)(uintptr_t)value;
+}
+
+import kvstore
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+type Kv_Entry {
+    public key: Array[u8]
+    public val: Array[u8]
+}
+
+enum Kv_Status {
+    KV_OK = 0,
+    KV_NOTFOUND = 1,
+    KV_ERR = 2
+}
+
+
+func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool {
+    var bytes: Array[u8] = new[Array[u8]](cast[int]__ffi_cstr_length(address))
+    __ffi_cstr_copy(address, ref bytes)
+    return __string_from_utf8(ref bytes, text)
+}
+
+type Export_Hold {
+    handle: uint
+    items: List[Array[u8]]
+}
+
+var __export_holds: List[Export_Hold] = new[List[Export_Hold]]()
+var __export_texts: List[Array[u8]] = new[List[Array[u8]]]()
+var __export_text_addresses: List[uint] = new[List[uint]]()
+
+func __export_drop(handle: uint) {
+    var kept: List[Export_Hold] = new[List[Export_Hold]]()
+    for hold in __export_holds {
+        if hold.handle != handle {
+            kept.append(hold)
+        }
+    }
+    __export_holds = kept
+}
+
+func __export_hold(handle: uint, items: List[Array[u8]]) {
+    __export_drop(handle)
+    let hold: Export_Hold = (handle = handle, items = items)
+    __export_holds.append(hold)
+}
+
+func __export_same(left: Array[u8], right: Array[u8]) -> bool {
+    if left.len() != right.len() {
+        return false
+    }
+    var i: uint = 0
+    while i < left.len() {
+        if left[i] != right[i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+func __export_text(text: string) -> uint {
+    let source: Array[u8] = __text_byte_array(text)
+    var bytes: Array[u8] = new[Array[u8]](cast[int]source.len() + 1)
+    var k: uint = 0
+    while k < source.len() {
+        bytes[k] = source[k]
+        k += 1
+    }
+    var i = 0
+    while i < cast[int]__export_texts.len() {
+        if __export_same(__export_texts[i], bytes) {
+            return __export_text_addresses[i]
+        }
+        i += 1
+    }
+    __export_texts.append(bytes)
+    let address = __export_address(ref bytes)
+    __export_text_addresses.append(address)
+    return address
+}
+
+func __export_keep_kv_entry(handle: uint, key: Array[u8], val: Array[u8]) -> uint {
+    var key_copy = key
+    var val_copy = val
+    var storage: Array[u8] = new[Array[u8]](32)
+    var items: List[Array[u8]] = new[List[Array[u8]]]()
+    items.append(storage)
+    __export_kv_entry_fill(ref storage, ref key_copy, ref val_copy)
+    items.append(key_copy)
+    items.append(val_copy)
+    __export_hold(handle, items)
+    return __export_address(ref storage)
+}
+
+func __export_kv_open(c_path: uint, c_out_db: uint, failed: uint) -> i64 {
+    var path_value: string = ""
+    if !__ffi_copy_cstr(c_path, ref path_value) {
+        __export_failed(failed, 2)
+        return -1
+    }
+    try {
+        let result:  = kvstore.open(path_value)!
+        __export_store(c_out_db, cast[uint]__ffi_table_insert(__handles_Db, result))
+        return 0
+    } else failure {
+        __export_failed(failed, 1)
+        return cast[i64]failure.code
+    }
+}
+
+func __export_kv_put(c_db: uint, c_key: uint, c_klen: u64, c_val: uint, c_vlen: u64, failed: uint) -> i64 {
+    let db_value = __export_Db(c_db)
+    if db_value == nil {
+        __export_failed(failed, 2)
+        return -1
+    }
+    var key_value: Array[u8] = new[Array[u8]](cast[int]c_klen)
+    __export_copy_in(c_key, ref key_value)
+    var val_value: Array[u8] = new[Array[u8]](cast[int]c_vlen)
+    __export_copy_in(c_val, ref val_value)
+    try {
+        kvstore.put(db_value, key_value, val_value)!
+        return 0
+    } else failure {
+        __export_failed(failed, 1)
+        return cast[i64]failure.code
+    }
+}
+
+func __export_kv_get(c_db: uint, c_key: uint, c_klen: u64, c_out_val: uint, c_out_len: uint, failed: uint) -> i64 {
+    let db_value = __export_Db(c_db)
+    if db_value == nil {
+        __export_failed(failed, 2)
+        return -1
+    }
+    var key_value: Array[u8] = new[Array[u8]](cast[int]c_klen)
+    __export_copy_in(c_key, ref key_value)
+    try {
+        let result = kvstore.get(db_value, key_value)!
+        if result == nil {
+            return 1
+        }
+        var bytes: Array[u8] = result.get()
+        __export_own_bytes(ref bytes, c_out_val, c_out_len)
+        return 0
+    } else failure {
+        __export_failed(failed, 1)
+        return cast[i64]failure.code
+    }
+}
+
+func __export_kv_iter_new(c_db: uint, c_prefix: uint, c_plen: u64, failed: uint) -> uint {
+    let db_value = __export_Db(c_db)
+    if db_value == nil {
+        __export_failed(failed, 2)
+        return 0
+    }
+    var prefix_value: Array[u8] = new[Array[u8]](cast[int]c_plen)
+    __export_copy_in(c_prefix, ref prefix_value)
+    try {
+        let result:  = kvstore.iter_new(db_value, prefix_value)!
+        return cast[uint]__ffi_table_insert(__handles_Iter, result)
+    } else failure {
+        __export_failed(failed, 1)
+        return 0
+    }
+}
+
+func __export_kv_iter_next(c_it: uint, failed: uint) -> uint {
+    let it_value = __export_Iter(c_it)
+    if it_value == nil {
+        __export_failed(failed, 2)
+        return 0
+    }
+    let result = kvstore.iter_next(it_value)
+    if result == nil {
+        return 0
+    }
+    return __export_keep_kv_entry(2 * 4294967296 + c_it, result.key, result.val)
+}
+
+func __export_kv_errstr(c_s: i32, failed: uint) -> uint {
+    let s_value = c_s
+    let result = kvstore.errstr(s_value)
+    return __export_text(result)
+}
+9	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
+14	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
+100	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+107	tests/gen_n00b/kv_export.writ:4:5	kvstore.open
+116	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+127	tests/gen_n00b/kv_export.writ:5:5	kvstore.put
+135	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+144	tests/gen_n00b/kv_export.writ:6:5	kvstore.get
+157	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
+166	tests/gen_n00b/kv_export.writ:7:5	kvstore.iter_new
+174	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
+180	tests/gen_n00b/kv_export.writ:8:5	kvstore.iter_next
+187	tests/gen_n00b/../bind/kv.writ:47:1	kv_errstr
+189	tests/gen_n00b/kv_export.writ:9:5	kvstore.errstr
+library kv
+load static
+extern __export_failed writ_kv_export_failed (uint, uint) -> nil fail: nil
+extern __export_copy_in writ_kv_export_copy_in (uint, ref[array[u8]]) -> nil fail: nil
+extern __export_store writ_kv_export_store (uint, uint) -> nil fail: nil
+extern __export_own_bytes writ_kv_export_own_bytes (ref[array[u8]], uint, uint) -> nil fail: nil
+extern __ffi_cstr_length writ_kv_cstr_length (uint) -> uint fail: nil
+extern __ffi_cstr_copy writ_kv_cstr_copy (uint, ref[array[u8]]) -> nil fail: nil
+extern __export_address writ_kv_export_address (ref[array[u8]]) -> uint fail: nil
+extern __export_kv_entry_fill writ_kv_export_kv_entry_fill (ref[array[u8]], ref[array[u8]], ref[array[u8]]) -> nil fail: nil

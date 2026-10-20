@@ -1,0 +1,657 @@
+@lexer("kotlin.lex")
+
+# ============================================================================
+# Kotlin Grammar (Syntactic)
+#
+# Translated from the official Kotlin Language Specification (v1.9)
+# https://kotlinlang.org/spec/syntax-and-grammar.html
+#
+# Lexer token types:
+#   %IDENTIFIER    - identifiers (also includes soft keywords contextually)
+#   %INTEGER       - integer literals (decimal, hex, binary, long, unsigned)
+#   %FLOAT         - floating-point literals
+#   %STRING        - single-line string literal content
+#   %MULTILINE_STRING - triple-quoted string literal content
+#   %CHAR          - character literal
+#   %NL            - newline (Kotlin is newline-sensitive)
+#   %SHEBANG       - shebang line (#!...)
+#
+# Conventions:
+#   <rule>         - non-terminal
+#   %"keyword"     - keyword or operator terminal
+#   ( ... )        - grouping
+#   ?              - optional (zero or one)
+#   *              - zero or more
+#   +              - one or more
+#   |              - alternation
+#   ""             - empty string
+# ============================================================================
+
+
+# ============================================================================
+# Top-level: File and Script Structure
+# ============================================================================
+
+<kotlin-file> @hardline @nospace($1) @nospace($6) ::= <shebang-line>? %NL* <file-annotation>* <package-header>? <import-list>? <top-level-object>* %EOF
+
+<script> ::= <shebang-line>? %NL* <file-annotation>* <package-header>? <import-list>? (<statement> <semi>)* %EOF
+
+<shebang-line> ::= %SHEBANG %NL+
+
+<file-annotation> ::= (%"@" | %"@file") %NL* %":" %NL* (%"[" <unescaped-annotation>+ %"]" | <unescaped-annotation>) %NL*
+
+<package-header> @nospace($2) ::= %"package" <identifier> <semi>?
+
+<import-list> ::= <import-header>+
+
+<import-header> ::= %"import" <identifier> (%"." %"*" | <import-alias>)? <semi>?
+
+<import-alias> ::= %"as" <simple-identifier>
+
+<top-level-object> @nospace($1) ::= <declaration> <semis>?
+
+
+# ============================================================================
+# Declarations
+# ============================================================================
+
+<declaration> ::= <class-declaration>
+                | <object-declaration>
+                | <function-declaration>
+                | <property-declaration>
+                | <type-alias>
+
+<type-alias> ::= <modifiers>? %"typealias" %NL* <simple-identifier> (%NL* <type-parameters>)? %NL* %"=" %NL* <type>
+
+
+# ============================================================================
+# Class Declarations
+# ============================================================================
+
+<class-declaration> ::= <modifiers>? (<class-keyword> | (%"fun" %NL*)? %"interface") %NL* <simple-identifier> (%NL* <type-parameters>)? (%NL* <primary-constructor>)? (%NL* %":" %NL* <delegation-specifiers>)? (%NL* <type-constraints>)? ((%NL* <class-body>) | (%NL* <enum-class-body>))?
+
+<class-keyword> ::= %"class"
+
+<primary-constructor> ::= (<modifiers>? %"constructor" %NL*)? <class-parameters>
+
+<class-body> @nospace($1) @hardline($2) @indent($2) @nospace($3) @hardline($4) ::= %"{" %NL* <class-member-declarations> %NL* %"}"
+
+<class-parameters> ::= %"(" %NL* (<class-parameter> (%NL* %"," %NL* <class-parameter>)* (%NL* %",")?)? %NL* %")"
+
+<class-parameter> ::= <modifiers>? (%"val" | %"var")? %NL* <simple-identifier> %":" %NL* <type> (%NL* %"=" %NL* <expression>)?
+
+
+# ============================================================================
+# Delegation Specifiers
+# ============================================================================
+
+<delegation-specifiers> ::= <annotated-delegation-specifier> (%NL* %"," %NL* <annotated-delegation-specifier>)*
+
+<annotated-delegation-specifier> ::= <annotation>* %NL* <delegation-specifier>
+
+<delegation-specifier> ::= <constructor-invocation>
+                          | <explicit-delegation>
+                          | <user-type>
+                          | <function-type>
+                          | %"suspend" %NL* <function-type>
+
+<constructor-invocation> ::= <user-type> %NL* <value-arguments>
+
+<explicit-delegation> ::= (<user-type> | <function-type>) %NL* %"by" %NL* <expression>
+
+
+# ============================================================================
+# Type Parameters and Constraints
+# ============================================================================
+
+<type-parameters> ::= %"<" %NL* <type-parameter> (%NL* %"," %NL* <type-parameter>)* (%NL* %",")? %NL* %">"
+
+<type-parameter> ::= <type-parameter-modifiers>? %NL* <simple-identifier> (%NL* %":" %NL* <type>)?
+
+<type-constraints> ::= %"where" %NL* <type-constraint> (%NL* %"," %NL* <type-constraint>)*
+
+<type-constraint> ::= <annotation>* <simple-identifier> %NL* %":" %NL* <type>
+
+
+# ============================================================================
+# Class Members
+# ============================================================================
+
+<class-member-declarations> ::= (<class-member-declaration> <semis>?)*
+
+<class-member-declaration> ::= <declaration>
+                              | <companion-object>
+                              | <anonymous-initializer>
+                              | <secondary-constructor>
+
+<anonymous-initializer> ::= %"init" %NL* <block>
+
+<companion-object> ::= <modifiers>? %"companion" %NL* (%"data" %NL*)? %"object" (%NL* <simple-identifier>)? (%NL* %":" %NL* <delegation-specifiers>)? (%NL* <class-body>)?
+
+
+# ============================================================================
+# Function Declarations
+# ============================================================================
+
+<function-declaration> @nospace($2) @nospace($3) @nospace($4) @nospace($6) @nospace($7) @nospace($8) ::= <modifiers>? %"fun" (%NL* <type-parameters>)? (%NL* <receiver-type> %NL* %".")? %NL* <simple-identifier> %NL* <function-value-parameters> (%NL* %":" %NL* <type>)? (%NL* <type-constraints>)? (%NL* <function-body>)?
+
+<function-value-parameters> @nospace ::= %"(" %NL* (<function-value-parameter> (%NL* %"," %NL* <function-value-parameter>)* (%NL* %",")?)? %NL* %")"
+
+<function-value-parameter> ::= <parameter-modifiers>? <parameter> (%NL* %"=" %NL* <expression>)?
+
+<function-body> ::= <block>
+                   | %"=" %NL* <expression>
+
+<parameter> @nospace($1) @nospace($2) @nospace($3) ::= <simple-identifier> %NL* %":" %NL* <type>
+
+
+# ============================================================================
+# Property Declarations
+# ============================================================================
+
+<property-declaration> ::= <modifiers>? (%"val" | %"var") (%NL* <type-parameters>)? (%NL* <receiver-type> %NL* %".")? %NL* (<multi-variable-declaration> | <variable-declaration>) (%NL* <type-constraints>)? (%NL* ((%"=" %NL* <expression>) | <property-delegate>))? (%NL* %";")? %NL* ((<getter>? (%NL* <semi>? <setter>)?) | (<setter>? (%NL* <semi>? <getter>)?))
+
+<property-delegate> ::= %"by" %NL* <expression>
+
+<getter> ::= <modifiers>? %"get" (%NL* %"(" %NL* %")" (%NL* %":" %NL* <type>)? %NL* <function-body>)?
+
+<setter> ::= <modifiers>? %"set" (%NL* %"(" %NL* <function-value-parameter-with-optional-type> (%NL* %",")? %NL* %")" (%NL* %":" %NL* <type>)? %NL* <function-body>)?
+
+<function-value-parameter-with-optional-type> ::= <parameter-modifiers>? <parameter-with-optional-type> (%NL* %"=" %NL* <expression>)?
+
+<parameter-with-optional-type> ::= <simple-identifier> %NL* (%":" %NL* <type>)?
+
+<variable-declaration> ::= <annotation>* %NL* <simple-identifier> (%NL* %":" %NL* <type>)?
+
+<multi-variable-declaration> ::= %"(" %NL* <variable-declaration> (%NL* %"," %NL* <variable-declaration>)* (%NL* %",")? %NL* %")"
+
+
+# ============================================================================
+# Object Declarations
+# ============================================================================
+
+<object-declaration> ::= <modifiers>? %"object" %NL* <simple-identifier> (%NL* %":" %NL* <delegation-specifiers>)? (%NL* <class-body>)?
+
+
+# ============================================================================
+# Secondary Constructors
+# ============================================================================
+
+<secondary-constructor> ::= <modifiers>? %"constructor" %NL* <function-value-parameters> (%NL* %":" %NL* <constructor-delegation-call>)? %NL* <block>?
+
+<constructor-delegation-call> ::= (%"this" | %"super") %NL* <value-arguments>
+
+
+# ============================================================================
+# Enum Classes
+# ============================================================================
+
+<enum-class-body> ::= %"{" %NL* <enum-entries>? (%NL* %";" %NL* <class-member-declarations>)? %NL* %"}"
+
+<enum-entries> ::= <enum-entry> (%NL* %"," %NL* <enum-entry>)* %NL* %","?
+
+<enum-entry> ::= (<modifiers> %NL*)? <simple-identifier> (%NL* <value-arguments>)? (%NL* <class-body>)?
+
+
+# ============================================================================
+# Type System
+# ============================================================================
+
+<type> ::= <type-modifiers>? (<function-type> | <parenthesized-type> | <nullable-type> | <type-reference> | <definitely-non-nullable-type>)
+
+<type-reference> ::= <user-type>
+                    | %"dynamic"
+
+<nullable-type> ::= (<type-reference> | <parenthesized-type>) %NL* %"?"+
+
+<user-type> ::= <simple-user-type> (%NL* %"." %NL* <simple-user-type>)*
+
+<simple-user-type> ::= <simple-identifier> (%NL* <type-arguments>)?
+
+<type-projection> ::= <type-projection-modifiers>? <type>
+                     | %"*"
+
+<type-projection-modifiers> ::= <type-projection-modifier>+
+
+<type-projection-modifier> ::= <variance-modifier> %NL*
+                              | <annotation>
+
+<function-type> ::= (<receiver-type> %NL* %"." %NL*)? <function-type-parameters> %NL* %"->" %NL* <type>
+
+<function-type-parameters> ::= %"(" %NL* ((<parameter> | <type>) (%NL* %"," %NL* (<parameter> | <type>))* (%NL* %",")?)? %NL* %")"
+
+<parenthesized-type> ::= %"(" %NL* <type> %NL* %")"
+
+<receiver-type> ::= <type-modifiers>? (<parenthesized-type> | <nullable-type> | <type-reference>)
+
+<parenthesized-user-type> ::= %"(" %NL* (<user-type> | <parenthesized-user-type>) %NL* %")"
+
+<definitely-non-nullable-type> ::= <type-modifiers>? (<user-type> | <parenthesized-user-type>) %NL* %"&" %NL* <type-modifiers>? (<user-type> | <parenthesized-user-type>)
+
+
+# ============================================================================
+# Statements and Blocks
+# ============================================================================
+
+<statements> @hardline @nospace($1) @nospace($2) ::= <statement> (<semis> <statement>)* <semis>?
+
+<statement> ::= (<label> | <annotation>)* (<declaration> | <assignment> | <loop-statement> | <expression>)
+
+<label> ::= <simple-identifier> %"@" %NL*
+
+<control-structure-body> ::= <block>
+                            | <statement>
+
+<block> @nospace($1) @hardline($2) @indent($2) @nospace($3) @hardline($4) ::= %"{" %NL* <statements>? %NL* %"}"
+
+<loop-statement> ::= <for-statement>
+                    | <while-statement>
+                    | <do-while-statement>
+
+<for-statement> ::= %"for" %NL* %"(" <annotation>* (<variable-declaration> | <multi-variable-declaration>) %"in" <expression> %")" %NL* <control-structure-body>?
+
+<while-statement> ::= %"while" %NL* %"(" <expression> %")" %NL* (<control-structure-body> | %";")
+
+<do-while-statement> ::= %"do" %NL* <control-structure-body>? %NL* %"while" %NL* %"(" <expression> %")"
+
+<assignment> ::= (<directly-assignable-expression> %"=" | <assignable-expression> <assignment-and-operator>) %NL* <expression>
+
+<semi> ::= (%";" | %NL) %NL*
+
+<semis> ::= (%";" | %NL)+
+
+
+# ============================================================================
+# Expressions
+# ============================================================================
+
+# Kotlin expressions use precedence climbing. Listed lowest to highest.
+
+<expression> ::= <disjunction>
+
+<disjunction> ::= <conjunction> (%NL* %"||" %NL* <conjunction>)*
+
+<conjunction> ::= <equality> (%NL* %"&&" %NL* <equality>)*
+
+<equality> ::= <comparison> (<equality-operator> %NL* <comparison>)*
+
+<comparison> ::= <generic-call-like-comparison> (<comparison-operator> %NL* <generic-call-like-comparison>)*
+
+<generic-call-like-comparison> ::= <infix-operation> <call-suffix>*
+
+<infix-operation> ::= <elvis-expression> ((<in-operator> %NL* <elvis-expression>) | (<is-operator> %NL* <type>))*
+
+<elvis-expression> ::= <infix-function-call> (%NL* %"?" %":" %NL* <infix-function-call>)*
+
+<infix-function-call> ::= <range-expression> (<simple-identifier> %NL* <range-expression>)*
+
+<range-expression> ::= <additive-expression> ((%".." | %"..<") %NL* <additive-expression>)*
+
+<additive-expression> ::= <multiplicative-expression> (<additive-operator> %NL* <multiplicative-expression>)*
+
+<multiplicative-expression> ::= <as-expression> (<multiplicative-operator> %NL* <as-expression>)*
+
+<as-expression> ::= <prefix-unary-expression> (%NL* <as-operator> %NL* <type>)*
+
+<prefix-unary-expression> ::= <unary-prefix>* <postfix-unary-expression>
+
+<unary-prefix> ::= <annotation>
+                  | <label>
+                  | <prefix-unary-operator> %NL*
+
+<postfix-unary-expression> ::= <primary-expression> <postfix-unary-suffix>*
+
+<postfix-unary-suffix> ::= <postfix-unary-operator>
+                          | <type-arguments>
+                          | <call-suffix>
+                          | <indexing-suffix>
+                          | <navigation-suffix>
+
+
+# ============================================================================
+# Assignable Expressions
+# ============================================================================
+
+<directly-assignable-expression> ::= <postfix-unary-expression> <assignable-suffix>
+                                    | <simple-identifier>
+                                    | <parenthesized-directly-assignable-expression>
+
+<parenthesized-directly-assignable-expression> ::= %"(" %NL* <directly-assignable-expression> %NL* %")"
+
+<assignable-expression> ::= <prefix-unary-expression>
+                           | <parenthesized-assignable-expression>
+
+<parenthesized-assignable-expression> ::= %"(" %NL* <assignable-expression> %NL* %")"
+
+<assignable-suffix> ::= <type-arguments>
+                       | <indexing-suffix>
+                       | <navigation-suffix>
+
+
+# ============================================================================
+# Suffixes: Indexing, Navigation, Call
+# ============================================================================
+
+<indexing-suffix> ::= %"[" %NL* <expression> (%NL* %"," %NL* <expression>)* (%NL* %",")? %NL* %"]"
+
+<navigation-suffix> ::= <member-access-operator> %NL* (<simple-identifier> | <parenthesized-expression> | %"class")
+
+<call-suffix> ::= <type-arguments>? ((<value-arguments>? <annotated-lambda>) | <value-arguments>)
+
+<annotated-lambda> ::= <annotation>* <label>? %NL* <lambda-literal>
+
+<type-arguments> ::= %"<" %NL* <type-projection> (%NL* %"," %NL* <type-projection>)* (%NL* %",")? %NL* %">"
+
+<value-arguments> ::= %"(" %NL* (<value-argument> (%NL* %"," %NL* <value-argument>)* (%NL* %",")?)? %NL* %")"
+
+<value-argument> ::= <annotation>? %NL* (<simple-identifier> %NL* %"=" %NL*)? %"*"? %NL* <expression>
+
+
+# ============================================================================
+# Primary Expressions
+# ============================================================================
+
+<primary-expression> ::= <parenthesized-expression>
+                        | <simple-identifier>
+                        | <literal-constant>
+                        | <string-literal>
+                        | <callable-reference>
+                        | <function-literal>
+                        | <object-literal>
+                        | <collection-literal>
+                        | <this-expression>
+                        | <super-expression>
+                        | <if-expression>
+                        | <when-expression>
+                        | <try-expression>
+                        | <jump-expression>
+
+<parenthesized-expression> ::= %"(" %NL* <expression> %NL* %")"
+
+<collection-literal> ::= %"[" %NL* (<expression> (%NL* %"," %NL* <expression>)* (%NL* %",")?)? %NL* %"]"
+
+
+# ============================================================================
+# Literal Constants
+# ============================================================================
+
+<literal-constant> ::= %"true"
+                      | %"false"
+                      | %INTEGER
+                      | %FLOAT
+                      | %CHAR
+                      | %"null"
+
+
+# ============================================================================
+# String Literals
+# ============================================================================
+
+<string-literal> ::= <line-string-literal>
+                    | <multi-line-string-literal>
+
+<line-string-literal> ::= %STRING
+
+<multi-line-string-literal> ::= %MULTILINE_STRING
+
+
+# ============================================================================
+# Callable References
+# ============================================================================
+
+<callable-reference> ::= (<user-type> | <function-type>)? %"::" %NL* (<simple-identifier> | %"class")
+
+
+# ============================================================================
+# Function Literals (Lambdas and Anonymous Functions)
+# ============================================================================
+
+<function-literal> ::= <lambda-literal>
+                      | <anonymous-function>
+
+<lambda-literal> ::= %"{" %NL* (<lambda-parameters> %NL* %"->" %NL*)? <statements>? %NL* %"}"
+
+<lambda-parameters> ::= <lambda-parameter> (%NL* %"," %NL* <lambda-parameter>)* (%NL* %",")?
+
+<lambda-parameter> ::= <variable-declaration>
+                      | <multi-variable-declaration> (%NL* %":" %NL* <type>)?
+
+<anonymous-function> ::= %"fun" (%NL* <type-parameters>)? (%NL* <receiver-type> %NL* %".")? %NL* <parameters-with-optional-type> (%NL* %":" %NL* <type>)? (%NL* <type-constraints>)? %NL* <function-body>?
+
+<parameters-with-optional-type> ::= %"(" %NL* (<function-value-parameter-with-optional-type> (%NL* %"," %NL* <function-value-parameter-with-optional-type>)* (%NL* %",")?)? %NL* %")"
+
+
+# ============================================================================
+# Object Literals
+# ============================================================================
+
+<object-literal> ::= %"object" (%NL* %":" %NL* <delegation-specifiers>)? %NL* <class-body>
+
+
+# ============================================================================
+# this / super Expressions
+# ============================================================================
+
+<this-expression> ::= %"this"
+                     | %"this" %"@" <simple-identifier>
+
+<super-expression> ::= %"super" (%"<" %NL* <type> %NL* %">")? (%"@" <simple-identifier>)?
+
+
+# ============================================================================
+# if Expression
+# ============================================================================
+
+<if-expression> ::= %"if" %NL* %"(" <expression> %")" %NL* <control-structure-body> ((%NL* %";"?)? %NL* %"else" %NL* <control-structure-body>)?
+                   | %"if" %NL* %"(" <expression> %")" %NL* %";"? %NL* %"else" %NL* <control-structure-body>
+
+
+# ============================================================================
+# when Expression
+# ============================================================================
+
+<when-expression> ::= %"when" (%NL* %"(" <expression> %")" %NL*)? %"{" %NL* (<when-entry> %NL*)* %"}"
+
+<when-entry> ::= <when-condition> (%NL* %"," %NL* <when-condition>)* %NL* %"->" %NL* <control-structure-body> (%NL* %";")?
+               | %"else" %"->" %NL* <control-structure-body> (%NL* %";")?
+
+<when-condition> ::= <expression>
+                    | <range-test>
+                    | <type-test>
+
+<range-test> ::= <in-operator> %NL* <expression>
+
+<type-test> ::= <is-operator> %NL* <type>
+
+
+# ============================================================================
+# try / catch / finally Expression
+# ============================================================================
+
+<try-expression> ::= %"try" %NL* <block> (<catch-block>+ <finally-block>? | <finally-block>)
+
+<catch-block> ::= %"catch" %NL* %"(" <annotation>* <simple-identifier> %":" <type> (%NL* %",")? %")" %NL* <block>
+
+<finally-block> ::= %"finally" %NL* <block>
+
+
+# ============================================================================
+# Jump Expressions
+# ============================================================================
+
+<jump-expression> ::= %"throw" %NL* <expression>
+                     | (%"return" | %"return" %"@" <simple-identifier>) <expression>?
+                     | %"continue" | %"continue" %"@" <simple-identifier>
+                     | %"break" | %"break" %"@" <simple-identifier>
+
+
+# ============================================================================
+# Operators
+# ============================================================================
+
+<equality-operator> ::= %"!=" | %"!=="
+                       | %"==" | %"==="
+
+<comparison-operator> ::= %"<" | %">"
+                         | %"<=" | %">="
+
+<in-operator> ::= %"in" | %"!in"
+
+<is-operator> ::= %"is" | %"!is"
+
+<additive-operator> ::= %"+" | %"-"
+
+<multiplicative-operator> ::= %"*" | %"/" | %"%"
+
+<as-operator> ::= %"as" | %"as?"
+
+<prefix-unary-operator> ::= %"++" | %"--"
+                           | %"+" | %"-"
+                           | %"!"
+
+<postfix-unary-operator> ::= %"++" | %"--"
+                            | %"!!"
+
+<member-access-operator> ::= %"." | %"?." | %"::"
+
+<assignment-and-operator> ::= %"+=" | %"-="
+                             | %"*=" | %"/=" | %"%="
+
+
+# ============================================================================
+# Modifiers
+# ============================================================================
+
+<modifiers> ::= <modifier>+
+
+<modifier> ::= <class-modifier>
+             | <member-modifier>
+             | <visibility-modifier>
+             | <function-modifier>
+             | <property-modifier>
+             | <inheritance-modifier>
+             | <parameter-modifier>
+             | <platform-modifier>
+             | <annotation>
+
+<class-modifier> ::= %"enum" | %"sealed"
+                    | %"annotation" | %"data"
+                    | %"inner" | %"value"
+
+<member-modifier> ::= %"override" | %"lateinit"
+
+<visibility-modifier> ::= %"public" | %"private"
+                         | %"protected" | %"internal"
+
+<function-modifier> ::= %"tailrec" | %"operator"
+                       | %"infix" | %"inline" | %"external"
+                       | %"suspend"
+
+<property-modifier> ::= %"const"
+
+<inheritance-modifier> ::= %"abstract" | %"final"
+                          | %"open"
+
+<parameter-modifier> ::= %"vararg" | %"noinline" | %"crossinline"
+
+<platform-modifier> ::= %"expect" | %"actual"
+
+<variance-modifier> ::= %"in" | %"out"
+
+
+# ============================================================================
+# Type Modifiers
+# ============================================================================
+
+<type-modifiers> ::= <type-modifier>+
+
+<type-modifier> ::= <annotation>
+                   | %"suspend" %NL*
+
+<type-parameter-modifiers> ::= <type-parameter-modifier>+
+
+<type-parameter-modifier> ::= <reification-modifier> %NL*
+                             | <variance-modifier> %NL*
+                             | <annotation>
+
+<reification-modifier> ::= %"reified"
+
+<parameter-modifiers> ::= <parameter-modifier>+
+
+
+# ============================================================================
+# Annotations
+# ============================================================================
+
+<annotation> ::= <single-annotation>
+               | <multi-annotation>
+
+<single-annotation> ::= (<annotation-use-site-target> %NL* | %"@") <unescaped-annotation>
+
+<multi-annotation> ::= (<annotation-use-site-target> %NL* | %"@") %"[" <unescaped-annotation>+ %"]"
+
+<annotation-use-site-target> ::= %"@" (%"field" | %"property" | %"get" | %"set" | %"receiver" | %"param" | %"setparam" | %"delegate" | %"file") %NL* %":"
+
+<unescaped-annotation> ::= <constructor-invocation>
+                          | <user-type>
+
+
+# ============================================================================
+# Identifiers
+# ============================================================================
+#
+# In Kotlin, many keywords are "soft" -- they act as keywords only in
+# specific syntactic positions, and can be used as identifiers elsewhere.
+# The lexer provides %IDENTIFIER for true identifiers. The parser must
+# also accept soft keywords in identifier position.
+
+<simple-identifier> ::= %IDENTIFIER
+                       | %"abstract"
+                       | %"annotation"
+                       | %"by"
+                       | %"catch"
+                       | %"companion"
+                       | %"constructor"
+                       | %"crossinline"
+                       | %"data"
+                       | %"dynamic"
+                       | %"enum"
+                       | %"external"
+                       | %"field"
+                       | %"file"
+                       | %"final"
+                       | %"finally"
+                       | %"get"
+                       | %"import"
+                       | %"infix"
+                       | %"init"
+                       | %"inline"
+                       | %"inner"
+                       | %"internal"
+                       | %"lateinit"
+                       | %"noinline"
+                       | %"open"
+                       | %"operator"
+                       | %"out"
+                       | %"override"
+                       | %"private"
+                       | %"protected"
+                       | %"public"
+                       | %"reified"
+                       | %"sealed"
+                       | %"tailrec"
+                       | %"set"
+                       | %"vararg"
+                       | %"where"
+                       | %"property"
+                       | %"receiver"
+                       | %"param"
+                       | %"setparam"
+                       | %"delegate"
+                       | %"expect"
+                       | %"actual"
+                       | %"const"
+                       | %"suspend"
+                       | %"value"
+
+<identifier> ::= <simple-identifier> (%NL* %"." %NL* <simple-identifier>)*

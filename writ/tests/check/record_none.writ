@@ -1,0 +1,4 @@
+library spans
+
+struct Span { start: usize, end: usize } none { start: usize_max, end: usize_max }
+struct Pair { a: i32, b: *cstr } none { a: i32_min, c: 0, b: 1 }

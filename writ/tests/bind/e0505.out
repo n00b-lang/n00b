@@ -1,0 +1,2 @@
+error[E0505]: two declarations get the same name: `compress2` and `uncompress` are both `uncompress`
+  --> tests/bind/e0505.writ:1:1

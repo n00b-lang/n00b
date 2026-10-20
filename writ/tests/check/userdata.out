@@ -1,0 +1,14 @@
+error[E0219]: invalid `userdata`: callback `Twice` already has a `userdata` parameter
+  --> tests/check/userdata.writ:5:49
+error[E0219]: invalid `userdata`: inside callback `Named`, `userdata` names no parameter; it marks where the context arrives
+  --> tests/check/userdata.writ:7:31
+error[E0110]: no such parameter: `nothing`
+  --> tests/check/userdata.writ:11:44
+error[E0219]: invalid `userdata`: `n` is not a callback
+  --> tests/check/userdata.writ:13:37
+error[E0219]: invalid `userdata`: `ud` must name the callback parameter it travels with
+  --> tests/check/userdata.writ:15:41
+error[E0219]: invalid `userdata`: callback `cb` has more than one `userdata` parameter
+  --> tests/check/userdata.writ:17:43
+error[E0219]: invalid `userdata`: callback `cb` has more than one `userdata` parameter
+  --> tests/check/userdata.writ:17:65

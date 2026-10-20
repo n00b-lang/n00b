@@ -1,0 +1,4 @@
+binding zlib for n00b import {
+    hide "*Init_"
+    method z_stream.compress = compress2
+}

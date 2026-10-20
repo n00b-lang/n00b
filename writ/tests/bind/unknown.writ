@@ -1,0 +1,3 @@
+library opaque_api
+
+fn read_some(buf: *[u8; unknown])

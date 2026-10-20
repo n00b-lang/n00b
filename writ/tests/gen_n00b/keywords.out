@@ -1,0 +1,382 @@
+#ifndef KEYWORDS_WRIT_H
+#define KEYWORDS_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define KEYWORDS_ARGUMENT_ERROR (-1)
+#define KEYWORDS_OUT_OF_MEMORY (-2)
+#define KEYWORDS_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} keywords_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} keywords_str_t;
+
+void keywords_bytes_free(keywords_bytes_t *bytes);
+void keywords_free(void *data);
+
+typedef struct db_state db_state;
+typedef struct OpenOpts {
+    uint32_t present;
+    uint32_t timeout_ms;
+    bool readonly;
+    uint32_t cache_kb;
+} OpenOpts;
+typedef struct Limits {
+    int64_t max_rows;
+    int64_t min_rows;
+} Limits;
+typedef struct Sized {
+    uint32_t size;
+    uint32_t flags;
+} Sized;
+typedef struct Plain {
+    int depth;
+} Plain;
+
+
+enum {
+    keywords_db_open_ok = 0,
+};
+int32_t keywords_db_open(const char *path, size_t path_length, OpenOpts *opts, db_state **result);
+
+int64_t keywords_db_limit(db_state *db, Limits *limits);
+
+uint32_t keywords_db_flags(db_state *db, Sized *sized);
+
+int keywords_db_depth(db_state *db, Plain *plain);
+
+enum {
+    keywords_db_close_ok = 0,
+};
+int32_t keywords_db_close(db_state *db);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "keywords_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+db_state * db_open(const char *path, OpenOpts *opts);
+int64_t db_limit(db_state *db, Limits *limits);
+uint32_t db_flags(db_state *db, Sized *sized);
+int db_depth(db_state *db, Plain *plain);
+void db_close(db_state *db);
+
+void keywords_bytes_free(keywords_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void keywords_free(void *data) {
+    free(data);
+}
+
+static int32_t keywords_encode(const char *text, size_t length, char **out) {
+    if (memchr(text, 0, length)) {
+        return KEYWORDS_ARGUMENT_ERROR;
+    }
+    *out = malloc(length + 1);
+    if (!*out) {
+        return KEYWORDS_OUT_OF_MEMORY;
+    }
+    memcpy(*out, text, length);
+    (*out)[length] = 0;
+    return 0;
+}
+
+int32_t keywords_db_open(const char *path, size_t path_length, OpenOpts *opts, db_state **result) {
+    const char *s0 = 0;
+    OpenOpts *s1 = 0;
+    db_state *ret = 0;
+    char *l0 = NULL;
+    int32_t outcome = 0;
+    if (path) {
+        int32_t status = keywords_encode(path, path_length, &l0);
+        if (status) {
+            outcome = status;
+            goto finish;
+        }
+    }
+    else {
+        outcome = KEYWORDS_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s0 = l0;
+    s1 = opts;
+    ret = db_open(s0, s1);
+    {
+        outcome = keywords_db_open_ok;
+    }
+    if (outcome == keywords_db_open_ok) {
+        *result = ret;
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int64_t keywords_db_limit(db_state *db, Limits *limits) {
+    db_state *s0 = 0;
+    Limits *s1 = 0;
+    int64_t ret = 0;
+    s0 = db;
+    s1 = limits;
+    ret = db_limit(s0, s1);
+    return ret;
+}
+
+uint32_t keywords_db_flags(db_state *db, Sized *sized) {
+    db_state *s0 = 0;
+    Sized *s1 = 0;
+    uint32_t ret = 0;
+    s0 = db;
+    s1 = sized;
+    ret = db_flags(s0, s1);
+    return ret;
+}
+
+int keywords_db_depth(db_state *db, Plain *plain) {
+    db_state *s0 = 0;
+    Plain *s1 = 0;
+    int ret = 0;
+    s0 = db;
+    s1 = plain;
+    ret = db_depth(s0, s1);
+    return ret;
+}
+
+int32_t keywords_db_close(db_state *db) {
+    db_state *s0 = 0;
+    int32_t outcome = 0;
+    s0 = db;
+    db_close(s0);
+    {
+        outcome = keywords_db_close_ok;
+    }
+    if (outcome == keywords_db_close_ok) {
+    }
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "keywords_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+void keywords_take_bytes(keywords_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    keywords_bytes_free(bytes);
+}
+
+int32_t keywords_n00b_db_open(const void *path, const void *opts, void *result) {
+    size_t path_length = 0;
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
+    uint8_t *path_data = malloc(path_length + 1);
+    if (path_data && path_length) {
+        memcpy(path_data, path_borrowed, path_length);
+    }
+    if (path_data) {
+        path_data[path_length] = 0;
+    }
+    n00b_ffi_release((void *)path);
+    if (!path_data) {
+        free(path_data);
+        return KEYWORDS_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = keywords_db_open((const char *)path_data, path_length, (OpenOpts *)opts, (db_state **)result);
+    free(path_data);
+    return writ_n00b_value;
+}
+
+int64_t keywords_n00b_db_limit(uint64_t db, const void *limits) {
+    int64_t writ_n00b_value = keywords_db_limit((db_state *)(uintptr_t)db, (Limits *)limits);
+    return writ_n00b_value;
+}
+
+uint32_t keywords_n00b_db_flags(uint64_t db, const void *sized) {
+    uint32_t writ_n00b_value = keywords_db_flags((db_state *)(uintptr_t)db, (Sized *)sized);
+    return writ_n00b_value;
+}
+
+int keywords_n00b_db_depth(uint64_t db, const void *plain) {
+    int writ_n00b_value = keywords_db_depth((db_state *)(uintptr_t)db, (Plain *)plain);
+    return writ_n00b_value;
+}
+
+int32_t keywords_n00b_db_close(uint64_t db) {
+    int32_t writ_n00b_value = keywords_db_close((db_state *)(uintptr_t)db);
+    return writ_n00b_value;
+}
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+type Db_Cell {
+    public raw: uint
+}
+
+alias Db = Ref[Db_Cell]
+
+func __db_cell(raw: uint) -> Db {
+    var cell: Db_Cell = (raw = raw)
+    return ref cell
+}
+
+func __finalize(consume self: Ref[Db_Cell]) {
+    if self.raw != 0 and debug_enabled() {
+        __fd_write(2, "Db collected while open; releasing it\n")
+        let released = __db_close(self.raw)
+    }
+}
+
+record Open_Opts layout(c) {
+    public present: u32
+    public timeout_ms: u32
+    public readonly: bool
+    public cache_kb: u32
+}
+
+record Limits layout(c) {
+    public max_rows: i64
+    public min_rows: i64
+}
+
+record Sized layout(c) {
+    public size: u32
+    public flags: u32
+}
+
+record Plain layout(c) {
+    public depth: i32
+}
+
+func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_kb: u32? = nil) -> Db fail: Error {
+    var opts_record: Open_Opts = (present = 0, timeout_ms = 0, readonly = false, cache_kb = 0)
+    if timeout_ms != nil {
+        opts_record.timeout_ms = timeout_ms.get()
+        opts_record.present = opts_record.present | 1
+    } else {
+        opts_record.timeout_ms = 30000
+    }
+    if readonly != nil {
+        opts_record.readonly = readonly.get()
+        opts_record.present = opts_record.present | 2
+    } else {
+        opts_record.readonly = false
+    }
+    if cache_kb != nil {
+        opts_record.cache_kb = cache_kb.get()
+        opts_record.present = opts_record.present | 4
+    }
+    var path_value: Array[u8] = __text_byte_array(path)
+    var result: uint = 0
+    let outcome = __db_open(ref path_value, ref opts_record, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "db_open")
+        fail failure
+    }
+    return __db_cell(result)
+}
+
+type Db_Limit_Options {
+    public max_rows: i64?
+    public min_rows: i64?
+}
+
+func db_limit(db: Db, limits: Db_Limit_Options) -> i64 {
+    var limits_record: Limits = (max_rows = 0, min_rows = 0)
+    let limits_max_rows = limits.max_rows
+    if limits_max_rows != nil {
+        limits_record.max_rows = limits_max_rows.get()
+    } else {
+        limits_record.max_rows = -1
+    }
+    let limits_min_rows = limits.min_rows
+    if limits_min_rows != nil {
+        limits_record.min_rows = limits_min_rows.get()
+    } else {
+        limits_record.min_rows = -1
+    }
+    if db.raw == 0 {
+        panic("db_limit: handle is closed")
+    }
+    let result = __db_limit(db.raw, ref limits_record)
+    return result
+}
+
+func db_flags(db: Db, flags: u32 = 4) -> u32 {
+    var sized_record: Sized = (size = 0, flags = 0)
+    sized_record.flags = flags
+    sized_record.size = 8
+    if db.raw == 0 {
+        panic("db_flags: handle is closed")
+    }
+    let result = __db_flags(db.raw, ref sized_record)
+    return result
+}
+
+func db_depth(db: Db, depth: i32 = 3) -> i32 {
+    var plain_record: Plain = (depth = 0)
+    plain_record.depth = depth
+    if db.raw == 0 {
+        panic("db_depth: handle is closed")
+    }
+    let result = __db_depth(db.raw, ref plain_record)
+    return result
+}
+
+func close(modify self: Db) fail: Error {
+    let outcome = __db_close(self.raw)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "db_close")
+        fail failure
+    }
+    self.raw = 0
+}
+7	tests/gen_n00b/../keywords/keywords.writ:4:1	Db
+25	tests/gen_n00b/../keywords/keywords.writ:6:1	OpenOpts
+32	tests/gen_n00b/../keywords/keywords.writ:13:1	Limits
+37	tests/gen_n00b/../keywords/keywords.writ:18:1	Sized
+42	tests/gen_n00b/../keywords/keywords.writ:23:1	Plain
+46	tests/gen_n00b/../keywords/keywords.writ:27:1	db_open
+79	tests/gen_n00b/../keywords/keywords.writ:30:1	db_limit
+100	tests/gen_n00b/../keywords/keywords.writ:33:1	db_flags
+111	tests/gen_n00b/../keywords/keywords.writ:36:1	db_depth
+121	tests/gen_n00b/../keywords/keywords.writ:39:1	db_close
+load static
+extern __db_open keywords_n00b_db_open (ref[array[u8]], ref[Open_Opts], ref[uint]) -> i32 fail: nil
+extern __db_limit keywords_n00b_db_limit (uint, ref[Limits]) -> int fail: nil
+extern __db_flags keywords_n00b_db_flags (uint, ref[Sized]) -> u32 fail: nil
+extern __db_depth keywords_n00b_db_depth (uint, ref[Plain]) -> i32 fail: nil
+extern __db_close keywords_n00b_db_close (uint) -> i32 fail: nil

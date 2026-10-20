@@ -1,0 +1,4 @@
+library broken
+
+const A: c_int = 1
+const A: c_int = 2

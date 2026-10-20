@@ -1,0 +1,11 @@
+use <zlib.writ>
+
+binding {
+    name compress2 "compress"
+    name zlibVersion "version"
+    hide "deflateInit_"
+    hide "inflateInit_"
+    type z_stream as "Stream"
+    method z_stream.deflate = deflate
+    method z_stream.inflate = inflate
+}

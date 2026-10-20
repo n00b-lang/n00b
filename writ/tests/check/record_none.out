@@ -1,0 +1,4 @@
+error[E0103]: unknown name: no field `c`
+  --> tests/check/record_none.writ:4:53
+error[E0213]: a `none` value must be an integer constant of its field's or handle's type: field `b`
+  --> tests/check/record_none.writ:4:59

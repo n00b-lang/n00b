@@ -1,0 +1,18 @@
+library callbacks
+
+callback Compare = fn(a: *void, b: *void) -> c_int
+  thread same
+  unwind no
+
+struct Event { code: c_int }
+
+callback Handler = fn(context: *void userdata, event: *Event) -> void
+  thread same
+
+fn sort_bytes(items: *[u8; count], count: usize, compare: Compare for call) -> c_int
+
+fn bus_subscribe(handler: keep Handler until bus_unsubscribe(ret), context: ?void userdata handler) -> u64
+
+fn bus_publish(code: c_int)
+
+fn bus_unsubscribe(id: u64)

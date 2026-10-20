@@ -1,0 +1,29 @@
+library unions
+header <unions.h>
+
+union Raw @size(8) @align(8) {
+    i: i64 @0
+    d: f64 @0
+    p: ?void @0
+}
+union Value_v source "__typeof__(((Value *)0)->v)" @size(8) @align(8) {
+    i: i64 @0
+    d: f64 @0
+    s: ?c_char @0
+}
+struct Value @size(16) @align(8) {
+    kind: c_int @0
+    v: Value_v @8
+}
+struct Cell @size(16) @align(8) {
+    raw: Raw @0
+    flag: u8 @8
+}
+
+const VK_INT: c_int = 1
+const VK_REAL: c_int = 2
+const VK_TEXT: c_int = 3
+const VK_NULL: c_int = 5
+
+fn value_kind(value: ?Value) -> c_int
+fn cell_flag(cell: ?Cell, raw: ?Raw) -> u8

@@ -1,0 +1,2 @@
+error[E0001]: syntax error: unexpected `->`
+  --> tests/check/syntax.writ:3:15

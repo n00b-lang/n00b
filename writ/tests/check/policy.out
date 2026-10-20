@@ -1,0 +1,8 @@
+error[E0222]: invalid policy: `COUNT` is not of the type of `dtor`
+  --> tests/check/policy.writ:8:5
+error[E0222]: invalid policy: `bad_target` has no parameter `nothing`
+  --> tests/check/policy.writ:12:5
+error[E0222]: invalid policy: `dtor` has more than one `else` arm
+  --> tests/check/policy.writ:17:5
+error[E0222]: invalid policy: `span by n`: `n` is not a policy parameter
+  --> tests/check/policy.writ:20:15

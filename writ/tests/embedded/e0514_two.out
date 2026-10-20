@@ -1,0 +1,2 @@
+error[E0514]: an embedded unit names one library and binds it without `module`: a second `library`
+  --> tests/embedded/e0514_two.writ:3:1

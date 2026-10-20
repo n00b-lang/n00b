@@ -1,0 +1,30 @@
+library unions
+
+enum Kind : c_int { K_INT = 1, K_TEXT = 2 }
+const OTHER: c_int = 7
+
+union Raw @size(4) { i: i64, d: f64 @4 }
+
+struct Later {
+    v: union by kind {
+        K_INT => i: i64
+    }
+    kind: c_int as Kind
+}
+
+struct Pointer {
+    kind: *void
+    v: union by kind {
+        1 => i: i64
+    }
+}
+
+struct Arms {
+    kind: c_int as Kind
+    v: union by kind {
+        K_INT => i: i64
+        K_TEXT => s: *cstr
+        1 => _
+        OTHER => d: f64
+    }
+}

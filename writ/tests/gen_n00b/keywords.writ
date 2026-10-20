@@ -1,0 +1,5 @@
+use "../keywords/keywords.writ"
+
+binding {
+    keywords Limits as record
+}

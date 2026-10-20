@@ -1,0 +1,3 @@
+library broken
+
+fn f(buf: out *[u8; until 0], n: c_ulong) -> c_int

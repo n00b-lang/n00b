@@ -1,0 +1,189 @@
+@tokenizer("ir")
+
+<module> @hardline($5) @indent($5) @hardline($6) @hardline($7) ::=
+<nl>? %"module" <name> %"{" <nl> <module-item>* %"}" <nl>?
+
+<module-item> ::= <profile-decl>
+                | <target-decl>
+                | <meta-decl>
+                | <type-decl>
+                | <layout-decl>
+                | <global-decl>
+                | <func>
+
+<nl> ::= %NEWLINE+
+
+<profile-decl> ::= %"profile" <name> <nl>
+<target-decl>  ::= %"target" <dotted-name> <nl>
+<meta-decl>    ::= %"meta" <annot> <nl>
+<type-decl>    ::= %"type" %"variant" <name> %"=" <typelang-type> <nl>
+                | %"type" <name> %"=" <typelang-type> <nl>
+
+<layout-decl> @hardline($5) @indent($5) @hardline($6) ::=
+%"layout" <typelang-type> <layout-target>? %"{" <nl> <layout-item>* %"}" <nl>
+
+<layout-target> ::= %"for" %STRING_LIT | %"without" %"target"
+
+<layout-item> @nospace($4) @nospace($5) @nospace($6) ::= %"size" %"=" <layout-val> <nl>
+                | %"align" %"=" <layout-val> <nl>
+                | %"stride" %"=" <layout-val> <nl>
+                | <name> %"@" %"bits" <layout-val> %"." %"." <layout-val> <nl>
+                | %"indirect" %"=" <indirect-kind> <nl>
+                | %"words" %"=" <layout-val> <nl>
+                | %"variant" %"tag" %"@" %"bits" <layout-val> %"." %"." <layout-val> <nl>
+                | %"niche" %"=" <layout-bool> <nl>
+
+<indirect-kind> ::= %"thin" | %"fat"
+<layout-bool> ::= %"false" | %"true"
+
+<layout-val> ::= <int> | <symbolic-expr>
+
+<symbolic-expr> @nospace @space($4) ::= %"sizeof" %"(" <typelang-type> %")"
+                  | %"alignof" %"(" <typelang-type> %")"
+                  | %"offsetof" %"(" <typelang-type> %"," %STRING_LIT %")"
+
+<linkage> ::= %"static" | %"extern"
+
+<mutability> ::= %"mutable" | %"immutable" | %"const"
+
+<global-decl> @nospace($4) ::=
+<linkage>? <mutability>? %"global" <global> %":" <typelang-type> <global-init>? <meta>* <nl>
+
+<func> @nospace($3) @nospace($4) @nospace($5) @hardline($12) @indent($12) @blankline($13) @indent($13) @hardline($14) ::=
+<linkage>? %"func" <global> %"(" <params>? %")" %"->" <typelang-type> <function-failure>? <meta>* %"{" <nl> <local>* <block>+ %"}" <nl>
+
+<function-failure> ::= %"fail" %":" <typelang-type>
+
+<params>     @nospace($1) ::= <func-param> (%"," <func-param>)*
+<func-param> ::= <func-param-pos> | <func-param-kw> | <func-param-rest>
+
+<func-param-pos>  @nospace($2) ::= <param-mode>? <value> %":" <typelang-type> <meta>*
+<func-param-kw>   @nospace($1) ::= <name> %":" <typelang-type> <meta>*
+<func-param-rest> @nospace($2) ::= <param-mode>? %"*" <value> %":" <typelang-type> <meta>*
+                                    | <param-mode>? %"*" <typelang-type>
+
+<param-mode> ::= %"in" | %"out" | %"inout" | %"consume"
+
+<local> @nospace($3) ::=
+<mutability>? %"local" <local-ref> %":" <typelang-type> <init>? <meta>* <nl>
+
+<init> ::= %"=" <signed-number>
+<global-init> ::= %"=" <global-init-value>
+<global-init-value> ::= <signed-number> | %STRING_LIT | %"true" | %"false" | %IDENTIFIER
+                      | <global> | <global-init-sequence>
+                      | <global-init-tuple> | <global-init-record>
+                      | <global-init-set> | <global-init-dictionary>
+                      | <global-init-phase-result> | <global-init-variant>
+                      | <global-init-type>
+<global-init-phase-result> @nospace($2) ::= %"$" %STRING_LIT
+<global-init-type> ::= %"type" %"(" <typelang-type> %")"
+<global-init-sequence> ::= %"[" <global-init-values>? %"]"
+<global-init-tuple> ::= %"(" <global-init-values>? %")"
+<global-init-record> ::= %"{" <global-init-fields>? %"}"
+<global-init-variant> ::= %"variant" %"{" <global-init-field> %"}"
+<global-init-set> ::= %"set" %"{" <global-init-values>? %"}"
+<global-init-dictionary> ::= %"dict" %"{" <global-init-pairs>? %"}"
+<global-init-values> ::= <global-init-value> (%"," <global-init-value>)*
+<global-init-fields> ::= <global-init-field> (%"," <global-init-field>)*
+<global-init-field> ::= <name> %"=" <global-init-value>
+<global-init-pairs> ::= <global-init-pair> (%"," <global-init-pair>)*
+<global-init-pair> ::= <global-init-value> %"=>" <global-init-value>
+
+<signed-number> @nospace($1) ::= %"-"? <number>
+
+<block> @nospace($2) @hardline($5) @indent($5) ::=
+%"block" <name> %":" <meta>* <nl> <instr>*
+
+<instr> ::= <dest>? <opcode> <modifier>* <operands>? <meta>* %NEWLINE+
+
+<opcode> @nospace ::= <opcode-name> (%"." <name>)*
+<opcode-name> ::= <name> | %"fail"
+
+<dest> ::= <dest-value> | <dest-local>
+
+<dest-value> @nospace($1) ::= <value> %":" <typelang-type> %"="
+<dest-local> ::= <local-ref> %"="
+
+<modifier> ::= <name>
+
+<operands> @nospace($1) ::= <operand> (%"," <operand>)*
+
+<operand> @nospace($1) ::= <ref>
+            | <spread-arg>
+            | %"out"
+            | <fresh-arg>
+            | <number>
+            | %"-" <number>
+            | %STRING_LIT
+            | <named-arg>
+            | <phi-arm>
+            | <switch-arm>
+            | <default-block>
+            | <typelang-type>
+            | <name>
+
+<spread-arg> ::= %"*" <value>
+<fresh-arg> ::= %"fresh" <value>
+
+<named-arg>     ::= <name> %"=" (<ref> | %"out")
+<phi-arm>       @nospace @space($3) ::= %"[" <name> %":" <ref> %"]"
+<switch-arm>    @nospace @space($4) ::= %"[" %"-"? <number> %":" <name> %"]"
+<default-block> @nospace($1) ::= %"default" %":" <name>
+
+<meta> ::= <loc> | <origin> | <annot>
+
+<loc> @nospace($1) @nospace($2) @nospace($3) @nospace($4) @nospace($5) ::=
+%"!" %"loc" %"(" <signed-int> (%"," <signed-int>)* %")"
+
+<origin> @nospace($1) @nospace($2) @nospace($3) @nospace($4) @nospace($6) @nospace($7) ::=
+%"!" %"origin" %"(" <origin-kind> %"," %STRING_LIT (%"," <signed-int>)* %")"
+
+<signed-int> @nospace($1) ::= %"-"? <int>
+
+<origin-kind> ::= %"source" | %"inlined" | %"expanded" | %"lowered"
+                | %"generated"
+
+<annot> @nospace($1) @nospace($2) @nospace($3) @nospace($5) ::=
+%"!" <ns-key> %"(" <annot-value> <provenance>? %")"
+
+<provenance> ::= %"from" <name>
+
+<ns-key> @nospace ::= <name> %"." <name>
+
+<annot-value> @nospace($1) ::= %"true" | %"false" | <int> | %"-" <int> | %STRING_LIT
+                | <typelang-type>
+                | <ref>
+
+<ref> ::= <value> | <local-ref> | <global>
+
+<value>     @nospace ::= %"%" <name>
+<local-ref> @nospace ::= %"$" <name>
+<global>    @nospace ::= %"@" <name>
+
+<dotted-name> @nospace ::= <name> ((%"." | %"-") (<name> | <int>))*
+
+<int>    ::= %INT_LIT
+<number> ::= %INT_LIT | %FLOAT_LIT
+
+<typelang-type> ::= <union-type>
+
+<name> ::= %IDENTIFIER
+         | %"module" | %"profile" | %"target" | %"meta" | %"type"
+         | %"layout" | %"size" | %"align" | %"stride" | %"bits"
+         | %"without" | %"indirect" | %"words" | %"tag" | %"niche"
+         | %"thin" | %"fat"
+         | %"sizeof" | %"alignof" | %"offsetof"
+         | %"global" | %"func" | %"local" | %"block"
+         | %"static" | %"extern" | %"default" | %"from"
+         | %"mutable" | %"immutable" | %"const"
+         | %"loc" | %"origin"
+         | %"source" | %"inlined" | %"expanded" | %"lowered" | %"generated"
+         | %"true" | %"false"
+         | %"set" | %"dict"
+         | %"in" | %"out" | %"inout" | %"consume"
+         | %"fresh"
+         | %"array" | %"bitint" | %"ubitint" | %"exclusive" | %"forall"
+         | %"i" | %"u"
+         | %"gcref" | %"indexable" | %"literal" | %"mutref" | %"nullable"
+         | %"own" | %"owning" | %"ptr" | %"ref" | %"reseatable" | %"t"
+         | %"temporary" | %"tmpref" | %"variant"

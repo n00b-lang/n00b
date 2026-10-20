@@ -1,0 +1,7 @@
+use "../../contracts/zlib.writ"
+
+binding {
+    hide "deflateInit_"
+    hide "inflateInit_"
+    name compress2 "compress"
+}

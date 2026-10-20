@@ -1,0 +1,2 @@
+error[E0514]: an embedded unit names one library and binds it without `module`: the host decides where the bound API lives
+  --> tests/embedded/e0514_module.writ:6:5

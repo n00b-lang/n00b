@@ -1,0 +1,1396 @@
+@lexer("csharp.lex")
+
+# C# 12 Grammar
+# Based on ECMA-334 (C# Language Specification) and the Roslyn parser
+#
+# This is a SYNTACTIC grammar only. Lexical details (how tokens are formed)
+# are handled by the lexer. Semicolons are explicit in C#.
+#
+# Lexer-provided token types:
+#   %IDENTIFIER           - identifiers (letter { letter | digit | _ })
+#   %INTEGER              - integer literals (decimal, hex 0x, binary 0b)
+#   %FLOAT                - floating-point and decimal literals
+#   %STRING               - regular string literals ("...")
+#   %CHAR                 - character literals ('...')
+#   %VERBATIM_STRING      - verbatim string literals (@"...")
+#   %INTERPOLATED_STRING  - interpolated string literals ($"..." or $@"...")
+#   %RAW_STRING           - raw string literals ("""...""")
+#
+# Keywords are written as %"keyword".
+# Operators and punctuation are written as %"op".
+
+# ============================================================================
+# Compilation unit (start symbol)
+# ============================================================================
+
+<compilation-unit> @hardline @blankline($3) ::= <extern-alias-directive>* <using-directive>* <global-attribute-section>* <namespace-member-declaration>*
+                     | <extern-alias-directive>* <using-directive>* <global-attribute-section>* <top-level-statement>+ <namespace-member-declaration>*
+
+# ============================================================================
+# Top-level statements (C# 9+)
+# ============================================================================
+
+<top-level-statement> ::= <statement>
+
+# ============================================================================
+# Extern alias directives
+# ============================================================================
+
+<extern-alias-directive> ::= %"extern" %"alias" %IDENTIFIER %";"
+
+# ============================================================================
+# Using directives
+# ============================================================================
+
+<using-directive> @nospace($2) ::= %"using" <name> %";"
+                    | %"using" <identifier-or-keyword> %"=" <type> %";"
+                    | %"using" <identifier-or-keyword> %"=" <name> %";"
+                    | %"using" %"static" <type> %";"
+                    | %"global" %"using" <name> %";"
+                    | %"global" %"using" <identifier-or-keyword> %"=" <type> %";"
+                    | %"global" %"using" <identifier-or-keyword> %"=" <name> %";"
+                    | %"global" %"using" %"static" <type> %";"
+                    | %"unsafe" %"using" <name> %";"
+                    | %"unsafe" %"using" <identifier-or-keyword> %"=" <type> %";"
+
+# ============================================================================
+# Namespace declarations
+# ============================================================================
+
+<namespace-declaration> ::= %"namespace" <qualified-identifier> <namespace-body> %";"?
+
+<file-scoped-namespace> @nospace($2) ::= %"namespace" <qualified-identifier> %";"
+
+<namespace-body> ::= %"{" <extern-alias-directive>* <using-directive>* <namespace-member-declaration>* %"}"
+
+<namespace-member-declaration> ::= <namespace-declaration>
+                                 | <file-scoped-namespace>
+                                 | <type-declaration>
+
+<qualified-identifier> @nospace ::= <identifier-or-keyword> (%"." <identifier-or-keyword>)*
+
+# ============================================================================
+# Identifiers (contextual keywords can appear as identifiers)
+# ============================================================================
+
+<identifier-or-keyword> ::= %IDENTIFIER
+                           | %"var"
+                           | %"dynamic"
+                           | %"global"
+                           | %"partial"
+                           | %"when"
+                           | %"and"
+                           | %"or"
+                           | %"not"
+                           | %"with"
+                           | %"init"
+                           | %"file"
+                           | %"scoped"
+                           | %"where"
+                           | %"nameof"
+                           | %"managed"
+                           | %"unmanaged"
+                           | %"nint"
+                           | %"nuint"
+                           | %"record"
+                           | %"required"
+                           | %"yield"
+                           | %"from"
+                           | %"select"
+                           | %"let"
+                           | %"orderby"
+                           | %"ascending"
+                           | %"descending"
+                           | %"join"
+                           | %"into"
+                           | %"on"
+                           | %"equals"
+                           | %"group"
+                           | %"by"
+                           | %"get"
+                           | %"set"
+                           | %"add"
+                           | %"remove"
+                           | %"async"
+                           | %"await"
+                           | %"notnull"
+                           | %"args"
+
+# ============================================================================
+# Type declarations
+# ============================================================================
+
+<type-declaration> ::= <class-declaration>
+                     | <struct-declaration>
+                     | <interface-declaration>
+                     | <enum-declaration>
+                     | <delegate-declaration>
+                     | <record-declaration>
+
+# ============================================================================
+# Attributes
+# ============================================================================
+
+<global-attribute-section> ::= %"[" <global-attribute-target> %":" <attribute-list> %","? %"]"
+
+<global-attribute-target> ::= %"assembly"
+                             | %"module"
+
+<attribute-section> ::= %"[" (<attribute-target> %":")? <attribute-list> %","? %"]"
+
+<attribute-target> ::= %"field"
+                     | %"event"
+                     | %"method"
+                     | %"param"
+                     | %"property"
+                     | %"return"
+                     | %"type"
+                     | %"typevar"
+                     | %"assembly"
+                     | %"module"
+
+<attributes> ::= <attribute-section>+
+
+<attribute-list> ::= <attribute> (%"," <attribute>)*
+
+<attribute> ::= <type-name> <attribute-arguments>?
+
+<attribute-arguments> ::= %"(" <attribute-argument-list>? %")"
+
+<attribute-argument-list> ::= <attribute-argument> (%"," <attribute-argument>)*
+
+<attribute-argument> ::= <identifier-or-keyword> %"=" <expression>
+                       | <identifier-or-keyword> %":" <expression>
+                       | <expression>
+
+# ============================================================================
+# Modifiers
+# ============================================================================
+
+<modifier> ::= %"new"
+             | %"public"
+             | %"protected"
+             | %"internal"
+             | %"private"
+             | %"static"
+             | %"virtual"
+             | %"sealed"
+             | %"override"
+             | %"abstract"
+             | %"extern"
+             | %"unsafe"
+             | %"volatile"
+             | %"readonly"
+             | %"async"
+             | %"partial"
+             | %"ref"
+             | %"required"
+             | %"file"
+
+<modifier-list> ::= <modifier>+
+
+# ============================================================================
+# Class declarations
+# ============================================================================
+
+<class-declaration> ::= <attributes>? <modifier-list>? %"class" <identifier-or-keyword> <type-parameter-list>? <primary-constructor-parameter-list>? <class-base>? <type-parameter-constraints-clauses>? <class-body> %";"?
+
+<class-base> ::= %":" <class-base-types>
+
+<class-base-types> ::= <class-base-type> (%"," <class-base-type>)*
+
+<class-base-type> ::= <type>
+
+<class-body> @hardline($1) @indent($1) @hardline($2) ::= %"{" <class-member-declaration>* %"}"
+
+<class-member-declaration> ::= <constant-declaration>
+                             | <field-declaration>
+                             | <method-declaration>
+                             | <property-declaration>
+                             | <event-declaration>
+                             | <indexer-declaration>
+                             | <operator-declaration>
+                             | <conversion-operator-declaration>
+                             | <constructor-declaration>
+                             | <destructor-declaration>
+                             | <type-declaration>
+
+# ============================================================================
+# Struct declarations
+# ============================================================================
+
+<struct-declaration> ::= <attributes>? <modifier-list>? %"ref"? %"struct" <identifier-or-keyword> <type-parameter-list>? <primary-constructor-parameter-list>? <struct-interfaces>? <type-parameter-constraints-clauses>? <struct-body> %";"?
+
+<struct-interfaces> ::= %":" <interface-type-list>
+
+<struct-body> ::= %"{" <struct-member-declaration>* %"}"
+
+<struct-member-declaration> ::= <constant-declaration>
+                              | <field-declaration>
+                              | <method-declaration>
+                              | <property-declaration>
+                              | <event-declaration>
+                              | <indexer-declaration>
+                              | <operator-declaration>
+                              | <conversion-operator-declaration>
+                              | <constructor-declaration>
+                              | <type-declaration>
+                              | <fixed-size-buffer-declaration>
+
+# ============================================================================
+# Interface declarations
+# ============================================================================
+
+<interface-declaration> ::= <attributes>? <modifier-list>? %"interface" <identifier-or-keyword> <type-parameter-list>? <interface-base>? <type-parameter-constraints-clauses>? <interface-body> %";"?
+
+<interface-base> ::= %":" <interface-type-list>
+
+<interface-type-list> ::= <type> (%"," <type>)*
+
+<interface-body> ::= %"{" <interface-member-declaration>* %"}"
+
+<interface-member-declaration> ::= <method-declaration>
+                                 | <property-declaration>
+                                 | <event-declaration>
+                                 | <indexer-declaration>
+                                 | <operator-declaration>
+                                 | <conversion-operator-declaration>
+                                 | <type-declaration>
+                                 | <constant-declaration>
+                                 | <field-declaration>
+
+# ============================================================================
+# Enum declarations
+# ============================================================================
+
+<enum-declaration> ::= <attributes>? <modifier-list>? %"enum" <identifier-or-keyword> <enum-base>? <enum-body> %";"?
+
+<enum-base> ::= %":" <integral-type>
+
+<integral-type> ::= %"sbyte" | %"byte" | %"short" | %"ushort"
+                  | %"int" | %"uint" | %"long" | %"ulong"
+                  | %"nint" | %"nuint"
+
+<enum-body> ::= %"{" <enum-member-declarations>? %","? %"}"
+
+<enum-member-declarations> ::= <enum-member-declaration> (%"," <enum-member-declaration>)*
+
+<enum-member-declaration> ::= <attributes>? <identifier-or-keyword> (%"=" <expression>)?
+
+# ============================================================================
+# Delegate declarations
+# ============================================================================
+
+<delegate-declaration> ::= <attributes>? <modifier-list>? %"delegate" <return-type> <identifier-or-keyword> <type-parameter-list>? %"(" <formal-parameter-list>? %")" <type-parameter-constraints-clauses>? %";"
+
+# ============================================================================
+# Record declarations (C# 9+, record struct C# 10+)
+# ============================================================================
+
+<record-declaration> ::= <attributes>? <modifier-list>? %"record" %"class"? <identifier-or-keyword> <type-parameter-list>? <primary-constructor-parameter-list>? <record-base>? <type-parameter-constraints-clauses>? <record-body>
+                       | <attributes>? <modifier-list>? %"record" %"struct" <identifier-or-keyword> <type-parameter-list>? <primary-constructor-parameter-list>? <struct-interfaces>? <type-parameter-constraints-clauses>? <record-body>
+
+<record-base> ::= %":" <class-base-types>
+
+<record-body> ::= <class-body> %";"?
+                | %";"
+
+# ============================================================================
+# Primary constructors (C# 12)
+# ============================================================================
+
+<primary-constructor-parameter-list> ::= %"(" <formal-parameter-list>? %")"
+
+# ============================================================================
+# Generics - Type parameters
+# ============================================================================
+
+<type-parameter-list> ::= %"<" <type-parameter> (%"," <type-parameter>)* %">"
+
+<type-parameter> ::= <attributes>? <type-parameter-variance>? <identifier-or-keyword>
+
+<type-parameter-variance> ::= %"in" | %"out"
+
+# ============================================================================
+# Generics - Type parameter constraints
+# ============================================================================
+
+<type-parameter-constraints-clauses> ::= <type-parameter-constraints-clause>+
+
+<type-parameter-constraints-clause> ::= %"where" <identifier-or-keyword> %":" <type-parameter-constraints>
+
+<type-parameter-constraints> ::= <type-parameter-constraint> (%"," <type-parameter-constraint>)*
+
+<type-parameter-constraint> ::= <primary-constraint>
+                              | <secondary-constraint>
+                              | <constructor-constraint>
+
+<primary-constraint> ::= %"class" %"?"?
+                       | %"struct"
+                       | %"notnull"
+                       | %"unmanaged"
+                       | %"default"
+
+<secondary-constraint> ::= <type>
+
+<constructor-constraint> ::= %"new" %"(" %")"
+
+# ============================================================================
+# Members - Constants
+# ============================================================================
+
+<constant-declaration> ::= <attributes>? <modifier-list>? %"const" <type> <constant-declarators> %";"
+
+<constant-declarators> ::= <constant-declarator> (%"," <constant-declarator>)*
+
+<constant-declarator> ::= <identifier-or-keyword> %"=" <expression>
+
+# ============================================================================
+# Members - Fields
+# ============================================================================
+
+<field-declaration> @nospace($4) ::= <attributes>? <modifier-list>? <type> <variable-declarators> %";"
+
+<variable-declarators> ::= <variable-declarator> (%"," <variable-declarator>)*
+
+<variable-declarator> ::= <identifier-or-keyword> (%"=" <variable-initializer>)?
+
+<variable-initializer> ::= <expression>
+                         | <array-initializer>
+
+# ============================================================================
+# Members - Methods
+# ============================================================================
+
+<method-declaration> @nospace($4) @nospace($5) @nospace($6) @nospace($7) ::= <attributes>? <modifier-list>? <return-type> <member-name> <type-parameter-list>? %"(" <formal-parameter-list>? %")" <type-parameter-constraints-clauses>? <method-body>
+
+<member-name> ::= <identifier-or-keyword>
+                | <type> %"." <identifier-or-keyword>
+
+<return-type> ::= <type>
+                | %"void"
+                | %"ref" %"readonly"? <type>
+
+<method-body> ::= <block>
+                | %"=>" <expression> %";"
+                | %";"
+
+# ============================================================================
+# Members - Properties
+# ============================================================================
+
+<property-declaration> ::= <attributes>? <modifier-list>? <type> <member-name> <property-body>
+
+<property-body> ::= %"{" <accessor-declarations> %"}" (%"=" <expression> %";")?
+                  | %"=>" <expression> %";"
+
+<accessor-declarations> ::= <accessor-declaration>+
+
+<accessor-declaration> ::= <attributes>? <modifier-list>? <accessor-keyword> <accessor-body>
+
+<accessor-keyword> ::= %"get" | %"set" | %"init"
+
+<accessor-body> ::= <block>
+                  | %"=>" <expression> %";"
+                  | %";"
+
+# ============================================================================
+# Members - Events
+# ============================================================================
+
+<event-declaration> ::= <attributes>? <modifier-list>? %"event" <type> <variable-declarators> %";"
+                      | <attributes>? <modifier-list>? %"event" <type> <member-name> %"{" <event-accessor-declarations> %"}"
+
+<event-accessor-declarations> ::= <event-accessor-declaration>+
+
+<event-accessor-declaration> ::= <attributes>? (%"add" | %"remove") <block>
+
+# ============================================================================
+# Members - Indexers
+# ============================================================================
+
+<indexer-declaration> ::= <attributes>? <modifier-list>? <type> (<type> %".")? %"this" %"[" <formal-parameter-list> %"]" <property-body>
+
+# ============================================================================
+# Members - Operators
+# ============================================================================
+
+<operator-declaration> ::= <attributes>? <modifier-list>? <type> %"operator" <overloadable-operator> %"(" <formal-parameter-list> %")" <method-body>
+                         | <attributes>? <modifier-list>? <type> %"operator" %"checked" <overloadable-operator> %"(" <formal-parameter-list> %")" <method-body>
+
+<overloadable-operator> ::= %"+" | %"-" | %"!" | %"~"
+                          | %"++" | %"--"
+                          | %"true" | %"false"
+                          | %"*" | %"/" | %"%" | %"&" | %"|" | %"^"
+                          | %"<<" | %">>"
+                          | %">>>"
+                          | %"==" | %"!=" | %"<" | %">" | %"<=" | %">="
+
+<conversion-operator-declaration> ::= <attributes>? <modifier-list>? (%"implicit" | %"explicit") %"operator" %"checked"? <type> %"(" <formal-parameter-list> %")" <method-body>
+
+# ============================================================================
+# Members - Constructors
+# ============================================================================
+
+<constructor-declaration> ::= <attributes>? <modifier-list>? <identifier-or-keyword> %"(" <formal-parameter-list>? %")" <constructor-initializer>? <method-body>
+
+<constructor-initializer> ::= %":" %"base" %"(" <argument-list>? %")"
+                            | %":" %"this" %"(" <argument-list>? %")"
+
+# ============================================================================
+# Members - Destructors (finalizers)
+# ============================================================================
+
+<destructor-declaration> ::= <attributes>? %"extern"? %"~" <identifier-or-keyword> %"(" %")" <method-body>
+
+# ============================================================================
+# Members - Fixed-size buffers (unsafe)
+# ============================================================================
+
+<fixed-size-buffer-declaration> ::= <attributes>? <modifier-list>? %"fixed" <type> <fixed-size-buffer-declarator>+ %";"
+
+<fixed-size-buffer-declarator> ::= <identifier-or-keyword> %"[" <expression> %"]"
+
+# ============================================================================
+# Formal parameters
+# ============================================================================
+
+<formal-parameter-list> @nospace($1) ::= <formal-parameter> (%"," <formal-parameter>)*
+
+<formal-parameter> ::= <fixed-parameter>
+                     | <parameter-array>
+
+<fixed-parameter> ::= <attributes>? <parameter-modifier>? <type> <identifier-or-keyword> <equals-value-clause>?
+
+<parameter-modifier> ::= %"ref" %"readonly"?
+                       | %"out"
+                       | %"in"
+                       | %"params"
+                       | %"this"
+                       | %"scoped" %"ref"?
+                       | %"scoped" %"ref" %"readonly"
+
+<parameter-array> ::= <attributes>? %"params" <type> <identifier-or-keyword>
+
+<equals-value-clause> ::= %"=" <expression>
+
+# ============================================================================
+# Types
+# ============================================================================
+
+<type> ::= <non-array-type> <rank-specifier>* %"?"?
+          | <non-array-type> %"?"?
+
+<non-array-type> ::= <value-type>
+                   | <reference-type>
+                   | <type-parameter-identifier>
+                   | <pointer-type>
+                   | <tuple-type>
+                   | <function-pointer-type>
+
+<value-type> ::= <simple-type>
+               | %"nint"
+               | %"nuint"
+
+<simple-type> ::= <numeric-type>
+                | %"bool"
+
+<numeric-type> ::= <integral-type>
+                 | <floating-point-type>
+                 | %"decimal"
+
+<floating-point-type> ::= %"float" | %"double"
+
+<reference-type> ::= <class-type>
+                   | %"object"
+                   | %"string"
+                   | %"dynamic"
+
+<class-type> ::= <type-name>
+               | <type-name> %"?"
+
+<type-name> ::= <namespace-or-type-name>
+
+<namespace-or-type-name> @nospace ::= <identifier-or-keyword> <type-argument-list>? (%"." <identifier-or-keyword> <type-argument-list>?)*
+
+<type-parameter-identifier> ::= <identifier-or-keyword>
+
+<pointer-type> ::= <type> %"*"
+
+# ============================================================================
+# Tuple types (C# 7+)
+# ============================================================================
+
+<tuple-type> ::= %"(" <tuple-element> %"," <tuple-element> (%"," <tuple-element>)* %")"
+
+<tuple-element> ::= <type> <identifier-or-keyword>?
+
+# ============================================================================
+# Function pointer types (C# 9+)
+# ============================================================================
+
+<function-pointer-type> ::= %"delegate" %"*" <calling-convention>? %"<" <function-pointer-parameter-list> %">"
+
+<calling-convention> ::= %"managed"
+                       | %"unmanaged"
+                       | %"unmanaged" %"[" <calling-convention-specifier-list> %"]"
+
+<calling-convention-specifier-list> ::= <identifier-or-keyword> (%"," <identifier-or-keyword>)*
+
+<function-pointer-parameter-list> ::= <function-pointer-parameter> (%"," <function-pointer-parameter>)*
+
+<function-pointer-parameter> ::= (%"ref" | %"out" | %"in" | %"ref" %"readonly")? <type>
+
+# ============================================================================
+# Type argument lists (generics usage)
+# ============================================================================
+
+<type-argument-list> ::= %"<" <type> (%"," <type>)* %">"
+
+# ============================================================================
+# Array types
+# ============================================================================
+
+<rank-specifier> ::= %"[" %","* %"]"
+
+<array-initializer> ::= %"{" <variable-initializer-list>? %","? %"}"
+
+<variable-initializer-list> ::= <variable-initializer> (%"," <variable-initializer>)*
+
+# ============================================================================
+# Names (for using directives and namespaces)
+# ============================================================================
+
+<name> @nospace ::= <identifier-or-keyword> (%"." <identifier-or-keyword>)*
+          | <identifier-or-keyword> %"::" <identifier-or-keyword> (%"." <identifier-or-keyword>)*
+
+# ============================================================================
+# Statements
+# ============================================================================
+
+<statement> ::= <labeled-statement>
+              | <declaration-statement>
+              | <embedded-statement>
+
+<labeled-statement> ::= <identifier-or-keyword> %":" <statement>
+                      | %"case" <pattern> (<when-clause>)? %":" <statement>
+                      | %"case" <expression> %":" <statement>
+                      | %"default" %":" <statement>
+
+<declaration-statement> ::= <local-variable-declaration> %";"
+                          | <local-constant-declaration> %";"
+                          | <local-function-declaration>
+
+<embedded-statement> ::= <block>
+                       | <empty-statement>
+                       | <expression-statement>
+                       | <if-statement>
+                       | <switch-statement>
+                       | <while-statement>
+                       | <do-statement>
+                       | <for-statement>
+                       | <foreach-statement>
+                       | <break-statement>
+                       | <continue-statement>
+                       | <goto-statement>
+                       | <return-statement>
+                       | <throw-statement>
+                       | <try-statement>
+                       | <checked-statement>
+                       | <unchecked-statement>
+                       | <lock-statement>
+                       | <using-statement>
+                       | <yield-statement>
+                       | <unsafe-statement>
+                       | <fixed-statement>
+
+# ============================================================================
+# Block
+# ============================================================================
+
+<block> @hardline($1) @indent($1) @hardline($2) ::= %"{" <statement>* %"}"
+
+# ============================================================================
+# Empty statement
+# ============================================================================
+
+<empty-statement> ::= %";"
+
+# ============================================================================
+# Local variable declarations
+# ============================================================================
+
+<local-variable-declaration> ::= <local-variable-type> <local-variable-declarators>
+                               | %"using" <local-variable-type> <local-variable-declarators>
+                               | %"ref" %"readonly"? <local-variable-type> <local-variable-declarator>
+                               | %"scoped" <local-variable-type> <local-variable-declarators>
+                               | <deconstruction-declaration>
+
+<local-variable-type> ::= <type>
+                        | %"var"
+
+<local-variable-declarators> ::= <local-variable-declarator> (%"," <local-variable-declarator>)*
+
+<local-variable-declarator> ::= <identifier-or-keyword> (%"=" <local-variable-initializer>)?
+
+<local-variable-initializer> ::= <expression>
+                               | <array-initializer>
+
+<deconstruction-declaration> ::= %"var" <deconstruction-tuple> %"=" <expression>
+                               | <deconstruction-lhs> %"=" <expression>
+
+<deconstruction-tuple> ::= %"(" <deconstruction-element> (%"," <deconstruction-element>)* %")"
+
+<deconstruction-element> ::= <identifier-or-keyword>
+                           | <deconstruction-tuple>
+
+<deconstruction-lhs> ::= %"(" <deconstruction-lhs-element> (%"," <deconstruction-lhs-element>)* %")"
+
+<deconstruction-lhs-element> ::= <type> <identifier-or-keyword>
+                               | <deconstruction-lhs>
+
+# ============================================================================
+# Local constant declarations
+# ============================================================================
+
+<local-constant-declaration> ::= %"const" <type> <constant-declarators>
+
+# ============================================================================
+# Local function declarations
+# ============================================================================
+
+<local-function-declaration> ::= <local-function-modifier>* <return-type> <identifier-or-keyword> <type-parameter-list>? %"(" <formal-parameter-list>? %")" <type-parameter-constraints-clauses>? <method-body>
+
+<local-function-modifier> ::= %"async"
+                            | %"unsafe"
+                            | %"static"
+                            | %"extern"
+
+# ============================================================================
+# Expression statement
+# ============================================================================
+
+<expression-statement> @nospace($1) ::= <statement-expression> %";"
+
+<statement-expression> ::= <invocation-expression>
+                         | <object-creation-expression>
+                         | <assignment-expression>
+                         | <post-increment-expression>
+                         | <post-decrement-expression>
+                         | <pre-increment-expression>
+                         | <pre-decrement-expression>
+                         | <await-expression>
+
+# ============================================================================
+# If statement
+# ============================================================================
+
+<if-statement> ::= %"if" %"(" <expression> %")" <embedded-statement> (%"else" <embedded-statement>)?
+
+# ============================================================================
+# Switch statement
+# ============================================================================
+
+<switch-statement> ::= %"switch" %"(" <expression> %")" %"{" <switch-section>* %"}"
+
+<switch-section> ::= <switch-label>+ <statement>+
+
+<switch-label> ::= %"case" <pattern> <when-clause>? %":"
+                 | %"case" <expression> %":"
+                 | %"default" %":"
+
+<when-clause> ::= %"when" <expression>
+
+# ============================================================================
+# While statement
+# ============================================================================
+
+<while-statement> ::= %"while" %"(" <expression> %")" <embedded-statement>
+
+# ============================================================================
+# Do statement
+# ============================================================================
+
+<do-statement> ::= %"do" <embedded-statement> %"while" %"(" <expression> %")" %";"
+
+# ============================================================================
+# For statement
+# ============================================================================
+
+<for-statement> ::= %"for" %"(" <for-initializer>? %";" <expression>? %";" <for-iterator>? %")" <embedded-statement>
+
+<for-initializer> ::= <local-variable-declaration>
+                    | <statement-expression-list>
+
+<for-iterator> ::= <statement-expression-list>
+
+<statement-expression-list> ::= <statement-expression> (%"," <statement-expression>)*
+
+# ============================================================================
+# Foreach statement
+# ============================================================================
+
+<foreach-statement> ::= %"foreach" %"(" <local-variable-type> <identifier-or-keyword> %"in" <expression> %")" <embedded-statement>
+                      | %"await" %"foreach" %"(" <local-variable-type> <identifier-or-keyword> %"in" <expression> %")" <embedded-statement>
+                      | %"foreach" %"(" %"var" <deconstruction-tuple> %"in" <expression> %")" <embedded-statement>
+
+# ============================================================================
+# Jump statements
+# ============================================================================
+
+<break-statement> ::= %"break" %";"
+
+<continue-statement> ::= %"continue" %";"
+
+<goto-statement> ::= %"goto" <identifier-or-keyword> %";"
+                   | %"goto" %"case" <expression> %";"
+                   | %"goto" %"default" %";"
+
+<return-statement> @nospace($2) ::= %"return" <expression>? %";"
+                     | %"return" %"ref" <expression> %";"
+
+<throw-statement> ::= %"throw" <expression>? %";"
+
+# ============================================================================
+# Try statement
+# ============================================================================
+
+<try-statement> ::= %"try" <block> <catch-clause>+ <finally-clause>?
+                  | %"try" <block> <finally-clause>
+
+<catch-clause> ::= %"catch" <catch-declaration>? <catch-filter>? <block>
+
+<catch-declaration> ::= %"(" <type> <identifier-or-keyword>? %")"
+
+<catch-filter> ::= %"when" %"(" <expression> %")"
+
+<finally-clause> ::= %"finally" <block>
+
+# ============================================================================
+# Checked / unchecked statements
+# ============================================================================
+
+<checked-statement> ::= %"checked" <block>
+
+<unchecked-statement> ::= %"unchecked" <block>
+
+# ============================================================================
+# Lock statement
+# ============================================================================
+
+<lock-statement> ::= %"lock" %"(" <expression> %")" <embedded-statement>
+
+# ============================================================================
+# Using statement
+# ============================================================================
+
+<using-statement> ::= %"using" %"(" <resource-acquisition> %")" <embedded-statement>
+                    | %"await" %"using" %"(" <resource-acquisition> %")" <embedded-statement>
+
+<resource-acquisition> ::= <local-variable-declaration>
+                         | <expression>
+
+# ============================================================================
+# Yield statements
+# ============================================================================
+
+<yield-statement> ::= %"yield" %"return" <expression> %";"
+                    | %"yield" %"break" %";"
+
+# ============================================================================
+# Unsafe statement
+# ============================================================================
+
+<unsafe-statement> ::= %"unsafe" <block>
+
+# ============================================================================
+# Fixed statement
+# ============================================================================
+
+<fixed-statement> ::= %"fixed" %"(" <type> <fixed-pointer-declarators> %")" <embedded-statement>
+
+<fixed-pointer-declarators> ::= <fixed-pointer-declarator> (%"," <fixed-pointer-declarator>)*
+
+<fixed-pointer-declarator> ::= <identifier-or-keyword> %"=" <expression>
+
+# ============================================================================
+# Expressions
+# ============================================================================
+
+# Expression precedence chain (lowest to highest):
+#   assignment, conditional, null-coalescing, conditional-or,
+#   conditional-and, or, xor, and, equality, relational, shift,
+#   additive, multiplicative, range, unary, primary
+
+<expression> ::= <non-assignment-expression>
+               | <assignment-expression>
+
+<non-assignment-expression> ::= <conditional-expression>
+                              | <lambda-expression>
+                              | <query-expression>
+                              | <switch-expression>
+                              | <with-expression>
+                              | <throw-expression>
+
+# ============================================================================
+# Assignment expressions
+# ============================================================================
+
+<assignment-expression> ::= <unary-expression> <assignment-operator> <expression>
+
+<assignment-operator> ::= %"="
+                        | %"+="
+                        | %"-="
+                        | %"*="
+                        | %"/="
+                        | %"%="
+                        | %"&="
+                        | %"|="
+                        | %"^="
+                        | %"<<="
+                        | %">>="
+                        | %">>>="
+                        | %"??="
+
+# ============================================================================
+# Conditional (ternary) expression
+# ============================================================================
+
+<conditional-expression> ::= <null-coalescing-expression> (%"?" <expression> %":" <expression>)?
+
+# ============================================================================
+# Null-coalescing expression
+# ============================================================================
+
+<null-coalescing-expression> ::= <conditional-or-expression> (%"??" <null-coalescing-expression>)?
+
+# ============================================================================
+# Logical / bitwise expressions
+# ============================================================================
+
+<conditional-or-expression> ::= <conditional-or-expression> %"||" <conditional-and-expression>
+                              | <conditional-and-expression>
+
+<conditional-and-expression> ::= <conditional-and-expression> %"&&" <inclusive-or-expression>
+                               | <inclusive-or-expression>
+
+<inclusive-or-expression> ::= <inclusive-or-expression> %"|" <exclusive-or-expression>
+                            | <exclusive-or-expression>
+
+<exclusive-or-expression> ::= <exclusive-or-expression> %"^" <and-expression>
+                            | <and-expression>
+
+<and-expression> ::= <and-expression> %"&" <equality-expression>
+                   | <equality-expression>
+
+# ============================================================================
+# Equality expressions
+# ============================================================================
+
+<equality-expression> ::= <equality-expression> %"==" <relational-expression>
+                        | <equality-expression> %"!=" <relational-expression>
+                        | <relational-expression>
+
+# ============================================================================
+# Relational expressions
+# ============================================================================
+
+<relational-expression> ::= <relational-expression> %"<" <shift-expression>
+                          | <relational-expression> %">" <shift-expression>
+                          | <relational-expression> %"<=" <shift-expression>
+                          | <relational-expression> %">=" <shift-expression>
+                          | <relational-expression> %"is" <type>
+                          | <relational-expression> %"is" <pattern>
+                          | <relational-expression> %"as" <type>
+                          | <shift-expression>
+
+# ============================================================================
+# Shift expressions
+# ============================================================================
+
+<shift-expression> ::= <shift-expression> %"<<" <additive-expression>
+                     | <shift-expression> %">>" <additive-expression>
+                     | <shift-expression> %">>>" <additive-expression>
+                     | <additive-expression>
+
+# ============================================================================
+# Additive expressions
+# ============================================================================
+
+<additive-expression> ::= <additive-expression> %"+" <multiplicative-expression>
+                        | <additive-expression> %"-" <multiplicative-expression>
+                        | <multiplicative-expression>
+
+# ============================================================================
+# Multiplicative expressions
+# ============================================================================
+
+<multiplicative-expression> ::= <multiplicative-expression> %"*" <range-expression>
+                              | <multiplicative-expression> %"/" <range-expression>
+                              | <multiplicative-expression> %"%" <range-expression>
+                              | <range-expression>
+
+# ============================================================================
+# Range expression (C# 8+)
+# ============================================================================
+
+<range-expression> ::= <unary-expression>? %".." <unary-expression>?
+                     | <unary-expression>
+
+# ============================================================================
+# Unary expressions
+# ============================================================================
+
+<unary-expression> ::= <primary-expression>
+                     | %"+" <unary-expression>
+                     | %"-" <unary-expression>
+                     | %"!" <unary-expression>
+                     | %"~" <unary-expression>
+                     | <pre-increment-expression>
+                     | <pre-decrement-expression>
+                     | <cast-expression>
+                     | <await-expression>
+                     | <pointer-indirection-expression>
+                     | <addressof-expression>
+                     | <index-expression>
+
+<pre-increment-expression> ::= %"++" <unary-expression>
+
+<pre-decrement-expression> ::= %"--" <unary-expression>
+
+<cast-expression> ::= %"(" <type> %")" <unary-expression>
+
+<await-expression> ::= %"await" <unary-expression>
+
+<pointer-indirection-expression> ::= %"*" <unary-expression>
+
+<addressof-expression> ::= %"&" <unary-expression>
+
+<index-expression> ::= %"^" <unary-expression>
+
+# ============================================================================
+# Primary expressions
+# ============================================================================
+
+<primary-expression> @nospace ::= <primary-expression-start> <primary-expression-suffix>*
+
+<primary-expression-start> ::= <literal>
+                             | <identifier-or-keyword> <type-argument-list>?
+                             | <parenthesized-expression>
+                             | <tuple-expression>
+                             | <predefined-type>
+                             | <this-access>
+                             | <base-access>
+                             | <object-creation-expression>
+                             | <typeof-expression>
+                             | <sizeof-expression>
+                             | <nameof-expression>
+                             | <checked-expression>
+                             | <unchecked-expression>
+                             | <default-value-expression>
+                             | <stackalloc-expression>
+                             | <anonymous-method-expression>
+                             | <collection-expression>
+
+<primary-expression-suffix> ::= <member-access-suffix>
+                              | <invocation-suffix>
+                              | <element-access-suffix>
+                              | <null-conditional-member-access>
+                              | <null-conditional-element-access>
+                              | <post-increment-suffix>
+                              | <post-decrement-suffix>
+                              | <pointer-member-access-suffix>
+                              | %"!"
+
+# ============================================================================
+# Literals
+# ============================================================================
+
+<literal> ::= %INTEGER
+            | %FLOAT
+            | %CHAR
+            | %STRING
+            | %VERBATIM_STRING
+            | %INTERPOLATED_STRING
+            | %RAW_STRING
+            | %"true"
+            | %"false"
+            | %"null"
+
+# ============================================================================
+# Parenthesized expression
+# ============================================================================
+
+<parenthesized-expression> ::= %"(" <expression> %")"
+
+# ============================================================================
+# Tuple expression (C# 7+)
+# ============================================================================
+
+<tuple-expression> ::= %"(" <tuple-argument> %"," <tuple-argument> (%"," <tuple-argument>)* %")"
+
+<tuple-argument> ::= (<identifier-or-keyword> %":")? <expression>
+
+# ============================================================================
+# Predefined types as expressions (e.g. int.MaxValue)
+# ============================================================================
+
+<predefined-type> ::= %"bool" | %"byte" | %"sbyte" | %"short" | %"ushort"
+                    | %"int" | %"uint" | %"long" | %"ulong"
+                    | %"float" | %"double" | %"decimal"
+                    | %"char" | %"string" | %"object"
+                    | %"nint" | %"nuint"
+
+# ============================================================================
+# this / base access
+# ============================================================================
+
+<this-access> ::= %"this"
+
+<base-access> ::= %"base" %"." <identifier-or-keyword> <type-argument-list>?
+                | %"base" %"[" <argument-list> %"]"
+
+# ============================================================================
+# Object / collection / array creation
+# ============================================================================
+
+<object-creation-expression> ::= %"new" <type> %"(" <argument-list>? %")" <object-or-collection-initializer>?
+                               | %"new" <type> <object-or-collection-initializer>
+                               | %"new" <type> %"[" <expression-list> %"]" <rank-specifier>* <array-initializer>?
+                               | %"new" <type> <rank-specifier>+ <array-initializer>
+                               | %"new" <rank-specifier> <array-initializer>
+                               | %"new" %"(" <argument-list>? %")" <object-or-collection-initializer>?
+                               | %"new" <object-or-collection-initializer>
+
+<expression-list> ::= <expression> (%"," <expression>)*
+
+<object-or-collection-initializer> ::= <object-initializer>
+                                     | <collection-initializer>
+
+<object-initializer> ::= %"{" <member-initializer-list>? %","? %"}"
+
+<member-initializer-list> ::= <member-initializer> (%"," <member-initializer>)*
+
+<member-initializer> ::= <initializer-target> %"=" <initializer-value>
+
+<initializer-target> ::= <identifier-or-keyword>
+                       | %"[" <argument-list> %"]"
+
+<initializer-value> ::= <expression>
+                      | <object-or-collection-initializer>
+
+<collection-initializer> ::= %"{" <element-initializer> (%"," <element-initializer>)* %","? %"}"
+
+<element-initializer> ::= <expression>
+                        | %"{" <expression-list> %"}"
+
+# ============================================================================
+# Collection expressions (C# 12)
+# ============================================================================
+
+<collection-expression> ::= %"[" <collection-element-list>? %"]"
+
+<collection-element-list> ::= <collection-element> (%"," <collection-element>)*
+
+<collection-element> ::= <expression>
+                       | %".." <expression>
+
+# ============================================================================
+# typeof, sizeof, nameof, checked, unchecked, default
+# ============================================================================
+
+<typeof-expression> ::= %"typeof" %"(" <type> %")"
+                      | %"typeof" %"(" %"void" %")"
+
+<sizeof-expression> ::= %"sizeof" %"(" <type> %")"
+
+<nameof-expression> ::= %"nameof" %"(" <named-entity> %")"
+
+<named-entity> ::= <identifier-or-keyword>
+                 | <named-entity> %"." <identifier-or-keyword>
+                 | <predefined-type>
+                 | <named-entity> %"." <identifier-or-keyword> <type-argument-list>
+
+<checked-expression> ::= %"checked" %"(" <expression> %")"
+
+<unchecked-expression> ::= %"unchecked" %"(" <expression> %")"
+
+<default-value-expression> ::= %"default" %"(" <type> %")"
+                             | %"default"
+
+# ============================================================================
+# stackalloc
+# ============================================================================
+
+<stackalloc-expression> ::= %"stackalloc" <type> %"[" <expression> %"]"
+                           | %"stackalloc" <type> %"[" %"]" <array-initializer>
+                           | %"stackalloc" %"[" %"]" <array-initializer>
+
+# ============================================================================
+# Anonymous methods
+# ============================================================================
+
+<anonymous-method-expression> ::= %"static"? %"delegate" %"(" <formal-parameter-list>? %")"? <block>
+
+# ============================================================================
+# Member access suffix (dot access)
+# ============================================================================
+
+<member-access-suffix> @nospace ::= %"." <identifier-or-keyword> <type-argument-list>?
+
+# ============================================================================
+# Invocation suffix
+# ============================================================================
+
+<invocation-suffix> @nospace ::= %"(" <argument-list>? %")"
+
+<invocation-expression> @nospace($1) ::= <primary-expression> <invocation-suffix>
+
+# ============================================================================
+# Element access suffix
+# ============================================================================
+
+<element-access-suffix> ::= %"[" <argument-list> %"]"
+
+# ============================================================================
+# Null-conditional access (C# 6+)
+# ============================================================================
+
+<null-conditional-member-access> ::= %"?." <identifier-or-keyword> <type-argument-list>?
+
+<null-conditional-element-access> ::= %"?" %"[" <argument-list> %"]"
+
+# ============================================================================
+# Post-increment / post-decrement
+# ============================================================================
+
+<post-increment-suffix> ::= %"++"
+<post-decrement-suffix> ::= %"--"
+
+<post-increment-expression> ::= <primary-expression> %"++"
+<post-decrement-expression> ::= <primary-expression> %"--"
+
+# ============================================================================
+# Pointer member access
+# ============================================================================
+
+<pointer-member-access-suffix> ::= %"->" <identifier-or-keyword>
+
+# ============================================================================
+# Arguments
+# ============================================================================
+
+<argument-list> @nospace($1) ::= <argument> (%"," <argument>)*
+
+<argument> ::= (<identifier-or-keyword> %":")? <argument-value>
+
+<argument-value> ::= <expression>
+                   | %"ref" <expression>
+                   | %"out" <expression>
+                   | %"out" <local-variable-type> <identifier-or-keyword>
+                   | %"in" <expression>
+
+# ============================================================================
+# Lambda expressions
+# ============================================================================
+
+<lambda-expression> ::= <lambda-modifier>* <lambda-parameters> %"=>" <lambda-body>
+                       | <lambda-modifier>* <lambda-return-type> <lambda-parameters> %"=>" <lambda-body>
+
+<lambda-modifier> ::= %"static"
+                    | %"async"
+                    | <attributes>
+
+<lambda-parameters> ::= <identifier-or-keyword>
+                       | %"(" <lambda-parameter-list>? %")"
+                       | %"(" <implicit-lambda-parameter-list> %")"
+
+<lambda-parameter-list> ::= <lambda-formal-parameter> (%"," <lambda-formal-parameter>)*
+
+<lambda-formal-parameter> ::= <attributes>? <parameter-modifier>? <type> <identifier-or-keyword> <equals-value-clause>?
+
+<implicit-lambda-parameter-list> ::= <identifier-or-keyword> (%"," <identifier-or-keyword>)*
+
+<lambda-return-type> ::= <type>
+                       | %"void"
+                       | %"ref" %"readonly"? <type>
+
+<lambda-body> ::= <expression>
+                | <block>
+
+# ============================================================================
+# Query expressions (LINQ)
+# ============================================================================
+
+<query-expression> ::= <from-clause> <query-body>
+
+<from-clause> ::= %"from" <type>? <identifier-or-keyword> %"in" <expression>
+
+<query-body> ::= <query-body-clause>* <select-or-group-clause> <query-continuation>?
+
+<query-body-clause> ::= <from-clause>
+                      | <let-clause>
+                      | <where-clause>
+                      | <join-clause>
+                      | <orderby-clause>
+
+<let-clause> ::= %"let" <identifier-or-keyword> %"=" <expression>
+
+<where-clause> ::= %"where" <expression>
+
+<join-clause> ::= %"join" <type>? <identifier-or-keyword> %"in" <expression> %"on" <expression> %"equals" <expression> (%"into" <identifier-or-keyword>)?
+
+<orderby-clause> ::= %"orderby" <ordering> (%"," <ordering>)*
+
+<ordering> ::= <expression> (%"ascending" | %"descending")?
+
+<select-or-group-clause> ::= <select-clause>
+                            | <group-clause>
+
+<select-clause> ::= %"select" <expression>
+
+<group-clause> ::= %"group" <expression> %"by" <expression>
+
+<query-continuation> ::= %"into" <identifier-or-keyword> <query-body>
+
+# ============================================================================
+# Switch expression (C# 8+)
+# ============================================================================
+
+<switch-expression> ::= <range-expression> %"switch" %"{" <switch-expression-arm-list>? %","? %"}"
+
+<switch-expression-arm-list> ::= <switch-expression-arm> (%"," <switch-expression-arm>)*
+
+<switch-expression-arm> ::= <pattern> <when-clause>? %"=>" <expression>
+
+# ============================================================================
+# With expression (C# 9+)
+# ============================================================================
+
+<with-expression> ::= <range-expression> %"with" %"{" <member-initializer-list>? %","? %"}"
+
+# ============================================================================
+# Throw expression (C# 7+)
+# ============================================================================
+
+<throw-expression> ::= %"throw" <expression>
+
+# ============================================================================
+# Patterns (C# 7-11)
+# ============================================================================
+
+<pattern> ::= <or-pattern>
+
+<or-pattern> ::= <or-pattern> %"or" <and-pattern>
+               | <and-pattern>
+
+<and-pattern> ::= <and-pattern> %"and" <not-pattern>
+                | <not-pattern>
+
+<not-pattern> ::= %"not" <not-pattern>
+                | <primary-pattern>
+
+<primary-pattern> ::= <declaration-pattern>
+                    | <type-pattern>
+                    | <constant-pattern>
+                    | <relational-pattern>
+                    | <property-pattern>
+                    | <positional-pattern>
+                    | <var-pattern>
+                    | <discard-pattern>
+                    | <list-pattern>
+                    | <slice-pattern>
+                    | <parenthesized-pattern>
+
+# ============================================================================
+# Declaration pattern
+# ============================================================================
+
+<declaration-pattern> ::= <type> <designation>
+
+<designation> ::= <simple-designation>
+                | <parenthesized-designation>
+
+<simple-designation> ::= <identifier-or-keyword>
+                       | %"_"
+
+<parenthesized-designation> ::= %"(" <designation> (%"," <designation>)* %")"
+
+# ============================================================================
+# Type pattern (C# 9+)
+# ============================================================================
+
+<type-pattern> ::= <type>
+
+# ============================================================================
+# Constant pattern
+# ============================================================================
+
+<constant-pattern> ::= <literal>
+                     | <identifier-or-keyword> (%"." <identifier-or-keyword>)*
+
+# ============================================================================
+# Relational patterns (C# 9+)
+# ============================================================================
+
+<relational-pattern> ::= %"<" <expression>
+                       | %">" <expression>
+                       | %"<=" <expression>
+                       | %">=" <expression>
+
+# ============================================================================
+# Property pattern (C# 8+)
+# ============================================================================
+
+<property-pattern> ::= <type>? %"{" <property-pattern-clause-list>? %","? %"}" <designation>?
+
+<property-pattern-clause-list> ::= <property-pattern-clause> (%"," <property-pattern-clause>)*
+
+<property-pattern-clause> ::= <property-pattern-name> %":" <pattern>
+
+<property-pattern-name> ::= <identifier-or-keyword> (%"." <identifier-or-keyword>)*
+
+# ============================================================================
+# Positional pattern (C# 8+)
+# ============================================================================
+
+<positional-pattern> ::= <type>? %"(" <positional-pattern-clause-list>? %")" <property-pattern>? <designation>?
+
+<positional-pattern-clause-list> ::= <positional-pattern-clause> (%"," <positional-pattern-clause>)*
+
+<positional-pattern-clause> ::= (<identifier-or-keyword> %":")? <pattern>
+
+# ============================================================================
+# Var pattern
+# ============================================================================
+
+<var-pattern> ::= %"var" <designation>
+
+# ============================================================================
+# Discard pattern
+# ============================================================================
+
+<discard-pattern> ::= %"_"
+
+# ============================================================================
+# List pattern (C# 11+)
+# ============================================================================
+
+<list-pattern> ::= %"[" <list-pattern-element-list>? %","? %"]" <designation>?
+
+<list-pattern-element-list> ::= <list-pattern-element> (%"," <list-pattern-element>)*
+
+<list-pattern-element> ::= <pattern>
+                         | <slice-pattern>
+
+# ============================================================================
+# Slice pattern (C# 11+)
+# ============================================================================
+
+<slice-pattern> ::= %".." <pattern>?
+
+# ============================================================================
+# Parenthesized pattern
+# ============================================================================
+
+<parenthesized-pattern> ::= %"(" <pattern> %")"

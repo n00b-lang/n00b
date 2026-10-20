@@ -1,0 +1,3 @@
+@lexer("lexer_unknown_set.lex")
+
+<file> ::= %WORD

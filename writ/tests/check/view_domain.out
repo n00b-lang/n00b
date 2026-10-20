@@ -1,0 +1,2 @@
+error[E0217]: the success domain does not fit the result's view: 2 succeeds but is not a `Level`
+  --> tests/check/view_domain.writ:8:12

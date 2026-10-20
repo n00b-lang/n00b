@@ -1,0 +1,2 @@
+error[E0510]: expected exactly one binding for this language: `n00b`
+  --> tests/bind/e0510.writ:1:1

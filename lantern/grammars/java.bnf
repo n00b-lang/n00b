@@ -1,0 +1,1047 @@
+@lexer("java.lex")
+
+# Java SE 21 Grammar (JLS Chapter 19)
+# Syntactic grammar only — lexer-provided tokens for literals and identifiers.
+#
+# Token types provided by lexer:
+#   %IDENTIFIER   — Java identifiers (not keywords, not contextual keywords)
+#   %INTEGER      — integer literals (decimal, hex, octal, binary)
+#   %FLOAT        — floating-point literals
+#   %STRING       — string literals (double-quoted)
+#   %CHAR         — character literals (single-quoted)
+#   %TEXT_BLOCK   — text block literals (triple-double-quoted)
+#
+# Keywords and operators are quoted terminals: %"if", %"+", etc.
+# Start symbol: <compilation-unit>
+
+# ============================================================================
+# 1. Compilation Units (JLS 7.3 - 7.6)
+# ============================================================================
+
+<compilation-unit> ::= <ordinary-compilation-unit>
+    | <modular-compilation-unit>
+
+<ordinary-compilation-unit> @hardline @blankline($1) @blankline($2) ::= <package-declaration>? <import-declaration>* <top-level-class-or-interface-declaration>*
+
+<modular-compilation-unit> ::= <import-declaration>* <module-declaration>
+
+# ============================================================================
+# 2. Package Declarations (JLS 7.4)
+# ============================================================================
+
+<package-declaration> @nospace($3) ::= <package-modifier>* %"package" <package-name> %";"
+
+<package-modifier> ::= <annotation>
+
+<package-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+# ============================================================================
+# 3. Import Declarations (JLS 7.5)
+# ============================================================================
+
+<import-declaration> ::= <single-type-import-declaration>
+    | <type-import-on-demand-declaration>
+    | <single-static-import-declaration>
+    | <static-import-on-demand-declaration>
+
+<single-type-import-declaration> @nospace($2) ::= %"import" <type-name> %";"
+
+<type-import-on-demand-declaration> ::= %"import" <package-or-type-name> %"." %"*" %";"
+
+<single-static-import-declaration> ::= %"import" %"static" <type-name> %"." %IDENTIFIER %";"
+
+<static-import-on-demand-declaration> ::= %"import" %"static" <type-name> %"." %"*" %";"
+
+# ============================================================================
+# 4. Top-Level Type Declarations (JLS 7.6)
+# ============================================================================
+
+<top-level-class-or-interface-declaration> ::= <class-declaration>
+    | <interface-declaration>
+    | %";"
+
+# ============================================================================
+# 5. Names (JLS 6.5)
+# ============================================================================
+
+<type-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+<package-or-type-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+<expression-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
+    | <ambiguous-name>
+
+<method-name> ::= %IDENTIFIER
+
+<ambiguous-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+# ============================================================================
+# 6. Types (JLS 4)
+# ============================================================================
+
+<type> ::= <primitive-type>
+    | <reference-type>
+
+<primitive-type> ::= <annotation>* <numeric-type>
+    | <annotation>* %"boolean"
+
+<numeric-type> ::= <integral-type>
+    | <floating-point-type>
+
+<integral-type> ::= %"byte"
+    | %"short"
+    | %"int"
+    | %"long"
+    | %"char"
+
+<floating-point-type> ::= %"float"
+    | %"double"
+
+<reference-type> ::= <class-or-interface-type>
+    | <type-variable>
+    | <array-type>
+
+<class-or-interface-type> ::= <class-type>
+
+<class-type> ::= <annotation>* %IDENTIFIER <type-arguments>?
+    | <class-or-interface-type> %"." <annotation>* %IDENTIFIER <type-arguments>?
+
+<type-variable> ::= <annotation>* %IDENTIFIER
+
+# Note: <type-variable> and unparameterized <class-type> are ambiguous at the
+# syntax level (both reduce to annotated IDENTIFIER).  Disambiguation is
+# semantic — the parser should treat them as a single production and resolve
+# later.  They are kept as separate non-terminals here for clarity.
+
+<array-type> ::= <primitive-type> <dims>
+    | <class-or-interface-type> <dims>
+    | <type-variable> <dims>
+
+<dims> ::= (<annotation>* %"[" %"]")+
+
+# ============================================================================
+# 7. Type Arguments and Type Parameters (JLS 4.5, 4.4)
+# ============================================================================
+
+<type-arguments> ::= %"<" <type-argument-list> %">"
+
+<type-argument-list> ::= <type-argument> (%"," <type-argument>)*
+
+<type-argument> ::= <reference-type>
+    | <wildcard>
+
+<wildcard> ::= <annotation>* %"?" <wildcard-bounds>?
+
+<wildcard-bounds> ::= %"extends" <reference-type>
+    | %"super" <reference-type>
+
+<type-parameters> ::= %"<" <type-parameter-list> %">"
+
+<type-parameter-list> ::= <type-parameter> (%"," <type-parameter>)*
+
+<type-parameter> ::= <type-parameter-modifier>* %IDENTIFIER <type-bound>?
+
+<type-parameter-modifier> ::= <annotation>
+
+<type-bound> ::= %"extends" <class-or-interface-type> <additional-bound>*
+
+<additional-bound> ::= %"&" <class-or-interface-type>
+
+# ============================================================================
+# 8. Class Declarations (JLS 8.1)
+# ============================================================================
+
+<class-declaration> ::= <normal-class-declaration>
+    | <enum-declaration>
+    | <record-declaration>
+
+<normal-class-declaration> ::= <class-modifier>* %"class" %IDENTIFIER <type-parameters>? <class-extends>? <class-implements>? <class-permits>? <class-body>
+
+<class-modifier> ::= <annotation>
+    | %"public"
+    | %"protected"
+    | %"private"
+    | %"abstract"
+    | %"static"
+    | %"final"
+    | %"sealed"
+    | %"non-sealed"
+    | %"strictfp"
+
+<class-extends> ::= %"extends" <class-type>
+
+<class-implements> ::= %"implements" <interface-type-list>
+
+<class-permits> ::= %"permits" <type-name-list>
+
+<interface-type-list> ::= <class-type> (%"," <class-type>)*
+
+<type-name-list> ::= <type-name> (%"," <type-name>)*
+
+<class-body> @hardline($1) @indent($1) @hardline($2) ::= %"{" <class-body-declaration>* %"}"
+
+<class-body-declaration> ::= <class-member-declaration>
+    | <instance-initializer>
+    | <static-initializer>
+    | <constructor-declaration>
+
+<class-member-declaration> ::= <field-declaration>
+    | <method-declaration>
+    | <class-declaration>
+    | <interface-declaration>
+    | %";"
+
+# ============================================================================
+# 9. Field Declarations (JLS 8.3)
+# ============================================================================
+
+<field-declaration> @nospace($3) ::= <field-modifier>* <unann-type> <variable-declarator-list> %";"
+
+<field-modifier> ::= <annotation>
+    | %"public"
+    | %"protected"
+    | %"private"
+    | %"static"
+    | %"final"
+    | %"transient"
+    | %"volatile"
+
+<variable-declarator-list> ::= <variable-declarator> (%"," <variable-declarator>)*
+
+<variable-declarator> ::= <variable-declarator-id> (%"=" <variable-initializer>)?
+
+<variable-declarator-id> ::= %IDENTIFIER <dims>?
+
+<variable-initializer> ::= <expression>
+    | <array-initializer>
+
+# ============================================================================
+# 10. Method Declarations (JLS 8.4)
+# ============================================================================
+
+<method-declaration> ::= <method-modifier>* <method-header> <method-body>
+
+<method-modifier> ::= <annotation>
+    | %"public"
+    | %"protected"
+    | %"private"
+    | %"abstract"
+    | %"static"
+    | %"final"
+    | %"synchronized"
+    | %"native"
+    | %"strictfp"
+    | %"default"
+
+<method-header> ::= <result> <method-declarator> <throws>?
+    | <type-parameters> <annotation>* <result> <method-declarator> <throws>?
+
+<result> ::= <unann-type>
+    | %"void"
+
+<method-declarator> @nospace ::= %IDENTIFIER %"(" <formal-parameter-list>? %")" <dims>?
+
+<formal-parameter-list> @nospace($1) ::= <formal-parameter> (%"," <formal-parameter>)*
+
+<formal-parameter> ::= <variable-modifier>* <unann-type> <variable-declarator-id>
+    | <variable-arity-parameter>
+
+<variable-arity-parameter> ::= <variable-modifier>* <unann-type> <annotation>* %"..." <variable-declarator-id>
+
+<variable-modifier> ::= <annotation>
+    | %"final"
+
+<throws> ::= %"throws" <exception-type-list>
+
+<exception-type-list> ::= <exception-type> (%"," <exception-type>)*
+
+<exception-type> ::= <class-type>
+    | <type-variable>
+
+# ============================================================================
+# 11. Method Body (JLS 8.4.7)
+# ============================================================================
+
+<method-body> ::= <block>
+    | %";"
+
+# ============================================================================
+# 12. Instance Initializers (JLS 8.6)
+# ============================================================================
+
+<instance-initializer> ::= <block>
+
+# ============================================================================
+# 13. Static Initializers (JLS 8.7)
+# ============================================================================
+
+<static-initializer> ::= %"static" <block>
+
+# ============================================================================
+# 14. Constructor Declarations (JLS 8.8)
+# ============================================================================
+
+<constructor-declaration> ::= <constructor-modifier>* <constructor-declarator> <throws>? <constructor-body>
+
+<constructor-modifier> ::= <annotation>
+    | %"public"
+    | %"protected"
+    | %"private"
+
+<constructor-declarator> ::= <type-parameters>? %IDENTIFIER %"(" <formal-parameter-list>? %")"
+
+<constructor-body> ::= %"{" <explicit-constructor-invocation>? <block-statements>? %"}"
+
+<explicit-constructor-invocation> ::= <type-arguments>? %"this" %"(" <argument-list>? %")" %";"
+    | <type-arguments>? %"super" %"(" <argument-list>? %")" %";"
+    | <expression-name> %"." <type-arguments>? %"super" %"(" <argument-list>? %")" %";"
+    | <primary> %"." <type-arguments>? %"super" %"(" <argument-list>? %")" %";"
+
+# ============================================================================
+# 15. Enum Declarations (JLS 8.9)
+# ============================================================================
+
+<enum-declaration> ::= <class-modifier>* %"enum" %IDENTIFIER <class-implements>? <enum-body>
+
+<enum-body> ::= %"{" <enum-constant-list>? %","? <enum-body-declarations>? %"}"
+
+<enum-constant-list> ::= <enum-constant> (%"," <enum-constant>)*
+
+<enum-constant> ::= <enum-constant-modifier>* %IDENTIFIER (%"(" <argument-list>? %")")? <class-body>?
+
+<enum-constant-modifier> ::= <annotation>
+
+<enum-body-declarations> ::= %";" <class-body-declaration>*
+
+# ============================================================================
+# 16. Record Declarations (JLS 8.10)
+# ============================================================================
+
+<record-declaration> ::= <class-modifier>* %"record" %IDENTIFIER <type-parameters>? <record-header> <class-implements>? <record-body>
+
+<record-header> ::= %"(" <record-component-list>? %")"
+
+<record-component-list> ::= <record-component> (%"," <record-component>)*
+
+<record-component> ::= <record-component-modifier>* <unann-type> %IDENTIFIER
+    | <variable-arity-record-component>
+
+<variable-arity-record-component> ::= <record-component-modifier>* <unann-type> <annotation>* %"..." %IDENTIFIER
+
+<record-component-modifier> ::= <annotation>
+
+<record-body> ::= %"{" <record-body-declaration>* %"}"
+
+<record-body-declaration> ::= <class-body-declaration>
+    | <compact-constructor-declaration>
+
+<compact-constructor-declaration> ::= <constructor-modifier>* %IDENTIFIER <constructor-body>
+
+# ============================================================================
+# 17. Interface Declarations (JLS 9.1)
+# ============================================================================
+
+<interface-declaration> ::= <normal-interface-declaration>
+    | <annotation-type-declaration>
+
+<normal-interface-declaration> ::= <interface-modifier>* %"interface" %IDENTIFIER <type-parameters>? <interface-extends>? <interface-permits>? <interface-body>
+
+<interface-modifier> ::= <annotation>
+    | %"public"
+    | %"protected"
+    | %"private"
+    | %"abstract"
+    | %"static"
+    | %"sealed"
+    | %"non-sealed"
+    | %"strictfp"
+
+<interface-extends> ::= %"extends" <interface-type-list>
+
+<interface-permits> ::= %"permits" <type-name-list>
+
+<interface-body> ::= %"{" <interface-member-declaration>* %"}"
+
+<interface-member-declaration> ::= <constant-declaration>
+    | <interface-method-declaration>
+    | <class-declaration>
+    | <interface-declaration>
+    | %";"
+
+# ============================================================================
+# 18. Constant Declarations (JLS 9.3)
+# ============================================================================
+
+<constant-declaration> ::= <constant-modifier>* <unann-type> <variable-declarator-list> %";"
+
+<constant-modifier> ::= <annotation>
+    | %"public"
+    | %"static"
+    | %"final"
+
+# ============================================================================
+# 19. Interface Method Declarations (JLS 9.4)
+# ============================================================================
+
+<interface-method-declaration> ::= <interface-method-modifier>* <method-header> <method-body>
+
+<interface-method-modifier> ::= <annotation>
+    | %"public"
+    | %"private"
+    | %"abstract"
+    | %"default"
+    | %"static"
+    | %"strictfp"
+
+# ============================================================================
+# 20. Annotation Type Declarations (JLS 9.6)
+# ============================================================================
+
+<annotation-type-declaration> ::= <interface-modifier>* %"@" %"interface" %IDENTIFIER <annotation-type-body>
+
+<annotation-type-body> ::= %"{" <annotation-type-member-declaration>* %"}"
+
+<annotation-type-member-declaration> ::= <annotation-type-element-declaration>
+    | <constant-declaration>
+    | <class-declaration>
+    | <interface-declaration>
+    | %";"
+
+<annotation-type-element-declaration> ::= <annotation-type-element-modifier>* <unann-type> %IDENTIFIER %"(" %")" <dims>? <default-value>? %";"
+
+<annotation-type-element-modifier> ::= <annotation>
+    | %"public"
+    | %"abstract"
+
+<default-value> ::= %"default" <element-value>
+
+# ============================================================================
+# 21. Annotations (JLS 9.7)
+# ============================================================================
+
+<annotation> ::= <normal-annotation>
+    | <marker-annotation>
+    | <single-element-annotation>
+
+<normal-annotation> ::= %"@" <type-name> %"(" <element-value-pair-list>? %")"
+
+<marker-annotation> ::= %"@" <type-name>
+
+<single-element-annotation> ::= %"@" <type-name> %"(" <element-value> %")"
+
+<element-value-pair-list> ::= <element-value-pair> (%"," <element-value-pair>)*
+
+<element-value-pair> ::= %IDENTIFIER %"=" <element-value>
+
+<element-value> ::= <conditional-expression>
+    | <element-value-array-initializer>
+    | <annotation>
+
+<element-value-array-initializer> ::= %"{" <element-value-list>? %","? %"}"
+
+<element-value-list> ::= <element-value> (%"," <element-value>)*
+
+# ============================================================================
+# 22. Unannotated Types (used in declarations)
+# ============================================================================
+
+# "Unann" types are types that do not begin with annotations —
+# used in declaration contexts where modifiers precede the type.
+
+<unann-type> ::= <unann-primitive-type>
+    | <unann-reference-type>
+
+<unann-primitive-type> ::= <numeric-type>
+    | %"boolean"
+
+<unann-reference-type> ::= <unann-class-or-interface-type>
+    | <unann-type-variable>
+    | <unann-array-type>
+
+<unann-class-or-interface-type> ::= <unann-class-type>
+
+<unann-class-type> ::= %IDENTIFIER <type-arguments>?
+    | <unann-class-or-interface-type> %"." <annotation>* %IDENTIFIER <type-arguments>?
+
+<unann-type-variable> ::= %IDENTIFIER
+
+# Note: <unann-type-variable> and unparameterized <unann-class-type> are
+# syntactically identical (bare IDENTIFIER).  Disambiguation is semantic.
+
+<unann-array-type> ::= <unann-primitive-type> <dims>
+    | <unann-class-or-interface-type> <dims>
+    | <unann-type-variable> <dims>
+
+# ============================================================================
+# 23. Array Initializers (JLS 10.6)
+# ============================================================================
+
+<array-initializer> ::= %"{" <variable-initializer-list>? %","? %"}"
+
+<variable-initializer-list> ::= <variable-initializer> (%"," <variable-initializer>)*
+
+# ============================================================================
+# 24. Blocks and Statements (JLS 14)
+# ============================================================================
+
+<block> @hardline($1) @indent($1) @hardline($2) ::= %"{" <block-statements>? %"}"
+
+<block-statements> @hardline ::= <block-statement>+
+
+<block-statement> ::= <local-class-or-interface-declaration>
+    | <local-variable-declaration-statement>
+    | <statement>
+
+<local-class-or-interface-declaration> ::= <class-declaration>
+    | <normal-interface-declaration>
+
+<local-variable-declaration-statement> @nospace($1) ::= <local-variable-declaration> %";"
+
+<local-variable-declaration> ::= <variable-modifier>* <local-variable-type> <variable-declarator-list>
+
+<local-variable-type> ::= <unann-type>
+    | <type>
+    | %"var"
+
+# ============================================================================
+# 25. Statements (JLS 14.5 - 14.22)
+# ============================================================================
+
+<statement> ::= <statement-without-trailing-substatement>
+    | <labeled-statement>
+    | <if-then-statement>
+    | <if-then-else-statement>
+    | <while-statement>
+    | <for-statement>
+
+<statement-no-short-if> ::= <statement-without-trailing-substatement>
+    | <labeled-statement-no-short-if>
+    | <if-then-else-statement-no-short-if>
+    | <while-statement-no-short-if>
+    | <for-statement-no-short-if>
+
+<statement-without-trailing-substatement> ::= <block>
+    | <empty-statement>
+    | <expression-statement>
+    | <assert-statement>
+    | <switch-statement>
+    | <do-statement>
+    | <break-statement>
+    | <continue-statement>
+    | <return-statement>
+    | <synchronized-statement>
+    | <throw-statement>
+    | <try-statement>
+    | <yield-statement>
+
+# ============================================================================
+# 26. Empty Statement (JLS 14.6)
+# ============================================================================
+
+<empty-statement> ::= %";"
+
+# ============================================================================
+# 27. Labeled Statement (JLS 14.7)
+# ============================================================================
+
+<labeled-statement> ::= %IDENTIFIER %":" <statement>
+
+<labeled-statement-no-short-if> ::= %IDENTIFIER %":" <statement-no-short-if>
+
+# ============================================================================
+# 28. Expression Statement (JLS 14.8)
+# ============================================================================
+
+<expression-statement> @nospace($1) ::= <statement-expression> %";"
+
+<statement-expression> ::= <assignment>
+    | <pre-increment-expression>
+    | <pre-decrement-expression>
+    | <post-increment-expression>
+    | <post-decrement-expression>
+    | <method-invocation>
+    | <class-instance-creation-expression>
+
+# ============================================================================
+# 29. If Statements (JLS 14.9)
+# ============================================================================
+
+<if-then-statement> ::= %"if" %"(" <expression> %")" <statement>
+
+<if-then-else-statement> ::= %"if" %"(" <expression> %")" <statement-no-short-if> %"else" <statement>
+
+<if-then-else-statement-no-short-if> ::= %"if" %"(" <expression> %")" <statement-no-short-if> %"else" <statement-no-short-if>
+
+# ============================================================================
+# 30. Assert Statement (JLS 14.10)
+# ============================================================================
+
+<assert-statement> ::= %"assert" <expression> %";"
+    | %"assert" <expression> %":" <expression> %";"
+
+# ============================================================================
+# 31. Switch Statement and Switch Expression (JLS 14.11, 15.28)
+# ============================================================================
+
+<switch-statement> ::= %"switch" %"(" <expression> %")" <switch-block>
+
+<switch-block> ::= %"{" <switch-rule>* %"}"
+    | %"{" <switch-block-statement-group>* <switch-label>* %"}"
+
+<switch-rule> ::= <switch-label> %"->" <expression> %";"
+    | <switch-label> %"->" <block>
+    | <switch-label> %"->" <throw-statement>
+
+<switch-block-statement-group> ::= <switch-label>+ <block-statements>
+
+<switch-label> ::= %"case" <case-constant-list> %":"
+    | %"default" %":"
+    | %"case" %"null" %":"
+    | %"case" %"null" %"," %"default" %":"
+    | %"case" <case-pattern-list> <guard>? %":"
+
+<case-constant-list> ::= <case-constant> (%"," <case-constant>)*
+
+<case-constant> ::= <conditional-expression>
+
+<case-pattern-list> ::= <pattern> (%"," <pattern>)*
+
+<guard> ::= %"when" <expression>
+
+# Switch expression (JLS 15.28)
+<switch-expression> ::= %"switch" %"(" <expression> %")" <switch-block>
+
+# ============================================================================
+# 32. While Statement (JLS 14.12)
+# ============================================================================
+
+<while-statement> ::= %"while" %"(" <expression> %")" <statement>
+
+<while-statement-no-short-if> ::= %"while" %"(" <expression> %")" <statement-no-short-if>
+
+# ============================================================================
+# 33. Do Statement (JLS 14.13)
+# ============================================================================
+
+<do-statement> ::= %"do" <statement> %"while" %"(" <expression> %")" %";"
+
+# ============================================================================
+# 34. For Statements (JLS 14.14)
+# ============================================================================
+
+<for-statement> ::= <basic-for-statement>
+    | <enhanced-for-statement>
+
+<for-statement-no-short-if> ::= <basic-for-statement-no-short-if>
+    | <enhanced-for-statement-no-short-if>
+
+<basic-for-statement> ::= %"for" %"(" <for-init>? %";" <expression>? %";" <for-update>? %")" <statement>
+
+<basic-for-statement-no-short-if> ::= %"for" %"(" <for-init>? %";" <expression>? %";" <for-update>? %")" <statement-no-short-if>
+
+<for-init> ::= <statement-expression-list>
+    | <local-variable-declaration>
+
+<for-update> ::= <statement-expression-list>
+
+<statement-expression-list> ::= <statement-expression> (%"," <statement-expression>)*
+
+<enhanced-for-statement> ::= %"for" %"(" <variable-modifier>* <local-variable-type> <variable-declarator-id> %":" <expression> %")" <statement>
+
+<enhanced-for-statement-no-short-if> ::= %"for" %"(" <variable-modifier>* <local-variable-type> <variable-declarator-id> %":" <expression> %")" <statement-no-short-if>
+
+# ============================================================================
+# 35. Break Statement (JLS 14.15)
+# ============================================================================
+
+<break-statement> ::= %"break" %IDENTIFIER? %";"
+
+# ============================================================================
+# 36. Continue Statement (JLS 14.16)
+# ============================================================================
+
+<continue-statement> ::= %"continue" %IDENTIFIER? %";"
+
+# ============================================================================
+# 37. Return Statement (JLS 14.17)
+# ============================================================================
+
+<return-statement> @nospace($2) ::= %"return" <expression>? %";"
+
+# ============================================================================
+# 38. Throw Statement (JLS 14.18)
+# ============================================================================
+
+<throw-statement> ::= %"throw" <expression> %";"
+
+# ============================================================================
+# 39. Synchronized Statement (JLS 14.19)
+# ============================================================================
+
+<synchronized-statement> ::= %"synchronized" %"(" <expression> %")" <block>
+
+# ============================================================================
+# 40. Try Statements (JLS 14.20)
+# ============================================================================
+
+<try-statement> ::= %"try" <block> <catches>
+    | %"try" <block> <catches>? <finally>
+    | <try-with-resources-statement>
+
+<catches> ::= <catch-clause>+
+
+<catch-clause> ::= %"catch" %"(" <catch-formal-parameter> %")" <block>
+
+<catch-formal-parameter> ::= <variable-modifier>* <catch-type> <variable-declarator-id>
+
+<catch-type> ::= <unann-class-type> (%"|" <class-type>)*
+
+<finally> ::= %"finally" <block>
+
+<try-with-resources-statement> ::= %"try" <resource-specification> <block> <catches>? <finally>?
+
+<resource-specification> ::= %"(" <resource-list> %";"? %")"
+
+<resource-list> ::= <resource> (%";" <resource>)*
+
+<resource> ::= <variable-modifier>* <local-variable-type> <variable-declarator-id> %"=" <expression>
+    | <variable-access>
+
+<variable-access> ::= <expression-name>
+    | <field-access>
+
+# ============================================================================
+# 41. Yield Statement (JLS 14.21)
+# ============================================================================
+
+<yield-statement> ::= %"yield" <expression> %";"
+
+# ============================================================================
+# 42. Patterns (JLS 14.30)
+# ============================================================================
+
+<pattern> ::= <type-pattern>
+    | <record-pattern>
+    | <guarded-pattern>
+
+<type-pattern> ::= <variable-modifier>* <unann-type> <variable-declarator-id>
+
+<record-pattern> ::= <annotation>* <reference-type> %"(" <pattern-list>? %")"
+
+<pattern-list> ::= <pattern> (%"," <pattern>)*
+
+<guarded-pattern> ::= <pattern> %"when" <expression>
+
+# Note: In JLS 21, guarded patterns appear in switch labels via the <guard>
+# production.  The <guarded-pattern> non-terminal is provided here for
+# completeness; implementations may fold guards into switch-label handling.
+
+# ============================================================================
+# 43. Expressions — Overview (JLS 15)
+# ============================================================================
+
+<expression> ::= <lambda-expression>
+    | <assignment-expression>
+
+<assignment-expression> ::= <conditional-expression>
+    | <assignment>
+
+# ============================================================================
+# 44. Lambda Expressions (JLS 15.27)
+# ============================================================================
+
+<lambda-expression> ::= <lambda-parameters> %"->" <lambda-body>
+
+<lambda-parameters> ::= %"(" <lambda-parameter-list>? %")"
+    | %IDENTIFIER
+
+<lambda-parameter-list> ::= <lambda-parameter> (%"," <lambda-parameter>)*
+
+<lambda-parameter> ::= <variable-modifier>* <lambda-parameter-type> <variable-declarator-id>
+    | <variable-arity-parameter>
+
+<lambda-parameter-type> ::= <unann-type>
+    | %"var"
+
+<lambda-body> ::= <expression>
+    | <block>
+
+# ============================================================================
+# 45. Assignment Expressions (JLS 15.26)
+# ============================================================================
+
+<assignment> ::= <left-hand-side> <assignment-operator> <expression>
+
+<left-hand-side> ::= <expression-name>
+    | <field-access>
+    | <array-access>
+
+<assignment-operator> ::= %"="
+    | %"*="
+    | %"/="
+    | %"%="
+    | %"+="
+    | %"-="
+    | %"<<="
+    | %">>="
+    | %">>>="
+    | %"&="
+    | %"^="
+    | %"|="
+
+# ============================================================================
+# 46. Conditional Expression (JLS 15.25)
+# ============================================================================
+
+<conditional-expression> ::= <conditional-or-expression> %"?" <expression> %":" <conditional-expression>
+    | <conditional-or-expression> %"?" <expression> %":" <lambda-expression>
+    | <conditional-or-expression>
+
+# ============================================================================
+# 47. Binary Expressions — Logical (JLS 15.23, 15.24)
+# ============================================================================
+
+<conditional-or-expression> ::= <conditional-or-expression> %"||" <conditional-and-expression>
+    | <conditional-and-expression>
+
+<conditional-and-expression> ::= <conditional-and-expression> %"&&" <inclusive-or-expression>
+    | <inclusive-or-expression>
+
+# ============================================================================
+# 48. Binary Expressions — Bitwise (JLS 15.20 - 15.22)
+# ============================================================================
+
+<inclusive-or-expression> ::= <inclusive-or-expression> %"|" <exclusive-or-expression>
+    | <exclusive-or-expression>
+
+<exclusive-or-expression> ::= <exclusive-or-expression> %"^" <and-expression>
+    | <and-expression>
+
+<and-expression> ::= <and-expression> %"&" <equality-expression>
+    | <equality-expression>
+
+# ============================================================================
+# 49. Binary Expressions — Equality (JLS 15.21)
+# ============================================================================
+
+<equality-expression> ::= <equality-expression> %"==" <relational-expression>
+    | <equality-expression> %"!=" <relational-expression>
+    | <relational-expression>
+
+# ============================================================================
+# 50. Binary Expressions — Relational and instanceof (JLS 15.20)
+# ============================================================================
+
+<relational-expression> ::= <relational-expression> %"<" <shift-expression>
+    | <relational-expression> %">" <shift-expression>
+    | <relational-expression> %"<=" <shift-expression>
+    | <relational-expression> %">=" <shift-expression>
+    | <instanceof-expression>
+    | <shift-expression>
+
+<instanceof-expression> ::= <relational-expression> %"instanceof" <reference-type>
+    | <relational-expression> %"instanceof" <pattern>
+
+# ============================================================================
+# 51. Binary Expressions — Shift (JLS 15.19)
+# ============================================================================
+
+<shift-expression> ::= <shift-expression> %"<<" <additive-expression>
+    | <shift-expression> %">>" <additive-expression>
+    | <shift-expression> %">>>" <additive-expression>
+    | <additive-expression>
+
+# ============================================================================
+# 52. Binary Expressions — Additive (JLS 15.18)
+# ============================================================================
+
+<additive-expression> ::= <additive-expression> %"+" <multiplicative-expression>
+    | <additive-expression> %"-" <multiplicative-expression>
+    | <multiplicative-expression>
+
+# ============================================================================
+# 53. Binary Expressions — Multiplicative (JLS 15.17)
+# ============================================================================
+
+<multiplicative-expression> ::= <multiplicative-expression> %"*" <unary-expression>
+    | <multiplicative-expression> %"/" <unary-expression>
+    | <multiplicative-expression> %"%" <unary-expression>
+    | <unary-expression>
+
+# ============================================================================
+# 54. Unary Expressions (JLS 15.15)
+# ============================================================================
+
+<unary-expression> ::= <pre-increment-expression>
+    | <pre-decrement-expression>
+    | %"+" <unary-expression>
+    | %"-" <unary-expression>
+    | <unary-expression-not-plus-minus>
+
+<pre-increment-expression> ::= %"++" <unary-expression>
+
+<pre-decrement-expression> ::= %"--" <unary-expression>
+
+<unary-expression-not-plus-minus> ::= <postfix-expression>
+    | %"~" <unary-expression>
+    | %"!" <unary-expression>
+    | <cast-expression>
+
+# ============================================================================
+# 55. Cast Expressions (JLS 15.16)
+# ============================================================================
+
+<cast-expression> ::= %"(" <primitive-type> %")" <unary-expression>
+    | %"(" <reference-type> <additional-bound>* %")" <unary-expression-not-plus-minus>
+    | %"(" <reference-type> <additional-bound>* %")" <lambda-expression>
+
+# ============================================================================
+# 56. Postfix Expressions (JLS 15.14)
+# ============================================================================
+
+<postfix-expression> ::= <primary>
+    | <expression-name>
+    | <post-increment-expression>
+    | <post-decrement-expression>
+
+<post-increment-expression> ::= <postfix-expression> %"++"
+
+<post-decrement-expression> ::= <postfix-expression> %"--"
+
+# ============================================================================
+# 57. Primary Expressions (JLS 15.8 - 15.13)
+# ============================================================================
+
+<primary> ::= <primary-no-new-array>
+    | <array-creation-expression>
+
+<primary-no-new-array> ::= <literal>
+    | <class-literal>
+    | %"this"
+    | <type-name> %"." %"this"
+    | %"(" <expression> %")"
+    | <class-instance-creation-expression>
+    | <field-access>
+    | <array-access>
+    | <method-invocation>
+    | <method-reference>
+    | <switch-expression>
+
+# ============================================================================
+# 58. Literals (JLS 15.8.1)
+# ============================================================================
+
+<literal> ::= %INTEGER
+    | %FLOAT
+    | %STRING
+    | %CHAR
+    | %TEXT_BLOCK
+    | %"true"
+    | %"false"
+    | %"null"
+
+# ============================================================================
+# 59. Class Literals (JLS 15.8.2)
+# ============================================================================
+
+<class-literal> ::= <type-name> (%"[" %"]")* %"." %"class"
+    | <numeric-type> (%"[" %"]")* %"." %"class"
+    | %"boolean" (%"[" %"]")* %"." %"class"
+    | %"void" %"." %"class"
+
+# ============================================================================
+# 60. Class Instance Creation (JLS 15.9)
+# ============================================================================
+
+<class-instance-creation-expression> ::= <unqualified-class-instance-creation-expression>
+    | <expression-name> %"." <unqualified-class-instance-creation-expression>
+    | <primary> %"." <unqualified-class-instance-creation-expression>
+
+<unqualified-class-instance-creation-expression> ::= %"new" <type-arguments>? <class-or-interface-type-to-instantiate> %"(" <argument-list>? %")" <class-body>?
+
+<class-or-interface-type-to-instantiate> ::= <annotation>* %IDENTIFIER (%"." <annotation>* %IDENTIFIER)* <type-arguments-or-diamond>?
+
+<type-arguments-or-diamond> ::= <type-arguments>
+    | %"<" %">"
+
+# ============================================================================
+# 61. Field Access (JLS 15.11)
+# ============================================================================
+
+<field-access> @nospace ::= <primary> %"." %IDENTIFIER
+    | %"super" %"." %IDENTIFIER
+    | <type-name> %"." %"super" %"." %IDENTIFIER
+
+# ============================================================================
+# 62. Array Access (JLS 15.10.3)
+# ============================================================================
+
+<array-access> ::= <expression-name> %"[" <expression> %"]"
+    | <primary-no-new-array> %"[" <expression> %"]"
+
+# ============================================================================
+# 63. Method Invocation (JLS 15.12)
+# ============================================================================
+
+<method-invocation> @nospace ::= <method-name> %"(" <argument-list>? %")"
+    | <type-name> %"." <type-arguments>? %IDENTIFIER %"(" <argument-list>? %")"
+    | <expression-name> %"." <type-arguments>? %IDENTIFIER %"(" <argument-list>? %")"
+    | <primary> %"." <type-arguments>? %IDENTIFIER %"(" <argument-list>? %")"
+    | %"super" %"." <type-arguments>? %IDENTIFIER %"(" <argument-list>? %")"
+    | <type-name> %"." %"super" %"." <type-arguments>? %IDENTIFIER %"(" <argument-list>? %")"
+
+<argument-list> @nospace($1) ::= <expression> (%"," <expression>)*
+
+# ============================================================================
+# 64. Method References (JLS 15.13)
+# ============================================================================
+
+<method-reference> ::= <expression-name> %"::" <type-arguments>? %IDENTIFIER
+    | <primary> %"::" <type-arguments>? %IDENTIFIER
+    | <reference-type> %"::" <type-arguments>? %IDENTIFIER
+    | %"super" %"::" <type-arguments>? %IDENTIFIER
+    | <type-name> %"." %"super" %"::" <type-arguments>? %IDENTIFIER
+    | <class-type> %"::" <type-arguments>? %"new"
+    | <array-type> %"::" %"new"
+
+# ============================================================================
+# 65. Array Creation (JLS 15.10)
+# ============================================================================
+
+<array-creation-expression> ::= %"new" <primitive-type> <dim-exprs> <dims>?
+    | %"new" <class-or-interface-type> <dim-exprs> <dims>?
+    | %"new" <primitive-type> <dims> <array-initializer>
+    | %"new" <class-or-interface-type> <dims> <array-initializer>
+
+<dim-exprs> ::= <dim-expr>+
+
+<dim-expr> ::= <annotation>* %"[" <expression> %"]"
+
+# ============================================================================
+# 66. Module Declarations (JLS 7.7)
+# ============================================================================
+
+<module-declaration> ::= <annotation>* %"open"? %"module" <module-name> %"{" <module-directive>* %"}"
+
+<module-name> ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+<module-directive> ::= <requires-directive>
+    | <exports-directive>
+    | <opens-directive>
+    | <uses-directive>
+    | <provides-directive>
+
+<requires-directive> ::= %"requires" <requires-modifier>* <module-name> %";"
+
+<requires-modifier> ::= %"transitive"
+    | %"static"
+
+<exports-directive> ::= %"exports" <package-name> (%"to" <module-name-list>)? %";"
+
+<opens-directive> ::= %"opens" <package-name> (%"to" <module-name-list>)? %";"
+
+<uses-directive> ::= %"uses" <type-name> %";"
+
+<provides-directive> ::= %"provides" <type-name> %"with" <type-name-list> %";"
+
+<module-name-list> ::= <module-name> (%"," <module-name>)*

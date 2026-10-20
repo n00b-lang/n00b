@@ -1,0 +1,3 @@
+error[E0512]: this profile item may appear once
+  --> tests/bind/e0512.profile.writ:3:5
+  = 2:5: first stated here

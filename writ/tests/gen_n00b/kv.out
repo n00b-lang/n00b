@@ -1,0 +1,642 @@
+#ifndef WRIT_KV_WRIT_H
+#define WRIT_KV_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <kv.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define WRIT_KV_ARGUMENT_ERROR (-1)
+#define WRIT_KV_OUT_OF_MEMORY (-2)
+#define WRIT_KV_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} writ_kv_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} writ_kv_str_t;
+
+void writ_kv_bytes_free(writ_kv_bytes_t *bytes);
+void writ_kv_free(void *data);
+
+
+enum {
+    writ_kv_kv_open_error = 0,
+    writ_kv_kv_open_ok = 1,
+};
+int32_t writ_kv_kv_open(const char *path, size_t path_length, kv_db **out_db, int64_t *detail);
+
+enum {
+    writ_kv_kv_put_error = 0,
+    writ_kv_kv_put_ok = 1,
+};
+int32_t writ_kv_kv_put(kv_db *db, const uint8_t *key, size_t key_length, const uint8_t *val, size_t val_length);
+
+enum {
+    writ_kv_kv_get_failed = 0,
+    writ_kv_kv_get_missing = 1,
+    writ_kv_kv_get_found = 2,
+};
+int32_t writ_kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, writ_kv_bytes_t *out_val);
+
+enum {
+    writ_kv_kv_iter_new_error = 0,
+    writ_kv_kv_iter_new_ok = 1,
+};
+int32_t writ_kv_kv_iter_new(kv_db *db, const uint8_t *prefix, size_t prefix_length, kv_iter **result);
+
+enum {
+    writ_kv_kv_iter_next_ok = 0,
+};
+int32_t writ_kv_kv_iter_next(kv_iter *it, writ_kv_bytes_t *result);
+
+enum {
+    writ_kv_kv_errstr_ok = 0,
+};
+int32_t writ_kv_kv_errstr(int s, const char **result);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "writ_kv_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+static const uint8_t writ_kv_empty[1];
+
+void writ_kv_bytes_free(writ_kv_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void writ_kv_free(void *data) {
+    free(data);
+}
+
+static int32_t writ_kv_encode(const char *text, size_t length, char **out) {
+    if (memchr(text, 0, length)) {
+        return WRIT_KV_ARGUMENT_ERROR;
+    }
+    *out = malloc(length + 1);
+    if (!*out) {
+        return WRIT_KV_OUT_OF_MEMORY;
+    }
+    memcpy(*out, text, length);
+    (*out)[length] = 0;
+    return 0;
+}
+
+static int writ_kv_copy_text(const char *text, writ_kv_bytes_t *out) {
+    size_t length = text ? strlen(text) : 0;
+    out->data = malloc(length + 1);
+    if (!out->data) {
+        return -1;
+    }
+    memcpy(out->data, text ? text : "", length + 1);
+    out->length = length;
+    return 0;
+}
+
+int32_t writ_kv_kv_open(const char *path, size_t path_length, kv_db **out_db, int64_t *detail) {
+    const char *s0 = 0;
+    kv_db * *s1 = 0;
+    int ret = 0;
+    char *l0 = NULL;
+    kv_db *l1 = 0;
+    int32_t outcome = 0;
+    if (path) {
+        int32_t status = writ_kv_encode(path, path_length, &l0);
+        if (status) {
+            outcome = status;
+            goto finish;
+        }
+    }
+    else {
+        outcome = WRIT_KV_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s0 = l0;
+    s1 = (kv_db * *)&l1;
+    ret = kv_open(s0, s1);
+    if (((long long)ret) != KV_OK) {
+        outcome = writ_kv_kv_open_error;
+    }
+    else {
+        outcome = writ_kv_kv_open_ok;
+    }
+    if (outcome == writ_kv_kv_open_error) {
+        *detail = (int64_t)(kv_errstr(((long long)ret)));
+    }
+    if (outcome == writ_kv_kv_open_ok) {
+        *out_db = l1;
+    }
+finish:
+    free(l0);
+    return outcome;
+}
+
+int32_t writ_kv_kv_put(kv_db *db, const uint8_t *key, size_t key_length, const uint8_t *val, size_t val_length) {
+    kv_db *s0 = 0;
+    const uint8_t *s1 = 0;
+    size_t s2 = 0;
+    const uint8_t *s3 = 0;
+    size_t s4 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = db;
+    if (!key && key_length) {
+        outcome = WRIT_KV_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = key_length ? (const uint8_t *)key : (const uint8_t *)writ_kv_empty;
+    s2 = (size_t)key_length;
+    if (!val && val_length) {
+        outcome = WRIT_KV_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s3 = val_length ? (const uint8_t *)val : (const uint8_t *)writ_kv_empty;
+    s4 = (size_t)val_length;
+    ret = kv_put(s0, s1, s2, s3, s4);
+    if (((long long)ret) != KV_OK) {
+        outcome = writ_kv_kv_put_error;
+    }
+    else {
+        outcome = writ_kv_kv_put_ok;
+    }
+finish:
+    return outcome;
+}
+
+int32_t writ_kv_kv_get(kv_db *db, const uint8_t *key, size_t key_length, writ_kv_bytes_t *out_val) {
+    kv_db *s0 = 0;
+    const uint8_t *s1 = 0;
+    size_t s2 = 0;
+    uint8_t * *s3 = 0;
+    size_t *s4 = 0;
+    int ret = 0;
+    uint8_t *l0 = 0;
+    size_t l1 = 0;
+    int32_t outcome = 0;
+    s0 = db;
+    if (!key && key_length) {
+        outcome = WRIT_KV_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = key_length ? (const uint8_t *)key : (const uint8_t *)writ_kv_empty;
+    s2 = (size_t)key_length;
+    s3 = (uint8_t * *)&l0;
+    s4 = (size_t *)&l1;
+    ret = kv_get(s0, s1, s2, s3, s4);
+    if (((long long)ret) == KV_ERR) {
+        outcome = writ_kv_kv_get_failed;
+    }
+    else if (((long long)ret) == KV_NOTFOUND) {
+        outcome = writ_kv_kv_get_missing;
+    }
+    else {
+        outcome = writ_kv_kv_get_found;
+    }
+    if (outcome == writ_kv_kv_get_found) {
+        out_val->data = NULL;
+        out_val->length = 0;
+        if (!l0) {
+            outcome = WRIT_KV_CONTRACT_VIOLATION;
+            goto finish;
+        }
+        if (l0) {
+            size_t length = (size_t)(((long long)l1));
+            out_val->data = malloc(length + 1);
+            if (out_val->data) {
+                memcpy(out_val->data, l0, length);
+                out_val->length = length;
+            }
+            kv_free((void *)l0);
+            if (!out_val->data) {
+                outcome = WRIT_KV_OUT_OF_MEMORY;
+                goto finish;
+            }
+        }
+    }
+finish:
+    return outcome;
+}
+
+int32_t writ_kv_kv_iter_new(kv_db *db, const uint8_t *prefix, size_t prefix_length, kv_iter **result) {
+    kv_db *s0 = 0;
+    const uint8_t *s1 = 0;
+    size_t s2 = 0;
+    kv_iter *ret = 0;
+    int32_t outcome = 0;
+    s0 = db;
+    s1 = prefix_length ? (const uint8_t *)prefix : NULL;
+    s2 = (size_t)prefix_length;
+    ret = kv_iter_new(s0, s1, s2);
+    if (ret == NULL) {
+        outcome = writ_kv_kv_iter_new_error;
+    }
+    else {
+        outcome = writ_kv_kv_iter_new_ok;
+    }
+    if (outcome == writ_kv_kv_iter_new_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+
+int32_t writ_kv_kv_iter_next(kv_iter *it, writ_kv_bytes_t *result) {
+    kv_iter *s0 = 0;
+    kv_entry *ret = 0;
+    int32_t outcome = 0;
+    s0 = it;
+    ret = kv_iter_next(s0);
+    {
+        outcome = writ_kv_kv_iter_next_ok;
+    }
+    if (outcome == writ_kv_kv_iter_next_ok) {
+        if (!ret) {
+            result->data = NULL;
+            result->length = 0;
+            goto finish;
+        }
+        size_t total = sizeof(kv_entry);
+        total = (total + _Alignof(uint8_t) - 1) & ~(_Alignof(uint8_t) - 1);
+        total += (size_t)ret->key_len * sizeof(uint8_t);
+        total = (total + _Alignof(uint8_t) - 1) & ~(_Alignof(uint8_t) - 1);
+        total += (size_t)ret->val_len * sizeof(uint8_t);
+        uint8_t *block = malloc(total);
+        if (!block) {
+            outcome = WRIT_KV_OUT_OF_MEMORY;
+            goto finish;
+        }
+        kv_entry *copy = (kv_entry *)block;
+        *copy = *ret;
+        size_t at = sizeof(kv_entry);
+        at = (at + _Alignof(uint8_t) - 1) & ~(_Alignof(uint8_t) - 1);
+        memcpy(block + at, ret->key, (size_t)ret->key_len * sizeof(uint8_t));
+        copy->key = (void *)(block + at);
+        at += (size_t)ret->key_len * sizeof(uint8_t);
+        at = (at + _Alignof(uint8_t) - 1) & ~(_Alignof(uint8_t) - 1);
+        memcpy(block + at, ret->val, (size_t)ret->val_len * sizeof(uint8_t));
+        copy->val = (void *)(block + at);
+        at += (size_t)ret->val_len * sizeof(uint8_t);
+        result->data = block;
+        result->length = total;
+    }
+finish:
+    return outcome;
+}
+
+int32_t writ_kv_kv_errstr(int s, const char **result) {
+    int s0 = 0;
+    const char *ret = 0;
+    int32_t outcome = 0;
+    s0 = s;
+    ret = kv_errstr(s0);
+    {
+        outcome = writ_kv_kv_errstr_ok;
+    }
+    if (outcome == writ_kv_kv_errstr_ok) {
+        *result = ret;
+    }
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "writ_kv_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+void writ_kv_take_bytes(writ_kv_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    writ_kv_bytes_free(bytes);
+}
+
+uint64_t writ_kv_kv_entry_key_length(uint64_t block) {
+    return block ? (uint64_t)((const kv_entry *)(uintptr_t)block)->key_len : 0;
+}
+
+uint64_t writ_kv_kv_entry_val_length(uint64_t block) {
+    return block ? (uint64_t)((const kv_entry *)(uintptr_t)block)->val_len : 0;
+}
+
+void writ_kv_kv_entry_take(writ_kv_bytes_t *bytes, void *key, void *val) {
+    const kv_entry *record = (const kv_entry *)bytes->data;
+    size_t capacity = 0;
+    uint8_t *key_items = n00b_ffi_borrow(key, &capacity, 1);
+    if (key_items && record && record->key) {
+        memcpy(key_items, record->key, capacity * sizeof(uint8_t));
+    }
+    n00b_ffi_release(key);
+    uint8_t *val_items = n00b_ffi_borrow(val, &capacity, 1);
+    if (val_items && record && record->val) {
+        memcpy(val_items, record->val, capacity * sizeof(uint8_t));
+    }
+    n00b_ffi_release(val);
+    writ_kv_bytes_free(bytes);
+}
+
+int32_t writ_kv_n00b_kv_open(const void *path, void *out_db, void *detail) {
+    size_t path_length = 0;
+    const void *path_borrowed = n00b_ffi_borrow((void *)path, &path_length, 0);
+    uint8_t *path_data = malloc(path_length + 1);
+    if (path_data && path_length) {
+        memcpy(path_data, path_borrowed, path_length);
+    }
+    if (path_data) {
+        path_data[path_length] = 0;
+    }
+    n00b_ffi_release((void *)path);
+    if (!path_data) {
+        free(path_data);
+        return WRIT_KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = writ_kv_kv_open((const char *)path_data, path_length, (kv_db **)out_db, (int64_t *)detail);
+    free(path_data);
+    return writ_n00b_value;
+}
+
+int32_t writ_kv_n00b_kv_put(uint64_t db, const void *key, const void *val) {
+    size_t key_length = 0;
+    const void *key_borrowed = n00b_ffi_borrow((void *)key, &key_length, 0);
+    uint8_t *key_data = malloc(key_length + 1);
+    if (key_data && key_length) {
+        memcpy(key_data, key_borrowed, key_length);
+    }
+    if (key_data) {
+        key_data[key_length] = 0;
+    }
+    n00b_ffi_release((void *)key);
+    size_t val_length = 0;
+    const void *val_borrowed = n00b_ffi_borrow((void *)val, &val_length, 0);
+    uint8_t *val_data = malloc(val_length + 1);
+    if (val_data && val_length) {
+        memcpy(val_data, val_borrowed, val_length);
+    }
+    if (val_data) {
+        val_data[val_length] = 0;
+    }
+    n00b_ffi_release((void *)val);
+    if (!key_data || !val_data) {
+        free(key_data);
+        free(val_data);
+        return WRIT_KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = writ_kv_kv_put((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (const uint8_t *)val_data, val_length);
+    free(key_data);
+    free(val_data);
+    return writ_n00b_value;
+}
+
+int32_t writ_kv_n00b_kv_get(uint64_t db, const void *key, void *out_val) {
+    size_t key_length = 0;
+    const void *key_borrowed = n00b_ffi_borrow((void *)key, &key_length, 0);
+    uint8_t *key_data = malloc(key_length + 1);
+    if (key_data && key_length) {
+        memcpy(key_data, key_borrowed, key_length);
+    }
+    if (key_data) {
+        key_data[key_length] = 0;
+    }
+    n00b_ffi_release((void *)key);
+    if (!key_data) {
+        free(key_data);
+        return WRIT_KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = writ_kv_kv_get((kv_db *)(uintptr_t)db, (const uint8_t *)key_data, key_length, (writ_kv_bytes_t *)out_val);
+    free(key_data);
+    return writ_n00b_value;
+}
+
+int32_t writ_kv_n00b_kv_iter_new(uint64_t db, const void *prefix, void *result) {
+    size_t prefix_length = 0;
+    const void *prefix_borrowed = n00b_ffi_borrow((void *)prefix, &prefix_length, 0);
+    uint8_t *prefix_data = malloc(prefix_length + 1);
+    if (prefix_data && prefix_length) {
+        memcpy(prefix_data, prefix_borrowed, prefix_length);
+    }
+    if (prefix_data) {
+        prefix_data[prefix_length] = 0;
+    }
+    n00b_ffi_release((void *)prefix);
+    if (!prefix_data) {
+        free(prefix_data);
+        return WRIT_KV_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = writ_kv_kv_iter_new((kv_db *)(uintptr_t)db, (const uint8_t *)prefix_data, prefix_length, (kv_iter **)result);
+    free(prefix_data);
+    return writ_n00b_value;
+}
+
+int32_t writ_kv_n00b_kv_iter_next(uint64_t it, void *result) {
+    int32_t writ_n00b_value = writ_kv_kv_iter_next((kv_iter *)(uintptr_t)it, (writ_kv_bytes_t *)result);
+    return writ_n00b_value;
+}
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+type Db_Cell {
+    public raw: uint
+}
+
+alias Db = Ref[Db_Cell]
+
+func __db_cell(raw: uint) -> Db {
+    var cell: Db_Cell = (raw = raw)
+    return ref cell
+}
+
+type Iter_Cell {
+    public raw: uint
+    public keep_db: Db?
+}
+
+alias Iter = Ref[Iter_Cell]
+
+func __iter_cell(raw: uint) -> Iter {
+    var cell: Iter_Cell = (raw = raw, keep_db = nil)
+    return ref cell
+}
+
+func __iter_cell_with_db(raw: uint, keep: Db) -> Iter {
+    var cell: Iter_Cell = (raw = raw, keep_db = keep)
+    return ref cell
+}
+
+type Entry {
+    public key: Array[u8]
+    public val: Array[u8]
+}
+
+enum Status {
+    KV_OK = 0,
+    KV_NOTFOUND = 1,
+    KV_ERR = 2
+}
+
+
+func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
+    let value: Ffi_Bytes = ref_read(bytes)
+    var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
+    __ffi_bytes_take(bytes, ref copied)
+    return copied
+}
+
+func __ffi_take_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry {
+    let value: Ffi_Bytes = ref_read(bytes)
+    var lifted: Entry = (key = new[Array[u8]](cast[int]__ffi_kv_entry_key_length(value.data)), val = new[Array[u8]](cast[int]__ffi_kv_entry_val_length(value.data)))
+    __ffi_kv_entry_take(bytes, ref lifted.key, ref lifted.val)
+    return lifted
+}
+
+func __ffi_take_optional_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry? {
+    let value: Ffi_Bytes = ref_read(bytes)
+    if value.data == 0 {
+        return nil
+    }
+    return __ffi_take_kv_entry(bytes)
+}
+
+func db_open(path: string) -> Db fail: Error {
+    var path_value: Array[u8] = __text_byte_array(path)
+    var out_db: uint = 0
+    var detail: i64 = 0
+    let outcome = __kv_open(ref path_value, ref out_db, ref detail)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_open")
+        fail failure
+    }
+    if outcome == 0 {
+        let failure: Error = (code = cast[i64]detail, text = nil, fn = "kv_open")
+        fail failure
+    }
+    return __db_cell(out_db)
+}
+
+func __init(modify self: Db, path: string) {
+    try {
+        self = db_open(path)!
+    } else failure {
+        panic("db_open failed")
+    }
+}
+
+func put(self: Db, key: Array[u8], val: Array[u8]) fail: Error {
+    var key_value = key
+    var val_value = val
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "kv_put")
+        fail failure
+    }
+    let outcome = __kv_put(self.raw, ref key_value, ref val_value)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
+        fail failure
+    }
+    if outcome == 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_put")
+        fail failure
+    }
+}
+
+func get(self: Db, key: Array[u8]) -> Array[u8]? fail: Error {
+    var key_value = key
+    var out_val: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "kv_get")
+        fail failure
+    }
+    let outcome = __kv_get(self.raw, ref key_value, ref out_val)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
+        fail failure
+    }
+    if outcome == 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_get")
+        fail failure
+    }
+    if outcome == 1 {
+        return nil
+    }
+    return __ffi_take_bytes(ref out_val)
+}
+
+func iter(self: Db, prefix: Array[u8]) -> Iter fail: Error {
+    var prefix_value = prefix
+    var result: uint = 0
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "kv_iter_new")
+        fail failure
+    }
+    let outcome = __kv_iter_new(self.raw, ref prefix_value, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
+        fail failure
+    }
+    if outcome == 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_new")
+        fail failure
+    }
+    return __iter_cell_with_db(result, self)
+}
+
+func next(self: Iter) -> Entry? fail: Error {
+    var result: Ffi_Bytes = (data = 0, length = 0)
+    if self.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "kv_iter_next")
+        fail failure
+    }
+    let outcome = __kv_iter_next(self.raw, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "kv_iter_next")
+        fail failure
+    }
+    return __ffi_take_optional_kv_entry(ref result)
+}
+7	tests/gen_n00b/../bind/kv.writ:10:1	Db
+18	tests/gen_n00b/../bind/kv.writ:11:1	Iter
+35	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
+40	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
+69	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+93	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+111	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+133	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
+152	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
+library kv
+load static
+extern __kv_open writ_kv_n00b_kv_open (ref[array[u8]], ref[uint], ref[int]) -> i32 fail: nil
+extern __kv_put writ_kv_n00b_kv_put (uint, ref[array[u8]], ref[array[u8]]) -> i32 fail: nil
+extern __kv_get writ_kv_n00b_kv_get (uint, ref[array[u8]], ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __kv_iter_new writ_kv_n00b_kv_iter_new (uint, ref[array[u8]], ref[uint]) -> i32 fail: nil
+extern __kv_iter_next writ_kv_n00b_kv_iter_next (uint, ref[builtin.ffi.Ffi_Bytes]) -> i32 fail: nil
+extern __ffi_bytes_take writ_kv_take_bytes (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]]) -> nil fail: nil
+extern __ffi_kv_entry_key_length writ_kv_kv_entry_key_length (uint) -> uint fail: nil
+extern __ffi_kv_entry_val_length writ_kv_kv_entry_val_length (uint) -> uint fail: nil
+extern __ffi_kv_entry_take writ_kv_kv_entry_take (ref[builtin.ffi.Ffi_Bytes], ref[array[u8]], ref[array[u8]]) -> nil fail: nil

@@ -1,0 +1,321 @@
+#ifndef PTS_WRIT_H
+#define PTS_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define PTS_ARGUMENT_ERROR (-1)
+#define PTS_OUT_OF_MEMORY (-2)
+#define PTS_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} pts_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} pts_str_t;
+
+void pts_bytes_free(pts_bytes_t *bytes);
+void pts_free(void *data);
+
+enum {
+    PTS_PT_READ = 1,
+    PTS_PT_WRITE = 2,
+    PTS_PT_BOTH = 3,
+    PTS_PT_EXEC = 8,
+};
+typedef struct point {
+    float x;
+    float y;
+} point;
+
+
+enum {
+    pts_pt_scale_error = 0,
+    pts_pt_scale_ok = 1,
+};
+int32_t pts_pt_scale(point *p, double k);
+
+enum {
+    pts_pt_origin_ok = 0,
+};
+int32_t pts_pt_origin(point *result);
+
+int pts_pt_type(int mode);
+
+enum {
+    pts_pt_sum_ok = 0,
+};
+int32_t pts_pt_sum(const double *args, size_t args_count, double *result);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "pts_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+int pt_scale(point *p, double k);
+point pt_origin(void);
+int pt_type(int mode);
+double pt_sum(int count, ...);
+int pt_peek(void *p);
+
+void pts_bytes_free(pts_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void pts_free(void *data) {
+    free(data);
+}
+
+int32_t pts_pt_scale(point *p, double k) {
+    point *s0 = 0;
+    double s1 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = p;
+    s1 = k;
+    ret = pt_scale(s0, s1);
+    if (((long long)ret) != 0) {
+        outcome = pts_pt_scale_error;
+    }
+    else {
+        outcome = pts_pt_scale_ok;
+    }
+    return outcome;
+}
+
+int32_t pts_pt_origin(point *result) {
+    point ret = {0};
+    int32_t outcome = 0;
+    ret = pt_origin();
+    {
+        outcome = pts_pt_origin_ok;
+    }
+    if (outcome == pts_pt_origin_ok) {
+        *result = ret;
+    }
+    return outcome;
+}
+
+int pts_pt_type(int mode) {
+    int s0 = 0;
+    int ret = 0;
+    s0 = mode;
+    ret = pt_type(s0);
+    return ret;
+}
+
+int32_t pts_pt_sum(const double *args, size_t args_count, double *result) {
+    int s0 = 0;
+    double ret = 0;
+    int32_t outcome = 0;
+    s0 = (int)args_count;
+    switch (args_count) {
+        case 0:
+            ret = pt_sum(s0);
+            break;
+        case 1:
+            ret = pt_sum(s0, (double)args[0]);
+            break;
+        case 2:
+            ret = pt_sum(s0, (double)args[0], (double)args[1]);
+            break;
+        case 3:
+            ret = pt_sum(s0, (double)args[0], (double)args[1], (double)args[2]);
+            break;
+        case 4:
+            ret = pt_sum(s0, (double)args[0], (double)args[1], (double)args[2], (double)args[3]);
+            break;
+        case 5:
+            ret = pt_sum(s0, (double)args[0], (double)args[1], (double)args[2], (double)args[3], (double)args[4]);
+            break;
+        case 6:
+            ret = pt_sum(s0, (double)args[0], (double)args[1], (double)args[2], (double)args[3], (double)args[4], (double)args[5]);
+            break;
+        case 7:
+            ret = pt_sum(s0, (double)args[0], (double)args[1], (double)args[2], (double)args[3], (double)args[4], (double)args[5], (double)args[6]);
+            break;
+        case 8:
+            ret = pt_sum(s0, (double)args[0], (double)args[1], (double)args[2], (double)args[3], (double)args[4], (double)args[5], (double)args[6], (double)args[7]);
+            break;
+        default:
+            outcome = PTS_ARGUMENT_ERROR;
+            goto finish;
+    }
+    {
+        outcome = pts_pt_sum_ok;
+    }
+    if (outcome == pts_pt_sum_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "pts_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+void pts_take_bytes(pts_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    pts_bytes_free(bytes);
+}
+
+int32_t pts_n00b_pt_scale(const void *p, double k) {
+    size_t p_length = 0;
+    const void *p_data = n00b_ffi_borrow((void *)p, &p_length, 0);
+    int32_t writ_n00b_value = pts_pt_scale((point *)p_data, k);
+    n00b_ffi_release((void *)p);
+    return writ_n00b_value;
+}
+
+int32_t pts_n00b_pt_origin(void *result) {
+    int32_t writ_n00b_value = pts_pt_origin((point *)result);
+    return writ_n00b_value;
+}
+
+int pts_n00b_pt_type(int mode) {
+    int writ_n00b_value = pts_pt_type(mode);
+    return writ_n00b_value;
+}
+
+int32_t pts_n00b_pt_sum(const void *args, void *result) {
+    size_t args_length = 0;
+    const void *args_borrowed = n00b_ffi_borrow((void *)args, &args_length, 0);
+    uint8_t *args_data = malloc(args_length + 1);
+    if (args_data && args_length) {
+        memcpy(args_data, args_borrowed, args_length);
+    }
+    if (args_data) {
+        args_data[args_length] = 0;
+    }
+    n00b_ffi_release((void *)args);
+    if (!args_data) {
+        free(args_data);
+        return PTS_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = pts_pt_sum((const double *)args_data, args_length, (double *)result);
+    free(args_data);
+    return writ_n00b_value;
+}
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+type Point {
+    storage: Array[u8]
+}
+
+func point() -> Point {
+    let value: Point = (storage = new[Array[u8]](8))
+    return value
+}
+
+func x(self: Point) -> f64 {
+    return __ffi_read_f32(ref self.storage, 0)
+}
+
+func set_x(modify self: Point, value: f64) {
+    __ffi_write_f32(ref self.storage, 0, value)
+}
+
+func y(self: Point) -> f64 {
+    return __ffi_read_f32(ref self.storage, 4)
+}
+
+func set_y(modify self: Point, value: f64) {
+    __ffi_write_f32(ref self.storage, 4, value)
+}
+
+flagset Mode {
+    PT_READ,
+    PT_WRITE,
+    unused_bit_2,
+    PT_EXEC,
+    PT_BOTH = PT_READ + PT_WRITE,
+}
+
+
+public func peek_raw(p: uint) -> i32 {
+    return __peek_raw(p)
+}
+
+func scale(modify p: Point, k: f64) fail: Scale_Failure {
+    let outcome = __pt_scale(ref p.storage, k)
+    if outcome < 0 {
+        fail new[Scale_Failure](cast[i64]outcome, nil, "pt_scale")
+    }
+    if outcome == 0 {
+        fail new[Scale_Failure](cast[i64]outcome, nil, "pt_scale")
+    }
+}
+
+func origin() -> Point fail: Error {
+    var result = point()
+    let outcome = __pt_origin(ref result.storage)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "pt_origin")
+        fail failure
+    }
+    return result
+}
+
+func type_(mode: Mode) -> i32 {
+    let result = __pt_type(mode)
+    return result
+}
+
+func sum(args: List[f64]) -> f64 fail: Error {
+    var args_value = args
+    var result: f64 = 0
+    let outcome = __pt_sum(ref args_value, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "pt_sum")
+        fail failure
+    }
+    return result
+}
+7	tests/gen_n00b/float_record.writ:4:1	point
+32	tests/gen_n00b/float_record.writ:9:1	pt_mode
+41	tests/gen_n00b/float_record.writ:20:1	pt_peek
+45	tests/gen_n00b/float_record.writ:11:1	pt_scale
+55	tests/gen_n00b/float_record.writ:14:1	pt_origin
+65	tests/gen_n00b/float_record.writ:16:1	pt_type
+70	tests/gen_n00b/float_record.writ:18:1	pt_sum
+library pts
+load static
+extern __pt_scale pts_n00b_pt_scale (ref[array[u8]], f64) -> i32 fail: nil
+extern __pt_origin pts_n00b_pt_origin (ref[array[u8]]) -> i32 fail: nil
+extern __pt_type pts_n00b_pt_type (Mode) -> i32 fail: nil
+extern __pt_sum pts_n00b_pt_sum (ref[builtin.containers.list.List[f64]], ref[f64]) -> i32 fail: nil
+extern __peek_raw pt_peek (uint) -> i32 fail: nil

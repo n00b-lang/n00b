@@ -1,0 +1,300 @@
+@lexer("lua.lex")
+
+# Lua 5.4 Grammar
+#
+# Translated from the complete syntax in the Lua 5.4 Reference Manual, section 9.
+# https://www.lua.org/manual/5.4/manual.html#9
+#
+# This is a SYNTACTIC grammar only. Lexical details (string escapes, number
+# formats, long comments, long strings, etc.) are handled by the lexer.
+#
+# Token types provided by the lexer:
+#   %IDENTIFIER  — Name (any identifier that is not a keyword)
+#   %INTEGER     — Integer numeral literal
+#   %FLOAT       — Float numeral literal
+#   %STRING      — String literal (single-quoted, double-quoted, or long string)
+#
+# Keywords are written as %"keyword".
+# Operators and punctuation are written as %"op".
+
+# ============================================================================
+# Chunks and blocks
+# ============================================================================
+
+# A chunk is the top-level compilation unit. It is a block treated as the
+# body of an anonymous variadic function.
+<chunk> ::= <block>
+
+# A block is a sequence of statements optionally followed by a return statement.
+<block> @hardline ::= <stat>* <retstat>?
+
+# ============================================================================
+# Statements
+# ============================================================================
+
+<stat> ::= %";"
+          | <varlist> %"=" <explist>
+          | <functioncall>
+          | <label>
+          | %"break"
+          | %"goto" %IDENTIFIER
+          | <do-block>
+          | <while-stat>
+          | <repeat-stat>
+          | <if-stat>
+          | <for-numeric>
+          | <for-generic>
+          | <func-stat>
+          | <local-func>
+          | <local-stat>
+
+# Do block
+<do-block> @hardline($1) @indent($1) @hardline($2) ::= %"do" <block> %"end"
+
+# While loop
+<while-stat> @hardline($3) @indent($3) @hardline($4) ::= %"while" <exp> %"do" <block> %"end"
+
+# Repeat-until loop
+<repeat-stat> @hardline($1) @indent($1) @hardline($2) ::= %"repeat" <block> %"until" <exp>
+
+# If-then-elseif-else
+<if-stat> @hardline($3) @indent($3) @hardline($4) @hardline($5) @hardline($6) ::= %"if" <exp> %"then" <block> <elseif-clause>* <else-clause>? %"end"
+
+<elseif-clause> @hardline($3) @indent($3) ::= %"elseif" <exp> %"then" <block>
+
+<else-clause> @hardline($1) @indent($1) ::= %"else" <block>
+
+# Numeric for: for Name = exp, exp [, exp] do block end
+<for-numeric> @nospace($4) @nospace($6) @hardline($8) @indent($8) @hardline($9) ::= %"for" %IDENTIFIER %"=" <exp> %"," <exp> <for-step>? %"do" <block> %"end"
+
+<for-step> ::= %"," <exp>
+
+# Generic for: for namelist in explist do block end
+<for-generic> @hardline($5) @indent($5) @hardline($6) ::= %"for" <namelist> %"in" <explist> %"do" <block> %"end"
+
+# Function definition statement: function funcname funcbody
+<func-stat> @nospace($2) ::= %"function" <funcname> <funcbody>
+
+# Function name with optional method colon
+# funcname ::= Name {'.' Name} [':' Name]
+<funcname> @nospace ::= <dotted-name> (%":" %IDENTIFIER)?
+
+<dotted-name> @nospace ::= %IDENTIFIER (%"." %IDENTIFIER)*
+
+# Local function definition
+<local-func> @nospace($3) ::= %"local" %"function" %IDENTIFIER <funcbody>
+
+# Local variable declaration with optional attrib and initializer
+# local attnamelist ['=' explist]
+<local-stat> ::= %"local" <attnamelist> (%"=" <explist>)?
+
+# Attribute name list: Name attrib {',' Name attrib}
+<attnamelist> @nospace($1) ::= <name-attrib> (%"," <name-attrib>)*
+
+# Name with optional attribute: Name ['<' Name '>']
+<name-attrib> ::= %IDENTIFIER <attrib>?
+
+# Attribute: '<' Name '>'
+# Used for <close> and <const> in Lua 5.4
+<attrib> ::= %"<" %IDENTIFIER %">"
+
+# Label: ::Name::
+<label> @nospace($1) @nospace($2) ::= %"::" %IDENTIFIER %"::"
+
+# Return statement: return [explist] [';']
+<retstat> ::= %"return" <explist>? %";"?
+
+# ============================================================================
+# Variables
+# ============================================================================
+
+# A variable is a name, a table field by index, or a table field by name.
+<var> ::= %IDENTIFIER
+         | <prefixexp> %"[" <exp> %"]"
+         | <prefixexp> %"." %IDENTIFIER
+
+# Variable list (for assignment)
+<varlist> @nospace($1) ::= <var> (%"," <var>)*
+
+# ============================================================================
+# Expressions
+# ============================================================================
+
+# Expression list
+<explist> @nospace($1) ::= <exp> (%"," <exp>)*
+
+# Name list (for generic for, parameter lists)
+<namelist> @nospace($1) ::= %IDENTIFIER (%"," %IDENTIFIER)*
+
+# ============================================================================
+# Expression with operator precedence
+# ============================================================================
+#
+# Lua 5.4 operator precedence (lowest to highest):
+#
+#   1. or                           (left-associative)
+#   2. and                          (left-associative)
+#   3. <  >  <=  >=  ~=  ==        (left-associative)
+#   4. |                            (left-associative)
+#   5. ~                            (left-associative, bitwise XOR)
+#   6. &                            (left-associative)
+#   7. <<  >>                       (left-associative)
+#   8. ..                           (RIGHT-associative)
+#   9. +  -                         (left-associative)
+#  10. *  /  //  %                  (left-associative)
+#  11. unary: not  #  -  ~          (prefix, right-associative)
+#  12. ^                            (RIGHT-associative)
+#
+# We encode this with one non-terminal per precedence level.
+# Left-associative:  <X> ::= <X> op <higher> | <higher>
+# Right-associative: <X> ::= <higher> op <X> | <higher>
+
+<exp> ::= <or-exp>
+
+# Level 1: or (left-assoc)
+<or-exp> ::= <or-exp> %"or" <and-exp>
+            | <and-exp>
+
+# Level 2: and (left-assoc)
+<and-exp> ::= <and-exp> %"and" <cmp-exp>
+             | <cmp-exp>
+
+# Level 3: comparison (left-assoc)
+# <  >  <=  >=  ~=  ==
+<cmp-exp> ::= <cmp-exp> <cmp-op> <bitor-exp>
+             | <bitor-exp>
+
+<cmp-op> ::= %"<" | %">" | %"<=" | %">=" | %"~=" | %"=="
+
+# Level 4: bitwise OR (left-assoc)
+<bitor-exp> ::= <bitor-exp> %"|" <bitxor-exp>
+               | <bitxor-exp>
+
+# Level 5: bitwise XOR (left-assoc)
+<bitxor-exp> ::= <bitxor-exp> %"~" <bitand-exp>
+                | <bitand-exp>
+
+# Level 6: bitwise AND (left-assoc)
+<bitand-exp> ::= <bitand-exp> %"&" <shift-exp>
+                | <shift-exp>
+
+# Level 7: shift (left-assoc)
+<shift-exp> ::= <shift-exp> <shift-op> <concat-exp>
+               | <concat-exp>
+
+<shift-op> ::= %"<<" | %">>"
+
+# Level 8: concatenation (RIGHT-assoc)
+<concat-exp> ::= <add-exp> %".." <concat-exp>
+                | <add-exp>
+
+# Level 9: addition, subtraction (left-assoc)
+<add-exp> ::= <add-exp> <add-op> <mul-exp>
+             | <mul-exp>
+
+<add-op> ::= %"+" | %"-"
+
+# Level 10: multiplication, division, floor division, modulo (left-assoc)
+<mul-exp> ::= <mul-exp> <mul-op> <unary-exp>
+             | <unary-exp>
+
+<mul-op> ::= %"*" | %"/" | %"//" | %"%"
+
+# Level 11: unary operators (prefix, right-assoc)
+# not  #  -  ~ (bitwise NOT)
+<unary-exp> ::= <unop> <unary-exp>
+               | <power-exp>
+
+<unop> ::= %"not" | %"#" | %"-" | %"~"
+
+# Level 12: exponentiation (RIGHT-assoc)
+<power-exp> ::= <simple-exp> %"^" <unary-exp>
+               | <simple-exp>
+
+# ============================================================================
+# Simple (primary) expressions
+# ============================================================================
+
+# The atoms of expressions: literals, vararg, function definition,
+# prefix expression, and table constructor.
+<simple-exp> ::= %"nil"
+                | %"false"
+                | %"true"
+                | %INTEGER
+                | %FLOAT
+                | %STRING
+                | %"..."
+                | <functiondef>
+                | <prefixexp>
+                | <tableconstructor>
+
+# ============================================================================
+# Prefix expressions
+# ============================================================================
+
+# A prefix expression is something that can appear on the left side of
+# indexing, field access, or function call. It is either a variable
+# (Name, prefix[exp], prefix.Name) or a parenthesized expression or
+# a function call.
+#
+# The Lua reference grammar defines:
+#   prefixexp ::= var | functioncall | '(' exp ')'
+#   var ::= Name | prefixexp '[' exp ']' | prefixexp '.' Name
+#   functioncall ::= prefixexp args | prefixexp ':' Name args
+#
+# This is mutually left-recursive. We flatten it into a single
+# left-recursive non-terminal with suffixes.
+
+<prefixexp> ::= %IDENTIFIER
+               | %"(" <exp> %")"
+               | <prefixexp> %"[" <exp> %"]"
+               | <prefixexp> %"." %IDENTIFIER
+               | <prefixexp> <args>
+               | <prefixexp> %":" %IDENTIFIER <args>
+
+# Function call is a prefix expression with call suffix.
+# We define it as a subset of prefixexp so the parser can distinguish
+# statements that are function calls from those that are not.
+<functioncall> @nospace($1) ::= <prefixexp> <args>
+                  | <prefixexp> %":" %IDENTIFIER <args>
+
+# ============================================================================
+# Function calls — arguments
+# ============================================================================
+
+# args ::= '(' [explist] ')' | tableconstructor | LiteralString
+<args> @nospace($1) @nospace($2) ::= %"(" <explist>? %")"
+          | <tableconstructor>
+          | %STRING
+
+# ============================================================================
+# Function definitions
+# ============================================================================
+
+# functiondef ::= function funcbody
+<functiondef> ::= %"function" <funcbody>
+
+# funcbody ::= '(' [parlist] ')' block end
+<funcbody> @nospace($1) @nospace($2) @hardline($3) @indent($3) @hardline($4) ::= %"(" <parlist>? %")" <block> %"end"
+
+# parlist ::= namelist [',' '...'] | '...'
+<parlist> ::= <namelist> (%"," %"...")?
+             | %"..."
+
+# ============================================================================
+# Table constructors
+# ============================================================================
+
+# tableconstructor ::= '{' [fieldlist] '}'
+<tableconstructor> @nospace($1) @nospace($2) ::= %"{" <fieldlist>? %"}"
+
+# fieldlist ::= field {fieldsep field} [fieldsep]
+<fieldlist> @nospace($1) ::= <field> (<fieldsep> <field>)* <fieldsep>?
+
+# field ::= '[' exp ']' '=' exp | Name '=' exp | exp
+<field> ::= %"[" <exp> %"]" %"=" <exp>
+           | %IDENTIFIER %"=" <exp>
+           | <exp>
+
+# fieldsep ::= ',' | ';'
+<fieldsep> ::= %"," | %";"

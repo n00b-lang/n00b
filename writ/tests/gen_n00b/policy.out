@@ -1,0 +1,389 @@
+#ifndef POLICY_WRIT_H
+#define POLICY_WRIT_H
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define POLICY_ARGUMENT_ERROR (-1)
+#define POLICY_OUT_OF_MEMORY (-2)
+#define POLICY_CONTRACT_VIOLATION (-3)
+
+typedef struct {
+    uint8_t *data;
+    size_t length;
+} policy_bytes_t;
+
+typedef struct {
+    const char *data;
+    size_t length;
+} policy_str_t;
+
+void policy_bytes_free(policy_bytes_t *bytes);
+void policy_free(void *data);
+
+typedef struct stmt_state stmt_state;
+
+typedef void (*text_free)(void *p);
+
+
+enum {
+    policy_bind_text_text_static_ok = 0,
+};
+int32_t policy_bind_text_text_static(stmt_state *stmt, const char *text, size_t text_length, int *result);
+
+enum {
+    policy_bind_text_text_transient_ok = 0,
+};
+int32_t policy_bind_text_text_transient(stmt_state *stmt, const char *text, size_t text_length, int *result);
+
+enum {
+    policy_bind_text_with_dtor_ok = 0,
+};
+int32_t policy_bind_text_with_dtor(stmt_state *stmt, const char *text, size_t text_length, text_free dtor, int *result);
+
+enum {
+    policy_stmt_release_ok = 0,
+};
+int32_t policy_stmt_release(stmt_state *stmt);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+#include "policy_writ.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+int bind_text(stmt_state *stmt, const char *text, int n, text_free dtor);
+void stmt_release(stmt_state *stmt);
+
+static const uint8_t policy_empty[1];
+
+void policy_bytes_free(policy_bytes_t *bytes) {
+    free(bytes->data);
+    bytes->data = NULL;
+    bytes->length = 0;
+}
+
+void policy_free(void *data) {
+    free(data);
+}
+
+int32_t policy_bind_text_text_static(stmt_state *stmt, const char *text, size_t text_length, int *result) {
+    stmt_state *s0 = 0;
+    const char *s1 = 0;
+    int s2 = 0;
+    text_free s3 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = stmt;
+    if (!text && text_length) {
+        outcome = POLICY_ARGUMENT_ERROR;
+        goto finish;
+    }
+    if ((uint64_t)text_length > UINT64_C(2147483647)) {
+        outcome = POLICY_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = text_length ? (const char *)text : (const char *)policy_empty;
+    s2 = (int)text_length;
+    s3 = (text_free)(intptr_t)0;
+    ret = bind_text(s0, s1, s2, s3);
+    {
+        outcome = policy_bind_text_text_static_ok;
+    }
+    if (outcome == policy_bind_text_text_static_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+
+int32_t policy_bind_text_text_transient(stmt_state *stmt, const char *text, size_t text_length, int *result) {
+    stmt_state *s0 = 0;
+    const char *s1 = 0;
+    int s2 = 0;
+    text_free s3 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = stmt;
+    if (!text && text_length) {
+        outcome = POLICY_ARGUMENT_ERROR;
+        goto finish;
+    }
+    if ((uint64_t)text_length > UINT64_C(2147483647)) {
+        outcome = POLICY_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = text_length ? (const char *)text : (const char *)policy_empty;
+    s2 = (int)text_length;
+    s3 = (text_free)(intptr_t)-1;
+    ret = bind_text(s0, s1, s2, s3);
+    {
+        outcome = policy_bind_text_text_transient_ok;
+    }
+    if (outcome == policy_bind_text_text_transient_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+
+int32_t policy_bind_text_with_dtor(stmt_state *stmt, const char *text, size_t text_length, text_free dtor, int *result) {
+    stmt_state *s0 = 0;
+    const char *s1 = 0;
+    int s2 = 0;
+    text_free s3 = 0;
+    int ret = 0;
+    int32_t outcome = 0;
+    s0 = stmt;
+    if (!text && text_length) {
+        outcome = POLICY_ARGUMENT_ERROR;
+        goto finish;
+    }
+    if ((uint64_t)text_length > UINT64_C(2147483647)) {
+        outcome = POLICY_ARGUMENT_ERROR;
+        goto finish;
+    }
+    s1 = text_length ? (const char *)text : (const char *)policy_empty;
+    s2 = (int)text_length;
+    s3 = dtor;
+    ret = bind_text(s0, s1, s2, s3);
+    {
+        outcome = policy_bind_text_with_dtor_ok;
+    }
+    if (outcome == policy_bind_text_with_dtor_ok) {
+        *result = ret;
+    }
+finish:
+    return outcome;
+}
+
+int32_t policy_stmt_release(stmt_state *stmt) {
+    stmt_state *s0 = 0;
+    int32_t outcome = 0;
+    s0 = stmt;
+    stmt_release(s0);
+    {
+        outcome = policy_stmt_release_ok;
+    }
+    if (outcome == policy_stmt_release_ok) {
+    }
+    return outcome;
+}
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "policy_writ.h"
+
+void *n00b_ffi_borrow(void *object, size_t *length, uint32_t access);
+void n00b_ffi_release(void *object);
+void n00bb_runtime_trap(const char *reason, uint64_t length);
+
+void policy_kept_free(uint64_t kept) {
+    free((void *)(uintptr_t)kept);
+}
+
+void policy_take_bytes(policy_bytes_t *bytes, void *out) {
+    size_t length = 0;
+    uint8_t *data = n00b_ffi_borrow(out, &length, 1);
+    if (data && bytes->data) {
+        memcpy(data, bytes->data, length < bytes->length ? length : bytes->length);
+    }
+    n00b_ffi_release(out);
+    policy_bytes_free(bytes);
+}
+
+int32_t policy_n00b_bind_text_text_static(uint64_t stmt, const void *text, void *result, uint64_t *text_kept) {
+    size_t text_length = 0;
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
+    uint8_t *text_data = malloc(text_length + 1);
+    if (text_data && text_length) {
+        memcpy(text_data, text_borrowed, text_length);
+    }
+    if (text_data) {
+        text_data[text_length] = 0;
+    }
+    n00b_ffi_release((void *)text);
+    if (!text_data) {
+        free(text_data);
+        return POLICY_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = policy_bind_text_text_static((stmt_state *)(uintptr_t)stmt, (const char *)text_data, text_length, (int *)result);
+    *text_kept = (uint64_t)(uintptr_t)text_data;
+    return writ_n00b_value;
+}
+
+int32_t policy_n00b_bind_text_text_transient(uint64_t stmt, const void *text, void *result) {
+    size_t text_length = 0;
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
+    uint8_t *text_data = malloc(text_length + 1);
+    if (text_data && text_length) {
+        memcpy(text_data, text_borrowed, text_length);
+    }
+    if (text_data) {
+        text_data[text_length] = 0;
+    }
+    n00b_ffi_release((void *)text);
+    if (!text_data) {
+        free(text_data);
+        return POLICY_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = policy_bind_text_text_transient((stmt_state *)(uintptr_t)stmt, (const char *)text_data, text_length, (int *)result);
+    free(text_data);
+    return writ_n00b_value;
+}
+
+void policy_n00b_bind_text_with_dtor_free(void *p) {
+    free((void *)p);
+}
+
+int32_t policy_n00b_bind_text_with_dtor(uint64_t stmt, const void *text, void *result) {
+    size_t text_length = 0;
+    const void *text_borrowed = n00b_ffi_borrow((void *)text, &text_length, 0);
+    uint8_t *text_data = malloc(text_length + 1);
+    if (text_data && text_length) {
+        memcpy(text_data, text_borrowed, text_length);
+    }
+    if (text_data) {
+        text_data[text_length] = 0;
+    }
+    n00b_ffi_release((void *)text);
+    if (!text_data) {
+        free(text_data);
+        return POLICY_OUT_OF_MEMORY;
+    }
+    int32_t writ_n00b_value = policy_bind_text_with_dtor((stmt_state *)(uintptr_t)stmt, (const char *)text_data, text_length, policy_n00b_bind_text_with_dtor_free, (int *)result);
+    return writ_n00b_value;
+}
+
+int32_t policy_n00b_stmt_release(uint64_t stmt) {
+    int32_t writ_n00b_value = policy_stmt_release((stmt_state *)(uintptr_t)stmt);
+    return writ_n00b_value;
+}
+
+type Error {
+    public code: i64
+    public text: string?
+    public fn: string
+}
+
+type Stmt_Cell {
+    public raw: uint
+}
+
+alias Stmt = Ref[Stmt_Cell]
+
+func __stmt_cell(raw: uint) -> Stmt {
+    var cell: Stmt_Cell = (raw = raw)
+    return ref cell
+}
+
+func __finalize(consume self: Ref[Stmt_Cell]) {
+    if self.raw != 0 and debug_enabled() {
+        __fd_write(2, "Stmt collected while open; releasing it\n")
+        __ffi_event("policy:stmt_release", [cast[u64](self.raw)]'array, __os_thread_id())
+        let released = __stmt_release(self.raw)
+    }
+}
+
+
+func __ffi_kept_free(kept: u64) {
+    __ffi_kept_release(kept)
+}
+
+func bind_text_text_static(stmt: Stmt, text: string) -> i32 fail: Error {
+    var text_value: Array[u8] = __text_byte_array(text)
+    var result: i32 = 0
+    if stmt.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
+        fail failure
+    }
+    var text_kept: uint = 0
+    let outcome = __bind_text_text_static(stmt.raw, ref text_value, ref result, ref text_kept)
+    if outcome < 0 {
+        __ffi_kept_free(cast[u64](text_kept))
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
+        fail failure
+    }
+    let text_kept_group = __ffi_hold_group()
+    __ffi_hold(text_kept_group, cast[u64](text_kept), ref __ffi_kept_free, "policy:stmt_release", [cast[u64](stmt.raw)]'array, 0)
+    return result
+}
+
+func bind_text_text_transient(stmt: Stmt, text: string) -> i32 fail: Error {
+    var text_value: Array[u8] = __text_byte_array(text)
+    var result: i32 = 0
+    if stmt.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
+        fail failure
+    }
+    let outcome = __bind_text_text_transient(stmt.raw, ref text_value, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
+        fail failure
+    }
+    return result
+}
+
+func bind_text_owned(stmt: Stmt, text: string) -> i32 fail: Error {
+    var text_value: Array[u8] = __text_byte_array(text)
+    var result: i32 = 0
+    if stmt.raw == 0 {
+        let failure: Error = (code = -1, text = "handle is closed", fn = "bind_text")
+        fail failure
+    }
+    let outcome = __bind_text_with_dtor(stmt.raw, ref text_value, ref result)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bind_text")
+        fail failure
+    }
+    return result
+}
+
+enum Bind_Text_Dtor {
+    TEXT_STATIC = 0,
+    TEXT_TRANSIENT = 1,
+    OWNED = 2
+}
+
+func bind_text(stmt: Stmt, text: string, dtor: Bind_Text_Dtor) -> i32 fail: Error {
+    if dtor == Bind_Text_Dtor.TEXT_STATIC {
+        return bind_text_text_static(stmt, text)!
+    }
+    if dtor == Bind_Text_Dtor.TEXT_TRANSIENT {
+        return bind_text_text_transient(stmt, text)!
+    }
+    return bind_text_owned(stmt, text)!
+}
+
+func close(modify self: Stmt) fail: Error {
+    let outcome = __stmt_release(self.raw)
+    if outcome < 0 {
+        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "stmt_release")
+        fail failure
+    }
+    __ffi_event("policy:stmt_release", [cast[u64](self.raw)]'array, __os_thread_id())
+    self.raw = 0
+}
+7	tests/gen_n00b/../policy/policy.writ:4:1	Stmt
+31	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+50	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+65	tests/gen_n00b/../policy/policy.writ:11:1	bind_text
+96	tests/gen_n00b/../policy/policy.writ:22:1	stmt_release
+load static
+extern __bind_text_text_static policy_n00b_bind_text_text_static (uint, ref[array[u8]], ref[i32], ref[uint]) -> i32 fail: nil
+extern __bind_text_text_transient policy_n00b_bind_text_text_transient (uint, ref[array[u8]], ref[i32]) -> i32 fail: nil
+extern __bind_text_with_dtor policy_n00b_bind_text_with_dtor (uint, ref[array[u8]], ref[i32]) -> i32 fail: nil
+extern __stmt_release policy_n00b_stmt_release (uint) -> i32 fail: nil
+extern __ffi_kept_release policy_kept_free (uint) -> nil fail: nil

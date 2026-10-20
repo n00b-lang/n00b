@@ -1,0 +1,5 @@
+binding callbacks for n00b import {
+    callback Handler as "Event_Handler"
+    callback Event as "Not_A_Callback"
+    type Handler as "Not_A_Type"
+}

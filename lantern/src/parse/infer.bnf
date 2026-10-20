@@ -1,0 +1,65 @@
+<infer-expr> ::= <infer-term> <infer-tail>*
+
+<infer-tail> ::= <infer-op> <infer-term>
+
+<infer-op> ::= %"unify" | %"converts" | %"|"
+
+<infer-term> ::= <self-ref>
+               | <children-ref>
+               | <return-ref>
+               | <child-app>
+               | <child-ref>
+               | <type-var>
+               | <group>
+               | <fetch>
+               | <project>
+               | <compare>
+               | <method-result>
+               | <named-app>
+               | <named>
+
+<self-ref> ::= %"$" %"$"
+
+<children-ref> ::= %"$" %"*"
+
+<return-ref> ::= %"$" %IDENTIFIER
+
+<child-ref> ::= %"$" %INTEGER
+
+<child-app> ::= %"$" %INTEGER %"[" <child-args>? %"]"
+
+<child-args> ::= <child-arg> (%"," <child-arg>)*
+
+<child-arg> ::= <spread> | <infer-expr>
+
+<spread> ::= %"..." %"$" %INTEGER
+
+<type-var> ::= %"`" %IDENTIFIER
+
+<group> ::= %"(" <infer-expr> %")"
+
+<fetch> ::= %"lookup" %"(" <child-ref> %")"
+
+<project> ::= <project-op> %"(" <infer-expr> %")"
+            | <project-op> %"(" <infer-expr> %"," %IDENTIFIER %")"
+            | <project-op> %"(" <infer-expr> %"," %IDENTIFIER %"," %IDENTIFIER %")"
+
+<project-op> ::= %"return_of"
+               | %"element_of"
+               | %"slice_of"
+               | %"unwrap_result"
+               | %"method_return"
+               | %"field_return"
+               | %"field_return_auto_deref"
+
+<compare> ::= %"compare" %"(" <child-ref> %"," <child-ref> %")"
+            | %"compare" %"(" <child-ref> %"," <child-ref> %"," %IDENTIFIER %"," %IDENTIFIER %")"
+
+<method-result> ::= %"method_result" %"(" <child-ref> %"," <child-ref> %"," %IDENTIFIER %")"
+                  | %"method_result" %"(" <child-ref> %"," <child-ref> %"," %IDENTIFIER %"," %IDENTIFIER %")"
+
+<named-app> ::= %IDENTIFIER %"[" <named-args> %"]"
+
+<named-args> ::= <infer-expr> (%"," <infer-expr>)*
+
+<named> ::= %IDENTIFIER

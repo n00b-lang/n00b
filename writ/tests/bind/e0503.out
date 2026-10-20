@@ -1,0 +1,2 @@
+error[E0503]: the contract does not leave this choice open: `compress2.dest` is not borrowed from the library
+  --> tests/bind/e0503.writ:3:5

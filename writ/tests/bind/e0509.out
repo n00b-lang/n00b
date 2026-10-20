@@ -1,0 +1,10 @@
+error[E0509]: nothing provides this declaration: `kv_put`
+  --> tests/bind/e0509.writ:1:1
+error[E0509]: nothing provides this declaration: `kv_get`
+  --> tests/bind/e0509.writ:1:1
+error[E0509]: nothing provides this declaration: `kv_iter_new`
+  --> tests/bind/e0509.writ:1:1
+error[E0509]: nothing provides this declaration: `kv_iter_next`
+  --> tests/bind/e0509.writ:1:1
+error[E0509]: nothing provides this declaration: `kv_errstr`
+  --> tests/bind/e0509.writ:1:1
