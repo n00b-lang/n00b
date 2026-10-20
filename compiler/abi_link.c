@@ -14,7 +14,56 @@
 #include "lib/hash.h"
 #include "lib/indexed_table.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static int
+relocation_offset_order(const void *left, const void *right)
+{
+    uint64_t a = ((const core_object_absolute64_relocation_t *)left)
+        ->section_offset;
+    uint64_t b = ((const core_object_absolute64_relocation_t *)right)
+        ->section_offset;
+    return a < b ? -1 : a > b;
+}
+
+static void
+index_relocations(n00bb_abi_object_view_t *view)
+{
+    uint32_t count = view->metadata.relocation_count;
+    view->relocations = core_alloc_array(core_object_absolute64_relocation_t,
+                                         count ? count : 1);
+    for (uint32_t i = 0; i < count; i++)
+        if (!core_object_absolute64_relocation_at(&view->metadata,
+                view->format, i, &view->relocations[i])) return;
+    qsort(view->relocations, count, sizeof(*view->relocations),
+          relocation_offset_order);
+    view->relocation_count = count;
+    view->relocations_valid = true;
+}
+
+static const core_object_absolute64_relocation_t *
+relocation_at_offset(const n00bb_abi_object_view_t *view, uint64_t offset,
+                     bool *unique)
+{
+    *unique = false;
+    if (!view->relocations_valid) return nullptr;
+    size_t low = 0, high = view->relocation_count;
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        if (view->relocations[middle].section_offset < offset)
+            low = middle + 1;
+        else high = middle;
+    }
+    if (low == view->relocation_count
+        || view->relocations[low].section_offset != offset) {
+        *unique = true;
+        return nullptr;
+    }
+    *unique = low + 1 == view->relocation_count
+        || view->relocations[low + 1].section_offset != offset;
+    return &view->relocations[low];
+}
 
 bool
 n00bb_abi_object_open(const core_target_desc_t *target,
@@ -64,6 +113,7 @@ n00bb_abi_object_open(const core_target_desc_t *target,
         .header = header,
         .directory = directory, .directory_count = count,
     };
+    index_relocations(out);
     return true;
 }
 
@@ -72,6 +122,7 @@ n00bb_abi_object_close(n00bb_abi_object_view_t *view)
 {
     if (!view) return;
     core_free(view->directory);
+    core_free(view->relocations);
     *view = (n00bb_abi_object_view_t){0};
 }
 
@@ -194,48 +245,42 @@ n00bb_abi_object_string(const n00bb_abi_object_view_t *view,
         : view->format == CORE_TARGET_OBJECT_COFF
             ? CORE_STRING_STATIC(".rdata$S")
             : CORE_STRING_STATIC(".rodata.n00b_strings");
-    bool found = false;
     uint64_t pool_offset = 0;
     core_object_section_t pool = {0};
-    uint64_t field_offset = address - base;
-    for (uint32_t i = 0; i < view->metadata.relocation_count; i++) {
-        core_object_absolute64_relocation_t relocation;
-        if (!core_object_absolute64_relocation_at(&view->metadata,
-                view->format, i, &relocation)) return false;
-        if (relocation.section_offset != field_offset) continue;
-        if (found) return false;
-        if (view->format == CORE_TARGET_OBJECT_MACH_O) {
-            if (!relocation.target_is_section
-                || !core_object_section_at(view->object, view->object_bytes,
-                    view->format, relocation.native_symbol_index, &pool)
-                || relocation.addend_bits < pool.virtual_address)
-                return false;
-            pool_offset = relocation.addend_bits - pool.virtual_address;
-        }
-        else {
-            core_object_symbol_t symbol;
-            if (relocation.target_is_section
-                || !core_object_symbol_at(view->object,
-                    view->object_bytes, view->format, &view->metadata,
-                    relocation.native_symbol_index, &symbol)
-                || symbol.name.length != sizeof("n00b_string_pool") - 1
-                || memcmp(symbol.name.bytes, "n00b_string_pool",
-                          symbol.name.length)
-                || !symbol.native_section_index
-                || !core_object_section_at(view->object, view->object_bytes,
-                    view->format, symbol.native_section_index, &pool))
-                return false;
-            pool_offset = relocation.addend_bits;
-        }
-        if (!core_string_eq(core_string_borrow((const char *)pool.name,
-                                               pool.name_length), name)
-            || (segment.data && !core_string_eq(core_string_borrow(
-                    (const char *)pool.segment, pool.segment_length),
-                    segment)))
+    bool unique = false;
+    const core_object_absolute64_relocation_t *relocation =
+        relocation_at_offset(view, address - base, &unique);
+    if (!relocation || !unique) return false;
+    if (view->format == CORE_TARGET_OBJECT_MACH_O) {
+        if (!relocation->target_is_section
+            || !core_object_section_at(view->object, view->object_bytes,
+                view->format, relocation->native_symbol_index, &pool)
+            || relocation->addend_bits < pool.virtual_address)
             return false;
-        found = true;
+        pool_offset = relocation->addend_bits - pool.virtual_address;
     }
-    if (!found || pool_offset > pool.size
+    else {
+        core_object_symbol_t symbol;
+        if (relocation->target_is_section
+            || !core_object_symbol_at(view->object,
+                view->object_bytes, view->format, &view->metadata,
+                relocation->native_symbol_index, &symbol)
+            || symbol.name.length != sizeof("n00b_string_pool") - 1
+            || memcmp(symbol.name.bytes, "n00b_string_pool",
+                      symbol.name.length)
+            || !symbol.native_section_index
+            || !core_object_section_at(view->object, view->object_bytes,
+                view->format, symbol.native_section_index, &pool))
+            return false;
+        pool_offset = relocation->addend_bits;
+    }
+    if (!core_string_eq(core_string_borrow((const char *)pool.name,
+                                           pool.name_length), name)
+        || (segment.data && !core_string_eq(core_string_borrow(
+                (const char *)pool.segment, pool.segment_length),
+                segment)))
+        return false;
+    if (pool_offset > pool.size
         || header.length > pool.size - pool_offset) return false;
     *out = (n00bb_abi_string_view_t){
         .bytes = pool.bytes + pool_offset,

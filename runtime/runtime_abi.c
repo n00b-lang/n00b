@@ -961,21 +961,44 @@ physical_run_bounds(const n00b_abi_snapshot_v1 *snapshot,
     return true;
 }
 
+typedef struct {
+    uint32_t skipped;
+    uint64_t start;
+} physical_run_cursor_t;
+
+static bool
+physical_runs_cover_from(const n00b_abi_snapshot_v1 *snapshot,
+                         n00b_abi_range_v1 range, uint64_t start,
+                         uint64_t end, uint64_t parent_bits,
+                         physical_run_cursor_t *resume)
+{
+    if (start < resume->start) *resume = (physical_run_cursor_t){0};
+    resume->start = start;
+    uint64_t cursor = start;
+    bool leading = true;
+    for (uint32_t i = resume->skipped; i < range.count && cursor < end; i++) {
+        uint64_t run_start, run_end;
+        if (!physical_run_bounds(snapshot, range, i, &run_start, &run_end)
+            || run_end > parent_bits) return false;
+        if (run_end <= cursor) {
+            if (leading) resume->skipped = i + 1;
+            continue;
+        }
+        leading = false;
+        if (run_start > cursor) return false;
+        cursor = run_end;
+    }
+    return cursor >= end;
+}
+
 static bool
 physical_runs_cover(const n00b_abi_snapshot_v1 *snapshot,
                     n00b_abi_range_v1 range, uint64_t start, uint64_t end,
                     uint64_t parent_bits)
 {
-    uint64_t cursor = start;
-    for (uint32_t i = 0; i < range.count && cursor < end; i++) {
-        uint64_t run_start, run_end;
-        if (!physical_run_bounds(snapshot, range, i, &run_start, &run_end)
-            || run_end > parent_bits) return false;
-        if (run_end <= cursor) continue;
-        if (run_start > cursor) return false;
-        cursor = run_end;
-    }
-    return cursor >= end;
+    physical_run_cursor_t resume = {0};
+    return physical_runs_cover_from(snapshot, range, start, end,
+                                    parent_bits, &resume);
 }
 
 static bool
@@ -1015,11 +1038,12 @@ trace_member_at(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
-trace_placement_valid(const n00b_abi_snapshot_v1 *snapshot,
-                      const n00b_abi_type_v1 *parent,
-                      n00b_abi_range_v1 parent_occupied,
-                      const n00b_abi_type_v1 *type,
-                      uint64_t byte_offset)
+trace_placement_valid_from(const n00b_abi_snapshot_v1 *snapshot,
+                           const n00b_abi_type_v1 *parent,
+                           n00b_abi_range_v1 parent_occupied,
+                           const n00b_abi_type_v1 *type,
+                           uint64_t byte_offset,
+                           physical_run_cursor_t *resume)
 {
     if (!type || (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
         || !type->size_bits || !type->alignment_bytes
@@ -1041,12 +1065,24 @@ trace_placement_valid(const n00b_abi_snapshot_v1 *snapshot,
                 &child_start, &child_end)
             || child_end > type->size_bits
             || child_end > UINT64_MAX - start
-            || !physical_runs_cover(snapshot, parent_occupied,
+            || !physical_runs_cover_from(snapshot, parent_occupied,
                 start + child_start, start + child_end,
-                parent->size_bits))
+                parent->size_bits, resume))
             return false;
     }
     return true;
+}
+
+static bool
+trace_placement_valid(const n00b_abi_snapshot_v1 *snapshot,
+                      const n00b_abi_type_v1 *parent,
+                      n00b_abi_range_v1 parent_occupied,
+                      const n00b_abi_type_v1 *type,
+                      uint64_t byte_offset)
+{
+    physical_run_cursor_t resume = {0};
+    return trace_placement_valid_from(snapshot, parent, parent_occupied,
+                                      type, byte_offset, &resume);
 }
 
 static bool
@@ -1063,9 +1099,10 @@ trace_repeated_placement_valid(const n00b_abi_snapshot_v1 *snapshot,
     uint64_t stride = child->stride_bits / 8;
     if (count > 1 && (count - 1)
         > (UINT64_MAX - child->byte_offset) / stride) return false;
+    physical_run_cursor_t resume = {0};
     for (uint64_t i = 0; i < count; i++)
-        if (!trace_placement_valid(snapshot, parent, parent_occupied,
-            type, child->byte_offset + i * stride)) return false;
+        if (!trace_placement_valid_from(snapshot, parent, parent_occupied,
+            type, child->byte_offset + i * stride, &resume)) return false;
     return true;
 }
 

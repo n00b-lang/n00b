@@ -22,6 +22,9 @@ typedef struct {
     n00bb_abi_image_header_t header;
     n00bb_abi_directory_entry_t *directory;
     size_t directory_count;
+    core_object_absolute64_relocation_t *relocations;
+    uint32_t relocation_count;
+    bool relocations_valid;
 } n00bb_abi_object_view_t;
 
 typedef struct {
