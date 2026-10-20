@@ -3,8 +3,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
-LANTERN_BUILD_DIR="${LANTERN_BUILD_DIR:-$ROOT/../lantern/build}"
-WRIT_ROOT="${WRIT_ROOT:-$ROOT/../writ}"
+LANTERN_BUILD_DIR="${LANTERN_BUILD_DIR:-$ROOT/lantern/build}"
+WRIT_ROOT="${WRIT_ROOT:-$ROOT/writ}"
 WRIT_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
 WRIT_BUILD_DIR="${WRIT_BUILD_DIR:-$WRIT_ROOT/build-$WRIT_PLATFORM}"
 MESON_PKG_CONFIG_PATH=""
@@ -57,7 +57,7 @@ ensure_configured() {
 
 prepare_dependencies() {
     BUILD_DIR="$LANTERN_BUILD_DIR" \
-        "$ROOT/../lantern/build.sh" compile || return 1
+        "$ROOT/lantern/build.sh" compile || return 1
     BUILD_DIR="$WRIT_BUILD_DIR" "$WRIT_ROOT/build.sh" compile || return 1
     local -a pkg_paths
     local -a unique_paths=("$LANTERN_BUILD_DIR/meson-uninstalled"
@@ -169,24 +169,15 @@ do_linux() {
         echo "no container engine" >&2
         exit 1
     }
-    local workspace
-    workspace="$(cd "$ROOT/.." && pwd)"
-    local writ_lantern="${LANTERN_ROOT:-$HOME/lantern-writ}"
     local writ_resharp="${RESHARP_ROOT:-$HOME/resharp-writ}"
     "$engine" build -q --platform linux/amd64 -t n00bb-linux \
         -f "$ROOT/tools/linux.Dockerfile" "$ROOT/tools" >/dev/null || exit 1
     "$engine" run --rm --platform linux/amd64 \
         -v "$ROOT:/work/n00bb" \
-        -v "$workspace/lantern:/work/lantern" \
-        -v "$WRIT_ROOT:/work/writ" \
-        -v "$writ_lantern:/work/lantern-writ:ro" \
         -v "$writ_resharp:/work/resharp-writ:ro" \
         -e BUILD_DIR=/work/n00bb/build-linux-x86_64 \
-        -e LANTERN_BUILD_DIR=/work/lantern/build-linux-x86_64 \
-        -e WRIT_ROOT=/work/writ \
-        -e LANTERN_ROOT=/work/lantern-writ \
+        -e LANTERN_BUILD_DIR=/work/n00bb/lantern/build-linux-x86_64 \
         -e RESHARP_ROOT=/work/resharp-writ \
-        -e LANTERN_VERIFIED="$(tr -d '[:space:]' < "$WRIT_ROOT/deps/LANTERN_REVISION")" \
         -e RESHARP_VERIFIED="$(tr -d '[:space:]' < "$WRIT_ROOT/deps/RESHARP_REVISION")" \
         -w /work/n00bb n00bb-linux ./build.sh "$@"
 }

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LANTERN_ROOT="${LANTERN_ROOT:-$HOME/lantern-writ}"
+LANTERN_ROOT="${LANTERN_ROOT:-$(cd "$ROOT/../lantern" && pwd)}"
 RESHARP_ROOT="${RESHARP_ROOT:-$HOME/resharp-writ}"
 PLATFORM_TAG="${PLATFORM_TAG:-$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)}"
 LANTERN_BUILD="$ROOT/deps/lantern-build-$PLATFORM_TAG"
@@ -39,32 +39,24 @@ verify_workspace() {
 }
 
 verify_pin() {
-    verify_workspace lantern "$LANTERN_ROOT" "${LANTERN_VERIFIED:-}"
     verify_workspace resharp "$RESHARP_ROOT" "${RESHARP_VERIFIED:-}"
 }
 
 build_lantern() {
-    local stamp="$LANTERN_PREFIX/.revision"
-    local want
-    want="$(tr -d '[:space:]' < "$ROOT/deps/LANTERN_REVISION")"
-    if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$want" ]; then
-        return 0
-    fi
-    rm -rf "$LANTERN_BUILD" "$LANTERN_PREFIX"
     mkdir -p "$ROOT/deps"
     local log="$ROOT/deps/lantern-build-$PLATFORM_TAG.log"
     local flags=""
     if [ "$(uname -s)" = Linux ]; then
         flags="-D_GNU_SOURCE"
     fi
-    if ! { (cd "$LANTERN_ROOT" && CFLAGS="$flags" BUILD_DIR="$LANTERN_BUILD" ./build.sh configure \
-                --prefix="$LANTERN_PREFIX" --libdir=lib --buildtype=debugoptimized) \
+    if ! { { [ -f "$LANTERN_BUILD/build.ninja" ] \
+             || (cd "$LANTERN_ROOT" && CFLAGS="$flags" BUILD_DIR="$LANTERN_BUILD" ./build.sh configure \
+                --prefix="$LANTERN_PREFIX" --libdir=lib --buildtype=debugoptimized); } \
            && (cd "$LANTERN_ROOT" && BUILD_DIR="$LANTERN_BUILD" ./build.sh compile) \
            && meson install -C "$LANTERN_BUILD" --quiet; } >"$log" 2>&1; then
         tail -40 "$log" >&2
         fail "lantern did not build; the full log is $log"
     fi
-    echo "$want" > "$stamp"
 }
 
 configure_writ() {
@@ -96,13 +88,12 @@ run_linux() {
     "$engine" build -q --platform "$platform" -t writ-linux -f "$ROOT/tools/linux.Containerfile" "$ROOT/tools" \
         >/dev/null
     "$engine" run --rm --platform "$platform" \
-        -v "$ROOT:/work/writ" \
         -v "$LANTERN_ROOT:/work/lantern:ro" \
+        -v "$ROOT:/work/writ" \
         -v "$RESHARP_ROOT:/work/resharp:ro" \
         -v writ-cargo:/opt/cargo/registry \
         -e LANTERN_ROOT=/work/lantern \
         -e RESHARP_ROOT=/work/resharp \
-        -e LANTERN_VERIFIED="$(tr -d '[:space:]' < "$ROOT/deps/LANTERN_REVISION")" \
         -e RESHARP_VERIFIED="$(tr -d '[:space:]' < "$ROOT/deps/RESHARP_REVISION")" \
         -w /work/writ writ-linux ./build.sh "$@"
 }
