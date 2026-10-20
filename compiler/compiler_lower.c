@@ -184,10 +184,15 @@ typedef struct {
 } n00bb_function_effect_summary_t;
 core_list_decl(n00bb_function_effect_summary_t);
 typedef struct {
+    core_list_t(n00bb_function_effect_summary_t) list;
+    core_dict_t index;
+    core_dict_t store_origins;
+} n00bb_effect_summaries_t;
+typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) initializer_roots;
     core_list_t(n00bb_ir_func_ptr_t) entry_functions;
     core_list_t(n00bb_ir_value_ptr_t) targets;
-    core_list_t(n00bb_function_effect_summary_t) summaries;
+    n00bb_effect_summaries_t summaries;
     core_dict_t target_indices;
 } n00bb_runtime_init_analysis_t;
 typedef struct {
@@ -18598,18 +18603,18 @@ effect_function_list_add(core_list_t(n00bb_ir_func_ptr_t) *functions,
 }
 
 static n00bb_function_effect_summary_t *
-effect_summary_for(core_list_t(n00bb_function_effect_summary_t) *summaries,
+effect_summary_for(n00bb_effect_summaries_t *summaries,
                      ir_func_t *function)
 {
-    for (size_t i = 0; summaries && i < summaries->len; i++)
-        if (summaries->data[i].function == function)
-            return &summaries->data[i];
-    return nullptr;
+    bool found = false;
+    size_t index = summaries && function ? (size_t)(uintptr_t)core_dict_get(
+        &summaries->index, function, &found) : 0;
+    return found ? &summaries->list.data[index] : nullptr;
 }
 
 static bool
 effect_summary_add(
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     ir_func_t *function)
 {
     if (!summaries || !function) return false;
@@ -18627,7 +18632,8 @@ effect_summary_add(
             return false;
         }
     }
-    core_list_push(*summaries, summary);
+    core_dict_put(&summaries->index, function, summaries->list.len);
+    core_list_push(summaries->list, summary);
     return true;
 }
 
@@ -18641,7 +18647,7 @@ effect_function_is_fallible(ir_func_t *function)
 
 static uint8_t
 effect_function_outcomes(
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     ir_func_t *function, size_t target_index, bool failure)
 {
     if (!function) return N00BB_GLOBAL_STATE_UNWRITTEN;
@@ -18659,7 +18665,7 @@ effect_function_outcomes(
 
 static uint8_t
 effect_parameter_outcomes(
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     ir_func_t *function, uint32_t parameter, bool failure)
 {
     n00bb_function_effect_summary_t *summary =
@@ -18672,11 +18678,11 @@ effect_parameter_outcomes(
 
 static bool
 effect_function_summaries_expand_calls(
-    core_list_t(n00bb_function_effect_summary_t) *summaries)
+    n00bb_effect_summaries_t *summaries)
 {
     if (!summaries) return false;
-    for (size_t i = 0; i < summaries->len; i++) {
-        ir_func_t *function = summaries->data[i].function;
+    for (size_t i = 0; i < summaries->list.len; i++) {
+        ir_func_t *function = summaries->list.data[i].function;
         ir_doms_t *doms = function->n_blocks ? ir_doms_of(function) : nullptr;
         for (size_t b = 0; doms && b < function->n_blocks; b++) {
             ir_block_t *block = function->blocks[b];
@@ -18977,55 +18983,102 @@ effect_target_matches(ir_value_t *target, ir_value_t *candidate)
     return target == candidate;
 }
 
+
 typedef struct {
-    ir_value_t *target;
-    bool saw_target;
-    bool all_targets_match;
-} effect_store_target_t;
+    const void *identity;
+    bool global;
+    bool uniform;
+} effect_store_origin_t;
 
 static bool
-effect_store_target_visit(void *context, ir_value_t *candidate)
+effect_origin_identity(ir_value_t *value, const void **identity,
+                       bool *global)
 {
-    effect_store_target_t *match = context;
-    match->saw_target = true;
-    match->all_targets_match &= effect_target_matches(match->target,
-                                                         candidate);
+    *global = value->kind == IR_VAL_GLOBAL;
+    if (!*global) *identity = value;
+    else *identity = value->global ? ir_global_identity(value->global)
+                                   : nullptr;
+    return *identity != nullptr;
+}
+
+typedef struct {
+    effect_store_origin_t origin;
+    bool saw;
+} effect_origin_collect_t;
+
+static bool
+effect_origin_collect_visit(void *context, ir_value_t *candidate)
+{
+    effect_origin_collect_t *collect = context;
+    const void *identity = nullptr;
+    bool global = false;
+    bool known = candidate
+        && effect_origin_identity(candidate, &identity, &global);
+    if (!collect->saw) {
+        collect->saw = true;
+        collect->origin = (effect_store_origin_t){
+            .identity = identity, .global = global, .uniform = known,
+        };
+    }
+    else collect->origin.uniform &= known
+        && identity == collect->origin.identity
+        && global == collect->origin.global;
     return true;
 }
 
+static const effect_store_origin_t *
+effect_store_origin(n00bb_effect_summaries_t *summaries, ir_value_t *address)
+{
+    effect_store_origin_t *origin = core_dict_get(&summaries->store_origins,
+                                                  address, nullptr);
+    if (origin) return origin;
+    effect_origin_collect_t collect = {0};
+    bool complete = ir_value_visit_store_origins(address,
+        effect_origin_collect_visit, &collect);
+    origin = core_alloc(effect_store_origin_t);
+    *origin = collect.origin;
+    origin->uniform = complete && collect.saw && collect.origin.uniform;
+    core_dict_put(&summaries->store_origins, address, origin);
+    return origin;
+}
+
 static bool
-effect_store_targets(ir_instr_t *instruction, ir_value_t *target)
+effect_origin_targets(n00bb_effect_summaries_t *summaries,
+                      ir_value_t *address, ir_value_t *target)
+{
+    const void *identity = nullptr;
+    bool global = false;
+    if (!address || !effect_origin_identity(target, &identity, &global))
+        return false;
+    const effect_store_origin_t *origin = effect_store_origin(summaries,
+                                                              address);
+    return origin->uniform && origin->global == global
+        && origin->identity == identity;
+}
+
+static bool
+effect_store_targets(n00bb_effect_summaries_t *summaries,
+                     ir_instr_t *instruction, ir_value_t *target)
 {
     if (!instruction || !target
         || (instruction->op != IR_OP_GLOBAL_STORE
             && instruction->op != IR_OP_STORE)
         || instruction->n_operands < 1
         || instruction->operands[0].kind != IR_OPD_VALUE) return false;
-    effect_store_target_t match = {
-        .target = target,
-        .all_targets_match = true,
-    };
-    bool complete = ir_value_visit_store_origins(
-        instruction->operands[0].value,
-        effect_store_target_visit, &match);
-    return complete && match.saw_target && match.all_targets_match;
+    return effect_origin_targets(summaries, instruction->operands[0].value,
+                                 target);
 }
 
 static bool
-effect_call_argument_targets(ir_instr_t *call, uint32_t parameter,
-                               ir_value_t *target)
+effect_call_argument_targets(n00bb_effect_summaries_t *summaries,
+                             ir_instr_t *call, uint32_t parameter,
+                             ir_value_t *target)
 {
     if (!call || !target || call->op != IR_OP_CALL
         || parameter + 1 >= call->n_operands
         || call->operands[parameter + 1].kind != IR_OPD_VALUE) return false;
-    effect_store_target_t match = {
-        .target = target,
-        .all_targets_match = true,
-    };
-    bool complete = ir_value_visit_store_origins(
-        call->operands[parameter + 1].value,
-        effect_store_target_visit, &match);
-    return complete && match.saw_target && match.all_targets_match;
+    return effect_origin_targets(summaries,
+                                 call->operands[parameter + 1].value, target);
 }
 
 static uint8_t
@@ -19040,7 +19093,7 @@ effect_effect_sequence(uint8_t first, uint8_t second)
 
 static uint8_t
 effect_call_effects(
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     ir_instr_t *call, ir_value_t *target, size_t target_index, bool failure)
 {
     ir_func_t *callee = call && call->n_operands
@@ -19056,7 +19109,7 @@ effect_call_effects(
         uint8_t parameter_effects = effect_parameter_outcomes(
             summaries, callee, p, failure);
         if (parameter_effects
-            && effect_call_argument_targets(call, p, target))
+            && effect_call_argument_targets(summaries, call, p, target))
             effects = effect_effect_sequence(effects, parameter_effects);
     }
     return effects;
@@ -19078,7 +19131,7 @@ static bool
 effect_analyze_targets_function(
     ir_func_t *function, ir_value_t *const *targets, size_t target_count,
     const size_t *summary_indices,
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
     const uint8_t *initial_states, bool *reads_before_initialization,
     ir_instr_t **first_uninitialized_read,
@@ -19185,7 +19238,8 @@ effect_analyze_targets_function(
                 bool store = false;
                 for (size_t t = 0; t < target_count; t++) {
                     if (!state[t]
-                        || !effect_store_targets(instruction, targets[t]))
+                        || !effect_store_targets(summaries, instruction,
+                                                 targets[t]))
                         continue;
                     state[t] = N00BB_GLOBAL_STATE_WRITTEN;
                     stored_after_outcome[t] |= after_outcome_call;
@@ -19270,7 +19324,7 @@ effect_analyze_targets_function(
 static bool
 effect_analyze_target_function(
     ir_func_t *function, ir_value_t *target, size_t target_index,
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
     uint8_t initial_state, bool *reads_before_initialization,
     ir_instr_t **first_uninitialized_read,
@@ -19286,7 +19340,7 @@ effect_analyze_target_function(
 }
 static bool
 effect_function_summaries_build(
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     ir_value_t *const *targets, size_t target_count)
 {
     if (!summaries || !targets || !target_count) return false;
@@ -19301,8 +19355,8 @@ effect_function_summaries_build(
     }
     memset(initial, N00BB_GLOBAL_STATE_UNWRITTEN, target_count);
     bool ok = true;
-    for (size_t i = 0; i < summaries->len; i++) {
-        n00bb_function_effect_summary_t *summary = &summaries->data[i];
+    for (size_t i = 0; i < summaries->list.len; i++) {
+        n00bb_function_effect_summary_t *summary = &summaries->list.data[i];
         free(summary->success_states);
         free(summary->failure_states);
         summary->success_states = calloc(target_count, 1);
@@ -19316,8 +19370,8 @@ effect_function_summaries_build(
     bool changed;
     do {
         changed = false;
-        for (size_t i = 0; ok && i < summaries->len; i++) {
-            n00bb_function_effect_summary_t *summary = &summaries->data[i];
+        for (size_t i = 0; ok && i < summaries->list.len; i++) {
+            n00bb_function_effect_summary_t *summary = &summaries->list.data[i];
             ok = effect_analyze_targets_function(summary->function,
                 targets, target_count, nullptr, summaries, nullptr, initial,
                 nullptr, nullptr, success, failure, nullptr, nullptr);
@@ -19341,14 +19395,14 @@ effect_function_summaries_build(
 
 static bool
 effect_parameter_summaries_build(
-    core_list_t(n00bb_function_effect_summary_t) *summaries)
+    n00bb_effect_summaries_t *summaries)
 {
     if (!summaries) return false;
     bool changed;
     do {
         changed = false;
-        for (size_t i = 0; i < summaries->len; i++) {
-            n00bb_function_effect_summary_t *summary = &summaries->data[i];
+        for (size_t i = 0; i < summaries->list.len; i++) {
+            n00bb_function_effect_summary_t *summary = &summaries->list.data[i];
             for (uint32_t p = 0; p < summary->function->n_params; p++) {
                 uint8_t success, failure;
                 if (!effect_analyze_target_function(summary->function,
@@ -19374,7 +19428,7 @@ effect_parameter_summaries_build(
 static bool
 effect_global_final_state(
     ir_func_t *const *roots, size_t root_count,
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     ir_global_t *source, size_t target_index,
     bool *phase_succeeds, bool *definitely_initialized,
     bool *has_successful_write)
@@ -20035,15 +20089,19 @@ thread_runtime_entry_function(parse_grammar_t *grammar,
 static void
 runtime_init_analysis_release(n00bb_runtime_init_analysis_t *runtime)
 {
-    for (size_t i = 0; i < runtime->summaries.len; i++) {
+    for (size_t i = 0; i < runtime->summaries.list.len; i++) {
         n00bb_function_effect_summary_t *summary =
-            &runtime->summaries.data[i];
+            &runtime->summaries.list.data[i];
         free(summary->success_states);
         free(summary->failure_states);
         free(summary->parameter_success_states);
         free(summary->parameter_failure_states);
     }
-    core_list_free(runtime->summaries);
+    core_list_free(runtime->summaries.list);
+    core_dict_free(&runtime->summaries.index);
+    core_dict_foreach(&runtime->summaries.store_origins, entry)
+        core_free(entry->value);
+    core_dict_free(&runtime->summaries.store_origins);
     core_list_free(runtime->initializer_roots);
     core_list_free(runtime->entry_functions);
     core_list_free(runtime->targets);
@@ -20077,7 +20135,9 @@ runtime_init_analysis_build(
     runtime->initializer_roots = core_list_new(n00bb_ir_func_ptr_t);
     runtime->entry_functions = core_list_new(n00bb_ir_func_ptr_t);
     runtime->targets = core_list_new(n00bb_ir_value_ptr_t);
-    runtime->summaries = core_list_new(n00bb_function_effect_summary_t);
+    runtime->summaries.list = core_list_new(n00bb_function_effect_summary_t);
+    core_dict_init(&runtime->summaries.index, nullptr, nullptr);
+    core_dict_init(&runtime->summaries.store_origins, nullptr, nullptr);
     core_dict_init(&runtime->target_indices, nullptr, nullptr);
     for (size_t i = 0; i < core_link_unit_dependency_count(link); i++) {
         core_link_dependency_view_t edge;
@@ -20140,7 +20200,7 @@ runtime_init_analysis_build(
 static bool
 thread_runtime_entry_state(
     ir_func_t *const *initializer_roots, size_t initializer_count,
-    core_list_t(n00bb_function_effect_summary_t) *summaries,
+    n00bb_effect_summaries_t *summaries,
     ir_global_t *global, size_t target_index, bool has_static_default,
     bool *phase_succeeds, uint8_t *state_out)
 {
