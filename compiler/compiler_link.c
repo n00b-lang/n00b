@@ -3806,7 +3806,7 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
                 .to = target,
                 .phase = phase,
                 .direct = parse_liveness_state(
-                    ir_value_liveness_on_edge(value, block, target)),
+                    ir_liveness_query_direct_on_edge(query, block, target)),
                 .aliases = parse_liveness_state(
                     ir_liveness_query_alias_on_edge(query, block, target)),
             };
@@ -3838,7 +3838,7 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
                 .from = block,
                 .phase = phase,
                 .direct = parse_liveness_state(
-                    ir_value_liveness_after(value, terminator)),
+                    ir_liveness_query_direct_after(query, terminator)),
                 .aliases = parse_liveness_state(
                     ir_liveness_query_alias_after(query, terminator)),
                 .is_exit = true,
