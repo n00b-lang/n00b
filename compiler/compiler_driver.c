@@ -1634,8 +1634,10 @@ process_postprune_package_syntax(import_driver_t *driver,
 static bool
 ensure_preprocessed_import(import_driver_t *driver, parse_grammar_t *grammar,
                            core_work_job_t *locate_job,
-                           core_translation_unit_t *unit, parse_tree_t *tree)
+                           core_translation_unit_t *unit, parse_tree_t *tree,
+                           bool *in_progress)
 {
+    if (in_progress) *in_progress = false;
     core_work_job_t *dependencies[] = {locate_job};
     core_work_job_t *preprocess_job = nullptr;
     core_work_submit_result_t submitted = core_work_submit(driver->queue,
@@ -1643,9 +1645,13 @@ ensure_preprocessed_import(import_driver_t *driver, parse_grammar_t *grammar,
         1, &preprocess_job);
     if (submitted == CORE_WORK_INVALID
         || submitted == CORE_WORK_DEPENDENCY_FAILED) return false;
-    if (submitted == CORE_WORK_CACHED)
-        return core_work_job_state(driver->queue, preprocess_job)
-            != CORE_WORK_FAILED;
+    if (submitted == CORE_WORK_CACHED) {
+        core_work_state_t state = core_work_job_state(driver->queue,
+                                                      preprocess_job);
+        if (in_progress) *in_progress = state != CORE_WORK_SUCCEEDED
+            && state != CORE_WORK_FAILED;
+        return state != CORE_WORK_FAILED;
+    }
     core_work_job_t *ready = nullptr;
     if (!core_work_take_kind(driver->queue, N00BB_JOB_PREPROCESS, &ready)
         || ready != preprocess_job) return false;
@@ -1706,13 +1712,15 @@ discover_package_import(import_driver_t *driver,
                 && !package_tree_may_declare(driver->grammar, tree,
                                              logical->identifier)))
             continue;
+        bool in_progress = false;
         if (!ensure_preprocessed_import(driver, driver->grammar,
-                                        job, unit, tree)) {
+                                        job, unit, tree, &in_progress)) {
             if (failure_already_reported(unit))
                 mark_import_failure_reported(importer);
             continue;
         }
-        if (!find_package_declaration(unit, logical->identifier))
+        if (!in_progress
+            && !find_package_declaration(unit, logical->identifier))
             continue;
         if (selected && selected != unit) {
             core_buffer_t message = {0};
@@ -1828,8 +1836,7 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     }
 
     bool located = wait_for_locate_job(driver, locate_job);
-    bool resolved = locate_job_resolved(driver, locate_job);
-    core_translation_unit_t *attempted = core_work_job_result(driver->queue,
+    bool resolved = locate_job_resolved(driver, locate_job);    core_translation_unit_t *attempted = core_work_job_result(driver->queue,
                                                               locate_job);
     core_translation_unit_t *direct = located
         ? core_work_job_result(driver->queue, locate_job) : nullptr;
@@ -1883,8 +1890,9 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
         return false;
     }
 
+    bool in_progress = false;
     if (!ensure_preprocessed_import(driver, grammar, locate_job,
-                                    imported, tree)) {
+                                    imported, tree, &in_progress)) {
         if (failure_already_reported(imported))
             mark_import_failure_reported(importer);
         else import_error(importer, statement,
@@ -1898,7 +1906,7 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
             "a package cannot import its own external namespace; use its internal module name");
         return false;
     }
-    if (statement && !state->interface_module
+    if (statement && !state->interface_module && !in_progress
         && !n00bb_same_package(importer, imported)
         && !find_package_declaration(imported, imported_name)) {
         import_error(importer, statement,

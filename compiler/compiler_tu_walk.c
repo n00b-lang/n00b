@@ -1838,6 +1838,46 @@ annotate_unit_bodies(parse_grammar_t *grammar, th_ctx *types,
 }
 
 static bool
+component_member(core_list_t(core_translation_unit_ptr_t) *members,
+                 core_translation_unit_t *unit)
+{
+    for (size_t i = 0; i < members->len; i++)
+        if (members->data[i] == unit) return true;
+    return false;
+}
+
+static void
+order_component_member(core_list_t(core_translation_unit_ptr_t) *members,
+                       core_translation_unit_t *unit,
+                       core_list_t(core_translation_unit_ptr_t) *ordered)
+{
+    if (component_member(ordered, unit)) return;
+    core_list_push(*ordered, unit);
+    size_t at = ordered->len - 1;
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++) {
+        core_translation_unit_t *imported =
+            core_translation_unit_import(unit, i);
+        if (component_member(members, imported))
+            order_component_member(members, imported, ordered);
+    }
+    for (size_t i = at; i + 1 < ordered->len; i++)
+        ordered->data[i] = ordered->data[i + 1];
+    ordered->data[ordered->len - 1] = unit;
+}
+
+static void
+order_component_bodies(core_list_t(core_translation_unit_ptr_t) *members)
+{
+    core_list_t(core_translation_unit_ptr_t) ordered =
+        core_list_new(core_translation_unit_ptr_t);
+    for (size_t i = 0; i < members->len; i++)
+        order_component_member(members, members->data[i], &ordered);
+    for (size_t i = 0; i < members->len && i < ordered.len; i++)
+        members->data[i] = ordered.data[i];
+    core_list_free(ordered);
+}
+
+static bool
 annotate_component(parse_grammar_t *grammar, th_ctx *types,
                    core_list_t(core_translation_unit_ptr_t) *members,
                    n00bb_semantic_unit_finish_t finish, void *context)
@@ -1852,9 +1892,15 @@ annotate_component(parse_grammar_t *grammar, th_ctx *types,
         if (!annotate_type_declarations(grammar, types, unit,
                 n00bb_tu_parsed_tree(tu_state(unit)))) return false;
     }
-    for (size_t i = 0; i < members->len; i++)
+    if (members->len > 1 && !prepopulate_component_package_interfaces(
+            members->data, members->len)) return false;
+    if (members->len > 1) order_component_bodies(members);
+    for (size_t i = 0; i < members->len; i++) {
         if (!annotate_unit_bodies(grammar, types, members->data[i], finish,
                                   context)) return false;
+        if (members->len > 1 && !refresh_component_export_bindings(
+                members->data, members->len)) return false;
+    }
     return true;
 }
 

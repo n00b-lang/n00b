@@ -1894,6 +1894,23 @@ export_name_conflicts(parse_scope_t *scope, parse_scope_t *types,
     return false;
 }
 
+static void
+copy_export_binding_facts(parse_sym_entry_t *binding,
+                          parse_sym_entry_t *origin)
+{
+    binding->type = origin->type;
+    binding->error_type = origin->error_type;
+    binding->callable_contract = origin->callable_contract;
+    binding->mutability = origin->mutability;
+    binding->adt_kind = origin->adt_kind;
+    binding->member_scope = origin->member_scope;
+    binding->visibility = CORE_STRING_STATIC("public");
+    binding->phases = origin->phases;
+    binding->mutable_phases = origin->mutable_phases;
+    binding->initializer_phases = origin->initializer_phases;
+    binding->storage_duration = origin->storage_duration;
+}
+
 static bool
 add_package_export_symbol(core_translation_unit_t *interface_unit,
                           n00bb_package_declaration_t *package,
@@ -1923,17 +1940,7 @@ add_package_export_symbol(core_translation_unit_t *interface_unit,
     parse_sym_entry_t *origin = canonical_symbol(source);
     if (!binding || !origin || !parse_sym_set_binding_origin(binding, origin))
         return false;
-    binding->type = origin->type;
-    binding->error_type = origin->error_type;
-    binding->callable_contract = origin->callable_contract;
-    binding->mutability = origin->mutability;
-    binding->adt_kind = origin->adt_kind;
-    binding->member_scope = origin->member_scope;
-    binding->visibility = CORE_STRING_STATIC("public");
-    binding->phases = origin->phases;
-    binding->mutable_phases = origin->mutable_phases;
-    binding->initializer_phases = origin->initializer_phases;
-    binding->storage_duration = origin->storage_duration;
+    copy_export_binding_facts(binding, origin);
     if (!parse_sym_set_binding(origin,
             CORE_STRING_STATIC("n00bb.external-export"), binding))
         return false;
@@ -2127,6 +2134,72 @@ resolve_one_package_export(core_translation_unit_t *unit,
 }
 
 bool
+refresh_component_export_bindings(core_translation_unit_t *const *members,
+                                  size_t count)
+{
+    for (size_t i = 0; i < count; i++) {
+        n00bb_tu_state_t *state = tu_state(members[i]);
+        for (size_t p = 0; state && p < state->package_declarations.len; p++) {
+            n00bb_package_declaration_t *package =
+                &state->package_declarations.data[p];
+            for (size_t e = 0; e < package->exports.len; e++) {
+                parse_sym_entry_t *binding = package->exports.data[e].symbol;
+                parse_sym_entry_t *origin = binding
+                    ? canonical_symbol(binding) : nullptr;
+                if (origin && origin != binding)
+                    copy_export_binding_facts(binding, origin);
+            }
+            for (parse_sym_entry_t *binding = package->scope
+                     ? package->scope->first_in_scope : nullptr;
+                 binding; binding = binding->next_in_scope) {
+                parse_sym_entry_t *origin = canonical_symbol(binding);
+                if (origin && origin != binding)
+                    copy_export_binding_facts(binding, origin);
+            }
+        }
+    }
+    return true;
+}
+
+static int
+resolve_unit_package_exports(core_translation_unit_t *unit, bool *progress,
+                             size_t *unresolved)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t p = 0; p < state->package_declarations.len; p++) {
+        n00bb_package_declaration_t *package =
+            &state->package_declarations.data[p];
+        for (size_t e = 0; e < package->exports.len; e++) {
+            n00bb_package_export_t *export = &package->exports.data[e];
+            if (export->subpackage || export->symbol
+                || export->module_export) continue;
+            int result = resolve_one_package_export(unit, package, export);            if (result < 0) return -1;
+            if (result > 0) *progress = true;
+            else (*unresolved)++;
+        }
+    }
+    return 0;
+}
+
+static void
+report_unresolved_package_exports(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t p = 0; p < state->package_declarations.len; p++)
+        for (size_t e = 0; e < state->package_declarations.data[p].exports.len;
+             e++) {
+            n00bb_package_export_t *export =
+                &state->package_declarations.data[p].exports.data[e];
+            if (!export->subpackage && !export->symbol
+                && !export->module_export)
+                package_diagnostic(unit, export->node,
+                    CORE_STRING_STATIC("N00BB-M0009"),
+                    CORE_STRING_STATIC(
+                        "package export source cannot be resolved"));
+        }
+}
+
+bool
 populate_unit_package_interfaces(core_translation_unit_t *unit)
 {
     size_t unresolved = 0;
@@ -2134,45 +2207,52 @@ populate_unit_package_interfaces(core_translation_unit_t *unit)
     do {
         progress = false;
         unresolved = 0;
-        n00bb_tu_state_t *state = tu_state(unit);
-        for (size_t p = 0; p < state->package_declarations.len; p++) {
-                n00bb_package_declaration_t *package =
-                    &state->package_declarations.data[p];
-                for (size_t e = 0; e < package->exports.len; e++) {
-                    n00bb_package_export_t *export = &package->exports.data[e];
-                    if (export->subpackage) continue;
-                    if (export->symbol || export->module_export) continue;
-                    int result = resolve_one_package_export(unit, package,
-                                                            export);
-                    if (result < 0) return false;
-                    if (result > 0) progress = true;
-                    else unresolved++;
-                }
-        }
+        if (resolve_unit_package_exports(unit, &progress, &unresolved) < 0)
+            return false;
     } while (progress && unresolved);
     if (!unresolved) return true;
-    n00bb_tu_state_t *state = tu_state(unit);
-        for (size_t p = 0; p < state->package_declarations.len; p++)
-            for (size_t e = 0; e < state->package_declarations.data[p].exports.len;
-                 e++) {
-                n00bb_package_export_t *export =
-                    &state->package_declarations.data[p].exports.data[e];
-                if (!export->subpackage && !export->symbol
-                    && !export->module_export)
-                    package_diagnostic(unit, export->node,
-                        CORE_STRING_STATIC("N00BB-M0009"),
-                        CORE_STRING_STATIC(
-                            "package export source cannot be resolved"));
-            }
+    report_unresolved_package_exports(unit);
     return false;
+}
+
+bool
+prepopulate_component_package_interfaces(
+    core_translation_unit_t *const *members, size_t count)
+{
+    for (size_t i = 0; i < count; i++)
+        if (!tu_state(members[i])->interface_module
+            && !initialize_unit_package_interfaces(members[i]))
+            return false;
+    bool progress;
+    do {
+        progress = false;
+        size_t unresolved = 0;
+        for (size_t i = 0; i < count; i++)
+            if (!tu_state(members[i])->interface_module
+                && resolve_unit_package_exports(members[i], &progress,
+                                                &unresolved) < 0)
+                return false;
+    } while (progress);
+    return true;
 }
 
 bool
 populate_package_interfaces(n00bb_link_analysis_t *analysis)
 {
-    for (size_t u = 0; u < analysis->units.len; u++)
-        if (!populate_unit_package_interfaces(analysis->units.data[u]))
-            return false;
+    size_t unresolved = 0;
+    bool progress;
+    do {
+        progress = false;
+        unresolved = 0;
+        for (size_t u = 0; u < analysis->units.len; u++)
+            if (resolve_unit_package_exports(analysis->units.data[u],
+                    &progress, &unresolved) < 0) return false;
+    } while (progress && unresolved);
+    if (unresolved) {
+        for (size_t u = 0; u < analysis->units.len; u++)
+            report_unresolved_package_exports(analysis->units.data[u]);
+        return false;
+    }
     for (size_t u = 0; u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);

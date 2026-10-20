@@ -540,3 +540,7 @@ void package_diagnostic(core_translation_unit_t *unit, parse_tree_t *node,
                         core_string_t code, core_string_t message);
 bool initialize_unit_package_interfaces(core_translation_unit_t *unit);
 bool populate_unit_package_interfaces(core_translation_unit_t *unit);
+bool prepopulate_component_package_interfaces(
+    core_translation_unit_t *const *members, size_t count);
+bool refresh_component_export_bindings(
+    core_translation_unit_t *const *members, size_t count);
