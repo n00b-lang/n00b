@@ -1,20 +1,19 @@
-import sys.fs
 import internal.blob
 
 public const script_common = 1
 public const script_inherited = 59
 
-public const script_ext_index_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/script_ext_index.bin")
+public const script_ext_index_values: Array[u32] = [- script_ext_index.bin -]'embed
 
 public inline func script_ext_index(row: u32, col: u32) -> u32 {
-    return internal.blob.u32_at(script_ext_index_bytes, row * 2 + col)
+    return script_ext_index_values[row * 2 + col]
 }
 
 public const script_ext_index_len: u32 = 741
 
-public const script_ext_data_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/script_ext_data.bin")
+public const script_ext_data_values: Array[u32] = [- script_ext_data.bin -]'embed
 
 public inline func script_ext_data(i: u32) -> u32 {
-    return internal.blob.u32_at(script_ext_data_bytes, i)
+    return script_ext_data_values[i]
 }
 

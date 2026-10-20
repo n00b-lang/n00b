@@ -20,12 +20,13 @@ Usage:
                                 [--check-inputs]
 
 Table data lives in little-endian .bin blobs next to the modules, baked in
-with sys.fs.data_file. A numeric table of u16/u32/u64 elements is the
-packed element array; a table of fixed-width rows is the row-major packed
-array. A string table is (count + 1) u32 byte offsets from the blob start
-followed by the UTF-8 bytes, so string i spans offsets i to i + 1. Each
-module exposes the raw blob as <table>_bytes and a typed accessor named
-after the table that decodes through internal.blob.
+with the 'embed literal. A numeric table of u8/u16/u32/u64 elements is the
+packed element array, embedded as <table>_values with that element type; a
+table of fixed-width rows is the row-major packed u32 array. A string table
+is (count + 1) u32 byte offsets from the blob start followed by the UTF-8
+bytes, so string i spans offsets i to i + 1; it is embedded as
+<table>_bytes and decoded through internal.blob. Each table has an accessor
+named after it.
 """
 
 import argparse
@@ -45,9 +46,9 @@ from pathlib import Path
 
 TABLE_PROLOGUE = ""
 
-DATA_FILE_IMPORT = "import sys.fs\n\n"
+DATA_FILE_IMPORT = ""
 
-TABLE_IMPORTS = "import sys.fs\nimport internal.blob\n\n"
+TABLE_IMPORTS = "import internal.blob\n\n"
 
 BLOB_CODES = {"u16": "H", "u32": "I", "u64": "Q"}
 
@@ -679,17 +680,17 @@ BINARY_PROP_MAP = {v: i for i, v in enumerate(BINARY_PROPERTIES)}
 # Table blobs
 # ---------------------------------------------------------------------------
 
-def write_blob_const(f, name, bin_path):
-    f.write(f"public const {name}_bytes: Array[u8] = "
-            f'sys.fs.data_file(source_dir() + "/{bin_path.name}")\n\n')
+def embed_const(name, elem, source):
+    return (f"public const {name}: Array[{elem}] = "
+            f"[- {source} -]'embed\n")
 
 
 def emit_table(f, bin_path, name, elem, values):
     bin_path.write_bytes(struct.pack(f"<{len(values)}{BLOB_CODES[elem]}",
                                      *values))
-    write_blob_const(f, name, bin_path)
+    f.write(embed_const(f"{name}_values", elem, bin_path.name) + "\n")
     f.write(f"public inline func {name}(i: u32) -> {elem} {{\n"
-            f"    return internal.blob.{elem}_at({name}_bytes, i)\n"
+            f"    return {name}_values[i]\n"
             f"}}\n\n")
 
 
@@ -699,10 +700,9 @@ def emit_rows(f, bin_path, name, width, rows):
         assert len(row) == width
         flat.extend(row)
     bin_path.write_bytes(struct.pack(f"<{len(flat)}I", *flat))
-    write_blob_const(f, name, bin_path)
+    f.write(embed_const(f"{name}_values", "u32", bin_path.name) + "\n")
     f.write(f"public inline func {name}(row: u32, col: u32) -> u32 {{\n"
-            f"    return internal.blob.u32_at({name}_bytes, "
-            f"row * {width} + col)\n"
+            f"    return {name}_values[row * {width} + col]\n"
             f"}}\n\n")
 
 
@@ -713,7 +713,7 @@ def emit_strings(f, bin_path, name, strings):
         offsets.append(offsets[-1] + len(s))
     bin_path.write_bytes(struct.pack(f"<{len(offsets)}I", *offsets)
                          + b"".join(encoded))
-    write_blob_const(f, name, bin_path)
+    f.write(embed_const(f"{name}_bytes", "u8", bin_path.name) + "\n")
     f.write(f"public func {name}(i: u32) -> string {{\n"
             f"    return internal.blob.str_at(ref {name}_bytes, i)\n"
             f"}}\n\n")
@@ -781,8 +781,8 @@ class TwoStageTable:
             bin_path = out_path.with_name(out_path.stem + "_stage2.bin")
             if self.c_type == "uint8_t":
                 bin_path.write_bytes(bytes(stage2))
-                f.write(f"public const {self.name}_stage2: Array[u8] = "
-                        f'sys.fs.data_file(source_dir() + "/{bin_path.name}")\n')
+                f.write(embed_const(f"{self.name}_stage2", "u8",
+                                    bin_path.name))
             else:
                 emit_table(f, bin_path, f"{self.name}_stage2",
                            N00B_TYPES[self.c_type], stage2)
@@ -981,8 +981,8 @@ def gen_scripts(cache_dir, out_dir):
     rec_bin.write_bytes(bytes(recommended))
 
     with open(out_dir / "scripts.n", "a") as f:
-        f.write(f"\npublic const script_recommended: Array[u8] = "
-                f'sys.fs.data_file(source_dir() + "/{rec_bin.name}")\n')
+        f.write("\n" + embed_const("script_recommended", "u8",
+                                   rec_bin.name))
 
     with open(out_dir / "scripts.n", "a") as f:
         f.write("\n")
@@ -1635,11 +1635,9 @@ def gen_names(cache_dir, out_dir):
         pool_path  = (out_dir / "names_pool.bin").resolve()
         index_path = (out_dir / "names_index.bin").resolve()
 
-        f.write('public const name_pool: Array[u8] = '
-                f'sys.fs.data_file(source_dir() + "/{pool_path.name}")\n\n')
+        f.write(embed_const("name_pool", "u8", pool_path.name) + "\n")
 
-        f.write('public const name_index: Array[u8] = '
-                f'sys.fs.data_file(source_dir() + "/{index_path.name}")\n\n')
+        f.write(embed_const("name_index", "u8", index_path.name) + "\n")
 
         by_name = bytearray()
 
@@ -1653,8 +1651,8 @@ def gen_names(cache_dir, out_dir):
         name_sorted_path = out_dir / "names_by_name.bin"
         name_sorted_path.write_bytes(bytes(by_name))
 
-        f.write('public const name_by_name: Array[u8] = '
-                f'sys.fs.data_file(source_dir() + "/{name_sorted_path.name}")\n\n')
+        f.write(embed_const("name_by_name", "u8", name_sorted_path.name)
+                + "\n")
 
         f.write(f'public const name_count = '
                 f'{len(entries)}\n')
@@ -2018,8 +2016,8 @@ def gen_conformance(test_data_dir, conformance_dir, out_path, strict):
 
             print(f"  {name}: {len(cases)} cases, {len(blob)}B")
 
-            f.write(f"public const conf_{name}: Array[u8] = sys.fs.data_file("
-                    f'source_dir() + "/{data_dir}/{bin_path.name}")\n\n')
+            f.write(embed_const(f"conf_{name}", "u8",
+                                f"{data_dir}/{bin_path.name}") + "\n")
 
         cases = _parse_norm_suite(test_data_dir / "NormalizationTest.txt")
         blob = _encode_norm_suite(cases)
@@ -2028,8 +2026,8 @@ def gen_conformance(test_data_dir, conformance_dir, out_path, strict):
 
         print(f"  normalization: {len(cases)} cases, {len(blob)}B")
 
-        f.write("public const conf_norm: Array[u8] = sys.fs.data_file("
-                f'source_dir() + "/{data_dir}/{bin_path.name}")\n\n')
+        f.write(embed_const("conf_norm", "u8",
+                            f"{data_dir}/{bin_path.name}") + "\n")
 
         cases = _parse_bidi_char_suite(test_data_dir / "BidiCharacterTest.txt")
         blob = _encode_bidi_char_suite(cases)
@@ -2038,8 +2036,8 @@ def gen_conformance(test_data_dir, conformance_dir, out_path, strict):
 
         print(f"  bidi: {len(cases)} cases, {len(blob)}B")
 
-        f.write("public const conf_bidi: Array[u8] = sys.fs.data_file("
-                f'source_dir() + "/{data_dir}/{bin_path.name}")\n\n')
+        f.write(embed_const("conf_bidi", "u8",
+                            f"{data_dir}/{bin_path.name}") + "\n")
 
         cases = _parse_collation_suite(test_data_dir / "CollationTest.zip")
         blob = _encode_collation_suite(cases)
@@ -2048,8 +2046,8 @@ def gen_conformance(test_data_dir, conformance_dir, out_path, strict):
 
         print(f"  collation: {len(cases)} cases, {len(blob)}B")
 
-        f.write("public const conf_collate: Array[u8] = sys.fs.data_file("
-                f'source_dir() + "/{data_dir}/{bin_path.name}")\n\n')
+        f.write(embed_const("conf_collate", "u8",
+                            f"{data_dir}/{bin_path.name}") + "\n")
 
         cases = _parse_idna_suite(test_data_dir / "IdnaTestV2.txt")
         blob = _encode_idna_suite(cases)
@@ -2058,8 +2056,8 @@ def gen_conformance(test_data_dir, conformance_dir, out_path, strict):
 
         print(f"  idna: {len(cases)} cases, {len(blob)}B")
 
-        f.write("public const conf_idna: Array[u8] = sys.fs.data_file("
-                f'source_dir() + "/{data_dir}/{bin_path.name}")\n')
+        f.write(embed_const("conf_idna", "u8",
+                            f"{data_dir}/{bin_path.name}"))
 
     return True
 

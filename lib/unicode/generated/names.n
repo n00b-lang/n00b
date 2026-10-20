@@ -1,9 +1,7 @@
-import sys.fs
+public const name_pool: Array[u8] = [- names_pool.bin -]'embed
 
-public const name_pool: Array[u8] = sys.fs.data_file(source_dir() + "/names_pool.bin")
+public const name_index: Array[u8] = [- names_index.bin -]'embed
 
-public const name_index: Array[u8] = sys.fs.data_file(source_dir() + "/names_index.bin")
-
-public const name_by_name: Array[u8] = sys.fs.data_file(source_dir() + "/names_by_name.bin")
+public const name_by_name: Array[u8] = [- names_by_name.bin -]'embed
 
 public const name_count = 41232

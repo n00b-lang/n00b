@@ -7,34 +7,9 @@ import generated.casemap
 
 const cp_capital_sigma = 0x03a3
 
-private func sparse_lookup(index: Array[u8], index_len: u32,
-                           cp: char) -> u32? {
-    let v: u32 = cast[u32] cp
-    var lo: u32 = 0
-    var hi: u32 = index_len
-
-    while lo < hi {
-        let mid: u32 = lo + (hi - lo) / 2
-
-        if internal.blob.u32_at(index, mid * 2) < v {
-            lo = mid + 1
-        }
-        else {
-            if internal.blob.u32_at(index, mid * 2) > v {
-                hi = mid
-            }
-            else {
-                return internal.blob.u32_at(index, mid * 2 + 1)
-            }
-        }
-    }
-
-    return nil
-}
-
-private func simple_map(cp: char, index: Array[u8], index_len: u32,
-                        data: Array[u8]) -> char {
-    let off: u32? = sparse_lookup(index, index_len, cp)
+private func simple_map(cp: char, index: Array[u32], index_len: u32,
+                        data: Array[u32]) -> char {
+    let off: u32? = internal.blob.sparse_lookup(index, index_len, cp)
 
     if off == nil {
         return cp
@@ -42,52 +17,52 @@ private func simple_map(cp: char, index: Array[u8], index_len: u32,
 
     let at: u32 = off.get()
 
-    if internal.blob.u32_at(data, at) >= 1 {
-        return cast[char] internal.blob.u32_at(data, at + 1)
+    if data[at] >= 1 {
+        return cast[char] data[at + 1]
     }
 
     return cp
 }
 
 func toupper_char(cp: char) -> char {
-    return simple_map(cp, generated.casemap.simple_upper_index_bytes,
+    return simple_map(cp, generated.casemap.simple_upper_index_values,
         generated.casemap.simple_upper_index_len,
-        generated.casemap.simple_upper_data_bytes)
+        generated.casemap.simple_upper_data_values)
 }
 
 func tolower_char(cp: char) -> char {
-    return simple_map(cp, generated.casemap.simple_lower_index_bytes,
+    return simple_map(cp, generated.casemap.simple_lower_index_values,
         generated.casemap.simple_lower_index_len,
-        generated.casemap.simple_lower_data_bytes)
+        generated.casemap.simple_lower_data_values)
 }
 
 func totitle_char(cp: char) -> char {
-    return simple_map(cp, generated.casemap.simple_title_index_bytes,
+    return simple_map(cp, generated.casemap.simple_title_index_values,
         generated.casemap.simple_title_index_len,
-        generated.casemap.simple_title_data_bytes)
+        generated.casemap.simple_title_data_values)
 }
 
 func casefold_char(cp: char) -> char {
-    return simple_map(cp, generated.casemap.casefold_simple_index_bytes,
+    return simple_map(cp, generated.casemap.casefold_simple_index_values,
         generated.casemap.casefold_simple_index_len,
-        generated.casemap.casefold_simple_data_bytes)
+        generated.casemap.casefold_simple_data_values)
 }
 
-private func full_map_char(cp: char, full_index: Array[u8],
-                           full_index_len: u32, full_data: Array[u8],
-                           simple_index: Array[u8],
-                           simple_index_len: u32, simple_data: Array[u8],
+private func full_map_char(cp: char, full_index: Array[u32],
+                           full_index_len: u32, full_data: Array[u32],
+                           simple_index: Array[u32],
+                           simple_index_len: u32, simple_data: Array[u32],
                            modify out: internal.runebuf.Char_Buf) {
-    let off: u32? = sparse_lookup(full_index, full_index_len, cp)
+    let off: u32? = internal.blob.sparse_lookup(full_index, full_index_len, cp)
 
     if off != nil {
         let at: u32 = off.get()
-        let count: u32 = internal.blob.u32_at(full_data, at)
+        let count: u32 = full_data[at]
 
         var i: u32 = 0
         while i < count {
             internal.runebuf.push(out,
-                cast[char] internal.blob.u32_at(full_data, at + 1 + i))
+                cast[char] full_data[at + 1 + i])
             i += 1
         }
 
@@ -145,8 +120,8 @@ private func map_final_sigma(cp: char, after_cased: bool, s: string,
         return false
     }
 
-    let off: u32? = sparse_lookup(
-        generated.casemap.final_sigma_lower_index_bytes,
+    let off: u32? = internal.blob.sparse_lookup(
+        generated.casemap.final_sigma_lower_index_values,
         generated.casemap.final_sigma_lower_index_len, cp)
 
     if off == nil {
@@ -167,10 +142,10 @@ private func map_final_sigma(cp: char, after_cased: bool, s: string,
 }
 
 private func full_case_map(consume s: string,
-                           full_index: Array[u8],
-                           full_index_len: u32, full_data: Array[u8],
-                           simple_index: Array[u8],
-                           simple_index_len: u32, simple_data: Array[u8],
+                           full_index: Array[u32],
+                           full_index_len: u32, full_data: Array[u32],
+                           simple_index: Array[u32],
+                           simple_index_len: u32, simple_data: Array[u32],
                            final_sigma: bool) -> string {
     let len: uint = byte_len(s)
 
@@ -208,30 +183,30 @@ private func full_case_map(consume s: string,
 }
 
 func toupper(consume s: string) -> string {
-    return full_case_map(s, generated.casemap.full_upper_index_bytes,
+    return full_case_map(s, generated.casemap.full_upper_index_values,
         generated.casemap.full_upper_index_len,
-        generated.casemap.full_upper_data_bytes,
-        generated.casemap.simple_upper_index_bytes,
+        generated.casemap.full_upper_data_values,
+        generated.casemap.simple_upper_index_values,
         generated.casemap.simple_upper_index_len,
-        generated.casemap.simple_upper_data_bytes, false)
+        generated.casemap.simple_upper_data_values, false)
 }
 
 func tolower(consume s: string) -> string {
-    return full_case_map(s, generated.casemap.full_lower_index_bytes,
+    return full_case_map(s, generated.casemap.full_lower_index_values,
         generated.casemap.full_lower_index_len,
-        generated.casemap.full_lower_data_bytes,
-        generated.casemap.simple_lower_index_bytes,
+        generated.casemap.full_lower_data_values,
+        generated.casemap.simple_lower_index_values,
         generated.casemap.simple_lower_index_len,
-        generated.casemap.simple_lower_data_bytes, true)
+        generated.casemap.simple_lower_data_values, true)
 }
 
 func casefold(consume s: string) -> string {
-    return full_case_map(s, generated.casemap.casefold_full_index_bytes,
+    return full_case_map(s, generated.casemap.casefold_full_index_values,
         generated.casemap.casefold_full_index_len,
-        generated.casemap.casefold_full_data_bytes,
-        generated.casemap.casefold_simple_index_bytes,
+        generated.casemap.casefold_full_data_values,
+        generated.casemap.casefold_simple_index_values,
         generated.casemap.casefold_simple_index_len,
-        generated.casemap.casefold_simple_data_bytes, false)
+        generated.casemap.casefold_simple_data_values, false)
 }
 
 func totitle(consume s: string) -> string {
@@ -263,21 +238,21 @@ func totitle(consume s: string) -> string {
             internal.types.Property.cased)
 
         if at_start and cased {
-            full_map_char(cp, generated.casemap.full_title_index_bytes,
+            full_map_char(cp, generated.casemap.full_title_index_values,
                 generated.casemap.full_title_index_len,
-                generated.casemap.full_title_data_bytes,
-                generated.casemap.simple_title_index_bytes,
+                generated.casemap.full_title_data_values,
+                generated.casemap.simple_title_index_values,
                 generated.casemap.simple_title_index_len,
-                generated.casemap.simple_title_data_bytes, out)
+                generated.casemap.simple_title_data_values, out)
         }
         else {
             if !map_final_sigma(cp, after_cased, s, len, pos, out) {
-                full_map_char(cp, generated.casemap.full_lower_index_bytes,
+                full_map_char(cp, generated.casemap.full_lower_index_values,
                     generated.casemap.full_lower_index_len,
-                    generated.casemap.full_lower_data_bytes,
-                    generated.casemap.simple_lower_index_bytes,
+                    generated.casemap.full_lower_data_values,
+                    generated.casemap.simple_lower_index_values,
                     generated.casemap.simple_lower_index_len,
-                    generated.casemap.simple_lower_data_bytes, out)
+                    generated.casemap.simple_lower_data_values, out)
             }
         }
 

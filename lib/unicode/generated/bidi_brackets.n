@@ -1,17 +1,16 @@
-import sys.fs
 import internal.blob
 
-public const bidi_bracket_index_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/bidi_bracket_index.bin")
+public const bidi_bracket_index_values: Array[u32] = [- bidi_bracket_index.bin -]'embed
 
 public inline func bidi_bracket_index(row: u32, col: u32) -> u32 {
-    return internal.blob.u32_at(bidi_bracket_index_bytes, row * 2 + col)
+    return bidi_bracket_index_values[row * 2 + col]
 }
 
 public const bidi_bracket_index_len: u32 = 130
 
-public const bidi_bracket_data_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/bidi_bracket_data.bin")
+public const bidi_bracket_data_values: Array[u32] = [- bidi_bracket_data.bin -]'embed
 
 public inline func bidi_bracket_data(i: u32) -> u32 {
-    return internal.blob.u32_at(bidi_bracket_data_bytes, i)
+    return bidi_bracket_data_values[i]
 }
 

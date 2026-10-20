@@ -1,24 +1,23 @@
-import sys.fs
 import internal.blob
 
 public const comp_table_size = 2048
 public const comp_empty = 0xFFFFFFFF
 
-public const comp_starter_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/comp_starter.bin")
+public const comp_starter_values: Array[u32] = [- comp_starter.bin -]'embed
 
 public inline func comp_starter(i: u32) -> u32 {
-    return internal.blob.u32_at(comp_starter_bytes, i)
+    return comp_starter_values[i]
 }
 
-public const comp_combining_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/comp_combining.bin")
+public const comp_combining_values: Array[u32] = [- comp_combining.bin -]'embed
 
 public inline func comp_combining(i: u32) -> u32 {
-    return internal.blob.u32_at(comp_combining_bytes, i)
+    return comp_combining_values[i]
 }
 
-public const comp_result_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/comp_result.bin")
+public const comp_result_values: Array[u32] = [- comp_result.bin -]'embed
 
 public inline func comp_result(i: u32) -> u32 {
-    return internal.blob.u32_at(comp_result_bytes, i)
+    return comp_result_values[i]
 }
 

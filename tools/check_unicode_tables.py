@@ -25,13 +25,14 @@ C_EMBED = re.compile(r'%embed\s+"([^"]+)"')
 N_CONST = re.compile(r"^public const (\w+)(?:\s*:\s*([^=]+?))?\s*=\s*", re.M)
 N_VERSION = re.compile(
     r'^public func version\(\) -> string \{\s*return "([^"]*)"\s*\}', re.M)
-N_DATA_FILE = re.compile(
-    r'sys\.fs\.data_file\(source_dir\(\) \+ "([^"]+)"\)')
+N_EMBED = re.compile(r"\[- (\S+) -\]'embed")
 N_ACCESSOR = re.compile(
-    r"^public (?:inline )?func (\w+)\([^)]*\) -> \w+ \{\n"
-    r"    return internal\.blob\.(u16|u32|u64|str)_at\((?:ref )?(\w+)_bytes, "
-    r"(?:row \* (\d+) \+ col|i)\)\n\}", re.M)
-BLOB_CODES = {"u16": "H", "u32": "I", "u64": "Q"}
+    r"^public (?:inline )?func (\w+)\([^)]*\) -> (\w+) \{\n"
+    r"    return (\w+)_values\[(?:row \* (\d+) \+ col|i)\]\n\}", re.M)
+N_STRINGS = re.compile(
+    r"^public (?:inline )?func (\w+)\([^)]*\) -> string \{\n"
+    r"    return internal\.blob\.str_at\(ref (\w+)_bytes, i\)\n\}", re.M)
+BLOB_CODES = {"u8": "B", "u16": "H", "u32": "I", "u64": "Q"}
 
 
 def number(text):
@@ -107,18 +108,31 @@ def decode_blob(data, elem, width):
             [values[i:i + width] for i in range(0, len(values), width)])
 
 
+def embedded_blob(path, text, key, referenced):
+    source = N_EMBED.search(
+        text[text.index(f"public const {key}:"):]).group(1)
+    blob = path.parent / source
+    referenced.add(blob.resolve())
+    return blob.read_bytes()
+
+
 def decode_accessors(path, text, tables, referenced):
     for m in N_ACCESSOR.finditer(text):
-        name, elem, blob_name, width = m.groups()
-        key = f"{name}_bytes"
-        if blob_name != name or key not in tables:
+        name, elem, table, width = m.groups()
+        key = f"{name}_values"
+        if table != name or key not in tables:
             continue
         del tables[key]
-        source = N_DATA_FILE.search(
-            text[text.index(f"public const {key}:"):]).group(1)
-        blob = path.parent / source.lstrip("/")
-        referenced.add(blob.resolve())
-        tables[name] = decode_blob(blob.read_bytes(), elem, width)
+        tables[name] = decode_blob(
+            embedded_blob(path, text, key, referenced), elem, width)
+    for m in N_STRINGS.finditer(text):
+        name, table = m.groups()
+        key = f"{name}_bytes"
+        if table != name or key not in tables:
+            continue
+        del tables[key]
+        tables[name] = decode_blob(
+            embedded_blob(path, text, key, referenced), "str", None)
 
 
 def parse_n00b(path, referenced):
@@ -131,7 +145,7 @@ def parse_n00b(path, referenced):
         name = m.group(1)
         n00b_type = re.sub(r"\s+", "", m.group(2)) if m.group(2) else None
         start = m.end()
-        if text[start] == "[":
+        if text[start] == "[" and not text.startswith("[- ", start):
             inner = text[start + 1:bracket_end(text, start)]
             if n00b_type == "Array[string]":
                 value = STRING.findall(inner)
@@ -142,11 +156,11 @@ def parse_n00b(path, referenced):
                 value = numbers(inner)
         else:
             line = text[start:text.index("\n", start)]
-            data_file = N_DATA_FILE.fullmatch(line.strip())
-            if data_file:
-                blob = path.parent / data_file.group(1).lstrip("/")
+            embedded = N_EMBED.fullmatch(line.strip())
+            if embedded:
+                blob = path.parent / embedded.group(1)
                 value = (list(blob.read_bytes()) if blob.is_file()
-                         else f"missing data file {blob}")
+                         else f"missing embedded file {blob}")
             else:
                 value = number(line)
         tables[name] = (n00b_type, value)

@@ -1,21 +1,20 @@
-import sys.fs
 import internal.blob
 
-public const block_ranges_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/block_ranges.bin")
+public const block_ranges_values: Array[u32] = [- block_ranges.bin -]'embed
 
 public inline func block_ranges(row: u32, col: u32) -> u32 {
-    return internal.blob.u32_at(block_ranges_bytes, row * 2 + col)
+    return block_ranges_values[row * 2 + col]
 }
 
-public const block_ids_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/block_ids.bin")
+public const block_ids_values: Array[u16] = [- block_ids.bin -]'embed
 
 public inline func block_ids(i: u32) -> u16 {
-    return internal.blob.u16_at(block_ids_bytes, i)
+    return block_ids_values[i]
 }
 
 public const block_count: u32 = 353
 
-public const block_names_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/block_names.bin")
+public const block_names_bytes: Array[u8] = [- block_names.bin -]'embed
 
 public func block_names(i: u32) -> string {
     return internal.blob.str_at(ref block_names_bytes, i)

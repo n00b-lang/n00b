@@ -13,7 +13,7 @@ func grapheme_break(cp: char) -> internal.types.Gcb {
     }
 
     return cast[internal.types.Gcb] generated.grapheme.gcb_stage2[
-        internal.blob.stage_index(generated.grapheme.gcb_stage1_bytes, cp)]
+        internal.blob.stage_index(generated.grapheme.gcb_stage1_values, cp)]
 }
 
 func incb(cp: char) -> internal.types.Incb {
@@ -22,7 +22,7 @@ func incb(cp: char) -> internal.types.Incb {
     }
 
     return cast[internal.types.Incb] generated.incb.incb_stage2[
-        internal.blob.stage_index(generated.incb.incb_stage1_bytes, cp)]
+        internal.blob.stage_index(generated.incb.incb_stage1_values, cp)]
 }
 
 private func is_ep(cp: char) -> bool {
@@ -114,7 +114,7 @@ func word_break(cp: char) -> internal.types.Wb {
     }
 
     return cast[internal.types.Wb] generated.wordbreak.wb_stage2[
-        internal.blob.stage_index(generated.wordbreak.wb_stage1_bytes, cp)]
+        internal.blob.stage_index(generated.wordbreak.wb_stage1_values, cp)]
 }
 
 func word_iter(s: string) -> internal.types.Break_Iter {
@@ -363,7 +363,7 @@ func sentence_break(cp: char) -> internal.types.Sb {
     }
 
     return cast[internal.types.Sb] generated.sentbreak.sb_stage2[
-        internal.blob.stage_index(generated.sentbreak.sb_stage1_bytes, cp)]
+        internal.blob.stage_index(generated.sentbreak.sb_stage1_values, cp)]
 }
 
 func sentence_iter(s: string) -> internal.types.Break_Iter {

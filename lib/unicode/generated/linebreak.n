@@ -1,10 +1,9 @@
-import sys.fs
 import internal.blob
 
-public const lb_stage1_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/linebreak_stage1.bin")
+public const lb_stage1_values: Array[u16] = [- linebreak_stage1.bin -]'embed
 
 public inline func lb_stage1(i: u32) -> u16 {
-    return internal.blob.u16_at(lb_stage1_bytes, i)
+    return lb_stage1_values[i]
 }
 
-public const lb_stage2: Array[u8] = sys.fs.data_file(source_dir() + "/linebreak_stage2.bin")
+public const lb_stage2: Array[u8] = [- linebreak_stage2.bin -]'embed

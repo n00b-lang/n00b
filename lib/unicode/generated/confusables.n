@@ -1,17 +1,16 @@
-import sys.fs
 import internal.blob
 
-public const confusable_index_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/confusable_index.bin")
+public const confusable_index_values: Array[u32] = [- confusable_index.bin -]'embed
 
 public inline func confusable_index(row: u32, col: u32) -> u32 {
-    return internal.blob.u32_at(confusable_index_bytes, row * 2 + col)
+    return confusable_index_values[row * 2 + col]
 }
 
 public const confusable_index_len: u32 = 6712
 
-public const confusable_data_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/confusable_data.bin")
+public const confusable_data_values: Array[u32] = [- confusable_data.bin -]'embed
 
 public inline func confusable_data(i: u32) -> u32 {
-    return internal.blob.u32_at(confusable_data_bytes, i)
+    return confusable_data_values[i]
 }
 

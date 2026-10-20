@@ -1,10 +1,9 @@
-import sys.fs
 import internal.blob
 
-public const bidi_stage1_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/bidi_class_stage1.bin")
+public const bidi_stage1_values: Array[u16] = [- bidi_class_stage1.bin -]'embed
 
 public inline func bidi_stage1(i: u32) -> u16 {
-    return internal.blob.u16_at(bidi_stage1_bytes, i)
+    return bidi_stage1_values[i]
 }
 
-public const bidi_stage2: Array[u8] = sys.fs.data_file(source_dir() + "/bidi_class_stage2.bin")
+public const bidi_stage2: Array[u8] = [- bidi_class_stage2.bin -]'embed

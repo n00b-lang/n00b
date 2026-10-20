@@ -1,64 +1,63 @@
-import sys.fs
 import internal.blob
 
-public const ducet_stage1_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/collation_stage1.bin")
+public const ducet_stage1_values: Array[u16] = [- collation_stage1.bin -]'embed
 
 public inline func ducet_stage1(i: u32) -> u16 {
-    return internal.blob.u16_at(ducet_stage1_bytes, i)
+    return ducet_stage1_values[i]
 }
 
-public const ducet_stage2_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/collation_stage2.bin")
+public const ducet_stage2_values: Array[u32] = [- collation_stage2.bin -]'embed
 
 public inline func ducet_stage2(i: u32) -> u32 {
-    return internal.blob.u32_at(ducet_stage2_bytes, i)
+    return ducet_stage2_values[i]
 }
 
-public const ce_data_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/ce_data.bin")
+public const ce_data_values: Array[u16] = [- ce_data.bin -]'embed
 
 public inline func ce_data(i: u32) -> u16 {
-    return internal.blob.u16_at(ce_data_bytes, i)
+    return ce_data_values[i]
 }
 
 public const ce_data_len: u32 = 156437
 
 public const contraction_count: u32 = 974
 
-public const contr_keys_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/contr_keys.bin")
+public const contr_keys_values: Array[u32] = [- contr_keys.bin -]'embed
 
 public inline func contr_keys(row: u32, col: u32) -> u32 {
-    return internal.blob.u32_at(contr_keys_bytes, row * 4 + col)
+    return contr_keys_values[row * 4 + col]
 }
 
-public const contr_key_lens_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/contr_key_lens.bin")
+public const contr_key_lens_values: Array[u32] = [- contr_key_lens.bin -]'embed
 
 public inline func contr_key_lens(i: u32) -> u32 {
-    return internal.blob.u32_at(contr_key_lens_bytes, i)
+    return contr_key_lens_values[i]
 }
 
-public const contr_ce_offsets_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/contr_ce_offsets.bin")
+public const contr_ce_offsets_values: Array[u32] = [- contr_ce_offsets.bin -]'embed
 
 public inline func contr_ce_offsets(i: u32) -> u32 {
-    return internal.blob.u32_at(contr_ce_offsets_bytes, i)
+    return contr_ce_offsets_values[i]
 }
 
-public const contr_ce_data_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/contr_ce_data.bin")
+public const contr_ce_data_values: Array[u16] = [- contr_ce_data.bin -]'embed
 
 public inline func contr_ce_data(i: u32) -> u16 {
-    return internal.blob.u16_at(contr_ce_data_bytes, i)
+    return contr_ce_data_values[i]
 }
 
-public const implicit_ranges_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/implicit_ranges.bin")
+public const implicit_ranges_values: Array[u32] = [- implicit_ranges.bin -]'embed
 
 public inline func implicit_ranges(row: u32, col: u32) -> u32 {
-    return internal.blob.u32_at(implicit_ranges_bytes, row * 3 + col)
+    return implicit_ranges_values[row * 3 + col]
 }
 
 public const implicit_range_count: u32 = 8
 
-public const core_han_ranges_bytes: Array[u8] = sys.fs.data_file(source_dir() + "/core_han_ranges.bin")
+public const core_han_ranges_values: Array[u32] = [- core_han_ranges.bin -]'embed
 
 public inline func core_han_ranges(row: u32, col: u32) -> u32 {
-    return internal.blob.u32_at(core_han_ranges_bytes, row * 2 + col)
+    return core_han_ranges_values[row * 2 + col]
 }
 
 public const core_han_range_count: u32 = 2
