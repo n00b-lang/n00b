@@ -192,7 +192,7 @@ ir_site_at(const ir_sites_t *sites, uint32_t index)
 
 static bool
 reaches_exit(ir_func_t *f, ir_instr_predicate_fn passes,
-             ir_instr_predicate_fn diverges, void *context, bool failures)
+             ir_instr_predicate_fn diverges, void *context, uint32_t exits)
 {
     ir_doms_t  *doms  = ir_func_doms(f);
     ir_block_t *entry = ir_block_entry(f);
@@ -212,11 +212,13 @@ reaches_exit(ir_func_t *f, ir_instr_predicate_fn passes,
                 ended = true;
                 break;
             }
-            if (in->op == IR_OP_RETURN
-                || (failures && in->op == IR_OP_FAIL)) {
+            if ((in->op == IR_OP_RETURN && (exits & IR_PATH_EXIT_RETURN))
+                || (in->op == IR_OP_FAIL && (exits & IR_PATH_EXIT_FAIL))) {
                 found = true;
                 ended = true;
             }
+            if (in->op == IR_OP_RETURN || in->op == IR_OP_FAIL)
+                ended = true;
             if (in->op == IR_OP_TRAP || in->op == IR_OP_UNREACHABLE)
                 ended = true;
         }
@@ -238,12 +240,22 @@ bool
 ir_paths_can_return(ir_func_t *f, ir_instr_predicate_fn diverges,
                     void *context)
 {
-    return f && reaches_exit(f, nullptr, diverges, context, true);
+    return f && reaches_exit(f, nullptr, diverges, context,
+                             IR_PATH_EXIT_RETURN | IR_PATH_EXIT_FAIL);
 }
 
 bool
 ir_paths_all_pass(ir_func_t *f, ir_instr_predicate_fn passes,
                   ir_instr_predicate_fn diverges, void *context)
 {
-    return f && passes && !reaches_exit(f, passes, diverges, context, true);
+    return ir_paths_all_pass_to(f, IR_PATH_EXIT_RETURN | IR_PATH_EXIT_FAIL,
+                                passes, diverges, context);
+}
+
+bool
+ir_paths_all_pass_to(ir_func_t *f, uint32_t exits,
+                     ir_instr_predicate_fn passes,
+                     ir_instr_predicate_fn diverges, void *context)
+{
+    return f && passes && !reaches_exit(f, passes, diverges, context, exits);
 }

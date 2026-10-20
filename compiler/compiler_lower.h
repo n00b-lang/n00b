@@ -42,4 +42,5 @@ bool lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                           ir_ctx_t *ir_context,
                           core_diagnostics_t *diagnostics,
                           bool dump_ir, bool dump_control_flow,
-                          bool dump_pdg, bool dump_layout);
+                          bool dump_pdg, bool dump_summaries,
+                          bool dump_layout);

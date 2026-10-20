@@ -4816,10 +4816,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                 || (lower_command && !parse_cmdr_flag_present(args,
                         CORE_STRING_STATIC("--dump-control-flow"))
                     && !parse_cmdr_flag_present(args,
-                        CORE_STRING_STATIC("--dump-pdg"))),
+                        CORE_STRING_STATIC("--dump-pdg"))
+                    && !parse_cmdr_flag_present(args,
+                        CORE_STRING_STATIC("--dump-summaries"))),
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-control-flow")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg")),
+            parse_cmdr_flag_present(args,
+                CORE_STRING_STATIC("--dump-summaries")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
     core_string_t header_output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));

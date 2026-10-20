@@ -34,6 +34,8 @@
          "dump control-flow edges"), \
     FLAG("--dump-pdg", NO_ALIAS, BOOL, false, \
          "dump the full program-dependence graph"), \
+    FLAG("--dump-summaries", NO_ALIAS, BOOL, false, \
+         "dump whole-program function summaries"), \
     FLAG("--dump-layout", NO_ALIAS, BOOL, false, \
          "dump target layouts for named types")
 

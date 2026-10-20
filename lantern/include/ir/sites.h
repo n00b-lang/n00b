@@ -34,9 +34,17 @@ const ir_site_t *ir_site_at(const ir_sites_t *sites, uint32_t index);
 
 typedef bool (*ir_instr_predicate_fn)(void *context, const ir_instr_t *in);
 
+enum {
+    IR_PATH_EXIT_RETURN = 1u << 0,
+    IR_PATH_EXIT_FAIL   = 1u << 1,
+};
+
 bool ir_paths_can_return(ir_func_t *f, ir_instr_predicate_fn diverges,
                          void *context);
 bool ir_paths_all_pass(ir_func_t *f, ir_instr_predicate_fn passes,
                        ir_instr_predicate_fn diverges, void *context);
+bool ir_paths_all_pass_to(ir_func_t *f, uint32_t exits,
+                          ir_instr_predicate_fn passes,
+                          ir_instr_predicate_fn diverges, void *context);
 
 #endif

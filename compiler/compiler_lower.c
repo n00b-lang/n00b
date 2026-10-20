@@ -69,7 +69,9 @@ double n00bb_profile_seconds(void);
 #include "ir/exec_graph.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
+#include "ir/summary.h"
 #include "ir/analyze.h"
+#include "cached_body.h"
 #include "ir/option_proof.h"
 #include "ir/layout.h"
 #include "ir/typelang.h"
@@ -19679,6 +19681,116 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
     }
 }
 
+static bool
+n00bb_summary_call_targets(void *context, const ir_instr_t *call,
+                           ir_summary_target_fn add, void *sink)
+{
+    (void)context;
+    ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands
+        ? ir_operand_value(&call->operands[0]) : nullptr;
+    if (!callee || callee->kind != IR_VAL_FUNC || !callee->owner) return false;
+    add(sink, n00bb_cached_body(callee->owner));
+    return true;
+}
+
+static void
+dump_splace(th_ctx *types, const ir_splace_t *place)
+{
+    switch (place->kind) {
+    case IR_SPLACE_PARAM:
+        fprintf(stdout, "param %u", place->param);
+        break;
+    case IR_SPLACE_GLOBAL:
+    case IR_SPLACE_THREAD:
+        fprintf(stdout, "%s %.*s",
+                place->kind == IR_SPLACE_THREAD ? "thread" : "global",
+                (int)place->global->name.u8_bytes, place->global->name.data);
+        break;
+    case IR_SPLACE_HEAP: {
+        core_string_t text = th_print(types, place->type);
+        fprintf(stdout, "heap %.*s", (int)text.u8_bytes, text.data);
+        break;
+    }
+    case IR_SPLACE_UNKNOWN:
+        fputs("unknown", stdout);
+        break;
+    }
+}
+
+static void
+dump_function_summaries(n00bb_link_analysis_t *analysis)
+{
+    ir_summary_hooks_t hooks = {.call_targets = n00bb_summary_call_targets};
+    ir_summaries_t *summaries = ir_summaries_compute(
+        analysis->reachable_functions.data,
+        analysis->reachable_functions.len, &hooks);
+    static const char *const flag_names[] = {
+        "may-fail", "may-trap", "may-allocate", "may-block", "diverges",
+        "calls-unknown", "may-io"};
+    static const char *const access_names[] = {
+        "read", "write", "must-success", "must-failure", "reads-entry"};
+    for (size_t f = 0; f < analysis->reachable_functions.len; f++) {
+        ir_func_t *function = analysis->reachable_functions.data[f];
+        ir_summary_t *summary = ir_summary_of(summaries, function);
+        if (!summary) continue;
+        core_string_t owner = ir_module_name(function->owner);
+        fprintf(stdout, "summary @%.*s.%.*s",
+                (int)owner.u8_bytes, owner.data,
+                (int)function->name.u8_bytes, function->name.data);
+        for (uint32_t b = 0; b < 7; b++)
+            if (ir_summary_flags(summary) & (1u << b))
+                fprintf(stdout, " %s", flag_names[b]);
+        fputc('\n', stdout);
+        th_ctx *types = ir_module_types(function->owner);
+        for (uint32_t a = 0; a < ir_summary_access_count(summary); a++) {
+            const ir_saccess_t *access = ir_summary_access_at(summary, a);
+            fputs("  ", stdout);
+            dump_splace(types, &access->place);
+            for (uint32_t b = 0; b < 5; b++)
+                if (access->flags & (1u << b))
+                    fprintf(stdout, " %s", access_names[b]);
+            fputc('\n', stdout);
+        }
+        const uint32_t *deps = ir_summary_dependences(summary);
+        for (uint32_t o = 0; o < ir_summary_output_count(summary); o++) {
+            const ir_soutput_t *output = ir_summary_output_at(summary, o);
+            fputs("  output ", stdout);
+            if (output->kind == IR_SOUTPUT_RESULT) fputs("result", stdout);
+            else if (output->kind == IR_SOUTPUT_FAILURE) fputs("failure", stdout);
+            else dump_splace(types, &output->place);
+            for (int pass = 0; pass < 2; pass++) {
+                uint32_t first = pass ? output->control_first
+                                      : output->data_first;
+                uint32_t count = pass ? output->control_count
+                                      : output->data_count;
+                fputs(pass ? " control[" : " data[", stdout);
+                for (uint32_t k = 0; k < count; k++) {
+                    const ir_sinput_t *input = ir_summary_input_at(summary,
+                        deps[first + k]);
+                    if (k) fputc(' ', stdout);
+                    switch (input->kind) {
+                    case IR_SINPUT_VALUE:
+                        fprintf(stdout, "arg%u", input->param);
+                        break;
+                    case IR_SINPUT_REFERENT:
+                        fprintf(stdout, "*arg%u", input->param);
+                        break;
+                    case IR_SINPUT_PLACE:
+                        dump_splace(types, &input->place);
+                        break;
+                    case IR_SINPUT_UNKNOWN:
+                        fputs("unknown", stdout);
+                        break;
+                    }
+                }
+                fputc(']', stdout);
+            }
+            fputc('\n', stdout);
+        }
+    }
+    ir_summaries_free(summaries);
+}
+
 static void
 dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
 {
@@ -20982,7 +21094,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                      core_diagnostics_t *diagnostics,
                      bool dump_ir,
                      bool dump_control_flow, bool dump_pdg,
-                     bool dump_layout)
+                     bool dump_summaries, bool dump_layout)
 {
     double profile_start = n00bb_profile_seconds();
     if (analysis) analysis->ir_context = ir_context;
@@ -21376,6 +21488,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                 dump_ir_analysis(tu_state(units.data[i])->ir_module,
                                  dump_control_flow, dump_pdg);
         }
+        if (dump_summaries) dump_function_summaries(analysis);
         if (dump_control_flow) {
             core_string_t text = ir_exec_graph_print(
                 analysis->execution_graph);
