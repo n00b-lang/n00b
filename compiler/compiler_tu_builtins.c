@@ -41,6 +41,7 @@ static const builtin_native_name_t builtin_native_names[] = {
     {CORE_STRING_STATIC("__os_open"), CORE_STRING_STATIC("n00b_os_open")},
     {CORE_STRING_STATIC("__os_read"), CORE_STRING_STATIC("n00b_os_read")},
     {CORE_STRING_STATIC("__os_close"), CORE_STRING_STATIC("n00b_os_close")},
+    {CORE_STRING_STATIC("__os_exit"), CORE_STRING_STATIC("n00b_os_exit")},
     {CORE_STRING_STATIC("__os_seek"), CORE_STRING_STATIC("n00b_os_seek")},
     {CORE_STRING_STATIC("__write_bytes"),
      CORE_STRING_STATIC("n00bb_runtime_write_bytes")},
@@ -420,6 +421,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__os_read"), integer, read_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_close"), integer, close_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_exit"), nil_type, close_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_seek"), integer, seek_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,

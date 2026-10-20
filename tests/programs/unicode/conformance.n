@@ -540,4 +540,4 @@ func main(args: List[string]) -> i32 {
     return 0
 }
 
-main(sys.env.args())
+sys.env.exit(cast[int] main(sys.env.args()))

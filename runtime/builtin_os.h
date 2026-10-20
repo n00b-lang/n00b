@@ -42,6 +42,7 @@ int32_t n00b_os_protect(void *address, size_t bytes, uint32_t protection);
 int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode);
 int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count);
 int64_t n00b_os_close(int64_t fd);
+[[noreturn]] void n00b_os_exit(int64_t code);
 int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence);
 uint64_t n00b_os_env_count(void);
 const uint8_t *n00b_os_env_at(uint64_t index);

@@ -212,6 +212,13 @@ static int64_t os_pipe_raw(int32_t fds[2])
     return n00b_linux_syscall6(__NR_pipe2, (long)fds, O_CLOEXEC, 0, 0, 0, 0);
 }
 
+[[noreturn]] static void os_exit_raw(int64_t code)
+{
+    for (;;)
+        (void)n00b_linux_syscall6(__NR_exit_group, (long)(int32_t)code,
+                                  0, 0, 0, 0, 0);
+}
+
 #elif defined(__APPLE__)
 
 #include <sys/ioctl.h>
@@ -294,6 +301,11 @@ static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
 static int64_t os_close_raw(int64_t fd)
 {
     return os_errno_result(close((int)fd));
+}
+
+[[noreturn]] static void os_exit_raw(int64_t code)
+{
+    _exit((int)code);
 }
 
 static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
@@ -424,6 +436,11 @@ static int64_t os_close_raw(int64_t fd)
     return os_errno_result(_close((int)fd));
 }
 
+[[noreturn]] static void os_exit_raw(int64_t code)
+{
+    ExitProcess((UINT)code);
+}
+
 static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
 {
     return os_errno_result(_lseeki64((int)fd, offset, whence));
@@ -508,6 +525,11 @@ int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count)
 int64_t n00b_os_close(int64_t fd)
 {
     return os_close_raw(fd);
+}
+
+void n00b_os_exit(int64_t code)
+{
+    os_exit_raw(code);
 }
 
 int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence)
