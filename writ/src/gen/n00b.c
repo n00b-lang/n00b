@@ -3841,7 +3841,7 @@ export_ref(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, core_buffer_t *
 {
     (void)base;
     (void)expr;
-    core_buffer_puts(out, ref.kind == WRIT_REF_RESULT ? "value" : "0");
+    ref.kind == WRIT_REF_RESULT ? core_buffer_puts(out, "value") : core_buffer_puts(out, "0");
 }
 
 static writ_str_t

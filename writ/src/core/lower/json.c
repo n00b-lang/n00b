@@ -29,7 +29,7 @@ json_value(json_t *json)
         return;
     }
     if (json->depth) {
-        core_buffer_puts(json->out, json->empty[json->depth] ? "" : ",");
+        if (!json->empty[json->depth]) core_buffer_puts(json->out, ",");
         json->empty[json->depth] = false;
         json_newline(json);
     }
@@ -99,7 +99,7 @@ static void
 json_bool(json_t *json, bool value)
 {
     json_value(json);
-    core_buffer_puts(json->out, value ? "true" : "false");
+    value ? core_buffer_puts(json->out, "true") : core_buffer_puts(json->out, "false");
 }
 
 static void

@@ -96,7 +96,7 @@ print_args(importer_t *im, uint32_t args, writ_str_t self, core_buffer_t *out)
     core_buffer_putc(out, '<');
     for (uint32_t i = 0; i < at(im, list)->child_count; i++) {
         uint32_t type = get(im, writ_node_child(im->json, list, i), "type");
-        core_buffer_puts(out, i ? ", " : "");
+        if (i) core_buffer_puts(out, ", ");
         if (!type || !print_type(im, type, self, out)) {
             return false;
         }
@@ -124,9 +124,10 @@ print_type(importer_t *im, uint32_t type, writ_str_t self, core_buffer_t *out)
         return true;
     }
     if (writ_str_eq(kind, writ_cstr("borrowed_ref"))) {
-        core_buffer_puts(out, at(im, get(im, value, "is_mutable"))->name == writ_intern(im->session, "true", 4)
-                                  ? "&mut "
-                                  : "&");
+        if (at(im, get(im, value, "is_mutable"))->name == writ_intern(im->session, "true", 4))
+            core_buffer_puts(out, "&mut ");
+        else
+            core_buffer_puts(out, "&");
         return print_type(im, get(im, value, "type"), self, out);
     }
     if (writ_str_eq(kind, writ_cstr("slice"))) {
@@ -196,14 +197,17 @@ emit_fn(importer_t *im, writ_emit_t *e, uint32_t entry, writ_str_t owner)
         uint32_t pair = writ_node_child(im->json, inputs, i);
         writ_str_t param = text(im, writ_node_child(im->json, pair, 0));
         uint32_t type = writ_node_child(im->json, pair, 1);
-        core_buffer_puts(line, i ? ", " : "");
+        if (i) core_buffer_puts(line, ", ");
         if (writ_str_eq(param, writ_cstr("self"))) {
             core_buffer_t *spelled = core_buffer_empty();
             ok = print_type(im, type, writ_cstr("Self"), spelled);
             writ_str_t receiver = {spelled->data, spelled->byte_len};
-            core_buffer_puts(line, writ_str_eq(receiver, writ_cstr("&Self"))      ? "&self"
-                                   : writ_str_eq(receiver, writ_cstr("&mut Self")) ? "&mut self"
-                                                                                  : "self");
+            if (writ_str_eq(receiver, writ_cstr("&Self")))
+                core_buffer_puts(line, "&self");
+            else if (writ_str_eq(receiver, writ_cstr("&mut Self")))
+                core_buffer_puts(line, "&mut self");
+            else
+                core_buffer_puts(line, "self");
             ok = ok && (writ_str_eq(receiver, writ_cstr("&Self")) || writ_str_eq(receiver, writ_cstr("&mut Self"))
                         || writ_str_eq(receiver, writ_cstr("Self")));
             core_buffer_free(spelled);

@@ -95,7 +95,7 @@ render_operands(render_env_t *env, const writ_plan_step_view_t *step, core_buffe
         if (step->local != WRIT_PLAN_NONE) {
             core_buffer_printf(out, "L%u", step->local);
         } else {
-            core_buffer_puts(out, plan->slots[step->slot].contract_slot == WRIT_PLAN_NONE ? "ret" : "s");
+            plan->slots[step->slot].contract_slot == WRIT_PLAN_NONE ? core_buffer_puts(out, "ret") : core_buffer_puts(out, "s");
         }
         core_buffer_puts(out, " -> ");
         put_item(plan, step->item, out);
@@ -138,7 +138,7 @@ render_operands(render_env_t *env, const writ_plan_step_view_t *step, core_buffe
         core_buffer_printf(out, "L%u -> s%u", step->local, step->slot);
         return;
     case WRIT_STEP_CALL:
-        core_buffer_puts(out, plan->variadic ? "variadic" : "fixed");
+        plan->variadic ? core_buffer_puts(out, "variadic") : core_buffer_puts(out, "fixed");
         return;
     case WRIT_STEP_FETCH_DETAIL:
         put_expr(env, step->expr, out);

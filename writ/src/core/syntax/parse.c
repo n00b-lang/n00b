@@ -126,8 +126,8 @@ typedef struct {
 } grammar_spec_t;
 
 static const grammar_spec_t grammar_specs[] = {
-    [WRIT_GRAMMAR_WRIT] = {CORE_STRING_STATIC(writ_grammar_text), &writ_lexer, "file", "declarations", "embedded"},
-    [WRIT_GRAMMAR_JSON] = {CORE_STRING_STATIC(json_grammar_text), &json_lexer, "json-file", "json-file", "json-file"},
+    [WRIT_GRAMMAR_WRIT] = {{.data = (char *)writ_grammar_text, .u8_bytes = sizeof(writ_grammar_text) - 1}, &writ_lexer, "file", "declarations", "embedded"},
+    [WRIT_GRAMMAR_JSON] = {{.data = (char *)json_grammar_text, .u8_bytes = sizeof(json_grammar_text) - 1}, &json_lexer, "json-file", "json-file", "json-file"},
 };
 
 static writ_grammar_t *
@@ -172,7 +172,7 @@ typedef struct {
 static writ_loc_t
 token_loc(const converter_t *converter, const parse_token_info_t *token)
 {
-    return (writ_loc_t){converter->source, (uint32_t)token->start_byte, (uint32_t)token->end_byte};
+    return (writ_loc_t){converter->source, (uint32_t)parse_token_start_byte(token), (uint32_t)parse_token_end_byte(token)};
 }
 
 static writ_sym_t
@@ -250,8 +250,8 @@ node_name(converter_t *converter, parse_tree_t *tree, const syntax_rule_t *rule,
     if (rule->name_form == WRIT_NAME_INNER) {
         parse_token_info_t *open = parse_node_token(core_tree_child(tree, 0));
         parse_token_info_t *close = parse_node_token(core_tree_child(tree, count - 1));
-        return text_sym(converter, (writ_loc_t){converter->source, (uint32_t)open->end_byte,
-                                                (uint32_t)close->start_byte});
+        return text_sym(converter, (writ_loc_t){converter->source, (uint32_t)parse_token_end_byte(open),
+                                                (uint32_t)parse_token_start_byte(close)});
     }
     parse_tree_t *child = core_tree_child(tree, rule->name_child);
     if (!parse_node_is_token(child)) {
@@ -338,14 +338,14 @@ report_syntax_error(writ_session_t *session, uint32_t source, parse_token_stream
         writ_report(session, WRIT_D_SYNTAX, (writ_loc_t){source, end, end}, "unexpected end of input");
         return;
     }
-    writ_loc_t loc = {source, (uint32_t)token->start_byte, (uint32_t)token->end_byte};
+    writ_loc_t loc = {source, (uint32_t)parse_token_start_byte(token), (uint32_t)parse_token_end_byte(token)};
     writ_str_t spelling = writ_loc_text(session, loc);
     bool second_binding = false;
     for (int32_t i = 0; embedded && writ_str_eq(spelling, writ_cstr("binding")) && i < position; i++) {
         parse_token_info_t *earlier = scan_stream_get(stream, i);
         second_binding = second_binding
-                      || (earlier && writ_str_eq(writ_loc_text(session, (writ_loc_t){source, (uint32_t)earlier->start_byte,
-                                                                                      (uint32_t)earlier->end_byte}),
+                      || (earlier && writ_str_eq(writ_loc_text(session, (writ_loc_t){source, (uint32_t)parse_token_start_byte(earlier),
+                                                                                      (uint32_t)parse_token_end_byte(earlier)}),
                                                  writ_cstr("binding")));
     }
     if (second_binding) {
@@ -367,7 +367,8 @@ parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind, writ_g
     core_buffer_t *buffer = nullptr;
     parse_scanner_t *scanner = nullptr;
     parse_token_stream_t *stream =
-        scan_tokenize(grammar->grammar, text->text.data, text->text.length, &buffer, &scanner);
+        scan_tokenize(grammar->grammar, core_string_borrow(text->text.data, text->text.length),
+                      &buffer, &scanner);
     parse_nt_id_t start = kind == WRIT_SOURCE_CONTRACT_DECLARATIONS ? grammar->declarations_start
                         : kind == WRIT_SOURCE_EMBEDDED           ? grammar->embedded_start
                                                                  : grammar->file_start;
@@ -509,8 +510,10 @@ writ_syntax_audit(writ_session_t *session, bool candidates)
     core_buffer_t *buffer = core_buffer_empty();
     for (size_t i = 0; i < findings.len; i++) {
         const parse_ambiguity_finding_t *finding = &findings.data[i];
-        core_buffer_printf(buffer, "%s %s in <%.*s>: %.*s\n", parse_ambiguity_severity_name(finding->severity),
-                           parse_ambiguity_kind_name(finding->kind), (int)finding->nonterminal_name.u8_bytes,
+        core_string_t severity = parse_ambiguity_severity_name(finding->severity);
+        core_string_t kind = parse_ambiguity_kind_name(finding->kind);
+        core_buffer_printf(buffer, "%.*s %.*s in <%.*s>: %.*s\n", (int)severity.u8_bytes, severity.data,
+                           (int)kind.u8_bytes, kind.data, (int)finding->nonterminal_name.u8_bytes,
                            finding->nonterminal_name.data, (int)finding->witness.u8_bytes, finding->witness.data);
     }
     parse_ambiguity_list_free(&findings);

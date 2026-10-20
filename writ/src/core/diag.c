@@ -3,11 +3,12 @@
 typedef struct {
     const char     *code;
     writ_severity_t severity;
-    const char     *text;
+    core_string_t   text;
 } writ_diag_info_t;
 
 static const writ_diag_info_t diag_info[] = {
-#define WRIT_DIAG(id, code, severity, text) {code, severity, text},
+#define WRIT_DIAG(id, code, severity, text) \
+    {code, severity, {.data = (char *)("" text), .u8_bytes = sizeof(text) - 1}},
 #include "diag_codes.def"
 #undef WRIT_DIAG
 };
@@ -23,7 +24,7 @@ writ_report(writ_session_t *session, writ_diag_code_t code, writ_loc_t loc, cons
 {
     const writ_diag_info_t *info = &diag_info[code];
     core_buffer_t *buffer = core_buffer_empty();
-    core_buffer_puts(buffer, info->text);
+    core_buffer_append_string(buffer, info->text);
     if (format && *format) {
         va_list args;
         va_start(args, format);

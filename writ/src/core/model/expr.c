@@ -549,7 +549,7 @@ print_ref(const writ_model_t *model, uint32_t expr, writ_ref_t ref, writ_languag
         return;
     }
     case WRIT_REF_NULL:
-        core_buffer_puts(out, language == WRIT_LANGUAGE_N00B ? "nil" : "NULL");
+        language == WRIT_LANGUAGE_N00B ? core_buffer_puts(out, "nil") : core_buffer_puts(out, "NULL");
         return;
     case WRIT_REF_NONE_OF:
         core_buffer_printf(out, "(%lld)", (long long)model->handles.data[ref.index].none_value);
@@ -614,7 +614,7 @@ writ_expr_print(const writ_model_t *model, uint32_t expr, writ_language_t langua
         if (callee.kind == WRIT_REF_BUILTIN) {
             core_buffer_puts(out, "((");
             print_child(model, expr, 1, language, env, out);
-            core_buffer_puts(out, callee.index == WRIT_BUILTIN_MIN ? ") < (" : ") > (");
+            callee.index == WRIT_BUILTIN_MIN ? core_buffer_puts(out, ") < (") : core_buffer_puts(out, ") > (");
             print_child(model, expr, 2, language, env, out);
             core_buffer_puts(out, ") ? (");
             print_child(model, expr, 1, language, env, out);
@@ -654,7 +654,12 @@ writ_expr_print(const writ_model_t *model, uint32_t expr, writ_language_t langua
     case WRIT_N_EXPR_NEG:
     case WRIT_N_EXPR_NOT:
     case WRIT_N_EXPR_BITNOT:
-        core_buffer_puts(out, node->kind == WRIT_N_EXPR_NEG ? "(-" : node->kind == WRIT_N_EXPR_NOT ? "(!" : "(~");
+        if (node->kind == WRIT_N_EXPR_NEG)
+            core_buffer_puts(out, "(-");
+        else if (node->kind == WRIT_N_EXPR_NOT)
+            core_buffer_puts(out, "(!");
+        else
+            core_buffer_puts(out, "(~");
         print_child(model, expr, 0, language, env, out);
         core_buffer_putc(out, ')');
         return;

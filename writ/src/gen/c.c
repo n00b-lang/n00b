@@ -311,7 +311,7 @@ typedef struct {
     writ_expr_env_t         base;
     const writ_c_context_t *c;
     const writ_plan_view_t *plan;
-    const char             *result;
+    core_string_t           result;
 } shim_env_t;
 
 static void print_shim_ref(shim_env_t *env, writ_ref_t ref, core_buffer_t *out);
@@ -333,9 +333,9 @@ shim_ref(writ_expr_env_t *base, writ_ref_t ref, uint32_t expr, core_buffer_t *ou
     const writ_model_t *model = env->c->model;
     writ_type_id type = expr ? writ_expr_type(model, expr) : 0;
     bool integer = type && writ_type_is_integer(model, type);
-    core_buffer_puts(out, integer ? "((long long)" : "");
+    if (integer) core_buffer_puts(out, "((long long)");
     print_shim_ref(env, ref, out);
-    core_buffer_puts(out, integer ? ")" : "");
+    if (integer) core_buffer_puts(out, ")");
 }
 
 static void
@@ -343,7 +343,7 @@ print_shim_ref(shim_env_t *env, writ_ref_t ref, core_buffer_t *out)
 {
     const writ_model_t *model = env->c->model;
     if (ref.kind == WRIT_REF_RESULT) {
-        core_buffer_puts(out, env->result);
+        core_buffer_append_string(out, env->result);
         return;
     }
     if (ref.kind == WRIT_REF_CHANNEL) {
@@ -565,9 +565,9 @@ emit_query(shim_env_t *env, writ_emit_t *emit, const writ_plan_step_view_t *step
     for (size_t i = 0; i < plan->query_count; i++) {
         writ_emit_line(emit, "s%u = saved%zu;", plan->query[i].slot, i);
     }
-    env->result = "query_ret";
+    env->result = CORE_STRING_STATIC("query_ret");
     writ_str_t needs = expr_text(env, step->expr);
-    env->result = "ret";
+    env->result = CORE_STRING_STATIC("ret");
     writ_emit_open(emit, "if ((%.*s) < 0)", S(needs));
     fail(env->c, emit, "CONTRACT_VIOLATION");
     writ_emit_close(emit, nullptr);
@@ -960,7 +960,7 @@ emit_reset(shim_env_t *env, writ_emit_t *emit)
 static void
 emit_shim(const writ_c_context_t *c, writ_emit_t *emit, const writ_plan_view_t *plan)
 {
-    shim_env_t env = {{.print_ref = shim_ref}, c, plan, "ret"};
+    shim_env_t env = {{.print_ref = shim_ref}, c, plan, CORE_STRING_STATIC("ret")};
     bool direct = writ_c_returns_directly(c, plan);
     writ_c_emit_signature(c, emit, plan);
     writ_emit_open(emit, "");
