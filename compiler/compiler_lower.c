@@ -148,9 +148,10 @@ n00bb_host_target_profile(core_target_desc_t *target)
 #if defined(__APPLE__) && defined(__aarch64__)
     return core_target_profile(CORE_STRING_STATIC("arm64-macos"), 0, target);
 #elif defined(__linux__) && defined(__x86_64__)
-    return core_target_profile("x86_64-linux", 0, target);
+    return core_target_profile(CORE_STRING_STATIC("x86_64-linux"), 0, target);
 #elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-    return core_target_profile("x86_64-windows", 0, target);
+    return core_target_profile(CORE_STRING_STATIC("x86_64-windows"), 0,
+                               target);
 #else
     (void)target;
     return false;
