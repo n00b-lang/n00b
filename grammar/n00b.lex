@@ -46,4 +46,3 @@
 	    bracket_newlines("keep"), dedent_newline("emit"))
 @lex-fallback("reject")
 @lex-bidi("reject")
-@lex-operators(add(".."))

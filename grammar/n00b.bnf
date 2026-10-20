@@ -268,7 +268,6 @@
 <range-step> ::= %"step" <expression>
 <range-sep> ::= %"to"
               | %"until"
-              | %".."
               | %":"
 
 <break-stmt> @jump("break") ::= %"break" %IDENTIFIER?
