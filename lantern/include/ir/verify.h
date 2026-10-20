@@ -10,6 +10,7 @@ ir_props_t ir_verify_only(ir_module_t *m, ir_props_t want, ir_diags_t *out);
 typedef struct ir_locsnap_t ir_locsnap_t;
 
 ir_locsnap_t *ir_loc_snapshot(ir_module_t *m);
+void          ir_loc_snapshot_free(ir_locsnap_t *s);
 bool          ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m,
                               core_string_t agent, ir_diags_t *out);
 

@@ -1926,23 +1926,22 @@ static bool live_instr(ir_visit_t *vi)
     return false;
 }
 
-static void snap_one(ir_ctx_t *ctx, ir_locsnap_t *s, ir_span_t span,
-                     ir_instr_t *in, ir_block_t *b, core_string_t what)
+static void snap_one(ir_locsnap_t *s, ir_span_t span, ir_instr_t *in,
+                     ir_block_t *b, core_string_t what)
 {
     if (!ir_span_known(span)) {
         return;
     }
-    s->v = ir_grow(ctx, s->v, &s->cap, s->n + 1, sizeof(ir_locrec_t));
-
-    if (!s->v) {
-        return;
+    if (s->n == s->cap) {
+        s->cap = s->cap ? s->cap * 2 : 64;
+        s->v   = core_realloc(s->v, s->cap * sizeof(ir_locrec_t));
     }
     s->v[s->n++] = (ir_locrec_t){.span = span, .in = in, .b = b, .what = what};
 }
 
 static bool snap_func(ir_visit_t *vi)
 {
-    snap_one(vi->module->ctx, vi->user, vi->func->span, nullptr, nullptr,
+    snap_one(vi->user, vi->func->span, nullptr, nullptr,
              CORE_STRING_STATIC("a function"));
 
     return true;
@@ -1950,7 +1949,7 @@ static bool snap_func(ir_visit_t *vi)
 
 static bool snap_local(ir_visit_t *vi)
 {
-    snap_one(vi->module->ctx, vi->user, vi->local->span, nullptr, nullptr,
+    snap_one(vi->user, vi->local->span, nullptr, nullptr,
              CORE_STRING_STATIC("a local"));
 
     return true;
@@ -1958,7 +1957,7 @@ static bool snap_local(ir_visit_t *vi)
 
 static bool snap_block(ir_visit_t *vi)
 {
-    snap_one(vi->module->ctx, vi->user, vi->block->span, nullptr, vi->block,
+    snap_one(vi->user, vi->block->span, nullptr, vi->block,
              CORE_STRING_STATIC("a block"));
 
     return true;
@@ -1966,10 +1965,19 @@ static bool snap_block(ir_visit_t *vi)
 
 static bool snap_instr(ir_visit_t *vi)
 {
-    snap_one(vi->module->ctx, vi->user, vi->instr->span, vi->instr, vi->block,
+    snap_one(vi->user, vi->instr->span, vi->instr, vi->block,
              CORE_STRING_STATIC("an instruction"));
 
     return false;
+}
+
+void ir_loc_snapshot_free(ir_locsnap_t *s)
+{
+    if (!s) {
+        return;
+    }
+    core_free(s->v);
+    core_free(s);
 }
 
 ir_locsnap_t *ir_loc_snapshot(ir_module_t *m)
@@ -1978,7 +1986,7 @@ ir_locsnap_t *ir_loc_snapshot(ir_module_t *m)
         return nullptr;
     }
 
-    ir_locsnap_t *s = ir_alloc(m->ctx, sizeof(ir_locsnap_t));
+    ir_locsnap_t *s = core_alloc(ir_locsnap_t);
     ir_walk_t    *w = ir_walk_new(s);
 
     ir_walk_on_func(w, snap_func, nullptr, nullptr);

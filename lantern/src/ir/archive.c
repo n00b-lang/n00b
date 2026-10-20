@@ -732,7 +732,7 @@ ir_modules_save_references(ir_module_t *const *modules, size_t count,
             w_type(&w, slot->def);
             w_u64(&w, slot->n_descs);
             for (size_t d = 0; d < slot->n_descs; d++)
-                w_descriptor(&w, &slot->descs[d]);
+                w_descriptor(&w, slot->descs[d]);
         }
     }
     for (size_t m = 0; m < count; m++)

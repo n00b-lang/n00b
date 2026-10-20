@@ -2088,11 +2088,14 @@ static void test_the_passes_over_the_generated_corpus(void)
 
             if (ir_pass_run(passes[k], m, nullptr, &unmet, d)
                 != IR_PASS_OK) {
+                ir_loc_snapshot_free(before);
                 continue;
             }
             ran[k]++;
 
-            if (!ir_loc_monotone(before, m, passes[k]->name, d)) {
+            bool monotone = ir_loc_monotone(before, m, passes[k]->name, d);
+            ir_loc_snapshot_free(before);
+            if (!monotone) {
                 printf("FAIL  %.*s lost a location on generated module %u\n",
                        SARG(passes[k]->name), i);
                 fails++;

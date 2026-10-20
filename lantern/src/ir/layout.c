@@ -79,8 +79,8 @@ static ir_descriptor_t *layout_of_exact(ir_module_t *m, th_type *t,
     }
 
     for (size_t i = 0; i < s->n_descs; i++) {
-        if (same_target(s->descs[i].target, target)) {
-            return &s->descs[i].d;
+        if (same_target(s->descs[i]->target, target)) {
+            return &s->descs[i]->d;
         }
     }
 
@@ -108,7 +108,7 @@ void ir_layout_invalidate_type(ir_module_t *m, th_type *t)
     ir_typeslot_t *slot = ir_type_slot(m, t);
     if (!slot) return;
     for (size_t i = 0; i < slot->n_descs; i++) {
-        ir_descriptor_t *d = &slot->descs[i].d;
+        ir_descriptor_t *d = &slot->descs[i]->d;
         d->done = false;
         d->final = nullptr;
         invalidate_value(&d->size);
@@ -140,14 +140,15 @@ static ir_descriptor_t *layout_ensure_exact(ir_module_t *m, th_type *t,
     }
 
     s->descs = ir_grow(m->ctx, s->descs, &s->cap_descs, s->n_descs + 1,
-                       sizeof(ir_descentry_t));
+                       sizeof(ir_descentry_t *));
 
     if (!s->descs) {
         return nullptr;
     }
 
-    ir_descentry_t *e = &s->descs[s->n_descs++];
+    ir_descentry_t *e = ir_alloc(m->ctx, sizeof(ir_descentry_t));
 
+    s->descs[s->n_descs++] = e;
     *e = (ir_descentry_t){.target = target.data ? ir_strdup(m->ctx, target)
                                                 : (core_string_t){}};
 

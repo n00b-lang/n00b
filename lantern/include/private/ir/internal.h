@@ -32,9 +32,9 @@ typedef struct {
     uint64_t        hash;
     th_type        *type;
     th_type        *def;
-    ir_descentry_t *descs;
-    size_t          n_descs;
-    size_t          cap_descs;
+    ir_descentry_t **descs;
+    size_t           n_descs;
+    size_t           cap_descs;
 } ir_typeslot_t;
 
 struct ir_module_t {

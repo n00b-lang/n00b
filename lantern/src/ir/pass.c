@@ -23,7 +23,10 @@ ir_pass_result_t ir_pass_run(const ir_pass_t *p, ir_module_t *m, void *state,
     uint32_t         said   = d ? ir_diags_count(d) : 0;
     ir_pass_result_t r      = run_bare(p, m, d, state, unmet);
 
-    if (r == IR_PASS_OK && before && !ir_loc_monotone(before, m, p->name, d)) {
+    bool monotone = r != IR_PASS_OK || !before
+        || ir_loc_monotone(before, m, p->name, d);
+    ir_loc_snapshot_free(before);
+    if (!monotone) {
         return IR_PASS_FAILED;
     }
 

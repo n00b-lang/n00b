@@ -504,6 +504,7 @@ static void test_promote_keeps_every_location(void)
     ir_promote(r->m, nullptr);
     check("promote turns no known location into an unknown one",
           ir_loc_monotone(before, r->m, S("promote"), r->d));
+    ir_loc_snapshot_free(before);
 
     ir_func_t *f = ir_func_at(r->m, 0);
 
@@ -521,6 +522,7 @@ static void test_promote_keeps_every_location(void)
     ir_split_edges(r->m, r->d);
     check("and neither does split-edges",
           ir_loc_monotone(mid, r->m, S("split-edges"), r->d));
+    ir_loc_snapshot_free(mid);
     done(r);
 }
 

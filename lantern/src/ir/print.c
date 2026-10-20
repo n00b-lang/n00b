@@ -518,7 +518,7 @@ static void put_layouts(core_buffer_t *b, ir_module_t *m)
         th_type       *t    = slot->type;
 
         for (size_t k = 0; k < slot->n_descs; k++) {
-            ir_descriptor_t *d = &slot->descs[k].d;
+            ir_descriptor_t *d = &slot->descs[k]->d;
 
             if (!authored_anywhere(d)) {
                 continue;
