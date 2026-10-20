@@ -10008,18 +10008,132 @@ bind_array_shape_type_source(parse_grammar_t *grammar,
         || parse_tree_set_resolution_symbol(base, symbol);
 }
 
+typedef struct {
+    core_string_t name;
+    core_list_t(parse_sym_entry_ptr_t) symbols;
+} type_symbol_bucket_t;
+
+typedef struct {
+    th_ctx *types;
+    th_type *wanted;
+    core_string_t name;
+    size_t args;
+    uint64_t hash;
+    bool hashed;
+} type_symbol_query_t;
+
+static bool
+type_symbol_name(parse_sym_entry_t *symbol, core_string_t *name)
+{
+    return symbol->type && symbol->kind == PARSE_SYM_TYPEDEF
+        && !alias_declaration_is_transparent(
+               canonical_symbol(symbol)->decl_node)
+        && th_named_info(th_resolve(symbol->type), name, nullptr, nullptr);
+}
+
+static bool
+type_symbol_matches(type_symbol_query_t *query, parse_sym_entry_t *symbol)
+{
+    if (!query->hashed) {
+        query->hash = th_hash(query->types, query->wanted);
+        query->hashed = true;
+    }
+    n00bb_signature_typevars_t *variables = parse_sym_binding(
+        symbol, N00BB_SIGNATURE_TYPEVARS_KEY);
+    return th_hash(query->types, th_resolve(symbol->type)) == query->hash
+        || (symbol->member_scope && variables
+            && variables->len == query->args);
+}
+
+static parse_namespace_t *
+type_namespace(n00bb_tu_state_t *state)
+{
+    return state && state->annotations
+        ? parse_symtab_ns(state->annotations->symtab,
+                          CORE_STRING_STATIC("type")) : nullptr;
+}
+
+void
+n00bb_index_type_symbols(n00bb_tu_state_t *state)
+{
+    parse_namespace_t *type_ns = type_namespace(state);
+    if (!type_ns || state->type_symbols_indexed) return;
+    core_dict_init_string(&state->type_symbol_index);
+    for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+         scope; scope = scope->all_next) {
+        if (scope->ns != type_ns) continue;
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            core_string_t name = {};
+            if (!type_symbol_name(symbol, &name)) continue;
+            type_symbol_bucket_t *bucket = core_dict_get(
+                &state->type_symbol_index, &name, nullptr);
+            if (!bucket) {
+                bucket = core_alloc(type_symbol_bucket_t);
+                bucket->name = name;
+                bucket->symbols = core_list_new(parse_sym_entry_ptr_t);
+                core_dict_put(&state->type_symbol_index, &bucket->name,
+                              bucket);
+            }
+            core_list_push(bucket->symbols, symbol);
+        }
+    }
+    state->type_symbols_indexed = true;
+}
+
+static void
+free_type_symbol_index(n00bb_tu_state_t *state)
+{
+    if (!state->type_symbols_indexed) return;
+    core_dict_t *index = &state->type_symbol_index;
+    for (size_t i = 0; i < index->capacity; i++) {
+        if (index->buckets[i].state != _CORE_BUCKET_OCCUPIED) continue;
+        type_symbol_bucket_t *bucket = index->values[i];
+        core_list_free(bucket->symbols);
+        core_free(bucket);
+    }
+    core_dict_free(index);
+    state->type_symbols_indexed = false;
+}
+
+static parse_sym_entry_t *
+unit_type_symbol(n00bb_tu_state_t *state, type_symbol_query_t *query)
+{
+    if (state && state->semantic_annotation_complete
+        && state->type_symbols_indexed) {
+        type_symbol_bucket_t *bucket = core_dict_get(
+            &state->type_symbol_index, &query->name, nullptr);
+        for (size_t i = 0; bucket && i < bucket->symbols.len; i++)
+            if (type_symbol_matches(query, bucket->symbols.data[i]))
+                return bucket->symbols.data[i];
+        return nullptr;
+    }
+    parse_namespace_t *type_ns = type_namespace(state);
+    for (parse_scope_t *scope = type_ns
+            ? state->annotations->symtab->all_scopes : nullptr;
+         scope; scope = scope->all_next) {
+        if (scope->ns != type_ns) continue;
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            core_string_t name = {};
+            if (type_symbol_name(symbol, &name)
+                && core_string_eq(name, query->name)
+                && type_symbol_matches(query, symbol))
+                return symbol;
+        }
+    }
+    return nullptr;
+}
+
 parse_sym_entry_t *
 type_symbol_in_loaded_imports(core_translation_unit_t *root, th_ctx *types,
                               th_type *wanted,
                               core_translation_unit_t **owner_unit_out)
 {
     if (owner_unit_out) *owner_unit_out = nullptr;
-    core_string_t wanted_name = {};
-    size_t wanted_args = 0;
-    if (!th_named_info(wanted, &wanted_name, nullptr, &wanted_args))
+    type_symbol_query_t query = {.types = types, .wanted = wanted};
+    if (!th_named_info(wanted, &query.name, nullptr, &query.args))
         return nullptr;
-    uint64_t wanted_hash = 0;
-    bool have_wanted_hash = false;
     core_list_t(core_translation_unit_ptr_t) pending =
         core_list_new(core_translation_unit_ptr_t);
     core_dict_t visited = {0};
@@ -10029,44 +10143,9 @@ type_symbol_in_loaded_imports(core_translation_unit_t *root, th_ctx *types,
     for (size_t at = 0; at < pending.len && !found; at++) {
         core_translation_unit_t *unit = pending.data[at];
         if (!core_dict_add(&visited, unit, unit)) continue;
-
-        n00bb_tu_state_t *state = tu_state(unit);
-        parse_namespace_t *type_ns = state && state->annotations
-            ? parse_symtab_ns(state->annotations->symtab,
-                              CORE_STRING_STATIC("type")) : nullptr;
-        for (parse_scope_t *scope = state && state->annotations
-                ? state->annotations->symtab->all_scopes : nullptr;
-             scope && !found; scope = scope->all_next) {
-            if (!type_ns || scope->ns != type_ns) continue;
-            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
-                 symbol = symbol->next_in_scope) {
-                if (!symbol->type || symbol->kind != PARSE_SYM_TYPEDEF
-                    || alias_declaration_is_transparent(
-                        canonical_symbol(symbol)->decl_node))
-                    continue;
-                th_type *candidate = th_resolve(symbol->type);
-                core_string_t candidate_name = {};
-                if (!th_named_info(candidate, &candidate_name, nullptr,
-                                   nullptr)
-                    || !core_string_eq(candidate_name, wanted_name))
-                    continue;
-                if (!have_wanted_hash) {
-                    wanted_hash = th_hash(types, wanted);
-                    have_wanted_hash = true;
-                }
-                n00bb_signature_typevars_t *variables = parse_sym_binding(
-                    symbol, N00BB_SIGNATURE_TYPEVARS_KEY);
-                bool generic_instance = symbol->member_scope && variables
-                    && variables->len == wanted_args;
-                if (th_hash(types, candidate) == wanted_hash
-                    || generic_instance) {
-                    found = symbol;
-                    if (owner_unit_out) *owner_unit_out = unit;
-                    break;
-                }
-            }
-        }
-        for (size_t i = 0; i < unit->import_count; i++)
+        found = unit_type_symbol(tu_state(unit), &query);
+        if (found && owner_unit_out) *owner_unit_out = unit;
+        for (size_t i = 0; !found && i < unit->import_count; i++)
             core_list_push(pending, unit->imports[i]);
     }
     core_dict_free(&visited);
@@ -10720,6 +10799,7 @@ free_tu_state(void *data)
     core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->declarations_typed_ahead);
+    free_type_symbol_index(state);
     n00bb_range_state_release(state);
     core_dict_free(&state->integer_range_variables);
     core_csp_store_free(state->integer_range_store);

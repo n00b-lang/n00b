@@ -563,6 +563,8 @@ typedef struct {
     bool package_manifest_restored;
     bool semantic_annotation_started;
     bool semantic_annotation_complete;
+    bool type_symbols_indexed;
+    core_dict_t type_symbol_index;
     parse_tree_t *flagset_scope;
 } n00bb_tu_state_t;
 static inline parse_tree_t *
@@ -932,6 +934,7 @@ parse_sym_entry_t *canonical_symbol(parse_sym_entry_t *symbol);
 parse_sym_entry_t *type_symbol_in_loaded_imports(
     core_translation_unit_t *root, th_ctx *types, th_type *wanted,
     core_translation_unit_t **owner_unit_out);
+void n00bb_index_type_symbols(n00bb_tu_state_t *state);
 n00bb_callback_contract_t *n00bb_callback_contract_for_type(
     n00bb_tu_state_t *state, th_type *type);
 th_type *n00bb_specialize_callback_role(th_ctx *types,

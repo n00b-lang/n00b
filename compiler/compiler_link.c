@@ -2045,27 +2045,35 @@ call_receiver_is_module(parse_grammar_t *grammar,
 parse_sym_entry_t *
 n00bb_enum_type_symbol(n00bb_link_analysis_t *analysis, th_type *type)
 {
-    if (!analysis || !type) return nullptr;
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        parse_namespace_t *type_ns = symtab
-            ? parse_symtab_ns(symtab, CORE_STRING_STATIC("type")) : nullptr;
-        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
-             scope; scope = scope->all_next) {
-            if (!type_ns || scope->ns != type_ns) continue;
-            for (parse_sym_entry_t *symbol = scope->first_in_scope;
-                 symbol; symbol = symbol->next_in_scope)
-                if (symbol->type && symbol->member_scope
-                    && core_string_eq(symbol->member_scope->scope_tag,
-                                      CORE_STRING_STATIC("enum"))
-                    && th_hash(state->types, symbol->type)
-                        == th_hash(state->types, type))
-                    return canonical_symbol(symbol);
+    if (!analysis || !type || !analysis->units.len) return nullptr;
+    if (!analysis->enum_symbols_indexed) {
+        analysis->enum_symbols_indexed = true;
+        core_dict_init(&analysis->enum_symbols_by_type, nullptr, nullptr);
+        for (size_t i = 0; i < analysis->units.len; i++) {
+            n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
+            parse_symtab_t *symtab = state && state->annotations
+                ? state->annotations->symtab : nullptr;
+            parse_namespace_t *type_ns = symtab
+                ? parse_symtab_ns(symtab, CORE_STRING_STATIC("type"))
+                : nullptr;
+            for (parse_scope_t *scope = type_ns ? symtab->all_scopes
+                                                : nullptr;
+                 scope; scope = scope->all_next) {
+                if (scope->ns != type_ns) continue;
+                for (parse_sym_entry_t *symbol = scope->first_in_scope;
+                     symbol; symbol = symbol->next_in_scope)
+                    if (symbol->type && symbol->member_scope
+                        && core_string_eq(symbol->member_scope->scope_tag,
+                                          CORE_STRING_STATIC("enum")))
+                        (void)core_dict_add(&analysis->enum_symbols_by_type,
+                            th_hash(state->types, symbol->type),
+                            canonical_symbol(symbol));
+            }
         }
     }
-    return nullptr;
+    th_ctx *types = tu_state(analysis->units.data[0])->types;
+    return core_dict_get(&analysis->enum_symbols_by_type,
+                         th_hash(types, type), nullptr);
 }
 
 parse_tree_t *
@@ -4427,6 +4435,8 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     for (size_t p = 0; analysis->record_requests_indexed
          && p <= N00BB_RECORD_C; p++)
         core_dict_free(&analysis->record_requests_by_type[p]);
+    if (analysis->enum_symbols_indexed)
+        core_dict_free(&analysis->enum_symbols_by_type);
     for (size_t i = 0; i < analysis->static_graph_nodes.len; i++) {
         n00bb_static_graph_node_t *node =
             &analysis->static_graph_nodes.data[i].node;

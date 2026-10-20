@@ -1833,6 +1833,7 @@ annotate_unit_bodies(parse_grammar_t *grammar, th_ctx *types,
         || core_translation_unit_has_fatal_diagnostics(unit)
         || core_diagnostics_failed(core_translation_unit_diagnostics(unit))
         || (finish && !finish(context, unit))) return false;
+    n00bb_index_type_symbols(state);
     state->semantic_annotation_complete = true;
     return true;
 }

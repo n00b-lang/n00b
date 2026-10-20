@@ -461,6 +461,8 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_record_request_site_t) record_requests;
     core_dict_t record_requests_by_type[N00BB_RECORD_C + 1];
     bool record_requests_indexed;
+    core_dict_t enum_symbols_by_type;
+    bool enum_symbols_indexed;
     ir_exec_graph_t *execution_graph;
     th_env *environment;
     th_env *export_environment;
