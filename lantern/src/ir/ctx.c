@@ -915,8 +915,12 @@ th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable)
                         {CORE_STRING_STATIC("error"), error}};
     th_type *definition = th_record(m->ctx->types, arms, 2);
     th_type *existing = ir_type_definition(m, outcome);
-    if (!existing && !ir_type_define(m, outcome, definition)) return nullptr;
     if (existing && !ir_type_eq(m, existing, definition))
+        return nullptr;
+    ir_typeslot_t *slot = ir_type_slot(m, outcome);
+    if (!slot) return nullptr;
+    if (!slot->def
+        && !ir_type_define(m, outcome, existing ? existing : definition))
         return nullptr;
     return ir_type_intern(m, outcome);
 }
