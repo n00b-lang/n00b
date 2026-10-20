@@ -433,7 +433,7 @@ n00bb_resolver_new(core_string_t argv0)
         core_string_t packages = n00bb_cache_directory(
             CORE_STRING_STATIC("packages"));
         if (packages.data && core_snapshot_inventory_enable_cache(
-                resolver->inventory, packages, 1))
+                resolver->inventory, packages, 2))
             resolver->package_syntax_profile = package_syntax_profile(argv0);
         core_free(packages.data);
     }
