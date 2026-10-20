@@ -20,6 +20,25 @@ n00b_builtin_abi_field(uint32_t index)
     return n00b_abi_v1_field(n00b_abi_v1_current_snapshot(), index);
 }
 
+const n00b_abi_arm_v1 *
+n00b_builtin_abi_arm(uint32_t index)
+{
+    uint32_t bytes = 0;
+    const n00b_abi_arm_v1 *row = n00b_abi_v1_record(
+        n00b_abi_v1_current_snapshot(), N00B_ABI_TABLE_ARM, index, &bytes);
+    return bytes == sizeof(*row) ? row : NULL;
+}
+
+const n00b_abi_physical_run_v1 *
+n00b_builtin_abi_physical_run(uint32_t index)
+{
+    uint32_t bytes = 0;
+    const n00b_abi_physical_run_v1 *row = n00b_abi_v1_record(
+        n00b_abi_v1_current_snapshot(), N00B_ABI_TABLE_PHYSICAL_RUN, index,
+        &bytes);
+    return bytes == sizeof(*row) ? row : NULL;
+}
+
 const n00b_abi_trace_v1 *
 n00b_builtin_abi_trace(uint32_t index)
 {
@@ -143,6 +162,39 @@ n00b_builtin_abi_range_index(uint32_t first, uint32_t count,
     return n00b_abi_v1_index_at(snapshot,
         (n00b_abi_range_v1){.first = first, .count = count},
         ordinal, &result) == 1 ? (int64_t)result : -1;
+}
+
+int32_t
+n00b_builtin_abi_type_specializes(uint32_t type, uint32_t general)
+{
+    return n00b_abi_v1_type_specializes(n00b_abi_v1_current_snapshot(), type,
+                                        general);
+}
+
+uint32_t
+n00b_builtin_abi_type_argument_type(uint32_t index)
+{
+    const n00b_abi_type_argument_v1 *argument = n00b_abi_v1_type_argument(
+        n00b_abi_v1_current_snapshot(), index);
+    return argument && argument->kind == N00B_ABI_TYPE_ARG_TYPE
+        ? argument->type_index : UINT32_MAX;
+}
+
+uint32_t
+n00b_builtin_abi_named_type(const uint8_t *name, uint64_t name_bytes,
+                            const uint32_t *arguments, uint32_t count)
+{
+    uint32_t match = 0;
+    return n00b_abi_v1_find_named_type(n00b_abi_v1_current_snapshot(), name,
+        (size_t)name_bytes, arguments, count, &match) == 1 ? match : 0;
+}
+
+uint32_t
+n00b_builtin_abi_unary_type(uint32_t kind, uint32_t element)
+{
+    uint32_t match = 0;
+    return n00b_abi_v1_find_unary_type(n00b_abi_v1_current_snapshot(),
+        (n00b_abi_type_kind_v1)kind, element, &match) == 1 ? match : 0;
 }
 
 uint64_t

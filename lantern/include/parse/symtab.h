@@ -121,8 +121,6 @@ typedef struct {
     bool     has_start;
     bool     has_end;
     bool     has_finalization_point;
-    bool     escapes;
-    bool     referent_value_escapes;
     parse_sym_lifetime_start_t *starts;
     size_t start_count;
     size_t start_capacity;
@@ -209,6 +207,7 @@ struct parse_sym_entry_t {
     size_t                   aliased_by_count;
     size_t                   aliased_by_capacity;
     bool                     alias_analysis_complete;
+    bool                     alias_unresolved;
     void                    *namespaced_bindings;
     void                    *user_data;
 };

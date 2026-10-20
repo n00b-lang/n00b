@@ -1,0 +1,20 @@
+func classify(x: u8) -> int {
+    if x <= 255 {
+        return 1
+    }
+    return 0
+}
+func halve(n: int, d: int) -> int {
+    if d < 5 {
+        return n / d
+    }
+    return n
+}
+func shift(v: u32, s: u32) -> u32 {
+    if s < 40 {
+        return v >> s
+    }
+    return v
+}
+require classify(1) + halve(4, 2) == 3
+require shift(8, 1) == 4

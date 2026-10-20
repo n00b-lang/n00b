@@ -55,6 +55,15 @@ package builtin {
     export abi.Module_Record to sys
     export abi.Function_Record to sys
     export abi.Baked_Node_Record to sys
+    export abi.Arm_Record to sys
+    export abi.Physical_Run_Record to sys
+    export abi.Box_Record to sys
+    export abi.__box_tag to sys
+    export abi.__box_set_tag to sys
+    export abi.__tag_at to sys
+    export abi.__type_has_kind to sys
+    export abi.__set_tag_at to sys
+    export hashing.xxh3_128_at to sys
     export containers.array.copy_items to sys.abi
     export containers.array.compare_items to sys.abi
     export containers.list.list_with_length to sys.abi

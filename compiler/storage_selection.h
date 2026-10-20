@@ -18,9 +18,6 @@ typedef struct {
     bool is_typed_variable;
     bool has_lexical_lifetime;
     bool is_reference;
-    bool has_aliases;
-    bool escapes;
-    bool alias_analysis_complete;
     bool required;
     core_string_t requested;
     core_string_t selected;
@@ -32,9 +29,6 @@ n00bb_storage_decision_t n00bb_storage_decide(
 typedef struct {
     bool has_lexical_lifetime;
     bool is_reference;
-    bool has_aliases;
-    bool escapes;
-    bool alias_analysis_complete;
     bool size_known;
     uint64_t size_bytes;
     uint64_t stack_limit_bytes;

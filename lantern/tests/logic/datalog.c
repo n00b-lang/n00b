@@ -390,6 +390,82 @@ static void test_symbol_and_relation_introspection(void) {
   core_datalog_engine_free(engine);
 }
 
+typedef struct {
+  int32_t depths[8];
+  int32_t rules[8];
+  core_datalog_relation_id_t relations[8];
+  size_t count;
+} explanation_t;
+
+static bool record_step(core_datalog_relation_id_t relation,
+                        const core_datalog_symbol_t *tuple, int32_t arity,
+                        int32_t rule, int32_t depth, void *context) {
+  (void)tuple;
+  (void)arity;
+  explanation_t *explanation = context;
+  if (explanation->count == 8)
+    return false;
+  explanation->relations[explanation->count] = relation;
+  explanation->rules[explanation->count] = rule;
+  explanation->depths[explanation->count++] = depth;
+  return true;
+}
+
+static void test_provenance_reports_derivation_chain(void) {
+  core_datalog_engine_t *engine = core_datalog_engine_new();
+  core_datalog_set_provenance(engine, true);
+  core_datalog_relation_id_t edge =
+      core_datalog_relation(engine, CORE_STRING_STATIC("edge"), 2);
+  core_datalog_relation_id_t path =
+      core_datalog_relation(engine, CORE_STRING_STATIC("path"), 2);
+  core_datalog_symbol_t a =
+      core_datalog_constant(engine, CORE_STRING_STATIC("a"));
+  core_datalog_symbol_t b =
+      core_datalog_constant(engine, CORE_STRING_STATIC("b"));
+  core_datalog_symbol_t c =
+      core_datalog_constant(engine, CORE_STRING_STATIC("c"));
+  core_datalog_symbol_t e1[] = {a, b}, e2[] = {b, c};
+  core_datalog_add_fact(engine, edge, 2, e1);
+  core_datalog_add_fact(engine, edge, 2, e2);
+  core_datalog_symbol_t x =
+      core_datalog_variable(engine, CORE_STRING_STATIC("X"));
+  core_datalog_symbol_t y =
+      core_datalog_variable(engine, CORE_STRING_STATIC("Y"));
+  core_datalog_symbol_t z =
+      core_datalog_variable(engine, CORE_STRING_STATIC("Z"));
+  core_datalog_symbol_t xy[] = {x, y}, xz[] = {x, z}, yz[] = {y, z};
+  core_datalog_rule_builder_t *builder = core_datalog_rule_builder_new();
+  core_datalog_rule_builder_head(builder, path, 2, xy);
+  core_datalog_rule_builder_add_literal(builder, edge, 2, xy, false);
+  core_datalog_add_rule(engine, core_datalog_rule_builder_finish(builder));
+  builder = core_datalog_rule_builder_new();
+  core_datalog_rule_builder_head(builder, path, 2, xz);
+  core_datalog_rule_builder_add_literal(builder, edge, 2, xy, false);
+  core_datalog_rule_builder_add_literal(builder, path, 2, yz, false);
+  core_datalog_add_rule(engine, core_datalog_rule_builder_finish(builder));
+  check("provenance engine runs", core_datalog_run(engine));
+
+  core_datalog_symbol_t ac[] = {a, c};
+  explanation_t explanation = {0};
+  check("a derived fact can be explained",
+        core_datalog_explain(engine, path, ac, record_step, &explanation));
+  check("the explanation walks rule, edge, path, edge",
+        explanation.count == 4 && explanation.relations[0] == path &&
+            explanation.rules[0] == 1 && explanation.depths[0] == 0 &&
+            explanation.relations[1] == edge && explanation.rules[1] == -1 &&
+            explanation.depths[1] == 1 && explanation.relations[2] == path &&
+            explanation.rules[2] == 0 && explanation.depths[2] == 1 &&
+            explanation.relations[3] == edge && explanation.depths[3] == 2);
+  check("membership queries see derived facts",
+        core_datalog_contains(engine, path, ac));
+  core_datalog_symbol_t ca[] = {c, a};
+  check("membership queries reject underived facts",
+        !core_datalog_contains(engine, path, ca));
+  check("underived facts have no explanation",
+        !core_datalog_explain(engine, path, ca, record_step, &explanation));
+  core_datalog_engine_free(engine);
+}
+
 int main(void) {
   test_transitive_closure_and_wide_bindings();
   test_ancestor_derivation();
@@ -399,5 +475,6 @@ int main(void) {
   test_multiple_negation_strata();
   test_rule_bindings_are_not_capped_at_64();
   test_symbol_and_relation_introspection();
+  test_provenance_reports_derivation_chain();
   return fails ? 1 : 0;
 }

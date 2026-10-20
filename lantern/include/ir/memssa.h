@@ -30,6 +30,19 @@ bool ir_memssa_visit_clobbers(ir_memssa_t *memssa, uint32_t load_access,
                               ir_memdef_visit_fn visit, void *context);
 bool ir_memssa_reads_entry(ir_memssa_t *memssa, uint32_t load_access);
 
+typedef enum : uint8_t {
+    IR_ELEMENT_DISJOINT,
+    IR_ELEMENT_SAME,
+    IR_ELEMENT_MAYBE,
+} ir_element_relation_t;
+
+typedef ir_element_relation_t (*ir_element_relation_fn)(
+    void *context, const ir_instr_t *store, const ir_instr_t *load);
+
+bool ir_memssa_visit_element_defs(ir_memssa_t *memssa, uint32_t load_access,
+                                  ir_element_relation_fn relate,
+                                  ir_memdef_visit_fn visit, void *context);
+
 uint32_t           ir_memssa_def_before(const ir_memssa_t *memssa,
                                         const ir_instr_t *in);
 const ir_memdef_t *ir_memssa_def(const ir_memssa_t *memssa, uint32_t id);

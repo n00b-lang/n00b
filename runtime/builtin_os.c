@@ -743,6 +743,11 @@ void *n00b_os_thread_stack_high_self(void)
     return (void *)os_thread_stack_high_self();
 }
 
+uint64_t n00b_os_stack_address(void)
+{
+    return (uint64_t)(uintptr_t)__builtin_frame_address(0);
+}
+
 size_t n00b_os_stack_red_zone_bytes(void)
 {
 #if defined(__x86_64__) || (defined(__APPLE__) && defined(__aarch64__))

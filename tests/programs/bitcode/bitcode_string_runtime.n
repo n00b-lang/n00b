@@ -24,10 +24,10 @@ while i < 20000 {
 assert total == "xa long enough piece of text to allocate"
 var bytes: Array[u8] = [104, 195, 169, 108, 108, 111, 32, 116, 104, 101, 114, 101, 32, 108, 111, 110, 103]
 var text: string = ""
-assert __string_from_utf8(ref bytes, ref text)
+require __string_from_utf8(ref bytes, ref text)
 assert text == "héllo there long"
 var invalid: Array[u8] = [104, 255]
-assert !__string_from_utf8(ref invalid, ref text)
+require !__string_from_utf8(ref invalid, ref text)
 var overlong: Array[u8] = [192, 175]
-assert !__string_from_utf8(ref overlong, ref text)
+require !__string_from_utf8(ref overlong, ref text)
 __fd_write(2, "ok")

@@ -57,7 +57,7 @@ func check_record_trace(heap: Ref[sys.gc.core.Heap],
                         sys.gc.mark.mark_object(marker, node_payload)
                         assert sys.gc.mark.is_marked(heap, node_payload.get())
                         assert !sys.gc.mark.is_marked(heap, payload)
-                        assert sys.gc.mark.marker_drain(marker, 0) == 1
+                        require sys.gc.mark.marker_drain(marker, 0) == 1
                         assert sys.gc.mark.is_marked(heap, payload)
                         sys.memory.unmap(marker_map.get(),
                             sys.abi.size_bytes(marker_row.get()))
@@ -122,9 +122,9 @@ func check_array_trace(heap: Ref[sys.gc.core.Heap],
                                         sys.gc.mark.marker_init(marker, heap, false)
                                         sys.gc.mark.mark_object(marker, array_payload)
                                         assert !sys.gc.mark.is_marked(heap, target)
-                                        assert sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
+                                        require sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
                                         assert !sys.gc.mark.is_marked(heap, target)
-                                        assert sys.gc.mark.marker_drain(marker, 0) >= cast[uint]1
+                                        require sys.gc.mark.marker_drain(marker, 0) >= cast[uint]1
                                         assert sys.gc.mark.is_marked(heap, target)
                                         sys.memory.unmap(marker_map.get(),
                                             sys.abi.size_bytes(marker_row.get()))
@@ -172,9 +172,9 @@ func check_inline_trace(heap: Ref[sys.gc.core.Heap],
                         sys.gc.mark.marker_init(marker, heap, false)
                         sys.gc.mark.mark_object(marker, payload)
                         assert !sys.gc.mark.is_marked(heap, target)
-                        assert sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
+                        require sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
                         assert !sys.gc.mark.is_marked(heap, target)
-                        assert sys.gc.mark.marker_drain(marker, 0) >= cast[uint]1
+                        require sys.gc.mark.marker_drain(marker, 0) >= cast[uint]1
                         assert sys.gc.mark.is_marked(heap, target)
                         sys.memory.unmap(marker_map.get(),
                             sys.abi.size_bytes(marker_row.get()))
@@ -262,7 +262,7 @@ if created != nil {
     if mapped != nil {
         let base: Ref[byte] = mapped.get()
         let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
-        assert sys.gc.registry.region_add(heap, base, end)
+        require sys.gc.registry.region_add(heap, base, end)
         let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
         sys.gc.core.block_init(heap, block)
         let mutator_probe: Ref[sys.gc.core.Mutator]? = nil
@@ -280,7 +280,7 @@ if created != nil {
                 sys.gc.core.own(heap, mutator, block, ref owned)
                 let attached: Ref[sys.gc.core.Block_Metadata]? = block
                 sys.gc.core.bump_attach(mutator, ref mutator.small, attached)
-                assert sys.gc.core.bump_next_hole(ref mutator.small, 48)
+                require sys.gc.core.bump_next_hole(ref mutator.small, 48)
                 let sample: byte = 0
                 let type_index: u32 = cast[u32](typeof(sample))
 

@@ -1,0 +1,808 @@
+import internal.abi
+
+func type_row(index: u32) -> Ref[internal.abi.Type_Record] {
+    let row: Ref[internal.abi.Type_Record]? = internal.abi.type_at(index)
+    require row != nil
+    return row.get()
+}
+
+func box_view(slot: Ref[Any]) -> Ref[internal.abi.Box_Value] {
+    return unsafe_cast[Ref[internal.abi.Box_Value]] slot
+}
+
+func payload_bytes(type_field: u32) -> uint {
+    let row: Ref[internal.abi.Type_Record] = type_row(type_field
+                                                      & 0x7fffffff)
+    if row.size_bits <= 64 {
+        return 0
+    }
+    return (row.size_bits + 7) / 8
+}
+
+func load(address: Ref[byte], slot: Ref[Any]) {
+    let view: Ref[internal.abi.Box_Value] = box_view(slot)
+    let bytes: uint = payload_bytes(view.type_field)
+    if bytes == 0 {
+        let size: uint =
+            (type_row(view.type_field & 0x7fffffff).size_bits + 7) / 8
+        view.payload = nil
+        if size != 0 {
+            __gc_memcpy(__gc_byte_offset(unsafe_cast[Ref[byte]] slot, 8),
+                        address, size)
+        }
+        return
+    }
+    let storage: Ref[byte]? = view.payload
+    require storage != nil
+    __gc_memcpy(storage.get(), address, bytes)
+}
+
+
+func payload_target(slot: Ref[Any], bytes: uint) -> Ref[byte] {
+    let view: Ref[internal.abi.Box_Value] = box_view(slot)
+    if payload_bytes(view.type_field) == 0 {
+        view.payload = nil
+        return __gc_byte_offset(unsafe_cast[Ref[byte]] slot, 8)
+    }
+    let storage: Ref[byte]? = view.payload
+    require storage != nil
+    __gc_memset(storage.get(), 0, bytes)
+    return storage.get()
+}
+
+func reference_locate(reference: Ref[Any], location: Ref[Location]) {
+    let view: Ref[internal.abi.Box_Value] = box_view(reference)
+    let child: u32 = component_of(view.type_field,
+                                  internal.abi.Type_Kind.reference_type)
+    let storage: Ref[byte]? = view.payload
+    require storage != nil
+    location.type_index = child
+    if type_row(view.type_field & 0x7fffffff).size_bits == 64 {
+        location.address = storage
+        location.bit_offset = 0
+        location.width = type_row(child).size_bits
+        return
+    }
+    let bits: Ref[internal.abi.Bitptr_Value] =
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage.get()
+    require bits.base != nil and bits.type_index == child
+        and bits.start_bit <= 7 and bits.end_bit > bits.start_bit
+    location.address = bits.base
+    location.bit_offset = cast[u64](bits.start_bit)
+    location.width = cast[u64](bits.end_bit - bits.start_bit)
+}
+
+func copy_bits(source: Ref[byte], start: uint, width: uint,
+               target: Ref[byte]) {
+    var bit: uint = 0
+    while bit < width {
+        let source_bit: uint = start + bit
+        let from: byte = __gc_byte_offset(source, source_bit / 8)
+        let into: Ref[byte] = __gc_byte_offset(target, bit / 8)
+        let current: byte = into
+        let lit: u32 = (cast[u32](from) >> cast[u32](source_bit & 7)) & 1
+        ref_write(into, cast[byte](cast[u32](current)
+                                   | (lit << cast[u32](bit & 7))))
+        bit += 1
+    }
+}
+
+func array_position(descriptor: Ref[internal.abi.Array_Descriptor_Header],
+                    index: i64) -> u64 {
+    let length: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] descriptor, 24)
+    var position: u64 = cast[u64] index
+    if index < 0 {
+        let back: u64 = cast[u64](-(index + 1)) + 1
+        require back <= length
+        position = length - back
+    }
+    require position < length
+    return position
+}
+
+func array_element(type_field: u32, payload: Ref[byte], index: i64,
+                   element: Ref[u32]) -> Ref[byte] {
+    let child: u32 = component_of(type_field,
+                                  internal.abi.Type_Kind.array_type)
+    let row: Ref[internal.abi.Type_Record] = type_row(child)
+    let array: Ref[internal.abi.Array_Value] =
+        unsafe_cast[Ref[internal.abi.Array_Value]] payload
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
+    let data: Ref[byte]? = array.data
+    require header != nil and data != nil
+    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
+    require descriptor.rank != 0 and descriptor.flat_rank == 1
+        and descriptor.flags == 0 and row.alignment_bytes != 0
+        and row.size_bits != 0
+        and !(row.flags & 4 != 0 and row.semantic_width_bits != 0
+              and row.semantic_width_bits < 8)
+    let position: u64 = array_position(descriptor, index)
+    let alignment_bits: u64 = cast[u64](row.alignment_bytes) * 8
+    let stride_bits: u64 = (row.size_bits + alignment_bits - 1) /
+        alignment_bits * alignment_bits
+    require stride_bits & 7 == 0
+    ref_write(element, child)
+    return __gc_byte_offset(data.get(), position * (stride_bits / 8))
+}
+
+func array_slot(source: Ref[Any], type_index: u32, index: i64,
+                element: Ref[u32]) -> Ref[byte] {
+    let view: Ref[internal.abi.Box_Value] = box_view(source)
+    let storage: Ref[byte]? = view.payload
+    require storage != nil and view.type_field & 0x7fffffff == type_index
+    return array_element(type_index, storage.get(), index, element)
+}
+
+func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
+    let child: u32 = component_of(type_index,
+                                  internal.abi.Type_Kind.array_type)
+    let row: Ref[internal.abi.Type_Record] = type_row(child)
+    let array: Ref[internal.abi.Array_Value] =
+        unsafe_cast[Ref[internal.abi.Array_Value]] payload
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
+    let data: Ref[byte]? = array.data
+    require header != nil and data != nil
+    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
+    let length: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] descriptor, 24)
+    require descriptor.rank == 1 and descriptor.flat_rank == 1
+        and descriptor.reserved_zero == 0 and index < descriptor.total_count
+        and index < length
+    if row.flags & 4 != 0 {
+        let width: u64 = cast[u64](row.semantic_width_bits)
+        require width != 0 and width <= 128
+            and descriptor.flags & 0xfffffff8 == 0
+        let start: u64 = index * width + cast[u64](descriptor.flags & 7)
+        var bit: u64 = 0
+        while bit < width {
+            let at: u64 = start + bit
+            let into: Ref[byte] = __gc_byte_offset(data.get(), at >> 3)
+            let existing: byte = into
+            ref_write(into, cast[byte](cast[u32](existing)
+                & ~(1 << cast[u32](at & 7)) & 0xff))
+            bit += 1
+        }
+        return
+    }
+    let alignment: u64 = cast[u64](row.alignment_bytes)
+    require alignment != 0 and alignment & (alignment - 1) == 0
+    let stride_bits: u64 = (row.size_bits + alignment * 8 - 1) /
+        (alignment * 8) * (alignment * 8)
+    require stride_bits & 7 == 0
+    __gc_memset(__gc_byte_offset(data.get(), index * (stride_bits / 8)), 0,
+                stride_bits / 8)
+}
+
+record Location layout(c) {
+    address:    Ref[byte]?
+    type_index: u32
+    reserved:   u32
+    bit_offset: u64
+    width:      u64
+}
+
+func component_of(type_field: u32, kind: internal.abi.Type_Kind) -> u32 {
+    let row: Ref[internal.abi.Type_Record] = type_row(type_field
+                                                      & 0x7fffffff)
+    require row.kind == cast[u32](kind) and row.components.count == 1
+    let child: i64 = internal.abi.range_index(row.components, 0)
+    require child > 0
+    return cast[u32] child
+}
+
+func array_value_of(source: Ref[Any],
+                    array_type: Ref[u32]) -> Ref[internal.abi.Array_Value] {
+    let view: Ref[internal.abi.Box_Value] = box_view(source)
+    var type_index: u32 = view.type_field & 0x7fffffff
+    let storage: Ref[byte]? = view.payload
+    require storage != nil
+    var address: Ref[byte] = storage.get()
+    if type_row(type_index).kind
+        == cast[u32](internal.abi.Type_Kind.reference_type) {
+        type_index = component_of(type_index,
+                                  internal.abi.Type_Kind.reference_type)
+        address = reference_address(source)
+    }
+    ref_write(array_type, type_index)
+    return unsafe_cast[Ref[internal.abi.Array_Value]] address
+}
+
+func array_count(source: Ref[Any]) -> uint {
+    var array_type: u32 = 0
+    let array: Ref[internal.abi.Array_Value] = array_value_of(source,
+                                                              ref array_type)
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
+    require header != nil
+    let count: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] header.get(), 24)
+    return cast[uint] count
+}
+
+func array_length(items: Array[`T]) -> uint {
+    return array_count(__box_of(items))
+}
+
+func check_shape(source: Ref[Any], rank: u32, expected: Ref[byte]) {
+    var array_type: u32 = 0
+    let array: Ref[internal.abi.Array_Value] = array_value_of(source,
+                                                              ref array_type)
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
+    require header != nil and header.get().rank == rank
+    let extents: Ref[byte] = __gc_byte_offset(
+        unsafe_cast[Ref[byte]] header.get(), 24)
+    var level: u32 = 0
+    while level < rank {
+        let wanted: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(expected,
+            cast[uint](level) * 8)
+        let actual: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(extents,
+            cast[uint](level) * 8)
+        require wanted == 0xffffffffffffffff or wanted == actual
+        level += 1
+    }
+}
+
+func array_shape_check(items: Array[`T], rank: u32,
+                              expected: Ref[`S]) {
+    check_shape(__box_of(items), rank, reference_address(__box_of(expected)))
+}
+
+func array_locate(source: Ref[Any], index: i64,
+                  location: Ref[Location]) -> bool {
+    var array_type: u32 = 0
+    let array: Ref[internal.abi.Array_Value] = array_value_of(source,
+                                                              ref array_type)
+    let child: u32 = component_of(array_type,
+                                  internal.abi.Type_Kind.array_type)
+    let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
+    let data: Ref[byte]? = array.data
+    require header != nil and data != nil
+    let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
+    require descriptor.rank != 0 and descriptor.flat_rank != 0
+        and descriptor.flags & 0xfffffff8 == 0
+    let length: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] descriptor, 24)
+    var position: u64 = cast[u64] index
+    if index < 0 {
+        let back: u64 = cast[u64](-(index + 1)) + 1
+        require back <= length
+        position = length - back
+    }
+    require position < length
+    if descriptor.flat_rank > 1 {
+        return false
+    }
+    let element: Ref[internal.abi.Type_Record] = type_row(child)
+    location.type_index = child
+    var width: u64 = 0
+    if element.flags & 4 != 0 {
+        width = cast[u64](element.semantic_width_bits)
+    }
+    if width == 0 {
+        let alignment_bits: u64 = cast[u64](element.alignment_bytes) * 8
+        require descriptor.flags == 0 and alignment_bits != 0
+            and element.size_bits != 0
+        let stride_bits: u64 = (element.size_bits + alignment_bits - 1) /
+            alignment_bits * alignment_bits
+        location.address = __gc_byte_offset(data.get(),
+                                            position * (stride_bits / 8))
+        location.bit_offset = 0
+        location.width = element.size_bits
+        return true
+    }
+    require width <= 128 and element.size_bits >= width
+    let bit_position: u64 = position * width + cast[u64](descriptor.flags)
+    location.address = __gc_byte_offset(data.get(), bit_position / 8)
+    location.bit_offset = bit_position & 7
+    location.width = width
+    return true
+}
+
+func name_matches(field: Ref[internal.abi.Field_Record], name: Ref[byte],
+                  name_bytes: uint) -> bool {
+    let address: Ref[byte] = unsafe_cast[Ref[byte]] field
+    if internal.abi.string_length(address) != name_bytes {
+        return false
+    }
+    let stored: Ref[byte]? = internal.abi.string_bytes(address)
+    require stored != nil
+    var at: uint = 0
+    while at < name_bytes {
+        let left: byte = __gc_byte_offset(stored.get(), at)
+        let right: byte = __gc_byte_offset(name, at)
+        if left != right {
+            return false
+        }
+        at += 1
+    }
+    return true
+}
+
+func reference_address(reference: Ref[Any]) -> Ref[byte] {
+    let view: Ref[internal.abi.Box_Value] = box_view(reference)
+    let row: Ref[internal.abi.Type_Record] = type_row(view.type_field
+                                                      & 0x7fffffff)
+    let storage: Ref[byte]? = view.payload
+    require row.kind == cast[u32](internal.abi.Type_Kind.reference_type)
+        and row.size_bits == 64 and storage != nil
+    return storage.get()
+}
+
+func type_component(type_field: u32, ordinal: u32) -> u32 {
+    let row: Ref[internal.abi.Type_Record] = type_row(type_field
+                                                      & 0x7fffffff)
+    if row.kind == cast[u32](internal.abi.Type_Kind.array_type)
+        or row.kind == cast[u32](internal.abi.Type_Kind.reference_type) {
+        let index: i64 = internal.abi.range_index(row.components, ordinal)
+        require index >= 0
+        return cast[u32] index
+    }
+    require ordinal < row.named_arguments.count
+    let child: u32 = __abi_type_argument_type(
+        row.named_arguments.first + ordinal)
+    require child != 0xffffffff
+    return child
+}
+
+func type_specializes(type_field: u32, general: u32) -> i32 {
+    require general != 0
+    let match: i32 = __abi_type_specializes(type_field & 0x7fffffff, general)
+    require match >= 0
+    return match
+}
+
+func program_word(program: Ref[byte], at: Ref[uint]) -> u64 {
+    let position: uint = at
+    let word: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(program,
+                                                           position * 8)
+    ref_write(at, position + 1)
+    return word
+}
+
+func pattern_holds(actual: u32, program: Ref[byte], at: Ref[uint],
+                   slots: Ref[byte]) -> bool {
+    let index: u32 = actual & 0x7fffffff
+    let operation: u64 = program_word(program, at)
+    if operation == 1 {
+        return cast[u64](index) == program_word(program, at) & 0x7fffffff
+    }
+    if operation == 2 {
+        let slot: uint = cast[uint](program_word(program, at))
+        let traits: u64 = program_word(program, at)
+        var checked: u64 = 0
+        while checked < traits {
+            let contract: u32 = cast[u32](program_word(program, at))
+            if type_specializes(index, contract) != 1 {
+                return false
+            }
+            checked += 1
+        }
+        let bound: Ref[u64] = unsafe_cast[Ref[u64]] __gc_byte_offset(slots,
+            slot * 8)
+        let previous: u64 = bound
+        if previous == 0 {
+            ref_write(bound, cast[u64](index))
+            return true
+        }
+        return previous == cast[u64](index)
+    }
+    if operation == 3 {
+        let kind: u32 = cast[u32](program_word(program, at))
+        if builtin.__type_has_kind(index, kind) != 1 {
+            return false
+        }
+        return pattern_holds(type_component(index, 0), program, at, slots)
+    }
+    if operation == 5 {
+        let contract: u32 = cast[u32](program_word(program, at))
+        return type_specializes(index, contract) == 1
+    }
+    require operation == 4
+    let head: u32 = cast[u32](program_word(program, at))
+    let count: u64 = program_word(program, at)
+    if type_specializes(index, head) != 1 {
+        return false
+    }
+    var argument: u64 = 0
+    while argument < count {
+        if !pattern_holds(type_component(index, cast[u32] argument), program,
+                          at, slots) {
+            return false
+        }
+        argument += 1
+    }
+    return true
+}
+
+func type_field_of(value: `T) -> u32 {
+    return box_view(__box_of(value)).type_field
+}
+
+func type_matches(actual: u32, program: Ref[`S], words: uint) -> bool {
+    let base: Ref[byte] = reference_address(__box_of(program))
+    var at: uint = 0
+    return pattern_holds(actual, base, ref at,
+                         __gc_byte_offset(base, words * 8))
+}
+
+func array_type_of(element: u32) -> u32 {
+    let index: u32 = __abi_unary_type(
+        cast[u32](internal.abi.Type_Kind.array_type), element)
+    require index != 0
+    return index
+}
+
+func reference_type_of(element: u32) -> u32 {
+    let index: u32 = __abi_unary_type(
+        cast[u32](internal.abi.Type_Kind.reference_type), element)
+    require index != 0
+    return index
+}
+
+func named_type(name: Ref[byte], name_bytes: uint, arguments: Ref[byte],
+                count: u32) -> u32 {
+    let index: u32 = __abi_named_type(name, name_bytes, arguments, count)
+    require index != 0
+    return index
+}
+
+func reference_view(reference: Ref[Any], slot: Ref[Any]) {
+    let child: u32 = component_of(box_view(reference).type_field,
+                                  internal.abi.Type_Kind.reference_type)
+    let view: Ref[internal.abi.Box_Value] = box_view(slot)
+    view.extent = 0
+    view.stride = 0
+    view.type_field = child
+    view.payload = nil
+    if type_row(child).size_bits > 64 {
+        view.payload = reference_address(reference)
+    }
+}
+
+func reference_equal(left: Ref[Any], right: Ref[Any]) -> bool {
+    let a: Ref[internal.abi.Box_Value] = box_view(left)
+    let b: Ref[internal.abi.Box_Value] = box_view(right)
+    let a_row: Ref[internal.abi.Type_Record] = type_row(a.type_field
+                                                        & 0x7fffffff)
+    let b_row: Ref[internal.abi.Type_Record] = type_row(b.type_field
+                                                        & 0x7fffffff)
+    require a_row.kind == cast[u32](internal.abi.Type_Kind.reference_type)
+        and b_row.kind == cast[u32](internal.abi.Type_Kind.reference_type)
+    if a_row.size_bits != b_row.size_bits {
+        return false
+    }
+    let a_storage: Ref[byte]? = a.payload
+    let b_storage: Ref[byte]? = b.payload
+    if a_row.size_bits == 64 {
+        return option_address(a_storage) == option_address(b_storage)
+    }
+    require a_row.size_bits == 128 and a_storage != nil and b_storage != nil
+    let a_bits: Ref[internal.abi.Bitptr_Value] =
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] a_storage.get()
+    let b_bits: Ref[internal.abi.Bitptr_Value] =
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] b_storage.get()
+    return option_address(a_bits.base) == option_address(b_bits.base)
+        and a_bits.type_index == b_bits.type_index
+        and a_bits.start_bit == b_bits.start_bit
+        and a_bits.end_bit == b_bits.end_bit
+}
+
+func option_address(address: Ref[byte]?) -> uint {
+    if address == nil {
+        return 0
+    }
+    return __abi_ref_address(address.get())
+}
+
+func field_row(row: Ref[internal.abi.Type_Record],
+               ordinal: u32) -> Ref[internal.abi.Field_Record] {
+    let index: i64 = internal.abi.range_index(row.fields_or_arms, ordinal)
+    require index >= 0
+    if row.kind == cast[u32](internal.abi.Type_Kind.variant_type) {
+        let arm: Ref[internal.abi.Arm_Record]? = internal.abi.arm_at(
+            cast[u32] index)
+        require arm != nil
+        return unsafe_cast[Ref[internal.abi.Field_Record]] arm.get()
+    }
+    let field: Ref[internal.abi.Field_Record]? = internal.abi.field_at(
+        cast[u32] index)
+    require field != nil
+    return field.get()
+}
+
+func arm_row(row: Ref[internal.abi.Type_Record],
+             ordinal: u32) -> Ref[internal.abi.Arm_Record] {
+    let index: i64 = internal.abi.range_index(row.fields_or_arms, ordinal)
+    require index >= 0
+    let arm: Ref[internal.abi.Arm_Record]? = internal.abi.arm_at(
+        cast[u32] index)
+    require arm != nil
+    return arm.get()
+}
+
+func run_at(runs: internal.abi.Range,
+            ordinal: u32) -> Ref[internal.abi.Physical_Run_Record] {
+    let index: i64 = internal.abi.range_index(runs, ordinal)
+    require index >= 0
+    let run: Ref[internal.abi.Physical_Run_Record]? =
+        internal.abi.physical_run_at(cast[u32] index)
+    require run != nil and run.get().width_bits != 0
+    return run.get()
+}
+
+func field_locate(target: Ref[Any], name: Ref[byte]?, name_bytes: uint,
+                  ordinal: u32, location: Ref[Location]) {
+    let view: Ref[internal.abi.Box_Value] = box_view(target)
+    var row: Ref[internal.abi.Type_Record] = type_row(view.type_field
+                                                      & 0x7fffffff)
+    var base: Ref[byte]? = nil
+    if row.kind == cast[u32](internal.abi.Type_Kind.reference_type) {
+        row = type_row(component_of(view.type_field,
+                                    internal.abi.Type_Kind.reference_type))
+        base = reference_address(target)
+    }
+    require row.kind == cast[u32](internal.abi.Type_Kind.record_type)
+        or row.kind == cast[u32](internal.abi.Type_Kind.tuple_type)
+        or row.kind == cast[u32](internal.abi.Type_Kind.variant_type)
+    require name != nil or ordinal != 0xffffffff
+    if base == nil and row.size_bits <= 64 {
+        base = __gc_byte_offset(unsafe_cast[Ref[byte]] target, 8)
+    }
+    elif base == nil {
+        base = view.payload
+    }
+    require base != nil
+    var at: u32 = 0
+    var end: u32 = row.fields_or_arms.count
+    if ordinal != 0xffffffff {
+        require ordinal < end
+        at = ordinal
+        end = ordinal + 1
+    }
+    while at < end {
+        let field: Ref[internal.abi.Field_Record] = field_row(row, at)
+        at += 1
+        if name != nil and !name_matches(field, name.get(), name_bytes) {
+            continue
+        }
+        require field.physical_runs.count != 0
+        let run: Ref[internal.abi.Physical_Run_Record] = run_at(
+            field.physical_runs, 0)
+        let first_bit: u64 = run.byte_offset * 8 + cast[u64](run.bit_offset)
+        var next_bit: u64 = first_bit + cast[u64](run.width_bits)
+        var part: u32 = 1
+        while part < field.physical_runs.count {
+            let piece: Ref[internal.abi.Physical_Run_Record] = run_at(
+                field.physical_runs, part)
+            require piece.byte_offset * 8 + cast[u64](piece.bit_offset)
+                == next_bit
+            next_bit += cast[u64](piece.width_bits)
+            part += 1
+        }
+        location.address = __gc_byte_offset(base.get(), run.byte_offset)
+        location.type_index = field.child_type_index
+        location.bit_offset = cast[u64](run.bit_offset)
+        location.width = next_bit - first_bit
+        return
+    }
+    require false
+}
+
+func reference_type_at(location: Ref[Location]) -> u32 {
+    let index: u32 = __abi_unary_type(
+        cast[u32](internal.abi.Type_Kind.reference_type), location.type_index)
+    require index != 0
+    return index
+}
+
+func reference_at(location: Ref[Location], slot: Ref[Any]) {
+    let child: Ref[internal.abi.Type_Record] = type_row(location.type_index)
+    let view: Ref[internal.abi.Box_Value] = box_view(slot)
+    let row: Ref[internal.abi.Type_Record] = type_row(view.type_field
+                                                      & 0x7fffffff)
+    if row.size_bits == 64 {
+        require location.bit_offset == 0 and location.width == child.size_bits
+        view.payload = location.address
+        return
+    }
+    let storage: Ref[byte]? = view.payload
+    require row.size_bits == 128 and storage != nil
+        and child.semantic_width_bits != 0
+        and location.width == cast[u64](child.semantic_width_bits)
+        and location.bit_offset <= 7
+    let bits: Ref[internal.abi.Bitptr_Value] =
+        unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage.get()
+    bits.base = location.address
+    bits.type_index = location.type_index
+    bits.start_bit = cast[u16](location.bit_offset)
+    bits.end_bit = cast[u16](location.bit_offset + location.width)
+}
+
+func borrow_at(location: Ref[Location], slot: Ref[Any]) {
+    let child: Ref[internal.abi.Type_Record] = type_row(location.type_index)
+    if child.size_bits > 64 and child.flags & 4 == 0
+        and location.bit_offset == 0 {
+        box_view(slot).payload = location.address
+        return
+    }
+    read_at(location, slot)
+}
+
+func read_at(location: Ref[Location], slot: Ref[Any]) {
+    let child: Ref[internal.abi.Type_Record] = type_row(location.type_index)
+    let address: Ref[byte]? = location.address
+    require address != nil
+    if location.bit_offset == 0 and location.width == child.size_bits
+        and location.width & 7 == 0 {
+        load(address.get(), slot)
+        return
+    }
+    require location.width != 0 and location.bit_offset <= 7
+        and (location.width == child.size_bits
+            or location.width == cast[u64](child.semantic_width_bits))
+    copy_bits(address.get(), location.bit_offset, location.width,
+              payload_target(slot, (child.size_bits + 7) / 8))
+}
+
+func field_get(owner: `R, ordinal: u32) -> `F {
+    var location: Location = (address = nil, type_index = 0, reserved = 0,
+                              bit_offset = 0, width = 0)
+    field_locate(__box_of(owner), nil, 0, ordinal, ref location)
+    read_at(ref location, __result_box())
+    return __box_as(__result_box())
+}
+
+func arm_tag(slot: Ref[Any]) -> uint {
+    let physical: u64 = builtin.__box_tag(
+        unsafe_cast[Ref[builtin.Box_Record]] slot)
+    if physical == 0 {
+        return 0
+    }
+    let row: Ref[internal.abi.Type_Record] = type_row(
+        box_view(slot).type_field & 0x7fffffff)
+    require row.kind == cast[u32](internal.abi.Type_Kind.variant_type)
+    var at: u32 = 0
+    while at < row.fields_or_arms.count
+        and cast[u64](arm_row(row, at).tag_value) != physical {
+        at += 1
+    }
+    require at < row.fields_or_arms.count
+    let address: Ref[byte] = unsafe_cast[Ref[byte]] arm_row(row, at)
+    let length: uint = internal.abi.string_length(address)
+    let stored: Ref[byte]? = internal.abi.string_bytes(address)
+    require stored != nil
+    let tag: uint = cast[uint](builtin.xxh3_128_at(stored.get(), length)
+                               & cast[u128]0xffffffffffffffff)
+    if tag == 0 {
+        return 1
+    }
+    return tag
+}
+
+func variant_tag(value: `V) -> uint {
+    return arm_tag(__box_of(value))
+}
+
+func slot_address(slot: Ref[Any]) -> Ref[byte]? {
+    let view: Ref[internal.abi.Box_Value] = box_view(slot)
+    if payload_bytes(view.type_field) == 0 {
+        return __gc_byte_offset(unsafe_cast[Ref[byte]] slot, 8)
+    }
+    require view.payload != nil
+    return view.payload
+}
+
+func slot_reference(slot: Ref[Any]) -> Ref[`R] {
+    box_view(__result_box()).payload = slot_address(slot)
+    return __box_as(__result_box())
+}
+
+func field_ref(owner: Ref[`R], ordinal: u32) -> Ref[`F] {
+    var location: Location = (address = nil, type_index = 0, reserved = 0,
+                              bit_offset = 0, width = 0)
+    field_locate(__box_of(owner), nil, 0, ordinal, ref location)
+    reference_at(ref location, __result_box())
+    return __box_as(__result_box())
+}
+
+func ref_equal(left: Ref[`T], right: Ref[`T]) -> bool {
+    return reference_equal(__box_of(left), __box_of(right))
+}
+
+func ref_differ(left: Ref[`T], right: Ref[`T]) -> bool {
+    return !reference_equal(__box_of(left), __box_of(right))
+}
+
+func ref_get(target: Ref[`T]) -> `T {
+    var location: Location = (address = nil, type_index = 0, reserved = 0,
+                              bit_offset = 0, width = 0)
+    reference_locate(__box_of(target), ref location)
+    read_at(ref location, __result_box())
+    return __box_as(__result_box())
+}
+
+func option_storage(reference: Ref[Any]) -> Location {
+    var location: Location = (address = nil, type_index = 0, reserved = 0,
+                              bit_offset = 0, width = 0)
+    reference_locate(reference, ref location)
+    require location.address != nil and location.bit_offset == 0
+    return location
+}
+
+func option_present(reference: Ref[Any]) -> bool {
+    let location: Location = option_storage(reference)
+    let address: Ref[byte]? = location.address
+    require address != nil
+    return builtin.__tag_at(location.type_index, address.get()) != 0
+}
+
+func option_payload(target: Ref[`T?]) -> Ref[`T] {
+    box_view(__result_box()).payload = reference_address(__box_of(target))
+    return __box_as(__result_box())
+}
+
+func element_storage(items: Ref[Any], index: i64) -> Location {
+    var location: Location = (address = nil, type_index = 0, reserved = 0,
+                              bit_offset = 0, width = 0)
+    require array_locate(items, index, ref location)
+    require location.address != nil and location.bit_offset == 0
+    return location
+}
+
+func element_present(items: Ref[Any], index: i64) -> bool {
+    let location: Location = element_storage(items, index)
+    let address: Ref[byte]? = location.address
+    require address != nil
+    return builtin.__tag_at(location.type_index, address.get()) != 0
+}
+
+func element_payload(items: Array[`T?], index: i64) -> Ref[`T] {
+    box_view(__result_box()).payload =
+        element_storage(__box_of(items), index).address
+    return __box_as(__result_box())
+}
+
+func element_payload_at(items: Ref[Array[`T?]],
+                               index: i64) -> Ref[`T] {
+    box_view(__result_box()).payload =
+        element_storage(__box_of(items), index).address
+    return __box_as(__result_box())
+}
+
+func array_get_option(items: Array[`T?], index: i64) -> `T? {
+    if !element_present(__box_of(items), index) {
+        return nil
+    }
+    return ref_get(element_payload(items, index))
+}
+
+func array_get_option_unsigned(items: Array[`T?], index: u64) -> `T? {
+    require index <= 0x7fffffffffffffff
+    return array_get_option(items, cast[i64] index)
+}
+
+func option_get(target: Ref[`T?]) -> `T? {
+    if !option_present(__box_of(target)) {
+        return nil
+    }
+    return ref_get(option_payload(target))
+}
+
+func fill(slot: Ref[Any], value: Ref[Any]) {
+    let given: Ref[internal.abi.Box_Value] = box_view(value)
+    let into: Ref[internal.abi.Box_Value] = box_view(slot)
+    let bytes: uint = payload_bytes(given.type_field)
+    into.type_field = given.type_field
+    if bytes == 0 {
+        into.payload = given.payload
+        return
+    }
+    let into_storage: Ref[byte]? = into.payload
+    let given_storage: Ref[byte]? = given.payload
+    require into_storage != nil and given_storage != nil
+    let target: Ref[byte] = into_storage.get()
+    let origin: Ref[byte] = given_storage.get()
+    if __abi_ref_address(target) != __abi_ref_address(origin) {
+        __gc_memcpy(target, origin, bytes)
+    }
+}

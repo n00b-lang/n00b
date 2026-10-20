@@ -1357,13 +1357,6 @@ semantic_walk_after_exit(parse_visit_t *visit)
             walk->unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
             CORE_STRING_STATIC("could not retain alias edges"),
             link_source_location(visit->node));
-    if (frame->in_expression
-        && !cache_escape_edges(walk->context->grammar, visit->node,
-                               tu_state(walk->unit)))
-        core_diagnostics_report_at(core_translation_unit_diagnostics(walk->unit),
-            walk->unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-            CORE_STRING_STATIC("could not retain escape edges"),
-            link_source_location(visit->node));
     return semantic_walk_status(walk);
 }
 

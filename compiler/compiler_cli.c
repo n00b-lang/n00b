@@ -37,7 +37,9 @@
     FLAG("--dump-summaries", NO_ALIAS, BOOL, false, \
          "dump whole-program function summaries"), \
     FLAG("--dump-layout", NO_ALIAS, BOOL, false, \
-         "dump target layouts for named types")
+         "dump target layouts for named types"), \
+    FLAG("--dump-ranges", NO_ALIAS, BOOL, false, \
+         "dump AST and IR integer ranges at shared expressions")
 
 static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
     FLAG("--help", CORE_STRING_STATIC("-h"), BOOL, false, "show this help"),
@@ -86,6 +88,10 @@ static const parse_cmdr_flag_t BUILD_FLAGS[] = {
          "use baseline CPU code generation"),
     FLAG("--no-specialize", NO_ALIAS, BOOL, false,
          "keep concrete generic calls on the boxed path"),
+    FLAG("--closed-world", NO_ALIAS, BOOL, false,
+         "omit the polymorphic implementations kept for dynamic linking"),
+    FLAG("--report-specialization-gaps", NO_ALIAS, BOOL, false,
+         "list generic functions the program still reaches unspecialized"),
     FLAG("--gc-conservative-stacks", NO_ALIAS, BOOL, false,
          "scan all stacks conservatively"),
     END_FLAGS,

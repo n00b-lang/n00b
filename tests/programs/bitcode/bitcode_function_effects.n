@@ -1,0 +1,32 @@
+import sys.effects
+
+var total: int = 0
+
+func square(n: int) -> int {
+    return n * n
+}
+
+func bump(n: int) {
+    total += n
+}
+
+func shout() {
+    __fd_write(2, "")
+}
+
+const square_effects: u64 = __function_effects(ref square)
+const square_is_quiet: bool = !sys.effects.has_effect(square_effects,
+                                                      sys.effects.may_io)
+require square_is_quiet
+
+let pure = __function_effects(ref square)
+require !sys.effects.has_effect(pure, sys.effects.writes_nonlocal)
+require !sys.effects.has_effect(pure, sys.effects.may_io)
+require sys.effects.has_effect(pure, sys.effects.traps_arithmetic)
+require sys.effects.has_effect(__function_effects(ref bump),
+                               sys.effects.writes_nonlocal)
+require sys.effects.has_effect(__function_effects(ref shout),
+                               sys.effects.may_io)
+require !sys.effects.has_effect(__function_effects(ref bump),
+                                sys.effects.may_io)
+__fd_write(2, "ok")

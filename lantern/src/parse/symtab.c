@@ -1249,7 +1249,7 @@ parse_sym_can_finalize_at(const parse_sym_entry_t *symbol, uint64_t point)
 
     while (safe && next < work.len) {
         parse_sym_entry_t *at = work.data[next++];
-        if (!at->alias_analysis_complete || at->lifetime.escapes
+        if (!at->alias_analysis_complete || at->alias_unresolved
             || !at->lifetime.has_end
             || (at->lifetime.has_start && point < at->lifetime.start_point)
             || point < at->lifetime.end_point) {

@@ -2,17 +2,22 @@
 
 #include "private/ir/internal.h"
 #include "ir/analyses.h"
+#include "ir/layout.h"
 #include "ir/summary.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/list.h"
 
 core_list_decl(ir_saccess_t);
+core_list_decl(ir_sfield_t);
 core_list_decl(ir_sinput_t);
 core_list_decl(ir_soutput_t);
 core_list_decl(uint32_t);
+core_list_decl(uint8_t);
 typedef ir_func_t *summary_func_ptr_t;
 core_list_decl(summary_func_ptr_t);
+typedef ir_block_t *summary_block_ptr_t;
+core_list_decl(summary_block_ptr_t);
 typedef ir_summary_t *summary_ptr_t;
 core_list_decl(summary_ptr_t);
 
@@ -23,12 +28,91 @@ struct ir_summary_t {
     core_list_t(ir_sinput_t)   inputs;
     core_list_t(ir_soutput_t)  outputs;
     core_list_t(uint32_t)      dependences;
+    core_list_t(uint8_t)       escapes;
+    bool                       all_escape;
+    ir_sreturn_t               returned;
+    uint8_t                    traps;
+    ir_sflow_t                 flow;
+    core_list_t(ir_sfield_t)   fields;
 };
+
+void
+ir_sflow_release(ir_sflow_t *flow)
+{
+    core_free(flow->carried);
+    flow->carried   = nullptr;
+    flow->n_carried = 0;
+}
+
+ir_sflow_t
+ir_sflow_opaque(void)
+{
+    ir_sflow_t flow = {
+        .receives = UINT64_MAX, .receives_fresh = true,
+        .receives_nonlocal = true, .writes_nonlocal = true, .opaque = true,
+    };
+    for (int kind = 0; kind < IR_SFLOW_KINDS; kind++)
+        flow.writes[kind] = flow.escapes[kind] = flow.leaks[kind]
+            = UINT64_MAX;
+    return flow;
+}
+
+bool
+ir_sflow_eq(const ir_sflow_t *a, const ir_sflow_t *b)
+{
+    return !memcmp(a->writes, b->writes, sizeof(a->writes))
+        && !memcmp(a->escapes, b->escapes, sizeof(a->escapes))
+        && !memcmp(a->leaks, b->leaks, sizeof(a->leaks))
+        && a->receives == b->receives
+        && a->receives_fresh == b->receives_fresh
+        && a->receives_nonlocal == b->receives_nonlocal
+        && a->writes_nonlocal == b->writes_nonlocal
+        && a->opaque == b->opaque && a->n_carried == b->n_carried
+        && (!a->n_carried
+            || !memcmp(a->carried, b->carried,
+                       a->n_carried * sizeof(*a->carried)));
+}
+
+const ir_sflow_t *
+ir_summary_flow(const ir_summary_t *summary)
+{
+    return summary ? &summary->flow : nullptr;
+}
+
+void
+ir_summary_set_flow(ir_summary_t *summary, const ir_sflow_t *flow)
+{
+    ir_sflow_release(&summary->flow);
+    summary->flow = *flow;
+    summary->flow.carried = flow->n_carried
+        ? core_alloc_array(ir_scarried_t, flow->n_carried) : nullptr;
+    if (flow->n_carried)
+        memcpy(summary->flow.carried, flow->carried,
+               flow->n_carried * sizeof(*flow->carried));
+}
+
+static uint8_t
+trap_kind(const ir_instr_t *in)
+{
+    switch (in->op) {
+    case IR_OP_TRAP:
+        return IR_STRAP_EXPLICIT;
+    case IR_OP_INDEX:
+    case IR_OP_SEQUENCE_GET:
+    case IR_OP_SEQUENCE_SET:
+        return IR_STRAP_BOUNDS;
+    case IR_OP_OPTION_GET:
+        return IR_STRAP_UNWRAP;
+    default:
+        return IR_STRAP_ARITHMETIC;
+    }
+}
 
 struct ir_summaries_t {
     const ir_summary_hooks_t *hooks;
     core_list_t(summary_ptr_t) owned;
     core_dict_t               by_function;
+    bool                      escapes_only;
 };
 
 bool
@@ -59,6 +143,8 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
     summary->inputs      = core_list_new(ir_sinput_t);
     summary->outputs     = core_list_new(ir_soutput_t);
     summary->dependences = core_list_new(uint32_t);
+    summary->escapes     = core_list_new(uint8_t);
+    summary->fields      = core_list_new(ir_sfield_t);
     if (summaries) core_list_push(summaries->owned, summary);
     return summary;
 }
@@ -66,10 +152,13 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
 static void
 summary_free(ir_summary_t *summary)
 {
+    core_list_free(summary->escapes);
     core_list_free(summary->accesses);
     core_list_free(summary->inputs);
     core_list_free(summary->outputs);
     core_list_free(summary->dependences);
+    core_list_free(summary->fields);
+    ir_sflow_release(&summary->flow);
     core_free(summary);
 }
 
@@ -102,11 +191,52 @@ ir_summary_conservative(ir_summaries_t *summaries, const ir_func_t *function)
     ir_summary_add_access(summary, (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
                           IR_SACCESS_READ | IR_SACCESS_WRITE
                               | IR_SACCESS_READS_ENTRY);
+    summary->all_escape = true;
+    summary->traps      = IR_STRAP_ALL;
+    summary->returned   = (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN};
+    summary->flow       = ir_sflow_opaque();
     return summary;
+}
+
+uint8_t
+ir_summary_param_escape(const ir_summary_t *summary, uint32_t param)
+{
+    if (!summary || summary->all_escape)
+        return IR_SESCAPE_ADDRESS | IR_SESCAPE_REFERENT;
+    return param < summary->escapes.len ? summary->escapes.data[param] : 0;
+}
+
+void
+ir_summary_set_param_escape(ir_summary_t *summary, uint32_t param,
+                            uint8_t flags)
+{
+    while (summary->escapes.len <= param) core_list_push(summary->escapes, 0);
+    summary->escapes.data[param] |= flags;
+}
+
+ir_sreturn_t
+ir_summary_return(const ir_summary_t *summary)
+{
+    return summary ? summary->returned
+                   : (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN};
+}
+
+void
+ir_summary_set_return(ir_summary_t *summary, ir_sreturn_t returned)
+{
+    summary->returned = returned;
 }
 
 const ir_func_t *ir_summary_function(const ir_summary_t *s) { return s->function; }
 uint32_t ir_summary_flags(const ir_summary_t *s) { return s ? s->flags : 0; }
+uint8_t ir_summary_trap_kinds(const ir_summary_t *s)
+{
+    return s ? s->traps : IR_STRAP_ALL;
+}
+void ir_summary_set_trap_kinds(ir_summary_t *s, uint8_t kinds)
+{
+    s->traps |= kinds & IR_STRAP_ALL;
+}
 uint32_t ir_summary_access_count(const ir_summary_t *s)
 {
     return s ? (uint32_t)s->accesses.len : 0;
@@ -263,6 +393,738 @@ target_summary(ir_summaries_t *summaries, ir_func_t *target)
     return summary;
 }
 
+ir_summary_t *
+ir_summary_for(ir_summaries_t *summaries, ir_func_t *function)
+{
+    return function ? target_summary(summaries, function)
+                    : ir_summary_conservative(summaries, nullptr);
+}
+
+uint64_t
+ir_summary_effect_bits(const ir_summary_t *summary)
+{
+    uint64_t bits = summary->flags & 0xffffu;
+    bits |= (uint64_t)summary->traps << IR_SEFFECT_TRAPS_SHIFT;
+    for (size_t a = 0; a < summary->accesses.len; a++) {
+        const ir_saccess_t *access = &summary->accesses.data[a];
+        bool read  = access->flags & IR_SACCESS_READ;
+        bool write = access->flags & IR_SACCESS_WRITE;
+        if (access->place.kind != IR_SPLACE_PARAM) {
+            if (read) bits |= IR_SEFFECT_READS_NONLOCAL;
+            if (write) bits |= IR_SEFFECT_WRITES_NONLOCAL;
+            continue;
+        }
+        uint32_t param = access->place.param < 16 ? access->place.param : 15;
+        if (read) bits |= UINT64_C(1) << (IR_SEFFECT_READS_PARAM_SHIFT + param);
+        if (write)
+            bits |= UINT64_C(1) << (IR_SEFFECT_WRITES_PARAM_SHIFT + param);
+    }
+    return bits;
+}
+
+static bool is_call(const ir_instr_t *in);
+
+uint8_t
+ir_summary_call_escape(ir_summaries_t *summaries, const ir_instr_t *call,
+                       uint32_t param)
+{
+    call_targets_t targets;
+    resolve_targets(summaries, call, &targets);
+    uint8_t flags = targets.unknown
+        ? IR_SESCAPE_ADDRESS | IR_SESCAPE_REFERENT : 0;
+    for (size_t t = 0; !targets.unknown && t < targets.targets.len; t++)
+        flags |= ir_summary_param_escape(
+            target_summary(summaries, targets.targets.data[t]), param);
+    core_list_free(targets.targets);
+    return flags;
+}
+
+bool
+ir_summary_call_diverges(ir_summaries_t *summaries, const ir_instr_t *call)
+{
+    call_targets_t targets;
+    resolve_targets(summaries, call, &targets);
+    bool diverges = !targets.unknown && targets.targets.len;
+    for (size_t t = 0; diverges && t < targets.targets.len; t++)
+        diverges = (target_summary(summaries, targets.targets.data[t])->flags
+                    & IR_SUMMARY_DIVERGES) != 0;
+    core_list_free(targets.targets);
+    return diverges;
+}
+
+static bool
+user_instruction(const ir_instr_t *in)
+{
+    return in->span.start_line && in->span.start_byte && !in->span.implied
+        && in->op != IR_OP_JUMP && in->op != IR_OP_RETURN
+        && in->op != IR_OP_BRANCH && in->op != IR_OP_TRAP;
+}
+
+static bool
+diverging_call(ir_summaries_t *summaries, const ir_instr_t *in)
+{
+    return is_call(in) && ir_summary_call_diverges(summaries, in);
+}
+
+static void
+mark_live_blocks(ir_summaries_t *summaries, ir_func_t *f, bool *live)
+{
+    ir_block_t *entry = ir_block_entry(f);
+    if (!entry) return;
+    core_list_t(summary_block_ptr_t) work = core_list_new(summary_block_ptr_t);
+    core_list_push(work, entry);
+    live[entry->index] = true;
+    while (work.len) {
+        ir_block_t *block     = work.data[--work.len];
+        bool        continues = true;
+        for (uint32_t i = 0; continues && i < block->n_instrs; i++)
+            continues = !diverging_call(summaries, block->instrs[i]);
+        ir_instr_t *terminator = continues ? ir_block_terminator(block)
+                                           : nullptr;
+        for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
+             s++) {
+            ir_block_t *next = ir_succ_at(terminator, s);
+            if (!next || live[next->index]) continue;
+            live[next->index] = true;
+            core_list_push(work, next);
+        }
+    }
+    core_list_free(work);
+}
+
+static const ir_instr_t *
+first_dead_user_instruction(ir_func_t *f, const bool *live, ir_block_t *block,
+                            uint32_t after)
+{
+    for (uint32_t i = after; i < block->n_instrs; i++)
+        if (user_instruction(block->instrs[i])) return block->instrs[i];
+    bool *seen = core_alloc_array(bool, f->n_blocks);
+    core_list_t(summary_block_ptr_t) work = core_list_new(summary_block_ptr_t);
+    core_list_push(work, block);
+    seen[block->index] = true;
+    const ir_instr_t *found = nullptr;
+    for (size_t at = 0; !found && at < work.len; at++) {
+        ir_instr_t *terminator = ir_block_terminator(work.data[at]);
+        for (uint32_t s = 0; !found && terminator
+             && s < ir_succ_count(terminator); s++) {
+            ir_block_t *next = ir_succ_at(terminator, s);
+            if (!next || seen[next->index] || live[next->index]) continue;
+            seen[next->index] = true;
+            core_list_push(work, next);
+            for (uint32_t i = 0; !found && i < next->n_instrs; i++)
+                if (user_instruction(next->instrs[i])) found = next->instrs[i];
+        }
+    }
+    core_list_free(work);
+    core_free(seen);
+    return found;
+}
+
+uint32_t
+ir_dead_code_sites(ir_summaries_t *summaries, ir_func_t *f,
+                   const ir_instr_t **out, uint32_t capacity)
+{
+    if (!f || !f->n_blocks) return 0;
+    bool *live = core_alloc_array(bool, f->n_blocks);
+    mark_live_blocks(summaries, f, live);
+    uint32_t count = 0;
+    for (uint32_t b = 0; count < capacity && b < f->n_blocks; b++) {
+        ir_block_t *block = f->blocks[b];
+        for (uint32_t i = 0; live[b] && i < block->n_instrs; i++) {
+            if (!diverging_call(summaries, block->instrs[i])) continue;
+            const ir_instr_t *dead = first_dead_user_instruction(f, live,
+                                                                 block, i + 1);
+            if (dead) out[count++] = dead;
+            break;
+        }
+    }
+    core_free(live);
+    return count;
+}
+
+const ir_summary_t *
+ir_summary_entries(ir_summaries_t *summaries, uint32_t flag)
+{
+    const ir_summary_hooks_t *hooks = summaries ? summaries->hooks : nullptr;
+    return hooks && hooks->entries
+        ? hooks->entries(hooks->context, summaries, flag) : nullptr;
+}
+
+static bool
+summary_reads_entry(ir_summaries_t *summaries, const ir_summary_t *summary,
+                    const ir_splace_t *place, bool follow)
+{
+    if (!summary || (summary->flags & IR_SUMMARY_CALLS_UNKNOWN)) return true;
+    for (size_t a = 0; a < summary->accesses.len; a++)
+        if ((summary->accesses.data[a].flags & IR_SACCESS_READS_ENTRY)
+            && ir_splace_eq(&summary->accesses.data[a].place, place))
+            return true;
+    const uint32_t entries[] = {IR_SUMMARY_CALLS_FINALIZERS,
+                                IR_SUMMARY_STARTS_THREADS};
+    for (size_t e = 0; follow && e < sizeof(entries) / sizeof(*entries); e++)
+        if ((summary->flags & entries[e])
+            && summary_reads_entry(summaries,
+                   ir_summary_entries(summaries, entries[e]), place, false))
+            return true;
+    return false;
+}
+
+bool
+ir_summary_call_reads_entry(ir_summaries_t *summaries, const ir_instr_t *call,
+                            const ir_splace_t *place)
+{
+    call_targets_t targets;
+    resolve_targets(summaries, call, &targets);
+    bool reads = targets.unknown;
+    for (size_t t = 0; !reads && t < targets.targets.len; t++)
+        reads = summary_reads_entry(summaries,
+            target_summary(summaries, targets.targets.data[t]), place, true);
+    core_list_free(targets.targets);
+    return reads;
+}
+
+bool
+ir_summary_call_callees(ir_summaries_t *summaries, const ir_instr_t *call,
+                        ir_summary_callee_fn visit, void *context)
+{
+    call_targets_t targets;
+    resolve_targets(summaries, call, &targets);
+    for (size_t t = 0; t < targets.targets.len; t++)
+        visit(context, targets.targets.data[t],
+              target_summary(summaries, targets.targets.data[t]));
+    core_list_free(targets.targets);
+    return !targets.unknown;
+}
+
+static void
+check_pure_callee(void *context, const ir_func_t *target,
+                  const ir_summary_t *summary)
+{
+    (void)target;
+    const uint32_t effects = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_BLOCK
+        | IR_SUMMARY_DIVERGES | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
+        | IR_SUMMARY_CALLS_FINALIZERS | IR_SUMMARY_STARTS_THREADS;
+    bool *pure = context;
+    *pure = *pure && !(summary->flags & effects);
+    for (size_t a = 0; *pure && a < summary->accesses.len; a++)
+        *pure = !(summary->accesses.data[a].flags & IR_SACCESS_WRITE);
+}
+
+bool
+ir_summary_call_pure(ir_summaries_t *summaries, const ir_instr_t *call)
+{
+    bool pure = summaries != nullptr;
+    return pure
+        && ir_summary_call_callees(summaries, call, check_pure_callee, &pure)
+        && pure;
+}
+
+bool
+ir_summary_argument_addressable(const ir_func_t *function,
+                                const ir_value_t *argument)
+{
+    return addressable(function, argument);
+}
+
+bool
+ir_summary_place_of(const ir_func_t *function, const ir_place_t *place,
+                    ir_splace_t *out)
+{
+    return portable_place(function, place, out);
+}
+
+static bool
+call_returns_parameter(ir_summaries_t *summaries, const ir_instr_t *call,
+                       uint32_t param)
+{
+    call_targets_t targets;
+    resolve_targets(summaries, call, &targets);
+    bool returns = targets.unknown;
+    for (size_t t = 0; !targets.unknown && t < targets.targets.len; t++) {
+        ir_sreturn_t returned = ir_summary_return(
+            target_summary(summaries, targets.targets.data[t]));
+        returns |= returned.kind == IR_SRETURN_UNKNOWN
+            || (returned.kind == IR_SRETURN_PARAM
+                && returned.param == param);
+    }
+    core_list_free(targets.targets);
+    return returns;
+}
+
+typedef struct {
+    const ir_value_t *value;
+    bool              storage;
+} escape_value_t;
+core_list_decl(escape_value_t);
+
+typedef struct {
+    ir_summaries_t              *summaries;
+    const ir_func_t             *function;
+    bool                         returns_escape;
+    bool                         returned;
+    bool                         referent;
+    uint32_t                     param;
+    core_list_t(escape_value_t)  values;
+} escape_walk_t;
+
+static bool holds_reference(const ir_func_t *f, const ir_value_t *value);
+
+static bool
+tracked(const escape_walk_t *walk, const ir_value_t *value, bool storage)
+{
+    for (size_t i = 0; i < walk->values.len; i++)
+        if (walk->values.data[i].value == value
+            && walk->values.data[i].storage == storage) return true;
+    return false;
+}
+
+static bool
+derived(const escape_walk_t *walk, const ir_value_t *value)
+{
+    return tracked(walk, value, false);
+}
+
+static void
+track(escape_walk_t *walk, const ir_value_t *value, bool storage)
+{
+    if (!value || tracked(walk, value, storage)) return;
+    if (!storage && !holds_reference(walk->function, value)) return;
+    core_list_push(walk->values,
+                   ((escape_value_t){.value = value, .storage = storage}));
+}
+
+static void
+derive(escape_walk_t *walk, const ir_value_t *value)
+{
+    track(walk, value, false);
+}
+
+static const ir_value_t *used_value(const ir_operand_t *operand);
+
+static bool
+inline_elements(const ir_func_t *f, const ir_value_t *base)
+{
+    const ir_instr_t *field = base->kind == IR_VAL_INSTR ? base->def : nullptr;
+    if (!field || field->op != IR_OP_FIELD || field->n_operands != 2
+        || field->operands[0].kind != IR_OPD_VALUE
+        || field->operands[1].kind != IR_OPD_NAME
+        || !field->operands[0].value) return false;
+    th_type *record = th_ind_referent(field->operands[0].value->type);
+    const ir_final_layout_t *layout = record
+        ? ir_layout_final(f->owner, record, ir_module_target(f->owner))
+        : nullptr;
+    for (size_t i = 0; layout && i < layout->n_members; i++)
+        if (layout->members[i].name.data
+            && core_string_eq(layout->members[i].name,
+                              field->operands[1].name))
+            return layout->members[i].inline_element_count != 0;
+    return !layout;
+}
+
+static bool
+positional_argument(const ir_instr_t *call, uint32_t index)
+{
+    if (index == 0) return false;
+    for (uint32_t i = 1; i <= index; i++) {
+        ir_opdkind_t kind = call->operands[i].kind;
+        if (kind != IR_OPD_VALUE && kind != IR_OPD_FRESH
+            && kind != IR_OPD_OUT) return false;
+    }
+    return true;
+}
+
+static bool
+returns_value(const ir_func_t *f)
+{
+    th_type *success = th_func_ret(f->type);
+    return success && ir_machine_of(f->owner, success).class != IR_CLASS_VOID;
+}
+
+static bool
+return_operand_escapes(escape_walk_t *walk, uint32_t index)
+{
+    const ir_func_t *f = walk->function;
+    uint32_t first_output = returns_value(f) ? 1 : 0;
+    if (index < first_output) {
+        walk->returned = true;
+        return walk->returns_escape;
+    }
+    uint32_t output = first_output;
+    for (size_t i = 0; i < th_func_nparams(f->type); i++) {
+        const th_param *formal = th_func_param(f->type, i);
+        if (!formal || !th_mode_produces_output(formal->mode)) continue;
+        if (output++ == index)
+            return walk->returns_escape || i != walk->param;
+    }
+    return true;
+}
+
+static bool
+hold_in_local(escape_walk_t *walk, const ir_value_t *target)
+{
+    for (unsigned depth = 0; target && depth < 32; depth++) {
+        const ir_instr_t *def = target->kind == IR_VAL_INSTR ? target->def
+                                                             : nullptr;
+        if (!def) return false;
+        switch (def->op) {
+        case IR_OP_FIELD:
+        case IR_OP_INDEX:
+        case IR_OP_OFFSET:
+        case IR_OP_BITCAST:
+        case IR_OP_COPY:
+            target = def->n_operands ? used_value(&def->operands[0])
+                                     : nullptr;
+            continue;
+        case IR_OP_ADDRESS_OF: {
+            const ir_value_t *local = def->n_operands
+                ? used_value(&def->operands[0]) : nullptr;
+            if (!local || (local->kind != IR_VAL_LOCAL
+                           && local->kind != IR_VAL_PARAM)) return false;
+            if (!derived(walk, local))
+                core_list_push(walk->values,
+                    ((escape_value_t){.value = local, .storage = false}));
+            return true;
+        }
+        case IR_OP_ALLOCA:
+        case IR_OP_ALLOC:
+            track(walk, target, true);
+            return true;
+        default:
+            return false;
+        }
+    }
+    return false;
+}
+
+static const ir_value_t *
+used_value(const ir_operand_t *operand)
+{
+    switch (operand->kind) {
+    case IR_OPD_VALUE:
+    case IR_OPD_SPREAD:
+    case IR_OPD_ARG:
+    case IR_OPD_OUT:
+    case IR_OPD_FRESH:
+        return operand->value;
+    case IR_OPD_PHI_ARM:
+        return operand->phi.value;
+    case IR_OPD_NAMED_ARG:
+        return operand->named.value;
+    default:
+        return nullptr;
+    }
+}
+
+static bool
+use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
+{
+    const ir_operand_t *operand = &use->operands[index];
+    switch (use->op) {
+    case IR_OP_LOAD:
+    case IR_OP_SEQUENCE_GET:
+    case IR_OP_SEQUENCE_LENGTH:
+    case IR_OP_SEQUENCE_SHAPE_CHECK:
+    case IR_OP_EQ:
+    case IR_OP_NE:
+    case IR_OP_LT:
+    case IR_OP_LE:
+    case IR_OP_GT:
+    case IR_OP_GE:
+    case IR_OP_TYPE_OF:
+    case IR_OP_TYPE_TEST:
+    case IR_OP_OPTION_IS_NIL:
+    case IR_OP_VARIANT_TAG:
+    case IR_OP_PREFETCH:
+    case IR_OP_MEMCMP:
+    case IR_OP_BRANCH:
+    case IR_OP_SWITCH:
+        return false;
+    case IR_OP_STORE:
+        return index != 0 && !hold_in_local(walk, used_value(&use->operands[0]));
+    case IR_OP_SEQUENCE_SET:
+    case IR_OP_ATOMIC_RMW:
+    case IR_OP_ATOMIC_CAS:
+        return index != 0;
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
+        if (index == 1) walk->referent = true;
+        return index > 1;
+    case IR_OP_MEMSET:
+        return index > 1;
+    case IR_OP_INDEX:
+        if (index == 0 && use->dest && operand->value
+            && th_kind_of(th_resolve(operand->value->type)) == TH_INDIRECTION
+            && th_kind_of(th_resolve(th_ind_referent(operand->value->type)))
+                == TH_SEQUENCE
+            && !inline_elements(walk->function, operand->value)) {
+            if (ir_address_escapes(walk->summaries, walk->function,
+                                   use->dest))
+                walk->referent = true;
+            return false;
+        }
+        if (!use->dest) return true;
+        derive(walk, use->dest);
+        return false;
+    case IR_OP_FIELD:
+    case IR_OP_OFFSET:
+    case IR_OP_BITCAST:
+    case IR_OP_NOMINAL_CAST:
+    case IR_OP_PHI:
+    case IR_OP_SELECT:
+    case IR_OP_EXTRACT:
+    case IR_OP_EXTRACT_INDEX:
+    case IR_OP_INSERT:
+    case IR_OP_AGGREGATE:
+    case IR_OP_OPTION_SOME:
+    case IR_OP_OPTION_GET:
+    case IR_OP_OPTION_GET_OR_ELSE:
+    case IR_OP_VARIANT_MAKE:
+    case IR_OP_VARIANT_PAYLOAD:
+    case IR_OP_TYPE_NARROW:
+    case IR_OP_BOX:
+    case IR_OP_CONSUME:
+        if (use->op == IR_OP_SELECT && index == 0) return false;
+        if (use->op == IR_OP_CONSUME && index != 0) return false;
+        if (!use->dest) return true;
+        derive(walk, use->dest);
+        return false;
+    case IR_OP_COPY:
+        if (use->dest_local) {
+            if (!use->dest_local->value) return true;
+            derive(walk, use->dest_local->value);
+            return false;
+        }
+        if (!use->dest) return true;
+        derive(walk, use->dest);
+        return false;
+    case IR_OP_ADDRESS_OF:
+        if (!use->dest) return true;
+        track(walk, use->dest, true);
+        return false;
+    case IR_OP_PARAM_PRESENT:
+    case IR_OP_ENUM_VALUE:
+        return false;
+    case IR_OP_CAST:
+        return !operand->value || ir_machine_of(walk->function->owner,
+            operand->value->type).class == IR_CLASS_PTR;
+    case IR_OP_CALL:
+        if (!positional_argument(use, index)) return true;
+        uint8_t escape = ir_summary_call_escape(walk->summaries, use,
+                                                index - 1);
+        if (escape & IR_SESCAPE_ADDRESS) return true;
+        if (escape & IR_SESCAPE_REFERENT) walk->referent = true;
+        if (use->dest
+            && call_returns_parameter(walk->summaries, use, index - 1))
+            derive(walk, use->dest);
+        return false;
+    case IR_OP_RETURN:
+        return return_operand_escapes(walk, index);
+    default:
+        return true;
+    }
+}
+
+static bool
+storage_use_escapes(escape_walk_t *walk, const ir_instr_t *use,
+                    uint32_t index)
+{
+    switch (use->op) {
+    case IR_OP_LOAD:
+    case IR_OP_SEQUENCE_GET:
+        if (use->dest) derive(walk, use->dest);
+        return false;
+    case IR_OP_STORE:
+    case IR_OP_SEQUENCE_SET:
+    case IR_OP_MEMSET:
+        return index != 0;
+    case IR_OP_SEQUENCE_LENGTH:
+    case IR_OP_SEQUENCE_SHAPE_CHECK:
+    case IR_OP_EQ:
+    case IR_OP_NE:
+    case IR_OP_PREFETCH:
+    case IR_OP_MEMCMP:
+        return false;
+    case IR_OP_CONSUME:
+        return index == 0;
+    case IR_OP_FIELD:
+    case IR_OP_INDEX:
+    case IR_OP_OFFSET:
+    case IR_OP_BITCAST:
+    case IR_OP_PHI:
+    case IR_OP_SELECT:
+        if (use->op == IR_OP_SELECT && index == 0) return false;
+        if (!use->dest) return true;
+        track(walk, use->dest, true);
+        return false;
+    case IR_OP_COPY:
+        if (use->dest_local || !use->dest) return true;
+        track(walk, use->dest, true);
+        return false;
+    case IR_OP_CALL:
+        if (!positional_argument(use, index)) return true;
+        if (ir_summary_call_escape(walk->summaries, use, index - 1))
+            return true;
+        if (use->dest
+            && call_returns_parameter(walk->summaries, use, index - 1))
+            track(walk, use->dest, true);
+        return false;
+    default:
+        return true;
+    }
+}
+
+static bool
+walk_escapes(escape_walk_t *walk, const ir_value_t *start)
+{
+    derive(walk, start);
+    const ir_func_t *f = walk->function;
+    for (size_t cursor = 0; cursor < walk->values.len; cursor++) {
+        const ir_value_t *value = walk->values.data[cursor].value;
+        bool storage = walk->values.data[cursor].storage;
+        for (uint32_t b = 0; b < f->n_blocks; b++) {
+            const ir_block_t *block = f->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                const ir_instr_t *use = block->instrs[i];
+                for (uint32_t k = 0; k < use->n_operands; k++)
+                    if (used_value(&use->operands[k]) == value
+                        && (storage ? storage_use_escapes(walk, use, k)
+                                    : use_escapes(walk, use, k)))
+                        return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool
+ir_address_escapes(ir_summaries_t *summaries, const ir_func_t *function,
+                   const ir_value_t *address)
+{
+    escape_walk_t walk = {
+        .summaries = summaries, .function = function, .returns_escape = true,
+        .param = UINT32_MAX, .values = core_list_new(escape_value_t),
+    };
+    bool escapes = walk_escapes(&walk, address);
+    core_list_free(walk.values);
+    return escapes;
+}
+
+static bool
+holds_reference(const ir_func_t *f, const ir_value_t *value)
+{
+    if (!value || !value->type) return true;
+    switch (ir_machine_of(f->owner, value->type).class) {
+    case IR_CLASS_SINT:
+    case IR_CLASS_UINT:
+    case IR_CLASS_FLOAT:
+    case IR_CLASS_BOOL:
+    case IR_CLASS_VOID:
+        return false;
+    default:
+        return true;
+    }
+}
+
+static bool
+referent_escapes(ir_summaries_t *summaries, const ir_func_t *f,
+                 const escape_walk_t *walk)
+{
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
+        const ir_block_t *block = f->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            const ir_instr_t *use = block->instrs[i];
+            if ((use->op != IR_OP_LOAD && use->op != IR_OP_SEQUENCE_GET)
+                || !use->n_operands || !use->dest
+                || !derived(walk, used_value(&use->operands[0]))
+                || !holds_reference(f, use->dest))
+                continue;
+            if (ir_address_escapes(summaries, f, use->dest)) return true;
+        }
+    }
+    return false;
+}
+
+static ir_sreturn_t
+join_return(ir_sreturn_t left, ir_sreturn_t right)
+{
+    if (left.kind == IR_SRETURN_NONE) return right;
+    if (right.kind == IR_SRETURN_NONE) return left;
+    if (left.kind == right.kind && left.param == right.param
+        && left.global == right.global) return left;
+    return (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN};
+}
+
+static ir_sreturn_t
+returned_source(ir_summaries_t *summaries, const ir_func_t *f,
+                const ir_value_t *value, const escape_walk_t *walks)
+{
+    for (uint32_t p = 0; p < f->n_params; p++)
+        if (derived(&walks[p], value))
+            return (ir_sreturn_t){.kind = IR_SRETURN_PARAM, .param = p};
+    if (!value || th_kind_of(th_resolve(value->type)) != TH_INDIRECTION)
+        return (ir_sreturn_t){.kind = IR_SRETURN_NONE};
+    const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
+                                                        : nullptr;
+    if (def && def->op == IR_OP_ADDRESS_OF && def->n_operands == 1) {
+        const ir_value_t *target = used_value(&def->operands[0]);
+        if (target && target->kind == IR_VAL_GLOBAL && target->global)
+            return (ir_sreturn_t){.kind = IR_SRETURN_GLOBAL,
+                                  .global = target->global};
+    }
+    if (def && is_call(def)) {
+        call_targets_t targets;
+        resolve_targets(summaries, def, &targets);
+        bool fresh = !targets.unknown && targets.targets.len;
+        for (size_t t = 0; fresh && t < targets.targets.len; t++)
+            fresh = ir_summary_return(target_summary(summaries,
+                targets.targets.data[t])).kind == IR_SRETURN_FRESH_EXTERNAL;
+        core_list_free(targets.targets);
+        if (fresh) return (ir_sreturn_t){.kind = IR_SRETURN_FRESH_EXTERNAL};
+    }
+    return (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN};
+}
+
+static void
+summarize_escapes(ir_summaries_t *summaries, ir_summary_t *summary,
+                  const ir_func_t *f)
+{
+    summary->escapes.len = 0;
+    escape_walk_t *walks = f->n_params
+        ? core_alloc_array(escape_walk_t, f->n_params) : nullptr;
+    for (uint32_t p = 0; p < f->n_params; p++) {
+        walks[p] = (escape_walk_t){
+            .summaries = summaries, .function = f, .param = p,
+            .values = core_list_new(escape_value_t),
+        };
+        uint8_t flags = 0;
+        if (!holds_reference(f, f->params[p])) {
+            ir_summary_set_param_escape(summary, p, 0);
+            continue;
+        }
+        if (walk_escapes(&walks[p], f->params[p]))
+            flags |= IR_SESCAPE_ADDRESS;
+        else if (walks[p].referent
+                 || referent_escapes(summaries, f, &walks[p]))
+            flags |= IR_SESCAPE_REFERENT;
+        ir_summary_set_param_escape(summary, p, flags);
+    }
+    ir_sreturn_t returned = {.kind = IR_SRETURN_NONE};
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
+        const ir_block_t *block = f->blocks[b];
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            const ir_instr_t *in = block->instrs[i];
+            if (in->op != IR_OP_RETURN || !in->n_operands || !returns_value(f)
+                || in->operands[0].kind != IR_OPD_VALUE) continue;
+            returned = join_return(returned, returned_source(summaries, f,
+                in->operands[0].value, walks));
+        }
+    }
+    summary->returned = returned;
+    for (uint32_t p = 0; p < f->n_params; p++)
+        core_list_free(walks[p].values);
+    core_free(walks);
+}
+
 static bool
 is_call(const ir_instr_t *in)
 {
@@ -366,6 +1228,25 @@ target_access_flags(flow_query_t *q, const ir_instr_t *call,
             : named_place(&access->place)
                 && ir_splace_eq(&access->place, q->target);
         if (matches) flags |= access->flags;
+    }
+    const uint32_t entries[] = {IR_SUMMARY_CALLS_FINALIZERS,
+                                IR_SUMMARY_STARTS_THREADS};
+    for (size_t e = 0; q->target && e < sizeof(entries) / sizeof(*entries);
+         e++) {
+        if (!(s->flags & entries[e])) continue;
+        const ir_summary_t *entry = ir_summary_entries(q->summaries,
+                                                       entries[e]);
+        if (!entry || (entry->flags & IR_SUMMARY_CALLS_UNKNOWN)) {
+            flags |= IR_SACCESS_READ | IR_SACCESS_WRITE
+                | IR_SACCESS_READS_ENTRY;
+            continue;
+        }
+        for (size_t a = 0; a < entry->accesses.len; a++)
+            if (named_place(&entry->accesses.data[a].place)
+                && ir_splace_eq(&entry->accesses.data[a].place, q->target))
+                flags |= entry->accesses.data[a].flags
+                    & (IR_SACCESS_READ | IR_SACCESS_WRITE
+                       | IR_SACCESS_READS_ENTRY);
     }
     return flags;
 }
@@ -472,6 +1353,47 @@ flow_step(void *context, const ir_instr_t *in, ir_path_outcome_t outcome)
     return writes_target(q, in) ? IR_PATH_PASSED : IR_PATH_UNPASSED;
 }
 
+static field_leaf_t
+read_path(const ir_splace_t *place, const ir_instr_t *in)
+{
+    field_leaf_t path = {0};
+    core_string_t names[FIELD_DEPTH];
+    uint32_t      depth = 0;
+    ir_op_t       step  = in->op == IR_OP_LOAD ? IR_OP_FIELD : IR_OP_EXTRACT;
+    if ((in->op != IR_OP_LOAD && in->op != IR_OP_EXTRACT) || !in->n_operands)
+        return path;
+    if (in->op == IR_OP_EXTRACT) {
+        if (in->n_operands != 2 || in->operands[1].kind != IR_OPD_NAME)
+            return path;
+        names[depth++] = in->operands[1].name;
+    }
+    const ir_value_t *address = ir_operand_value(&in->operands[0]);
+    while (address && address->kind == IR_VAL_INSTR && address->def
+           && address->def->op == step && address->def->n_operands == 2
+           && address->def->operands[1].kind == IR_OPD_NAME) {
+        if (depth == FIELD_DEPTH) return (field_leaf_t){0};
+        names[depth++] = address->def->operands[1].name;
+        address = ir_operand_value(&address->def->operands[0]);
+    }
+    if (!depth || !address || address->kind != IR_VAL_GLOBAL
+        || !address->global
+        || ir_global_identity(address->global) != place->global)
+        return path;
+    for (uint32_t i = 0; i < depth; i++)
+        path.names[i] = names[depth - 1 - i];
+    path.depth = depth;
+    return path;
+}
+
+static bool
+leaf_under(const field_leaf_t *leaf, const field_leaf_t *path)
+{
+    uint32_t common = leaf->depth < path->depth ? leaf->depth : path->depth;
+    for (uint32_t i = 0; i < common; i++)
+        if (!core_string_eq(leaf->names[i], path->names[i])) return false;
+    return true;
+}
+
 static uint8_t
 combine_leaf(uint8_t combined, uint8_t leaf, bool first)
 {
@@ -541,11 +1463,15 @@ ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
     uint8_t state = memssa && doms && q.places
         ? state_before_leaf(&q, memssa, doms, entry, in) : 0;
     if (state & IR_PATH_UNPASSED) {
+        field_leaf_t read = read_path(place, in);
         core_list_t(field_leaf_t) leaves = place_leaves(f, place);
+        bool first = true;
         for (size_t l = 0; leaves.data[0].depth && l < leaves.len; l++) {
+            if (!leaf_under(&leaves.data[l], &read)) continue;
             q.leaf = &leaves.data[l];
             state  = combine_leaf(state,
-                state_before_leaf(&q, memssa, doms, entry, in), l == 0);
+                state_before_leaf(&q, memssa, doms, entry, in), first);
+            first  = false;
         }
         core_list_free(leaves);
     }
@@ -629,6 +1555,7 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
         summary->flags |= IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
             | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
             | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT;
+        summary->traps |= IR_STRAP_ALL;
         ir_summary_add_access(summary, (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
                               IR_SACCESS_READ | IR_SACCESS_WRITE
                                   | IR_SACCESS_READS_ENTRY);
@@ -638,11 +1565,13 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
     for (size_t t = 0; t < targets.targets.len; t++) {
         ir_summary_t *callee = target_summary(summaries,
                                               targets.targets.data[t]);
+        summary->traps |= callee->traps;
         summary->flags |= callee->flags
             & (IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
                | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
                | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
-               | IR_SUMMARY_ALLOCATES_DIRECT);
+               | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
+               | IR_SUMMARY_STARTS_THREADS);
         for (size_t a = 0; a < callee->accesses.len; a++) {
             const ir_saccess_t *access = &callee->accesses.data[a];
             uint8_t flags = access->flags
@@ -757,7 +1686,9 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
     }
     for (uint32_t s = 0; sites && s < ir_sites_count(sites); s++) {
         const ir_site_t *site = ir_site_at(sites, s);
-        if (site->kind == IR_SITE_TRAP) summary->flags |= IR_SUMMARY_MAY_TRAP;
+        if (site->kind != IR_SITE_TRAP) continue;
+        summary->flags |= IR_SUMMARY_MAY_TRAP;
+        summary->traps |= trap_kind(site->instr);
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
@@ -792,6 +1723,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
             access->flags |= IR_SACCESS_MUST_FAILURE;
     }
     adjust_flags(summaries, summary);
+    summarize_escapes(summaries, summary, f);
     summarize_dependences(summaries, summary, f);
     ir_analysis_scope_end(scope);
 }
@@ -918,7 +1850,9 @@ call_dependences(deps_t *d, ir_instr_t *call, uint64_t *into)
         ir_summary_t *callee = target_summary(d->summaries,
                                               targets.targets.data[t]);
         if (!callee->outputs.len && !callee->inputs.len
-            && (callee->flags & IR_SUMMARY_CALLS_UNKNOWN))
+            && (callee->flags & (IR_SUMMARY_CALLS_UNKNOWN
+                                 | IR_SUMMARY_CALLS_FINALIZERS
+                                 | IR_SUMMARY_STARTS_THREADS)))
             unknown = true;
     }
     for (uint32_t o = 1; o < call->n_operands; o++) {
@@ -1218,6 +2152,18 @@ same_summary(const ir_summary_t *a, const core_list_t(ir_saccess_t) *before,
     return true;
 }
 
+static bool
+same_escapes(const ir_summary_t *a, const ir_summary_t *b)
+{
+    if (a->escapes.len != b->escapes.len
+        || a->returned.kind != b->returned.kind
+        || a->returned.param != b->returned.param
+        || a->returned.global != b->returned.global) return false;
+    for (size_t i = 0; i < a->escapes.len; i++)
+        if (a->escapes.data[i] != b->escapes.data[i]) return false;
+    return true;
+}
+
 typedef struct {
     ir_summaries_t                *summaries;
     core_dict_t                    index;
@@ -1229,6 +2175,237 @@ typedef struct {
 
 static void direct_callees(ir_summaries_t *summaries, ir_func_t *f,
                            core_list_t(summary_func_ptr_t) *out);
+
+static uint8_t
+divergence_step(void *context, const ir_instr_t *in, ir_path_outcome_t outcome)
+{
+    (void)outcome;
+    return is_call(in) && ir_summary_call_diverges(context, in)
+        ? 0 : IR_PATH_UNPASSED;
+}
+
+typedef struct {
+    ir_summaries_t   *summaries;
+    ir_func_t *const *members;
+    size_t            count;
+} recursion_t;
+
+static uint8_t
+recursion_step(void *context, const ir_instr_t *in, ir_path_outcome_t outcome)
+{
+    (void)outcome;
+    recursion_t *recursion = context;
+    if (!is_call(in)) return IR_PATH_UNPASSED;
+    call_targets_t targets;
+    resolve_targets(recursion->summaries, in, &targets);
+    bool member = false;
+    for (size_t t = 0; t < targets.targets.len; t++)
+        for (size_t m = 0; m < recursion->count; m++)
+            member |= targets.targets.data[t] == recursion->members[m];
+    core_list_free(targets.targets);
+    return member || !ir_summary_call_diverges(recursion->summaries, in)
+        ? IR_PATH_UNPASSED : 0;
+}
+
+static void
+summarize_divergence(ir_summaries_t *summaries, ir_summary_t *summary,
+                     ir_func_t *f)
+{
+    summary->flags &= ~(uint32_t)(IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN);
+    size_t          scope = ir_analysis_scope_begin();
+    ir_path_exits_t exits;
+    if (ir_paths_flow(f, IR_PATH_UNPASSED, divergence_step, summaries,
+                      &exits)
+        && !exits.returned && !exits.failed)
+        summary->flags |= IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
+    ir_analysis_scope_end(scope);
+}
+
+uint32_t
+ir_summary_field_count(const ir_summary_t *summary)
+{
+    return summary ? (uint32_t)summary->fields.len : 0;
+}
+
+const ir_sfield_t *
+ir_summary_field_at(const ir_summary_t *summary, uint32_t index)
+{
+    return summary && index < summary->fields.len
+        ? &summary->fields.data[index] : nullptr;
+}
+
+static th_type *
+record_key(const ir_func_t *f, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || th_kind_of(type) != TH_NAMED) return nullptr;
+    th_type *definition = ir_type_definition(f->owner, type);
+    definition = definition ? th_resolve(definition) : nullptr;
+    return definition && th_kind_of(definition) == TH_RECORD ? type : nullptr;
+}
+
+static th_type *
+record_or_referent(const ir_func_t *f, const ir_value_t *value)
+{
+    th_type *type = value && value->type ? th_resolve(value->type) : nullptr;
+    th_type *record = record_key(f, type);
+    if (record || !type || th_kind_of(type) != TH_INDIRECTION) return record;
+    return record_key(f, th_ind_referent(type));
+}
+
+static void
+add_field(ir_summary_t *summary, th_type *record, core_string_t name,
+          uint8_t flags)
+{
+    for (size_t i = 0; i < summary->fields.len; i++) {
+        ir_sfield_t *field = &summary->fields.data[i];
+        if (field->record == record && core_string_eq(field->name, name)) {
+            field->flags |= flags;
+            return;
+        }
+    }
+    core_list_push(summary->fields,
+                   ((ir_sfield_t){.record = record, .name = name,
+                                  .flags = flags}));
+}
+
+static uint8_t
+field_pointer_use(const ir_instr_t *use, uint32_t operand)
+{
+    switch (use->op) {
+    case IR_OP_LOAD:
+        return IR_SFIELD_READ;
+    case IR_OP_STORE:
+        return operand == 0 ? IR_SFIELD_WRITE
+                            : IR_SFIELD_READ | IR_SFIELD_WRITE;
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
+        return operand == 0 ? IR_SFIELD_WRITE : IR_SFIELD_READ;
+    case IR_OP_MEMSET:
+        return IR_SFIELD_WRITE;
+    default:
+        return IR_SFIELD_READ | IR_SFIELD_WRITE;
+    }
+}
+
+static bool
+opaque_use(ir_summaries_t *summaries, const ir_instr_t *in)
+{
+    switch (in->op) {
+    case IR_OP_BOX:
+    case IR_OP_BOX_RAW:
+    case IR_OP_BITCAST:
+    case IR_OP_MEMCMP:
+    case IR_OP_CALLBACK_CREATE:
+        return true;
+    case IR_OP_CALL:
+    case IR_OP_CALLBACK_INVOKE: {
+        call_targets_t targets;
+        resolve_targets(summaries, in, &targets);
+        bool opaque = targets.unknown;
+        for (size_t t = 0; !opaque && t < targets.targets.len; t++)
+            opaque = !targets.targets.data[t]->n_blocks;
+        core_list_free(targets.targets);
+        return opaque;
+    }
+    default:
+        return false;
+    }
+}
+
+static bool
+generic_parameter(const ir_func_t *target, uint32_t index)
+{
+    th_type *type = index < target->n_params && target->params[index]->type
+        ? th_resolve(target->params[index]->type) : nullptr;
+    if (type && th_kind_of(type) == TH_INDIRECTION)
+        type = th_resolve(th_ind_referent(type));
+    return type && th_kind_of(type) == TH_VAR;
+}
+
+static bool
+generic_argument(ir_summaries_t *summaries, const ir_instr_t *in,
+                 uint32_t operand)
+{
+    if (in->op != IR_OP_CALL || operand == 0) return false;
+    call_targets_t targets;
+    resolve_targets(summaries, in, &targets);
+    bool generic = false;
+    for (size_t t = 0; !generic && t < targets.targets.len; t++)
+        generic = generic_parameter(targets.targets.data[t], operand - 1);
+    core_list_free(targets.targets);
+    return generic;
+}
+
+static void
+summarize_fields(ir_summaries_t *summaries, ir_summary_t *summary,
+                 ir_func_t *f)
+{
+    core_dict_t pointers;
+    core_dict_init(&pointers, nullptr, nullptr);
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (in->n_operands < 2 || in->operands[1].kind != IR_OPD_NAME)
+                continue;
+            const ir_value_t *base = ir_operand_value(&in->operands[0]);
+            if (in->op == IR_OP_FIELD && in->dest) {
+                th_type *record = base && base->type
+                    ? record_key(f, th_ind_referent(th_resolve(base->type)))
+                    : nullptr;
+                if (record) core_dict_put(&pointers, in->dest, in);
+            }
+            else if (in->op == IR_OP_EXTRACT || in->op == IR_OP_INSERT) {
+                th_type *record = base ? record_key(f, base->type) : nullptr;
+                if (record)
+                    add_field(summary, record, in->operands[1].name,
+                              in->op == IR_OP_EXTRACT ? IR_SFIELD_READ
+                                                      : IR_SFIELD_WRITE);
+            }
+        }
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            ir_instr_t *in     = f->blocks[b]->instrs[i];
+            bool        opaque = opaque_use(summaries, in);
+            for (uint32_t o = 0; o < in->n_operands; o++) {
+                const ir_value_t *value = ir_operand_value(&in->operands[o]);
+                if (!value) continue;
+                bool        found = false;
+                ir_instr_t *field = core_dict_get(&pointers, value, &found);
+                if (found) {
+                    const ir_value_t *base =
+                        ir_operand_value(&field->operands[0]);
+                    add_field(summary,
+                              record_key(f, th_ind_referent(
+                                  th_resolve(base->type))),
+                              field->operands[1].name,
+                              field_pointer_use(in, o));
+                }
+                th_type *record = opaque || generic_argument(summaries, in, o)
+                    ? record_or_referent(f, value) : nullptr;
+                if (record)
+                    add_field(summary, record, (core_string_t){0},
+                              IR_SFIELD_WHOLE);
+            }
+        }
+    core_dict_free(&pointers);
+}
+
+static void
+summarize_flow(ir_summaries_t *summaries, ir_summary_t *next,
+               const ir_summary_t *previous, ir_func_t *f)
+{
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    ir_sflow_t flow = {0};
+    if (!hooks || !hooks->flow
+        || !hooks->flow(hooks->context, summaries, f, &previous->flow,
+                        &flow)) {
+        ir_sflow_release(&flow);
+        flow = ir_sflow_opaque();
+    }
+    ir_sflow_release(&next->flow);
+    next->flow = flow;
+}
 
 static void
 solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
@@ -1253,8 +2430,19 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
         for (size_t i = 0; i < count; i++) {
             ir_summary_t *summary = ir_summary_of(summaries, members[i]);
             ir_summary_t *next    = ir_summary_new(nullptr, members[i]);
-            summarize_function(summaries, next, members[i]);
-            if (!same_summary(next, &summary->accesses, summary->flags))
+            if (summaries->escapes_only) {
+                next->flags = summary->flags;
+                for (size_t a = 0; a < summary->accesses.len; a++)
+                    core_list_push(next->accesses, summary->accesses.data[a]);
+                summarize_escapes(summaries, next, members[i]);
+                summarize_divergence(summaries, next, members[i]);
+            }
+            else summarize_function(summaries, next, members[i]);
+            summarize_flow(summaries, next, summary, members[i]);
+            if (!same_summary(next, &summary->accesses, summary->flags)
+                || next->traps != summary->traps
+                || !same_escapes(next, summary)
+                || !ir_sflow_eq(&next->flow, &summary->flow))
                 changed = true;
             ir_summary_t previous = *summary;
             *summary = *next;
@@ -1262,6 +2450,23 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             summary_free(next);
         }
         if (!cyclic || !changed) break;
+    }
+    for (size_t i = 0; !summaries->escapes_only && i < count; i++)
+        summarize_fields(summaries, ir_summary_of(summaries, members[i]),
+                         members[i]);
+    for (size_t i = 0; cyclic && !summaries->escapes_only && i < count;
+         i++) {
+        ir_summary_t *summary = ir_summary_of(summaries, members[i]);
+        if (!(summary->flags & IR_SUMMARY_DIVERGES)) continue;
+        recursion_t     recursion = {.summaries = summaries,
+                                     .members = members, .count = count};
+        size_t          scope = ir_analysis_scope_begin();
+        ir_path_exits_t exits;
+        if (ir_paths_flow(members[i], IR_PATH_UNPASSED, recursion_step,
+                          &recursion, &exits)
+            && (exits.returned || exits.failed))
+            summary->flags |= IR_SUMMARY_UNBOUNDED_RECURSION;
+        ir_analysis_scope_end(scope);
     }
 }
 
@@ -1363,12 +2568,13 @@ strongconnect(tarjan_t *t, ir_func_t *root)
     core_list_free(frames);
 }
 
-ir_summaries_t *
-ir_summaries_compute(ir_func_t *const *functions, size_t count,
-                     const ir_summary_hooks_t *hooks)
+static ir_summaries_t *
+compute_summaries(ir_func_t *const *functions, size_t count,
+                  const ir_summary_hooks_t *hooks, bool escapes_only)
 {
     ir_summaries_t *summaries = core_alloc(ir_summaries_t);
     summaries->hooks = hooks;
+    summaries->escapes_only = escapes_only;
     summaries->owned = core_list_new(summary_ptr_t);
     core_dict_init(&summaries->by_function, nullptr, nullptr);
     tarjan_t t = {.summaries = summaries,
@@ -1388,13 +2594,251 @@ ir_summaries_compute(ir_func_t *const *functions, size_t count,
     return summaries;
 }
 
+ir_summaries_t *
+ir_summaries_compute(ir_func_t *const *functions, size_t count,
+                     const ir_summary_hooks_t *hooks)
+{
+    return compute_summaries(functions, count, hooks, false);
+}
+
+ir_summaries_t *
+ir_escapes_compute(ir_func_t *const *functions, size_t count,
+                   const ir_summary_hooks_t *hooks)
+{
+    return compute_summaries(functions, count, hooks, true);
+}
+
 void
 ir_summaries_free(ir_summaries_t *summaries)
 {
     if (!summaries) return;
+    if (ir_analysis_summaries() == summaries) ir_analysis_bind_summaries(nullptr);
     for (size_t i = 0; i < summaries->owned.len; i++)
         summary_free(summaries->owned.data[i]);
     core_list_free(summaries->owned);
     core_dict_free(&summaries->by_function);
     core_free(summaries);
+}
+
+enum { SUMMARY_CODEC_VERSION = 3 };
+
+static void
+put_u8(core_buffer_t *out, uint8_t value)
+{
+    core_buffer_append(out, (const char *)&value, 1);
+}
+
+static void
+put_u32(core_buffer_t *out, uint32_t value)
+{
+    uint8_t bytes[4];
+    for (int i = 0; i < 4; i++) bytes[i] = (uint8_t)(value >> (8 * i));
+    core_buffer_append(out, (const char *)bytes, 4);
+}
+
+static void
+put_text(core_buffer_t *out, core_string_t text)
+{
+    put_u32(out, text.data ? (uint32_t)text.u8_bytes : 0);
+    if (text.data && text.u8_bytes)
+        core_buffer_append(out, text.data, text.u8_bytes);
+}
+
+static void
+put_global(core_buffer_t *out, const ir_global_t *global)
+{
+    const ir_global_t *identity = global ? ir_global_identity(global)
+                                         : nullptr;
+    put_text(out, identity && identity->owner
+        ? ir_module_name(identity->owner) : (core_string_t){0});
+    put_text(out, identity ? identity->name : (core_string_t){0});
+}
+
+static void
+put_u64(core_buffer_t *out, uint64_t value)
+{
+    put_u32(out, (uint32_t)value);
+    put_u32(out, (uint32_t)(value >> 32));
+}
+
+static void
+put_flow(core_buffer_t *out, const ir_sflow_t *flow)
+{
+    for (int kind = 0; kind < IR_SFLOW_KINDS; kind++) {
+        put_u64(out, flow->writes[kind]);
+        put_u64(out, flow->escapes[kind]);
+        put_u64(out, flow->leaks[kind]);
+    }
+    put_u64(out, flow->receives);
+    put_u8(out, (uint8_t)(flow->receives_fresh
+        | flow->receives_nonlocal << 1 | flow->writes_nonlocal << 2
+        | flow->opaque << 3));
+    put_u32(out, flow->n_carried);
+    for (uint32_t s = 0; s < flow->n_carried; s++) {
+        const ir_scarried_t *carried = &flow->carried[s];
+        put_u64(out, carried->from[IR_SFLOW_SELF]);
+        put_u64(out, carried->from[IR_SFLOW_CONTENTS]);
+        put_u8(out, (uint8_t)(carried->nonlocal | carried->fresh << 1
+                              | carried->shared << 2));
+    }
+}
+
+bool
+ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
+{
+    if (!summary || !out) return false;
+    core_buffer_append(out, "IRSM", 4);
+    put_u8(out, SUMMARY_CODEC_VERSION);
+    put_u32(out, summary->flags);
+    put_u8(out, summary->all_escape);
+    put_u8(out, summary->traps);
+    put_u32(out, (uint32_t)summary->escapes.len);
+    for (size_t i = 0; i < summary->escapes.len; i++)
+        put_u8(out, summary->escapes.data[i]);
+    put_u8(out, summary->returned.kind);
+    put_u32(out, summary->returned.param);
+    put_global(out, summary->returned.kind == IR_SRETURN_GLOBAL
+        ? summary->returned.global : nullptr);
+    put_u32(out, (uint32_t)summary->accesses.len);
+    for (size_t i = 0; i < summary->accesses.len; i++) {
+        const ir_saccess_t *access = &summary->accesses.data[i];
+        put_u8(out, access->place.kind);
+        put_u8(out, access->flags);
+        put_u32(out, access->place.param);
+        put_global(out, access->place.kind == IR_SPLACE_GLOBAL
+                || access->place.kind == IR_SPLACE_THREAD
+            ? access->place.global : nullptr);
+    }
+    put_flow(out, &summary->flow);
+    return true;
+}
+
+typedef struct {
+    const uint8_t *data;
+    size_t         size;
+    size_t         at;
+    bool           failed;
+} summary_reader_t;
+
+static uint8_t
+get_u8(summary_reader_t *r)
+{
+    if (r->failed || r->at >= r->size) {
+        r->failed = true;
+        return 0;
+    }
+    return r->data[r->at++];
+}
+
+static uint32_t
+get_u32(summary_reader_t *r)
+{
+    uint32_t value = 0;
+    for (int i = 0; i < 4; i++) value |= (uint32_t)get_u8(r) << (8 * i);
+    return value;
+}
+
+static core_string_t
+get_text(summary_reader_t *r)
+{
+    uint32_t length = get_u32(r);
+    if (r->failed || length > r->size - r->at) {
+        r->failed = true;
+        return (core_string_t){0};
+    }
+    core_string_t text = length
+        ? core_string_borrow((const char *)r->data + r->at, length)
+        : (core_string_t){0};
+    r->at += length;
+    return text;
+}
+
+static const ir_global_t *
+get_global(summary_reader_t *r, ir_summary_global_fn resolve, void *context)
+{
+    core_string_t module = get_text(r);
+    core_string_t name   = get_text(r);
+    return !r->failed && module.data && name.data && resolve
+        ? resolve(context, module, name) : nullptr;
+}
+
+static uint64_t
+get_u64(summary_reader_t *r)
+{
+    uint64_t low = get_u32(r);
+    return low | (uint64_t)get_u32(r) << 32;
+}
+
+static void
+get_flow(summary_reader_t *r, ir_sflow_t *flow)
+{
+    for (int kind = 0; kind < IR_SFLOW_KINDS; kind++) {
+        flow->writes[kind]  = get_u64(r);
+        flow->escapes[kind] = get_u64(r);
+        flow->leaks[kind]   = get_u64(r);
+    }
+    flow->receives = get_u64(r);
+    uint8_t bits = get_u8(r);
+    flow->receives_fresh    = bits & 1;
+    flow->receives_nonlocal = bits >> 1 & 1;
+    flow->writes_nonlocal   = bits >> 2 & 1;
+    flow->opaque            = bits >> 3 & 1;
+    uint32_t carried = get_u32(r);
+    if (r->failed || carried > (r->size - r->at) / 17) {
+        r->failed = true;
+        return;
+    }
+    flow->n_carried = carried;
+    flow->carried   = carried ? core_alloc_array(ir_scarried_t, carried)
+                              : nullptr;
+    for (uint32_t s = 0; s < carried; s++) {
+        flow->carried[s].from[IR_SFLOW_SELF]     = get_u64(r);
+        flow->carried[s].from[IR_SFLOW_CONTENTS] = get_u64(r);
+        uint8_t flags = get_u8(r);
+        flow->carried[s].nonlocal = flags & 1;
+        flow->carried[s].fresh    = flags >> 1 & 1;
+        flow->carried[s].shared   = flags >> 2 & 1;
+    }
+}
+
+ir_summary_t *
+ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
+                  const uint8_t *data, size_t size,
+                  ir_summary_global_fn resolve, void *context)
+{
+    summary_reader_t r = {.data = data, .size = size};
+    if (!data || size < 5 || memcmp(data, "IRSM", 4)
+        || data[4] != SUMMARY_CODEC_VERSION) return nullptr;
+    r.at = 5;
+    ir_summary_t *summary = ir_summary_new(nullptr, function);
+    summary->flags      = get_u32(&r);
+    summary->all_escape = get_u8(&r) != 0;
+    summary->traps      = get_u8(&r) & IR_STRAP_ALL;
+    uint32_t escapes = get_u32(&r);
+    for (uint32_t i = 0; !r.failed && i < escapes; i++)
+        core_list_push(summary->escapes, get_u8(&r));
+    ir_sreturn_t returned = {.kind = get_u8(&r)};
+    returned.param = get_u32(&r);
+    returned.global = get_global(&r, resolve, context);
+    if (returned.kind > IR_SRETURN_UNKNOWN
+        || (returned.kind == IR_SRETURN_GLOBAL && !returned.global))
+        returned = (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN};
+    summary->returned = returned;
+    uint32_t accesses = get_u32(&r);
+    for (uint32_t i = 0; !r.failed && i < accesses; i++) {
+        ir_splace_t place = {.kind = get_u8(&r)};
+        uint8_t flags = get_u8(&r);
+        place.param  = get_u32(&r);
+        place.global = get_global(&r, resolve, context);
+        if (place.kind > IR_SPLACE_UNKNOWN) r.failed = true;
+        if (place.global) place.type = place.global->type;
+        ir_summary_add_access(summary, place, flags);
+    }
+    get_flow(&r, &summary->flow);
+    if (r.failed || r.at != r.size) {
+        summary_free(summary);
+        return nullptr;
+    }
+    if (summaries) core_list_push(summaries->owned, summary);
+    return summary;
 }

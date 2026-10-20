@@ -19,7 +19,7 @@ if created != nil {
         object.hdr.type_index = 1
         object.hdr.meta = sys.gc.core.meta_make(cast[u64](bytes),
             cast[u32](sys.gc.core.obj_large))
-        assert sys.gc.registry.los_register(heap, object)
+        require sys.gc.registry.los_register(heap, object)
         let interior: Ref[byte] = __gc_byte_offset(base, bytes - 1)
         let found: Ref[sys.gc.core.Los_Obj]? = sys.gc.registry.los_find(
             heap, __abi_ref_address(interior))
@@ -34,14 +34,14 @@ if created != nil {
         heap.los_bytes = bytes
         __atomic_store(ref object.marked, heap.epoch)
         __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
-        assert sys.gc.collect.sweep_some(heap, 1)
+        require sys.gc.collect.sweep_some(heap, 1)
         assert heap.los != nil
         assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
 
         heap.epoch += 1
         heap.los_cursor = ref heap.los
         __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
-        assert sys.gc.collect.sweep_some(heap, 1)
+        require sys.gc.collect.sweep_some(heap, 1)
         assert heap.los == nil
         assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
         assert heap.los_cache_bytes == bytes

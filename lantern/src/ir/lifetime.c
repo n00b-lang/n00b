@@ -487,6 +487,8 @@ forwarding_alias_input(const ir_instr_t *instruction, uint32_t operand)
     case IR_OP_BITCAST:
     case IR_OP_NOMINAL_CAST:
     case IR_OP_BOX:
+    case IR_OP_BOX_RAW:
+    case IR_OP_BOX_FROM_RAW:
         return operand == 0;
     case IR_OP_FIELD:
     case IR_OP_INDEX:
@@ -562,6 +564,8 @@ collect_structural_aliases(const ir_value_t *value, value_set_t *work)
             case IR_OP_BITCAST:
             case IR_OP_NOMINAL_CAST:
             case IR_OP_BOX:
+            case IR_OP_BOX_RAW:
+            case IR_OP_BOX_FROM_RAW:
                 limit = instruction->n_operands;
                 break;
             case IR_OP_FIELD:
@@ -1404,5 +1408,179 @@ ir_allocation_has_only_local_uses(const ir_func_t *function,
     if (!allocation || allocation->op != IR_OP_ALLOC || !allocation->dest
         || ir_instr_storage_class(allocation, &required).data || required)
         return false;
+    ir_annot_t *placed = ir_annot_get(&((ir_instr_t *)allocation)->annots,
+                                      CORE_STRING_STATIC("ir.allocation_local"));
+    if (placed && placed->kind == IR_ANNOT_BOOL) return placed->b;
     return address_has_only_local_uses(function, allocation->dest, nullptr);
+}
+
+struct ir_values_liveness {
+    ir_func_t         *function;
+    ir_value_t *const *values;
+    size_t             count;
+    uint32_t           words;
+    uint64_t          *live_in;
+    uint64_t          *live_out;
+};
+
+static bool
+values_index(const ir_values_liveness_t *liveness, const ir_value_t *value,
+             uint32_t *index)
+{
+    for (size_t i = 0; value && i < liveness->count; i++)
+        if (liveness->values[i] == value) {
+            *index = (uint32_t)i;
+            return true;
+        }
+    return false;
+}
+
+static const ir_value_t *
+values_operand(const ir_instr_t *instruction, uint32_t index)
+{
+    const ir_operand_t *operand = &instruction->operands[index];
+    return operand->kind == IR_OPD_ARG ? operand->value
+                                       : ir_operand_value(operand);
+}
+
+static void
+values_set(uint64_t *bits, uint32_t index, bool live)
+{
+    if (live) bits[index / 64] |= UINT64_C(1) << (index % 64);
+    else bits[index / 64] &= ~(UINT64_C(1) << (index % 64));
+}
+
+static bool
+values_any(const uint64_t *bits, uint32_t words)
+{
+    for (uint32_t w = 0; w < words; w++)
+        if (bits[w]) return true;
+    return false;
+}
+
+static void
+values_step(const ir_values_liveness_t *liveness,
+            const ir_instr_t *instruction, uint64_t *live)
+{
+    uint32_t index = 0;
+    if (instruction->dest && values_index(liveness, instruction->dest, &index))
+        values_set(live, index, false);
+    if (instruction->op == IR_OP_COPY && instruction->dest_local
+        && values_index(liveness, ir_local_value(liveness->function,
+                                                 instruction->dest_local),
+                        &index))
+        values_set(live, index, false);
+    if (instruction->op == IR_OP_PHI) return;
+    for (uint32_t o = 0; o < instruction->n_operands; o++)
+        if (values_index(liveness, values_operand(instruction, o), &index))
+            values_set(live, index, true);
+}
+
+static void
+values_edge_uses(const ir_values_liveness_t *liveness, const ir_block_t *from,
+                 const ir_block_t *to, uint64_t *live)
+{
+    for (uint32_t i = 0; i < to->n_instrs && to->instrs[i]->op == IR_OP_PHI;
+         i++) {
+        const ir_instr_t *phi = to->instrs[i];
+        for (uint32_t o = 0; o < phi->n_operands; o++) {
+            const ir_operand_t *operand = &phi->operands[o];
+            uint32_t index = 0;
+            if (operand->kind == IR_OPD_PHI_ARM && operand->phi.block == from
+                && values_index(liveness, operand->phi.value, &index))
+                values_set(live, index, true);
+        }
+    }
+}
+
+ir_values_liveness_t *
+ir_values_liveness_new(ir_func_t *function, ir_value_t *const *values,
+                       size_t count)
+{
+    ir_values_liveness_t *liveness = calloc(1, sizeof(*liveness));
+    if (!liveness) return NULL;
+    liveness->function = function;
+    liveness->values   = values;
+    liveness->count    = count;
+    liveness->words    = (uint32_t)((count + 63) / 64);
+    size_t total = (size_t)function->n_blocks * liveness->words;
+    liveness->live_in  = calloc(total ? total : 1, sizeof(uint64_t));
+    liveness->live_out = calloc(total ? total : 1, sizeof(uint64_t));
+    uint64_t *scratch  = calloc(liveness->words ? liveness->words : 1,
+                                sizeof(uint64_t));
+    if (!liveness->live_in || !liveness->live_out || !scratch) {
+        free(scratch);
+        ir_values_liveness_free(liveness);
+        return NULL;
+    }
+    size_t bytes = liveness->words * sizeof(uint64_t);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (uint32_t b = function->n_blocks; b-- > 0;) {
+            ir_block_t *block = function->blocks[b];
+            memset(scratch, 0, bytes);
+            ir_instr_t *terminator = ir_block_terminator(block);
+            for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
+                 s++) {
+                ir_block_t *successor = ir_succ_at(terminator, s);
+                for (uint32_t w = 0; w < liveness->words; w++)
+                    scratch[w] |= liveness->live_in[
+                        (size_t)successor->index * liveness->words + w];
+                values_edge_uses(liveness, block, successor, scratch);
+            }
+            memcpy(&liveness->live_out[(size_t)b * liveness->words], scratch,
+                   bytes);
+            for (uint32_t i = block->n_instrs; i-- > 0;)
+                values_step(liveness, block->instrs[i], scratch);
+            uint64_t *in = &liveness->live_in[(size_t)b * liveness->words];
+            if (memcmp(in, scratch, bytes)) {
+                memcpy(in, scratch, bytes);
+                changed = true;
+            }
+        }
+    }
+    free(scratch);
+    return liveness;
+}
+
+void
+ir_values_liveness_free(ir_values_liveness_t *liveness)
+{
+    if (!liveness) return;
+    free(liveness->live_in);
+    free(liveness->live_out);
+    free(liveness);
+}
+
+bool
+ir_values_live_after_each(const ir_values_liveness_t *liveness,
+                          const ir_block_t *block, bool *after)
+{
+    uint64_t *live = calloc(liveness->words ? liveness->words : 1,
+                            sizeof(uint64_t));
+    if (!live) return false;
+    memcpy(live, &liveness->live_out[(size_t)block->index * liveness->words],
+           liveness->words * sizeof(uint64_t));
+    for (uint32_t i = block->n_instrs; i-- > 0;) {
+        after[i] = values_any(live, liveness->words);
+        values_step(liveness, block->instrs[i], live);
+    }
+    free(live);
+    return true;
+}
+
+bool
+ir_values_live_on_edge(const ir_values_liveness_t *liveness,
+                       const ir_block_t *from, const ir_block_t *to)
+{
+    uint64_t *live = calloc(liveness->words ? liveness->words : 1,
+                            sizeof(uint64_t));
+    if (!live) return false;
+    memcpy(live, &liveness->live_in[(size_t)to->index * liveness->words],
+           liveness->words * sizeof(uint64_t));
+    values_edge_uses(liveness, from, to, live);
+    bool any = values_any(live, liveness->words);
+    free(live);
+    return any;
 }

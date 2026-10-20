@@ -1476,7 +1476,7 @@ uint64_t th_hash(th_ctx *ctx, th_type *t)
 
 uint64_t th_arm_tag(core_string_t n)
 {
-    uint64_t t = XXH3_64bits(n.data, n.u8_bytes);
+    uint64_t t = XXH3_128bits(n.data, n.u8_bytes).low64;
 
     return t ? t : 1;
 }

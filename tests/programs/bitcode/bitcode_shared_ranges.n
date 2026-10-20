@@ -1,0 +1,11 @@
+func shared(flag: bool) -> int {
+    let base: int = 40
+    let offset: int = base + 2
+    let scaled: int = offset * 3
+    var total: int = scaled - 26
+    if flag {
+        total = total + 1
+    }
+    return total
+}
+require shared(true) == 101

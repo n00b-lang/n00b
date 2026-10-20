@@ -115,39 +115,6 @@ bool generalize_link_unit(parse_grammar_t *grammar, core_link_unit_t *link,
 bool publish_link_call_dependencies(core_link_unit_t *link,
     n00bb_link_analysis_t *analysis, uint32_t producer_stage,
     core_link_contribution_state_t *state_out);
-parse_sym_entry_t *link_dependency_callee_symbol(
-    n00bb_link_analysis_t *analysis, core_link_dependency_view_t *call);
-bool link_dependency_reference_builtin(core_link_dependency_view_t *call,
-    core_string_t *name);
-bool publish_function_effect_summaries(core_link_unit_t *link,
-    n00bb_link_analysis_t *analysis, uint32_t producer_stage,
-    core_link_contribution_state_t direct_state,
-    core_link_contribution_state_t call_state,
-    core_link_contribution_state_t *state_out);
-bool initializer_units_share_cycle(core_link_unit_t *link,
-    core_translation_unit_t *left, core_translation_unit_t *right);
-bool publish_link_initializer_uses(core_link_unit_t *link,
-    n00bb_link_analysis_t *analysis, uint32_t producer_stage,
-    core_link_contribution_state_t *state_out);
-bool has_initializer_write_candidate(core_link_unit_t *link,
-    n00bb_link_analysis_t *analysis, parse_sym_entry_t *symbol);
-bool n00bb_module_initializer_writes(n00bb_link_analysis_t *analysis,
-                                     parse_sym_entry_t *symbol);
-bool n00bb_function_writes_global(core_link_unit_t *link,
-                                  n00bb_link_analysis_t *analysis,
-                                  parse_sym_entry_t *symbol);
-bool n00bb_next_call_within(core_translation_unit_t *unit, parse_tree_t *node,
-                            size_t *cursor, core_link_dependency_view_t *call,
-                            th_type **signature);
-bool n00bb_signature_writes_arguments(th_type *signature);
-bool n00bb_callee_writes_globals(core_link_unit_t *link,
-                                 core_link_declaration_t *callee);
-bool n00bb_use_writes_root(core_translation_unit_t *unit,
-                           parse_grammar_t *grammar, parse_tree_t *use,
-                           parse_tree_t *region);
-bool validate_initializer_cycles(core_link_unit_t *link,
-    n00bb_link_analysis_t *analysis,
-    core_link_contribution_state_t *state_out);
 parse_tree_t *call_argument_for_parameter(parse_grammar_t *grammar,
     parse_tree_t *call, parse_sym_entry_t *function, size_t target,
     bool trait_dispatch);
@@ -323,10 +290,7 @@ bool register_link_use_sites(core_link_unit_t *link,
     parse_grammar_t *grammar, core_list_t(core_translation_unit_ptr_t) *units);
 bool bind_link_references_to_nodes(parse_grammar_t *grammar,
                                    core_link_unit_t *link);
-bool publish_function_global_effects(core_link_unit_t *link,
-    n00bb_link_analysis_t *analysis, uint32_t producer_stage,
-    core_link_contribution_state_t *state_out);
-bool register_package_context_effect_metadata(n00bb_link_analysis_t *analysis);
+bool register_package_module_metadata(n00bb_link_analysis_t *analysis);
 bool register_package_interfaces(n00bb_link_analysis_t *analysis,
     th_env *environment);
 void bind_return_call_sources(n00bb_link_analysis_t *analysis);
@@ -415,18 +379,7 @@ enum {
 enum {
     N00BB_LINK_DEPENDENCY_CALL = 1,
     N00BB_LINK_DEPENDENCY_TRAIT_DISPATCH = 2,
-    N00BB_LINK_DEPENDENCY_INITIALIZER_USE = 3,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ = 4,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE = 5,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE = 6,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN = 7,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_SUMMARY = 8,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY = 9,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY = 10,
     N00BB_LINK_DEPENDENCY_CONTEXT_CALL = 11,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS = 12,
-    N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY = 13,
-    N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER = 15,
     N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION = 16,
 };
 
@@ -438,6 +391,23 @@ typedef struct {
 } n00bb_record_request_site_t;
 core_list_decl(n00bb_record_request_site_t);
 
+typedef struct n00bb_interface_summaries_t n00bb_interface_summaries_t;
+
+typedef struct {
+    ir_func_t *function;
+    ir_span_t span;
+    core_translation_unit_t *unit;
+} n00bb_assert_site_t;
+core_list_decl(n00bb_assert_site_t);
+
+typedef struct {
+    ir_func_t *function;
+    ir_instr_t *trap;
+    core_translation_unit_t *unit;
+    core_string_t name;
+} n00bb_missing_return_t;
+core_list_decl(n00bb_missing_return_t);
+
 typedef struct n00bb_link_analysis_t {
     parse_grammar_t *grammar;
     ir_ctx_t *ir_context;
@@ -446,6 +416,10 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_trait_specialization_ptr_t) trait_specializations;
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
+    core_list_t(n00bb_ir_func_ptr_t) callback_handlers;
+    ir_summaries_t *entry_owner;
+    ir_summary_t *entry_summaries[3];
+    bool entry_ready[3];
     core_list_t(n00bb_specialization_t) specializations;
     core_list_t(n00bb_specialization_request_t) specialization_requests;
     core_list_t(n00bb_captured_graph_node_t) static_graph_nodes;
@@ -466,6 +440,12 @@ typedef struct n00bb_link_analysis_t {
     ir_exec_graph_t *execution_graph;
     ir_summary_hooks_t summary_hooks;
     ir_summaries_t *summaries;
+    ir_summaries_t *escapes;
+    core_list_t(n00bb_assert_site_t) assert_sites;
+    core_list_t(n00bb_missing_return_t) missing_returns;
+    n00bb_interface_summaries_t *interface_summaries;
+    core_list_t(core_translation_unit_ptr_t) initializer_order;
+    bool dump_ranges;
     th_env *environment;
     th_env *export_environment;
     th_env *interface_environment;
@@ -474,6 +454,7 @@ typedef struct n00bb_link_analysis_t {
     const core_string_t *native_roots;
     size_t native_root_count;
     bool may_link_further;
+    bool closed_world;
     bool returned_parameters_computed;
     n00bb_resolver_t *resolver;
     struct n00bb_cache_t *cache;
@@ -490,20 +471,7 @@ parse_sym_entry_t *n00bb_enum_type_symbol(n00bb_link_analysis_t *analysis,
 
 const core_list_t(core_translation_unit_ptr_t) *
 n00bb_link_analysis_units(const n00bb_link_analysis_t *analysis);
-typedef struct {
-    core_translation_unit_t **units;
-    size_t count;
-} n00bb_initializer_order_t;
-n00bb_initializer_order_t *build_initializer_order(
-    core_link_unit_t *link, n00bb_link_analysis_t *analysis,
-    core_link_contribution_state_t *state_out);
-#define N00BB_INITIALIZER_ORDER_DOMAIN "n00bb.module-initializer-order"
-bool n00bb_collect_initializer_order(core_link_unit_t *link,
-    core_list_t(core_translation_unit_ptr_t) *order);
-void free_initializer_order(void *opaque);
 parse_sym_entry_t *initializer_declaration_symbol(
-    core_link_declaration_t *declaration);
-void append_initializer_declaration_name(core_buffer_t *out,
     core_link_declaration_t *declaration);
 bool dynamic_initializer_declaration(parse_grammar_t *grammar,
     core_link_declaration_t *declaration);
@@ -512,11 +480,6 @@ parse_tree_t *link_initializer_value(parse_grammar_t *grammar,
 bool populate_link_declaration_facts(parse_grammar_t *grammar,
     ir_ctx_t *ir_context, core_translation_unit_t *unit,
     n00bb_link_payload_t *payload);
-uint32_t effect_summary_kind(uint32_t kind);
-bool restore_context_effect_dependencies(core_link_unit_t *link,
-    uint32_t producer_stage);
-bool register_context_effect_metadata(n00bb_link_analysis_t *analysis,
-    core_link_unit_t *link);
 bool register_builtin_value_defaults(th_env *defaults, const th_env *base,
                                      core_link_unit_t *link,
                                      parse_grammar_t *grammar,

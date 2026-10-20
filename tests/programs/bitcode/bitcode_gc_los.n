@@ -46,7 +46,7 @@ if mapped != nil {
     assert sys.gc.mark.is_marked(heap, payload)
     heap.los_count = 1
     heap.los_bytes = total
-    assert sys.gc.registry.los_register(heap, object)
+    require sys.gc.registry.los_register(heap, object)
     sys.gc.los.release(heap, object)
     assert heap.los_count == 0
     assert heap.los_bytes == 0

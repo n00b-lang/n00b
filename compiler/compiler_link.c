@@ -2,6 +2,8 @@
 
 #include "compiler_link.h"
 #include "compiler_baked.h"
+#include "interface_summaries.h"
+#include "storage_placement.h"
 #include "compiler_tu.h"
 #include "preprocessor.h"
 
@@ -2156,330 +2158,11 @@ populate_link_declaration_facts(parse_grammar_t *grammar,
     bool requires_comptime_value = symbol->mutability == PARSE_SYM_CONST;
     payload->phase_value_complete = !requires_comptime_value
         || payload->static_value != nullptr;
-    payload->storage_lifetime_complete = payload->alias_analysis_complete
-        && payload->lifetime.has_region
+    payload->storage_lifetime_complete = payload->lifetime.has_region
         && payload->storage_duration != PARSE_SYM_STORAGE_UNSPECIFIED;
     payload->facts_complete = payload->array_shape_complete
         && payload->initializer_facts_complete;
     return true;
-}
-
-uint32_t
-effect_summary_kind(uint32_t kind)
-{
-    switch (kind) {
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ:
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_SUMMARY:
-        return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_SUMMARY;
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE:
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY:
-        return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY;
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE:
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY:
-        return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY;
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS:
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY:
-        return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY;
-    case N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN:
-        return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN;
-    default:
-        return 0;
-    }
-}
-
-bool
-restore_context_effect_dependencies(core_link_unit_t *link,
-                                    uint32_t producer_stage)
-{
-    for (size_t i = 0; i < core_link_unit_declaration_count(link); i++) {
-        core_link_declaration_t *source =
-            core_link_unit_declaration_at(link, i);
-        n00bb_link_payload_t *payload = source
-            ? core_link_declaration_payload(source) : nullptr;
-        parse_sym_entry_t *symbol = payload ? payload->symbol : nullptr;
-        const uint8_t *data = symbol
-            ? parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.context-effects")) : nullptr;
-        if (!data) continue;
-        uint32_t count = read_u32_le(data + 4);
-        size_t offset = 8;
-        for (uint32_t e = 0; e < count; e++) {
-            uint32_t kind = data[offset++];
-            uint32_t module_size = read_u32_le(data + offset);
-            offset += 4;
-            uint32_t key_size = read_u32_le(data + offset);
-            offset += 4;
-            core_link_declaration_t *target = nullptr;
-            core_link_dependency_state_t state =
-                CORE_LINK_DEPENDENCY_UNAVAILABLE;
-            if (kind != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN) {
-                core_string_t module = core_string_borrow(
-                    (const char *)data + offset, module_size);
-                core_string_t key = core_string_borrow(
-                    (const char *)data + offset + module_size, key_size);
-                target = core_link_unit_find_declaration(link, module, key);
-                if (target) state = CORE_LINK_DEPENDENCY_RESOLVED;
-            }
-            offset += module_size + key_size;
-            if (!core_link_unit_add_dependency(link, kind, producer_stage,
-                    state, source, target, nullptr, nullptr,
-                    (core_diag_location_t){0}, (core_string_t){0}, 0,
-                    nullptr)) return false;
-        }
-    }
-    return true;
-}
-
-bool
-register_context_effect_metadata(n00bb_link_analysis_t *analysis,
-                                 core_link_unit_t *link)
-{
-    th_env *environment = analysis ? analysis->interface_environment : nullptr;
-    if (!environment || !link) return false;
-    for (size_t i = 0; i < core_link_unit_declaration_count(link); i++) {
-        core_link_declaration_t *context =
-            core_link_unit_declaration_at(link, i);
-        n00bb_link_payload_t *payload = context
-            ? core_link_declaration_payload(context) : nullptr;
-        parse_sym_entry_t *symbol = payload ? payload->symbol : nullptr;
-        if (!symbol || !symbol->decl_node
-            || !nt_is(analysis->grammar, symbol->decl_node, CORE_STRING_STATIC("context-def")))
-            continue;
-        core_buffer_t records = {0};
-        uint32_t count = 0;
-        bool ok = true;
-        for (size_t d = 0; ok && d < core_link_unit_dependency_count(link); d++) {
-            core_link_dependency_view_t effect = {0};
-            if (!core_link_unit_dependency_at(link, d, &effect)) {
-                ok = false;
-                break;
-            }
-            uint32_t kind = effect_summary_kind(effect.kind);
-            if (effect.from != context || !kind) continue;
-            core_string_t module = effect.to
-                ? core_link_declaration_module(effect.to) : (core_string_t){0};
-            core_string_t key = effect.to
-                ? core_link_declaration_key(effect.to) : (core_string_t){0};
-            if ((effect.to && (!module.data || !key.data))
-                || module.u8_bytes > UINT32_MAX
-                || key.u8_bytes > UINT32_MAX || count == UINT32_MAX) {
-                ok = false;
-                break;
-            }
-            core_buffer_putc(&records, (char)kind);
-            ok = append_u32_le(&records, (uint32_t)module.u8_bytes)
-                && append_u32_le(&records, (uint32_t)key.u8_bytes);
-            if (ok && module.u8_bytes)
-                core_buffer_append(&records, module.data, module.u8_bytes);
-            if (ok && key.u8_bytes)
-                core_buffer_append(&records, key.data, key.u8_bytes);
-            count++;
-        }
-        core_buffer_t metadata = {0};
-        if (ok) {
-            core_buffer_append(&metadata, "N0CE", 4);
-            ok = append_u32_le(&metadata, count);
-        }
-        if (ok && records.byte_len)
-            core_buffer_append(&metadata, records.data, records.byte_len);
-        core_string_t module = core_link_declaration_module(context);
-        core_string_t key = symbol->name;
-        core_buffer_t qualified = {0};
-        if (ok && module.data && key.data) {
-            core_buffer_append(&qualified, module.data, module.u8_bytes);
-            core_buffer_putc(&qualified, '.');
-            core_buffer_append(&qualified, key.data, key.u8_bytes);
-            ok = th_env_register_metadata(environment,
-                TH_ENV_METADATA_VALUE, core_buffer_string(&qualified),
-                CORE_STRING_STATIC("n00b.context-effects"), 1, metadata.data,
-                metadata.byte_len);
-        }
-        else ok = false;
-        core_buffer_release(&qualified);
-        core_buffer_release(&metadata);
-        core_buffer_release(&records);
-        if (!ok) return false;
-    }
-    return true;
-}
-
-static bool
-diag_location_precedes(core_diag_location_t left,
-                       core_diag_location_t right)
-{
-    return left.has_location && right.has_location
-        && (left.line < right.line
-            || (left.line == right.line && left.column < right.column));
-}
-
-static bool static_literal_global_initializer(parse_grammar_t *grammar,
-                                               parse_sym_entry_t *symbol);
-
-void
-free_initializer_order(void *opaque)
-{
-    n00bb_initializer_order_t *order = opaque;
-    if (!order) return;
-    core_free(order->units);
-    core_free(order);
-}
-
-n00bb_initializer_order_t *
-build_initializer_order(core_link_unit_t *link,
-                         n00bb_link_analysis_t *analysis,
-                         core_link_contribution_state_t *state_out)
-{
-    *state_out = CORE_LINK_CONTRIBUTION_COMPLETE;
-    size_t unit_count = core_link_unit_translation_unit_count(link);
-    n00bb_initializer_order_t *order =
-        core_alloc(n00bb_initializer_order_t);
-    order->units = unit_count
-        ? core_alloc_array(core_translation_unit_t *, unit_count) : nullptr;
-    order->count = 0;
-    bool incomplete = false;
-    bool valid = true;
-    bool *selected = nullptr;
-    size_t scc_count = core_link_unit_scc_count(link);
-    core_dict_t member_positions;
-    core_dict_init(&member_positions, nullptr, nullptr);
-    for (size_t scc = 0; scc < scc_count; scc++) {
-        size_t member_count = core_link_unit_scc_member_count(link, scc);
-        for (size_t i = 0; i < member_count; i++) {
-            core_translation_unit_t *member = core_link_unit_scc_member(
-                link, scc, i);
-            if (!member) {
-                valid = false;
-                goto finish;
-            }
-            core_dict_add(&member_positions, member, i + 1);
-        }
-        selected = core_alloc_array(bool, member_count);
-        for (size_t step = 0; step < member_count; step++) {
-            size_t choice = SIZE_MAX;
-            core_link_dependency_view_t blocked_edge = {0};
-            for (size_t candidate = 0; candidate < member_count; candidate++) {
-                if (selected[candidate]) continue;
-                bool blocked = false;
-                core_translation_unit_t *candidate_unit =
-                    core_link_unit_scc_member(link, scc, candidate);
-                for (size_t d = 0;
-                     d < core_link_unit_dependency_count(link); d++) {
-                    core_link_dependency_view_t edge;
-                    if (!core_link_unit_dependency_at(link, d, &edge)) {
-                        valid = false;
-                        goto finish;
-                    }
-                    if (edge.kind != N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER)
-                        continue;
-                    if (edge.state != CORE_LINK_DEPENDENCY_RESOLVED) {
-                        incomplete = true;
-                        continue;
-                    }
-                    core_translation_unit_t *source = edge.from
-                        ? core_link_declaration_owner(edge.from)
-                        : edge.source_unit;
-                    core_translation_unit_t *target = edge.to
-                        ? core_link_declaration_owner(edge.to) : nullptr;
-                    if (source != candidate_unit || !target) continue;
-                    if (!dynamic_initializer_declaration(
-                            analysis->grammar, edge.to)) continue;
-                    if (target == source) {
-                        parse_sym_entry_t *target_symbol =
-                            initializer_declaration_symbol(edge.to);
-                        parse_token_info_t *target_token = target_symbol
-                            ? parse_tree_find_first_terminal(
-                                symbol_binding_node(target_symbol)) : nullptr;
-                        core_diag_location_t target_location = target_token
-                            ? (core_diag_location_t){
-                                .line = parse_token_line(target_token),
-                                .column = parse_token_column(target_token),
-                                .has_location = true,
-                            } : (core_diag_location_t){0};
-                        if (diag_location_precedes(edge.source_location,
-                                                   target_location)) {
-                            core_diagnostics_report_at(
-                                core_translation_unit_diagnostics(source),
-                                source, CORE_DIAG_ERROR,
-                                CORE_STRING_STATIC("N00BB-L0043"),
-                                CORE_STRING_STATIC("initializer reads a global before its initializer runs"),
-                                edge.source_location);
-                            *state_out = CORE_LINK_CONTRIBUTION_FAILED;
-                            valid = false;
-                            goto finish;
-                        }
-                        continue;
-                    }
-                    size_t target_scc;
-                    if (!core_link_unit_scc_of(link, target, &target_scc)
-                        || target_scc != scc) continue;
-                    size_t target_index = (size_t)(uintptr_t)core_dict_get(
-                        &member_positions, target, nullptr);
-                    if (!target_index || selected[target_index - 1])
-                        continue;
-                    blocked = true;
-                    blocked_edge = edge;
-                    break;
-                }
-                if (!blocked) {
-                    choice = candidate;
-                    break;
-                }
-            }
-            if (choice == SIZE_MAX) {
-                core_translation_unit_t *source = blocked_edge.from
-                    ? core_link_declaration_owner(blocked_edge.from)
-                    : blocked_edge.source_unit;
-                if (source) {
-                    core_buffer_t message = {0};
-                    core_buffer_puts(&message,
-                        "initializer dependency cycle requires reading an uninitialized global: no initialization order exists for modules ");
-                    size_t listed = 0;
-                    for (size_t m = 0; m < member_count; m++) {
-                        if (selected[m]) continue;
-                        core_string_t name = core_link_unit_scc_member(
-                            link, scc, m)->module.identifier;
-                        core_buffer_printf(&message, "%s'%.*s'",
-                            listed++ ? ", " : "",
-                            (int)name.u8_bytes, name.data);
-                    }
-                    core_buffer_puts(&message, " (");
-                    append_initializer_declaration_name(&message,
-                                                        blocked_edge.from);
-                    core_buffer_puts(&message, " reads ");
-                    append_initializer_declaration_name(&message,
-                                                        blocked_edge.to);
-                    core_buffer_puts(&message, ")");
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(source), source,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0040"),
-                        core_string_borrow(message.data, message.byte_len),
-                        blocked_edge.source_location);
-                    core_buffer_release(&message);
-                }
-                *state_out = CORE_LINK_CONTRIBUTION_FAILED;
-                valid = false;
-                goto finish;
-            }
-            selected[choice] = true;
-            order->units[order->count++] = core_link_unit_scc_member(
-                link, scc, choice);
-        }
-        core_free(selected);
-        selected = nullptr;
-    }
-    if (order->count != unit_count) valid = false;
-    if (incomplete) {
-        *state_out = CORE_LINK_CONTRIBUTION_UNAVAILABLE;
-        valid = false;
-    }
-finish:
-    core_free(selected);
-    core_dict_free(&member_positions);
-    if (!valid) {
-        free_initializer_order(order);
-        return nullptr;
-    }
-    return order;
 }
 
 parse_sym_entry_t *
@@ -2488,21 +2171,6 @@ initializer_declaration_symbol(core_link_declaration_t *declaration)
     n00bb_link_payload_t *payload = declaration
         ? core_link_declaration_payload(declaration) : nullptr;
     return payload ? payload->symbol : nullptr;
-}
-
-void
-append_initializer_declaration_name(core_buffer_t *out,
-                                    core_link_declaration_t *declaration)
-{
-    core_string_t module = declaration
-        ? core_link_declaration_module(declaration) : (core_string_t){0};
-    parse_sym_entry_t *symbol = initializer_declaration_symbol(declaration);
-    core_string_t name = symbol ? symbol->name
-        : declaration ? core_link_declaration_key(declaration)
-                      : CORE_STRING_STATIC("<module initializer>");
-    if (module.u8_bytes)
-        core_buffer_printf(out, "%.*s.", (int)module.u8_bytes, module.data);
-    core_buffer_printf(out, "%.*s", (int)name.u8_bytes, name.data);
 }
 
 static bool
@@ -2620,76 +2288,6 @@ read_u32_le(const uint8_t *data)
 {
     return (uint32_t)data[0] | (uint32_t)data[1] << 8 |
            (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24;
-}
-
-static uint32_t
-function_global_effect_kind(parse_grammar_t *grammar,
-                            parse_annot_result_t *annotations,
-                            n00bb_link_use_site_t *site,
-                            parse_sym_entry_t *effect_owner)
-{
-    for (parse_tree_t *at = site->node; at && at != effect_owner->decl_node;
-         at = parse_tree_parent(at)) {
-        if (!nt_is(grammar, at, CORE_STRING_STATIC("unary-expr"))) continue;
-        if (core_string_eq(first_token_text(at), CORE_STRING_STATIC("ref")))
-            return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS;
-    }
-
-    if (!annotations) return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ;
-    for (size_t label_index = 0;
-         label_index < annotations->cf_label_order.len;
-         label_index++) {
-        parse_cf_label_t *label =
-            annotations->cf_label_order.data[label_index];
-        if (!label || label->kind != PARSE_CF_ASSIGNS || !label->cond
-            || !node_is_within(site->node, label->cond)
-            || link_effect_owner_symbol(grammar, label->self)
-                != effect_owner) continue;
-        return nt_is(grammar, label->self, CORE_STRING_STATIC("binop-assign-stmt"))
-            ? N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE
-            : N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE;
-    }
-    return N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ;
-}
-
-bool
-publish_function_global_effects(core_link_unit_t *link,
-                                n00bb_link_analysis_t *analysis,
-                                uint32_t producer_stage,
-                                core_link_contribution_state_t *state_out)
-{
-    bool complete = true;
-    for (size_t i = 0; i < analysis->units.len; i++) {
-        core_translation_unit_t *unit = analysis->units.data[i];
-        n00bb_tu_state_t *state = tu_state(unit);
-        if (!state) return false;
-        for (size_t s = 0; s < state->link_use_sites.len; s++) {
-            n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
-            parse_sym_entry_t *effect_owner = link_effect_owner_symbol(
-                analysis->grammar, site->node);
-            if (!effect_owner || !is_module_global_symbol(
-                    analysis->grammar, site->symbol)) continue;
-            core_link_declaration_t *source = link_declaration_for_symbol(
-                analysis, effect_owner);
-            core_link_declaration_t *target = link_declaration_for_symbol(
-                analysis, site->symbol);
-            uint32_t kind = function_global_effect_kind(
-                analysis->grammar, state->annotations, site, effect_owner);
-            bool resolved = source && target
-                && kind != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN;
-            if (!resolved) complete = false;
-            if (!core_link_unit_add_dependency(link, kind, producer_stage,
-                    resolved ? CORE_LINK_DEPENDENCY_RESOLVED
-                             : CORE_LINK_DEPENDENCY_UNAVAILABLE,
-                    source, target, unit, site->node,
-                    link_source_location(site->node),
-                    core_source_file_path(&unit->source), 1, nullptr))
-                return false;
-        }
-    }
-    *state_out = complete ? CORE_LINK_CONTRIBUTION_COMPLETE
-                          : CORE_LINK_CONTRIBUTION_UNAVAILABLE;
-    return true;
 }
 
 
@@ -4025,7 +3623,7 @@ cleanup_lifetime_range(const parse_sym_entry_t *symbol,
 }
 
 static bool
-cleanup_fact_add(n00bb_link_payload_t *owner_facts,
+cleanup_fact_add(ir_summaries_t *escapes, n00bb_link_payload_t *owner_facts,
                  parse_sym_entry_t *symbol, ir_func_t *function,
                  ir_value_t *binding, parse_sym_phase_t phase,
                  const parse_sym_lifetime_range_t *range)
@@ -4086,8 +3684,7 @@ cleanup_fact_add(n00bb_link_payload_t *owner_facts,
         fact.cfg_edges = observed_edges;
         complete &= observed_edges == range->edge_count
             && observed_endpoints == range->end_count
-            && symbol->alias_analysis_complete
-            && !symbol->lifetime.escapes;
+            && !n00bb_binding_escapes(escapes, function, binding);
     }
     fact.range_complete = complete;
     core_list_push(owner_facts->cleanup_facts, fact);
@@ -4175,8 +3772,9 @@ n00bb_link_stage_cleanup_obligations(core_link_unit_t *link,
                             CORE_STRING_STATIC(
                                 "n00bb.semantic.declaration-facts"))
                         : nullptr;
-                    bool added = cleanup_fact_add(facts, symbol, nullptr,
-                        nullptr, PARSE_SYM_PHASE_RUNTIME, nullptr);
+                    bool added = cleanup_fact_add(analysis->escapes, facts,
+                        symbol, nullptr, nullptr, PARSE_SYM_PHASE_RUNTIME,
+                        nullptr);
                     complete &= added && facts
                         && facts->cleanup_obligations_complete;
                     continue;
@@ -4215,8 +3813,9 @@ n00bb_link_stage_cleanup_obligations(core_link_unit_t *link,
                         cleanup_lifetime_range(symbol,
                             PARSE_SYM_PHASE_RUNTIME, function, value);
                     bool added = binding && function && value
-                        && cleanup_fact_add(owner_facts, symbol, function,
-                            value, PARSE_SYM_PHASE_RUNTIME, range);
+                        && cleanup_fact_add(analysis->escapes, owner_facts,
+                            symbol, function, value, PARSE_SYM_PHASE_RUNTIME,
+                            range);
                     complete &= added && range && range->complete
                         && owner_facts->cleanup_obligations_complete;
                 }
@@ -4282,13 +3881,7 @@ storage_lifetime_symbol_is_complete(n00bb_link_analysis_t *analysis,
             && facts->storage_duration == symbol->storage_duration;
     }
 
-    core_translation_unit_t *unit = unit_for_symbol(analysis->grammar,
-        &analysis->units, symbol);
-    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
-    if (!scope_has_lexical_lifetime(symbol->scope)
-        || (type_may_contain_reference_alias(state ? state->types : nullptr,
-                                              symbol->type)
-            && !symbol->alias_analysis_complete)) return false;
+    if (!scope_has_lexical_lifetime(symbol->scope)) return false;
     parse_sym_entry_t *owner_symbol = lifetime_function_owner(
         analysis->grammar, symbol);
     core_link_declaration_t *owner_declaration = owner_symbol
@@ -4305,6 +3898,8 @@ storage_lifetime_symbol_is_complete(n00bb_link_analysis_t *analysis,
         const parse_sym_function_binding_t *binding =
             parse_sym_function_binding_at(symbol, PARSE_SYM_PHASE_RUNTIME, i);
         if (!binding || !binding->function || !binding->binding
+            || n00bb_binding_escapes(analysis->escapes, binding->function,
+                                     binding->binding)
             || !storage_lifetime_range_is_complete(symbol,
                 binding->function, binding->binding)) return false;
     }
@@ -4422,6 +4017,11 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
 {
     if (!analysis) return;
     ir_summaries_free(analysis->summaries);
+    ir_summaries_free(analysis->escapes);
+    core_list_free(analysis->assert_sites);
+    core_list_free(analysis->missing_returns);
+    n00bb_interface_summaries_free(analysis->interface_summaries);
+    core_list_free(analysis->initializer_order);
     core_free((void *)analysis->linked_interfaces);
     th_env_free(analysis->export_environment);
     th_env_free(analysis->interface_environment);
@@ -4430,6 +4030,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->trait_specializations);
     core_list_free(analysis->reachable_functions);
     core_list_free(analysis->emitted_functions);
+    core_list_free(analysis->callback_handlers);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
     core_list_free(analysis->record_requests);

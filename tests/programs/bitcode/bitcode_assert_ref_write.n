@@ -1,0 +1,8 @@
+func fill(target: Ref[int]) -> bool {
+    ref_write(target, 7)
+    return true
+}
+
+var value: int = 0
+assert fill(ref value)
+require value == 7

@@ -421,8 +421,6 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
     static const core_string_t required[] = {
         CORE_STRING_STATIC("n00bb.semantic-ready"),
         CORE_STRING_STATIC("n00bb.bootstrap-pipeline-ran"),
-        CORE_STRING_STATIC("n00bb.initializer-dependencies"),
-        CORE_STRING_STATIC(N00BB_INITIALIZER_ORDER_DOMAIN),
     };
     for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
         if (core_link_unit_require_contribution(link, (core_string_t){0},
@@ -896,7 +894,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_list_new(core_translation_unit_ptr_t);
     bool ok = link && analysis
         && core_link_unit_root_count(link) == 1
-        && n00bb_collect_initializer_order(link, &order);
+        && analysis->initializer_order.len == analysis->units.len;
+    for (size_t i = 0; ok && i < analysis->initializer_order.len; i++)
+        core_list_push(order, analysis->initializer_order.data[i]);
     if (!ok) {
         core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0010"),

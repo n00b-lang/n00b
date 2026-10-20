@@ -141,34 +141,7 @@ root_set_union(root_set_t *into, const root_set_t *from, bool *changed)
     return true;
 }
 
-enum { REACH_SELF, REACH_CONTENTS, REACH_KINDS };
-
 typedef struct {
-    uint64_t from[REACH_KINDS];
-    bool nonlocal;
-    bool fresh;
-    bool shared;
-} carried_t;
-
-typedef struct {
-    ir_func_t *function;
-    uint64_t writes[REACH_KINDS];
-    uint64_t escapes[REACH_KINDS];
-    uint64_t leaks[REACH_KINDS];
-    uint64_t receives;
-    bool receives_fresh;
-    bool receives_nonlocal;
-    carried_t *carried;
-    uint32_t n_carried;
-    bool writes_nonlocal;
-    bool opaque;
-} effects_t;
-
-typedef struct {
-    effects_t **items;
-    size_t len;
-    size_t cap;
-    pointer_map_t index;
     pointer_map_t contents_index;
     ir_value_t **contents;
     ir_value_t **contents_base;
@@ -177,7 +150,7 @@ typedef struct {
     uint32_t contents_cap;
     th_ctx *types;
     bool failed;
-} effects_table_t;
+} contents_table_t;
 
 static th_type *
 contents_type(th_type *type)
@@ -305,7 +278,7 @@ contents_may_hold_buffer(th_ctx *types, th_type *type, uint32_t depth)
 }
 
 static ir_value_t *
-contents_root(effects_table_t *table, ir_value_t *base)
+contents_root(contents_table_t *table, ir_value_t *base)
 {
     uint32_t slot = 0;
     if (pointer_map_get(&table->contents_index, base, &slot))
@@ -350,7 +323,7 @@ contents_root(effects_table_t *table, ir_value_t *base)
 }
 
 static bool
-is_contents_root(const effects_table_t *table, const ir_value_t *root)
+is_contents_root(const contents_table_t *table, const ir_value_t *root)
 {
     uint32_t slot = 0;
     return root && root->kind != IR_VAL_PARAM
@@ -359,7 +332,7 @@ is_contents_root(const effects_table_t *table, const ir_value_t *root)
 }
 
 static ir_value_t *
-contents_base(const effects_table_t *table, const ir_value_t *root)
+contents_base(const contents_table_t *table, const ir_value_t *root)
 {
     uint32_t slot = 0;
     return is_contents_root(table, root)
@@ -368,35 +341,14 @@ contents_base(const effects_table_t *table, const ir_value_t *root)
 }
 
 static void
-effects_table_free(effects_table_t *table)
+contents_table_free(contents_table_t *table)
 {
     for (uint32_t i = 0; i < table->contents_len; i++)
         free(table->contents[i]);
     free(table->contents);
     free(table->contents_base);
     free(table->contents_hold_buffer);
-    for (size_t i = 0; i < table->len; i++) {
-        free(table->items[i]->carried);
-        free(table->items[i]);
-    }
-    free(table->items);
-    pointer_map_free(&table->index);
     pointer_map_free(&table->contents_index);
-}
-
-static bool
-function_is_native(const ir_func_t *function)
-{
-    return ir_annot_get((ir_annots_t *)&function->annots,
-                        CORE_STRING_STATIC("n00bb.abi.native")) != nullptr;
-}
-
-static bool
-native_calls_n00b(const ir_func_t *function)
-{
-    return ir_annot_get((ir_annots_t *)&function->annots,
-                        CORE_STRING_STATIC("n00bb.native.calls-n00b"))
-        != nullptr;
 }
 
 static bool
@@ -429,62 +381,24 @@ carried_count(const ir_func_t *function)
     return 1 + (signature ? (uint32_t)ir_call_output_count(signature) : 0);
 }
 
-static effects_t *
-effects_for(effects_table_t *table, ir_func_t *function)
+bool
+n00bb_buffer_native_flow(const ir_func_t *function, ir_sflow_t *out)
 {
-    uint32_t slot = 0;
-    if (pointer_map_get(&table->index, function, &slot))
-        return table->items[slot];
-    if (table->len == table->cap) {
-        size_t cap = table->cap ? table->cap * 2 : 64;
-        effects_t **items = realloc(table->items, cap * sizeof(*items));
-        if (!items) {
-            table->failed = true;
-            return nullptr;
-        }
-        table->items = items;
-        table->cap = cap;
+    if (n00bb_native_calls_n00b(function)) {
+        *out = ir_sflow_opaque();
+        return true;
     }
-    effects_t *effects = calloc(1, sizeof(*effects));
     uint32_t n_carried = carried_count(function);
-    carried_t *carried = effects ? calloc(n_carried, sizeof(*carried))
-                                 : nullptr;
-    if (!carried) {
-        free(effects);
-        table->failed = true;
-        return nullptr;
-    }
-    table->items[table->len] = effects;
-    *effects = (effects_t){
-        .function = function, .carried = carried, .n_carried = n_carried,
+    *out = (ir_sflow_t){
+        .n_carried = n_carried,
+        .carried = core_alloc_array(ir_scarried_t, n_carried),
     };
-    bool opaque = !function->n_blocks
-        && (!function_is_native(function) || native_calls_n00b(function));
-    if (opaque) {
-        for (int kind = 0; kind < REACH_KINDS; kind++)
-            effects->writes[kind] = effects->escapes[kind]
-                = effects->leaks[kind] = UINT64_MAX;
-        effects->receives = UINT64_MAX;
-        effects->receives_fresh = effects->receives_nonlocal = true;
-        effects->writes_nonlocal = true;
-        effects->opaque = true;
-    }
-    for (uint32_t slot = 0; !function->n_blocks && slot < n_carried;
-         slot++)
-        carried[slot] = (carried_t){
-            .from = {UINT64_MAX, UINT64_MAX},
-            .nonlocal = opaque,
-            .fresh = !opaque,
+    for (uint32_t slot = 0; slot < n_carried; slot++)
+        out->carried[slot] = (ir_scarried_t){
+            .from = {UINT64_MAX, UINT64_MAX}, .fresh = true,
         };
-    if (function_is_write_lock(function)) effects->writes[REACH_SELF] = 1;
-    if (!pointer_map_put(&table->index, function, (uint32_t)table->len)) {
-        free(carried);
-        free(effects);
-        table->failed = true;
-        return nullptr;
-    }
-    table->len++;
-    return effects;
+    if (function_is_write_lock(function)) out->writes[IR_SFLOW_SELF] = 1;
+    return true;
 }
 
 static ir_value_t *
@@ -493,16 +407,6 @@ operand_at(const ir_instr_t *instruction, uint32_t index)
     const ir_operand_t *operand = &instruction->operands[index];
     if (operand->kind == IR_OPD_ARG) return operand->value;
     return ir_operand_value(operand);
-}
-
-static ir_func_t *
-direct_callee(const ir_instr_t *instruction)
-{
-    if (instruction->op != IR_OP_CALL || !instruction->n_operands)
-        return nullptr;
-    ir_value_t *target = operand_at(instruction, 0);
-    return target && target->kind == IR_VAL_FUNC
-        ? n00bb_cached_body(target->owner) : nullptr;
 }
 
 static bool
@@ -515,7 +419,8 @@ is_call(const ir_instr_t *instruction)
 typedef struct {
     ir_func_t *function;
     th_ctx *types;
-    effects_table_t *effects;
+    contents_table_t *table;
+    ir_summaries_t *summaries;
     pointer_map_t slots;
     root_set_t *origins;
     root_set_t *memory;
@@ -645,8 +550,8 @@ load_roots(origins_t *state, const root_set_t *address, root_set_t *into)
                 return false;
         }
         else if (root != &nonlocal_root
-                 && !is_contents_root(state->effects, root)) {
-            ir_value_t *contents = contents_root(state->effects, root);
+                 && !is_contents_root(state->table, root)) {
+            ir_value_t *contents = contents_root(state->table, root);
             if (!contents || !root_set_add(into, contents, nullptr)
                 || (root->kind != IR_VAL_PARAM
                     && !root_set_add(into, root, nullptr)))
@@ -700,17 +605,17 @@ parameter_bit(const ir_value_t *root)
 }
 
 static const ir_value_t *
-reached_parameter(const effects_table_t *table, const ir_value_t *root,
+reached_parameter(const contents_table_t *table, const ir_value_t *root,
                   int *kind)
 {
     if (root == &nonlocal_root) return nullptr;
     if (root->kind == IR_VAL_PARAM) {
-        *kind = REACH_SELF;
+        *kind = IR_SFLOW_SELF;
         return root;
     }
     const ir_value_t *base = contents_base(table, root);
     if (base && base->kind == IR_VAL_PARAM) {
-        *kind = REACH_CONTENTS;
+        *kind = IR_SFLOW_CONTENTS;
         return base;
     }
     return nullptr;
@@ -745,8 +650,8 @@ escape_into(origins_t *state, ir_value_t *target, const root_set_t *stored,
             bool *changed)
 {
     ir_value_t *contents = target == &nonlocal_root
-        || is_contents_root(state->effects, target)
-        ? target : contents_root(state->effects, target);
+        || is_contents_root(state->table, target)
+        ? target : contents_root(state->table, target);
     if (!contents) return false;
     root_set_t leaving = {0};
     bool ok = true;
@@ -754,7 +659,7 @@ escape_into(origins_t *state, ir_value_t *target, const root_set_t *stored,
         if (stored->items[i] != target && stored->items[i] != contents)
             ok = root_set_add(&leaving, stored->items[i], nullptr);
     int kind = 0;
-    const ir_value_t *parameter = reached_parameter(state->effects, target,
+    const ir_value_t *parameter = reached_parameter(state->table, target,
                                                     &kind);
     if (parameter && leaving.len) {
         state->receives |= parameter_bit(parameter);
@@ -779,7 +684,7 @@ receive_into(origins_t *state, const root_set_t *targets,
     int kind = 0;
     for (uint32_t i = 0; ok && incoming->len && i < targets->len; i++) {
         ir_value_t *target = targets->items[i];
-        const ir_value_t *parameter = reached_parameter(state->effects,
+        const ir_value_t *parameter = reached_parameter(state->table,
                                                         target, &kind);
         if (target == &nonlocal_root)
             ok = record_escape(state, incoming, true, changed);
@@ -799,23 +704,43 @@ receive_into(origins_t *state, const root_set_t *targets,
     return ok;
 }
 
-static bool
-call_effects(origins_t *state, const ir_instr_t *call, effects_t **effects)
+typedef struct {
+    const ir_sflow_t *flow;
+    uint32_t targets;
+} callee_flow_t;
+
+static void
+collect_callee_flow(void *context, const ir_func_t *target,
+                    const ir_summary_t *summary)
 {
-    ir_func_t *callee = direct_callee(call);
-    *effects = callee ? effects_for(state->effects, callee) : nullptr;
-    return !callee || *effects;
+    (void)target;
+    callee_flow_t *callee = context;
+    callee->flow = callee->targets++ ? nullptr : ir_summary_flow(summary);
+}
+
+static const ir_sflow_t *
+call_effects(origins_t *state, const ir_instr_t *call)
+{
+    callee_flow_t callee = {0};
+    return ir_summary_call_callees(state->summaries, call,
+                                   collect_callee_flow, &callee)
+        ? callee.flow : nullptr;
+}
+
+static uint32_t
+first_argument(const ir_instr_t *call, const ir_sflow_t *effects)
+{
+    return call->op == IR_OP_CALL || (effects && !effects->opaque) ? 1 : 0;
 }
 
 static bool
 call_carried(origins_t *state, const ir_instr_t *call, uint32_t slot,
              ir_value_t *fresh, root_set_t *into)
 {
-    effects_t *effects = nullptr;
-    if (!call_effects(state, call, &effects)) return false;
-    const carried_t *carried = effects && !effects->opaque
+    const ir_sflow_t *effects = call_effects(state, call);
+    const ir_scarried_t *carried = effects && !effects->opaque
         && slot < effects->n_carried ? &effects->carried[slot] : nullptr;
-    uint32_t first = call->op == IR_OP_CALL ? 1 : 0;
+    uint32_t first = first_argument(call, effects);
     bool ok = true;
     for (uint32_t i = first; ok && i < call->n_operands; i++) {
         ir_value_t *argument = operand_at(call, i);
@@ -826,11 +751,11 @@ call_carried(origins_t *state, const ir_instr_t *call, uint32_t slot,
             && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         if (ok && (!carried
-                   || effect_bit(carried->from, index, REACH_SELF)))
+                   || effect_bit(carried->from, index, IR_SFLOW_SELF)))
             ok = root_set_union(into, &roots, nullptr);
         if (ok && contents_carry_references(state, argument)
             && (!carried
-                || effect_bit(carried->from, index, REACH_CONTENTS)))
+                || effect_bit(carried->from, index, IR_SFLOW_CONTENTS)))
             ok = root_set_union(into, &contents, nullptr);
         free(roots.items);
         free(contents.items);
@@ -873,10 +798,9 @@ static bool
 transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
               bool *changed)
 {
-    effects_t *effects = nullptr;
-    if (!call_effects(state, instruction, &effects)) return false;
+    const ir_sflow_t *effects = call_effects(state, instruction);
     bool opaque = !effects || effects->opaque;
-    uint32_t first = instruction->op == IR_OP_CALL ? 1 : 0;
+    uint32_t first = first_argument(instruction, effects);
     root_set_t kept = {0};
     bool ok = true;
     for (uint32_t i = first; ok && i < instruction->n_operands; i++) {
@@ -888,9 +812,9 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
             && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         bool carry = contents_carry_references(state, argument);
-        for (int kind = 0; ok && kind < REACH_KINDS; kind++) {
-            if (kind == REACH_CONTENTS && !carry) continue;
-            root_set_t *reached = kind == REACH_SELF ? &roots : &contents;
+        for (int kind = 0; ok && kind < IR_SFLOW_KINDS; kind++) {
+            if (kind == IR_SFLOW_CONTENTS && !carry) continue;
+            root_set_t *reached = kind == IR_SFLOW_SELF ? &roots : &contents;
             if (!opaque && !effect_bit(effects->escapes, index, kind))
                 continue;
             bool leak = opaque || effect_bit(effects->leaks, index, kind);
@@ -1071,18 +995,15 @@ static bool
 call_write_roots(origins_t *state, ir_instr_t *instruction,
                  root_set_t *written, bool *writes_nonlocal)
 {
-    ir_func_t *callee = direct_callee(instruction);
-    effects_t *effects = callee ? effects_for(state->effects, callee)
-                                : nullptr;
-    if (callee && !effects) return false;
+    const ir_sflow_t *effects = call_effects(state, instruction);
     bool opaque = !effects || effects->opaque;
     if (opaque || effects->writes_nonlocal) *writes_nonlocal = true;
-    uint32_t first = instruction->op == IR_OP_CALL ? 1 : 0;
+    uint32_t first = first_argument(instruction, effects);
     for (uint32_t i = first; i < instruction->n_operands; i++) {
         uint32_t index = i - first;
-        bool self = opaque || effect_bit(effects->writes, index, REACH_SELF);
+        bool self = opaque || effect_bit(effects->writes, index, IR_SFLOW_SELF);
         bool contents = opaque
-            || effect_bit(effects->writes, index, REACH_CONTENTS);
+            || effect_bit(effects->writes, index, IR_SFLOW_CONTENTS);
         if (!self && !contents) continue;
         root_set_t roots = {0};
         bool ok = seed_value(state, operand_at(instruction, i), &roots,
@@ -1155,7 +1076,8 @@ instruction_write_roots(origins_t *state, ir_instr_t *instruction,
 
 static bool
 summarize_carried(origins_t *state, const ir_instr_t *exit,
-                  carried_t *carried, root_set_t *fresh, uint32_t n_carried)
+                  ir_scarried_t *carried, root_set_t *fresh,
+                  uint32_t n_carried)
 {
     uint32_t outputs = exit->op == IR_OP_RETURN ? n_carried - 1 : 0;
     uint32_t result_at = exit->n_operands > outputs
@@ -1170,7 +1092,7 @@ summarize_carried(origins_t *state, const ir_instr_t *exit,
         int kind = 0;
         for (uint32_t r = 0; ok && r < roots.len; r++) {
             ir_value_t *root = roots.items[r];
-            const ir_value_t *parameter = reached_parameter(state->effects,
+            const ir_value_t *parameter = reached_parameter(state->table,
                                                             root, &kind);
             if (root == &nonlocal_root) carried[slot].nonlocal = true;
             else if (parameter)
@@ -1179,7 +1101,7 @@ summarize_carried(origins_t *state, const ir_instr_t *exit,
                 carried[slot].fresh = true;
                 ok = root_set_add(&fresh[slot], root, nullptr);
                 if (root_set_has(&state->escaped, root))
-                    carried[slot].from[REACH_CONTENTS] |= state->receives;
+                    carried[slot].from[IR_SFLOW_CONTENTS] |= state->receives;
                 if (root_set_has(&state->leaked, root))
                     carried[slot].nonlocal = true;
                 if (root_set_has(&state->received, root))
@@ -1192,7 +1114,8 @@ summarize_carried(origins_t *state, const ir_instr_t *exit,
 }
 
 static void
-mark_shared(carried_t *carried, const root_set_t *fresh, uint32_t n_carried)
+mark_shared(ir_scarried_t *carried, const root_set_t *fresh,
+            uint32_t n_carried)
 {
     for (uint32_t s = 0; s < n_carried; s++)
         for (uint32_t t = 0; t < n_carried && !carried[s].shared; t++)
@@ -1203,23 +1126,31 @@ mark_shared(carried_t *carried, const root_set_t *fresh, uint32_t n_carried)
                 }
 }
 
-static bool
-summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
-          bool *changed)
+bool
+n00bb_buffer_flow(void *context, ir_summaries_t *summaries,
+                  ir_func_t *function, const ir_sflow_t *previous,
+                  ir_sflow_t *out)
 {
-    ir_func_t *function = effects->function;
-    if (!function->n_blocks || effects->opaque) return true;
+    (void)context;
+    th_ctx *types = ir_module_types(function->owner);
+    contents_table_t table = {.types = types};
     origins_t state = {
-        .function = function, .types = types, .effects = table,
+        .function = function, .types = types, .table = &table,
+        .summaries = summaries,
     };
+    uint32_t n_carried = carried_count(function);
+    *out = (ir_sflow_t){
+        .writes = {previous->writes[IR_SFLOW_SELF],
+                   previous->writes[IR_SFLOW_CONTENTS]},
+        .n_carried = n_carried,
+        .carried = core_alloc_array(ir_scarried_t, n_carried),
+    };
+    if (function_is_write_lock(function)) out->writes[IR_SFLOW_SELF] |= 1;
     bool ok = origins_solve(&state);
-    uint64_t writes[REACH_KINDS] = {
-        effects->writes[REACH_SELF], effects->writes[REACH_CONTENTS],
-    };
-    uint64_t escapes[REACH_KINDS] = {0};
-    carried_t *carried = calloc(effects->n_carried, sizeof(*carried));
-    root_set_t *fresh = calloc(effects->n_carried, sizeof(*fresh));
-    ok = ok && carried && fresh;
+    uint64_t *writes = out->writes;
+    ir_scarried_t *carried = out->carried;
+    root_set_t *fresh = calloc(n_carried, sizeof(*fresh));
+    ok = ok && fresh;
     bool writes_nonlocal = false;
     int kind = 0;
     for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
@@ -1233,101 +1164,45 @@ summarize(effects_table_t *table, th_ctx *types, effects_t *effects,
             if (nonlocal) writes_nonlocal = true;
             for (uint32_t r = 0; ok && r < roots.len; r++) {
                 const ir_value_t *parameter
-                    = reached_parameter(table, roots.items[r], &kind);
+                    = reached_parameter(&table, roots.items[r], &kind);
                 if (roots.items[r] == &nonlocal_root) writes_nonlocal = true;
                 else if (parameter) writes[kind] |= parameter_bit(parameter);
             }
             if (ok && (instruction->op == IR_OP_RETURN
                        || instruction->op == IR_OP_FAIL))
                 ok = summarize_carried(&state, instruction, carried, fresh,
-                                       effects->n_carried);
+                                       n_carried);
             free(roots.items);
         }
     }
     for (uint32_t r = 0; ok && r < state.escaped.len; r++) {
         const ir_value_t *parameter
-            = reached_parameter(table, state.escaped.items[r], &kind);
-        if (parameter) escapes[kind] |= parameter_bit(parameter);
+            = reached_parameter(&table, state.escaped.items[r], &kind);
+        if (parameter) out->escapes[kind] |= parameter_bit(parameter);
     }
-    uint64_t leaks[REACH_KINDS] = {0};
     for (uint32_t r = 0; ok && r < state.leaked.len; r++) {
         const ir_value_t *parameter
-            = reached_parameter(table, state.leaked.items[r], &kind);
-        if (parameter) leaks[kind] |= parameter_bit(parameter);
+            = reached_parameter(&table, state.leaked.items[r], &kind);
+        if (parameter) out->leaks[kind] |= parameter_bit(parameter);
     }
-    uint64_t receives = state.receives;
-    bool receives_fresh = false;
-    bool receives_nonlocal = false;
+    out->receives = state.receives;
     for (uint32_t r = 0; ok && r < state.received.len; r++) {
         ir_value_t *root = state.received.items[r];
         if (root == &nonlocal_root
             || root_set_has(&state.leaked, root))
-            receives_nonlocal = true;
+            out->receives_nonlocal = true;
         if (root != &nonlocal_root
-            && !reached_parameter(table, root, &kind))
-            receives_fresh = true;
+            && !reached_parameter(&table, root, &kind))
+            out->receives_fresh = true;
     }
-    if (ok) mark_shared(carried, fresh, effects->n_carried);
-    for (uint32_t s = 0; fresh && s < effects->n_carried; s++)
+    out->writes_nonlocal = writes_nonlocal;
+    if (ok) mark_shared(carried, fresh, n_carried);
+    for (uint32_t s = 0; fresh && s < n_carried; s++)
         free(fresh[s].items);
     free(fresh);
     origins_free(&state);
-    if (!ok) {
-        free(carried);
-        return false;
-    }
-    if (memcmp(writes, effects->writes, sizeof(writes))
-        || memcmp(escapes, effects->escapes, sizeof(escapes))
-        || memcmp(carried, effects->carried,
-                  effects->n_carried * sizeof(*carried))
-        || memcmp(leaks, effects->leaks, sizeof(leaks))
-        || receives != effects->receives
-        || receives_fresh != effects->receives_fresh
-        || receives_nonlocal != effects->receives_nonlocal
-        || writes_nonlocal != effects->writes_nonlocal) {
-        memcpy(effects->writes, writes, sizeof(writes));
-        memcpy(effects->escapes, escapes, sizeof(escapes));
-        memcpy(effects->leaks, leaks, sizeof(leaks));
-        effects->receives = receives;
-        effects->receives_fresh = receives_fresh;
-        effects->receives_nonlocal = receives_nonlocal;        free(effects->carried);
-        effects->carried = carried;
-        effects->writes_nonlocal = writes_nonlocal;
-        *changed = true;
-    }
-    else free(carried);
-    return true;
-}
-
-static bool
-collect_reachable(effects_table_t *table, ir_func_t *root)
-{
-    size_t start = table->len;
-    if (!effects_for(table, root)) return false;
-    for (size_t at = start; at < table->len; at++) {
-        ir_func_t *function = table->items[at]->function;
-        for (uint32_t b = 0; b < function->n_blocks; b++) {
-            ir_block_t *block = function->blocks[b];
-            for (uint32_t i = 0; i < block->n_instrs; i++) {
-                ir_func_t *callee = direct_callee(block->instrs[i]);
-                if (callee && !effects_for(table, callee)) return false;
-            }
-        }
-    }
-    return !table->failed;
-}
-
-static bool
-solve_effects(effects_table_t *table, th_ctx *types)
-{
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (size_t i = 0; i < table->len; i++)
-            if (!summarize(table, types, table->items[i], &changed))
-                return false;
-    }
-    return true;
+    contents_table_free(&table);
+    return ok;
 }
 
 typedef struct {
@@ -1344,9 +1219,7 @@ typedef struct {
     origins_t *origins;
     value_list_t tracked;
     pointer_map_t tracked_index;
-    uint64_t *live_in;
-    uint64_t *live_out;
-    uint32_t words;
+    ir_values_liveness_t *liveness;
 } window_t;
 
 static void
@@ -1381,26 +1254,6 @@ report_borrow(window_t *window, const ir_instr_t *offender,
     if (offender && label.data)
         ir_diag_secondary(window->diagnostics, diagnostic, offender->span,
                           label);
-}
-
-static void
-bitset_set(uint64_t *bits, uint32_t index)
-{
-    bits[index / 64] |= UINT64_C(1) << (index % 64);
-}
-
-static void
-bitset_clear(uint64_t *bits, uint32_t index)
-{
-    bits[index / 64] &= ~(UINT64_C(1) << (index % 64));
-}
-
-static bool
-bitset_empty(const uint64_t *bits, uint32_t words)
-{
-    for (uint32_t i = 0; i < words; i++)
-        if (bits[i]) return false;
-    return true;
 }
 
 static bool
@@ -1471,112 +1324,6 @@ collect_tracked(window_t *window)
         }
     }
     return true;
-}
-
-static void
-uses_and_defs(window_t *window, const ir_instr_t *instruction,
-              uint64_t *live)
-{
-    uint32_t index = 0;
-    if (instruction->dest
-        && tracked_index(window, instruction->dest, &index))
-        bitset_clear(live, index);
-    if (instruction->op == IR_OP_COPY && instruction->dest_local
-        && tracked_index(window, ir_local_value(window->function,
-                                                instruction->dest_local),
-                         &index))
-        bitset_clear(live, index);
-    if (instruction->op == IR_OP_PHI) return;
-    for (uint32_t o = 0; o < instruction->n_operands; o++)
-        if (tracked_index(window, operand_at(instruction, o), &index))
-            bitset_set(live, index);
-}
-
-static void
-phi_edge_uses(window_t *window, const ir_block_t *from, const ir_block_t *to,
-              uint64_t *live)
-{
-    for (uint32_t i = 0; i < to->n_instrs && to->instrs[i]->op == IR_OP_PHI;
-         i++) {
-        const ir_instr_t *phi = to->instrs[i];
-        for (uint32_t o = 0; o < phi->n_operands; o++) {
-            const ir_operand_t *operand = &phi->operands[o];
-            uint32_t index = 0;
-            if (operand->kind == IR_OPD_PHI_ARM && operand->phi.block == from
-                && tracked_index(window, operand->phi.value, &index))
-                bitset_set(live, index);
-        }
-    }
-}
-
-static bool
-edge_live(window_t *window, const ir_block_t *from, const ir_block_t *to,
-          bool *live_edge)
-{
-    uint64_t *live = calloc(window->words, sizeof(*live));
-    if (!live) return false;
-    memcpy(live, &window->live_in[(size_t)to->index * window->words],
-           window->words * sizeof(*live));
-    phi_edge_uses(window, from, to, live);
-    *live_edge = !bitset_empty(live, window->words);
-    free(live);
-    return true;
-}
-
-static bool
-solve_liveness(window_t *window)
-{
-    ir_func_t *function = window->function;
-    window->words = (window->tracked.len + 63) / 64;
-    size_t total = (size_t)function->n_blocks * window->words;
-    window->live_in = calloc(total ? total : 1, sizeof(uint64_t));
-    window->live_out = calloc(total ? total : 1, sizeof(uint64_t));
-    uint64_t *scratch = calloc(window->words, sizeof(uint64_t));
-    if (!window->live_in || !window->live_out || !scratch) {
-        free(scratch);
-        return false;
-    }
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (uint32_t b = function->n_blocks; b-- > 0;) {
-            ir_block_t *block = function->blocks[b];
-            memset(scratch, 0, window->words * sizeof(*scratch));
-            ir_instr_t *terminator = ir_block_terminator(block);
-            for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
-                 s++) {
-                ir_block_t *successor = ir_succ_at(terminator, s);
-                for (uint32_t w = 0; w < window->words; w++)
-                    scratch[w] |= window->live_in[
-                        (size_t)successor->index * window->words + w];
-                phi_edge_uses(window, block, successor, scratch);
-            }
-            memcpy(&window->live_out[(size_t)b * window->words], scratch,
-                   window->words * sizeof(*scratch));
-            for (uint32_t i = block->n_instrs; i-- > 0;)
-                uses_and_defs(window, block->instrs[i], scratch);
-            uint64_t *in = &window->live_in[(size_t)b * window->words];
-            if (memcmp(in, scratch, window->words * sizeof(*scratch))) {
-                memcpy(in, scratch, window->words * sizeof(*scratch));
-                changed = true;
-            }
-        }
-    }
-    free(scratch);
-    return true;
-}
-
-static void
-live_after_each(window_t *window, const ir_block_t *block, uint64_t *after,
-                uint64_t *live)
-{
-    memcpy(live, &window->live_out[(size_t)block->index * window->words],
-           window->words * sizeof(*live));
-    for (uint32_t i = block->n_instrs; i-- > 0;) {
-        memcpy(&after[(size_t)i * window->words], live,
-               window->words * sizeof(*live));
-        uses_and_defs(window, block->instrs[i], live);
-    }
 }
 
 static uint32_t
@@ -1784,8 +1531,7 @@ typedef struct {
     uint8_t *state;
     bool *entered;
     bool *continued;
-    uint64_t *after;
-    uint64_t *scratch;
+    bool *after;
     uint32_t after_cap;
     ir_instr_t *offender;
     core_string_t reason;
@@ -1795,7 +1541,7 @@ typedef struct {
 } walk_t;
 
 static bool
-root_is_buffer(const effects_table_t *table, const ir_value_t *root)
+root_is_buffer(const contents_table_t *table, const ir_value_t *root)
 {
     uint32_t slot = 0;
     if (root == &nonlocal_root) return true;
@@ -1808,7 +1554,7 @@ root_is_buffer(const effects_table_t *table, const ir_value_t *root)
 }
 
 static bool
-buffer_roots_meet(const effects_table_t *table, const root_set_t *left,
+buffer_roots_meet(const contents_table_t *table, const root_set_t *left,
                   const root_set_t *right)
 {
     for (uint32_t i = 0; i < left->len; i++)
@@ -1821,12 +1567,12 @@ buffer_roots_meet(const effects_table_t *table, const root_set_t *left,
 static bool
 roots_reach_global(const walk_t *walk, const root_set_t *roots)
 {
-    const effects_table_t *table = walk->window->origins->effects;
+    const contents_table_t *table = walk->window->origins->table;
     for (uint32_t i = 0; i < roots->len; i++) {
         ir_value_t *root = roots->items[i];
         if (!root_is_buffer(table, root)) continue;
         if (root == &nonlocal_root || root->kind == IR_VAL_PARAM
-            || is_contents_root(walk->window->origins->effects, root)
+            || is_contents_root(table, root)
             || root_set_has(&walk->window->origins->escaped, root))
             return true;
     }
@@ -1911,8 +1657,11 @@ call_wraps_view(window_t *window, const ir_instr_t *instruction)
     if (!is_call(instruction)) return false;
     th_type *signature = ir_instr_call_signature(instruction);
     signature = signature ? th_resolve(signature) : nullptr;
-    if (!signature || th_kind_of(signature) != TH_FUNCTION)
-        signature = function_signature(direct_callee(instruction));
+    ir_value_t *callee = instruction->op == IR_OP_CALL
+            && instruction->n_operands ? operand_at(instruction, 0) : nullptr;
+    if ((!signature || th_kind_of(signature) != TH_FUNCTION) && callee
+        && callee->kind == IR_VAL_FUNC)
+        signature = function_signature(callee->owner);
     if (!signature) return false;
     return !is_view_type(window, th_func_ret(signature))
         && !is_view_type(window, th_func_error(signature));
@@ -1939,9 +1688,8 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     }
     bool call = is_call(instruction);
     if (!call && !writes_memory(instruction)) return true;
-    ir_func_t *callee = call ? direct_callee(instruction) : nullptr;
-    effects_t *effects = callee
-        ? effects_for(window->origins->effects, callee) : nullptr;
+    const ir_sflow_t *effects = call
+        ? call_effects(window->origins, instruction) : nullptr;
     if (call && (!effects || effects->opaque)) {
         blame(walk, instruction, CORE_STRING_STATIC(
               "this indirect or unknown call may write the borrowed Buffer"));
@@ -1951,7 +1699,7 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     bool writes_nonlocal = false;
     bool ok = instruction_write_roots(window->origins, instruction, &written,
                                       &writes_nonlocal);
-    if (ok && (buffer_roots_meet(window->origins->effects, &written,
+    if (ok && (buffer_roots_meet(window->origins->table, &written,
                                  &walk->source)
                || (walk->source_global
                    && (writes_nonlocal
@@ -1969,20 +1717,20 @@ walk_block(walk_t *walk, ir_block_t *block, uint32_t start,
 {
     window_t *window = walk->window;
     if (block->n_instrs > walk->after_cap) {
-        uint64_t *after = realloc(walk->after,
-            (size_t)block->n_instrs * window->words * sizeof(uint64_t));
+        bool *after = realloc(walk->after,
+                              (size_t)block->n_instrs * sizeof(*after));
         if (!after) return false;
         walk->after = after;
         walk->after_cap = block->n_instrs;
     }
-    live_after_each(window, block, walk->after, walk->scratch);
+    if (!ir_values_live_after_each(window->liveness, block, walk->after))
+        return false;
     ir_instr_t *terminator = ir_block_terminator(block);
     for (uint32_t i = start; i < block->n_instrs; i++) {
         ir_instr_t *instruction = block->instrs[i];
         if (!check_instruction(walk, instruction)) return false;
         if (instruction == terminator) break;
-        if (bitset_empty(&walk->after[(size_t)i * window->words],
-                         window->words)) {
+        if (!walk->after[i]) {
             *reaches_end = false;
             return add_end_site(&walk->sites,
                                 (end_site_t){.after = instruction});
@@ -2022,10 +1770,8 @@ walk_window(walk_t *walk)
     walk->entered = calloc(count, sizeof(*walk->entered));
     walk->continued = calloc((size_t)count * count,
                              sizeof(*walk->continued));
-    walk->scratch = calloc(window->words, sizeof(uint64_t));
     walk_frame_t *stack = calloc(count + 1, sizeof(*stack));
-    bool ok = walk->state && walk->entered && walk->continued
-        && walk->scratch && stack;
+    bool ok = walk->state && walk->entered && walk->continued && stack;
     ir_block_t *origin = window->conversion->block;
     bool reaches_end = false;
     ok = ok && walk_block(walk, origin,
@@ -2045,10 +1791,8 @@ walk_window(walk_t *walk)
             continue;
         }
         ir_block_t *successor = ir_succ_at(terminator, frame->successor++);
-        bool live = false;
-        ok = edge_live(window, frame->block, successor, &live);
-        if (!ok) break;
-        if (!live) {
+        if (!ir_values_live_on_edge(window->liveness, frame->block,
+                                    successor)) {
             ok = add_end_site(&walk->sites, (end_site_t){
                 .from = frame->block, .to = successor,
             });
@@ -2151,7 +1895,9 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
     };
     walk_t walk = {.window = &window};
     bool ok = window.buffer && conversion->dest
-        && collect_tracked(&window) && solve_liveness(&window)
+        && collect_tracked(&window)
+        && (window.liveness = ir_values_liveness_new(function,
+                window.tracked.items, window.tracked.len))
         && seed_value(origins, window.buffer, &walk.source, nullptr)
         && expand_contents(origins, &walk.source);
     if (ok) {
@@ -2174,12 +1920,10 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
     free(walk.entered);
     free(walk.continued);
     free(walk.after);
-    free(walk.scratch);
     free(walk.source.items);
+    ir_values_liveness_free(window.liveness);
     free(window.tracked.items);
     pointer_map_free(&window.tracked_index);
-    free(window.live_in);
-    free(window.live_out);
     return accepted;
 }
 
@@ -2198,14 +1942,16 @@ collect_conversions(const ir_func_t *function, ir_instr_t **into)
 }
 
 static bool
-borrow_function(ir_diags_t *diagnostics, effects_table_t *table,
-                th_ctx *types, ir_func_t *function, size_t count)
+borrow_function(ir_diags_t *diagnostics, contents_table_t *table,
+                ir_summaries_t *summaries, th_ctx *types, ir_func_t *function,
+                size_t count)
 {
     ir_instr_t **conversions = calloc(count, sizeof(*conversions));
     if (!conversions) return false;
     collect_conversions(function, conversions);
     origins_t origins = {
-        .function = function, .types = types, .effects = table,
+        .function = function, .types = types, .table = table,
+        .summaries = summaries,
     };
     bool ok = true;
     for (size_t c = 0; ok && c < count; c++) {
@@ -2225,27 +1971,19 @@ borrow_function(ir_diags_t *diagnostics, effects_table_t *table,
 }
 
 bool
-n00bb_buffer_borrow_pass(ir_module_t *module, ir_diags_t *diagnostics)
+n00bb_buffer_borrow_pass(ir_module_t *module, ir_summaries_t *summaries,
+                         ir_diags_t *diagnostics)
 {
     th_ctx *types = ir_module_types(module);
-    effects_table_t table = {.types = types};
+    contents_table_t table = {.types = types};
     bool ok = true;
-    bool solved = false;
     for (size_t f = 0; ok && f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);
         size_t count = collect_conversions(function, nullptr);
-        if (!count) continue;
-        if (!solved) {
-            for (size_t g = 0; ok && g < ir_func_count(module); g++)
-                if (collect_conversions(ir_func_at(module, g), nullptr))
-                    ok = collect_reachable(&table, ir_func_at(module, g));
-            ok = ok && solve_effects(&table, types);
-            solved = true;
-        }
-        if (ok && !borrow_function(diagnostics, &table, types, function,
-                                   count))
+        if (count && !borrow_function(diagnostics, &table, summaries, types,
+                                      function, count))
             ok = false;
     }
-    effects_table_free(&table);
+    contents_table_free(&table);
     return ok;
 }

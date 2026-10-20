@@ -19,7 +19,6 @@ main(void)
     n00bb_storage_facts_t facts = {
         .is_typed_variable = true,
         .has_lexical_lifetime = true,
-        .alias_analysis_complete = true,
         .requested = CORE_STRING_STATIC("pool/opaque"),
         .required = true,
     };
@@ -48,34 +47,21 @@ main(void)
     facts.is_typed_variable = true;
     facts.required = false;
     facts.has_lexical_lifetime = true;
-    facts.escapes = true;
-    CHECK("escaping local requests runtime-managed dynamic storage",
+    CHECK("local without a requested class keeps lowering storage",
           n00bb_storage_decide(&facts, &dynamic_duration)
-              == N00BB_STORAGE_RUNTIME_DYNAMIC && dynamic_duration);
+              == N00BB_STORAGE_KEEP && !dynamic_duration);
     facts.is_reference = true;
     CHECK("reference binding does not select separate gc storage",
           n00bb_storage_decide(&facts, &dynamic_duration)
               == N00BB_STORAGE_KEEP && !dynamic_duration);
     facts.is_reference = false;
     facts.has_lexical_lifetime = false;
-    CHECK("escaping owning global does not receive local gc storage",
-          n00bb_storage_decide(&facts, &dynamic_duration)
-              == N00BB_STORAGE_KEEP && !dynamic_duration);
-    facts.has_lexical_lifetime = true;
-    facts.escapes = false;
-    facts.alias_analysis_complete = false;
-    facts.has_aliases = true;
-    CHECK("incomplete alias evidence defers placement to runtime",
-          n00bb_storage_decide(&facts, &dynamic_duration)
-              == N00BB_STORAGE_RUNTIME_DYNAMIC && dynamic_duration);
-    facts.has_aliases = false;
-    CHECK("incomplete aliases do not force closed scalar values dynamic",
+    CHECK("owning global does not receive local gc storage",
           n00bb_storage_decide(&facts, &dynamic_duration)
               == N00BB_STORAGE_KEEP && !dynamic_duration);
 
     n00bb_storage_placement_facts_t placement = {
         .has_lexical_lifetime = true,
-        .alias_analysis_complete = true,
         .size_known = true,
         .size_bytes = 128,
         .stack_limit_bytes = 256,

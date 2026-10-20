@@ -4951,67 +4951,6 @@ cache_alias_edges(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
-bool
-cache_escape_edges(parse_grammar_t *grammar, parse_tree_t *node,
-                   n00bb_tu_state_t *state)
-{
-    if (NT_IS(grammar, node, "typeof-expr")) return true;
-    parse_sym_entry_t *symbol = parse_tree_sym(node);
-    if (!symbol) {
-        parse_node_resolution_t resolution = parse_tree_resolution(node);
-        if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
-            symbol = resolution.target.symbol;
-    }
-    bool self_symbol = symbol && (symbol->kind == PARSE_SYM_VARIABLE
-                                  || symbol->kind == PARSE_SYM_PARAM);
-    bool self_ref = NT_IS(grammar, node, "unary-expr")
-        && core_string_eq(first_token_text(node), CORE_STRING_STATIC("ref"));
-    size_t count = self_symbol + self_ref;
-    n00bb_alias_edges_t *only_child = nullptr;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        n00bb_alias_edges_t *child = n00bb_node_escape_edges(
-            core_tree_child(node, i));
-        if (!child) continue;
-        count += child->count;
-        if (count == child->count) only_child = child;
-        else only_child = nullptr;
-    }
-    if (!count) return true;
-    if (only_child) {
-        n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
-        if (!facts) return false;
-        facts->escape_edges = only_child;
-        return true;
-    }
-    n00bb_alias_edges_t *result = core_arena_alloc(
-        &state->semantic_values, sizeof(*result));
-    n00bb_alias_edge_t *edges = core_arena_alloc(
-        &state->semantic_values, count * sizeof(*edges));
-    if (!result || !edges) return false;
-    size_t at = 0;
-    if (self_symbol)
-        edges[at++] = (n00bb_alias_edge_t){
-            .kind = N00BB_ALIAS_SYMBOL, .node = node, .symbol = symbol,
-        };
-    if (self_ref)
-        edges[at++] = (n00bb_alias_edge_t){
-            .kind = N00BB_ALIAS_REFERENCE, .node = node,
-            .symbol = direct_ref_target(grammar, node),
-        };
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        n00bb_alias_edges_t *child = n00bb_node_escape_edges(
-            core_tree_child(node, i));
-        if (!child) continue;
-        memcpy(edges + at, child->edges, child->count * sizeof(*edges));
-        at += child->count;
-    }
-    *result = (n00bb_alias_edges_t){ .edges = edges, .count = count };
-    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state, node);
-    if (!facts) return false;
-    facts->escape_edges = result;
-    return true;
-}
-
 parse_tree_t *
 member_access_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
@@ -9083,6 +9022,10 @@ n00bb_conversion_hook(th_ctx *types, th_type *from, th_type *to, void *site,
         th_type *element = nullptr;
         bool option_target = n00bb_option_type_element(resolved, &element);
         if (th_is_nil(from) && option_target) return true;
+        if (!option_target && th_kind_of(resolved) != TH_VAR
+            && n00bb_dereference_target(types, from, resolved))
+            return th_unify_in_place(types, th_ind_referent(from), resolved)
+                != nullptr;
         if (option_target && element && th_kind_of(from) != TH_VAR
             && !n00bb_option_type_element(from, nullptr))
             return th_unify_probe(types, from, element);
@@ -9621,13 +9564,6 @@ n00bb_node_alias_edges(parse_tree_t *node)
     return facts ? facts->alias_edges : nullptr;
 }
 
-n00bb_alias_edges_t *
-n00bb_node_escape_edges(parse_tree_t *node)
-{
-    n00bb_node_facts_t *facts = n00bb_node_facts(node);
-    return facts ? facts->escape_edges : nullptr;
-}
-
 bool
 alias_declaration_is_transparent(parse_tree_t *declaration)
 {
@@ -9943,11 +9879,6 @@ select_storage_classes(core_list_t(core_translation_unit_ptr_t) *units)
                         .has_lexical_lifetime =
                             scope_has_lexical_lifetime(scope),
                         .is_reference = is_reference_symbol(symbol),
-                        .has_aliases = symbol->alias_count
-                            || symbol->aliased_by_count,
-                        .escapes = symbol->lifetime.escapes,
-                        .alias_analysis_complete =
-                            symbol->alias_analysis_complete,
                         .required = symbol->storage_class_required,
                         .requested = symbol->requested_storage_class,
                         .selected = symbol->selected_storage_class,

@@ -7,13 +7,26 @@
 
 #include "lib/alloc.h"
 #include "lib/dict.h"
+#include "lib/hash.h"
 #include "lib/list.h"
 
+typedef struct datalog_tuple datalog_tuple_t;
+
 typedef struct {
+  core_datalog_relation_id_t relation;
+  datalog_tuple_t *tuple;
+} datalog_premise_t;
+core_list_decl(datalog_premise_t);
+
+struct datalog_tuple {
   core_datalog_symbol_t *values;
+  int32_t arity;
+  int32_t rule;
+  datalog_premise_t *premises;
+  size_t premise_count;
   bool recent;
   bool pending;
-} datalog_tuple_t;
+};
 typedef datalog_tuple_t *datalog_tuple_ptr_t;
 core_list_decl(datalog_tuple_ptr_t);
 core_list_decl(core_datalog_rule_t);
@@ -33,6 +46,7 @@ typedef struct {
   int32_t arity;
   int32_t stratum;
   core_list_t(datalog_tuple_ptr_t) tuples;
+  core_dict_t tuple_set;
   core_dict_t *column_indexes;
   bool indexes_dirty;
 } datalog_relation_t;
@@ -56,7 +70,22 @@ struct core_datalog_engine {
   core_datalog_symbol_t next_variable;
   int64_t iterations;
   int64_t fact_count;
+  bool provenance;
+  core_list_t(datalog_premise_t) trail;
 };
+
+static core_hash_value_t tuple_hash(void *key) {
+  const datalog_tuple_t *tuple = key;
+  return core_hash_raw(tuple->values,
+                       (size_t)tuple->arity * sizeof(*tuple->values));
+}
+
+static bool tuple_eq(const void *left, const void *right) {
+  const datalog_tuple_t *a = left;
+  const datalog_tuple_t *b = right;
+  return a->arity == b->arity &&
+         !memcmp(a->values, b->values, (size_t)a->arity * sizeof(*a->values));
+}
 
 struct core_datalog_rule_builder {
   core_datalog_literal_t head;
@@ -166,6 +195,7 @@ core_datalog_engine_t *core_datalog_engine_new(void) {
   engine->constants = core_list_new(datalog_string_ptr_t);
   engine->variables = core_list_new(datalog_string_ptr_t);
   engine->next_variable = CORE_DATALOG_VARIABLE_BASE;
+  engine->trail = core_list_new(datalog_premise_t);
   core_dict_init_string(&engine->relation_names);
   core_dict_init_string(&engine->constant_names);
   core_dict_init_string(&engine->variable_names);
@@ -201,9 +231,11 @@ void core_datalog_engine_free(core_datalog_engine_t *engine) {
     datalog_relation_t *relation = engine->relations.data[i];
     for (size_t j = 0; j < relation->tuples.len; j++) {
       core_free(relation->tuples.data[j]->values);
+      core_free(relation->tuples.data[j]->premises);
       core_free(relation->tuples.data[j]);
     }
     core_list_free(relation->tuples);
+    core_dict_free(&relation->tuple_set);
     for (int32_t col = 0; col < relation->arity; col++) {
       core_dict_t *index = &relation->column_indexes[col];
       core_dict_foreach(index, entry) core_free(entry->value);
@@ -230,6 +262,7 @@ void core_datalog_engine_free(core_datalog_engine_t *engine) {
   core_list_free(engine->rules);
   core_list_free(engine->constants);
   core_list_free(engine->variables);
+  core_list_free(engine->trail);
   core_free(engine);
 }
 
@@ -250,6 +283,7 @@ core_datalog_relation_id_t core_datalog_relation(core_datalog_engine_t *engine,
   relation->name = core_string_dup(name);
   relation->arity = arity;
   relation->tuples = core_list_new(datalog_tuple_ptr_t);
+  core_dict_init(&relation->tuple_set, tuple_hash, tuple_eq);
   relation->column_indexes =
       arity ? core_alloc_array(core_dict_t, (size_t)arity) : nullptr;
   relation->indexes_dirty = true;
@@ -367,6 +401,37 @@ core_datalog_symbol_integer(const core_datalog_engine_t *engine,
   return core_result_ok(core_datalog_int_result_t, value);
 }
 
+static datalog_tuple_t *find_tuple(datalog_relation_t *relation,
+                                   const core_datalog_symbol_t *arguments) {
+  datalog_tuple_t probe = {
+      .values = (core_datalog_symbol_t *)arguments,
+      .arity = relation->arity,
+  };
+  bool found = false;
+  void *existing = core_dict_get(&relation->tuple_set, &probe, &found);
+  return found ? existing : nullptr;
+}
+
+static datalog_tuple_t *insert_tuple(datalog_relation_t *relation,
+                                     const core_datalog_symbol_t *arguments) {
+  if (find_tuple(relation, arguments))
+    return nullptr;
+  int32_t arity = relation->arity;
+  datalog_tuple_t *tuple = core_alloc(datalog_tuple_t);
+  *tuple = (datalog_tuple_t){
+      .values =
+          core_alloc_array(core_datalog_symbol_t, arity ? (size_t)arity : 1),
+      .arity = arity,
+      .rule = -1,
+  };
+  if (arity)
+    memcpy(tuple->values, arguments, (size_t)arity * sizeof(*arguments));
+  core_dict_put(&relation->tuple_set, tuple, tuple);
+  core_list_push(relation->tuples, tuple);
+  relation->indexes_dirty = true;
+  return tuple;
+}
+
 bool core_datalog_add_fact(core_datalog_engine_t *engine,
                            core_datalog_relation_id_t id, int32_t arity,
                            const core_datalog_symbol_t *arguments) {
@@ -379,20 +444,8 @@ bool core_datalog_add_fact(core_datalog_engine_t *engine,
   for (int32_t i = 0; i < arity; i++)
     if (!valid_symbol(arguments[i]) || core_datalog_is_variable(arguments[i]))
       return false;
-  for (size_t i = 0; i < relation->tuples.len; i++) {
-    if (!memcmp(relation->tuples.data[i]->values, arguments,
-                (size_t)arity * sizeof(*arguments)))
-      return false;
-  }
-  datalog_tuple_t *tuple = core_alloc(datalog_tuple_t);
-  tuple->values =
-      core_alloc_array(core_datalog_symbol_t, arity ? (size_t)arity : 1);
-  if (arity)
-    memcpy(tuple->values, arguments, (size_t)arity * sizeof(*arguments));
-  tuple->recent = false;
-  tuple->pending = false;
-  core_list_push(relation->tuples, tuple);
-  relation->indexes_dirty = true;
+  if (!insert_tuple(relation, arguments))
+    return false;
   engine->fact_count++;
   return true;
 }
@@ -622,11 +675,19 @@ static void derive_head(core_datalog_engine_t *engine,
     }
     values[i] = value;
   }
-  if (core_datalog_add_fact(engine, head->id, head->arity, values)) {
-    head->tuples.data[head->tuples.len - 1]->pending = true;
-    engine->fact_count--;
-  }
+  datalog_tuple_t *tuple = insert_tuple(head, values);
   core_free(values);
+  if (!tuple)
+    return;
+  tuple->pending = true;
+  if (!engine->provenance)
+    return;
+  tuple->rule = (int32_t)(rule - engine->rules.data);
+  tuple->premise_count = engine->trail.len;
+  tuple->premises = core_alloc_array(datalog_premise_t,
+                                     engine->trail.len ? engine->trail.len : 1);
+  memcpy(tuple->premises, engine->trail.data,
+         engine->trail.len * sizeof(*tuple->premises));
 }
 
 static bool eval_builtin(core_datalog_engine_t *engine,
@@ -693,6 +754,21 @@ static void evaluate_body(core_datalog_engine_t *engine,
   datalog_relation_t *relation = engine->relations.data[literal.relation];
   if (literal.negated) {
     bool matched = false;
+    core_datalog_symbol_t ground[literal.arity ? literal.arity : 1];
+    bool bound = true;
+    for (int32_t a = 0; bound && a < literal.arity; a++) {
+      ground[a] = core_datalog_is_variable(literal.arguments[a])
+                      ? binding_get(bindings, literal.arguments[a])
+                      : literal.arguments[a];
+      bound = ground[a] != CORE_DATALOG_SYMBOL_INVALID;
+    }
+    if (bound) {
+      datalog_tuple_t *tuple = find_tuple(relation, ground);
+      if (!tuple || tuple->pending)
+        evaluate_body(engine, rule, body_index + 1, bindings, has_recent,
+                      first_iteration, head);
+      return;
+    }
     for (size_t i = 0; i < relation->tuples.len; i++) {
       datalog_tuple_t *tuple = relation->tuples.data[i];
       if (tuple->pending)
@@ -738,9 +814,15 @@ static void evaluate_body(core_datalog_engine_t *engine,
     if (tuple->pending)
       continue;
     size_t mark = bindings->len;
-    if (match_literal(tuple->values, &literal, bindings))
+    if (match_literal(tuple->values, &literal, bindings)) {
+      if (engine->provenance)
+        core_list_push(engine->trail,
+                       ((datalog_premise_t){literal.relation, tuple}));
       evaluate_body(engine, rule, body_index + 1, bindings,
                     has_recent || tuple->recent, first_iteration, head);
+      if (engine->provenance)
+        engine->trail.len--;
+    }
     bindings->len = mark;
   }
 }
@@ -794,6 +876,50 @@ bool core_datalog_run(core_datalog_engine_t *engine) {
   engine->fact_count = 0;
   for (size_t r = 0; r < engine->relations.len; r++)
     engine->fact_count += (int64_t)engine->relations.data[r]->tuples.len;
+  return true;
+}
+
+void core_datalog_set_provenance(core_datalog_engine_t *engine, bool enabled) {
+  if (engine)
+    engine->provenance = enabled;
+}
+
+bool core_datalog_contains(const core_datalog_engine_t *engine,
+                           core_datalog_relation_id_t relation,
+                           const core_datalog_symbol_t *arguments) {
+  if (!engine || relation < 0 || (size_t)relation >= engine->relations.len)
+    return false;
+  datalog_tuple_t *tuple =
+      find_tuple(engine->relations.data[relation], arguments);
+  return tuple && !tuple->pending;
+}
+
+static bool explain_tuple(const core_datalog_engine_t *engine,
+                          core_datalog_relation_id_t relation,
+                          const datalog_tuple_t *tuple, int32_t depth,
+                          core_datalog_explain_fn visit, void *context) {
+  if (!visit(relation, tuple->values, tuple->arity, tuple->rule, depth,
+             context))
+    return false;
+  for (size_t p = 0; p < tuple->premise_count; p++)
+    if (!explain_tuple(engine, tuple->premises[p].relation,
+                       tuple->premises[p].tuple, depth + 1, visit, context))
+      return false;
+  return true;
+}
+
+bool core_datalog_explain(const core_datalog_engine_t *engine,
+                          core_datalog_relation_id_t relation,
+                          const core_datalog_symbol_t *arguments,
+                          core_datalog_explain_fn visit, void *context) {
+  if (!engine || !visit || relation < 0 ||
+      (size_t)relation >= engine->relations.len)
+    return false;
+  datalog_tuple_t *tuple =
+      find_tuple(engine->relations.data[relation], arguments);
+  if (!tuple || tuple->pending)
+    return false;
+  explain_tuple(engine, relation, tuple, 0, visit, context);
   return true;
 }
 

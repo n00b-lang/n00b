@@ -3277,6 +3277,9 @@ static const entry DEFAULTS[] = {
     ENTRY(IR_OP_FAIL, "ir.fail", rule_fail),
     ENTRY(IR_OP_TRAP, "ir.trap", rule_none),
     ENTRY(IR_OP_UNREACHABLE, "ir.unreachable", rule_none),
+    ENTRY(IR_OP_TYPE_INDEX, "ir.type.index", rule_annotated),
+    ENTRY(IR_OP_BOX_RAW, "ir.box.raw", rule_annotated),
+    ENTRY(IR_OP_BOX_FROM_RAW, "ir.box.from_raw", rule_annotated),
 };
 
 bool ir_rules_add_defaults(ir_rules_t *rs)

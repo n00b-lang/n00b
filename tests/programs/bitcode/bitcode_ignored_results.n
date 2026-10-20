@@ -1,0 +1,16 @@
+var counter: int = 0
+func square(n: int) -> int {
+    return n * n
+}
+func bump(n: int) -> int {
+    counter += n
+    return counter
+}
+func checked(n: int) -> int {
+    require n > 0
+    return n
+}
+square(4)
+bump(2)
+checked(1)
+require counter == 2

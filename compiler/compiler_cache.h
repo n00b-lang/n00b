@@ -79,6 +79,10 @@ void n00bb_cache_stale_modules(const n00bb_cache_t *cache,
 bool n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis);
+bool n00bb_cache_record_summaries(n00bb_cache_t *cache,
+                                  core_link_unit_t *link,
+                                  n00bb_link_analysis_t *analysis);
+bool n00bb_cache_summary_assumptions_hold(const n00bb_cache_t *cache);
 typedef bool (*n00bb_cache_module_used_fn)(void *context,
                                            core_string_t module);
 bool n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,

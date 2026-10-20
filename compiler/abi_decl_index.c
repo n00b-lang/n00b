@@ -114,7 +114,11 @@ n00bb_abi_decl_index_new(const parse_symtab_t *symbols)
                 if (core_indexed_table_intern(index->symbols, symbol,
                                               symbol, nullptr)) continue;
             }
+            parse_scope_t *body = symbol->kind == PARSE_SYM_FUNCTION
+                && symbol->decl_node
+                ? parse_tree_scope(symbol->decl_node) : nullptr;
             if (symbol->scope != scope || !add_scope_chain(index, scope)
+                || (body && !add_scope_chain(index, body))
                 || !core_indexed_table_intern(index->symbols, symbol,
                                                symbol, nullptr)) {
                 n00bb_abi_decl_index_free(index);

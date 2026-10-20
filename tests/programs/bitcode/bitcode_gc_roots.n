@@ -30,7 +30,7 @@ if created != nil {
                 let slot_address: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] slot_mapping.get()
                 var index: uint = 0
                 while index < 257 {
-                    assert sys.gc.roots.push(mutator, slot_address)
+                    require sys.gc.roots.push(mutator, slot_address)
                     index += 1
                 }
                 assert sys.gc.roots.depth(mutator) == 257

@@ -1,0 +1,5 @@
+func never(n: int) -> int {
+    let zero: int = 0
+    return n / zero
+}
+require never(1) == 0

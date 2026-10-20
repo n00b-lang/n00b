@@ -1094,35 +1094,6 @@ restore_interface_context_semantics(n00bb_interface_context_t *loader,
     if (offset != size) return false;
     symbol->adt_kind = CORE_STRING_STATIC("context");
     symbol->user_data = (void *)data;
-    size_t effects_size = 0;
-    const uint8_t *effects = interface_owned_metadata(loader,
-        TH_ENV_METADATA_VALUE, qualified_name,
-        CORE_STRING_STATIC("n00b.context-effects"), 1, &effects_size);
-    if (!effects || effects_size < 8 || memcmp(effects, "N0CE", 4))
-        return false;
-    uint32_t effect_count = read_u32_le(effects + 4);
-    size_t effects_offset = 8;
-    for (uint32_t i = 0; i < effect_count; i++) {
-        if (effects_size - effects_offset < 9) return false;
-        uint32_t kind = effects[effects_offset++];
-        uint32_t module_size = read_u32_le(effects + effects_offset);
-        effects_offset += 4;
-        uint32_t key_size = read_u32_le(effects + effects_offset);
-        effects_offset += 4;
-        if (((kind < N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_SUMMARY
-                || kind > N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY)
-            && kind != N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN)
-            || module_size > effects_size - effects_offset
-            || key_size > effects_size - effects_offset - module_size)
-            return false;
-        if ((kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN)
-            != (module_size == 0 && key_size == 0)) return false;
-        effects_offset += module_size + key_size;
-    }
-    if (effects_offset != effects_size
-        || !parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.context-effects"), (void *)effects))
-        return false;
     th_type *signature = th_resolve(symbol->type);
     size_t expected = signature && th_kind_of(signature) == TH_FUNCTION
         ? th_func_nparams(signature) + (th_func_rest(signature) != nullptr)

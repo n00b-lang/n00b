@@ -63,7 +63,20 @@ struct ir_rd_t {
     uint32_t    *rr_off;
     uint32_t    *rr_at;
     bool        *rr_unset;
+    bool         sets;
 };
+
+static bool call_diverges(const ir_instr_t *in)
+{
+    if (in->op != IR_OP_CALL && in->op != IR_OP_CALLBACK_INVOKE) {
+        return false;
+    }
+
+    ir_annot_t *mark = ir_annot_get(&((ir_instr_t *)in)->annots,
+                                    CORE_STRING_STATIC("ir.diverges"));
+
+    return mark && mark->kind == IR_ANNOT_BOOL && mark->b;
+}
 
 static uint32_t use_slot(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 
@@ -371,6 +384,8 @@ static bool rename_enter(ir_block_t *b, void *thunk)
         w->trail[w->tn++]                    = l;
     }
 
+    bool diverged = false;
+
     for (uint32_t k = 0; k < b->n_instrs; k++) {
         ir_instr_t *in = b->instrs[k];
         uint32_t    at = node_of(r, in);
@@ -378,10 +393,13 @@ static bool rename_enter(ir_block_t *b, void *thunk)
         for (uint32_t u = r->use_off[at]; u < r->use_off[at + 1]; u++) {
             uint32_t l = r->use_local[u];
 
-            r->use_tok[u] = w->st_top[l]
+            r->use_tok[u] = diverged ? RD_NONE
+                          : w->st_top[l]
                               ? w->st[w->st_off[l] + w->st_top[l] - 1]
                               : TOK_UNSET;
         }
+
+        diverged = diverged || (r->sets && call_diverges(in));
 
         if (r->def_id[at] != RD_NONE) {
             uint32_t l = r->def_local[r->def_id[at]];
@@ -406,8 +424,9 @@ static bool rename_enter(ir_block_t *b, void *thunk)
             uint32_t l = r->phi[p].local;
 
             add_arm(r, p,
-                    w->st_top[l] ? w->st[w->st_off[l] + w->st_top[l] - 1]
-                                 : TOK_UNSET,
+                    diverged       ? TOK_PHI(r, p)
+                    : w->st_top[l] ? w->st[w->st_off[l] + w->st_top[l] - 1]
+                                   : TOK_UNSET,
                     b->index);
         }
     }
@@ -647,8 +666,9 @@ static ir_rd_t *build(ir_func_t *f, ir_doms_t *d, bool sets)
 
     ir_rd_t *r = ir_alloc(f->owner->ctx, sizeof(ir_rd_t));
 
-    r->f   = f;
-    r->dom = d;
+    r->f    = f;
+    r->dom  = d;
+    r->sets = sets;
 
     collect(r);
 

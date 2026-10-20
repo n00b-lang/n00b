@@ -1195,6 +1195,26 @@ static void test_aggregates_and_variants(void)
     check("type.of preserves the frontend's descriptor result type",
           accepts_as(e, type_of, S("descriptor")));
 
+    ir_instr_t *type_index = op(e, IR_OP_TYPE_INDEX);
+    ir_instr_set_dest(type_index, S("index"), ir_type_parse(e->m,
+                                                          S("descriptor")));
+    ir_instr_operand_type(type_index, ir_type_parse(e->m, S("i32")));
+    check("type.index takes a type and yields its descriptor",
+          accepts_as(e, type_index, S("descriptor")));
+
+    ir_instr_t *raw = op(e, IR_OP_BOX_RAW);
+    ir_instr_set_dest(raw, S("raw"), ir_type_parse(e->m, S("u64")));
+    ir_instr_operand_value(raw, val(e, S("i32 | string")));
+    check("box.raw yields its declared record type",
+          accepts_as(e, raw, S("u64")));
+
+    ir_instr_t *unraw = op(e, IR_OP_BOX_FROM_RAW);
+    ir_instr_set_dest(unraw, S("value"), ir_type_parse(e->m,
+                                                     S("i32 | string")));
+    ir_instr_operand_value(unraw, val(e, S("u64")));
+    check("box.from_raw yields its declared dynamic type",
+          accepts_as(e, unraw, S("i32 | string")));
+
     ir_instr_t *union_target_test = op(e, IR_OP_TYPE_TEST);
     ir_instr_operand_value(union_target_test, val(e, S("i32")));
     ir_instr_operand_type(union_target_test,

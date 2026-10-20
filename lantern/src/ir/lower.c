@@ -269,7 +269,7 @@ lower_project_symbol_facts(ir_lower_context_t *context,
     if (!annots) return false;
 
     ir_ctx_t *ctx = context->module->ctx;
-    bool unresolved = false;
+    bool unresolved = symbol->alias_unresolved;
     ir_annot_t *assignment_source = ir_annot_get(
         annots, CORE_STRING_STATIC("ir.alias_from_assignment"));
     bool preserve_assignment_aliases = assignment_source
@@ -344,7 +344,7 @@ lower_project_symbol_facts(ir_lower_context_t *context,
                                 resolved_reverse_aliases)
         || !lower_set_bool_annot(ctx, annots,
                                  CORE_STRING_STATIC("ir.lifetime_escapes"),
-                                 symbol->lifetime.escapes || unresolved)
+                                 unresolved)
         || (!preserve_assignment_aliases
             && (!lower_set_bool_annot(ctx, annots,
                                       CORE_STRING_STATIC(
@@ -1339,10 +1339,23 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
     const parse_rule_t *rule = expression && !core_tree_is_leaf(expression)
         ? parse_tree_rule(visit->grammar, expression) : nullptr;
     th_type *type = expression ? parse_tree_type(expression) : nullptr;
-    if (!expression || (type && th_is_nil(th_resolve(type)))
-        || (rule && parse_rule_find_annot(visit->grammar, rule,
-                                          PARSE_ANNOT_CALL)))
+    if (!expression || (type && th_is_nil(th_resolve(type))))
         return true;
+    if (rule && parse_rule_find_annot(visit->grammar, rule,
+                                      PARSE_ANNOT_CALL)) {
+        bool        found = false;
+        ir_value_t *value = core_dict_get(&state->values, expression, &found);
+        ir_instr_t *call  = found && value && value->kind == IR_VAL_INSTR
+                              ? value->def : nullptr;
+        if (call && (call->op == IR_OP_CALL
+                     || call->op == IR_OP_CALLBACK_INVOKE))
+            ir_annot_set(state->context->module->ctx, &call->annots,
+                         (ir_annot_t){
+                             .key  = CORE_STRING_STATIC("ir.result_discarded"),
+                             .kind = IR_ANNOT_BOOL,
+                             .b    = true});
+        return true;
+    }
     ir_diag_t *diagnostic = ir_diag_begin(state->context->diagnostics,
         IR_DIAG_UNUSED_RESULT, span_of_tree(state->context, expression),
         CORE_STRING_STATIC("this value"));

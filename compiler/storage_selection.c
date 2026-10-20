@@ -22,14 +22,6 @@ n00bb_storage_decide(const n00bb_storage_facts_t *facts,
             *dynamic_duration = facts->has_lexical_lifetime;
         return N00BB_STORAGE_EXPLICIT;
     }
-    if (facts->is_typed_variable && facts->has_lexical_lifetime
-        && !facts->selected.u8_bytes && !facts->is_reference
-        && (facts->escapes
-            || (facts->has_aliases
-                && !facts->alias_analysis_complete))) {
-        if (dynamic_duration) *dynamic_duration = true;
-        return N00BB_STORAGE_RUNTIME_DYNAMIC;
-    }
     return N00BB_STORAGE_KEEP;
 }
 
@@ -41,10 +33,7 @@ n00bb_storage_choose_placement(const n00bb_storage_placement_facts_t *facts,
     if (!facts) return N00BB_STORAGE_INVALID_TARGET;
     if (!facts->has_lexical_lifetime || facts->is_reference)
         return N00BB_STORAGE_KEEP;
-    if (facts->escapes
-        || (facts->has_aliases && !facts->alias_analysis_complete)
-        || !facts->size_known
-        || facts->size_bytes > facts->stack_limit_bytes) {
+    if (!facts->size_known || facts->size_bytes > facts->stack_limit_bytes) {
         if (dynamic_duration) *dynamic_duration = true;
         return N00BB_STORAGE_RUNTIME_DYNAMIC;
     }

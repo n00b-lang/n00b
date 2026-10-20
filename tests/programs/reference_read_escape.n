@@ -30,3 +30,7 @@ func expose_slot() {
     var local_slot: Ref[int]? = ref retained_target
     retain_address(ref local_slot)
 }
+
+publish_local()
+return_local()
+expose_slot()

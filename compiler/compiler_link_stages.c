@@ -1,7 +1,21 @@
 #include "compiler_cache.h"
 #include "compiler_link.h"
-#include "compiler_link_lifetime.h"
 #include "compiler_ir_setup.h"
+
+static th_env *
+build_interface_environment(n00bb_link_analysis_t *analysis)
+{
+    if (!analysis || !analysis->export_environment) return nullptr;
+    const th_env *inputs[] = {analysis->export_environment};
+    core_diagnostics_t *diagnostics = analysis->units.len
+        ? core_translation_unit_diagnostics(analysis->units.data[0]) : nullptr;
+    th_env *environment = th_env_compose_report(inputs, 1, diagnostics,
+                                                nullptr);
+    if (environment && register_package_interfaces(analysis, environment))
+        return environment;
+    th_env_free(environment);
+    return nullptr;
+}
 
 static void
 report_stage_failure(core_translation_unit_t *const *units, size_t count,
@@ -177,11 +191,6 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
     }
-    record_link_unit_call_result_aliases(analysis);
-    if (!record_call_argument_escape_facts(analysis)) {
-        th_env_free(environment);
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    }
     for (size_t i = 0; i < units->len; i++)
         if (!finalize_alias_free_local_summaries(
                 analysis->grammar, units->data[i])) {
@@ -236,8 +245,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             return CORE_LINK_STAGE_RESULT_FAILED;
         }
     }
-    analysis->interface_environment =
-        build_function_lifetime_environment(analysis);
+    analysis->interface_environment = build_interface_environment(analysis);
     if (!analysis->interface_environment) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
@@ -347,86 +355,8 @@ n00bb_link_stage_contributions(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("n00bb.call-graph"), 1, stage_kind,
             call_graph_state,
             CORE_STRING_STATIC("n00bb.post-inference-call-sites"), 1,
-            nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    core_link_contribution_state_t direct_effect_state;
-    if (!publish_function_global_effects(link, analysis, stage_kind,
-                                         &direct_effect_state)
-        || !core_link_unit_set_contribution(link, (core_string_t){0},
-            CORE_STRING_STATIC("n00bb.function-direct-global-effects"), 1,
-            stage_kind, direct_effect_state,
-            CORE_STRING_STATIC("n00bb.annotation-reference-sites"), 1,
-            nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    core_link_contribution_state_t call_effect_state;
-    if (!publish_function_effect_summaries(link, analysis, stage_kind,
-            direct_effect_state, call_graph_state, &call_effect_state)
-        || !register_context_effect_metadata(analysis, link)
-        || !register_package_context_effect_metadata(analysis)
-        || !core_link_unit_set_contribution(link, (core_string_t){0},
-            CORE_STRING_STATIC("n00bb.call-effects"), 1,
-            stage_kind, call_effect_state,
-            CORE_STRING_STATIC("n00bb.canonical-call-fixed-point"), 1,
-            nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    core_link_contribution_state_t direct_initializer_state;
-    if (!publish_link_initializer_uses(link, analysis, stage_kind,
-                                       &direct_initializer_state)
-        || !core_link_unit_set_contribution(link, (core_string_t){0},
-            CORE_STRING_STATIC("n00bb.initializer-direct-uses"), 1,
-            stage_kind, direct_initializer_state,
-            CORE_STRING_STATIC("n00bb.annotation-reference-sites"), 1,
-            nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    if (!core_link_unit_set_contribution(link, (core_string_t){0},
-            CORE_STRING_STATIC("n00bb.initializer-phase-uses"), 1,
-            stage_kind, direct_initializer_state,
-            CORE_STRING_STATIC("n00bb.phase-classified-initializer-uses"),
-            1, nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    core_link_contribution_state_t initializer_cycle_state;
-    if (!validate_initializer_cycles(link, analysis,
-                                     &initializer_cycle_state)
-        || !core_link_unit_set_contribution(link, (core_string_t){0},
-            CORE_STRING_STATIC("n00bb.initializer-cycle-check"), 1,
-            stage_kind, initializer_cycle_state,
-            CORE_STRING_STATIC("n00bb.phase-initializer-dependency-graph"),
-            1, nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    if (initializer_cycle_state == CORE_LINK_CONTRIBUTION_FAILED)
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    core_link_contribution_state_t order_state = initializer_cycle_state;
-    n00bb_initializer_order_t *order = initializer_cycle_state
-            == CORE_LINK_CONTRIBUTION_COMPLETE
-        ? build_initializer_order(link, analysis, &order_state)
-        : nullptr;
-    if (!order && order_state == CORE_LINK_CONTRIBUTION_COMPLETE)
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    if (!core_link_unit_set_contribution(link, (core_string_t){0},
-            CORE_STRING_STATIC(N00BB_INITIALIZER_ORDER_DOMAIN), 1,
-            stage_kind, order_state,
-            CORE_STRING_STATIC("n00bb.link-unit-scc-order"), 1,
-            order, order ? CORE_LINK_PAYLOAD_OWNED
-                         : CORE_LINK_PAYLOAD_BORROWED,
-            order ? free_initializer_order : nullptr)) {
-        if (order) free_initializer_order(order);
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    }
-    if (order_state == CORE_LINK_CONTRIBUTION_FAILED)
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    bool initializer_orders_complete =
-        order_state == CORE_LINK_CONTRIBUTION_COMPLETE;
-    core_link_contribution_state_t initializer_dependencies_state =
-        direct_initializer_state == CORE_LINK_CONTRIBUTION_COMPLETE
-            && initializer_cycle_state == CORE_LINK_CONTRIBUTION_COMPLETE
-            && initializer_orders_complete
-        ? CORE_LINK_CONTRIBUTION_COMPLETE
-        : CORE_LINK_CONTRIBUTION_UNAVAILABLE;
-    if (!core_link_unit_set_contribution(link, (core_string_t){0},
-            CORE_STRING_STATIC("n00bb.initializer-dependencies"), 1,
-            stage_kind, initializer_dependencies_state,
-            CORE_STRING_STATIC("n00bb.phase-initializer-dependencies"), 1,
-            nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr))
+            nullptr, CORE_LINK_PAYLOAD_BORROWED, nullptr)
+        || !register_package_module_metadata(analysis))
         return CORE_LINK_STAGE_RESULT_FAILED;
     return core_link_unit_set_contribution(link, (core_string_t){0},
         CORE_STRING_STATIC("n00bb.bootstrap-pipeline-ran"), 1, stage_kind,

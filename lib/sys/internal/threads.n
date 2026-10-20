@@ -39,6 +39,10 @@ func thread_stack_high_self() -> Ref[byte]? {
     return __os_thread_stack_high_self()
 }
 
+func stack_address() -> uint {
+    return __os_stack_address()
+}
+
 func stack_red_zone_bytes() -> uint {
     return __os_stack_red_zone_bytes()
 }

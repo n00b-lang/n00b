@@ -19,6 +19,8 @@
 #include "abi_type_signatures.h"
 #include "abi_trait_method_rows.h"
 #include "frame_roots.h"
+#include "ir/analyses.h"
+#include "ir/summary.h"
 #include "n00b-abi-v1.h"
 #include "th/environment.h"
 #include "lib/alloc.h"
@@ -318,6 +320,48 @@ build_frame_rows(n00bb_abi_function_rows_t *functions,
         frames.active_count++;
     }
     *out = frames;
+    return true;
+}
+
+static bool
+append_bytes(abi_frame_rows_t *frames, const void *data, size_t count)
+{
+    if (frames->bitmap_count > UINT32_MAX - count) return false;
+    uint8_t *grown = core_realloc(frames->bitmap,
+                                  frames->bitmap_count + count);
+    if (!grown) return false;
+    frames->bitmap = grown;
+    memcpy(frames->bitmap + frames->bitmap_count, data, count);
+    frames->bitmap_count += count;
+    return true;
+}
+
+static bool
+append_function_summaries(n00bb_abi_function_rows_t *functions,
+                          ir_module_t *runtime, abi_frame_rows_t *frames)
+{
+    ir_summaries_t *summaries = ir_analysis_summaries();
+    for (size_t i = 1; summaries && i < functions->function_count; i++) {
+        ir_func_t *function = functions->ir_functions[i];
+        ir_summary_t *summary = function && function->owner == runtime
+                && function->n_blocks
+            ? ir_summary_of(summaries, function) : nullptr;
+        core_buffer_t encoded = {0};
+        if (!summary || !ir_summary_encode(summary, &encoded)) {
+            core_buffer_release(&encoded);
+            continue;
+        }
+        uint8_t zero = 0;
+        uint8_t length[4];
+        core_le_store_u32(length, (uint32_t)encoded.byte_len);
+        bool ok = (frames->bitmap_count || append_bytes(frames, &zero, 1));
+        uint32_t offset = (uint32_t)frames->bitmap_count;
+        ok = ok && append_bytes(frames, length, sizeof(length))
+            && append_bytes(frames, encoded.data, encoded.byte_len);
+        core_buffer_release(&encoded);
+        if (!ok) return false;
+        functions->functions[i].summary_offset = offset;
+    }
     return true;
 }
 
@@ -1909,6 +1953,10 @@ n00bb_abi_emit_unit(
         && ABI_STAGE("frame layouts",
             build_frame_rows(&function_rows, type_index, &type_rows,
                              (ir_module_t *)runtime_ir, &frame_rows))
+        && ABI_STAGE("function summaries",
+            append_function_summaries(&function_rows,
+                                      (ir_module_t *)runtime_ir,
+                                      &frame_rows))
         && ABI_STAGE("trait methods",
             n00bb_abi_trait_method_rows_build(type_index, &type_rows,
                 declarations, th_ctx_environment(ir_module_types(

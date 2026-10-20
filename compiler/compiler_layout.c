@@ -613,8 +613,22 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 th_type *definition = ir_type_definition(module, type);
                 if (!definition || th_kind_of(definition) != TH_RECORD)
                     continue;
+                core_translation_unit_t *owner = nullptr;
                 if (requested_record_symbol_for_type(analysis, type,
-                        N00BB_RECORD_C, nullptr)) continue;
+                        N00BB_RECORD_C, &owner)) {
+                    ir_module_t *source = u >= analysis->units.len && owner
+                        ? tu_state(owner)->ir_module : nullptr;
+                    const ir_final_layout_t *layout = source
+                        ? ir_layout_final(source, type,
+                                          analysis->target.triple)
+                        : nullptr;
+                    if (layout) {
+                        valid = ir_layout_publish_final(module, type,
+                            analysis->target.triple, layout);
+                        progress = progress || valid;
+                    }
+                    continue;
+                }
                 size_t count = th_record_len(definition);
                 if (count > UINT32_MAX) { valid = false; break; }
                 bool variant = false;
@@ -881,11 +895,6 @@ select_storage_placement(n00bb_link_analysis_t *analysis)
                         &(n00bb_storage_placement_facts_t){
                             .has_lexical_lifetime = true,
                             .is_reference = false,
-                            .has_aliases = symbol->alias_count
-                                || symbol->aliased_by_count,
-                            .escapes = symbol->lifetime.escapes,
-                            .alias_analysis_complete =
-                                symbol->alias_analysis_complete,
                             .size_known = size_known,
                             .size_bytes = size_bytes,
                             .stack_limit_bytes =

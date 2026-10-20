@@ -6,6 +6,8 @@
 const n00b_abi_type_v1 *n00b_builtin_abi_type(uint32_t index);
 const n00b_abi_type_v1 *n00b_builtin_abi_type_for(uint32_t descriptor);
 const n00b_abi_field_v1 *n00b_builtin_abi_field(uint32_t index);
+const n00b_abi_arm_v1 *n00b_builtin_abi_arm(uint32_t index);
+const n00b_abi_physical_run_v1 *n00b_builtin_abi_physical_run(uint32_t index);
 const n00b_abi_trace_v1 *n00b_builtin_abi_trace(uint32_t index);
 const n00b_abi_trace_child_v1 *n00b_builtin_abi_trace_child(uint32_t index);
 const n00b_abi_trace_arm_v1 *n00b_builtin_abi_trace_arm(uint32_t index);
@@ -25,6 +27,12 @@ const uint8_t *n00b_builtin_abi_string_backing_at(const void *address);
 const uint8_t *n00b_builtin_abi_bytes(uint32_t first, uint32_t count);
 int64_t n00b_builtin_abi_range_index(uint32_t first, uint32_t count,
                                       uint32_t ordinal);
+uint32_t n00b_builtin_abi_unary_type(uint32_t kind, uint32_t element);
+int32_t n00b_builtin_abi_type_specializes(uint32_t type, uint32_t general);
+uint32_t n00b_builtin_abi_type_argument_type(uint32_t index);
+uint32_t n00b_builtin_abi_named_type(const uint8_t *name, uint64_t name_bytes,
+                                     const uint32_t *arguments,
+                                     uint32_t count);
 uint64_t n00b_builtin_abi_ref_address(const void *value);
 const uint8_t *n00b_builtin_native_symbol_name(uint64_t address);
 

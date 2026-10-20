@@ -60,6 +60,13 @@ mv "$tmp/leaf.n" "$tmp/work/leaf.n"
 build work main.n
 expect_stored "leaf body edit" "leaf"
 
+printf 'public func leaf_value() -> int {\n    let values: Array[int] = [40, 1]\n    return values[0] + values[1]\n}\n' \
+    >"$tmp/work/leaf.n"
+build work main.n
+grep -q '^runtime restart cached summary assumptions do not hold$' \
+    "$tmp/log" || fail "summary edit: the optimistic build did not restart"
+expect_stored "summary edit" "helper leaf"
+
 printf '\npublic func leaf_extra() -> int {\n    return 1\n}\n' \
     >>"$tmp/work/leaf.n"
 build work main.n

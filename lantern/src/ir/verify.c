@@ -720,6 +720,8 @@ static bool store_target_collect(store_target_set_t *set,
         case IR_OP_COPY:
         case IR_OP_CAST:
         case IR_OP_BITCAST:
+        case IR_OP_BOX_RAW:
+        case IR_OP_BOX_FROM_RAW:
         case IR_OP_NOMINAL_CAST:
         case IR_OP_FIELD:
         case IR_OP_INDEX:

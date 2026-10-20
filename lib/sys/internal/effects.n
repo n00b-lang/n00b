@@ -1,0 +1,29 @@
+public const may_fail:            u64 = 0x1
+public const may_trap:            u64 = 0x2
+public const may_allocate:        u64 = 0x4
+public const may_block:           u64 = 0x8
+public const diverges:            u64 = 0x10
+public const calls_unknown:       u64 = 0x20
+public const may_io:              u64 = 0x40
+public const no_return:           u64 = 0x80
+public const may_collect:         u64 = 0x100
+public const allocates_direct:    u64 = 0x200
+public const unbounded_recursion: u64 = 0x400
+public const traps_explicit:      u64 = 0x10000
+public const traps_bounds:        u64 = 0x20000
+public const traps_unwrap:        u64 = 0x40000
+public const traps_arithmetic:    u64 = 0x80000
+public const reads_nonlocal:      u64 = 0x1000000
+public const writes_nonlocal:     u64 = 0x2000000
+
+public func reads_parameter(index: u64) -> u64 {
+    return cast[u64] 1 << (32 + index)
+}
+
+public func writes_parameter(index: u64) -> u64 {
+    return cast[u64] 1 << (48 + index)
+}
+
+public func has_effect(effects: u64, effect: u64) -> bool {
+    return effects & effect != 0
+}

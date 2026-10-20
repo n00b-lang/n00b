@@ -1,0 +1,7 @@
+import internal.box
+import internal.gc.box_store
+
+package sys.box {
+    export internal.box
+    export internal.gc.box_store
+}

@@ -170,25 +170,6 @@ func target_node(graph: Ref[Graph], pointer: Ref[byte]) -> i64 {
     return baked_node(graph, address)
 }
 
-func string_tag(address: Ref[byte]) -> u64 {
-    let bits: Ref[internal.abi.String_Bits] = unsafe_cast[Ref[internal.abi.String_Bits]] address
-    return bits.high >> 62
-}
-
-func string_length(address: Ref[byte]) -> uint {
-    let bits: Ref[internal.abi.String_Bits] = unsafe_cast[Ref[internal.abi.String_Bits]] address
-    if string_tag(address) == 0 {
-        return cast[uint](bits.high >> 56) & 15
-    }
-    return cast[uint](bits.high & 0x0fffffffffffffff)
-}
-
-func string_bytes(address: Ref[byte]) -> Ref[byte]? {
-    if string_tag(address) == 0 {
-        return address
-    }
-    return internal.abi.string_backing_at(address)
-}
 
 func add_edge(graph: Ref[Graph], source: u32, slot: Ref[byte], target: u32,
               pointer: Ref[byte]) {
@@ -530,7 +511,7 @@ func visit_pointer(graph: Ref[Graph], source: u32, slot: Ref[byte],
 }
 
 func visit_string(graph: Ref[Graph], source: u32, address: Ref[byte]) {
-    let tag: u64 = string_tag(address)
+    let tag: u64 = internal.abi.string_tag(address)
     if tag == 3 {
         visit_pointer(graph, source, address,
                       internal.abi.string_backing_at(address))
@@ -551,7 +532,8 @@ func visit_string(graph: Ref[Graph], source: u32, address: Ref[byte]) {
     }
     if target < 0 {
         target = cast[i64]add_node(graph, backing.get(),
-            string_length(address), 1, 0, internal.abi.baked_immutable, false)
+            internal.abi.string_length(address), 1, 0,
+            internal.abi.baked_immutable, false)
     }
     add_edge(graph, source, address, cast[u32]target, backing.get())
 }
@@ -826,9 +808,9 @@ func write_block(base: Ref[byte], size: uint) {
 }
 
 func write_string(address: Ref[byte]) {
-    let length: uint = string_length(address)
+    let length: uint = internal.abi.string_length(address)
     write_word(cast[u64]length, 8)
-    let bytes: Ref[byte]? = string_bytes(address)
+    let bytes: Ref[byte]? = internal.abi.string_bytes(address)
     if bytes != nil {
         write_block(bytes.get(), length)
     }

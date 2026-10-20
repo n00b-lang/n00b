@@ -37,13 +37,13 @@ func mapped_header() -> Ref[sys.gc.core.Object_Header] {
 }
 
 let heap: Ref[sys.gc.core.Heap] = mapped_heap()
-assert sys.gc.mark.mark_quiescent(heap)
+require sys.gc.mark.mark_quiescent(heap)
 let marker: Ref[sys.gc.core.Marker] = mapped_marker()
 let header: Ref[sys.gc.core.Object_Header] = mapped_header()
 __gc_prefetch(header)
 sys.gc.mark.marker_init(marker, heap, false)
 sys.gc.mark.drain_to_termination(marker)
-assert sys.gc.mark.mark_quiescent(heap)
+require sys.gc.mark.mark_quiescent(heap)
 var pushed: uint = 0
 while pushed < sys.gc.core.packet_cap + 1 {
     sys.gc.mark.push(marker, header)
@@ -77,7 +77,7 @@ assert heap.pool_full != nil
 assert __atomic_load(ref heap.work_progress.seq) != 0
 assert __atomic_load(ref heap.cnt_objects) == 1
 assert __atomic_load(ref heap.cnt_bytes) == 16
-assert !sys.gc.mark.mark_quiescent(heap)
+require !sys.gc.mark.mark_quiescent(heap)
 var pending: Ref[sys.gc.core.Packet]? = heap.pool_full
 while pending != nil {
     let packet: Ref[sys.gc.core.Packet] = pending.get()
@@ -85,7 +85,7 @@ while pending != nil {
     pending = packet.next
 }
 sys.gc.mark.drain_to_termination(marker)
-assert sys.gc.mark.mark_quiescent(heap)
+require sys.gc.mark.mark_quiescent(heap)
 sys.gc.mark.pool_free_all(heap)
 assert heap.pool_chunks == nil
 assert heap.pool_empty == nil

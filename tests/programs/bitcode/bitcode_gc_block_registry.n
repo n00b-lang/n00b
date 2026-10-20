@@ -13,7 +13,7 @@ if created != nil {
     if mapped != nil {
         let base: Ref[byte] = mapped.get()
         let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
-        assert sys.gc.registry.region_add(heap, base, end)
+        require sys.gc.registry.region_add(heap, base, end)
         let key: uint = __abi_ref_address(base) / sys.gc.core.block_bytes
         let found: Ref[byte]? = sys.gc.hash.tab_lookup(ref heap.blocks, key)
         if found != nil { assert found.get() == base } else { require false }

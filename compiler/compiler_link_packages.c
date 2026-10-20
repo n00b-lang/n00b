@@ -1429,7 +1429,7 @@ append_text_le(core_buffer_t *out, core_string_t text)
 }
 
 bool
-register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
+register_package_module_metadata(n00bb_link_analysis_t *analysis)
 {
     th_env *environment = analysis ? analysis->interface_environment : nullptr;
     if (!environment) return false;
@@ -1526,43 +1526,6 @@ register_package_context_effect_metadata(n00bb_link_analysis_t *analysis)
             }
             core_buffer_release(&imports);
             if (!registered) return false;
-        }
-        for (size_t p = 0; state && !state->interface_module
-             && p < state->package_declarations.len; p++) {
-            n00bb_package_declaration_t *package =
-                &state->package_declarations.data[p];
-            parse_scope_t *scopes[] = {
-                package->scope,
-                parse_symtab_scope_in_namespace(state->annotations->symtab,
-                    package->scope, CORE_STRING_STATIC("type")),
-            };
-            for (size_t s = 0; s < sizeof(scopes) / sizeof(scopes[0]); s++) {
-                for (parse_sym_entry_t *binding = scopes[s]
-                         ? scopes[s]->first_in_scope : nullptr;
-                     binding; binding = binding->next_in_scope) {
-                    parse_sym_entry_t *source = canonical_symbol(binding);
-                    if (!source || !context_symbol(analysis->grammar, source))
-                        continue;
-                    core_translation_unit_t *source_unit = unit_for_symbol(
-                        analysis->grammar, &analysis->units, source);
-                    core_buffer_t origin = {0}, external = {0};
-                    bool ok = source_unit
-                        && append_environment_symbol_name(analysis->grammar,
-                            source_unit, source, &origin);
-                    if (ok)
-                        core_buffer_printf(&external, "%.*s.%.*s",
-                            (int)package->name.u8_bytes, package->name.data,
-                            (int)binding->name.u8_bytes, binding->name.data);
-                    if (ok)
-                        ok = copy_package_export_metadata(environment,
-                            environment, TH_ENV_METADATA_VALUE,
-                            core_buffer_string(&origin),
-                            core_buffer_string(&external), true, CORE_STRING_STATIC("n00b.context-effects"));
-                    core_buffer_release(&external);
-                    core_buffer_release(&origin);
-                    if (!ok) return false;
-                }
-            }
         }
     }
     return true;

@@ -61,6 +61,18 @@ record Field_Record layout(c) {
     public inline_element_stride_bits: u64
 }
 
+record Arm_Record layout(c) {
+    public field:         Field_Record
+    public tag_value:     u32
+    public reserved_zero: u32
+}
+
+record Physical_Run_Record layout(c) {
+    public byte_offset: u64
+    public bit_offset:  u32
+    public width_bits:  u32
+}
+
 record Trace_Record layout(c) {
     public type_index:          u32
     public reserved_zero:       u32
@@ -186,7 +198,7 @@ record Function_Record layout(c) {
     public frame_layouts:       Range
     public flags:               u32
     public variadic_type_index: u32
-    public reserved_zero:       u32
+    public summary_offset:      u32
     public valid_keyword_bits:  u64
 }
 
@@ -265,8 +277,8 @@ func __set_tag_unit(unit: Ref[byte], width_bits: u32, bits: u64) {
     ref_write(unsafe_cast[Ref[u64]] unit, bits)
 }
 
-func __box_tag_extractor(box: Ref[Box_Record]) -> Ref[Tag_Extractor_Record] {
-    let row: Ref[Type_Record]? = __abi_type(box.type_field & 0x7fffffff)
+func __type_tag_extractor(type_index: u32) -> Ref[Tag_Extractor_Record] {
+    let row: Ref[Type_Record]? = __abi_type(type_index)
     require row != nil
     let layout: Ref[Layout_Record]? = __abi_layout(row.get().layout_index)
     require layout != nil
@@ -276,17 +288,10 @@ func __box_tag_extractor(box: Ref[Box_Record]) -> Ref[Tag_Extractor_Record] {
     return found.get()
 }
 
-func __box_tag_unit(box: Ref[Box_Record],
-                    tag: Ref[Tag_Extractor_Record]) -> Ref[byte] {
-    let row: Ref[Type_Record]? = __abi_type(box.type_field & 0x7fffffff)
-    require row != nil
-    let value: Ref[byte] = __box_value_address(box, row.get().size_bits)
-    return __gc_byte_offset(value, cast[int] tag.unit_byte_offset)
-}
-
-func __box_tag(box: Ref[Box_Record]) -> u64 {
-    let tag: Ref[Tag_Extractor_Record] = __box_tag_extractor(box)
-    let unit: Ref[byte] = __box_tag_unit(box, tag)
+func __tag_at(type_index: u32, value: Ref[byte]) -> u64 {
+    let tag: Ref[Tag_Extractor_Record] = __type_tag_extractor(type_index)
+    let unit: Ref[byte] = __gc_byte_offset(value,
+                                           cast[int] tag.unit_byte_offset)
     let bits: u64 = __tag_unit(unit, tag.unit_width_bits)
     if tag.kind != tag_direct_bits {
         if bits == 0 {
@@ -297,16 +302,32 @@ func __box_tag(box: Ref[Box_Record]) -> u64 {
     return (bits >> tag.lsb_position) & tag.mask
 }
 
-func __box_set_tag(box: Ref[Box_Record], physical: u64) {
-    let tag: Ref[Tag_Extractor_Record] = __box_tag_extractor(box)
+func __set_tag_at(type_index: u32, value: Ref[byte], physical: u64) {
+    let tag: Ref[Tag_Extractor_Record] = __type_tag_extractor(type_index)
     if tag.kind != tag_direct_bits {
         return
     }
-    let unit: Ref[byte] = __box_tag_unit(box, tag)
+    let unit: Ref[byte] = __gc_byte_offset(value,
+                                           cast[int] tag.unit_byte_offset)
     let cleared: u64 = 0xffffffffffffffff ^ (tag.mask << tag.lsb_position)
     let kept: u64 = __tag_unit(unit, tag.unit_width_bits) & cleared
     __set_tag_unit(unit, tag.unit_width_bits,
                    kept | ((physical & tag.mask) << tag.lsb_position))
+}
+
+func __box_tag(box: Ref[Box_Record]) -> u64 {
+    let index: u32 = box.type_field & 0x7fffffff
+    let row: Ref[Type_Record]? = __abi_type(index)
+    require row != nil
+    return __tag_at(index, __box_value_address(box, row.get().size_bits))
+}
+
+func __box_set_tag(box: Ref[Box_Record], physical: u64) {
+    let index: u32 = box.type_field & 0x7fffffff
+    let row: Ref[Type_Record]? = __abi_type(index)
+    require row != nil
+    __set_tag_at(index, __box_value_address(box, row.get().size_bits),
+                 physical)
 }
 
 func __box_address(box: Ref[Box_Record]) -> Ref[byte] {

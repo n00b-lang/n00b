@@ -2563,6 +2563,37 @@ remap_range(const n00bb_abi_object_view_t *view,
     return true;
 }
 
+static bool
+remap_function_summary(const n00bb_abi_object_view_t *view,
+                       const n00bb_abi_index_plan_t *plan,
+                       size_t input_index, n00b_abi_function_v1 *function)
+{
+    uint32_t offset = function->summary_offset;
+    if (!offset) return true;
+    const n00bb_abi_directory_entry_t *table =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_BYTE_STREAM);
+    if (!table || offset >= table->record_count
+        || table->record_count - offset < 4) return false;
+    uint8_t length[4];
+    for (uint32_t i = 0; i < 4; i++) {
+        const uint8_t *byte = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_BYTE_STREAM, offset + i);
+        if (!byte) return false;
+        length[i] = *byte;
+    }
+    uint32_t count = core_le_load_u32(length);
+    if (count > table->record_count - offset - 4) return false;
+    uint32_t first, last;
+    if (!n00bb_abi_index_plan_map(plan, input_index,
+            N00B_ABI_TABLE_BYTE_STREAM, offset, &first)
+        || !n00bb_abi_index_plan_map(plan, input_index,
+            N00B_ABI_TABLE_BYTE_STREAM, offset + 3 + count, &last)
+        || !first || last < first || last - first != 3 + count)
+        return false;
+    function->summary_offset = first;
+    return true;
+}
+
 bool
 n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
                     const n00bb_abi_index_plan_t *plan, size_t input_index,
@@ -2627,6 +2658,9 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
                 field->stream_kind, target, stream, &first)) return false;
         core_le_store_u32(bytes + field->offset, first);
     }
+    if (kind == N00B_ABI_TABLE_FUNCTION
+        && !remap_function_summary(view, plan, input_index, out))
+        return false;
     if (kind == N00B_ABI_TABLE_TYPE) {
         n00b_abi_type_v1 *type = out;
         if (type->kind == N00B_ABI_TYPE_VARIABLE

@@ -727,6 +727,15 @@ ir_liveness_t ir_liveness_query_direct_after(
 ir_liveness_t ir_liveness_query_direct_on_edge(
     const ir_liveness_query_t *query, const ir_block_t *from,
     const ir_block_t *to);
+typedef struct ir_values_liveness ir_values_liveness_t;
+ir_values_liveness_t *ir_values_liveness_new(ir_func_t *function,
+                                             ir_value_t *const *values,
+                                             size_t count);
+void ir_values_liveness_free(ir_values_liveness_t *liveness);
+bool ir_values_live_after_each(const ir_values_liveness_t *liveness,
+                               const ir_block_t *block, bool *after);
+bool ir_values_live_on_edge(const ir_values_liveness_t *liveness,
+                            const ir_block_t *from, const ir_block_t *to);
 typedef struct {
     ir_func_t *function;
     ir_value_t *binding;

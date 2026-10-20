@@ -18,7 +18,7 @@ suites = [
     ['ir-spans',            'ir/span.c',             {}],
     ['ir-rules',            'ir/rule.c',             {}],
     ['ir-typing',           'ir/typing.c',           {}],
-    ['ir-ranges',           'ir/range.c',            {}],
+    ['ir-ranges',           'ir/ranges.c',           {}],
     ['ir-verify',           'ir/verify.c',           {}],
     ['ir-grammar',          'ir/grammar.c',          {}],
     ['ir-layout',           'ir/layout.c',           {}],

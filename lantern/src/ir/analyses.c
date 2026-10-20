@@ -1,5 +1,6 @@
 #include "private/ir/internal.h"
 #include "ir/analyses.h"
+#include "ir/ranges.h"
 #include "lib/alloc.h"
 #include "lib/hash.h"
 #include "lib/list.h"
@@ -11,6 +12,7 @@ struct ir_func_analyses_t {
     ir_places_t *places;
     ir_memssa_t *memssa;
     ir_sites_t  *sites;
+    ir_ranges_t *ranges;
 };
 
 typedef ir_func_t *ir_func_ptr_t;
@@ -18,6 +20,21 @@ core_list_decl(ir_func_ptr_t);
 
 static _Thread_local core_list_t(ir_func_ptr_t) scope_owned;
 static _Thread_local size_t scope_depth;
+static _Thread_local ir_summaries_t *bound_summaries;
+
+ir_summaries_t *
+ir_analysis_bind_summaries(ir_summaries_t *summaries)
+{
+    ir_summaries_t *previous = bound_summaries;
+    bound_summaries = summaries;
+    return previous;
+}
+
+ir_summaries_t *
+ir_analysis_summaries(void)
+{
+    return bound_summaries;
+}
 
 size_t
 ir_analysis_scope_begin(void)
@@ -94,6 +111,8 @@ current_slot(ir_func_t *f)
     struct ir_func_analyses_t *slot = slot_of(f);
     uint64_t now = fingerprint(f);
     if (now == slot->fingerprint) return slot;
+    ir_ranges_free(slot->ranges);
+    slot->ranges = nullptr;
     ir_sites_free(slot->sites);
     slot->sites = nullptr;
     ir_memssa_free(slot->memssa);
@@ -154,11 +173,21 @@ ir_func_sites(ir_func_t *f)
     return slot->sites;
 }
 
+ir_ranges_t *
+ir_func_ranges(ir_func_t *f)
+{
+    if (!f || !f->n_blocks) return nullptr;
+    struct ir_func_analyses_t *slot = current_slot(f);
+    if (!slot->ranges) slot->ranges = ir_ranges_build(f);
+    return slot->ranges;
+}
+
 void
 ir_func_release_analyses(ir_func_t *f)
 {
     if (!f || !f->analyses) return;
     struct ir_func_analyses_t *slot = f->analyses;
+    ir_ranges_free(slot->ranges);
     ir_sites_free(slot->sites);
     ir_memssa_free(slot->memssa);
     ir_places_free(slot->places);

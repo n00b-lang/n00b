@@ -1,0 +1,24 @@
+func die(code: int) {
+    __os_exit(code)
+}
+
+func after_return(n: int) -> int {
+    return n
+    let skipped: int = n + 7
+    return skipped
+}
+
+func after_require(n: int) -> int {
+    require false
+    return n + 11
+}
+
+func after_exit(n: int) -> int {
+    die(1)
+    let unused: int = n + 9
+    return unused
+}
+
+if after_return(1) == 2 {
+    require after_require(1) == after_exit(1)
+}

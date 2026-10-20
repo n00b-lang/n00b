@@ -19,7 +19,6 @@ double n00bb_profile_seconds(void);
 #include "compiler_native_roots.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
-#include "compiler_link_lifetime.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
 #include "compiler_cache.h"
@@ -45,6 +44,7 @@ double n00bb_profile_seconds(void);
 #include "runtime_native_roots.h"
 #include "storage_selection.h"
 #include "specialize.h"
+#include "box_calls.h"
 #include "compiler_ffi.h"
 #include "compiler_baked.h"
 #include "lib/alloc.h"
@@ -105,6 +105,8 @@ typedef struct {
     bool package_warnings;
     bool changed_files_only;
 } warning_policy_t;
+
+static bool closed_world_build;
 
 static bool
 same_diagnostic(const core_diagnostic_t *left, const core_diagnostic_t *right)
@@ -639,7 +641,7 @@ dump_symbols(core_translation_unit_t *unit)
                        symbol->selected_storage_class.data);
             if (symbol->storage_class_required)
                 printf(", storage-class-required");
-            if (symbol->lifetime.escapes) printf(", may-escape");
+            if (symbol->alias_unresolved) printf(", alias-unresolved");
             printf(", uses=%u", symbol->uses);
             parse_token_info_t *token = symbol->decl_node
                 ? parse_tree_find_first_terminal(symbol->decl_node) : nullptr;
@@ -1004,28 +1006,6 @@ dump_link_unit(core_link_unit_t *link)
             ? S("trait-dispatch")
             : edge.kind == N00BB_LINK_DEPENDENCY_CONTEXT_CALL
             ? S("context-call")
-            : edge.kind == N00BB_LINK_DEPENDENCY_INITIALIZER_USE
-            ? S("initializer-use")
-            : edge.kind == N00BB_LINK_DEPENDENCY_INITIALIZER_ORDER
-            ? S("initializer-order")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ
-            ? S("function-global-read")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE
-            ? S("function-global-write")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE
-            ? S("function-global-read-write")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS
-            ? S("function-global-alias")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_UNKNOWN
-            ? S("function-global-unknown")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_SUMMARY
-            ? S("function-global-read-summary")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_WRITE_SUMMARY
-            ? S("function-global-write-summary")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_READ_WRITE_SUMMARY
-            ? S("function-global-read-write-summary")
-            : edge.kind == N00BB_LINK_DEPENDENCY_FUNCTION_GLOBAL_ALIAS_SUMMARY
-            ? S("function-global-alias-summary")
             : edge.kind == N00BB_LINK_DEPENDENCY_TRAIT_SPECIALIZATION
             ? S("trait-specialization") : S("other");
 #undef S
@@ -2397,7 +2377,10 @@ link_located_program(const program_link_inputs_t *inputs,
         inputs->native_root_count, inputs->may_link_further,
         inputs->resolver);
     core_free(program_interfaces);
-    if (analysis) analysis->cache = (n00bb_cache_t *)cache;
+    if (analysis) {
+        analysis->cache = (n00bb_cache_t *)cache;
+        analysis->closed_world = closed_world_build;
+    }
     bool success = link != nullptr;
     for (size_t i = 0; i < inputs->root_request_count; i++) {
         if (!requests->ordered.data[i].root_input) continue;
@@ -2658,7 +2641,9 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                     job_ok = load_implicit_builtin(&import_driver, grammar,
                             unit, CORE_STRING_STATIC("sys.gc.alloc"))
                         && load_implicit_builtin(&import_driver, grammar,
-                            unit, CORE_STRING_STATIC("sys.marshal"));
+                            unit, CORE_STRING_STATIC("sys.marshal"))
+                        && load_implicit_builtin(&import_driver, grammar,
+                            unit, CORE_STRING_STATIC("sys.box"));
                     runtime_support_loaded = job_ok;
                 }
                 if (job_ok) job_ok = !core_diagnostics_failed(
@@ -4113,10 +4098,14 @@ build_time_arguments(int argc, char **argv, char *compiler,
     for (int i = 1; i < argc; i++) {
         core_string_t argument = core_string_from_cstr(argv[i]);
         bool output = core_string_eq(argument, CORE_STRING_STATIC("--output"))
-            || core_string_eq(argument, CORE_STRING_STATIC("-o"));
+            || core_string_eq(argument, CORE_STRING_STATIC("-o"))
+            || core_string_eq(argument,
+                              CORE_STRING_STATIC("--emit-interface"));
         bool dropped = (i == 1
                 && (core_string_eq(argument, CORE_STRING_STATIC("build"))
-                    || core_string_eq(argument, CORE_STRING_STATIC("lower"))))
+                    || core_string_eq(argument, CORE_STRING_STATIC("lower"))
+                    || core_string_eq(argument,
+                                      CORE_STRING_STATIC("library"))))
             || core_string_starts_with(argument, CORE_STRING_STATIC("--dump-"));
         core_free(argument.data);
         if (output) {
@@ -4415,30 +4404,44 @@ open_object_cache(n00bb_resolver_t *resolver, parse_cmdr_result_t *args,
     return cache;
 }
 
-static bool
-specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
-                 core_diagnostics_t *diagnostics)
+static size_t
+report_specialization_gaps(n00bb_link_analysis_t *analysis)
 {
-    n00bb_specialization_failure_t failure = {0};
+    size_t gaps = 0;
+    for (size_t i = 0; i < analysis->reachable_functions.len; i++) {
+        ir_func_t *function = analysis->reachable_functions.data[i];
+        if (!function || !function->n_blocks || !function->owner) continue;
+        th_ctx *types = ir_module_types(function->owner);
+        if (th_is_closed(types, function->type)) continue;
+        core_string_t module = ir_module_name(function->owner);
+        core_string_t printed = th_print(types, function->type);
+        fprintf(stderr, "specialization gap: %.*s.%.*s: %.*s\n",
+                TEXT_ARGS(module), TEXT_ARGS(function->name),
+                TEXT_ARGS(printed));
+        gaps++;
+    }
+    return gaps;
+}
+
+static bool
+specialize_emitted(n00bb_link_analysis_t *analysis,
+                   const n00bb_specialization_seed_t *seeds,
+                   size_t seed_count, n00bb_specialization_failure_t *failure,
+                   core_diagnostics_t *diagnostics)
+{
     core_list_t(n00bb_ir_func_ptr_t) callers =
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
         core_list_push(callers, analysis->emitted_functions.data[i]);
-    core_list_t(n00bb_specialization_seed_t) seeds =
-        core_list_new(n00bb_specialization_seed_t);
-    n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
-                      n00bb_source_unit_module, analysis, &seeds);
-    core_list_t(core_translation_unit_ptr_t) order =
-        core_list_new(core_translation_unit_ptr_t);
     core_list_t(n00bb_ir_func_ptr_t) visited =
         core_list_new(n00bb_ir_func_ptr_t);
-    bool ok = n00bb_collect_initializer_order(link, &order);
-    size_t seed_count = seeds.len;
+    bool ok = true;
     while (ok && callers.len) {
         ok = n00bb_specialize_calls(analysis->ir_context, &callers,
-                seeds.data, seed_count, &analysis->specializations,
-                &analysis->specialization_requests, &failure)
-            && build_reachable_functions(analysis, &order, diagnostics);
+                seeds, seed_count, &analysis->specializations,
+                &analysis->specialization_requests, failure)
+            && build_reachable_functions(analysis, &analysis->units,
+                                         diagnostics);
         seed_count = 0;
         for (size_t i = 0; i < callers.len; i++)
             core_list_push(visited, callers.data[i]);
@@ -4452,9 +4455,24 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         }
     }
     core_list_free(visited);
-    core_list_free(order);
-    core_list_free(seeds);
     core_list_free(callers);
+    return ok;
+}
+
+static bool
+specialize_calls(n00bb_link_analysis_t *analysis,
+                 core_diagnostics_t *diagnostics)
+{
+    n00bb_specialization_failure_t failure = {0};
+    core_list_t(n00bb_specialization_seed_t) seeds =
+        core_list_new(n00bb_specialization_seed_t);
+    n00bb_cache_seeds(analysis->cache, ir_ctx_types(analysis->ir_context),
+                      n00bb_source_unit_module, analysis, &seeds);
+    bool ok = specialize_emitted(analysis, seeds.data, seeds.len, &failure,
+                                 diagnostics)
+        && n00bb_rewrite_box_operations(analysis)
+        && specialize_emitted(analysis, nullptr, 0, &failure, diagnostics);
+    core_list_free(seeds);
     if (ok) ok = publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis)
         && n00bb_recompute_summaries(analysis);
@@ -4507,6 +4525,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         return 2;
     }
 
+    closed_world_build = parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--closed-world"));
     bool requested_native = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--native"));
     bool requested_generic = parse_cmdr_flag_present(args,
@@ -4567,12 +4587,6 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         && core_string_eq(command, CORE_STRING_STATIC("compile"));
     bool emit_interface = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--emit-interface"));
-    bool interface_ir_dump = emit_interface
-        && (parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-ir"))
-            || parse_cmdr_flag_present(args,
-                                       CORE_STRING_STATIC("--dump-control-flow"))
-            || parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg"))
-            || parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
     core_string_t interface_output = emit_interface
         ? parse_cmdr_flag_str(args,
             CORE_STRING_STATIC("--emit-interface")) : (core_string_t){0};
@@ -4583,8 +4597,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool build_time_reported = false;
     bool deferred_build_time = build_command && !build_time
         && !getenv("N00BB_BUILD_TIME_CAPTURE_FD");
-    if (options_valid && (build_command || lower_command) && !build_time
-        && !deferred_build_time
+    if (options_valid && (build_command || lower_command || library_command)
+        && !build_time && !deferred_build_time
         && !run_build_time_stage(argc, argv, argv0, cli_diagnostics,
                                  &build_time_reported))
         options_valid = false;
@@ -4807,9 +4821,11 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         fprintf(stderr, "PROFILE jobs %.3f\n", now - profile_tick);
         profile_tick = now;
     }
+    if (located && link_analysis)
+        link_analysis->dump_ranges = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--dump-ranges"));
     if (located && (lower_command || build_command || compile_command
-                    || (library_command && (!emit_interface
-                                            || interface_ir_dump))))
+                    || library_command))
         located = lower_requests_to_ir(grammar, link,
             link_analysis, ir_context, cli_diagnostics,
             (!build_command
@@ -4819,13 +4835,25 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
                     && !parse_cmdr_flag_present(args,
                         CORE_STRING_STATIC("--dump-pdg"))
                     && !parse_cmdr_flag_present(args,
-                        CORE_STRING_STATIC("--dump-summaries"))),
+                        CORE_STRING_STATIC("--dump-summaries"))
+                    && !parse_cmdr_flag_present(args,
+                        CORE_STRING_STATIC("--dump-ranges"))),
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-control-flow")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-pdg")),
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-summaries")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
+    if (located && cache) {
+        bool recorded = n00bb_cache_record_summaries(cache, link,
+                                                     link_analysis);
+        if (optimistic_cache && !build_time_reported
+            && (!recorded || !n00bb_cache_summary_assumptions_hold(cache))) {
+            n00bb_cache_log_restart(CORE_STRING_STATIC(
+                "cached summary assumptions do not hold"));
+            restart_with_strict_cache(argv, argv0);
+        }
+    }
     core_string_t header_output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (located && header_output.data
@@ -4881,7 +4909,16 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && emit_program && cache)
         (void)n00bb_cache_snapshot(cache, link);
     if (emit_program && specialize)
-        located = specialize_calls(link, link_analysis, cli_diagnostics);
+        located = specialize_calls(link_analysis, cli_diagnostics);
+    if (located && emit_program && specialize
+        && parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--report-specialization-gaps")))
+        (void)report_specialization_gaps(link_analysis);
+    if (located && emit_program && !specialize)
+        located = n00bb_rewrite_box_operations(link_analysis)
+            && publish_declared_aggregate_layouts(link_analysis)
+            && publish_interned_variant_layouts(link_analysis)
+            && n00bb_recompute_summaries(link_analysis);
     if (located && build_command
         && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-ir")))
         located = n00bb_dump_ir(link_analysis);

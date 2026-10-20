@@ -1,0 +1,12 @@
+func square(n: int) -> int {
+    return n * n
+}
+func checked(n: int) -> int {
+    require n > 0
+    return n
+}
+func both(xs: Array[int], n: int) -> int {
+    return xs[0] + checked(n)
+}
+let xs: Array[int] = [1, 2]
+require square(2) + both(xs, 1) == 6

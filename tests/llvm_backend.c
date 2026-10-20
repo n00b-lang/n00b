@@ -595,9 +595,11 @@ main(void)
         && ir_instr_operand_value(atomic_return, atomic_or_relaxed->dest));
     th_type *boolean_type = TYPE_PARSE(runtime, "bool");
     ir_func_t *arithmetic_function = FUNC_ADD(runtime, "arithmetic",
-        TYPE_PARSE(runtime, "(i128) -> uint"), IR_LINK_INTERNAL);
+        TYPE_PARSE(runtime, "(i128, uint) -> uint"), IR_LINK_INTERNAL);
     ir_value_t *wide_parameter = arithmetic_function
         ? PARAM_ADD(arithmetic_function, "wide", wide) : nullptr;
+    ir_value_t *count_parameter = arithmetic_function
+        ? PARAM_ADD(arithmetic_function, "count", unsigned_type) : nullptr;
     ir_block_t *arithmetic_block = arithmetic_function
         ? BLOCK_ADD(arithmetic_function, "entry") : nullptr;
     ir_instr_t *nine = ir_instr_add(arithmetic_block, IR_OP_CONST);
@@ -611,7 +613,8 @@ main(void)
     ir_instr_t *narrowed = ir_instr_add(arithmetic_block, IR_OP_CAST);
     ir_instr_t *arithmetic_return = ir_instr_add(arithmetic_block,
                                                 IR_OP_RETURN);
-    assert(boolean_type && wide_parameter && nine && two && difference
+    assert(boolean_type && wide_parameter && count_parameter && nine && two
+        && difference
         && product && quotient && remainder && unequal && greater && narrowed
         && arithmetic_return
         && SET_DEST(nine, "nine", unsigned_type)
@@ -619,7 +622,7 @@ main(void)
         && SET_DEST(two, "two", unsigned_type)
         && ir_instr_operand_uint(two, 2)
         && SET_DEST(difference, "difference", unsigned_type)
-        && ir_instr_operand_value(difference, nine->dest)
+        && ir_instr_operand_value(difference, count_parameter)
         && ir_instr_operand_value(difference, two->dest)
         && ADD_MOD(difference, "trap")
         && SET_DEST(product, "product", unsigned_type)

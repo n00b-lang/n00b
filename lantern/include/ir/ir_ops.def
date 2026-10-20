@@ -130,3 +130,7 @@ IR_OP(RETURN,          "return",          0, VAR, NONE,        "v*",  0,        
 IR_OP(FAIL,            "fail",            1, 1,  NONE,        "v",   0,                              TERMINATOR)
 IR_OP(TRAP,            "trap",            0, 1,  NONE,        "v",   0,                              TERMINATOR | SIDEEFFECT)
 IR_OP(UNREACHABLE,     "unreachable",     0, 0,  NONE,        "",    0,                              TERMINATOR)
+
+IR_OP(TYPE_INDEX,      "type.index",      1, 1,  ANNOTATED,   "t",   0,                              HASRESULT)
+IR_OP(BOX_RAW,        "box.raw",         1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)
+IR_OP(BOX_FROM_RAW,    "box.from_raw",    1, 1,  ANNOTATED,   "v",   0,                              HASRESULT)

@@ -228,36 +228,41 @@ func barrier_queue_drain(marker: Ref[internal.gc.core.Marker]) {
     require false
 }
 
+inline func managed_header(marker: Ref[internal.gc.core.Marker]?,
+                    mutator: Ref[internal.gc.core.Mutator]?,
+                    pointer: Ref[byte]) -> Ref[internal.gc.core.Object_Header]? {
+    var heap: Ref[internal.gc.core.Heap]
+    if marker != nil {
+        heap = marker.get().heap
+    }
+    elif mutator != nil {
+        heap = mutator.get().heap
+    }
+    else {
+        require false
+        return nil
+    }
+    internal.gc.registry.registry_read_lock(heap)
+    let header: Ref[internal.gc.core.Object_Header]? = internal.gc.registry.find_object(
+        heap, __abi_ref_address(pointer))
+    internal.gc.registry.registry_read_unlock(heap)
+    return header
+}
+
 func visit_managed_pointer(marker: Ref[internal.gc.core.Marker]?,
                            mutator: Ref[internal.gc.core.Mutator]?,
                            pointer: Ref[byte]?) {
     if pointer != nil {
-        var heap: Ref[internal.gc.core.Heap]?
-        if marker != nil {
-            heap = marker.get().heap
-        }
-        elif mutator != nil {
-            heap = mutator.get().heap
-        }
-        else {
-            require false
-        }
-        if heap != nil {
-            internal.gc.registry.registry_read_lock(heap.get())
-            let header: Ref[internal.gc.core.Object_Header]? = internal.gc.registry.find_object(
-                heap.get(), __abi_ref_address(pointer.get()))
-            internal.gc.registry.registry_read_unlock(heap.get())
-            if header != nil {
-                let payload: Ref[byte] = internal.gc.core.payload_of(header.get())
-                if marker != nil {
-                    mark_object(marker.get(), payload)
-                }
-                elif mutator != nil {
-                    write_barrier(mutator.get(), payload)
-                }
+        let header: Ref[internal.gc.core.Object_Header]? =
+            managed_header(marker, mutator, pointer.get())
+        if header != nil {
+            let payload: Ref[byte] = internal.gc.core.payload_of(header.get())
+            if marker != nil {
+                mark_object(marker.get(), payload)
             }
-        } else {
-            require false
+            elif mutator != nil {
+                write_barrier(mutator.get(), payload)
+            }
         }
     }
 }
@@ -540,8 +545,13 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
             let item_index: u32                           = box.type_field & 0x7fffffff
             let item:       Ref[internal.abi.Type_Record]? = internal.abi.type_at(item_index)
             require item != nil
-            if item.get().size_bits > 64 {
-                visit_managed_pointer(marker, mutator, box.payload)
+            let payload: Ref[byte]? = box.payload
+            if item.get().size_bits > 64 and payload != nil
+                and managed_header(marker, mutator, payload.get()) == nil {
+                trace_value(marker, mutator, owner, payload.get(),
+                            item_index, 0)
+            } elif item.get().size_bits > 64 {
+                visit_managed_pointer(marker, mutator, payload)
             } else {
                 trace_value(marker, mutator, owner,
                             __gc_byte_offset(address, 8), item_index, 0)

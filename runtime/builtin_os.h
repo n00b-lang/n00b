@@ -33,6 +33,7 @@ uint64_t n00b_os_thread_id(void);
 uint64_t n00b_os_thread_is_main(void);
 int32_t n00b_os_thread_start(n00b_os_thread_entry entry, void *argument);
 void *n00b_os_thread_stack_high_self(void);
+uint64_t n00b_os_stack_address(void);
 size_t n00b_os_stack_red_zone_bytes(void);
 uint64_t n00b_os_now_ns(void);
 void n00b_os_cpu_relax(void);

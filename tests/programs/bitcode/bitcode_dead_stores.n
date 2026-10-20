@@ -1,0 +1,13 @@
+func f(n: int) -> int {
+    var a: int = n + 1
+    a = n + 2
+    let never: int = n * 3
+    var total: int = 0
+    var slot: int = 5
+    let r: Ref[int] = ref slot
+    ref_write(r, 6)
+    ref_write(r, 7)
+    total = ref_read(r)
+    return a + total
+}
+require f(1) == 10

@@ -265,6 +265,7 @@ parse_sym_entry_t *simple_expression_symbol(parse_tree_t *node);
 bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 ir_summary_t *n00bb_native_axiom(ir_summaries_t *summaries,
                                  const ir_func_t *function);
+bool n00bb_native_calls_n00b(const ir_func_t *function);
 parse_sym_entry_t *n00bb_atomic_member_lvalue_root(
     parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_tree_t *target);
@@ -329,7 +330,6 @@ typedef struct n00bb_litmod_site_t n00bb_litmod_site_t;
 typedef struct {
     n00bb_return_source_t *return_source;
     n00bb_alias_edges_t *alias_edges;
-    n00bb_alias_edges_t *escape_edges;
     n00bb_typecase_arm_types_t *typecase_arm_types;
     n00bb_ordered_nodes_t *ordered_nodes;
     n00bb_iteration_plan_t *iteration_plan;
@@ -827,8 +827,6 @@ bool cache_return_source_fact(parse_grammar_t *grammar, parse_tree_t *node,
                               n00bb_tu_state_t *state);
 bool cache_alias_edges(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_tu_state_t *state);
-bool cache_escape_edges(parse_grammar_t *grammar, parse_tree_t *node,
-                        n00bb_tu_state_t *state);
 
 bool n00bb_current_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
                                  int64_t *minimum, int64_t *maximum);
@@ -988,16 +986,8 @@ bool context_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol);
 bool is_module_global_symbol(parse_grammar_t *grammar,
                              parse_sym_entry_t *symbol);
 bool type_may_contain_reference_alias(th_ctx *types, th_type *type);
-void mark_alias_symbol_may_escape(th_ctx *types,
-    parse_sym_entry_t *symbol);
-void mark_referent_value_may_escape(th_ctx *types,
-    parse_sym_entry_t *symbol);
 bool finalize_alias_free_local_summaries(parse_grammar_t *grammar,
     core_translation_unit_t *unit);
-parse_sym_entry_t *cached_argument_value_source(
-    n00bb_tu_state_t *state, parse_tree_t *argument);
-void mark_expression_aliases_may_escape(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, parse_tree_t *node);
 parse_tree_t *aggregate_literal_root(parse_grammar_t *grammar,
     parse_tree_t *expression);
 bool record_aggregate_aliases(parse_grammar_t *grammar,
@@ -1039,7 +1029,6 @@ n00bb_node_facts_t *n00bb_ensure_node_facts(n00bb_tu_state_t *state,
     parse_tree_t *node);
 n00bb_return_source_t *n00bb_node_return_source(parse_tree_t *node);
 n00bb_alias_edges_t *n00bb_node_alias_edges(parse_tree_t *node);
-n00bb_alias_edges_t *n00bb_node_escape_edges(parse_tree_t *node);
 core_string_t n00bb_context_hook_role(core_string_t name);
 bool alias_declaration_is_transparent(parse_tree_t *declaration);
 th_type *declared_type_from_node(parse_grammar_t *grammar,

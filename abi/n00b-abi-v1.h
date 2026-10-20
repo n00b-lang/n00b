@@ -565,7 +565,7 @@ typedef struct {
     n00b_abi_range_v1 frame_layouts;
     uint32_t flags;
     uint32_t variadic_type_index;
-    uint32_t reserved_zero;
+    uint32_t summary_offset;
     uint64_t valid_keyword_bits;
 } n00b_abi_function_v1;
 

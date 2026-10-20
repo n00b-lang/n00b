@@ -27,7 +27,7 @@ if created != nil {
     if mapped != nil {
         let base: Ref[byte] = mapped.get()
         let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
-        assert sys.gc.registry.region_add(heap, base, end)
+        require sys.gc.registry.region_add(heap, base, end)
         let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
         sys.gc.core.block_init(heap, block)
 
@@ -67,7 +67,7 @@ if created != nil {
         heap.keep_bytes = sys.gc.core.committed_bytes(heap)
         __atomic_store(ref heap.nunswept, 1)
         __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
-        assert sys.gc.collect.sweep_some(heap, 1)
+        require sys.gc.collect.sweep_some(heap, 1)
         assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
         assert block.state == cast[u8](sys.gc.core.Block_State.free)
         assert heap.nfree == 1

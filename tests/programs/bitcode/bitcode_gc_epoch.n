@@ -104,7 +104,7 @@ if created != nil {
     wrap_bump.blk = block
     wrap_bump.seen_epoch = 256
     wrap_bump.line = first
-    assert sys.gc.core.bump_next_hole(ref wrap_bump, sys.gc.core.line_bytes)
+    require sys.gc.core.bump_next_hole(ref wrap_bump, sys.gc.core.line_bytes)
     let next_cursor: Ref[byte]? = wrap_bump.cursor
     if next_cursor != nil {
         assert __abi_ref_address(next_cursor.get()) ==

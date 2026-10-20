@@ -14,6 +14,8 @@ public alias Symbol_Record = builtin.Symbol_Record
 public alias Module_Record = builtin.Module_Record
 public alias Function_Record = builtin.Function_Record
 public alias Baked_Node_Record = builtin.Baked_Node_Record
+public alias Arm_Record = builtin.Arm_Record
+public alias Physical_Run_Record = builtin.Physical_Run_Record
 
 enum Tag_Kind {
     invalid = 0, direct_bits = 1, pointer_null = 2, bitptr_depth = 3
@@ -43,6 +45,13 @@ record Box_Value layout(c) {
     stride:     u16
     type_field: u32
     payload:    Ref[byte]?
+}
+
+record Bitptr_Value layout(c) {
+    base:       Ref[byte]?
+    type_index: u32
+    start_bit:  u16
+    end_bit:    u16
 }
 
 record Callback_Value layout(c) {
@@ -78,6 +87,14 @@ func type_for(descriptor: typespec) -> Ref[Type_Record]? {
 
 func field_at(index: u32) -> Ref[Field_Record]? {
     return __abi_field(index)
+}
+
+func arm_at(index: u32) -> Ref[Arm_Record]? {
+    return __abi_arm(index)
+}
+
+func physical_run_at(index: u32) -> Ref[Physical_Run_Record]? {
+    return __abi_physical_run(index)
 }
 
 func trace_at(index: u32) -> Ref[Trace_Record]? {
@@ -168,6 +185,26 @@ func string_backing_at(address: Ref[byte]) -> Ref[byte]? {
 
 func bytes(range: Range) -> Ref[byte]? {
     return __abi_bytes(range.first, range.count)
+}
+
+func string_tag(address: Ref[byte]) -> u64 {
+    let bits: Ref[String_Bits] = unsafe_cast[Ref[String_Bits]] address
+    return bits.high >> 62
+}
+
+func string_length(address: Ref[byte]) -> uint {
+    let bits: Ref[String_Bits] = unsafe_cast[Ref[String_Bits]] address
+    if string_tag(address) == 0 {
+        return cast[uint](bits.high >> 56) & 15
+    }
+    return cast[uint](bits.high & 0x0fffffffffffffff)
+}
+
+func string_bytes(address: Ref[byte]) -> Ref[byte]? {
+    if string_tag(address) == 0 {
+        return address
+    }
+    return string_backing_at(address)
 }
 
 func range_index(range: Range, ordinal: u32) -> i64 {

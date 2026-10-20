@@ -1,3 +1,4 @@
+#include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
 #include "enum_value.h"
 #include "ir/summary.h"
@@ -16,28 +17,34 @@ n00bb_builtin_reference_function(parse_sym_entry_t *symbol)
 }
 
 typedef struct {
-    core_string_t name;
-    core_string_t native;
-    uint32_t      effects;
-    uint8_t       reads;
-    uint8_t       writes;
-    bool          collection_free;
+    core_string_t     name;
+    core_string_t     native;
+    uint32_t          effects;
+    uint8_t           reads;
+    uint8_t           writes;
+    bool              collection_free;
+    ir_sreturn_kind_t returns;
 } builtin_native_name_t;
 
 #define NATIVE(name, native, effects, reads, writes)                       \
     {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), effects, reads, \
-     writes, false}
+     writes, false, IR_SRETURN_NONE}
 #define COLLECTION_FREE_NATIVE(name, native, effects, reads, writes)       \
     {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), effects, reads, \
-     writes, true}
+     writes, true, IR_SRETURN_NONE}
+#define RETURNING_NATIVE(name, native, collection_free, returns)           \
+    {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), 0, 0, 0,       \
+     collection_free, returns}
 #define NATIVE_IO (IR_SUMMARY_MAY_IO)
 #define NATIVE_BLOCKING_IO (IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_BLOCK)
-#define NATIVE_CALLS (IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_TRAP       \
-                      | IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_BLOCK     \
-                      | IR_SUMMARY_MAY_IO)
+#define NATIVE_ENTERS (IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE       \
+                       | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_MAY_IO)
+#define NATIVE_ENTRY_FLAGS (IR_SUMMARY_CALLS_UNKNOWN                       \
+                            | IR_SUMMARY_CALLS_FINALIZERS                  \
+                            | IR_SUMMARY_STARTS_THREADS)
 
 static const builtin_native_name_t builtin_native_names[] = {
-    COLLECTION_FREE_NATIVE("__bitptr", "n00bb_bitptr", 0, 0, 0),
+    RETURNING_NATIVE("__bitptr", "n00bb_bitptr", true, IR_SRETURN_PARAM),
     NATIVE("__os_page_size", "n00b_os_page_size", 0, 0, 0),
     NATIVE("__gc_enter_blocking",
            "sys.internal.gc.alloc.enter_blocking_runtime", 0, 0, 0),
@@ -66,13 +73,17 @@ static const builtin_native_name_t builtin_native_names[] = {
     NATIVE("__os_thread_fence", "n00b_os_thread_fence", 0, 0, 0),
     NATIVE("__os_thread_id", "n00b_os_thread_id", 0, 0, 0),
     NATIVE("__os_thread_is_main", "n00b_os_thread_is_main", 0, 0, 0),
-    NATIVE("__os_thread_start", "n00b_os_thread_start", NATIVE_CALLS, 0, 0),
+    NATIVE("__os_thread_start", "n00b_os_thread_start",
+           NATIVE_ENTERS | IR_SUMMARY_STARTS_THREADS, 0, 0),
+    COLLECTION_FREE_NATIVE("__function_effects", "n00bb_function_effects", 0,
+                           0, 0),
     NATIVE("__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
            0, 0, 0),
+    NATIVE("__os_stack_address", "n00b_os_stack_address", 0, 0, 0),
     NATIVE("__os_stack_red_zone_bytes", "n00b_os_stack_red_zone_bytes", 0,
            0, 0),
     NATIVE("__os_thread_control_self", "n00b_os_thread_control_self", 0, 0,
-           0x1),
+           0),
     NATIVE("__os_thread_capture_self", "n00b_os_thread_capture_self", 0, 0,
            0x1),
     NATIVE("__os_thread_suspend", "n00b_os_thread_suspend",
@@ -81,11 +92,14 @@ static const builtin_native_name_t builtin_native_names[] = {
     NATIVE("__os_now_ns", "n00b_os_now_ns", 0, 0, 0),
     NATIVE("__os_cpu_relax", "n00b_os_cpu_relax", 0, 0, 0),
     NATIVE("__panic_trace", "n00bb_runtime_panic_trace", NATIVE_IO, 0, 0),
-    NATIVE("__os_map_zeroed", "n00b_os_map_zeroed", 0, 0, 0),
+    RETURNING_NATIVE("__os_map_zeroed", "n00b_os_map_zeroed", false,
+                     IR_SRETURN_FRESH_EXTERNAL),
     NATIVE("__os_unmap", "n00b_os_unmap", 0, 0, 0x1),
     NATIVE("__os_protect", "n00b_os_protect", 0, 0, 0x1),
     NATIVE("__abi_type", "n00b_builtin_abi_type", 0, 0, 0),
     NATIVE("__abi_field", "n00b_builtin_abi_field", 0, 0, 0),
+    NATIVE("__abi_arm", "n00b_builtin_abi_arm", 0, 0, 0),
+    NATIVE("__abi_physical_run", "n00b_builtin_abi_physical_run", 0, 0, 0),
     NATIVE("__abi_trace", "n00b_builtin_abi_trace", 0, 0, 0),
     NATIVE("__abi_trace_child", "n00b_builtin_abi_trace_child", 0, 0, 0),
     NATIVE("__abi_trace_arm", "n00b_builtin_abi_trace_arm", 0, 0, 0),
@@ -115,12 +129,22 @@ static const builtin_native_name_t builtin_native_names[] = {
     NATIVE("__abi_string_backing_at", "n00b_builtin_abi_string_backing_at", 0,
            0x1, 0),
     NATIVE("__abi_range_index", "n00b_builtin_abi_range_index", 0, 0, 0),
+    NATIVE("__abi_unary_type", "n00b_builtin_abi_unary_type", 0, 0, 0),
+    NATIVE("__abi_type_specializes", "n00b_builtin_abi_type_specializes", 0,
+           0, 0),
+    NATIVE("__abi_type_argument_type", "n00b_builtin_abi_type_argument_type",
+           0, 0, 0),
+    NATIVE("__abi_named_type", "n00b_builtin_abi_named_type", 0, 0, 0),
+    RETURNING_NATIVE("__box_of", "n00bb_box_of", false, IR_SRETURN_PARAM),
+    NATIVE("__result_box", "n00bb_result_box", 0, 0, 0),
+    RETURNING_NATIVE("__box_as", "n00bb_box_as", false, IR_SRETURN_UNKNOWN),
     NATIVE("__abi_bytes", "n00b_builtin_abi_bytes", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__abi_ref_address",
                            "n00b_builtin_abi_ref_address", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__load_le_u64", "n00bb_load_le_u64", 0, 0x1, 0),
     COLLECTION_FREE_NATIVE("__load_le_u32", "n00bb_load_le_u32", 0, 0x1, 0),
-    NATIVE("__gc_invoke_finalizer", "n00b_gc_finalize", NATIVE_CALLS, 0, 0),
+    NATIVE("__gc_invoke_finalizer", "n00b_gc_finalize",
+           NATIVE_ENTERS | IR_SUMMARY_CALLS_FINALIZERS, 0, 0),
     NATIVE("__array_length", "__n00bb_array_length", 0, 0x1, 0),
     NATIVE("__array_prefix", "__n00bb_array_prefix", 0, 0x1, 0x1),
     NATIVE("__array_clear", "__n00bb_array_clear", 0, 0, 0x1),
@@ -132,6 +156,7 @@ static const builtin_native_name_t builtin_native_names[] = {
 
 #undef NATIVE
 #undef COLLECTION_FREE_NATIVE
+#undef RETURNING_NATIVE
 
 ir_summary_t *
 n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
@@ -144,6 +169,8 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         ir_summary_t *summary = ir_summary_new(summaries, function);
         ir_summary_set_flags(summary, native->effects
             | (native->collection_free ? 0 : IR_SUMMARY_MAY_COLLECT));
+        if (native->effects & IR_SUMMARY_MAY_TRAP)
+            ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
         for (uint32_t p = 0; p < 8; p++) {
             uint8_t flags = 0;
             if (native->reads & (1u << p))
@@ -157,9 +184,30 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
             ir_summary_add_access(summary,
                 (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
                 IR_SACCESS_READ | IR_SACCESS_WRITE | IR_SACCESS_READS_ENTRY);
+        for (uint32_t p = 0; (native->effects & NATIVE_ENTRY_FLAGS)
+             && p < th_func_nparams(function->type); p++)
+            ir_summary_set_param_escape(summary, p,
+                IR_SESCAPE_ADDRESS | IR_SESCAPE_REFERENT);
+        ir_summary_set_return(summary,
+            (ir_sreturn_t){.kind = native->returns, .param = 0});
+        ir_sflow_t flow;
+        n00bb_buffer_native_flow(function, &flow);
+        ir_summary_set_flow(summary, &flow);
+        ir_sflow_release(&flow);
         return summary;
     }
     return nullptr;
+}
+
+bool
+n00bb_native_calls_n00b(const ir_func_t *function)
+{
+    for (size_t i = 0; function && !function->n_blocks
+         && i < sizeof(builtin_native_names)
+                    / sizeof(builtin_native_names[0]); i++)
+        if (core_string_eq(builtin_native_names[i].native, function->name))
+            return builtin_native_names[i].effects & NATIVE_ENTRY_FLAGS;
+    return false;
 }
 
 static const core_string_t *
@@ -316,15 +364,30 @@ register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
 }
 
 static bool
+register_box_primitives(parse_symtab_t *symtab, th_ctx *types,
+                        th_type *nil_type)
+{
+    th_type *any = th_name(types, CORE_STRING_STATIC("Any"));
+    th_type *slot = any ? th_ind(types, 0, any) : nullptr;
+    th_type *held = th_var(types);
+    th_type *produced = th_var(types);
+    return slot && held && produced
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__box_of"), slot, &held, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__result_box"), slot, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__box_as"), produced, &slot, 1);
+}
+
+static bool
 register_bitptr_builtin(parse_symtab_t *symtab, th_ctx *types,
                         th_type *nil_type, th_type *reference)
 {
     th_type *result = th_name(types,
                               CORE_STRING_STATIC("builtin.bitptr.Bitptr"));
-    parse_sym_entry_t *symbol = builtin_native_symbol(symtab, types,
-        nil_type, CORE_STRING_STATIC("__bitptr"), result, &reference, 1);
-    return symbol && parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.native.returns-parameter"), symbol);
+    return builtin_native_symbol(symtab, types, nil_type,
+        CORE_STRING_STATIC("__bitptr"), result, &reference, 1) != nullptr;
 }
 
 bool
@@ -400,6 +463,10 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         entry_item ? th_ind(types, 0, entry_item) : nullptr,
         argument_item ? th_ind(types, 0, argument_item) : nullptr,
     };
+    th_type *effects_subject = th_var(types);
+    th_type *effects_args[] = {
+        effects_subject ? th_ind(types, 0, effects_subject) : nullptr,
+    };
     return register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_page_size"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -452,8 +519,12 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__os_thread_start"), i32,
             thread_start_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__function_effects"), u64, effects_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_stack_high_self"),
             optional_reference, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_stack_address"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_stack_red_zone_bytes"),
             uint, nullptr, 0)
@@ -507,6 +578,8 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         CORE_STRING_STATIC("builtin.abi.Module_Record"),
         CORE_STRING_STATIC("builtin.abi.Baked_Node_Record"),
         CORE_STRING_STATIC("builtin.abi.Function_Record"),
+        CORE_STRING_STATIC("builtin.abi.Arm_Record"),
+        CORE_STRING_STATIC("builtin.abi.Physical_Run_Record"),
     };
     static const core_string_t names[] = {
         CORE_STRING_STATIC("__abi_type"), CORE_STRING_STATIC("__abi_field"),
@@ -521,6 +594,8 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         CORE_STRING_STATIC("__abi_module"),
         CORE_STRING_STATIC("__abi_baked_node"),
         CORE_STRING_STATIC("__abi_function"),
+        CORE_STRING_STATIC("__abi_arm"),
+        CORE_STRING_STATIC("__abi_physical_run"),
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         th_type *record = th_name(types, record_names[i]);
@@ -583,6 +658,18 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
             bytes_result, &byte_reference, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_range_index"), i64, range_args, 3)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_unary_type"), u32, bytes_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_type_specializes"),
+            th_name(types, CORE_STRING_STATIC("i32")), bytes_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_type_argument_type"), u32, bytes_args,
+            1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_named_type"), u32,
+            (th_type *[]){byte_reference, uint, byte_reference, u32}, 4)
+        && register_box_primitives(symtab, types, nil_type)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_bytes"), bytes_result, bytes_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -982,9 +1069,7 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     if (!invoke || !parse_sym_set_binding(invoke,
             CORE_STRING_STATIC("n00bb.abi.native"),
             (void *)builtin_native_name(
-                CORE_STRING_STATIC("__gc_invoke_finalizer")))
-        || !parse_sym_set_binding(invoke,
-            CORE_STRING_STATIC("n00bb.native.calls-n00b"), invoke))
+                CORE_STRING_STATIC("__gc_invoke_finalizer"))))
         return false;
     invoke->type = invoke_signature;
     invoke->error_type = nil_type;

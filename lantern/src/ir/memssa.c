@@ -312,6 +312,64 @@ ir_memssa_visit_clobbers(ir_memssa_t *m, uint32_t load_access,
 }
 
 bool
+ir_memssa_visit_element_defs(ir_memssa_t *m, uint32_t load_access,
+                             ir_element_relation_fn relate,
+                             ir_memdef_visit_fn visit, void *context)
+{
+    const ir_access_t *load = m ? ir_places_access_at(m->places, load_access)
+                                : nullptr;
+    if (!load || load->kind != IR_ACCESS_LOAD || !relate
+        || m->use_def[load_access] == UINT32_MAX) return false;
+    bool local = all_private(m->places, load);
+    core_list_t(uint32_t) pending = core_list_new(uint32_t);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    core_list_push(pending, m->use_def[load_access]);
+    bool ok = true;
+    while (ok && pending.len) {
+        uint32_t index = pending.data[--pending.len];
+        if (!core_dict_add(&seen, (void *)(uintptr_t)(index + 1),
+                           (void *)(uintptr_t)(index + 1)))
+            continue;
+        const memdef_node_t *node = &m->defs.data[index];
+        switch (node->def.kind) {
+        case IR_MEMDEF_ENTRY:
+            ok = visit(context, &node->def);
+            break;
+        case IR_MEMDEF_PHI:
+            for (uint32_t i = 0; i < node->incoming_count; i++)
+                core_list_push(pending,
+                               m->incoming.data[node->first_incoming + i]);
+            break;
+        case IR_MEMDEF_CALL:
+            if (!local) ok = visit(context, &node->def);
+            core_list_push(pending, node->prev);
+            break;
+        case IR_MEMDEF_STORE: {
+            if (!places_overlap(m->places, node->def.access, load)) {
+                core_list_push(pending, node->prev);
+                break;
+            }
+            ir_element_relation_t relation = relate(context, node->def.instr,
+                                                    load->instr);
+            if (relation == IR_ELEMENT_DISJOINT) {
+                core_list_push(pending, node->prev);
+                break;
+            }
+            ok = visit(context, &node->def);
+            if (relation != IR_ELEMENT_SAME
+                && !covers(m->places, node->def.access, load))
+                core_list_push(pending, node->prev);
+            break;
+        }
+        }
+    }
+    core_dict_free(&seen);
+    core_list_free(pending);
+    return ok;
+}
+
+bool
 ir_memssa_reads_entry(ir_memssa_t *m, uint32_t load_access)
 {
     const ir_access_t *load = m ? ir_places_access_at(m->places, load_access)

@@ -75,7 +75,7 @@ if mapped != nil {
     heap.los_bytes = 0
     heap.los_cache_bytes = 0
     heap.cfg.max_heap_bytes = 0
-    assert sys.gc.los.cache_take(heap, 10 * 1024) == nil
+    require sys.gc.los.cache_take(heap, 10 * 1024) == nil
     sys.gc.los.cache_drain(heap)
     let metadata: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
     sys.gc.core.block_init(heap, metadata)

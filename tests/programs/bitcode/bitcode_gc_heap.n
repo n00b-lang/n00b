@@ -26,7 +26,7 @@ if created != nil {
     if attached != nil {
         assert heap.nmutators == 1
         var slot: Ref[byte]? = nil
-        assert sys.gc.roots.push(attached.get(), ref slot)
+        require sys.gc.roots.push(attached.get(), ref slot)
         assert sys.gc.roots.depth(attached.get()) == 1
     } else { require false }
     sys.gc.heap.destroy(heap)
@@ -64,12 +64,12 @@ let item_bytes: uint = sys.abi.size_bytes(item)
 let item_alignment: uint = sys.abi.alignment_bytes(item)
 var slots: Ref[byte]? = nil
 var capacity: uint = 0
-assert sys.gc.heap.grow_array(ref slots, ref capacity,
+require sys.gc.heap.grow_array(ref slots, ref capacity,
                                   item_bytes, item_alignment, 0, 1)
 if slots != nil {
     let first: Ref[u64] = unsafe_cast[Ref[u64]] slots.get()
     ref_write(first, retained)
-    assert sys.gc.heap.grow_array(ref slots, ref capacity,
+    require sys.gc.heap.grow_array(ref slots, ref capacity,
                                       item_bytes, item_alignment,
                                       1, capacity + 1)
     if slots != nil {

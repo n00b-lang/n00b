@@ -50,7 +50,6 @@ runtime_abi_headers = lantern.partial_dependency(
 runtime_abi_sources = ['runtime/runtime_abi.c', 'runtime/runtime_allocate.c', 'runtime/runtime_abi_io.c',
      'runtime/runtime_panic.c', 'runtime/runtime_dwarf.c', 'runtime/runtime_ffi.c',
      'runtime/runtime_unwind.c',
-     'runtime/runtime_abi_box.c',
      'runtime/runtime_abi_storage.c', 'runtime/native_frame_runtime.c', 'runtime/builtin_os.c',
      'runtime/builtin_os_stw.c',
      'runtime/builtin_abi.c', 'abi/abi_directory.c', 'abi/abi_string.c']
@@ -96,15 +95,15 @@ n00bb_exe = executable(
      'compiler/compiler_tu_range.c', 'compiler/compiler_tu_builtins.c',
      'compiler/compiler_tu_alias.c', 'compiler/compiler_tu_walk.c',
      'compiler/compiler_tu_interface.c',
-     'compiler/compiler_link.c', 'compiler/compiler_link_calls.c', 'compiler/compiler_link_effects.c',
-     'compiler/compiler_link_initializers.c',
-     'compiler/compiler_link_lifetime.c',
+     'compiler/compiler_link.c', 'compiler/compiler_link_calls.c',
      'compiler/compiler_link_traits.c',
      'compiler/compiler_link_packages.c', 'compiler/compiler_link_environment.c',
      'compiler/compiler_link_stages.c', 'compiler/driver.c',
      'compiler/enum_value.c',
      'compiler/preprocessor.c', 'abi/abi_string.c',
-     'compiler/specialize.c',
+     'compiler/specialize.c', 'compiler/box_calls.c',
+     'compiler/storage_placement.c',
+     'compiler/interface_summaries.c',
      'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c',
      'compiler/abi_layout.c', 'compiler/abi_record_layout.c', 'compiler/abi_static_graph.c',
      'abi/abi_directory.c',
@@ -1430,6 +1429,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_mark_pool.n'],
+    env: ['N00BB_TEST_BUILD_FLAGS=--closed-world'],
     suite: 'slow',
 )
 
@@ -1470,6 +1470,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_finalizer_cycle.n'],
+    env: ['N00BB_TEST_BUILD_FLAGS=--closed-world'],
     suite: 'slow',
 )
 
@@ -1572,6 +1573,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_heap.n'],
+    env: ['N00BB_TEST_BUILD_FLAGS=--closed-world'],
     suite: 'slow',
 )
 
@@ -1837,6 +1839,197 @@ test(
                / 'bitcode_partial_field_global.n',
            'N00BB-L0044',
            'bitcode_partial_field_global.n:10:15'],
+    suite: 'slow',
+)
+
+test(
+    'assert-ref-write-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_assert_ref_write.n',
+           'assert expression has a side effect: \'fill\' writes through argument 1',
+           'bitcode_assert_ref_write.n:7:1'],
+    suite: 'slow',
+)
+
+test(
+    'unbounded-recursion-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'warning_expected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_unbounded_recursion.n',
+           'function \'spin\' recurses with no path that returns',
+           'function \'ping\' recurses with no path that returns',
+           'function \'pong\' recurses with no path that returns'],
+    suite: 'slow',
+)
+
+test(
+    'range-agreement-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'range_agreement.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_shared_ranges.n',
+           'bitcode_shared_ranges', '12'],
+    suite: 'slow',
+)
+
+test(
+    'overflow-warning-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'warning_expected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_overflow_warning.n',
+           'bitcode_overflow_warning.n:2:12'],
+    suite: 'slow',
+)
+
+test(
+    'overflow-always-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_overflow_always.n',
+           'N00BB-L0050', 'bitcode_overflow_always.n:3:12'],
+    suite: 'slow',
+)
+
+test(
+    'abi-summaries-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_abi_summaries.n'],
+    suite: 'slow',
+)
+
+test(
+    'thread-races-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'thread_races.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_thread_races.n'],
+    suite: 'slow',
+)
+
+test(
+    'unused-fields-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'closed_world_fields.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_unused_fields.n'],
+    suite: 'slow',
+)
+
+test(
+    'function-effects-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_function_effects.n'],
+    suite: 'slow',
+)
+
+test(
+    'closed-world-callback-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'closed_world_callback.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_closed_world_callback.n'],
+    suite: 'slow',
+)
+
+test(
+    'range-warnings-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'warning_expected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_range_warnings.n',
+           'N00BB-W0013', 'bitcode_range_warnings.n:2:8',
+           'the divisor may be invalid', 'bitcode_range_warnings.n:9:16',
+           'the shift amount may be invalid: [0, 39]',
+           'bitcode_range_warnings.n:15:16'],
+    suite: 'slow',
+)
+
+test(
+    'divide-always-zero-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_divide_always_zero.n',
+           'N00BB-L0051', 'bitcode_divide_always_zero.n:3:12'],
+    suite: 'slow',
+)
+
+test(
+    'trap-summaries-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'summary_expected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_trap_summaries.n',
+           'summary @bitcode_trap_summaries.both may-trap=>  traps explicit bounds arithmetic',
+           'summary @bitcode_trap_summaries.square may-trap=>  traps arithmetic',
+           'summary @bitcode_trap_summaries.checked may-trap=>  traps explicit'],
+    suite: 'slow',
+)
+
+test(
+    'ignored-results-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'warning_expected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_ignored_results.n',
+           'bitcode_ignored_results.n:13:1'],
+    suite: 'slow',
+)
+
+test(
+    'dead-stores-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'warning_expected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_dead_stores.n',
+           '\'never\' is assigned here and never read afterward',
+           'bitcode_dead_stores.n:8:5'],
+    suite: 'slow',
+)
+
+test(
+    'dead-code-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'warning_expected.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_dead_code.n',
+           'bitcode_dead_code.n:7:5', 'bitcode_dead_code.n:13:5',
+           'bitcode_dead_code.n:18:27'],
+    suite: 'slow',
+)
+
+test(
+    'diverging-paths-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_diverging_paths.n'],
     suite: 'slow',
 )
 

@@ -260,6 +260,8 @@ resolve_into(ir_places_t *places, const ir_value_t *address,
         case IR_OP_RETAIN_REF:
         case IR_OP_CAST:
         case IR_OP_BITCAST:
+        case IR_OP_BOX_RAW:
+        case IR_OP_BOX_FROM_RAW:
         case IR_OP_NOMINAL_CAST:
         case IR_OP_TYPE_NARROW:
         case IR_OP_FIELD:
