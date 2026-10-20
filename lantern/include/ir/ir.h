@@ -524,6 +524,7 @@ struct ir_func_t {
     ir_annots_t   annots;
     ir_props_t    props;
     ir_module_t  *owner;
+    struct ir_func_analyses_t *analyses;
 };
 
 ir_ctx_t *ir_ctx_new(void);

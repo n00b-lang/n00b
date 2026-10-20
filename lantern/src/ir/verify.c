@@ -7,6 +7,7 @@
 #include "ir/pass.h"
 #include "ir/text.h"
 #include "ir/typelang.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/verify.h"
 #include "ir/walk.h"
@@ -21,6 +22,8 @@ typedef struct {
     bool         bad;
     ir_func_t   *dom_for;
     ir_doms_t   *dom;
+    size_t       dom_scope;
+    bool         dom_scoped;
 
     core_dict_t   defined;
     core_dict_t   locals;
@@ -42,9 +45,11 @@ static bool holds(core_dict_t *s, const void *p)
 static ir_doms_t *doms(V *v, ir_func_t *f)
 {
     if (v->dom_for != f) {
-        ir_doms_free(v->dom);
-        v->dom     = ir_doms_of(f);
-        v->dom_for = f;
+        if (v->dom_scoped) ir_analysis_scope_end(v->dom_scope);
+        v->dom_scope  = ir_analysis_scope_begin();
+        v->dom_scoped = true;
+        v->dom        = ir_func_doms(f);
+        v->dom_for    = f;
     }
 
     return v->dom;
@@ -1848,7 +1853,7 @@ static ir_props_t run_phases(ir_module_t *m, ir_props_t want, ir_diags_t *out,
 
     audit_spans(&v);
 
-    ir_doms_free(v.dom);
+    if (v.dom_scoped) ir_analysis_scope_end(v.dom_scope);
     core_dict_free(&v.checked);
     ir_walk_free(v.collect);
 

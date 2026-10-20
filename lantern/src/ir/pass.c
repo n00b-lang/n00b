@@ -1,6 +1,7 @@
 #include <stdlib.h>
 
 #include "private/ir/internal.h"
+#include "ir/analyses.h"
 #include "ir/verify.h"
 
 bool ir_pass_declares(const ir_pass_t *p)
@@ -74,7 +75,10 @@ static ir_pass_result_t run_bare(const ir_pass_t *p, ir_module_t *m,
         return IR_PASS_UNMET;
     }
 
-    if (!p->run(m, d, state)) {
+    size_t scope = ir_analysis_scope_begin();
+    bool ran = p->run(m, d, state);
+    ir_analysis_scope_end(scope);
+    if (!ran) {
         return IR_PASS_FAILED;
     }
 

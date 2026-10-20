@@ -78,6 +78,7 @@ struct ir_module_t {
     size_t      n_funcs;
     size_t      cap_funcs;
     void        *func_index;
+    bool         analyses_hooked;
     void        *file_index;
     void        *ext_op_index;
 };

@@ -1,5 +1,6 @@
 #include "ir/range.h"
 
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "lib/list.h"
 
@@ -530,14 +531,25 @@ checked_index_dominates(ir_doms_t *doms,
     return ir_dominates(doms, guard->block, index->block);
 }
 
+static ir_index_proofs_t *index_proofs_build(ir_func_t *function);
+
 ir_index_proofs_t *
 ir_index_proofs_new(ir_func_t *function)
+{
+    size_t             scope  = ir_analysis_scope_begin();
+    ir_index_proofs_t *proofs = index_proofs_build(function);
+    ir_analysis_scope_end(scope);
+    return proofs;
+}
+
+static ir_index_proofs_t *
+index_proofs_build(ir_func_t *function)
 {
     if (!function) return nullptr;
     ir_index_proofs_t *proofs = calloc(1, sizeof(*proofs));
     if (!proofs) return nullptr;
     if (!(ir_module_props(function->owner) & IR_PROP_SSA)) return proofs;
-    ir_doms_t *doms = ir_doms_of(function);
+    ir_doms_t *doms = ir_func_doms(function);
     if (!doms) return proofs;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
@@ -550,7 +562,6 @@ ir_index_proofs_new(ir_func_t *function)
             if (!compute_bounds(function, length->dest, &set, 8)) {
                 core_list_free(set);
                 ir_index_proofs_free(proofs);
-                ir_doms_free(doms);
                 return nullptr;
             }
             for (uint32_t ib = 0; ib < function->n_blocks; ib++) {
@@ -594,7 +605,6 @@ ir_index_proofs_new(ir_func_t *function)
                         && !record_proof(proofs, index)) {
                         core_list_free(set);
                         ir_index_proofs_free(proofs);
-                        ir_doms_free(doms);
                         return nullptr;
                     }
                 }
@@ -602,7 +612,6 @@ ir_index_proofs_new(ir_func_t *function)
             core_list_free(set);
         }
     }
-    ir_doms_free(doms);
     return proofs;
 }
 

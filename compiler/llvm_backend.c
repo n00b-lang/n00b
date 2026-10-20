@@ -2,6 +2,7 @@
 #include "cached_body.h"
 
 #include "ir/layout.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/range.h"
 #include "ir/shape.h"

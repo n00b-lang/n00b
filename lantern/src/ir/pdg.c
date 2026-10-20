@@ -18,6 +18,7 @@ struct ir_pdg_t {
     core_arena_t   arena;
     ir_func_t     *f;
     ir_doms_t     *dom;
+    bool           owns_dom;
     ir_instr_t   **nodes;
     uint32_t       n_nodes;
     uint32_t      *base;
@@ -55,7 +56,7 @@ void ir_pdg_free(ir_pdg_t *g)
     if (!g) {
         return;
     }
-    ir_doms_free(g->dom);
+    if (g->owns_dom) ir_doms_free(g->dom);
     core_arena_free(&g->arena);
     core_free(g);
 }
@@ -442,7 +443,21 @@ static void index_edges(ir_pdg_t *g)
 
 ir_pdg_t *ir_pdg_of(ir_func_t *f)
 {
-    if (!f || !f->n_blocks) {
+    ir_doms_t *dom = f && f->n_blocks ? ir_doms_of(f) : nullptr;
+    ir_pdg_t  *g   = dom ? ir_pdg_with_doms(f, dom) : nullptr;
+
+    if (g) {
+        g->owns_dom = true;
+    }
+    else {
+        ir_doms_free(dom);
+    }
+    return g;
+}
+
+ir_pdg_t *ir_pdg_with_doms(ir_func_t *f, ir_doms_t *dom)
+{
+    if (!f || !f->n_blocks || !dom) {
         return nullptr;
     }
 
@@ -453,7 +468,7 @@ ir_pdg_t *ir_pdg_of(ir_func_t *f)
     core_arena_t *ctx = &g->arena;
 
     g->f     = f;
-    g->dom   = ir_doms_of(f);
+    g->dom   = dom;
     g->base  = core_arena_alloc(ctx, (f->n_blocks + 1) * sizeof(uint32_t));
     g->exact = true;
 

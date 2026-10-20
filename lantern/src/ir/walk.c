@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/walk.h"
 
@@ -152,8 +153,9 @@ ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
     for (size_t i = 0; ok && i < functions.len; i++) {
         ir_func_t *function = functions.data[i];
         ok = visit(function, user);
-        ir_doms_t *doms = ok && function->n_blocks
-            ? ir_doms_of(function) : nullptr;
+        size_t     scope = ir_analysis_scope_begin();
+        ir_doms_t *doms  = ok && function->n_blocks
+            ? ir_func_doms(function) : nullptr;
         ok = ok && (!function->n_blocks || doms);
         for (size_t b = 0; ok && b < function->n_blocks; b++) {
             ir_block_t *block = function->blocks[b];
@@ -171,7 +173,7 @@ ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
                 }
             }
         }
-        ir_doms_free(doms);
+        ir_analysis_scope_end(scope);
     }
     core_dict_free(&seen);
     core_list_free(functions);

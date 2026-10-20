@@ -2,6 +2,7 @@
 #define IR_PDG_H
 
 #include "ir/diag.h"
+#include "ir/doms.h"
 #include "ir/ir.h"
 #include "lib/string.h"
 
@@ -26,6 +27,7 @@ typedef struct {
 typedef struct ir_pdg_t ir_pdg_t;
 
 ir_pdg_t *ir_pdg_of(ir_func_t *f);
+ir_pdg_t *ir_pdg_with_doms(ir_func_t *f, ir_doms_t *dom);
 void      ir_pdg_free(ir_pdg_t *g);
 
 uint32_t             ir_pdg_node_count(const ir_pdg_t *g);

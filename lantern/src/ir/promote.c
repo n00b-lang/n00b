@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/walk.h"
 #include "ir/pass.h"
@@ -251,7 +252,7 @@ static bool promote_func_body(P *p, ir_func_t *f)
         }
     }
     p->f       = f;
-    p->dom     = ir_doms_of(f);
+    p->dom     = ir_func_doms(f);
     p->counter = ir_alloc(p->m->ctx, f->n_locals * sizeof(uint32_t));
 
     ir_ctx_t *ctx = p->m->ctx;
@@ -404,9 +405,10 @@ static bool promote_func_body(P *p, ir_func_t *f)
 
 static bool promote_func(P *p, ir_func_t *f)
 {
-    bool ok = promote_func_body(p, f);
+    size_t scope = ir_analysis_scope_begin();
+    bool   ok    = promote_func_body(p, f);
 
-    ir_doms_free(p->dom);
+    ir_analysis_scope_end(scope);
     p->dom = nullptr;
 
     return ok;
@@ -480,7 +482,8 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
     for (size_t i = 0; i < ir_func_count(m); i++) {
         ir_func_t *f     = ir_func_at(m, i);
         uint32_t   walls = f->n_blocks;
-        ir_doms_t *dom   = ir_doms_of(f);
+        size_t     scope = ir_analysis_scope_begin();
+        ir_doms_t *dom   = ir_func_doms(f);
 
         uint32_t     edges = ir_pred_total(dom);
         ir_block_t **mids  = ir_alloc(m->ctx, (edges ? edges : 1)
@@ -527,7 +530,7 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                 ir_block_t *cut = ir_block_add(f, text);
 
                 if (!cut) {
-                    ir_doms_free(dom);
+                    ir_analysis_scope_end(scope);
                     return false;
                 }
                 cut->span = ir_span_known(b->span) ? b->span : to->span;
@@ -539,7 +542,7 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                                                       0);
 
                 if (!jump || !ir_instr_operand_block(jump, to)) {
-                    ir_doms_free(dom);
+                    ir_analysis_scope_end(scope);
                     return false;
                 }
                 retarget(t, to, cut);
@@ -585,7 +588,7 @@ bool ir_split_edges(ir_module_t *m, ir_diags_t *d)
                 count[hit[x]] = 0;
             }
         }
-        ir_doms_free(dom);
+        ir_analysis_scope_end(scope);
     }
     ir_module_invalidate(m, ir_pass_split_edges.invalidates);
     ir_module_establish(m, IR_PROP_NO_CRIT_EDGE);

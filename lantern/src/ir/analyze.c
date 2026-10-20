@@ -2,6 +2,7 @@
 
 #include "private/ir/internal.h"
 #include "ir/analyze.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/walk.h"
 
@@ -31,6 +32,8 @@ typedef struct {
     ir_diags_t *d;
     ir_doms_t  *dom;
     ir_rd_t    *rd;
+    size_t      scope;
+    bool        scoped;
 } A;
 
 static bool analyze_func(ir_visit_t *vi)
@@ -42,8 +45,10 @@ static bool analyze_func(ir_visit_t *vi)
         return false;
     }
 
-    a->dom = ir_doms_of(f);
-    a->rd  = f->n_locals ? ir_rd_of(f, a->dom) : nullptr;
+    a->scope  = ir_analysis_scope_begin();
+    a->scoped = true;
+    a->dom    = ir_func_doms(f);
+    a->rd    = f->n_locals ? ir_rd_of(f, a->dom) : nullptr;
 
     return true;
 }
@@ -52,9 +57,10 @@ static bool analyze_func_end(ir_visit_t *vi)
 {
     A *a = vi->user;
 
-    ir_doms_free(a->dom);
-    a->dom = nullptr;
-    a->rd  = nullptr;
+    if (a->scoped) ir_analysis_scope_end(a->scope);
+    a->scoped = false;
+    a->dom    = nullptr;
+    a->rd     = nullptr;
 
     return true;
 }

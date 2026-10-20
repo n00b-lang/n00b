@@ -4,6 +4,7 @@
 #include "private/ir/internal.h"
 #include "lib/option.h"
 #include "ir/pass.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/region_walk.h"
 
@@ -621,8 +622,9 @@ static bool structure_func(S *s, ir_func_t *f)
     if (!f->n_blocks) {
         return true;
     }
+    size_t scope = ir_analysis_scope_begin();
     s->f      = f;
-    s->dom    = ir_doms_of(f);
+    s->dom    = ir_func_doms(f);
     s->placed = core_alloc_array(bool, f->n_blocks);
     s->mark   = core_alloc_array(uint32_t, f->n_blocks);
     s->work   = core_alloc_array(ir_block_t *, f->n_blocks);
@@ -659,11 +661,11 @@ static bool structure_func(S *s, ir_func_t *f)
     core_free(s->placed);
     core_free(s->mark);
     core_free(s->work);
-    ir_doms_free(s->dom);
     s->placed = nullptr;
     s->mark   = nullptr;
     s->work   = nullptr;
     s->dom    = nullptr;
+    ir_analysis_scope_end(scope);
 
     return true;
 }

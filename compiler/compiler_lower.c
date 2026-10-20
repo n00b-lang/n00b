@@ -67,6 +67,7 @@ double n00bb_profile_seconds(void);
 #include "parse/annot_walk.h"
 #include "ir/ir.h"
 #include "ir/exec_graph.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/analyze.h"
 #include "ir/option_proof.h"
@@ -18693,25 +18694,25 @@ effect_function_summaries_expand_calls(
     if (!summaries) return false;
     for (size_t i = 0; i < summaries->list.len; i++) {
         ir_func_t *function = summaries->list.data[i].function;
-        ir_doms_t *doms = function->n_blocks ? ir_doms_of(function) : nullptr;
-        for (size_t b = 0; doms && b < function->n_blocks; b++) {
+        size_t scope = ir_analysis_scope_begin();
+        ir_doms_t *doms = ir_func_doms(function);
+        bool ok = true;
+        for (size_t b = 0; ok && doms && b < function->n_blocks; b++) {
             ir_block_t *block = function->blocks[b];
             if (!ir_block_reachable(doms, block)) continue;
-            for (size_t n = 0; n < block->n_instrs; n++) {
+            for (size_t n = 0; ok && n < block->n_instrs; n++) {
                 ir_instr_t *instruction = block->instrs[n];
                 if (!instruction || instruction->op != IR_OP_CALL
                     || !instruction->n_operands
                     || instruction->operands[0].kind != IR_OPD_VALUE)
                     continue;
                 ir_value_t *callee = instruction->operands[0].value;
-                if (callee && callee->kind == IR_VAL_FUNC && callee->owner
-                    && !effect_summary_add(summaries, callee->owner)) {
-                    ir_doms_free(doms);
-                    return false;
-                }
+                ok = !callee || callee->kind != IR_VAL_FUNC || !callee->owner
+                    || effect_summary_add(summaries, callee->owner);
             }
         }
-        ir_doms_free(doms);
+        ir_analysis_scope_end(scope);
+        if (!ok) return false;
     }
     return true;
 }
@@ -19140,8 +19141,38 @@ thread_read_site_at(
     return false;
 }
 
+static bool effect_analyze_targets_body(
+    ir_func_t *function, ir_value_t *const *targets, size_t target_count,
+    const size_t *summary_indices,
+    n00bb_effect_summaries_t *summaries,
+    core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
+    const uint8_t *initial_states, bool *reads_before_initialization,
+    ir_instr_t **first_uninitialized_read,
+    uint8_t *success_states, uint8_t *failure_states,
+    ir_instr_t *stop_before, uint8_t *states_before);
+
 static bool
 effect_analyze_targets_function(
+    ir_func_t *function, ir_value_t *const *targets, size_t target_count,
+    const size_t *summary_indices,
+    n00bb_effect_summaries_t *summaries,
+    core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
+    const uint8_t *initial_states, bool *reads_before_initialization,
+    ir_instr_t **first_uninitialized_read,
+    uint8_t *success_states, uint8_t *failure_states,
+    ir_instr_t *stop_before, uint8_t *states_before)
+{
+    size_t scope = ir_analysis_scope_begin();
+    bool ok = effect_analyze_targets_body(function, targets, target_count,
+        summary_indices, summaries, thread_read_sites, initial_states,
+        reads_before_initialization, first_uninitialized_read,
+        success_states, failure_states, stop_before, states_before);
+    ir_analysis_scope_end(scope);
+    return ok;
+}
+
+static bool
+effect_analyze_targets_body(
     ir_func_t *function, ir_value_t *const *targets, size_t target_count,
     const size_t *summary_indices,
     n00bb_effect_summaries_t *summaries,
@@ -19172,7 +19203,7 @@ effect_analyze_targets_function(
         return true;
     }
     ir_block_t *entry = ir_block_entry(function);
-    ir_doms_t *doms = ir_doms_of(function);
+    ir_doms_t *doms = ir_func_doms(function);
     uint8_t *incoming = calloc(function->n_blocks * target_count, 1);
     uint8_t *state = calloc(target_count, 1);
     uint8_t *before_outcome = calloc(target_count, 1);
@@ -19185,7 +19216,6 @@ effect_analyze_targets_function(
         free(state);
         free(before_outcome);
         free(stored_after_outcome);
-        ir_doms_free(doms);
         return false;
     }
     memcpy(incoming + entry->index * target_count, initial_states,
@@ -19332,7 +19362,6 @@ effect_analyze_targets_function(
     free(state);
     free(before_outcome);
     free(stored_after_outcome);
-    ir_doms_free(doms);
     return true;
 }
 
@@ -19539,7 +19568,7 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
     for (size_t f = 0; f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);
         if (control_flow) {
-            ir_pdg_t *pdg = ir_pdg_of(function);
+            ir_pdg_t *pdg = ir_func_pdg(function);
             fprintf(stdout, "control-flow @%.*s\n",
                     (int)function->name.u8_bytes, function->name.data);
             for (uint32_t b = 0; b < function->n_blocks; b++) {
@@ -19561,10 +19590,9 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
                     fprintf(stdout, "  %.*s -> exit\n",
                             (int)block->name.u8_bytes, block->name.data);
             }
-            ir_pdg_free(pdg);
         }
         if (full_pdg) {
-            ir_pdg_t *pdg = ir_pdg_of(function);
+            ir_pdg_t *pdg = ir_func_pdg(function);
             core_string_t certainty = ir_pdg_is_exact(pdg)
                 ? CORE_STRING_STATIC("exact") : CORE_STRING_STATIC("may");
             fprintf(stdout, "pdg @%.*s (%.*s)\n",
@@ -19584,7 +19612,6 @@ dump_ir_analysis(ir_module_t *module, bool control_flow, bool full_pdg)
                             edge->via->name.data);
                 fputc('\n', stdout);
             }
-            ir_pdg_free(pdg);
         }
     }
 }
@@ -20636,11 +20663,30 @@ n00bb_binding_transfer(ir_block_t *block, uint8_t state,
     return state;
 }
 
+static bool validate_consumed_binding_body(parse_sym_entry_t *symbol,
+                                           ir_func_t *function,
+                                           ir_value_t *binding,
+                                           ir_diags_t *diagnostics,
+                                           core_string_t binding_name);
+
 static bool
 n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
                                 ir_func_t *function, ir_value_t *binding,
                                 ir_diags_t *diagnostics,
                                 core_string_t binding_name)
+{
+    size_t scope = ir_analysis_scope_begin();
+    bool ok = validate_consumed_binding_body(symbol, function, binding,
+                                             diagnostics, binding_name);
+    ir_analysis_scope_end(scope);
+    return ok;
+}
+
+static bool
+validate_consumed_binding_body(parse_sym_entry_t *symbol,
+                               ir_func_t *function, ir_value_t *binding,
+                               ir_diags_t *diagnostics,
+                               core_string_t binding_name)
 {
     if (!function || !binding || !diagnostics || !function->n_blocks)
         return false;
@@ -20652,11 +20698,10 @@ n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
     if (!has_consume) return true;
 
     ir_block_t *entry = ir_block_entry(function);
-    ir_doms_t *doms = ir_doms_of(function);
+    ir_doms_t *doms = ir_func_doms(function);
     uint8_t *incoming = calloc(function->n_blocks, sizeof(*incoming));
     if (!entry || !doms || !incoming || entry->index >= function->n_blocks) {
         free(incoming);
-        ir_doms_free(doms);
         return false;
     }
     incoming[entry->index] = binding->kind == IR_VAL_LOCAL
@@ -20712,7 +20757,6 @@ n00bb_validate_consumed_binding(parse_sym_entry_t *symbol,
         ok = false;
     }
     free(incoming);
-    ir_doms_free(doms);
     return ok;
 }
 
@@ -21232,10 +21276,10 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
         for (size_t f = 0; ok && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
-            ir_pdg_t *pdg = function->n_blocks ? ir_pdg_of(function)
-                                               : nullptr;
-            ir_pdg_free(pdg);
-            if (function->n_blocks && !pdg) {
+            size_t scope = ir_analysis_scope_begin();
+            bool built = ir_func_pdg(function) != nullptr;
+            ir_analysis_scope_end(scope);
+            if (function->n_blocks && !built) {
                 ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
                     IR_DIAG_INTERNAL, ir_module_span(module),
                     CORE_STRING_STATIC("this lowered function"));
@@ -21295,6 +21339,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             }
         }
     }
+    for (size_t i = 0; i < units.len; i++)
+        ir_module_release_analyses(tu_state(units.data[i])->ir_module);
     core_list_free(units);
     return ok;
 }

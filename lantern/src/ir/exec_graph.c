@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/exec_graph.h"
 #include "lib/buffer.h"
@@ -205,8 +206,12 @@ ir_exec_graph_add_function(
         || !ir_block_entry(function) || graph->functions.len >= UINT32_MAX)
         return false;
 
-    ir_doms_t *doms = ir_doms_of(function);
-    if (!doms) return false;
+    size_t scope = ir_analysis_scope_begin();
+    ir_doms_t *doms = ir_func_doms(function);
+    if (!doms) {
+        ir_analysis_scope_end(scope);
+        return false;
+    }
     core_list_t(exec_exit_spec_t) exits = core_list_new(exec_exit_spec_t);
     bool complete = true;
     for (uint32_t i = 0; i < function->n_blocks; i++) {
@@ -228,7 +233,7 @@ ir_exec_graph_add_function(
         if (outcome != IR_EXEC_GRAPH_OUTCOME_NONE)
             core_list_push(exits, ((exec_exit_spec_t){block, outcome}));
     }
-    ir_doms_free(doms);
+    ir_analysis_scope_end(scope);
     if (!complete) {
         core_list_free(exits);
         return false;

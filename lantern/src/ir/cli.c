@@ -4,6 +4,7 @@
 
 #include "private/ir/internal.h"
 #include "parse/commander.h"
+#include "ir/analyses.h"
 #include "ir/analyze.h"
 #include "ir/cli.h"
 #include "ir/layout.h"
@@ -306,7 +307,7 @@ static bool cfg_func(ir_visit_t *vi)
 {
     dump *u = vi->user;
 
-    u->pdg = ir_pdg_of(vi->func);
+    u->pdg = ir_func_pdg(vi->func);
     put_func(u->out, vi->func);
     fputc('\n', u->out);
 
@@ -317,7 +318,6 @@ static bool cfg_func_end(ir_visit_t *vi)
 {
     dump *u = vi->user;
 
-    ir_pdg_free(u->pdg);
     u->pdg = nullptr;
 
     return true;
@@ -370,7 +370,7 @@ static bool dom_func(ir_visit_t *vi)
 {
     dump *u = vi->user;
 
-    u->dom = ir_doms_of(vi->func);
+    u->dom = ir_func_doms(vi->func);
     put_func(u->out, vi->func);
     fputc('\n', u->out);
 
@@ -381,7 +381,6 @@ static bool dom_func_end(ir_visit_t *vi)
 {
     dump *u = vi->user;
 
-    ir_doms_free(u->dom);
     u->dom = nullptr;
 
     return true;
@@ -528,12 +527,11 @@ static void install_explain(ir_walk_t *w)
 static bool graph_func(ir_visit_t *vi)
 {
     dump     *u = vi->user;
-    ir_pdg_t *g = ir_pdg_of(vi->func);
+    ir_pdg_t *g = ir_func_pdg(vi->func);
 
     put_func(u->out, vi->func);
     fprintf(u->out, " %s\n", ir_pdg_is_exact(g) ? "exact" : "may");
     put_edges(u->out, g, u->control, u->data);
-    ir_pdg_free(g);
 
     return false;
 }

@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/option_proof.h"
 #include "ir/pdg.h"
@@ -466,13 +467,13 @@ static void check_func(ir_func_t *f, ir_diags_t *d)
     if (!f->n_blocks) {
         return;
     }
-    proof_t p = {.f = f, .pdg = ir_pdg_of(f), .dom = ir_doms_of(f)};
+    size_t  scope = ir_analysis_scope_begin();
+    proof_t p = {.f = f, .pdg = ir_func_pdg(f), .dom = ir_func_doms(f)};
 
     p.base = core_alloc_size(sizeof(uint32_t), f->n_blocks + 1);
     if (!p.pdg || !p.dom || !p.base) {
         core_free(p.base);
-        ir_pdg_free(p.pdg);
-        ir_doms_free(p.dom);
+        ir_analysis_scope_end(scope);
         return;
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
@@ -503,8 +504,7 @@ static void check_func(ir_func_t *f, ir_diags_t *d)
     core_free(p.forward);
     core_free(p.backward);
     core_free(p.base);
-    ir_pdg_free(p.pdg);
-    ir_doms_free(p.dom);
+    ir_analysis_scope_end(scope);
 }
 
 static bool check_visit(ir_visit_t *vi)
