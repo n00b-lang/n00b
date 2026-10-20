@@ -29,4 +29,13 @@ void         ir_memssa_free(ir_memssa_t *memssa);
 bool ir_memssa_visit_clobbers(ir_memssa_t *memssa, uint32_t load_access,
                               ir_memdef_visit_fn visit, void *context);
 
+uint32_t           ir_memssa_def_before(const ir_memssa_t *memssa,
+                                        const ir_instr_t *in);
+const ir_memdef_t *ir_memssa_def(const ir_memssa_t *memssa, uint32_t id);
+uint32_t           ir_memssa_def_prev(const ir_memssa_t *memssa, uint32_t id);
+uint32_t           ir_memssa_phi_count(const ir_memssa_t *memssa,
+                                       uint32_t id);
+uint32_t           ir_memssa_phi_incoming(const ir_memssa_t *memssa,
+                                          uint32_t id, uint32_t index);
+
 #endif

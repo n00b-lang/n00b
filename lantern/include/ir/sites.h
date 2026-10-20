@@ -32,19 +32,29 @@ void             ir_sites_free(ir_sites_t *sites);
 uint32_t         ir_sites_count(const ir_sites_t *sites);
 const ir_site_t *ir_site_at(const ir_sites_t *sites, uint32_t index);
 
-typedef bool (*ir_instr_predicate_fn)(void *context, const ir_instr_t *in);
-
 enum {
-    IR_PATH_EXIT_RETURN = 1u << 0,
-    IR_PATH_EXIT_FAIL   = 1u << 1,
+    IR_PATH_UNPASSED = 1u << 0,
+    IR_PATH_PASSED   = 1u << 1,
 };
 
-bool ir_paths_can_return(ir_func_t *f, ir_instr_predicate_fn diverges,
-                         void *context);
-bool ir_paths_all_pass(ir_func_t *f, ir_instr_predicate_fn passes,
-                       ir_instr_predicate_fn diverges, void *context);
-bool ir_paths_all_pass_to(ir_func_t *f, uint32_t exits,
-                          ir_instr_predicate_fn passes,
-                          ir_instr_predicate_fn diverges, void *context);
+typedef enum : uint8_t {
+    IR_PATH_ANY,
+    IR_PATH_SUCCESS,
+    IR_PATH_FAILURE,
+} ir_path_outcome_t;
+
+typedef struct {
+    uint8_t returned;
+    uint8_t failed;
+} ir_path_exits_t;
+
+typedef uint8_t (*ir_path_step_fn)(void *context, const ir_instr_t *in,
+                                   ir_path_outcome_t outcome);
+
+ir_instr_t *ir_call_outcome_branch(const ir_instr_t *terminator,
+                                   bool *true_is_success);
+uint8_t     ir_path_apply(uint8_t state, uint8_t effect);
+bool        ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
+                          void *context, ir_path_exits_t *exits);
 
 #endif

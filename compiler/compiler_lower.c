@@ -179,25 +179,11 @@ typedef struct {
 } n00bb_array_extent_lowering_t;
 
 typedef struct {
-    ir_func_t *function;
-    uint8_t *success_states;
-    uint8_t *failure_states;
-    size_t target_count;
-    uint8_t *parameter_success_states;
-    uint8_t *parameter_failure_states;
-} n00bb_function_effect_summary_t;
-core_list_decl(n00bb_function_effect_summary_t);
-typedef struct {
-    core_list_t(n00bb_function_effect_summary_t) list;
-    core_dict_t index;
-    core_dict_t store_origins;
-} n00bb_effect_summaries_t;
-typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) initializer_roots;
     core_list_t(n00bb_ir_func_ptr_t) entry_functions;
-    core_list_t(n00bb_ir_value_ptr_t) targets;
-    n00bb_effect_summaries_t summaries;
-    core_dict_t target_indices;
+    core_dict_t targets;
+    ir_summary_hooks_t hooks;
+    ir_summaries_t *summaries;
 } n00bb_runtime_init_analysis_t;
 typedef struct {
     ir_func_t *function;
@@ -18588,137 +18574,6 @@ build_initializer_graph(
                                   IR_EXEC_GRAPH_EDGE_SEQUENCE);
 }
 
-enum {
-    N00BB_GLOBAL_STATE_UNWRITTEN = 1u << 0,
-    N00BB_GLOBAL_STATE_WRITTEN = 1u << 1,
-};
-
-static uint8_t
-effect_global_apply_effect(uint8_t incoming, uint8_t effects)
-{
-    uint8_t result = 0;
-    if (incoming & N00BB_GLOBAL_STATE_WRITTEN)
-        result |= effects ? N00BB_GLOBAL_STATE_WRITTEN : 0;
-    if (incoming & N00BB_GLOBAL_STATE_UNWRITTEN)
-        result |= effects;
-    return result;
-}
-
-static bool
-effect_function_list_add(core_list_t(n00bb_ir_func_ptr_t) *functions,
-                           ir_func_t *function)
-{
-    if (!functions || !function) return false;
-    for (size_t i = 0; i < functions->len; i++)
-        if (functions->data[i] == function) return true;
-    core_list_push(*functions, function);
-    return true;
-}
-
-static n00bb_function_effect_summary_t *
-effect_summary_for(n00bb_effect_summaries_t *summaries,
-                     ir_func_t *function)
-{
-    bool found = false;
-    size_t index = summaries && function ? (size_t)(uintptr_t)core_dict_get(
-        &summaries->index, function, &found) : 0;
-    return found ? &summaries->list.data[index] : nullptr;
-}
-
-static bool
-effect_summary_add(
-    n00bb_effect_summaries_t *summaries,
-    ir_func_t *function)
-{
-    if (!summaries || !function) return false;
-    if (effect_summary_for(summaries, function)) return true;
-    n00bb_function_effect_summary_t summary = {.function = function};
-    if (function->n_params) {
-        summary.parameter_success_states = calloc(function->n_params,
-                                                   sizeof(uint8_t));
-        summary.parameter_failure_states = calloc(function->n_params,
-                                                   sizeof(uint8_t));
-        if (!summary.parameter_success_states
-            || !summary.parameter_failure_states) {
-            free(summary.parameter_success_states);
-            free(summary.parameter_failure_states);
-            return false;
-        }
-    }
-    core_dict_put(&summaries->index, function, summaries->list.len);
-    core_list_push(summaries->list, summary);
-    return true;
-}
-
-static bool
-effect_function_is_fallible(ir_func_t *function)
-{
-    if (!function || !function->owner || !function->type) return false;
-    th_type *failure = th_func_error(function->type);
-    return failure && !th_is_nil(failure);
-}
-
-static uint8_t
-effect_function_outcomes(
-    n00bb_effect_summaries_t *summaries,
-    ir_func_t *function, size_t target_index, bool failure)
-{
-    if (!function) return N00BB_GLOBAL_STATE_UNWRITTEN;
-    bool fallible = effect_function_is_fallible(function);
-    if (failure && !fallible) return 0;
-    if (!function->n_blocks)
-        return N00BB_GLOBAL_STATE_UNWRITTEN;
-    n00bb_function_effect_summary_t *summary =
-        effect_summary_for(summaries, function);
-    if (!summary) return N00BB_GLOBAL_STATE_UNWRITTEN;
-    if (target_index >= summary->target_count) return 0;
-    return failure ? summary->failure_states[target_index]
-                   : summary->success_states[target_index];
-}
-
-static uint8_t
-effect_parameter_outcomes(
-    n00bb_effect_summaries_t *summaries,
-    ir_func_t *function, uint32_t parameter, bool failure)
-{
-    n00bb_function_effect_summary_t *summary =
-        effect_summary_for(summaries, function);
-    if (!summary || parameter >= function->n_params) return 0;
-    uint8_t *states = failure ? summary->parameter_failure_states
-                              : summary->parameter_success_states;
-    return states ? states[parameter] : 0;
-}
-
-static bool
-effect_function_summaries_expand_calls(
-    n00bb_effect_summaries_t *summaries)
-{
-    if (!summaries) return false;
-    for (size_t i = 0; i < summaries->list.len; i++) {
-        ir_func_t *function = summaries->list.data[i].function;
-        size_t scope = ir_analysis_scope_begin();
-        ir_doms_t *doms = ir_func_doms(function);
-        bool ok = true;
-        for (size_t b = 0; ok && doms && b < function->n_blocks; b++) {
-            ir_block_t *block = function->blocks[b];
-            if (!ir_block_reachable(doms, block)) continue;
-            for (size_t n = 0; ok && n < block->n_instrs; n++) {
-                ir_instr_t *instruction = block->instrs[n];
-                if (!instruction || instruction->op != IR_OP_CALL
-                    || !instruction->n_operands
-                    || instruction->operands[0].kind != IR_OPD_VALUE)
-                    continue;
-                ir_value_t *callee = instruction->operands[0].value;
-                ok = !callee || callee->kind != IR_VAL_FUNC || !callee->owner
-                    || effect_summary_add(summaries, callee->owner);
-            }
-        }
-        ir_analysis_scope_end(scope);
-        if (!ok) return false;
-    }
-    return true;
-}
-
 static bool
 collect_phase_reachable_function(ir_func_t *function, void *raw)
 {
@@ -18950,558 +18805,55 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
     return ok;
 }
 
-static ir_instr_t *
-effect_branch_outcome_call(ir_instr_t *terminator,
-                             bool *true_is_success)
-{
-    if (!terminator || terminator->op != IR_OP_BRANCH
-        || terminator->n_operands < 3
-        || terminator->operands[0].kind != IR_OPD_VALUE) return nullptr;
-    ir_value_t *condition = terminator->operands[0].value;
-    ir_instr_t *comparison = condition ? condition->def : nullptr;
-    if (!comparison || (comparison->op != IR_OP_EQ
-            && comparison->op != IR_OP_NE)
-        || comparison->n_operands != 2) return nullptr;
-    for (size_t tag_index = 0; tag_index < 2; tag_index++) {
-        ir_operand_t *tag_operand = &comparison->operands[tag_index];
-        ir_operand_t *literal_operand = &comparison->operands[1 - tag_index];
-        if (tag_operand->kind != IR_OPD_VALUE
-            || literal_operand->kind != IR_OPD_VALUE) continue;
-        ir_instr_t *tag = tag_operand->value
-            ? tag_operand->value->def : nullptr;
-        ir_instr_t *literal = literal_operand->value
-            ? literal_operand->value->def : nullptr;
-        if (!tag || tag->op != IR_OP_VARIANT_TAG || tag->n_operands != 1
-            || tag->operands[0].kind != IR_OPD_VALUE
-            || !tag->operands[0].value || !tag->operands[0].value->def
-            || tag->operands[0].value->def->op != IR_OP_CALL
-            || !literal || literal->op != IR_OP_CONST
-            || literal->n_operands != 1
-            || literal->operands[0].kind != IR_OPD_CONST
-            || literal->operands[0].lit.i.neg
-            || literal->operands[0].lit.i.mag != th_arm_tag(CORE_STRING_STATIC("ok")))
-            continue;
-        if (true_is_success) *true_is_success = comparison->op == IR_OP_EQ;
-        return tag->operands[0].value->def;
-    }
-    return nullptr;
-}
-
-static bool
-effect_target_matches(ir_value_t *target, ir_value_t *candidate)
-{
-    if (!target || !candidate) return false;
-    if (target->kind == IR_VAL_GLOBAL)
-        return candidate->kind == IR_VAL_GLOBAL && target->global
-            && candidate->global
-            && ir_global_identity(candidate->global)
-                == ir_global_identity(target->global);
-    return target == candidate;
-}
-
-
-typedef struct {
-    const void *identity;
-    bool global;
-    bool uniform;
-} effect_store_origin_t;
-
-static bool
-effect_origin_identity(ir_value_t *value, const void **identity,
-                       bool *global)
-{
-    *global = value->kind == IR_VAL_GLOBAL;
-    if (!*global) *identity = value;
-    else *identity = value->global ? ir_global_identity(value->global)
-                                   : nullptr;
-    return *identity != nullptr;
-}
-
-typedef struct {
-    effect_store_origin_t origin;
-    bool saw;
-} effect_origin_collect_t;
-
-static bool
-effect_origin_collect_visit(void *context, ir_value_t *candidate)
-{
-    effect_origin_collect_t *collect = context;
-    const void *identity = nullptr;
-    bool global = false;
-    bool known = candidate
-        && effect_origin_identity(candidate, &identity, &global);
-    if (!collect->saw) {
-        collect->saw = true;
-        collect->origin = (effect_store_origin_t){
-            .identity = identity, .global = global, .uniform = known,
-        };
-    }
-    else collect->origin.uniform &= known
-        && identity == collect->origin.identity
-        && global == collect->origin.global;
-    return true;
-}
-
-static const effect_store_origin_t *
-effect_store_origin(n00bb_effect_summaries_t *summaries, ir_value_t *address)
-{
-    effect_store_origin_t *origin = core_dict_get(&summaries->store_origins,
-                                                  address, nullptr);
-    if (origin) return origin;
-    effect_origin_collect_t collect = {0};
-    bool complete = ir_value_visit_store_origins(address,
-        effect_origin_collect_visit, &collect);
-    origin = core_alloc(effect_store_origin_t);
-    *origin = collect.origin;
-    origin->uniform = complete && collect.saw && collect.origin.uniform;
-    core_dict_put(&summaries->store_origins, address, origin);
-    return origin;
-}
-
-static bool
-effect_origin_targets(n00bb_effect_summaries_t *summaries,
-                      ir_value_t *address, ir_value_t *target)
-{
-    const void *identity = nullptr;
-    bool global = false;
-    if (!address || !effect_origin_identity(target, &identity, &global))
-        return false;
-    const effect_store_origin_t *origin = effect_store_origin(summaries,
-                                                              address);
-    return origin->uniform && origin->global == global
-        && origin->identity == identity;
-}
-
-static bool
-effect_store_targets(n00bb_effect_summaries_t *summaries,
-                     ir_instr_t *instruction, ir_value_t *target)
-{
-    if (!instruction || !target
-        || (instruction->op != IR_OP_GLOBAL_STORE
-            && instruction->op != IR_OP_STORE)
-        || instruction->n_operands < 1
-        || instruction->operands[0].kind != IR_OPD_VALUE) return false;
-    return effect_origin_targets(summaries, instruction->operands[0].value,
-                                 target);
-}
-
-static bool
-effect_call_argument_targets(n00bb_effect_summaries_t *summaries,
-                             ir_instr_t *call, uint32_t parameter,
-                             ir_value_t *target)
-{
-    if (!call || !target || call->op != IR_OP_CALL
-        || parameter + 1 >= call->n_operands
-        || call->operands[parameter + 1].kind != IR_OPD_VALUE) return false;
-    return effect_origin_targets(summaries,
-                                 call->operands[parameter + 1].value, target);
-}
-
-static uint8_t
-effect_effect_sequence(uint8_t first, uint8_t second)
-{
-    uint8_t result = 0;
-    if (first & N00BB_GLOBAL_STATE_WRITTEN)
-        result |= N00BB_GLOBAL_STATE_WRITTEN;
-    if (first & N00BB_GLOBAL_STATE_UNWRITTEN) result |= second;
-    return result;
-}
-
-static uint8_t
-effect_call_effects(
-    n00bb_effect_summaries_t *summaries,
-    ir_instr_t *call, ir_value_t *target, size_t target_index, bool failure)
-{
-    ir_func_t *callee = call && call->n_operands
-        && call->operands[0].kind == IR_OPD_VALUE
-        && call->operands[0].value
-        && call->operands[0].value->kind == IR_VAL_FUNC
-        ? call->operands[0].value->owner : nullptr;
-    uint8_t effects = effect_function_outcomes(summaries, callee,
-                                                 target_index, failure);
-    if (!callee || (failure && !effect_function_is_fallible(callee)))
-        return effects;
-    for (uint32_t p = 0; p < callee->n_params; p++) {
-        uint8_t parameter_effects = effect_parameter_outcomes(
-            summaries, callee, p, failure);
-        if (parameter_effects
-            && effect_call_argument_targets(summaries, call, p, target))
-            effects = effect_effect_sequence(effects, parameter_effects);
-    }
-    return effects;
-}
-
-static bool
-thread_read_site_at(
-    core_list_t(n00bb_thread_read_site_t) *read_sites,
-    ir_func_t *function, ir_instr_t *instruction)
-{
-    for (size_t i = 0; read_sites && i < read_sites->len; i++)
-        if (read_sites->data[i].function == function
-            && read_sites->data[i].instruction == instruction)
-            return true;
-    return false;
-}
-
-static bool effect_analyze_targets_body(
-    ir_func_t *function, ir_value_t *const *targets, size_t target_count,
-    const size_t *summary_indices,
-    n00bb_effect_summaries_t *summaries,
-    core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
-    const uint8_t *initial_states, bool *reads_before_initialization,
-    ir_instr_t **first_uninitialized_read,
-    uint8_t *success_states, uint8_t *failure_states,
-    ir_instr_t *stop_before, uint8_t *states_before);
-
-static bool
-effect_analyze_targets_function(
-    ir_func_t *function, ir_value_t *const *targets, size_t target_count,
-    const size_t *summary_indices,
-    n00bb_effect_summaries_t *summaries,
-    core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
-    const uint8_t *initial_states, bool *reads_before_initialization,
-    ir_instr_t **first_uninitialized_read,
-    uint8_t *success_states, uint8_t *failure_states,
-    ir_instr_t *stop_before, uint8_t *states_before)
-{
-    size_t scope = ir_analysis_scope_begin();
-    bool ok = effect_analyze_targets_body(function, targets, target_count,
-        summary_indices, summaries, thread_read_sites, initial_states,
-        reads_before_initialization, first_uninitialized_read,
-        success_states, failure_states, stop_before, states_before);
-    ir_analysis_scope_end(scope);
-    return ok;
-}
-
-static bool
-effect_analyze_targets_body(
-    ir_func_t *function, ir_value_t *const *targets, size_t target_count,
-    const size_t *summary_indices,
-    n00bb_effect_summaries_t *summaries,
-    core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
-    const uint8_t *initial_states, bool *reads_before_initialization,
-    ir_instr_t **first_uninitialized_read,
-    uint8_t *success_states, uint8_t *failure_states,
-    ir_instr_t *stop_before, uint8_t *states_before)
-{
-    if (!function || !targets || !target_count || !initial_states
-        || !success_states || !failure_states
-        || (function->n_blocks
-            && target_count > SIZE_MAX / function->n_blocks))
-        return false;
-    if (reads_before_initialization)
-        memset(reads_before_initialization, 0,
-               target_count * sizeof(*reads_before_initialization));
-    if (first_uninitialized_read)
-        memset(first_uninitialized_read, 0,
-               target_count * sizeof(*first_uninitialized_read));
-    memset(success_states, 0, target_count);
-    memset(failure_states, 0, target_count);
-    if (states_before) memset(states_before, 0, target_count);
-    if (!function->n_blocks) {
-        memcpy(success_states, initial_states, target_count);
-        if (effect_function_is_fallible(function))
-            memcpy(failure_states, initial_states, target_count);
-        return true;
-    }
-    ir_block_t *entry = ir_block_entry(function);
-    ir_doms_t *doms = ir_func_doms(function);
-    uint8_t *incoming = calloc(function->n_blocks * target_count, 1);
-    uint8_t *state = calloc(target_count, 1);
-    uint8_t *before_outcome = calloc(target_count, 1);
-    bool *stored_after_outcome = calloc(target_count,
-                                        sizeof(*stored_after_outcome));
-    if (!entry || !doms || !incoming || !state || !before_outcome
-        || !stored_after_outcome
-        || entry->index >= function->n_blocks) {
-        free(incoming);
-        free(state);
-        free(before_outcome);
-        free(stored_after_outcome);
-        return false;
-    }
-    memcpy(incoming + entry->index * target_count, initial_states,
-           target_count);
-    bool changed;
-    do {
-        changed = false;
-        for (size_t b = 0; b < function->n_blocks; b++) {
-            ir_block_t *block = function->blocks[b];
-            if (!block || block->index >= function->n_blocks
-                || !ir_block_reachable(doms, block)) continue;
-            memcpy(state, incoming + block->index * target_count,
-                   target_count);
-            bool active = false;
-            for (size_t t = 0; t < target_count; t++) active |= state[t] != 0;
-            if (!active) continue;
-            ir_instr_t *terminator = ir_block_terminator(block);
-            bool true_is_success = false;
-            ir_instr_t *outcome_call =
-                effect_branch_outcome_call(terminator, &true_is_success);
-            bool call_after_outcome = false;
-            bool after_outcome_call = false;
-            for (size_t n = 0; n < block->n_instrs; n++) {
-                ir_instr_t *instruction = block->instrs[n];
-                if (instruction == outcome_call) {
-                    after_outcome_call = true;
-                    continue;
-                }
-                if (after_outcome_call && instruction
-                    && instruction->op == IR_OP_CALL)
-                    call_after_outcome = true;
-            }
-            if (call_after_outcome) outcome_call = nullptr;
-
-            bool found_outcome_call = false;
-            memset(stored_after_outcome, 0,
-                   target_count * sizeof(*stored_after_outcome));
-            after_outcome_call = false;
-            for (size_t n = 0; n < block->n_instrs; n++) {
-                ir_instr_t *instruction = block->instrs[n];
-                if (!instruction) continue;
-                if (instruction == stop_before && states_before)
-                    for (size_t t = 0; t < target_count; t++)
-                        states_before[t] |= state[t];
-                if (thread_read_site_at(thread_read_sites, function,
-                                        instruction)) {
-                    for (size_t t = 0; t < target_count; t++) {
-                        if (!(state[t] & N00BB_GLOBAL_STATE_UNWRITTEN))
-                            continue;
-                        if (reads_before_initialization)
-                            reads_before_initialization[t] = true;
-                        if (first_uninitialized_read
-                            && !first_uninitialized_read[t])
-                            first_uninitialized_read[t] = instruction;
-                    }
-                }
-                if (instruction == terminator) continue;
-                if (instruction == outcome_call) {
-                    memcpy(before_outcome, state, target_count);
-                    found_outcome_call = true;
-                    after_outcome_call = true;
-                    continue;
-                }
-                bool store = false;
-                for (size_t t = 0; t < target_count; t++) {
-                    if (!state[t]
-                        || !effect_store_targets(summaries, instruction,
-                                                 targets[t]))
-                        continue;
-                    state[t] = N00BB_GLOBAL_STATE_WRITTEN;
-                    stored_after_outcome[t] |= after_outcome_call;
-                    store = true;
-                }
-                if (store) continue;
-                if (instruction->op != IR_OP_CALL || after_outcome_call)
-                    continue;
-                ir_func_t *callee = instruction->n_operands
-                    && instruction->operands[0].kind == IR_OPD_VALUE
-                    && instruction->operands[0].value
-                    && instruction->operands[0].value->kind == IR_VAL_FUNC
-                    ? instruction->operands[0].value->owner : nullptr;
-                if (effect_function_is_fallible(callee)) continue;
-                for (size_t t = 0; t < target_count; t++) {
-                    uint8_t effects = effect_call_effects(
-                        summaries, instruction, targets[t],
-                        summary_indices ? summary_indices[t] : t, false);
-                    state[t] = effect_global_apply_effect(state[t], effects);
-                }
-            }
-
-            if (terminator && terminator->op == IR_OP_RETURN) {
-                for (size_t t = 0; t < target_count; t++)
-                    success_states[t] |= state[t];
-                continue;
-            }
-            if (terminator && terminator->op == IR_OP_FAIL) {
-                for (size_t t = 0; t < target_count; t++)
-                    failure_states[t] |= state[t];
-                continue;
-            }
-            if (terminator && terminator->op == IR_OP_BRANCH
-                && found_outcome_call) {
-                ir_block_t *true_block = terminator->operands[1].block;
-                for (size_t s = 0; s < ir_succ_count(terminator); s++) {
-                    ir_block_t *successor = ir_succ_at(terminator,
-                                                       (uint32_t)s);
-                    if (!successor || successor->index >= function->n_blocks)
-                        continue;
-                    bool call_success = (successor == true_block)
-                        == true_is_success;
-                    uint8_t *next = incoming
-                        + successor->index * target_count;
-                    for (size_t t = 0; t < target_count; t++) {
-                        uint8_t effects = effect_call_effects(summaries,
-                            outcome_call, targets[t],
-                            summary_indices ? summary_indices[t] : t,
-                            !call_success);
-                        uint8_t edge = effect_global_apply_effect(
-                            before_outcome[t], effects);
-                        if (stored_after_outcome[t] && edge)
-                            edge = N00BB_GLOBAL_STATE_WRITTEN;
-                        uint8_t merged = next[t] | edge;
-                        changed |= merged != next[t];
-                        next[t] = merged;
-                    }
-                }
-                continue;
-            }
-            for (size_t s = 0; terminator
-                 && s < ir_succ_count(terminator); s++) {
-                ir_block_t *successor = ir_succ_at(terminator, (uint32_t)s);
-                if (!successor || successor->index >= function->n_blocks)
-                    continue;
-                uint8_t *next = incoming + successor->index * target_count;
-                for (size_t t = 0; t < target_count; t++) {
-                    uint8_t merged = next[t] | state[t];
-                    changed |= merged != next[t];
-                    next[t] = merged;
-                }
-            }
-        }
-    } while (changed);
-    free(incoming);
-    free(state);
-    free(before_outcome);
-    free(stored_after_outcome);
-    return true;
-}
-
-static bool
-effect_analyze_target_function(
-    ir_func_t *function, ir_value_t *target, size_t target_index,
-    n00bb_effect_summaries_t *summaries,
-    core_list_t(n00bb_thread_read_site_t) *thread_read_sites,
-    uint8_t initial_state, bool *reads_before_initialization,
-    ir_instr_t **first_uninitialized_read,
-    uint8_t *success_states, uint8_t *failure_states,
-    ir_instr_t *stop_before, uint8_t *states_before)
-{
-    ir_value_t *targets[] = {target};
-    size_t indices[] = {target_index};
-    return effect_analyze_targets_function(function, targets, 1,
-        indices, summaries, thread_read_sites, &initial_state,
-        reads_before_initialization, first_uninitialized_read,
-        success_states, failure_states, stop_before, states_before);
-}
-static bool
-effect_function_summaries_build(
-    n00bb_effect_summaries_t *summaries,
-    ir_value_t *const *targets, size_t target_count)
-{
-    if (!summaries || !targets || !target_count) return false;
-    uint8_t *initial = malloc(target_count);
-    uint8_t *success = malloc(target_count);
-    uint8_t *failure = malloc(target_count);
-    if (!initial || !success || !failure) {
-        free(initial);
-        free(success);
-        free(failure);
-        return false;
-    }
-    memset(initial, N00BB_GLOBAL_STATE_UNWRITTEN, target_count);
-    bool ok = true;
-    for (size_t i = 0; i < summaries->list.len; i++) {
-        n00bb_function_effect_summary_t *summary = &summaries->list.data[i];
-        free(summary->success_states);
-        free(summary->failure_states);
-        summary->success_states = calloc(target_count, 1);
-        summary->failure_states = calloc(target_count, 1);
-        summary->target_count = target_count;
-        if (!summary->success_states || !summary->failure_states) {
-            ok = false;
-            break;
-        }
-    }
-    bool changed;
-    do {
-        changed = false;
-        for (size_t i = 0; ok && i < summaries->list.len; i++) {
-            n00bb_function_effect_summary_t *summary = &summaries->list.data[i];
-            ok = effect_analyze_targets_function(summary->function,
-                targets, target_count, nullptr, summaries, nullptr, initial,
-                nullptr, nullptr, success, failure, nullptr, nullptr);
-            for (size_t t = 0; ok && t < target_count; t++) {
-                uint8_t next_success = summary->success_states[t]
-                    | success[t];
-                uint8_t next_failure = summary->failure_states[t]
-                    | failure[t];
-                changed |= next_success != summary->success_states[t]
-                    || next_failure != summary->failure_states[t];
-                summary->success_states[t] = next_success;
-                summary->failure_states[t] = next_failure;
-            }
-        }
-    } while (ok && changed);
-    free(initial);
-    free(success);
-    free(failure);
-    return ok;
-}
-
-static bool
-effect_parameter_summaries_build(
-    n00bb_effect_summaries_t *summaries)
-{
-    if (!summaries) return false;
-    bool changed;
-    do {
-        changed = false;
-        for (size_t i = 0; i < summaries->list.len; i++) {
-            n00bb_function_effect_summary_t *summary = &summaries->list.data[i];
-            for (uint32_t p = 0; p < summary->function->n_params; p++) {
-                uint8_t success, failure;
-                if (!effect_analyze_target_function(summary->function,
-                        summary->function->params[p], 0, summaries, nullptr,
-                        N00BB_GLOBAL_STATE_UNWRITTEN, nullptr, nullptr,
-                        &success, &failure, nullptr, nullptr)) return false;
-                uint8_t next_success = summary->parameter_success_states[p]
-                    | success;
-                uint8_t next_failure = summary->parameter_failure_states[p]
-                    | failure;
-                changed |= next_success
-                        != summary->parameter_success_states[p]
-                    || next_failure
-                        != summary->parameter_failure_states[p];
-                summary->parameter_success_states[p] = next_success;
-                summary->parameter_failure_states[p] = next_failure;
-            }
-        }
-    } while (changed);
-    return true;
-}
-
-static bool
-effect_global_final_state(
-    ir_func_t *const *roots, size_t root_count,
-    n00bb_effect_summaries_t *summaries,
-    ir_global_t *source, size_t target_index,
+static void
+runtime_global_final_state(
+    n00bb_runtime_init_analysis_t *runtime,
+    ir_func_t *const *roots, size_t root_count, ir_global_t *global,
     bool *phase_succeeds, bool *definitely_initialized,
     bool *has_successful_write)
 {
-    if ((!roots && root_count) || !summaries || !source || !phase_succeeds
-        || !definitely_initialized || !has_successful_write) return false;
-    uint8_t state = source->has_static_initializer
-        ? N00BB_GLOBAL_STATE_WRITTEN
-        : N00BB_GLOBAL_STATE_UNWRITTEN;
-    uint8_t write_state = N00BB_GLOBAL_STATE_UNWRITTEN;
+    ir_splace_t place = ir_splace_global(global);
+    uint8_t state = global->has_static_initializer ? IR_PATH_PASSED
+                                                   : IR_PATH_UNPASSED;
+    uint8_t write_state = IR_PATH_UNPASSED;
     *phase_succeeds = true;
     for (size_t i = 0; i < root_count; i++) {
-        uint8_t effects = effect_function_outcomes(
-            summaries, roots[i], target_index, false);
+        uint8_t effects = ir_summary_effect(
+            ir_summary_of(runtime->summaries, roots[i]), &place,
+            IR_PATH_SUCCESS);
         if (!effects) {
             *phase_succeeds = false;
             state = 0;
             break;
         }
-        state = effect_global_apply_effect(state, effects);
-        write_state = effect_global_apply_effect(write_state, effects);
+        state = ir_path_apply(state, effects);
+        write_state = ir_path_apply(write_state, effects);
     }
-    *definitely_initialized = state != 0
-        && !(state & N00BB_GLOBAL_STATE_UNWRITTEN);
-    *has_successful_write =
-        (write_state & N00BB_GLOBAL_STATE_WRITTEN) != 0;
-    return true;
+    *definitely_initialized = state && !(state & IR_PATH_UNPASSED);
+    *has_successful_write = (write_state & IR_PATH_PASSED) != 0;
+}
+
+static n00bb_thread_read_site_t *
+first_uninitialized_thread_read(
+    ir_summaries_t *summaries, ir_func_t *function,
+    const ir_splace_t *place, uint8_t entry_state,
+    core_list_t(n00bb_thread_read_site_t) *sites)
+{
+    for (size_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        for (size_t n = 0; n < block->n_instrs; n++) {
+            for (size_t i = 0; i < sites->len; i++) {
+                n00bb_thread_read_site_t *site = &sites->data[i];
+                if (site->function == function
+                    && site->instruction == block->instrs[n]
+                    && (ir_summary_state_before(summaries, function, place,
+                            entry_state, site->instruction)
+                        & IR_PATH_UNPASSED))
+                    return site;
+            }
+        }
+    }
+    return nullptr;
 }
 
 static bool
@@ -19621,9 +18973,10 @@ dump_ir_places(ir_module_t *module, ir_func_t *function)
             fprintf(stdout, " operand %u", site->operand);
         fputc('\n', stdout);
     }
+    ir_path_exits_t exits = {0};
+    ir_paths_flow(function, IR_PATH_UNPASSED, nullptr, nullptr, &exits);
     fprintf(stdout, "  paths %s\n",
-            ir_paths_can_return(function, nullptr, nullptr)
-                ? "may-return" : "never-returns");
+            exits.returned || exits.failed ? "may-return" : "never-returns");
 }
 
 static void
@@ -19735,7 +19088,7 @@ dump_function_summaries(n00bb_link_analysis_t *analysis)
         analysis->reachable_functions.len, &hooks);
     static const char *const flag_names[] = {
         "may-fail", "may-trap", "may-allocate", "may-block", "diverges",
-        "calls-unknown", "may-io"};
+        "calls-unknown", "may-io", "no-return"};
     static const char *const access_names[] = {
         "read", "write", "must-success", "must-failure", "reads-entry"};
     for (size_t f = 0; f < analysis->reachable_functions.len; f++) {
@@ -19746,7 +19099,7 @@ dump_function_summaries(n00bb_link_analysis_t *analysis)
         fprintf(stdout, "summary @%.*s.%.*s",
                 (int)owner.u8_bytes, owner.data,
                 (int)function->name.u8_bytes, function->name.data);
-        for (uint32_t b = 0; b < 7; b++)
+        for (uint32_t b = 0; b < 8; b++)
             if (ir_summary_flags(summary) & (1u << b))
                 fprintf(stdout, " %s", flag_names[b]);
         fputc('\n', stdout);
@@ -20147,6 +19500,15 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
 
 
 
+static bool
+same_global_value(ir_value_t *target, ir_value_t *candidate)
+{
+    return candidate && candidate->kind == IR_VAL_GLOBAL && target->global
+        && candidate->global
+        && ir_global_identity(candidate->global)
+            == ir_global_identity(target->global);
+}
+
 static ir_instr_t *
 runtime_global_read_at(ir_func_t *function, ir_value_t *target,
                       core_diag_location_t location)
@@ -20165,7 +19527,7 @@ runtime_global_read_at(ir_func_t *function, ir_value_t *target,
             for (size_t operand = first_operand;
                  operand < instruction->n_operands; operand++) {
                 if (instruction->operands[operand].kind == IR_OPD_VALUE
-                    && effect_target_matches(target,
+                    && same_global_value(target,
                         instruction->operands[operand].value)) {
                     uses_target = true;
                     break;
@@ -20317,23 +19679,10 @@ thread_runtime_entry_function(parse_grammar_t *grammar,
 static void
 runtime_init_analysis_release(n00bb_runtime_init_analysis_t *runtime)
 {
-    for (size_t i = 0; i < runtime->summaries.list.len; i++) {
-        n00bb_function_effect_summary_t *summary =
-            &runtime->summaries.list.data[i];
-        free(summary->success_states);
-        free(summary->failure_states);
-        free(summary->parameter_success_states);
-        free(summary->parameter_failure_states);
-    }
-    core_list_free(runtime->summaries.list);
-    core_dict_free(&runtime->summaries.index);
-    core_dict_foreach(&runtime->summaries.store_origins, entry)
-        core_free(entry->value);
-    core_dict_free(&runtime->summaries.store_origins);
+    ir_summaries_free(runtime->summaries);
     core_list_free(runtime->initializer_roots);
     core_list_free(runtime->entry_functions);
-    core_list_free(runtime->targets);
-    core_dict_free(&runtime->target_indices);
+    core_dict_free(&runtime->targets);
 }
 
 static bool
@@ -20342,12 +19691,25 @@ runtime_init_target_add(n00bb_runtime_init_analysis_t *runtime,
 {
     ir_global_t *identity = global ? ir_global_identity(global) : nullptr;
     if (!identity) return false;
-    if (core_dict_contains(&runtime->target_indices, identity)) return true;
-    ir_value_t *target = ir_global_address(global->owner, identity);
-    if (!target) return false;
-    core_list_push(runtime->targets, target);
-    return core_dict_add(&runtime->target_indices, identity,
-                         (void *)(uintptr_t)runtime->targets.len);
+    core_dict_put(&runtime->targets, identity, identity);
+    return true;
+}
+
+static bool
+runtime_init_is_target(n00bb_runtime_init_analysis_t *runtime,
+                       ir_global_t *global)
+{
+    return global && runtime->summaries
+        && core_dict_contains(&runtime->targets, ir_global_identity(global));
+}
+
+static void
+runtime_function_add(core_list_t(n00bb_ir_func_ptr_t) *functions,
+                     ir_func_t *function)
+{
+    for (size_t i = 0; i < functions->len; i++)
+        if (functions->data[i] == function) return;
+    core_list_push(*functions, function);
 }
 
 static bool
@@ -20362,11 +19724,7 @@ runtime_init_analysis_build(
         return false;
     runtime->initializer_roots = core_list_new(n00bb_ir_func_ptr_t);
     runtime->entry_functions = core_list_new(n00bb_ir_func_ptr_t);
-    runtime->targets = core_list_new(n00bb_ir_value_ptr_t);
-    runtime->summaries.list = core_list_new(n00bb_function_effect_summary_t);
-    core_dict_init(&runtime->summaries.index, nullptr, nullptr);
-    core_dict_init(&runtime->summaries.store_origins, nullptr, nullptr);
-    core_dict_init(&runtime->target_indices, nullptr, nullptr);
+    core_dict_init(&runtime->targets, nullptr, nullptr);
     for (size_t i = 0; i < core_link_unit_dependency_count(link); i++) {
         core_link_dependency_view_t edge;
         if (!core_link_unit_dependency_at(link, i, &edge)) return false;
@@ -20401,56 +19759,48 @@ runtime_init_analysis_build(
                 ir_func_t *function = link_ir_function_for_symbol(analysis,
                                                                   symbol);
                 if (!function || !function->n_blocks) continue;
-                if (!effect_function_list_add(&runtime->entry_functions,
-                                               function)
-                    || !effect_summary_add(&runtime->summaries, function))
-                    return false;
+                runtime_function_add(&runtime->entry_functions, function);
             }
         }
     }
 
-    if (!runtime->targets.len) return true;
+    if (!core_dict_len(&runtime->targets)) return true;
     for (size_t i = 0; i < runtime_initializer_order->len; i++) {
         n00bb_tu_state_t *state = tu_state(runtime_initializer_order->data[i]);
         ir_func_t *initializer = state && state->ir_module
             ? ir_func_find(state->ir_module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME)) : nullptr;
-        if (!initializer
-            || !effect_function_list_add(&runtime->initializer_roots,
-                                           initializer)
-            || !effect_summary_add(&runtime->summaries, initializer))
-            return false;
+        if (!initializer) return false;
+        runtime_function_add(&runtime->initializer_roots, initializer);
     }
-    return effect_function_summaries_expand_calls(&runtime->summaries)
-        && effect_parameter_summaries_build(&runtime->summaries)
-        && effect_function_summaries_build(&runtime->summaries,
-            runtime->targets.data, runtime->targets.len);
+    core_list_t(n00bb_ir_func_ptr_t) roots =
+        core_list_new(n00bb_ir_func_ptr_t);
+    for (size_t i = 0; i < runtime->initializer_roots.len; i++)
+        core_list_push(roots, runtime->initializer_roots.data[i]);
+    for (size_t i = 0; i < runtime->entry_functions.len; i++)
+        core_list_push(roots, runtime->entry_functions.data[i]);
+    runtime->hooks = (ir_summary_hooks_t){
+        .call_targets = n00bb_summary_call_targets,
+        .axiom = n00bb_summary_axiom,
+    };
+    runtime->summaries = ir_summaries_compute(roots.data, roots.len,
+                                              &runtime->hooks);
+    core_list_free(roots);
+    return runtime->summaries != nullptr;
 }
-static bool
+
+static uint8_t
 thread_runtime_entry_state(
-    ir_func_t *const *initializer_roots, size_t initializer_count,
-    n00bb_effect_summaries_t *summaries,
-    ir_global_t *global, size_t target_index, bool has_static_default,
-    bool *phase_succeeds, uint8_t *state_out)
+    n00bb_runtime_init_analysis_t *runtime, ir_global_t *global,
+    bool has_static_default, bool *phase_succeeds)
 {
     bool definitely_initialized, has_successful_write;
-    if (!effect_global_final_state(initializer_roots, initializer_count,
-            summaries, global, target_index,
-            phase_succeeds, &definitely_initialized,
-            &has_successful_write)) return false;
-    if (!*phase_succeeds) {
-        *state_out = 0;
-    }
-    else if (has_static_default || definitely_initialized) {
-        *state_out = N00BB_GLOBAL_STATE_WRITTEN;
-    }
-    else if (has_successful_write) {
-        *state_out = N00BB_GLOBAL_STATE_UNWRITTEN
-            | N00BB_GLOBAL_STATE_WRITTEN;
-    }
-    else {
-        *state_out = N00BB_GLOBAL_STATE_UNWRITTEN;
-    }
-    return true;
+    runtime_global_final_state(runtime, runtime->initializer_roots.data,
+        runtime->initializer_roots.len, global, phase_succeeds,
+        &definitely_initialized, &has_successful_write);
+    if (!*phase_succeeds) return 0;
+    if (has_static_default || definitely_initialized) return IR_PATH_PASSED;
+    if (has_successful_write) return IR_PATH_UNPASSED | IR_PATH_PASSED;
+    return IR_PATH_UNPASSED;
 }
 
 static size_t
@@ -20487,8 +19837,6 @@ initializer_write_precedes_read(
             || target_order >= source_order) return false;
     }
     ir_global_t *global = link_ir_global_for_symbol(analysis, target);
-    uintptr_t encoded = global ? (uintptr_t)core_dict_get(
-        &runtime->target_indices, ir_global_identity(global), nullptr) : 0;
     n00bb_tu_state_t *target_state = tu_state(target_unit);
     ir_func_t *initializer = target_state && target_state->ir_module
         ? ir_func_find(target_state->ir_module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))
@@ -20496,14 +19844,13 @@ initializer_write_precedes_read(
     ir_value_t *target_value = global
         ? ir_global_address(global->owner, ir_global_identity(global))
         : nullptr;
-    if (!initializer || !encoded || !target_value) return false;
-    size_t target_index = encoded - 1;
+    if (!initializer || !runtime_init_is_target(runtime, global)
+        || !target_value) return false;
     if (different_units) {
         bool succeeds, initialized, has_write;
-        return effect_global_final_state(&initializer, 1,
-            &runtime->summaries, global, target_index, &succeeds,
-            &initialized, &has_write)
-            && succeeds && initialized && has_write;
+        runtime_global_final_state(runtime, &initializer, 1, global,
+            &succeeds, &initialized, &has_write);
+        return succeeds && initialized && has_write;
     }
     n00bb_tu_state_t *source_state = tu_state(source_unit);
     ir_func_t *source_initializer = source_state && source_state->ir_module
@@ -20514,13 +19861,10 @@ initializer_write_precedes_read(
     if (!read_instruction)
         read_instruction = runtime_call_at(source_initializer,
                                            read->source_location);
-    uint8_t success, failure, state_before_read;
+    ir_splace_t place = ir_splace_global(global);
     return read_instruction
-        && effect_analyze_target_function(source_initializer,
-            target_value, target_index, &runtime->summaries, nullptr,
-            N00BB_GLOBAL_STATE_UNWRITTEN, nullptr, nullptr,
-            &success, &failure, read_instruction, &state_before_read)
-        && state_before_read == N00BB_GLOBAL_STATE_WRITTEN;
+        && ir_summary_state_before(runtime->summaries, source_initializer,
+               &place, IR_PATH_UNPASSED, read_instruction) == IR_PATH_PASSED;
 }
 
 static bool
@@ -20603,60 +19947,39 @@ validate_thread_function_reads(
                     continue;
                 ir_global_t *global = link_ir_global_for_symbol(analysis,
                                                                 thread_global);
-                if (!global) return false;
-                uintptr_t encoded = (uintptr_t)core_dict_get(
-                    &runtime->target_indices, ir_global_identity(global),
-                    nullptr);
-                if (!encoded) return false;
-                size_t target_index = encoded - 1;
-                ir_value_t *target = runtime->targets.data[target_index];
+                if (!global || !runtime_init_is_target(runtime, global))
+                    return false;
+                ir_splace_t place = ir_splace_global(global);
                 core_list_t(n00bb_thread_read_site_t) read_sites =
                     core_list_new(n00bb_thread_read_site_t);
                 bool ok = thread_read_sites_build(link, analysis,
                                                   thread_global, &read_sites);
-                uint8_t entry_state = 0;
                 bool runtime_succeeds = false;
-                ok = ok && thread_runtime_entry_state(
-                    runtime->initializer_roots.data,
-                    runtime->initializer_roots.len, &runtime->summaries,
-                    global, target_index,
+                uint8_t entry_state = ok ? thread_runtime_entry_state(
+                    runtime, global,
                     global->has_static_initializer
                         || (thread_global->has_comptime_value
                             && thread_global->comptime_value),
-                    &runtime_succeeds, &entry_state);
-                bool diagnosed = false;
+                    &runtime_succeeds) : 0;
                 for (size_t f = 0; ok && runtime_succeeds
                      && f < runtime->entry_functions.len; f++) {
-                    ir_func_t *function = runtime->entry_functions.data[f];
-                    uint8_t success, failure;
-                    bool reads_uninitialized;
-                    ir_instr_t *bad_instruction = nullptr;
-                    ok = target && effect_analyze_target_function(function,
-                        target, target_index, &runtime->summaries,
-                        &read_sites, entry_state,
-                        &reads_uninitialized, &bad_instruction,
-                        &success, &failure, nullptr, nullptr);
-                    if (!ok || !reads_uninitialized) continue;
-                    for (size_t r = 0; r < read_sites.len; r++) {
-                        n00bb_thread_read_site_t *read = &read_sites.data[r];
-                        if (read->function != function
-                            || read->instruction != bad_instruction) continue;
-                        core_buffer_t message = {0};
-                        core_buffer_printf(&message,
-                            "runtime function may read thread-local global '%.*s' before a guaranteed initialization",
-                            (int)thread_global->name.u8_bytes,
-                            thread_global->name.data);
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(read->unit),
-                            read->unit, CORE_DIAG_ERROR,
-                            CORE_STRING_STATIC("N00BB-L0044"),
-                            core_string_borrow(message.data, message.byte_len),
-                            read->location);
-                        core_buffer_release(&message);
-                        diagnosed = true;
-                        break;
-                    }
-                    if (!diagnosed) ok = false;
+                    n00bb_thread_read_site_t *read =
+                        first_uninitialized_thread_read(runtime->summaries,
+                            runtime->entry_functions.data[f], &place,
+                            entry_state, &read_sites);
+                    if (!read) continue;
+                    core_buffer_t message = {0};
+                    core_buffer_printf(&message,
+                        "runtime function may read thread-local global '%.*s' before a guaranteed initialization",
+                        (int)thread_global->name.u8_bytes,
+                        thread_global->name.data);
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(read->unit),
+                        read->unit, CORE_DIAG_ERROR,
+                        CORE_STRING_STATIC("N00BB-L0044"),
+                        core_string_borrow(message.data, message.byte_len),
+                        read->location);
+                    core_buffer_release(&message);
                 }
                 core_list_free(read_sites);
                 if (!ok) return false;

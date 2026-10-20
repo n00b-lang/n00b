@@ -190,72 +190,126 @@ ir_site_at(const ir_sites_t *sites, uint32_t index)
                                              : nullptr;
 }
 
-static bool
-reaches_exit(ir_func_t *f, ir_instr_predicate_fn passes,
-             ir_instr_predicate_fn diverges, void *context, uint32_t exits)
+ir_instr_t *
+ir_call_outcome_branch(const ir_instr_t *terminator, bool *true_is_success)
 {
-    ir_doms_t  *doms  = ir_func_doms(f);
-    ir_block_t *entry = ir_block_entry(f);
-    if (!doms || !entry) return true;
-    bool *seen = core_alloc_array(bool, f->n_blocks);
-    core_list_t(site_block_ptr_t) work = core_list_new(site_block_ptr_t);
-    seen[entry->index] = true;
-    core_list_push(work, entry);
-    bool found = false;
-    while (!found && work.len) {
-        ir_block_t *block = work.data[--work.len];
-        bool        ended = false;
-        for (uint32_t i = 0; !ended && i < block->n_instrs; i++) {
-            ir_instr_t *in = block->instrs[i];
-            if ((passes && passes(context, in))
-                || (diverges && diverges(context, in))) {
-                ended = true;
-                break;
-            }
-            if ((in->op == IR_OP_RETURN && (exits & IR_PATH_EXIT_RETURN))
-                || (in->op == IR_OP_FAIL && (exits & IR_PATH_EXIT_FAIL))) {
-                found = true;
-                ended = true;
-            }
-            if (in->op == IR_OP_RETURN || in->op == IR_OP_FAIL)
-                ended = true;
-            if (in->op == IR_OP_TRAP || in->op == IR_OP_UNREACHABLE)
-                ended = true;
-        }
-        ir_instr_t *t = ended ? nullptr : ir_block_terminator(block);
-        for (uint32_t s = 0; t && s < ir_succ_count(t); s++) {
-            ir_block_t *succ = ir_succ_at(t, s);
-            if (succ && !seen[succ->index]) {
-                seen[succ->index] = true;
-                core_list_push(work, succ);
-            }
-        }
+    if (!terminator || terminator->op != IR_OP_BRANCH
+        || terminator->n_operands < 3) return nullptr;
+    ir_value_t *condition  = ir_operand_value(&terminator->operands[0]);
+    ir_instr_t *comparison = condition ? condition->def : nullptr;
+    if (!comparison || (comparison->op != IR_OP_EQ && comparison->op != IR_OP_NE)
+        || comparison->n_operands != 2) return nullptr;
+    for (uint32_t side = 0; side < 2; side++) {
+        ir_value_t *tag_value = ir_operand_value(&comparison->operands[side]);
+        ir_value_t *literal_value =
+            ir_operand_value(&comparison->operands[1 - side]);
+        ir_instr_t *tag     = tag_value ? tag_value->def : nullptr;
+        ir_instr_t *literal = literal_value ? literal_value->def : nullptr;
+        ir_value_t *variant = tag && tag->op == IR_OP_VARIANT_TAG
+            && tag->n_operands == 1 ? ir_operand_value(&tag->operands[0])
+                                    : nullptr;
+        if (!variant || !variant->def || variant->def->op != IR_OP_CALL
+            || !literal || literal->op != IR_OP_CONST
+            || literal->n_operands != 1
+            || literal->operands[0].kind != IR_OPD_CONST
+            || literal->operands[0].lit.i.neg
+            || literal->operands[0].lit.i.mag
+                != th_arm_tag(CORE_STRING_STATIC("ok")))
+            continue;
+        if (true_is_success) *true_is_success = comparison->op == IR_OP_EQ;
+        return variant->def;
     }
-    core_list_free(work);
-    core_free(seen);
-    return found;
+    return nullptr;
+}
+
+uint8_t
+ir_path_apply(uint8_t state, uint8_t effect)
+{
+    uint8_t result = 0;
+    if (state & IR_PATH_PASSED) result |= effect ? IR_PATH_PASSED : 0;
+    if (state & IR_PATH_UNPASSED) result |= effect;
+    return result;
+}
+
+static uint8_t
+step_of(ir_path_step_fn step, void *context, const ir_instr_t *in,
+        ir_path_outcome_t outcome)
+{
+    return step ? step(context, in, outcome) : IR_PATH_UNPASSED;
+}
+
+static bool
+merge_state(uint8_t *into, uint8_t state)
+{
+    uint8_t merged  = *into | state;
+    bool    changed = merged != *into;
+    *into = merged;
+    return changed;
 }
 
 bool
-ir_paths_can_return(ir_func_t *f, ir_instr_predicate_fn diverges,
-                    void *context)
+ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
+              void *context, ir_path_exits_t *exits)
 {
-    return f && reaches_exit(f, nullptr, diverges, context,
-                             IR_PATH_EXIT_RETURN | IR_PATH_EXIT_FAIL);
-}
-
-bool
-ir_paths_all_pass(ir_func_t *f, ir_instr_predicate_fn passes,
-                  ir_instr_predicate_fn diverges, void *context)
-{
-    return ir_paths_all_pass_to(f, IR_PATH_EXIT_RETURN | IR_PATH_EXIT_FAIL,
-                                passes, diverges, context);
-}
-
-bool
-ir_paths_all_pass_to(ir_func_t *f, uint32_t exits,
-                     ir_instr_predicate_fn passes,
-                     ir_instr_predicate_fn diverges, void *context)
-{
-    return f && passes && !reaches_exit(f, passes, diverges, context, exits);
+    *exits = (ir_path_exits_t){0};
+    ir_doms_t  *doms  = f ? ir_func_doms(f) : nullptr;
+    ir_block_t *first = f ? ir_block_entry(f) : nullptr;
+    if (!doms || !first) return false;
+    uint8_t *incoming = core_alloc_array(uint8_t, f->n_blocks);
+    incoming[first->index] = entry;
+    bool changed;
+    do {
+        changed = false;
+        for (uint32_t b = 0; b < f->n_blocks; b++) {
+            ir_block_t *block = f->blocks[b];
+            if (!ir_block_reachable(doms, block)) continue;
+            uint8_t state = incoming[block->index];
+            if (!state) continue;
+            ir_instr_t *terminator      = ir_block_terminator(block);
+            bool        true_is_success = false;
+            ir_instr_t *outcome = ir_call_outcome_branch(terminator,
+                                                         &true_is_success);
+            bool    deferred = false;
+            uint8_t before   = 0;
+            uint8_t rest     = IR_PATH_UNPASSED;
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *in = block->instrs[i];
+                if (in == terminator) continue;
+                if (in == outcome) {
+                    before   = state;
+                    deferred = true;
+                    continue;
+                }
+                uint8_t effect = step_of(step, context, in, IR_PATH_ANY);
+                state = ir_path_apply(state, effect);
+                if (deferred) rest = ir_path_apply(rest, effect);
+            }
+            if (terminator && terminator->op == IR_OP_RETURN) {
+                exits->returned |= state;
+                continue;
+            }
+            if (terminator && terminator->op == IR_OP_FAIL) {
+                exits->failed |= state;
+                continue;
+            }
+            ir_block_t *true_block = deferred
+                ? ir_succ_of(&terminator->operands[1]) : nullptr;
+            for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
+                 s++) {
+                ir_block_t *succ = ir_succ_at(terminator, s);
+                if (!succ) continue;
+                uint8_t edge = state;
+                if (deferred) {
+                    bool success = (succ == true_block) == true_is_success;
+                    edge = ir_path_apply(ir_path_apply(before,
+                        step_of(step, context, outcome,
+                                success ? IR_PATH_SUCCESS : IR_PATH_FAILURE)),
+                        rest);
+                }
+                changed |= merge_state(&incoming[succ->index], edge);
+            }
+        }
+    } while (changed);
+    core_free(incoming);
+    return true;
 }

@@ -44,6 +44,9 @@ bool               ir_places_may_alias(const ir_places_t *places, uint32_t a,
 uint32_t           ir_places_access_count(const ir_places_t *places);
 const ir_access_t *ir_places_access_at(const ir_places_t *places,
                                        uint32_t index);
+uint32_t           ir_places_accesses_of(const ir_places_t *places,
+                                         const ir_instr_t *in,
+                                         uint32_t *first);
 const uint32_t    *ir_places_access_places(const ir_places_t *places,
                                            const ir_access_t *access);
 void               ir_places_free(ir_places_t *places);

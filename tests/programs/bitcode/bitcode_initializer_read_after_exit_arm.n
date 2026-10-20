@@ -1,0 +1,16 @@
+var value: int
+
+func set_value(v: int) fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+    value = v
+}
+
+try {
+    set_value(1)!
+} else e {
+    __os_exit(1)
+}
+let observed = value
+require observed == 1

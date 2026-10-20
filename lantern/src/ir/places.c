@@ -26,6 +26,7 @@ struct ir_places_t {
     core_list_t(ir_access_t)          accesses;
     core_list_t(place_span_t)         spans;
     core_dict_t                       resolved;
+    core_dict_t                       by_instr;
 };
 
 static bool
@@ -428,7 +429,8 @@ collect_accesses(ir_places_t *places, ir_func_t *f)
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *in = block->instrs[i];
+            ir_instr_t *in    = block->instrs[i];
+            size_t      start = places->accesses.len;
             collect_storage_uses(places, in);
             switch (in->op) {
             case IR_OP_LOAD:
@@ -460,6 +462,9 @@ collect_accesses(ir_places_t *places, ir_func_t *f)
             default:
                 break;
             }
+            if (places->accesses.len > start)
+                core_dict_put(&places->by_instr, in,
+                              (void *)(uintptr_t)(start + 1));
         }
     }
 }
@@ -475,6 +480,7 @@ ir_places_build(ir_func_t *f)
     places->accesses = core_list_new(ir_access_t);
     places->spans    = core_list_new(place_span_t);
     core_dict_init(&places->resolved, nullptr, nullptr);
+    core_dict_init(&places->by_instr, nullptr, nullptr);
     collect_accesses(places, f);
     return places;
 }
@@ -488,6 +494,7 @@ ir_places_free(ir_places_t *places)
     core_list_free(places->accesses);
     core_list_free(places->spans);
     core_dict_free(&places->resolved);
+    core_dict_free(&places->by_instr);
     core_free(places);
 }
 
@@ -515,6 +522,20 @@ ir_places_access_at(const ir_places_t *places, uint32_t index)
 {
     return places && index < places->accesses.len
         ? &places->accesses.data[index] : nullptr;
+}
+
+uint32_t
+ir_places_accesses_of(const ir_places_t *places, const ir_instr_t *in,
+                      uint32_t *first)
+{
+    uintptr_t start = places ? (uintptr_t)core_dict_get(
+        (core_dict_t *)&places->by_instr, (void *)in, nullptr) : 0;
+    *first = start ? (uint32_t)(start - 1) : 0;
+    uint32_t count = 0;
+    while (start && *first + count < places->accesses.len
+           && places->accesses.data[*first + count].instr == in)
+        count++;
+    return count;
 }
 
 const uint32_t *

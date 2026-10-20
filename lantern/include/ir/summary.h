@@ -2,6 +2,7 @@
 #define IR_SUMMARY_H
 
 #include "ir/ir.h"
+#include "ir/sites.h"
 
 typedef enum : uint8_t {
     IR_SPLACE_PARAM,
@@ -39,6 +40,7 @@ enum {
     IR_SUMMARY_DIVERGES      = 1u << 4,
     IR_SUMMARY_CALLS_UNKNOWN = 1u << 5,
     IR_SUMMARY_MAY_IO        = 1u << 6,
+    IR_SUMMARY_NO_RETURN     = 1u << 7,
 };
 
 typedef enum : uint8_t {
@@ -110,6 +112,14 @@ const ir_soutput_t  *ir_summary_output_at(const ir_summary_t *summary,
                                           uint32_t index);
 const uint32_t      *ir_summary_dependences(const ir_summary_t *summary);
 
-bool ir_splace_eq(const ir_splace_t *a, const ir_splace_t *b);
+bool        ir_splace_eq(const ir_splace_t *a, const ir_splace_t *b);
+ir_splace_t ir_splace_global(const ir_global_t *global);
+
+uint8_t ir_summary_effect(const ir_summary_t *summary,
+                          const ir_splace_t *place,
+                          ir_path_outcome_t outcome);
+uint8_t ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
+                                const ir_splace_t *place, uint8_t entry,
+                                const ir_instr_t *in);
 
 #endif

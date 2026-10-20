@@ -1829,6 +1829,26 @@ test(
 )
 
 test(
+    'partial-field-global-n00b',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_partial_field_global.n',
+           'N00BB-L0044',
+           'bitcode_partial_field_global.n:10:15'],
+    suite: 'slow',
+)
+
+test(
+    'initializer-read-after-exit-arm-n00b',
+    n00bb_exe,
+    args: ['lower', meson.current_source_dir() / 'tests' / 'programs'
+        / 'bitcode' / 'bitcode_initializer_read_after_exit_arm.n'],
+    suite: 'slow',
+)
+
+test(
     'indirect-global-init-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'indirect_global_init.sh',

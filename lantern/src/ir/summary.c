@@ -162,8 +162,8 @@ portable_place(const ir_func_t *f, const ir_place_t *place, ir_splace_t *out)
         return true;
     case IR_PLACE_GLOBAL:
     case IR_PLACE_THREAD: {
-        const ir_global_t *global = place->root ? place->root->global : nullptr;
-        if (global && global->identity) global = global->identity;
+        const ir_global_t *global = place->root && place->root->global
+            ? ir_global_identity(place->root->global) : nullptr;
         *out = (ir_splace_t){
             .kind = place->kind == IR_PLACE_THREAD ? IR_SPLACE_THREAD
                                                     : IR_SPLACE_GLOBAL,
@@ -258,16 +258,70 @@ is_call(const ir_instr_t *in)
     return in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE;
 }
 
+enum {
+    FIELD_DEPTH  = 4,
+    FIELD_LEAVES = 64,
+};
+
 typedef struct {
-    ir_summaries_t *summaries;
-    ir_func_t      *f;
-    ir_places_t    *places;
-    ir_splace_t     target;
-    uint8_t         must;
-} must_query_t;
+    core_string_t names[FIELD_DEPTH];
+    uint32_t      depth;
+} field_leaf_t;
+core_list_decl(field_leaf_t);
+
+static th_type *
+record_of(const ir_func_t *f, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (type && th_kind_of(type) == TH_NAMED && f->owner) {
+        th_type *definition = ir_type_definition(f->owner, type);
+        type = definition ? th_resolve(definition) : nullptr;
+    }
+    return type && th_kind_of(type) == TH_RECORD && th_record_len(type)
+        ? type : nullptr;
+}
 
 static bool
-argument_is(must_query_t *q, const ir_instr_t *call, uint32_t param,
+collect_leaves(const ir_func_t *f, th_type *type, field_leaf_t prefix,
+               core_list_t(field_leaf_t) *out)
+{
+    th_type *record = prefix.depth < FIELD_DEPTH ? record_of(f, type)
+                                                 : nullptr;
+    if (!record) {
+        if (out->len >= FIELD_LEAVES) return false;
+        core_list_push(*out, prefix);
+        return true;
+    }
+    for (size_t i = 0; i < th_record_len(record); i++) {
+        const th_member *member = th_record_member(record, i);
+        field_leaf_t     next   = prefix;
+        next.names[next.depth++] = member->name;
+        if (!collect_leaves(f, member->type, next, out)) return false;
+    }
+    return true;
+}
+
+static core_list_t(field_leaf_t)
+place_leaves(const ir_func_t *f, const ir_splace_t *place)
+{
+    core_list_t(field_leaf_t) leaves = core_list_new(field_leaf_t);
+    if (!collect_leaves(f, place->type, (field_leaf_t){0}, &leaves)) {
+        leaves.len = 0;
+        core_list_push(leaves, ((field_leaf_t){0}));
+    }
+    return leaves;
+}
+
+typedef struct {
+    ir_summaries_t     *summaries;
+    ir_func_t          *f;
+    ir_places_t        *places;
+    const ir_splace_t  *target;
+    const field_leaf_t *leaf;
+} flow_query_t;
+
+static bool
+argument_is(flow_query_t *q, const ir_instr_t *call, uint32_t param,
             const ir_splace_t *want)
 {
     uint32_t operand = param + 1;
@@ -284,86 +338,274 @@ argument_is(must_query_t *q, const ir_instr_t *call, uint32_t param,
 }
 
 static bool
-call_must_write(must_query_t *q, const ir_instr_t *call)
+named_place(const ir_splace_t *place)
+{
+    return place->kind != IR_SPLACE_HEAP && place->kind != IR_SPLACE_UNKNOWN;
+}
+
+static uint8_t
+target_access_flags(flow_query_t *q, const ir_instr_t *call,
+                    const ir_summary_t *s)
+{
+    uint8_t flags = 0;
+    for (size_t a = 0; q->target && a < s->accesses.len; a++) {
+        const ir_saccess_t *access = &s->accesses.data[a];
+        bool matches = access->place.kind == IR_SPLACE_PARAM
+            ? argument_is(q, call, access->place.param, q->target)
+            : named_place(&access->place)
+                && ir_splace_eq(&access->place, q->target);
+        if (matches) flags |= access->flags;
+    }
+    return flags;
+}
+
+static uint8_t
+written(uint8_t flags, uint8_t must)
+{
+    if (flags & must) return IR_PATH_PASSED;
+    if (flags & IR_SACCESS_WRITE) return IR_PATH_UNPASSED | IR_PATH_PASSED;
+    return IR_PATH_UNPASSED;
+}
+
+static uint8_t
+callee_effect(const ir_summary_t *s, uint8_t flags, ir_path_outcome_t outcome)
+{
+    bool diverges = (s->flags & IR_SUMMARY_DIVERGES) != 0;
+    uint8_t success = diverges || (s->flags & IR_SUMMARY_NO_RETURN)
+        ? 0 : written(flags, IR_SACCESS_MUST_SUCCESS);
+    uint8_t failure = !diverges && (s->flags & IR_SUMMARY_MAY_FAIL)
+        ? written(flags, IR_SACCESS_MUST_FAILURE) : 0;
+    switch (outcome) {
+    case IR_PATH_SUCCESS:
+        return success;
+    case IR_PATH_FAILURE:
+        return failure;
+    case IR_PATH_ANY:
+        break;
+    }
+    return success | failure;
+}
+
+static uint8_t
+call_effect(flow_query_t *q, const ir_instr_t *call, ir_path_outcome_t outcome)
 {
     call_targets_t targets;
     resolve_targets(q->summaries, call, &targets);
-    bool all = !targets.unknown && targets.targets.len;
-    for (size_t t = 0; all && t < targets.targets.len; t++) {
+    uint8_t effect = targets.unknown || !targets.targets.len
+        ? IR_PATH_UNPASSED : 0;
+    for (size_t t = 0; t < targets.targets.len; t++) {
         ir_summary_t *s = target_summary(q->summaries, targets.targets.data[t]);
-        uint8_t need = (s->flags & IR_SUMMARY_MAY_FAIL)
-            ? IR_SACCESS_MUST_SUCCESS | IR_SACCESS_MUST_FAILURE
-            : IR_SACCESS_MUST_SUCCESS;
-        bool found = false;
-        for (size_t a = 0; !found && a < s->accesses.len; a++) {
-            const ir_saccess_t *access = &s->accesses.data[a];
-            if ((access->flags & need) != need) continue;
-            found = access->place.kind == IR_SPLACE_PARAM
-                ? argument_is(q, call, access->place.param, &q->target)
-                : access->place.kind != IR_SPLACE_HEAP
-                    && access->place.kind != IR_SPLACE_UNKNOWN
-                    && ir_splace_eq(&access->place, &q->target);
-        }
-        all = found;
+        effect |= callee_effect(s, target_access_flags(q, call, s), outcome);
     }
     core_list_free(targets.targets);
-    return all;
+    return effect;
 }
 
 static bool
-writes_target(void *context, const ir_instr_t *in)
+stores_target(flow_query_t *q, const ir_instr_t *in)
 {
-    must_query_t *q = context;
-    if (is_call(in)) return call_must_write(q, in);
-    for (uint32_t a = 0; a < ir_places_access_count(q->places); a++) {
+    uint32_t first = 0;
+    uint32_t count = q->target ? ir_places_accesses_of(q->places, in, &first)
+                               : 0;
+    for (uint32_t a = first; a < first + count; a++) {
         const ir_access_t *access = ir_places_access_at(q->places, a);
-        if (access->instr != in || access->kind != IR_ACCESS_STORE
+        if (access->kind != IR_ACCESS_STORE
             || !access->whole || access->count != 1) continue;
         ir_splace_t mapped;
         if (portable_place(q->f, ir_place_at(q->places,
                 ir_places_access_places(q->places, access)[0]), &mapped)
-            && mapped.kind != IR_SPLACE_HEAP
-            && mapped.kind != IR_SPLACE_UNKNOWN
-            && ir_splace_eq(&mapped, &q->target))
+            && named_place(&mapped) && ir_splace_eq(&mapped, q->target))
             return true;
     }
     return false;
 }
 
-typedef struct {
-    ir_summaries_t *summaries;
-} diverge_query_t;
-
 static bool
-call_diverges(void *context, const ir_instr_t *in)
+field_store_covers(flow_query_t *q, const ir_instr_t *in)
 {
-    diverge_query_t *q = context;
-    if (!is_call(in)) return false;
-    call_targets_t targets;
-    resolve_targets(q->summaries, in, &targets);
-    bool all = !targets.unknown && targets.targets.len;
-    for (size_t t = 0; all && t < targets.targets.len; t++)
-        all = (target_summary(q->summaries, targets.targets.data[t])->flags
-               & IR_SUMMARY_DIVERGES) != 0;
-    core_list_free(targets.targets);
-    return all;
-}
-
-typedef struct {
-    must_query_t    must;
-    diverge_query_t diverge;
-} path_query_t;
-
-static bool
-path_passes(void *context, const ir_instr_t *in)
-{
-    return writes_target(&((path_query_t *)context)->must, in);
+    if (!q->target || !q->leaf || !q->leaf->depth || in->op != IR_OP_STORE
+        || !in->n_operands) return false;
+    core_string_t     path[FIELD_DEPTH];
+    uint32_t          depth   = 0;
+    const ir_value_t *address = ir_operand_value(&in->operands[0]);
+    while (address && address->def && address->def->op == IR_OP_FIELD
+           && address->def->n_operands == 2
+           && address->def->operands[1].kind == IR_OPD_NAME) {
+        if (depth == FIELD_DEPTH) return false;
+        path[depth++] = address->def->operands[1].name;
+        address       = ir_operand_value(&address->def->operands[0]);
+    }
+    if (!depth || depth > q->leaf->depth) return false;
+    for (uint32_t i = 0; i < depth; i++)
+        if (!core_string_eq(path[depth - 1 - i], q->leaf->names[i]))
+            return false;
+    const uint32_t *ids = nullptr;
+    uint32_t        n   = 0;
+    ir_splace_t     mapped;
+    return address && ir_places_of(q->places, address, &ids, &n) && n == 1
+        && portable_place(q->f, ir_place_at(q->places, ids[0]), &mapped)
+        && named_place(&mapped) && ir_splace_eq(&mapped, q->target);
 }
 
 static bool
-path_diverges(void *context, const ir_instr_t *in)
+writes_target(flow_query_t *q, const ir_instr_t *in)
 {
-    return call_diverges(&((path_query_t *)context)->diverge, in);
+    return stores_target(q, in) || field_store_covers(q, in);
+}
+
+static uint8_t
+flow_step(void *context, const ir_instr_t *in, ir_path_outcome_t outcome)
+{
+    flow_query_t *q = context;
+    if (is_call(in)) return call_effect(q, in, outcome);
+    return writes_target(q, in) ? IR_PATH_PASSED : IR_PATH_UNPASSED;
+}
+
+static uint8_t
+combine_leaf(uint8_t combined, uint8_t leaf, bool first)
+{
+    if (first) return leaf;
+    if (!combined || !leaf) return 0;
+    uint8_t passed = combined & leaf & IR_PATH_PASSED;
+    return ((combined | leaf) & IR_PATH_UNPASSED) | passed;
+}
+
+uint8_t
+ir_summary_effect(const ir_summary_t *summary, const ir_splace_t *place,
+                  ir_path_outcome_t outcome)
+{
+    if (!summary) return IR_PATH_UNPASSED;
+    uint8_t flags = 0;
+    for (size_t a = 0; a < summary->accesses.len; a++)
+        if (named_place(&summary->accesses.data[a].place)
+            && ir_splace_eq(&summary->accesses.data[a].place, place))
+            flags |= summary->accesses.data[a].flags;
+    return callee_effect(summary, flags, outcome);
+}
+
+static bool
+arm_dominates(ir_doms_t *doms, ir_block_t *arm, ir_block_t *from)
+{
+    return arm && ir_pred_count(doms, arm) == 1 && ir_dominates(doms, arm, from);
+}
+
+static ir_path_outcome_t
+call_arm(ir_doms_t *doms, const ir_instr_t *call, ir_block_t *from)
+{
+    ir_instr_t *terminator      = ir_block_terminator(call->block);
+    bool        true_is_success = false;
+    if (ir_call_outcome_branch(terminator, &true_is_success) != call)
+        return IR_PATH_ANY;
+    ir_block_t *on_true  = ir_succ_of(&terminator->operands[1]);
+    ir_block_t *on_false = ir_succ_of(&terminator->operands[2]);
+    ir_block_t *success  = true_is_success ? on_true : on_false;
+    ir_block_t *failure  = true_is_success ? on_false : on_true;
+    if (success == failure) return IR_PATH_ANY;
+    if (arm_dominates(doms, success, from)) return IR_PATH_SUCCESS;
+    if (arm_dominates(doms, failure, from)) return IR_PATH_FAILURE;
+    return IR_PATH_ANY;
+}
+
+typedef struct {
+    uint32_t    def;
+    uint8_t     effect;
+    ir_block_t *from;
+} walk_item_t;
+core_list_decl(walk_item_t);
+
+static uint8_t state_before_leaf(flow_query_t *q, ir_memssa_t *memssa,
+                                 ir_doms_t *doms, uint8_t entry,
+                                 const ir_instr_t *in);
+
+uint8_t
+ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
+                        const ir_splace_t *place, uint8_t entry,
+                        const ir_instr_t *in)
+{
+    size_t       scope  = ir_analysis_scope_begin();
+    ir_memssa_t *memssa = ir_func_memssa(f);
+    ir_doms_t   *doms   = ir_func_doms(f);
+    flow_query_t q      = {.summaries = summaries, .f = f,
+                           .places = ir_func_places(f), .target = place};
+    uint8_t state = memssa && doms && q.places
+        ? state_before_leaf(&q, memssa, doms, entry, in) : 0;
+    if (state & IR_PATH_UNPASSED) {
+        core_list_t(field_leaf_t) leaves = place_leaves(f, place);
+        for (size_t l = 0; leaves.data[0].depth && l < leaves.len; l++) {
+            q.leaf = &leaves.data[l];
+            state  = combine_leaf(state,
+                state_before_leaf(&q, memssa, doms, entry, in), l == 0);
+        }
+        core_list_free(leaves);
+    }
+    ir_analysis_scope_end(scope);
+    return state;
+}
+
+static uint8_t
+state_before_leaf(flow_query_t *q, ir_memssa_t *memssa, ir_doms_t *doms,
+                  uint8_t entry, const ir_instr_t *in)
+{
+    uint32_t start = ir_memssa_def_before(memssa, in);
+    uint8_t  state = 0;
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    core_list_t(walk_item_t) work = core_list_new(walk_item_t);
+    if (start != UINT32_MAX)
+        core_list_push(work, ((walk_item_t){.def = start,
+                                            .effect = IR_PATH_UNPASSED,
+                                            .from = in->block}));
+    while (work.len) {
+        walk_item_t item = work.data[--work.len];
+        uintptr_t key = ((uintptr_t)item.def << 34)
+            | ((uintptr_t)item.from->index << 2) | item.effect;
+        if (!core_dict_add(&seen, (void *)(key + 1), (void *)(key + 1)))
+            continue;
+        const ir_memdef_t *def    = ir_memssa_def(memssa, item.def);
+        uint8_t            effect = item.effect;
+        switch (def->kind) {
+        case IR_MEMDEF_ENTRY:
+            state |= ir_path_apply(entry, effect);
+            continue;
+        case IR_MEMDEF_PHI:
+            for (uint32_t i = 0; i < ir_memssa_phi_count(memssa, item.def);
+                 i++) {
+                ir_block_t *pred = ir_pred_at(doms, def->block, i);
+                core_list_push(work, ((walk_item_t){
+                    .def    = ir_memssa_phi_incoming(memssa, item.def, i),
+                    .effect = effect,
+                    .from   = pred ? pred : def->block}));
+            }
+            continue;
+        case IR_MEMDEF_STORE:
+            if (writes_target(q, def->instr)) effect = IR_PATH_PASSED;
+            break;
+        case IR_MEMDEF_CALL:
+            if (is_call(def->instr))
+                effect = ir_path_apply(call_effect(q, def->instr,
+                    call_arm(doms, def->instr, item.from)), effect);
+            break;
+        }
+        if (effect == IR_PATH_PASSED) state |= IR_PATH_PASSED;
+        else if (effect)
+            core_list_push(work, ((walk_item_t){
+                .def = ir_memssa_def_prev(memssa, item.def),
+                .effect = effect, .from = item.from}));
+    }
+    core_list_free(work);
+    core_dict_free(&seen);
+    return state;
+}
+
+ir_splace_t
+ir_splace_global(const ir_global_t *global)
+{
+    bool thread = ir_global_storage_duration(global)
+        == IR_STORAGE_DURATION_THREAD;
+    return (ir_splace_t){
+        .kind   = thread ? IR_SPLACE_THREAD : IR_SPLACE_GLOBAL,
+        .global = ir_global_identity(global),
+        .type   = global->type};
 }
 
 static void
@@ -457,6 +699,38 @@ heap_allocation(ir_places_t *places, const ir_instr_t *in)
 static void summarize_dependences(ir_summaries_t *summaries,
                                   ir_summary_t *summary, ir_func_t *f);
 
+enum {
+    UNPASSED_RETURN = 1u << 0,
+    UNPASSED_FAIL   = 1u << 1,
+};
+
+static uint8_t
+exit_unpassed(const ir_path_exits_t *exits)
+{
+    return ((exits->returned & IR_PATH_UNPASSED) ? UNPASSED_RETURN : 0)
+        | ((exits->failed & IR_PATH_UNPASSED) ? UNPASSED_FAIL : 0);
+}
+
+static uint8_t
+unpassed_exits(flow_query_t *q, ir_func_t *f, const ir_path_exits_t *whole)
+{
+    uint8_t unpassed = exit_unpassed(whole);
+    if (!unpassed) return 0;
+    core_list_t(field_leaf_t) leaves = place_leaves(f, q->target);
+    if (leaves.data[0].depth) {
+        unpassed = 0;
+        for (size_t l = 0; l < leaves.len; l++) {
+            ir_path_exits_t exits;
+            q->leaf = &leaves.data[l];
+            unpassed |= ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, q, &exits)
+                ? exit_unpassed(&exits) : UNPASSED_RETURN | UNPASSED_FAIL;
+        }
+        q->leaf = nullptr;
+    }
+    core_list_free(leaves);
+    return unpassed;
+}
+
 static void
 summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
                    ir_func_t *f)
@@ -486,7 +760,6 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
     for (uint32_t s = 0; sites && s < ir_sites_count(sites); s++) {
         const ir_site_t *site = ir_site_at(sites, s);
         if (site->kind == IR_SITE_TRAP) summary->flags |= IR_SUMMARY_MAY_TRAP;
-        if (site->kind == IR_SITE_FAILURE) summary->flags |= IR_SUMMARY_MAY_FAIL;
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
@@ -497,23 +770,28 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
                 summary->flags |= IR_SUMMARY_MAY_ALLOCATE;
         }
     }
-    path_query_t paths = {
-        .must = {.summaries = summaries, .f = f, .places = places},
-        .diverge = {.summaries = summaries},
-    };
-    if (!ir_paths_can_return(f, path_diverges, &paths))
-        summary->flags |= IR_SUMMARY_DIVERGES;
-    for (size_t a = 0; a < summary->accesses.len; a++) {
+    flow_query_t    q = {.summaries = summaries, .f = f, .places = places};
+    ir_path_exits_t exits;
+    if (places && ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, &q, &exits)) {
+        if (!exits.returned) summary->flags |= IR_SUMMARY_NO_RETURN;
+        if (exits.failed) summary->flags |= IR_SUMMARY_MAY_FAIL;
+        if (!exits.returned && !exits.failed)
+            summary->flags |= IR_SUMMARY_DIVERGES;
+    }
+    else summary->flags |= IR_SUMMARY_MAY_FAIL;
+    for (size_t a = 0; places && a < summary->accesses.len; a++) {
         ir_saccess_t *access = &summary->accesses.data[a];
-        if (!(access->flags & IR_SACCESS_WRITE)
-            || access->place.kind == IR_SPLACE_HEAP
-            || access->place.kind == IR_SPLACE_UNKNOWN) continue;
-        paths.must.target = access->place;
-        if (ir_paths_all_pass_to(f, IR_PATH_EXIT_RETURN, path_passes,
-                                 path_diverges, &paths))
+        if (!(access->flags & IR_SACCESS_WRITE) || !named_place(&access->place))
+            continue;
+        ir_splace_t target = access->place;
+        q.target = &target;
+        q.leaf   = nullptr;
+        if (!ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, &q, &exits))
+            continue;
+        uint8_t unpassed = unpassed_exits(&q, f, &exits);
+        if (!(unpassed & UNPASSED_RETURN))
             access->flags |= IR_SACCESS_MUST_SUCCESS;
-        if (ir_paths_all_pass_to(f, IR_PATH_EXIT_FAIL, path_passes,
-                                 path_diverges, &paths))
+        if (!(unpassed & UNPASSED_FAIL))
             access->flags |= IR_SACCESS_MUST_FAILURE;
     }
     summarize_dependences(summaries, summary, f);
@@ -960,6 +1238,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
 {
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
+        summary->flags = IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES;
         core_dict_put(&summaries->by_function, members[i], summary);
     }
     bool cyclic = count > 1;
@@ -975,13 +1254,14 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
         bool changed = false;
         for (size_t i = 0; i < count; i++) {
             ir_summary_t *summary = ir_summary_of(summaries, members[i]);
-            core_list_t(ir_saccess_t) before = core_list_new(ir_saccess_t);
-            for (size_t a = 0; a < summary->accesses.len; a++)
-                core_list_push(before, summary->accesses.data[a]);
-            uint32_t flags = summary->flags;
-            summarize_function(summaries, summary, members[i]);
-            if (!same_summary(summary, &before, flags)) changed = true;
-            core_list_free(before);
+            ir_summary_t *next    = ir_summary_new(nullptr, members[i]);
+            summarize_function(summaries, next, members[i]);
+            if (!same_summary(next, &summary->accesses, summary->flags))
+                changed = true;
+            ir_summary_t previous = *summary;
+            *summary = *next;
+            *next    = previous;
+            summary_free(next);
         }
         if (!cyclic || !changed) break;
     }

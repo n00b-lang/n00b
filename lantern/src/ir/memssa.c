@@ -23,6 +23,8 @@ struct ir_memssa_t {
     core_list_t(uint32_t)      incoming;
     uint32_t                  *use_def;
     uint32_t                  *phi_of;
+    uint32_t                  *block_in;
+    core_dict_t                last_def;
     core_list_t(uint32_t)      current;
 };
 
@@ -46,8 +48,9 @@ block_accesses(ir_memssa_t *m, ir_block_t *block, uint32_t *cursor,
                uint32_t *def)
 {
     for (uint32_t i = 0; i < block->n_instrs; i++) {
-        ir_instr_t *in    = block->instrs[i];
-        uint32_t    first = *cursor;
+        ir_instr_t *in     = block->instrs[i];
+        uint32_t    before = *def;
+        uint32_t    first  = *cursor;
         uint32_t    end   = first;
         uint32_t    total = ir_places_access_count(m->places);
         while (end < total && ir_places_access_at(m->places, end)->instr == in)
@@ -67,6 +70,8 @@ block_accesses(ir_memssa_t *m, ir_block_t *block, uint32_t *cursor,
                                                 .block = block},
                                *def);
         }
+        if (*def != before)
+            core_dict_put(&m->last_def, in, (void *)(uintptr_t)(*def + 1));
         *cursor = end;
     }
 }
@@ -84,6 +89,7 @@ rename_pre(ir_block_t *block, void *thunk)
     ir_memssa_t *m = r->m;
     uint32_t     def = m->current.data[m->current.len - 1];
     if (m->phi_of[block->index] != UINT32_MAX) def = m->phi_of[block->index];
+    m->block_in[block->index] = def;
     uint32_t cursor = r->block_cursor[block->index];
     block_accesses(m, block, &cursor, &def);
     r->block_out[block->index] = def;
@@ -116,7 +122,9 @@ ir_memssa_build(ir_func_t *f)
     m->current  = core_list_new(uint32_t);
     uint32_t accesses = ir_places_access_count(places);
     m->use_def = core_alloc_array(uint32_t, accesses ? accesses : 1);
-    m->phi_of  = core_alloc_array(uint32_t, f->n_blocks);
+    m->phi_of   = core_alloc_array(uint32_t, f->n_blocks);
+    m->block_in = core_alloc_array(uint32_t, f->n_blocks);
+    core_dict_init(&m->last_def, nullptr, nullptr);
     uint32_t *cursor = core_alloc_array(uint32_t, f->n_blocks);
     uint32_t *out    = core_alloc_array(uint32_t, f->n_blocks);
     for (uint32_t a = 0; a < accesses; a++) m->use_def[a] = UINT32_MAX;
@@ -137,8 +145,9 @@ ir_memssa_build(ir_func_t *f)
                              UINT32_MAX);
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
-        m->phi_of[block->index] = UINT32_MAX;
-        out[block->index]       = UINT32_MAX;
+        m->phi_of[block->index]   = UINT32_MAX;
+        m->block_in[block->index] = UINT32_MAX;
+        out[block->index]         = UINT32_MAX;
         if (block != entry && ir_block_reachable(doms, block)
             && ir_pred_count(doms, block) >= 2)
             m->phi_of[block->index] = add_def(m, (ir_memdef_t){
@@ -177,7 +186,50 @@ ir_memssa_free(ir_memssa_t *m)
     core_list_free(m->current);
     core_free(m->use_def);
     core_free(m->phi_of);
+    core_free(m->block_in);
+    core_dict_free(&m->last_def);
     core_free(m);
+}
+
+uint32_t
+ir_memssa_def_before(const ir_memssa_t *m, const ir_instr_t *in)
+{
+    ir_block_t *block = m && in ? in->block : nullptr;
+    if (!block || block->index >= m->f->n_blocks) return UINT32_MAX;
+    uint32_t def = m->block_in[block->index];
+    for (uint32_t i = 0; def != UINT32_MAX && i < block->n_instrs; i++) {
+        if (block->instrs[i] == in) return def;
+        uintptr_t last = (uintptr_t)core_dict_get(
+            (core_dict_t *)&m->last_def, block->instrs[i], nullptr);
+        if (last) def = (uint32_t)(last - 1);
+    }
+    return UINT32_MAX;
+}
+
+const ir_memdef_t *
+ir_memssa_def(const ir_memssa_t *m, uint32_t id)
+{
+    return m && id < m->defs.len ? &m->defs.data[id].def : nullptr;
+}
+
+uint32_t
+ir_memssa_def_prev(const ir_memssa_t *m, uint32_t id)
+{
+    return m && id < m->defs.len ? m->defs.data[id].prev : UINT32_MAX;
+}
+
+uint32_t
+ir_memssa_phi_count(const ir_memssa_t *m, uint32_t id)
+{
+    return m && id < m->defs.len ? m->defs.data[id].incoming_count : 0;
+}
+
+uint32_t
+ir_memssa_phi_incoming(const ir_memssa_t *m, uint32_t id, uint32_t index)
+{
+    return index < ir_memssa_phi_count(m, id)
+        ? m->incoming.data[m->defs.data[id].first_incoming + index]
+        : UINT32_MAX;
 }
 
 static bool

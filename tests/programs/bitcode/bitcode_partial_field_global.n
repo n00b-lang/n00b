@@ -1,0 +1,10 @@
+type Pair {
+    x: int
+    y: int
+}
+func total(p: Pair) -> int {
+    return p.x + p.y
+}
+var p: Pair
+p.x = 1
+require total(p) == 1
