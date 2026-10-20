@@ -182,7 +182,6 @@ typedef struct {
     core_list_t(n00bb_ir_func_ptr_t) initializer_roots;
     core_list_t(n00bb_ir_func_ptr_t) entry_functions;
     core_dict_t targets;
-    ir_summary_hooks_t hooks;
     ir_summaries_t *summaries;
 } n00bb_runtime_init_analysis_t;
 typedef struct {
@@ -11437,15 +11436,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 })) return lower_error(context, IR_DIAG_INTERNAL, span,
                     "could not annotate a native function");
         if (function && parse_sym_binding(symbol,
-                CORE_STRING_STATIC("n00bb.native.collection-free"))
-            && !ir_annot_set(lower->ir_context, &function->annots,
-                (ir_annot_t){
-                    .key = CORE_STRING_STATIC("n00bb.native.collection-free"),
-                    .kind = IR_ANNOT_BOOL,
-                    .b = true,
-                })) return lower_error(context, IR_DIAG_INTERNAL, span,
-                    "could not annotate a collection-free native");
-        if (function && parse_sym_binding(symbol,
                 CORE_STRING_STATIC("n00bb.native.calls-n00b"))
             && !ir_annot_set(lower->ir_context, &function->annots,
                 (ir_annot_t){
@@ -19081,14 +19071,11 @@ dump_splace(th_ctx *types, const ir_splace_t *place)
 static void
 dump_function_summaries(n00bb_link_analysis_t *analysis)
 {
-    ir_summary_hooks_t hooks = {.call_targets = n00bb_summary_call_targets,
-                                .axiom = n00bb_summary_axiom};
-    ir_summaries_t *summaries = ir_summaries_compute(
-        analysis->reachable_functions.data,
-        analysis->reachable_functions.len, &hooks);
+    ir_summaries_t *summaries = analysis->summaries;
     static const char *const flag_names[] = {
         "may-fail", "may-trap", "may-allocate", "may-block", "diverges",
-        "calls-unknown", "may-io", "no-return"};
+        "calls-unknown", "may-io", "no-return", "may-collect",
+        "allocates-direct"};
     static const char *const access_names[] = {
         "read", "write", "must-success", "must-failure", "reads-entry"};
     for (size_t f = 0; f < analysis->reachable_functions.len; f++) {
@@ -19099,7 +19086,7 @@ dump_function_summaries(n00bb_link_analysis_t *analysis)
         fprintf(stdout, "summary @%.*s.%.*s",
                 (int)owner.u8_bytes, owner.data,
                 (int)function->name.u8_bytes, function->name.data);
-        for (uint32_t b = 0; b < 8; b++)
+        for (uint32_t b = 0; b < 10; b++)
             if (ir_summary_flags(summary) & (1u << b))
                 fprintf(stdout, " %s", flag_names[b]);
         fputc('\n', stdout);
@@ -19150,7 +19137,6 @@ dump_function_summaries(n00bb_link_analysis_t *analysis)
             fputc('\n', stdout);
         }
     }
-    ir_summaries_free(summaries);
 }
 
 static void
@@ -19679,7 +19665,6 @@ thread_runtime_entry_function(parse_grammar_t *grammar,
 static void
 runtime_init_analysis_release(n00bb_runtime_init_analysis_t *runtime)
 {
-    ir_summaries_free(runtime->summaries);
     core_list_free(runtime->initializer_roots);
     core_list_free(runtime->entry_functions);
     core_dict_free(&runtime->targets);
@@ -19772,20 +19757,48 @@ runtime_init_analysis_build(
         if (!initializer) return false;
         runtime_function_add(&runtime->initializer_roots, initializer);
     }
+    return true;
+}
+
+static uint32_t
+n00bb_summary_adjust(void *context, const ir_func_t *function, uint32_t flags)
+{
+    n00bb_link_analysis_t *analysis = context;
+    return n00bb_llvm_mutator_flags(
+        n00bb_cache_mutator_classifier(analysis->cache), function, flags);
+}
+
+static bool
+build_function_summaries(n00bb_link_analysis_t *analysis,
+    const core_list_t(n00bb_ir_func_ptr_t) *initializers,
+    const core_list_t(n00bb_ir_func_ptr_t) *entries)
+{
     core_list_t(n00bb_ir_func_ptr_t) roots =
         core_list_new(n00bb_ir_func_ptr_t);
-    for (size_t i = 0; i < runtime->initializer_roots.len; i++)
-        core_list_push(roots, runtime->initializer_roots.data[i]);
-    for (size_t i = 0; i < runtime->entry_functions.len; i++)
-        core_list_push(roots, runtime->entry_functions.data[i]);
-    runtime->hooks = (ir_summary_hooks_t){
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++)
+        core_list_push(roots, analysis->emitted_functions.data[i]);
+    for (size_t i = 0; i < initializers->len; i++)
+        core_list_push(roots, initializers->data[i]);
+    for (size_t i = 0; i < entries->len; i++)
+        core_list_push(roots, entries->data[i]);
+    analysis->summary_hooks = (ir_summary_hooks_t){
+        .context = analysis,
         .call_targets = n00bb_summary_call_targets,
         .axiom = n00bb_summary_axiom,
+        .adjust = n00bb_summary_adjust,
     };
-    runtime->summaries = ir_summaries_compute(roots.data, roots.len,
-                                              &runtime->hooks);
+    ir_summaries_free(analysis->summaries);
+    analysis->summaries = ir_summaries_compute(roots.data, roots.len,
+                                               &analysis->summary_hooks);
     core_list_free(roots);
-    return runtime->summaries != nullptr;
+    return analysis->summaries != nullptr;
+}
+
+bool
+n00bb_recompute_summaries(n00bb_link_analysis_t *analysis)
+{
+    core_list_t(n00bb_ir_func_ptr_t) none = {0};
+    return build_function_summaries(analysis, &none, &none);
 }
 
 static uint8_t
@@ -20655,19 +20668,6 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && build_reachable_functions(analysis, &init_order, diagnostics);
 
     if (ok) ok = diagnose_unused_link_symbols(grammar, analysis);
-    n00bb_runtime_init_analysis_t runtime_init = {0};
-    bool analyze_runtime_init = ok
-        && n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME;
-    if (analyze_runtime_init)
-        ok = runtime_init_analysis_build(link, grammar, analysis,
-            &init_order, &runtime_init);
-    if (ok && analyze_runtime_init)
-        ok = validate_uninitialized_global_reads(link, analysis,
-            &runtime_init, &init_order);
-    if (ok && analyze_runtime_init)
-        ok = validate_thread_function_reads(link, analysis, &runtime_init,
-                                            true);
-    if (analyze_runtime_init) runtime_init_analysis_release(&runtime_init);
     if (getenv("N00BB_PROFILE_COMPILE"))
         fprintf(stderr, "PROFILE lower-initializers %.3f\n",
             n00bb_profile_seconds() - profile_start);
@@ -20796,6 +20796,25 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             }
         }
     }
+    n00bb_runtime_init_analysis_t runtime_init = {0};
+    bool analyze_runtime_init = ok
+        && n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME;
+    if (analyze_runtime_init)
+        ok = runtime_init_analysis_build(link, grammar, analysis,
+            &init_order, &runtime_init);
+    if (ok) ok = build_function_summaries(analysis,
+        &runtime_init.initializer_roots, &runtime_init.entry_functions);
+    runtime_init.summaries = analysis->summaries;
+    if (ok && analyze_runtime_init)
+        ok = validate_uninitialized_global_reads(link, analysis,
+            &runtime_init, &init_order);
+    if (ok && analyze_runtime_init)
+        ok = validate_thread_function_reads(link, analysis, &runtime_init,
+                                            true);
+    if (analyze_runtime_init) runtime_init_analysis_release(&runtime_init);
+    if (getenv("N00BB_PROFILE_COMPILE"))
+        fprintf(stderr, "PROFILE lower-summaries %.3f\n",
+            n00bb_profile_seconds() - profile_start);
 
     if (ok && !build_n00bb_execution_graph(analysis, &init_order)) {
         core_diagnostics_report(

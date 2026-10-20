@@ -577,8 +577,7 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
     item->backend = backend;
     if (!backend) return item->ok = false;
     n00bb_llvm_backend_bind_native_cache(backend, emission->native_cache);
-    n00bb_llvm_backend_bind_mutator_classifier(backend,
-        n00bb_cache_mutator_classifier(analysis->cache));
+    n00bb_llvm_backend_bind_summaries(backend, analysis->summaries);
     core_string_t table_symbol = artifact
         ? artifact->index_table.symbol : (core_string_t){};
     if (table_symbol.u8_bytes && table_symbol.data[0] == '_'

@@ -97,7 +97,8 @@ ir_summary_conservative(ir_summaries_t *summaries, const ir_func_t *function)
     ir_summary_t *summary = ir_summary_new(summaries, function);
     summary->flags = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_TRAP
         | IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_BLOCK
-        | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO;
+        | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
+        | IR_SUMMARY_MAY_COLLECT;
     ir_summary_add_access(summary, (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
                           IR_SACCESS_READ | IR_SACCESS_WRITE
                               | IR_SACCESS_READS_ENTRY);
@@ -239,6 +240,15 @@ resolve_targets(ir_summaries_t *summaries, const ir_instr_t *call,
     return true;
 }
 
+static void
+adjust_flags(ir_summaries_t *summaries, ir_summary_t *summary)
+{
+    const ir_summary_hooks_t *hooks = summaries->hooks;
+    if (hooks && hooks->adjust)
+        summary->flags = hooks->adjust(hooks->context, summary->function,
+                                       summary->flags);
+}
+
 static ir_summary_t *
 target_summary(ir_summaries_t *summaries, ir_func_t *target)
 {
@@ -248,6 +258,7 @@ target_summary(ir_summaries_t *summaries, ir_func_t *target)
     if (hooks && hooks->axiom) summary = hooks->axiom(hooks->context,
                                                       summaries, target);
     if (!summary) summary = ir_summary_conservative(summaries, target);
+    adjust_flags(summaries, summary);
     core_dict_put(&summaries->by_function, target, summary);
     return summary;
 }
@@ -617,7 +628,7 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
     if (targets.unknown) {
         summary->flags |= IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
             | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
-            | IR_SUMMARY_MAY_IO;
+            | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT;
         ir_summary_add_access(summary, (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
                               IR_SACCESS_READ | IR_SACCESS_WRITE
                                   | IR_SACCESS_READS_ENTRY);
@@ -630,7 +641,8 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
         summary->flags |= callee->flags
             & (IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
                | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
-               | IR_SUMMARY_MAY_IO);
+               | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
+               | IR_SUMMARY_ALLOCATES_DIRECT);
         for (size_t a = 0; a < callee->accesses.len; a++) {
             const ir_saccess_t *access = &callee->accesses.data[a];
             uint8_t flags = access->flags
@@ -660,41 +672,28 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
     core_list_free(targets.targets);
 }
 
-static bool
-allocates(const ir_instr_t *in)
+static uint32_t
+allocation_flags(const ir_func_t *f, const ir_instr_t *in)
 {
     switch (in->op) {
     case IR_OP_ALLOC:
+        return ir_allocation_has_only_local_uses(f, in)
+            ? 0
+            : IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
+                | IR_SUMMARY_ALLOCATES_DIRECT;
     case IR_OP_ALLOC_USING:
     case IR_OP_ARRAY_NEW:
     case IR_OP_ARRAY_NEW_USING:
-    case IR_OP_VARIANT_NEW:
-    case IR_OP_VARIANT_NEW_USING:
     case IR_OP_BOX:
-        return true;
+        return IR_SUMMARY_MAY_ALLOCATE;
+    case IR_OP_BUFFER_AS_STRING:
+    case IR_OP_BUFFER_BORROW_END:
+        return IR_SUMMARY_MAY_COLLECT;
     default:
-        return false;
+        return 0;
     }
 }
 
-static bool
-note_entry_clobber(void *context, const ir_memdef_t *def)
-{
-    if (def->kind == IR_MEMDEF_ENTRY) *(bool *)context = true;
-    return true;
-}
-
-static bool
-heap_allocation(ir_places_t *places, const ir_instr_t *in)
-{
-    if (!allocates(in) || !in->dest) return false;
-    const uint32_t *ids = nullptr;
-    uint32_t        n   = 0;
-    if (!ir_places_of(places, in->dest, &ids, &n)) return true;
-    for (uint32_t i = 0; i < n; i++)
-        if (ir_place_at(places, ids[i])->kind != IR_PLACE_LOCAL) return true;
-    return false;
-}
 
 static void summarize_dependences(ir_summaries_t *summaries,
                                   ir_summary_t *summary, ir_func_t *f);
@@ -744,9 +743,8 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
     for (uint32_t a = 0; places && a < ir_places_access_count(places); a++) {
         const ir_access_t *access = ir_places_access_at(places, a);
         const uint32_t    *ids    = ir_places_access_places(places, access);
-        bool entry = false;
-        if (access->kind == IR_ACCESS_LOAD && memssa)
-            ir_memssa_visit_clobbers(memssa, a, note_entry_clobber, &entry);
+        bool entry = access->kind == IR_ACCESS_LOAD && memssa
+            && ir_memssa_reads_entry(memssa, a);
         for (uint32_t p = 0; p < access->count; p++) {
             ir_splace_t mapped;
             if (!portable_place(f, ir_place_at(places, ids[p]), &mapped))
@@ -766,8 +764,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *in = block->instrs[i];
             if (is_call(in)) compose_call(summaries, summary, f, places, in);
-            if (heap_allocation(places, in))
-                summary->flags |= IR_SUMMARY_MAY_ALLOCATE;
+            summary->flags |= allocation_flags(f, in);
         }
     }
     flow_query_t    q = {.summaries = summaries, .f = f, .places = places};
@@ -794,6 +791,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         if (!(unpassed & UNPASSED_FAIL))
             access->flags |= IR_SACCESS_MUST_FAILURE;
     }
+    adjust_flags(summaries, summary);
     summarize_dependences(summaries, summary, f);
     ir_analysis_scope_end(scope);
 }

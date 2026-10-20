@@ -310,3 +310,42 @@ ir_memssa_visit_clobbers(ir_memssa_t *m, uint32_t load_access,
     core_list_free(pending);
     return ok;
 }
+
+bool
+ir_memssa_reads_entry(ir_memssa_t *m, uint32_t load_access)
+{
+    const ir_access_t *load = m ? ir_places_access_at(m->places, load_access)
+                                : nullptr;
+    if (!load || load->kind != IR_ACCESS_LOAD
+        || m->use_def[load_access] == UINT32_MAX) return false;
+    bool *seen = core_alloc_array(bool, m->defs.len);
+    core_list_t(uint32_t) pending = core_list_new(uint32_t);
+    core_list_push(pending, m->use_def[load_access]);
+    bool entry = false;
+    while (!entry && pending.len) {
+        uint32_t index = pending.data[--pending.len];
+        if (seen[index]) continue;
+        seen[index] = true;
+        const memdef_node_t *node = &m->defs.data[index];
+        switch (node->def.kind) {
+        case IR_MEMDEF_ENTRY:
+            entry = true;
+            break;
+        case IR_MEMDEF_PHI:
+            for (uint32_t i = 0; i < node->incoming_count; i++)
+                core_list_push(pending,
+                               m->incoming.data[node->first_incoming + i]);
+            break;
+        case IR_MEMDEF_CALL:
+            core_list_push(pending, node->prev);
+            break;
+        case IR_MEMDEF_STORE:
+            if (!covers(m->places, node->def.access, load))
+                core_list_push(pending, node->prev);
+            break;
+        }
+    }
+    core_list_free(pending);
+    core_free(seen);
+    return entry;
+}

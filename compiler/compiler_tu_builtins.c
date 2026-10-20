@@ -21,11 +21,15 @@ typedef struct {
     uint32_t      effects;
     uint8_t       reads;
     uint8_t       writes;
+    bool          collection_free;
 } builtin_native_name_t;
 
 #define NATIVE(name, native, effects, reads, writes)                       \
     {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), effects, reads, \
-     writes}
+     writes, false}
+#define COLLECTION_FREE_NATIVE(name, native, effects, reads, writes)       \
+    {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), effects, reads, \
+     writes, true}
 #define NATIVE_IO (IR_SUMMARY_MAY_IO)
 #define NATIVE_BLOCKING_IO (IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_BLOCK)
 #define NATIVE_CALLS (IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_TRAP       \
@@ -33,7 +37,7 @@ typedef struct {
                       | IR_SUMMARY_MAY_IO)
 
 static const builtin_native_name_t builtin_native_names[] = {
-    NATIVE("__bitptr", "n00bb_bitptr", 0, 0, 0),
+    COLLECTION_FREE_NATIVE("__bitptr", "n00bb_bitptr", 0, 0, 0),
     NATIVE("__os_page_size", "n00b_os_page_size", 0, 0, 0),
     NATIVE("__gc_enter_blocking",
            "sys.internal.gc.alloc.enter_blocking_runtime", 0, 0, 0),
@@ -77,8 +81,7 @@ static const builtin_native_name_t builtin_native_names[] = {
     NATIVE("__os_now_ns", "n00b_os_now_ns", 0, 0, 0),
     NATIVE("__os_cpu_relax", "n00b_os_cpu_relax", 0, 0, 0),
     NATIVE("__panic_trace", "n00bb_runtime_panic_trace", NATIVE_IO, 0, 0),
-    NATIVE("__os_map_zeroed", "n00b_os_map_zeroed", IR_SUMMARY_MAY_ALLOCATE,
-           0, 0),
+    NATIVE("__os_map_zeroed", "n00b_os_map_zeroed", 0, 0, 0),
     NATIVE("__os_unmap", "n00b_os_unmap", 0, 0, 0x1),
     NATIVE("__os_protect", "n00b_os_protect", 0, 0, 0x1),
     NATIVE("__abi_type", "n00b_builtin_abi_type", 0, 0, 0),
@@ -113,9 +116,10 @@ static const builtin_native_name_t builtin_native_names[] = {
            0x1, 0),
     NATIVE("__abi_range_index", "n00b_builtin_abi_range_index", 0, 0, 0),
     NATIVE("__abi_bytes", "n00b_builtin_abi_bytes", 0, 0, 0),
-    NATIVE("__abi_ref_address", "n00b_builtin_abi_ref_address", 0, 0, 0),
-    NATIVE("__load_le_u64", "n00bb_load_le_u64", 0, 0x1, 0),
-    NATIVE("__load_le_u32", "n00bb_load_le_u32", 0, 0x1, 0),
+    COLLECTION_FREE_NATIVE("__abi_ref_address",
+                           "n00b_builtin_abi_ref_address", 0, 0, 0),
+    COLLECTION_FREE_NATIVE("__load_le_u64", "n00bb_load_le_u64", 0, 0x1, 0),
+    COLLECTION_FREE_NATIVE("__load_le_u32", "n00bb_load_le_u32", 0, 0x1, 0),
     NATIVE("__gc_invoke_finalizer", "n00b_gc_finalize", NATIVE_CALLS, 0, 0),
     NATIVE("__array_length", "__n00bb_array_length", 0, 0x1, 0),
     NATIVE("__array_prefix", "__n00bb_array_prefix", 0, 0x1, 0x1),
@@ -127,6 +131,7 @@ static const builtin_native_name_t builtin_native_names[] = {
 };
 
 #undef NATIVE
+#undef COLLECTION_FREE_NATIVE
 
 ir_summary_t *
 n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
@@ -137,7 +142,8 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         const builtin_native_name_t *native = &builtin_native_names[i];
         if (!core_string_eq(native->native, function->name)) continue;
         ir_summary_t *summary = ir_summary_new(summaries, function);
-        ir_summary_set_flags(summary, native->effects);
+        ir_summary_set_flags(summary, native->effects
+            | (native->collection_free ? 0 : IR_SUMMARY_MAY_COLLECT));
         for (uint32_t p = 0; p < 8; p++) {
             uint8_t flags = 0;
             if (native->reads & (1u << p))
@@ -310,18 +316,6 @@ register_builtin_native_function(parse_symtab_t *symtab, th_ctx *types,
 }
 
 static bool
-register_collection_free_native(parse_symtab_t *symtab, th_ctx *types,
-                                th_type *nil_type, core_string_t name,
-                                th_type *result,
-                                th_type *const *arguments, size_t count)
-{
-    parse_sym_entry_t *symbol = builtin_native_symbol(symtab, types,
-        nil_type, name, result, arguments, count);
-    return symbol && parse_sym_set_binding(symbol,
-        CORE_STRING_STATIC("n00bb.native.collection-free"), symbol);
-}
-
-static bool
 register_bitptr_builtin(parse_symtab_t *symtab, th_ctx *types,
                         th_type *nil_type, th_type *reference)
 {
@@ -330,9 +324,7 @@ register_bitptr_builtin(parse_symtab_t *symtab, th_ctx *types,
     parse_sym_entry_t *symbol = builtin_native_symbol(symtab, types,
         nil_type, CORE_STRING_STATIC("__bitptr"), result, &reference, 1);
     return symbol && parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.native.returns-parameter"), symbol)
-        && parse_sym_set_binding(symbol,
-            CORE_STRING_STATIC("n00bb.native.collection-free"), symbol);
+            CORE_STRING_STATIC("n00bb.native.returns-parameter"), symbol);
 }
 
 bool
@@ -593,13 +585,13 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__abi_range_index"), i64, range_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_bytes"), bytes_result, bytes_args, 2)
-        && register_collection_free_native(symtab, types, nil_type,
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_ref_address"), uint, address_args, 1)
         && register_bitptr_builtin(symtab, types, nil_type, reference)
-        && register_collection_free_native(symtab, types, nil_type,
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__load_le_u64"),
             th_name(types, CORE_STRING_STATIC("u64")), &byte_reference, 1)
-        && register_collection_free_native(symtab, types, nil_type,
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__load_le_u32"), u32, &byte_reference, 1);
 }
 

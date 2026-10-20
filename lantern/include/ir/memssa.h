@@ -28,6 +28,7 @@ void         ir_memssa_free(ir_memssa_t *memssa);
 
 bool ir_memssa_visit_clobbers(ir_memssa_t *memssa, uint32_t load_access,
                               ir_memdef_visit_fn visit, void *context);
+bool ir_memssa_reads_entry(ir_memssa_t *memssa, uint32_t load_access);
 
 uint32_t           ir_memssa_def_before(const ir_memssa_t *memssa,
                                         const ir_instr_t *in);

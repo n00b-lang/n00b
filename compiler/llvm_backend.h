@@ -5,6 +5,7 @@
 
 #include "ir/ir.h"
 #include "ir/storage_origin.h"
+#include "ir/summary.h"
 #include "lib/buffer.h"
 #include "lib/diagnostic.h"
 #include "lib/target.h"
@@ -82,8 +83,11 @@ typedef struct {
     void *context;
 } n00bb_llvm_mutator_classifier_t;
 
-void n00bb_llvm_backend_bind_mutator_classifier(n00bb_llvm_backend_t *backend,
-    const n00bb_llvm_mutator_classifier_t *classifier);
+uint32_t n00bb_llvm_mutator_flags(
+    const n00bb_llvm_mutator_classifier_t *classifier,
+    const ir_func_t *function, uint32_t flags);
+void n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
+    ir_summaries_t *summaries);
 size_t n00bb_llvm_backend_mutator_count(const n00bb_llvm_backend_t *backend);
 core_string_t n00bb_llvm_backend_mutator_name(
     const n00bb_llvm_backend_t *backend, size_t index);

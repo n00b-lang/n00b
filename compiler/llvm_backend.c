@@ -73,8 +73,7 @@ native_type_key_eq(const void *left, const void *right)
 }
 
 static _Thread_local core_dict_t *active_native_types;
-static _Thread_local const n00bb_llvm_mutator_classifier_t
-    *active_mutator_classifier;
+static _Thread_local ir_summaries_t *active_summaries;
 static _Thread_local core_list_t(core_string_t)
     *active_selected_mutators;
 
@@ -281,7 +280,7 @@ struct n00bb_llvm_backend_t {
     n00bb_native_cache_t *native_cache;
     const n00bb_llvm_callback_bindings_t *callback_bindings;
     bool prepared;
-    const n00bb_llvm_mutator_classifier_t *mutator_classifier;
+    ir_summaries_t *summaries;
     core_list_t(core_string_t) selected_mutators;
 };
 
@@ -11601,43 +11600,18 @@ mark_conservative_frame(lower_state_t *state)
                           2, "") != nullptr;
 }
 
-static bool has_dynamic_allocation(ir_func_t *function);
-
 static bool
-may_collect(ir_func_t *function,
-            core_list_t(inline_function_ptr_t) *visiting)
+summary_has(const ir_func_t *function, uint32_t flag, bool otherwise)
 {
-    if (!function->n_blocks) {
-        ir_annot_t *free_native = ir_annot_get(&function->annots,
-            CORE_STRING_STATIC("n00bb.native.collection-free"));
-        return !free_native || free_native->kind != IR_ANNOT_BOOL
-            || !free_native->b;
-    }
-    if (inline_list_contains(visiting, function)) return false;
-    core_list_push(*visiting, function);
-    if (has_dynamic_allocation(function)) return true;
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            if (block->instrs[i]->op == IR_OP_BUFFER_AS_STRING
-                || block->instrs[i]->op == IR_OP_BUFFER_BORROW_END)
-                return true;
-            if (block->instrs[i]->op != IR_OP_CALL) continue;
-            ir_func_t *callee = direct_call_target(block->instrs[i]);
-            if (!callee || may_collect(callee, visiting)) return true;
-        }
-    }
-    return false;
+    ir_summary_t *summary = ir_summary_of(active_summaries, function);
+    return summary ? (ir_summary_flags(summary) & flag) != 0 : otherwise;
 }
 
 static bool
 prepare_frame_map(lower_state_t *state)
 {
-    core_list_t(inline_function_ptr_t) visiting =
-        core_list_new(inline_function_ptr_t);
     bool collects = state->with_mutator
-        || may_collect(state->function, &visiting);
-    core_list_free(visiting);
+        || summary_has(state->function, IR_SUMMARY_MAY_COLLECT, true);
     if (!collects) return true;
     frame_root_count_t selected = {.state = state, .possible = true};
     size_t total = 0;
@@ -12087,21 +12061,6 @@ collect_inline_callees(ir_func_t *function,
     return true;
 }
 
-static bool
-has_dynamic_allocation(ir_func_t *function)
-{
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *instruction = block->instrs[i];
-            if (instruction->op == IR_OP_ALLOC
-                && !ir_allocation_has_only_local_uses(function, instruction))
-                return true;
-        }
-    }
-    return false;
-}
-
 static void
 collect_mutator_candidates(ir_func_t *function,
                            core_list_t(inline_function_ptr_t) *candidates)
@@ -12119,15 +12078,7 @@ collect_mutator_candidates(ir_func_t *function,
 }
 
 static bool
-fixed_mutator(const ir_func_t *function, bool *mutator)
-{
-    return active_mutator_classifier && active_mutator_classifier->known
-        && active_mutator_classifier->known(
-            active_mutator_classifier->context, function, mutator);
-}
-
-static bool
-is_mutator_allocator(ir_func_t *function)
+is_mutator_allocator(const ir_func_t *function)
 {
     return core_string_eq(ir_module_name(function->owner),
                           CORE_STRING_STATIC("sys.internal.gc.alloc"))
@@ -12144,41 +12095,18 @@ is_mutator_getter(const ir_func_t *function)
             CORE_STRING_STATIC("mutator_for_native"));
 }
 
-static void
-select_mutator_functions(
-    const core_list_t(inline_function_ptr_t) *candidates,
-    core_list_t(inline_function_ptr_t) *selected)
+uint32_t
+n00bb_llvm_mutator_flags(const n00bb_llvm_mutator_classifier_t *classifier,
+                         const ir_func_t *function, uint32_t flags)
 {
-    for (size_t f = 0; f < candidates->len; f++) {
-        ir_func_t *function = candidates->data[f];
-        bool mutator = false;
-        if (is_mutator_allocator(function)
-            || (fixed_mutator(function, &mutator)
-                ? mutator : has_dynamic_allocation(function)))
-            core_list_push(*selected, function);
-    }
-    bool changed;
-    do {
-        changed = false;
-        for (size_t f = 0; f < candidates->len; f++) {
-            ir_func_t *function = candidates->data[f];
-            bool fixed = false;
-            if (inline_list_contains(selected, function)
-                || fixed_mutator(function, &fixed)) continue;
-            for (uint32_t b = 0; b < function->n_blocks; b++) {
-                ir_block_t *block = function->blocks[b];
-                for (uint32_t i = 0; i < block->n_instrs; i++) {
-                    ir_func_t *callee = direct_call_target(block->instrs[i]);
-                    if (callee && inline_list_contains(selected, callee)) {
-                        core_list_push(*selected, function);
-                        changed = true;
-                        goto next_caller;
-                    }
-                }
-            }
-next_caller:;
-        }
-    } while (changed);
+    bool mutator = false;
+    if (!function->n_blocks) return flags;
+    if (is_mutator_allocator(function)) mutator = true;
+    else if (!classifier || !classifier->known
+             || !classifier->known(classifier->context, function, &mutator))
+        return flags;
+    return mutator ? flags | IR_SUMMARY_ALLOCATES_DIRECT
+                   : flags & ~(uint32_t)IR_SUMMARY_ALLOCATES_DIRECT;
 }
 
 static void
@@ -12365,11 +12293,13 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
         bool emit_body = function_body_emitted(function,
             reachable, reachable_count, reachable_bound);
-        if (emit_body && has_dynamic_allocation(function))
+        if (emit_body && function->n_blocks
+            && summary_has(function, IR_SUMMARY_ALLOCATES_DIRECT, false))
             needs_allocation_callee = true;
     }
     for (size_t i = 0; i < inline_callees.len; i++)
-        if (has_dynamic_allocation(inline_callees.data[i]))
+        if (summary_has(inline_callees.data[i], IR_SUMMARY_ALLOCATES_DIRECT,
+                        false))
             needs_allocation_callee = true;
     if (inline_ok && needs_allocation_callee && reachable_bound) {
         for (size_t i = 0; i < reachable_count; i++) {
@@ -12421,7 +12351,10 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
                                    &candidates);
     for (size_t i = 0; i < inline_callees.len; i++)
         collect_mutator_candidates(inline_callees.data[i], &candidates);
-    select_mutator_functions(&candidates, &mutator_functions);
+    for (size_t i = 0; i < candidates.len; i++)
+        if (summary_has(candidates.data[i], IR_SUMMARY_ALLOCATES_DIRECT,
+                        false))
+            core_list_push(mutator_functions, candidates.data[i]);
     core_list_free(candidates);
     for (size_t i = 0; i < mutator_functions.len; i++) {
         if (!is_mutator_getter(mutator_functions.data[i])) continue;
@@ -12788,10 +12721,34 @@ n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
 }
 
 void
-n00bb_llvm_backend_bind_mutator_classifier(n00bb_llvm_backend_t *backend,
-    const n00bb_llvm_mutator_classifier_t *classifier)
+n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
+                                  ir_summaries_t *summaries)
 {
-    if (backend) backend->mutator_classifier = classifier;
+    if (backend) backend->summaries = summaries;
+}
+
+static uint32_t
+module_mutator_flags(void *context, const ir_func_t *function, uint32_t flags)
+{
+    (void)context;
+    return n00bb_llvm_mutator_flags(nullptr, function, flags);
+}
+
+static const ir_summary_hooks_t module_summary_hooks = {
+    .adjust = module_mutator_flags,
+};
+
+static ir_summaries_t *
+module_function_summaries(const ir_module_t *module)
+{
+    core_list_t(inline_function_ptr_t) functions =
+        core_list_new(inline_function_ptr_t);
+    for (size_t i = 0; i < ir_func_count((ir_module_t *)module); i++)
+        core_list_push(functions, ir_func_at((ir_module_t *)module, i));
+    ir_summaries_t *summaries = ir_summaries_compute(functions.data,
+        functions.len, &module_summary_hooks);
+    core_list_free(functions);
+    return summaries;
 }
 
 size_t
@@ -12825,11 +12782,13 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
     }
     debug_info_t *previous_debug = active_debug;
     active_debug = with_debug ? &debug : nullptr;
-    const n00bb_llvm_mutator_classifier_t *previous_classifier =
-        active_mutator_classifier;
+    ir_summaries_t *previous_summaries = active_summaries;
     core_list_t(core_string_t) *previous_selected =
         active_selected_mutators;
-    active_mutator_classifier = backend->mutator_classifier;
+    ir_summaries_t *module_summaries = backend->summaries
+        ? nullptr : module_function_summaries(backend->source);
+    active_summaries = backend->summaries ? backend->summaries
+                                          : module_summaries;
     active_selected_mutators = &backend->selected_mutators;
     bool module_lowered = lower_module(backend->module, backend->source,
         backend->emit_frame_maps, backend->type_indices,
@@ -12841,7 +12800,8 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
         backend->callback_bindings ? &backend->callback_bindings->list
                                    : nullptr,
         backend->index_table, diagnostics);
-    active_mutator_classifier = previous_classifier;
+    active_summaries = previous_summaries;
+    ir_summaries_free(module_summaries);
     active_selected_mutators = previous_selected;
     active_debug = previous_debug;
     if (with_debug) debug_info_end(&debug);

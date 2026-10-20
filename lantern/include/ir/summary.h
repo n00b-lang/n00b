@@ -33,14 +33,16 @@ typedef struct {
 } ir_saccess_t;
 
 enum {
-    IR_SUMMARY_MAY_FAIL      = 1u << 0,
-    IR_SUMMARY_MAY_TRAP      = 1u << 1,
-    IR_SUMMARY_MAY_ALLOCATE  = 1u << 2,
-    IR_SUMMARY_MAY_BLOCK     = 1u << 3,
-    IR_SUMMARY_DIVERGES      = 1u << 4,
-    IR_SUMMARY_CALLS_UNKNOWN = 1u << 5,
-    IR_SUMMARY_MAY_IO        = 1u << 6,
-    IR_SUMMARY_NO_RETURN     = 1u << 7,
+    IR_SUMMARY_MAY_FAIL         = 1u << 0,
+    IR_SUMMARY_MAY_TRAP         = 1u << 1,
+    IR_SUMMARY_MAY_ALLOCATE     = 1u << 2,
+    IR_SUMMARY_MAY_BLOCK        = 1u << 3,
+    IR_SUMMARY_DIVERGES         = 1u << 4,
+    IR_SUMMARY_CALLS_UNKNOWN    = 1u << 5,
+    IR_SUMMARY_MAY_IO           = 1u << 6,
+    IR_SUMMARY_NO_RETURN        = 1u << 7,
+    IR_SUMMARY_MAY_COLLECT      = 1u << 8,
+    IR_SUMMARY_ALLOCATES_DIRECT = 1u << 9,
 };
 
 typedef enum : uint8_t {
@@ -82,6 +84,8 @@ typedef struct {
                          ir_summary_target_fn add, void *sink);
     ir_summary_t *(*axiom)(void *context, ir_summaries_t *summaries,
                            const ir_func_t *function);
+    uint32_t (*adjust)(void *context, const ir_func_t *function,
+                       uint32_t flags);
 } ir_summary_hooks_t;
 
 ir_summaries_t *ir_summaries_compute(ir_func_t *const *functions,

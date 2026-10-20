@@ -464,6 +464,8 @@ typedef struct n00bb_link_analysis_t {
     core_dict_t enum_symbols_by_type;
     bool enum_symbols_indexed;
     ir_exec_graph_t *execution_graph;
+    ir_summary_hooks_t summary_hooks;
+    ir_summaries_t *summaries;
     th_env *environment;
     th_env *export_environment;
     th_env *interface_environment;

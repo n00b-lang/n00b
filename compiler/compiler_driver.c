@@ -4456,7 +4456,8 @@ specialize_calls(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_list_free(seeds);
     core_list_free(callers);
     if (ok) ok = publish_declared_aggregate_layouts(analysis)
-        && publish_interned_variant_layouts(analysis);
+        && publish_interned_variant_layouts(analysis)
+        && n00bb_recompute_summaries(analysis);
     core_translation_unit_t *site = nullptr;
     for (size_t i = 0; !ok && failure.located && !site
          && i < analysis->units.len; i++)

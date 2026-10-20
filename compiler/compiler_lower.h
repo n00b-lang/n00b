@@ -44,3 +44,4 @@ bool lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                           bool dump_ir, bool dump_control_flow,
                           bool dump_pdg, bool dump_summaries,
                           bool dump_layout);
+bool n00bb_recompute_summaries(n00bb_link_analysis_t *analysis);

@@ -27,6 +27,7 @@ struct ir_places_t {
     core_list_t(place_span_t)         spans;
     core_dict_t                       resolved;
     core_dict_t                       by_instr;
+    core_dict_t                       overlaps;
 };
 
 static bool
@@ -481,6 +482,7 @@ ir_places_build(ir_func_t *f)
     places->spans    = core_list_new(place_span_t);
     core_dict_init(&places->resolved, nullptr, nullptr);
     core_dict_init(&places->by_instr, nullptr, nullptr);
+    core_dict_init(&places->overlaps, nullptr, nullptr);
     collect_accesses(places, f);
     return places;
 }
@@ -495,6 +497,7 @@ ir_places_free(ir_places_t *places)
     core_list_free(places->spans);
     core_dict_free(&places->resolved);
     core_dict_free(&places->by_instr);
+    core_dict_free(&places->overlaps);
     core_free(places);
 }
 
@@ -557,5 +560,13 @@ ir_places_may_alias(const ir_places_t *places, uint32_t a, uint32_t b)
     bool x_named = x->kind == IR_PLACE_GLOBAL || x->kind == IR_PLACE_THREAD;
     bool y_named = y->kind == IR_PLACE_GLOBAL || y->kind == IR_PLACE_THREAD;
     if (x_named && y_named) return false;
-    return types_overlap(places->module, x->type, y->type);
+    uint64_t     lo       = a < b ? a : b;
+    uint64_t     hi       = a < b ? b : a;
+    void        *key      = (void *)(uintptr_t)(((hi << 32) | lo) + 1);
+    core_dict_t *overlaps = (core_dict_t *)&places->overlaps;
+    uintptr_t    known    = (uintptr_t)core_dict_get(overlaps, key, nullptr);
+    if (known) return known == 2;
+    bool overlap = types_overlap(places->module, x->type, y->type);
+    core_dict_put(overlaps, key, (void *)(uintptr_t)(overlap ? 2 : 1));
+    return overlap;
 }

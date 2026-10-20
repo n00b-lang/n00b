@@ -4421,6 +4421,7 @@ void
 n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
 {
     if (!analysis) return;
+    ir_summaries_free(analysis->summaries);
     core_free((void *)analysis->linked_interfaces);
     th_env_free(analysis->export_environment);
     th_env_free(analysis->interface_environment);
