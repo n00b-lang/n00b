@@ -2,6 +2,7 @@ import internal.types
 import internal.encoding
 import internal.runebuf
 import internal.properties
+import internal.charinfo
 import internal.normalization
 import internal.identifiers
 import internal.query
@@ -134,7 +135,7 @@ private func augmented_script_set(cp: char,
                                   max: i32, ids: Script_Ids) -> i32 {
     var ext: Array[internal.types.Script][max_script_ext] =
         new[Array[internal.types.Script][max_script_ext]]()
-    let n: i32 = internal.properties.script_extensions(cp, ext, max_script_ext)
+    let n: i32 = internal.charinfo.script_extensions(cp, ext, max_script_ext)
     var k: i32 = 0
     var hanb: bool = false
     var jpan: bool = false

@@ -318,11 +318,11 @@ private func run_bidi_suite(blob: Array[u8]) -> u32 {
             para = 1
         }
 
-        let p: unicode.Bidi = unicode.bidi_open(s, para_level = para)
+        let p: unicode.bidi.Bidi = unicode.bidi.bidi_open(s, para_level = para)
 
-        var ok: bool = unicode.paragraph_level(p) == want_para
+        var ok: bool = unicode.bidi.paragraph_level(p) == want_para
 
-        let levels: List[u8] = unicode.levels(p)
+        let levels: List[u8] = unicode.bidi.levels(p)
 
         if cast[u32] levels.len() != n {
             ok = false
@@ -377,9 +377,9 @@ private func run_collation_suite(blob: Array[u8]) -> u32 {
             continue
         }
 
-        let key: List[u8] = unicode.sort_key(s)
+        let key: List[u8] = unicode.collation.sort_key(s)
 
-        if !first and unicode.sort_key_compare(prev_key, key) > 0 {
+        if !first and unicode.collation.sort_key_compare(prev_key, key) > 0 {
             failed += 1
         }
 
@@ -434,7 +434,7 @@ private func run_idna_suite(blob: Array[u8]) -> u32 {
         var got_ok: bool = true
         var got: string = ""
         try {
-            got = unicode.idna_to_ascii(source)!
+            got = unicode.idna.idna_to_ascii(source)!
         } else e {
             got_ok = false
         }

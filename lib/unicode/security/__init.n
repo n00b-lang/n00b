@@ -1,0 +1,5 @@
+import internal.security
+
+package unicode.security {
+    export internal.security
+}

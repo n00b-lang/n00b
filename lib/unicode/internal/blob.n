@@ -9,6 +9,11 @@ inline func u32_at(data: Array[u8], i: u32) -> u32 {
         (cast[u32] data[b + 2] << 16) | (cast[u32] data[b + 3] << 24)
 }
 
+inline func stage_index(stage1: Array[u8], cp: char) -> u32 {
+    let v: u32 = cast[u32] cp
+    return cast[u32] u16_at(stage1, v >> 8) * 256 + (v & 0xff)
+}
+
 inline func u64_at(data: Array[u8], i: u32) -> u64 {
     return cast[u64] u32_at(data, i * 2) |
         (cast[u64] u32_at(data, i * 2 + 1) << 32)

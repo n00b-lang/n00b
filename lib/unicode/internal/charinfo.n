@@ -1,0 +1,151 @@
+import internal.types
+import internal.blob
+import internal.properties
+import generated.scripts
+import generated.blocks
+import generated.bidi_class
+import generated.joining
+import generated.age
+import generated.script_extensions
+
+func script(cp: char) -> internal.types.Script {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return 0
+    }
+
+    return cast[internal.types.Script] generated.scripts.script_stage2[
+        internal.blob.stage_index(generated.scripts.script_stage1_bytes, cp)]
+}
+
+func script_name(s: internal.types.Script) -> string {
+    if cast[u32] s >= generated.scripts.script_count {
+        return "Unknown"
+    }
+
+    return generated.scripts.script_names(cast[u32] s)
+}
+
+func block(cp: char) -> internal.types.Block {
+    let v: u32 = cast[u32] cp
+    var lo: u32 = 0
+    var hi: u32 = generated.blocks.block_count
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if v < generated.blocks.block_ranges(mid, 0) {
+            hi = mid
+        }
+        else {
+            if v > generated.blocks.block_ranges(mid, 1) {
+                lo = mid + 1
+            }
+            else {
+                return cast[internal.types.Block] generated.blocks.block_ids(mid)
+            }
+        }
+    }
+
+    return 0
+}
+
+func block_name(b: internal.types.Block) -> string {
+    if cast[u32] b > generated.blocks.block_count {
+        return "No_Block"
+    }
+
+    return generated.blocks.block_names(cast[u32] b)
+}
+
+func bidi_class(cp: char) -> internal.types.Bidi_Class {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return internal.types.Bidi_Class.l
+    }
+
+    return cast[internal.types.Bidi_Class] generated.bidi_class.bidi_stage2[
+        internal.blob.stage_index(generated.bidi_class.bidi_stage1_bytes, cp)]
+}
+
+func joining_type(cp: char) -> internal.types.Joining_Type {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return internal.types.Joining_Type.u
+    }
+
+    return cast[internal.types.Joining_Type] generated.joining.jt_stage2[
+        internal.blob.stage_index(generated.joining.jt_stage1_bytes, cp)]
+}
+
+func age(cp: char) -> internal.types.Age {
+    if cast[u32] cp >= internal.properties.max_cp {
+        return 0
+    }
+
+    return cast[internal.types.Age] generated.age.age_stage2[
+        internal.blob.stage_index(generated.age.age_stage1_bytes, cp)]
+}
+
+func age_name(a: internal.types.Age) -> string {
+    if cast[u32] a >= generated.age.age_count {
+        return "Unassigned"
+    }
+
+    return generated.age.age_names(cast[u32] a)
+}
+
+private func sparse_lookup(index: Array[u8], index_len: u32,
+                           cp: char) -> u32? {
+    let v: u32 = cast[u32] cp
+    var lo: u32 = 0
+    var hi: u32 = index_len
+
+    while lo < hi {
+        let mid: u32 = lo + (hi - lo) / 2
+
+        if internal.blob.u32_at(index, mid * 2) < v {
+            lo = mid + 1
+        }
+        else {
+            if internal.blob.u32_at(index, mid * 2) > v {
+                hi = mid
+            }
+            else {
+                return internal.blob.u32_at(index, mid * 2 + 1)
+            }
+        }
+    }
+
+    return nil
+}
+
+func script_extensions(cp: char, modify scripts: Array[internal.types.Script],
+                       max_scripts: i32) -> i32 {
+    if cast[u32] cp >= internal.properties.max_cp or max_scripts <= 0 {
+        return 0
+    }
+
+    let off: u32? = sparse_lookup(
+        generated.script_extensions.script_ext_index_bytes,
+        generated.script_extensions.script_ext_index_len, cp)
+
+    if off == nil {
+        scripts[0] = script(cp)
+        return 1
+    }
+
+    let at: u32 = off.get()
+    let count: i32 = cast[i32] generated.script_extensions.script_ext_data(at)
+    var n: i32 = max_scripts
+    if count < max_scripts {
+        n = count
+    }
+
+    var i: i32 = 0
+    while i < n {
+        let entry: u32 = generated.script_extensions.script_ext_data(
+            at + 1 + cast[u32] i)
+        scripts[cast[uint] i] = cast[internal.types.Script] entry
+        i += 1
+    }
+
+    return n
+}

@@ -2,6 +2,7 @@ import internal.types
 import internal.encoding
 import internal.runebuf
 import internal.properties
+import internal.charinfo
 import internal.normalization
 import generated.idna
 
@@ -369,7 +370,7 @@ private func contextj_ok(label: Array[char], n: u32) -> bool {
 
         var j: i64 = cast[i64] i - 1
 
-        while j >= 0 and internal.properties.joining_type(
+        while j >= 0 and internal.charinfo.joining_type(
             label[cast[uint] j]) == internal.types.Joining_Type.t {
             j -= 1
         }
@@ -379,7 +380,7 @@ private func contextj_ok(label: Array[char], n: u32) -> bool {
         }
 
         let before: internal.types.Joining_Type =
-            internal.properties.joining_type(label[cast[uint] j])
+            internal.charinfo.joining_type(label[cast[uint] j])
 
         if before != internal.types.Joining_Type.l and
             before != internal.types.Joining_Type.d {
@@ -388,7 +389,7 @@ private func contextj_ok(label: Array[char], n: u32) -> bool {
 
         var k: u32 = i + 1
 
-        while k < n and internal.properties.joining_type(label[k]) ==
+        while k < n and internal.charinfo.joining_type(label[k]) ==
             internal.types.Joining_Type.t {
             k += 1
         }
@@ -398,7 +399,7 @@ private func contextj_ok(label: Array[char], n: u32) -> bool {
         }
 
         let after: internal.types.Joining_Type =
-            internal.properties.joining_type(label[k])
+            internal.charinfo.joining_type(label[k])
 
         if after != internal.types.Joining_Type.r and
             after != internal.types.Joining_Type.d {
@@ -414,7 +415,7 @@ private func label_is_rtl(label: Array[char], n: u32) -> bool {
     var i: u32 = 0
     while i < n {
         let b: internal.types.Bidi_Class =
-            internal.properties.bidi_class(label[i])
+            internal.charinfo.bidi_class(label[i])
 
         if b == internal.types.Bidi_Class.r or
             b == internal.types.Bidi_Class.al or
@@ -433,7 +434,7 @@ private func bidi_label_ok(label: Array[char], n: u32) -> bool {
     }
 
     let first: internal.types.Bidi_Class =
-        internal.properties.bidi_class(label[0])
+        internal.charinfo.bidi_class(label[0])
     let rtl: bool = first == internal.types.Bidi_Class.r or
         first == internal.types.Bidi_Class.al
 
@@ -447,7 +448,7 @@ private func bidi_label_ok(label: Array[char], n: u32) -> bool {
     var i: u32 = 0
     while i < n {
         let b: internal.types.Bidi_Class =
-            internal.properties.bidi_class(label[i])
+            internal.charinfo.bidi_class(label[i])
 
         if rtl {
             if b != internal.types.Bidi_Class.r and
@@ -492,7 +493,7 @@ private func bidi_label_ok(label: Array[char], n: u32) -> bool {
 
     var last: i64 = cast[i64] n - 1
 
-    while last >= 0 and internal.properties.bidi_class(
+    while last >= 0 and internal.charinfo.bidi_class(
         label[cast[uint] last]) == internal.types.Bidi_Class.nsm {
         last -= 1
     }
@@ -502,7 +503,7 @@ private func bidi_label_ok(label: Array[char], n: u32) -> bool {
     }
 
     let tail: internal.types.Bidi_Class =
-        internal.properties.bidi_class(label[cast[uint] last])
+        internal.charinfo.bidi_class(label[cast[uint] last])
 
     if rtl {
         return tail == internal.types.Bidi_Class.r or

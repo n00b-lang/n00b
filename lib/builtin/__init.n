@@ -17,6 +17,7 @@ import string.core
 import string.style
 import bitptr
 import abi
+import text
 
 package builtin {
     export bitptr.Bitptr
@@ -150,4 +151,6 @@ package builtin {
     export containers.traits.TreeLike
     export io.debug.raw_debug
     export io.raw.Raw_Repr
+    export text.len
+    export text.Index_Unit
 }

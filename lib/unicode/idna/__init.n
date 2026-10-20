@@ -1,0 +1,5 @@
+import internal.idna
+
+package unicode.idna {
+    export internal.idna
+}

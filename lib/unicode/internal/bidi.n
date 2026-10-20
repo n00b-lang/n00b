@@ -2,6 +2,7 @@ import sys.abi
 import internal.types
 import internal.encoding
 import internal.properties
+import internal.charinfo
 import generated.bidi_brackets
 
 const bidi_max_depth = 125
@@ -661,7 +662,7 @@ private func resolve_brackets(cps: Array[char], modify types: Array[u8],
 
             k = open_ix + 1
             while k < n and
-                cast[u8] internal.properties.bidi_class(cps[seq[k]]) ==
+                cast[u8] internal.charinfo.bidi_class(cps[seq[k]]) ==
                 cast[u8] internal.types.Bidi_Class.nsm {
                 types[seq[k]] = resolved
                 k += 1
@@ -669,7 +670,7 @@ private func resolve_brackets(cps: Array[char], modify types: Array[u8],
 
             k = close_ix + 1
             while k < n and
-                cast[u8] internal.properties.bidi_class(cps[seq[k]]) ==
+                cast[u8] internal.charinfo.bidi_class(cps[seq[k]]) ==
                 cast[u8] internal.types.Bidi_Class.nsm {
                 types[seq[k]] = resolved
                 k += 1
@@ -978,7 +979,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
                 continue
             }
 
-            p.types[p.len] = cast[u8] internal.properties.bidi_class(p.cps[p.len])
+            p.types[p.len] = cast[u8] internal.charinfo.bidi_class(p.cps[p.len])
             p.levels[p.len] = 0
             p.len += 1
         }
@@ -1005,7 +1006,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
 
     i = 0
     while i < p.len {
-        let orig_class: u8 = cast[u8] internal.properties.bidi_class(p.cps[i])
+        let orig_class: u8 = cast[u8] internal.charinfo.bidi_class(p.cps[i])
 
         if orig_class == cast[u8] internal.types.Bidi_Class.s or
             orig_class == cast[u8] internal.types.Bidi_Class.b {
@@ -1015,7 +1016,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
             var going: bool = true
 
             while going and j > 0 {
-                let ot: u8 = cast[u8] internal.properties.bidi_class(p.cps[j - 1])
+                let ot: u8 = cast[u8] internal.charinfo.bidi_class(p.cps[j - 1])
 
                 if is_l1_reset(ot) {
                     p.levels[j - 1] = p.para_level
@@ -1034,7 +1035,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
     var going: bool = true
 
     while going and j > 0 {
-        let ot: u8 = cast[u8] internal.properties.bidi_class(p.cps[j - 1])
+        let ot: u8 = cast[u8] internal.charinfo.bidi_class(p.cps[j - 1])
 
         if is_l1_reset(ot) or ot == cast[u8] internal.types.Bidi_Class.s or
             ot == cast[u8] internal.types.Bidi_Class.b {

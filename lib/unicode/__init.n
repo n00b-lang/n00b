@@ -8,11 +8,6 @@ import internal.casemap
 import internal.normalization
 import internal.segmentation
 import internal.linebreak
-import internal.bidi
-import internal.collation
-import internal.query
-import internal.security
-import internal.idna
 import generated.versions
 
 package unicode {
@@ -26,11 +21,11 @@ package unicode {
     export internal.normalization
     export internal.segmentation
     export internal.linebreak
-    export internal.bidi
-    export internal.collation
-    export internal.query
-    export internal.security
-    export internal.idna
     export builtin.encoding_of
     export generated.versions.version
+    export package query
+    export package bidi
+    export package collation
+    export package idna
+    export package security
 }

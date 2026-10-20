@@ -1,0 +1,7 @@
+import internal.query
+import internal.charinfo
+
+package unicode.query {
+    export internal.query
+    export internal.charinfo
+}

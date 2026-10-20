@@ -1,0 +1,5 @@
+import internal.collation
+
+package unicode.collation {
+    export internal.collation
+}

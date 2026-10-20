@@ -2,6 +2,7 @@ import sys.abi
 import internal.types
 import internal.encoding
 import internal.properties
+import internal.charinfo
 import internal.runebuf
 import generated.names
 import generated.scripts
@@ -159,11 +160,11 @@ func matches(self: internal.types.Char_Filter, cp: char) -> bool {
     }
 
     if self.kind == internal.types.Char_Filter_Kind.script {
-        return cast[u32] internal.properties.script(cp) == self.lo
+        return cast[u32] internal.charinfo.script(cp) == self.lo
     }
 
     if self.kind == internal.types.Char_Filter_Kind.bidi {
-        return cast[u32] internal.properties.bidi_class(cp) == self.lo
+        return cast[u32] internal.charinfo.bidi_class(cp) == self.lo
     }
 
     if self.kind == internal.types.Char_Filter_Kind.property {
@@ -172,7 +173,7 @@ func matches(self: internal.types.Char_Filter, cp: char) -> bool {
     }
 
     if self.kind == internal.types.Char_Filter_Kind.block {
-        return cast[u32] internal.properties.block(cp) == self.lo
+        return cast[u32] internal.charinfo.block(cp) == self.lo
     }
 
     if self.kind == internal.types.Char_Filter_Kind.eaw {

@@ -275,15 +275,15 @@ func encoding_probe() -> string? {
         return "32"
     }
 
-    if !unicode.matches(unicode.filter_gc(unicode.Gc.lu), 'A') or
-       unicode.matches(unicode.filter_gc(unicode.Gc.lu), 'a') or
-       !unicode.matches(unicode.filter_range(cast[char] 0x41,
+    if !unicode.query.matches(unicode.query.filter_gc(unicode.Gc.lu), 'A') or
+       unicode.query.matches(unicode.query.filter_gc(unicode.Gc.lu), 'a') or
+       !unicode.query.matches(unicode.query.filter_range(cast[char] 0x41,
                                              cast[char] 0x5a), 'Q') {
         return "33"
     }
 
     let ri: List[unicode.Char_Pair] =
-        unicode.ranges(unicode.filter_range(cast[char] 0x1f1e6,
+        unicode.query.ranges(unicode.query.filter_range(cast[char] 0x1f1e6,
                                             cast[char] 0x1f1ff))
 
     if ri.len() != 1 {
@@ -296,25 +296,25 @@ func encoding_probe() -> string? {
         return "35"
     }
 
-    let cpn: string? = unicode.char_name('A')
+    let cpn: string? = unicode.query.char_name('A')
 
     if cpn == nil or !name_is(cpn.get(), "LATIN CAPITAL LETTER A") {
         return "36"
     }
 
-    let rev: char? = unicode.char_from_name("LATIN SMALL LETTER Z")
+    let rev: char? = unicode.query.char_from_name("LATIN SMALL LETTER Z")
 
     if rev == nil or rev.get() != 'z' {
         return "37"
     }
 
-    if unicode.char_name(cast[char] 0xe000) != nil {
+    if unicode.query.char_name(cast[char] 0xe000) != nil {
         return "38"
     }
 
-    let sc: unicode.Script? = unicode.script_by_name("Greek")
+    let sc: unicode.Script? = unicode.query.script_by_name("Greek")
 
-    if sc == nil or unicode.script(cast[char] 0x0391) != sc.get() {
+    if sc == nil or unicode.query.script(cast[char] 0x0391) != sc.get() {
         return "39"
     }
 
@@ -455,61 +455,61 @@ func encoding_probe() -> string? {
         return "64"
     }
 
-    if !unicode.is_confusable("good", "goo\u0501") {
+    if !unicode.security.is_confusable("good", "goo\u0501") {
         return "65"
     }
 
-    if unicode.is_confusable("abc", "xyz") {
+    if unicode.security.is_confusable("abc", "xyz") {
         return "66"
     }
 
-    if unicode.script_restriction("hello") !=
-       unicode.Restriction.ascii_only {
+    if unicode.security.script_restriction("hello") !=
+       unicode.security.Restriction.ascii_only {
         return "67"
     }
 
-    if unicode.script_restriction("\u043f\u0440\u0438") !=
-       unicode.Restriction.single_script {
+    if unicode.security.script_restriction("\u043f\u0440\u0438") !=
+       unicode.security.Restriction.single_script {
         return "68"
     }
 
-    if !unicode.has_mixed_scripts("a\u0440c") {
+    if !unicode.security.has_mixed_scripts("a\u0440c") {
         return "69"
     }
 
-    if unicode.script_restriction("a\u6f22\u304b\u30ab") !=
-       unicode.Restriction.highly_restrictive {
+    if unicode.security.script_restriction("a\u6f22\u304b\u30ab") !=
+       unicode.security.Restriction.highly_restrictive {
         return "83"
     }
 
-    if unicode.script_restriction("a\u6f22\u3105") !=
-       unicode.Restriction.highly_restrictive {
+    if unicode.security.script_restriction("a\u6f22\u3105") !=
+       unicode.security.Restriction.highly_restrictive {
         return "84"
     }
 
-    if unicode.script_restriction("a\u6f22\ud55c") !=
-       unicode.Restriction.highly_restrictive {
+    if unicode.security.script_restriction("a\u6f22\ud55c") !=
+       unicode.security.Restriction.highly_restrictive {
         return "85"
     }
 
-    if unicode.script_restriction("a\u0440") ==
-       unicode.Restriction.moderately_restrictive {
+    if unicode.security.script_restriction("a\u0440") ==
+       unicode.security.Restriction.moderately_restrictive {
         return "86"
     }
 
-    if unicode.script_restriction("a\u03b1") ==
-       unicode.Restriction.moderately_restrictive {
+    if unicode.security.script_restriction("a\u03b1") ==
+       unicode.security.Restriction.moderately_restrictive {
         return "87"
     }
 
-    if unicode.script_restriction("a\u05d0") !=
-       unicode.Restriction.moderately_restrictive {
+    if unicode.security.script_restriction("a\u05d0") !=
+       unicode.security.Restriction.moderately_restrictive {
         return "88"
     }
 
     var ia_ok: bool = false
     try {
-        ia_ok = name_is(unicode.idna_to_ascii("b\u00fccher.de")!,
+        ia_ok = name_is(unicode.idna.idna_to_ascii("b\u00fccher.de")!,
                         "xn--bcher-kva.de")
     } else e {
         ia_ok = false
@@ -520,7 +520,7 @@ func encoding_probe() -> string? {
 
     var iu_ok: bool = false
     try {
-        iu_ok = name_is(unicode.idna_to_unicode("xn--bcher-kva.de")!,
+        iu_ok = name_is(unicode.idna.idna_to_unicode("xn--bcher-kva.de")!,
                         "b\u00fccher.de")
     } else e {
         iu_ok = false
@@ -531,7 +531,7 @@ func encoding_probe() -> string? {
 
     var ic_ok: bool = false
     try {
-        ic_ok = name_is(unicode.idna_to_ascii("\u4f8b\u3048\u3070.com")!,
+        ic_ok = name_is(unicode.idna.idna_to_ascii("\u4f8b\u3048\u3070.com")!,
                         "xn--r8j3dr99h.com")
     } else e {
         ic_ok = false
@@ -542,7 +542,7 @@ func encoding_probe() -> string? {
 
     var iup_ok: bool = false
     try {
-        iup_ok = name_is(unicode.idna_to_ascii("ASCII.EXAMPLE")!,
+        iup_ok = name_is(unicode.idna.idna_to_ascii("ASCII.EXAMPLE")!,
                          "ascii.example")
     } else e {
         iup_ok = false
@@ -560,23 +560,23 @@ func encoding_probe() -> string? {
         return "82"
     }
 
-    if !name_is(unicode.script_name(unicode.script(cast[char] 0x0378)),
+    if !name_is(unicode.query.script_name(unicode.query.script(cast[char] 0x0378)),
                 "Unknown") or
        unicode.east_asian_width(cast[char] 0x3400) != unicode.Eaw.w {
         return "900"
     }
 
-    if unicode.bidi_class(cast[char] 0x0590) != unicode.Bidi_Class.r or
-       unicode.bidi_class(cast[char] 0x074b) != unicode.Bidi_Class.al or
-       unicode.bidi_class(cast[char] 0x20c1) != unicode.Bidi_Class.et {
+    if unicode.query.bidi_class(cast[char] 0x0590) != unicode.Bidi_Class.r or
+       unicode.query.bidi_class(cast[char] 0x074b) != unicode.Bidi_Class.al or
+       unicode.query.bidi_class(cast[char] 0x20c1) != unicode.Bidi_Class.et {
         return "901"
     }
 
-    let spua_b: unicode.Block = unicode.block(cast[char] 0x100000)
+    let spua_b: unicode.Block = unicode.query.block(cast[char] 0x100000)
     let spua_b_id: unicode.Block? =
-        unicode.block_by_name("Supplementary Private Use Area-B")
+        unicode.query.block_by_name("Supplementary Private Use Area-B")
 
-    if !name_is(unicode.block_name(spua_b),
+    if !name_is(unicode.query.block_name(spua_b),
                 "Supplementary Private Use Area-B") or
        spua_b_id == nil or spua_b_id.get() != spua_b {
         return "902"
@@ -599,8 +599,8 @@ func encoding_probe() -> string? {
         return "904"
     }
 
-    if unicode.script_restriction("\u65e5\u672c\u8a9e\u3072\u3089\u304c\u306a") !=
-       unicode.Restriction.single_script {
+    if unicode.security.script_restriction("\u65e5\u672c\u8a9e\u3072\u3089\u304c\u306a") !=
+       unicode.security.Restriction.single_script {
         return "905"
     }
 
@@ -615,7 +615,7 @@ func encoding_probe() -> string? {
     var trip_ok: bool = false
     try {
         trip_ok = name_is(
-            unicode.idna_to_unicode(unicode.idna_to_ascii("\u4f8b\u3048.com")!)!,
+            unicode.idna.idna_to_unicode(unicode.idna.idna_to_ascii("\u4f8b\u3048.com")!)!,
             "\u4f8b\u3048.com")
     } else e {
         trip_ok = false
