@@ -4219,6 +4219,8 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
         (int64_t)(s->cursor - s->mark - best->prefix.u8_bytes));
     parse_token_set_postfix_modifier(
         previous, core_option_set(core_string_t, name), true);
+    parse_token_set_span(previous, parse_token_start_byte(previous),
+                         s->source_base + s->cursor);
     return scan_lex_scan(s);
   }
 
@@ -5537,6 +5539,8 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
         (int64_t)(s->cursor - s->mark - sigil->prefix.u8_bytes));
     parse_token_set_postfix_modifier(
         previous, core_option_set(core_string_t, name), true);
+    parse_token_set_span(previous, parse_token_start_byte(previous),
+                         s->source_base + s->cursor);
     return scan_lex_scan(s);
   }
 
