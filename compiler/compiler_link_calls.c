@@ -954,8 +954,12 @@ finalize_module_group_contracts(void *context,
     bool shaped = true;
     for (size_t i = 0; i < member_count; i++)
         shaped = n00bb_resolve_shape_literals(grammar, members[i]) && shaped;
+    bool grounded = false;
     if (!shaped || !unify_calls_until_stable(grammar, nullptr, members,
-            member_count, true, false, false)) return false;
+            member_count, true, false, false)
+        || !n00bb_ground_integers(members, member_count, true, &grounded)
+        || (grounded && !unify_calls_until_stable(grammar, nullptr, members,
+            member_count, true, false, false))) return false;
 
     for (size_t i = 0; i < member_count; i++) {
         n00bb_tu_state_t *state = tu_state(members[i]);

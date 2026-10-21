@@ -39,8 +39,7 @@ typedef void (*core_object_destroy_fn)(void *object, void *user_data);
 
 typedef struct {
   uint64_t type_id;
-  uint32_t current_version;
-  uint32_t oldest_supported_version;
+  uint32_t version;
   core_object_allocate_fn allocate;
   core_object_save_fn save;
   core_object_restore_fn restore;

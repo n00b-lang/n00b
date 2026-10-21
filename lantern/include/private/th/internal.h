@@ -240,6 +240,7 @@ struct th_ctx {
   void *custom_user;
   th_convert_fn conversion;
   void *conversion_user;
+  th_integer_class_fn integer_class;
   uint8_t method_argument_coercions;
   th_span_t span;
   th_span_t related;
@@ -266,7 +267,6 @@ struct th_env {
   core_datalog_relation_id_t candidate_relation;
   core_datalog_relation_id_t intrinsic_type_relation;
   core_object_archive_t *persisted_archive;
-  uint32_t archive_schema_version;
   bool owns_types;
   bool frozen;
 };

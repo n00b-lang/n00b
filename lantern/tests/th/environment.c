@@ -180,14 +180,13 @@ static bool mutate_environment_metadata_owner(core_string_t path,
     offset += 8;
     for (size_t i = 0; valid && i < count; i++) {
       size_t strings = group == 0 ? 3 : 4;
-      size_t fixed = group == 1 && root_record->schema_version >= 9
-          ? 60 : 52;
+      size_t fixed = group == 1 ? 60 : 52;
       valid = skip_archive_strings(payload, size, &offset, strings) &&
               offset <= size && size - offset >= fixed;
       if (valid) offset += fixed;
     }
   }
-  if (valid && root_record->schema_version >= 8) {
+  if (valid) {
     valid = offset <= size && size - offset >= 8;
     size_t count = valid ? (size_t)read_le_u64(payload + offset) : 0;
     if (valid) offset += 8;

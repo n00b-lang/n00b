@@ -97,6 +97,7 @@ add_constraint(n00bb_abi_type_index_t *index, th_constraint constraint)
                     && add_children(index, th_resolve(constraint.method.call))));
     case TH_CON_IMPLEMENTS:
     case TH_CON_KIND:
+    case TH_CON_INTEGER:
         return true;
     }
     return false;

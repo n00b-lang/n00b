@@ -92,6 +92,7 @@ visit_constraint(th_type_writer_t *writer, const th_constraint *constraint)
         break;
     case TH_CON_IMPLEMENTS:
     case TH_CON_KIND:
+    case TH_CON_INTEGER:
         break;
     }
 }
@@ -203,6 +204,10 @@ put_constraint(th_type_writer_t *writer, core_buffer_t *out,
     switch (constraint->kind) {
     case TH_CON_KIND:
         put_u32(out, (uint32_t)constraint->type_kind);
+        break;
+    case TH_CON_INTEGER:
+        put_u32(out, constraint->integer.flags);
+        put_u32(out, constraint->integer.owner);
         break;
     case TH_CON_IMPLEMENTS:
         put_text(out, constraint->iface);
@@ -439,6 +444,10 @@ get_constraint(cursor_t *cursor, th_type_reader_t *reader,
     switch (constraint->kind) {
     case TH_CON_KIND:
         constraint->type_kind = (th_kind)get_u32(cursor);
+        break;
+    case TH_CON_INTEGER:
+        constraint->integer.flags = (uint8_t)get_u32(cursor);
+        constraint->integer.owner = get_u32(cursor);
         break;
     case TH_CON_IMPLEMENTS:
         constraint->iface = get_text(cursor, ctx);

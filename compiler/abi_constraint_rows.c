@@ -219,6 +219,8 @@ append_constraint(n00bb_abi_type_index_t *index,
         if (source.type_kind > TH_TRAIT) return false;
         row.type_family = (uint32_t)source.type_kind + 1;
         break;
+    case TH_CON_INTEGER:
+        return false;
     }
     if (!row.kind) return false;
     *out_index = row_index;

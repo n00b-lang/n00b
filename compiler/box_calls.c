@@ -1223,9 +1223,19 @@ static int
 index_entry(ir_module_t *module, const ir_value_t *index)
 {
     ir_machine_t machine = ir_machine_of(module, index->type);
-    if (machine.width != 64) return 0;
+    if (!machine.width || machine.width > 64) return 0;
     if (machine.class == IR_CLASS_SINT) return 1;
     return machine.class == IR_CLASS_UINT ? 2 : 0;
+}
+
+static bool
+widen_index(ir_func_t *caller, ir_instr_t *instruction, ir_value_t **index,
+            int entry)
+{
+    *index = converted(caller, instruction, *index,
+        th_name(ir_module_types(caller->owner), entry == 1
+            ? CORE_STRING_STATIC("int") : CORE_STRING_STATIC("uint")));
+    return *index != nullptr;
 }
 
 static bool
@@ -1355,7 +1365,8 @@ rewrite_sequence_reference(box_calls_t *calls, ir_func_t *caller,
                                       arguments[0]);
         if (!arguments[0]) return false;
     }
-    return retarget(calls, caller, instruction, target, &element, 1,
+    return widen_index(caller, instruction, &arguments[1], entry)
+        && retarget(calls, caller, instruction, target, &element, 1,
                     arguments, 2);
 }
 
@@ -1386,15 +1397,19 @@ rewrite_sequence_get(box_calls_t *calls, ir_func_t *caller,
         ir_func_t *target = runtime_function(calls, entry == 1
             ? CORE_STRING_STATIC("array_get_option")
             : CORE_STRING_STATIC("array_get_option_unsigned"));
-        return !target || retarget(calls, caller, instruction, target,
-                                   &payload, 1, arguments, 2);
+        return !target
+            || (widen_index(caller, instruction, &arguments[1], entry)
+                && retarget(calls, caller, instruction, target,
+                            &payload, 1, arguments, 2));
     }
     if (!n00bb_boxed_signature_position(module, element)) return true;
     ir_func_t *target = store_function(calls, entry == 1
         ? CORE_STRING_STATIC("array_get")
         : CORE_STRING_STATIC("array_get_unsigned"));
-    return !target || retarget(calls, caller, instruction, target, &element,
-                               1, arguments, 2);
+    return !target
+        || (widen_index(caller, instruction, &arguments[1], entry)
+            && retarget(calls, caller, instruction, target, &element,
+                        1, arguments, 2));
 }
 
 static bool
@@ -1436,7 +1451,8 @@ rewrite_sequence_set(box_calls_t *calls, ir_func_t *caller,
                                       arguments[0]);
         if (!arguments[0]) return false;
     }
-    return retarget(calls, caller, instruction, target, &actual, 1,
+    return widen_index(caller, instruction, &arguments[1], entry)
+        && retarget(calls, caller, instruction, target, &actual, 1,
                     arguments, 3);
 }
 

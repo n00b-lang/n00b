@@ -266,7 +266,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             && core_string_eq(first_token_text(node),
                               CORE_STRING_STATIC("nil"))))
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_INFER);
-    if (modified_numeric)
+    if (modified_numeric
+        || core_string_eq(literal_terminal, CORE_STRING_STATIC("INT_LIT"))
+        || core_string_eq(literal_terminal, CORE_STRING_STATIC("HEX_LIT")))
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_LITERAL);
     if (type_reference)
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_VARREF);
@@ -496,14 +498,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 ? th_resolve(parse_tree_type(target)) : nullptr;
             th_type *value_type = parse_tree_type(value)
                 ? th_resolve(parse_tree_type(value)) : nullptr;
+            bool open_integer = n00bb_open_integer(value_type);
             if (target_type && value_type
                 && th_kind_of(target_type) == TH_VAR
                 && th_var_name(target_type).data
-                && th_kind_of(value_type) != TH_VAR
-                && th_is_closed(state->types, value_type)) {
+                && (open_integer
+                    || (th_kind_of(value_type) != TH_VAR
+                        && th_is_closed(state->types, value_type)))) {
                 core_buffer_t message = {0};
-                core_string_t value_text = n00bb_print_type(state->types,
-                                                            value_type);
+                core_string_t value_text = open_integer
+                    ? CORE_STRING_STATIC("an integer")
+                    : n00bb_print_type(state->types, value_type);
                 core_string_t variable = th_var_name(target_type);
                 core_string_t target_text = n00bb_node_source_text(unit,
                     target, CORE_STRING_STATIC("this target"));

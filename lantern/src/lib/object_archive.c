@@ -149,10 +149,7 @@ void core_object_archive_registry_free(core_object_archive_registry_t *registry)
 
 bool core_object_archive_register(core_object_archive_registry_t *registry,
                                   core_object_archive_type_t type) {
-  if (!registry || !type.type_id || !type.current_version ||
-      !type.oldest_supported_version ||
-      type.oldest_supported_version > type.current_version ||
-      !type.allocate || !type.save || !type.restore ||
+  if (!registry || !type.type_id || !type.version || !type.allocate || !type.save || !type.restore ||
       find_codec(registry, type.type_id))
     return false;
   core_list_push(registry->codecs, type);
@@ -422,7 +419,7 @@ bool core_object_archive_save(core_string_t path, size_t capacity,
     records[i] = (archive_record_t){
         .id = i + 1,
         .type_id = object->type_id,
-        .schema_version = object->codec.current_version,
+        .schema_version = object->codec.version,
         .payload_size = object->payload.byte_len,
         .payload = payload,
     };
@@ -535,8 +532,7 @@ bool core_object_archive_load(core_string_t path, uint64_t abi_tag,
       discard_archive(archive);
       return fail(error, CORE_OBJECT_ARCHIVE_UNKNOWN_TYPE);
     }
-    if (record->schema_version < codec->oldest_supported_version ||
-        record->schema_version > codec->current_version) {
+    if (record->schema_version != codec->version) {
       discard_archive(archive);
       return fail(error, CORE_OBJECT_ARCHIVE_INCOMPATIBLE);
     }

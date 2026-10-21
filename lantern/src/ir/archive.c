@@ -7,7 +7,7 @@
 #include "lib/alloc.h"
 
 #define IR_ARCHIVE_MAGIC   UINT32_C(0x4e30494c)
-#define IR_ARCHIVE_VERSION UINT32_C(3)
+#define IR_ARCHIVE_VERSION UINT32_C(1)
 
 enum {
     REF_NONE,

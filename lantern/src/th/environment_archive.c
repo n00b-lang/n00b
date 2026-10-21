@@ -84,10 +84,6 @@ static bool read_constraint_scope(core_object_reader_t *reader,
          core_object_reader_string(reader, &constraint->scope_package);
 }
 
-static uint32_t type_archive_version(const th_type *type) {
-  return *(const uint32_t *)((const char *)type + sizeof(*type));
-}
-
 static bool read_string_arg(core_object_reader_t *reader,
                             core_string_t *out) {
   size_t size;
@@ -133,16 +129,17 @@ static bool save_constraint(core_object_writer_t *writer,
            write_type_ref(writer, constraint->method.call) &&
            save_constraint_scope(writer, constraint) &&
            core_object_writer_string(writer, constraint->method.in_place);
+  case TH_CON_INTEGER:
+    return false;
   }
   return false;
 }
 
 static bool read_constraint(core_object_reader_t *reader,
-                            th_constraint *constraint, uint32_t version) {
+                            th_constraint *constraint) {
   memset(constraint, 0, sizeof(*constraint));
   uint32_t kind;
-  if (!core_object_reader_u32(reader, &kind) ||
-      kind > (version >= 2 ? TH_CON_KIND : TH_CON_EXCLUDES))
+  if (!core_object_reader_u32(reader, &kind) || kind > TH_CON_KIND)
     return false;
   constraint->kind = (th_con_kind)kind;
   switch (constraint->kind) {
@@ -172,11 +169,10 @@ static bool read_constraint(core_object_reader_t *reader,
     return true;
   case TH_CON_IMPLEMENTS:
     return core_object_reader_string(reader, &constraint->iface) &&
-           (version < 5 || read_constraint_scope(reader, constraint));
+           read_constraint_scope(reader, constraint);
   case TH_CON_HAS_FIELD:
     if (!core_object_reader_string(reader, &constraint->field.name) ||
         !read_type_ref(reader, &constraint->field.type)) return false;
-    if (version < 6) return true;
     uint32_t auto_deref;
     if (!core_object_reader_u32(reader, &auto_deref) || auto_deref > 1)
       return false;
@@ -190,10 +186,11 @@ static bool read_constraint(core_object_reader_t *reader,
            constraint->method.name.data &&
            read_type_ref(reader, &constraint->method.result) &&
            constraint->method.result &&
-           (version < 3 || read_type_ref(reader, &constraint->method.call)) &&
-           (version < 5 || read_constraint_scope(reader, constraint)) &&
-           (version < 7 || core_object_reader_string(reader,
-               &constraint->method.in_place));
+           read_type_ref(reader, &constraint->method.call) &&
+           read_constraint_scope(reader, constraint) &&
+           core_object_reader_string(reader, &constraint->method.in_place);
+  case TH_CON_INTEGER:
+    return false;
   }
   return false;
 }
@@ -312,15 +309,11 @@ static bool save_type(core_object_writer_t *writer, const void *object,
 static void *type_allocate(core_persist_arena_t *arena, uint32_t version,
                            core_object_reader_t *payload, void *user_data) {
   (void)payload;
-  if (version < 1 || version > 7)
+  if (version != 1)
     return nullptr;
-  /* Carry the record schema into restore_type without changing th_type. */
   th_type *type = core_persist_arena_alloc_transient(
-      arena, sizeof(*type) + sizeof(uint32_t), alignof(th_type), nullptr);
-  if (type) {
-    type->kind = (th_kind)(uintptr_t)user_data;
-    *(uint32_t *)((char *)type + sizeof(*type)) = version;
-  }
+      arena, sizeof(*type), alignof(th_type), nullptr);
+  if (type) type->kind = (th_kind)(uintptr_t)user_data;
   return type;
 }
 
@@ -531,8 +524,7 @@ static bool restore_type(core_object_reader_t *reader, void *object,
     type->var.cons_borrowed = true;
     if (count && !type->var.cons.data) return false;
     for (size_t i = 0; i < count; i++)
-      if (!read_constraint(reader, &type->var.cons.data[i],
-                           type_archive_version(type))) return false;
+      if (!read_constraint(reader, &type->var.cons.data[i])) return false;
     return true;
   }
   return false;
@@ -614,7 +606,7 @@ static void *environment_allocate(core_persist_arena_t *arena,
                                   void *user_data) {
   (void)payload;
   (void)user_data;
-  if (version < 1 || version > 9) return nullptr;
+  if (version != 1) return nullptr;
   th_env *temporary = th_env_new();
   th_env *mapped = core_persist_arena_alloc_transient(
       arena, sizeof(*mapped), alignof(th_env), nullptr);
@@ -623,7 +615,6 @@ static void *environment_allocate(core_persist_arena_t *arena,
     return nullptr;
   }
   *mapped = *temporary;
-  mapped->archive_schema_version = version;
   core_free(temporary);
   return mapped;
 }
@@ -642,13 +633,11 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
     if (!core_object_reader_string(reader, &origin.name) ||
         !core_object_reader_string(reader, &origin.module) ||
         !core_object_reader_string(reader, &origin.package) ||
-        (env->archive_schema_version >= 2 &&
-         !core_object_reader_u32(reader, &visibility)) ||
+        !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
-        (env->archive_schema_version >= 7 &&
-         (!core_object_reader_u32(reader, &shape_kind) ||
-          shape_kind > TH_ENV_TYPE_SHAPE_BITSET ||
-          !read_type_ref(reader, &origin.shape))) ||
+        !core_object_reader_u32(reader, &shape_kind) ||
+        shape_kind > TH_ENV_TYPE_SHAPE_BITSET ||
+        !read_type_ref(reader, &origin.shape) ||
         ((shape_kind == TH_ENV_TYPE_SHAPE_NONE) != (origin.shape == nullptr)))
       return false;
     origin.visibility = (th_env_visibility_t)visibility;
@@ -666,38 +655,8 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
         !read_type_ref(reader, &trait.scheme) ||
-        (env->archive_schema_version >= 3
-             ? !read_type_ref(reader, &trait.errors)
-             : false) ||
-        (env->archive_schema_version >= 4
-             ? !read_type_ref(reader, &trait.contracts)
-             : false)) return false;
-    if (env->archive_schema_version < 3) {
-      core_list_t(th_member) errors = core_list_new(th_member);
-      for (size_t j = 0; j < th_record_len(trait.scheme); j++) {
-        const th_member *method = th_record_member(trait.scheme, j);
-        core_list_push(errors, ((th_member){
-            .name = method->name,
-            .type = th_nil(env->types),
-        }));
-      }
-      trait.errors = th_record(env->types, errors.data, errors.len);
-      core_list_free(errors);
-    }
-    if (env->archive_schema_version < 4) {
-      core_list_t(th_member) contracts = core_list_new(th_member);
-      for (size_t j = 0; j < th_record_len(trait.scheme); j++) {
-        const th_member *method = th_record_member(trait.scheme, j);
-        th_type *error = th_record_lookup(trait.errors, method->name);
-        core_list_push(contracts, ((th_member){
-            .name = method->name,
-            .type = th_env_signature_contract(env->types, method->type,
-                                               error),
-        }));
-      }
-      trait.contracts = th_record(env->types, contracts.data, contracts.len);
-      core_list_free(contracts);
-    }
+        !read_type_ref(reader, &trait.errors) ||
+        !read_type_ref(reader, &trait.contracts)) return false;
     trait.visibility = (th_env_visibility_t)visibility;
     core_list_push(env->traits, trait);
   }
@@ -714,42 +673,29 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
         !read_type_ref(reader, &function.scheme) ||
-        (env->archive_schema_version >= 3
-             ? !read_type_ref(reader, &function.error_type)
-             : false) ||
-        (env->archive_schema_version >= 4
-             ? !read_type_ref(reader, &function.contract)
-             : false)) return false;
-    uint64_t required = SIZE_MAX;
-    if (env->archive_schema_version >= 9
-        && !core_object_reader_u64(reader, &required)) return false;
+        !read_type_ref(reader, &function.error_type) ||
+        !read_type_ref(reader, &function.contract)) return false;
+    uint64_t required;
+    if (!core_object_reader_u64(reader, &required)) return false;
     function.required_params = (size_t)required;
-    if (env->archive_schema_version < 3)
-      function.error_type = th_nil(env->types);
-    if (env->archive_schema_version < 4)
-      function.contract = th_env_signature_contract(env->types,
-          function.scheme, function.error_type);
     function.visibility = (th_env_visibility_t)visibility;
     function.order = i;
     core_list_push(env->functions, function);
   }
-  if (env->archive_schema_version >= 8) {
-    if (!read_count(reader, &count) ||
-        count > SIZE_MAX / sizeof(th_env_value_t)) return false;
-    for (size_t i = 0; i < count; i++) {
-      th_env_value_t value = {0};
-      uint32_t visibility;
-      if (!core_object_reader_string(reader,
-              &value.qualified_name) ||
-          !core_object_reader_string(reader, &value.root_name) ||
-          !core_object_reader_string(reader, &value.module) ||
-          !core_object_reader_string(reader, &value.package) ||
-          !core_object_reader_u32(reader, &visibility) ||
-          visibility > TH_ENV_PUBLIC || !read_type_ref(reader, &value.type) ||
-          !value.type) return false;
-      value.visibility = (th_env_visibility_t)visibility;
-      core_list_push(env->values, value);
-    }
+  if (!read_count(reader, &count) ||
+      count > SIZE_MAX / sizeof(th_env_value_t)) return false;
+  for (size_t i = 0; i < count; i++) {
+    th_env_value_t value = {0};
+    uint32_t visibility;
+    if (!core_object_reader_string(reader, &value.qualified_name) ||
+        !core_object_reader_string(reader, &value.root_name) ||
+        !core_object_reader_string(reader, &value.module) ||
+        !core_object_reader_string(reader, &value.package) ||
+        !core_object_reader_u32(reader, &visibility) ||
+        visibility > TH_ENV_PUBLIC || !read_type_ref(reader, &value.type) ||
+        !value.type) return false;
+    value.visibility = (th_env_visibility_t)visibility;
+    core_list_push(env->values, value);
   }
   if (!read_count(reader, &count) ||
       count > SIZE_MAX / sizeof(th_env_metadata_record_t)) return false;
@@ -773,16 +719,14 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
     }
     core_list_push(env->metadata, metadata);
   }
-  if (env->archive_schema_version >= 5) {
-    if (!read_count(reader, &count) ||
-        count > SIZE_MAX / sizeof(th_env_intrinsic_type_t)) return false;
-    for (size_t i = 0; i < count; i++) {
-      th_env_intrinsic_type_t fact = {0};
-      if (!core_object_reader_string(reader, &fact.trait_name) ||
-          !fact.trait_name.data || !read_type_ref(reader, &fact.receiver_pattern) ||
-          !fact.receiver_pattern) return false;
-      core_list_push(env->intrinsic_types, fact);
-    }
+  if (!read_count(reader, &count) ||
+      count > SIZE_MAX / sizeof(th_env_intrinsic_type_t)) return false;
+  for (size_t i = 0; i < count; i++) {
+    th_env_intrinsic_type_t fact = {0};
+    if (!core_object_reader_string(reader, &fact.trait_name) ||
+        !fact.trait_name.data || !read_type_ref(reader, &fact.receiver_pattern) ||
+        !fact.receiver_pattern) return false;
+    core_list_push(env->intrinsic_types, fact);
   }
   return true;
 }
@@ -859,8 +803,7 @@ static bool register_environment_codecs(
     core_object_archive_registry_t *registry) {
   if (!core_object_archive_register(registry, (core_object_archive_type_t){
           .type_id = TH_ENV_ARCHIVE_ROOT_TYPE,
-          .current_version = 9,
-          .oldest_supported_version = 1,
+          .version = 1,
           .allocate = environment_allocate,
           .save = save_environment,
           .restore = restore_environment,
@@ -869,8 +812,7 @@ static bool register_environment_codecs(
   for (uint32_t kind = 0; kind <= TH_TRAIT; kind++)
     if (!core_object_archive_register(registry, (core_object_archive_type_t){
             .type_id = type_archive_id((th_kind)kind),
-            .current_version = 7,
-            .oldest_supported_version = 1,
+            .version = 1,
             .allocate = type_allocate,
             .save = save_type,
             .restore = restore_type,

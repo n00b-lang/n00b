@@ -156,7 +156,18 @@ typedef enum : uint8_t {
     /* Restrict a variable to a structural type family without fixing its
      * parameters, such as the width and signedness of a bit integer. */
     TH_CON_KIND,
+    TH_CON_INTEGER,
 } th_con_kind;
+
+enum {
+    TH_INTEGER_UNSIGNED = 1u << 0,
+};
+
+typedef enum : uint8_t {
+    TH_INTEGER_NONE,
+    TH_INTEGER_SIGNED,
+    TH_INTEGER_UNSIGNED_TYPE,
+} th_integer_class;
 
 typedef struct {
     th_con_kind kind;
@@ -170,6 +181,10 @@ typedef struct {
     th_span_t span;
     union {
         th_kind type_kind;
+        struct {
+            uint8_t  flags;
+            uint32_t owner;
+        } integer;
         th_type    *target;
         core_string_t iface;
         struct {
@@ -511,6 +526,7 @@ typedef th_type *(*th_coerce_target_fn)(th_ctx *ctx, th_type *from,
                                         void *user);
 typedef bool (*th_convert_fn)(th_ctx *ctx, th_type *from, th_type *to,
                               void *site, void *context, void *user);
+typedef th_integer_class (*th_integer_class_fn)(th_ctx *ctx, th_type *type);
 
 th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy);
 
@@ -518,6 +534,8 @@ void   th_register_coercion(th_ctx *ctx, th_coerce_fn fn, void *user);
 void   th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn);
 void   th_register_receiver_view(th_ctx *ctx, th_coerce_target_fn fn);
 void   th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user);
+void   th_register_integer_class(th_ctx *ctx, th_integer_class_fn fn);
+bool   th_var_is_integer(const th_type *var, uint8_t *flags);
 bool   th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
                    void *context);
 bool   th_custom_coerces(th_ctx *ctx, th_type *from, th_type *to);

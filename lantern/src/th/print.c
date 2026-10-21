@@ -543,6 +543,12 @@ static void emit_constraint(pctx *c, core_buffer_t *b, const th_constraint *k)
     case TH_CON_KIND:
         core_buffer_printf(b, "kind(%u)", (unsigned)k->type_kind);
         break;
+    case TH_CON_INTEGER:
+        if (k->integer.flags & TH_INTEGER_UNSIGNED)
+            core_buffer_puts(b, "integer(unsigned)");
+        else
+            core_buffer_puts(b, "integer");
+        break;
     case TH_CON_IMPLEMENTS:
         core_buffer_append_string(b, k->iface);
         break;

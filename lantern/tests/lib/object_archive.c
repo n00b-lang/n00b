@@ -143,8 +143,7 @@ int main(void) {
         core_object_archive_register(
             registry, (core_object_archive_type_t){
                           .type_id = TEST_NODE_TYPE,
-                          .current_version = 1,
-                          .oldest_supported_version = 1,
+                          .version = 1,
                           .allocate = node_allocate,
                           .save = node_save,
                           .restore = node_restore,
@@ -183,8 +182,7 @@ int main(void) {
   bool newer_registered = core_object_archive_register(
       newer_codec, (core_object_archive_type_t){
                        .type_id = TEST_NODE_TYPE,
-                       .current_version = 2,
-                       .oldest_supported_version = 2,
+                       .version = 2,
                        .allocate = node_allocate,
                        .save = node_save,
                        .restore = node_restore,
@@ -195,27 +193,6 @@ int main(void) {
                                       &archive, &error) &&
             error == CORE_OBJECT_ARCHIVE_INCOMPATIBLE && !archive);
   core_object_archive_registry_free(newer_codec);
-
-  core_object_archive_registry_t *compatible_codec =
-      core_object_archive_registry_new();
-  bool compatible_registered = core_object_archive_register(
-      compatible_codec, (core_object_archive_type_t){
-                            .type_id = TEST_NODE_TYPE,
-                            .current_version = 2,
-                            .oldest_supported_version = 1,
-                            .allocate = node_allocate,
-                            .save = node_save,
-                            .restore = node_restore,
-                            .destroy = node_destroy});
-  bool older_schema_loaded = compatible_registered &&
-      core_object_archive_load(path, TEST_ARCHIVE_ABI, compatible_codec,
-                               &archive, &error);
-  check("codec supporting an older schema loads the archived version",
-        older_schema_loaded && error == CORE_OBJECT_ARCHIVE_OK && archive);
-  if (archive)
-    core_object_archive_close(archive, nullptr);
-  archive = nullptr;
-  core_object_archive_registry_free(compatible_codec);
   node_destroy_calls = 0;
 
   core_object_archive_registry_t *malformed_registry =
@@ -223,8 +200,7 @@ int main(void) {
   core_object_archive_register(
       malformed_registry, (core_object_archive_type_t){
                               .type_id = TEST_NODE_TYPE,
-                              .current_version = 1,
-                              .oldest_supported_version = 1,
+                              .version = 1,
                               .allocate = node_allocate,
                               .save = node_save,
                               .restore = node_restore,
@@ -266,8 +242,7 @@ int main(void) {
   bool reject_registered = core_object_archive_register(
       rejecting_codec, (core_object_archive_type_t){
                            .type_id = TEST_NODE_TYPE,
-                           .current_version = 1,
-                           .oldest_supported_version = 1,
+                           .version = 1,
                            .allocate = node_allocate,
                            .save = node_save,
                            .restore = node_restore,

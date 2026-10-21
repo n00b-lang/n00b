@@ -5606,7 +5606,6 @@ refine_integer_literal_type(parse_grammar_t *grammar,
                             core_translation_unit_t *unit,
                             parse_tree_t *node, n00bb_tu_state_t *state)
 {
-    (void)unit;
     parse_token_info_t *token = parse_tree_find_first_terminal(node);
     if (!token) return true;
     core_string_t terminal = parse_terminal_name(grammar, parse_token_tid(token));
@@ -5618,9 +5617,6 @@ refine_integer_literal_type(parse_grammar_t *grammar,
         || !n00bb_parse_switch_integer(first_token_text(node), &literal)) {
         return true;
     }
-    ir_uint_t i64_max = (ir_uint_t)INT64_MAX;
-    if (literal.mag <= i64_max) return true;
-
     bool negative = false;
     parse_tree_t *ancestor = parse_tree_parent(node);
     while (ancestor) {
@@ -5636,19 +5632,17 @@ refine_integer_literal_type(parse_grammar_t *grammar,
         }
         ancestor = parse_tree_parent(ancestor);
     }
-    ir_uint_t i64_limit = (ir_uint_t)1 << 63;
-    ir_uint_t i128_limit = (ir_uint_t)1 << 127;
-    core_string_t fit = negative
-        ? (literal.mag <= i64_limit ? CORE_STRING_STATIC("i64")
-           : literal.mag <= i128_limit ? CORE_STRING_STATIC("i128")
-           : (core_string_t){})
-        : (literal.mag <= (ir_uint_t)UINT64_MAX ? CORE_STRING_STATIC("u64")
-           : literal.mag < i128_limit ? CORE_STRING_STATIC("i128")
-           : CORE_STRING_STATIC("u128"));
-    if (!fit.data) return true;
-    th_type *wide = th_name(state->types, canonical_builtin_type_name(fit));
-    if (!wide) return false;
-    parse_tree_set_type(node, wide);
+    if (negative && literal.mag > (ir_uint_t)1 << 127) {
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
+            CORE_STRING_STATIC("no integer type holds this value"),
+            link_source_location(node));
+        return true;
+    }
+    literal.neg = negative;
+    th_type *type = n00bb_integer_literal_variable(state, node, literal);
+    if (!type) return false;
+    parse_tree_set_type(node, type);
     return true;
 }
 
@@ -8647,6 +8641,10 @@ n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
     if (!literal_fits_type(state, origin, node, target)) return false;
     if (n00bb_unsigned_literal_origin(origin) && !n00bb_bitwise_type(target))
         return false;
+    th_type *open = parse_tree_type(origin);
+    if (n00bb_open_integer(open) && th_resolve(open) != th_resolve(target)
+        && !th_unify_in_place(state->types, open, target))
+        return false;
     for (parse_tree_t *current = origin; current;
          current = parse_tree_parent(current)) {
         parse_tree_set_type(current, target);
@@ -9051,6 +9049,7 @@ n00bb_register_value_coercions(n00bb_tu_state_t *state)
     th_register_coercion_target(state->types, n00bb_coercion_target_hook);
     th_register_receiver_view(state->types, n00bb_receiver_view_hook);
     th_register_conversion(state->types, n00bb_conversion_hook, state);
+    n00bb_register_integer_class(state);
 }
 
 static void
@@ -10713,6 +10712,7 @@ free_tu_state(void *data)
     }
     core_list_free(state->dispatch_records);
     core_list_free(state->deferred_conversions);
+    core_list_free(state->integer_seeds);
     core_list_free(state->module_top_level_statements);
     core_list_free(state->literal_constants);
     core_list_free(state->array_type_nodes);
@@ -11722,7 +11722,8 @@ n00bb_init_target(parse_grammar_t *grammar, parse_tree_t *node)
 static bool
 primitive_ordering_type(th_type *type)
 {
-    return is_integer_type(type) || is_float_type(type);
+    return is_integer_type(type) || n00bb_open_integer(type)
+        || is_float_type(type);
 }
 
 bool
@@ -11752,7 +11753,7 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
         return n00bb_scalar_class_is(receiver_type, IR_CLASS_BOOL);
     if (core_string_eq(site->dispatch_trait,
                        CORE_STRING_STATIC("Negate")))
-        return is_integer_type(receiver_type) || is_float_type(receiver_type);
+        return primitive_ordering_type(receiver_type);
     bool equality = core_string_eq(site->dispatch_trait,
                                    CORE_STRING_STATIC("Equal"));
     bool ordering = core_string_eq(site->dispatch_trait,
@@ -11779,8 +11780,10 @@ primitive_operator_site(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
     const n00bb_binary_operator_t *operator =
         n00bb_binary_operator_method(site->dispatch_method);
     if (!operator) return false;
-    if (operator->unsigned_only) return n00bb_bitwise_type(receiver_type);
-    return is_integer_type(receiver_type) || is_float_type(receiver_type);
+    if (operator->unsigned_only)
+        return n00bb_bitwise_type(receiver_type)
+            || n00bb_open_integer(receiver_type);
+    return primitive_ordering_type(receiver_type);
 }
 
 bool
@@ -11982,7 +11985,12 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
     const n00bb_binary_operator_t *operator =
         n00bb_binary_operator_method(method);
     bool shift = operator && operator->shift;
-    if (shift && !n00bb_bitwise_type(left_type)) {
+    if (operator && (operator->unsigned_only || shift)
+        && n00bb_open_integer(left_type)
+        && !n00bb_require_unsigned_integer(state, left_type))
+        return false;
+    if (shift && !n00bb_bitwise_type(left_type)
+        && !n00bb_open_integer(left_type)) {
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
             unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
             CORE_STRING_STATIC(
@@ -12007,7 +12015,9 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
             known_range = n00bb_current_integer_range(state, literal_origin,
                                                        &minimum, &maximum);
         if (known_range
-            && (minimum < 0 || (uint64_t)minimum >= width)) {
+            && (minimum < 0
+                || ((uint64_t)minimum >= width
+                    && !n00bb_open_integer(left_type)))) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
@@ -12015,7 +12025,11 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
                 link_source_location(right));
             return false;
         }
-        if (!right_type || !n00bb_unsigned_shift_count_type(right_type)) {
+        if (n00bb_open_integer(right_type)
+            && !n00bb_require_unsigned_integer(state, right_type))
+            return false;
+        if (!right_type || (!n00bb_unsigned_shift_count_type(right_type)
+                            && !n00bb_open_integer(right_type))) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),

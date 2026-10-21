@@ -3639,7 +3639,7 @@ ir_summaries_free(ir_summaries_t *summaries)
     core_free(summaries);
 }
 
-enum { SUMMARY_CODEC_VERSION = 5 };
+enum { SUMMARY_CODEC_VERSION = 1 };
 
 static void
 put_u8(core_buffer_t *out, uint8_t value)

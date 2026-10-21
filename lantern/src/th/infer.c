@@ -126,6 +126,10 @@ static th_constraint *con_same_slot(th_type *var, th_constraint c)
             return e;
         }
 
+        if (c.kind == TH_CON_INTEGER) {
+            return e;
+        }
+
         if (c.kind == TH_CON_IMPLEMENTS && e->iface.data && c.iface.data &&
             core_string_eq(e->iface, c.iface)
             && same_constraint_scope(e, &c)) {
@@ -355,6 +359,14 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
 
     if (slot) {
         if (c.kind == TH_CON_IMPLEMENTS) return true;
+        if (c.kind == TH_CON_INTEGER) {
+            if ((slot->integer.flags | c.integer.flags)
+                != slot->integer.flags) {
+                slot->integer.flags |= c.integer.flags;
+                var->revision++;
+            }
+            return true;
+        }
 
         th_type *have = c.kind == TH_CON_HAS_FIELD ? slot->field.type
                                                    : slot->param.type;
@@ -993,6 +1005,22 @@ void th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user)
     }
 }
 
+void th_register_integer_class(th_ctx *ctx, th_integer_class_fn fn)
+{
+    if (ctx) ctx->integer_class = fn;
+}
+
+bool th_var_is_integer(const th_type *var, uint8_t *flags)
+{
+    if (!var || var->kind != TH_VAR) return false;
+    for (size_t i = 0; i < var->var.cons.len; i++)
+        if (var->var.cons.data[i].kind == TH_CON_INTEGER) {
+            if (flags) *flags = var->var.cons.data[i].integer.flags;
+            return true;
+        }
+    return false;
+}
+
 bool th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
                  void *context)
 {
@@ -1281,6 +1309,24 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 return false;
             }
             break;
+        case TH_CON_INTEGER: {
+            th_integer_class class = ctx->integer_class
+                ? ctx->integer_class(ctx, th_resolve(bound_to))
+                : TH_INTEGER_SIGNED;
+            if (class == TH_INTEGER_NONE
+                || (class == TH_INTEGER_SIGNED
+                    && (c->integer.flags & TH_INTEGER_UNSIGNED))) {
+                th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("integer"),
+                       nullptr, bound_to,
+                       class == TH_INTEGER_NONE
+                           ? CORE_STRING_STATIC(
+                                 "an integer value cannot take this type")
+                           : CORE_STRING_STATIC(
+                                 "a bitwise integer value needs an unsigned type"));
+                return false;
+            }
+            break;
+        }
         case TH_CON_UNIFIES:
             if (!uni(ctx, bound_to, c->target, seen)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("unifies"),
@@ -1656,6 +1702,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
                 break;
             case TH_CON_IMPLEMENTS:
             case TH_CON_KIND:
+            case TH_CON_INTEGER:
                 break;
             }
         }
@@ -1686,6 +1733,7 @@ static th_type **fv_children(th_ctx *ctx, th_type *t, core_dict_t *acc,
                 break;
             case TH_CON_IMPLEMENTS:
             case TH_CON_KIND:
+            case TH_CON_INTEGER:
                 break;
             }
         }
@@ -2817,6 +2865,7 @@ static th_constraint instantiate_constraint(th_ctx *ctx, th_constraint c,
         break;
     case TH_CON_IMPLEMENTS:
     case TH_CON_KIND:
+    case TH_CON_INTEGER:
         break;
     }
     return c;
@@ -2918,10 +2967,19 @@ static th_type *generalize_vars(th_ctx *ctx, th_type *t, th_type **vars,
     return r;
 }
 
+static size_t drop_integer_vars(th_type **vars, size_t count)
+{
+    size_t kept = 0;
+    for (size_t i = 0; i < count; i++)
+        if (!th_var_is_integer(vars[i], nullptr)) vars[kept++] = vars[i];
+    return kept;
+}
+
 th_type *th_generalize(th_ctx *ctx, th_type *t)
 {
     th_type **vars = nullptr;
-    size_t nvars = th_free_vars(ctx, t, &vars);
+    size_t found = th_free_vars(ctx, t, &vars);
+    size_t nvars = drop_integer_vars(vars, found);
     return generalize_vars(ctx, t, vars, nvars);
 }
 
@@ -2949,7 +3007,7 @@ th_type *th_generalize_excluding(th_ctx *ctx, th_type *t,
     for (size_t i = 0; i < count; i++) {
         bool is_fixed = false;
         core_dict_get(&fixed, candidates[i], &is_fixed);
-        if (!is_fixed)
+        if (!is_fixed && !th_var_is_integer(candidates[i], nullptr))
             generalizable[n_generalizable++] = candidates[i];
     }
     core_dict_free(&fixed);
