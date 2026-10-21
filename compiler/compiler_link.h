@@ -89,6 +89,7 @@ typedef struct {
     parse_tree_t *argument;
     th_type *expected;
     bool keyword;
+    bool writes;
 } n00bb_call_binding_t;
 core_list_decl(n00bb_call_binding_t);
 bool n00bb_bind_call_arguments(parse_grammar_t *grammar,
@@ -428,6 +429,7 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
     core_list_t(n00bb_ir_func_ptr_t) callback_handlers;
+    core_list_t(th_type_ptr_t) callback_handler_types;
     ir_summaries_t *entry_owner;
     ir_summary_t *entry_summaries[3];
     bool entry_ready[3];
@@ -456,6 +458,9 @@ typedef struct n00bb_link_analysis_t {
     ir_summary_hooks_t summary_hooks;
     ir_summaries_t *summaries;
     ir_summaries_t *escapes;
+    struct n00bb_rule_facts_t *rule_facts;
+    core_dict_t dead_code_sites;
+    bool dead_code_sites_ready;
     core_list_t(n00bb_assert_site_t) assert_sites;
     core_list_t(n00bb_missing_return_t) missing_returns;
     n00bb_interface_summaries_t *interface_summaries;
@@ -514,6 +519,12 @@ n00bb_link_analysis_t *n00bb_link_analysis_new(
     const core_string_t *native_roots, size_t native_root_count,
     bool may_link_further, n00bb_resolver_t *resolver);
 void n00bb_link_analysis_free(n00bb_link_analysis_t *analysis);
+typedef struct n00bb_diagnostic_filter_t n00bb_diagnostic_filter_t;
+n00bb_diagnostic_filter_t *n00bb_diagnostic_filter_take(
+    n00bb_link_analysis_t *analysis);
+void n00bb_diagnostic_filter_free(n00bb_diagnostic_filter_t *filter);
+bool n00bb_diagnostic_visible(void *filter,
+                              const core_diagnostic_t *diagnostic);
 core_link_stage_result_t n00bb_link_stage_inputs(
     core_link_unit_t *link, uint32_t stage_kind, void *opaque);
 core_link_stage_result_t n00bb_link_stage_semantics(

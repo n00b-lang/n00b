@@ -58,7 +58,6 @@ double n00bb_profile_seconds(void);
 #include "lib/object_section.h"
 #include "lib/work_queue.h"
 #include "lib/diagnostic.h"
-#include "logic/clpfd_store.h"
 #include "parse/commander.h"
 #include "parse/bnf.h"
 #include "parse/grammar.h"
@@ -69,6 +68,7 @@ double n00bb_profile_seconds(void);
 #include "parse/tree_util.h"
 #include "parse/annot_walk.h"
 #include "ir/ir.h"
+#include "ir/analyses.h"
 #include "ir/exec_graph.h"
 #include "ir/doms.h"
 #include "ir/analyze.h"
@@ -1675,9 +1675,10 @@ discover_package_import(import_driver_t *driver,
         n00bb_lex_result_t *lex = state ? state->lex : nullptr;
         parse_tree_t *tree = lex && lex->parser
             ? parse_pwz_get_tree(lex->parser) : nullptr;
-        if (unit && tree) {
+        if (unit && tree && !state->interface_module) {
             core_buffer_t names = {0};
-            if (package_tree_syntax_index(driver->grammar, tree, &names))
+            if (package_tree_syntax_index(driver->grammar, tree, &names)
+                && names.byte_len)
                 n00bb_resolver_store_package_syntax(driver->resolver,
                     core_source_file_path(&unit->source), names.data,
                     names.byte_len);
@@ -4271,6 +4272,7 @@ fork_build_time_stage(int argc, char **argv, core_string_t argv0,
         close(capture_fd);
         forked_build_time = true;
         n00bb_set_build_time(true);
+        n00bb_native_root_hide_hosted(true);
         parse_cmdr_result_t *build_args = parse_cmdr_parse(cli,
             (int)count - 1, (const char **)arguments + 1);
         if (!parse_cmdr_result_ok(build_args)
@@ -4377,6 +4379,53 @@ report_specialization_gaps(n00bb_link_analysis_t *analysis)
 }
 
 static bool
+verify_analyses(n00bb_link_analysis_t *analysis,
+                core_diagnostics_t *diagnostics)
+{
+    bool ok = true;
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
+        ir_func_t *function = analysis->emitted_functions.data[i];
+        if (!function || !function->n_blocks) continue;
+        ir_memssa_t *memssa = ir_func_memssa(function);
+        if (!memssa || ir_memssa_verify(memssa)) continue;
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "memory SSA for '%.*s' failed verification",
+            TEXT_ARGS(function->name));
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR,
+            CORE_STRING_STATIC("N00BB-B0033"), core_buffer_string(&message));
+        core_buffer_release(&message);
+        ok = false;
+    }
+    return ok;
+}
+
+static void
+uncheck_wide_narrowing(n00bb_link_analysis_t *analysis)
+{
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
+        ir_func_t *function = analysis->emitted_functions.data[i];
+        ir_module_t *module = function ? function->owner : nullptr;
+        for (uint32_t b = 0; module && b < function->n_blocks; b++)
+            for (uint32_t n = 0; n < function->blocks[b]->n_instrs; n++) {
+                ir_instr_t *cast = function->blocks[b]->instrs[n];
+                ir_value_t *source = cast->op == IR_OP_CAST
+                    && cast->n_operands == 1 && cast->dest
+                    ? ir_operand_value(&cast->operands[0]) : nullptr;
+                if (!source || ir_machine_of(module, source->type).width != 128
+                    || ir_machine_of(module, cast->dest->type).width >= 128)
+                    continue;
+                uint32_t kept = 0;
+                for (uint32_t m = 0; m < cast->n_mods; m++)
+                    if (!core_string_eq(cast->mods[m],
+                                        CORE_STRING_STATIC("trap")))
+                        cast->mods[kept++] = cast->mods[m];
+                cast->n_mods = kept;
+            }
+    }
+}
+
+static bool
 specialize_emitted(n00bb_link_analysis_t *analysis,
                    const n00bb_specialization_seed_t *seeds,
                    size_t seed_count, n00bb_specialization_failure_t *failure,
@@ -4427,8 +4476,7 @@ specialize_calls(n00bb_link_analysis_t *analysis,
         && specialize_emitted(analysis, nullptr, 0, &failure, diagnostics);
     core_list_free(seeds);
     if (ok) ok = publish_declared_aggregate_layouts(analysis)
-        && publish_interned_variant_layouts(analysis)
-        && n00bb_recompute_summaries(analysis);
+        && publish_interned_variant_layouts(analysis);
     core_translation_unit_t *site = nullptr;
     for (size_t i = 0; !ok && failure.located && !site
          && i < analysis->units.len; i++)
@@ -4547,6 +4595,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool build_time = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--build-time"));
     n00bb_set_build_time(build_time);
+    n00bb_native_root_hide_hosted(build_time);
     bool build_time_reported = false;
     bool deferred_build_time = build_command && !build_time
         && !getenv("N00BB_BUILD_TIME_CAPTURE_FD");
@@ -4870,8 +4919,15 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && emit_program && !specialize)
         located = n00bb_rewrite_box_operations(link_analysis)
             && publish_declared_aggregate_layouts(link_analysis)
-            && publish_interned_variant_layouts(link_analysis)
-            && n00bb_recompute_summaries(link_analysis);
+            && publish_interned_variant_layouts(link_analysis);
+    if (located && emit_program && parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--unchecked-wide-narrowing")))
+        uncheck_wide_narrowing(link_analysis);
+    if (located && emit_program)
+        located = n00bb_recompute_summaries(link_analysis);
+    if (located && emit_program && parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--verify-analyses")))
+        located = verify_analyses(link_analysis, cli_diagnostics);
     if (located && build_command
         && parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-ir")))
         located = n00bb_dump_ir(link_analysis);
@@ -5005,6 +5061,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
 
     core_link_unit_free(link);
     th_env_free(environment);
+    n00bb_diagnostic_filter_t *diagnostic_filter =
+        n00bb_diagnostic_filter_take(link_analysis);
+    core_diagnostics_set_filter(cli_diagnostics, n00bb_diagnostic_visible,
+                                diagnostic_filter);
     n00bb_link_analysis_free(link_analysis);
     n00bb_cache_free(cache);
     release_requests(queue, &requests);
@@ -5025,6 +5085,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         }
     }
     core_diagnostics_free(cli_diagnostics);
+    n00bb_diagnostic_filter_free(diagnostic_filter);
     ir_ctx_free(ir_context);
     parse_grammar_free(grammar);
     n00bb_resolver_free(resolver);

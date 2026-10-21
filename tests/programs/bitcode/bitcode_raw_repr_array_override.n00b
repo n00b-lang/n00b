@@ -11,5 +11,6 @@ func emit(value: Raw_Repr) -> i32 {
     return value.raw_repr(2)
 }
 
-emit([1, 2]'array)
+let ints: Array[int] = [1, 2]'array
+emit(ints)
 emit(["a"]'array)

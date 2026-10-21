@@ -9,6 +9,7 @@
 #include "lib/list.h"
 #include "signature_typevars.h"
 #include "abi_decl_index.h"
+#include "cached_body.h"
 
 typedef struct {
     uint64_t id;
@@ -383,6 +384,9 @@ typedef struct {
 } call_type_binding_t;
 core_list_decl(call_type_binding_t);
 
+typedef ir_func_t *inline_body_t;
+core_list_decl(inline_body_t);
+
 typedef struct {
     ir_func_t *target;
     th_type *actual;
@@ -519,6 +523,22 @@ collect_specialized_body(n00bb_abi_type_index_t *index, ir_func_t *function,
     return true;
 }
 
+static void
+append_inline_body(core_list_t(inline_body_t) *bodies,
+                   const ir_instr_t *instruction, const ir_module_t *module)
+{
+    if (instruction->op != IR_OP_CALL || !instruction->n_operands
+        || instruction->operands[0].kind != IR_OPD_VALUE
+        || !instruction->operands[0].value
+        || instruction->operands[0].value->kind != IR_VAL_FUNC) return;
+    ir_func_t *body = n00bb_cached_body(instruction->operands[0].value->owner);
+    if (!body || !body->n_blocks || body->owner == module
+        || !ir_func_is_always_inline(body)) return;
+    for (size_t i = 0; i < bodies->len; i++)
+        if (bodies->data[i] == body) return;
+    core_list_push(*bodies, body);
+}
+
 static bool
 collect_call_specializations(n00bb_abi_type_index_t *index,
                              ir_module_t *module,
@@ -529,15 +549,28 @@ collect_call_specializations(n00bb_abi_type_index_t *index,
     core_list_t(call_specialization_t) pending = {0};
     bool valid = true;
     size_t count = module ? ir_func_count(module) : function_count;
+    core_list_t(inline_body_t) inline_bodies = {0};
     for (size_t f = 0; f < count; f++) {
         ir_func_t *caller = module ? ir_func_at(module, f) : functions[f];
         for (uint32_t b = 0; b < caller->n_blocks; b++) {
             ir_block_t *block = caller->blocks[b];
-            for (uint32_t i = 0; valid && i < block->n_instrs; i++)
+            for (uint32_t i = 0; valid && i < block->n_instrs; i++) {
                 valid = append_call_specialization(index, &pending,
                     block->instrs[i], nullptr, nullptr, 0);
+                append_inline_body(&inline_bodies, block->instrs[i], module);
+            }
         }
     }
+    for (size_t n = 0; valid && n < inline_bodies.len; n++) {
+        ir_func_t *body = inline_bodies.data[n];
+        valid = collect_specialized_body(index, body, nullptr, nullptr, 0,
+                                         &pending);
+        for (uint32_t b = 0; valid && b < body->n_blocks; b++)
+            for (uint32_t i = 0; i < body->blocks[b]->n_instrs; i++)
+                append_inline_body(&inline_bodies, body->blocks[b]->instrs[i],
+                                   module);
+    }
+    core_list_free(inline_bodies);
     for (size_t i = 0; valid && i < pending.len; i++) {
         call_specialization_t *specialization = &pending.data[i];
         core_list_t(call_type_binding_t) bindings = {0};

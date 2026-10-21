@@ -68,6 +68,42 @@ temporary_object_argument(const void *bytes, size_t length)
     return argument;
 }
 
+static char *
+host_object_archive(parse_cmdr_result_t *args, int32_t count,
+                    const char *staging)
+{
+    core_buffer_t path = {0};
+    core_buffer_printf(&path, "%s.hosts.a", staging);
+    char *archive = core_string_to_cstr(core_buffer_string(&path));
+    core_buffer_release(&path);
+    char **arguments = archive
+        ? calloc((size_t)count + 4, sizeof(*arguments)) : nullptr;
+    bool ok = arguments != nullptr;
+    if (ok) {
+        arguments[0] = "ar";
+        arguments[1] = "crs";
+        arguments[2] = archive;
+    }
+    for (int32_t i = 0; ok && i < count; i++) {
+        arguments[3 + i] = core_string_to_cstr(parse_cmdr_flag_str_at(args,
+            CORE_STRING_STATIC("--link-object"), i));
+        ok = arguments[3 + i] != nullptr;
+    }
+    pid_t child = 0;
+    int status = 0;
+    ok = ok && !posix_spawnp(&child, "ar", nullptr, nullptr, arguments,
+                             environ)
+        && waitpid(child, &status, 0) == child && WIFEXITED(status)
+        && WEXITSTATUS(status) == 0;
+    for (int32_t i = 0; arguments && i < count; i++)
+        core_free(arguments[3 + i]);
+    free(arguments);
+    if (ok) return archive;
+    if (archive) unlink(archive);
+    core_free(archive);
+    return nullptr;
+}
+
 static core_string_t
 qualified_function_name(core_string_t module, core_string_t function)
 {
@@ -740,15 +776,7 @@ complete_module_object(const module_emission_t *emission,
         core_diagnostics_free(item->diagnostics);
         item->diagnostics = nullptr;
     }
-    core_buffer_t mutators = {0};
-    n00bb_llvm_backend_t *backend = item->backend;
-    for (size_t i = 0; backend && i < n00bb_llvm_backend_mutator_count(backend);
-         i++) {
-        core_buffer_append_string(&mutators,
-            n00bb_llvm_backend_mutator_name(backend, i));
-        core_buffer_putc(&mutators, '\n');
-    }
-    n00bb_llvm_backend_free(backend);
+    n00bb_llvm_backend_free(item->backend);
     item->backend = nullptr;
     if (getenv("N00BB_PROFILE_COMPILE")) {
         core_string_t name = ir_module_name(item->module);
@@ -758,7 +786,6 @@ complete_module_object(const module_emission_t *emission,
     core_buffer_t object = item->object;
     item->object = (core_buffer_t){0};
     if (ok && emission->lto) {
-        core_buffer_release(&mutators);
         *item->bitcode = object;
         return true;
     }
@@ -771,13 +798,9 @@ complete_module_object(const module_emission_t *emission,
                 .native = copy, .native_bytes = object.byte_len,
                 .abi = item->artifact->object,
                 .abi_bytes = item->artifact->object_bytes,
-                .mutators = (const uint8_t *)mutators.data,
-                .mutator_bytes = mutators.byte_len,
             }));
-            mutators = (core_buffer_t){0};
         }
     }
-    core_buffer_release(&mutators);
     if (ok) ok = n00bb_native_frames_add(emission->native_frames,
         object.data, object.byte_len);
     if (ok) *item->object_path = temporary_object_argument(object.data,
@@ -1260,6 +1283,12 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         const char *linker = N00BB_NATIVE_LINKER;
         int32_t extra_count = parse_cmdr_flag_value_count(args,
             CORE_STRING_STATIC("--link-object"));
+        bool lazy_hosts = extra_count > 0
+            && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
+        char *host_archive = lazy_hosts
+            ? host_object_archive(args, extra_count, staging) : nullptr;
+        if (lazy_hosts && !host_archive) ok = false;
+        size_t extra_used = lazy_hosts ? 1 : (size_t)extra_count;
         size_t object_count = 0;
         for (size_t i = 0; i < modules + 4; i++)
             if (objects[i]) object_count++;
@@ -1296,14 +1325,15 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             size_t next = 1;
             for (size_t i = 0; i < modules + 4; i++)
                 if (objects[i]) arguments[next++] = objects[i];
-            for (int32_t i = 0; i < extra_count; i++) {
+            if (lazy_hosts) arguments[next] = host_archive;
+            for (int32_t i = 0; !lazy_hosts && i < extra_count; i++) {
                 core_string_t value = parse_cmdr_flag_str_at(args,
                     CORE_STRING_STATIC("--link-object"), i);
                 arguments[next + (size_t)i] = core_string_to_cstr(value);
                 if (!arguments[next + (size_t)i]) ok = false;
             }
             if (ok) {
-                size_t tail = next + (size_t)extra_count;
+                size_t tail = next + extra_used;
                 arguments[tail++] = archive;
                 for (size_t i = 0; i < native_used; i++)
                     arguments[tail++] = native_arguments[i];
@@ -1353,8 +1383,13 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 core_buffer_release(&bundle);
             }
 #endif
-            for (int32_t i = 0; i < extra_count; i++)
-                core_free(arguments[next + (size_t)i]);
+            if (host_archive) unlink(host_archive);
+            for (size_t i = 0; i < extra_used; i++)
+                core_free(arguments[next + i]);
+        }
+        else if (host_archive) {
+            unlink(host_archive);
+            core_free(host_archive);
         }
         for (size_t i = 0; i < native_used; i++)
             core_free(native_arguments[i]);
@@ -1364,10 +1399,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     if (ok && !lto)
         (void)n00bb_cache_store(analysis->cache, link, analysis, kept.data,
                                 kept.len);
-    for (size_t i = 0; i < kept.len; i++) {
+    for (size_t i = 0; i < kept.len; i++)
         free((void *)kept.data[i].native);
-        core_free((void *)kept.data[i].mutators);
-    }
     core_list_free(kept);
     if (staging) unlink(staging);
     free(staging);

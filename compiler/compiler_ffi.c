@@ -281,13 +281,17 @@ refresh_selection(n00bb_ffi_t *ffi)
     clear_strings(&ffi->frameworks);
     clear_strings(&ffi->search_paths);
     ffi->selected_shims.len = 0;
+    bool hosted = n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME;
     for (size_t i = 0; i < ffi->records.len; i++) {
         const ffi_literal_t *record = &ffi->records.data[i];
         if (!record->used) {
             continue;
         }
         for (size_t j = 0; j < record->shims.len; j++) {
-            core_list_push(ffi->selected_shims, record->shims.data[j]);
+            size_t shim = record->shims.data[j];
+            if (hosted || !core_string_ends_with(ffi->shims.data[shim].name,
+                              CORE_STRING_STATIC("_n00b_export.c")))
+                core_list_push(ffi->selected_shims, shim);
         }
         push_all(&ffi->archives, &record->archives);
         push_all(&ffi->libraries, &record->libraries);
@@ -305,7 +309,8 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
         size_t length = record->prefix.u8_bytes;
-        record->used = record->exports;
+        record->used = record->exports
+            && n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME;
         for (size_t j = 0; !record->used && j < count; j++) {
             record->used = symbols[j].u8_bytes > length
                 && core_string_starts_with(symbols[j], record->prefix)
@@ -331,6 +336,7 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
             .name      = core_string_dup(as_core(externs->items[i].name)),
             .symbol    = core_string_dup(as_core(externs->items[i].symbol)),
             .signature = core_string_dup(as_core(externs->items[i].signature)),
+            .pure      = externs->items[i].pure,
         };
     }
     natives->count = externs->count;
@@ -351,7 +357,7 @@ register_exports(const writ_n00b_externs_t *externs, core_string_t module)
         }
         core_string_t symbol = as_core(externs->exports[i].symbol);
         bool registered = function.data && symbol.data
-                       && n00bb_native_root_register(core_buffer_string(&function), symbol);
+                       && n00bb_native_root_register_hosted(core_buffer_string(&function), symbol);
         core_buffer_release(&function);
         if (!registered) {
             return false;

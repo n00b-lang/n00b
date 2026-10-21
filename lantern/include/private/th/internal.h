@@ -241,6 +241,11 @@ struct th_ctx {
   th_convert_fn conversion;
   void *conversion_user;
   th_integer_class_fn integer_class;
+  th_integer_method_fn integer_method;
+  void *integer_method_user;
+  uint32_t integer_owner;
+  size_t probe_depth;
+  bool grounding_integers;
   uint8_t method_argument_coercions;
   th_span_t span;
   th_span_t related;
@@ -283,6 +288,7 @@ typedef struct {
   size_t method_resolvers;
   size_t promos;
   size_t ifaces;
+  size_t depth;
 } th_probe_t;
 
 void th_var_cons_push(th_type *var, th_constraint constraint);

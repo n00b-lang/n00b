@@ -406,6 +406,7 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         CORE_STRING_STATIC("--gc-conservative-stacks"),
         CORE_STRING_STATIC("--no-specialize"),
         CORE_STRING_STATIC("--closed-world"),
+        CORE_STRING_STATIC("--unchecked-wide-narrowing"),
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(*flags); i++)
         put_u32(out, parse_cmdr_flag_present(args, flags[i]));
@@ -617,7 +618,6 @@ struct n00bb_cache_t {
     core_list_t(cache_entry_t) entries;
     core_list_t(cache_environment_t) interfaces;
     core_list_t(cache_snapshot_t) snapshots;
-    n00bb_llvm_mutator_classifier_t mutator_classifier;
     core_list_t(cache_scc_t) sccs;
     core_list_t(cache_link_t) summary_identities;
     bool prepared;
@@ -1057,9 +1057,6 @@ read_entries(n00bb_cache_t *cache)
     }
 }
 
-static bool cached_mutator(void *context, const ir_func_t *function,
-                           bool *mutator);
-
 static void
 member_names(const cache_entry_t *entry, core_buffer_t *out)
 {
@@ -1109,9 +1106,6 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     cache->sccs = core_list_new(cache_scc_t);
     cache->instances = core_list_new(cache_instance_t);
     cache->strict = getenv("N00BB_CACHE_STRICT") != nullptr;
-    cache->mutator_classifier = (n00bb_llvm_mutator_classifier_t){
-        .known = cached_mutator, .context = cache,
-    };
     read_module_keys(cache);
     read_entries(cache);
     core_string_t excluded = core_string_from_cstr(
@@ -1596,54 +1590,6 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
 static const cache_instance_t *loaded_instance(const n00bb_cache_t *cache,
                                                const ir_module_t *module);
 
-static bool
-mutator_listed(const cache_section_t *section, core_string_t name,
-               bool *mutator)
-{
-    size_t length = name.u8_bytes;
-    const char *at = (const char *)section->data;
-    const char *end = at + section->length;
-    *mutator = false;
-    while (at < end) {
-        const char *line = memchr(at, '\n', (size_t)(end - at));
-        size_t span = line ? (size_t)(line - at) : (size_t)(end - at);
-        if (span == length && (!length || !memcmp(at, name.data, length))) {
-            *mutator = true;
-            break;
-        }
-        at = line ? line + 1 : end;
-    }
-    return true;
-}
-
-static bool
-cached_mutator(void *context, const ir_func_t *function, bool *mutator)
-{
-    const n00bb_cache_t *cache = context;
-    const cache_instance_t *instance = function
-        ? loaded_instance(cache, function->owner) : nullptr;
-    if (instance) {
-        core_buffer_t name = {0};
-        phase_name_into(&name, CORE_STRING_STATIC("mutators"));
-        const cache_section_t *section = section_named(&instance->sections,
-            core_buffer_string(&name));
-        core_buffer_release(&name);
-        return section && mutator_listed(section, function->name, mutator);
-    }
-    for (size_t e = 0; function && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load != ENTRY_VALID) continue;
-        for (size_t m = 0; m < entry->members.len; m++) {
-            if (entry->members.data[m].module != function->owner) continue;
-            const cache_section_t *section = phase_section(entry,
-                CORE_STRING_STATIC("mutators"), entry->members.data[m].name);
-            if (!section) return false;
-            return mutator_listed(section, function->name, mutator);
-        }
-    }
-    return false;
-}
-
 bool
 n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache)
 {
@@ -1655,12 +1601,6 @@ n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache)
             return true;
     }
     return false;
-}
-
-const n00bb_llvm_mutator_classifier_t *
-n00bb_cache_mutator_classifier(const n00bb_cache_t *cache)
-{
-    return cache ? &cache->mutator_classifier : nullptr;
 }
 
 static bool
@@ -2206,11 +2146,6 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         module_section_name(&name, CORE_STRING_STATIC("abi"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 object->abi, object->abi_bytes);
-        module_section_name(&name, CORE_STRING_STATIC("mutators"), module);
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                object->mutators ? object->mutators
-                                                 : (const uint8_t *)"",
-                                object->mutator_bytes);
         core_buffer_t warnings = {0};
         put_warnings(&warnings, scc->members.data[m]);
         module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
@@ -2478,15 +2413,11 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
     phase_section_name(&name, CORE_STRING_STATIC("native"));
     const cache_section_t *native = section_named(&found->sections,
         core_buffer_string(&name));
-    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
-    const cache_section_t *mutators = section_named(&found->sections,
-        core_buffer_string(&name));
     core_buffer_release(&name);
-    if (!native || !mutators) return false;
+    if (!native) return false;
     *object = (n00bb_cache_module_object_t){
         .module = ir_module_name(module),
         .native = native->data, .native_bytes = native->length,
-        .mutators = mutators->data, .mutator_bytes = mutators->length,
     };
     return true;
 }
@@ -2512,11 +2443,6 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     phase_section_name(&name, CORE_STRING_STATIC("native"));
     bool ok = sections_set(&sections, core_buffer_string(&name),
                            object->native, object->native_bytes);
-    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
-    ok = ok && sections_set(&sections, core_buffer_string(&name),
-                            object->mutators ? object->mutators
-                                             : (const uint8_t *)"",
-                            object->mutator_bytes);
     core_buffer_release(&name);
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);

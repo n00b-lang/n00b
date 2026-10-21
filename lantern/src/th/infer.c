@@ -329,6 +329,8 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     if (c.kind == TH_CON_KIND && c.type_kind > TH_TRAIT) return false;
     if (same_repeated_constraint(ctx, var, &c)) return true;
     if (ctx && !c.span.file.data && !c.span.start_line) c.span = ctx->span;
+    if (ctx && c.kind == TH_CON_INTEGER && !c.integer.owner)
+        c.integer.owner = ctx->integer_owner;
 
     if (c.kind == TH_CON_METHOD) {
         if (!ctx || !c.method.name.u8_bytes || !c.method.result ||
@@ -352,7 +354,9 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
         }
         th_var_cons_push(var, c);
         var->revision++;
-        return true;
+        return !ctx->integer_method || ctx->probe_depth
+            || !th_var_is_integer(var, nullptr)
+            || ctx->integer_method(ctx, var, &c, ctx->integer_method_user);
     }
 
     th_constraint *slot = con_same_slot(var, c);
@@ -409,6 +413,14 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     th_var_cons_push(var, c);
     var->revision++;
 
+    if (c.kind != TH_CON_INTEGER || !ctx || !ctx->integer_method
+        || ctx->probe_depth) return true;
+    for (size_t i = 0; i < var->var.cons.len; i++) {
+        th_constraint method = var->var.cons.data[i];
+        if (method.kind == TH_CON_METHOD
+            && !ctx->integer_method(ctx, var, &method,
+                                    ctx->integer_method_user)) return false;
+    }
     return true;
 }
 
@@ -1010,6 +1022,14 @@ void th_register_integer_class(th_ctx *ctx, th_integer_class_fn fn)
     if (ctx) ctx->integer_class = fn;
 }
 
+void th_register_integer_method(th_ctx *ctx, th_integer_method_fn fn,
+                                void *user)
+{
+    if (!ctx) return;
+    ctx->integer_method = fn;
+    ctx->integer_method_user = user;
+}
+
 bool th_var_is_integer(const th_type *var, uint8_t *flags)
 {
     if (!var || var->kind != TH_VAR) return false;
@@ -1019,6 +1039,25 @@ bool th_var_is_integer(const th_type *var, uint8_t *flags)
             return true;
         }
     return false;
+}
+
+bool th_var_owned_integer(const th_ctx *ctx, const th_type *var)
+{
+    if (!ctx || !var || var->kind != TH_VAR || var->var.ref) return false;
+    for (size_t i = 0; i < var->var.cons.len; i++)
+        if (var->var.cons.data[i].kind == TH_CON_INTEGER)
+            return var->var.cons.data[i].integer.owner == ctx->integer_owner;
+    return false;
+}
+
+bool th_ground_integer(th_ctx *ctx, th_type *var, th_type *type)
+{
+    if (!ctx) return false;
+    bool previous = ctx->grounding_integers;
+    ctx->grounding_integers = true;
+    bool bound = th_unify_in_place(ctx, var, type) != nullptr;
+    ctx->grounding_integers = previous;
+    return bound;
 }
 
 bool th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
@@ -1153,6 +1192,21 @@ static th_type *dereferenced_argument(th_ctx *ctx, th_type *actual,
     return th_unify_probe(ctx, referent, formal) ? referent : nullptr;
 }
 
+static bool integer_shaped(th_ctx *ctx, th_type *type)
+{
+    type = th_resolve(type);
+    if (!type || !ctx->integer_class) return false;
+    if (type->kind == TH_VAR) return th_var_is_integer(type, nullptr);
+    return ctx->integer_class(ctx, type) != TH_INTEGER_NONE;
+}
+
+static bool integer_pair_converts(th_ctx *ctx, th_type *left, th_type *right)
+{
+    return integer_shaped(ctx, left) && integer_shaped(ctx, right)
+        && (th_resolve(left)->kind != TH_VAR
+            || th_resolve(right)->kind != TH_VAR);
+}
+
 static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
                                     th_type *formal, th_mode mode,
                                     core_dict_t *seen)
@@ -1160,6 +1214,8 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
     if (!actual || !formal) return false;
     th_type *referent = dereferenced_argument(ctx, actual, formal, mode);
     if (referent) return uni(ctx, referent, formal, seen);
+    if (mode == TH_IN && integer_pair_converts(ctx, actual, formal))
+        return true;
     if (!(ctx->method_argument_coercions
           & (TH_COERCE_OPTION_WRAP | TH_COERCE_NIL_OPTION
              | TH_COERCE_RECORD_CONSTRUCT | TH_COERCE_CUSTOM)))
@@ -1546,7 +1602,9 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 receiver_errors = ctx->errors.len;
                 bool self_result = c->method.result == var
                     && method_result == receiver->type;
-                if (matches && !self_result
+                bool integer_result = integer_pair_converts(ctx,
+                    c->method.result, method_result);
+                if (matches && !self_result && !integer_result
                     && !custom_coerces(ctx, th_resolve(method_result),
                                        th_resolve(c->method.result)))
                     matches = uni(ctx, c->method.result, method_result, seen);
@@ -2330,6 +2388,7 @@ static bool arg_eq(const th_arg *x, const th_arg *y)
 typedef struct {
     th_type *a;
     th_type *b;
+    bool     boundary;
 } tpair;
 
 core_option_decl(tpair);
@@ -2338,6 +2397,11 @@ core_list_decl(tpair);
 static void upush(core_list_t(tpair) *w, th_type *a, th_type *b)
 {
     core_list_push(*w, ((tpair){.a = a, .b = b}));
+}
+
+static void upush_boundary(core_list_t(tpair) *w, th_type *a, th_type *b)
+{
+    core_list_push(*w, ((tpair){.a = a, .b = b, .boundary = true}));
 }
 
 static bool uni_named(th_ctx *ctx, th_type *a, th_type *b,
@@ -2490,10 +2554,13 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
             return false;
         }
 
-        upush(w, a->fn.params[i].type, b->fn.params[i].type);
+        if (a->fn.params[i].mode == TH_IN)
+            upush_boundary(w, a->fn.params[i].type, b->fn.params[i].type);
+        else
+            upush(w, a->fn.params[i].type, b->fn.params[i].type);
     }
 
-    upush(w, a->fn.ret, b->fn.ret);
+    upush_boundary(w, a->fn.ret, b->fn.ret);
     if (a->fn.error) upush(w, a->fn.error, b->fn.error);
 
     return true;
@@ -2612,11 +2679,14 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
     bool              ok = true;
 
     upush(&w, a0, b0);
+    bool top = true;
 
     while (ok && w.len) {
         tpair    p = core_option_get(core_list_pop(tpair, w));
         th_type *a = th_resolve(p.a);
         th_type *b = th_resolve(p.b);
+        bool     boundary = top || p.boundary;
+        top = false;
 
         if (a == b) {
             continue;
@@ -2650,6 +2720,13 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
 
             a = b;
             b = t;
+        }
+
+        if (boundary && a->kind == TH_VAR && b->kind != TH_VAR
+            && !ctx->grounding_integers && ctx->integer_class
+            && th_var_is_integer(a, nullptr)
+            && ctx->integer_class(ctx, b) != TH_INTEGER_NONE) {
+            continue;
         }
 
         if (a->kind == TH_VAR) {

@@ -5,6 +5,7 @@
 #include "lib/list.h"
 
 core_list_decl(ir_site_t);
+core_list_decl(ir_dead_site_t);
 typedef ir_block_t *site_block_ptr_t;
 core_list_decl(site_block_ptr_t);
 
@@ -90,6 +91,88 @@ mark_loop_bounds(ir_func_t *f, ir_doms_t *doms, bool *bound)
     }
 }
 
+static uint32_t
+instr_sites(const ir_instr_t *in, ir_site_t *out, uint32_t capacity)
+{
+    uint32_t count = 0;
+#define SITE(operand_, kind_)                                               \
+    do {                                                                    \
+        if (count < capacity)                                               \
+            out[count++] = (ir_site_t){.instr = (ir_instr_t *)in,           \
+                                       .operand = (operand_),               \
+                                       .kind = (kind_)};                    \
+    } while (0)
+    switch (in->op) {
+    case IR_OP_BRANCH:
+    case IR_OP_SWITCH:
+    case IR_OP_SELECT:
+        SITE(0, IR_SITE_BRANCH);
+        break;
+    case IR_OP_LOAD:
+    case IR_OP_STORE:
+    case IR_OP_MEMSET:
+    case IR_OP_ATOMIC_RMW:
+    case IR_OP_ATOMIC_CAS:
+        SITE(0, IR_SITE_ADDRESS);
+        break;
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
+    case IR_OP_MEMCMP:
+        SITE(0, IR_SITE_ADDRESS);
+        SITE(1, IR_SITE_ADDRESS);
+        break;
+    case IR_OP_INDEX:
+    case IR_OP_SEQUENCE_GET:
+    case IR_OP_SEQUENCE_SET:
+        SITE(1, IR_SITE_ADDRESS);
+        break;
+    case IR_OP_DIV:
+    case IR_OP_REM:
+        SITE(1, IR_SITE_DIVISOR);
+        break;
+    case IR_OP_SHL:
+    case IR_OP_SHR:
+        SITE(1, IR_SITE_SHIFT_AMOUNT);
+        break;
+    case IR_OP_BOX:
+    case IR_OP_BOX_RAW:
+    case IR_OP_BOX_FROM_RAW:
+        SITE(0, IR_SITE_BOXED);
+        break;
+    case IR_OP_CALL:
+    case IR_OP_CALLBACK_INVOKE:
+        if (in->dest_kind != IR_DEST_NONE)
+            SITE(UINT32_MAX, IR_SITE_CALL_RESULT);
+        break;
+    case IR_OP_CALL_OUTPUT:
+        SITE(UINT32_MAX, IR_SITE_COPY_OUT);
+        break;
+    case IR_OP_RETURN:
+        if (in->n_operands) SITE(0, IR_SITE_RETURNED);
+        break;
+    case IR_OP_FAIL:
+        SITE(in->n_operands ? 0 : UINT32_MAX, IR_SITE_FAILURE);
+        break;
+    default:
+        break;
+    }
+#undef SITE
+    return count;
+}
+
+bool
+ir_instr_site(const ir_instr_t *in, ir_site_kind_t kind, uint32_t *operand)
+{
+    ir_site_t found[4];
+    uint32_t  count = in ? instr_sites(in, found, 4) : 0;
+    for (uint32_t s = 0; s < count; s++)
+        if (found[s].kind == kind) {
+            if (operand) *operand = found[s].operand;
+            return true;
+        }
+    return false;
+}
+
 ir_sites_t *
 ir_sites_build(ir_func_t *f)
 {
@@ -105,64 +188,18 @@ ir_sites_build(ir_func_t *f)
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *in = block->instrs[i];
             if (traps(in)) add_site(sites, in, UINT32_MAX, IR_SITE_TRAP);
-            switch (in->op) {
-            case IR_OP_BRANCH:
-            case IR_OP_SWITCH:
-                add_site(sites, in, 0, bound[block->index]
-                    ? IR_SITE_LOOP_BOUND : IR_SITE_BRANCH);
-                break;
-            case IR_OP_SELECT:
-                add_site(sites, in, 0, IR_SITE_BRANCH);
-                break;
-            case IR_OP_LOAD:
-            case IR_OP_STORE:
-            case IR_OP_MEMSET:
-                add_site(sites, in, 0, IR_SITE_ADDRESS);
-                break;
-            case IR_OP_MEMCPY:
-            case IR_OP_MEMMOVE:
-            case IR_OP_MEMCMP:
-                add_site(sites, in, 0, IR_SITE_ADDRESS);
-                add_site(sites, in, 1, IR_SITE_ADDRESS);
-                break;
-            case IR_OP_INDEX:
-            case IR_OP_SEQUENCE_GET:
-            case IR_OP_SEQUENCE_SET:
-                add_site(sites, in, 1, IR_SITE_ADDRESS);
-                break;
-            case IR_OP_DIV:
-            case IR_OP_REM:
-                add_site(sites, in, 1, IR_SITE_DIVISOR);
-                break;
-            case IR_OP_SHL:
-            case IR_OP_SHR:
-            case IR_OP_ROL:
-            case IR_OP_ROR:
-                add_site(sites, in, 1, IR_SITE_SHIFT_AMOUNT);
-                break;
-            case IR_OP_BOX:
-                add_site(sites, in, 0, IR_SITE_BOXED);
-                break;
-            case IR_OP_CALL:
-            case IR_OP_CALLBACK_INVOKE:
+            ir_site_t found[4];
+            uint32_t  count = instr_sites(in, found, 4);
+            for (uint32_t s = 0; s < count; s++) {
+                ir_site_kind_t kind = found[s].kind;
+                if (kind == IR_SITE_BRANCH && in->op != IR_OP_SELECT
+                    && bound[block->index])
+                    kind = IR_SITE_LOOP_BOUND;
+                add_site(sites, in, found[s].operand, kind);
+            }
+            if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
                 for (uint32_t o = 1; o < in->n_operands; o++)
                     add_site(sites, in, o, IR_SITE_CALL_ARGUMENT);
-                if (in->dest_kind != IR_DEST_NONE)
-                    add_site(sites, in, UINT32_MAX, IR_SITE_CALL_RESULT);
-                break;
-            case IR_OP_CALL_OUTPUT:
-                add_site(sites, in, UINT32_MAX, IR_SITE_COPY_OUT);
-                break;
-            case IR_OP_RETURN:
-                if (in->n_operands) add_site(sites, in, 0, IR_SITE_RETURNED);
-                break;
-            case IR_OP_FAIL:
-                add_site(sites, in, in->n_operands ? 0 : UINT32_MAX,
-                         IR_SITE_FAILURE);
-                break;
-            default:
-                break;
-            }
         }
     }
     core_free(bound);
@@ -247,14 +284,43 @@ merge_state(uint8_t *into, uint8_t state)
     return changed;
 }
 
+static uint8_t *paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
+                            void *context, ir_path_exits_t *exits);
+
 bool
 ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
               void *context, ir_path_exits_t *exits)
 {
+    uint8_t *incoming = paths_solve(f, entry, step, context, exits);
+    core_free(incoming);
+    return incoming != nullptr;
+}
+
+bool
+ir_paths_reach(ir_func_t *f, ir_path_step_fn step, void *context,
+               const ir_instr_t *at)
+{
+    ir_path_exits_t exits;
+    uint8_t *incoming = paths_solve(f, IR_PATH_UNPASSED, step, context,
+                                    &exits);
+    if (!incoming) return true;
+    uint8_t state = incoming[at->block->index];
+    for (uint32_t i = 0; state && i < at->index; i++)
+        state = ir_path_apply(state, step_of(step, context,
+                                             at->block->instrs[i],
+                                             IR_PATH_ANY));
+    core_free(incoming);
+    return state != 0;
+}
+
+static uint8_t *
+paths_solve(ir_func_t *f, uint8_t entry, ir_path_step_fn step, void *context,
+            ir_path_exits_t *exits)
+{
     *exits = (ir_path_exits_t){0};
     ir_doms_t  *doms  = f ? ir_func_doms(f) : nullptr;
     ir_block_t *first = f ? ir_block_entry(f) : nullptr;
-    if (!doms || !first) return false;
+    if (!doms || !first) return nullptr;
     uint8_t *incoming = core_alloc_array(uint8_t, f->n_blocks);
     incoming[first->index] = entry;
     bool changed;
@@ -310,6 +376,173 @@ ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
             }
         }
     } while (changed);
-    core_free(incoming);
+    return incoming;
+}
+
+struct ir_dead_code_t {
+    ir_func_t                   *f;
+    bool                        *live;
+    bool                        *covered;
+    int64_t                     *cut;
+    core_list_t(ir_dead_site_t)  sites;
+};
+
+static bool
+user_instruction(const ir_instr_t *in)
+{
+    return in->span.start_line && in->span.start_byte && !in->span.implied
+        && in->op != IR_OP_JUMP && in->op != IR_OP_RETURN
+        && in->op != IR_OP_BRANCH && in->op != IR_OP_TRAP;
+}
+
+static bool
+constant_condition(const ir_instr_t *terminator, bool *truth)
+{
+    if (!terminator || terminator->op != IR_OP_BRANCH
+        || terminator->n_operands != 3) return false;
+    const ir_value_t *condition = ir_operand_value(&terminator->operands[0]);
+    const ir_instr_t *def = condition ? condition->def : nullptr;
+    if (!def || def->op != IR_OP_CONST || def->n_operands != 1
+        || def->operands[0].kind != IR_OPD_CONST
+        || def->operands[0].lit.is_float) return false;
+    *truth = def->operands[0].lit.i.mag != 0;
     return true;
+}
+
+static const ir_instr_t *
+dead_region_site(ir_dead_code_t *dead, ir_block_t *start, uint32_t after)
+{
+    const ir_instr_t *found = nullptr;
+    for (uint32_t i = after; i < start->n_instrs && !found; i++)
+        if (user_instruction(start->instrs[i])) found = start->instrs[i];
+    core_list_t(site_block_ptr_t) work = core_list_new(site_block_ptr_t);
+    core_list_push(work, start);
+    for (size_t at = 0; at < work.len; at++) {
+        ir_instr_t *terminator = ir_block_terminator(work.data[at]);
+        for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
+             s++) {
+            ir_block_t *next = ir_succ_at(terminator, s);
+            if (!next || dead->live[next->index]
+                || dead->covered[next->index]) continue;
+            dead->covered[next->index] = true;
+            core_list_push(work, next);
+            for (uint32_t i = 0; !found && i < next->n_instrs; i++)
+                if (user_instruction(next->instrs[i]))
+                    found = next->instrs[i];
+        }
+    }
+    core_list_free(work);
+    return found;
+}
+
+static void
+add_dead_site(ir_dead_code_t *dead, const ir_instr_t *site,
+              const ir_instr_t *cause, ir_dead_cause_t kind)
+{
+    if (site)
+        core_list_push(dead->sites, ((ir_dead_site_t){
+            .site = site, .cause = cause, .kind = kind}));
+}
+
+ir_dead_code_t *
+ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges, void *context)
+{
+    if (!f || !f->n_blocks) return nullptr;
+    ir_dead_code_t *dead = core_alloc(ir_dead_code_t);
+    dead->f       = f;
+    dead->live    = core_alloc_array(bool, f->n_blocks);
+    dead->covered = core_alloc_array(bool, f->n_blocks);
+    dead->cut     = core_alloc_array(int64_t, f->n_blocks);
+    dead->sites   = core_list_new(ir_dead_site_t);
+    for (uint32_t b = 0; b < f->n_blocks; b++) dead->cut[b] = -1;
+    ir_block_t *entry = ir_block_entry(f);
+    core_list_t(site_block_ptr_t) work = core_list_new(site_block_ptr_t);
+    dead->live[entry->index] = true;
+    core_list_push(work, entry);
+    while (work.len) {
+        ir_block_t *block = work.data[--work.len];
+        for (uint32_t i = 0; dead->cut[block->index] < 0 && i < block->n_instrs;
+             i++) {
+            const ir_instr_t *in = block->instrs[i];
+            if ((in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
+                && diverges && diverges(context, in))
+                dead->cut[block->index] = i;
+        }
+        if (dead->cut[block->index] >= 0) continue;
+        ir_instr_t *terminator = ir_block_terminator(block);
+        bool truth = false;
+        bool constant = constant_condition(terminator, &truth);
+        for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
+             s++) {
+            ir_block_t *next = ir_succ_at(terminator, s);
+            if (constant && next
+                && next != ir_succ_of(&terminator->operands[truth ? 1 : 2]))
+                continue;
+            if (!next || dead->live[next->index]) continue;
+            dead->live[next->index] = true;
+            core_list_push(work, next);
+        }
+    }
+    core_list_free(work);
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
+        ir_block_t *block = f->blocks[b];
+        if (!dead->live[b]) continue;
+        if (dead->cut[b] >= 0) {
+            add_dead_site(dead, dead_region_site(dead, block,
+                              (uint32_t)dead->cut[b] + 1),
+                          block->instrs[dead->cut[b]],
+                          IR_DEAD_AFTER_DIVERGING_CALL);
+            continue;
+        }
+        ir_instr_t *terminator = ir_block_terminator(block);
+        bool truth = false;
+        if (!constant_condition(terminator, &truth)) continue;
+        ir_block_t *untaken = ir_succ_of(&terminator->operands[truth ? 2 : 1]);
+        if (!untaken || dead->live[untaken->index]
+            || dead->covered[untaken->index]) continue;
+        dead->covered[untaken->index] = true;
+        add_dead_site(dead, dead_region_site(dead, untaken, 0), terminator,
+                      IR_DEAD_CONSTANT_CONDITION);
+    }
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
+        if (dead->live[b] || dead->covered[b]) continue;
+        dead->covered[b] = true;
+        add_dead_site(dead, dead_region_site(dead, f->blocks[b], 0), nullptr,
+                      IR_DEAD_UNREACHED);
+    }
+    return dead;
+}
+
+void
+ir_dead_code_free(ir_dead_code_t *dead)
+{
+    if (!dead) return;
+    core_free(dead->live);
+    core_free(dead->covered);
+    core_free(dead->cut);
+    core_list_free(dead->sites);
+    core_free(dead);
+}
+
+bool
+ir_dead_code_instr(const ir_dead_code_t *dead, const ir_instr_t *in)
+{
+    if (!dead || !in || !in->block || in->block->owner != dead->f)
+        return false;
+    uint32_t b = in->block->index;
+    return !dead->live[b]
+        || (dead->cut[b] >= 0 && (int64_t)in->index > dead->cut[b]);
+}
+
+uint32_t
+ir_dead_code_site_count(const ir_dead_code_t *dead)
+{
+    return dead ? (uint32_t)dead->sites.len : 0;
+}
+
+const ir_dead_site_t *
+ir_dead_code_site_at(const ir_dead_code_t *dead, uint32_t index)
+{
+    return dead && index < dead->sites.len ? &dead->sites.data[index]
+                                           : nullptr;
 }

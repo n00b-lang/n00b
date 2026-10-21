@@ -78,19 +78,9 @@ bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);
 void n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
     n00bb_native_cache_t *cache);
 
-typedef struct {
-    bool (*known)(void *context, const ir_func_t *function, bool *mutator);
-    void *context;
-} n00bb_llvm_mutator_classifier_t;
-
-uint32_t n00bb_llvm_mutator_flags(
-    const n00bb_llvm_mutator_classifier_t *classifier,
-    const ir_func_t *function, uint32_t flags);
+uint32_t n00bb_llvm_mutator_flags(const ir_func_t *function, uint32_t flags);
 void n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
     ir_summaries_t *summaries);
-size_t n00bb_llvm_backend_mutator_count(const n00bb_llvm_backend_t *backend);
-core_string_t n00bb_llvm_backend_mutator_name(
-    const n00bb_llvm_backend_t *backend, size_t index);
 
 bool n00bb_llvm_backend_write_bitcode(
     n00bb_llvm_backend_t *backend, core_buffer_t *out,

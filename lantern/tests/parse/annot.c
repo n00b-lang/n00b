@@ -104,23 +104,6 @@ test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope(void)
     parse_tree_free_node(node);
 }
 
-static void
-test_tree_integer_range_fact(void)
-{
-    parse_tree_t *node = core_tree_node(parse_nt_node_t,
-        parse_token_info_ptr_t, ((parse_nt_node_t){0}));
-    int64_t minimum = 0, maximum = 0;
-    bool unset = node && !parse_tree_integer_range(node, &minimum, &maximum);
-    bool set = node && parse_tree_set_integer_range(node, 2, 7);
-    bool invalid_rejected = node
-        && !parse_tree_set_integer_range(node, 8, 7);
-    bool read = node && parse_tree_integer_range(node, &minimum, &maximum);
-    check("tree stores integer range analysis separately from inferred type",
-          unset && set && invalid_rejected && read
-          && minimum == 2 && maximum == 7);
-    parse_tree_free_node(node);
-}
-
 static bool
 visit_type_namespace_scope(parse_scope_t *scope, void *context)
 {
@@ -2951,7 +2934,6 @@ main(void)
     test_symbol_namespaces_share_lexical_scopes();
     test_symbol_namespace_scope_iteration();
     test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope();
-    test_tree_integer_range_fact();
     test_a_deep_tree_does_not_overflow_the_stack(g);
 
     parse_grammar_free(g);

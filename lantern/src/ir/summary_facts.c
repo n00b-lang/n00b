@@ -11,26 +11,37 @@ core_list_decl(facts_func_ptr_t);
 core_list_decl(ir_splace_t);
 
 typedef enum : uint8_t {
-    REL_FUNCTION,
     REL_FLAG,
-    REL_TRAP_KIND,
     REL_ACCESS,
     REL_PLACE_KIND,
     REL_PARAM_PLACE,
-    REL_CALL,
     REL_CALL_TARGET,
     REL_CALL_UNKNOWN,
     REL_OUT_ARGUMENT,
     REL_DISCARDED,
     REL_ADDRESSABLE_ARGUMENT,
-    REL_LOAD,
-    REL_STORE,
     REL_RESULT_EFFECT,
+    REL_ASSERT_EFFECT,
+    REL_ESCAPE,
+    REL_RETURN_ALIAS,
+    REL_DEPENDENCE,
+    REL_MEMBER,
+    REL_FIELD,
     REL_SHARED_PLACE,
     REL_VISIBLE_WRITE,
     REL_SIDE_EFFECT,
     REL_EFFECTFUL_CALL,
     REL_IGNORED_RESULT,
+    REL_RESULT_ALIAS,
+    REL_RESULT_INPUT,
+    REL_DIVERGING_TARGET,
+    REL_CALL_RETURNS,
+    REL_CALL_DIVERGES,
+    REL_CALL_READS_ENTRY,
+    REL_CALL_READS_UNSEEN,
+    REL_FIELD_READ,
+    REL_FIELD_WRITTEN,
+    REL_RECORD_READ,
     REL_COUNT,
 } relation_t;
 
@@ -38,27 +49,38 @@ static const struct {
     core_string_t name;
     int32_t       arity;
 } relations[REL_COUNT] = {
-    [REL_FUNCTION]             = {CORE_STRING_STATIC("function"), 1},
     [REL_FLAG]                 = {CORE_STRING_STATIC("flag"), 2},
-    [REL_TRAP_KIND]            = {CORE_STRING_STATIC("trap_kind"), 2},
     [REL_ACCESS]               = {CORE_STRING_STATIC("access"), 3},
     [REL_PLACE_KIND]           = {CORE_STRING_STATIC("place_kind"), 2},
     [REL_PARAM_PLACE]          = {CORE_STRING_STATIC("param_place"), 2},
-    [REL_CALL]                 = {CORE_STRING_STATIC("call"), 2},
     [REL_CALL_TARGET]          = {CORE_STRING_STATIC("call_target"), 2},
     [REL_CALL_UNKNOWN]         = {CORE_STRING_STATIC("call_unknown"), 1},
     [REL_OUT_ARGUMENT]         = {CORE_STRING_STATIC("out_argument"), 1},
     [REL_DISCARDED]            = {CORE_STRING_STATIC("discarded"), 1},
     [REL_ADDRESSABLE_ARGUMENT] = {CORE_STRING_STATIC("addressable_argument"),
                                   2},
-    [REL_LOAD]                 = {CORE_STRING_STATIC("load"), 3},
-    [REL_STORE]                = {CORE_STRING_STATIC("store"), 3},
     [REL_RESULT_EFFECT]        = {CORE_STRING_STATIC("result_effect"), 1},
+    [REL_ASSERT_EFFECT]        = {CORE_STRING_STATIC("assert_effect"), 1},
+    [REL_ESCAPE]               = {CORE_STRING_STATIC("escape"), 2},
+    [REL_RETURN_ALIAS]         = {CORE_STRING_STATIC("return_alias"), 2},
+    [REL_DEPENDENCE]           = {CORE_STRING_STATIC("dependence"), 2},
+    [REL_MEMBER]               = {CORE_STRING_STATIC("member"), 1},
+    [REL_FIELD]                = {CORE_STRING_STATIC("field"), 4},
     [REL_SHARED_PLACE]         = {CORE_STRING_STATIC("shared_place"), 1},
     [REL_VISIBLE_WRITE]        = {CORE_STRING_STATIC("visible_write"), 1},
     [REL_SIDE_EFFECT]          = {CORE_STRING_STATIC("side_effect"), 1},
     [REL_EFFECTFUL_CALL]       = {CORE_STRING_STATIC("effectful_call"), 1},
     [REL_IGNORED_RESULT]       = {CORE_STRING_STATIC("ignored_result"), 1},
+    [REL_RESULT_ALIAS]         = {CORE_STRING_STATIC("result_alias"), 2},
+    [REL_RESULT_INPUT]         = {CORE_STRING_STATIC("result_input"), 2},
+    [REL_DIVERGING_TARGET]     = {CORE_STRING_STATIC("diverging_target"), 2},
+    [REL_CALL_RETURNS]         = {CORE_STRING_STATIC("call_returns"), 1},
+    [REL_CALL_DIVERGES]        = {CORE_STRING_STATIC("call_diverges"), 1},
+    [REL_CALL_READS_ENTRY]     = {CORE_STRING_STATIC("call_reads_entry"), 2},
+    [REL_CALL_READS_UNSEEN]    = {CORE_STRING_STATIC("call_reads_unseen"), 1},
+    [REL_FIELD_READ]           = {CORE_STRING_STATIC("field_read"), 2},
+    [REL_FIELD_WRITTEN]        = {CORE_STRING_STATIC("field_written"), 2},
+    [REL_RECORD_READ]          = {CORE_STRING_STATIC("record_read"), 1},
 };
 
 static const core_string_t flag_names[] = {
@@ -77,19 +99,18 @@ static const core_string_t flag_names[] = {
     CORE_STRING_STATIC("starts_threads"),
 };
 
-static const core_string_t trap_names[] = {
-    CORE_STRING_STATIC("explicit"),
-    CORE_STRING_STATIC("bounds"),
-    CORE_STRING_STATIC("unwrap"),
-    CORE_STRING_STATIC("arithmetic"),
-};
-
 static const core_string_t access_names[] = {
     CORE_STRING_STATIC("read"),
     CORE_STRING_STATIC("write"),
     CORE_STRING_STATIC("must_success"),
     CORE_STRING_STATIC("must_failure"),
     CORE_STRING_STATIC("reads_entry"),
+};
+
+static const core_string_t field_names[] = {
+    CORE_STRING_STATIC("read"),
+    CORE_STRING_STATIC("write"),
+    CORE_STRING_STATIC("whole"),
 };
 
 static const core_string_t place_names[] = {
@@ -104,7 +125,7 @@ typedef struct {
     relation_t    relation;
     bool          negated;
     uint8_t       arity;
-    core_string_t arguments[3];
+    core_string_t arguments[4];
 } atom_t;
 
 typedef struct {
@@ -117,7 +138,9 @@ typedef struct {
 #define ATOM1(r, a) {r, false, 1, {V(a)}}
 #define ATOM2(r, a, b) {r, false, 2, {V(a), V(b)}}
 #define ATOM3(r, a, b, c) {r, false, 3, {V(a), V(b), V(c)}}
+#define ATOM4(r, a, b, c, d) {r, false, 4, {V(a), V(b), V(c), V(d)}}
 #define NOT1(r, a) {r, true, 1, {V(a)}}
+#define NOT2(r, a, b) {r, true, 2, {V(a), V(b)}}
 
 static const rule_t rules[] = {
     {ATOM1(REL_SHARED_PLACE, "P"), 1,
@@ -136,24 +159,62 @@ static const rule_t rules[] = {
      {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM3(REL_ACCESS, "G", "P", "write"),
       ATOM2(REL_PARAM_PLACE, "P", "I"),
       ATOM2(REL_ADDRESSABLE_ARGUMENT, "S", "I")}},
+    {ATOM1(REL_VISIBLE_WRITE, "S"), 3,
+     {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_ESCAPE, "G", "I"),
+      ATOM2(REL_ADDRESSABLE_ARGUMENT, "S", "I")}},
     {ATOM1(REL_SIDE_EFFECT, "S"), 1, {ATOM1(REL_OUT_ARGUMENT, "S")}},
     {ATOM1(REL_SIDE_EFFECT, "S"), 1, {ATOM1(REL_VISIBLE_WRITE, "S")}},
+    {ATOM1(REL_SIDE_EFFECT, "S"), 3,
+     {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_FLAG, "G", "K"),
+      ATOM1(REL_ASSERT_EFFECT, "K")}},
     {ATOM1(REL_EFFECTFUL_CALL, "S"), 3,
      {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_FLAG, "G", "K"),
       ATOM1(REL_RESULT_EFFECT, "K")}},
     {ATOM1(REL_IGNORED_RESULT, "S"), 4,
      {ATOM1(REL_DISCARDED, "S"), ATOM2(REL_CALL_TARGET, "S", "G"),
       NOT1(REL_VISIBLE_WRITE, "S"), NOT1(REL_EFFECTFUL_CALL, "S")}},
+    {ATOM2(REL_RESULT_ALIAS, "S", "I"), 3,
+     {ATOM1(REL_IGNORED_RESULT, "S"), ATOM2(REL_CALL_TARGET, "S", "G"),
+      ATOM2(REL_RETURN_ALIAS, "G", "I")}},
+    {ATOM2(REL_RESULT_INPUT, "S", "I"), 3,
+     {ATOM1(REL_IGNORED_RESULT, "S"), ATOM2(REL_CALL_TARGET, "S", "G"),
+      ATOM2(REL_DEPENDENCE, "G", "I")}},
+    {ATOM2(REL_DIVERGING_TARGET, "S", "G"), 2,
+     {ATOM2(REL_CALL_TARGET, "S", "G"), ATOM2(REL_FLAG, "G", "diverges")}},
+    {ATOM1(REL_CALL_RETURNS, "S"), 2,
+     {ATOM2(REL_CALL_TARGET, "S", "G"), NOT2(REL_FLAG, "G", "diverges")}},
+    {ATOM1(REL_CALL_RETURNS, "S"), 1, {ATOM1(REL_CALL_UNKNOWN, "S")}},
+    {ATOM1(REL_CALL_DIVERGES, "S"), 2,
+     {ATOM2(REL_DIVERGING_TARGET, "S", "G"), NOT1(REL_CALL_RETURNS, "S")}},
+    {ATOM2(REL_CALL_READS_ENTRY, "S", "P"), 2,
+     {ATOM2(REL_CALL_TARGET, "S", "G"),
+      ATOM3(REL_ACCESS, "G", "P", "reads_entry")}},
+    {ATOM1(REL_CALL_READS_UNSEEN, "S"), 2,
+     {ATOM2(REL_CALL_READS_ENTRY, "S", "P"),
+      ATOM2(REL_PLACE_KIND, "P", "unknown")}},
+    {ATOM2(REL_FIELD_READ, "R", "F"), 2,
+     {ATOM1(REL_MEMBER, "G"), ATOM4(REL_FIELD, "G", "R", "F", "read")}},
+    {ATOM2(REL_FIELD_WRITTEN, "R", "F"), 2,
+     {ATOM1(REL_MEMBER, "G"), ATOM4(REL_FIELD, "G", "R", "F", "write")}},
+    {ATOM1(REL_RECORD_READ, "R"), 2,
+     {ATOM1(REL_MEMBER, "G"), ATOM4(REL_FIELD, "G", "R", "F", "whole")}},
 };
 
 static const core_string_t result_effects[] = {
     CORE_STRING_STATIC("may_fail"),
+    CORE_STRING_STATIC("may_trap"),
     CORE_STRING_STATIC("may_block"),
     CORE_STRING_STATIC("diverges"),
     CORE_STRING_STATIC("calls_unknown"),
     CORE_STRING_STATIC("may_io"),
     CORE_STRING_STATIC("calls_finalizers"),
     CORE_STRING_STATIC("starts_threads"),
+};
+
+static const core_string_t assert_effects[] = {
+    CORE_STRING_STATIC("may_io"),
+    CORE_STRING_STATIC("may_block"),
+    CORE_STRING_STATIC("diverges"),
 };
 
 struct ir_summary_facts_t {
@@ -192,29 +253,35 @@ fact(ir_summary_facts_t *facts, relation_t relation,
                           relations[relation].arity, tuple);
 }
 
+static const void *
+place_key(ir_summary_facts_t *facts, const ir_splace_t *place,
+          core_dict_t **index)
+{
+    switch (place->kind) {
+    case IR_SPLACE_PARAM:
+        *index = &facts->param_place_ids;
+        return (const void *)(uintptr_t)(place->param + 1);
+    case IR_SPLACE_GLOBAL:
+    case IR_SPLACE_THREAD:
+        *index = &facts->place_ids;
+        return place->global ? (const void *)ir_global_identity(place->global)
+                             : nullptr;
+    case IR_SPLACE_HEAP:
+        *index = &facts->place_ids;
+        return place->type ? (const void *)th_resolve(place->type)
+                           : (const void *)facts;
+    case IR_SPLACE_UNKNOWN:
+        break;
+    }
+    *index = nullptr;
+    return nullptr;
+}
+
 static core_datalog_symbol_t
 place_symbol(ir_summary_facts_t *facts, const ir_splace_t *place)
 {
     core_dict_t *index = nullptr;
-    const void  *key   = nullptr;
-    switch (place->kind) {
-    case IR_SPLACE_PARAM:
-        index = &facts->param_place_ids;
-        key   = (const void *)(uintptr_t)(place->param + 1);
-        break;
-    case IR_SPLACE_GLOBAL:
-    case IR_SPLACE_THREAD:
-        index = &facts->place_ids;
-        key   = place->global;
-        break;
-    case IR_SPLACE_HEAP:
-        index = &facts->place_ids;
-        key   = place->type ? (const void *)th_resolve(place->type)
-                            : (const void *)facts;
-        break;
-    case IR_SPLACE_UNKNOWN:
-        break;
-    }
+    const void  *key   = place_key(facts, place, &index);
     if (!index || !key) {
         if (facts->unknown_place < 0) {
             facts->unknown_place = (int64_t)facts->places.len;
@@ -239,9 +306,82 @@ place_symbol(ir_summary_facts_t *facts, const ir_splace_t *place)
     return symbol;
 }
 
-static void add_summary_facts(ir_summary_facts_t *facts,
-                              core_datalog_symbol_t symbol,
-                              const ir_summary_t *summary);
+static void
+add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
+                  const ir_summary_t *summary, uint32_t mask)
+{
+    uint32_t flags = ir_summary_flags(summary) & mask;
+    for (uint32_t bit = 0; bit < sizeof(flag_names) / sizeof(*flag_names);
+         bit++)
+        if (flags & (1u << bit))
+            fact(facts, REL_FLAG, symbol, constant(facts, flag_names[bit]), 0);
+    for (uint32_t a = 0; a < ir_summary_access_count(summary); a++) {
+        const ir_saccess_t *access = ir_summary_access_at(summary, a);
+        core_datalog_symbol_t place = place_symbol(facts, &access->place);
+        for (uint32_t bit = 0;
+             bit < sizeof(access_names) / sizeof(*access_names); bit++)
+            if (access->flags & (1u << bit))
+                fact(facts, REL_ACCESS, symbol, place,
+                     constant(facts, access_names[bit]));
+    }
+}
+
+static void
+add_result_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
+                 const ir_summary_t *summary)
+{
+    ir_sreturn_t returned = ir_summary_return(summary);
+    if (returned.kind == IR_SRETURN_PARAM)
+        fact(facts, REL_RETURN_ALIAS, symbol, integer(facts, returned.param),
+             0);
+    const uint32_t *dependences = ir_summary_dependences(summary);
+    for (uint32_t o = 0; o < ir_summary_output_count(summary); o++) {
+        const ir_soutput_t *output = ir_summary_output_at(summary, o);
+        if (output->kind != IR_SOUTPUT_RESULT) continue;
+        for (uint32_t d = 0; d < output->data_count; d++) {
+            const ir_sinput_t *input = ir_summary_input_at(summary,
+                dependences[output->data_first + d]);
+            if (input && (input->kind == IR_SINPUT_VALUE
+                          || input->kind == IR_SINPUT_REFERENT))
+                fact(facts, REL_DEPENDENCE, symbol,
+                     integer(facts, input->param), 0);
+        }
+    }
+}
+
+static core_string_t
+record_name(th_type *record)
+{
+    core_string_t name = {0};
+    th_type *type = record ? th_resolve(record) : nullptr;
+    if (!type || th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, &name, nullptr, nullptr))
+        return (core_string_t){0};
+    return name;
+}
+
+static void
+add_field_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
+                const ir_summary_t *summary)
+{
+    for (uint32_t i = 0; i < ir_summary_field_count(summary); i++) {
+        const ir_sfield_t *field = ir_summary_field_at(summary, i);
+        core_string_t record = record_name(field->record);
+        if (!record.data) continue;
+        for (uint32_t bit = 0;
+             bit < sizeof(field_names) / sizeof(*field_names); bit++) {
+            if (!(field->flags & (1u << bit))) continue;
+            core_datalog_symbol_t tuple[4] = {
+                symbol, constant(facts, record),
+                field->name.data ? constant(facts, field->name)
+                                 : constant(facts, record),
+                constant(facts, field_names[bit]),
+            };
+            core_datalog_add_fact(facts->engine, facts->ids[REL_FIELD], 4,
+                                  tuple);
+        }
+    }
+}
 
 static core_datalog_symbol_t
 function_symbol(ir_summary_facts_t *facts, const ir_func_t *function,
@@ -256,45 +396,21 @@ function_symbol(ir_summary_facts_t *facts, const ir_func_t *function,
     core_list_push(facts->functions, function);
     core_dict_put(&facts->function_ids, key, (uintptr_t)next);
     core_datalog_symbol_t symbol = integer(facts, next);
-    fact(facts, REL_FUNCTION, symbol, 0, 0);
     if (!summary) return symbol;
-    add_summary_facts(facts, symbol, summary);
+    add_summary_facts(facts, symbol, summary, UINT32_MAX);
+    add_result_facts(facts, symbol, summary);
     const uint32_t entries[] = {IR_SUMMARY_CALLS_FINALIZERS,
                                 IR_SUMMARY_STARTS_THREADS};
     for (size_t e = 0; e < sizeof(entries) / sizeof(*entries); e++) {
         if (!(ir_summary_flags(summary) & entries[e])) continue;
         const ir_summary_t *entry = ir_summary_entries(facts->summaries,
                                                        entries[e]);
-        add_summary_facts(facts, symbol, entry ? entry
-                                               : facts->unknown_callee);
+        add_summary_facts(facts, symbol,
+                          entry ? entry : facts->unknown_callee,
+                          ~(uint32_t)(IR_SUMMARY_DIVERGES
+                                      | IR_SUMMARY_NO_RETURN));
     }
     return symbol;
-}
-
-static void
-add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
-                  const ir_summary_t *summary)
-{
-    uint32_t flags = ir_summary_flags(summary);
-    for (uint32_t bit = 0; bit < sizeof(flag_names) / sizeof(*flag_names);
-         bit++)
-        if (flags & (1u << bit))
-            fact(facts, REL_FLAG, symbol, constant(facts, flag_names[bit]), 0);
-    uint8_t traps = ir_summary_trap_kinds(summary);
-    for (uint32_t bit = 0; bit < sizeof(trap_names) / sizeof(*trap_names);
-         bit++)
-        if (traps & (1u << bit))
-            fact(facts, REL_TRAP_KIND, symbol,
-                 constant(facts, trap_names[bit]), 0);
-    for (uint32_t a = 0; a < ir_summary_access_count(summary); a++) {
-        const ir_saccess_t *access = ir_summary_access_at(summary, a);
-        core_datalog_symbol_t place = place_symbol(facts, &access->place);
-        for (uint32_t bit = 0;
-             bit < sizeof(access_names) / sizeof(*access_names); bit++)
-            if (access->flags & (1u << bit))
-                fact(facts, REL_ACCESS, symbol, place,
-                     constant(facts, access_names[bit]));
-    }
 }
 
 static core_datalog_symbol_t
@@ -319,8 +435,8 @@ add_callee(void *context, const ir_func_t *target, const ir_summary_t *summary)
 {
     callee_visit_t     *visit = context;
     ir_summary_facts_t *facts = visit->facts;
-    fact(facts, REL_CALL_TARGET, visit->site,
-         function_symbol(facts, target, summary), 0);
+    core_datalog_symbol_t callee = function_symbol(facts, target, summary);
+    fact(facts, REL_CALL_TARGET, visit->site, callee, 0);
     for (uint32_t a = 0; summary && a < ir_summary_access_count(summary);
          a++) {
         const ir_saccess_t *access = ir_summary_access_at(summary, a);
@@ -329,6 +445,9 @@ add_callee(void *context, const ir_func_t *target, const ir_summary_t *summary)
             fact(facts, REL_ADDRESSABLE_ARGUMENT, visit->site,
                  integer(facts, access->place.param), 0);
     }
+    for (uint32_t o = 1; summary && o < visit->call->n_operands; o++)
+        if (ir_summary_param_escape(summary, o - 1) & IR_SESCAPE_ADDRESS)
+            fact(facts, REL_ESCAPE, callee, integer(facts, o - 1), 0);
 }
 
 static bool
@@ -340,21 +459,17 @@ discarded(const ir_instr_t *in)
 }
 
 static void
-add_call(ir_summary_facts_t *facts, ir_func_t *function,
-         core_datalog_symbol_t caller, ir_instr_t *in)
+add_call(ir_summary_facts_t *facts, ir_func_t *function, ir_instr_t *in)
 {
     core_datalog_symbol_t site = site_symbol(facts, in);
-    fact(facts, REL_CALL, caller, site, 0);
     callee_visit_t visit = {facts, in, site};
     const ir_summary_t *callbacks = in->op == IR_OP_CALLBACK_INVOKE
         ? ir_summary_entries(facts->summaries, IR_SUMMARY_CALLS_CALLBACKS)
         : nullptr;
     if (!ir_summary_call_callees(facts->summaries, in, add_callee, &visit)) {
-        if (callbacks) add_callee(&visit, nullptr, callbacks);
-        else {
-            fact(facts, REL_CALL_UNKNOWN, site, 0, 0);
-            add_callee(&visit, nullptr, facts->unknown_callee);
-        }
+        fact(facts, REL_CALL_UNKNOWN, site, 0, 0);
+        add_callee(&visit, nullptr, callbacks ? callbacks
+                                              : facts->unknown_callee);
     }
     if (discarded(in)) fact(facts, REL_DISCARDED, site, 0, 0);
     for (uint32_t o = 1; o < in->n_operands; o++) {
@@ -368,32 +483,13 @@ add_call(ir_summary_facts_t *facts, ir_func_t *function,
 }
 
 static void
-add_accesses(ir_summary_facts_t *facts, ir_func_t *function,
-             core_datalog_symbol_t caller)
-{
-    ir_places_t *places = ir_func_places(function);
-    for (uint32_t a = 0; places && a < ir_places_access_count(places); a++) {
-        const ir_access_t *access = ir_places_access_at(places, a);
-        const uint32_t    *ids    = ir_places_access_places(places, access);
-        for (uint32_t p = 0; p < access->count; p++) {
-            ir_splace_t place;
-            if (!ir_summary_place_of(function, ir_place_at(places, ids[p]),
-                                     &place)) continue;
-            fact(facts, access->kind == IR_ACCESS_LOAD ? REL_LOAD : REL_STORE,
-                 caller, site_symbol(facts, access->instr),
-                 place_symbol(facts, &place));
-        }
-    }
-}
-
-static void
 add_rules(ir_summary_facts_t *facts)
 {
     for (size_t r = 0; r < sizeof(rules) / sizeof(*rules); r++) {
         core_datalog_rule_builder_t *builder = core_datalog_rule_builder_new();
         for (int b = -1; b < rules[r].body_count; b++) {
             const atom_t *atom = b < 0 ? &rules[r].head : &rules[r].body[b];
-            core_datalog_symbol_t arguments[3];
+            core_datalog_symbol_t arguments[4];
             for (uint8_t i = 0; i < atom->arity; i++) {
                 core_string_t name = atom->arguments[i];
                 bool variable = name.data[0] >= 'A' && name.data[0] <= 'Z';
@@ -437,20 +533,24 @@ ir_summary_facts_build(ir_summaries_t *summaries, ir_func_t *const *functions,
          e++)
         fact(facts, REL_RESULT_EFFECT, constant(facts, result_effects[e]), 0,
              0);
+    for (size_t e = 0; e < sizeof(assert_effects) / sizeof(*assert_effects);
+         e++)
+        fact(facts, REL_ASSERT_EFFECT, constant(facts, assert_effects[e]), 0,
+             0);
     for (size_t f = 0; f < count; f++) {
         ir_func_t *function = functions[f];
         if (!function->n_blocks) continue;
-        core_datalog_symbol_t caller = function_symbol(facts, function,
-            ir_summary_of(summaries, function));
+        const ir_summary_t *summary = ir_summary_of(summaries, function);
+        core_datalog_symbol_t member = function_symbol(facts, function,
+                                                       summary);
+        fact(facts, REL_MEMBER, member, 0, 0);
+        if (summary) add_field_facts(facts, member, summary);
         for (uint32_t b = 0; b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 ir_instr_t *in = function->blocks[b]->instrs[i];
                 if (in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
-                    add_call(facts, function, caller, in);
+                    add_call(facts, function, in);
             }
-        size_t scope = ir_analysis_scope_begin();
-        add_accesses(facts, function, caller);
-        ir_analysis_scope_end(scope);
     }
     add_rules(facts);
     core_datalog_run(facts->engine);
@@ -478,14 +578,23 @@ ir_summary_facts_engine(ir_summary_facts_t *facts)
 }
 
 static bool
+site_of(ir_summary_facts_t *facts, const ir_instr_t *call,
+        core_datalog_symbol_t *site)
+{
+    bool  found  = false;
+    void *symbol = facts
+        ? core_dict_get(&facts->site_symbols, call, &found) : nullptr;
+    if (found) *site = (core_datalog_symbol_t)(uintptr_t)symbol;
+    return found;
+}
+
+static bool
 site_holds(ir_summary_facts_t *facts, relation_t relation,
            const ir_instr_t *call)
 {
-    bool  found  = false;
-    void *symbol = core_dict_get(&facts->site_symbols, call, &found);
-    if (!found) return false;
-    core_datalog_symbol_t site = (core_datalog_symbol_t)(uintptr_t)symbol;
-    return core_datalog_contains(facts->engine, facts->ids[relation], &site);
+    core_datalog_symbol_t site;
+    return site_of(facts, call, &site)
+        && core_datalog_contains(facts->engine, facts->ids[relation], &site);
 }
 
 bool
@@ -501,9 +610,59 @@ ir_summary_facts_ignored_result(ir_summary_facts_t *facts,
     return site_holds(facts, REL_IGNORED_RESULT, call);
 }
 
+bool
+ir_summary_facts_call_diverges(ir_summary_facts_t *facts,
+                               const ir_instr_t *call)
+{
+    return site_holds(facts, REL_CALL_DIVERGES, call);
+}
+
+bool
+ir_summary_facts_call_reads_entry(ir_summary_facts_t *facts,
+                                  const ir_instr_t *call,
+                                  const ir_splace_t *place)
+{
+    core_datalog_symbol_t site;
+    if (!site_of(facts, call, &site)) return true;
+    if (core_datalog_contains(facts->engine, facts->ids[REL_CALL_READS_UNSEEN],
+                              &site)
+        && ir_summary_place_unseen(facts->summaries, place))
+        return true;
+    core_dict_t *index = nullptr;
+    const void  *key   = place_key(facts, place, &index);
+    bool         found = false;
+    void        *id    = index && key ? core_dict_get(index, key, &found)
+                                      : nullptr;
+    if (!found) return false;
+    core_datalog_symbol_t tuple[2] = {site,
+                                      integer(facts, (int64_t)(uintptr_t)id)};
+    return core_datalog_contains(facts->engine,
+                                 facts->ids[REL_CALL_READS_ENTRY], tuple);
+}
+
+uint8_t
+ir_summary_facts_field_use(ir_summary_facts_t *facts, core_string_t record,
+                           core_string_t field)
+{
+    if (!facts) return 0;
+    core_datalog_symbol_t tuple[2] = {constant(facts, record),
+                                      constant(facts, field)};
+    uint8_t flags = 0;
+    if (core_datalog_contains(facts->engine, facts->ids[REL_RECORD_READ],
+                              tuple)
+        || core_datalog_contains(facts->engine, facts->ids[REL_FIELD_READ],
+                                 tuple))
+        flags |= IR_SFIELD_READ;
+    if (core_datalog_contains(facts->engine, facts->ids[REL_FIELD_WRITTEN],
+                              tuple))
+        flags |= IR_SFIELD_WRITE;
+    return flags;
+}
+
 typedef struct {
-    ir_summary_facts_t *facts;
-    ir_effect_reason_t *reason;
+    ir_summary_facts_t     *facts;
+    ir_summary_explain_fn   visit;
+    void                   *context;
 } explain_t;
 
 static int64_t
@@ -514,48 +673,139 @@ symbol_index(ir_summary_facts_t *facts, core_datalog_symbol_t symbol)
     return value.is_ok ? value.result.value : -1;
 }
 
+static const ir_func_t *
+function_at(ir_summary_facts_t *facts, core_datalog_symbol_t symbol)
+{
+    int64_t index = symbol_index(facts, symbol);
+    return index >= 0 && (size_t)index < facts->functions.len
+        ? facts->functions.data[index] : nullptr;
+}
+
 static bool
-record_reason(core_datalog_relation_id_t relation,
-              const core_datalog_symbol_t *tuple, int32_t arity, int32_t rule,
-              int32_t depth, void *context)
+record_step(core_datalog_relation_id_t relation,
+            const core_datalog_symbol_t *tuple, int32_t arity, int32_t rule,
+            int32_t depth, void *context)
 {
     (void)arity;
     (void)rule;
-    (void)depth;
     explain_t          *explain = context;
     ir_summary_facts_t *facts   = explain->facts;
-    ir_effect_reason_t *reason  = explain->reason;
-    if (reason->kind == IR_EFFECT_REASON_UNKNOWN_CALLEE) return false;
+    ir_summary_step_t   step    = {.depth = depth};
     if (relation == facts->ids[REL_OUT_ARGUMENT])
-        reason->kind = IR_EFFECT_REASON_OUT_ARGUMENT;
+        step.kind = IR_SUMMARY_STEP_OUT_ARGUMENT;
+    else if (relation == facts->ids[REL_DISCARDED])
+        step.kind = IR_SUMMARY_STEP_DISCARDED;
     else if (relation == facts->ids[REL_CALL_TARGET]) {
+        step.callee = function_at(facts, tuple[1]);
+        step.kind   = step.callee ? IR_SUMMARY_STEP_CALLS
+                                  : IR_SUMMARY_STEP_CALLS_UNSEEN;
+    } else if (relation == facts->ids[REL_FLAG]) {
+        step.callee = function_at(facts, tuple[0]);
+        step.kind   = IR_SUMMARY_STEP_FLAG;
+        step.name   = core_datalog_symbol_name(facts->engine, tuple[1]);
+    } else if (relation == facts->ids[REL_ACCESS]) {
         int64_t index = symbol_index(facts, tuple[1]);
-        if (index >= 0 && (size_t)index < facts->functions.len)
-            reason->callee = facts->functions.data[index];
-        if (!reason->callee) reason->kind = IR_EFFECT_REASON_UNKNOWN_CALLEE;
-    } else if (relation == facts->ids[REL_FLAG])
-        reason->kind = IR_EFFECT_REASON_CALLEE_CALLS_UNKNOWN;
-    else if (relation == facts->ids[REL_ACCESS]) {
-        int64_t index = symbol_index(facts, tuple[1]);
-        reason->kind = IR_EFFECT_REASON_CALLEE_WRITES;
+        step.callee = function_at(facts, tuple[0]);
+        step.kind   = IR_SUMMARY_STEP_ACCESS;
+        step.name   = core_datalog_symbol_name(facts->engine, tuple[2]);
         if (index >= 0 && (size_t)index < facts->places.len)
-            reason->place = facts->places.data[index];
-    }
-    return true;
+            step.place = facts->places.data[index];
+    } else if (relation == facts->ids[REL_ESCAPE]) {
+        step.callee = function_at(facts, tuple[0]);
+        step.kind   = IR_SUMMARY_STEP_ESCAPE;
+        step.param  = (uint32_t)symbol_index(facts, tuple[1]);
+    } else if (relation == facts->ids[REL_ADDRESSABLE_ARGUMENT]) {
+        step.kind  = IR_SUMMARY_STEP_ADDRESSABLE;
+        step.param = (uint32_t)symbol_index(facts, tuple[1]);
+    } else if (relation == facts->ids[REL_PLACE_KIND]) {
+        int64_t index = symbol_index(facts, tuple[0]);
+        step.kind = IR_SUMMARY_STEP_PLACE;
+        if (index >= 0 && (size_t)index < facts->places.len)
+            step.place = facts->places.data[index];
+    } else if (relation == facts->ids[REL_RETURN_ALIAS]) {
+        step.callee = function_at(facts, tuple[0]);
+        step.kind   = IR_SUMMARY_STEP_RETURNS;
+        step.param  = (uint32_t)symbol_index(facts, tuple[1]);
+    } else if (relation == facts->ids[REL_DEPENDENCE]) {
+        step.callee = function_at(facts, tuple[0]);
+        step.kind   = IR_SUMMARY_STEP_DEPENDS;
+        step.param  = (uint32_t)symbol_index(facts, tuple[1]);
+    } else
+        step.kind = IR_SUMMARY_STEP_RULE;
+    step.relation = core_datalog_relation_name(facts->engine, relation);
+    return explain->visit(explain->context, &step);
+}
+
+static bool
+explain_site(ir_summary_facts_t *facts, relation_t relation,
+             const ir_instr_t *call, ir_summary_explain_fn visit,
+             void *context)
+{
+    core_datalog_symbol_t site;
+    explain_t explain = {facts, visit, context};
+    return site_of(facts, call, &site)
+        && core_datalog_explain(facts->engine, facts->ids[relation], &site,
+                                record_step, &explain);
 }
 
 bool
 ir_summary_facts_explain_side_effect(ir_summary_facts_t *facts,
                                      const ir_instr_t *call,
-                                     ir_effect_reason_t *reason)
+                                     ir_summary_explain_fn visit,
+                                     void *context)
 {
-    *reason = (ir_effect_reason_t){.kind = IR_EFFECT_REASON_NONE};
-    bool  found  = false;
-    void *symbol = core_dict_get(&facts->site_symbols, call, &found);
-    if (!found) return false;
-    core_datalog_symbol_t site = (core_datalog_symbol_t)(uintptr_t)symbol;
-    explain_t explain = {facts, reason};
-    return core_datalog_explain(facts->engine, facts->ids[REL_SIDE_EFFECT],
-                                &site, record_reason, &explain)
-        && reason->kind != IR_EFFECT_REASON_NONE;
+    return explain_site(facts, REL_SIDE_EFFECT, call, visit, context);
+}
+
+bool
+ir_summary_facts_explain_divergence(ir_summary_facts_t *facts,
+                                    const ir_instr_t *call,
+                                    ir_summary_explain_fn visit,
+                                    void *context)
+{
+    return explain_site(facts, REL_CALL_DIVERGES, call, visit, context);
+}
+
+typedef struct {
+    ir_summary_facts_t   *facts;
+    core_datalog_symbol_t site;
+    relation_t            relation;
+    ir_summary_explain_fn visit;
+    void                 *context;
+    bool                  ok;
+} result_visit_t;
+
+static bool
+explain_result_tuple(const core_datalog_symbol_t *tuple, int32_t arity,
+                     void *context)
+{
+    (void)arity;
+    result_visit_t *walk = context;
+    if (tuple[0] != walk->site) return true;
+    explain_t explain = {walk->facts, walk->visit, walk->context};
+    walk->ok = core_datalog_explain(walk->facts->engine,
+                                    walk->facts->ids[walk->relation], tuple,
+                                    record_step, &explain);
+    return walk->ok;
+}
+
+bool
+ir_summary_facts_explain_ignored_result(ir_summary_facts_t *facts,
+                                        const ir_instr_t *call,
+                                        ir_summary_explain_fn visit,
+                                        void *context)
+{
+    result_visit_t walk = {.facts = facts, .visit = visit,
+                           .context = context, .ok = true};
+    if (!site_of(facts, call, &walk.site)) return false;
+    if (!explain_site(facts, REL_IGNORED_RESULT, call, visit, context))
+        return false;
+    const relation_t sources[] = {REL_RESULT_ALIAS, REL_RESULT_INPUT};
+    for (size_t s = 0; walk.ok && s < sizeof(sources) / sizeof(*sources);
+         s++) {
+        walk.relation = sources[s];
+        core_datalog_query(facts->engine, facts->ids[sources[s]],
+                           explain_result_tuple, &walk);
+    }
+    return true;
 }

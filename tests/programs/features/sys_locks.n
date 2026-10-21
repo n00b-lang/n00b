@@ -1,0 +1,39 @@
+import sys.threads
+import sys.locks
+
+var guard: sys.locks.Mutex
+var table: sys.locks.Rw_Lock
+var total: int = 0
+var finished: Atomic[int] = 0
+
+func worker(argument: Ref[byte]) -> Ref[byte] {
+    var round: int = 0
+    while round < 1000 {
+        sys.locks.mutex_lock(ref guard)
+        total += 1
+        sys.locks.mutex_unlock(ref guard)
+        round += 1
+    }
+    sys.locks.rw_write_lock(ref table)
+    sys.locks.rw_read_lock(ref table)
+    sys.locks.rw_unlock(ref table)
+    sys.locks.rw_unlock(ref table)
+    __atomic_fetch_add(ref finished, 1)
+    return argument
+}
+
+var seed: byte = 0
+sys.locks.rw_lock_init(ref table)
+require sys.threads.thread_start(ref worker, ref seed)
+require sys.threads.thread_start(ref worker, ref seed)
+while __atomic_load(ref finished) < 2 {
+    sys.threads.thread_yield()
+}
+sys.locks.mutex_lock(ref guard)
+sys.locks.mutex_lock(ref guard)
+require total == 2000
+sys.locks.mutex_unlock(ref guard)
+sys.locks.mutex_unlock(ref guard)
+require sys.locks.mutex_try_lock(ref guard)
+sys.locks.mutex_unlock(ref guard)
+__fd_write(2, "ok")

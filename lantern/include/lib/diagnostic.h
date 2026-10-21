@@ -47,6 +47,10 @@ void core_diagnostics_set_unit(core_diagnostics_t *diagnostics,
                                const core_translation_unit_t *unit);
 void core_diagnostics_set_policy(core_diagnostics_t *diagnostics,
                                  core_diag_policy_fn policy, void *context);
+typedef bool (*core_diag_filter_fn)(void *context,
+                                    const core_diagnostic_t *diagnostic);
+void core_diagnostics_set_filter(core_diagnostics_t *diagnostics,
+                                 core_diag_filter_fn filter, void *context);
 bool core_diagnostics_report(core_diagnostics_t *diagnostics,
                              const core_translation_unit_t *unit,
                              core_diag_severity_t severity, core_string_t code,

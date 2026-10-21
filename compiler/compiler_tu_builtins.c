@@ -1,3 +1,4 @@
+#include "compiler_axioms.h"
 #include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
 #include "enum_value.h"
@@ -16,156 +17,27 @@ n00bb_builtin_reference_function(parse_sym_entry_t *symbol)
                               CORE_STRING_STATIC("ref_write")));
 }
 
-typedef struct {
-    core_string_t     name;
-    core_string_t     native;
-    uint32_t          effects;
-    uint8_t           reads;
-    uint8_t           writes;
-    bool              collection_free;
-    ir_sreturn_kind_t returns;
-} builtin_native_name_t;
-
-#define NATIVE(name, native, effects, reads, writes)                       \
-    {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), effects, reads, \
-     writes, false, IR_SRETURN_NONE}
-#define COLLECTION_FREE_NATIVE(name, native, effects, reads, writes)       \
-    {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), effects, reads, \
-     writes, true, IR_SRETURN_NONE}
-#define RETURNING_NATIVE(name, native, collection_free, returns)           \
-    {CORE_STRING_STATIC(name), CORE_STRING_STATIC(native), 0, 0, 0,       \
-     collection_free, returns}
-#define NATIVE_IO (IR_SUMMARY_MAY_IO)
-#define NATIVE_BLOCKING_IO (IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_BLOCK)
-#define NATIVE_ENTERS (IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE       \
-                       | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_MAY_IO)
-#define NATIVE_ENTRY_FLAGS (IR_SUMMARY_CALLS_UNKNOWN                       \
-                            | IR_SUMMARY_CALLS_FINALIZERS                  \
-                            | IR_SUMMARY_STARTS_THREADS)
-
-static const builtin_native_name_t builtin_native_names[] = {
-    RETURNING_NATIVE("__bitptr", "n00bb_bitptr", true, IR_SRETURN_PARAM),
-    NATIVE("__os_page_size", "n00b_os_page_size", 0, 0, 0),
-    NATIVE("__gc_enter_blocking",
-           "sys.internal.gc.alloc.enter_blocking_runtime", 0, 0, 0),
-    NATIVE("__gc_leave_blocking",
-           "sys.internal.gc.alloc.leave_blocking_runtime", 0, 0, 0),
-    NATIVE("__os_env_count", "n00b_os_env_count", 0, 0, 0),
-    NATIVE("__os_env_at", "n00b_os_env_at", 0, 0, 0),
-    NATIVE("__os_arg_count", "n00b_os_arg_count", 0, 0, 0),
-    NATIVE("__os_arg_at", "n00b_os_arg_at", 0, 0, 0),
-    NATIVE("__os_fd_is_tty", "n00b_os_fd_is_tty", NATIVE_IO, 0, 0),
-    NATIVE("__os_terminal_size", "n00b_os_terminal_size", NATIVE_IO, 0,
-           0x6),
-    NATIVE("__os_pipe", "n00b_os_pipe", NATIVE_IO, 0, 0x3),
-    NATIVE("__os_open", "n00b_os_open", NATIVE_BLOCKING_IO, 0x1, 0),
-    NATIVE("__os_read", "n00b_os_read", NATIVE_BLOCKING_IO, 0, 0x2),
-    NATIVE("__os_close", "n00b_os_close", NATIVE_IO, 0, 0),
-    NATIVE("__os_exit", "n00b_os_exit", NATIVE_IO | IR_SUMMARY_DIVERGES, 0,
-           0),
-    NATIVE("__os_futex_wait", "n00b_os_futex_wait", IR_SUMMARY_MAY_BLOCK,
-           0x1, 0),
-    NATIVE("__os_futex_wake_all", "n00b_os_futex_wake_all", 0, 0, 0),
-    NATIVE("__os_seek", "n00b_os_seek", NATIVE_IO, 0, 0),
-    NATIVE("__write_bytes", "n00bb_runtime_write_bytes", NATIVE_BLOCKING_IO,
-           0x2, 0),
-    NATIVE("__os_thread_yield", "n00b_os_thread_yield", 0, 0, 0),
-    NATIVE("__os_thread_fence", "n00b_os_thread_fence", 0, 0, 0),
-    NATIVE("__os_thread_id", "n00b_os_thread_id", 0, 0, 0),
-    NATIVE("__os_thread_is_main", "n00b_os_thread_is_main", 0, 0, 0),
-    NATIVE("__os_thread_start", "n00b_os_thread_start",
-           NATIVE_ENTERS | IR_SUMMARY_STARTS_THREADS, 0, 0),
-    COLLECTION_FREE_NATIVE("__function_effects", "n00bb_function_effects", 0,
-                           0, 0),
-    NATIVE("__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
-           0, 0, 0),
-    NATIVE("__os_stack_address", "n00b_os_stack_address", 0, 0, 0),
-    NATIVE("__os_stack_red_zone_bytes", "n00b_os_stack_red_zone_bytes", 0,
-           0, 0),
-    NATIVE("__os_thread_control_self", "n00b_os_thread_control_self", 0, 0,
-           0),
-    NATIVE("__os_thread_capture_self", "n00b_os_thread_capture_self", 0, 0,
-           0x1),
-    NATIVE("__os_thread_suspend", "n00b_os_thread_suspend",
-           IR_SUMMARY_MAY_BLOCK, 0, 0x2),
-    NATIVE("__os_thread_resume", "n00b_os_thread_resume", 0, 0x2, 0),
-    NATIVE("__os_now_ns", "n00b_os_now_ns", 0, 0, 0),
-    NATIVE("__os_cpu_relax", "n00b_os_cpu_relax", 0, 0, 0),
-    NATIVE("__panic_trace", "n00bb_runtime_panic_trace", NATIVE_IO, 0, 0),
-    RETURNING_NATIVE("__os_map_zeroed", "n00b_os_map_zeroed", false,
-                     IR_SRETURN_FRESH_EXTERNAL),
-    NATIVE("__os_unmap", "n00b_os_unmap", 0, 0, 0x1),
-    NATIVE("__os_protect", "n00b_os_protect", 0, 0, 0x1),
-    NATIVE("__abi_type", "n00b_builtin_abi_type", 0, 0, 0),
-    NATIVE("__abi_field", "n00b_builtin_abi_field", 0, 0, 0),
-    NATIVE("__abi_arm", "n00b_builtin_abi_arm", 0, 0, 0),
-    NATIVE("__abi_physical_run", "n00b_builtin_abi_physical_run", 0, 0, 0),
-    NATIVE("__abi_trace", "n00b_builtin_abi_trace", 0, 0, 0),
-    NATIVE("__abi_trace_child", "n00b_builtin_abi_trace_child", 0, 0, 0),
-    NATIVE("__abi_trace_arm", "n00b_builtin_abi_trace_arm", 0, 0, 0),
-    NATIVE("__abi_tag_extractor", "n00b_builtin_abi_tag_extractor", 0, 0, 0),
-    NATIVE("__abi_layout", "n00b_builtin_abi_layout", 0, 0, 0),
-    NATIVE("__abi_frame_layout", "n00b_builtin_abi_frame_layout", 0, 0, 0),
-    NATIVE("__abi_storage", "n00b_builtin_abi_storage", 0, 0, 0),
-    NATIVE("__abi_symbol", "n00b_builtin_abi_symbol", 0, 0, 0),
-    NATIVE("__abi_module", "n00b_builtin_abi_module", 0, 0, 0),
-    NATIVE("__abi_baked_node", "n00b_builtin_abi_baked_node", 0, 0, 0),
-    NATIVE("__abi_function", "n00b_builtin_abi_function", 0, 0, 0),
-    NATIVE("__abi_type_for", "n00b_builtin_abi_type_for", 0, 0, 0),
-    NATIVE("__abi_baked_address", "n00b_abi_baked_address", 0, 0, 0),
-    NATIVE("__native_symbol_name", "n00b_builtin_native_symbol_name", 0, 0,
-           0),
-    NATIVE("__abi_native_frame_at", "n00b_builtin_abi_native_frame_at", 0, 0,
-           0),
-    NATIVE("__abi_native_frame_root_offset",
-           "n00b_builtin_abi_native_frame_root_offset", 0, 0, 0),
-    NATIVE("__abi_storage_count", "n00b_builtin_abi_storage_count", 0, 0, 0),
-    NATIVE("__abi_storage_address", "n00b_builtin_abi_storage_address", 0, 0,
-           0),
-    NATIVE("__abi_baked_node_count", "n00b_builtin_abi_baked_node_count", 0,
-           0, 0),
-    NATIVE("__abi_baked_node_address", "n00b_builtin_abi_baked_node_address",
-           0, 0, 0),
-    NATIVE("__abi_string_backing_at", "n00b_builtin_abi_string_backing_at", 0,
-           0x1, 0),
-    NATIVE("__abi_range_index", "n00b_builtin_abi_range_index", 0, 0, 0),
-    NATIVE("__abi_unary_type", "n00b_builtin_abi_unary_type", 0, 0, 0),
-    NATIVE("__abi_type_specializes", "n00b_builtin_abi_type_specializes", 0,
-           0, 0),
-    NATIVE("__abi_type_argument_type", "n00b_builtin_abi_type_argument_type",
-           0, 0, 0),
-    NATIVE("__abi_named_type", "n00b_builtin_abi_named_type", 0, 0, 0),
-    RETURNING_NATIVE("__box_of", "n00bb_box_of", false, IR_SRETURN_PARAM),
-    NATIVE("__result_box", "n00bb_result_box", 0, 0, 0),
-    RETURNING_NATIVE("__box_as", "n00bb_box_as", false, IR_SRETURN_UNKNOWN),
-    NATIVE("__abi_bytes", "n00b_builtin_abi_bytes", 0, 0, 0),
-    COLLECTION_FREE_NATIVE("__abi_ref_address",
-                           "n00b_builtin_abi_ref_address", 0, 0, 0),
-    COLLECTION_FREE_NATIVE("__load_le_u64", "n00bb_load_le_u64", 0, 0x1, 0),
-    COLLECTION_FREE_NATIVE("__load_le_u32", "n00bb_load_le_u32", 0, 0x1, 0),
-    NATIVE("__gc_invoke_finalizer", "n00b_gc_finalize",
-           NATIVE_ENTERS | IR_SUMMARY_CALLS_FINALIZERS, 0, 0),
-    NATIVE("__array_length", "__n00bb_array_length", 0, 0x1, 0),
-    NATIVE("__array_prefix", "__n00bb_array_prefix", 0, 0x1, 0x1),
-    NATIVE("__array_clear", "__n00bb_array_clear", 0, 0, 0x1),
-    NATIVE("__ffi_borrow", "n00b_ffi_borrow", 0, 0x1, 0),
-    NATIVE("__ffi_release", "n00b_ffi_release", 0, 0, 0),
-    NATIVE("__ffi_unwind_jump", "n00b_ffi_unwind_jump", IR_SUMMARY_DIVERGES,
-           0, 0),
-};
-
-#undef NATIVE
-#undef COLLECTION_FREE_NATIVE
-#undef RETURNING_NATIVE
+const n00bb_axiom_t *
+n00bb_axiom_of_symbol(parse_sym_entry_t *symbol)
+{
+    for (size_t i = 0; symbol && i < n00bb_axiom_count(); i++) {
+        const n00bb_axiom_t *axiom = n00bb_axiom_at(i);
+        if (axiom->key == N00BB_AXIOM_BINDING
+            ? parse_sym_binding(symbol, axiom->name) != nullptr
+            : axiom->key == N00BB_AXIOM_BUILTIN
+                && n00bb_builtin_function(symbol)
+                && core_string_eq(axiom->name, symbol->name))
+            return axiom;
+    }
+    return nullptr;
+}
 
 ir_summary_t *
 n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
 {
     if (!function || function->n_blocks) return nullptr;
-    for (size_t i = 0; i < sizeof(builtin_native_names)
-                               / sizeof(builtin_native_names[0]); i++) {
-        const builtin_native_name_t *native = &builtin_native_names[i];
-        if (!core_string_eq(native->native, function->name)) continue;
+    const n00bb_axiom_t *native = n00bb_axiom_of_function(function);
+    if (native && native->key == N00BB_AXIOM_NATIVE) {
         ir_summary_t *summary = ir_summary_new(summaries, function);
         ir_summary_set_flags(summary, native->effects
             | (native->collection_free ? 0 : IR_SUMMARY_MAY_COLLECT));
@@ -184,7 +56,7 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
             ir_summary_add_access(summary,
                 (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
                 IR_SACCESS_READ | IR_SACCESS_WRITE | IR_SACCESS_READS_ENTRY);
-        for (uint32_t p = 0; (native->effects & NATIVE_ENTRY_FLAGS)
+        for (uint32_t p = 0; (native->effects & N00BB_AXIOM_ENTRY_FLAGS)
              && p < th_func_nparams(function->type); p++)
             ir_summary_set_param_escape(summary, p,
                 IR_SESCAPE_ADDRESS | IR_SESCAPE_REFERENT);
@@ -196,27 +68,38 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         ir_sflow_release(&flow);
         return summary;
     }
-    return nullptr;
+    if (!n00bb_axiom_pure_native(function)) return nullptr;
+    ir_summary_t *summary = ir_summary_new(summaries, function);
+    for (uint32_t p = 0; p < th_func_nparams(function->type); p++)
+        ir_summary_add_access(summary, (ir_splace_t){
+            .kind = IR_SPLACE_PARAM, .param = p},
+            IR_SACCESS_READ | IR_SACCESS_READS_ENTRY);
+    ir_summary_set_return(summary,
+        (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
+    ir_sflow_t flow;
+    n00bb_buffer_native_flow(function, &flow);
+    ir_summary_set_flow(summary, &flow);
+    ir_sflow_release(&flow);
+    return summary;
 }
 
 bool
 n00bb_native_calls_n00b(const ir_func_t *function)
 {
-    for (size_t i = 0; function && !function->n_blocks
-         && i < sizeof(builtin_native_names)
-                    / sizeof(builtin_native_names[0]); i++)
-        if (core_string_eq(builtin_native_names[i].native, function->name))
-            return builtin_native_names[i].effects & NATIVE_ENTRY_FLAGS;
-    return false;
+    const n00bb_axiom_t *native = n00bb_axiom_of_function(function);
+    return native && native->key == N00BB_AXIOM_NATIVE
+        && (native->effects & N00BB_AXIOM_ENTRY_FLAGS);
 }
 
 static const core_string_t *
 builtin_native_name(core_string_t name)
 {
-    for (size_t i = 0; i < sizeof(builtin_native_names)
-                               / sizeof(builtin_native_names[0]); i++)
-        if (core_string_eq(builtin_native_names[i].name, name))
-            return &builtin_native_names[i].native;
+    for (size_t i = 0; i < n00bb_axiom_count(); i++) {
+        const n00bb_axiom_t *axiom = n00bb_axiom_at(i);
+        if (axiom->key == N00BB_AXIOM_NATIVE
+            && core_string_eq(axiom->name, name))
+            return &axiom->native;
+    }
     return nullptr;
 }
 
@@ -410,6 +293,8 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
         if (!symbol || !parse_sym_set_binding(symbol,
                 CORE_STRING_STATIC("n00bb.generated-extern"), symbol))
             return false;
+        if (natives.items[i].pure)
+            n00bb_axiom_note_pure_native(natives.items[i].symbol);
     }
     return true;
 }

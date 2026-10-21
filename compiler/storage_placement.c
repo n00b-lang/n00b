@@ -1,4 +1,5 @@
 #include "storage_placement.h"
+#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/pass.h"
 #include "lib/alloc.h"
@@ -257,7 +258,8 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
         ir_local_t **moved = core_alloc_array(ir_local_t *, locals + 1);
         bool *entry = core_alloc_array(bool, locals + 1);
         uint32_t count = 0;
-        ir_doms_t *doms = ir_doms_of(function);
+        size_t scope = ir_analysis_scope_begin();
+        ir_doms_t *doms = ir_func_doms(function);
         for (uint32_t l = 0; doms && l < locals; l++) {
             ir_local_t *local = function->locals[l];
             if (!local->address_taken
@@ -265,8 +267,8 @@ n00bb_place_storage(ir_ctx_t *context, ir_summaries_t *summaries,
             entry[count] = needs_entry_storage(doms, function, local);
             moved[count++] = local;
         }
-        if (doms) ir_doms_free(doms);
         bool ok = doms != nullptr;
+        ir_analysis_scope_end(scope);
         for (uint32_t m = 0; ok && m < count; m++)
             ok = move_local_to_storage(&placement, types, moved[m],
                                        entry[m]);

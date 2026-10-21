@@ -8,6 +8,8 @@
 
 #include "ir/ir.h"
 #include "ir/layout.h"
+#include "ir/liveness.h"
+#include "lib/alloc.h"
 #include "ir/typelang.h"
 #include "lib/hash.h"
 #include "th/typehash.h"
@@ -93,6 +95,94 @@ n00bb_frame_traced_value(ir_func_t *function, th_type *type)
 }
 
 static inline bool
+n00bb_frame_call_point(void *context, const ir_instr_t *instruction)
+{
+    (void)context;
+    switch (instruction->op) {
+    case IR_OP_CONST: case IR_OP_ENUM_CONST: case IR_OP_ENUM_VALUE:
+    case IR_OP_ENUM_FROM_VALUE: case IR_OP_BITSET_CONST:
+    case IR_OP_BITSET_UNION: case IR_OP_BITSET_DIFFERENCE:
+    case IR_OP_BITSET_INTERSECTION: case IR_OP_BITSET_XOR:
+    case IR_OP_BITSET_COMPLEMENT: case IR_OP_BITSET_CONTAINS:
+    case IR_OP_BITSET_IS_EMPTY: case IR_OP_BITSET_VALUE:
+    case IR_OP_BITSET_FROM_VALUE: case IR_OP_PARAM_PRESENT: case IR_OP_UNDEF:
+    case IR_OP_COPY: case IR_OP_ADDRESS_OF: case IR_OP_ALLOCA: case IR_OP_LOAD:
+    case IR_OP_FIELD: case IR_OP_INDEX: case IR_OP_SEQUENCE_LENGTH:
+    case IR_OP_OFFSET: case IR_OP_DIFF: case IR_OP_EXTRACT:
+    case IR_OP_EXTRACT_INDEX: case IR_OP_INSERT: case IR_OP_VARIANT_MAKE:
+    case IR_OP_VARIANT_TAG: case IR_OP_VARIANT_PAYLOAD:
+    case IR_OP_OPTION_IS_NIL: case IR_OP_NIL: case IR_OP_OPTION_NONE:
+    case IR_OP_OPTION_SOME: case IR_OP_OPTION_GET: case IR_OP_ADD:
+    case IR_OP_SUB: case IR_OP_MUL: case IR_OP_DIV: case IR_OP_REM:
+    case IR_OP_NEG: case IR_OP_AND: case IR_OP_OR: case IR_OP_XOR:
+    case IR_OP_NOT: case IR_OP_SHL: case IR_OP_SHR: case IR_OP_ROL:
+    case IR_OP_ROR: case IR_OP_CLZ: case IR_OP_CTZ: case IR_OP_POPCOUNT:
+    case IR_OP_BITREVERSE: case IR_OP_BYTESWAP: case IR_OP_EQ: case IR_OP_NE:
+    case IR_OP_LT: case IR_OP_LE: case IR_OP_GT: case IR_OP_GE:
+    case IR_OP_CAST: case IR_OP_BITCAST: case IR_OP_NOMINAL_CAST:
+    case IR_OP_SELECT: case IR_OP_PHI: case IR_OP_SIZEOF: case IR_OP_ALIGNOF:
+    case IR_OP_OFFSETOF: case IR_OP_TYPEHASH: case IR_OP_ARMTAG:
+    case IR_OP_TYPE_INDEX: case IR_OP_JUMP: case IR_OP_BRANCH:
+    case IR_OP_SWITCH: case IR_OP_RETURN: case IR_OP_FAIL: case IR_OP_TRAP:
+    case IR_OP_UNREACHABLE:
+        return false;
+    default:
+        return true;
+    }
+}
+
+static inline bool
+n00bb_frame_instr_candidate(ir_func_t *function, bool pointers_only,
+                            const ir_value_t *value)
+{
+    return value
+        && (n00bb_frame_native_pointer(function->owner, value->type)
+            || (!pointers_only
+                && n00bb_frame_traced_value(function, value->type)));
+}
+
+typedef struct {
+    ir_value_t **values;
+    bool *across;
+} n00bb_frame_live_roots_t;
+
+static inline bool
+n00bb_frame_live_roots(ir_func_t *function, bool pointers_only,
+                       n00bb_frame_live_roots_t *live)
+{
+    size_t total = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++) {
+        ir_block_t *block = function->blocks[b];
+        if (!block) return false;
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
+            ir_instr_t *instruction = block->instrs[i];
+            if (!instruction) return false;
+            ir_value_t *value = instruction->dest_kind == IR_DEST_VALUE
+                ? instruction->dest : nullptr;
+            if (value && !value->type) return false;
+            total += n00bb_frame_instr_candidate(function, pointers_only,
+                                                 value);
+        }
+    }
+    live->values = core_alloc_array(ir_value_t *, total ? total : 1);
+    live->across = core_alloc_array(bool, total ? total : 1);
+    size_t next = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *instruction = function->blocks[b]->instrs[i];
+            ir_value_t *value = instruction->dest_kind == IR_DEST_VALUE
+                ? instruction->dest : nullptr;
+            if (n00bb_frame_instr_candidate(function, pointers_only, value))
+                live->values[next++] = value;
+        }
+    if (!ir_live_across_points(ir_func_liveness(function), live->values,
+                               total, n00bb_frame_call_point, nullptr,
+                               live->across))
+        for (size_t v = 0; v < total; v++) live->across[v] = true;
+    return true;
+}
+
+static inline bool
 n00bb_frame_roots_filtered(ir_func_t *function, bool pointers_only,
                            n00bb_frame_root_visit_fn visit, void *context,
                            size_t *count)
@@ -119,42 +209,43 @@ n00bb_frame_roots_filtered(ir_func_t *function, bool pointers_only,
                             nullptr, local, nullptr)) return false;
         next++;
     }
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
+    n00bb_frame_live_roots_t live = {0};
+    if (!n00bb_frame_live_roots(function, pointers_only, &live)) return false;
+    size_t candidate = 0;
+    bool ok = true;
+    for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
-        if (!block) return false;
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
+        for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
             ir_instr_t *instruction = block->instrs[i];
-            if (!instruction) return false;
             ir_value_t *value = instruction->dest_kind == IR_DEST_VALUE
                 ? instruction->dest : nullptr;
-            if (!value) continue;
-            if (!value->type) return false;
-            if (!n00bb_frame_native_pointer(function->owner, value->type)
-                && (pointers_only
-                    || !n00bb_frame_traced_value(function, value->type)))
+            if (!n00bb_frame_instr_candidate(function, pointers_only, value))
                 continue;
-            if (visit && !visit(context, N00BB_FRAME_ROOT_INSTR, next,
-                                value, nullptr, instruction)) return false;
-            next++;
+            if (live.across[candidate++]) {
+                ok = !visit || visit(context, N00BB_FRAME_ROOT_INSTR, next,
+                                     value, nullptr, instruction);
+                next++;
+            }
             th_type *stored = n00bb_frame_root_type(
                 N00BB_FRAME_ROOT_STORAGE, nullptr, nullptr, instruction);
             bool stack = instruction->op == IR_OP_ALLOCA
                 || (instruction->op == IR_OP_ALLOC
                     && ir_allocation_has_only_local_uses(function,
                                                           instruction));
-            if (stack && stored
+            if (ok && stack && stored
                 && (n00bb_frame_native_pointer(function->owner, stored)
                     || (!pointers_only
                         && n00bb_frame_traced_value(function, stored)))) {
-                if (visit && !visit(context, N00BB_FRAME_ROOT_STORAGE, next,
-                                    nullptr, nullptr, instruction))
-                    return false;
+                ok = !visit || visit(context, N00BB_FRAME_ROOT_STORAGE, next,
+                                     nullptr, nullptr, instruction);
                 next++;
             }
         }
     }
+    core_free(live.values);
+    core_free(live.across);
     *count = next;
-    return true;
+    return ok;
 }
 
 static inline bool

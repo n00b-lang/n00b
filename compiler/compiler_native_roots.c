@@ -5,8 +5,16 @@
 
 static n00bb_runtime_native_root_t *registered_roots;
 static core_string_t *registered_names;
+static bool *registered_hosted;
 static size_t registered_root_count;
 static core_string_t *runtime_names;
+static bool hosted_hidden;
+
+void
+n00bb_native_root_hide_hosted(bool hidden)
+{
+    hosted_hidden = hidden;
+}
 
 static bool
 runtime_names_ready(void)
@@ -20,6 +28,12 @@ runtime_names_ready(void)
             n00bb_runtime_native_roots[i].qualified_name);
     runtime_names = names;
     return true;
+}
+
+static bool
+registered_visible(size_t index)
+{
+    return !registered_hosted[index] || !hosted_hidden;
 }
 
 static const n00bb_runtime_native_root_t *
@@ -38,8 +52,8 @@ native_root_name_at(size_t index)
         return runtime_names_ready() ? runtime_names[index]
                                      : (core_string_t){};
     index -= n00bb_runtime_native_root_count;
-    return index < registered_root_count ? registered_names[index]
-                                         : (core_string_t){};
+    return index < registered_root_count && registered_visible(index)
+        ? registered_names[index] : (core_string_t){};
 }
 
 static core_string_t
@@ -57,22 +71,31 @@ native_root_name(const n00bb_runtime_native_root_t *root)
 size_t
 n00bb_native_root_registered_count(void)
 {
-    return registered_root_count;
+    size_t count = 0;
+    for (size_t i = 0; i < registered_root_count; i++)
+        if (registered_visible(i)) count++;
+    return count;
 }
 
 const n00bb_runtime_native_root_t *
 n00bb_native_root_registered_at(size_t index)
 {
-    return index < registered_root_count ? &registered_roots[index] : nullptr;
+    for (size_t i = 0; i < registered_root_count; i++)
+        if (registered_visible(i) && !index--) return &registered_roots[i];
+    return nullptr;
 }
 
-bool
-n00bb_native_root_register(core_string_t qualified_name,
-                           core_string_t c_alias)
+static bool
+register_root(core_string_t qualified_name, core_string_t c_alias,
+              bool hosted)
 {
     if (!qualified_name.data || !c_alias.data) return false;
-    for (size_t i = 0; i < n00bb_runtime_native_root_count + registered_root_count;
-         i++)
+    for (size_t i = 0; i < registered_root_count; i++)
+        if (core_string_eq(registered_names[i], qualified_name)) {
+            registered_hosted[i] = registered_hosted[i] && hosted;
+            return true;
+        }
+    for (size_t i = 0; i < n00bb_runtime_native_root_count; i++)
         if (core_string_eq(native_root_name_at(i), qualified_name))
             return true;
     n00bb_runtime_native_root_t *grown = realloc(registered_roots,
@@ -81,21 +104,40 @@ n00bb_native_root_register(core_string_t qualified_name,
     core_string_t *grown_names = realloc(registered_names,
         (registered_root_count + 1) * sizeof(*grown_names));
     if (grown_names) registered_names = grown_names;
+    bool *grown_hosted = realloc(registered_hosted,
+        (registered_root_count + 1) * sizeof(*grown_hosted));
+    if (grown_hosted) registered_hosted = grown_hosted;
     core_string_t name = core_string_dup(qualified_name);
     char *native_name = core_string_to_cstr(qualified_name);
     char *alias = core_string_to_cstr(c_alias);
-    if (!grown || !grown_names || !name.data || !native_name || !alias) {
+    if (!grown || !grown_names || !grown_hosted || !name.data || !native_name
+        || !alias) {
         core_free(name.data);
         core_free(native_name);
         core_free(alias);
         return false;
     }
     registered_names[registered_root_count] = name;
+    registered_hosted[registered_root_count] = hosted;
     registered_roots[registered_root_count++] = (n00bb_runtime_native_root_t){
         .qualified_name = native_name,
         .c_alias = alias,
     };
     return true;
+}
+
+bool
+n00bb_native_root_register(core_string_t qualified_name,
+                           core_string_t c_alias)
+{
+    return register_root(qualified_name, c_alias, false);
+}
+
+bool
+n00bb_native_root_register_hosted(core_string_t qualified_name,
+                                  core_string_t c_alias)
+{
+    return register_root(qualified_name, c_alias, true);
 }
 
 const n00bb_runtime_native_root_t *

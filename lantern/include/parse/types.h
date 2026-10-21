@@ -129,9 +129,6 @@ typedef struct parse_node_facts_t {
     void                   *integer_literal_origin;
     core_string_t           unresolved_name;
     parse_node_resolution_t resolution;
-    int64_t                 integer_range_minimum;
-    int64_t                 integer_range_maximum;
-    bool                    integer_range_known;
     bool                    direct_symbol_reference;
     bool                    index_address_access;
 } parse_node_facts_t;

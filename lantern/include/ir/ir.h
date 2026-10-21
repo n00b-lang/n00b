@@ -727,15 +727,6 @@ ir_liveness_t ir_liveness_query_direct_after(
 ir_liveness_t ir_liveness_query_direct_on_edge(
     const ir_liveness_query_t *query, const ir_block_t *from,
     const ir_block_t *to);
-typedef struct ir_values_liveness ir_values_liveness_t;
-ir_values_liveness_t *ir_values_liveness_new(ir_func_t *function,
-                                             ir_value_t *const *values,
-                                             size_t count);
-void ir_values_liveness_free(ir_values_liveness_t *liveness);
-bool ir_values_live_after_each(const ir_values_liveness_t *liveness,
-                               const ir_block_t *block, bool *after);
-bool ir_values_live_on_edge(const ir_values_liveness_t *liveness,
-                            const ir_block_t *from, const ir_block_t *to);
 typedef struct {
     ir_func_t *function;
     ir_value_t *binding;
@@ -755,6 +746,29 @@ bool ir_value_visit_lifetime_endpoints(
 bool ir_liveness_query_visit_endpoints(
     const ir_liveness_query_t *query,
     ir_lifetime_endpoint_visitor_fn visitor, void *context);
+typedef bool (*ir_value_escape_fn)(void *context, const ir_value_t *value);
+typedef struct {
+    size_t cfg_edges;
+    size_t direct_live_edges;
+    size_t direct_dead_edges;
+    size_t direct_unknown_edges;
+    size_t alias_live_edges;
+    size_t alias_dead_edges;
+    size_t alias_unknown_edges;
+    size_t range_ends;
+    size_t exit_edges;
+    size_t safe_exit_edges;
+    size_t live_exit_edges;
+    size_t unknown_exit_edges;
+    size_t point_endpoints;
+    size_t edge_endpoints;
+    bool   alias_complete;
+    bool   escapes;
+    bool   resolved;
+    bool   complete;
+} ir_cleanup_range_t;
+bool ir_value_cleanup_range(const ir_value_t *value, ir_value_escape_fn escapes,
+                            void *context, ir_cleanup_range_t *out);
 /* Checks alias/lifetime facts at a candidate point; does not schedule or
  * guarantee finalization or reclamation. */
 bool         ir_value_can_finalize_at(const ir_value_t *value,

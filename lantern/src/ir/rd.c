@@ -399,7 +399,7 @@ static bool rename_enter(ir_block_t *b, void *thunk)
                               : TOK_UNSET;
         }
 
-        diverged = diverged || (r->sets && call_diverges(in));
+        diverged = diverged || call_diverges(in);
 
         if (r->def_id[at] != RD_NONE) {
             uint32_t l = r->def_local[r->def_id[at]];
@@ -424,7 +424,7 @@ static bool rename_enter(ir_block_t *b, void *thunk)
             uint32_t l = r->phi[p].local;
 
             add_arm(r, p,
-                    diverged       ? TOK_PHI(r, p)
+                    diverged       ? r->sets ? TOK_PHI(r, p) : RD_NONE
                     : w->st_top[l] ? w->st[w->st_off[l] + w->st_top[l] - 1]
                                    : TOK_UNSET,
                     b->index);
@@ -489,7 +489,7 @@ static void index_arms(ir_rd_t *r)
     for (uint32_t i = 0; i < r->n_arms; i++) {
         r->arm_off[r->arm[i].phi + 1]++;
 
-        if (r->arm[i].tok > r->n_defs) {
+        if (r->arm[i].tok > r->n_defs && r->arm[i].tok != RD_NONE) {
             r->fan_off[r->arm[i].tok - 1 - r->n_defs + 1]++;
         }
     }
@@ -510,7 +510,7 @@ static void index_arms(ir_rd_t *r)
     for (uint32_t i = 0; i < r->n_arms; i++) {
         r->arm_at[fa[r->arm[i].phi]++] = i;
 
-        if (r->arm[i].tok > r->n_defs) {
+        if (r->arm[i].tok > r->n_defs && r->arm[i].tok != RD_NONE) {
             r->fan_at[ff[r->arm[i].tok - 1 - r->n_defs]++] = r->arm[i].phi;
         }
     }

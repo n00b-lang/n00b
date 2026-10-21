@@ -7,6 +7,9 @@
 
 bool n00bb_native_root_register(core_string_t qualified_name,
                                 core_string_t c_alias);
+bool n00bb_native_root_register_hosted(core_string_t qualified_name,
+                                       core_string_t c_alias);
+void n00bb_native_root_hide_hosted(bool hidden);
 size_t n00bb_native_root_registered_count(void);
 const n00bb_runtime_native_root_t *n00bb_native_root_registered_at(size_t index);
 const n00bb_runtime_native_root_t *n00bb_native_root_in_module(

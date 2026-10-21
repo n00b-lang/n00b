@@ -321,40 +321,6 @@ primitive_operand_class(ir_class_t class)
 }
 
 static bool
-rewrite_primitive_operator(ir_module_t *module, ir_instr_t *call)
-{
-    ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands == 3
-        ? ir_operand_value(&call->operands[0]) : nullptr;
-    ir_instr_t *selection = callee ? callee->def : nullptr;
-    if (!selection || selection->op != IR_OP_TRAIT_METHOD
-        || selection->n_operands < 2
-        || selection->operands[1].kind != IR_OPD_NAME || !call->dest)
-        return false;
-    const n00bb_binary_operator_t *operator =
-        n00bb_binary_operator_method(selection->operands[1].name);
-    ir_value_t *left = ir_operand_value(&call->operands[1]);
-    ir_value_t *right = ir_operand_value(&call->operands[2]);
-    if (!operator || operator->shift || !left || !right
-        || !ir_type_eq(module, left->type, right->type)
-        || !ir_type_eq(module, left->type, call->dest->type)) return false;
-    ir_class_t class = ir_machine_of(module, left->type).class;
-    if (!primitive_operand_class(class)
-        || (operator->unsigned_only && class != IR_CLASS_UINT)) return false;
-    call->op = operator->op;
-    call->n_operands = 0;
-    call->n_mods = 0;
-    if (!ir_instr_operand_value(call, left)
-        || !ir_instr_operand_value(call, right)) return false;
-    bool integer = class != IR_CLASS_FLOAT;
-    if (integer && ir_op_accepts_mod(call->op, CORE_STRING_STATIC("trap"))
-        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
-    if (class == IR_CLASS_SINT
-        && (call->op == IR_OP_DIV || call->op == IR_OP_REM)
-        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
-    return true;
-}
-
-static bool
 value_used(ir_func_t *function, const ir_value_t *value)
 {
     for (uint32_t b = 0; b < function->n_blocks; b++)
@@ -370,8 +336,280 @@ value_used(ir_func_t *function, const ir_value_t *value)
 typedef ir_instr_t *selection_t;
 core_list_decl(selection_t);
 
+static ir_value_t *
+inserted_value(ir_func_t *function, ir_instr_t *before, ir_op_t op,
+               th_type *type)
+{
+    ir_block_t *block = before->block;
+    ir_instr_t *instruction = ir_instr_generated(block, op, before->span,
+        CORE_STRING_STATIC("specialize"), before->index);
+    if (!instruction) return nullptr;
+    for (uint32_t attempt = 0;; attempt++) {
+        core_buffer_t name = {0};
+        core_buffer_printf(&name, "__n00bb_spec_%u_%u_%u", block->index,
+                           instruction->index, attempt);
+        core_string_t text = core_buffer_string(&name);
+        bool taken = ir_value_find(function, text) != nullptr;
+        bool bound = !taken && ir_instr_set_dest(instruction, text, type);
+        core_buffer_release(&name);
+        if (!taken) return bound ? instruction->dest : nullptr;
+    }
+}
+
+static ir_value_t *
+inserted_binary(ir_func_t *function, ir_instr_t *before, ir_op_t op,
+                th_type *type, ir_value_t *left, ir_value_t *right)
+{
+    ir_value_t *value = inserted_value(function, before, op, type);
+    return value && ir_instr_operand_value(value->def, left)
+        && ir_instr_operand_value(value->def, right) ? value : nullptr;
+}
+
+static ir_value_t *
+comparison_member(ir_func_t *function, ir_instr_t *before, th_type *type,
+                  core_string_t name, uint64_t ordinal)
+{
+    ir_value_t *value = inserted_value(function, before, IR_OP_ENUM_CONST,
+                                       type);
+    return value && ir_instr_operand_name(value->def, name)
+        && ir_instr_operand_int_lit(value->def,
+               (ir_lit_t){.mag = ordinal}) ? value : nullptr;
+}
+
+static ir_value_t *
+operand_as(ir_func_t *function, ir_instr_t *before, ir_value_t *value,
+           th_type *type)
+{
+    ir_module_t *module = function->owner;
+    if (ir_type_eq(module, value->type, type)) return value;
+    ir_class_t source = ir_machine_of(module, value->type).class;
+    ir_class_t target = ir_machine_of(module, type).class;
+    if ((source != IR_CLASS_SINT && source != IR_CLASS_UINT)
+        || (target != IR_CLASS_SINT && target != IR_CLASS_UINT))
+        return nullptr;
+    ir_value_t *cast = inserted_value(function, before, IR_OP_CAST, type);
+    bool checked = source != target
+        || !n00bb_integer_type_promotes_to(value->type, type);
+    return cast && ir_instr_operand_value(cast->def, value)
+        && (!checked || ir_instr_add_mod(cast->def,
+                                         CORE_STRING_STATIC("trap")))
+        ? cast : nullptr;
+}
+
+static ir_value_t *
+shift_count_as(ir_func_t *function, ir_instr_t *before, ir_value_t *value,
+               th_type *count)
+{
+    ir_module_t *module = function->owner;
+    if (ir_type_eq(module, value->type, count)) return value;
+    ir_value_t *cast = inserted_value(function, before, IR_OP_CAST, count);
+    bool narrowing = ir_machine_of(module, value->type).width
+        > ir_machine_of(module, count).width;
+    return cast && ir_instr_operand_value(cast->def, value)
+        && (!narrowing || ir_instr_add_mod(cast->def,
+                                           CORE_STRING_STATIC("trap")))
+        ? cast : nullptr;
+}
+
+static bool
+rewrite_primitive_operator(ir_func_t *function, ir_instr_t *call)
+{
+    ir_module_t *module = function->owner;
+    ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands == 3
+        ? ir_operand_value(&call->operands[0]) : nullptr;
+    ir_instr_t *selection = callee ? callee->def : nullptr;
+    if (!selection || selection->op != IR_OP_TRAIT_METHOD
+        || selection->n_operands < 2
+        || selection->operands[1].kind != IR_OPD_NAME || !call->dest)
+        return false;
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_method(selection->operands[1].name);
+    ir_value_t *left = ir_operand_value(&call->operands[1]);
+    ir_value_t *right = ir_operand_value(&call->operands[2]);
+    if (!operator || !left || !right) return false;
+    th_type *result = call->dest->type;
+    ir_class_t class = ir_machine_of(module, result).class;
+    if (!primitive_operand_class(class)
+        || ((operator->unsigned_only || operator->shift)
+            && !n00bb_bitwise_type(result))) return false;
+    if (operator->shift) {
+        th_type *width = n00bb_integer_type_promotes_to(left->type, result)
+            ? result : left->type;
+        th_type *count = n00bb_bitwise_type(width)
+            ? n00bb_shift_count_type(ir_module_types(module), width)
+            : nullptr;
+        if (!count || !n00bb_unsigned_shift_count_type(right->type))
+            return false;
+        left = operand_as(function, call, left, width);
+        right = left ? shift_count_as(function, call, right, count) : nullptr;
+        if (!right) return false;
+        if (!ir_type_eq(module, width, result)) {
+            ir_value_t *shifted = inserted_binary(function, call,
+                operator->op, width, left, right);
+            if (!shifted || !ir_instr_add_mod(shifted->def,
+                                              CORE_STRING_STATIC("trap")))
+                return false;
+            call->op = IR_OP_CAST;
+            call->n_operands = 0;
+            call->n_mods = 0;
+            return ir_instr_operand_value(call, shifted)
+                && (n00bb_integer_type_promotes_to(width, result)
+                    || ir_instr_add_mod(call, CORE_STRING_STATIC("trap")));
+        }
+    }
+    bool same = ir_type_eq(module, left->type, result)
+        && ir_type_eq(module, right->type, result);
+    if (operator->shift) same = true;
+    if (!same && class == IR_CLASS_FLOAT) return false;
+    if (!same) {
+        left = operand_as(function, call, left, result);
+        right = left ? operand_as(function, call, right, result) : nullptr;
+        if (!right) return false;
+    }
+    call->op = operator->op;
+    call->n_operands = 0;
+    call->n_mods = 0;
+    if (!ir_instr_operand_value(call, left)
+        || !ir_instr_operand_value(call, right)) return false;
+    bool integer = class != IR_CLASS_FLOAT;
+    if (integer && ir_op_accepts_mod(call->op, CORE_STRING_STATIC("trap"))
+        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
+    if (class == IR_CLASS_SINT
+        && (call->op == IR_OP_DIV || call->op == IR_OP_REM)
+        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
+    return true;
+}
+
+static bool
+become_select(ir_instr_t *call, ir_value_t *condition, ir_value_t *taken,
+              ir_value_t *otherwise)
+{
+    call->op = IR_OP_SELECT;
+    call->n_operands = 0;
+    call->n_mods = 0;
+    return ir_instr_operand_value(call, condition)
+        && ir_instr_operand_value(call, taken)
+        && ir_instr_operand_value(call, otherwise);
+}
+
+static bool
+rewrite_primitive_comparison(ir_func_t *function, ir_instr_t *call,
+                             core_string_t method)
+{
+    ir_module_t *module = function->owner;
+    ir_value_t *left = ir_operand_value(&call->operands[1]);
+    ir_value_t *right = ir_operand_value(&call->operands[2]);
+    if (!left || !right || !call->dest
+        || !ir_type_eq(module, left->type, right->type)) return false;
+    ir_class_t class = ir_machine_of(module, left->type).class;
+    if (class != IR_CLASS_SINT && class != IR_CLASS_UINT
+        && class != IR_CLASS_FLOAT && class != IR_CLASS_BOOL
+        && class != IR_CLASS_PTR) return false;
+    if (core_string_eq(method, CORE_STRING_STATIC("__equal"))) {
+        call->op = IR_OP_EQ;
+        call->n_operands = 0;
+        call->n_mods = 0;
+        return ir_instr_operand_value(call, left)
+            && ir_instr_operand_value(call, right);
+    }
+    if (!core_string_eq(method, CORE_STRING_STATIC("__cmp"))
+        || class == IR_CLASS_BOOL || class == IR_CLASS_PTR) return false;
+    th_ctx *types = ir_module_types(module);
+    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
+    th_type *comparison = call->dest->type;
+    ir_value_t *less = inserted_binary(function, call, IR_OP_LT, boolean,
+                                       left, right);
+    ir_value_t *greater = inserted_binary(function, call, IR_OP_GT, boolean,
+                                          left, right);
+    ir_value_t *less_member = comparison_member(function, call, comparison,
+        CORE_STRING_STATIC("less"), 0);
+    ir_value_t *equal_member = comparison_member(function, call, comparison,
+        CORE_STRING_STATIC("equal"), 1);
+    ir_value_t *greater_member = comparison_member(function, call,
+        comparison, CORE_STRING_STATIC("greater"), 2);
+    if (!less || !greater || !less_member || !equal_member
+        || !greater_member) return false;
+    ir_value_t *level = equal_member;
+    if (class == IR_CLASS_FLOAT) {
+        ir_value_t *equal = inserted_binary(function, call, IR_OP_EQ,
+                                            boolean, left, right);
+        ir_value_t *unordered = comparison_member(function, call,
+            comparison, CORE_STRING_STATIC("unordered"), 3);
+        level = equal && unordered ? inserted_value(function, call,
+            IR_OP_SELECT, comparison) : nullptr;
+        if (!level || !ir_instr_operand_value(level->def, equal)
+            || !ir_instr_operand_value(level->def, equal_member)
+            || !ir_instr_operand_value(level->def, unordered)) return false;
+    }
+    ir_value_t *upper = inserted_value(function, call, IR_OP_SELECT,
+                                       comparison);
+    return upper && ir_instr_operand_value(upper->def, greater)
+        && ir_instr_operand_value(upper->def, greater_member)
+        && ir_instr_operand_value(upper->def, level)
+        && become_select(call, less, less_member, upper);
+}
+
+static ir_func_t *
+trait_implementation(core_list_t(n00bb_ir_func_ptr_t) *functions,
+                     core_string_t method, th_type *receiver, th_ctx *types)
+{
+    ir_func_t *generic = nullptr;
+    for (size_t i = 0; i < functions->len; i++) {
+        ir_func_t *candidate = functions->data[i];
+        ir_func_t *body = candidate ? n00bb_cached_body(candidate) : nullptr;
+        if (!body || !core_string_eq(candidate->name, method)
+            || !body->n_blocks) continue;
+        th_ctx *candidate_types = ir_module_types(candidate->owner);
+        const th_param *self = th_func_param(candidate->type, 0);
+        if (!self) continue;
+        if (th_hash(candidate_types, self->type) == th_hash(types, receiver))
+            return candidate;
+        core_list_t(type_binding_t) bindings = {0};
+        if (!generic && !th_is_closed(candidate_types, self->type)
+            && match_type(candidate_types, self->type, receiver, &bindings))
+            generic = candidate;
+        core_list_free(bindings);
+    }
+    return generic;
+}
+
+static bool
+resolve_trait_operator(ir_func_t *function, ir_instr_t *call,
+                       core_list_t(n00bb_ir_func_ptr_t) *functions)
+{
+    ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands == 3
+        ? ir_operand_value(&call->operands[0]) : nullptr;
+    ir_instr_t *selection = callee ? callee->def : nullptr;
+    if (!selection || selection->op != IR_OP_TRAIT_METHOD
+        || selection->n_operands < 3
+        || selection->operands[0].kind != IR_OPD_NAME
+        || selection->operands[1].kind != IR_OPD_NAME) return false;
+    if (rewrite_primitive_operator(function, call)) return true;
+    ir_value_t *receiver = ir_operand_value(&call->operands[1]);
+    th_ctx *types = ir_module_types(function->owner);
+    if (!receiver || !receiver->type || !th_is_closed(types, receiver->type))
+        return false;
+    core_string_t trait = selection->operands[0].name;
+    core_string_t method = selection->operands[1].name;
+    th_env_method_t resolved = {0};
+    bool builtin = th_env_method_resolve(types, receiver->type, trait, method,
+                                         &resolved) == TH_ENV_METHOD_FOUND
+        && core_string_starts_with(resolved.qualified_name,
+                                   CORE_STRING_STATIC("builtins."));
+    ir_func_t *implementation = builtin ? nullptr
+        : trait_implementation(functions, method, receiver->type, types);
+    if (!implementation)
+        return rewrite_primitive_comparison(function, call, method);
+    ir_value_t *reference = ir_func_address(implementation->owner,
+                                            implementation);
+    if (!reference) return false;
+    call->operands[0].value = reference;
+    return true;
+}
+
 static void
-specialize_primitive_operators(ir_func_t *function)
+specialize_trait_operators(ir_func_t *function,
+                           core_list_t(n00bb_ir_func_ptr_t) *functions)
 {
     core_list_t(selection_t) selections = core_list_new(selection_t);
     for (uint32_t b = 0; b < function->n_blocks; b++)
@@ -380,7 +618,7 @@ specialize_primitive_operators(ir_func_t *function)
             ir_instr_t *selection = call->op == IR_OP_CALL && call->n_operands
                 && ir_operand_value(&call->operands[0])
                 ? ir_operand_value(&call->operands[0])->def : nullptr;
-            if (rewrite_primitive_operator(function->owner, call))
+            if (resolve_trait_operator(function, call, functions))
                 core_list_push(selections, selection);
         }
     for (size_t s = 0; s < selections.len; s++)
@@ -577,7 +815,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         th_ctx *caller_types = ir_module_types(caller->owner);
         bool open_caller = !th_is_closed(caller_types, caller->type)
             && !is_instance(&specializations, caller);
-        if (!open_caller) specialize_primitive_operators(caller);
+        if (!open_caller) specialize_trait_operators(caller, functions);
         bool *feasible = fold_static_type_tests(caller, caller_types);
         valid = feasible != nullptr;
         for (uint32_t b = 0; valid && b < caller->n_blocks; b++) {

@@ -1,6 +1,7 @@
 #ifndef IR_ANALYSES_H
 #define IR_ANALYSES_H
 
+#include "ir/abcd.h"
 #include "ir/doms.h"
 #include "ir/ir.h"
 #include "ir/memssa.h"
@@ -8,6 +9,7 @@
 #include "ir/places.h"
 #include "ir/ranges.h"
 #include "ir/sites.h"
+#include "ir/vn.h"
 
 ir_doms_t   *ir_func_doms(ir_func_t *f);
 ir_pdg_t    *ir_func_pdg(ir_func_t *f);

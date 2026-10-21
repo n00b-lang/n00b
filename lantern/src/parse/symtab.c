@@ -950,8 +950,7 @@ parse_sym_finish_lifetime_range(parse_sym_entry_t *symbol,
     parse_sym_lifetime_range_t *range = ensure_lifetime_range(
         symbol, phase, function, binding);
     if (!range) return false;
-    range->complete = complete && range->start_count != 0
-        && range->edge_count != 0;
+    range->complete = complete && range->start_count != 0;
     return !complete || range->complete;
 }
 
