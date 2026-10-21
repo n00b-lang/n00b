@@ -126,14 +126,6 @@ func array_element(type_field: u32, payload: Ref[byte], index: i64,
     return __gc_byte_offset(data.get(), position * (stride_bits / 8))
 }
 
-func array_slot(source: Ref[Any], type_index: u32, index: i64,
-                element: Ref[u32]) -> Ref[byte] {
-    let view: Ref[internal.abi.Box_Value] = box_view(source)
-    let storage: Ref[byte]? = view.payload
-    require storage != nil and view.type_field & 0x7fffffff == type_index
-    return array_element(type_index, storage.get(), index, element)
-}
-
 func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
     let child: u32 = component_of(type_index,
                                   internal.abi.Type_Kind.array_type)
@@ -415,6 +407,10 @@ func pattern_holds(actual: u32, program: Ref[byte], at: Ref[uint],
 }
 
 func type_field_of(value: `T) -> u32 {
+    return box_view(__box_of(value)).type_field
+}
+
+func any_type_field(value: Any) -> u32 {
     return box_view(__box_of(value)).type_field
 }
 

@@ -39,7 +39,6 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
     {"sys.internal.gc.box_store.array_row", nullptr, nullptr, 0},
     {"sys.internal.gc.box_store.array_replace_row", nullptr, nullptr, 0},
     {"sys.internal.box.array_element", nullptr, nullptr, 0},
-    {"sys.internal.box.array_slot", nullptr, nullptr, 0},
     {"sys.internal.box.array_clear_slot", nullptr, nullptr, 0},
     {"sys.internal.gc.box_store.write_at", nullptr, nullptr, 0},
     {"sys.internal.box.payload_bytes", nullptr, nullptr, 0},

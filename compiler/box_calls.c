@@ -785,6 +785,50 @@ type_index_word(ir_ctx_t *context, ir_func_t *caller, ir_instr_t *before,
     return converted(caller, before, index->dest, word);
 }
 
+static ir_value_t *
+type_index_of_box(box_calls_t *calls, ir_func_t *caller,
+                  ir_instr_t *instruction)
+{
+    th_type *u32 = th_name(ir_module_types(caller->owner),
+                           CORE_STRING_STATIC("u32"));
+    ir_value_t *value = instruction->operands[0].value;
+    th_type *source = th_resolve(value->type);
+    bool any = th_builtin_applied(source, TH_BUILTIN_ANY, 0) != nullptr;
+    ir_func_t *field = runtime_function(calls, any
+        ? CORE_STRING_STATIC("any_type_field")
+        : CORE_STRING_STATIC("type_field_of"));
+    ir_instr_t *actual = u32 && field ? fresh_instruction(caller,
+        instruction->block, instruction->index, instruction->span,
+        IR_OP_CALL, u32) : nullptr;
+    if (!actual || !retarget(calls, caller, actual, field, &source,
+                             any ? 0 : 1, &value, 1)) return nullptr;
+    ir_value_t *mask = typed_constant(caller, instruction->block,
+        instruction->index, instruction->span, UINT32_C(0x7fffffff),
+        CORE_STRING_STATIC("u32"));
+    ir_instr_t *masked = mask ? fresh_instruction(caller, instruction->block,
+        instruction->index, instruction->span, IR_OP_AND, u32) : nullptr;
+    return masked && ir_instr_operand_value(masked, actual->dest)
+        && ir_instr_operand_value(masked, mask) ? masked->dest : nullptr;
+}
+
+static bool
+rewrite_closed_type_test(box_calls_t *calls, ir_func_t *caller,
+                         ir_instr_t *instruction, th_type *pattern)
+{
+    th_type *u32 = th_name(ir_module_types(caller->owner),
+                           CORE_STRING_STATIC("u32"));
+    ir_value_t *actual = type_index_of_box(calls, caller, instruction);
+    ir_value_t *expected = actual ? type_index_word(
+        calls->analysis->ir_context, caller, instruction, pattern, false,
+        u32) : nullptr;
+    if (!expected) return false;
+    instruction->op = IR_OP_EQ;
+    instruction->n_operands = 0;
+    instruction->n_mods = 0;
+    return ir_instr_operand_value(instruction, actual)
+        && ir_instr_operand_value(instruction, expected);
+}
+
 static bool
 rewrite_type_test(box_calls_t *calls, ir_func_t *caller,
                   ir_instr_t *instruction)
@@ -800,14 +844,15 @@ rewrite_type_test(box_calls_t *calls, ir_func_t *caller,
     ir_value_t *value = instruction->operands[0].value;
     th_type *source = th_resolve(value->type);
     th_type *word = th_name(types, CORE_STRING_STATIC("uint"));
-    ir_func_t *field = runtime_function(calls,
-                                        CORE_STRING_STATIC("type_field_of"));
     ir_func_t *target = runtime_function(calls,
                                          CORE_STRING_STATIC("type_matches"));
     bool boxed = n00bb_boxed_signature_position(module, source)
         || th_builtin_applied(source, TH_BUILTIN_ANY, 0);
     th_type *pattern = instruction->operands[1].type;
-    if (!word || !field || !target || !boxed) return true;
+    if (!word || !target || !boxed) return true;
+    if (pattern && th_kind_of(th_resolve(pattern)) != TH_TRAIT
+        && th_is_closed(types, pattern))
+        return rewrite_closed_type_test(calls, caller, instruction, pattern);
     pattern_plan_t *plan = core_alloc(pattern_plan_t);
     if (!plan) return false;
     plan->caller = caller;
@@ -836,13 +881,10 @@ rewrite_type_test(box_calls_t *calls, ir_func_t *caller,
         instruction->index, instruction->span, plan->count,
         CORE_STRING_STATIC("uint")) : nullptr;
     core_free(plan);
-    th_type *u32 = th_name(types, CORE_STRING_STATIC("u32"));
-    ir_instr_t *actual = length ? fresh_instruction(caller,
-        instruction->block, instruction->index, instruction->span,
-        IR_OP_CALL, u32) : nullptr;
-    if (!actual || !retarget(calls, caller, actual, field, &source, 1,
-                             &value, 1)) return false;
-    ir_value_t *arguments[] = {actual->dest, scratch, length};
+    ir_value_t *actual = length
+        ? type_index_of_box(calls, caller, instruction) : nullptr;
+    if (!actual) return false;
+    ir_value_t *arguments[] = {actual, scratch, length};
     return retarget(calls, caller, instruction, target, &tuple, 1,
                     arguments, 3);
 }
@@ -852,7 +894,6 @@ rewrite_type_of(box_calls_t *calls, ir_func_t *caller,
                 ir_instr_t *instruction)
 {
     ir_module_t *module = caller->owner;
-    th_ctx *types = ir_module_types(module);
     if (instruction->n_operands != 1
         || instruction->operands[0].kind != IR_OPD_VALUE
         || !instruction->operands[0].value
@@ -860,20 +901,14 @@ rewrite_type_of(box_calls_t *calls, ir_func_t *caller,
         return true;
     ir_value_t *value = instruction->operands[0].value;
     th_type *source = th_resolve(value->type);
-    th_type *u32 = th_name(types, CORE_STRING_STATIC("u32"));
-    ir_func_t *field = runtime_function(calls,
-                                        CORE_STRING_STATIC("type_field_of"));
-    if (!u32 || !field
-        || !(n00bb_boxed_signature_position(module, source)
-             || th_builtin_applied(source, TH_BUILTIN_ANY, 0))) return true;
-    ir_instr_t *call = fresh_instruction(caller, instruction->block,
-        instruction->index, instruction->span, IR_OP_CALL, u32);
-    if (!call || !retarget(calls, caller, call, field, &source, 1, &value, 1))
-        return false;
+    if (!(n00bb_boxed_signature_position(module, source)
+          || th_builtin_applied(source, TH_BUILTIN_ANY, 0))) return true;
+    ir_value_t *actual = type_index_of_box(calls, caller, instruction);
+    if (!actual) return false;
     instruction->op = IR_OP_BITCAST;
     instruction->n_operands = 0;
     instruction->n_mods = 0;
-    return ir_instr_operand_value(instruction, call->dest);
+    return ir_instr_operand_value(instruction, actual);
 }
 
 static bool
