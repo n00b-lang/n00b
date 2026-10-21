@@ -322,9 +322,20 @@ bool append_environment_symbol_name(parse_grammar_t *grammar,
     core_buffer_t *qualified);
 bool append_function_contract_identity(core_translation_unit_t *unit,
     parse_sym_entry_t *symbol, core_buffer_t *key);
-parse_sym_entry_t *n00bb_select_call_overload(parse_grammar_t *grammar,
+typedef enum {
+    N00BB_OVERLOAD_SELECTED,
+    N00BB_OVERLOAD_PENDING,
+    N00BB_OVERLOAD_NO_MATCH,
+    N00BB_OVERLOAD_AMBIGUOUS,
+} n00bb_overload_status_t;
+typedef struct {
+    n00bb_overload_status_t status;
+    parse_sym_entry_t *symbol;
+    bool passed_over_conversion;
+} n00bb_overload_choice_t;
+n00bb_overload_choice_t n00bb_select_call_overload(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, parse_cf_label_t *call,
-    parse_sym_entry_t *symbol, bool *pending);
+    parse_sym_entry_t *symbol);
 bool n00bb_function_has_overloads(parse_sym_entry_t *symbol);
 void n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);

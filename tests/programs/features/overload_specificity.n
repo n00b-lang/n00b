@@ -1,0 +1,65 @@
+record Box {
+    value: int
+}
+
+func concrete_first(item: Box) -> int {
+    return 2
+}
+
+func concrete_first(item: 'T) -> int {
+    return 1
+}
+
+func generic_first(item: 'T) -> int {
+    return 1
+}
+
+func generic_first(item: Box) -> int {
+    return 2
+}
+
+func nested(item: Array['T]) -> int {
+    return 1
+}
+
+func nested(item: Array[int]) -> int {
+    return 2
+}
+
+func exact_over_conversion(item: 'T) -> int {
+    return 1
+}
+
+func exact_over_conversion(item: string) -> int {
+    return 2
+}
+
+func shared_type(left: 'T, right: 'T) -> int {
+    return 1
+}
+
+func shared_type(left: int, right: string) -> int {
+    return 2
+}
+
+func constrained(item: 'T) -> int {
+    return 1
+}
+
+func constrained(item: 'T) -> int where 'T: != string {
+    return 2
+}
+
+let box: Box = (value = 4)
+require concrete_first(box) == 2
+require generic_first(box) == 2
+require concrete_first(4) == 1
+require generic_first(4) == 1
+let numbers: Array[int] = [1, 2]
+require nested(numbers) == 2
+var buffer: Buffer = buffer_from_string("x")
+require exact_over_conversion(buffer) == 1
+require shared_type(1, "a") == 2
+require constrained(1) == 2
+require constrained("a") == 1
+__fd_write(2, "ok")

@@ -581,6 +581,18 @@ test(
 )
 
 test(
+    'overload-resolution', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'overload_resolution.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'overload_specificity.n',
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'overload_ambiguous_generic.n'],
+    timeout: 120,
+    suite: 'slow',
+)
+
+test(
     'generic-union-parameter', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
            n00bb_exe.full_path(),

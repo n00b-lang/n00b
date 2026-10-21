@@ -521,18 +521,52 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             nt_is(grammar, label->self, CORE_STRING_STATIC("context-call"))
                 ? attached_symbol(grammar, unit, label->cond) : nullptr;
         bool context_call = context_symbol(grammar, context_target);
-        if (callee_symbol && !context_call) {
-            bool pending = false;
-            parse_sym_entry_t *selected = n00bb_select_call_overload(grammar,
-                state, label, callee_symbol, &pending);
-            if (pending && !force_overloads) {
+        bool free_function = !member || call_receiver_is_module(grammar,
+            unit, core_tree_child(member, 0));
+        if (callee_symbol && !context_call && free_function
+            && n00bb_function_has_overloads(callee_symbol)) {
+            n00bb_overload_choice_t choice = n00bb_select_call_overload(
+                grammar, state, label, callee_symbol);
+            if (choice.status == N00BB_OVERLOAD_PENDING
+                && !force_overloads) {
                 (*deferred)++;
                 continue;
             }
-            if (selected && selected != callee_symbol) {
+            if (choice.status != N00BB_OVERLOAD_SELECTED) {
+                core_string_t message = choice.status == N00BB_OVERLOAD_PENDING
+                    ? CORE_STRING_STATIC(
+                        "overloaded call needs a known argument type")
+                    : choice.status == N00BB_OVERLOAD_NO_MATCH
+                    ? CORE_STRING_STATIC(
+                        "no overload accepts these arguments")
+                    : CORE_STRING_STATIC(
+                        "multiple equally specific overloads accept this call");
+                core_string_t code = choice.status == N00BB_OVERLOAD_PENDING
+                    ? CORE_STRING_STATIC("N00BB-T0055")
+                    : choice.status == N00BB_OVERLOAD_NO_MATCH
+                    ? CORE_STRING_STATIC("N00BB-T0053")
+                    : CORE_STRING_STATIC("N00BB-T0054");
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_ERROR, code, message,
+                    link_source_location(label->self));
+                continue;
+            }
+            n00bb_node_facts_t *facts = choice.passed_over_conversion
+                ? n00bb_ensure_node_facts(state, label->self) : nullptr;
+            if (facts && !facts->overload_conversion_warning_reported) {
+                facts->overload_conversion_warning_reported = true;
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0008"),
+                    CORE_STRING_STATIC(
+                        "an exact overload was selected over an overload requiring conversion"),
+                    link_source_location(label->self));
+            }
+            if (choice.symbol && choice.symbol != callee_symbol) {
                 rebind_call_callee(grammar, state, label->self, label,
-                                   callee_symbol, selected);
-                callee_symbol = selected;
+                                   callee_symbol, choice.symbol);
+                callee_symbol = choice.symbol;
             }
         }
         parse_sym_entry_t *caller_symbol = enclosing_function_symbol(

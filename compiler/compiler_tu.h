@@ -343,6 +343,7 @@ typedef struct {
     bool unsigned_literal;
     bool shape_literal_pending;
     bool shape_literal_resolved;
+    bool overload_conversion_warning_reported;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);

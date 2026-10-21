@@ -1,0 +1,9 @@
+func competing(left: int, right: 'T) -> int {
+    return 1
+}
+
+func competing(left: 'T, right: int) -> int {
+    return 2
+}
+
+require competing(1, 2) == 1

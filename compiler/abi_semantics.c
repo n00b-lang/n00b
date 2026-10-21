@@ -64,6 +64,17 @@ add_receiver(th_ctx *ctx, const n00bb_abi_merged_table_t *types,
 }
 
 static bool
+same_function_root(n00bb_abi_string_view_t encoded, core_string_t source)
+{
+    for (size_t i = 0; i < encoded.length; i++)
+        if (encoded.bytes[i] == '#') {
+            encoded.length = i;
+            break;
+        }
+    return same_string(encoded, source);
+}
+
+static bool
 function_index_for_method(th_ctx *ctx,
                           const n00bb_abi_selected_objects_t *selected,
                           const n00bb_abi_index_plan_t *plan,
@@ -99,9 +110,9 @@ function_index_for_method(th_ctx *ctx,
             int64_t hash_mark = qualified_leaf.data
                 ? core_string_find_byte(qualified_leaf, '#') : -1;
             if (hash_mark >= 0) qualified_leaf.u8_bytes = (size_t)hash_mark;
-            bool named = same_string(name, method->root_name)
+            bool named = same_function_root(name, method->root_name)
                 || (qualified_leaf.data
-                    && same_string(name, qualified_leaf));
+                    && same_function_root(name, qualified_leaf));
             if (!named) continue;
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_SYMBOL, function->symbol_index);

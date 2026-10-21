@@ -13,6 +13,22 @@ typedef ir_func_t *ir_func_ptr_t;
 core_list_decl(ir_func_ptr_t);
 
 static bool
+function_symbol_needs_qualified_name(th_ctx *types, parse_sym_entry_t *symbol)
+{
+    uint64_t signature = types && symbol && symbol->type
+        ? th_hash(types, symbol->type) : 0;
+    if (!signature) return false;
+    for (parse_sym_entry_t *candidate = symbol && symbol->scope
+            ? symbol->scope->first_in_scope : nullptr;
+         candidate; candidate = candidate->next_in_scope)
+        if (candidate != symbol && candidate->kind == PARSE_SYM_FUNCTION
+            && core_string_eq(candidate->name, symbol->name)
+            && candidate->type
+            && th_hash(types, candidate->type) == signature) return true;
+    return false;
+}
+
+static bool
 append_module_initializer(n00bb_abi_type_index_t *index,
                           const n00bb_abi_type_identity_rows_t *types,
                           const n00bb_abi_decl_index_t *declarations,
@@ -167,8 +183,10 @@ n00bb_abi_function_rows_build(
             .failure_type_index = signature->failure_type_index,
             .variadic_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
         };
-        core_string_t row_name = parse_sym_binding(symbol,
+        core_string_t row_name = (parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.litmod.declaration"))
+            || function_symbol_needs_qualified_name(
+                ir_module_types(module), symbol))
             ? function->name : symbol->name;
         valid = n00bb_abi_name_pool_encode(names, row_name,
             N00B_ABI_TABLE_FUNCTION, (uint32_t)rows.len,

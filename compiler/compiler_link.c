@@ -1138,21 +1138,11 @@ call_binds_candidate(parse_grammar_t *grammar, parse_sym_entry_t *candidate,
 }
 
 static bool
-overload_argument_fits(n00bb_tu_state_t *state, parse_tree_t *argument,
-                       th_type *parameter, bool receiver, bool *typed)
+overload_argument_converts(n00bb_tu_state_t *state, parse_tree_t *argument,
+                           th_type *type, th_type *parameter)
 {
-    th_type *type = argument ? parse_tree_type(argument) : nullptr;
-    if (!type || !parameter) {
-        *typed = false;
-        return true;
-    }
-    if (!th_is_closed(state->types, type)) {
-        *typed = false;
-        return !receiver || th_unify_probe(state->types, type, parameter);
-    }
     th_type *element = nullptr;
-    return th_unify_probe(state->types, type, parameter)
-        || n00bb_value_coerces(state->types, type, parameter)
+    return n00bb_value_coerces(state->types, type, parameter)
         || n00bb_dereferences_to(state->types, type, parameter)
         || (n00bb_option_type_element(parameter, &element)
             && (th_is_nil(type)
@@ -1161,46 +1151,177 @@ overload_argument_fits(n00bb_tu_state_t *state, parse_tree_t *argument,
             && is_integer_type(th_resolve(parameter)));
 }
 
+typedef struct {
+    parse_sym_entry_t *symbol;
+    th_type *pattern;
+    size_t conversions;
+} n00bb_overload_fit_t;
+core_list_decl(n00bb_overload_fit_t);
+
+static size_t
+overload_typevar_ordinal(parse_sym_entry_t *symbol, th_type *subject)
+{
+    n00bb_signature_typevars_t *variables = symbol
+        ? parse_sym_binding(canonical_symbol(symbol),
+                            N00BB_SIGNATURE_TYPEVARS_KEY) : nullptr;
+    subject = subject ? th_resolve(subject) : nullptr;
+    for (size_t i = 0; variables && i < variables->len; i++)
+        if (th_resolve(variables->data[i].type) == subject) return i;
+    return SIZE_MAX;
+}
+
 static bool
-overload_arguments_fit(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+overload_requirement_type_equal(th_ctx *types, th_type *left, th_type *right)
+{
+    const uint8_t *left_encoding = nullptr, *right_encoding = nullptr;
+    size_t left_size = 0, right_size = 0;
+    return left && right
+        && th_encode(types, left, &left_encoding, &left_size)
+        && th_encode(types, right, &right_encoding, &right_size)
+        && left_size == right_size
+        && !memcmp(left_encoding, right_encoding, left_size);
+}
+
+static bool
+overload_requirement_equal(th_ctx *types,
+                           const th_trait_requirement *left,
+                           const th_trait_requirement *right)
+{
+    if (!left || !right || left->kind != right->kind) return false;
+    if (left->kind == TH_CON_IMPLEMENTS)
+        return core_string_eq(left->iface, right->iface);
+    if (left->kind == TH_CON_EXCLUDES)
+        return overload_requirement_type_equal(types, left->target,
+                                                right->target);
+    return false;
+}
+
+/* A pattern with fewer declared requirements accepts at least everything
+ * accepted by the otherwise equivalent pattern with a superset of them. */
+static bool
+overload_constraints_subsume(th_ctx *types, parse_sym_entry_t *general,
+                             parse_sym_entry_t *specific)
+{
+    general = canonical_symbol(general);
+    specific = canonical_symbol(specific);
+    n00bb_declared_where_t *general_where = general
+        ? parse_sym_binding(general, N00BB_DECLARED_WHERE_KEY) : nullptr;
+    n00bb_declared_where_t *specific_where = specific
+        ? parse_sym_binding(specific, N00BB_DECLARED_WHERE_KEY) : nullptr;
+    for (size_t i = 0; general_where && i < general_where->len; i++) {
+        th_trait_requirement *requirement = &general_where->data[i];
+        size_t ordinal = overload_typevar_ordinal(general,
+                                                  requirement->subject);
+        bool found = false;
+        for (size_t j = 0; specific_where && j < specific_where->len; j++) {
+            th_trait_requirement *candidate = &specific_where->data[j];
+            if (ordinal == overload_typevar_ordinal(specific,
+                                                    candidate->subject)
+                && overload_requirement_equal(types, requirement,
+                                               candidate)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+static bool
+overload_candidate_fit(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_sym_entry_t *candidate, th_type *signature,
                        core_list_t(n00bb_tree_ptr_t) *positional,
-                       core_list_t(n00bb_tree_ptr_t) *keywords, bool *typed)
+                       core_list_t(n00bb_tree_ptr_t) *keywords,
+                       n00bb_overload_fit_t *fit, bool *pending)
 {
-    bool fits = true;
-    for (size_t i = 0; fits && i < positional->len; i++) {
+    size_t count = positional->len + keywords->len;
+    th_type **actual = core_alloc_array(th_type *, count ? count : 1);
+    th_type **formal = core_alloc_array(th_type *, count ? count : 1);
+    parse_tree_t **arguments = core_alloc_array(parse_tree_t *,
+                                                count ? count : 1);
+    bool valid = true;
+    for (size_t i = 0; i < positional->len; i++) {
         const th_param *parameter = th_func_param(signature, i);
-        fits = overload_argument_fits(state, positional->data[i],
-                                      parameter ? parameter->type : nullptr,
-                                      i == 0, typed);
+        arguments[i] = positional->data[i];
+        actual[i] = parse_tree_type(arguments[i]);
+        formal[i] = parameter ? parameter->type : nullptr;
+        valid &= actual[i] && formal[i];
     }
     parse_sym_entry_t *declared = canonical_symbol(candidate);
     parse_tree_t *formals = declared->decl_node
         ? child_nt(grammar, child_nt(grammar, declared->decl_node,
-                                     CORE_STRING_STATIC("func-type-signature")), CORE_STRING_STATIC("param-decl"))
-        : nullptr;
-    for (size_t k = 0; fits && k < keywords->len; k++) {
-        size_t index = 0;
+                                     CORE_STRING_STATIC("func-type-signature")),
+                   CORE_STRING_STATIC("param-decl")) : nullptr;
+    for (size_t k = 0; k < keywords->len; k++) {
+        size_t index = 0, slot = positional->len + k;
         const th_param *parameter = function_parameter_named(grammar,
                 declared, formals, call_keyword_name(keywords->data[k]),
                 &index)
             ? th_func_param(signature, index) : nullptr;
-        fits = overload_argument_fits(state,
-            child_nt(grammar, keywords->data[k], CORE_STRING_STATIC("expression")),
-            parameter ? parameter->type : nullptr, false, typed);
+        arguments[slot] = child_nt(grammar, keywords->data[k],
+                                  CORE_STRING_STATIC("expression"));
+        actual[slot] = arguments[slot]
+            ? parse_tree_type(arguments[slot]) : nullptr;
+        formal[slot] = parameter ? parameter->type : nullptr;
+        valid &= actual[slot] && formal[slot];
     }
-    return fits;
+    bool closed = valid;
+    for (size_t i = 0; i < count && closed; i++)
+        closed = th_is_closed(state->types, actual[i]);
+    *pending = !valid;
+    bool matched = false;
+    if (valid) {
+        fit->pattern = th_tuple(state->types, formal, count);
+        th_type *provided = th_tuple(state->types, actual, count);
+        if (!closed) {
+            matched = fit->pattern && provided
+                && th_env_type_pattern_subsumes(fit->pattern, provided)
+                && th_unify_probe(state->types, provided, fit->pattern);
+            *pending = !matched && fit->pattern && provided
+                && th_unify_probe(state->types, provided, fit->pattern);
+        }
+        else if (fit->pattern && provided
+                 && th_unify_probe(state->types, provided, fit->pattern)) {
+            matched = true;
+        }
+        else if (fit->pattern) {
+            th_type **converted = core_alloc_array(th_type *,
+                                                    count ? count : 1);
+            bool convertible = true;
+            for (size_t i = 0; i < count; i++) {
+                converted[i] = actual[i];
+                if (th_unify_probe(state->types, actual[i], formal[i]))
+                    continue;
+                if (!overload_argument_converts(state, arguments[i],
+                                                actual[i], formal[i])) {
+                    convertible = false;
+                    break;
+                }
+                converted[i] = formal[i];
+                fit->conversions++;
+            }
+            th_type *effective = convertible && fit->conversions
+                ? th_tuple(state->types, converted, count) : nullptr;
+            matched = effective && th_unify_probe(state->types, effective,
+                                                   fit->pattern);
+            core_free(converted);
+        }
+    }
+    core_free(arguments);
+    core_free(formal);
+    core_free(actual);
+    return matched;
 }
 
-parse_sym_entry_t *
+n00bb_overload_choice_t
 n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                           parse_cf_label_t *call, parse_sym_entry_t *symbol,
-                           bool *pending)
+                           parse_cf_label_t *call, parse_sym_entry_t *symbol)
 {
-    if (pending) *pending = false;
+    n00bb_overload_choice_t choice = {N00BB_OVERLOAD_SELECTED, symbol, false};
     if (!symbol || symbol->kind != PARSE_SYM_FUNCTION || !call || !symbol->scope
         || !state || !state->types)
-        return symbol;
+        return choice;
     parse_sym_entry_t *head = parse_symtab_lookup_in(symbol->scope,
                                                      symbol->name);
     if (head && head->scope == symbol->scope) symbol = head;
@@ -1214,9 +1335,11 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         collect_keyword_nodes(grammar,
             child_nt(grammar, call->then_body, CORE_STRING_STATIC("keyword-args")), &keywords);
     }
-    bool typed = true;
-    parse_sym_entry_t *match = nullptr, *fitting = nullptr;
-    size_t matches = 0, fits = 0;
+    core_list_t(n00bb_overload_fit_t) fits =
+        core_list_new(n00bb_overload_fit_t);
+    parse_sym_entry_t *sole = nullptr;
+    size_t shapes = 0;
+    bool pending = false;
     for (parse_sym_entry_t *candidate = symbol; candidate
          && candidate->scope == symbol->scope
          && core_string_eq(candidate->name, symbol->name);
@@ -1228,20 +1351,81 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             || th_kind_of(signature) != TH_FUNCTION
             || !call_binds_candidate(grammar, candidate, signature,
                                      arguments.len, &keywords)) continue;
-        matches++;
-        match = candidate;
-        if (overload_arguments_fit(grammar, state, candidate, signature,
-                                   &arguments, &keywords, &typed)) {
-            fits++;
-            fitting = candidate;
-        }
+        shapes++;
+        sole = candidate;
+        n00bb_overload_fit_t fit = {.symbol = candidate};
+        bool candidate_pending = false;
+        if (overload_candidate_fit(grammar, state, candidate, signature,
+                                   &arguments, &keywords, &fit,
+                                   &candidate_pending))
+            core_list_push(fits, fit);
+        pending |= candidate_pending;
     }
     core_list_free(arguments);
     core_list_free(keywords);
-    if (matches == 1) return match;
-    if (fits == 1) return fitting;
-    if (pending) *pending = matches > 1 && !typed;
-    return symbol;
+    if (shapes == 1) {
+        choice.symbol = sole;
+        core_list_free(fits);
+        return choice;
+    }
+    choice.symbol = nullptr;
+    if (pending) {
+        choice.status = N00BB_OVERLOAD_PENDING;
+        core_list_free(fits);
+        return choice;
+    }
+    size_t tier = SIZE_MAX;
+    for (size_t i = 0; i < fits.len; i++)
+        if (!fits.data[i].conversions) {
+            tier = 0;
+            break;
+        }
+        else tier = 1;
+    if (tier == SIZE_MAX) {
+        choice.status = N00BB_OVERLOAD_NO_MATCH;
+        core_list_free(fits);
+        return choice;
+    }
+    size_t selected = SIZE_MAX;
+    for (size_t i = 0; i < fits.len; i++) {
+        if ((fits.data[i].conversions != 0) != (tier != 0)) continue;
+        bool dominated = false;
+        for (size_t j = 0; j < fits.len; j++) {
+            if (i == j
+                || ((fits.data[j].conversions != 0) != (tier != 0)))
+                continue;
+            bool i_general = th_env_type_pattern_subsumes(
+                fits.data[i].pattern, fits.data[j].pattern);
+            bool j_general = th_env_type_pattern_subsumes(
+                fits.data[j].pattern, fits.data[i].pattern);
+            if (i_general && j_general) {
+                i_general = overload_constraints_subsume(state->types,
+                    fits.data[i].symbol, fits.data[j].symbol);
+                j_general = overload_constraints_subsume(state->types,
+                    fits.data[j].symbol, fits.data[i].symbol);
+            }
+            if (i_general && !j_general) {
+                dominated = true;
+                break;
+            }
+        }
+        if (dominated) continue;
+        if (selected != SIZE_MAX) {
+            choice.status = N00BB_OVERLOAD_AMBIGUOUS;
+            core_list_free(fits);
+            return choice;
+        }
+        selected = i;
+    }
+    if (selected == SIZE_MAX) choice.status = N00BB_OVERLOAD_AMBIGUOUS;
+    else {
+        choice.symbol = fits.data[selected].symbol;
+        if (!tier)
+            for (size_t i = 0; i < fits.len; i++)
+                choice.passed_over_conversion |= fits.data[i].conversions > 0;
+    }
+    core_list_free(fits);
+    return choice;
 }
 
 bool
@@ -1277,9 +1461,11 @@ static parse_sym_entry_t *
 module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                         parse_tree_t *member, parse_sym_entry_t *symbol)
 {
-    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) return symbol;
-    return n00bb_select_call_overload(grammar, state,
-        call_label_for_member(grammar, state, member), symbol, nullptr);
+    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION
+        || !n00bb_function_has_overloads(symbol)) return symbol;
+    n00bb_overload_choice_t choice = n00bb_select_call_overload(grammar,
+        state, call_label_for_member(grammar, state, member), symbol);
+    return choice.symbol ? choice.symbol : symbol;
 }
 
 bool
@@ -2611,6 +2797,8 @@ append_function_contract_identity(core_translation_unit_t *unit,
     if (!overloaded) return true;
     th_type *contract = symbol->callable_contract
         ? symbol->callable_contract : symbol->type;
+    n00bb_declared_where_t *declared = parse_sym_binding(
+        canonical_symbol(symbol), N00BB_DECLARED_WHERE_KEY);
     const uint8_t *encoding = nullptr;
     size_t length = 0;
     if (!state || !state->types || !contract
@@ -2621,6 +2809,32 @@ append_function_contract_identity(core_translation_unit_t *unit,
     for (size_t i = 0; i < length; i++) {
         core_buffer_putc(key, hex[encoding[i] >> 4]);
         core_buffer_putc(key, hex[encoding[i] & 0x0f]);
+    }
+    for (size_t i = 0; declared && i < declared->len; i++) {
+        th_trait_requirement *requirement = &declared->data[i];
+        size_t ordinal = overload_typevar_ordinal(symbol,
+                                                  requirement->subject);
+        if (ordinal == SIZE_MAX) return false;
+        core_buffer_printf(key, "w%zu:%u:", ordinal,
+                           (unsigned)requirement->kind);
+        if (requirement->kind == TH_CON_IMPLEMENTS) {
+            core_buffer_printf(key, "%zu:", requirement->iface.u8_bytes);
+            core_buffer_append(key, requirement->iface.data,
+                               requirement->iface.u8_bytes);
+        }
+        else if (requirement->kind == TH_CON_EXCLUDES) {
+            const uint8_t *target = nullptr;
+            size_t target_length = 0;
+            if (!requirement->target
+                || !th_encode(state->types, requirement->target, &target,
+                              &target_length)) return false;
+            core_buffer_printf(key, "%zu:", target_length);
+            for (size_t j = 0; j < target_length; j++) {
+                core_buffer_putc(key, hex[target[j] >> 4]);
+                core_buffer_putc(key, hex[target[j] & 0x0f]);
+            }
+        }
+        else return false;
     }
     return true;
 }
