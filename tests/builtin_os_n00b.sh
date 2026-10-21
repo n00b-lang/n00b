@@ -8,7 +8,7 @@ native_root=${4:-}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-set -- "$compiler" build ${N00BB_TEST_BUILD_FLAGS:-} --output "$tmp/os" "$program"
+set -- "$compiler" build --output "$tmp/os" "$program"
 if test -n "$link_object"; then
     set -- "$@" --link-object "$link_object"
 fi

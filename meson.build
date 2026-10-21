@@ -1429,7 +1429,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_mark_pool.n'],
-    env: ['N00BB_TEST_BUILD_FLAGS=--closed-world'],
     suite: 'slow',
 )
 
@@ -1470,7 +1469,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_finalizer_cycle.n'],
-    env: ['N00BB_TEST_BUILD_FLAGS=--closed-world'],
     suite: 'slow',
 )
 
@@ -1573,7 +1571,6 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_gc_heap.n'],
-    env: ['N00BB_TEST_BUILD_FLAGS=--closed-world'],
     suite: 'slow',
 )
 

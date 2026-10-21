@@ -1988,6 +1988,32 @@ interface_module_declares(core_translation_unit_t *unit,
     return origin && core_string_eq(origin->module, unit->module.identifier);
 }
 
+static core_translation_unit_t *
+find_reachable_import(core_translation_unit_t *unit, core_string_t module)
+{
+    core_list_t(core_translation_unit_ptr_t) pending =
+        core_list_new(core_translation_unit_ptr_t);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    core_translation_unit_t *found = nullptr;
+    core_list_push(pending, unit);
+    while (!found && pending.len) {
+        core_translation_unit_t *at = pending.data[--pending.len];
+        if (!core_dict_add(&seen, at, at)) continue;
+        for (size_t i = 0; !found && i < core_translation_unit_import_count(at);
+             i++) {
+            core_translation_unit_t *imported =
+                core_translation_unit_import(at, i);
+            if (core_string_eq(imported->module.identifier, module))
+                found = imported;
+            else core_list_push(pending, imported);
+        }
+    }
+    core_dict_free(&seen);
+    core_list_free(pending);
+    return found;
+}
+
 static int
 resolve_one_package_export(core_translation_unit_t *unit,
                            n00bb_package_declaration_t *package,
@@ -2003,6 +2029,8 @@ resolve_one_package_export(core_translation_unit_t *unit,
         core_translation_unit_t *candidate =
             core_string_eq(unit->module.identifier, prefix)
                 ? unit : find_direct_import(unit, prefix);
+        if (!candidate && state->interface_module)
+            candidate = find_reachable_import(unit, prefix);
         if (candidate) {
             source_unit = candidate;
             scope = package_import_scope(unit, prefix, candidate);

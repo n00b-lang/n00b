@@ -48,6 +48,7 @@ enum {
     IR_SUMMARY_CALLS_FINALIZERS = 1u << 11,
     IR_SUMMARY_STARTS_THREADS   = 1u << 12,
     IR_SUMMARY_CALLS_CALLBACKS  = 1u << 13,
+    IR_SUMMARY_REINTERPRETS     = 1u << 14,
 };
 
 enum {
@@ -63,12 +64,14 @@ typedef enum : uint8_t {
     IR_SINPUT_REFERENT,
     IR_SINPUT_PLACE,
     IR_SINPUT_UNKNOWN,
+    IR_SINPUT_CALL,
 } ir_sinput_kind_t;
 
 typedef struct {
     ir_sinput_kind_t kind;
     uint32_t         param;
     ir_splace_t      place;
+    core_string_t    callee;
 } ir_sinput_t;
 
 typedef enum : uint8_t {
@@ -145,6 +148,7 @@ typedef struct {
                  ir_sflow_t *out);
     const ir_summary_t *(*entries)(void *context, ir_summaries_t *summaries,
                                    uint32_t flag);
+    bool (*global_reachable)(void *context, const ir_global_t *global);
 } ir_summary_hooks_t;
 
 const ir_sflow_t *ir_summary_flow(const ir_summary_t *summary);

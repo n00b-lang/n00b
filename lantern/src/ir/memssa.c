@@ -55,16 +55,20 @@ block_accesses(ir_memssa_t *m, ir_block_t *block, uint32_t *cursor,
         uint32_t    total = ir_places_access_count(m->places);
         while (end < total && ir_places_access_at(m->places, end)->instr == in)
             end++;
-        for (uint32_t a = first; a < end; a++)
-            if (ir_places_access_at(m->places, a)->kind == IR_ACCESS_LOAD)
+        for (uint32_t a = first; a < end; a++) {
+            const ir_access_t *access = ir_places_access_at(m->places, a);
+            if (access->kind == IR_ACCESS_LOAD
+                && !ir_places_access_private(m->places, access))
                 m->use_def[a] = *def;
+        }
         if (call_like(in))
             *def = add_def(m, (ir_memdef_t){.kind = IR_MEMDEF_CALL,
                                             .instr = in, .block = block},
                            *def);
         for (uint32_t a = first; a < end; a++) {
             const ir_access_t *access = ir_places_access_at(m->places, a);
-            if (access->kind == IR_ACCESS_STORE)
+            if (access->kind == IR_ACCESS_STORE
+                && !ir_places_access_private(m->places, access))
                 *def = add_def(m, (ir_memdef_t){.kind = IR_MEMDEF_STORE,
                                                 .instr = in, .access = access,
                                                 .block = block},
@@ -206,6 +210,19 @@ ir_memssa_def_before(const ir_memssa_t *m, const ir_instr_t *in)
     return UINT32_MAX;
 }
 
+uint32_t
+ir_memssa_def_count(const ir_memssa_t *m)
+{
+    return m ? (uint32_t)m->defs.len : 0;
+}
+
+uint32_t
+ir_memssa_load_def(const ir_memssa_t *m, uint32_t load_access)
+{
+    return m && load_access < ir_places_access_count(m->places)
+        ? m->use_def[load_access] : UINT32_MAX;
+}
+
 const ir_memdef_t *
 ir_memssa_def(const ir_memssa_t *m, uint32_t id)
 {
@@ -248,8 +265,10 @@ static bool
 all_private(const ir_places_t *places, const ir_access_t *access)
 {
     const uint32_t *ids = ir_places_access_places(places, access);
-    for (uint32_t i = 0; i < access->count; i++)
-        if (ir_place_at(places, ids[i])->kind != IR_PLACE_LOCAL) return false;
+    for (uint32_t i = 0; i < access->count; i++) {
+        const ir_place_t *place = ir_place_at(places, ids[i]);
+        if (place->kind != IR_PLACE_LOCAL || place->exposed) return false;
+    }
     return true;
 }
 

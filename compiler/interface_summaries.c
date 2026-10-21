@@ -207,10 +207,13 @@ n00bb_interface_summary(n00bb_link_analysis_t *analysis,
 {
     if (!analysis || !function || function->n_blocks
         || !analysis->linked_interface_count) return nullptr;
-    interface_summary_t probe = {
-        .module = ir_module_name(function->owner),
-        .function = function->name,
-    };
+    core_string_t module = ir_module_name(function->owner);
+    core_string_t name   = function->name;
+    if (name.u8_bytes > module.u8_bytes
+        && core_string_starts_with(name, module)
+        && name.data[module.u8_bytes] == '.')
+        name = core_string_slice(name, module.u8_bytes + 1, name.u8_bytes);
+    interface_summary_t probe = {.module = module, .function = name};
     bool found = false;
     interface_summary_t *entry = core_dict_get(
         &interface_index(analysis)->by_function, &probe, &found);

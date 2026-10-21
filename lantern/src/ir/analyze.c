@@ -158,41 +158,6 @@ static bool mark_read_store(void *context, const ir_memdef_t *def)
     return true;
 }
 
-static bool place_reaches_call(ir_places_t *places, ir_func_t *f,
-                               uint32_t place)
-{
-    for (uint32_t b = 0; b < f->n_blocks; b++) {
-        ir_block_t *block = f->blocks[b];
-
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *in = block->instrs[i];
-
-            if (in->op != IR_OP_CALL && in->op != IR_OP_CALLBACK_INVOKE
-                && in->op != IR_OP_CALLBACK_CREATE) {
-                continue;
-            }
-
-            for (uint32_t o = 0; o < in->n_operands; o++) {
-                const ir_value_t *value = ir_operand_value(&in->operands[o]);
-                const uint32_t   *ids   = nullptr;
-                uint32_t          count = 0;
-
-                if (!value || !ir_places_of(places, value, &ids, &count)) {
-                    continue;
-                }
-
-                for (uint32_t p = 0; p < count; p++) {
-                    if (ids[p] == place) {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-
-    return false;
-}
-
 uint32_t ir_dead_stores(ir_func_t *f, const ir_instr_t **out,
                         uint32_t capacity)
 {
@@ -234,10 +199,13 @@ uint32_t ir_dead_stores(ir_func_t *f, const ir_instr_t **out,
                 const uint32_t    *ids    = ir_places_access_places(places,
                                                                    access);
 
+                const ir_place_t  *place  = access->count == 1
+                                          ? ir_place_at(places, ids[0])
+                                          : nullptr;
+
                 if (access->kind != IR_ACCESS_STORE || !access->whole
-                    || access->count != 1
-                    || ir_place_at(places, ids[0])->kind != IR_PLACE_LOCAL
-                    || place_reaches_call(places, f, ids[0])) {
+                    || access->direct || !place
+                    || place->kind != IR_PLACE_LOCAL || place->exposed) {
                     continue;
                 }
 

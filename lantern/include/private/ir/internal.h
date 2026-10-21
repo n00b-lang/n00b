@@ -18,10 +18,13 @@ typedef struct ir_cleanup_t {
     struct ir_cleanup_t *next;
 } ir_cleanup_t;
 
+typedef struct ir_reinterpretations_t ir_reinterpretations_t;
+
 struct ir_ctx_t {
-    core_arena_t  arena;
-    th_ctx       *types;
-    ir_cleanup_t *cleanups;
+    core_arena_t            arena;
+    th_ctx                 *types;
+    ir_cleanup_t           *cleanups;
+    ir_reinterpretations_t *reinterpretations;
 };
 
 void ir_ctx_on_free(ir_ctx_t *ctx, void (*fn)(void *), void *arg);

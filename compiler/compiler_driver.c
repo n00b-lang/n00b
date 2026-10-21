@@ -1730,65 +1730,6 @@ discover_package_import(import_driver_t *driver,
     return selected_job;
 }
 
-static bool
-load_parent_package_dependencies(import_driver_t *driver,
-                                 core_translation_unit_t *importer,
-                                 parse_tree_t *statement,
-                                 core_translation_unit_t *child_unit,
-                                 core_string_t child_name)
-{
-    for (size_t end = 0; end < child_name.u8_bytes; end++) {
-        if (child_name.data[end] != '.') continue;
-        core_string_t parent_name = core_string_borrow(child_name.data, end);
-        n00bb_package_declaration_t *parent =
-            find_package_declaration(child_unit, parent_name);
-        core_translation_unit_t *parent_unit = child_unit;
-        if (!parent) {
-            core_module_spec_t module = {0};
-            bool initialized = core_module_spec_init(&module, parent_name);
-            core_work_job_t *job = initialized
-                ? discover_package_import(driver, importer, statement,
-                                          &module, false) : nullptr;
-            if (initialized) core_module_spec_release(&module);
-            parent_unit = job ? core_work_job_result(driver->queue, job)
-                              : nullptr;
-            parent = parent_unit
-                ? find_package_declaration(parent_unit, parent_name)
-                : nullptr;
-            if (!parent) {
-                import_error(importer, statement,
-                    "a public child package requires an ancestor manifest");
-                return false;
-            }
-        }
-        size_t next = end + 1;
-        while (next < child_name.u8_bytes && child_name.data[next] != '.')
-            next++;
-        core_string_t member = core_string_borrow(child_name.data + end + 1,
-                                                   next - end - 1);
-        bool exported = false;
-        for (size_t i = 0; i < parent->exports.len; i++) {
-            n00bb_package_export_t *item = &parent->exports.data[i];
-            if (item->subpackage
-                && core_string_eq(item->export_name, member)) {
-                exported = true;
-                break;
-            }
-        }
-        if (!exported) {
-            import_error(importer, statement,
-                "a public child package must be exported by its parent manifest");
-            return false;
-        }
-        if (parent_unit != child_unit
-            && !core_translation_unit_add_import(child_unit, parent_unit)) {
-            import_error(importer, statement,
-                "cannot retain parent package dependency");
-            return false;
-        }
-    }
-    return true;
-}
 
 static bool
 load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
@@ -1893,10 +1834,6 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
             "a library source module cannot be imported from another source package; import its package manifest");
         return false;
     }
-    if (find_package_declaration(imported, imported_name)
-        && !load_parent_package_dependencies(driver, importer, statement,
-                                              imported, imported_name))
-        return false;
     if (state && state->interface_module && state->package_interface
         && !record_import_alias(importer, imported_name, imported)) {
         import_error(importer, statement,

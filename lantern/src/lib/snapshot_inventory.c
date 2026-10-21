@@ -51,7 +51,6 @@ struct core_snapshot_inventory_t {
     core_list_t(core_string_t) roots;
     core_list_t(inventory_entry_t) entries;
     core_snapshot_inventory_accept_fn accept;
-    core_snapshot_inventory_descend_fn descend;
     void *context;
     uint64_t generation;
     uint64_t next_revision;
@@ -388,12 +387,6 @@ core_snapshot_inventory_free(core_snapshot_inventory_t *inventory)
     core_free(inventory);
 }
 
-void
-core_snapshot_inventory_set_descend(core_snapshot_inventory_t *inventory,
-                                    core_snapshot_inventory_descend_fn descend)
-{
-    if (inventory) inventory->descend = descend;
-}
 
 bool
 core_snapshot_inventory_enable_cache(core_snapshot_inventory_t *inventory,
@@ -508,10 +501,54 @@ accepts(const core_snapshot_inventory_t *inventory, core_string_t relative)
 }
 
 static bool
+holds_sources(const core_snapshot_inventory_t *inventory,
+              core_string_t absolute)
+{
+    bool found = false;
+#ifdef _WIN32
+    core_string_t pattern = join_path(absolute, CORE_STRING_STATIC("*"));
+    wchar_t *wide = wide_path(pattern);
+    WIN32_FIND_DATAW item;
+    HANDLE search = wide ? FindFirstFileW(wide, &item) : INVALID_HANDLE_VALUE;
+    core_free(wide);
+    core_free(pattern.data);
+    if (search == INVALID_HANDLE_VALUE) return false;
+    do {
+        if (item.cFileName[0] == L'.'
+            || (item.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        core_string_t name = utf8_name(item.cFileName);
+        found = name.data && accepts(inventory, name);
+        core_free(name.data);
+    } while (!found && FindNextFileW(search, &item));
+    FindClose(search);
+#else
+    DIR *directory = open_directory(absolute);
+    if (!directory) return false;
+    struct dirent *item;
+    while (!found && (item = readdir(directory))) {
+        core_string_t name = core_string_from_cstr(item->d_name);
+        if (!is_dot_entry(name) && name.u8_bytes && name.data[0] != '.'
+            && accepts(inventory, name)) {
+            core_string_t path = join_path(absolute, name);
+            file_signature_t signature = {0};
+            bool is_directory = false, regular = false;
+            found = path_signature(path, &signature, &is_directory,
+                                   &regular) == 1 && regular;
+            core_free(path.data);
+        }
+        core_free(name.data);
+    }
+    closedir(directory);
+#endif
+    return found;
+}
+
+static bool
 descends(const core_snapshot_inventory_t *inventory, core_string_t absolute)
 {
-    return !inventory->descend || inventory->descend(inventory->context,
-                                                     absolute);
+    for (size_t i = 0; i < inventory->roots.len; i++)
+        if (core_string_eq(inventory->roots.data[i], absolute)) return false;
+    return holds_sources(inventory, absolute);
 }
 
 static bool

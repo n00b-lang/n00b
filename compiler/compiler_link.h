@@ -420,6 +420,10 @@ typedef struct n00bb_link_analysis_t {
     ir_summaries_t *entry_owner;
     ir_summary_t *entry_summaries[3];
     bool entry_ready[3];
+    core_dict_t global_symbols;
+    bool global_symbols_ready;
+    core_dict_t escaped_globals;
+    ir_summaries_t *escaped_owner;
     core_list_t(n00bb_specialization_t) specializations;
     core_list_t(n00bb_specialization_request_t) specialization_requests;
     core_list_t(n00bb_captured_graph_node_t) static_graph_nodes;

@@ -45,6 +45,9 @@ bool ir_memssa_visit_element_defs(ir_memssa_t *memssa, uint32_t load_access,
 
 uint32_t           ir_memssa_def_before(const ir_memssa_t *memssa,
                                         const ir_instr_t *in);
+uint32_t           ir_memssa_load_def(const ir_memssa_t *memssa,
+                                      uint32_t load_access);
+uint32_t           ir_memssa_def_count(const ir_memssa_t *memssa);
 const ir_memdef_t *ir_memssa_def(const ir_memssa_t *memssa, uint32_t id);
 uint32_t           ir_memssa_def_prev(const ir_memssa_t *memssa, uint32_t id);
 uint32_t           ir_memssa_phi_count(const ir_memssa_t *memssa,

@@ -47,7 +47,7 @@ ir_analysis_scope_begin(void)
 void
 ir_analysis_scope_end(size_t scope)
 {
-    while (scope_owned.len > scope)
+    while (scope_depth == 1 && scope_owned.len > scope)
         ir_func_release_analyses(scope_owned.data[--scope_owned.len]);
     if (scope_depth && !--scope_depth) core_list_free(scope_owned);
 }
@@ -62,9 +62,41 @@ mix(uint64_t state, uint64_t word)
 }
 
 static uint64_t
+mix_annots(uint64_t h, const ir_annots_t *annots)
+{
+    h = mix(h, annots->n);
+    return annots->n
+        ? mix(h, core_xxh3_64bits_raw(annots->a,
+                                      annots->n * sizeof(ir_annot_t)))
+        : h;
+}
+
+static uint64_t
+mix_value(uint64_t h, const ir_value_t *value)
+{
+    if (!value) return mix(h, 0);
+    h = mix(h, (uint64_t)(uintptr_t)value);
+    h = mix(h, (uint64_t)(uintptr_t)value->type);
+    return mix_annots(h, &value->annots);
+}
+
+static uint64_t
 fingerprint(const ir_func_t *f)
 {
     uint64_t h = mix(0, f->n_blocks);
+    h = mix(h, (uint64_t)(uintptr_t)f->type);
+    h = mix_annots(h, &f->annots);
+    h = mix(h, f->n_params);
+    for (uint32_t p = 0; p < f->n_params; p++)
+        h = mix_value(h, f->params[p]);
+    h = mix(h, f->n_locals);
+    for (uint32_t l = 0; l < f->n_locals; l++) {
+        const ir_local_t *local = f->locals[l];
+        h = mix(h, (uint64_t)(uintptr_t)local);
+        h = mix(h, (uint64_t)(uintptr_t)local->type);
+        h = mix(h, local->address_taken);
+        h = mix_value(h, local->value);
+    }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         const ir_block_t *block = f->blocks[b];
         h = mix(h, (uint64_t)(uintptr_t)block);
@@ -73,12 +105,20 @@ fingerprint(const ir_func_t *f)
             const ir_instr_t *in = block->instrs[i];
             h = mix(h, (uint64_t)(uintptr_t)in);
             h = mix(h, in->op);
-            h = mix(h, (uint64_t)(uintptr_t)in->dest);
+            h = mix(h, in->dest_kind);
+            h = mix_value(h, in->dest);
             h = mix(h, (uint64_t)(uintptr_t)in->dest_local);
             h = mix(h, in->n_operands);
             if (in->n_operands)
                 h = mix(h, core_xxh3_64bits_raw(in->operands,
                     in->n_operands * sizeof(ir_operand_t)));
+            h = mix(h, in->n_mods);
+            if (in->n_mods)
+                h = mix(h, core_xxh3_64bits_raw(in->mods,
+                    in->n_mods * sizeof(core_string_t)));
+            h = mix(h, (uint64_t)(uintptr_t)in->const_bytes);
+            h = mix(h, in->const_byte_len);
+            h = mix_annots(h, &in->annots);
         }
     }
     return h;
@@ -127,11 +167,19 @@ current_slot(ir_func_t *f)
     return slot;
 }
 
+static _Thread_local const ir_func_t *building;
+
+static struct ir_func_analyses_t *
+valid_slot(ir_func_t *f)
+{
+    return building == f ? slot_of(f) : current_slot(f);
+}
+
 ir_doms_t *
 ir_func_doms(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
-    struct ir_func_analyses_t *slot = current_slot(f);
+    struct ir_func_analyses_t *slot = valid_slot(f);
     if (!slot->doms) slot->doms = ir_doms_of(f);
     return slot->doms;
 }
@@ -140,9 +188,14 @@ ir_pdg_t *
 ir_func_pdg(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
-    struct ir_func_analyses_t *slot = current_slot(f);
+    struct ir_func_analyses_t *slot = valid_slot(f);
     if (!slot->doms) slot->doms = ir_doms_of(f);
-    if (!slot->pdg && slot->doms) slot->pdg = ir_pdg_with_doms(f, slot->doms);
+    if (!slot->pdg && slot->doms) {
+        const ir_func_t *outer = building;
+        building = f;
+        slot->pdg = ir_pdg_with_doms(f, slot->doms);
+        building = outer;
+    }
     return slot->pdg;
 }
 
@@ -150,8 +203,13 @@ ir_places_t *
 ir_func_places(ir_func_t *f)
 {
     if (!f) return nullptr;
-    struct ir_func_analyses_t *slot = current_slot(f);
-    if (!slot->places) slot->places = ir_places_build(f);
+    struct ir_func_analyses_t *slot = valid_slot(f);
+    if (!slot->places) {
+        const ir_func_t *outer = building;
+        building = f;
+        slot->places = ir_places_build(f);
+        building = outer;
+    }
     return slot->places;
 }
 
@@ -159,8 +217,13 @@ ir_memssa_t *
 ir_func_memssa(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
-    struct ir_func_analyses_t *slot = current_slot(f);
-    if (!slot->memssa) slot->memssa = ir_memssa_build(f);
+    struct ir_func_analyses_t *slot = valid_slot(f);
+    if (!slot->memssa) {
+        const ir_func_t *outer = building;
+        building = f;
+        slot->memssa = ir_memssa_build(f);
+        building = outer;
+    }
     return slot->memssa;
 }
 
@@ -168,8 +231,13 @@ ir_sites_t *
 ir_func_sites(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
-    struct ir_func_analyses_t *slot = current_slot(f);
-    if (!slot->sites) slot->sites = ir_sites_build(f);
+    struct ir_func_analyses_t *slot = valid_slot(f);
+    if (!slot->sites) {
+        const ir_func_t *outer = building;
+        building = f;
+        slot->sites = ir_sites_build(f);
+        building = outer;
+    }
     return slot->sites;
 }
 
@@ -177,8 +245,13 @@ ir_ranges_t *
 ir_func_ranges(ir_func_t *f)
 {
     if (!f || !f->n_blocks) return nullptr;
-    struct ir_func_analyses_t *slot = current_slot(f);
-    if (!slot->ranges) slot->ranges = ir_ranges_build(f);
+    struct ir_func_analyses_t *slot = valid_slot(f);
+    if (!slot->ranges) {
+        const ir_func_t *outer = building;
+        building = f;
+        slot->ranges = ir_ranges_build(f);
+        building = outer;
+    }
     return slot->ranges;
 }
 

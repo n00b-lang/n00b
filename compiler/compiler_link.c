@@ -4031,6 +4031,9 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->reachable_functions);
     core_list_free(analysis->emitted_functions);
     core_list_free(analysis->callback_handlers);
+    if (analysis->global_symbols_ready)
+        core_dict_free(&analysis->global_symbols);
+    if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
     core_list_free(analysis->specializations);
     core_list_free(analysis->specialization_requests);
     core_list_free(analysis->record_requests);

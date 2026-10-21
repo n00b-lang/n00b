@@ -100,19 +100,6 @@ accept_source_path(void *context, core_string_t relative)
         || core_string_ends_with(relative, CORE_STRING_STATIC(".n00b"));
 }
 
-static bool
-descend_source_directory(void *context, core_string_t absolute)
-{
-    (void)context;
-    core_string_t marker = join_path(absolute,
-                                     CORE_STRING_STATIC("meson-private"));
-    char *native = core_string_to_cstr(marker);
-    struct stat info = {0};
-    bool build_tree = native && !stat(native, &info) && S_ISDIR(info.st_mode);
-    core_free(native);
-    core_free(marker.data);
-    return !build_tree;
-}
 #ifdef _WIN32
 static core_string_t wide_to_utf8(const wchar_t *wide, int length);
 static wchar_t *utf8_to_wide(core_string_t utf8);
@@ -427,8 +414,6 @@ n00bb_resolver_new(core_string_t argv0)
         roots[i] = resolver->roots.data[i].path;
     resolver->inventory = core_snapshot_inventory_new(roots,
         resolver->roots.len, accept_source_path, nullptr);
-    core_snapshot_inventory_set_descend(resolver->inventory,
-                                        descend_source_directory);
     if (resolver->inventory && !getenv("N00BB_NO_PACKAGE_CACHE")) {
         core_string_t packages = n00bb_cache_directory(
             CORE_STRING_STATIC("packages"));
