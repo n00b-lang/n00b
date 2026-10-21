@@ -67,10 +67,12 @@ unify_call_node_type(core_translation_unit_t *unit,
         return true;
     }
     bool converted = false;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    size_t reported = core_diagnostics_count(diagnostics);
     th_type *materialized = n00bb_type_materialize(state->link_analysis
             ? state->link_analysis->grammar : nullptr,
         state, typed_node, actual, expected, &converted);
-    if (!materialized)
+    if (!materialized && core_diagnostics_count(diagnostics) == reported)
         report_call_type_error(unit, diagnostic_node, state->types, actual,
                                expected, role);
     return materialized != nullptr;

@@ -1170,7 +1170,7 @@ resolved_iteration_item_type(parse_grammar_t *grammar,
         const th_param *self = signature ? th_func_param(signature, 0)
                                          : nullptr;
         if (!self || !th_unify_in_place(state->types, self->type,
-                th_type_clone(state->types, receiver))) return nullptr;
+                th_type_clone_fresh(state->types, receiver))) return nullptr;
         receiver = th_func_ret(signature);
         if (!receiver) return nullptr;
         if (i == 0) cursor_type = receiver;
@@ -1808,7 +1808,7 @@ infer_sequence_modifier_type(parse_grammar_t *grammar,
             break;
         }
         if (context_element)
-            (void)n00bb_contextual_integer_literal(state,
+            (void)n00bb_integer_literal_joins_type(state,
                 expressions.data[i], context_element);
         th_type *item = parse_tree_type(expressions.data[i]);
         if (!item) collected = false;
@@ -2205,7 +2205,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
         th_type *slot = ok ? th_resolve(groups[g].slot) : nullptr;
         for (size_t i = 0; slot && is_integer_type(slot)
              && i < groups[g].nodes.len; i++)
-            if (n00bb_contextual_integer_literal(state,
+            if (n00bb_integer_literal_joins_type(state,
                     groups[g].nodes.data[i], slot))
                 groups[g].items.data[i] = slot;
         if (ok && !unify_literal_items(state->types, &groups[g], &conflict)) {
@@ -4173,7 +4173,7 @@ unify_literal_operand(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             && !(shift && side == 1);
         if (!other_type || th_kind_of(th_resolve(other_type)) != TH_VAR) {
             if (unsigned_only && other_type)
-                (void)n00bb_contextual_integer_literal(state, operand,
+                (void)n00bb_integer_literal_joins_type(state, operand,
                                                        other_type);
             continue;
         }
@@ -8575,83 +8575,20 @@ n00bb_float_literal_adopts(parse_tree_t *node, th_type *operand)
     return true;
 }
 
-static bool
-literal_path_negation(parse_tree_t *origin, parse_tree_t *node,
-                      bool *negated)
-{
-    *negated = false;
-    for (parse_tree_t *current = origin; current != node;) {
-        current = parse_tree_parent(current);
-        if (!current) return false;
-        size_t children = core_tree_num_children(current);
-        if (children == 1) continue;
-        if (children == 2
-            && parse_tree_leaf_is(core_tree_child(current, 0),
-                                  CORE_STRING_STATIC("-"))) {
-            *negated = !*negated;
-            continue;
-        }
-        if (children == 2
-            && parse_tree_leaf_is(core_tree_child(current, 0),
-                                  CORE_STRING_STATIC("+"))) continue;
-        if (children == 3
-            && parse_tree_leaf_is(core_tree_child(current, 0),
-                                  CORE_STRING_STATIC("("))
-            && parse_tree_leaf_is(core_tree_child(current, 2),
-                                  CORE_STRING_STATIC(")"))) continue;
-        return false;
-    }
-    return true;
-}
-
-static bool
-literal_fits_type(n00bb_tu_state_t *state, parse_tree_t *origin,
-                  parse_tree_t *node, th_type *target)
-{
-    int64_t minimum = 0, maximum = 0;
-    if (n00bb_current_integer_range(state, node, &minimum, &maximum))
-        return n00bb_integer_interval_fits_type(target, minimum, maximum);
-    bool negated = false;
-    if (!literal_path_negation(origin, node, &negated)) return false;
-    if (n00bb_current_integer_range(state, origin, &minimum, &maximum))
-        return negated
-            ? minimum != INT64_MIN && n00bb_integer_interval_fits_type(
-                target, -maximum, -minimum)
-            : n00bb_integer_interval_fits_type(target, minimum, maximum);
-    ir_lit_t literal = {0};
-    uint64_t width = 0;
-    bool is_signed = false;
-    if (!n00bb_parse_switch_integer(first_token_text(origin), &literal)
-        || !n00bb_integer_representation(target, &width, &is_signed))
-        return false;
-    ir_scalar_t scalar = {
-        .class = is_signed ? IR_CLASS_SINT : IR_CLASS_UINT,
-        .width = width,
-    };
-    return n00bb_literal_fits_scalar(literal.mag, negated, &scalar);
-}
-
 bool
-n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
+n00bb_integer_literal_joins_type(n00bb_tu_state_t *state,
                                  parse_tree_t *node, th_type *target)
 {
     parse_tree_t *origin = node
         ? parse_tree_integer_literal_origin(node) : nullptr;
     if (!origin) return n00bb_contextual_float_literal(node, target);
-    if (!literal_fits_type(state, origin, node, target)) return false;
-    if (n00bb_unsigned_literal_origin(origin) && !n00bb_bitwise_type(target))
-        return false;
-    th_type *open = parse_tree_type(origin);
-    if (n00bb_open_integer(open) && th_resolve(open) != th_resolve(target)
-        && !th_unify_in_place(state->types, open, target))
-        return false;
-    for (parse_tree_t *current = origin; current;
-         current = parse_tree_parent(current)) {
-        parse_tree_set_type(current, target);
-        if (current == node) break;
-    }
-    type_folded_operands(state, origin, target);
-    return true;
+    th_type *open = parse_tree_type(node);
+    if (n00bb_open_integer(open))
+        return target
+            && (n00bb_open_integer(target) || is_integer_type(target)
+                || n00bb_scalar_role_is(target, IR_ROLE_BYTE))
+            && th_unify_in_place(state->types, open, target) != nullptr;
+    return open && target && th_resolve(open) == th_resolve(target);
 }
 
 static bool
@@ -8772,7 +8709,7 @@ sequence_literal_as_array(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     bool fits = !elements || collect_ordered_children(elements, &items);
     for (size_t i = 0; fits && i < items.len; i++) {
         th_type *item = parse_tree_type(items.data[i]);
-        fits = n00bb_contextual_integer_literal(state, items.data[i], element)
+        fits = n00bb_integer_literal_joins_type(state, items.data[i], element)
             || (item && th_unify_probe(state->types, item, element));
     }
     for (size_t i = 0; fits && i < items.len; i++)
@@ -9003,6 +8940,8 @@ n00bb_conversion_hook(th_ctx *types, th_type *from, th_type *to, void *site,
         break;
     }
     if (!state || state->types != types) return false;
+    if (n00bb_open_integer(from) && n00bb_open_integer(to))
+        return th_unify_in_place(types, from, to) != nullptr;
     if (th_is_nil(to) || (site && n00bb_node_record_literal_origin(site)))
         return true;
     if (site && ((!th_is_closed(types, from) && call_result_node(site))
@@ -9092,7 +9031,7 @@ contextual_value_results(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         contextual = (result && th_is_closed(state->types, result)
                       && th_hash(state->types, result)
                           == th_hash(state->types, target))
-            || n00bb_contextual_integer_literal(state, results.data[i],
+            || n00bb_integer_literal_joins_type(state, results.data[i],
                                                 target)
             || contextual_value_results(grammar, state, results.data[i],
                                         target);
@@ -9155,7 +9094,7 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         *converted = materialized != nullptr;
         return materialized ? expected : nullptr;
     }
-    if (n00bb_contextual_integer_literal(state, node, expected)
+    if (n00bb_integer_literal_joins_type(state, node, expected)
         || contextual_value_results(grammar, state, node, expected))
         return expected;
     if (n00bb_constant_misfits_type(state, node, expected)) return nullptr;
@@ -9180,7 +9119,7 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (n00bb_option_type_element(expected, &element)
         && !n00bb_option_type_element(actual, nullptr)
         && (th_is_nil(actual) || th_unify_probe(types, actual, element)
-            || n00bb_contextual_integer_literal(state, node, element)))
+            || n00bb_integer_literal_joins_type(state, node, element)))
         return expected;
     th_type *materialized = union_arm_for(types, actual, expected);
     if (materialized && !th_unify_probe(types, actual, expected))
@@ -10713,6 +10652,7 @@ free_tu_state(void *data)
     core_list_free(state->dispatch_records);
     core_list_free(state->deferred_conversions);
     core_list_free(state->integer_seeds);
+    core_list_free(state->integer_edges);
     core_list_free(state->module_top_level_statements);
     core_list_free(state->literal_constants);
     core_list_free(state->array_type_nodes);
@@ -10729,6 +10669,7 @@ free_tu_state(void *data)
     core_list_free(state->literal_site_nodes);
     core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
+    core_dict_free(&state->integer_edge_sites);
     core_dict_free(&state->declarations_typed_ahead);
     free_type_symbol_index(state);
     n00bb_range_state_release(state);
@@ -10762,6 +10703,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->literal_site_nodes = core_list_new(parse_tree_ptr_t);
     state->shape_literal_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
+    core_dict_init(&state->integer_edge_sites, nullptr, nullptr);
     core_dict_init(&state->declarations_typed_ahead, nullptr, nullptr);
     core_dict_init(&state->integer_symbol_ranges, nullptr, nullptr);
     core_dict_init(&state->integer_range_invalidated_symbols, nullptr, nullptr);
@@ -11942,7 +11884,16 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
 {
     core_string_t trait = {0}, method = {0};
     if (!binary_operator_dispatch_for_node(grammar, node,
-                                           &trait, &method)) return true;
+                                           &trait, &method)
+        || core_dict_contains(&state->integer_edge_sites, node)) return true;
+    const n00bb_binary_operator_t *compound =
+        NT_IS(grammar, node, "binop-assign-stmt")
+        ? n00bb_binary_operator_method(method) : nullptr;
+    th_type *compound_target = compound
+        ? parse_tree_type(core_tree_child(node, 0)) : nullptr;
+    if (compound && !compound->shift
+        && (is_integer_type(compound_target)
+            || n00bb_open_integer(compound_target))) return true;
     n00bb_link_use_site_t site = {
         .node = node,
         .dispatch_trait = trait,
@@ -11961,7 +11912,8 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
     if (!primitive_operator_site(state, &site)) return true;
     th_type *result = parse_tree_type(node);
     if (comparison && !is_integer_type(left_type)
-        && !is_integer_type(right_type)
+        && !n00bb_open_integer(left_type)
+        && !is_integer_type(right_type) && !n00bb_open_integer(right_type)
         && !(left_type && th_ind_referent(th_resolve(left_type)))
         && !(right_type && th_ind_referent(th_resolve(right_type))))
         return true;
@@ -12007,7 +11959,7 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
             && th_kind_of(th_resolve(right_type)) == TH_VAR
             ? n00bb_shift_count_type(state->types, left_type) : nullptr;
         if (count_type
-            && n00bb_contextual_integer_literal(state, right, count_type))
+            && n00bb_integer_literal_joins_type(state, right, count_type))
             right_type = parse_tree_type(right);
         bool known_range = n00bb_current_integer_range(state, right,
                                                        &minimum, &maximum);
@@ -12039,15 +11991,61 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
             return false;
         }
     }
+    bool left_open = n00bb_open_integer(left_type);
+    bool right_open = n00bb_open_integer(right_type);
+    bool left_pending = left_type && !left_open
+        && th_kind_of(th_resolve(left_type)) == TH_VAR;
+    bool right_pending = right_type && !right_open
+        && th_kind_of(th_resolve(right_type)) == TH_VAR;
+    if (!comparison && !shift && operator && (left_open || right_open)
+        && (left_open || left_pending) && (right_open || right_pending)) {
+        th_type *existing = result ? th_resolve(result) : nullptr;
+        if (n00bb_open_integer(existing)
+            && existing != th_resolve(left_type)
+            && existing != th_resolve(right_type)) return true;
+        if (operator->unsigned_only && right_open
+            && !n00bb_require_unsigned_integer(state, right_type))
+            return false;
+        th_type *widened = n00bb_integer_result_variable(state, node,
+            operator->op, left_type, right_type);
+        if (!widened) return false;
+        if (existing && th_kind_of(existing) == TH_VAR
+            && existing != th_resolve(left_type)
+            && existing != th_resolve(right_type)
+            && !th_unify_in_place(state->types, widened, existing))
+            return false;
+        parse_tree_set_type(node, widened);
+        return true;
+    }
+    if (!comparison && !shift && is_integer_type(left_type)
+        && is_integer_type(right_type)
+        && th_resolve(left_type) != th_resolve(right_type)) {
+        th_type *wider = n00bb_integer_type_promotes_to(left_type, right_type)
+            ? right_type
+            : n00bb_integer_type_promotes_to(right_type, left_type)
+            ? left_type : nullptr;
+        th_type *current = result ? th_resolve(result) : nullptr;
+        if (wider && current && is_integer_type(current)
+            && n00bb_integer_type_promotes_to(wider, current))
+            return true;
+        if (wider && (!current || current == th_resolve(left_type)
+                      || th_kind_of(current) == TH_VAR)) {
+            if (current && th_kind_of(current) == TH_VAR
+                && !th_unify_in_place(state->types, current, wider))
+                return false;
+            parse_tree_set_type(node, wider);
+            return true;
+        }
+    }
     if (!shift && left_type && right_type
         && left_type != right_type) {
-        if (n00bb_contextual_integer_literal(state, right, left_type)
+        if (n00bb_integer_literal_joins_type(state, right, left_type)
             || n00bb_float_literal_adopts(right, left_type)) {
             right_type = parse_tree_type(right);
         }
         else {
             th_type *previous_left = left_type;
-            if (n00bb_contextual_integer_literal(state, left, right_type)
+            if (n00bb_integer_literal_joins_type(state, left, right_type)
                 || n00bb_float_literal_adopts(left, right_type)) {
                 left_type = parse_tree_type(left);
                 if (result == previous_left) {

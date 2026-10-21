@@ -1185,6 +1185,24 @@ n00bb_emit_binary_ir(ir_lower_context_t *context, ir_op_t op,
                                      right, span);
 }
 
+static ir_value_t *
+n00bb_widen_integer_operand(ir_lower_context_t *context, ir_value_t *value,
+                            th_type *result_type, ir_span_t span)
+{
+    if (ir_type_eq(context->module, value->type, result_type)
+        || !n00bb_integer_type_promotes_to(value->type, result_type))
+        return value;
+    ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST, span);
+    bool signedness_change = ir_machine_of(context->module, value->type).class
+        != ir_machine_of(context->module, result_type).class;
+    return cast && ir_lower_set_temp_dest(context, cast,
+                       CORE_STRING_STATIC("__n00bb_"), result_type)
+        && ir_instr_operand_value(cast, value)
+        && (!signedness_change
+            || ir_instr_add_mod(cast, CORE_STRING_STATIC("trap")))
+        ? cast->dest : nullptr;
+}
+
 static th_type *
 n00bb_ir_builtin_type(ir_module_t *module, core_string_t name)
 {
@@ -4961,6 +4979,15 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_error(context, IR_DIAG_INTERNAL, span,
                            "could not read through an operator operand");
     bool shift = op == IR_OP_SHL || op == IR_OP_SHR;
+    if (!comparison && !shift && is_integer_type(result_type)
+        && is_integer_type(left->type) && is_integer_type(right->type)) {
+        left = n00bb_widen_integer_operand(context, left, result_type, span);
+        right = n00bb_widen_integer_operand(context, right, result_type,
+                                            span);
+        if (!left || !right)
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not widen an integer operand");
+    }
     if (!shift && !ir_type_eq(context->module, left->type, right->type)) {
         ir_value_t *coerced = n00bb_typed_integer_literal(context,
             core_tree_child(visit->node, 2), left->type);
@@ -15093,13 +15120,21 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         updated = result.value;
     }
     else {
+        ir_value_t *value = !operator->shift && is_integer_type(target_type)
+            && is_integer_type(operands[1]->type)
+            ? n00bb_widen_integer_operand(context, operands[1], target_type,
+                                          span)
+            : operands[1];
+        if (!value)
+            return lower_error(context, IR_DIAG_INTERNAL, span,
+                               "could not widen an integer operand");
         if (!operator->shift && !ir_type_eq(context->module, target_type,
-                                            operands[1]->type))
+                                            value->type))
             return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                 "compound assignment operands do not match its operator");
         ir_value_t *right = operator->shift
             ? n00bb_lower_shift_count(context, core_tree_child(visit->node, 2),
-                operands[1], target_type, span) : operands[1];
+                operands[1], target_type, span) : value;
         if (!right) return (ir_lower_result_t){IR_LOWER_FAILED, nullptr};
         updated = n00bb_emit_binary_ir(context, operator->op, target_type,
             operands[0], right, span);

@@ -260,8 +260,16 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         .literal_token = literal_token,
         .literal_terminal = literal_terminal,
     };
+    th_type *compound_target = !entering
+        && NT_IS(grammar, node, "binop-assign-stmt")
+        && core_tree_num_children(node) == 3
+        ? parse_tree_type(core_tree_child(node, 0)) : nullptr;
+    bool integer_compound = compound_target
+        && (is_integer_type(compound_target)
+            || n00bb_open_integer(compound_target));
     if (variant_payload || flagset_field || type_reference
         || invalid_field_access || intrinsic_binary || intrinsic_unary
+        || integer_compound
         || (modified_numeric
             && core_string_eq(first_token_text(node),
                               CORE_STRING_STATIC("nil"))))
@@ -386,7 +394,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 expected = element;
             if (expected && is_integer_type(expected)
                 && parse_tree_integer_literal_origin(node) == node
-                && !n00bb_contextual_integer_literal(state, node, expected)
+                && !n00bb_integer_literal_joins_type(state, node, expected)
                 && literal_is_whole_value(grammar, node))
                 (void)n00bb_constant_misfits_type(state, node, expected);
             if (expected && is_float_type(expected))
@@ -397,16 +405,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             parse_tree_t *step = CHILD_NT(grammar,
                 CHILD_NT(grammar, node, "range-step"), "expression");
             th_type *bound = parts ? parse_tree_type(parts) : nullptr;
-            if (step && bound && is_integer_type(th_resolve(bound)))
-                (void)n00bb_contextual_integer_literal(state, step, bound);
+            if (step && bound && (is_integer_type(bound)
+                                  || n00bb_open_integer(bound)))
+                (void)n00bb_integer_literal_joins_type(state, step, bound);
         }
         th_type *declared = NT_IS(grammar, node, "range-parts")
             ? range_binding_type(grammar, node) : nullptr;
         if (declared && is_integer_type(th_resolve(declared))
             && core_tree_num_children(node) == 3) {
-            (void)n00bb_contextual_integer_literal(state,
+            (void)n00bb_integer_literal_joins_type(state,
                 core_tree_child(node, 0), declared);
-            (void)n00bb_contextual_integer_literal(state,
+            (void)n00bb_integer_literal_joins_type(state,
                 core_tree_child(node, 2), declared);
         }
         if (NT_IS(grammar, node, "range-parts")
@@ -436,10 +445,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             th_type *left_type = parse_tree_type(left);
             th_type *right_type = parse_tree_type(right);
             if (left_type && right_type && left_type != right_type
-                && !n00bb_contextual_integer_literal(state, right,
+                && !n00bb_integer_literal_joins_type(state, right,
                                                      left_type)
                 && !n00bb_float_literal_adopts(right, left_type)
-                && !n00bb_contextual_integer_literal(state, left, right_type))
+                && !n00bb_integer_literal_joins_type(state, left, right_type))
                 n00bb_float_literal_adopts(left, right_type);
         }
         if (NT_IS(grammar, node, "sym-decl")) {
@@ -488,12 +497,43 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 facts->record_literal_origin = origin;
             }
         }
+        if (NT_IS(grammar, node, "binop-assign-stmt")
+            && core_tree_num_children(node) == 3) {
+            const n00bb_binary_operator_t *operator =
+                n00bb_binary_operator_assigned(
+                    first_token_text(core_tree_child(node, 1)));
+            th_type *target_type = parse_tree_type(core_tree_child(node, 0));
+            th_type *value_type = parse_tree_type(core_tree_child(node, 2));
+            bool open_target = n00bb_open_integer(target_type);
+            bool unresolved_value = value_type
+                && th_kind_of(th_resolve(value_type)) == TH_VAR
+                && !n00bb_open_integer(value_type);
+            if (operator && !operator->shift && value_type
+                && (open_target || is_integer_type(target_type))) {
+                if (unresolved_value)
+                    core_list_push(state->deferred_conversions,
+                        ((n00bb_deferred_conversion_t){
+                            core_tree_child(node, 2), value_type,
+                            target_type}));
+                else (void)th_converts(state->types, value_type, target_type,
+                                       core_tree_child(node, 2), grammar);
+            }
+            if (operator && operator->unsigned_only && open_target)
+                (void)n00bb_require_unsigned_integer(state, target_type);
+            if (operator && !operator->shift && open_target)
+                n00bb_integer_growth(state, node, operator->op, target_type,
+                                     value_type);
+        }
         if (NT_IS(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {
             parse_tree_t *target = core_tree_child(node, 0);
             parse_tree_t *value = core_tree_child(node, 2);
-            n00bb_contextual_integer_literal(state, value,
+            n00bb_integer_literal_joins_type(state, value,
                 parse_tree_type(target));
+            if (n00bb_open_integer(parse_tree_type(value))
+                && n00bb_open_integer(parse_tree_type(target)))
+                (void)th_unify_in_place(state->types,
+                    parse_tree_type(value), parse_tree_type(target));
             th_type *target_type = parse_tree_type(target)
                 ? th_resolve(parse_tree_type(target)) : nullptr;
             th_type *value_type = parse_tree_type(value)

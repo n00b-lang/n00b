@@ -555,6 +555,10 @@ static ir_rule_result_t rule_const(ir_module_t *m, ir_instr_t *in,
         return ACCEPT(t);
     }
 
+    if (t && th_kind_of(th_resolve(t)) == TH_VAR
+        && in->n_operands && in->operands[0].kind == IR_OPD_CONST)
+        return ACCEPT(t);
+
     ir_machine_t k = ir_machine_of(m, t);
 
     if (k.class == IR_CLASS_OPAQUE) {

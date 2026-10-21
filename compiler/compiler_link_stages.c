@@ -151,18 +151,18 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     mark_resolved_flagset_operator_sites(analysis->grammar, units);
-    bool grounded = false;
-    if (!n00bb_ground_integers(units->data, units->len, false, &grounded)
-        || (grounded && !unify_calls_until_stable(analysis->grammar, link,
-            units->data, units->len, true, true, false))) {
-        th_env_free(environment);
-        return CORE_LINK_STAGE_RESULT_FAILED;
-    }
     if (!resolve_inferred_trait_references(analysis->grammar, link,
                                            analysis, environment)) {
         report_stage_failure(units->data, units->len, units->data[0],
             CORE_STRING_STATIC("N00BB-L0052"),
             CORE_STRING_STATIC("internal error: trait reference resolution failed"));
+        th_env_free(environment);
+        return CORE_LINK_STAGE_RESULT_FAILED;
+    }
+    bool grounded = false;
+    if (!n00bb_ground_integers(units->data, units->len, false, &grounded)
+        || (grounded && !unify_calls_until_stable(analysis->grammar, link,
+            units->data, units->len, true, true, false))) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }

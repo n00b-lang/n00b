@@ -89,6 +89,28 @@ ir_instr_t *ir_instr_generated(ir_block_t *b, ir_op_t op, ir_span_t near,
     return in;
 }
 
+bool ir_instr_erase(ir_instr_t *in)
+{
+    ir_block_t *from = in ? in->block : nullptr;
+    uint32_t    seen = 0;
+
+    for (uint32_t i = 0; from && i < from->n_instrs; i++) {
+        if (from->instrs[i] == in) {
+            seen = 1;
+            continue;
+        }
+        from->instrs[i - seen] = from->instrs[i];
+    }
+    if (!seen) {
+        return false;
+    }
+    from->n_instrs--;
+    reindex(from);
+    in->block = nullptr;
+
+    return true;
+}
+
 bool ir_instr_move(ir_instr_t *in, ir_block_t *to, uint32_t at)
 {
     if (!in || !to || !in->block) {

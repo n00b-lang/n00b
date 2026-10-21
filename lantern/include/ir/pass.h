@@ -12,6 +12,7 @@ ir_instr_t *ir_instr_derived(ir_block_t *b, ir_op_t op, const ir_instr_t *from,
 ir_instr_t *ir_instr_generated(ir_block_t *b, ir_op_t op, ir_span_t near,
                                core_string_t pass, uint32_t at);
 bool        ir_instr_move(ir_instr_t *in, ir_block_t *to, uint32_t at);
+bool        ir_instr_erase(ir_instr_t *in);
 bool        ir_instr_inlined_from(ir_instr_t *in, ir_span_t call_site,
                                   core_string_t agent);
 

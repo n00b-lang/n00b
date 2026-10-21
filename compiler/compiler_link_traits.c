@@ -1370,7 +1370,7 @@ constructor_argument_fits(n00bb_tu_state_t *state, parse_tree_t *node,
     if (optional && th_is_nil(argument)) return true;
     if (n00bb_value_coerces(state->types, argument, parameter)) return true;
     if (parse_tree_integer_literal_origin(node))
-        return n00bb_contextual_integer_literal(state, node,
+        return n00bb_integer_literal_joins_type(state, node,
                                                 optional ? element : parameter);
     return optional && th_unify_probe(state->types, argument, element)
         && th_unify_in_place(state->types, element, argument) != nullptr;

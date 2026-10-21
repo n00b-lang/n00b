@@ -6,6 +6,7 @@
 #include "cached_body.h"
 #include "compiler_tu.h"
 #include "ir/doms.h"
+#include "ir/pass.h"
 #include "ir/typelang.h"
 #include "lib/hash.h"
 #include "th/environment.h"
@@ -312,6 +313,83 @@ fold_static_type_tests(ir_func_t *function, th_ctx *types)
     return feasible;
 }
 
+static bool
+primitive_operand_class(ir_class_t class)
+{
+    return class == IR_CLASS_SINT || class == IR_CLASS_UINT
+        || class == IR_CLASS_FLOAT;
+}
+
+static bool
+rewrite_primitive_operator(ir_module_t *module, ir_instr_t *call)
+{
+    ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands == 3
+        ? ir_operand_value(&call->operands[0]) : nullptr;
+    ir_instr_t *selection = callee ? callee->def : nullptr;
+    if (!selection || selection->op != IR_OP_TRAIT_METHOD
+        || selection->n_operands < 2
+        || selection->operands[1].kind != IR_OPD_NAME || !call->dest)
+        return false;
+    const n00bb_binary_operator_t *operator =
+        n00bb_binary_operator_method(selection->operands[1].name);
+    ir_value_t *left = ir_operand_value(&call->operands[1]);
+    ir_value_t *right = ir_operand_value(&call->operands[2]);
+    if (!operator || operator->shift || !left || !right
+        || !ir_type_eq(module, left->type, right->type)
+        || !ir_type_eq(module, left->type, call->dest->type)) return false;
+    ir_class_t class = ir_machine_of(module, left->type).class;
+    if (!primitive_operand_class(class)
+        || (operator->unsigned_only && class != IR_CLASS_UINT)) return false;
+    call->op = operator->op;
+    call->n_operands = 0;
+    call->n_mods = 0;
+    if (!ir_instr_operand_value(call, left)
+        || !ir_instr_operand_value(call, right)) return false;
+    bool integer = class != IR_CLASS_FLOAT;
+    if (integer && ir_op_accepts_mod(call->op, CORE_STRING_STATIC("trap"))
+        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
+    if (class == IR_CLASS_SINT
+        && (call->op == IR_OP_DIV || call->op == IR_OP_REM)
+        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
+    return true;
+}
+
+static bool
+value_used(ir_func_t *function, const ir_value_t *value)
+{
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *instruction = function->blocks[b]->instrs[i];
+            for (uint32_t o = 0; o < instruction->n_operands; o++)
+                if (ir_operand_value(&instruction->operands[o]) == value)
+                    return true;
+        }
+    return false;
+}
+
+typedef ir_instr_t *selection_t;
+core_list_decl(selection_t);
+
+static void
+specialize_primitive_operators(ir_func_t *function)
+{
+    core_list_t(selection_t) selections = core_list_new(selection_t);
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *call = function->blocks[b]->instrs[i];
+            ir_instr_t *selection = call->op == IR_OP_CALL && call->n_operands
+                && ir_operand_value(&call->operands[0])
+                ? ir_operand_value(&call->operands[0])->def : nullptr;
+            if (rewrite_primitive_operator(function->owner, call))
+                core_list_push(selections, selection);
+        }
+    for (size_t s = 0; s < selections.len; s++)
+        if (selections.data[s]->block && selections.data[s]->dest
+            && !value_used(function, selections.data[s]->dest))
+            (void)ir_instr_erase(selections.data[s]);
+    core_list_free(selections);
+}
+
 static th_type *
 concrete_call_signature(ir_instr_t *call, ir_func_t *target, th_ctx *types,
                         bool from_operands)
@@ -499,6 +577,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
         th_ctx *caller_types = ir_module_types(caller->owner);
         bool open_caller = !th_is_closed(caller_types, caller->type)
             && !is_instance(&specializations, caller);
+        if (!open_caller) specialize_primitive_operators(caller);
         bool *feasible = fold_static_type_tests(caller, caller_types);
         valid = feasible != nullptr;
         for (uint32_t b = 0; valid && b < caller->n_blocks; b++) {

@@ -445,6 +445,15 @@ typedef struct {
 } n00bb_integer_seed_t;
 core_list_decl(n00bb_integer_seed_t);
 
+typedef struct {
+    parse_tree_t *site;
+    th_type *result;
+    th_type *left;
+    th_type *right;
+    ir_op_t op;
+} n00bb_integer_edge_t;
+core_list_decl(n00bb_integer_edge_t);
+
 struct n00bb_iteration_plan_t {
     size_t iter_site;
     size_t next_site;
@@ -552,6 +561,8 @@ typedef struct {
     bool needs_build_time_capture;
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_integer_seed_t) integer_seeds;
+    core_list_t(n00bb_integer_edge_t) integer_edges;
+    core_dict_t integer_edge_sites;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
@@ -846,6 +857,11 @@ th_type *n00bb_integer_literal_variable(n00bb_tu_state_t *state,
                                         parse_tree_t *site, ir_lit_t literal);
 void n00bb_register_integer_class(n00bb_tu_state_t *state);
 bool n00bb_open_integer(th_type *type);
+void n00bb_integer_growth(n00bb_tu_state_t *state, parse_tree_t *site,
+                          ir_op_t op, th_type *target, th_type *value);
+th_type *n00bb_integer_result_variable(n00bb_tu_state_t *state,
+                                       parse_tree_t *site, ir_op_t op,
+                                       th_type *left, th_type *right);
 bool n00bb_require_unsigned_integer(n00bb_tu_state_t *state, th_type *type);
 bool n00bb_ground_integers(core_translation_unit_t *const *units,
                            size_t unit_count, bool interface_only,
@@ -855,7 +871,7 @@ bool n00bb_range_proven_above_int64(parse_grammar_t *grammar,
                                     parse_tree_t *node);
 bool n00bb_constant_misfits_type(n00bb_tu_state_t *state, parse_tree_t *node,
                                  th_type *expected);
-bool n00bb_contextual_integer_literal(n00bb_tu_state_t *state,
+bool n00bb_integer_literal_joins_type(n00bb_tu_state_t *state,
                                       parse_tree_t *node, th_type *target);
 bool n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
                                     n00bb_tu_state_t *state,
