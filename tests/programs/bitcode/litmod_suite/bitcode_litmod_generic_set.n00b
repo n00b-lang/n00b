@@ -1,4 +1,4 @@
-litmod<set> identity, wrap(items: Array[`T]) -> Array[`T] fail: string {
+litmod<set> identity, wrap(items: Array['T]) -> Array['T] fail: string {
     return items
 }
 

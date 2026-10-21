@@ -7,11 +7,11 @@ type Ffi_Bytes layout(c) {
 }
 
 trait Fixup {
-    func fixup(modify self: `T) -> nil fail: string
+    func fixup(modify self: 'T) -> nil fail: string
 }
 
 record Ffi_Table {
-    public slots: List[`T?]
+    public slots: List['T?]
     public free: List[int]
     public owners: List[uint]
 }
@@ -30,10 +30,10 @@ var ffi_hold_groups: u64 = 0
 var ffi_fixed: List[uint] = new[List[uint]]()
 thread var ffi_unwind_top: uint = 0
 
-func fixup(modify self: `T) -> nil fail: string {
+func fixup(modify self: 'T) -> nil fail: string {
 }
 
-func ffi_run_fixup(modify value: `T) -> string? where `T : Fixup {
+func ffi_run_fixup(modify value: 'T) -> string? where 'T : Fixup {
     try {
         value.fixup()!
     } else failure {
@@ -76,7 +76,7 @@ public func foreign_text(pointer: Foreign[i8]?) -> string? {
     return string.core.from_raw(ref bytes, cast[int]length, copy = false)
 }
 
-func __ffi_fixup(pointer: Foreign[`T]?) -> string? where `T : Fixup {
+func __ffi_fixup(pointer: Foreign['T]?) -> string? where 'T : Fixup {
     if pointer == nil {
         return nil
     }
@@ -84,8 +84,8 @@ func __ffi_fixup(pointer: Foreign[`T]?) -> string? where `T : Fixup {
     if !__abi_baked_address(address) or ffi_is_fixed(address) {
         return nil
     }
-    let target: Ref[`T] = unsafe_cast[Ref[`T]] pointer
-    var value: `T = target
+    let target: Ref['T] = unsafe_cast[Ref['T]] pointer
+    var value: 'T = target
     let problem: string? = ffi_run_fixup(value)
     if problem != nil {
         return problem
@@ -116,7 +116,7 @@ func __ffi_panic_hook() {
     }
 }
 
-func __ffi_table_insert(modify table: Ffi_Table[`T], value: `T) -> u64 {
+func __ffi_table_insert(modify table: Ffi_Table['T], value: 'T) -> u64 {
     let reused = table.free.pop()
     if reused != nil {
         let index = reused.get()
@@ -129,7 +129,7 @@ func __ffi_table_insert(modify table: Ffi_Table[`T], value: `T) -> u64 {
     return cast[u64]table.slots.len()
 }
 
-func __ffi_table_owner(table: Ffi_Table[`T], handle: u64) -> uint {
+func __ffi_table_owner(table: Ffi_Table['T], handle: u64) -> uint {
     let index = cast[int]handle - 1
     if handle == 0 or index >= cast[int]table.owners.len() {
         return 0
@@ -137,7 +137,7 @@ func __ffi_table_owner(table: Ffi_Table[`T], handle: u64) -> uint {
     return table.owners[index]
 }
 
-func __ffi_table_get(table: Ffi_Table[`T], handle: u64) -> `T? {
+func __ffi_table_get(table: Ffi_Table['T], handle: u64) -> 'T? {
     let index = cast[int]handle - 1
     if handle == 0 or index >= cast[int]table.slots.len() {
         return nil
@@ -145,7 +145,7 @@ func __ffi_table_get(table: Ffi_Table[`T], handle: u64) -> `T? {
     return table.slots[index]
 }
 
-func __ffi_table_free(modify table: Ffi_Table[`T], handle: u64) {
+func __ffi_table_free(modify table: Ffi_Table['T], handle: u64) {
     let index = cast[int]handle - 1
     if handle == 0 or index >= cast[int]table.slots.len() or table.slots[index] == nil {
         return

@@ -1,4 +1,4 @@
 public trait Render {
-    func render(self: `T) -> int
-    func measure(self: `T) -> int
+    func render(self: 'T) -> int
+    func measure(self: 'T) -> int
 }

@@ -3144,19 +3144,27 @@ n00bb_signature_open(const char *text, n00bb_signature_line_t *line)
 }
 
 static size_t
-n00bb_signature_close(const char *text, size_t length, size_t open)
+n00bb_signature_close(parse_token_stream_t *tokens, size_t open)
 {
+    int32_t count = scan_stream_token_count(tokens);
+    int32_t first = 0, after = count;
+    while (first < after) {
+        int32_t middle = first + (after - first) / 2;
+        parse_token_info_t *token = scan_stream_get(tokens, middle);
+        if (parse_token_start_byte(token) < open) first = middle + 1;
+        else after = middle;
+    }
+    parse_token_info_t *opening = first < count
+        ? scan_stream_get(tokens, first) : nullptr;
+    if (!opening || parse_token_start_byte(opening) != open
+        || parse_token_tid(opening) != '(') return SIZE_MAX;
     size_t depth = 1;
-    char quote = 0;
-    for (size_t at = open + 1; at < length; at++) {
-        char ch = text[at];
-        if (quote) {
-            if (ch == '\\' && at + 1 < length) at++;
-            else if (ch == quote) quote = 0;
-        }
-        else if (ch == '"' || ch == '\'') quote = ch;
-        else if (ch == '(') depth++;
-        else if (ch == ')' && !--depth) return at;
+    for (int32_t i = first + 1; i < count; i++) {
+        parse_token_info_t *token = scan_stream_get(tokens, i);
+        int32_t tid = parse_token_tid(token);
+        if (tid == '(') depth++;
+        else if (tid == ')' && !--depth)
+            return parse_token_start_byte(token);
     }
     return SIZE_MAX;
 }
@@ -3184,8 +3192,11 @@ n00bb_signature_row(const char *text, n00bb_signature_line_t *line,
 }
 
 static core_string_t
-n00bb_format_signatures(core_string_t input)
+n00bb_format_signatures(parse_grammar_t *grammar, core_string_t input)
 {
+    parse_token_stream_t *tokens = scan_tokenize_owned(grammar, input);
+    if (!tokens) return (core_string_t){0};
+    while (scan_stream_next(tokens)) {}
     const char *text = input.data;
     size_t length = input.u8_bytes;
     size_t count = n00bb_format_newline_count(text, length) + 1;
@@ -3204,7 +3215,7 @@ n00bb_format_signatures(core_string_t input)
     for (size_t first = 0; first < count;) {
         size_t open = n00bb_signature_open(text, &lines[first]);
         size_t close = open == SIZE_MAX ? SIZE_MAX
-            : n00bb_signature_close(text, length, open);
+            : n00bb_signature_close(tokens, open);
         size_t last = first;
         while (close != SIZE_MAX && last + 1 < count
                && close > lines[last].end) last++;
@@ -3315,12 +3326,16 @@ n00bb_format_signatures(core_string_t input)
         first = last + 1;
     }
     core_free(lines);
+    scan_token_stream_free(tokens);
     return core_buffer_string(&result);
 }
 
 static core_string_t
-n00bb_format_channels(core_string_t input)
+n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
 {
+    parse_token_stream_t *tokens = scan_tokenize_owned(grammar, input);
+    if (!tokens) return (core_string_t){0};
+    while (scan_stream_next(tokens)) {}
     const char *text = input.data;
     core_buffer_t result = {0};
     size_t length = input.u8_bytes, start = 0, paren_column = 0;
@@ -3336,7 +3351,7 @@ n00bb_format_channels(core_string_t input)
         size_t open = n00bb_signature_open(text, &signature);
         if (open != SIZE_MAX) {
             paren_column = open - start;
-            signature_close = n00bb_signature_close(text, length, open);
+            signature_close = n00bb_signature_close(tokens, open);
         }
         if (line_length > 88 && signature_close >= start
             && signature_close < i) {
@@ -3448,6 +3463,7 @@ n00bb_format_channels(core_string_t input)
         if (i < length) core_buffer_putc(&result, '\n');
         start = i + 1;
     }
+    scan_token_stream_free(tokens);
     return core_buffer_string(&result);
 }
 
@@ -3813,10 +3829,10 @@ n00bb_format_units(parse_grammar_t *grammar, core_work_queue_t *queue,
                                               : (core_string_t){0};
         core_free(restored.data);
         core_string_t signatures = aligned.data
-            ? n00bb_format_signatures(aligned) : (core_string_t){0};
+            ? n00bb_format_signatures(grammar, aligned) : (core_string_t){0};
         core_free(aligned.data);
         core_string_t channels = signatures.data
-            ? n00bb_format_channels(signatures) : (core_string_t){0};
+            ? n00bb_format_channels(grammar, signatures) : (core_string_t){0};
         core_free(signatures.data);
         core_string_t formatted = channels.data
             ? n00bb_format_rich_tags(grammar, channels, ascii_tags)

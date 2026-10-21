@@ -966,6 +966,27 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   compile_recipe_dispatch(spec->sigils, sizeof(scan_lex_sigil_t),
                           offsetof(scan_lex_sigil_t, prefix),
                           lex->sigil_buckets, &lex->sigil_dispatch);
+  for (const scan_lex_sigil_t *sigil = spec->sigils;
+       sigil && sigil->prefix.data; sigil++) {
+    lex->sigil_count++;
+  }
+  if (lex->sigil_count) {
+    lex->sigil_attach_after = core_alloc_array(lex_tid_set_t,
+                                                lex->sigil_count);
+    for (size_t i = 0; i < lex->sigil_count; i++) {
+      const scan_lex_sigil_t *sigil = &spec->sigils[i];
+      for (const core_string_t *name = sigil->attach_after;
+           name && name->data; name++) {
+        int64_t tid = parse_terminal_id(g, *name);
+        if (!tid && name->u8_bytes == 1) {
+          tid = (unsigned char)name->data[0];
+        }
+        if (tid) {
+          tid_set_add(&lex->sigil_attach_after[i], (int32_t)tid);
+        }
+      }
+    }
+  }
   compile_recipe_dispatch(spec->regexes, sizeof(scan_lex_regex_t),
                           offsetof(scan_lex_regex_t, opener),
                           lex->regex_buckets, &lex->regex_dispatch);
@@ -1412,6 +1433,10 @@ void scan_lex_free(scan_lex_t *lex) {
   core_list_free(lex->number_suffix_roots);
   core_free(lex->comment_dispatch);
   core_free(lex->sigil_dispatch);
+  for (size_t i = 0; i < lex->sigil_count; i++) {
+    core_free(lex->sigil_attach_after[i].slots);
+  }
+  core_free(lex->sigil_attach_after);
   core_free(lex->regex_dispatch);
   for (size_t i = 0; i < lex->regex_count; i++) {
     core_free(lex->regex_not_after[i].slots);
@@ -1814,7 +1839,7 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   s->token_suffix_lookahead = false;
   for (const scan_lex_sigil_t *sigil = lex->program->spec->sigils;
        sigil && sigil->prefix.data; sigil++) {
-    if (sigil->attach_previous) {
+    if (sigil->attach_previous || sigil->attach_after) {
       s->token_suffix_lookahead = true;
       break;
     }
@@ -4108,6 +4133,22 @@ static bool try_number(parse_scanner_t *s) {
   return continue_number(s);
 }
 
+static bool sigil_attaches(parse_scanner_t *s, const scan_lex_sigil_t *sigil) {
+  if (sigil->attach_previous) return true;
+  if (!sigil->attach_after) return false;
+
+  parse_token_info_t *previous = scan_prev_token(s);
+  if (!previous
+      || parse_token_end_byte(previous) != s->source_base + s->cursor) {
+    return false;
+  }
+
+  const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
+  size_t index = (size_t)(sigil - lex->spec->sigils);
+  return tid_set_contains(&lex->sigil_attach_after[index],
+                          parse_token_tid(previous));
+}
+
 static bool try_sigil(parse_scanner_t *s, bool before_string) {
   const scan_lex_t *lex = ((scan_lex_session_t *)s->user_state)->program;
   lex_bucket_t bucket = lex->sigil_buckets[scan_peek_byte(s, 0)];
@@ -4175,6 +4216,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
     return false;
   }
 
+  bool attach = sigil_attaches(s, best);
   scan_mark(s);
   scan_advance_bytes(s, best->prefix.u8_bytes);
 
@@ -4191,7 +4233,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
   if (scan_at_eof(s) && !s->source_final) {
     scan_lex_session_t *run = s->user_state;
 
-    if (best->attach_previous) {
+    if (attach) {
       run->pending_attached_sigil = best;
       scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
                           s->mark);
@@ -4206,7 +4248,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
     return false;
   }
 
-  if (best->attach_previous) {
+  if (attach) {
     parse_token_info_t *previous = scan_prev_token(s);
     if (!previous
         || core_option_is_set(parse_token_postfix_modifier(previous))) {
@@ -4221,7 +4263,8 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
         previous, core_option_set(core_string_t, name), true);
     parse_token_set_span(previous, parse_token_start_byte(previous),
                          s->source_base + s->cursor);
-    return scan_lex_scan(s);
+    return scan_lex_scan(s)
+        || (scan_at_eof(s) && s->status == SCAN_STATUS_ACTIVE);
   }
 
   emit_named(s, best->tok, lex->tid_ident);
@@ -5541,7 +5584,8 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
         previous, core_option_set(core_string_t, name), true);
     parse_token_set_span(previous, parse_token_start_byte(previous),
                          s->source_base + s->cursor);
-    return scan_lex_scan(s);
+    return scan_lex_scan(s)
+        || (scan_at_eof(s) && s->status == SCAN_STATUS_ACTIVE);
   }
 
   if (run->pending_string) {

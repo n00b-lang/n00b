@@ -1,5 +1,5 @@
-func hold_same(item: `T) -> `T {
-    var saved: `T = item
+func hold_same(item: 'T) -> 'T {
+    var saved: 'T = item
     return saved
 }
 

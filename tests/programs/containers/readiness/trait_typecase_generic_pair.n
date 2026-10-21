@@ -1,22 +1,22 @@
 trait Pair_Comparable {
-    func pair_cmp(left: `T, right: `T) -> int
+    func pair_cmp(left: 'T, right: 'T) -> int
 }
 
-func compare_pair(left: `T, right: `T) -> int {
+func compare_pair(left: 'T, right: 'T) -> int {
     typecase left {
         case Pair_Comparable { return left.pair_cmp(right) }
         else { require false }
     }
 }
 
-func has_pair_comparable(item: `T) -> bool {
+func has_pair_comparable(item: 'T) -> bool {
     typecase item {
         case Pair_Comparable { return true }
         else { return false }
     }
 }
 
-func compare_self(left: `T) -> int {
+func compare_self(left: 'T) -> int {
     typecase left {
         case Pair_Comparable { return left.pair_cmp(left) }
         else { require false }

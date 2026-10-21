@@ -92,9 +92,11 @@ struct scan_lex_t {
     size_t       fence_count;
     size_t       string_count;
     size_t       regex_count;
+    size_t       sigil_count;
     size_t       embed_count;
     scan_lex_t **embed_programs;
     lex_tid_set_t *regex_not_after;
+    lex_tid_set_t *sigil_attach_after;
     const scan_lex_escape_t **string_escape_dispatch;
     bool                    *string_escape_complex;
     size_t       number_form_count;

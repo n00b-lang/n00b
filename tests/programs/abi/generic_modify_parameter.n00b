@@ -1,4 +1,4 @@
-func assign_same(modify item: `T) {
+func assign_same(modify item: 'T) {
     item = item
 }
 

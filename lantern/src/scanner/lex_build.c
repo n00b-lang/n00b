@@ -1559,6 +1559,7 @@ build_sigil(lex_build_t *b, const scan_lex_decl_t *a)
 {
     scan_lex_sigil_t item = {0};
     scan_lex_sigil_t *g   = &item;
+    core_list_t(core_string_t) attach_after = core_list_new(core_string_t);
 
     g->prefix = positional(&a->lex_opts, 0);
 
@@ -1584,15 +1585,23 @@ build_sigil(lex_build_t *b, const scan_lex_decl_t *a)
         else if (named(o, "attach_previous")) {
             g->attach_previous = true;
         }
+        else if (named(o, "attach_after")) {
+            for (size_t j = 0; j < core_list_len(o->args); j++) {
+                core_list_push(attach_after, o->args.data[j]);
+            }
+        }
         else {
             oops(b, "sigil", o->name);
         }
     }
 
     if (!g->prefix.data) {
+        core_list_free(attach_after);
         return;
     }
 
+    g->attach_after = own_string_array(b, &attach_after);
+    core_list_free(attach_after);
     core_list_push(b->sigils, item);
 }
 
@@ -2624,6 +2633,26 @@ grammar_uses_operator(parse_grammar_t *g, core_string_t op)
 }
 
 static void
+validate_sigil_contexts(lex_build_t *b, parse_grammar_t *g)
+{
+    for (size_t i = 0; !b->err.data && i < core_list_len(b->sigils); i++) {
+        const scan_lex_sigil_t *sigil = &b->sigils.data[i];
+
+        for (const core_string_t *name = sigil->attach_after;
+             name && name->data; name++) {
+            if (parse_terminal_id(g, *name)) {
+                continue;
+            }
+
+            set_errf(b,
+                     "@lex-sigil: attach_after() names unknown token '%.*s'",
+                     (int)name->u8_bytes, name->data);
+            return;
+        }
+    }
+}
+
+static void
 validate_regex_contexts(lex_build_t *b, parse_grammar_t *g)
 {
     for (size_t i = 0; !b->err.data && i < core_list_len(b->regexes); i++) {
@@ -2965,6 +2994,7 @@ scan_lex_spec_from_decls(parse_grammar_t *g,
         }
     }
 
+    validate_sigil_contexts(b, g);
     validate_regex_contexts(b, g);
 
     size_t active_operators = 0;

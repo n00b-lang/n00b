@@ -1,5 +1,5 @@
 trait Scaler {
-    func scale(self: `T, by: int) -> int
+    func scale(self: 'T, by: int) -> int
 }
 
 record Box {
@@ -10,11 +10,11 @@ func scale(self: Box, by: int) -> int {
     return self.n * by
 }
 
-func many(item: `T) -> int {
+func many(item: 'T) -> int {
     return item.scale(1, 2)
 }
 
-func few(item: `T) -> int {
+func few(item: 'T) -> int {
     return item.scale()
 }
 

@@ -211,7 +211,7 @@ func array_count(source: Ref[Any]) -> uint {
     return cast[uint] count
 }
 
-func array_length(items: Array[`T]) -> uint {
+func array_length(items: Array['T]) -> uint {
     return array_count(__box_of(items))
 }
 
@@ -234,8 +234,8 @@ func check_shape(source: Ref[Any], rank: u32, expected: Ref[byte]) {
     }
 }
 
-func array_shape_check(items: Array[`T], rank: u32,
-                              expected: Ref[`S]) {
+func array_shape_check(items: Array['T], rank: u32,
+                              expected: Ref['S]) {
     check_shape(__box_of(items), rank, reference_address(__box_of(expected)))
 }
 
@@ -406,7 +406,7 @@ func pattern_holds(actual: u32, program: Ref[byte], at: Ref[uint],
     return true
 }
 
-func type_field_of(value: `T) -> u32 {
+func type_field_of(value: 'T) -> u32 {
     return box_view(__box_of(value)).type_field
 }
 
@@ -414,7 +414,7 @@ func any_type_field(value: Any) -> u32 {
     return box_view(__box_of(value)).type_field
 }
 
-func type_matches(actual: u32, program: Ref[`S], words: uint) -> bool {
+func type_matches(actual: u32, program: Ref['S], words: uint) -> bool {
     let base: Ref[byte] = reference_address(__box_of(program))
     var at: uint = 0
     return pattern_holds(actual, base, ref at,
@@ -640,7 +640,7 @@ func read_at(location: Ref[Location], slot: Ref[Any]) {
               payload_target(slot, (child.size_bits + 7) / 8))
 }
 
-func field_get(owner: `R, ordinal: u32) -> `F {
+func field_get(owner: 'R, ordinal: u32) -> 'F {
     var location: Location = (address = nil, type_index = 0, reserved = 0,
                               bit_offset = 0, width = 0)
     field_locate(__box_of(owner), nil, 0, ordinal, ref location)
@@ -675,7 +675,7 @@ func arm_tag(slot: Ref[Any]) -> uint {
     return tag
 }
 
-func variant_tag(value: `V) -> uint {
+func variant_tag(value: 'V) -> uint {
     return arm_tag(__box_of(value))
 }
 
@@ -688,12 +688,12 @@ func slot_address(slot: Ref[Any]) -> Ref[byte]? {
     return view.payload
 }
 
-func slot_reference(slot: Ref[Any]) -> Ref[`R] {
+func slot_reference(slot: Ref[Any]) -> Ref['R] {
     box_view(__result_box()).payload = slot_address(slot)
     return __box_as(__result_box())
 }
 
-func field_ref(owner: Ref[`R], ordinal: u32) -> Ref[`F] {
+func field_ref(owner: Ref['R], ordinal: u32) -> Ref['F] {
     var location: Location = (address = nil, type_index = 0, reserved = 0,
                               bit_offset = 0, width = 0)
     field_locate(__box_of(owner), nil, 0, ordinal, ref location)
@@ -701,15 +701,15 @@ func field_ref(owner: Ref[`R], ordinal: u32) -> Ref[`F] {
     return __box_as(__result_box())
 }
 
-func ref_equal(left: Ref[`T], right: Ref[`T]) -> bool {
+func ref_equal(left: Ref['T], right: Ref['T]) -> bool {
     return reference_equal(__box_of(left), __box_of(right))
 }
 
-func ref_differ(left: Ref[`T], right: Ref[`T]) -> bool {
+func ref_differ(left: Ref['T], right: Ref['T]) -> bool {
     return !reference_equal(__box_of(left), __box_of(right))
 }
 
-func ref_get(target: Ref[`T]) -> `T {
+func ref_get(target: Ref['T]) -> 'T {
     var location: Location = (address = nil, type_index = 0, reserved = 0,
                               bit_offset = 0, width = 0)
     reference_locate(__box_of(target), ref location)
@@ -732,7 +732,7 @@ func option_present(reference: Ref[Any]) -> bool {
     return builtin.__tag_at(location.type_index, address.get()) != 0
 }
 
-func option_payload(target: Ref[`T?]) -> Ref[`T] {
+func option_payload(target: Ref['T?]) -> Ref['T] {
     box_view(__result_box()).payload = reference_address(__box_of(target))
     return __box_as(__result_box())
 }
@@ -752,32 +752,32 @@ func element_present(items: Ref[Any], index: i64) -> bool {
     return builtin.__tag_at(location.type_index, address.get()) != 0
 }
 
-func element_payload(items: Array[`T?], index: i64) -> Ref[`T] {
+func element_payload(items: Array['T?], index: i64) -> Ref['T] {
     box_view(__result_box()).payload =
         element_storage(__box_of(items), index).address
     return __box_as(__result_box())
 }
 
-func element_payload_at(items: Ref[Array[`T?]],
-                               index: i64) -> Ref[`T] {
+func element_payload_at(items: Ref[Array['T?]],
+                               index: i64) -> Ref['T] {
     box_view(__result_box()).payload =
         element_storage(__box_of(items), index).address
     return __box_as(__result_box())
 }
 
-func array_get_option(items: Array[`T?], index: i64) -> `T? {
+func array_get_option(items: Array['T?], index: i64) -> 'T? {
     if !element_present(__box_of(items), index) {
         return nil
     }
     return ref_get(element_payload(items, index))
 }
 
-func array_get_option_unsigned(items: Array[`T?], index: u64) -> `T? {
+func array_get_option_unsigned(items: Array['T?], index: u64) -> 'T? {
     require index <= 0x7fffffffffffffff
     return array_get_option(items, cast[i64] index)
 }
 
-func option_get(target: Ref[`T?]) -> `T? {
+func option_get(target: Ref['T?]) -> 'T? {
     if !option_present(__box_of(target)) {
         return nil
     }

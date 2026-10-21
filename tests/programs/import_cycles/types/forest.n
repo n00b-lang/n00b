@@ -1,7 +1,7 @@
 import tree
 
 public trait Measured {
-    func measure(self: `T) -> int
+    func measure(self: 'T) -> int
 }
 
 public type Forest {

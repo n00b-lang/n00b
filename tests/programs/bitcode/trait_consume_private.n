@@ -1,5 +1,5 @@
 trait Probe {
-    func apply(consume self: `T)
+    func apply(consume self: 'T)
 }
 
 type Sample {

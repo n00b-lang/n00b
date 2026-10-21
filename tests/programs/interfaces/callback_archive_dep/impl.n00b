@@ -15,8 +15,8 @@ public callback Archived_Event {
 }
 
 public callback Archived_Transform {
-    call(value: `T) -> `U fail: `E
-    handler(value: `T) -> `U fail: `E
+    call(value: 'T) -> 'U fail: 'E
+    handler(value: 'T) -> 'U fail: 'E
 }
 
 public func setup(

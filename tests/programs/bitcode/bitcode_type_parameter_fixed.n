@@ -1,5 +1,5 @@
 trait Measured {
-    func size(self: `T) -> int
+    func size(self: 'T) -> int
 }
 
 record Handle {
@@ -10,7 +10,7 @@ func size(self: Handle) -> int {
     return self.fd
 }
 
-func measure(value: `T) -> int where `T: Measured {
+func measure(value: 'T) -> int where 'T: Measured {
     return size(value)
 }
 

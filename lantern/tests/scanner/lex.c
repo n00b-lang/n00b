@@ -1351,6 +1351,84 @@ static void test_attached_postfix_sigil(void) {
   parse_grammar_free(g);
 }
 
+static void check_conditional_sigil(parse_grammar_t *g) {
+  kinds(g, "apostrophe separates type variables and character literals",
+        "['T] 'a'", "[ TYPE_VAR ] CHAR_LIT");
+  kinds(g, "escaped character literals retain their quotes",
+        "'\\n' '\\''", "CHAR_LIT CHAR_LIT");
+  kinds(g, "literal modifiers attach after eligible tokens",
+        "\"x\"'rich []'array", "STRING_LIT [ ]");
+
+  parse_scanner_t *scanner = nullptr;
+  parse_token_stream_t *stream = scan_tokenize(
+      g, S("['T] 'a' \"x\"'rich []'array"), nullptr, &scanner);
+  parse_token_info_t *tokens[7] = {0};
+  for (size_t i = 0; i < 7; i++) tokens[i] = scan_stream_next(stream);
+  check("type-variable token retains its apostrophe",
+        tokens[1] && parse_token_tid(tokens[1]) ==
+            parse_terminal_id(g, S("TYPE_VAR"))
+        && core_option_is_set(parse_token_value(tokens[1]))
+        && core_string_eq(core_option_get(parse_token_value(tokens[1])),
+                          S("'T")));
+  check("adjacent string modifier remains attached",
+        tokens[4] && core_option_is_set(parse_token_postfix_modifier(tokens[4]))
+        && core_string_eq(core_option_get(
+            parse_token_postfix_modifier(tokens[4])), S("rich")));
+  check("adjacent list modifier remains attached",
+        tokens[6] && core_option_is_set(parse_token_postfix_modifier(tokens[6]))
+        && core_string_eq(core_option_get(
+            parse_token_postfix_modifier(tokens[6])), S("array")));
+  scan_token_stream_free(stream);
+  scan_scanner_free(scanner);
+}
+
+static void test_conditional_attached_sigil(void) {
+  static const scan_lex_string_t strings[] = {
+      {.opener = S("'"), .closer = S("'"), .escape = S("\\"),
+       .tok = S("CHAR_LIT")},
+      {.opener = S("\""), .closer = S("\""), .tok = S("STRING_LIT")},
+      {},
+  };
+  static const core_string_t attach_after[] = {
+      S("]"), S("STRING_LIT"), {0},
+  };
+  static const scan_lex_sigil_t sigils[] = {
+      {.prefix = S("'"), .tok = S("TYPE_VAR"), .before_string = true,
+       .unless_closed = true, .attach_after = attach_after},
+      {},
+  };
+  static const scan_lex_spec_t spec = {
+      .name = S("conditional-sigil-test"),
+      .strings = strings,
+      .sigils = sigils,
+      .tok_ident = S("IDENTIFIER"),
+  };
+  static const core_string_t terms[] = {
+      S("["), S("]"), S("CHAR_LIT"), S("STRING_LIT"),
+      S("TYPE_VAR"), S("IDENTIFIER"), {0},
+  };
+  parse_grammar_t *g = mk(&spec, terms);
+  check_conditional_sigil(g);
+  parse_grammar_free(g);
+
+  core_string_t source = S(
+      "@lex-string(\"'\", \"'\", escape(\"\\\\\"), scalar, "
+      "as(\"CHAR_LIT\"))\n"
+      "@lex-string(\"\\\"\", \"\\\"\", as(\"STRING_LIT\"))\n"
+      "@lex-sigil(\"'\", before_string, unless_closed, as(\"TYPE_VAR\"), "
+      "attach_after(\"]\", \"STRING_LIT\"))\n"
+      "@lex-ident(as(\"IDENTIFIER\"))\n"
+      "<file> ::= %\"[\" | %\"]\" | %CHAR_LIT | %STRING_LIT | "
+      "%TYPE_VAR | %IDENTIFIER\n");
+  g = parse_grammar_new();
+  parse_grammar_set_error_recovery(g, false);
+  parse_bnf_declare_terminals(g, source);
+  check("declarative conditional sigil loads",
+        load_test_grammar(source, S("file"), g));
+  check_conditional_sigil(g);
+  parse_grammar_free(g);
+}
+
 static void test_heredoc_families(void) {
   core_string_t source =
       S("@lex-heredoc-header(\"shell-word\", quotes(\"single\"), "
@@ -4398,6 +4476,7 @@ int main(void) {
   test_templates_and_regex();
   test_sigils_and_heredocs();
   test_attached_postfix_sigil();
+  test_conditional_attached_sigil();
   test_heredoc_families();
   test_literal_postprocessing_hooks();
   test_a_grammar_declares_its_own_lexis();

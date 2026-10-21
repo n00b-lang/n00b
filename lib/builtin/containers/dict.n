@@ -7,39 +7,39 @@ import sort
 enum Sort_Order { none, insertion, key, value }
 
 record Item {
-    key:   `K
-    value: `V
+    key:   'K
+    value: 'V
 }
 
 record Entry {
-    key:     `K
-    value:   `V
+    key:     'K
+    value:   'V
     ordinal: uint
 }
 
 record Dict_State {
-    entries:      Array[Entry[`K, `V]]
+    entries:      Array[Entry['K, 'V]]
     count:        uint
     index:        containers.hash_index.Hash_Index
     next_ordinal: uint
 }
 
 record Dict {
-    state: Ref[Dict_State[`K, `V]]
+    state: Ref[Dict_State['K, 'V]]
 }
 
-func __init(modify self: Dict_State[`K, `V]) {
-    self.entries = new[Array[Entry[`K, `V]]](0)
+func __init(modify self: Dict_State['K, 'V]) {
+    self.entries = new[Array[Entry['K, 'V]]](0)
     self.count = 0
     self.index = new[containers.hash_index.Hash_Index]()
     self.next_ordinal = 0
 }
 
-func key_hash(key: `K) -> u128 where ` K : hashing . Hash {
+func key_hash(key: 'K) -> u128 where 'K : hashing . Hash {
     return key.hash()
 }
 
-func ensure_entries(modify self: Dict[`K, `V], needed: uint) {
+func ensure_entries(modify self: Dict['K, 'V], needed: uint) {
     let capacity: uint = __array_length(self.state.entries)
     if needed <= capacity {
         return
@@ -51,8 +51,8 @@ func ensure_entries(modify self: Dict[`K, `V], needed: uint) {
     while next_capacity < needed {
         next_capacity *= 2
     }
-    var next: Array[Entry[`K, `V]] =
-        new[Array[Entry[`K, `V]]](cast[int]next_capacity)
+    var next: Array[Entry['K, 'V]] =
+        new[Array[Entry['K, 'V]]](cast[int]next_capacity)
     var at: uint = 0
     while at < self.state.count {
         next[at] = self.state.entries[at]
@@ -61,34 +61,34 @@ func ensure_entries(modify self: Dict[`K, `V], needed: uint) {
     self.state.entries = next
 }
 
-func __init(modify self: Dict[`K, `V],
-                   pairs : Array[Tuple[`K, `V]] = [])
-           where ` K : hashing . Hash {
-    var state: Dict_State[`K, `V] = new[Dict_State[`K, `V]]()
+func __init(modify self: Dict['K, 'V],
+                   pairs : Array[Tuple['K, 'V]] = [])
+           where 'K : hashing . Hash {
+    var state: Dict_State['K, 'V] = new[Dict_State['K, 'V]]()
     self.state = ref state
     for key, value in pairs {
         _ = put(self, key, value)
     }
 }
 
-func len(self: Dict[`K, `V]) -> uint {
+func len(self: Dict['K, 'V]) -> uint {
     return self.state.count
 }
 
-func __equal(self: Dict[`K, `V], other: Dict[`K, `V]) -> bool {
+func __equal(self: Dict['K, 'V], other: Dict['K, 'V]) -> bool {
     return self.state == other.state
 }
 
-private func state_hash(self: Dict[`K, `V]) -> u128 {
+private func state_hash(self: Dict['K, 'V]) -> u128 {
     return hashing.hash_value(__abi_ref_address(self.state))
 }
 
-func hash(self: Dict[`K, `V]) -> u128 {
+func hash(self: Dict['K, 'V]) -> u128 {
     return state_hash(self)
 }
 
-inline func get(self: Dict[`K, `V], key: `K) -> `V? where ` K : hashing . Hash {
-    let state: Ref[Dict_State[`K, `V]]                       = self.state
+inline func get(self: Dict['K, 'V], key: 'K) -> 'V? where 'K : hashing . Hash {
+    let state: Ref[Dict_State['K, 'V]]                       = self.state
     let index: Ref[containers.hash_index.Hash_Index] = ref state.index
     let slot:  uint?                                         = containers.hash_index.find_slot(index, key_hash(key))
     if slot == nil {
@@ -99,14 +99,14 @@ inline func get(self: Dict[`K, `V], key: `K) -> `V? where ` K : hashing . Hash {
     return state.entries[cell.entry - 1].value
 }
 
-func contains(self: Dict[`K, `V], key: `K) -> bool where ` K : hashing . Hash {
+func contains(self: Dict['K, 'V], key: 'K) -> bool where 'K : hashing . Hash {
     return containers.hash_index.find_slot(ref self.state.index, key_hash(key)) != nil
 }
 
-func insert_missing(modify self: Dict[`K, `V], key: `K, value: `V, hash: u128) {
+func insert_missing(modify self: Dict['K, 'V], key: 'K, value: 'V, hash: u128) {
     ensure_entries(self, self.state.count + 1)
     containers.hash_index.ensure_capacity(self.state.index, 1)
-    let inserted: Entry[`K, `V] =
+    let inserted: Entry['K, 'V] =
         (key = key, value = value, ordinal = self.state.next_ordinal)
     self.state.entries[self.state.count] = inserted
     containers.hash_index.index_insert(self.state.index, hash, self.state.count)
@@ -114,18 +114,18 @@ func insert_missing(modify self: Dict[`K, `V], key: `K, value: `V, hash: u128) {
     self.state.next_ordinal += 1
 }
 
-func replace_at(modify self: Dict[`K, `V], slot: uint, value: `V) -> `V {
+func replace_at(modify self: Dict['K, 'V], slot: uint, value: 'V) -> 'V {
     let cell: containers.hash_index.Hash_Index_Slot =
         self.state.index.slots[slot]
     let at:    uint          = cell.entry - 1
-    let prior: Entry[`K, `V] = self.state.entries[at]
+    let prior: Entry['K, 'V] = self.state.entries[at]
     self.state.entries[at] =
         (key = prior.key, value = value, ordinal = prior.ordinal)
     return prior.value
 }
 
-func put(modify self: Dict[`K, `V], key: `K, value: `V)
-        -> `V? where ` K : hashing . Hash {
+func put(modify self: Dict['K, 'V], key: 'K, value: 'V)
+        -> 'V? where 'K : hashing . Hash {
     let hash:  u128  = key_hash(key)
     let found: uint? = containers.hash_index.find_slot(ref self.state.index, hash)
     if found != nil {
@@ -135,17 +135,17 @@ func put(modify self: Dict[`K, `V], key: `K, value: `V)
     return nil
 }
 
-inline func add(modify self: Dict[`K, `V], key: `K, value: `V)
-               -> bool where ` K : hashing . Hash {
+inline func add(modify self: Dict['K, 'V], key: 'K, value: 'V)
+               -> bool where 'K : hashing . Hash {
     let hash:  u128                    = key_hash(key)
-    let state: Ref[Dict_State[`K, `V]] = self.state
+    let state: Ref[Dict_State['K, 'V]] = self.state
     if state.count < __array_length(state.entries) and
        containers.hash_index.has_room(state.index, 1) {
         if !containers.hash_index.index_insert_unique_ref(
             ref self.state.index, hash, state.count) {
             return false
         }
-        let inserted: Entry[`K, `V] =
+        let inserted: Entry['K, 'V] =
             (key = key, value = value, ordinal = state.next_ordinal)
         state.entries[state.count] = inserted
         state.count += 1
@@ -159,8 +159,8 @@ inline func add(modify self: Dict[`K, `V], key: `K, value: `V)
     return true
 }
 
-func replace(modify self: Dict[`K, `V], key: `K, value: `V)
-            -> bool where ` K : hashing . Hash {
+func replace(modify self: Dict['K, 'V], key: 'K, value: 'V)
+            -> bool where 'K : hashing . Hash {
     let found: uint? = containers.hash_index.find_slot(ref self.state.index, key_hash(key))
     if found == nil {
         return false
@@ -169,8 +169,8 @@ func replace(modify self: Dict[`K, `V], key: `K, value: `V)
     return true
 }
 
-inline func remove(modify self: Dict[`K, `V], key: `K)
-                  -> bool where ` K : hashing . Hash {
+inline func remove(modify self: Dict['K, 'V], key: 'K)
+                  -> bool where 'K : hashing . Hash {
     let hash:  u128  = key_hash(key)
     let found: uint? = containers.hash_index.find_slot(ref self.state.index, hash)
     if found == nil {
@@ -182,7 +182,7 @@ inline func remove(modify self: Dict[`K, `V], key: `K)
     containers.hash_index.remove_at(self.state.index, found.get())
     let last: uint = self.state.count - 1
     if removed != last {
-        let moved: Entry[`K, `V] = self.state.entries[last]
+        let moved: Entry['K, 'V] = self.state.entries[last]
         self.state.entries[removed] = moved
         containers.hash_index.replace_entry(self.state.index,
             key_hash(moved.key), last, removed)
@@ -192,37 +192,37 @@ inline func remove(modify self: Dict[`K, `V], key: `K)
     return true
 }
 
-func clear(modify self: Dict[`K, `V]) {
-    self.state.entries = new[Array[Entry[`K, `V]]](0)
+func clear(modify self: Dict['K, 'V]) {
+    self.state.entries = new[Array[Entry['K, 'V]]](0)
     self.state.count = 0
     self.state.index = new[containers.hash_index.Hash_Index]()
     self.state.next_ordinal = 0
 }
 
-func __read(self: Dict[`K, `V], key: `K) -> `V? where ` K : hashing . Hash {
+func __read(self: Dict['K, 'V], key: 'K) -> 'V? where 'K : hashing . Hash {
     return get(self, key)
 }
 
-func __write(modify self: Dict[`K, `V], key: `K, value: `V)
-            where ` K : hashing . Hash {
+func __write(modify self: Dict['K, 'V], key: 'K, value: 'V)
+            where 'K : hashing . Hash {
     _ = put(self, key, value)
 }
 
-func iter(self: Dict[`K, `V]) -> cursor.Cursor[Item[`K, `V]] {
+func iter(self: Dict['K, 'V]) -> cursor.Cursor[Item['K, 'V]] {
     let count: int                 = cast[int]self.state.count
-    var pairs: Array[Item[`K, `V]] = new[Array[Item[`K, `V]]](count)
+    var pairs: Array[Item['K, 'V]] = new[Array[Item['K, 'V]]](count)
     var at:    int                 = 0
     while at < count {
-        let entry: Entry[`K, `V] = self.state.entries[at]
+        let entry: Entry['K, 'V] = self.state.entries[at]
         pairs[at] = (key = entry.key, value = entry.value)
         at += 1
     }
     return cursor.iter(pairs)
 }
 
-func snapshot_entries(self: Dict[`K, `V]) -> Array[Entry[`K, `V]] {
+func snapshot_entries(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
     let count:   int                  = cast[int]self.state.count
-    var entries: Array[Entry[`K, `V]] = new[Array[Entry[`K, `V]]](count)
+    var entries: Array[Entry['K, 'V]] = new[Array[Entry['K, 'V]]](count)
     var at:      int                  = 0
     while at < count {
         entries[at] = self.state.entries[at]
@@ -231,7 +231,7 @@ func snapshot_entries(self: Dict[`K, `V]) -> Array[Entry[`K, `V]] {
     return entries
 }
 
-func compare_insertion(left: Entry[`K, `V], right: Entry[`K, `V]) -> Comparison {
+func compare_insertion(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
     if left.ordinal < right.ordinal {
         return Comparison.less
     }
@@ -241,8 +241,8 @@ func compare_insertion(left: Entry[`K, `V], right: Entry[`K, `V]) -> Comparison 
     return Comparison.equal
 }
 
-func compare_key(left: Entry[`K, `V], right: Entry[`K, `V]) -> Comparison {
-    let key: `K = left.key
+func compare_key(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
+    let key: 'K = left.key
     typecase key {
         case Comparable {
         return key.__cmp(right.key)
@@ -253,8 +253,8 @@ func compare_key(left: Entry[`K, `V], right: Entry[`K, `V]) -> Comparison {
     }
 }
 
-func compare_value(left: Entry[`K, `V], right: Entry[`K, `V]) -> Comparison {
-    let value: `V = left.value
+func compare_value(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
+    let value: 'V = left.value
     typecase value {
         case Comparable {
         return value.__cmp(right.value)
@@ -265,31 +265,31 @@ func compare_value(left: Entry[`K, `V], right: Entry[`K, `V]) -> Comparison {
     }
 }
 
-func entries_in_insertion_order(self: Dict[`K, `V]) -> Array[Entry[`K, `V]] {
-    var entries: Array[Entry[`K, `V]]                   = snapshot_entries(self)
-    let by:      sort.Comparator[Entry[`K, `V]] =
+func entries_in_insertion_order(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
+    var entries: Array[Entry['K, 'V]]                   = snapshot_entries(self)
+    let by:      sort.Comparator[Entry['K, 'V]] =
         callback[sort.Comparator](ref compare_insertion)
     sort.sort_by(entries, by)
     return entries
 }
 
-func entries_in_key_order(self: Dict[`K, `V]) -> Array[Entry[`K, `V]] {
-    var entries: Array[Entry[`K, `V]]                   = snapshot_entries(self)
-    let by:      sort.Comparator[Entry[`K, `V]] =
+func entries_in_key_order(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
+    var entries: Array[Entry['K, 'V]]                   = snapshot_entries(self)
+    let by:      sort.Comparator[Entry['K, 'V]] =
         callback[sort.Comparator](ref compare_key)
     sort.sort_by(entries, by)
     return entries
 }
 
-func entries_in_value_order(self: Dict[`K, `V]) -> Array[Entry[`K, `V]] {
-    var entries: Array[Entry[`K, `V]]                   = snapshot_entries(self)
-    let by:      sort.Comparator[Entry[`K, `V]] =
+func entries_in_value_order(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
+    var entries: Array[Entry['K, 'V]]                   = snapshot_entries(self)
+    let by:      sort.Comparator[Entry['K, 'V]] =
         callback[sort.Comparator](ref compare_value)
     sort.sort_by(entries, by)
     return entries
 }
 
-func ordered_entries(self: Dict[`K, `V], order: Sort_Order) -> Array[Entry[`K, `V]] {
+func ordered_entries(self: Dict['K, 'V], order: Sort_Order) -> Array[Entry['K, 'V]] {
     if order == Sort_Order.none {
         return snapshot_entries(self)
     }
@@ -302,31 +302,31 @@ func ordered_entries(self: Dict[`K, `V], order: Sort_Order) -> Array[Entry[`K, `
     return entries_in_value_order(self)
 }
 
-func key_view(entries: Array[Entry[`K, `V]], count: int)
-             -> containers.view.View[`K] {
-    var items: Array[`K] = new[Array[`K]](count)
+func key_view(entries: Array[Entry['K, 'V]], count: int)
+             -> containers.view.View['K] {
+    var items: Array['K] = new[Array['K]](count)
     var at:    int       = 0
     while at < count {
         items[at] = entries[at].key
         at += 1
     }
-    return new[containers.view.View[`K]](items, 0, count)
+    return new[containers.view.View['K]](items, 0, count)
 }
 
-func value_view(entries: Array[Entry[`K, `V]], count: int)
-               -> containers.view.View[`V] {
-    var items: Array[`V] = new[Array[`V]](count)
+func value_view(entries: Array[Entry['K, 'V]], count: int)
+               -> containers.view.View['V] {
+    var items: Array['V] = new[Array['V]](count)
     var at:    int       = 0
     while at < count {
         items[at] = entries[at].value
         at += 1
     }
-    return new[containers.view.View[`V]](items, 0, count)
+    return new[containers.view.View['V]](items, 0, count)
 }
 
-func keys(self: Dict[`K, `V],
+func keys(self: Dict['K, 'V],
                  sort_order : Sort_Order = Sort_Order.none)
-         -> containers.view.View[`K] {
+         -> containers.view.View['K] {
     if sort_order == Sort_Order.none {
         return key_view(self.state.entries, cast[int]self.state.count)
     }
@@ -334,9 +334,9 @@ func keys(self: Dict[`K, `V],
                     cast[int]self.state.count)
 }
 
-func values(self: Dict[`K, `V],
+func values(self: Dict['K, 'V],
                    sort_order : Sort_Order = Sort_Order.none)
-           -> containers.view.View[`V] {
+           -> containers.view.View['V] {
     if sort_order == Sort_Order.none {
         return value_view(self.state.entries, cast[int]self.state.count)
     }
@@ -344,6 +344,6 @@ func values(self: Dict[`K, `V],
                       cast[int]self.state.count)
 }
 
-litmod<dict> dict, d(pairs: Array[Tuple[`K, `V]]) -> Dict[`K, `V] fail: string {
-    return new[Dict[`K, `V]](pairs)
+litmod<dict> dict, d(pairs: Array[Tuple['K, 'V]]) -> Dict['K, 'V] fail: string {
+    return new[Dict['K, 'V]](pairs)
 }

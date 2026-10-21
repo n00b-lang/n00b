@@ -686,6 +686,11 @@ analyze_outputs(const scan_lex_spec_t *spec, parse_grammar_t *grammar,
     }
     for (const scan_lex_sigil_t *item = spec->sigils;
          item && item->prefix.data; item++) {
+        if (item->attach_previous && item->attach_after) {
+            *error = core_string_dup(CORE_STRING_STATIC(
+                "@lex-sigil: attach_previous and attach_after are exclusive"));
+            return false;
+        }
         if (!item->attach_previous) REQUIRE(item->tok, "@lex-sigil");
     }
     for (const scan_lex_regex_t *item = spec->regexes;

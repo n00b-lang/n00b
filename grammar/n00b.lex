@@ -15,7 +15,10 @@
 		    escape_digits("U", "0123456789abcdefABCDEF", "8"))
 @lex-string('"', '"', escape('\\'), use_escapes("n00b"), as("STRING_LIT"))
 @lex-string("'", "'", escape('\\'), use_escapes("n00b"), scalar, as("CHAR_LIT"))
-@lex-sigil("'", before_string, unless_closed, attach_previous)
+@lex-sigil("'", before_string, unless_closed, as("TYPE_VAR"),
+	   attach_after("]", "}", ")", "STRING_LIT", "INT_LIT",
+			"HEX_LIT", "FLOAT_LIT", "EMBED", "true", "false",
+			"nil"))
 @lex-number(digits("0123456789"),
 	    sep("_"),
 	    point("leading"),

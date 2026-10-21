@@ -676,7 +676,7 @@
     <array-dimension>+
 <array-dimension> @nospace ::= %"[" <expression>? %"]"
 
-<tspec-tvar> @nospace ::= %"`" %IDENTIFIER
+<tspec-tvar> @nospace ::= %TYPE_VAR
 
 <sized-int-tspec> @adjacent("prefix") ::= %i %":" <integer-size>
                                           | %u %":" <integer-size>
@@ -712,7 +712,7 @@
 
 <where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)*
 
-<type-constraint> ::= %"`" %IDENTIFIER %":" <constraint-list>
+<type-constraint> ::= %TYPE_VAR %":" <constraint-list>
 
 <constraint-list> ::= <one-constraint> (<plus-op> <one-constraint>)*
 

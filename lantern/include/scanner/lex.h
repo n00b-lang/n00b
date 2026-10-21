@@ -125,6 +125,9 @@ typedef struct {
 typedef struct {
     core_string_t prefix;
     core_string_t tok;
+    /* Adjacent preceding token names that receive the sigil as a modifier.
+     * Otherwise the lexer emits tok. The array ends with an empty string. */
+    const core_string_t *attach_after;
     bool         digits_only;
     bool         before_string;
     bool         unless_closed;

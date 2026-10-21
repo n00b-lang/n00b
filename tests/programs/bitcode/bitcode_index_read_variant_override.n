@@ -9,7 +9,7 @@ variant Other {
 }
 
 trait Index_Read {
-    func __read(self: `T, index: int) -> Other
+    func __read(self: 'T, index: int) -> Other
 }
 
 func __read(self: Array[Choice], index: int) -> Other {

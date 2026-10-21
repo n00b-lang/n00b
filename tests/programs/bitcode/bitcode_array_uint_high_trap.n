@@ -1,4 +1,4 @@
-func read_at(values: Array[`T], index: uint) -> `T {
+func read_at(values: Array['T], index: uint) -> 'T {
     return values[index]
 }
 

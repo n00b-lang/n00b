@@ -1,22 +1,22 @@
 import text
 
 trait Describe {
-    func describe(self: `T) -> int
+    func describe(self: 'T) -> int
 }
 
-func describe(self: Dict[string, `V]) -> int {
+func describe(self: Dict[string, 'V]) -> int {
     return 1
 }
 
-func describe(self: Dict[int, `V]) -> int {
+func describe(self: Dict[int, 'V]) -> int {
     return 2
 }
 
-func size_of(x: `C) -> uint where `C: Has_Length {
+func size_of(x: 'C) -> uint where 'C: Has_Length {
     return x.len()
 }
 
-func hashed(x: `H) -> u128 where `H: Hash {
+func hashed(x: 'H) -> u128 where 'H: Hash {
     return x.hash()
 }
 
@@ -24,23 +24,23 @@ flagset Edge {
     top, bottom, left, right
 }
 
-func combine(a: `T, b: `T) -> `T where `T: Add {
+func combine(a: 'T, b: 'T) -> 'T where 'T: Add {
     return a + b
 }
 
-func strip(a: `T, b: `T) -> `T where `T: Subtract {
+func strip(a: 'T, b: 'T) -> 'T where 'T: Subtract {
     return a - b
 }
 
-func pick(x: `T) -> int where `T: Describe {
+func pick(x: 'T) -> int where 'T: Describe {
     return x.describe()
 }
 
-func classify(x: `T) -> int {
+func classify(x: 'T) -> int {
     typecase x {
-        case Dict[string, `V] { return 1 }
-        case Dict[`K, `K] { return 2 }
-        case List[List[`E]] { return 3 }
+        case Dict[string, 'V] { return 1 }
+        case Dict['K, 'K] { return 2 }
+        case List[List['E]] { return 3 }
         else { return 0 }
     }
 }

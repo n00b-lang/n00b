@@ -1,6 +1,6 @@
 callback Comparator {
-    call (left: `T, right: `T) -> Comparison
-    handler (left: `T, right: `T) -> Comparison
+    call (left: 'T, right: 'T) -> Comparison
+    handler (left: 'T, right: 'T) -> Comparison
 }
 
 record Sort_Range {
@@ -9,23 +9,23 @@ record Sort_Range {
     depth: uint
 }
 
-func natural_compare(left: `T, right: `T) -> Comparison where ` T : Comparable {
+func natural_compare(left: 'T, right: 'T) -> Comparison where 'T : Comparable {
     return left.__cmp(right)
 }
 
-inline func order(by: Comparator[`T], left: `T, right: `T) -> Comparison {
+inline func order(by: Comparator['T], left: 'T, right: 'T) -> Comparison {
     let result: Comparison = by.call(left, right)
     require result != Comparison.unordered
     return result
 }
 
-inline func swap(left: Ref[`T], right: Ref[`T]) {
-    let value: `T = ref_read(left)
+inline func swap(left: Ref['T], right: Ref['T]) {
+    let value: 'T = ref_read(left)
     ref_write(left, ref_read(right))
     ref_write(right, value)
 }
 
-func sort_by(modify items: Array[`T], by: Comparator[`T]) {
+func sort_by(modify items: Array['T], by: Comparator['T]) {
     let count:     uint = __array_length(items)
     var height:    uint = count
     var max_depth: uint = 0
@@ -83,7 +83,7 @@ func sort_by(modify items: Array[`T], by: Comparator[`T]) {
             if order(by, items[mid], items[low]) == Comparison.less {
                 swap(ref items[mid], ref items[low])
             }
-            let pivot: `T  = items[mid]
+            let pivot: 'T  = items[mid]
             var left:  int = low
             var at:    int = low
             var right: int = high
@@ -131,7 +131,7 @@ func sort_by(modify items: Array[`T], by: Comparator[`T]) {
     }
 }
 
-func sort(modify items: Array[`T]) where ` T : Comparable {
-    let by: Comparator[`T] = callback[Comparator](ref natural_compare)
+func sort(modify items: Array['T]) where 'T : Comparable {
+    let by: Comparator['T] = callback[Comparator](ref natural_compare)
     sort_by(items, by)
 }

@@ -9,19 +9,19 @@ func append(modify self: OtherBox, value: int) {
     self.value = value + 1
 }
 
-func put_in(modify values: `L, value: `T)
-            where `L: Appendable {
+func put_in(modify values: 'L, value: 'T)
+            where 'L: Appendable {
     values.append(value)
 }
 
-func put_in_typecase(modify values: `L, value: `T) {
+func put_in_typecase(modify values: 'L, value: 'T) {
     typecase values {
         case Appendable { values.append(value) }
         else { require false }
     }
 }
 
-func put_in_unconstrained(modify values: `L, value: `T) {
+func put_in_unconstrained(modify values: 'L, value: 'T) {
     values.append(value)
 }
 

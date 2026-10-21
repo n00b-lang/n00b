@@ -1,8 +1,8 @@
-func nested(x: `T, n: int) -> int {
+func nested(x: 'T, n: int) -> int {
     if n == 0 {
         return 0
     }
-    let wrapped: List[`T] = [x]
+    let wrapped: List['T] = [x]
     return nested(wrapped, n - 1)
 }
 

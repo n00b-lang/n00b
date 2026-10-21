@@ -5,7 +5,7 @@ import abi
 import hex
 
 trait Raw_Repr {
-    func raw_repr(self: `T, fd: i32) -> i32
+    func raw_repr(self: 'T, fd: i32) -> i32
 }
 
 private const signed_flag: u32 = 1
@@ -18,7 +18,7 @@ func raw_repr(self: string, fd: i32) -> i32 {
     }
 }
 
-func raw_repr(self: `T, fd: i32) -> i32 {
+func raw_repr(self: 'T, fd: i32) -> i32 {
     typecase self {
         case bool {
             if self {
@@ -37,10 +37,10 @@ func raw_repr(self: `T, fd: i32) -> i32 {
                 (bits >> 52) & 0x7ff == 0x7ff,
                 bits & 0x000fffffffffffff != 0)
         }
-        case Ref[`R] {
+        case Ref['R] {
             return emit_address(fd, cast[u64] __abi_ref_address(self))
         }
-        case Array[`E] {
+        case Array['E] {
             return emit_array(fd, self)
         }
         else {
@@ -201,7 +201,7 @@ private func emit_integer(fd: i32, bits: u128, width: uint, signed: bool)
     return string.core.__fd_write_bytes(fd, buf, start, 40)
 }
 
-private func emit_array(fd: i32, items: Array[`E]) -> i32 {
+private func emit_array(fd: i32, items: Array['E]) -> i32 {
     var written: int = cast[int] string.core.__fd_write(fd, "[")
     if written < 0 {
         return -1
@@ -231,7 +231,7 @@ private func emit_array(fd: i32, items: Array[`E]) -> i32 {
     return cast[i32] (written + 1)
 }
 
-private func emit_default(fd: i32, self: `T) -> i32 {
+private func emit_default(fd: i32, self: 'T) -> i32 {
     let found: Ref[abi.Type_Record]? = __abi_type_for(typeof(self))
     require found != nil
     let row: Ref[abi.Type_Record] = found.get()

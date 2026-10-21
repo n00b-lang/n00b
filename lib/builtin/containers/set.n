@@ -3,22 +3,22 @@ import containers.hash_index
 import cursor
 
 record Set_State {
-    keys:  Array[`T]
+    keys:  Array['T]
     count: uint
     index: containers.hash_index.Hash_Index
 }
 
 record Set {
-    state: Ref[Set_State[`T]]
+    state: Ref[Set_State['T]]
 }
 
-func __init(modify self: Set_State[`T]) {
-    self.keys = new[Array[`T]](0)
+func __init(modify self: Set_State['T]) {
+    self.keys = new[Array['T]](0)
     self.count = 0
     self.index = new[containers.hash_index.Hash_Index]()
 }
 
-func ensure_keys(modify self: Set[`T], needed: uint) {
+func ensure_keys(modify self: Set['T], needed: uint) {
     let capacity: uint = __array_length(self.state.keys)
     if needed <= capacity {
         return
@@ -30,7 +30,7 @@ func ensure_keys(modify self: Set[`T], needed: uint) {
     while next_capacity < needed {
         next_capacity *= 2
     }
-    var next: Array[`T] = new[Array[`T]](cast[int]next_capacity)
+    var next: Array['T] = new[Array['T]](cast[int]next_capacity)
     var at:   uint      = 0
     while at < self.state.count {
         next[at] = self.state.keys[at]
@@ -39,28 +39,28 @@ func ensure_keys(modify self: Set[`T], needed: uint) {
     self.state.keys = next
 }
 
-func __init(modify self: Set[`T], items : Array[`T] = [])
-           where ` T : hashing . Hash {
-    var state: Set_State[`T] = new[Set_State[`T]]()
+func __init(modify self: Set['T], items : Array['T] = [])
+           where 'T : hashing . Hash {
+    var state: Set_State['T] = new[Set_State['T]]()
     self.state = ref state
     for value in items {
         _ = add(self, value)
     }
 }
 
-func len(self: Set[`T]) -> uint {
+func len(self: Set['T]) -> uint {
     return self.state.count
 }
 
-inline func contains(self: Set[`T], value: `T) -> bool where ` T : hashing . Hash {
+inline func contains(self: Set['T], value: 'T) -> bool where 'T : hashing . Hash {
     return containers.hash_index.find_slot(ref self.state.index,
         value.hash()) != nil
 }
 
-inline func add(modify self: Set[`T], value: `T)
-               -> bool where ` T : hashing . Hash {
+inline func add(modify self: Set['T], value: 'T)
+               -> bool where 'T : hashing . Hash {
     let hash:  u128               = value.hash()
-    let state: Ref[Set_State[`T]] = self.state
+    let state: Ref[Set_State['T]] = self.state
     if state.count < __array_length(state.keys) and
        containers.hash_index.has_room(state.index, 1) {
         if !containers.hash_index.index_insert_unique_ref(
@@ -83,8 +83,8 @@ inline func add(modify self: Set[`T], value: `T)
     return true
 }
 
-inline func remove(modify self: Set[`T], value: `T)
-                  -> bool where ` T : hashing . Hash {
+inline func remove(modify self: Set['T], value: 'T)
+                  -> bool where 'T : hashing . Hash {
     let hash:  u128  = value.hash()
     let found: uint? = containers.hash_index.find_slot(
         ref self.state.index, hash)
@@ -97,7 +97,7 @@ inline func remove(modify self: Set[`T], value: `T)
     containers.hash_index.remove_at(self.state.index, found.get())
     let last: uint = self.state.count - 1
     if removed != last {
-        let moved: `T = self.state.keys[last]
+        let moved: 'T = self.state.keys[last]
         self.state.keys[removed] = moved
         containers.hash_index.replace_entry(self.state.index,
             moved.hash(), last, removed)
@@ -107,15 +107,15 @@ inline func remove(modify self: Set[`T], value: `T)
     return true
 }
 
-func clear(modify self: Set[`T]) {
-    self.state.keys = new[Array[`T]](0)
+func clear(modify self: Set['T]) {
+    self.state.keys = new[Array['T]](0)
     self.state.count = 0
     self.state.index = new[containers.hash_index.Hash_Index]()
 }
 
-func iter(self: Set[`T]) -> cursor.Cursor[`T] {
+func iter(self: Set['T]) -> cursor.Cursor['T] {
     let count: int       = cast[int]self.state.count
-    var items: Array[`T] = new[Array[`T]](count)
+    var items: Array['T] = new[Array['T]](count)
     var at:    int       = 0
     while at < count {
         items[at] = self.state.keys[at]
@@ -124,7 +124,7 @@ func iter(self: Set[`T]) -> cursor.Cursor[`T] {
     return cursor.iter(items)
 }
 
-func is_subset(left: Set[`T], right: Set[`T]) -> bool where ` T : hashing . Hash {
+func is_subset(left: Set['T], right: Set['T]) -> bool where 'T : hashing . Hash {
     for value in left {
         if !contains(right, value) {
             return false
@@ -133,13 +133,13 @@ func is_subset(left: Set[`T], right: Set[`T]) -> bool where ` T : hashing . Hash
     return true
 }
 
-func is_superset(left: Set[`T], right: Set[`T])
-                -> bool where ` T : hashing . Hash {
+func is_superset(left: Set['T], right: Set['T])
+                -> bool where 'T : hashing . Hash {
     return is_subset(right, left)
 }
 
-func is_disjoint(left: Set[`T], right: Set[`T])
-                -> bool where ` T : hashing . Hash {
+func is_disjoint(left: Set['T], right: Set['T])
+                -> bool where 'T : hashing . Hash {
     for value in left {
         if contains(right, value) {
             return false
@@ -148,11 +148,11 @@ func is_disjoint(left: Set[`T], right: Set[`T])
     return true
 }
 
-func __equal(self: Set[`T], other: Set[`T]) -> bool where ` T : hashing . Hash {
+func __equal(self: Set['T], other: Set['T]) -> bool where 'T : hashing . Hash {
     return len(self) == len(other) and is_subset(self, other)
 }
 
-func hash(self: Set[`T]) -> u128 where ` T : hashing . Hash {
+func hash(self: Set['T]) -> u128 where 'T : hashing . Hash {
     var result: u128 = len(self)
     for value in self {
         result = result ^ value.hash()
@@ -160,8 +160,8 @@ func hash(self: Set[`T]) -> u128 where ` T : hashing . Hash {
     return result
 }
 
-func __add(left: Set[`T], right: Set[`T]) -> Set[`T] where ` T : hashing . Hash {
-    var result: Set[`T] = new[Set[`T]]()
+func __add(left: Set['T], right: Set['T]) -> Set['T] where 'T : hashing . Hash {
+    var result: Set['T] = new[Set['T]]()
     for value in left {
         _ = add(result, value)
     }
@@ -171,9 +171,9 @@ func __add(left: Set[`T], right: Set[`T]) -> Set[`T] where ` T : hashing . Hash 
     return result
 }
 
-func __subtract(left: Set[`T], right: Set[`T])
-               -> Set[`T] where ` T : hashing . Hash {
-    var result: Set[`T] = new[Set[`T]]()
+func __subtract(left: Set['T], right: Set['T])
+               -> Set['T] where 'T : hashing . Hash {
+    var result: Set['T] = new[Set['T]]()
     for value in left {
         if !contains(right, value) {
             _ = add(result, value)
@@ -182,9 +182,9 @@ func __subtract(left: Set[`T], right: Set[`T])
     return result
 }
 
-func __bit_and(left: Set[`T], right: Set[`T])
-              -> Set[`T] where ` T : hashing . Hash {
-    var result: Set[`T] = new[Set[`T]]()
+func __bit_and(left: Set['T], right: Set['T])
+              -> Set['T] where 'T : hashing . Hash {
+    var result: Set['T] = new[Set['T]]()
     for value in left {
         if contains(right, value) {
             _ = add(result, value)
@@ -193,9 +193,9 @@ func __bit_and(left: Set[`T], right: Set[`T])
     return result
 }
 
-func __bit_xor(left: Set[`T], right: Set[`T])
-              -> Set[`T] where ` T : hashing . Hash {
-    var result: Set[`T] = new[Set[`T]]()
+func __bit_xor(left: Set['T], right: Set['T])
+              -> Set['T] where 'T : hashing . Hash {
+    var result: Set['T] = new[Set['T]]()
     for value in left {
         if !contains(right, value) {
             _ = add(result, value)
@@ -209,6 +209,6 @@ func __bit_xor(left: Set[`T], right: Set[`T])
     return result
 }
 
-litmod<set> set, s(items: Array[`T]) -> Set[`T] fail: string {
-    return new[Set[`T]](items)
+litmod<set> set, s(items: Array['T]) -> Set['T] fail: string {
+    return new[Set['T]](items)
 }

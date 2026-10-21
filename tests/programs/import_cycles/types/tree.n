@@ -6,8 +6,8 @@ public type Tree {
 }
 
 public type Pair {
-    public left: `T
-    public right: `T
+    public left: 'T
+    public right: 'T
 }
 
 public var shared: Tree = make_tree(forest.make_forest(2))
@@ -24,7 +24,7 @@ public func measured(item: forest.Forest) -> int {
     return item.measure()
 }
 
-public func wrapped(item: `T) -> Pair[`T] {
+public func wrapped(item: 'T) -> Pair['T] {
     return (left = item, right = item)
 }
 

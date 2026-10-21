@@ -3,11 +3,11 @@ import containers.traits
 
 variant Generic_Choice {
     empty: nil
-    value: `T
+    value: 'T
 }
 
-func tree_width(handle: `T) -> uint
-                where ` T : builtin . containers . traits . TreeLike {
+func tree_width(handle: 'T) -> uint
+                where 'T : builtin . containers . traits . TreeLike {
     return handle.child_count()
 }
 

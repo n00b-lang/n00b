@@ -1,7 +1,7 @@
 public trait ArchiveMeasure {
-    func measure(self: `T) -> int fail: string
+    func measure(self: 'T) -> int fail: string
 }
 
-public func archived_measure(item: `T) -> int fail: string where `T: ArchiveMeasure {
+public func archived_measure(item: 'T) -> int fail: string where 'T: ArchiveMeasure {
     return item.measure()!
 }

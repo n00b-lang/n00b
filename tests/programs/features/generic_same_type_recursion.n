@@ -1,11 +1,11 @@
-func total(items: Array[`T], n: int) -> int where `T: Has_Length {
+func total(items: Array['T], n: int) -> int where 'T: Has_Length {
     if n == 0 {
         return 0
     }
     return cast[int](items[n - 1].len()) + total(items, n - 1)
 }
 
-func count_down(x: `T, n: int) -> `T {
+func count_down(x: 'T, n: int) -> 'T {
     if n == 0 {
         return x
     }

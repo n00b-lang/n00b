@@ -6285,6 +6285,16 @@ measure_static_shape_prefix(ir_shape_t *shape, uint32_t flat_prefix_rank)
     return ok;
 }
 
+static core_string_t
+source_typevar_name(parse_tree_t *leaf)
+{
+    if (!leaf || !core_tree_is_leaf(leaf)) return (core_string_t){0};
+    core_string_t spelling = parse_tree_leaf_text(leaf);
+    if (!spelling.data || spelling.u8_bytes < 2 || spelling.data[0] != '\'')
+        return (core_string_t){0};
+    return core_string_borrow(spelling.data + 1, spelling.u8_bytes - 1);
+}
+
 th_type *
 signature_typevar_for_node(parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
@@ -6293,11 +6303,9 @@ signature_typevar_for_node(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->types || !node
         || !NT_IS(grammar, node, "tspec-tvar")
-        || core_tree_num_children(node) < 2) return nullptr;
-    parse_tree_t *identifier = core_tree_child(node, 1);
-    if (!core_tree_is_leaf(identifier)) return nullptr;
-    core_string_t name = parse_tree_leaf_text(identifier);
-    if (!name.data || !name.u8_bytes) return nullptr;
+        || core_tree_num_children(node) != 1) return nullptr;
+    core_string_t name = source_typevar_name(core_tree_child(node, 0));
+    if (!name.data) return nullptr;
 
     parse_tree_t *owner_node = node;
     while (owner_node && !NT_IS(grammar, owner_node, "func-def")
@@ -6589,9 +6597,9 @@ apply_signature_where_tree(parse_grammar_t *grammar,
 {
     if (!node || core_tree_is_leaf(node)) return true;
     if (NT_IS(grammar, node, "type-constraint")) {
-        if (core_tree_num_children(node) < 4
-            || !core_tree_is_leaf(core_tree_child(node, 1))) return false;
-        core_string_t var_name = parse_tree_leaf_text(core_tree_child(node, 1));
+        if (core_tree_num_children(node) < 3) return false;
+        core_string_t var_name = source_typevar_name(core_tree_child(node, 0));
+        if (!var_name.data) return false;
         th_type *variable = type_variable_for_signature(types, variables,
                                                          var_name, nullptr,
                                                          nullptr);

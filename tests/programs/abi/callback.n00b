@@ -15,6 +15,6 @@ callback State_Call {
 }
 
 callback Transform_Call {
-    call(value: `T) -> `U fail: `E
-    handler(value: `T) -> `U fail: `E
+    call(value: 'T) -> 'U fail: 'E
+    handler(value: 'T) -> 'U fail: 'E
 }

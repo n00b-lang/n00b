@@ -1,5 +1,5 @@
 trait Scaler {
-    func scale(self: `T, by: int) -> int
+    func scale(self: 'T, by: int) -> int
 }
 
 record Box {

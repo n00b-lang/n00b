@@ -1,6 +1,6 @@
 type Pair {
-    left: `A
-    right: `B
+    left: 'A
+    right: 'B
 }
 
 func first(value: Pair[int, string]) -> int {

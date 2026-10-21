@@ -1,9 +1,9 @@
 trait Checker {
-    func check(self: `T) -> nil fail: string
+    func check(self: 'T) -> nil fail: string
 }
 
 trait Measured {
-    func size(self: `T) -> int
+    func size(self: 'T) -> int
 }
 
 record Handle {
@@ -27,19 +27,19 @@ func size(self: Handle) -> int {
     return self.fd
 }
 
-func verify(value: `T) -> nil fail: string where `T: Checker {
+func verify(value: 'T) -> nil fail: string where 'T: Checker {
     value.check()!
 }
 
-func repair(modify value: `T) -> nil fail: string where `T: Fixup {
+func repair(modify value: 'T) -> nil fail: string where 'T: Fixup {
     value.fixup()!
 }
 
-func measure(value: `T) -> int where `T: Measured {
+func measure(value: 'T) -> int where 'T: Measured {
     return value.size()
 }
 
-func clear(modify value: `T?) -> nil {
+func clear(modify value: 'T?) -> nil {
     value = nil
 }
 

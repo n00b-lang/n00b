@@ -2,7 +2,7 @@ import first
 
 public var depth: int = first.levels
 
-public func same(value: `T) -> `T {
+public func same(value: 'T) -> 'T {
     return value
 }
 

@@ -16,7 +16,7 @@ func __add(left: Counter, right: Counter) -> Counter {
     return result
 }
 
-func combine(left: `T, right: `T) -> `T where `T: Add {
+func combine(left: 'T, right: 'T) -> 'T where 'T: Add {
     return left + right
 }
 

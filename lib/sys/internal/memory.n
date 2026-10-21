@@ -10,7 +10,7 @@ func map_zeroed(bytes: uint, alignment: uint) -> Ref[byte]? {
     return __os_map_zeroed(bytes, alignment)
 }
 
-func unmap(address: Ref[`T], bytes: uint) -> i32 {
+func unmap(address: Ref['T], bytes: uint) -> i32 {
     return __os_unmap(address, bytes)
 }
 

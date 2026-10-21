@@ -56,7 +56,7 @@ private func resolved_path(contents: string, site: litmod_site.Literal_Site)
     return string.core.byte_slice(site.path, 0, slash) + "/" + path
 }
 
-private func element_row(probe: Array[`E]) -> Ref[abi.Type_Record]? {
+private func element_row(probe: Array['E]) -> Ref[abi.Type_Record]? {
     let array_row: Ref[abi.Type_Record]? = __abi_type_for(typeof(probe))
     if array_row == nil {
         return nil
@@ -129,9 +129,9 @@ private func read_all(fd: int, at: Ref[byte], length: uint, path: string)
 }
 
 litmod<fence> embed(contents: string, site: litmod_site.Literal_Site)
-    -> Array[`E] fail: string {
+    -> Array['E] fail: string {
     let path: string = resolved_path(contents, site)
-    var items: Array[`E] = new[Array[`E]](0)
+    var items: Array['E] = new[Array['E]](0)
     let found: Ref[abi.Type_Record]? = element_row(items)
     if found == nil {
         fail "'embed needs a concrete element type"
@@ -150,7 +150,7 @@ litmod<fence> embed(contents: string, site: litmod_site.Literal_Site)
         fail path + " is " + decimal(size) + " bytes, not a whole number of " +
             decimal(stride) + "-byte " + name + " elements"
     }
-    items = new[Array[`E]](cast[int] (size / stride))
+    items = new[Array['E]](cast[int] (size / stride))
     if size > 0 {
         read_all(fd, unsafe_cast[Ref[byte]] ref items[0], size, path)!
     }

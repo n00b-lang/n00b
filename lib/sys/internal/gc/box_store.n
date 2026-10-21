@@ -413,7 +413,7 @@ func empty_location() -> internal.box.Location {
             width = 0)
 }
 
-func ref_set(target: Ref[`T], value: `T) {
+func ref_set(target: Ref['T], value: 'T) {
     var location: internal.box.Location = empty_location()
     internal.box.reference_locate(__box_of(target), ref location)
     let slot: Ref[Any] = __box_of(value)
@@ -421,7 +421,7 @@ func ref_set(target: Ref[`T], value: `T) {
     write_at(ref location, slot)
 }
 
-func option_set(target: Ref[`T?], value: `T?) {
+func option_set(target: Ref['T?], value: 'T?) {
     let reference: Ref[Any] = __box_of(target)
     let location: internal.box.Location = internal.box.option_storage(
         reference)
@@ -436,8 +436,8 @@ func option_set(target: Ref[`T?], value: `T?) {
     builtin.__set_tag_at(location.type_index, address, 1)
 }
 
-func array_set_option(items: Ref[Array[`T?]], index: i64,
-                             value: `T?) {
+func array_set_option(items: Ref[Array['T?]], index: i64,
+                             value: 'T?) {
     let target: Ref[Any] = __box_of(items)
     let location: internal.box.Location = internal.box.element_storage(
         target, index)
@@ -451,13 +451,13 @@ func array_set_option(items: Ref[Array[`T?]], index: i64,
     builtin.__set_tag_at(location.type_index, stored.get(), 1)
 }
 
-func array_set_option_unsigned(items: Ref[Array[`T?]], index: u64,
-                                      value: `T?) {
+func array_set_option_unsigned(items: Ref[Array['T?]], index: u64,
+                                      value: 'T?) {
     require index <= 0x7fffffffffffffff
     array_set_option(items, cast[i64] index, value)
 }
 
-func array_get(items: Array[`T], index: i64) -> `T {
+func array_get(items: Array['T], index: i64) -> 'T {
     var location: internal.box.Location = empty_location()
     let source: Ref[Any] = __box_of(items)
     if internal.box.array_locate(source, index, ref location) {
@@ -469,23 +469,23 @@ func array_get(items: Array[`T], index: i64) -> `T {
     return __box_as(__result_box())
 }
 
-func array_get_unsigned(items: Array[`T], index: u64) -> `T {
+func array_get_unsigned(items: Array['T], index: u64) -> 'T {
     require index <= 0x7fffffffffffffff
     return array_get(items, cast[i64] index)
 }
 
-func record_new() -> `R {
+func record_new() -> 'R {
     return __box_as(__result_box())
 }
 
-func variant_new(physical: u64) -> `V {
+func variant_new(physical: u64) -> 'V {
     let slot: Ref[Any] = __result_box()
     builtin.__box_set_tag(unsafe_cast[Ref[builtin.Box_Record]] slot,
                           physical)
     return __box_as(slot)
 }
 
-func field_put(owner: `R, ordinal: u32, value: `F) {
+func field_put(owner: 'R, ordinal: u32, value: 'F) {
     var location: internal.box.Location = empty_location()
     internal.box.field_locate(__box_of(owner), nil, 0, ordinal,
                               ref location)
@@ -503,7 +503,7 @@ record Single_Shape layout(c) {
     extent:        u64
 }
 
-func array_with_length(count: uint) -> Array[`T] {
+func array_with_length(count: uint) -> Array['T] {
     let slot: Ref[Any] = __result_box()
     var extent: u64 = count
     var shape: Single_Shape = (total_count = 0, rank = 0, flat_rank = 0,
@@ -515,7 +515,7 @@ func array_with_length(count: uint) -> Array[`T] {
 }
 
 func array_with_shape(count: uint, rank: u32, flat_rank: u32,
-                             scratch: Ref[`S]) -> Array[`T] {
+                             scratch: Ref['S]) -> Array['T] {
     let slot: Ref[Any] = __result_box()
     let shape: Ref[byte] = internal.box.reference_address(__box_of(scratch))
     new_array(internal.box.box_view(slot).type_field & 0x7fffffff, count,
@@ -524,12 +524,12 @@ func array_with_shape(count: uint, rank: u32, flat_rank: u32,
     return __box_as(slot)
 }
 
-func array_copy(items: Array[`T]) -> Array[`T] {
+func array_copy(items: Array['T]) -> Array['T] {
     copy_array(__box_of(items), __result_box())
     return __box_as(__result_box())
 }
 
-func array_put(items: Array[`T], index: i64, value: `T) {
+func array_put(items: Array['T], index: i64, value: 'T) {
     var location: internal.box.Location = empty_location()
     let slot: Ref[Any] = __box_of(value)
     escape_box_inner(slot)
@@ -537,12 +537,12 @@ func array_put(items: Array[`T], index: i64, value: `T) {
     write_at(ref location, slot)
 }
 
-func array_prefix_of(items: Array[`T], count: uint) -> Array[`T] {
+func array_prefix_of(items: Array['T], count: uint) -> Array['T] {
     array_prefix(__box_of(items), count, __result_box())
     return __box_as(__result_box())
 }
 
-func array_clear_at(items: Ref[Array[`T]], index: uint) {
+func array_clear_at(items: Ref[Array['T]], index: uint) {
     var array_type: u32 = 0
     let value: Ref[internal.abi.Array_Value] = internal.box.array_value_of(
         __box_of(items), ref array_type)
@@ -550,7 +550,7 @@ func array_clear_at(items: Ref[Array[`T]], index: uint) {
                                   index)
 }
 
-func new_storage() -> Ref[`T] {
+func new_storage() -> Ref['T] {
     let slot: Ref[Any] = __result_box()
     new_reference(internal.box.component_of(
         internal.box.box_view(slot).type_field,
@@ -558,20 +558,20 @@ func new_storage() -> Ref[`T] {
     return __box_as(slot)
 }
 
-func array_ref(items: Ref[Array[`T]], index: i64) -> Ref[`T] {
+func array_ref(items: Ref[Array['T]], index: i64) -> Ref['T] {
     var location: internal.box.Location = empty_location()
     require internal.box.array_locate(__box_of(items), index, ref location)
     internal.box.reference_at(ref location, __result_box())
     return __box_as(__result_box())
 }
 
-func array_ref_unsigned(items: Ref[Array[`T]],
-                               index: u64) -> Ref[`T] {
+func array_ref_unsigned(items: Ref[Array['T]],
+                               index: u64) -> Ref['T] {
     require index <= 0x7fffffffffffffff
     return array_ref(items, cast[i64] index)
 }
 
-func array_set(items: Ref[Array[`T]], index: i64, value: `T) {
+func array_set(items: Ref[Array['T]], index: i64, value: 'T) {
     var location: internal.box.Location = empty_location()
     let target: Ref[Any] = __box_of(items)
     let slot: Ref[Any] = __box_of(value)
@@ -584,8 +584,8 @@ func array_set(items: Ref[Array[`T]], index: i64, value: `T) {
     }
 }
 
-func array_set_unsigned(items: Ref[Array[`T]], index: u64,
-                               value: `T) {
+func array_set_unsigned(items: Ref[Array['T]], index: u64,
+                               value: 'T) {
     require index <= 0x7fffffffffffffff
     array_set(items, cast[i64] index, value)
 }

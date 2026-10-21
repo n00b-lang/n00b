@@ -115,7 +115,7 @@ func blank_line_before_indent() -> int:
     return 1
 
 trait Measured {
-    func measure(self: `T)
+    func measure(self: 'T)
         -> int
 }
 

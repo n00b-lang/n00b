@@ -46,8 +46,14 @@ func initialize_array_backing(payload      : Ref[byte],
     return true
 }
 
+func default_right_paren(first_parameter_with_a_long_name : int,
+                         second_parameter_with_a_long_name: char = ')') ->
+                         Ref[AnExtraordinarilyLongNamedRecord] {
+    return nil
+}
+
 trait LongResult {
-    func select(self                             : `T,
+    func select(self                             : 'T,
                 first_parameter_with_a_long_name : int,
                 second_parameter_with_a_long_name: int) ->
                 Ref[AnExtraordinarilyLongNamedRecord] fail: string

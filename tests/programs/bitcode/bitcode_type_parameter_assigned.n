@@ -1,4 +1,4 @@
-func reset(modify value: `T) -> nil {
+func reset(modify value: 'T) -> nil {
     value = 0
 }
 
