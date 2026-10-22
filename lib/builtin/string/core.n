@@ -238,6 +238,39 @@ inline func utf8_word_is_ascii(w: u64) -> bool {
     return ((unsafe_sub(w, utf8_word_ones) | w) & utf8_word_high) == 0
 }
 
+func utf8_char_count(s: string, len: u64) -> u64 {
+    var n: u64 = 0
+    var i: u64 = 0
+    while i < len {
+        if i + 8 <= len {
+            var w: u64 = 0
+            for k: u64 from 0 until 8 {
+                w = w | (cast[u64] byte_at(s, i + k) << (k * 8))
+            }
+            if utf8_word_is_ascii(w) {
+                n += 8
+                i += 8
+                continue
+            }
+        }
+        if (byte_at(s, i) & 0xc0) != 0x80 {
+            n += 1
+        }
+        i += 1
+    }
+    return n
+}
+
+func len(self: string) -> uint {
+    let base: string = text(self)
+    let bytes: uint = __string_byte_len(base)
+    let enc: Str_Encoding = encoding(base)
+    if enc == Str_Encoding.binary or enc == Str_Encoding.ascii {
+        return bytes
+    }
+    return utf8_char_count(base, bytes)
+}
+
 func __add(self: string, other: string) -> string {
     let left: string = text(self)
     let right: string = text(other)

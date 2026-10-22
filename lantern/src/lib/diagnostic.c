@@ -13,6 +13,8 @@ struct core_diagnostics_t {
     core_list_t(core_diagnostic_t) items;
     core_diag_policy_fn policy;
     void *policy_context;
+    core_diag_filter_fn filter;
+    void *filter_context;
     const core_translation_unit_t *unit;
 };
 
@@ -53,6 +55,15 @@ core_diagnostics_set_policy(core_diagnostics_t *d, core_diag_policy_fn policy,
     if (!d) return;
     d->policy = policy;
     d->policy_context = context;
+}
+
+void
+core_diagnostics_set_filter(core_diagnostics_t *d, core_diag_filter_fn filter,
+                            void *context)
+{
+    if (!d) return;
+    d->filter = filter;
+    d->filter_context = context;
 }
 
 bool
@@ -198,6 +209,7 @@ core_diagnostics_render_text(const core_diagnostics_t *d)
     };
     for (size_t i = 0; i < d->items.len; i++) {
         const core_diagnostic_t *item = &d->items.data[i];
+        if (d->filter && !d->filter(d->filter_context, item)) continue;
         core_string_t severity = item->severity <= CORE_DIAG_HELP
             ? names[item->severity] : CORE_STRING_STATIC("diagnostic");
         core_buffer_printf(out, "%.*s[%.*s]: %.*s\n",

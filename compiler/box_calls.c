@@ -16,6 +16,7 @@ typedef struct {
     ir_module_t *store;
     ir_module_t *runtime_body;
     ir_module_t *store_body;
+    core_dict_t emitted;
 } box_calls_t;
 
 typedef enum {
@@ -45,14 +46,6 @@ runtime_module(box_calls_t *calls, const ir_module_t *module)
 }
 
 static bool
-emitted(n00bb_link_analysis_t *analysis, const ir_func_t *function)
-{
-    for (size_t i = 0; i < analysis->emitted_functions.len; i++)
-        if (analysis->emitted_functions.data[i] == function) return true;
-    return false;
-}
-
-static bool
 retarget(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction,
          ir_func_t *target, th_type *const *actuals, size_t actual_count,
          ir_value_t *const *arguments, size_t argument_count)
@@ -74,7 +67,7 @@ retarget(box_calls_t *calls, ir_func_t *caller, ir_instr_t *instruction,
     if (!ir_instr_set_call_signature(instruction, signature)) return false;
     core_list_push(calls->analysis->specialization_requests,
         ((n00bb_specialization_request_t){caller->owner, target}));
-    if (!emitted(calls->analysis, target))
+    if (core_dict_add(&calls->emitted, target, 1))
         core_list_push(calls->analysis->emitted_functions, target);
     return true;
 }
@@ -143,29 +136,21 @@ member_ordinal(ir_module_t *module, th_type *record, core_string_t name)
 }
 
 static ir_instr_t *
-fresh_instruction(ir_func_t *caller, ir_block_t *block, uint32_t at,
-                  ir_span_t span, ir_op_t op, th_type *type)
+fresh_instruction(ir_block_t *block, uint32_t at, ir_span_t span, ir_op_t op,
+                  th_type *type)
 {
     ir_instr_t *instruction = type ? ir_instr_generated(block, op, span,
         CORE_STRING_STATIC("box_calls"), at) : nullptr;
-    if (!instruction) return nullptr;
-    for (uint32_t attempt = 0;; attempt++) {
-        core_buffer_t name = {0};
-        core_buffer_printf(&name, "__box_value_%u_%u_%u", block->index,
-                           at, attempt);
-        core_string_t text = core_buffer_string(&name);
-        bool taken = ir_value_find(caller, text) != nullptr;
-        bool bound = !taken && ir_instr_set_dest(instruction, text, type);
-        core_buffer_release(&name);
-        if (!taken) return bound ? instruction : nullptr;
-    }
+    return instruction
+        && ir_instr_set_fresh_dest(instruction, "__box_value", type)
+        ? instruction : nullptr;
 }
 
 static ir_value_t *
 typed_constant(ir_func_t *caller, ir_block_t *block, uint32_t at,
                ir_span_t span, uint64_t value, core_string_t type_name)
 {
-    ir_instr_t *constant = fresh_instruction(caller, block, at, span,
+    ir_instr_t *constant = fresh_instruction(block, at, span,
         IR_OP_CONST, th_name(ir_module_types(caller->owner), type_name));
     return constant && ir_instr_operand_uint(constant, value)
         ? constant->dest : nullptr;
@@ -292,10 +277,10 @@ slot_reference(box_calls_t *calls, ir_func_t *caller, ir_instr_t *before,
     th_type *referent = th_ind_referent(reference);
     if (!n00bb_boxed_signature_position(caller->owner, referent))
         return nullptr;
-    ir_instr_t *slot = fresh_instruction(caller, before->block, before->index,
+    ir_instr_t *slot = fresh_instruction(before->block, before->index,
         before->span, IR_OP_BITCAST, th_ind(types, 0, any));
     if (!slot || !ir_instr_operand_value(slot, address)) return nullptr;
-    ir_instr_t *call = fresh_instruction(caller, before->block, before->index,
+    ir_instr_t *call = fresh_instruction(before->block, before->index,
         before->span, IR_OP_CALL, address->type);
     return call && retarget(calls, caller, call, target, &referent, 1,
                             &slot->dest, 1) ? call->dest : nullptr;
@@ -442,8 +427,9 @@ owned_sequence(box_calls_t *calls, ir_func_t *caller, ir_instr_t *before,
         || th_is_closed(ir_module_types(caller->owner), type)) return value;
     ir_func_t *copy = store_function(calls, CORE_STRING_STATIC("array_copy"));
     if (!copy) return value;
-    ir_instr_t *call = fresh_instruction(caller, before->block, before->index,
-                                         before->span, IR_OP_CALL, value->type);
+    ir_instr_t *call = fresh_instruction(before->block, before->index,
+                                         before->span, IR_OP_CALL,
+                                         value->type);
     th_type *element = th_seq_elem(type);
     return call && retarget(calls, caller, call, copy, &element, 1, &value, 1)
         ? call->dest : nullptr;
@@ -521,7 +507,7 @@ converted(ir_func_t *caller, ir_instr_t *before, ir_value_t *value,
           th_type *type)
 {
     if (!value || ir_type_eq(caller->owner, value->type, type)) return value;
-    ir_instr_t *cast = fresh_instruction(caller, before->block, before->index,
+    ir_instr_t *cast = fresh_instruction(before->block, before->index,
                                          before->span, IR_OP_CAST, type);
     return cast && ir_instr_operand_value(cast, value) ? cast->dest : nullptr;
 }
@@ -536,11 +522,11 @@ scratch_words(ir_func_t *caller, ir_instr_t *before, th_type *word,
     for (uint32_t i = 0; i < count; i++) items[i] = word;
     th_type *tuple = th_tuple(types, items, count);
     core_free(items);
-    ir_instr_t *scratch = tuple ? fresh_instruction(caller, before->block,
+    ir_instr_t *scratch = tuple ? fresh_instruction(before->block,
         before->index, before->span, IR_OP_ALLOCA, th_ind(types, 0, tuple))
         : nullptr;
     ir_instr_t *words = scratch && ir_instr_operand_type(scratch, tuple)
-        ? fresh_instruction(caller, before->block, before->index,
+        ? fresh_instruction(before->block, before->index,
                             before->span, IR_OP_AGGREGATE, tuple)
         : nullptr;
     bool ok = words != nullptr;
@@ -776,7 +762,7 @@ type_index_word(ir_ctx_t *context, ir_func_t *caller, ir_instr_t *before,
 {
     th_type *u32 = th_name(ir_module_types(caller->owner),
                            CORE_STRING_STATIC("u32"));
-    ir_instr_t *index = fresh_instruction(caller, before->block,
+    ir_instr_t *index = fresh_instruction(before->block,
         before->index, before->span, IR_OP_TYPE_INDEX, u32);
     if (!index || !ir_instr_operand_type(index, type)) return nullptr;
     if (head && !ir_annot_set(context, &index->annots,
@@ -797,15 +783,14 @@ type_index_of_box(box_calls_t *calls, ir_func_t *caller,
     ir_func_t *field = runtime_function(calls, any
         ? CORE_STRING_STATIC("any_type_field")
         : CORE_STRING_STATIC("type_field_of"));
-    ir_instr_t *actual = u32 && field ? fresh_instruction(caller,
-        instruction->block, instruction->index, instruction->span,
-        IR_OP_CALL, u32) : nullptr;
+    ir_instr_t *actual = u32 && field ? fresh_instruction(instruction->block,
+        instruction->index, instruction->span, IR_OP_CALL, u32) : nullptr;
     if (!actual || !retarget(calls, caller, actual, field, &source,
                              any ? 0 : 1, &value, 1)) return nullptr;
     ir_value_t *mask = typed_constant(caller, instruction->block,
         instruction->index, instruction->span, UINT32_C(0x7fffffff),
         CORE_STRING_STATIC("u32"));
-    ir_instr_t *masked = mask ? fresh_instruction(caller, instruction->block,
+    ir_instr_t *masked = mask ? fresh_instruction(instruction->block,
         instruction->index, instruction->span, IR_OP_AND, u32) : nullptr;
     return masked && ir_instr_operand_value(masked, actual->dest)
         && ir_instr_operand_value(masked, mask) ? masked->dest : nullptr;
@@ -999,7 +984,7 @@ rewrite_nominal_cast(box_calls_t *calls, ir_func_t *caller,
         const th_member *member = th_record_member(target_shape, i);
         th_type *field_type = member && member->name.data
             ? th_record_lookup(source_shape, member->name) : nullptr;
-        ir_instr_t *read = field_type ? fresh_instruction(caller, block, at,
+        ir_instr_t *read = field_type ? fresh_instruction(block, at,
             instruction->span, IR_OP_EXTRACT, field_type) : nullptr;
         if (!read || !ir_instr_operand_value(read, source)
             || !ir_instr_operand_name(read, member->name)) return false;
@@ -1142,11 +1127,7 @@ rewrite_reference_compare(box_calls_t *calls, ir_func_t *caller,
 static bool
 native_named(const ir_instr_t *call, core_string_t name)
 {
-    const ir_value_t *callee = call->n_operands
-        && call->operands[0].kind == IR_OPD_VALUE
-        ? call->operands[0].value : nullptr;
-    ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-        ? n00bb_cached_body(callee->owner) : nullptr;
+    ir_func_t *target = n00bb_direct_call_target(call);
     ir_annot_t *native = target ? ir_annot_get(&target->annots,
         CORE_STRING_STATIC("n00bb.abi.native")) : nullptr;
     return native && native->kind == IR_ANNOT_STR && native->s.data
@@ -1456,6 +1437,135 @@ rewrite_sequence_set(box_calls_t *calls, ir_func_t *caller,
                     arguments, 3);
 }
 
+static bool
+rewrite_emitted(box_calls_t *calls)
+{
+    n00bb_link_analysis_t *analysis = calls->analysis;
+    size_t count = analysis->emitted_functions.len;
+    for (size_t f = 0; f < count; f++) {
+        ir_func_t *function = n00bb_cached_body(
+            analysis->emitted_functions.data[f]);
+        if (!function || !function->n_blocks
+            || runtime_module(calls,function->owner)) continue;
+        for (uint32_t b = 0; b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *instruction = block->instrs[i];
+                if (!own_sequence_operands(calls,function, instruction)
+                    || !box_raw_arguments(calls,function, instruction))
+                    return false;
+                bool rewritten = true;
+                switch (instruction->op) {
+                case IR_OP_LOAD:
+                    rewritten = rewrite_load(calls,function, instruction);
+                    break;
+                case IR_OP_STORE:
+                    rewritten = rewrite_store(calls,function, instruction);
+                    break;
+                case IR_OP_EXTRACT:
+                    rewritten = rewrite_extract(calls,function,
+                                                instruction);
+                    break;
+                case IR_OP_TYPE_OF:
+                    rewritten = rewrite_type_of(calls,function, instruction);
+                    break;
+                case IR_OP_TYPE_TEST:
+                    rewritten = rewrite_type_test(calls,function,
+                                                  instruction);
+                    break;
+                case IR_OP_SEQUENCE_SHAPE_CHECK:
+                    rewritten = rewrite_shape_check(calls,function,
+                                                    instruction);
+                    break;
+                case IR_OP_SEQUENCE_LENGTH:
+                    rewritten = rewrite_sequence_length(calls,function,
+                                                        instruction);
+                    break;
+                case IR_OP_EXTRACT_INDEX:
+                    rewritten = rewrite_extract_index(calls,function,
+                                                      instruction);
+                    break;
+                case IR_OP_ALLOC:
+                    rewritten = rewrite_alloc(calls,function, instruction);
+                    break;
+                case IR_OP_FIELD:
+                    rewritten = rewrite_field(calls,function, instruction);
+                    break;
+                case IR_OP_CALL:
+                    rewritten = rewrite_native_call(calls,function,
+                                                    instruction);
+                    break;
+                case IR_OP_AGGREGATE:
+                    rewritten = rewrite_array_literal(calls,function,
+                                                      instruction);
+                    break;
+                case IR_OP_EQ:
+                case IR_OP_NE:
+                    rewritten = rewrite_reference_compare(calls,function,
+                                                          instruction);
+                    break;
+                case IR_OP_INDEX:
+                case IR_OP_SEQUENCE_GET:
+                    rewritten = rewrite_sequence_get(calls,function,
+                                                     instruction);
+                    break;
+                case IR_OP_SEQUENCE_SET:
+                    rewritten = rewrite_sequence_set(calls,function,
+                                                     instruction);
+                    break;
+                case IR_OP_ARRAY_NEW:
+                    rewritten = rewrite_array_new(calls,function,
+                                                  instruction);
+                    break;
+                case IR_OP_NOMINAL_CAST:
+                    rewritten = rewrite_nominal_cast(calls,function,
+                                                     instruction);
+                    break;
+                case IR_OP_VARIANT_TAG:
+                    rewritten = rewrite_variant_tag(calls,function,
+                                                    instruction);
+                    break;
+                case IR_OP_VARIANT_PAYLOAD:
+                    rewritten = rewrite_variant_payload(calls,function,
+                                                        instruction);
+                    break;
+                case IR_OP_VARIANT_MAKE:
+                    rewritten = rewrite_variant_make(calls,function,
+                                                     instruction);
+                    break;
+                default:
+                    break;
+                }
+                if (!rewritten) return false;
+            }
+        }
+    }
+    return true;
+}
+
+static void
+emit_callees(box_calls_t *calls, size_t first)
+{
+    core_list_t(n00bb_ir_func_ptr_t) *emitted =
+        &calls->analysis->emitted_functions;
+    for (size_t f = first; f < emitted->len; f++) {
+        ir_func_t *function = n00bb_cached_body(emitted->data[f]);
+        for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+            ir_block_t *block = function->blocks[b];
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                ir_instr_t *in = block->instrs[i];
+                for (uint32_t k = 0; k < in->n_operands; k++) {
+                    ir_value_t *value = in->operands[k].kind == IR_OPD_VALUE
+                        ? in->operands[k].value : nullptr;
+                    if (value && value->kind == IR_VAL_FUNC && value->owner
+                        && core_dict_add(&calls->emitted, value->owner, 1))
+                        core_list_push(*emitted, value->owner);
+                }
+            }
+        }
+    }
+}
+
 bool
 n00bb_rewrite_box_operations(n00bb_link_analysis_t *analysis)
 {
@@ -1471,104 +1581,12 @@ n00bb_rewrite_box_operations(n00bb_link_analysis_t *analysis)
             ? n00bb_cache_module(analysis->cache, store) : nullptr,
     };
     if (!calls.runtime) return true;
-    size_t count = analysis->emitted_functions.len;
-    for (size_t f = 0; f < count; f++) {
-        ir_func_t *function = n00bb_cached_body(
-            analysis->emitted_functions.data[f]);
-        if (!function || !function->n_blocks
-            || runtime_module(&calls, function->owner)) continue;
-        for (uint32_t b = 0; b < function->n_blocks; b++) {
-            ir_block_t *block = function->blocks[b];
-            for (uint32_t i = 0; i < block->n_instrs; i++) {
-                ir_instr_t *instruction = block->instrs[i];
-                if (!own_sequence_operands(&calls, function, instruction)
-                    || !box_raw_arguments(&calls, function, instruction))
-                    return false;
-                bool rewritten = true;
-                switch (instruction->op) {
-                case IR_OP_LOAD:
-                    rewritten = rewrite_load(&calls, function, instruction);
-                    break;
-                case IR_OP_STORE:
-                    rewritten = rewrite_store(&calls, function, instruction);
-                    break;
-                case IR_OP_EXTRACT:
-                    rewritten = rewrite_extract(&calls, function,
-                                                instruction);
-                    break;
-                case IR_OP_TYPE_OF:
-                    rewritten = rewrite_type_of(&calls, function, instruction);
-                    break;
-                case IR_OP_TYPE_TEST:
-                    rewritten = rewrite_type_test(&calls, function,
-                                                  instruction);
-                    break;
-                case IR_OP_SEQUENCE_SHAPE_CHECK:
-                    rewritten = rewrite_shape_check(&calls, function,
-                                                    instruction);
-                    break;
-                case IR_OP_SEQUENCE_LENGTH:
-                    rewritten = rewrite_sequence_length(&calls, function,
-                                                        instruction);
-                    break;
-                case IR_OP_EXTRACT_INDEX:
-                    rewritten = rewrite_extract_index(&calls, function,
-                                                      instruction);
-                    break;
-                case IR_OP_ALLOC:
-                    rewritten = rewrite_alloc(&calls, function, instruction);
-                    break;
-                case IR_OP_FIELD:
-                    rewritten = rewrite_field(&calls, function, instruction);
-                    break;
-                case IR_OP_CALL:
-                    rewritten = rewrite_native_call(&calls, function,
-                                                    instruction);
-                    break;
-                case IR_OP_AGGREGATE:
-                    rewritten = rewrite_array_literal(&calls, function,
-                                                      instruction);
-                    break;
-                case IR_OP_EQ:
-                case IR_OP_NE:
-                    rewritten = rewrite_reference_compare(&calls, function,
-                                                          instruction);
-                    break;
-                case IR_OP_INDEX:
-                case IR_OP_SEQUENCE_GET:
-                    rewritten = rewrite_sequence_get(&calls, function,
-                                                     instruction);
-                    break;
-                case IR_OP_SEQUENCE_SET:
-                    rewritten = rewrite_sequence_set(&calls, function,
-                                                     instruction);
-                    break;
-                case IR_OP_ARRAY_NEW:
-                    rewritten = rewrite_array_new(&calls, function,
-                                                  instruction);
-                    break;
-                case IR_OP_NOMINAL_CAST:
-                    rewritten = rewrite_nominal_cast(&calls, function,
-                                                     instruction);
-                    break;
-                case IR_OP_VARIANT_TAG:
-                    rewritten = rewrite_variant_tag(&calls, function,
-                                                    instruction);
-                    break;
-                case IR_OP_VARIANT_PAYLOAD:
-                    rewritten = rewrite_variant_payload(&calls, function,
-                                                        instruction);
-                    break;
-                case IR_OP_VARIANT_MAKE:
-                    rewritten = rewrite_variant_make(&calls, function,
-                                                     instruction);
-                    break;
-                default:
-                    break;
-                }
-                if (!rewritten) return false;
-            }
-        }
-    }
-    return true;
+    core_dict_init(&calls.emitted, nullptr, nullptr);
+    for (size_t f = 0; f < analysis->emitted_functions.len; f++)
+        core_dict_put(&calls.emitted, analysis->emitted_functions.data[f], 1);
+    size_t reached = analysis->emitted_functions.len;
+    bool ok = rewrite_emitted(&calls);
+    if (ok) emit_callees(&calls, reached);
+    core_dict_free(&calls.emitted);
+    return ok;
 }

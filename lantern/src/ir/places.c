@@ -423,13 +423,19 @@ ir_places_types_overlap(ir_module_t *module, th_type *a, th_type *b)
 static uint32_t
 intern_place(ir_places_t *places, ir_place_t place)
 {
+    bool named = place.kind == IR_PLACE_GLOBAL || place.kind == IR_PLACE_THREAD;
+    const ir_global_t *global = named && place.root && place.root->global
+        ? ir_global_identity(place.root->global) : nullptr;
     for (size_t i = 0; i < places->places.len; i++) {
         const ir_place_t *have = &places->places.data[i];
         if (have->kind != place.kind) continue;
+        bool same_global = global && have->root && have->root->global
+            && ir_global_identity(have->root->global) == global;
         if (place.kind == IR_PLACE_HEAP
                 ? have->root == place.root
                     && same_type(places->module, have->type, place.type)
-                : place.kind == IR_PLACE_UNKNOWN || have->root == place.root)
+                : place.kind == IR_PLACE_UNKNOWN || have->root == place.root
+                    || same_global)
             return (uint32_t)i;
     }
     core_list_push(places->places, place);
@@ -991,7 +997,13 @@ ir_places_may_alias(const ir_places_t *places, uint32_t a, uint32_t b)
         return true;
     bool x_named = x->kind == IR_PLACE_GLOBAL || x->kind == IR_PLACE_THREAD;
     bool y_named = y->kind == IR_PLACE_GLOBAL || y->kind == IR_PLACE_THREAD;
-    if (x_named && y_named) return false;
+    if (x_named && y_named) {
+        const ir_global_t *gx = x->root && x->root->global
+            ? ir_global_identity(x->root->global) : nullptr;
+        const ir_global_t *gy = y->root && y->root->global
+            ? ir_global_identity(y->root->global) : nullptr;
+        return !gx || !gy || gx == gy;
+    }
     bool x_site = x->kind == IR_PLACE_HEAP && x->root;
     bool y_site = y->kind == IR_PLACE_HEAP && y->root;
     if (x_site && y_site) return false;

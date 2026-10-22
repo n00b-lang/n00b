@@ -1,0 +1,5 @@
+import internal.locks
+
+package sys.locks {
+    export internal.locks
+}

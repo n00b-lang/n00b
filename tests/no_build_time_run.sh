@@ -6,8 +6,8 @@ program=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-if ! "$compiler" build --build-time --output "$tmp/build_time" "$program" \
-    >"$tmp/compile.out" 2>&1; then
+if ! N00B_PATH="$(dirname "$program")" "$compiler" build --build-time \
+    --output "$tmp/build_time" "$program" >"$tmp/compile.out" 2>&1; then
     cat "$tmp/compile.out" >&2
     exit 1
 fi

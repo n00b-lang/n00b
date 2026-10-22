@@ -107,6 +107,8 @@ n00bb_check_deferred_conversions(core_translation_unit_t *unit)
         th_type *target = th_resolve(pending->target);
         if (!th_is_closed(state->types, target)) continue;
         if (!th_is_closed(state->types, value)) {
+            if (n00bb_open_integer(value) && is_integer_type(target))
+                n00bb_integer_boundary(state, pending->site, target);
             (void)th_unify_in_place(state->types, value, target);
             continue;
         }
@@ -345,11 +347,24 @@ rebind_call_callee(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 }
 
 static void
-unify_call_argument(core_translation_unit_t *unit, n00bb_tu_state_t *state,
-                    parse_tree_t *diagnostic_node, parse_tree_t *argument,
-                    th_type *expected, bool context_call)
+unify_call_argument(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                    n00bb_tu_state_t *state, parse_tree_t *diagnostic_node,
+                    parse_tree_t *argument, th_type *expected,
+                    bool context_call, bool writes)
 {
     th_type *actual = parse_tree_type(argument);
+    if (writes && is_integer_type(expected)) {
+        parse_tree_t *lvalue = n00bb_simple_lvalue(argument);
+        parse_sym_entry_t *symbol = lvalue
+            ? attached_symbol(grammar, unit, lvalue) : nullptr;
+        if (symbol && n00bb_open_integer(symbol->type))
+            (void)th_ground_integer(state->types, symbol->type, expected);
+        if (n00bb_open_integer(actual)
+            && th_ground_integer(state->types, actual, expected)) {
+            parse_tree_set_type(argument, expected);
+            return;
+        }
+    }
     if (context_call && n00bb_value_coerces(state->types, actual, expected))
         report_call_type_error(unit, argument, state->types, actual,
                                expected, N00BB_CALL_ARGUMENT);
@@ -422,7 +437,8 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
         if (index < parameter_count) bound[index] = true;
         if (!core_tree_is_leaf(positional.data[i]))
             core_list_push(*bindings, ((n00bb_call_binding_t){
-                positional.data[i], parameter->type, false}));
+                positional.data[i], parameter->type, false,
+                th_mode_produces_output(parameter->mode)}));
     }
     core_list_free(positional);
     parse_tree_t *formals = callee
@@ -438,6 +454,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
                                           CORE_STRING_STATIC("expression"));
         size_t index = 0;
         th_type *expected = nullptr;
+        bool writes = false;
         if (function_parameter_named(grammar, callee, formals,
                 call_keyword_name(keyword), &index)) {
             const th_param *parameter = th_func_param(signature, index);
@@ -445,6 +462,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
                 ? th_func_kw(signature, index - parameter_count) : nullptr;
             expected = parameter ? parameter->type
                 : option ? option->type : nullptr;
+            writes = parameter && th_mode_produces_output(parameter->mode);
         }
         if (!expected) {
             report_call_binding_error(unit, keyword,
@@ -463,7 +481,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
         if (index < parameter_count) bound[index] = true;
         if (argument && !core_tree_is_leaf(argument))
             core_list_push(*bindings, ((n00bb_call_binding_t){
-                argument, expected, true}));
+                argument, expected, true, writes}));
     }
     core_list_free(keywords);
     for (size_t i = 0; valid && callee && i < parameter_count; i++) {
@@ -810,9 +828,10 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             label->then_body, parameter_offset, label->self, &bindings);
         for (size_t i = 0; i < bindings.len; i++) {
             n00bb_call_binding_t *binding = &bindings.data[i];
-            unify_call_argument(unit, state,
+            unify_call_argument(grammar, unit, state,
                 binding->keyword ? binding->argument : label->self,
-                binding->argument, binding->expected, context_call);
+                binding->argument, binding->expected, context_call,
+                binding->writes);
         }
         core_list_free(bindings);
         th_type *return_type = th_func_ret(signature);

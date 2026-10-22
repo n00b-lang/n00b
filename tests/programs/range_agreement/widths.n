@@ -1,0 +1,20 @@
+func full(a: u64, b: i64) -> u64 {
+    let masked: u64 = a & 255
+    let shifted: u64 = masked << 2
+    let halved: i64 = b / 2
+    let negated: i64 = -halved
+    return shifted + cast[u64](negated + negated)
+}
+
+func narrow(value: u16) -> u8 {
+    let low: u16 = value % 200
+    return cast[u8](low)
+}
+
+func product(a: u32, b: u32) -> u64 {
+    return cast[u64](a) * cast[u64](b)
+}
+
+require full(3, -4) == 16
+require narrow(300) == 100
+require product(3, 4) == 12

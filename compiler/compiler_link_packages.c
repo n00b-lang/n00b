@@ -276,8 +276,25 @@ append_static_value(core_buffer_t *buffer,
             if (!append_static_value(buffer, &value->as.aggregate.items[i],
                                      depth + 1)) return false;
         return true;
+    case N00BB_STATIC_VALUE_ADDRESS:
+        return false;
     }
     return false;
+}
+
+static bool
+static_value_portable(const n00bb_static_value_t *value)
+{
+    if (value->kind == N00BB_STATIC_VALUE_ADDRESS) return false;
+    if (value->kind == N00BB_STATIC_VALUE_VARIANT)
+        return static_value_portable(value->as.variant.payload);
+    if (value->kind != N00BB_STATIC_VALUE_SEQUENCE
+        && value->kind != N00BB_STATIC_VALUE_TUPLE
+        && value->kind != N00BB_STATIC_VALUE_RECORD) return true;
+    for (size_t i = 0; i < value->as.aggregate.count; i++)
+        if (!static_value_portable(&value->as.aggregate.items[i]))
+            return false;
+    return true;
 }
 
 static bool
@@ -1039,6 +1056,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
                         symbol) ? 1 : 0;
                     const n00bb_static_value_t *static_value =
                         symbol->has_comptime_value && symbol->comptime_value
+                        && static_value_portable(symbol->comptime_value)
                         ? symbol->comptime_value : nullptr;
                     metadata[10] = static_value ? 1 : 0;
                     metadata[11] = static_value

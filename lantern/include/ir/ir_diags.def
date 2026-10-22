@@ -35,3 +35,4 @@ IR_DIAG(VERIFY_PHASE,     "IR-E0037", ERROR,   "global is unavailable in this ex
 IR_DIAG(VERIFY_STORAGE,   "IR-E0038", ERROR,   "a required storage class is not honored")
 IR_DIAG(UNUSED_RESULT,    "IR-W0039", WARNING, "the value of an expression statement is never used")
 IR_DIAG(UNPROVEN_OPTION,  "IR-E0040", ERROR,   "an option's value is used where nothing proves it is not nil")
+IR_DIAG(UNBOUNDED_RECURSION, "IR-W0041", WARNING, "a function recurses with no path that returns")

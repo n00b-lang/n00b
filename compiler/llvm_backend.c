@@ -1,11 +1,12 @@
 #include "llvm_backend.h"
 #include "cached_body.h"
+#include "compiler_axioms.h"
 #include "sequence_transfer.h"
 
 #include "ir/layout.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
-#include "ir/analyses.h"
+#include "ir/liveness.h"
 #include "ir/ranges.h"
 #include "ir/shape.h"
 #include "ir/typelang.h"
@@ -76,8 +77,6 @@ native_type_key_eq(const void *left, const void *right)
 }
 
 static _Thread_local core_dict_t *active_native_types;
-static _Thread_local core_list_t(core_string_t)
-    *active_selected_mutators;
 
 static char *
 llvm_text(core_string_t text)
@@ -255,6 +254,43 @@ debug_location(LLVMBuilderRef builder, LLVMMetadataRef subprogram,
         LLVMGetBuilderContext(builder), line, column, subprogram, nullptr));
 }
 
+typedef void *pointer_set_item_t;
+core_list_decl(pointer_set_item_t);
+
+typedef struct {
+    core_list_t(pointer_set_item_t) items;
+    core_dict_t                     members;
+} pointer_set_t;
+
+static pointer_set_t
+pointer_set_new(void)
+{
+    pointer_set_t set = {.items = core_list_new(pointer_set_item_t)};
+    core_dict_init(&set.members, nullptr, nullptr);
+    return set;
+}
+
+static bool
+pointer_set_has(const pointer_set_t *set, const void *item)
+{
+    return core_dict_contains((core_dict_t *)&set->members, (void *)item);
+}
+
+static bool
+pointer_set_add(pointer_set_t *set, void *item)
+{
+    if (!core_dict_add(&set->members, item, item)) return false;
+    core_list_push(set->items, item);
+    return true;
+}
+
+static void
+pointer_set_free(pointer_set_t *set)
+{
+    core_list_free(set->items);
+    core_dict_free(&set->members);
+}
+
 struct n00bb_llvm_backend_t {
     LLVMContextRef context;
     core_dict_t native_types;
@@ -274,8 +310,7 @@ struct n00bb_llvm_backend_t {
     size_t global_binding_count;
     const n00bb_llvm_finalizer_binding_t *finalizers;
     size_t finalizer_count;
-    ir_func_t *const *reachable;
-    size_t reachable_count;
+    pointer_set_t reachable;
     bool reachable_bound;
     ir_storage_origin_t *storage_origin;
     bool emit_frame_maps;
@@ -283,7 +318,6 @@ struct n00bb_llvm_backend_t {
     const n00bb_llvm_callback_bindings_t *callback_bindings;
     bool prepared;
     ir_summaries_t *summaries;
-    core_list_t(core_string_t) selected_mutators;
 };
 
 typedef struct {
@@ -324,32 +358,10 @@ typedef struct {
 } member_match_t;
 core_list_decl(member_match_t);
 
-typedef ir_func_t *inline_function_ptr_t;
-core_list_decl(inline_function_ptr_t);
 core_list_decl(LLVMValueRef);
 
 static const char gc_root_init_metadata[] = "n00bb.gc.root.init";
 static const char code_name_attribute[] = "n00bb-code-name";
-
-static bool
-inline_list_contains(const core_list_t(inline_function_ptr_t) *functions,
-                     const ir_func_t *function)
-{
-    for (size_t i = 0; i < functions->len; i++)
-        if (functions->data[i] == function) return true;
-    return false;
-}
-
-static ir_func_t *
-direct_call_target(const ir_instr_t *instruction)
-{
-    if (instruction->op != IR_OP_CALL || !instruction->n_operands
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || !instruction->operands[0].value
-        || instruction->operands[0].value->kind != IR_VAL_FUNC)
-        return nullptr;
-    return n00bb_cached_body(instruction->operands[0].value->owner);
-}
 
 typedef struct {
     const n00bb_llvm_index_table_t *binding;
@@ -371,7 +383,7 @@ typedef struct {
     LLVMValueRef *locals;
     LLVMValueRef *param_addresses;
     LLVMValueRef mutator;
-    const core_list_t(inline_function_ptr_t) *mutator_functions;
+    const pointer_set_t *mutator_functions;
     lowered_value_t *values;
     size_t value_count;
     size_t value_capacity;
@@ -393,11 +405,7 @@ typedef struct {
     bool conservative_frame;
     core_indexed_table_t *used_values;
     const ir_instr_t *current_instruction;
-    core_indexed_table_t *flow_ids;
-    uint32_t *flow_first;
-    uint32_t *flow_targets;
-    bool *flow_memory;
-    int8_t *block_cycles;
+    ir_live_t *live;
     core_indexed_table_t *value_index;
     core_list_t(layout_match_t) *layout_matches;
     core_list_t(member_match_t) *member_matches;
@@ -495,12 +503,11 @@ unsupported(lower_state_t *state, const ir_instr_t *instruction)
         core_string_t pattern = th_print(types, instruction->operands[1].type);
         core_buffer_printf(&message, "pattern %.*s", TEXT_ARGS(pattern));
     }
-    ir_func_t *callee = direct_call_target(instruction);
+    ir_func_t *callee = n00bb_direct_call_target(instruction);
     if (callee) {
         core_string_t callee_module = ir_module_name(callee->owner);
         core_buffer_printf(&message, " (callee '%.*s.%.*s')",
-            TEXT_ARGS(callee_module), TEXT_ARGS(callee->name));
-    }
+            TEXT_ARGS(callee_module), TEXT_ARGS(callee->name));    }
     if (state->diagnostics) {
         core_diagnostics_report_at(state->diagnostics, nullptr,
             CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0006"),
@@ -3037,6 +3044,55 @@ inline_array_from_value(lower_state_t *state, LLVMValueRef array,
 }
 
 static LLVMValueRef
+array_from_inline(lower_state_t *state, LLVMValueRef items, th_type *type)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(context);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTargetDataRef layout = LLVMGetModuleDataLayout(state->module);
+    LLVMTypeRef storage = LLVMTypeOf(items);
+    LLVMValueRef type_index = runtime_type_value(state, type);
+    if (!layout || !type_index
+        || LLVMGetTypeKind(storage) != LLVMArrayTypeKind) return nullptr;
+    uint64_t count = LLVMGetArrayLength(storage);
+    uint64_t bytes = LLVMABISizeOfType(layout, storage);
+    uint64_t alignment = LLVMABIAlignmentOfType(layout, storage);
+    if (alignment < 8) alignment = 8;
+    uint64_t descriptor_bytes = LLVMABISizeOfType(layout,
+        array_descriptor_type(context));
+    uint64_t data_offset = (descriptor_bytes + alignment - 1)
+        & ~(alignment - 1);
+    LLVMValueRef descriptor = array_descriptor(state, count);
+    LLVMTypeRef parameters[] = {i32, i64, i32, pointer};
+    LLVMValueRef arguments[] = {
+        type_index, LLVMConstInt(i64, data_offset + (bytes ? bytes : 1),
+                                 false),
+        LLVMConstInt(i32, alignment, false), descriptor,
+    };
+    LLVMValueRef backing = box_runtime_call(state,
+        "sys.internal.gc.alloc.allocate_runtime", pointer, parameters,
+        arguments, 4);
+    if (!backing) return nullptr;
+    emit_trap_if(state, LLVMBuildIsNull(state->builder, backing,
+                                        "inline.array.missing"));
+    LLVMBuildMemCpy(state->builder, backing, 8, descriptor, 8,
+                    LLVMConstInt(i64, descriptor_bytes, false));
+    LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
+    LLVMValueRef data = LLVMBuildInBoundsGEP2(state->builder, i8, backing,
+                                              &offset, 1, "inline.array.data");
+    LLVMBuildStore(state->builder, items, data);
+    LLVMTypeRef fields[] = {pointer, pointer};
+    LLVMValueRef header = LLVMGetUndef(
+        LLVMStructTypeInContext(context, fields, 2, false));
+    header = LLVMBuildInsertValue(state->builder, header, data, 0,
+                                  "inline.array.header");
+    return LLVMBuildInsertValue(state->builder, header, backing, 1,
+                                "inline.array.value");
+}
+
+static LLVMValueRef
 record_value_set(lower_state_t *state, LLVMValueRef record,
                  const record_slot_t *slot, LLVMValueRef value)
 {
@@ -5285,9 +5341,13 @@ box_value_with(lower_state_t *state, LLVMValueRef value, th_type *type,
     if (source_type == box_type
         && th_builtin_kind_of(th_resolve(type)) != TH_BUILTIN_ANY)
         return value;
-    uint32_t index = runtime_type_index(state, type);
-    if (!layout || !index || index >= (1u << 31)
+    bool open = !th_is_closed(ir_module_types(state->function->owner), type);
+    uint32_t index = open ? 0 : runtime_type_index(state, type);
+    if (!layout || (!open && (!index || index >= (1u << 31)))
         || LLVMGetTypeKind(source_type) == LLVMVoidTypeKind) return nullptr;
+    LLVMValueRef type_index = open ? runtime_type_value(state, type)
+                                   : runtime_type_index_value(state, type);
+    if (!type_index) return nullptr;
     uint64_t size = LLVMABISizeOfType(layout, source_type);
     LLVMTypeRef word_type = LLVMInt64TypeInContext(context);
     LLVMValueRef bits = nullptr;
@@ -5321,7 +5381,7 @@ box_value_with(lower_state_t *state, LLVMValueRef value, th_type *type,
             return nullptr;
         LLVMValueRef arguments[] = {
             LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
-            runtime_type_index_value(state, type),
+            type_index,
             LLVMConstInt(word_type, size, false),
             LLVMConstInt(i32, LLVMABIAlignmentOfType(layout,
                                                      source_type), false),
@@ -5334,8 +5394,7 @@ box_value_with(lower_state_t *state, LLVMValueRef value, th_type *type,
         bits = LLVMBuildPtrToInt(state->builder, slot, word_type,
                                  "box.pointer");
     }
-    LLVMValueRef type_index = runtime_type_index_value(state, type);
-    return type_index ? assemble_box(state, type_index, bits) : nullptr;
+    return assemble_box(state, type_index, bits);
 }
 
 static LLVMValueRef
@@ -6272,16 +6331,6 @@ fill_result_box(lower_state_t *state, LLVMValueRef value)
 }
 
 static bool
-flow_id(lower_state_t *state, const ir_value_t *value, uint32_t *id)
-{
-    const core_indexed_entry_t *entry = core_indexed_table_intern(
-        state->flow_ids, value, nullptr, nullptr);
-    if (!entry) return false;
-    *id = entry->index;
-    return true;
-}
-
-static bool
 flow_carries_box(lower_state_t *state, const ir_instr_t *instruction)
 {
     if (instruction->dest_kind != IR_DEST_VALUE || !instruction->dest
@@ -6293,176 +6342,17 @@ flow_carries_box(lower_state_t *state, const ir_instr_t *instruction)
     return native && llvm_type_holds_box(native, box_llvm_type(context));
 }
 
-static bool
-prepare_box_flow(lower_state_t *state)
+static ir_live_flow_t
+box_flow(void *context, const ir_instr_t *user, uint32_t operand)
 {
-    if (state->flow_ids) return state->flow_first != nullptr;
-    const ir_func_t *function = state->function;
-    state->flow_ids = core_indexed_table_new(0, UINT32_MAX,
-        pointer_key_hash, pointer_key_equal);
-    if (!state->flow_ids) return false;
-    core_list_t(uint32_t) sources = {0};
-    core_list_t(uint32_t) targets = {0};
-    core_list_t(uint32_t) held = {0};
-    bool ok = true;
-    for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
-        const ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
-            const ir_instr_t *instruction = block->instrs[i];
-            bool local = instruction->dest_kind == IR_DEST_LOCAL;
-            bool stack_store = instruction->op == IR_OP_STORE
-                && instruction->n_operands == 2
-                && direct_stack_address(function,
-                    ir_operand_value(&instruction->operands[0]));
-            bool carries = flow_carries_box(state, instruction);
-            uint32_t target = 0;
-            if (carries) ok = flow_id(state, instruction->dest, &target);
-            for (uint32_t o = 0; ok && o < instruction->n_operands; o++) {
-                const ir_value_t *used = ir_operand_value(
-                    &instruction->operands[o]);
-                if (!used || used->kind != IR_VAL_INSTR) continue;
-                if (!local && !(stack_store && o == 1) && !carries) continue;
-                uint32_t source = 0;
-                ok = flow_id(state, used, &source);
-                if (ok && (local || (stack_store && o == 1)))
-                    ok = core_list_try_push(held, source);
-                if (ok && carries) ok = core_list_try_push(sources, source)
-                    && core_list_try_push(targets, target);
-            }
-        }
-    }
-    size_t count = core_indexed_table_len(state->flow_ids);
-    state->flow_memory = ok ? calloc(count + 1, sizeof(bool)) : nullptr;
-    uint32_t *first = ok ? calloc(count + 2, sizeof(uint32_t)) : nullptr;
-    uint32_t *edges = ok ? calloc(targets.len + 1, sizeof(uint32_t)) : nullptr;
-    ok = ok && state->flow_memory && first && edges;
-    for (size_t i = 0; ok && i < held.len; i++)
-        state->flow_memory[held.data[i]] = true;
-    for (size_t i = 0; ok && i < sources.len; i++) first[sources.data[i] + 2]++;
-    for (size_t i = 2; ok && i < count + 2; i++) first[i] += first[i - 1];
-    for (size_t i = 0; ok && i < sources.len; i++)
-        edges[first[sources.data[i] + 1]++] = targets.data[i];
-    core_list_free(sources);
-    core_list_free(targets);
-    core_list_free(held);
-    if (!ok) {
-        free(first);
-        free(edges);
-        return false;
-    }
-    state->flow_first = first;
-    state->flow_targets = edges;
-    return true;
-}
-
-static bool
-phi_reads_value(const ir_block_t *block, const ir_value_t *value)
-{
-    for (uint32_t i = 0; i < block->n_instrs; i++) {
-        const ir_instr_t *instruction = block->instrs[i];
-        if (instruction->op != IR_OP_PHI) continue;
-        for (uint32_t o = 0; o < instruction->n_operands; o++)
-            if (ir_operand_value(&instruction->operands[o]) == value)
-                return true;
-    }
-    return false;
-}
-
-static bool
-value_used_before_redefinition(const ir_func_t *function,
-                               const ir_value_t *value,
-                               const ir_instr_t *point)
-{
-    uint32_t count = function->n_blocks;
-    bool *queued = calloc(count, sizeof(*queued));
-    ir_block_t **pending = calloc(count, sizeof(*pending));
-    if (!queued || !pending) {
-        free(queued);
-        free(pending);
-        return true;
-    }
-    bool live = false;
-    size_t depth = 0;
-    ir_block_t *start = point->block;
-    for (uint32_t pass = 0; !live; pass++) {
-        ir_block_t *block = pass == 0 ? start
-            : depth ? pending[--depth] : nullptr;
-        if (!block) break;
-        bool killed = false;
-        uint32_t begin = pass == 0 ? point->index + 1 : 0;
-        if (pass > 0 && phi_reads_value(block, value)) {
-            live = true;
-            break;
-        }
-        for (uint32_t i = begin; i < block->n_instrs; i++) {
-            const ir_instr_t *instruction = block->instrs[i];
-            if (instruction == value->def) {
-                killed = true;
-                break;
-            }
-            if (instruction->op == IR_OP_PHI) continue;
-            for (uint32_t o = 0; o < instruction->n_operands; o++)
-                if (ir_operand_value(&instruction->operands[o]) == value)
-                    live = true;
-            if (live) break;
-        }
-        if (live || killed) continue;
-        ir_instr_t *terminator = ir_block_terminator(block);
-        uint32_t successors = terminator ? ir_succ_count(terminator) : 0;
-        for (uint32_t s = 0; s < successors; s++) {
-            ir_block_t *next = ir_succ_at(terminator, s);
-            if (!next || next->index >= count
-                || function->blocks[next->index] != next) {
-                live = true;
-                break;
-            }
-            if (!queued[next->index]) {
-                queued[next->index] = true;
-                pending[depth++] = next;
-            }
-        }
-    }
-    free(queued);
-    free(pending);
-    return live;
-}
-
-static bool
-block_on_cycle(lower_state_t *state, ir_block_t *block)
-{
-    const ir_func_t *function = state->function;
-    uint32_t count = function->n_blocks;
-    if (!block || block->index >= count
-        || function->blocks[block->index] != block) return true;
-    if (!state->block_cycles) {
-        state->block_cycles = calloc(count, sizeof(*state->block_cycles));
-        if (!state->block_cycles) return true;
-    }
-    if (state->block_cycles[block->index])
-        return state->block_cycles[block->index] > 0;
-    bool *seen = calloc(count, sizeof(*seen));
-    ir_block_t **pending = calloc(count, sizeof(*pending));
-    bool cyclic = !seen || !pending;
-    size_t depth = 0;
-    if (!cyclic) pending[depth++] = block;
-    while (!cyclic && depth) {
-        ir_block_t *current = pending[--depth];
-        ir_instr_t *terminator = ir_block_terminator(current);
-        uint32_t successors = terminator ? ir_succ_count(terminator) : 0;
-        for (uint32_t s = 0; !cyclic && s < successors; s++) {
-            ir_block_t *next = ir_succ_at(terminator, s);
-            if (!next) continue;
-            if (next == block) cyclic = true;
-            else if (next->index < count && !seen[next->index]) {
-                seen[next->index] = true;
-                pending[depth++] = next;
-            }
-        }
-    }
-    free(seen);
-    free(pending);
-    state->block_cycles[block->index] = cyclic ? 1 : -1;
-    return cyclic;
+    lower_state_t *state = context;
+    if (user->dest_kind == IR_DEST_LOCAL
+        || (user->op == IR_OP_STORE && user->n_operands == 2 && operand == 1
+            && direct_stack_address(state->function,
+                                    ir_operand_value(&user->operands[0]))))
+        return IR_LIVE_FLOW_HOLD;
+    return flow_carries_box(state, user) ? IR_LIVE_FLOW_CARRY
+                                         : IR_LIVE_FLOW_NONE;
 }
 
 static bool
@@ -6470,41 +6360,12 @@ box_in_frame(lower_state_t *state, const ir_instr_t *instruction)
 {
     if (!instruction || instruction->dest_kind != IR_DEST_VALUE
         || !instruction->dest) return false;
-    if (!block_on_cycle(state, instruction->block)) return true;
-    if (!prepare_box_flow(state)) return false;
-    const core_indexed_entry_t *origin = core_indexed_table_find(
-        state->flow_ids, instruction->dest);
-    if (!origin) return true;
-    size_t count = core_indexed_table_len(state->flow_ids);
-    bool *seen = calloc(count, sizeof(*seen));
-    uint32_t *pending = calloc(count, sizeof(*pending));
-    bool in_frame = seen && pending;
-    size_t depth = 0;
-    if (in_frame) {
-        seen[origin->index] = true;
-        pending[depth++] = origin->index;
-    }
-    while (in_frame && depth) {
-        uint32_t current = pending[--depth];
-        const ir_value_t *carrier = core_indexed_table_at(state->flow_ids,
-                                                          current)->key;
-        if (state->flow_memory[current]
-            || (carrier != instruction->dest
-                && value_used_before_redefinition(state->function, carrier,
-                                                  instruction)))
-            in_frame = false;
-        for (uint32_t e = state->flow_first[current];
-             in_frame && e < state->flow_first[current + 1]; e++) {
-            uint32_t next = state->flow_targets[e];
-            if (!seen[next]) {
-                seen[next] = true;
-                pending[depth++] = next;
-            }
-        }
-    }
-    free(seen);
-    free(pending);
-    return in_frame;
+    if (!state->live)
+        state->live = ir_func_liveness((ir_func_t *)state->function);
+    if (!ir_live_block_on_cycle(state->live, instruction->block))
+        return true;
+    return ir_live_carried_after(state->live, instruction->dest, box_flow,
+                                 state, instruction) == IR_LIVENESS_DEAD;
 }
 
 static bool
@@ -6707,10 +6568,19 @@ checked_array_index(lower_state_t *state, LLVMValueRef index,
     return position;
 }
 
+static bool
+overflow_proven(lower_state_t *state, const ir_instr_t *instruction)
+{
+    return ir_range_overflow(state->ranges, instruction, nullptr, nullptr)
+            == IR_OVERFLOW_NEVER
+        || ir_abcd_overflow_safe(ir_range_abcd(state->ranges), instruction);
+}
+
 static LLVMValueRef
 native_array_slot(lower_state_t *state, LLVMValueRef array_address,
                   LLVMValueRef index, LLVMTypeRef array_type,
-                  LLVMTypeRef element_type, bool signed_index)
+                  LLVMTypeRef element_type, bool signed_index,
+                  bool check_bounds)
 {
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMValueRef array = LLVMBuildLoad2(state->builder, array_type,
@@ -6725,7 +6595,7 @@ native_array_slot(lower_state_t *state, LLVMValueRef array_address,
     LLVMValueRef length = load_array_extent(state, length_address,
         "array.length");
     LLVMValueRef position = checked_array_index(state, index, length,
-        signed_index, true);
+        signed_index, check_bounds);
     if (!position) return nullptr;
     return LLVMBuildInBoundsGEP2(state->builder, element_type, data,
         &position, 1, "array.element.address");
@@ -7541,7 +7411,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMValueRef slot = native_array_slot(state, base, index,
                 native_array, native_element,
                 ir_machine_of(state->function->owner,
-                    operands[1].value->type).class == IR_CLASS_SINT);
+                    operands[1].value->type).class == IR_CLASS_SINT,
+                !ir_range_index_proven(state->ranges, instruction));
             value = slot ? escape_boxes(state, value) : nullptr;
             return value && store_gc_barrier(state, value, element)
                 && LLVMBuildStore(state->builder, value, slot);
@@ -7976,7 +7847,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             || (to.class != IR_CLASS_SINT && to.class != IR_CLASS_UINT)) break;
         unsigned from_width = LLVMGetIntTypeWidth(LLVMTypeOf(source));
         unsigned to_width = LLVMGetIntTypeWidth(target);
-        bool checked = ir_instr_has_mod(instruction, CORE_STRING_STATIC("trap"));
+        bool checked = ir_instr_has_mod(instruction, CORE_STRING_STATIC("trap"))
+            && !overflow_proven(state, instruction);
         if (checked && from.class == IR_CLASS_SINT
             && to.class == IR_CLASS_UINT)
             emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntSLT,
@@ -8221,6 +8093,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         }
         result = record_value_get(state, value, &member_slot,
                                   instruction->dest->type);
+        if (result && LLVMGetTypeKind(LLVMTypeOf(result)) == LLVMArrayTypeKind
+            && th_kind_of(th_resolve(instruction->dest->type))
+                == TH_SEQUENCE)
+            result = array_from_inline(state, result,
+                                       instruction->dest->type);
         if (!result || LLVMTypeOf(result) != value_type(
                 state->function->owner, instruction->dest->type,
                 LLVMGetModuleContext(state->module))) {
@@ -8983,11 +8860,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef value = lowered_value(state, operands[0].value);
         if (!value) break;
         LLVMTypeRef type = LLVMTypeOf(value);
+        bool checked = false;
         if (floating_type(type)) {
             if (instruction->n_mods) break;
             result = LLVMBuildFNeg(state->builder, value, "negated");
         } else if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind) {
-            if (!instruction->n_mods) {
+            checked = instruction->n_mods && !overflow_proven(state,
+                                                              instruction);
+            if (!checked) {
                 result = LLVMBuildNeg(state->builder, value, "negated");
             } else {
                 ir_machine_t machine = ir_machine_of(state->function->owner,
@@ -9023,7 +8903,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             }
         } else break;
         result = semantic_integer_result(state, result,
-            operands[0].value->type, instruction->n_mods != 0);
+            operands[0].value->type, checked);
         return result && save_result(state, instruction, result);
     }
     case IR_OP_ADD:
@@ -9048,8 +8928,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return save_result(state, instruction, result);
         }
         if (LLVMGetTypeKind(LLVMTypeOf(left)) != LLVMIntegerTypeKind) break;
-        bool safe_sub = ir_range_overflow(state->ranges, instruction, nullptr,
-                nullptr) == IR_OVERFLOW_NEVER
+        bool safe_sub = overflow_proven(state, instruction)
             || (instruction->op == IR_OP_SUB
                 && ir_range_unsigned_sub_safe(state->ranges, instruction));
         if (ir_instr_has_mod(instruction, CORE_STRING_STATIC("trap")) && !safe_sub) {
@@ -9119,9 +8998,13 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (machine.class != IR_CLASS_SINT
             && machine.class != IR_CLASS_UINT) break;
         LLVMValueRef zero = LLVMConstNull(type);
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
-            right, zero, "div.zero"));
-        if (machine.class == IR_CLASS_SINT) {
+        bool nonzero = ir_range_site_proven(state->ranges, instruction,
+                                            IR_SITE_DIVISOR);
+        bool proven = overflow_proven(state, instruction);
+        if (!nonzero)
+            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
+                right, zero, "div.zero"));
+        if (machine.class == IR_CLASS_SINT && !proven) {
             unsigned width = LLVMGetIntTypeWidth(type);
             unsigned nwords = (width + 63) / 64;
             uint64_t *words = calloc(nwords, sizeof(*words));
@@ -9145,7 +9028,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 ? LLVMBuildSRem(state->builder, left, right, "remainder")
                 : LLVMBuildURem(state->builder, left, right, "remainder");
         result = semantic_integer_result(state, result,
-            operands[0].value->type, instruction->n_mods != 0);
+            operands[0].value->type, instruction->n_mods != 0 && !proven);
         return save_result(state, instruction, result);
     }
     case IR_OP_AND:
@@ -9195,7 +9078,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMTypeRef count_type = LLVMTypeOf(right);
         unsigned value_width = LLVMGetIntTypeWidth(value_type);
         unsigned count_width = LLVMGetIntTypeWidth(count_type);
-        if (instruction->n_mods) {
+        bool count_proven = ir_range_site_proven(state->ranges, instruction,
+                                                 IR_SITE_SHIFT_AMOUNT);
+        if (instruction->n_mods && !count_proven) {
             if (count_machine.class == IR_CLASS_SINT)
                 emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntSLT,
                     right, LLVMConstNull(count_type), "shift.negative"));
@@ -9227,7 +9112,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             : value_machine.class == IR_CLASS_SINT
                 ? LLVMBuildAShr(state->builder, left, amount, "shift.right")
                 : LLVMBuildLShr(state->builder, left, amount, "shift.right");
-        if (instruction->op == IR_OP_SHL && trapping) {
+        bool overflow_checked = instruction->op == IR_OP_SHL && trapping
+            && !overflow_proven(state, instruction);
+        if (overflow_checked) {
             LLVMValueRef restored = value_machine.class == IR_CLASS_SINT
                 ? LLVMBuildAShr(state->builder, result, amount,
                                 "shift.restored")
@@ -9237,8 +9124,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 restored, left, "shift.overflow"));
         }
         result = semantic_integer_result(state, result,
-            operands[0].value->type,
-            instruction->op == IR_OP_SHL && trapping);
+            operands[0].value->type, overflow_checked);
         return save_result(state, instruction, result);
     }
     case IR_OP_EQ:
@@ -9964,7 +9850,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 LLVMValueRef slot = native_array_slot(state, address, index,
                     native_array, native_element,
                     ir_machine_of(owner, operands[2].value->type).class
-                        == IR_CLASS_SINT);
+                        == IR_CLASS_SINT, true);
                 if (!slot || !LLVMBuildStore(state->builder,
                         LLVMConstNull(native_element), slot)) break;
                 return true;
@@ -10111,7 +9997,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return result && save_result(state, instruction, result);
         }
         bool mutator_call = !native && target
-            && inline_list_contains(state->mutator_functions, target);
+            && pointer_set_has(state->mutator_functions, target);
         LLVMValueRef callee = nullptr;
         if (native && native->kind == IR_ANNOT_STR && native->s.data) {
             LLVMTypeRef signature = function_type(state->module, target);
@@ -11006,44 +10892,93 @@ frame_root_slot(void *opaque, n00bb_frame_root_kind_t kind,
 }
 
 static bool
+collect_conservative_spills(ir_func_t *function,
+                            core_indexed_table_t *spills)
+{
+    size_t total = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *instruction = function->blocks[b]->instrs[i];
+            total += instruction->dest_kind == IR_DEST_VALUE
+                && instruction->dest;
+        }
+    ir_value_t **values = core_alloc_array(ir_value_t *, total ? total : 1);
+    bool *across = core_alloc_array(bool, total ? total : 1);
+    size_t next = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *instruction = function->blocks[b]->instrs[i];
+            if (instruction->dest_kind == IR_DEST_VALUE && instruction->dest)
+                values[next++] = instruction->dest;
+        }
+    n00bb_frame_values_across(function, values, total, across);
+    size_t pending = 0;
+    for (size_t v = 0; v < total; v++)
+        if (across[v]) values[pending++] = values[v];
+    bool ok = true;
+    while (ok && pending) {
+        ir_value_t *value = values[--pending];
+        bool added = false;
+        ok = core_indexed_table_intern(spills, value, nullptr, &added)
+            != nullptr;
+        if (!ok || !added || !value->def || value->def->op != IR_OP_PHI)
+            continue;
+        const ir_instr_t *phi = value->def;
+        for (uint32_t o = 0; o < phi->n_operands; o++) {
+            ir_value_t *arm = phi->operands[o].kind == IR_OPD_PHI_ARM
+                ? phi->operands[o].phi.value : nullptr;
+            if (!arm || arm->kind != IR_VAL_INSTR
+                || core_indexed_table_find(spills, arm)) continue;
+            if (pending == total) {
+                values = core_realloc(values, (total * 2 + 1)
+                                                  * sizeof(*values));
+                total = total * 2 + 1;
+            }
+            values[pending++] = arm;
+        }
+    }
+    core_free(values);
+    core_free(across);
+    return ok;
+}
+
+static const char stack_map_name[] = "llvm.experimental.stackmap";
+
+static LLVMValueRef
+stack_map_intrinsic(LLVMModuleRef module, LLVMTypeRef *signature)
+{
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef parameters[] = {LLVMInt64TypeInContext(context),
+                                LLVMInt32TypeInContext(context)};
+    *signature = LLVMFunctionType(LLVMVoidTypeInContext(context),
+                                  parameters, 2, true);
+    LLVMValueRef intrinsic = LLVMGetNamedFunction(module, stack_map_name);
+    return intrinsic ? intrinsic
+                     : LLVMAddFunction(module, stack_map_name, *signature);
+}
+
+static bool
 mark_conservative_frame(lower_state_t *state)
 {
     state->conservative_frame = true;
     state->used_values = core_indexed_table_new(0, UINT32_MAX,
         pointer_key_hash, pointer_key_equal);
-    if (!state->used_values) return false;
-    for (uint32_t b = 0; b < state->function->n_blocks; b++) {
-        const ir_block_t *block = state->function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            const ir_instr_t *instruction = block->instrs[i];
-            for (uint32_t o = 0; o < instruction->n_operands; o++) {
-                const ir_operand_t *operand = &instruction->operands[o];
-                const ir_value_t *used = operand->kind == IR_OPD_ARG
-                        || operand->kind == IR_OPD_OUT
-                    ? operand->value : ir_operand_value(operand);
-                if (used && !core_indexed_table_intern(state->used_values,
-                        used, nullptr, nullptr)) return false;
-            }
-        }
-    }
+    if (!state->used_values
+        || !collect_conservative_spills(state->function, state->used_values))
+        return false;
     for (uint32_t i = 0; i < state->function->n_params; i++) {
         ir_value_t *parameter = state->function->params[i];
         if (parameter && !spill_conservative_root(state, parameter->type,
                 lowered_value(state, parameter))) return false;
     }
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef parameters[] = {LLVMInt64TypeInContext(context),
-                                LLVMInt32TypeInContext(context)};
-    LLVMTypeRef signature = LLVMFunctionType(LLVMVoidTypeInContext(context),
-                                            parameters, 2, true);
-    LLVMValueRef intrinsic = LLVMGetNamedFunction(state->module,
-        "llvm.experimental.stackmap");
-    if (!intrinsic) intrinsic = LLVMAddFunction(state->module,
-        "llvm.experimental.stackmap", signature);
+    LLVMTypeRef signature = nullptr;
+    LLVMValueRef intrinsic = stack_map_intrinsic(state->module, &signature);
     if (!intrinsic) return false;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMValueRef arguments[] = {
-        LLVMConstInt(parameters[0], N00BB_LLVM_FRAME_CONSERVATIVE_ID, false),
-        LLVMConstInt(parameters[1], 0, false),
+        LLVMConstInt(LLVMInt64TypeInContext(context),
+                     N00BB_LLVM_FRAME_CONSERVATIVE_ID, false),
+        LLVMConstInt(LLVMInt32TypeInContext(context), 0, false),
     };
     return LLVMBuildCall2(state->builder, signature, intrinsic, arguments,
                           2, "") != nullptr;
@@ -11063,7 +10998,6 @@ prepare_frame_map(lower_state_t *state)
         || summary_has(state->function, IR_SUMMARY_MAY_COLLECT, true);
     if (!collects) return true;
     frame_root_count_t selected = {.state = state, .possible = true};
-    size_t total = 0;
     for (uint32_t i = 0; i < state->function->n_locals; i++) {
         ir_local_t *local = state->function->locals[i];
         if (!local || !local->type) return false;
@@ -11077,28 +11011,31 @@ prepare_frame_map(lower_state_t *state)
                                            local->type))
             return mark_conservative_frame(state);
     }
-    if (!n00bb_frame_roots(state->function, count_frame_root,
-                           &selected, &total)) return false;
-    if (!selected.possible) return mark_conservative_frame(state);
-    if (!selected.count) return true;
+    n00bb_frame_root_list_t roots;
+    if (!n00bb_frame_root_list(state->function, &roots)) return false;
+    bool counted = n00bb_frame_root_list_visit(&roots, false,
+                                               count_frame_root, &selected);
     size_t count = selected.count;
-    if (count > UINT32_MAX - 2) return false;
-    state->frame_roots = core_indexed_table_new((uint32_t)count, UINT32_MAX,
-        pointer_key_hash, pointer_key_equal);
-    state->frame_slots = calloc(count, sizeof(*state->frame_slots));
-    if (!state->frame_roots || !state->frame_slots) return false;
-    if (!n00bb_frame_roots(state->function, frame_root_slot, state, &total)
-        || state->frame_slot_count != count) return false;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef parameters[] = {LLVMInt64TypeInContext(context),
-                                LLVMInt32TypeInContext(context)};
-    LLVMTypeRef signature = LLVMFunctionType(LLVMVoidTypeInContext(context),
-                                            parameters, 2, true);
-    LLVMValueRef intrinsic = LLVMGetNamedFunction(state->module,
-        "llvm.experimental.stackmap");
-    if (!intrinsic) intrinsic = LLVMAddFunction(state->module,
-        "llvm.experimental.stackmap", signature);
+    bool slotted = counted && selected.possible && count
+        && count <= UINT32_MAX - 2;
+    if (slotted) {
+        state->frame_roots = core_indexed_table_new((uint32_t)count,
+            UINT32_MAX, pointer_key_hash, pointer_key_equal);
+        state->frame_slots = calloc(count, sizeof(*state->frame_slots));
+        slotted = state->frame_roots && state->frame_slots
+            && n00bb_frame_root_list_visit(&roots, false, frame_root_slot,
+                                           state)
+            && state->frame_slot_count == count;
+    }
+    n00bb_frame_root_list_release(&roots);
+    if (!counted || count > UINT32_MAX - 2) return false;
+    if (!selected.possible) return mark_conservative_frame(state);
+    if (!count) return true;
+    if (!slotted) return false;
+    LLVMTypeRef signature = nullptr;
+    LLVMValueRef intrinsic = stack_map_intrinsic(state->module, &signature);
     if (!intrinsic) return false;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
     core_buffer_t name = {0};
     append_function_symbol(&name, state->function);
     uint64_t id = core_hash_raw(name.data, name.byte_len);
@@ -11107,8 +11044,8 @@ prepare_frame_map(lower_state_t *state)
     core_buffer_release(&name);
     LLVMValueRef *arguments = calloc(count + 2, sizeof(*arguments));
     if (!arguments) return false;
-    arguments[0] = LLVMConstInt(parameters[0], id, false);
-    arguments[1] = LLVMConstInt(parameters[1], 0, false);
+    arguments[0] = LLVMConstInt(LLVMInt64TypeInContext(context), id, false);
+    arguments[1] = LLVMConstInt(LLVMInt32TypeInContext(context), 0, false);
     memcpy(arguments + 2, state->frame_slots,
            count * sizeof(*state->frame_slots));
     LLVMValueRef call = LLVMBuildCall2(state->builder, signature, intrinsic,
@@ -11200,7 +11137,7 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
                ir_func_t *function,
                bool with_mutator,
                bool emit_frame_maps,
-               const core_list_t(inline_function_ptr_t) *mutator_functions,
+               const pointer_set_t *mutator_functions,
                const n00bb_llvm_type_index_t *type_indices,
                size_t type_index_count,
                const n00bb_llvm_function_binding_t *function_indices,
@@ -11416,11 +11353,6 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
     ir_analysis_scope_end(state.analysis_scope);
     core_indexed_table_free(state.frame_roots);
     core_indexed_table_free(state.used_values);
-    core_indexed_table_free(state.flow_ids);
-    free(state.flow_first);
-    free(state.flow_targets);
-    free(state.flow_memory);
-    free(state.block_cycles);
     core_indexed_table_free(state.value_index);
     free(state.frame_slots);
     if (!ok && (!diagnostics || !core_diagnostics_failed(diagnostics))) {
@@ -11460,17 +11392,15 @@ inline_error(core_diagnostics_t *diagnostics, const ir_func_t *function,
 
 static bool
 inline_reaches_self(ir_func_t *current, ir_func_t *start,
-                    core_list_t(inline_function_ptr_t) *visited,
-                    core_diagnostics_t *diagnostics)
+                    pointer_set_t *visited, core_diagnostics_t *diagnostics)
 {
-    if (inline_list_contains(visited, current)) return true;
-    core_list_push(*visited, current);
+    if (!pointer_set_add(visited, current)) return true;
     for (uint32_t b = 0; b < current->n_blocks; b++) {
         ir_block_t *block = current->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *instruction = block->instrs[i];
             if (instruction->op != IR_OP_CALL) continue;
-            ir_func_t *callee = direct_call_target(instruction);
+            ir_func_t *callee = n00bb_direct_call_target(instruction);
             if (!callee && current == start)
                 return inline_error(diagnostics, start,
                     CORE_STRING_STATIC("contains an indirect call whose recursion cannot be checked"));
@@ -11486,8 +11416,7 @@ inline_reaches_self(ir_func_t *current, ir_func_t *start,
 }
 
 static bool
-collect_inline_callees(ir_func_t *function,
-                       core_list_t(inline_function_ptr_t) *collected,
+collect_inline_callees(ir_func_t *function, pointer_set_t *collected,
                        core_diagnostics_t *diagnostics)
 {
     for (uint32_t b = 0; b < function->n_blocks; b++) {
@@ -11505,19 +11434,18 @@ collect_inline_callees(ir_func_t *function,
                     return inline_error(diagnostics, value,
                         CORE_STRING_STATIC("cannot be used as a function value"));
             }
-            ir_func_t *callee = direct_call_target(instruction);
+            ir_func_t *callee = n00bb_direct_call_target(instruction);
             if (!callee || !ir_func_is_always_inline(callee)
-                || inline_list_contains(collected, callee)) continue;
+                || pointer_set_has(collected, callee)) continue;
             if (!callee->n_blocks)
                 return inline_error(diagnostics, callee,
                     CORE_STRING_STATIC("has no body available at this call site"));
-            core_list_t(inline_function_ptr_t) visited =
-                core_list_new(inline_function_ptr_t);
+            pointer_set_t visited = pointer_set_new();
             bool valid = inline_reaches_self(callee, callee, &visited,
                                              diagnostics);
-            core_list_free(visited);
+            pointer_set_free(&visited);
             if (!valid) return false;
-            core_list_push(*collected, callee);
+            pointer_set_add(collected, callee);
             if (!collect_inline_callees(callee, collected, diagnostics))
                 return false;
         }
@@ -11526,17 +11454,22 @@ collect_inline_callees(ir_func_t *function,
 }
 
 static void
-collect_mutator_candidates(ir_func_t *function,
-                           core_list_t(inline_function_ptr_t) *candidates)
+add_mutator_candidate(ir_func_t *function, pointer_set_t *mutators)
 {
-    if (!function->n_blocks || inline_list_contains(candidates, function))
-        return;
-    core_list_push(*candidates, function);
+    if (function->n_blocks && !pointer_set_has(mutators, function)
+        && summary_has(function, IR_SUMMARY_ALLOCATES_DIRECT, false))
+        pointer_set_add(mutators, function);
+}
+
+static void
+collect_mutator_candidates(ir_func_t *function, pointer_set_t *mutators)
+{
+    add_mutator_candidate(function, mutators);
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_func_t *callee = direct_call_target(block->instrs[i]);
-            if (callee) collect_mutator_candidates(callee, candidates);
+            ir_func_t *callee = n00bb_direct_call_target(block->instrs[i]);
+            if (callee) add_mutator_candidate(callee, mutators);
         }
     }
 }
@@ -11544,33 +11477,20 @@ collect_mutator_candidates(ir_func_t *function,
 static bool
 is_mutator_allocator(const ir_func_t *function)
 {
-    return core_string_eq(ir_module_name(function->owner),
-                          CORE_STRING_STATIC("sys.internal.gc.alloc"))
-        && core_string_eq(function->name,
-            CORE_STRING_STATIC("allocate_runtime_known_on_mutator"));
+    return n00bb_axiom_function_has(function, N00BB_AXIOM_MUTATOR_ALLOCATOR);
 }
 
 static bool
 is_mutator_getter(const ir_func_t *function)
 {
-    return core_string_eq(ir_module_name(function->owner),
-                          CORE_STRING_STATIC("sys.internal.gc.alloc"))
-        && core_string_eq(function->name,
-            CORE_STRING_STATIC("mutator_for_native"));
+    return n00bb_axiom_function_has(function, N00BB_AXIOM_MUTATOR_GETTER);
 }
 
 uint32_t
-n00bb_llvm_mutator_flags(const n00bb_llvm_mutator_classifier_t *classifier,
-                         const ir_func_t *function, uint32_t flags)
+n00bb_llvm_mutator_flags(const ir_func_t *function, uint32_t flags)
 {
-    bool mutator = false;
-    if (!function->n_blocks) return flags;
-    if (is_mutator_allocator(function)) mutator = true;
-    else if (!classifier || !classifier->known
-             || !classifier->known(classifier->context, function, &mutator))
-        return flags;
-    return mutator ? flags | IR_SUMMARY_ALLOCATES_DIRECT
-                   : flags & ~(uint32_t)IR_SUMMARY_ALLOCATES_DIRECT;
+    return function->n_blocks && is_mutator_allocator(function)
+        ? flags | IR_SUMMARY_ALLOCATES_DIRECT : flags;
 }
 
 static void
@@ -11583,13 +11503,9 @@ mark_always_inline(LLVMContextRef context, LLVMValueRef function)
 
 static bool
 function_body_emitted(const ir_func_t *function,
-                      ir_func_t *const *reachable, size_t reachable_count,
-                      bool reachable_bound)
+                      const pointer_set_t *reachable)
 {
-    if (!reachable_bound) return true;
-    for (size_t j = 0; j < reachable_count; j++)
-        if (reachable[j] == function) return true;
-    return false;
+    return !reachable || pointer_set_has(reachable, function);
 }
 
 static bool
@@ -11602,8 +11518,7 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
              const n00bb_llvm_global_binding_t *global_bindings,
              size_t global_binding_count,
              ir_storage_origin_t *storage_origin,
-             ir_func_t *const *reachable, size_t reachable_count,
-             bool reachable_bound,
+             const pointer_set_t *reachable,
              const core_list_t(callback_binding_t) *callback_bindings,
              const n00bb_llvm_index_table_t *index_table,
              core_diagnostics_t *diagnostics)
@@ -11733,55 +11648,43 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         if (ir_func_is_always_inline(function))
             mark_always_inline(LLVMGetModuleContext(target), declared);
     }
-    core_list_t(inline_function_ptr_t) inline_callees =
-        core_list_new(inline_function_ptr_t);
-    bool inline_ok = true;
-    for (size_t i = 0; inline_ok && i < ir_func_count(source); i++) {
-        ir_func_t *function = ir_func_at((ir_module_t *)source, i);
-        bool emit_body = function_body_emitted(function,
-            reachable, reachable_count, reachable_bound);
-        if (!function->n_blocks || !emit_body) continue;
-        if (ir_func_is_always_inline(function)) {
-            core_list_t(inline_function_ptr_t) visited =
-                core_list_new(inline_function_ptr_t);
-            inline_ok = inline_reaches_self(function, function, &visited,
-                                            diagnostics);
-            core_list_free(visited);
-        }
-        if (inline_ok)
-            inline_ok = collect_inline_callees(function, &inline_callees,
-                                                diagnostics);
-    }
+    pointer_set_t inline_callees = pointer_set_new();
+    bool ok = true;
     bool needs_allocation_callee = false;
-    for (size_t i = 0; i < ir_func_count(source); i++) {
+    for (size_t i = 0; ok && i < ir_func_count(source); i++) {
         ir_func_t *function = ir_func_at((ir_module_t *)source, i);
-        bool emit_body = function_body_emitted(function,
-            reachable, reachable_count, reachable_bound);
-        if (emit_body && function->n_blocks
-            && summary_has(function, IR_SUMMARY_ALLOCATES_DIRECT, false))
-            needs_allocation_callee = true;
-    }
-    for (size_t i = 0; i < inline_callees.len; i++)
-        if (summary_has(inline_callees.data[i], IR_SUMMARY_ALLOCATES_DIRECT,
-                        false))
-            needs_allocation_callee = true;
-    if (inline_ok && needs_allocation_callee && reachable_bound) {
-        for (size_t i = 0; i < reachable_count; i++) {
-            ir_func_t *function = reachable[i];
-            if (!is_mutator_allocator(function)
-                || function->owner == source
-                || inline_list_contains(&inline_callees, function))
-                continue;
-            if (ir_func_is_always_inline(function) && function->n_blocks) {
-                core_list_push(inline_callees, function);
-                inline_ok = collect_inline_callees(function, &inline_callees,
-                                                    diagnostics);
-            }
-            break;
+        if (!function->n_blocks || !function_body_emitted(function, reachable))
+            continue;
+        needs_allocation_callee |= summary_has(function,
+            IR_SUMMARY_ALLOCATES_DIRECT, false);
+        if (ir_func_is_always_inline(function)) {
+            pointer_set_t visited = pointer_set_new();
+            ok = inline_reaches_self(function, function, &visited,
+                                     diagnostics);
+            pointer_set_free(&visited);
         }
+        if (ok)
+            ok = collect_inline_callees(function, &inline_callees,
+                                        diagnostics);
     }
-    for (size_t i = 0; inline_ok && i < inline_callees.len; i++) {
-        ir_func_t *function = inline_callees.data[i];
+    for (size_t i = 0; i < inline_callees.items.len; i++)
+        needs_allocation_callee |= summary_has(inline_callees.items.data[i],
+            IR_SUMMARY_ALLOCATES_DIRECT, false);
+    for (size_t i = 0; ok && needs_allocation_callee && reachable
+         && i < reachable->items.len; i++) {
+        ir_func_t *function = reachable->items.data[i];
+        if (!is_mutator_allocator(function) || function->owner == source
+            || pointer_set_has(&inline_callees, function))
+            continue;
+        if (ir_func_is_always_inline(function) && function->n_blocks) {
+            pointer_set_add(&inline_callees, function);
+            ok = collect_inline_callees(function, &inline_callees,
+                                        diagnostics);
+        }
+        break;
+    }
+    for (size_t i = 0; ok && i < inline_callees.items.len; i++) {
+        ir_func_t *function = inline_callees.items.data[i];
         if (function->owner == source) continue;
         core_buffer_t symbol = {0};
         append_function_symbol(&symbol, function);
@@ -11795,40 +11698,26 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
         }
         core_buffer_release(&symbol);
         if (!declared) {
-            inline_ok = backend_error(diagnostics,
+            ok = backend_error(diagnostics,
                 "LLVM backend could not declare inline function");
             break;
         }
         LLVMSetLinkage(declared, LLVMAvailableExternallyLinkage);
         mark_always_inline(LLVMGetModuleContext(target), declared);
     }
-    if (!inline_ok) {
-        core_list_free(inline_callees);
-        return false;
-    }
-    core_list_t(inline_function_ptr_t) candidates =
-        core_list_new(inline_function_ptr_t);
-    core_list_t(inline_function_ptr_t) mutator_functions =
-        core_list_new(inline_function_ptr_t);
-    for (size_t i = 0; i < ir_func_count(source); i++)
+    pointer_set_t mutator_functions = pointer_set_new();
+    for (size_t i = 0; ok && i < ir_func_count(source); i++)
         collect_mutator_candidates(ir_func_at((ir_module_t *)source, i),
-                                   &candidates);
-    for (size_t i = 0; i < inline_callees.len; i++)
-        collect_mutator_candidates(inline_callees.data[i], &candidates);
-    for (size_t i = 0; i < candidates.len; i++)
-        if (summary_has(candidates.data[i], IR_SUMMARY_ALLOCATES_DIRECT,
-                        false))
-            core_list_push(mutator_functions, candidates.data[i]);
-    core_list_free(candidates);
-    for (size_t i = 0; i < mutator_functions.len; i++) {
-        if (!is_mutator_getter(mutator_functions.data[i])) continue;
-        core_list_free(mutator_functions);
-        core_list_free(inline_callees);
-        return backend_error(diagnostics,
-            "the native mutator getter reaches code that needs a mutator");
-    }
-    for (size_t i = 0; i < mutator_functions.len; i++) {
-        ir_func_t *function = mutator_functions.data[i];
+                                   &mutator_functions);
+    for (size_t i = 0; ok && i < inline_callees.items.len; i++)
+        collect_mutator_candidates(inline_callees.items.data[i],
+                                   &mutator_functions);
+    for (size_t i = 0; ok && i < mutator_functions.items.len; i++)
+        if (is_mutator_getter(mutator_functions.items.data[i]))
+            ok = backend_error(diagnostics,
+                "the native mutator getter reaches code that needs a mutator");
+    for (size_t i = 0; ok && i < mutator_functions.items.len; i++) {
+        ir_func_t *function = mutator_functions.items.data[i];
         LLVMTypeRef signature = mutator_function_type(target, function);
         core_buffer_t name = {0};
         mutator_symbol(&name, function);
@@ -11838,24 +11727,21 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
             declared = add_function(target, core_buffer_string(&name),
                                     signature);
         core_buffer_release(&name);
-        if (declared) {
-            core_buffer_t source_name = {0};
-            append_function_symbol(&source_name, function);
-            LLVMAddAttributeAtIndex(declared, LLVMAttributeFunctionIndex,
-                LLVMCreateStringAttribute(LLVMGetModuleContext(target),
-                    code_name_attribute,
-                    (unsigned)(sizeof(code_name_attribute) - 1),
-                    source_name.data, (unsigned)source_name.byte_len));
-            core_buffer_release(&source_name);
-        }
         if (!declared) {
-            core_list_free(mutator_functions);
-            core_list_free(inline_callees);
-            return backend_error(diagnostics,
+            ok = backend_error(diagnostics,
                 "LLVM backend could not declare mutator entry");
+            break;
         }
+        core_buffer_t source_name = {0};
+        append_function_symbol(&source_name, function);
+        LLVMAddAttributeAtIndex(declared, LLVMAttributeFunctionIndex,
+            LLVMCreateStringAttribute(LLVMGetModuleContext(target),
+                code_name_attribute,
+                (unsigned)(sizeof(code_name_attribute) - 1),
+                source_name.data, (unsigned)source_name.byte_len));
+        core_buffer_release(&source_name);
         if (function->owner != source
-            && inline_list_contains(&inline_callees, function))
+            && pointer_set_has(&inline_callees, function))
             LLVMSetLinkage(declared, LLVMAvailableExternallyLinkage);
         if (ir_func_is_always_inline(function))
             mark_always_inline(LLVMGetModuleContext(target), declared);
@@ -11863,64 +11749,31 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     core_list_t(layout_match_t) layout_matches = {0};
     core_list_t(member_match_t) member_matches = {0};
     index_slots_t index_slots = {.binding = index_table};
-    for (size_t i = 0; i < ir_func_count(source); i++) {
-        ir_func_t *function = ir_func_at((ir_module_t *)source, i);
-        bool emit_body = function_body_emitted(function,
-            reachable, reachable_count, reachable_bound);
-        bool selected = inline_list_contains(&mutator_functions, function);
-        if (function->n_blocks && emit_body
-            && ((selected && !lower_mutator_wrapper(target, function,
-                                                     diagnostics))
-                || !lower_function(target, source, function, selected,
-                               emit_frame_maps,
-                               &mutator_functions,
-                               type_indices,
-                               type_index_count, function_indices,
-                               function_index_count, global_bindings,
-                               global_binding_count, storage_origin,
-                               callback_bindings,
-                               &layout_matches,
-                               &member_matches,
-                               &index_slots,
-                               diagnostics))) {
-            core_list_free(mutator_functions);
-            core_list_free(inline_callees);
-            core_list_free(layout_matches);
-            core_list_free(member_matches);
-            return false;
-        }
-        if (function->n_blocks && emit_body && selected
-            && active_selected_mutators)
-            core_list_push(*active_selected_mutators, function->name);
+    size_t own = ir_func_count(source);
+    for (size_t i = 0; ok && i < own + inline_callees.items.len; i++) {
+        ir_func_t *function = i < own
+            ? ir_func_at((ir_module_t *)source, i)
+            : inline_callees.items.data[i - own];
+        if (i < own ? !function->n_blocks
+                || !function_body_emitted(function, reachable)
+                    : function->owner == source) continue;
+        bool selected = pointer_set_has(&mutator_functions, function);
+        ok = (!selected || lower_mutator_wrapper(target, function,
+                                                 diagnostics))
+            && lower_function(target, source, function, selected,
+                              emit_frame_maps, &mutator_functions,
+                              type_indices, type_index_count,
+                              function_indices, function_index_count,
+                              global_bindings, global_binding_count,
+                              storage_origin, callback_bindings,
+                              &layout_matches, &member_matches,
+                              &index_slots, diagnostics);
     }
-    for (size_t i = 0; i < inline_callees.len; i++) {
-        ir_func_t *function = inline_callees.data[i];
-        if (function->owner == source) continue;
-        bool selected = inline_list_contains(&mutator_functions, function);
-        if ((selected && !lower_mutator_wrapper(target, function,
-                                                diagnostics))
-            || !lower_function(target, source, function, selected,
-                            emit_frame_maps,
-                            &mutator_functions,
-                            type_indices,
-                            type_index_count, function_indices,
-                            function_index_count, global_bindings,
-                            global_binding_count, storage_origin,
-                            callback_bindings,
-                            &layout_matches, &member_matches,
-                            &index_slots,
-                            diagnostics)) {
-            core_list_free(mutator_functions);
-            core_list_free(inline_callees);
-            core_list_free(layout_matches);
-            core_list_free(member_matches);
-            return false;
-        }
-    }
-    core_list_free(mutator_functions);
-    core_list_free(inline_callees);
+    pointer_set_free(&mutator_functions);
+    pointer_set_free(&inline_callees);
     core_list_free(layout_matches);
     core_list_free(member_matches);
+    if (!ok) return false;
     core_string_t module_name = ir_module_name(source);
     size_t cursor = 0;
     const n00bb_runtime_native_root_t *root;
@@ -12030,11 +11883,11 @@ n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
             core_free(item->key);
         core_dict_free(&backend->native_types);
     }
-    core_list_free(backend->selected_mutators);
     if (backend->module) LLVMDisposeModule(backend->module);
     if (backend->context) LLVMContextDispose(backend->context);
     core_free(backend->cpu_name.data);
     core_free(backend->cpu_features.data);
+    if (backend->reachable_bound) pointer_set_free(&backend->reachable);
     core_free(backend);
 }
 
@@ -12108,6 +11961,12 @@ n00bb_llvm_callback_bindings_free(n00bb_llvm_callback_bindings_t *bindings)
     core_free(bindings);
 }
 
+static const pointer_set_t *
+backend_reachable(const n00bb_llvm_backend_t *backend)
+{
+    return backend->reachable_bound ? &backend->reachable : nullptr;
+}
+
 bool
 n00bb_llvm_backend_bind_reachable_functions(
     n00bb_llvm_backend_t *backend, ir_func_t *const *functions, size_t count,
@@ -12115,8 +11974,10 @@ n00bb_llvm_backend_bind_reachable_functions(
 {
     if (!backend || (count && !functions) || !bindings || backend->lowered)
         return false;
-    backend->reachable = functions;
-    backend->reachable_count = count;
+    if (backend->reachable_bound) pointer_set_free(&backend->reachable);
+    backend->reachable = pointer_set_new();
+    for (size_t i = 0; i < count; i++)
+        pointer_set_add(&backend->reachable, functions[i]);
     backend->reachable_bound = true;
     backend->callback_bindings = bindings;
     return true;
@@ -12191,44 +12052,6 @@ n00bb_llvm_backend_bind_summaries(n00bb_llvm_backend_t *backend,
     if (backend) backend->summaries = summaries;
 }
 
-static uint32_t
-module_mutator_flags(void *context, const ir_func_t *function, uint32_t flags)
-{
-    (void)context;
-    return n00bb_llvm_mutator_flags(nullptr, function, flags);
-}
-
-static const ir_summary_hooks_t module_summary_hooks = {
-    .adjust = module_mutator_flags,
-};
-
-static ir_summaries_t *
-module_function_summaries(const ir_module_t *module)
-{
-    core_list_t(inline_function_ptr_t) functions =
-        core_list_new(inline_function_ptr_t);
-    for (size_t i = 0; i < ir_func_count((ir_module_t *)module); i++)
-        core_list_push(functions, ir_func_at((ir_module_t *)module, i));
-    ir_summaries_t *summaries = ir_summaries_compute(functions.data,
-        functions.len, &module_summary_hooks);
-    core_list_free(functions);
-    return summaries;
-}
-
-size_t
-n00bb_llvm_backend_mutator_count(const n00bb_llvm_backend_t *backend)
-{
-    return backend ? backend->selected_mutators.len : 0;
-}
-
-core_string_t
-n00bb_llvm_backend_mutator_name(const n00bb_llvm_backend_t *backend,
-                                size_t index)
-{
-    return backend && index < backend->selected_mutators.len
-        ? backend->selected_mutators.data[index] : (core_string_t){0};
-}
-
 static bool
 lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
 {
@@ -12246,26 +12069,19 @@ lower_backend(n00bb_llvm_backend_t *backend, core_diagnostics_t *diagnostics)
     }
     debug_info_t *previous_debug = active_debug;
     active_debug = with_debug ? &debug : nullptr;
-    core_list_t(core_string_t) *previous_selected =
-        active_selected_mutators;
-    ir_summaries_t *module_summaries = backend->summaries
-        ? nullptr : module_function_summaries(backend->source);
-    ir_summaries_t *previous_summaries = ir_analysis_bind_summaries(
-        backend->summaries ? backend->summaries : module_summaries);
-    active_selected_mutators = &backend->selected_mutators;
+    ir_summaries_t *previous_summaries = backend->summaries
+        ? ir_analysis_bind_summaries(backend->summaries)
+        : ir_analysis_summaries();
     bool module_lowered = lower_module(backend->module, backend->source,
         backend->emit_frame_maps, backend->type_indices,
         backend->type_index_count, backend->function_indices,
         backend->function_index_count, backend->global_bindings,
         backend->global_binding_count, backend->storage_origin,
-        backend->reachable, backend->reachable_count,
-        backend->reachable_bound,
+        backend_reachable(backend),
         backend->callback_bindings ? &backend->callback_bindings->list
                                    : nullptr,
         backend->index_table, diagnostics);
     ir_analysis_bind_summaries(previous_summaries);
-    ir_summaries_free(module_summaries);
-    active_selected_mutators = previous_selected;
     active_debug = previous_debug;
     if (with_debug) debug_info_end(&debug);
     active_native_types = previous_native_types;
@@ -12486,8 +12302,8 @@ is_stack_map_call(LLVMValueRef instruction)
     LLVMValueRef callee = LLVMGetCalledValue(instruction);
     size_t length = 0;
     const char *name = callee ? LLVMGetValueName2(callee, &length) : nullptr;
-    return name && length == sizeof("llvm.experimental.stackmap") - 1
-        && !memcmp(name, "llvm.experimental.stackmap", length);
+    return name && length == sizeof(stack_map_name) - 1
+        && !memcmp(name, stack_map_name, length);
 }
 
 static bool
@@ -12516,14 +12332,6 @@ is_root_lifetime_call(LLVMValueRef instruction)
                         && !memcmp(name, end, sizeof(end) - 1)));
 }
 
-static bool
-llvm_value_list_contains(const core_list_t(LLVMValueRef) *values,
-                         LLVMValueRef value)
-{
-    for (size_t i = 0; i < values->len; i++)
-        if (values->data[i] == value) return true;
-    return false;
-}
 
 static bool
 null_only_frame_root(LLVMValueRef slot)
@@ -12553,13 +12361,11 @@ null_only_frame_root(LLVMValueRef slot)
 static bool
 prune_null_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
 {
-    LLVMValueRef map = LLVMGetNamedFunction(module,
-        "llvm.experimental.stackmap");
+    LLVMValueRef map = LLVMGetNamedFunction(module, stack_map_name);
     if (!map) return true;
     for (LLVMValueRef function = LLVMGetFirstFunction(module); function;
          function = LLVMGetNextFunction(function)) {
-        core_list_t(LLVMValueRef) dead = core_list_new(LLVMValueRef);
-        if (!dead.data) return false;
+        pointer_set_t dead = pointer_set_new();
         for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function); block;
              block = LLVMGetNextBasicBlock(block))
             for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
@@ -12568,12 +12374,12 @@ prune_null_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
                 unsigned count = LLVMGetNumArgOperands(instruction);
                 for (unsigned i = 2; i < count; i++) {
                     LLVMValueRef slot = LLVMGetOperand(instruction, i);
-                    if (!llvm_value_list_contains(&dead, slot)
+                    if (!pointer_set_has(&dead, slot)
                         && null_only_frame_root(slot))
-                        core_list_push(dead, slot);
+                        pointer_set_add(&dead, slot);
                 }
             }
-        if (!dead.len) { core_list_free(dead); continue; }
+        if (!dead.items.len) { pointer_set_free(&dead); continue; }
         bool ok = true;
         for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function);
              ok && block; block = LLVMGetNextBasicBlock(block))
@@ -12587,7 +12393,7 @@ prune_null_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
                     unsigned kept = 0;
                     for (unsigned i = 0; i < count; i++) {
                         LLVMValueRef operand = LLVMGetOperand(instruction, i);
-                        if (i < 2 || !llvm_value_list_contains(&dead, operand))
+                        if (i < 2 || !pointer_set_has(&dead, operand))
                             args[kept++] = operand;
                     }
                     if (kept != count && kept > 2) {
@@ -12600,30 +12406,25 @@ prune_null_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
                     if (ok && kept != count)
                         LLVMInstructionEraseFromParent(instruction);
                 } else if (LLVMGetInstructionOpcode(instruction) == LLVMStore
-                           && llvm_value_list_contains(&dead,
+                           && pointer_set_has(&dead,
                                LLVMGetOperand(instruction, 1)))
                     LLVMInstructionEraseFromParent(instruction);
                 else if (is_root_lifetime_call(instruction)
-                         && llvm_value_list_contains(&dead,
+                         && pointer_set_has(&dead,
                              LLVMGetOperand(instruction, 0)))
                     LLVMInstructionEraseFromParent(instruction);
                 instruction = next;
             }
-        for (size_t i = 0; ok && i < dead.len; i++) {
-            if (LLVMGetFirstUse(dead.data[i])) { ok = false; break; }
-            LLVMInstructionEraseFromParent(dead.data[i]);
+        for (size_t i = 0; ok && i < dead.items.len; i++) {
+            if (LLVMGetFirstUse(dead.items.data[i])) { ok = false; break; }
+            LLVMInstructionEraseFromParent(dead.items.data[i]);
         }
-        core_list_free(dead);
+        pointer_set_free(&dead);
         if (!ok) return false;
     }
     return true;
 }
 
-typedef struct {
-    LLVMValueRef slot;
-    LLVMValueRef value;
-} frame_single_value_root_t;
-core_list_decl(frame_single_value_root_t);
 
 static LLVMValueRef
 frame_root_single_value(LLVMValueRef slot, LLVMBasicBlockRef entry,
@@ -12659,21 +12460,18 @@ merge_single_value_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
     LLVMContextRef context = LLVMGetModuleContext(module);
     unsigned init_kind = LLVMGetMDKindIDInContext(context,
         gc_root_init_metadata, sizeof(gc_root_init_metadata) - 1);
-    LLVMValueRef map = LLVMGetNamedFunction(module,
-        "llvm.experimental.stackmap");
+    LLVMValueRef map = LLVMGetNamedFunction(module, stack_map_name);
     for (LLVMValueRef function = LLVMGetFirstFunction(module); function;
          function = LLVMGetNextFunction(function)) {
         LLVMBasicBlockRef entry = LLVMGetFirstBasicBlock(function);
         if (!entry) continue;
-        core_list_t(frame_single_value_root_t) roots =
-            core_list_new(frame_single_value_root_t);
-        core_list_t(frame_single_value_root_t) merges =
-            core_list_new(frame_single_value_root_t);
-        if (!roots.data || !merges.data) {
-            core_list_free(roots);
-            core_list_free(merges);
-            return false;
-        }
+        core_dict_t seen, canonical_of, replacement, last_store, last_block;
+        core_dict_init(&seen, nullptr, nullptr);
+        core_dict_init(&canonical_of, nullptr, nullptr);
+        core_dict_init(&replacement, nullptr, nullptr);
+        core_dict_init(&last_store, nullptr, nullptr);
+        core_dict_init(&last_block, nullptr, nullptr);
+        pointer_set_t duplicates = pointer_set_new();
         for (LLVMBasicBlockRef block = entry; block;
              block = LLVMGetNextBasicBlock(block))
             for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
@@ -12684,129 +12482,93 @@ merge_single_value_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
                     LLVMValueRef slot = LLVMGetOperand(instruction, i);
                     LLVMValueRef value = frame_root_single_value(slot, entry,
                                                                   init_kind);
-                    if (!value) continue;
-                    bool seen = false;
-                    for (size_t j = 0; j < roots.len; j++)
-                        if (roots.data[j].slot == slot) seen = true;
-                    if (seen) continue;
-                    LLVMValueRef canonical = nullptr;
-                    for (size_t j = 0; j < roots.len; j++)
-                        if (roots.data[j].value == value) {
-                            canonical = roots.data[j].slot;
-                            break;
-                        }
-                    core_list_push(roots, ((frame_single_value_root_t){
-                        .slot = slot, .value = value,
-                    }));
-                    if (canonical) core_list_push(merges,
-                        ((frame_single_value_root_t){
-                            .slot = slot, .value = canonical,
-                        }));
+                    if (!value || !core_dict_add(&seen, slot, slot)) continue;
+                    bool found = false;
+                    LLVMValueRef canonical = core_dict_get(&canonical_of,
+                                                           value, &found);
+                    if (!found) {
+                        core_dict_put(&canonical_of, value, slot);
+                        continue;
+                    }
+                    core_dict_put(&replacement, slot, canonical);
+                    core_dict_put(&last_block, canonical, (void *)0);
+                    pointer_set_add(&duplicates, slot);
                 }
             }
-        for (size_t i = 0; i < merges.len; i++) {
-            LLVMValueRef duplicate = merges.data[i].slot;
-            LLVMValueRef canonical = merges.data[i].value;
-            for (LLVMBasicBlockRef block = entry; block;
-                 block = LLVMGetNextBasicBlock(block))
-                for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
-                     instruction;) {
-                    LLVMValueRef next = LLVMGetNextInstruction(instruction);
-                    if (is_stack_map_call(instruction)) {
-                        unsigned count = LLVMGetNumArgOperands(instruction);
+        bool ok = true;
+        for (LLVMBasicBlockRef block = entry; ok && duplicates.items.len
+             && block; block = LLVMGetNextBasicBlock(block)) {
+            for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
+                 ok && instruction;) {
+                LLVMValueRef next = LLVMGetNextInstruction(instruction);
+                bool found = false;
+                if (is_stack_map_call(instruction)) {
+                    unsigned count = LLVMGetNumArgOperands(instruction);
+                    LLVMValueRef *args = malloc((size_t)count * sizeof(*args));
+                    pointer_set_t kept_slots = pointer_set_new();
+                    unsigned kept = 0;
+                    for (unsigned arg = 0; args && arg < count; arg++) {
+                        LLVMValueRef value = LLVMGetOperand(instruction, arg);
+                        LLVMValueRef mapped = arg < 2 ? nullptr
+                            : core_dict_get(&replacement, value, &found);
+                        if (mapped) value = mapped;
+                        if (arg < 2 || pointer_set_add(&kept_slots, value))
+                            args[kept++] = value;
+                    }
+                    pointer_set_free(&kept_slots);
+                    ok = args != nullptr;
+                    if (ok && kept < count) {
+                        LLVMPositionBuilderBefore(builder, instruction);
+                        ok = LLVMBuildCall2(builder,
+                            LLVMGlobalGetValueType(map), map, args, kept,
+                            "") != nullptr;
+                        if (ok) LLVMInstructionEraseFromParent(instruction);
+                    } else if (ok)
                         for (unsigned arg = 2; arg < count; arg++)
-                            if (LLVMGetOperand(instruction, arg) == duplicate)
-                                LLVMSetOperand(instruction, arg, canonical);
-                    } else if (LLVMGetInstructionOpcode(instruction)
-                               == LLVMStore
-                               && LLVMGetOperand(instruction, 1)
-                                    == duplicate) {
-                        if (LLVMIsNull(LLVMGetOperand(instruction, 0)))
-                            LLVMInstructionEraseFromParent(instruction);
-                        else LLVMSetOperand(instruction, 1, canonical);
-                    } else if (is_root_lifetime_call(instruction)
-                               && LLVMGetOperand(instruction, 0)
-                                    == duplicate)
+                            LLVMSetOperand(instruction, arg, args[arg]);
+                    free(args);
+                } else if (LLVMGetInstructionOpcode(instruction) == LLVMStore) {
+                    LLVMValueRef slot = LLVMGetOperand(instruction, 1);
+                    LLVMValueRef stored = LLVMGetOperand(instruction, 0);
+                    LLVMValueRef mapped = core_dict_get(&replacement, slot,
+                                                        &found);
+                    if (mapped && LLVMIsNull(stored)) {
                         LLVMInstructionEraseFromParent(instruction);
-                    instruction = next;
-                }
-            if (LLVMGetFirstUse(duplicate)) {
-                core_list_free(roots);
-                core_list_free(merges);
-                return false;
-            }
-            LLVMInstructionEraseFromParent(duplicate);
-        }
-        for (size_t i = 0; i < roots.len; i++) {
-            LLVMValueRef slot = roots.data[i].slot;
-            bool merged = false;
-            for (size_t j = 0; j < merges.len; j++)
-                if (merges.data[j].slot == slot) merged = true;
-            if (merged) continue;
-            bool canonical = false;
-            for (size_t j = 0; j < merges.len; j++)
-                if (merges.data[j].value == slot) canonical = true;
-            if (!canonical) continue;
-            if (LLVMGetValueKind(slot) != LLVMInstructionValueKind) continue;
-            for (LLVMBasicBlockRef block = entry; block;
-                 block = LLVMGetNextBasicBlock(block)) {
-                LLVMValueRef last = nullptr;
-                for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
-                     instruction;) {
-                    LLVMValueRef next = LLVMGetNextInstruction(instruction);
-                    if (LLVMGetInstructionOpcode(instruction) == LLVMStore
-                        && LLVMGetOperand(instruction, 1) == slot) {
-                        LLVMValueRef value = LLVMGetOperand(instruction, 0);
-                        if (last == value)
-                            LLVMInstructionEraseFromParent(instruction);
-                        else last = value;
+                        instruction = next;
+                        continue;
                     }
-                    instruction = next;
-                }
+                    if (mapped) {
+                        LLVMSetOperand(instruction, 1, mapped);
+                        slot = mapped;
+                    }
+                    LLVMBasicBlockRef owner = core_dict_get(&last_block,
+                                                            slot, &found);
+                    bool repeated = found && owner == block
+                        && core_dict_get(&last_store, slot, nullptr)
+                            == stored;
+                    if (repeated) LLVMInstructionEraseFromParent(instruction);
+                    else if (found) {
+                        core_dict_put(&last_block, slot, block);
+                        core_dict_put(&last_store, slot, stored);
+                    }
+                } else if (is_root_lifetime_call(instruction)
+                           && pointer_set_has(&duplicates,
+                                              LLVMGetOperand(instruction, 0)))
+                    LLVMInstructionEraseFromParent(instruction);
+                instruction = next;
             }
         }
-        if (merges.len) {
-            for (LLVMBasicBlockRef block = entry; block;
-                 block = LLVMGetNextBasicBlock(block))
-                for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
-                     instruction;) {
-                    LLVMValueRef next = LLVMGetNextInstruction(instruction);
-                    if (is_stack_map_call(instruction)) {
-                        unsigned count = LLVMGetNumArgOperands(instruction);
-                        LLVMValueRef *args = malloc((size_t)count * sizeof(*args));
-                        if (!args) {
-                            core_list_free(roots);
-                            core_list_free(merges);
-                            return false;
-                        }
-                        unsigned kept = 0;
-                        for (unsigned arg = 0; arg < count; arg++) {
-                            LLVMValueRef value = LLVMGetOperand(instruction, arg);
-                            bool seen = false;
-                            for (unsigned prior = 2; prior < kept; prior++)
-                                if (args[prior] == value) seen = true;
-                            if (arg < 2 || !seen) args[kept++] = value;
-                        }
-                        if (kept < count) {
-                            LLVMPositionBuilderBefore(builder, instruction);
-                            LLVMValueRef replacement = LLVMBuildCall2(builder,
-                                LLVMGlobalGetValueType(map), map, args, kept,
-                                "");
-                            if (!replacement) {
-                                free(args);
-                                core_list_free(roots);
-                                core_list_free(merges);
-                                return false;
-                            }
-                            LLVMInstructionEraseFromParent(instruction);
-                        }
-                        free(args);
-                    }
-                    instruction = next;
-                }
+        for (size_t i = 0; ok && i < duplicates.items.len; i++) {
+            ok = !LLVMGetFirstUse(duplicates.items.data[i]);
+            if (ok) LLVMInstructionEraseFromParent(duplicates.items.data[i]);
         }
-        core_list_free(roots);
-        core_list_free(merges);
+        pointer_set_free(&duplicates);
+        core_dict_free(&seen);
+        core_dict_free(&canonical_of);
+        core_dict_free(&replacement);
+        core_dict_free(&last_store);
+        core_dict_free(&last_block);
+        if (!ok) return false;
     }
     return true;
 }
@@ -12814,8 +12576,7 @@ merge_single_value_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
 static bool
 discard_unpublished_frame_roots(LLVMValueRef function, unsigned init_kind)
 {
-    core_list_t(LLVMValueRef) roots = core_list_new(LLVMValueRef);
-    if (!roots.data) return false;
+    pointer_set_t roots = pointer_set_new();
     bool valid = true;
     for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function);
          valid && block; block = LLVMGetNextBasicBlock(block))
@@ -12823,20 +12584,14 @@ discard_unpublished_frame_roots(LLVMValueRef function, unsigned init_kind)
              instruction; instruction = LLVMGetNextInstruction(instruction)) {
             if (is_stack_map_call(instruction)) {
                 unsigned count = LLVMGetNumArgOperands(instruction);
-                for (unsigned i = 2; i < count; i++) {
-                    LLVMValueRef slot = LLVMGetOperand(instruction, i);
-                    if (!llvm_value_list_contains(&roots, slot))
-                        core_list_push(roots, slot);
-                }
+                for (unsigned i = 2; i < count; i++)
+                    pointer_set_add(&roots, LLVMGetOperand(instruction, i));
             } else if (LLVMGetInstructionOpcode(instruction) == LLVMStore
-                       && LLVMGetMetadata(instruction, init_kind)) {
-                LLVMValueRef slot = LLVMGetOperand(instruction, 1);
-                if (!llvm_value_list_contains(&roots, slot))
-                    core_list_push(roots, slot);
-            }
+                       && LLVMGetMetadata(instruction, init_kind))
+                pointer_set_add(&roots, LLVMGetOperand(instruction, 1));
         }
-    for (size_t i = 0; valid && i < roots.len; i++) {
-        LLVMValueRef slot = roots.data[i];
+    for (size_t i = 0; valid && i < roots.items.len; i++) {
+        LLVMValueRef slot = roots.items.data[i];
         valid = LLVMGetValueKind(slot) == LLVMInstructionValueKind
             && LLVMGetInstructionOpcode(slot) == LLVMAlloca
             && LLVMGetTypeKind(LLVMGetAllocatedType(slot))
@@ -12863,19 +12618,19 @@ discard_unpublished_frame_roots(LLVMValueRef function, unsigned init_kind)
                 LLVMValueRef next = LLVMGetNextInstruction(instruction);
                 if (is_stack_map_call(instruction)
                     || (LLVMGetInstructionOpcode(instruction) == LLVMStore
-                        && llvm_value_list_contains(&roots,
+                        && pointer_set_has(&roots,
                             LLVMGetOperand(instruction, 1)))
                     || (is_root_lifetime_call(instruction)
-                        && llvm_value_list_contains(&roots,
+                        && pointer_set_has(&roots,
                             LLVMGetOperand(instruction, 0))))
                     LLVMInstructionEraseFromParent(instruction);
                 instruction = next;
             }
-    for (size_t i = 0; valid && i < roots.len; i++) {
-        if (LLVMGetFirstUse(roots.data[i])) { valid = false; break; }
-        LLVMInstructionEraseFromParent(roots.data[i]);
+    for (size_t i = 0; valid && i < roots.items.len; i++) {
+        if (LLVMGetFirstUse(roots.items.data[i])) { valid = false; break; }
+        LLVMInstructionEraseFromParent(roots.items.data[i]);
     }
-    core_list_free(roots);
+    pointer_set_free(&roots);
     return valid;
 }
 
@@ -12884,8 +12639,7 @@ emit_frame_sentinels(LLVMModuleRef module,
                      core_diagnostics_t *diagnostics)
 {
     LLVMContextRef context = LLVMGetModuleContext(module);
-    LLVMValueRef map = LLVMGetNamedFunction(module,
-        "llvm.experimental.stackmap");
+    LLVMValueRef map = LLVMGetNamedFunction(module, stack_map_name);
     if (!map) return true;
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
     if (!builder) return backend_error(diagnostics,
@@ -12928,16 +12682,9 @@ emit_frame_sentinels(LLVMModuleRef module,
                 CORE_STRING_STATIC("discarding conservative roots");
             continue;
         }
-        core_list_t(LLVMValueRef) roots = core_list_new(LLVMValueRef);
+        pointer_set_t roots = pointer_set_new();
+        pointer_set_t cleared = pointer_set_new();
         core_list_t(LLVMValueRef) clears = core_list_new(LLVMValueRef);
-        core_list_t(LLVMValueRef) lifetimes = core_list_new(LLVMValueRef);
-        if (!roots.data || !clears.data || !lifetimes.data) {
-            core_list_free(roots);
-            core_list_free(clears);
-            core_list_free(lifetimes);
-            ok = false;
-            break;
-        }
         bool possible = true;
         for (LLVMBasicBlockRef block = entry; block;
              block = LLVMGetNextBasicBlock(block))
@@ -12950,38 +12697,23 @@ emit_frame_sentinels(LLVMModuleRef module,
                         if (LLVMGetValueKind(root) != LLVMInstructionValueKind
                             || LLVMGetInstructionOpcode(root) != LLVMAlloca
                             || LLVMGetInstructionParent(root) != entry
-                            || LLVMGetAllocatedType(root) != pointer) {
+                            || LLVMGetAllocatedType(root) != pointer)
                             possible = false;
-                            continue;
-                        }
-                        bool found = false;
-                        for (size_t j = 0; j < roots.len; j++)
-                            if (roots.data[j] == root) found = true;
-                        if (!found) core_list_push(roots, root);
+                        else pointer_set_add(&roots, root);
                     }
                 } else if (LLVMGetInstructionOpcode(instruction) == LLVMStore
                            && LLVMGetMetadata(instruction, init_kind)) {
                     core_list_push(clears, instruction);
+                    pointer_set_add(&cleared, LLVMGetOperand(instruction, 1));
                 }
-        if (!roots.len) possible = false;
-        for (size_t i = 0; i < clears.len; i++) {
-            LLVMValueRef slot = LLVMGetOperand(clears.data[i], 1);
-            bool found = false;
-            for (size_t j = 0; j < roots.len; j++)
-                if (roots.data[j] == slot) found = true;
-            if (!found) possible = false;
-        }
-        for (size_t i = 0; i < roots.len; i++) {
-            bool found = false;
-            for (size_t j = 0; j < clears.len; j++)
-                if (LLVMGetOperand(clears.data[j], 1) == roots.data[i])
-                    found = true;
-            if (!found) possible = false;
-        }
+        possible = possible && roots.items.len
+            && cleared.items.len == roots.items.len;
+        for (size_t i = 0; possible && i < cleared.items.len; i++)
+            possible = pointer_set_has(&roots, cleared.items.data[i]);
+        pointer_set_free(&cleared);
         if (!possible) {
-            core_list_free(roots);
+            pointer_set_free(&roots);
             core_list_free(clears);
-            core_list_free(lifetimes);
             ok = discard_unpublished_frame_roots(function, init_kind);
             if (!ok) failed_step =
                 CORE_STRING_STATIC("discarding transformed roots");
@@ -12990,54 +12722,44 @@ emit_frame_sentinels(LLVMModuleRef module,
         for (LLVMBasicBlockRef block = entry; block;
              block = LLVMGetNextBasicBlock(block))
             for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
-                 instruction; instruction = LLVMGetNextInstruction(instruction))
-                if (is_root_lifetime_call(instruction)) {
-                    LLVMValueRef slot = LLVMGetOperand(instruction, 0);
-                    for (size_t i = 0; i < roots.len; i++)
-                        if (roots.data[i] == slot) {
-                            core_list_push(lifetimes, instruction);
-                            break;
-                        }
-                }
+                 instruction;) {
+                LLVMValueRef next = LLVMGetNextInstruction(instruction);
+                if (is_root_lifetime_call(instruction)
+                    && pointer_set_has(&roots,
+                                       LLVMGetOperand(instruction, 0)))
+                    LLVMInstructionEraseFromParent(instruction);
+                instruction = next;
+            }
         LLVMValueRef last_root = nullptr;
         for (LLVMValueRef instruction = LLVMGetFirstInstruction(entry);
              instruction; instruction = LLVMGetNextInstruction(instruction))
-            for (size_t i = 0; i < roots.len; i++)
-                if (instruction == roots.data[i]) last_root = instruction;
-        if (!last_root) {
-            core_list_free(roots);
-            core_list_free(clears);
-            core_list_free(lifetimes);
-            ok = false;
-            failed_step = CORE_STRING_STATIC("finding entry root slots");
-            break;
-        }
+            if (pointer_set_has(&roots, instruction)) last_root = instruction;
         LLVMValueRef last_init = nullptr;
-        for (size_t i = 0; i < roots.len; i++) {
-            LLVMValueRef next = LLVMGetNextInstruction(roots.data[i]);
-            if (!next) { ok = false; break; }
-            LLVMPositionBuilderBefore(builder, next);
-            LLVMValueRef init = LLVMBuildStore(builder,
-                LLVMConstNull(pointer), roots.data[i]);
-            if (!init) { ok = false; break; }
-            LLVMSetVolatile(init, true);
-            if (roots.data[i] == last_root) last_init = init;
+        bool initialized = last_root != nullptr;
+        for (size_t i = 0; initialized && i < roots.items.len; i++) {
+            LLVMValueRef slot = roots.items.data[i];
+            LLVMValueRef next = LLVMGetNextInstruction(slot);
+            LLVMValueRef init = nullptr;
+            if (next) {
+                LLVMPositionBuilderBefore(builder, next);
+                init = LLVMBuildStore(builder, LLVMConstNull(pointer), slot);
+            }
+            initialized = init != nullptr;
+            if (init) LLVMSetVolatile(init, true);
+            if (slot == last_root) last_init = init;
         }
-        if (!ok || !last_init) {
-            failed_step = CORE_STRING_STATIC("initializing entry root slots");
-            core_list_free(roots);
-            core_list_free(clears);
-            core_list_free(lifetimes);
+        if (!initialized) last_init = nullptr;
+        for (size_t i = 0; last_init && i < clears.len; i++)
+            LLVMInstructionEraseFromParent(clears.data[i]);
+        pointer_set_free(&roots);
+        core_list_free(clears);
+        if (!last_init) {
             ok = false;
+            failed_step = last_root
+                ? CORE_STRING_STATIC("initializing entry root slots")
+                : CORE_STRING_STATIC("finding entry root slots");
             break;
         }
-        for (size_t i = 0; i < clears.len; i++)
-            LLVMInstructionEraseFromParent(clears.data[i]);
-        for (size_t i = 0; i < lifetimes.len; i++)
-            LLVMInstructionEraseFromParent(lifetimes.data[i]);
-        core_list_free(roots);
-        core_list_free(clears);
-        core_list_free(lifetimes);
         LLVMValueRef next = LLVMGetNextInstruction(last_init);
         if (!next) { ok = false; break; }
         LLVMPositionBuilderBefore(builder, next);
@@ -13096,8 +12818,7 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
         ir_func_t *function = backend->function_indices[i].function;
         ir_func_t *body = n00bb_cached_body(function);
         if (body == function
-            ? !function_body_emitted(function, backend->reachable,
-                  backend->reachable_count, backend->reachable_bound)
+            ? !function_body_emitted(function, backend_reachable(backend))
             : !th_is_closed(ir_module_types(body->owner), body->type))
             continue;
         LLVMTypeRef signature = function_type(module, body);
@@ -13255,6 +12976,19 @@ prepare_image(n00bb_llvm_backend_t *backend,
                 nullptr, 0, "");
             LLVMBuildUnreachable(builder);
             LLVMPositionBuilderAtEnd(builder, ready);
+            LLVMTypeRef relocate_type = LLVMFunctionType(
+                LLVMVoidTypeInContext(context), nullptr, 0, false);
+            LLVMValueRef relocate = LLVMGetNamedFunction(module,
+                                                         "n00b_abi_tls_relocate");
+            if (!relocate)
+                relocate = LLVMAddFunction(module, "n00b_abi_tls_relocate",
+                                           relocate_type);
+            LLVMTypeRef hook_type = LLVMFunctionType(
+                LLVMVoidTypeInContext(context), &pointer, 1, false);
+            LLVMValueRef hook = LLVMAddFunction(module,
+                "n00b_os_set_thread_start_hook", hook_type);
+            LLVMBuildCall2(builder, hook_type, hook, &relocate, 1, "");
+            LLVMBuildCall2(builder, relocate_type, relocate, nullptr, 0, "");
         }
         if (!emit_entry_initializers(module, context, builder,
                 entry_initializers, initializer_count, diagnostics)) {

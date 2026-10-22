@@ -252,7 +252,7 @@ lower_set_alias_annots(ir_lower_context_t *context, ir_annots_t *annots,
         if (!lower_set_bool_annot(ctx, annots,
                 lower_alias_key(key, sizeof(key), prefix, index,
                                 CORE_STRING_STATIC("_escapes")),
-                aliases[i].escapes))
+                false))
             return false;
     }
     return true;
@@ -860,6 +860,26 @@ ir_lower_value_as(ir_lower_context_t *context, ir_value_t *value,
     if (!context || !value || !target
         || ir_type_eq(context->module, value->type, target))
         return value;
+    ir_machine_t from = ir_machine_of(context->module, value->type);
+    ir_machine_t to = ir_machine_of(context->module, target);
+    bool from_integer = from.class == IR_CLASS_SINT
+        || from.class == IR_CLASS_UINT;
+    bool to_integer = to.class == IR_CLASS_SINT || to.class == IR_CLASS_UINT;
+    if (from_integer && to_integer) {
+        bool lossless = from.class == to.class ? from.width <= to.width
+            : from.class == IR_CLASS_UINT && from.width < to.width;
+        bool checked = !lossless || from.class != to.class;
+        ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
+                                                      span);
+        if (!cast
+            || !ir_lower_set_temp_dest(context, cast,
+                                       CORE_STRING_STATIC("__convert_"), target)
+            || !ir_instr_operand_value(cast, value)
+            || (checked
+                && !ir_instr_add_mod(cast, CORE_STRING_STATIC("trap"))))
+            return nullptr;
+        return cast->dest;
+    }
     th_type *source = th_resolve(value->type);
     if (th_kind_of(source) != TH_INDIRECTION
         || th_kind_of(th_resolve(target)) == TH_INDIRECTION

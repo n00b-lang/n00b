@@ -51,7 +51,9 @@ void th_var_cons_push(th_type *var, th_constraint constraint)
 
 th_probe_t th_probe_begin(th_ctx *ctx)
 {
+    size_t depth = ctx->probe_depth++;
     return (th_probe_t){
+        .depth     = depth,
         .arena     = core_arena_mark(&ctx->arena),
         .err       = ctx->err,
         .errors    = ctx->errors.len,
@@ -70,6 +72,7 @@ th_probe_t th_probe_begin(th_ctx *ctx)
 
 bool th_probe_end(th_ctx *ctx, const th_probe_t *probe)
 {
+    ctx->probe_depth = probe->depth;
     if (ctx->probe_errors_discarded) {
         ctx->errors.len = probe->errors;
         ctx->err        = probe->err;
@@ -96,10 +99,13 @@ th_ctx *th_ctx_new(void)
 {
     th_ctx *ctx = core_alloc(th_ctx);
 
+    static uint32_t next_owner;
+
     memset(ctx, 0, sizeof(*ctx));
     core_arena_init(&ctx->arena, 0);
     core_arena_init(&ctx->memo_arena, 0);
     ctx->type_records = core_list_new(th_type_record_t);
+    ctx->integer_owner = __atomic_add_fetch(&next_owner, 1, __ATOMIC_RELAXED);
     th_builtin_defaults_apply(ctx);
 
     return ctx;
@@ -207,7 +213,9 @@ clone_constraint_graph(th_ctx *destination, const th_constraint *source,
         copy->iface = clone_string(destination, source->iface);
         return !source->iface.data || copy->iface.data;
     case TH_CON_KIND:
+        return true;
     case TH_CON_INTEGER:
+        copy->integer.owner = destination->integer_owner;
         return true;
     case TH_CON_HAS_FIELD:
         copy->field.name = clone_string(destination, source->field.name);
@@ -245,6 +253,8 @@ clone_type_graph(th_ctx *destination, const th_type *source,
                 && seen->data[i].source->kind == TH_VAR
                 && seen->data[i].source->var.origin == source->var.origin)
                 return seen->data[i].copy;
+    if (!destination->probe_depth && th_var_owned_integer(destination, source))
+        return (th_type *)source;
 
     th_type *copy = th_alloc(destination, sizeof(*copy));
     if (!copy) return nullptr;
@@ -441,20 +451,12 @@ th_type_clone_fresh(th_ctx *destination, const th_type *source)
 {
     if (!destination || !source) return nullptr;
     core_list_t(th_clone_entry_t) seen = core_list_new(th_clone_entry_t);
-    th_type **free = nullptr;
-    size_t count = th_free_vars(destination, (th_type *)source, &free);
-    for (size_t i = 0; i < count; i++)
-        if (th_var_is_integer(free[i], nullptr))
-            core_list_push(seen, ((th_clone_entry_t){
-                .source = free[i], .copy = free[i],
-            }));
     th_type *copy = clone_type_graph(destination, source, &seen);
     core_dict_t origins;
     core_dict_init(&origins, nullptr, nullptr);
     for (size_t i = 0; copy && i < seen.len; i++) {
         th_type *variable = seen.data[i].copy;
-        if (variable->kind != TH_VAR || !variable->var.origin
-            || seen.data[i].source == variable) continue;
+        if (variable->kind != TH_VAR || !variable->var.origin) continue;
         bool found = false;
         void *fresh = core_dict_get(&origins, variable->var.origin, &found);
         if (!found) {

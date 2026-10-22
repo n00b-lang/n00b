@@ -1,0 +1,8 @@
+const primes = [2, 3, 5, 7, 11]
+const names = {"a": 1, "b": 2}
+const words = ["static", "litmod"]
+
+require primes[3] == 7 and primes.len() == 5
+require names["b"].get_or_else(0) == 2
+require words[1] == "litmod"
+__fd_write(2, "ok")

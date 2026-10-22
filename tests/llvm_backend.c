@@ -7,6 +7,7 @@
 
 #include "ir/ir.h"
 #include "ir/layout.h"
+#include "ir/summary.h"
 #include "ir/typelang.h"
 #include "lib/buffer.h"
 #include "lib/diagnostic.h"
@@ -28,6 +29,27 @@
 #define FUNC_ADD(module, lit, type, linkage) \
     ir_func_add((module), S(lit), (type), (linkage))
 #define ADD_MOD(instr, lit) ir_instr_add_mod((instr), S(lit))
+
+static uint32_t
+mutator_flags(void *context, const ir_func_t *function, uint32_t flags)
+{
+    (void)context;
+    return n00bb_llvm_mutator_flags(function, flags);
+}
+
+static const ir_summary_hooks_t summary_hooks = {.adjust = mutator_flags};
+
+static ir_summaries_t *
+module_summaries(ir_module_t *module)
+{
+    size_t count = ir_func_count(module);
+    ir_func_t **functions = calloc(count ? count : 1, sizeof(*functions));
+    for (size_t i = 0; i < count; i++) functions[i] = ir_func_at(module, i);
+    ir_summaries_t *summaries = ir_summaries_compute(functions, count,
+                                                     &summary_hooks);
+    free(functions);
+    return summaries;
+}
 
 static uint64_t
 index_operand(LLVMValueRef value)
@@ -688,6 +710,8 @@ main(void)
     n00bb_llvm_backend_t *backend = n00bb_llvm_backend_prepare(
         runtime, true, false, diagnostics);
     assert(backend);
+    ir_summaries_t *runtime_summaries = module_summaries(runtime);
+    n00bb_llvm_backend_bind_summaries(backend, runtime_summaries);
     n00bb_llvm_type_index_t type_indices[] = {
         {.typehash = th_hash(ir_module_types(runtime), unsigned_type),
          .index = 7, .finalizable = true},
@@ -1111,6 +1135,7 @@ main(void)
 
     assert(core_diagnostics_count(diagnostics) == 0);
     n00bb_llvm_backend_free(backend);
+    ir_summaries_free(runtime_summaries);
 
     ir_module_t *native_runtime = ir_module_new(context,
         S("sys.internal.gc.alloc"), &profile, target);
@@ -1130,6 +1155,8 @@ main(void)
         && ir_instr_add(native_mutator_entry, IR_OP_RETURN));
     backend = n00bb_llvm_backend_prepare(native_runtime,
         true, true, diagnostics);
+    ir_summaries_t *native_summaries = module_summaries(native_runtime);
+    n00bb_llvm_backend_bind_summaries(backend, native_summaries);
     ir_func_t *native_roots[] = {native_function, native_mutator};
     n00bb_llvm_callback_bindings_t *native_bindings =
         n00bb_llvm_callback_bindings_new(native_roots, 2);
@@ -1156,6 +1183,7 @@ main(void)
     LLVMDisposeMemoryBuffer(native_source);
     core_buffer_release(&native_bytes);
     n00bb_llvm_backend_free(backend);
+    ir_summaries_free(native_summaries);
     n00bb_llvm_callback_bindings_free(native_bindings);
 
     core_diagnostics_free(diagnostics);

@@ -119,6 +119,84 @@ static void test_branch_path_refines_integer_ranges(void)
     ir_ctx_free(ctx);
 }
 
+static void test_negated_guards_and_earlier_traps_refine(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *m = ir_module_new(ctx, S("ranges"), &ir_profile_bce, S("test"));
+    ir_func_t *f = ir_func_add(m, S("f"), ir_type_parse(m, S("(i:8) -> i:8")),
+                               IR_LINK_EXTERNAL);
+    ir_value_t *input = ir_param_add(f, S("input"), ir_type_parse(m, S("i:8")));
+    ir_block_t *entry = ir_block_add(f, S("entry"));
+    ir_block_t *big = ir_block_add(f, S("big"));
+    ir_block_t *small = ir_block_add(f, S("small"));
+    ir_instr_t *ten = constant(m, entry, "ten", "i:8", 10);
+    ir_instr_t *below = binary(m, entry, IR_OP_LT, "below", "bool", input,
+                               ten->dest, false);
+    ir_instr_t *flipped = ir_instr_add(entry, IR_OP_NOT);
+    ir_instr_set_dest(flipped, S("flipped"), ir_type_parse(m, S("bool")));
+    ir_instr_operand_value(flipped, below->dest);
+    ir_instr_t *branch = ir_instr_add(entry, IR_OP_BRANCH);
+    ir_instr_operand_value(branch, flipped->dest);
+    ir_instr_operand_block(branch, big);
+    ir_instr_operand_block(branch, small);
+    ir_instr_t *one = constant(m, big, "one", "i:8", 1);
+    ir_instr_t *first = binary(m, big, IR_OP_ADD, "first", "i:8", input,
+                               one->dest, true);
+    ir_instr_t *second = binary(m, big, IR_OP_ADD, "second", "i:8", input,
+                                one->dest, true);
+    ir_instr_t *big_return = ir_instr_add(big, IR_OP_RETURN);
+    ir_instr_operand_value(big_return, second->dest);
+    ir_instr_t *small_return = ir_instr_add(small, IR_OP_RETURN);
+    ir_instr_operand_value(small_return, input);
+    ir_ranges_t *ranges = ir_ranges_build(f);
+    ir_interval_t at_first = {0}, at_second = {0};
+    check("a branch on a negated comparison refines its operand",
+          ir_range_of(ranges, input, first, &at_first)
+          && at_first.lo == 10 && at_first.hi == 127);
+    check("a trapping add bounds its operand afterwards",
+          ir_range_of(ranges, input, second, &at_second)
+          && at_second.lo == 10 && at_second.hi == 126);
+    check("the first add may still overflow",
+          ir_range_overflow(ranges, first, nullptr, nullptr)
+              == IR_OVERFLOW_MAY);
+    check("the repeated add cannot overflow",
+          ir_range_overflow(ranges, second, nullptr, nullptr)
+              == IR_OVERFLOW_NEVER);
+    ir_ranges_free(ranges);
+    ir_ctx_free(ctx);
+}
+
+static void test_cached_ranges_follow_mods_and_scopes(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *m = ir_module_new(ctx, S("ranges"), &ir_profile_bce, S("test"));
+    ir_func_t *f = ir_func_add(m, S("f"), ir_type_parse(m, S("(u:8) -> u:8")),
+                               IR_LINK_EXTERNAL);
+    ir_value_t *x = ir_param_add(f, S("x"), ir_type_parse(m, S("u:8")));
+    ir_block_t *b = ir_block_add(f, S("entry"));
+    ir_instr_t *one = constant(m, b, "one", "u:8", 1);
+    ir_instr_t *sum = binary(m, b, IR_OP_ADD, "sum", "u:8", x, one->dest,
+                             false);
+    ir_instr_t *ret = ir_instr_add(b, IR_OP_RETURN);
+    ir_instr_operand_value(ret, sum->dest);
+    ir_interval_t before = {0}, after = {0};
+    ir_ranges_t *outer = ir_func_ranges(f);
+    check("a wrapping add covers its type",
+          ir_range_of(outer, sum->dest, nullptr, &before)
+          && before.lo == 0 && before.hi == 255);
+    size_t scope = ir_analysis_scope_begin();
+    check("a per-query scope reuses the enclosing phase's ranges",
+          ir_func_ranges(f) == outer);
+    ir_analysis_scope_end(scope);
+    check("closing the scope keeps the enclosing phase's ranges",
+          ir_func_ranges(f) == outer);
+    ir_instr_add_mod(sum, S("trap"));
+    check("adding a mod rebuilds the cached ranges",
+          ir_range_of(ir_func_ranges(f), sum->dest, nullptr, &after)
+          && after.lo == 1 && after.hi == 255);
+    ir_ctx_free(ctx);
+}
+
 static void test_phi_ranges_merge_reachable_arms(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -406,14 +484,17 @@ static void test_loop_index_proofs(void)
     ir_instr_operand_value(next, sum->dest);
     ir_instr_operand_value(next, mask->dest);
     ir_instr_operand_phi_arm(at, body, next->dest);
+    ir_instr_t *two = ir_instr_add(body, IR_OP_CONST);
+    ir_instr_set_dest(two, S("two"), word);
+    ir_instr_operand_int(two, 2);
     ir_instr_t *wrapped = ir_instr_add(body, IR_OP_SUB);
     ir_instr_set_dest(wrapped, S("wrapped"), word);
     ir_instr_operand_value(wrapped, length->dest);
-    ir_instr_operand_value(wrapped, one->dest);
+    ir_instr_operand_value(wrapped, two->dest);
     ir_instr_add_mod(wrapped, S("wrap"));
     ir_instr_t *wrap_index = ir_instr_add(body, IR_OP_AND);
     ir_instr_set_dest(wrap_index, S("wrap_index"), word);
-    ir_instr_operand_value(wrap_index, at->dest);
+    ir_instr_operand_value(wrap_index, sum->dest);
     ir_instr_operand_value(wrap_index, wrapped->dest);
     ir_instr_t *unsafe = ir_instr_add(body, IR_OP_INDEX);
     ir_instr_set_dest(unsafe, S("unsafe"), ir_type_parse(m, S("ref[u:64]")));
@@ -760,6 +841,7 @@ static void test_length_helper_and_disjoint_writes(void)
     ir_ranges_free(proofs);
     count_store->operands[0].value = slots->dest;
     count_store->operands[1].value = slots_value->dest;
+    element->operands[1].value = hash;
     proofs = ir_ranges_build(f);
     check("replacing the measured Array invalidates the helper bound",
           !ir_range_index_proven(proofs, index));
@@ -861,6 +943,8 @@ int main(void)
     test_branch_guard_proves_index();
     test_trapping_add_bounds();
     test_branch_path_refines_integer_ranges();
+    test_negated_guards_and_earlier_traps_refine();
+    test_cached_ranges_follow_mods_and_scopes();
     test_phi_ranges_merge_reachable_arms();
     test_loop_induction_is_bounded_by_its_guard();
     test_unconditional_block_chain();

@@ -68,7 +68,6 @@ inline func tab_lookup(tab: Ref[Hash_Tab], key: uint) -> Ref[byte]? {
         }
         index = (index + 1) & mask
     }
-    require false
 }
 
 func tab_insert(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
@@ -142,7 +141,6 @@ func tab_find(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) -> Ref[Hash_Slot] {
         }
         index = (index + 1) & mask
     }
-    require false
 }
 
 func tab_delete(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
@@ -252,7 +250,6 @@ func index_tab_lookup(tab: Ref[Index_Tab], key: uint) -> uint {
         }
         index = (index + 1) & mask
     }
-    require false
 }
 
 func index_tab_insert(tab: Ref[Index_Tab], key: uint, val: uint) {
@@ -271,7 +268,6 @@ func index_tab_insert(tab: Ref[Index_Tab], key: uint, val: uint) {
         }
         index = (index + 1) & mask
     }
-    require false
 }
 
 func index_tab_reserve(tab: Ref[Index_Tab], more: uint) -> bool {
@@ -326,7 +322,6 @@ func index_tab_find(tab: Ref[Index_Tab], key: uint, val: uint) -> Ref[Index_Slot
         }
         index = (index + 1) & mask
     }
-    require false
 }
 
 func index_tab_delete(tab: Ref[Index_Tab], key: uint, val: uint) {

@@ -59,6 +59,12 @@ enum {
     IR_STRAP_ALL        = 0xf,
 };
 
+typedef struct {
+    uint8_t  kind;
+    uint32_t line;
+    uint32_t column;
+} ir_strap_site_t;
+
 typedef enum : uint8_t {
     IR_SINPUT_VALUE,
     IR_SINPUT_REFERENT,
@@ -149,6 +155,7 @@ typedef struct {
     const ir_summary_t *(*entries)(void *context, ir_summaries_t *summaries,
                                    uint32_t flag);
     bool (*global_reachable)(void *context, const ir_global_t *global);
+    bool defer_trap_proofs;
 } ir_summary_hooks_t;
 
 const ir_sflow_t *ir_summary_flow(const ir_summary_t *summary);
@@ -180,6 +187,9 @@ uint32_t             ir_summary_flags(const ir_summary_t *summary);
 uint8_t              ir_summary_trap_kinds(const ir_summary_t *summary);
 void                 ir_summary_set_trap_kinds(ir_summary_t *summary,
                                                uint8_t kinds);
+uint32_t             ir_summary_trap_site_count(const ir_summary_t *summary);
+const ir_strap_site_t *ir_summary_trap_site_at(const ir_summary_t *summary,
+                                               uint32_t index);
 uint32_t             ir_summary_access_count(const ir_summary_t *summary);
 const ir_saccess_t  *ir_summary_access_at(const ir_summary_t *summary,
                                           uint32_t index);
@@ -211,11 +221,8 @@ ir_summary_t *ir_summary_decode(ir_summaries_t *summaries,
                                 ir_summary_global_fn resolve, void *context);
 bool         ir_summary_call_diverges(ir_summaries_t *summaries,
                                       const ir_instr_t *call);
-uint32_t     ir_dead_code_sites(ir_summaries_t *summaries, ir_func_t *f,
-                                const ir_instr_t **out, uint32_t capacity);
-bool         ir_summary_call_reads_entry(ir_summaries_t *summaries,
-                                         const ir_instr_t *call,
-                                         const ir_splace_t *place);
+bool         ir_summary_place_unseen(ir_summaries_t *summaries,
+                                     const ir_splace_t *place);
 typedef void (*ir_summary_callee_fn)(void *context, const ir_func_t *target,
                                      const ir_summary_t *summary);
 bool         ir_summary_call_callees(ir_summaries_t *summaries,
@@ -224,6 +231,9 @@ bool         ir_summary_call_callees(ir_summaries_t *summaries,
                                      void *context);
 bool         ir_summary_call_pure(ir_summaries_t *summaries,
                                   const ir_instr_t *call);
+bool         ir_summary_call_writes(ir_summaries_t *summaries,
+                                    const ir_func_t *f, ir_places_t *places,
+                                    const ir_instr_t *call, uint32_t place);
 
 enum {
     IR_SEFFECT_TRAPS_SHIFT       = 16,

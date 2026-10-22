@@ -890,6 +890,8 @@ decode_static_value(const uint8_t *data, size_t size, size_t *offset,
         return th_is_nil(type)
             || n00bb_option_type_element(type, &element);
     }
+    case N00BB_STATIC_VALUE_ADDRESS:
+        return false;
     case N00BB_STATIC_VALUE_VARIANT: {
         bool variant = false;
         th_type *shape = interface_static_record_shape(loader, state, type,

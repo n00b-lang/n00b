@@ -255,6 +255,9 @@ static bool writes_root(const option_key_t *key, ir_instr_t *in)
         if (in->dest_kind == IR_DEST_LOCAL && in->dest_local == key->local) {
             return true;
         }
+        if (key->local->mutability != IR_MUT_MUTABLE) {
+            return false;
+        }
         for (uint32_t i = 0; i < in->n_operands; i++) {
             if (ir_operand_local(&in->operands[i]) == key->local
                 && (in->operands[i].kind == IR_OPD_OUT

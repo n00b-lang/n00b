@@ -1,0 +1,20 @@
+func triangle(n: uint) -> uint {
+    var total: uint = 0
+    for i from 0 until 10 {
+        total += i
+    }
+    return total + n
+}
+
+func countdown(limit: int) -> int {
+    var steps: int = 0
+    var at: int = limit
+    while at > 0 {
+        at = at - 1
+        steps = steps + 1
+    }
+    return steps
+}
+
+require triangle(0) == 45
+require countdown(5) == 5

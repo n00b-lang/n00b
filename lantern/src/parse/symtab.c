@@ -166,8 +166,6 @@ parse_symtab_free(parse_symtab_t *st)
             core_free(entry->aliased_by);
             core_free(entry->lifetime.starts);
             core_free(entry->lifetime.ranges);
-            core_free(entry->lifetime.ends);
-            core_free(entry->lifetime.cfg_edges);
             if (entry->namespaced_bindings) {
                 core_dict_t *bindings = entry->namespaced_bindings;
                 core_dict_foreach(bindings, item) {
@@ -855,12 +853,6 @@ parse_sym_set_lifetime(parse_sym_entry_t *symbol,
         lifetime.ranges = symbol->lifetime.ranges;
         lifetime.range_count = symbol->lifetime.range_count;
         lifetime.range_capacity = symbol->lifetime.range_capacity;
-        lifetime.ends = symbol->lifetime.ends;
-        lifetime.end_count = symbol->lifetime.end_count;
-        lifetime.end_capacity = symbol->lifetime.end_capacity;
-        lifetime.cfg_edges = symbol->lifetime.cfg_edges;
-        lifetime.cfg_edge_count = symbol->lifetime.cfg_edge_count;
-        lifetime.cfg_edge_capacity = symbol->lifetime.cfg_edge_capacity;
         symbol->lifetime = lifetime;
     }
 }
@@ -903,42 +895,15 @@ parse_sym_begin_lifetime_range(parse_sym_entry_t *symbol,
     if (!range) return false;
     range->complete = false;
     parse_sym_lifetime_t *lifetime = &symbol->lifetime;
-    for (size_t i = 0; i < lifetime->start_count;) {
+    size_t kept = 0;
+    for (size_t i = 0; i < lifetime->start_count; i++) {
         parse_sym_lifetime_start_t *start = &lifetime->starts[i];
         if (start->phase != phase || start->function != function
-            || start->binding != binding) {
-            i++;
-            continue;
-        }
-        for (size_t j = i + 1; j < lifetime->start_count; j++)
-            lifetime->starts[j - 1] = lifetime->starts[j];
-        lifetime->start_count--;
+            || start->binding != binding)
+            lifetime->starts[kept++] = *start;
     }
-    for (size_t i = 0; i < lifetime->cfg_edge_count;) {
-        parse_sym_lifetime_edge_t *edge = &lifetime->cfg_edges[i];
-        if (edge->phase != phase || edge->function != function
-            || edge->binding != binding) {
-            i++;
-            continue;
-        }
-        for (size_t j = i + 1; j < lifetime->cfg_edge_count; j++)
-            lifetime->cfg_edges[j - 1] = lifetime->cfg_edges[j];
-        lifetime->cfg_edge_count--;
-    }
-    for (size_t i = 0; i < lifetime->end_count;) {
-        parse_sym_lifetime_end_t *end = &lifetime->ends[i];
-        if (end->phase != phase || end->function != function
-            || end->binding != binding) {
-            i++;
-            continue;
-        }
-        for (size_t j = i + 1; j < lifetime->end_count; j++)
-            lifetime->ends[j - 1] = lifetime->ends[j];
-        lifetime->end_count--;
-    }
+    lifetime->start_count = kept;
     range->start_count = 0;
-    range->edge_count = 0;
-    range->end_count = 0;
     return true;
 }
 
@@ -950,8 +915,7 @@ parse_sym_finish_lifetime_range(parse_sym_entry_t *symbol,
     parse_sym_lifetime_range_t *range = ensure_lifetime_range(
         symbol, phase, function, binding);
     if (!range) return false;
-    range->complete = complete && range->start_count != 0
-        && range->edge_count != 0;
+    range->complete = complete && range->start_count != 0;
     return !complete || range->complete;
 }
 
@@ -966,50 +930,6 @@ parse_sym_lifetime_range_at(const parse_sym_entry_t *symbol, size_t index)
 {
     return symbol && index < symbol->lifetime.range_count
         ? &symbol->lifetime.ranges[index] : nullptr;
-}
-
-bool
-parse_sym_set_lifetime_end(parse_sym_entry_t *symbol,
-                           parse_sym_lifetime_end_t end)
-{
-    if (!symbol || !end.function || !end.binding
-        || (end.phase != PARSE_SYM_PHASE_COMPTIME
-            && end.phase != PARSE_SYM_PHASE_RUNTIME)
-        || (end.on_edge
-            ? (end.point || !end.from || !end.to)
-            : (!end.point || end.from || end.to))) return false;
-    parse_sym_lifetime_range_t *range = ensure_lifetime_range(
-        symbol, end.phase, end.function, end.binding);
-    if (!range) return false;
-    parse_sym_lifetime_t *lifetime = &symbol->lifetime;
-    for (size_t i = 0; i < lifetime->end_count; i++) {
-        parse_sym_lifetime_end_t *old = &lifetime->ends[i];
-        if (old->phase == end.phase && old->function == end.function
-            && old->binding == end.binding && old->on_edge == end.on_edge
-            && old->point == end.point && old->from == end.from
-            && old->to == end.to) return true;
-    }
-    void *ends = lifetime->ends;
-    if (!core_list_reserve_raw(&ends, &lifetime->end_capacity,
-                               lifetime->end_count + 1,
-                               sizeof(*lifetime->ends))) return false;
-    lifetime->ends = ends;
-    lifetime->ends[lifetime->end_count++] = end;
-    range->end_count++;
-    return true;
-}
-
-size_t
-parse_sym_lifetime_end_count(const parse_sym_entry_t *symbol)
-{
-    return symbol ? symbol->lifetime.end_count : 0;
-}
-
-const parse_sym_lifetime_end_t *
-parse_sym_lifetime_end_at(const parse_sym_entry_t *symbol, size_t index)
-{
-    return symbol && index < symbol->lifetime.end_count
-        ? &symbol->lifetime.ends[index] : nullptr;
 }
 
 bool
@@ -1050,53 +970,6 @@ parse_sym_lifetime_start_at(const parse_sym_entry_t *symbol, size_t index)
 {
     return symbol && index < symbol->lifetime.start_count
         ? &symbol->lifetime.starts[index] : nullptr;
-}
-
-bool
-parse_sym_set_lifetime_edge(parse_sym_entry_t *symbol,
-                            parse_sym_lifetime_edge_t edge)
-{
-    if (!symbol || !edge.function || !edge.binding || !edge.from
-        || (edge.phase != PARSE_SYM_PHASE_COMPTIME
-            && edge.phase != PARSE_SYM_PHASE_RUNTIME)
-        || edge.direct > PARSE_SYM_LIVENESS_LIVE
-        || edge.aliases > PARSE_SYM_LIVENESS_LIVE
-        || (edge.is_exit ? edge.to != nullptr : edge.to == nullptr))
-        return false;
-    parse_sym_lifetime_range_t *range = ensure_lifetime_range(
-        symbol, edge.phase, edge.function, edge.binding);
-    if (!range) return false;
-    parse_sym_lifetime_t *lifetime = &symbol->lifetime;
-    for (size_t i = 0; i < lifetime->cfg_edge_count; i++) {
-        parse_sym_lifetime_edge_t *old = &lifetime->cfg_edges[i];
-        if (old->function == edge.function && old->binding == edge.binding
-            && old->from == edge.from && old->to == edge.to
-            && old->phase == edge.phase && old->is_exit == edge.is_exit) {
-            *old = edge;
-            return true;
-        }
-    }
-    void *edges = lifetime->cfg_edges;
-    if (!core_list_reserve_raw(&edges, &lifetime->cfg_edge_capacity,
-                               lifetime->cfg_edge_count + 1,
-                               sizeof(*lifetime->cfg_edges))) return false;
-    lifetime->cfg_edges = edges;
-    lifetime->cfg_edges[lifetime->cfg_edge_count++] = edge;
-    range->edge_count++;
-    return true;
-}
-
-size_t
-parse_sym_lifetime_edge_count(const parse_sym_entry_t *symbol)
-{
-    return symbol ? symbol->lifetime.cfg_edge_count : 0;
-}
-
-const parse_sym_lifetime_edge_t *
-parse_sym_lifetime_edge_at(const parse_sym_entry_t *symbol, size_t index)
-{
-    return symbol && index < symbol->lifetime.cfg_edge_count
-        ? &symbol->lifetime.cfg_edges[index] : nullptr;
 }
 
 static parse_sym_alias_t *

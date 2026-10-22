@@ -123,7 +123,6 @@ inline func index_insert_unique_ref(index: Ref[Hash_Index], hash: u128,
         traveled += 1
     }
     require false
-    return false
 }
 
 inline func index_insert_unique(modify self: Hash_Index, hash: u128,

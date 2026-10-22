@@ -7,13 +7,30 @@
 #include "lib/buffer.h"
 
 static core_buffer_t baked_capture;
+static bool baked_capture_read;
+static bool baked_capture_full;
 
 void
-n00bb_set_baked_capture(const uint8_t *data, size_t size)
+n00bb_set_baked_capture(const uint8_t *data, size_t size, bool full)
 {
     core_buffer_release(&baked_capture);
+    baked_capture_read = true;
+    baked_capture_full = full;
     if (data && size)
         core_buffer_append(&baked_capture, (const char *)data, size);
+}
+
+bool
+n00bb_full_build_time_stage_ran(void)
+{
+    return baked_capture_read && baked_capture_full;
+}
+
+bool
+n00bb_literal_values_captured(void)
+{
+    return baked_capture_read
+        && (!baked_capture_full || baked_capture.byte_len != 0);
 }
 
 bool
@@ -235,6 +252,12 @@ n00bb_baked_graph_load(n00bb_link_analysis_t *analysis)
         ok = read_slot(&reader, node_count, &slot);
         if (ok) core_list_push(analysis->static_graph_slots, slot);
     }
+    core_dict_free(&analysis->baked_root_index);
+    core_dict_init_string(&analysis->baked_root_index);
+    for (size_t i = 0; ok && i < analysis->baked_roots.len; i++)
+        core_dict_put(&analysis->baked_root_index,
+                      &analysis->baked_roots.data[i].identifier,
+                      &analysis->baked_roots.data[i].identifier);
     return ok && reader.offset == reader.size;
 }
 
@@ -242,13 +265,13 @@ core_string_t
 n00bb_baked_root_identifier(const n00bb_link_analysis_t *analysis,
                             core_string_t module, core_string_t name)
 {
-    for (size_t i = 0; analysis && i < analysis->baked_roots.len; i++) {
-        core_string_t identifier = analysis->baked_roots.data[i].identifier;
-        if (identifier.u8_bytes == module.u8_bytes + 1 + name.u8_bytes
-            && core_string_starts_with(identifier, module)
-            && identifier.data[module.u8_bytes] == ':'
-            && core_string_ends_with(identifier, name))
-            return identifier;
-    }
-    return (core_string_t){};
+    if (!analysis || !analysis->baked_roots.len) return (core_string_t){};
+    core_buffer_t key = {0};
+    core_buffer_printf(&key, "%.*s:%.*s", (int)module.u8_bytes, module.data,
+                       (int)name.u8_bytes, name.data);
+    core_string_t text = core_buffer_string(&key);
+    const core_string_t *found = core_dict_get(
+        (core_dict_t *)&analysis->baked_root_index, &text, nullptr);
+    core_buffer_release(&key);
+    return found ? *found : (core_string_t){};
 }

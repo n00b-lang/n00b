@@ -9,6 +9,7 @@ typedef enum : uint8_t {
     IR_MEMDEF_STORE,
     IR_MEMDEF_CALL,
     IR_MEMDEF_PHI,
+    IR_MEMDEF_ELEMENT_PHI,
 } ir_memdef_kind_t;
 
 typedef struct {
@@ -16,6 +17,9 @@ typedef struct {
     ir_instr_t        *instr;
     const ir_access_t *access;
     ir_block_t        *block;
+    uint32_t           element_base;
+    const ir_value_t  *element_index;
+    uint32_t           memory_phi;
 } ir_memdef_t;
 
 typedef struct ir_memssa_t ir_memssa_t;
@@ -54,5 +58,18 @@ uint32_t           ir_memssa_phi_count(const ir_memssa_t *memssa,
                                        uint32_t id);
 uint32_t           ir_memssa_phi_incoming(const ir_memssa_t *memssa,
                                           uint32_t id, uint32_t index);
+
+bool     ir_memssa_element_of(const ir_instr_t *in, const ir_value_t **base,
+                              const ir_value_t **index);
+uint32_t ir_memssa_access_of(const ir_memssa_t *memssa, const ir_instr_t *in,
+                             ir_access_kind_t kind);
+uint32_t ir_memssa_element_link_count(const ir_memssa_t *memssa,
+                                      uint32_t load_access);
+uint32_t ir_memssa_element_link(const ir_memssa_t *memssa,
+                                uint32_t load_access, uint32_t index);
+ir_element_relation_t ir_memssa_element_relation(const ir_memssa_t *memssa,
+                                                 uint32_t def,
+                                                 uint32_t load_access);
+bool     ir_memssa_verify(ir_memssa_t *memssa);
 
 #endif

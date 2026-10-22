@@ -401,7 +401,6 @@ func allocate_in_blocks_slow(mutator: Ref[internal.gc.core.Mutator],
             internal.gc.handshake.wait_for_cycle(heap)
         }
     }
-    return nil
 }
 
 inline func allocate_in_blocks(mutator: Ref[internal.gc.core.Mutator],
@@ -475,7 +474,6 @@ func allocate_large(mutator: Ref[internal.gc.core.Mutator],
         internal.gc.heap.unlock(heap)
         return result
     }
-    return nil
 }
 
 inline func allocate_runtime_known_on_mutator_into(mutator: Ref[internal.gc.core.Mutator],

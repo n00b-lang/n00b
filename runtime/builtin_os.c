@@ -2,6 +2,7 @@
 
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdlib.h>
 
 #if defined(__linux__)
 #include "builtin_os_syscall.h"
@@ -577,13 +578,39 @@ static int64_t os_pipe_raw(int32_t fds[2])
 #error "builtin/os requires macOS, Linux, or Windows"
 #endif
 
+typedef struct {
+    n00b_os_thread_entry entry;
+    void *argument;
+} os_thread_packet_t;
+
+static void (*_Atomic thread_start_hook)(void);
+
+void n00b_os_set_thread_start_hook(void (*hook)(void))
+{
+    atomic_store(&thread_start_hook, hook);
+}
+
+static void *os_thread_begin(void *raw)
+{
+    os_thread_packet_t packet = *(os_thread_packet_t *)raw;
+    free(raw);
+    void (*hook)(void) = atomic_load(&thread_start_hook);
+    if (hook) hook();
+    return packet.entry(packet.argument);
+}
+
 #if defined(_WIN32)
 
-static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
+static DWORD WINAPI os_thread_begin_windows(LPVOID raw)
 {
-    HANDLE thread = CreateThread(NULL, 0,
-                                 (LPTHREAD_START_ROUTINE)(void (*)(void))entry,
-                                 argument, 0, NULL);
+    os_thread_begin(raw);
+    return 0;
+}
+
+static int32_t os_thread_start_raw(os_thread_packet_t *packet)
+{
+    HANDLE thread = CreateThread(NULL, 0, os_thread_begin_windows, packet, 0,
+                                 NULL);
     if (!thread) return -1;
     CloseHandle(thread);
     return 0;
@@ -593,14 +620,16 @@ static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
 
 #include <pthread.h>
 
-static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
+static int32_t os_thread_start_raw(os_thread_packet_t *packet)
 {
     pthread_attr_t attributes;
     pthread_t thread;
     if (pthread_attr_init(&attributes)) return -1;
     int result = pthread_attr_setdetachstate(&attributes,
                                              PTHREAD_CREATE_DETACHED);
-    if (!result) result = pthread_create(&thread, &attributes, entry, argument);
+    if (!result)
+        result = pthread_create(&thread, &attributes, os_thread_begin,
+                                packet);
     pthread_attr_destroy(&attributes);
     return result ? -1 : 0;
 }
@@ -609,7 +638,12 @@ static int32_t os_thread_start_raw(n00b_os_thread_entry entry, void *argument)
 
 int32_t n00b_os_thread_start(n00b_os_thread_entry entry, void *argument)
 {
-    return entry ? os_thread_start_raw(entry, argument) : -1;
+    os_thread_packet_t *packet = entry ? malloc(sizeof(*packet)) : NULL;
+    if (!packet) return -1;
+    *packet = (os_thread_packet_t){.entry = entry, .argument = argument};
+    if (!os_thread_start_raw(packet)) return 0;
+    free(packet);
+    return -1;
 }
 
 int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode)

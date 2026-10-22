@@ -11,6 +11,9 @@ enum {
     MACH_SECTION_BYTES = 80,
     MACH_SYMTAB_COMMAND_BYTES = 24,
     MACH_DYSYMTAB_COMMAND_BYTES = 80,
+    MACH_BUILD_VERSION_COMMAND_BYTES = 24,
+    MACH_PLATFORM_MACOS = 1,
+    MACH_MINIMUM_MACOS = 0x000b0000,
     MACH_SYMBOL_BYTES = 16,
     MACH_RELOCATION_BYTES = 8,
 };
@@ -57,6 +60,9 @@ bool core_object_emit_macho(const core_target_desc_t *target,
         !core_object_size_add(segment_command, MACH_SYMTAB_COMMAND_BYTES,
                               &command_bytes) ||
         !core_object_size_add(command_bytes, MACH_DYSYMTAB_COMMAND_BYTES,
+                              &command_bytes) ||
+        !core_object_size_add(command_bytes,
+                              MACH_BUILD_VERSION_COMMAND_BYTES,
                               &command_bytes) ||
         command_bytes > UINT32_MAX ||
         !core_object_size_add(MACH_HEADER_BYTES, command_bytes, &data_base))
@@ -113,7 +119,7 @@ bool core_object_emit_macho(const core_target_desc_t *target,
     core_le_store_u32(image + 4, 0x0100000c);
     core_le_store_u32(image + 8, 0);
     core_le_store_u32(image + 12, 1);
-    core_le_store_u32(image + 16, 3);
+    core_le_store_u32(image + 16, 4);
     core_le_store_u32(image + 20, (uint32_t)command_bytes);
     uint8_t *segment = image + MACH_HEADER_BYTES;
     core_le_store_u32(segment, 0x19);
@@ -166,6 +172,11 @@ bool core_object_emit_macho(const core_target_desc_t *target,
                       (uint32_t)(local_count + external_count));
     core_le_store_u32(dysymtab + 28,
                       (uint32_t)(symbol_count - local_count - external_count));
+    uint8_t *build_version = dysymtab + MACH_DYSYMTAB_COMMAND_BYTES;
+    core_le_store_u32(build_version, 0x32);
+    core_le_store_u32(build_version + 4, MACH_BUILD_VERSION_COMMAND_BYTES);
+    core_le_store_u32(build_version + 8, MACH_PLATFORM_MACOS);
+    core_le_store_u32(build_version + 12, MACH_MINIMUM_MACOS);
 
     uint32_t local_next = 0, external_next = (uint32_t)local_count;
     uint32_t undefined_next = (uint32_t)(local_count + external_count);

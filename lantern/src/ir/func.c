@@ -1664,6 +1664,27 @@ bool ir_instr_set_dest(ir_instr_t *in, core_string_t name, th_type *type)
     return address_of_set_alias(in);
 }
 
+bool ir_instr_set_fresh_dest(ir_instr_t *in, const char *prefix,
+                             th_type *type)
+{
+    if (!in || !in->block || !prefix) {
+        return false;
+    }
+
+    for (uint32_t attempt = 0;; attempt++) {
+        core_buffer_t name = {0};
+        core_buffer_printf(&name, "%s_%u_%u_%u", prefix, in->block->index,
+                           in->index, attempt);
+        core_string_t text  = core_buffer_string(&name);
+        bool          taken = ir_value_find(in->block->owner, text) != nullptr;
+        bool          bound = !taken && ir_instr_set_dest(in, text, type);
+        core_buffer_release(&name);
+        if (!taken) {
+            return bound;
+        }
+    }
+}
+
 bool ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l)
 {
     if (!in || !l

@@ -375,10 +375,11 @@ struct writ_gen_n00b_request_t @size(64) @align(8) {
     shim_prefix: writ_str_t @32
     type_namespace: writ_str_t @48
 }
-struct writ_n00b_extern_t @size(48) @align(8) {
+struct writ_n00b_extern_t @size(56) @align(8) {
     name: writ_str_t @0
     symbol: writ_str_t @16
     signature: writ_str_t @32
+    pure: bool @48
 }
 struct writ_n00b_export_t @size(32) @align(8) {
     function: writ_str_t @0

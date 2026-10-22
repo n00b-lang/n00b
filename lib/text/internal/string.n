@@ -17,28 +17,6 @@ private func crlf_pairs(s: string, len: u64) -> u64 {
     return n
 }
 
-private func char_count_utf8(s: string, len: u64) -> u64 {
-    var n: u64 = 0
-    var i: u64 = 0
-    while i < len {
-        if i + 8 <= len {
-            var w: u64 = 0
-            for k: u64 from 0 until 8 {
-                w = w | (cast[u64] byte_at(s, i + k) << (k * 8))
-            }
-            if utf8_word_is_ascii(w) {
-                n += 8
-                i += 8
-                continue
-            }
-        }
-        if (byte_at(s, i) & 0xc0) != 0x80 {
-            n += 1
-        }
-        i += 1
-    }
-    return n
-}
 
 private func next_char_byte(s: string, len: u64, at: u64) -> u64 {
     var i: u64 = at
@@ -98,7 +76,7 @@ private func units_between(s: string, unit: Index_Unit, since: u64,
         return upto - since
     }
     if enc == Str_Encoding.utf8 and unit == Index_Unit.char {
-        return char_count_utf8(byte_slice(s, cast[int] since, cast[int] upto),
+        return utf8_char_count(byte_slice(s, cast[int] since, cast[int] upto),
                                upto - since)
     }
     var i: u64 = since
@@ -180,7 +158,7 @@ func unit_count(s: string, unit: Index_Unit) -> u64 {
         return len - crlf_pairs(s, len)
     }
     if unit == Index_Unit.char {
-        return char_count_utf8(s, len)
+        return utf8_char_count(s, len)
     }
     return unicode.grapheme_count(s)
 }
@@ -257,7 +235,7 @@ func byte_to_unit(s: string, unit: Index_Unit, at: u64) -> u64 {
         return b - crlf_pairs(s, b)
     }
     if unit == Index_Unit.char {
-        return char_count_utf8(s, b)
+        return utf8_char_count(s, b)
     }
     var it: unicode.Break_Iter = unicode.grapheme_iter(s)
     var k: u64 = 0
@@ -274,9 +252,6 @@ func byte_to_unit(s: string, unit: Index_Unit, at: u64) -> u64 {
     return k
 }
 
-func len(self: string, unit: Index_Unit = Index_Unit.char) -> uint {
-    return unit_count(text(self), unit)
-}
 
 private func normalize(n: i64, count: u64) -> i64 {
     if n < 0 {

@@ -1,0 +1,381 @@
+import internal.threads
+import internal.clock
+
+const mutex_unlocked: u32 = 0
+const mutex_locked:   u32 = 1
+const spin_limit:     u32 = 16
+const wait_slice_ns:  uint = 10_000
+
+const rw_writer:      u32 = 0x8000_0000
+const rw_readers:     u32 = 0x1fff_ffff
+const rw_records:     uint = 16
+
+public record Mutex {
+    state:       Atomic[u32]
+    should_wake: Atomic[u32]
+    owner:       Atomic[u64]
+    nesting:     u32
+}
+
+public record Condition {
+    mutex:      Mutex
+    epoch:      Atomic[u32]
+    waiters:    Atomic[u32]
+    wake_slots: Atomic[u32]
+}
+
+public record Rw_Lock {
+    state:        Atomic[u32]
+    owner:        Atomic[u64]
+    parked:       Atomic[u32]
+    nonrecursive: bool
+}
+
+thread var held_rw: Array[uint][rw_records] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+thread var held_total: Array[uint][rw_records] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+thread var held_write: Array[uint][rw_records] =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+thread var held_reader: Array[bool][rw_records] =
+    [false, false, false, false, false, false, false, false,
+     false, false, false, false, false, false, false, false]
+
+func self_tag() -> u64 {
+    return internal.threads.thread_id() + 1
+}
+
+func futex_park(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint) {
+    __gc_enter_blocking()
+    internal.threads.futex_wait(word, expected, timeout_ns)
+    __gc_leave_blocking()
+}
+
+func mutex_owned(mutex: Ref[Mutex]) -> bool {
+    return __atomic_load(ref mutex.owner) == self_tag()
+}
+
+func mutex_fast(mutex: Ref[Mutex], me: u64) -> bool {
+    if __atomic_load(ref mutex.owner) == me {
+        mutex.nesting += 1
+        return true
+    }
+    var spins: u32 = 0
+    while spins < spin_limit {
+        if __atomic_fetch_or(ref mutex.state, mutex_locked) == mutex_unlocked {
+            __atomic_store(ref mutex.owner, me)
+            return true
+        }
+        internal.threads.cpu_relax()
+        spins += 1
+    }
+    return false
+}
+
+public func mutex_lock(mutex: Ref[Mutex]) {
+    let me: u64 = self_tag()
+    if mutex_fast(mutex, me) {
+        return
+    }
+    __atomic_fetch_add(ref mutex.should_wake, 1)
+    while __atomic_fetch_or(ref mutex.state, mutex_locked) != mutex_unlocked {
+        futex_park(ref mutex.state, mutex_locked, wait_slice_ns)
+    }
+    __atomic_fetch_sub(ref mutex.should_wake, 1)
+    __atomic_store(ref mutex.owner, me)
+}
+
+public func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
+                          -> bool {
+    let me: u64 = self_tag()
+    if mutex_fast(mutex, me) {
+        return true
+    }
+    var now: u64 = internal.clock.now_ns()
+    let deadline: u64 = now + timeout_ns
+    while now < deadline {
+        futex_park(ref mutex.state, mutex_locked, deadline - now)
+        if mutex_fast(mutex, me) {
+            return true
+        }
+        now = internal.clock.now_ns()
+    }
+    return false
+}
+
+public func mutex_unlock(mutex: Ref[Mutex]) {
+    require mutex_owned(mutex)
+    if mutex.nesting != 0 {
+        mutex.nesting -= 1
+        return
+    }
+    __atomic_store(ref mutex.owner, 0)
+    __atomic_store(ref mutex.state, mutex_unlocked)
+    if __atomic_load(ref mutex.should_wake) != 0 {
+        internal.threads.futex_wake_all(ref mutex.state)
+    }
+}
+
+public func condition_lock(cv: Ref[Condition]) {
+    if mutex_owned(ref cv.mutex) {
+        return
+    }
+    mutex_lock(ref cv.mutex)
+}
+
+public func condition_unlock(cv: Ref[Condition]) {
+    mutex_unlock(ref cv.mutex)
+}
+
+func condition_leave(cv: Ref[Condition], unlock: bool) {
+    let waiters: u32 = __atomic_fetch_sub(ref cv.waiters, 1) - 1
+    if __atomic_load(ref cv.wake_slots) > waiters {
+        __atomic_store(ref cv.wake_slots, waiters)
+    }
+    if unlock {
+        condition_unlock(cv)
+    }
+}
+
+public func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
+                           unlock: bool = true) -> bool {
+    var deadline: u64 = 0
+    if timeout_ns != 0 {
+        deadline = internal.clock.now_ns() + timeout_ns
+    }
+    condition_lock(cv)
+    var seen: u32 = __atomic_load(ref cv.epoch)
+    __atomic_fetch_add(ref cv.waiters, 1)
+    condition_unlock(cv)
+    while true {
+        var remaining: u64 = 0
+        if deadline != 0 {
+            let now: u64 = internal.clock.now_ns()
+            if now >= deadline {
+                condition_lock(cv)
+                condition_leave(cv, unlock)
+                return false
+            }
+            remaining = deadline - now
+        }
+        futex_park(ref cv.epoch, seen, remaining)
+        if __atomic_load(ref cv.epoch) == seen {
+            continue
+        }
+        condition_lock(cv)
+        if __atomic_load(ref cv.wake_slots) != 0 {
+            __atomic_fetch_sub(ref cv.wake_slots, 1)
+            condition_leave(cv, unlock)
+            return true
+        }
+        seen = __atomic_load(ref cv.epoch)
+        condition_unlock(cv)
+    }
+}
+
+public func condition_notify(cv: Ref[Condition], all: bool = false,
+                             max: u32 = 1, unlock: bool = false) {
+    condition_lock(cv)
+    let waiters: u32 = __atomic_load(ref cv.waiters)
+    if waiters != 0 {
+        let slots: u32 = __atomic_load(ref cv.wake_slots)
+        var want: u32 = max
+        if all {
+            want = waiters
+        }
+        if want > waiters - slots {
+            want = waiters - slots
+        }
+        __atomic_store(ref cv.wake_slots, slots + want)
+        __atomic_fetch_add(ref cv.epoch, 1)
+        internal.threads.futex_wake_all(ref cv.epoch)
+    }
+    if unlock {
+        condition_unlock(cv)
+    }
+}
+
+public func rw_lock_init(lock: Ref[Rw_Lock], recursive: bool = true) {
+    __atomic_store(ref lock.state, 0)
+    __atomic_store(ref lock.owner, 0)
+    __atomic_store(ref lock.parked, 0)
+    lock.nonrecursive = !recursive
+}
+
+func rw_backoff(lock: Ref[Rw_Lock], seen: u32, round: u32) {
+    if round < spin_limit {
+        internal.threads.cpu_relax()
+        return
+    }
+    __atomic_fetch_add(ref lock.parked, 1)
+    futex_park(ref lock.state, seen, wait_slice_ns)
+    __atomic_fetch_sub(ref lock.parked, 1)
+}
+
+func rw_wake(lock: Ref[Rw_Lock]) {
+    if __atomic_load(ref lock.parked) != 0 {
+        internal.threads.futex_wake_all(ref lock.state)
+    }
+}
+
+func rw_find(lock: Ref[Rw_Lock]) -> uint {
+    let address: uint = __abi_ref_address(lock)
+    var slot: uint = 0
+    while slot < rw_records {
+        if held_rw[slot] == address {
+            return slot
+        }
+        slot += 1
+    }
+    return rw_records
+}
+
+func rw_record(lock: Ref[Rw_Lock], write: bool) {
+    var slot: uint = 0
+    while slot < rw_records and held_rw[slot] != 0 {
+        slot += 1
+    }
+    require slot < rw_records
+    held_rw[slot] = __abi_ref_address(lock)
+    held_total[slot] = 1
+    held_write[slot] = 0
+    if write {
+        held_write[slot] = 1
+    }
+    held_reader[slot] = !write
+}
+
+func rw_readers_adjust(lock: Ref[Rw_Lock], up: bool) {
+    while true {
+        let current: u32 = __atomic_load(ref lock.state)
+        let readers: u32 = current & rw_readers
+        var wanted: u32 = current
+        if up {
+            require readers != rw_readers
+            wanted = current + 1
+        }
+        else {
+            require readers != 0
+            wanted = current - 1
+        }
+        if __atomic_compare_exchange(ref lock.state, current, wanted) {
+            return
+        }
+    }
+}
+
+func rw_reenter(lock: Ref[Rw_Lock], write: bool) -> u32 {
+    let slot: uint = rw_find(lock)
+    if slot == rw_records {
+        return 0
+    }
+    require !lock.nonrecursive
+    if write and held_write[slot] == 0 {
+        return 1
+    }
+    held_total[slot] += 1
+    if write or held_write[slot] != 0 {
+        held_write[slot] += 1
+        return 2
+    }
+    return 1
+}
+
+public func rw_read_lock(lock: Ref[Rw_Lock]) {
+    if rw_reenter(lock, false) != 0 {
+        return
+    }
+    var round: u32 = 0
+    while true {
+        let current: u32 = __atomic_load(ref lock.state)
+        if current & rw_writer != 0 {
+            rw_backoff(lock, current, round)
+            round += 1
+            continue
+        }
+        require current & rw_readers != rw_readers
+        if __atomic_compare_exchange(ref lock.state, current, current + 1) {
+            rw_record(lock, false)
+            return
+        }
+    }
+}
+
+public func rw_try_write_lock(lock: Ref[Rw_Lock]) -> bool {
+    let held: u32 = rw_reenter(lock, true)
+    if held == 2 {
+        return true
+    }
+    let upgrading: bool = held == 1
+    if upgrading {
+        rw_readers_adjust(lock, false)
+    }
+    while true {
+        let current: u32 = __atomic_load(ref lock.state)
+        if current & rw_writer != 0 {
+            if upgrading {
+                rw_readers_adjust(lock, true)
+            }
+            return false
+        }
+        if __atomic_compare_exchange(ref lock.state, current,
+                                     current | rw_writer) {
+            break
+        }
+    }
+    __atomic_store(ref lock.owner, self_tag())
+    var round: u32 = 0
+    while true {
+        let current: u32 = __atomic_load(ref lock.state)
+        if current & rw_readers == 0 {
+            break
+        }
+        rw_backoff(lock, current, round)
+        round += 1
+    }
+    if upgrading {
+        rw_readers_adjust(lock, true)
+        let slot: uint = rw_find(lock)
+        held_total[slot] += 1
+        held_write[slot] += 1
+    }
+    else {
+        rw_record(lock, true)
+    }
+    return true
+}
+
+public func rw_write_lock(lock: Ref[Rw_Lock]) {
+    var round: u32 = 0
+    while !rw_try_write_lock(lock) {
+        rw_backoff(lock, __atomic_load(ref lock.state), round)
+        round += 1
+    }
+}
+
+public func rw_unlock(lock: Ref[Rw_Lock], all: bool = false) {
+    let slot: uint = rw_find(lock)
+    require slot < rw_records
+    if all {
+        held_write[slot] = 0
+        held_total[slot] = 0
+    }
+    else {
+        if held_write[slot] != 0 {
+            held_write[slot] -= 1
+        }
+        held_total[slot] -= 1
+        if held_total[slot] != 0 {
+            return
+        }
+    }
+    held_rw[slot] = 0
+    if __atomic_load(ref lock.owner) == self_tag() {
+        __atomic_store(ref lock.owner, 0)
+        __atomic_fetch_and(ref lock.state, ~rw_writer)
+    }
+    if held_reader[slot] {
+        rw_readers_adjust(lock, false)
+    }
+    rw_wake(lock)
+}

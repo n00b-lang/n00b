@@ -9,12 +9,12 @@
 #include "lib/link_unit.h"
 #include "lib/list.h"
 #include "lib/diagnostic.h"
-#include "logic/clpfd_store.h"
 #include "parse/annot_walk.h"
 #include "parse/tree_util.h"
 #include "parse/pwz.h"
 #include "scanner/token_stream.h"
 #include "ir/libir.h"
+#include "ir/interval.h"
 #include "ir/summary.h"
 #include "th/environment.h"
 #include "builtin_types.h"
@@ -231,6 +231,7 @@ typedef enum {
     N00BB_STATIC_VALUE_RECORD,
     N00BB_STATIC_VALUE_NIL,
     N00BB_STATIC_VALUE_VARIANT,
+    N00BB_STATIC_VALUE_ADDRESS,
 } n00bb_static_value_kind_t;
 
 typedef struct n00bb_static_value {
@@ -248,17 +249,17 @@ typedef struct n00bb_static_value {
             core_string_t arm;
             struct n00bb_static_value *payload;
         } variant;
+        parse_sym_entry_t *address;
     } as;
 } n00bb_static_value_t;
 bool n00bb_integer_type_promotes_to(th_type *source, th_type *target);
+th_type *n00bb_common_integer_type(th_ctx *types, th_type *left,
+                                   th_type *right);
 uint64_t n00bb_shift_receiver_width(th_type *type);
 bool n00bb_bitwise_type(th_type *type);
 bool n00bb_unsigned_shift_count_type(th_type *type);
 th_type *n00bb_shift_count_type(th_ctx *types, th_type *receiver);
-bool n00bb_integer_interval_type(th_type *type, int64_t *minimum,
-                                 int64_t *maximum);
-bool n00bb_integer_interval_fits_type(th_type *type, int64_t minimum,
-                                      int64_t maximum);
+bool n00bb_integer_range_fits_type(th_type *type, ir_interval_t range);
 bool n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal);
 parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
 parse_sym_entry_t *simple_expression_symbol(parse_tree_t *node);
@@ -335,11 +336,12 @@ typedef struct {
     n00bb_iteration_plan_t *iteration_plan;
     n00bb_litmod_site_t *literal_site;
     parse_tree_t *record_literal_origin;
+    ir_interval_t integer_range;
+    bool integer_range_known;
     size_t first_link_use_site;
     size_t last_link_use_site;
     bool static_literal;
     bool selected_when_body;
-    bool proven_above_int64;
     bool unsigned_literal;
     bool shape_literal_pending;
     bool shape_literal_resolved;
@@ -353,15 +355,19 @@ core_list_decl(parse_scope_ptr_t);
 
 typedef struct {
     parse_sym_entry_t *symbol;
-    int64_t minimum;
-    int64_t maximum;
-    bool proven_above_int64;
+    ir_interval_t range;
 } n00bb_symbol_range_t;
+core_list_decl(n00bb_symbol_range_t);
+
+typedef struct {
+    core_list_t(n00bb_symbol_range_t) entries;
+    core_dict_t index;
+} n00bb_range_table_t;
 
 typedef struct {
     parse_tree_t *node;
-    core_dict_t incoming;
-    core_dict_t merged;
+    n00bb_range_table_t incoming;
+    n00bb_range_table_t merged;
     bool has_branch;
     bool has_else;
     bool branch_active;
@@ -446,11 +452,36 @@ typedef struct {
 } n00bb_integer_seed_t;
 core_list_decl(n00bb_integer_seed_t);
 
+typedef enum : uint8_t {
+    N00BB_INTEGER_TERM_NONE,
+    N00BB_INTEGER_TERM_TYPE,
+    N00BB_INTEGER_TERM_SYMBOL,
+    N00BB_INTEGER_TERM_NODE,
+} n00bb_integer_term_kind_t;
+
+typedef struct {
+    n00bb_integer_term_kind_t kind;
+    th_type *type;
+    void *key;
+} n00bb_integer_term_t;
+
+typedef struct {
+    parse_sym_entry_t *symbol;
+    n00bb_integer_term_t bound;
+    ir_op_t op;
+} n00bb_integer_guard_t;
+core_list_decl(n00bb_integer_guard_t);
+
 typedef struct {
     parse_tree_t *site;
-    th_type *result;
-    th_type *left;
-    th_type *right;
+    n00bb_integer_term_t result;
+    n00bb_integer_term_t left;
+    n00bb_integer_term_t right;
+    parse_sym_entry_t *left_symbol;
+    parse_sym_entry_t *right_symbol;
+    uint32_t guard_start;
+    uint32_t guard_count;
+    parse_tree_t *loop;
     ir_op_t op;
 } n00bb_integer_edge_t;
 core_list_decl(n00bb_integer_edge_t);
@@ -547,6 +578,12 @@ typedef struct {
 core_list_decl(n00bb_literal_constant_t);
 
 typedef struct {
+    parse_tree_t *literal;
+    ir_global_t *global;
+} n00bb_literal_backed_const_t;
+core_list_decl(n00bb_literal_backed_const_t);
+
+typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
@@ -560,10 +597,17 @@ typedef struct {
     core_list_t(n00bb_link_use_site_t) link_use_sites;
     core_list_t(n00bb_dispatch_record_t) dispatch_records;
     bool needs_build_time_capture;
+    bool needs_literal_capture;
+    core_list_t(n00bb_literal_backed_const_t) literal_backed_consts;
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_integer_seed_t) integer_seeds;
     core_list_t(n00bb_integer_edge_t) integer_edges;
+    core_list_t(n00bb_integer_guard_t) integer_guards;
     core_dict_t integer_edge_sites;
+    core_dict_t integer_range_nodes;
+    core_dict_t integer_tracked_symbols;
+    core_list_t(parse_tree_ptr_t) integer_shift_sites;
+    core_dict_t integer_shift_seen;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
@@ -574,13 +618,18 @@ typedef struct {
     th_ctx *types;
     ir_module_t *ir_module;
     core_arena_t semantic_values;
-    core_csp_store_t *integer_range_store;
     parse_tree_t *integer_range_root;
-    core_dict_t integer_range_variables;
-    core_dict_t integer_symbol_ranges;
+    core_dict_t integer_range_references;
+    n00bb_range_table_t integer_symbol_ranges;
     core_dict_t integer_range_invalidated_symbols;
+    core_dict_t integer_solved_symbols;
+    core_dict_t integer_boundary_sites;
+    core_dict_t integer_narrowing_sites;
+    core_dict_t integer_reference_taken;
+    parse_grammar_t *grammar;
     core_list_t(n00bb_range_branch_frame_t) integer_range_branches;
     bool integer_range_use_symbol_facts;
+    bool integer_range_roles_ready;
     bool inference_finalized;
     bool interface_module;
     bool import_failure_reported;
@@ -822,7 +871,7 @@ void record_function_exit_fact(parse_grammar_t *grammar,
                                n00bb_tu_state_t *state);
 bool n00bb_constrain_integer_fit(n00bb_tu_state_t *state, th_type *type,
                                  th_type *source, bool range_known,
-                                 int64_t minimum, int64_t maximum);
+                                 ir_interval_t range);
 bool n00bb_cache_contextual_integer(parse_grammar_t *grammar,
                                     n00bb_tu_state_t *state,
                                     parse_tree_t *node);
@@ -850,19 +899,59 @@ bool cache_return_source_fact(parse_grammar_t *grammar, parse_tree_t *node,
 bool cache_alias_edges(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_tu_state_t *state);
 
-bool n00bb_current_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
-                                 int64_t *minimum, int64_t *maximum);
+bool n00bb_current_integer_range(parse_tree_t *node, ir_interval_t *range);
+bool n00bb_set_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
+                             ir_interval_t range);
+void n00bb_settle_symbol_range(n00bb_tu_state_t *state, parse_tree_t *node,
+                               ir_interval_t range);
+void n00bb_integer_boundary(n00bb_tu_state_t *state, parse_tree_t *node,
+                            th_type *target);
+void n00bb_report_integer_misfit(n00bb_tu_state_t *state, parse_tree_t *node,
+                                 core_string_t noun, ir_interval_t range,
+                                 th_type *target);
+void n00bb_report_integer_narrowing(n00bb_tu_state_t *state,
+                                    parse_tree_t *node, ir_interval_t range,
+                                    th_type *target);
+bool n00bb_integer_narrowing_reported(n00bb_tu_state_t *state, uint32_t line,
+                                      uint32_t column);
+bool n00bb_integer_point(parse_tree_t *node, int64_t *value);
+bool n00bb_type_interval(th_type *type, ir_interval_t *range);
+ir_op_t n00bb_comparison_op(core_string_t op);
+bool n00bb_function_node(parse_grammar_t *grammar, parse_tree_t *node);
+parse_tree_t *n00bb_enclosing_function_node(parse_grammar_t *grammar,
+                                            parse_tree_t *node);
+#define N00BB_INTEGER_WIDTHS 5
+th_type *n00bb_integer_type_of_width(th_ctx *types, uint64_t width,
+                                     bool is_signed);
+parse_sym_entry_t *n00bb_range_variable_of(parse_tree_t *node);
 bool n00bb_integer_representation(th_type *type, uint64_t *width,
                                   bool *is_signed);
 th_type *n00bb_integer_literal_variable(n00bb_tu_state_t *state,
                                         parse_tree_t *site, ir_lit_t literal);
 void n00bb_register_integer_class(n00bb_tu_state_t *state);
 bool n00bb_open_integer(th_type *type);
+th_type *n00bb_integer_variable(n00bb_tu_state_t *state, uint8_t flags);
+n00bb_integer_term_t n00bb_integer_term_of(n00bb_tu_state_t *state,
+                                           parse_tree_t *node);
+bool n00bb_integer_flow(n00bb_tu_state_t *state, parse_tree_t *site,
+                        ir_op_t op, n00bb_integer_term_t result,
+                        n00bb_integer_term_t left,
+                        n00bb_integer_term_t right);
 void n00bb_integer_growth(n00bb_tu_state_t *state, parse_tree_t *site,
-                          ir_op_t op, th_type *target, th_type *value);
+                          ir_op_t op, parse_tree_t *target,
+                          parse_tree_t *value);
+void n00bb_integer_copy(n00bb_tu_state_t *state, parse_tree_t *site,
+                        n00bb_integer_term_t target, parse_tree_t *value);
+void n00bb_integer_assign(n00bb_tu_state_t *state, parse_tree_t *site,
+                          n00bb_integer_term_t written, parse_tree_t *target,
+                          parse_tree_t *value);
+void n00bb_integer_node_result(n00bb_tu_state_t *state, parse_tree_t *site,
+                               ir_op_t op, parse_tree_t *left,
+                               parse_tree_t *right);
 th_type *n00bb_integer_result_variable(n00bb_tu_state_t *state,
                                        parse_tree_t *site, ir_op_t op,
-                                       th_type *left, th_type *right);
+                                       parse_tree_t *left,
+                                       parse_tree_t *right);
 bool n00bb_require_unsigned_integer(n00bb_tu_state_t *state, th_type *type);
 bool n00bb_ground_integers(core_translation_unit_t *const *units,
                            size_t unit_count, bool interface_only,
@@ -1086,6 +1175,9 @@ bool is_named_type_declaration(parse_grammar_t *grammar,
                                parse_sym_entry_t *symbol);
 bool field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node);
 void n00bb_set_build_time(bool build_time);
+void n00bb_set_literal_stage(bool literal_stage);
+bool n00bb_literal_stage(void);
+size_t n00bb_initializer_kinds(void);
 parse_sym_phase_t n00bb_compile_phase(void);
 bool scope_is_within_function(parse_scope_t *scope);
 bool scope_is_within(parse_scope_t *scope, parse_scope_t *ancestor);

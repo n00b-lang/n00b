@@ -2234,10 +2234,11 @@ static ir_rule_result_t rule_cast(ir_module_t *m, ir_instr_t *in,
     const axis_t *ax[2];
     size_t        n_ax = 0;
 
-    bool signedness_change =
-        (f.class == IR_CLASS_SINT && t.class == IR_CLASS_UINT)
-        || (f.class == IR_CLASS_UINT && t.class == IR_CLASS_SINT);
-    if (f2i || (i2i && (t.width < f.width || signedness_change))) {
+    bool lossy = t.width < f.width
+        || (f.class == IR_CLASS_SINT && t.class == IR_CLASS_UINT)
+        || (f.class == IR_CLASS_UINT && t.class == IR_CLASS_SINT
+            && t.width <= f.width);
+    if (f2i || (i2i && lossy)) {
         ax[n_ax++] = &AX_FIT;
     }
 

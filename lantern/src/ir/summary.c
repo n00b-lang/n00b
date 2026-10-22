@@ -4,12 +4,14 @@
 #include "ir/analyses.h"
 #include "ir/layout.h"
 #include "ir/summary.h"
+#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/list.h"
 
 core_list_decl(ir_saccess_t);
 core_list_decl(ir_sfield_t);
+core_list_decl(ir_strap_site_t);
 core_list_decl(ir_sinput_t);
 core_list_decl(ir_soutput_t);
 core_list_decl(uint32_t);
@@ -32,6 +34,7 @@ struct ir_summary_t {
     bool                       all_escape;
     ir_sreturn_t               returned;
     uint8_t                    traps;
+    core_list_t(ir_strap_site_t) trap_sites;
     ir_sflow_t                 flow;
     core_list_t(ir_sfield_t)   fields;
 };
@@ -146,6 +149,7 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
     summary->dependences = core_list_new(uint32_t);
     summary->escapes     = core_list_new(uint8_t);
     summary->fields      = core_list_new(ir_sfield_t);
+    summary->trap_sites  = core_list_new(ir_strap_site_t);
     if (summaries) core_list_push(summaries->owned, summary);
     return summary;
 }
@@ -153,6 +157,7 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
 static void
 summary_free(ir_summary_t *summary)
 {
+    core_list_free(summary->trap_sites);
     core_list_free(summary->escapes);
     core_list_free(summary->accesses);
     core_list_free(summary->inputs);
@@ -237,6 +242,15 @@ uint8_t ir_summary_trap_kinds(const ir_summary_t *s)
 void ir_summary_set_trap_kinds(ir_summary_t *s, uint8_t kinds)
 {
     s->traps |= kinds & IR_STRAP_ALL;
+}
+uint32_t ir_summary_trap_site_count(const ir_summary_t *s)
+{
+    return s ? (uint32_t)s->trap_sites.len : 0;
+}
+const ir_strap_site_t *ir_summary_trap_site_at(const ir_summary_t *s,
+                                               uint32_t i)
+{
+    return s && i < s->trap_sites.len ? &s->trap_sites.data[i] : nullptr;
 }
 uint32_t ir_summary_access_count(const ir_summary_t *s)
 {
@@ -453,96 +467,6 @@ ir_summary_call_diverges(ir_summaries_t *summaries, const ir_instr_t *call)
     return diverges;
 }
 
-static bool
-user_instruction(const ir_instr_t *in)
-{
-    return in->span.start_line && in->span.start_byte && !in->span.implied
-        && in->op != IR_OP_JUMP && in->op != IR_OP_RETURN
-        && in->op != IR_OP_BRANCH && in->op != IR_OP_TRAP;
-}
-
-static bool
-diverging_call(ir_summaries_t *summaries, const ir_instr_t *in)
-{
-    return is_call(in) && ir_summary_call_diverges(summaries, in);
-}
-
-static void
-mark_live_blocks(ir_summaries_t *summaries, ir_func_t *f, bool *live)
-{
-    ir_block_t *entry = ir_block_entry(f);
-    if (!entry) return;
-    core_list_t(summary_block_ptr_t) work = core_list_new(summary_block_ptr_t);
-    core_list_push(work, entry);
-    live[entry->index] = true;
-    while (work.len) {
-        ir_block_t *block     = work.data[--work.len];
-        bool        continues = true;
-        for (uint32_t i = 0; continues && i < block->n_instrs; i++)
-            continues = !diverging_call(summaries, block->instrs[i]);
-        ir_instr_t *terminator = continues ? ir_block_terminator(block)
-                                           : nullptr;
-        for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
-             s++) {
-            ir_block_t *next = ir_succ_at(terminator, s);
-            if (!next || live[next->index]) continue;
-            live[next->index] = true;
-            core_list_push(work, next);
-        }
-    }
-    core_list_free(work);
-}
-
-static const ir_instr_t *
-first_dead_user_instruction(ir_func_t *f, const bool *live, ir_block_t *block,
-                            uint32_t after)
-{
-    for (uint32_t i = after; i < block->n_instrs; i++)
-        if (user_instruction(block->instrs[i])) return block->instrs[i];
-    bool *seen = core_alloc_array(bool, f->n_blocks);
-    core_list_t(summary_block_ptr_t) work = core_list_new(summary_block_ptr_t);
-    core_list_push(work, block);
-    seen[block->index] = true;
-    const ir_instr_t *found = nullptr;
-    for (size_t at = 0; !found && at < work.len; at++) {
-        ir_instr_t *terminator = ir_block_terminator(work.data[at]);
-        for (uint32_t s = 0; !found && terminator
-             && s < ir_succ_count(terminator); s++) {
-            ir_block_t *next = ir_succ_at(terminator, s);
-            if (!next || seen[next->index] || live[next->index]) continue;
-            seen[next->index] = true;
-            core_list_push(work, next);
-            for (uint32_t i = 0; !found && i < next->n_instrs; i++)
-                if (user_instruction(next->instrs[i])) found = next->instrs[i];
-        }
-    }
-    core_list_free(work);
-    core_free(seen);
-    return found;
-}
-
-uint32_t
-ir_dead_code_sites(ir_summaries_t *summaries, ir_func_t *f,
-                   const ir_instr_t **out, uint32_t capacity)
-{
-    if (!f || !f->n_blocks) return 0;
-    bool *live = core_alloc_array(bool, f->n_blocks);
-    mark_live_blocks(summaries, f, live);
-    uint32_t count = 0;
-    for (uint32_t b = 0; count < capacity && b < f->n_blocks; b++) {
-        ir_block_t *block = f->blocks[b];
-        for (uint32_t i = 0; live[b] && i < block->n_instrs; i++) {
-            if (!diverging_call(summaries, block->instrs[i])) continue;
-            const ir_instr_t *dead = first_dead_user_instruction(f, live,
-                                                                 block, i + 1);
-            if (dead) out[count++] = dead;
-            break;
-        }
-    }
-    core_free(live);
-    return count;
-}
-
 const ir_summary_t *
 ir_summary_entries(ir_summaries_t *summaries, uint32_t flag)
 {
@@ -572,38 +496,10 @@ access_touches(ir_summaries_t *summaries, const ir_splace_t *access,
         : ir_splace_eq(access, place);
 }
 
-static bool
-summary_reads_entry(ir_summaries_t *summaries, const ir_summary_t *summary,
-                    const ir_splace_t *place, bool follow)
-{
-    if (!summary) return unseen_reaches(summaries, place);
-    for (size_t a = 0; a < summary->accesses.len; a++)
-        if ((summary->accesses.data[a].flags & IR_SACCESS_READS_ENTRY)
-            && access_touches(summaries, &summary->accesses.data[a].place,
-                              place))
-            return true;
-    const uint32_t entries[] = {IR_SUMMARY_CALLS_FINALIZERS,
-                                IR_SUMMARY_STARTS_THREADS};
-    for (size_t e = 0; follow && e < sizeof(entries) / sizeof(*entries); e++)
-        if ((summary->flags & entries[e])
-            && summary_reads_entry(summaries,
-                   ir_summary_entries(summaries, entries[e]), place, false))
-            return true;
-    return false;
-}
-
 bool
-ir_summary_call_reads_entry(ir_summaries_t *summaries, const ir_instr_t *call,
-                            const ir_splace_t *place)
+ir_summary_place_unseen(ir_summaries_t *summaries, const ir_splace_t *place)
 {
-    call_targets_t targets;
-    resolve_targets(summaries, call, &targets);
-    bool reads = targets.unknown && unseen_reaches(summaries, place);
-    for (size_t t = 0; !reads && t < targets.targets.len; t++)
-        reads = summary_reads_entry(summaries,
-            target_summary(summaries, targets.targets.data[t]), place, true);
-    core_list_free(targets.targets);
-    return reads;
+    return unseen_reaches(summaries, place);
 }
 
 bool
@@ -640,6 +536,107 @@ ir_summary_call_pure(ir_summaries_t *summaries, const ir_instr_t *call)
     return pure
         && ir_summary_call_callees(summaries, call, check_pure_callee, &pure)
         && pure;
+}
+
+static bool
+place_meets(ir_module_t *module, const ir_place_t *place,
+            const ir_splace_t *other)
+{
+    if (place->kind == IR_PLACE_LOCAL)
+        return place->exposed && other->kind == IR_SPLACE_UNKNOWN;
+    if (place->kind == IR_PLACE_UNKNOWN || other->kind == IR_SPLACE_UNKNOWN)
+        return true;
+    bool named = place->kind == IR_PLACE_GLOBAL
+        || place->kind == IR_PLACE_THREAD;
+    bool other_named = other->kind == IR_SPLACE_GLOBAL
+        || other->kind == IR_SPLACE_THREAD;
+    if (named && other_named) {
+        const ir_global_t *global = place->root && place->root->global
+            ? ir_global_identity(place->root->global) : nullptr;
+        return !global || !other->global
+            || global == ir_global_identity(other->global);
+    }
+    if (place->kind == IR_PLACE_HEAP && place->root
+        && other->kind != IR_SPLACE_HEAP) return false;
+    return !place->type || !other->type
+        || ir_places_types_overlap(module, place->type, other->type);
+}
+
+typedef struct {
+    ir_summaries_t   *summaries;
+    const ir_func_t  *f;
+    ir_places_t      *places;
+    const ir_instr_t *call;
+    const uint32_t   *ids;
+    uint32_t          count;
+} write_query_t;
+
+static bool
+access_writes(write_query_t *q, const ir_splace_t *place, bool arguments)
+{
+    if (place->kind == IR_SPLACE_PARAM && arguments) {
+        uint32_t operand = place->param + 1;
+        const ir_value_t *arg = operand < q->call->n_operands
+            ? ir_operand_value(&q->call->operands[operand]) : nullptr;
+        if (!arg) return true;
+        if (!addressable(q->f, arg)) return false;
+        const uint32_t *written = nullptr;
+        uint32_t        n       = 0;
+        if (!argument_places(q->places, q->f, arg, &written, &n)) return true;
+        for (uint32_t w = 0; w < n; w++)
+            for (uint32_t i = 0; i < q->count; i++)
+                if (ir_places_may_alias(q->places, written[w], q->ids[i]))
+                    return true;
+        return false;
+    }
+    ir_splace_t other = place->kind == IR_SPLACE_PARAM
+        ? (ir_splace_t){.kind = IR_SPLACE_UNKNOWN} : *place;
+    for (uint32_t i = 0; i < q->count; i++)
+        if (place_meets(q->f->owner, ir_place_at(q->places, q->ids[i]),
+                        &other))
+            return true;
+    return false;
+}
+
+static bool
+summary_writes(write_query_t *q, const ir_summary_t *summary, bool follow)
+{
+    if (!summary) return true;
+    for (size_t a = 0; a < summary->accesses.len; a++)
+        if ((summary->accesses.data[a].flags & IR_SACCESS_WRITE)
+            && access_writes(q, &summary->accesses.data[a].place, follow))
+            return true;
+    const uint32_t entries[] = {IR_SUMMARY_CALLS_FINALIZERS,
+                                IR_SUMMARY_STARTS_THREADS};
+    for (size_t e = 0; follow && e < sizeof(entries) / sizeof(*entries); e++)
+        if ((summary->flags & entries[e])
+            && summary_writes(q, ir_summary_entries(q->summaries, entries[e]),
+                              false))
+            return true;
+    return false;
+}
+
+bool
+ir_summary_call_writes(ir_summaries_t *summaries, const ir_func_t *f,
+                       ir_places_t *places, const ir_instr_t *call,
+                       uint32_t place)
+{
+    if (!summaries || !f || !places || !call) return true;
+    if (call->op != IR_OP_CALL && call->op != IR_OP_CALLBACK_INVOKE)
+        return true;
+    call_targets_t targets;
+    resolve_targets(summaries, call, &targets);
+    write_query_t q = {
+        .summaries = summaries, .f = f, .places = places, .call = call,
+        .ids = &place, .count = 1,
+    };
+    bool writes = targets.unknown;
+    for (size_t t = 0; !writes && t < targets.targets.len; t++)
+        writes = summary_writes(&q, target_summary(summaries,
+                                                   targets.targets.data[t]),
+                                true);
+    core_list_free(targets.targets);
+    return writes;
 }
 
 bool
@@ -1553,6 +1550,8 @@ state_before_leaf(flow_query_t *q, ir_memssa_t *memssa, ir_doms_t *doms,
                 effect = ir_path_apply(call_effect(q, def->instr,
                     call_arm(doms, def->instr, item.from)), effect);
             break;
+        case IR_MEMDEF_ELEMENT_PHI:
+            continue;
         }
         if (effect == IR_PATH_PASSED) state |= IR_PATH_PASSED;
         else if (effect)
@@ -1582,6 +1581,8 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
 {
     call_targets_t targets;
     resolve_targets(summaries, call, &targets);
+    if (call->op == IR_OP_CALLBACK_INVOKE)
+        summary->flags |= IR_SUMMARY_CALLS_CALLBACKS;
     if (targets.unknown) {
         summary->flags |= IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
             | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
@@ -1602,7 +1603,8 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
                | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
                | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
                | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
-               | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS);
+               | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
+               | IR_SUMMARY_CALLS_CALLBACKS);
         for (size_t a = 0; a < callee->accesses.len; a++) {
             const ir_saccess_t *access = &callee->accesses.data[a];
             uint8_t flags = access->flags
@@ -1641,8 +1643,12 @@ allocation_flags(const ir_func_t *f, const ir_instr_t *in)
             ? 0
             : IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
                 | IR_SUMMARY_ALLOCATES_DIRECT;
-    case IR_OP_ALLOC_USING:
     case IR_OP_ARRAY_NEW:
+        return in->dest && th_is_closed(ir_module_types(f->owner),
+                                        in->dest->type)
+            ? IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
+            : IR_SUMMARY_MAY_ALLOCATE;
+    case IR_OP_ALLOC_USING:
     case IR_OP_ARRAY_NEW_USING:
     case IR_OP_BOX:
         return IR_SUMMARY_MAY_ALLOCATE;
@@ -1701,6 +1707,10 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
     ir_places_t *places = ir_func_places(f);
     ir_sites_t  *sites  = ir_func_sites(f);
     ir_memssa_t *memssa = ir_func_memssa(f);
+    ir_ranges_t *prove_ranges = (!summaries->hooks
+                                 || !summaries->hooks->defer_trap_proofs)
+        && (ir_module_props(f->owner) & IR_PROP_SSA)
+        ? ir_func_ranges(f) : nullptr;
     for (uint32_t a = 0; places && a < ir_places_access_count(places); a++) {
         const ir_access_t *access = ir_places_access_at(places, a);
         const uint32_t    *ids    = ir_places_access_places(places, access);
@@ -1718,9 +1728,17 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
     }
     for (uint32_t s = 0; sites && s < ir_sites_count(sites); s++) {
         const ir_site_t *site = ir_site_at(sites, s);
-        if (site->kind != IR_SITE_TRAP) continue;
+        if (site->kind != IR_SITE_TRAP
+            || (prove_ranges && ir_range_trap_proven(prove_ranges,
+                                                     site->instr))) continue;
+        uint8_t kind = trap_kind(site->instr);
         summary->flags |= IR_SUMMARY_MAY_TRAP;
-        summary->traps |= trap_kind(site->instr);
+        summary->traps |= kind;
+        core_list_push(summary->trap_sites, ((ir_strap_site_t){
+            .kind   = kind,
+            .line   = site->instr->span.start_line,
+            .column = site->instr->span.start_col,
+        }));
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
@@ -2441,6 +2459,8 @@ memory_states(deps_t *d, uint32_t accesses)
                 if (part) apply_recipe(d, d->parts.data[part - 1], out);
                 break;
             }
+            case IR_MEMDEF_ELEMENT_PHI:
+                break;
             }
         }
     }
@@ -3703,23 +3723,42 @@ put_flow(core_buffer_t *out, const ir_sflow_t *flow)
 }
 
 static void
-put_splace(core_buffer_t *out, const ir_splace_t *place)
+put_place_type(core_buffer_t *out, th_ctx *types, const ir_splace_t *place)
+{
+    bool named = place->kind == IR_SPLACE_GLOBAL
+        || place->kind == IR_SPLACE_THREAD;
+    put_text(out, !named && types && place->type
+        ? th_print(types, place->type) : (core_string_t){0});
+}
+
+static void
+put_splace(core_buffer_t *out, th_ctx *types, const ir_splace_t *place)
 {
     put_u8(out, place->kind);
     put_u32(out, place->param);
     put_global(out, place->kind == IR_SPLACE_GLOBAL
             || place->kind == IR_SPLACE_THREAD ? place->global : nullptr);
+    put_place_type(out, types, place);
 }
 
 bool
 ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
 {
     if (!summary || !out) return false;
+    th_ctx *types = summary->function && summary->function->owner
+        ? ir_module_types(summary->function->owner) : nullptr;
     core_buffer_append(out, "IRSM", 4);
     put_u8(out, SUMMARY_CODEC_VERSION);
     put_u32(out, summary->flags);
     put_u8(out, summary->all_escape);
     put_u8(out, summary->traps);
+    put_u32(out, (uint32_t)summary->trap_sites.len);
+    for (size_t i = 0; i < summary->trap_sites.len; i++) {
+        const ir_strap_site_t *site = &summary->trap_sites.data[i];
+        put_u8(out, site->kind);
+        put_u32(out, site->line);
+        put_u32(out, site->column);
+    }
     put_u32(out, (uint32_t)summary->escapes.len);
     for (size_t i = 0; i < summary->escapes.len; i++)
         put_u8(out, summary->escapes.data[i]);
@@ -3736,6 +3775,7 @@ ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
         put_global(out, access->place.kind == IR_SPLACE_GLOBAL
                 || access->place.kind == IR_SPLACE_THREAD
             ? access->place.global : nullptr);
+        put_place_type(out, types, &access->place);
     }
     put_flow(out, &summary->flow);
     put_u32(out, (uint32_t)summary->inputs.len);
@@ -3743,7 +3783,7 @@ ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
         const ir_sinput_t *input = &summary->inputs.data[i];
         put_u8(out, input->kind);
         put_u32(out, input->param);
-        put_splace(out, &input->place);
+        put_splace(out, types, &input->place);
         put_text(out, input->kind == IR_SINPUT_CALL ? input->callee
                                                    : (core_string_t){0});
     }
@@ -3751,7 +3791,7 @@ ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
     for (size_t i = 0; i < summary->outputs.len; i++) {
         const ir_soutput_t *output = &summary->outputs.data[i];
         put_u8(out, output->kind);
-        put_splace(out, &output->place);
+        put_splace(out, types, &output->place);
         put_u32(out, output->data_first);
         put_u32(out, output->data_count);
         put_u32(out, output->control_first);
@@ -3812,14 +3852,24 @@ get_global(summary_reader_t *r, ir_summary_global_fn resolve, void *context)
         ? resolve(context, module, name) : nullptr;
 }
 
+static void
+get_place_type(summary_reader_t *r, th_ctx *types, ir_splace_t *place)
+{
+    core_string_t text = get_text(r);
+    if (!place->global && types && text.data && text.u8_bytes)
+        place->type = ir_type_from_text(types, text);
+}
+
 static ir_splace_t
-get_splace(summary_reader_t *r, ir_summary_global_fn resolve, void *context)
+get_splace(summary_reader_t *r, th_ctx *types, ir_summary_global_fn resolve,
+           void *context)
 {
     ir_splace_t place = {.kind = get_u8(r)};
     place.param  = get_u32(r);
     place.global = get_global(r, resolve, context);
     if (place.kind > IR_SPLACE_UNKNOWN) r->failed = true;
     if (place.global) place.type = place.global->type;
+    get_place_type(r, types, &place);
     if ((place.kind == IR_SPLACE_GLOBAL || place.kind == IR_SPLACE_THREAD)
         && !place.global)
         place = (ir_splace_t){.kind = IR_SPLACE_UNKNOWN};
@@ -3874,10 +3924,19 @@ ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
     if (!data || size < 5 || memcmp(data, "IRSM", 4)
         || data[4] != SUMMARY_CODEC_VERSION) return nullptr;
     r.at = 5;
+    th_ctx *types = function && function->owner
+        ? ir_module_types(function->owner) : nullptr;
     ir_summary_t *summary = ir_summary_new(nullptr, function);
     summary->flags      = get_u32(&r);
     summary->all_escape = get_u8(&r) != 0;
     summary->traps      = get_u8(&r) & IR_STRAP_ALL;
+    uint32_t trap_sites = get_u32(&r);
+    for (uint32_t i = 0; !r.failed && i < trap_sites; i++) {
+        ir_strap_site_t site = {.kind = get_u8(&r) & IR_STRAP_ALL};
+        site.line   = get_u32(&r);
+        site.column = get_u32(&r);
+        core_list_push(summary->trap_sites, site);
+    }
     uint32_t escapes = get_u32(&r);
     for (uint32_t i = 0; !r.failed && i < escapes; i++)
         core_list_push(summary->escapes, get_u8(&r));
@@ -3896,6 +3955,7 @@ ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
         place.global = get_global(&r, resolve, context);
         if (place.kind > IR_SPLACE_UNKNOWN) r.failed = true;
         if (place.global) place.type = place.global->type;
+        get_place_type(&r, types, &place);
         ir_summary_add_access(summary, place, flags);
     }
     get_flow(&r, &summary->flow);
@@ -3903,7 +3963,7 @@ ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
     for (uint32_t i = 0; !r.failed && i < inputs; i++) {
         ir_sinput_t input = {.kind = get_u8(&r)};
         input.param = get_u32(&r);
-        input.place = get_splace(&r, resolve, context);
+        input.place = get_splace(&r, types, resolve, context);
         core_string_t callee = get_text(&r);
         if (input.kind > IR_SINPUT_CALL) r.failed = true;
         if (input.kind == IR_SINPUT_CALL)
@@ -3919,7 +3979,7 @@ ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
     uint32_t outputs = get_u32(&r);
     for (uint32_t i = 0; !r.failed && i < outputs; i++) {
         ir_soutput_t output = {.kind = get_u8(&r)};
-        output.place         = get_splace(&r, resolve, context);
+        output.place         = get_splace(&r, types, resolve, context);
         output.data_first    = get_u32(&r);
         output.data_count    = get_u32(&r);
         output.control_first = get_u32(&r);

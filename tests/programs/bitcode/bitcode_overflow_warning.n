@@ -1,5 +1,5 @@
 func bump(x: u8) -> u8 {
-    return x + 200
+    return x % 100 + 200
 }
 func fine(x: u8) -> u8 {
     if x < 50 {

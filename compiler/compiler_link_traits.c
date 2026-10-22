@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "compiler_axioms.h"
 #include "compiler_cache.h"
 #include "compiler_link.h"
 #include "compiler_tu.h"
@@ -970,49 +971,15 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
             && core_tree_num_children(parent)) {
             parse_sym_entry_t *callee = bound_function_symbol(
                 core_tree_child(parent, 0));
-            bool store = callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.store"));
-            store = store || (callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.store_relaxed")));
-            store = store || (callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.store_release")));
-            bool exchange = callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.exchange"));
-            exchange = exchange || (callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.exchange_acquire")));
-            exchange = exchange || (callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.exchange_relaxed")));
-            bool cas = callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.compare_exchange"));
-            bool fetch_or = callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.fetch_or"));
-            fetch_or = fetch_or || (callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.fetch_or_release")));
-            fetch_or = fetch_or || (callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.fetch_or_relaxed")));
-            bool fetch_and = callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.fetch_and"));
-            bool fetch_add = callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.fetch_add"));
-            fetch_add = fetch_add || (callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.fetch_add_relaxed")));
-            bool fetch_sub = callee && parse_sym_binding(callee,
-                CORE_STRING_STATIC("n00bb.atomic.fetch_sub"));
-            bool ref_write = callee && n00bb_builtin_function(callee)
-                && core_string_eq(callee->name,
-                                  CORE_STRING_STATIC("ref_write"));
-            parse_tree_t *first = store || exchange || cas || fetch_or
-                || fetch_and
-                || fetch_add || fetch_sub
-                || ref_write
+            const n00bb_axiom_t *axiom = n00bb_axiom_of_symbol(callee);
+            parse_tree_t *first = axiom
+                && (axiom->writes & N00BB_AXIOM_PARAM(0))
                 ? call_argument_for_parameter(grammar, parent, callee,
                                               0, false) : nullptr;
             if (first && node_is_within(use, first)
                 && core_string_eq(first_token_text(first),
                                   CORE_STRING_STATIC("ref"))) {
-                *also_reads = exchange || cas || fetch_or || fetch_and
-                    || fetch_add
-                    || fetch_sub;
+                *also_reads = axiom->roles & N00BB_AXIOM_READS_TARGET;
                 return true;
             }
         }
@@ -2088,7 +2055,11 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 else if (trait_name.data && receiver_type
                          && (has_trait_constraint(receiver_type, trait_name)
                              || has_deferred_method_constraint(
-                                 receiver_type, site->dispatch_method))) {
+                                 receiver_type, site->dispatch_method)
+                             || (core_string_eq(site->dispatch_trait,
+                                     CORE_STRING_STATIC("Equal"))
+                                 && th_kind_of(th_resolve(receiver_type))
+                                     == TH_VAR))) {
                     parse_sym_entry_t *requirement =
                         trait_method_requirement_symbol(grammar, analysis,
                             unit, trait_name, site->dispatch_method);
@@ -2785,8 +2756,10 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         specialization_field(field, "parameter_%zu", p));
                     size_t errors_before = th_error_count(types);
                     bool matched = parameter
-                        && th_unify_in_place(types, parameter,
-                                             argument_type);
+                        && ((is_integer_type(parameter)
+                                && is_integer_type(argument_type))
+                            || th_unify_in_place(types, parameter,
+                                                 argument_type));
                     if (!matched) {
                         arguments_valid = false;
                         failed_argument_index = p;
@@ -3044,7 +3017,13 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                                              parameter_index));
                     target_matches = parameter_index < target_parameter_count
                         && copied_argument;
-                    if (target_matches)
+                    th_type *declared = target_matches
+                        ? target_parameters[parameter_index].type : nullptr;
+                    bool widens = declared && is_integer_type(declared)
+                        && is_integer_type(copied_argument)
+                        && n00bb_integer_type_promotes_to(copied_argument,
+                                                          declared);
+                    if (target_matches && !widens)
                         target_parameters[parameter_index].type = copied_argument;
                 }
                 th_type *target_shape = target_matches

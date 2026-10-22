@@ -21,7 +21,7 @@ test "$(cat "$tmp/stderr")" = "$(printf 'bool\nstring\n')"
 "$tmp/defaults" >"$tmp/defaults.stdout" 2>"$tmp/defaults.stderr"
 test ! -s "$tmp/defaults.stdout"
 test "$(cat "$tmp/defaults.stderr")" = \
-    "$(printf 'True\nFalse\n42\n-17\n3.5\n-0.0\n1.0e6\n1.0e-5\n[1, 2]\n[1.25, 2.5]\n[a, b]\n[[1, 2], [3]]\n')"
+    "$(printf 'True\nFalse\n42\n-17\n3.5\n-0.0\n1.0e6\n1.0e-5\n[1, 2]\n[1.25, 2.5]\n[a, b]\n[[1, 2], [3]]\n<bitcode_raw_repr_defaults.Sample>\n<bitcode_raw_repr_defaults.Sample>\n2.5\n')"
 "$compiler" build --output "$tmp/array-overrides" "$array_overrides" \
     2>"$tmp/array-overrides.compile.err"
 "$tmp/array-overrides" >"$tmp/array-overrides.stdout" \
@@ -53,4 +53,4 @@ if "$compiler" build --output "$tmp/out-of-range" "$out_of_range" \
     >"$tmp/negative.stdout" 2>"$tmp/negative.stderr"; then
     exit 1
 fi
-grep -q 'no matching method implementation (expected i32)' "$tmp/negative.stderr"
+grep -q 'integer constant 2147483648 does not fit i32' "$tmp/negative.stderr"

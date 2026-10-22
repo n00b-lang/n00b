@@ -10,6 +10,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "ir/interval.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/diagnostic.h"
@@ -1861,22 +1862,9 @@ builtin_name(pp_context_t *ctx, parse_tree_t *node)
 static core_string_t
 format_integer(__int128 value)
 {
-    char digits[48];
-    size_t length = 0;
-    bool negative = value < 0;
-    unsigned __int128 magnitude = negative
-        ? (unsigned __int128)(-(value + 1)) + 1 : (unsigned __int128)value;
-    do {
-        digits[length++] = (char)('0' + magnitude % 10);
-        magnitude /= 10;
-    } while (magnitude);
-    if (negative) digits[length++] = '-';
-    for (size_t i = 0; i < length / 2; i++) {
-        char temp = digits[i];
-        digits[i] = digits[length - i - 1];
-        digits[length - i - 1] = temp;
-    }
-    return core_string_from_raw(digits, (int64_t)length);
+    core_buffer_t *buffer = core_buffer_empty();
+    ir_int_append(buffer, value);
+    return core_buffer_take_string(buffer);
 }
 
 static core_string_t

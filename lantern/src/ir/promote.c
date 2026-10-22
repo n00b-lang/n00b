@@ -296,6 +296,7 @@ static bool promote_func_body(P *p, ir_func_t *f)
         for (uint32_t i = 0; i < ir_rd_arm_count(r, q); i++) {
             uint32_t l = ir_rd_phi_local(r, q)->index;
 
+            if (ir_rd_arm_tok(r, q, i) == NO_TOK) want[l] = true;
             if (!ir_rd_arm_tok(r, q, i)) {
                 want[l] = true;
                 warn[l] = warn[l] || live_phi[q];
@@ -370,7 +371,8 @@ static bool promote_func_body(P *p, ir_func_t *f)
 
         for (uint32_t i = 0; i < ir_rd_arm_count(r, q); i++) {
             uint32_t    tok = ir_rd_arm_tok(r, q, i);
-            ir_value_t *v   = tok ? val[tok] : und[l->index];
+            ir_value_t *v   = tok && tok != NO_TOK ? val[tok]
+                                                   : und[l->index];
 
             if (!v || !ir_instr_operand_phi_arm(instruction,
                                                 ir_rd_arm_block(r, q, i),

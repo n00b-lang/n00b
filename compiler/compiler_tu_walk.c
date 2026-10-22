@@ -70,31 +70,6 @@ n00bb_node_source_text(core_translation_unit_t *unit, parse_tree_t *node,
 }
 
 static bool
-literal_is_whole_value(parse_grammar_t *grammar, parse_tree_t *literal)
-{
-    parse_tree_t *child = literal;
-    for (parse_tree_t *parent = parse_tree_parent(child); parent;
-         child = parent, parent = parse_tree_parent(parent)) {
-        if (NT_IS(grammar, parent, "shift-expr")
-            && core_tree_num_children(parent) == 3)
-            return false;
-        if (NT_IS(grammar, parent, "add-expr")
-            || NT_IS(grammar, parent, "mul-expr")
-            || NT_IS(grammar, parent, "bitand-expr")
-            || NT_IS(grammar, parent, "bitxor-expr")
-            || NT_IS(grammar, parent, "bitor-expr")) {
-            if (core_tree_num_children(parent) == 3) return false;
-            continue;
-        }
-        if (NT_IS(grammar, parent, "unary-expr")
-            || n00bb_integer_range_wrapper(grammar, parent))
-            continue;
-        return true;
-    }
-    return true;
-}
-
-static bool
 untyped_module_name(n00bb_tu_state_t *state, parse_tree_t *import)
 {
     parse_node_resolution_t resolution = parse_tree_resolution(import);
@@ -141,6 +116,16 @@ infer_literal_reporting(parse_grammar_t *grammar,
     if (infer_user_literal_type(grammar, unit, node, nullptr)) return true;
     report_literal_failure(unit, node, before, code, message);
     return false;
+}
+
+static bool
+integer_copy_declaration(parse_grammar_t *grammar, parse_tree_t *node,
+                         bool entering)
+{
+    if (entering || !NT_IS(grammar, node, "sym-decl")
+        || CHILD_NT(grammar, node, "type-spec")) return false;
+    parse_tree_t *initializer = CHILD_NT(grammar, node, "expression");
+    return initializer && is_integer_type(parse_tree_type(initializer));
 }
 
 static void
@@ -267,9 +252,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     bool integer_compound = compound_target
         && (is_integer_type(compound_target)
             || n00bb_open_integer(compound_target));
+    bool integer_copy = integer_copy_declaration(grammar, node, entering);
     if (variant_payload || flagset_field || type_reference
         || invalid_field_access || intrinsic_binary || intrinsic_unary
-        || integer_compound
+        || integer_compound || integer_copy
         || (modified_numeric
             && core_string_eq(first_token_text(node),
                               CORE_STRING_STATIC("nil"))))
@@ -392,11 +378,6 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             th_type *element = nullptr;
             if (n00bb_option_type_element(expected, &element))
                 expected = element;
-            if (expected && is_integer_type(expected)
-                && parse_tree_integer_literal_origin(node) == node
-                && !n00bb_integer_literal_joins_type(state, node, expected)
-                && literal_is_whole_value(grammar, node))
-                (void)n00bb_constant_misfits_type(state, node, expected);
             if (expected && is_float_type(expected))
                 n00bb_contextual_float_literal(node, expected);
         }
@@ -431,6 +412,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                      && th_kind_of(th_resolve(start_type)) == TH_VAR)
                 (void)n00bb_literal_adopts_open_type(grammar, state, bound,
                                                      start_type);
+            th_type *parts = n00bb_open_integer(start_type) ? start_type
+                : n00bb_open_integer(bound_type) ? bound_type : nullptr;
+            if (parts) {
+                n00bb_integer_term_t term = {N00BB_INTEGER_TERM_TYPE, parts,
+                                             nullptr};
+                n00bb_integer_copy(state, node, term, start);
+                n00bb_integer_copy(state, node, term, bound);
+            }
         }
         if (core_tree_num_children(node) == 3
             && (NT_IS(grammar, node, "range-parts")
@@ -444,18 +433,60 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             parse_tree_t *right = core_tree_child(node, 2);
             th_type *left_type = parse_tree_type(left);
             th_type *right_type = parse_tree_type(right);
+            bool integer_comparison = !NT_IS(grammar, node, "range-parts")
+                && (is_integer_type(left_type) || n00bb_open_integer(left_type))
+                && (is_integer_type(right_type)
+                    || n00bb_open_integer(right_type));
             if (left_type && right_type && left_type != right_type
+                && !integer_comparison
                 && !n00bb_integer_literal_joins_type(state, right,
                                                      left_type)
                 && !n00bb_float_literal_adopts(right, left_type)
                 && !n00bb_integer_literal_joins_type(state, left, right_type))
                 n00bb_float_literal_adopts(left, right_type);
+            parse_tree_t *sides[] = {left, right};
+            th_type *declared[] = {right_type, left_type};
+            for (size_t s = 0; integer_comparison && s < 2; s++) {
+                ir_interval_t range = {0}, bounds = {0};
+                if (parse_tree_integer_literal_origin(sides[s])
+                    && is_integer_type(declared[s])
+                    && !n00bb_open_integer(declared[s])
+                    && n00bb_current_integer_range(sides[s], &range)
+                    && n00bb_type_interval(declared[s], &bounds)
+                    && !ir_interval_meet(range, bounds, nullptr)) {
+                    n00bb_report_integer_misfit(state, node,
+                        CORE_STRING_STATIC("value"), range, declared[s]);
+                    break;
+                }
+            }
         }
         if (NT_IS(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
-            contextualize_record_literal(grammar, unit, state,
-                CHILD_NT(grammar, node, "expression"),
+            parse_tree_t *initializer = CHILD_NT(grammar, node, "expression");
+            contextualize_record_literal(grammar, unit, state, initializer,
                 type_spec ? parse_tree_type(type_spec) : nullptr);
+            parse_sym_entry_t *declared = parse_tree_sym(node);
+            if (declared && !type_spec && initializer
+                && is_integer_type(parse_tree_type(initializer))) {
+                th_type *class = n00bb_integer_variable(state, 0);
+                if (class && !declared->type) declared->type = class;
+                if (class && th_unify_in_place(state->types, declared->type,
+                                               class))
+                    n00bb_integer_copy(state, node,
+                        (n00bb_integer_term_t){N00BB_INTEGER_TERM_TYPE,
+                                               class, nullptr},
+                        initializer);
+            }
+            if (type_spec && initializer && declared
+                && is_integer_type(declared->type)
+                && scope_is_within_function(declared->scope)) {
+                core_dict_put(&state->integer_tracked_symbols, declared,
+                              declared);
+                n00bb_integer_copy(state, node,
+                    (n00bb_integer_term_t){N00BB_INTEGER_TERM_SYMBOL,
+                                           declared->type, declared},
+                    initializer);
+            }
         }
         if (NT_IS(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {
@@ -509,6 +540,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 && th_kind_of(th_resolve(value_type)) == TH_VAR
                 && !n00bb_open_integer(value_type);
             if (operator && !operator->shift && value_type
+                && !n00bb_open_integer(value_type)
                 && (open_target || is_integer_type(target_type))) {
                 if (unresolved_value)
                     core_list_push(state->deferred_conversions,
@@ -520,9 +552,11 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             }
             if (operator && operator->unsigned_only && open_target)
                 (void)n00bb_require_unsigned_integer(state, target_type);
-            if (operator && !operator->shift && open_target)
-                n00bb_integer_growth(state, node, operator->op, target_type,
-                                     value_type);
+            if (operator && !operator->shift
+                && (open_target || is_integer_type(target_type)))
+                n00bb_integer_growth(state, node, operator->op,
+                                     core_tree_child(node, 0),
+                                     core_tree_child(node, 2));
         }
         if (NT_IS(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {
@@ -534,6 +568,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 && n00bb_open_integer(parse_tree_type(target)))
                 (void)th_unify_in_place(state->types,
                     parse_tree_type(value), parse_tree_type(target));
+            n00bb_integer_term_t written = n00bb_integer_term_of(state,
+                                                                 target);
+            if (written.kind == N00BB_INTEGER_TERM_SYMBOL)
+                n00bb_integer_assign(state, node, written, target, value);
             th_type *target_type = parse_tree_type(target)
                 ? th_resolve(parse_tree_type(target)) : nullptr;
             th_type *value_type = parse_tree_type(value)
@@ -1193,14 +1231,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     if (!entering && NT_IS(grammar, node, "expression")) {
         th_type *argument = parse_tree_argument_type(node);
         if (argument) {
-            int64_t minimum = 0, maximum = 0;
+            ir_interval_t range = {0};
             th_type *source = parse_tree_type(node);
             bool integer = source && is_integer_type(source);
-            bool ranged = integer && n00bb_current_integer_range(state,
-                node, &minimum, &maximum);
+            bool ranged = integer && n00bb_current_integer_range(node,
+                                                                 &range);
             if (!(integer
                     ? n00bb_constrain_integer_fit(state, argument, source,
-                        ranged, minimum, maximum)
+                        ranged, range)
                     : source && th_unify_in_place(state->types, argument,
                                                    source))) {
                 core_diagnostics_report_at(
@@ -1559,6 +1597,7 @@ run_semantic_walk(parse_grammar_t *grammar, th_ctx *types,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!root || !state || !state->annotations) return false;
+    state->grammar = grammar;
     core_string_t package = n00bb_package_id(unit);
     if (!th_ctx_set_scope(types, unit->module.identifier, package))
         return false;

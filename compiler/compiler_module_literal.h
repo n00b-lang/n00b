@@ -18,6 +18,7 @@ typedef struct {
     core_string_t name;
     core_string_t symbol;
     core_string_t signature;
+    bool          pure;
 } n00bb_native_declaration_t;
 
 typedef struct {

@@ -19,7 +19,6 @@ import bitptr
 import abi
 import litmod_site
 import embed
-import text
 
 package builtin {
     export bitptr.Bitptr
@@ -106,6 +105,8 @@ package builtin {
     export string.core.to_cstring
     export string.core.to_hex
     export string.core.utf8_word_is_ascii
+    export string.core.utf8_char_count
+    export string.core.len
     export string.core.widen_encoding
     export string.core.string
     export string.style.rich
@@ -162,8 +163,6 @@ package builtin {
     export containers.traits.TreeLike
     export io.debug.raw_debug
     export io.raw.Raw_Repr
-    export text.len
-    export text.Index_Unit
     export litmod_site.Literal_Site
     export embed.embed
 }

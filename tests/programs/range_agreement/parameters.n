@@ -1,0 +1,16 @@
+func scale(a: int, b: uint) -> int {
+    let doubled: int = a * 2
+    let widened: uint = b + 1
+    return doubled + cast[int](widened)
+}
+
+func pick(flag: bool, small: u8) -> uint {
+    var total: uint = 10
+    if flag {
+        total = total + small
+    }
+    return total
+}
+
+require scale(3, 4) == 11
+require pick(true, 5) == 15

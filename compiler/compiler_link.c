@@ -1266,6 +1266,11 @@ overload_candidate_fit(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         formal[slot] = parameter ? parameter->type : nullptr;
         valid &= actual[slot] && formal[slot];
     }
+    for (size_t i = 0; valid && i < count; i++)
+        if (n00bb_open_integer(actual[i]) && is_integer_type(formal[i])
+            && th_is_closed(state->types, formal[i])
+            && th_unify_probe(state->types, actual[i], formal[i]))
+            actual[i] = formal[i];
     bool closed = valid;
     for (size_t i = 0; i < count && closed; i++)
         closed = th_is_closed(state->types, actual[i]);
@@ -3435,17 +3440,6 @@ lifetime_function_owner(parse_grammar_t *grammar, parse_sym_entry_t *symbol)
     return owner;
 }
 
-static parse_sym_liveness_t
-parse_liveness_state(ir_liveness_t state)
-{
-    switch (state) {
-    case IR_LIVENESS_DEAD: return PARSE_SYM_LIVENESS_DEAD;
-    case IR_LIVENESS_LIVE: return PARSE_SYM_LIVENESS_LIVE;
-    case IR_LIVENESS_UNKNOWN: return PARSE_SYM_LIVENESS_UNKNOWN;
-    }
-    return PARSE_SYM_LIVENESS_UNKNOWN;
-}
-
 static bool
 record_symbol_lifetime_starts(parse_sym_entry_t *symbol,
                               ir_value_t *value,
@@ -3517,33 +3511,6 @@ record_symbol_lifetime_starts(parse_sym_entry_t *symbol,
     return *start_count != 0;
 }
 
-typedef struct {
-    parse_sym_entry_t *symbol;
-    parse_sym_phase_t phase;
-    n00bb_link_payload_t *facts;
-} n00bb_lifetime_endpoint_context_t;
-
-static bool
-record_symbol_lifetime_endpoint(void *opaque,
-                                ir_lifetime_endpoint_t endpoint)
-{
-    n00bb_lifetime_endpoint_context_t *context = opaque;
-    if (!context || !context->symbol || !context->facts) return false;
-    parse_sym_lifetime_end_t end = {
-        .phase = context->phase,
-        .function = endpoint.function,
-        .binding = endpoint.binding,
-        .point = endpoint.point,
-        .from = endpoint.from,
-        .to = endpoint.to,
-        .on_edge = endpoint.from != nullptr,
-    };
-    if (!parse_sym_set_lifetime_end(context->symbol, end)) return false;
-    if (end.on_edge) context->facts->cfg_liveness_end_edges++;
-    else context->facts->cfg_liveness_end_points++;
-    return true;
-}
-
 static bool
 record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
                            ir_value_t *value,
@@ -3580,107 +3547,24 @@ record_symbol_cfg_liveness(parse_sym_entry_t *symbol,
         symbol, value, function, phase, &start_count);
     facts->cfg_liveness_start_points += start_count;
     if (!complete) facts->cfg_liveness_missing_starts++;
-    ir_liveness_query_t *query = ir_liveness_query_new(value);
-    if (!query) {
+    ir_cleanup_range_t range;
+    if (!ir_value_cleanup_range(value, nullptr, nullptr, &range)) {
         facts->cfg_liveness_complete = false;
         return false;
     }
-    n00bb_lifetime_endpoint_context_t endpoint_context = {
-        .symbol = symbol,
-        .phase = phase,
-        .facts = facts,
-    };
-    if (!ir_liveness_query_visit_endpoints(
-            query, record_symbol_lifetime_endpoint, &endpoint_context))
-        complete = false;
-    size_t edge_count = 0;
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        ir_instr_t *terminator = ir_block_terminator(block);
-        if (!terminator) {
-            complete = false;
-            facts->cfg_liveness_incomplete_blocks++;
-            continue;
-        }
-        uint32_t successors = ir_succ_count(terminator);
-        ir_liveness_t after_terminator =
-            ir_liveness_query_alias_after(query, terminator);
-        for (uint32_t s = 0; s < successors; s++) {
-            ir_block_t *target = ir_succ_at(terminator, s);
-            if (!target) {
-                complete = false;
-                continue;
-            }
-            parse_sym_lifetime_edge_t edge = {
-                .function = function,
-                .binding = value,
-                .from = block,
-                .to = target,
-                .phase = phase,
-                .direct = parse_liveness_state(
-                    ir_liveness_query_direct_on_edge(query, block, target)),
-                .aliases = parse_liveness_state(
-                    ir_liveness_query_alias_on_edge(query, block, target)),
-            };
-            edge.ends_live_range = after_terminator == IR_LIVENESS_LIVE
-                && edge.aliases == PARSE_SYM_LIVENESS_DEAD;
-            if (!parse_sym_set_lifetime_edge(symbol, edge)) {
-                complete = false;
-                continue;
-            }
-            if (edge.direct == PARSE_SYM_LIVENESS_LIVE)
-                facts->cfg_liveness_direct_live_edges++;
-            else if (edge.direct == PARSE_SYM_LIVENESS_DEAD)
-                facts->cfg_liveness_direct_dead_edges++;
-            else
-                facts->cfg_liveness_direct_unknown_edges++;
-            if (edge.aliases == PARSE_SYM_LIVENESS_LIVE)
-                facts->cfg_liveness_alias_live_edges++;
-            else if (edge.aliases == PARSE_SYM_LIVENESS_DEAD)
-                facts->cfg_liveness_alias_dead_edges++;
-            else
-                facts->cfg_liveness_alias_unknown_edges++;
-            facts->cfg_liveness_range_ends += edge.ends_live_range;
-            edge_count++;
-        }
-        if (successors == 0) {
-            parse_sym_lifetime_edge_t edge = {
-                .function = function,
-                .binding = value,
-                .from = block,
-                .phase = phase,
-                .direct = parse_liveness_state(
-                    ir_liveness_query_direct_after(query, terminator)),
-                .aliases = parse_liveness_state(
-                    ir_liveness_query_alias_after(query, terminator)),
-                .is_exit = true,
-            };
-            edge.ends_live_range =
-                edge.aliases == PARSE_SYM_LIVENESS_DEAD;
-            if (!parse_sym_set_lifetime_edge(symbol, edge)) {
-                complete = false;
-                continue;
-            }
-            if (edge.direct == PARSE_SYM_LIVENESS_LIVE)
-                facts->cfg_liveness_direct_live_edges++;
-            else if (edge.direct == PARSE_SYM_LIVENESS_DEAD)
-                facts->cfg_liveness_direct_dead_edges++;
-            else
-                facts->cfg_liveness_direct_unknown_edges++;
-            if (edge.aliases == PARSE_SYM_LIVENESS_LIVE)
-                facts->cfg_liveness_alias_live_edges++;
-            else if (edge.aliases == PARSE_SYM_LIVENESS_DEAD)
-                facts->cfg_liveness_alias_dead_edges++;
-            else
-                facts->cfg_liveness_alias_unknown_edges++;
-            facts->cfg_liveness_range_ends += edge.ends_live_range;
-            edge_count++;
-        }
-    }
-    facts->cfg_liveness_edges += edge_count;
+    complete &= range.resolved;
+    facts->cfg_liveness_end_points += range.point_endpoints;
+    facts->cfg_liveness_end_edges += range.edge_endpoints;
+    facts->cfg_liveness_direct_live_edges += range.direct_live_edges;
+    facts->cfg_liveness_direct_dead_edges += range.direct_dead_edges;
+    facts->cfg_liveness_direct_unknown_edges += range.direct_unknown_edges;
+    facts->cfg_liveness_alias_live_edges += range.alias_live_edges;
+    facts->cfg_liveness_alias_dead_edges += range.alias_dead_edges;
+    facts->cfg_liveness_alias_unknown_edges += range.alias_unknown_edges;
+    facts->cfg_liveness_range_ends += range.range_ends;
+    facts->cfg_liveness_edges += range.cfg_edges;
     facts->cfg_liveness_complete &= complete;
-    ir_liveness_query_free(query);
-    bool range_complete = complete && edge_count != 0;
+    bool range_complete = complete;
     bool range_recorded = parse_sym_finish_lifetime_range(
         symbol, phase, function, value, range_complete);
     facts->cfg_liveness_ranges++;
@@ -3836,6 +3720,18 @@ cleanup_lifetime_range(const parse_sym_entry_t *symbol,
     return nullptr;
 }
 
+typedef struct {
+    ir_summaries_t *summaries;
+    ir_func_t *function;
+} cleanup_escape_t;
+
+static bool
+cleanup_binding_escapes(void *context, const ir_value_t *binding)
+{
+    cleanup_escape_t *escape = context;
+    return n00bb_binding_escapes(escape->summaries, escape->function, binding);
+}
+
 static bool
 cleanup_fact_add(ir_summaries_t *escapes, n00bb_link_payload_t *owner_facts,
                  parse_sym_entry_t *symbol, ir_func_t *function,
@@ -3859,46 +3755,24 @@ cleanup_fact_add(ir_summaries_t *escapes, n00bb_link_payload_t *owner_facts,
     };
     bool complete = function || binding
         ? range && range->complete : true;
-    size_t observed_edges = 0;
-    size_t observed_endpoints = 0;
-    if (range) {
-        for (size_t i = 0; i < symbol->lifetime.cfg_edge_count; i++) {
-            const parse_sym_lifetime_edge_t *edge =
-                &symbol->lifetime.cfg_edges[i];
-            if (edge->phase != phase || edge->function != function
-                || edge->binding != binding) continue;
-            observed_edges++;
-            if (edge->is_exit) {
-                fact.exit_edges++;
-                if (edge->direct == PARSE_SYM_LIVENESS_DEAD
-                    && edge->aliases == PARSE_SYM_LIVENESS_DEAD)
-                    fact.safe_exit_edges++;
-                else if (edge->direct == PARSE_SYM_LIVENESS_UNKNOWN
-                         || edge->aliases == PARSE_SYM_LIVENESS_UNKNOWN)
-                    fact.unknown_exit_edges++;
-                else {
-                    fact.live_exit_edges++;
-                    complete = false;
-                }
-            }
-            if (edge->direct == PARSE_SYM_LIVENESS_UNKNOWN
-                || edge->aliases == PARSE_SYM_LIVENESS_UNKNOWN)
-                complete = false;
+    cleanup_escape_t escape = {.summaries = escapes, .function = function};
+    ir_cleanup_range_t cleanup;
+    if (range && binding) {
+        if (!ir_value_cleanup_range(binding, cleanup_binding_escapes,
+                                    &escape, &cleanup))
+            complete = false;
+        else {
+            complete &= cleanup.complete;
+            fact.cfg_edges = cleanup.cfg_edges;
+            fact.exit_edges = cleanup.exit_edges;
+            fact.safe_exit_edges = cleanup.safe_exit_edges;
+            fact.live_exit_edges = cleanup.live_exit_edges;
+            fact.unknown_exit_edges = cleanup.unknown_exit_edges;
+            fact.point_endpoints = cleanup.point_endpoints;
+            fact.edge_endpoints = cleanup.edge_endpoints;
+            fact.safe_endpoints = cleanup.point_endpoints
+                + cleanup.edge_endpoints;
         }
-        for (size_t i = 0; i < symbol->lifetime.end_count; i++) {
-            const parse_sym_lifetime_end_t *end =
-                &symbol->lifetime.ends[i];
-            if (end->phase != phase || end->function != function
-                || end->binding != binding) continue;
-            observed_endpoints++;
-            fact.safe_endpoints++;
-            if (end->on_edge) fact.edge_endpoints++;
-            else fact.point_endpoints++;
-        }
-        fact.cfg_edges = observed_edges;
-        complete &= observed_edges == range->edge_count
-            && observed_endpoints == range->end_count
-            && !n00bb_binding_escapes(escapes, function, binding);
     }
     fact.range_complete = complete;
     core_list_push(owner_facts->cleanup_facts, fact);
@@ -4056,8 +3930,7 @@ storage_lifetime_range_is_complete(const parse_sym_entry_t *symbol,
             parse_sym_lifetime_range_at(symbol, i);
         if (range && range->phase == PARSE_SYM_PHASE_RUNTIME
             && range->function == function && range->binding == binding)
-            return range->complete && range->start_count != 0
-                && range->edge_count != 0;
+            return range->complete && range->start_count != 0;
     }
     return false;
 }
@@ -4219,6 +4092,7 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .resolver = resolver,
     };
     core_dict_init(&analysis->declarations_by_symbol, nullptr, nullptr);
+    core_dict_init_string(&analysis->baked_root_index);
     if (!n00bb_baked_graph_load(analysis)) {
         n00bb_link_analysis_free(analysis);
         return nullptr;
@@ -4230,6 +4104,8 @@ void
 n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
 {
     if (!analysis) return;
+    if (analysis->dead_code_sites_ready)
+        core_dict_free(&analysis->dead_code_sites);
     ir_summaries_free(analysis->summaries);
     ir_summaries_free(analysis->escapes);
     core_list_free(analysis->assert_sites);
@@ -4245,6 +4121,9 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->reachable_functions);
     core_list_free(analysis->emitted_functions);
     core_list_free(analysis->callback_handlers);
+    core_list_free(analysis->callback_handler_types);
+    if (analysis->unit_of_module_ready)
+        core_dict_free(&analysis->unit_of_module);
     if (analysis->global_symbols_ready)
         core_dict_free(&analysis->global_symbols);
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
@@ -4281,6 +4160,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->static_graph_slots);
     core_list_free(analysis->units);
     core_dict_free(&analysis->declarations_by_symbol);
+    core_dict_free(&analysis->baked_root_index);
     core_free(analysis);
 }
 

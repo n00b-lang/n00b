@@ -270,30 +270,6 @@ parse_tree_set_index_address_access(parse_tree_t *node, bool access)
     return true;
 }
 
-static inline bool
-parse_tree_integer_range(const parse_tree_t *node, int64_t *minimum,
-                         int64_t *maximum)
-{
-    const parse_node_facts_t *facts = parse_tree_facts(node);
-    if (!facts || !facts->integer_range_known) return false;
-    if (minimum) *minimum = facts->integer_range_minimum;
-    if (maximum) *maximum = facts->integer_range_maximum;
-    return true;
-}
-
-static inline bool
-parse_tree_set_integer_range(parse_tree_t *node, int64_t minimum,
-                             int64_t maximum)
-{
-    if (minimum > maximum) return false;
-    parse_node_facts_t *facts = parse_tree_facts_for_update(node);
-    if (!facts) return false;
-    facts->integer_range_known = true;
-    facts->integer_range_minimum = minimum;
-    facts->integer_range_maximum = maximum;
-    return true;
-}
-
 static inline void *
 parse_tree_integer_literal_origin(const parse_tree_t *node)
 {

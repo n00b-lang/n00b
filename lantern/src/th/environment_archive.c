@@ -130,7 +130,7 @@ static bool save_constraint(core_object_writer_t *writer,
            save_constraint_scope(writer, constraint) &&
            core_object_writer_string(writer, constraint->method.in_place);
   case TH_CON_INTEGER:
-    return false;
+    return core_object_writer_u32(writer, constraint->integer.flags);
   }
   return false;
 }
@@ -139,7 +139,7 @@ static bool read_constraint(core_object_reader_t *reader,
                             th_constraint *constraint) {
   memset(constraint, 0, sizeof(*constraint));
   uint32_t kind;
-  if (!core_object_reader_u32(reader, &kind) || kind > TH_CON_KIND)
+  if (!core_object_reader_u32(reader, &kind) || kind > TH_CON_INTEGER)
     return false;
   constraint->kind = (th_con_kind)kind;
   switch (constraint->kind) {
@@ -189,8 +189,14 @@ static bool read_constraint(core_object_reader_t *reader,
            read_type_ref(reader, &constraint->method.call) &&
            read_constraint_scope(reader, constraint) &&
            core_object_reader_string(reader, &constraint->method.in_place);
-  case TH_CON_INTEGER:
-    return false;
+  case TH_CON_INTEGER: {
+    uint32_t flags = 0;
+    if (!core_object_reader_u32(reader, &flags) || flags > UINT8_MAX)
+      return false;
+    constraint->integer.flags = (uint8_t)flags;
+    constraint->integer.owner = 0;
+    return true;
+  }
   }
   return false;
 }

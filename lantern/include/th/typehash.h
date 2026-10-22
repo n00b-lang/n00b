@@ -527,6 +527,8 @@ typedef th_type *(*th_coerce_target_fn)(th_ctx *ctx, th_type *from,
 typedef bool (*th_convert_fn)(th_ctx *ctx, th_type *from, th_type *to,
                               void *site, void *context, void *user);
 typedef th_integer_class (*th_integer_class_fn)(th_ctx *ctx, th_type *type);
+typedef bool (*th_integer_method_fn)(th_ctx *ctx, th_type *receiver,
+                                     const th_constraint *method, void *user);
 
 th_type *th_coerce(th_ctx *ctx, th_type *from, th_coerce_policy policy);
 
@@ -535,7 +537,11 @@ void   th_register_coercion_target(th_ctx *ctx, th_coerce_target_fn fn);
 void   th_register_receiver_view(th_ctx *ctx, th_coerce_target_fn fn);
 void   th_register_conversion(th_ctx *ctx, th_convert_fn fn, void *user);
 void   th_register_integer_class(th_ctx *ctx, th_integer_class_fn fn);
+void   th_register_integer_method(th_ctx *ctx, th_integer_method_fn fn,
+                                  void *user);
 bool   th_var_is_integer(const th_type *var, uint8_t *flags);
+bool   th_var_owned_integer(const th_ctx *ctx, const th_type *var);
+bool   th_ground_integer(th_ctx *ctx, th_type *var, th_type *type);
 bool   th_converts(th_ctx *ctx, th_type *from, th_type *to, void *site,
                    void *context);
 bool   th_custom_coerces(th_ctx *ctx, th_type *from, th_type *to);

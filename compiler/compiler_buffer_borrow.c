@@ -2,19 +2,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "compiler_axioms.h"
 #include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
 #include "cached_body.h"
 
 #include "ir/doms.h"
+#include "ir/liveness.h"
 #include "ir/pass.h"
 
 static const core_string_t borrow_diagnostic_text = CORE_STRING_STATIC(
     "this use of a Buffer as a string outlives a safe borrow; consume it "
     "with to_string(b), or keep b with to_string(buffer_from_string(b))");
-
-static const core_string_t write_lock_name =
-    CORE_STRING_STATIC("builtin.containers.buffer.write_lock");
 
 static const core_string_t buffer_state_type_name =
     CORE_STRING_STATIC("builtin.containers.buffer.Buffer_State");
@@ -351,18 +350,11 @@ contents_table_free(contents_table_t *table)
     pointer_map_free(&table->contents_index);
 }
 
-static bool
-function_is_write_lock(const ir_func_t *function)
+static uint64_t
+axiom_writes(const ir_func_t *function)
 {
-    core_string_t module = function->owner ? ir_module_name(function->owner)
-                                           : (core_string_t){};
-    if (!module.data || !function->name.data) return false;
-    size_t module_len = module.u8_bytes;
-    return write_lock_name.u8_bytes > module_len
-        && core_string_starts_with(write_lock_name, module)
-        && write_lock_name.data[module_len] == '.'
-        && core_string_eq(core_string_slice(write_lock_name, module_len + 1,
-               write_lock_name.u8_bytes - module_len - 1), function->name);
+    const n00bb_axiom_t *axiom = n00bb_axiom_of_function(function);
+    return axiom ? axiom->writes : 0;
 }
 
 static th_type *
@@ -397,7 +389,7 @@ n00bb_buffer_native_flow(const ir_func_t *function, ir_sflow_t *out)
         out->carried[slot] = (ir_scarried_t){
             .from = {UINT64_MAX, UINT64_MAX}, .fresh = true,
         };
-    if (function_is_write_lock(function)) out->writes[IR_SFLOW_SELF] = 1;
+    out->writes[IR_SFLOW_SELF] = axiom_writes(function);
     return true;
 }
 
@@ -1145,7 +1137,7 @@ n00bb_buffer_flow(void *context, ir_summaries_t *summaries,
         .n_carried = n_carried,
         .carried = core_alloc_array(ir_scarried_t, n_carried),
     };
-    if (function_is_write_lock(function)) out->writes[IR_SFLOW_SELF] |= 1;
+    out->writes[IR_SFLOW_SELF] |= axiom_writes(function);
     bool ok = origins_solve(&state);
     uint64_t *writes = out->writes;
     ir_scarried_t *carried = out->carried;
@@ -1219,7 +1211,7 @@ typedef struct {
     origins_t *origins;
     value_list_t tracked;
     pointer_map_t tracked_index;
-    ir_values_liveness_t *liveness;
+    ir_live_t *liveness;
 } window_t;
 
 static void
@@ -1723,7 +1715,8 @@ walk_block(walk_t *walk, ir_block_t *block, uint32_t start,
         walk->after = after;
         walk->after_cap = block->n_instrs;
     }
-    if (!ir_values_live_after_each(window->liveness, block, walk->after))
+    if (!ir_live_set_after_each(window->liveness, window->tracked.items,
+                                window->tracked.len, block, walk->after))
         return false;
     ir_instr_t *terminator = ir_block_terminator(block);
     for (uint32_t i = start; i < block->n_instrs; i++) {
@@ -1791,8 +1784,9 @@ walk_window(walk_t *walk)
             continue;
         }
         ir_block_t *successor = ir_succ_at(terminator, frame->successor++);
-        if (!ir_values_live_on_edge(window->liveness, frame->block,
-                                    successor)) {
+        if (!ir_live_set_on_edge(window->liveness, window->tracked.items,
+                                 window->tracked.len, frame->block,
+                                 successor)) {
             ok = add_end_site(&walk->sites, (end_site_t){
                 .from = frame->block, .to = successor,
             });
@@ -1896,8 +1890,7 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
     walk_t walk = {.window = &window};
     bool ok = window.buffer && conversion->dest
         && collect_tracked(&window)
-        && (window.liveness = ir_values_liveness_new(function,
-                window.tracked.items, window.tracked.len))
+        && (window.liveness = ir_func_liveness(function))
         && seed_value(origins, window.buffer, &walk.source, nullptr)
         && expand_contents(origins, &walk.source);
     if (ok) {
@@ -1921,7 +1914,6 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
     free(walk.continued);
     free(walk.after);
     free(walk.source.items);
-    ir_values_liveness_free(window.liveness);
     free(window.tracked.items);
     pointer_map_free(&window.tracked_index);
     return accepted;

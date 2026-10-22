@@ -51,12 +51,6 @@ typedef enum {
     PARSE_SYM_STORAGE_DYNAMIC,
 } parse_sym_storage_duration_t;
 
-typedef enum {
-    PARSE_SYM_LIVENESS_UNKNOWN,
-    PARSE_SYM_LIVENESS_DEAD,
-    PARSE_SYM_LIVENESS_LIVE,
-} parse_sym_liveness_t;
-
 typedef struct {
     parse_sym_entry_t    *other;
     parse_sym_alias_kind_t kind;
@@ -65,18 +59,6 @@ typedef struct {
     bool                  has_last_use;
     bool                  escapes;
 } parse_sym_alias_t;
-
-typedef struct {
-    void *function;
-    void *binding;
-    void *from;
-    void *to;
-    parse_sym_phase_t phase;
-    parse_sym_liveness_t direct;
-    parse_sym_liveness_t aliases;
-    bool is_exit;
-    bool ends_live_range;
-} parse_sym_lifetime_edge_t;
 
 typedef struct {
     parse_sym_phase_t phase;
@@ -96,19 +78,7 @@ typedef struct {
     parse_sym_phase_t phase;
     void *function;
     void *binding;
-    void *point;
-    void *from;
-    void *to;
-    bool on_edge;
-} parse_sym_lifetime_end_t;
-
-typedef struct {
-    parse_sym_phase_t phase;
-    void *function;
-    void *binding;
     size_t start_count;
-    size_t edge_count;
-    size_t end_count;
     bool complete;
 } parse_sym_lifetime_range_t;
 
@@ -127,12 +97,6 @@ typedef struct {
     parse_sym_lifetime_range_t *ranges;
     size_t range_count;
     size_t range_capacity;
-    parse_sym_lifetime_end_t *ends;
-    size_t end_count;
-    size_t end_capacity;
-    parse_sym_lifetime_edge_t *cfg_edges;
-    size_t cfg_edge_count;
-    size_t cfg_edge_capacity;
 } parse_sym_lifetime_t;
 
 struct parse_sym_entry_t {
@@ -371,18 +335,6 @@ bool parse_sym_finish_lifetime_range(parse_sym_entry_t *symbol,
                                      bool complete);
 size_t parse_sym_lifetime_range_count(const parse_sym_entry_t *symbol);
 const parse_sym_lifetime_range_t *parse_sym_lifetime_range_at(
-    const parse_sym_entry_t *symbol, size_t index);
-bool parse_sym_set_lifetime_end(parse_sym_entry_t *symbol,
-                                parse_sym_lifetime_end_t end);
-size_t parse_sym_lifetime_end_count(const parse_sym_entry_t *symbol);
-const parse_sym_lifetime_end_t *parse_sym_lifetime_end_at(
-    const parse_sym_entry_t *symbol, size_t index);
-/* CFG nodes and owners are opaque and borrowed from the frontend's IR. One
- * entry records a binding's value/alias liveness for an edge or terminal exit. */
-bool parse_sym_set_lifetime_edge(parse_sym_entry_t *symbol,
-                                 parse_sym_lifetime_edge_t edge);
-size_t parse_sym_lifetime_edge_count(const parse_sym_entry_t *symbol);
-const parse_sym_lifetime_edge_t *parse_sym_lifetime_edge_at(
     const parse_sym_entry_t *symbol, size_t index);
 bool parse_symtab_add_alias(parse_sym_entry_t *alias,
                             parse_sym_entry_t *target,

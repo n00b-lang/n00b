@@ -1,0 +1,21 @@
+func clamp(x: int) -> int {
+    if x < 0 {
+        return 0
+    }
+    if x > 100 {
+        return 100
+    }
+    let inside: int = x + 1
+    return inside
+}
+
+func bucket(n: uint) -> uint {
+    var result: uint = 0
+    if n < 16 {
+        result = n * 4
+    }
+    return result
+}
+
+require clamp(50) == 51
+require bucket(3) == 12

@@ -406,6 +406,7 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         CORE_STRING_STATIC("--gc-conservative-stacks"),
         CORE_STRING_STATIC("--no-specialize"),
         CORE_STRING_STATIC("--closed-world"),
+        CORE_STRING_STATIC("--unchecked-wide-narrowing"),
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(*flags); i++)
         put_u32(out, parse_cmdr_flag_present(args, flags[i]));
@@ -617,7 +618,6 @@ struct n00bb_cache_t {
     core_list_t(cache_entry_t) entries;
     core_list_t(cache_environment_t) interfaces;
     core_list_t(cache_snapshot_t) snapshots;
-    n00bb_llvm_mutator_classifier_t mutator_classifier;
     core_list_t(cache_scc_t) sccs;
     core_list_t(cache_link_t) summary_identities;
     bool prepared;
@@ -1057,9 +1057,6 @@ read_entries(n00bb_cache_t *cache)
     }
 }
 
-static bool cached_mutator(void *context, const ir_func_t *function,
-                           bool *mutator);
-
 static void
 member_names(const cache_entry_t *entry, core_buffer_t *out)
 {
@@ -1109,9 +1106,6 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
     cache->sccs = core_list_new(cache_scc_t);
     cache->instances = core_list_new(cache_instance_t);
     cache->strict = getenv("N00BB_CACHE_STRICT") != nullptr;
-    cache->mutator_classifier = (n00bb_llvm_mutator_classifier_t){
-        .known = cached_mutator, .context = cache,
-    };
     read_module_keys(cache);
     read_entries(cache);
     core_string_t excluded = core_string_from_cstr(
@@ -1597,49 +1591,13 @@ static const cache_instance_t *loaded_instance(const n00bb_cache_t *cache,
                                                const ir_module_t *module);
 
 static bool
-mutator_listed(const cache_section_t *section, core_string_t name,
-               bool *mutator)
+cache_has_marker(const n00bb_cache_t *cache, core_string_t marker)
 {
-    size_t length = name.u8_bytes;
-    const char *at = (const char *)section->data;
-    const char *end = at + section->length;
-    *mutator = false;
-    while (at < end) {
-        const char *line = memchr(at, '\n', (size_t)(end - at));
-        size_t span = line ? (size_t)(line - at) : (size_t)(end - at);
-        if (span == length && (!length || !memcmp(at, name.data, length))) {
-            *mutator = true;
-            break;
-        }
-        at = line ? line + 1 : end;
-    }
-    return true;
-}
-
-static bool
-cached_mutator(void *context, const ir_func_t *function, bool *mutator)
-{
-    const n00bb_cache_t *cache = context;
-    const cache_instance_t *instance = function
-        ? loaded_instance(cache, function->owner) : nullptr;
-    if (instance) {
-        core_buffer_t name = {0};
-        phase_name_into(&name, CORE_STRING_STATIC("mutators"));
-        const cache_section_t *section = section_named(&instance->sections,
-            core_buffer_string(&name));
-        core_buffer_release(&name);
-        return section && mutator_listed(section, function->name, mutator);
-    }
-    for (size_t e = 0; function && e < cache->entries.len; e++) {
+    for (size_t e = 0; cache && e < cache->entries.len; e++) {
         const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load != ENTRY_VALID) continue;
-        for (size_t m = 0; m < entry->members.len; m++) {
-            if (entry->members.data[m].module != function->owner) continue;
-            const cache_section_t *section = phase_section(entry,
-                CORE_STRING_STATIC("mutators"), entry->members.data[m].name);
-            if (!section) return false;
-            return mutator_listed(section, function->name, mutator);
-        }
+        if (entry->load == ENTRY_VALID && entry->loaded
+            && phase_section(entry, marker, (core_string_t){0}))
+            return true;
     }
     return false;
 }
@@ -1647,20 +1605,13 @@ cached_mutator(void *context, const ir_func_t *function, bool *mutator)
 bool
 n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache)
 {
-    for (size_t e = 0; cache && e < cache->entries.len; e++) {
-        const cache_entry_t *entry = &cache->entries.data[e];
-        if (entry->load == ENTRY_VALID && entry->loaded
-            && phase_section(entry, CORE_STRING_STATIC("build-time-capture"),
-                             (core_string_t){0}))
-            return true;
-    }
-    return false;
+    return cache_has_marker(cache, CORE_STRING_STATIC("build-time-capture"));
 }
 
-const n00bb_llvm_mutator_classifier_t *
-n00bb_cache_mutator_classifier(const n00bb_cache_t *cache)
+bool
+n00bb_cache_needs_literal_capture(const n00bb_cache_t *cache)
 {
-    return cache ? &cache->mutator_classifier : nullptr;
+    return cache_has_marker(cache, CORE_STRING_STATIC("literal-capture"));
 }
 
 static bool
@@ -1853,11 +1804,11 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link)
             .module = core_string_dup(
                 scc->members.data[0]->module.identifier),
         };
-        ok = snapshot.module.data
+        bool saved = snapshot.module.data
             && ir_modules_save_references(modules, scc->members.len,
                                           &snapshot.ir, &snapshot.references);
         core_free(modules);
-        if (ok) core_list_push(cache->snapshots, snapshot);
+        if (saved) core_list_push(cache->snapshots, snapshot);
         else {
             core_free(snapshot.module.data);
             core_buffer_release(&snapshot.ir);
@@ -2051,34 +2002,80 @@ n00bb_cache_symbol_uses(const n00bb_cache_t *cache, core_string_t module,
     return !reader.failed;
 }
 
+typedef struct {
+    const core_diagnostic_t *const *items;
+    size_t count;
+} warning_group_t;
+
+static int
+compare_text(core_string_t left, core_string_t right)
+{
+    size_t shared = left.u8_bytes < right.u8_bytes ? left.u8_bytes
+                                                   : right.u8_bytes;
+    int order = shared ? memcmp(left.data, right.data, shared) : 0;
+    if (order) return order;
+    return (left.u8_bytes > right.u8_bytes) - (left.u8_bytes < right.u8_bytes);
+}
+
+static int
+warning_group_order(const void *left_raw, const void *right_raw)
+{
+    const core_diagnostic_t *left = ((const warning_group_t *)left_raw)
+        ->items[0];
+    const core_diagnostic_t *right = ((const warning_group_t *)right_raw)
+        ->items[0];
+    int order = compare_text(left->path, right->path);
+    if (!order)
+        order = (left->location.line > right->location.line)
+            - (left->location.line < right->location.line);
+    if (!order)
+        order = (left->location.column > right->location.column)
+            - (left->location.column < right->location.column);
+    if (!order) order = compare_text(left->code, right->code);
+    if (!order) order = compare_text(left->message, right->message);
+    return order;
+}
+
 static void
 put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
 {
     const core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(unit);
-    core_buffer_t items = {0};
-    uint32_t count = 0;
+    size_t total = core_diagnostics_count(diagnostics);
+    const core_diagnostic_t **items = core_alloc_array(
+        const core_diagnostic_t *, total + 1);
+    warning_group_t *groups = core_alloc_array(warning_group_t, total + 1);
+    size_t group_count = 0, item_count = 0;
     bool attached = false;
-    for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
+    for (size_t i = 0; i < total; i++) {
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         bool note = item->severity == CORE_DIAG_NOTE
             || item->severity == CORE_DIAG_HELP;
         attached = item->severity == CORE_DIAG_WARNING || (note && attached);
         if (!attached) continue;
-        put_u32(&items, (uint32_t)item->severity);
-        put_text(&items, item->code);
-        put_text(&items, item->message);
-        put_text(&items, item->path);
-        put_u32(&items, item->location.line);
-        put_u32(&items, item->location.column);
-        put_u32(&items, item->location.end_line);
-        put_u32(&items, item->location.end_column);
-        put_u32(&items, item->location.has_location);
-        count++;
+        if (!note)
+            groups[group_count++] = (warning_group_t){
+                .items = &items[item_count]};
+        items[item_count++] = item;
+        groups[group_count - 1].count++;
     }
-    put_u32(out, count);
-    if (items.byte_len) core_buffer_append(out, items.data, items.byte_len);
-    core_buffer_release(&items);
+    qsort(groups, group_count, sizeof(*groups), warning_group_order);
+    put_u32(out, (uint32_t)item_count);
+    for (size_t g = 0; g < group_count; g++)
+        for (size_t i = 0; i < groups[g].count; i++) {
+            const core_diagnostic_t *item = groups[g].items[i];
+            put_u32(out, (uint32_t)item->severity);
+            put_text(out, item->code);
+            put_text(out, item->message);
+            put_text(out, item->path);
+            put_u32(out, item->location.line);
+            put_u32(out, item->location.column);
+            put_u32(out, item->location.end_line);
+            put_u32(out, item->location.end_column);
+            put_u32(out, item->location.has_location);
+        }
+    core_free(groups);
+    core_free(items);
 }
 
 static bool
@@ -2186,11 +2183,19 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                             dispatch.data, dispatch.byte_len);
     core_buffer_release(&dispatch);
     bool needs_capture = false;
-    for (size_t m = 0; m < scc->members.len; m++)
-        needs_capture = needs_capture
-            || tu_state(scc->members.data[m])->needs_build_time_capture;
+    bool needs_literals = false;
+    for (size_t m = 0; m < scc->members.len; m++) {
+        n00bb_tu_state_t *member = tu_state(scc->members.data[m]);
+        needs_capture = needs_capture || member->needs_build_time_capture;
+        needs_literals = needs_literals || member->needs_literal_capture;
+    }
     if (needs_capture) {
         phase_section_name(&name, CORE_STRING_STATIC("build-time-capture"));
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                (const uint8_t *)"", 0);
+    }
+    if (needs_literals) {
+        phase_section_name(&name, CORE_STRING_STATIC("literal-capture"));
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 (const uint8_t *)"", 0);
     }
@@ -2206,13 +2211,13 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         module_section_name(&name, CORE_STRING_STATIC("abi"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 object->abi, object->abi_bytes);
-        module_section_name(&name, CORE_STRING_STATIC("mutators"), module);
-        ok = ok && sections_set(&sections, core_buffer_string(&name),
-                                object->mutators ? object->mutators
-                                                 : (const uint8_t *)"",
-                                object->mutator_bytes);
         core_buffer_t warnings = {0};
-        put_warnings(&warnings, scc->members.data[m]);
+        core_translation_unit_t *root = analysis->units.len
+            ? analysis->units.data[0] : nullptr;
+        if (root && n00bb_resolver_same_root(analysis->resolver, root,
+                                             scc->members.data[m]))
+            put_warnings(&warnings, scc->members.data[m]);
+        else put_u32(&warnings, 0);
         module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 warnings.data ? (const uint8_t *)warnings.data
@@ -2478,15 +2483,11 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
     phase_section_name(&name, CORE_STRING_STATIC("native"));
     const cache_section_t *native = section_named(&found->sections,
         core_buffer_string(&name));
-    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
-    const cache_section_t *mutators = section_named(&found->sections,
-        core_buffer_string(&name));
     core_buffer_release(&name);
-    if (!native || !mutators) return false;
+    if (!native) return false;
     *object = (n00bb_cache_module_object_t){
         .module = ir_module_name(module),
         .native = native->data, .native_bytes = native->length,
-        .mutators = mutators->data, .mutator_bytes = mutators->length,
     };
     return true;
 }
@@ -2512,11 +2513,6 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     phase_section_name(&name, CORE_STRING_STATIC("native"));
     bool ok = sections_set(&sections, core_buffer_string(&name),
                            object->native, object->native_bytes);
-    phase_section_name(&name, CORE_STRING_STATIC("mutators"));
-    ok = ok && sections_set(&sections, core_buffer_string(&name),
-                            object->mutators ? object->mutators
-                                             : (const uint8_t *)"",
-                            object->mutator_bytes);
     core_buffer_release(&name);
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);

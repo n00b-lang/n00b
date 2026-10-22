@@ -104,23 +104,6 @@ test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope(void)
     parse_tree_free_node(node);
 }
 
-static void
-test_tree_integer_range_fact(void)
-{
-    parse_tree_t *node = core_tree_node(parse_nt_node_t,
-        parse_token_info_ptr_t, ((parse_nt_node_t){0}));
-    int64_t minimum = 0, maximum = 0;
-    bool unset = node && !parse_tree_integer_range(node, &minimum, &maximum);
-    bool set = node && parse_tree_set_integer_range(node, 2, 7);
-    bool invalid_rejected = node
-        && !parse_tree_set_integer_range(node, 8, 7);
-    bool read = node && parse_tree_integer_range(node, &minimum, &maximum);
-    check("tree stores integer range analysis separately from inferred type",
-          unset && set && invalid_rejected && read
-          && minimum == 2 && maximum == 7);
-    parse_tree_free_node(node);
-}
-
 static bool
 visit_type_namespace_scope(parse_scope_t *scope, void *context)
 {
@@ -272,8 +255,6 @@ test_symtab_phase_lifetime_and_alias_facts(void)
     int runtime_function_b = 18;
     int runtime_binding_a = 19;
     int runtime_binding_b = 20;
-    int cfg_from = 15;
-    int cfg_to = 16;
     int lifetime_entry = 21;
     int lifetime_instruction = 22;
     void *observed_comptime = nullptr;
@@ -338,55 +319,6 @@ test_symtab_phase_lifetime_and_alias_facts(void)
                 .function = &runtime_function_b,
                 .binding = &runtime_binding_b,
                 .point = &lifetime_instruction,
-            });
-    bool cfg_edges = parse_sym_set_lifetime_edge(value,
-        (parse_sym_lifetime_edge_t){
-            .function = &runtime_function_a,
-            .binding = &runtime_binding,
-            .from = &cfg_from,
-            .to = &cfg_to,
-            .phase = PARSE_SYM_PHASE_RUNTIME,
-            .direct = PARSE_SYM_LIVENESS_DEAD,
-            .aliases = PARSE_SYM_LIVENESS_LIVE,
-            .ends_live_range = true,
-        })
-        && parse_sym_set_lifetime_edge(value,
-            (parse_sym_lifetime_edge_t){
-                .function = &runtime_function_a,
-                .binding = &runtime_binding,
-                .from = &cfg_from,
-                .phase = PARSE_SYM_PHASE_COMPTIME,
-                .direct = PARSE_SYM_LIVENESS_UNKNOWN,
-                .aliases = PARSE_SYM_LIVENESS_UNKNOWN,
-                .is_exit = true,
-            })
-        && parse_sym_set_lifetime_edge(value,
-            (parse_sym_lifetime_edge_t){
-                .function = &runtime_function_a,
-                .binding = &runtime_binding,
-                .from = &cfg_from,
-                .to = &cfg_to,
-                .phase = PARSE_SYM_PHASE_RUNTIME,
-                .direct = PARSE_SYM_LIVENESS_LIVE,
-                .aliases = PARSE_SYM_LIVENESS_UNKNOWN,
-                .ends_live_range = true,
-            })
-        && parse_sym_set_lifetime_edge(value,
-            (parse_sym_lifetime_edge_t){
-                .function = &runtime_function_b,
-                .binding = &runtime_binding_b,
-                .from = &cfg_from,
-                .to = &cfg_to,
-                .phase = PARSE_SYM_PHASE_RUNTIME,
-                .direct = PARSE_SYM_LIVENESS_LIVE,
-                .aliases = PARSE_SYM_LIVENESS_LIVE,
-            })
-        && !parse_sym_set_lifetime_edge(value,
-            (parse_sym_lifetime_edge_t){
-                .from = &cfg_from,
-                .phase = PARSE_SYM_PHASE_RUNTIME,
-                .direct = PARSE_SYM_LIVENESS_DEAD,
-                .aliases = PARSE_SYM_LIVENESS_DEAD,
             });
 
     parse_sym_set_phases(view, PARSE_SYM_PHASE_RUNTIME,
@@ -527,31 +459,6 @@ test_symtab_phase_lifetime_and_alias_facts(void)
               && instruction_start->binding == &runtime_binding_b
               && instruction_start->point == &lifetime_instruction
               && !instruction_start->at_entry);
-    const parse_sym_lifetime_edge_t *runtime_edge =
-        parse_sym_lifetime_edge_at(value, 0);
-    const parse_sym_lifetime_edge_t *comptime_exit =
-        parse_sym_lifetime_edge_at(value, 1);
-    bool lifetime_ends = parse_sym_set_lifetime_end(value,
-        (parse_sym_lifetime_end_t){
-            .phase = PARSE_SYM_PHASE_RUNTIME,
-            .function = &runtime_function_a,
-            .binding = &runtime_binding,
-            .point = &lifetime_instruction,
-        }) && parse_sym_set_lifetime_end(value,
-            (parse_sym_lifetime_end_t){
-                .phase = PARSE_SYM_PHASE_RUNTIME,
-                .function = &runtime_function_b,
-                .binding = &runtime_binding_b,
-                .from = &cfg_from,
-                .to = &cfg_to,
-                .on_edge = true,
-            }) && !parse_sym_set_lifetime_end(value,
-            (parse_sym_lifetime_end_t){
-                .phase = PARSE_SYM_PHASE_RUNTIME,
-                .function = &runtime_function_a,
-                .binding = &runtime_binding,
-                .on_edge = true,
-            });
     bool ranges_finished =
         parse_sym_finish_lifetime_range(value, PARSE_SYM_PHASE_RUNTIME,
             &runtime_function_a, &runtime_binding, true)
@@ -565,33 +472,12 @@ test_symtab_phase_lifetime_and_alias_facts(void)
         parse_sym_lifetime_range_at(value, 1);
     const parse_sym_lifetime_range_t *incomplete_range =
         parse_sym_lifetime_range_at(value, 2);
-    check("symbols retain deduplicated CFG lifetime facts by phase",
-          cfg_edges && parse_sym_lifetime_edge_count(value) == 3
-              && runtime_edge && runtime_edge->from == &cfg_from
-              && runtime_edge->function == &runtime_function_a
-              && runtime_edge->binding == &runtime_binding
-              && runtime_edge->to == &cfg_to
-              && runtime_edge->phase == PARSE_SYM_PHASE_RUNTIME
-              && runtime_edge->direct == PARSE_SYM_LIVENESS_LIVE
-              && runtime_edge->aliases == PARSE_SYM_LIVENESS_UNKNOWN
-              && runtime_edge->ends_live_range
-              && comptime_exit && comptime_exit->is_exit
-              && comptime_exit->to == nullptr
-              && comptime_exit->phase == PARSE_SYM_PHASE_COMPTIME
-              && parse_sym_lifetime_edge_at(value, 2)->function
-                    == &runtime_function_b
-              && parse_sym_lifetime_edge_at(value, 2)->binding
-                    == &runtime_binding_b
-              && lifetime_ends && ranges_finished
+    check("symbols retain lifetime ranges by phase",
+          ranges_finished
               && parse_sym_lifetime_range_count(value) == 3
-              && range_a && range_a->start_count == 1
-              && range_a->edge_count == 1 && range_a->end_count == 1
-              && range_a->complete
-              && range_b && range_b->start_count == 1
-              && range_b->edge_count == 1 && range_b->end_count == 1
-              && range_b->complete
+              && range_a && range_a->start_count == 1 && range_a->complete
+              && range_b && range_b->start_count == 1 && range_b->complete
               && incomplete_range && !incomplete_range->start_count
-              && incomplete_range->edge_count == 1
               && !incomplete_range->complete);
     bool range_reset = parse_sym_begin_lifetime_range(value,
         PARSE_SYM_PHASE_RUNTIME, &runtime_function_a, &runtime_binding);
@@ -599,11 +485,9 @@ test_symtab_phase_lifetime_and_alias_facts(void)
     range_b = parse_sym_lifetime_range_at(value, 1);
     check("restarting one lifetime range clears only its owner facts",
           range_reset && range_a && !range_a->complete
-              && !range_a->start_count && !range_a->edge_count
-              && !range_a->end_count
+              && !range_a->start_count
               && range_b && range_b->complete
-              && range_b->start_count == 1 && range_b->edge_count == 1
-              && range_b->end_count == 1);
+              && range_b->start_count == 1);
     const parse_sym_alias_t *forward = parse_sym_alias_at(view, 0);
     const parse_sym_alias_t *reverse = parse_sym_aliased_by_at(value, 0);
     check("alias relationships are queryable in both directions",
@@ -2951,7 +2835,6 @@ main(void)
     test_symbol_namespaces_share_lexical_scopes();
     test_symbol_namespace_scope_iteration();
     test_tree_resolution_is_scope_or_symbol_without_replacing_lexical_scope();
-    test_tree_integer_range_fact();
     test_a_deep_tree_does_not_overflow_the_stack(g);
 
     parse_grammar_free(g);

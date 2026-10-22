@@ -93,6 +93,7 @@ n00bb_exe = executable(
     'n00b',
     ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_buffer_borrow.c', 'compiler/compiler_layout.c', 'compiler/compiler_baked.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_cache.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c', 'compiler/builtin_types.c',
      'compiler/compiler_tu_range.c', 'compiler/compiler_tu_builtins.c',
+     'compiler/compiler_axioms.c',
      'compiler/compiler_int_ground.c',
      'compiler/compiler_tu_alias.c', 'compiler/compiler_tu_walk.c',
      'compiler/compiler_tu_interface.c',
@@ -414,7 +415,8 @@ test('abi-type-index', abi_type_index_test)
 llvm_backend_test = executable(
     'llvm-backend-test',
     ['tests/llvm_backend.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/cache_location.c',
-     'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c'],
+     'runtime/runtime_native_roots.c', 'compiler/compiler_native_roots.c',
+     'compiler/compiler_axioms.c'],
     dependencies: [lantern, llvm],
 )
 
@@ -440,7 +442,7 @@ llvm_frame_roots_test = executable(
     'llvm-frame-roots-test',
     ['tests/llvm_frame_roots.c', 'compiler/llvm_backend.c', 'compiler/llvm_native_cache.c', 'compiler/cache_location.c',
      'compiler/llvm_stack_maps.c', 'compiler/native_frame_maps.c', 'runtime/runtime_native_roots.c',
-     'compiler/compiler_native_roots.c'],
+     'compiler/compiler_native_roots.c', 'compiler/compiler_axioms.c'],
     dependencies: [lantern, llvm],
 )
 test('llvm-frame-roots', llvm_frame_roots_test)
@@ -661,7 +663,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'try_without_failure.n',
-           'IR-E0010',
+           'N00BB-T0048',
            'try_without_failure.n:2:21'],
     timeout: 120,
     suite: 'slow',
@@ -720,7 +722,8 @@ test(
     suite: 'slow',
 )
 
-foreach static_case : ['static_enum', 'static_option', 'static_nested_import']
+foreach static_case : ['static_enum', 'static_option', 'static_nested_import',
+                       'static_literals']
     test(
         static_case.replace('_', '-') + '-n00b', find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
@@ -826,7 +829,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'wide_integer_literal_range.n',
-           'N00BB-T0045',
+           'N00BB-T0041',
            'wide_integer_literal_range.n:4:9'],
     timeout: 120,
     suite: 'slow',
@@ -1548,6 +1551,51 @@ test(
 )
 
 test(
+    'integer-operand-widening',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'integer_operand_widening.n'],
+)
+
+test(
+    'ref-integer-widening',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'ref_integer_widening.n'],
+)
+
+test(
+    'sys-locks',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'sys_locks.n'],
+)
+
+test(
+    'thread-var-storage',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'thread_var_storage.n'],
+)
+
+test(
+    'verify-analyses',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'verify_analyses.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
+               / 'bitcode_shared_ranges.n'],
+)
+
+test(
     'gc-empty-array-backing-n00b',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
@@ -1859,7 +1907,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_assert_ref_write.n',
-           'assert expression has a side effect: \'fill\' writes through argument 1',
+           'assert expression has a side effect: it calls \'fill\'; \'fill\' writes through its argument 1',
            'bitcode_assert_ref_write.n:7:1'],
     suite: 'slow',
 )
@@ -1884,8 +1932,17 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_shared_ranges.n',
-           'bitcode_shared_ranges', '12'],
-    suite: 'slow',
+           'bitcode_shared_ranges'],
+)
+
+test(
+    'range-agreement-programs',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'range_agreement.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'range_agreement' / 'agreement.n',
+           'parameters', 'guards', 'loops', 'widths'],
 )
 
 test(
@@ -2028,8 +2085,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_dead_code.n',
-           'bitcode_dead_code.n:7:5', 'bitcode_dead_code.n:13:5',
-           'bitcode_dead_code.n:18:27'],
+           'bitcode_dead_code.n:7:9', 'bitcode_dead_code.n:13:12',
+           'bitcode_dead_code.n:18:9', 'bitcode_dead_code.n:23:33'],
     suite: 'slow',
 )
 
