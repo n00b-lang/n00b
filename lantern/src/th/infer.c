@@ -2722,11 +2722,21 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
             b = t;
         }
 
+        uint8_t integer_flags = 0;
         if (boundary && a->kind == TH_VAR && b->kind != TH_VAR
             && !ctx->grounding_integers && ctx->integer_class
-            && th_var_is_integer(a, nullptr)
-            && ctx->integer_class(ctx, b) != TH_INTEGER_NONE) {
-            continue;
+            && th_var_is_integer(a, &integer_flags)) {
+            th_integer_class class = ctx->integer_class(ctx, b);
+            if (class == TH_INTEGER_SIGNED
+                && (integer_flags & TH_INTEGER_UNSIGNED)) {
+                th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("integer"),
+                       nullptr, b,
+                       CORE_STRING_STATIC(
+                           "a bitwise integer value needs an unsigned type"));
+                ok = false;
+                break;
+            }
+            if (class != TH_INTEGER_NONE) continue;
         }
 
         if (a->kind == TH_VAR) {

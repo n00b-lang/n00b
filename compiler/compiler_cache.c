@@ -1793,11 +1793,11 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link)
             .module = core_string_dup(
                 scc->members.data[0]->module.identifier),
         };
-        ok = snapshot.module.data
+        bool saved = snapshot.module.data
             && ir_modules_save_references(modules, scc->members.len,
                                           &snapshot.ir, &snapshot.references);
         core_free(modules);
-        if (ok) core_list_push(cache->snapshots, snapshot);
+        if (saved) core_list_push(cache->snapshots, snapshot);
         else {
             core_free(snapshot.module.data);
             core_buffer_release(&snapshot.ir);
@@ -1991,34 +1991,80 @@ n00bb_cache_symbol_uses(const n00bb_cache_t *cache, core_string_t module,
     return !reader.failed;
 }
 
+typedef struct {
+    const core_diagnostic_t *const *items;
+    size_t count;
+} warning_group_t;
+
+static int
+compare_text(core_string_t left, core_string_t right)
+{
+    size_t shared = left.u8_bytes < right.u8_bytes ? left.u8_bytes
+                                                   : right.u8_bytes;
+    int order = shared ? memcmp(left.data, right.data, shared) : 0;
+    if (order) return order;
+    return (left.u8_bytes > right.u8_bytes) - (left.u8_bytes < right.u8_bytes);
+}
+
+static int
+warning_group_order(const void *left_raw, const void *right_raw)
+{
+    const core_diagnostic_t *left = ((const warning_group_t *)left_raw)
+        ->items[0];
+    const core_diagnostic_t *right = ((const warning_group_t *)right_raw)
+        ->items[0];
+    int order = compare_text(left->path, right->path);
+    if (!order)
+        order = (left->location.line > right->location.line)
+            - (left->location.line < right->location.line);
+    if (!order)
+        order = (left->location.column > right->location.column)
+            - (left->location.column < right->location.column);
+    if (!order) order = compare_text(left->code, right->code);
+    if (!order) order = compare_text(left->message, right->message);
+    return order;
+}
+
 static void
 put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
 {
     const core_diagnostics_t *diagnostics =
         core_translation_unit_diagnostics(unit);
-    core_buffer_t items = {0};
-    uint32_t count = 0;
+    size_t total = core_diagnostics_count(diagnostics);
+    const core_diagnostic_t **items = core_alloc_array(
+        const core_diagnostic_t *, total + 1);
+    warning_group_t *groups = core_alloc_array(warning_group_t, total + 1);
+    size_t group_count = 0, item_count = 0;
     bool attached = false;
-    for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
+    for (size_t i = 0; i < total; i++) {
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         bool note = item->severity == CORE_DIAG_NOTE
             || item->severity == CORE_DIAG_HELP;
         attached = item->severity == CORE_DIAG_WARNING || (note && attached);
         if (!attached) continue;
-        put_u32(&items, (uint32_t)item->severity);
-        put_text(&items, item->code);
-        put_text(&items, item->message);
-        put_text(&items, item->path);
-        put_u32(&items, item->location.line);
-        put_u32(&items, item->location.column);
-        put_u32(&items, item->location.end_line);
-        put_u32(&items, item->location.end_column);
-        put_u32(&items, item->location.has_location);
-        count++;
+        if (!note)
+            groups[group_count++] = (warning_group_t){
+                .items = &items[item_count]};
+        items[item_count++] = item;
+        groups[group_count - 1].count++;
     }
-    put_u32(out, count);
-    if (items.byte_len) core_buffer_append(out, items.data, items.byte_len);
-    core_buffer_release(&items);
+    qsort(groups, group_count, sizeof(*groups), warning_group_order);
+    put_u32(out, (uint32_t)item_count);
+    for (size_t g = 0; g < group_count; g++)
+        for (size_t i = 0; i < groups[g].count; i++) {
+            const core_diagnostic_t *item = groups[g].items[i];
+            put_u32(out, (uint32_t)item->severity);
+            put_text(out, item->code);
+            put_text(out, item->message);
+            put_text(out, item->path);
+            put_u32(out, item->location.line);
+            put_u32(out, item->location.column);
+            put_u32(out, item->location.end_line);
+            put_u32(out, item->location.end_column);
+            put_u32(out, item->location.has_location);
+        }
+    core_free(groups);
+    core_free(items);
 }
 
 static bool
@@ -2147,7 +2193,12 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 object->abi, object->abi_bytes);
         core_buffer_t warnings = {0};
-        put_warnings(&warnings, scc->members.data[m]);
+        core_translation_unit_t *root = analysis->units.len
+            ? analysis->units.data[0] : nullptr;
+        if (root && n00bb_resolver_same_root(analysis->resolver, root,
+                                             scc->members.data[m]))
+            put_warnings(&warnings, scc->members.data[m]);
+        else put_u32(&warnings, 0);
         module_section_name(&name, CORE_STRING_STATIC("warnings"), module);
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 warnings.data ? (const uint8_t *)warnings.data

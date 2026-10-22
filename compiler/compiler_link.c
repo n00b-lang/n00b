@@ -4092,6 +4092,7 @@ n00bb_link_analysis_new(parse_grammar_t *grammar, ir_ctx_t *ir_context,
         .resolver = resolver,
     };
     core_dict_init(&analysis->declarations_by_symbol, nullptr, nullptr);
+    core_dict_init_string(&analysis->baked_root_index);
     if (!n00bb_baked_graph_load(analysis)) {
         n00bb_link_analysis_free(analysis);
         return nullptr;
@@ -4121,6 +4122,8 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->emitted_functions);
     core_list_free(analysis->callback_handlers);
     core_list_free(analysis->callback_handler_types);
+    if (analysis->unit_of_module_ready)
+        core_dict_free(&analysis->unit_of_module);
     if (analysis->global_symbols_ready)
         core_dict_free(&analysis->global_symbols);
     if (analysis->escaped_owner) core_dict_free(&analysis->escaped_globals);
@@ -4157,6 +4160,7 @@ n00bb_link_analysis_free(n00bb_link_analysis_t *analysis)
     core_list_free(analysis->static_graph_slots);
     core_list_free(analysis->units);
     core_dict_free(&analysis->declarations_by_symbol);
+    core_dict_free(&analysis->baked_root_index);
     core_free(analysis);
 }
 

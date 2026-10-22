@@ -762,7 +762,6 @@ typedef struct {
     size_t unknown_exit_edges;
     size_t point_endpoints;
     size_t edge_endpoints;
-    bool   alias_complete;
     bool   escapes;
     bool   resolved;
     bool   complete;
@@ -788,6 +787,8 @@ bool         ir_branch_fold(ir_instr_t *branch, uint32_t taken);
 ir_instr_t *ir_instr_add(ir_block_t *b, ir_op_t op);
 bool        ir_instr_set_dest(ir_instr_t *in, core_string_t name,
                               th_type *type);
+bool        ir_instr_set_fresh_dest(ir_instr_t *in, const char *prefix,
+                                    th_type *type);
 bool        ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l);
 /* Storage classes are extensible names. A null class clears the request. */
 bool        ir_instr_set_storage_class(ir_instr_t *allocation,

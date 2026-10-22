@@ -57,6 +57,7 @@ type Graph {
     roots:   List[Graph_Root]
     slots:   List[Graph_Slot]
     pending: List[u32]
+    order:   List[u32]
     failure: Capture_Failure?
 }
 
@@ -72,18 +73,34 @@ func new_graph(copying: bool) -> Graph {
     return (heap = mutator.get().heap, copying = copying,
             nodes = new[List[Graph_Node]](), edges = new[List[Graph_Edge]](),
             roots = new[List[Graph_Root]](), slots = new[List[Graph_Slot]](),
-            pending = new[List[u32]](), failure = nil)
+            pending = new[List[u32]](), order = new[List[u32]](),
+            failure = nil)
+}
+
+func order_position(graph: Ref[Graph], address: uint) -> int {
+    var low: int = 0
+    var high: int = cast[int]graph.order.len()
+    while low < high {
+        let middle: int = (low + high) / 2
+        let node: Graph_Node = graph.nodes[cast[int]graph.order[middle]]
+        if __abi_ref_address(node.base) <= address {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    return low
 }
 
 func node_containing(graph: Ref[Graph], address: uint) -> i64 {
-    var index: int = 0
-    while index < cast[int]graph.nodes.len() {
-        let node: Graph_Node = graph.nodes[index]
-        let base: uint       = __abi_ref_address(node.base)
-        if address >= base and address < base + node.size {
-            return cast[i64]index
-        }
-        index += 1
+    let at: int = order_position(graph, address)
+    if at == 0 {
+        return -1
+    }
+    let index: u32 = graph.order[at - 1]
+    let node: Graph_Node = graph.nodes[cast[int]index]
+    if address < __abi_ref_address(node.base) + node.size {
+        return cast[i64]index
     }
     return -1
 }
@@ -111,6 +128,7 @@ func add_node(graph: Ref[Graph], base: Ref[byte], size: uint, alignment: u32,
                             flags = flags, copy = copy, count = 1, merged_into = -1,
                             merged_offset = 0, parent = -1, parent_offset = 0)
     graph.nodes.append(node)
+    graph.order.insert(order_position(graph, __abi_ref_address(base)), index)
     if trace and (!graph.copying or copy != nil) {
         graph.pending.append(index)
     }
@@ -308,7 +326,6 @@ func sentinel_count(pointer: Ref[byte], element: Ref[internal.abi.Type_Record],
             return count
         }
     }
-    return 0
 }
 
 func foreign_node(graph: Ref[Graph], source: u32, slot: Ref[byte],
@@ -1062,13 +1079,19 @@ func capture_consts() {
                 cast[uint]row.get().byte_length,
                 cast[u32]internal.abi.alignment_bytes(type_record),
                 row.get().type_index, 0, false)
-            visit_value(ref graph, node, address.get(), row.get().type_index)
             let root: Graph_Root = (module_path = unsafe_cast[Ref[byte]] (ref module.get().full_path),
                                     name = unsafe_cast[Ref[byte]] (ref symbol.get().name),
                                     node = node)
             graph.roots.append(root)
         }
         storage_index += 1
+    }
+    var root_index: int = 0
+    while root_index < cast[int]graph.roots.len() {
+        let node: Graph_Node = graph.nodes[cast[int]graph.roots[root_index].node]
+        visit_value(ref graph, graph.roots[root_index].node, node.base,
+                    node.type_index)
+        root_index += 1
     }
     drain(ref graph)
     if graph.failure != nil {

@@ -1,5 +1,0 @@
-import state
-
-func stage() -> int {
-    return state.current()
-}

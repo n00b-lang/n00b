@@ -3,6 +3,7 @@
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/memssa.h"
+#include "ir/operands.h"
 #include "ir/pass.h"
 #include "ir/ranges.h"
 #include "ir/summary.h"
@@ -53,6 +54,12 @@ typedef struct {
 } sequence_origin_t;
 
 typedef struct {
+    const ir_instr_t *length;
+    sequence_origin_t origin;
+} length_t;
+core_list_decl(length_t);
+
+typedef struct {
     ir_func_t *function;
     uint32_t   parameter;
     bool       known;
@@ -68,12 +75,14 @@ struct ir_abcd_t {
     ir_ranges_t                *ranges;
     ir_memssa_t                *memssa;
     ir_places_t                *places;
-    core_list_t(instr_ptr_t)    lengths;
+    core_list_t(length_t)       lengths;
+    core_list_t(instr_ptr_t)    effects;
     core_list_t(callee_bound_t) callees;
     uint32_t                    call_depth;
     bool                      **reach;
     uint32_t                    reach_count;
     core_dict_t                 offsets_of;
+    core_dict_t                 checks_of;
 };
 
 typedef struct {
@@ -98,32 +107,11 @@ typedef struct {
     uint32_t                 steps;
 } query_t;
 
-static const ir_value_t *
-value_operand(const ir_instr_t *in, uint32_t index)
-{
-    return in && index < in->n_operands
-        && in->operands[index].kind == IR_OPD_VALUE
-        ? in->operands[index].value : nullptr;
-}
-
-static const ir_value_t *
-uncopied(const ir_value_t *value)
-{
-    for (uint32_t i = 0; value && value->def && i < 64; i++) {
-        const ir_instr_t *definition = value->def;
-        if (definition->op != IR_OP_COPY) break;
-        const ir_value_t *source = value_operand(definition, 0);
-        if (!source || source == value) break;
-        value = source;
-    }
-    return value;
-}
-
 static bool
 same_value(ir_abcd_t *a, const ir_value_t *left, const ir_value_t *right)
 {
-    return ir_value_numbers_same(a->numbers, uncopied(left),
-                                 uncopied(right));
+    return ir_value_numbers_same(a->numbers, ir_value_uncopied(left),
+                                 ir_value_uncopied(right));
 }
 
 static bool
@@ -150,8 +138,8 @@ static bool
 same_address(ir_abcd_t *a, const ir_value_t *left, const ir_value_t *right,
              unsigned depth)
 {
-    left  = uncopied(left);
-    right = uncopied(right);
+    left  = ir_value_uncopied(left);
+    right = ir_value_uncopied(right);
     if (left == right) return left != nullptr;
     if (!left || !right) return false;
     if (same_value(a, left, right)) return true;
@@ -162,20 +150,20 @@ same_address(ir_abcd_t *a, const ir_value_t *left, const ir_value_t *right,
         || right->def->operands[1].kind != IR_OPD_NAME
         || !core_string_eq(left->def->operands[1].name,
                            right->def->operands[1].name)) return false;
-    return same_address(a, value_operand(left->def, 0),
-                        value_operand(right->def, 0), depth - 1);
+    return same_address(a, ir_value_operand(left->def, 0),
+                        ir_value_operand(right->def, 0), depth - 1);
 }
 
 static bool
 same_sequence(ir_abcd_t *a, const ir_value_t *sequence,
               const ir_value_t *base, bool base_is_address)
 {
-    sequence = uncopied(sequence);
-    base     = uncopied(base);
+    sequence = ir_value_uncopied(sequence);
+    base     = ir_value_uncopied(base);
     if (!sequence || !base) return false;
     if (!base_is_address) return same_value(a, sequence, base);
     return sequence->def && sequence->def->op == IR_OP_LOAD
-        && same_address(a, value_operand(sequence->def, 0), base,
+        && same_address(a, ir_value_operand(sequence->def, 0), base,
                         PATH_DEPTH);
 }
 
@@ -183,15 +171,15 @@ static bool
 actual_matches_address(ir_abcd_t *a, const ir_value_t *actual,
                        const ir_value_t *address)
 {
-    actual  = uncopied(actual);
-    address = uncopied(address);
+    actual  = ir_value_uncopied(actual);
+    address = ir_value_uncopied(address);
     if (actual == address) return actual != nullptr;
     const ir_instr_t *definition = address ? address->def : nullptr;
     if (definition && definition->op == IR_OP_ADDRESS_OF
-        && same_value(a, actual, value_operand(definition, 0))) return true;
+        && same_value(a, actual, ir_value_operand(definition, 0))) return true;
     definition = actual ? actual->def : nullptr;
     return definition && definition->op == IR_OP_LOAD
-        && same_address(a, value_operand(definition, 0), address,
+        && same_address(a, ir_value_operand(definition, 0), address,
                         PATH_DEPTH);
 }
 
@@ -201,8 +189,8 @@ extracted_path_matches(ir_abcd_t *a, const ir_value_t *value,
                        const ir_value_t *address, unsigned depth)
 {
     if (!depth) return false;
-    value   = uncopied(value);
-    address = uncopied(address);
+    value   = ir_value_uncopied(value);
+    address = ir_value_uncopied(address);
     if (value == parameter) return actual_matches_address(a, actual, address);
     const ir_instr_t *extract = value ? value->def : nullptr;
     const ir_instr_t *field   = address ? address->def : nullptr;
@@ -213,8 +201,8 @@ extracted_path_matches(ir_abcd_t *a, const ir_value_t *value,
         || field->operands[1].kind != IR_OPD_NAME
         || !core_string_eq(extract->operands[1].name,
                            field->operands[1].name)) return false;
-    return extracted_path_matches(a, value_operand(extract, 0), parameter,
-                                  actual, value_operand(field, 0), depth - 1);
+    return extracted_path_matches(a, ir_value_operand(extract, 0), parameter,
+                                  actual, ir_value_operand(field, 0), depth - 1);
 }
 
 static bool
@@ -227,7 +215,7 @@ static bool
 origin_matches_access(ir_abcd_t *a, const sequence_origin_t *origin,
                       const ir_instr_t *access)
 {
-    const ir_value_t *base = value_operand(access, 0);
+    const ir_value_t *base = ir_value_operand(access, 0);
     if (origin->parameter)
         return addressed(access)
             && extracted_path_matches(a, origin->sequence, origin->parameter,
@@ -294,13 +282,13 @@ element_or_sibling_write(ir_abcd_t *a, const ir_instr_t *effect,
 {
     if (effect->op != IR_OP_STORE && effect->op != IR_OP_SEQUENCE_SET)
         return false;
-    const ir_value_t *target     = uncopied(value_operand(effect, 0));
+    const ir_value_t *target     = ir_value_uncopied(ir_value_operand(effect, 0));
     const ir_instr_t *target_def = target ? target->def : nullptr;
-    base = uncopied(base);
+    base = ir_value_uncopied(base);
     if (effect->op == IR_OP_SEQUENCE_SET)
-        return same_address(a, value_operand(effect, 0), base, PATH_DEPTH);
+        return same_address(a, ir_value_operand(effect, 0), base, PATH_DEPTH);
     if (target_def && target_def->op == IR_OP_INDEX)
-        return same_address(a, value_operand(target_def, 0), base,
+        return same_address(a, ir_value_operand(target_def, 0), base,
                             PATH_DEPTH);
     const ir_instr_t *source_field = base ? base->def : nullptr;
     if (!source_field || source_field->op != IR_OP_FIELD) return false;
@@ -310,8 +298,8 @@ element_or_sibling_write(ir_abcd_t *a, const ir_instr_t *effect,
         || target_def->operands[1].kind != IR_OPD_NAME
         || core_string_eq(source_field->operands[1].name,
                           target_def->operands[1].name)) return false;
-    const ir_value_t *source_parent = value_operand(source_field, 0);
-    const ir_value_t *target_parent = value_operand(target_def, 0);
+    const ir_value_t *source_parent = ir_value_operand(source_field, 0);
+    const ir_value_t *target_parent = ir_value_operand(target_def, 0);
     th_type *record = source_parent
         ? th_ind_referent(source_parent->type) : nullptr;
     record = th_resolve(record);
@@ -348,14 +336,14 @@ store_may_replace(ir_abcd_t *a, const ir_instr_t *effect,
 static bool
 local_holds(const ir_instr_t *effect, const ir_value_t *base)
 {
-    base = uncopied(base);
+    base = ir_value_uncopied(base);
     const ir_instr_t *address = base ? base->def : nullptr;
     while (address && address->op == IR_OP_FIELD) {
-        const ir_value_t *parent = uncopied(value_operand(address, 0));
+        const ir_value_t *parent = ir_value_uncopied(ir_value_operand(address, 0));
         address = parent ? parent->def : nullptr;
     }
     const ir_value_t *root = address && address->op == IR_OP_ADDRESS_OF
-        ? value_operand(address, 0) : nullptr;
+        ? ir_value_operand(address, 0) : nullptr;
     return !root || (root->kind == IR_VAL_LOCAL
                      && root->local == effect->dest_local);
 }
@@ -377,19 +365,28 @@ clobbers(ir_abcd_t *a, const ir_instr_t *effect, const ir_value_t *base,
 }
 
 static bool
+may_clobber(const ir_instr_t *effect)
+{
+    if (effect->op == IR_OP_TRAP || ir_op_is_terminator(effect->op))
+        return false;
+    return effect->dest_kind == IR_DEST_LOCAL
+        || ((effect->op == IR_OP_CALL || effect->op == IR_OP_CALLBACK_INVOKE)
+            && !pure_call(effect))
+        || effect->op == IR_OP_STORE || effect->op == IR_OP_SEQUENCE_SET
+        || ((ir_op_info(effect->op)->flags & IR_OPF_SIDEEFFECT)
+            && !allocation(effect->op));
+}
+
+static bool
 sequence_stable(ir_abcd_t *a, const ir_value_t *base, bool through_address,
                 const ir_instr_t *from, const ir_instr_t *to)
 {
-    ir_func_t *function = a->f;
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_instr_t *effect = block->instrs[i];
-            if (effect != from && clobbers(a, effect, base, through_address)
-                && instruction_reaches(a, from, effect)
-                && instruction_reaches(a, effect, to))
-                return false;
-        }
+    for (size_t e = 0; e < a->effects.len; e++) {
+        const ir_instr_t *effect = a->effects.data[e];
+        if (effect != from && instruction_reaches(a, from, effect)
+            && instruction_reaches(a, effect, to)
+            && clobbers(a, effect, base, through_address))
+            return false;
     }
     return true;
 }
@@ -398,10 +395,10 @@ static const ir_value_t *
 extraction_root(const ir_value_t *value)
 {
     for (unsigned depth = 0; value && depth < PATH_DEPTH; depth++) {
-        value = uncopied(value);
+        value = ir_value_uncopied(value);
         const ir_instr_t *definition = value ? value->def : nullptr;
         if (!definition || definition->op != IR_OP_EXTRACT) return value;
-        value = value_operand(definition, 0);
+        value = ir_value_operand(definition, 0);
     }
     return nullptr;
 }
@@ -414,11 +411,11 @@ length_origin(const ir_instr_t *length, sequence_origin_t *origin)
     if (!unsigned_width(length->block->owner->owner, length->dest, &width))
         return false;
     if (length->op == IR_OP_SEQUENCE_LENGTH) {
-        *origin = (sequence_origin_t){.sequence = value_operand(length, 0)};
+        *origin = (sequence_origin_t){.sequence = ir_value_operand(length, 0)};
         return origin->sequence != nullptr;
     }
     if (length->op != IR_OP_CALL) return false;
-    const ir_value_t *callee = value_operand(length, 0);
+    const ir_value_t *callee = ir_value_operand(length, 0);
     ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
         ? callee->owner : nullptr;
     if (!target || !pure_call(length)) return false;
@@ -429,11 +426,11 @@ length_origin(const ir_instr_t *length, sequence_origin_t *origin)
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             const ir_instr_t *in = block->instrs[i];
             if (in->op != IR_OP_RETURN) continue;
-            const ir_value_t *value = uncopied(value_operand(in, 0));
+            const ir_value_t *value = ir_value_uncopied(ir_value_operand(in, 0));
             const ir_instr_t *definition = value ? value->def : nullptr;
             if (!definition || definition->op != IR_OP_SEQUENCE_LENGTH)
                 return false;
-            const ir_value_t *current = value_operand(definition, 0);
+            const ir_value_t *current = ir_value_operand(definition, 0);
             if (!current || (source && source != current)) return false;
             source   = current;
             returned = true;
@@ -444,7 +441,7 @@ length_origin(const ir_instr_t *length, sequence_origin_t *origin)
     if (!root || root->kind != IR_VAL_PARAM) return false;
     for (uint32_t i = 0; i < target->n_params; i++) {
         if (target->params[i] != root) continue;
-        const ir_value_t *actual = value_operand(length, i + 1);
+        const ir_value_t *actual = ir_value_operand(length, i + 1);
         if (!actual) return false;
         *origin = (sequence_origin_t){
             .sequence = source, .parameter = root, .actual = actual};
@@ -466,88 +463,6 @@ access_check(const ir_instr_t *in)
 {
     return in->op == IR_OP_INDEX || in->op == IR_OP_SEQUENCE_GET
         || in->op == IR_OP_SEQUENCE_SET;
-}
-
-static ir_op_t
-swapped(ir_op_t op)
-{
-    switch (op) {
-    case IR_OP_LT: return IR_OP_GT;
-    case IR_OP_LE: return IR_OP_GE;
-    case IR_OP_GT: return IR_OP_LT;
-    case IR_OP_GE: return IR_OP_LE;
-    default:       return op;
-    }
-}
-
-static ir_op_t
-negated(ir_op_t op)
-{
-    switch (op) {
-    case IR_OP_LT: return IR_OP_GE;
-    case IR_OP_LE: return IR_OP_GT;
-    case IR_OP_GT: return IR_OP_LE;
-    case IR_OP_GE: return IR_OP_LT;
-    case IR_OP_EQ: return IR_OP_NE;
-    case IR_OP_NE: return IR_OP_EQ;
-    default:       return op;
-    }
-}
-
-static bool
-comparison(ir_op_t op)
-{
-    return op == IR_OP_LT || op == IR_OP_LE || op == IR_OP_GT
-        || op == IR_OP_GE || op == IR_OP_EQ || op == IR_OP_NE;
-}
-
-static bool
-constant_truth(const ir_value_t *value, bool *truth)
-{
-    value = uncopied(value);
-    const ir_instr_t *definition = value ? value->def : nullptr;
-    if (!definition || definition->op != IR_OP_CONST
-        || definition->n_operands != 1
-        || definition->operands[0].kind != IR_OPD_CONST
-        || definition->operands[0].lit.is_float) return false;
-    *truth = definition->operands[0].lit.i.mag != 0;
-    return true;
-}
-
-static const ir_instr_t *
-condition_test(const ir_value_t *condition, bool *sense)
-{
-    for (unsigned depth = 0; depth < PATH_DEPTH; depth++) {
-        condition = uncopied(condition);
-        const ir_instr_t *test = condition ? condition->def : nullptr;
-        if (!test) return nullptr;
-        bool truth = false;
-        if (test->op == IR_OP_SELECT && test->n_operands == 3
-            && constant_truth(value_operand(test, 0), &truth)) {
-            condition = value_operand(test, truth ? 1 : 2);
-            continue;
-        }
-        if (test->op != IR_OP_NOT || test->n_operands != 1) return test;
-        *sense = !*sense;
-        condition = value_operand(test, 0);
-    }
-    return nullptr;
-}
-
-static bool
-edge_condition(const ir_block_t *from, const ir_block_t *to,
-               const ir_value_t **condition, bool *sense)
-{
-    ir_instr_t *end = from ? ir_block_terminator((ir_block_t *)from)
-                           : nullptr;
-    if (!end || end->op != IR_OP_BRANCH || end->n_operands != 3)
-        return false;
-    ir_block_t *yes = ir_succ_of(&end->operands[1]);
-    ir_block_t *no  = ir_succ_of(&end->operands[2]);
-    if (yes == no || (to != yes && to != no)) return false;
-    *condition = value_operand(end, 0);
-    *sense     = to == yes;
-    return *condition != nullptr;
 }
 
 static bool
@@ -593,17 +508,17 @@ condition_edges(query_t *q, const ir_value_t *value, const ir_instr_t *at,
         bool sense = false;
         const ir_instr_t *test = nullptr;
         if (ir_pred_count(a->doms, (ir_block_t *)block) == 1
-            && edge_condition(parent, block, &condition, &sense))
-            test = condition_test(condition, &sense);
-        if (test && comparison(test->op) && test->n_operands == 2) {
-            const ir_value_t *left  = value_operand(test, 0);
-            const ir_value_t *right = value_operand(test, 1);
-            ir_op_t op = sense ? test->op : negated(test->op);
+            && ir_edge_condition(parent, block, &condition, &sense))
+            test = ir_condition_test(condition, &sense);
+        if (test && ir_op_is_comparison(test->op) && test->n_operands == 2) {
+            const ir_value_t *left  = ir_value_operand(test, 0);
+            const ir_value_t *right = ir_value_operand(test, 1);
+            ir_op_t op = sense ? test->op : ir_comparison_negated(test->op);
             const ir_value_t *other = nullptr;
             if (same_value(a, left, value)) other = right;
             else if (same_value(a, right, value)) {
                 other = left;
-                op = swapped(op);
+                op = ir_comparison_swapped(op);
             }
             const ir_instr_t *point = ir_block_terminator(parent);
             if (other && q->upper) {
@@ -629,24 +544,23 @@ checked_access_edges(query_t *q, const ir_value_t *value,
 {
     ir_abcd_t *a = q->abcd;
     if (!q->upper || !q->length_target || !q->access) return;
-    const ir_value_t *base = value_operand(q->access, 0);
-    for (uint32_t b = 0; b < a->f->n_blocks; b++) {
-        ir_block_t *block = a->f->blocks[b];
-        if (!ir_dominates(a->doms, block, at->block)) continue;
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            const ir_instr_t *check = block->instrs[i];
-            if (!access_check(check) || check == q->access
-                || !precedes(a, check, at)
-                || !same_value(a, value_operand(check, 1), value)
-                || addressed(check) != addressed(q->access)
-                || !same_address(a, value_operand(check, 0), base,
-                                 PATH_DEPTH)
-                || !sequence_stable(a, base, addressed(q->access),
-                                    check, q->access))
-                continue;
-            push_edge(edges, (node_t){.kind = NODE_LENGTH}, -1, check,
-                      false);
-        }
+    const ir_value_t *base = ir_value_operand(q->access, 0);
+    uint32_t number = ir_value_number(a->numbers, ir_value_uncopied(value));
+    core_list_t(instr_ptr_t) *checks = number
+        ? core_dict_get(&a->checks_of, (void *)(uintptr_t)number, nullptr)
+        : nullptr;
+    for (size_t c = 0; checks && c < checks->len; c++) {
+        const ir_instr_t *check = checks->data[c];
+        if (check == q->access
+            || !ir_dominates(a->doms, check->block, at->block)
+            || !precedes(a, check, at)
+            || addressed(check) != addressed(q->access)
+            || !same_address(a, ir_value_operand(check, 0), base,
+                             PATH_DEPTH)
+            || !sequence_stable(a, base, addressed(q->access), check,
+                                q->access))
+            continue;
+        push_edge(edges, (node_t){.kind = NODE_LENGTH}, -1, check, false);
     }
 }
 
@@ -658,11 +572,11 @@ definition_edges(query_t *q, const ir_value_t *value,
                  core_list_t(edge_t) *edges)
 {
     ir_abcd_t *a = q->abcd;
-    const ir_instr_t *in = uncopied(value) ? uncopied(value)->def : nullptr;
+    const ir_instr_t *in = ir_value_uncopied(value) ? ir_value_uncopied(value)->def : nullptr;
     if (!in) return;
     ir_module_t *module = a->f->owner;
-    const ir_value_t *left = value_operand(in, 0);
-    const ir_value_t *right = value_operand(in, 1);
+    const ir_value_t *left = ir_value_operand(in, 0);
+    const ir_value_t *right = ir_value_operand(in, 1);
     ir_interval_t other = {0};
     switch (in->op) {
     case IR_OP_CAST: {
@@ -731,7 +645,7 @@ definition_edges(query_t *q, const ir_value_t *value,
         }
         break;
     case IR_OP_SELECT: {
-        const ir_value_t *third = value_operand(in, 2);
+        const ir_value_t *third = ir_value_operand(in, 2);
         if (right && third) {
             push_edge(edges, value_node(right), 0, in, true);
             push_edge(edges, value_node(third), 0, in, true);
@@ -751,8 +665,8 @@ definition_edges(query_t *q, const ir_value_t *value,
             const ir_instr_t *write = store && store->kind == IR_MEMDEF_STORE
                 ? store->instr : nullptr;
             const ir_value_t *stored = !write ? nullptr
-                : write->op == IR_OP_STORE ? value_operand(write, 1)
-                : write->op == IR_OP_SEQUENCE_SET ? value_operand(write, 2)
+                : write->op == IR_OP_STORE ? ir_value_operand(write, 1)
+                : write->op == IR_OP_SEQUENCE_SET ? ir_value_operand(write, 2)
                 : nullptr;
             if (!stored) {
                 edges->len = mark;
@@ -769,7 +683,7 @@ definition_edges(query_t *q, const ir_value_t *value,
         if (!target || !q->upper || !pure_call(in)) break;
         for (uint32_t p = 0; p < target->n_params; p++) {
             ir_int_t offset = 0;
-            const ir_value_t *argument = value_operand(in, p + 1);
+            const ir_value_t *argument = ir_value_operand(in, p + 1);
             if (argument && callee_return_bound(a, target, p, &offset))
                 push_edge(edges, value_node(argument), offset, in, false);
         }
@@ -784,9 +698,9 @@ static bool
 constant_operand(ir_abcd_t *a, const ir_instr_t *in, uint32_t index,
                  ir_int_t *value)
 {
-    const ir_value_t *operand = value_operand(in, index);
+    const ir_value_t *operand = ir_value_operand(in, index);
     return operand && ir_value_number_constant(a->numbers,
-        ir_value_number(a->numbers, uncopied(operand)), value);
+        ir_value_number(a->numbers, ir_value_uncopied(operand)), value);
 }
 
 static void
@@ -794,7 +708,7 @@ inverse_edges(query_t *q, const ir_value_t *value, const ir_instr_t *at,
               core_list_t(edge_t) *edges)
 {
     ir_abcd_t *a = q->abcd;
-    uint32_t number = ir_value_number(a->numbers, uncopied(value));
+    uint32_t number = ir_value_number(a->numbers, ir_value_uncopied(value));
     core_list_t(instr_ptr_t) *users = number
         ? core_dict_get(&a->offsets_of, (void *)(uintptr_t)number, nullptr)
         : nullptr;
@@ -803,7 +717,7 @@ inverse_edges(query_t *q, const ir_value_t *value, const ir_instr_t *at,
         if (!user->dest || !precedes(a, user, at)
             || !exact_arithmetic(a, user)) continue;
         ir_int_t k = 0;
-        bool left_is_value = same_value(a, value_operand(user, 0), value);
+        bool left_is_value = same_value(a, ir_value_operand(user, 0), value);
         if (user->op == IR_OP_SUB && left_is_value
             && constant_operand(a, user, 1, &k))
             push_edge(edges, value_node(user->dest), k, user, false);
@@ -845,7 +759,7 @@ is_target(query_t *q, node_t node)
             return q->upper ? q->type_limit.hi >= 0 : q->type_limit.lo <= 0;
         ir_interval_t bounds = {0};
         uint32_t number = ir_value_number(q->abcd->numbers,
-                                          uncopied(node.value));
+                                          ir_value_uncopied(node.value));
         return number != q->origin
             && ir_range_type_bounds(q->abcd->f, node.value, &bounds)
             && (q->upper ? bounds.hi <= q->type_limit.hi
@@ -875,7 +789,7 @@ static uint64_t
 memo_key(query_t *q, node_t node, const ir_instr_t *at)
 {
     uint32_t number = node.kind == NODE_VALUE
-        ? ir_value_number(q->abcd->numbers, uncopied(node.value)) : 0;
+        ? ir_value_number(q->abcd->numbers, ir_value_uncopied(node.value)) : 0;
     uint64_t words[3] = {((uint64_t)node.kind << 32) | number,
                          (uint64_t)(uintptr_t)at,
                          node.kind == NODE_VALUE && !number
@@ -987,38 +901,25 @@ ir_abcd_at_least(ir_abcd_t *a, const ir_value_t *value,
     return run_query(a, false, value, bound, offset, at);
 }
 
-static bool
-return_point(const ir_func_t *f, const ir_instr_t **out)
-{
-    for (uint32_t b = 0; b < f->n_blocks; b++) {
-        const ir_block_t *block = f->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++)
-            if (block->instrs[i]->op == IR_OP_RETURN) {
-                *out = block->instrs[i];
-                return true;
-            }
-    }
-    return false;
-}
 
 static bool
 returns_bounded(ir_abcd_t *callee, const ir_value_t *parameter,
                 ir_int_t offset)
 {
-    const ir_instr_t *any = nullptr;
-    if (!return_point(callee->f, &any)) return false;
+    bool returns = false;
     for (uint32_t b = 0; b < callee->f->n_blocks; b++) {
         const ir_block_t *block = callee->f->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             const ir_instr_t *in = block->instrs[i];
             if (in->op != IR_OP_RETURN) continue;
-            const ir_value_t *returned = value_operand(in, 0);
+            const ir_value_t *returned = ir_value_operand(in, 0);
             if (!returned
                 || !ir_abcd_at_most(callee, returned, parameter, offset, in))
                 return false;
+            returns = true;
         }
     }
-    return true;
+    return returns;
 }
 
 static bool
@@ -1063,8 +964,8 @@ ir_abcd_check_redundant(ir_abcd_t *a, const ir_instr_t *access)
         &((ir_instr_t *)access)->annots,
         CORE_STRING_STATIC("ir.hoisted_check"));
     if (hoisted && hoisted->kind == IR_ANNOT_BOOL && hoisted->b) return true;
-    const ir_value_t *base = value_operand(access, 0);
-    const ir_value_t *index = value_operand(access, 1);
+    const ir_value_t *base = ir_value_operand(access, 0);
+    const ir_value_t *index = ir_value_operand(access, 1);
     if (!base || !index || !integer_value(a->f->owner, index)) return false;
     uint64_t width = 0;
     bool natural = unsigned_width(a->f->owner, index, &width)
@@ -1075,18 +976,41 @@ ir_abcd_check_redundant(ir_abcd_t *a, const ir_instr_t *access)
     q.length_target = true;
     q.access = access;
     for (size_t i = 0; i < a->lengths.len; i++) {
-        const ir_instr_t *length = a->lengths.data[i];
-        sequence_origin_t origin = {0};
-        if (length_origin(length, &origin)
-            && precedes(a, length, access)
-            && origin_matches_access(a, &origin, access)
-            && sequence_stable(a, base, addressed(access), length,
+        const length_t *length = &a->lengths.data[i];
+        if (precedes(a, length->length, access)
+            && origin_matches_access(a, &length->origin, access)
+            && sequence_stable(a, base, addressed(access), length->length,
                                access))
-            core_list_push(q.targets, length->dest);
+            core_list_push(q.targets, length->length->dest);
     }
     bool proven = prove(&q, value_node(index), access, -1);
     query_free(&q);
     return proven;
+}
+
+static void
+index_by_number(core_dict_t *index, uint32_t number, const ir_instr_t *in)
+{
+    if (!number) return;
+    core_list_t(instr_ptr_t) *list = core_dict_get(index,
+        (void *)(uintptr_t)number, nullptr);
+    if (!list) {
+        list = core_alloc(core_list_t(instr_ptr_t));
+        *list = core_list_new(instr_ptr_t);
+        core_dict_put(index, (void *)(uintptr_t)number, list);
+    }
+    core_list_push(*list, in);
+}
+
+static void
+free_index(core_dict_t *index)
+{
+    core_dict_foreach(index, entry) {
+        core_list_t(instr_ptr_t) *list = entry->value;
+        core_list_free(*list);
+        core_free(list);
+    }
+    core_dict_free(index);
 }
 
 ir_abcd_t *
@@ -1100,38 +1024,35 @@ ir_abcd_build(ir_func_t *f)
     a->ranges = ir_func_ranges(f);
     a->memssa = ir_func_memssa(f);
     a->places = ir_func_places(f);
-    a->lengths = core_list_new(instr_ptr_t);
+    a->lengths = core_list_new(length_t);
+    a->effects = core_list_new(instr_ptr_t);
     a->callees = core_list_new(callee_bound_t);
     core_dict_init(&a->offsets_of, nullptr, nullptr);
+    core_dict_init(&a->checks_of, nullptr, nullptr);
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             const ir_instr_t *in = block->instrs[i];
             sequence_origin_t origin = {0};
             if (length_origin(in, &origin))
-                core_list_push(a->lengths, in);
+                core_list_push(a->lengths, ((length_t){in, origin}));
+            if (may_clobber(in)) core_list_push(a->effects, in);
+            if (access_check(in))
+                index_by_number(&a->checks_of, ir_value_number(a->numbers,
+                    ir_value_uncopied(ir_value_operand(in, 1))), in);
             ir_int_t constant = 0;
             const ir_value_t *offset_of = nullptr;
             if (in->op == IR_OP_SUB && constant_operand(a, in, 1, &constant))
-                offset_of = value_operand(in, 0);
+                offset_of = ir_value_operand(in, 0);
             else if (in->op == IR_OP_ADD) {
                 if (constant_operand(a, in, 1, &constant))
-                    offset_of = value_operand(in, 0);
+                    offset_of = ir_value_operand(in, 0);
                 else if (constant_operand(a, in, 0, &constant))
-                    offset_of = value_operand(in, 1);
+                    offset_of = ir_value_operand(in, 1);
             }
-            uint32_t number = offset_of
-                ? ir_value_number(a->numbers, uncopied(offset_of)) : 0;
-            if (!number || !in->dest) continue;
-            core_list_t(instr_ptr_t) *users = core_dict_get(&a->offsets_of,
-                (void *)(uintptr_t)number, nullptr);
-            if (!users) {
-                users = core_alloc(core_list_t(instr_ptr_t));
-                *users = core_list_new(instr_ptr_t);
-                core_dict_put(&a->offsets_of, (void *)(uintptr_t)number,
-                              users);
-            }
-            core_list_push(*users, in);
+            if (offset_of && in->dest)
+                index_by_number(&a->offsets_of, ir_value_number(a->numbers,
+                    ir_value_uncopied(offset_of)), in);
         }
     }
     return a;
@@ -1150,7 +1071,7 @@ typed_query(ir_abcd_t *a, bool upper, const ir_value_t *value,
     query_init(&q, a, upper);
     q.type_target = true;
     q.type_limit = limit;
-    q.origin = ir_value_number(a->numbers, uncopied(value));
+    q.origin = ir_value_number(a->numbers, ir_value_uncopied(value));
     bool proven = prove(&q, value_node(value), at, offset);
     query_free(&q);
     return proven;
@@ -1160,7 +1081,7 @@ bool
 ir_abcd_overflow_safe(ir_abcd_t *a, const ir_instr_t *in)
 {
     if (!a || !in || !in->dest) return false;
-    const ir_value_t *source = value_operand(in, 0);
+    const ir_value_t *source = ir_value_operand(in, 0);
     if (in->op == IR_OP_CAST && in->n_operands == 1 && source
         && integer_value(a->f->owner, source))
         return typed_query(a, true, source, 0, in->dest->type, in)
@@ -1173,15 +1094,15 @@ ir_abcd_overflow_safe(ir_abcd_t *a, const ir_instr_t *in)
     ir_int_t k = 0;
     if (in->op == IR_OP_ADD) {
         if (constant_operand(a, in, 1, &k) && k > 0)
-            return typed_query(a, true, value_operand(in, 0), -k,
+            return typed_query(a, true, ir_value_operand(in, 0), -k,
                                in->dest->type, in);
         if (constant_operand(a, in, 0, &k) && k > 0)
-            return typed_query(a, true, value_operand(in, 1), -k,
+            return typed_query(a, true, ir_value_operand(in, 1), -k,
                                in->dest->type, in);
         return false;
     }
     if (in->op == IR_OP_SUB && constant_operand(a, in, 1, &k) && k > 0)
-        return typed_query(a, false, value_operand(in, 0), k,
+        return typed_query(a, false, ir_value_operand(in, 0), k,
                            in->dest->type, in);
     return false;
 }
@@ -1189,9 +1110,9 @@ ir_abcd_overflow_safe(ir_abcd_t *a, const ir_instr_t *in)
 int
 ir_abcd_compare(ir_abcd_t *a, const ir_instr_t *in)
 {
-    if (!a || !in || !comparison(in->op) || in->n_operands != 2) return -1;
-    const ir_value_t *left = value_operand(in, 0);
-    const ir_value_t *right = value_operand(in, 1);
+    if (!a || !in || !ir_op_is_comparison(in->op) || in->n_operands != 2) return -1;
+    const ir_value_t *left = ir_value_operand(in, 0);
+    const ir_value_t *right = ir_value_operand(in, 1);
     ir_module_t *module = a->f->owner;
     if (!left || !right || !integer_value(module, left)
         || !integer_value(module, right)
@@ -1231,24 +1152,32 @@ ir_abcd_fold(ir_func_t *f)
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             ir_instr_t *in = f->blocks[b]->instrs[i];
-            if (!comparison(in->op) || !in->dest) continue;
+            if (!ir_op_is_comparison(in->op) || !in->dest) continue;
             int outcome = ir_abcd_compare(a, in);
             if (outcome >= 0)
                 core_list_push(decided, ((decision_t){in, outcome}));
         }
+    core_dict_t outcomes;
+    core_dict_init(&outcomes, nullptr, nullptr);
     for (size_t d = 0; d < decided.len; d++) {
         ir_instr_t *in = decided.data[d].comparison;
         in->op = IR_OP_CONST;
         in->n_operands = 0;
         in->n_mods = 0;
         (void)ir_instr_operand_uint(in, (ir_uint_t)decided.data[d].outcome);
-        for (uint32_t u = 0; u < f->n_blocks; u++) {
-            ir_instr_t *term = ir_block_terminator(f->blocks[u]);
-            if (term && term->op == IR_OP_BRANCH && term->n_operands == 3
-                && ir_operand_value(&term->operands[0]) == in->dest)
-                (void)ir_branch_fold(term, decided.data[d].outcome ? 0 : 1);
-        }
+        core_dict_put(&outcomes, in->dest,
+                      (void *)(uintptr_t)(decided.data[d].outcome + 1));
     }
+    for (uint32_t u = 0; decided.len && u < f->n_blocks; u++) {
+        ir_instr_t *term = ir_block_terminator(f->blocks[u]);
+        bool found = false;
+        uintptr_t outcome = term && term->op == IR_OP_BRANCH
+            && term->n_operands == 3
+            ? (uintptr_t)core_dict_get(&outcomes,
+                ir_operand_value(&term->operands[0]), &found) : 0;
+        if (found) (void)ir_branch_fold(term, outcome - 1 ? 0 : 1);
+    }
+    core_dict_free(&outcomes);
     uint32_t folded = (uint32_t)decided.len;
     core_list_free(decided);
     return folded;
@@ -1338,7 +1267,7 @@ single_exit(ir_abcd_t *a, ir_block_t *header, ir_block_t *latch,
 static bool
 invariant(const ir_value_t *value, const bool *inside)
 {
-    value = uncopied(value);
+    value = ir_value_uncopied(value);
     if (!value) return false;
     if (value->kind == IR_VAL_PARAM) return true;
     return value->kind == IR_VAL_INSTR && value->def
@@ -1353,9 +1282,9 @@ unit_step(ir_abcd_t *a, const ir_instr_t *advance, const ir_value_t *counter,
     if (!advance || !advance->dest || !exact_arithmetic(a, advance))
         return false;
     if (advance->op == IR_OP_ADD
-        && ((same_value(a, value_operand(advance, 0), counter)
+        && ((same_value(a, ir_value_operand(advance, 0), counter)
              && constant_operand(a, advance, 1, &k))
-            || (same_value(a, value_operand(advance, 1), counter)
+            || (same_value(a, ir_value_operand(advance, 1), counter)
                 && constant_operand(a, advance, 0, &k)))
         && k == 1) {
         *rising = true;
@@ -1363,7 +1292,7 @@ unit_step(ir_abcd_t *a, const ir_instr_t *advance, const ir_value_t *counter,
     }
     *rising = false;
     return advance->op == IR_OP_SUB
-        && same_value(a, value_operand(advance, 0), counter)
+        && same_value(a, ir_value_operand(advance, 0), counter)
         && constant_operand(a, advance, 1, &k) && k == 1;
 }
 
@@ -1377,21 +1306,21 @@ loop_counter(ir_abcd_t *a, ir_block_t *latch, monotone_loop_t *loop)
     if (!yes || !no || loop->inside[yes->index] == loop->inside[no->index])
         return false;
     bool sense = loop->inside[yes->index];
-    const ir_instr_t *test = condition_test(value_operand(end, 0), &sense);
-    if (!test || !comparison(test->op) || test->n_operands != 2
+    const ir_instr_t *test = ir_condition_test(ir_value_operand(end, 0), &sense);
+    if (!test || !ir_op_is_comparison(test->op) || test->n_operands != 2
         || !test->dest) return false;
-    ir_op_t op = sense ? test->op : negated(test->op);
+    ir_op_t op = sense ? test->op : ir_comparison_negated(test->op);
     for (uint32_t i = 0; i < loop->header->n_instrs; i++) {
         const ir_instr_t *phi = loop->header->instrs[i];
         if (phi->op != IR_OP_PHI || !phi->dest || phi->n_operands != 2)
             continue;
         const ir_value_t *bound = nullptr;
         ir_op_t oriented = op;
-        if (same_value(a, value_operand(test, 0), phi->dest))
-            bound = value_operand(test, 1);
-        else if (same_value(a, value_operand(test, 1), phi->dest)) {
-            bound = value_operand(test, 0);
-            oriented = swapped(op);
+        if (same_value(a, ir_value_operand(test, 0), phi->dest))
+            bound = ir_value_operand(test, 1);
+        else if (same_value(a, ir_value_operand(test, 1), phi->dest)) {
+            bound = ir_value_operand(test, 0);
+            oriented = ir_comparison_swapped(op);
         }
         if (!bound || !invariant(bound, loop->inside)) continue;
         const ir_value_t *start = nullptr;
@@ -1403,7 +1332,7 @@ loop_counter(ir_abcd_t *a, ir_block_t *latch, monotone_loop_t *loop)
             else if (arm->phi.block == loop->preheader)
                 start = arm->phi.value;
         }
-        const ir_value_t *advanced = uncopied(next);
+        const ir_value_t *advanced = ir_value_uncopied(next);
         bool rising = false;
         if (!start || !advanced
             || !unit_step(a, advanced->def, phi->dest, &rising))
@@ -1415,7 +1344,7 @@ loop_counter(ir_abcd_t *a, ir_block_t *latch, monotone_loop_t *loop)
         loop->op      = oriented;
         loop->counter = phi->dest;
         loop->start   = start;
-        loop->bound   = uncopied(bound);
+        loop->bound   = ir_value_uncopied(bound);
         loop->rising  = rising;
         return true;
     }
@@ -1432,20 +1361,20 @@ counter_offset(ir_abcd_t *a, const ir_value_t *index,
         *offset   = 0;
         return true;
     }
-    const ir_value_t *value = uncopied(index);
+    const ir_value_t *value = ir_value_uncopied(index);
     const ir_instr_t *in = value ? value->def : nullptr;
     ir_int_t k = 0;
     if (!in || !exact_arithmetic(a, in)) return false;
     for (uint32_t side = 0; in->op == IR_OP_ADD && side < 2; side++)
-        if (same_value(a, value_operand(in, side), counter)
+        if (same_value(a, ir_value_operand(in, side), counter)
             && constant_operand(a, in, 1 - side, &k)) {
-            *position = value_operand(in, side);
+            *position = ir_value_operand(in, side);
             *offset   = k;
             return true;
         }
-    if (in->op == IR_OP_SUB && same_value(a, value_operand(in, 0), counter)
+    if (in->op == IR_OP_SUB && same_value(a, ir_value_operand(in, 0), counter)
         && constant_operand(a, in, 1, &k) && k != ir_int_min) {
-        *position = value_operand(in, 0);
+        *position = ir_value_operand(in, 0);
         *offset   = -k;
         return true;
     }
@@ -1460,7 +1389,7 @@ materializable(const ir_value_t *value, const bool *inside, unsigned depth)
     if (value->kind != IR_VAL_INSTR || !value->def) return false;
     const ir_instr_t *in = value->def;
     if (!inside[in->block->index]) return true;
-    const ir_value_t *source = value_operand(in, 0);
+    const ir_value_t *source = ir_value_operand(in, 0);
     if (in->op == IR_OP_COPY)
         return materializable(source, inside, depth - 1);
     if (in->op == IR_OP_ADDRESS_OF && in->n_operands == 1)
@@ -1498,8 +1427,8 @@ loop_accesses(ir_abcd_t *a, ir_block_t *latch, monotone_loop_t *loop)
             if ((access->op != IR_OP_INDEX
                  && access->op != IR_OP_SEQUENCE_GET)
                 || !access->dest || access->n_operands != 2) continue;
-            const ir_value_t *base  = value_operand(access, 0);
-            const ir_value_t *index = value_operand(access, 1);
+            const ir_value_t *base  = ir_value_operand(access, 0);
+            const ir_value_t *index = ir_value_operand(access, 1);
             const ir_value_t *position = nullptr;
             ir_int_t offset = 0;
             if (!base || !index || !integer_value(a->f->owner, index)
@@ -1516,18 +1445,9 @@ loop_accesses(ir_abcd_t *a, ir_block_t *latch, monotone_loop_t *loop)
 }
 
 static ir_value_t *
-fresh_dest(ir_func_t *f, ir_instr_t *in, th_type *type)
+fresh_dest(ir_instr_t *in, th_type *type)
 {
-    for (uint32_t attempt = 0;; attempt++) {
-        core_buffer_t name = {0};
-        core_buffer_printf(&name, "__abcd_%u_%u_%u", in->block->index,
-                           in->index, attempt);
-        core_string_t text = core_buffer_string(&name);
-        bool taken = ir_value_find(f, text) != nullptr;
-        bool bound = !taken && ir_instr_set_dest(in, text, type);
-        core_buffer_release(&name);
-        if (!taken) return bound ? in->dest : nullptr;
-    }
+    return ir_instr_set_fresh_dest(in, "__abcd", type) ? in->dest : nullptr;
 }
 
 static ir_block_t *
@@ -1545,7 +1465,7 @@ fresh_block(ir_func_t *f, const char *role)
 }
 
 static ir_value_t *
-emit_binary(ir_func_t *f, ir_block_t *into, ir_op_t op, const ir_instr_t *near,
+emit_binary(ir_block_t *into, ir_op_t op, const ir_instr_t *near,
             ir_value_t *left, ir_value_t *right, th_type *type, bool trap)
 {
     ir_instr_t *in = ir_instr_derived(into, op, near, into->n_instrs);
@@ -1553,77 +1473,76 @@ emit_binary(ir_func_t *f, ir_block_t *into, ir_op_t op, const ir_instr_t *near,
         || !ir_instr_operand_value(in, right)
         || (trap && !ir_instr_add_mod(in, CORE_STRING_STATIC("trap"))))
         return nullptr;
-    return fresh_dest(f, in, type);
+    return fresh_dest(in, type);
 }
 
 static ir_value_t *
-emit_constant(ir_func_t *f, ir_block_t *into, const ir_instr_t *near,
-              ir_int_t value, th_type *type)
+emit_constant(ir_block_t *into, const ir_instr_t *near, ir_int_t value,
+              th_type *type)
 {
     ir_instr_t *in = ir_instr_derived(into, IR_OP_CONST, near,
                                       into->n_instrs);
     return in && ir_instr_operand_int(in, value)
-        ? fresh_dest(f, in, type) : nullptr;
+        ? fresh_dest(in, type) : nullptr;
 }
 
 static ir_value_t *
-emit_conversion(ir_func_t *f, ir_block_t *into, const ir_instr_t *near,
-                ir_value_t *value, th_type *type)
+emit_conversion(ir_block_t *into, const ir_instr_t *near, ir_value_t *value,
+                th_type *type)
 {
     if (!value || value->type == type) return value;
     ir_instr_t *in = ir_instr_derived(into, IR_OP_CAST, near, into->n_instrs);
     return in && ir_instr_operand_value(in, value)
         && ir_instr_add_mod(in, CORE_STRING_STATIC("trap"))
-        ? fresh_dest(f, in, type) : nullptr;
+        ? fresh_dest(in, type) : nullptr;
 }
 
 static ir_value_t *
-emit_offset(ir_func_t *f, ir_block_t *into, const ir_instr_t *near,
-            ir_value_t *value, ir_int_t offset)
+emit_offset(ir_block_t *into, const ir_instr_t *near, ir_value_t *value,
+            ir_int_t offset)
 {
     if (!value || !offset) return value;
-    ir_value_t *amount = emit_constant(f, into, near,
+    ir_value_t *amount = emit_constant(into, near,
                                        offset < 0 ? -offset : offset,
                                        value->type);
-    return amount ? emit_binary(f, into, offset < 0 ? IR_OP_SUB : IR_OP_ADD,
+    return amount ? emit_binary(into, offset < 0 ? IR_OP_SUB : IR_OP_ADD,
                                 near, value, amount, value->type, true)
                   : nullptr;
 }
 
 static ir_value_t *
-materialize(ir_func_t *f, ir_block_t *into, const ir_value_t *value,
-            const bool *inside)
+materialize(ir_block_t *into, const ir_value_t *value, const bool *inside)
 {
     if (value->kind != IR_VAL_INSTR || !inside[value->def->block->index])
         return (ir_value_t *)value;
     const ir_instr_t *in = value->def;
-    const ir_value_t *source = value_operand(in, 0);
-    if (in->op == IR_OP_COPY) return materialize(f, into, source, inside);
-    ir_value_t *operand = materialize(f, into, source, inside);
+    const ir_value_t *source = ir_value_operand(in, 0);
+    if (in->op == IR_OP_COPY) return materialize(into, source, inside);
+    ir_value_t *operand = materialize(into, source, inside);
     ir_instr_t *copy = ir_instr_derived(into, in->op, in, into->n_instrs);
     if (!operand || !copy || !ir_instr_operand_value(copy, operand)
         || (in->op == IR_OP_FIELD
             && !ir_instr_operand_name(copy, in->operands[1].name)))
         return nullptr;
-    return fresh_dest(f, copy, value->type);
+    return fresh_dest(copy, value->type);
 }
 
 static ir_value_t *
-probe(ir_func_t *f, ir_block_t *into, const hoisted_access_t *hoisted,
-      ir_value_t *base, ir_value_t *endpoint)
+probe(ir_block_t *into, const hoisted_access_t *hoisted, ir_value_t *base,
+      ir_value_t *endpoint)
 {
     const ir_instr_t *access = hoisted->access;
-    ir_value_t *at = emit_conversion(f, into, access, endpoint,
+    ir_value_t *at = emit_conversion(into, access, endpoint,
                                      hoisted->position->type);
-    at = emit_offset(f, into, access, at, hoisted->offset);
-    at = emit_conversion(f, into, access, at,
-                         value_operand(access, 1)->type);
+    at = emit_offset(into, access, at, hoisted->offset);
+    at = emit_conversion(into, access, at,
+                         ir_value_operand(access, 1)->type);
     ir_instr_t *check = at ? ir_instr_derived(into, access->op, access,
                                               into->n_instrs)
                            : nullptr;
     return check && ir_instr_operand_value(check, base)
         && ir_instr_operand_value(check, at)
-        ? fresh_dest(f, check, access->dest->type) : nullptr;
+        ? fresh_dest(check, access->dest->type) : nullptr;
 }
 
 static bool
@@ -1636,24 +1555,23 @@ hoist_loop(ir_func_t *f, monotone_loop_t *loop)
     ir_value_t *start = (ir_value_t *)loop->start;
     ir_value_t *bound = (ir_value_t *)loop->bound;
     const ir_instr_t *near = loop->test;
-    ir_value_t *one = emit_constant(f, checks, near, 1, bound->type);
+    ir_value_t *one = emit_constant(checks, near, 1, bound->type);
     ir_value_t *last = bound;
     if (loop->op == IR_OP_LT || loop->op == IR_OP_GT)
-        last = emit_binary(f, checks, loop->rising ? IR_OP_SUB : IR_OP_ADD,
+        last = emit_binary(checks, loop->rising ? IR_OP_SUB : IR_OP_ADD,
                            near, bound, one, bound->type, true);
     ir_value_t *low  = loop->rising ? start : last;
     ir_value_t *high = loop->rising ? last : start;
     if (!one || !last) return false;
     for (size_t i = 0; i < loop->accesses.len; i++) {
         hoisted_access_t *hoisted = &loop->accesses.data[i];
-        ir_value_t *base = materialize(f, checks,
-                                       value_operand(hoisted->access, 0),
-                                       loop->inside);
+        ir_value_t *base = materialize(checks,
+            ir_value_operand(hoisted->access, 0), loop->inside);
         ir_machine_t machine = ir_machine_of(f->owner,
-            value_operand(hoisted->access, 1)->type);
+            ir_value_operand(hoisted->access, 1)->type);
         bool below = hoisted->offset < 0 || machine.class == IR_CLASS_SINT;
-        if (!base || !probe(f, checks, hoisted, base, high)
-            || (below && !probe(f, checks, hoisted, base, low)))
+        if (!base || !probe(checks, hoisted, base, high)
+            || (below && !probe(checks, hoisted, base, low)))
             return false;
     }
     ir_instr_t *to_join = ir_instr_derived(checks, IR_OP_JUMP, entry,
@@ -1666,7 +1584,7 @@ hoist_loop(ir_func_t *f, monotone_loop_t *loop)
         || !ir_instr_operand_block(to_header, loop->header)
         || !ir_instr_operand_value(enter, start)
         || !ir_instr_operand_value(enter, bound)
-        || !fresh_dest(f, enter, near->dest->type)) return false;
+        || !fresh_dest(enter, near->dest->type)) return false;
     entry->op = IR_OP_BRANCH;
     entry->n_operands = 0;
     if (!ir_instr_operand_value(entry, enter->dest)
@@ -1747,13 +1665,10 @@ ir_abcd_free(ir_abcd_t *a)
     for (uint32_t b = 0; a->reach && b < a->reach_count; b++)
         core_free(a->reach[b]);
     core_free(a->reach);
-    core_dict_foreach(&a->offsets_of, entry) {
-        core_list_t(instr_ptr_t) *users = entry->value;
-        core_list_free(*users);
-        core_free(users);
-    }
-    core_dict_free(&a->offsets_of);
+    free_index(&a->offsets_of);
+    free_index(&a->checks_of);
     core_list_free(a->lengths);
+    core_list_free(a->effects);
     core_list_free(a->callees);
     core_free(a);
 }

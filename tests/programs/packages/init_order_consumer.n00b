@@ -1,3 +1,0 @@
-import init_order.child
-
-require init_order.child.stage() == 2

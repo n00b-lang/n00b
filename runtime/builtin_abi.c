@@ -104,6 +104,15 @@ n00b_builtin_abi_storage(uint32_t index)
     return n00b_abi_v1_storage(n00b_abi_v1_current_snapshot(), index);
 }
 
+const n00b_abi_tls_relocation_v1 *
+n00b_builtin_abi_tls_relocation(uint32_t index)
+{
+    return index ? n00b_abi_v1_record(n00b_abi_v1_current_snapshot(),
+                                      N00B_ABI_TABLE_TLS_RELOCATION, index,
+                                      nullptr)
+                 : nullptr;
+}
+
 uint32_t
 n00b_builtin_abi_baked_node_count(void)
 {

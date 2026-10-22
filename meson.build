@@ -663,7 +663,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'try_without_failure.n',
-           'IR-E0010',
+           'N00BB-T0048',
            'try_without_failure.n:2:21'],
     timeout: 120,
     suite: 'slow',
@@ -828,7 +828,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'wide_integer_literal_range.n',
-           'N00BB-T0045',
+           'N00BB-T0041',
            'wide_integer_literal_range.n:4:9'],
     timeout: 120,
     suite: 'slow',
@@ -1577,6 +1577,15 @@ test(
 )
 
 test(
+    'thread-var-storage',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'thread_var_storage.n'],
+)
+
+test(
     'verify-analyses',
     find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'verify_analyses.sh',
@@ -1897,7 +1906,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_assert_ref_write.n',
-           'assert expression has a side effect: \'fill\' writes through argument 1',
+           'assert expression has a side effect: it calls \'fill\'; \'fill\' writes through its argument 1',
            'bitcode_assert_ref_write.n:7:1'],
     suite: 'slow',
 )
@@ -2075,8 +2084,8 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'bitcode'
                / 'bitcode_dead_code.n',
-           'bitcode_dead_code.n:7:5', 'bitcode_dead_code.n:13:5',
-           'bitcode_dead_code.n:18:27'],
+           'bitcode_dead_code.n:7:9', 'bitcode_dead_code.n:13:12',
+           'bitcode_dead_code.n:18:9', 'bitcode_dead_code.n:23:33'],
     suite: 'slow',
 )
 

@@ -10,6 +10,7 @@
 #include "ir/shape.h"
 #include "lib/alloc.h"
 #include "lib/byteorder.h"
+#include "lib/dict.h"
 #include "lib/list.h"
 
 core_list_decl(n00b_abi_storage_v1);
@@ -221,14 +222,52 @@ typedef struct {
 } array_shape_facts_t;
 
 typedef struct {
+    uint32_t source_kind;
+    uint64_t byte_offset;
+    core_string_t global;
+} pending_address_t;
+
+core_list_decl(pending_address_t);
+
+typedef struct {
     n00bb_abi_type_index_t *index;
     const n00bb_abi_type_identity_rows_t *types;
     ir_module_t *runtime;
     n00bb_abi_name_pool_t *pool;
     n00bb_abi_storage_rows_t *built;
     core_list_t(n00bb_abi_storage_relocation_t) *relocations;
+    core_list_t(n00bb_abi_storage_relocation_t) *tls_fixups;
     core_list_t(n00bb_abi_storage_index_patch_t) *index_patches;
+    core_list_t(pending_address_t) *addresses;
 } array_writer_t;
+
+static bool
+global_address(const ir_global_init_value_t *value)
+{
+    return value && value->kind == IR_GLOBAL_INIT_SYMBOL && value->symbol
+        && value->symbol->kind == IR_VAL_GLOBAL && value->symbol->name.data;
+}
+
+static bool
+encode_global_address(array_writer_t *writer,
+                      const ir_global_init_value_t *value, uint64_t bits,
+                      uint32_t source_kind, uint64_t source_bit_offset)
+{
+    if (bits != 64 || source_bit_offset % 8) return false;
+    core_list_push(*writer->addresses, ((pending_address_t){
+        .source_kind = source_kind,
+        .byte_offset = source_bit_offset / 8,
+        .global = value->symbol->name,
+    }));
+    return true;
+}
+
+static core_buffer_t *
+data_segment(array_writer_t *writer, uint32_t data_kind)
+{
+    return data_kind == N00B_ABI_STORAGE_TLS ? &writer->built->tls
+                                             : &writer->built->aggregates;
+}
 
 static bool
 record_type_index(array_writer_t *writer, uint32_t source_kind,
@@ -370,6 +409,9 @@ encode_inline_array_member(array_writer_t *writer,
         valid = aggregate
             ? encode_aggregate(writer, element, value, source_kind,
                 source_bit_offset + at, buffer, element_bytes, depth + 1)
+            : global_address(value)
+            ? encode_global_address(writer, value, element_bits, source_kind,
+                source_bit_offset + at)
             : encode_scalar(writer->runtime, writer->index, element, value,
                 element_bits, buffer, &descriptor_index);
         if (valid && descriptor_index != UINT32_MAX)
@@ -441,7 +483,6 @@ encode_typed_value(array_writer_t *writer, th_type *type,
             source_bit_offset, bytes, byte_count, depth + 1);
     else if (row->kind == N00B_ABI_TYPE_ARRAY)
         valid = source_bit_offset % 8 == 0
-            && source_kind != N00B_ABI_STORAGE_TLS
             && encode_array(writer, type, item, nullptr,
                 source_kind, source_bit_offset / 8, nullptr);
     else if (row->kind == N00B_ABI_TYPE_STRING) {
@@ -450,8 +491,7 @@ encode_typed_value(array_writer_t *writer, th_type *type,
             && encode_string(writer->pool, item, bytes, &pool_offset);
         if (valid && item->string.u8_bytes
             > N00BB_ABI_STRING_SHORT_CAPACITY) {
-            valid = source_bit_offset % 8 == 0
-                && source_kind != N00B_ABI_STORAGE_TLS;
+            valid = source_bit_offset % 8 == 0;
             if (valid)
                 core_list_push(*writer->relocations,
                     ((n00bb_abi_storage_relocation_t){
@@ -464,6 +504,9 @@ encode_typed_value(array_writer_t *writer, th_type *type,
     }
     else if (item->kind == IR_GLOBAL_INIT_NIL)
         valid = true;
+    else if (global_address(item))
+        valid = encode_global_address(writer, item, bits, source_kind,
+                                      source_bit_offset);
     else if (row->kind == N00B_ABI_TYPE_OPTION)
         valid = encode_option_payload(writer, type, item, source_kind,
             source_bit_offset, bytes, byte_count, depth);
@@ -595,7 +638,8 @@ encode_array_items(array_writer_t *writer,
                    const array_shape_facts_t *shape,
                    const ir_global_init_value_t *value, th_type *type,
                    uint32_t depth, size_t data_offset, size_t stride,
-                   size_t width, bool packed, size_t *next)
+                   size_t width, bool packed, uint32_t data_kind,
+                   size_t *next)
 {
     if (depth < shape->flat_rank) {
         th_type *element = array_element_type(type);
@@ -604,13 +648,14 @@ encode_array_items(array_writer_t *writer,
         for (size_t i = 0; i < value->aggregate.count; i++)
             if (!encode_array_items(writer, shape,
                     &value->aggregate.items[i], element, depth + 1,
-                    data_offset, stride, width, packed, next)) return false;
+                    data_offset, stride, width, packed, data_kind, next))
+                return false;
         return true;
     }
     size_t at = packed ? 0 : data_offset + (*next) * stride;
     if (depth < shape->rank) {
-        if (!encode_array(writer, type, value, nullptr,
-                N00BB_ABI_RELOC_AGGREGATE, at, nullptr)) return false;
+        if (!encode_array(writer, type, value, nullptr, data_kind, at,
+                          nullptr)) return false;
     }
     else {
         uint32_t type_index;
@@ -635,11 +680,14 @@ encode_array_items(array_writer_t *writer,
         bool valid = string ? (stride == 16
                 && encode_string(writer->pool, value, bytes, &pool_offset))
             : aggregate ? encode_typed_value(writer, type, row, value,
-                N00BB_ABI_RELOC_AGGREGATE, (uint64_t)at * 8,
-                bytes, stride, 0)
+                data_kind, (uint64_t)at * 8, bytes, stride, 0)
             : zero_option ? true
             : row->kind == N00B_ABI_TYPE_NIL && !row->size_bits
                 ? value->kind == IR_GLOBAL_INIT_NIL
+            : global_address(value)
+                ? !packed && encode_global_address(writer, value,
+                    storage_bits(writer->runtime, type, row), data_kind,
+                    (uint64_t)at * 8)
             : encode_scalar(writer->runtime, writer->index, type, value,
                 storage_bits(writer->runtime, type, row), bytes,
                 &descriptor_index);
@@ -647,21 +695,21 @@ encode_array_items(array_writer_t *writer,
             if (heap_bytes) core_free(bytes);
             return false;
         }
+        char *data = data_segment(writer, data_kind)->data;
         if (packed) {
             size_t first_bit = (*next) * width;
             for (size_t bit = 0; bit < width; bit++)
                 if (bytes[bit / 8] & (1u << (bit % 8)))
-                    writer->built->aggregates.data[
-                        data_offset + (first_bit + bit) / 8]
+                    data[data_offset + (first_bit + bit) / 8]
                         |= (char)(1u << ((first_bit + bit) % 8));
         }
         else {
-            memcpy(writer->built->aggregates.data + at, bytes, stride);
+            memcpy(data + at, bytes, stride);
             if (string && value->string.u8_bytes
                 > N00BB_ABI_STRING_SHORT_CAPACITY)
                 core_list_push(*writer->relocations,
                     ((n00bb_abi_storage_relocation_t){
-                        .source_kind = N00BB_ABI_RELOC_AGGREGATE,
+                        .source_kind = data_kind,
                         .byte_offset = at,
                         .target_kind = N00BB_ABI_RELOC_STRING_POOL,
                         .target_offset = pool_offset,
@@ -669,8 +717,8 @@ encode_array_items(array_writer_t *writer,
         }
         if (heap_bytes) core_free(bytes);
         if (descriptor_index != UINT32_MAX
-            && (packed || !record_type_index(writer,
-                N00BB_ABI_RELOC_AGGREGATE, at, descriptor_index)))
+            && (packed || !record_type_index(writer, data_kind, at,
+                                             descriptor_index)))
             return false;
     }
     (*next)++;
@@ -725,7 +773,10 @@ encode_array(array_writer_t *writer, th_type *type,
     size_t data_size = packed ? (shape.total_count * width + 7) / 8
                               : shape.total_count * stride;
     if (!data_size) data_size = 1;
-    core_buffer_t *buffer = &writer->built->aggregates;
+    bool thread = source_kind == N00B_ABI_STORAGE_TLS;
+    uint32_t data_kind = thread ? N00B_ABI_STORAGE_TLS
+                                : N00BB_ABI_RELOC_AGGREGATE;
+    core_buffer_t *buffer = data_segment(writer, data_kind);
     if (!append_padding(buffer, alignment)
         || data_size >= SIZE_MAX - buffer->byte_len) {
         valid = false;
@@ -736,30 +787,33 @@ encode_array(array_writer_t *writer, th_type *type,
     memset(buffer->data + buffer->byte_len, 0, data_size);
     buffer->byte_len += data_size;
     buffer->data[buffer->byte_len] = 0;
-    if (!append_padding(buffer, 8)
-        || buffer->byte_len > SIZE_MAX - 25
-        || (size_t)shape.rank > (SIZE_MAX - buffer->byte_len - 25) / 8) {
+    uint32_t *data_alignment = thread ? &writer->built->tls_alignment
+                                      : &writer->built->aggregate_alignment;
+    if (*data_alignment < alignment) *data_alignment = (uint32_t)alignment;
+    core_buffer_t *descriptors = &writer->built->aggregates;
+    if (!append_padding(descriptors, 8)
+        || descriptors->byte_len > SIZE_MAX - 25
+        || (size_t)shape.rank
+            > (SIZE_MAX - descriptors->byte_len - 25) / 8) {
         valid = false;
         goto done;
     }
-    size_t descriptor_offset = buffer->byte_len;
+    size_t descriptor_offset = descriptors->byte_len;
     uint8_t header[24] = {0};
     core_le_store_u64(header, shape.total_count);
     core_le_store_u32(header + 8, shape.rank);
     core_le_store_u32(header + 12, shape.flat_rank);
-    core_buffer_append(buffer, (const char *)header, sizeof header);
+    core_buffer_append(descriptors, (const char *)header, sizeof header);
     for (uint32_t i = 0; i < shape.rank; i++) {
         uint8_t extent[8];
         core_le_store_u64(extent, shape.extents[i]);
-        core_buffer_append(buffer, (const char *)extent, sizeof extent);
+        core_buffer_append(descriptors, (const char *)extent, sizeof extent);
     }
-    if (writer->built->aggregate_alignment < alignment)
-        writer->built->aggregate_alignment = (uint32_t)alignment;
     if (writer->built->aggregate_alignment < 8)
         writer->built->aggregate_alignment = 8;
     size_t next = 0;
     valid = encode_array_items(writer, &shape, value, type, 0,
-        data_offset, stride, width, packed, &next)
+        data_offset, stride, width, packed, data_kind, &next)
         && next == shape.total_count;
     if (!valid) goto done;
     if (shape_index) {
@@ -782,11 +836,10 @@ encode_array(array_writer_t *writer, th_type *type,
                shape.rank * sizeof(*built->extents));
         built->extent_count += shape.rank;
     }
-    core_list_push(*writer->relocations,
+    core_list_push(*(thread ? writer->tls_fixups : writer->relocations),
         ((n00bb_abi_storage_relocation_t){
             .source_kind = source_kind, .byte_offset = source_offset,
-            .target_kind = N00BB_ABI_RELOC_AGGREGATE,
-            .target_offset = data_offset,
+            .target_kind = data_kind, .target_offset = data_offset,
         }));
     core_list_push(*writer->relocations,
         ((n00bb_abi_storage_relocation_t){
@@ -1148,7 +1201,11 @@ n00bb_abi_storage_rows_build(
     core_list_t(n00b_abi_storage_v1) rows = {0};
     core_list_t(uint32_t) statics = {0}, locals = {0};
     core_list_t(n00bb_abi_storage_relocation_t) relocations = {0};
+    core_list_t(n00bb_abi_storage_relocation_t) tls_fixups = {0};
     core_list_t(n00bb_abi_storage_index_patch_t) index_patches = {0};
+    core_list_t(pending_address_t) addresses = {0};
+    core_dict_t global_rows;
+    core_dict_init(&global_rows, nullptr, nullptr);
     n00bb_abi_storage_rows_t built = {0};
     graph_place_t *graph_places = nullptr;
     graph_edge_t *graph_edges = nullptr;
@@ -1241,9 +1298,11 @@ n00bb_abi_storage_rows_build(
                             || atomic_option)
             && initializer && initializer->kind == IR_GLOBAL_INIT_NIL;
         bool uninitialized = !initializer;
+        bool address = global_address(initializer);
         if (!alignment || (alignment & (alignment - 1))
             || bits > SIZE_MAX - 7
             || (phase_graph ? false
+                : address ? bits != 64
                 : is_string
                 ? (bits != 128 || alignment != 8
                     || !encode_string(pool, initializer, bytes, &pool_offset))
@@ -1293,8 +1352,16 @@ n00bb_abi_storage_rows_build(
         array_writer_t writer = {
             .index = index, .types = types, .runtime = runtime,
             .pool = pool, .built = &built, .relocations = &relocations,
-            .index_patches = &index_patches,
+            .tls_fixups = &tls_fixups, .index_patches = &index_patches,
+            .addresses = &addresses,
         };
+        if (address && !encode_global_address(&writer, initializer, bits,
+                kind, row.byte_offset * 8)) {
+            valid = false;
+            break;
+        }
+        core_dict_put(&global_rows, ir_global_identity(global),
+                      (void *)(uintptr_t)rows.len);
         if (phase_graph) {
             core_buffer_append(buffer, (const char *)graph_bytes,
                 byte_length);
@@ -1306,12 +1373,13 @@ n00bb_abi_storage_rows_build(
             size_t record_bytes = byte_length < 16 ? 16 : byte_length;
             uint8_t *record = core_alloc_array(uint8_t, record_bytes);
             memset(record, 0, record_bytes);
+            core_buffer_append(buffer, (const char *)record, byte_length);
             valid = row.byte_offset <= UINT64_MAX / 8
                 && encode_typed_value(&writer, global->type, type_row,
                     initializer, kind, row.byte_offset * 8, record,
                     byte_length, 0);
             if (valid)
-                core_buffer_append(buffer, (const char *)record, byte_length);
+                memcpy(buffer->data + row.byte_offset, record, byte_length);
             core_free(record);
             if (!valid) break;
         }
@@ -1331,6 +1399,8 @@ n00bb_abi_storage_rows_build(
             valid = false;
             break;
         }
+        if (kind == N00B_ABI_STORAGE_TLS)
+            row.byte_length = buffer->byte_len - row.byte_offset;
         if (descriptor_index != UINT32_MAX
             && !record_type_index(&writer, kind, row.byte_offset,
                                   descriptor_index)) {
@@ -1351,6 +1421,23 @@ n00bb_abi_storage_rows_build(
         else core_list_push(statics, (uint32_t)rows.len);
         core_list_push(rows, row);
         matched_globals++;
+    }
+    for (size_t i = 0; valid && i < addresses.len; i++) {
+        const pending_address_t *address = &addresses.data[i];
+        ir_global_t *target = ir_global_find(runtime, address->global);
+        bool found = false;
+        uintptr_t slot = target ? (uintptr_t)core_dict_get(&global_rows,
+            ir_global_identity(target), &found) : 0;
+        const n00b_abi_storage_v1 *row = found ? &rows.data[slot] : nullptr;
+        valid = row && (row->segment_kind == N00B_ABI_STORAGE_READ_ONLY
+                        || row->segment_kind == N00B_ABI_STORAGE_WRITABLE);
+        if (valid)
+            core_list_push(relocations, ((n00bb_abi_storage_relocation_t){
+                .source_kind = address->source_kind,
+                .byte_offset = address->byte_offset,
+                .target_kind = row->segment_kind,
+                .target_offset = row->byte_offset,
+            }));
     }
     for (size_t i = 0; valid && graph_places && i < graphs->node_count; i++) {
         graph_place_t *place = &graph_places[i];
@@ -1511,6 +1598,8 @@ n00bb_abi_storage_rows_build(
         built.row_count = rows.len;
         built.relocations = relocations.data;
         built.relocation_count = relocations.len;
+        built.tls_fixups = tls_fixups.data;
+        built.tls_fixup_count = tls_fixups.len;
         built.index_patches = index_patches.data;
         built.index_patch_count = index_patches.len;
         built.baked_nodes = baked.data;
@@ -1521,6 +1610,7 @@ n00bb_abi_storage_rows_build(
         core_list_free(baked);
         core_list_free(rows);
         core_list_free(relocations);
+        core_list_free(tls_fixups);
         core_list_free(index_patches);
         n00bb_abi_storage_rows_release(&built);
     }
@@ -1528,6 +1618,8 @@ n00bb_abi_storage_rows_build(
     core_free(graph_edges);
     core_list_free(statics);
     core_list_free(locals);
+    core_list_free(addresses);
+    core_dict_free(&global_rows);
     return valid;
 }
 
@@ -1538,6 +1630,7 @@ n00bb_abi_storage_rows_release(n00bb_abi_storage_rows_t *rows)
     core_free(rows->rows);
     core_free(rows->stream_indexes);
     core_free(rows->relocations);
+    core_free(rows->tls_fixups);
     core_free(rows->index_patches);
     core_free(rows->baked_nodes);
     core_free(rows->shapes);

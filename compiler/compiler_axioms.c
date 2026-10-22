@@ -96,6 +96,8 @@ static const n00bb_axiom_t axioms[] = {
     NATIVE("__abi_layout", "n00b_builtin_abi_layout", 0, 0, 0),
     NATIVE("__abi_frame_layout", "n00b_builtin_abi_frame_layout", 0, 0, 0),
     NATIVE("__abi_storage", "n00b_builtin_abi_storage", 0, 0, 0),
+    NATIVE("__abi_tls_relocation", "n00b_builtin_abi_tls_relocation", 0, 0,
+           0),
     NATIVE("__abi_symbol", "n00b_builtin_abi_symbol", 0, 0, 0),
     NATIVE("__abi_module", "n00b_builtin_abi_module", 0, 0, 0),
     NATIVE("__abi_baked_node", "n00b_builtin_abi_baked_node", 0, 0, 0),
@@ -145,8 +147,7 @@ static const n00bb_axiom_t axioms[] = {
              N00BB_AXIOM_MUTATOR_ALLOCATOR),
     FUNCTION("sys.internal.gc.alloc", "mutator_for_native", 0,
              N00BB_AXIOM_MUTATOR_GETTER),
-    FUNCTION("builtin.containers.buffer", "write_lock", 0x1,
-             N00BB_AXIOM_WRITE_LOCK),
+    FUNCTION("builtin.containers.buffer", "write_lock", 0x1, 0),
     FUNCTION("sys.internal.gc.sync", "ticket_lock", 0,
              N00BB_AXIOM_LOCK_ACQUIRE),
     FUNCTION("sys.internal.gc.sync", "ticket_unlock", 0,
@@ -198,22 +199,82 @@ static const n00bb_axiom_t axioms[] = {
 
 static const size_t axiom_count = sizeof(axioms) / sizeof(axioms[0]);
 
+static pthread_once_t index_once = PTHREAD_ONCE_INIT;
+static core_dict_t    by_native;
+static core_dict_t    by_native_name;
+static core_dict_t    by_function;
+static core_dict_t    by_builtin;
+static const n00bb_axiom_t *bindings[sizeof(axioms) / sizeof(axioms[0])];
+static size_t         binding_count;
+
+static void
+build_indexes(void)
+{
+    core_dict_init_string(&by_native);
+    core_dict_init_string(&by_native_name);
+    core_dict_init_string(&by_function);
+    core_dict_init_string(&by_builtin);
+    for (size_t i = 0; i < axiom_count; i++) {
+        const n00bb_axiom_t *axiom = &axioms[i];
+        switch (axiom->key) {
+        case N00BB_AXIOM_NATIVE:
+            core_dict_put(&by_native, &axiom->native, axiom);
+            core_dict_put(&by_native_name, &axiom->name, axiom);
+            break;
+        case N00BB_AXIOM_FUNCTION:
+            core_dict_put(&by_function, &axiom->name, axiom);
+            break;
+        case N00BB_AXIOM_BUILTIN:
+            core_dict_put(&by_builtin, &axiom->name, axiom);
+            break;
+        case N00BB_AXIOM_BINDING:
+            bindings[binding_count++] = axiom;
+            break;
+        }
+    }
+}
+
+static const n00bb_axiom_t *
+indexed(core_dict_t *index, const core_string_t *name)
+{
+    pthread_once(&index_once, build_indexes);
+    bool found = false;
+    const n00bb_axiom_t *axiom = core_dict_get(index, (void *)name, &found);
+    return found ? axiom : nullptr;
+}
+
 const n00bb_axiom_t *
 n00bb_axiom_of_function(const ir_func_t *function)
 {
-    core_string_t module = function && function->owner
-        ? ir_module_name(function->owner) : (core_string_t){0};
-    for (size_t i = 0; function && i < axiom_count; i++) {
-        const n00bb_axiom_t *axiom = &axioms[i];
-        if (axiom->key == N00BB_AXIOM_NATIVE
-            ? !function->n_blocks
-                && core_string_eq(axiom->native, function->name)
-            : axiom->key == N00BB_AXIOM_FUNCTION && module.data
-                && core_string_eq(axiom->module, module)
-                && core_string_eq(axiom->name, function->name))
-            return axiom;
+    if (!function) return nullptr;
+    if (!function->n_blocks) {
+        const n00bb_axiom_t *native = indexed(&by_native, &function->name);
+        if (native) return native;
     }
-    return nullptr;
+    const n00bb_axiom_t *axiom = indexed(&by_function, &function->name);
+    return axiom && function->owner
+        && core_string_eq(axiom->module, ir_module_name(function->owner))
+        ? axiom : nullptr;
+}
+
+const n00bb_axiom_t *
+n00bb_axiom_of_native_name(core_string_t name)
+{
+    return indexed(&by_native_name, &name);
+}
+
+const n00bb_axiom_t *
+n00bb_axiom_of_builtin(core_string_t name)
+{
+    return indexed(&by_builtin, &name);
+}
+
+const n00bb_axiom_t *const *
+n00bb_axiom_bindings(size_t *count)
+{
+    pthread_once(&index_once, build_indexes);
+    *count = binding_count;
+    return bindings;
 }
 
 bool
@@ -223,27 +284,15 @@ n00bb_axiom_function_has(const ir_func_t *function, uint8_t role)
     return axiom && (axiom->roles & role);
 }
 
-size_t
-n00bb_axiom_count(void)
-{
-    return axiom_count;
-}
-
-const n00bb_axiom_t *
-n00bb_axiom_at(size_t index)
-{
-    return index < axiom_count ? &axioms[index] : nullptr;
-}
-
-static pthread_mutex_t pure_lock = PTHREAD_MUTEX_INITIALIZER;
-static core_dict_t     pure_natives;
-static bool            pure_ready;
+static pthread_rwlock_t pure_lock = PTHREAD_RWLOCK_INITIALIZER;
+static core_dict_t      pure_natives;
+static bool             pure_ready;
 
 void
 n00bb_axiom_note_pure_native(core_string_t symbol)
 {
     if (!symbol.data) return;
-    pthread_mutex_lock(&pure_lock);
+    pthread_rwlock_wrlock(&pure_lock);
     if (!pure_ready) {
         core_dict_init_string(&pure_natives);
         pure_ready = true;
@@ -251,16 +300,16 @@ n00bb_axiom_note_pure_native(core_string_t symbol)
     if (!core_dict_contains(&pure_natives, &symbol))
         core_dict_put(&pure_natives, core_dict_string_key_copy(symbol),
                       (void *)1);
-    pthread_mutex_unlock(&pure_lock);
+    pthread_rwlock_unlock(&pure_lock);
 }
 
 bool
 n00bb_axiom_pure_native(const ir_func_t *function)
 {
     if (!function || function->n_blocks) return false;
-    pthread_mutex_lock(&pure_lock);
+    pthread_rwlock_rdlock(&pure_lock);
     bool pure = pure_ready
         && core_dict_contains(&pure_natives, (void *)&function->name);
-    pthread_mutex_unlock(&pure_lock);
+    pthread_rwlock_unlock(&pure_lock);
     return pure;
 }

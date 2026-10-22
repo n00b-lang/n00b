@@ -231,6 +231,7 @@ typedef enum {
     N00BB_STATIC_VALUE_RECORD,
     N00BB_STATIC_VALUE_NIL,
     N00BB_STATIC_VALUE_VARIANT,
+    N00BB_STATIC_VALUE_ADDRESS,
 } n00bb_static_value_kind_t;
 
 typedef struct n00bb_static_value {
@@ -248,6 +249,7 @@ typedef struct n00bb_static_value {
             core_string_t arm;
             struct n00bb_static_value *payload;
         } variant;
+        parse_sym_entry_t *address;
     } as;
 } n00bb_static_value_t;
 bool n00bb_integer_type_promotes_to(th_type *source, th_type *target);
@@ -258,7 +260,6 @@ bool n00bb_bitwise_type(th_type *type);
 bool n00bb_unsigned_shift_count_type(th_type *type);
 th_type *n00bb_shift_count_type(th_ctx *types, th_type *receiver);
 bool n00bb_integer_range_fits_type(th_type *type, ir_interval_t range);
-void n00bb_append_wide_integer(core_buffer_t *out, __int128 value);
 bool n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal);
 parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
 parse_sym_entry_t *simple_expression_symbol(parse_tree_t *node);
@@ -356,11 +357,17 @@ typedef struct {
     parse_sym_entry_t *symbol;
     ir_interval_t range;
 } n00bb_symbol_range_t;
+core_list_decl(n00bb_symbol_range_t);
+
+typedef struct {
+    core_list_t(n00bb_symbol_range_t) entries;
+    core_dict_t index;
+} n00bb_range_table_t;
 
 typedef struct {
     parse_tree_t *node;
-    core_dict_t incoming;
-    core_dict_t merged;
+    n00bb_range_table_t incoming;
+    n00bb_range_table_t merged;
     bool has_branch;
     bool has_else;
     bool branch_active;
@@ -458,13 +465,12 @@ typedef struct {
     void *key;
 } n00bb_integer_term_t;
 
-enum { N00BB_INTEGER_GUARD_LIMIT = 4 };
-
 typedef struct {
     parse_sym_entry_t *symbol;
     n00bb_integer_term_t bound;
     ir_op_t op;
 } n00bb_integer_guard_t;
+core_list_decl(n00bb_integer_guard_t);
 
 typedef struct {
     parse_tree_t *site;
@@ -473,8 +479,8 @@ typedef struct {
     n00bb_integer_term_t right;
     parse_sym_entry_t *left_symbol;
     parse_sym_entry_t *right_symbol;
-    n00bb_integer_guard_t guards[N00BB_INTEGER_GUARD_LIMIT];
-    uint8_t guard_count;
+    uint32_t guard_start;
+    uint32_t guard_count;
     parse_tree_t *loop;
     ir_op_t op;
 } n00bb_integer_edge_t;
@@ -588,10 +594,12 @@ typedef struct {
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_integer_seed_t) integer_seeds;
     core_list_t(n00bb_integer_edge_t) integer_edges;
+    core_list_t(n00bb_integer_guard_t) integer_guards;
     core_dict_t integer_edge_sites;
     core_dict_t integer_range_nodes;
     core_dict_t integer_tracked_symbols;
     core_list_t(parse_tree_ptr_t) integer_shift_sites;
+    core_dict_t integer_shift_seen;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
@@ -604,7 +612,7 @@ typedef struct {
     core_arena_t semantic_values;
     parse_tree_t *integer_range_root;
     core_dict_t integer_range_references;
-    core_dict_t integer_symbol_ranges;
+    n00bb_range_table_t integer_symbol_ranges;
     core_dict_t integer_range_invalidated_symbols;
     core_dict_t integer_solved_symbols;
     core_dict_t integer_boundary_sites;
@@ -613,6 +621,7 @@ typedef struct {
     parse_grammar_t *grammar;
     core_list_t(n00bb_range_branch_frame_t) integer_range_branches;
     bool integer_range_use_symbol_facts;
+    bool integer_range_roles_ready;
     bool inference_finalized;
     bool interface_module;
     bool import_failure_reported;
@@ -882,8 +891,7 @@ bool cache_return_source_fact(parse_grammar_t *grammar, parse_tree_t *node,
 bool cache_alias_edges(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_tu_state_t *state);
 
-bool n00bb_current_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
-                                 ir_interval_t *range);
+bool n00bb_current_integer_range(parse_tree_t *node, ir_interval_t *range);
 bool n00bb_set_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
                              ir_interval_t range);
 void n00bb_settle_symbol_range(n00bb_tu_state_t *state, parse_tree_t *node,
@@ -891,7 +899,8 @@ void n00bb_settle_symbol_range(n00bb_tu_state_t *state, parse_tree_t *node,
 void n00bb_integer_boundary(n00bb_tu_state_t *state, parse_tree_t *node,
                             th_type *target);
 void n00bb_report_integer_misfit(n00bb_tu_state_t *state, parse_tree_t *node,
-                                 ir_interval_t range, th_type *target);
+                                 core_string_t noun, ir_interval_t range,
+                                 th_type *target);
 void n00bb_report_integer_narrowing(n00bb_tu_state_t *state,
                                     parse_tree_t *node, ir_interval_t range,
                                     th_type *target);
@@ -899,6 +908,14 @@ bool n00bb_integer_narrowing_reported(n00bb_tu_state_t *state, uint32_t line,
                                       uint32_t column);
 bool n00bb_integer_point(parse_tree_t *node, int64_t *value);
 bool n00bb_type_interval(th_type *type, ir_interval_t *range);
+ir_op_t n00bb_comparison_op(core_string_t op);
+bool n00bb_function_node(parse_grammar_t *grammar, parse_tree_t *node);
+parse_tree_t *n00bb_enclosing_function_node(parse_grammar_t *grammar,
+                                            parse_tree_t *node);
+#define N00BB_INTEGER_WIDTHS 5
+th_type *n00bb_integer_type_of_width(th_ctx *types, uint64_t width,
+                                     bool is_signed);
+parse_sym_entry_t *n00bb_range_variable_of(parse_tree_t *node);
 bool n00bb_integer_representation(th_type *type, uint64_t *width,
                                   bool *is_signed);
 th_type *n00bb_integer_literal_variable(n00bb_tu_state_t *state,

@@ -155,6 +155,15 @@ record Storage_Record layout(c) {
     public tls_relocations:      Range
 }
 
+record Tls_Relocation_Record layout(c) {
+    public template_storage_index:   u32
+    public referenced_storage_index: u32
+    public write_byte_offset:        u64
+    public addend_bytes:             i64
+    public target_kind:              u32
+    public reserved_zero:            u32
+}
+
 record Symbol_Record layout(c) {
     public name:                       String_Bits
     public kind:                       u32
@@ -215,6 +224,52 @@ record Baked_Node_Record layout(c) {
 
 func string_backing_at(s: string) -> uint {
     return string.core.string_backing_at(s)
+}
+
+private const tls_segment: u32 = 3
+
+thread var tls_relocated: bool = false
+
+func relocate_thread_storage(index: u32, row: Ref[Storage_Record]) {
+    var ordinal: u32 = 0
+    while ordinal < row.tls_relocations.count {
+        let at: i64 = __abi_range_index(row.tls_relocations.first,
+                                        row.tls_relocations.count, ordinal)
+        require at > 0
+        let relocation: Ref[Tls_Relocation_Record]? =
+            __abi_tls_relocation(cast[u32]at)
+        require relocation != nil
+        let fixup: Ref[Tls_Relocation_Record] = relocation.get()
+        if fixup.target_kind == tls_segment {
+            let base: Ref[byte]? = __abi_storage_address(index)
+            let target: Ref[byte]? =
+                __abi_storage_address(fixup.referenced_storage_index)
+            require base != nil
+            require target != nil
+            let slot: Ref[byte] = __gc_byte_offset(base.get(),
+                cast[int]fixup.write_byte_offset)
+            ref_write(unsafe_cast[Ref[uint]] slot,
+                __abi_ref_address(target.get()) + cast[uint]fixup.addend_bytes)
+        }
+        ordinal += 1
+    }
+}
+
+public func tls_relocate() {
+    if tls_relocated {
+        return
+    }
+    tls_relocated = true
+    var index: u32 = 1
+    while index < __abi_storage_count() {
+        let row: Ref[Storage_Record]? = __abi_storage(index)
+        if row != nil {
+            if row.get().segment_kind == tls_segment {
+                relocate_thread_storage(index, row.get())
+            }
+        }
+        index += 1
+    }
 }
 
 func __type_has_kind(type_field: u32, kind: u32) -> i32 {

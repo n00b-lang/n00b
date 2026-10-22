@@ -1,6 +1,7 @@
 #include "private/ir/internal.h"
 #include "ir/analyses.h"
 #include "ir/memssa.h"
+#include "ir/operands.h"
 #include "ir/summary.h"
 #include "ir/vn.h"
 #include "lib/alloc.h"
@@ -52,42 +53,22 @@ call_like(const ir_instr_t *in)
         || in->op == IR_OP_BUFFER_BORROW_END;
 }
 
-static const ir_value_t *
-uncopied_value(const ir_value_t *value)
-{
-    for (uint32_t i = 0; value && value->def && i < 64; i++) {
-        const ir_instr_t *def = value->def;
-        if (def->op != IR_OP_COPY || def->n_operands != 1
-            || def->operands[0].kind != IR_OPD_VALUE
-            || def->operands[0].value == value) break;
-        value = def->operands[0].value;
-    }
-    return value;
-}
-
-static const ir_value_t *
-operand_value(const ir_instr_t *in, uint32_t index)
-{
-    return index < in->n_operands && in->operands[index].kind == IR_OPD_VALUE
-        ? in->operands[index].value : nullptr;
-}
-
 bool
 ir_memssa_element_of(const ir_instr_t *in, const ir_value_t **base,
                      const ir_value_t **index)
 {
     if (!in) return false;
     if (in->op == IR_OP_SEQUENCE_GET || in->op == IR_OP_SEQUENCE_SET) {
-        *base = operand_value(in, 0);
-        *index = operand_value(in, 1);
+        *base = ir_value_operand(in, 0);
+        *index = ir_value_operand(in, 1);
         return *base && *index;
     }
     if (in->op != IR_OP_LOAD && in->op != IR_OP_STORE) return false;
-    const ir_value_t *address = uncopied_value(operand_value(in, 0));
+    const ir_value_t *address = ir_value_uncopied(ir_value_operand(in, 0));
     const ir_instr_t *element = address ? address->def : nullptr;
     if (!element || element->op != IR_OP_INDEX) return false;
-    *base = operand_value(element, 0);
-    *index = operand_value(element, 1);
+    *base = ir_value_operand(element, 0);
+    *index = ir_value_operand(element, 1);
     return *base && *index;
 }
 
@@ -189,16 +170,20 @@ all_private(const ir_places_t *places, const ir_access_t *access)
 static bool
 call_writes_place(ir_memssa_t *m, const ir_instr_t *call, uint32_t place)
 {
-    uintptr_t key = ((uintptr_t)call->block->index << 40)
-        | ((uintptr_t)call->index << 20) | (uintptr_t)(place + 1);
     bool found = false;
-    uintptr_t known = (uintptr_t)core_dict_get(&m->call_writes,
-                                               (void *)key, &found);
+    core_dict_t *places = core_dict_get(&m->call_writes, (void *)call,
+                                        &found);
+    if (!found) {
+        places = core_alloc(core_dict_t);
+        core_dict_init(places, nullptr, nullptr);
+        core_dict_put(&m->call_writes, (void *)call, places);
+    }
+    void *key = (void *)(uintptr_t)(place + 1);
+    uintptr_t known = (uintptr_t)core_dict_get(places, key, &found);
     if (found) return known == 2;
     bool writes = ir_summary_call_writes(ir_analysis_summaries(), m->f,
-                                         m->places, call, &place, 1);
-    core_dict_put(&m->call_writes, (void *)key,
-                  (void *)(uintptr_t)(writes ? 2 : 1));
+                                         m->places, call, place);
+    core_dict_put(places, key, (void *)(uintptr_t)(writes ? 2 : 1));
     return writes;
 }
 
@@ -483,6 +468,10 @@ ir_memssa_free(ir_memssa_t *m)
     core_free(m->block_in);
     core_dict_free(&m->last_def);
     core_dict_free(&m->element_phis);
+    core_dict_foreach(&m->call_writes, item) {
+        core_dict_free(item->value);
+        core_free(item->value);
+    }
     core_dict_free(&m->call_writes);
     core_free(m);
 }

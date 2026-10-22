@@ -131,26 +131,68 @@ n00bb_frame_call_point(void *context, const ir_instr_t *instruction)
     }
 }
 
-static inline bool
-n00bb_frame_instr_candidate(ir_func_t *function, bool pointers_only,
-                            const ir_value_t *value)
+typedef enum : uint8_t {
+    N00BB_FRAME_TYPE_NONE,
+    N00BB_FRAME_TYPE_TRACED,
+    N00BB_FRAME_TYPE_POINTER,
+} n00bb_frame_type_class_t;
+
+static inline n00bb_frame_type_class_t
+n00bb_frame_type_class(ir_func_t *function, th_type *type)
 {
-    return value
-        && (n00bb_frame_native_pointer(function->owner, value->type)
-            || (!pointers_only
-                && n00bb_frame_traced_value(function, value->type)));
+    if (n00bb_frame_native_pointer(function->owner, type))
+        return N00BB_FRAME_TYPE_POINTER;
+    return n00bb_frame_traced_value(function, type) ? N00BB_FRAME_TYPE_TRACED
+                                                   : N00BB_FRAME_TYPE_NONE;
+}
+
+static inline bool
+n00bb_frame_values_across(ir_func_t *function, ir_value_t **values,
+                          size_t count, bool *across)
+{
+    if (!ir_live_across_points(ir_func_liveness(function), values, count,
+                               n00bb_frame_call_point, nullptr, across))
+        for (size_t v = 0; v < count; v++) across[v] = true;
+    return true;
 }
 
 typedef struct {
-    ir_value_t **values;
-    bool *across;
-} n00bb_frame_live_roots_t;
+    n00bb_frame_root_kind_t kind;
+    bool                    pointer;
+    ir_value_t             *value;
+    ir_local_t             *local;
+    ir_instr_t             *instruction;
+} n00bb_frame_root_t;
+
+typedef struct {
+    n00bb_frame_root_t *roots;
+    size_t              count;
+    size_t              pointer_count;
+} n00bb_frame_root_list_t;
+
+static inline void
+n00bb_frame_root_list_release(n00bb_frame_root_list_t *list)
+{
+    core_free(list->roots);
+    *list = (n00bb_frame_root_list_t){0};
+}
+
+static inline void
+n00bb_frame_root_push(n00bb_frame_root_list_t *list,
+                      n00bb_frame_type_class_t class,
+                      n00bb_frame_root_t root)
+{
+    root.pointer = class == N00BB_FRAME_TYPE_POINTER;
+    list->pointer_count += root.pointer;
+    list->roots[list->count++] = root;
+}
 
 static inline bool
-n00bb_frame_live_roots(ir_func_t *function, bool pointers_only,
-                       n00bb_frame_live_roots_t *live)
+n00bb_frame_root_list(ir_func_t *function, n00bb_frame_root_list_t *list)
 {
-    size_t total = 0;
+    *list = (n00bb_frame_root_list_t){0};
+    if (!function || !function->owner) return false;
+    size_t instructions = 0, candidates = 0;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         if (!block) return false;
@@ -160,25 +202,89 @@ n00bb_frame_live_roots(ir_func_t *function, bool pointers_only,
             ir_value_t *value = instruction->dest_kind == IR_DEST_VALUE
                 ? instruction->dest : nullptr;
             if (value && !value->type) return false;
-            total += n00bb_frame_instr_candidate(function, pointers_only,
-                                                 value);
+            instructions++;
+            candidates += value && n00bb_frame_type_class(function,
+                                                          value->type);
         }
     }
-    live->values = core_alloc_array(ir_value_t *, total ? total : 1);
-    live->across = core_alloc_array(bool, total ? total : 1);
+    for (uint32_t i = 0; i < function->n_params; i++)
+        if (!function->params[i] || !function->params[i]->type) return false;
+    for (uint32_t i = 0; i < function->n_locals; i++)
+        if (!function->locals[i] || !function->locals[i]->type) return false;
+    ir_value_t **values = core_alloc_array(ir_value_t *,
+                                           candidates ? candidates : 1);
+    bool *across = core_alloc_array(bool, candidates ? candidates : 1);
+    list->roots = core_alloc_array(n00bb_frame_root_t,
+        function->n_params + function->n_locals + 2 * instructions + 1);
     size_t next = 0;
     for (uint32_t b = 0; b < function->n_blocks; b++)
         for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
             ir_instr_t *instruction = function->blocks[b]->instrs[i];
             ir_value_t *value = instruction->dest_kind == IR_DEST_VALUE
                 ? instruction->dest : nullptr;
-            if (n00bb_frame_instr_candidate(function, pointers_only, value))
-                live->values[next++] = value;
+            if (value && n00bb_frame_type_class(function, value->type))
+                values[next++] = value;
         }
-    if (!ir_live_across_points(ir_func_liveness(function), live->values,
-                               total, n00bb_frame_call_point, nullptr,
-                               live->across))
-        for (size_t v = 0; v < total; v++) live->across[v] = true;
+    n00bb_frame_values_across(function, values, candidates, across);
+    for (uint32_t i = 0; i < function->n_params; i++) {
+        ir_value_t *value = function->params[i];
+        n00bb_frame_type_class_t class = n00bb_frame_type_class(function,
+                                                                value->type);
+        if (class) n00bb_frame_root_push(list, class, (n00bb_frame_root_t){
+            .kind = N00BB_FRAME_ROOT_PARAM, .value = value});
+    }
+    for (uint32_t i = 0; i < function->n_locals; i++) {
+        ir_local_t *local = function->locals[i];
+        n00bb_frame_type_class_t class = n00bb_frame_type_class(function,
+                                                                local->type);
+        if (class) n00bb_frame_root_push(list, class, (n00bb_frame_root_t){
+            .kind = N00BB_FRAME_ROOT_LOCAL, .local = local});
+    }
+    next = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            ir_instr_t *instruction = function->blocks[b]->instrs[i];
+            ir_value_t *value = instruction->dest_kind == IR_DEST_VALUE
+                ? instruction->dest : nullptr;
+            n00bb_frame_type_class_t class = value
+                ? n00bb_frame_type_class(function, value->type)
+                : N00BB_FRAME_TYPE_NONE;
+            if (!class) continue;
+            if (across[next++])
+                n00bb_frame_root_push(list, class, (n00bb_frame_root_t){
+                    .kind = N00BB_FRAME_ROOT_INSTR, .value = value,
+                    .instruction = instruction});
+            th_type *stored = n00bb_frame_root_type(
+                N00BB_FRAME_ROOT_STORAGE, nullptr, nullptr, instruction);
+            bool stack = instruction->op == IR_OP_ALLOCA
+                || (instruction->op == IR_OP_ALLOC
+                    && ir_allocation_has_only_local_uses(function,
+                                                          instruction));
+            n00bb_frame_type_class_t storage = stack && stored
+                ? n00bb_frame_type_class(function, stored)
+                : N00BB_FRAME_TYPE_NONE;
+            if (storage)
+                n00bb_frame_root_push(list, storage, (n00bb_frame_root_t){
+                    .kind = N00BB_FRAME_ROOT_STORAGE,
+                    .instruction = instruction});
+        }
+    core_free(values);
+    core_free(across);
+    return true;
+}
+
+static inline bool
+n00bb_frame_root_list_visit(const n00bb_frame_root_list_t *list,
+                            bool pointers_only,
+                            n00bb_frame_root_visit_fn visit, void *context)
+{
+    size_t index = 0;
+    for (size_t r = 0; r < list->count; r++) {
+        const n00bb_frame_root_t *root = &list->roots[r];
+        if (pointers_only && !root->pointer) continue;
+        if (!visit(context, root->kind, index++, root->value, root->local,
+                   root->instruction)) return false;
+    }
     return true;
 }
 
@@ -187,64 +293,12 @@ n00bb_frame_roots_filtered(ir_func_t *function, bool pointers_only,
                            n00bb_frame_root_visit_fn visit, void *context,
                            size_t *count)
 {
-    if (!function || !function->owner || !count) return false;
-    size_t next = 0;
-    for (uint32_t i = 0; i < function->n_params; i++) {
-        ir_value_t *value = function->params[i];
-        if (!value || !value->type) return false;
-        if (!n00bb_frame_native_pointer(function->owner, value->type)
-            && (pointers_only
-                || !n00bb_frame_traced_value(function, value->type))) continue;
-        if (visit && !visit(context, N00BB_FRAME_ROOT_PARAM, next,
-                            value, nullptr, nullptr)) return false;
-        next++;
-    }
-    for (uint32_t i = 0; i < function->n_locals; i++) {
-        ir_local_t *local = function->locals[i];
-        if (!local || !local->type) return false;
-        if (!n00bb_frame_native_pointer(function->owner, local->type)
-            && (pointers_only
-                || !n00bb_frame_traced_value(function, local->type))) continue;
-        if (visit && !visit(context, N00BB_FRAME_ROOT_LOCAL, next,
-                            nullptr, local, nullptr)) return false;
-        next++;
-    }
-    n00bb_frame_live_roots_t live = {0};
-    if (!n00bb_frame_live_roots(function, pointers_only, &live)) return false;
-    size_t candidate = 0;
-    bool ok = true;
-    for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
-            ir_instr_t *instruction = block->instrs[i];
-            ir_value_t *value = instruction->dest_kind == IR_DEST_VALUE
-                ? instruction->dest : nullptr;
-            if (!n00bb_frame_instr_candidate(function, pointers_only, value))
-                continue;
-            if (live.across[candidate++]) {
-                ok = !visit || visit(context, N00BB_FRAME_ROOT_INSTR, next,
-                                     value, nullptr, instruction);
-                next++;
-            }
-            th_type *stored = n00bb_frame_root_type(
-                N00BB_FRAME_ROOT_STORAGE, nullptr, nullptr, instruction);
-            bool stack = instruction->op == IR_OP_ALLOCA
-                || (instruction->op == IR_OP_ALLOC
-                    && ir_allocation_has_only_local_uses(function,
-                                                          instruction));
-            if (ok && stack && stored
-                && (n00bb_frame_native_pointer(function->owner, stored)
-                    || (!pointers_only
-                        && n00bb_frame_traced_value(function, stored)))) {
-                ok = !visit || visit(context, N00BB_FRAME_ROOT_STORAGE, next,
-                                     nullptr, nullptr, instruction);
-                next++;
-            }
-        }
-    }
-    core_free(live.values);
-    core_free(live.across);
-    *count = next;
+    n00bb_frame_root_list_t list;
+    if (!count || !n00bb_frame_root_list(function, &list)) return false;
+    *count = pointers_only ? list.pointer_count : list.count;
+    bool ok = !visit
+        || n00bb_frame_root_list_visit(&list, pointers_only, visit, context);
+    n00bb_frame_root_list_release(&list);
     return ok;
 }
 
@@ -313,12 +367,10 @@ n00bb_frame_member(void *opaque, n00bb_frame_root_kind_t kind, size_t index,
 }
 
 static inline th_type *
-n00bb_frame_payload_type(ir_func_t *function, size_t *root_count)
+n00bb_frame_payload_type(ir_func_t *function,
+                         const n00bb_frame_root_list_t *roots)
 {
-    size_t count = 0;
-    if (!n00bb_frame_roots(function, nullptr, nullptr, &count)
-        || !root_count) return nullptr;
-    *root_count = count;
+    size_t count = roots->count;
     if (!count || count > SIZE_MAX / sizeof(th_member)) return nullptr;
     th_member *members = calloc(count, sizeof(*members));
     char (*names)[96] = calloc(count, sizeof(*names));
@@ -328,9 +380,8 @@ n00bb_frame_payload_type(ir_func_t *function, size_t *root_count)
         return nullptr;
     }
     n00bb_frame_member_context_t context = {function, members, names};
-    size_t filled = 0;
-    bool valid = n00bb_frame_roots(function, n00bb_frame_member,
-                                   &context, &filled) && filled == count;
+    bool valid = n00bb_frame_root_list_visit(roots, false,
+                                             n00bb_frame_member, &context);
     th_type *payload = valid ? th_record(ir_module_types(function->owner),
                                           members, count) : nullptr;
     free(members);

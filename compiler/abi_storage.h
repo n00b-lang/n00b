@@ -80,6 +80,8 @@ typedef struct {
     size_t extent_count;
     n00bb_abi_storage_relocation_t *relocations;
     size_t relocation_count;
+    n00bb_abi_storage_relocation_t *tls_fixups;
+    size_t tls_fixup_count;
     n00bb_abi_storage_index_patch_t *index_patches;
     size_t index_patch_count;
     n00b_abi_baked_node_v1 *baked_nodes;

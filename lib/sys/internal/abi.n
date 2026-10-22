@@ -135,6 +135,7 @@ func storage_at(index: u32) -> Ref[Storage_Record]? {
     return __abi_storage(index)
 }
 
+
 func symbol_at(index: u32) -> Ref[Symbol_Record]? {
     return __abi_symbol(index)
 }

@@ -37,6 +37,7 @@ double n00bb_profile_seconds(void);
 #include "flagset_value.h"
 #include "frame_roots.h"
 #include "global_metadata.h"
+#include "ir/abcd.h"
 #include "llvm_backend.h"
 #include "llvm_native_cache.h"
 #include "native_frame_maps.h"
@@ -429,6 +430,10 @@ dump_static_value_contents(const n00bb_static_value_t *value, size_t depth)
         break;
     case N00BB_STATIC_VALUE_NIL:
         printf("nil");
+        break;
+    case N00BB_STATIC_VALUE_ADDRESS:
+        printf("ref %.*s", (int)value->as.address->name.u8_bytes,
+               value->as.address->name.data);
         break;
     case N00BB_STATIC_VALUE_VARIANT:
         printf("%.*s=", (int)value->as.variant.arm.u8_bytes,
@@ -2239,18 +2244,11 @@ load_import(void *opaque, parse_grammar_t *grammar, parse_tree_t *statement,
 }
 
 static bool
-load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
-                      core_translation_unit_t *importer,
-                      core_string_t module_name)
+load_runtime_module(import_driver_t *driver, parse_grammar_t *grammar,
+                    core_translation_unit_t *importer,
+                    core_string_t module_name)
 {
-    core_string_t name = importer->module.identifier;
-    if (core_string_eq(name, module_name)) return true;
-    n00bb_tu_state_t *importer_state = tu_state(importer);
-    if (importer_state && importer_state->interface_module) return true;
-    if (name.u8_bytes >= sizeof("builtin.") - 1
-        && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1))
-        return true;
-    import_driver_t *driver = opaque;
+    if (core_string_eq(importer->module.identifier, module_name)) return true;
     core_module_spec_t module = {0};
     if (!core_module_spec_init(&module, module_name)) return false;
     core_translation_unit_t *imported = nullptr;
@@ -2261,7 +2259,19 @@ load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
     return loaded;
 }
 
-
+static bool
+load_implicit_builtin(void *opaque, parse_grammar_t *grammar,
+                      core_translation_unit_t *importer,
+                      core_string_t module_name)
+{
+    core_string_t name = importer->module.identifier;
+    n00bb_tu_state_t *importer_state = tu_state(importer);
+    if (importer_state && importer_state->interface_module) return true;
+    if (name.u8_bytes >= sizeof("builtin.") - 1
+        && !memcmp(name.data, "builtin.", sizeof("builtin.") - 1))
+        return true;
+    return load_runtime_module(opaque, grammar, importer, module_name);
+}
 
 typedef struct {
     core_work_queue_t *queue;
@@ -2576,11 +2586,11 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                     job_ok = process_postprune_package_syntax(&import_driver,
                         grammar, unit, tree);
                 if (job_ok && native_build && !runtime_support_loaded) {
-                    job_ok = load_implicit_builtin(&import_driver, grammar,
+                    job_ok = load_runtime_module(&import_driver, grammar,
                             unit, CORE_STRING_STATIC("sys.gc.alloc"))
-                        && load_implicit_builtin(&import_driver, grammar,
+                        && load_runtime_module(&import_driver, grammar,
                             unit, CORE_STRING_STATIC("sys.marshal"))
-                        && load_implicit_builtin(&import_driver, grammar,
+                        && load_runtime_module(&import_driver, grammar,
                             unit, CORE_STRING_STATIC("sys.box"));
                     runtime_support_loaded = job_ok;
                 }
@@ -3993,6 +4003,18 @@ restart_with_strict_cache(char **argv, core_string_t argv0)
 }
 
 static void
+restart_with_build_time(char **argv, core_string_t argv0)
+{
+    core_string_t compiler = n00bb_executable_path(argv0);
+    if (!compiler.data || setenv("N00BB_BUILD_TIME_FIRST", "1", 1)) {
+        core_free(compiler.data);
+        return;
+    }
+    exec_compiler(compiler, argv);
+    core_free(compiler.data);
+}
+
+static void
 restart_excluding_cached(char **argv, core_string_t argv0,
                          const core_buffer_t *stale)
 {
@@ -4059,7 +4081,9 @@ build_time_arguments(int argc, char **argv, char *compiler,
                 && (core_string_eq(argument, CORE_STRING_STATIC("build"))
                     || core_string_eq(argument, CORE_STRING_STATIC("lower"))
                     || core_string_eq(argument,
-                                      CORE_STRING_STATIC("library"))))
+                                      CORE_STRING_STATIC("library"))
+                    || core_string_eq(argument,
+                                      CORE_STRING_STATIC("compile"))))
             || core_string_starts_with(argument, CORE_STRING_STATIC("--dump-"));
         core_free(argument.data);
         if (output) {
@@ -4435,8 +4459,8 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < analysis->emitted_functions.len; i++)
         core_list_push(callers, analysis->emitted_functions.data[i]);
-    core_list_t(n00bb_ir_func_ptr_t) visited =
-        core_list_new(n00bb_ir_func_ptr_t);
+    core_dict_t visited;
+    core_dict_init(&visited, nullptr, nullptr);
     bool ok = true;
     while (ok && callers.len) {
         ok = n00bb_specialize_calls(analysis->ir_context, &callers,
@@ -4446,19 +4470,30 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
                                          diagnostics);
         seed_count = 0;
         for (size_t i = 0; i < callers.len; i++)
-            core_list_push(visited, callers.data[i]);
+            core_dict_put(&visited, callers.data[i], callers.data[i]);
         callers.len = 0;
         for (size_t i = 0; ok && i < analysis->emitted_functions.len; i++) {
             ir_func_t *function = analysis->emitted_functions.data[i];
-            bool seen = false;
-            for (size_t v = 0; !seen && v < visited.len; v++)
-                seen = visited.data[v] == function;
-            if (!seen) core_list_push(callers, function);
+            if (!core_dict_contains(&visited, function))
+                core_list_push(callers, function);
         }
     }
-    core_list_free(visited);
+    core_dict_free(&visited);
     core_list_free(callers);
     return ok;
+}
+
+static void
+optimize_range_checks(n00bb_link_analysis_t *analysis)
+{
+    for (size_t i = 0; i < analysis->emitted_functions.len; i++) {
+        ir_func_t *function = analysis->emitted_functions.data[i];
+        if (!function || !function->n_blocks) continue;
+        size_t scope = ir_analysis_scope_begin();
+        (void)ir_abcd_fold(function);
+        (void)ir_abcd_hoist(function);
+        ir_analysis_scope_end(scope);
+    }
 }
 
 static bool
@@ -4596,10 +4631,19 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         CORE_STRING_STATIC("--build-time"));
     n00bb_set_build_time(build_time);
     n00bb_native_root_hide_hosted(build_time);
+    if (build_command && !build_time && input_count > 1) {
+        core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
+            CORE_STRING_STATIC("N00BB-B0003"),
+            CORE_STRING_STATIC("build takes exactly one module or file"));
+        options_valid = false;
+    }
     bool build_time_reported = false;
     bool deferred_build_time = build_command && !build_time
         && !getenv("N00BB_BUILD_TIME_CAPTURE_FD");
-    if (options_valid && (build_command || lower_command || library_command)
+    bool upfront_build_time = build_command
+        || ((lower_command || library_command || compile_command)
+            && getenv("N00BB_BUILD_TIME_FIRST"));
+    if (options_valid && upfront_build_time
         && !build_time && !deferred_build_time
         && !run_build_time_stage(argc, argv, argv0, cli_diagnostics,
                                  &build_time_reported))
@@ -4846,6 +4890,13 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-summaries")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
+    if (link_analysis && link_analysis->build_time_needed && !build_time) {
+        restart_with_build_time(argv, argv0);
+        core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_FATAL,
+            CORE_STRING_STATIC("N00BB-B0027"),
+            CORE_STRING_STATIC("could not restart with a build-time run"));
+        located = false;
+    }
     if (located && cache) {
         bool recorded = n00bb_cache_record_summaries(cache, link,
                                                      link_analysis);
@@ -4923,8 +4974,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && emit_program && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--unchecked-wide-narrowing")))
         uncheck_wide_narrowing(link_analysis);
-    if (located && emit_program)
+    if (located && emit_program) {
+        optimize_range_checks(link_analysis);
         located = n00bb_recompute_summaries(link_analysis);
+    }
     if (located && emit_program && parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--verify-analyses")))
         located = verify_analyses(link_analysis, cli_diagnostics);

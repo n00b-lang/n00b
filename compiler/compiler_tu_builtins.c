@@ -20,15 +20,15 @@ n00bb_builtin_reference_function(parse_sym_entry_t *symbol)
 const n00bb_axiom_t *
 n00bb_axiom_of_symbol(parse_sym_entry_t *symbol)
 {
-    for (size_t i = 0; symbol && i < n00bb_axiom_count(); i++) {
-        const n00bb_axiom_t *axiom = n00bb_axiom_at(i);
-        if (axiom->key == N00BB_AXIOM_BINDING
-            ? parse_sym_binding(symbol, axiom->name) != nullptr
-            : axiom->key == N00BB_AXIOM_BUILTIN
-                && n00bb_builtin_function(symbol)
-                && core_string_eq(axiom->name, symbol->name))
-            return axiom;
+    if (!symbol) return nullptr;
+    if (n00bb_builtin_function(symbol)) {
+        const n00bb_axiom_t *builtin = n00bb_axiom_of_builtin(symbol->name);
+        if (builtin) return builtin;
     }
+    size_t count = 0;
+    const n00bb_axiom_t *const *bindings = n00bb_axiom_bindings(&count);
+    for (size_t i = 0; i < count; i++)
+        if (parse_sym_binding(symbol, bindings[i]->name)) return bindings[i];
     return nullptr;
 }
 
@@ -45,9 +45,10 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
             ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
         for (uint32_t p = 0; p < 8; p++) {
             uint8_t flags = 0;
-            if (native->reads & (1u << p))
+            if (native->reads & N00BB_AXIOM_PARAM(p))
                 flags |= IR_SACCESS_READ | IR_SACCESS_READS_ENTRY;
-            if (native->writes & (1u << p)) flags |= IR_SACCESS_WRITE;
+            if (native->writes & N00BB_AXIOM_PARAM(p))
+                flags |= IR_SACCESS_WRITE;
             if (flags)
                 ir_summary_add_access(summary, (ir_splace_t){
                     .kind = IR_SPLACE_PARAM, .param = p}, flags);
@@ -94,13 +95,8 @@ n00bb_native_calls_n00b(const ir_func_t *function)
 static const core_string_t *
 builtin_native_name(core_string_t name)
 {
-    for (size_t i = 0; i < n00bb_axiom_count(); i++) {
-        const n00bb_axiom_t *axiom = n00bb_axiom_at(i);
-        if (axiom->key == N00BB_AXIOM_NATIVE
-            && core_string_eq(axiom->name, name))
-            return &axiom->native;
-    }
-    return nullptr;
+    const n00bb_axiom_t *axiom = n00bb_axiom_of_native_name(name);
+    return axiom ? &axiom->native : nullptr;
 }
 
 static th_type *
@@ -459,6 +455,7 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         CORE_STRING_STATIC("builtin.abi.Layout_Record"),
         CORE_STRING_STATIC("builtin.abi.Frame_Layout_Record"),
         CORE_STRING_STATIC("builtin.abi.Storage_Record"),
+        CORE_STRING_STATIC("builtin.abi.Tls_Relocation_Record"),
         CORE_STRING_STATIC("builtin.abi.Symbol_Record"),
         CORE_STRING_STATIC("builtin.abi.Module_Record"),
         CORE_STRING_STATIC("builtin.abi.Baked_Node_Record"),
@@ -475,6 +472,7 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         CORE_STRING_STATIC("__abi_layout"),
         CORE_STRING_STATIC("__abi_frame_layout"),
         CORE_STRING_STATIC("__abi_storage"),
+        CORE_STRING_STATIC("__abi_tls_relocation"),
         CORE_STRING_STATIC("__abi_symbol"),
         CORE_STRING_STATIC("__abi_module"),
         CORE_STRING_STATIC("__abi_baked_node"),

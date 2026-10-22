@@ -425,6 +425,8 @@ typedef struct n00bb_link_analysis_t {
     ir_ctx_t *ir_context;
     core_target_desc_t target;
     core_list_t(core_translation_unit_ptr_t) units;
+    core_dict_t unit_of_module;
+    bool unit_of_module_ready;
     core_list_t(n00bb_trait_specialization_ptr_t) trait_specializations;
     core_list_t(n00bb_ir_func_ptr_t) reachable_functions;
     core_list_t(n00bb_ir_func_ptr_t) emitted_functions;
@@ -442,12 +444,14 @@ typedef struct n00bb_link_analysis_t {
     core_list_t(n00bb_captured_graph_node_t) static_graph_nodes;
     core_list_t(n00bb_static_graph_edge_t) static_graph_edges;
     core_list_t(n00bb_baked_root_t) baked_roots;
+    core_dict_t baked_root_index;
     core_list_t(n00bb_static_graph_slot_t) static_graph_slots;
     core_string_t baked_failure_root;
     core_string_t baked_failure_path;
     core_string_t baked_failure_message;
     bool baked_failure_reported;
     bool build_time_capture;
+    bool build_time_needed;
     core_dict_t declarations_by_symbol;
     core_list_t(n00bb_record_request_site_t) record_requests;
     core_dict_t record_requests_by_type[N00BB_RECORD_C + 1];

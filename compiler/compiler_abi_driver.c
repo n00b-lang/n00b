@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -68,10 +69,24 @@ temporary_object_argument(const void *bytes, size_t length)
     return argument;
 }
 
-static char *
-host_object_archive(parse_cmdr_result_t *args, int32_t count,
-                    const char *staging)
+static bool
+archive_file(const char *path)
 {
+    static const char magic[] = "!<arch>\n";
+    char header[sizeof(magic) - 1] = {0};
+    int fd = open(path, O_RDONLY);
+    bool archive = fd >= 0
+        && read(fd, header, sizeof(header)) == (ssize_t)sizeof(header)
+        && !memcmp(header, magic, sizeof(header));
+    if (fd >= 0) close(fd);
+    return archive;
+}
+
+static bool
+host_object_archive(parse_cmdr_result_t *args, int32_t count,
+                    const char *staging, char **out)
+{
+    *out = nullptr;
     core_buffer_t path = {0};
     core_buffer_printf(&path, "%s.hosts.a", staging);
     char *archive = core_string_to_cstr(core_buffer_string(&path));
@@ -84,24 +99,29 @@ host_object_archive(parse_cmdr_result_t *args, int32_t count,
         arguments[1] = "crs";
         arguments[2] = archive;
     }
+    int32_t objects = 0;
     for (int32_t i = 0; ok && i < count; i++) {
-        arguments[3 + i] = core_string_to_cstr(parse_cmdr_flag_str_at(args,
+        char *object = core_string_to_cstr(parse_cmdr_flag_str_at(args,
             CORE_STRING_STATIC("--link-object"), i));
-        ok = arguments[3 + i] != nullptr;
+        ok = object != nullptr;
+        if (ok && archive_file(object)) core_free(object);
+        else if (ok) arguments[3 + objects++] = object;
     }
     pid_t child = 0;
     int status = 0;
-    ok = ok && !posix_spawnp(&child, "ar", nullptr, nullptr, arguments,
-                             environ)
-        && waitpid(child, &status, 0) == child && WIFEXITED(status)
-        && WEXITSTATUS(status) == 0;
-    for (int32_t i = 0; arguments && i < count; i++)
+    ok = ok && (!objects
+        || (!posix_spawnp(&child, "ar", nullptr, nullptr, arguments, environ)
+            && waitpid(child, &status, 0) == child && WIFEXITED(status)
+            && WEXITSTATUS(status) == 0));
+    for (int32_t i = 0; arguments && i < objects; i++)
         core_free(arguments[3 + i]);
     free(arguments);
-    if (ok) return archive;
-    if (archive) unlink(archive);
-    core_free(archive);
-    return nullptr;
+    if (ok && objects) *out = archive;
+    else {
+        if (archive && objects) unlink(archive);
+        core_free(archive);
+    }
+    return ok;
 }
 
 static core_string_t
@@ -1285,10 +1305,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             CORE_STRING_STATIC("--link-object"));
         bool lazy_hosts = extra_count > 0
             && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
-        char *host_archive = lazy_hosts
-            ? host_object_archive(args, extra_count, staging) : nullptr;
-        if (lazy_hosts && !host_archive) ok = false;
-        size_t extra_used = lazy_hosts ? 1 : (size_t)extra_count;
+        char *host_archive = nullptr;
+        if (lazy_hosts
+            && !host_object_archive(args, extra_count, staging,
+                                    &host_archive)) ok = false;
+        size_t extra_used = 0;
         size_t object_count = 0;
         for (size_t i = 0; i < modules + 4; i++)
             if (objects[i]) object_count++;
@@ -1297,7 +1318,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             + 2 * native->framework_count;
         char **arguments = calloc(object_count + (size_t)extra_count
                                       + native_flags
-                                      + N00BB_SYSTEM_LIBRARY_COUNT + 6,
+                                      + N00BB_SYSTEM_LIBRARY_COUNT + 7,
                                   sizeof(*arguments));
         char **native_arguments = native_flags
             ? calloc(native_flags, sizeof(*native_arguments)) : nullptr;
@@ -1325,15 +1346,17 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             size_t next = 1;
             for (size_t i = 0; i < modules + 4; i++)
                 if (objects[i]) arguments[next++] = objects[i];
-            if (lazy_hosts) arguments[next] = host_archive;
-            for (int32_t i = 0; !lazy_hosts && i < extra_count; i++) {
-                core_string_t value = parse_cmdr_flag_str_at(args,
-                    CORE_STRING_STATIC("--link-object"), i);
-                arguments[next + (size_t)i] = core_string_to_cstr(value);
-                if (!arguments[next + (size_t)i]) ok = false;
+            for (int32_t i = 0; ok && i < extra_count; i++) {
+                char *object = core_string_to_cstr(parse_cmdr_flag_str_at(
+                    args, CORE_STRING_STATIC("--link-object"), i));
+                if (!object) ok = false;
+                else if (lazy_hosts && !archive_file(object))
+                    core_free(object);
+                else arguments[next + extra_used++] = object;
             }
             if (ok) {
                 size_t tail = next + extra_used;
+                if (host_archive) arguments[tail++] = host_archive;
                 arguments[tail++] = archive;
                 for (size_t i = 0; i < native_used; i++)
                     arguments[tail++] = native_arguments[i];
@@ -1383,7 +1406,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 core_buffer_release(&bundle);
             }
 #endif
-            if (host_archive) unlink(host_archive);
+            if (host_archive) {
+                unlink(host_archive);
+                core_free(host_archive);
+            }
             for (size_t i = 0; i < extra_used; i++)
                 core_free(arguments[next + i]);
         }

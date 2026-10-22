@@ -281,7 +281,7 @@ refresh_selection(n00bb_ffi_t *ffi)
     clear_strings(&ffi->frameworks);
     clear_strings(&ffi->search_paths);
     ffi->selected_shims.len = 0;
-    bool hosted = n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME;
+    bool hosted = !n00bb_native_root_hosted_hidden();
     for (size_t i = 0; i < ffi->records.len; i++) {
         const ffi_literal_t *record = &ffi->records.data[i];
         if (!record->used) {
@@ -306,17 +306,29 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     if (!ffi) {
         return;
     }
+    bool hosted = !n00bb_native_root_hosted_hidden();
+    core_dict_t by_prefix;
+    core_dict_init_string(&by_prefix);
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
-        size_t length = record->prefix.u8_bytes;
-        record->used = record->exports
-            && n00bb_compile_phase() == PARSE_SYM_PHASE_RUNTIME;
-        for (size_t j = 0; !record->used && j < count; j++) {
-            record->used = symbols[j].u8_bytes > length
-                && core_string_starts_with(symbols[j], record->prefix)
-                && symbols[j].data[length] == '_';
-        }
+        record->used = record->exports && hosted;
+        core_dict_put(&by_prefix, &record->prefix, record);
     }
+    core_string_t stem = CORE_STRING_STATIC("n00b_ffi_");
+    for (size_t j = 0; j < count; j++) {
+        core_string_t symbol = symbols[j];
+        if (!core_string_starts_with(symbol, stem)) continue;
+        size_t end = stem.u8_bytes;
+        while (end < symbol.u8_bytes && symbol.data[end] >= '0'
+               && symbol.data[end] <= '9') end++;
+        if (end == stem.u8_bytes || end >= symbol.u8_bytes
+            || symbol.data[end] != '_') continue;
+        core_string_t prefix = core_string_slice(symbol, 0, end);
+        bool found = false;
+        ffi_literal_t *record = core_dict_get(&by_prefix, &prefix, &found);
+        if (found) record->used = true;
+    }
+    core_dict_free(&by_prefix);
     refresh_selection(ffi);
 }
 

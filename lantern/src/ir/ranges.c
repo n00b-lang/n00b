@@ -4,6 +4,7 @@
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/memssa.h"
+#include "ir/operands.h"
 #include "ir/places.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -43,56 +44,18 @@ struct ir_ranges_t {
     bool                       clamps_known;
 };
 
-static ir_int_t
-int_min(ir_int_t a, ir_int_t b)
-{
-    return a < b ? a : b;
-}
-
-static ir_int_t
-int_max(ir_int_t a, ir_int_t b)
-{
-    return a > b ? a : b;
-}
-
-static const ir_value_t *
-value_operand(const ir_instr_t *instruction, uint32_t index)
-{
-    return instruction && index < instruction->n_operands
-        && instruction->operands[index].kind == IR_OPD_VALUE
-        ? instruction->operands[index].value : nullptr;
-}
-
-static const ir_value_t *
-uncopied(const ir_value_t *value)
-{
-    for (uint32_t i = 0; value && value->def && i < 64; i++) {
-        const ir_instr_t *definition = value->def;
-        if (definition->op != IR_OP_COPY) break;
-        const ir_value_t *source = value_operand(definition, 0);
-        if (!source || source == value) break;
-        value = source;
-    }
-    return value;
-}
-
 static bool
 same_value(const ir_value_t *left, const ir_value_t *right)
 {
-    return uncopied(left) == uncopied(right);
+    return ir_value_uncopied(left) == ir_value_uncopied(right);
 }
 
 bool
 ir_range_type_bounds(const ir_func_t *f, const ir_value_t *value,
                      ir_interval_t *out)
 {
-    if (!f || !value || !value->type) return false;
-    ir_machine_t machine = ir_machine_of(f->owner, value->type);
-    if ((machine.class != IR_CLASS_SINT && machine.class != IR_CLASS_UINT)
-        || !machine.width || machine.width > 128) return false;
-    *out = ir_interval_of_width(machine.width,
-                                machine.class == IR_CLASS_SINT);
-    return true;
+    return f && value
+        && ir_interval_of_integer_type(f->owner, value->type, out);
 }
 
 static bool
@@ -120,70 +83,10 @@ global_range(ir_ranges_t *r, const ir_value_t *value, ir_interval_t *out)
     return true;
 }
 
-static ir_op_t
-swapped(ir_op_t op)
-{
-    switch (op) {
-    case IR_OP_LT: return IR_OP_GT;
-    case IR_OP_LE: return IR_OP_GE;
-    case IR_OP_GT: return IR_OP_LT;
-    case IR_OP_GE: return IR_OP_LE;
-    default:       return op;
-    }
-}
-
-static ir_op_t
-negated(ir_op_t op)
-{
-    switch (op) {
-    case IR_OP_LT: return IR_OP_GE;
-    case IR_OP_LE: return IR_OP_GT;
-    case IR_OP_GT: return IR_OP_LE;
-    case IR_OP_GE: return IR_OP_LT;
-    case IR_OP_EQ: return IR_OP_NE;
-    case IR_OP_NE: return IR_OP_EQ;
-    default:       return op;
-    }
-}
-
-static bool
-comparison(ir_op_t op)
-{
-    return op == IR_OP_LT || op == IR_OP_LE || op == IR_OP_GT
-        || op == IR_OP_GE || op == IR_OP_EQ || op == IR_OP_NE;
-}
-
 static void
 constrain(ir_interval_t *range, ir_op_t op, ir_interval_t other)
 {
     *range = ir_interval_constrain(*range, op, other);
-}
-
-static bool constant_of(const ir_instr_t *in, ir_int_t *out);
-
-static const ir_instr_t *
-condition_test(const ir_value_t *condition, bool *sense)
-{
-    for (uint32_t depth = 0; depth < 16; depth++) {
-        condition = uncopied(condition);
-        const ir_instr_t *test = condition ? condition->def : nullptr;
-        if (!test) return nullptr;
-        if (test->op == IR_OP_NOT && test->n_operands == 1) {
-            *sense = !*sense;
-            condition = value_operand(test, 0);
-            continue;
-        }
-        const ir_value_t *choice = test->op == IR_OP_SELECT
-            && test->n_operands == 3 ? uncopied(value_operand(test, 0))
-                                     : nullptr;
-        ir_int_t truth = 0;
-        if (choice && choice->def && constant_of(choice->def, &truth)) {
-            condition = value_operand(test, truth ? 1 : 2);
-            continue;
-        }
-        return test;
-    }
-    return nullptr;
 }
 
 static void
@@ -191,34 +94,18 @@ apply_condition(ir_ranges_t *r, const ir_value_t *value,
                 const ir_value_t *condition, bool sense,
                 ir_interval_t *range)
 {
-    const ir_instr_t *test = condition_test(condition, &sense);
-    if (!test || !comparison(test->op) || test->n_operands != 2) return;
-    const ir_value_t *left  = value_operand(test, 0);
-    const ir_value_t *right = value_operand(test, 1);
+    const ir_instr_t *test = ir_condition_test(condition, &sense);
+    if (!test || !ir_op_is_comparison(test->op) || test->n_operands != 2) return;
+    const ir_value_t *left  = ir_value_operand(test, 0);
+    const ir_value_t *right = ir_value_operand(test, 1);
     if (!left || !right || is_signed(r->f, left) != is_signed(r->f, right))
         return;
-    ir_op_t op = sense ? test->op : negated(test->op);
+    ir_op_t op = sense ? test->op : ir_comparison_negated(test->op);
     ir_interval_t other;
     if (same_value(left, value) && global_range(r, right, &other))
         constrain(range, op, other);
     else if (same_value(right, value) && global_range(r, left, &other))
-        constrain(range, swapped(op), other);
-}
-
-static bool
-edge_condition(const ir_block_t *from, const ir_block_t *to,
-               const ir_value_t **condition, bool *sense)
-{
-    ir_instr_t *end = from ? ir_block_terminator((ir_block_t *)from)
-                           : nullptr;
-    if (!end || end->op != IR_OP_BRANCH || end->n_operands != 3)
-        return false;
-    ir_block_t *yes = ir_succ_of(&end->operands[1]);
-    ir_block_t *no  = ir_succ_of(&end->operands[2]);
-    if (yes == no || (to != yes && to != no)) return false;
-    *condition = value_operand(end, 0);
-    *sense     = to == yes;
-    return *condition != nullptr;
+        constrain(range, ir_comparison_swapped(op), other);
 }
 
 static void
@@ -231,7 +118,7 @@ refine_in_block(ir_ranges_t *r, const ir_value_t *value,
         const ir_value_t *condition = nullptr;
         bool sense = false;
         if (ir_pred_count(r->doms, (ir_block_t *)at) == 1
-            && edge_condition(parent, at, &condition, &sense))
+            && ir_edge_condition(parent, at, &condition, &sense))
             apply_condition(r, value, condition, sense, range);
         at = parent;
     }
@@ -244,7 +131,7 @@ trap_bound(ir_ranges_t *r, const trap_use_t *use, ir_interval_t *out)
     ir_interval_t type, other = ir_interval_point(0);
     if (!ir_range_type_bounds(r->f, in->dest, &type)) return false;
     if ((in->op == IR_OP_ADD || in->op == IR_OP_SUB)
-        && !global_range(r, value_operand(in, 1 - use->operand), &other))
+        && !global_range(r, ir_value_operand(in, 1 - use->operand), &other))
         return false;
     switch (in->op) {
     case IR_OP_CAST:
@@ -278,13 +165,13 @@ refine_by_traps(ir_ranges_t *r, const ir_value_t *value, const ir_instr_t *at,
                 ir_interval_t *range)
 {
     core_list_t(trap_use_t) *uses = core_dict_get(&r->trap_uses,
-        (void *)uncopied(value), nullptr);
+        (void *)ir_value_uncopied(value), nullptr);
     for (size_t i = 0; uses && at && i < uses->len; i++) {
         ir_interval_t bound;
         if (!executed_before(r, uses->data[i].user, at)
             || !trap_bound(r, &uses->data[i], &bound)) continue;
-        ir_interval_t met = {int_max(range->lo, bound.lo),
-                             int_min(range->hi, bound.hi)};
+        ir_interval_t met = {ir_int_greater(range->lo, bound.lo),
+                             ir_int_lesser(range->hi, bound.hi)};
         if (met.lo <= met.hi) *range = met;
     }
 }
@@ -308,7 +195,7 @@ range_on_edge(ir_ranges_t *r, const ir_value_t *value, ir_block_t *from,
     refine_by_traps(r, value, ir_block_terminator(from), out);
     const ir_value_t *condition = nullptr;
     bool sense = false;
-    if (edge_condition(from, to, &condition, &sense))
+    if (ir_edge_condition(from, to, &condition, &sense))
         apply_condition(r, value, condition, sense, out);
     return true;
 }
@@ -330,8 +217,8 @@ fit(ir_interval_t exact, ir_interval_t type, bool trapping)
 {
     if (exact.lo >= type.lo && exact.hi <= type.hi) return exact;
     if (!trapping) return type;
-    ir_interval_t clamped = {int_max(exact.lo, type.lo),
-                             int_min(exact.hi, type.hi)};
+    ir_interval_t clamped = {ir_int_greater(exact.lo, type.lo),
+                             ir_int_lesser(exact.hi, type.hi)};
     return clamped.lo <= clamped.hi ? clamped : type;
 }
 
@@ -339,8 +226,8 @@ static bool
 exact_arithmetic(ir_ranges_t *r, const ir_instr_t *in, ir_interval_t *left,
                  ir_interval_t *right, ir_interval_t *exact)
 {
-    const ir_value_t *a = value_operand(in, 0);
-    const ir_value_t *b = value_operand(in, 1);
+    const ir_value_t *a = ir_value_operand(in, 0);
+    const ir_value_t *b = ir_value_operand(in, 1);
     if (!a || !range_at(r, a, in, left)) return false;
     switch (in->op) {
     case IR_OP_NEG:
@@ -391,11 +278,11 @@ transfer(ir_ranges_t *r, const ir_instr_t *in, ir_interval_t *out)
             *out = (ir_interval_t){constant, constant};
         return true;
     case IR_OP_COPY:
-        if (range_at(r, value_operand(in, 0), in, &a)
+        if (range_at(r, ir_value_operand(in, 0), in, &a)
             && a.lo >= type.lo && a.hi <= type.hi) *out = a;
         return true;
     case IR_OP_CAST:
-        if (range_at(r, value_operand(in, 0), in, &a))
+        if (range_at(r, ir_value_operand(in, 0), in, &a))
             *out = fit(a, type, trapping);
         return true;
     case IR_OP_ADD:
@@ -407,57 +294,57 @@ transfer(ir_ranges_t *r, const ir_instr_t *in, ir_interval_t *out)
             *out = fit(exact, type, trapping);
         return true;
     case IR_OP_AND:
-        if (range_at(r, value_operand(in, 0), in, &a)
-            && range_at(r, value_operand(in, 1), in, &b)) {
+        if (range_at(r, ir_value_operand(in, 0), in, &a)
+            && range_at(r, ir_value_operand(in, 1), in, &b)) {
             if (a.lo >= 0 && b.lo >= 0)
-                *out = (ir_interval_t){0, int_min(a.hi, b.hi)};
+                *out = (ir_interval_t){0, ir_int_lesser(a.hi, b.hi)};
             else if (a.lo >= 0) *out = (ir_interval_t){0, a.hi};
             else if (b.lo >= 0) *out = (ir_interval_t){0, b.hi};
         }
         return true;
     case IR_OP_OR:
     case IR_OP_XOR:
-        if (range_at(r, value_operand(in, 0), in, &a)
-            && range_at(r, value_operand(in, 1), in, &b)
+        if (range_at(r, ir_value_operand(in, 0), in, &a)
+            && range_at(r, ir_value_operand(in, 1), in, &b)
             && a.lo >= 0 && b.lo >= 0) {
-            ir_interval_t candidate = {0, mask_ceiling(int_max(a.hi, b.hi))};
+            ir_interval_t candidate = {0, mask_ceiling(ir_int_greater(a.hi, b.hi))};
             if (candidate.hi <= type.hi) *out = candidate;
         }
         return true;
     case IR_OP_SHR:
-        if (range_at(r, value_operand(in, 0), in, &a)
-            && range_at(r, value_operand(in, 1), in, &b)
+        if (range_at(r, ir_value_operand(in, 0), in, &a)
+            && range_at(r, ir_value_operand(in, 1), in, &b)
             && a.lo >= 0 && b.lo >= 0 && b.hi < 127)
             *out = (ir_interval_t){a.lo >> b.hi, a.hi >> b.lo};
         return true;
     case IR_OP_DIV:
-        if (range_at(r, value_operand(in, 0), in, &a)
-            && range_at(r, value_operand(in, 1), in, &b)
+        if (range_at(r, ir_value_operand(in, 0), in, &a)
+            && range_at(r, ir_value_operand(in, 1), in, &b)
             && a.lo >= 0 && b.lo > 0)
             *out = (ir_interval_t){a.lo / b.hi, a.hi / b.lo};
         return true;
     case IR_OP_REM:
-        if (range_at(r, value_operand(in, 0), in, &a)
-            && range_at(r, value_operand(in, 1), in, &b)
+        if (range_at(r, ir_value_operand(in, 0), in, &a)
+            && range_at(r, ir_value_operand(in, 1), in, &b)
             && a.lo >= 0 && b.lo > 0)
-            *out = (ir_interval_t){0, int_min(a.hi, b.hi - 1)};
+            *out = (ir_interval_t){0, ir_int_lesser(a.hi, b.hi - 1)};
         return true;
     case IR_OP_CLZ:
     case IR_OP_CTZ:
     case IR_OP_POPCOUNT: {
         ir_machine_t machine = ir_machine_of(r->f->owner,
-            value_operand(in, 0) ? value_operand(in, 0)->type : nullptr);
+            ir_value_operand(in, 0) ? ir_value_operand(in, 0)->type : nullptr);
         if (machine.width && (ir_int_t)machine.width <= type.hi)
             *out = (ir_interval_t){0, (ir_int_t)machine.width};
         return true;
     }
     case IR_OP_SEQUENCE_LENGTH:
-        *out = (ir_interval_t){int_max(type.lo, 0), type.hi};
+        *out = (ir_interval_t){ir_int_greater(type.lo, 0), type.hi};
         return true;
     case IR_OP_SELECT:
-        if (range_at(r, value_operand(in, 1), in, &a)
-            && range_at(r, value_operand(in, 2), in, &b))
-            *out = (ir_interval_t){int_min(a.lo, b.lo), int_max(a.hi, b.hi)};
+        if (range_at(r, ir_value_operand(in, 1), in, &a)
+            && range_at(r, ir_value_operand(in, 2), in, &b))
+            *out = (ir_interval_t){ir_int_lesser(a.lo, b.lo), ir_int_greater(a.hi, b.hi)};
         return true;
     case IR_OP_LOAD:
         if (element_range(r, in, &a) && a.lo >= type.lo && a.hi <= type.hi)
@@ -487,8 +374,8 @@ phi_transfer(ir_ranges_t *r, const ir_instr_t *in, ir_interval_t *out)
             return true;
         }
         if (range.lo > range.hi) continue;
-        *out = any ? (ir_interval_t){int_min(out->lo, range.lo),
-                                     int_max(out->hi, range.hi)}
+        *out = any ? (ir_interval_t){ir_int_lesser(out->lo, range.lo),
+                                     ir_int_greater(out->hi, range.hi)}
                    : range;
         any = true;
     }
@@ -513,13 +400,13 @@ update(ir_ranges_t *r, range_entry_t *entry, ir_interval_t next,
        const ir_interval_t *type)
 {
     if (r->narrowing) {
-        next.lo = int_max(next.lo, entry->range.lo);
-        next.hi = int_min(next.hi, entry->range.hi);
+        next.lo = ir_int_greater(next.lo, entry->range.lo);
+        next.hi = ir_int_lesser(next.hi, entry->range.hi);
         if (next.lo > next.hi) return false;
     }
     else if (entry->set) {
-        next.lo = int_min(next.lo, entry->range.lo);
-        next.hi = int_max(next.hi, entry->range.hi);
+        next.lo = ir_int_lesser(next.lo, entry->range.lo);
+        next.hi = ir_int_greater(next.hi, entry->range.hi);
         if (++entry->changes > WIDEN_AFTER) {
             if (next.lo < entry->range.lo) next.lo = type->lo;
             if (next.hi > entry->range.hi) next.hi = type->hi;
@@ -582,15 +469,15 @@ static bool
 phi_step(ir_ranges_t *r, const ir_instr_t *phi, const ir_value_t *next,
          ir_interval_t *step)
 {
-    const ir_value_t *advanced = uncopied(next);
+    const ir_value_t *advanced = ir_value_uncopied(next);
     const ir_instr_t *in = advanced ? advanced->def : nullptr;
     if (!in || (in->op != IR_OP_ADD && in->op != IR_OP_SUB)
         || !ir_instr_has_mod((ir_instr_t *)in, CORE_STRING_STATIC("trap")))
         return false;
     for (uint32_t side = 0; side < 2; side++) {
-        if (!same_value(value_operand(in, side), phi->dest)
+        if (!same_value(ir_value_operand(in, side), phi->dest)
             || (in->op == IR_OP_SUB && side == 1)
-            || !range_at(r, value_operand(in, 1 - side), in, step))
+            || !range_at(r, ir_value_operand(in, 1 - side), in, step))
             continue;
         if (in->op == IR_OP_SUB)
             *step = ir_interval_apply(IR_OP_NEG, *step, ir_interval_point(0));
@@ -611,8 +498,8 @@ trip_count(ir_ranges_t *r, ir_block_t *header, ir_block_t *latch,
     bool no_inside  = no && ir_dominates(r->doms, no, latch);
     if (yes_inside == no_inside) return false;
     bool sense = yes_inside;
-    const ir_instr_t *test = condition_test(value_operand(end, 0), &sense);
-    if (!test || !comparison(test->op) || test->n_operands != 2) return false;
+    const ir_instr_t *test = ir_condition_test(ir_value_operand(end, 0), &sense);
+    if (!test || !ir_op_is_comparison(test->op) || test->n_operands != 2) return false;
     for (uint32_t i = 0; i < header->n_instrs; i++) {
         const ir_instr_t *phi = header->instrs[i];
         const ir_value_t *init = nullptr, *next = nullptr;
@@ -620,13 +507,13 @@ trip_count(ir_ranges_t *r, ir_block_t *header, ir_block_t *latch,
         if (!phi_arms(phi, latch, &init, &next)
             || !phi_step(r, phi, next, &step) || step.lo != step.hi
             || step.lo == 0) continue;
-        ir_op_t op = sense ? test->op : negated(test->op);
+        ir_op_t op = sense ? test->op : ir_comparison_negated(test->op);
         const ir_value_t *bound = nullptr;
-        if (same_value(value_operand(test, 0), phi->dest))
-            bound = value_operand(test, 1);
-        else if (same_value(value_operand(test, 1), phi->dest)) {
-            bound = value_operand(test, 0);
-            op = swapped(op);
+        if (same_value(ir_value_operand(test, 0), phi->dest))
+            bound = ir_value_operand(test, 1);
+        else if (same_value(ir_value_operand(test, 1), phi->dest)) {
+            bound = ir_value_operand(test, 0);
+            op = ir_comparison_swapped(op);
         }
         if (!bound || !range_at(r, init, end, &start)
             || !range_at(r, bound, end, &limit)) continue;
@@ -670,12 +557,12 @@ bound_loop_phis(ir_ranges_t *r)
                     || !phi_step(r, phi, next, &step)
                     || !range_at(r, init, ir_block_terminator(header),
                                  &start)) continue;
-                ir_interval_t per = {int_min(step.lo, 0), int_max(step.hi, 0)};
+                ir_interval_t per = {ir_int_lesser(step.lo, 0), ir_int_greater(step.hi, 0)};
                 ir_interval_t reach = ir_interval_apply(IR_OP_ADD, start,
                     ir_interval_apply(IR_OP_MUL, ir_interval_point(count),
                                       per));
-                ir_interval_t met = {int_max(entry->range.lo, reach.lo),
-                                     int_min(entry->range.hi, reach.hi)};
+                ir_interval_t met = {ir_int_greater(entry->range.lo, reach.lo),
+                                     ir_int_lesser(entry->range.hi, reach.hi)};
                 if (met.lo > met.hi || (met.lo == entry->range.lo
                                         && met.hi == entry->range.hi))
                     continue;
@@ -696,7 +583,7 @@ collect_trap_uses(ir_ranges_t *r, const ir_instr_t *in)
         || !ir_instr_has_mod((ir_instr_t *)in, CORE_STRING_STATIC("trap")))
         return;
     for (uint32_t o = 0; o < in->n_operands; o++) {
-        const ir_value_t *value = uncopied(value_operand(in, o));
+        const ir_value_t *value = ir_value_uncopied(ir_value_operand(in, o));
         ir_interval_t type;
         if (!value || !ir_range_type_bounds(r->f, value, &type)) continue;
         core_list_t(trap_use_t) *uses = core_dict_get(&r->trap_uses,
@@ -793,7 +680,7 @@ clamped_result(ir_ranges_t *r, const ir_instr_t *in)
             && (exact.lo < type.lo || exact.hi > type.hi)) return true;
         return operand_clamped(r, in);
     case IR_OP_CAST:
-        if (trapping && range_at(r, value_operand(in, 0), in, &a)
+        if (trapping && range_at(r, ir_value_operand(in, 0), in, &a)
             && ir_range_type_bounds(r->f, in->dest, &type)
             && (a.lo < type.lo || a.hi > type.hi)) return true;
         return operand_clamped(r, in);
@@ -854,8 +741,8 @@ static bool
 overflow_interval(ir_ranges_t *r, const ir_instr_t *in, ir_interval_t *left,
                   ir_interval_t *right, ir_interval_t *exact)
 {
-    const ir_value_t *a = value_operand(in, 0);
-    const ir_value_t *b = value_operand(in, 1);
+    const ir_value_t *a = ir_value_operand(in, 0);
+    const ir_value_t *b = ir_value_operand(in, 1);
     switch (in->op) {
     case IR_OP_CAST:
         if (in->n_operands != 1 || !a || !range_at(r, a, in, left))
@@ -880,18 +767,18 @@ overflow_interval(ir_ranges_t *r, const ir_instr_t *in, ir_interval_t *left,
     }
 }
 
-bool
-ir_range_within(ir_ranges_t *r, const ir_value_t *value, const ir_instr_t *at,
-                ir_interval_t bounds)
+static bool
+range_within(ir_ranges_t *r, const ir_value_t *value, const ir_instr_t *at,
+             ir_interval_t bounds)
 {
     ir_interval_t range;
     return r && value && range_at(r, value, at, &range)
         && range.lo >= bounds.lo && range.hi <= bounds.hi;
 }
 
-bool
-ir_range_excludes(ir_ranges_t *r, const ir_value_t *value,
-                  const ir_instr_t *at, ir_int_t point)
+static bool
+range_excludes(ir_ranges_t *r, const ir_value_t *value,
+               const ir_instr_t *at, ir_int_t point)
 {
     ir_interval_t range;
     return r && value && range_at(r, value, at, &range)
@@ -918,11 +805,11 @@ static bool
 element_index(const ir_value_t *address, const ir_value_t **base,
               const ir_value_t **index)
 {
-    const ir_instr_t *in = uncopied(address) ? uncopied(address)->def
+    const ir_instr_t *in = ir_value_uncopied(address) ? ir_value_uncopied(address)->def
                                              : nullptr;
     if (!in || in->op != IR_OP_INDEX) return false;
-    *base  = value_operand(in, 0);
-    *index = value_operand(in, 1);
+    *base  = ir_value_operand(in, 0);
+    *index = ir_value_operand(in, 1);
     return *base && *index;
 }
 
@@ -941,7 +828,7 @@ relate_elements(void *context, const ir_instr_t *store, const ir_instr_t *load)
     element_query_t *query = context;
     const ir_value_t *store_base = nullptr, *store_index = nullptr;
     if (!store || store->op != IR_OP_STORE
-        || !element_index(value_operand(store, 0), &store_base,
+        || !element_index(ir_value_operand(store, 0), &store_base,
                           &store_index)
         || !same_value(store_base, query->base)) return IR_ELEMENT_MAYBE;
     if (same_value(store_index, query->index)) return IR_ELEMENT_SAME;
@@ -960,14 +847,14 @@ collect_element_store(void *context, const ir_memdef_t *def)
     ir_interval_t stored;
     if (def->kind != IR_MEMDEF_STORE || !def->instr
         || def->instr->op != IR_OP_STORE
-        || !global_range(query->ranges, value_operand(def->instr, 1),
+        || !global_range(query->ranges, ir_value_operand(def->instr, 1),
                          &stored)) {
         query->unknown = true;
         return false;
     }
     query->range = query->any
-        ? (ir_interval_t){int_min(query->range.lo, stored.lo),
-                          int_max(query->range.hi, stored.hi)}
+        ? (ir_interval_t){ir_int_lesser(query->range.lo, stored.lo),
+                          ir_int_greater(query->range.hi, stored.hi)}
         : stored;
     query->any = true;
     return true;
@@ -977,7 +864,7 @@ static bool
 element_range(ir_ranges_t *r, const ir_instr_t *load, ir_interval_t *out)
 {
     element_query_t query = {.ranges = r};
-    if (!element_index(value_operand(load, 0), &query.base, &query.index))
+    if (!element_index(ir_value_operand(load, 0), &query.base, &query.index))
         return false;
     if (!r->memssa) {
         r->places = ir_func_places(r->f);
@@ -1021,8 +908,8 @@ ir_range_unsigned_sub_safe(ir_ranges_t *r, const ir_instr_t *sub)
         return true;
     if (!(ir_module_props(sub->block->owner->owner) & IR_PROP_SSA))
         return false;
-    return ir_abcd_at_most(ir_range_abcd(r), value_operand(sub, 1),
-                           value_operand(sub, 0), 0, sub);
+    return ir_abcd_at_most(ir_range_abcd(r), ir_value_operand(sub, 1),
+                           ir_value_operand(sub, 0), 0, sub);
 }
 
 bool
@@ -1032,20 +919,20 @@ ir_range_site_proven(ir_ranges_t *r, const ir_instr_t *in,
     uint32_t operand = 0;
     if (!r || !in || !in->n_operands || !ir_instr_site(in, kind, &operand))
         return false;
-    const ir_value_t *value = value_operand(in, operand);
-    const ir_value_t *subject = value_operand(in, 0);
+    const ir_value_t *value = ir_value_operand(in, operand);
+    const ir_value_t *subject = ir_value_operand(in, 0);
     ir_machine_t machine = subject
         ? ir_machine_of(r->f->owner, subject->type) : (ir_machine_t){0};
     switch (kind) {
     case IR_SITE_DIVISOR:
-        return ir_range_excludes(r, value, in, 0)
+        return range_excludes(r, value, in, 0)
             || (machine.class == IR_CLASS_UINT
                 && ir_abcd_at_least(ir_range_abcd(r), value, nullptr, 1,
                                     in));
     case IR_SITE_SHIFT_AMOUNT:
         return machine.width
-            && ir_range_within(r, value, in,
-                               (ir_interval_t){0, machine.width - 1});
+            && range_within(r, value, in,
+                            (ir_interval_t){0, machine.width - 1});
     case IR_SITE_ADDRESS:
         return operand == 1 && ir_range_index_proven(r, in);
     default:

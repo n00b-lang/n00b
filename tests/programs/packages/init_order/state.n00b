@@ -1,9 +1,0 @@
-var stage_value: int = 0
-
-func mark(value: int) {
-    stage_value = value
-}
-
-func current() -> int {
-    return stage_value
-}

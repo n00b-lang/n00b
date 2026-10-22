@@ -24,10 +24,6 @@ bool          ir_range_of_conditions(ir_ranges_t *ranges,
                                      const ir_instr_t *at, ir_interval_t *out);
 bool          ir_range_type_bounds(const ir_func_t *f, const ir_value_t *value,
                                    ir_interval_t *out);
-bool          ir_range_within(ir_ranges_t *ranges, const ir_value_t *value,
-                              const ir_instr_t *at, ir_interval_t bounds);
-bool          ir_range_excludes(ir_ranges_t *ranges, const ir_value_t *value,
-                                const ir_instr_t *at, ir_int_t point);
 ir_overflow_t ir_range_overflow(ir_ranges_t *ranges, const ir_instr_t *in,
                                 ir_interval_t *left, ir_interval_t *right);
 bool          ir_range_index_proven(ir_ranges_t *ranges,

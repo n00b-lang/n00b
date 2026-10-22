@@ -32,10 +32,11 @@ typedef struct {
     bool              self;
 } ir_race_t;
 
-uint32_t ir_races_find(ir_summaries_t *summaries,
-                       ir_func_t *const *main_roots, size_t main_count,
-                       const ir_race_entry_t *entries, size_t entry_count,
-                       const ir_race_hooks_t *hooks, ir_race_t *out,
-                       uint32_t capacity);
+typedef void (*ir_race_report_fn)(void *context, const ir_race_t *race);
+
+void ir_races_find(ir_summaries_t *summaries, ir_func_t *const *main_roots,
+                   size_t main_count, const ir_race_entry_t *entries,
+                   size_t entry_count, const ir_race_hooks_t *hooks,
+                   ir_race_report_fn report, void *context);
 
 #endif

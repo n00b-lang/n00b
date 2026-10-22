@@ -1,3 +1,4 @@
+import abi
 import containers.list
 import string.core
 
@@ -100,6 +101,7 @@ litmod<fence> ffi(source: string) -> nil fail: string {
 }
 
 func __ffi_enter(buffer: uint) -> uint {
+    abi.tls_relocate()
     let previous = ffi_unwind_top
     ffi_unwind_top = buffer
     return previous

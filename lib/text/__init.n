@@ -33,6 +33,4 @@ package text {
     export internal.string
     export internal.table
     export internal.table_layout
-    export internal.string.len to builtin
-    export internal.string.Index_Unit to builtin
 }

@@ -1283,6 +1283,13 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
         && n00bb_option_type_element(type, &option_element))
         return static_value_matches_type(value, option_element, state,
                                          depth + 1);
+    if (value->kind == N00BB_STATIC_VALUE_ADDRESS) {
+        th_type *referent = th_kind_of(type) == TH_INDIRECTION
+            ? th_ind_referent(type) : nullptr;
+        return referent && value->as.address && value->as.address->type
+            && th_hash(state->types, referent)
+                == th_hash(state->types, value->as.address->type);
+    }
     if (value->kind == N00BB_STATIC_VALUE_SEQUENCE) {
         th_type *element_type = static_sequence_element_type(type);
         if (!element_type) return false;
@@ -1352,6 +1359,7 @@ static_value_matches_type(const n00bb_static_value_t *value, th_type *type,
         definition = definition ? th_resolve(definition) : nullptr;
         return is_integer_type(type)
             || n00bb_scalar_role_is(type, IR_ROLE_BYTE)
+            || n00bb_scalar_role_is(type, IR_ROLE_CHAR)
             || (definition && (th_kind_of(definition) == TH_BITINT
                                || is_integer_type(definition)));
     }
@@ -1557,6 +1565,19 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
     if (!grammar || !expression || !type || !state || !out || depth > 64)
         return false;
     type = th_resolve(type);
+    parse_tree_t *reference = direct_ref_expression(grammar, expression);
+    if (reference) {
+        parse_sym_entry_t *target = direct_ref_target(grammar, reference);
+        if (!target || target->kind != PARSE_SYM_VARIABLE
+            || target->mutability != PARSE_SYM_CONST
+            || target->storage_duration != PARSE_SYM_STORAGE_MODULE
+            || th_kind_of(type) != TH_INDIRECTION) return false;
+        *out = (n00bb_static_value_t){
+            .kind = N00BB_STATIC_VALUE_ADDRESS,
+            .as.address = target,
+        };
+        return true;
+    }
     parse_sym_entry_t *referenced = static_reference_symbol(grammar, state,
                                                             expression);
     if (referenced)
@@ -2702,18 +2723,6 @@ n00bb_union_arm_group(uint64_t record_hash, core_string_t field)
     return 0;
 }
 
-static bool
-union_tag_taken(parse_scope_t *scope, parse_sym_entry_t *field, uint64_t tag)
-{
-    for (parse_sym_entry_t *other = scope->first_in_scope;
-         other && other != field; other = other->next_in_scope) {
-        n00bb_field_union_t *member = parse_sym_binding(other,
-                                                        N00BB_FIELD_UNION_KEY);
-        if (member && member->tag == tag) return true;
-    }
-    return false;
-}
-
 typedef enum {
     FOREIGN_CONSTANT_OK,
     FOREIGN_CONSTANT_NOT_CONSTANT,
@@ -2751,7 +2760,8 @@ foreign_clause_constant(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                                      : (ir_int_t)magnitude;
     if (signed_value < bounds.lo || signed_value > bounds.hi) {
         n00bb_report_integer_misfit(state, expression,
-            ir_interval_point(signed_value), target);
+            CORE_STRING_STATIC("constant"), ir_interval_point(signed_value),
+            target);
         return FOREIGN_CONSTANT_MISFIT;
     }
     *value = (uint64_t)(int64_t)signed_value;
@@ -2771,8 +2781,6 @@ foreign_element_type(parse_grammar_t *grammar,
         ? th_ind_referent(type) : nullptr;
 }
 
-core_list_decl(uint64_t);
-
 static void
 collect_union_arms(parse_grammar_t *grammar, parse_tree_t *node,
                    core_list_t(parse_tree_ptr_t) *arms)
@@ -2790,7 +2798,7 @@ static bool
 check_unnamed_union_arms(parse_grammar_t *grammar,
                          core_translation_unit_t *unit,
                          n00bb_tu_state_t *state, parse_scope_t *scope,
-                         parse_tree_t *owner)
+                         const core_dict_t *named, parse_tree_t *owner)
 {
     parse_sym_entry_t *discriminant = member_field_named(scope,
         first_token_text(core_tree_child(owner, 2)));
@@ -2800,7 +2808,8 @@ check_unnamed_union_arms(parse_grammar_t *grammar,
     core_list_t(parse_tree_ptr_t) arms = core_list_new(parse_tree_ptr_t);
     collect_union_arms(grammar, CHILD_NT(grammar, owner, "union-arms"),
                        &arms);
-    core_list_t(uint64_t) seen = core_list_new(uint64_t);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
     bool ok = tag_type != nullptr;
     for (size_t i = 0; ok && i < arms.len; i++) {
         parse_tree_t *arm = arms.data[i];
@@ -2812,9 +2821,9 @@ check_unnamed_union_arms(parse_grammar_t *grammar,
             ok = false;
             break;
         }
-        bool duplicate = union_tag_taken(scope, nullptr, tag);
-        for (size_t s = 0; !duplicate && s < seen.len; s++)
-            duplicate = seen.data[s] == tag;
+        bool duplicate = core_dict_contains((core_dict_t *)named,
+                                            (void *)(uintptr_t)tag)
+            || !core_dict_add(&seen, tag, 1);
         core_string_t problem = status == FOREIGN_CONSTANT_NOT_CONSTANT
             ? CORE_STRING_STATIC(
                 "a union arm's value must be a constant integer")
@@ -2829,9 +2838,8 @@ check_unnamed_union_arms(parse_grammar_t *grammar,
             ok = false;
             break;
         }
-        core_list_push(seen, tag);
     }
-    core_list_free(seen);
+    core_dict_free(&seen);
     core_list_free(arms);
     return ok;
 }
@@ -2897,6 +2905,8 @@ cache_record_field_extents(parse_grammar_t *grammar,
             return false;
     }
     core_list_t(parse_tree_ptr_t) groups = core_list_new(parse_tree_ptr_t);
+    core_dict_t tags;
+    core_dict_init(&tags, nullptr, nullptr);
     bool ok = true;
     for (parse_sym_entry_t *field = scope->first_in_scope; ok && field;
          field = field->next_in_scope) {
@@ -2958,7 +2968,7 @@ cache_record_field_extents(parse_grammar_t *grammar,
             : tag == FOREIGN_CONSTANT_NOT_CONSTANT
             ? CORE_STRING_STATIC(
                 "a union arm's value must be a constant integer")
-            : union_tag_taken(scope, field, member->tag)
+            : !core_dict_add(&tags, member->tag, 1)
             ? CORE_STRING_STATIC("two union arms have the same value")
             : (core_string_t){};
         if (problem.data) {
@@ -2975,8 +2985,9 @@ cache_record_field_extents(parse_grammar_t *grammar,
                 member->group));
     }
     for (size_t g = 0; ok && g < groups.len; g++)
-        ok = check_unnamed_union_arms(grammar, unit, state, scope,
+        ok = check_unnamed_union_arms(grammar, unit, state, scope, &tags,
                                       groups.data[g]);
+    core_dict_free(&tags);
     core_list_free(groups);
     return ok;
 }
@@ -4113,7 +4124,7 @@ n00bb_constrain_literal_fit(parse_grammar_t *grammar,
         if (!n00bb_parse_switch_integer(first_token_text(origin), &literal))
             return false;
     }
-    else if (n00bb_current_integer_range(state, origin, &range)
+    else if (n00bb_current_integer_range(origin, &range)
              && range.lo == range.hi) {
         literal.neg = range.lo < 0;
         literal.mag = range.lo < 0 ? (ir_uint_t)(-(range.lo + 1)) + 1
@@ -4311,13 +4322,9 @@ signature_variable(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     th_type *signature = function ? parse_sym_binding(function,
         CORE_STRING_STATIC("n00bb.body-function-signature")) : nullptr;
     if (!signature && function) signature = function->type;
-    th_type **variables = nullptr;
-    size_t count = signature
-        ? th_free_vars(state->types, signature, &variables) : 0;
     th_type *resolved = th_resolve(type);
-    for (size_t i = 0; i < count; i++)
-        if (th_resolve(variables[i]) == resolved) return true;
-    return false;
+    return signature && resolved && th_kind_of(resolved) == TH_VAR
+        && th_occurs(state->types, resolved, signature);
 }
 
 static bool
@@ -4533,22 +4540,6 @@ n00bb_folded_integer_expression(parse_grammar_t *grammar, parse_tree_t *node,
         && n00bb_integer_point(node, value);
 }
 
-void
-n00bb_append_wide_integer(core_buffer_t *out, __int128 value)
-{
-    char digits[48];
-    size_t at = sizeof(digits);
-    digits[--at] = '\0';
-    unsigned __int128 magnitude = value < 0
-        ? (unsigned __int128)(-(value + 1)) + 1 : (unsigned __int128)value;
-    do {
-        digits[--at] = (char)('0' + (int)(magnitude % 10));
-        magnitude /= 10;
-    } while (magnitude);
-    if (value < 0) digits[--at] = '-';
-    core_buffer_printf(out, "%s", digits + at);
-}
-
 static bool
 constant_integer_operand(parse_grammar_t *grammar, parse_tree_t *operand,
                          int64_t *value)
@@ -4621,25 +4612,13 @@ report_constant_overflow(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             first_token_text(core_tree_child(node, 1)), left, right, &value))
         return false;
     th_type *target = n00bb_integer_literal_context(grammar, state, node);
-    if (!target || !is_integer_type(target)) return false;
-    uint64_t width = 0;
-    bool is_signed = false;
-    if (!n00bb_integer_representation(target, &width, &is_signed)
-        || !width || width > 126) return false;
-    __int128 maximum = is_signed ? ((__int128)1 << (width - 1)) - 1
-                                 : ((__int128)1 << width) - 1;
-    __int128 minimum = is_signed ? -((__int128)1 << (width - 1)) : 0;
-    if (value >= minimum && value <= maximum) return false;
-    core_string_t name = th_print(state->types, target);
-    core_buffer_t message = {0};
-    core_buffer_puts(&message, "integer constant ");
-    n00bb_append_wide_integer(&message, value);
-    core_buffer_printf(&message, " does not fit %.*s",
-                       (int)name.u8_bytes, name.data);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(state->unit),
-        state->unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0041"),
-        core_buffer_string(&message), link_source_location(node));
-    core_buffer_release(&message);
+    ir_interval_t bounds = {0};
+    if (!target || !is_integer_type(target)
+        || !n00bb_type_interval(target, &bounds)
+        || ir_interval_contains(bounds, ir_interval_point(value)))
+        return false;
+    n00bb_report_integer_misfit(state, node, CORE_STRING_STATIC("constant"),
+                                ir_interval_point(value), target);
     return true;
 }
 
@@ -6130,6 +6109,9 @@ n00bb_static_integer_expression(parse_grammar_t *grammar,
                                 parse_tree_t *expression, th_type *type,
                                 uint64_t *value)
 {
+    if (n00bb_scalar_role_is(type, IR_ROLE_CHAR))
+        return fold_static_extent(grammar, expression, 0, value)
+            && *value <= 0x10ffff && (*value < 0xd800 || *value > 0xdfff);
     return is_integer_type(type)
         && fold_static_extent(grammar, expression, 0, value);
 }
@@ -8564,6 +8546,26 @@ n00bb_integer_representation(th_type *type, uint64_t *width,
 }
 
 th_type *
+n00bb_integer_type_of_width(th_ctx *types, uint64_t width, bool is_signed)
+{
+    static const core_string_t signed_names[] = {
+        CORE_STRING_STATIC("i8"), CORE_STRING_STATIC("i16"),
+        CORE_STRING_STATIC("i32"), CORE_STRING_STATIC("i64"),
+        CORE_STRING_STATIC("i128"),
+    };
+    static const core_string_t unsigned_names[] = {
+        CORE_STRING_STATIC("u8"), CORE_STRING_STATIC("u16"),
+        CORE_STRING_STATIC("u32"), CORE_STRING_STATIC("u64"),
+        CORE_STRING_STATIC("u128"),
+    };
+    for (size_t i = 0; i < N00BB_INTEGER_WIDTHS; i++)
+        if (((uint64_t)8 << i) == width)
+            return th_name(types, canonical_builtin_type_name(
+                is_signed ? signed_names[i] : unsigned_names[i]));
+    return nullptr;
+}
+
+th_type *
 n00bb_common_integer_type(th_ctx *types, th_type *left, th_type *right)
 {
     if (n00bb_integer_type_promotes_to(left, right)) return right;
@@ -8572,14 +8574,9 @@ n00bb_common_integer_type(th_ctx *types, th_type *left, th_type *right)
     if (!n00bb_type_interval(left, &left_range)
         || !n00bb_type_interval(right, &right_range)) return nullptr;
     ir_interval_t joined = ir_interval_join(left_range, right_range);
-    static const core_string_t names[] = {
-        CORE_STRING_STATIC("i8"), CORE_STRING_STATIC("i16"),
-        CORE_STRING_STATIC("i32"), CORE_STRING_STATIC("i64"),
-        CORE_STRING_STATIC("i128"),
-    };
-    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+    for (size_t i = 0; i < N00BB_INTEGER_WIDTHS; i++)
         if (ir_interval_fits(joined, (uint64_t)8 << i, true))
-            return th_name(types, canonical_builtin_type_name(names[i]));
+            return n00bb_integer_type_of_width(types, (uint64_t)8 << i, true);
     return nullptr;
 }
 
@@ -8662,6 +8659,15 @@ n00bb_float_literal_adopts(parse_tree_t *node, th_type *operand)
     return true;
 }
 
+static bool
+unsigned_literal_misplaced(parse_tree_t *node, th_type *expected)
+{
+    parse_tree_t *origin = node ? parse_tree_integer_literal_origin(node)
+                                : nullptr;
+    return origin && n00bb_unsigned_literal_origin(origin)
+        && !n00bb_bitwise_type(expected);
+}
+
 bool
 n00bb_integer_literal_joins_type(n00bb_tu_state_t *state,
                                  parse_tree_t *node, th_type *target)
@@ -8672,25 +8678,23 @@ n00bb_integer_literal_joins_type(n00bb_tu_state_t *state,
     th_type *open = parse_tree_type(node);
     if (n00bb_open_integer(open))
         return target
-            && (n00bb_open_integer(target) || is_integer_type(target)
-                || n00bb_scalar_role_is(target, IR_ROLE_BYTE))
+            && (n00bb_open_integer(target)
+                || ((is_integer_type(target)
+                     || n00bb_scalar_role_is(target, IR_ROLE_BYTE))
+                    && !unsigned_literal_misplaced(node, target)))
             && th_unify_in_place(state->types, open, target) != nullptr;
     return open && target && th_resolve(open) == th_resolve(target);
 }
 
 static bool
-integer_value_promotes(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                       parse_tree_t *node, th_type *actual, th_type *expected)
+integer_value_promotes(parse_tree_t *node, th_type *actual,
+                       th_type *expected)
 {
-    (void)grammar;
     ir_interval_t range = {0}, bounds = {0};
     if (!n00bb_type_interval(actual, &range)
-        || !n00bb_type_interval(expected, &bounds)) return false;
-    if (node && parse_tree_integer_literal_origin(node)
-        && n00bb_unsigned_literal_origin(
-            parse_tree_integer_literal_origin(node))
-        && !n00bb_bitwise_type(expected)) return false;
-    if (node) (void)n00bb_current_integer_range(state, node, &range);
+        || !n00bb_type_interval(expected, &bounds)
+        || unsigned_literal_misplaced(node, expected)) return false;
+    if (node) (void)n00bb_current_integer_range(node, &range);
     return ir_interval_meet(range, bounds, nullptr);
 }
 
@@ -9151,43 +9155,30 @@ n00bb_constant_misfits_type(n00bb_tu_state_t *state, parse_tree_t *node,
         && is_integer_type(element)) target = element;
     ir_interval_t range = {0};
     if (!target || !node || !parse_tree_integer_literal_origin(node)
-        || !n00bb_current_integer_range(state, node, &range)
+        || !n00bb_current_integer_range(node, &range)
         || n00bb_integer_range_fits_type(target, range))
         return false;
-    core_string_t name = th_print(state->types, target);
-    core_buffer_t message = {0};
-    if (range.lo == range.hi)
-        core_buffer_puts(&message, "integer constant ");
-    else
-        core_buffer_puts(&message, "integer constant range ");
-    n00bb_append_wide_integer(&message, range.lo);
-    if (range.lo != range.hi) {
-        core_buffer_puts(&message, "..");
-        n00bb_append_wide_integer(&message, range.hi);
-    }
-    core_buffer_printf(&message, " does not fit %.*s",
-                       (int)name.u8_bytes, name.data);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(state->unit),
-        state->unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0041"),
-        core_buffer_string(&message), link_source_location(node));
-    core_buffer_release(&message);
+    n00bb_report_integer_misfit(state, node, CORE_STRING_STATIC("constant"),
+                                range, target);
     return true;
 }
 
 void
 n00bb_report_integer_misfit(n00bb_tu_state_t *state, parse_tree_t *node,
-                            ir_interval_t range, th_type *target)
+                            core_string_t noun, ir_interval_t range,
+                            th_type *target)
 {
     core_string_t name = th_print(state->types, target);
     core_buffer_t message = {0};
-    if (range.lo == range.hi)
-        core_buffer_puts(&message, "integer value ");
-    else
-        core_buffer_puts(&message, "integer values ");
-    n00bb_append_wide_integer(&message, range.lo);
+    core_buffer_puts(&message, "integer ");
+    core_buffer_append_string(&message, noun);
+    if (range.lo != range.hi) core_buffer_puts(&message, "s ");
+    else core_buffer_puts(&message, " ");
+    if (range.lo == ir_int_max) core_buffer_puts(&message, "above ");
+    ir_int_append(&message, range.lo);
     if (range.lo != range.hi) {
         core_buffer_puts(&message, "..");
-        n00bb_append_wide_integer(&message, range.hi);
+        ir_int_append(&message, range.hi);
         core_buffer_puts(&message, " never fit ");
     }
     else core_buffer_puts(&message, " does not fit ");
@@ -9224,9 +9215,9 @@ n00bb_report_integer_narrowing(n00bb_tu_state_t *state, parse_tree_t *node,
     core_string_t name = th_print(state->types, target);
     core_buffer_t message = {0};
     core_buffer_puts(&message, "integer values ");
-    n00bb_append_wide_integer(&message, range.lo);
+    ir_int_append(&message, range.lo);
     core_buffer_puts(&message, "..");
-    n00bb_append_wide_integer(&message, range.hi);
+    ir_int_append(&message, range.hi);
     core_buffer_printf(&message,
         " may not fit %.*s; the conversion traps at runtime when they do not",
         (int)name.u8_bytes, name.data);
@@ -9275,7 +9266,7 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                 : node));
         return nullptr;
     }
-    if (integer_value_promotes(grammar, state, node, actual, expected)) {
+    if (integer_value_promotes(node,actual, expected)) {
         n00bb_integer_boundary(state, node, expected);
         return expected;
     }
@@ -9286,10 +9277,12 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                                       expected, converted);
     if (dereferenced) return expected;
     ir_interval_t value_range = {0}, target_range = {0};
-    if (node && n00bb_type_interval(actual, &value_range)
+    if (node && !unsigned_literal_misplaced(node, expected)
+        && n00bb_type_interval(actual, &value_range)
         && n00bb_type_interval(expected, &target_range)) {
-        (void)n00bb_current_integer_range(state, node, &value_range);
-        n00bb_report_integer_misfit(state, node, value_range, expected);
+        (void)n00bb_current_integer_range(node, &value_range);
+        n00bb_report_integer_misfit(state, node, CORE_STRING_STATIC("value"),
+                                    value_range, expected);
         *converted = false;
         return nullptr;
     }
@@ -9300,7 +9293,7 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         return expected;
     if (n00bb_option_type_element(expected, &element)
         && !n00bb_option_type_element(actual, nullptr)
-        && integer_value_promotes(grammar, state, node, actual, element)) {
+        && integer_value_promotes(node,actual, element)) {
         n00bb_integer_boundary(state, node, element);
         return expected;
     }
@@ -10838,7 +10831,9 @@ free_tu_state(void *data)
     core_list_free(state->deferred_conversions);
     core_list_free(state->integer_seeds);
     core_list_free(state->integer_edges);
+    core_list_free(state->integer_guards);
     core_list_free(state->integer_shift_sites);
+    core_dict_free(&state->integer_shift_seen);
     core_list_free(state->module_top_level_statements);
     core_list_free(state->literal_constants);
     core_list_free(state->array_type_nodes);
@@ -10891,9 +10886,10 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init(&state->flagset_values, nullptr, nullptr);
     core_dict_init(&state->integer_edge_sites, nullptr, nullptr);
     core_dict_init(&state->integer_range_nodes, nullptr, nullptr);
+    core_dict_init(&state->integer_shift_seen, nullptr, nullptr);
     core_dict_init(&state->integer_tracked_symbols, nullptr, nullptr);
     core_dict_init(&state->declarations_typed_ahead, nullptr, nullptr);
-    core_dict_init(&state->integer_symbol_ranges, nullptr, nullptr);
+    core_dict_init(&state->integer_symbol_ranges.index, nullptr, nullptr);
     core_dict_init(&state->integer_range_invalidated_symbols, nullptr, nullptr);
     core_dict_init(&state->integer_solved_symbols, nullptr, nullptr);
     core_dict_init(&state->integer_boundary_sites, nullptr, nullptr);
@@ -12153,15 +12149,12 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         if (count_type
             && n00bb_integer_literal_joins_type(state, right, count_type))
             right_type = parse_tree_type(right);
-        bool known_range = n00bb_current_integer_range(state, right, &count);
+        bool known_range = n00bb_current_integer_range(right, &count);
         if (!known_range && literal_origin)
-            known_range = n00bb_current_integer_range(state, literal_origin,
+            known_range = n00bb_current_integer_range(literal_origin,
                                                        &count);
-        bool deferred = false;
-        for (size_t i = 0; !deferred && i < state->integer_shift_sites.len;
-             i++)
-            deferred = state->integer_shift_sites.data[i] == node;
-        if (n00bb_open_integer(left_type) && !deferred)
+        if (n00bb_open_integer(left_type)
+            && core_dict_add(&state->integer_shift_seen, node, 1))
             core_list_push(state->integer_shift_sites, node);
         if (known_range
             && (count.lo < 0
@@ -12603,7 +12596,7 @@ initializer_node_is_reference_store_target(parse_grammar_t *grammar,
             parse_sym_entry_t *function = bound_function_symbol(callee);
             if (!function) continue;
             const n00bb_axiom_t *axiom = n00bb_axiom_of_symbol(function);
-            if (!axiom || !(axiom->writes & 0x1)
+            if (!axiom || !(axiom->writes & N00BB_AXIOM_PARAM(0))
                 || (axiom->roles & N00BB_AXIOM_READS_TARGET)) continue;
             parse_tree_t *positional = CHILD_NT(grammar, args,
                                                 "positional-args");

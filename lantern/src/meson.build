@@ -152,6 +152,7 @@ ir_sources = files(
     'ir/layout.c',
     'ir/lifetime.c',
     'ir/liveness.c',
+    'ir/operands.c',
     'ir/races.c',
     'ir/lower.c',
     'ir/ops.c',

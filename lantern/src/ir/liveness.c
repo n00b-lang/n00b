@@ -3,6 +3,8 @@
 #include <string.h>
 
 #include "ir/analyses.h"
+#include "ir/doms.h"
+#include "ir/operands.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
@@ -13,8 +15,10 @@ core_list_decl(uint32_t);
 typedef struct {
     bool *live_in;
     bool *live_out;
-    bool *avoids_def;
 } live_record_t;
+
+typedef const ir_instr_t *live_copy_t;
+core_list_decl(live_copy_t);
 
 typedef struct {
     const ir_instr_t *user;
@@ -34,29 +38,22 @@ struct ir_live_t {
     ir_func_t   *f;
     uint32_t     count;
     bool         cfg_valid;
-    bool        *reachable;
-    uint32_t    *pred_start;
-    ir_block_t **preds;
+    ir_doms_t   *doms;
     int8_t      *cycle;
     core_dict_t  records;
     bool         uses_built;
     core_dict_t  use_index;
     uint32_t    *use_start;
     live_use_t  *uses;
+    core_dict_t  copies;
     core_list_t(across_memo_t) across;
 };
 
-static bool
-block_belongs_to(const ir_func_t *f, const ir_block_t *block)
-{
-    return block && block->owner == f && block->index < f->n_blocks
-        && f->blocks[block->index] == block;
-}
 
 static bool
 instruction_belongs_to(const ir_func_t *f, const ir_instr_t *in)
 {
-    return in && block_belongs_to(f, in->block)
+    return in && ir_block_belongs_to(f, in->block)
         && in->index < in->block->n_instrs
         && in->block->instrs[in->index] == in;
 }
@@ -66,10 +63,10 @@ cfg_verified(const ir_func_t *f)
 {
     ir_block_t *entry = f->n_blocks ? ir_block_entry((ir_func_t *)f)
                                     : nullptr;
-    if (!entry || !block_belongs_to(f, entry)) return false;
+    if (!entry || !ir_block_belongs_to(f, entry)) return false;
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
-        if (!block_belongs_to(f, block) || !block->n_instrs) return false;
+        if (!ir_block_belongs_to(f, block) || !block->n_instrs) return false;
         uint32_t terminators = 0;
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *in = block->instrs[i];
@@ -82,7 +79,7 @@ cfg_verified(const ir_func_t *f)
         ir_instr_t *terminator = ir_block_terminator(block);
         if (terminators != 1 || !terminator) return false;
         for (uint32_t s = 0; s < ir_succ_count(terminator); s++)
-            if (!block_belongs_to(f, ir_succ_at(terminator, s)))
+            if (!ir_block_belongs_to(f, ir_succ_at(terminator, s)))
                 return false;
     }
     return true;
@@ -98,46 +95,29 @@ ir_live_build(ir_func_t *f)
     live->cfg_valid = cfg_verified(f);
     core_dict_init(&live->records, core_hash_word, nullptr);
     core_dict_init(&live->use_index, core_hash_word, nullptr);
-    if (!live->cfg_valid) return live;
-    uint32_t count = live->count;
-    live->reachable = core_alloc_array(bool, count);
-    live->pred_start = core_alloc_array(uint32_t, count + 1);
-    size_t edges = 0;
-    for (uint32_t b = 0; b < count; b++) {
-        ir_instr_t *terminator = ir_block_terminator(f->blocks[b]);
-        for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
-            live->pred_start[ir_succ_at(terminator, s)->index + 1]++;
-            edges++;
-        }
-    }
-    for (uint32_t b = 0; b < count; b++)
-        live->pred_start[b + 1] += live->pred_start[b];
-    live->preds = core_alloc_array(ir_block_t *, edges ? edges : 1);
-    uint32_t *fill = core_alloc_array(uint32_t, count);
-    for (uint32_t b = 0; b < count; b++) {
-        ir_instr_t *terminator = ir_block_terminator(f->blocks[b]);
-        for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
-            uint32_t to = ir_succ_at(terminator, s)->index;
-            live->preds[live->pred_start[to] + fill[to]++] = f->blocks[b];
-        }
-    }
-    core_free(fill);
-    ir_block_t **work = core_alloc_array(ir_block_t *, count);
-    size_t depth = 0;
-    ir_block_t *entry = ir_block_entry(f);
-    live->reachable[entry->index] = true;
-    work[depth++] = entry;
-    while (depth) {
-        ir_instr_t *terminator = ir_block_terminator(work[--depth]);
-        for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
-            ir_block_t *next = ir_succ_at(terminator, s);
-            if (live->reachable[next->index]) continue;
-            live->reachable[next->index] = true;
-            work[depth++] = next;
-        }
-    }
-    core_free(work);
+    core_dict_init(&live->copies, core_hash_word, nullptr);
+    live->doms = live->cfg_valid ? ir_func_doms(f) : nullptr;
+    live->cfg_valid = live->doms != nullptr;
     return live;
+}
+
+static bool
+reachable(const ir_live_t *live, const ir_block_t *block)
+{
+    return ir_block_reachable(live->doms, (ir_block_t *)block);
+}
+
+uint32_t
+ir_live_pred_count(const ir_live_t *live, const ir_block_t *block)
+{
+    return live && live->cfg_valid
+        ? ir_pred_count(live->doms, (ir_block_t *)block) : 0;
+}
+
+ir_block_t *
+ir_live_pred_at(const ir_live_t *live, const ir_block_t *block, uint32_t i)
+{
+    return ir_pred_at(live->doms, (ir_block_t *)block, i);
 }
 
 bool
@@ -154,11 +134,16 @@ ir_live_free(ir_live_t *live)
         live_record_t *record = item->value;
         core_free(record->live_in);
         core_free(record->live_out);
-        core_free(record->avoids_def);
         core_free(record);
     }
     core_dict_free(&live->records);
     core_dict_free(&live->use_index);
+    core_dict_foreach(&live->copies, item) {
+        core_list_t(live_copy_t) *list = item->value;
+        core_list_free(*list);
+        core_free(list);
+    }
+    core_dict_free(&live->copies);
     for (size_t i = 0; i < live->across.len; i++) {
         core_free(live->across.data[i].values);
         core_free(live->across.data[i].across);
@@ -166,20 +151,10 @@ ir_live_free(ir_live_t *live)
     core_list_free(live->across);
     core_free(live->use_start);
     core_free(live->uses);
-    core_free(live->reachable);
-    core_free(live->pred_start);
-    core_free(live->preds);
     core_free(live->cycle);
     core_free(live);
 }
 
-static const ir_value_t *
-operand_value(const ir_instr_t *in, uint32_t o)
-{
-    const ir_operand_t *operand = &in->operands[o];
-    return operand->kind == IR_OPD_ARG ? operand->value
-                                       : ir_operand_value(operand);
-}
 
 static bool
 kills(const ir_func_t *f, const ir_instr_t *in, const ir_value_t *value)
@@ -190,30 +165,22 @@ kills(const ir_func_t *f, const ir_instr_t *in, const ir_value_t *value)
             == value;
 }
 
+static const void *
+use_key(const ir_value_t *value)
+{
+    return value && value->kind == IR_VAL_GLOBAL && value->global
+        ? (const void *)ir_global_identity(value->global) : value;
+}
+
 static bool
 uses(const ir_instr_t *in, const ir_value_t *value, bool precise)
 {
     if (precise && in->op == IR_OP_PHI) return false;
+    const void *key = use_key(value);
     for (uint32_t o = 0; o < in->n_operands; o++)
-        if ((precise ? operand_value(in, o)
-                     : ir_operand_value(&in->operands[o])) == value)
+        if (use_key(precise ? ir_operand_used_value(in, o)
+                            : ir_operand_value(&in->operands[o])) == key)
             return true;
-    return false;
-}
-
-static bool
-phi_edge_uses(const ir_block_t *from, const ir_block_t *to,
-              const ir_value_t *value)
-{
-    for (uint32_t i = 0; i < to->n_instrs && to->instrs[i]->op == IR_OP_PHI;
-         i++) {
-        const ir_instr_t *phi = to->instrs[i];
-        for (uint32_t o = 0; o < phi->n_operands; o++) {
-            const ir_operand_t *operand = &phi->operands[o];
-            if (operand->kind == IR_OPD_PHI_ARM && operand->phi.block == from
-                && operand->phi.value == value) return true;
-        }
-    }
     return false;
 }
 
@@ -227,48 +194,72 @@ mark_live_out(live_record_t *record, const bool *kill, ir_block_t *block,
     work[(*depth)++] = block;
 }
 
+static void build_uses(ir_live_t *live);
+static bool is_edge(const ir_block_t *from, const ir_block_t *to);
+
+static void
+note_kill(uint32_t *first_kill, bool *kill, const ir_instr_t *in)
+{
+    uint32_t block = in->block->index;
+    kill[block] = true;
+    if (in->index < first_kill[block]) first_kill[block] = in->index;
+}
+
 static live_record_t *
 record_of(ir_live_t *live, const ir_value_t *value, bool precise)
 {
-    const void *key = (const void *)((uintptr_t)value | (uintptr_t)precise);
+    const void *key = (const void *)((uintptr_t)use_key(value)
+                                     | (uintptr_t)precise);
     bool found = false;
     live_record_t *record = core_dict_get(&live->records, key, &found);
     if (found) return record;
+    if (!live->uses_built) build_uses(live);
     ir_func_t *f = live->f;
     uint32_t count = live->count;
     record = core_alloc(live_record_t);
     record->live_in = core_alloc_array(bool, count);
     record->live_out = core_alloc_array(bool, count);
     bool *kill = core_alloc_array(bool, count);
+    uint32_t *first_kill = core_alloc_array(uint32_t, count);
+    for (uint32_t b = 0; b < count; b++) first_kill[b] = UINT32_MAX;
+    if (precise && value->kind == IR_VAL_INSTR && value->def
+        && value->def->dest == value
+        && instruction_belongs_to(f, value->def))
+        note_kill(first_kill, kill, value->def);
+    core_list_t(live_copy_t) *copies = precise
+        && value->kind == IR_VAL_LOCAL
+        ? core_dict_get(&live->copies, (void *)value, &found) : nullptr;
+    for (size_t c = 0; copies && found && c < copies->len; c++)
+        note_kill(first_kill, kill, copies->data[c]);
     ir_block_t **work = core_alloc_array(ir_block_t *, count);
     size_t depth = 0;
-    for (uint32_t b = 0; b < count; b++) {
-        ir_block_t *block = f->blocks[b];
-        bool gen = false;
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            const ir_instr_t *in = block->instrs[i];
-            if (!gen && !kill[b] && uses(in, value, precise)) gen = true;
-            if (precise && kills(f, in, value)) kill[b] = true;
+    uintptr_t slot = (uintptr_t)core_dict_get(&live->use_index,
+                                              (void *)use_key(value), &found);
+    for (uint32_t u = found ? live->use_start[slot] : 0;
+         found && u < live->use_start[slot + 1]; u++) {
+        const ir_instr_t *user = live->uses[u].user;
+        const ir_operand_t *operand = &user->operands[live->uses[u].operand];
+        uint32_t b = user->block->index;
+        if (precise && user->op == IR_OP_PHI) {
+            if (operand->kind == IR_OPD_PHI_ARM
+                && is_edge(operand->phi.block, user->block))
+                mark_live_out(record, kill, operand->phi.block, work,
+                              &depth);
+            continue;
         }
-        if (gen) {
-            record->live_in[b] = true;
-            work[depth++] = block;
-        }
-    }
-    for (uint32_t b = 0; precise && b < count; b++) {
-        ir_block_t *block = f->blocks[b];
-        for (uint32_t p = live->pred_start[b]; p < live->pred_start[b + 1];
-             p++)
-            if (phi_edge_uses(live->preds[p], block, value))
-                mark_live_out(record, kill, live->preds[p], work, &depth);
+        if (!precise && operand->kind == IR_OPD_ARG) continue;
+        if (user->index > first_kill[b] || record->live_in[b]) continue;
+        record->live_in[b] = true;
+        work[depth++] = user->block;
     }
     while (depth) {
         ir_block_t *block = work[--depth];
-        for (uint32_t p = live->pred_start[block->index];
-             p < live->pred_start[block->index + 1]; p++)
-            mark_live_out(record, kill, live->preds[p], work, &depth);
+        for (uint32_t p = 0; p < ir_pred_count(live->doms, block); p++)
+            mark_live_out(record, kill, ir_pred_at(live->doms, block, p),
+                          work, &depth);
     }
     core_free(kill);
+    core_free(first_kill);
     core_free(work);
     core_dict_put(&live->records, key, record);
     return record;
@@ -287,9 +278,9 @@ reaches(ir_live_t *live, const ir_value_t *value, const ir_instr_t *point,
     return record_of(live, value, precise)->live_out[block->index];
 }
 
-bool
-ir_live_reaches_after(ir_live_t *live, const ir_value_t *value,
-                      const ir_instr_t *point)
+static bool
+reaches_after(ir_live_t *live, const ir_value_t *value,
+              const ir_instr_t *point)
 {
     if (!live || !live->cfg_valid || !value
         || !instruction_belongs_to(live->f, point)) return true;
@@ -299,6 +290,7 @@ ir_live_reaches_after(ir_live_t *live, const ir_value_t *value,
 static bool
 value_trackable(const ir_live_t *live, const ir_value_t *value)
 {
+    if (value && value->kind == IR_VAL_GLOBAL) return value->global;
     if (!value || value->owner != live->f) return false;
     if (value->kind == IR_VAL_PARAM || value->kind == IR_VAL_LOCAL)
         return true;
@@ -312,47 +304,11 @@ def_dominates(ir_live_t *live, const ir_value_t *value,
               const ir_block_t *block)
 {
     if (value->kind != IR_VAL_INSTR) return true;
-    const ir_block_t *def_block = value->def->block;
-    if (!live->reachable[def_block->index]) return false;
-    if (def_block == block) return true;
-    live_record_t *record = record_of(live, value, false);
-    if (!record->avoids_def) {
-        uint32_t count = live->count;
-        record->avoids_def = core_alloc_array(bool, count);
-        ir_block_t **work = core_alloc_array(ir_block_t *, count);
-        size_t depth = 0;
-        ir_block_t *entry = ir_block_entry(live->f);
-        if (entry != def_block) {
-            record->avoids_def[entry->index] = true;
-            work[depth++] = entry;
-        }
-        while (depth) {
-            ir_instr_t *terminator = ir_block_terminator(work[--depth]);
-            for (uint32_t s = 0; s < ir_succ_count(terminator); s++) {
-                ir_block_t *next = ir_succ_at(terminator, s);
-                if (next == def_block || record->avoids_def[next->index])
-                    continue;
-                record->avoids_def[next->index] = true;
-                work[depth++] = next;
-            }
-        }
-        core_free(work);
-    }
-    return !record->avoids_def[block->index];
-}
-
-uint32_t
-ir_live_pred_count(const ir_live_t *live, const ir_block_t *block)
-{
-    return live && live->cfg_valid
-        ? live->pred_start[block->index + 1] - live->pred_start[block->index]
-        : 0;
-}
-
-ir_block_t *
-ir_live_pred_at(const ir_live_t *live, const ir_block_t *block, uint32_t i)
-{
-    return live->preds[live->pred_start[block->index] + i];
+    ir_block_t *def_block = value->def->block;
+    if (!reachable(live, def_block)) return false;
+    return def_block == block
+        || !reachable(live, block)
+        || ir_dominates(live->doms, def_block, (ir_block_t *)block);
 }
 
 ir_liveness_t
@@ -361,13 +317,32 @@ ir_live_after(ir_live_t *live, const ir_value_t *value,
 {
     if (!live || !live->cfg_valid || !value_trackable(live, value)
         || !instruction_belongs_to(live->f, point)
-        || !live->reachable[point->block->index]
+        || !reachable(live, point->block)
         || !def_dominates(live, value, point->block)
         || (value->kind == IR_VAL_INSTR && value->def->block == point->block
             && value->def->index > point->index))
         return IR_LIVENESS_UNKNOWN;
     return reaches(live, value, point, false) ? IR_LIVENESS_LIVE
                                               : IR_LIVENESS_DEAD;
+}
+
+void
+ir_live_after_each(ir_live_t *live, const ir_value_t *value,
+                   const ir_block_t *block, ir_liveness_t *after)
+{
+    uint32_t count = block->n_instrs;
+    bool known = live && live->cfg_valid && value_trackable(live, value)
+        && ir_block_belongs_to(live->f, block) && reachable(live, block)
+        && def_dominates(live, value, block);
+    bool current = known
+        && record_of(live, value, false)->live_out[block->index];
+    uint32_t defined = known && value->kind == IR_VAL_INSTR
+        && value->def->block == block ? value->def->index : 0;
+    for (uint32_t i = count; i-- > 0;) {
+        after[i] = !known || i < defined ? IR_LIVENESS_UNKNOWN
+            : current ? IR_LIVENESS_LIVE : IR_LIVENESS_DEAD;
+        current = current || uses(block->instrs[i], value, false);
+    }
 }
 
 static bool
@@ -384,8 +359,8 @@ ir_live_on_edge(ir_live_t *live, const ir_value_t *value,
                 const ir_block_t *from, const ir_block_t *to)
 {
     if (!live || !live->cfg_valid || !value_trackable(live, value)
-        || !block_belongs_to(live->f, from) || !block_belongs_to(live->f, to)
-        || !is_edge(from, to) || !live->reachable[from->index])
+        || !ir_block_belongs_to(live->f, from) || !ir_block_belongs_to(live->f, to)
+        || !is_edge(from, to) || !reachable(live, from))
         return IR_LIVENESS_UNKNOWN;
     if (value->kind == IR_VAL_INSTR) {
         const ir_block_t *def_block = value->def->block;
@@ -404,7 +379,7 @@ bool
 ir_live_set_after_each(ir_live_t *live, ir_value_t *const *values,
                        size_t count, const ir_block_t *block, bool *after)
 {
-    if (!live || !live->cfg_valid || !block_belongs_to(live->f, block))
+    if (!live || !live->cfg_valid || !ir_block_belongs_to(live->f, block))
         return false;
     bool *current = core_alloc_array(bool, count ? count : 1);
     size_t alive = 0;
@@ -425,6 +400,22 @@ ir_live_set_after_each(ir_live_t *live, ir_value_t *const *values,
     }
     core_free(current);
     return true;
+}
+
+static bool
+phi_edge_uses(const ir_block_t *from, const ir_block_t *to,
+              const ir_value_t *value)
+{
+    for (uint32_t i = 0; i < to->n_instrs && to->instrs[i]->op == IR_OP_PHI;
+         i++) {
+        const ir_instr_t *phi = to->instrs[i];
+        for (uint32_t o = 0; o < phi->n_operands; o++) {
+            const ir_operand_t *operand = &phi->operands[o];
+            if (operand->kind == IR_OPD_PHI_ARM && operand->phi.block == from
+                && operand->phi.value == value) return true;
+        }
+    }
+    return false;
 }
 
 bool
@@ -488,7 +479,7 @@ across_local_sets(across_t *a)
             }
             if (in->op == IR_OP_PHI) continue;
             for (uint32_t o = 0; o < in->n_operands; o++)
-                if (across_slot(a, operand_value(in, o), &slot))
+                if (across_slot(a, ir_operand_used_value(in, o), &slot))
                     across_set(use, slot);
         }
     }
@@ -589,7 +580,7 @@ ir_live_across_points(ir_live_t *live, ir_value_t *const *values,
                 for (size_t w = 0; w < a.words; w++) hit[w] |= current[w];
             if (in->op == IR_OP_PHI) continue;
             for (uint32_t o = 0; o < in->n_operands; o++)
-                if (across_slot(&a, operand_value(in, o), &slot))
+                if (across_slot(&a, ir_operand_used_value(in, o), &slot))
                     across_set(current, slot);
         }
     }
@@ -676,7 +667,7 @@ compute_cycles(ir_live_t *live)
 bool
 ir_live_block_on_cycle(ir_live_t *live, const ir_block_t *block)
 {
-    if (!live || !live->cfg_valid || !block_belongs_to(live->f, block))
+    if (!live || !live->cfg_valid || !ir_block_belongs_to(live->f, block))
         return true;
     if (!live->cycle) compute_cycles(live);
     return live->cycle[block->index] > 0;
@@ -691,14 +682,28 @@ build_uses(ir_live_t *live)
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (in->op == IR_OP_COPY && in->dest_local) {
+                ir_value_t *local = ir_local_value(f, in->dest_local);
+                bool known = false;
+                core_list_t(live_copy_t) *copies = local
+                    ? core_dict_get(&live->copies, local, &known) : nullptr;
+                if (local && !known) {
+                    copies = core_alloc(core_list_t(live_copy_t));
+                    *copies = core_list_new(live_copy_t);
+                    core_dict_put(&live->copies, local, copies);
+                }
+                if (copies) core_list_push(*copies, in);
+            }
             for (uint32_t o = 0; o < in->n_operands; o++) {
-                const ir_value_t *value = operand_value(in, o);
+                const ir_value_t *value = ir_operand_used_value(in, o);
                 if (!value) continue;
                 bool found = false;
-                void *slot = core_dict_get(&live->use_index, value, &found);
+                void *slot = core_dict_get(&live->use_index,
+                                           (void *)use_key(value), &found);
                 if (!found) {
                     slot = (void *)(uintptr_t)counts.len;
-                    core_dict_put(&live->use_index, value, counts.len);
+                    core_dict_put(&live->use_index, use_key(value),
+                                  counts.len);
                     core_list_push(counts, 0);
                 }
                 counts.data[(uintptr_t)slot]++;
@@ -714,11 +719,11 @@ build_uses(ir_live_t *live)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in = f->blocks[b]->instrs[i];
             for (uint32_t o = 0; o < in->n_operands; o++) {
-                const ir_value_t *value = operand_value(in, o);
+                const ir_value_t *value = ir_operand_used_value(in, o);
                 if (!value) continue;
                 bool found = false;
                 uintptr_t slot = (uintptr_t)core_dict_get(&live->use_index,
-                                                          value, &found);
+                    (void *)use_key(value), &found);
                 live->uses[live->use_start[slot] + counts.data[slot]++] =
                     (live_use_t){in, o};
             }
@@ -743,12 +748,13 @@ ir_live_carried_after(ir_live_t *live, const ir_value_t *root,
     work[depth++] = root;
     while (depth && state == IR_LIVENESS_DEAD) {
         const ir_value_t *value = work[--depth];
-        if (value != root && ir_live_reaches_after(live, value, point)) {
+        if (value != root && reaches_after(live, value, point)) {
             state = IR_LIVENESS_LIVE;
             break;
         }
         bool found = false;
-        uintptr_t slot = (uintptr_t)core_dict_get(&live->use_index, value,
+        uintptr_t slot = (uintptr_t)core_dict_get(&live->use_index,
+                                                  (void *)use_key(value),
                                                   &found);
         for (uint32_t u = found ? live->use_start[slot] : 0;
              found && u < live->use_start[slot + 1]; u++) {

@@ -4,7 +4,9 @@
 #include "ir/analyze.h"
 #include "ir/analyses.h"
 #include "ir/doms.h"
+#include "ir/liveness.h"
 #include "ir/memssa.h"
+#include "ir/operands.h"
 #include "ir/places.h"
 #include "ir/walk.h"
 #include "lib/dict.h"
@@ -256,7 +258,14 @@ static bool reads_directly(const ir_block_t *block, uint32_t from,
 static bool direct_read_follows(ir_func_t *f, const ir_instr_t *store,
                                 const ir_value_t *root)
 {
-    if (!root || reads_directly(store->block, store->index + 1, root)) {
+    if (!root) {
+        return true;
+    }
+    ir_liveness_t known = ir_live_after(ir_func_liveness(f), root, store);
+    if (known != IR_LIVENESS_UNKNOWN) {
+        return known == IR_LIVENESS_LIVE;
+    }
+    if (reads_directly(store->block, store->index + 1, root)) {
         return true;
     }
 
@@ -298,17 +307,15 @@ static bool mark_read_store(void *context, const ir_memdef_t *def)
     return true;
 }
 
-uint32_t ir_dead_stores(ir_func_t *f, const ir_instr_t **out,
-                        uint32_t capacity)
+void ir_dead_stores(ir_func_t *f, ir_dead_store_fn report, void *context)
 {
-    if (!f || !f->n_blocks) {
-        return 0;
+    if (!f || !f->n_blocks || !report) {
+        return;
     }
 
     size_t       scope  = ir_analysis_scope_begin();
     ir_places_t *places = ir_func_places(f);
     ir_memssa_t *memssa = ir_func_memssa(f);
-    uint32_t     count  = 0;
     core_dict_t  read;
 
     core_dict_init(&read, nullptr, nullptr);
@@ -320,11 +327,10 @@ uint32_t ir_dead_stores(ir_func_t *f, const ir_instr_t **out,
         }
     }
 
-    for (uint32_t b = 0; places && memssa && count < capacity
-                         && b < f->n_blocks; b++) {
+    for (uint32_t b = 0; places && memssa && b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
 
-        for (uint32_t i = 0; count < capacity && i < block->n_instrs; i++) {
+        for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *in    = block->instrs[i];
             uint32_t    first = 0;
             uint32_t    n     = ir_places_accesses_of(places, in, &first);
@@ -360,7 +366,7 @@ uint32_t ir_dead_stores(ir_func_t *f, const ir_instr_t **out,
                     continue;
                 }
 
-                out[count++] = in;
+                report(in, context);
                 break;
             }
         }
@@ -368,7 +374,20 @@ uint32_t ir_dead_stores(ir_func_t *f, const ir_instr_t **out,
 
     core_dict_free(&read);
     ir_analysis_scope_end(scope);
-    return count;
+}
+
+ir_span_t ir_func_report_span(const ir_func_t *f)
+{
+    ir_span_t span = f->span;
+
+    for (uint32_t b = 0; !span.start_line && b < f->n_blocks; b++) {
+        for (uint32_t i = 0; !span.start_line && i < f->blocks[b]->n_instrs;
+             i++) {
+            span = f->blocks[b]->instrs[i]->span;
+        }
+    }
+
+    return span;
 }
 
 bool ir_report_unbounded_recursion(ir_summaries_t *summaries, ir_func_t *f,
@@ -381,14 +400,7 @@ bool ir_report_unbounded_recursion(ir_summaries_t *summaries, ir_func_t *f,
         return false;
     }
 
-    ir_span_t span = f->span;
-
-    for (uint32_t b = 0; !span.start_line && b < f->n_blocks; b++) {
-        for (uint32_t i = 0; !span.start_line && i < f->blocks[b]->n_instrs;
-             i++) {
-            span = f->blocks[b]->instrs[i]->span;
-        }
-    }
+    ir_span_t span = ir_func_report_span(f);
 
     ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_UNBOUNDED_RECURSION, span,
                                   CORE_STRING_STATIC("this function"));
@@ -427,12 +439,12 @@ uint32_t ir_unused_params(const ir_func_t *f, uint32_t *out,
             const ir_instr_t *in = block->instrs[i];
 
             for (uint32_t o = 0; o < in->n_operands; o++) {
-                const ir_operand_t *operand = &in->operands[o];
-                const ir_value_t   *value   = operand->kind == IR_OPD_ARG
-                    ? operand->value : ir_operand_value(operand);
+                const ir_value_t *value = ir_operand_used_value(in, o);
 
-                for (uint32_t p = 0; value && p < f->n_params; p++) {
-                    used[p] |= f->params[p] == value;
+                if (value && value->kind == IR_VAL_PARAM
+                    && value->index < f->n_params
+                    && f->params[value->index] == value) {
+                    used[value->index] = true;
                 }
             }
         }

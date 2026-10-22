@@ -107,6 +107,8 @@ n00bb_check_deferred_conversions(core_translation_unit_t *unit)
         th_type *target = th_resolve(pending->target);
         if (!th_is_closed(state->types, target)) continue;
         if (!th_is_closed(state->types, value)) {
+            if (n00bb_open_integer(value) && is_integer_type(target))
+                n00bb_integer_boundary(state, pending->site, target);
             (void)th_unify_in_place(state->types, value, target);
             continue;
         }

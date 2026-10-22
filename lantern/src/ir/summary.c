@@ -619,7 +619,7 @@ summary_writes(write_query_t *q, const ir_summary_t *summary, bool follow)
 bool
 ir_summary_call_writes(ir_summaries_t *summaries, const ir_func_t *f,
                        ir_places_t *places, const ir_instr_t *call,
-                       const uint32_t *ids, uint32_t count)
+                       uint32_t place)
 {
     if (!summaries || !f || !places || !call) return true;
     if (call->op != IR_OP_CALL && call->op != IR_OP_CALLBACK_INVOKE)
@@ -628,7 +628,7 @@ ir_summary_call_writes(ir_summaries_t *summaries, const ir_func_t *f,
     resolve_targets(summaries, call, &targets);
     write_query_t q = {
         .summaries = summaries, .f = f, .places = places, .call = call,
-        .ids = ids, .count = count,
+        .ids = &place, .count = 1,
     };
     bool writes = targets.unknown;
     for (size_t t = 0; !writes && t < targets.targets.len; t++)

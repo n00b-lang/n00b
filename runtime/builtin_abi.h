@@ -16,6 +16,8 @@ const n00b_abi_layout_v1 *n00b_builtin_abi_layout(uint32_t index);
 const n00b_abi_frame_layout_v1 *n00b_builtin_abi_frame_layout(uint32_t index);
 uint32_t n00b_builtin_abi_storage_count(void);
 const n00b_abi_storage_v1 *n00b_builtin_abi_storage(uint32_t index);
+const n00b_abi_tls_relocation_v1 *n00b_builtin_abi_tls_relocation(
+    uint32_t index);
 const n00b_abi_symbol_v1 *n00b_builtin_abi_symbol(uint32_t index);
 const n00b_abi_module_v1 *n00b_builtin_abi_module(uint32_t index);
 const n00b_abi_function_v1 *n00b_builtin_abi_function(uint32_t index);

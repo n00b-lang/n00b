@@ -394,6 +394,37 @@ typedef struct {
 } call_specialization_t;
 core_list_decl(call_specialization_t);
 
+typedef struct {
+    core_list_t(call_specialization_t) list;
+    core_dict_t                        hashes_of;
+} pending_calls_t;
+
+static void
+pending_add(pending_calls_t *pending, ir_func_t *target, th_type *actual,
+            uint64_t hash)
+{
+    core_dict_t *hashes = core_dict_get(&pending->hashes_of, target, nullptr);
+    if (!hashes) {
+        hashes = core_alloc(core_dict_t);
+        core_dict_init(hashes, nullptr, nullptr);
+        core_dict_put(&pending->hashes_of, target, hashes);
+    }
+    if (core_dict_add(hashes, hash, 1))
+        core_list_push(pending->list,
+                       ((call_specialization_t){target, actual, hash}));
+}
+
+static void
+pending_free(pending_calls_t *pending)
+{
+    core_dict_foreach(&pending->hashes_of, item) {
+        core_dict_free(item->value);
+        core_free(item->value);
+    }
+    core_dict_free(&pending->hashes_of);
+    core_list_free(pending->list);
+}
+
 static bool
 match_call_type(th_ctx *types, th_type *pattern, th_type *actual,
                 core_list_t(call_type_binding_t) *bindings, unsigned depth)
@@ -466,7 +497,7 @@ collect_specialized_type(n00bb_abi_type_index_t *index, th_type *type,
 
 static bool
 append_call_specialization(n00bb_abi_type_index_t *index,
-                           core_list_t(call_specialization_t) *pending,
+                           pending_calls_t *pending,
                            ir_instr_t *instruction, const th_type **from,
                            th_type **to, size_t count)
 {
@@ -483,19 +514,14 @@ append_call_specialization(n00bb_abi_type_index_t *index,
         actual = th_type_clone_replacing(types, actual, from, to, count);
     if (!actual) return false;
     if (!th_is_closed(types, actual)) return true;
-    uint64_t hash = th_hash(types, actual);
-    for (size_t i = 0; i < pending->len; i++)
-        if (pending->data[i].target == target
-            && pending->data[i].hash == hash) return true;
-    core_list_push(*pending, ((call_specialization_t){target, actual,
-                                                     hash}));
+    pending_add(pending, target, actual, th_hash(types, actual));
     return true;
 }
 
 static bool
 collect_specialized_body(n00bb_abi_type_index_t *index, ir_func_t *function,
                          const th_type **from, th_type **to, size_t count,
-                         core_list_t(call_specialization_t) *pending)
+                         pending_calls_t *pending)
 {
     for (uint32_t i = 0; i < function->n_locals; i++)
         if (!collect_specialized_type(index, function->locals[i]->type,
@@ -524,18 +550,13 @@ collect_specialized_body(n00bb_abi_type_index_t *index, ir_func_t *function,
 }
 
 static void
-append_inline_body(core_list_t(inline_body_t) *bodies,
+append_inline_body(core_list_t(inline_body_t) *bodies, core_dict_t *seen,
                    const ir_instr_t *instruction, const ir_module_t *module)
 {
-    if (instruction->op != IR_OP_CALL || !instruction->n_operands
-        || instruction->operands[0].kind != IR_OPD_VALUE
-        || !instruction->operands[0].value
-        || instruction->operands[0].value->kind != IR_VAL_FUNC) return;
-    ir_func_t *body = n00bb_cached_body(instruction->operands[0].value->owner);
+    ir_func_t *body = n00bb_direct_call_target(instruction);
     if (!body || !body->n_blocks || body->owner == module
-        || !ir_func_is_always_inline(body)) return;
-    for (size_t i = 0; i < bodies->len; i++)
-        if (bodies->data[i] == body) return;
+        || !ir_func_is_always_inline(body) || !core_dict_add(seen, body, body))
+        return;
     core_list_push(*bodies, body);
 }
 
@@ -546,10 +567,13 @@ collect_call_specializations(n00bb_abi_type_index_t *index,
                              size_t function_count)
 {
     th_ctx *types = ir_module_types(index->module);
-    core_list_t(call_specialization_t) pending = {0};
+    pending_calls_t pending = {0};
+    core_dict_init(&pending.hashes_of, nullptr, nullptr);
     bool valid = true;
     size_t count = module ? ir_func_count(module) : function_count;
     core_list_t(inline_body_t) inline_bodies = {0};
+    core_dict_t inline_seen;
+    core_dict_init(&inline_seen, nullptr, nullptr);
     for (size_t f = 0; f < count; f++) {
         ir_func_t *caller = module ? ir_func_at(module, f) : functions[f];
         for (uint32_t b = 0; b < caller->n_blocks; b++) {
@@ -557,7 +581,8 @@ collect_call_specializations(n00bb_abi_type_index_t *index,
             for (uint32_t i = 0; valid && i < block->n_instrs; i++) {
                 valid = append_call_specialization(index, &pending,
                     block->instrs[i], nullptr, nullptr, 0);
-                append_inline_body(&inline_bodies, block->instrs[i], module);
+                append_inline_body(&inline_bodies, &inline_seen,
+                                   block->instrs[i], module);
             }
         }
     }
@@ -567,15 +592,16 @@ collect_call_specializations(n00bb_abi_type_index_t *index,
                                          &pending);
         for (uint32_t b = 0; valid && b < body->n_blocks; b++)
             for (uint32_t i = 0; i < body->blocks[b]->n_instrs; i++)
-                append_inline_body(&inline_bodies, body->blocks[b]->instrs[i],
-                                   module);
+                append_inline_body(&inline_bodies, &inline_seen,
+                                   body->blocks[b]->instrs[i], module);
     }
+    core_dict_free(&inline_seen);
     core_list_free(inline_bodies);
-    for (size_t i = 0; valid && i < pending.len; i++) {
-        call_specialization_t *specialization = &pending.data[i];
+    for (size_t i = 0; valid && i < pending.list.len; i++) {
+        call_specialization_t specialization = pending.list.data[i];
         core_list_t(call_type_binding_t) bindings = {0};
-        valid = match_call_type(types, specialization->target->type,
-            specialization->actual, &bindings, 0);
+        valid = match_call_type(types, specialization.target->type,
+            specialization.actual, &bindings, 0);
         const th_type **from = valid && bindings.len
             ? core_alloc_array(const th_type *, bindings.len) : nullptr;
         th_type **to = valid && bindings.len
@@ -587,12 +613,12 @@ collect_call_specializations(n00bb_abi_type_index_t *index,
         }
         if (valid && bindings.len)
             valid = collect_specialized_body(index,
-                specialization->target, from, to, bindings.len, &pending);
+                specialization.target, from, to, bindings.len, &pending);
         core_free(from);
         core_free(to);
         core_list_free(bindings);
     }
-    core_list_free(pending);
+    pending_free(&pending);
     return valid;
 }
 

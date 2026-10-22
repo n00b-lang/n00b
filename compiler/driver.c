@@ -1122,7 +1122,8 @@ discover_files(void *context, const core_module_spec_t *module,
                 candidate->relative, PACKAGE_SYNTAX_KIND,
                 resolver->package_syntax_profile, &names);
             bool matches = !cached || syntax_index_has_name(
-                &names, module->identifier);            core_buffer_release(&names);
+                &names, module->identifier);
+            core_buffer_release(&names);
             if (!matches) continue;
         }
         found = true;

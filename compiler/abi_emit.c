@@ -113,12 +113,17 @@ collect_frame_payload_types(core_translation_unit_t *unit,
     for (size_t i = 0; i < ir_func_count(runtime); i++) {
         ir_func_t *function = ir_func_at(runtime, i);
         if (!function || !function->n_blocks) continue;
-        size_t pointers = 0, roots = 0;
-        if (!n00bb_frame_pointer_roots(function, nullptr, nullptr, &pointers)
-            || !n00bb_frame_roots(function, nullptr, nullptr, &roots))
-            return false;
-        if (roots == pointers) continue;
-        th_type *payload = n00bb_frame_payload_type(function, &roots);
+        n00bb_frame_root_list_t list;
+        size_t scope = ir_analysis_scope_begin();
+        bool listed = n00bb_frame_root_list(function, &list);
+        ir_analysis_scope_end(scope);
+        if (!listed) return false;
+        size_t roots = list.count;
+        bool mixed = roots != list.pointer_count;
+        th_type *payload = mixed
+            ? n00bb_frame_payload_type(function, &list) : nullptr;
+        n00bb_frame_root_list_release(&list);
+        if (!mixed) continue;
         n00bb_abi_record_member_t *members = payload
             ? core_alloc_array(n00bb_abi_record_member_t, roots) : nullptr;
         bool valid = payload && members;
@@ -171,17 +176,21 @@ frame_info(n00bb_abi_type_index_t *index,
            const n00bb_abi_type_identity_rows_t *types,
            ir_func_t *function, abi_frame_info_t *out)
 {
-    size_t pointers = 0, roots = 0;
-    if (!n00bb_frame_pointer_roots(function, nullptr, nullptr, &pointers)
-        || !n00bb_frame_roots(function, nullptr, nullptr, &roots))
-        return false;
+    n00bb_frame_root_list_t list;
+    size_t scope = ir_analysis_scope_begin();
+    bool listed = n00bb_frame_root_list(function, &list);
+    ir_analysis_scope_end(scope);
+    if (!listed) return false;
+    size_t pointers = list.pointer_count, roots = list.count;
+    th_type *payload = roots != pointers
+        ? n00bb_frame_payload_type(function, &list) : nullptr;
+    n00bb_frame_root_list_release(&list);
     abi_frame_info_t info = {
         .roots = pointers,
         .pointer_roots = pointers,
         .slots = pointers,
     };
     if (roots != pointers) {
-        th_type *payload = n00bb_frame_payload_type(function, &roots);
         uint32_t payload_index = 0;
         if (!payload || !n00bb_abi_type_index_find(index, payload,
                                                     &payload_index)
@@ -252,16 +261,19 @@ build_frame_rows(n00bb_abi_function_rows_t *functions,
         return false;
     size_t bytes = 0;
     size_t active = 0;
+    abi_frame_info_t *infos = core_alloc_array(abi_frame_info_t,
+                                               functions->function_count);
     for (size_t i = 1; i < functions->function_count; i++) {
         ir_func_t *function = functions->ir_functions[i];
         if (!function || function->owner != runtime || !function->n_blocks)
             continue;
-        abi_frame_info_t info;
-        if (!frame_info(index, types, function, &info)) return false;
-        if (info.bitmap_bytes > UINT32_MAX
-            || bytes > UINT32_MAX - info.bitmap_bytes)
+        if (!frame_info(index, types, function, &infos[i])
+            || infos[i].bitmap_bytes > UINT32_MAX
+            || bytes > UINT32_MAX - infos[i].bitmap_bytes) {
+            core_free(infos);
             return false;
-        bytes += info.bitmap_bytes;
+        }
+        bytes += infos[i].bitmap_bytes;
         active++;
     }
     abi_frame_rows_t frames = {
@@ -273,6 +285,7 @@ build_frame_rows(n00bb_abi_function_rows_t *functions,
     };
     if (!frames.rows || !frames.function_frames
         || (bytes && !frames.bitmap)) {
+        core_free(infos);
         frame_rows_release(&frames);
         return false;
     }
@@ -280,11 +293,7 @@ build_frame_rows(n00bb_abi_function_rows_t *functions,
         ir_func_t *function = functions->ir_functions[i];
         if (!function || function->owner != runtime || !function->n_blocks)
             continue;
-        abi_frame_info_t info;
-        if (!frame_info(index, types, function, &info)) {
-            frame_rows_release(&frames);
-            return false;
-        }
+        abi_frame_info_t info = infos[i];
         size_t width = info.bitmap_bytes;
         if (info.layout) {
             abi_frame_bitmap_t bitmap = {
@@ -296,6 +305,7 @@ build_frame_rows(n00bb_abi_function_rows_t *functions,
             size_t filled = 0;
             if (!n00bb_frame_roots(function, frame_bitmap_root, &bitmap,
                                    &filled) || filled != info.roots) {
+                core_free(infos);
                 frame_rows_release(&frames);
                 return false;
             }
@@ -319,6 +329,7 @@ build_frame_rows(n00bb_abi_function_rows_t *functions,
         frames.bitmap_count += width;
         frames.active_count++;
     }
+    core_free(infos);
     *out = frames;
     return true;
 }
@@ -398,6 +409,14 @@ build_tls_metadata(n00bb_abi_storage_rows_t *storage,
         else if (reloc->target_kind != N00BB_ABI_RELOC_STRING_POOL)
             return false;
         if (reloc->target_offset > INT64_MAX) return false;
+        count++;
+    }
+    for (size_t i = 0; i < storage->tls_fixup_count; i++) {
+        const n00bb_abi_storage_relocation_t *fixup = &storage->tls_fixups[i];
+        if (fixup->source_kind != N00B_ABI_STORAGE_TLS
+            || fixup->target_kind != N00B_ABI_STORAGE_TLS
+            || fixup->target_offset > INT64_MAX
+            || fixup->byte_offset > INT64_MAX) return false;
         count++;
     }
     if (!count) {
@@ -516,6 +535,27 @@ build_tls_metadata(n00bb_abi_storage_rows_t *storage,
                     == N00BB_ABI_RELOC_STRING_POOL
                     ? 0 : (int64_t)source->target_offset,
                 .target_kind = N00B_ABI_STORAGE_READ_ONLY,
+            };
+            out->stream_indexes[stream_position++] =
+                (uint32_t)relocation_row++;
+        }
+        for (size_t j = 0; valid && j < storage->tls_fixup_count; j++) {
+            const n00bb_abi_storage_relocation_t *fixup =
+                &storage->tls_fixups[j];
+            uint64_t end = row->byte_offset + row->byte_length;
+            if (fixup->byte_offset < row->byte_offset
+                || fixup->byte_offset >= end) continue;
+            valid = sizeof(void *) <= end - fixup->byte_offset
+                && fixup->target_offset >= row->byte_offset
+                && fixup->target_offset < end;
+            if (!valid) break;
+            out->rows[relocation_row] = (n00b_abi_tls_relocation_v1){
+                .template_storage_index = (uint32_t)i,
+                .referenced_storage_index = (uint32_t)i,
+                .write_byte_offset = fixup->byte_offset - row->byte_offset,
+                .addend_bytes = (int64_t)(fixup->target_offset
+                                          - row->byte_offset),
+                .target_kind = N00B_ABI_STORAGE_TLS,
             };
             out->stream_indexes[stream_position++] =
                 (uint32_t)relocation_row++;
@@ -2435,6 +2475,8 @@ n00bb_abi_emit_unit(
     core_string_t *native_names = storage_rows.relocation_count
         ? core_alloc_array(core_string_t, storage_rows.relocation_count)
         : nullptr;
+    core_dict_t native_slots;
+    core_dict_init_string(&native_slots);
     if (valid)
         valid = n00bb_abi_name_pool_relocations(pool, entries,
             sizeof(entries) / sizeof(*entries), &relocations,
@@ -2476,13 +2518,15 @@ n00bb_abi_emit_unit(
                                 N00B_ABI_STORAGE_READ_ONLY] != 0))
                         : UINT32_MAX;
                 if (source->target_kind == N00BB_ABI_RELOC_NATIVE) {
-                    size_t found = 0;
-                    while (found < native_count
-                        && !core_string_eq(native_names[found],
-                                           source->native))
-                        found++;
-                    if (found == native_count)
+                    size_t found = (size_t)(uintptr_t)core_dict_get(
+                        &native_slots, &source->native, nullptr);
+                    if (found) found--;
+                    else {
+                        found = native_count;
                         native_names[native_count++] = source->native;
+                        core_dict_put(&native_slots, &source->native,
+                                      (void *)(uintptr_t)native_count);
+                    }
                     combined[relocation_count + i] =
                         (core_object_emit_absolute64_t){
                             .section_index = section,
@@ -2640,6 +2684,7 @@ n00bb_abi_emit_unit(
         core_free(native_symbol_names[i].data);
     core_free(native_symbol_names);
     core_free(native_names);
+    core_dict_free(&native_slots);
     if (!valid) {
         core_buffer_t message = {0};
         core_buffer_puts(&message, "could not write ABI object: ");

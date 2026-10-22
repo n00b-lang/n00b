@@ -169,19 +169,21 @@ parse_tree_resolve_child_ref(parse_grammar_t *g, parse_tree_t *parent,
     return nullptr;
 }
 
-core_string_t parse_tree_nt_name(parse_grammar_t *g, parse_tree_t *n)
+parse_nonterm_t *parse_tree_nonterm(parse_grammar_t *g, parse_tree_t *n)
 {
     if (!n || core_tree_is_leaf(n)) {
-        return (core_string_t){0};
+        return nullptr;
     }
 
     parse_nt_node_t *pn = &core_tree_node_value(n);
 
-    if (pn->id < 0 || pn->group_top) {
-        return (core_string_t){0};
-    }
+    return pn->id < 0 || pn->group_top ? nullptr
+                                       : parse_get_nonterm(g, pn->id);
+}
 
-    parse_nonterm_t *nt = parse_get_nonterm(g, pn->id);
+core_string_t parse_tree_nt_name(parse_grammar_t *g, parse_tree_t *n)
+{
+    parse_nonterm_t *nt = parse_tree_nonterm(g, n);
 
     return nt ? nt->name : (core_string_t){0};
 }

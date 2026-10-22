@@ -3,12 +3,14 @@
 
 #include "compiler_tu.h"
 #include "compiler_link.h"
+#include "ir/operands.h"
 
 bool
 n00bb_type_interval(th_type *type, ir_interval_t *range)
 {
     uint64_t width = 0;
     bool is_signed = false;
+    if (!type) return false;
     if (!n00bb_integer_representation(type, &width, &is_signed)) {
         if (!n00bb_scalar_role_is(type, IR_ROLE_BYTE)) return false;
         width = 8;
@@ -19,10 +21,8 @@ n00bb_type_interval(th_type *type, ir_interval_t *range)
 }
 
 bool
-n00bb_current_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
-                            ir_interval_t *range)
+n00bb_current_integer_range(parse_tree_t *node, ir_interval_t *range)
 {
-    (void)state;
     n00bb_node_facts_t *facts = n00bb_node_facts(node);
     if (!facts || !facts->integer_range_known) return false;
     if (range) *range = facts->integer_range;
@@ -33,7 +33,7 @@ bool
 n00bb_integer_point(parse_tree_t *node, int64_t *value)
 {
     ir_interval_t range = {0};
-    if (!n00bb_current_integer_range(nullptr, node, &range)
+    if (!n00bb_current_integer_range(node, &range)
         || range.lo != range.hi || range.lo < INT64_MIN
         || range.lo > INT64_MAX) return false;
     if (value) *value = (int64_t)range.lo;
@@ -50,6 +50,90 @@ n00bb_set_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
     facts->integer_range = range;
     facts->integer_range_known = true;
     return true;
+}
+
+enum {
+    RANGE_SIMPLE_LIT = 1u << 0,
+    RANGE_UNARY = 1u << 1,
+    RANGE_PRIMARY = 1u << 2,
+    RANGE_WRAPPER = 1u << 3,
+    RANGE_ADD = 1u << 4,
+    RANGE_MUL = 1u << 5,
+    RANGE_SHIFT = 1u << 6,
+    RANGE_BITAND = 1u << 7,
+    RANGE_BITOR = 1u << 8,
+    RANGE_BITXOR = 1u << 9,
+    RANGE_IF = 1u << 10,
+    RANGE_CLAUSE = 1u << 11,
+    RANGE_BODY = 1u << 12,
+    RANGE_EXPRESSION = 1u << 13,
+    RANGE_SYM_DECL = 1u << 14,
+    RANGE_ASSIGN = 1u << 15,
+    RANGE_BINOP_ASSIGN = 1u << 16,
+    RANGE_CONTROL = 1u << 17,
+    RANGE_FUNCTION = 1u << 18,
+};
+
+static const struct {
+    core_string_t name;
+    uint32_t roles;
+} range_role_names[] = {
+    {CORE_STRING_STATIC("simple-lit"), RANGE_SIMPLE_LIT},
+    {CORE_STRING_STATIC("expression"), RANGE_WRAPPER | RANGE_EXPRESSION},
+    {CORE_STRING_STATIC("or-expr"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("and-expr"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("or-rhs"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("and-rhs"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("equality-expr"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("compare-expr"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("bitor-expr"), RANGE_WRAPPER | RANGE_BITOR},
+    {CORE_STRING_STATIC("bitxor-expr"), RANGE_WRAPPER | RANGE_BITXOR},
+    {CORE_STRING_STATIC("bitand-expr"), RANGE_WRAPPER | RANGE_BITAND},
+    {CORE_STRING_STATIC("shift-expr"), RANGE_WRAPPER | RANGE_SHIFT},
+    {CORE_STRING_STATIC("add-expr"), RANGE_WRAPPER | RANGE_ADD},
+    {CORE_STRING_STATIC("mul-expr"), RANGE_WRAPPER | RANGE_MUL},
+    {CORE_STRING_STATIC("unary-expr"), RANGE_WRAPPER | RANGE_UNARY},
+    {CORE_STRING_STATIC("postfix-expr"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("primary"), RANGE_WRAPPER | RANGE_PRIMARY},
+    {CORE_STRING_STATIC("tuple-or-paren"), RANGE_WRAPPER},
+    {CORE_STRING_STATIC("if-stmt"), RANGE_IF | RANGE_CONTROL},
+    {CORE_STRING_STATIC("if-value-expr"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("elif-clause"), RANGE_CLAUSE | RANGE_CONTROL},
+    {CORE_STRING_STATIC("else-clause"), RANGE_CLAUSE | RANGE_CONTROL},
+    {CORE_STRING_STATIC("while-stmt"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("for-stmt"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("labeled-while"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("labeled-for"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("switch-stmt"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("typecase-stmt"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("typecase-value-expr"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("try-stmt"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("with-stmt"), RANGE_CONTROL},
+    {CORE_STRING_STATIC("body"), RANGE_BODY},
+    {CORE_STRING_STATIC("sym-decl"), RANGE_SYM_DECL},
+    {CORE_STRING_STATIC("assign-stmt"), RANGE_ASSIGN},
+    {CORE_STRING_STATIC("binop-assign-stmt"), RANGE_BINOP_ASSIGN},
+    {CORE_STRING_STATIC("func-def"), RANGE_FUNCTION},
+    {CORE_STRING_STATIC("context-def"), RANGE_FUNCTION},
+};
+
+static uint32_t
+range_roles(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+            parse_tree_t *node)
+{
+    if (!state->integer_range_roles_ready) {
+        for (size_t i = 0; i < sizeof(range_role_names)
+                                   / sizeof(range_role_names[0]); i++) {
+            parse_nonterm_t *nt = parse_find_nonterm(grammar,
+                                                     range_role_names[i].name);
+            if (nt)
+                parse_nonterm_set_user_data(nt,
+                    (void *)(uintptr_t)range_role_names[i].roles);
+        }
+        state->integer_range_roles_ready = true;
+    }
+    parse_nonterm_t *nt = parse_tree_nonterm(grammar, node);
+    return nt ? (uint32_t)(uintptr_t)parse_nonterm_get_user_data(nt) : 0;
 }
 
 bool
@@ -71,13 +155,78 @@ n00bb_integer_range_wrapper(parse_grammar_t *grammar, parse_tree_t *node)
     return false;
 }
 
+static n00bb_symbol_range_t *
+range_table_get(const n00bb_range_table_t *table,
+                const parse_sym_entry_t *symbol)
+{
+    size_t slot = (uintptr_t)core_dict_get((core_dict_t *)&table->index,
+                                           (void *)symbol, nullptr);
+    return slot ? &table->entries.data[slot - 1] : nullptr;
+}
+
+static void
+range_table_remove(n00bb_range_table_t *table,
+                   const parse_sym_entry_t *symbol)
+{
+    size_t slot = (uintptr_t)core_dict_get(&table->index, (void *)symbol,
+                                           nullptr);
+    if (!slot) return;
+    size_t last = table->entries.len - 1;
+    if (slot - 1 != last) {
+        table->entries.data[slot - 1] = table->entries.data[last];
+        core_dict_put(&table->index, table->entries.data[slot - 1].symbol,
+                      slot);
+    }
+    table->entries.len = last;
+    core_dict_remove(&table->index, (void *)symbol);
+}
+
+static void
+range_table_put(n00bb_range_table_t *table, parse_sym_entry_t *symbol,
+                ir_interval_t value)
+{
+    n00bb_symbol_range_t *range = range_table_get(table, symbol);
+    if (range) {
+        range->range = value;
+        return;
+    }
+    core_list_push(table->entries,
+                   ((n00bb_symbol_range_t){.symbol = symbol, .range = value}));
+    core_dict_put(&table->index, symbol, table->entries.len);
+}
+
+static n00bb_range_table_t
+range_table_copy(const n00bb_range_table_t *source)
+{
+    n00bb_range_table_t copy = {.entries = core_list_new(n00bb_symbol_range_t)};
+    core_dict_init(&copy.index, nullptr, nullptr);
+    for (size_t i = 0; source && i < source->entries.len; i++)
+        range_table_put(&copy, source->entries.data[i].symbol,
+                        source->entries.data[i].range);
+    return copy;
+}
+
+static void
+range_table_release(n00bb_range_table_t *table)
+{
+    core_list_free(table->entries);
+    core_dict_free(&table->index);
+}
+
+static void
+range_table_clear(n00bb_range_table_t *table)
+{
+    table->entries.len = 0;
+    core_dict_free(&table->index);
+    core_dict_init(&table->index, nullptr, nullptr);
+}
+
 static const n00bb_symbol_range_t *
 n00bb_range_for_symbol(const n00bb_tu_state_t *state,
                       const parse_sym_entry_t *symbol)
 {
-    return state && symbol ? core_dict_get(
-        (core_dict_t *)&state->integer_symbol_ranges, symbol, nullptr)
-        : nullptr;
+    return state && symbol
+        ? range_table_get(&state->integer_symbol_ranges, symbol) : nullptr;
 }
 
 static bool
@@ -102,30 +251,20 @@ static void
 n00bb_range_forget_symbol(n00bb_tu_state_t *state,
                           const parse_sym_entry_t *symbol)
 {
-    if (!state || !symbol) return;
-    n00bb_symbol_range_t *range = core_dict_get(
-        &state->integer_symbol_ranges, symbol, nullptr);
-    if (!range) return;
-    core_dict_remove(&state->integer_symbol_ranges, symbol);
-    core_free(range);
+    if (state && symbol)
+        range_table_remove(&state->integer_symbol_ranges, symbol);
 }
 
 static void
 n00bb_range_set_symbol(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
                        ir_interval_t value)
 {
-    if (!state || !symbol) return;
-    n00bb_symbol_range_t *range = core_dict_get(
-        &state->integer_symbol_ranges, symbol, nullptr);
-    if (!range) {
-        range = core_alloc(n00bb_symbol_range_t);
-        core_dict_put(&state->integer_symbol_ranges, symbol, range);
-    }
-    *range = (n00bb_symbol_range_t){.symbol = symbol, .range = value};
+    if (state && symbol)
+        range_table_put(&state->integer_symbol_ranges, symbol, value);
 }
 
 static void
-n00bb_range_release(core_dict_t *ranges)
+solved_ranges_release(core_dict_t *ranges)
 {
     core_dict_foreach(ranges, entry)
         core_free(entry->value);
@@ -133,57 +272,32 @@ n00bb_range_release(core_dict_t *ranges)
 }
 
 static void
-n00bb_range_clear(core_dict_t *ranges)
-{
-    n00bb_range_release(ranges);
-    core_dict_init(ranges, nullptr, nullptr);
-}
-
-static core_dict_t
-n00bb_range_copy(const core_dict_t *source)
-{
-    core_dict_t copy = {0};
-    core_dict_init(&copy, nullptr, nullptr);
-    if (source) {
-        core_dict_foreach(source, entry) {
-            n00bb_symbol_range_t *range = core_alloc(n00bb_symbol_range_t);
-            *range = *(const n00bb_symbol_range_t *)entry->value;
-            core_dict_put(&copy, entry->key, range);
-        }
-    }
-    return copy;
-}
-
-static void
 n00bb_range_merge_branch(n00bb_range_branch_frame_t *frame,
-                         const core_dict_t *branch)
+                         const n00bb_range_table_t *branch)
 {
     if (!frame || !branch) return;
     if (!frame->has_branch) {
-        frame->merged = n00bb_range_copy(branch);
+        frame->merged = range_table_copy(branch);
         frame->has_branch = true;
         return;
     }
-    core_dict_foreach(&frame->merged, entry) {
-        n00bb_symbol_range_t *merged = entry->value;
-        const n00bb_symbol_range_t *other = core_dict_get(
-            (core_dict_t *)branch, merged->symbol, nullptr);
-        if (!other) {
-            core_dict_remove(&frame->merged, merged->symbol);
-            core_free(merged);
-            continue;
-        }
-        merged->range = ir_interval_join(merged->range, other->range);
+    for (size_t i = frame->merged.entries.len; i > 0; i--) {
+        n00bb_symbol_range_t *merged = &frame->merged.entries.data[i - 1];
+        const n00bb_symbol_range_t *other = range_table_get(branch,
+                                                            merged->symbol);
+        if (other)
+            merged->range = ir_interval_join(merged->range, other->range);
+        else range_table_remove(&frame->merged, merged->symbol);
     }
 }
 
 static void
 n00bb_range_restore(n00bb_tu_state_t *state,
-                    const core_dict_t *ranges)
+                    const n00bb_range_table_t *ranges)
 {
     if (!state || !ranges) return;
-    n00bb_range_release(&state->integer_symbol_ranges);
-    state->integer_symbol_ranges = n00bb_range_copy(ranges);
+    range_table_release(&state->integer_symbol_ranges);
+    state->integer_symbol_ranges = range_table_copy(ranges);
 }
 
 static n00bb_range_branch_frame_t *
@@ -236,8 +350,8 @@ n00bb_range_simple_integer_literal(parse_grammar_t *grammar,
     return false;
 }
 
-static ir_op_t
-comparison_op(core_string_t op)
+ir_op_t
+n00bb_comparison_op(core_string_t op)
 {
     static const struct {
         core_string_t spelling;
@@ -255,33 +369,7 @@ comparison_op(core_string_t op)
     return IR_OP_COUNT;
 }
 
-static ir_op_t
-swapped_comparison(ir_op_t op)
-{
-    switch (op) {
-    case IR_OP_LT: return IR_OP_GT;
-    case IR_OP_LE: return IR_OP_GE;
-    case IR_OP_GT: return IR_OP_LT;
-    case IR_OP_GE: return IR_OP_LE;
-    default: return op;
-    }
-}
-
-static ir_op_t
-negated_comparison(ir_op_t op)
-{
-    switch (op) {
-    case IR_OP_LT: return IR_OP_GE;
-    case IR_OP_LE: return IR_OP_GT;
-    case IR_OP_GT: return IR_OP_LE;
-    case IR_OP_GE: return IR_OP_LT;
-    case IR_OP_EQ: return IR_OP_NE;
-    case IR_OP_NE: return IR_OP_EQ;
-    default: return op;
-    }
-}
-
-static parse_sym_entry_t *
+parse_sym_entry_t *
 n00bb_range_variable_of(parse_tree_t *node)
 {
     parse_tree_t *lvalue = n00bb_simple_lvalue(node);
@@ -300,15 +388,15 @@ n00bb_range_refine_comparison(parse_grammar_t *grammar,
     parse_tree_t *comparison = n00bb_range_direct_comparison(grammar,
                                                               condition);
     if (!comparison) return;
-    ir_op_t op = comparison_op(first_token_text(core_tree_child(comparison,
-                                                                1)));
+    ir_op_t op = n00bb_comparison_op(first_token_text(
+        core_tree_child(comparison, 1)));
     parse_tree_t *constant_node = core_tree_child(comparison, 2);
     parse_sym_entry_t *symbol = n00bb_range_variable_of(
         core_tree_child(comparison, 0));
     if (!symbol) {
         symbol = n00bb_range_variable_of(core_tree_child(comparison, 2));
         constant_node = core_tree_child(comparison, 0);
-        op = swapped_comparison(op);
+        op = ir_comparison_swapped(op);
     }
     int64_t constant = 0;
     if (!symbol || op == IR_OP_COUNT
@@ -319,7 +407,7 @@ n00bb_range_refine_comparison(parse_grammar_t *grammar,
     if (fact) known = fact->range;
     else if (!n00bb_type_interval(symbol->type, &known)) return;
     ir_interval_t refined = ir_interval_constrain(known,
-        true_branch ? op : negated_comparison(op),
+        true_branch ? op : ir_comparison_negated(op),
         ir_interval_point(constant));
     if (refined.lo <= refined.hi)
         n00bb_range_set_symbol(state, symbol, refined);
@@ -332,7 +420,7 @@ n00bb_range_enter_if(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (!state || !nt_is(grammar, node, CORE_STRING_STATIC("if-stmt"))) return;
     n00bb_range_branch_frame_t frame = {
         .node = node,
-        .incoming = n00bb_range_copy(&state->integer_symbol_ranges),
+        .incoming = range_table_copy(&state->integer_symbol_ranges),
     };
     core_list_push(state->integer_range_branches, frame);
 }
@@ -393,12 +481,11 @@ n00bb_range_end_if(n00bb_tu_state_t *state, parse_tree_t *node)
     if (!frame) return;
     if (!frame->has_else)
         n00bb_range_merge_branch(frame, &frame->incoming);
-    if (!frame->has_branch)
-        core_dict_init(&frame->merged, nullptr, nullptr);
-    n00bb_range_release(&frame->incoming);
-    n00bb_range_release(&state->integer_symbol_ranges);
+    if (!frame->has_branch) frame->merged = range_table_copy(nullptr);
+    range_table_release(&frame->incoming);
+    range_table_release(&state->integer_symbol_ranges);
     state->integer_symbol_ranges = frame->merged;
-    frame->merged = (core_dict_t){0};
+    frame->merged = (n00bb_range_table_t){0};
     state->integer_range_branches.len--;
 }
 
@@ -409,61 +496,40 @@ n00bb_range_in_active_branch(parse_grammar_t *grammar,
     parse_tree_t *owner = nullptr;
     for (parse_tree_t *at = node ? parse_tree_parent(node) : nullptr;
          at; at = parse_tree_parent(at)) {
-        if (nt_is(grammar, at, CORE_STRING_STATIC("while-stmt"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("for-stmt"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("labeled-while"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("labeled-for"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("switch-stmt"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("typecase-stmt"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("typecase-value-expr"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("try-stmt"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("with-stmt"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("if-value-expr")))
-            return false;
-        if (nt_is(grammar, at, CORE_STRING_STATIC("if-stmt"))) {
+        uint32_t roles = range_roles(grammar, state, at);
+        if (roles & RANGE_IF) {
             owner = at;
             break;
         }
+        if ((roles & RANGE_CONTROL) && !(roles & RANGE_CLAUSE)) return false;
     }
     n00bb_range_branch_frame_t *frame = n00bb_range_branch_top(state, owner);
     return frame && frame->branch_active;
 }
 
 static bool
-n00bb_range_control_node(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    static const core_string_t controls[] = {
-        CORE_STRING_STATIC("if-stmt"), CORE_STRING_STATIC("if-value-expr"),
-        CORE_STRING_STATIC("elif-clause"), CORE_STRING_STATIC("else-clause"),
-        CORE_STRING_STATIC("while-stmt"), CORE_STRING_STATIC("for-stmt"),
-        CORE_STRING_STATIC("labeled-while"), CORE_STRING_STATIC("labeled-for"),
-        CORE_STRING_STATIC("switch-stmt"), CORE_STRING_STATIC("typecase-stmt"),
-        CORE_STRING_STATIC("typecase-value-expr"),
-        CORE_STRING_STATIC("try-stmt"), CORE_STRING_STATIC("with-stmt"),
-    };
-    for (size_t i = 0; i < sizeof(controls) / sizeof(controls[0]); i++)
-        if (nt_is(grammar, node, controls[i])) return true;
-    return false;
-}
-
-static bool
-n00bb_range_inside_control(parse_grammar_t *grammar, parse_tree_t *node)
+n00bb_range_inside_control(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                           parse_tree_t *node)
 {
     for (parse_tree_t *parent = node ? parse_tree_parent(node) : nullptr;
          parent; parent = parse_tree_parent(parent))
-        if (n00bb_range_control_node(grammar, parent)) return true;
+        if (range_roles(grammar, state, parent) & RANGE_CONTROL) return true;
     return false;
 }
 
-static bool
-n00bb_range_inside_function(parse_grammar_t *grammar, parse_tree_t *node)
+bool
+n00bb_function_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    for (parse_tree_t *parent = node ? parse_tree_parent(node) : nullptr;
-         parent; parent = parse_tree_parent(parent))
-        if (nt_is(grammar, parent, CORE_STRING_STATIC("func-def"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("context-def")))
-            return true;
-    return false;
+    return nt_is(grammar, node, CORE_STRING_STATIC("func-def"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("context-def"));
+}
+
+parse_tree_t *
+n00bb_enclosing_function_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at))
+        if (n00bb_function_node(grammar, at)) return at;
+    return nullptr;
 }
 
 static void
@@ -559,7 +625,7 @@ n00bb_range_proven_above_int64(parse_grammar_t *grammar,
 {
     if (!grammar || !state || !node || core_tree_is_leaf(node)) return false;
     ir_interval_t range = {0};
-    if (n00bb_current_integer_range(state, node, &range))
+    if (n00bb_current_integer_range(node, &range))
         return range.lo > INT64_MAX;
     uint64_t constant = 0;
     if (n00bb_range_constant_uint64(grammar, node, &constant))
@@ -579,8 +645,9 @@ static void
 n00bb_range_invalidate_static_symbols(n00bb_tu_state_t *state)
 {
     if (!state) return;
-    core_dict_foreach(&state->integer_symbol_ranges, entry)
-        n00bb_range_invalidate_symbol(state, entry->key);
+    for (size_t i = 0; i < state->integer_symbol_ranges.entries.len; i++)
+        n00bb_range_invalidate_symbol(state,
+            state->integer_symbol_ranges.entries.data[i].symbol);
     n00bb_range_invalidate_symtab(state, state->annotations
         ? state->annotations->symtab : nullptr);
     const core_list_t(core_translation_unit_ptr_t) *units =
@@ -608,9 +675,12 @@ n00bb_range_invalidate_call_mutations(n00bb_tu_state_t *state)
             if (n00bb_range_mutable(entry->key))
                 n00bb_range_invalidate_symbol(state, entry->key);
     }
-    core_dict_foreach(&state->integer_symbol_ranges, entry)
-        if (n00bb_range_mutable(entry->key))
-            n00bb_range_forget_symbol(state, entry->key);
+    for (size_t i = state->integer_symbol_ranges.entries.len; i > 0; i--) {
+        parse_sym_entry_t *symbol =
+            state->integer_symbol_ranges.entries.data[i - 1].symbol;
+        if (n00bb_range_mutable(symbol))
+            n00bb_range_forget_symbol(state, symbol);
+    }
 }
 
 static void
@@ -638,13 +708,14 @@ n00bb_range_update_symbol(parse_grammar_t *grammar, parse_tree_t *node,
     if (!symbol) return;
     if (!declaration)
         n00bb_range_invalidate_symbol(state, symbol);
-    if (n00bb_range_inside_control(grammar, node)
+    if (n00bb_range_inside_control(grammar, state, node)
         && !n00bb_range_in_active_branch(grammar, state, node)) {
         n00bb_range_forget_symbol(state, symbol);
         return;
     }
 
-    bool in_function = n00bb_range_inside_function(grammar, node);
+    bool in_function = n00bb_enclosing_function_node(grammar,
+        parse_tree_parent(node)) != nullptr;
     if ((in_function && !scope_is_within_function(symbol->scope))
         || (!in_function && scope_is_within_function(symbol->scope))) {
         n00bb_range_forget_symbol(state, symbol);
@@ -662,7 +733,7 @@ n00bb_range_update_symbol(parse_grammar_t *grammar, parse_tree_t *node,
     parse_tree_t *value = parse_tree_resolve_child_ref(grammar, node,
                                                         assign->value_ref);
     ir_interval_t range = {0};
-    if (!value || !n00bb_current_integer_range(state, value, &range)) {
+    if (!value || !n00bb_current_integer_range(value, &range)) {
         n00bb_range_forget_symbol(state, symbol);
         return;
     }
@@ -671,37 +742,32 @@ n00bb_range_update_symbol(parse_grammar_t *grammar, parse_tree_t *node,
 }
 
 static bool
-n00bb_range_child(n00bb_tu_state_t *state, parse_tree_t *node, size_t index,
-                  ir_interval_t *range)
+child_range(parse_tree_t *node, size_t index, ir_interval_t *range)
 {
-    return n00bb_current_integer_range(state, core_tree_child(node, index),
-                                       range);
+    return n00bb_current_integer_range(core_tree_child(node, index), range);
 }
 
 static ir_op_t
-n00bb_range_binary_op(parse_grammar_t *grammar, parse_tree_t *node)
+n00bb_range_binary_op(uint32_t roles, parse_tree_t *node)
 {
     if (core_tree_num_children(node) != 3) return IR_OP_COUNT;
     core_string_t op = first_token_text(core_tree_child(node, 1));
-    if (nt_is(grammar, node, CORE_STRING_STATIC("add-expr")))
+    if (roles & RANGE_ADD)
         return core_string_eq(op, CORE_STRING_STATIC("+")) ? IR_OP_ADD
             : core_string_eq(op, CORE_STRING_STATIC("-")) ? IR_OP_SUB
             : IR_OP_COUNT;
-    if (nt_is(grammar, node, CORE_STRING_STATIC("mul-expr")))
+    if (roles & RANGE_MUL)
         return core_string_eq(op, CORE_STRING_STATIC("*")) ? IR_OP_MUL
             : core_string_eq(op, CORE_STRING_STATIC("/")) ? IR_OP_DIV
             : core_string_eq(op, CORE_STRING_STATIC("%")) ? IR_OP_REM
             : IR_OP_COUNT;
-    if (nt_is(grammar, node, CORE_STRING_STATIC("shift-expr")))
+    if (roles & RANGE_SHIFT)
         return core_string_eq(op, CORE_STRING_STATIC("<<")) ? IR_OP_SHL
             : core_string_eq(op, CORE_STRING_STATIC(">>")) ? IR_OP_SHR
             : IR_OP_COUNT;
-    if (nt_is(grammar, node, CORE_STRING_STATIC("bitand-expr")))
-        return IR_OP_AND;
-    if (nt_is(grammar, node, CORE_STRING_STATIC("bitor-expr")))
-        return IR_OP_OR;
-    if (nt_is(grammar, node, CORE_STRING_STATIC("bitxor-expr")))
-        return IR_OP_XOR;
+    if (roles & RANGE_BITAND) return IR_OP_AND;
+    if (roles & RANGE_BITOR) return IR_OP_OR;
+    if (roles & RANGE_BITXOR) return IR_OP_XOR;
     return IR_OP_COUNT;
 }
 
@@ -755,7 +821,9 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
     ir_interval_t range = {0};
     bool known = false;
     int64_t constant = 0;
-    if (nt_is(grammar, node, CORE_STRING_STATIC("simple-lit"))) {
+    uint32_t roles = range_roles(grammar, state, node);
+    ir_op_t binary = n00bb_range_binary_op(roles, node);
+    if (roles & RANGE_SIMPLE_LIT) {
         ir_lit_t literal = {0};
         if (!n00bb_parse_switch_integer(first_token_text(node), &literal)
             || literal.mag > (ir_uint_t)ir_int_max) return;
@@ -768,16 +836,13 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         range = ir_interval_point(constant);
         known = true;
     }
-    else if (n00bb_range_binary_op(grammar, node) != IR_OP_COUNT) {
+    else if (binary != IR_OP_COUNT) {
         ir_interval_t left = {0}, right = {0};
-        known = n00bb_range_child(state, node, 0, &left)
-            && n00bb_range_child(state, node, 2, &right);
-        if (known)
-            range = ir_interval_apply(n00bb_range_binary_op(grammar, node),
-                                      left, right);
+        known = child_range(node, 0, &left)
+            && child_range(node, 2, &right);
+        if (known) range = ir_interval_apply(binary, left, right);
     }
-    else if (nt_is(grammar, node, CORE_STRING_STATIC("unary-expr"))
-             && child_count == 2) {
+    else if ((roles & RANGE_UNARY) && child_count == 2) {
         core_string_t op = parse_tree_leaf_text(core_tree_child(node, 0));
         parse_tree_t *operand = core_tree_child(node, 1);
         bool sign = core_string_eq(op, CORE_STRING_STATIC("-"))
@@ -785,16 +850,15 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
         if (sign && parse_tree_integer_literal_origin(operand))
             parse_tree_set_integer_literal_origin(node,
                 parse_tree_integer_literal_origin(operand));
-        known = sign && n00bb_range_child(state, node, 1, &range);
+        known = sign && child_range(node, 1, &range);
         if (known && core_string_eq(op, CORE_STRING_STATIC("-")))
             range = ir_interval_apply(IR_OP_NEG, range, range);
     }
-    else if (nt_is(grammar, node, CORE_STRING_STATIC("primary"))
-             && child_count == 1
-             && !n00bb_current_integer_range(state, core_tree_child(node, 0),
+    else if ((roles & RANGE_PRIMARY) && child_count == 1
+             && !n00bb_current_integer_range(core_tree_child(node, 0),
                                              nullptr))
         known = n00bb_range_primary(state, node, &range);
-    else if (n00bb_integer_range_wrapper(grammar, node)) {
+    else if (roles & RANGE_WRAPPER) {
         size_t ranged = 0;
         parse_tree_t *literal_child = nullptr;
         bool literal_shape = true;
@@ -814,7 +878,7 @@ n00bb_propagate_integer_range_node(parse_grammar_t *grammar,
             }
             else literal_shape = false;
             ir_interval_t child = {0};
-            if (!n00bb_current_integer_range(state, member, &child)) continue;
+            if (!n00bb_current_integer_range(member, &child)) continue;
             range = child;
             ranged++;
         }
@@ -833,18 +897,16 @@ void
 n00bb_range_enter_node(parse_grammar_t *grammar, n00bb_tu_state_t *state,
                        parse_tree_t *node, parse_tree_t *parent)
 {
-    if (nt_is(grammar, node, CORE_STRING_STATIC("func-def"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("context-def")))
-        n00bb_range_clear(&state->integer_symbol_ranges);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("if-stmt")))
-        n00bb_range_enter_if(grammar, state, node);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("body")))
+    uint32_t roles = range_roles(grammar, state, node);
+    if (roles & RANGE_FUNCTION)
+        range_table_clear(&state->integer_symbol_ranges);
+    if (roles & RANGE_IF) n00bb_range_enter_if(grammar, state, node);
+    if (roles & RANGE_BODY)
         (void)n00bb_range_begin_branch(grammar, state, parent);
-    if (!state->integer_range_root
-        && nt_is(grammar, node, CORE_STRING_STATIC("expression"))) {
+    if (!state->integer_range_root && (roles & RANGE_EXPRESSION)) {
         state->integer_range_root = node;
         state->integer_range_use_symbol_facts =
-            !n00bb_range_inside_control(grammar, node)
+            !n00bb_range_inside_control(grammar, state, node)
             || n00bb_range_in_active_branch(grammar, state, node);
         core_dict_init(&state->integer_range_references, nullptr, nullptr);
     }
@@ -867,45 +929,40 @@ n00bb_range_after_annotation(parse_grammar_t *grammar,
                              n00bb_tu_state_t *state,
                              parse_tree_t *node, parse_tree_t *parent)
 {
-    if (nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("assign-stmt")))
+    uint32_t roles = range_roles(grammar, state, node);
+    if (roles & (RANGE_SYM_DECL | RANGE_ASSIGN))
         n00bb_range_update_symbol(grammar, node, state,
-            nt_is(grammar, node, CORE_STRING_STATIC("sym-decl")), false);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("binop-assign-stmt")))
+                                  (roles & RANGE_SYM_DECL) != 0, false);
+    if (roles & RANGE_BINOP_ASSIGN)
         n00bb_range_update_symbol(grammar, node, state, false, true);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("body")))
+    if (roles & RANGE_BODY)
         (void)n00bb_range_end_branch(grammar, state, parent);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("if-stmt")))
-        n00bb_range_end_if(state, node);
+    if (roles & RANGE_IF) n00bb_range_end_if(state, node);
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
     if (rule && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)) {
         n00bb_range_invalidate_call_mutations(state);
-        if (!n00bb_range_inside_function(grammar, node)
+        if (!n00bb_enclosing_function_node(grammar, parse_tree_parent(node))
             && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME)
             n00bb_range_invalidate_static_symbols(state);
     }
-    if ((n00bb_range_control_node(grammar, node)
-            && !nt_is(grammar, node, CORE_STRING_STATIC("if-stmt"))
-            && !nt_is(grammar, node, CORE_STRING_STATIC("elif-clause"))
-            && !nt_is(grammar, node, CORE_STRING_STATIC("else-clause")))
-        || nt_is(grammar, node, CORE_STRING_STATIC("func-def"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("context-def")))
-        n00bb_range_clear(&state->integer_symbol_ranges);
+    if (((roles & RANGE_CONTROL) && !(roles & (RANGE_IF | RANGE_CLAUSE)))
+        || (roles & RANGE_FUNCTION))
+        range_table_clear(&state->integer_symbol_ranges);
 }
 
 void
 n00bb_range_state_release(n00bb_tu_state_t *state)
 {
     if (!state) return;
-    n00bb_range_release(&state->integer_symbol_ranges);
+    range_table_release(&state->integer_symbol_ranges);
     core_dict_free(&state->integer_range_invalidated_symbols);
-    n00bb_range_release(&state->integer_solved_symbols);
+    solved_ranges_release(&state->integer_solved_symbols);
     core_dict_free(&state->integer_boundary_sites);
     core_dict_free(&state->integer_narrowing_sites);
     core_dict_free(&state->integer_reference_taken);
     for (size_t i = 0; i < state->integer_range_branches.len; i++) {
-        n00bb_range_release(&state->integer_range_branches.data[i].incoming);
-        n00bb_range_release(&state->integer_range_branches.data[i].merged);
+        range_table_release(&state->integer_range_branches.data[i].incoming);
+        range_table_release(&state->integer_range_branches.data[i].merged);
     }
     core_list_free(state->integer_range_branches);
 }

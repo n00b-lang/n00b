@@ -1,6 +1,7 @@
 #include "compiler_tu.h"
 #include "compiler_link.h"
 #include "ir/interval.h"
+#include "ir/operands.h"
 
 enum { GROWTH_LIMIT = 8, ROUND_LIMIT = 256, NARROW_LIMIT = 4 };
 enum { TRIP_NONE, TRIP_BOUNDED, TRIP_FAILED };
@@ -31,6 +32,30 @@ typedef struct {
     core_dict_t index;
     core_list_t(range_node_t) nodes;
 } range_graph_t;
+
+enum { INCREMENT_UNKNOWN, INCREMENT_NONE, INCREMENT_LEFT, INCREMENT_RIGHT };
+
+typedef struct {
+    n00bb_integer_edge_t *edge;
+    n00bb_tu_state_t *state;
+    range_node_t *result;
+    range_node_t *left;
+    range_node_t *right;
+    uint8_t increment;
+} flow_edge_t;
+core_list_decl(flow_edge_t);
+
+typedef struct {
+    uint32_t node;
+    uint32_t edge;
+} flow_read_t;
+core_list_decl(flow_read_t);
+
+typedef struct {
+    core_list_t(flow_edge_t) edges;
+    uint32_t *reader_start;
+    uint32_t *readers;
+} flow_t;
 
 static th_integer_class
 integer_class_of(th_ctx *ctx, th_type *type)
@@ -125,13 +150,19 @@ n00bb_integer_literal_variable(n00bb_tu_state_t *state, parse_tree_t *site,
 static parse_sym_entry_t *
 declared_integer_symbol(parse_tree_t *node)
 {
-    parse_tree_t *lvalue = n00bb_simple_lvalue(node);
-    parse_node_resolution_t resolution = lvalue
-        ? parse_tree_resolution(lvalue) : (parse_node_resolution_t){0};
-    parse_sym_entry_t *symbol = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-        ? resolution.target.symbol : nullptr;
-    return symbol && symbol->kind == PARSE_SYM_VARIABLE
-        && is_integer_type(symbol->type) ? symbol : nullptr;
+    parse_sym_entry_t *symbol = n00bb_range_variable_of(node);
+    return symbol && is_integer_type(symbol->type) ? symbol : nullptr;
+}
+
+static parse_tree_t *
+unwrapped_once(parse_tree_t *node)
+{
+    size_t count = node && !core_tree_is_leaf(node)
+        ? core_tree_num_children(node) : 0;
+    return count == 1 ? core_tree_child(node, 0)
+        : count == 3 && parse_tree_leaf_is(core_tree_child(node, 0),
+                                           CORE_STRING_STATIC("("))
+        ? core_tree_child(node, 1) : nullptr;
 }
 
 n00bb_integer_term_t
@@ -144,16 +175,11 @@ n00bb_integer_term_of(n00bb_tu_state_t *state, parse_tree_t *node)
     if (symbol)
         return (n00bb_integer_term_t){N00BB_INTEGER_TERM_SYMBOL,
                                       symbol->type, symbol};
-    for (parse_tree_t *at = node; at && !core_tree_is_leaf(at);) {
+    for (parse_tree_t *at = node; at && !core_tree_is_leaf(at);
+         at = unwrapped_once(at))
         if (core_dict_contains(&state->integer_range_nodes, at))
             return (n00bb_integer_term_t){N00BB_INTEGER_TERM_NODE,
                                           parse_tree_type(at), at};
-        size_t count = core_tree_num_children(at);
-        at = count == 1 ? core_tree_child(at, 0)
-            : count == 3 && parse_tree_leaf_is(core_tree_child(at, 0),
-                                               CORE_STRING_STATIC("("))
-            ? core_tree_child(at, 1) : nullptr;
-    }
     return (n00bb_integer_term_t){
         type ? N00BB_INTEGER_TERM_TYPE : N00BB_INTEGER_TERM_NONE, type,
         nullptr};
@@ -162,31 +188,19 @@ n00bb_integer_term_of(n00bb_tu_state_t *state, parse_tree_t *node)
 static parse_tree_t *
 guard_unwrap(parse_tree_t *node)
 {
-    while (node && !core_tree_is_leaf(node)) {
-        size_t count = core_tree_num_children(node);
-        if (count == 1) node = core_tree_child(node, 0);
-        else if (count == 3 && parse_tree_leaf_is(core_tree_child(node, 0),
-                                                  CORE_STRING_STATIC("(")))
-            node = core_tree_child(node, 1);
-        else break;
-    }
+    for (parse_tree_t *next = unwrapped_once(node); next;
+         next = unwrapped_once(node))
+        node = next;
     return node;
 }
 
 static ir_op_t
 guard_comparison(parse_tree_t *operator, bool flipped)
 {
-    core_string_t text = operator ? first_token_text(operator)
-                                  : (core_string_t){0};
-    if (core_string_eq(text, CORE_STRING_STATIC("<")))
-        return flipped ? IR_OP_GT : IR_OP_LT;
-    if (core_string_eq(text, CORE_STRING_STATIC("<=")))
-        return flipped ? IR_OP_GE : IR_OP_LE;
-    if (core_string_eq(text, CORE_STRING_STATIC(">")))
-        return flipped ? IR_OP_LT : IR_OP_GT;
-    if (core_string_eq(text, CORE_STRING_STATIC(">=")))
-        return flipped ? IR_OP_LE : IR_OP_GE;
-    return IR_OP_COUNT;
+    ir_op_t op = operator ? n00bb_comparison_op(first_token_text(operator))
+                          : IR_OP_COUNT;
+    if (op == IR_OP_EQ || op == IR_OP_NE) return IR_OP_COUNT;
+    return flipped ? ir_comparison_swapped(op) : op;
 }
 
 static bool
@@ -200,14 +214,16 @@ add_guard(n00bb_tu_state_t *state, n00bb_integer_edge_t *edge,
           parse_sym_entry_t *symbol, ir_op_t op, parse_tree_t *bound)
 {
     if (!guard_symbol(symbol) || op == IR_OP_COUNT
-        || edge->guard_count >= N00BB_INTEGER_GUARD_LIMIT
         || (symbol != edge->left_symbol && symbol != edge->right_symbol))
         return;
     n00bb_integer_term_t term = n00bb_integer_term_of(state, bound);
     if (term.kind == N00BB_INTEGER_TERM_NONE) return;
-    edge->guards[edge->guard_count++] = (n00bb_integer_guard_t){
+    if (!edge->guard_count)
+        edge->guard_start = (uint32_t)state->integer_guards.len;
+    core_list_push(state->integer_guards, ((n00bb_integer_guard_t){
         .symbol = symbol, .bound = term, .op = op,
-    };
+    }));
+    edge->guard_count++;
 }
 
 typedef struct {
@@ -246,91 +262,81 @@ collect_guards(parse_tree_t *condition,
 }
 
 static bool
-tree_contains(parse_tree_t *outer, parse_tree_t *node)
+argument_writes(parse_tree_t *arguments, parse_sym_entry_t *symbol)
 {
-    for (parse_tree_t *at = node; at; at = parse_tree_parent(at))
-        if (at == outer) return true;
-    return false;
-}
-
-static bool
-assigns_before(parse_grammar_t *grammar, parse_tree_t *node,
-               parse_tree_t *site, parse_sym_entry_t *symbol, bool *reached)
-{
-    if (*reached || !node || core_tree_is_leaf(node)) return false;
-    if (node == site) {
-        *reached = true;
-        return false;
-    }
-    bool contains = tree_contains(node, site);
-    if (!contains
-        && ((nt_is(grammar, node, CORE_STRING_STATIC("assign-stmt"))
-                || nt_is(grammar, node,
-                         CORE_STRING_STATIC("binop-assign-stmt")))
-            && simple_expression_symbol(core_tree_child(node, 0)) == symbol))
-        return true;
-    if (!contains && nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))
-        && parse_tree_sym(node) == symbol)
-        return true;
-    if (!contains && nt_is(grammar, node, CORE_STRING_STATIC("call-args")))
-        for (size_t i = 0; i < core_tree_num_children(node); i++) {
-            parse_tree_t *group = core_tree_child(node, i);
-            for (size_t a = 0; !core_tree_is_leaf(group)
-                 && a < core_tree_num_children(group); a++) {
-                parse_tree_t *argument = core_tree_child(group, a);
-                if (!core_tree_is_leaf(argument)
-                    && core_tree_num_children(argument)
-                    && simple_expression_symbol(core_tree_child(argument,
-                        core_tree_num_children(argument) - 1)) == symbol)
-                    return true;
-                if (simple_expression_symbol(argument) == symbol)
-                    return true;
-            }
+    for (size_t i = 0; i < core_tree_num_children(arguments); i++) {
+        parse_tree_t *group = core_tree_child(arguments, i);
+        for (size_t a = 0; !core_tree_is_leaf(group)
+             && a < core_tree_num_children(group); a++) {
+            parse_tree_t *argument = core_tree_child(group, a);
+            if (!core_tree_is_leaf(argument)
+                && core_tree_num_children(argument)
+                && simple_expression_symbol(core_tree_child(argument,
+                    core_tree_num_children(argument) - 1)) == symbol)
+                return true;
+            if (simple_expression_symbol(argument) == symbol) return true;
         }
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        if (assigns_before(grammar, core_tree_child(node, i), site, symbol,
-                           reached)) return true;
-        if (*reached) return false;
     }
     return false;
 }
 
 static bool
-reference_taken(parse_tree_t *node, parse_sym_entry_t *symbol)
+assigned_in(parse_grammar_t *grammar, parse_tree_t *node,
+            parse_sym_entry_t *symbol)
 {
     if (!node || core_tree_is_leaf(node)) return false;
-    if (core_tree_num_children(node) == 2
-        && parse_tree_leaf_is(core_tree_child(node, 0),
-                              CORE_STRING_STATIC("ref"))
-        && simple_expression_symbol(core_tree_child(node, 1)) == symbol)
+    if ((nt_is(grammar, node, CORE_STRING_STATIC("assign-stmt"))
+            || nt_is(grammar, node, CORE_STRING_STATIC("binop-assign-stmt")))
+        && simple_expression_symbol(core_tree_child(node, 0)) == symbol)
+        return true;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("sym-decl"))
+        && parse_tree_sym(node) == symbol)
+        return true;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("call-args"))
+        && argument_writes(node, symbol))
         return true;
     for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (reference_taken(core_tree_child(node, i), symbol)) return true;
+        if (assigned_in(grammar, core_tree_child(node, i), symbol))
+            return true;
     return false;
 }
 
-static parse_tree_t *
-enclosing_function(parse_grammar_t *grammar, parse_tree_t *node)
+static bool
+assigns_before(parse_grammar_t *grammar, parse_tree_t *scope,
+               parse_tree_t *site, parse_sym_entry_t *symbol)
 {
-    for (parse_tree_t *at = node; at; at = parse_tree_parent(at))
-        if (nt_is(grammar, at, CORE_STRING_STATIC("func-def"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("context-def")))
-            return at;
-    return nullptr;
+    for (parse_tree_t *on_path = site; on_path && on_path != scope;
+         on_path = parse_tree_parent(on_path)) {
+        parse_tree_t *parent = parse_tree_parent(on_path);
+        for (size_t i = 0; parent && i < core_tree_num_children(parent)
+             && core_tree_child(parent, i) != on_path; i++)
+            if (assigned_in(grammar, core_tree_child(parent, i), symbol))
+                return true;
+    }
+    return false;
+}
+
+static void
+note_references(n00bb_tu_state_t *state, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    parse_sym_entry_t *symbol = core_tree_num_children(node) == 2
+            && parse_tree_leaf_is(core_tree_child(node, 0),
+                                  CORE_STRING_STATIC("ref"))
+        ? simple_expression_symbol(core_tree_child(node, 1)) : nullptr;
+    if (symbol) core_dict_put(&state->integer_reference_taken, symbol, 2);
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        note_references(state, core_tree_child(node, i));
 }
 
 static bool
 reference_taken_cached(n00bb_tu_state_t *state, parse_tree_t *function,
                        parse_sym_entry_t *symbol)
 {
-    bool found = false;
-    uintptr_t known = (uintptr_t)core_dict_get(
-        &state->integer_reference_taken, symbol, &found);
-    if (found) return known == 2;
-    bool taken = reference_taken(function, symbol);
-    core_dict_put(&state->integer_reference_taken, symbol,
-                  (void *)(uintptr_t)(taken ? 2 : 1));
-    return taken;
+    if (core_dict_add(&state->integer_reference_taken, function, 1))
+        note_references(state, function);
+    return (uintptr_t)core_dict_get(&state->integer_reference_taken, symbol,
+                                    nullptr) == 2;
 }
 
 static void
@@ -338,7 +344,7 @@ site_guards(n00bb_tu_state_t *state, parse_tree_t *site,
             core_list_t(guard_candidate_t) *valid)
 {
     parse_grammar_t *grammar = state->grammar;
-    parse_tree_t *function = enclosing_function(grammar, site);
+    parse_tree_t *function = n00bb_enclosing_function_node(grammar, site);
     core_list_t(guard_candidate_t) found = core_list_new(guard_candidate_t);
     for (parse_tree_t *at = site, *parent = at ? parse_tree_parent(at)
                                                : nullptr;
@@ -351,19 +357,16 @@ site_guards(n00bb_tu_state_t *state, parse_tree_t *site,
             && core_tree_child(parent, 2) == at) {
             found.len = 0;
             collect_guards(core_tree_child(parent, 1), &found);
-            for (size_t g = 0; g < found.len; g++) {
-                bool reached = false;
+            for (size_t g = 0; g < found.len; g++)
                 if (guard_symbol(found.data[g].symbol) && function
                     && !reference_taken_cached(state, function,
                                                found.data[g].symbol)
                     && !assigns_before(grammar, at, site,
-                                       found.data[g].symbol, &reached))
+                                       found.data[g].symbol))
                     core_list_push(*valid, found.data[g]);
-            }
         }
         if (loop || nt_is(grammar, parent, CORE_STRING_STATIC("for-stmt"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("func-def"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("context-def")))
+            || n00bb_function_node(grammar, parent))
             break;
     }
     core_list_free(found);
@@ -412,7 +415,7 @@ guard_site_range(n00bb_tu_state_t *state, parse_tree_t *site,
     for (size_t g = 0; g < valid.len; g++) {
         ir_interval_t bound = {0}, narrowed = {0};
         if (valid.data[g].symbol == symbol
-            && n00bb_current_integer_range(state, valid.data[g].bound, &bound)
+            && n00bb_current_integer_range(valid.data[g].bound, &bound)
             && ir_interval_meet(*range,
                    guard_limit(valid.data[g].op, bound), &narrowed))
             *range = narrowed;
@@ -444,9 +447,7 @@ bounded_loop(parse_grammar_t *grammar, parse_tree_t *site)
     parse_tree_t *found = nullptr;
     for (parse_tree_t *at = site, *parent = parse_tree_parent(at); parent;
          at = parent, parent = parse_tree_parent(parent)) {
-        if (nt_is(grammar, parent, CORE_STRING_STATIC("func-def"))
-            || nt_is(grammar, parent, CORE_STRING_STATIC("context-def")))
-            return found;
+        if (n00bb_function_node(grammar, parent)) return found;
         if (!loop_node(grammar, parent)) continue;
         if (found || !range_loop(grammar, parent)
             || core_tree_child(parent, 4) != at)
@@ -499,14 +500,15 @@ n00bb_integer_node_result(n00bb_tu_state_t *state, parse_tree_t *site,
                           ir_op_t op, parse_tree_t *left, parse_tree_t *right)
 {
     if (core_dict_contains(&state->integer_range_nodes, site)) return;
-    core_dict_put(&state->integer_range_nodes, site, site);
-    if (n00bb_integer_flow(state, site, op,
-            (n00bb_integer_term_t){N00BB_INTEGER_TERM_NODE,
-                                   parse_tree_type(site), site},
-            n00bb_integer_term_of(state, left),
-            right ? n00bb_integer_term_of(state, right)
-                  : (n00bb_integer_term_t){0}))
-        guard_last_edge(state, left, right);
+    bool flowed = n00bb_integer_flow(state, site, op,
+        (n00bb_integer_term_t){N00BB_INTEGER_TERM_NODE,
+                               parse_tree_type(site), site},
+        n00bb_integer_term_of(state, left),
+        right ? n00bb_integer_term_of(state, right)
+              : (n00bb_integer_term_t){0});
+    core_dict_put(&state->integer_range_nodes, site,
+                  flowed ? state->integer_edges.len : 0);
+    if (flowed) guard_last_edge(state, left, right);
 }
 
 void
@@ -529,13 +531,9 @@ same_term(n00bb_integer_term_t left, n00bb_integer_term_t right)
 static const n00bb_integer_edge_t *
 value_edge(n00bb_tu_state_t *state, parse_tree_t *value)
 {
-    for (size_t e = state->integer_edges.len, seen = 0; e > 0 && seen < 16;
-         e--, seen++) {
-        const n00bb_integer_edge_t *edge = &state->integer_edges.data[e - 1];
-        if (edge->site == value && edge->result.kind == N00BB_INTEGER_TERM_NODE
-            && edge->result.key == value) return edge;
-    }
-    return nullptr;
+    size_t slot = (uintptr_t)core_dict_get(&state->integer_range_nodes, value,
+                                           nullptr);
+    return slot ? &state->integer_edges.data[slot - 1] : nullptr;
 }
 
 void
@@ -578,35 +576,18 @@ n00bb_integer_copy(n00bb_tu_state_t *state, parse_tree_t *site,
         guard_last_edge(state, value, nullptr);
 }
 
-static bool
-type_interval(th_type *type, ir_interval_t *out)
-{
-    return type && n00bb_type_interval(type, out);
-}
-
 static th_type *
 best_fit(th_ctx *types, const range_node_t *class, bool unsigned_only)
 {
-    const core_string_t unsigned_names[] = {
-        CORE_STRING_STATIC("u8"), CORE_STRING_STATIC("u16"),
-        CORE_STRING_STATIC("u32"), CORE_STRING_STATIC("u64"),
-        CORE_STRING_STATIC("u128"),
-    };
-    const core_string_t signed_names[] = {
-        CORE_STRING_STATIC("i8"), CORE_STRING_STATIC("i16"),
-        CORE_STRING_STATIC("i32"), CORE_STRING_STATIC("i64"),
-        CORE_STRING_STATIC("i128"),
-    };
     bool is_signed = class->lo < 0 && !class->wide;
     if (is_signed && unsigned_only) return nullptr;
-    for (size_t i = 0; i < 5; i++) {
+    for (size_t i = 0; i < N00BB_INTEGER_WIDTHS; i++) {
         uint64_t width = (uint64_t)8 << i;
         if (!class->wide && !ir_interval_fits(
                 (ir_interval_t){class->lo, class->hi}, width, is_signed))
             continue;
         if (class->wide && width < 128) continue;
-        return th_name(types, canonical_builtin_type_name(
-            is_signed ? signed_names[i] : unsigned_names[i]));
+        return n00bb_integer_type_of_width(types, width, is_signed);
     }
     return nullptr;
 }
@@ -624,7 +605,7 @@ allowed_fit(th_type *variable, const range_node_t *class)
         for (size_t t = 0; t < constraint.one_of.n; t++) {
             th_type *candidate = constraint.one_of.types[t];
             ir_interval_t bounds = {0};
-            if (!type_interval(candidate, &bounds)) continue;
+            if (!n00bb_type_interval(candidate, &bounds)) continue;
             bool fits = !class->wide && ir_interval_meet(range, bounds,
                                                          nullptr)
                 && bounds.lo <= range.lo && range.hi <= bounds.hi;
@@ -652,24 +633,9 @@ report(const range_node_t *class, core_string_t message)
         message, link_source_location(class->site));
 }
 
-static void
-append_integer(core_buffer_t *buffer, ir_int_t value, bool wide)
-{
-    char digits[48];
-    size_t length = 0;
-    ir_uint_t magnitude = wide ? ~(ir_uint_t)0
-        : value < 0 ? (ir_uint_t)(-(value + 1)) + 1 : (ir_uint_t)value;
-    do {
-        digits[length++] = (char)('0' + (int)(magnitude % 10));
-        magnitude /= 10;
-    } while (magnitude);
-    if (!wide && value < 0) core_buffer_append(buffer, "-", 1);
-    while (length) core_buffer_append(buffer, &digits[--length], 1);
-}
-
 static bool
-check_seed_fits(n00bb_tu_state_t *state, core_translation_unit_t *unit,
-                const n00bb_integer_seed_t *seed, th_type *type)
+check_seed_fits(n00bb_tu_state_t *state, const n00bb_integer_seed_t *seed,
+                th_type *type)
 {
     uint64_t width = 0;
     bool is_signed = false;
@@ -681,16 +647,8 @@ check_seed_fits(n00bb_tu_state_t *state, core_translation_unit_t *unit,
                               : ir_interval_fits((ir_interval_t){seed->lo,
                                     seed->hi}, width, is_signed)))
         return true;
-    core_string_t name = th_print(state->types, type);
-    core_buffer_t message = {0};
-    core_buffer_append(&message, "integer constant ", 17);
-    append_integer(&message, seed->lo, seed->wide);
-    core_buffer_printf(&message, " does not fit %.*s",
-                       (int)name.u8_bytes, name.data);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0041"),
-        core_buffer_string(&message), link_source_location(seed->site));
-    core_buffer_release(&message);
+    n00bb_report_integer_misfit(state, seed->site,
+        CORE_STRING_STATIC("constant"), ir_interval_point(seed->lo), type);
     return false;
 }
 
@@ -736,16 +694,23 @@ term_key(n00bb_integer_term_t term)
 }
 
 static range_node_t *
+find_node(range_graph_t *graph, n00bb_integer_term_t term)
+{
+    void *key = term_key(term);
+    uintptr_t slot = key ? (uintptr_t)core_dict_get(&graph->index, key,
+                                                    nullptr)
+                         : 0;
+    return slot ? &graph->nodes.data[slot - 1] : nullptr;
+}
+
+static range_node_t *
 node_for(range_graph_t *graph, n00bb_integer_term_t term,
          core_translation_unit_t *unit, n00bb_tu_state_t *state,
          parse_tree_t *site)
 {
+    range_node_t *found = find_node(graph, term);
     void *key = term_key(term);
-    if (!key) return nullptr;
-    bool found = false;
-    uintptr_t slot = (uintptr_t)core_dict_get(&graph->index, key, &found);
-    if (found) return &graph->nodes.data[slot - 1];
-    if (!unit) return nullptr;
+    if (found || !key) return found;
     core_list_push(graph->nodes, ((range_node_t){
         .kind = term.kind, .key = key,
         .type = term.kind == N00BB_INTEGER_TERM_TYPE ? th_resolve(term.type)
@@ -754,14 +719,6 @@ node_for(range_graph_t *graph, n00bb_integer_term_t term,
     }));
     core_dict_put(&graph->index, key, (void *)(uintptr_t)graph->nodes.len);
     return &graph->nodes.data[graph->nodes.len - 1];
-}
-
-static range_node_t *
-class_for_type(range_graph_t *graph, th_type *type)
-{
-    return node_for(graph,
-        (n00bb_integer_term_t){N00BB_INTEGER_TERM_TYPE, type, nullptr},
-        nullptr, nullptr, nullptr);
 }
 
 static th_type *
@@ -775,22 +732,28 @@ seed_type(const n00bb_integer_seed_t *seed)
 }
 
 static bool
-term_interval(range_graph_t *graph, n00bb_integer_term_t term,
-              ir_interval_t *out, bool *unbounded)
+node_term_interval(range_node_t *node, n00bb_integer_term_t term,
+                   ir_interval_t *out, bool *unbounded)
 {
-    range_node_t *node = node_for(graph, term, nullptr, nullptr, nullptr);
     if (node) {
         *out = (ir_interval_t){node->lo, node->hi};
         *unbounded = *unbounded || node->unbounded;
         return node->known;
     }
     *unbounded = true;
-    if (type_interval(term.type ? th_resolve(term.type) : nullptr, out))
+    if (n00bb_type_interval(term.type ? th_resolve(term.type) : nullptr, out))
         return true;
     if (term.type && th_kind_of(th_resolve(term.type)) == TH_VAR)
         return false;
     *out = (ir_interval_t){INT64_MIN, INT64_MAX};
     return term.kind != N00BB_INTEGER_TERM_NONE;
+}
+
+static bool
+term_interval(range_graph_t *graph, n00bb_integer_term_t term,
+              ir_interval_t *out, bool *unbounded)
+{
+    return node_term_interval(find_node(graph, term), term, out, unbounded);
 }
 
 static bool
@@ -801,7 +764,7 @@ widen(range_node_t *node, ir_interval_t range, bool unbounded)
     node->unbounded = node->unbounded || unbounded;
     ir_interval_t bounds = {0};
     if (node->kind != N00BB_INTEGER_TERM_TYPE
-        && type_interval(node->type, &bounds)
+        && n00bb_type_interval(node->type, &bounds)
         && !ir_interval_meet(range, bounds, &range)) return false;
     if (!node->known) {
         node->lo = range.lo;
@@ -817,7 +780,7 @@ widen(range_node_t *node, ir_interval_t range, bool unbounded)
             range.hi > node->hi
                 ? (negative ? INT64_MAX : (ir_int_t)UINT64_MAX) : node->hi};
         if (node->kind != N00BB_INTEGER_TERM_TYPE
-            && type_interval(node->type, &bounds))
+            && n00bb_type_interval(node->type, &bounds))
             (void)ir_interval_meet(grown, bounds, &grown);
         node->lo = grown.lo;
         node->hi = grown.hi;
@@ -831,13 +794,21 @@ widen(range_node_t *node, ir_interval_t range, bool unbounded)
     return true;
 }
 
+static const n00bb_integer_guard_t *
+edge_guard(const n00bb_tu_state_t *state, const n00bb_integer_edge_t *edge,
+           uint32_t index)
+{
+    return &state->integer_guards.data[edge->guard_start + index];
+}
+
 static bool
-guarded(range_graph_t *graph, const n00bb_integer_edge_t *edge,
+guarded(range_graph_t *graph, const flow_edge_t *flow,
         parse_sym_entry_t *symbol, ir_interval_t *range)
 {
     if (!symbol) return true;
-    for (uint8_t g = 0; g < edge->guard_count; g++) {
-        const n00bb_integer_guard_t *guard = &edge->guards[g];
+    const n00bb_integer_edge_t *edge = flow->edge;
+    for (uint32_t g = 0; g < edge->guard_count; g++) {
+        const n00bb_integer_guard_t *guard = edge_guard(flow->state, edge, g);
         bool unbounded = false;
         ir_interval_t bound = {0};
         if (guard->symbol != symbol
@@ -860,17 +831,18 @@ unbounded_cap(ir_interval_t out, ir_interval_t left, ir_interval_t right)
 }
 
 static bool
-edge_output(range_graph_t *graph, const n00bb_integer_edge_t *edge,
+edge_output(range_graph_t *graph, const flow_edge_t *flow,
             ir_interval_t *out, bool *unbounded)
 {
+    const n00bb_integer_edge_t *edge = flow->edge;
     bool binary = edge->right.kind != N00BB_INTEGER_TERM_NONE;
     ir_interval_t left = {0}, right = {0};
-    if (!term_interval(graph, edge->left, &left, unbounded)
-        || !guarded(graph, edge, edge->left_symbol, &left))
+    if (!node_term_interval(flow->left, edge->left, &left, unbounded)
+        || !guarded(graph, flow, edge->left_symbol, &left))
         return false;
     if (!binary) right = left;
-    else if (!term_interval(graph, edge->right, &right, unbounded)
-             || !guarded(graph, edge, edge->right_symbol, &right))
+    else if (!node_term_interval(flow->right, edge->right, &right, unbounded)
+             || !guarded(graph, flow, edge->right_symbol, &right))
         return false;
     *out = edge->op == IR_OP_COPY ? left
         : ir_interval_apply(edge->op, left, right);
@@ -883,7 +855,7 @@ static bool
 node_interval(range_graph_t *graph, n00bb_tu_state_t *state,
               parse_tree_t *node, ir_interval_t *out)
 {
-    if (node && n00bb_current_integer_range(state, node, out)) return true;
+    if (node && n00bb_current_integer_range(node, out)) return true;
     bool unbounded = false;
     n00bb_integer_term_t term = node ? n00bb_integer_term_of(state, node)
                                      : (n00bb_integer_term_t){0};
@@ -929,9 +901,7 @@ inside_loop(parse_grammar_t *grammar, parse_tree_t *site)
 {
     for (parse_tree_t *at = parse_tree_parent(site); at;
          at = parse_tree_parent(at)) {
-        if (nt_is(grammar, at, CORE_STRING_STATIC("func-def"))
-            || nt_is(grammar, at, CORE_STRING_STATIC("context-def")))
-            return false;
+        if (n00bb_function_node(grammar, at)) return false;
         if (loop_node(grammar, at)) return true;
     }
     return false;
@@ -941,41 +911,51 @@ static bool
 activation_local(n00bb_tu_state_t *state, parse_tree_t *site,
                  parse_sym_entry_t *symbol)
 {
-    parse_tree_t *function = enclosing_function(state->grammar, site);
+    parse_tree_t *function = n00bb_enclosing_function_node(state->grammar, site);
     return symbol && function && symbol->decl_node
-        && enclosing_function(state->grammar, symbol->decl_node) == function
+        && n00bb_enclosing_function_node(state->grammar, symbol->decl_node) == function
         && !reference_taken_cached(state, function, symbol);
 }
 
-static bool
-self_increment(range_graph_t *graph, n00bb_tu_state_t *state,
-               const n00bb_integer_edge_t *edge, range_node_t *node,
-               ir_interval_t *step)
+static uint8_t
+increment_side(const flow_edge_t *flow)
 {
-    range_node_t *left = node_for(graph, edge->left, nullptr, nullptr,
-                                  nullptr);
-    range_node_t *right = node_for(graph, edge->right, nullptr, nullptr,
-                                   nullptr);
+    const n00bb_integer_edge_t *edge = flow->edge;
     bool add = edge->op == IR_OP_ADD;
-    bool from_left = left == node && right != node
-        && (add || edge->op == IR_OP_SUB);
-    bool from_right = add && right == node && left != node;
+    bool from_left = flow->left == flow->result
+        && flow->right != flow->result && (add || edge->op == IR_OP_SUB);
+    bool from_right = add && flow->right == flow->result
+        && flow->left != flow->result;
     if ((!from_left && !from_right)
-        || !activation_local(state, edge->site,
+        || !activation_local(flow->state, edge->site,
                              from_left ? edge->left_symbol
-                                       : edge->right_symbol)) return false;
+                                       : edge->right_symbol)
+        || (!edge->loop && inside_loop(flow->state->grammar, edge->site)))
+        return INCREMENT_NONE;
+    return from_left ? INCREMENT_LEFT : INCREMENT_RIGHT;
+}
+
+static bool
+self_increment(range_graph_t *graph, flow_edge_t *flow, ir_interval_t *step)
+{
+    if (flow->increment == INCREMENT_UNKNOWN)
+        flow->increment = increment_side(flow);
+    if (flow->increment == INCREMENT_NONE) return false;
+    const n00bb_integer_edge_t *edge = flow->edge;
+    bool from_left = flow->increment == INCREMENT_LEFT;
     ir_int_t count = 1;
-    if (edge->loop ? !trip_count(graph, state, edge->loop, &count)
-                   : inside_loop(state->grammar, edge->site))
+    if (edge->loop && !trip_count(graph, flow->state, edge->loop, &count))
         return false;
     bool unbounded = false;
     ir_interval_t other = {0};
-    if (!term_interval(graph, from_left ? edge->right : edge->left, &other,
-                       &unbounded)
-        || !guarded(graph, edge, from_left ? edge->right_symbol
+    if (!node_term_interval(from_left ? flow->right : flow->left,
+                            from_left ? edge->right : edge->left, &other,
+                            &unbounded)
+        || !guarded(graph, flow, from_left ? edge->right_symbol
                                            : edge->left_symbol, &other))
         return false;
-    if (!add) other = ir_interval_apply(IR_OP_NEG, other, other);
+    if (edge->op != IR_OP_ADD)
+        other = ir_interval_apply(IR_OP_NEG, other, other);
     ir_interval_t per_iteration = {other.lo < 0 ? other.lo : 0,
                                    other.hi > 0 ? other.hi : 0};
     *step = ir_interval_apply(IR_OP_MUL, ir_interval_point(count),
@@ -984,8 +964,7 @@ self_increment(range_graph_t *graph, n00bb_tu_state_t *state,
 }
 
 static void
-narrow(range_graph_t *graph, core_translation_unit_t *const *units,
-       size_t unit_count)
+narrow(range_graph_t *graph, flow_t *flow)
 {
     size_t count = graph->nodes.len;
     ir_interval_t *fresh = count ? core_alloc_array(ir_interval_t, count)
@@ -1007,37 +986,29 @@ narrow(range_graph_t *graph, core_translation_unit_t *const *units,
             growth[i] = (ir_interval_t){0, 0};
             trip[i] = TRIP_NONE;
         }
-        for (size_t u = 0; u < unit_count; u++) {
-            n00bb_tu_state_t *state = tu_state(units[u]);
-            for (size_t e = 0; state && e < state->integer_edges.len; e++) {
-                n00bb_integer_edge_t *edge = &state->integer_edges.data[e];
-                range_node_t *result = node_for(graph, edge->result,
-                    nullptr, nullptr, nullptr);
-                if (!result || !result->grown) continue;
-                size_t slot = (size_t)(result - graph->nodes.data);
-                ir_interval_t out = {0}, step = {0};
-                bool unbounded = false;
-                bool self = node_for(graph, edge->left, nullptr, nullptr,
-                                     nullptr) == result
-                    || node_for(graph, edge->right, nullptr, nullptr,
-                                nullptr) == result;
-                if (self && trip[slot] != TRIP_FAILED) {
-                    if (self_increment(graph, state, edge, result, &step)) {
-                        growth[slot] = ir_interval_apply(IR_OP_ADD,
-                                                         growth[slot], step);
-                        trip[slot] = TRIP_BOUNDED;
-                    }
-                    else trip[slot] = TRIP_FAILED;
+        for (size_t e = 0; e < flow->edges.len; e++) {
+            flow_edge_t *edge = &flow->edges.data[e];
+            range_node_t *result = edge->result;
+            if (!result || !result->grown) continue;
+            size_t slot = (size_t)(result - graph->nodes.data);
+            ir_interval_t out = {0}, step = {0};
+            bool unbounded = false;
+            bool self = edge->left == result || edge->right == result;
+            if (self && trip[slot] != TRIP_FAILED) {
+                if (self_increment(graph, edge, &step)) {
+                    growth[slot] = ir_interval_apply(IR_OP_ADD, growth[slot],
+                                                     step);
+                    trip[slot] = TRIP_BOUNDED;
                 }
-                if (!edge_output(graph, edge, &out, &unbounded)) continue;
-                fresh[slot] = reached[slot]
-                    ? ir_interval_join(fresh[slot], out) : out;
-                reached[slot] = true;
-                if (self) continue;
-                base[slot] = based[slot]
-                    ? ir_interval_join(base[slot], out) : out;
-                based[slot] = true;
+                else trip[slot] = TRIP_FAILED;
             }
+            if (!edge_output(graph, edge, &out, &unbounded)) continue;
+            fresh[slot] = reached[slot] ? ir_interval_join(fresh[slot], out)
+                                        : out;
+            reached[slot] = true;
+            if (self) continue;
+            base[slot] = based[slot] ? ir_interval_join(base[slot], out) : out;
+            based[slot] = true;
         }
         for (size_t i = 0; i < count; i++)
             if (trip[i] == TRIP_BOUNDED && based[i]) {
@@ -1068,28 +1039,113 @@ narrow(range_graph_t *graph, core_translation_unit_t *const *units,
 }
 
 static void
-solve(range_graph_t *graph, core_translation_unit_t *const *units,
-      size_t unit_count)
+note_read(core_list_t(flow_read_t) *reads, range_graph_t *graph,
+          const range_node_t *node, size_t edge)
 {
+    if (node)
+        core_list_push(*reads, ((flow_read_t){
+            (uint32_t)(node - graph->nodes.data), (uint32_t)edge}));
+}
+
+static flow_t
+flow_build(range_graph_t *graph, core_translation_unit_t *const *units,
+           size_t unit_count)
+{
+    flow_t flow = {.edges = core_list_new(flow_edge_t)};
+    core_list_t(flow_read_t) reads = core_list_new(flow_read_t);
+    for (size_t u = 0; u < unit_count; u++) {
+        n00bb_tu_state_t *state = tu_state(units[u]);
+        for (size_t e = 0; state && e < state->integer_edges.len; e++) {
+            n00bb_integer_edge_t *edge = &state->integer_edges.data[e];
+            flow_edge_t entry = {
+                .edge = edge, .state = state,
+                .result = find_node(graph, edge->result),
+                .left = find_node(graph, edge->left),
+                .right = find_node(graph, edge->right),
+            };
+            size_t id = flow.edges.len;
+            core_list_push(flow.edges, entry);
+            note_read(&reads, graph, entry.left, id);
+            if (entry.right != entry.left)
+                note_read(&reads, graph, entry.right, id);
+            for (uint32_t g = 0; g < edge->guard_count; g++)
+                note_read(&reads, graph,
+                          find_node(graph, edge_guard(state, edge, g)->bound),
+                          id);
+        }
+    }
+    size_t count = graph->nodes.len;
+    flow.reader_start = core_alloc_array(uint32_t, count + 1);
+    flow.readers = core_alloc_array(uint32_t, reads.len + 1);
+    uint32_t *fill = core_alloc_array(uint32_t, count + 1);
+    for (size_t r = 0; r < reads.len; r++)
+        flow.reader_start[reads.data[r].node + 1]++;
+    for (size_t n = 0; n < count; n++)
+        flow.reader_start[n + 1] += flow.reader_start[n];
+    for (size_t r = 0; r < reads.len; r++) {
+        uint32_t node = reads.data[r].node;
+        flow.readers[flow.reader_start[node] + fill[node]++] =
+            reads.data[r].edge;
+    }
+    core_free(fill);
+    core_list_free(reads);
+    return flow;
+}
+
+static void
+flow_free(flow_t *flow)
+{
+    core_list_free(flow->edges);
+    core_free(flow->reader_start);
+    core_free(flow->readers);
+}
+
+static void
+mark_edge(uint64_t *words, uint32_t edge)
+{
+    words[edge / 64] |= UINT64_C(1) << (edge % 64);
+}
+
+static bool
+settle(range_graph_t *graph, flow_t *flow, uint64_t *now, uint64_t *next,
+       size_t words)
+{
+    bool changed = false;
+    for (size_t w = 0; w < words; w++)
+        for (uint64_t bits; (bits = now[w]) != 0;) {
+            uint32_t e = (uint32_t)(w * 64 + (size_t)__builtin_ctzll(bits));
+            now[w] &= now[w] - 1;
+            flow_edge_t *edge = &flow->edges.data[e];
+            ir_interval_t out = {0};
+            bool unbounded = false;
+            if (!edge->result || !edge_output(graph, edge, &out, &unbounded)
+                || !widen(edge->result, out, unbounded)) continue;
+            changed = true;
+            size_t slot = (size_t)(edge->result - graph->nodes.data);
+            for (uint32_t r = flow->reader_start[slot];
+                 r < flow->reader_start[slot + 1]; r++)
+                mark_edge(flow->readers[r] > e ? now : next,
+                          flow->readers[r]);
+        }
+    return changed;
+}
+
+static void
+solve(range_graph_t *graph, flow_t *flow)
+{
+    size_t words = flow->edges.len / 64 + 1;
+    uint64_t *now = core_alloc_array(uint64_t, words);
+    uint64_t *next = core_alloc_array(uint64_t, words);
     for (int pass = 0; pass < 3; pass++) {
+        for (uint32_t e = 0; e < flow->edges.len; e++) mark_edge(now, e);
         bool changed = true;
         for (size_t round = 0; changed && round < ROUND_LIMIT; round++) {
-            changed = false;
-            for (size_t u = 0; u < unit_count; u++) {
-                n00bb_tu_state_t *state = tu_state(units[u]);
-                for (size_t e = 0; state && e < state->integer_edges.len;
-                     e++) {
-                    n00bb_integer_edge_t *edge = &state->integer_edges.data[e];
-                    range_node_t *result = node_for(graph, edge->result,
-                        nullptr, nullptr, nullptr);
-                    ir_interval_t out = {0};
-                    bool unbounded = false;
-                    if (!result || !edge_output(graph, edge, &out,
-                                                &unbounded)) continue;
-                    changed = widen(result, out, unbounded) || changed;
-                }
-            }
+            changed = settle(graph, flow, now, next, words);
+            uint64_t *swap = now;
+            now = next;
+            next = swap;
         }
+        for (size_t w = 0; w < words; w++) now[w] = next[w] = 0;
         for (size_t i = 0; pass < 2 && i < graph->nodes.len; i++) {
             range_node_t *node = &graph->nodes.data[i];
             bool typed = node->kind != N00BB_INTEGER_TERM_TYPE;
@@ -1101,14 +1157,16 @@ solve(range_graph_t *graph, core_translation_unit_t *const *units,
             ir_interval_t fallback = unsigned_class
                 ? (ir_interval_t){0, (ir_int_t)UINT64_MAX}
                 : (ir_interval_t){INT64_MIN, INT64_MAX};
-            if (typed) (void)type_interval(node->type, &fallback);
+            if (typed) (void)n00bb_type_interval(node->type, &fallback);
             node->lo = fallback.lo;
             node->hi = fallback.hi;
             node->known = true;
             node->unbounded = true;
         }
     }
-    narrow(graph, units, unit_count);
+    core_free(now);
+    core_free(next);
+    narrow(graph, flow);
 }
 
 static void
@@ -1129,13 +1187,11 @@ collect_nodes(range_graph_t *graph, core_translation_unit_t *const *units,
                                        nullptr},
                 units[u], state, seed->site);
             if (!class) continue;
-            if (!class->known) {
-                class->lo = seed->lo;
-                class->hi = seed->hi;
-                class->known = true;
-            }
-            if (seed->lo < class->lo) class->lo = seed->lo;
-            if (seed->hi > class->hi) class->hi = seed->hi;
+            class->lo = class->known ? ir_int_lesser(class->lo, seed->lo)
+                                     : seed->lo;
+            class->hi = class->known ? ir_int_greater(class->hi, seed->hi)
+                                     : seed->hi;
+            class->known = true;
             class->wide = class->wide || seed->wide;
             class->seed_lo = class->seeded && class->seed_lo < seed->lo
                 ? class->seed_lo : seed->lo;
@@ -1160,7 +1216,7 @@ collect_nodes(range_graph_t *graph, core_translation_unit_t *const *units,
         if (!symbol || (core_dict_contains(
                 &node->state->integer_tracked_symbols, symbol)
                 && !symbol->aliased_by_count && !symbol->alias_unresolved)
-            || !type_interval(node->type, &bounds)) continue;
+            || !n00bb_type_interval(node->type, &bounds)) continue;
         node->lo = bounds.lo;
         node->hi = bounds.hi;
         node->known = true;
@@ -1168,7 +1224,6 @@ collect_nodes(range_graph_t *graph, core_translation_unit_t *const *units,
         node->unbounded = true;
     }
 }
-
 
 static void
 annotate_ranges(range_graph_t *graph, n00bb_tu_state_t *state,
@@ -1180,18 +1235,18 @@ annotate_ranges(range_graph_t *graph, n00bb_tu_state_t *state,
         annotate_ranges(graph, state, core_tree_child(node, i), interface,
                         interface_only);
     th_type *type = parse_tree_type(node);
-    range_node_t *entry = class_for_type(graph, type);
+    range_node_t *entry = find_node(graph, (n00bb_integer_term_t){
+        N00BB_INTEGER_TERM_TYPE, type, nullptr});
     if (entry && interface_only
         && !core_dict_contains(interface, th_resolve(type))) return;
     if (!entry && core_dict_contains(&state->integer_range_nodes, node))
-        entry = node_for(graph, (n00bb_integer_term_t){
-            N00BB_INTEGER_TERM_NODE, type, node}, nullptr, nullptr, nullptr);
+        entry = find_node(graph, (n00bb_integer_term_t){
+            N00BB_INTEGER_TERM_NODE, type, node});
     if (!entry) {
         parse_sym_entry_t *symbol = declared_integer_symbol(node);
         if (symbol)
-            entry = node_for(graph, (n00bb_integer_term_t){
-                N00BB_INTEGER_TERM_SYMBOL, symbol->type, symbol},
-                nullptr, nullptr, nullptr);
+            entry = find_node(graph, (n00bb_integer_term_t){
+                N00BB_INTEGER_TERM_SYMBOL, symbol->type, symbol});
     }
     if (!entry || !entry->known) return;
     ir_interval_t solved = {entry->lo, entry->hi};
@@ -1199,7 +1254,7 @@ annotate_ranges(range_graph_t *graph, n00bb_tu_state_t *state,
     if (entry->kind == N00BB_INTEGER_TERM_SYMBOL)
         guard_site_range(state, node, &solved);
     ir_interval_t current = {0};
-    if (n00bb_current_integer_range(state, node, &current)
+    if (n00bb_current_integer_range(node, &current)
         && !ir_interval_meet(current, solved, &solved)) return;
     (void)n00bb_set_integer_range(state, node, solved);
 }
@@ -1212,14 +1267,15 @@ n00bb_integer_boundary(n00bb_tu_state_t *state, parse_tree_t *node,
         core_dict_put(&state->integer_boundary_sites, node, target);
 }
 
-static void
+static bool
 check_boundaries(n00bb_tu_state_t *state)
 {
+    bool ok = true;
     core_dict_foreach(&state->integer_boundary_sites, entry) {
         ir_interval_t range = {0}, bounds = {0};
         th_type *target = th_resolve(entry->value);
         if (!n00bb_type_interval(target, &bounds)
-            || !n00bb_current_integer_range(state, entry->key, &range))
+            || !n00bb_current_integer_range(entry->key, &range))
             continue;
         ir_interval_t guarded_range = range;
         guard_site_range(state, entry->key, &guarded_range);
@@ -1227,18 +1283,23 @@ check_boundaries(n00bb_tu_state_t *state)
             range = guarded_range;
             (void)n00bb_set_integer_range(state, entry->key, range);
         }
-        if (!ir_interval_meet(range, bounds, nullptr))
-            n00bb_report_integer_misfit(state, entry->key, range, target);
+        if (!ir_interval_meet(range, bounds, nullptr)) {
+            n00bb_report_integer_misfit(state, entry->key,
+                CORE_STRING_STATIC("value"), range, target);
+            ok = false;
+        }
         else if (range.lo < bounds.lo || range.hi > bounds.hi)
             n00bb_report_integer_narrowing(state, entry->key, range, target);
     }
     core_dict_free(&state->integer_boundary_sites);
     core_dict_init(&state->integer_boundary_sites, nullptr, nullptr);
+    return ok;
 }
 
-static void
+static bool
 check_shift_counts(core_translation_unit_t *unit, n00bb_tu_state_t *state)
 {
+    bool ok = true;
     for (size_t i = 0; i < state->integer_shift_sites.len; i++) {
         parse_tree_t *site = state->integer_shift_sites.data[i];
         uint64_t width = n00bb_shift_receiver_width(
@@ -1246,15 +1307,19 @@ check_shift_counts(core_translation_unit_t *unit, n00bb_tu_state_t *state)
         uint64_t result = n00bb_shift_receiver_width(parse_tree_type(site));
         if (result > width) width = result;
         ir_interval_t count = {0};
-        if (!width || !n00bb_current_integer_range(state,
+        if (!width || !n00bb_current_integer_range(
                 core_tree_child(site, 2), &count)
             || (count.lo >= 0 && count.lo < (ir_int_t)width)) continue;
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
             unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
             CORE_STRING_STATIC("shift count is outside the receiver width"),
             link_source_location(core_tree_child(site, 2)));
+        ok = false;
     }
     state->integer_shift_sites.len = 0;
+    core_dict_free(&state->integer_shift_seen);
+    core_dict_init(&state->integer_shift_seen, nullptr, nullptr);
+    return ok;
 }
 
 static bool
@@ -1264,10 +1329,11 @@ term_resolved(n00bb_integer_term_t term)
         || !n00bb_open_integer(term.type);
 }
 
-static void
+static bool
 retire_resolved(core_translation_unit_t *const *units, size_t unit_count,
                 bool interface_only)
 {
+    bool ok = true;
     for (size_t u = 0; u < unit_count; u++) {
         n00bb_tu_state_t *state = tu_state(units[u]);
         if (!state) continue;
@@ -1278,19 +1344,33 @@ retire_resolved(core_translation_unit_t *const *units, size_t unit_count,
             if (th_kind_of(type) == TH_VAR)
                 state->integer_seeds.data[kept++] = seed;
             else if (th_is_closed(state->types, type))
-                (void)check_seed_fits(state, units[u], &seed, type);
+                ok = check_seed_fits(state, &seed, type) && ok;
         }
         state->integer_seeds.len = kept;
         if (interface_only) continue;
         kept = 0;
+        size_t guards = 0;
         for (size_t e = 0; e < state->integer_edges.len; e++) {
             n00bb_integer_edge_t edge = state->integer_edges.data[e];
-            if (!term_resolved(edge.result) || !term_resolved(edge.left)
-                || !term_resolved(edge.right))
-                state->integer_edges.data[kept++] = edge;
+            bool keep = !term_resolved(edge.result)
+                || !term_resolved(edge.left) || !term_resolved(edge.right);
+            if (edge.result.kind == N00BB_INTEGER_TERM_NODE
+                && (uintptr_t)core_dict_get(&state->integer_range_nodes,
+                                            edge.result.key, nullptr) == e + 1)
+                core_dict_put(&state->integer_range_nodes, edge.result.key,
+                              keep ? kept + 1 : 0);
+            if (!keep) continue;
+            for (uint32_t g = 0; g < edge.guard_count; g++)
+                state->integer_guards.data[guards + g] =
+                    state->integer_guards.data[edge.guard_start + g];
+            edge.guard_start = (uint32_t)guards;
+            guards += edge.guard_count;
+            state->integer_edges.data[kept++] = edge;
         }
         state->integer_edges.len = kept;
+        state->integer_guards.len = guards;
     }
+    return ok;
 }
 
 bool
@@ -1307,11 +1387,12 @@ n00bb_ground_integers(core_translation_unit_t *const *units,
                             || state->integer_shift_sites.len);
     }
     if (!pending) {
+        bool fits = true;
         for (size_t u = 0; !interface_only && u < unit_count; u++) {
             n00bb_tu_state_t *state = tu_state(units[u]);
-            if (state) check_boundaries(state);
+            if (state) fits = check_boundaries(state) && fits;
         }
-        return true;
+        return fits;
     }
     core_dict_t interface;
     core_dict_init(&interface, nullptr, nullptr);
@@ -1320,7 +1401,9 @@ n00bb_ground_integers(core_translation_unit_t *const *units,
     core_dict_init(&graph.index, nullptr, nullptr);
     collect_nodes(&graph, units, unit_count);
     bool ok = true;
-    solve(&graph, units, unit_count);
+    flow_t flow = flow_build(&graph, units, unit_count);
+    solve(&graph, &flow);
+    flow_free(&flow);
     for (size_t u = 0; u < unit_count; u++) {
         n00bb_tu_state_t *state = tu_state(units[u]);
         if (state)
@@ -1354,12 +1437,12 @@ n00bb_ground_integers(core_translation_unit_t *const *units,
         }
         else *grounded = true;
     }
-    retire_resolved(units, unit_count, interface_only);
+    ok = retire_resolved(units, unit_count, interface_only) && ok;
     for (size_t u = 0; !interface_only && u < unit_count; u++) {
         n00bb_tu_state_t *state = tu_state(units[u]);
         if (!state) continue;
-        check_shift_counts(units[u], state);
-        check_boundaries(state);
+        ok = check_shift_counts(units[u], state) && ok;
+        ok = check_boundaries(state) && ok;
     }
     core_list_free(graph.nodes);
     core_dict_free(&graph.index);

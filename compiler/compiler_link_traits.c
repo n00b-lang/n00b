@@ -972,7 +972,8 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
             parse_sym_entry_t *callee = bound_function_symbol(
                 core_tree_child(parent, 0));
             const n00bb_axiom_t *axiom = n00bb_axiom_of_symbol(callee);
-            parse_tree_t *first = axiom && (axiom->writes & 0x1)
+            parse_tree_t *first = axiom
+                && (axiom->writes & N00BB_AXIOM_PARAM(0))
                 ? call_argument_for_parameter(grammar, parent, callee,
                                               0, false) : nullptr;
             if (first && node_is_within(use, first)

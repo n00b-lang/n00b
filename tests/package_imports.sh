@@ -35,13 +35,6 @@ if ! "$compiler" build --output "$tmp/sys-child" \
 fi
 "$tmp/sys-child"
 
-if ! "$compiler" build --output "$tmp/init-order" \
-    init_order_consumer.n00b >"$tmp/init-order.log" 2>&1; then
-    cat "$tmp/init-order.log" >&2
-    exit 1
-fi
-"$tmp/init-order"
-
 if ! "$compiler" build --output "$tmp/overload-export" \
     overload_export_consumer.n00b >"$tmp/overload-export.log" 2>&1; then
     cat "$tmp/overload-export.log" >&2

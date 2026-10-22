@@ -18,6 +18,7 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
     {"sys.internal.gc.alloc.barrier_pointer_runtime", nullptr, nullptr, 0},
     {"sys.internal.marshal.copy_literal", nullptr, nullptr, 0},
     {"sys.internal.abi.baked_address", "n00b_abi_baked_address", nullptr, 0},
+    {"builtin.abi.tls_relocate", "n00b_abi_tls_relocate", nullptr, 0},
     {"builtin.abi.__type_has_kind", nullptr, nullptr, 0},
     {"sys.internal.box.fill", nullptr, nullptr, 0},
     {"sys.internal.gc.box_store.escape_box", nullptr, nullptr, 0},

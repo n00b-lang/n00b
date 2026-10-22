@@ -418,8 +418,7 @@ n00bb_abi_link_semantic_rows(
                         CORE_STRING_STATIC("builtins")))
                     continue;
                 valid = function_index_for_method(ctx, selected, plan,
-                    &chosen, &function_index) && entries.len < UINT32_MAX;
-                if (valid) core_list_push(entries,
+                    &chosen, &function_index) && entries.len < UINT32_MAX;                if (valid) core_list_push(entries,
                     ((n00b_abi_dispatch_entry_v1){
                         receiver.index, function_index,
                     }));

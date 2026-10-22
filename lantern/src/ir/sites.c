@@ -292,8 +292,9 @@ ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
               void *context, ir_path_exits_t *exits)
 {
     uint8_t *incoming = paths_solve(f, entry, step, context, exits);
+    bool solved = incoming != nullptr;
     core_free(incoming);
-    return incoming != nullptr;
+    return solved;
 }
 
 bool
@@ -392,7 +393,8 @@ user_instruction(const ir_instr_t *in)
 {
     return in->span.start_line && in->span.start_byte && !in->span.implied
         && in->op != IR_OP_JUMP && in->op != IR_OP_RETURN
-        && in->op != IR_OP_BRANCH && in->op != IR_OP_TRAP;
+        && in->op != IR_OP_BRANCH && in->op != IR_OP_TRAP
+        && in->op != IR_OP_UNREACHABLE;
 }
 
 static bool
@@ -410,11 +412,26 @@ constant_condition(const ir_instr_t *terminator, bool *truth)
 }
 
 static const ir_instr_t *
-dead_region_site(ir_dead_code_t *dead, ir_block_t *start, uint32_t after)
+earlier_site(const ir_instr_t *found, const ir_instr_t *in,
+             const ir_instr_t *cause)
+{
+    if (!user_instruction(in)
+        || (cause && (in->span.start_line < cause->span.end_line
+            || (in->span.start_line == cause->span.end_line
+                && in->span.start_col < cause->span.end_col))))
+        return found;
+    return !found || in->span.start_line < found->span.start_line
+        || (in->span.start_line == found->span.start_line
+            && in->span.start_col < found->span.start_col) ? in : found;
+}
+
+static const ir_instr_t *
+dead_region_site(ir_dead_code_t *dead, ir_block_t *start, uint32_t after,
+                 const ir_instr_t *cause)
 {
     const ir_instr_t *found = nullptr;
-    for (uint32_t i = after; i < start->n_instrs && !found; i++)
-        if (user_instruction(start->instrs[i])) found = start->instrs[i];
+    for (uint32_t i = after; i < start->n_instrs; i++)
+        found = earlier_site(found, start->instrs[i], cause);
     core_list_t(site_block_ptr_t) work = core_list_new(site_block_ptr_t);
     core_list_push(work, start);
     for (size_t at = 0; at < work.len; at++) {
@@ -426,9 +443,8 @@ dead_region_site(ir_dead_code_t *dead, ir_block_t *start, uint32_t after)
                 || dead->covered[next->index]) continue;
             dead->covered[next->index] = true;
             core_list_push(work, next);
-            for (uint32_t i = 0; !found && i < next->n_instrs; i++)
-                if (user_instruction(next->instrs[i]))
-                    found = next->instrs[i];
+            for (uint32_t i = 0; i < next->n_instrs; i++)
+                found = earlier_site(found, next->instrs[i], cause);
         }
     }
     core_list_free(work);
@@ -489,7 +505,8 @@ ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges, void *context)
         if (!dead->live[b]) continue;
         if (dead->cut[b] >= 0) {
             add_dead_site(dead, dead_region_site(dead, block,
-                              (uint32_t)dead->cut[b] + 1),
+                              (uint32_t)dead->cut[b] + 1,
+                              block->instrs[dead->cut[b]]),
                           block->instrs[dead->cut[b]],
                           IR_DEAD_AFTER_DIVERGING_CALL);
             continue;
@@ -501,13 +518,15 @@ ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges, void *context)
         if (!untaken || dead->live[untaken->index]
             || dead->covered[untaken->index]) continue;
         dead->covered[untaken->index] = true;
-        add_dead_site(dead, dead_region_site(dead, untaken, 0), terminator,
+        add_dead_site(dead, dead_region_site(dead, untaken, 0, nullptr),
+                      terminator,
                       IR_DEAD_CONSTANT_CONDITION);
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         if (dead->live[b] || dead->covered[b]) continue;
         dead->covered[b] = true;
-        add_dead_site(dead, dead_region_site(dead, f->blocks[b], 0), nullptr,
+        add_dead_site(dead, dead_region_site(dead, f->blocks[b], 0, nullptr),
+                      nullptr,
                       IR_DEAD_UNREACHED);
     }
     return dead;

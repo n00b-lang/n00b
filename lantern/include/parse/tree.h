@@ -270,7 +270,6 @@ parse_tree_set_index_address_access(parse_tree_t *node, bool access)
     return true;
 }
 
-
 static inline void *
 parse_tree_integer_literal_origin(const parse_tree_t *node)
 {

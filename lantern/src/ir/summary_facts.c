@@ -202,7 +202,7 @@ static const rule_t rules[] = {
 
 static const core_string_t result_effects[] = {
     CORE_STRING_STATIC("may_fail"),
-    CORE_STRING_STATIC("may_trap"),
+    CORE_STRING_STATIC("traps_explicit"),
     CORE_STRING_STATIC("may_block"),
     CORE_STRING_STATIC("diverges"),
     CORE_STRING_STATIC("calls_unknown"),
@@ -315,6 +315,10 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
          bit++)
         if (flags & (1u << bit))
             fact(facts, REL_FLAG, symbol, constant(facts, flag_names[bit]), 0);
+    if ((flags & IR_SUMMARY_MAY_TRAP)
+        && (ir_summary_trap_kinds(summary) & IR_STRAP_EXPLICIT))
+        fact(facts, REL_FLAG, symbol,
+             constant(facts, CORE_STRING_STATIC("traps_explicit")), 0);
     for (uint32_t a = 0; a < ir_summary_access_count(summary); a++) {
         const ir_saccess_t *access = ir_summary_access_at(summary, a);
         core_datalog_symbol_t place = place_symbol(facts, &access->place);

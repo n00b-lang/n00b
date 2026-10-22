@@ -110,18 +110,6 @@ keyed(ir_value_numbers_t *n, core_list_t(vn_word_t) *words,
     return result;
 }
 
-static bool
-integer_type(ir_func_t *f, th_type *type, ir_interval_t *bounds)
-{
-    ir_machine_t machine = type ? ir_machine_of(f->owner, type)
-                                : (ir_machine_t){0};
-    if ((machine.class != IR_CLASS_SINT && machine.class != IR_CLASS_UINT)
-        || !machine.width || machine.width > 128) return false;
-    if (bounds)
-        *bounds = ir_interval_of_width(machine.width,
-                                       machine.class == IR_CLASS_SINT);
-    return true;
-}
 
 static bool
 literal_value(const ir_operand_t *operand, ir_int_t *value)
@@ -187,6 +175,21 @@ commutative(ir_op_t op)
     return op == IR_OP_ADD || op == IR_OP_MUL || op == IR_OP_AND
         || op == IR_OP_OR || op == IR_OP_XOR || op == IR_OP_EQ
         || op == IR_OP_NE;
+}
+
+static bool
+reads_variable_storage(const ir_instr_t *in)
+{
+    if (in->op == IR_OP_ADDRESS_OF) return false;
+    for (uint32_t i = 0; i < in->n_operands; i++) {
+        const ir_value_t *value = in->operands[i].kind == IR_OPD_VALUE
+            ? in->operands[i].value : nullptr;
+        if (value && (value->kind == IR_VAL_LOCAL
+                || (value->kind == IR_VAL_GLOBAL && (!value->global
+                    || value->global->mutability != IR_MUT_CONST))))
+            return true;
+    }
+    return false;
 }
 
 static bool
@@ -305,8 +308,9 @@ cast_number(ir_value_numbers_t *n, const ir_instr_t *in)
                                                 : nullptr;
     ir_interval_t from = {0}, to = {0};
     if (!source || !in->dest
-        || !integer_type(n->f, source->type, &from)
-        || !integer_type(n->f, in->dest->type, &to)) return 0;
+        || !ir_interval_of_integer_type(n->f->owner, source->type, &from)
+        || !ir_interval_of_integer_type(n->f->owner, in->dest->type, &to))
+        return 0;
     uint32_t number = operand_number(n, source);
     ir_int_t value = 0;
     if (ir_value_number_constant(n, number, &value))
@@ -355,7 +359,7 @@ instruction_number(ir_value_numbers_t *n, const ir_instr_t *in, th_ctx *types)
     if (in->op == IR_OP_PHI) return phi_number(n, in);
     ir_int_t constant = 0;
     if (in->op == IR_OP_CONST && in->n_operands == 1 && in->dest
-        && integer_type(n->f, in->dest->type, nullptr)
+        && ir_interval_of_integer_type(n->f->owner, in->dest->type, nullptr)
         && literal_value(&in->operands[0], &constant))
         return constant_number(n, constant);
     if (in->op == IR_OP_CAST) {
@@ -363,7 +367,8 @@ instruction_number(ir_value_numbers_t *n, const ir_instr_t *in, th_ctx *types)
         if (number) return number;
     }
     bool memory = memory_read(in->op);
-    if (!pure(in->op) && !(memory && n->memssa)) return fresh(n);
+    if ((!pure(in->op) && !(memory && n->memssa))
+        || (!memory && reads_variable_storage(in))) return fresh(n);
     core_list_t(vn_word_t) words = core_list_new(vn_word_t);
     core_list_push(words, (uint64_t)in->op);
     core_list_push(words, in->dest ? th_hash(types, in->dest->type) : 0);
@@ -453,10 +458,4 @@ ir_value_numbers_same(const ir_value_numbers_t *n, const ir_value_t *a,
     if (a == b) return a != nullptr;
     uint32_t x = ir_value_number(n, a);
     return x && x == ir_value_number(n, b);
-}
-
-uint32_t
-ir_value_number_count(const ir_value_numbers_t *n)
-{
-    return n ? (uint32_t)n->constants.len : 0;
 }

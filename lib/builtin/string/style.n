@@ -205,7 +205,6 @@ private func cmp_sub_spec(left: Sub_Spec, right: Sub_Spec) -> int {
             return 0
         }
     }
-    return 0
 }
 
 private func cmp_style_record(left: Style_Record, right: Style_Record) -> int {
@@ -464,7 +463,6 @@ private func hash_sub_spec(sub: Sub_Spec) -> u128 {
             return acc
         }
     }
-    return acc
 }
 
 private func hash_opt_i8(o: i8?) -> u128 {
@@ -1361,7 +1359,6 @@ private func closes_pending(open: Pending_Style, close: Markup_Segment)
             return false
         }
     }
-    return false
 }
 
 private func build_style_records(segments: List[Markup_Segment])

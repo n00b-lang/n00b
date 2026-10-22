@@ -132,7 +132,7 @@ static const parse_cmdr_cmd_t COMMANDS[] = {
      FMT_FLAGS, CORE_STRING_STATIC("input"), 1, -1},
     {CORE_STRING_STATIC("build"),
      CORE_STRING_STATIC("build an executable from one module or file"),
-     BUILD_FLAGS, CORE_STRING_STATIC("input"), 1, 1},
+     BUILD_FLAGS, CORE_STRING_STATIC("input"), 1, -1},
     {CORE_STRING_STATIC("library"),
      CORE_STRING_STATIC("emit a library interface or ABI metadata"),
      LIBRARY_FLAGS, CORE_STRING_STATIC("input"), 1, -1},

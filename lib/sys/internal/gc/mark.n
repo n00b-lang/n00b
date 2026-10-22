@@ -240,7 +240,6 @@ inline func managed_header(marker: Ref[internal.gc.core.Marker]?,
     }
     else {
         require false
-        return nil
     }
     internal.gc.registry.registry_read_lock(heap)
     let header: Ref[internal.gc.core.Object_Header]? = internal.gc.registry.find_object(
@@ -373,7 +372,6 @@ func option_depth(type_index: u32) -> u64 {
             require false
         }
     }
-    require false
 }
 
 func option_is_set(address: Ref[byte], trace: Ref[internal.abi.Trace_Record],
@@ -901,7 +899,6 @@ func marker_drain(marker: Ref[internal.gc.core.Marker], budget: uint) -> uint {
         marker_flush(marker)
         return done
     }
-    require false
 }
 
 func drain_to_termination(marker: Ref[internal.gc.core.Marker]) {

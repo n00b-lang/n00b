@@ -7,6 +7,7 @@
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/liveness.h"
+#include "ir/operands.h"
 #include "ir/summary.h"
 
 #include "lib/list.h"
@@ -106,13 +107,6 @@ static bool check_alias_edges(const ir_value_t *value, core_string_t prefix,
     return true;
 }
 
-static bool
-block_belongs_to(const ir_func_t *function, const ir_block_t *block)
-{
-    return block && block->owner == function
-        && block->index < function->n_blocks
-        && function->blocks[block->index] == block;
-}
 
 ir_liveness_t
 ir_value_liveness_after(const ir_value_t *value, const ir_instr_t *point)
@@ -493,6 +487,23 @@ set_after(ir_live_t *live, const value_set_t *values, const ir_instr_t *point)
     return unknown ? IR_LIVENESS_UNKNOWN : IR_LIVENESS_DEAD;
 }
 
+static void
+set_after_each(ir_live_t *live, const value_set_t *values,
+               const ir_block_t *block, ir_liveness_t *states,
+               ir_liveness_t *scratch)
+{
+    for (uint32_t i = 0; i < block->n_instrs; i++)
+        states[i] = IR_LIVENESS_DEAD;
+    for (size_t v = 0; v < values->len; v++) {
+        ir_live_after_each(live, values->data[v], block, scratch);
+        for (uint32_t i = 0; i < block->n_instrs; i++)
+            if (scratch[i] == IR_LIVENESS_LIVE
+                || (scratch[i] == IR_LIVENESS_UNKNOWN
+                    && states[i] == IR_LIVENESS_DEAD))
+                states[i] = scratch[i];
+    }
+}
+
 static ir_liveness_t
 set_on_edge(ir_live_t *live, const value_set_t *values,
             const ir_block_t *from, const ir_block_t *to)
@@ -568,7 +579,7 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
             && value->kind != IR_VAL_INSTR)) return false;
     ir_func_t *function = value->owner;
     ir_block_t *entry = ir_block_entry(function);
-    if (!entry || !block_belongs_to(function, entry)) return false;
+    if (!entry || !ir_block_belongs_to(function, entry)) return false;
     bool local_starts_at_entry = value->kind == IR_VAL_LOCAL
         && !local_has_binding_initialization(value, function);
     if (!query->live || !ir_live_valid(query->live)) return false;
@@ -576,19 +587,26 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
     ir_live_t *live = query->live;
     const value_set_t *aliases = &query->aliases;
     bool ok = true;
+    uint32_t widest = 0;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        if (function->blocks[b]->n_instrs > widest)
+            widest = function->blocks[b]->n_instrs;
+    ir_liveness_t *states = calloc(widest ? widest : 1, sizeof(*states));
+    ir_liveness_t *scratch = calloc(widest ? widest : 1, sizeof(*scratch));
+    ok = states && scratch;
     for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
+        set_after_each(live, aliases, block, states, scratch);
         for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
             ir_instr_t *point = block->instrs[i];
-            if (set_after(live, aliases, point) != IR_LIVENESS_DEAD)
-                continue;
+            if (states[i] != IR_LIVENESS_DEAD) continue;
             bool starts_here = value_starts_at_instruction(
                 value, point, local_starts_at_entry);
             bool is_entry_parameter = value->kind == IR_VAL_PARAM
                 && block == entry && i == 0;
             ir_liveness_t before = i
-                ? set_after(live, aliases, block->instrs[i - 1])
+                ? states[i - 1]
                 : set_at_block_entry(live, aliases, block);
             bool terminator_fallback = point == terminator
                 && before == IR_LIVENESS_UNKNOWN;
@@ -620,6 +638,8 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
             });
         }
     }
+    free(states);
+    free(scratch);
     return ok;
 }
 
@@ -679,7 +699,6 @@ ir_value_cleanup_range(const ir_value_t *value, ir_value_escape_fn escapes,
     if (!function || !function->n_blocks) return false;
     ir_liveness_query_t *query = ir_liveness_query_new(value);
     if (!query) return false;
-    out->alias_complete = query->complete;
     if (!ir_liveness_query_visit_endpoints(query, count_endpoint, out))
         out->resolved = false;
     for (uint32_t b = 0; b < function->n_blocks; b++) {

@@ -233,8 +233,7 @@ bool         ir_summary_call_pure(ir_summaries_t *summaries,
                                   const ir_instr_t *call);
 bool         ir_summary_call_writes(ir_summaries_t *summaries,
                                     const ir_func_t *f, ir_places_t *places,
-                                    const ir_instr_t *call,
-                                    const uint32_t *ids, uint32_t count);
+                                    const ir_instr_t *call, uint32_t place);
 
 enum {
     IR_SEFFECT_TRAPS_SHIFT       = 16,

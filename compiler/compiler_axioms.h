@@ -15,7 +15,6 @@ typedef enum : uint8_t {
 enum {
     N00BB_AXIOM_MUTATOR_ALLOCATOR = 1u << 0,
     N00BB_AXIOM_MUTATOR_GETTER    = 1u << 1,
-    N00BB_AXIOM_WRITE_LOCK        = 1u << 2,
     N00BB_AXIOM_LOCK_ACQUIRE      = 1u << 3,
     N00BB_AXIOM_LOCK_RELEASE      = 1u << 4,
     N00BB_AXIOM_READS_TARGET      = 1u << 5,
@@ -39,10 +38,12 @@ typedef struct {
 #define N00BB_AXIOM_ENTRY_FLAGS (IR_SUMMARY_CALLS_UNKNOWN                  \
                                  | IR_SUMMARY_CALLS_FINALIZERS             \
                                  | IR_SUMMARY_STARTS_THREADS)
+#define N00BB_AXIOM_PARAM(index) (1u << (index))
 
-size_t               n00bb_axiom_count(void);
-const n00bb_axiom_t *n00bb_axiom_at(size_t index);
 const n00bb_axiom_t *n00bb_axiom_of_function(const ir_func_t *function);
+const n00bb_axiom_t *n00bb_axiom_of_native_name(core_string_t name);
+const n00bb_axiom_t *n00bb_axiom_of_builtin(core_string_t name);
+const n00bb_axiom_t *const *n00bb_axiom_bindings(size_t *count);
 const n00bb_axiom_t *n00bb_axiom_of_symbol(parse_sym_entry_t *symbol);
 bool                 n00bb_axiom_function_has(const ir_func_t *function,
                                               uint8_t role);

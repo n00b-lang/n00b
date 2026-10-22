@@ -17,6 +17,5 @@ bool     ir_value_numbers_same(const ir_value_numbers_t *numbers,
                                const ir_value_t *a, const ir_value_t *b);
 bool     ir_value_number_constant(const ir_value_numbers_t *numbers,
                                   uint32_t number, ir_int_t *value);
-uint32_t ir_value_number_count(const ir_value_numbers_t *numbers);
 
 #endif

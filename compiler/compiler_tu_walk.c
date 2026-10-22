@@ -444,6 +444,21 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 && !n00bb_float_literal_adopts(right, left_type)
                 && !n00bb_integer_literal_joins_type(state, left, right_type))
                 n00bb_float_literal_adopts(left, right_type);
+            parse_tree_t *sides[] = {left, right};
+            th_type *declared[] = {right_type, left_type};
+            for (size_t s = 0; integer_comparison && s < 2; s++) {
+                ir_interval_t range = {0}, bounds = {0};
+                if (parse_tree_integer_literal_origin(sides[s])
+                    && is_integer_type(declared[s])
+                    && !n00bb_open_integer(declared[s])
+                    && n00bb_current_integer_range(sides[s], &range)
+                    && n00bb_type_interval(declared[s], &bounds)
+                    && !ir_interval_meet(range, bounds, nullptr)) {
+                    n00bb_report_integer_misfit(state, node,
+                        CORE_STRING_STATIC("value"), range, declared[s]);
+                    break;
+                }
+            }
         }
         if (NT_IS(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
@@ -451,7 +466,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             contextualize_record_literal(grammar, unit, state, initializer,
                 type_spec ? parse_tree_type(type_spec) : nullptr);
             parse_sym_entry_t *declared = parse_tree_sym(node);
-            if (declared && integer_copy_declaration(grammar, node, false)) {
+            if (declared && !type_spec && initializer
+                && is_integer_type(parse_tree_type(initializer))) {
                 th_type *class = n00bb_integer_variable(state, 0);
                 if (class && !declared->type) declared->type = class;
                 if (class && th_unify_in_place(state->types, declared->type,
@@ -1218,8 +1234,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             ir_interval_t range = {0};
             th_type *source = parse_tree_type(node);
             bool integer = source && is_integer_type(source);
-            bool ranged = integer && n00bb_current_integer_range(state,
-                node, &range);
+            bool ranged = integer && n00bb_current_integer_range(node,
+                                                                 &range);
             if (!(integer
                     ? n00bb_constrain_integer_fit(state, argument, source,
                         ranged, range)
