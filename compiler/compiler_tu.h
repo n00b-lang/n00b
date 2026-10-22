@@ -23,6 +23,7 @@
 
 #define N00BB_PARAMETER_FACTS_KEY \
     CORE_STRING_STATIC("n00bb.parameter-facts")
+#define N00BB_PUBLIC_UNUSED_CODE "N00BB-W0020"
 
 core_list_decl(th_param);
 core_list_decl(th_trait_requirement);
@@ -568,8 +569,18 @@ core_list_decl(n00bb_package_declaration_t);
 typedef struct {
     core_string_t name;
     core_translation_unit_t *unit;
+    bool renamed;
 } n00bb_import_alias_t;
 core_list_decl(n00bb_import_alias_t);
+
+typedef struct {
+    parse_tree_t *node;
+    core_translation_unit_t *provider;
+    core_string_t local;
+    core_string_t remote;
+    bool all;
+} n00bb_brought_name_t;
+core_list_decl(n00bb_brought_name_t);
 
 
 typedef struct {
@@ -588,6 +599,7 @@ typedef struct {
     core_translation_unit_t *provider;
     parse_scope_t *values;
     parse_scope_t *types;
+    const n00bb_brought_name_t *brought;
 } n00bb_import_source_t;
 core_list_decl(n00bb_import_source_t);
 
@@ -602,12 +614,16 @@ typedef struct {
     core_list_t(n00bb_package_declaration_t) package_declarations;
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_dict_t import_alias_index;
+    core_list_t(core_translation_unit_ptr_t) path_imports;
+    core_list_t(core_translation_unit_ptr_t) restricted_imports;
+    core_list_t(n00bb_brought_name_t) brought_names;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
     core_list_t(n00bb_dispatch_record_t) dispatch_records;
     bool needs_build_time_capture;
     bool needs_literal_capture;
     core_list_t(n00bb_literal_backed_const_t) literal_backed_consts;
     core_list_t(n00bb_import_source_t) import_sources;
+    bool import_sources_ready;
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_integer_seed_t) integer_seeds;
     core_list_t(n00bb_integer_edge_t) integer_edges;

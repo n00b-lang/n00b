@@ -16,6 +16,7 @@
 #include "lib/diagnostic.h"
 #include "lib/list.h"
 #include "lib/tree.h"
+#include "parse/annot_walk.h"
 #include "parse/rewrite.h"
 #include "parse/token.h"
 #include "parse/tree_util.h"
@@ -2105,19 +2106,31 @@ import_node(pp_context_t *ctx, core_string_t name)
         parse_terminal_id(ctx->grammar, CORE_STRING_STATIC("IDENTIFIER")), name);
     parse_tree_t *chain = parse_tree_make_nt(ctx->grammar,
         CORE_STRING_STATIC("member-chain"), 1);
+    parse_tree_t *source = parse_tree_make_nt(ctx->grammar,
+        CORE_STRING_STATIC("module-source"), 0);
+    parse_tree_t *module = parse_tree_make_nt(ctx->grammar,
+        CORE_STRING_STATIC("module-import"), 0);
     parse_tree_t *import = parse_tree_make_nt(ctx->grammar,
         CORE_STRING_STATIC("import-stmt"), 0);
-    if (keyword && identifier && chain && import
+    if (keyword && identifier && chain && source && module && import
         && core_tree_add_child(chain, identifier)) {
         identifier = nullptr;
-        if (core_tree_add_child(import, keyword)) {
-            keyword = nullptr;
-            if (core_tree_add_child(import, chain)) return import;
+        if (core_tree_add_child(source, chain)) {
+            chain = nullptr;
+            if (core_tree_add_child(module, source)) {
+                source = nullptr;
+                if (core_tree_add_child(import, keyword)) {
+                    keyword = nullptr;
+                    if (core_tree_add_child(import, module)) return import;
+                }
+            }
         }
     }
     parse_tree_free(keyword);
     parse_tree_free(identifier);
     parse_tree_free(chain);
+    parse_tree_free(source);
+    parse_tree_free(module);
     parse_tree_free(import);
     return nullptr;
 }
@@ -2189,8 +2202,22 @@ module_literal_const(pp_context_t *ctx, parse_visit_t *visit, bool module_level)
     return true;
 }
 
+static void
+collect_module_sources(parse_grammar_t *grammar, parse_tree_t *node,
+                       core_list_t(parse_tree_ptr_t) *out)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    if (is_name(grammar, node, "module-source")) {
+        core_list_push(*out, node);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_module_sources(grammar, core_tree_child(node, i), out);
+}
+
 static bool
-process_import(pp_context_t *ctx, parse_tree_t *statement)
+process_import(pp_context_t *ctx, parse_tree_t *import,
+               parse_tree_t *statement)
 {
     if (!ctx->options || !ctx->options->load_import) {
         pp_error(ctx, statement, "no module loader is configured for imports");
@@ -2213,6 +2240,12 @@ process_import(pp_context_t *ctx, parse_tree_t *statement)
     }
     if (!core_translation_unit_add_import(ctx->unit, imported)) {
         pp_error(ctx, statement, "cannot record imported module reference");
+        return false;
+    }
+    if (ctx->options->record_import
+        && !ctx->options->record_import(ctx->options->import_context,
+               ctx->grammar, import, statement, ctx->unit, imported)) {
+        ctx->failed = true;
         return false;
     }
     size_t index = module_state_index(ctx, imported);
@@ -2293,7 +2326,14 @@ preprocess_prepare(parse_visit_t *visit)
                 "imports are only allowed at module level or directly in a selected when branch");
             return PARSE_VISIT_ERROR;
         }
-        if (!process_import(ctx, node)) return PARSE_VISIT_ERROR;
+        core_list_t(parse_tree_ptr_t) sources =
+            core_list_new(parse_tree_ptr_t);
+        collect_module_sources(ctx->grammar, node, &sources);
+        bool imported = sources.len != 0;
+        for (size_t i = 0; imported && i < sources.len; i++)
+            imported = process_import(ctx, node, sources.data[i]);
+        core_list_free(sources);
+        if (!imported) return PARSE_VISIT_ERROR;
         return PARSE_VISIT_PRUNE;
     }
     if (is_name(ctx->grammar, node, "assert-stmt")
@@ -2414,10 +2454,17 @@ preprocess_discover(parse_visit_t *visit)
         parse_tree_t *import = parse_tree_find_direct_child_by_nt_name(
             ctx->grammar, node, CORE_STRING_STATIC("import-stmt"));
         if (import) {
-            if (ctx->options && ctx->options->prepare_import
-                && !ctx->options->prepare_import(
-                    ctx->options->import_context, ctx->grammar, import,
-                    ctx->unit)) {
+            core_list_t(parse_tree_ptr_t) sources =
+                core_list_new(parse_tree_ptr_t);
+            collect_module_sources(ctx->grammar, import, &sources);
+            bool prepared = true;
+            for (size_t i = 0; prepared && ctx->options
+                 && ctx->options->prepare_import && i < sources.len; i++)
+                prepared = ctx->options->prepare_import(
+                    ctx->options->import_context, ctx->grammar,
+                    sources.data[i], ctx->unit);
+            core_list_free(sources);
+            if (!prepared) {
                 ctx->failed = true;
                 return PARSE_VISIT_ERROR;
             }

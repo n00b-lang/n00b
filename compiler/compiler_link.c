@@ -1345,7 +1345,7 @@ n00bb_module_view_member(parse_symtab_t *symtab,
 
 static void
 push_scope_functions(parse_scope_t *scope, core_string_t name,
-                     core_string_t module,
+                     core_string_t module, bool public_only,
                      core_list_t(parse_sym_entry_ptr_t) *out)
 {
     for (parse_sym_entry_t *candidate = n00bb_scope_named_next(scope, name,
@@ -1353,8 +1353,21 @@ push_scope_functions(parse_scope_t *scope, core_string_t name,
          candidate; candidate = n00bb_scope_named_next(scope, name, candidate))
         if (candidate->kind == PARSE_SYM_FUNCTION
             && symbol_from_module(candidate, module)
+            && (!public_only || symbol_is_public_declaration(
+                    canonical_symbol(candidate)))
             && !n00bb_same_declaration_listed(out, candidate))
             core_list_push(*out, candidate);
+}
+
+static bool
+source_provides(const n00bb_import_source_t *source, core_string_t name,
+                core_string_t *provided)
+{
+    const n00bb_brought_name_t *brought = source->brought;
+    if (brought && !brought->all && !core_string_eq(brought->local, name))
+        return false;
+    *provided = brought && !brought->all ? brought->remote : name;
+    return true;
 }
 
 static bool
@@ -1366,13 +1379,18 @@ symbol_is_local(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
 
 static void
 push_import_functions(core_translation_unit_t *unit, core_string_t name,
+                      bool prelude_only,
                       core_list_t(parse_sym_entry_ptr_t) *out)
 {
     const core_list_t(n00bb_import_source_t) *sources =
         unqualified_import_sources(unit);
-    for (size_t i = 0; sources && i < sources->len; i++)
-        push_scope_functions(sources->data[i].values, name,
-                             (core_string_t){0}, out);
+    for (size_t i = 0; sources && i < sources->len; i++) {
+        core_string_t provided = {0};
+        if ((!prelude_only || !sources->data[i].brought)
+            && source_provides(&sources->data[i], name, &provided))
+            push_scope_functions(sources->data[i].values, provided,
+                                 (core_string_t){0}, true, out);
+    }
 }
 
 static core_list_t(parse_sym_entry_ptr_t)
@@ -1387,9 +1405,11 @@ function_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
         return candidates;
     }
     push_scope_functions(symbol->scope, symbol->name, lookup.origin_module,
-                         &candidates);
+                         false, &candidates);
     if (lookup.unqualified)
-        push_import_functions(state->unit, symbol->name, &candidates);
+        push_import_functions(state->unit,
+            lookup.name.data ? lookup.name : symbol->name, false,
+            &candidates);
     return candidates;
 }
 
@@ -1597,7 +1617,8 @@ n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
         && symbol->kind == PARSE_SYM_FUNCTION
         && n00bb_function_has_overloads(state, symbol,
                (n00bb_call_lookup_t){
-                   .unqualified = !dotted_symbol_path_node(grammar, node)})
+                   .unqualified = !dotted_symbol_path_node(grammar, node),
+                   .name = first_token_text(node)})
         && module_member_is_call(grammar, node))
         parse_tree_set_type(node, th_var(state->types));
 }
@@ -1880,27 +1901,46 @@ site_is_resolved_module_prefix(parse_grammar_t *grammar,
 static void collect_origin_candidates(parse_scope_t *scope,
     core_string_t name, core_list_t(parse_sym_entry_ptr_t) *out);
 
+static bool
+push_import_source(core_list_t(n00bb_import_source_t) *sources,
+                   core_translation_unit_t *provider, core_string_t package,
+                   const n00bb_brought_name_t *brought)
+{
+    n00bb_tu_state_t *state = tu_state(provider);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    n00bb_package_declaration_t *declaration = provider
+        ? find_package_declaration(provider, package) : nullptr;
+    parse_scope_t *values = declaration && declaration->scope
+        ? declaration->scope : brought ? module_scope(state) : nullptr;
+    if (!values || !symtab) return false;
+    core_list_push(*sources, ((n00bb_import_source_t){
+        .provider = provider,
+        .values = values,
+        .types = parse_symtab_scope_in_namespace(symtab, values,
+            CORE_STRING_STATIC("type")),
+        .brought = brought,
+    }));
+    return true;
+}
+
 const core_list_t(n00bb_import_source_t) *
 unqualified_import_sources(core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *consumer = tu_state(unit);
     if (!consumer) return nullptr;
-    if (consumer->import_sources.len) return &consumer->import_sources;
-    core_translation_unit_t *builtin = find_direct_import(
-        unit, CORE_STRING_STATIC("builtin"));
-    n00bb_package_declaration_t *package = builtin
-        ? find_package_declaration(builtin, CORE_STRING_STATIC("builtin"))
-        : nullptr;
-    n00bb_tu_state_t *state = tu_state(builtin);
-    parse_symtab_t *symtab = state && state->annotations
-        ? state->annotations->symtab : nullptr;
-    if (package && package->scope && symtab)
-        core_list_push(consumer->import_sources, ((n00bb_import_source_t){
-            .provider = builtin,
-            .values = package->scope,
-            .types = parse_symtab_scope_in_namespace(symtab, package->scope,
-                CORE_STRING_STATIC("type")),
-        }));
+    if (consumer->import_sources_ready) return &consumer->import_sources;
+    consumer->import_sources.len = 0;
+    for (size_t i = 0; i < consumer->brought_names.len; i++) {
+        const n00bb_brought_name_t *brought = &consumer->brought_names.data[i];
+        (void)push_import_source(&consumer->import_sources, brought->provider,
+            brought->provider->module.identifier, brought);
+    }
+    core_translation_unit_t *builtin = find_direct_import(unit,
+        CORE_STRING_STATIC("builtin"));
+    consumer->import_sources_ready = !builtin
+        || push_import_source(&consumer->import_sources, builtin,
+                              CORE_STRING_STATIC("builtin"), nullptr);
     return &consumer->import_sources;
 }
 
@@ -1916,42 +1956,52 @@ granted_import(core_translation_unit_t *unit,
         ? granted : nullptr;
 }
 
+static void
+collect_tier_candidates(core_translation_unit_t *unit, core_string_t name,
+                        bool type_reference, bool brought,
+                        core_list_t(parse_sym_entry_ptr_t) *out)
+{
+    const core_list_t(n00bb_import_source_t) *sources =
+        unqualified_import_sources(unit);
+    for (size_t i = 0; sources && i < sources->len; i++) {
+        const n00bb_import_source_t *source = &sources->data[i];
+        core_string_t provided = {0};
+        if (!source->brought != !brought
+            || !source_provides(source, name, &provided)) continue;
+        size_t before = out->len;
+        if (!type_reference)
+            collect_origin_candidates(source->values, provided, out);
+        if (out->len == before)
+            collect_origin_candidates(source->types, provided, out);
+        parse_sym_entry_t *granted = out->len == before && !brought
+            ? granted_import(unit, source, provided, type_reference)
+            : nullptr;
+        if (granted) core_list_push(*out, granted);
+    }
+}
+
 core_list_t(parse_sym_entry_ptr_t)
 unqualified_import_candidates(core_translation_unit_t *unit,
                               core_string_t name, bool type_reference)
 {
     core_list_t(parse_sym_entry_ptr_t) candidates =
         core_list_new(parse_sym_entry_ptr_t);
-    const core_list_t(n00bb_import_source_t) *sources =
-        unqualified_import_sources(unit);
-    for (size_t i = 0; sources && i < sources->len; i++) {
-        size_t before = candidates.len;
-        if (!type_reference)
-            collect_origin_candidates(sources->data[i].values, name,
-                                      &candidates);
-        if (candidates.len == before)
-            collect_origin_candidates(sources->data[i].types, name,
-                                      &candidates);
-        parse_sym_entry_t *granted = candidates.len == before
-            ? granted_import(unit, &sources->data[i], name, type_reference)
-            : nullptr;
-        if (granted) core_list_push(candidates, granted);
-    }
+    collect_tier_candidates(unit, name, type_reference, true, &candidates);
+    if (!candidates.len)
+        collect_tier_candidates(unit, name, type_reference, false,
+                                &candidates);
     return candidates;
 }
 
 static parse_sym_entry_t *
 unqualified_import_type(core_translation_unit_t *unit, core_string_t name)
 {
-    const core_list_t(n00bb_import_source_t) *sources =
-        unqualified_import_sources(unit);
-    for (size_t i = 0; sources && i < sources->len; i++) {
-        parse_sym_entry_t *type = n00bb_scope_named_next(
-            sources->data[i].types, name, nullptr);
-        if (!type) type = granted_import(unit, &sources->data[i], name, true);
-        if (type) return type;
-    }
-    return nullptr;
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        core_list_new(parse_sym_entry_ptr_t);
+    collect_tier_candidates(unit, name, true, false, &candidates);
+    parse_sym_entry_t *type = candidates.len ? candidates.data[0] : nullptr;
+    core_list_free(candidates);
+    return type;
 }
 
 static bool
@@ -1996,7 +2046,7 @@ warn_overlapping_import(parse_grammar_t *grammar,
 {
     core_list_t(parse_sym_entry_ptr_t) imported =
         core_list_new(parse_sym_entry_ptr_t);
-    push_import_functions(unit, local->name, &imported);
+    push_import_functions(unit, local->name, true, &imported);
     size_t overlapping = 0;
     for (size_t i = 0; i < imported.len; i++) {
         parse_sym_entry_t *other = canonical_symbol(imported.data[i]);
@@ -2108,7 +2158,8 @@ n00bb_unqualified_import_named(core_translation_unit_t *unit,
                                core_string_t name, bool function)
 {
     core_list_t(parse_sym_entry_ptr_t) candidates =
-        unqualified_import_candidates(unit, name, false);
+        core_list_new(parse_sym_entry_ptr_t);
+    collect_tier_candidates(unit, name, false, false, &candidates);
     parse_sym_entry_t *found = nullptr;
     for (size_t i = 0; !found && i < candidates.len; i++)
         if ((candidates.data[i]->kind == PARSE_SYM_FUNCTION) == function
@@ -2144,7 +2195,7 @@ n00bb_check_clobbered_import(parse_grammar_t *grammar,
     core_list_t(parse_sym_entry_ptr_t) hidden =
         core_list_new(parse_sym_entry_ptr_t);
     if (clobbered->kind == PARSE_SYM_FUNCTION)
-        push_import_functions(unit, symbol->name, &hidden);
+        push_import_functions(unit, symbol->name, true, &hidden);
     else core_list_push(hidden, clobbered);
     core_buffer_t message = {0};
     core_buffer_printf(&message, "'%.*s' here is the local %s declared on "
@@ -2183,7 +2234,8 @@ names_member_receiver(parse_grammar_t *grammar, parse_tree_t *node)
 static bool
 names_imported_module(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return nt_is(grammar, parse_tree_parent(node), CORE_STRING_STATIC("import-stmt"));
+    return nt_is(grammar, parse_tree_parent(node),
+                 CORE_STRING_STATIC("module-source"));
 }
 
 static void
@@ -2193,7 +2245,8 @@ collect_origin_candidates(parse_scope_t *scope, core_string_t name,
     for (parse_sym_entry_t *candidate = n00bb_scope_named_next(scope, name,
              nullptr);
          candidate; candidate = n00bb_scope_named_next(scope, name, candidate))
-        if (!n00bb_same_declaration_listed(out, candidate))
+        if (symbol_is_public_declaration(canonical_symbol(candidate))
+            && !n00bb_same_declaration_listed(out, candidate))
             core_list_push(*out, candidate);
 }
 
@@ -2311,6 +2364,179 @@ mark_resolved_flagset_operator_sites(parse_grammar_t *grammar,
             mark_flagset_operator_site(grammar, unit, state,
                                        &state->link_use_sites.data[s]);
     }
+}
+
+static bool report_hidden_import(core_translation_unit_t *unit,
+    n00bb_tu_state_t *state, n00bb_link_use_site_t *site);
+
+typedef struct {
+    parse_sym_entry_t *declaration;
+    const n00bb_import_source_t *source;
+} brought_entry_t;
+core_list_decl(brought_entry_t);
+
+typedef struct {
+    core_translation_unit_t *unit;
+    n00bb_tu_state_t *state;
+    core_dict_t names;
+    core_list_t(brought_entry_t) entries;
+} bring_check_t;
+
+static void
+report_brought(core_translation_unit_t *unit, parse_tree_t *node,
+               core_buffer_t *message)
+{
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0062"),
+        core_string_borrow(message->data, message->byte_len),
+        link_source_location(node));
+    core_buffer_release(message);
+}
+
+static bool
+brought_name_declared_locally(bring_check_t *check, core_string_t name,
+                              const n00bb_import_source_t *source)
+{
+    parse_scope_t *scopes[] = {module_scope(check->state),
+                               type_module_scope(check->state)};
+    for (size_t s = 0; s < sizeof(scopes) / sizeof(scopes[0]); s++) {
+        parse_sym_entry_t *local = n00bb_scope_named_next(scopes[s], name,
+                                                          nullptr);
+        if (!local || local->kind == PARSE_SYM_MODULE || !local->decl_node
+            || canonical_symbol(local) != local) continue;
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "'%.*s' is declared in this module on "
+            "line %u and also brought in here; rename it with 'as'",
+            (int)name.u8_bytes, name.data,
+            link_source_location(local->decl_node).line);
+        report_brought(check->unit, source->brought->node, &message);
+        return true;
+    }
+    return false;
+}
+
+static bool
+add_brought_entry(bring_check_t *check, const core_string_t *local,
+                  parse_sym_entry_t *candidate,
+                  const n00bb_import_source_t *source)
+{
+    parse_sym_entry_t *declaration = canonical_symbol(candidate);
+    bool seen = false;
+    size_t index = (uintptr_t)core_dict_get(&check->names, local, &seen);
+    if (!seen) {
+        core_dict_put(&check->names, local, check->entries.len);
+        core_list_push(check->entries, ((brought_entry_t){
+            .declaration = declaration, .source = source,
+        }));
+        return !brought_name_declared_locally(check, *local, source);
+    }
+    brought_entry_t *prior = &check->entries.data[index];
+    if (prior->declaration == declaration
+        || (prior->source == source
+            && prior->declaration->owner_unit == declaration->owner_unit))
+        return true;
+    core_buffer_t message = {0};
+    if (prior->source == source)
+        core_buffer_printf(&message, "module '%.*s' exports different "
+            "declarations named '%.*s'; bring them by name and rename "
+            "one with 'as'",
+            (int)source->provider->module.identifier.u8_bytes,
+            source->provider->module.identifier.data,
+            (int)local->u8_bytes, local->data);
+    else core_buffer_printf(&message, "'%.*s' is already brought in by "
+        "line %u; rename one of them with 'as'",
+        (int)local->u8_bytes, local->data,
+        link_source_location(prior->source->brought->node).line);
+    report_brought(check->unit, source->brought->node, &message);
+    return false;
+}
+
+static bool
+bring_scope_entries(bring_check_t *check, parse_scope_t *scope,
+                    const n00bb_import_source_t *source)
+{
+    bool ok = true;
+    for (parse_sym_entry_t *entry = scope ? scope->first_in_scope : nullptr;
+         entry; entry = entry->next_in_scope)
+        if (entry->kind != PARSE_SYM_MODULE
+            && symbol_is_public_declaration(canonical_symbol(entry)))
+            ok = add_brought_entry(check, &entry->name, entry, source) && ok;
+    return ok;
+}
+
+static bool
+bring_named_entries(bring_check_t *check, const n00bb_import_source_t *source)
+{
+    core_translation_unit_t *unit = check->unit;
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        core_list_new(parse_sym_entry_ptr_t);
+    collect_origin_candidates(source->values, source->brought->remote,
+                              &candidates);
+    collect_origin_candidates(source->types, source->brought->remote,
+                              &candidates);
+    bool ok = candidates.len != 0;
+    if (!ok) {
+        core_buffer_t message = {0};
+        core_string_t module = source->provider->module.identifier;
+        core_buffer_printf(&message,
+            "module '%.*s' has no public '%.*s' to bring",
+            (int)module.u8_bytes, module.data,
+            (int)source->brought->remote.u8_bytes,
+            source->brought->remote.data);
+        if (core_string_eq(source->brought->remote,
+                           CORE_STRING_STATIC("all")))
+            core_buffer_printf(&message, "; bringing everything is only "
+                "written 'bring all from %.*s'",
+                (int)module.u8_bytes, module.data);
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0061"),
+            core_string_borrow(message.data, message.byte_len),
+            link_source_location(source->brought->node));
+        core_buffer_release(&message);
+    }
+    for (size_t i = 0; ok && i < candidates.len; i++)
+        ok = add_brought_entry(check, &source->brought->local,
+                               candidates.data[i], source);
+    core_list_free(candidates);
+    return ok;
+}
+
+static bool
+check_brought_names(core_translation_unit_t *unit, n00bb_tu_state_t *state)
+{
+    const core_list_t(n00bb_import_source_t) *sources =
+        unqualified_import_sources(unit);
+    bring_check_t check = {
+        .unit = unit, .state = state,
+        .entries = core_list_new(brought_entry_t),
+    };
+    core_dict_init_string(&check.names);
+    bool ok = true;
+    for (size_t i = 0; sources && i < sources->len; i++) {
+        const n00bb_import_source_t *source = &sources->data[i];
+        if (!source->brought) continue;
+        if (!source->brought->all) {
+            ok = bring_named_entries(&check, source) && ok;
+            continue;
+        }
+        ok = bring_scope_entries(&check, source->values, source) && ok;
+        ok = bring_scope_entries(&check, source->types, source) && ok;
+    }
+    core_dict_free(&check.names);
+    core_list_free(check.entries);
+    return ok;
+}
+
+bool
+check_import_brings(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        if (state && !state->interface_module && state->brought_names.len)
+            ok = check_brought_names(analysis->units.data[u], state) && ok;
+    }
+    return ok;
 }
 
 bool
@@ -2451,6 +2677,11 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                         "could not record the resolved symbol use site"),
                     link_source_location(site->node));
                 return false;
+            }
+            else if (!site->symbol && !site->dotted_path
+                     && !names_imported_module(grammar, site->node)
+                     && report_hidden_import(unit, state, site)) {
+                all_resolved = false;
             }
             else if (!site->symbol && !site->dotted_path
                      && !site->trait_reference
@@ -2651,6 +2882,58 @@ module_path_matches_site(n00bb_tu_state_t *state,
         && !memcmp(root.data, module.data, end);
 }
 
+static bool
+listed_unit(const core_list_t(core_translation_unit_ptr_t) *list,
+            core_translation_unit_t *unit)
+{
+    for (size_t i = 0; i < list->len; i++)
+        if (list->data[i] == unit) return true;
+    return false;
+}
+
+static bool
+import_path_hidden(n00bb_tu_state_t *state, core_translation_unit_t *unit)
+{
+    return state && listed_unit(&state->restricted_imports, unit)
+        && !listed_unit(&state->path_imports, unit);
+}
+
+static bool
+report_hidden_import(core_translation_unit_t *unit, n00bb_tu_state_t *state,
+                     n00bb_link_use_site_t *site)
+{
+    for (size_t i = 0; i < core_translation_unit_import_count(unit); i++) {
+        core_translation_unit_t *imported =
+            core_translation_unit_import(unit, i);
+        core_string_t path = imported->module.identifier;
+        if (!import_path_hidden(state, imported)
+            || !module_path_matches_site(state, site, path, true))
+            continue;
+        core_string_t alias = {0};
+        for (size_t a = 0; !alias.data && a < state->import_aliases.len; a++)
+            if (state->import_aliases.data[a].unit == imported
+                && state->import_aliases.data[a].renamed)
+                alias = state->import_aliases.data[a].name;
+        core_buffer_t message = {0};
+        if (alias.data)
+            core_buffer_printf(&message,
+                "module '%.*s' is imported here as '%.*s'; refer to it by "
+                "that name", (int)path.u8_bytes, path.data,
+                (int)alias.u8_bytes, alias.data);
+        else core_buffer_printf(&message,
+                "names are only brought from module '%.*s', so its name is "
+                "not available; add 'import %.*s' to use it",
+                (int)path.u8_bytes, path.data, (int)path.u8_bytes, path.data);
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0060"),
+            core_string_borrow(message.data, message.byte_len),
+            link_source_location(site->node));
+        core_buffer_release(&message);
+        return true;
+    }
+    return false;
+}
+
 core_translation_unit_t *
 unit_for_module_site(core_translation_unit_t *unit,
                      n00bb_link_use_site_t *site, bool allow_suffix)
@@ -2658,16 +2941,20 @@ unit_for_module_site(core_translation_unit_t *unit,
     n00bb_tu_state_t *state = tu_state(unit);
     if (module_path_matches_site(state, site, unit->module.identifier,
                                  allow_suffix)) return unit;
-    for (size_t i = 0; state && i < state->import_aliases.len; i++)
-        if (module_path_matches_site(state, site,
-                state->import_aliases.data[i].name, allow_suffix))
-            return state->import_aliases.data[i].unit;
+    for (size_t i = 0; state && i < state->import_aliases.len; i++) {
+        n00bb_import_alias_t *alias = &state->import_aliases.data[i];
+        if ((alias->renamed || !import_path_hidden(state, alias->unit))
+            && module_path_matches_site(state, site, alias->name,
+                                        allow_suffix))
+            return alias->unit;
+    }
     for (size_t i = 0; i < core_translation_unit_import_count(unit); i++) {
         core_translation_unit_t *imported =
             core_translation_unit_import(unit, i);
-        if (module_path_matches_site(state, site,
-                                     imported->module.identifier,
-                                     allow_suffix)) return imported;
+        if (!import_path_hidden(state, imported)
+            && module_path_matches_site(state, site,
+                                        imported->module.identifier,
+                                        allow_suffix)) return imported;
     }
     return nullptr;
 }
@@ -3771,7 +4058,9 @@ register_link_use_sites(core_link_unit_t *link,
                 && n00bb_function_has_overloads(state, site->symbol,
                        (n00bb_call_lookup_t){
                            .unqualified = !site->dotted_path,
-                           .origin_module = site->origin_module})) {
+                           .origin_module = site->origin_module,
+                           .name = site->dotted_path ? (core_string_t){0}
+                                                     : site->member_name})) {
                 core_link_reference_t *reference = nullptr;
                 bool deferred =
                     core_link_unit_add_deferred_reference_at_scoped_kind(
@@ -3890,7 +4179,8 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
         || !bind_imported_module_scopes(&analysis->units)
         || !populate_package_interfaces(analysis)
         || !resolve_imported_module_symbols(analysis->grammar,
-                                        &analysis->units))
+                                        &analysis->units)
+        || !check_import_brings(analysis))
         return CORE_LINK_STAGE_RESULT_FAILED;
     if (!register_link_declarations(link, analysis->grammar,
                                     &analysis->units,

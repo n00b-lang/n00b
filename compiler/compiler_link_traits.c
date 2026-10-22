@@ -1133,12 +1133,16 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                         break;
                     }
                 if (literal_handler) continue;
+                bool public = symbol_is_public_declaration(symbol);
                 core_buffer_t message = {0};
-                core_buffer_printf(&message, "function '%.*s' is never used",
+                core_buffer_printf(&message, "%sfunction '%.*s' is never used",
+                    public ? "public " : "",
                     (int)symbol->name.u8_bytes, symbol->name.data);
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0003"),
+                    CORE_DIAG_WARNING,
+                    public ? CORE_STRING_STATIC(N00BB_PUBLIC_UNUSED_CODE)
+                           : CORE_STRING_STATIC("N00BB-W0003"),
                     core_buffer_string(&message),
                     link_source_location(symbol->decl_node));
                 core_buffer_release(&message);

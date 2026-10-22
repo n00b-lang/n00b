@@ -1,0 +1,7 @@
+public func circle() -> int {
+    return 9
+}
+
+public func triangle() -> int {
+    return 3
+}

@@ -593,6 +593,16 @@ test(
 )
 
 test(
+    'imports-bring', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'imports_bring.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'imports_bring'],
+    timeout: 300,
+    suite: 'slow',
+)
+
+test(
     'overload-resolution', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'overload_resolution.sh',
            n00bb_exe.full_path(),

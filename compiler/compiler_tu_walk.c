@@ -658,7 +658,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 core_buffer_release(&qualified);
             }
         }
-        if (NT_IS(grammar, node, "import-stmt")
+        if (NT_IS(grammar, node, "module-import")
             && !untyped_module_name(state, node)) {
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
@@ -1661,7 +1661,7 @@ collect_import_statements(parse_grammar_t *grammar, parse_tree_t *node,
 {
     if (!node || core_tree_is_leaf(node) || NT_IS(grammar, node, "func-def"))
         return;
-    if (NT_IS(grammar, node, "import-stmt")) {
+    if (NT_IS(grammar, node, "module-import")) {
         core_list_push(*imports, node);
         return;
     }
@@ -1710,8 +1710,10 @@ reject_imported_module_names(parse_grammar_t *grammar,
     parse_scope_t *scopes[] = {module_scope(state), type_module_scope(state)};
     bool distinct = true;
     for (size_t i = 0; i < imports.len; i++) {
-        core_string_t name = first_token_text(
-            CHILD_NT(grammar, imports.data[i], "member-chain"));
+        parse_tree_t *import = imports.data[i];
+        core_string_t name = core_tree_num_children(import) == 3
+            ? parse_tree_leaf_text(core_tree_child(import, 2))
+            : first_token_text(import);
         if (!name.u8_bytes) continue;
         for (size_t s = 0; s < sizeof(scopes) / sizeof(scopes[0]); s++)
             for (parse_sym_entry_t *symbol = scopes[s]

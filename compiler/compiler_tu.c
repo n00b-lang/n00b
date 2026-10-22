@@ -10862,6 +10862,9 @@ free_tu_state(void *data)
     core_list_free(state->dispatch_records);
     core_list_free(state->literal_backed_consts);
     core_list_free(state->import_sources);
+    core_list_free(state->path_imports);
+    core_list_free(state->restricted_imports);
+    core_list_free(state->brought_names);
     core_list_free(state->deferred_conversions);
     core_list_free(state->integer_seeds);
     core_list_free(state->integer_edges);

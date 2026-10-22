@@ -110,6 +110,15 @@ typedef struct {
 static bool closed_world_build;
 
 static bool
+link_root_unit(const core_link_unit_t *link,
+               const core_translation_unit_t *unit)
+{
+    for (size_t i = 0; link && i < core_link_unit_root_count(link); i++)
+        if (core_link_unit_root(link, i) == unit) return true;
+    return false;
+}
+
+static bool
 same_diagnostic(const core_diagnostic_t *left, const core_diagnostic_t *right)
 {
     return left->severity == right->severity
@@ -132,7 +141,7 @@ already_reported(const core_diagnostics_t *diagnostics,
 
 static void
 append_diagnostics(core_diagnostics_t *into, const core_diagnostics_t *from,
-                   bool keep_warnings, bool skip_reported)
+                   bool keep_warnings, bool root, bool skip_reported)
 {
     bool keep = true;
     for (size_t i = 0; i < core_diagnostics_count(from); i++) {
@@ -141,6 +150,8 @@ append_diagnostics(core_diagnostics_t *into, const core_diagnostics_t *from,
             || item->severity == CORE_DIAG_HELP;
         if (!attached)
             keep = (item->severity != CORE_DIAG_WARNING || keep_warnings)
+                && (root || !core_string_eq(item->code,
+                        CORE_STRING_STATIC(N00BB_PUBLIC_UNUSED_CODE)))
                 && !(skip_reported && already_reported(into, item));
         if (keep) core_diagnostics_append(into, item);
     }
@@ -149,17 +160,17 @@ append_diagnostics(core_diagnostics_t *into, const core_diagnostics_t *from,
 static void
 merge_unit_diagnostics(core_diagnostics_t *into,
                        const warning_policy_t *policy,
-                       core_translation_unit_t *unit, bool local)
+                       core_translation_unit_t *unit, bool local, bool root)
 {
     append_diagnostics(into, core_translation_unit_diagnostics(unit),
-                       local || policy->package_warnings, false);
+                       local || policy->package_warnings, root, false);
     n00bb_tu_state_t *state = tu_state(unit);
     if (!local || policy->changed_files_only || !policy->cache || !state
         || !state->interface_module)
         return;
     core_diagnostics_t *replayed = core_diagnostics_new();
     if (n00bb_cache_replay_warnings(policy->cache, unit, replayed))
-        append_diagnostics(into, replayed, true, true);
+        append_diagnostics(into, replayed, true, root, true);
     core_diagnostics_free(replayed);
 }
 
@@ -1378,31 +1389,6 @@ append_import_names(parse_grammar_t *grammar, parse_tree_t *node,
     }
 }
 
-static parse_tree_t *
-find_string_token(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    if (!node) return nullptr;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (parse_tree_is_group(child)) {
-            for (size_t j = 0; j < core_tree_num_children(child); j++) {
-                parse_tree_t *item = core_tree_child(child, j);
-                parse_token_info_t *token = parse_node_token(item);
-                if (token && core_string_eq(
-                        parse_terminal_name(grammar, parse_token_tid(token)),
-                        CORE_STRING_STATIC("STRING_LIT"))) return item;
-            }
-            continue;
-        }
-        parse_token_info_t *token = parse_node_token(child);
-        if (token && core_string_eq(parse_terminal_name(grammar,
-                                        parse_token_tid(token)),
-                                    CORE_STRING_STATIC("STRING_LIT")))
-            return child;
-    }
-    return nullptr;
-}
-
 #define import_error(unit, statement, lit) \
     import_report((unit), (statement), CORE_STRING_STATIC(lit))
 
@@ -1458,21 +1444,9 @@ import_request_details(n00bb_resolver_t *resolver, parse_grammar_t *grammar,
         import_error(importer, statement, "invalid imported module name");
         return false;
     }
-    parse_tree_t *path_token = find_string_token(grammar, statement);
-    core_string_t operand = core_string_borrow(name->data, name->byte_len);
-    if (path_token) {
-        core_string_t raw = parse_tree_leaf_text(path_token);
-        if (raw.u8_bytes < 2 || raw.data[0] != '"'
-            || raw.data[raw.u8_bytes - 1] != '"') {
-            core_buffer_free(name);
-            import_error(importer, statement, "invalid imported module path");
-            return false;
-        }
-        operand = core_string_borrow(raw.data + 1, raw.u8_bytes - 2);
-    }
     core_string_t source_name = core_string_borrow(name->data, name->byte_len);
     core_string_t package_namespace = n00bb_package_namespace(importer);
-    if (!path_token && package_namespace.u8_bytes) {
+    if (package_namespace.u8_bytes) {
         size_t root_len = package_namespace.u8_bytes;
         if (source_name.u8_bytes >= root_len
             && !memcmp(source_name.data, package_namespace.data, root_len)
@@ -1484,12 +1458,12 @@ import_request_details(n00bb_resolver_t *resolver, parse_grammar_t *grammar,
             return false;
         }
     }
-    bool internal = !path_token && n00bb_resolver_internal_import(
+    bool internal = n00bb_resolver_internal_import(
         resolver, importer, source_name, module);
     bool initialized = internal || core_module_spec_init(module, source_name);
     if (initialized) {
         *operand_out = core_string_dup(internal ? module->identifier
-                                                : operand);
+                                                : source_name);
         *source_name_out = core_string_dup(source_name);
     }
     core_buffer_free(name);
@@ -1604,6 +1578,143 @@ record_import_alias(core_translation_unit_t *importer, core_string_t name,
         .unit = unit,
     }));
     core_dict_add(&state->import_alias_index, key, unit);
+    return true;
+}
+
+static bool
+record_import_rename(core_translation_unit_t *importer, core_string_t name,
+                     core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(importer);
+    if (!record_import_alias(importer, name, unit)) return false;
+    for (size_t i = 0; i < state->import_aliases.len; i++)
+        if (core_string_eq(state->import_aliases.data[i].name, name))
+            state->import_aliases.data[i].renamed = true;
+    return true;
+}
+
+static void
+note_import_reach(core_list_t(core_translation_unit_ptr_t) *list,
+                  core_translation_unit_t *unit)
+{
+    for (size_t i = 0; i < list->len; i++)
+        if (list->data[i] == unit) return;
+    core_list_push(*list, unit);
+}
+
+static void
+collect_brought_symbols(parse_grammar_t *grammar, parse_tree_t *node,
+                        core_list_t(parse_tree_ptr_t) *out)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("brought-symbol"))) {
+        core_list_push(*out, node);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_brought_symbols(grammar, core_tree_child(node, i), out);
+}
+
+static void
+collect_identifier_leaves(parse_grammar_t *grammar, parse_tree_t *node,
+                          core_list_t(parse_tree_ptr_t) *out)
+{
+    if (!node) return;
+    if (core_tree_is_leaf(node)) {
+        parse_token_info_t *token = parse_node_token(node);
+        if (token && core_string_eq(parse_terminal_name(grammar,
+                parse_token_tid(token)), CORE_STRING_STATIC("IDENTIFIER")))
+            core_list_push(*out, node);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_identifier_leaves(grammar, core_tree_child(node, i), out);
+}
+
+static bool
+brought_symbol_names(parse_grammar_t *grammar, parse_tree_t *symbol,
+                     core_string_t *remote, core_string_t *local)
+{
+    core_list_t(parse_tree_ptr_t) names = core_list_new(parse_tree_ptr_t);
+    collect_identifier_leaves(grammar, symbol, &names);
+    *remote = names.len ? parse_tree_leaf_text(names.data[0])
+                        : first_token_text(symbol);
+    *local = names.len ? parse_tree_leaf_text(names.data[names.len - 1])
+                       : *remote;
+    bool renamed = names.len > 1;
+    core_list_free(names);
+    return renamed;
+}
+
+static parse_tree_t *
+owning_module_import(parse_grammar_t *grammar, parse_tree_t *node,
+                     parse_tree_t *source)
+{
+    if (!node || core_tree_is_leaf(node)) return nullptr;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("module-import")))
+        return core_tree_num_children(node)
+            && core_tree_child(node, 0) == source ? node : nullptr;
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *found = owning_module_import(grammar,
+            core_tree_child(node, i), source);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+static bool
+record_import_shape(void *opaque, parse_grammar_t *grammar,
+                    parse_tree_t *statement, parse_tree_t *source,
+                    core_translation_unit_t *importer,
+                    core_translation_unit_t *imported)
+{
+    (void)opaque;
+    n00bb_tu_state_t *state = tu_state(importer);
+    if (!state || !nt_is(grammar, statement,
+                         CORE_STRING_STATIC("import-stmt"))) return true;
+    parse_tree_t *module_import = owning_module_import(grammar, statement,
+                                                       source);
+    core_string_t alias = module_import
+            && core_tree_num_children(module_import) == 3
+        ? parse_tree_leaf_text(core_tree_child(module_import, 2))
+        : (core_string_t){0};
+    if (alias.data && !record_import_rename(importer, alias, imported)) {
+        import_error(importer, source,
+                     "this import name already names another module");
+        return false;
+    }
+    note_import_reach(alias.data || !module_import ? &state->restricted_imports
+                                                   : &state->path_imports,
+                      imported);
+    parse_tree_t *brought = child_nt(grammar, statement,
+                                     CORE_STRING_STATIC("brought-symbols"));
+    bool bring_from = brought != nullptr;
+    if (!brought)
+        brought = child_nt(grammar, statement,
+                           CORE_STRING_STATIC("brought-names"));
+    if (!brought) return true;
+    core_list_t(parse_tree_ptr_t) symbols = core_list_new(parse_tree_ptr_t);
+    collect_brought_symbols(grammar, brought, &symbols);
+    core_string_t remote = {0}, local = {0};
+    bool all = bring_from && (symbols.len
+        ? symbols.len == 1 && !brought_symbol_names(grammar, symbols.data[0],
+                                                    &remote, &local)
+            && core_string_eq(remote, CORE_STRING_STATIC("all"))
+        : core_string_eq(first_token_text(brought),
+                         CORE_STRING_STATIC("all")));
+    if (all)
+        core_list_push(state->brought_names, ((n00bb_brought_name_t){
+            .node = statement, .provider = imported, .all = true,
+        }));
+    for (size_t i = 0; !all && i < symbols.len; i++) {
+        (void)brought_symbol_names(grammar, symbols.data[i], &remote,
+                                   &local);
+        core_list_push(state->brought_names, ((n00bb_brought_name_t){
+            .node = symbols.data[i], .provider = imported,
+            .local = local, .remote = remote,
+        }));
+    }
+    core_list_free(symbols);
     return true;
 }
 
@@ -1846,7 +1957,6 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
                      "cannot retain package interface import");
         return false;
     }
-
     *imported_out = imported;
     *tree_out = tree;
     return true;
@@ -2476,6 +2586,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     active_options.import_failure_reported = failure_already_reported;
     active_options.import_context = &import_driver;
     active_options.prepare_import = prepare_import;
+    active_options.record_import = record_import_shape;
     active_options.selected_body = n00bb_tu_remember_selected_when_body;
     active_options.build_time_use = n00bb_tu_remember_build_time_use;
     active_options.selected_body_context = nullptr;
@@ -2661,13 +2772,15 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
             queue, requests->ordered.data[i].job);
         if (unit && show_symbols) dump_symbols(unit);
         bool local = false;
+        bool root_input = requests->ordered.data[i].root_input;
         for (size_t r = 0; unit && !local && r < requests->ordered.len; r++) {
             core_translation_unit_t *root = requests->ordered.data[r].root_input
                 ? core_work_job_result(queue, requests->ordered.data[r].job)
                 : nullptr;
             local = root && n00bb_resolver_same_root(resolver, root, unit);
         }
-        if (unit) merge_unit_diagnostics(diags, warnings, unit, local);
+        if (unit)
+            merge_unit_diagnostics(diags, warnings, unit, local, root_input);
     }
 
     n00bb_preprocessor_free(preprocessor);
@@ -5126,7 +5239,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             for (size_t i = 0; i < link_analysis->units.len; i++) {
                 core_translation_unit_t *unit = link_analysis->units.data[i];
                 merge_unit_diagnostics(cli_diagnostics, &warnings, unit,
-                    n00bb_resolver_same_root(resolver, root, unit));
+                    n00bb_resolver_same_root(resolver, root, unit),
+                    link ? link_root_unit(link, unit) : unit == root);
             }
         }
         if (link)
