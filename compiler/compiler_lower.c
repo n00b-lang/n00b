@@ -7135,14 +7135,14 @@ n00bb_declare_literal_constant(n00bb_lower_context_t *lower,
                                         IR_STORAGE_DURATION_MODULE))
         return false;
     if (n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME) {
-        tu->link_analysis->build_time_capture = true;
-        tu->needs_build_time_capture = true;
+        tu->link_analysis->literal_capture = true;
+        tu->needs_literal_capture = true;
         return true;
     }
     core_string_t identifier = n00bb_baked_root_identifier(tu->link_analysis,
         unit->module.identifier, name);
-    if (!identifier.data && !n00bb_build_time_stage_ran()) {
-        tu->link_analysis->build_time_needed = true;
+    if (!identifier.data && !n00bb_literal_values_captured()) {
+        tu->link_analysis->literal_needed = true;
         return true;
     }
     if (!identifier.data) {
@@ -7184,8 +7184,8 @@ n00bb_record_literal_constant(n00bb_lower_context_t *lower,
         .global = global,
     }));
     if (n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME) {
-        tu->link_analysis->build_time_capture = true;
-        tu->needs_build_time_capture = true;
+        tu->link_analysis->literal_capture = true;
+        tu->needs_literal_capture = true;
     }
     *global_out = global;
     return true;
@@ -7217,42 +7217,63 @@ n00bb_bind_static_literal_result(ir_lower_context_t *context,
 }
 
 static bool
+produced_literal_site(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    static const core_string_t kinds[] = {
+        CORE_STRING_STATIC("sequence"), CORE_STRING_STATIC("dict"),
+        CORE_STRING_STATIC("set"), CORE_STRING_STATIC("quotes"),
+        CORE_STRING_STATIC("int"), CORE_STRING_STATIC("hex"),
+        CORE_STRING_STATIC("float"), CORE_STRING_STATIC("bool"),
+        CORE_STRING_STATIC("nil"), CORE_STRING_STATIC("tuple"),
+        CORE_STRING_STATIC("record"), CORE_STRING_STATIC("fence"),
+    };
+    n00bb_litmod_site_t *site = n00bb_node_literal_site(node);
+    if (!site)
+        return n00bb_default_container_literal(grammar, node,
+                                               parse_tree_type(node));
+    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
+        if (core_string_eq(site->registration->kind, kinds[i])) return true;
+    return false;
+}
+
+static core_string_t
+literal_producer_name(parse_tree_t *node, char *buffer, size_t size)
+{
+    parse_token_info_t *token = parse_tree_find_first_terminal(node);
+    return n00bb_format_name(buffer, size, "__n00bb_litmod_%llu",
+        (unsigned long long)(token ? parse_token_start_byte(token) : 0));
+}
+
+static parse_tree_t *
+literal_backed_initializer(parse_grammar_t *grammar,
+                           parse_sym_entry_t *symbol)
+{
+    parse_tree_t *declaration = symbol && symbol->kind == PARSE_SYM_VARIABLE
+            && symbol->mutability == PARSE_SYM_CONST ? symbol->decl_node
+                                                     : nullptr;
+    parse_tree_t *node = nt_is(grammar, declaration,
+            CORE_STRING_STATIC("sym-decl"))
+        ? child_nt(grammar, declaration, CORE_STRING_STATIC("expression"))
+        : nullptr;
+    while (node && !core_tree_is_leaf(node)) {
+        n00bb_node_facts_t *facts = n00bb_node_facts(node);
+        if (produced_literal_site(grammar, node))
+            return facts && facts->static_literal ? node : nullptr;
+        if (core_tree_num_children(node) != 1) return nullptr;
+        node = core_tree_child(node, 0);
+    }
+    return nullptr;
+}
+
+static bool
 n00bb_lower_static_litmod(ir_lower_context_t *context,
                           parse_visit_t *visit, bool entering, void *opaque)
 {
     (void)opaque;
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
-    n00bb_litmod_site_t *site = tu
-        ? n00bb_node_literal_site(visit->node) : nullptr;
-    bool default_container = !site && n00bb_default_container_literal(
-        visit->grammar, visit->node,
-        parse_tree_type(visit->node));
-    if (!site && !default_container) return true;
-    if (site && (!core_string_eq(site->registration->kind,
-                                  CORE_STRING_STATIC("sequence"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("dict"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("set"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("quotes"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("int"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("hex"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("float"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("bool"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("nil"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("tuple"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("record"))
-                  && !core_string_eq(site->registration->kind,
-                                     CORE_STRING_STATIC("fence")))) return true;
+    if (!tu || !produced_literal_site(visit->grammar, visit->node))
+        return true;
     if (entering) {
         if (lower->has_active_literal) return true;
         n00bb_node_facts_t *facts = n00bb_node_facts(visit->node);
@@ -7264,12 +7285,9 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
                 lower_span_for_tree(context, visit->node),
                 "literal handler result is not concrete at this site")
                 .status != IR_LOWER_FAILED;
-        parse_token_info_t *token =
-            parse_tree_find_first_terminal(visit->node);
         char name_buffer[96];
-        core_string_t name = n00bb_format_name(name_buffer,
-            sizeof(name_buffer), "__n00bb_litmod_%llu",
-            (unsigned long long)(token ? parse_token_start_byte(token) : 0));
+        core_string_t name = literal_producer_name(visit->node, name_buffer,
+                                                   sizeof(name_buffer));
         ir_module_t *module = tu->ir_module;
         ir_func_t *existing = module ? ir_func_find(module, name) : nullptr;
         if (existing) {
@@ -7316,7 +7334,7 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         || lower->active_literal.node != visit->node) return true;
     ir_span_t span = lower_span_for_tree(context, visit->node);
     th_type *result_type = parse_tree_type(visit->node);
-    ir_lower_result_t result = site
+    ir_lower_result_t result = n00bb_node_literal_site(visit->node)
         ? n00bb_lower_literal_handler(context, visit, nullptr, 0,
                                       result_type, span, nullptr)
         : nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("list-lit"))
@@ -16361,7 +16379,7 @@ n00bb_unit_defines_global(n00bb_link_analysis_t *analysis,
 static bool
 bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
                   parse_sym_entry_t *symbol, ir_global_t *global,
-                  n00bb_link_analysis_t *analysis)
+                  n00bb_link_analysis_t *analysis, bool literal_backed)
 {
     if (analysis->baked_failure_root.data) {
         core_string_t failure_root = analysis->baked_failure_root;
@@ -16404,12 +16422,19 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
         core_buffer_release(&message);
         return false;
     }
-    core_string_t identifier = n00bb_baked_root_identifier(analysis,
-        source->module.identifier, symbol->name);
+    bool covered = literal_backed || n00bb_full_build_time_stage_ran();
+    core_string_t identifier = covered
+        ? n00bb_baked_root_identifier(analysis, source->module.identifier,
+                                      symbol->name)
+        : (core_string_t){};
     if (identifier.data)
         return ir_global_set_phase_result_initializer(destination, global,
                                                       identifier);
-    if (!n00bb_build_time_stage_ran()) {
+    if (literal_backed && !n00bb_literal_values_captured()) {
+        analysis->literal_needed = true;
+        return true;
+    }
+    if (!literal_backed && !n00bb_full_build_time_stage_ran()) {
         analysis->build_time_needed = true;
         return true;
     }
@@ -16583,14 +16608,34 @@ register_module_globals(parse_grammar_t *grammar,
                     bool dynamic_const = ok && local_definition
                         && symbol->mutability == PARSE_SYM_CONST
                         && !global->has_static_initializer;
+                    parse_tree_t *literal = dynamic_const
+                        ? literal_backed_initializer(grammar, symbol)
+                        : nullptr;
+                    th_type *literal_type = literal ? parse_tree_type(literal)
+                                                    : nullptr;
+                    if (literal_type && th_hash(source_state->types,
+                            literal_type) != th_hash(source_state->types,
+                                                     global->type))
+                        literal = nullptr;
                     if (dynamic_const
                         && n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME) {
-                        analysis->build_time_capture = true;
-                        tu_state(source)->needs_build_time_capture = true;
+                        if (literal) {
+                            analysis->literal_capture = true;
+                            source_state->needs_literal_capture = true;
+                            core_list_push(source_state->literal_backed_consts,
+                                ((n00bb_literal_backed_const_t){
+                                    .literal = literal,
+                                    .global = global,
+                                }));
+                        }
+                        else {
+                            analysis->build_time_capture = true;
+                            source_state->needs_build_time_capture = true;
+                        }
                     }
                     else if (dynamic_const)
                         ok = bake_const_global(source, destination, symbol,
-                            global, analysis);
+                            global, analysis, literal != nullptr);
                     core_link_declaration_t *declaration = canonical_owner
                         ? link_declaration_for_symbol(analysis, symbol)
                         : nullptr;
@@ -18613,6 +18658,17 @@ literal_constant_order(core_translation_unit_t *unit, size_t index,
 }
 
 static bool
+store_literal_result(n00bb_tu_state_t *state, ir_global_t *global,
+                     ir_block_t *block, ir_instr_t *call)
+{
+    ir_instr_t *store = ir_instr_add(block, IR_OP_GLOBAL_STORE);
+    return store
+        && ir_instr_operand_value(store,
+            ir_global_address(state->ir_module, global))
+        && ir_instr_operand_value(store, call->dest);
+}
+
+static bool
 lower_literal_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
@@ -18656,11 +18712,16 @@ lower_literal_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit)
             && ir_instr_set_call_signature(call, constant->producer->type)
             && (!constant->global || ir_instr_set_dest(call, name, result));
         if (!ok || !constant->global) continue;
-        ir_instr_t *store = ir_instr_add(block, IR_OP_GLOBAL_STORE);
-        ok = store
-            && ir_instr_operand_value(store,
-                ir_global_address(state->ir_module, constant->global))
-            && ir_instr_operand_value(store, call->dest);
+        ok = store_literal_result(state, constant->global, block, call);
+        for (size_t b = 0; ok && b < state->literal_backed_consts.len; b++) {
+            n00bb_literal_backed_const_t *backed =
+                &state->literal_backed_consts.data[b];
+            char backed_buffer[96];
+            ok = !core_string_eq(constant->producer->name,
+                    literal_producer_name(backed->literal, backed_buffer,
+                                          sizeof(backed_buffer)))
+                || store_literal_result(state, backed->global, block, call);
+        }
     }
     core_list_free(sequence);
     ir_instr_t *ret = ok ? ir_instr_add(block, IR_OP_RETURN) : nullptr;
@@ -18817,7 +18878,7 @@ build_reachable_functions(
     for (size_t i = 0; i < initializer_order->len; i++) {
         ir_module_t *module = unit_module(
             tu_state(initializer_order->data[i]));
-        for (size_t k = 0; module && k < 2; k++) {
+        for (size_t k = 0; module && k < n00bb_initializer_kinds(); k++) {
             ir_func_t *initializer = ir_func_find(module, initializers[k]);
             if (initializer) core_list_push(roots, initializer);
         }
@@ -18833,7 +18894,7 @@ build_reachable_functions(
         CORE_STRING_STATIC(N00BB_START_NAME),
         CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME),
     };
-    for (size_t i = 0; i < 2; i++) {
+    for (size_t i = 0; !n00bb_literal_stage() && i < 2; i++) {
         ir_func_t *entry = n00bb_root_entry(analysis, entries[i]);
         if (entry) core_list_push(roots, entry);
     }
@@ -19090,7 +19151,7 @@ build_n00bb_execution_graph(
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < order->len; i++) {
         ir_module_t *module = unit_module(tu_state(order->data[i]));
-        for (size_t k = 0; module && k < 2; k++) {
+        for (size_t k = 0; module && k < n00bb_initializer_kinds(); k++) {
             ir_func_t *initializer = ir_func_find(module, names[k]);
             if (initializer) core_list_push(initializers, initializer);
         }
@@ -20136,7 +20197,7 @@ rule_members(n00bb_link_analysis_t *analysis,
         add_rule_member(&members, &seen, analysis->emitted_functions.data[f]);
     for (size_t u = 0; u < analysis->units.len; u++) {
         ir_module_t *module = unit_module(tu_state(analysis->units.data[u]));
-        for (size_t k = 0; module && k < 2; k++)
+        for (size_t k = 0; module && k < n00bb_initializer_kinds(); k++)
             add_rule_member(&members, &seen,
                             ir_func_find(module, initializers[k]));
     }
@@ -20314,7 +20375,7 @@ collect_initializer_reads(n00bb_link_analysis_t *analysis,
     for (size_t u = 0; ok && u < analysis->units.len; u++) {
         core_translation_unit_t *unit = analysis->units.data[u];
         ir_module_t *module = unit_module(tu_state(unit));
-        for (size_t k = 0; module && ok && k < 2; k++) {
+        for (size_t k = 0; module && ok && k < n00bb_initializer_kinds(); k++) {
             ir_func_t *initializer = ir_func_find(module, initializers[k]);
             ir_summary_t *summary = initializer
                 ? ir_summary_of(analysis->summaries, initializer) : nullptr;
@@ -23683,7 +23744,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             analysis->escapes, ir_diags_new_attached(ir_context, nullptr,
                 core_translation_unit_diagnostics(unit), unit));
     }
-    bool dumps = !analysis->build_time_needed;
+    bool dumps = !analysis->build_time_needed && !analysis->literal_needed;
     if (ok && dump_ir && dumps) ok = n00bb_dump_ir(analysis);
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];

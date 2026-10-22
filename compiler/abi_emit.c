@@ -2284,7 +2284,7 @@ n00bb_abi_emit_unit(
             memset(tls_descriptors, 0, tls_descriptor_count * 24);
             tls_descriptor_input_index = (uint32_t)(2 + extra_sections.len);
             core_list_push(extra_sections, ((core_object_emit_section_t){
-                .name = CORE_STRING_STATIC("__n00b_tlv"),
+                .name = CORE_STRING_STATIC("__thread_vars"),
                 .segment = CORE_STRING_STATIC("__DATA"),
                 .bytes = tls_descriptors, .size = tls_descriptor_count * 24,
                 .alignment = 8, .writable = true,

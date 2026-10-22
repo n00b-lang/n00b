@@ -452,6 +452,8 @@ typedef struct n00bb_link_analysis_t {
     bool baked_failure_reported;
     bool build_time_capture;
     bool build_time_needed;
+    bool literal_capture;
+    bool literal_needed;
     core_dict_t declarations_by_symbol;
     core_list_t(n00bb_record_request_site_t) record_requests;
     core_dict_t record_requests_by_type[N00BB_RECORD_C + 1];

@@ -94,6 +94,7 @@ bool n00bb_cache_module_object(const n00bb_cache_t *cache,
                                n00bb_cache_module_object_t *object);
 core_list_decl(n00bb_specialization_seed_t);
 bool n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache);
+bool n00bb_cache_needs_literal_capture(const n00bb_cache_t *cache);
 void n00bb_cache_seeds(const n00bb_cache_t *cache, th_ctx *types,
     ir_module_lookup_fn lookup, void *context,
     core_list_t(n00bb_specialization_seed_t) *seeds);

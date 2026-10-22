@@ -578,6 +578,12 @@ typedef struct {
 core_list_decl(n00bb_literal_constant_t);
 
 typedef struct {
+    parse_tree_t *literal;
+    ir_global_t *global;
+} n00bb_literal_backed_const_t;
+core_list_decl(n00bb_literal_backed_const_t);
+
+typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
@@ -591,6 +597,8 @@ typedef struct {
     core_list_t(n00bb_link_use_site_t) link_use_sites;
     core_list_t(n00bb_dispatch_record_t) dispatch_records;
     bool needs_build_time_capture;
+    bool needs_literal_capture;
+    core_list_t(n00bb_literal_backed_const_t) literal_backed_consts;
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_integer_seed_t) integer_seeds;
     core_list_t(n00bb_integer_edge_t) integer_edges;
@@ -1167,6 +1175,9 @@ bool is_named_type_declaration(parse_grammar_t *grammar,
                                parse_sym_entry_t *symbol);
 bool field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node);
 void n00bb_set_build_time(bool build_time);
+void n00bb_set_literal_stage(bool literal_stage);
+bool n00bb_literal_stage(void);
+size_t n00bb_initializer_kinds(void);
 parse_sym_phase_t n00bb_compile_phase(void);
 bool scope_is_within_function(parse_scope_t *scope);
 bool scope_is_within(parse_scope_t *scope, parse_scope_t *ancestor);

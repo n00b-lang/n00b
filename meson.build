@@ -722,7 +722,8 @@ test(
     suite: 'slow',
 )
 
-foreach static_case : ['static_enum', 'static_option', 'static_nested_import']
+foreach static_case : ['static_enum', 'static_option', 'static_nested_import',
+                       'static_literals']
     test(
         static_case.replace('_', '-') + '-n00b', find_program('sh'),
         args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',

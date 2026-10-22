@@ -8,20 +8,29 @@
 
 static core_buffer_t baked_capture;
 static bool baked_capture_read;
+static bool baked_capture_full;
 
 void
-n00bb_set_baked_capture(const uint8_t *data, size_t size)
+n00bb_set_baked_capture(const uint8_t *data, size_t size, bool full)
 {
     core_buffer_release(&baked_capture);
     baked_capture_read = true;
+    baked_capture_full = full;
     if (data && size)
         core_buffer_append(&baked_capture, (const char *)data, size);
 }
 
 bool
-n00bb_build_time_stage_ran(void)
+n00bb_full_build_time_stage_ran(void)
 {
-    return baked_capture_read;
+    return baked_capture_read && baked_capture_full;
+}
+
+bool
+n00bb_literal_values_captured(void)
+{
+    return baked_capture_read
+        && (!baked_capture_full || baked_capture.byte_len != 0);
 }
 
 bool

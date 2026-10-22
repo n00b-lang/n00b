@@ -1590,17 +1590,28 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
 static const cache_instance_t *loaded_instance(const n00bb_cache_t *cache,
                                                const ir_module_t *module);
 
-bool
-n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache)
+static bool
+cache_has_marker(const n00bb_cache_t *cache, core_string_t marker)
 {
     for (size_t e = 0; cache && e < cache->entries.len; e++) {
         const cache_entry_t *entry = &cache->entries.data[e];
         if (entry->load == ENTRY_VALID && entry->loaded
-            && phase_section(entry, CORE_STRING_STATIC("build-time-capture"),
-                             (core_string_t){0}))
+            && phase_section(entry, marker, (core_string_t){0}))
             return true;
     }
     return false;
+}
+
+bool
+n00bb_cache_needs_build_time_capture(const n00bb_cache_t *cache)
+{
+    return cache_has_marker(cache, CORE_STRING_STATIC("build-time-capture"));
+}
+
+bool
+n00bb_cache_needs_literal_capture(const n00bb_cache_t *cache)
+{
+    return cache_has_marker(cache, CORE_STRING_STATIC("literal-capture"));
 }
 
 static bool
@@ -2172,11 +2183,19 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                             dispatch.data, dispatch.byte_len);
     core_buffer_release(&dispatch);
     bool needs_capture = false;
-    for (size_t m = 0; m < scc->members.len; m++)
-        needs_capture = needs_capture
-            || tu_state(scc->members.data[m])->needs_build_time_capture;
+    bool needs_literals = false;
+    for (size_t m = 0; m < scc->members.len; m++) {
+        n00bb_tu_state_t *member = tu_state(scc->members.data[m]);
+        needs_capture = needs_capture || member->needs_build_time_capture;
+        needs_literals = needs_literals || member->needs_literal_capture;
+    }
     if (needs_capture) {
         phase_section_name(&name, CORE_STRING_STATIC("build-time-capture"));
+        ok = ok && sections_set(&sections, core_buffer_string(&name),
+                                (const uint8_t *)"", 0);
+    }
+    if (needs_literals) {
+        phase_section_name(&name, CORE_STRING_STATIC("literal-capture"));
         ok = ok && sections_set(&sections, core_buffer_string(&name),
                                 (const uint8_t *)"", 0);
     }

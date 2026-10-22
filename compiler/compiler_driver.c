@@ -3895,6 +3895,7 @@ wait_for_child(pid_t child)
 }
 
 static int build_time_capture = -1;
+static bool build_time_capture_full;
 
 static void
 pass_build_time_capture(void)
@@ -3903,6 +3904,8 @@ pass_build_time_capture(void)
     char descriptor[16];
     snprintf(descriptor, sizeof(descriptor), "%d", build_time_capture);
     setenv("N00BB_BUILD_TIME_CAPTURE_FD", descriptor, 1);
+    setenv("N00BB_BUILD_TIME_CAPTURE_FULL", build_time_capture_full ? "1" : "0",
+           1);
 }
 
 enum { FORKED_BUILD_TIME_FALLBACK = 75 };
@@ -4003,13 +4006,17 @@ restart_with_strict_cache(char **argv, core_string_t argv0)
 }
 
 static void
-restart_with_build_time(char **argv, core_string_t argv0)
+restart_with_build_time(char **argv, core_string_t argv0, bool literal)
 {
     core_string_t compiler = n00bb_executable_path(argv0);
-    if (!compiler.data || setenv("N00BB_BUILD_TIME_FIRST", "1", 1)) {
+    if (!compiler.data || unsetenv("N00BB_LITERAL_FIRST")
+        || unsetenv("N00BB_BUILD_TIME_FIRST")
+        || setenv(literal ? "N00BB_LITERAL_FIRST" : "N00BB_BUILD_TIME_FIRST",
+                  "1", 1)) {
         core_free(compiler.data);
         return;
     }
+    build_time_capture = -1;
     exec_compiler(compiler, argv);
     core_free(compiler.data);
 }
@@ -4064,9 +4071,9 @@ replay_build_time_log(int log_fd, bool *reported)
 
 static char **
 build_time_arguments(int argc, char **argv, char *compiler,
-                     char *native_executable, size_t *count_out)
+                     char *native_executable, bool literal, size_t *count_out)
 {
-    char **arguments = calloc((size_t)argc + 5, sizeof(*arguments));
+    char **arguments = calloc((size_t)argc + 6, sizeof(*arguments));
     if (!arguments) return nullptr;
     size_t count = 0;
     arguments[count++] = compiler;
@@ -4094,6 +4101,7 @@ build_time_arguments(int argc, char **argv, char *compiler,
         arguments[count++] = argv[i];
     }
     arguments[count++] = "--build-time";
+    if (literal) arguments[count++] = "--literal-stage";
     arguments[count++] = "--output";
     arguments[count++] = native_executable;
     *count_out = count;
@@ -4102,7 +4110,8 @@ build_time_arguments(int argc, char **argv, char *compiler,
 
 static bool
 compile_build_time_program(int argc, char **argv, core_string_t argv0,
-                           core_string_t executable, bool *reported)
+                           core_string_t executable, bool literal,
+                           bool *reported)
 {
     core_string_t compiler_path = n00bb_executable_path(argv0);
     char *compiler = core_string_to_cstr(compiler_path);
@@ -4111,7 +4120,7 @@ compile_build_time_program(int argc, char **argv, core_string_t argv0,
     size_t count = 0;
     char **arguments = compiler && native_executable
         ? build_time_arguments(argc, argv, compiler, native_executable,
-                               &count)
+                               literal, &count)
         : nullptr;
     bool ok = arguments != nullptr;
     int log_fd = ok ? build_time_log() : -1;
@@ -4158,7 +4167,7 @@ run_build_time_program(core_string_t executable, int capture_fd)
 }
 
 static bool
-read_capture(int capture_fd)
+read_capture(int capture_fd, bool full)
 {
     core_buffer_t capture = {0};
     char chunk[65536];
@@ -4167,13 +4176,13 @@ read_capture(int capture_fd)
     while (ok && (got = read(capture_fd, chunk, sizeof(chunk))) > 0)
         core_buffer_append(&capture, chunk, (size_t)got);
     if (ok) n00bb_set_baked_capture((const uint8_t *)capture.data,
-                                    capture.byte_len);
+                                    capture.byte_len, full);
     core_buffer_release(&capture);
     return ok;
 }
 
 static bool
-run_build_time_stage(int argc, char **argv, core_string_t argv0,
+run_build_time_stage(int argc, char **argv, core_string_t argv0, bool literal,
                      core_diagnostics_t *diagnostics, bool *reported)
 {
     core_string_t inherited = core_string_from_cstr(
@@ -4181,8 +4190,11 @@ run_build_time_stage(int argc, char **argv, core_string_t argv0,
     if (inherited.data) {
         build_time_capture = (int)core_string_strtoll(inherited, 10);
         core_free(inherited.data);
+        const char *full = getenv("N00BB_BUILD_TIME_CAPTURE_FULL");
+        build_time_capture_full = !full || full[0] != '0';
         unsetenv("N00BB_BUILD_TIME_CAPTURE_FD");
-        return read_capture(build_time_capture)
+        unsetenv("N00BB_BUILD_TIME_CAPTURE_FULL");
+        return read_capture(build_time_capture, build_time_capture_full)
             || build_time_failure(diagnostics, CORE_STRING_STATIC(
                 "could not read the build-time capture"));
     }
@@ -4202,7 +4214,7 @@ run_build_time_stage(int argc, char **argv, core_string_t argv0,
         "could not create the build-time capture file"));
     bool child_reported = false;
     if (ok && !compile_build_time_program(argc, argv, argv0,
-                                          executable_path, &child_reported)) {
+            executable_path, literal, &child_reported)) {
         *reported = child_reported;
         ok = child_reported ? false : build_time_failure(diagnostics,
             CORE_STRING_STATIC(
@@ -4213,10 +4225,13 @@ run_build_time_stage(int argc, char **argv, core_string_t argv0,
     if (ok && needed && !run_build_time_program(executable_path, capture_fd))
         ok = build_time_failure(diagnostics,
             CORE_STRING_STATIC("the build-time run failed"));
-    if (ok && !read_capture(capture_fd))
+    if (ok && !read_capture(capture_fd, !literal))
         ok = build_time_failure(diagnostics, CORE_STRING_STATIC(
             "could not read the build-time capture"));
-    if (ok) build_time_capture = capture_fd;
+    if (ok) {
+        build_time_capture = capture_fd;
+        build_time_capture_full = !literal;
+    }
     else if (capture_fd >= 0) close(capture_fd);
     unlink(executable);
     return ok;
@@ -4247,7 +4262,8 @@ spawn_build_time_stage(int argc, char **argv, core_string_t argv0,
                        n00bb_link_analysis_t *analysis,
                        core_diagnostics_t *diagnostics, bool *reported)
 {
-    return run_build_time_stage(argc, argv, argv0, diagnostics, reported)
+    return run_build_time_stage(argc, argv, argv0, false, diagnostics,
+                                reported)
         && load_build_time_capture(analysis, diagnostics);
 }
 
@@ -4281,7 +4297,8 @@ fork_build_time_stage(int argc, char **argv, core_string_t argv0,
     core_free(compiler_path.data);
     size_t count = 0;
     char **arguments = compiler
-        ? build_time_arguments(argc, argv, compiler, executable, &count)
+        ? build_time_arguments(argc, argv, compiler, executable, false,
+                               &count)
         : nullptr;
     pid_t pid = -1;
     if (capture_fd >= 0 && log_fd >= 0 && arguments) {
@@ -4330,10 +4347,13 @@ fork_build_time_stage(int argc, char **argv, core_string_t argv0,
     if (ok && needed && !run_build_time_program(executable_text, capture_fd))
         ok = build_time_failure(diagnostics,
             CORE_STRING_STATIC("the build-time run failed"));
-    if (ok && !read_capture(capture_fd))
+    if (ok && needed && !read_capture(capture_fd, true))
         ok = build_time_failure(diagnostics, CORE_STRING_STATIC(
             "could not read the build-time capture"));
-    if (ok) build_time_capture = capture_fd;
+    if (ok && needed) {
+        build_time_capture = capture_fd;
+        build_time_capture_full = true;
+    }
     else if (capture_fd >= 0) close(capture_fd);
     unlink(executable);
     core_free(executable);
@@ -4630,6 +4650,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     bool build_time = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--build-time"));
     n00bb_set_build_time(build_time);
+    n00bb_set_literal_stage(parse_cmdr_flag_present(args,
+        CORE_STRING_STATIC("--literal-stage")));
     n00bb_native_root_hide_hosted(build_time);
     if (build_command && !build_time && input_count > 1) {
         core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
@@ -4638,15 +4660,17 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         options_valid = false;
     }
     bool build_time_reported = false;
+    bool full_first = getenv("N00BB_BUILD_TIME_FIRST") != nullptr;
+    bool literal_first = !full_first && getenv("N00BB_LITERAL_FIRST");
+    bool inherited_capture = getenv("N00BB_BUILD_TIME_CAPTURE_FD") != nullptr;
     bool deferred_build_time = build_command && !build_time
-        && !getenv("N00BB_BUILD_TIME_CAPTURE_FD");
-    bool upfront_build_time = build_command
-        || ((lower_command || library_command || compile_command)
-            && getenv("N00BB_BUILD_TIME_FIRST"));
-    if (options_valid && upfront_build_time
-        && !build_time && !deferred_build_time
-        && !run_build_time_stage(argc, argv, argv0, cli_diagnostics,
-                                 &build_time_reported))
+        && !inherited_capture && !full_first && !literal_first;
+    bool upfront_build_time = (build_command || lower_command
+            || library_command || compile_command)
+        && (inherited_capture || full_first || literal_first);
+    if (options_valid && upfront_build_time && !build_time
+        && !run_build_time_stage(argc, argv, argv0, literal_first,
+                                 cli_diagnostics, &build_time_reported))
         options_valid = false;
     int32_t native_root_count = parse_cmdr_flag_value_count(args,
         CORE_STRING_STATIC("--native-root"));
@@ -4890,8 +4914,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             parse_cmdr_flag_present(args,
                 CORE_STRING_STATIC("--dump-summaries")),
             parse_cmdr_flag_present(args, CORE_STRING_STATIC("--dump-layout")));
-    if (link_analysis && link_analysis->build_time_needed && !build_time) {
-        restart_with_build_time(argv, argv0);
+    if (link_analysis && !build_time && (link_analysis->build_time_needed
+                                         || link_analysis->literal_needed)) {
+        restart_with_build_time(argv, argv0,
+                                !link_analysis->build_time_needed);
         core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_FATAL,
             CORE_STRING_STATIC("N00BB-B0027"),
             CORE_STRING_STATIC("could not restart with a build-time run"));

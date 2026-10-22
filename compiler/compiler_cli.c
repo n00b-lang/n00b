@@ -76,6 +76,8 @@ static const parse_cmdr_flag_t BUILD_FLAGS[] = {
     LOWERING_DUMP_FLAGS,
     FLAG("--build-time", NO_ALIAS, BOOL, false,
          "compile the program that computes consts"),
+    FLAG("--literal-stage", NO_ALIAS, BOOL, false,
+         "with --build-time, compile only the static literal producers"),
     FLAG("--unchecked-wide-narrowing", NO_ALIAS, BOOL, false,
          "narrow 128-bit integers without the runtime range check"),
     FLAG("--verify-analyses", NO_ALIAS, BOOL, false,

@@ -558,6 +558,9 @@ n00bb_flag_argument(const char *prefix, core_string_t value)
 bool
 n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis)
 {
+    if (analysis && n00bb_literal_stage())
+        return analysis->literal_capture
+            || n00bb_cache_needs_literal_capture(analysis->cache);
     return analysis && (analysis->build_time_capture
         || n00bb_cache_needs_build_time_capture(analysis->cache)
         || n00bb_root_entry(analysis,
@@ -1059,7 +1062,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             break;
         }
         if (state->interface_module && state->package_interface) continue;
-        for (size_t k = 0; ok && k < 2; k++) {
+        for (size_t k = 0; ok && k < n00bb_initializer_kinds(); k++) {
             if (!ir_func_find(state->ir_module, initializers[k])) continue;
             names[initializer_count] = qualified_function_name(
                 ir_module_name(state->ir_module), initializers[k]);
@@ -1067,7 +1070,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         }
     }
     bool build_time = n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
-    ir_func_t *entry = ok ? n00bb_root_entry(analysis, build_time
+    ir_func_t *entry = ok && !n00bb_literal_stage()
+        ? n00bb_root_entry(analysis, build_time
         ? CORE_STRING_STATIC(N00BB_COMPTIME_START_NAME)
         : CORE_STRING_STATIC(N00BB_START_NAME)) : nullptr;
     if (entry) {

@@ -10430,11 +10430,30 @@ simple_identifier_expression(parse_grammar_t *grammar, parse_tree_t *node,
 }
 
 static bool compiling_build_time;
+static bool compiling_literal_stage;
 
 void
 n00bb_set_build_time(bool build_time)
 {
     compiling_build_time = build_time;
+}
+
+void
+n00bb_set_literal_stage(bool literal_stage)
+{
+    compiling_literal_stage = literal_stage;
+}
+
+bool
+n00bb_literal_stage(void)
+{
+    return compiling_build_time && compiling_literal_stage;
+}
+
+size_t
+n00bb_initializer_kinds(void)
+{
+    return n00bb_literal_stage() ? 1 : 2;
 }
 
 parse_sym_phase_t
@@ -10828,6 +10847,7 @@ free_tu_state(void *data)
         core_free(state->dispatch_records.data[i].method.data);
     }
     core_list_free(state->dispatch_records);
+    core_list_free(state->literal_backed_consts);
     core_list_free(state->deferred_conversions);
     core_list_free(state->integer_seeds);
     core_list_free(state->integer_edges);
@@ -10876,6 +10896,8 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->literal_constants = core_list_new(n00bb_literal_constant_t);
+    state->literal_backed_consts =
+        core_list_new(n00bb_literal_backed_const_t);
     state->array_type_nodes = core_list_new(parse_tree_ptr_t);
     state->literal_modifiers = core_list_new(n00bb_user_litmod_t);
     state->package_declarations = core_list_new(n00bb_package_declaration_t);
