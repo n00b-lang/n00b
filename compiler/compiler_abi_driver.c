@@ -21,6 +21,7 @@ extern char **environ;
 #include "compiler_phases.h"
 #include "compiler_abi_driver.h"
 #include "compiler_cache.h"
+#include "compiler_ffi.h"
 #include "cached_body.h"
 #include "compiler_object_io.h"
 #include "abi_emit.h"
@@ -553,6 +554,29 @@ n00bb_flag_argument(const char *prefix, core_string_t value)
     char *native = core_string_to_cstr(core_buffer_string(&argument));
     core_buffer_release(&argument);
     return native;
+}
+
+static char *
+debug_bundle_path(core_string_t executable)
+{
+    core_buffer_t bundle = {0};
+    core_buffer_append_string(&bundle, executable);
+    core_buffer_puts(&bundle, ".dSYM");
+    char *path = core_string_to_cstr(core_buffer_string(&bundle));
+    core_buffer_release(&bundle);
+    return path;
+}
+
+void
+n00bb_remove_executable(const char *path)
+{
+    if (!path) return;
+    unlink(path);
+    core_string_t executable = core_string_from_cstr(path);
+    char *bundle = debug_bundle_path(executable);
+    n00bb_remove_tree(bundle);
+    core_free(bundle);
+    core_free(executable.data);
 }
 
 bool
@@ -1393,11 +1417,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             }
 #ifdef __APPLE__
             if (ok && debug_enabled) {
-                core_buffer_t bundle = {0};
-                core_buffer_append_string(&bundle, output_name);
-                core_buffer_puts(&bundle, ".dSYM");
-                char *native_bundle = core_string_to_cstr(
-                    core_buffer_string(&bundle));
+                char *native_bundle = debug_bundle_path(output_name);
                 char *dsymutil[] = {"/usr/bin/dsymutil", (char *)output, "-o",
                                     native_bundle, nullptr};
                 pid_t child = 0;
@@ -1407,7 +1427,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                     (void)waitpid(child, &status, 0);
                 }
                 core_free(native_bundle);
-                core_buffer_release(&bundle);
             }
 #endif
             if (host_archive) {

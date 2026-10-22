@@ -4233,7 +4233,7 @@ run_build_time_stage(int argc, char **argv, core_string_t argv0, bool literal,
         build_time_capture_full = !literal;
     }
     else if (capture_fd >= 0) close(capture_fd);
-    unlink(executable);
+    n00bb_remove_executable(executable);
     return ok;
 }
 
@@ -4355,7 +4355,7 @@ fork_build_time_stage(int argc, char **argv, core_string_t argv0,
         build_time_capture_full = true;
     }
     else if (capture_fd >= 0) close(capture_fd);
-    unlink(executable);
+    n00bb_remove_executable(executable);
     core_free(executable);
     if (fallback)
         return spawn_build_time_stage(argc, argv, argv0, analysis,
