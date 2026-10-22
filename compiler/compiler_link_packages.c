@@ -1322,6 +1322,19 @@ register_package_context_callables(parse_grammar_t *grammar,
 }
 
 static bool
+export_name_has_origins(n00bb_package_declaration_t *package,
+                        parse_sym_entry_t *binding)
+{
+    core_translation_unit_t *origin = canonical_symbol(binding)->owner_unit;
+    parse_scope_t *scope = binding->scope ? binding->scope : package->scope;
+    for (parse_sym_entry_t *entry = n00bb_scope_named_next(scope,
+             binding->name, nullptr);
+         entry; entry = n00bb_scope_named_next(scope, binding->name, entry))
+        if (canonical_symbol(entry)->owner_unit != origin) return true;
+    return false;
+}
+
+static bool
 register_package_export_declaration(n00bb_link_analysis_t *analysis,
                                     th_env *environment,
                                     core_translation_unit_t *interface_unit,
@@ -1335,8 +1348,12 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
     if (!source || !source_unit || !source->type) return false;
     n00bb_tu_state_t *source_state = tu_state(source_unit);
     core_buffer_t external = {0}, origin = {0};
-    core_buffer_printf(&external, "%.*s.%.*s", (int)package->name.u8_bytes,
-        package->name.data, (int)binding->name.u8_bytes, binding->name.data);
+    core_string_t module = source_unit->module.identifier;
+    bool qualify = export_name_has_origins(package, binding);
+    core_buffer_printf(&external, "%.*s.%.*s%s%.*s",
+        (int)package->name.u8_bytes, package->name.data,
+        (int)binding->name.u8_bytes, binding->name.data,
+        qualify ? "#" : "", qualify ? (int)module.u8_bytes : 0, module.data);
     th_env_metadata_owner_t metadata_kind =
         package_export_metadata_kind(source);
     bool include_members = true;
@@ -1710,22 +1727,15 @@ connect_package_subpackage(core_translation_unit_t *parent_unit,
                 "a manifest can export only subpackages from its own source package"));
         return false;
     }
-    parse_scope_t *types = parse_symtab_scope_in_namespace(
-        symtab, parent->scope, CORE_STRING_STATIC("type"));
-    parse_sym_entry_t *existing = parse_symtab_lookup_in(parent->scope,
-                                                         member_name);
-    if (existing && existing->kind == PARSE_SYM_MODULE
-        && existing->exposed_scope == child->scope
-        && parse_sym_binding(existing,
-            CORE_STRING_STATIC("n00bb.package-unit")) == child_unit)
-        return true;
-    if (existing || parse_symtab_lookup_in(types, member_name)) {
-        package_diagnostic(child_unit, child->node,
-            CORE_STRING_STATIC("N00BB-M0006"),
-            CORE_STRING_STATIC(
-                "subpackage name conflicts with another package binding"));
-        return false;
-    }
+    for (parse_sym_entry_t *existing = n00bb_scope_named_next(parent->scope,
+             member_name, nullptr);
+         existing; existing = n00bb_scope_named_next(parent->scope,
+             member_name, existing))
+        if (existing->kind == PARSE_SYM_MODULE
+            && existing->exposed_scope == child->scope
+            && parse_sym_binding(existing,
+                CORE_STRING_STATIC("n00bb.package-unit")) == child_unit)
+            return true;
     parse_symtab_enter_scope_all(symtab, parent->scope);
     parse_sym_entry_t *binding = parse_symtab_add(symtab,
         CORE_STRING_STATIC(""), member_name, PARSE_SYM_MODULE, child->node);
@@ -1859,20 +1869,16 @@ connect_package_subpackages(n00bb_link_analysis_t *analysis)
     return true;
 }
 
-static bool
-export_name_conflicts(parse_scope_t *scope, parse_scope_t *types,
-                      core_string_t name, parse_sym_entry_t *source)
+static parse_sym_entry_t *
+existing_export_binding(parse_scope_t *scope, core_string_t name,
+                        parse_sym_entry_t *source)
 {
-    if (parse_symtab_lookup_in(types, name)) return true;
-    for (parse_sym_entry_t *entry = scope->first_in_scope; entry;
-         entry = entry->next_in_scope) {
-        if (!core_string_eq(entry->name, name)) continue;
-        if (source->kind != PARSE_SYM_FUNCTION
-            || entry->kind != PARSE_SYM_FUNCTION
-            || canonical_symbol(entry) == canonical_symbol(source))
-            return true;
-    }
-    return false;
+    parse_sym_entry_t *origin = canonical_symbol(source);
+    for (parse_sym_entry_t *entry = n00bb_scope_named_next(scope, name,
+             nullptr);
+         entry; entry = n00bb_scope_named_next(scope, name, entry))
+        if (canonical_symbol(entry) == origin) return entry;
+    return nullptr;
 }
 
 static void
@@ -1892,6 +1898,80 @@ copy_export_binding_facts(parse_sym_entry_t *binding,
     binding->storage_duration = origin->storage_duration;
 }
 
+parse_sym_entry_t *
+n00bb_package_module_view(parse_symtab_t *symtab, parse_scope_t *scope,
+                          core_string_t name)
+{
+    parse_scope_t *views = symtab && scope
+        ? parse_symtab_scope_in_namespace(symtab, scope,
+              CORE_STRING_STATIC(N00BB_MODULE_VIEW_NAMESPACE))
+        : nullptr;
+    for (parse_sym_entry_t *entry = views ? views->first_in_scope : nullptr;
+         entry; entry = entry->next_in_scope)
+        if (entry->kind == PARSE_SYM_MODULE && entry->exposed_scope
+            && core_string_eq(entry->name, name))
+            return entry;
+    return nullptr;
+}
+
+static bool
+ensure_package_module_view(core_translation_unit_t *interface_unit,
+                           n00bb_package_declaration_t *package,
+                           core_translation_unit_t *source_unit)
+{
+    n00bb_tu_state_t *state = tu_state(interface_unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    core_string_t module = source_unit ? source_unit->module.identifier
+                                       : (core_string_t){0};
+    if (!symtab || !module.data || source_unit == interface_unit
+        || module.u8_bytes <= package->name.u8_bytes + 1
+        || !core_string_starts_with(module, package->name)
+        || module.data[package->name.u8_bytes] != '.')
+        return true;
+    parse_scope_t *scope = package->scope;
+    size_t start = package->name.u8_bytes + 1;
+    while (start < module.u8_bytes) {
+        size_t end = start;
+        while (end < module.u8_bytes && module.data[end] != '.') end++;
+        core_string_t component = core_string_slice(module, start,
+                                                    end - start);
+        parse_sym_entry_t *view = n00bb_package_module_view(symtab, scope,
+                                                            component);
+        if (!view) {
+            n00bb_module_view_t *filter = core_alloc(n00bb_module_view_t);
+            *filter = (n00bb_module_view_t){
+                .package_scope = package->scope,
+                .module = core_string_slice(module, 0, end),
+            };
+            parse_symtab_enter_scope_all(symtab, scope);
+            view = parse_symtab_add(symtab,
+                CORE_STRING_STATIC(N00BB_MODULE_VIEW_NAMESPACE),
+                component, PARSE_SYM_MODULE, package->node);
+            parse_symtab_push_scope_all(symtab,
+                CORE_STRING_STATIC(N00BB_MODULE_VIEW_NAMESPACE));
+            parse_scope_t *child = parse_symtab_current_scope(symtab,
+                CORE_STRING_STATIC(""));
+            parse_symtab_pop_scope_all(symtab);
+            parse_symtab_leave_scope_all(symtab);
+            if (!view || !child
+                || !parse_sym_set_binding(view,
+                       CORE_STRING_STATIC(N00BB_MODULE_VIEW_KEY), filter)
+                || !parse_sym_set_binding(view,
+                       CORE_STRING_STATIC("n00bb.package-unit"),
+                       interface_unit))
+                return false;
+            child->scope_tag = CORE_STRING_STATIC("package-interface");
+            child->owner_unit = interface_unit;
+            view->exposed_scope = child;
+            view->visibility = CORE_STRING_STATIC("public");
+        }
+        scope = view->exposed_scope;
+        start = end + 1;
+    }
+    return true;
+}
+
 static bool
 add_package_export_symbol(core_translation_unit_t *interface_unit,
                           n00bb_package_declaration_t *package,
@@ -1904,13 +1984,14 @@ add_package_export_symbol(core_translation_unit_t *interface_unit,
     if (!symtab || !package->scope || !source) return false;
     parse_scope_t *type_scope = parse_symtab_scope_in_namespace(
         symtab, package->scope, CORE_STRING_STATIC("type"));
-    if (export_name_conflicts(package->scope, type_scope, export->export_name,
-                              source)) {
-        package_diagnostic(interface_unit, export->node,
-            CORE_STRING_STATIC("N00BB-M0006"),
-            CORE_STRING_STATIC(
-                "package export name conflicts with another binding"));
-        return false;
+    parse_sym_entry_t *existing = existing_export_binding(package->scope,
+            export->export_name, source);
+    if (!existing)
+        existing = existing_export_binding(type_scope, export->export_name,
+                                           source);
+    if (existing) {
+        export->symbol = existing;
+        return true;
     }
     core_string_t ns = source->scope && source->scope->ns
         ? source->scope->ns->ns_name : CORE_STRING_STATIC("");
@@ -1932,7 +2013,8 @@ add_package_export_symbol(core_translation_unit_t *interface_unit,
             CORE_STRING_STATIC("n00bb.exposed-record"), origin))
         return false;
     export->symbol = binding;
-    return true;
+    return ensure_package_module_view(interface_unit, package,
+                                      origin->owner_unit);
 }
 
 static parse_sym_entry_t *
@@ -2139,7 +2221,18 @@ resolve_one_package_export(core_translation_unit_t *unit,
         export->symbol = symbol;
         return 1;
     }
-    return add_package_export_symbol(unit, package, export, symbol) ? 1 : -1;
+    if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->scope)
+        return add_package_export_symbol(unit, package, export, symbol)
+            ? 1 : -1;
+    for (parse_sym_entry_t *overload = n00bb_scope_named_next(symbol->scope,
+             symbol->name, nullptr);
+         overload; overload = n00bb_scope_named_next(symbol->scope,
+             symbol->name, overload))
+        if (overload->kind == PARSE_SYM_FUNCTION
+            && symbol_is_public_declaration(overload)
+            && !add_package_export_symbol(unit, package, export, overload))
+            return -1;
+    return 1;
 }
 
 bool

@@ -107,6 +107,11 @@ package builtin {
     export string.core.utf8_word_is_ascii
     export string.core.utf8_char_count
     export string.core.len
+    export containers.array.len
+    export containers.dict.len
+    export containers.list.len
+    export containers.set.len
+    export containers.view.len
     export string.core.widen_encoding
     export string.core.string
     export string.style.rich

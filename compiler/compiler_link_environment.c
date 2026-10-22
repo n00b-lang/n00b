@@ -8,6 +8,40 @@ typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 
 static void
+describe_fitting_methods(th_ctx *types, core_string_t trait,
+                         core_string_t method, th_type *receiver,
+                         size_t count, core_buffer_t *out)
+{
+    th_env_method_t *methods = count
+        ? core_alloc_array(th_env_method_t, count) : nullptr;
+    if (!methods) return;
+    count = th_env_method_candidates(types, trait, method, methods, count);
+    size_t listed = 0;
+    core_string_t example = {0};
+    for (size_t i = 0; i < count; i++) {
+        th_type *signature = methods[i].signature
+            ? th_resolve(methods[i].signature) : nullptr;
+        const th_param *self = signature && th_kind_of(signature) == TH_FUNCTION
+                && th_func_nparams(signature)
+            ? th_func_param(signature, 0) : nullptr;
+        if (!self || !receiver
+            || !th_env_type_pattern_accepts(types, self->type, receiver))
+            continue;
+        core_buffer_printf(out, "%s'%.*s.%.*s'", listed ? ", " : ": ",
+            (int)methods[i].module.u8_bytes, methods[i].module.data,
+            (int)methods[i].root_name.u8_bytes, methods[i].root_name.data);
+        if (!listed) example = methods[i].module;
+        listed++;
+    }
+    if (listed)
+        core_buffer_printf(out, "; call one statically with function "
+            "syntax and its qualified path, such as '%.*s.%.*s(...)'",
+            (int)example.u8_bytes, example.data,
+            (int)method.u8_bytes, method.data);
+    core_free(methods);
+}
+
+static void
 dispatch_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
                         core_list_t(n00bb_tree_ptr_t) *arguments)
 {
@@ -368,11 +402,16 @@ build_import_environment(parse_grammar_t *grammar,
                     size_t candidates = th_env_method_candidates(
                         state->types, trait, detail.constraint, nullptr, 0);
                     if (core_string_eq(reason, CORE_STRING_STATIC(
-                            "method dispatch is ambiguous")))
+                            "method dispatch is ambiguous"))) {
                         core_buffer_printf(&message,
-                            "more than one `%.*s` implementation fits %.*s here",
+                            "more than one `%.*s` implementation fits %.*s "
+                            "equally well",
                             (int)trait.u8_bytes, trait.data,
                             (int)got.u8_bytes, got.data);
+                        describe_fitting_methods(state->types, trait,
+                            detail.constraint, detail.got, candidates,
+                            &message);
+                    }
                     else if (detail.got
                              && n00bb_option_type_element(detail.got,
                                                           nullptr))

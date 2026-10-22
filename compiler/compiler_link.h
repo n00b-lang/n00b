@@ -110,7 +110,8 @@ bool call_units_failed(core_translation_unit_t *const *units,
 bool unify_calls_until_stable(parse_grammar_t *grammar,
     core_link_unit_t *link, core_translation_unit_t *const *units,
     size_t unit_count, bool resolve_ordinary_calls,
-    bool resolve_member_calls, bool deferred_trait_requirements_only);
+    bool resolve_member_calls, bool deferred_trait_requirements_only,
+    bool settle_overloads);
 bool generalize_link_unit(parse_grammar_t *grammar, core_link_unit_t *link,
     core_list_t(core_translation_unit_ptr_t) *units);
 bool publish_link_call_dependencies(core_link_unit_t *link,
@@ -328,16 +329,52 @@ typedef enum {
     N00BB_OVERLOAD_PENDING,
     N00BB_OVERLOAD_NO_MATCH,
     N00BB_OVERLOAD_AMBIGUOUS,
+    N00BB_OVERLOAD_CONFLICT,
 } n00bb_overload_status_t;
 typedef struct {
     n00bb_overload_status_t status;
     parse_sym_entry_t *symbol;
     bool passed_over_conversion;
+    core_list_t(parse_sym_entry_ptr_t) matches;
 } n00bb_overload_choice_t;
+typedef struct {
+    bool unqualified;
+    core_string_t origin_module;
+} n00bb_call_lookup_t;
+#define N00BB_MODULE_VIEW_NAMESPACE "module-view"
+#define N00BB_MODULE_VIEW_KEY "n00bb.package-module-view"
+typedef struct {
+    parse_scope_t *package_scope;
+    core_string_t module;
+} n00bb_module_view_t;
 n00bb_overload_choice_t n00bb_select_call_overload(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, parse_cf_label_t *call,
-    parse_sym_entry_t *symbol);
-bool n00bb_function_has_overloads(parse_sym_entry_t *symbol);
+    parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
+void n00bb_overload_choice_release(n00bb_overload_choice_t *choice);
+bool check_local_names_against_imports(n00bb_link_analysis_t *analysis);
+parse_sym_entry_t *n00bb_unqualified_import_named(
+    core_translation_unit_t *unit, core_string_t name, bool function);
+void n00bb_check_clobbered_import(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *node);
+bool n00bb_report_name_conflict(parse_grammar_t *grammar,
+    core_translation_unit_t *unit, parse_tree_t *node, core_string_t name,
+    parse_scope_t *scope, bool type_reference);
+bool n00bb_resolve_overload_reference(parse_grammar_t *grammar,
+    core_link_unit_t *link, n00bb_tu_state_t *state, parse_tree_t *callee,
+    parse_sym_entry_t *selected);
+void n00bb_describe_candidate(parse_grammar_t *grammar,
+    n00bb_tu_state_t *state, parse_sym_entry_t *symbol, core_buffer_t *out);
+void n00bb_describe_candidates(parse_grammar_t *grammar,
+    n00bb_tu_state_t *state,
+    const core_list_t(parse_sym_entry_ptr_t) *symbols, core_buffer_t *out);
+bool n00bb_function_has_overloads(n00bb_tu_state_t *state,
+    parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
+parse_sym_entry_t *n00bb_module_view_member(parse_symtab_t *symtab,
+    const n00bb_module_view_t *view, core_string_t name, bool type_member);
+const core_list_t(n00bb_import_source_t) *unqualified_import_sources(
+    core_translation_unit_t *unit);
+core_list_t(parse_sym_entry_ptr_t) unqualified_import_candidates(
+    core_translation_unit_t *unit, core_string_t name, bool type_reference);
 void n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);
 core_string_t link_symbol_module(core_translation_unit_t *unit,
@@ -542,6 +579,9 @@ core_link_stage_result_t n00bb_link_stage_ir_bindings(
 bool validate_package_interfaces(n00bb_link_analysis_t *analysis);
 bool connect_package_subpackages(n00bb_link_analysis_t *analysis);
 bool populate_package_interfaces(n00bb_link_analysis_t *analysis);
+parse_sym_entry_t *n00bb_package_module_view(parse_symtab_t *symtab,
+                                             parse_scope_t *scope,
+                                             core_string_t name);
 parse_sym_entry_t *granted_export_symbol(core_translation_unit_t *provider,
                                          core_string_t name,
                                          core_string_t grantee);

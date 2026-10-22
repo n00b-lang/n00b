@@ -46,7 +46,7 @@ fn kv_errstr(s: c_int) -> *cstr static
 
 binding export {
     implement Db   = "kvstore.Store"
-    implement Iter = "kvstore.Cursor"
+    implement Iter = "kvstore.Kv_Cursor"
     provide kv_open      = "kvstore.open"
     provide kv_put       = "kvstore.put"
     provide kv_get       = "kvstore.get"

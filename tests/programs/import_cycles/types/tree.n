@@ -1,6 +1,6 @@
 import forest
 
-public type Tree {
+public type Tree_Node {
     public label: int
     public kids: forest.Forest
 }
@@ -10,13 +10,13 @@ public type Pair {
     public right: 'T
 }
 
-public var shared: Tree = make_tree(forest.make_forest(2))
+public var shared: Tree_Node = make_tree(forest.make_forest(2))
 
-public func make_tree(kids: forest.Forest) -> Tree {
+public func make_tree(kids: forest.Forest) -> Tree_Node {
     return (label = 1, kids = kids)
 }
 
-public func depth(item: Tree) -> int {
+public func depth(item: Tree_Node) -> int {
     return forest.count(item.kids) - 2
 }
 

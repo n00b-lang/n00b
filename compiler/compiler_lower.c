@@ -7187,6 +7187,8 @@ n00bb_record_literal_constant(n00bb_lower_context_t *lower,
         tu->link_analysis->literal_capture = true;
         tu->needs_literal_capture = true;
     }
+    else if (!global && !n00bb_literal_values_captured())
+        tu->link_analysis->literal_needed = true;
     *global_out = global;
     return true;
 }
@@ -17306,6 +17308,12 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                                                ? cached_body->name
                                                : semantic_name,
                                            semantic_type, linkage);
+                if (new_function && function && !cached_body
+                    && symbol->decl_node && state->ir_module)
+                    function->span = lower_span_for_tree(
+                        &(ir_lower_context_t){
+                            .file_id = ir_file_count(state->ir_module) - 1},
+                        symbol->decl_node);
                 if (always_inline && function
                     && !ir_func_set_always_inline(ir_context, function, true)) {
                     core_list_free(scopes);
@@ -18082,8 +18090,10 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             goto cleanup;
         }
         if (!n00bb_emit_with_success(&context, body)) goto cleanup;
+        ir_span_t implicit_return = ir_module_span(module);
+        implicit_return.implied = true;
         if (!n00bb_emit_success_return(&context, nullptr,
-                &lower_data.parameters_to_copy_out, ir_module_span(module)))
+                &lower_data.parameters_to_copy_out, implicit_return))
             goto cleanup;
     }
     ok = !ir_diags_failed(diagnostics);
@@ -22454,6 +22464,10 @@ static void
 report_dead_store(const ir_instr_t *store, void *context)
 {
     core_translation_unit_t *unit = context;
+    const ir_value_t *stored = store->op == IR_OP_STORE
+            && store->n_operands > 1
+        ? ir_operand_value(&store->operands[1]) : nullptr;
+    if (stored && stored->kind == IR_VAL_PARAM) return;
     core_diagnostics_report_at(
         core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0010"),
@@ -22533,6 +22547,53 @@ note_taken_owner(void *context, const ir_value_t *value)
     core_dict_put(context, value->owner, 1);
 }
 
+static parse_sym_entry_t *
+ir_function_declaration(n00bb_link_analysis_t *analysis,
+                        core_translation_unit_t *unit, ir_func_t *function)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (parse_scope_t *scope = state && state->annotations
+             ? state->annotations->symtab->all_scopes : nullptr;
+         scope; scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->decl_node)
+                continue;
+            core_link_declaration_t *declaration =
+                link_declaration_for_symbol(analysis, symbol);
+            if (declaration && core_link_declaration_binding(declaration,
+                    CORE_STRING_STATIC("n00bb.ir.function")) == function)
+                return symbol;
+        }
+    return nullptr;
+}
+
+static bool
+parameter_location(parse_grammar_t *grammar, parse_sym_entry_t *function,
+                   core_string_t name, core_diag_location_t *out)
+{
+    parse_tree_t *signature = function ? child_nt(grammar,
+        function->decl_node, CORE_STRING_STATIC("func-type-signature"))
+        : nullptr;
+    parse_tree_t *formals = child_nt(grammar, signature ? signature
+        : function ? function->decl_node : nullptr,
+        CORE_STRING_STATIC("param-decl"));
+    core_list_t(parse_sym_entry_ptr_t) parameters =
+        core_list_new(parse_sym_entry_ptr_t);
+    parse_sym_entry_t *rest = nullptr;
+    if (formals) collect_ir_parameters(grammar, formals, &parameters, &rest);
+    if (rest) core_list_push(parameters, rest);
+    bool found = false;
+    for (size_t i = 0; !found && i < parameters.len; i++)
+        if (parameters.data[i] && parameters.data[i]->decl_node
+            && core_string_eq(parameters.data[i]->name, name)) {
+            *out = link_source_location(parameters.data[i]->decl_node);
+            found = true;
+        }
+    core_list_free(parameters);
+    return found;
+}
+
 static void
 warn_unused_params(n00bb_link_analysis_t *analysis)
 {
@@ -22569,16 +22630,20 @@ warn_unused_params(n00bb_link_analysis_t *analysis)
                 "parameter '%.*s' is never used; name it with a leading "
                 "'_' if it is required by a signature",
                 (int)parameter->name.u8_bytes, parameter->name.data);
+            core_diag_location_t location = {
+                .line = span.start_line,
+                .column = span.start_col,
+                .end_line = span.end_line,
+                .end_column = span.end_col,
+                .has_location = true,
+            };
+            (void)parameter_location(analysis->grammar,
+                ir_function_declaration(analysis, unit, function),
+                parameter->name, &location);
             core_diagnostics_report_at(
                 core_translation_unit_diagnostics(unit), unit,
                 CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0018"),
-                core_buffer_string(&message), (core_diag_location_t){
-                    .line = span.start_line,
-                    .column = span.start_col,
-                    .end_line = span.end_line,
-                    .end_column = span.end_col,
-                    .has_location = true,
-                });
+                core_buffer_string(&message), location);
             core_buffer_release(&message);
         }
         core_free(unused);

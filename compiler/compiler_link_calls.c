@@ -320,16 +320,19 @@ static void
 rebind_call_node(n00bb_tu_state_t *state, parse_tree_t *node,
                  parse_sym_entry_t *from, parse_sym_entry_t *to)
 {
+    parse_sym_entry_t *origin = canonical_symbol(from);
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
-        && resolution.target.symbol == from) {
+        && canonical_symbol(resolution.target.symbol) == origin) {
+        parse_sym_entry_t *bound = resolution.target.symbol;
         parse_tree_set_resolution_symbol(node, to);
-        if (parse_sym_remove_use(from, node)) (void)parse_sym_add_use(to, node);
+        if (parse_sym_remove_use(bound, node)) (void)parse_sym_add_use(to, node);
     }
-    if (parse_tree_sym(node) == from)
+    if (parse_tree_sym(node) && canonical_symbol(parse_tree_sym(node)) == origin)
         parse_tree_set_sym(node, to);
     n00bb_link_use_site_t *site = link_use_site_for_node(state, node);
-    if (site && site->symbol == from) site->symbol = to;
+    if (site && site->symbol && canonical_symbol(site->symbol) == origin)
+        site->symbol = to;
 }
 
 static void
@@ -541,35 +544,72 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         bool context_call = context_symbol(grammar, context_target);
         bool free_function = !member || call_receiver_is_module(grammar,
             unit, core_tree_child(member, 0));
+        n00bb_link_use_site_t *callee_site = member
+            ? link_use_site_for_node(state, member) : nullptr;
+        n00bb_call_lookup_t lookup = {
+            .unqualified = !member,
+            .origin_module = callee_site ? callee_site->origin_module
+                                         : (core_string_t){0},
+        };
         if (callee_symbol && !context_call && free_function
-            && n00bb_function_has_overloads(callee_symbol)) {
+            && n00bb_function_has_overloads(state, callee_symbol, lookup)) {
             n00bb_overload_choice_t choice = n00bb_select_call_overload(
-                grammar, state, label, callee_symbol);
+                grammar, state, label, callee_symbol, lookup);
             if (choice.status == N00BB_OVERLOAD_PENDING
                 && !force_overloads) {
+                n00bb_overload_choice_release(&choice);
                 (*deferred)++;
                 continue;
             }
             if (choice.status != N00BB_OVERLOAD_SELECTED) {
-                core_string_t message = choice.status == N00BB_OVERLOAD_PENDING
-                    ? CORE_STRING_STATIC(
-                        "overloaded call needs a known argument type")
-                    : choice.status == N00BB_OVERLOAD_NO_MATCH
-                    ? CORE_STRING_STATIC(
-                        "no overload accepts these arguments")
-                    : CORE_STRING_STATIC(
+                core_buffer_t message = {0};
+                switch (choice.status) {
+                case N00BB_OVERLOAD_PENDING:
+                    core_buffer_puts(&message,
+                        "overloaded call needs a known argument type");
+                    break;
+                case N00BB_OVERLOAD_NO_MATCH:
+                    core_buffer_puts(&message,
+                        "no overload accepts these arguments");
+                    break;
+                case N00BB_OVERLOAD_CONFLICT:
+                    core_buffer_printf(&message,
+                        "'%.*s' names functions from different modules that "
+                        "all accept this call: ",
+                        (int)callee_symbol->name.u8_bytes,
+                        callee_symbol->name.data);
+                    n00bb_describe_candidates(grammar, state,
+                                              &choice.matches, &message);
+                    core_buffer_puts(&message,
+                        "; call the one you mean by its qualified path");
+                    break;
+                default:
+                    core_buffer_puts(&message,
                         "multiple equally specific overloads accept this call");
+                    if (choice.matches.len) {
+                        core_buffer_puts(&message, ": ");
+                        n00bb_describe_candidates(grammar, state,
+                                                  &choice.matches, &message);
+                    }
+                    break;
+                }
                 core_string_t code = choice.status == N00BB_OVERLOAD_PENDING
                     ? CORE_STRING_STATIC("N00BB-T0055")
                     : choice.status == N00BB_OVERLOAD_NO_MATCH
                     ? CORE_STRING_STATIC("N00BB-T0053")
+                    : choice.status == N00BB_OVERLOAD_CONFLICT
+                    ? CORE_STRING_STATIC("N00BB-T0056")
                     : CORE_STRING_STATIC("N00BB-T0054");
                 core_diagnostics_report_at(
                     core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, code, message,
+                    CORE_DIAG_ERROR, code,
+                    core_string_borrow(message.data, message.byte_len),
                     link_source_location(label->self));
+                core_buffer_release(&message);
+                n00bb_overload_choice_release(&choice);
                 continue;
             }
+            n00bb_overload_choice_release(&choice);
             n00bb_node_facts_t *facts = choice.passed_over_conversion
                 ? n00bb_ensure_node_facts(state, label->self) : nullptr;
             if (facts && !facts->overload_conversion_warning_reported) {
@@ -585,6 +625,16 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 rebind_call_callee(grammar, state, label->self, label,
                                    callee_symbol, choice.symbol);
                 callee_symbol = choice.symbol;
+            }
+            if (!n00bb_resolve_overload_reference(grammar, link, state,
+                    member ? member : label->cond, callee_symbol)) {
+                core_diagnostics_report_at(
+                    core_translation_unit_diagnostics(unit), unit,
+                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0004"),
+                    CORE_STRING_STATIC(
+                        "could not bind the selected overload in the link unit"),
+                    link_source_location(label->self));
+                continue;
             }
         }
         parse_sym_entry_t *caller_symbol = enclosing_function_symbol(
@@ -935,7 +985,8 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
                          core_translation_unit_t *const *units,
                          size_t unit_count, bool resolve_ordinary_calls,
                          bool resolve_member_calls,
-                         bool deferred_trait_requirements_only)
+                         bool deferred_trait_requirements_only,
+                         bool settle_overloads)
 {
     size_t call_count = 0;
     for (size_t i = 0; i < unit_count; i++) {
@@ -977,7 +1028,7 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
                 || !memcmp(before.data, after.data, before.byte_len));
         core_buffer_release(&before);
         core_buffer_release(&after);
-        if (stable && deferred && !force_overloads) {
+        if (stable && deferred && !force_overloads && settle_overloads) {
             force_overloads = true;
             continue;
         }
@@ -1005,16 +1056,16 @@ finalize_module_group_contracts(void *context,
     module_inference_context_t *inference = context;
     parse_grammar_t *grammar = inference->grammar;
     if (!unify_calls_until_stable(grammar, nullptr, members, member_count,
-            true, false, false)) return false;
+            true, false, false, false)) return false;
     bool shaped = true;
     for (size_t i = 0; i < member_count; i++)
         shaped = n00bb_resolve_shape_literals(grammar, members[i]) && shaped;
     bool grounded = false;
     if (!shaped || !unify_calls_until_stable(grammar, nullptr, members,
-            member_count, true, false, false)
+            member_count, true, false, false, true)
         || !n00bb_ground_integers(members, member_count, true, &grounded)
         || (grounded && !unify_calls_until_stable(grammar, nullptr, members,
-            member_count, true, false, false))) return false;
+            member_count, true, false, false, true))) return false;
 
     for (size_t i = 0; i < member_count; i++) {
         n00bb_tu_state_t *state = tu_state(members[i]);

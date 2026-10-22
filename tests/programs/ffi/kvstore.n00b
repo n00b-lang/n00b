@@ -19,7 +19,7 @@ type Entry {
     public val: Array[u8]
 }
 
-type Cursor {
+type Kv_Cursor {
     store: int
     id: int
 }
@@ -94,13 +94,13 @@ func get(store: Store, key: Array[u8]) -> Array[u8]? fail: Kv_Error {
     return nil
 }
 
-func iter_new(store: Store, prefix: Array[u8]) -> Cursor fail: Kv_Error {
+func iter_new(store: Store, prefix: Array[u8]) -> Kv_Cursor fail: Kv_Error {
     positions.append(0)
-    let cursor: Cursor = (store = store.id, id = cast[int]positions.len() - 1)
+    let cursor: Kv_Cursor = (store = store.id, id = cast[int]positions.len() - 1)
     return cursor
 }
 
-func iter_next(cursor: Cursor) -> Entry? {
+func iter_next(cursor: Kv_Cursor) -> Entry? {
     var at = positions[cursor.id]
     while at < cast[int]records.len() {
         let item = records[at]

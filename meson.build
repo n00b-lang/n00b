@@ -583,6 +583,16 @@ test(
 )
 
 test(
+    'name-resolution', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'name_resolution.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'name_resolution'],
+    timeout: 300,
+    suite: 'slow',
+)
+
+test(
     'overload-resolution', find_program('sh'),
     args: [meson.current_source_dir() / 'tests' / 'overload_resolution.sh',
            n00bb_exe.full_path(),
