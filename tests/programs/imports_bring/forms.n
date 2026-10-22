@@ -1,0 +1,9 @@
+import geo as g, alg
+import alg as a bring double as twice
+bring circle, rectangle as rect from geo
+bring circle as round from shapes
+
+require g.circle() == 1 and alg.double(2) == 4 and a.double(3) == 6
+require twice(4) == 8 and circle() == 1 and rect() == 2 and round() == 9
+require len("abc") == 3
+__fd_write(2, "ok")

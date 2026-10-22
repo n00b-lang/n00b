@@ -15,6 +15,10 @@ typedef bool (*n00bb_preprocessor_implicit_import_fn)(
 typedef bool (*n00bb_preprocessor_prepare_import_fn)(
     void *context, parse_grammar_t *grammar, parse_tree_t *import_statement,
     core_translation_unit_t *importer);
+typedef bool (*n00bb_preprocessor_import_shape_fn)(
+    void *context, parse_grammar_t *grammar, parse_tree_t *import_statement,
+    parse_tree_t *module_source, core_translation_unit_t *importer,
+    core_translation_unit_t *imported);
 typedef bool (*n00bb_preprocessor_selected_body_fn)(
     void *context, core_translation_unit_t *unit, parse_tree_t *body);
 typedef bool (*n00bb_preprocessor_module_literal_fn)(
@@ -52,6 +56,7 @@ typedef struct {
     bool (*import_failure_reported)(core_translation_unit_t *unit);
     void *import_context;
     n00bb_preprocessor_prepare_import_fn prepare_import;
+    n00bb_preprocessor_import_shape_fn record_import;
     n00bb_preprocessor_selected_body_fn selected_body;
     n00bb_preprocessor_selected_body_fn build_time_use;
     void *selected_body_context;

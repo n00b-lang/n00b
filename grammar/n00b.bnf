@@ -279,7 +279,16 @@
 
 <assert-stmt> ::= (%"assert"|%"require") <expression>
 
-<import-stmt> @declares($1, "module") ::= %"import" <member-chain> (%"from" %STRING_LIT)?
+<import-stmt> ::= %"import" <module-import> (%"," <module-import>)*
+<import-stmt> ::= %"import" <module-import> %"bring" <brought-names>
+<import-stmt> ::= %"bring" <brought-symbols> %"from" <module-source>
+<module-import> @declares($0, "module") ::= <module-source>
+<module-import> @declares($2, "module") ::= <module-source> %"as" %IDENTIFIER
+<module-source> ::= <member-chain>
+<brought-symbols> ::= %"all"
+<brought-symbols> ::= <brought-names>
+<brought-names> ::= <brought-symbol> (%"," <brought-symbol>)*
+<brought-symbol> ::= %IDENTIFIER (%"as" %IDENTIFIER)?
 
 <package-decl> ::= %"package" <dotted-name> <package-body>
 <package-body> ::= <block-start> <package-items>? <block-end>

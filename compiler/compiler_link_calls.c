@@ -550,6 +550,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             .unqualified = !member,
             .origin_module = callee_site ? callee_site->origin_module
                                          : (core_string_t){0},
+            .name = member ? (core_string_t){0} : first_token_text(label->cond),
         };
         if (callee_symbol && !context_call && free_function
             && n00bb_function_has_overloads(state, callee_symbol, lookup)) {

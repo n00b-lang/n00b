@@ -340,6 +340,7 @@ typedef struct {
 typedef struct {
     bool unqualified;
     core_string_t origin_module;
+    core_string_t name;
 } n00bb_call_lookup_t;
 #define N00BB_MODULE_VIEW_NAMESPACE "module-view"
 #define N00BB_MODULE_VIEW_KEY "n00bb.package-module-view"
@@ -352,6 +353,7 @@ n00bb_overload_choice_t n00bb_select_call_overload(parse_grammar_t *grammar,
     parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
 void n00bb_overload_choice_release(n00bb_overload_choice_t *choice);
 bool check_local_names_against_imports(n00bb_link_analysis_t *analysis);
+bool check_import_brings(n00bb_link_analysis_t *analysis);
 parse_sym_entry_t *n00bb_unqualified_import_named(
     core_translation_unit_t *unit, core_string_t name, bool function);
 void n00bb_check_clobbered_import(parse_grammar_t *grammar,

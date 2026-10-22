@@ -1,0 +1,11 @@
+public func circle() -> int {
+    return 1
+}
+
+public func rectangle() -> int {
+    return 2
+}
+
+private func secret() -> int {
+    return 3
+}
