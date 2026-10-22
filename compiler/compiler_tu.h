@@ -509,6 +509,7 @@ typedef struct {
     core_string_t dispatch_trait;
     core_string_t dispatch_method;
     core_string_t resolved_trait_name;
+    core_string_t origin_module;
     th_type *dispatch_receiver_type;
     n00bb_trait_dispatch_plan_t *closed_dispatch;
     bool dotted_path;
@@ -584,6 +585,13 @@ typedef struct {
 core_list_decl(n00bb_literal_backed_const_t);
 
 typedef struct {
+    core_translation_unit_t *provider;
+    parse_scope_t *values;
+    parse_scope_t *types;
+} n00bb_import_source_t;
+core_list_decl(n00bb_import_source_t);
+
+typedef struct {
     core_translation_unit_t *unit;
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
@@ -599,6 +607,7 @@ typedef struct {
     bool needs_build_time_capture;
     bool needs_literal_capture;
     core_list_t(n00bb_literal_backed_const_t) literal_backed_consts;
+    core_list_t(n00bb_import_source_t) import_sources;
     core_list_t(n00bb_deferred_conversion_t) deferred_conversions;
     core_list_t(n00bb_integer_seed_t) integer_seeds;
     core_list_t(n00bb_integer_edge_t) integer_edges;
@@ -1056,6 +1065,10 @@ n00bb_package_declaration_t *find_package_declaration(
     core_translation_unit_t *unit, core_string_t name);
 core_diag_location_t link_source_location(parse_tree_t *node);
 parse_sym_entry_t *canonical_symbol(parse_sym_entry_t *symbol);
+parse_sym_entry_t *n00bb_scope_named_next(parse_scope_t *scope,
+    core_string_t name, parse_sym_entry_t *previous);
+bool n00bb_same_declaration_listed(
+    const core_list_t(parse_sym_entry_ptr_t) *list, parse_sym_entry_t *symbol);
 parse_sym_entry_t *type_symbol_in_loaded_imports(
     core_translation_unit_t *root, th_ctx *types, th_type *wanted,
     core_translation_unit_t **owner_unit_out);
@@ -1201,6 +1214,7 @@ bool resolve_function_parameter_facts(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, n00bb_function_parameter_facts_t *facts,
     core_list_t(th_param) *params, th_param *rest, bool *has_rest);
 core_string_t n00bb_print_type(th_ctx *types, th_type *type);
+core_string_t n00bb_print_type_brief(th_ctx *types, th_type *type);
 th_type *function_with_error_channel(th_ctx *types, th_type *function,
     th_type *error_type);
 parse_sym_entry_t *formal_symbol_at(parse_grammar_t *grammar,

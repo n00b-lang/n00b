@@ -423,6 +423,11 @@ bool ir_report_unbounded_recursion(ir_summaries_t *summaries, ir_func_t *f,
     return true;
 }
 
+static void note_dead_store(const ir_instr_t *store, void *context)
+{
+    core_dict_put(context, (void *)store, 1);
+}
+
 uint32_t ir_unused_params(const ir_func_t *f, uint32_t *out,
                           uint32_t capacity)
 {
@@ -430,7 +435,9 @@ uint32_t ir_unused_params(const ir_func_t *f, uint32_t *out,
         return 0;
     }
 
-    bool *used = core_alloc_array(bool, f->n_params);
+    bool *used     = core_alloc_array(bool, f->n_params);
+    bool *stored   = core_alloc_array(bool, f->n_params);
+    bool  pending  = false;
 
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         const ir_block_t *block = f->blocks[b];
@@ -444,10 +451,38 @@ uint32_t ir_unused_params(const ir_func_t *f, uint32_t *out,
                 if (value && value->kind == IR_VAL_PARAM
                     && value->index < f->n_params
                     && f->params[value->index] == value) {
+                    bool *mark = in->op == IR_OP_STORE && o == 1
+                        ? stored : used;
+                    mark[value->index] = true;
+                }
+            }
+        }
+    }
+
+    for (uint32_t p = 0; p < f->n_params; p++) {
+        pending |= stored[p] && !used[p];
+    }
+
+    if (pending) {
+        core_dict_t dead;
+
+        core_dict_init(&dead, nullptr, nullptr);
+        ir_dead_stores((ir_func_t *)f, note_dead_store, &dead);
+        for (uint32_t b = 0; b < f->n_blocks; b++) {
+            for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+                const ir_instr_t *in    = f->blocks[b]->instrs[i];
+                const ir_value_t *value = in->op == IR_OP_STORE
+                                              && in->n_operands > 1
+                    ? ir_operand_used_value(in, 1) : nullptr;
+
+                if (value && value->kind == IR_VAL_PARAM
+                    && value->index < f->n_params
+                    && !core_dict_contains(&dead, (void *)in)) {
                     used[value->index] = true;
                 }
             }
         }
+        core_dict_free(&dead);
     }
 
     uint32_t count = 0;
@@ -458,6 +493,7 @@ uint32_t ir_unused_params(const ir_func_t *f, uint32_t *out,
         }
     }
     core_free(used);
+    core_free(stored);
 
     return count;
 }

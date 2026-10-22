@@ -9,7 +9,7 @@ public type Forest {
 }
 
 public type Holder {
-    public tree: tree.Tree
+    public tree: tree.Tree_Node
     public count: int
 }
 
@@ -27,7 +27,7 @@ public func measure(self: Forest) -> int {
     return self.size * 2
 }
 
-public func first_label(item: tree.Tree) -> int {
+public func first_label(item: tree.Tree_Node) -> int {
     return item.label
 }
 

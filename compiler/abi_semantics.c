@@ -410,9 +410,11 @@ n00bb_abi_link_semantic_rows(
                 if (!matches[r]) continue;
                 th_env_method_t chosen = {0};
                 uint32_t function_index = 0;
-                valid = th_env_method_resolve(ctx, receiver.type,
-                    trait.qualified_name, method->name, &chosen)
-                        == TH_ENV_METHOD_FOUND;
+                th_env_method_status_t status = th_env_method_resolve(ctx,
+                    receiver.type, trait.qualified_name, method->name,
+                    &chosen);
+                if (status == TH_ENV_METHOD_AMBIGUOUS) continue;
+                valid = status == TH_ENV_METHOD_FOUND;
                 if (!valid) break;
                 if (chosen.module.data && core_string_eq(chosen.module,
                         CORE_STRING_STATIC("builtins")))

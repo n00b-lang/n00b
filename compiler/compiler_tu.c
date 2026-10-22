@@ -7065,16 +7065,29 @@ function_with_error_channel(th_ctx *types, th_type *function,
     return result;
 }
 
-core_string_t
-n00bb_print_type(th_ctx *types, th_type *type)
+static core_string_t
+print_user_type(th_ctx *types, th_type *type, bool constraints)
 {
-    static const th_print_options_t options = {
+    th_print_options_t options = {
         .sequence = CORE_STRING_STATIC("Array"),
         .reference = CORE_STRING_STATIC("Ref"),
         .option_suffix = CORE_STRING_STATIC("?"),
+        .omit_constraints = !constraints,
         .omit_nil_failure = true,
     };
     return th_print_with_options(types, type, &options);
+}
+
+core_string_t
+n00bb_print_type_brief(th_ctx *types, th_type *type)
+{
+    return print_user_type(types, type, false);
+}
+
+core_string_t
+n00bb_print_type(th_ctx *types, th_type *type)
+{
+    return print_user_type(types, type, true);
 }
 
 void
@@ -10848,6 +10861,7 @@ free_tu_state(void *data)
     }
     core_list_free(state->dispatch_records);
     core_list_free(state->literal_backed_consts);
+    core_list_free(state->import_sources);
     core_list_free(state->deferred_conversions);
     core_list_free(state->integer_seeds);
     core_list_free(state->integer_edges);
@@ -11027,6 +11041,26 @@ canonical_symbol(parse_sym_entry_t *symbol)
     return symbol;
 }
 
+parse_sym_entry_t *
+n00bb_scope_named_next(parse_scope_t *scope, core_string_t name,
+                       parse_sym_entry_t *previous)
+{
+    parse_sym_entry_t *next = previous ? previous->shadowed
+        : scope ? parse_symtab_lookup_in(scope, name) : nullptr;
+    return next && next->scope == scope && core_string_eq(next->name, name)
+        ? next : nullptr;
+}
+
+bool
+n00bb_same_declaration_listed(const core_list_t(parse_sym_entry_ptr_t) *list,
+                              parse_sym_entry_t *symbol)
+{
+    parse_sym_entry_t *origin = canonical_symbol(symbol);
+    for (size_t i = 0; i < list->len; i++)
+        if (canonical_symbol(list->data[i]) == origin) return true;
+    return false;
+}
+
 bool
 symbol_is_public_declaration(parse_sym_entry_t *symbol)
 {
@@ -11182,22 +11216,6 @@ cache_package_export_syntax(parse_grammar_t *grammar,
         : (core_string_t){0};
     core_buffer_release(&grantee_name);
     if (grantee && !stored_grantee.data) return false;
-    for (size_t i = 0; i < package->exports.len; i++) {
-        core_string_t prior_grantee = package->exports.data[i].grantee;
-        bool same_audience = !prior_grantee.data == !stored_grantee.data
-            && (!stored_grantee.data
-                || core_string_eq(prior_grantee, stored_grantee));
-        if (same_audience && core_string_eq(
-                package->exports.data[i].export_name, stored_export)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0006"),
-                CORE_STRING_STATIC(
-                    "package export name conflicts with another binding"),
-                link_source_location(node));
-            return false;
-        }
-    }
     core_list_push(package->exports, ((n00bb_package_export_t){
         .source_name = stored_source,
         .export_name = stored_export,

@@ -1,4 +1,4 @@
-record Cursor {
+record Mark {
     at: uint
 }
 
@@ -6,13 +6,13 @@ func span(s: string, n: int, scale: int = 1) -> string fail: string {
     return byte_slice(s, 0, n * scale)
 }
 
-func span(c: Cursor, d: Cursor) -> uint {
+func span(c: Mark, d: Mark) -> uint {
     return d.at - c.at
 }
 
 func measure() -> uint {
-    let a: Cursor = (at = 2)
-    let b: Cursor = (at = 9)
+    let a: Mark = (at = 2)
+    let b: Mark = (at = 9)
     let gap = span(a, b)
     var text: string = ""
     var wide: string = ""

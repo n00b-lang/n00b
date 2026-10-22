@@ -1319,17 +1319,137 @@ overload_candidate_fit(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     return matched;
 }
 
+static bool
+symbol_from_module(parse_sym_entry_t *symbol, core_string_t module)
+{
+    parse_sym_entry_t *origin = canonical_symbol(symbol);
+    return !module.data || (origin && origin->owner_unit
+        && core_string_eq(origin->owner_unit->module.identifier, module));
+}
+
+parse_sym_entry_t *
+n00bb_module_view_member(parse_symtab_t *symtab,
+                         const n00bb_module_view_t *view, core_string_t name,
+                         bool type_member)
+{
+    parse_scope_t *scope = view && type_member
+        ? parse_symtab_scope_in_namespace(symtab, view->package_scope,
+                                          CORE_STRING_STATIC("type"))
+        : view ? view->package_scope : nullptr;
+    for (parse_sym_entry_t *candidate = n00bb_scope_named_next(scope, name,
+             nullptr);
+         candidate; candidate = n00bb_scope_named_next(scope, name, candidate))
+        if (symbol_from_module(candidate, view->module)) return candidate;
+    return nullptr;
+}
+
+static void
+push_scope_functions(parse_scope_t *scope, core_string_t name,
+                     core_string_t module,
+                     core_list_t(parse_sym_entry_ptr_t) *out)
+{
+    for (parse_sym_entry_t *candidate = n00bb_scope_named_next(scope, name,
+             nullptr);
+         candidate; candidate = n00bb_scope_named_next(scope, name, candidate))
+        if (candidate->kind == PARSE_SYM_FUNCTION
+            && symbol_from_module(candidate, module)
+            && !n00bb_same_declaration_listed(out, candidate))
+            core_list_push(*out, candidate);
+}
+
+static bool
+symbol_is_local(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
+{
+    parse_sym_entry_t *origin = symbol ? canonical_symbol(symbol) : nullptr;
+    return origin && state && origin->owner_unit == state->unit;
+}
+
+static void
+push_import_functions(core_translation_unit_t *unit, core_string_t name,
+                      core_list_t(parse_sym_entry_ptr_t) *out)
+{
+    const core_list_t(n00bb_import_source_t) *sources =
+        unqualified_import_sources(unit);
+    for (size_t i = 0; sources && i < sources->len; i++)
+        push_scope_functions(sources->data[i].values, name,
+                             (core_string_t){0}, out);
+}
+
+static core_list_t(parse_sym_entry_ptr_t)
+function_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+                    n00bb_call_lookup_t lookup)
+{
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        core_list_new(parse_sym_entry_ptr_t);
+    if (!symbol || symbol->kind != PARSE_SYM_FUNCTION) return candidates;
+    if (!symbol->scope) {
+        core_list_push(candidates, symbol);
+        return candidates;
+    }
+    push_scope_functions(symbol->scope, symbol->name, lookup.origin_module,
+                         &candidates);
+    if (lookup.unqualified)
+        push_import_functions(state->unit, symbol->name, &candidates);
+    return candidates;
+}
+
+void
+n00bb_overload_choice_release(n00bb_overload_choice_t *choice)
+{
+    core_list_free(choice->matches);
+}
+
+void
+n00bb_describe_candidate(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                         parse_sym_entry_t *symbol, core_buffer_t *out)
+{
+    parse_sym_entry_t *origin = canonical_symbol(symbol);
+    core_string_t module = origin->owner_unit
+        ? origin->owner_unit->module.identifier : (core_string_t){0};
+    parse_tree_t *signature = origin->decl_node
+        ? child_nt(grammar, origin->decl_node,
+                   CORE_STRING_STATIC("func-type-signature")) : nullptr;
+    core_string_t text = signature
+        ? n00bb_node_source_text(origin->owner_unit, signature,
+                                 (core_string_t){0})
+        : (core_string_t){0};
+    if (!text.u8_bytes && origin->type && state && state->types)
+        text = n00bb_print_type_brief(state->types, origin->type);
+    bool function = origin->kind == PARSE_SYM_FUNCTION;
+    bool typed_value = !function && origin->kind != PARSE_SYM_TYPEDEF
+        && text.u8_bytes;
+    core_buffer_printf(out, "'%.*s%s%.*s%.*s'%s%.*s",
+        (int)module.u8_bytes, module.data, module.u8_bytes ? "." : "",
+        (int)origin->name.u8_bytes, origin->name.data,
+        function ? (int)text.u8_bytes : 0, text.data,
+        typed_value ? " of type " : "",
+        typed_value ? (int)text.u8_bytes : 0, text.data);
+}
+
+void
+n00bb_describe_candidates(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                          const core_list_t(parse_sym_entry_ptr_t) *symbols,
+                          core_buffer_t *out)
+{
+    for (size_t i = 0; i < symbols->len; i++) {
+        if (i && i + 1 == symbols->len) core_buffer_puts(out, " and ");
+        else if (i) core_buffer_puts(out, ", ");
+        n00bb_describe_candidate(grammar, state, symbols->data[i], out);
+    }
+}
+
 n00bb_overload_choice_t
 n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                           parse_cf_label_t *call, parse_sym_entry_t *symbol)
+                           parse_cf_label_t *call, parse_sym_entry_t *symbol,
+                           n00bb_call_lookup_t lookup)
 {
-    n00bb_overload_choice_t choice = {N00BB_OVERLOAD_SELECTED, symbol, false};
+    n00bb_overload_choice_t choice = {N00BB_OVERLOAD_SELECTED, symbol, false,
+        core_list_new(parse_sym_entry_ptr_t)};
     if (!symbol || symbol->kind != PARSE_SYM_FUNCTION || !call || !symbol->scope
         || !state || !state->types)
         return choice;
-    parse_sym_entry_t *head = parse_symtab_lookup_in(symbol->scope,
-                                                     symbol->name);
-    if (head && head->scope == symbol->scope) symbol = head;
+    core_list_t(parse_sym_entry_ptr_t) candidates = function_candidates(state,
+        symbol, lookup);
     core_list_t(n00bb_tree_ptr_t) arguments =
         core_list_new(n00bb_tree_ptr_t);
     core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
@@ -1345,15 +1465,12 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     parse_sym_entry_t *sole = nullptr;
     size_t shapes = 0;
     bool pending = false;
-    for (parse_sym_entry_t *candidate = symbol; candidate
-         && candidate->scope == symbol->scope
-         && core_string_eq(candidate->name, symbol->name);
-         candidate = candidate->shadowed) {
+    for (size_t c = 0; c < candidates.len; c++) {
+        parse_sym_entry_t *candidate = candidates.data[c];
         th_type *signature = candidate->callable_contract
             ? candidate->callable_contract : candidate->type;
         signature = signature ? th_resolve(signature) : nullptr;
-        if (candidate->kind != PARSE_SYM_FUNCTION || !signature
-            || th_kind_of(signature) != TH_FUNCTION
+        if (!signature || th_kind_of(signature) != TH_FUNCTION
             || !call_binds_candidate(grammar, candidate, signature,
                                      arguments.len, &keywords)) continue;
         shapes++;
@@ -1368,6 +1485,7 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     }
     core_list_free(arguments);
     core_list_free(keywords);
+    core_list_free(candidates);
     if (shapes == 1) {
         choice.symbol = sole;
         core_list_free(fits);
@@ -1379,6 +1497,14 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         core_list_free(fits);
         return choice;
     }
+    bool local_fit = false;
+    for (size_t i = 0; i < fits.len; i++)
+        local_fit |= symbol_is_local(state, fits.data[i].symbol);
+    size_t kept = 0;
+    for (size_t i = 0; i < fits.len; i++)
+        if (!local_fit || symbol_is_local(state, fits.data[i].symbol))
+            fits.data[kept++] = fits.data[i];
+    fits.len = kept;
     size_t tier = SIZE_MAX;
     for (size_t i = 0; i < fits.len; i++)
         if (!fits.data[i].conversions) {
@@ -1388,6 +1514,23 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         else tier = 1;
     if (tier == SIZE_MAX) {
         choice.status = N00BB_OVERLOAD_NO_MATCH;
+        core_list_free(fits);
+        return choice;
+    }
+    core_translation_unit_t *origin = nullptr;
+    bool mixed_origins = false;
+    for (size_t i = 0; i < fits.len; i++) {
+        if ((fits.data[i].conversions != 0) != (tier != 0)) continue;
+        core_translation_unit_t *owner =
+            canonical_symbol(fits.data[i].symbol)->owner_unit;
+        mixed_origins |= origin && owner != origin;
+        origin = owner;
+    }
+    if (mixed_origins) {
+        choice.status = N00BB_OVERLOAD_CONFLICT;
+        for (size_t i = 0; i < fits.len; i++)
+            if ((fits.data[i].conversions != 0) == (tier != 0))
+                core_list_push(choice.matches, fits.data[i].symbol);
         core_list_free(fits);
         return choice;
     }
@@ -1415,15 +1558,12 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
             }
         }
         if (dominated) continue;
-        if (selected != SIZE_MAX) {
-            choice.status = N00BB_OVERLOAD_AMBIGUOUS;
-            core_list_free(fits);
-            return choice;
-        }
+        core_list_push(choice.matches, fits.data[i].symbol);
         selected = i;
     }
-    if (selected == SIZE_MAX) choice.status = N00BB_OVERLOAD_AMBIGUOUS;
+    if (choice.matches.len != 1) choice.status = N00BB_OVERLOAD_AMBIGUOUS;
     else {
+        choice.matches.len = 0;
         choice.symbol = fits.data[selected].symbol;
         if (!tier)
             for (size_t i = 0; i < fits.len; i++)
@@ -1434,17 +1574,15 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 }
 
 bool
-n00bb_function_has_overloads(parse_sym_entry_t *symbol)
+n00bb_function_has_overloads(n00bb_tu_state_t *state,
+                             parse_sym_entry_t *symbol,
+                             n00bb_call_lookup_t lookup)
 {
-    parse_sym_entry_t *head = symbol->scope
-        ? parse_symtab_lookup_in(symbol->scope, symbol->name) : nullptr;
-    size_t count = 0;
-    for (parse_sym_entry_t *candidate = head ? head : symbol; candidate
-         && candidate->scope == symbol->scope
-         && core_string_eq(candidate->name, symbol->name);
-         candidate = candidate->shadowed)
-        count += candidate->kind == PARSE_SYM_FUNCTION;
-    return count > 1;
+    core_list_t(parse_sym_entry_ptr_t) candidates = function_candidates(state,
+        symbol, lookup);
+    bool overloaded = candidates.len > 1;
+    core_list_free(candidates);
+    return overloaded;
 }
 
 void
@@ -1457,20 +1595,26 @@ n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
         ? attached_symbol(grammar, unit, node) : nullptr;
     if (state && state->types && symbol
         && symbol->kind == PARSE_SYM_FUNCTION
-        && n00bb_function_has_overloads(symbol)
+        && n00bb_function_has_overloads(state, symbol,
+               (n00bb_call_lookup_t){
+                   .unqualified = !dotted_symbol_path_node(grammar, node)})
         && module_member_is_call(grammar, node))
         parse_tree_set_type(node, th_var(state->types));
 }
 
 static parse_sym_entry_t *
 module_call_exact_arity(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                        parse_tree_t *member, parse_sym_entry_t *symbol)
+                        parse_tree_t *member, parse_sym_entry_t *symbol,
+                        core_string_t origin_module)
 {
+    n00bb_call_lookup_t lookup = {.origin_module = origin_module};
     if (!symbol || symbol->kind != PARSE_SYM_FUNCTION
-        || !n00bb_function_has_overloads(symbol)) return symbol;
+        || !n00bb_function_has_overloads(state, symbol, lookup)) return symbol;
     n00bb_overload_choice_t choice = n00bb_select_call_overload(grammar,
-        state, call_label_for_member(grammar, state, member), symbol);
-    return choice.symbol ? choice.symbol : symbol;
+        state, call_label_for_member(grammar, state, member), symbol, lookup);
+    parse_sym_entry_t *selected = choice.symbol ? choice.symbol : symbol;
+    n00bb_overload_choice_release(&choice);
+    return selected;
 }
 
 bool
@@ -1562,12 +1706,30 @@ resolve_module_member_site(parse_grammar_t *grammar,
         ? parse_symtab_lookup_in(exposed_types, member)
         : nullptr;
     parse_sym_entry_t *symbol = parse_symtab_lookup_in(exposed_scope, member);
+    const n00bb_module_view_t *view = prefix
+        ? parse_sym_binding(prefix, CORE_STRING_STATIC(N00BB_MODULE_VIEW_KEY))
+        : nullptr;
+    if (view && imported_state && imported_state->annotations) {
+        parse_symtab_t *symtab = imported_state->annotations->symtab;
+        type = n00bb_module_view_member(symtab, view, member, true);
+        symbol = n00bb_module_view_member(symtab, view, member, false);
+        site->origin_module = view->module;
+    }
     if (module_member_is_call(grammar, node))
         symbol = module_call_exact_arity(grammar, tu_state(unit), node,
-                                         symbol);
+                                         symbol, site->origin_module);
     bool package_export = core_string_eq(exposed_scope->scope_tag,
                                          CORE_STRING_STATIC(
                                              "package-interface"));
+    if (!symbol && !type && package_export && imported_state
+        && imported_state->annotations)
+        symbol = n00bb_package_module_view(imported_state->annotations->symtab,
+                                           exposed_scope, member);
+    if (package_export && !view && (symbol || type)
+        && n00bb_report_name_conflict(grammar, unit, node, member,
+               type_reference || !symbol ? exposed_types : exposed_scope,
+               type_reference || !symbol))
+        return false;
     core_string_t consumer_package = n00bb_package_namespace(unit);
     parse_sym_entry_t *granted = !symbol && !type
         && consumer_package.u8_bytes
@@ -1633,7 +1795,9 @@ resolve_module_member_site(parse_grammar_t *grammar,
             && symbol->type && state && state->types
             && !state->semantic_annotation_complete
             && th_is_closed(state->types, symbol->type)
-            && !n00bb_function_has_overloads(symbol)) {
+            && !n00bb_function_has_overloads(state, symbol,
+                   (n00bb_call_lookup_t){
+                       .origin_module = site->origin_module})) {
             th_type *instance = th_resolve(th_type_clone(state->types,
                                                          symbol->type));
             th_type *use = th_resolve(use_type);
@@ -1713,20 +1877,15 @@ site_is_resolved_module_prefix(parse_grammar_t *grammar,
     return false;
 }
 
+static void collect_origin_candidates(parse_scope_t *scope,
+    core_string_t name, core_list_t(parse_sym_entry_ptr_t) *out);
 
-
-
-
-
-
-
-
-
-
-static parse_sym_entry_t *
-implicit_builtin_export(core_translation_unit_t *unit,
-                        core_string_t name, bool type_reference)
+const core_list_t(n00bb_import_source_t) *
+unqualified_import_sources(core_translation_unit_t *unit)
 {
+    n00bb_tu_state_t *consumer = tu_state(unit);
+    if (!consumer) return nullptr;
+    if (consumer->import_sources.len) return &consumer->import_sources;
     core_translation_unit_t *builtin = find_direct_import(
         unit, CORE_STRING_STATIC("builtin"));
     n00bb_package_declaration_t *package = builtin
@@ -1735,22 +1894,277 @@ implicit_builtin_export(core_translation_unit_t *unit,
     n00bb_tu_state_t *state = tu_state(builtin);
     parse_symtab_t *symtab = state && state->annotations
         ? state->annotations->symtab : nullptr;
-    if (!package || !package->scope || !symtab) return nullptr;
-    parse_scope_t *types = parse_symtab_scope_in_namespace(
-        symtab, package->scope, CORE_STRING_STATIC("type"));
-    parse_sym_entry_t *type = types ? parse_symtab_lookup_in(types, name)
-                                   : nullptr;
-    parse_sym_entry_t *value = parse_symtab_lookup_in(package->scope, name);
-    parse_sym_entry_t *found = type_reference ? type : value ? value : type;
-    core_string_t consumer_package = n00bb_package_namespace(unit);
-    if (!found && consumer_package.u8_bytes) {
-        parse_sym_entry_t *granted = granted_export_symbol(builtin, name,
-                                                           consumer_package);
-        if (granted && (!type_reference
-                        || granted->kind == PARSE_SYM_TYPEDEF))
-            found = granted;
+    if (package && package->scope && symtab)
+        core_list_push(consumer->import_sources, ((n00bb_import_source_t){
+            .provider = builtin,
+            .values = package->scope,
+            .types = parse_symtab_scope_in_namespace(symtab, package->scope,
+                CORE_STRING_STATIC("type")),
+        }));
+    return &consumer->import_sources;
+}
+
+static parse_sym_entry_t *
+granted_import(core_translation_unit_t *unit,
+               const n00bb_import_source_t *source, core_string_t name,
+               bool type_reference)
+{
+    core_string_t consumer = n00bb_package_namespace(unit);
+    parse_sym_entry_t *granted = consumer.u8_bytes
+        ? granted_export_symbol(source->provider, name, consumer) : nullptr;
+    return granted && (!type_reference || granted->kind == PARSE_SYM_TYPEDEF)
+        ? granted : nullptr;
+}
+
+core_list_t(parse_sym_entry_ptr_t)
+unqualified_import_candidates(core_translation_unit_t *unit,
+                              core_string_t name, bool type_reference)
+{
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        core_list_new(parse_sym_entry_ptr_t);
+    const core_list_t(n00bb_import_source_t) *sources =
+        unqualified_import_sources(unit);
+    for (size_t i = 0; sources && i < sources->len; i++) {
+        size_t before = candidates.len;
+        if (!type_reference)
+            collect_origin_candidates(sources->data[i].values, name,
+                                      &candidates);
+        if (candidates.len == before)
+            collect_origin_candidates(sources->data[i].types, name,
+                                      &candidates);
+        parse_sym_entry_t *granted = candidates.len == before
+            ? granted_import(unit, &sources->data[i], name, type_reference)
+            : nullptr;
+        if (granted) core_list_push(candidates, granted);
     }
+    return candidates;
+}
+
+static parse_sym_entry_t *
+unqualified_import_type(core_translation_unit_t *unit, core_string_t name)
+{
+    const core_list_t(n00bb_import_source_t) *sources =
+        unqualified_import_sources(unit);
+    for (size_t i = 0; sources && i < sources->len; i++) {
+        parse_sym_entry_t *type = n00bb_scope_named_next(
+            sources->data[i].types, name, nullptr);
+        if (!type) type = granted_import(unit, &sources->data[i], name, true);
+        if (type) return type;
+    }
+    return nullptr;
+}
+
+static bool
+alias_reexports(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                parse_sym_entry_t *symbol, parse_sym_entry_t *type)
+{
+    parse_tree_t *declaration = symbol->decl_node;
+    parse_sym_entry_t *target = canonical_symbol(type);
+    return nt_is(grammar, declaration, CORE_STRING_STATIC("alias-stmt"))
+        && alias_declaration_is_transparent(declaration)
+        && symbol->type && target->type && state->types
+        && th_hash(state->types, th_resolve(symbol->type))
+            == th_hash(state->types, th_resolve(target->type));
+}
+
+static bool
+function_shapes_overlap(th_ctx *types, th_type *left, th_type *right)
+{
+    left = left ? th_resolve(th_type_clone(types, left)) : nullptr;
+    right = right ? th_resolve(th_type_clone(types, right)) : nullptr;
+    if (!left || !right || th_kind_of(left) != TH_FUNCTION
+        || th_kind_of(right) != TH_FUNCTION
+        || th_func_nparams(left) != th_func_nparams(right)) return false;
+    size_t count = th_func_nparams(left);
+    th_type **left_params = core_alloc_array(th_type *, count + 1);
+    th_type **right_params = core_alloc_array(th_type *, count + 1);
+    for (size_t i = 0; i < count; i++) {
+        left_params[i] = th_func_param(left, i)->type;
+        right_params[i] = th_func_param(right, i)->type;
+    }
+    bool overlap = th_unify_probe(types, th_tuple(types, left_params, count),
+                                  th_tuple(types, right_params, count));
+    core_free(left_params);
+    core_free(right_params);
+    return overlap;
+}
+
+static void
+warn_overlapping_import(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        n00bb_tu_state_t *state, parse_sym_entry_t *local)
+{
+    core_list_t(parse_sym_entry_ptr_t) imported =
+        core_list_new(parse_sym_entry_ptr_t);
+    push_import_functions(unit, local->name, &imported);
+    size_t overlapping = 0;
+    for (size_t i = 0; i < imported.len; i++) {
+        parse_sym_entry_t *other = canonical_symbol(imported.data[i]);
+        if (!other->owner_type && function_shapes_overlap(state->types,
+                local->callable_contract ? local->callable_contract
+                                         : local->type,
+                other->callable_contract ? other->callable_contract
+                                         : other->type))
+            imported.data[overlapping++] = other;
+    }
+    imported.len = overlapping;
+    if (imported.len) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "'%.*s' overlaps the imported %s ",
+            (int)local->name.u8_bytes, local->name.data,
+            imported.len > 1 ? "functions" : "function");
+        n00bb_describe_candidates(grammar, state, &imported, &message);
+        core_buffer_puts(&message,
+            "; calls that both accept bind to this local function");
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0019"),
+            core_string_borrow(message.data, message.byte_len),
+            link_source_location(local->decl_node));
+        core_buffer_release(&message);
+    }
+    core_list_free(imported);
+}
+
+static bool
+shadows_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
+             n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
+{
+    parse_sym_entry_t *type = unqualified_import_type(unit, symbol->name);
+    if (type ? alias_reexports(grammar, state, symbol, type)
+             : !builtin_type_name(symbol->name))
+        return false;
+    core_buffer_t message = {0};
+    core_buffer_printf(&message, "'%.*s' is the name of the type ",
+        (int)symbol->name.u8_bytes, symbol->name.data);
+    if (type) n00bb_describe_candidate(grammar, state, type, &message);
+    else core_buffer_printf(&message, "'%.*s'",
+        (int)symbol->name.u8_bytes, symbol->name.data);
+    core_buffer_puts(&message,
+        "; type names cannot be shadowed, so choose another name");
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0059"),
+        core_string_borrow(message.data, message.byte_len),
+        link_source_location(symbol->decl_node));
+    core_buffer_release(&message);
+    return true;
+}
+
+bool
+check_local_names_against_imports(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        const core_list_t(n00bb_import_source_t) *sources =
+            unqualified_import_sources(unit);
+        if (!sources || !sources->len || state->interface_module
+            || !state->annotations || !state->annotations->symtab) continue;
+        for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+             scope; scope = scope->all_next) {
+            if (core_string_eq(scope->scope_tag,
+                               CORE_STRING_STATIC("package-interface")))
+                continue;
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope) {
+                if (!symbol->decl_node || symbol->is_synthetic
+                    || symbol->is_field
+                    || symbol->kind == PARSE_SYM_MODULE
+                    || symbol->kind == PARSE_SYM_ENUM_CONST
+                    || canonical_symbol(symbol) != symbol) continue;
+                if (symbol->kind == PARSE_SYM_FUNCTION && !symbol->owner_type
+                    && core_string_eq(scope->scope_tag,
+                                      CORE_STRING_STATIC("module")))
+                    warn_overlapping_import(analysis->grammar, unit, state,
+                                            symbol);
+                ok = !shadows_type(analysis->grammar, unit, state, symbol)
+                    && ok;
+            }
+        }
+    }
+    return ok;
+}
+
+static bool
+node_is_whole_callee(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        parse_tree_t *parent = parse_tree_parent(at);
+        const parse_rule_t *rule = parent
+            ? parse_tree_rule(grammar, parent) : nullptr;
+        const parse_annotation_t *call = rule
+            ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
+            : nullptr;
+        if (call)
+            return parse_tree_resolve_child_ref(grammar, parent,
+                                                call->name_ref) == at;
+        if (!parent || core_tree_num_children(parent) != 1) return false;
+    }
+    return false;
+}
+
+parse_sym_entry_t *
+n00bb_unqualified_import_named(core_translation_unit_t *unit,
+                               core_string_t name, bool function)
+{
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        unqualified_import_candidates(unit, name, false);
+    parse_sym_entry_t *found = nullptr;
+    for (size_t i = 0; !found && i < candidates.len; i++)
+        if ((candidates.data[i]->kind == PARSE_SYM_FUNCTION) == function
+            && candidates.data[i]->kind != PARSE_SYM_TYPEDEF)
+            found = candidates.data[i];
+    core_list_free(candidates);
     return found;
+}
+
+void
+n00bb_check_clobbered_import(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit,
+                             parse_tree_t *node)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_sym_entry_t *symbol = state && state->types
+        && simple_identifier_primary(grammar, node)
+        ? attached_symbol(grammar, unit, node) : nullptr;
+    if (!symbol || !symbol_is_local(state, symbol)
+        || (symbol->kind != PARSE_SYM_FUNCTION
+            && symbol->kind != PARSE_SYM_VARIABLE)) return;
+    bool call = node_is_whole_callee(grammar, node);
+    th_type *type = symbol->type ? th_resolve(symbol->type) : nullptr;
+    bool callable = symbol->kind == PARSE_SYM_FUNCTION || !type
+        || th_kind_of(type) == TH_FUNCTION
+        || (th_kind_of(type) == TH_VAR && !n00bb_open_integer(type));
+    parse_sym_entry_t *clobbered = call && !callable
+        ? n00bb_unqualified_import_named(unit, symbol->name, true)
+        : !call && symbol->kind == PARSE_SYM_FUNCTION
+        ? n00bb_unqualified_import_named(unit, symbol->name, false)
+        : nullptr;
+    if (!clobbered) return;
+    core_list_t(parse_sym_entry_ptr_t) hidden =
+        core_list_new(parse_sym_entry_ptr_t);
+    if (clobbered->kind == PARSE_SYM_FUNCTION)
+        push_import_functions(unit, symbol->name, &hidden);
+    else core_list_push(hidden, clobbered);
+    core_buffer_t message = {0};
+    core_buffer_printf(&message, "'%.*s' here is the local %s declared on "
+        "line %u, which hides the imported %s ",
+        (int)symbol->name.u8_bytes, symbol->name.data,
+        symbol->kind == PARSE_SYM_FUNCTION ? "function" : "value",
+        symbol->decl_node ? link_source_location(symbol->decl_node).line : 0,
+        clobbered->kind == PARSE_SYM_FUNCTION
+            ? (hidden.len > 1 ? "functions" : "function") : "value");
+    n00bb_describe_candidates(grammar, state, &hidden, &message);
+    core_list_free(hidden);
+    core_buffer_puts(&message,
+        "; rename the local declaration or use the imported one by its "
+        "qualified path");
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0058"),
+        core_string_borrow(message.data, message.byte_len),
+        link_source_location(node));
+    core_buffer_release(&message);
+    if (call) parse_tree_set_type(node, th_var(state->types));
 }
 
 static bool
@@ -1772,17 +2186,95 @@ names_imported_module(parse_grammar_t *grammar, parse_tree_t *node)
     return nt_is(grammar, parse_tree_parent(node), CORE_STRING_STATIC("import-stmt"));
 }
 
+static void
+collect_origin_candidates(parse_scope_t *scope, core_string_t name,
+                          core_list_t(parse_sym_entry_ptr_t) *out)
+{
+    for (parse_sym_entry_t *candidate = n00bb_scope_named_next(scope, name,
+             nullptr);
+         candidate; candidate = n00bb_scope_named_next(scope, name, candidate))
+        if (!n00bb_same_declaration_listed(out, candidate))
+            core_list_push(*out, candidate);
+}
+
+static bool
+candidates_conflict(const core_list_t(parse_sym_entry_ptr_t) *candidates,
+                    bool call)
+{
+    core_translation_unit_t *origin = nullptr;
+    bool mixed = false, value = false;
+    for (size_t i = 0; i < candidates->len; i++) {
+        parse_sym_entry_t *declaration = canonical_symbol(candidates->data[i]);
+        mixed |= origin && declaration->owner_unit != origin;
+        origin = declaration->owner_unit;
+        value |= declaration->kind != PARSE_SYM_FUNCTION;
+    }
+    return mixed && (value || !call);
+}
+
+static bool
+report_conflicting_candidates(parse_grammar_t *grammar,
+                              core_translation_unit_t *unit,
+                              parse_tree_t *node, core_string_t name,
+                              const core_list_t(parse_sym_entry_ptr_t)
+                                  *candidates,
+                              bool type_reference)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    bool conflict = candidates_conflict(candidates,
+        !type_reference && module_member_is_call(grammar, node));
+    if (conflict) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "'%.*s' names declarations from different modules: ",
+            (int)name.u8_bytes, name.data);
+        n00bb_describe_candidates(grammar, state, candidates, &message);
+        core_buffer_puts(&message,
+            "; refer to the one you mean by its qualified path");
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0057"),
+            core_string_borrow(message.data, message.byte_len),
+            link_source_location(node));
+        core_buffer_release(&message);
+    }
+    return conflict;
+}
+
+bool
+n00bb_report_name_conflict(parse_grammar_t *grammar,
+                           core_translation_unit_t *unit,
+                           parse_tree_t *node, core_string_t name,
+                           parse_scope_t *scope, bool type_reference)
+{
+    core_list_t(parse_sym_entry_ptr_t) candidates =
+        core_list_new(parse_sym_entry_ptr_t);
+    collect_origin_candidates(scope, name, &candidates);
+    bool conflict = report_conflicting_candidates(grammar, unit, node, name,
+                                                  &candidates, type_reference);
+    core_list_free(candidates);
+    return conflict;
+}
+
 static bool
 resolve_prelude_value(parse_grammar_t *grammar,
                       core_translation_unit_t *unit,
                       n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
 {
-    parse_sym_entry_t *builtin = parse_symtab_lookup_scoped(
+    parse_sym_entry_t *intrinsic = parse_symtab_lookup_scoped(
         state->annotations->symtab, site->scope,
         CORE_STRING_STATIC("builtin"), site->member_name);
-    site->symbol = n00bb_builtin_function(builtin) ? builtin
-        : implicit_builtin_export(unit, site->member_name,
-            is_type_reference_node(grammar, site->node));
+    bool type_reference = is_type_reference_node(grammar, site->node);
+    if (n00bb_builtin_function(intrinsic)) site->symbol = intrinsic;
+    else {
+        core_list_t(parse_sym_entry_ptr_t) candidates =
+            unqualified_import_candidates(unit, site->member_name,
+                                          type_reference);
+        bool conflict = report_conflicting_candidates(grammar, unit,
+            site->node, site->member_name, &candidates, type_reference);
+        site->symbol = !conflict && candidates.len ? candidates.data[0]
+                                                   : nullptr;
+        core_list_free(candidates);
+    }
     return !site->symbol
         || (parse_tree_set_resolution_symbol(site->node, site->symbol)
             && parse_tree_mark_direct_symbol_reference(site->node));
@@ -3192,6 +3684,34 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
 }
 
 bool
+n00bb_resolve_overload_reference(parse_grammar_t *grammar,
+                                 core_link_unit_t *link,
+                                 n00bb_tu_state_t *state, parse_tree_t *callee,
+                                 parse_sym_entry_t *selected)
+{
+    parse_sym_entry_t *declaration = selected ? canonical_symbol(selected)
+                                              : nullptr;
+    for (parse_tree_t *at = callee; link && declaration && at
+             && !core_tree_is_leaf(at);
+         at = core_tree_num_children(at) == 1 ? core_tree_child(at, 0)
+                                               : nullptr) {
+        n00bb_link_use_site_t *site = link_use_site_for_node(state, at);
+        if (!site || !site->reference
+            || !core_link_reference_is_deferred(site->reference)) continue;
+        core_translation_unit_t *owner = declaration->owner_unit;
+        core_buffer_t key = {0};
+        bool ok = owner && append_link_symbol_key(grammar, owner,
+                                                  declaration, &key)
+            && core_link_unit_resolve_reference(link, site->reference,
+                   link_symbol_module(owner, declaration),
+                   core_buffer_string(&key));
+        core_buffer_release(&key);
+        return ok;
+    }
+    return true;
+}
+
+bool
 register_link_use_sites(core_link_unit_t *link,
                         parse_grammar_t *grammar,
                         core_list_t(core_translation_unit_ptr_t) *units)
@@ -3243,6 +3763,28 @@ register_link_use_sites(core_link_unit_t *link,
                         reference, link_source_location(node), provenance))
                     return false;
                 if (!n00bb_bind_site_reference(unit, site, reference))
+                    return false;
+                continue;
+            }
+            if (symbol && symbol->kind == PARSE_SYM_FUNCTION
+                && module_member_is_call(grammar, node)
+                && n00bb_function_has_overloads(state, site->symbol,
+                       (n00bb_call_lookup_t){
+                           .unqualified = !site->dotted_path,
+                           .origin_module = site->origin_module})) {
+                core_link_reference_t *reference = nullptr;
+                bool deferred =
+                    core_link_unit_add_deferred_reference_at_scoped_kind(
+                        link, unit, node, site->scope, PARSE_SYM_FUNCTION,
+                        CORE_STRING_STATIC(
+                            "overloaded call awaits overload selection"),
+                        N00BB_LINK_STAGE_SEMANTICS, &reference);
+                core_string_t provenance = core_source_file_path(
+                    &unit->source);
+                if (!deferred
+                    || !core_link_reference_set_source_info(link, reference,
+                        link_source_location(node), provenance)
+                    || !n00bb_bind_site_reference(unit, site, reference))
                     return false;
                 continue;
             }

@@ -1,0 +1,7 @@
+public trait Sized {
+    func area(self: 'T) -> int
+}
+
+public type Item {
+    public w: int
+}

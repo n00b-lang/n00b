@@ -82,6 +82,8 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             CORE_STRING_STATIC("internal error: could not finalize named declaration types"));
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    if (!check_local_names_against_imports(analysis))
+        return CORE_LINK_STAGE_RESULT_FAILED;
 
     for (size_t i = 0; i < units->len; i++)
         if (!populate_unit_symbol_shapes(analysis->grammar,
@@ -122,7 +124,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         }
     }
     if (!unify_calls_until_stable(analysis->grammar, link, units->data,
-            units->len, true, true, false)) {
+            units->len, true, true, false, true)) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
@@ -162,7 +164,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
     bool grounded = false;
     if (!n00bb_ground_integers(units->data, units->len, false, &grounded)
         || (grounded && !unify_calls_until_stable(analysis->grammar, link,
-            units->data, units->len, true, true, false))) {
+            units->data, units->len, true, true, false, true))) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
@@ -180,7 +182,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     if (!unify_calls_until_stable(analysis->grammar, link, units->data,
-            units->len, true, true, false)) {
+            units->len, true, true, false, true)) {
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
