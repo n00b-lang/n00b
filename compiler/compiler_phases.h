@@ -24,6 +24,7 @@ typedef struct {
 } n00bb_native_inputs_t;
 
 bool n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis);
+void n00bb_remove_executable(const char *path);
 bool n00bb_build_executable(core_link_unit_t *link,
                             n00bb_link_analysis_t *analysis,
                             parse_cmdr_result_t *args,

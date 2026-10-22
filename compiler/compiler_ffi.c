@@ -542,6 +542,12 @@ remove_entry(const char *path, const struct stat *status, int kind, struct FTW *
     return remove(path);
 }
 
+void
+n00bb_remove_tree(const char *path)
+{
+    if (path) nftw(path, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+}
+
 static bool
 write_crate(core_string_t directory, const capture_t *crate)
 {
@@ -747,7 +753,7 @@ keep_transport(n00bb_ffi_t *ffi, ffi_literal_t *record, core_translation_unit_t 
             bool built = ok && build_crate(core_buffer_string(&staging));
             char *native_directory = core_string_to_cstr(core_buffer_string(&directory));
             if (built && rename(native_staging, native_directory)) {
-                nftw(native_staging, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
+                n00bb_remove_tree(native_staging);
             }
             core_free(native_directory);
             core_free(native_staging);
