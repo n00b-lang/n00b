@@ -4,11 +4,11 @@ public trait Measured {
     func measure(self: 'T) -> int
 }
 
-public type Forest {
+public record Forest {
     public size: int
 }
 
-public type Holder {
+public record Holder {
     public tree: tree.Tree_Node
     public count: int
 }

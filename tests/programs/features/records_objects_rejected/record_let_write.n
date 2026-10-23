@@ -1,0 +1,10 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+let frozen: Point = (x = 0)
+frozen.x = 4

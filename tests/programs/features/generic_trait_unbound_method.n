@@ -1,11 +1,11 @@
-type Box { value: int }
-type OtherBox { value: int }
+object Box { value: int }
+object OtherBox { value: int }
 
-func append(modify self: Box, value: int) {
+func append(self: Box, value: int) {
     self.value = value
 }
 
-func append(modify self: OtherBox, value: int) {
+func append(self: OtherBox, value: int) {
     self.value = value + 1
 }
 

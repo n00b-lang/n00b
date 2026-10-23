@@ -130,14 +130,14 @@ uint8_t unions_n00b_cell_flag(const void *cell, uint64_t raw) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
 }
 
-type Raw {
-    storage: Array[u8]
+record Raw {
+    private storage: Array[u8]
 }
 
 func raw() -> Raw {
@@ -179,8 +179,8 @@ record Value layout(c) {
     }
 }
 
-type Cell {
-    storage: Array[u8]
+record Cell {
+    private storage: Array[u8]
 }
 
 func cell() -> Cell {

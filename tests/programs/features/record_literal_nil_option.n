@@ -1,4 +1,4 @@
-type Failure {
+record Failure {
     code: i64
     text: string?
     origin: string

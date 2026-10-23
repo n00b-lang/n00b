@@ -930,6 +930,7 @@ static void *r_mode(parse_reduce_t *r)
         n->uval = rule_of(r) == 1 ? TH_OUT
             : rule_of(r) == 2 ? TH_INOUT
             : rule_of(r) == 3 ? TH_CONSUME
+            : rule_of(r) == 4 ? TH_VIEW
             : TH_IN;
     }
 

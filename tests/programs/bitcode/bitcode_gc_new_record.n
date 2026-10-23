@@ -1,7 +1,7 @@
 import sys.abi
 import sys.gc.alloc
 
-type Constructed_Record {
+record Constructed_Record {
     payload: int
 }
 

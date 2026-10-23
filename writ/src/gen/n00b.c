@@ -1507,8 +1507,8 @@ static void
 emit_opaque_record(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *record)
 {
     writ_str_t type = writ_binding_type(g->b, record->name);
-    writ_emit_open(emit, "type %.*s", S(type));
-    writ_emit_line(emit, "storage: %.*s", S(buffer_type(g)));
+    writ_emit_open(emit, "record %.*s", S(type));
+    writ_emit_line(emit, "private storage: %.*s", S(buffer_type(g)));
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func %.*s() -> %.*s", S(writ_profile_name(g->profile, WRIT_NAMING_FN, record->name)),
@@ -1657,7 +1657,7 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
     writ_str_t entry = writ_str_format(g->session, "%.*s_Callback", S(name));
     writ_str_t table = callback_table(g, name, "callbacks");
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "type %.*s", S(entry));
+    writ_emit_open(emit, "record %.*s", S(entry));
     writ_emit_line(emit, "public value: %.*s", S(name));
     writ_emit_line(emit, "public once: bool");
     writ_emit_close(emit, nullptr);
@@ -1719,7 +1719,7 @@ emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
     bool packed = callback->slots_count > 1;
     if (packed) {
         writ_emit_line(emit, "");
-        writ_emit_open(emit, "type %.*s_Arguments layout(c)", S(name));
+        writ_emit_open(emit, "record %.*s_Arguments layout(c)", S(name));
         for (size_t i = 0; i < callback->slots_count; i++) {
             if (i != receiver) {
                 writ_emit_line(emit, "public %.*s: %.*s",
@@ -1831,7 +1831,7 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_str_t raw = raw_of(g, handle->type, writ_cstr("self"));
     writ_str_t initial = typed ? writ_str_format(g->session, "unsafe_cast[%.*s] raw", S(typed->raw_type))
                                : writ_cstr("raw");
-    writ_emit_open(emit, "type %.*s_Cell", S(type));
+    writ_emit_open(emit, "record %.*s_Cell", S(type));
     writ_emit_line(emit, "public raw: %.*s", S(typed ? typed->raw_type : writ_cstr("uint")));
     for (size_t s = 0; s < source_count; s++) {
         fields[s] = keep_field(g, sources[s]);
@@ -1879,7 +1879,7 @@ static void
 emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
 {
     const writ_model_t *model = g->model;
-    writ_emit_open(emit, "type Error");
+    writ_emit_open(emit, "record Error");
     writ_emit_line(emit, "public code: %.*s", S(code_type(g)));
     writ_emit_line(emit, "public text: string?");
     writ_emit_line(emit, "public fn: string");
@@ -1895,7 +1895,7 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
         writ_emit_line(emit, "");
         mark(g, emit, record->declared_at, record->name);
         if (liftable_record(model, record)) {
-            writ_emit_open(emit, "type %.*s", S(writ_binding_type(g->b, record->name)));
+            writ_emit_open(emit, "record %.*s", S(writ_binding_type(g->b, record->name)));
             for (size_t f = 0; f < record->fields_count; f++) {
                 const writ_slot_view_t *field = &record->fields[f];
                 if (writ_c_count_field(model, field).length) {
@@ -2200,7 +2200,7 @@ emit_result_types(const wrapper_t *w, writ_emit_t *emit, const uint32_t *outs, s
     bool multiple_success = outcome_enum(w->plan);
     if (count > 1 || (count && multiple_success)) {
         writ_emit_line(emit, "");
-        writ_emit_open(emit, "type %.*s", S(result_type_name(w)));
+        writ_emit_open(emit, "record %.*s", S(result_type_name(w)));
         if (multiple_success) {
             writ_emit_line(emit, "public outcome: %.*s", S(outcome_type_name(w)));
         }
@@ -2445,7 +2445,7 @@ static void
 emit_options_type(const wrapper_t *w, writ_emit_t *emit, const writ_record_view_t *record)
 {
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "type %.*s", S(options_type_name(w)));
+    writ_emit_open(emit, "record %.*s", S(options_type_name(w)));
     for (size_t f = 0; f < record->fields_count; f++) {
         if (f != record->presence_field) {
             writ_emit_line(emit, "public %.*s: %.*s?", S(keyword_name(w->g, &record->fields[f])),
@@ -3649,9 +3649,9 @@ emit_export_holds(const n00b_t *g, writ_emit_t *emit)
     add_extern(g, writ_cstr("__export_address"), writ_str_format(g->session, "%.*s_export_address", S(g->shim)),
                address, 1, writ_cstr("uint"));
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "type Export_Hold");
-    writ_emit_line(emit, "handle: uint");
-    writ_emit_line(emit, "items: List[Array[u8]]");
+    writ_emit_open(emit, "record Export_Hold");
+    writ_emit_line(emit, "private handle: uint");
+    writ_emit_line(emit, "private items: List[Array[u8]]");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
     writ_emit_line(emit, "var __export_holds: List[Export_Hold] = new[List[Export_Hold]]()");

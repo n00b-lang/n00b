@@ -2051,7 +2051,7 @@ put_warnings(core_buffer_t *out, core_translation_unit_t *unit)
         const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
         bool note = item->severity == CORE_DIAG_NOTE
             || item->severity == CORE_DIAG_HELP;
-        attached = item->severity == CORE_DIAG_WARNING || (note && attached);
+        attached = core_diag_is_advisory(item->severity) || (note && attached);
         if (!attached) continue;
         if (!note)
             groups[group_count++] = (warning_group_t){

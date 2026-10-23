@@ -274,7 +274,7 @@ static_type_test_arm(const ir_instr_t *branch, th_ctx *types)
         || test->operands[0].kind != IR_OPD_VALUE
         || test->operands[1].kind != IR_OPD_TYPE
         || !test->operands[0].value) return -1;
-    th_type *subject = test->operands[0].value->type;
+    th_type *subject = call_operand_type(test->operands[0].value, types);
     if (!subject || !th_is_closed(types, subject)
         || dynamic_subject(types, subject)) return -1;
     return th_env_type_pattern_accepts(types, test->operands[1].type, subject)

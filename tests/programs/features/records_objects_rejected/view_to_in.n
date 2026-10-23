@@ -1,0 +1,15 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+func keep(c: Counter) -> int {
+    return c.count
+}
+
+func pass_view(view c: Counter) -> int {
+    return keep(c)
+}

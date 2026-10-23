@@ -1,4 +1,4 @@
-type State {
+record State {
     count: int
 }
 

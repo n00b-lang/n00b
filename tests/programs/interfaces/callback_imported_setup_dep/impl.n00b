@@ -1,4 +1,4 @@
-public type Imported_State {
+public record Imported_State {
     count: int
 }
 

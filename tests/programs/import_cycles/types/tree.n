@@ -1,11 +1,11 @@
 import forest
 
-public type Tree_Node {
+public record Tree_Node {
     public label: int
     public kids: forest.Forest
 }
 
-public type Pair {
+public record Pair {
     public left: 'T
     public right: 'T
 }

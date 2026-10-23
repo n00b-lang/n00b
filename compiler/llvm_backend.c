@@ -1041,7 +1041,7 @@ aggregate_option_type(ir_module_t *module, th_type *type,
         LLVMTypeRef fields[] = {element, LLVMInt8TypeInContext(context)};
         return LLVMStructTypeInContext(context, fields, 2, false);
     }
-    if (n00bb_frame_pointer_option(type)) return nullptr;
+    if (n00bb_frame_pointer_option(module, type)) return nullptr;
     LLVMTypeRef packed = packed_option_type(module, type, context, nullptr);
     if (packed) return packed;
     core_string_t target = ir_module_target(module);
@@ -1167,7 +1167,7 @@ value_type_uncached(ir_module_t *module, th_type *type,
         return argument && argument->kind == TH_ARG_TYPE
             ? value_type(module, argument->type, context) : nullptr;
     }
-    if (n00bb_frame_pointer_option(type)
+    if (n00bb_frame_pointer_option(module, type)
         && th_is_closed(ir_module_types(module), type))
         return LLVMPointerTypeInContext(context, 0);
     if (builtin == TH_BUILTIN_OPTION && arguments == 1)
@@ -2701,6 +2701,10 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
     ir_machine_t machine = ir_machine_of(module, type);
     if (machine.class == IR_CLASS_BOOL)
         return literal_boolean_field_matches(module, type, native, target);
+    if (th_kind_of(type) == TH_NAMED
+        && n00bb_frame_reference_type(module, type)
+        && LLVMGetTypeKind(native) == LLVMPointerTypeKind)
+        return layout->intrinsic_bits == sizeof(void *) * 8;
     th_type *definition = ir_type_definition(module, type);
     if (!definition && (th_kind_of(th_resolve(type)) == TH_RECORD
                         || th_kind_of(th_resolve(type)) == TH_BITINT))
@@ -2780,7 +2784,7 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
             && literal_element_layout_matches(module, argument->type,
                                               native, target);
     }
-    if (n00bb_frame_pointer_option(type))
+    if (n00bb_frame_pointer_option(module, type))
         return LLVMGetTypeKind(native) == LLVMPointerTypeKind
             && layout->intrinsic_bits == sizeof(void *) * 8
             && layout->has_discriminant
@@ -5079,8 +5083,8 @@ store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
     }
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
     if (LLVMTypeOf(value) == pointer
-        && (th_kind_of(th_resolve(type)) == TH_INDIRECTION
-            || n00bb_frame_pointer_option(type))) {
+        && (n00bb_frame_reference_type(state->function->owner, type)
+            || n00bb_frame_pointer_option(state->function->owner, type))) {
         LLVMTypeRef params[] = {pointer};
         LLVMTypeRef signature = LLVMFunctionType(
             LLVMVoidTypeInContext(context), params, 1, false);
@@ -5201,8 +5205,8 @@ gc_references_equal(lower_state_t *state, LLVMValueRef old_value,
     LLVMTypeRef native = LLVMTypeOf(new_value);
     if (native != LLVMTypeOf(old_value)) return nullptr;
     if (LLVMGetTypeKind(native) == LLVMPointerTypeKind
-        && (th_kind_of(th_resolve(type)) == TH_INDIRECTION
-            || n00bb_frame_pointer_option(type)))
+        && (n00bb_frame_reference_type(state->function->owner, type)
+            || n00bb_frame_pointer_option(state->function->owner, type)))
         return LLVMBuildICmp(state->builder, LLVMIntEQ, old_value,
                              new_value, "gc.same.pointer");
     if (th_kind_of(th_resolve(type)) == TH_SEQUENCE

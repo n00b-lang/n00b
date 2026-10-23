@@ -1,5 +1,5 @@
 record DefaultRecord { field: int }
-type AbstractThing { field: int }
+record AbstractThing { private field: int }
 enum DefaultState { ready, done }
 alias DefaultAlias = int
 func identity(value: int) -> int { return value }

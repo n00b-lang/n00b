@@ -121,16 +121,16 @@ func los_key(address: uint, level: u32) -> uint {
     return ((address >> level) << los_level_bits) | cast[uint]level
 }
 
-func los_table_value(object: Ref[internal.gc.core.Los_Obj]) -> Ref[byte] {
-    require (object.hdr.meta & internal.gc.core.obj_large) != 0
-    return unsafe_cast[Ref[byte]] object
+func los_table_value(obj: Ref[internal.gc.core.Los_Obj]) -> Ref[byte] {
+    require (obj.hdr.meta & internal.gc.core.obj_large) != 0
+    return unsafe_cast[Ref[byte]] obj
 }
 
 func los_register(heap: Ref[internal.gc.core.Heap],
-                         object: Ref[internal.gc.core.Los_Obj]) -> bool {
-    let level: u32  = los_level(object.bytes)
-    let start: uint = __abi_ref_address(object)
-    let last:  uint = start + object.bytes - 1
+                         obj: Ref[internal.gc.core.Los_Obj]) -> bool {
+    let level: u32  = los_level(obj.bytes)
+    let start: uint = __abi_ref_address(obj)
+    let last:  uint = start + obj.bytes - 1
     write_lock(heap)
     if !internal.gc.hash.tab_reserve(ref heap.large,
                                     (last >> level) - (start >> level) + 1) {
@@ -141,7 +141,7 @@ func los_register(heap: Ref[internal.gc.core.Heap],
     while granule <= last >> level {
         internal.gc.hash.tab_insert(ref heap.large,
             los_key(granule << level, level),
-            los_table_value(object))
+            los_table_value(obj))
         granule += 1
     }
     let index:      uint      = level
@@ -151,22 +151,22 @@ func los_register(heap: Ref[internal.gc.core.Heap],
     ref_write(count_cell, count)
     let bit: uint = 1
     heap.los_levels = heap.los_levels | (bit << level)
-    widen_bounds(heap, start, start + object.bytes)
+    widen_bounds(heap, start, start + obj.bytes)
     write_unlock(heap)
     return true
 }
 
 func los_unregister(heap: Ref[internal.gc.core.Heap],
-                           object: Ref[internal.gc.core.Los_Obj]) {
-    let level: u32  = los_level(object.bytes)
-    let start: uint = __abi_ref_address(object)
-    let last:  uint = start + object.bytes - 1
+                           obj: Ref[internal.gc.core.Los_Obj]) {
+    let level: u32  = los_level(obj.bytes)
+    let start: uint = __abi_ref_address(obj)
+    let last:  uint = start + obj.bytes - 1
     write_lock(heap)
     var granule: uint = start >> level
     while granule <= last >> level {
         internal.gc.hash.tab_delete(ref heap.large,
             los_key(granule << level, level),
-            los_table_value(object))
+            los_table_value(obj))
         granule += 1
     }
     let index:      uint      = level
@@ -200,10 +200,10 @@ func los_find(heap: Ref[internal.gc.core.Heap], address: uint) -> Ref[internal.g
             let candidate: Ref[byte]?                     = slot.val
             if candidate != nil {
                 if slot.key == key {
-                    let object: Ref[internal.gc.core.Los_Obj] = unsafe_cast[Ref[internal.gc.core.Los_Obj]] candidate.get()
-                    let start:  uint                    = __abi_ref_address(object)
-                    if address >= start and address - start < object.bytes {
-                        return object
+                    let obj: Ref[internal.gc.core.Los_Obj] = unsafe_cast[Ref[internal.gc.core.Los_Obj]] candidate.get()
+                    let start: uint = __abi_ref_address(obj)
+                    if address >= start and address - start < obj.bytes {
+                        return obj
                     }
                 }
                 index = (index + 1) & mask
@@ -268,9 +268,9 @@ func find_object(heap: Ref[internal.gc.core.Heap], address: uint)
 
     let large: Ref[internal.gc.core.Los_Obj]? = los_find(heap, address)
     if large != nil {
-        let object: Ref[internal.gc.core.Los_Obj] = large.get()
-        if object.hdr.type_index != 0 {
-            return ref object.hdr
+        let obj: Ref[internal.gc.core.Los_Obj] = large.get()
+        if obj.hdr.type_index != 0 {
+            return ref obj.hdr
         }
     }
     return nil

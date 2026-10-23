@@ -14,7 +14,7 @@ var pause_count: uint = 0
 var cycle_count: uint = 0
 thread var tls_slot: Ref[byte]? = nil
 
-type Stack_Cell {
+record Stack_Cell {
     child: Ref[byte]?
 }
 

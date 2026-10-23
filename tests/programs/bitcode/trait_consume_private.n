@@ -2,7 +2,7 @@ trait Probe {
     func apply(consume self: 'T)
 }
 
-type Sample {
+record Sample {
     value: int
 }
 

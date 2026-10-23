@@ -19,6 +19,7 @@ passing_mode(th_mode mode, uint32_t *out)
     case TH_OUT: *out = N00B_ABI_PASS_OUT; return true;
     case TH_INOUT: *out = N00B_ABI_PASS_MODIFY; return true;
     case TH_CONSUME: *out = N00B_ABI_PASS_CONSUME; return true;
+    case TH_VIEW: *out = N00B_ABI_PASS_VIEW; return true;
     }
     return false;
 }

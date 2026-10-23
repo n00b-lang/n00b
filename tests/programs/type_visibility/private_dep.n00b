@@ -1,1 +1,1 @@
-private type PrivateRecord { field: int }
+private record PrivateRecord { field: int }

@@ -5,7 +5,7 @@ enum Type_Kind {
     flagset_type,reference_type, option_type,array_type, view_type,
     string_type, box_type, callback_type, function_type, trait_type,
     wrapper_type, union_type,atomic_type, variable_type,named_type,
-    tuple_type, foreign_type
+    tuple_type, foreign_type, object_type
 }
 
 record Range layout(c) {

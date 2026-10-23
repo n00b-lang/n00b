@@ -1,1 +1,1 @@
-private type Meter { reading: int }
+private record Meter { reading: int }

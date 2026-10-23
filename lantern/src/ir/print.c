@@ -114,6 +114,18 @@ static void put_origin(core_buffer_t *b, const ir_origin_t *o)
     }
 }
 
+static const char *param_mode_spelling(th_mode mode)
+{
+    switch (mode) {
+    case TH_OUT:     return "out";
+    case TH_INOUT:   return "inout";
+    case TH_CONSUME: return "consume";
+    case TH_VIEW:    return "view";
+    case TH_IN:      return "in";
+    }
+    return "in";
+}
+
 static void put_annots(core_buffer_t *b, ir_module_t *m, ir_annots_t *a)
 {
     for (uint32_t i = 0; i < ir_annot_count(a); i++) {
@@ -719,8 +731,7 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
         const th_param *parameter = th_func_param(f->type, i);
         core_buffer_printf(b, "%s", first ? "" : ", ");
         if (parameter && parameter->mode != TH_IN)
-            core_buffer_printf(b, "%s ", parameter->mode == TH_OUT ? "out"
-                : parameter->mode == TH_INOUT ? "inout" : "consume");
+            core_buffer_printf(b, "%s ", param_mode_spelling(parameter->mode));
         core_buffer_puts(b, "%");
         put_text(b, f->params[i]->name);
         core_buffer_puts(b, ": ");
@@ -734,8 +745,8 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
             const th_param *parameter = th_func_param(f->type, i);
             core_buffer_printf(b, "%s", first ? "" : ", ");
             if (parameter->mode != TH_IN)
-                core_buffer_printf(b, "%s ", parameter->mode == TH_OUT ? "out"
-                    : parameter->mode == TH_INOUT ? "inout" : "consume");
+                core_buffer_printf(b, "%s ",
+                                   param_mode_spelling(parameter->mode));
             core_buffer_printf(b, "%%arg%zu: ", i);
             put_type(b, m, parameter->type);
             if (ir_func_parameter_is_optional(f, (uint32_t)i))
@@ -749,8 +760,7 @@ static void put_signature(core_buffer_t *b, ir_module_t *m, ir_func_t *f)
     if (rest) {
         core_buffer_printf(b, "%s", first ? "" : ", ");
         if (rest->mode != TH_IN)
-            core_buffer_printf(b, "%s ", rest->mode == TH_OUT ? "out"
-                : rest->mode == TH_INOUT ? "inout" : "consume");
+            core_buffer_printf(b, "%s ", param_mode_spelling(rest->mode));
         core_buffer_puts(b, "*");
         ir_value_t *rest_value = nullptr;
         for (uint32_t i = 0; i < f->n_params; i++)

@@ -26,20 +26,31 @@ typedef bool (*n00bb_frame_root_visit_fn)(void *context,
     ir_local_t *local, ir_instr_t *instruction);
 
 static inline bool
-n00bb_frame_pointer_option(th_type *type)
+n00bb_frame_reference_type(ir_module_t *module, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (type && th_kind_of(type) == TH_NAMED && module) {
+        th_type *definition = ir_type_definition(module, type);
+        type = definition ? th_resolve(definition) : nullptr;
+    }
+    return type && th_kind_of(type) == TH_INDIRECTION;
+}
+
+static inline bool
+n00bb_frame_pointer_option(ir_module_t *module, th_type *type)
 {
     type = th_builtin_applied(type, TH_BUILTIN_OPTION, 1);
     if (!type) return false;
     const th_arg *element = th_named_arg(type, 0);
     return element && element->kind == TH_ARG_TYPE
-        && th_kind_of(th_resolve(element->type)) == TH_INDIRECTION;
+        && n00bb_frame_reference_type(module, element->type);
 }
 
 static inline bool
 n00bb_frame_native_pointer(ir_module_t *module, th_type *type)
 {
     return ir_machine_of(module, type).class == IR_CLASS_PTR
-        || n00bb_frame_pointer_option(type)
+        || n00bb_frame_pointer_option(module, type)
         || th_kind_of(th_resolve(type)) == TH_SEQUENCE;
 }
 

@@ -31,7 +31,7 @@
                    "layout", "align", "step", "out", "inline", "typeof",
                    "provides", "enter", "exit", "ensure", "as", "thread",
                    "litmod", "modify", "consume", "where", "count", "by",
-                   "union", "from", "all")
+                   "union", "from", "all", "struct", "object", "view")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),

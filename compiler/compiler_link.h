@@ -90,6 +90,7 @@ typedef struct {
     th_type *expected;
     bool keyword;
     bool writes;
+    th_mode mode;
 } n00bb_call_binding_t;
 core_list_decl(n00bb_call_binding_t);
 bool n00bb_bind_call_arguments(parse_grammar_t *grammar,

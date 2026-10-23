@@ -1,10 +1,10 @@
 const extent: uint = 4
 
-type Deferred_Array {
+record Deferred_Array {
     items: Array[int][extent]
 }
 
-type Pair layout(c) {
+record Pair layout(c) {
     left: int
     right: int
 }

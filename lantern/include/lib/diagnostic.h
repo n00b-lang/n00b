@@ -14,6 +14,7 @@ typedef enum {
     CORE_DIAG_WARNING,
     CORE_DIAG_NOTE,
     CORE_DIAG_HELP,
+    CORE_DIAG_INFO,
 } core_diag_severity_t;
 
 typedef struct {
@@ -26,6 +27,7 @@ typedef struct {
 
 core_diag_location_t core_diag_location_span(core_string_t text, size_t start,
                                              size_t end);
+bool core_diag_is_advisory(core_diag_severity_t severity);
 
 typedef struct {
     core_diag_severity_t severity;

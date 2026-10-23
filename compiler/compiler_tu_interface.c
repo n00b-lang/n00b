@@ -1372,6 +1372,8 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
             ? CORE_STRING_STATIC("enum")
         : declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET
             ? CORE_STRING_STATIC("flagset")
+        : declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_OBJECT
+            ? CORE_STRING_STATIC("object")
         : CORE_STRING_STATIC("type");
     parse_symtab_push_scope_all(symtab, type_symbol->name);
     parse_scope_t *member_scope = parse_symtab_current_scope(
@@ -1525,7 +1527,8 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
             }
             entry->has_comptime_value = true;
         }
-        if (declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_RECORD)
+        if (declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_RECORD
+            || declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_OBJECT)
             entry->is_field = true;
         if (metadata) {
             uint32_t visibility = 0, flags = 0;
@@ -2009,6 +2012,21 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                         symbol, declaration.qualified_name,
                         origin->declaration, shape, false);
                 }
+                th_type *recorded_shape = shape;
+                if (declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_OBJECT
+                    && shape && definition_key) {
+                    core_buffer_t shape_name = {0};
+                    core_buffer_append_string(&shape_name,
+                                              origin->declaration);
+                    core_buffer_append_string(&shape_name,
+                        CORE_STRING_STATIC(n00bb_object_shape_suffix));
+                    th_type *fields = record_template_type(state->types,
+                        core_buffer_string(&shape_name), symbol);
+                    core_buffer_release(&shape_name);
+                    shape = fields
+                        && th_type_define(state->types, fields, shape)
+                        ? th_ind(state->types, 0, fields) : nullptr;
+                }
                 symbol->adt_kind = declaration.kind ==
                         TH_ENV_DECLARATION_TRAIT
                     ? CORE_STRING_STATIC("trait")
@@ -2025,6 +2043,8 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                         ? CORE_STRING_STATIC("nominal")
                     : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_RECORD
                         ? CORE_STRING_STATIC("record")
+                    : declaration.type_shape_kind == TH_ENV_TYPE_SHAPE_OBJECT
+                        ? CORE_STRING_STATIC("object")
                         : CORE_STRING_STATIC("type");
                 size_t layout_size = 0;
                 const uint8_t *layout = interface_owned_metadata(loader,
@@ -2088,7 +2108,8 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     if (!recorded) return false;
                     *recorded = (n00bb_interface_type_shape_t){
                         .kind = declaration.type_shape_kind,
-                        .shape = shape ? shape : declaration.type_shape,
+                        .shape = recorded_shape ? recorded_shape
+                                                : declaration.type_shape,
                     };
                     if (!parse_sym_set_binding(symbol,
                             CORE_STRING_STATIC("n00bb.interface-type-shape"),

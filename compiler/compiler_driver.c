@@ -149,7 +149,7 @@ append_diagnostics(core_diagnostics_t *into, const core_diagnostics_t *from,
         bool attached = item->severity == CORE_DIAG_NOTE
             || item->severity == CORE_DIAG_HELP;
         if (!attached)
-            keep = (item->severity != CORE_DIAG_WARNING || keep_warnings)
+            keep = (!core_diag_is_advisory(item->severity) || keep_warnings)
                 && (root || !core_string_eq(item->code,
                         CORE_STRING_STATIC(N00BB_PUBLIC_UNUSED_CODE)))
                 && !(skip_reported && already_reported(into, item));
@@ -3170,7 +3170,11 @@ n00bb_format_align(core_string_t input)
             if (!at)
                 n00bb_format_word(line->start, line->length, &at,
                                   "private");
-            if (n00bb_format_word(line->start, line->length, &at, "record"))
+            if (n00bb_format_word(line->start, line->length, &at, "record")
+                || n00bb_format_word(line->start, line->length, &at,
+                                     "struct")
+                || n00bb_format_word(line->start, line->length, &at,
+                                     "object"))
                 for (size_t j = at; j < line->length; j++)
                     if (line->start[j] == '{') in_record = true;
         }

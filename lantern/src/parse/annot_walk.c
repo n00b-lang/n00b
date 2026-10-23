@@ -533,6 +533,7 @@ annot_direction(parse_visit_t *v)
         {CORE_STRING_STATIC("inout"), TH_INOUT},
         {CORE_STRING_STATIC("modify"), TH_INOUT},
         {CORE_STRING_STATIC("consume"), TH_CONSUME},
+        {CORE_STRING_STATIC("view"), TH_VIEW},
     };
 
     for (size_t i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
@@ -556,7 +557,7 @@ annot_pass_by(parse_visit_t *v)
     static const core_string_t allowed[] = {
         CORE_STRING_STATIC("in"),  CORE_STRING_STATIC("out"),
         CORE_STRING_STATIC("inout"), CORE_STRING_STATIC("ref"),
-        CORE_STRING_STATIC("consume"),
+        CORE_STRING_STATIC("consume"), CORE_STRING_STATIC("view"),
     };
 
     if (!sym || !mode.data) return true;

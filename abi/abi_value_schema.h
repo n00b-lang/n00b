@@ -23,7 +23,7 @@ typedef struct {
 static const n00bb_abi_value_column_t n00bb_abi_value_columns[] = {
     ABI_VALUE(PACKAGE, package, visibility,
         N00B_ABI_VISIBILITY_PRIVATE, N00B_ABI_VISIBILITY_PUBLIC),
-    ABI_VALUE(TYPE, type, kind, N00B_ABI_TYPE_NIL, N00B_ABI_TYPE_FOREIGN),
+    ABI_VALUE(TYPE, type, kind, N00B_ABI_TYPE_NIL, N00B_ABI_TYPE_OBJECT),
     ABI_VALUE(TRACE_CHILD, trace_child, extent_form,
         N00B_ABI_EXTENT_NONE, N00B_ABI_EXTENT_SENTINEL),
     ABI_VALUE(TRACE_CHILD, trace_child, reserved_zero, 0, 0),
@@ -50,7 +50,7 @@ static const n00bb_abi_value_column_t n00bb_abi_value_columns[] = {
         N00B_ABI_TAG_DIRECT_BITS, N00B_ABI_TAG_BITPTR_DEPTH),
     ABI_BITS(FUNCTION, function, flags, N00B_ABI_FUNCTION_FLAG_WRAPPABLE),
     ABI_VALUE(PARAMETER, parameter, passing_mode,
-        N00B_ABI_PASS_IN, N00B_ABI_PASS_CONSUME),
+        N00B_ABI_PASS_IN, N00B_ABI_PASS_VIEW),
     ABI_BITS(PARAMETER, parameter, flags,
         N00B_ABI_PARAMETER_FLAG_VARIADIC),
     ABI_VALUE(SYMBOL, symbol, kind,

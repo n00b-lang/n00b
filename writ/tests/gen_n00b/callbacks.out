@@ -184,7 +184,7 @@ int32_t callbacks_n00b_bus_unsubscribe(uint64_t id) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
@@ -199,11 +199,11 @@ callback Event_Handler {
     handler(event: uint) -> nil
 }
 
-type Event_Handler_Arguments layout(c) {
+record Event_Handler_Arguments layout(c) {
     public event: uint
 }
 
-type Event_Handler_Callback {
+record Event_Handler_Callback {
     public value: Event_Handler
     public once: bool
 }

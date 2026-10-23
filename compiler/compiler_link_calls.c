@@ -377,6 +377,54 @@ unify_call_argument(parse_grammar_t *grammar, core_translation_unit_t *unit,
 }
 
 static void
+check_call_argument_mode(parse_grammar_t *grammar,
+                         core_translation_unit_t *unit,
+                         n00bb_tu_state_t *state, parse_tree_t *argument,
+                         th_mode mode)
+{
+    if (!argument || mode == TH_VIEW) return;
+    parse_tree_t *root = mode == TH_CONSUME
+        ? n00bb_addressable_root_lvalue(grammar, argument) : nullptr;
+    parse_sym_entry_t *root_symbol = root
+        ? attached_symbol(grammar, unit, root) : nullptr;
+    core_buffer_t message = {0};
+    if (root_symbol
+        && root_symbol->kind == PARSE_SYM_PARAM
+        && th_mode_is_in(root_symbol->has_mode ? root_symbol->mode : TH_IN)) {
+        core_buffer_printf(&message,
+            "'%.*s' is %s parameter, so it cannot be passed to a consume "
+            "parameter",
+            (int)root_symbol->name.u8_bytes, root_symbol->name.data,
+            root_symbol->has_mode && root_symbol->mode == TH_VIEW
+                ? "a view" : "an in");
+        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
+            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0064"),
+            core_buffer_string(&message), link_source_location(argument));
+        core_buffer_release(&message);
+        return;
+    }
+    th_type *type = parse_tree_type(argument);
+    if (!type || !n00bb_unit_type_reaches_shared_state(state, type))
+        return;
+    parse_sym_entry_t *in_parameter = nullptr;
+    parse_sym_entry_t *origin = n00bb_view_origin(grammar, unit, argument,
+                                                  &in_parameter);
+    if (in_parameter
+        && !parse_sym_binding(in_parameter, n00bb_view_blocked_binding))
+        parse_sym_set_binding(in_parameter, n00bb_view_blocked_binding,
+                              in_parameter);
+    if (!origin) return;
+    core_buffer_printf(&message,
+        "this value comes from view parameter '%.*s' and can reach shared "
+        "state, so it can only be passed to a view parameter",
+        (int)origin->name.u8_bytes, origin->name.data);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0065"),
+        core_buffer_string(&message), link_source_location(argument));
+    core_buffer_release(&message);
+}
+
+static void
 report_call_binding_error(core_translation_unit_t *unit, parse_tree_t *node,
                           core_string_t code, core_string_t message)
 {
@@ -441,7 +489,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
         if (!core_tree_is_leaf(positional.data[i]))
             core_list_push(*bindings, ((n00bb_call_binding_t){
                 positional.data[i], parameter->type, false,
-                th_mode_produces_output(parameter->mode)}));
+                th_mode_produces_output(parameter->mode), parameter->mode}));
     }
     core_list_free(positional);
     parse_tree_t *formals = callee
@@ -458,6 +506,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
         size_t index = 0;
         th_type *expected = nullptr;
         bool writes = false;
+        th_mode mode = TH_IN;
         if (function_parameter_named(grammar, callee, formals,
                 call_keyword_name(keyword), &index)) {
             const th_param *parameter = th_func_param(signature, index);
@@ -466,6 +515,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
             expected = parameter ? parameter->type
                 : option ? option->type : nullptr;
             writes = parameter && th_mode_produces_output(parameter->mode);
+            mode = parameter ? parameter->mode : option ? option->mode : TH_IN;
         }
         if (!expected) {
             report_call_binding_error(unit, keyword,
@@ -484,7 +534,7 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
         if (index < parameter_count) bound[index] = true;
         if (argument && !core_tree_is_leaf(argument))
             core_list_push(*bindings, ((n00bb_call_binding_t){
-                argument, expected, true, writes}));
+                argument, expected, true, writes, mode}));
     }
     core_list_free(keywords);
     for (size_t i = 0; valid && callee && i < parameter_count; i++) {
@@ -869,6 +919,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     receiver_node, receiver_type, receiver->type,
                     N00BB_CALL_RECEIVER))
                 continue;
+            check_call_argument_mode(grammar, unit, state, receiver_node,
+                                     receiver->mode);
         }
         parse_sym_entry_t *named = context_call ? context_target
             : keyword_callee ? keyword_callee
@@ -883,6 +935,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 binding->keyword ? binding->argument : label->self,
                 binding->argument, binding->expected, context_call,
                 binding->writes);
+            check_call_argument_mode(grammar, unit, state,
+                                     binding->argument, binding->mode);
         }
         core_list_free(bindings);
         th_type *return_type = th_func_ret(signature);

@@ -48,6 +48,7 @@ shape_parameter(n00bb_abi_type_index_t *index,
     case TH_OUT: row.passing_mode = N00B_ABI_PASS_OUT; break;
     case TH_INOUT: row.passing_mode = N00B_ABI_PASS_MODIFY; break;
     case TH_CONSUME: row.passing_mode = N00B_ABI_PASS_CONSUME; break;
+    case TH_VIEW: row.passing_mode = N00B_ABI_PASS_VIEW; break;
     default: return false;
     }
     uint32_t row_index = parameter_base + (uint32_t)parameters->len;

@@ -1,4 +1,4 @@
-type Failure {
+record Failure {
     public code: i64
     public text: string?
     public limit: u32?

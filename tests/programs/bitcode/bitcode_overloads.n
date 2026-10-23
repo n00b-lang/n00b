@@ -1,8 +1,8 @@
-type First {
+record First {
     raw: uint
 }
 
-type Second {
+record Second {
     raw: uint
 }
 

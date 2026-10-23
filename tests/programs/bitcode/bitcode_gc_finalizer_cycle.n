@@ -9,7 +9,7 @@ import sys.gc.registry
 import sys.gc.sync
 import sys.memory
 
-type Twin {
+record Twin {
     other: Ref[Twin]?
     id: int
     magic: int

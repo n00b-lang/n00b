@@ -241,7 +241,9 @@ resolved_member_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
             && n00bb_flagset_instance_access(grammar, unit, node, member)
             ? th_name(state->types, CORE_STRING_STATIC("bool")) : member->type;
     return receiver_type
-        ? th_record_lookup_in(state->types, receiver_type, member->name)
+        ? th_record_lookup_in(state->types,
+                              th_auto_deref(state->types, receiver_type),
+                              member->name)
         : nullptr;
 }
 
@@ -502,45 +504,6 @@ diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis)
     return true;
 }
 core_list_decl(th_member);
-
-static bool
-nominal_declaration_is_record(parse_tree_t *declaration)
-{
-    for (size_t i = 0; declaration && !core_tree_is_leaf(declaration)
-         && i < core_tree_num_children(declaration); i++) {
-        parse_tree_t *child = core_tree_child(declaration, i);
-        if (core_tree_is_leaf(child)
-            && parse_tree_leaf_is(child, CORE_STRING_STATIC("record")))
-            return true;
-    }
-    return false;
-}
-
-static th_type *
-record_representation(th_ctx *types, th_type *type)
-{
-    core_list_t(th_type_ptr_t) visited = core_list_new(th_type_ptr_t);
-    type = type ? th_resolve(type) : nullptr;
-    while (type && th_kind_of(type) != TH_RECORD) {
-        bool cycle = false;
-        for (size_t i = 0; i < visited.len; i++)
-            cycle |= visited.data[i] == type;
-        if (cycle) {
-            type = nullptr;
-            break;
-        }
-        core_list_push(visited, type);
-        type = th_type_definition(types, type);
-        type = type ? th_resolve(type) : nullptr;
-    }
-    core_list_free(visited);
-    return type;
-}
-
-
-
-
-
 
 th_type *
 link_semantic_type_for_symbol(parse_grammar_t *grammar,
@@ -984,17 +947,6 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     && !alias_declaration_is_transparent(symbol->decl_node)) {
                     th_type *representation = declared_type_from_node(
                         grammar, unit, symbol->decl_node);
-                    if (nominal_declaration_is_record(symbol->decl_node)
-                        && !record_representation(state->types,
-                                                  representation)) {
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(unit), unit,
-                            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0022"),
-                            CORE_STRING_STATIC(
-                                "a record declaration requires a record representation"),
-                            link_source_location(symbol->decl_node));
-                        return false;
-                    }
                     if (!representation || !th_type_define(state->types,
                             symbol->type, representation)) {
                         core_diagnostics_report_at(
@@ -1004,10 +956,7 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                             link_source_location(symbol->decl_node));
                         return false;
                     }
-                    if (nominal_declaration_is_record(symbol->decl_node))
-                        symbol->adt_kind = CORE_STRING_STATIC("record");
-                    else
-                        symbol->adt_kind = CORE_STRING_STATIC("nominal");
+                    symbol->adt_kind = CORE_STRING_STATIC("nominal");
                 }
             }
         }
@@ -5136,6 +5085,8 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 if (th_kind_of(receiver) != TH_NAMED) continue;
                 bool record = core_string_eq(symbol->adt_kind,
                     CORE_STRING_STATIC("record"));
+                bool object = core_string_eq(symbol->adt_kind,
+                    CORE_STRING_STATIC("object"));
                 bool scalar = core_string_eq(symbol->adt_kind,
                     CORE_STRING_STATIC("enum"))
                     || core_string_eq(symbol->adt_kind,
@@ -5144,7 +5095,13 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         && core_string_eq(
                             symbol->member_scope->scope_tag,
                             CORE_STRING_STATIC("flagset")));
-                if (!record && !scalar) continue;
+                if (!record && !scalar && !object) continue;
+                core_string_t object_name = {0};
+                if (object && th_named_info(receiver, &object_name, nullptr,
+                                            nullptr))
+                    receiver = record_template_type(state->types,
+                        object_name, symbol);
+                if (!receiver) continue;
                 if (n00bb_flagset_type(unit, state, receiver, nullptr)
                     && !register_flagset_operators(defaults, state->types,
                         unit, symbol, receiver)) {
@@ -5152,11 +5109,14 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                     return false;
                 }
                 th_type *shape = th_type_definition(state->types, receiver);
-                if (!th_is_closed(state->types, receiver)
+                if ((!object && !th_is_closed(state->types, receiver))
                     || n00bb_value_coercion_target(state->types, receiver)
                     || (record && (!shape
                         || th_kind_of(th_resolve(shape)) != TH_RECORD
-                        || !th_is_closed(state->types, shape)))) continue;
+                        || !th_is_closed(state->types, shape)))
+                    || (object && (!shape
+                        || th_kind_of(th_resolve(shape))
+                            != TH_INDIRECTION))) continue;
                 th_type *candidate = th_type_clone(probe, receiver);
                 th_env_method_t selected = {0};
                 bool custom_equal = candidate &&
@@ -5171,14 +5131,15 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         == TH_ENV_METHOD_FOUND;
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
-                bool derive_equal = record && !custom_equal
-                    && record_default_fields_support(probe, state->types,
-                        receiver, CORE_STRING_STATIC("Equal"),
-                        CORE_STRING_STATIC("__equal"), &visiting);
+                bool derive_equal = !custom_equal
+                    && (object || (record && record_default_fields_support(
+                        probe, state->types, receiver,
+                        CORE_STRING_STATIC("Equal"),
+                        CORE_STRING_STATIC("__equal"), &visiting)));
                 bool derive_hash = hash_available && !custom_equal
                     && !custom_hash
-                    && (scalar || record_default_fields_support(probe,
-                        state->types, receiver,
+                    && (scalar || object || record_default_fields_support(
+                        probe, state->types, receiver,
                         CORE_STRING_STATIC("builtin.hashing.Hash"),
                         CORE_STRING_STATIC("hash"), &visiting));
                 core_dict_free(&visiting);
@@ -5197,6 +5158,8 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                     core_buffer_t generated_name = {0};
                     core_buffer_printf(&generated_name,
                         kind && scalar ? "__n00bb_scalar_hash_%016llx"
+                        : kind && object ? "__n00bb_object_hash_%016llx"
+                        : object ? "__n00bb_object_equal_%016llx"
                         : kind ? "__n00bb_record_hash_%016llx"
                              : "__n00bb_record_equal_%016llx",
                         (unsigned long long)th_hash(state->types, receiver));

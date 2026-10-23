@@ -4,7 +4,7 @@ func extent() -> int {
 
 public var grid: Array[int][extent()]
 
-public type GridHolder {
+public record GridHolder {
     public cells: Array[int][extent()]
 }
 

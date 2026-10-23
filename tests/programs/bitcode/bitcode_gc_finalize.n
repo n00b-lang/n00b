@@ -9,7 +9,7 @@ import sys.gc.registry
 import sys.gc.sync
 import sys.memory
 
-type Sample {
+record Sample {
     value: int
 }
 

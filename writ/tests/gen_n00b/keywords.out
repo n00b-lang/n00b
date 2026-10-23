@@ -236,13 +236,13 @@ int32_t keywords_n00b_db_close(uint64_t db) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
 }
 
-type Db_Cell {
+record Db_Cell {
     public raw: uint
 }
 
@@ -309,7 +309,7 @@ func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_
     return __db_cell(result)
 }
 
-type Db_Limit_Options {
+record Db_Limit_Options {
     public max_rows: i64?
     public min_rows: i64?
 }

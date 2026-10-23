@@ -2,7 +2,7 @@ import abi
 import containers.list
 import string.core
 
-type Ffi_Bytes layout(c) {
+record Ffi_Bytes layout(c) {
     public data: uint
     public length: uint
 }
@@ -17,7 +17,7 @@ record Ffi_Table {
     public owners: List[uint]
 }
 
-type Ffi_Hold {
+record Ffi_Hold {
     group: u64
     token: u64
     release: Ref[(u64) -> nil]?

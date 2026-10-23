@@ -5,19 +5,19 @@ private variant Tree_Contents {
     leaf_value: Ref['L]
 }
 
-record Tree {
-    parent:           Ref[Tree['N, 'L]]?
+object Tree {
+    parent:           Tree['N, 'L]?
     private contents: Tree_Contents['N, 'L]?
-    children:         List[Ref[Tree['N, 'L]]]
+    children:         List[Tree['N, 'L]]
 }
 
-func __init(modify self: Tree['N, 'L]) {
+func __init(self: Tree['N, 'L]) {
     self.parent = nil
     self.contents = nil
-    self.children = new[List[Ref[Tree['N, 'L]]]]()
+    self.children = new[List[Tree['N, 'L]]]()
 }
 
-func is_leaf(self: Ref[Tree['N, 'L]]) -> bool {
+func is_leaf(self: Tree['N, 'L]) -> bool {
     let maybe: Tree_Contents['N, 'L]? = self.contents
     if maybe == nil {
         return false
@@ -33,25 +33,21 @@ func is_leaf(self: Ref[Tree['N, 'L]]) -> bool {
     }
 }
 
-func set_node(self: Ref[Tree['N, 'L]], value: 'N) {
+func set_node(self: Tree['N, 'L], value: 'N) {
     var owned:    'N                    = value
-    var tree:     Tree['N, 'L]          = ref_read(self)
     var contents: Tree_Contents['N, 'L] = new[Tree_Contents['N, 'L]]()
     contents.node_value = ref owned
-    tree.contents = contents
-    ref_write(self, tree)
+    self.contents = contents
 }
 
-func set_leaf(self: Ref[Tree['N, 'L]], value: 'L) {
+func set_leaf(self: Tree['N, 'L], value: 'L) {
     var owned:    'L                    = value
-    var tree:     Tree['N, 'L]          = ref_read(self)
     var contents: Tree_Contents['N, 'L] = new[Tree_Contents['N, 'L]]()
     contents.leaf_value = ref owned
-    tree.contents = contents
-    ref_write(self, tree)
+    self.contents = contents
 }
 
-func node(self: Ref[Tree['N, 'L]]) -> Ref['N]? {
+func node(self: Tree['N, 'L]) -> Ref['N]? {
     let maybe: Tree_Contents['N, 'L]? = self.contents
     if maybe == nil {
         return nil
@@ -68,7 +64,7 @@ func node(self: Ref[Tree['N, 'L]]) -> Ref['N]? {
     }
 }
 
-func leaf(self: Ref[Tree['N, 'L]]) -> Ref['L]? {
+func leaf(self: Tree['N, 'L]) -> Ref['L]? {
     let maybe: Tree_Contents['N, 'L]? = self.contents
     if maybe == nil {
         return nil
@@ -85,11 +81,11 @@ func leaf(self: Ref[Tree['N, 'L]]) -> Ref['L]? {
     }
 }
 
-func child_count(self: Ref[Tree['N, 'L]]) -> uint {
+func child_count(self: Tree['N, 'L]) -> uint {
     return self.children.count
 }
 
-func child(self: Ref[Tree['N, 'L]], index: int) -> Ref[Tree['N, 'L]]? {
+func child(self: Tree['N, 'L], index: int) -> Tree['N, 'L]? {
     let count: int = cast[int]self.children.count
     if index < -count or index >= count {
         return nil
@@ -101,17 +97,16 @@ func child(self: Ref[Tree['N, 'L]], index: int) -> Ref[Tree['N, 'L]]? {
     return self.children.items[at]
 }
 
-private func can_attach(self : Ref[Tree['N, 'L]],
-                        child: Ref[Tree['N, 'L]]) -> bool {
+private func can_attach(self: Tree['N, 'L], child: Tree['N, 'L]) -> bool {
     if child.parent != nil {
         return false
     }
-    var current: Ref[Tree['N, 'L]] = self
+    var current: Tree['N, 'L] = self
     while true {
         if current == child {
             return false
         }
-        let next: Ref[Tree['N, 'L]]? = current.parent
+        let next: Tree['N, 'L]? = current.parent
         if next == nil {
             return true
         }
@@ -119,67 +114,53 @@ private func can_attach(self : Ref[Tree['N, 'L]],
     }
 }
 
-private func set_parent(self : Ref[Tree['N, 'L]],
-                        value: Ref[Tree['N, 'L]]?) {
-    var tree: Tree['N, 'L] = ref_read(self)
-    tree.parent = value
-    ref_write(self, tree)
-}
-
-func add_child(self : Ref[Tree['N, 'L]],
-               child: Ref[Tree['N, 'L]]) -> bool {
+func add_child(self: Tree['N, 'L], child: Tree['N, 'L]) -> bool {
     if !can_attach(self, child) {
         return false
     }
-    var tree: Tree['N, 'L] = ref_read(self)
-    containers.list.append(tree.children, child)
-    ref_write(self, tree)
-    set_parent(child, self)
+    containers.list.append(self.children, child)
+    child.parent = self
     return true
 }
 
-func insert_child(self : Ref[Tree['N, 'L]], index: int,
-                  child: Ref[Tree['N, 'L]]) -> bool {
+func insert_child(self: Tree['N, 'L], index: int,
+                  child: Tree['N, 'L]) -> bool {
     if index < 0 or index > cast[int]self.children.count or
        !can_attach(self, child) {
         return false
     }
-    var tree: Tree['N, 'L] = ref_read(self)
-    containers.list.insert(tree.children, index, child)
-    ref_write(self, tree)
-    set_parent(child, self)
+    containers.list.insert(self.children, index, child)
+    child.parent = self
     return true
 }
 
-func remove_child(self: Ref[Tree['N, 'L]], index: int) -> Ref[Tree['N, 'L]]? {
-    let found: Ref[Tree['N, 'L]]? = child(self, index)
+func remove_child(self: Tree['N, 'L], index: int) -> Tree['N, 'L]? {
+    let found: Tree['N, 'L]? = child(self, index)
     if found == nil {
         return nil
     }
-    var tree:  Tree['N, 'L] = ref_read(self)
-    let count: int          = cast[int]tree.children.count
-    var at:    int          = index
+    let count: int = cast[int]self.children.count
+    var at:    int = index
     if at < 0 {
         at += count
     }
     while at + 1 < count {
-        tree.children.items[at] = tree.children.items[at + 1]
+        self.children.items[at] = self.children.items[at + 1]
         at += 1
     }
-    _ = containers.list.pop(tree.children)
-    ref_write(self, tree)
-    let removed: Ref[Tree['N, 'L]] = found.get()
-    set_parent(removed, nil)
+    _ = containers.list.pop(self.children)
+    let removed: Tree['N, 'L] = found.get()
+    removed.parent = nil
     return removed
 }
 
-func parent(self: Ref[Tree['N, 'L]]) -> Ref[Tree['N, 'L]]? {
+func parent(self: Tree['N, 'L]) -> Tree['N, 'L]? {
     return self.parent
 }
 
-func root(self: Ref[Tree['N, 'L]]) -> Ref[Tree['N, 'L]] {
-    var current: Ref[Tree['N, 'L]]  = self
-    var next:    Ref[Tree['N, 'L]]? = current.parent
+func root(self: Tree['N, 'L]) -> Tree['N, 'L] {
+    var current: Tree['N, 'L]  = self
+    var next:    Tree['N, 'L]? = current.parent
     while next != nil {
         current = next.get()
         next = current.parent
@@ -187,10 +168,10 @@ func root(self: Ref[Tree['N, 'L]]) -> Ref[Tree['N, 'L]] {
     return current
 }
 
-func depth(self: Ref[Tree['N, 'L]]) -> uint {
-    var result:  uint               = 0
-    var current: Ref[Tree['N, 'L]]  = self
-    var next:    Ref[Tree['N, 'L]]? = current.parent
+func depth(self: Tree['N, 'L]) -> uint {
+    var result:  uint          = 0
+    var current: Tree['N, 'L]  = self
+    var next:    Tree['N, 'L]? = current.parent
     while next != nil {
         current = next.get()
         result += 1

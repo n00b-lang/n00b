@@ -1185,7 +1185,7 @@ static th_type *dereferenced_argument(th_ctx *ctx, th_type *actual,
     th_type *referent = th_kind_of(resolved_actual) == TH_INDIRECTION
         ? th_ind_referent(resolved_actual)
         : custom_referent(ctx, resolved_actual);
-    if (mode != TH_IN || !referent
+    if (!th_mode_is_in(mode) || !referent
         || th_kind_of(resolved_formal) == TH_INDIRECTION
         || th_kind_of(resolved_formal) == TH_VAR
         || th_unify_probe(ctx, actual, formal)) return nullptr;
@@ -1214,7 +1214,7 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
     if (!actual || !formal) return false;
     th_type *referent = dereferenced_argument(ctx, actual, formal, mode);
     if (referent) return uni(ctx, referent, formal, seen);
-    if (mode == TH_IN && integer_pair_converts(ctx, actual, formal))
+    if (th_mode_is_in(mode) && integer_pair_converts(ctx, actual, formal))
         return true;
     if (!(ctx->method_argument_coercions
           & (TH_COERCE_OPTION_WRAP | TH_COERCE_NIL_OPTION
@@ -1222,14 +1222,14 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
         return uni(ctx, actual, formal, seen);
     if (th_unify_probe(ctx, actual, formal))
         return uni(ctx, actual, formal, seen);
-    if (mode == TH_IN && custom_coerces(ctx, th_resolve(actual),
-                                        th_resolve(formal))) {
+    if (th_mode_is_in(mode) && custom_coerces(ctx, th_resolve(actual),
+                                              th_resolve(formal))) {
         record_coercion(ctx, TH_COERCE_CUSTOM, actual, formal);
         return true;
     }
     th_type *resolved_actual = th_resolve(actual);
     th_type *resolved_formal = th_resolve(formal);
-    if (mode == TH_IN
+    if (th_mode_is_in(mode)
         && (ctx->method_argument_coercions & TH_COERCE_RECORD_CONSTRUCT)
         && th_kind_of(resolved_actual) == TH_RECORD
         && th_kind_of(resolved_formal) == TH_NAMED) {
@@ -1238,7 +1238,7 @@ static bool method_argument_unifies(th_ctx *ctx, th_type *actual,
             && th_unify_probe(ctx, resolved_actual, definition))
             return uni(ctx, resolved_actual, definition, seen);
     }
-    th_type *inner = mode == TH_IN ? th_option_item(formal) : nullptr;
+    th_type *inner = th_mode_is_in(mode) ? th_option_item(formal) : nullptr;
     if (!inner) return false;
     actual = th_resolve(actual);
     if ((ctx->method_argument_coercions & TH_COERCE_NIL_OPTION)
@@ -2554,7 +2554,7 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
             return false;
         }
 
-        if (a->fn.params[i].mode == TH_IN)
+        if (th_mode_is_in(a->fn.params[i].mode))
             upush_boundary(w, a->fn.params[i].type, b->fn.params[i].type);
         else
             upush(w, a->fn.params[i].type, b->fn.params[i].type);

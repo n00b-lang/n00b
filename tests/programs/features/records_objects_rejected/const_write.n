@@ -1,0 +1,10 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+const FIXED: Counter = (count = 1)
+FIXED.count = 5

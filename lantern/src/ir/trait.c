@@ -225,7 +225,8 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   const th_param *slot_receiver = th_func_param(slot_signature, 0);
   const th_param *concrete_receiver =
       th_func_param(implementation->type, 0);
-  if (!slot_receiver || !concrete_receiver || slot_receiver->mode != TH_IN ||
+  if (!slot_receiver || !concrete_receiver
+      || !th_mode_is_in(slot_receiver->mode) ||
       !same_type(module, slot_receiver->type, erased_pointer))
     return nullptr;
 

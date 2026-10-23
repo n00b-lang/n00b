@@ -1162,13 +1162,13 @@ int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *nam
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
 }
 
-type Regex_Options_Cell {
+record Regex_Options_Cell {
     public raw: uint
 }
 
@@ -1186,7 +1186,7 @@ func __finalize(consume self: Ref[Regex_Options_Cell]) {
     }
 }
 
-type Regex_Cell {
+record Regex_Cell {
     public raw: uint
 }
 

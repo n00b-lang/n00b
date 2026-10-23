@@ -1,0 +1,11 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+func view_write(view c: Counter) {
+    c.count = 2
+}

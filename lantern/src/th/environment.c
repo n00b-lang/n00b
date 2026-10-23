@@ -724,7 +724,7 @@ bool th_env_register_type_shape(th_env *env, core_string_t name,
                                 th_type *shape) {
   if (!env || env->frozen || !name.u8_bytes || !shape ||
       shape_kind <= TH_ENV_TYPE_SHAPE_NONE ||
-      shape_kind > TH_ENV_TYPE_SHAPE_BITSET)
+      shape_kind > TH_ENV_TYPE_SHAPE_OBJECT)
     return false;
   for (size_t i = 0; i < env->type_origins.len; i++) {
     th_env_type_origin_t *origin = &env->type_origins.data[i];
@@ -1006,6 +1006,31 @@ size_t th_env_function_required(const th_env *env,
   return SIZE_MAX;
 }
 
+static bool reference_receiver(th_ctx *ctx, th_type *type) {
+  type = type ? th_resolve(type) : nullptr;
+  core_string_t name = {};
+  th_env_type_shape_kind_t shape = TH_ENV_TYPE_SHAPE_NONE;
+  if (type && th_named_info(type, &name, nullptr, nullptr)
+      && th_env_type_shape(ctx, name, &shape)
+      && shape == TH_ENV_TYPE_SHAPE_OBJECT)
+    return true;
+  if (type && th_kind_of(type) == TH_NAMED) {
+    th_type *definition = th_type_definition(ctx, type);
+    type = definition ? th_resolve(definition) : nullptr;
+  }
+  return type && th_kind_of(type) == TH_INDIRECTION;
+}
+
+static bool receiver_fits_modify(th_ctx *ctx, th_type *signature,
+                                 th_type *required_signature) {
+  const th_param *required = required_signature
+      ? th_func_param(required_signature, 0) : nullptr;
+  const th_param *provided = th_func_param(signature, 0);
+  return required && provided && required->mode == TH_INOUT
+      && provided->mode == TH_IN
+      && reference_receiver(ctx, provided->type);
+}
+
 static th_type *fitted_contract(th_ctx *ctx,
                                 const th_env_function_t *function,
                                 th_type *required_signature) {
@@ -1013,22 +1038,32 @@ static th_type *fitted_contract(th_ctx *ctx,
   th_type *signature = nullptr;
   size_t wanted = required_signature
       ? th_func_nparams(required_signature) : SIZE_MAX;
-  if (function->required_params == SIZE_MAX
-      || wanted < function->required_params
+  const th_param *wanted_receiver = required_signature
+      ? th_func_param(required_signature, 0) : nullptr;
+  bool may_trim = function->required_params != SIZE_MAX
+      && wanted >= function->required_params;
+  bool may_adapt = wanted_receiver && wanted_receiver->mode == TH_INOUT;
+  if ((!may_trim && !may_adapt)
       || (required_signature && th_func_rest(required_signature))
       || !signature_channels_raw(ctx, fresh, &signature, nullptr)
-      || th_func_rest(signature) || wanted >= th_func_nparams(signature))
+      || th_func_rest(signature))
     return fresh;
-  th_param *params = th_alloc(ctx, (wanted ? wanted : 1) * sizeof(th_param));
+  bool trim = may_trim && wanted < th_func_nparams(signature);
+  bool adapt = may_adapt
+      && receiver_fits_modify(ctx, signature, required_signature);
+  if (!trim && !adapt) return fresh;
+  size_t count = trim ? wanted : th_func_nparams(signature);
+  th_param *params = th_alloc(ctx, (count ? count : 1) * sizeof(th_param));
   size_t nkw = th_func_nkw(signature);
   th_kwparam *kw = th_alloc(ctx, (nkw ? nkw : 1) * sizeof(th_kwparam));
   if (!params || !kw) return fresh;
-  for (size_t i = 0; i < wanted; i++) params[i] = *th_func_param(signature, i);
+  for (size_t i = 0; i < count; i++) params[i] = *th_func_param(signature, i);
   for (size_t i = 0; i < nkw; i++) kw[i] = *th_func_kw(signature, i);
-  th_type *trimmed = th_func_with_error(ctx, th_func_ret(signature),
-                                        signature->fn.error, params, wanted,
-                                        nullptr, kw, nkw);
-  return trimmed ? trimmed : fresh;
+  if (adapt && count) params[0].mode = TH_INOUT;
+  th_type *fitted = th_func_with_error(ctx, th_func_ret(signature),
+                                       signature->fn.error, params, count,
+                                       nullptr, kw, nkw);
+  return fitted ? fitted : fresh;
 }
 
 bool th_env_register_value(th_env *env, core_string_t qualified_name,

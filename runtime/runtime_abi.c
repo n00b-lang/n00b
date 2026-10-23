@@ -358,7 +358,8 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                 && owner->kind != N00B_ABI_TYPE_ENUM
                 && owner->kind != N00B_ABI_TYPE_FLAGSET
                 && owner->kind != N00B_ABI_TYPE_CALLBACK
-                && owner->kind != N00B_ABI_TYPE_WRAPPER))
+                && owner->kind != N00B_ABI_TYPE_WRAPPER
+                && owner->kind != N00B_ABI_TYPE_OBJECT))
                 return invalid_record(error, N00B_ABI_TABLE_TYPE, i,
                     offsetof(n00b_abi_type_v1, typevar_owner_type_index));
         }
@@ -1007,6 +1008,7 @@ type_needs_trace(const n00b_abi_type_v1 *type)
     if (type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE) return false;
     switch (type->kind) {
     case N00B_ABI_TYPE_REFERENCE:
+    case N00B_ABI_TYPE_OBJECT:
     case N00B_ABI_TYPE_FOREIGN:
     case N00B_ABI_TYPE_ARRAY:
     case N00B_ABI_TYPE_VIEW:
@@ -1338,6 +1340,24 @@ variant_trace_arms_valid(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+pointer_type(const n00b_abi_snapshot_v1 *snapshot,
+             const n00b_abi_type_v1 *type)
+{
+    for (uint32_t depth = 0; type && depth < 64; depth++) {
+        if (type->kind == N00B_ABI_TYPE_REFERENCE
+            || type->kind == N00B_ABI_TYPE_FOREIGN) return true;
+        uint32_t component = 0;
+        if ((type->kind != N00B_ABI_TYPE_WRAPPER
+             && type->kind != N00B_ABI_TYPE_OBJECT)
+            || type->components.count != 1
+            || n00b_abi_v1_index_at(snapshot, type->components, 0,
+                                    &component) != 1) return false;
+        type = n00b_abi_v1_type(snapshot, component);
+    }
+    return false;
+}
+
+static bool
 option_metadata_valid(const n00b_abi_snapshot_v1 *snapshot,
                       const n00b_abi_type_v1 *type,
                       const n00b_abi_layout_v1 *layout,
@@ -1388,8 +1408,7 @@ option_metadata_valid(const n00b_abi_snapshot_v1 *snapshot,
                 tag_bit, tag_bit + 1, child->size_bits)) return false;
     }
     else if (tag->kind == N00B_ABI_TAG_POINTER_NULL) {
-        if ((child->kind != N00B_ABI_TYPE_REFERENCE
-             && child->kind != N00B_ABI_TYPE_FOREIGN)
+        if (!pointer_type(snapshot, child)
             || child->size_bits != 64 || type->size_bits != 64
             || tag_bit || tag->unit_width_bits != 64
             || tag->lsb_position || tag->tag_width_bits != 1

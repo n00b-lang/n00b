@@ -1,4 +1,4 @@
-public type Archived_State {
+public record Archived_State {
     count: int
 }
 

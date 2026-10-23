@@ -272,13 +272,13 @@ int32_t policy_n00b_stmt_release(uint64_t stmt) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
 }
 
-type Stmt_Cell {
+record Stmt_Cell {
     public raw: uint
 }
 

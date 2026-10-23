@@ -611,6 +611,14 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
                 if (ir_layout_final(module, type, analysis->target.triple))
                     continue;
                 th_type *definition = ir_type_definition(module, type);
+                if (n00bb_object_type(ir_module_types(module), type)
+                    && th_is_closed(ir_module_types(module), type)) {
+                    bool handled = false;
+                    valid = n00bb_abi_publish_direct_layout(module, type,
+                        &analysis->target, &handled);
+                    progress = progress || handled;
+                    continue;
+                }
                 if (!definition || th_kind_of(definition) != TH_RECORD)
                     continue;
                 core_translation_unit_t *owner = nullptr;

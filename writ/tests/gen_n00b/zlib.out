@@ -686,7 +686,7 @@ int32_t zlib_n00b_inflateInit(const void *strm, void *status) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string

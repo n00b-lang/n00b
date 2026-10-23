@@ -1,0 +1,12 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+func view_derived(view c: Counter) {
+    let other = c
+    other.count = 3
+}

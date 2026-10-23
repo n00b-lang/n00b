@@ -62,8 +62,8 @@ inline func is_marked(heap: Ref[internal.gc.core.Heap], payload: Ref[byte]) -> b
     let header: Ref[internal.gc.core.Object_Header] = internal.gc.core.header_of(payload)
     let epoch:  u32                           = heap.mark_epoch
     if (header.meta & internal.gc.core.obj_large) != 0 {
-        let object: Ref[internal.gc.core.Los_Obj] = internal.gc.core.los_of(header)
-        return __atomic_load_relaxed(ref object.marked) == epoch
+        let obj: Ref[internal.gc.core.Los_Obj] = internal.gc.core.los_of(header)
+        return __atomic_load_relaxed(ref obj.marked) == epoch
     }
     let block:   Ref[internal.gc.core.Block_Metadata] = internal.gc.core.block_of(header)
     let offset:  uint                           = __abi_ref_address(header) - __abi_ref_address(block)
@@ -563,7 +563,8 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
                                   callback_value.environment)
             return
         }
-        if row.kind == cast[u32](internal.abi.Type_Kind.reference_type) {
+        if row.kind == cast[u32](internal.abi.Type_Kind.reference_type) or
+            row.kind == cast[u32](internal.abi.Type_Kind.object_type) {
             require start_index == 0
             let target: Ref[byte]? = __atomic_load(pointer_word_at(address))
             visit_managed_pointer(marker, mutator, target)

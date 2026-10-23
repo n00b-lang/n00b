@@ -1,4 +1,4 @@
-type Handle {
+record Handle {
     raw: uint
 }
 

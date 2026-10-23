@@ -642,7 +642,7 @@ static bool restore_environment(core_object_reader_t *reader, void *object,
         !core_object_reader_u32(reader, &visibility) ||
         visibility > TH_ENV_PUBLIC ||
         !core_object_reader_u32(reader, &shape_kind) ||
-        shape_kind > TH_ENV_TYPE_SHAPE_BITSET ||
+        shape_kind > TH_ENV_TYPE_SHAPE_OBJECT ||
         !read_type_ref(reader, &origin.shape) ||
         ((shape_kind == TH_ENV_TYPE_SHAPE_NONE) != (origin.shape == nullptr)))
       return false;

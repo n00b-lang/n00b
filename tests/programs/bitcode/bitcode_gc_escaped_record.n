@@ -1,4 +1,4 @@
-type Chain_Node {
+record Chain_Node {
     value: int
     next: Ref[Chain_Node]?
 }

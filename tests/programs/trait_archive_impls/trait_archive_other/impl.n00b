@@ -1,4 +1,4 @@
-public type ArchiveOther {
+public record ArchiveOther {
 }
 
 public func render(self: ArchiveOther) -> int {

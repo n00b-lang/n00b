@@ -125,6 +125,7 @@ typedef struct {
 
 typedef struct {
     uint64_t       writes[IR_SFLOW_KINDS];
+    uint64_t       mutates[IR_SFLOW_KINDS];
     uint64_t       escapes[IR_SFLOW_KINDS];
     uint64_t       leaks[IR_SFLOW_KINDS];
     uint64_t       receives;

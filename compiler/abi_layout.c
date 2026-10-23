@@ -212,10 +212,15 @@ publish_option_layout(ir_module_t *module, th_type *type,
     const ir_final_layout_t *child = ir_layout_final(module, argument->type,
                                                     target->triple);
     if (!child) return true;
-    bool pointer_niche = th_kind_of(th_resolve(argument->type))
-            == TH_INDIRECTION && child->intrinsic_bits == 64;
-    bool bitptr_niche = th_kind_of(th_resolve(argument->type))
-            == TH_INDIRECTION && child->intrinsic_bits == 128;
+    th_type *referent = th_resolve(argument->type);
+    if (th_kind_of(referent) == TH_NAMED) {
+        th_type *definition = ir_type_definition(module, referent);
+        referent = definition ? th_resolve(definition) : referent;
+    }
+    bool pointer_niche = th_kind_of(referent) == TH_INDIRECTION
+        && child->intrinsic_bits == 64;
+    bool bitptr_niche = th_kind_of(referent) == TH_INDIRECTION
+        && child->intrinsic_bits == 128;
     if (!bitptr_niche && child->has_discriminant
         && child->discriminant_is_niche
         && child->discriminant.unit_bit_offset == 64)

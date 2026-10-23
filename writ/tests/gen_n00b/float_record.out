@@ -226,14 +226,14 @@ int32_t pts_n00b_pt_sum(const void *args, void *result) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
 }
 
-type Point {
-    storage: Array[u8]
+record Point {
+    private storage: Array[u8]
 }
 
 func point() -> Point {
