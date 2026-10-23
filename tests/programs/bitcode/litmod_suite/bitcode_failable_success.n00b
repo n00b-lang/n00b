@@ -8,9 +8,9 @@ func caller() -> int fail: string {
 
 when comptime() {
     let value = try {
-        = caller()!
+        -> caller()!
     } else e {
-        = 0
+        -> 0
     }
     require value == 7
 }

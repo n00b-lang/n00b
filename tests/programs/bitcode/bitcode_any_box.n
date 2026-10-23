@@ -8,15 +8,15 @@ func box_string(value: string) -> Any {
 
 func inspect_integer(value: Any) -> int {
     return typecase value {
-        case int { = value }
-        else { = 0 }
+        case int { -> value }
+        else { -> 0 }
     }
 }
 
 func inspect_string(value: Any) -> string {
     return typecase value {
-        case string { = value }
-        else { = "bad" }
+        case string { -> value }
+        else { -> "bad" }
     }
 }
 

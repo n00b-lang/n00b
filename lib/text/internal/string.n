@@ -559,9 +559,9 @@ private func gcb_safe_start(r: unicode.Gcb, p: unicode.Gcb) -> bool {
 private func char_at_byte(s: string, i: u64) -> char {
     var pos: u32 = cast[u32] i
     let decoded: char = try {
-        = unicode.utf8_decode(s, pos)!
+        -> unicode.utf8_decode(s, pos)!
     } else failure {
-        = '\0'
+        -> '\0'
     }
     return decoded
 }

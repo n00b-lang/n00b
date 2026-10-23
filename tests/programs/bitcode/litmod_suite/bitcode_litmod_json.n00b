@@ -1,7 +1,7 @@
 func is_string(item: Any) -> int {
     return typecase item {
-        case string { = 1 }
-        else { = 0 }
+        case string { -> 1 }
+        else { -> 0 }
     }
 }
 

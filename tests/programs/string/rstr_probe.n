@@ -19,9 +19,9 @@ func c_length(bytes: Array[u8]) -> uint {
 func cstring_of(s: string) -> Array[u8] {
     let empty: Array[u8] = new[Array[u8]](0)
     let result = try {
-        = to_cstring(s)!
+        -> to_cstring(s)!
     } else e {
-        = empty
+        -> empty
     }
     return result
 }
@@ -54,9 +54,9 @@ func run_cstring_checks() {
     require embedded_nul_rejected(from_raw(ref raw, 3))
     var buf: Array[u8] = new[Array[u8]](64)
     let copied = try {
-        = to_cstring(shortish, copy = true, buf = buf)!
+        -> to_cstring(shortish, copy = true, buf = buf)!
     } else e {
-        = new[Array[u8]](0)
+        -> new[Array[u8]](0)
     }
     require c_length(copied) == byte_len(shortish)
     var j: uint = 0

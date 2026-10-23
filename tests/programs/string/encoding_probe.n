@@ -30,9 +30,9 @@ func as_text_fails(s: string) -> bool {
 
 func as_text_encoding(s: string) -> Str_Encoding {
     let revealed = try {
-        = encoding(as_text(s)!)
+        -> encoding(as_text(s)!)
     } else e {
-        = Str_Encoding.binary
+        -> Str_Encoding.binary
     }
     return revealed
 }

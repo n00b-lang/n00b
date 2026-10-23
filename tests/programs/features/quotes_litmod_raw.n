@@ -4,9 +4,9 @@ litmod<quotes> raw_text, verbatim(text: string) -> string fail: string {
 
 func rejected(text: string) -> bool {
     let decoded = try {
-        = decode_escapes(text)!
+        -> decode_escapes(text)!
     } else e {
-        = "rejected"
+        -> "rejected"
     }
     return decoded == "rejected"
 }
@@ -19,16 +19,16 @@ let spelled: string = "a\nb"'verbatim
 require byte_len(spelled) == 4
 require local_spelling() == 4
 let decoded: string = try {
-    = decode_escapes(spelled)!
+    -> decode_escapes(spelled)!
 } else e {
-    = ""
+    -> ""
 }
 require byte_len(decoded) == 3
 require decoded == "a\nb"
 let accent: string = try {
-    = decode_escapes("caf\\u00e9 \\x41\\U0001F600 \\t\\\"")!
+    -> decode_escapes("caf\\u00e9 \\x41\\U0001F600 \\t\\\"")!
 } else e {
-    = ""
+    -> ""
 }
 require accent == "café \x41\U0001F600 \t\""
 require rejected("bad \\q escape")

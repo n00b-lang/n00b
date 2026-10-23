@@ -2932,6 +2932,7 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
     int32_t original_index = 0, rendered_index = 0;
     parse_token_info_t *prior_original = nullptr;
     parse_token_info_t *prior_rendered = nullptr;
+    bool prior_value_sigil = false;
     bool valid = true;
     for (;;) {
         parse_token_info_t *from = n00bb_format_next_token(original,
@@ -2987,7 +2988,44 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
                 && prior_original_end - prior_original_start == 2
                 && !memcmp(source.data + prior_original_start,
                            "->", 2));
-        if (aligned_colon && from_start >= prior_original_end) {
+        bool value_sigil = false;
+        if (to_len == 2
+            && !memcmp(printed + to_start, "->", 2) && prior_rendered) {
+            size_t prior_start = parse_token_start_byte(prior_rendered);
+            size_t prior_end = parse_token_end_byte(prior_rendered);
+            value_sigil = prior_end == prior_start + 1
+                && printed[prior_start] == '{';
+        }
+        if (!value_sigil && from_len == 2
+            && !memcmp(source.data + from_start, "->", 2)) {
+            size_t line_start = from_start;
+            while (line_start && source.data[line_start - 1] != '\n')
+                line_start--;
+            bool leading = true;
+            for (size_t j = line_start; j < from_start && leading; j++)
+                leading = source.data[j] == ' ' || source.data[j] == '\t';
+            bool follows_params = prior_original
+                && prior_original_end > prior_original_start
+                && source.data[prior_original_end - 1] == ')';
+            value_sigil = leading && !follows_params;
+        }
+        if (value_sigil) {
+            size_t line_start = prior_rendered
+                ? parse_token_start_byte(prior_rendered) : 0;
+            while (line_start && printed[line_start - 1] != '\n')
+                line_start--;
+            size_t spaces = 4;
+            while (line_start + spaces - 4 < printed_len
+                   && printed[line_start + spaces - 4] == ' ')
+                spaces++;
+            core_buffer_putc(&result, '\n');
+            for (size_t j = 0; j < spaces; j++)
+                core_buffer_putc(&result, ' ');
+        }
+        else if (prior_value_sigil) {
+            core_buffer_putc(&result, ' ');
+        }
+        else if (aligned_colon && from_start >= prior_original_end) {
             size_t original_gap = from_start - prior_original_end;
             bool spaces_only = original_gap > gap_len;
             for (size_t j = 0; j < original_gap && spaces_only; j++)
@@ -3034,6 +3072,7 @@ n00bb_format_restore_breaks(parse_grammar_t *grammar,
         core_buffer_append(&result, printed + to_start, to_len);
         prior_original = from;
         prior_rendered = to;
+        prior_value_sigil = value_sigil;
     }
     if (valid) {
         size_t suffix = prior_rendered ? parse_token_end_byte(prior_rendered)
@@ -3536,6 +3575,12 @@ n00bb_format_channels(parse_grammar_t *grammar, core_string_t input)
                 && line[indent] == '-' && line[indent + 1] == '>')
             || (line_length - indent >= 5
                 && !memcmp(line + indent, "fail:", 5));
+        if (channel && line[indent] == '-' && result.byte_len
+            && result.data[result.byte_len - 1] == '\n') {
+            size_t prior = result.byte_len - 1;
+            while (prior && result.data[prior - 1] == ' ') prior--;
+            channel = !prior || result.data[prior - 1] != '{';
+        }
         bool opening_brace = line_length - indent == 1
             && line[indent] == '{';
         bool joined = false;

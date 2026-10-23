@@ -278,7 +278,8 @@
 <return-stmt> @jump("return") @emit("return", $1) @infer("$1") ::= %"return" <expression>
 <return-stmt> @jump("return") @emit("return") ::= %"return"
 <fail-stmt> @jump("fail") @infer("$1") ::= %"fail" <expression>
-<value-stmt> @jump("value") @infer("$1") ::= <assign-op> <expression>
+<value-stmt> @jump("value") @infer("$1") ::= <value-sigil> <expression>
+<value-sigil> ::= %"->"
 
 <assert-stmt> ::= (%"assert"|%"require") <expression>
 

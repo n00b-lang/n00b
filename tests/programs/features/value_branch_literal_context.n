@@ -3,15 +3,15 @@ func narrow(x: u8) -> u8 {
 }
 
 func pick(c: bool, k: int) -> uint {
-    return if c { = 1 } elif k > 2 { = 5 } else { = 0 }
+    return if c { -> 1 } elif k > 2 { -> 5 } else { -> 0 }
 }
 
 func total(c: bool) -> uint {
     var n: uint = 3
-    n = if c { = 2 } else { = n }
-    let extra: uint = if c { = 1 } else { = 0 }
-    let small: u8 = if c { = if c { = 7 } else { = 8 } } else { = 0 }
-    let s: u8 = narrow(if c { = 4 } else { = 1 })
+    n = if c { -> 2 } else { -> n }
+    let extra: uint = if c { -> 1 } else { -> 0 }
+    let small: u8 = if c { -> if c { -> 7 } else { -> 8 } } else { -> 0 }
+    let s: u8 = narrow(if c { -> 4 } else { -> 1 })
     return n + extra + cast[uint] small + cast[uint] s + pick(c, 3)
 }
 
