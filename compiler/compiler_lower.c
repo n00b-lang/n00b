@@ -7300,20 +7300,13 @@ n00bb_bind_static_literal_result(ir_lower_context_t *context,
 static bool
 produced_literal_site(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    static const core_string_t kinds[] = {
-        CORE_STRING_STATIC("sequence"), CORE_STRING_STATIC("dict"),
-        CORE_STRING_STATIC("set"), CORE_STRING_STATIC("quotes"),
-        CORE_STRING_STATIC("int"), CORE_STRING_STATIC("hex"),
-        CORE_STRING_STATIC("float"), CORE_STRING_STATIC("bool"),
-        CORE_STRING_STATIC("nil"), CORE_STRING_STATIC("tuple"),
-        CORE_STRING_STATIC("record"), CORE_STRING_STATIC("fence"),
-    };
     n00bb_litmod_site_t *site = n00bb_node_literal_site(node);
     if (!site)
         return n00bb_default_container_literal(grammar, node,
                                                parse_tree_type(node));
-    for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
-        if (core_string_eq(site->registration->kind, kinds[i])) return true;
+    for (size_t i = 0; i < n00bb_litmod_kind_count; i++)
+        if (core_string_eq(site->registration->kind, n00bb_litmod_kinds[i]))
+            return true;
     return false;
 }
 
@@ -16065,7 +16058,7 @@ register_nominal_types(parse_grammar_t *grammar,
             }
             bool nominal = symbol->decl_node
                 ? nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
-                    && !alias_declaration_is_transparent(symbol->decl_node)
+                    && !alias_declaration_is_transparent(grammar,symbol->decl_node)
                 : core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("nominal"));
             if (!nominal) continue;
             th_type *representation = th_type_definition(state->types, symbol->type);

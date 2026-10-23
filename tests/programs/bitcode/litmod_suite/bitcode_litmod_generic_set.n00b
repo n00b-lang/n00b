@@ -1,4 +1,5 @@
-litmod<set> identity, wrap(items: Array['T]) -> Array['T] fail: string {
+public alias litmod wrap = identity
+set litmod identity(items: Array['T]) -> Array['T] fail: string {
     return items
 }
 

@@ -128,7 +128,7 @@ private func read_all(fd: int, at: Ref[byte], length: uint, path: string)
     }
 }
 
-litmod<fence> embed(contents: string, site: litmod_site.Literal_Site)
+fence litmod embed(contents: string, site: litmod_site.Literal_Site)
     -> Array['E] fail: string {
     let path: string = resolved_path(contents, site)
     var items: Array['E] = new[Array['E]](0)

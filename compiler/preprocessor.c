@@ -711,39 +711,23 @@ builtin_argument_count(pp_context_t *ctx, parse_tree_t *call)
             CORE_STRING_STATIC("positional-args")));
 }
 
-static bool
-register_litmod_name(pp_context_t *ctx, parse_tree_t *function,
-                     parse_tree_t *node, core_string_t name,
-                     core_string_t kind)
-{
-    if (ctx->options->register_litmod(ctx->options->litmod_context,
-            ctx->unit, function, name, kind)) return true;
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "literal modifier '%.*s' for %.*s literals is already declared in this module",
-        (int)name.u8_bytes, name.data, (int)kind.u8_bytes, kind.data);
-    pp_report(ctx, node, core_buffer_string(&message));
-    core_buffer_release(&message);
-    return false;
-}
+const core_string_t n00bb_litmod_kinds[] = {
+    CORE_STRING_STATIC("set"), CORE_STRING_STATIC("hex"),
+    CORE_STRING_STATIC("sequence"), CORE_STRING_STATIC("dict"),
+    CORE_STRING_STATIC("int"), CORE_STRING_STATIC("bool"),
+    CORE_STRING_STATIC("nil"), CORE_STRING_STATIC("float"),
+    CORE_STRING_STATIC("quotes"), CORE_STRING_STATIC("tuple"),
+    CORE_STRING_STATIC("record"), CORE_STRING_STATIC("fence"),
+};
+const size_t n00bb_litmod_kind_count =
+    sizeof(n00bb_litmod_kinds) / sizeof(n00bb_litmod_kinds[0]);
 
 static bool
-register_litmod_aliases(pp_context_t *ctx, parse_tree_t *function,
-                        parse_tree_t *node, core_string_t kind)
+known_litmod_kind(core_string_t kind)
 {
-    if (!node) return true;
-    if (core_tree_is_leaf(node)) {
-        parse_token_info_t *token = parse_node_token(node);
-        if (!token || !core_string_eq(parse_terminal_name(ctx->grammar,
-                parse_token_tid(token)), CORE_STRING_STATIC("IDENTIFIER")))
-            return true;
-        return register_litmod_name(ctx, function, node, leaf_text(ctx, node),
-                                    kind);
-    }
-    for (size_t i = 0; i < core_tree_num_children(node); i++)
-        if (!register_litmod_aliases(ctx, function,
-                core_tree_child(node, i), kind)) return false;
-    return true;
+    for (size_t i = 0; i < n00bb_litmod_kind_count; i++)
+        if (core_string_eq(kind, n00bb_litmod_kinds[i])) return true;
+    return false;
 }
 
 static bool
@@ -760,18 +744,7 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
         kind = CORE_STRING_STATIC("record");
     if (nil_spelling(kind)) kind = CORE_STRING_STATIC("nil");
     core_string_t function_name = leaf_text(ctx, primary);
-    if (!core_string_eq(kind, CORE_STRING_STATIC("set"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("hex"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("sequence"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("dict"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("int"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("bool"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("nil"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("float"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("quotes"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("tuple"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("record"))
-        && !core_string_eq(kind, CORE_STRING_STATIC("fence"))) {
+    if (!known_litmod_kind(kind)) {
         pp_error(ctx, kind_node, "unknown literal modifier kind");
         return false;
     }
@@ -780,11 +753,51 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
         pp_error(ctx, function, "invalid literal modifier declaration");
         return false;
     }
-    if (!register_litmod_name(ctx, function, primary, function_name, kind))
+    if (ctx->options->register_litmod(ctx->options->litmod_context,
+            ctx->unit, function, function_name, kind)) return true;
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "literal modifier '%.*s' for %.*s literals is already declared in this module",
+        (int)function_name.u8_bytes, function_name.data,
+        (int)kind.u8_bytes, kind.data);
+    pp_report(ctx, primary, core_buffer_string(&message));
+    core_buffer_release(&message);
+    return false;
+}
+
+static bool
+publicly_visible(pp_context_t *ctx, parse_tree_t *statement)
+{
+    parse_tree_t *visibility = parse_tree_find_flat_child_by_nt_name(
+        ctx->grammar, statement, CORE_STRING_STATIC("member-visibility"));
+    const parse_rule_t *rule = visibility
+        ? parse_tree_rule(ctx->grammar, visibility) : nullptr;
+    parse_annotation_t *annotation = rule
+        ? parse_rule_find_annot(ctx->grammar, rule, PARSE_ANNOT_VISIBILITY)
+        : nullptr;
+    return annotation && core_string_eq(annotation->visibility_spec,
+                                        CORE_STRING_STATIC("public"));
+}
+
+static bool
+register_litmod_alias(pp_context_t *ctx, parse_tree_t *statement)
+{
+    parse_tree_t *alias = parse_tree_find_flat_child_by_nt_name(ctx->grammar,
+        statement, CORE_STRING_STATIC("litmod-alias-name"));
+    parse_tree_t *target = parse_tree_find_flat_child_by_nt_name(
+        ctx->grammar, statement, CORE_STRING_STATIC("litmod-alias-target"));
+    bool exported = publicly_visible(ctx, statement);
+    if (!alias || !target || !ctx->options
+        || !ctx->options->register_litmod_alias) {
+        pp_error(ctx, statement, "invalid literal modifier alias");
         return false;
-    parse_tree_t *aliases = parse_tree_find_flat_child_by_nt_name(ctx->grammar,
-        function, CORE_STRING_STATIC("litmod-aliases"));
-    return register_litmod_aliases(ctx, function, aliases, kind);
+    }
+    if (ctx->options->register_litmod_alias(ctx->options->litmod_context,
+            ctx->unit, statement, first_leaf_text(ctx, alias),
+            first_leaf_text(ctx, target), exported))
+        return true;
+    pp_error(ctx, statement, "could not record the literal modifier alias");
+    return false;
 }
 
 static bool
@@ -2395,6 +2408,8 @@ preprocess_prepare(parse_visit_t *visit)
     }
     if (is_name(ctx->grammar, node, "func-def")
         && !register_litmod_declaration(ctx, node)) return PARSE_VISIT_ERROR;
+    if (is_name(ctx->grammar, node, "litmod-alias-stmt")
+        && !register_litmod_alias(ctx, node)) return PARSE_VISIT_ERROR;
     if (is_name(ctx->grammar, node, "import-stmt")) {
         if (frame->current_body
             && frame->current_body != frame->selected_import_body) {

@@ -1,4 +1,5 @@
-litmod<sequence> identity_ints, ints(items: Array[int]) -> Array[int] fail: string {
+public alias litmod ints = identity_ints
+sequence litmod identity_ints(items: Array[int]) -> Array[int] fail: string {
     return items
 }
 

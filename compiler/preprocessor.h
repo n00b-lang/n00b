@@ -28,6 +28,12 @@ typedef bool (*n00bb_preprocessor_module_literal_fn)(
 typedef bool (*n00bb_preprocessor_litmod_fn)(
     void *context, core_translation_unit_t *unit,
     parse_tree_t *declaration, core_string_t modifier, core_string_t kind);
+typedef bool (*n00bb_preprocessor_litmod_alias_fn)(
+    void *context, core_translation_unit_t *unit, parse_tree_t *statement,
+    core_string_t alias, core_string_t target, bool exported);
+
+extern const core_string_t n00bb_litmod_kinds[];
+extern const size_t n00bb_litmod_kind_count;
 
 typedef enum {
     N00BB_PREPROCESSOR_VALUE_BOOL,
@@ -64,6 +70,7 @@ typedef struct {
     n00bb_preprocessor_selected_body_fn build_time_use;
     void *selected_body_context;
     n00bb_preprocessor_litmod_fn register_litmod;
+    n00bb_preprocessor_litmod_alias_fn register_litmod_alias;
     void *litmod_context;
     const core_string_t *module_modifiers;
     size_t module_modifier_count;

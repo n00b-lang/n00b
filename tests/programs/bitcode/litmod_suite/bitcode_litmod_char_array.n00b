@@ -1,4 +1,5 @@
-litmod<sequence> identity_char_array, wrap(items: Array[char]) -> Array[char] fail: string {
+public alias litmod wrap = identity_char_array
+sequence litmod identity_char_array(items: Array[char]) -> Array[char] fail: string {
     return items
 }
 

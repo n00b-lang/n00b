@@ -1451,6 +1451,24 @@ append_text_le(core_buffer_t *out, core_string_t text)
     return true;
 }
 
+static bool
+append_litmod_entry(n00bb_link_analysis_t *analysis,
+                    core_translation_unit_t *unit, core_buffer_t *litmods,
+                    uint32_t *count, core_string_t name,
+                    n00bb_user_litmod_t *registration)
+{
+    if (!registration || !registration->function) return true;
+    core_buffer_t qualified = {0};
+    bool appended = append_environment_symbol_name(analysis->grammar, unit,
+            registration->function, &qualified)
+        && append_text_le(litmods, name)
+        && append_text_le(litmods, registration->kind)
+        && append_text_le(litmods, core_buffer_string(&qualified));
+    core_buffer_release(&qualified);
+    (*count)++;
+    return appended;
+}
+
 bool
 register_package_module_metadata(n00bb_link_analysis_t *analysis)
 {
@@ -1512,17 +1530,18 @@ register_package_module_metadata(n00bb_link_analysis_t *analysis)
                  && i < state->literal_modifiers.len; i++) {
                 n00bb_user_litmod_t *registration =
                     &state->literal_modifiers.data[i];
-                if (!registration->function) continue;
-                core_buffer_t qualified = {0};
-                registered = append_environment_symbol_name(
-                        analysis->grammar, unit, registration->function,
-                        &qualified)
-                    && append_text_le(&litmods, registration->modifier)
-                    && append_text_le(&litmods, registration->kind)
-                    && append_text_le(&litmods,
-                        core_buffer_string(&qualified));
-                core_buffer_release(&qualified);
-                litmod_count++;
+                registered = append_litmod_entry(analysis, unit, &litmods,
+                    &litmod_count, registration->modifier, registration);
+            }
+            for (size_t a = 0; registered
+                 && a < state->litmod_aliases.len; a++) {
+                n00bb_litmod_alias_t *alias = &state->litmod_aliases.data[a];
+                for (size_t k = 0; registered && alias->exported
+                     && k < n00bb_litmod_kind_count; k++)
+                    registered = append_litmod_entry(analysis, unit,
+                        &litmods, &litmod_count, alias->alias,
+                        user_litmod(state, alias->alias,
+                                    n00bb_litmod_kinds[k], nullptr));
             }
             if (registered && litmod_count) {
                 core_buffer_t payload = {0};

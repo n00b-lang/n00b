@@ -1,3 +1,4 @@
-litmod<dict> mine, dict(items: int) -> int fail: string {
+public alias litmod dict = mine
+dict litmod mine(items: int) -> int fail: string {
     return items
 }

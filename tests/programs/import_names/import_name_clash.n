@@ -17,7 +17,8 @@ const limit: int = 3
 
 var counter: int = 0
 
-litmod<quotes> lit, verbatim(text: string) -> string fail: string {
+public alias litmod verbatim = lit
+quotes litmod lit(text: string) -> string fail: string {
     return text
 }
 

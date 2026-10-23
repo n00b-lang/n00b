@@ -1,21 +1,21 @@
-public alias Type_Kind = builtin.Type_Kind
-public alias Range = builtin.Range
-public alias String_Bits = builtin.String_Bits
-public alias Type_Record = builtin.Type_Record
-public alias Field_Record = builtin.Field_Record
-public alias Trace_Record = builtin.Trace_Record
-public alias Trace_Child_Record = builtin.Trace_Child_Record
-public alias Trace_Arm_Record = builtin.Trace_Arm_Record
-public alias Tag_Extractor_Record = builtin.Tag_Extractor_Record
-public alias Frame_Layout_Record = builtin.Frame_Layout_Record
-public alias Native_Frame_Record = builtin.Native_Frame_Record
-public alias Storage_Record = builtin.Storage_Record
-public alias Symbol_Record = builtin.Symbol_Record
-public alias Module_Record = builtin.Module_Record
-public alias Function_Record = builtin.Function_Record
-public alias Baked_Node_Record = builtin.Baked_Node_Record
-public alias Arm_Record = builtin.Arm_Record
-public alias Physical_Run_Record = builtin.Physical_Run_Record
+public alias type Type_Kind = builtin.Type_Kind
+public alias type Range = builtin.Range
+public alias type String_Bits = builtin.String_Bits
+public alias type Type_Record = builtin.Type_Record
+public alias type Field_Record = builtin.Field_Record
+public alias type Trace_Record = builtin.Trace_Record
+public alias type Trace_Child_Record = builtin.Trace_Child_Record
+public alias type Trace_Arm_Record = builtin.Trace_Arm_Record
+public alias type Tag_Extractor_Record = builtin.Tag_Extractor_Record
+public alias type Frame_Layout_Record = builtin.Frame_Layout_Record
+public alias type Native_Frame_Record = builtin.Native_Frame_Record
+public alias type Storage_Record = builtin.Storage_Record
+public alias type Symbol_Record = builtin.Symbol_Record
+public alias type Module_Record = builtin.Module_Record
+public alias type Function_Record = builtin.Function_Record
+public alias type Baked_Node_Record = builtin.Baked_Node_Record
+public alias type Arm_Record = builtin.Arm_Record
+public alias type Physical_Run_Record = builtin.Physical_Run_Record
 
 enum Tag_Kind {
     invalid = 0, direct_bits = 1, pointer_null = 2, bitptr_depth = 3

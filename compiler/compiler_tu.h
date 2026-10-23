@@ -127,6 +127,10 @@ bool n00bb_literal_prefix_registered(core_string_t prefix);
 bool register_user_litmod(void *context, core_translation_unit_t *unit,
                           parse_tree_t *declaration,
                           core_string_t modifier, core_string_t kind);
+bool register_user_litmod_alias(void *context, core_translation_unit_t *unit,
+                                parse_tree_t *statement, core_string_t alias,
+                                core_string_t target, bool exported);
+bool validate_litmod_aliases(core_translation_unit_t *unit);
 th_type *n00bb_atomic_element_type(th_type *type);
 bool n00bb_option_type_element(th_type *type, th_type **element);
 void n00bb_append_dereference_hint(core_buffer_t *message, th_ctx *types,
@@ -385,6 +389,14 @@ typedef struct {
     core_string_t module;
 } n00bb_user_litmod_t;
 core_list_decl(n00bb_user_litmod_t);
+
+typedef struct {
+    core_string_t alias;
+    core_string_t target;
+    core_diag_location_t location;
+    bool exported;
+} n00bb_litmod_alias_t;
+core_list_decl(n00bb_litmod_alias_t);
 typedef n00bb_user_litmod_t *n00bb_user_litmod_ptr_t;
 core_list_decl(n00bb_user_litmod_ptr_t);
 struct n00bb_litmod_site_t {
@@ -612,6 +624,7 @@ typedef struct {
     core_list_t(n00bb_literal_constant_t) literal_constants;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;
+    core_list_t(n00bb_litmod_alias_t) litmod_aliases;
     core_list_t(n00bb_package_declaration_t) package_declarations;
     core_list_t(n00bb_import_alias_t) import_aliases;
     core_dict_t import_alias_index;
@@ -1197,7 +1210,8 @@ n00bb_node_facts_t *n00bb_ensure_node_facts(n00bb_tu_state_t *state,
 n00bb_return_source_t *n00bb_node_return_source(parse_tree_t *node);
 n00bb_alias_edges_t *n00bb_node_alias_edges(parse_tree_t *node);
 core_string_t n00bb_context_hook_role(core_string_t name);
-bool alias_declaration_is_transparent(parse_tree_t *declaration);
+bool alias_declaration_is_transparent(parse_grammar_t *grammar,
+                                      parse_tree_t *declaration);
 th_type *declared_type_from_node(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node);
 bool record_fields_in_source_order(parse_scope_t *scope,

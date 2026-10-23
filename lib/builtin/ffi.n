@@ -96,7 +96,7 @@ func __ffi_fixup(pointer: Foreign['T]?) -> string? where 'T : Fixup {
     return nil
 }
 
-litmod<fence> ffi(source: string) -> nil fail: string {
+fence litmod ffi(source: string) -> nil fail: string {
     fail "an 'ffi literal is bound by the compiler"
 }
 

@@ -7,7 +7,7 @@ record Other_Cell {
 }
 
 type Handle = Ref[Cell]
-alias Other = Ref[Other_Cell]
+alias type Other = Ref[Other_Cell]
 
 func make(raw: uint) -> Handle {
     var cell: Cell = (raw = raw)

@@ -1,4 +1,5 @@
-litmod<sequence> always_fail, fault(items: Array[int]) -> Array[int] fail: string {
+public alias litmod fault = always_fail
+sequence litmod always_fail(items: Array[int]) -> Array[int] fail: string {
     fail "runtime literal failure"
 }
 

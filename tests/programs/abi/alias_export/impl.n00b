@@ -1,2 +1,2 @@
-public alias Number = int
+public alias type Number = int
 public const answer: Number = 42

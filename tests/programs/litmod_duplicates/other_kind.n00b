@@ -1,6 +1,6 @@
 import provider
 
-litmod<int> stamp(repr: string) -> string fail: string {
+int litmod stamp(repr: string) -> string fail: string {
     return repr
 }
 

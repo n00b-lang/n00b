@@ -1,4 +1,5 @@
-litmod<fence> fail_fence, noop(contents: string) -> nil fail: string {
+public alias litmod noop = fail_fence
+fence litmod fail_fence(contents: string) -> nil fail: string {
     fail "prelude failed"
 }
 

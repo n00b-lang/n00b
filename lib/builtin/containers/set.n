@@ -199,6 +199,7 @@ func __bit_xor(left: Set['T], right: Set['T])
     return result
 }
 
-litmod<set> set, s(items: Array['T]) -> Set['T] fail: string {
+public alias litmod s = set
+set litmod set(items: Array['T]) -> Set['T] fail: string {
     return new[Set['T]](items)
 }

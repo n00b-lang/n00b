@@ -1,0 +1,5 @@
+import impl
+
+package alias_pkg {
+    export impl
+}

@@ -25,7 +25,7 @@ record First { value: int }
 struct Second:
     value: int
 
-alias FirstAlias = First
+alias type FirstAlias = First
 type SecondAlias = Second
 
 assert true

@@ -2599,6 +2599,7 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
     active_options.build_time_use = n00bb_tu_remember_build_time_use;
     active_options.selected_body_context = nullptr;
     active_options.register_litmod = register_user_litmod;
+    active_options.register_litmod_alias = register_user_litmod_alias;
     active_options.litmod_context = nullptr;
     active_options.load_module_literal = load_module_literal;
     import_driver.generators = preprocessor_options->module_literal_context;

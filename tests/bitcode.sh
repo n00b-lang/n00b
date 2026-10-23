@@ -45,7 +45,7 @@ if "$compiler" build --output "$tmp/litmod_comptime_fail" \
     exit 1
 fi
 grep -q '^panic: prelude failed' "$tmp/litmod_comptime_fail.out"
-grep -q 'bitcode_litmod_comptime_fail.n00b:6:5' \
+grep -q 'bitcode_litmod_comptime_fail.n00b:7:5' \
     "$tmp/litmod_comptime_fail.out"
 grep -q 'fatal\[N00BB-B0027\]: the build-time run failed' \
     "$tmp/litmod_comptime_fail.out"
@@ -57,7 +57,7 @@ if "$compiler" build --output "$tmp/litmod_fence_nil_fail" \
     exit 1
 fi
 grep -q '^panic: fence failed' "$tmp/litmod_fence_nil_fail.out"
-grep -q 'bitcode_litmod_fence_nil_fail.n00b:5:1' \
+grep -q 'bitcode_litmod_fence_nil_fail.n00b:6:1' \
     "$tmp/litmod_fence_nil_fail.out"
 test ! -e "$tmp/litmod_fence_nil_fail"
 if "$compiler" build --output "$tmp/litmod_string_fail" \
@@ -67,7 +67,7 @@ if "$compiler" build --output "$tmp/litmod_string_fail" \
     exit 1
 fi
 grep -q '^panic: bad literal' "$tmp/litmod_string_fail.out"
-grep -q 'bitcode_litmod_string_fail.n00b:6:12' \
+grep -q 'bitcode_litmod_string_fail.n00b:7:12' \
     "$tmp/litmod_string_fail.out"
 test ! -e "$tmp/litmod_string_fail"
 if "$compiler" build --output "$tmp/comptime_failed" \
