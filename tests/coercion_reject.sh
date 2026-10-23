@@ -143,7 +143,7 @@ reject ref_view 'this call may write the borrowed Buffer, at line 6'
 cat >"$tmp/private_state.n" <<'EOF'
 func private_state(b: Buffer) -> uint {
     let view: string = b
-    __atomic_store(ref b.state.lock, 0)
+    __atomic_store(ref b.lock, 0)
     return byte_len(view)
 }
 private_state(buffer_from_string("kept"))

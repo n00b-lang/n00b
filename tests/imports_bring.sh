@@ -6,6 +6,7 @@ program_dir=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 cp "$program_dir"/*.n "$tmp"/
+cd "$tmp"
 
 runs() {
     name=$1

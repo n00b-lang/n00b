@@ -6,6 +6,7 @@
 #include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
 #include "cached_body.h"
+#include "sequence_transfer.h"
 
 #include "ir/doms.h"
 #include "ir/liveness.h"
@@ -848,14 +849,47 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
 }
 
 static bool
+fresh_copy(ir_instr_t *instruction)
+{
+    if (instruction->op != IR_OP_COPY || instruction->n_operands != 1)
+        return false;
+    if (ir_annot_get(&instruction->annots,
+                     CORE_STRING_STATIC("n00bb.literal_copy")))
+        return true;
+    ir_annot_t *promoted = ir_annot_get(&instruction->annots,
+        CORE_STRING_STATIC("ir.promoted_local_write"));
+    th_type *copied = instruction->dest_kind == IR_DEST_LOCAL
+            && instruction->dest_local ? instruction->dest_local->type
+        : promoted && promoted->kind == IR_ANNOT_BOOL && promoted->b
+            && instruction->dest ? instruction->dest->type : nullptr;
+    return copied && th_kind_of(th_resolve(copied)) == TH_SEQUENCE
+        && !n00bb_sequence_transfers_storage(operand_at(instruction, 0));
+}
+
+static bool
+foreign_reference(th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    th_type *item = type ? th_option_item(type) : nullptr;
+    if (item) type = th_resolve(item);
+    uint8_t attrs = 0;
+    return type && th_kind_of(type) == TH_INDIRECTION
+        && th_ind_attrs(type, &attrs) && (attrs & TH_FOREIGN);
+}
+
+static bool
 transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
 {
     root_set_t gathered = {0};
     bool ok = true;
-    switch (instruction->op) {
+    ir_value_t *target = instruction->dest;
+    if (!target && instruction->dest_local)
+        target = ir_local_value(state->function, instruction->dest_local);
+    bool fresh = fresh_copy(instruction)
+        || (target && foreign_reference(target->type));
+    switch (fresh ? IR_OP_ALLOC : instruction->op) {
     case IR_OP_ALLOC:
-        ok = instruction->dest
-            && root_set_add(&gathered, instruction->dest, nullptr);
+        ok = target && root_set_add(&gathered, target, nullptr);
         break;
     case IR_OP_LOAD:
     case IR_OP_SEQUENCE_GET: {
@@ -944,9 +978,6 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         break;
     }
     }
-    ir_value_t *target = instruction->dest;
-    if (!target && instruction->dest_local)
-        target = ir_local_value(state->function, instruction->dest_local);
     if (ok && target && (instruction->op == IR_OP_ALLOC
                          || value_carries_references(state, target))) {
         root_set_t *origin = origin_slot(state, target, false);
@@ -1003,6 +1034,11 @@ call_write_roots(origins_t *state, ir_instr_t *instruction,
     for (uint32_t i = first; i < instruction->n_operands; i++) {
         uint32_t index = i - first;
         if (index < 64 && trusted >> index & 1) continue;
+        if (instruction->op == IR_OP_CALLBACK_INVOKE && i == first) continue;
+        ir_value_t *argument = operand_at(instruction, i);
+        if (opaque && argument && argument->type
+            && !n00bb_type_reaches_shared_state(state->types, argument->type))
+            continue;
         bool write_self = written
             && (opaque || effect_bit(writes, index, IR_SFLOW_SELF));
         bool write_contents = written
