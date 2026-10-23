@@ -8281,6 +8281,7 @@ cache_flagset_semantics(parse_grammar_t *grammar,
         if (core_tree_num_children(node) == 1) {
             parse_tree_t *child = core_tree_child(node, 0);
             if (!core_tree_is_leaf(child)
+                && !NT_IS(grammar, child, "nil-keyword")
                 && !flagset_node_mask(state, child, &mask)) return false;
         }
         else if (core_tree_num_children(node) == 3
