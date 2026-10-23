@@ -1,0 +1,20 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+func poke(c: Counter) {
+    c.count = 9
+}
+
+func same(view c: Counter) -> Counter {
+    return c
+}
+
+func sneaky(view c: Counter) {
+    let other = same(c)
+    poke(other)
+}

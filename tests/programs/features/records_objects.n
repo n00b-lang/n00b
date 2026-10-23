@@ -1,0 +1,106 @@
+record Point {
+    x: int
+    y: int
+}
+
+object Counter {
+    count: int
+    label: string
+}
+
+const ORIGIN: Point = (x = 0, y = 0)
+
+func shift(p: Point) -> Point {
+    var moved: Point = p
+    moved.x = moved.x + 1
+    return moved
+}
+
+func bump(c: Counter) {
+    c.count = c.count + 1
+}
+
+func peek(view c: Counter) -> int {
+    return c.count
+}
+
+func label_of(view c: Counter) -> string {
+    let text: string = c.label
+    return text
+}
+
+func double_peek(view c: Counter) -> int {
+    return peek(c) * 2
+}
+
+func pass_back(view c: Counter) -> Counter {
+    return c
+}
+
+var copied: int = 0
+
+func copy_out(view c: Counter) {
+    copied = c.count
+}
+
+func grow(modify p: Point) {
+    p.y = p.y + 10
+}
+
+func replace(modify c: Counter) {
+    c = (count = 100, label = "replaced")
+}
+
+func make(out p: Point) {
+    p = (x = 7, y = 8)
+}
+
+func take(consume c: Counter) -> int {
+    c = (count = c.count + 1000, label = c.label)
+    return c.count
+}
+
+var first: Point = (x = 1, y = 2)
+var second: Point = first
+second.x = 50
+require first.x == 1 and second.x == 50
+
+let fixed: Point = (x = 3, y = 4)
+require shift(fixed).x == 4 and fixed.x == 3
+
+let counter: Counter = (count = 1, label = "c")
+let alias_of_counter: Counter = counter
+alias_of_counter.count = 5
+require counter.count == 5
+bump(counter)
+require counter.count == 6 and alias_of_counter.count == 6
+
+require peek(counter) == 6 and double_peek(counter) == 12
+require label_of(counter) == "c"
+require pass_back(counter) == counter
+copy_out(counter)
+require copied == 6
+
+grow(first)
+require first.y == 12
+
+var slot: Counter = counter
+replace(slot)
+require slot.count == 100 and counter.count == 6
+
+var made: Point
+make(made)
+require made.x == 7 and made.y == 8
+
+let given: Counter = (count = 1, label = "given")
+require take(given) == 1001
+
+require ORIGIN.x == 0 and peek(counter) == 6
+
+let items: List[int] = [1, 2]
+let shared_items = items
+shared_items.append(3)
+items[0] = 9
+require len(items) == 3 and shared_items[0] == 9
+
+__fd_write(2, "records objects ok\n")

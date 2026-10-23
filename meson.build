@@ -718,6 +718,44 @@ test(
     suite: 'slow',
 )
 
+test(
+    'records-objects-n00b', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'lto_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'records_objects.n'],
+    suite: 'slow',
+)
+
+foreach rejected : [
+    ['record_let_write', 'IR-E0017', '10:1'],
+    ['record_in_write', 'IR-E0017', '10:5'],
+    ['view_write', 'N00BB-T0066', '10:5'],
+    ['view_derived_write', 'N00BB-T0066', '11:5'],
+    ['const_write', 'N00BB-T0066', '10:1'],
+    ['in_to_modify', 'IR-E0017', '14:11'],
+    ['in_to_out', 'IR-E0017', '14:10'],
+    ['in_to_consume', 'N00BB-T0064', '13:10'],
+    ['view_to_in', 'N00BB-T0065', '14:17'],
+    ['view_deep_write', 'IR-E0042', '19:5'],
+    ['const_to_writing_in', 'IR-E0042', '15:1'],
+    ['view_escape', 'IR-E0043', '12:5'],
+    ['view_escape_nested', 'IR-E0043', '24:5'],
+]
+    test(
+        'records-objects-rejected-' + rejected[0].replace('_', '-'),
+        find_program('sh'),
+        args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+               n00bb_exe.full_path(),
+               meson.current_source_dir() / 'tests' / 'programs'
+                   / 'features' / 'records_objects_rejected'
+                   / (rejected[0] + '.n'),
+               rejected[1], rejected[0] + '.n:' + rejected[2]],
+        timeout: 120,
+        suite: 'slow',
+    )
+endforeach
+
 foreach declared_root : ['shape', 'maker']
     test(
         'import-cycle-declared-' + declared_root + '-n00b',

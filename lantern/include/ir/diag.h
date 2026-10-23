@@ -10,6 +10,7 @@ typedef enum : uint8_t {
     IR_SEV_WARNING,
     IR_SEV_NOTE,
     IR_SEV_HELP,
+    IR_SEV_INFO,
 } ir_severity_t;
 
 core_string_t ir_severity_name(ir_severity_t s);

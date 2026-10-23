@@ -371,7 +371,7 @@ int32_t writ_bake_n00b_bake_free(uint64_t root) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
@@ -422,7 +422,7 @@ record Bake_Root_T layout(c) {
     public path: Foreign[i8]? until 0
 }
 
-type Bake_Root_Cell {
+record Bake_Root_Cell {
     public raw: Foreign[Bake_Root_T]?
 }
 

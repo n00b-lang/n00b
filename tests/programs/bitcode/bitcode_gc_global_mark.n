@@ -16,7 +16,7 @@ variant Root_Variant {
     empty: nil
 }
 
-type Nested_Arm {
+record Nested_Arm {
     child: Ref[byte]?
 }
 

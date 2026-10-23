@@ -1,0 +1,11 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+func record_in(p: Point) {
+    p.x = 1
+}

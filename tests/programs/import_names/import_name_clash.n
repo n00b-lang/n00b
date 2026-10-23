@@ -9,7 +9,7 @@ func util(text: string) -> int {
     return 0
 }
 
-type shape {
+record shape {
     side: int
 }
 

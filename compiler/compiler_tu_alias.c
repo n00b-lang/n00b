@@ -72,7 +72,15 @@ finalize_alias_free_local_summaries(parse_grammar_t *grammar,
     if (!symtab) return false;
     for (parse_scope_t *scope = symtab->all_scopes; scope;
          scope = scope->all_next) {
-        if (!scope_has_lexical_lifetime(scope)) continue;
+        if (!scope_has_lexical_lifetime(scope)) {
+            for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+                 symbol = symbol->next_in_scope)
+                if (symbol->kind == PARSE_SYM_VARIABLE
+                    && !symbol->alias_analysis_complete
+                    && (symbol->alias_count || symbol->aliased_by_count))
+                    symbol->alias_unresolved = true;
+            continue;
+        }
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
             bool local_value = (symbol->kind == PARSE_SYM_VARIABLE

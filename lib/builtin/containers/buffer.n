@@ -2,16 +2,12 @@ import containers.array
 import string.core
 import panic
 
-record Buffer_State {
-    lock:      Atomic[u32]
-    store:     Array[u8]
-    byte_len:  uint
-    alloc_len: uint
-    borrowed:  bool
-}
-
-record Buffer {
-    private state: Ref[Buffer_State]
+object Buffer {
+    private lock:      Atomic[u32]
+    private store:     Array[u8]
+    private byte_len:  uint
+    private alloc_len: uint
+    private borrowed:  bool
 }
 
 public const empty_buffer_alloc: uint = 16
@@ -23,7 +19,7 @@ enum Buffer_Error {
 private const writer_bit: u32 = 0x8000_0000
 private const align_unit: uint = 8
 
-thread var borrowed_buffers: Array[Ref[Buffer_State]?][8] =
+thread var borrowed_buffers: Array[Buffer?][8] =
     [nil, nil, nil, nil, nil, nil, nil, nil]
 thread var borrowed_top: uint = 0
 
@@ -39,29 +35,33 @@ private func spin_wait(modify attempt: u32) {
     attempt = 0
 }
 
-private func read_lock(state: Ref[Buffer_State]) {
+private func read_lock(buffer: Buffer) {
     var attempt: u32 = 0
     while true {
-        let seen: u32 = __atomic_load(ref state.lock)
+        let seen: u32 = __atomic_load(ref buffer.lock)
         if seen & writer_bit == 0 and
-            __atomic_compare_exchange(ref state.lock, seen, seen + 1) {
+            __atomic_compare_exchange(ref buffer.lock, seen, seen + 1) {
             return
         }
         spin_wait(attempt)
     }
 }
 
-private func read_unlock(state: Ref[Buffer_State]) {
-    __atomic_fetch_sub(ref state.lock, 1)
+private func read_unlock(buffer: Buffer) {
+    __atomic_fetch_sub(ref buffer.lock, 1)
 }
 
-private func check_not_borrowed(state: Ref[Buffer_State]) {
+private func same_buffer(left: Buffer, right: Buffer) -> bool {
+    return __abi_ref_address(ref left.lock)
+        == __abi_ref_address(ref right.lock)
+}
+
+private func check_not_borrowed(buffer: Buffer) {
     when debug_enabled() {
-        let target: uint = __abi_ref_address(state)
         var i: uint = 0
         while i < borrowed_top and i < 8 {
-            let entry: Ref[Buffer_State]? = borrowed_buffers[i]
-            if entry != nil and __abi_ref_address(entry.get()) == target {
+            let entry: Buffer? = borrowed_buffers[i]
+            if entry != nil and same_buffer(entry.get(), buffer) {
                 panic.panic("buffer written while borrowed as string")
             }
             i += 1
@@ -69,33 +69,33 @@ private func check_not_borrowed(state: Ref[Buffer_State]) {
     }
 }
 
-private func write_lock(state: Ref[Buffer_State]) {
-    check_not_borrowed(state)
+private func write_lock(buffer: Buffer) {
+    check_not_borrowed(buffer)
     var attempt: u32 = 0
-    while !__atomic_compare_exchange(ref state.lock, 0, writer_bit) {
+    while !__atomic_compare_exchange(ref buffer.lock, 0, writer_bit) {
         spin_wait(attempt)
     }
 }
 
-private func write_unlock(state: Ref[Buffer_State]) {
-    __atomic_store(ref state.lock, 0)
+private func write_unlock(buffer: Buffer) {
+    __atomic_store(ref buffer.lock, 0)
 }
 
-context Buffer_Read(state: Ref[Buffer_State]) {
+context Buffer_Read(buffer: Buffer) {
     enter() {
-        read_lock(state)
+        read_lock(buffer)
     }
     ensure() {
-        read_unlock(state)
+        read_unlock(buffer)
     }
 }
 
-context Buffer_Write(state: Ref[Buffer_State]) {
+context Buffer_Write(buffer: Buffer) {
     enter() {
-        write_lock(state)
+        write_lock(buffer)
     }
     ensure() {
-        write_unlock(state)
+        write_unlock(buffer)
     }
 }
 
@@ -127,16 +127,13 @@ private func hex_digit(byte: u8, out value: u8) -> bool {
     return false
 }
 
-private func fresh_state() -> Ref[Buffer_State] {
-    var state: Buffer_State = (lock = 0, store = new[Array[u8]](0),
-        byte_len = 0, alloc_len = 0, borrowed = false)
-    return ref state
-}
-
-func __init(modify self: Buffer, length: int = -1, hex: string = "",
+func __init(self: Buffer, length: int = -1, hex: string = "",
             ptr: Array[u8]? = nil, copy: bool = true) {
-    self.state = fresh_state()
-    let state: Ref[Buffer_State] = self.state
+    __atomic_store(ref self.lock, 0)
+    self.store = new[Array[u8]](0)
+    self.byte_len = 0
+    self.alloc_len = 0
+    self.borrowed = false
     var count: int = length
     let hex_len: uint = string.core.byte_len(hex)
 
@@ -154,23 +151,23 @@ func __init(modify self: Buffer, length: int = -1, hex: string = "",
     }
 
     if count == 0 {
-        state.alloc_len = empty_buffer_alloc
-        state.store = new[Array[u8]](cast[int] state.alloc_len)
-        state.byte_len = 0
+        self.alloc_len = empty_buffer_alloc
+        self.store = new[Array[u8]](cast[int] self.alloc_len)
+        self.byte_len = 0
         return
     }
 
     if ptr == nil and hex_len == 0 {
-        state.byte_len = cast[uint] count
-        state.store = new[Array[u8]](count)
-        state.alloc_len = cast[uint] count
+        self.byte_len = cast[uint] count
+        self.store = new[Array[u8]](count)
+        self.alloc_len = cast[uint] count
         return
     }
 
     if hex_len != 0 {
         assert ptr == nil
-        state.store = new[Array[u8]](count)
-        state.alloc_len = cast[uint] count
+        self.store = new[Array[u8]](count)
+        self.alloc_len = cast[uint] count
         var cur: u8 = 0
         var valid_count: int = 0
         var i: uint = 0
@@ -183,8 +180,8 @@ func __init(modify self: Buffer, length: int = -1, hex: string = "",
                 }
                 else {
                     cur = cur | nibble
-                    state.store[state.byte_len] = cur
-                    state.byte_len += 1
+                    self.store[self.byte_len] = cur
+                    self.byte_len += 1
                 }
             }
             i += 1
@@ -192,19 +189,19 @@ func __init(modify self: Buffer, length: int = -1, hex: string = "",
         return
     }
 
-    state.byte_len = cast[uint] count
+    self.byte_len = cast[uint] count
 
     if ptr != nil {
         if copy {
-            state.alloc_len = align(cast[uint] count)
-            state.store = new[Array[u8]](cast[int] state.alloc_len)
-            containers.array.copy_items(state.store, 0, ptr.get(), 0,
+            self.alloc_len = align(cast[uint] count)
+            self.store = new[Array[u8]](cast[int] self.alloc_len)
+            containers.array.copy_items(self.store, 0, ptr.get(), 0,
                                         cast[uint] count)
         }
         else {
-            state.alloc_len = cast[uint] count
-            state.borrowed = true
-            state.store = ptr.get()
+            self.alloc_len = cast[uint] count
+            self.borrowed = true
+            self.store = ptr.get()
         }
     }
 }
@@ -218,52 +215,52 @@ func buffer_from_bytes(bytes: Array[u8], len: int, copy: bool = true)
     return new[Buffer](len, ptr = bytes, copy = copy)
 }
 
-private func raw_own(state: Ref[Buffer_State]) {
-    if !state.borrowed {
+private func raw_own(buffer: Buffer) {
+    if !buffer.borrowed {
         return
     }
 
-    let new_alloc_sz: uint = pow2_ceil(state.alloc_len)
+    let new_alloc_sz: uint = pow2_ceil(buffer.alloc_len)
     var new_raw: Array[u8] = new[Array[u8]](cast[int] new_alloc_sz)
 
-    if state.byte_len != 0 {
-        containers.array.copy_items(new_raw, 0, state.store, 0,
-                                    state.byte_len)
+    if buffer.byte_len != 0 {
+        containers.array.copy_items(new_raw, 0, buffer.store, 0,
+                                    buffer.byte_len)
     }
 
-    state.borrowed = false
-    state.store = new_raw
-    state.alloc_len = new_alloc_sz
+    buffer.borrowed = false
+    buffer.store = new_raw
+    buffer.alloc_len = new_alloc_sz
 }
 
-private func raw_resize(state: Ref[Buffer_State], new_sz: uint) {
-    raw_own(state)
+private func raw_resize(buffer: Buffer, new_sz: uint) {
+    raw_own(buffer)
 
-    if new_sz > state.alloc_len {
+    if new_sz > buffer.alloc_len {
         let new_alloc_sz: uint = pow2_ceil(new_sz)
         var new_raw: Array[u8] = new[Array[u8]](cast[int] new_alloc_sz)
 
-        containers.array.copy_items(new_raw, 0, state.store, 0,
-                                    state.byte_len)
+        containers.array.copy_items(new_raw, 0, buffer.store, 0,
+                                    buffer.byte_len)
 
-        state.store = new_raw
-        state.alloc_len = new_alloc_sz
-        state.byte_len = new_sz
+        buffer.store = new_raw
+        buffer.alloc_len = new_alloc_sz
+        buffer.byte_len = new_sz
         return
     }
 
-    var at: uint = state.byte_len
+    var at: uint = buffer.byte_len
     while at < new_sz {
-        state.store[at] = 0
+        buffer.store[at] = 0
         at += 1
     }
 
-    state.byte_len = new_sz
+    buffer.byte_len = new_sz
 }
 
 func resize(self: Buffer, new_sz: uint) {
-    with Buffer_Write(self.state) {
-        raw_resize(self.state, new_sz)
+    with Buffer_Write(self) {
+        raw_resize(self, new_sz)
     }
 }
 
@@ -272,19 +269,18 @@ func append_bytes(self: Buffer, src: Array[u8], len: uint) {
         return
     }
 
-    let state: Ref[Buffer_State] = self.state
-    with Buffer_Write(state) {
-        let old_len: uint = state.byte_len
+    with Buffer_Write(self) {
+        let old_len: uint = self.byte_len
         let needed: uint = old_len + len
 
-        raw_own(state)
+        raw_own(self)
 
-        if needed > state.alloc_len {
-            raw_resize(state, needed)
+        if needed > self.alloc_len {
+            raw_resize(self, needed)
         }
 
-        containers.array.copy_items(state.store, old_len, src, 0, len)
-        state.byte_len = needed
+        containers.array.copy_items(self.store, old_len, src, 0, len)
+        self.byte_len = needed
     }
 }
 
@@ -322,14 +318,14 @@ func put_string(self: Buffer, s: string) {
 }
 
 func __add(self: Buffer, other: string) -> Buffer {
-    let left: Ref[Buffer_State] = self.state
+    let left: Buffer = self
     var result: Buffer
     with Buffer_Read(left) {
         let other_len: uint = string.core.byte_len(other)
         let new_len: uint = left.byte_len + other_len
 
         result = new[Buffer](cast[int] new_len)
-        let out: Ref[Buffer_State] = result.state
+        let out: Buffer = result
         with Buffer_Write(out) {
             containers.array.copy_items(out.store, 0, left.store, 0,
                                         left.byte_len)
@@ -341,58 +337,57 @@ func __add(self: Buffer, other: string) -> Buffer {
     return result
 }
 
-private func concat_raw(state: Ref[Buffer_State], src: Array[u8],
+private func concat_raw(buffer: Buffer, src: Array[u8],
                         src_len: uint, to_front: bool) {
     if src_len == 0 {
         return
     }
 
-    let old_len: uint = state.byte_len
+    let old_len: uint = buffer.byte_len
     let new_len: uint = old_len + src_len
 
-    raw_own(state)
+    raw_own(buffer)
 
-    if state.alloc_len < new_len {
-        raw_resize(state, new_len)
+    if buffer.alloc_len < new_len {
+        raw_resize(buffer, new_len)
     }
 
     if !to_front {
-        containers.array.copy_items(state.store, old_len, src, 0, src_len)
+        containers.array.copy_items(buffer.store, old_len, src, 0, src_len)
     }
     else {
-        containers.array.copy_items(state.store, src_len, state.store, 0,
+        containers.array.copy_items(buffer.store, src_len, buffer.store, 0,
                                     old_len)
-        containers.array.copy_items(state.store, 0, src, 0, src_len)
+        containers.array.copy_items(buffer.store, 0, src, 0, src_len)
     }
-    state.byte_len = new_len
+    buffer.byte_len = new_len
 }
 
-func __add_assign(modify self: Buffer, other: string) {
-    with Buffer_Write(self.state) {
-        concat_raw(self.state, string.core.__text_byte_array(other),
+func __add_assign(self: Buffer, other: string) {
+    with Buffer_Write(self) {
+        concat_raw(self, string.core.__text_byte_array(other),
                    string.core.byte_len(other), false)
     }
 }
 
 func concat(self: Buffer, src: string, to_front: bool = false) {
-    with Buffer_Write(self.state) {
-        concat_raw(self.state, string.core.__text_byte_array(src),
+    with Buffer_Write(self) {
+        concat_raw(self, string.core.__text_byte_array(src),
                    string.core.byte_len(src), to_front)
     }
 }
 
 func set_index(self: Buffer, n: int, c: u8) fail: Buffer_Error {
-    let state: Ref[Buffer_State] = self.state
     var ok: bool = false
-    with Buffer_Write(state) {
+    with Buffer_Write(self) {
         var at: int = n
         if at < 0 {
-            at += cast[int] state.byte_len
+            at += cast[int] self.byte_len
         }
 
-        if at >= 0 and at < cast[int] state.byte_len {
-            raw_own(state)
-            state.store[cast[uint] at] = c
+        if at >= 0 and at < cast[int] self.byte_len {
+            raw_own(self)
+            self.store[cast[uint] at] = c
             ok = true
         }
     }
@@ -401,9 +396,9 @@ func set_index(self: Buffer, n: int, c: u8) fail: Buffer_Error {
     }
 }
 
-private func set_slice_raw(state: Ref[Buffer_State], start: int, end: int,
+private func set_slice_raw(buffer: Buffer, start: int, end: int,
                            v_data: Array[u8], add_len: int) -> bool {
-    let len: int = cast[int] state.byte_len
+    let len: int = cast[int] buffer.byte_len
     var first: int = start
     var last: int = end
 
@@ -428,24 +423,24 @@ private func set_slice_raw(state: Ref[Buffer_State], start: int, end: int,
     let needed_len: int = len - cut_len + add_len
     let tail_len: int = len - last
 
-    raw_own(state)
+    raw_own(buffer)
 
-    if needed_len > cast[int] state.alloc_len {
-        raw_resize(state, cast[uint] needed_len)
+    if needed_len > cast[int] buffer.alloc_len {
+        raw_resize(buffer, cast[uint] needed_len)
     }
 
     if tail_len != 0 {
-        containers.array.copy_items(state.store, cast[uint] (first + add_len),
-                                    state.store, cast[uint] last,
+        containers.array.copy_items(buffer.store, cast[uint] (first + add_len),
+                                    buffer.store, cast[uint] last,
                                     cast[uint] tail_len)
     }
 
     if add_len != 0 {
-        containers.array.copy_items(state.store, cast[uint] first, v_data, 0,
+        containers.array.copy_items(buffer.store, cast[uint] first, v_data, 0,
                                     cast[uint] add_len)
     }
 
-    state.byte_len = cast[uint] needed_len
+    buffer.byte_len = cast[uint] needed_len
     return true
 }
 
@@ -458,8 +453,8 @@ func set_slice(self: Buffer, start: int, end: int, val: string? = nil)
         bytes = string.core.__text_byte_array(val.get())
         add_len = cast[int] string.core.byte_len(val.get())
     }
-    with Buffer_Write(self.state) {
-        ok = set_slice_raw(self.state, start, end, bytes, add_len)
+    with Buffer_Write(self) {
+        ok = set_slice_raw(self, start, end, bytes, add_len)
     }
     if !ok {
         fail Buffer_Error.slice_oob
@@ -467,8 +462,8 @@ func set_slice(self: Buffer, start: int, end: int, val: string? = nil)
 }
 
 func buffer_from_string(s: string) -> Buffer {
-    var copy: Buffer = new[Buffer](0)
-    concat_raw(copy.state, string.core.__text_byte_array(s),
+    let copy: Buffer = new[Buffer](0)
+    concat_raw(copy, string.core.__text_byte_array(s),
                string.core.byte_len(s), false)
     return copy
 }
@@ -485,48 +480,43 @@ func buffer_adopt(s: string) -> Buffer {
 
 func to_string(consume self: Buffer,
                encoding: string.core.Str_Encoding? = nil) -> string {
-    let state: Ref[Buffer_State] = self.state
     var result: string
-    with Buffer_Write(state) {
-        raw_own(state)
-        result = string.core.from_raw(ref state.store,
-                                      cast[int] state.byte_len,
+    with Buffer_Write(self) {
+        raw_own(self)
+        result = string.core.from_raw(ref self.store,
+                                      cast[int] self.byte_len,
                                       copy = false, encoding = encoding)
-        state.store = new[Array[u8]](0)
-        state.byte_len = 0
-        state.alloc_len = 0
+        self.store = new[Array[u8]](0)
+        self.byte_len = 0
+        self.alloc_len = 0
     }
     return result
 }
 
 func free(self: Buffer) {
-    let state: Ref[Buffer_State] = self.state
-    with Buffer_Write(state) {
-        state.store = new[Array[u8]](0)
-        state.byte_len = 0
-        state.alloc_len = 0
-        state.borrowed = false
+    with Buffer_Write(self) {
+        self.store = new[Array[u8]](0)
+        self.byte_len = 0
+        self.alloc_len = 0
+        self.borrowed = false
     }
 }
 
 func buffer_borrow_begin(self: Buffer) -> string {
-    let state: Ref[Buffer_State] = self.state
-    read_lock(state)
+    read_lock(self)
     when debug_enabled() {
         if borrowed_top < 8 {
-            borrowed_buffers[borrowed_top] = state
+            borrowed_buffers[borrowed_top] = self
         }
         borrowed_top += 1
     }
-    return string.core.from_raw(ref state.store, cast[int] state.byte_len,
+    return string.core.from_raw(ref self.store, cast[int] self.byte_len,
                                 copy = false)
 }
 
 func buffer_borrow_end(self: Buffer) {
-    let state: Ref[Buffer_State] = self.state
     when debug_enabled() {
         require borrowed_top > 0
-        let target: uint = __abi_ref_address(state)
         var stored: uint = borrowed_top
         if stored > 8 {
             stored = 8
@@ -535,8 +525,8 @@ func buffer_borrow_end(self: Buffer) {
         var i: uint = stored
         while i > 0 {
             i -= 1
-            let entry: Ref[Buffer_State]? = borrowed_buffers[i]
-            if entry != nil and __abi_ref_address(entry.get()) == target {
+            let entry: Buffer? = borrowed_buffers[i]
+            if entry != nil and same_buffer(entry.get(), self) {
                 found = i
                 break
             }
@@ -551,7 +541,7 @@ func buffer_borrow_end(self: Buffer) {
         }
         borrowed_top -= 1
     }
-    read_unlock(state)
+    read_unlock(self)
 }
 
 func buffer_borrow_end_if_held(held: Buffer?) {

@@ -6,7 +6,7 @@ import internal.gc.mark
 
 const capture_fd: i32 = 3
 
-type Graph_Node {
+record Graph_Node {
     base:       Ref[byte]
     size:       uint
     alignment:  u32
@@ -21,20 +21,20 @@ type Graph_Node {
     parent_offset: uint
 }
 
-type Graph_Edge {
+record Graph_Edge {
     source:        u32
     source_offset: uint
     target:        u32
     target_offset: uint
 }
 
-type Graph_Root {
+record Graph_Root {
     module_path: Ref[byte]
     name:        Ref[byte]
     node:        u32
 }
 
-type Graph_Slot {
+record Graph_Slot {
     node:   u32
     offset: uint
     table:  u32
@@ -43,13 +43,13 @@ type Graph_Slot {
     native: Ref[byte]?
 }
 
-type Capture_Failure {
+record Capture_Failure {
     node:    u32
     offset:  uint
     message: string
 }
 
-type Graph {
+record Graph {
     heap:    Ref[internal.gc.core.Heap]
     copying: bool
     nodes:   List[Graph_Node]
@@ -721,7 +721,8 @@ func visit_value(graph: Ref[Graph], source: u32, address: Ref[byte],
         visit_string(graph, source, address)
         return
     }
-    if row.kind == cast[u32](internal.abi.Type_Kind.reference_type) {
+    if row.kind == cast[u32](internal.abi.Type_Kind.reference_type) or
+        row.kind == cast[u32](internal.abi.Type_Kind.object_type) {
         visit_pointer(graph, source, address,
             __atomic_load(internal.gc.mark.pointer_word_at(address)))
         return

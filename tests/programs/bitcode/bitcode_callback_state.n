@@ -1,4 +1,4 @@
-type Counter_State {
+record Counter_State {
     count: int
 }
 

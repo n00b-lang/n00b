@@ -190,15 +190,15 @@ func find_dead_locked(marker: Ref[internal.gc.core.Marker]) {
     var link:      Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.final_los
     var candidate: Ref[internal.gc.core.Los_Obj]?      = ref_read(link)
     while candidate != nil {
-        let object: Ref[internal.gc.core.Los_Obj] = candidate.get()
-        if (object.hdr.meta & internal.gc.core.obj_final) == 0 {
-            ref_write(link, object.final_next)
-        } elif __atomic_load(ref object.marked) != heap.mark_epoch {
-            object.hdr.meta = object.hdr.meta & ~internal.gc.core.obj_final
-            enqueue(heap, internal.gc.core.payload_of(ref object.hdr))
-            ref_write(link, object.final_next)
+        let obj: Ref[internal.gc.core.Los_Obj] = candidate.get()
+        if (obj.hdr.meta & internal.gc.core.obj_final) == 0 {
+            ref_write(link, obj.final_next)
+        } elif __atomic_load(ref obj.marked) != heap.mark_epoch {
+            obj.hdr.meta = obj.hdr.meta & ~internal.gc.core.obj_final
+            enqueue(heap, internal.gc.core.payload_of(ref obj.hdr))
+            ref_write(link, obj.final_next)
         } else {
-            link = ref object.final_next
+            link = ref obj.final_next
         }
         candidate = ref_read(link)
     }

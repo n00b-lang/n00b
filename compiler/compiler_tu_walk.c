@@ -96,6 +96,42 @@ range_binding_type(parse_grammar_t *grammar, parse_tree_t *parts)
 }
 
 static void
+report_view_write(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                  parse_tree_t *target)
+{
+    parse_tree_t *root = target
+        ? n00bb_addressable_root_lvalue(grammar, target) : nullptr;
+    if (!root || root == n00bb_simple_lvalue(target)) return;
+    parse_sym_entry_t *origin = n00bb_frozen_origin(grammar, unit, target);
+    if (!origin) return;
+    n00bb_tu_state_t *state = tu_state(unit);
+    bool through_shared = attached_symbol(grammar, unit, root) == origin;
+    for (parse_tree_t *at = target; !through_shared;) {
+        parse_tree_t *member = member_access_node(grammar, at);
+        parse_tree_t *step = member ? member
+            : n00bb_index_expression_node(grammar, at);
+        if (!step || !core_tree_num_children(step)) break;
+        at = core_tree_child(step, 0);
+        th_type *base = th_resolve(parse_tree_type(at));
+        through_shared = base && state
+            && (th_kind_of(base) == TH_INDIRECTION
+                || n00bb_reference_definition(state->types, base));
+    }
+    if (!through_shared) return;
+    core_buffer_t message = {0};
+    const char *kind = origin->kind == PARSE_SYM_PARAM ? "view parameter"
+                                                       : "constant";
+    core_buffer_printf(&message,
+        "cannot write through %s '%.*s'; nothing reachable from a %s is "
+        "writable", kind, (int)origin->name.u8_bytes, origin->name.data,
+        kind);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0066"),
+        core_buffer_string(&message), link_source_location(target));
+    core_buffer_release(&message);
+}
+
+static void
 report_literal_failure(core_translation_unit_t *unit, parse_tree_t *node,
                        size_t before, core_string_t code,
                        core_string_t message)
@@ -490,6 +526,13 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     initializer);
             }
         }
+        if (NT_IS(grammar, node, "default-param")) {
+            parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
+            if (type_spec)
+                contextualize_record_literal(grammar, unit, state,
+                    CHILD_NT(grammar, node, "expression"),
+                    parse_tree_type(type_spec));
+        }
         if (NT_IS(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {
             contextualize_record_literal(grammar, unit, state,
@@ -497,6 +540,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 record_literal_expected_type(grammar, state->types,
                     core_tree_child(node, 2)));
         }
+        if ((NT_IS(grammar, node, "assign-stmt")
+             || NT_IS(grammar, node, "binop-assign-stmt"))
+            && core_tree_num_children(node) == 3)
+            report_view_write(grammar, unit, core_tree_child(node, 0));
         if (NT_IS(grammar, node, "return-stmt")) {
             parse_tree_t *function = node;
             while (function && !NT_IS(grammar, function, "func-def"))
@@ -1125,6 +1172,24 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0008"),
                 CORE_STRING_STATIC("could not infer the tuple literal type"),
                 link_source_location(node));
+            return;
+        }
+        if (NT_IS(grammar, node, "type-decl")) {
+            parse_sym_entry_t *declared = parse_tree_sym(node);
+            core_string_t name = declared ? declared->name
+                                          : CORE_STRING_STATIC("X");
+            core_buffer_t message = {0};
+            core_buffer_printf(&message,
+                "`type %.*s { ... }` is not a declaration form; use "
+                "`record %.*s { ... }` for a value that is copied or "
+                "`object %.*s { ... }` for a value that is shared",
+                (int)name.u8_bytes, name.data, (int)name.u8_bytes, name.data,
+                (int)name.u8_bytes, name.data);
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(unit), unit,
+                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0063"),
+                core_buffer_string(&message), link_source_location(node));
+            core_buffer_release(&message);
             return;
         }
         if (field_record_declaration(grammar, node)) {

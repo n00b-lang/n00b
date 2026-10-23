@@ -205,13 +205,13 @@ const char * kv_errstr(int s)
 
 import kvstore
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
 }
 
-type Kv_Entry {
+record Kv_Entry {
     public key: Array[u8]
     public val: Array[u8]
 }
@@ -229,9 +229,9 @@ func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool {
     return __string_from_utf8(ref bytes, text)
 }
 
-type Export_Hold {
-    handle: uint
-    items: List[Array[u8]]
+record Export_Hold {
+    private handle: uint
+    private items: List[Array[u8]]
 }
 
 var __export_holds: List[Export_Hold] = new[List[Export_Hold]]()

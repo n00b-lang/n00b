@@ -1,8 +1,8 @@
-type Meter {
+record Meter {
     value: int
 }
 
-type Counter {
+record Counter {
     value: int
 }
 

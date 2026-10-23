@@ -29,7 +29,7 @@
                  | %"ref" | %"mutref" | %"own" | %"gcref" | %"tmpref"
                  | %"nullable" | %"reseatable" | %"indexable" | %"owning"
                  | %"exclusive" | %"temporary" | %"foreign" | %"array" | %"t" | %"fail"
-                 | %"where" | %"in" | %"out" | %"inout" | %"consume"
+                 | %"where" | %"in" | %"out" | %"inout" | %"consume" | %"view"
 
 <type-args> @nospace($1) ::= <type-arg> (%"," <type-arg>)*
 
@@ -105,6 +105,6 @@
           | <mode>? %IDENTIFIER %":" <mode>? <union-type>
           | <mode>? <union-type>
 
-<mode> ::= %"in" | %"out" | %"inout" | %"consume"
+<mode> ::= %"in" | %"out" | %"inout" | %"consume" | %"view"
 
 <rest-param> @nospace($1) ::= %"*" <union-type>

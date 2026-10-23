@@ -3,6 +3,6 @@ public record Point {
     y: int
 }
 
-public type Secret {
-    value: int
+public record Secret {
+    private value: int
 }

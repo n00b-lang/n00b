@@ -687,6 +687,8 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
         ctx->grammar, prelude, CORE_STRING_STATIC("litmod-kind"));
     parse_tree_t *primary = core_tree_child(function, 1);
     core_string_t kind = first_leaf_text(ctx, kind_node);
+    if (core_string_eq(kind, CORE_STRING_STATIC("struct")))
+        kind = CORE_STRING_STATIC("record");
     core_string_t function_name = leaf_text(ctx, primary);
     if (!core_string_eq(kind, CORE_STRING_STATIC("set"))
         && !core_string_eq(kind, CORE_STRING_STATIC("hex"))

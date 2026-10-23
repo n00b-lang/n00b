@@ -1,4 +1,4 @@
-type Pair {
+record Pair {
     x: int
     y: int
 }

@@ -55,8 +55,8 @@ ir_sflow_opaque(void)
         .receives_nonlocal = true, .writes_nonlocal = true, .opaque = true,
     };
     for (int kind = 0; kind < IR_SFLOW_KINDS; kind++)
-        flow.writes[kind] = flow.escapes[kind] = flow.leaks[kind]
-            = UINT64_MAX;
+        flow.writes[kind] = flow.mutates[kind] = flow.escapes[kind]
+            = flow.leaks[kind] = UINT64_MAX;
     return flow;
 }
 
@@ -64,6 +64,7 @@ bool
 ir_sflow_eq(const ir_sflow_t *a, const ir_sflow_t *b)
 {
     return !memcmp(a->writes, b->writes, sizeof(a->writes))
+        && !memcmp(a->mutates, b->mutates, sizeof(a->mutates))
         && !memcmp(a->escapes, b->escapes, sizeof(a->escapes))
         && !memcmp(a->leaks, b->leaks, sizeof(a->leaks))
         && a->receives == b->receives
@@ -3705,6 +3706,7 @@ put_flow(core_buffer_t *out, const ir_sflow_t *flow)
 {
     for (int kind = 0; kind < IR_SFLOW_KINDS; kind++) {
         put_u64(out, flow->writes[kind]);
+        put_u64(out, flow->mutates[kind]);
         put_u64(out, flow->escapes[kind]);
         put_u64(out, flow->leaks[kind]);
     }
@@ -3888,6 +3890,7 @@ get_flow(summary_reader_t *r, ir_sflow_t *flow)
 {
     for (int kind = 0; kind < IR_SFLOW_KINDS; kind++) {
         flow->writes[kind]  = get_u64(r);
+        flow->mutates[kind] = get_u64(r);
         flow->escapes[kind] = get_u64(r);
         flow->leaks[kind]   = get_u64(r);
     }

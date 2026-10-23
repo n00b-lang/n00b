@@ -1,4 +1,4 @@
-public type Shared_State {
+public record Shared_State {
     count: int
 }
 

@@ -184,6 +184,7 @@ typedef enum {
     N00B_ABI_TYPE_NAMED,
     N00B_ABI_TYPE_TUPLE,
     N00B_ABI_TYPE_FOREIGN,
+    N00B_ABI_TYPE_OBJECT,
 } n00b_abi_type_kind_v1;
 
 typedef enum {
@@ -296,6 +297,7 @@ typedef enum {
     N00B_ABI_PASS_OUT = 1,
     N00B_ABI_PASS_MODIFY = 2,
     N00B_ABI_PASS_CONSUME = 3,
+    N00B_ABI_PASS_VIEW = 4,
 } n00b_abi_parameter_mode_v1;
 
 typedef enum {

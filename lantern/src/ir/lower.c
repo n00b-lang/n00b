@@ -950,6 +950,19 @@ lower_emit_local_read(ir_lower_context_t *context, ir_local_t *local,
     return instruction->dest;
 }
 
+static bool
+lower_loaded_reference(ir_lower_context_t *context, ir_value_t *value)
+{
+    th_type *type = th_resolve(value->type);
+    th_type *definition = th_kind_of(type) == TH_NAMED
+        ? th_type_definition(ir_module_types(context->module), type)
+        : nullptr;
+    if (definition) type = th_resolve(definition);
+    return th_kind_of(type) != TH_INDIRECTION
+        || ir_value_set_indirect_access(context->module->ctx, value,
+                                        IR_INDIRECT_ACCESS_READ_WRITE);
+}
+
 static ir_value_t *
 lower_emit_address_read(ir_lower_context_t *context, ir_value_t *address,
                        th_type *type, ir_span_t span)
@@ -960,7 +973,8 @@ lower_emit_address_read(ir_lower_context_t *context, ir_value_t *address,
     if (!instruction
         || !ir_lower_set_temp_dest(context, instruction,
                                    CORE_STRING_STATIC("__lowered_"), type)
-        || !ir_instr_operand_value(instruction, address)) return nullptr;
+        || !ir_instr_operand_value(instruction, address)
+        || !lower_loaded_reference(context, instruction->dest)) return nullptr;
     return instruction->dest;
 }
 

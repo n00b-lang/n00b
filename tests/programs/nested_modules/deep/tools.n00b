@@ -1,4 +1,4 @@
-public type Answer {
+public record Answer {
     public payload: int
 }
 

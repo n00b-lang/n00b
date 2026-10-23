@@ -1,8 +1,8 @@
-type Inner {
+record Inner {
     value: int?
 }
 
-type Entry {
+record Entry {
     value: int?
     inner: Inner
 }

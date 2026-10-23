@@ -1,27 +1,27 @@
 import sys.gc
 
-type Kv_Error {
+record Kv_Error {
     public code: i64
 }
 
-type Store {
-    id: int
+record Store {
+    private id: int
 }
 
-type Pair {
-    store: int
-    key: Array[u8]
-    val: Array[u8]
+record Pair {
+    private store: int
+    private key: Array[u8]
+    private val: Array[u8]
 }
 
-type Entry {
+record Entry {
     public key: Array[u8]
     public val: Array[u8]
 }
 
-type Kv_Cursor {
-    store: int
-    id: int
+record Kv_Cursor {
+    private store: int
+    private id: int
 }
 
 var records: List[Pair] = new[List[Pair]]()

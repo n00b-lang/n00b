@@ -1,4 +1,4 @@
-public type Generic_Link {
+public record Generic_Link {
     public first: 'K
     public second: 'V
     public address: Ref['K]

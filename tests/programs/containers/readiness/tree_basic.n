@@ -30,83 +30,79 @@ switch choice {
     }
 }
 
-var root:       containers.tree.Tree[int, string]      = new[containers.tree.Tree[int, string]]()
-var first:      containers.tree.Tree[int, string]      = new[containers.tree.Tree[int, string]]()
-var second:     containers.tree.Tree[int, string]      = new[containers.tree.Tree[int, string]]()
-var third:      containers.tree.Tree[int, string]      = new[containers.tree.Tree[int, string]]()
-let root_ref:   Ref[containers.tree.Tree[int, string]] = ref root
-let first_ref:  Ref[containers.tree.Tree[int, string]] = ref first
-let second_ref: Ref[containers.tree.Tree[int, string]] = ref second
-let third_ref:  Ref[containers.tree.Tree[int, string]] = ref third
+let root:   containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
+let first:  containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
+let second: containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
+let third:  containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
 
-require !containers.tree.is_leaf(root_ref)
-require containers.tree.node(root_ref) == nil
-require containers.tree.leaf(root_ref) == nil
-containers.tree.set_node(root_ref, 7)
-let node_value: Ref[int]? = containers.tree.node(root_ref)
+require !containers.tree.is_leaf(root)
+require containers.tree.node(root) == nil
+require containers.tree.leaf(root) == nil
+containers.tree.set_node(root, 7)
+let node_value: Ref[int]? = containers.tree.node(root)
 if node_value != nil {
     ref_write(node_value.get(), 9)
 } else {
     require false
 }
-let changed: Ref[int]? = containers.tree.node(root_ref)
+let changed: Ref[int]? = containers.tree.node(root)
 if changed != nil {
     require ref_read(changed.get()) == 9
 } else {
     require false
 }
 
-containers.tree.set_leaf(first_ref, "first")
-require containers.tree.is_leaf(first_ref)
-require containers.tree.node(first_ref) == nil
-let first_value: Ref[string]? = containers.tree.leaf(first_ref)
+containers.tree.set_leaf(first, "first")
+require containers.tree.is_leaf(first)
+require containers.tree.node(first) == nil
+let first_value: Ref[string]? = containers.tree.leaf(first)
 if first_value != nil {
     require ref_read(first_value.get()) == "first"
 } else {
     require false
 }
-containers.tree.set_node(first_ref, 11)
-require !containers.tree.is_leaf(first_ref)
-require containers.tree.leaf(first_ref) == nil
+containers.tree.set_node(first, 11)
+require !containers.tree.is_leaf(first)
+require containers.tree.leaf(first) == nil
 
-require containers.tree.add_child(root_ref, first_ref)
-require containers.tree.add_child(root_ref, second_ref)
-require containers.tree.insert_child(root_ref, 1, third_ref)
-require tree_width(root_ref) == 3
-require containers.tree.child_count(root_ref) == 3
-let middle: Ref[containers.tree.Tree[int, string]]? =
-    containers.tree.child(root_ref, 1)
+require containers.tree.add_child(root, first)
+require containers.tree.add_child(root, second)
+require containers.tree.insert_child(root, 1, third)
+require tree_width(root) == 3
+require containers.tree.child_count(root) == 3
+let middle: containers.tree.Tree[int, string]? =
+    containers.tree.child(root, 1)
 if middle != nil {
-    require middle.get() == third_ref
+    require middle.get() == third
 } else {
     require false
 }
-let last: Ref[containers.tree.Tree[int, string]]? =
-    containers.tree.child(root_ref, -1)
+let last: containers.tree.Tree[int, string]? =
+    containers.tree.child(root, -1)
 if last != nil {
-    require last.get() == second_ref
+    require last.get() == second
 } else {
     require false
 }
-require containers.tree.child(root_ref, 3) == nil
-require containers.tree.child(root_ref, -4) == nil
-require containers.tree.depth(third_ref) == 1
-require containers.tree.root(third_ref) == root_ref
-require !containers.tree.add_child(root_ref, first_ref)
-require !containers.tree.add_child(first_ref, root_ref)
-require !containers.tree.insert_child(root_ref, 4, root_ref)
+require containers.tree.child(root, 3) == nil
+require containers.tree.child(root, -4) == nil
+require containers.tree.depth(third) == 1
+require containers.tree.root(third) == root
+require !containers.tree.add_child(root, first)
+require !containers.tree.add_child(first, root)
+require !containers.tree.insert_child(root, 4, root)
 
-let removed: Ref[containers.tree.Tree[int, string]]? =
-    containers.tree.remove_child(root_ref, 1)
+let removed: containers.tree.Tree[int, string]? =
+    containers.tree.remove_child(root, 1)
 if removed != nil {
-    require removed.get() == third_ref
+    require removed.get() == third
 } else {
     require false
 }
-require containers.tree.parent(third_ref) == nil
-require containers.tree.depth(third_ref) == 0
-require containers.tree.child_count(root_ref) == 2
-require containers.tree.remove_child(root_ref, 2) == nil
-require containers.tree.add_child(first_ref, third_ref)
-require containers.tree.depth(third_ref) == 2
-require containers.tree.root(third_ref) == root_ref
+require containers.tree.parent(third) == nil
+require containers.tree.depth(third) == 0
+require containers.tree.child_count(root) == 2
+require containers.tree.remove_child(root, 2) == nil
+require containers.tree.add_child(first, third)
+require containers.tree.depth(third) == 2
+require containers.tree.root(third) == root

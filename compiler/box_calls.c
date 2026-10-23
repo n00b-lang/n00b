@@ -1246,7 +1246,7 @@ address_storage_within(ir_func_t *caller, ir_value_t *address, unsigned depth,
             < th_func_nparams(caller->type)
             ? th_func_param(caller->type, address->index) : nullptr;
         return !parameter ? ADDRESS_UNKNOWN
-            : parameter->mode == TH_IN ? ADDRESS_BOXED : ADDRESS_RAW;
+            : th_mode_is_in(parameter->mode) ? ADDRESS_BOXED : ADDRESS_RAW;
     }
     if (address->kind != IR_VAL_INSTR) return ADDRESS_BOXED;
     ir_instr_t *definition = address->def;

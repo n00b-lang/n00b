@@ -2,11 +2,11 @@ import sys.abi
 import sys.gc.core
 import sys.gc.alloc
 
-type Sample {
+record Sample {
     value: int
 }
 
-type Plain {
+record Plain {
     value: int
 }
 

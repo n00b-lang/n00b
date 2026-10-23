@@ -205,12 +205,12 @@ core_diagnostics_render_text(const core_diagnostics_t *d)
     static const core_string_t names[] = {
         CORE_STRING_STATIC("fatal"), CORE_STRING_STATIC("error"),
         CORE_STRING_STATIC("warning"), CORE_STRING_STATIC("note"),
-        CORE_STRING_STATIC("help"),
+        CORE_STRING_STATIC("help"), CORE_STRING_STATIC("info"),
     };
     for (size_t i = 0; i < d->items.len; i++) {
         const core_diagnostic_t *item = &d->items.data[i];
         if (d->filter && !d->filter(d->filter_context, item)) continue;
-        core_string_t severity = item->severity <= CORE_DIAG_HELP
+        core_string_t severity = item->severity <= CORE_DIAG_INFO
             ? names[item->severity] : CORE_STRING_STATIC("diagnostic");
         core_buffer_printf(out, "%.*s[%.*s]: %.*s\n",
             (int)severity.u8_bytes, severity.data,
@@ -228,6 +228,12 @@ core_diagnostics_render_text(const core_diagnostics_t *d)
                 (int)item->path.u8_bytes, item->path.data);
     }
     return core_buffer_take_string(out);
+}
+
+bool
+core_diag_is_advisory(core_diag_severity_t severity)
+{
+    return severity == CORE_DIAG_WARNING || severity == CORE_DIAG_INFO;
 }
 
 core_diag_location_t

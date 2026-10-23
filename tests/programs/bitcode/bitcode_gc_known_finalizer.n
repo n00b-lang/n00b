@@ -1,6 +1,6 @@
 import sys.abi
 
-type Finalized_Record {
+record Finalized_Record {
     payload: int
 }
 

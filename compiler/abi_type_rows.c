@@ -43,6 +43,8 @@ kind_from_owner(const parse_sym_entry_t *owner, uint32_t *kind)
         *kind = N00B_ABI_TYPE_CALLBACK;
     else if (core_string_eq(adt, CORE_STRING_STATIC("nominal")))
         *kind = N00B_ABI_TYPE_WRAPPER;
+    else if (core_string_eq(adt, CORE_STRING_STATIC("object")))
+        *kind = N00B_ABI_TYPE_OBJECT;
     else return false;
     return true;
 }
@@ -51,6 +53,17 @@ static bool
 type_category(ir_module_t *module, th_type *type,
               const parse_sym_entry_t *owner, n00b_abi_type_v1 *row)
 {
+    if (owner && core_string_eq(owner->adt_kind,
+                                CORE_STRING_STATIC("object"))) {
+        core_string_t name = {0}, object_name = {0};
+        if (!th_named_info(th_resolve(type), &name, nullptr, nullptr)
+            || !owner->type
+            || !th_named_info(th_resolve(owner->type), &object_name,
+                              nullptr, nullptr)) return false;
+        row->kind = core_string_eq(name, object_name) ? N00B_ABI_TYPE_OBJECT
+                                                      : N00B_ABI_TYPE_RECORD;
+        return true;
+    }
     if (kind_from_owner(owner, &row->kind)) return true;
     switch (th_kind_of(type)) {
     case TH_BITINT: {
@@ -185,6 +198,15 @@ n00bb_abi_type_identity_rows_build(
             if (!owners[row] || (!owners[row]->adt_kind.u8_bytes
                                  && symbol->adt_kind.u8_bytes))
                 owners[row] = symbol;
+            th_type *reference = core_string_eq(symbol->adt_kind,
+                    CORE_STRING_STATIC("object"))
+                ? ir_type_definition(runtime, symbol->type) : nullptr;
+            th_type *shape = reference
+                && th_kind_of(th_resolve(reference)) == TH_INDIRECTION
+                ? th_ind_referent(th_resolve(reference)) : nullptr;
+            if (shape && n00bb_abi_type_index_find(index, shape, &row)
+                && !owners[row])
+                owners[row] = symbol;
         }
     }
     th_ctx *types = ir_module_types(runtime);
@@ -198,6 +220,7 @@ n00bb_abi_type_identity_rows_build(
         parse_sym_entry_t *category_owner = owner ? owner
             : lookup ? lookup(lookup_context, type) : nullptr;
         n00b_abi_type_v1 *row = &rows[i];
+        failed_reason = CORE_STRING_STATIC("type category");
         valid = type && type_category(runtime, type, category_owner, row);
         if (!valid) break;
         if (row->kind == N00B_ABI_TYPE_VARIABLE) continue;
@@ -311,10 +334,12 @@ n00bb_abi_type_identity_rows_build(
         size_t named_arguments = 0;
         bool specialization = th_named_info(th_resolve(type), nullptr,
             nullptr, &named_arguments) && named_arguments != 0;
+        bool object = row->kind == N00B_ABI_TYPE_OBJECT;
         bool external = !include_external_definitions && !owner
             && definition_owner && definition_owner != runtime
-            && row->kind != N00B_ABI_TYPE_ATOMIC;
-        const ir_final_layout_t *final = ir_layout_final(runtime, type,
+            && row->kind != N00B_ABI_TYPE_ATOMIC && !object;
+        const ir_final_layout_t *final = ir_layout_final(runtime,
+            object && definition ? definition : type,
             ir_module_target(runtime));
         if (external && !specialization) final = nullptr;
         if (final) {
@@ -392,6 +417,9 @@ n00bb_abi_type_variables_bind_import(n00bb_abi_type_index_t *index,
     if (!index || !types || !symbol || !signature || !requirement_index
         || !rows || !rows->rows
         || rows->count != n00bb_abi_type_index_count(index)) return false;
+    if (parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.generated-value-method")))
+        return true;
     n00bb_signature_typevars_t *variables = parse_sym_binding(symbol,
         N00BB_SIGNATURE_TYPEVARS_KEY);
     if (variables && (variables->len > UINT32_MAX
@@ -530,7 +558,8 @@ n00bb_abi_type_variables_bind(n00bb_abi_type_index_t *index, th_ctx *types,
                 && type_row->kind != N00B_ABI_TYPE_ENUM
                 && type_row->kind != N00B_ABI_TYPE_FLAGSET
                 && type_row->kind != N00B_ABI_TYPE_CALLBACK
-                && type_row->kind != N00B_ABI_TYPE_WRAPPER)
+                && type_row->kind != N00B_ABI_TYPE_WRAPPER
+                && type_row->kind != N00B_ABI_TYPE_OBJECT)
             || type_row->named_arguments.count) continue;
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
         parse_sym_entry_t *owner = rows->owners[i] ? rows->owners[i]
@@ -797,10 +826,14 @@ append_type_components(n00bb_abi_type_index_t *index, ir_module_t *module,
         || kind == N00B_ABI_TYPE_ARRAY
         || kind == N00B_ABI_TYPE_VIEW
         || kind == N00B_ABI_TYPE_WRAPPER
+        || kind == N00B_ABI_TYPE_OBJECT
         || kind == N00B_ABI_TYPE_ATOMIC) {
         th_type *component = nullptr;
-        if (source_kind == TH_NAMED && kind == N00B_ABI_TYPE_WRAPPER)
+        if (source_kind == TH_NAMED && (kind == N00B_ABI_TYPE_WRAPPER
+                                        || kind == N00B_ABI_TYPE_OBJECT)) {
             component = ir_type_definition(module, type);
+            if (!component && !th_named_nargs(type)) return true;
+        }
         else if (source_kind == TH_NAMED) {
             const th_arg *arg = th_named_nargs(type) == 1
                 ? th_named_arg(type, 0) : nullptr;

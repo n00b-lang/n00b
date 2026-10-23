@@ -2,12 +2,12 @@ import containers.traits
 import containers.view
 import cursor
 
-record List {
+object List {
     items: Array['T]
     count: uint
 }
 
-func __init(modify self: List['T], items : Array['T] = []) {
+func __init(self: List['T], items : Array['T] = []) {
     self.items = items
     self.count = __array_length(items)
 }
@@ -17,7 +17,7 @@ func len(self: List['T]) -> uint {
 }
 
 func list_with_length(items: Array['T], n: uint) -> List['T] {
-    var list: List['T] = new[List['T]](items)
+    let list: List['T] = new[List['T]](items)
     list.count = n
     return list
 }
@@ -35,7 +35,7 @@ func __read(self: List['T], index: int) -> 'T {
     return self.items[checked_index(self, index)]
 }
 
-func __write(modify self: List['T], index: int, value: 'T) {
+func __write(self: List['T], index: int, value: 'T) {
     self.items[checked_index(self, index)] = value
 }
 
@@ -53,7 +53,7 @@ func __slice(self: List['T], start_ix: int,
     return containers.view.__slice(items, 0, length)
 }
 
-func __write_slice(modify self: List['T], start_ix: int?,
+func __write_slice(self: List['T], start_ix: int?,
                           end_ix: int?, inclusive: bool,
                           values: List['T]) {
     var start: int = 0
@@ -116,7 +116,7 @@ func __write_slice(modify self: List['T], start_ix: int?,
     self.count = length
 }
 
-func ensure_capacity(modify self: List['T], needed: uint) {
+func ensure_capacity(self: List['T], needed: uint) {
     let capacity: uint = __array_length(self.items)
     if needed <= capacity {
         return
@@ -135,7 +135,7 @@ func ensure_capacity(modify self: List['T], needed: uint) {
     self.items = next
 }
 
-func append(modify self: List['T], value: 'T,
+func append(self: List['T], value: 'T,
                    front : bool = false) {
     ensure_capacity(self, self.count + 1)
     if front {
@@ -151,7 +151,7 @@ func append(modify self: List['T], value: 'T,
     self.count += 1
 }
 
-func insert(modify self: List['T], index: int, value: 'T) {
+func insert(self: List['T], index: int, value: 'T) {
     require index >= 0 and cast[uint]index <= self.count
     ensure_capacity(self, self.count + 1)
     var at: uint = self.count
@@ -163,7 +163,7 @@ func insert(modify self: List['T], index: int, value: 'T) {
     self.count += 1
 }
 
-func pop(modify self: List['T], front : bool = false) -> 'T? {
+func pop(self: List['T], front : bool = false) -> 'T? {
     if self.count == 0 {
         return nil
     }
@@ -194,7 +194,7 @@ func find(self: List['T], value: 'T) -> int? where 'T : Equal {
     return nil
 }
 
-func remove(modify self: List['T], value: 'T,
+func remove(self: List['T], value: 'T,
                    all : bool = true) -> uint where 'T : Equal {
     var read:    uint = 0
     var write:   uint = 0
@@ -220,7 +220,7 @@ func remove(modify self: List['T], value: 'T,
     return removed
 }
 
-func clear(modify self: List['T]) {
+func clear(self: List['T]) {
     self.items = new[Array['T]](0)
     self.count = 0
 }

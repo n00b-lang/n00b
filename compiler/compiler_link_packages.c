@@ -437,7 +437,7 @@ register_context_callable_parameter_metadata(
         th_mode mode = parameter && parameter->has_mode
             ? parameter->mode : TH_IN;
         ok = parameter && name_size && name_size <= UINT16_MAX
-            && mode == TH_IN;
+            && th_mode_is_in(mode);
         if (!ok) break;
         core_buffer_putc(&metadata, (char)(name_size & 0xff));
         core_buffer_putc(&metadata, (char)(name_size >> 8));
@@ -1209,17 +1209,15 @@ copy_package_export_metadata(const th_env *source, th_env *destination,
                              th_env_metadata_owner_t kind,
                              core_string_t source_name,
                              core_string_t external_name,
-                             bool include_members, core_string_t only_key)
+                             core_string_t only_key)
 {
     for (size_t i = 0; source && i < th_env_metadata_count(source); i++) {
         th_env_metadata_view_t metadata = {0};
         if (!th_env_metadata_at(source, i, &metadata)
             || metadata.owner_kind != kind
             || !core_string_eq(metadata.owner_name, source_name)
-            || (only_key.data && !core_string_eq(metadata.key, only_key))
-            || (!include_members
-                && core_string_starts_with(metadata.key,
-                       CORE_STRING_STATIC("n00b.member-")))) continue;
+            || (only_key.data && !core_string_eq(metadata.key, only_key)))
+            continue;
         if (!th_env_register_metadata(destination, kind, external_name,
                 metadata.key, metadata.version, metadata.data,
                 metadata.size)) return false;
@@ -1254,8 +1252,7 @@ register_package_context_callable(th_env *environment,
     if (ok)
         ok = copy_package_export_metadata(environment, environment,
             TH_ENV_METADATA_FUNCTION, core_buffer_string(&source_qualified),
-            core_buffer_string(&external_qualified), true,
-            (core_string_t){0});
+            core_buffer_string(&external_qualified), (core_string_t){0});
     if (ok)
         ok = append_package_export_origin(environment,
             TH_ENV_METADATA_FUNCTION, core_buffer_string(&external_qualified), source_unit,
@@ -1356,7 +1353,6 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
         qualify ? "#" : "", qualify ? (int)module.u8_bytes : 0, module.data);
     th_env_metadata_owner_t metadata_kind =
         package_export_metadata_kind(source);
-    bool include_members = true;
     bool ok = external.data != nullptr
         && append_function_contract_identity(source_unit, binding, &external);
     if (ok && source->kind == PARSE_SYM_TYPEDEF) {
@@ -1399,18 +1395,11 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
             if (ok && !exported_type_shape(analysis->grammar, source_unit,
                                            source, &shape_kind, &shape))
                 ok = false;
-            bool opaque_record = source->decl_node
-                && nt_is(analysis->grammar, source->decl_node, CORE_STRING_STATIC("type-decl"));
-            if (opaque_record) {
-                shape_kind = TH_ENV_TYPE_SHAPE_NONE;
-                shape = nullptr;
-                include_members = false;
-            }
             if (ok && shape_kind != TH_ENV_TYPE_SHAPE_NONE)
                 ok = th_env_register_type_shape(environment, core_buffer_string(&external),
                                                  shape_kind, shape);
             if (ok) {
-                uint8_t exposure = opaque_record ? 0 : 1;
+                uint8_t exposure = 1;
                 ok = th_env_register_metadata(environment,
                     TH_ENV_METADATA_TYPE, core_buffer_string(&external),
                     CORE_STRING_STATIC("n00b.type-exposure"), 1, &exposure, sizeof(exposure));
@@ -1439,8 +1428,7 @@ register_package_export_declaration(n00bb_link_analysis_t *analysis,
     if (ok)
         ok = copy_package_export_metadata(environment, environment,
             metadata_kind, core_buffer_string(&origin),
-            core_buffer_string(&external), include_members,
-            (core_string_t){0});
+            core_buffer_string(&external), (core_string_t){0});
     if (ok)
         ok = append_package_export_origin(environment, metadata_kind,
             core_buffer_string(&external), source_unit,

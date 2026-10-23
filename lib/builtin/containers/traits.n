@@ -3,28 +3,28 @@ trait Has_Length {
 }
 
 trait Appendable {
-    func append(modify self: 'L, value: 'T) -> nil
+    func append(self: 'L, value: 'T) -> nil
 }
 
 trait ListLike {
-    func append(modify self : 'L, value: 'T, front: bool = false) -> nil
-    func pop(modify self : 'L, front: bool = false) -> 'T?
-    func insert(modify self : 'L, index: int, value: 'T) -> nil
+    func append(self: 'L, value: 'T, front: bool = false) -> nil
+    func pop(self: 'L, front: bool = false) -> 'T?
+    func insert(self: 'L, index: int, value: 'T) -> nil
 }
 
 trait Associative {
     func get(self: 'D, key: 'K) -> 'V?
-    func put(modify self : 'D, key: 'K, value: 'V) -> 'V?
-    func add(modify self : 'D, key: 'K, value: 'V) -> bool
-    func replace(modify self : 'D, key: 'K, value: 'V) -> bool
-    func remove(modify self : 'D, key: 'K) -> bool
+    func put(self: 'D, key: 'K, value: 'V) -> 'V?
+    func add(self: 'D, key: 'K, value: 'V) -> bool
+    func replace(self: 'D, key: 'K, value: 'V) -> bool
+    func remove(self: 'D, key: 'K) -> bool
     func contains(self: 'D, key: 'K) -> bool
 }
 
 trait SetLike {
     func contains(self: 'S, value: 'T) -> bool
-    func add(modify self : 'S, value: 'T) -> bool
-    func remove(modify self : 'S, value: 'T) -> bool
+    func add(self: 'S, value: 'T) -> bool
+    func remove(self: 'S, value: 'T) -> bool
 }
 
 trait TreeLike {

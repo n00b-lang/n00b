@@ -1,6 +1,6 @@
 const HALF: f32 = 0.5
 
-type Sample layout(c) {
+record Sample layout(c) {
     weight: f32
     total: f64
     count: i32

@@ -1173,7 +1173,8 @@ append_imported_type_requirements(
             && type->kind != N00B_ABI_TYPE_FLAGSET
             && type->kind != N00B_ABI_TYPE_CALLBACK
             && type->kind != N00B_ABI_TYPE_TRAIT
-            && type->kind != N00B_ABI_TYPE_WRAPPER) continue;
+            && type->kind != N00B_ABI_TYPE_WRAPPER
+            && type->kind != N00B_ABI_TYPE_OBJECT) continue;
         th_type *graph_type = n00bb_abi_type_index_at(index, i);
         parse_sym_entry_t *owner = graph_type
             ? type_owner(type_owner_context, graph_type) : nullptr;
@@ -1719,8 +1720,10 @@ n00bb_abi_emit_unit(
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
                                                                (uint32_t)i);
         bool record = symbol && symbol->kind == PARSE_SYM_TYPEDEF
-            && core_string_eq(symbol->adt_kind,
-                              CORE_STRING_STATIC("record"));
+            && (core_string_eq(symbol->adt_kind,
+                               CORE_STRING_STATIC("record"))
+                || core_string_eq(symbol->adt_kind,
+                                  CORE_STRING_STATIC("object")));
         bool enumeration = symbol && symbol->kind == PARSE_SYM_TYPEDEF
             && core_string_eq(symbol->adt_kind,
                               CORE_STRING_STATIC("enum"));
@@ -1761,8 +1764,10 @@ n00bb_abi_emit_unit(
                                   CORE_STRING_STATIC("variant")));
         bool field = symbol && symbol->kind == PARSE_SYM_VARIABLE
             && symbol->is_field && symbol->owner_type
-            && core_string_eq(symbol->owner_type->adt_kind,
-                              CORE_STRING_STATIC("record"));
+            && (core_string_eq(symbol->owner_type->adt_kind,
+                               CORE_STRING_STATIC("record"))
+                || core_string_eq(symbol->owner_type->adt_kind,
+                                  CORE_STRING_STATIC("object")));
         bool enum_item = symbol && symbol->kind == PARSE_SYM_ENUM_CONST
             && symbol->owner_type
             && (core_string_eq(symbol->owner_type->adt_kind,

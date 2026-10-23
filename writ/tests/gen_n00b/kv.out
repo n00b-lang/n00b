@@ -456,13 +456,13 @@ int32_t writ_kv_n00b_kv_iter_next(uint64_t it, void *result) {
     return writ_n00b_value;
 }
 
-type Error {
+record Error {
     public code: i64
     public text: string?
     public fn: string
 }
 
-type Db_Cell {
+record Db_Cell {
     public raw: uint
 }
 
@@ -473,7 +473,7 @@ func __db_cell(raw: uint) -> Db {
     return ref cell
 }
 
-type Iter_Cell {
+record Iter_Cell {
     public raw: uint
     public keep_db: Db?
 }
@@ -490,7 +490,7 @@ func __iter_cell_with_db(raw: uint, keep: Db) -> Iter {
     return ref cell
 }
 
-type Entry {
+record Entry {
     public key: Array[u8]
     public val: Array[u8]
 }

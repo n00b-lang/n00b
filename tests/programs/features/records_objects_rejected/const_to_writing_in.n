@@ -1,0 +1,15 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+const FIXED: Counter = (count = 1)
+
+func poke(c: Counter) {
+    c.count = 9
+}
+
+poke(FIXED)

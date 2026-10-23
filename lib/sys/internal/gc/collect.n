@@ -532,12 +532,12 @@ func sweep_some(heap: Ref[internal.gc.core.Heap], count: uint) -> bool {
         if remaining == 0 {
             break
         }
-        let object: Ref[internal.gc.core.Los_Obj] = large.get()
-        if __atomic_load_relaxed(ref object.marked) == epoch {
-            cursor = ref object.next
+        let obj: Ref[internal.gc.core.Los_Obj] = large.get()
+        if __atomic_load_relaxed(ref obj.marked) == epoch {
+            cursor = ref obj.next
         } else {
-            ref_write(cursor, object.next)
-            internal.gc.los.release(heap, object)
+            ref_write(cursor, obj.next)
+            internal.gc.los.release(heap, obj)
         }
         remaining -= 1
         did_work = true
@@ -685,10 +685,10 @@ func reclaim_caches(heap: Ref[internal.gc.core.Heap]) {
 func release_los(heap: Ref[internal.gc.core.Heap]) {
     var current: Ref[internal.gc.core.Los_Obj]? = heap.release_los
     while current != nil {
-        let object: Ref[internal.gc.core.Los_Obj] = current.get()
-        heap.release_los = object.next
-        internal.gc.registry.los_unregister(heap, object)
-        internal.memory.unmap(object.mapping, object.mapped_bytes)
+        let obj: Ref[internal.gc.core.Los_Obj] = current.get()
+        heap.release_los = obj.next
+        internal.gc.registry.los_unregister(heap, obj)
+        internal.memory.unmap(obj.mapping, obj.mapped_bytes)
         current = heap.release_los
     }
 }

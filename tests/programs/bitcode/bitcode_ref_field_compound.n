@@ -1,4 +1,4 @@
-type Counter {
+record Counter {
     value: u64
 }
 

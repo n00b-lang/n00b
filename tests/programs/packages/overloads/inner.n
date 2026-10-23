@@ -1,8 +1,8 @@
-public type First {
+public record First {
     public raw: uint
 }
 
-public type Second {
+public record Second {
     public raw: uint
 }
 
@@ -42,7 +42,7 @@ public func first() -> First {
     return (raw = 0)
 }
 
-public type Opts {
+public record Opts {
     public a: i64?
     public b: i64?
 }

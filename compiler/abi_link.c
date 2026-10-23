@@ -586,7 +586,8 @@ link_key_init(abi_link_key_t *key, uint32_t kind)
                     || type->kind == N00B_ABI_TYPE_ENUM
                     || type->kind == N00B_ABI_TYPE_FLAGSET
                     || type->kind == N00B_ABI_TYPE_CALLBACK
-                    || type->kind == N00B_ABI_TYPE_WRAPPER);
+                    || type->kind == N00B_ABI_TYPE_WRAPPER
+                    || type->kind == N00B_ABI_TYPE_OBJECT);
             if ((type->flags & N00B_ABI_TYPE_FLAG_NON_CONCRETE)
                 && type->kind != N00B_ABI_TYPE_TRAIT
                 && !bare_nominal)
@@ -1232,7 +1233,8 @@ type_is_import_reference(const n00b_abi_type_v1 *type)
             || type->kind == N00B_ABI_TYPE_FLAGSET
             || type->kind == N00B_ABI_TYPE_CALLBACK
             || type->kind == N00B_ABI_TYPE_TRAIT
-            || type->kind == N00B_ABI_TYPE_WRAPPER);
+            || type->kind == N00B_ABI_TYPE_WRAPPER
+            || type->kind == N00B_ABI_TYPE_OBJECT);
 }
 
 static bool

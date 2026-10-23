@@ -20,6 +20,6 @@ public enum ArchivedColor {
     green = 2
 }
 
-public type RestrictedPoint {
+public record RestrictedPoint {
     private x: int
 }

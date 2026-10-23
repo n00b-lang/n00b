@@ -2,7 +2,7 @@ import second
 
 public var levels: int = 3
 
-public type Token {
+public record Token {
     public weight: int
 }
 

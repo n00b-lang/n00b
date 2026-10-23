@@ -59,6 +59,7 @@ static core_string_t mode_name(th_mode m)
     case TH_OUT:     return CORE_STRING_STATIC("out ");
     case TH_INOUT:   return CORE_STRING_STATIC("inout ");
     case TH_CONSUME: return CORE_STRING_STATIC("consume ");
+    case TH_VIEW:    return CORE_STRING_STATIC("view ");
     case TH_IN:      return CORE_STRING_STATIC("");
     }
     return CORE_STRING_STATIC("");

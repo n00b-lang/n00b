@@ -1,8 +1,8 @@
-type Cell {
+record Cell {
     public raw: uint
 }
 
-type Other_Cell {
+record Other_Cell {
     public raw: uint
 }
 

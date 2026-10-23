@@ -23,8 +23,8 @@ func compare_self(left: 'T) -> int {
     }
 }
 
-type Comparable_Item { value: int }
-type Plain_Item { value: int }
+record Comparable_Item { value: int }
+record Plain_Item { value: int }
 
 func pair_cmp(left: Comparable_Item, right: Comparable_Item) -> int {
     return left.value - right.value

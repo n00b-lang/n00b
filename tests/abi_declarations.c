@@ -39,7 +39,7 @@ source_token(size_t start, size_t end, uint32_t line, uint32_t column,
 int
 main(void)
 {
-    const char source[] = "type Item { value: i32 }";
+    const char source[] = "record Item { value: i32 }";
     core_module_spec_t spec = {0};
     core_source_file_t file = {0};
     core_translation_unit_t unit = {0};
@@ -49,8 +49,8 @@ main(void)
                                                     sizeof(source) - 1))
         && core_translation_unit_init(&unit, &spec, &file));
     core_module_spec_release(&spec);
-    parse_token_info_t *first = source_token(0, 4, 1, 1, 5);
-    parse_token_info_t *second = source_token(12, 17, 1, 13, 18);
+    parse_token_info_t *first = source_token(0, 6, 1, 1, 7);
+    parse_token_info_t *second = source_token(14, 19, 1, 15, 20);
     parse_token_info_t *tokens_array[] = {first, second};
     parse_token_stream_t *tokens = scan_token_stream_from_array(
         tokens_array, 2);
@@ -181,10 +181,10 @@ main(void)
             .declaration_location_index];
     assert(type_location->file_index == 1
         && type_location->start_byte_offset == 0
-        && type_location->end_byte_offset == 17
-        && field_location->start_byte_offset == 12
-        && field_location->end_byte_offset == 17
-        && field_location->start_column == 13);
+        && type_location->end_byte_offset == 19
+        && field_location->start_byte_offset == 14
+        && field_location->end_byte_offset == 19
+        && field_location->start_column == 15);
     assert(!rows.symbols[field_symbol_index].uses.count);
     n00bb_abi_declarations_release(&rows);
     type_symbol->visibility = (core_string_t){0};

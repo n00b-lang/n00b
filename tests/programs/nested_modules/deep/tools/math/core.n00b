@@ -1,4 +1,4 @@
-public type DeepAnswer {
+public record DeepAnswer {
     amount: int
 }
 

@@ -1512,7 +1512,7 @@ typedef struct {
     core_indexed_table_t *scopes;
     th_ctx *types;
     core_dict_t type_owners;
-    core_dict_t callback_type_owners;
+    core_dict_t generic_type_owners;
 } n00bb_abi_source_context_t;
 
 static parse_sym_entry_t *
@@ -1531,7 +1531,7 @@ abi_type_owner(void *context, th_type *type)
     th_type *base = th_name(sources->types, name);
     if (!base) return nullptr;
     typehash = th_hash(sources->types, base);
-    owner = core_dict_get(&sources->callback_type_owners,
+    owner = core_dict_get(&sources->generic_type_owners,
         (uintptr_t)typehash, nullptr);
     return owner ? canonical_symbol(owner) : nullptr;
 }
@@ -1542,7 +1542,7 @@ abi_collect_type_owners(core_link_unit_t *link,
 {
     if (!link || !sources || !sources->types) return false;
     core_dict_init(&sources->type_owners, nullptr, nullptr);
-    core_dict_init(&sources->callback_type_owners, nullptr, nullptr);
+    core_dict_init(&sources->generic_type_owners, nullptr, nullptr);
     for (size_t i = 0; i < core_link_unit_translation_unit_count(link); i++) {
         core_translation_unit_t *unit = core_link_unit_translation_unit(link, i);
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
@@ -1568,9 +1568,21 @@ abi_collect_type_owners(core_link_unit_t *link,
                 uintptr_t typehash = (uintptr_t)th_hash(sources->types,
                     th_resolve(symbol->type));
                 core_dict_add(&sources->type_owners, typehash, symbol);
+                th_type *reference = core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("object"))
+                    ? th_type_definition(sources->types, symbol->type)
+                    : nullptr;
+                reference = reference ? th_resolve(reference) : nullptr;
+                if (reference && th_kind_of(reference) == TH_INDIRECTION)
+                    core_dict_add(&sources->type_owners,
+                        (uintptr_t)th_hash(sources->types,
+                            th_resolve(th_ind_referent(reference))),
+                        symbol);
                 if (core_string_eq(symbol->adt_kind,
-                        CORE_STRING_STATIC("callback")))
-                    core_dict_add(&sources->callback_type_owners,
+                        CORE_STRING_STATIC("callback"))
+                    || core_string_eq(symbol->adt_kind,
+                        CORE_STRING_STATIC("object")))
+                    core_dict_add(&sources->generic_type_owners,
                         typehash, symbol);
             }
         }
@@ -1894,7 +1906,7 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
     }
     core_indexed_table_free(sources.scopes);
     core_dict_free(&sources.type_owners);
-    core_dict_free(&sources.callback_type_owners);
+    core_dict_free(&sources.generic_type_owners);
     return valid;
 }
 

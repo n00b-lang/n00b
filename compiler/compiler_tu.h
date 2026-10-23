@@ -636,6 +636,7 @@ typedef struct {
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
     core_list_t(parse_tree_ptr_t) shape_literal_nodes;
     core_dict_t flagset_values;
+    core_dict_t shared_state_types;
     core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;
     core_diag_location_t build_time_use;
@@ -1139,6 +1140,16 @@ bool context_symbol(parse_grammar_t *grammar, parse_sym_entry_t *symbol);
 bool is_module_global_symbol(parse_grammar_t *grammar,
                              parse_sym_entry_t *symbol);
 bool type_may_contain_reference_alias(th_ctx *types, th_type *type);
+bool n00bb_type_reaches_shared_state(th_ctx *types, th_type *type);
+bool n00bb_unit_type_reaches_shared_state(n00bb_tu_state_t *state,
+                                          th_type *type);
+parse_sym_entry_t *n00bb_view_origin(parse_grammar_t *grammar,
+                                     core_translation_unit_t *unit,
+                                     parse_tree_t *node,
+                                     parse_sym_entry_t **in_parameter);
+parse_sym_entry_t *n00bb_frozen_origin(parse_grammar_t *grammar,
+                                       core_translation_unit_t *unit,
+                                       parse_tree_t *node);
 bool finalize_alias_free_local_summaries(parse_grammar_t *grammar,
     core_translation_unit_t *unit);
 parse_tree_t *aggregate_literal_root(parse_grammar_t *grammar,
@@ -1178,6 +1189,7 @@ parse_tree_t *n00bb_node_record_literal_origin(parse_tree_t *node);
 parse_sym_entry_t *bound_function_symbol(parse_tree_t *node);
 th_type *n00bb_reference_definition(th_ctx *types, th_type *type);
 th_type *n00bb_dereferenced_type(th_ctx *types, th_type *type);
+bool n00bb_object_type(th_ctx *types, th_type *type);
 n00bb_node_facts_t *n00bb_ensure_node_facts(n00bb_tu_state_t *state,
     parse_tree_t *node);
 n00bb_return_source_t *n00bb_node_return_source(parse_tree_t *node);
@@ -1203,6 +1215,23 @@ bool scope_in_value_namespace(parse_scope_t *scope);
 bool is_named_type_declaration(parse_grammar_t *grammar,
                                parse_sym_entry_t *symbol);
 bool field_record_declaration(parse_grammar_t *grammar, parse_tree_t *node);
+bool n00bb_field_scope_tag(core_string_t tag);
+typedef struct {
+    th_type *base;
+    th_type *named;
+    th_type *shape;
+    th_type *record;
+    th_type *representation;
+} n00bb_field_declaration_types_t;
+bool n00bb_field_declaration_types(parse_grammar_t *grammar,
+                                   core_translation_unit_t *unit,
+                                   parse_scope_t *scope,
+                                   n00bb_field_declaration_types_t *out);
+bool n00bb_object_type_declared(parse_grammar_t *grammar,
+                                core_translation_unit_t *unit,
+                                parse_sym_entry_t *value);
+#define n00bb_object_shape_suffix ".__fields"
+#define n00bb_view_blocked_binding CORE_STRING_STATIC("n00bb.view-blocked")
 void n00bb_set_build_time(bool build_time);
 void n00bb_set_literal_stage(bool literal_stage);
 bool n00bb_literal_stage(void);

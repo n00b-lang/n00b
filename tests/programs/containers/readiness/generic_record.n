@@ -1,4 +1,4 @@
-type Pair {
+record Pair {
     left: 'A
     right: 'B
 }

@@ -1,0 +1,14 @@
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+func drop(consume c: Counter) {
+}
+
+func keep(c: Counter) {
+    drop(c)
+}

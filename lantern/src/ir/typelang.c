@@ -907,6 +907,9 @@ static void *r_mode(parse_reduce_t *r)
               : parse_alt_leads_with(r->grammar, CORE_STRING_STATIC("mode"),
                                      alt, CORE_STRING_STATIC("consume"))
                   ? TH_CONSUME
+              : parse_alt_leads_with(r->grammar, CORE_STRING_STATIC("mode"),
+                                     alt, CORE_STRING_STATIC("view"))
+                  ? TH_VIEW
                   : TH_IN;
 
     return n;

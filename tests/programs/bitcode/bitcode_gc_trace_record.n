@@ -3,7 +3,7 @@ import sys.gc.alloc
 import sys.gc.heap
 import sys.gc.los
 
-type Stress_Node {
+record Stress_Node {
     value: int
     next: Ref[Stress_Node]?
 }

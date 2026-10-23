@@ -2,6 +2,6 @@ public trait Sized {
     func area(self: 'T) -> int
 }
 
-public type Item {
+public record Item {
     public w: int
 }

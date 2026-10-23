@@ -784,6 +784,8 @@ n00bb_abi_type_layout_rows_build(
                 && (core_string_eq(types->owners[i]->adt_kind,
                                    CORE_STRING_STATIC("record"))
                     || core_string_eq(types->owners[i]->adt_kind,
+                                      CORE_STRING_STATIC("object"))
+                    || core_string_eq(types->owners[i]->adt_kind,
                                       CORE_STRING_STATIC("variant"))
                     || (types->owners[i]->member_scope
                         && core_string_eq(
@@ -793,7 +795,8 @@ n00bb_abi_type_layout_rows_build(
             continue;
         }
         bool option = types->rows[i].kind == N00B_ABI_TYPE_OPTION;
-        bool wrapper = types->rows[i].kind == N00B_ABI_TYPE_WRAPPER;
+        bool wrapper = types->rows[i].kind == N00B_ABI_TYPE_WRAPPER
+            || types->rows[i].kind == N00B_ABI_TYPE_OBJECT;
         bool own_tag = types->rows[i].kind == N00B_ABI_TYPE_VARIANT
             || option;
         if (!final->alignment_bytes

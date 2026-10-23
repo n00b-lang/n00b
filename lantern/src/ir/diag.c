@@ -29,6 +29,8 @@ core_string_t ir_severity_name(ir_severity_t s)
         return CORE_STRING_STATIC("note");
     case IR_SEV_HELP:
         return CORE_STRING_STATIC("help");
+    case IR_SEV_INFO:
+        return CORE_STRING_STATIC("info");
     default:
         return CORE_STRING_STATIC("?");
     }
@@ -232,7 +234,17 @@ core_severity_of(ir_severity_t severity)
 {
     return severity == IR_SEV_WARNING ? CORE_DIAG_WARNING
         : severity == IR_SEV_NOTE ? CORE_DIAG_NOTE
-        : severity == IR_SEV_HELP ? CORE_DIAG_HELP : CORE_DIAG_ERROR;
+        : severity == IR_SEV_HELP ? CORE_DIAG_HELP
+        : severity == IR_SEV_INFO ? CORE_DIAG_INFO : CORE_DIAG_ERROR;
+}
+
+static ir_severity_t
+ir_severity_of(core_diag_severity_t severity)
+{
+    return severity == CORE_DIAG_WARNING ? IR_SEV_WARNING
+        : severity == CORE_DIAG_NOTE ? IR_SEV_NOTE
+        : severity == CORE_DIAG_HELP ? IR_SEV_HELP
+        : severity == CORE_DIAG_INFO ? IR_SEV_INFO : IR_SEV_ERROR;
 }
 
 static bool
@@ -278,9 +290,7 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
         return nullptr;
     }
 
-    core_diag_severity_t core_severity = sev == IR_SEV_HELP ? CORE_DIAG_HELP
-        : sev == IR_SEV_NOTE ? CORE_DIAG_NOTE
-        : sev == IR_SEV_WARNING ? CORE_DIAG_WARNING : CORE_DIAG_ERROR;
+    core_diag_severity_t core_severity = core_severity_of(sev);
     size_t core_index = core_diagnostics_count(d->core);
     if (!core_diagnostics_report(d->core, nullptr, core_severity,
             ir_diag_code(code), ir_diag_default_text(code))) {
@@ -291,9 +301,7 @@ static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
     if (!core_item) {
         return nullptr;
     }
-    sev = core_item->severity == CORE_DIAG_WARNING ? IR_SEV_WARNING
-        : core_item->severity == CORE_DIAG_NOTE ? IR_SEV_NOTE
-        : core_item->severity == CORE_DIAG_HELP ? IR_SEV_HELP : IR_SEV_ERROR;
+    sev = ir_severity_of(core_item->severity);
     size_t destination_index = SIZE_MAX;
     if (d->destination && d->unit) {
         core_diag_location_t location = {0};
@@ -506,10 +514,8 @@ uint32_t ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev)
         return 0;
     }
 
-    core_diag_severity_t core_sev = sev == IR_SEV_WARNING ? CORE_DIAG_WARNING
-        : sev == IR_SEV_NOTE ? CORE_DIAG_NOTE
-        : sev == IR_SEV_HELP ? CORE_DIAG_HELP : CORE_DIAG_ERROR;
-    return (uint32_t)core_diagnostics_count_severity(d->core, core_sev);
+    return (uint32_t)core_diagnostics_count_severity(d->core,
+                                                     core_severity_of(sev));
 }
 
 bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
