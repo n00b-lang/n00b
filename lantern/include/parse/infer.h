@@ -32,6 +32,7 @@ typedef enum : uint8_t {
     PARSE_INFER_METHOD_RETURN,
     PARSE_INFER_FIELD_RETURN,
     PARSE_INFER_FIELD_RETURN_AUTO_DEREF,
+    PARSE_INFER_REFERENT_MEMBER,
 } parse_infer_proj_t;
 
 typedef struct parse_infer_expr_t parse_infer_expr_t;

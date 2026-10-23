@@ -24,7 +24,7 @@ inline func load_bits(self: 'T) -> u128 {
     var bits: u128 = 0
     var i: uint = 0
     while 8 * i < start + width {
-        let b: byte = __gc_byte_offset(place.base, cast[int] i)
+        let b: byte = __gc_byte_offset(place.base, cast[int] i).__value
         let wide: u128 = cast[u128] b
         if 8 * i >= start {
             bits = bits | unsafe_shl(wide, 8 * i - start)

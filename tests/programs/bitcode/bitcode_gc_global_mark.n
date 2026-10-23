@@ -76,14 +76,14 @@ if created != nil {
                     if slot_map != nil and marker_map != nil {
                         let slot: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] slot_map.get()
                         let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
-                        ref_write(slot, first)
+                        slot.__value = first
                         require sys.gc.roots.add_global(heap, slot)
-                        sys.gc.mark.marker_init(marker, heap, false)
+                        sys.gc.mark.marker_init(marker.__value, heap, false)
                         sys.gc.collect.mark_global_roots(marker)
                         assert sys.gc.mark.is_marked(heap, first.get())
                         assert !sys.gc.mark.is_marked(heap, second.get())
                         sys.gc.roots.remove_global(heap, slot)
-                        ref_write(slot, second)
+                        slot.__value = second
                         require sys.gc.roots.push(mutator, slot)
                         sys.gc.collect.mark_roots(marker)
                         assert sys.gc.mark.is_marked(heap, second.get())

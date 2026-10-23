@@ -146,9 +146,9 @@ func los_register(heap: Ref[internal.gc.core.Heap],
     }
     let index:      uint      = level
     let count_cell: Ref[uint] = ref heap.los_level_n[index]
-    var count:      uint      = ref_read(count_cell)
+    var count:      uint      = count_cell.__value
     count += 1
-    ref_write(count_cell, count)
+    count_cell.__value = count
     let bit: uint = 1
     heap.los_levels = heap.los_levels | (bit << level)
     widen_bounds(heap, start, start + obj.bytes)
@@ -171,9 +171,9 @@ func los_unregister(heap: Ref[internal.gc.core.Heap],
     }
     let index:      uint      = level
     let count_cell: Ref[uint] = ref heap.los_level_n[index]
-    var count:      uint      = ref_read(count_cell)
+    var count:      uint      = count_cell.__value
     count -= 1
-    ref_write(count_cell, count)
+    count_cell.__value = count
     if count == 0 {
         let bit: uint = 1
         heap.los_levels = heap.los_levels & ~(bit << level)

@@ -5,9 +5,9 @@ func f(n: int) -> int {
     var total: int = 0
     var slot: int = 5
     let r: Ref[int] = ref slot
-    ref_write(r, 6)
-    ref_write(r, 7)
-    total = ref_read(r)
+    r.__value = 6
+    r.__value = 7
+    total = r.__value
     return a + total
 }
 require f(1) == 10

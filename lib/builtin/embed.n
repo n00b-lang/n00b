@@ -137,7 +137,7 @@ litmod<fence> embed(contents: string, site: litmod_site.Literal_Site)
         fail "'embed needs a concrete element type"
     }
     let row: Ref[abi.Type_Record] = found.get()
-    let name: string = unsafe_cast[Ref[string]] (ref row.canonical_name)
+    let name: string = (unsafe_cast[Ref[string]] (ref row.canonical_name)).__value
     let stride: uint = stride_bytes(row)
     if !plain_data(row) or stride == 0 {
         fail "'embed cannot fill " + name +

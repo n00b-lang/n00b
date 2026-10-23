@@ -1,7 +1,7 @@
 public var shared_value: int = 0
 
 public func write_shared(next_value: int) {
-    ref_write(ref shared_value, next_value)
+    (ref shared_value).__value = next_value
 }
 
 public context UpdatingContext(next_value: int) {

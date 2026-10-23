@@ -15,11 +15,11 @@ if source != nil {
         assert word == 0x5a5a5a5a5a5a5a5a
         word = 0
         __gc_memcpy(dst, ref word, 8)
-        assert ref_read(dst) == cast[byte](0)
+        assert dst.__value == cast[byte](0)
         __gc_memcpy(dst, src, 8)
         let last: Ref[byte] = __gc_byte_offset(dst, page - 1)
-        assert ref_read(dst) == pattern
-        assert ref_read(last) == pattern
+        assert dst.__value == pattern
+        assert last.__value == pattern
         sys.memory.unmap(src, page)
         sys.memory.unmap(dst, page)
         __fd_write(2, "ok")

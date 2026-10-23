@@ -18,7 +18,7 @@ func rich_over(body: Ref[text.Rich_Body]) -> string {
     var words: String_Words = (data = unsafe_cast[Ref[byte]] body,
                                selector = str_tag_rich << 62)
     let view: Ref[string] = unsafe_cast[Ref[string]] ref words
-    let s: string = view
+    let s: string = view.__value
     return s
 }
 

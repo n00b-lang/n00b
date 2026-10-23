@@ -32,7 +32,7 @@ func slot(ix: text.Palette_Ix) -> i8 {
 }
 
 func pal(t: Ref[text.Theme], ix: text.Palette_Ix) -> text.Color {
-    let c: text.Color? = text.palette(t, ix)
+    let c: text.Color? = text.palette(t.__value, ix)
     if c == nil {
         return -1
     }
@@ -58,10 +58,10 @@ func builtin_checks() {
         check(text.theme_lookup(t.name) != nil, "3")
         var s: i8 = 0
         while s < slot(text.Palette_Ix.palette_size) {
-            check(text.palette(t, cast[text.Palette_Ix] s) != nil, "4")
+            check(text.palette(t.__value, cast[text.Palette_Ix] s) != nil, "4")
             s += 1
         }
-        check(text.palette(t, text.Palette_Ix.palette_size) == nil, "5")
+        check(text.palette(t.__value, text.Palette_Ix.palette_size) == nil, "5")
         i += 1
     }
 }
@@ -91,18 +91,18 @@ func theme_probe_main() {
     check(pal(d, text.Palette_Ix.background) == 0x1a1b26, "14")
 
     let cur: Ref[text.Theme] = text.theme_current()
-    check(is_yes(text.style_for_tag(cur, "b").bold), "15")
-    let err: text.Text_Style = text.style_for_tag(cur, "@error")
+    check(is_yes(text.style_for_tag(cur.__value,"b").bold), "15")
+    let err: text.Text_Style = text.style_for_tag(cur.__value,"@error")
     check(is_yes(err.bold) and err.fg_palette_ix != nil and
           ix_of(err.fg_palette_ix) == slot(text.Palette_Ix.error_tone), "16")
-    let h1: text.Text_Style = text.style_for_tag(cur, "h1")
+    let h1: text.Text_Style = text.style_for_tag(cur.__value,"h1")
     check(is_yes(h1.bold) and h1.text_case == text.Text_Case.upper and
           ix_of(h1.fg_palette_ix) == slot(text.Palette_Ix.primary), "17")
-    check(text.style_for_tag(cur, "@code").font_hint == text.Font_Hint.mono,
+    check(text.style_for_tag(cur.__value,"@code").font_hint == text.Font_Hint.mono,
           "18")
-    check(text.is_empty(text.style_for_tag(cur, "@nope")) and
-          text.is_empty(text.style_for_tag(cur, "nope")) and
-          text.is_empty(text.style_for_tag(cur, "")), "19")
+    check(text.is_empty(text.style_for_tag(cur.__value,"@nope")) and
+          text.is_empty(text.style_for_tag(cur.__value,"nope")) and
+          text.is_empty(text.style_for_tag(cur.__value,"")), "19")
     let coloured_roles: Array[string] = [
         "@code",
         "@heading",
@@ -117,29 +117,29 @@ func theme_probe_main() {
     ]
     var i: uint = 0
     while i < coloured_roles.len() {
-        let rs: text.Text_Style = text.style_for_tag(cur, coloured_roles[i])
+        let rs: text.Text_Style = text.style_for_tag(cur.__value,coloured_roles[i])
         if rs.fg_palette_ix == nil {
             __fd_write(2, coloured_roles[i] + "\n")
         }
         check(rs.fg_palette_ix != nil, "20")
         i += 1
     }
-    check(text.style_for_tag(cur, "@mono").fg_palette_ix == nil, "21")
+    check(text.style_for_tag(cur.__value,"@mono").fg_palette_ix == nil, "21")
 
-    let derived: Ref[text.Theme] = text.copy(cur, "probe-derived")
+    let derived: Ref[text.Theme] = text.copy(cur.__value, "probe-derived")
     text.set_role(derived, "@link",
                   style_of(true, nil, nil, slot(text.Palette_Ix.accent)))
-    let dlink: text.Text_Style = text.style_for_tag(derived, "@link")
+    let dlink: text.Text_Style = text.style_for_tag(derived.__value,"@link")
     check(is_yes(dlink.bold) and
           ix_of(dlink.fg_palette_ix) == slot(text.Palette_Ix.accent), "22")
-    let olink: text.Text_Style = text.style_for_tag(cur, "@link")
+    let olink: text.Text_Style = text.style_for_tag(cur.__value,"@link")
     check(!is_yes(olink.bold) and
           ix_of(olink.fg_palette_ix) == slot(text.Palette_Ix.info), "23")
     text.set_role(derived, "@brandnew", style_of(nil, true, nil, nil))
-    check(is_yes(text.style_for_tag(derived, "@brandnew").italic), "24")
+    check(is_yes(text.style_for_tag(derived.__value,"@brandnew").italic), "24")
     text.set_style(derived, "h1", style_of(nil, nil, true, nil))
-    check(is_yes(text.style_for_tag(derived, "h1").dim) and
-          !is_yes(text.style_for_tag(cur, "h1").dim), "25")
+    check(is_yes(text.style_for_tag(derived.__value,"h1").dim) and
+          !is_yes(text.style_for_tag(cur.__value,"h1").dim), "25")
     text.install(derived)
     check(text.theme_set_current("probe-derived") and
           same_name(text.theme_current(), "probe-derived"), "26")

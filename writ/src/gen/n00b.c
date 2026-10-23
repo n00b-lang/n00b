@@ -1153,7 +1153,7 @@ emit_optional_taker(writ_emit_t *emit, writ_str_t name, writ_str_t type)
 {
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func __ffi_take_optional_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s?", S(name), S(type));
-    writ_emit_line(emit, "let value: Ffi_Bytes = ref_read(bytes)");
+    writ_emit_line(emit, "let value: Ffi_Bytes = bytes.__value");
     writ_emit_open(emit, "if value.data == 0");
     writ_emit_line(emit, "return nil");
     writ_emit_close(emit, nullptr);
@@ -1169,7 +1169,7 @@ emit_n00b_record_taker(const n00b_t *g, writ_emit_t *emit, const writ_record_vie
     writ_str_t take_params[WRIT_C_MAX_ARITY + 1] = {writ_cstr("Ref[Ffi_Bytes]")};
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func __ffi_take_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s", S(record->name), S(type));
-    writ_emit_line(emit, "let value: Ffi_Bytes = ref_read(bytes)");
+    writ_emit_line(emit, "let value: Ffi_Bytes = bytes.__value");
     writ_emit_text(emit, "var lifted: %.*s = (", S(type));
     for (size_t f = 0; f < count; f++) {
         writ_str_t length = writ_str_format(g->session, "__ffi_%.*s_%.*s_length", S(record->name),
@@ -3253,7 +3253,7 @@ n00b_text(const n00b_t *g)
                    take_params, 2, writ_cstr("nil"));
         writ_emit_line(&emit, "");
         writ_emit_line(&emit, "func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {");
-        writ_emit_line(&emit, "    let value: Ffi_Bytes = ref_read(bytes)");
+        writ_emit_line(&emit, "    let value: Ffi_Bytes = bytes.__value");
         writ_emit_line(&emit, "    var copied: Array[u8] = new[Array[u8]](cast[int]value.length)");
         writ_emit_line(&emit, "    __ffi_bytes_take(bytes, ref copied)");
         writ_emit_line(&emit, "    return copied");

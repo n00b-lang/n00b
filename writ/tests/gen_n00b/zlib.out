@@ -747,7 +747,7 @@ public const Z_DEFLATED: i32 = 8
 public const Z_NULL: i32 = 0
 
 func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
-    let value: Ffi_Bytes = ref_read(bytes)
+    let value: Ffi_Bytes = bytes.__value
     var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
     __ffi_bytes_take(bytes, ref copied)
     return copied

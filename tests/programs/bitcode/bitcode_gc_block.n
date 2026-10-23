@@ -124,11 +124,11 @@ if mapped != nil {
     let cursor: Ref[byte]? = bump.cursor
     if cursor != nil {
         let expected: byte = 42
-        ref_write(cursor.get(), 42)
+        cursor.get().__value = 42
         let cell: Ref[byte] = __gc_byte_offset(base, 896)
         assert __gc_byte_diff(cell, base) == 896
         assert __gc_byte_diff(base, cell) == -896
-        assert ref_read(cell) == expected
+        assert cell.__value == expected
         let header: Ref[sys.gc.core.Object_Header] = unsafe_cast[Ref[sys.gc.core.Object_Header]] cell
         header.meta = sys.gc.core.meta_make(32, 0)
         assert sys.gc.core.meta_payload_bytes(header.meta) == 32

@@ -20,9 +20,9 @@ inline func order(by: Comparator['T], left: 'T, right: 'T) -> Comparison {
 }
 
 inline func swap(left: Ref['T], right: Ref['T]) {
-    let value: 'T = ref_read(left)
-    ref_write(left, ref_read(right))
-    ref_write(right, value)
+    let value: 'T = left.__value
+    left.__value = right.__value
+    right.__value = value
 }
 
 func sort_by(modify items: Array['T], by: Comparator['T]) {

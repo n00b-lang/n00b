@@ -707,14 +707,14 @@ func capacity(blk: Ref[Block_Metadata]) -> uint {
 
 func pop_list(head: Ref[Ref[Block_Metadata]?], count: Ref[uint])
              -> Ref[Block_Metadata]? {
-    let first: Ref[Block_Metadata]? = ref_read(head)
+    let first: Ref[Block_Metadata]? = head.__value
 
     if first != nil {
         let blk:           Ref[Block_Metadata] = first.get()
-        let current_count: uint                = ref_read(count)
+        let current_count: uint                = count.__value
 
-        ref_write(head, blk.next)
-        ref_write(count, current_count - 1)
+        head.__value = blk.next
+        count.__value = current_count - 1
     }
     return first
 }
@@ -779,11 +779,11 @@ func own(heap   : Ref[Heap],
     set_block_state(heap, blk, Block_State.owned)
 
     blk.owner = mutator
-    blk.next = ref_read(list)
+    blk.next = list.__value
 
     let owned: Ref[Block_Metadata]? = blk
 
-    ref_write(list, owned)
+    list.__value = owned
 
     if !blk.on_owned {
         blk.on_owned = true

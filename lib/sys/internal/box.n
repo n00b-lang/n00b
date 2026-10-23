@@ -77,20 +77,20 @@ func copy_bits(source: Ref[byte], start: uint, width: uint,
     var bit: uint = 0
     while bit < width {
         let source_bit: uint = start + bit
-        let from: byte = __gc_byte_offset(source, source_bit / 8)
+        let from: byte = __gc_byte_offset(source, source_bit / 8).__value
         let into: Ref[byte] = __gc_byte_offset(target, bit / 8)
-        let current: byte = into
+        let current: byte = into.__value
         let lit: u32 = (cast[u32](from) >> cast[u32](source_bit & 7)) & 1
-        ref_write(into, cast[byte](cast[u32](current)
-                                   | (lit << cast[u32](bit & 7))))
+        into.__value = cast[byte](cast[u32](current)
+                                  | (lit << cast[u32](bit & 7)))
         bit += 1
     }
 }
 
 func array_position(descriptor: Ref[internal.abi.Array_Descriptor_Header],
                     index: i64) -> u64 {
-    let length: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
-        unsafe_cast[Ref[byte]] descriptor, 24)
+    let length: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] descriptor, 24)).__value
     var position: u64 = cast[u64] index
     if index < 0 {
         let back: u64 = cast[u64](-(index + 1)) + 1
@@ -122,7 +122,7 @@ func array_element(type_field: u32, payload: Ref[byte], index: i64,
     let stride_bits: u64 = (row.size_bits + alignment_bits - 1) /
         alignment_bits * alignment_bits
     require stride_bits & 7 == 0
-    ref_write(element, child)
+    element.__value = child
     return __gc_byte_offset(data.get(), position * (stride_bits / 8))
 }
 
@@ -136,8 +136,8 @@ func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
     let data: Ref[byte]? = array.data
     require header != nil and data != nil
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
-    let length: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
-        unsafe_cast[Ref[byte]] descriptor, 24)
+    let length: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] descriptor, 24)).__value
     require descriptor.rank == 1 and descriptor.flat_rank == 1
         and descriptor.reserved_zero == 0 and index < descriptor.total_count
         and index < length
@@ -150,9 +150,9 @@ func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
         while bit < width {
             let at: u64 = start + bit
             let into: Ref[byte] = __gc_byte_offset(data.get(), at >> 3)
-            let existing: byte = into
-            ref_write(into, cast[byte](cast[u32](existing)
-                & ~(1 << cast[u32](at & 7)) & 0xff))
+            let existing: byte = into.__value
+            into.__value = cast[byte](cast[u32](existing)
+                & ~(1 << cast[u32](at & 7)) & 0xff)
             bit += 1
         }
         return
@@ -196,7 +196,7 @@ func array_value_of(source: Ref[Any],
                                   internal.abi.Type_Kind.reference_type)
         address = reference_address(source)
     }
-    ref_write(array_type, type_index)
+    array_type.__value = type_index
     return unsafe_cast[Ref[internal.abi.Array_Value]] address
 }
 
@@ -206,8 +206,8 @@ func array_count(source: Ref[Any]) -> uint {
                                                               ref array_type)
     let header: Ref[internal.abi.Array_Descriptor_Header]? = array.descriptor
     require header != nil
-    let count: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
-        unsafe_cast[Ref[byte]] header.get(), 24)
+    let count: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] header.get(), 24)).__value
     return cast[uint] count
 }
 
@@ -225,10 +225,10 @@ func check_shape(source: Ref[Any], rank: u32, expected: Ref[byte]) {
         unsafe_cast[Ref[byte]] header.get(), 24)
     var level: u32 = 0
     while level < rank {
-        let wanted: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(expected,
-            cast[uint](level) * 8)
-        let actual: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(extents,
-            cast[uint](level) * 8)
+        let wanted: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(expected,
+            cast[uint](level) * 8)).__value
+        let actual: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(extents,
+            cast[uint](level) * 8)).__value
         require wanted == 0xffffffffffffffff or wanted == actual
         level += 1
     }
@@ -252,8 +252,8 @@ func array_locate(source: Ref[Any], index: i64,
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
     require descriptor.rank != 0 and descriptor.flat_rank != 0
         and descriptor.flags & 0xfffffff8 == 0
-    let length: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(
-        unsafe_cast[Ref[byte]] descriptor, 24)
+    let length: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(
+        unsafe_cast[Ref[byte]] descriptor, 24)).__value
     var position: u64 = cast[u64] index
     if index < 0 {
         let back: u64 = cast[u64](-(index + 1)) + 1
@@ -300,8 +300,8 @@ func name_matches(field: Ref[internal.abi.Field_Record], name: Ref[byte],
     require stored != nil
     var at: uint = 0
     while at < name_bytes {
-        let left: byte = __gc_byte_offset(stored.get(), at)
-        let right: byte = __gc_byte_offset(name, at)
+        let left: byte = __gc_byte_offset(stored.get(), at).__value
+        let right: byte = __gc_byte_offset(name, at).__value
         if left != right {
             return false
         }
@@ -344,10 +344,10 @@ func type_specializes(type_field: u32, general: u32) -> i32 {
 }
 
 func program_word(program: Ref[byte], at: Ref[uint]) -> u64 {
-    let position: uint = at
-    let word: u64 = unsafe_cast[Ref[u64]] __gc_byte_offset(program,
-                                                           position * 8)
-    ref_write(at, position + 1)
+    let position: uint = at.__value
+    let word: u64 = (unsafe_cast[Ref[u64]] __gc_byte_offset(program,
+                                                            position * 8)).__value
+    at.__value = position + 1
     return word
 }
 
@@ -371,9 +371,9 @@ func pattern_holds(actual: u32, program: Ref[byte], at: Ref[uint],
         }
         let bound: Ref[u64] = unsafe_cast[Ref[u64]] __gc_byte_offset(slots,
             slot * 8)
-        let previous: u64 = bound
+        let previous: u64 = bound.__value
         if previous == 0 {
-            ref_write(bound, cast[u64](index))
+            bound.__value = cast[u64](index)
             return true
         }
         return previous == cast[u64](index)

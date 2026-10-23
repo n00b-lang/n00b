@@ -185,7 +185,7 @@ func global_pointer_at(heap: Ref[internal.gc.core.Heap], index: uint) -> Ref[Ref
 
 func global_slot_at(heap: Ref[internal.gc.core.Heap], index: uint) -> Ref[Ref[byte]?] {
     require index < heap.nglobals
-    return ref_read(global_pointer_at(heap, index))
+    return global_pointer_at(heap, index).__value
 }
 
 func add_global(heap: Ref[internal.gc.core.Heap], slot: Ref[Ref[byte]?]) -> bool {
@@ -198,7 +198,7 @@ func add_global(heap: Ref[internal.gc.core.Heap], slot: Ref[Ref[byte]?]) -> bool
         heap.nglobals + 1)
     var added: bool = false
     if grown and internal.gc.hash.index_tab_reserve(ref heap.global_index, 1) {
-        ref_write(global_pointer_at(heap, heap.nglobals), slot)
+        global_pointer_at(heap, heap.nglobals).__value = slot
         internal.gc.hash.index_tab_insert(ref heap.global_index, key,
             heap.nglobals + 1)
         heap.nglobals += 1
@@ -217,8 +217,8 @@ func remove_global(heap: Ref[internal.gc.core.Heap], slot: Ref[Ref[byte]?]) {
         let last:  uint = heap.nglobals - 1
         internal.gc.hash.index_tab_delete(ref heap.global_index, key, indexed)
         if index != last {
-            let moved: Ref[Ref[byte]?] = ref_read(global_pointer_at(heap, last))
-            ref_write(global_pointer_at(heap, index), moved)
+            let moved: Ref[Ref[byte]?] = global_pointer_at(heap, last).__value
+            global_pointer_at(heap, index).__value = moved
             internal.gc.hash.index_tab_find(ref heap.global_index,
                 __abi_ref_address(moved), last + 1).val = index + 1
         }

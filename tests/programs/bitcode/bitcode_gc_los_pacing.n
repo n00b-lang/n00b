@@ -20,7 +20,7 @@ if created != nil {
         let first: Ref[byte]? = sys.gc.alloc.allocate_large(
             mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
         if first != nil {
-            ref_write(first.get(), cast[byte](0x5a))
+            first.get().__value = cast[byte](0x5a)
             var root: Ref[byte]? = first
             require sys.gc.roots.push(mutator, ref root)
             var index: uint = 0
@@ -32,7 +32,7 @@ if created != nil {
                 index += 1
             }
             require heap.collections != 0
-            require ref_read(first.get()) == cast[byte](0x5a)
+            require first.get().__value == cast[byte](0x5a)
             sys.gc.roots.pop(mutator, 0)
         } else { require false }
         sys.gc.mutator.destroy(mutator)

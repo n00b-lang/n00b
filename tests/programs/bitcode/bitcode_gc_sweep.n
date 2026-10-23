@@ -59,7 +59,7 @@ if created != nil {
         assert !sys.gc.core.object_started(base, black)
         assert cast[uint](block.free_lines) == usable
         assert __atomic_load(ref heap.nunswept) == 0
-        assert ref_read(__gc_byte_offset(base, first)) == cast[byte](0xdb)
+        assert __gc_byte_offset(base, first).__value == cast[byte](0xdb)
 
         heap.cfg.poison_free = false
         heap.epoch += 1

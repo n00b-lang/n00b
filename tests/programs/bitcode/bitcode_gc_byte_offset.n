@@ -8,8 +8,8 @@ func offset_round_trip() -> bool {
     let index: uint = 0
     let cell: Ref[byte] = __gc_byte_offset(base, index)
     let value: byte = 42
-    ref_write(cell, value)
-    return ref_read(cell) == value
+    cell.__value = value
+    return cell.__value == value
 }
 
 func offset_backwards() -> bool {

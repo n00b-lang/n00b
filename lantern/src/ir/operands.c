@@ -32,6 +32,17 @@ ir_value_uncopied(const ir_value_t *value)
 }
 
 bool
+ir_value_stable(const ir_value_t *value)
+{
+    const ir_value_t *source = ir_value_uncopied(value);
+    if (source && source->kind == IR_VAL_GLOBAL)
+        return source->global && source->global->mutability != IR_MUT_MUTABLE;
+    if (value && value->kind == IR_VAL_LOCAL)
+        return value->local && value->local->mutability != IR_MUT_MUTABLE;
+    return value != nullptr;
+}
+
+bool
 ir_block_belongs_to(const ir_func_t *f, const ir_block_t *block)
 {
     return block && block->owner == f && block->index < f->n_blocks

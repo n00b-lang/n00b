@@ -53,7 +53,7 @@ func check_record_trace(heap: Ref[sys.gc.core.Heap],
                         sys.abi.alignment_bytes(marker_row.get()))
                     if marker_map != nil {
                         let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
-                        sys.gc.mark.marker_init(marker, heap, false)
+                        sys.gc.mark.marker_init(marker.__value, heap, false)
                         sys.gc.mark.mark_object(marker, node_payload)
                         assert sys.gc.mark.is_marked(heap, node_payload.get())
                         assert !sys.gc.mark.is_marked(heap, payload)
@@ -119,7 +119,7 @@ func check_array_trace(heap: Ref[sys.gc.core.Heap],
                                         sys.abi.alignment_bytes(marker_row.get()))
                                     if marker_map != nil {
                                         let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
-                                        sys.gc.mark.marker_init(marker, heap, false)
+                                        sys.gc.mark.marker_init(marker.__value, heap, false)
                                         sys.gc.mark.mark_object(marker, array_payload)
                                         assert !sys.gc.mark.is_marked(heap, target)
                                         require sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
@@ -169,7 +169,7 @@ func check_inline_trace(heap: Ref[sys.gc.core.Heap],
                         sys.abi.alignment_bytes(marker_row.get()))
                     if marker_map != nil {
                         let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
-                        sys.gc.mark.marker_init(marker, heap, false)
+                        sys.gc.mark.marker_init(marker.__value, heap, false)
                         sys.gc.mark.mark_object(marker, payload)
                         assert !sys.gc.mark.is_marked(heap, target)
                         require sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
@@ -198,11 +198,11 @@ func check_barrier_queue(heap: Ref[sys.gc.core.Heap],
             sys.abi.alignment_bytes(marker_row.get()))
         if marker_map != nil {
             let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
-            sys.gc.mark.marker_init(marker, heap, false)
+            sys.gc.mark.marker_init(marker.__value, heap, false)
             assert !sys.gc.mark.is_marked(heap, target)
             mutator.write_buffer_epoch = heap.mark_epoch
             let slot: Ref[Ref[byte]?] = ref mutator.write_buffer [0]
-            ref_write(slot, target)
+            slot.__value = target
             mutator.write_buffer_count = 1
             sys.gc.sync.ticket_lock(ref heap.lock)
             sys.gc.mark.barrier_flush_locked(mutator)
@@ -232,7 +232,7 @@ func check_mutator_roots(heap: Ref[sys.gc.core.Heap],
             sys.abi.alignment_bytes(marker_row.get()))
         if mapped != nil {
             let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] mapped.get()
-            sys.gc.mark.marker_init(marker, heap, false)
+            sys.gc.mark.marker_init(marker.__value, heap, false)
             assert !sys.gc.mark.is_marked(heap, rooted)
             assert !sys.gc.mark.is_marked(heap, last_alloc)
             var slot: Ref[byte]? = rooted

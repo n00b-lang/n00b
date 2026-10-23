@@ -225,7 +225,7 @@ func mark_mutator_roots(marker: Ref[internal.gc.core.Marker],
     var index: uint = 0
     while index < mutator.nroots {
         internal.gc.mark.mark_object(marker,
-            ref_read(internal.gc.roots.slot_at(mutator, index)))
+            internal.gc.roots.slot_at(mutator, index).__value)
         index += 1
     }
     index = 0
@@ -303,7 +303,7 @@ func mark_global_roots(marker: Ref[internal.gc.core.Marker]) {
     var index: uint = 0
     while index < marker.heap.nglobals {
         internal.gc.mark.mark_object(marker,
-            ref_read(internal.gc.roots.global_slot_at(marker.heap, index)))
+            internal.gc.roots.global_slot_at(marker.heap, index).__value)
         index += 1
     }
 }
@@ -386,8 +386,7 @@ func drain_barrier_buffers(marker: Ref[internal.gc.core.Marker]) {
             var index: uint = 0
             while index < mutator.write_buffer_count {
                 let slot: Ref[Ref[byte]?] = ref mutator.write_buffer[index]
-                internal.gc.mark.mark_object(marker,
-                    ref_read(slot))
+                internal.gc.mark.mark_object(marker, slot.__value)
                 index += 1
             }
         }
@@ -483,7 +482,7 @@ func sweep_block(heap: Ref[internal.gc.core.Heap], block: Ref[internal.gc.core.B
 
 func prune_owned(heap: Ref[internal.gc.core.Heap], sweep: bool) {
     var slot:    Ref[Ref[internal.gc.core.Block_Metadata]?] = ref heap.owned
-    var current: Ref[internal.gc.core.Block_Metadata]?      = ref_read(slot)
+    var current: Ref[internal.gc.core.Block_Metadata]?      = slot.__value
     while current != nil {
         let block: Ref[internal.gc.core.Block_Metadata] = current.get()
         if block.state == cast[u8](internal.gc.core.Block_State.owned) {
@@ -492,11 +491,11 @@ func prune_owned(heap: Ref[internal.gc.core.Heap], sweep: bool) {
             }
             slot = ref block.own_next
         } else {
-            ref_write(slot, block.own_next)
+            slot.__value = block.own_next
             block.own_next = nil
             block.on_owned = false
         }
-        current = ref_read(slot)
+        current = slot.__value
     }
 }
 
@@ -527,7 +526,7 @@ func sweep_some(heap: Ref[internal.gc.core.Heap], count: uint) -> bool {
     }
 
     var cursor: Ref[Ref[internal.gc.core.Los_Obj]?] = heap.los_cursor
-    var large:  Ref[internal.gc.core.Los_Obj]?      = ref_read(cursor)
+    var large:  Ref[internal.gc.core.Los_Obj]?      = cursor.__value
     while large != nil {
         if remaining == 0 {
             break
@@ -536,15 +535,15 @@ func sweep_some(heap: Ref[internal.gc.core.Heap], count: uint) -> bool {
         if __atomic_load_relaxed(ref obj.marked) == epoch {
             cursor = ref obj.next
         } else {
-            ref_write(cursor, obj.next)
+            cursor.__value = obj.next
             internal.gc.los.release(heap, obj)
         }
         remaining -= 1
         did_work = true
-        large = ref_read(cursor)
+        large = cursor.__value
     }
     heap.los_cursor = cursor
-    if heap.sweep_cursor == nil and ref_read(cursor) == nil {
+    if heap.sweep_cursor == nil and cursor.__value == nil {
         __atomic_store(ref heap.phase, cast[u32](internal.gc.core.Phase.idle))
     }
     return did_work

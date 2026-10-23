@@ -51,7 +51,7 @@ if mapped != nil {
         let first: uint = cast[uint] __gc_byte_diff(first_cursor.get(), base)
         let stale: Ref[byte] = __gc_byte_offset(first_cursor.get(),
                                                  2 * line_bytes)
-        ref_write(stale, 42)
+        stale.__value = 42
         bump.cursor = bump.limit
         assert sys.gc.core.bump_room(ref bump) == 0
         let exhausted: bool = sys.gc.core.bump_next_hole(ref bump, 16)
@@ -63,7 +63,7 @@ if mapped != nil {
         let reused: Ref[byte]? = bump.cursor
         if reused != nil {
             assert __gc_byte_diff(reused.get(), base) == cast[int](first + 2 * line_bytes)
-            assert ref_read(reused.get()) == 0
+            assert reused.get().__value == 0
         } else {
             assert false
         }

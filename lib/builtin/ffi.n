@@ -61,7 +61,7 @@ public func foreign_text(pointer: Foreign[i8]?) -> string? {
     let base: Ref[byte] = unsafe_cast[Ref[byte]] pointer
     var length: uint = 0
     while true {
-        let value: byte = __gc_byte_offset(base, length)
+        let value: byte = __gc_byte_offset(base, length).__value
         if value == 0 {
             break
         }
@@ -70,7 +70,7 @@ public func foreign_text(pointer: Foreign[i8]?) -> string? {
     var bytes: Array[u8] = new[Array[u8]](length)
     var position: uint = 0
     while position < length {
-        let value: byte = __gc_byte_offset(base, position)
+        let value: byte = __gc_byte_offset(base, position).__value
         bytes[cast[int]position] = cast[u8]value
         position += 1
     }
@@ -86,12 +86,12 @@ func __ffi_fixup(pointer: Foreign['T]?) -> string? where 'T : Fixup {
         return nil
     }
     let target: Ref['T] = unsafe_cast[Ref['T]] pointer
-    var value: 'T = target
+    var value: 'T = target.__value
     let problem: string? = ffi_run_fixup(value)
     if problem != nil {
         return problem
     }
-    ref_write(target, value)
+    target.__value = value
     ffi_fixed.append(address)
     return nil
 }

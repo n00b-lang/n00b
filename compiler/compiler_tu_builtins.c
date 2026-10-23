@@ -5,18 +5,6 @@
 #include "ir/summary.h"
 #include "ir/typelang.h"
 
-bool
-n00bb_builtin_reference_function(parse_sym_entry_t *symbol)
-{
-    return symbol && symbol->kind == PARSE_SYM_FUNCTION
-        && symbol->scope && !symbol->scope->parent && symbol->scope->ns
-        && core_string_eq(symbol->scope->ns->ns_name,
-                          CORE_STRING_STATIC("builtin"))
-        && (core_string_eq(symbol->name, CORE_STRING_STATIC("ref_read"))
-            || core_string_eq(symbol->name,
-                              CORE_STRING_STATIC("ref_write")));
-}
-
 const n00bb_axiom_t *
 n00bb_axiom_of_symbol(parse_sym_entry_t *symbol)
 {
@@ -983,24 +971,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
                              nullptr, nullptr, 0) : nullptr;
     th_type *contract = signature
         ? th_env_signature_contract(types, signature, nil_type) : nullptr;
-    th_type *referent = th_var(types);
-    th_type *reference = referent ? th_ind(types, 0, referent) : nullptr;
-    th_param read_parameter = {.mode = TH_IN, .type = reference};
-    th_type *read_signature = reference
-        ? th_func_with_error(types, referent, nil_type, &read_parameter, 1,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *read_contract = read_signature
-        ? th_env_signature_contract(types, read_signature, nil_type) : nullptr;
-    th_param write_parameters[] = {
-        {.mode = TH_IN, .type = reference},
-        {.mode = TH_IN, .type = referent},
-    };
-    th_type *write_signature = reference
-        ? th_func_with_error(types, nil_type, nil_type, write_parameters, 2,
-                             nullptr, nullptr, 0) : nullptr;
-    th_type *write_contract = write_signature
-        ? th_env_signature_contract(types, write_signature, nil_type)
-        : nullptr;
     th_type *option_is_nil_item = th_var(types);
     th_type *option_is_nil_type = option_is_nil_item
         ? th_option(types, option_is_nil_item) : nullptr;
@@ -1073,8 +1043,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     th_type *init_contract = init_signature
         ? th_env_signature_contract(types, init_signature, nil_type)
         : nullptr;
-    if (!signature || !contract || !read_signature || !read_contract
-        || !write_signature || !write_contract || !option_is_nil_signature
+    if (!signature || !contract || !option_is_nil_signature
         || !option_get_signature || !option_get_or_else_signature
         || !option_is_nil_contract || !option_get_contract
         || !option_get_or_else_contract
@@ -1108,12 +1077,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     }
     parse_sym_entry_t *symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("has_type"),
-        PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *read_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("ref_read"),
-        PARSE_SYM_FUNCTION, nullptr);
-    parse_sym_entry_t *write_symbol = parse_symtab_add(symtab,
-        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("ref_write"),
         PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *option_is_nil_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("builtin"),
@@ -1182,7 +1145,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     if (saved)
         parse_symtab_enter_scope(symtab, CORE_STRING_STATIC("builtin"),
                                  saved);
-    if (!symbol || !read_symbol || !write_symbol || !option_is_nil_symbol
+    if (!symbol || !option_is_nil_symbol
         || !option_get_symbol || !option_get_or_else_symbol
         || !array_read_symbol || !array_write_symbol
         || !init_symbol || !init_contract
@@ -1194,12 +1157,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     symbol->type = signature;
     symbol->error_type = nil_type;
     symbol->callable_contract = contract;
-    read_symbol->type = read_signature;
-    read_symbol->error_type = nil_type;
-    read_symbol->callable_contract = read_contract;
-    write_symbol->type = write_signature;
-    write_symbol->error_type = nil_type;
-    write_symbol->callable_contract = write_contract;
     option_is_nil_symbol->type = option_is_nil_signature;
     option_is_nil_symbol->error_type = nil_type;
     option_is_nil_symbol->callable_contract = option_is_nil_contract;
@@ -1227,8 +1184,7 @@ register_builtin_symbols(parse_annot_result_t *annotations,
     parse_sym_set_binding(init_symbol, CORE_STRING_STATIC("n00bb.init"),
                           init_symbol);
     return register_builtin_comparison_symbols(symtab, state, types)
-        && symbol->callable_contract && read_symbol->callable_contract
-        && write_symbol->callable_contract
+        && symbol->callable_contract
         && option_is_nil_symbol->callable_contract
         && option_get_symbol->callable_contract
         && option_get_or_else_symbol->callable_contract
@@ -1615,6 +1571,21 @@ register_builtin_traits(th_env *environment, th_ctx *types,
         || !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Finalize"),
             CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, finalizer_contract))
         return false;
+    th_param initializer_receiver = {.mode = TH_INOUT, .type = th_var(types)};
+    th_param initializer_rest = {.mode = TH_IN, .type = th_var(types)};
+    th_type *initializer_signature = th_func_with_error(types,
+        th_name(types, CORE_STRING_STATIC("nil")),
+        th_name(types, CORE_STRING_STATIC("nil")), &initializer_receiver, 1,
+        &initializer_rest, nullptr, 0);
+    th_member initializer_method = {
+        .name = CORE_STRING_STATIC("__init"), .type = initializer_signature,
+    };
+    th_type *initializer_contract = initializer_signature
+        ? th_record(types, &initializer_method, 1) : nullptr;
+    if (!initializer_contract
+        || !th_env_register_trait_contracts(environment, CORE_STRING_STATIC("Init"),
+            CORE_STRING_STATIC("builtins"), CORE_STRING_STATIC("default"), TH_ENV_PUBLIC, initializer_contract))
+        return false;
     if (!register_builtin_binary_operators(environment, types, arena))
         return false;
     if (!register_builtin_unary_operators(environment, types)) return false;
@@ -1878,7 +1849,6 @@ n00bb_builtin_function(parse_sym_entry_t *symbol)
             || n00bb_builtin_option_function(symbol)
             || n00bb_builtin_array_read_function(symbol)
             || n00bb_builtin_array_write_function(symbol)
-            || n00bb_builtin_reference_function(symbol)
             || n00bb_builtin_byte_offset_function(symbol)
             || n00bb_builtin_byte_diff_function(symbol)
             || n00bb_builtin_unsafe_arithmetic(symbol)

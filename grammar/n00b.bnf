@@ -569,7 +569,7 @@
 <unary-expr> @emit("unsafe_cast", $4) @infer("$2") @nospace($1) @nospace($2) @nospace($3) ::= %"unsafe_cast" %"[" <type-spec> %"]" <unary-expr>
 <unary-expr> @emit("identity", $0) ::= <postfix-expr>
 
-<postfix-expr> @emit("module_member") @infer("field_return_auto_deref($0)") @nospace ::= <postfix-expr> %"." %IDENTIFIER
+<postfix-expr> @emit("module_member") @infer("referent_member($0, __value)") @nospace ::= <postfix-expr> %"." %IDENTIFIER
 <postfix-expr> @emit("call") @infer("element_of($0, __read, __write)") @nospace ::= <postfix-expr> %"[" <index-contents> %"]"
 <postfix-expr> @emit("call") @infer("slice_of($0, __slice, __write_slice)") @nospace ::= <postfix-expr> %"[" <slice-contents> %"]"
 <postfix-expr> @operator("unwrap_result") @infer("unwrap_result($0)") @nospace ::= <postfix-expr> %"!"

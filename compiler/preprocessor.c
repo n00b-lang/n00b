@@ -1816,7 +1816,8 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
         S("tuple-or-paren"), S("simple-lit"), S("bool-lit"), S("int-lit"),
         S("float-lit"), S("string-lit"), S("call-args"),
         S("positional-args"), S("equality-op"), S("compare-op"),
-        S("shift-op"), S("add-op"), S("mul-op"),
+        S("shift-op"), S("add-op"), S("mul-op"), S("or-op"), S("and-op"),
+        S("not-op"), S("nil-keyword"),
     };
 #undef S
     if (!node || core_tree_is_leaf(node)) return true;

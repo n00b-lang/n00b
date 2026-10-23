@@ -1192,8 +1192,14 @@ operand_unifies(th_ctx *types, th_type *parameter, th_type *operand)
 {
     if (th_unify_probe(types, parameter, operand))
         return th_unify_in_place(types, parameter, operand) != nullptr;
-    if (n00bb_value_coerces(types, operand, parameter)) return true;
-    th_type *promoted = n00bb_dereferenced_type(types, operand);
+    return n00bb_value_coerces(types, operand, parameter);
+}
+
+static bool
+index_receiver_unifies(th_ctx *types, th_type *parameter, th_type *receiver)
+{
+    if (operand_unifies(types, parameter, receiver)) return true;
+    th_type *promoted = n00bb_dereferenced_type(types, receiver);
     return promoted && th_unify_in_place(types, parameter, promoted);
 }
 
@@ -1219,7 +1225,7 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
     th_type *receiver = core_tree_num_children(site->node)
         ? parse_tree_type(core_tree_child(site->node, 0)) : nullptr;
     if (self && receiver)
-        (void)operand_unifies(state->types, self->type, receiver);
+        (void)index_receiver_unifies(state->types, self->type, receiver);
     th_type *expected = signature ? th_func_ret(signature) : nullptr;
     th_type *actual = parse_tree_type(site->node);
     if (actual && expected

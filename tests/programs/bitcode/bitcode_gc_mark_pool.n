@@ -41,7 +41,7 @@ require sys.gc.mark.mark_quiescent(heap)
 let marker: Ref[sys.gc.core.Marker] = mapped_marker()
 let header: Ref[sys.gc.core.Object_Header] = mapped_header()
 __gc_prefetch(header)
-sys.gc.mark.marker_init(marker, heap, false)
+sys.gc.mark.marker_init(marker.__value, heap, false)
 sys.gc.mark.drain_to_termination(marker)
 require sys.gc.mark.mark_quiescent(heap)
 var pushed: uint = 0

@@ -34,8 +34,8 @@ func sparse_lookup(index: Array[u32], index_len: u32, cp: char) -> u32? {
 }
 
 func str_at(data: Ref[Array[u8]], i: u32) -> string {
-    let start: u32 = u32_at(data, i)
-    let end: u32 = u32_at(data, i + 1)
+    let start: u32 = u32_at(data.__value, i)
+    let end: u32 = u32_at(data.__value, i + 1)
     return from_raw(data, cast[int] (end - start), at = cast[uint] start,
                     copy = false, encoding = Str_Encoding.utf8)
 }

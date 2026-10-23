@@ -248,8 +248,8 @@ func relocate_thread_storage(index: u32, row: Ref[Storage_Record]) {
             require target != nil
             let slot: Ref[byte] = __gc_byte_offset(base.get(),
                 cast[int]fixup.write_byte_offset)
-            ref_write(unsafe_cast[Ref[uint]] slot,
-                __abi_ref_address(target.get()) + cast[uint]fixup.addend_bytes)
+            (unsafe_cast[Ref[uint]] slot).__value =
+                __abi_ref_address(target.get()) + cast[uint]fixup.addend_bytes
         }
         ordinal += 1
     }
@@ -289,7 +289,7 @@ func __box_value_address(box: Ref[Box_Record], size_bits: u64) -> Ref[byte] {
         return payload
     }
     let slot: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] payload
-    let stored: Ref[byte]? = slot
+    let stored: Ref[byte]? = slot.__value
     require stored != nil
     return stored.get()
 }
@@ -297,39 +297,36 @@ func __box_value_address(box: Ref[Box_Record], size_bits: u64) -> Ref[byte] {
 func __tag_unit(unit: Ref[byte], width_bits: u32) -> u64 {
     if width_bits == 8 {
         let word: Ref[u8] = unsafe_cast[Ref[u8]] unit
-        let value: u8 = word
-        return cast[u64] value
+        return cast[u64] word.__value
     }
     if width_bits == 16 {
         let word: Ref[u16] = unsafe_cast[Ref[u16]] unit
-        let value: u16 = word
-        return cast[u64] value
+        return cast[u64] word.__value
     }
     if width_bits == 32 {
         let word: Ref[u32] = unsafe_cast[Ref[u32]] unit
-        let value: u32 = word
-        return cast[u64] value
+        return cast[u64] word.__value
     }
     require width_bits == 64
     let word: Ref[u64] = unsafe_cast[Ref[u64]] unit
-    return word
+    return word.__value
 }
 
 func __set_tag_unit(unit: Ref[byte], width_bits: u32, bits: u64) {
     if width_bits == 8 {
-        ref_write(unsafe_cast[Ref[u8]] unit, cast[u8] bits)
+        (unsafe_cast[Ref[u8]] unit).__value = cast[u8] bits
         return
     }
     if width_bits == 16 {
-        ref_write(unsafe_cast[Ref[u16]] unit, cast[u16] bits)
+        (unsafe_cast[Ref[u16]] unit).__value = cast[u16] bits
         return
     }
     if width_bits == 32 {
-        ref_write(unsafe_cast[Ref[u32]] unit, cast[u32] bits)
+        (unsafe_cast[Ref[u32]] unit).__value = cast[u32] bits
         return
     }
     require width_bits == 64
-    ref_write(unsafe_cast[Ref[u64]] unit, bits)
+    (unsafe_cast[Ref[u64]] unit).__value = bits
 }
 
 func __type_tag_extractor(type_index: u32) -> Ref[Tag_Extractor_Record] {

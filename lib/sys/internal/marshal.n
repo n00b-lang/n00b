@@ -202,7 +202,7 @@ func add_edge(graph: Ref[Graph], source: u32, slot: Ref[byte], target: u32,
 
 func u32_at(address: Ref[byte]) -> u32 {
     let word: Ref[u32] = unsafe_cast[Ref[u32]] address
-    return word
+    return word.__value
 }
 
 func add_slot(graph: Ref[Graph], source: u32, address: Ref[byte],
@@ -910,7 +910,7 @@ func write_graph(graph: Ref[Graph]) {
 func write_c_string(text: Ref[byte]) {
     var length: uint = 0
     while true {
-        let value: byte = __gc_byte_offset(text, length)
+        let value: byte = __gc_byte_offset(text, length).__value
         if value == 0 {
             write_word(cast[u64]length, 8)
             write_block(text, length)

@@ -27,8 +27,8 @@ if created != nil {
                 heap, mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
             if first != nil {
                 let payload: Ref[byte] = first.get()
-                assert ref_read(payload) == cast[byte](0)
-                ref_write(payload, cast[byte](0xa5))
+                assert payload.__value == cast[byte](0)
+                payload.__value = cast[byte](0xa5)
                 let object: Ref[sys.gc.core.Los_Obj] = sys.gc.core.los_of(
                     sys.gc.core.header_of(payload))
                 assert object.hdr.type_index == type_index
@@ -74,7 +74,7 @@ if created != nil {
                     heap, mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
                 if reused != nil {
                     assert reused.get() == payload
-                    assert ref_read(reused.get()) == cast[byte](0)
+                    assert reused.get().__value == cast[byte](0)
                     assert heap.los_count == 1
                     assert heap.los_cache_bytes == 0
                     heap.los = nil

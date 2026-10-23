@@ -232,6 +232,20 @@ field_receiver_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
 }
 
 static th_type *
+referent_member_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                     parse_tree_t *receiver)
+{
+    th_type *type = receiver ? parse_tree_type(receiver) : nullptr;
+    if (!type || th_kind_of(th_resolve(type)) == TH_VAR) {
+        parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
+        if (symbol && symbol->type) type = symbol->type;
+    }
+    type = type ? th_resolve(type) : nullptr;
+    return type && th_kind_of(type) == TH_INDIRECTION
+        ? th_ind_referent(type) : nullptr;
+}
+
+static th_type *
 resolved_member_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
                      n00bb_tu_state_t *state, parse_tree_t *node,
                      parse_sym_entry_t *member, th_type *receiver_type)
@@ -267,6 +281,22 @@ resolve_inferred_field_references(core_link_unit_t *link,
                 continue;
             if (variant_assignment_arm(analysis->grammar, unit, node))
                 continue;
+            if (referent_access_node(analysis->grammar, node)) {
+                th_type *referent = referent_member_type(analysis->grammar,
+                    unit, core_tree_child(node, 0));
+                if (!referent) {
+                    core_diagnostics_report_at(
+                        core_translation_unit_diagnostics(unit), unit,
+                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0020"),
+                        CORE_STRING_STATIC(
+                            "'__value' requires a Ref or Foreign receiver"),
+                        link_source_location(node));
+                    return false;
+                }
+                if (!bind_resolved_field_type(unit, state, node, referent))
+                    return false;
+                continue;
+            }
             parse_node_resolution_t existing = parse_tree_resolution(node);
             bool resolved_to_receiver = existing.kind
                     == PARSE_NODE_RESOLUTION_SYMBOL
@@ -444,6 +474,70 @@ resolve_inferred_field_references(core_link_unit_t *link,
     }
     return true;
 }
+
+static void
+report_reserved_declaration(core_translation_unit_t *unit,
+                            parse_sym_entry_t *symbol, core_string_t hint)
+{
+    core_buffer_t message = {0};
+    if (n00bb_builtin_member(symbol->name))
+        core_buffer_printf(&message,
+            "'%.*s' is the built-in dereference member and cannot be declared",
+            (int)symbol->name.u8_bytes, symbol->name.data);
+    else if (hint.data)
+        core_buffer_printf(&message,
+            "names starting with '__' are reserved for the language; did you mean the '%.*s' hook?",
+            (int)hint.u8_bytes, hint.data);
+    else
+        core_buffer_printf(&message,
+            "names starting with '__' are reserved for the language; '%.*s' is not a language hook",
+            (int)symbol->name.u8_bytes, symbol->name.data);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0071"),
+        core_buffer_string(&message), link_source_location(symbol->decl_node));
+    core_buffer_release(&message);
+}
+
+static bool
+spells_name(parse_tree_t *node, core_string_t name)
+{
+    if (!node) return false;
+    if (core_tree_is_leaf(node))
+        return core_string_eq(first_token_text(node), name);
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        if (spells_name(core_tree_child(node, i), name)) return true;
+    return false;
+}
+
+bool
+diagnose_reserved_declarations(core_translation_unit_t *unit,
+                               const th_env *environment)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || state->interface_module || !state->annotations
+        || !state->annotations->symtab) return true;
+    bool system = n00bb_system_module(unit->module.identifier)
+        || n00bb_generated_source(core_source_file_path(&unit->source));
+    bool clean = true;
+    for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+         scope; scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            if (!symbol->decl_node || symbol->owner_unit != unit
+                || !n00bb_reserved_name(symbol->name)
+                || !spells_name(symbol->decl_node, symbol->name)) continue;
+            bool member = n00bb_builtin_member(symbol->name);
+            if (!member && (system || (symbol->kind == PARSE_SYM_FUNCTION
+                    && n00bb_language_hook(environment, symbol->name))))
+                continue;
+            report_reserved_declaration(unit, symbol, member
+                ? (core_string_t){0}
+                : n00bb_nearest_language_hook(environment, symbol->name));
+            clean = false;
+        }
+    return clean;
+}
+
 core_list_decl(th_type_ptr_t);
 bool
 diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis)
@@ -462,7 +556,8 @@ diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis)
                                        CORE_STRING_STATIC("."))
                 || n00bb_is_trait_dispatch_reference(analysis->grammar, unit, node)
                 || variant_payload_arm(analysis->grammar, unit, node)
-                || variant_assignment_arm(analysis->grammar, unit, node))
+                || variant_assignment_arm(analysis->grammar, unit, node)
+                || referent_access_node(analysis->grammar, node))
                 continue;
             parse_tree_t *receiver = core_tree_child(node, 0);
             th_type *receiver_type = receiver ? parse_tree_type(receiver)
@@ -1092,7 +1187,6 @@ overload_argument_converts(n00bb_tu_state_t *state, parse_tree_t *argument,
 {
     th_type *element = nullptr;
     return n00bb_value_coerces(state->types, type, parameter)
-        || n00bb_dereferences_to(state->types, type, parameter)
         || (n00bb_option_type_element(parameter, &element)
             && (th_is_nil(type)
                 || th_unify_probe(state->types, type, element)))
@@ -3841,8 +3935,7 @@ register_link_declarations(core_link_unit_t *link, parse_grammar_t *grammar,
     }
 
     static const core_string_t builtin_names[] = {
-        CORE_STRING_STATIC("has_type"), CORE_STRING_STATIC("ref_read"),
-        CORE_STRING_STATIC("ref_write"),
+        CORE_STRING_STATIC("has_type"),
         CORE_STRING_STATIC("__gc_byte_offset"),
         CORE_STRING_STATIC("__gc_byte_diff"),
         CORE_STRING_STATIC("__count_leading_zeros"),

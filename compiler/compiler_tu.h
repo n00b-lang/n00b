@@ -19,6 +19,7 @@
 #include "th/environment.h"
 #include "builtin_types.h"
 #include "compiler_module_literal.h"
+#include "compiler_system.h"
 #include "signature_typevars.h"
 #include "preprocessor.h"
 
@@ -128,11 +129,9 @@ bool register_user_litmod(void *context, core_translation_unit_t *unit,
                           core_string_t modifier, core_string_t kind);
 th_type *n00bb_atomic_element_type(th_type *type);
 bool n00bb_option_type_element(th_type *type, th_type **element);
-bool n00bb_dereferences_to(th_ctx *types, th_type *actual, th_type *wanted);
-th_type *n00bb_dereference_target(th_ctx *types, th_type *actual,
-                                  th_type *wanted);
-th_type *n00bb_operand_value_type(th_type *operand, th_type *other,
-                                  bool comparison);
+void n00bb_append_dereference_hint(core_buffer_t *message, th_ctx *types,
+                                   th_type *value, th_type *wanted);
+th_type *n00bb_operand_value_type(th_type *operand, bool comparison);
 enum { N00BB_MAX_SIZED_BITS = sizeof(ir_uint_t) * CHAR_BIT };
 typedef struct {
     core_string_t spelling;
@@ -168,6 +167,8 @@ bool unary_operator_dispatch_for_node(parse_grammar_t *grammar,
                                       core_string_t *trait,
                                       core_string_t *method);
 parse_tree_t *member_access_node(parse_grammar_t *grammar, parse_tree_t *node);
+parse_tree_t *referent_access_node(parse_grammar_t *grammar,
+                                   parse_tree_t *node);
 bool index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                              core_string_t *trait, core_string_t *method);
 parse_tree_t *n00bb_index_stored_value(parse_grammar_t *grammar,
@@ -265,7 +266,6 @@ bool n00bb_integer_range_fits_type(th_type *type, ir_interval_t range);
 bool n00bb_parse_switch_integer(core_string_t text, ir_lit_t *literal);
 parse_tree_t *n00bb_simple_lvalue(parse_tree_t *node);
 parse_sym_entry_t *simple_expression_symbol(parse_tree_t *node);
-bool n00bb_builtin_reference_function(parse_sym_entry_t *symbol);
 ir_summary_t *n00bb_native_axiom(ir_summaries_t *summaries,
                                  const ir_func_t *function);
 bool n00bb_native_calls_n00b(const ir_func_t *function);

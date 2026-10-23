@@ -43,7 +43,7 @@ func item_at(root: bake.Bake_Root, index: uint) -> bake.Bake_Item_T {
     let root_record: Ref[bake.Bake_Root_T] = unsafe_cast[Ref[bake.Bake_Root_T]] root.raw
     let base: Ref[byte] = unsafe_cast[Ref[byte]] root_record.items.data
     let item: Ref[bake.Bake_Item_T] = unsafe_cast[Ref[bake.Bake_Item_T]] __gc_byte_offset(base, index * 24)
-    return item
+    return item.__value
 }
 
 func build_index(root: bake.Bake_Root) -> Dict[bake.Bake_Item_T, i32] {

@@ -94,6 +94,7 @@ apply_condition(ir_ranges_t *r, const ir_value_t *value,
                 const ir_value_t *condition, bool sense,
                 ir_interval_t *range)
 {
+    if (!ir_value_stable(value)) return;
     const ir_instr_t *test = ir_condition_test(condition, &sense);
     if (!test || !ir_op_is_comparison(test->op) || test->n_operands != 2) return;
     const ir_value_t *left  = ir_value_operand(test, 0);
@@ -164,6 +165,7 @@ static void
 refine_by_traps(ir_ranges_t *r, const ir_value_t *value, const ir_instr_t *at,
                 ir_interval_t *range)
 {
+    if (!ir_value_stable(value)) return;
     core_list_t(trap_use_t) *uses = core_dict_get(&r->trap_uses,
         (void *)ir_value_uncopied(value), nullptr);
     for (size_t i = 0; uses && at && i < uses->len; i++) {

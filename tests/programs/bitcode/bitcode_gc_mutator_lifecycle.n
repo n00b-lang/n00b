@@ -83,7 +83,7 @@ if created != nil {
                 } else { require false }
                 let buffered: Ref[byte] = unsafe_cast[Ref[byte]] heap
                 survivor.write_buffer_epoch = heap.mark_epoch
-                ref_write(ref survivor.write_buffer [0], buffered)
+                (ref survivor.write_buffer [0]).__value = buffered
                 survivor.write_buffer_count = 1
                 survivor.objects_allocated = 3
                 survivor.bytes_allocated = 64

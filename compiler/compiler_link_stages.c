@@ -259,8 +259,10 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         th_env_free(environment);
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
-    for (size_t i = 0; i < units->len; i++)
+    for (size_t i = 0; i < units->len; i++) {
         (void)n00bb_check_deferred_conversions(units->data[i]);
+        (void)diagnose_reserved_declarations(units->data[i], environment);
+    }
     for (size_t i = 0; i < units->len; i++) {
         if (core_diagnostics_failed(core_translation_unit_diagnostics(
                 units->data[i]))) {

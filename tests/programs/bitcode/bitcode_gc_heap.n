@@ -42,7 +42,7 @@ if row != nil {
         sys.abi.alignment_bytes(row.get()))
     if mapping != nil {
         let config: Ref[sys.gc.core.Config] = unsafe_cast[Ref[sys.gc.core.Config]] mapping.get()
-        sys.gc.heap.config_default(config)
+        sys.gc.heap.config_default(config.__value)
         config.initial_heap_bytes = 1
         config.growth_factor = 0.5
         config.max_heap_bytes = sys.gc.core.block_bytes * 2
@@ -68,13 +68,13 @@ require sys.gc.heap.grow_array(ref slots, ref capacity,
                                   item_bytes, item_alignment, 0, 1)
 if slots != nil {
     let first: Ref[u64] = unsafe_cast[Ref[u64]] slots.get()
-    ref_write(first, retained)
+    first.__value = retained
     require sys.gc.heap.grow_array(ref slots, ref capacity,
                                       item_bytes, item_alignment,
                                       1, capacity + 1)
     if slots != nil {
         let grown: Ref[u64] = unsafe_cast[Ref[u64]] slots.get()
-        assert ref_read(grown) == retained
+        assert grown.__value == retained
         sys.memory.unmap(grown, capacity * item_bytes)
     } else { require false }
 } else { require false }

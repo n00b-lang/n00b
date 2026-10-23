@@ -51,6 +51,7 @@
                | %"method_return"
                | %"field_return"
                | %"field_return_auto_deref"
+               | %"referent_member"
 
 <compare> ::= %"compare" %"(" <child-ref> %"," <child-ref> %")"
             | %"compare" %"(" <child-ref> %"," <child-ref> %"," %IDENTIFIER %"," %IDENTIFIER %")"
