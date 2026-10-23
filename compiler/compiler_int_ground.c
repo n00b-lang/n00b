@@ -243,7 +243,9 @@ collect_guards(parse_tree_t *condition,
     parse_tree_t *left = core_tree_child(condition, 0);
     parse_tree_t *middle = core_tree_child(condition, 1);
     parse_tree_t *right = core_tree_child(condition, 2);
-    if (parse_tree_leaf_is(middle, CORE_STRING_STATIC("and"))) {
+    if (core_string_eq(n00bb_canonical_logical_spelling(
+                           first_token_text(middle)),
+                       CORE_STRING_STATIC("and"))) {
         collect_guards(left, found);
         collect_guards(right, found);
         return;

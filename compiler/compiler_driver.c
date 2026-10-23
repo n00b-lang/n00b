@@ -1107,7 +1107,15 @@ n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
                                  parse_token_info_t *token)
 {
     (void)opaque;
-    (void)token;
+    if (core_string_eq(predicate,
+                       CORE_STRING_STATIC("n00bb_penalize_nil_identifier"))) {
+        core_option_t(core_string_t) value = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        if (!core_option_is_set(value)) return false;
+        core_string_t spelling = core_option_get(value);
+        return core_string_eq(spelling, CORE_STRING_STATIC("null"))
+            || core_string_eq(spelling, CORE_STRING_STATIC("None"));
+    }
     return core_string_eq(predicate,
         CORE_STRING_STATIC("n00bb_prefer_type_application"));
 }
@@ -4867,6 +4875,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     for (int32_t i = 0; i < define_count; i++)
         definitions[i] = parse_cmdr_flag_str_at(
             args, CORE_STRING_STATIC("--define"), i);
+    int32_t syntax_preference_count = parse_cmdr_flag_value_count(
+        args, CORE_STRING_STATIC("--syntax-preference"));
+    core_string_t *syntax_preferences = syntax_preference_count
+        ? core_alloc_array(core_string_t, (size_t)syntax_preference_count)
+        : nullptr;
+    for (int32_t i = 0; i < syntax_preference_count; i++)
+        syntax_preferences[i] = parse_cmdr_flag_str_at(
+            args, CORE_STRING_STATIC("--syntax-preference"), i);
     n00bb_ffi_t *ffi = n00bb_ffi_new();
     int32_t contract_dir_count = parse_cmdr_flag_value_count(
         args, CORE_STRING_STATIC("--contract-dir"));
@@ -4883,6 +4899,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     n00bb_preprocessor_options_t preprocessor_options = {
         .definitions = definitions,
         .definition_count = (size_t)define_count,
+        .syntax_preferences = syntax_preferences,
+        .syntax_preference_count = (size_t)syntax_preference_count,
+        .disable_syntax_warnings = parse_cmdr_flag_present(
+            args, CORE_STRING_STATIC("--no-syntax-warnings")),
         .release_mode = parse_cmdr_flag_present(
             args, CORE_STRING_STATIC("--release")),
         .build_time = build_time,
@@ -5289,6 +5309,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     core_work_queue_free(queue);
     n00bb_ffi_free(ffi);
     core_free(definitions);
+    core_free(syntax_preferences);
     parse_cmdr_result_free(args);
     parse_cmdr_free(cli);
     return located ? 0 : 1;

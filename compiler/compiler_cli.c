@@ -54,6 +54,10 @@ static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
          "report warnings only for modules compiled in this build"),
     FLAG("--package-warnings", NO_ALIAS, BOOL, false,
          "report warnings from imported packages"),
+    FLAG("--syntax-preference", NO_ALIAS, WORD, true,
+         "set preferred syntax as CLASS=SPELLING"),
+    FLAG("--no-syntax-warnings", NO_ALIAS, BOOL, false,
+         "disable syntax spelling warnings"),
     END_FLAGS,
 };
 
@@ -178,6 +182,7 @@ n00bb_make_cli(void)
         CORE_STRING_STATIC("--contract-dir"),
         CORE_STRING_STATIC("--link-object"),
         CORE_STRING_STATIC("--native-root"),
+        CORE_STRING_STATIC("--syntax-preference"),
     };
     for (size_t i = 0; i < sizeof(repeatable) / sizeof(repeatable[0]); i++) {
         for (const parse_cmdr_flag_t *flag = GLOBAL_FLAGS; flag->name.data;

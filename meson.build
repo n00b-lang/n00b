@@ -129,6 +129,17 @@ n00bb_exe = executable(
 )
 
 test(
+    'syntax-aliases', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'syntax_aliases.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'syntax_aliases.n00b',
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'syntax_preferences.n00b'],
+    timeout: 120,
+)
+
+test(
     'writ-coexistence',
     executable('writ-coexistence', 'tests/writ_coexistence.c', dependencies: [lantern, writ]),
 )

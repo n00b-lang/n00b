@@ -93,7 +93,8 @@
 
 <elif-chain> ::= (<eos>* <elif-clause>)* (<eos>* <else-clause>)?
 
-<elif-clause> @branch($1, $2) ::= %"elif" <expression> <body>
+<elif-clause> @branch($1, $2) ::= <elif-keyword> <expression> <body>
+<elif-keyword> ::= %"elif" | %"elseif" | %"else" %"if"
 <else-clause> ::= %"else" <body>
 
 <if-value-expr> @scope("if") @branch($1, $2, $3) @infer("$2 unify $3") ::=
@@ -109,7 +110,7 @@
 <value-elif-chain> @infer("$1 unify $2") ::=
        <eos>* <value-elif-clause> <value-elif-chain>
 
-<value-elif-clause> @branch($1, $2) @infer("$2") ::= %"elif" <expression> <value-body>
+<value-elif-clause> @branch($1, $2) @infer("$2") ::= <elif-keyword> <expression> <value-body>
 <value-else-clause> @infer("$1") ::= %"else" <value-body>
 
 <for-stmt> @scope("for") @loop($3, $4) @infer("`t unify element_of(method_return(method_return($3, iter), next))") ::=
@@ -134,7 +135,7 @@
 <while-stmt> @scope("while") @loop($1, $2) ::= %"while" <expression> <body>
 
 <member-chain> @nospace ::= <member-chain> %"." %IDENTIFIER
-<member-chain> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
+<member-chain> @varref($0) @infer("lookup($0)") @disambig(n00bb_penalize_nil_identifier, 100) ::= %IDENTIFIER
 
 <when-stmt> ::= %"when" <expression> <body> <else-when-clause>* <ctime-else>?
 <else-when-clause> ::= %"else" %"when" <expression> <body>
@@ -331,7 +332,7 @@
     <litmod-prelude> %IDENTIFIER <litmod-aliases>? <func-type-signature> <body>
 
 <litmod-prelude> @nospace($1) @nospace($2) @nospace($3) ::= %"litmod" %"<" <litmod-kind> %">"
-<litmod-kind> ::= %IDENTIFIER | <record-keyword> | %"nil"
+<litmod-kind> ::= %IDENTIFIER | <record-keyword> | <nil-keyword>
 <litmod-aliases> ::= %"," %IDENTIFIER (%"," %IDENTIFIER)*
 
 <member-visibility> @visibility("public") ::= %"public"
@@ -340,10 +341,11 @@
 <func-visibility> @visibility("public") ::= %"public"
 <func-visibility> @visibility("private") ::= %"private"
 
-<func-prelude> ::= %"func"
-<func-prelude> ::= <func-visibility> %"func"
-<func-prelude> ::= <func-inline> %"func"
-<func-prelude> ::= <func-visibility> <func-inline> %"func"
+<function-keyword> ::= %"func" | %"fn" | %"function"
+<func-prelude> ::= <function-keyword>
+<func-prelude> ::= <func-visibility> <function-keyword>
+<func-prelude> ::= <func-inline> <function-keyword>
+<func-prelude> ::= <func-visibility> <func-inline> <function-keyword>
 <func-inline> ::= %"inline"
 <func-type-signature> @newline($1) ::=
     <param-decl> <function-result>? <where-clause>?
@@ -464,7 +466,7 @@
                          | <flagset-unary>
 <flagset-unary> ::= %"~" <flagset-unary>
                   | <flagset-primary>
-<flagset-primary> ::= %"nil"
+<flagset-primary> ::= <nil-keyword>
                     | <flagset-name>
                     | %"(" <flagset-value> %")"
 <flagset-name> @varref($0) ::= %IDENTIFIER
@@ -487,13 +489,16 @@
 
 <expression> @emit("identity", $0) ::= <or-expr>
 
-<or-expr> @branch($0, $2) @infer("bool") ::= <or-expr> %"or" <or-rhs>
+<or-expr> @branch($0, $2) @infer("bool") ::= <or-expr> <or-op> <or-rhs>
 <or-expr> @emit("identity", $0) ::= <and-expr>
 <or-rhs> @emit("identity", $0) ::= <and-expr>
 
-<and-expr> @branch($0, $2) @infer("bool") ::= <and-expr> %"and" <and-rhs>
+<and-expr> @branch($0, $2) @infer("bool") ::= <and-expr> <and-op> <and-rhs>
 <and-expr> @emit("identity", $0) ::= <equality-expr>
 <and-rhs> @emit("identity", $0) ::= <equality-expr>
+
+<or-op> ::= %"or" | %"||"
+<and-op> ::= %"and" | %"&&"
 
 <equality-expr> @emit("binary", $0, $2) @infer("bool") ::=
     <compare-expr> <equality-op> <compare-expr>
@@ -553,7 +558,8 @@
 <left-shift-assign-op> ::= %"<<="
 <right-shift-assign-op> ::= %">>="
 
-<unary-expr> @emit("bool_not", $1) @infer("bool unify method_return($1, __not)") @nospace ::= %"!" <unary-expr>
+<unary-expr> @emit("bool_not", $1) @infer("bool unify method_return($1, __not)") @nospace ::= <not-op> <unary-expr>
+<not-op> ::= %"!" | %"not"
 <unary-expr> @emit("complement", $1) @infer("$1") @nospace ::= %"~" <unary-expr>
 <unary-expr> @emit("negate", $1) @infer("method_return($1, __negate)") @nospace ::= %"-" <unary-expr>
 <unary-expr> @emit("identity", $1) @infer("$1") @nospace ::= %"+" <unary-expr>
@@ -607,7 +613,7 @@
                  | <dict-or-set-lit>
                  | <tuple-or-paren>
 
-<primary> @varref($0) @emit("reference") @infer("lookup($0)") ::= %IDENTIFIER
+<primary> @varref($0) @emit("reference") @infer("lookup($0)") @disambig(n00bb_penalize_nil_identifier, 100) ::= %IDENTIFIER
 
 <typeof-expr> @infer("typespec") @emit("typeof", $2) @nospace ::= %"typeof" %"(" <expression> %")"
 
@@ -634,7 +640,8 @@
 <simple-lit> @infer("`t") @emit("string_literal") ::= %STRING_LIT
 <simple-lit> @literal("char") @emit("char_literal") ::= %CHAR_LIT
 <simple-lit> @literal("bool") @emit("literal") ::= <bool-lit>
-<simple-lit> @literal("nil") @infer("nil") @emit("nil_literal") ::= %"nil"
+<simple-lit> @literal("nil") @infer("nil") @emit("nil_literal") ::= <nil-keyword>
+<nil-keyword> ::= %"nil" | %"null" | %"None"
 
 <bool-lit> @literal("bool") @emit("literal") ::= %"true"
 <bool-lit> @literal("bool") @emit("literal") ::= %"false"
@@ -699,7 +706,7 @@
 <base-tspec> @nospace($1) ::= <base-tspec-core> <array-dimensions>*
 
 <base-tspec-core> @nospace($1) ::= <tspec-tvar>
-                    | %"nil"
+                    | <nil-keyword>
                     | <sized-int-tspec>
                     | <member-chain> <tspec-application>?
                     | <tspec-func>
@@ -810,8 +817,8 @@
 <trait-spec> @declares($1, $2, "function") @scope("trait") @nospace($2) ::=
        <trait-func-prelude> %IDENTIFIER <trait-func-type-signature>
 
-<trait-func-prelude> ::= %"func"
-<trait-func-prelude> ::= <func-visibility> %"func"
+<trait-func-prelude> ::= <function-keyword>
+<trait-func-prelude> ::= <func-visibility> <function-keyword>
 
 <trait-func-type-signature> ::=
     <trait-param-decl> <function-result>

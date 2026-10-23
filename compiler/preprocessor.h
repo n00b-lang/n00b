@@ -49,8 +49,11 @@ typedef struct {
 typedef struct {
     const core_string_t *definitions;
     size_t definition_count;
+    const core_string_t *syntax_preferences;
+    size_t syntax_preference_count;
     bool release_mode;
     bool build_time;
+    bool disable_syntax_warnings;
     n00bb_preprocessor_import_fn load_import;
     n00bb_preprocessor_implicit_import_fn load_implicit_import;
     bool (*import_failure_reported)(core_translation_unit_t *unit);
@@ -69,6 +72,31 @@ typedef struct {
 } n00bb_preprocessor_options_t;
 
 typedef struct n00bb_preprocessor_t n00bb_preprocessor_t;
+
+typedef enum {
+    PP_SPELL_FUNC,
+    PP_SPELL_FN,
+    PP_SPELL_FUNCTION,
+    PP_SPELL_OR,
+    PP_SPELL_PIPE_PIPE,
+    PP_SPELL_AND,
+    PP_SPELL_AMP_AMP,
+    PP_SPELL_BANG,
+    PP_SPELL_NOT,
+    PP_SPELL_NIL,
+    PP_SPELL_NULL,
+    PP_SPELL_PY_NONE,
+    PP_SPELL_ELIF,
+    PP_SPELL_ELSEIF,
+    PP_SPELL_ELSE_IF,
+    PP_SPELL_BRACES,
+    PP_SPELL_INDENT,
+    PP_SPELL_RECORD,
+    PP_SPELL_STRUCT,
+    PP_SPELL_ARROW,
+    PP_SPELL_RETURN_COLON,
+    PP_SPELL_COUNT,
+} pp_spelling_t;
 
 n00bb_preprocessor_t *n00bb_preprocessor_new(
     const n00bb_preprocessor_options_t *options);

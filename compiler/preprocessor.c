@@ -2,6 +2,7 @@
 #define _DARWIN_C_SOURCE 1
 
 #include "preprocessor.h"
+#include "compiler_tu.h"
 
 #include <errno.h>
 #include <math.h>
@@ -31,6 +32,53 @@ typedef enum {
     PP_STRING,
     PP_ANY,
 } pp_kind_t;
+
+typedef enum {
+    PP_STYLE_FUNCTION,
+    PP_STYLE_OR,
+    PP_STYLE_AND,
+    PP_STYLE_NOT,
+    PP_STYLE_NIL,
+    PP_STYLE_ELIF,
+    PP_STYLE_BLOCK,
+    PP_STYLE_RECORD,
+    PP_STYLE_RETURN,
+    PP_STYLE_SET_COUNT,
+} pp_style_set_t;
+
+typedef struct {
+    pp_style_set_t set;
+    core_string_t preference;
+    core_string_t spelling;
+    core_string_t concept;
+    bool preferred;
+} pp_spelling_info_t;
+
+#define S(literal) CORE_STRING_STATIC(literal)
+static const pp_spelling_info_t pp_spellings[PP_SPELL_COUNT] = {
+    [PP_SPELL_FUNC]         = {PP_STYLE_FUNCTION, S("function"), S("func"), S("function declarations"), true},
+    [PP_SPELL_FN]           = {PP_STYLE_FUNCTION, S("function"), S("fn"), S("function declarations"), false},
+    [PP_SPELL_FUNCTION]     = {PP_STYLE_FUNCTION, S("function"), S("function"), S("function declarations"), false},
+    [PP_SPELL_OR]           = {PP_STYLE_OR, S("or"), S("or"), S("logical or"), true},
+    [PP_SPELL_PIPE_PIPE]    = {PP_STYLE_OR, S("or"), S("||"), S("logical or"), false},
+    [PP_SPELL_AND]          = {PP_STYLE_AND, S("and"), S("and"), S("logical and"), true},
+    [PP_SPELL_AMP_AMP]      = {PP_STYLE_AND, S("and"), S("&&"), S("logical and"), false},
+    [PP_SPELL_BANG]         = {PP_STYLE_NOT, S("not"), S("!"), S("logical negation"), true},
+    [PP_SPELL_NOT]          = {PP_STYLE_NOT, S("not"), S("not"), S("logical negation"), false},
+    [PP_SPELL_NIL]          = {PP_STYLE_NIL, S("nil"), S("nil"), S("the nil value"), true},
+    [PP_SPELL_NULL]         = {PP_STYLE_NIL, S("nil"), S("null"), S("the nil value"), false},
+    [PP_SPELL_PY_NONE]      = {PP_STYLE_NIL, S("nil"), S("None"), S("the nil value"), false},
+    [PP_SPELL_ELIF]         = {PP_STYLE_ELIF, S("else-if"), S("elif"), S("else-if clauses"), true},
+    [PP_SPELL_ELSEIF]       = {PP_STYLE_ELIF, S("else-if"), S("elseif"), S("else-if clauses"), false},
+    [PP_SPELL_ELSE_IF]      = {PP_STYLE_ELIF, S("else-if"), S("else if"), S("else-if clauses"), false},
+    [PP_SPELL_BRACES]       = {PP_STYLE_BLOCK, S("block"), S("{}"), S("blocks"), true},
+    [PP_SPELL_INDENT]       = {PP_STYLE_BLOCK, S("block"), S(":"), S("blocks"), false},
+    [PP_SPELL_RECORD]       = {PP_STYLE_RECORD, S("record"), S("record"), S("record declarations"), true},
+    [PP_SPELL_STRUCT]       = {PP_STYLE_RECORD, S("record"), S("struct"), S("record declarations"), false},
+    [PP_SPELL_ARROW]        = {PP_STYLE_RETURN, S("return-type"), S("->"), S("function return types"), true},
+    [PP_SPELL_RETURN_COLON] = {PP_STYLE_RETURN, S("return-type"), S("return:"), S("function return types"), false},
+};
+#undef S
 
 typedef struct {
     pp_kind_t kind;
@@ -106,6 +154,7 @@ static bool evaluate_when_condition(pp_context_t *ctx,
 static core_string_t builtin_name(pp_context_t *ctx, parse_tree_t *node);
 static bool process_module(pp_context_t *ctx, core_translation_unit_t *unit,
                            parse_tree_t *tree);
+static pp_spelling_t style_spelling(pp_context_t *ctx, parse_tree_t *node);
 
 static core_string_t
 own_string(pp_context_t *ctx, core_string_t value)
@@ -279,6 +328,26 @@ first_leaf_text(pp_context_t *ctx, parse_tree_t *node)
 {
     parse_tree_t *leaf = node ? core_tree_first_leaf_node(node) : nullptr;
     return leaf ? leaf_text(ctx, leaf) : (core_string_t){0};
+}
+
+static core_string_t
+canonical_logical_spelling(core_string_t spelling)
+{
+    if (core_string_eq(spelling, CORE_STRING_STATIC("&&")))
+        return CORE_STRING_STATIC("and");
+    if (core_string_eq(spelling, CORE_STRING_STATIC("||")))
+        return CORE_STRING_STATIC("or");
+    if (core_string_eq(spelling, CORE_STRING_STATIC("not")))
+        return CORE_STRING_STATIC("!");
+    return spelling;
+}
+
+static bool
+nil_spelling(core_string_t spelling)
+{
+    return core_string_eq(spelling, CORE_STRING_STATIC("nil"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("null"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("None"));
 }
 
 static void
@@ -689,6 +758,7 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
     core_string_t kind = first_leaf_text(ctx, kind_node);
     if (core_string_eq(kind, CORE_STRING_STATIC("struct")))
         kind = CORE_STRING_STATIC("record");
+    if (nil_spelling(kind)) kind = CORE_STRING_STATIC("nil");
     core_string_t function_name = leaf_text(ctx, primary);
     if (!core_string_eq(kind, CORE_STRING_STATIC("set"))
         && !core_string_eq(kind, CORE_STRING_STATIC("hex"))
@@ -1404,7 +1474,8 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
 
     if (core_string_eq(name, CORE_STRING_STATIC("unary-expr"))) {
         if (core_tree_num_children(node) == 2) {
-            core_string_t op = leaf_text(ctx, core_tree_child(node, 0));
+            core_string_t op = canonical_logical_spelling(
+                first_leaf_text(ctx, core_tree_child(node, 0)));
             if (core_string_eq(op, CORE_STRING_STATIC("-"))) {
                 core_string_t literal_text;
                 __int128 signed_value;
@@ -1467,7 +1538,8 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         && core_tree_num_children(node) == 3) {
         pp_value_t left, right;
         parse_tree_t *operator_node = core_tree_child(node, 1);
-        core_string_t op = first_leaf_text(ctx, operator_node);
+        core_string_t op = canonical_logical_spelling(
+            first_leaf_text(ctx, operator_node));
         if (!eval_expr(ctx, core_tree_child(node, 0), &left)) return false;
         if (!ctx->type_only && core_string_eq(op, CORE_STRING_STATIC("and"))
             && left.kind == PP_BOOL && !left.as.boolean) {
@@ -1824,8 +1896,9 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
     if (is_name(ctx->grammar, node, "unary-expr")) {
         size_t count = core_tree_num_children(node);
         bool allowed = count == 1;
-        if (count == 2 && core_tree_is_leaf(core_tree_child(node, 0))) {
-            core_string_t op = parse_tree_leaf_text(core_tree_child(node, 0));
+        if (count == 2) {
+            core_string_t op = canonical_logical_spelling(
+                first_leaf_text(ctx, core_tree_child(node, 0)));
             allowed = core_string_eq(op, CORE_STRING_STATIC("!"))
                 || core_string_eq(op, CORE_STRING_STATIC("-"))
                 || core_string_eq(op, CORE_STRING_STATIC("+"));
@@ -2442,7 +2515,155 @@ typedef struct {
     pp_context_t *ctx;
     core_list_t(pp_deferred_stmt_t) *imports;
     core_list_t(pp_deferred_stmt_t) *deferred;
+    uint32_t *spelling_lines;
 } pp_discovery_t;
+
+static pp_spelling_t
+style_spelling(pp_context_t *ctx, parse_tree_t *node)
+{
+    core_string_t text = first_leaf_text(ctx, node);
+    struct {
+        const char *nonterminal;
+        pp_spelling_t first;
+        pp_spelling_t last;
+    } static const groups[] = {
+        {"function-keyword", PP_SPELL_FUNC, PP_SPELL_FUNCTION},
+        {"or-op", PP_SPELL_OR, PP_SPELL_PIPE_PIPE},
+        {"and-op", PP_SPELL_AND, PP_SPELL_AMP_AMP},
+        {"not-op", PP_SPELL_BANG, PP_SPELL_NOT},
+        {"nil-keyword", PP_SPELL_NIL, PP_SPELL_PY_NONE},
+        {"record-keyword", PP_SPELL_RECORD, PP_SPELL_STRUCT},
+        {"return-sigil", PP_SPELL_ARROW, PP_SPELL_RETURN_COLON},
+    };
+    for (size_t g = 0; g < sizeof(groups) / sizeof(groups[0]); g++) {
+        if (!node_named(ctx->grammar, node,
+                        core_string_from_cstr(groups[g].nonterminal))) continue;
+        for (pp_spelling_t i = groups[g].first; i <= groups[g].last; i++)
+            if (core_string_eq(text, pp_spellings[i].spelling)) return i;
+        return PP_SPELL_COUNT;
+    }
+    if (is_name(ctx->grammar, node, "elif-keyword")) {
+        if (core_tree_num_children(node) == 2) return PP_SPELL_ELSE_IF;
+        return core_string_eq(text, CORE_STRING_STATIC("elseif"))
+            ? PP_SPELL_ELSEIF : PP_SPELL_ELIF;
+    }
+    if (is_name(ctx->grammar, node, "block-start"))
+        return core_string_eq(text, CORE_STRING_STATIC("{"))
+            ? PP_SPELL_BRACES : PP_SPELL_INDENT;
+    if (is_name(ctx->grammar, node, "return-type"))
+        return core_string_eq(text, CORE_STRING_STATIC("->"))
+            ? PP_SPELL_ARROW : PP_SPELL_RETURN_COLON;
+    return PP_SPELL_COUNT;
+}
+
+static void
+default_syntax_preferences(pp_spelling_t preferred[PP_STYLE_SET_COUNT])
+{
+    for (pp_style_set_t set = 0; set < PP_STYLE_SET_COUNT; set++)
+        preferred[set] = PP_SPELL_COUNT;
+    for (pp_spelling_t i = 0; i < PP_SPELL_COUNT; i++)
+        if (pp_spellings[i].preferred)
+            preferred[pp_spellings[i].set] = i;
+}
+
+static bool
+syntax_preferences(pp_context_t *ctx,
+                   pp_spelling_t preferred[PP_STYLE_SET_COUNT],
+                   core_string_t *invalid)
+{
+    default_syntax_preferences(preferred);
+    for (size_t p = 0; ctx->options
+         && p < ctx->options->syntax_preference_count; p++) {
+        core_string_t raw = ctx->options->syntax_preferences[p];
+        int64_t split = core_string_find_byte(raw, '=');
+        core_string_t preference = split > 0
+            ? core_string_borrow(raw.data, (size_t)split) : (core_string_t){0};
+        core_string_t spelling = split > 0
+            && (size_t)split + 1 < raw.u8_bytes
+            ? core_string_borrow(raw.data + split + 1,
+                                 raw.u8_bytes - (size_t)split - 1)
+            : (core_string_t){0};
+        bool found = false;
+        for (pp_spelling_t i = 0; preference.data && spelling.data
+             && i < PP_SPELL_COUNT; i++) {
+            if (!core_string_eq(preference, pp_spellings[i].preference)
+                || !core_string_eq(spelling, pp_spellings[i].spelling))
+                continue;
+            preferred[pp_spellings[i].set] = i;
+            found = true;
+            break;
+        }
+        if (!found) {
+            if (invalid) *invalid = raw;
+            return false;
+        }
+    }
+    return true;
+}
+
+static void
+report_syntax_spellings(pp_context_t *ctx,
+                        const uint32_t lines[PP_SPELL_COUNT],
+                        const pp_spelling_t preferred[PP_STYLE_SET_COUNT])
+{
+    if (ctx->options && ctx->options->disable_syntax_warnings) return;
+    for (pp_style_set_t set = 0; set < PP_STYLE_SET_COUNT; set++) {
+        size_t count = 0;
+        uint32_t report_line = 0;
+        pp_spelling_t used = PP_SPELL_COUNT;
+        for (pp_spelling_t i = 0; i < PP_SPELL_COUNT; i++) {
+            if (pp_spellings[i].set != set || !lines[i]) continue;
+            count++;
+            used = i;
+            if (!report_line || lines[i] > report_line) report_line = lines[i];
+        }
+        core_buffer_t *message = core_buffer_empty();
+        if (count > 1) {
+            core_buffer_printf(message, "inconsistent spelling for %.*s: ",
+                (int)pp_spellings[used].concept.u8_bytes,
+                pp_spellings[used].concept.data);
+            size_t emitted = 0;
+            for (pp_spelling_t i = 0; i < PP_SPELL_COUNT; i++) {
+                if (pp_spellings[i].set != set || !lines[i]) continue;
+                if (emitted++)
+                    core_buffer_append_string(message,
+                                              CORE_STRING_STATIC(", "));
+                core_buffer_printf(message, "'%.*s' on line %u",
+                    (int)pp_spellings[i].spelling.u8_bytes,
+                    pp_spellings[i].spelling.data, lines[i]);
+            }
+            core_diag_location_t location = {
+                .line = report_line, .column = 1,
+                .end_line = report_line, .end_column = 1,
+                .has_location = true,
+            };
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(ctx->unit), ctx->unit,
+                CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-PPW0003"),
+                core_buffer_string(message), location);
+        }
+        else if (count == 1 && used != preferred[set]) {
+            core_buffer_printf(message,
+                "'%.*s' is not the preferred spelling for %.*s; use '%.*s' instead",
+                (int)pp_spellings[used].spelling.u8_bytes,
+                pp_spellings[used].spelling.data,
+                (int)pp_spellings[used].concept.u8_bytes,
+                pp_spellings[used].concept.data,
+                (int)pp_spellings[preferred[set]].spelling.u8_bytes,
+                pp_spellings[preferred[set]].spelling.data);
+            core_diag_location_t location = {
+                .line = lines[used], .column = 1,
+                .end_line = lines[used], .end_column = 1,
+                .has_location = true,
+            };
+            core_diagnostics_report_at(
+                core_translation_unit_diagnostics(ctx->unit), ctx->unit,
+                CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-PPW0004"),
+                core_buffer_string(message), location);
+        }
+        core_buffer_free(message);
+    }
+}
 
 static parse_visit_outcome_t
 preprocess_discover(parse_visit_t *visit)
@@ -2452,6 +2673,11 @@ preprocess_discover(parse_visit_t *visit)
     parse_tree_t *node = visit->node;
     if (ctx->failed) return PARSE_VISIT_ERROR;
     if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
+    pp_spelling_t spelling = style_spelling(ctx, node);
+    if (spelling != PP_SPELL_COUNT && !discovery->spelling_lines[spelling]) {
+        parse_token_info_t *token = parse_tree_find_first_terminal(node);
+        if (token) discovery->spelling_lines[spelling] = parse_token_line(token);
+    }
     if (is_name(ctx->grammar, node, "top-level-stmt")) {
         parse_tree_t *import = parse_tree_find_direct_child_by_nt_name(
             ctx->grammar, node, CORE_STRING_STATIC("import-stmt"));
@@ -2481,7 +2707,7 @@ preprocess_discover(parse_visit_t *visit)
                     .parent = visit->parent, .statement = node,
                 }));
         }
-        return PARSE_VISIT_PRUNE;
+        return PARSE_VISIT_CONTINUE;
     }
     return PARSE_VISIT_CONTINUE;
 }
@@ -2584,6 +2810,20 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     bool previous_cycle_warning = ctx->cycle_warning_emitted;
     ctx->unit = unit;
     ctx->cycle_warning_emitted = false;
+    pp_spelling_t preferred[PP_STYLE_SET_COUNT];
+    core_string_t invalid_preference = {0};
+    bool valid_preferences = syntax_preferences(ctx, preferred,
+                                                &invalid_preference);
+    if (!valid_preferences && ctx->module_stack.len == 1) {
+        core_buffer_t *message = core_buffer_empty();
+        core_buffer_printf(message,
+                           "invalid syntax preference '%.*s'; expected CLASS=SPELLING",
+                           (int)invalid_preference.u8_bytes,
+                           invalid_preference.data);
+        pp_report(ctx, tree, core_buffer_string(message));
+        core_buffer_free(message);
+        ctx->failed = true;
+    }
     const core_string_t implicit_imports[] = {
         CORE_STRING_STATIC("builtin"),
     };
@@ -2600,8 +2840,13 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
         core_list_new(pp_deferred_stmt_t);
     core_list_t(pp_deferred_stmt_t) deferred =
         core_list_new(pp_deferred_stmt_t);
+    uint32_t local_spelling_lines[PP_SPELL_COUNT] = {0};
+    n00bb_tu_state_t *tu = core_translation_unit_user_data(unit);
+    uint32_t *spelling_lines = tu ? tu->syntax_spelling_lines
+                                  : local_spelling_lines;
     pp_discovery_t discovery = {
         .ctx = ctx, .imports = &imports, .deferred = &deferred,
+        .spelling_lines = spelling_lines,
     };
     parse_tree_walk_t *discovery_walk = parse_tree_walk_new(ctx->grammar,
                                                              &discovery);
@@ -2636,6 +2881,8 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     core_list_free(imports);
     core_list_free(deferred);
     if (!ctx->failed) check_pass_statements(ctx, tree, nullptr, 0);
+    if (!ctx->failed)
+        report_syntax_spellings(ctx, spelling_lines, preferred);
     bool succeeded = !ctx->failed
         && !core_diagnostics_failed(core_translation_unit_diagnostics(unit));
     if (!succeeded) ctx->failed = true;
