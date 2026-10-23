@@ -1489,7 +1489,7 @@ semantic_static_scalar_value(parse_grammar_t *grammar, parse_tree_t *literal,
         };
         return true;
     }
-    if (core_string_eq(spelling, CORE_STRING_STATIC("nil"))) {
+    if (n00bb_nil_spelling(spelling)) {
         *out = (n00bb_static_value_t){.kind = N00BB_STATIC_VALUE_NIL};
         return true;
     }
@@ -2138,7 +2138,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
         : core_string_eq(scalar_kind, CORE_STRING_STATIC("true"))
             || core_string_eq(scalar_kind, CORE_STRING_STATIC("false"))
             ? CORE_STRING_STATIC("bool")
-        : core_string_eq(first_token_text(node), CORE_STRING_STATIC("nil"))
+        : n00bb_nil_spelling(first_token_text(node))
             ? CORE_STRING_STATIC("nil")
         : fence ? CORE_STRING_STATIC("fence")
         : dict_entries || dict_only_empty_literal(grammar, braces)
@@ -4902,7 +4902,8 @@ unary_operator_dispatch_for_node(parse_grammar_t *grammar,
         *method = CORE_STRING_STATIC("__negate");
         return true;
     }
-    if (core_string_eq(spelling, CORE_STRING_STATIC("!"))) {
+    if (core_string_eq(n00bb_canonical_logical_spelling(spelling),
+                       CORE_STRING_STATIC("!"))) {
         *trait = CORE_STRING_STATIC("Not");
         *method = CORE_STRING_STATIC("__not");
         return true;
@@ -5852,7 +5853,7 @@ n00bb_is_nil_literal(parse_grammar_t *grammar, parse_tree_t *node)
         node = core_tree_child(node, 0);
     }
     return NT_IS(grammar, node, "simple-lit")
-        && core_string_eq(first_token_text(node), CORE_STRING_STATIC("nil"));
+        && n00bb_nil_spelling(first_token_text(node));
 }
 
 
@@ -12386,7 +12387,8 @@ refine_flagset_operator_result(parse_grammar_t *grammar,
         : parse_tree_type(core_tree_child(node, 2));
     core_string_t spelling = first_token_text(
         core_tree_child(node, unary ? 0 : 1));
-    bool boolean = core_string_eq(spelling, CORE_STRING_STATIC("!"))
+    bool boolean = core_string_eq(n00bb_canonical_logical_spelling(spelling),
+                                  CORE_STRING_STATIC("!"))
         || core_string_eq(spelling, CORE_STRING_STATIC("=="))
         || core_string_eq(spelling, CORE_STRING_STATIC("!="));
     th_type *expected = boolean ? th_name(state->types, CORE_STRING_STATIC("bool")) : left_type;
@@ -13482,7 +13484,7 @@ literal_modifier_terminal(parse_grammar_t *grammar, parse_tree_t *leaf,
             || core_string_eq(terminal, CORE_STRING_STATIC("HEX_LIT"))
             || core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))
             || core_string_eq(terminal, CORE_STRING_STATIC("STRING_LIT"))
-            || parse_tree_leaf_is(leaf, CORE_STRING_STATIC("nil"));
+            || n00bb_nil_spelling(first_token_text(leaf));
     if (NT_IS(grammar, parent, "bool-lit"))
         return parse_tree_leaf_is(leaf, CORE_STRING_STATIC("true"))
             || parse_tree_leaf_is(leaf, CORE_STRING_STATIC("false"));
@@ -13947,8 +13949,8 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
             type_node = child;
             break;
         }
-        if (core_tree_is_leaf(child)
-            && parse_tree_leaf_is(child, CORE_STRING_STATIC("nil")))
+        if ((core_tree_is_leaf(child) || NT_IS(grammar, child, "nil-keyword"))
+            && n00bb_nil_spelling(first_token_text(child)))
             return th_name(state->types, CORE_STRING_STATIC("nil"));
     }
     if (!type_node) return nullptr;

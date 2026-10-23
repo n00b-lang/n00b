@@ -31,7 +31,9 @@
                    "layout", "align", "step", "out", "inline", "typeof",
                    "provides", "enter", "exit", "ensure", "as", "thread",
                    "litmod", "modify", "consume", "where", "count", "by",
-                   "union", "from", "all", "struct", "object", "view")
+                   "union", "from", "all", "struct", "object", "view",
+                   "fn", "function", "not", "null", "None",
+                   "elseif")
 @lex-ident-profile("n00b-identifiers",
 		   normalize("nfc"),
 		   mixed_scripts("diagnose"),

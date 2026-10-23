@@ -4940,6 +4940,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     core_string_t spelling = core_tree_num_children(visit->node) > 1
         ? first_token_text(core_tree_child(visit->node, 1))
         : (core_string_t){0};
+    spelling = n00bb_canonical_logical_spelling(spelling);
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     bool flagset = caller && n00bb_flagset_type(lower->unit, caller,

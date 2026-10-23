@@ -20,6 +20,7 @@
 #include "builtin_types.h"
 #include "compiler_module_literal.h"
 #include "signature_typevars.h"
+#include "preprocessor.h"
 
 #define N00BB_PARAMETER_FACTS_KEY \
     CORE_STRING_STATIC("n00bb.parameter-facts")
@@ -619,6 +620,7 @@ typedef struct {
     core_list_t(n00bb_brought_name_t) brought_names;
     core_list_t(n00bb_link_use_site_t) link_use_sites;
     core_list_t(n00bb_dispatch_record_t) dispatch_records;
+    uint32_t syntax_spelling_lines[PP_SPELL_COUNT];
     bool needs_build_time_capture;
     bool needs_literal_capture;
     core_list_t(n00bb_literal_backed_const_t) literal_backed_consts;
@@ -1401,6 +1403,26 @@ first_token_text(parse_tree_t *node)
         ? parse_token_value(token) : core_option_none(core_string_t);
     return core_option_is_set(value) ? core_option_get(value)
                                      : (core_string_t){0};
+}
+
+static inline bool
+n00bb_nil_spelling(core_string_t spelling)
+{
+    return core_string_eq(spelling, CORE_STRING_STATIC("nil"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("null"))
+        || core_string_eq(spelling, CORE_STRING_STATIC("None"));
+}
+
+static inline core_string_t
+n00bb_canonical_logical_spelling(core_string_t spelling)
+{
+    if (core_string_eq(spelling, CORE_STRING_STATIC("&&")))
+        return CORE_STRING_STATIC("and");
+    if (core_string_eq(spelling, CORE_STRING_STATIC("||")))
+        return CORE_STRING_STATIC("or");
+    if (core_string_eq(spelling, CORE_STRING_STATIC("not")))
+        return CORE_STRING_STATIC("!");
+    return spelling;
 }
 
 static inline th_type *

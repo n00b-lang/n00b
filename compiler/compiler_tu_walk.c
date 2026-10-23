@@ -252,8 +252,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                               CORE_STRING_STATIC("true"))
             || core_string_eq(first_token_text(node),
                               CORE_STRING_STATIC("false"))
-            || core_string_eq(first_token_text(node),
-                              CORE_STRING_STATIC("nil")));
+            || n00bb_nil_spelling(first_token_text(node)));
     operator_site.dispatch_trait = operator_trait;
     operator_site.dispatch_method = operator_method;
     parse_tree_t *numeric_receiver = intrinsic_binary
@@ -292,9 +291,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     if (variant_payload || flagset_field || type_reference
         || invalid_field_access || intrinsic_binary || intrinsic_unary
         || integer_compound || integer_copy
-        || (modified_numeric
-            && core_string_eq(first_token_text(node),
-                              CORE_STRING_STATIC("nil"))))
+        || (modified_numeric && n00bb_nil_spelling(first_token_text(node))))
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_INFER);
     if (modified_numeric
         || core_string_eq(literal_terminal, CORE_STRING_STATIC("INT_LIT"))
@@ -902,8 +899,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                         CORE_STRING_STATIC("true"))
                     || core_string_eq(first_token_text(node),
                         CORE_STRING_STATIC("false"))
-                    || core_string_eq(first_token_text(node),
-                        CORE_STRING_STATIC("nil")));
+                    || n00bb_nil_spelling(first_token_text(node)));
             if (NT_IS(grammar, node, "simple-lit")
                 && !string_literal && !numeric_literal) {
                 return;

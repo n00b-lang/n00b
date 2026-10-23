@@ -1,0 +1,12 @@
+struct Value:
+    item: int
+
+type ValueAlias = Value
+
+fn choose(first: bool, second: bool) return: int?:
+    if not first && second || first:
+        return None
+    elseif second:
+        return None
+    else:
+        return None
