@@ -86,7 +86,7 @@ func display_width(s: string) -> i32 {
     while cast[uint] pos < len {
         try {
             width += char_width(internal.encoding.utf8_decode(s, pos)!)
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] len
         }
     }

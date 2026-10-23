@@ -58,7 +58,7 @@ func is_valid_identifier(s: string) -> bool {
         if !is_xid_start(internal.encoding.utf8_decode(s, pos)!) {
             return false
         }
-    } else failure {
+    } fail(failure) {
         return false
     }
 
@@ -67,7 +67,7 @@ func is_valid_identifier(s: string) -> bool {
             if !is_xid_continue(internal.encoding.utf8_decode(s, pos)!) {
                 return false
             }
-        } else failure {
+        } fail(failure) {
             return false
         }
     }

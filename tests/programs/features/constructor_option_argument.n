@@ -30,7 +30,7 @@ require empty.text == nil
 require limit_of(empty) == 9
 try {
     risky(3)!
-} else failure {
+} fail(failure) {
     require failure.code == 3
     require limit_of(failure) == 0
 }

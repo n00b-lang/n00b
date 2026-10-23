@@ -537,7 +537,7 @@ func idna_map(consume s: string) -> string fail: Idna_Error {
 
         try {
             cp = internal.encoding.utf8_decode(s, pos)!
-        } else failure {
+        } fail(failure) {
             fail Idna_Error.processing_error
         }
 
@@ -665,7 +665,7 @@ private func domain_is_bidi(norm: string, len: uint) -> bool {
 
             try {
                 cp = internal.encoding.utf8_decode(norm, pos)!
-            } else failure {
+            } fail(failure) {
                 return false
             }
 
@@ -697,7 +697,7 @@ func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
 
     try {
         norm = idna_map(domain)!
-    } else e: Idna_Error {
+    } fail(e: Idna_Error) {
         fail e
     }
 
@@ -742,7 +742,7 @@ func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
 
             try {
                 cp = internal.encoding.utf8_decode(norm, pos)!
-            } else failure {
+            } fail(failure) {
                 fail Idna_Error.processing_error
             }
 
@@ -883,7 +883,7 @@ func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
 
     try {
         norm = idna_map(domain)!
-    } else e: Idna_Error {
+    } fail(e: Idna_Error) {
         fail e
     }
 
@@ -920,7 +920,7 @@ func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
 
             try {
                 cp = internal.encoding.utf8_decode(norm, pos)!
-            } else failure {
+            } fail(failure) {
                 fail Idna_Error.processing_error
             }
 

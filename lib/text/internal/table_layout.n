@@ -119,7 +119,7 @@ private func scan_column_preferences(table: internal.table.Table, width: i64)
                 try {
                     cell = internal.table.cell_index(table, cast[uint] r,
                                                      cast[uint] ci)!
-                } else e: Container_Err {
+                } fail(e: Container_Err) {
                     continue
                 }
                 var span: i64 = 1
@@ -226,7 +226,7 @@ private func compute_row_heights(modify table: internal.table.Table) {
             try {
                 cell = internal.table.cell_index(table, cast[uint] r,
                                                  cast[uint] ci)!
-            } else e: Container_Err {
+            } fail(e: Container_Err) {
                 continue
             }
             var span: i64 = 1
@@ -249,7 +249,7 @@ private func compute_row_heights(modify table: internal.table.Table) {
             try {
                 internal.table.put_cell(table, cast[uint] r, cast[uint] ci,
                                         cell)!
-            } else e: Container_Err {
+            } fail(e: Container_Err) {
             }
             var n_lines: i64 = cast[i64] lines.len()
             if n_lines < 1 {

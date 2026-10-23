@@ -282,7 +282,7 @@ record Stmt_Cell {
     public raw: uint
 }
 
-alias type Stmt =Ref[Stmt_Cell]
+alias type Stmt = Ref[Stmt_Cell]
 
 func __stmt_cell(raw: uint) -> Stmt {
     var cell: Stmt_Cell = (raw = raw)

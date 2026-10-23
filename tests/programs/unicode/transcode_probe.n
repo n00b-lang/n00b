@@ -28,7 +28,7 @@ func transcode_probe() -> string? {
     var cps: List[char] = []
     try {
         cps = unicode.utf32_from_string(mixed)!
-    } else e {
+    } fail(e) {
         return "1"
     }
 
@@ -42,7 +42,7 @@ func transcode_probe() -> string? {
     var back32_ok: bool = false
     try {
         back32_ok = same_string(unicode.utf32_to_string(cps)!, mixed)
-    } else e {
+    } fail(e) {
         back32_ok = false
     }
     if !back32_ok {
@@ -52,7 +52,7 @@ func transcode_probe() -> string? {
     var units: List[u16] = []
     try {
         units = unicode.utf16_from_string(mixed)!
-    } else e {
+    } fail(e) {
         return "4"
     }
 
@@ -65,7 +65,7 @@ func transcode_probe() -> string? {
     var back16_ok: bool = false
     try {
         back16_ok = same_string(unicode.utf16_to_string(units)!, mixed)
-    } else e {
+    } fail(e) {
         back16_ok = false
     }
     if !back16_ok {
@@ -81,14 +81,14 @@ func transcode_probe() -> string? {
     try {
         unicode.utf32_from_string(binary)!
         transcoded = true
-    } else e {
+    } fail(e) {
         transcoded = false
     }
     if !transcoded {
         try {
             unicode.utf16_from_string(binary)!
             transcoded = true
-        } else e {
+        } fail(e) {
             transcoded = false
         }
     }
@@ -103,7 +103,7 @@ func transcode_probe() -> string? {
     try {
         unicode.utf32_to_string(too_big)!
         too_big_ok = true
-    } else e {
+    } fail(e) {
         too_big_ok = false
     }
     if too_big_ok {
@@ -117,7 +117,7 @@ func transcode_probe() -> string? {
     try {
         unicode.utf32_to_string(lone)!
         lone_ok = true
-    } else e {
+    } fail(e) {
         lone_ok = false
     }
     if lone_ok {
@@ -127,7 +127,7 @@ func transcode_probe() -> string? {
     var empty_ok: bool = false
     try {
         empty_ok = unicode.utf32_from_string(empty_string())!.len() == 0
-    } else e {
+    } fail(e) {
         empty_ok = false
     }
     if !empty_ok {

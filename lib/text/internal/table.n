@@ -523,7 +523,7 @@ func row_cell_count(self: Table, row: uint) -> uint {
     var row_val: Table_Row
     try {
         row_val = row_index(self, row)!
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         return 0
     }
     return row_val.cells.len()

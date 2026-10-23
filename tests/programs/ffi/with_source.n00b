@@ -35,7 +35,7 @@ while k < 100 {
     require cursor.iter_next(iter) == k + 1
     try {
         cursor.close(iter)!
-    } else failure {
+    } fail(failure) {
         require false
     }
     k = k + 1

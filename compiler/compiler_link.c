@@ -611,7 +611,7 @@ link_semantic_type_for_symbol(parse_grammar_t *grammar,
     if (!is_named_type_declaration(grammar, symbol))
         return symbol->type ? th_resolve(symbol->type) : nullptr;
     if (nt_is(grammar, declaration, CORE_STRING_STATIC("alias-stmt"))) {
-        if (alias_declaration_is_transparent(grammar,declaration))
+        if (alias_declaration_is_transparent(grammar, declaration))
             return declared_type_from_node(grammar, owner, declaration);
         core_buffer_t nominal_name = {0};
         append_module_type_name(owner, symbol->name, &nominal_name);
@@ -735,7 +735,8 @@ transparent_alias_cycle_from(parse_grammar_t *grammar,
                     ? resolution.target.symbol : nullptr;
             if (!dependency || !dependency->decl_node
                 || !nt_is(grammar, dependency->decl_node, CORE_STRING_STATIC("alias-stmt"))
-                || !alias_declaration_is_transparent(grammar,dependency->decl_node))
+                || !alias_declaration_is_transparent(grammar,
+                                                     dependency->decl_node))
                 continue;
             cycle = transparent_alias_cycle_from(grammar, units, dependency,
                                                    active, visited);
@@ -1010,7 +1011,8 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                  symbol = symbol->next_in_scope) {
                 if (!is_named_type_declaration(grammar, symbol)) continue;
                 if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
-                    && alias_declaration_is_transparent(grammar,symbol->decl_node)
+                    && alias_declaration_is_transparent(grammar,
+                                                        symbol->decl_node)
                     && transparent_alias_has_cycle(grammar, units, symbol)) {
                     core_diagnostics_report_at(
                         core_translation_unit_diagnostics(unit), unit,
@@ -1027,7 +1029,8 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     return false;
                 }
                 if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
-                    && alias_declaration_is_transparent(grammar,symbol->decl_node))
+                    && alias_declaration_is_transparent(grammar,
+                                                        symbol->decl_node))
                     symbol->adt_kind = CORE_STRING_STATIC("alias");
                 if (!symbol->type) {
                     core_diagnostics_report_at(
@@ -1039,7 +1042,8 @@ finalize_named_declaration_types(parse_grammar_t *grammar,
                     return false;
                 }
                 if (nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
-                    && !alias_declaration_is_transparent(grammar,symbol->decl_node)) {
+                    && !alias_declaration_is_transparent(grammar,
+                                                         symbol->decl_node)) {
                     th_type *representation = declared_type_from_node(
                         grammar, unit, symbol->decl_node);
                     if (!representation || !th_type_define(state->types,
@@ -2054,7 +2058,7 @@ alias_reexports(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     parse_tree_t *declaration = symbol->decl_node;
     parse_sym_entry_t *target = canonical_symbol(type);
     return nt_is(grammar, declaration, CORE_STRING_STATIC("alias-stmt"))
-        && alias_declaration_is_transparent(grammar,declaration)
+        && alias_declaration_is_transparent(grammar, declaration)
         && symbol->type && target->type && state->types
         && th_hash(state->types, th_resolve(symbol->type))
             == th_hash(state->types, th_resolve(target->type));

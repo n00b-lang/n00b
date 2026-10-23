@@ -560,7 +560,7 @@ private func char_at_byte(s: string, i: u64) -> char {
     var pos: u32 = cast[u32] i
     let decoded: char = try {
         -> unicode.utf8_decode(s, pos)!
-    } else failure {
+    } fail(failure) {
         -> '\0'
     }
     return decoded
@@ -783,7 +783,7 @@ private func char_is_space(s: string, at: u64, out adv: u64) -> bool {
     var decoded: char? = nil
     try {
         decoded = unicode.utf8_decode(s, pos)!
-    } else failure {
+    } fail(failure) {
         decoded = nil
     }
     adv = cast[u64] pos - at

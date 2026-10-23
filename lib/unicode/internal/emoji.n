@@ -45,7 +45,7 @@ private func take_char(s: string, modify pos: u32) -> char? {
 
     try {
         return internal.encoding.utf8_decode(s, pos)!
-    } else failure {
+    } fail(failure) {
         return nil
     }
 }

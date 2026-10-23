@@ -20,7 +20,7 @@ func cstring_of(s: string) -> Array[u8] {
     let empty: Array[u8] = new[Array[u8]](0)
     let result = try {
         -> to_cstring(s)!
-    } else e {
+    } fail(e) {
         -> empty
     }
     return result
@@ -30,7 +30,7 @@ func embedded_nul_rejected(s: string) -> bool {
     var rejected = false
     try {
         to_cstring(s)!
-    } else e {
+    } fail(e) {
         rejected = e == String_Error.embedded_nul
     }
     return rejected
@@ -55,7 +55,7 @@ func run_cstring_checks() {
     var buf: Array[u8] = new[Array[u8]](64)
     let copied = try {
         -> to_cstring(shortish, copy = true, buf = buf)!
-    } else e {
+    } fail(e) {
         -> new[Array[u8]](0)
     }
     require c_length(copied) == byte_len(shortish)

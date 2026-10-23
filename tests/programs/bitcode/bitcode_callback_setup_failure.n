@@ -31,13 +31,13 @@ initial.count = 0
 try {
     let counter = make(initial, false)!
     require counter.call(2) == 2
-} else err {
+} fail(err) {
     require false
 }
 try {
     let unused = make(initial, true)!
     require false
-} else err {
+} fail(err) {
     require true
 }
 __fd_write(2, "ok")

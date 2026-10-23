@@ -21,6 +21,6 @@ try {
     require sorter.nth_sorted(items, 0)! == 9
     require sorter.nth_sorted(items, 1)! == 7
     require sorter.nth_sorted(items, 3)! == 1
-} else failure {
+} fail(failure) {
     require false
 }

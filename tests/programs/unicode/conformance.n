@@ -75,7 +75,7 @@ private func run_break_suite(blob: Array[u8], kind: unicode.Break_Type)
         var s: string = ""
         try {
             s = unicode.utf32_to_string(cps)!
-        } else e {
+        } fail(e) {
             failed += 1
 
             continue
@@ -151,7 +151,7 @@ private func run_line_suite(blob: Array[u8]) -> u32 {
         var s: string = ""
         try {
             s = unicode.utf32_to_string(cps)!
-        } else e {
+        } fail(e) {
             failed += 1
 
             continue
@@ -188,7 +188,7 @@ private func same_cps(got: string, want: List[char]) -> bool {
     var g: List[char] = []
     try {
         g = unicode.utf32_from_string(got)!
-    } else e {
+    } fail(e) {
         return false
     }
 
@@ -232,7 +232,7 @@ private func run_norm_suite(blob: Array[u8]) -> u32 {
 
             try {
                 strs[k] = unicode.utf32_to_string(cols[k])!
-            } else e {
+            } fail(e) {
                 ok = false
             }
         }
@@ -304,7 +304,7 @@ private func run_bidi_suite(blob: Array[u8]) -> u32 {
         var s: string = ""
         try {
             s = unicode.utf32_to_string(cps)!
-        } else e {
+        } fail(e) {
             failed += 1
 
             continue
@@ -371,7 +371,7 @@ private func run_collation_suite(blob: Array[u8]) -> u32 {
         var s: string = ""
         try {
             s = unicode.utf32_to_string(cps)!
-        } else e {
+        } fail(e) {
             failed += 1
 
             continue
@@ -425,7 +425,7 @@ private func run_idna_suite(blob: Array[u8]) -> u32 {
         var source: string = ""
         try {
             source = unicode.utf32_to_string(src)!
-        } else e {
+        } fail(e) {
             failed += 1
 
             continue
@@ -435,7 +435,7 @@ private func run_idna_suite(blob: Array[u8]) -> u32 {
         var got: string = ""
         try {
             got = unicode.idna.idna_to_ascii(source)!
-        } else e {
+        } fail(e) {
             got_ok = false
         }
 
@@ -451,7 +451,7 @@ private func run_idna_suite(blob: Array[u8]) -> u32 {
         var want: string = ""
         try {
             want = unicode.utf32_to_string(dst)!
-        } else e {
+        } fail(e) {
             dsr_ok = false
         }
 

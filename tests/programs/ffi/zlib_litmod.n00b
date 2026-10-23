@@ -5,7 +5,7 @@ sequence litmod checksum_bytes(items: Array[u8]) -> u64 fail: string {
     var sum: u64 = 0
     try {
         sum = zlib.crc32(0, items)!
-    } else failure {
+    } fail(failure) {
         fail "crc32 failed"
     }
     return sum

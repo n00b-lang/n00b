@@ -16,6 +16,6 @@ func checked(raw: uint) -> Handle fail: string {
 require make(5).raw == 5
 try {
     require checked(1)!.raw == 2
-} else failure {
+} fail(failure) {
     require false
 }

@@ -20,7 +20,7 @@ private func decodes_to(s: string, want: char, want_pos: u32) -> bool {
 
     try {
         got = unicode.utf8_decode(s, pos)!
-    } else e {
+    } fail(e) {
         return false
     }
 
@@ -62,7 +62,7 @@ func encoding_probe() -> string? {
         walked = unicode.utf8_decode(mixed, pos)! == 'A' and
                  unicode.utf8_decode(mixed, pos)! == cast[char] 0x00e9 and
                  unicode.utf8_decode(mixed, pos)! == cast[char] 0x4e16
-    } else e {
+    } fail(e) {
         walked = false
     }
     if !walked {
@@ -73,7 +73,7 @@ func encoding_probe() -> string? {
     try {
         unicode.utf8_decode(mixed, pos)!
         past_end = true
-    } else e {
+    } fail(e) {
         past_end = false
     }
     if past_end {
@@ -90,7 +90,7 @@ func encoding_probe() -> string? {
     try {
         unicode.utf8_decode(bad_lead, pos)!
         lead_ok = true
-    } else e {
+    } fail(e) {
         lead_ok = false
     }
     if lead_ok {
@@ -108,7 +108,7 @@ func encoding_probe() -> string? {
     try {
         unicode.utf8_decode(truncated, pos)!
         trunc_ok = true
-    } else e {
+    } fail(e) {
         trunc_ok = false
     }
     if trunc_ok {
@@ -127,7 +127,7 @@ func encoding_probe() -> string? {
     try {
         unicode.utf8_decode(surrogate, pos)!
         sur_ok = true
-    } else e {
+    } fail(e) {
         sur_ok = false
     }
     if sur_ok {
@@ -145,7 +145,7 @@ func encoding_probe() -> string? {
     try {
         unicode.utf8_decode(overlong, pos)!
         over_ok = true
-    } else e {
+    } fail(e) {
         over_ok = false
     }
     if over_ok {
@@ -511,7 +511,7 @@ func encoding_probe() -> string? {
     try {
         ia_ok = name_is(unicode.idna.idna_to_ascii("b\u00fccher.de")!,
                         "xn--bcher-kva.de")
-    } else e {
+    } fail(e) {
         ia_ok = false
     }
     if !ia_ok {
@@ -522,7 +522,7 @@ func encoding_probe() -> string? {
     try {
         iu_ok = name_is(unicode.idna.idna_to_unicode("xn--bcher-kva.de")!,
                         "b\u00fccher.de")
-    } else e {
+    } fail(e) {
         iu_ok = false
     }
     if !iu_ok {
@@ -533,7 +533,7 @@ func encoding_probe() -> string? {
     try {
         ic_ok = name_is(unicode.idna.idna_to_ascii("\u4f8b\u3048\u3070.com")!,
                         "xn--r8j3dr99h.com")
-    } else e {
+    } fail(e) {
         ic_ok = false
     }
     if !ic_ok {
@@ -544,7 +544,7 @@ func encoding_probe() -> string? {
     try {
         iup_ok = name_is(unicode.idna.idna_to_ascii("ASCII.EXAMPLE")!,
                          "ascii.example")
-    } else e {
+    } fail(e) {
         iup_ok = false
     }
     if !iup_ok {
@@ -617,7 +617,7 @@ func encoding_probe() -> string? {
         trip_ok = name_is(
             unicode.idna.idna_to_unicode(unicode.idna.idna_to_ascii("\u4f8b\u3048.com")!)!,
             "\u4f8b\u3048.com")
-    } else e {
+    } fail(e) {
         trip_ok = false
     }
     if !trip_ok {

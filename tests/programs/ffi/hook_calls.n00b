@@ -35,6 +35,6 @@ try {
     require hooks.hook_context() == first
     require hooks.hook_fire(2) == 6
     hooks.hook_unsubscribe(again)!
-} else failure {
+} fail(failure) {
     require false
 }

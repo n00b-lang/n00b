@@ -27,7 +27,7 @@ var write_fd: int = -1
 require __os_pipe(ref read_fd, ref write_fd) == 0
 try {
     require !sys.term.fd_is_tty(read_fd)!
-} else failure {
+} fail(failure) {
     require false
 }
 var rows: u16 = 0
@@ -35,7 +35,7 @@ var cols: u16 = 0
 try {
     sys.term.terminal_size(read_fd, rows, cols)!
     require false
-} else failure {
+} fail(failure) {
     require failure < 0
 }
 require __os_close(read_fd) == 0

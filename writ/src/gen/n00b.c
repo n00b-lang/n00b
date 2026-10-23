@@ -2558,7 +2558,7 @@ emit_static_init(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bool 
     emit_wrapper_arguments(w, emit, keywords, options_record);
     writ_emit_line(emit, ")%s", can_fail(w) ? "!" : "");
     if (can_fail(w)) {
-        writ_emit_close(emit, " else failure {");
+        writ_emit_close(emit, " fail(failure) {");
         writ_emit_indent(emit, 1);
         writ_emit_line(emit, "panic(\"%.*s failed\")", S(wrapper_name(w)));
         writ_emit_close(emit, nullptr);
@@ -3593,7 +3593,7 @@ emit_export_adapter(const n00b_t *g, writ_emit_t *emit, size_t index, const writ
         writ_emit_open(emit, "try");
         emit_export_call(g, emit, &w, count != 0);
         emit_export_outputs(g, emit, &w, outs, count);
-        writ_emit_close(emit, " else failure {");
+        writ_emit_close(emit, " fail(failure) {");
         writ_emit_indent(emit, 1);
         emit_export_failure(g, emit, plan, "cast[i64]failure.code");
         writ_emit_close(emit, nullptr);
