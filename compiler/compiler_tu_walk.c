@@ -8,6 +8,7 @@
 typedef struct {
     parse_grammar_t *grammar;
     th_ctx *types;
+    core_list_t(parse_tree_ptr_t) assignment_targets;
 } annotation_context_t;
 
 static const parse_annot_kind_t semantic_kinds[] = {
@@ -540,7 +541,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if ((NT_IS(grammar, node, "assign-stmt")
              || NT_IS(grammar, node, "binop-assign-stmt"))
             && core_tree_num_children(node) == 3)
-            report_view_write(grammar, unit, core_tree_child(node, 0));
+            core_list_push(annotation_context->assignment_targets,
+                           core_tree_child(node, 0));
         if (NT_IS(grammar, node, "return-stmt")) {
             parse_tree_t *function = node;
             while (function && !NT_IS(grammar, function, "func-def"))
@@ -1709,6 +1711,9 @@ run_semantic_walk(parse_grammar_t *grammar, th_ctx *types,
                                             child_index);
         else parse_tree_walk_run(walk, root);
     }
+    for (size_t i = 0; i < context.assignment_targets.len; i++)
+        report_view_write(grammar, unit, context.assignment_targets.data[i]);
+    core_list_free(context.assignment_targets);
     bool ok = configured && !parse_tree_walk_failed(walk)
         && !core_diagnostics_failed(core_translation_unit_diagnostics(unit));
     parse_tree_walk_free(walk);

@@ -273,8 +273,10 @@ func totitle(consume s: string) -> string {
 }
 
 func casecmp(a: string, b: string) -> i32 {
-    let fa: string = casefold(a)
-    let fb: string = casefold(b)
+    let left: string = a
+    let right: string = b
+    let fa: string = casefold(left)
+    let fb: string = casefold(right)
 
     let la: uint = byte_len(fa)
     let lb: uint = byte_len(fb)

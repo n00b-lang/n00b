@@ -367,7 +367,8 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
 }
 
 func sort_key(s: string) -> List[u8] {
-    let nfd: string = internal.normalization.nfd(s)
+    let input: string = s
+    let nfd: string = internal.normalization.nfd(input)
     let byte_len: uint = byte_len(nfd)
     var cap: uint = 1
     if byte_len != 0 {

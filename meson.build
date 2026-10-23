@@ -720,7 +720,7 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'const_array_write_rejected.n',
-           'IR-E0037',
+           'N00BB-T0066',
            'const_array_write_rejected.n:22:5',
            'const_array_write_rejected.n:18:5',
            'const_array_write_rejected.n:14:5',

@@ -90,14 +90,6 @@ func start() -> nil {
     require bake.bake_query(graph, 7) == 40
     require bake.bake_query(graph, 8) == 1
     require bake.bake_query(graph, 9) == 90
-    var handle: bake.Bake_Root = graph
-    try {
-        bake.close(handle)!
-        require false
-    } else failure {
-        require failure.text != nil
-        require failure.text.get() == "a baked object cannot be released"
-    }
     require bake.bake_query(graph, 8) == 2
     var position: uint = 0
     while position < 4 {

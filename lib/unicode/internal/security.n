@@ -127,7 +127,9 @@ func skeleton(consume s: string) -> string {
 }
 
 func is_confusable(a: string, b: string) -> bool {
-    return skeleton(a) == skeleton(b)
+    let left: string = a
+    let right: string = b
+    return skeleton(left) == skeleton(right)
 }
 
 private func augmented_script_set(cp: char,
