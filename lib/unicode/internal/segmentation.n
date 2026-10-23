@@ -103,7 +103,7 @@ private func next_char(it: internal.types.Break_Iter, modify pos: u32) -> char? 
     try {
         let rc: char = internal.encoding.utf8_decode(it.text, pos)!
         return rc
-    } else failure {
+    } fail(failure) {
         return nil
     }
 }

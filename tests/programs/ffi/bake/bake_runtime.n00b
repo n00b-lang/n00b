@@ -6,7 +6,7 @@ func start() -> nil {
     var root: bake.Bake_Root? = nil
     try {
         root = bake.bake_build("bake_spec.txt")!
-    } else failure {
+    } fail(failure) {
         panic("bake_build failed")
     }
     require root != nil
@@ -23,7 +23,7 @@ func start() -> nil {
     require bake.bake_query(graph, 9) == 90
     try {
         bake.close(graph)!
-    } else failure {
+    } fail(failure) {
         panic("closing a run-time graph failed")
     }
     __fd_write(2, "runtime ok\n")

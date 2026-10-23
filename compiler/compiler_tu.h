@@ -1144,7 +1144,7 @@ th_type *context_default_ir_type(th_ctx *types, th_type *context_type,
     th_type *result_type);
 bool n00bb_call_is_error_propagated(parse_grammar_t *grammar,
     parse_tree_t *node);
-parse_sym_entry_t *n00bb_try_error_symbol(parse_grammar_t *grammar,
+parse_tree_t *n00bb_try_handler_clause(parse_grammar_t *grammar,
     parse_tree_t *node);
 parse_sym_entry_t *n00bb_try_clause_symbol(parse_grammar_t *grammar,
     parse_tree_t *clause);

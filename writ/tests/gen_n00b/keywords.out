@@ -246,7 +246,7 @@ record Db_Cell {
     public raw: uint
 }
 
-alias type Db =Ref[Db_Cell]
+alias type Db = Ref[Db_Cell]
 
 func __db_cell(raw: uint) -> Db {
     var cell: Db_Cell = (raw = raw)

@@ -96,7 +96,7 @@ func terminal_color_depth(fd: int) -> internal.color.Color_Depth {
         if !sys.term.fd_is_tty(fd)! {
             return internal.color.Color_Depth.mono
         }
-    } else failure {
+    } fail(failure) {
         return internal.color.Color_Depth.mono
     }
     return ceiling
@@ -141,7 +141,7 @@ func terminal_width(fd: int) -> u16? {
         if cols > 0 {
             return cols
         }
-    } else failure {
+    } fail(failure) {
     }
     return env_columns()
 }

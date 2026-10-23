@@ -94,7 +94,7 @@ private func followed_by_cased(s: string, len: uint, pos: u32) -> bool {
 
         try {
             cp = internal.encoding.utf8_decode(s, at)!
-        } else failure {
+        } fail(failure) {
             return false
         }
 
@@ -164,7 +164,7 @@ private func full_case_map(consume s: string,
 
         try {
             cp = internal.encoding.utf8_decode(s, pos)!
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] len
 
             continue
@@ -228,7 +228,7 @@ func totitle(consume s: string) -> string {
 
         try {
             cp = internal.encoding.utf8_decode(s, pos)!
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] len
 
             continue

@@ -22,7 +22,7 @@ func as_text_fails(s: string) -> bool {
     var failed = false
     try {
         as_text(s)!
-    } else e {
+    } fail(e) {
         failed = e == String_Error.bad_encoding
     }
     return failed
@@ -31,7 +31,7 @@ func as_text_fails(s: string) -> bool {
 func as_text_encoding(s: string) -> Str_Encoding {
     let revealed = try {
         -> encoding(as_text(s)!)
-    } else e {
+    } fail(e) {
         -> Str_Encoding.binary
     }
     return revealed

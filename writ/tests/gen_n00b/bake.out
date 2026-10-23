@@ -426,7 +426,7 @@ record Bake_Root_Cell {
     public raw: Foreign[Bake_Root_T]?
 }
 
-alias type Bake_Root =Ref[Bake_Root_Cell]
+alias type Bake_Root = Ref[Bake_Root_Cell]
 
 func __bake_root_cell(raw: uint) -> Bake_Root {
     var cell: Bake_Root_Cell = (raw = unsafe_cast[Foreign[Bake_Root_T]?] raw)

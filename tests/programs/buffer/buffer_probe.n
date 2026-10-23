@@ -39,7 +39,7 @@ func literal_checks() {
     var b: Buffer = buffer_from_string("hello")
     try {
         set_index(b, 0, 0x48)!
-    } else e {
+    } fail(e) {
         require false
     }
     require same_text(b, "Hello")

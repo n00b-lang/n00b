@@ -973,7 +973,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
         while cast[uint] pos < byte_len {
             try {
                 p.cps[p.len] = internal.encoding.utf8_decode(s, pos)!
-            } else failure {
+            } fail(failure) {
                 pos = cast[u32] byte_len
 
                 continue

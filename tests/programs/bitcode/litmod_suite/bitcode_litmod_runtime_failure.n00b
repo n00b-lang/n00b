@@ -7,7 +7,7 @@ func caught(x: int) -> int {
     try {
         values = [1, x]'fault
         return 0
-    } else err {
+    } fail(err) {
         return 1
     }
 }

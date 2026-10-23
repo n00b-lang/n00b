@@ -122,7 +122,7 @@ func failing() -> uint fail: string {
 }
 try {
     let n: uint = failing()!
-} else e {
+} fail(e) {
 }
 EOF
 reject fail_payload 'the borrowed string is the failure value here'

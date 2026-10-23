@@ -559,7 +559,7 @@ func linebreaks(s: string) -> List[u8] {
             cps[n] = internal.encoding.utf8_decode(s, pos)!
             cls[n] = line_break(cps[n])
             n += 1
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] byte_len
         }
     }

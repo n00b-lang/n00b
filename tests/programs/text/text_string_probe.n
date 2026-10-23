@@ -25,7 +25,7 @@ func index_of(s: string, n: i64, unit: text.Index_Unit) -> string? {
     var got: string? = nil
     try {
         got = text.index(s, n, unit = unit)!
-    } else failure {
+    } fail(failure) {
         got = nil
     }
     return got
@@ -36,7 +36,7 @@ func slice_of(s: string, start: i64, end: i64, unit: text.Index_Unit)
     var got: string? = nil
     try {
         got = text.slice(s, start, end, unit = unit)!
-    } else failure {
+    } fail(failure) {
         got = nil
     }
     return got
@@ -46,7 +46,7 @@ func find_of(s: string, sub: string, unit: text.Index_Unit) -> uint? {
     var got: uint? = nil
     try {
         got = text.find(s, sub, unit = unit)!
-    } else failure {
+    } fail(failure) {
         got = nil
     }
     return got
@@ -67,7 +67,7 @@ func cased(s: string, which: int) -> string? {
         else {
             got = text.title(s)!
         }
-    } else failure {
+    } fail(failure) {
         got = nil
     }
     return got
@@ -76,7 +76,7 @@ func cased(s: string, which: int) -> string? {
 func seeks(modify c: text.Str_Cursor, n: i64) -> bool {
     let got: bool = try {
         -> text.seek(c, n)!
-    } else failure {
+    } fail(failure) {
         -> false
     }
     return got
@@ -116,7 +116,7 @@ func check_utf8_units() {
     check(same_opt(index_of(s, -1, text.Index_Unit.char), "z"), "10")
     let cp: char = try {
         -> text.char_index(s, 1)!
-    } else failure {
+    } fail(failure) {
         -> '\0'
     }
     check(cast[u32] cp == 0x4e16, "11")

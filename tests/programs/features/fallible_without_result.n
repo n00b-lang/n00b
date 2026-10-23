@@ -24,12 +24,12 @@ try {
     check_return(1)!
     check(-1)!
     require false
-} else e {
+} fail(e) {
     failed = e == "negative"
 }
 require failed
 try {
     require pick(4)! == 5
-} else e {
+} fail(e) {
     require false
 }

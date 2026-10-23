@@ -59,6 +59,6 @@ try {
     require kw.db_limit(tuned, limits) == 49999
     kw.close(defaults)!
     kw.close(tuned)!
-} else failure {
+} fail(failure) {
     require false
 }

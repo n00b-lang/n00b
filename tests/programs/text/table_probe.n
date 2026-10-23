@@ -13,7 +13,7 @@ func cell_is(t: text.Table, row: uint, col: uint, want: string) -> bool {
     var cell: text.Table_Cell
     try {
         cell = text.cell_index(t, row, col)!
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         return false
     }
     return cell.content == want
@@ -90,7 +90,7 @@ func spec_unchanged(t: text.Table, col: uint) -> bool {
     var spec: text.Table_Col_Spec
     try {
         spec = text.col_spec(t, col)!
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         return false
     }
     return spec.mode == text.Col_Mode.fit and spec.min == nil and
@@ -163,7 +163,7 @@ func run_checks() {
                       c0.flex_multiple == 2 and
                       c2.mode == text.Col_Mode.fixed and c2.pref != nil and
                       abs_of(c2.pref) == 20
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         specs_ok = false
     }
     check(specs_ok, "11")
@@ -184,7 +184,7 @@ func run_checks() {
     var wide_ok: bool = false
     try {
         wide_ok = text.cell_index(spanned, 0, 0)!.col_span == 3
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         wide_ok = false
     }
     check(wide_ok, "14")
@@ -215,7 +215,7 @@ func run_checks() {
     var styled: text.Table_Cell
     try {
         styled = text.cell_index(casc, 1, 1)!
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         require false
     }
     let rc: text.Box_Props = text.resolve_cell_props(casc, 1, 1,
@@ -230,7 +230,7 @@ func run_checks() {
     try {
         text.set_col_props(casc, 0, colp)!
         text.set_col_priority(casc, 0, 7)!
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         over_ok = false
     }
     check(over_ok, "20")
@@ -241,7 +241,7 @@ func run_checks() {
     try {
         pri_ok = text.col_spec(casc, 0)!.priority == 7 and
             !casc.layout_valid
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         pri_ok = false
     }
     check(pri_ok, "22")
@@ -254,7 +254,7 @@ func run_checks() {
     try {
         rspec = text.col_spec(ranged, 0)!
         pspec = text.col_spec(ranged, 1)!
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         require false
     }
     require rspec.min != nil and rspec.max != nil
@@ -287,7 +287,7 @@ func run_checks() {
     var flow_flex: bool = false
     try {
         flow_flex = text.col_spec(flow, 2)!.mode == text.Col_Mode.flex
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         require false
     }
     check(flow_flex, "29")
@@ -301,7 +301,7 @@ func run_checks() {
     var second_ok: bool = true
     try {
         second_cells = text.row_index(bulk, 1)!.cells.len()
-    } else e: Container_Err {
+    } fail(e: Container_Err) {
         second_ok = false
     }
     check(second_ok, "31")
@@ -309,7 +309,7 @@ func run_checks() {
         var past_end: bool = false
         try {
             text.row_index(bulk, 2)!
-        } else e: Container_Err {
+        } fail(e: Container_Err) {
             past_end = true
         }
         check(second_cells == 3 and past_end, "32")

@@ -382,7 +382,7 @@ func sort_key(s: string) -> List[u8] {
     while cast[uint] pos < byte_len {
         try {
             cps[num_cps] = internal.encoding.utf8_decode(nfd, pos)!
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] byte_len
 
             continue

@@ -312,7 +312,7 @@ func __export_kv_open(c_path: uint, c_out_db: uint, failed: uint) -> i64 {
         let result:  = kvstore.open(path_value)!
         __export_store(c_out_db, cast[uint]__ffi_table_insert(__handles_Db, result))
         return 0
-    } else failure {
+    } fail(failure) {
         __export_failed(failed, 1)
         return cast[i64]failure.code
     }
@@ -331,7 +331,7 @@ func __export_kv_put(c_db: uint, c_key: uint, c_klen: u64, c_val: uint, c_vlen: 
     try {
         kvstore.put(db_value, key_value, val_value)!
         return 0
-    } else failure {
+    } fail(failure) {
         __export_failed(failed, 1)
         return cast[i64]failure.code
     }
@@ -353,7 +353,7 @@ func __export_kv_get(c_db: uint, c_key: uint, c_klen: u64, c_out_val: uint, c_ou
         var bytes: Array[u8] = result.get()
         __export_own_bytes(ref bytes, c_out_val, c_out_len)
         return 0
-    } else failure {
+    } fail(failure) {
         __export_failed(failed, 1)
         return cast[i64]failure.code
     }
@@ -370,7 +370,7 @@ func __export_kv_iter_new(c_db: uint, c_prefix: uint, c_plen: u64, failed: uint)
     try {
         let result:  = kvstore.iter_new(db_value, prefix_value)!
         return cast[uint]__ffi_table_insert(__handles_Iter, result)
-    } else failure {
+    } fail(failure) {
         __export_failed(failed, 1)
         return 0
     }

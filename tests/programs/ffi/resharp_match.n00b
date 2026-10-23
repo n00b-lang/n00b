@@ -12,13 +12,13 @@ try {
     require spans[1].start == 6
     require spans[1].end == 11
     resharp.close(pattern)!
-} else failure {
+} fail(failure) {
     require false
 }
 try {
     resharp.regex_new("(unclosed")!
     require false
-} else failure {
+} fail(failure) {
     require failure.fn == "regex_new"
     require failure.text != nil
 }

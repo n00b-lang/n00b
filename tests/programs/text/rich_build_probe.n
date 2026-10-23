@@ -48,7 +48,7 @@ func byte_slice_of(s: string, start: i64, end: i64) -> string {
     var got: string = ""
     try {
         got = text.slice(s, start, end, unit = text.Index_Unit.byte)!
-    } else failure {
+    } fail(failure) {
         got = ""
     }
     return got

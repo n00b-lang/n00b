@@ -466,7 +466,7 @@ record Db_Cell {
     public raw: uint
 }
 
-alias type Db =Ref[Db_Cell]
+alias type Db = Ref[Db_Cell]
 
 func __db_cell(raw: uint) -> Db {
     var cell: Db_Cell = (raw = raw)
@@ -478,7 +478,7 @@ record Iter_Cell {
     public keep_db: Db?
 }
 
-alias type Iter =Ref[Iter_Cell]
+alias type Iter = Ref[Iter_Cell]
 
 func __iter_cell(raw: uint) -> Iter {
     var cell: Iter_Cell = (raw = raw, keep_db = nil)
@@ -543,7 +543,7 @@ func db_open(path: string) -> Db fail: Error {
 func __init(modify self: Db, path: string) {
     try {
         self = db_open(path)!
-    } else failure {
+    } fail(failure) {
         panic("db_open failed")
     }
 }

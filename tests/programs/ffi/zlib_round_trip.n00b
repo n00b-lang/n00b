@@ -7,14 +7,14 @@ try {
     require __array_length(unpacked) == __array_length(text)
     require unpacked[0] == 104
     require unpacked[9] == 111
-} else failure {
+} fail(failure) {
     require false
 }
 try {
     let packed = zlib.compress(text, 6)!
     zlib.uncompress(2, packed)!
     require false
-} else failure {
+} fail(failure) {
     require failure.code == -5
     require failure.fn == "uncompress"
 }

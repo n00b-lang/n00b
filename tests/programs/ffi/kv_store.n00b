@@ -84,6 +84,6 @@ try {
         }
     }
     require keys == 2
-} else failure {
+} fail(failure) {
     require false
 }

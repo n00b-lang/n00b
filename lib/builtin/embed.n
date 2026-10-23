@@ -93,7 +93,7 @@ private func open_file(path: string) -> int fail: string {
     try {
         bytes = string.core.to_cstring(path, copy = true,
             buf = new[Array[u8]](cast[int] string.core.byte_len(path) + 1))!
-    } else failure {
+    } fail(failure) {
         fail "'embed path is not a valid file name: " + path
     }
     let fd: int = __os_open(unsafe_cast[Ref[byte]] ref bytes[0],

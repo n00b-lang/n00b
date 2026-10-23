@@ -9,29 +9,47 @@ func caught(v: int) -> bool {
     var matched = false
     try {
         pick(v)!
-    } else e {
+    } fail(e) {
         matched = e == "negative"
     }
     return matched
 }
 
+func ignored(v: int) -> bool {
+    var failed = false
+    try {
+        pick(v)!
+    } fail() {
+        failed = true
+    }
+    return failed
+}
+
 require caught(-1)
 require !caught(1)
+require ignored(-1)
+require !ignored(1)
+let fallback = try {
+    -> pick(-3)!
+} fail() {
+    -> 7
+}
+require fallback == 7
 let matched = try {
     -> pick(-1)! == 3
-} else e {
+} fail(e) {
     -> e == "negative"
 }
 require matched
 let typed = try {
     -> pick(-2)! == 3
-} else e: string {
+} fail(e: string) {
     -> e == "negative"
 }
 require typed
 let value = try {
     -> pick(5)!
-} else e {
+} fail(e) {
     -> 0
 }
 require value == 5

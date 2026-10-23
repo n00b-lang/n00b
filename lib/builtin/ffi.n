@@ -37,7 +37,7 @@ func fixup(modify self: 'T) -> nil fail: string {
 func ffi_run_fixup(modify value: 'T) -> string? where 'T : Fixup {
     try {
         value.fixup()!
-    } else failure {
+    } fail(failure) {
         return failure
     }
     return nil

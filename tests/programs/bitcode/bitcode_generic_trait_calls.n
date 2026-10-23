@@ -48,7 +48,7 @@ func start() -> nil {
     try {
         verify(handle)!
         repair(handle)!
-    } else failure {
+    } fail(failure) {
         require false
     }
     require handle.fd == 7
@@ -57,7 +57,7 @@ func start() -> nil {
     try {
         repair(broken)!
         require false
-    } else failure {
+    } fail(failure) {
         require failure == "unfixable"
     }
     require broken.fd == -1

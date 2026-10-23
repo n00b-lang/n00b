@@ -2010,6 +2010,11 @@ n00bb_store_try_value(ir_lower_context_t *context,
     return true;
 }
 
+static bool
+n00bb_store_try_error(ir_lower_context_t *context,
+                      n00bb_lower_context_t *lower, n00bb_try_frame_t *frame,
+                      ir_value_t *error, ir_span_t span);
+
 static int
 n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
                       ir_value_t *error, ir_span_t span)
@@ -2025,20 +2030,37 @@ n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
         }
     }
     if (!frame) return 0;
+    if (frame->error_symbol
+        && !n00bb_store_try_error(context, lower, frame, error, span))
+        return -1;
+    if (!n00bb_emit_jump(context, frame->handler, span)) {
+        lower_error(context, IR_DIAG_INTERNAL, span,
+                    "could not route failure to the try handler");
+        return -1;
+    }
+    frame->error_reachable = true;
+    context->reachable = false;
+    return 1;
+}
 
+static bool
+n00bb_store_try_error(ir_lower_context_t *context,
+                      n00bb_lower_context_t *lower, n00bb_try_frame_t *frame,
+                      ir_value_t *error, ir_span_t span)
+{
     parse_sym_entry_t *symbol = frame->error_symbol;
     th_ctx *types = tu_state(lower->unit)->types;
-    if (!error || !symbol || !types) {
+    if (!error || !types) {
         lower_error(context, IR_DIAG_VERIFY_TYPED, span,
                     "try error handler has no bound error value");
-        return -1;
+        return false;
     }
     th_type *bound_type = symbol->type
         ? th_unify_in_place(types, symbol->type, error->type) : error->type;
     if (!bound_type) {
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                     "failure value does not match the try handler error type");
-        return -1;
+        return false;
     }
     symbol->type = bound_type;
     if (!frame->error_value) {
@@ -2051,25 +2073,22 @@ n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
         if (!frame->error_value) {
             lower_error(context, IR_DIAG_INTERNAL, span,
                         "could not allocate the try handler error value");
-            return -1;
+            return false;
         }
     }
     if (!ir_type_eq(context->module, frame->error_value->type, bound_type)) {
         lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
                     "failure paths reaching this handler have incompatible types");
-        return -1;
+        return false;
     }
     ir_instr_t *store = ir_lower_emit_instruction(context, IR_OP_COPY, span);
     if (!store || !ir_instr_set_dest_local(store, frame->error_value)
-        || !ir_instr_operand_value(store, error)
-        || !n00bb_emit_jump(context, frame->handler, span)) {
+        || !ir_instr_operand_value(store, error)) {
         lower_error(context, IR_DIAG_INTERNAL, span,
-                    "could not route failure to the try handler");
-        return -1;
+                    "could not store the failure for the try handler");
+        return false;
     }
-    frame->error_reachable = true;
-    context->reachable = false;
-    return 1;
+    return true;
 }
 
 static bool
@@ -2188,7 +2207,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                 core_translation_unit_diagnostics(lower->unit), lower->unit,
                 CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0048"),
                 CORE_STRING_STATIC("nothing in this `try` can fail, so its"
-                                   " `else` handler can never run"),
+                                   " `fail` handler can never run"),
                 link_source_location(frame->node));
             return false;
         }
@@ -2214,7 +2233,8 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
             return true;
         if (entering && context->reachable) {
             parse_sym_entry_t *symbol = frame->error_symbol;
-            if (!frame->error_value || !symbol
+            if (!symbol) return true;
+            if (!frame->error_value
                 || !ir_lower_bind_local(context, symbol,
                                         frame->error_value)) {
                 lower_error(context, IR_DIAG_INTERNAL,
@@ -16058,7 +16078,8 @@ register_nominal_types(parse_grammar_t *grammar,
             }
             bool nominal = symbol->decl_node
                 ? nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("alias-stmt"))
-                    && !alias_declaration_is_transparent(grammar,symbol->decl_node)
+                    && !alias_declaration_is_transparent(grammar,
+                                                         symbol->decl_node)
                 : core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("nominal"));
             if (!nominal) continue;
             th_type *representation = th_type_definition(state->types, symbol->type);

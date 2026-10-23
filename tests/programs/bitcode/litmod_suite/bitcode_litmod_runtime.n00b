@@ -11,7 +11,7 @@ func caught(x: int) -> int {
     try {
         data = [1, x]'ints
         return 1
-    } else err {
+    } fail(err) {
         return 0
     }
 }

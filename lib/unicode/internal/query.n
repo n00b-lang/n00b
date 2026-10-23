@@ -66,7 +66,7 @@ private func count_wide_chars(chars: string) -> uint {
 
         try {
             got = internal.encoding.utf8_decode(chars, pos)!
-        } else failure {
+        } fail(failure) {
             break
         }
 
@@ -91,7 +91,7 @@ func char_set(chars: string) -> internal.types.Char_Set {
 
         try {
             got = internal.encoding.utf8_decode(chars, pos)!
-        } else failure {
+        } fail(failure) {
             break
         }
 

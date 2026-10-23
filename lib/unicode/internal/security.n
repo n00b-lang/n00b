@@ -98,7 +98,7 @@ func skeleton(consume s: string) -> string {
 
         try {
             cp = internal.encoding.utf8_decode(nfd, pos)!
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] len
 
             continue
@@ -256,7 +256,7 @@ func script_restriction(s: string) -> Restriction {
 
         try {
             cp = internal.encoding.utf8_decode(s, pos)!
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] len
 
             continue

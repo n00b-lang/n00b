@@ -6,6 +6,6 @@ try {
     let unpacked = archive.zlib.uncompress(32, packed)!
     require __array_length(unpacked) == 9
     require unpacked[8] == 99
-} else failure {
+} fail(failure) {
     require false
 }

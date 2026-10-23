@@ -125,8 +125,8 @@ n00bb_call_is_error_propagated(parse_grammar_t *grammar, parse_tree_t *node)
     }
 }
 
-parse_sym_entry_t *
-n00bb_try_error_symbol(parse_grammar_t *grammar, parse_tree_t *node)
+parse_tree_t *
+n00bb_try_handler_clause(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_tree_t *current = node;
     for (parse_tree_t *at = node ? parse_tree_parent(node) : nullptr;
@@ -138,9 +138,9 @@ n00bb_try_error_symbol(parse_grammar_t *grammar, parse_tree_t *node)
         if (child_nt(grammar, at, statement ? CORE_STRING_STATIC("try-body")
                                             : CORE_STRING_STATIC("value-body"))
             != current) continue;
-        return n00bb_try_clause_symbol(grammar, child_nt(grammar, at,
+        return child_nt(grammar, at,
             statement ? CORE_STRING_STATIC("try-error-clause")
-                      : CORE_STRING_STATIC("try-value-error-clause")));
+                      : CORE_STRING_STATIC("try-value-error-clause"));
     }
     return nullptr;
 }
@@ -148,7 +148,8 @@ n00bb_try_error_symbol(parse_grammar_t *grammar, parse_tree_t *node)
 parse_sym_entry_t *
 n00bb_try_clause_symbol(parse_grammar_t *grammar, parse_tree_t *clause)
 {
-    parse_tree_t *binding = CHILD_NT(grammar, clause, "try-error-binding");
+    parse_tree_t *binding = CHILD_NT(grammar,
+        CHILD_NT(grammar, clause, "try-handler-params"), "try-error-binding");
     return binding ? parse_tree_sym(binding) : nullptr;
 }
 

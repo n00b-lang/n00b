@@ -18,7 +18,7 @@ func open_read(path: string) -> int fail: int {
     try {
         bytes = to_cstring(path, copy = true,
             buf = new[Array[u8]](cast[int] byte_len(path) + 1))!
-    } else failure {
+    } fail(failure) {
         fail einval
     }
     let fd: int = __os_open(unsafe_cast[Ref[byte]] ref bytes[0],
@@ -67,7 +67,7 @@ func read_file(path: string) -> Array[u8] fail: int {
     var length: uint = 0
     try {
         length = size(fd)!
-    } else failure {
+    } fail(failure) {
         __os_close(fd)
         fail failure
     }
@@ -77,7 +77,7 @@ func read_file(path: string) -> Array[u8] fail: int {
         var got: uint = 0
         try {
             got = read_into(fd, data, done, length - done)!
-        } else failure {
+        } fail(failure) {
             __os_close(fd)
             fail failure
         }
@@ -95,7 +95,7 @@ func data_file(path: string) -> Array[u8] {
     var data: Array[u8] = new[Array[u8]](0)
     try {
         data = read_file(path)!
-    } else failure {
+    } fail(failure) {
         panic("cannot read data file " + path)
     }
     return data

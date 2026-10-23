@@ -43,7 +43,7 @@ try {
     require kept.stmt_byte(statement, 0) == 107
     require kept.stmt_byte(statement, 5) == 116
     kept.close(statement)!
-} else failure {
+} fail(failure) {
     require false
 }
 try {
@@ -51,7 +51,7 @@ try {
     kept.close(closed)!
     bind(closed)!
     require false
-} else failure {
+} fail(failure) {
     require failure.code == -1
     require failure.fn == "bind_text"
 }

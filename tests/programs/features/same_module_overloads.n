@@ -19,7 +19,7 @@ func measure() -> uint {
     try {
         text = span("abcd", 2)!
         wide = span("abcdef", 2, scale = 2)!
-    } else failure {
+    } fail(failure) {
     }
     return gap + byte_len(text) + byte_len(wide)
 }

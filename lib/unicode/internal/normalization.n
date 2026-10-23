@@ -338,7 +338,7 @@ private func decompose_string(s: string, modify b: internal.runebuf.Char_Buf,
     while cast[uint] pos < len {
         try {
             decompose_into(internal.encoding.utf8_decode(s, pos)!, b, compat)
-        } else failure {
+        } fail(failure) {
             pos = cast[u32] len
 
             continue
@@ -411,7 +411,7 @@ func is_nfc(s: string) -> bool {
 
         try {
             cp = internal.encoding.utf8_decode(s, pos)!
-        } else failure {
+        } fail(failure) {
             return false
         }
 
@@ -471,7 +471,7 @@ func is_nfd(s: string) -> bool {
 
         try {
             cp = internal.encoding.utf8_decode(s, pos)!
-        } else failure {
+        } fail(failure) {
             return false
         }
 

@@ -11,7 +11,7 @@ try {
         leak("a.c")!
         i = i + 1
     }
-} else failure {
+} fail(failure) {
     require false
 }
 var junk: string = ""

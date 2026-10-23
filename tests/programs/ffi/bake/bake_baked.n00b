@@ -11,7 +11,7 @@ func fixup(modify self: bake.Bake_Root_T) -> nil fail: string {
     var fd: i32 = -1
     try {
         fd = bake.bake_open(path.get())!
-    } else failure {
+    } fail(failure) {
         fail "the baked spec file cannot be opened"
     }
     if fd < 0 {
@@ -24,7 +24,7 @@ func build_graph() -> bake.Bake_Root {
     var root: bake.Bake_Root? = nil
     try {
         root = bake.bake_build("bake_spec.txt")!
-    } else failure {
+    } fail(failure) {
         panic("bake_build failed")
     }
     require root != nil
@@ -62,7 +62,7 @@ const index: Dict[bake.Bake_Item_T, i32] = build_index(graph)
 func reopen() -> string? {
     try {
         let status = bake.bake_reopen(graph)!
-    } else failure {
+    } fail(failure) {
         return failure.text
     }
     return nil
@@ -74,7 +74,7 @@ func start() -> nil {
         require missing.get() == "the baked spec file cannot be reopened"
         try {
             let written = bake.bake_touch("bake_spec.txt", "Zbake spec")!
-        } else failure {
+        } fail(failure) {
             panic("bake_touch failed")
         }
         require reopen() == nil

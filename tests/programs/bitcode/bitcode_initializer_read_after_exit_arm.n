@@ -9,7 +9,7 @@ func set_value(v: int) fail: string {
 
 try {
     set_value(1)!
-} else e {
+} fail(e) {
     __os_exit(1)
 }
 let observed = value
