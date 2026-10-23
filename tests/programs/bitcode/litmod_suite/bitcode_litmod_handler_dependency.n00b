@@ -1,8 +1,10 @@
-litmod<quotes> make_outer_handler_dependency, outer_handler_dependency(raw: string) -> string fail: string {
+public alias litmod outer_handler_dependency = make_outer_handler_dependency
+quotes litmod make_outer_handler_dependency(raw: string) -> string fail: string {
     return "an inner long string payload"'inner_handler_dependency
 }
 
-litmod<quotes> identity_handler_dependency, inner_handler_dependency(raw: string) -> string fail: string {
+public alias litmod inner_handler_dependency = identity_handler_dependency
+quotes litmod identity_handler_dependency(raw: string) -> string fail: string {
     return raw
 }
 

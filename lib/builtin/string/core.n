@@ -860,7 +860,7 @@ func style_ref(self: string) -> u32 {
     return 0
 }
 
-litmod<fence> string(contents: string) -> string fail: string {
+fence litmod string(contents: string) -> string fail: string {
     return contents
 }
 

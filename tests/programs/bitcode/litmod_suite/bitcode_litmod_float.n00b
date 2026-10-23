@@ -1,8 +1,10 @@
-litmod<quotes> make_float, as_float(raw: string) -> float fail: string {
+public alias litmod as_float = make_float
+quotes litmod make_float(raw: string) -> float fail: string {
     return 1.5 + 2.0
 }
 
-litmod<sequence> identity_float, floats(items: Array[float]) -> Array[float] fail: string {
+public alias litmod floats = identity_float
+sequence litmod identity_float(items: Array[float]) -> Array[float] fail: string {
     return items
 }
 

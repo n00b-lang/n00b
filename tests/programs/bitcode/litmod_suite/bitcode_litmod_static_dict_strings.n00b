@@ -1,8 +1,10 @@
-litmod<dict> identity, string_mirror(items: Array[Tuple[string, int]]) -> Array[Tuple[string, int]] fail: string {
+public alias litmod string_mirror = identity
+dict litmod identity(items: Array[Tuple[string, int]]) -> Array[Tuple[string, int]] fail: string {
     return items
 }
 
-litmod<sequence> identity_pairs, pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
+public alias litmod pairs = identity_pairs
+sequence litmod identity_pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
     return items
 }
 

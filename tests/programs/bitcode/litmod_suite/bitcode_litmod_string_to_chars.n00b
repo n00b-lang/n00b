@@ -1,4 +1,5 @@
-litmod<quotes> make_chars, chars(raw: string) -> Array[char] fail: string {
+public alias litmod chars = make_chars
+quotes litmod make_chars(raw: string) -> Array[char] fail: string {
     return "abc"'u32
 }
 

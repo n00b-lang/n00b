@@ -1,8 +1,10 @@
-litmod<quotes> identity_scalar_tuple, bundle(raw: string) -> Tuple[string, int] fail: string {
+public alias litmod bundle = identity_scalar_tuple
+quotes litmod identity_scalar_tuple(raw: string) -> Tuple[string, int] fail: string {
     return (raw, 7)
 }
 
-litmod<sequence> from_items, dynamic(items: Array[int]) -> Tuple[string, int] fail: string {
+public alias litmod dynamic = from_items
+sequence litmod from_items(items: Array[int]) -> Tuple[string, int] fail: string {
     return ("runtime", 9)
 }
 

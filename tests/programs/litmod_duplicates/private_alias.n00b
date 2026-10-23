@@ -1,0 +1,3 @@
+import alias_pkg
+
+require "x"'hidden == 1

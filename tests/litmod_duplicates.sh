@@ -38,3 +38,6 @@ fails_with builtin_dict "literal modifier 'dict' for dict literals is already de
 builds cross_module
 builds other_kind
 "$tmp/other_kind"
+builds public_alias
+"$tmp/public_alias" 2>&1 | grep -q ok
+fails_with private_alias "N00BB-T0067"

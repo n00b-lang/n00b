@@ -1,4 +1,5 @@
-litmod<fence> parse_raw, raw(contents: string) -> string fail: string {
+public alias litmod raw = parse_raw
+fence litmod parse_raw(contents: string) -> string fail: string {
     return contents
 }
 

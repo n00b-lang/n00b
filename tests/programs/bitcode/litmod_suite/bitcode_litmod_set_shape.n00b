@@ -1,4 +1,5 @@
-litmod<set> build_set, mirror(items: Array[int]) -> Array[int] fail: string {
+public alias litmod mirror = build_set
+set litmod build_set(items: Array[int]) -> Array[int] fail: string {
     return items
 }
 

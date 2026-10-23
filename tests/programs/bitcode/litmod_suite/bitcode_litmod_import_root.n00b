@@ -1,7 +1,8 @@
 import litmod_import_dep
 
 
-litmod<quotes> make_forwarded, forwarded(raw: string) -> int fail: string {
+public alias litmod forwarded = make_forwarded
+quotes litmod make_forwarded(raw: string) -> int fail: string {
     return litmod_import_dep.value()
 }
 

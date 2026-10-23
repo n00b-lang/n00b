@@ -1,20 +1,23 @@
-litmod<quotes> echo, e(raw: string) -> string fail: string {
+public alias litmod e = echo
+quotes litmod echo(raw: string) -> string fail: string {
     return raw
 }
 
-litmod<int> echo, e(repr: string) -> string fail: string {
+int litmod echo(repr: string) -> string fail: string {
     return repr
 }
 
-litmod<hex> hex_text, ht(digits: string) -> string fail: string {
+public alias litmod ht = hex_text
+hex litmod hex_text(digits: string) -> string fail: string {
     return digits
 }
 
-litmod<float> float_text, ft(digits: string) -> string fail: string {
+public alias litmod ft = float_text
+float litmod float_text(digits: string) -> string fail: string {
     return digits
 }
 
-litmod<quotes> solo(raw: string) -> string fail: string {
+quotes litmod solo(raw: string) -> string fail: string {
     return raw
 }
 

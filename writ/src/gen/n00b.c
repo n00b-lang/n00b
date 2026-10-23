@@ -1839,7 +1839,7 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     }
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_line(emit, "alias %.*s = Ref[%.*s_Cell]", S(type), S(type));
+    writ_emit_line(emit, "alias type %.*s = Ref[%.*s_Cell]", S(type), S(type));
     writ_emit_line(emit, "");
     emit_cell_constructor(emit, type, cell_constructor(g, type), writ_cstr(""), fields, source_count, source_count,
                           initial);

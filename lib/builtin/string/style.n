@@ -18,7 +18,7 @@ enum Font_Hint {
     default = 0, mono, serif, sans
 }
 
-alias Color = i32
+alias type Color = i32
 
 record Text_Style {
     bold:             bool?
@@ -1417,7 +1417,8 @@ private func build_style_records(segments: List[Markup_Segment])
     return records
 }
 
-litmod<quotes> rich, r(raw: string) -> string fail: string {
+public alias litmod r = rich
+quotes litmod rich(raw: string) -> string fail: string {
     var segments: List[Markup_Segment] = new[List[Markup_Segment]]()
     let text: string = parse_rich_markup(raw, segments)!
     var body: Rich_Body = (s = text, style_info = build_style_records(segments),

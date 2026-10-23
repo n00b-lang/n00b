@@ -1172,7 +1172,7 @@ record Regex_Options_Cell {
     public raw: uint
 }
 
-alias Regex_Options = Ref[Regex_Options_Cell]
+alias type Regex_Options =Ref[Regex_Options_Cell]
 
 func __regex_options_cell(raw: uint) -> Regex_Options {
     var cell: Regex_Options_Cell = (raw = raw)
@@ -1190,7 +1190,7 @@ record Regex_Cell {
     public raw: uint
 }
 
-alias Regex = Ref[Regex_Cell]
+alias type Regex =Ref[Regex_Cell]
 
 func __regex_cell(raw: uint) -> Regex {
     var cell: Regex_Cell = (raw = raw)

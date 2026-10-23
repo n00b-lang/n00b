@@ -1,4 +1,4 @@
-alias Maybe_Int =
+alias type Maybe_Int =
     int
 
 func returns_union() -> int |

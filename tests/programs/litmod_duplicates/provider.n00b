@@ -1,3 +1,3 @@
-litmod<quotes> stamp(text: string) -> int fail: string {
+quotes litmod stamp(text: string) -> int fail: string {
     return 1
 }

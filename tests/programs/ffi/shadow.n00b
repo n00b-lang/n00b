@@ -1,3 +1,3 @@
-litmod<fence> ffi(contents: string) -> int fail: string {
+fence litmod ffi(contents: string) -> int fail: string {
     return 1
 }

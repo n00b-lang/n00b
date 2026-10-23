@@ -1,8 +1,10 @@
-litmod<quotes> is_yes, yes(raw: string) -> bool fail: string {
+public alias litmod yes = is_yes
+quotes litmod is_yes(raw: string) -> bool fail: string {
     return true
 }
 
-litmod<quotes> is_no, no(raw: string) -> bool fail: string {
+public alias litmod no = is_no
+quotes litmod is_no(raw: string) -> bool fail: string {
     return false
 }
 

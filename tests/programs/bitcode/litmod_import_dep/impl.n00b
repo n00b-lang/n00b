@@ -1,8 +1,9 @@
-litmod<quotes> make_stamp, stamp(raw: string) -> int fail: string {
+public alias litmod stamp = make_stamp
+quotes litmod make_stamp(raw: string) -> int fail: string {
     return 42
 }
 
-litmod<tuple> count_pair(items: Array[Tuple[int, int] | string]) -> int fail: string {
+tuple litmod count_pair(items: Array[Tuple[int, int] | string]) -> int fail: string {
     return 2
 }
 

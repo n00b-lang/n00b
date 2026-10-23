@@ -3,7 +3,7 @@ record Span {
     high: u32
 }
 
-litmod<fence> located(contents: string, site: Literal_Site) -> uint fail: string {
+fence litmod located(contents: string, site: Literal_Site) -> uint fail: string {
     if contents != "here" {
         fail "unexpected fence contents"
     }

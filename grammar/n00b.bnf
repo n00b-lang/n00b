@@ -39,6 +39,7 @@
                    | <binop-assign-stmt>
                    | <expression-stmt>
                    | <alias-stmt>
+                   | <litmod-alias-stmt>
                    | <type-decl>
                    | <record-decl>
                    | <object-decl>
@@ -189,8 +190,14 @@
 # The `alias` keyword here means that we have one type, with multiple names.
 
 <alias-stmt> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
-       <member-visibility>? %"alias" %IDENTIFIER <assign-op> <type-spec>
+       <member-visibility>? <alias-type-keyword> %IDENTIFIER <assign-op> <type-spec>
      | <member-visibility>? %"type" %IDENTIFIER <assign-op> <type-spec>
+<alias-type-keyword> ::= %"alias" %"type"
+
+<litmod-alias-stmt> ::=
+       <member-visibility>? %"alias" %"litmod" <litmod-alias-name> <assign-op> <litmod-alias-target>
+<litmod-alias-name> ::= %IDENTIFIER
+<litmod-alias-target> ::= %IDENTIFIER
 
 <record-keyword> ::= %"record" | %"struct"
 
@@ -329,12 +336,11 @@
 
 <func-def> @scope("function", $1) @declares($1, "function") @nospace($2) @align($2) ::=
     <func-prelude> %IDENTIFIER <func-type-signature> <body>
-<func-def> @scope("function", $1) @declares($1, "function") @nospace($3) @align($3) ::=
-    <litmod-prelude> %IDENTIFIER <litmod-aliases>? <func-type-signature> <body>
+<func-def> @scope("function", $1) @declares($1, "function") @nospace($2) @align($2) ::=
+    <litmod-prelude> %IDENTIFIER <func-type-signature> <body>
 
-<litmod-prelude> @nospace($1) @nospace($2) @nospace($3) ::= %"litmod" %"<" <litmod-kind> %">"
+<litmod-prelude> ::= <litmod-kind> %"litmod"
 <litmod-kind> ::= %IDENTIFIER | <record-keyword> | <nil-keyword>
-<litmod-aliases> ::= %"," %IDENTIFIER (%"," %IDENTIFIER)*
 
 <member-visibility> @visibility("public") ::= %"public"
 <member-visibility> @visibility("private") ::= %"private"

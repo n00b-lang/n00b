@@ -674,7 +674,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             || !refine_intrinsic_unary_result(grammar, unit, state, node))
             return;
         if (NT_IS(grammar, node, "alias-stmt")
-            && alias_declaration_is_transparent(node)) {
+            && alias_declaration_is_transparent(grammar,node)) {
             parse_sym_entry_t *alias = parse_tree_sym(node);
             if (alias && !alias->type) alias->type = th_var(state->types);
             th_type *target = alias
@@ -1839,7 +1839,7 @@ nominal_declaration_type(parse_grammar_t *grammar, th_ctx *types,
     if (NT_IS(grammar, declaration, "variant-decl"))
         return th_variant(types, qualified, nullptr, 0);
     if (NT_IS(grammar, declaration, "alias-stmt")
-        && alias_declaration_is_transparent(declaration))
+        && alias_declaration_is_transparent(grammar,declaration))
         return th_var(types);
     bool nominal = field_record_declaration(grammar, declaration)
         || NT_IS(grammar, declaration, "enum-stmt")
@@ -1971,7 +1971,8 @@ annotate_unit_bodies(parse_grammar_t *grammar, th_ctx *types,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     parse_tree_t *tree = n00bb_tu_parsed_tree(state);
-    if (!report_shadowed_litmods(unit, state)) return false;
+    if (!validate_litmod_aliases(unit)
+        || !report_shadowed_litmods(unit, state)) return false;
     bool annotated = run_semantic_walk(grammar, types, unit, tree, nullptr,
                                        0, 0, true);
     if (!reject_imported_module_names(grammar, unit, state, tree)

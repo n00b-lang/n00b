@@ -20,9 +20,9 @@ record Char_Filter {
     set:  Char_Set?
 }
 
-alias Script = u16
-alias Block = u16
-alias Age = u8
+alias type Script = u16
+alias type Block = u16
+alias type Age = u8
 
 enum Gc {
     lu = 0, ll, lt, lm, lo, mn, mc, me, nd, nl, no, pc, pd, ps, pe, pi, pf,

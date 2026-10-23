@@ -21,19 +21,23 @@ func count_string_values(pairs: Array[Tuple[string, Any]]) -> int {
     return n
 }
 
-litmod<sequence> json_array, json(items: Array[Any]) -> int fail: string {
+public alias litmod json = json_array
+sequence litmod json_array(items: Array[Any]) -> int fail: string {
     return count_strings(items)
 }
 
-litmod<dict> json_object, json(pairs: Array[Tuple[string, Any]]) -> int fail: string {
+public alias litmod json = json_object
+dict litmod json_object(pairs: Array[Tuple[string, Any]]) -> int fail: string {
     return count_string_values(pairs)
 }
 
-litmod<tuple> json_tuple, json(items: Array[Any]) -> int fail: string {
+public alias litmod json = json_tuple
+tuple litmod json_tuple(items: Array[Any]) -> int fail: string {
     return count_strings(items)
 }
 
-litmod<record> json_record, json(pairs: Array[Tuple[string, Any]]) -> int fail: string {
+public alias litmod json = json_record
+record litmod json_record(pairs: Array[Tuple[string, Any]]) -> int fail: string {
     return count_string_values(pairs)
 }
 

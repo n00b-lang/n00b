@@ -2112,6 +2112,39 @@ report_literal_item_conflict(core_translation_unit_t *unit,
     core_buffer_release(&message);
 }
 
+static void
+report_unknown_litmod(core_translation_unit_t *unit, n00bb_tu_state_t *state,
+                      parse_tree_t *node, core_string_t modifier,
+                      core_string_t kind)
+{
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "no visible literal modifier '%.*s' handles %.*s literals",
+        (int)modifier.u8_bytes, modifier.data,
+        (int)kind.u8_bytes, kind.data);
+    size_t handled = 0;
+    for (size_t k = 0; k < n00bb_litmod_kind_count; k++) {
+        core_string_t other = n00bb_litmod_kinds[k];
+        if (core_string_eq(other, kind)
+            || !user_litmod(state, modifier, other, nullptr)) continue;
+        if (!handled++)
+            core_buffer_printf(&message, "; '%.*s' handles ",
+                               (int)modifier.u8_bytes, modifier.data);
+        else core_buffer_printf(&message, ", ");
+        core_buffer_printf(&message, "%.*s",
+                           (int)other.u8_bytes, other.data);
+    }
+    if (handled) core_buffer_printf(&message, " literals");
+    else
+        core_buffer_printf(&message,
+            "; declare it here, or import a module that exports it");
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0067"),
+        core_string_borrow(message.data, message.byte_len),
+        link_source_location(node));
+    core_buffer_release(&message);
+}
+
 bool
 infer_user_literal_type(parse_grammar_t *grammar,
                         core_translation_unit_t *unit, parse_tree_t *node,
@@ -2191,6 +2224,8 @@ infer_user_literal_type(parse_grammar_t *grammar,
             link_source_location(node));
         core_buffer_release(&message);
     }
+    else if (!registration)
+        report_unknown_litmod(unit, state, node, modifier, kind);
     if (!registration) return false;
     th_type *input_type = th_name(state->types,
         core_string_eq(kind, CORE_STRING_STATIC("bool"))
@@ -5551,7 +5586,8 @@ bind_array_shape_alias_source(parse_grammar_t *grammar,
 {
     if (!type_reference || !alias || !alias->decl_node
         || !NT_IS(grammar, alias->decl_node, "alias-stmt")
-        || !alias_declaration_is_transparent(alias->decl_node)) return true;
+        || !alias_declaration_is_transparent(grammar, alias->decl_node))
+        return true;
     for (parse_tree_t *at = type_reference; at;
          at = parse_tree_parent(at)) {
         if (core_tree_is_leaf(at)) continue;
@@ -5794,7 +5830,7 @@ resolve_local_type_reference(parse_grammar_t *grammar,
     }
     else if (symbol && symbol->decl_node
         && NT_IS(grammar, symbol->decl_node, "alias-stmt")
-        && !alias_declaration_is_transparent(symbol->decl_node)) {
+        && !alias_declaration_is_transparent(grammar, symbol->decl_node)) {
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->types) return;
         core_buffer_t qualified = {0};
@@ -9968,16 +10004,11 @@ n00bb_node_alias_edges(parse_tree_t *node)
 }
 
 bool
-alias_declaration_is_transparent(parse_tree_t *declaration)
+alias_declaration_is_transparent(parse_grammar_t *grammar,
+                                 parse_tree_t *declaration)
 {
-    for (size_t i = 0; declaration && !core_tree_is_leaf(declaration)
-         && i < core_tree_num_children(declaration); i++) {
-        parse_tree_t *child = core_tree_child(declaration, i);
-        if (core_tree_is_leaf(child)
-            && parse_tree_leaf_is(child, CORE_STRING_STATIC("alias")))
-            return true;
-    }
-    return false;
+    return declaration && !core_tree_is_leaf(declaration)
+        && CHILD_NT(grammar, declaration, "alias-type-keyword");
 }
 
 th_type *
@@ -10108,7 +10139,7 @@ exported_type_shape(parse_grammar_t *grammar, core_translation_unit_t *unit,
 
     parse_tree_t *declaration = symbol->decl_node;
     if (NT_IS(grammar, declaration, "alias-stmt")) {
-        *shape_kind = alias_declaration_is_transparent(declaration)
+        *shape_kind = alias_declaration_is_transparent(grammar, declaration)
             ? TH_ENV_TYPE_SHAPE_ALIAS : TH_ENV_TYPE_SHAPE_NOMINAL;
         *shape = declared_type_from_node(grammar, unit, declaration);
         return *shape != nullptr;
@@ -10360,10 +10391,11 @@ typedef struct {
 } type_symbol_query_t;
 
 static bool
-type_symbol_name(parse_sym_entry_t *symbol, core_string_t *name)
+type_symbol_name(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
+                 core_string_t *name)
 {
     return symbol->type && symbol->kind == PARSE_SYM_TYPEDEF
-        && !alias_declaration_is_transparent(
+        && !alias_declaration_is_transparent(grammar,
                canonical_symbol(symbol)->decl_node)
         && th_named_info(th_resolve(symbol->type), name, nullptr, nullptr);
 }
@@ -10402,7 +10434,7 @@ n00bb_index_type_symbols(n00bb_tu_state_t *state)
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
             core_string_t name = {};
-            if (!type_symbol_name(symbol, &name)) continue;
+            if (!type_symbol_name(state->grammar, symbol, &name)) continue;
             type_symbol_bucket_t *bucket = core_dict_get(
                 &state->type_symbol_index, &name, nullptr);
             if (!bucket) {
@@ -10453,7 +10485,7 @@ unit_type_symbol(n00bb_tu_state_t *state, type_symbol_query_t *query)
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
             core_string_t name = {};
-            if (type_symbol_name(symbol, &name)
+            if (type_symbol_name(state->grammar, symbol, &name)
                 && core_string_eq(name, query->name)
                 && type_symbol_matches(query, symbol))
                 return symbol;
@@ -11185,6 +11217,11 @@ free_tu_state(void *data)
         core_free(state->literal_modifiers.data[i].kind.data);
     }
     core_list_free(state->literal_modifiers);
+    for (size_t i = 0; i < state->litmod_aliases.len; i++) {
+        core_free(state->litmod_aliases.data[i].alias.data);
+        core_free(state->litmod_aliases.data[i].target.data);
+    }
+    core_list_free(state->litmod_aliases);
     for (size_t i = 0; i < state->package_declarations.len; i++)
         core_list_free(state->package_declarations.data[i].exports);
     core_list_free(state->package_declarations);
@@ -11225,6 +11262,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
         core_list_new(n00bb_literal_backed_const_t);
     state->array_type_nodes = core_list_new(parse_tree_ptr_t);
     state->literal_modifiers = core_list_new(n00bb_user_litmod_t);
+    state->litmod_aliases = core_list_new(n00bb_litmod_alias_t);
     state->package_declarations = core_list_new(n00bb_package_declaration_t);
     state->import_aliases = core_list_new(n00bb_import_alias_t);
     core_dict_init_string(&state->import_alias_index);
@@ -13193,6 +13231,22 @@ n00bb_literal_prefix_registered(core_string_t prefix)
     return false;
 }
 
+static bool
+builtin_litmod_name(core_string_t modifier, core_string_t kind)
+{
+    n00bb_literal_shape_t shape =
+        core_string_eq(kind, CORE_STRING_STATIC("quotes"))
+            ? N00BB_LITERAL_STRING_SHAPE
+        : core_string_eq(kind, CORE_STRING_STATIC("sequence"))
+            ? N00BB_LITERAL_SEQUENCE_SHAPE
+        : N00BB_LITERAL_BRACE_SHAPE;
+    return (core_string_eq(kind, CORE_STRING_STATIC("quotes"))
+            || core_string_eq(kind, CORE_STRING_STATIC("sequence"))
+            || core_string_eq(kind, CORE_STRING_STATIC("dict"))
+            || core_string_eq(kind, CORE_STRING_STATIC("set")))
+        && n00bb_literal_handler(modifier, shape);
+}
+
 bool
 register_user_litmod(void *context, core_translation_unit_t *unit,
                      parse_tree_t *declaration, core_string_t modifier,
@@ -13200,19 +13254,9 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
 {
     (void)context;
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!state || !modifier.u8_bytes || !declaration)
+    if (!state || !modifier.u8_bytes || !declaration
+        || builtin_litmod_name(modifier, kind))
         return false;
-    n00bb_literal_shape_t shape =
-        core_string_eq(kind, CORE_STRING_STATIC("quotes"))
-            ? N00BB_LITERAL_STRING_SHAPE
-        : core_string_eq(kind, CORE_STRING_STATIC("sequence"))
-            ? N00BB_LITERAL_SEQUENCE_SHAPE
-        : N00BB_LITERAL_BRACE_SHAPE;
-    if ((core_string_eq(kind, CORE_STRING_STATIC("quotes"))
-            || core_string_eq(kind, CORE_STRING_STATIC("sequence"))
-            || core_string_eq(kind, CORE_STRING_STATIC("dict"))
-            || core_string_eq(kind, CORE_STRING_STATIC("set")))
-        && n00bb_literal_handler(modifier, shape)) return false;
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *existing = &state->literal_modifiers.data[i];
         if (core_string_eq(existing->modifier, modifier)
@@ -13241,12 +13285,42 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
     core_list_push(state->literal_modifiers, registration);
     return true;
 }
-static n00bb_user_litmod_t *
-local_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
-                  core_string_t kind)
+
+bool
+register_user_litmod_alias(void *context, core_translation_unit_t *unit,
+                           parse_tree_t *statement, core_string_t alias,
+                           core_string_t target, bool exported)
 {
-    if (!state) return nullptr;
-    for (size_t i = 0; i < state->literal_modifiers.len; i++) {
+    (void)context;
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state) return false;
+    n00bb_litmod_alias_t pending = {
+        .alias = core_string_dup(alias),
+        .target = core_string_dup(target),
+        .location = link_source_location(statement),
+        .exported = exported,
+    };
+    if (!pending.alias.data || !pending.target.data) {
+        core_free(pending.alias.data);
+        core_free(pending.target.data);
+        return false;
+    }
+    core_list_push(state->litmod_aliases, pending);
+    return true;
+}
+
+enum { litmod_alias_depth = 8 };
+
+static n00bb_user_litmod_t *litmod_lookup(n00bb_tu_state_t *state,
+                                          core_string_t modifier,
+                                          core_string_t kind, bool *ambiguous,
+                                          uint32_t depth);
+
+static n00bb_user_litmod_t *
+declared_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
+                     core_string_t kind)
+{
+    for (size_t i = 0; state && i < state->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *registration =
             &state->literal_modifiers.data[i];
         if (core_string_eq(registration->modifier, modifier)
@@ -13256,10 +13330,56 @@ local_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
     return nullptr;
 }
 
+static n00bb_user_litmod_t *
+aliased_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
+                    core_string_t kind, uint32_t depth)
+{
+    for (size_t a = 0; state && depth < litmod_alias_depth
+         && a < state->litmod_aliases.len; a++) {
+        n00bb_litmod_alias_t *alias = &state->litmod_aliases.data[a];
+        if (!core_string_eq(alias->alias, modifier)) continue;
+        n00bb_user_litmod_t *target = litmod_lookup(state, alias->target,
+                                                    kind, nullptr, depth + 1);
+        if (target) return target;
+    }
+    return nullptr;
+}
+
+static n00bb_user_litmod_t *
+local_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
+                  core_string_t kind, uint32_t depth)
+{
+    n00bb_user_litmod_t *declared = declared_user_litmod(state, modifier,
+                                                         kind);
+    return declared ? declared
+                    : aliased_user_litmod(state, modifier, kind, depth);
+}
+
 static n00bb_user_litmod_t *imported_user_litmod(n00bb_tu_state_t *state,
                                                  core_string_t modifier,
                                                  core_string_t kind,
-                                                 bool *ambiguous);
+                                                 bool *ambiguous,
+                                                 uint32_t depth);
+
+static void
+report_litmod_clash(core_translation_unit_t *unit,
+                    core_diag_location_t location, core_string_t modifier,
+                    core_string_t kind, core_string_t module)
+{
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "literal modifier '%.*s' for %.*s literals is already declared in ",
+        (int)modifier.u8_bytes, modifier.data, (int)kind.u8_bytes, kind.data);
+    if (module.data)
+        core_buffer_printf(&message, "module '%.*s'",
+                           (int)module.u8_bytes, module.data);
+    else
+        core_buffer_printf(&message, "this module");
+    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
+        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-PP0001"),
+        core_string_borrow(message.data, message.byte_len), location);
+    core_buffer_release(&message);
+}
 
 bool
 report_shadowed_litmods(core_translation_unit_t *unit,
@@ -13269,58 +13389,123 @@ report_shadowed_litmods(core_translation_unit_t *unit,
     for (size_t i = 0; state && i < state->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *local = &state->literal_modifiers.data[i];
         n00bb_user_litmod_t *visible = imported_user_litmod(state,
-            local->modifier, local->kind, nullptr);
+            local->modifier, local->kind, nullptr, 0);
         if (!visible) continue;
+        report_litmod_clash(unit, local->location, local->modifier,
+                            local->kind, visible->module);
+        valid = false;
+    }
+    return valid;
+}
+
+static bool
+alias_clashes(core_translation_unit_t *unit, n00bb_tu_state_t *state,
+              size_t index, core_string_t kind)
+{
+    n00bb_litmod_alias_t *alias = &state->litmod_aliases.data[index];
+    n00bb_user_litmod_t *visible = nullptr;
+    bool local = declared_user_litmod(state, alias->alias, kind)
+        || builtin_litmod_name(alias->alias, kind);
+    for (size_t earlier = 0; !local && earlier < index; earlier++)
+        local = core_string_eq(state->litmod_aliases.data[earlier].alias,
+                               alias->alias)
+            && litmod_lookup(state, state->litmod_aliases.data[earlier].target,
+                             kind, nullptr, 1);
+    if (!local)
+        visible = imported_user_litmod(state, alias->alias, kind, nullptr, 0);
+    if (!local && !visible) return false;
+    report_litmod_clash(unit, alias->location, alias->alias, kind,
+                        visible ? visible->module : (core_string_t){0});
+    return true;
+}
+
+bool
+validate_litmod_aliases(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    bool valid = true;
+    for (size_t a = 0; state && a < state->litmod_aliases.len; a++) {
+        n00bb_litmod_alias_t *alias = &state->litmod_aliases.data[a];
+        bool resolved = false;
+        for (size_t k = 0; k < n00bb_litmod_kind_count; k++) {
+            core_string_t kind = n00bb_litmod_kinds[k];
+            if (!litmod_lookup(state, alias->target, kind, nullptr, 1))
+                continue;
+            resolved = true;
+            if (alias_clashes(unit, state, a, kind)) valid = false;
+        }
+        if (resolved) continue;
         core_buffer_t message = {0};
         core_buffer_printf(&message,
-            "literal modifier '%.*s' for %.*s literals is already declared in module '%.*s'",
-            (int)local->modifier.u8_bytes, local->modifier.data,
-            (int)local->kind.u8_bytes, local->kind.data,
-            (int)visible->module.u8_bytes, visible->module.data);
+            "literal modifier alias '%.*s' refers to '%.*s', which is not a visible literal modifier",
+            (int)alias->alias.u8_bytes, alias->alias.data,
+            (int)alias->target.u8_bytes, alias->target.data);
         core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
             unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-PP0001"),
             core_string_borrow(message.data, message.byte_len),
-            local->location);
+            alias->location);
         core_buffer_release(&message);
         valid = false;
     }
     return valid;
 }
 
+static n00bb_user_litmod_t *
+litmod_lookup(n00bb_tu_state_t *state, core_string_t modifier,
+              core_string_t kind, bool *ambiguous, uint32_t depth)
+{
+    if (ambiguous) *ambiguous = false;
+    n00bb_user_litmod_t *local = local_user_litmod(state, modifier, kind,
+                                                   depth);
+    return local ? local : imported_user_litmod(state, modifier, kind,
+                                                ambiguous, depth);
+}
+
 n00bb_user_litmod_t *
 user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
             core_string_t kind, bool *ambiguous)
 {
-    if (ambiguous) *ambiguous = false;
-    n00bb_user_litmod_t *local = local_user_litmod(state, modifier, kind);
-    return local ? local : imported_user_litmod(state, modifier, kind,
-                                                ambiguous);
+    return litmod_lookup(state, modifier, kind, ambiguous, 0);
 }
 
-typedef bool (*litmod_visitor_t)(n00bb_user_litmod_t *registration,
+typedef bool (*litmod_visitor_t)(core_string_t name,
+                                 n00bb_user_litmod_t *registration,
                                  void *context);
 
 static bool
+exported_by(n00bb_package_export_t *export, n00bb_user_litmod_t *registration)
+{
+    parse_sym_entry_t *handler = registration->declaration
+        ? parse_tree_sym(registration->declaration) : registration->function;
+    return handler && (export->module_export
+                       || handler == canonical_symbol(export->symbol));
+}
+
+static bool
 visit_exported_litmods(n00bb_package_export_t *export, core_string_t kind,
-                       litmod_visitor_t visit, void *context)
+                       litmod_visitor_t visit, void *context, uint32_t depth)
 {
     n00bb_tu_state_t *source = tu_state(export->source_unit);
     for (size_t i = 0; source && i < source->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *exported = &source->literal_modifiers.data[i];
-        if (!core_string_eq(exported->kind, kind)) continue;
-        parse_sym_entry_t *handler = exported->declaration
-            ? parse_tree_sym(exported->declaration) : exported->function;
-        if (!handler || (!export->module_export
-                && handler != canonical_symbol(export->symbol)))
-            continue;
-        if (!visit(exported, context)) return false;
+        if (core_string_eq(exported->kind, kind) && exported_by(export, exported)
+            && !visit(exported->modifier, exported, context)) return false;
+    }
+    for (size_t a = 0; source && depth < litmod_alias_depth
+         && a < source->litmod_aliases.len; a++) {
+        n00bb_litmod_alias_t *alias = &source->litmod_aliases.data[a];
+        n00bb_user_litmod_t *target = alias->exported
+            ? litmod_lookup(source, alias->target, kind, nullptr, depth + 1)
+            : nullptr;
+        if (target && exported_by(export, target)
+            && !visit(alias->alias, target, context)) return false;
     }
     return true;
 }
 
 static bool
 visit_imported_litmods(n00bb_tu_state_t *state, core_string_t kind,
-                       litmod_visitor_t visit, void *context)
+                       litmod_visitor_t visit, void *context, uint32_t depth)
 {
     if (!state || !state->unit) return true;
     for (size_t i = 0; i < core_translation_unit_import_count(state->unit);
@@ -13343,7 +13528,7 @@ visit_imported_litmods(n00bb_tu_state_t *state, core_string_t kind,
                     n00bb_package_export_t *export =
                         &package->exports.data[export_ix];
                     if (export->source_unit && !visit_exported_litmods(
-                            export, kind, visit, context))
+                            export, kind, visit, context, depth))
                         return false;
                 }
             }
@@ -13359,11 +13544,11 @@ typedef struct {
 } imported_litmod_search_t;
 
 static bool
-match_imported_litmod(n00bb_user_litmod_t *registration, void *context)
+match_imported_litmod(core_string_t name, n00bb_user_litmod_t *registration,
+                      void *context)
 {
     imported_litmod_search_t *search = context;
-    if (!core_string_eq(registration->modifier, search->modifier))
-        return true;
+    if (!core_string_eq(name, search->modifier)) return true;
     if (search->found && search->found != registration) {
         search->ambiguous = true;
         return false;
@@ -13374,17 +13559,20 @@ match_imported_litmod(n00bb_user_litmod_t *registration, void *context)
 
 static n00bb_user_litmod_t *
 imported_user_litmod(n00bb_tu_state_t *state, core_string_t modifier,
-                     core_string_t kind, bool *ambiguous)
+                     core_string_t kind, bool *ambiguous, uint32_t depth)
 {
     imported_litmod_search_t search = {.modifier = modifier};
-    visit_imported_litmods(state, kind, match_imported_litmod, &search);
+    visit_imported_litmods(state, kind, match_imported_litmod, &search,
+                           depth);
     if (ambiguous) *ambiguous = search.ambiguous;
     return search.ambiguous ? nullptr : search.found;
 }
 
 static bool
-collect_visible_litmod(n00bb_user_litmod_t *registration, void *context)
+collect_visible_litmod(core_string_t name, n00bb_user_litmod_t *registration,
+                       void *context)
 {
+    (void)name;
     core_list_t(n00bb_user_litmod_ptr_t) *found = context;
     for (size_t i = 0; i < found->len; i++)
         if (found->data[i] == registration) return true;
@@ -13411,8 +13599,9 @@ n00bb_visible_litmods(n00bb_tu_state_t *state, core_string_t kind)
         core_list_new(n00bb_user_litmod_ptr_t);
     for (size_t i = 0; state && i < state->literal_modifiers.len; i++)
         if (core_string_eq(state->literal_modifiers.data[i].kind, kind))
-            collect_visible_litmod(&state->literal_modifiers.data[i], &found);
-    visit_imported_litmods(state, kind, collect_visible_litmod, &found);
+            collect_visible_litmod(state->literal_modifiers.data[i].modifier,
+                                   &state->literal_modifiers.data[i], &found);
+    visit_imported_litmods(state, kind, collect_visible_litmod, &found, 0);
     return found;
 }
 

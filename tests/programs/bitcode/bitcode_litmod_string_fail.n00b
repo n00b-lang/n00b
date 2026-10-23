@@ -1,4 +1,5 @@
-litmod<quotes> reject_text, reject(raw: string) -> string fail: string {
+public alias litmod reject = reject_text
+quotes litmod reject_text(raw: string) -> string fail: string {
     fail "bad literal"
 }
 

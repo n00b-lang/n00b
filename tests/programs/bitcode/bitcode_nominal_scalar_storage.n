@@ -1,5 +1,5 @@
 type Word = u64
-alias Count = uint
+alias type Count = uint
 enum Status { ready = 1, done = 2 }
 
 func copy_word(value: Word) -> Word {
