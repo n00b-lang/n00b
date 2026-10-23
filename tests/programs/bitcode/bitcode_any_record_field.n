@@ -22,8 +22,8 @@ func check() -> int {
         let entry = entries[i]
         let other = entry.other
         let text = typecase other {
-            case string { = other }
-            else { = "" }
+            case string { -> other }
+            else { -> "" }
         }
         if text != "boxed text that is long enough to need heap storage x" {
             bad = bad + 1

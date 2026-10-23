@@ -642,8 +642,8 @@ private func put_binding(modify tbl: List[Style_Binding]?, is_role: bool,
             break
         }
     }
-    let total: uint = if at == src_n { = src_n + 1 } else { = src_n }
-    let extra: uint = if at == src_n { = 1 } else { = 0 }
+    let total: uint = if at == src_n { -> src_n + 1 } else { -> src_n }
+    let extra: uint = if at == src_n { -> 1 } else { -> 0 }
     var out: Array[Style_Binding] = clone_bindings(src, src_n, extra)
     out[at] = (name = name, style = style, fg_ix = -1, bg_ix = -1)
     tbl = sys.abi.list_with_length(out, total)
@@ -704,8 +704,8 @@ func style_for_tag(self: Theme, tag: string) -> Text_Style {
                 bg_rgb = nil, font_size = nil)
     }
     let is_role: bool = byte_at(tag, 0) == 0x40
-    let own: List[Style_Binding]? = if is_role { = self.roles }
-                                    else { = self.styles }
+    let own: List[Style_Binding]? = if is_role { -> self.roles }
+                                    else { -> self.styles }
     var tbl: List[Style_Binding]
     if own != nil {
         tbl = own.get()

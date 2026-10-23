@@ -18,20 +18,20 @@ func caught(v: int) -> bool {
 require caught(-1)
 require !caught(1)
 let matched = try {
-    = pick(-1)! == 3
+    -> pick(-1)! == 3
 } else e {
-    = e == "negative"
+    -> e == "negative"
 }
 require matched
 let typed = try {
-    = pick(-2)! == 3
+    -> pick(-2)! == 3
 } else e: string {
-    = e == "negative"
+    -> e == "negative"
 }
 require typed
 let value = try {
-    = pick(5)!
+    -> pick(5)!
 } else e {
-    = 0
+    -> 0
 }
 require value == 5
