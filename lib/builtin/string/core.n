@@ -74,10 +74,10 @@ private func __string_byte(s: string, i: uint) -> u8 {
     let view: Ref[String_Words] = words(ref s)
     if view.selector >> tag_shift == 0 {
         let cell: byte = __gc_byte_offset(unsafe_cast[Ref[byte]] view,
-                                          cast[int] i)
+                                          cast[int] i).__value
         return cast[u8] cell
     }
-    let stored: byte = __gc_byte_offset(view.data, cast[int] i)
+    let stored: byte = __gc_byte_offset(view.data, cast[int] i).__value
     return cast[u8] stored
 }
 
@@ -89,12 +89,11 @@ private func __string_make(bytes: Ref[Array[u8]], at: uint, n: uint,
         let cells: Ref[byte] = unsafe_cast[Ref[byte]] view
         var i: uint = 0
         while i < n {
-            ref_write(__gc_byte_offset(cells, cast[int] i),
-                      cast[byte] bytes[at + i])
+            __gc_byte_offset(cells, cast[int] i).__value = cast[byte] bytes[at + i]
             i += 1
         }
-        ref_write(__gc_byte_offset(cells, cast[int] short_selector),
-                  cast[byte](n | (cast[uint] encoding << 4)))
+        __gc_byte_offset(cells, cast[int] short_selector).__value =
+            cast[byte](n | (cast[uint] encoding << 4))
         return made
     }
     if share {
@@ -154,7 +153,7 @@ inline func text(self: string) -> string {
     var walked: string = self
     while __string_tag(walked) == cast[u8] str_tag_rich {
         let body: Ref[string] = unsafe_cast[Ref[string]] words(ref walked).data
-        walked = body
+        walked = body.__value
     }
     return walked
 }
@@ -393,11 +392,11 @@ private func utf8_sequence(bytes: Array[u8], at: uint, remaining: uint)
 
 func __string_from_utf8(bytes: Ref[Array[u8]], result: Ref[string])
     -> bool {
-    let length: uint = __array_length(bytes)
+    let length: uint = __array_length(bytes.__value)
     var ascii: bool = true
     var at: uint = 0
     while at < length {
-        let advance: uint = utf8_sequence(bytes, at, length - at)
+        let advance: uint = utf8_sequence(bytes.__value, at, length - at)
         if advance == 0 {
             return false
         }
@@ -408,7 +407,7 @@ func __string_from_utf8(bytes: Ref[Array[u8]], result: Ref[string])
     if ascii {
         encoding = 1
     }
-    ref_write(result, __string_make(bytes, 0, length, encoding, true))
+    result.__value = __string_make(bytes, 0, length, encoding, true)
     return true
 }
 
@@ -431,7 +430,7 @@ func __string_storage(s: string) -> Array[u8]? {
         flat_rank = 1, flags = 0, reserved_zero = 0, extent = length)
     var value: Byte_Array_Value = (data = view.data, descriptor = ref shape)
     let storage: Ref[Array[u8]] = unsafe_cast[Ref[Array[u8]]] ref value
-    return storage
+    return storage.__value
 }
 
 func __text_byte_array(self: string) -> Array[u8] {
@@ -459,13 +458,14 @@ private func __string_with_encoding(s: string, encoding: u8) -> string {
 }
 
 private func raw_len(src: Ref[Array[u8]], at: uint, byte_len: int) -> uint {
-    require at <= __array_length(src)
+    let total: uint = __array_length(src.__value)
+    require at <= total
     if byte_len >= 0 {
-        require cast[uint] byte_len <= __array_length(src) - at
+        require cast[uint] byte_len <= total - at
         return cast[uint] byte_len
     }
     var n: uint = 0
-    while at + n < __array_length(src) and src[at + n] != 0 {
+    while at + n < total and src[at + n] != 0 {
         n += 1
     }
     return n

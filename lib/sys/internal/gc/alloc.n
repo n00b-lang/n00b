@@ -227,7 +227,7 @@ inline func allocate_reserved_validated(mutator: Ref[internal.gc.core.Mutator],
         if slot != nil {
             internal.gc.mark.write_barrier(mutator, payload)
             let published: Ref[byte]? = payload
-            ref_write(slot.get(), published)
+            slot.get().__value = published
             mutator.last_alloc = nil
         } else {
             mutator.last_alloc = payload

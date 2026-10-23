@@ -2,13 +2,13 @@ func returned() -> int {
     var n = 1
     let r = ref n
     n = 2
-    return r
+    return r.__value
 }
 
 func bound() -> int {
     var n = 1
     let r = ref n
-    let k: int = r
+    let k: int = r.__value
     return k
 }
 

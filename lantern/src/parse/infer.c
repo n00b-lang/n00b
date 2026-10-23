@@ -24,6 +24,7 @@ static int64_t tid_unwrap;
 static int64_t tid_method_return;
 static int64_t tid_field_return;
 static int64_t tid_field_return_auto_deref;
+static int64_t tid_referent_member;
 
 static void
 learn_tids(parse_grammar_t *g)
@@ -44,6 +45,7 @@ learn_tids(parse_grammar_t *g)
     tid_method_return = TID("method_return");
     tid_field_return  = TID("field_return");
     tid_field_return_auto_deref = TID("field_return_auto_deref");
+    tid_referent_member = TID("referent_member");
 
 #undef TID
 }
@@ -452,16 +454,21 @@ r_project(parse_reduce_t *r)
     else if (tid == tid_field_return_auto_deref) {
         e->proj = PARSE_INFER_FIELD_RETURN_AUTO_DEREF;
     }
+    else if (tid == tid_referent_member) {
+        e->proj = PARSE_INFER_REFERENT_MEMBER;
+    }
     else {
         fail(r);
     }
 
     e->lhs = kid_expr(r, 2);
+    if (e->proj == PARSE_INFER_REFERENT_MEMBER && r->n_kids != 6) fail(r);
     if (r->n_kids == 6 || r->n_kids == 8) {
         e->name = dup_text(kid_text(r, 4));
         if ((e->proj != PARSE_INFER_METHOD_RETURN
              && e->proj != PARSE_INFER_FIELD_RETURN
              && e->proj != PARSE_INFER_FIELD_RETURN_AUTO_DEREF
+             && e->proj != PARSE_INFER_REFERENT_MEMBER
              && e->proj != PARSE_INFER_ELEMENT_OF
              && e->proj != PARSE_INFER_SLICE_OF) || !e->lhs
             || !e->name.data) {
@@ -731,6 +738,8 @@ parse_infer_proj_name(parse_infer_proj_t p)
         return CORE_STRING_STATIC("field_return");
     case PARSE_INFER_FIELD_RETURN_AUTO_DEREF:
         return CORE_STRING_STATIC("field_return_auto_deref");
+    case PARSE_INFER_REFERENT_MEMBER:
+        return CORE_STRING_STATIC("referent_member");
     }
 
     return CORE_STRING_STATIC("?");

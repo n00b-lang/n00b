@@ -762,6 +762,25 @@ field_projection(ictx *c, th_type *receiver, core_string_t name,
     return result;
 }
 
+static th_type *
+referent_projection(ictx *c, th_type *receiver)
+{
+    th_type *resolved = th_resolve(receiver);
+    if (resolved && th_kind_of(resolved) == TH_INDIRECTION)
+        return th_ind_referent(resolved);
+    th_type *result = fresh(c);
+    if (resolved && th_kind_of(resolved) == TH_VAR
+        && th_unify_in_place(c->tc, resolved, th_ind(c->tc, 0, result)))
+        return result;
+    c->failed = true;
+    th_err(c->tc, TH_ERR_NO_SUCH_FIELD, CORE_STRING_STATIC("referent"),
+           nullptr, receiver,
+           resolved && th_option_item(resolved)
+               ? CORE_STRING_STATIC("an optional reference has no referent; narrow it before dereferencing")
+               : CORE_STRING_STATIC("only a reference has a referent to dereference"));
+    return result;
+}
+
 static bool
 text_is(core_string_t text, core_string_t want)
 {
@@ -1018,6 +1037,14 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
         th_type *ret = signature ? th_func_ret(signature) : nullptr;
 
         return ret ? ret : fresh(c);
+    }
+
+    case PARSE_INFER_REFERENT_MEMBER: {
+        core_string_t member = last_text(c->v->node);
+        if (core_string_eq(member, explicit_name))
+            return referent_projection(c, t);
+        return project(c, PARSE_INFER_FIELD_RETURN_AUTO_DEREF, t, member,
+                       (core_string_t){0});
     }
 
     case PARSE_INFER_FIELD_RETURN:

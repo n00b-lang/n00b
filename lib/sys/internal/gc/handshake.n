@@ -108,7 +108,7 @@ func respond(heap: Ref[internal.gc.core.Heap], mutator: Ref[internal.gc.core.Mut
             var index: uint = 0
             while index < mutator.write_buffer_count {
                 internal.gc.mark.mark_object(ref marker,
-                    ref_read(ref mutator.write_buffer[index]))
+                    mutator.write_buffer[index])
                 index += 1
             }
         }

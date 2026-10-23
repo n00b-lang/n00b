@@ -48,7 +48,7 @@ const root: Root = make()
 func item_at(index: uint) -> Item {
     let base: Ref[byte] = unsafe_cast[Ref[byte]] root.items
     let item: Ref[Item] = unsafe_cast[Ref[Item]] __gc_byte_offset(base, index * 16)
-    return item
+    return item.__value
 }
 
 func start() -> nil {
@@ -61,8 +61,8 @@ func start() -> nil {
     let codes: Ref[byte] = unsafe_cast[Ref[byte]] root.codes
     let third: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 8)
     let last: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 12)
-    require third == 7
-    require last == 0
+    require third.__value == 7
+    require last.__value == 0
     require unsafe_cast[uint] item_at(0).label == unsafe_cast[uint] root.other
     require unsafe_cast[uint] item_at(2).label == unsafe_cast[uint] root.other
     require __abi_baked_address(unsafe_cast[uint] root.other)

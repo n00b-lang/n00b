@@ -132,7 +132,7 @@ func ref_view() -> uint {
     var b: Buffer = buffer_from_string("kept")
     var t: string = b
     let r: Ref[string] = ref t
-    let u: string = r
+    let u: string = r.__value
     b += "!"
     return byte_len(u)
 }
@@ -212,7 +212,7 @@ func ref_local() -> uint {
     var b: Buffer = buffer_from_string("kept")
     let r: Ref[string] = hold(b)
     b += "!"
-    let t: string = r
+    let t: string = r.__value
     return byte_len(t)
 }
 ref_local()
@@ -363,3 +363,35 @@ EOF2
 reject context_argument \
     'N00BB-T0002'
 grep -Fq 'context_argument.n:8:12' "$tmp/context_argument.out"
+
+cat >"$tmp/ref_argument.n" <<'EOF2'
+func take(n: int) -> int {
+    return n
+}
+var n: int = 1
+take(ref n)
+EOF2
+reject ref_argument "read the referenced value with '.__value'"
+
+cat >"$tmp/ref_binding.n" <<'EOF2'
+var n: int = 1
+let r: Ref[int] = ref n
+let k: int = r
+EOF2
+reject ref_binding "read the referenced value with '.__value'"
+
+cat >"$tmp/ref_return.n" <<'EOF2'
+func give(r: Ref[int]) -> int {
+    return r
+}
+var n: int = 1
+give(ref n)
+EOF2
+reject ref_return "read the referenced value with '.__value'"
+
+cat >"$tmp/ref_operand.n" <<'EOF2'
+var n: int = 1
+let r: Ref[int] = ref n
+let k: int = r + 1
+EOF2
+reject ref_operand "read the referenced value with '.__value'"

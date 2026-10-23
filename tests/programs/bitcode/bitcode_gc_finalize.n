@@ -91,7 +91,7 @@ if created != nil {
                         marker_bytes, sys.abi.alignment_bytes(marker_row.get()))
                     if marker_map != nil {
                         let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
-                        sys.gc.mark.marker_init(marker, heap, false)
+                        sys.gc.mark.marker_init(marker.__value, heap, false)
                         sys.gc.sync.ticket_lock(ref heap.lock)
                         sys.gc.finalize.find_dead_locked(marker)
                         sys.gc.sync.ticket_unlock(ref heap.lock)

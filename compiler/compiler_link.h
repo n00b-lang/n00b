@@ -558,6 +558,8 @@ parse_scope_t *record_scope_for_type(parse_grammar_t *grammar,
 bool resolve_inferred_field_references(core_link_unit_t *link,
                                        n00bb_link_analysis_t *analysis);
 bool diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis);
+bool diagnose_reserved_declarations(core_translation_unit_t *unit,
+                                    const th_env *environment);
 
 n00bb_link_analysis_t *n00bb_link_analysis_new(
     parse_grammar_t *grammar, ir_ctx_t *ir_context,

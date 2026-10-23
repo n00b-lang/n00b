@@ -103,7 +103,7 @@ private func level_style_index(body: Ref[Rich_Body], pos: u32, len: u32,
         if tag == nil {
             continue
         }
-        acc = merge(acc, internal.theme.style_for_tag(theme, tag.get()))
+        acc = merge(acc, internal.theme.style_for_tag(theme.__value, tag.get()))
     }
     return acc
 }

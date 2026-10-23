@@ -6,11 +6,11 @@ func read_value() -> int {
 }
 
 func read_ref_value() -> int {
-    return ref_read(ref through_ref)
+    return (ref through_ref).__value
 }
 
 value = 7
-ref_write(ref through_ref, 9)
+(ref through_ref).__value = 9
 let reader: Ref[() -> int] = ref read_value
 require reader.call() == 7
 let ref_reader: Ref[() -> int] = ref read_ref_value

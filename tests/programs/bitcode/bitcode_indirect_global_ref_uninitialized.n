@@ -1,7 +1,7 @@
 var value: int
 
 func read_value() -> int {
-    return ref_read(ref value)
+    return (ref value).__value
 }
 
 let reader: Ref[() -> int] = ref read_value

@@ -94,6 +94,7 @@ n00bb_exe = executable(
     ['compiler/main.c', 'compiler/compiler_driver.c', 'compiler/compiler_lower.c', 'compiler/compiler_buffer_borrow.c', 'compiler/compiler_layout.c', 'compiler/compiler_baked.c', 'compiler/compiler_abi_driver.c', 'compiler/compiler_cache.c', 'compiler/compiler_object_io.c', 'compiler/compiler_cli.c', 'compiler/compiler_tu.c', 'compiler/builtin_types.c',
      'compiler/compiler_tu_range.c', 'compiler/compiler_tu_builtins.c',
      'compiler/compiler_axioms.c',
+     'compiler/compiler_system.c',
      'compiler/compiler_int_ground.c',
      'compiler/compiler_tu_alias.c', 'compiler/compiler_tu_walk.c',
      'compiler/compiler_tu_interface.c',
@@ -1635,6 +1636,36 @@ test(
            n00bb_exe.full_path(),
            meson.current_source_dir() / 'tests' / 'programs' / 'features'
                / 'ref_integer_widening.n'],
+)
+
+test(
+    'explicit-deref',
+    find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'builtin_os_n00b.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs' / 'features'
+               / 'explicit_deref.n'],
+)
+
+test(
+    'explicit-deref-rejected', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'explicit_deref_rejected.n',
+           'read the referenced value with \'.__value\'',
+           'explicit_deref_rejected.n:3:14'],
+)
+
+test(
+    'reserved-names-rejected', find_program('sh'),
+    args: [meson.current_source_dir() / 'tests' / 'diagnostic_failure.sh',
+           n00bb_exe.full_path(),
+           meson.current_source_dir() / 'tests' / 'programs'
+               / 'features' / 'reserved_names_rejected.n',
+           'reserved_names_rejected.n:2:5',
+           '\'__mine\' is not a language hook',
+           'did you mean the \'__equal\' hook?'],
 )
 
 test(

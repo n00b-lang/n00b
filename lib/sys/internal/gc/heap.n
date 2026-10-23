@@ -19,7 +19,7 @@ const default_world_timeout_ms:     u32  = 10000
 func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
                        element_bytes: uint, alignment: uint,
                        used: uint, need: uint) -> bool {
-    let old_cap: uint = ref_read(cap)
+    let old_cap: uint = cap.__value
     if need <= old_cap {
         return true
     }
@@ -27,7 +27,7 @@ func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
         (alignment & (alignment - 1)) != 0 {
         return false
     }
-    let old: Ref[byte]? = ref_read(arrp)
+    let old: Ref[byte]? = arrp.__value
     if used != 0 and old == nil {
         return false
     }
@@ -61,8 +61,8 @@ func grow_array(arrp: Ref[Ref[byte]?], cap: Ref[uint],
             }
         }
         __gc_signal_fence()
-        ref_write(arrp, base)
-        ref_write(cap, next_cap)
+        arrp.__value = base
+        cap.__value = next_cap
         __gc_signal_fence()
         if old != nil {
             internal.memory.unmap(old.get(), old_cap * element_bytes)
@@ -161,7 +161,7 @@ func create(config: Ref[internal.gc.core.Config]?) -> Ref[internal.gc.core.Heap]
         let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] mapped.get()
 
         if config != nil {
-            heap.cfg = ref_read(config.get())
+            heap.cfg = config.get().__value
         } else {
             config_default(heap.cfg)
         }

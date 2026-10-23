@@ -16,9 +16,9 @@ func handle(modify state: State, value: int) -> int {
 
 func setup(handler: Ref[(modify state: State, value: int) -> int],
            state: Ref[State], priority: int = 1) -> nil {
-    var current = ref_read(state)
+    var current = state.__value
     current.count = priority
-    ref_write(state, current)
+    state.__value = current
 }
 
 func with_default(input: State) -> Counter {

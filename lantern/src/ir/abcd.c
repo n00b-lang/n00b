@@ -745,6 +745,7 @@ collect_edges(query_t *q, node_t node, const ir_instr_t *at,
                       false);
     }
     definition_edges(q, value, edges);
+    if (!ir_value_stable(value)) return;
     condition_edges(q, value, at, edges);
     checked_access_edges(q, value, at, edges);
     inverse_edges(q, value, at, edges);

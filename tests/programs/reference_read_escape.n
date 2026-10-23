@@ -2,7 +2,7 @@ var shared: Ref[int]? = nil
 var retained_slot: Ref[Ref[int]?]? = nil
 
 func publish_value(slot: Ref[Ref[int]?]) {
-    ref_write(ref shared, ref_read(slot))
+    (ref shared).__value = slot.__value
 }
 
 func publish_local() {
@@ -12,7 +12,7 @@ func publish_local() {
 }
 
 func return_value(slot: Ref[Ref[int]?]) -> Ref[int]? {
-    return ref_read(slot)
+    return slot.__value
 }
 
 func return_local() -> Ref[int]? {

@@ -62,7 +62,7 @@ if created != nil {
         assert sys.gc.core.line_marked_in(base, first + 4, heap.mark_epoch)
         assert !sys.gc.core.line_marked_in(base, first + 5, heap.mark_epoch)
         mutator.write_buffer_epoch = heap.mark_epoch
-        ref_write(ref mutator.write_buffer[0], nil)
+        (ref mutator.write_buffer[0]).__value = nil
         mutator.write_buffer_count = 1
         sys.gc.collect.drain_barrier_buffers(ref marker)
         assert mutator.write_buffer_count == 0

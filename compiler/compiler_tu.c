@@ -40,17 +40,34 @@ static void report_literal_item_conflict(core_translation_unit_t *unit,
 static bool n00bb_contextual_method_argument(parse_grammar_t *grammar,
                                              parse_tree_t *expression);
 
+static bool
+lvalue_spine_step(parse_grammar_t *grammar, parse_tree_t *parent,
+                  parse_tree_t *child)
+{
+    size_t children = core_tree_num_children(parent);
+    if (children == 1) return true;
+    if (NT_IS(grammar, parent, "tuple-or-paren"))
+        return children == 3 && core_tree_child(parent, 1) == child;
+    if (!NT_IS(grammar, parent, "postfix-expr") || children < 3
+        || core_tree_child(parent, 0) != child) return false;
+    parse_tree_t *operator = core_tree_child(parent, 1);
+    return parse_tree_leaf_is(operator, CORE_STRING_STATIC("."))
+        || parse_tree_leaf_is(operator, CORE_STRING_STATIC("["));
+}
+
 bool
 n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
                         bool *compound)
 {
+    bool spine = true;
+    parse_tree_t *child = node;
     for (parse_tree_t *parent = parse_tree_parent(node);
-         parent; parent = parse_tree_parent(parent)) {
-        if (NT_IS(grammar, parent, "index-contents")
-            || NT_IS(grammar, parent, "slice-contents")) return false;
+         parent; child = parent, parent = parse_tree_parent(parent)) {
         bool is_compound = NT_IS(grammar, parent, "binop-assign-stmt");
-        if (!is_compound && !NT_IS(grammar, parent, "assign-stmt"))
+        if (!is_compound && !NT_IS(grammar, parent, "assign-stmt")) {
+            spine = spine && lvalue_spine_step(grammar, parent, child);
             continue;
+        }
         const parse_rule_t *rule = parse_tree_rule(grammar, parent);
         parse_annotation_t *assign = rule
             ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_ASSIGNS)
@@ -58,10 +75,11 @@ n00bb_assignment_target(parse_grammar_t *grammar, parse_tree_t *node,
         parse_tree_t *target = assign
             ? parse_tree_resolve_child_ref(grammar, parent,
                                            assign->name_ref) : nullptr;
-        if (target && node_is_within(node, target)) {
+        if (spine && target && node_is_within(node, target)) {
             if (compound) *compound = is_compound;
             return true;
         }
+        spine = false;
     }
     return false;
 }
@@ -617,7 +635,8 @@ check_local_record_field_reference(parse_grammar_t *grammar,
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))
-        || n00bb_is_trait_dispatch_reference(grammar, unit, node)) return false;
+        || n00bb_is_trait_dispatch_reference(grammar, unit, node)
+        || referent_access_node(grammar, node)) return false;
     n00bb_tu_state_t *state = tu_state(unit);
     if (variant_payload_arm(grammar, unit, node)
         || variant_assignment_arm(grammar, unit, node)) return false;
@@ -3901,21 +3920,6 @@ function_parameter_named(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
         }
         return false;
     }
-    if (n00bb_builtin_reference_function(symbol)) {
-        bool write = core_string_eq(symbol->name,
-                                    CORE_STRING_STATIC("ref_write"));
-        if ((write || core_string_eq(symbol->name,
-                CORE_STRING_STATIC("ref_read")))
-            && core_string_eq(name, CORE_STRING_STATIC("reference"))) {
-            if (index) *index = 0;
-            return true;
-        }
-        if (write && core_string_eq(name, CORE_STRING_STATIC("value"))) {
-            if (index) *index = 1;
-            return true;
-        }
-        return false;
-    }
     parse_sym_entry_t *formal = formal_symbol_named(grammar, formals, name,
                                                     index);
     if (formal) return true;
@@ -3959,44 +3963,12 @@ n00bb_option_type_element(th_type *type, th_type **element)
 }
 
 th_type *
-n00bb_operand_value_type(th_type *operand, th_type *other, bool comparison)
+n00bb_operand_value_type(th_type *operand, bool comparison)
 {
     th_type *resolved = operand ? th_resolve(operand) : nullptr;
-    th_type *other_resolved = other ? th_resolve(other) : nullptr;
     th_type *option_item = resolved && !comparison
         ? th_option_item(resolved) : nullptr;
-    if (option_item) return option_item;
-    if (!resolved || th_kind_of(resolved) != TH_INDIRECTION) return operand;
-    bool other_reference = other_resolved
-        && (th_kind_of(other_resolved) == TH_INDIRECTION
-            || th_is_nil(other_resolved));
-    if (comparison && (!other_resolved || other_reference)) return operand;
-    return th_ind_referent(resolved);
-}
-
-th_type *
-n00bb_dereference_target(th_ctx *types, th_type *actual, th_type *wanted)
-{
-    actual = actual ? th_resolve(actual) : nullptr;
-    wanted = wanted ? th_resolve(wanted) : nullptr;
-    if (!actual || !wanted || th_kind_of(actual) != TH_INDIRECTION
-        || th_kind_of(wanted) == TH_INDIRECTION) return nullptr;
-    th_type *referent = th_ind_referent(actual);
-    if (th_kind_of(wanted) == TH_VAR)
-        return referent && th_resolve(referent) == wanted ? wanted : nullptr;
-    if (th_unify_probe(types, referent, wanted))
-        return th_is_closed(types, wanted) ? wanted : referent;
-    if (is_integer_type(referent) && is_integer_type(wanted))
-        return th_resolve(referent);
-    th_type *element = th_option_item(wanted);
-    return element && th_kind_of(th_resolve(element)) != TH_INDIRECTION
-        && th_unify_probe(types, referent, element) ? element : nullptr;
-}
-
-bool
-n00bb_dereferences_to(th_ctx *types, th_type *actual, th_type *wanted)
-{
-    return n00bb_dereference_target(types, actual, wanted) != nullptr;
+    return option_item ? option_item : operand;
 }
 
 bool
@@ -4096,6 +4068,8 @@ record_function_exit_fact(parse_grammar_t *grammar,
                         "return value of type %.*s does not convert to the declared return type %.*s",
                         (int)actual.u8_bytes, actual.data,
                         (int)wanted.u8_bytes, wanted.data);
+                    n00bb_append_dereference_hint(&message, state->types,
+                                                  observed, expected);
                     core_diagnostics_report_at(diagnostics, unit,
                         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0044"),
                         core_buffer_string(&message),
@@ -5128,6 +5102,14 @@ member_access_node(parse_grammar_t *grammar, parse_tree_t *node)
     if (core_tree_num_children(node) == 1)
         return member_access_node(grammar, core_tree_child(node, 0));
     return nullptr;
+}
+
+parse_tree_t *
+referent_access_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *member = member_access_node(grammar, node);
+    return member && n00bb_builtin_member(
+        first_token_text(core_tree_child(member, 2))) ? member : nullptr;
 }
 
 static parse_tree_t *
@@ -9334,9 +9316,7 @@ n00bb_conversion_hook(th_ctx *types, th_type *from, th_type *to, void *site,
         return true;
     if (site && ((!th_is_closed(types, from) && call_result_node(site))
             || th_kind_of(th_resolve(from)) == TH_VAR
-            || (th_kind_of(th_resolve(to)) == TH_VAR && !th_is_nil(from)))
-        && n00bb_dereference_target(types, from, th_resolve(to))
-            != th_resolve(to)) {
+            || (th_kind_of(th_resolve(to)) == TH_VAR && !th_is_nil(from)))) {
         core_list_push(state->deferred_conversions,
             ((n00bb_deferred_conversion_t){site, from, to}));
         if (n00bb_open_integer(to) && !n00bb_open_integer(from))
@@ -9353,20 +9333,10 @@ n00bb_conversion_hook(th_ctx *types, th_type *from, th_type *to, void *site,
         th_type *element = nullptr;
         bool option_target = n00bb_option_type_element(resolved, &element);
         if (th_is_nil(from) && option_target) return true;
-        if (!option_target && th_kind_of(resolved) != TH_VAR
-            && n00bb_dereference_target(types, from, resolved)) {
-            th_type *referent = th_ind_referent(th_resolve(from));
-            if (n00bb_open_integer(referent) && is_integer_type(resolved)) {
-                if (site) n00bb_integer_boundary(state, site, resolved);
-                return true;
-            }
-            return th_unify_in_place(types, referent, resolved) != nullptr;
-        }
         if (option_target && element && th_kind_of(from) != TH_VAR
             && !n00bb_option_type_element(from, nullptr))
             return th_unify_probe(types, from, element);
-        return th_kind_of(resolved) == TH_VAR
-            && n00bb_dereference_target(types, from, resolved) == resolved;
+        return false;
     }
     bool converted = false;
     core_diagnostics_t *diagnostics =
@@ -9570,12 +9540,6 @@ n00bb_type_materialize(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         n00bb_integer_boundary(state, node, expected);
         return expected;
     }
-    th_type *dereferenced = n00bb_dereference_target(types, actual, expected);
-    if (dereferenced && th_resolve(dereferenced) != th_resolve(expected)
-        && is_integer_type(dereferenced))
-        return n00bb_type_materialize(grammar, state, node, dereferenced,
-                                      expected, converted);
-    if (dereferenced) return expected;
     ir_interval_t value_range = {0}, target_range = {0};
     if (node && !unsigned_literal_misplaced(node, expected)
         && n00bb_type_interval(actual, &value_range)
@@ -12490,14 +12454,11 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
     th_type *result = parse_tree_type(node);
     if (comparison && !is_integer_type(left_type)
         && !n00bb_open_integer(left_type)
-        && !is_integer_type(right_type) && !n00bb_open_integer(right_type)
-        && !(left_type && th_ind_referent(th_resolve(left_type)))
-        && !(right_type && th_ind_referent(th_resolve(right_type))))
+        && !is_integer_type(right_type) && !n00bb_open_integer(right_type))
         return true;
     th_type *declared_left = left_type;
-    left_type = n00bb_operand_value_type(left_type, right_type, comparison);
-    right_type = n00bb_operand_value_type(right_type, declared_left,
-                                          comparison);
+    left_type = n00bb_operand_value_type(left_type, comparison);
+    right_type = n00bb_operand_value_type(right_type, comparison);
     if (!comparison && result && declared_left != left_type
         && th_resolve(result) == th_resolve(declared_left)) {
         result = left_type;
@@ -12707,12 +12668,19 @@ refine_intrinsic_binary_result(parse_grammar_t *grammar,
         ? th_name(state->types, CORE_STRING_STATIC("bool")) : operand_type;
     core_string_t produced_text = produced
         ? th_print(state->types, produced) : CORE_STRING_STATIC("<missing>");
-    if (!compatible_operands)
+    if (!compatible_operands) {
         core_buffer_printf(&message,
             "operator '%.*s' needs operands of the same type; got %.*s and %.*s",
             (int)op_text.u8_bytes, op_text.data,
             (int)left_text.u8_bytes, left_text.data,
             (int)right_text.u8_bytes, right_text.data);
+        size_t plain = message.byte_len;
+        n00bb_append_dereference_hint(&message, state->types, left_type,
+                                      right_type);
+        if (message.byte_len == plain)
+            n00bb_append_dereference_hint(&message, state->types, right_type,
+                                          left_type);
+    }
     else
         core_buffer_printf(&message,
             "operator '%.*s' produces %.*s, which does not match its use as %.*s",
@@ -13486,6 +13454,8 @@ literal_modifier_terminal(parse_grammar_t *grammar, parse_tree_t *leaf,
             || core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))
             || core_string_eq(terminal, CORE_STRING_STATIC("STRING_LIT"))
             || n00bb_nil_spelling(first_token_text(leaf));
+    if (NT_IS(grammar, parent, "nil-keyword"))
+        return n00bb_nil_spelling(first_token_text(leaf));
     if (NT_IS(grammar, parent, "bool-lit"))
         return parse_tree_leaf_is(leaf, CORE_STRING_STATIC("true"))
             || parse_tree_leaf_is(leaf, CORE_STRING_STATIC("false"));

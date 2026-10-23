@@ -9,6 +9,23 @@ typedef struct {
 } module_inference_context_t;
 
 void
+n00bb_append_dereference_hint(core_buffer_t *message, th_ctx *types,
+                              th_type *value, th_type *wanted)
+{
+    value = value ? th_resolve(value) : nullptr;
+    wanted = wanted ? th_resolve(wanted) : nullptr;
+    if (!value || !wanted || th_kind_of(value) != TH_INDIRECTION
+        || th_kind_of(wanted) == TH_INDIRECTION) return;
+    th_type *referent = th_resolve(th_ind_referent(value));
+    th_type *element = th_option_item(wanted);
+    if (th_unify_probe(types, referent, wanted)
+        || (is_integer_type(referent) && is_integer_type(wanted))
+        || (element && th_unify_probe(types, referent, element)))
+        core_buffer_printf(message,
+            "; read the referenced value with '.__value'");
+}
+
+void
 report_call_type_error(core_translation_unit_t *unit, parse_tree_t *call,
                        th_ctx *types, th_type *actual, th_type *expected,
                        n00bb_call_role_t role)
@@ -41,6 +58,10 @@ report_call_type_error(core_translation_unit_t *unit, parse_tree_t *call,
             actual_size, actual_text.data, expected_size, expected_text.data);
         break;
     }
+    if (role == N00BB_CALL_RESULT)
+        n00bb_append_dereference_hint(&message, types, expected, actual);
+    else
+        n00bb_append_dereference_hint(&message, types, actual, expected);
     parse_token_info_t *site = parse_tree_find_first_terminal(call);
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
@@ -89,6 +110,7 @@ n00bb_report_conversion_error(core_translation_unit_t *unit,
     core_buffer_printf(&message, "value of type %.*s does not convert to %.*s",
         (int)actual_text.u8_bytes, actual_text.data,
         (int)expected_text.u8_bytes, expected_text.data);
+    n00bb_append_dereference_hint(&message, types, value, target);
     core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
         CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0042"),
         core_buffer_string(&message), link_source_location(site));

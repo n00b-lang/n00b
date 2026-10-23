@@ -503,21 +503,21 @@ enum Status {
 
 
 func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
-    let value: Ffi_Bytes = ref_read(bytes)
+    let value: Ffi_Bytes = bytes.__value
     var copied: Array[u8] = new[Array[u8]](cast[int]value.length)
     __ffi_bytes_take(bytes, ref copied)
     return copied
 }
 
 func __ffi_take_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry {
-    let value: Ffi_Bytes = ref_read(bytes)
+    let value: Ffi_Bytes = bytes.__value
     var lifted: Entry = (key = new[Array[u8]](cast[int]__ffi_kv_entry_key_length(value.data)), val = new[Array[u8]](cast[int]__ffi_kv_entry_val_length(value.data)))
     __ffi_kv_entry_take(bytes, ref lifted.key, ref lifted.val)
     return lifted
 }
 
 func __ffi_take_optional_kv_entry(bytes: Ref[Ffi_Bytes]) -> Entry? {
-    let value: Ffi_Bytes = ref_read(bytes)
+    let value: Ffi_Bytes = bytes.__value
     if value.data == 0 {
         return nil
     }

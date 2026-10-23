@@ -41,13 +41,13 @@ require containers.tree.leaf(root) == nil
 containers.tree.set_node(root, 7)
 let node_value: Ref[int]? = containers.tree.node(root)
 if node_value != nil {
-    ref_write(node_value.get(), 9)
+    node_value.get().__value = 9
 } else {
     require false
 }
 let changed: Ref[int]? = containers.tree.node(root)
 if changed != nil {
-    require ref_read(changed.get()) == 9
+    require changed.get().__value == 9
 } else {
     require false
 }
@@ -57,7 +57,7 @@ require containers.tree.is_leaf(first)
 require containers.tree.node(first) == nil
 let first_value: Ref[string]? = containers.tree.leaf(first)
 if first_value != nil {
-    require ref_read(first_value.get()) == "first"
+    require first_value.get().__value == "first"
 } else {
     require false
 }

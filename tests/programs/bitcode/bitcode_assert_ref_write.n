@@ -1,5 +1,5 @@
 func fill(target: Ref[int]) -> bool {
-    ref_write(target, 7)
+    target.__value = 7
     return true
 }
 

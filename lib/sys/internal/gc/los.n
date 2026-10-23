@@ -48,11 +48,11 @@ func cache_take(heap: Ref[internal.gc.core.Heap], total: uint) -> Ref[internal.g
     var index: uint = first
     while index <= first + 1 and index < internal.gc.core.los_classes {
         let slot:      Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.los_cache[index]
-        let candidate: Ref[internal.gc.core.Los_Obj]?      = ref_read(slot)
+        let candidate: Ref[internal.gc.core.Los_Obj]?      = slot.__value
         if candidate != nil {
             let obj: Ref[internal.gc.core.Los_Obj] = candidate.get()
             if obj.bytes >= total {
-                ref_write(slot, obj.next)
+                slot.__value = obj.next
                 heap.los_cache_bytes -= obj.mapped_bytes
                 return obj
             }
@@ -66,13 +66,13 @@ func cache_drain(heap: Ref[internal.gc.core.Heap]) {
     var index: uint = 0
     while index < internal.gc.core.los_classes {
         let slot:      Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.los_cache[index]
-        var candidate: Ref[internal.gc.core.Los_Obj]?      = ref_read(slot)
+        var candidate: Ref[internal.gc.core.Los_Obj]?      = slot.__value
         while candidate != nil {
             let obj: Ref[internal.gc.core.Los_Obj] = candidate.get()
-            ref_write(slot, obj.next)
+            slot.__value = obj.next
             internal.gc.registry.los_unregister(heap, obj)
             internal.memory.unmap(obj.mapping, obj.mapped_bytes)
-            candidate = ref_read(slot)
+            candidate = slot.__value
         }
         index += 1
     }
@@ -108,9 +108,9 @@ func release(heap: Ref[internal.gc.core.Heap], obj: Ref[internal.gc.core.Los_Obj
             }
         }
         let slot: Ref[Ref[internal.gc.core.Los_Obj]?] = ref heap.los_cache[index]
-        obj.next = ref_read(slot)
+        obj.next = slot.__value
         let cached: Ref[internal.gc.core.Los_Obj]? = obj
-        ref_write(slot, cached)
+        slot.__value = cached
         heap.los_cache_bytes += obj.mapped_bytes
         return
     }
@@ -214,7 +214,7 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
         let payload: Ref[byte] = internal.gc.core.payload_of(ref allocated.hdr)
         if slot != nil {
             let published: Ref[byte]? = payload
-            ref_write(slot.get(), published)
+            slot.get().__value = published
             mutator.last_alloc = nil
         } else {
             mutator.last_alloc = payload

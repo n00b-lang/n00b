@@ -174,8 +174,6 @@ static const n00bb_axiom_t axioms[] = {
     FUNCTION("sys.internal.locks", "rw_try_write_lock", 0,
              N00BB_AXIOM_LOCK_SYNC),
     FUNCTION("sys.internal.locks", "rw_unlock", 0, N00BB_AXIOM_LOCK_RELEASE),
-    {.key = N00BB_AXIOM_BUILTIN, .name = CORE_STRING_STATIC("ref_write"),
-     .writes = 0x1},
     BINDING("n00bb.atomic.store", 0),
     BINDING("n00bb.atomic.store_relaxed", 0),
     BINDING("n00bb.atomic.store_release", 0),

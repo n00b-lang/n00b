@@ -7,6 +7,7 @@
 const ir_value_t *ir_value_operand(const ir_instr_t *in, uint32_t index);
 const ir_value_t *ir_operand_used_value(const ir_instr_t *in, uint32_t index);
 const ir_value_t *ir_value_uncopied(const ir_value_t *value);
+bool              ir_value_stable(const ir_value_t *value);
 bool              ir_block_belongs_to(const ir_func_t *f,
                                       const ir_block_t *block);
 bool              ir_value_has_uses(const ir_func_t *f,

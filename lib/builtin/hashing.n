@@ -46,7 +46,7 @@ private const secret: Array[u8] = [
 ]'array
 
 private inline func in8(p: Ref[byte], at: uint) -> u64 {
-    let b: byte = __gc_byte_offset(p, cast[int] at)
+    let b: byte = __gc_byte_offset(p, cast[int] at).__value
     return cast[u64] b
 }
 
