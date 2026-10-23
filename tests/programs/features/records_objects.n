@@ -33,6 +33,16 @@ func double_peek(view c: Counter) -> int {
     return peek(c) * 2
 }
 
+func pass_back(view c: Counter) -> Counter {
+    return c
+}
+
+var copied: int = 0
+
+func copy_out(view c: Counter) {
+    copied = c.count
+}
+
 func grow(modify p: Point) {
     p.y = p.y + 10
 }
@@ -67,6 +77,9 @@ require counter.count == 6 and alias_of_counter.count == 6
 
 require peek(counter) == 6 and double_peek(counter) == 12
 require label_of(counter) == "c"
+require pass_back(counter) == counter
+copy_out(counter)
+require copied == 6
 
 grow(first)
 require first.y == 12

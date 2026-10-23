@@ -739,6 +739,8 @@ foreach rejected : [
     ['view_to_in', 'N00BB-T0065', '14:17'],
     ['view_deep_write', 'IR-E0042', '19:5'],
     ['const_to_writing_in', 'IR-E0042', '15:1'],
+    ['view_escape', 'IR-E0043', '12:5'],
+    ['view_escape_nested', 'IR-E0043', '24:5'],
 ]
     test(
         'records-objects-rejected-' + rejected[0].replace('_', '-'),

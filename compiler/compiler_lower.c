@@ -23692,7 +23692,9 @@ view_candidate(n00bb_tu_state_t *state, const ir_sflow_t *flow,
     return mode == TH_IN && index < 64 && parameter->type
         && !parse_sym_binding(parameter, n00bb_view_blocked_binding)
         && n00bb_unit_type_reaches_shared_state(state, parameter->type)
-        && !((flow->mutates[IR_SFLOW_SELF] | flow->mutates[IR_SFLOW_CONTENTS])
+        && !((flow->mutates[IR_SFLOW_SELF] | flow->mutates[IR_SFLOW_CONTENTS]
+              | flow->escapes[IR_SFLOW_SELF] | flow->escapes[IR_SFLOW_CONTENTS]
+              | flow->leaks[IR_SFLOW_SELF] | flow->leaks[IR_SFLOW_CONTENTS])
              >> index & 1);
 }
 

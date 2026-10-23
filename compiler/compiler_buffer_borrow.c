@@ -2099,6 +2099,114 @@ report_guarded_write(ir_diags_t *diagnostics, ir_func_t *function,
     core_buffer_release(&label);
 }
 
+static const ir_value_t *
+view_reference(origins_t *state, ir_value_t *value, bool contents,
+               uint64_t views, bool *ok)
+{
+    root_set_t roots = {0}, held = {0};
+    *ok = seed_value(state, value, &roots, nullptr)
+        && (!contents || load_roots(state, &roots, &held));
+    root_set_t *reached = contents ? &held : &roots;
+    *ok = *ok && expand_contents(state, reached);
+    const ir_value_t *found = nullptr;
+    int kind = 0;
+    for (uint32_t r = 0; *ok && !found && r < reached->len; r++) {
+        const ir_value_t *parameter = reached_parameter(state->table,
+            reached->items[r], &kind);
+        if (parameter && parameter->index < 64
+            && views >> parameter->index & 1)
+            found = parameter;
+    }
+    free(roots.items);
+    free(held.items);
+    return found;
+}
+
+static bool
+outlives_call(origins_t *state, ir_value_t *address, bool *ok)
+{
+    root_set_t roots = {0};
+    *ok = seed_value(state, address, &roots, nullptr);
+    bool outlives = false;
+    for (uint32_t r = 0; *ok && !outlives && r < roots.len; r++)
+        outlives = !is_location(roots.items[r]);
+    free(roots.items);
+    return outlives;
+}
+
+static const ir_value_t *
+escaped_view(origins_t *state, ir_instr_t *instruction, uint64_t views,
+             bool *ok)
+{
+    *ok = true;
+    if (is_call(instruction)) {
+        const ir_sflow_t *effects = call_effects(state, instruction);
+        bool opaque = !effects || effects->opaque;
+        uint32_t first = first_argument(instruction, effects);
+        uint64_t trusted = call_view_inputs(instruction);
+        const ir_value_t *found = nullptr;
+        for (uint32_t i = first; *ok && !found
+             && i < instruction->n_operands; i++) {
+            uint32_t index = i - first;
+            if (index < 64 && trusted >> index & 1) continue;
+            bool escapes = opaque
+                || effect_bit(effects->escapes, index, IR_SFLOW_SELF)
+                || effect_bit(effects->escapes, index, IR_SFLOW_CONTENTS)
+                || effect_bit(effects->leaks, index, IR_SFLOW_SELF)
+                || effect_bit(effects->leaks, index, IR_SFLOW_CONTENTS);
+            if (escapes)
+                found = view_reference(state, operand_at(instruction, i),
+                                       false, views, ok);
+        }
+        return found;
+    }
+    uint32_t value_at = 0;
+    switch (instruction->op) {
+    case IR_OP_GLOBAL_STORE:
+        return instruction->n_operands >= 2
+            ? view_reference(state, operand_at(instruction, 1), false, views,
+                             ok)
+            : nullptr;
+    case IR_OP_STORE:
+    case IR_OP_MEMCPY:
+    case IR_OP_MEMMOVE:
+        value_at = 1;
+        break;
+    case IR_OP_SEQUENCE_SET:
+    case IR_OP_ATOMIC_RMW:
+    case IR_OP_ATOMIC_CAS:
+        value_at = 2;
+        break;
+    default:
+        return nullptr;
+    }
+    if (instruction->n_operands <= value_at
+        || !outlives_call(state, operand_at(instruction, 0), ok))
+        return nullptr;
+    bool copies = instruction->op == IR_OP_MEMCPY
+        || instruction->op == IR_OP_MEMMOVE;
+    return view_reference(state, operand_at(instruction, value_at), copies,
+                          views, ok);
+}
+
+static void
+report_view_escape(ir_diags_t *diagnostics, ir_func_t *function,
+                   const ir_instr_t *offender, const ir_value_t *parameter)
+{
+    core_buffer_t label = {0};
+    core_buffer_printf(&label, "%s a reference reachable from view "
+        "parameter '%.*s' where it outlives the call; only returning it is "
+        "allowed",
+        is_call(offender) ? "this call may keep" : "this stores",
+        (int)parameter->name.u8_bytes, parameter->name.data);
+    core_string_t text = core_buffer_string(&label);
+    if (text.u8_bytes > 511) text.u8_bytes = 511;
+    ir_diag_t *diagnostic = ir_diag_begin_at(diagnostics,
+        IR_DIAG_VIEW_ESCAPE, offender, offender->block, function, text);
+    ir_diag_message(diagnostic, diagnostics, text);
+    core_buffer_release(&label);
+}
+
 static bool
 guard_function(ir_diags_t *diagnostics, contents_table_t *table,
                ir_summaries_t *summaries, th_ctx *types, ir_func_t *function,
@@ -2126,6 +2234,14 @@ guard_function(ir_diags_t *diagnostics, contents_table_t *table,
             if (guarded) {
                 report_guarded_write(diagnostics, function, instruction,
                                      guarded);
+                accepted = false;
+                continue;
+            }
+            const ir_value_t *escaped = ok && views
+                ? escaped_view(&state, instruction, views, &ok) : nullptr;
+            if (escaped) {
+                report_view_escape(diagnostics, function, instruction,
+                                   escaped);
                 accepted = false;
             }
         }
