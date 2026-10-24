@@ -1,31 +1,31 @@
 import internal.blob
 
-public const canon_decomp_index_values: Array[u32] = [- canon_decomp_index.bin -]'embed
+const canon_decomp_index_values: Array[u32] = [- canon_decomp_index.bin -]'embed
 
-public inline func canon_decomp_index(row: u32, col: u32) -> u32 {
+inline func canon_decomp_index(row: u32, col: u32) -> u32 {
     return canon_decomp_index_values[row * 2 + col]
 }
 
-public const canon_decomp_index_len: u32 = 2081
+const canon_decomp_index_len: u32 = 2081
 
-public const canon_decomp_data_values: Array[u32] = [- canon_decomp_data.bin -]'embed
+const canon_decomp_data_values: Array[u32] = [- canon_decomp_data.bin -]'embed
 
-public inline func canon_decomp_data(i: u32) -> u32 {
+inline func canon_decomp_data(i: u32) -> u32 {
     return canon_decomp_data_values[i]
 }
 
-public const compat_decomp_index_values: Array[u32] = [- compat_decomp_index.bin -]'embed
+const compat_decomp_index_values: Array[u32] = [- compat_decomp_index.bin -]'embed
 
-public inline func compat_decomp_index(row: u32, col: u32) -> u32 {
+inline func compat_decomp_index(row: u32, col: u32) -> u32 {
     return compat_decomp_index_values[row * 2 + col]
 }
 
-public const compat_decomp_index_len: u32 = 5982
+const compat_decomp_index_len: u32 = 5982
 
-public const compat_decomp_data_values: Array[u32] = [- compat_decomp_data.bin -]'embed
+const compat_decomp_data_values: Array[u32] = [- compat_decomp_data.bin -]'embed
 
-public inline func compat_decomp_data(i: u32) -> u32 {
+inline func compat_decomp_data(i: u32) -> u32 {
     return compat_decomp_data_values[i]
 }
 
-public const max_decomp = 18
+const max_decomp = 18

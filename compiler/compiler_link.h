@@ -268,7 +268,8 @@ typedef struct {
     th_type *failure_type;
 } n00bb_trait_specialization_t;
 parse_sym_entry_t *unit_trait_symbol(parse_grammar_t *grammar,
-    core_translation_unit_t *unit, core_string_t name, bool imported);
+    core_translation_unit_t *unit, core_string_t name,
+    core_translation_unit_t *consumer);
 bool n00bb_resolve_trait_reference(parse_grammar_t *grammar,
     core_translation_unit_t *unit, n00bb_link_use_site_t *site,
     core_translation_unit_t **owner_out, parse_sym_entry_t **symbol_out,
@@ -582,7 +583,6 @@ core_link_stage_result_t n00bb_link_stage_contributions(
 core_link_stage_result_t n00bb_link_stage_ir_bindings(
     core_link_unit_t *link, uint32_t stage_kind, void *opaque);
 bool validate_package_interfaces(n00bb_link_analysis_t *analysis);
-bool connect_package_subpackages(n00bb_link_analysis_t *analysis);
 bool populate_package_interfaces(n00bb_link_analysis_t *analysis);
 parse_sym_entry_t *n00bb_package_module_view(parse_symtab_t *symtab,
                                              parse_scope_t *scope,

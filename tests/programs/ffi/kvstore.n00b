@@ -1,7 +1,8 @@
-import sys.gc
+import sys.gc.alloc
+import sys.gc.collect
 
 record Kv_Error {
-    public code: i64
+    code: i64
 }
 
 record Store {
@@ -15,8 +16,8 @@ record Pair {
 }
 
 record Entry {
-    public key: Array[u8]
-    public val: Array[u8]
+    key: Array[u8]
+    val: Array[u8]
 }
 
 record Kv_Cursor {

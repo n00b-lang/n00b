@@ -1,0 +1,3 @@
+import orphan.leaf
+
+require orphan.leaf.value() == 1

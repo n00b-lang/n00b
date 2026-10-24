@@ -1163,13 +1163,13 @@ int32_t resharp_n00b_regex_capture_index_for_name(uint64_t self, const void *nam
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Regex_Options_Cell {
-    public raw: uint
+    raw: uint
 }
 
 alias type Regex_Options = Ref[Regex_Options_Cell]
@@ -1187,7 +1187,7 @@ func __finalize(consume self: Ref[Regex_Options_Cell]) {
 }
 
 record Regex_Cell {
-    public raw: uint
+    raw: uint
 }
 
 alias type Regex = Ref[Regex_Cell]
@@ -1205,8 +1205,8 @@ func __finalize(consume self: Ref[Regex_Cell]) {
 }
 
 record Match layout(c) {
-    public start: u64
-    public end: u64
+    start: u64
+    end: u64
 }
 
 enum Status {

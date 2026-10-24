@@ -1,6 +1,6 @@
 import zlib
 
-public alias litmod crc = checksum_bytes
+alias litmod crc = checksum_bytes
 sequence litmod checksum_bytes(items: Array[u8]) -> u64 fail: string {
     var sum: u64 = 0
     try {

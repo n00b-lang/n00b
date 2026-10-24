@@ -1,0 +1,3 @@
+import impl
+
+func doubled() -> int { return impl.answer() * 2 }

@@ -1,5 +1,5 @@
-public const answer: int = 7
+const answer: int = 7
 
-public func read() -> int {
+func read() -> int {
     return answer
 }

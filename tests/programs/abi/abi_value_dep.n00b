@@ -1,1 +1,1 @@
-public const value: int = 7
+const value: int = 7

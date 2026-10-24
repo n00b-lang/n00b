@@ -453,13 +453,6 @@ register_context_callable_parameter_metadata(
     return ok;
 }
 
-static uint32_t
-n00bb_visibility_code(core_string_t visibility)
-{
-    if (core_string_eq(visibility, CORE_STRING_STATIC("private"))) return 1;
-    if (core_string_eq(visibility, CORE_STRING_STATIC("public"))) return 2;
-    return 0;
-}
 
 static bool
 register_type_member_metadata(parse_grammar_t *grammar,
@@ -470,8 +463,7 @@ register_type_member_metadata(parse_grammar_t *grammar,
 {
     parse_scope_t *scope = type_symbol ? type_symbol->member_scope : nullptr;
     if (!scope) return true;
-    uint32_t type_visibility = n00bb_visibility_code(type_symbol->visibility);
-    if (!type_visibility) type_visibility = 2;
+    uint32_t type_visibility = symbol_is_private(type_symbol);
     size_t count = 0;
     for (parse_sym_entry_t *member = scope->first_in_scope; member;
          member = member->next_in_scope) {
@@ -506,8 +498,7 @@ register_type_member_metadata(parse_grammar_t *grammar,
         append_u32_le(&data, name_size);
         core_buffer_append(&data, member->name.data,
                            member->name.u8_bytes);
-        ok = append_u32_le(&data,
-                           n00bb_visibility_code(member->visibility)) &&
+        ok = append_u32_le(&data, symbol_is_private(member)) &&
              append_u32_le(&data, flags) &&
              append_u64_le(&data, member->bit_offset) &&
              append_u64_le(&data, member->bit_width);
@@ -1102,8 +1093,7 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             ok = ok && th_env_register_function_contract(environment,
                 core_buffer_string(&qualified),
                 symbol->name, module_text, package_text,
-                symbol_is_public_declaration(symbol)
-                    ? TH_ENV_PUBLIC : TH_ENV_PRIVATE, contract);
+                symbol_visibility(symbol), contract);
             if (ok) {
                 export_failure =
                     CORE_STRING_STATIC("function parameter metadata");
@@ -1533,16 +1523,22 @@ register_package_module_metadata(n00bb_link_analysis_t *analysis)
                 registered = append_litmod_entry(analysis, unit, &litmods,
                     &litmod_count, registration->modifier, registration);
             }
+            core_buffer_t litmod_aliases = {0};
+            if (registered && state->litmod_aliases.len <= UINT32_MAX)
+                registered = append_u32_le(&litmod_aliases,
+                    (uint32_t)state->litmod_aliases.len);
             for (size_t a = 0; registered
-                 && a < state->litmod_aliases.len; a++) {
-                n00bb_litmod_alias_t *alias = &state->litmod_aliases.data[a];
-                for (size_t k = 0; registered && alias->exported
-                     && k < n00bb_litmod_kind_count; k++)
-                    registered = append_litmod_entry(analysis, unit,
-                        &litmods, &litmod_count, alias->alias,
-                        user_litmod(state, alias->alias,
-                                    n00bb_litmod_kinds[k], nullptr));
-            }
+                 && a < state->litmod_aliases.len; a++)
+                registered = append_text_le(&litmod_aliases,
+                        state->litmod_aliases.data[a].alias)
+                    && append_text_le(&litmod_aliases,
+                        state->litmod_aliases.data[a].target);
+            if (registered && state->litmod_aliases.len)
+                registered = th_env_register_metadata(environment,
+                    TH_ENV_METADATA_ENVIRONMENT, module_name,
+                    CORE_STRING_STATIC("n00b.module-litmod-aliases"), 1,
+                    litmod_aliases.data, litmod_aliases.byte_len);
+            core_buffer_release(&litmod_aliases);
             if (registered && litmod_count) {
                 core_buffer_t payload = {0};
                 registered = append_u32_le(&payload, litmod_count);
@@ -1627,7 +1623,6 @@ register_package_manifest(th_env *environment, core_translation_unit_t *unit,
     for (size_t e = 0; ok && e < package->exports.len; e++) {
         n00bb_package_export_t *export = &package->exports.data[e];
         uint8_t flags = (uint8_t)((export->renamed ? 1u : 0u)
-            | (export->subpackage ? 2u : 0u)
             | (export->grantee.data ? 4u : 0u));
         ok = append_text_le(&payload, export->source_name)
             && append_text_le(&payload, export->export_name)
@@ -1715,46 +1710,6 @@ package_name_owned_by_unit(core_string_t package,
                            CORE_STRING_STATIC("default"));
 }
 
-static bool
-connect_package_subpackage(core_translation_unit_t *parent_unit,
-                           n00bb_package_declaration_t *parent,
-                           core_translation_unit_t *child_unit,
-                           n00bb_package_declaration_t *child,
-                           core_string_t member_name)
-{
-    n00bb_tu_state_t *parent_state = tu_state(parent_unit);
-    parse_symtab_t *symtab = parent_state && parent_state->annotations
-        ? parent_state->annotations->symtab : nullptr;
-    if (!parent || !parent->scope || !child || !child->scope || !symtab)
-        return false;
-    if (!n00bb_same_package(parent_unit, child_unit)) {
-        package_diagnostic(parent_unit, parent->node,
-            CORE_STRING_STATIC("N00BB-M0010"),
-            CORE_STRING_STATIC(
-                "a manifest can export only subpackages from its own source package"));
-        return false;
-    }
-    for (parse_sym_entry_t *existing = n00bb_scope_named_next(parent->scope,
-             member_name, nullptr);
-         existing; existing = n00bb_scope_named_next(parent->scope,
-             member_name, existing))
-        if (existing->kind == PARSE_SYM_MODULE
-            && existing->exposed_scope == child->scope
-            && parse_sym_binding(existing,
-                CORE_STRING_STATIC("n00bb.package-unit")) == child_unit)
-            return true;
-    parse_symtab_enter_scope_all(symtab, parent->scope);
-    parse_sym_entry_t *binding = parse_symtab_add(symtab,
-        CORE_STRING_STATIC(""), member_name, PARSE_SYM_MODULE, child->node);
-    parse_symtab_leave_scope_all(symtab);
-    if (!binding || !parse_sym_set_binding(binding,
-            CORE_STRING_STATIC("n00bb.package-unit"), child_unit))
-        return false;
-    binding->exposed_scope = child->scope;
-    binding->visibility = CORE_STRING_STATIC("public");
-    return true;
-}
-
 bool
 initialize_unit_package_interfaces(core_translation_unit_t *unit)
 {
@@ -1819,62 +1774,6 @@ validate_package_interfaces(n00bb_link_analysis_t *analysis)
     return true;
 }
 
-static n00bb_package_declaration_t *
-find_link_package_declaration(n00bb_link_analysis_t *analysis,
-                              core_string_t name,
-                              core_translation_unit_t **unit_out)
-{
-    for (size_t u = 0; analysis && u < analysis->units.len; u++) {
-        core_translation_unit_t *unit = analysis->units.data[u];
-        n00bb_package_declaration_t *package =
-            find_package_declaration(unit, name);
-        if (!package) continue;
-        if (unit_out) *unit_out = unit;
-        return package;
-    }
-    return nullptr;
-}
-
-bool
-connect_package_subpackages(n00bb_link_analysis_t *analysis)
-{
-    for (size_t u = 0; analysis && u < analysis->units.len; u++) {
-        core_translation_unit_t *child_unit = analysis->units.data[u];
-        n00bb_tu_state_t *child_state = tu_state(child_unit);
-        for (size_t p = 0; child_state
-                && p < child_state->package_declarations.len; p++) {
-            n00bb_package_declaration_t *child =
-                &child_state->package_declarations.data[p];
-            size_t split = child->name.u8_bytes;
-            while (split && child->name.data[split - 1] != '.') split--;
-            if (!split) continue;
-            core_string_t parent_name = core_string_borrow(child->name.data,
-                                                           split - 1);
-            core_string_t member_name = core_string_borrow(
-                child->name.data + split, child->name.u8_bytes - split);
-            core_translation_unit_t *parent_unit = nullptr;
-            n00bb_package_declaration_t *parent =
-                find_link_package_declaration(analysis, parent_name,
-                                              &parent_unit);
-            if (!parent) continue;
-            bool exported = false;
-            for (size_t e = 0; e < parent->exports.len; e++) {
-                n00bb_package_export_t *item = &parent->exports.data[e];
-                if (!item->subpackage
-                    || !core_string_eq(item->export_name, member_name))
-                    continue;
-                exported = core_string_eq(item->source_name, member_name)
-                    || core_string_eq(item->source_name, child->name);
-                if (exported) break;
-            }
-            if (!exported) continue;
-            if (!connect_package_subpackage(parent_unit, parent, child_unit,
-                                            child, member_name))
-                return false;
-        }
-    }
-    return true;
-}
 
 static parse_sym_entry_t *
 existing_export_binding(parse_scope_t *scope, core_string_t name,
@@ -1898,7 +1797,6 @@ copy_export_binding_facts(parse_sym_entry_t *binding,
     binding->mutability = origin->mutability;
     binding->adt_kind = origin->adt_kind;
     binding->member_scope = origin->member_scope;
-    binding->visibility = CORE_STRING_STATIC("public");
     binding->phases = origin->phases;
     binding->mutable_phases = origin->mutable_phases;
     binding->initializer_phases = origin->initializer_phases;
@@ -1971,7 +1869,6 @@ ensure_package_module_view(core_translation_unit_t *interface_unit,
             child->scope_tag = CORE_STRING_STATIC("package-interface");
             child->owner_unit = interface_unit;
             view->exposed_scope = child;
-            view->visibility = CORE_STRING_STATIC("public");
         }
         scope = view->exposed_scope;
         start = end + 1;
@@ -2012,12 +1909,6 @@ add_package_export_symbol(core_translation_unit_t *interface_unit,
     copy_export_binding_facts(binding, origin);
     if (!parse_sym_set_binding(origin,
             CORE_STRING_STATIC("n00bb.external-export"), binding))
-        return false;
-    if (origin->kind == PARSE_SYM_TYPEDEF && origin->member_scope
-        && core_string_eq(origin->member_scope->scope_tag,
-                          CORE_STRING_STATIC("record"))
-        && !parse_sym_set_binding(origin,
-            CORE_STRING_STATIC("n00bb.exposed-record"), origin))
         return false;
     export->symbol = binding;
     return ensure_package_module_view(interface_unit, package,
@@ -2170,7 +2061,7 @@ resolve_one_package_export(core_translation_unit_t *unit,
                  ok && symbol; symbol = symbol->next_in_scope) {
                 if ((!symbol->decl_node
                      && !interface_module_declares(source_unit, symbol))
-                    || !symbol_is_public_declaration(symbol))
+                    || !symbol_exported_by_default(symbol))
                     continue;
                 n00bb_package_export_t item = *export;
                 item.export_name = symbol->name;
@@ -2181,7 +2072,7 @@ resolve_one_package_export(core_translation_unit_t *unit,
                  ok && symbol; symbol = symbol->next_in_scope) {
                 if ((!symbol->decl_node
                      && !interface_module_declares(source_unit, symbol))
-                    || !symbol_is_public_declaration(symbol))
+                    || !symbol_exported_by_default(symbol))
                     continue;
                 n00bb_package_export_t item = *export;
                 item.export_name = symbol->name;
@@ -2196,6 +2087,14 @@ resolve_one_package_export(core_translation_unit_t *unit,
     if (!scope) {
         source_unit = unit;
         scope = module_scope(state);
+    }
+    if (source_unit != unit && component < source.u8_bytes
+        && n00bb_declares_litmod_alias(tu_state(source_unit),
+               core_string_borrow(source.data + component,
+                                  source.u8_bytes - component))) {
+        export->source_unit = source_unit;
+        export->litmod_alias = true;
+        return 1;
     }
     parse_sym_entry_t *symbol = nullptr;
     while (component < source.u8_bytes) {
@@ -2217,10 +2116,10 @@ resolve_one_package_export(core_translation_unit_t *unit,
         component = end + 1;
     }
     symbol = canonical_symbol(symbol);
-    if (!symbol || !symbol_is_public_declaration(symbol)) {
+    if (!symbol_is_exportable(symbol)) {
         package_diagnostic(unit, export->node,
             CORE_STRING_STATIC("N00BB-M0008"),
-            CORE_STRING_STATIC("only public declarations may be exported"));
+            CORE_STRING_STATIC("private declarations cannot be exported"));
         return -1;
     }
     export->source_unit = source_unit;
@@ -2236,7 +2135,7 @@ resolve_one_package_export(core_translation_unit_t *unit,
          overload; overload = n00bb_scope_named_next(symbol->scope,
              symbol->name, overload))
         if (overload->kind == PARSE_SYM_FUNCTION
-            && symbol_is_public_declaration(overload)
+            && symbol_is_exportable(overload)
             && !add_package_export_symbol(unit, package, export, overload))
             return -1;
     return 1;
@@ -2280,9 +2179,10 @@ resolve_unit_package_exports(core_translation_unit_t *unit, bool *progress,
             &state->package_declarations.data[p];
         for (size_t e = 0; e < package->exports.len; e++) {
             n00bb_package_export_t *export = &package->exports.data[e];
-            if (export->subpackage || export->symbol
-                || export->module_export) continue;
-            int result = resolve_one_package_export(unit, package, export);            if (result < 0) return -1;
+            if (export->symbol || export->module_export
+                || export->litmod_alias) continue;
+            int result = resolve_one_package_export(unit, package, export);
+            if (result < 0) return -1;
             if (result > 0) *progress = true;
             else (*unresolved)++;
         }
@@ -2299,13 +2199,51 @@ report_unresolved_package_exports(core_translation_unit_t *unit)
              e++) {
             n00bb_package_export_t *export =
                 &state->package_declarations.data[p].exports.data[e];
-            if (!export->subpackage && !export->symbol
-                && !export->module_export)
+            if (!export->symbol && !export->module_export
+                && !export->litmod_alias)
                 package_diagnostic(unit, export->node,
                     CORE_STRING_STATIC("N00BB-M0009"),
                     CORE_STRING_STATIC(
                         "package export source cannot be resolved"));
         }
+}
+
+static bool
+exports_same_symbol(n00bb_package_export_t *first,
+                    n00bb_package_export_t *second)
+{
+    if (first->module_export || second->module_export
+        || !core_string_eq(first->grantee, second->grantee)) return false;
+    if (first->litmod_alias || second->litmod_alias)
+        return first->litmod_alias && second->litmod_alias
+            && first->source_unit == second->source_unit
+            && core_string_eq(first->source_name, second->source_name);
+    return first->symbol && second->symbol
+        && canonical_symbol(first->symbol) == canonical_symbol(second->symbol);
+}
+
+static bool
+reject_duplicate_exports(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    bool valid = true;
+    for (size_t p = 0; p < state->package_declarations.len; p++) {
+        n00bb_package_declaration_t *package =
+            &state->package_declarations.data[p];
+        for (size_t later = 1; later < package->exports.len; later++)
+            for (size_t earlier = 0; earlier < later; earlier++) {
+                if (!exports_same_symbol(&package->exports.data[earlier],
+                                         &package->exports.data[later]))
+                    continue;
+                package_diagnostic(unit, package->exports.data[later].node,
+                    CORE_STRING_STATIC("N00BB-M0013"),
+                    CORE_STRING_STATIC(
+                        "this symbol is already exported to the same destination"));
+                valid = false;
+                break;
+            }
+    }
+    return valid;
 }
 
 bool
@@ -2319,7 +2257,7 @@ populate_unit_package_interfaces(core_translation_unit_t *unit)
         if (resolve_unit_package_exports(unit, &progress, &unresolved) < 0)
             return false;
     } while (progress && unresolved);
-    if (!unresolved) return true;
+    if (!unresolved) return reject_duplicate_exports(unit);
     report_unresolved_package_exports(unit);
     return false;
 }
@@ -2451,7 +2389,6 @@ add_implicit_package_scope(parse_symtab_t *symtab,
         || !parse_sym_set_binding(module,
             CORE_STRING_STATIC("n00bb.package-unit"), unit)) return false;
     module->exposed_scope = scope;
-    module->visibility = CORE_STRING_STATIC("public");
     *out = scope;
     return true;
 }
@@ -2475,6 +2412,24 @@ install_implicit_builtin_package(core_translation_unit_t *unit)
             CORE_STRING_STATIC("types"), &types_scope);
 }
 
+static bool
+bind_import_prefix(core_translation_unit_t *unit, core_string_t name)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    parse_scope_t *root = module_scope(state);
+    int64_t dot = name.data ? core_string_find_byte(name, '.') : -1;
+    if (dot < 0) return true;
+    core_string_t prefix = core_string_slice(name, 0, (size_t)dot);
+    parse_sym_entry_t *existing = root
+        ? parse_symtab_lookup_in(root, prefix) : nullptr;
+    if (existing && existing->kind == PARSE_SYM_MODULE) return true;
+    parse_scope_t *prefix_scope = nullptr;
+    return symtab && root && add_implicit_package_scope(symtab, unit, root,
+                                                        prefix, &prefix_scope);
+}
+
 bool
 bind_imported_module_scopes(core_list_t(core_translation_unit_ptr_t) *units)
 {
@@ -2482,21 +2437,13 @@ bind_imported_module_scopes(core_list_t(core_translation_unit_ptr_t) *units)
         core_translation_unit_t *unit = units->data[i];
         if (!install_implicit_builtin_package(unit)) return false;
         n00bb_tu_state_t *state = tu_state(unit);
-        parse_symtab_t *symtab = state && state->annotations
-            ? state->annotations->symtab : nullptr;
-        parse_scope_t *root = module_scope(state);
-        for (size_t a = 0; state && a < state->import_aliases.len; a++) {
-            core_string_t alias = state->import_aliases.data[a].name;
-            int64_t dot = alias.data ? core_string_find_byte(alias, '.') : -1;
-            if (dot < 0) continue;
-            core_string_t prefix = core_string_slice(alias, 0, (size_t)dot);
-            parse_sym_entry_t *existing = root
-                ? parse_symtab_lookup_in(root, prefix) : nullptr;
-            if (existing && existing->kind == PARSE_SYM_MODULE) continue;
-            parse_scope_t *prefix_scope = nullptr;
-            if (!symtab || !root || !add_implicit_package_scope(symtab,
-                    unit, root, prefix, &prefix_scope)) return false;
-        }
+        for (size_t a = 0; state && a < state->import_aliases.len; a++)
+            if (!bind_import_prefix(unit, state->import_aliases.data[a].name))
+                return false;
+        for (size_t p = 0; state && p < state->path_imports.len; p++)
+            if (!bind_import_prefix(unit,
+                    state->path_imports.data[p]->module.identifier))
+                return false;
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;

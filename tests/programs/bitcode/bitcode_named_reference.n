@@ -1,9 +1,9 @@
 record Cell {
-    public raw: uint
+    raw: uint
 }
 
 record Other_Cell {
-    public raw: uint
+    raw: uint
 }
 
 type Handle = Ref[Cell]

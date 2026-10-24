@@ -1,4 +1,4 @@
-public alias litmod bundle_bool_tuple_array = identity_bool_tuple_array
+alias litmod bundle_bool_tuple_array = identity_bool_tuple_array
 sequence litmod identity_bool_tuple_array(items: Array[Tuple[bool, int]]) -> Array[Tuple[bool, int]] fail: string {
     return items
 }

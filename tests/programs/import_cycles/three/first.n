@@ -1,20 +1,20 @@
 import second
 
-public var levels: int = 3
+var levels: int = 3
 
-public record Token {
-    public weight: int
+record Token {
+    weight: int
 }
 
-public func token(weight: int) -> Token {
+func token(weight: int) -> Token {
     return (weight = weight)
 }
 
-public func weight_of(item: Token) -> int {
+func weight_of(item: Token) -> int {
     return item.weight
 }
 
-public func walk(n: int) -> int {
+func walk(n: int) -> int {
     if n <= 0 {
         return 0
     }

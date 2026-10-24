@@ -1,13 +1,13 @@
 import function_archive_dep
 
-public func archived_keep_wrapper(input_ref) {
+func archived_keep_wrapper(input_ref) {
     function_archive_dep.renamed_keep(input_ref)
 }
 
-public func archived_return_wrapper(input_ref) {
+func archived_return_wrapper(input_ref) {
     return function_archive_dep.renamed_return(input_ref)
 }
 
-public func archived_global_wrapper() {
+func archived_global_wrapper() {
     return function_archive_dep.renamed_global_reference()
 }

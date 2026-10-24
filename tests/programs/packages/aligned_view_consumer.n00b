@@ -1,4 +1,5 @@
 import aligned
+import aligned.child
 
 require aligned.child.answer == 21
 require aligned.doubled() == 42

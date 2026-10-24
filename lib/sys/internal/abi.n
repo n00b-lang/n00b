@@ -1,21 +1,21 @@
-public alias type Type_Kind = builtin.Type_Kind
-public alias type Range = builtin.Range
-public alias type String_Bits = builtin.String_Bits
-public alias type Type_Record = builtin.Type_Record
-public alias type Field_Record = builtin.Field_Record
-public alias type Trace_Record = builtin.Trace_Record
-public alias type Trace_Child_Record = builtin.Trace_Child_Record
-public alias type Trace_Arm_Record = builtin.Trace_Arm_Record
-public alias type Tag_Extractor_Record = builtin.Tag_Extractor_Record
-public alias type Frame_Layout_Record = builtin.Frame_Layout_Record
-public alias type Native_Frame_Record = builtin.Native_Frame_Record
-public alias type Storage_Record = builtin.Storage_Record
-public alias type Symbol_Record = builtin.Symbol_Record
-public alias type Module_Record = builtin.Module_Record
-public alias type Function_Record = builtin.Function_Record
-public alias type Baked_Node_Record = builtin.Baked_Node_Record
-public alias type Arm_Record = builtin.Arm_Record
-public alias type Physical_Run_Record = builtin.Physical_Run_Record
+alias type Type_Kind = builtin.Type_Kind
+alias type Range = builtin.Range
+alias type String_Bits = builtin.String_Bits
+alias type Type_Record = builtin.Type_Record
+alias type Field_Record = builtin.Field_Record
+alias type Trace_Record = builtin.Trace_Record
+alias type Trace_Child_Record = builtin.Trace_Child_Record
+alias type Trace_Arm_Record = builtin.Trace_Arm_Record
+alias type Tag_Extractor_Record = builtin.Tag_Extractor_Record
+alias type Frame_Layout_Record = builtin.Frame_Layout_Record
+alias type Native_Frame_Record = builtin.Native_Frame_Record
+alias type Storage_Record = builtin.Storage_Record
+alias type Symbol_Record = builtin.Symbol_Record
+alias type Module_Record = builtin.Module_Record
+alias type Function_Record = builtin.Function_Record
+alias type Baked_Node_Record = builtin.Baked_Node_Record
+alias type Arm_Record = builtin.Arm_Record
+alias type Physical_Run_Record = builtin.Physical_Run_Record
 
 enum Tag_Kind {
     invalid = 0, direct_bits = 1, pointer_null = 2, bitptr_depth = 3
@@ -25,7 +25,7 @@ enum Storage_Kind {
     read_only = 1, writable = 2, tls = 3
 }
 
-public const type_flag_bits: u32 = 1 << 4
+const type_flag_bits: u32 = 1 << 4
 
 record Array_Descriptor_Header layout(c) {
     total_count:   u64
@@ -60,22 +60,22 @@ record Callback_Value layout(c) {
     environment:            Ref[byte]?
 }
 
-public const frame_sentinel:    u32  = 0x4230304e
-public const frame_root_offset: uint = 8
+const frame_sentinel:    u32  = 0x4230304e
+const frame_root_offset: uint = 8
 
-public const type_flag_type_index: u32 = 1 << 6
-public const table_type:          u32 = 4
-public const table_function:      u32 = 14
-public const patch_index:         u32 = 1
-public const patch_box_type:      u32 = 2
-public const binding_const:       u32 = 3
-public const baked_immutable:     u32 = 1
-public const baked_array_backing: u32 = 2
-public const baked_foreign:       u32 = 4
-public const table_native:        u32 = 19
-public const type_flag_opaque:    u32 = 1 << 1
-public const extent_count_field:  u32 = 1
-public const extent_sentinel:     u32 = 2
+const type_flag_type_index: u32 = 1 << 6
+const table_type:          u32 = 4
+const table_function:      u32 = 14
+const patch_index:         u32 = 1
+const patch_box_type:      u32 = 2
+const binding_const:       u32 = 3
+const baked_immutable:     u32 = 1
+const baked_array_backing: u32 = 2
+const baked_foreign:       u32 = 4
+const table_native:        u32 = 19
+const type_flag_opaque:    u32 = 1 << 1
+const extent_count_field:  u32 = 1
+const extent_sentinel:     u32 = 2
 
 func type_at(index: u32) -> Ref[Type_Record]? {
     return __abi_type(index)

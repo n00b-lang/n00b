@@ -1,1 +1,1 @@
-public func dependency() -> int { return 1 }
+func dependency() -> int { return 1 }

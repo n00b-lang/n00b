@@ -191,10 +191,10 @@ main(void)
     assert(n00bb_abi_declarations_build(declarations, type_index,
         &type_rows, &unit, tokens, names, source_of_node, &sources, 5, &rows)
         && rows.symbols[type_symbol_index].visibility
-            == N00B_ABI_VISIBILITY_PACKAGE
+            == N00B_ABI_VISIBILITY_PUBLIC
         && rows.symbols[field_symbol_index].visibility
-            == N00B_ABI_VISIBILITY_PACKAGE
-        && !(rows.symbols[type_symbol_index].flags
+            == N00B_ABI_VISIBILITY_PUBLIC
+        && (rows.symbols[type_symbol_index].flags
             & N00B_ABI_SYMBOL_FLAG_EXPORTED));
     n00bb_abi_declarations_release(&rows);
     type_symbol->visibility = CORE_STRING_STATIC("private");
@@ -203,13 +203,18 @@ main(void)
         && rows.symbols[type_symbol_index].visibility
             == N00B_ABI_VISIBILITY_PRIVATE
         && rows.symbols[field_symbol_index].visibility
-            == N00B_ABI_VISIBILITY_PRIVATE);
+            == N00B_ABI_VISIBILITY_PRIVATE
+        && !(rows.symbols[type_symbol_index].flags
+            & N00B_ABI_SYMBOL_FLAG_EXPORTED));
     n00bb_abi_declarations_release(&rows);
-    field_symbol->visibility = CORE_STRING_STATIC("protected");
+    type_symbol->visibility = (core_string_t){0};
+    field_symbol->visibility = CORE_STRING_STATIC("private");
     assert(n00bb_abi_declarations_build(declarations, type_index,
         &type_rows, &unit, tokens, names, source_of_node, &sources, 5, &rows)
+        && rows.symbols[type_symbol_index].visibility
+            == N00B_ABI_VISIBILITY_PUBLIC
         && rows.symbols[field_symbol_index].visibility
-            == N00B_ABI_VISIBILITY_PACKAGE);
+            == N00B_ABI_VISIBILITY_PRIVATE);
     n00bb_abi_declarations_release(&rows);
     n00bb_abi_decl_index_free(declarations);
     n00bb_abi_type_identity_rows_release(&type_rows);

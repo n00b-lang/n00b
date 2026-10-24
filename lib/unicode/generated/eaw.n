@@ -1,9 +1,9 @@
 import internal.blob
 
-public const eaw_stage1_values: Array[u16] = [- eaw_stage1.bin -]'embed
+const eaw_stage1_values: Array[u16] = [- eaw_stage1.bin -]'embed
 
-public inline func eaw_stage1(i: u32) -> u16 {
+inline func eaw_stage1(i: u32) -> u16 {
     return eaw_stage1_values[i]
 }
 
-public const eaw_stage2: Array[u8] = [- eaw_stage2.bin -]'embed
+const eaw_stage2: Array[u8] = [- eaw_stage2.bin -]'embed

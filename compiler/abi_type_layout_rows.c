@@ -1,5 +1,6 @@
 #include "abi_trace_leaf.h"
 #include "abi_type_layout_rows.h"
+#include "compiler_visibility.h"
 
 #include <limits.h>
 #include <string.h>
@@ -625,15 +626,8 @@ build_member_row(n00bb_abi_type_index_t *index,
                     || !n00bb_abi_decl_find_symbol(declarations, field,
                                                    &row->symbol_index)))))
             return false;
-        core_string_t visibility = field && field->visibility.u8_bytes
-            ? field->visibility : owner ? owner->visibility
-                                      : (core_string_t){0};
-        if (core_string_eq(visibility, CORE_STRING_STATIC("public")))
-            row->visibility = N00B_ABI_VISIBILITY_PUBLIC;
-        else if (owner && (!visibility.u8_bytes
-                 || core_string_eq(visibility, CORE_STRING_STATIC("protected"))
-                 || core_string_eq(visibility, CORE_STRING_STATIC("package"))))
-            row->visibility = N00B_ABI_VISIBILITY_PACKAGE;
+        row->visibility = member_is_private(field, owner)
+            ? N00B_ABI_VISIBILITY_PRIVATE : N00B_ABI_VISIBILITY_PUBLIC;
         if (!member->type || !n00bb_abi_type_index_find(index, member->type,
                                                          &row->child_type_index)
             || (member->inline_element_count

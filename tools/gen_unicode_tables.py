@@ -681,7 +681,7 @@ BINARY_PROP_MAP = {v: i for i, v in enumerate(BINARY_PROPERTIES)}
 # ---------------------------------------------------------------------------
 
 def embed_const(name, elem, source):
-    return (f"public const {name}: Array[{elem}] = "
+    return (f"const {name}: Array[{elem}] = "
             f"[- {source} -]'embed\n")
 
 
@@ -689,7 +689,7 @@ def emit_table(f, bin_path, name, elem, values):
     bin_path.write_bytes(struct.pack(f"<{len(values)}{BLOB_CODES[elem]}",
                                      *values))
     f.write(embed_const(f"{name}_values", elem, bin_path.name) + "\n")
-    f.write(f"public inline func {name}(i: u32) -> {elem} {{\n"
+    f.write(f"inline func {name}(i: u32) -> {elem} {{\n"
             f"    return {name}_values[i]\n"
             f"}}\n\n")
 
@@ -701,7 +701,7 @@ def emit_rows(f, bin_path, name, width, rows):
         flat.extend(row)
     bin_path.write_bytes(struct.pack(f"<{len(flat)}I", *flat))
     f.write(embed_const(f"{name}_values", "u32", bin_path.name) + "\n")
-    f.write(f"public inline func {name}(row: u32, col: u32) -> u32 {{\n"
+    f.write(f"inline func {name}(row: u32, col: u32) -> u32 {{\n"
             f"    return {name}_values[row * {width} + col]\n"
             f"}}\n\n")
 
@@ -714,7 +714,7 @@ def emit_strings(f, bin_path, name, strings):
     bin_path.write_bytes(struct.pack(f"<{len(offsets)}I", *offsets)
                          + b"".join(encoded))
     f.write(embed_const(f"{name}_bytes", "u8", bin_path.name) + "\n")
-    f.write(f"public func {name}(i: u32) -> string {{\n"
+    f.write(f"func {name}(i: u32) -> string {{\n"
             f"    return internal.blob.str_at(ref {name}_bytes, i)\n"
             f"}}\n\n")
 
@@ -830,7 +830,7 @@ class SparseMapping:
             emit_rows(f, out_path.with_name(f"{self.name}_index.bin"),
                       f"{self.name}_index", 2,
                       [(cp, offsets[cp]) for cp in sorted_cps])
-            f.write(f"public const {self.name}_index_len: u32 = {len(sorted_cps)}\n\n")
+            f.write(f"const {self.name}_index_len: u32 = {len(sorted_cps)}\n\n")
 
             emit_table(f, out_path.with_name(f"{self.name}_data.bin"),
                        f"{self.name}_data", "u32",
@@ -988,7 +988,7 @@ def gen_scripts(cache_dir, out_dir):
         f.write("\n")
         emit_strings(f, out_dir / "script_names.bin", "script_names",
                      SCRIPT_VALUES)
-        f.write(f"public const script_count: u32 = {len(SCRIPT_VALUES)}\n")
+        f.write(f"const script_count: u32 = {len(SCRIPT_VALUES)}\n")
 
 
 def gen_script_extensions(cache_dir, out_dir):
@@ -1051,8 +1051,8 @@ def gen_script_extensions(cache_dir, out_dir):
     with open(out_dir / "script_extensions.n", "w") as f:
         f.write(TABLE_PROLOGUE)
         f.write(TABLE_IMPORTS)
-        f.write(f"public const script_common = {common_idx}\n")
-        f.write(f"public const script_inherited = {inherited_idx}\n\n")
+        f.write(f"const script_common = {common_idx}\n")
+        f.write(f"const script_inherited = {inherited_idx}\n\n")
 
     scext.generate_n00b(out_dir / "script_extensions.n", append=True)
 
@@ -1081,7 +1081,7 @@ def gen_blocks(cache_dir, out_dir):
                   [(start, end) for start, end, name in blocks])
         emit_table(f, out_dir / "block_ids.bin", "block_ids", "u16",
                    [BLOCK_MAP[name] for start, end, name in blocks])
-        f.write(f"public const block_count: u32 = {len(blocks)}\n\n")
+        f.write(f"const block_count: u32 = {len(blocks)}\n\n")
 
         emit_strings(f, out_dir / "block_names.bin", "block_names",
                      BLOCK_VALUES)
@@ -1248,7 +1248,7 @@ def gen_age(cache_dir, out_dir):
     with open(out_dir / "age.n", "a") as f:
         f.write("\n")
         emit_strings(f, out_dir / "age_names.bin", "age_names", age_list)
-        f.write(f"public const age_count: u32 = {len(age_list)}\n")
+        f.write(f"const age_count: u32 = {len(age_list)}\n")
 
 
 def gen_proplist(cache_dir, out_dir):
@@ -1327,7 +1327,7 @@ def gen_decomposition(cache_dir, out_dir):
                              default=0))
 
     with open(out_dir / "decomposition.n", "a") as f:
-        f.write(f"public const max_decomp = {widest}\n")
+        f.write(f"const max_decomp = {widest}\n")
 
 
 def gen_composition(cache_dir, out_dir):
@@ -1383,8 +1383,8 @@ def gen_composition(cache_dir, out_dir):
         f.write(TABLE_PROLOGUE)
         f.write(TABLE_IMPORTS)
 
-        f.write(f"public const comp_table_size = {table_size}\n")
-        f.write(f"public const comp_empty = 0xFFFFFFFF\n\n")
+        f.write(f"const comp_table_size = {table_size}\n")
+        f.write(f"const comp_empty = 0xFFFFFFFF\n\n")
 
         emit_table(f, out_dir / "comp_starter.bin", "comp_starter", "u32",
                    [k[0] for k in keys])
@@ -1654,7 +1654,7 @@ def gen_names(cache_dir, out_dir):
         f.write(embed_const("name_by_name", "u8", name_sorted_path.name)
                 + "\n")
 
-        f.write(f'public const name_count = '
+        f.write(f'const name_count = '
                 f'{len(entries)}\n')
 
 
@@ -1977,7 +1977,7 @@ def gen_versions(out_dir, versions):
     print("Generating versions.n ...")
 
     with open(out_dir / "versions.n", "w") as f:
-        f.write("public func version() -> string {\n")
+        f.write("func version() -> string {\n")
         f.write(f'    return "{versions["ucd"]}"\n')
         f.write("}\n")
 
@@ -2080,8 +2080,8 @@ def gen_collation(cache_dir, out_dir):
         table.generate_n00b(out_dir / "collation.n")
         with open(out_dir / "collation.n", "a") as f:
             emit_table(f, out_dir / "ce_data.bin", "ce_data", "u16", [0])
-            f.write("public const ce_data_len: u32 = 1\n")
-            f.write("public const contraction_count: u32 = 0\n\n")
+            f.write("const ce_data_len: u32 = 1\n")
+            f.write("const contraction_count: u32 = 0\n\n")
             emit_rows(f, out_dir / "contr_keys.bin", "contr_keys", 4,
                       [(0, 0, 0, 0)])
             emit_table(f, out_dir / "contr_key_lens.bin", "contr_key_lens",
@@ -2090,7 +2090,7 @@ def gen_collation(cache_dir, out_dir):
                        "contr_ce_offsets", "u32", [0])
             emit_table(f, out_dir / "contr_ce_data.bin", "contr_ce_data",
                        "u16", [0])
-            f.write("public const ducet_count: u32 = 0\n")
+            f.write("const ducet_count: u32 = 0\n")
         return
 
     implicit_ranges = []
@@ -2165,10 +2165,10 @@ def gen_collation(cache_dir, out_dir):
 
     with open(out_dir / "collation.n", "a") as f:
         emit_table(f, out_dir / "ce_data.bin", "ce_data", "u16", ce_data)
-        f.write(f"public const ce_data_len: u32 = {len(ce_data)}\n\n")
+        f.write(f"const ce_data_len: u32 = {len(ce_data)}\n\n")
 
         sorted_contr = sorted(contractions.items())
-        f.write(f"public const contraction_count: u32 = {len(sorted_contr)}\n\n")
+        f.write(f"const contraction_count: u32 = {len(sorted_contr)}\n\n")
 
         if sorted_contr:
             # Contraction index: {cp1, cp2, ..., 0, ce_offset}
@@ -2198,7 +2198,7 @@ def gen_collation(cache_dir, out_dir):
             emit_rows(f, out_dir / "implicit_ranges.bin", "implicit_ranges",
                       3, implicit_ranges or [(0, 0, 0)])
 
-            f.write("public const implicit_range_count: u32 = "
+            f.write("const implicit_range_count: u32 = "
                     f"{len(implicit_ranges)}\n")
 
     core_han = []
@@ -2219,7 +2219,7 @@ def gen_collation(cache_dir, out_dir):
         f.write("\n")
         emit_rows(f, out_dir / "core_han_ranges.bin", "core_han_ranges", 2,
                   core_han or [(0, 0)])
-        f.write("public const core_han_range_count: u32 = "
+        f.write("const core_han_range_count: u32 = "
                 f"{len(core_han)}\n")
 
     print(f"  collation: {len(single_ces)} single entries, "

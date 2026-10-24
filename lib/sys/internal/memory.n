@@ -1,6 +1,6 @@
-public const PROT_NONE:         u32  = 0
-public const PROT_READ:         u32  = 1
-public const PROT_WRITE:        u32  = 2
+const PROT_NONE:         u32  = 0
+const PROT_READ:         u32  = 1
+const PROT_WRITE:        u32  = 2
 
 func page_size() -> uint {
     return __os_page_size()

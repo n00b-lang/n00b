@@ -1,4 +1,0 @@
-import private_dep
-func accept(item: private_dep.PrivateRecord) -> private_dep.PrivateRecord {
-    return item
-}

@@ -1,2 +1,2 @@
-public const fixed_values: Array[int] = [1, 2]
-public thread var worker_values: Array[int] = [3, 4]
+const fixed_values: Array[int] = [1, 2]
+thread var worker_values: Array[int] = [3, 4]

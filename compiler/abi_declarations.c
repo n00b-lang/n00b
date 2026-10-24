@@ -1,4 +1,5 @@
 #include "abi_declarations.h"
+#include "compiler_visibility.h"
 
 #include <limits.h>
 #include <string.h>
@@ -230,29 +231,10 @@ symbol_kind(const parse_sym_entry_t *symbol, uint32_t *out)
 static bool
 symbol_attributes(const parse_sym_entry_t *symbol, n00b_abi_symbol_v1 *row)
 {
-    bool exported = core_string_eq(symbol->visibility,
-        CORE_STRING_STATIC("public")) || parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.external-export")) != nullptr;
-    core_string_t visibility = symbol->visibility;
-    if (!visibility.u8_bytes && symbol->owner_type)
-        visibility = symbol->owner_type->visibility;
-    if (visibility.u8_bytes
-        && !core_string_eq(visibility, CORE_STRING_STATIC("public"))
-        && !core_string_eq(visibility, CORE_STRING_STATIC("private"))
-        && !core_string_eq(visibility, CORE_STRING_STATIC("protected"))
-        && !core_string_eq(visibility, CORE_STRING_STATIC("package")))
-        return false;
-    bool package_default = symbol->kind == PARSE_SYM_FUNCTION
-        || symbol->kind == PARSE_SYM_TYPEDEF
-        || symbol->kind == PARSE_SYM_TAG
-        || symbol->owner_type;
-    row->visibility = exported || core_string_eq(visibility,
-        CORE_STRING_STATIC("public")) ? N00B_ABI_VISIBILITY_PUBLIC
-        : core_string_eq(visibility, CORE_STRING_STATIC("private"))
-            ? N00B_ABI_VISIBILITY_PRIVATE
-        : (visibility.u8_bytes || package_default)
-            ? N00B_ABI_VISIBILITY_PACKAGE
-            : N00B_ABI_VISIBILITY_PRIVATE;
+    bool visible = !member_is_private(symbol, symbol->owner_type);
+    row->visibility = visible ? N00B_ABI_VISIBILITY_PUBLIC
+                              : N00B_ABI_VISIBILITY_PRIVATE;
+    bool exported = visible && !symbol->owner_type;
     if (exported)
         row->flags |= N00B_ABI_SYMBOL_FLAG_EXPORTED;
     row->storage_duration = (uint32_t)symbol->storage_duration;

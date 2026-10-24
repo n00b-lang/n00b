@@ -1,23 +1,23 @@
 import internal.blob
 
-public const idna_status_stage1_values: Array[u16] = [- idna_stage1.bin -]'embed
+const idna_status_stage1_values: Array[u16] = [- idna_stage1.bin -]'embed
 
-public inline func idna_status_stage1(i: u32) -> u16 {
+inline func idna_status_stage1(i: u32) -> u16 {
     return idna_status_stage1_values[i]
 }
 
-public const idna_status_stage2: Array[u8] = [- idna_stage2.bin -]'embed
-public const idna_map_index_values: Array[u32] = [- idna_map_index.bin -]'embed
+const idna_status_stage2: Array[u8] = [- idna_stage2.bin -]'embed
+const idna_map_index_values: Array[u32] = [- idna_map_index.bin -]'embed
 
-public inline func idna_map_index(row: u32, col: u32) -> u32 {
+inline func idna_map_index(row: u32, col: u32) -> u32 {
     return idna_map_index_values[row * 2 + col]
 }
 
-public const idna_map_index_len: u32 = 6467
+const idna_map_index_len: u32 = 6467
 
-public const idna_map_data_values: Array[u32] = [- idna_map_data.bin -]'embed
+const idna_map_data_values: Array[u32] = [- idna_map_data.bin -]'embed
 
-public inline func idna_map_data(i: u32) -> u32 {
+inline func idna_map_data(i: u32) -> u32 {
     return idna_map_data_values[i]
 }
 

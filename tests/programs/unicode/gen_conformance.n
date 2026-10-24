@@ -1,15 +1,15 @@
-public const conf_grapheme: Array[u8] = [- ../../data/unicode/gen_conf_grapheme.bin -]'embed
+const conf_grapheme: Array[u8] = [- ../../data/unicode/gen_conf_grapheme.bin -]'embed
 
-public const conf_word: Array[u8] = [- ../../data/unicode/gen_conf_word.bin -]'embed
+const conf_word: Array[u8] = [- ../../data/unicode/gen_conf_word.bin -]'embed
 
-public const conf_sentence: Array[u8] = [- ../../data/unicode/gen_conf_sentence.bin -]'embed
+const conf_sentence: Array[u8] = [- ../../data/unicode/gen_conf_sentence.bin -]'embed
 
-public const conf_line: Array[u8] = [- ../../data/unicode/gen_conf_line.bin -]'embed
+const conf_line: Array[u8] = [- ../../data/unicode/gen_conf_line.bin -]'embed
 
-public const conf_norm: Array[u8] = [- ../../data/unicode/gen_conf_norm.bin -]'embed
+const conf_norm: Array[u8] = [- ../../data/unicode/gen_conf_norm.bin -]'embed
 
-public const conf_bidi: Array[u8] = [- ../../data/unicode/gen_conf_bidi.bin -]'embed
+const conf_bidi: Array[u8] = [- ../../data/unicode/gen_conf_bidi.bin -]'embed
 
-public const conf_collate: Array[u8] = [- ../../data/unicode/gen_conf_collate.bin -]'embed
+const conf_collate: Array[u8] = [- ../../data/unicode/gen_conf_collate.bin -]'embed
 
-public const conf_idna: Array[u8] = [- ../../data/unicode/gen_conf_idna.bin -]'embed
+const conf_idna: Array[u8] = [- ../../data/unicode/gen_conf_idna.bin -]'embed

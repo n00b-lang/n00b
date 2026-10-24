@@ -1,9 +1,9 @@
-public alias litmod bundle = identity_scalar_tuple
+alias litmod bundle = identity_scalar_tuple
 quotes litmod identity_scalar_tuple(raw: string) -> Tuple[string, int] fail: string {
     return (raw, 7)
 }
 
-public alias litmod dynamic = from_items
+alias litmod dynamic = from_items
 sequence litmod from_items(items: Array[int]) -> Tuple[string, int] fail: string {
     return ("runtime", 9)
 }

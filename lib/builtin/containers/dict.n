@@ -320,7 +320,7 @@ func values(self: Dict['K, 'V],
                       cast[int]self.count)
 }
 
-public alias litmod d = dict
+alias litmod d = dict
 dict litmod dict(pairs: Array[Tuple['K, 'V]]) -> Dict['K, 'V] fail: string {
     return new[Dict['K, 'V]](pairs)
 }

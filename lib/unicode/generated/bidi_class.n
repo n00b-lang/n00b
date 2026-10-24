@@ -1,9 +1,9 @@
 import internal.blob
 
-public const bidi_stage1_values: Array[u16] = [- bidi_class_stage1.bin -]'embed
+const bidi_stage1_values: Array[u16] = [- bidi_class_stage1.bin -]'embed
 
-public inline func bidi_stage1(i: u32) -> u16 {
+inline func bidi_stage1(i: u32) -> u16 {
     return bidi_stage1_values[i]
 }
 
-public const bidi_stage2: Array[u8] = [- bidi_class_stage2.bin -]'embed
+const bidi_stage2: Array[u8] = [- bidi_class_stage2.bin -]'embed

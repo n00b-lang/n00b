@@ -206,14 +206,14 @@ const char * kv_errstr(int s)
 import kvstore
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Kv_Entry {
-    public key: Array[u8]
-    public val: Array[u8]
+    key: Array[u8]
+    val: Array[u8]
 }
 
 enum Kv_Status {

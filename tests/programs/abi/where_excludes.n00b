@@ -1,1 +1,1 @@
-public func keep(item: 'T) -> 'T where 'T: != string { return item }
+func keep(item: 'T) -> 'T where 'T: != string { return item }

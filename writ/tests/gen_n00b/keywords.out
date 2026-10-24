@@ -237,13 +237,13 @@ int32_t keywords_n00b_db_close(uint64_t db) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Db_Cell {
-    public raw: uint
+    raw: uint
 }
 
 alias type Db = Ref[Db_Cell]
@@ -261,24 +261,24 @@ func __finalize(consume self: Ref[Db_Cell]) {
 }
 
 record Open_Opts layout(c) {
-    public present: u32
-    public timeout_ms: u32
-    public readonly: bool
-    public cache_kb: u32
+    present: u32
+    timeout_ms: u32
+    readonly: bool
+    cache_kb: u32
 }
 
 record Limits layout(c) {
-    public max_rows: i64
-    public min_rows: i64
+    max_rows: i64
+    min_rows: i64
 }
 
 record Sized layout(c) {
-    public size: u32
-    public flags: u32
+    size: u32
+    flags: u32
 }
 
 record Plain layout(c) {
-    public depth: i32
+    depth: i32
 }
 
 func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_kb: u32? = nil) -> Db fail: Error {
@@ -310,8 +310,8 @@ func db_open(path: string, timeout_ms: u32? = nil, readonly: bool? = nil, cache_
 }
 
 record Db_Limit_Options {
-    public max_rows: i64?
-    public min_rows: i64?
+    max_rows: i64?
+    min_rows: i64?
 }
 
 func db_limit(db: Db, limits: Db_Limit_Options) -> i64 {

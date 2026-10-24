@@ -1,0 +1,6 @@
+import impl
+
+package twice {
+    export impl.once
+    export impl.once
+}

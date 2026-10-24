@@ -136,7 +136,6 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
     if (!symbol || !parse_sym_set_binding(symbol,
             CORE_STRING_STATIC("n00bb.builtin-type"), symbol)) return false;
     symbol->type = th_name(types, CORE_STRING_STATIC("Comparison"));
-    symbol->visibility = CORE_STRING_STATIC("public");
     symbol->adt_kind = CORE_STRING_STATIC("enum");
     parse_symtab_push_scope_all(symtab,
                                 CORE_STRING_STATIC("Comparison"));
@@ -162,7 +161,6 @@ register_builtin_comparison_symbols(parse_symtab_t *symtab,
         member->type = symbol->type;
         member->owner_type = symbol;
         member->mutability = PARSE_SYM_CONST;
-        member->visibility = CORE_STRING_STATIC("public");
         member->comptime_value = value;
         member->has_comptime_value = true;
         parse_sym_set_phases(member, PARSE_SYM_PHASE_BOTH,
@@ -1067,7 +1065,6 @@ register_builtin_symbols(parse_annot_result_t *annotations,
                 CORE_STRING_STATIC("n00bb.builtin-type"), trait)) return false;
         trait->type = th_name(types, comparison_traits[i]);
         trait->adt_kind = CORE_STRING_STATIC("trait");
-        trait->visibility = CORE_STRING_STATIC("public");
         parse_symtab_push_scope(symtab, CORE_STRING_STATIC("builtin"), name);
         trait->member_scope = parse_symtab_current_scope(symtab,
             CORE_STRING_STATIC("builtin"));

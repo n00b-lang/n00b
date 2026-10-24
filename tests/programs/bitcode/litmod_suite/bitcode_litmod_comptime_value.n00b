@@ -1,4 +1,4 @@
-public alias litmod raw = identity
+alias litmod raw = identity
 quotes litmod identity(contents: string) -> string fail: string {
     return contents
 }

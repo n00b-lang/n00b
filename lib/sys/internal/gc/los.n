@@ -3,7 +3,7 @@ import internal.gc.core
 import internal.gc.registry
 import internal.memory
 
-public const los_threshold: uint = 8 * 1024
+const los_threshold: uint = 8 * 1024
 const los_cache_object:     uint = 256 * 1024
 const los_cache_min:        uint = 8 * 1024 * 1024
 

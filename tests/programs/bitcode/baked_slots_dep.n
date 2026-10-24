@@ -1,4 +1,4 @@
-public callback Scale {
+callback Scale {
     call(value: int) -> int
     handler(value: int) -> int
 }
@@ -7,6 +7,6 @@ func triple(value: int) -> int {
     return value * 3
 }
 
-public func make_scale() -> Scale {
+func make_scale() -> Scale {
     return callback[Scale](ref triple)
 }

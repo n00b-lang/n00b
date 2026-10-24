@@ -6475,7 +6475,8 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
                 if (symbol->kind != PARSE_SYM_FUNCTION
                     || !core_string_eq(symbol->name,
                                        CORE_STRING_STATIC("__init"))
-                    || !symbol_is_public_declaration(symbol)) continue;
+                    || !n00bb_member_visible_to(lower->unit, unit, symbol))
+                    continue;
                 th_type *candidate = constructor_signature_instance(probe,
                                                                       symbol);
                 th_type *receiver_type = candidate
@@ -16714,7 +16715,7 @@ register_module_globals(parse_grammar_t *grammar,
                     || ir_global_set_shape(global, array_shape);
                 global->is_extern = !local_definition;
                 global->is_static = local_definition
-                    && !symbol_is_public_declaration(symbol);
+                    && symbol_is_private(symbol);
                 bool writable = parse_sym_can_write(symbol,
                                                     n00bb_compile_phase());
                 global->mutability = writable ? IR_MUT_MUTABLE
@@ -17419,7 +17420,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 bool always_inline = prelude
                     && child_nt(grammar, prelude, CORE_STRING_STATIC("func-inline"));
                 ir_linkage_t linkage = !definition ? IR_LINK_EXTERN
-                    : symbol_visibility(symbol) == TH_ENV_PRIVATE
+                    : symbol_is_private(symbol)
                         && !core_string_eq(symbol->name,
                                            CORE_STRING_STATIC("__finalize"))
                         ? IR_LINK_INTERNAL : IR_LINK_EXTERNAL;
@@ -19784,7 +19785,9 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
     bool found = false;
     parse_sym_entry_t *symbol = core_dict_get(&analysis->global_symbols,
                                               (void *)global, &found);
-    if (!found || !symbol || symbol_is_public_declaration(symbol))
+    if (!found || !symbol || symbol_exported_by_default(symbol)
+        || parse_sym_binding(symbol,
+               CORE_STRING_STATIC("n00bb.external-export")))
         return true;
     collect_escaped_globals(analysis);
     return core_dict_contains(&analysis->escaped_globals, (void *)global);
@@ -20725,7 +20728,7 @@ thread_runtime_entry_function(parse_grammar_t *grammar,
     return symbol && symbol->kind == PARSE_SYM_FUNCTION
         && symbol->decl_node && nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("func-def"))
         && (symbol->phases & PARSE_SYM_PHASE_RUNTIME)
-        && symbol_visibility(symbol) != TH_ENV_PRIVATE;
+        && !symbol_is_private(symbol);
 }
 
 static void

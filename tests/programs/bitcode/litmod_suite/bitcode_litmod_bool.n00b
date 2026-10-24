@@ -1,9 +1,9 @@
-public alias litmod yes = is_yes
+alias litmod yes = is_yes
 quotes litmod is_yes(raw: string) -> bool fail: string {
     return true
 }
 
-public alias litmod no = is_no
+alias litmod no = is_no
 quotes litmod is_no(raw: string) -> bool fail: string {
     return false
 }

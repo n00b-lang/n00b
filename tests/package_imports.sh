@@ -21,12 +21,15 @@ if ! "$compiler" build --output "$tmp/aligned" \
 fi
 "$tmp/aligned"
 
-if ! "$compiler" build --output "$tmp/sys-parent" \
+if "$compiler" build --output "$tmp/sys-parent" \
     sys_parent_consumer.n00b >"$tmp/sys-parent.log" 2>&1; then
-    cat "$tmp/sys-parent.log" >&2
+    echo 'a subpackage was reachable through its parent package' >&2
     exit 1
 fi
-"$tmp/sys-parent"
+grep -Fq "named 'memory'" "$tmp/sys-parent.log" || {
+    cat "$tmp/sys-parent.log" >&2
+    exit 1
+}
 
 if ! "$compiler" build --output "$tmp/sys-child" \
     sys_child_consumer.n00b >"$tmp/sys-child.log" 2>&1; then
@@ -84,16 +87,24 @@ grep -Fq "has no visible member named 'rejected'" \
     exit 1
 }
 
-if "$compiler" build --output "$tmp/internal" \
-    internal_module_consumer.n00b >"$tmp/rejected.log" 2>&1; then
-    echo 'internal package module unexpectedly compiled' >&2
-    exit 1
-fi
-grep -Fq 'a library source module cannot be imported from another source package' \
-    "$tmp/rejected.log" || {
-    cat "$tmp/rejected.log" >&2
-    exit 1
-}
+for case in \
+    'internal_module_consumer:a library source module cannot be imported' \
+    'renamed_manifest_consumer:a library source module cannot be imported' \
+    'orphan_manifest_consumer:without a manifest for package' \
+    'stranded_consumer:exports nothing and has no subpackages' \
+    'duplicate_export_consumer:already exported to the same destination'; do
+    consumer=${case%%:*}
+    expected=${case#*:}
+    if "$compiler" build --output "$tmp/$consumer" \
+        "$consumer.n00b" >"$tmp/rejected.log" 2>&1; then
+        echo "$consumer unexpectedly compiled" >&2
+        exit 1
+    fi
+    grep -Fq "$expected" "$tmp/rejected.log" || {
+        cat "$tmp/rejected.log" >&2
+        exit 1
+    }
+done
 
 if "$compiler" lower builtin_private_consumer.n00b \
     >"$tmp/builtin-private.log" 2>&1; then
@@ -106,14 +117,30 @@ grep -Fq 'a library source module cannot be imported from another source package
     exit 1
 }
 
-if "$compiler" build --output "$tmp/bare" \
-    missing_manifest_consumer.n00b >"$tmp/bare.log" 2>&1; then
-    echo 'module without a package manifest unexpectedly compiled' >&2
+"$compiler" build --output "$tmp/bare" \
+    missing_manifest_consumer.n00b >"$tmp/bare.log" 2>&1 || {
+    cat "$tmp/bare.log" >&2
+    exit 1
+}
+"$tmp/bare"
+"$compiler" build --output "$tmp/single-subpackage" \
+    single_subpackage_consumer.n00b >"$tmp/single-subpackage.log" 2>&1 || {
+    cat "$tmp/single-subpackage.log" >&2
+    exit 1
+}
+grep -Fq "N00BB-W0021" "$tmp/single-subpackage.log" || {
+    cat "$tmp/single-subpackage.log" >&2
+    exit 1
+}
+"$tmp/single-subpackage"
+if "$compiler" build --output "$tmp/bare-variable" \
+    missing_manifest_variable_consumer.n00b >"$tmp/bare-variable.log" 2>&1
+then
+    echo 'module-level variable visible through the default manifest' >&2
     exit 1
 fi
-grep -Fq 'a library source module cannot be imported from another source package' \
-    "$tmp/bare.log" || {
-    cat "$tmp/bare.log" >&2
+grep -Fq "N00BB-T0008" "$tmp/bare-variable.log" || {
+    cat "$tmp/bare-variable.log" >&2
     exit 1
 }
 

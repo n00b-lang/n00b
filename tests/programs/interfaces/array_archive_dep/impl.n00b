@@ -1,1 +1,1 @@
-public var grid: Array[Array[int]]
+var grid: Array[Array[int]]

@@ -1,0 +1,9 @@
+alias litmod shown = stamp
+
+quotes litmod stamp(text: string) -> int fail: string {
+    return 1
+}
+
+func ping() -> int {
+    return 1
+}

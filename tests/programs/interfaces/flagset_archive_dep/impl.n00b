@@ -1,4 +1,4 @@
-public flagset FilePerms {
+flagset FilePerms {
     read,
     write,
     read_write = read + write,

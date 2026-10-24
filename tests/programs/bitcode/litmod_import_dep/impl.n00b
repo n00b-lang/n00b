@@ -1,4 +1,4 @@
-public alias litmod stamp = make_stamp
+alias litmod stamp = make_stamp
 quotes litmod make_stamp(raw: string) -> int fail: string {
     return 42
 }
@@ -7,7 +7,7 @@ tuple litmod count_pair(items: Array[Tuple[int, int] | string]) -> int fail: str
     return 2
 }
 
-public func value() -> int {
+func value() -> int {
     return "dependency"'stamp
 }
 

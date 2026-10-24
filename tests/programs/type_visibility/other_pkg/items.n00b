@@ -1,0 +1,15 @@
+private record Hidden { field: int }
+
+record Holder {
+    open: int
+    private {
+        secret: int
+    }
+}
+
+var counter: int = 0
+const limit: int = 3
+
+func make_holder() -> Holder {
+    return (open = 1, secret = 2)
+}

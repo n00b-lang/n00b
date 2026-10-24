@@ -4,17 +4,15 @@ func initialize_marker() -> int {
     return 4
 }
 
-public var marker: int = initialize_marker()
+var marker: int = initialize_marker()
 
 package zeta {
     export impl.root as value
     export marker
-    export package tools
 }
 
 package zeta.tools {
     export impl.tool as value
-    export package deep
 }
 
 package zeta.tools.deep {

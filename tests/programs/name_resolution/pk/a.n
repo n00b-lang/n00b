@@ -1,11 +1,11 @@
 import shape
 
-public let limit: int = 1
+let limit: int = 1
 
-public func size(_x: string) -> uint {
+func size(_x: string) -> uint {
     return 100
 }
 
-public func area(self: shape.Item) -> int {
+func area(self: shape.Item) -> int {
     return 1
 }

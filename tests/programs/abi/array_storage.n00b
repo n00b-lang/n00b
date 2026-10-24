@@ -1,1 +1,1 @@
-public const values: Array[int] = [1, 2]
+const values: Array[int] = [1, 2]

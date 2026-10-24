@@ -1,9 +1,9 @@
 import internal.blob
 
-public const incb_stage1_values: Array[u16] = [- incb_stage1.bin -]'embed
+const incb_stage1_values: Array[u16] = [- incb_stage1.bin -]'embed
 
-public inline func incb_stage1(i: u32) -> u16 {
+inline func incb_stage1(i: u32) -> u16 {
     return incb_stage1_values[i]
 }
 
-public const incb_stage2: Array[u8] = [- incb_stage2.bin -]'embed
+const incb_stage2: Array[u8] = [- incb_stage2.bin -]'embed

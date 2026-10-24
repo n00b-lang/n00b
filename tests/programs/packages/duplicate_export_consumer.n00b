@@ -1,0 +1,3 @@
+import twice
+
+require twice.once() == 1

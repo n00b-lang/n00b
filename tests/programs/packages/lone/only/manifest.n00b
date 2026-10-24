@@ -1,0 +1,5 @@
+import only.impl
+
+package lone.only {
+    export only.impl.f
+}

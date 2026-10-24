@@ -1,0 +1,5 @@
+record Doubled {
+    private {
+        private secret: int
+    }
+}

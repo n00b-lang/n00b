@@ -1,0 +1,3 @@
+import narrow_pkg
+
+require "x"'shown == 1

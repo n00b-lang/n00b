@@ -1,0 +1,5 @@
+import default_dep
+
+func accept(item: default_dep.ModuleRecord) -> default_dep.ModuleRecord {
+    return item
+}

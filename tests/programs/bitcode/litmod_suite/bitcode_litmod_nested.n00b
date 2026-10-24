@@ -1,9 +1,9 @@
-public alias litmod raw_nested = identity_string
+alias litmod raw_nested = identity_string
 quotes litmod identity_string(raw: string) -> string fail: string {
     return raw
 }
 
-public alias litmod bundle_nested = identity_array
+alias litmod bundle_nested = identity_array
 sequence litmod identity_array(items: Array[string]) -> Array[string] fail: string {
     return items
 }

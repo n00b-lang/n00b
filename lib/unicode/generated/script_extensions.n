@@ -1,19 +1,19 @@
 import internal.blob
 
-public const script_common = 1
-public const script_inherited = 59
+const script_common = 1
+const script_inherited = 59
 
-public const script_ext_index_values: Array[u32] = [- script_ext_index.bin -]'embed
+const script_ext_index_values: Array[u32] = [- script_ext_index.bin -]'embed
 
-public inline func script_ext_index(row: u32, col: u32) -> u32 {
+inline func script_ext_index(row: u32, col: u32) -> u32 {
     return script_ext_index_values[row * 2 + col]
 }
 
-public const script_ext_index_len: u32 = 741
+const script_ext_index_len: u32 = 741
 
-public const script_ext_data_values: Array[u32] = [- script_ext_data.bin -]'embed
+const script_ext_data_values: Array[u32] = [- script_ext_data.bin -]'embed
 
-public inline func script_ext_data(i: u32) -> u32 {
+inline func script_ext_data(i: u32) -> u32 {
     return script_ext_data_values[i]
 }
 

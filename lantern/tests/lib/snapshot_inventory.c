@@ -148,7 +148,7 @@ test_local_persistence(void)
     check("persistent source writes",
           write_file(source, S("package demo {}")));
     core_snapshot_inventory_t *first = core_snapshot_inventory_new(
-        &root, 1, accept_source, nullptr);
+        &(core_snapshot_root_t){.path = root}, 1, accept_source, nullptr);
     check("out-of-tree cache enables", core_snapshot_inventory_enable_cache(
         first, cache_root, 1));
     check("cold package refresh succeeds", core_snapshot_inventory_refresh(first));
@@ -161,7 +161,7 @@ test_local_persistence(void)
     core_snapshot_inventory_free(first);
 
     core_snapshot_inventory_t *second = core_snapshot_inventory_new(
-        &root, 1, accept_source, nullptr);
+        &(core_snapshot_root_t){.path = root}, 1, accept_source, nullptr);
     core_snapshot_inventory_enable_cache(second, cache_root, 1);
     check("warm package refresh succeeds", core_snapshot_inventory_refresh(second));
     core_snapshot_inventory_stats_t warm = core_snapshot_inventory_stats(second);
@@ -207,7 +207,7 @@ test_local_persistence(void)
 
     check("corrupt metadata writes", write_file(cache, S("broken")));
     core_snapshot_inventory_t *third = core_snapshot_inventory_new(
-        &root, 1, accept_source, nullptr);
+        &(core_snapshot_root_t){.path = root}, 1, accept_source, nullptr);
     core_snapshot_inventory_enable_cache(third, cache_root, 1);
     check("corrupt metadata falls back to source scan",
           core_snapshot_inventory_refresh(third)
@@ -262,7 +262,7 @@ main(void)
     check("ignored file writes", write_file(ignored_path, S("ignored")));
 
     core_snapshot_inventory_t *inventory = core_snapshot_inventory_new(
-        &root, 1, accept_source, nullptr);
+        &(core_snapshot_root_t){.path = root}, 1, accept_source, nullptr);
     check("inventory initializes", inventory != nullptr);
     check("first refresh succeeds", core_snapshot_inventory_refresh(inventory));
     observed_t first = {0};

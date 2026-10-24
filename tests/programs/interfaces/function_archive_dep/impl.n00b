@@ -1,33 +1,33 @@
-public func archived_add(first: int, second: int = 2) -> int {
+func archived_add(first: int, second: int = 2) -> int {
     return first + second
 }
 
-public func archived_update(out result: int, modify counter: int) {
+func archived_update(out result: int, modify counter: int) {
     result = counter
     counter += 1
 }
 
-public func archived_variadic(seed: int, *extra: int) -> int {
+func archived_variadic(seed: int, *extra: int) -> int {
     return seed
 }
 
-public func archived_keep(input_ref) {
+func archived_keep(input_ref) {
 }
 
-public func archived_return(input_ref) {
+func archived_return(input_ref) {
     return input_ref
 }
 
-public var archived_global: int = 23
+var archived_global: int = 23
 
-public func archived_global_reference() {
+func archived_global_reference() {
     return ref archived_global
 }
 
-public func archived_cycle_a(input_ref) {
+func archived_cycle_a(input_ref) {
     archived_cycle_b(input_ref)
 }
 
-public func archived_cycle_b(input_ref) {
+func archived_cycle_b(input_ref) {
     archived_cycle_a(input_ref)
 }

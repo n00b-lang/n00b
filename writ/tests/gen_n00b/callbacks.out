@@ -185,13 +185,13 @@ int32_t callbacks_n00b_bus_unsubscribe(uint64_t id) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Event layout(c) {
-    public code: i32
+    code: i32
 }
 
 callback Event_Handler {
@@ -200,12 +200,12 @@ callback Event_Handler {
 }
 
 record Event_Handler_Arguments layout(c) {
-    public event: uint
+    event: uint
 }
 
 record Event_Handler_Callback {
-    public value: Event_Handler
-    public once: bool
+    value: Event_Handler
+    once: bool
 }
 
 var __event_handler_callbacks: Ffi_Table[Event_Handler_Callback] = (slots = new[List[Event_Handler_Callback?]](), free = new[List[int]](), owners = new[List[uint]]())

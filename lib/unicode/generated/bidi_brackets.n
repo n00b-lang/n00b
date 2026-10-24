@@ -1,16 +1,16 @@
 import internal.blob
 
-public const bidi_bracket_index_values: Array[u32] = [- bidi_bracket_index.bin -]'embed
+const bidi_bracket_index_values: Array[u32] = [- bidi_bracket_index.bin -]'embed
 
-public inline func bidi_bracket_index(row: u32, col: u32) -> u32 {
+inline func bidi_bracket_index(row: u32, col: u32) -> u32 {
     return bidi_bracket_index_values[row * 2 + col]
 }
 
-public const bidi_bracket_index_len: u32 = 130
+const bidi_bracket_index_len: u32 = 130
 
-public const bidi_bracket_data_values: Array[u32] = [- bidi_bracket_data.bin -]'embed
+const bidi_bracket_data_values: Array[u32] = [- bidi_bracket_data.bin -]'embed
 
-public inline func bidi_bracket_data(i: u32) -> u32 {
+inline func bidi_bracket_data(i: u32) -> u32 {
     return bidi_bracket_data_values[i]
 }
 

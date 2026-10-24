@@ -1,15 +1,15 @@
-public record Item layout(c) {
-    public key: i32
-    public value: i32
+record Item layout(c) {
+    key: i32
+    value: i32
 }
 
-public record Holder layout(c) {
-    public items: Foreign[Item]? count total
-    public total: u64
-    public name: Foreign[i8]? until 0
-    public op: Foreign_Fn[(i64, i64) -> i64]?
-    public kind: i32
-    public v: union by kind {
+record Holder layout(c) {
+    items: Foreign[Item]? count total
+    total: u64
+    name: Foreign[i8]? until 0
+    op: Foreign_Fn[(i64, i64) -> i64]?
+    kind: i32
+    v: union by kind {
         1 => number: i64
         2 => text: Foreign[i8]? until 0
         3 => _

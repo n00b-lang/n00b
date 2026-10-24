@@ -1,19 +1,19 @@
 import internal.blob
 
-public const script_stage1_values: Array[u16] = [- scripts_stage1.bin -]'embed
+const script_stage1_values: Array[u16] = [- scripts_stage1.bin -]'embed
 
-public inline func script_stage1(i: u32) -> u16 {
+inline func script_stage1(i: u32) -> u16 {
     return script_stage1_values[i]
 }
 
-public const script_stage2: Array[u8] = [- scripts_stage2.bin -]'embed
+const script_stage2: Array[u8] = [- scripts_stage2.bin -]'embed
 
-public const script_recommended: Array[u8] = [- scripts_recommended.bin -]'embed
+const script_recommended: Array[u8] = [- scripts_recommended.bin -]'embed
 
-public const script_names_bytes: Array[u8] = [- script_names.bin -]'embed
+const script_names_bytes: Array[u8] = [- script_names.bin -]'embed
 
-public func script_names(i: u32) -> string {
+func script_names(i: u32) -> string {
     return internal.blob.str_at(ref script_names_bytes, i)
 }
 
-public const script_count: u32 = 178
+const script_count: u32 = 178

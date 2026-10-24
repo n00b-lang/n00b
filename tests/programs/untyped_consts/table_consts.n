@@ -1,3 +1,3 @@
-public const table_size = 2048
-public const empty_slot = 0xFFFFFFFF
-public const max_items = 18
+const table_size = 2048
+const empty_slot = 0xFFFFFFFF
+const max_items = 18

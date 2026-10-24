@@ -2,12 +2,12 @@ func value() -> int {
     return "ignored"'outer
 }
 
-public alias litmod outer = make_outer
+alias litmod outer = make_outer
 quotes litmod make_outer(raw: string) -> int fail: string {
     return "ignored"'inner
 }
 
-public alias litmod inner = make_inner
+alias litmod inner = make_inner
 quotes litmod make_inner(raw: string) -> int fail: string {
     return 42
 }

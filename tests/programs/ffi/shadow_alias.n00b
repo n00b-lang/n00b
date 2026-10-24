@@ -1,4 +1,4 @@
-public alias litmod ffi = mine
+alias litmod ffi = mine
 fence litmod mine(contents: string) -> int fail: string {
     return 1
 }

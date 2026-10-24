@@ -1,0 +1,4 @@
+import default_dep
+
+var sealed: default_dep.Sealed
+sealed.secret = 5

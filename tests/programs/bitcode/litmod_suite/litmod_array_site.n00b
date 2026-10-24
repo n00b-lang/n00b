@@ -1,4 +1,4 @@
-public alias litmod json_array_site = parse_json_array_site
+alias litmod json_array_site = parse_json_array_site
 sequence litmod parse_json_array_site(items: Array[int]) -> Array[int] fail: string {
     return items
 }

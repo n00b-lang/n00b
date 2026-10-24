@@ -1,5 +1,5 @@
 import abi_value_dep
 
-public func read_value() -> int {
+func read_value() -> int {
     return abi_value_dep.value + abi_value_dep.value
 }

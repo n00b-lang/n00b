@@ -687,64 +687,64 @@ int32_t zlib_n00b_inflateInit(const void *strm, void *status) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Stream layout(c) {
-    public next_in: Foreign[u8]?
-    public avail_in: u32
-    public total_in: u64
-    public next_out: Foreign[u8]?
-    public avail_out: u32
-    public total_out: u64
-    public msg: Foreign[i8]?
-    public state: Foreign[nil]?
-    public zalloc: Foreign_Fn[(uint, u32, u32) -> uint]?
-    public zfree: Foreign_Fn[(uint, uint) -> nil]?
-    public opaque: Foreign[nil]?
-    public data_type: i32
-    public adler: u64
-    public reserved: u64
+    next_in: Foreign[u8]?
+    avail_in: u32
+    total_in: u64
+    next_out: Foreign[u8]?
+    avail_out: u32
+    total_out: u64
+    msg: Foreign[i8]?
+    state: Foreign[nil]?
+    zalloc: Foreign_Fn[(uint, u32, u32) -> uint]?
+    zfree: Foreign_Fn[(uint, uint) -> nil]?
+    opaque: Foreign[nil]?
+    data_type: i32
+    adler: u64
+    reserved: u64
 }
 
-public const ZLIB_VERSION: string = "1.2.12"
-public const ZLIB_VERNUM: i32 = 4800
-public const ZLIB_VER_MAJOR: i32 = 1
-public const ZLIB_VER_MINOR: i32 = 2
-public const ZLIB_VER_REVISION: i32 = 12
-public const ZLIB_VER_SUBREVISION: i32 = 0
-public const Z_NO_FLUSH: i32 = 0
-public const Z_PARTIAL_FLUSH: i32 = 1
-public const Z_SYNC_FLUSH: i32 = 2
-public const Z_FULL_FLUSH: i32 = 3
-public const Z_FINISH: i32 = 4
-public const Z_BLOCK: i32 = 5
-public const Z_TREES: i32 = 6
-public const Z_OK: i32 = 0
-public const Z_STREAM_END: i32 = 1
-public const Z_NEED_DICT: i32 = 2
-public const Z_ERRNO: i32 = -1
-public const Z_STREAM_ERROR: i32 = -2
-public const Z_DATA_ERROR: i32 = -3
-public const Z_MEM_ERROR: i32 = -4
-public const Z_BUF_ERROR: i32 = -5
-public const Z_VERSION_ERROR: i32 = -6
-public const Z_NO_COMPRESSION: i32 = 0
-public const Z_BEST_SPEED: i32 = 1
-public const Z_BEST_COMPRESSION: i32 = 9
-public const Z_DEFAULT_COMPRESSION: i32 = -1
-public const Z_FILTERED: i32 = 1
-public const Z_HUFFMAN_ONLY: i32 = 2
-public const Z_RLE: i32 = 3
-public const Z_FIXED: i32 = 4
-public const Z_DEFAULT_STRATEGY: i32 = 0
-public const Z_BINARY: i32 = 0
-public const Z_TEXT: i32 = 1
-public const Z_UNKNOWN: i32 = 2
-public const Z_DEFLATED: i32 = 8
-public const Z_NULL: i32 = 0
+const ZLIB_VERSION: string = "1.2.12"
+const ZLIB_VERNUM: i32 = 4800
+const ZLIB_VER_MAJOR: i32 = 1
+const ZLIB_VER_MINOR: i32 = 2
+const ZLIB_VER_REVISION: i32 = 12
+const ZLIB_VER_SUBREVISION: i32 = 0
+const Z_NO_FLUSH: i32 = 0
+const Z_PARTIAL_FLUSH: i32 = 1
+const Z_SYNC_FLUSH: i32 = 2
+const Z_FULL_FLUSH: i32 = 3
+const Z_FINISH: i32 = 4
+const Z_BLOCK: i32 = 5
+const Z_TREES: i32 = 6
+const Z_OK: i32 = 0
+const Z_STREAM_END: i32 = 1
+const Z_NEED_DICT: i32 = 2
+const Z_ERRNO: i32 = -1
+const Z_STREAM_ERROR: i32 = -2
+const Z_DATA_ERROR: i32 = -3
+const Z_MEM_ERROR: i32 = -4
+const Z_BUF_ERROR: i32 = -5
+const Z_VERSION_ERROR: i32 = -6
+const Z_NO_COMPRESSION: i32 = 0
+const Z_BEST_SPEED: i32 = 1
+const Z_BEST_COMPRESSION: i32 = 9
+const Z_DEFAULT_COMPRESSION: i32 = -1
+const Z_FILTERED: i32 = 1
+const Z_HUFFMAN_ONLY: i32 = 2
+const Z_RLE: i32 = 3
+const Z_FIXED: i32 = 4
+const Z_DEFAULT_STRATEGY: i32 = 0
+const Z_BINARY: i32 = 0
+const Z_TEXT: i32 = 1
+const Z_UNKNOWN: i32 = 2
+const Z_DEFLATED: i32 = 8
+const Z_NULL: i32 = 0
 
 func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {
     let value: Ffi_Bytes = bytes.__value

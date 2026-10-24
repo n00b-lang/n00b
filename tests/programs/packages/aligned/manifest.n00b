@@ -2,7 +2,6 @@ import child
 import use
 
 package aligned {
-    export package child
     export use.doubled
 }
 

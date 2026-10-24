@@ -1,4 +1,4 @@
-public alias litmod number_scalar = read_number
+alias litmod number_scalar = read_number
 quotes litmod read_number(raw: string) -> int fail: string {
     return 7
 }

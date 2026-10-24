@@ -1,4 +1,5 @@
 import default_dep
+import other_pkg.items
 
 var item: default_dep.DefaultRecord
 item.field = 7
@@ -7,3 +8,9 @@ require default_dep.identity(9) == 9
 require default_dep.DefaultState.ready != default_dep.DefaultState.done
 let aliased: default_dep.DefaultAlias = 11
 require aliased == 11
+var sealed: default_dep.Sealed
+sealed.open = 5
+require sealed.open == 5
+require default_dep.shared == 4
+require other_pkg.items.make_holder().open == 1
+require other_pkg.items.limit == 3

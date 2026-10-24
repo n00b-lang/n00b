@@ -10,6 +10,10 @@ typedef struct {
     size_t package_scans;
     size_t source_reads;
 } core_snapshot_inventory_stats_t;
+typedef struct {
+    core_string_t path;
+    bool enters_fileless_directories;
+} core_snapshot_root_t;
 
 /* The filter receives a root-relative path. It selects files before they are
  * read. A snapshot is immutable and may be retained across refreshes. */
@@ -20,7 +24,7 @@ typedef bool (*core_snapshot_inventory_visit_fn)(
     const core_source_snapshot_t *snapshot);
 
 core_snapshot_inventory_t *core_snapshot_inventory_new(
-    const core_string_t *roots, size_t root_count,
+    const core_snapshot_root_t *roots, size_t root_count,
     core_snapshot_inventory_accept_fn accept, void *context);
 void core_snapshot_inventory_free(core_snapshot_inventory_t *inventory);
 /* Cache each root's immediate source-package directory under the absolute

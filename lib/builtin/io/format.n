@@ -34,7 +34,7 @@ record String_Repr {
     hex:    bool
 }
 
-public const default_repr_options: Repr_Options = (
+const default_repr_options: Repr_Options = (
     min_width = -1, precision = -1, left_align = false, zero_pad = false,
     pad = false, all_caps = false, title_case = true, literal = false)
 

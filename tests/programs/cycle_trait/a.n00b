@@ -1,9 +1,9 @@
 import cycle_trait.b
 import cycle_trait.contract
 
-public record CycleWidget {
+record CycleWidget {
 }
 
-public func echo(self: CycleWidget) -> CycleWidget {
+func echo(self: CycleWidget) -> CycleWidget {
     return self
 }

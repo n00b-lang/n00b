@@ -11,11 +11,11 @@ import sys.memory
 import sys.threads
 
 record Node {
-    public next: Ref[byte]?
+    next: Ref[byte]?
 }
 
 record Inline_Nodes {
-    public items: Array[Node][513]
+    items: Array[Node][513]
 }
 
 func check_record_trace(heap: Ref[sys.gc.core.Heap],

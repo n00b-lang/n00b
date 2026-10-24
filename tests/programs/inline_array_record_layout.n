@@ -1,13 +1,13 @@
-public record Block layout(c) {
-    public marks: Array[byte][4]
-    public bits: Array[Atomic[u64]][2]
+record Block layout(c) {
+    marks: Array[byte][4]
+    bits: Array[Atomic[u64]][2]
 }
 
-public record Plain {
-    public marks: Array[byte][4]
-    public bits: Array[Atomic[u64]][2]
+record Plain {
+    marks: Array[byte][4]
+    bits: Array[Atomic[u64]][2]
 }
 
-public func first_mark(block: Ref[Block]) -> Ref[byte] {
+func first_mark(block: Ref[Block]) -> Ref[byte] {
     return ref block.marks [0]
 }

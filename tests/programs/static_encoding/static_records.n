@@ -1,6 +1,6 @@
-public record Inner {
+record Inner {
     x: i16
     y: bool
 }
 
-public const base_inner: Inner = (x = -1, y = true)
+const base_inner: Inner = (x = -1, y = true)

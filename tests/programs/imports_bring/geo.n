@@ -1,8 +1,8 @@
-public func circle() -> int {
+func circle() -> int {
     return 1
 }
 
-public func rectangle() -> int {
+func rectangle() -> int {
     return 2
 }
 

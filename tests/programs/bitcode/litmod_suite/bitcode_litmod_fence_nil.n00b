@@ -1,4 +1,4 @@
-public alias litmod noop = do_nothing
+alias litmod noop = do_nothing
 fence litmod do_nothing(contents: string) -> nil fail: string {
     return
 }

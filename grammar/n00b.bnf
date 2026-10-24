@@ -190,13 +190,14 @@
 # name equiv is required for there to be equal types.
 # The `alias` keyword here means that we have one type, with multiple names.
 
+<alias-stmt> @namespace("type") @scope("type", $1) @type($1) @exposes ::=
+       <alias-type-keyword> %IDENTIFIER <assign-op> <type-spec>
 <alias-stmt> @namespace("type") @scope("type", $2) @type($2) @exposes ::=
-       <member-visibility>? <alias-type-keyword> %IDENTIFIER <assign-op> <type-spec>
-     | <member-visibility>? %"type" %IDENTIFIER <assign-op> <type-spec>
+       <member-visibility>? %"type" %IDENTIFIER <assign-op> <type-spec>
 <alias-type-keyword> ::= %"alias" %"type"
 
 <litmod-alias-stmt> ::=
-       <member-visibility>? %"alias" %"litmod" <litmod-alias-name> <assign-op> <litmod-alias-target>
+       %"alias" %"litmod" <litmod-alias-name> <assign-op> <litmod-alias-target>
 <litmod-alias-name> ::= %IDENTIFIER
 <litmod-alias-target> ::= %IDENTIFIER
 
@@ -307,17 +308,12 @@
 <package-items> ::= <package-item> (<eos>+ <package-item>)*
 <package-item> ::= <export-stmt> | <when-stmt> | <pass-stmt>
 <export-stmt> ::= %"export" <dotted-name> (<export-alias>)? (<export-grantee>)?
-<export-stmt> ::= %"export" %"package" <dotted-name>
 <export-alias> ::= %"as" %IDENTIFIER
 <export-grantee> ::= %"to" <dotted-name>
 <dotted-name> ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
 
-<variable-decl> ::= <variable-visibility>? <declaration-prefix> <sym-decl-list>
+<variable-decl> ::= <member-visibility>? <declaration-prefix> <sym-decl-list>
 
-<variable-visibility> @visibility("public") ::= %"public"
-<variable-visibility> @visibility("private") ::= %"private"
-
-<visible-inferred-assign> @visibility("public") ::= %"public" <assign-stmt>
 <visible-inferred-assign> @visibility("private") ::= %"private" <assign-stmt>
 
 <declaration-prefix> ::= <storage-class>? <binding-kind>
@@ -343,17 +339,13 @@
 <litmod-prelude> ::= <litmod-kind> %"litmod"
 <litmod-kind> ::= %IDENTIFIER | <record-keyword> | <nil-keyword>
 
-<member-visibility> @visibility("public") ::= %"public"
 <member-visibility> @visibility("private") ::= %"private"
-
-<func-visibility> @visibility("public") ::= %"public"
-<func-visibility> @visibility("private") ::= %"private"
 
 <function-keyword> ::= %"func" | %"fn" | %"function"
 <func-prelude> ::= <function-keyword>
-<func-prelude> ::= <func-visibility> <function-keyword>
+<func-prelude> ::= <member-visibility> <function-keyword>
 <func-prelude> ::= <func-inline> <function-keyword>
-<func-prelude> ::= <func-visibility> <func-inline> <function-keyword>
+<func-prelude> ::= <member-visibility> <func-inline> <function-keyword>
 <func-inline> ::= %"inline"
 <func-type-signature> @newline($1) ::=
     <param-decl> <function-result>? <where-clause>?
@@ -786,7 +778,11 @@
 <type-align> @nospace ::= %"align" %"(" <expression> %")"
 
 <type-body> @hardline($1) @indent($1) @hardline($2) ::= <block-start> <type-decl-spec-list> <block-end>
-<type-decl-spec-list> @hardline ::= (<type-decl-one> (<eos>+ <type-decl-one>)*)?
+<type-decl-spec-list> @hardline ::= (<type-member> (<eos>+ <type-member>)*)?
+<type-member> ::= <type-decl-one> | <private-fields>
+<private-fields> @hardline($2) @indent($2) @hardline($3) ::=
+       %"private" <block-start> <private-field-list> <block-end>
+<private-field-list> @hardline ::= (<type-decl-one> (<eos>+ <type-decl-one>)*)?
 
 <type-decl-one> @field($1, $3) @nospace($2) ::=
        <member-visibility>? %IDENTIFIER %":" <type-spec>
@@ -826,7 +822,7 @@
        <trait-func-prelude> %IDENTIFIER <trait-func-type-signature>
 
 <trait-func-prelude> ::= <function-keyword>
-<trait-func-prelude> ::= <func-visibility> <function-keyword>
+<trait-func-prelude> ::= <member-visibility> <function-keyword>
 
 <trait-func-type-signature> ::=
     <trait-param-decl> <function-result>

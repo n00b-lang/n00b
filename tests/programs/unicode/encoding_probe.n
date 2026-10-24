@@ -1,4 +1,7 @@
 import unicode
+import unicode.idna
+import unicode.query
+import unicode.security
 
 private func name_is(got: string, want: string) -> bool {
     if byte_len(got) != byte_len(want) {

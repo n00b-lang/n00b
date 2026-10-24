@@ -14,20 +14,6 @@ import internal.gc.sync
 import internal.gc.world
 
 package sys.gc {
-    export package core
-    export package alloc
-    export package collect
-    export package finalize
-    export package handshake
-    export package hash
-    export package heap
-    export package los
-    export package mark
-    export package mutator
-    export package registry
-    export package roots
-    export package sync
-    export package world
 }
 
 package sys.gc.core {

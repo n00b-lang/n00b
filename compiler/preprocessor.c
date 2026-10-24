@@ -766,27 +766,12 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
 }
 
 static bool
-publicly_visible(pp_context_t *ctx, parse_tree_t *statement)
-{
-    parse_tree_t *visibility = parse_tree_find_flat_child_by_nt_name(
-        ctx->grammar, statement, CORE_STRING_STATIC("member-visibility"));
-    const parse_rule_t *rule = visibility
-        ? parse_tree_rule(ctx->grammar, visibility) : nullptr;
-    parse_annotation_t *annotation = rule
-        ? parse_rule_find_annot(ctx->grammar, rule, PARSE_ANNOT_VISIBILITY)
-        : nullptr;
-    return annotation && core_string_eq(annotation->visibility_spec,
-                                        CORE_STRING_STATIC("public"));
-}
-
-static bool
 register_litmod_alias(pp_context_t *ctx, parse_tree_t *statement)
 {
     parse_tree_t *alias = parse_tree_find_flat_child_by_nt_name(ctx->grammar,
         statement, CORE_STRING_STATIC("litmod-alias-name"));
     parse_tree_t *target = parse_tree_find_flat_child_by_nt_name(
         ctx->grammar, statement, CORE_STRING_STATIC("litmod-alias-target"));
-    bool exported = publicly_visible(ctx, statement);
     if (!alias || !target || !ctx->options
         || !ctx->options->register_litmod_alias) {
         pp_error(ctx, statement, "invalid literal modifier alias");
@@ -794,7 +779,7 @@ register_litmod_alias(pp_context_t *ctx, parse_tree_t *statement)
     }
     if (ctx->options->register_litmod_alias(ctx->options->litmod_context,
             ctx->unit, statement, first_leaf_text(ctx, alias),
-            first_leaf_text(ctx, target), exported))
+            first_leaf_text(ctx, target)))
         return true;
     pp_error(ctx, statement, "could not record the literal modifier alias");
     return false;

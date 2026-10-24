@@ -5,7 +5,7 @@
 #include <stdlib.h>
 
 extern _Atomic(void *) worker_heap
-    __asm("__$bitcode_gc_worker_live$worker_heap");
+    __asm("_$bitcode_gc_worker_live$worker_heap");
 extern void gc_worker(void *) __asm("_sys.internal.gc.collect.worker");
 extern void n00b_abi_tls_relocate(void);
 

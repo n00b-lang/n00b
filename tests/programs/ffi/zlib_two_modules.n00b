@@ -1,5 +1,5 @@
 import zlib
-import archive
+import archive.zlib
 
 let text: Array[u8] = [120, 121, 122, 120, 121, 122]
 var packed: Array[u8] = []

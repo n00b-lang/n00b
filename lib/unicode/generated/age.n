@@ -1,17 +1,17 @@
 import internal.blob
 
-public const age_stage1_values: Array[u16] = [- age_stage1.bin -]'embed
+const age_stage1_values: Array[u16] = [- age_stage1.bin -]'embed
 
-public inline func age_stage1(i: u32) -> u16 {
+inline func age_stage1(i: u32) -> u16 {
     return age_stage1_values[i]
 }
 
-public const age_stage2: Array[u8] = [- age_stage2.bin -]'embed
+const age_stage2: Array[u8] = [- age_stage2.bin -]'embed
 
-public const age_names_bytes: Array[u8] = [- age_names.bin -]'embed
+const age_names_bytes: Array[u8] = [- age_names.bin -]'embed
 
-public func age_names(i: u32) -> string {
+func age_names(i: u32) -> string {
     return internal.blob.str_at(ref age_names_bytes, i)
 }
 
-public const age_count: u32 = 30
+const age_count: u32 = 30

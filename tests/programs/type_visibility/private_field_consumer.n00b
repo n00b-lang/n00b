@@ -1,0 +1,4 @@
+import other_pkg.items
+
+let holder = other_pkg.items.make_holder()
+require holder.secret == 2
