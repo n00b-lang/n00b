@@ -1,14 +1,14 @@
 import internal.blob
 
-public const props_stage1_values: Array[u16] = [- proplist_stage1.bin -]'embed
+const props_stage1_values: Array[u16] = [- proplist_stage1.bin -]'embed
 
-public inline func props_stage1(i: u32) -> u16 {
+inline func props_stage1(i: u32) -> u16 {
     return props_stage1_values[i]
 }
 
-public const props_stage2_values: Array[u64] = [- proplist_stage2.bin -]'embed
+const props_stage2_values: Array[u64] = [- proplist_stage2.bin -]'embed
 
-public inline func props_stage2(i: u32) -> u64 {
+inline func props_stage2(i: u32) -> u64 {
     return props_stage2_values[i]
 }
 

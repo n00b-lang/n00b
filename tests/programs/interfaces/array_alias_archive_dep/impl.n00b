@@ -1,6 +1,6 @@
-public alias type FixedRowBase = Array[int][4]
-public alias type FixedRow = FixedRowBase
+alias type FixedRowBase = Array[int][4]
+alias type FixedRow = FixedRowBase
 
-public func echo_row(input: FixedRow) -> FixedRow {
+func echo_row(input: FixedRow) -> FixedRow {
     return input
 }

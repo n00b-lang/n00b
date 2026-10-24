@@ -1,0 +1,5 @@
+import other_pkg.items
+
+func accept(item: other_pkg.items.Hidden) -> other_pkg.items.Hidden {
+    return item
+}

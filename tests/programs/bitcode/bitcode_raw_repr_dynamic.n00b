@@ -1,5 +1,5 @@
 
-public func raw_repr(self: bool, fd: i32) -> i32 {
+func raw_repr(self: bool, fd: i32) -> i32 {
     return __fd_write(fd, "bool\n")
 }
 

@@ -2,12 +2,12 @@ func extent() -> int {
     return 4
 }
 
-public var grid: Array[int][extent()]
+var grid: Array[int][extent()]
 
-public record GridHolder {
-    public cells: Array[int][extent()]
+record GridHolder {
+    cells: Array[int][extent()]
 }
 
-public func echo(input: Array[int][extent()]) -> Array[int][extent()] {
+func echo(input: Array[int][extent()]) -> Array[int][extent()] {
     return input
 }

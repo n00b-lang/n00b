@@ -273,13 +273,13 @@ int32_t policy_n00b_stmt_release(uint64_t stmt) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Stmt_Cell {
-    public raw: uint
+    raw: uint
 }
 
 alias type Stmt = Ref[Stmt_Cell]

@@ -4,7 +4,7 @@ import containers.buffer
 import io.format
 import hashing
 
-public const index_extends: u32 = 0xffffffff
+const index_extends: u32 = 0xffffffff
 
 private const sub_arm_none: u64 = 0
 private const sub_arm_position: u64 = 1
@@ -1417,7 +1417,7 @@ private func build_style_records(segments: List[Markup_Segment])
     return records
 }
 
-public alias litmod r = rich
+alias litmod r = rich
 quotes litmod rich(raw: string) -> string fail: string {
     var segments: List[Markup_Segment] = new[List[Markup_Segment]]()
     let text: string = parse_rich_markup(raw, segments)!

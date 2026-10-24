@@ -1,4 +1,4 @@
-public alias litmod bundle = identity
+alias litmod bundle = identity
 sequence litmod identity(items: Array[Tuple[bool, string]]) -> Array[Tuple[bool, string]] fail: string {
     return items
 }

@@ -131,9 +131,9 @@ uint8_t unions_n00b_cell_flag(const void *cell, uint64_t raw) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Raw {
@@ -170,8 +170,8 @@ func set_p(modify self: Raw, value: uint) {
 }
 
 record Value layout(c) {
-    public kind: i32
-    public v: union by kind {
+    kind: i32
+    v: union by kind {
         1 => i: i64
         2 => d: f64
         3 => s: Foreign[i8]? until 0

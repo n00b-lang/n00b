@@ -1,0 +1,3 @@
+import bundle.impl
+
+require bundle.impl.first() == 1

@@ -1,3 +1,3 @@
-public const root: int = 1
-public const tool: int = 2
-public const deep: int = 3
+const root: int = 1
+const tool: int = 2
+const deep: int = 3

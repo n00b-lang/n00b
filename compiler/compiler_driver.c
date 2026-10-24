@@ -1730,8 +1730,7 @@ static bool
 load_interface_imports(import_driver_t *driver, parse_grammar_t *grammar,
                        core_translation_unit_t *unit);
 static bool
-process_postprune_package_syntax(import_driver_t *driver,
-                                 parse_grammar_t *grammar,
+process_postprune_package_syntax(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *tree);
 
@@ -1760,13 +1759,141 @@ ensure_preprocessed_import(import_driver_t *driver, parse_grammar_t *grammar,
     if (!core_work_take_kind(driver->queue, N00BB_JOB_PREPROCESS, &ready)
         || ready != preprocess_job) return false;
     bool ok = n00bb_preprocessor_run(driver->preprocessor, grammar, tree, unit);
-    if (ok) ok = process_postprune_package_syntax(driver, grammar, unit, tree);
+    if (ok) ok = process_postprune_package_syntax(grammar, unit, tree);
     n00bb_tu_state_t *state = tu_state(unit);
     if (ok && state && state->interface_module)
         ok = load_interface_imports(driver, grammar, unit);
     return core_work_complete_tu(driver->queue, preprocess_job, unit, ok)
         && core_work_job_state(driver->queue, preprocess_job)
             == CORE_WORK_SUCCEEDED;
+}
+
+static core_translation_unit_t *
+locate_manifest_candidate(import_driver_t *driver,
+                          core_module_spec_t *candidate,
+                          core_work_job_t **job_out, parse_tree_t **tree_out,
+                          core_buffer_t *declared)
+{
+    if (!add_locate_request_for_module(driver->queue, driver->requests,
+            driver->requests_lock, candidate, candidate->identifier, false,
+            true, job_out)
+        || !wait_for_locate_job(driver, *job_out)) {
+        *job_out = nullptr;
+        return nullptr;
+    }
+    core_translation_unit_t *unit = core_work_job_result(driver->queue,
+                                                          *job_out);
+    n00bb_tu_state_t *state = tu_state(unit);
+    n00bb_lex_result_t *lex = state ? state->lex : nullptr;
+    *tree_out = lex && lex->parser ? parse_pwz_get_tree(lex->parser)
+                                   : nullptr;
+    if (!unit || !*tree_out) return unit;
+    if (state->interface_module) {
+        for (size_t i = 0; declared && i < state->package_declarations.len;
+             i++) {
+            core_string_t name = state->package_declarations.data[i].name;
+            core_buffer_append(declared, name.data, name.u8_bytes);
+            core_buffer_putc(declared, '\n');
+        }
+        return unit;
+    }
+    core_buffer_t names = {0};
+    if (package_tree_syntax_index(driver->grammar, *tree_out, &names)) {
+        n00bb_resolver_store_package_syntax(driver->resolver,
+            core_source_file_path(&unit->source), names.data,
+            names.byte_len);
+        if (declared) core_buffer_append(declared, names.data, names.byte_len);
+    }
+    core_buffer_release(&names);
+    return unit;
+}
+
+static size_t
+direct_subpackage_count(const core_buffer_t *names, core_string_t parent)
+{
+    core_string_t first = {0};
+    size_t start = 0;
+    while (start < names->byte_len) {
+        const char *end = memchr(names->data + start, '\n',
+                                 names->byte_len - start);
+        size_t length = end ? (size_t)(end - (names->data + start))
+                            : names->byte_len - start;
+        core_string_t name = core_string_borrow(names->data + start, length);
+        start += length + 1;
+        if (length <= parent.u8_bytes + 1
+            || !core_string_starts_with(name, parent)
+            || name.data[parent.u8_bytes] != '.') continue;
+        core_string_t child = core_string_slice(name, parent.u8_bytes + 1,
+                                                length - parent.u8_bytes - 1);
+        int64_t dot = core_string_find_byte(child, '.');
+        if (dot >= 0) child = core_string_slice(child, 0, (size_t)dot);
+        if (!first.data) first = child;
+        else if (!core_string_eq(first, child)) return 2;
+    }
+    return first.data ? 1 : 0;
+}
+
+static bool collect_package_declarations(import_driver_t *driver,
+    core_string_t package_id, core_buffer_t *names, bool first_only);
+
+static bool
+accept_package_exports(import_driver_t *driver,
+                       core_translation_unit_t *importer,
+                       core_translation_unit_t *manifest, core_string_t name)
+{
+    n00bb_package_declaration_t *package = find_package_declaration(manifest,
+                                                                    name);
+    if (!package || package->exports.len) return true;
+    core_buffer_t names = {0};
+    size_t subpackages = collect_package_declarations(driver,
+            n00bb_package_id(manifest), &names, false)
+        ? direct_subpackage_count(&names, name) : 2;
+    core_buffer_release(&names);
+    if (subpackages > 1
+        || (subpackages && n00bb_system_module(manifest->module.identifier)))
+        return true;
+    core_buffer_t message = {0};
+    core_buffer_printf(&message, subpackages
+        ? "package '%.*s' exports nothing and holds a single subpackage"
+        : "package '%.*s' exports nothing and has no subpackages",
+        (int)name.u8_bytes, name.data);
+    core_diagnostics_report_at(core_translation_unit_diagnostics(importer),
+        manifest, subpackages ? CORE_DIAG_WARNING : CORE_DIAG_ERROR,
+        subpackages ? CORE_STRING_STATIC("N00BB-W0021")
+                    : CORE_STRING_STATIC("N00BB-M0014"),
+        core_buffer_string(&message), link_source_location(package->node));
+    core_buffer_release(&message);
+    return subpackages != 0;
+}
+
+static core_work_job_t *
+discover_package_import(import_driver_t *driver,
+                        core_translation_unit_t *importer,
+                        parse_tree_t *statement,
+                        const core_module_spec_t *logical,
+                        bool record_alias);
+
+static bool
+parent_manifest_declared(import_driver_t *driver,
+                         core_translation_unit_t *importer,
+                         parse_tree_t *statement, core_string_t name)
+{
+    int64_t dot = core_string_rfind_byte(name, '.');
+    if (dot < 0) return true;
+    core_string_t parent = core_string_borrow(name.data, (size_t)dot);
+    core_module_spec_t spec = {0};
+    bool declared = core_module_spec_init(&spec, parent)
+        && discover_package_import(driver, importer, statement, &spec,
+                                   false) != nullptr;
+    core_module_spec_release(&spec);
+    if (declared) return true;
+    core_buffer_t message = {0};
+    core_buffer_printf(&message,
+        "package '%.*s' cannot be declared without a manifest for package '%.*s'",
+        (int)name.u8_bytes, name.data, (int)parent.u8_bytes, parent.data);
+    import_report(importer, statement, core_buffer_string(&message));
+    core_buffer_release(&message);
+    return false;
 }
 
 static core_work_job_t *
@@ -1787,27 +1914,12 @@ discover_package_import(import_driver_t *driver,
     core_translation_unit_t *selected = nullptr;
     for (size_t i = 0; status == CORE_MODULE_RESOLVED
             && i < candidates.modules.len; i++) {
-        core_module_spec_t *candidate = &candidates.modules.data[i];
         core_work_job_t *job = nullptr;
-        bool scheduled = add_locate_request_for_module(driver->queue,
-            driver->requests, driver->requests_lock, candidate,
-            candidate->identifier, false, true, &job);
-        if (!scheduled || !wait_for_locate_job(driver, job)) continue;
-        core_translation_unit_t *unit = core_work_job_result(driver->queue,
-                                                              job);
+        parse_tree_t *tree = nullptr;
+        core_translation_unit_t *unit = locate_manifest_candidate(driver,
+            &candidates.modules.data[i], &job, &tree, nullptr);
+        if (!job) continue;
         n00bb_tu_state_t *state = tu_state(unit);
-        n00bb_lex_result_t *lex = state ? state->lex : nullptr;
-        parse_tree_t *tree = lex && lex->parser
-            ? parse_pwz_get_tree(lex->parser) : nullptr;
-        if (unit && tree && !state->interface_module) {
-            core_buffer_t names = {0};
-            if (package_tree_syntax_index(driver->grammar, tree, &names)
-                && names.byte_len)
-                n00bb_resolver_store_package_syntax(driver->resolver,
-                    core_source_file_path(&unit->source), names.data,
-                    names.byte_len);
-            core_buffer_release(&names);
-        }
         if (!unit || !tree) {
             if (failure_already_reported(unit))
                 mark_import_failure_reported(importer);
@@ -1843,6 +1955,14 @@ discover_package_import(import_driver_t *driver,
         selected = unit;
         selected_job = job;
     }
+    if (selected && (!parent_manifest_declared(driver, importer, statement,
+                                               logical->identifier)
+                     || !accept_package_exports(driver, importer, selected,
+                                                logical->identifier))) {
+        mark_import_failure_reported(importer);
+        selected_job = nullptr;
+        selected = nullptr;
+    }
     if (selected && record_alias
         && !record_import_alias(importer, logical->identifier, selected)) {
         import_error(importer, statement,
@@ -1853,6 +1973,47 @@ discover_package_import(import_driver_t *driver,
         core_module_spec_release(&candidates.modules.data[i]);
     core_list_free(candidates.modules);
     return selected_job;
+}
+
+static bool
+collect_package_declarations(import_driver_t *driver,
+                             core_string_t package_id, core_buffer_t *names,
+                             bool first_only)
+{
+    n00bb_discovery_candidates_t candidates = {
+        .modules = core_list_new(n00bb_module_candidate_t),
+    };
+    bool listed = n00bb_resolver_package_manifests(driver->resolver,
+        package_id, collect_discovery_candidate, &candidates);
+    for (size_t i = 0; listed && i < candidates.modules.len
+             && !(first_only && names->byte_len); i++) {
+        core_work_job_t *job = nullptr;
+        parse_tree_t *tree = nullptr;
+        (void)locate_manifest_candidate(driver, &candidates.modules.data[i],
+                                        &job, &tree, names);
+    }
+    for (size_t i = 0; i < candidates.modules.len; i++)
+        core_module_spec_release(&candidates.modules.data[i]);
+    core_list_free(candidates.modules);
+    return listed;
+}
+
+static bool
+package_has_manifest(import_driver_t *driver,
+                     core_translation_unit_t *imported)
+{
+    core_string_t package_id = n00bb_package_id(imported);
+    bool found = false;
+    if (n00bb_resolver_known_manifest(driver->resolver, package_id, &found))
+        return found;
+    core_buffer_t names = {0};
+    bool listed = collect_package_declarations(driver, package_id, &names,
+                                               true);
+    found = !listed || names.byte_len != 0;
+    core_buffer_release(&names);
+    if (listed)
+        n00bb_resolver_remember_manifest(driver->resolver, package_id, found);
+    return found;
 }
 
 
@@ -1952,9 +2113,12 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
             "a package cannot import its own external namespace; use its internal module name");
         return false;
     }
-    if (statement && !state->interface_module && !in_progress
-        && !n00bb_same_package(importer, imported)
-        && !find_package_declaration(imported, imported_name)) {
+    bool direct_foreign = !n00bb_same_package(importer, imported)
+        && !find_package_declaration(imported, imported_name);
+    if (direct_foreign
+        && (!statement || !package_has_manifest(driver, imported)))
+        n00bb_mark_open_module(imported);
+    else if (direct_foreign && !state->interface_module && !in_progress) {
         import_error(importer, statement,
             "a library source module cannot be imported from another source package; import its package manifest");
         return false;
@@ -1970,115 +2134,11 @@ load_import_module(import_driver_t *driver, parse_grammar_t *grammar,
     return true;
 }
 
-static bool
-append_dotted_reference(parse_grammar_t *grammar, parse_tree_t *node,
-                        core_buffer_t *name)
-{
-    if (!node) return false;
-    if (core_tree_is_leaf(node)) {
-        parse_token_info_t *token = parse_node_token(node);
-        if (!token || !core_string_eq(parse_terminal_name(grammar,
-                parse_token_tid(token)), CORE_STRING_STATIC("IDENTIFIER")))
-            return false;
-        core_string_t text = parse_tree_leaf_text(node);
-        core_buffer_append(name, text.data, text.u8_bytes);
-        return true;
-    }
-    size_t count = core_tree_num_children(node);
-    if (count == 1)
-        return append_dotted_reference(grammar, core_tree_child(node, 0),
-                                       name);
-    parse_token_info_t *separator = count == 3
-        ? parse_node_token(core_tree_child(node, 1)) : nullptr;
-    if (!separator || parse_token_tid(separator) != '.') return false;
-    if (!append_dotted_reference(grammar, core_tree_child(node, 0), name))
-        return false;
-    core_buffer_putc(name, '.');
-    return append_dotted_reference(grammar, core_tree_child(node, 2), name);
-}
-
-static bool
-load_package_reference(import_driver_t *driver, parse_grammar_t *grammar,
-                       core_translation_unit_t *unit, parse_tree_t *node,
-                       core_string_t path)
-{
-    for (size_t end = 0; end < path.u8_bytes; end++) {
-        if (path.data[end] != '.') continue;
-        size_t child_end = end + 1;
-        while (child_end < path.u8_bytes && path.data[child_end] != '.')
-            child_end++;
-        core_string_t parent_name = core_string_borrow(path.data, end);
-        core_translation_unit_t *parent_unit = find_direct_import(unit,
-                                                                   parent_name);
-        n00bb_package_declaration_t *parent = parent_unit
-            ? find_package_declaration(parent_unit, parent_name) : nullptr;
-        if (!parent) continue;
-        core_string_t child_member = core_string_borrow(path.data + end + 1,
-                                                        child_end - end - 1);
-        bool exported = false;
-        for (size_t i = 0; i < parent->exports.len; i++) {
-            n00bb_package_export_t *item = &parent->exports.data[i];
-            if (item->subpackage
-                && core_string_eq(item->export_name, child_member)) {
-                exported = true;
-                break;
-            }
-        }
-        if (!exported) continue;
-        core_string_t child_name = core_string_borrow(path.data, child_end);
-        if (find_direct_import(unit, child_name)) continue;
-        core_module_spec_t module = {0};
-        core_translation_unit_t *imported = nullptr;
-        parse_tree_t *imported_tree = nullptr;
-        bool loaded = core_module_spec_init(&module, child_name)
-            && load_import_module(driver, grammar, node, unit, &module,
-                                  child_name, child_name, &imported,
-                                  &imported_tree);
-        core_module_spec_release(&module);
-        if (!loaded) return false;
-    }
-    return true;
-}
-
-static bool
-load_referenced_subpackages(import_driver_t *driver,
-                            parse_grammar_t *grammar,
-                            core_translation_unit_t *unit,
-                            core_list_t(parse_tree_ptr_t) *references)
-{
-    n00bb_tu_state_t *state = tu_state(unit);
-    bool has_parent = false;
-    for (size_t i = 0; state && i < state->import_aliases.len; i++) {
-        n00bb_import_alias_t *alias = &state->import_aliases.data[i];
-        n00bb_package_declaration_t *package =
-            find_package_declaration(alias->unit, alias->name);
-        for (size_t e = 0; package && e < package->exports.len; e++)
-            if (package->exports.data[e].subpackage) {
-                has_parent = true;
-                break;
-            }
-        if (has_parent) break;
-    }
-    if (!has_parent) return true;
-    for (size_t i = 0; i < references->len; i++) {
-        parse_tree_t *node = references->data[i];
-        core_buffer_t name = {0};
-        bool dotted = append_dotted_reference(grammar, node, &name)
-            && memchr(name.data, '.', name.byte_len) != nullptr;
-        bool ok = !dotted || load_package_reference(driver, grammar, unit,
-            node, core_string_borrow(name.data, name.byte_len));
-        core_buffer_release(&name);
-        if (!ok) return false;
-    }
-    return true;
-}
-
 static void
 collect_postprune_package_syntax(parse_grammar_t *grammar,
     parse_tree_t *node, bool inside_package,
     core_list_t(parse_tree_ptr_t) *declarations,
-    core_list_t(parse_tree_ptr_t) *exports,
-    core_list_t(parse_tree_ptr_t) *references)
+    core_list_t(parse_tree_ptr_t) *exports)
 {
     if (!node || core_tree_is_leaf(node)) return;
     bool package = nt_is(grammar, node, CORE_STRING_STATIC("package-decl"));
@@ -2087,16 +2147,11 @@ collect_postprune_package_syntax(parse_grammar_t *grammar,
         core_list_push(*exports, node);
     for (size_t i = 0; i < core_tree_num_children(node); i++)
         collect_postprune_package_syntax(grammar, core_tree_child(node, i),
-            inside_package || package, declarations, exports, references);
-    if (nt_is(grammar, node, CORE_STRING_STATIC("postfix-expr"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("member-chain"))
-        || nt_is(grammar, node, CORE_STRING_STATIC("dotted-name")))
-        core_list_push(*references, node);
+            inside_package || package, declarations, exports);
 }
 
 static bool
-process_postprune_package_syntax(import_driver_t *driver,
-                                 parse_grammar_t *grammar,
+process_postprune_package_syntax(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *tree)
 {
@@ -2104,9 +2159,8 @@ process_postprune_package_syntax(import_driver_t *driver,
     if (!state || !tree) return false;
     core_list_t(parse_tree_ptr_t) declarations = core_list_new(parse_tree_ptr_t);
     core_list_t(parse_tree_ptr_t) exports = core_list_new(parse_tree_ptr_t);
-    core_list_t(parse_tree_ptr_t) references = core_list_new(parse_tree_ptr_t);
     collect_postprune_package_syntax(grammar, tree, false, &declarations,
-                                     &exports, &references);
+                                     &exports);
     for (size_t i = 0; i < state->package_declarations.len; i++)
         core_list_free(state->package_declarations.data[i].exports);
     state->package_declarations.len = 0;
@@ -2116,9 +2170,6 @@ process_postprune_package_syntax(import_driver_t *driver,
                                                declarations.data[i]);
     for (size_t i = 0; ok && i < exports.len; i++)
         ok = cache_package_export_syntax(grammar, unit, exports.data[i]);
-    if (ok && !state->interface_module)
-        ok = load_referenced_subpackages(driver, grammar, unit, &references);
-    core_list_free(references);
     core_list_free(exports);
     core_list_free(declarations);
     return ok;
@@ -2703,8 +2754,8 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 bool job_ok = tree && n00bb_preprocessor_run(
                     preprocessor, grammar, tree, unit);
                 if (job_ok)
-                    job_ok = process_postprune_package_syntax(&import_driver,
-                        grammar, unit, tree);
+                    job_ok = process_postprune_package_syntax(grammar, unit,
+                                                              tree);
                 if (job_ok && native_build && !runtime_support_loaded) {
                     job_ok = load_runtime_module(&import_driver, grammar,
                             unit, CORE_STRING_STATIC("sys.gc.alloc"))
@@ -3133,9 +3184,7 @@ n00bb_format_line_classify(n00bb_format_line_t *line, bool in_record)
     if (!in_record && line->length) {
         size_t name = at;
         if (top_level) {
-            n00bb_format_word(line->start, line->length, &name, "public");
-            if (name == at)
-                n00bb_format_word(line->start, line->length, &name, "private");
+            n00bb_format_word(line->start, line->length, &name, "private");
         }
         size_t keyword = name;
         if (top_level && n00bb_format_word(line->start, line->length,
@@ -3159,9 +3208,7 @@ n00bb_format_line_classify(n00bb_format_line_t *line, bool in_record)
     }
     if (in_record && !top_level) {
         size_t name = at;
-        n00bb_format_word(line->start, line->length, &name, "public");
-        if (name == at)
-            n00bb_format_word(line->start, line->length, &name, "private");
+        n00bb_format_word(line->start, line->length, &name, "private");
         at = name;
     }
     size_t name_start = at;
@@ -3214,10 +3261,7 @@ n00bb_format_align(core_string_t input)
         };
         if (!in_record) {
             size_t at = 0;
-            n00bb_format_word(line->start, line->length, &at, "public");
-            if (!at)
-                n00bb_format_word(line->start, line->length, &at,
-                                  "private");
+            n00bb_format_word(line->start, line->length, &at, "private");
             if (n00bb_format_word(line->start, line->length, &at, "record")
                 || n00bb_format_word(line->start, line->length, &at,
                                      "struct")
@@ -3302,9 +3346,7 @@ n00bb_signature_open(const char *text, n00bb_signature_line_t *line)
     for (;;) {
         size_t before = at;
         if (n00bb_format_word(text + line->start,
-                              line->end - line->start, &at, "public")
-            || n00bb_format_word(text + line->start,
-                                 line->end - line->start, &at, "private")
+                              line->end - line->start, &at, "private")
             || n00bb_format_word(text + line->start,
                                  line->end - line->start, &at, "inline"))
             continue;
@@ -4787,13 +4829,16 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
             input.data ? input : CORE_STRING_STATIC("")) && scheduled;
     }
 
-    n00bb_resolver_t *resolver = n00bb_resolver_new(argv0);
+    size_t reported = core_diagnostics_count(cli_diagnostics);
+    n00bb_resolver_t *resolver = n00bb_resolver_new(argv0, cli_diagnostics);
     if (!resolver) {
         core_diagnostics_report(cli_diagnostics, nullptr, CORE_DIAG_ERROR,
             CORE_STRING_STATIC("N00BB-B0023"),
             CORE_STRING_STATIC("cannot determine the current directory"));
         scheduled = false;
     }
+    else if (core_diagnostics_count(cli_diagnostics) > reported)
+        scheduled = false;
     bool lex_command = core_string_eq(command, CORE_STRING_STATIC("lex"));
     bool parse_command = core_string_eq(command, CORE_STRING_STATIC("parse"));
     bool fmt_command = core_string_eq(command, CORE_STRING_STATIC("fmt"));

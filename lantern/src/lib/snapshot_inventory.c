@@ -46,9 +46,10 @@ typedef struct {
     core_source_snapshot_t *snapshot;
 } inventory_entry_t;
 core_list_decl(inventory_entry_t);
+core_list_decl(core_snapshot_root_t);
 
 struct core_snapshot_inventory_t {
-    core_list_t(core_string_t) roots;
+    core_list_t(core_snapshot_root_t) roots;
     core_list_t(inventory_entry_t) entries;
     core_snapshot_inventory_accept_fn accept;
     void *context;
@@ -355,22 +356,27 @@ release_entries(core_list_t(inventory_entry_t) *entries)
 }
 
 core_snapshot_inventory_t *
-core_snapshot_inventory_new(const core_string_t *roots, size_t root_count,
+core_snapshot_inventory_new(const core_snapshot_root_t *roots,
+                            size_t root_count,
                             core_snapshot_inventory_accept_fn accept,
                             void *context)
 {
     if (!roots && root_count) return nullptr;
     core_snapshot_inventory_t *inventory = core_alloc(core_snapshot_inventory_t);
-    inventory->roots = core_list_new(core_string_t);
+    inventory->roots = core_list_new(core_snapshot_root_t);
     inventory->entries = core_list_new(inventory_entry_t);
     inventory->accept = accept;
     inventory->context = context;
     for (size_t i = 0; i < root_count; i++) {
-        if (!roots[i].data || !roots[i].u8_bytes) {
+        if (!roots[i].path.data || !roots[i].path.u8_bytes) {
             core_snapshot_inventory_free(inventory);
             return nullptr;
         }
-        core_list_push(inventory->roots, core_string_dup(roots[i]));
+        core_list_push(inventory->roots, ((core_snapshot_root_t){
+            .path = core_string_dup(roots[i].path),
+            .enters_fileless_directories =
+                roots[i].enters_fileless_directories,
+        }));
     }
     return inventory;
 }
@@ -381,7 +387,7 @@ core_snapshot_inventory_free(core_snapshot_inventory_t *inventory)
     if (!inventory) return;
     release_entries(&inventory->entries);
     for (size_t i = 0; i < inventory->roots.len; i++)
-        core_free(inventory->roots.data[i].data);
+        core_free(inventory->roots.data[i].path.data);
     core_list_free(inventory->roots);
     core_free(inventory->cache_root.data);
     core_free(inventory);
@@ -500,62 +506,93 @@ accepts(const core_snapshot_inventory_t *inventory, core_string_t relative)
                                                    relative);
 }
 
+typedef struct {
+    bool files;
+    bool sources;
+} directory_contents_t;
+
+#ifndef _WIN32
 static bool
-holds_sources(const core_snapshot_inventory_t *inventory,
-              core_string_t absolute)
+entry_is_regular(core_string_t directory, core_string_t name,
+                 const struct dirent *item)
 {
-    bool found = false;
+#ifdef DT_UNKNOWN
+    if (item->d_type != DT_UNKNOWN) return item->d_type == DT_REG;
+#else
+    (void)item;
+#endif
+    core_string_t path = join_path(directory, name);
+    file_signature_t signature = {0};
+    bool is_directory = false, regular = false;
+    bool found = path_signature(path, &signature, &is_directory,
+                                &regular) == 1;
+    core_free(path.data);
+    return found && regular;
+}
+#endif
+
+static directory_contents_t
+directory_contents(const core_snapshot_inventory_t *inventory,
+                   core_string_t absolute, bool probe_files)
+{
+    directory_contents_t contents = {0};
 #ifdef _WIN32
+    (void)probe_files;
     core_string_t pattern = join_path(absolute, CORE_STRING_STATIC("*"));
     wchar_t *wide = wide_path(pattern);
     WIN32_FIND_DATAW item;
     HANDLE search = wide ? FindFirstFileW(wide, &item) : INVALID_HANDLE_VALUE;
     core_free(wide);
     core_free(pattern.data);
-    if (search == INVALID_HANDLE_VALUE) return false;
+    if (search == INVALID_HANDLE_VALUE) return contents;
     do {
         if (item.cFileName[0] == L'.'
             || (item.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        contents.files = true;
         core_string_t name = utf8_name(item.cFileName);
-        found = name.data && accepts(inventory, name);
+        contents.sources = name.data && accepts(inventory, name);
         core_free(name.data);
-    } while (!found && FindNextFileW(search, &item));
+    } while (!contents.sources && FindNextFileW(search, &item));
     FindClose(search);
 #else
     DIR *directory = open_directory(absolute);
-    if (!directory) return false;
+    if (!directory) return contents;
     struct dirent *item;
-    while (!found && (item = readdir(directory))) {
+    while (!contents.sources && (item = readdir(directory))) {
         core_string_t name = core_string_from_cstr(item->d_name);
-        if (!is_dot_entry(name) && name.u8_bytes && name.data[0] != '.'
-            && accepts(inventory, name)) {
-            core_string_t path = join_path(absolute, name);
-            file_signature_t signature = {0};
-            bool is_directory = false, regular = false;
-            found = path_signature(path, &signature, &is_directory,
-                                   &regular) == 1 && regular;
-            core_free(path.data);
+        bool visible = !is_dot_entry(name) && name.u8_bytes
+            && name.data[0] != '.';
+        bool source = visible && accepts(inventory, name);
+        if (visible && (source || (probe_files && !contents.files))
+            && entry_is_regular(absolute, name, item)) {
+            contents.files = true;
+            contents.sources = source;
         }
         core_free(name.data);
     }
     closedir(directory);
 #endif
-    return found;
+    return contents;
 }
 
 static bool
-descends(const core_snapshot_inventory_t *inventory, core_string_t absolute)
+descends(const core_snapshot_inventory_t *inventory, size_t root_index,
+         core_string_t absolute)
 {
     for (size_t i = 0; i < inventory->roots.len; i++)
-        if (core_string_eq(inventory->roots.data[i], absolute)) return false;
-    return holds_sources(inventory, absolute);
+        if (core_string_eq(inventory->roots.data[i].path, absolute))
+            return false;
+    bool fileless = inventory->roots.data[root_index].enters_fileless_directories;
+    directory_contents_t contents = directory_contents(inventory, absolute,
+                                                       fileless);
+    return contents.sources || (fileless && !contents.files);
 }
 
 static bool
 scan_directory(refresh_context_t *refresh, size_t root_index,
                core_string_t relative)
 {
-    core_string_t root = refresh->inventory->roots.data[root_index];
+    core_string_t root = refresh->inventory->roots.data[root_index].path;
     core_string_t path = relative.u8_bytes ? join_path(root, relative)
                                            : core_string_dup(root);
 #ifdef _WIN32
@@ -584,7 +621,7 @@ scan_directory(refresh_context_t *refresh, size_t root_index,
         int found = path_signature(absolute, &signature, &directory, &regular);
         if (found != 1) ok = false;
         else if (directory) {
-            if (descends(refresh->inventory, absolute))
+            if (descends(refresh->inventory, root_index, absolute))
                 ok = scan_directory(refresh, root_index, child);
         }
         else if (regular && accepts(refresh->inventory, child))
@@ -619,7 +656,7 @@ scan_directory(refresh_context_t *refresh, size_t root_index,
                                    &regular);
         if (found < 0) ok = false;
         else if (is_directory) {
-            if (descends(refresh->inventory, absolute))
+            if (descends(refresh->inventory, root_index, absolute))
                 ok = scan_directory(refresh, root_index, child);
         }
         else if (regular && accepts(refresh->inventory, child))
@@ -801,7 +838,7 @@ add_cached_file(refresh_context_t *refresh, size_t root_index,
                        sizeof cached->signature))
         snapshot = core_source_snapshot_retain(old->snapshot);
     else {
-        core_string_t root = refresh->inventory->roots.data[root_index];
+        core_string_t root = refresh->inventory->roots.data[root_index].path;
         core_string_t path = join_path(root, relative);
         snapshot = core_alloc(core_source_snapshot_t);
         snapshot->references = 1;
@@ -889,7 +926,7 @@ load_package_cache(refresh_context_t *refresh, size_t root_index,
         }));
     }
     ok = ok && reader.offset == size && directories.len > 0;
-    core_string_t root = inventory->roots.data[root_index];
+    core_string_t root = inventory->roots.data[root_index].path;
     for (size_t i = 0; ok && i < directories.len; i++) {
         cached_directory_t *record = &directories.data[i];
         core_string_t absolute = record->relative.u8_bytes
@@ -919,7 +956,7 @@ scan_package_directory(refresh_context_t *refresh, size_t root_index,
                        core_string_t relative, bool recursive,
                        core_list_t(inventory_directory_t) *directories)
 {
-    core_string_t root = refresh->inventory->roots.data[root_index];
+    core_string_t root = refresh->inventory->roots.data[root_index].path;
     core_string_t path = relative.u8_bytes ? join_path(root, relative)
                                            : core_string_dup(root);
     file_signature_t signature = {0};
@@ -956,9 +993,13 @@ scan_package_directory(refresh_context_t *refresh, size_t root_index,
                                         &child_directory, &child_regular);
         if (child_found < 0) ok = false;
         else if (child_directory && recursive) {
-            if (descends(refresh->inventory, absolute))
+            if (descends(refresh->inventory, root_index, absolute))
                 ok = scan_package_directory(refresh, root_index, child,
                                             true, directories);
+            else core_list_push(*directories, ((inventory_directory_t){
+                .relative = core_string_dup(child),
+                .signature = child_signature,
+            }));
         }
         else if (child_regular && accepts(refresh->inventory, child))
             ok = add_file(refresh, root_index, child, absolute,
@@ -1076,7 +1117,7 @@ static bool
 refresh_package_group(refresh_context_t *refresh, size_t root_index,
                       core_string_t group, bool recursive)
 {
-    core_string_t root = refresh->inventory->roots.data[root_index];
+    core_string_t root = refresh->inventory->roots.data[root_index].path;
     core_string_t group_path = group.u8_bytes ? join_path(root, group)
                                               : core_string_dup(root);
     size_t first_entry = refresh->entries.len;
@@ -1114,7 +1155,7 @@ refresh_package_group(refresh_context_t *refresh, size_t root_index,
 static bool
 refresh_local_packages(refresh_context_t *refresh, size_t root_index)
 {
-    core_string_t root = refresh->inventory->roots.data[root_index];
+    core_string_t root = refresh->inventory->roots.data[root_index].path;
     if (!refresh_package_group(refresh, root_index, CORE_STRING_STATIC(""),
                                false)) return false;
     DIR *directory = open_directory(root);
@@ -1132,7 +1173,8 @@ refresh_local_packages(refresh_context_t *refresh, size_t root_index)
         bool is_directory = false, regular = false;
         int found = path_signature(path, &signature, &is_directory, &regular);
         if (found < 0) ok = false;
-        else if (is_directory)
+        else if (is_directory
+                 && descends(refresh->inventory, root_index, path))
             ok = refresh_package_group(refresh, root_index, name, true);
         core_free(path.data);
         core_free(name.data);
@@ -1159,7 +1201,7 @@ product_directory(const core_snapshot_inventory_t *inventory,
                   size_t root_index, core_string_t relative)
 {
     if (root_index >= inventory->roots.len) return (core_string_t){};
-    core_string_t root = inventory->roots.data[root_index];
+    core_string_t root = inventory->roots.data[root_index].path;
     int64_t slash = core_string_find_byte(relative, '/');
     core_string_t package = slash >= 0
         ? join_path(root, core_string_slice(relative, 0, (size_t)slash))

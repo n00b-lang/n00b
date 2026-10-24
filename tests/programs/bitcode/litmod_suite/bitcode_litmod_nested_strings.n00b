@@ -1,4 +1,4 @@
-public alias litmod bundle_nested_strings = identity_nested_strings
+alias litmod bundle_nested_strings = identity_nested_strings
 sequence litmod identity_nested_strings(items: Array[Array[string]]) -> Array[Array[string]] fail: string {
     return items
 }

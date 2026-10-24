@@ -1,4 +1,4 @@
-public alias litmod verbatim = raw_text
+alias litmod verbatim = raw_text
 quotes litmod raw_text(text: string) -> string fail: string {
     return text
 }

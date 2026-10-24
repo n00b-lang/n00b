@@ -1,4 +1,4 @@
-public const einval: int = -22
+const einval: int = -22
 
 private inline func open_read_flags() -> int {
     when target_os() == "linux" {

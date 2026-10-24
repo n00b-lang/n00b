@@ -1,1 +1,1 @@
-public const zero: int = 0
+const zero: int = 0

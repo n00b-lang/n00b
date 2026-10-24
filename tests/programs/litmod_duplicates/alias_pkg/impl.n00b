@@ -1,5 +1,4 @@
-alias litmod hidden = stamp
-public alias litmod shown = stamp
+alias litmod shown = stamp
 
 quotes litmod stamp(text: string) -> int fail: string {
     return 1

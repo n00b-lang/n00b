@@ -1,0 +1,1 @@
+func once() -> int { return 1 }

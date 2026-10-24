@@ -1,7 +1,7 @@
-public const name_pool: Array[u8] = [- names_pool.bin -]'embed
+const name_pool: Array[u8] = [- names_pool.bin -]'embed
 
-public const name_index: Array[u8] = [- names_index.bin -]'embed
+const name_index: Array[u8] = [- names_index.bin -]'embed
 
-public const name_by_name: Array[u8] = [- names_by_name.bin -]'embed
+const name_by_name: Array[u8] = [- names_by_name.bin -]'embed
 
-public const name_count = 41232
+const name_count = 41232

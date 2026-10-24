@@ -1,4 +1,4 @@
 import shared_link_dep
-public func first_root() -> int {
+func first_root() -> int {
     return shared_link_dep.shared_link_value()
 }

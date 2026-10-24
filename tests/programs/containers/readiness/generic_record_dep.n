@@ -1,5 +1,5 @@
-public record Generic_Link {
-    public first: 'K
-    public second: 'V
-    public address: Ref['K]
+record Generic_Link {
+    first: 'K
+    second: 'V
+    address: Ref['K]
 }

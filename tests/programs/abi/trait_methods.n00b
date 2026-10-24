@@ -1,4 +1,4 @@
-public trait Readable {
+trait Readable {
     func read(self: 'T) -> string
     func reset(self: 'T) -> nil
 }

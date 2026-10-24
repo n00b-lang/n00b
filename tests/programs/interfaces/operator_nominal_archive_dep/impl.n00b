@@ -1,5 +1,5 @@
-public type Amount = int
+type Amount = int
 
-public func make_amount(value: int) -> Amount {
+func make_amount(value: int) -> Amount {
     return cast[Amount] value
 }

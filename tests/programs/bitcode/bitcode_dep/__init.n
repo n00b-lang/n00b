@@ -1,3 +1,7 @@
 require 2 + 3 == 6
 
-package bitcode_dep {}
+const marker: int = 1
+
+package bitcode_dep {
+    export marker
+}

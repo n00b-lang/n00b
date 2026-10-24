@@ -258,7 +258,7 @@ func iter(self: List['T]) -> cursor.Cursor['T] {
     return new[cursor.Cursor['T]](view)
 }
 
-public alias litmod l = list
+alias litmod l = list
 sequence litmod list(items: Array['T]) -> List['T] fail: string {
     return new[List['T]](items)
 }

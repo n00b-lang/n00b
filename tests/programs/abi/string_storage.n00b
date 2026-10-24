@@ -1,4 +1,4 @@
-public const short_label: string = "hello"
+const short_label: string = "hello"
 const long_label: string = "a longer immutable string value"
 const repeated_label: string = "a longer immutable string value"
 thread const thread_label: string = "worker"

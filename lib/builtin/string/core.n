@@ -26,23 +26,23 @@ private const encoding_shift: u64 = 60
 private const length_mask:    u64 = 0x0fffffffffffffff
 private const short_selector: uint = 15
 
-public const str_tag_short: u64 = 0
-public const str_tag_long:  u64 = 1
-public const str_tag_span:  u64 = 2
-public const str_tag_rich:  u64 = 3
-public const str_short_cap: uint = 14
+const str_tag_short: u64 = 0
+const str_tag_long:  u64 = 1
+const str_tag_span:  u64 = 2
+const str_tag_rich:  u64 = 3
+const str_short_cap: uint = 14
 
-public enum Str_Encoding {
+enum Str_Encoding {
     binary = 0, ascii = 1, utf8 = 2
 }
 
-public enum String_Error {
+enum String_Error {
     not_text, bad_encoding, index_oob, embedded_nul, not_found
 }
 
-public const utf8_word_ones: u64 = 0x0101010101010101
-public const utf8_word_high: u64 = 0x8080808080808080
-public const max_u8_len:     uint = 4
+const utf8_word_ones: u64 = 0x0101010101010101
+const utf8_word_high: u64 = 0x8080808080808080
+const max_u8_len:     uint = 4
 
 
 private inline func words(self: Ref[string]) -> Ref[String_Words] {

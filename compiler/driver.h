@@ -6,7 +6,8 @@
 typedef struct n00bb_resolver_t n00bb_resolver_t;
 
 core_string_t n00bb_executable_path(core_string_t argv0);
-n00bb_resolver_t *n00bb_resolver_new(core_string_t argv0);
+n00bb_resolver_t *n00bb_resolver_new(core_string_t argv0,
+                                     core_diagnostics_t *diagnostics);
 void n00bb_resolver_free(n00bb_resolver_t *resolver);
 bool n00bb_resolver_prepare_packages(n00bb_resolver_t *resolver);
 core_module_resolver_t n00bb_resolver_interface(n00bb_resolver_t *resolver);
@@ -47,6 +48,18 @@ bool n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
                                      core_string_t *unsupported_scheme);
 bool n00bb_resolver_has_source_module(n00bb_resolver_t *resolver,
                                       core_string_t identifier);
+bool n00bb_resolver_package_manifests(n00bb_resolver_t *resolver,
+                                      core_string_t package_id,
+                                      core_module_discovery_emit_fn emit,
+                                      void *emit_context);
+bool n00bb_resolver_known_manifest(n00bb_resolver_t *resolver,
+                                   core_string_t package_id,
+                                   bool *has_manifest);
+void n00bb_resolver_remember_manifest(n00bb_resolver_t *resolver,
+                                      core_string_t package_id,
+                                      bool has_manifest);
+void n00bb_mark_open_module(core_translation_unit_t *unit);
+bool n00bb_open_module(const core_translation_unit_t *unit);
 bool n00bb_resolver_internal_import(n00bb_resolver_t *resolver,
                                     const core_translation_unit_t *importer,
                                     core_string_t name,

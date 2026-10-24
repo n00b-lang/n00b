@@ -10,7 +10,7 @@ object Buffer {
     private borrowed:  bool
 }
 
-public const empty_buffer_alloc: uint = 16
+const empty_buffer_alloc: uint = 16
 
 enum Buffer_Error {
     index_oob, slice_oob

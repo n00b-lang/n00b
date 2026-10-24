@@ -1,1 +1,1 @@
-public const extent: int = 7
+const extent: int = 7

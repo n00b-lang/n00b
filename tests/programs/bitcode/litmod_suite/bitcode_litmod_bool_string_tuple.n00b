@@ -1,4 +1,4 @@
-public alias litmod pair = make_pair
+alias litmod pair = make_pair
 quotes litmod make_pair(raw: string) -> Tuple[bool, string] fail: string {
     return (true, raw)
 }

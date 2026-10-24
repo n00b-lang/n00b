@@ -1,9 +1,9 @@
-public alias litmod string_mirror = identity
+alias litmod string_mirror = identity
 dict litmod identity(items: Array[Tuple[string, int]]) -> Array[Tuple[string, int]] fail: string {
     return items
 }
 
-public alias litmod pairs = identity_pairs
+alias litmod pairs = identity_pairs
 sequence litmod identity_pairs(items: Array[Tuple[string, string, int]]) -> Array[Tuple[string, string, int]] fail: string {
     return items
 }

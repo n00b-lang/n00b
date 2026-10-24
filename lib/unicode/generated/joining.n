@@ -1,9 +1,9 @@
 import internal.blob
 
-public const jt_stage1_values: Array[u16] = [- joining_stage1.bin -]'embed
+const jt_stage1_values: Array[u16] = [- joining_stage1.bin -]'embed
 
-public inline func jt_stage1(i: u32) -> u16 {
+inline func jt_stage1(i: u32) -> u16 {
     return jt_stage1_values[i]
 }
 
-public const jt_stage2: Array[u8] = [- joining_stage2.bin -]'embed
+const jt_stage2: Array[u8] = [- joining_stage2.bin -]'embed

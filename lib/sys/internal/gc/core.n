@@ -2,28 +2,28 @@ import internal.threads
 import internal.abi
 import internal.gc.hash
 
-public const granule_bytes:     uint = 16
-public const line_bytes:        uint = 128
-public const block_bytes:       uint = 32768
-public const word_bits:         uint = 64
+const granule_bytes:     uint = 16
+const line_bytes:        uint = 128
+const block_bytes:       uint = 32768
+const word_bits:         uint = 64
 const lines_per_block:          uint = block_bytes / line_bytes
 const granules_per_block:       uint = block_bytes / granule_bytes
 const bitmap_words:             uint = granules_per_block / 64
-public const block_magic:       u32  = 0x6d616e69
-public const cache_max:         uint = 8
-public const los_classes:       uint = 256
-public const obj_large:         uint = 1 << 0
-public const obj_array_backing: uint = 1 << 1
-public const obj_final:         uint = 1 << 3
+const block_magic:       u32  = 0x6d616e69
+const cache_max:         uint = 8
+const los_classes:       uint = 256
+const obj_large:         uint = 1 << 0
+const obj_array_backing: uint = 1 << 1
+const obj_final:         uint = 1 << 3
 const empty_word:               uint = 0
 const mark_clearing:            u32  = 0x80000000
-public const meta_flag_bits:    uint = 8
+const meta_flag_bits:    uint = 8
 const meta_flag_mask:           uint = 0xff
-public const packet_cap:        uint = 500
-public const final_batch:       uint = 256
-public const packet_chunk:      uint = 64
-public const write_buffer_cap:  uint = 128
-public const lock_slots:        u32  = 64
+const packet_cap:        uint = 500
+const final_batch:       uint = 256
+const packet_chunk:      uint = 64
+const write_buffer_cap:  uint = 128
+const lock_slots:        u32  = 64
 
 var object_header_size:         uint = 0
 var block_header_line_count:    uint = 0

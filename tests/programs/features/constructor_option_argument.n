@@ -1,7 +1,7 @@
 record Failure {
-    public code: i64
-    public text: string?
-    public limit: u32?
+    code: i64
+    text: string?
+    limit: u32?
 }
 
 func __init(modify self: Failure, code: i64, text: string?, limit: u32? = nil) {

@@ -1,63 +1,63 @@
 import internal.blob
 
-public const ducet_stage1_values: Array[u16] = [- collation_stage1.bin -]'embed
+const ducet_stage1_values: Array[u16] = [- collation_stage1.bin -]'embed
 
-public inline func ducet_stage1(i: u32) -> u16 {
+inline func ducet_stage1(i: u32) -> u16 {
     return ducet_stage1_values[i]
 }
 
-public const ducet_stage2_values: Array[u32] = [- collation_stage2.bin -]'embed
+const ducet_stage2_values: Array[u32] = [- collation_stage2.bin -]'embed
 
-public inline func ducet_stage2(i: u32) -> u32 {
+inline func ducet_stage2(i: u32) -> u32 {
     return ducet_stage2_values[i]
 }
 
-public const ce_data_values: Array[u16] = [- ce_data.bin -]'embed
+const ce_data_values: Array[u16] = [- ce_data.bin -]'embed
 
-public inline func ce_data(i: u32) -> u16 {
+inline func ce_data(i: u32) -> u16 {
     return ce_data_values[i]
 }
 
-public const ce_data_len: u32 = 156437
+const ce_data_len: u32 = 156437
 
-public const contraction_count: u32 = 974
+const contraction_count: u32 = 974
 
-public const contr_keys_values: Array[u32] = [- contr_keys.bin -]'embed
+const contr_keys_values: Array[u32] = [- contr_keys.bin -]'embed
 
-public inline func contr_keys(row: u32, col: u32) -> u32 {
+inline func contr_keys(row: u32, col: u32) -> u32 {
     return contr_keys_values[row * 4 + col]
 }
 
-public const contr_key_lens_values: Array[u32] = [- contr_key_lens.bin -]'embed
+const contr_key_lens_values: Array[u32] = [- contr_key_lens.bin -]'embed
 
-public inline func contr_key_lens(i: u32) -> u32 {
+inline func contr_key_lens(i: u32) -> u32 {
     return contr_key_lens_values[i]
 }
 
-public const contr_ce_offsets_values: Array[u32] = [- contr_ce_offsets.bin -]'embed
+const contr_ce_offsets_values: Array[u32] = [- contr_ce_offsets.bin -]'embed
 
-public inline func contr_ce_offsets(i: u32) -> u32 {
+inline func contr_ce_offsets(i: u32) -> u32 {
     return contr_ce_offsets_values[i]
 }
 
-public const contr_ce_data_values: Array[u16] = [- contr_ce_data.bin -]'embed
+const contr_ce_data_values: Array[u16] = [- contr_ce_data.bin -]'embed
 
-public inline func contr_ce_data(i: u32) -> u16 {
+inline func contr_ce_data(i: u32) -> u16 {
     return contr_ce_data_values[i]
 }
 
-public const implicit_ranges_values: Array[u32] = [- implicit_ranges.bin -]'embed
+const implicit_ranges_values: Array[u32] = [- implicit_ranges.bin -]'embed
 
-public inline func implicit_ranges(row: u32, col: u32) -> u32 {
+inline func implicit_ranges(row: u32, col: u32) -> u32 {
     return implicit_ranges_values[row * 3 + col]
 }
 
-public const implicit_range_count: u32 = 8
+const implicit_range_count: u32 = 8
 
-public const core_han_ranges_values: Array[u32] = [- core_han_ranges.bin -]'embed
+const core_han_ranges_values: Array[u32] = [- core_han_ranges.bin -]'embed
 
-public inline func core_han_ranges(row: u32, col: u32) -> u32 {
+inline func core_han_ranges(row: u32, col: u32) -> u32 {
     return core_han_ranges_values[row * 2 + col]
 }
 
-public const core_han_range_count: u32 = 2
+const core_han_range_count: u32 = 2

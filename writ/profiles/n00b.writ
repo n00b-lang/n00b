@@ -36,7 +36,7 @@ profile n00b {
     reserved "alias", "and", "as", "assert", "break", "callback", "case", "cast", "comptime", "const", "consume",
              "context", "continue", "elif", "else", "ensure", "enter", "enum", "error", "exit", "export", "fail",
              "false", "flagset", "for", "from", "func", "if", "import", "in", "inline", "let", "litmod", "modify",
-             "new", "nil", "or", "out", "package", "private", "provides", "public", "record", "ref", "require",
+             "new", "nil", "or", "out", "package", "private", "provides", "record", "ref", "require",
              "return", "step", "switch", "thread", "to", "trait", "true", "try", "type", "typecase", "typeof",
              "unsafe_cast", "until", "var", "variant", "when", "where", "while", "with"
 }

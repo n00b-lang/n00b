@@ -802,7 +802,6 @@ builtin_trait_requirement_symbol(core_translation_unit_t *unit,
         if (trait) {
             trait->type = th_name(state->types, trait->name);
             trait->adt_kind = CORE_STRING_STATIC("trait");
-            trait->visibility = CORE_STRING_STATIC("public");
             parse_sym_set_binding(trait,
                 CORE_STRING_STATIC("n00bb.builtin-type"), trait);
             parse_symtab_push_scope(symtab, CORE_STRING_STATIC("builtin"),
@@ -821,7 +820,6 @@ builtin_trait_requirement_symbol(core_translation_unit_t *unit,
         method->owner_type = trait;
         method->type = contract;
         method->callable_contract = contract;
-        method->visibility = CORE_STRING_STATIC("public");
         parse_sym_set_binding(method,
             CORE_STRING_STATIC("n00bb.builtin-trait-method"), trait);
         parse_sym_set_phases(method, PARSE_SYM_PHASE_BOTH,
@@ -861,7 +859,7 @@ trait_method_requirement_symbol(parse_grammar_t *grammar,
             && find_direct_import(caller, owner->module.identifier) != owner)
             continue;
         parse_sym_entry_t *trait_symbol = unit_trait_symbol(
-            grammar, owner, trait, owner != caller);
+            grammar, owner, trait, caller);
         if (!trait_symbol || !trait_symbol->member_scope) continue;
         n00bb_tu_state_t *state = tu_state(owner);
         parse_sym_entry_t *method = state && state->annotations
@@ -1019,7 +1017,7 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
 static bool
 field_shared_outside(parse_sym_entry_t *field)
 {
-    if (core_string_eq(field->visibility, CORE_STRING_STATIC("public")))
+    if (!symbol_is_private(field))
         return true;
     n00bb_record_layout_request_t *request = field->owner_type
         ? parse_sym_binding(field->owner_type,
@@ -1133,7 +1131,7 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                         break;
                     }
                 if (literal_handler) continue;
-                bool public = symbol_is_public_declaration(symbol);
+                bool public = symbol_is_exportable(symbol);
                 core_buffer_t message = {0};
                 core_buffer_printf(&message, "%sfunction '%.*s' is never used",
                     public ? "public " : "",
@@ -1503,7 +1501,8 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
                     || !symbol->type
                     || (!symbol->decl_node
                         && !candidate_state->interface_module)
-                    || !symbol_is_public_declaration(symbol)) continue;
+                    || !n00bb_member_visible_to(unit, candidate_unit, symbol))
+                    continue;
                 th_type *pattern_signature = constructor_signature_instance(
                     state->types, symbol);
                 const th_param *receiver = pattern_signature
@@ -1937,8 +1936,9 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     status == TH_ENV_METHOD_FOUND
                     ? resolve_linked_method(link, site, unit, &method)
                     : nullptr;
-                if (implementation
-                    && !symbol_is_public_declaration(implementation))
+                if (implementation && !n00bb_member_visible_to(unit,
+                        canonical_symbol(implementation)->owner_unit,
+                        implementation))
                     implementation = nullptr;
                 if (!implementation) {
                     core_diagnostics_report_at(
@@ -2276,7 +2276,6 @@ register_builtin_method_declaration(core_link_unit_t *link,
     if (!symbol) return nullptr;
     symbol->type = symbol->callable_contract = method->contract;
     symbol->owner_type = requirement->owner_type;
-    symbol->visibility = CORE_STRING_STATIC("public");
     if (!parse_sym_set_binding(symbol,
             CORE_STRING_STATIC("n00bb.builtin-operator"), requirement))
         return nullptr;

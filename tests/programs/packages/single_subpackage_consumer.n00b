@@ -1,0 +1,3 @@
+import lone.only
+
+require lone.only.f() == 1

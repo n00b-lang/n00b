@@ -10,21 +10,21 @@ const rw_writer:      u32 = 0x8000_0000
 const rw_readers:     u32 = 0x1fff_ffff
 const rw_records:     uint = 16
 
-public record Mutex {
+record Mutex {
     state:       Atomic[u32]
     should_wake: Atomic[u32]
     owner:       Atomic[u64]
     nesting:     u32
 }
 
-public record Condition {
+record Condition {
     mutex:      Mutex
     epoch:      Atomic[u32]
     waiters:    Atomic[u32]
     wake_slots: Atomic[u32]
 }
 
-public record Rw_Lock {
+record Rw_Lock {
     state:        Atomic[u32]
     owner:        Atomic[u64]
     parked:       Atomic[u32]
@@ -72,7 +72,7 @@ func mutex_fast(mutex: Ref[Mutex], me: u64) -> bool {
     return false
 }
 
-public func mutex_lock(mutex: Ref[Mutex]) {
+func mutex_lock(mutex: Ref[Mutex]) {
     let me: u64 = self_tag()
     if mutex_fast(mutex, me) {
         return
@@ -85,7 +85,7 @@ public func mutex_lock(mutex: Ref[Mutex]) {
     __atomic_store(ref mutex.owner, me)
 }
 
-public func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
+func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
                           -> bool {
     let me: u64 = self_tag()
     if mutex_fast(mutex, me) {
@@ -103,7 +103,7 @@ public func mutex_try_lock(mutex: Ref[Mutex], timeout_ns: u64 = 100_000)
     return false
 }
 
-public func mutex_unlock(mutex: Ref[Mutex]) {
+func mutex_unlock(mutex: Ref[Mutex]) {
     require mutex_owned(mutex)
     if mutex.nesting != 0 {
         mutex.nesting -= 1
@@ -116,14 +116,14 @@ public func mutex_unlock(mutex: Ref[Mutex]) {
     }
 }
 
-public func condition_lock(cv: Ref[Condition]) {
+func condition_lock(cv: Ref[Condition]) {
     if mutex_owned(ref cv.mutex) {
         return
     }
     mutex_lock(ref cv.mutex)
 }
 
-public func condition_unlock(cv: Ref[Condition]) {
+func condition_unlock(cv: Ref[Condition]) {
     mutex_unlock(ref cv.mutex)
 }
 
@@ -137,7 +137,7 @@ func condition_leave(cv: Ref[Condition], unlock: bool) {
     }
 }
 
-public func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
+func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
                            unlock: bool = true) -> bool {
     var deadline: u64 = 0
     if timeout_ns != 0 {
@@ -173,7 +173,7 @@ public func condition_wait(cv: Ref[Condition], timeout_ns: u64 = 0,
     }
 }
 
-public func condition_notify(cv: Ref[Condition], all: bool = false,
+func condition_notify(cv: Ref[Condition], all: bool = false,
                              max: u32 = 1, unlock: bool = false) {
     condition_lock(cv)
     let waiters: u32 = __atomic_load(ref cv.waiters)
@@ -195,7 +195,7 @@ public func condition_notify(cv: Ref[Condition], all: bool = false,
     }
 }
 
-public func rw_lock_init(lock: Ref[Rw_Lock], recursive: bool = true) {
+func rw_lock_init(lock: Ref[Rw_Lock], recursive: bool = true) {
     __atomic_store(ref lock.state, 0)
     __atomic_store(ref lock.owner, 0)
     __atomic_store(ref lock.parked, 0)
@@ -281,7 +281,7 @@ func rw_reenter(lock: Ref[Rw_Lock], write: bool) -> u32 {
     return 1
 }
 
-public func rw_read_lock(lock: Ref[Rw_Lock]) {
+func rw_read_lock(lock: Ref[Rw_Lock]) {
     if rw_reenter(lock, false) != 0 {
         return
     }
@@ -301,7 +301,7 @@ public func rw_read_lock(lock: Ref[Rw_Lock]) {
     }
 }
 
-public func rw_try_write_lock(lock: Ref[Rw_Lock]) -> bool {
+func rw_try_write_lock(lock: Ref[Rw_Lock]) -> bool {
     let held: u32 = rw_reenter(lock, true)
     if held == 2 {
         return true
@@ -345,7 +345,7 @@ public func rw_try_write_lock(lock: Ref[Rw_Lock]) -> bool {
     return true
 }
 
-public func rw_write_lock(lock: Ref[Rw_Lock]) {
+func rw_write_lock(lock: Ref[Rw_Lock]) {
     var round: u32 = 0
     while !rw_try_write_lock(lock) {
         rw_backoff(lock, __atomic_load(ref lock.state), round)
@@ -353,7 +353,7 @@ public func rw_write_lock(lock: Ref[Rw_Lock]) {
     }
 }
 
-public func rw_unlock(lock: Ref[Rw_Lock], all: bool = false) {
+func rw_unlock(lock: Ref[Rw_Lock], all: bool = false) {
     let slot: uint = rw_find(lock)
     require slot < rw_records
     if all {

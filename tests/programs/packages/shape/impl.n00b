@@ -1,8 +1,8 @@
-public record Point {
+record Point {
     x: int
     y: int
 }
 
-public record Secret {
+record Secret {
     private value: int
 }

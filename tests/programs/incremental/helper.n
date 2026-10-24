@@ -1,5 +1,5 @@
 import leaf
 
-public func helper_value() -> int {
+func helper_value() -> int {
     return leaf.leaf_value() + 1
 }

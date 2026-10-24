@@ -1,9 +1,9 @@
 import internal.blob
 
-public const sb_stage1_values: Array[u16] = [- sentbreak_stage1.bin -]'embed
+const sb_stage1_values: Array[u16] = [- sentbreak_stage1.bin -]'embed
 
-public inline func sb_stage1(i: u32) -> u16 {
+inline func sb_stage1(i: u32) -> u16 {
     return sb_stage1_values[i]
 }
 
-public const sb_stage2: Array[u8] = [- sentbreak_stage2.bin -]'embed
+const sb_stage2: Array[u8] = [- sentbreak_stage2.bin -]'embed

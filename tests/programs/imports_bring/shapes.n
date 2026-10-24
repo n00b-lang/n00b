@@ -1,7 +1,7 @@
-public func circle() -> int {
+func circle() -> int {
     return 9
 }
 
-public func triangle() -> int {
+func triangle() -> int {
     return 3
 }

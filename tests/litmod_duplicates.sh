@@ -35,9 +35,12 @@ builds() {
 fails_with same_module "literal modifier 'twice' for quotes literals is already declared in this module"
 fails_with builtin_dict "literal modifier 'dict' for dict literals is already declared in module 'builtin.containers.dict'"
 
-builds cross_module
+fails_with cross_module "literal modifier 'stamp' for quotes literals is already declared in module 'provider'"
 builds other_kind
 "$tmp/other_kind"
 builds public_alias
 "$tmp/public_alias" 2>&1 | grep -q ok
-fails_with private_alias "N00BB-T0067"
+fails_with unexported_alias "N00BB-T0067"
+builds alias_only
+"$tmp/alias_only" 2>&1 | grep -q ok
+fails_with alias_only_target "N00BB-T0067"

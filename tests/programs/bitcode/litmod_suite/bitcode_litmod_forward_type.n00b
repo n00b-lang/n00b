@@ -2,7 +2,7 @@ func value() -> int {
     return "ignored"'number
 }
 
-public alias litmod number = make_number
+alias litmod number = make_number
 quotes litmod make_number(raw: string) -> int fail: string {
     return 42
 }

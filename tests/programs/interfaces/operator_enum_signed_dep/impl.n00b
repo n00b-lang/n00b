@@ -1,1 +1,1 @@
-public enum Signed { negative = -7, following, zero = -0, positive = 7 }
+enum Signed { negative = -7, following, zero = -0, positive = 7 }

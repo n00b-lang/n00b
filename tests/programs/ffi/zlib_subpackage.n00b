@@ -1,4 +1,4 @@
-import archive
+import archive.zlib
 
 let text: Array[u8] = [97, 98, 99, 97, 98, 99, 97, 98, 99]
 try {

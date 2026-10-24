@@ -372,58 +372,58 @@ int32_t writ_bake_n00b_bake_free(uint64_t root) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Bake_Item_T layout(c) {
-    public key: i32
-    public value: i32
-    public hash: u64
-    public label: Foreign[i8]? until 0
+    key: i32
+    value: i32
+    hash: u64
+    label: Foreign[i8]? until 0
 }
 
 record Bake_Items_T layout(c) {
-    public data: Foreign[Bake_Item_T]? count len
-    public len: u64
-    public cap: u64
+    data: Foreign[Bake_Item_T]? count len
+    len: u64
+    cap: u64
 }
 
 record Bake_Variant_T layout(c) {
-    public kind: i32
-    public v: union by kind {
+    kind: i32
+    v: union by kind {
         1 => number: i64
         2 => text: Foreign[i8]? until 0
     }
 }
 
 record Bake_Slot_T layout(c) {
-    public key: Foreign[Bake_Item_T]?
-    public hash: u64
-    public value: i32
+    key: Foreign[Bake_Item_T]?
+    hash: u64
+    value: i32
 }
 
 record Bake_Table_T layout(c) {
-    public slots: Foreign[Bake_Slot_T]? count len
-    public len: u64
+    slots: Foreign[Bake_Slot_T]? count len
+    len: u64
 }
 
 record Bake_Root_T layout(c) {
-    public name: Foreign[i8]? until 0
-    public items: Bake_Items_T
-    public codes: Foreign[i32]? until 0
-    public variant_: Bake_Variant_T
-    public middle: Foreign[Bake_Item_T]?
-    public op: Foreign_Fn[(i64, i64) -> i64]?
-    public table: Bake_Table_T
-    public cache: i64
-    public fd: i32
-    public path: Foreign[i8]? until 0
+    name: Foreign[i8]? until 0
+    items: Bake_Items_T
+    codes: Foreign[i32]? until 0
+    variant_: Bake_Variant_T
+    middle: Foreign[Bake_Item_T]?
+    op: Foreign_Fn[(i64, i64) -> i64]?
+    table: Bake_Table_T
+    cache: i64
+    fd: i32
+    path: Foreign[i8]? until 0
 }
 
 record Bake_Root_Cell {
-    public raw: Foreign[Bake_Root_T]?
+    raw: Foreign[Bake_Root_T]?
 }
 
 alias type Bake_Root = Ref[Bake_Root_Cell]
@@ -445,16 +445,16 @@ enum Bake_Kind {
     BAKE_TEXT = 2
 }
 
-public const BAKE_QUERY_NAME: i32 = 0
-public const BAKE_QUERY_ITEMS: i32 = 1
-public const BAKE_QUERY_CODES: i32 = 2
-public const BAKE_QUERY_VARIANT: i32 = 3
-public const BAKE_QUERY_SHARED: i32 = 4
-public const BAKE_QUERY_MIDDLE: i32 = 5
-public const BAKE_QUERY_OP: i32 = 6
-public const BAKE_QUERY_HASH: i32 = 7
-public const BAKE_QUERY_CACHE: i32 = 8
-public const BAKE_QUERY_FD: i32 = 9
+const BAKE_QUERY_NAME: i32 = 0
+const BAKE_QUERY_ITEMS: i32 = 1
+const BAKE_QUERY_CODES: i32 = 2
+const BAKE_QUERY_VARIANT: i32 = 3
+const BAKE_QUERY_SHARED: i32 = 4
+const BAKE_QUERY_MIDDLE: i32 = 5
+const BAKE_QUERY_OP: i32 = 6
+const BAKE_QUERY_HASH: i32 = 7
+const BAKE_QUERY_CACHE: i32 = 8
+const BAKE_QUERY_FD: i32 = 9
 
 func bake_add(left: i64, right: i64) -> i64 {
     let result = __bake_add(left, right)

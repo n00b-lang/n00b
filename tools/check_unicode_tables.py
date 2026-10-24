@@ -22,15 +22,15 @@ C_VERSION = re.compile(
     r"export\s+string_t\s+unicode_version\s*\(void\)\s*\{\s*return\s+"
     r'"([^"]*)"\s*;\s*\}', re.S)
 C_EMBED = re.compile(r'%embed\s+"([^"]+)"')
-N_CONST = re.compile(r"^public const (\w+)(?:\s*:\s*([^=]+?))?\s*=\s*", re.M)
+N_CONST = re.compile(r"^const (\w+)(?:\s*:\s*([^=]+?))?\s*=\s*", re.M)
 N_VERSION = re.compile(
-    r'^public func version\(\) -> string \{\s*return "([^"]*)"\s*\}', re.M)
+    r'^func version\(\) -> string \{\s*return "([^"]*)"\s*\}', re.M)
 N_EMBED = re.compile(r"\[- (\S+) -\]'embed")
 N_ACCESSOR = re.compile(
-    r"^public (?:inline )?func (\w+)\([^)]*\) -> (\w+) \{\n"
+    r"^(?:inline )?func (\w+)\([^)]*\) -> (\w+) \{\n"
     r"    return (\w+)_values\[(?:row \* (\d+) \+ col|i)\]\n\}", re.M)
 N_STRINGS = re.compile(
-    r"^public (?:inline )?func (\w+)\([^)]*\) -> string \{\n"
+    r"^(?:inline )?func (\w+)\([^)]*\) -> string \{\n"
     r"    return internal\.blob\.str_at\(ref (\w+)_bytes, i\)\n\}", re.M)
 BLOB_CODES = {"u8": "B", "u16": "H", "u32": "I", "u64": "Q"}
 
@@ -110,7 +110,7 @@ def decode_blob(data, elem, width):
 
 def embedded_blob(path, text, key, referenced):
     source = N_EMBED.search(
-        text[text.index(f"public const {key}:"):]).group(1)
+        text[text.index(f"const {key}:"):]).group(1)
     blob = path.parent / source
     referenced.add(blob.resolve())
     return blob.read_bytes()

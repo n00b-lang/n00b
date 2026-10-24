@@ -1,4 +1,4 @@
-public const context_registers: uint = 48
+const context_registers: uint = 48
 
 record Thread_Context layout(c) {
     sp:        Ref[byte]?

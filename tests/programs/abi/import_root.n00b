@@ -1,2 +1,2 @@
 import import_dep
-public func root() -> int { return 2 }
+func root() -> int { return 2 }

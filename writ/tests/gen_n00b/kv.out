@@ -457,13 +457,13 @@ int32_t writ_kv_n00b_kv_iter_next(uint64_t it, void *result) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Db_Cell {
-    public raw: uint
+    raw: uint
 }
 
 alias type Db = Ref[Db_Cell]
@@ -474,8 +474,8 @@ func __db_cell(raw: uint) -> Db {
 }
 
 record Iter_Cell {
-    public raw: uint
-    public keep_db: Db?
+    raw: uint
+    keep_db: Db?
 }
 
 alias type Iter = Ref[Iter_Cell]
@@ -491,8 +491,8 @@ func __iter_cell_with_db(raw: uint, keep: Db) -> Iter {
 }
 
 record Entry {
-    public key: Array[u8]
-    public val: Array[u8]
+    key: Array[u8]
+    val: Array[u8]
 }
 
 enum Status {

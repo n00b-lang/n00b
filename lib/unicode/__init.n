@@ -23,9 +23,4 @@ package unicode {
     export internal.linebreak
     export builtin.encoding_of
     export generated.versions.version
-    export package query
-    export package bidi
-    export package collation
-    export package idna
-    export package security
 }

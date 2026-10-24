@@ -1483,11 +1483,11 @@ emit_layout_field(const n00b_t *g, writ_emit_t *emit, const writ_record_view_t *
     writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name);
     writ_str_t spec = field_spec(g, record, field);
     if (field->type->kind != WRIT_TYPE_UNION) {
-        writ_emit_line(emit, "public %.*s: %.*s", S(name), S(spec));
+        writ_emit_line(emit, "%.*s: %.*s", S(name), S(spec));
         return;
     }
     const writ_record_view_t *tagged = writ_model_record_at(g->model, field->type->decl);
-    writ_emit_open(emit, "public %.*s: union by %.*s", S(name),
+    writ_emit_open(emit, "%.*s: union by %.*s", S(name),
                    S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, record->fields[field->tag_field].name)));
     for (size_t a = 0; a < tagged->arms_count; a++) {
         const writ_union_arm_view_t *arm = &tagged->arms[a];
@@ -1658,8 +1658,8 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
     writ_str_t table = callback_table(g, name, "callbacks");
     writ_emit_line(emit, "");
     writ_emit_open(emit, "record %.*s", S(entry));
-    writ_emit_line(emit, "public value: %.*s", S(name));
-    writ_emit_line(emit, "public once: bool");
+    writ_emit_line(emit, "value: %.*s", S(name));
+    writ_emit_line(emit, "once: bool");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
     emit_table(emit, table, entry);
@@ -1722,7 +1722,7 @@ emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
         writ_emit_open(emit, "record %.*s_Arguments layout(c)", S(name));
         for (size_t i = 0; i < callback->slots_count; i++) {
             if (i != receiver) {
-                writ_emit_line(emit, "public %.*s: %.*s",
+                writ_emit_line(emit, "%.*s: %.*s",
                                S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, callback->slots[i].name)),
                                S(scalar_type(g, callback->slots[i].type)));
             }
@@ -1832,10 +1832,10 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_str_t initial = typed ? writ_str_format(g->session, "unsafe_cast[%.*s] raw", S(typed->raw_type))
                                : writ_cstr("raw");
     writ_emit_open(emit, "record %.*s_Cell", S(type));
-    writ_emit_line(emit, "public raw: %.*s", S(typed ? typed->raw_type : writ_cstr("uint")));
+    writ_emit_line(emit, "raw: %.*s", S(typed ? typed->raw_type : writ_cstr("uint")));
     for (size_t s = 0; s < source_count; s++) {
         fields[s] = keep_field(g, sources[s]);
-        writ_emit_line(emit, "public %.*s: %.*s?", S(fields[s]), S(sources[s]));
+        writ_emit_line(emit, "%.*s: %.*s?", S(fields[s]), S(sources[s]));
     }
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
@@ -1880,9 +1880,9 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
 {
     const writ_model_t *model = g->model;
     writ_emit_open(emit, "record Error");
-    writ_emit_line(emit, "public code: %.*s", S(code_type(g)));
-    writ_emit_line(emit, "public text: string?");
-    writ_emit_line(emit, "public fn: string");
+    writ_emit_line(emit, "code: %.*s", S(code_type(g)));
+    writ_emit_line(emit, "text: string?");
+    writ_emit_line(emit, "fn: string");
     writ_emit_close(emit, nullptr);
     for (size_t i = 0; handles && i < writ_model_handle_count(model); i++) {
         emit_handle_type(g, emit, writ_model_handle_at(model, i));
@@ -1899,7 +1899,7 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
             for (size_t f = 0; f < record->fields_count; f++) {
                 const writ_slot_view_t *field = &record->fields[f];
                 if (writ_c_count_field(model, field).length) {
-                    writ_emit_line(emit, "public %.*s: Array[%.*s]",
+                    writ_emit_line(emit, "%.*s: Array[%.*s]",
                                    S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, field->name)),
                                    S(scalar_type(g, field->type->target)));
                 }
@@ -1952,9 +1952,9 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_CONST, constant->name);
         mark(g, emit, constant->declared_at, constant->name);
         if (constant->text.length) {
-            writ_emit_line(emit, "public const %.*s: string = \"%.*s\"", S(name), S(constant->text));
+            writ_emit_line(emit, "const %.*s: string = \"%.*s\"", S(name), S(constant->text));
         } else {
-            writ_emit_line(emit, "public const %.*s: %.*s = %lld", S(name), S(scalar_type(g, constant->type)),
+            writ_emit_line(emit, "const %.*s: %.*s = %lld", S(name), S(scalar_type(g, constant->type)),
                            (long long)constant->value);
         }
     }
@@ -2202,10 +2202,10 @@ emit_result_types(const wrapper_t *w, writ_emit_t *emit, const uint32_t *outs, s
         writ_emit_line(emit, "");
         writ_emit_open(emit, "record %.*s", S(result_type_name(w)));
         if (multiple_success) {
-            writ_emit_line(emit, "public outcome: %.*s", S(outcome_type_name(w)));
+            writ_emit_line(emit, "outcome: %.*s", S(outcome_type_name(w)));
         }
         for (size_t i = 0; i < count; i++) {
-            writ_emit_line(emit, "public %.*s: %.*s", S(local_name(w, outs[i])), S(item_type(w->g, w->fn, w->plan, outs[i])));
+            writ_emit_line(emit, "%.*s: %.*s", S(local_name(w, outs[i])), S(item_type(w->g, w->fn, w->plan, outs[i])));
         }
         writ_emit_close(emit, nullptr);
     }
@@ -2448,7 +2448,7 @@ emit_options_type(const wrapper_t *w, writ_emit_t *emit, const writ_record_view_
     writ_emit_open(emit, "record %.*s", S(options_type_name(w)));
     for (size_t f = 0; f < record->fields_count; f++) {
         if (f != record->presence_field) {
-            writ_emit_line(emit, "public %.*s: %.*s?", S(keyword_name(w->g, &record->fields[f])),
+            writ_emit_line(emit, "%.*s: %.*s?", S(keyword_name(w->g, &record->fields[f])),
                            S(scalar_type(w->g, record->fields[f].type)));
         }
     }
@@ -3140,7 +3140,7 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
                     fn->slots_count, result, fn->is_pure);
     writ_emit_line(emit, "");
     mark(g, emit, fn->declared_at, fn->contract_name);
-    writ_emit_text(emit, "public func %.*s_raw(", S(bound.name));
+    writ_emit_text(emit, "func %.*s_raw(", S(bound.name));
     for (size_t s = 0; s < fn->slots_count; s++) {
         writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
         writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(types[s]));

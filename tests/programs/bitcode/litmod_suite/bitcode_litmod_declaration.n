@@ -1,4 +1,4 @@
-public alias litmod e = echo
+alias litmod e = echo
 quotes litmod echo(raw: string) -> string fail: string {
     return raw
 }
@@ -7,12 +7,12 @@ int litmod echo(repr: string) -> string fail: string {
     return repr
 }
 
-public alias litmod ht = hex_text
+alias litmod ht = hex_text
 hex litmod hex_text(digits: string) -> string fail: string {
     return digits
 }
 
-public alias litmod ft = float_text
+alias litmod ft = float_text
 float litmod float_text(digits: string) -> string fail: string {
     return digits
 }

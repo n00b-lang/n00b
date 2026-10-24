@@ -1,4 +1,4 @@
-public alias litmod mirror = build_dict
+alias litmod mirror = build_dict
 dict litmod build_dict(items: Array[Tuple[int, int]]) -> Array[Tuple[int, int]] fail: string {
     return items
 }

@@ -1,34 +1,34 @@
 import forest
 
-public record Tree_Node {
-    public label: int
-    public kids: forest.Forest
+record Tree_Node {
+    label: int
+    kids: forest.Forest
 }
 
-public record Pair {
-    public left: 'T
-    public right: 'T
+record Pair {
+    left: 'T
+    right: 'T
 }
 
-public var shared: Tree_Node = make_tree(forest.make_forest(2))
+var shared: Tree_Node = make_tree(forest.make_forest(2))
 
-public func make_tree(kids: forest.Forest) -> Tree_Node {
+func make_tree(kids: forest.Forest) -> Tree_Node {
     return (label = 1, kids = kids)
 }
 
-public func depth(item: Tree_Node) -> int {
+func depth(item: Tree_Node) -> int {
     return forest.count(item.kids) - 2
 }
 
-public func measured(item: forest.Forest) -> int {
+func measured(item: forest.Forest) -> int {
     return item.measure()
 }
 
-public func wrapped(item: 'T) -> Pair['T] {
+func wrapped(item: 'T) -> Pair['T] {
     return (left = item, right = item)
 }
 
-public func paired(item: forest.Forest) -> int {
+func paired(item: forest.Forest) -> int {
     var pair: Pair[forest.Forest] = wrapped(item)
     return forest.count(pair.left) + forest.count(pair.right)
 }

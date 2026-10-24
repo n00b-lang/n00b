@@ -1,2 +1,2 @@
 import cycle_long_a
-public func c() -> int { return 3 }
+func c() -> int { return 3 }

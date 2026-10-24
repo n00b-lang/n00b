@@ -6,7 +6,7 @@ import generated.combining
 import generated.eaw
 import generated.proplist
 
-public const max_cp = 0x110000
+const max_cp = 0x110000
 
 func general_category(cp: char) -> internal.types.Gc {
     if cast[u32] cp >= max_cp {

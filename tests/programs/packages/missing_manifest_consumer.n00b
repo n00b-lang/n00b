@@ -1,3 +1,9 @@
 import bare.impl
+import bare.extra as x
 
 require bare.impl.answer() == 1
+require bare.impl.limit == 3
+require bare.impl.Mode.quiet != bare.impl.Mode.loud
+require x.doubled() == 2
+require "a"'stamp == 4
+require "a"'st == 4

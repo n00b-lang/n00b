@@ -1,5 +1,13 @@
 record DefaultRecord { field: int }
 record AbstractThing { private field: int }
+private record ModuleRecord { field: int }
+record Sealed {
+    open: int
+    private {
+        secret: int
+    }
+}
 enum DefaultState { ready, done }
 alias type DefaultAlias = int
+var shared: int = 4
 func identity(value: int) -> int { return value }

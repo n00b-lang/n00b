@@ -1112,7 +1112,7 @@ test(
            meson.current_source_dir() / 'tests' / 'programs'
                / 'import_cycles' / 'initializer' / 'initializer_cycle.n',
            'N00BB-L0040',
-           'beta.n:3:21'],
+           'beta.n:3:14'],
     env: ['N00B_PATH=' + (meson.current_source_dir() / 'tests'
         / 'programs' / 'import_cycles' / 'initializer')],
     timeout: 120,

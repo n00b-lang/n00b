@@ -27,12 +27,8 @@ interface_context_hook_symbol(parse_sym_entry_t *symbol)
 static core_string_t
 n00bb_visibility_from_code(uint32_t visibility)
 {
-    switch (visibility) {
-    case 0: return (core_string_t){0};
-    case 1: return CORE_STRING_STATIC("private");
-    case 2: return CORE_STRING_STATIC("public");
-    }
-    return (core_string_t){0};
+    return visibility == 1 ? CORE_STRING_STATIC("private")
+                           : (core_string_t){0};
 }
 
 static uint64_t
@@ -1196,7 +1192,6 @@ interface_restore_package_declarations(
                 if (!ok) break;
                 uint8_t flags = data[at++];
                 export.renamed = (flags & 1u) != 0;
-                export.subpackage = (flags & 2u) != 0;
                 if (!(flags & 4u)) export.grantee = (core_string_t){0};
                 core_list_push(package.exports, export);
             }
@@ -1216,9 +1211,9 @@ static core_string_t
 interface_visibility_name(th_env_visibility_t visibility)
 {
     switch (visibility) {
-    case TH_ENV_PRIVATE: return CORE_STRING_STATIC("private");
-    case TH_ENV_PACKAGE: return CORE_STRING_STATIC("public");
-    case TH_ENV_PUBLIC: return CORE_STRING_STATIC("public");
+    case TH_ENV_PRIVATE:
+    case TH_ENV_PACKAGE: return CORE_STRING_STATIC("private");
+    case TH_ENV_PUBLIC: return (core_string_t){0};
     }
     return (core_string_t){0};
 }
@@ -1288,7 +1283,6 @@ ensure_interface_package_scope(n00bb_interface_context_t *loader,
     if (!binding || !parse_sym_set_binding(binding,
             CORE_STRING_STATIC("n00bb.package-unit"), unit)) return nullptr;
     binding->exposed_scope = scope;
-    binding->visibility = CORE_STRING_STATIC("public");
     return scope;
 }
 
@@ -2086,13 +2080,6 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                             "could not retain interface type exposure");
                         return false;
                     }
-                    if (exposure[0] && !parse_sym_set_binding(symbol,
-                            CORE_STRING_STATIC("n00bb.exposed-record"),
-                            symbol)) {
-                        if (failure) *failure = CORE_STRING_STATIC(
-                            "could not retain interface type exposure");
-                        return false;
-                    }
                 }
                 if (defined_shape && (!shape || !definition_key
                         || !th_type_define(state->types, definition_key,
@@ -2230,6 +2217,34 @@ restore_interface_litmods(n00bb_interface_context_t *loader,
     return at == size;
 }
 
+static bool
+restore_interface_litmod_aliases(n00bb_interface_context_t *loader,
+                                 core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    core_string_t module_name = unit->module.identifier;
+    size_t size = 0;
+    const uint8_t *data = module_name.data
+        ? interface_owned_metadata(loader, TH_ENV_METADATA_ENVIRONMENT,
+            module_name, CORE_STRING_STATIC("n00b.module-litmod-aliases"), 1,
+            &size)
+        : nullptr;
+    if (!data) return true;
+    if (size < 4) return false;
+    uint32_t count = read_u32_le(data);
+    size_t at = 4;
+    for (uint32_t i = 0; i < count; i++) {
+        core_string_t alias = {0}, target = {0};
+        if (!read_manifest_text(state, data, size, &at, &alias)
+            || !read_manifest_text(state, data, size, &at, &target)
+            || !alias.data || !target.data
+            || !register_user_litmod_alias(nullptr, unit, nullptr, alias,
+                                           target))
+            return false;
+    }
+    return at == size;
+}
+
 bool
 finish_semantic_unit(void *context, core_translation_unit_t *unit)
 {
@@ -2239,7 +2254,8 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
         core_string_t failure = {0};
         bool restored = materialize_interface_module_symbols(loader, unit,
                                                              &failure);
-        if (restored && !restore_interface_litmods(loader, unit)) {
+        if (restored && (!restore_interface_litmods(loader, unit)
+                         || !restore_interface_litmod_aliases(loader, unit))) {
             restored = false;
             failure = CORE_STRING_STATIC("interface module has malformed literal modifiers");
         }

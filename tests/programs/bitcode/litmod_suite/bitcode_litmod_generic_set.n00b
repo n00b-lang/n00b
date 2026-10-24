@@ -1,4 +1,4 @@
-public alias litmod wrap = identity
+alias litmod wrap = identity
 set litmod identity(items: Array['T]) -> Array['T] fail: string {
     return items
 }

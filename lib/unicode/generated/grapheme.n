@@ -1,9 +1,9 @@
 import internal.blob
 
-public const gcb_stage1_values: Array[u16] = [- grapheme_stage1.bin -]'embed
+const gcb_stage1_values: Array[u16] = [- grapheme_stage1.bin -]'embed
 
-public inline func gcb_stage1(i: u32) -> u16 {
+inline func gcb_stage1(i: u32) -> u16 {
     return gcb_stage1_values[i]
 }
 
-public const gcb_stage2: Array[u8] = [- grapheme_stage2.bin -]'embed
+const gcb_stage2: Array[u8] = [- grapheme_stage2.bin -]'embed

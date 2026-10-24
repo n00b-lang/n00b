@@ -1,9 +1,9 @@
 import internal.blob
 
-public const nqc_stage1_values: Array[u16] = [- normprops_stage1.bin -]'embed
+const nqc_stage1_values: Array[u16] = [- normprops_stage1.bin -]'embed
 
-public inline func nqc_stage1(i: u32) -> u16 {
+inline func nqc_stage1(i: u32) -> u16 {
     return nqc_stage1_values[i]
 }
 
-public const nqc_stage2: Array[u8] = [- normprops_stage2.bin -]'embed
+const nqc_stage2: Array[u8] = [- normprops_stage2.bin -]'embed

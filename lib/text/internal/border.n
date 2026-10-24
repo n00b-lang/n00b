@@ -19,7 +19,7 @@ flagset Border_Set {
     none = nil
 }
 
-public const border_plain: Border_Theme = (
+const border_plain: Border_Theme = (
     horizontal  = cast[char] 0x2500,
     vertical    = cast[char] 0x2502,
     upper_left  = cast[char] 0x250c,
@@ -32,7 +32,7 @@ public const border_plain: Border_Theme = (
     left_t      = cast[char] 0x251c,
     right_t     = cast[char] 0x2524)
 
-public const border_bold: Border_Theme = (
+const border_bold: Border_Theme = (
     horizontal  = cast[char] 0x2501,
     vertical    = cast[char] 0x2503,
     upper_left  = cast[char] 0x250f,
@@ -45,7 +45,7 @@ public const border_bold: Border_Theme = (
     left_t      = cast[char] 0x2523,
     right_t     = cast[char] 0x252b)
 
-public const border_double: Border_Theme = (
+const border_double: Border_Theme = (
     horizontal  = cast[char] 0x2550,
     vertical    = cast[char] 0x2551,
     upper_left  = cast[char] 0x2554,
@@ -58,7 +58,7 @@ public const border_double: Border_Theme = (
     left_t      = cast[char] 0x2560,
     right_t     = cast[char] 0x2563)
 
-public const border_dash: Border_Theme = (
+const border_dash: Border_Theme = (
     horizontal  = cast[char] 0x2504,
     vertical    = cast[char] 0x2506,
     upper_left  = cast[char] 0x250c,
@@ -71,7 +71,7 @@ public const border_dash: Border_Theme = (
     left_t      = cast[char] 0x251c,
     right_t     = cast[char] 0x2524)
 
-public const border_bold_dash: Border_Theme = (
+const border_bold_dash: Border_Theme = (
     horizontal  = cast[char] 0x2505,
     vertical    = cast[char] 0x2507,
     upper_left  = cast[char] 0x250f,
@@ -84,7 +84,7 @@ public const border_bold_dash: Border_Theme = (
     left_t      = cast[char] 0x2523,
     right_t     = cast[char] 0x252b)
 
-public const border_dash2: Border_Theme = (
+const border_dash2: Border_Theme = (
     horizontal  = cast[char] 0x2508,
     vertical    = cast[char] 0x250a,
     upper_left  = cast[char] 0x250c,
@@ -97,7 +97,7 @@ public const border_dash2: Border_Theme = (
     left_t      = cast[char] 0x251c,
     right_t     = cast[char] 0x2524)
 
-public const border_bold_dash2: Border_Theme = (
+const border_bold_dash2: Border_Theme = (
     horizontal  = cast[char] 0x2509,
     vertical    = cast[char] 0x250b,
     upper_left  = cast[char] 0x250f,
@@ -110,7 +110,7 @@ public const border_bold_dash2: Border_Theme = (
     left_t      = cast[char] 0x2523,
     right_t     = cast[char] 0x252b)
 
-public const border_ascii: Border_Theme = (
+const border_ascii: Border_Theme = (
     horizontal  = cast[char] 0x002d,
     vertical    = cast[char] 0x007c,
     upper_left  = cast[char] 0x002f,
@@ -123,7 +123,7 @@ public const border_ascii: Border_Theme = (
     left_t      = cast[char] 0x007c,
     right_t     = cast[char] 0x007c)
 
-public const border_rounded: Border_Theme = (
+const border_rounded: Border_Theme = (
     horizontal  = cast[char] 0x2500,
     vertical    = cast[char] 0x2502,
     upper_left  = cast[char] 0x256d,

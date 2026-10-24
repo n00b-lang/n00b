@@ -1,2 +1,2 @@
 import cycle_second
-public func first() -> int { return 1 }
+func first() -> int { return 1 }

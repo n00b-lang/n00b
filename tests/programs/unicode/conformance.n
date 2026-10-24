@@ -1,5 +1,8 @@
 import sys.env
 import unicode
+import unicode.bidi
+import unicode.collation
+import unicode.idna
 import gen_conformance
 
 private func name_is(got: string, want: string) -> bool {

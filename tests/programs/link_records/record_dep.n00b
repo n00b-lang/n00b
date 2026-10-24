@@ -1,1 +1,1 @@
-public record SharedRecord { remote: int }
+record SharedRecord { remote: int }

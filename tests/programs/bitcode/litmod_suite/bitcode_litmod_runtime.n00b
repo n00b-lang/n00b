@@ -1,4 +1,4 @@
-public alias litmod ints = identity_ints
+alias litmod ints = identity_ints
 sequence litmod identity_ints(items: Array[int]) -> Array[int] fail: string {
     return items
 }

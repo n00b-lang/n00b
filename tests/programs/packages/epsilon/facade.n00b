@@ -1,7 +1,10 @@
+when true {
+    import impl
+}
+
 package epsilon {
     when true {
         when true {
-            import impl
             export impl.answer
         }
     }

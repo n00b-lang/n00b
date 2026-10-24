@@ -46,8 +46,15 @@ typedef struct {
     core_string_t package_namespace;
     bool is_default_package;
     bool interface_module;
+    bool open_module;
     n00bb_native_declarations_t natives;
 } n00bb_source_origin_t;
+
+typedef struct {
+    core_string_t package_id;
+    bool has_manifest;
+} n00bb_manifest_fact_t;
+core_list_decl(n00bb_manifest_fact_t);
 
 typedef struct {
     core_string_t path;
@@ -77,6 +84,8 @@ struct n00bb_resolver_t {
     uint64_t package_syntax_profile;
     core_list_t(n00bb_generated_module_t) generated;
     pthread_mutex_t generated_lock;
+    core_list_t(n00bb_manifest_fact_t) manifest_facts;
+    pthread_mutex_t manifest_facts_lock;
 };
 
 static const core_string_t source_extensions[] = {
@@ -318,18 +327,45 @@ add_root(n00bb_resolver_t *resolver, core_string_t path,
     core_list_push(resolver->roots, root);
 }
 
-static void
-add_environment_root(n00bb_resolver_t *resolver, core_string_t cwd,
-                     core_string_t entry)
+static bool
+path_within(core_string_t path, core_string_t directory)
 {
-    core_string_t absolute = path_is_absolute(entry) ? core_string_dup(entry)
-                                                     : join_path(cwd, entry);
-    add_root(resolver, absolute, false);
-    core_free(absolute.data);
+    if (!core_string_starts_with(path, directory)) return false;
+    size_t length = directory.u8_bytes;
+    return path.u8_bytes == length
+        || (length && is_path_separator(directory.data[length - 1]))
+        || is_path_separator(path.data[length]);
 }
 
 static void
-add_environment_roots(n00bb_resolver_t *resolver, core_string_t cwd)
+add_environment_root(n00bb_resolver_t *resolver, core_string_t cwd,
+                     core_string_t entry, core_diagnostics_t *diagnostics)
+{
+    if (path_is_absolute(entry)) {
+        add_root(resolver, entry, false);
+        return;
+    }
+    core_string_t joined = join_path(cwd, entry);
+    core_string_t resolved = canonical_path(joined);
+    if (resolved.data && !path_within(resolved, cwd)) {
+        core_buffer_t message = {0};
+        core_buffer_printf(&message,
+            "N00B_PATH entry '%.*s' resolves to '%.*s', outside the current "
+            "directory; relative entries must stay inside it",
+            (int)entry.u8_bytes, entry.data,
+            (int)resolved.u8_bytes, resolved.data);
+        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR,
+            CORE_STRING_STATIC("N00BB-B0034"), core_buffer_string(&message));
+        core_buffer_release(&message);
+    }
+    else add_root(resolver, joined, false);
+    core_free(resolved.data);
+    core_free(joined.data);
+}
+
+static void
+add_environment_roots(n00bb_resolver_t *resolver, core_string_t cwd,
+                      core_diagnostics_t *diagnostics)
 {
 #ifdef _WIN32
     DWORD cap = GetEnvironmentVariableW(L"N00B_PATH", nullptr, 0);
@@ -343,39 +379,19 @@ add_environment_roots(n00bb_resolver_t *resolver, core_string_t cwd)
     core_string_t value = core_string_from_cstr(getenv("N00B_PATH"));
 #endif
     if (!value.data) return;
+    core_string_t base = cwd;
+    for (size_t i = 0; i < resolver->roots.len; i++)
+        if (resolver->roots.data[i].is_default_package)
+            base = resolver->roots.data[i].path;
     size_t start = 0;
     for (size_t i = 0; i <= value.u8_bytes; i++) {
         if (i < value.u8_bytes && value.data[i] != N00BB_LIST_SEP) continue;
         if (i > start)
-            add_environment_root(resolver, cwd,
-                core_string_slice(value, start, i - start));
+            add_environment_root(resolver, base,
+                core_string_slice(value, start, i - start), diagnostics);
         start = i + 1;
     }
     core_free(value.data);
-}
-
-static void
-add_executable_library_roots(n00bb_resolver_t *resolver, core_string_t argv0)
-{
-    core_string_t exe = n00bb_executable_path(argv0);
-    if (!exe.data) return;
-    core_string_t dir = parent_path(exe);
-    for (;;) {
-        core_string_t n00b = join_path(dir, CORE_STRING_STATIC("n00b"));
-        core_string_t lib = join_path(n00b, CORE_STRING_STATIC("lib"));
-        add_root(resolver, lib, false);
-        core_free(lib.data);
-        core_free(n00b.data);
-        core_string_t parent = parent_path(dir);
-        if (core_string_eq(parent, dir)) {
-            core_free(parent.data);
-            break;
-        }
-        core_free(dir.data);
-        dir = parent;
-    }
-    core_free(dir.data);
-    core_free(exe.data);
 }
 
 static void
@@ -394,7 +410,7 @@ add_bundled_library_root(n00bb_resolver_t *resolver, core_string_t argv0)
 }
 
 n00bb_resolver_t *
-n00bb_resolver_new(core_string_t argv0)
+n00bb_resolver_new(core_string_t argv0, core_diagnostics_t *diagnostics)
 {
     core_string_t cwd = cwd_path();
     if (!cwd.data) return nullptr;
@@ -404,14 +420,19 @@ n00bb_resolver_new(core_string_t argv0)
     resolver->manifests_indexed = false;
     resolver->generated = core_list_new(n00bb_generated_module_t);
     pthread_mutex_init(&resolver->generated_lock, nullptr);
+    resolver->manifest_facts = core_list_new(n00bb_manifest_fact_t);
+    pthread_mutex_init(&resolver->manifest_facts_lock, nullptr);
     add_bundled_library_root(resolver, argv0);
     add_root(resolver, cwd, true);
-    add_environment_roots(resolver, cwd);
-    add_executable_library_roots(resolver, argv0);
-    core_string_t *roots = core_alloc_array(core_string_t,
-                                            resolver->roots.len);
+    add_environment_roots(resolver, cwd, diagnostics);
+    core_snapshot_root_t *roots = core_alloc_array(core_snapshot_root_t,
+                                                   resolver->roots.len);
     for (size_t i = 0; i < resolver->roots.len; i++)
-        roots[i] = resolver->roots.data[i].path;
+        roots[i] = (core_snapshot_root_t){
+            .path = resolver->roots.data[i].path,
+            .enters_fileless_directories =
+                resolver->roots.data[i].is_default_package,
+        };
     resolver->inventory = core_snapshot_inventory_new(roots,
         resolver->roots.len, accept_source_path, nullptr);
     if (resolver->inventory && !getenv("N00BB_NO_PACKAGE_CACHE")) {
@@ -455,7 +476,42 @@ n00bb_resolver_free(n00bb_resolver_t *resolver)
     }
     core_list_free(resolver->generated);
     pthread_mutex_destroy(&resolver->generated_lock);
+    for (size_t i = 0; i < resolver->manifest_facts.len; i++)
+        core_free(resolver->manifest_facts.data[i].package_id.data);
+    core_list_free(resolver->manifest_facts);
+    pthread_mutex_destroy(&resolver->manifest_facts_lock);
     core_free(resolver);
+}
+
+bool
+n00bb_resolver_known_manifest(n00bb_resolver_t *resolver,
+                              core_string_t package_id, bool *has_manifest)
+{
+    pthread_mutex_lock(&resolver->manifest_facts_lock);
+    bool known = false;
+    for (size_t i = 0; !known && i < resolver->manifest_facts.len; i++) {
+        n00bb_manifest_fact_t *fact = &resolver->manifest_facts.data[i];
+        if (!core_string_eq(fact->package_id, package_id)) continue;
+        *has_manifest = fact->has_manifest;
+        known = true;
+    }
+    pthread_mutex_unlock(&resolver->manifest_facts_lock);
+    return known;
+}
+
+void
+n00bb_resolver_remember_manifest(n00bb_resolver_t *resolver,
+                                 core_string_t package_id, bool has_manifest)
+{
+    bool known = false;
+    if (n00bb_resolver_known_manifest(resolver, package_id, &known)) return;
+    core_string_t owned = core_string_dup(package_id);
+    if (!owned.data) return;
+    pthread_mutex_lock(&resolver->manifest_facts_lock);
+    core_list_push(resolver->manifest_facts,
+        ((n00bb_manifest_fact_t){.package_id = owned,
+                                 .has_manifest = has_manifest}));
+    pthread_mutex_unlock(&resolver->manifest_facts_lock);
 }
 
 bool
@@ -807,6 +863,22 @@ n00bb_source_file_set_package(core_source_file_t *source,
     set_source_origin(source, id, package_namespace, is_default);
 }
 
+void
+n00bb_mark_open_module(core_translation_unit_t *unit)
+{
+    n00bb_source_origin_t *origin = unit
+        ? core_source_file_user_data(&unit->source) : nullptr;
+    if (origin) origin->open_module = true;
+}
+
+bool
+n00bb_open_module(const core_translation_unit_t *unit)
+{
+    const n00bb_source_origin_t *origin = unit
+        ? core_source_file_user_data(&unit->source) : nullptr;
+    return origin && origin->open_module;
+}
+
 core_string_t
 n00bb_package_namespace(const core_translation_unit_t *unit)
 {
@@ -859,11 +931,8 @@ unit_root_index(const n00bb_resolver_t *resolver,
             if (root->is_default_package) return i;
             continue;
         }
-        core_string_t id = origin->package_id;
         size_t length = root->path.u8_bytes;
-        bool prefix = id.u8_bytes >= length
-            && !memcmp(id.data, root->path.data, length)
-            && (id.u8_bytes == length || is_path_separator(id.data[length]));
+        bool prefix = path_within(origin->package_id, root->path);
         if (prefix && (best == SIZE_MAX || length > best_length)) {
             best = i;
             best_length = length;
@@ -1103,26 +1172,48 @@ n00bb_resolver_store_package_syntax(n00bb_resolver_t *resolver,
     }
 }
 
+static bool
+candidate_in_package(const n00bb_resolver_t *resolver,
+                     const n00bb_manifest_candidate_t *candidate,
+                     core_string_t package_id)
+{
+    const n00bb_root_t *root = &resolver->roots.data[candidate->root_index];
+    core_string_t name = candidate->module.identifier;
+    int64_t separator = core_string_find_byte(name, '.');
+    if (separator < 0)
+        return core_string_eq(package_id, root->is_default_package
+            ? CORE_STRING_STATIC("default") : root->path);
+    size_t prefix = root->path.u8_bytes;
+    return package_id.u8_bytes == prefix + 1 + (size_t)separator
+        && !memcmp(package_id.data, root->path.data, prefix)
+        && package_id.data[prefix] == '/'
+        && !memcmp(package_id.data + prefix + 1, name.data,
+                   (size_t)separator);
+}
+
 static core_module_resolve_status_t
-discover_files(void *context, const core_module_spec_t *module,
+walk_manifests(n00bb_resolver_t *resolver, core_string_t declared_name,
+               core_string_t package_id,
                core_module_discovery_emit_fn emit, void *emit_context)
 {
-    n00bb_resolver_t *resolver = context;
-    if (!resolver || !module || !emit) return CORE_MODULE_RESOLVE_ERROR;
     if (!resolver->manifests_indexed
         && !n00bb_resolver_prepare_packages(resolver))
         return CORE_MODULE_RESOLVE_ERROR;
     bool found = false;
     for (size_t i = 0; i < resolver->manifests.len; i++) {
         n00bb_manifest_candidate_t *candidate = &resolver->manifests.data[i];
+        if (package_id.data
+            && !candidate_in_package(resolver, candidate, package_id))
+            continue;
         if (resolver->package_syntax_profile) {
             core_buffer_t names = {0};
             bool cached = core_snapshot_inventory_product_read(
                 resolver->inventory, candidate->root_index,
                 candidate->relative, PACKAGE_SYNTAX_KIND,
                 resolver->package_syntax_profile, &names);
-            bool matches = !cached || syntax_index_has_name(
-                &names, module->identifier);
+            bool matches = !cached || (declared_name.data
+                ? syntax_index_has_name(&names, declared_name)
+                : names.byte_len != 0);
             core_buffer_release(&names);
             if (!matches) continue;
         }
@@ -1131,6 +1222,27 @@ discover_files(void *context, const core_module_spec_t *module,
             return CORE_MODULE_RESOLVE_ERROR;
     }
     return found ? CORE_MODULE_RESOLVED : CORE_MODULE_NOT_FOUND;
+}
+
+static core_module_resolve_status_t
+discover_files(void *context, const core_module_spec_t *module,
+               core_module_discovery_emit_fn emit, void *emit_context)
+{
+    n00bb_resolver_t *resolver = context;
+    if (!resolver || !module || !emit) return CORE_MODULE_RESOLVE_ERROR;
+    return walk_manifests(resolver, module->identifier, (core_string_t){0},
+                          emit, emit_context);
+}
+
+bool
+n00bb_resolver_package_manifests(n00bb_resolver_t *resolver,
+                                 core_string_t package_id,
+                                 core_module_discovery_emit_fn emit,
+                                 void *emit_context)
+{
+    return resolver && emit && package_id.data
+        && walk_manifests(resolver, (core_string_t){0}, package_id, emit,
+                          emit_context) != CORE_MODULE_RESOLVE_ERROR;
 }
 
 bool

@@ -1,6 +1,6 @@
 import ping
 
-public func pong(n: int) -> int {
+func pong(n: int) -> int {
     if n <= 0 {
         return 0
     }

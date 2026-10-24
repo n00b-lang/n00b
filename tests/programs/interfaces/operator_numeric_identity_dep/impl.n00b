@@ -1,1 +1,1 @@
-public func identity(value) { return +value }
+func identity(value) { return +value }

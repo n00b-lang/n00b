@@ -1552,8 +1552,7 @@ find_switch_variant_candidate(parse_grammar_t *grammar,
             if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type || !arms
                 || !core_string_eq(arms->scope_tag,
                                    CORE_STRING_STATIC("variant"))
-                || (unit != root && !core_string_eq(symbol->visibility,
-                                                    CORE_STRING_STATIC("public")))
+                || !n00bb_member_visible_to(root, unit, symbol)
                 || !th_is_closed(state->types, symbol->type)) continue;
             bool matches = true;
             for (size_t i = 0; i < names->len; i++) {

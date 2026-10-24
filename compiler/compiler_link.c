@@ -1102,38 +1102,12 @@ field_access_is_visible(core_translation_unit_t *use_unit,
                         parse_sym_entry_t *field)
 {
     if (!use_unit || !owner_unit || !owner_type || !field) return false;
-    bool same_package = n00bb_same_package(use_unit, owner_unit);
-    if (core_string_eq(field->visibility, CORE_STRING_STATIC("private")))
-        return use_unit == owner_unit;
-    if (field->kind == PARSE_SYM_ENUM_CONST) {
-        if (core_string_eq(owner_type->visibility,
-                           CORE_STRING_STATIC("private")))
-            return use_unit == owner_unit;
-        return same_package || core_string_eq(owner_type->visibility,
-                                              CORE_STRING_STATIC("public"));
-    }
-    if (same_package) return true;
-    if (!core_string_eq(field->visibility, CORE_STRING_STATIC("public"))
-        || parse_sym_binding(owner_type,
-            CORE_STRING_STATIC("n00bb.opaque-type"))) return false;
-    return core_string_eq(owner_type->visibility,
-        CORE_STRING_STATIC("public"))
-        || parse_sym_binding(owner_type,
-            CORE_STRING_STATIC("n00bb.exposed-record")) != nullptr;
-}
-static bool
-imported_symbol_is_visible(parse_grammar_t *grammar,
-                            core_translation_unit_t *use_unit,
-                            core_translation_unit_t *owner,
-                            parse_sym_entry_t *symbol)
-{
-    if (!symbol) return false;
-    if (context_symbol(grammar, symbol)) return true;
-    if (core_string_eq(symbol->visibility, CORE_STRING_STATIC("public")))
-        return true;
-    if (symbol_is_public_declaration(symbol))
-        return true;
-    return use_unit == owner;
+    if (use_unit == owner_unit) return true;
+    if (member_is_private(field, owner_type)) return false;
+    return n00bb_same_package(use_unit, owner_unit)
+        || field->kind == PARSE_SYM_ENUM_CONST
+        || !parse_sym_binding(owner_type,
+               CORE_STRING_STATIC("n00bb.opaque-type"));
 }
 
 bool
@@ -1392,7 +1366,8 @@ n00bb_module_view_member(parse_symtab_t *symtab,
 
 static void
 push_scope_functions(parse_scope_t *scope, core_string_t name,
-                     core_string_t module, bool public_only,
+                     core_string_t module, core_translation_unit_t *consumer,
+                     core_translation_unit_t *provider,
                      core_list_t(parse_sym_entry_ptr_t) *out)
 {
     for (parse_sym_entry_t *candidate = n00bb_scope_named_next(scope, name,
@@ -1400,7 +1375,7 @@ push_scope_functions(parse_scope_t *scope, core_string_t name,
          candidate; candidate = n00bb_scope_named_next(scope, name, candidate))
         if (candidate->kind == PARSE_SYM_FUNCTION
             && symbol_from_module(candidate, module)
-            && (!public_only || symbol_is_public_declaration(
+            && (!consumer || n00bb_symbol_visible_to(consumer, provider,
                     canonical_symbol(candidate)))
             && !n00bb_same_declaration_listed(out, candidate))
             core_list_push(*out, candidate);
@@ -1436,7 +1411,8 @@ push_import_functions(core_translation_unit_t *unit, core_string_t name,
         if ((!prelude_only || !sources->data[i].brought)
             && source_provides(&sources->data[i], name, &provided))
             push_scope_functions(sources->data[i].values, provided,
-                                 (core_string_t){0}, true, out);
+                                 (core_string_t){0}, unit,
+                                 sources->data[i].provider, out);
     }
 }
 
@@ -1452,7 +1428,7 @@ function_candidates(n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
         return candidates;
     }
     push_scope_functions(symbol->scope, symbol->name, lookup.origin_module,
-                         false, &candidates);
+                         nullptr, nullptr, &candidates);
     if (lookup.unqualified)
         push_import_functions(state->unit,
             lookup.name.data ? lookup.name : symbol->name, false,
@@ -1699,6 +1675,15 @@ n00bb_pending_type_reference(n00bb_tu_state_t *state, parse_tree_t *node)
     return parse_tree_type(node) != nullptr;
 }
 
+static bool
+names_imported_module(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    parse_tree_t *at = parse_tree_parent(node);
+    while (nt_is(grammar, at, CORE_STRING_STATIC("member-chain")))
+        at = parse_tree_parent(at);
+    return nt_is(grammar, at, CORE_STRING_STATIC("module-source"));
+}
+
 bool
 resolve_module_member_site(parse_grammar_t *grammar,
                            core_translation_unit_t *unit,
@@ -1813,8 +1798,7 @@ resolve_module_member_site(parse_grammar_t *grammar,
     if (type_reference || (!symbol && type)) {
         bool visible = type && type->kind == PARSE_SYM_TYPEDEF
             && (package_export
-                || imported_symbol_is_visible(grammar, unit, imported,
-                                              type));
+                || n00bb_symbol_visible_to(unit, imported, type));
         if (visible) {
             return parse_tree_set_resolution_symbol(node, type);
         }
@@ -1838,7 +1822,7 @@ resolve_module_member_site(parse_grammar_t *grammar,
     if (symbol) {
         if (symbol->kind != PARSE_SYM_MODULE
             && !package_export
-            && !imported_symbol_is_visible(grammar, unit, imported, symbol)) {
+            && !n00bb_symbol_visible_to(unit, imported, symbol)) {
             core_buffer_t message = {0};
             core_buffer_printf(&message,
                 "module '%.*s' has no visible %s named '%.*s'",
@@ -1906,7 +1890,8 @@ resolve_module_member_site(parse_grammar_t *grammar,
         return true;
     }
     else {
-        if (package_export && !state->semantic_annotation_complete)
+        if ((package_export && !state->semantic_annotation_complete)
+            || names_imported_module(grammar, node))
             return true;
         core_buffer_t message = {0};
         core_buffer_printf(&message,
@@ -1945,7 +1930,8 @@ site_is_resolved_module_prefix(parse_grammar_t *grammar,
     return false;
 }
 
-static void collect_origin_candidates(parse_scope_t *scope,
+static void collect_origin_candidates(core_translation_unit_t *consumer,
+    core_translation_unit_t *provider, parse_scope_t *scope,
     core_string_t name, core_list_t(parse_sym_entry_ptr_t) *out);
 
 static bool
@@ -2017,9 +2003,11 @@ collect_tier_candidates(core_translation_unit_t *unit, core_string_t name,
             || !source_provides(source, name, &provided)) continue;
         size_t before = out->len;
         if (!type_reference)
-            collect_origin_candidates(source->values, provided, out);
+            collect_origin_candidates(unit, source->provider, source->values,
+                                      provided, out);
         if (out->len == before)
-            collect_origin_candidates(source->types, provided, out);
+            collect_origin_candidates(unit, source->provider, source->types,
+                                      provided, out);
         parse_sym_entry_t *granted = out->len == before && !brought
             ? granted_import(unit, source, provided, type_reference)
             : nullptr;
@@ -2278,21 +2266,18 @@ names_member_receiver(parse_grammar_t *grammar, parse_tree_t *node)
     return false;
 }
 
-static bool
-names_imported_module(parse_grammar_t *grammar, parse_tree_t *node)
-{
-    return nt_is(grammar, parse_tree_parent(node),
-                 CORE_STRING_STATIC("module-source"));
-}
-
 static void
-collect_origin_candidates(parse_scope_t *scope, core_string_t name,
+collect_origin_candidates(core_translation_unit_t *consumer,
+                          core_translation_unit_t *provider,
+                          parse_scope_t *scope, core_string_t name,
                           core_list_t(parse_sym_entry_ptr_t) *out)
 {
     for (parse_sym_entry_t *candidate = n00bb_scope_named_next(scope, name,
              nullptr);
          candidate; candidate = n00bb_scope_named_next(scope, name, candidate))
-        if (symbol_is_public_declaration(canonical_symbol(candidate))
+        if (candidate->kind != PARSE_SYM_MODULE
+            && (!consumer || n00bb_symbol_visible_to(consumer, provider,
+                    canonical_symbol(candidate)))
             && !n00bb_same_declaration_listed(out, candidate))
             core_list_push(*out, candidate);
 }
@@ -2348,7 +2333,7 @@ n00bb_report_name_conflict(parse_grammar_t *grammar,
 {
     core_list_t(parse_sym_entry_ptr_t) candidates =
         core_list_new(parse_sym_entry_ptr_t);
-    collect_origin_candidates(scope, name, &candidates);
+    collect_origin_candidates(nullptr, nullptr, scope, name, &candidates);
     bool conflict = report_conflicting_candidates(grammar, unit, node, name,
                                                   &candidates, type_reference);
     core_list_free(candidates);
@@ -2506,7 +2491,8 @@ bring_scope_entries(bring_check_t *check, parse_scope_t *scope,
     for (parse_sym_entry_t *entry = scope ? scope->first_in_scope : nullptr;
          entry; entry = entry->next_in_scope)
         if (entry->kind != PARSE_SYM_MODULE
-            && symbol_is_public_declaration(canonical_symbol(entry)))
+            && n00bb_symbol_visible_to(check->unit, source->provider,
+                                          canonical_symbol(entry)))
             ok = add_brought_entry(check, &entry->name, entry, source) && ok;
     return ok;
 }
@@ -2517,16 +2503,16 @@ bring_named_entries(bring_check_t *check, const n00bb_import_source_t *source)
     core_translation_unit_t *unit = check->unit;
     core_list_t(parse_sym_entry_ptr_t) candidates =
         core_list_new(parse_sym_entry_ptr_t);
-    collect_origin_candidates(source->values, source->brought->remote,
-                              &candidates);
-    collect_origin_candidates(source->types, source->brought->remote,
-                              &candidates);
+    collect_origin_candidates(unit, source->provider, source->values,
+                              source->brought->remote, &candidates);
+    collect_origin_candidates(unit, source->provider, source->types,
+                              source->brought->remote, &candidates);
     bool ok = candidates.len != 0;
     if (!ok) {
         core_buffer_t message = {0};
         core_string_t module = source->provider->module.identifier;
         core_buffer_printf(&message,
-            "module '%.*s' has no public '%.*s' to bring",
+            "module '%.*s' has no visible '%.*s' to bring",
             (int)module.u8_bytes, module.data,
             (int)source->brought->remote.u8_bytes,
             source->brought->remote.data);
@@ -2731,6 +2717,7 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 all_resolved = false;
             }
             else if (!site->symbol && !site->dotted_path
+                     && !names_imported_module(grammar, site->node)
                      && !site->trait_reference
                      && !site->variant_case_candidate
                      && !site->constructor_call
@@ -3310,7 +3297,7 @@ read_u32_le(const uint8_t *data)
 
 parse_sym_entry_t *
 unit_trait_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
-                core_string_t name, bool imported)
+                core_string_t name, core_translation_unit_t *consumer)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     parse_symtab_t *symtab = state && state->annotations
@@ -3323,7 +3310,7 @@ unit_trait_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
         && core_string_eq(symbol->adt_kind, CORE_STRING_STATIC("trait"));
     if (!symbol || (!interface_trait && (!symbol->decl_node
         || !nt_is(grammar, symbol->decl_node, CORE_STRING_STATIC("trait-decl"))))) return nullptr;
-    if (imported && !symbol_is_public_declaration(symbol))
+    if (!n00bb_symbol_visible_to(consumer, unit, symbol))
         return nullptr;
     return symbol;
 }
@@ -3380,7 +3367,7 @@ implicit_builtin_trait_symbol(parse_grammar_t *grammar,
         : nullptr;
     for (size_t i = 0; package && i < package->exports.len; i++) {
         n00bb_package_export_t *item = &package->exports.data[i];
-        if (item->subpackage || !core_string_eq(item->export_name, name))
+        if (!core_string_eq(item->export_name, name))
             continue;
         core_string_t source = item->source_name;
         size_t split = source.u8_bytes;
@@ -3393,7 +3380,7 @@ implicit_builtin_trait_symbol(parse_grammar_t *grammar,
         core_translation_unit_t *origin = find_direct_import(builtin,
                                                                module_name);
         parse_sym_entry_t *symbol = origin
-            ? unit_trait_symbol(grammar, origin, source_name, true) : nullptr;
+            ? unit_trait_symbol(grammar, origin, source_name, unit) : nullptr;
         if (!symbol) continue;
         if (owner_out) *owner_out = origin;
         return symbol;
@@ -3436,7 +3423,7 @@ n00bb_resolve_trait_reference(parse_grammar_t *grammar,
                 symbol = package_trait_symbol(grammar, target, alias->name,
                                               trait);
                 if (!symbol && n00bb_same_package(unit, target))
-                    symbol = unit_trait_symbol(grammar, target, trait, true);
+                    symbol = unit_trait_symbol(grammar, target, trait, unit);
                 if (symbol) break;
                 target = nullptr;
             }
@@ -3453,12 +3440,11 @@ n00bb_resolve_trait_reference(parse_grammar_t *grammar,
             }
         }
         if (target && !symbol)
-            symbol = unit_trait_symbol(grammar, target, trait,
-                                       target != unit);
+            symbol = unit_trait_symbol(grammar, target, trait, unit);
         if (!symbol) target = nullptr;
     }
     else {
-        symbol = unit_trait_symbol(grammar, unit, trait, false);
+        symbol = unit_trait_symbol(grammar, unit, trait, unit);
         if (symbol) {
             target = unit;
         }
@@ -3468,7 +3454,7 @@ n00bb_resolve_trait_reference(parse_grammar_t *grammar,
                 core_translation_unit_t *imported =
                     core_translation_unit_import(unit, i);
                 parse_sym_entry_t *candidate = unit_trait_symbol(
-                    grammar, imported, trait, true);
+                    grammar, imported, trait, unit);
                 if (!candidate) continue;
                 if (target) {
                     target = nullptr;
@@ -4221,7 +4207,6 @@ n00bb_link_stage_symbols(core_link_unit_t *link, uint32_t stage_kind,
         if (!validate_type_value_namespaces(analysis->units.data[i]))
             return CORE_LINK_STAGE_RESULT_FAILED;
     if (!validate_package_interfaces(analysis)
-        || !connect_package_subpackages(analysis)
         || !bind_imported_module_scopes(&analysis->units)
         || !populate_package_interfaces(analysis)
         || !resolve_imported_module_symbols(analysis->grammar,
@@ -5141,8 +5126,7 @@ register_flagset_operators(th_env *defaults, th_ctx *types,
         ok = n00bb_register_operator_function(defaults, types,
             operators[i][0], operators[i][1], owner, flagset, flagset, flagset,
             unit->module.identifier, package,
-            symbol_is_public_declaration(symbol) ? TH_ENV_PUBLIC
-                                                 : TH_ENV_PRIVATE);
+            symbol_visibility(symbol));
     return ok;
 }
 
@@ -5273,7 +5257,6 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                     generated->type = generated->callable_contract = signature;
                     generated->error_type = th_name(state->types, CORE_STRING_STATIC("nil"));
                     generated->adt_kind = symbol->adt_kind;
-                    generated->visibility = CORE_STRING_STATIC("public");
                     generated->is_synthetic = true;
                     parse_sym_set_phases(generated, PARSE_SYM_PHASE_BOTH,
                         PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);

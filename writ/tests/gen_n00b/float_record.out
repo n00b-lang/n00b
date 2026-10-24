@@ -227,9 +227,9 @@ int32_t pts_n00b_pt_sum(const void *args, void *result) {
 }
 
 record Error {
-    public code: i64
-    public text: string?
-    public fn: string
+    code: i64
+    text: string?
+    fn: string
 }
 
 record Point {
@@ -266,7 +266,7 @@ flagset Mode {
 }
 
 
-public func peek_raw(p: uint) -> i32 {
+func peek_raw(p: uint) -> i32 {
     return __peek_raw(p)
 }
 

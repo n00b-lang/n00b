@@ -30,7 +30,7 @@ typedef bool (*n00bb_preprocessor_litmod_fn)(
     parse_tree_t *declaration, core_string_t modifier, core_string_t kind);
 typedef bool (*n00bb_preprocessor_litmod_alias_fn)(
     void *context, core_translation_unit_t *unit, parse_tree_t *statement,
-    core_string_t alias, core_string_t target, bool exported);
+    core_string_t alias, core_string_t target);
 
 extern const core_string_t n00bb_litmod_kinds[];
 extern const size_t n00bb_litmod_kind_count;

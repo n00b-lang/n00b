@@ -1,7 +1,7 @@
-public trait ArchiveRender {
+trait ArchiveRender {
     func render(self: 'T) -> int
 }
 
-public func archived_render(item: 'T) -> int where 'T: ArchiveRender {
+func archived_render(item: 'T) -> int where 'T: ArchiveRender {
     return item.render()
 }

@@ -1,6 +1,6 @@
-public alias type Forward = Concrete
-public alias type Concrete = int
+alias type Forward = Concrete
+alias type Concrete = int
 
-public func forward_alias(input: Forward) -> Concrete {
+func forward_alias(input: Forward) -> Concrete {
     return input
 }

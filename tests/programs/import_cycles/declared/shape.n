@@ -1,13 +1,13 @@
 import maker
 
-public record Shape {
-    public x: int
+record Shape {
+    x: int
 }
 
-public func __init(modify self: Shape, x: int) {
+func __init(modify self: Shape, x: int) {
     self.x = x
 }
 
-public func shape_total() -> int {
+func shape_total() -> int {
     return maker.literal_x() + maker.constructed_x()
 }

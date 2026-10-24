@@ -1,7 +1,7 @@
 record E {
-    public code: i64
-    public count: i64?
-    public text: string?
+    code: i64
+    count: i64?
+    text: string?
 }
 
 let e: E = (code = -3, count = 4, text = "a longer piece of option text")

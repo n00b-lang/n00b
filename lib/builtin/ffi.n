@@ -3,8 +3,8 @@ import containers.list
 import string.core
 
 record Ffi_Bytes layout(c) {
-    public data: uint
-    public length: uint
+    data: uint
+    length: uint
 }
 
 trait Fixup {
@@ -12,9 +12,9 @@ trait Fixup {
 }
 
 record Ffi_Table {
-    public slots: List['T?]
-    public free: List[int]
-    public owners: List[uint]
+    slots: List['T?]
+    free: List[int]
+    owners: List[uint]
 }
 
 record Ffi_Hold {
@@ -54,7 +54,7 @@ func ffi_is_fixed(address: uint) -> bool {
     return false
 }
 
-public func foreign_text(pointer: Foreign[i8]?) -> string? {
+func foreign_text(pointer: Foreign[i8]?) -> string? {
     if pointer == nil {
         return nil
     }

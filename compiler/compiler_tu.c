@@ -2280,9 +2280,7 @@ infer_user_literal_type(parse_grammar_t *grammar,
                                            : nullptr;
     th_type *expected_result = known && th_kind_of(known) != TH_VAR
         ? known : th_var(state->types);
-    parse_sym_entry_t *function = registration->declaration
-        ? parse_tree_sym(registration->declaration)
-        : registration->function;
+    parse_sym_entry_t *function = n00bb_litmod_handler(registration);
     th_type *signature = function && function->type
         ? th_resolve(function->type) : nullptr;
     bool takes_site = core_string_eq(kind, CORE_STRING_STATIC("fence"))
@@ -2440,16 +2438,13 @@ collect_shape_handlers(n00bb_tu_state_t *state, core_string_t kind,
         n00bb_visible_litmods(state, kind);
     for (size_t i = 0; i < visible.len; i++) {
         n00bb_user_litmod_t *registration = visible.data[i];
-        parse_sym_entry_t *function = registration->declaration
-            ? parse_tree_sym(registration->declaration)
-            : registration->function;
+        parse_sym_entry_t *function = n00bb_litmod_handler(registration);
         th_type *signature = function && function->type
             ? th_resolve(function->type) : nullptr;
         bool alias = false;
         for (size_t m = 0; m < matches->len; m++) {
             n00bb_user_litmod_t *seen = matches->data[m];
-            alias |= (seen->declaration ? parse_tree_sym(seen->declaration)
-                                        : seen->function) == function;
+            alias |= n00bb_litmod_handler(seen) == function;
         }
         if (!alias && signature && th_kind_of(signature) == TH_FUNCTION
             && th_unify_probe(state->types, th_func_ret(signature),
@@ -2633,9 +2628,7 @@ resolve_forward_literal_sites(core_translation_unit_t *unit,
         parse_tree_t *node = state->literal_site_nodes.data[i];
         n00bb_litmod_site_t *site = n00bb_node_literal_site(node);
         if (!site || !site->deferred) continue;
-        parse_sym_entry_t *function = site->registration->declaration
-            ? parse_tree_sym(site->registration->declaration)
-            : site->registration->function;
+        parse_sym_entry_t *function = n00bb_litmod_handler(site->registration);
         th_type *signature = function && function->type
             ? th_resolve(function->type) : nullptr;
         th_type *specialized = nullptr;
@@ -6011,6 +6004,7 @@ cache_enum_item_value(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     symbol->has_comptime_value = true;
     return true;
 }
+
 bool
 validate_package_body_statement(parse_grammar_t *grammar,
                                 core_translation_unit_t *unit,
@@ -6020,14 +6014,14 @@ validate_package_body_statement(parse_grammar_t *grammar,
     parse_tree_t *ancestor = parent;
     while (ancestor && !NT_IS(grammar, ancestor, "package-decl"))
         ancestor = parse_tree_parent(ancestor);
-    if (!ancestor || CHILD_NT(grammar, node, "import-stmt")
-        || CHILD_NT(grammar, node, "export-stmt")) return true;
+    if (!ancestor || CHILD_NT(grammar, node, "export-stmt")) return true;
     parse_tree_t *body = CHILD_NT(grammar, node, "body");
     n00bb_node_facts_t *facts = body ? n00bb_node_facts(body) : nullptr;
     if (facts && facts->selected_when_body) return true;
     package_diagnostic(unit, node, CORE_STRING_STATIC("N00BB-M0010"),
         CORE_STRING_STATIC(
-            "a selected package branch may contain only imports, exports, and nested when statements"));
+            "a package block may contain only exports and when statements; "
+            "put imports before the package block"));
     return false;
 }
 void
@@ -10659,7 +10653,6 @@ n00bb_bind_callback_call(n00bb_tu_state_t *state, n00bb_link_use_site_t *site)
                 CORE_STRING_STATIC("n00bb.callback-public-signature"),
                 callback_contract->call->type)) return false;
     }
-    symbol->visibility = CORE_STRING_STATIC("public");
     parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
                          PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
     site->callback_call = true;
@@ -10879,6 +10872,16 @@ inferred_binding_scope(parse_scope_t *scope)
     return scope;
 }
 
+static bool
+in_private_fields(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (!NT_IS(grammar, node, "type-decl-one")) return false;
+    for (parse_tree_t *at = parse_tree_parent(node);
+         at && !NT_IS(grammar, at, "type-body"); at = parse_tree_parent(at))
+        if (NT_IS(grammar, at, "private-fields")) return true;
+    return false;
+}
+
 static void
 apply_declaration_defaults(parse_visit_t *visit)
 {
@@ -10887,27 +10890,9 @@ apply_declaration_defaults(parse_visit_t *visit)
         && declared->kind == PARSE_SYM_TYPEDEF)
         parse_sym_set_phases(declared, PARSE_SYM_PHASE_BOTH,
             PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_NONE);
-    if (declared && declared->decl_node == visit->node) {
-        if (!declared->visibility.u8_bytes
-            && (NT_IS(visit->grammar, visit->node, "func-def")
-                || field_record_declaration(visit->grammar, visit->node)
-                || NT_IS(visit->grammar, visit->node, "enum-stmt")
-                || NT_IS(visit->grammar, visit->node, "flagset-stmt")
-                || NT_IS(visit->grammar, visit->node, "variant-decl")
-                || NT_IS(visit->grammar, visit->node, "trait-decl")
-                || NT_IS(visit->grammar, visit->node, "alias-stmt")
-                || NT_IS(visit->grammar, visit->node, "callback-decl")
-                || NT_IS(visit->grammar, visit->node, "context-def")))
-            declared->visibility = CORE_STRING_STATIC("public");
-        if (field_record_declaration(visit->grammar, visit->node)
-            && core_string_eq(declared->visibility,
-                              CORE_STRING_STATIC("public")))
-            for (parse_sym_entry_t *member = declared->member_scope
-                     ? declared->member_scope->first_in_scope : nullptr;
-                 member; member = member->next_in_scope)
-                if (member->is_field && !member->visibility.u8_bytes)
-                    member->visibility = CORE_STRING_STATIC("public");
-    }
+    if (declared && declared->is_field
+        && in_private_fields(visit->grammar, visit->node))
+        declared->visibility = CORE_STRING_STATIC("private");
 }
 
 void
@@ -10925,6 +10910,16 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
     if (!visit->pn) return;
     parse_sym_entry_t *declared = parse_tree_sym(visit->node);
     apply_declaration_defaults(visit);
+    if (declared && declared->is_field
+        && in_private_fields(visit->grammar, visit->node)
+        && parse_tree_find_flat_child_by_nt_name(visit->grammar, visit->node,
+               CORE_STRING_STATIC("member-visibility")))
+        core_diagnostics_report_at(
+            annotations->diagnostics, annotations->diagnostic_unit,
+            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0068"),
+            CORE_STRING_STATIC("fields in a private block are already "
+                               "private; remove 'private' here"),
+            link_source_location(visit->node));
     if (NT_IS(visit->grammar, visit->node, "sym-decl")
         && declared && declared->decl_node == visit->node
         && declared->shadowed
@@ -11412,29 +11407,48 @@ n00bb_same_declaration_listed(const core_list_t(parse_sym_entry_ptr_t) *list,
 }
 
 bool
-symbol_is_public_declaration(parse_sym_entry_t *symbol)
+n00bb_symbol_visible_to(core_translation_unit_t *consumer,
+                        core_translation_unit_t *owner,
+                        parse_sym_entry_t *symbol)
 {
     if (!symbol) return false;
-    if (core_string_eq(symbol->visibility, CORE_STRING_STATIC("public")))
-        return true;
-    if (symbol->visibility.u8_bytes) return false;
-    return symbol->kind == PARSE_SYM_FUNCTION
-        || symbol->kind == PARSE_SYM_TYPEDEF
-        || symbol->kind == PARSE_SYM_TAG;
+    if (consumer == owner) return true;
+    if (symbol_is_private(symbol)) return false;
+    return n00bb_same_package(consumer, owner)
+        || parse_sym_binding(symbol,
+               CORE_STRING_STATIC("n00bb.external-export"))
+        || (n00bb_open_module(owner)
+            && symbol_exported_by_default(symbol));
+}
+
+bool
+n00bb_member_visible_to(core_translation_unit_t *consumer,
+                        core_translation_unit_t *owner,
+                        parse_sym_entry_t *symbol)
+{
+    return symbol && (consumer == owner || !symbol_is_private(symbol));
+}
+
+bool
+symbol_is_exportable(parse_sym_entry_t *symbol)
+{
+    return symbol && symbol->kind != PARSE_SYM_MODULE
+        && !symbol_is_private(symbol);
+}
+
+bool
+symbol_exported_by_default(parse_sym_entry_t *symbol)
+{
+    return symbol_is_exportable(symbol)
+        && (symbol->kind != PARSE_SYM_VARIABLE
+            || symbol->mutability == PARSE_SYM_CONST);
 }
 
 th_env_visibility_t
 symbol_visibility(parse_sym_entry_t *symbol)
 {
     if (!symbol) return TH_ENV_PRIVATE;
-    if (parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.external-export"))
-        || core_string_eq(symbol->visibility,
-            CORE_STRING_STATIC("public")))
-        return TH_ENV_PUBLIC;
-    if (symbol_is_public_declaration(symbol))
-        return TH_ENV_PUBLIC;
-    return TH_ENV_PRIVATE;
+    return symbol_is_private(symbol) ? TH_ENV_PRIVATE : TH_ENV_PUBLIC;
 }
 
 static bool
@@ -11540,15 +11554,6 @@ cache_package_export_syntax(parse_grammar_t *grammar,
     }
     core_string_t stored_source = store_semantic_string(state, source_name);
     core_string_t stored_export = store_semantic_string(state, export_name);
-    bool subpackage = false;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
-        parse_tree_t *child = core_tree_child(node, i);
-        if (core_tree_is_leaf(child)
-            && parse_tree_leaf_is(child, CORE_STRING_STATIC("package"))) {
-            subpackage = true;
-            break;
-        }
-    }
     core_buffer_release(&source);
     if (!stored_source.data || !stored_export.data) return false;
     for (size_t i = 0; i < package->exports.len; i++)
@@ -11572,7 +11577,6 @@ cache_package_export_syntax(parse_grammar_t *grammar,
         .grantee = stored_grantee,
         .node = node,
         .renamed = alias != nullptr,
-        .subpackage = subpackage,
     }));
     return true;
 }
@@ -13232,6 +13236,13 @@ n00bb_literal_prefix_registered(core_string_t prefix)
     return false;
 }
 
+parse_sym_entry_t *
+n00bb_litmod_handler(const n00bb_user_litmod_t *registration)
+{
+    return registration->declaration
+        ? parse_tree_sym(registration->declaration) : registration->function;
+}
+
 static bool
 builtin_litmod_name(core_string_t modifier, core_string_t kind)
 {
@@ -13290,7 +13301,7 @@ register_user_litmod(void *context, core_translation_unit_t *unit,
 bool
 register_user_litmod_alias(void *context, core_translation_unit_t *unit,
                            parse_tree_t *statement, core_string_t alias,
-                           core_string_t target, bool exported)
+                           core_string_t target)
 {
     (void)context;
     n00bb_tu_state_t *state = tu_state(unit);
@@ -13299,7 +13310,6 @@ register_user_litmod_alias(void *context, core_translation_unit_t *unit,
         .alias = core_string_dup(alias),
         .target = core_string_dup(target),
         .location = link_source_location(statement),
-        .exported = exported,
     };
     if (!pending.alias.data || !pending.target.data) {
         core_free(pending.alias.data);
@@ -13476,17 +13486,29 @@ typedef bool (*litmod_visitor_t)(core_string_t name,
 static bool
 exported_by(n00bb_package_export_t *export, n00bb_user_litmod_t *registration)
 {
-    parse_sym_entry_t *handler = registration->declaration
-        ? parse_tree_sym(registration->declaration) : registration->function;
-    return handler && (export->module_export
-                       || handler == canonical_symbol(export->symbol));
+    if (!export || export->module_export) return true;
+    parse_sym_entry_t *handler = n00bb_litmod_handler(registration);
+    return !export->litmod_alias && handler
+        && handler == canonical_symbol(export->symbol);
 }
 
 static bool
-visit_exported_litmods(n00bb_package_export_t *export, core_string_t kind,
-                       litmod_visitor_t visit, void *context, uint32_t depth)
+alias_exported_by(n00bb_package_export_t *export, n00bb_litmod_alias_t *alias)
 {
-    n00bb_tu_state_t *source = tu_state(export->source_unit);
+    if (!export || export->module_export) return true;
+    if (!export->litmod_alias) return false;
+    int64_t dot = core_string_rfind_byte(export->source_name, '.');
+    size_t start = dot < 0 ? 0 : (size_t)dot + 1;
+    return core_string_eq(core_string_slice(export->source_name, start,
+                              export->source_name.u8_bytes - start),
+                          alias->alias);
+}
+
+static bool
+visit_source_litmods(n00bb_tu_state_t *source,
+                     n00bb_package_export_t *export, core_string_t kind,
+                     litmod_visitor_t visit, void *context, uint32_t depth)
+{
     for (size_t i = 0; source && i < source->literal_modifiers.len; i++) {
         n00bb_user_litmod_t *exported = &source->literal_modifiers.data[i];
         if (core_string_eq(exported->kind, kind) && exported_by(export, exported)
@@ -13495,13 +13517,23 @@ visit_exported_litmods(n00bb_package_export_t *export, core_string_t kind,
     for (size_t a = 0; source && depth < litmod_alias_depth
          && a < source->litmod_aliases.len; a++) {
         n00bb_litmod_alias_t *alias = &source->litmod_aliases.data[a];
-        n00bb_user_litmod_t *target = alias->exported
-            ? litmod_lookup(source, alias->target, kind, nullptr, depth + 1)
-            : nullptr;
-        if (target && exported_by(export, target)
-            && !visit(alias->alias, target, context)) return false;
+        if (!alias_exported_by(export, alias)) continue;
+        n00bb_user_litmod_t *target = litmod_lookup(source, alias->target,
+                                                    kind, nullptr, depth + 1);
+        core_string_t name = export && export->litmod_alias
+            ? export->export_name : alias->alias;
+        if (target && !visit(name, target, context)) return false;
     }
     return true;
+}
+
+bool
+n00bb_declares_litmod_alias(n00bb_tu_state_t *state, core_string_t name)
+{
+    for (size_t a = 0; state && a < state->litmod_aliases.len; a++)
+        if (core_string_eq(state->litmod_aliases.data[a].alias, name))
+            return true;
+    return false;
 }
 
 static bool
@@ -13514,6 +13546,11 @@ visit_imported_litmods(n00bb_tu_state_t *state, core_string_t kind,
         core_translation_unit_t *imported = core_translation_unit_import(
             state->unit, i);
         n00bb_tu_state_t *imported_state = tu_state(imported);
+        if (imported_state && (n00bb_same_package(state->unit, imported)
+                               || n00bb_open_module(imported))
+            && !visit_source_litmods(imported_state, nullptr, kind, visit,
+                                     context, depth))
+            return false;
         for (size_t alias_ix = 0; imported_state
                 && alias_ix < state->import_aliases.len; alias_ix++) {
             n00bb_import_alias_t *alias = &state->import_aliases.data[alias_ix];
@@ -13528,8 +13565,9 @@ visit_imported_litmods(n00bb_tu_state_t *state, core_string_t kind,
                      export_ix++) {
                     n00bb_package_export_t *export =
                         &package->exports.data[export_ix];
-                    if (export->source_unit && !visit_exported_litmods(
-                            export, kind, visit, context, depth))
+                    if (export->source_unit && !visit_source_litmods(
+                            tu_state(export->source_unit), export, kind,
+                            visit, context, depth))
                         return false;
                 }
             }

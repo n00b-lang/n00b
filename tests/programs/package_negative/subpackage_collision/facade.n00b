@@ -1,9 +1,0 @@
-import subpackage_collision.impl
-
-package subpackage_collision {
-    export subpackage_collision.impl.tools
-    export package tools
-}
-
-package subpackage_collision.tools {
-}

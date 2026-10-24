@@ -1,2 +1,2 @@
-public const selected: int = 11
-public const rejected: int = 12
+const selected: int = 11
+const rejected: int = 12

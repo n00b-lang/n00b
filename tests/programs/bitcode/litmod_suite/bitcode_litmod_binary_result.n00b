@@ -1,4 +1,4 @@
-public alias litmod binary_result = make_binary
+alias litmod binary_result = make_binary
 quotes litmod make_binary(raw: string) -> string fail: string {
     return "abc"'binary
 }

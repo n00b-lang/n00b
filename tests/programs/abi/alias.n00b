@@ -1,2 +1,2 @@
-public alias type Number = int
-public const answer: Number = 42
+alias type Number = int
+const answer: Number = 42

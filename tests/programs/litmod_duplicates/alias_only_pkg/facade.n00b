@@ -1,0 +1,5 @@
+import impl
+
+package alias_only_pkg {
+    export impl.shown
+}

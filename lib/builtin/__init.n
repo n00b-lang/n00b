@@ -115,6 +115,7 @@ package builtin {
     export string.core.widen_encoding
     export string.core.string
     export string.style.rich
+    export string.style.r
     export string.core.encoding_of to unicode
     export string.core.validate_multibyte to unicode
     export ffi.Ffi_Bytes
@@ -151,10 +152,13 @@ package builtin {
     export containers.buffer.free
     export containers.list.List
     export containers.list.list
+    export containers.list.l
     export containers.dict.Dict
     export containers.dict.dict
+    export containers.dict.d
     export containers.set.Set
     export containers.set.set
+    export containers.set.s
     export containers.tree.Tree
     export containers.view.View
     export containers.errors.Container_Err

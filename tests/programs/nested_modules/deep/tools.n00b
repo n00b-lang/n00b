@@ -1,5 +1,5 @@
-public record Answer {
-    public payload: int
+record Answer {
+    payload: int
 }
 
-public func answer(item: Answer) -> int { return item.payload }
+func answer(item: Answer) -> int { return item.payload }

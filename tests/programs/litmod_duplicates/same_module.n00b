@@ -1,9 +1,9 @@
-public alias litmod twice = first
+alias litmod twice = first
 quotes litmod first(text: string) -> int fail: string {
     return 1
 }
 
-public alias litmod twice = second
+alias litmod twice = second
 quotes litmod second(text: string) -> int fail: string {
     return 2
 }

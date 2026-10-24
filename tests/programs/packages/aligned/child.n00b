@@ -1,1 +1,1 @@
-public const answer: int = 21
+const answer: int = 21

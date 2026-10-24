@@ -9,6 +9,6 @@ record Sample {
 func apply(consume self: Ref[Sample]) {
 }
 
-public func invoke(consume value: Ref[Sample]) {
+func invoke(consume value: Ref[Sample]) {
     value.apply()
 }

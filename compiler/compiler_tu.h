@@ -9,6 +9,7 @@
 #include "lib/link_unit.h"
 #include "lib/list.h"
 #include "lib/diagnostic.h"
+#include "compiler_visibility.h"
 #include "parse/annot_walk.h"
 #include "parse/tree_util.h"
 #include "parse/pwz.h"
@@ -129,7 +130,7 @@ bool register_user_litmod(void *context, core_translation_unit_t *unit,
                           core_string_t modifier, core_string_t kind);
 bool register_user_litmod_alias(void *context, core_translation_unit_t *unit,
                                 parse_tree_t *statement, core_string_t alias,
-                                core_string_t target, bool exported);
+                                core_string_t target);
 bool validate_litmod_aliases(core_translation_unit_t *unit);
 th_type *n00bb_atomic_element_type(th_type *type);
 bool n00bb_option_type_element(th_type *type, th_type **element);
@@ -394,7 +395,6 @@ typedef struct {
     core_string_t alias;
     core_string_t target;
     core_diag_location_t location;
-    bool exported;
 } n00bb_litmod_alias_t;
 core_list_decl(n00bb_litmod_alias_t);
 typedef n00bb_user_litmod_t *n00bb_user_litmod_ptr_t;
@@ -561,8 +561,8 @@ typedef struct {
     parse_sym_entry_t *symbol;
     core_translation_unit_t *source_unit;
     bool module_export;
+    bool litmod_alias;
     bool renamed;
-    bool subpackage;
 } n00bb_package_export_t;
 core_list_decl(n00bb_package_export_t);
 
@@ -765,6 +765,9 @@ bool report_shadowed_litmods(core_translation_unit_t *unit,
                              n00bb_tu_state_t *state);
 bool n00bb_declares_litmod(n00bb_tu_state_t *state,
                            parse_sym_entry_t *symbol);
+bool n00bb_declares_litmod_alias(n00bb_tu_state_t *state, core_string_t name);
+parse_sym_entry_t *n00bb_litmod_handler(
+    const n00bb_user_litmod_t *registration);
 bool collect_ordered_children(parse_tree_t *node,
     core_list_t(parse_tree_ptr_t) *children);
 core_string_t named_field_identifier(parse_grammar_t *grammar,
@@ -1223,7 +1226,14 @@ parse_sym_entry_t *enclosing_function_symbol(parse_grammar_t *grammar,
                                              parse_tree_t *node);
 parse_sym_entry_t *link_effect_owner_symbol(parse_grammar_t *grammar,
                                              parse_tree_t *node);
-bool symbol_is_public_declaration(parse_sym_entry_t *symbol);
+bool n00bb_symbol_visible_to(core_translation_unit_t *consumer,
+                             core_translation_unit_t *owner,
+                             parse_sym_entry_t *symbol);
+bool n00bb_member_visible_to(core_translation_unit_t *consumer,
+                             core_translation_unit_t *owner,
+                             parse_sym_entry_t *symbol);
+bool symbol_is_exportable(parse_sym_entry_t *symbol);
+bool symbol_exported_by_default(parse_sym_entry_t *symbol);
 th_env_visibility_t symbol_visibility(parse_sym_entry_t *symbol);
 parse_tree_t *symbol_binding_node(parse_sym_entry_t *symbol);
 bool symbol_has_definition(parse_sym_entry_t *symbol, parse_tree_t *node);

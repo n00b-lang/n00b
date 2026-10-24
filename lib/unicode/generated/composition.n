@@ -1,23 +1,23 @@
 import internal.blob
 
-public const comp_table_size = 2048
-public const comp_empty = 0xFFFFFFFF
+const comp_table_size = 2048
+const comp_empty = 0xFFFFFFFF
 
-public const comp_starter_values: Array[u32] = [- comp_starter.bin -]'embed
+const comp_starter_values: Array[u32] = [- comp_starter.bin -]'embed
 
-public inline func comp_starter(i: u32) -> u32 {
+inline func comp_starter(i: u32) -> u32 {
     return comp_starter_values[i]
 }
 
-public const comp_combining_values: Array[u32] = [- comp_combining.bin -]'embed
+const comp_combining_values: Array[u32] = [- comp_combining.bin -]'embed
 
-public inline func comp_combining(i: u32) -> u32 {
+inline func comp_combining(i: u32) -> u32 {
     return comp_combining_values[i]
 }
 
-public const comp_result_values: Array[u32] = [- comp_result.bin -]'embed
+const comp_result_values: Array[u32] = [- comp_result.bin -]'embed
 
-public inline func comp_result(i: u32) -> u32 {
+inline func comp_result(i: u32) -> u32 {
     return comp_result_values[i]
 }
 
