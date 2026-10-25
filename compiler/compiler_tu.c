@@ -4945,6 +4945,90 @@ finalize_variant_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
     return true;
 }
 
+// The width and signedness of a fixed-width integer type, for `enum E: T`.
+static bool
+enum_storage_scalar(th_type *type, uint32_t *bits, bool *is_signed)
+{
+    static const struct {
+        const char *name;
+        uint32_t bits;
+        bool is_signed;
+    } integers[] = {
+        {"i8", 8, true},    {"i16", 16, true}, {"i32", 32, true},
+        {"i64", 64, true},  {"i128", 128, true}, {"int", 64, true},
+        {"u8", 8, false},   {"u16", 16, false}, {"u32", 32, false},
+        {"u64", 64, false}, {"u128", 128, false}, {"uint", 64, false},
+    };
+    type = type ? th_resolve(type) : nullptr;
+    core_string_t name = {0};
+    bool variant = false;
+    size_t arguments = 0;
+    if (!type || !th_named_info(type, &name, &variant, &arguments)
+        || variant || arguments) return false;
+    for (size_t i = 0; i < sizeof(integers) / sizeof(integers[0]); i++) {
+        if (!core_string_eq(name, core_string_borrow(integers[i].name,
+                                strlen(integers[i].name)))) continue;
+        *bits = integers[i].bits;
+        *is_signed = integers[i].is_signed;
+        return true;
+    }
+    return false;
+}
+
+// Applies `: T` to an enum's range, reporting a storage type that is not a
+// fixed-width integer or that cannot hold every item.
+static bool
+enum_declared_storage(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                      parse_sym_entry_t *symbol, parse_tree_t *storage,
+                      n00bb_enum_range_t *range)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_tree_t *spec = CHILD_NT(grammar, storage, "type-spec");
+    th_type *declared = spec ? declared_type_from_node(grammar, unit, spec)
+                             : nullptr;
+    core_string_t spec_text = declared && state && state->types
+        ? n00bb_print_type(state->types, declared)
+        : n00bb_text_form(N00B_TEXT_THIS_VALUE);
+    uint32_t bits = 0;
+    bool is_signed = false;
+    if (!enum_storage_scalar(declared, &bits, &is_signed)) {
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_ENUM_STORAGE_NOT_INTEGER,
+                link_source_location(spec ? spec : storage),
+                N00B_TEXT_ENUM_STORAGE_NOT_INTEGER,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(spec_text))))
+            n00bb_report_help(diagnostics, N00B_TEXT_ENUM_STORAGE_INTEGER_HELP,
+                              N00BB_NO_ARGS);
+        return false;
+    }
+    if (!is_signed && range->is_signed) {
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_ENUM_STORAGE_TOO_NARROW,
+                link_source_location(spec ? spec : storage),
+                N00B_TEXT_ENUM_STORAGE_NEGATIVE_UNSIGNED,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(spec_text))))
+            n00bb_report_help(diagnostics, N00B_TEXT_ENUM_STORAGE_SIGNED_HELP,
+                              N00BB_ARGS(ARG_TEXT(spec_text)));
+        return false;
+    }
+    if (!n00bb_enum_members_fit(range, bits, is_signed)) {
+        uint64_t needed = range->magnitude_bits + range->is_signed;
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_ENUM_STORAGE_TOO_NARROW,
+                link_source_location(spec ? spec : storage),
+                N00B_TEXT_ENUM_STORAGE_TOO_NARROW,
+                N00BB_ARGS(ARG_TEXT(symbol->name),
+                           ARG_NUMBER((unsigned)needed),
+                           ARG_TEXT(spec_text))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_ENUM_STORAGE_TOO_NARROW_HELP,
+                N00BB_ARGS(ARG_TEXT(spec_text)));
+        return false;
+    }
+    range->explicit_storage = true;
+    range->storage_bits = bits;
+    range->storage_signed = is_signed;
+    return true;
+}
+
 bool
 finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
                           core_translation_unit_t *unit,
@@ -5003,6 +5087,13 @@ finalize_enum_symbol_type(parse_grammar_t *grammar, parse_tree_t *node,
         n00bb_enum_range_include(&range, value);
     }
     core_list_free(items);
+    parse_tree_t *prefix = CHILD_NT(grammar, node, "enum-prefix");
+    range.is_open = prefix && CHILD_NT(grammar, prefix, "enum-open");
+    // A storage type that is reported as invalid falls back to the best
+    // fit, so the rest of the module is still checked.
+    parse_tree_t *storage = CHILD_NT(grammar, node, "enum-storage");
+    if (ok && storage)
+        (void)enum_declared_storage(grammar, unit, symbol, storage, &range);
     return ok && n00bb_bind_enum_range(state->types, &state->semantic_values,
                                        symbol, range);
 }
@@ -8428,6 +8519,7 @@ module_initializer_declaration(parse_grammar_t *grammar, parse_tree_t *node)
         CORE_STRING_STATIC("variant-decl"),
         CORE_STRING_STATIC("trait-decl"), CORE_STRING_STATIC("callback-decl"),
         CORE_STRING_STATIC("package-decl"), CORE_STRING_STATIC("when-stmt"),
+        CORE_STRING_STATIC("top-when-stmt"),
     };
     for (size_t i = 0; i < sizeof(declarations) / sizeof(declarations[0]);
          i++)

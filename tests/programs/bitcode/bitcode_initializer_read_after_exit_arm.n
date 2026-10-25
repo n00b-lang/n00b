@@ -1,3 +1,5 @@
+import sys.os
+
 var value: int
 
 func set_value(v: int) fail: string {
@@ -10,7 +12,7 @@ func set_value(v: int) fail: string {
 try {
     set_value(1)!
 } fail(e) {
-    __os_exit(1)
+    sys.os.exit(1)
 }
 let observed = value
 require observed == 1

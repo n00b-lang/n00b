@@ -86,6 +86,7 @@ typedef uint32_t writ_fn_kind_t;
 enum {
     WRIT_FN_FUNCTION,
     WRIT_FN_CALLBACK,
+    WRIT_FN_SYSCALL,
 };
 
 typedef uint32_t writ_sizing_kind_t;
@@ -393,6 +394,9 @@ struct writ_fn_view {
     writ_span_t declared_at;
     uint32_t keywords_slot;
     writ_effects_t effects;
+    bool has_syscall_number;
+    int64_t syscall_number;
+    bool infallible;
 };
 
 struct writ_union_arm_view {
@@ -559,6 +563,8 @@ const writ_fn_view_t *writ_model_fn_named(const writ_model_t *model, writ_str_t 
 size_t writ_model_callback_count(const writ_model_t *model);
 const writ_fn_view_t *writ_model_callback_at(const writ_model_t *model, size_t index);
 const writ_fn_view_t *writ_model_callback_named(const writ_model_t *model, writ_str_t name);
+size_t writ_model_syscall_count(const writ_model_t *model);
+const writ_fn_view_t *writ_model_syscall_at(const writ_model_t *model, size_t index);
 size_t writ_model_const_count(const writ_model_t *model);
 const writ_const_view_t *writ_model_const_at(const writ_model_t *model, size_t index);
 const writ_const_view_t *writ_model_const_named(const writ_model_t *model, writ_str_t name);

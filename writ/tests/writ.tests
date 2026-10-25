@@ -26,6 +26,9 @@ check-duplicate	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/dupli
 check-reinterpret	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/reinterpret.out" --fails -- ./writ check tests/check/reinterpret.writ
 check-view_domain	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/view_domain.out" --fails -- ./writ check tests/check/view_domain.writ
 check-return_span	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/return_span.out" --fails -- ./writ check tests/check/return_span.writ
+check-syscall	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/syscall.out" -- ./writ --platform x86_64-linux-gnu check tests/check/syscall.writ
+check-syscall_errors	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/syscall_errors.out" --fails -- ./writ --platform x86_64-linux-gnu check tests/check/syscall_errors.writ
+check-syscall_platform	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/syscall_platform.out" --fails -- ./writ --platform aarch64-apple-darwin check tests/check/syscall.writ
 check-record_none	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/record_none.out" --fails -- ./writ check tests/check/record_none.writ
 check-userdata	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/userdata.out" --fails -- ./writ check tests/check/userdata.writ
 check-keywords	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/keywords.out" --fails -- ./writ check tests/check/keywords.writ

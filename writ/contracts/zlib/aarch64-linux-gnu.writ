@@ -1,5 +1,7 @@
 library zlib
 link "z"
+# The system zlib is built against glibc.
+link "c"
 header <zlib.h>
 
 opaque internal_state source "struct internal_state"

@@ -293,14 +293,12 @@ n00bb_abi_type_identity_rows_build(
             failed_reason = CORE_STRING_STATIC("enum range");
             const n00bb_enum_range_t *range = parse_sym_binding(category_owner,
                 CORE_STRING_STATIC("n00bb.enum-range"));
-            uint64_t width = range
-                ? range->magnitude_bits + (uint64_t)range->is_signed : 0;
-            if (!range || width > UINT32_MAX) {
+            if (!range || !range->storage_bits) {
                 valid = false;
                 break;
             }
-            row->semantic_width_bits = width ? (uint32_t)width : 1;
-            if (range->is_signed)
+            row->semantic_width_bits = range->storage_bits;
+            if (range->storage_signed)
                 row->flags |= N00B_ABI_TYPE_FLAG_SIGNED;
         }
         if (category_owner && row->kind == N00B_ABI_TYPE_FLAGSET) {

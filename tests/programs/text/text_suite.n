@@ -1,6 +1,7 @@
 import sys.abi
 import sys.gc.alloc
 import sys.gc.collect
+import sys.os
 import text
 import unicode
 import unicode.idna
@@ -66,20 +67,39 @@ func opt_is(o: u32?, v: u32) -> bool {
     return o == v
 }
 
+func open_pipe() -> sys.os.Pipe {
+    try {
+        return sys.os.pipe()!
+    } fail(failure) {
+        require false
+    }
+    return (read = -1, write = -1)
+}
+
+func close_fd(fd: i32) {
+    try {
+        sys.os.close(fd)!
+    } fail(failure) {
+        require false
+    }
+}
+
 func repr_of(s: string) -> string {
-    var read_fd: int = -1
-    var write_fd: int = -1
-    require __os_pipe(ref read_fd, ref write_fd) == 0
-    let count: i32 = s.raw_repr(cast[i32] write_fd)
+    let ends: sys.os.Pipe = open_pipe()
+    let count: i32 = s.raw_repr(ends.write)
     require count >= 0
     let written: uint = cast[uint] count
-    require __os_close(write_fd) == 0
-    var bytes: Array[u8] = new[Array[u8]](cast[int] written)
-    let got: int = __os_read(read_fd, unsafe_cast[Ref[byte]] ref bytes[0],
-                             written)
-    require got == cast[int] written
-    require __os_close(read_fd) == 0
-    return from_raw(ref bytes, got)
+    close_fd(ends.write)
+    var bytes: Array[u8] = new[Array[u8]](written)
+    var got: uint = 0
+    try {
+        got = sys.os.read(ends.read, bytes, 0, written)!
+    } fail(failure) {
+        require false
+    }
+    require got == written
+    close_fd(ends.read)
+    return from_raw(ref bytes, cast[int] got)
 }
 
 func check_encode(cp: char, want: string) {
@@ -1319,9 +1339,8 @@ func color_probe_main() {
 }
 
 func capability_probe_main() {
-    var read_fd: int = -1
-    var write_fd: int = -1
-    require __os_pipe(ref read_fd, ref write_fd) == 0
+    let ends: sys.os.Pipe = open_pipe()
+    let read_fd: int = cast[int](ends.read)
     text.terminal_force_color_depth(nil)
     check(text.terminal_color_depth(read_fd) == text.Color_Depth.mono, "capability_probe", "1")
     text.terminal_force_color_depth(text.Color_Depth.truecolor)
@@ -1333,8 +1352,8 @@ func capability_probe_main() {
     text.terminal_force_color_depth(nil)
     check(text.terminal_color_depth(read_fd) == text.Color_Depth.mono, "capability_probe", "4")
     check(text.terminal_width(read_fd) == nil, "capability_probe", "5")
-    require __os_close(write_fd) == 0
-    require __os_close(read_fd) == 0
+    close_fd(ends.write)
+    close_fd(ends.read)
 }
 
 let all_themes: Array[text.Border_Theme] = [
@@ -2653,7 +2672,7 @@ func builtin_checks() {
         check(text.theme_lookup(t.__value.name) != nil, "theme_probe", "3")
         var s: i8 = 0
         while s < slot(text.Palette_Ix.palette_size) {
-            check(text.palette(t.__value, cast[text.Palette_Ix] s) != nil, "theme_probe", "4")
+            check(text.palette(t.__value, unsafe_cast[text.Palette_Ix] s) != nil, "theme_probe", "4")
             s += 1
         }
         check(text.palette(t.__value, text.Palette_Ix.palette_size) == nil, "theme_probe", "5")

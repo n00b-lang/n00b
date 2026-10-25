@@ -1,3 +1,5 @@
+import sys.os
+
 record Node {
     value: int
     next:  Ref[Node]?
@@ -38,5 +40,5 @@ func run(live: int, churn: int) -> int {
     return sum(kept)
 }
 
-let scale = cast[int](__os_arg_count())
+let scale = cast[int](sys.os.arg_count())
 require run(1000000 * scale, 20000000) == 1000000 * scale * 999999 / 2

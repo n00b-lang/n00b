@@ -1,18 +1,16 @@
-func fd_is_tty(fd: int) -> bool fail: int {
-    let status = __os_fd_is_tty(fd)
-    if status < 0 {
-        fail status
-    }
-    return status == 1
+import internal.errno
+import internal.os
+
+func fd_is_tty(fd: int) -> bool fail: internal.errno.Errno {
+    return internal.os.is_terminal(cast[i32](fd))!
 }
 
-func terminal_size(fd: int, out rows: u16, out cols: u16) -> nil fail: int {
-    var height: u16 = 0
-    var width: u16 = 0
-    let status = __os_terminal_size(fd, ref height, ref width)
-    rows = height
-    cols = width
-    if status < 0 {
-        fail status
-    }
+func terminal_size(fd: int, out rows: u16, out cols: u16)
+    fail: internal.errno.Errno {
+    rows = 0
+    cols = 0
+    let size: internal.os.Terminal_Size =
+        internal.os.terminal_size(cast[i32](fd))!
+    rows = size.rows
+    cols = size.columns
 }

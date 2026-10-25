@@ -1,0 +1,63 @@
+import errs
+
+# A writ `syscall` enters the Linux kernel directly: no libc, no shim.
+[-
+library kernel
+platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+syscall write(fd: c_int, buf: *u8, count: usize) -> isize
+  number 1 when arch == x86_64
+  number 64 when arch == aarch64
+  effects output, blocking
+
+syscall getpid() -> c_int
+  number 39 when arch == x86_64
+  number 172 when arch == aarch64
+  infallible
+  effects none
+
+syscall getuid() -> c_uint
+  number 102 when arch == x86_64
+  number 174 when arch == aarch64
+  infallible
+  effects none
+
+binding {
+    error * -> "errs.Errno"
+    # This module declares its own `write`, so the syscall's is renamed;
+    # `getuid` isn't bound at all.
+    name write "kernel_write"
+    hide "getuid"
+}
+-]'ffi
+
+func say(fd: i32, text: string) -> int fail: errs.Errno {
+    let length: uint = text.len()
+    let bytes: Array[u8] = new[Array[u8]](cast[int](length))
+    var i: uint = 0
+    while i < length {
+        bytes[i] = text.byte_at(i)
+        i += 1
+    }
+    return kernel_write(fd, unsafe_cast[Ref[byte]] ref bytes[0], length)!
+}
+
+func write(text: string) -> int fail: errs.Errno {
+    return say(2, text)!
+}
+
+var wrote: int = 0
+var failed: errs.Errno = cast[errs.Errno](0)
+try {
+    # Success: the byte count comes back.
+    wrote = write("wrote\n")!
+    # Failure: the kernel's -EBADF arrives as errs.Errno.EBADF.
+    wrote = say(-1, "x")!
+} fail(e) {
+    failed = e
+}
+require wrote == 6
+require failed == errs.Errno.EBADF
+# `infallible`: no failure channel at all.
+require getpid() > 0
+__fd_write(2, "ok")

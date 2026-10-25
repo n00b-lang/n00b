@@ -38,13 +38,8 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                 if (!symbol->type) continue;
                 const n00bb_enum_range_t *enum_range = parse_sym_binding(
                     symbol, CORE_STRING_STATIC("n00bb.enum-range"));
-                uint64_t enum_bits = 0;
-                if (enum_range)
-                    enum_bits = enum_range->magnitude_bits > UINT32_MAX
-                            - (uint32_t)enum_range->is_signed
-                        ? UINT64_MAX
-                        : enum_range->magnitude_bits + enum_range->is_signed;
-                if (enum_range && !enum_bits) enum_bits = 1;
+                uint64_t enum_bits = enum_range ? enum_range->storage_bits
+                                                : 0;
                 const n00bb_flagset_info_t *flagset_info = parse_sym_binding(
                     symbol, CORE_STRING_STATIC("n00bb.flagset-info"));
                 th_type *type = th_apply_subst(ir_module_types(module),

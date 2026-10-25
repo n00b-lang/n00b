@@ -19,12 +19,6 @@ n00bb_emit_value_instruction(ir_lower_context_t *context, ir_op_t op,
                              th_type *type, ir_value_t *left,
                              ir_value_t *right, ir_span_t span);
 static ir_lower_result_t
-n00bb_lower_enum_from_value(ir_lower_context_t *context,
-                            n00bb_lower_context_t *lower,
-                            parse_sym_entry_t *enum_symbol,
-                            ir_value_t *operand, th_type *target,
-                            ir_span_t span);
-static ir_lower_result_t
 report_undefined_cast(ir_lower_context_t *context, th_ctx *types,
                       th_type *from, th_type *target, ir_span_t span);
 static th_type *
@@ -683,67 +677,50 @@ n00bb_emit_value_instruction(ir_lower_context_t *context, ir_op_t op,
     return instruction->dest;
 }
 
-static ir_lower_result_t
-n00bb_lower_enum_from_value(ir_lower_context_t *context,
-                            n00bb_lower_context_t *lower,
-                            parse_sym_entry_t *enum_symbol,
-                            ir_value_t *operand, th_type *target,
-                            ir_span_t span)
+// The integer or float a distinct type was created from (`type Id = i32`
+// gives `i32`), or nullptr. Enums and flagsets also have integer
+// definitions, but they have their own cast rules, so they are excluded.
+static th_type *
+distinct_scalar_base(ir_lower_context_t *context, n00bb_tu_state_t *caller,
+                     th_type *type)
 {
-    th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
-    ir_machine_t machine = ir_machine_of(context->module, operand->type);
-    ir_block_t *join = n00bb_branch_block(context, lower, "enum_cast_join");
-    ir_block_t *failure = n00bb_branch_block(context, lower,
-                                              "enum_cast_failed");
-    ir_instr_t *trap = failure ? ir_instr_add(failure, IR_OP_TRAP) : nullptr;
-    if (!join || !failure || !trap || !ir_instr_operand_value(trap, operand)
-        || !n00bb_describe_failure(lower, trap, N00BB_FAILURE_ENUM,
-               (core_string_t){0}, enum_symbol->name))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
-            "could not emit the enum range check");
-    trap->span = span;
-    for (parse_sym_entry_t *member = enum_symbol->member_scope
-             ? enum_symbol->member_scope->first_in_scope : nullptr;
-         member; member = member->next_in_scope) {
-        if (member->kind != PARSE_SYM_ENUM_CONST || !member->has_comptime_value
-            || !member->comptime_value) continue;
-        n00bb_enum_value_t *ordinal = member->comptime_value;
-        ir_lit_t literal = {.mag = ordinal->magnitude, .neg = ordinal->negative};
-        if (!n00bb_literal_fits_machine(literal, machine)) continue;
-        ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
-                                                         span);
-        if (!constant
-            || !ir_lower_set_temp_dest(context, constant, CORE_STRING_STATIC("__n00bb_"),
-                                       operand->type)
-            || !ir_instr_operand_int_lit(constant, literal))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not emit the enum member value");
-        ir_value_t *equal = n00bb_emit_value_instruction(context, IR_OP_EQ,
-            bool_type, operand, constant->dest, span);
-        ir_block_t *next = n00bb_branch_block(context, lower,
-                                               "enum_cast_test");
-        ir_instr_t *branch = equal && next
-            ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
-        if (!branch || !ir_instr_operand_value(branch, equal)
-            || !ir_instr_operand_block(branch, join)
-            || !ir_instr_operand_block(branch, next))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
-                "could not emit the enum membership test");
-        branch->span = span;
-        context->block = next;
+    th_type *definition = th_type_definition(ir_module_types(context->module),
+                                             type);
+    if (!definition || !caller) return nullptr;
+    n00bb_lower_context_t *lower = context->user;
+    if (n00bb_enum_type_symbol(caller->link_analysis, type)
+        || n00bb_flagset_type(lower->unit, caller, type, nullptr))
+        return nullptr;
+    ir_machine_t machine = ir_machine_of(context->module, definition);
+    return machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT
+        || machine.class == IR_CLASS_FLOAT ? definition : nullptr;
+}
+
+// The fixed-width integer type an open enum's values are stored as.
+static th_type *
+enum_storage_integer(th_ctx *types, const n00bb_enum_range_t *range)
+{
+    static const char *const signed_names[] = {"i8", "i16", "i32", "i64",
+                                               "i128"};
+    static const char *const unsigned_names[] = {"u8", "u16", "u32", "u64",
+                                                 "u128"};
+    for (size_t i = 0, bits = 8; i < 5; i++, bits *= 2) {
+        if (range->storage_bits != bits) continue;
+        const char *name = range->storage_signed ? signed_names[i]
+                                                 : unsigned_names[i];
+        return th_name(types, core_string_borrow(name, strlen(name)));
     }
-    ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
-    if (!jump || !ir_instr_operand_block(jump, failure))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
-            "could not emit the enum range check");
-    jump->span = span;
-    context->block = join;
+    return nullptr;
+}
+
+static ir_lower_result_t
+emit_nominal_cast(ir_lower_context_t *context, ir_value_t *value,
+                  th_type *target, ir_span_t span)
+{
     ir_value_t *converted = n00bb_emit_value_instruction(context,
-        IR_OP_ENUM_FROM_VALUE, target, operand, nullptr, span);
-    if (!converted)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
-            "could not emit the integer-to-enum conversion");
-    return (ir_lower_result_t){IR_LOWER_VALUE, converted};
+        IR_OP_NOMINAL_CAST, target, value, nullptr, span);
+    return converted ? (ir_lower_result_t){IR_LOWER_VALUE, converted}
+        : lower_internal(context, span, "could not emit a nominal cast");
 }
 
 bool
@@ -757,10 +734,42 @@ foreign_pointer_type(th_type *type)
         && th_ind_attrs(resolved, &attrs) && (attrs & TH_FOREIGN);
 }
 
+// True inside the errno conversion the writ n00b generator emits for each
+// syscall, `__<name>_syscall_errno`: there, a cast that fails means the
+// binding chose an errno type that can't hold every errno.
+static bool
+in_syscall_errno(const ir_lower_context_t *context)
+{
+    core_string_t name = context && context->function
+        ? context->function->name : (core_string_t){0};
+    size_t start = name.u8_bytes;
+    while (start && name.data[start - 1] != '.') start--;
+    core_string_t last = core_string_slice(name, start,
+                                           name.u8_bytes - start);
+    return core_string_starts_with(last, CORE_STRING_STATIC("__"))
+        && core_string_ends_with(last, CORE_STRING_STATIC("_syscall_errno"));
+}
+
+static ir_lower_result_t
+report_syscall_errno_type(ir_lower_context_t *context, th_type *target,
+                          ir_span_t span)
+{
+    core_string_t target_text = lower_type_text(context, target);
+    ir_lower_result_t result = lower_report(context,
+        N00B_DIAG_SYSCALL_ERRNO_TYPE, span, N00B_TEXT_SYSCALL_ERRNO_TYPE,
+        N00BB_ARGS(ARG_TEXT(target_text)));
+    lower_help(context, N00B_TEXT_SYSCALL_ERRNO_TYPE_HELP,
+               N00BB_ARGS(ARG_TEXT(target_text)));
+    core_free(target_text.data);
+    return result;
+}
+
 static ir_lower_result_t
 report_undefined_cast(ir_lower_context_t *context, th_ctx *types,
                       th_type *from, th_type *target, ir_span_t span)
 {
+    if (in_syscall_errno(context))
+        return report_syscall_errno_type(context, target, span);
     core_string_t from_text = n00bb_print_type(types, from);
     core_string_t target_text = n00bb_print_type(types, target);
     bool references = th_kind_of(th_resolve(from)) == TH_INDIRECTION
@@ -1000,6 +1009,101 @@ n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,
             || (foreign_pointer_type(from)
                 && th_ind_attrs(target, &plain_attrs) && !plain_attrs)))
         plain_reference_cast = true;
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
+    th_type *to_base = distinct_scalar_base(context, caller, target);
+    th_type *from_base = distinct_scalar_base(context, caller, from);
+    if (to_base && !ir_type_eq(context->module, from, to_base)) {
+        ir_lower_result_t inner = n00bb_emit_cast(context, grammar,
+            operand_node, operands, to_base, unsafe_cast, span);
+        if (inner.status != IR_LOWER_VALUE) return inner;
+        return emit_nominal_cast(context, inner.value, target, span);
+    }
+    if (from_base && !ir_type_eq(context->module, target, from_base)) {
+        ir_lower_result_t inner = emit_nominal_cast(context, operands[0],
+                                                    from_base, span);
+        if (inner.status != IR_LOWER_VALUE) return inner;
+        ir_value_t *step[1] = {inner.value};
+        return n00bb_emit_cast(context, grammar, nullptr, step, target,
+                               unsafe_cast, span);
+    }
+    parse_sym_entry_t *enum_symbol = caller
+        ? n00bb_enum_type_symbol(caller->link_analysis, from) : nullptr;
+    parse_sym_entry_t *target_enum = caller
+        ? n00bb_enum_type_symbol(caller->link_analysis, target) : nullptr;
+    if (unsafe_cast && target_enum && is_integer_type(from)) {
+        ir_value_t *converted = n00bb_emit_value_instruction(context,
+            IR_OP_ENUM_FROM_VALUE, target, operands[0], nullptr, span);
+        return converted ? (ir_lower_result_t){IR_LOWER_VALUE, converted}
+            : lower_internal(context, span,
+                             "could not emit an unchecked enum conversion");
+    }
+    if (unsafe_cast && enum_symbol && is_integer_type(target)) {
+        const n00bb_enum_range_t *range = parse_sym_binding(enum_symbol,
+            CORE_STRING_STATIC("n00bb.enum-range"));
+        th_type *wide = th_name(types, range && range->storage_signed
+            ? CORE_STRING_STATIC("i128") : CORE_STRING_STATIC("u128"));
+        ir_value_t *value = range && wide
+            ? n00bb_emit_value_instruction(context, IR_OP_ENUM_VALUE, wide,
+                                           operands[0], nullptr, span)
+            : nullptr;
+        if (!value)
+            return lower_internal(context, span,
+                                  "could not emit an unchecked enum value");
+        ir_value_t *step[1] = {value};
+        return n00bb_emit_cast(context, grammar, nullptr, step, target, true,
+                               span);
+    }
+    const n00bb_enum_range_t *from_range = enum_symbol
+        ? parse_sym_binding(enum_symbol, CORE_STRING_STATIC("n00bb.enum-range"))
+        : nullptr;
+    const n00bb_enum_range_t *to_range = target_enum
+        ? parse_sym_binding(target_enum, CORE_STRING_STATIC("n00bb.enum-range"))
+        : nullptr;
+    if (to_range && to_range->is_open && is_integer_type(from)) {
+        th_type *storage = enum_storage_integer(types, to_range);
+        if (!storage)
+            return lower_internal(context, span,
+                                  "open enum storage has no integer type");
+        ir_value_t *value = operands[0];
+        if (!ir_type_eq(context->module, from, storage)) {
+            ir_lower_result_t inner = n00bb_emit_cast(context, grammar,
+                operand_node, operands, storage, false, span);
+            if (inner.status != IR_LOWER_VALUE) return inner;
+            value = inner.value;
+        }
+        ir_value_t *converted = n00bb_emit_value_instruction(context,
+            IR_OP_ENUM_FROM_VALUE, target, value, nullptr, span);
+        return converted ? (ir_lower_result_t){IR_LOWER_VALUE, converted}
+            : lower_internal(context, span,
+                             "could not emit an open enum conversion");
+    }
+    if (from_range && from_range->is_open && is_integer_type(target)) {
+        th_type *storage = enum_storage_integer(types, from_range);
+        ir_value_t *value = storage
+            ? n00bb_emit_value_instruction(context, IR_OP_ENUM_VALUE, storage,
+                                           operands[0], nullptr, span)
+            : nullptr;
+        if (!value)
+            return lower_internal(context, span,
+                                  "could not emit an open enum value");
+        if (ir_type_eq(context->module, storage, target))
+            return (ir_lower_result_t){IR_LOWER_VALUE, value};
+        ir_value_t *step[1] = {value};
+        return n00bb_emit_cast(context, grammar, nullptr, step, target, false,
+                               span);
+    }
+    bool reinterpret_from_float = from_machine.class == IR_CLASS_FLOAT;
+    bool reinterpret_to_float = target_machine.class == IR_CLASS_FLOAT;
+    if (unsafe_cast && from_machine.width == target_machine.width
+        && ((reinterpret_from_float && is_integer_type(target))
+            || (reinterpret_to_float && is_integer_type(from)))) {
+        ir_value_t *bits = n00bb_emit_value_instruction(context,
+            IR_OP_BITCAST, target, operands[0], nullptr, span);
+        return bits ? (ir_lower_result_t){IR_LOWER_VALUE, bits}
+            : lower_internal(context, span,
+                             "could not emit a float reinterpretation");
+    }
     if (unsafe_cast && is_integer_type(from) && is_integer_type(target)) {
         ir_instr_t *cast = ir_lower_emit_instruction(context, IR_OP_CAST,
                                                      span);
@@ -1024,8 +1128,6 @@ n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,
         core_free(target_text.data);
         return result;
     }
-    n00bb_lower_context_t *lower = context->user;
-    n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     parse_sym_entry_t *from_flagset = nullptr;
     parse_sym_entry_t *to_flagset = nullptr;
     bool source_flagset = caller && n00bb_flagset_type(lower->unit, caller,
@@ -1072,12 +1174,11 @@ n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,
                                "could not emit the flagset integer conversion");
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
     }
-    parse_sym_entry_t *enum_symbol = caller
-        ? n00bb_enum_type_symbol(caller->link_analysis, from) : nullptr;
     if (enum_symbol && is_integer_type(target)) {
         const n00bb_enum_range_t *range = parse_sym_binding(enum_symbol,
             CORE_STRING_STATIC("n00bb.enum-range"));
         ir_machine_t destination = ir_machine_of(context->module, target);
+        uint64_t needed = range ? range->magnitude_bits + range->is_signed : 0;
         bool represents_range = range && (range->is_signed
             ? destination.class == IR_CLASS_SINT
                 && destination.width >= range->magnitude_bits + 1
@@ -1085,23 +1186,41 @@ n00bb_emit_cast(ir_lower_context_t *context, parse_grammar_t *grammar,
                     && destination.width >= range->magnitude_bits)
                 || (destination.class == IR_CLASS_SINT
                     && destination.width > range->magnitude_bits));
-        ir_instr_t *conversion = ir_lower_emit_instruction(context,
-                                                            IR_OP_ENUM_VALUE,
-                                                            span);
-        if (!range || !conversion
-            || !ir_lower_set_temp_dest(context, conversion,
-                                       CORE_STRING_STATIC("__n00bb_"), target)
-            || !ir_instr_operand_value(conversion, operands[0])
-            || (!represents_range && !ir_instr_add_mod(conversion, CORE_STRING_STATIC("trap"))))
-            return lower_internal(context, span,
+        if (range && !represents_range) {
+            core_string_t integer_text = lower_type_text(context, target);
+            ir_lower_result_t result = lower_report(context,
+                N00B_DIAG_ENUM_INTEGER_TOO_NARROW, span,
+                N00B_TEXT_ENUM_TOO_NARROW_TO_HOLD,
+                N00BB_ARGS(ARG_TEXT(integer_text),
+                           ARG_TEXT(enum_symbol->name),
+                           ARG_NUMBER((unsigned)needed)));
+            lower_help(context, N00B_TEXT_CAST_TO_AN_INTEGER_WITH_BITS,
+                       N00BB_ARGS(ARG_NUMBER((unsigned)needed)));
+            core_free(integer_text.data);
+            return result;
+        }
+        ir_value_t *converted = range
+            ? n00bb_emit_value_instruction(context, IR_OP_ENUM_VALUE, target,
+                                           operands[0], nullptr, span)
+            : nullptr;
+        return converted ? (ir_lower_result_t){IR_LOWER_VALUE, converted}
+            : lower_internal(context, span,
                 "could not emit the semantic enum-to-integer conversion");
-        return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
     }
-    parse_sym_entry_t *target_enum = caller
-        ? n00bb_enum_type_symbol(caller->link_analysis, target) : nullptr;
-    if (target_enum && is_integer_type(from))
-        return n00bb_lower_enum_from_value(context, lower, target_enum,
-                                           operands[0], target, span);
+    if (target_enum && is_integer_type(from)) {
+        if (in_syscall_errno(context))
+            return report_syscall_errno_type(context, target, span);
+        core_string_t from_text = lower_type_text(context, from);
+        ir_lower_result_t result = lower_report(context,
+            N00B_DIAG_INTEGER_TO_ENUM_CAST, span,
+            N00B_TEXT_CAST_INTEGER_TO_ENUM,
+            N00BB_ARGS(ARG_TEXT(from_text), ARG_TEXT(target_enum->name)));
+        lower_help(context, N00B_TEXT_CAST_INTEGER_TO_ENUM_HELP,
+                   N00BB_ARGS(ARG_TEXT(from_text),
+                              ARG_TEXT(target_enum->name)));
+        core_free(from_text.data);
+        return result;
+    }
     th_type *from_definition = th_type_definition(types, from);
     th_type *to_definition = th_type_definition(types, target);
     if (unsafe_cast) {

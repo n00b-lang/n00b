@@ -1,0 +1,171 @@
+# A small pool allocator for memory outside the collected heap: blocks that
+# C code owns, such as the buffers generated FFI shims use. On Linux, where
+# programs link no libc, it is the C side's malloc, calloc, realloc and free
+# (runtime/linux_start.c forwards them here as n00b_pool_*).
+#
+# Requests up to 2048 bytes come from eight size classes (16, 32, ... 2048
+# bytes), each a free list carved from 64 KiB chunks. Larger requests get a
+# mapping of their own. Every block has a 16-byte header in front: the class
+# index, or for a large block the size of its mapping with `large_block`
+# set. Blocks come back zeroed.
+
+import internal.locks
+import internal.memory
+
+private const header_bytes: uint = 16
+private const smallest_class: uint = 16
+private const class_count: uint = 8
+private const largest_class: uint = 2048
+private const chunk_bytes: uint = 0x10000
+private const large_block: u64 = 0x8000000000000000
+
+# The pool's state lives in a page of its own: the lock, then one free-list
+# head per class.
+private const heads_at: int = 64
+private var state: Ref[byte]? = internal.memory.map_zeroed(
+    internal.memory.page_size(), 16)
+
+private func state_page() -> Ref[byte] {
+    let page: Ref[byte]? = state
+    require page != nil
+    return page
+}
+
+private func lock() -> Ref[internal.locks.Mutex] {
+    return unsafe_cast[Ref[internal.locks.Mutex]] state_page()
+}
+
+private func head(class: uint) -> Ref[Ref[byte]?] {
+    return unsafe_cast[Ref[Ref[byte]?]] __gc_byte_offset(state_page(),
+        heads_at + cast[int](class * 8))
+}
+
+# A block's first word: the next free block while it is free, its header
+# while it is in use.
+private func link(block: Ref[byte]) -> Ref[Ref[byte]?] {
+    return unsafe_cast[Ref[Ref[byte]?]] block
+}
+
+private func header(block: Ref[byte]) -> Ref[u64] {
+    return unsafe_cast[Ref[u64]] block
+}
+
+private func class_bytes(class: uint) -> uint {
+    return smallest_class << class
+}
+
+private func class_for(bytes: uint) -> uint {
+    var class: uint = 0
+    while class_bytes(class) < bytes {
+        class += 1
+    }
+    return class
+}
+
+private func round_up(value: uint, alignment: uint) -> uint {
+    return ((value + alignment - 1) / alignment) * alignment
+}
+
+# Maps a chunk and threads all its blocks onto the class's free list. Called
+# with the lock held.
+private func refill(class: uint) -> bool {
+    let chunk: Ref[byte]? = internal.memory.map_zeroed(chunk_bytes, 16)
+    if chunk == nil {
+        return false
+    }
+    let base: Ref[byte] = chunk
+    let block_bytes: uint = header_bytes + class_bytes(class)
+    var at: uint = 0
+    while at + block_bytes <= chunk_bytes {
+        let block: Ref[byte] = __gc_byte_offset(base, cast[int](at))
+        link(block).__value = head(class).__value
+        head(class).__value = block
+        at += block_bytes
+    }
+    return true
+}
+
+private func allocate_large(bytes: uint) -> Ref[byte]? {
+    let mapping: uint = round_up(header_bytes + bytes,
+                                 internal.memory.page_size())
+    let mapped: Ref[byte]? = internal.memory.map_zeroed(mapping, 16)
+    if mapped == nil {
+        return nil
+    }
+    let block: Ref[byte] = mapped
+    header(block).__value = cast[u64](mapping) | large_block
+    return __gc_byte_offset(block, cast[int](header_bytes))
+}
+
+# A zeroed block of at least `bytes` bytes, or nil when memory runs out.
+func allocate(bytes: uint) -> Ref[byte]? {
+    if bytes > largest_class {
+        return allocate_large(bytes)
+    }
+    let class: uint = class_for(bytes)
+    internal.locks.mutex_lock(lock())
+    var taken: Ref[byte]? = head(class).__value
+    if taken == nil and refill(class) {
+        taken = head(class).__value
+    }
+    if taken != nil {
+        let block: Ref[byte] = taken
+        head(class).__value = link(block).__value
+    }
+    internal.locks.mutex_unlock(lock())
+    if taken == nil {
+        return nil
+    }
+    let block: Ref[byte] = taken
+    __gc_memset(block, 0, header_bytes + class_bytes(class))
+    header(block).__value = cast[u64](class)
+    return __gc_byte_offset(block, cast[int](header_bytes))
+}
+
+# The bytes a block from `allocate` can hold.
+func capacity(memory: Ref[byte]) -> uint {
+    let tag: u64 = header(__gc_byte_offset(memory,
+                                           -cast[int](header_bytes))).__value
+    if tag & large_block != 0 {
+        return cast[uint](tag & ~large_block) - header_bytes
+    }
+    return class_bytes(cast[uint](tag))
+}
+
+# Returns a block from `allocate`. nil is ignored.
+func release(memory: Ref[byte]?) {
+    if memory == nil {
+        return
+    }
+    let block: Ref[byte] = __gc_byte_offset(memory, -cast[int](header_bytes))
+    let tag: u64 = header(block).__value
+    if tag & large_block != 0 {
+        _ = internal.memory.unmap(block, cast[uint](tag & ~large_block))
+        return
+    }
+    let class: uint = cast[uint](tag)
+    internal.locks.mutex_lock(lock())
+    link(block).__value = head(class).__value
+    head(class).__value = block
+    internal.locks.mutex_unlock(lock())
+}
+
+# A block of at least `bytes` bytes holding `memory`'s contents; `memory`
+# is released. Like realloc, nil allocates and a failure leaves `memory`.
+func resize(memory: Ref[byte]?, bytes: uint) -> Ref[byte]? {
+    if memory == nil {
+        return allocate(bytes)
+    }
+    let old: Ref[byte] = memory
+    let held: uint = capacity(old)
+    if bytes <= held {
+        return old
+    }
+    let grown: Ref[byte]? = allocate(bytes)
+    if grown == nil {
+        return nil
+    }
+    __gc_memcpy(grown, old, held)
+    release(old)
+    return grown
+}

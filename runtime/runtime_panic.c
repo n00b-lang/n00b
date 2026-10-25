@@ -926,7 +926,7 @@ function_at(uintptr_t address)
         if (start && start <= address
             && (!best || start > (uintptr_t)best->start)) best = entry;
     }
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(N00B_LIBC_FREE)
     Dl_info symbol = {0};
     if (best && dladdr((const void *)address, &symbol) && symbol.dli_saddr
         && (uintptr_t)symbol.dli_saddr > (uintptr_t)best->start)
@@ -1185,6 +1185,83 @@ n00bb_runtime_install_failure_handlers(void)
 
 enum { ALTERNATE_STACK_BYTES = 1u << 18, STACK_FAULT_WINDOW = 1u << 16 };
 
+#if defined(__linux__) && defined(N00B_LIBC_FREE)
+#include "builtin_os_syscall.h"
+
+// Signals without libc: rt_sigaction takes the kernel's own sigaction
+// layout, and the handler returns through a restorer that calls
+// rt_sigreturn, which libc would otherwise supply.
+typedef struct {
+    void *handler;
+    unsigned long flags;
+    void (*restorer)(void);
+    uint64_t mask;
+} kernel_sigaction_t;
+
+enum { KERNEL_SA_RESTORER = 0x04000000 };
+
+__attribute__((naked)) static void
+signal_restorer(void)
+{
+#if defined(__x86_64__)
+    __asm__ volatile("mov $15, %%eax\n\tsyscall" ::: "memory");
+#else
+    __asm__ volatile("mov x8, #139\n\tsvc #0" ::: "memory");
+#endif
+}
+
+static void
+set_signal_handler(int number, void *handler, unsigned long flags)
+{
+    kernel_sigaction_t action = {
+        .handler = handler,
+        .flags = flags | KERNEL_SA_RESTORER,
+        .restorer = signal_restorer,
+    };
+    (void)n00b_linux_syscall6(__NR_rt_sigaction, number, (long)&action, 0,
+                              sizeof(action.mask), 0, 0);
+}
+
+static void *
+alternate_stack_memory(void)
+{
+    enum { READ_WRITE = 3, PRIVATE_ANONYMOUS = 0x22 };
+    long area = n00b_linux_syscall6(__NR_mmap, 0, ALTERNATE_STACK_BYTES,
+                                    READ_WRITE, PRIVATE_ANONYMOUS, -1, 0);
+    return area < 0 && area > -4096 ? NULL : (void *)area;
+}
+
+static void
+use_alternate_stack(stack_t *alternate)
+{
+    (void)n00b_linux_syscall6(__NR_sigaltstack, (long)alternate, 0, 0, 0, 0,
+                              0);
+}
+#else
+static void
+set_signal_handler(int number, void *handler, unsigned long flags)
+{
+    struct sigaction action = {0};
+    if (handler == (void *)SIG_DFL) action.sa_handler = SIG_DFL;
+    else action.sa_sigaction = handler;
+    action.sa_flags = (int)flags;
+    sigemptyset(&action.sa_mask);
+    sigaction(number, &action, NULL);
+}
+
+static void *
+alternate_stack_memory(void)
+{
+    return malloc(ALTERNATE_STACK_BYTES);
+}
+
+static void
+use_alternate_stack(stack_t *alternate)
+{
+    sigaltstack(alternate, NULL);
+}
+#endif
+
 static void
 stack_fault(int number, siginfo_t *info, void *raw_context)
 {
@@ -1211,7 +1288,7 @@ stack_fault(int number, siginfo_t *info, void *raw_context)
     uintptr_t address = (uintptr_t)info->si_addr;
     if (address + STACK_FAULT_WINDOW < sp
         || address > sp + STACK_FAULT_WINDOW) {
-        signal(number, SIG_DFL);
+        set_signal_handler(number, (void *)SIG_DFL, 0);
         return;
     }
     fault_pc = pc;
@@ -1225,16 +1302,12 @@ void
 n00bb_runtime_install_failure_handlers(void)
 {
     stack_t alternate = {
-        .ss_sp = malloc(ALTERNATE_STACK_BYTES),
+        .ss_sp = alternate_stack_memory(),
         .ss_size = ALTERNATE_STACK_BYTES,
     };
-    if (alternate.ss_sp) sigaltstack(&alternate, NULL);
+    if (alternate.ss_sp) use_alternate_stack(&alternate);
     if (atomic_exchange(&handlers_installed, true)) return;
-    struct sigaction action = {0};
-    action.sa_sigaction = stack_fault;
-    action.sa_flags = SA_SIGINFO | SA_ONSTACK;
-    sigemptyset(&action.sa_mask);
-    sigaction(SIGSEGV, &action, NULL);
-    sigaction(SIGBUS, &action, NULL);
+    set_signal_handler(SIGSEGV, (void *)stack_fault, SA_SIGINFO | SA_ONSTACK);
+    set_signal_handler(SIGBUS, (void *)stack_fault, SA_SIGINFO | SA_ONSTACK);
 }
 #endif

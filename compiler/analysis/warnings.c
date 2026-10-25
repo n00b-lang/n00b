@@ -64,7 +64,7 @@ add_argument_places(race_start_t *start, ir_func_t *function,
 static void
 collect_race_starts(const core_list_t(n00bb_ir_func_ptr_t) *functions,
                     const core_list_t(entry_param_t) *params,
-                    race_starts_t *starts);
+                    ir_summaries_t *summaries, race_starts_t *starts);
 static void
 report_race(void *context, const ir_race_t *race);
 static void
@@ -719,6 +719,31 @@ entry_param_mask(const core_list_t(entry_param_t) *params,
     return 0;
 }
 
+// A function that starts threads without saying which argument runs on
+// them, such as an FFI binding declared `effects threads, of entry`: any
+// callback it is given may be a thread's entry.
+static bool
+starts_threads(ir_summaries_t *summaries, const ir_func_t *function)
+{
+    ir_summary_t *summary = summaries
+        ? ir_summary_of(summaries, (ir_func_t *)function) : nullptr;
+    return summary
+        && (ir_summary_flags(summary) & IR_SUMMARY_STARTS_THREADS);
+}
+
+// The function a thread entry argument runs: a function value, or the
+// handler of a callback made from one.
+static const ir_value_t *
+entry_function_value(const ir_value_t *argument)
+{
+    const ir_value_t *value = copied_source(argument);
+    const ir_instr_t *creation = value ? value->def : nullptr;
+    if (creation && creation->op == IR_OP_CALLBACK_CREATE
+        && creation->n_operands && creation->operands[0].kind == IR_OPD_VALUE)
+        value = copied_source(creation->operands[0].value);
+    return value;
+}
+
 static bool
 add_entry_param(core_list_t(entry_param_t) *params, ir_func_t *function,
                 uint64_t bit)
@@ -785,7 +810,8 @@ note_taken_value(void *context, const ir_value_t *value)
 
 core_list_t(n00bb_ir_func_ptr_t)
 thread_entries(const core_list_t(n00bb_ir_func_ptr_t) *functions,
-               bool *complete, core_list_t(entry_param_t) *params_out)
+               ir_summaries_t *summaries, bool *complete,
+               core_list_t(entry_param_t) *params_out)
 {
     core_list_t(entry_param_t) params = core_list_new(entry_param_t);
     core_list_t(n00bb_ir_func_ptr_t) entries =
@@ -804,10 +830,13 @@ thread_entries(const core_list_t(n00bb_ir_func_ptr_t) *functions,
                     ir_func_t *target = n00bb_direct_call_target(in);
                     uint64_t mask = target
                         ? entry_param_mask(&params, target) : 0;
+                    bool by_effect = !mask && target
+                        && starts_threads(summaries, target);
+                    if (by_effect) mask = UINT64_MAX;
                     for (uint32_t p = 0; mask && p < 64
                          && p + 1 < in->n_operands; p++) {
                         if (!(mask >> p & 1)) continue;
-                        const ir_value_t *argument = copied_source(
+                        const ir_value_t *argument = entry_function_value(
                             ir_operand_value(&in->operands[p + 1]));
                         ir_func_t *entry = argument
                                 && argument->kind == IR_VAL_FUNC
@@ -817,7 +846,9 @@ thread_entries(const core_list_t(n00bb_ir_func_ptr_t) *functions,
                             if (core_dict_add(&listed, entry, 1))
                                 core_list_push(entries, entry);
                         }
-                        else if (!argument || argument->kind != IR_VAL_PARAM)
+                        else if (!by_effect
+                                 && (!argument
+                                     || argument->kind != IR_VAL_PARAM))
                             *complete = false;
                         for (uint32_t q = 0; argument
                              && argument->kind == IR_VAL_PARAM
@@ -913,7 +944,7 @@ add_argument_places(race_start_t *start, ir_func_t *function,
 static void
 collect_race_starts(const core_list_t(n00bb_ir_func_ptr_t) *functions,
                     const core_list_t(entry_param_t) *params,
-                    race_starts_t *starts)
+                    ir_summaries_t *summaries, race_starts_t *starts)
 {
     for (size_t f = 0; f < functions->len; f++) {
         ir_func_t *function = functions->data[f];
@@ -924,10 +955,12 @@ collect_race_starts(const core_list_t(n00bb_ir_func_ptr_t) *functions,
                 ir_instr_t *in = function->blocks[b]->instrs[i];
                 ir_func_t *target = n00bb_direct_call_target(in);
                 uint64_t mask = target ? entry_param_mask(params, target) : 0;
+                if (!mask && target && starts_threads(summaries, target))
+                    mask = UINT64_MAX;
                 for (uint32_t p = 0; mask && p < 64
                      && p + 1 < in->n_operands; p++) {
                     if (!(mask >> p & 1)) continue;
-                    const ir_value_t *argument = copied_source(
+                    const ir_value_t *argument = entry_function_value(
                         ir_operand_value(&in->operands[p + 1]));
                     if (!argument || argument->kind != IR_VAL_FUNC
                         || !argument->owner) continue;
@@ -1013,11 +1046,11 @@ warn_shared_global_races(n00bb_link_analysis_t *analysis,
     bool complete = true;
     core_list_t(entry_param_t) params = {0};
     core_list_t(n00bb_ir_func_ptr_t) entries = thread_entries(
-        &everything, &complete, &params);
+        &everything, analysis->summaries, &complete, &params);
     if (!complete) add_address_taken_functions(&everything, &entries);
     race_starts_t starts = {.list = core_list_new(race_start_t)};
     core_dict_init(&starts.index, nullptr, nullptr);
-    collect_race_starts(&everything, &params, &starts);
+    collect_race_starts(&everything, &params, analysis->summaries, &starts);
     core_list_free(params);
     core_list_free(everything);
     core_dict_t threaded;

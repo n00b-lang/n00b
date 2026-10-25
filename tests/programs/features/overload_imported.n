@@ -6,6 +6,16 @@ func put(modify buffer: Array[u8]) -> nil fail: int {
     buffer[0] = 9
 }
 
+# The same pair with no written return type: the generic one's result is
+# known only from its body.
+func store(modify value: 'T) fail: int where 'T : Integer {
+    value = value.from_bits(cast[u128](5))
+}
+
+func store(modify buffer: Array[u8]) fail: int {
+    buffer[0] = 6
+}
+
 func hashed(value: 'T) -> u128 fail: int where 'T : Hash {
     return value.hash()
 }

@@ -1,3 +1,5 @@
+import sys.os
+
 record Node {
     value: int
     next:  Ref[Node]?
@@ -25,5 +27,5 @@ func run(rounds: int, length: int) -> int {
     return total
 }
 
-let scale = cast[int](__os_arg_count())
+let scale = cast[int](sys.os.arg_count())
 require run(60 * scale, 100000) == 299997000000

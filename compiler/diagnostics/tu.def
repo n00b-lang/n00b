@@ -389,3 +389,12 @@ N00B_DIAG(VARIANT_LITERAL_ARMS, "N00B-T0594", ERROR,
     "A variant holds one arm at a time, so a literal for it names exactly\n"
     "one arm and its value:\n"
     "    let shape: Shape = (circle = 3)")
+N00B_DIAG(ENUM_STORAGE_NOT_INTEGER, "N00B-T0595", ERROR,
+    "an enum's storage type is not a fixed-width integer type",
+    "`enum Name: T` stores the enum's values as `T`, which must be one of\n"
+    "the fixed-width integer types:\n"
+    "    open enum Errno: i32 { EPERM = 1 }")
+N00B_DIAG(ENUM_STORAGE_TOO_NARROW, "N00B-T0596", ERROR,
+    "an enum item's value does not fit the enum's storage type",
+    "Every item of `enum Name: T` must have a value that `T` can hold.\n"
+    "Use a wider storage type, or leave it out to let the compiler choose.")

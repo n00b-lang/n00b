@@ -1,0 +1,20 @@
+error[E0227]: a `syscall` passes only integers and plain pointers, one register each
+  --> tests/check/syscall_errors.writ:4:18
+error[E0227]: a `syscall` passes only integers and plain pointers, one register each
+  --> tests/check/syscall_errors.writ:4:43
+error[E0227]: a `syscall` passes only integers and plain pointers, one register each
+  --> tests/check/syscall_errors.writ:4:56
+error[E0228]: this clause does not apply to a `syscall`
+  --> tests/check/syscall_errors.writ:10:3
+error[E0228]: this clause does not apply to a `syscall`
+  --> tests/check/syscall_errors.writ:11:3
+error[E0229]: a `syscall` needs an `effects` clause naming built-in effects
+  --> tests/check/syscall_errors.writ:14:1
+error[E0229]: a `syscall` needs an `effects` clause naming built-in effects
+  --> tests/check/syscall_errors.writ:17:1
+error[E0230]: the `syscall` number does not resolve to a non-negative integer constant
+  --> tests/check/syscall_errors.writ:21:1
+error[E0227]: a `syscall` passes only integers and plain pointers, one register each
+  --> tests/check/syscall_errors.writ:24:1
+error[E0227]: a `syscall` passes only integers and plain pointers, one register each
+  --> tests/check/syscall_errors.writ:28:1

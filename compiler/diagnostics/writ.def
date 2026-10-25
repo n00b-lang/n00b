@@ -154,6 +154,26 @@ N00B_WRIT_DIAG(BAD_DEREF, "N00B-F1225", ERROR,
     "`*` reads an integer through a pointer parameter",
     "A type, parameter or clause in the 'ffi contract does not describe the\n"
     "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(SYSCALL_PLATFORM, "N00B-F1226", ERROR,
+    "a `syscall` needs a Linux platform whose architecture has a kernel entry",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(SYSCALL_SLOT, "N00B-F1227", ERROR,
+    "a `syscall` passes only integers and plain pointers, one register each",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(SYSCALL_CLAUSE, "N00B-F1228", ERROR,
+    "this clause does not apply to a `syscall`",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(SYSCALL_EFFECTS, "N00B-F1229", ERROR,
+    "a `syscall` needs an `effects` clause naming built-in effects",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(SYSCALL_NUMBER, "N00B-F1230", ERROR,
+    "the `syscall` number does not resolve to a non-negative integer constant",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
 N00B_WRIT_DIAG(TOOLCHAIN, "N00B-F1301", ERROR,
     "toolchain failure",
     "The contract was checked against the C compiler and the library, and\n"

@@ -104,7 +104,7 @@ is_member(writ_node_kind_t parent, writ_node_kind_t child)
 static bool
 is_clause_owner(writ_node_kind_t kind)
 {
-    return kind == WRIT_N_FN || kind == WRIT_N_CALLBACK;
+    return kind == WRIT_N_FN || kind == WRIT_N_CALLBACK || kind == WRIT_N_SYSCALL;
 }
 
 static bool

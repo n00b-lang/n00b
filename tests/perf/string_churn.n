@@ -1,3 +1,5 @@
+import sys.os
+
 func run(rounds: int, tail: string) -> uint {
     var junk: string = ""
     var total: uint = 0
@@ -10,6 +12,6 @@ func run(rounds: int, tail: string) -> uint {
     return total
 }
 
-let scale = cast[int](__os_arg_count())
+let scale = cast[int](sys.os.arg_count())
 let tail: string = "a piece of text long enough to need the heap"
 require run(10000000 * scale, tail) == cast[uint](10000000 * scale) * (byte_len(tail) + 1)

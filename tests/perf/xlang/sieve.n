@@ -1,3 +1,5 @@
+import sys.os
+
 func count_primes(limit: int) -> int {
     var composite: Array[bool] = new[Array[bool]](limit + 1)
     var count = 0
@@ -26,5 +28,5 @@ func run(rounds: int, limit: int) -> int {
     return total
 }
 
-let scale = cast[int](__os_arg_count())
+let scale = cast[int](sys.os.arg_count())
 require run(6 * scale, 2000000) == 893598

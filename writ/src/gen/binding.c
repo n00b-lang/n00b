@@ -37,8 +37,16 @@ typedef struct {
     writ_str_t member;
 } target_t;
 
+// A `name` or `hide` aimed at a contract constant or syscall.
+typedef struct {
+    writ_str_t contract;
+    choice_t   name;
+    bool       hidden;
+} const_decision_t;
+
 core_list_decl(slot_decision_t);
 core_list_decl(type_decision_t);
+core_list_decl(const_decision_t);
 
 typedef struct {
     uint32_t   fn;
@@ -52,6 +60,15 @@ typedef struct {
     writ_str_t type;
 } handle_implementation_t;
 core_list_decl(handle_implementation_t);
+
+// An `error PATTERN -> "Type"` item, kept so that declarations other than
+// `fn`s (syscalls) can look up their error type by name.
+typedef struct {
+    writ_str_t pattern;
+    writ_str_t type;
+    writ_loc_t loc;
+} error_map_t;
+core_list_decl(error_map_t);
 
 struct writ_binding {
     const writ_model_t           *model;
@@ -73,8 +90,10 @@ struct writ_binding {
     fn_decision_t                *fns;
     core_list_t(slot_decision_t)  slots;
     core_list_t(type_decision_t)  types;
+    core_list_t(const_decision_t) consts;
     core_list_t(slot_provide_t)   provides;
     core_list_t(handle_implementation_t) implementations;
+    core_list_t(error_map_t)      error_maps;
 };
 
 static const char *const form_names[] = {"cstr", "utf8", "bytes", "rest pack", "keyword pack"};
@@ -309,6 +328,13 @@ known_slot(const writ_binding_t *b, size_t fn, writ_str_t name)
             return true;
         }
     }
+    // A slot the plan names, such as the `args` of an unnamed `...` pack:
+    // the name the generated signature shows.
+    for (size_t i = 0; i < b->slots.len; i++) {
+        if (b->slots.data[i].fn == fn && writ_str_eq(b->slots.data[i].slot, name)) {
+            return true;
+        }
+    }
     return writ_str_eq(name, writ_cstr("return")) && view->result;
 }
 
@@ -485,11 +511,61 @@ apply_borrow(writ_binding_t *b, uint32_t id)
     }
 }
 
+static const_decision_t *
+const_decision(writ_binding_t *b, writ_str_t contract)
+{
+    for (size_t i = 0; i < b->consts.len; i++) {
+        if (writ_str_eq(b->consts.data[i].contract, contract)) {
+            return &b->consts.data[i];
+        }
+    }
+    core_list_push(b->consts, ((const_decision_t){.contract = contract}));
+    return &b->consts.data[b->consts.len - 1];
+}
+
+static bool
+names_const(const writ_binding_t *b, writ_str_t name)
+{
+    for (size_t i = 0; i < writ_model_const_count(b->model); i++) {
+        if (writ_str_eq(writ_model_const_at(b->model, i)->name, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool
+names_syscall(const writ_binding_t *b, writ_str_t name)
+{
+    for (size_t i = 0; i < writ_model_syscall_count(b->model); i++) {
+        if (writ_str_eq(writ_model_syscall_at(b->model, i)->contract_name, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void
 apply_glob(writ_binding_t *b, uint32_t id, bool hide)
 {
     writ_str_t pattern = text_of(b, at(b, id)->name);
     bool any = false;
+    // `hide` also reaches constants and syscalls; `raw` is only for
+    // functions.
+    for (size_t i = 0; hide && i < writ_model_const_count(b->model); i++) {
+        writ_str_t name = writ_model_const_at(b->model, i)->name;
+        if (writ_glob_match(pattern, name)) {
+            any = true;
+            const_decision(b, name)->hidden = true;
+        }
+    }
+    for (size_t i = 0; hide && i < writ_model_syscall_count(b->model); i++) {
+        writ_str_t name = writ_model_syscall_at(b->model, i)->contract_name;
+        if (writ_glob_match(pattern, name)) {
+            any = true;
+            const_decision(b, name)->hidden = true;
+        }
+    }
     for (size_t i = 0; i < writ_model_fn_count(b->model); i++) {
         if (writ_glob_match(pattern, writ_model_fn_at(b->model, i)->contract_name)) {
             any = true;
@@ -511,6 +587,10 @@ apply_name(writ_binding_t *b, uint32_t id)
     type_decision_t *type = type_named(b, text);
     if (type) {
         type->name = (choice_t){name, true};
+        return;
+    }
+    if (names_const(b, text) || names_syscall(b, text)) {
+        const_decision(b, text)->name = (choice_t){name, true};
         return;
     }
     target_t target = split(text);
@@ -582,6 +662,7 @@ apply_item(writ_binding_t *b, uint32_t id)
         return;
     case WRIT_N_ERROR_MAP: {
         writ_str_t pattern = child_text(b, id, WRIT_N_PATTERN);
+        core_list_push(b->error_maps, ((error_map_t){pattern, child_text(b, id, WRIT_N_TEXT), item->loc}));
         for (size_t i = 0; i < writ_model_fn_count(b->model); i++) {
             if (writ_glob_match(pattern, writ_model_fn_at(b->model, i)->contract_name)) {
                 b->fns[i].error = (choice_t){child_text(b, id, WRIT_N_TEXT), true};
@@ -808,8 +889,10 @@ binding_release(void *object)
     core_list_free(b->search_paths);
     core_list_free(b->slots);
     core_list_free(b->types);
+    core_list_free(b->consts);
     core_list_free(b->provides);
     core_list_free(b->implementations);
+    core_list_free(b->error_maps);
 }
 
 writ_status_t
@@ -824,8 +907,10 @@ writ_bind(const writ_model_t *model, const writ_bind_request_t *request, const w
     *b = (writ_binding_t){.model = model, .session = session, .unit = request->binding,
                           .prefixes = core_list_new(writ_sym_t), .libraries = core_list_new(writ_sym_t),
                           .search_paths = core_list_new(writ_sym_t), .slots = core_list_new(slot_decision_t),
-                          .types = core_list_new(type_decision_t), .provides = core_list_new(slot_provide_t),
-                          .implementations = core_list_new(handle_implementation_t)};
+                          .types = core_list_new(type_decision_t),
+                          .consts = core_list_new(const_decision_t), .provides = core_list_new(slot_provide_t),
+                          .implementations = core_list_new(handle_implementation_t),
+                          .error_maps = core_list_new(error_map_t)};
     writ_on_session_free(session, binding_release, b);
     writ_str_t library = writ_model_library(model)->name;
     if (find_block(b, request, library)) {
@@ -993,6 +1078,21 @@ writ_binding_fn(const writ_binding_t *b, size_t fn)
 }
 
 writ_str_t
+writ_binding_error_for(const writ_binding_t *b, writ_str_t name, writ_span_t *at)
+{
+    writ_str_t chosen = {0};
+    for (size_t i = 0; i < b->error_maps.len; i++) {
+        if (writ_glob_match(b->error_maps.data[i].pattern, name)) {
+            chosen = b->error_maps.data[i].type;
+            if (at) {
+                *at = writ_loc_span(b->session, b->error_maps.data[i].loc);
+            }
+        }
+    }
+    return chosen;
+}
+
+writ_str_t
 writ_binding_implementation(const writ_binding_t *b, writ_str_t handle)
 {
     for (size_t i = 0; i < b->implementations.len; i++) {
@@ -1034,6 +1134,40 @@ writ_binding_type(const writ_binding_t *b, writ_str_t contract)
         }
     }
     return writ_profile_name(b->profile, WRIT_NAMING_TYPE, contract);
+}
+
+// The name a `name` item chose for contract constant or syscall `contract`,
+// or the contract name in the profile's convention; `*hidden` says `hide`
+// left it out.
+static writ_str_t
+decided_name(const writ_binding_t *b, writ_str_t contract, writ_naming_kind_t naming,
+             bool *hidden)
+{
+    for (size_t i = 0; i < b->consts.len; i++) {
+        const const_decision_t *d = &b->consts.data[i];
+        if (writ_str_eq(d->contract, contract)) {
+            if (hidden) {
+                *hidden = d->hidden;
+            }
+            if (d->name.chosen) {
+                return d->name.text;
+            }
+            break;
+        }
+    }
+    return writ_profile_name(b->profile, naming, contract);
+}
+
+writ_str_t
+writ_binding_syscall(const writ_binding_t *b, writ_str_t contract, bool *hidden)
+{
+    return decided_name(b, contract, WRIT_NAMING_FN, hidden);
+}
+
+writ_str_t
+writ_binding_const(const writ_binding_t *b, writ_str_t contract, bool *hidden)
+{
+    return decided_name(b, contract, WRIT_NAMING_CONST, hidden);
 }
 
 size_t

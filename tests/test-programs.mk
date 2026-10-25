@@ -35,25 +35,25 @@ writ-coexistence_SOURCES := tests/writ_coexistence.c
 writ-coexistence_LIBS := $(WRIT_LIB) $(LANTERN_LIB)
 
 builtin-os-test_SOURCES := tests/builtin_os.c
-builtin-os-test_LIBS := $(RUNTIME_LIB)
+builtin-os-test_LIBS := $(LIBC_RUNTIME_LIB)
 
 builtin-abi-test_SOURCES := tests/builtin_abi.c
-builtin-abi-test_LIBS := $(RUNTIME_LIB)
+builtin-abi-test_LIBS := $(LIBC_RUNTIME_LIB)
 
 runtime-abi-io-test_SOURCES := tests/runtime_abi_io.c
-runtime-abi-io-test_LIBS := $(RUNTIME_LIB)
+runtime-abi-io-test_LIBS := $(LIBC_RUNTIME_LIB)
 
 runtime-abi-test_SOURCES := tests/runtime_abi.c
-runtime-abi-test_LIBS := $(RUNTIME_LIB)
+runtime-abi-test_LIBS := $(LIBC_RUNTIME_LIB)
 
 runtime-abi-scc-test_SOURCES := tests/runtime_abi_scc.c
-runtime-abi-scc-test_LIBS := $(RUNTIME_LIB)
+runtime-abi-scc-test_LIBS := $(LIBC_RUNTIME_LIB)
 
 runtime-abi-trace-test_SOURCES := tests/runtime_abi_trace.c
-runtime-abi-trace-test_LIBS := $(RUNTIME_LIB)
+runtime-abi-trace-test_LIBS := $(LIBC_RUNTIME_LIB)
 
 runtime-abi-option-test_SOURCES := tests/runtime_abi_option.c
-runtime-abi-option-test_LIBS := $(RUNTIME_LIB)
+runtime-abi-option-test_LIBS := $(LIBC_RUNTIME_LIB)
 
 storage-selection-test_SOURCES := tests/storage_selection.c \
     compiler/storage_selection.c
@@ -166,7 +166,7 @@ abi-link-input-test_SOURCES := tests/abi_link_input.c \
 abi-link-input-test_LIBS := $(LANTERN_LIB)
 
 abi-register-object-test_SOURCES := tests/abi_register_object.c
-abi-register-object-test_LIBS := $(RUNTIME_LIB) $(LANTERN_LIB)
+abi-register-object-test_LIBS := $(LIBC_RUNTIME_LIB) $(LANTERN_LIB)
 
 abi-emit-strings-test_SOURCES := tests/abi_emit_strings.c \
     compiler/abi_emit_strings.c \

@@ -1,0 +1,13 @@
+library kernel
+platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+syscall write(fd: c_int, buf: *u8, count: usize) -> isize
+  number 1 when arch == x86_64
+  number 64 when arch == aarch64
+  effects output, blocking
+
+syscall getpid() -> c_int
+  number 39 when arch == x86_64
+  number 172 when arch == aarch64
+  infallible
+  effects none
