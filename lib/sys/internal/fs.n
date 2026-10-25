@@ -1,96 +1,51 @@
-const einval: int = -22
+import internal.errno
+import internal.os
 
-private inline func open_read_flags() -> int {
-    when target_os() == "linux" {
-        return 0x80000
-    } else when target_os() == "macos" {
-        return 0x1000000
-    } else when target_os() == "windows" {
-        return 0x80
-    } else {
-        return 0
-    }
+func open_read(path: string) -> i32 fail: internal.errno.Errno {
+    return internal.os.open(path, internal.os.Access.read_only)!
 }
 
-private const seek_set: i32 = 0
-private const seek_end: i32 = 2
-
-func open_read(path: string) -> int fail: int {
-    var bytes: Array[u8] = new[Array[u8]](1)
-    try {
-        bytes = to_cstring(path, copy = true,
-            buf = new[Array[u8]](cast[int](byte_len(path)) + 1))!
-    } fail(failure) {
-        fail einval
-    }
-    let fd: int = __os_open(unsafe_cast[Ref[byte]] ref bytes[0],
-                            open_read_flags(), 0)
-    if fd < 0 {
-        fail fd
-    }
-    return fd
+# The size of the file `fd` refers to. Leaves its offset at the start.
+func size(fd: i32) -> uint fail: internal.errno.Errno {
+    let end: uint = internal.os.seek(fd, 0, internal.os.Whence.end)!
+    _ = internal.os.seek(fd, 0, internal.os.Whence.start)!
+    return end
 }
 
-func size(fd: int) -> uint fail: int {
-    let end: int = __os_seek(fd, 0, seek_end)
-    if end < 0 {
-        fail end
-    }
-    let start: int = __os_seek(fd, 0, seek_set)
-    if start < 0 {
-        fail start
-    }
-    return cast[uint] end
-}
-
-func read_into(fd: int, modify buffer: Array[u8], at: uint, count: uint)
-    -> uint fail: int {
+func read_into(fd: i32, modify buffer: Array[u8], at: uint, count: uint)
+    -> uint fail: internal.errno.Errno {
     require at <= __array_length(buffer)
     require count <= __array_length(buffer) - at
-    if count == 0 {
-        return 0
-    }
-    let got: int = __os_read(fd, unsafe_cast[Ref[byte]] ref buffer[at], count)
-    if got < 0 {
-        fail got
-    }
-    return cast[uint] got
+    return internal.os.read(fd, buffer, at, at + count)!
 }
 
-func close(fd: int) -> nil fail: int {
-    let status = __os_close(fd)
-    if status < 0 {
-        fail status
-    }
+func close(fd: i32) fail: internal.errno.Errno {
+    internal.os.close(fd)!
 }
 
-func read_file(path: string) -> Array[u8] fail: int {
-    let fd: int = open_read(path)!
-    var length: uint = 0
+func read_file(path: string) -> Array[u8] fail: internal.errno.Errno {
+    let fd: i32 = open_read(path)!
     try {
-        length = size(fd)!
+        let length: uint = size(fd)!
+        var data: Array[u8] = new[Array[u8]](length)
+        var done: uint = 0
+        while done < length {
+            let got: uint = read_into(fd, data, done, length - done)!
+            if got == 0 {
+                # The file shrank while it was read.
+                fail internal.errno.Errno.EIO
+            }
+            done += got
+        }
+        close(fd)!
+        return data
     } fail(failure) {
-        __os_close(fd)
+        try {
+            internal.os.close(fd)!
+        } fail(ignored) {
+        }
         fail failure
     }
-    var data: Array[u8] = new[Array[u8]](cast[int] length)
-    var done: uint = 0
-    while done < length {
-        var got: uint = 0
-        try {
-            got = read_into(fd, data, done, length - done)!
-        } fail(failure) {
-            __os_close(fd)
-            fail failure
-        }
-        if got == 0 {
-            __os_close(fd)
-            fail einval
-        }
-        done += got
-    }
-    close(fd)!
-    return data
 }
 
 func data_file(path: string) -> Array[u8] {
@@ -98,7 +53,7 @@ func data_file(path: string) -> Array[u8] {
     try {
         data = read_file(path)!
     } fail(failure) {
-        os_failure("cannot read data file " + path, failure)
+        os_failure("cannot read data file " + path, cast[int](failure))
     }
     return data
 }

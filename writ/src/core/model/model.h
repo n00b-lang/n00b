@@ -234,6 +234,10 @@ typedef struct {
     writ_thread_kind_t  thread;
     writ_sym_t          note;
     uint32_t            keywords_slot;
+    bool                has_syscall_number;
+    int64_t             syscall_number;
+    uint32_t            syscall_number_node;
+    bool                infallible;
     writ_loc_t          loc;
 } writ_fn_rec_t;
 

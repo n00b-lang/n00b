@@ -62,7 +62,7 @@ func bidi_class(cp: char) -> internal.types.Bidi_Class {
         return internal.types.Bidi_Class.l
     }
 
-    return cast[internal.types.Bidi_Class] generated.bidi_class.bidi_stage2[
+    return unsafe_cast[internal.types.Bidi_Class] generated.bidi_class.bidi_stage2[
         internal.blob.stage_index(generated.bidi_class.bidi_stage1_values, cp)]
 }
 
@@ -71,7 +71,7 @@ func joining_type(cp: char) -> internal.types.Joining_Type {
         return internal.types.Joining_Type.u
     }
 
-    return cast[internal.types.Joining_Type] generated.joining.jt_stage2[
+    return unsafe_cast[internal.types.Joining_Type] generated.joining.jt_stage2[
         internal.blob.stage_index(generated.joining.jt_stage1_values, cp)]
 }
 

@@ -1576,7 +1576,13 @@ collect_imported_nominal_declarations(n00bb_abi_type_index_t *index,
     if (!type_owner) return true;
     for (size_t i = 1; i < n00bb_abi_type_index_count(index); i++) {
         th_type *type = n00bb_abi_type_index_at(index, (uint32_t)i);
-        parse_sym_entry_t *owner = type ? type_owner(context, type) : nullptr;
+        // Only a nominal type has a declaration. A type variable has none;
+        // looking one up finds whichever declaration in the program uses a
+        // variable like it, which would make this module's object depend on
+        // what it's built with.
+        th_kind kind = type ? th_kind_of(th_resolve(type)) : TH_VAR;
+        if (kind != TH_NAMED && kind != TH_TRAIT) continue;
+        parse_sym_entry_t *owner = type_owner(context, type);
         if (!owner || !(owner->decl_node || owner->owner_unit)
             || !owner->type) continue;
         bool added = th_kind_of(th_resolve(owner->type)) == TH_TRAIT

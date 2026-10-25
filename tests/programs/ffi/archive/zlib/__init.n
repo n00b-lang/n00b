@@ -1,4 +1,4 @@
-const zlib = [-
+[-
 use <zlib.writ>
 
 binding {
@@ -13,5 +13,25 @@ binding {
 -]'ffi
 
 package archive.zlib {
-    export zlib
+    export Stream
+    export Deflate_Outcome
+    export Inflate_Outcome
+    export ZLIB_VERSION
+    export Z_OK
+    export Z_STREAM_END
+    export Z_BUF_ERROR
+    export Z_FINISH
+    export Z_NO_FLUSH
+    export Z_DEFAULT_COMPRESSION
+    export deflate
+    export deflate_end
+    export inflate
+    export inflate_end
+    export compress
+    export compress_bound
+    export uncompress
+    export adler32
+    export crc32
+    export deflate_init
+    export inflate_init
 }

@@ -174,6 +174,7 @@ report_view_candidates(parse_grammar_t *grammar,
     for (size_t s = 0; s < scopes.len; s++)
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type
                 || !function_symbol_at(grammar, symbol->decl_node)
                 || core_string_starts_with(symbol->name,
@@ -479,6 +480,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
+                if (n00bb_injected_member(symbol)) continue;
                 if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type
                     || !function_symbol_at(grammar, symbol->decl_node))
                     continue;
@@ -507,6 +509,7 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         for (size_t s = 0; ok && s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  ok && symbol; symbol = symbol->next_in_scope) {
+                if (n00bb_injected_member(symbol)) continue;
                 if (!context_symbol(grammar, symbol)) continue;
                 static const core_string_t hooks[] = {
                     CORE_STRING_STATIC("context-enter"),

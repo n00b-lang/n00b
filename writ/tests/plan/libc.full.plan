@@ -56,10 +56,11 @@ reset errno
 item 0 path input text borrowed
 item 1 arg0 input text borrowed
 item 2 args pack rest_pack borrowed
-item 3 detail error_detail scalar none
+item 3 result result scalar none
+item 4 detail error_detail scalar none
 slot 0 in_pointer whole path
 slot 1 in_pointer whole arg0
-slot 2 value whole -
+slot 2 value whole result
 slot 3 variadic_tail elements args
 local 0 text c_char path
 local 1 text c_char arg0
@@ -70,6 +71,7 @@ attempt   expand         args -> s3, until NULL
 classify  error: failure when (ret == (-1))
           ok: success
 error     fetch_detail   errno -> detail
+ok        lift_value     ret -> result
 finally   release_local  L0 unless handed over
           release_local  L1 unless handed over
 

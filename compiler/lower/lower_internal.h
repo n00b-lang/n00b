@@ -1968,7 +1968,8 @@ typedef struct {
 
 core_list_t(n00bb_ir_func_ptr_t)
 thread_entries(const core_list_t(n00bb_ir_func_ptr_t) *functions,
-               bool *complete, core_list_t(entry_param_t) *params_out);
+               ir_summaries_t *summaries, bool *complete,
+               core_list_t(entry_param_t) *params_out);
 
 bool
 atomic_type(th_type *type);

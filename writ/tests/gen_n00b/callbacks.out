@@ -184,11 +184,6 @@ int32_t callbacks_n00b_bus_unsubscribe(uint64_t id) {
     return writ_n00b_value;
 }
 
-record Error {
-    code: i64
-    text: string?
-    fn: string
-}
 
 record Event layout(c) {
     code: i32
@@ -199,27 +194,27 @@ callback Event_Handler {
     handler(event: uint) -> nil
 }
 
-record Event_Handler_Arguments layout(c) {
+private record Event_Handler_Arguments layout(c) {
     event: uint
 }
 
-record Event_Handler_Callback {
+private record Event_Handler_Callback {
     value: Event_Handler
     once: bool
 }
 
-var __event_handler_callbacks: Ffi_Table[Event_Handler_Callback] = (slots = new[Array[Event_Handler_Callback?]](0), owners = new[Array[uint]](0), next_free = new[Array[uint]](0), count = 0, free_head = 0)
+private var __event_handler_callbacks: Ffi_Table[Event_Handler_Callback] = (slots = new[Array[Event_Handler_Callback?]](0), owners = new[Array[uint]](0), next_free = new[Array[uint]](0), count = 0, free_head = 0)
 
-func __event_handler_register(value: Event_Handler, once: bool) -> u64 {
+private func __event_handler_register(value: Event_Handler, once: bool) -> u64 {
     let entry: Event_Handler_Callback = (value = value, once = once)
     return __ffi_table_insert(__event_handler_callbacks, entry)
 }
 
-func __event_handler_free(handle: u64) {
+private func __event_handler_free(handle: u64) {
     __ffi_table_free(__event_handler_callbacks, handle)
 }
 
-func __event_handler_dispatch(handle: u64, arguments: uint, returned: uint) -> i32 {
+private func __event_handler_dispatch(handle: u64, arguments: uint, returned: uint) -> i32 {
     let entry = __ffi_table_get(__event_handler_callbacks, handle)
     if entry == nil {
         return -1
@@ -243,27 +238,27 @@ func bus_subscribe(handler: Event_Handler) -> u64 {
     return returned
 }
 
-func bus_publish(code: i32) fail: Error {
+func bus_publish(code: i32) fail: Ffi_Error {
     let outcome = __bus_publish(code)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bus_publish")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bus_publish")
         fail failure
     }
 }
 
-func bus_unsubscribe(id: u64) fail: Error {
+func bus_unsubscribe(id: u64) fail: Ffi_Error {
     let outcome = __bus_unsubscribe(id)
     if outcome < 0 {
-        let failure: Error = (code = cast[i64]outcome, text = nil, fn = "bus_unsubscribe")
+        let failure: Ffi_Error = (code = cast[i64]outcome, text = nil, fn = "bus_unsubscribe")
         fail failure
     }
-    __ffi_event("callbacks:bus_unsubscribe", [cast[u64](id)]'array, __os_thread_id())
+    __ffi_event("callbacks:bus_unsubscribe", [cast[u64](id)]'array, __ffi_thread_id())
 }
-7	tests/gen_n00b/../callbacks/callbacks.writ:7:1	Event
-11	tests/gen_n00b/../callbacks/callbacks.writ:9:1	Handler
-52	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
-60	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
-68	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
+2	tests/gen_n00b/../callbacks/callbacks.writ:7:1	Event
+6	tests/gen_n00b/../callbacks/callbacks.writ:9:1	Handler
+47	tests/gen_n00b/../callbacks/callbacks.writ:14:1	bus_subscribe
+55	tests/gen_n00b/../callbacks/callbacks.writ:16:1	bus_publish
+63	tests/gen_n00b/../callbacks/callbacks.writ:18:1	bus_unsubscribe
 load static
 extern __event_handler_arguments_copy callbacks_Handler_arguments_copy (uint, ref[Event_Handler_Arguments]) -> nil fail: nil
 extern __bus_subscribe callbacks_n00b_bus_subscribe (uint) -> uint fail: nil

@@ -67,10 +67,17 @@ typedef bool (*n00bb_module_generator_fn)(void *context, core_translation_unit_t
                                           n00bb_native_declarations_t *natives,
                                           n00bb_line_origins_t *origins);
 
+// Appends the files the literal that generated `module` reads, one per
+// line, so a cached build can tell when it would generate something else.
+typedef void (*n00bb_module_generator_inputs_fn)(void *context,
+                                                 core_string_t module,
+                                                 core_buffer_t *out);
+
 typedef struct {
-    core_string_t             modifier;
-    n00bb_module_generator_fn generate;
-    void                     *context;
+    core_string_t                    modifier;
+    n00bb_module_generator_fn        generate;
+    void                            *context;
+    n00bb_module_generator_inputs_fn inputs;
 } n00bb_module_generator_t;
 
 typedef struct {

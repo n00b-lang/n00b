@@ -1,0 +1,7 @@
+import internal.errno
+import internal.os
+
+package sys.os {
+    export internal.errno
+    export internal.os
+}

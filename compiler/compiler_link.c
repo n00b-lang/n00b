@@ -381,6 +381,15 @@ diagnose_reserved_declarations(core_translation_unit_t *unit,
             if (!member && (system || (symbol->kind == PARSE_SYM_FUNCTION
                     && n00bb_language_hook(environment, symbol->name))))
                 continue;
+            // The import the compiler makes for a module literal is named
+            // by the compiler, in the reserved space, so no code can name it.
+            bool literal_import = false;
+            for (size_t i = 0; symbol->kind == PARSE_SYM_MODULE
+                 && i < state->import_aliases.len; i++)
+                literal_import |= state->import_aliases.data[i].injected
+                    && core_string_eq(state->import_aliases.data[i].name,
+                                      symbol->name);
+            if (literal_import) continue;
             report_reserved_declaration(unit, symbol, member
                 ? (core_string_t){0}
                 : n00bb_nearest_language_hook(environment, symbol->name));
@@ -3237,6 +3246,8 @@ register_link_declaration(core_link_unit_t *link,
                           core_dict_t *declarations_by_symbol,
                           parse_sym_entry_t *symbol)
 {
+    // A module literal's member is declared by the literal's own module.
+    if (n00bb_injected_member(symbol)) return true;
     core_buffer_t key = {0};
     if (!append_link_symbol_key(grammar, unit, symbol, &key)) {
         return false;
@@ -4054,7 +4065,8 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                 core_dict_t visiting;
                 core_dict_init(&visiting, nullptr, nullptr);
                 bool derive_equal = !custom_equal
-                    && (object || (record && record_default_fields_support(
+                    && (scalar || object
+                        || (record && record_default_fields_support(
                         probe, state->types, receiver,
                         CORE_STRING_STATIC("Equal"),
                         CORE_STRING_STATIC("__equal"), &visiting)));
@@ -4089,6 +4101,7 @@ register_builtin_value_defaults(th_env *defaults, const th_env *base,
                         kind && scalar ? "__n00bb_scalar_hash_%016llx"
                         : kind && object ? "__n00bb_object_hash_%016llx"
                         : object ? "__n00bb_object_equal_%016llx"
+                        : scalar ? "__n00bb_scalar_equal_%016llx"
                         : kind ? "__n00bb_record_hash_%016llx"
                              : "__n00bb_record_equal_%016llx",
                         (unsigned long long)th_hash(state->types, receiver));
@@ -4256,8 +4269,7 @@ register_dispatch_adapters(const th_env *environment, core_link_unit_t *link,
         n00bb_tu_state_t *state = tu_state(unit);
         parse_symtab_t *symbols = state && state->annotations
             ? state->annotations->symtab : nullptr;
-        if (!symbols || !module_scope(state) || state->interface_module)
-            continue;
+        if (!symbols || !module_scope(state)) continue;
         core_list_t(parse_sym_entry_ptr_t) targets =
             core_list_new(parse_sym_entry_ptr_t);
         for (parse_scope_t *scope = symbols->all_scopes; scope;

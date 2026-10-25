@@ -137,7 +137,12 @@ package builtin {
     export string.style.r
     export string.core.encoding_of to unicode
     export string.core.validate_multibyte to unicode
+    export string.core.Utf8_Step to unicode
+    export string.core.utf8_decode_step to unicode
+    export string.core.utf16_units to unicode
+    export string.core.utf16_units to sys
     export ffi.Ffi_Bytes
+    export ffi.Ffi_Error
     export ffi.ffi
     export ffi.foreign_text
     export ffi.__ffi_fixup
@@ -146,10 +151,13 @@ package builtin {
     export ffi.__ffi_table_get
     export ffi.__ffi_table_free
     export ffi.__ffi_table_owner
+    export ffi.__ffi_check_owner
     export ffi.__ffi_hold_group
     export ffi.__ffi_hold
     export ffi.__ffi_event
     export ffi.__ffi_event_key
+    export ffi.__ffi_thread_id
+    export ffi.__ffi_on_main_thread
     export panic.panic
     export containers.buffer.Buffer
     export containers.buffer.Buffer_Error

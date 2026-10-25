@@ -13,7 +13,7 @@ func general_category(cp: char) -> internal.types.Gc {
         return internal.types.Gc.cn
     }
 
-    return cast[internal.types.Gc] generated.categories.gc_stage2[
+    return unsafe_cast[internal.types.Gc] generated.categories.gc_stage2[
         internal.blob.stage_index(generated.categories.gc_stage1_values, cp)]
 }
 
@@ -31,7 +31,7 @@ func east_asian_width(cp: char) -> internal.types.Eaw {
         return internal.types.Eaw.n
     }
 
-    return cast[internal.types.Eaw] generated.eaw.eaw_stage2[
+    return unsafe_cast[internal.types.Eaw] generated.eaw.eaw_stage2[
         internal.blob.stage_index(generated.eaw.eaw_stage1_values, cp)]
 }
 

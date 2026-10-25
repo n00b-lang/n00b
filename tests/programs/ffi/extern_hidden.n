@@ -1,4 +1,4 @@
-const c = [-
+[-
 library c
 fn abs(x: c_int) -> c_int
 binding {
@@ -6,4 +6,4 @@ binding {
 }
 -]'ffi
 
-require c.__abs_raw(-5) == 5
+require __abs_raw(-5) == 5

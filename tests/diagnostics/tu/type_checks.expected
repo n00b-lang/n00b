@@ -73,7 +73,8 @@ tests/diagnostics/tu/type_checks.n:148:24: error N00B-T0500: `(a = "no", b = 2)`
   tests/diagnostics/tu/type_checks.n:148:17: note: `wrong_pair` is declared `Pair` here
 tests/diagnostics/tu/type_checks.n:149:24: error N00B-T0500: `(a = 1)` is `Tuple[a: {integer}]`, but `pair_as_int` is declared `int`
   tests/diagnostics/tu/type_checks.n:149:18: note: `pair_as_int` is declared `int` here
-tests/diagnostics/tu/type_checks.n:155:29: error N00B-N0003: module `native` has no function `nope`
+tests/diagnostics/tu/type_checks.n:155:22: error N00B-N0001: cannot find `nope` in this scope
+  help: did you mean `name`?
 tests/diagnostics/tu/type_checks.n:157:21: error N00B-T0005: parameter 1 (`n`) of `h_1` is `int`, but this argument is `string`
   tests/diagnostics/tu/type_checks.n:164:6: note: `h_1` is declared here
 tests/diagnostics/tu/type_checks.n:158:25: error N00B-T0001: `h_1` takes 1 positional argument, but this call passes 2
@@ -92,5 +93,5 @@ tests/diagnostics/tu/type_checks.n:176:7: error N00B-N0005: `Tally` has no field
   note: `Tally` has field `count`
   tests/diagnostics/tu/type_checks.n:171:8: note: type `Tally` is declared here
 tests/diagnostics/tu/type_checks.n:177:7: error N00B-N0006: field `lock` of `Buffer` is private to module `builtin.containers.buffer`
-  lib/builtin/containers/buffer.n:8:13: note: field `lock` is declared here
+  lib/builtin/containers/buffer.n:9:13: note: field `lock` is declared here
   help: use a function of module `builtin.containers.buffer` to read or change it, or remove `private` from the field

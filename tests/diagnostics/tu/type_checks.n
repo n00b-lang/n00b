@@ -147,12 +147,12 @@ let mixed = [1, 2, "three"]
 let squares: List[Sq] = [(s = 1.0), (s = 2.0)]
 let wrong_pair: Pair = (a = "no", b = 2)
 let pair_as_int: int = (a = 1)
-const native = [-
+[-
 library c
 
 fn abs(x: c_int) -> c_int
 -]'ffi
-let missing_member = native.nope(1)
+let missing_member = nope(1)
 func calls_after_errors() -> int {
     let first = h_1("wrong")
     let second = h_1(1, 2)

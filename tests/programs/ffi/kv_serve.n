@@ -1,7 +1,9 @@
 import kvstore
 
-const kvx = [-
+[-
 library kv
+# kv_thread.c runs a pthread.
+link "c"
 
 allocator kvheap alloc kv_malloc release kv_free
 
@@ -59,7 +61,7 @@ binding export {
 }
 -]'ffi
 
-const client = [-
+[-
 library client
 
 fn kv_client_run() -> c_int
@@ -69,4 +71,4 @@ binding {
 }
 -]'ffi
 
-require client.kv_client_run_raw() == 0
+require kv_client_run_raw() == 0

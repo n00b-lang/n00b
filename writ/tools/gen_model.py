@@ -75,6 +75,8 @@ def header_text():
         "size_t writ_model_callback_count(const writ_model_t *model);",
         "const writ_fn_view_t *writ_model_callback_at(const writ_model_t *model, size_t index);",
         "const writ_fn_view_t *writ_model_callback_named(const writ_model_t *model, writ_str_t name);",
+        "size_t writ_model_syscall_count(const writ_model_t *model);",
+        "const writ_fn_view_t *writ_model_syscall_at(const writ_model_t *model, size_t index);",
     ]
     for kind in ("const", "record", "handle", "enum", "channel"):
         lines += [

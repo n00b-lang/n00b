@@ -5,7 +5,7 @@ func trip(depth: i32) -> i32 {
     return depth
 }
 
-const tripx = [-
+[-
 library trip
 
 fn trip(depth: c_int) -> c_int
@@ -18,7 +18,7 @@ binding export {
 }
 -]'ffi
 
-const client = [-
+[-
 library client
 
 fn trip_client_run() -> c_int
@@ -28,4 +28,4 @@ binding {
 }
 -]'ffi
 
-require client.trip_client_run_raw() == 0
+require trip_client_run_raw() == 0

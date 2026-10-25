@@ -205,40 +205,35 @@ const char * kv_errstr(int s)
 
 import kvstore
 
-record Error {
-    code: i64
-    text: string?
-    fn: string
-}
 
 record Kv_Entry {
     key: Array[u8]
     val: Array[u8]
 }
 
-enum Kv_Status {
+open enum Kv_Status: i32 {
     KV_OK = 0,
     KV_NOTFOUND = 1,
     KV_ERR = 2
 }
 
 
-func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool {
+private func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool {
     var bytes: Array[u8] = new[Array[u8]](cast[int]__ffi_cstr_length(address))
     __ffi_cstr_copy(address, ref bytes)
     return __string_from_utf8(ref bytes, text)
 }
 
-record Export_Hold {
+private record Export_Hold {
     private handle: uint
     private items: List[Array[u8]]
 }
 
-var __export_holds: List[Export_Hold] = new[List[Export_Hold]]()
-var __export_texts: List[Array[u8]] = new[List[Array[u8]]]()
-var __export_text_addresses: List[uint] = new[List[uint]]()
+private var __export_holds: List[Export_Hold] = new[List[Export_Hold]]()
+private var __export_texts: List[Array[u8]] = new[List[Array[u8]]]()
+private var __export_text_addresses: List[uint] = new[List[uint]]()
 
-func __export_drop(handle: uint) {
+private func __export_drop(handle: uint) {
     var kept: List[Export_Hold] = new[List[Export_Hold]]()
     for hold in __export_holds {
         if hold.handle != handle {
@@ -248,13 +243,13 @@ func __export_drop(handle: uint) {
     __export_holds = kept
 }
 
-func __export_hold(handle: uint, items: List[Array[u8]]) {
+private func __export_hold(handle: uint, items: List[Array[u8]]) {
     __export_drop(handle)
     let hold: Export_Hold = (handle = handle, items = items)
     __export_holds.append(hold)
 }
 
-func __export_same(left: Array[u8], right: Array[u8]) -> bool {
+private func __export_same(left: Array[u8], right: Array[u8]) -> bool {
     if left.len() != right.len() {
         return false
     }
@@ -268,7 +263,7 @@ func __export_same(left: Array[u8], right: Array[u8]) -> bool {
     return true
 }
 
-func __export_text(text: string) -> uint {
+private func __export_text(text: string) -> uint {
     let source: Array[u8] = __text_byte_array(text)
     var bytes: Array[u8] = new[Array[u8]](cast[int](source.len()) + 1)
     var k: uint = 0
@@ -289,7 +284,7 @@ func __export_text(text: string) -> uint {
     return address
 }
 
-func __export_keep_kv_entry(handle: uint, key: Array[u8], val: Array[u8]) -> uint {
+private func __export_keep_kv_entry(handle: uint, key: Array[u8], val: Array[u8]) -> uint {
     var key_copy = key
     var val_copy = val
     var storage: Array[u8] = new[Array[u8]](32)
@@ -394,20 +389,20 @@ func __export_kv_errstr(c_s: i32, failed: uint) -> uint {
     let returned = kvstore.errstr(s_value)
     return __export_text(returned)
 }
-9	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
-14	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
-100	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
-107	tests/gen_n00b/kv_export.writ:4:5	kvstore.open
-116	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
-127	tests/gen_n00b/kv_export.writ:5:5	kvstore.put
-135	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
-144	tests/gen_n00b/kv_export.writ:6:5	kvstore.get
-157	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
-166	tests/gen_n00b/kv_export.writ:7:5	kvstore.iter_new
-174	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
-180	tests/gen_n00b/kv_export.writ:8:5	kvstore.iter_next
-187	tests/gen_n00b/../bind/kv.writ:47:1	kv_errstr
-189	tests/gen_n00b/kv_export.writ:9:5	kvstore.errstr
+4	tests/gen_n00b/../bind/kv.writ:15:1	kv_entry
+9	tests/gen_n00b/../bind/kv.writ:13:1	kv_status
+95	tests/gen_n00b/../bind/kv.writ:22:1	kv_open
+102	tests/gen_n00b/kv_export.writ:4:5	kvstore.open
+111	tests/gen_n00b/../bind/kv.writ:26:1	kv_put
+122	tests/gen_n00b/kv_export.writ:5:5	kvstore.put
+130	tests/gen_n00b/../bind/kv.writ:31:1	kv_get
+139	tests/gen_n00b/kv_export.writ:6:5	kvstore.get
+152	tests/gen_n00b/../bind/kv.writ:41:1	kv_iter_new
+161	tests/gen_n00b/kv_export.writ:7:5	kvstore.iter_new
+169	tests/gen_n00b/../bind/kv.writ:45:1	kv_iter_next
+175	tests/gen_n00b/kv_export.writ:8:5	kvstore.iter_next
+182	tests/gen_n00b/../bind/kv.writ:47:1	kv_errstr
+184	tests/gen_n00b/kv_export.writ:9:5	kvstore.errstr
 library kv
 load static
 extern __export_failed writ_kv_export_failed (uint, uint) -> nil fail: nil

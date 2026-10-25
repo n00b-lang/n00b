@@ -309,7 +309,7 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
             CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
     if (!flagset && !range) return nullptr;
     th_type *integer_type = th_name(types,
-        range && range->is_signed ? CORE_STRING_STATIC("i128") :CORE_STRING_STATIC("u128"));
+        range && range->storage_signed ? CORE_STRING_STATIC("i128") :CORE_STRING_STATIC("u128"));
     th_env_method_t selected = {0};
     if (th_env_method_resolve(state->types, integer_type,
             CORE_STRING_STATIC("builtin.hashing.Hash"), CORE_STRING_STATIC("hash"), &selected) != TH_ENV_METHOD_FOUND)
@@ -326,6 +326,50 @@ n00bb_scalar_hash_function(ir_lower_context_t *context, th_type *receiver)
         integer->dest, nullptr, hash_type, CORE_STRING_STATIC("hash"));
     ir_instr_t *ret = hashed ? ir_instr_add(block, IR_OP_RETURN) : nullptr;
     return ret && ir_instr_operand_value(ret, hashed) ? function : nullptr;
+}
+
+// Enums and flagsets are equal when their values are.
+static ir_func_t *
+n00bb_scalar_equal_function(ir_lower_context_t *context, th_type *receiver)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    th_ctx *types = context ? ir_module_types(context->module) : nullptr;
+    ir_func_t *function = context ? context->function : nullptr;
+    if (!lower || !types || !function || function->n_blocks) return nullptr;
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    bool flagset = n00bb_flagset_type(lower->unit, state, receiver, nullptr);
+    parse_sym_entry_t *enum_symbol = flagset ? nullptr
+        : n00bb_enum_type_symbol(state->link_analysis, receiver);
+    const n00bb_enum_range_t *range = enum_symbol
+        ? parse_sym_binding(enum_symbol,
+            CORE_STRING_STATIC("n00bb.enum-range")) : nullptr;
+    if (!flagset && !range) return nullptr;
+    th_type *integer_type = th_name(types,
+        range && range->storage_signed ? CORE_STRING_STATIC("i128")
+                                       : CORE_STRING_STATIC("u128"));
+    ir_value_t *self = ir_param_add(function, CORE_STRING_STATIC("self"),
+                                    receiver);
+    ir_value_t *other = ir_param_add(function, CORE_STRING_STATIC("other"),
+                                     receiver);
+    ir_block_t *block = ir_block_add(function, CORE_STRING_STATIC("entry"));
+    ir_op_t op = flagset ? IR_OP_BITSET_VALUE : IR_OP_ENUM_VALUE;
+    ir_instr_t *left = block ? ir_instr_add(block, op) : nullptr;
+    ir_instr_t *right = block ? ir_instr_add(block, op) : nullptr;
+    ir_instr_t *same = block ? ir_instr_add(block, IR_OP_EQ) : nullptr;
+    if (!self || !other || !left || !right || !same
+        || !ir_instr_set_dest(left, CORE_STRING_STATIC("left"), integer_type)
+        || !ir_instr_operand_value(left, self)
+        || (flagset && !ir_instr_add_mod(left, CORE_STRING_STATIC("trap")))
+        || !ir_instr_set_dest(right, CORE_STRING_STATIC("right"),
+                              integer_type)
+        || !ir_instr_operand_value(right, other)
+        || (flagset && !ir_instr_add_mod(right, CORE_STRING_STATIC("trap")))
+        || !ir_instr_set_dest(same, CORE_STRING_STATIC("same"),
+                              th_name(types, CORE_STRING_STATIC("bool")))
+        || !ir_instr_operand_value(same, left->dest)
+        || !ir_instr_operand_value(same, right->dest)) return nullptr;
+    ir_instr_t *ret = ir_instr_add(block, IR_OP_RETURN);
+    return ret && ir_instr_operand_value(ret, same->dest) ? function : nullptr;
 }
 
 static ir_func_t *
@@ -439,6 +483,9 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                 bool object_equal = symbol->name.data
                     && core_string_starts_with(symbol->name,
                         CORE_STRING_STATIC("__n00bb_object_equal_"));
+                bool scalar_equal = symbol->name.data
+                    && core_string_starts_with(symbol->name,
+                        CORE_STRING_STATIC("__n00bb_scalar_equal_"));
                 bool finalize = symbol->name.data
                     && core_string_starts_with(symbol->name,
                         CORE_STRING_STATIC("__finalize#n00bb_"));
@@ -462,6 +509,8 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                         ? n00bb_object_equal_function(&context, receiver)
                         : scalar_hash
                         ? n00bb_scalar_hash_function(&context, receiver)
+                        : scalar_equal
+                        ? n00bb_scalar_equal_function(&context, receiver)
                         : record_hash
                         ? n00bb_record_hash_function(&context, receiver)
                         : n00bb_record_equal_function(&context, receiver))

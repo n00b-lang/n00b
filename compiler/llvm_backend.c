@@ -329,6 +329,8 @@ struct n00bb_llvm_backend_t {
     bool reachable_bound;
     pointer_set_t runtime;
     bool runtime_bound;
+    pointer_set_t cached;
+    bool cached_bound;
     ir_storage_origin_t *storage_origin;
     bool emit_frame_maps;
     bool panic_trap;
@@ -7670,6 +7672,109 @@ emit_trap_failure(lower_state_t *state, ir_instr_t *instruction)
     return true;
 }
 
+#define SYSCALL_SYMBOL_PREFIX "n00b.syscall."
+
+// The call number of an extern bound to a writ `syscall`, whose native
+// symbol is `n00b.syscall.<number>` (writ ffi-spec.md §7.1).
+static bool
+syscall_number(core_string_t symbol, uint64_t *number)
+{
+    size_t prefix = sizeof(SYSCALL_SYMBOL_PREFIX) - 1;
+    if (!symbol.data || symbol.u8_bytes <= prefix
+        || memcmp(symbol.data, SYSCALL_SYMBOL_PREFIX, prefix)) return false;
+    uint64_t value = 0;
+    for (size_t i = prefix; i < symbol.u8_bytes; i++) {
+        char digit = symbol.data[i];
+        if (digit < '0' || digit > '9' || value > (UINT64_MAX - 9) / 10)
+            return false;
+        value = value * 10 + (uint64_t)(digit - '0');
+    }
+    *number = value;
+    return true;
+}
+
+// Enters the Linux kernel directly: the call number and up to six
+// arguments go in the architecture's syscall registers, and the result is
+// the raw register (writ dsl.md §7.7). Nothing is called, so there is no
+// stack map; the generated n00b wrapper handles errno and blocking.
+static bool
+emit_syscall_entry(lower_state_t *state, const ir_instr_t *instruction,
+                   const ir_operand_t *operands, size_t count, uint64_t number)
+{
+    static const char *const x86_args[] = {"{rdi}", "{rsi}", "{rdx}",
+                                           "{r10}", "{r8}", "{r9}"};
+    static const char *const arm_args[] = {"0", "{x1}", "{x2}",
+                                           "{x3}", "{x4}", "{x5}"};
+    const char *triple = LLVMGetTarget(state->module);
+    bool x86 = triple && !strncmp(triple, "x86_64", 6);
+    bool arm = triple && (!strncmp(triple, "aarch64", 7)
+                          || !strncmp(triple, "arm64", 5));
+    size_t arguments = count ? count - 1 : 0;
+    if ((!x86 && !arm) || arguments > 6) {
+        state->failure_detail = FAILURE_DETAIL(
+            "a syscall needs x86_64 or aarch64 and at most six arguments");
+        return false;
+    }
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef types[7];
+    LLVMValueRef values[7];
+    // aarch64 ties the first argument to x0, the result register, so the
+    // tied operand must come right after the output.
+    size_t n = 0;
+    for (size_t a = 0; a < arguments; a++) {
+        const ir_operand_t *operand = &operands[a + 1];
+        if (operand->kind != IR_OPD_VALUE || !operand->value) return false;
+        LLVMValueRef value = lowered_value(state, operand->value);
+        if (!value) return false;
+        LLVMTypeRef type = LLVMTypeOf(value);
+        LLVMTypeKind kind = LLVMGetTypeKind(type);
+        if (kind == LLVMPointerTypeKind)
+            value = LLVMBuildPtrToInt(state->builder, value, i64, "sys.arg");
+        else if (kind == LLVMIntegerTypeKind && LLVMGetIntTypeWidth(type) < 64)
+            value = ir_machine_of(state->function->owner,
+                                  operand->value->type).class == IR_CLASS_SINT
+                ? LLVMBuildSExt(state->builder, value, i64, "sys.arg")
+                : LLVMBuildZExt(state->builder, value, i64, "sys.arg");
+        else if (kind != LLVMIntegerTypeKind || LLVMGetIntTypeWidth(type) != 64) {
+            state->failure_detail = FAILURE_DETAIL(
+                "a syscall argument is neither an integer nor a pointer");
+            return false;
+        }
+        values[n] = value;
+        types[n++] = i64;
+    }
+    values[n] = LLVMConstInt(i64, number, false);
+    types[n++] = i64;
+
+    core_buffer_t constraints = {0};
+    core_buffer_printf(&constraints, x86 ? "={rax}" : "={x0}");
+    for (size_t a = 0; a < arguments; a++)
+        core_buffer_printf(&constraints, ",%s", x86 ? x86_args[a] : arm_args[a]);
+    core_buffer_printf(&constraints, x86 ? ",{rax},~{rcx},~{r11},~{memory}"
+                                         : ",{x8},~{memory}");
+    const char *text = x86 ? "syscall" : "svc #0";
+    LLVMTypeRef signature = LLVMFunctionType(i64, types, (unsigned)n, false);
+    LLVMValueRef entry = LLVMGetInlineAsm(signature, text, strlen(text),
+        constraints.data, constraints.byte_len, true, false,
+        LLVMInlineAsmDialectATT, false);
+    core_buffer_release(&constraints);
+    LLVMValueRef result = entry
+        ? LLVMBuildCall2(state->builder, signature, entry, values,
+                         (unsigned)n, "syscall")
+        : nullptr;
+    if (!result) return false;
+    if (!instruction->dest) return true;
+    LLVMTypeRef wanted = value_type(state->function->owner,
+        instruction->dest->type, context);
+    if (!wanted || LLVMGetTypeKind(wanted) != LLVMIntegerTypeKind)
+        return save_result(state, instruction, nullptr);
+    unsigned width = LLVMGetIntTypeWidth(wanted);
+    if (width < 64)
+        result = LLVMBuildTrunc(state->builder, result, wanted, "sys.ret");
+    return save_result(state, instruction, result);
+}
+
 static bool
 lower_instruction(lower_state_t *state, ir_instr_t *instruction)
 {
@@ -10993,6 +11098,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         ir_annot_t *native_call = target
             ? ir_annot_get(&target->annots,
                            CORE_STRING_STATIC("n00bb.abi.native")) : nullptr;
+        uint64_t kernel_call = 0;
+        if (native_call && native_call->kind == IR_ANNOT_STR
+            && syscall_number(native_call->s, &kernel_call))
+            return emit_syscall_entry(state, instruction, operands, count,
+                                      kernel_call);
         if (native_call && native_call->kind == IR_ANNOT_STR
             && native_call->s.data
             && core_string_eq(native_call->s,
@@ -13310,6 +13420,7 @@ n00bb_llvm_backend_free(n00bb_llvm_backend_t *backend)
     core_free(backend->cpu_features.data);
     if (backend->reachable_bound) pointer_set_free(&backend->reachable);
     if (backend->runtime_bound) pointer_set_free(&backend->runtime);
+    if (backend->cached_bound) pointer_set_free(&backend->cached);
     core_buffer_release(&backend->mutator_entries);
     core_free(backend);
 }
@@ -13431,6 +13542,20 @@ n00bb_llvm_backend_restrict_functions(n00bb_llvm_backend_t *backend,
     for (size_t i = 0; i < count; i++)
         pointer_set_add(&backend->runtime, functions[i]);
     backend->runtime_bound = true;
+    return true;
+}
+
+bool
+n00bb_llvm_backend_bind_cached_functions(n00bb_llvm_backend_t *backend,
+                                         ir_func_t *const *functions,
+                                         size_t count)
+{
+    if (!backend || (count && !functions) || backend->lowered) return false;
+    if (backend->cached_bound) pointer_set_free(&backend->cached);
+    backend->cached = pointer_set_new();
+    for (size_t i = 0; i < count; i++)
+        pointer_set_add(&backend->cached, functions[i]);
+    backend->cached_bound = true;
     return true;
 }
 
@@ -14427,6 +14552,22 @@ emit_frame_maps(LLVMModuleRef module, core_diagnostics_t *diagnostics)
     return reported;
 }
 
+// A cached body is linked from its module's cached object, if this build
+// reached it: the runtime set when bound, else the cached bodies the build
+// reached. A dispatch adapter counts though its receiver is a type
+// variable, as an emitted one does.
+static bool
+cached_body_linked(const n00bb_llvm_backend_t *backend,
+                   const ir_func_t *function, ir_func_t *body)
+{
+    const pointer_set_t *reached = backend->runtime_bound ? &backend->runtime
+        : backend->cached_bound ? &backend->cached : nullptr;
+    if (reached)
+        return pointer_set_has(reached, function)
+            || pointer_set_has(reached, body);
+    return th_is_closed(ir_module_types(body->owner), body->type);
+}
+
 static LLVMValueRef
 runtime_function_address_table(n00bb_llvm_backend_t *backend,
                                uint32_t *count_out)
@@ -14448,11 +14589,7 @@ runtime_function_address_table(n00bb_llvm_backend_t *backend,
         ir_func_t *body = n00bb_cached_body(function);
         if (body == function
             ? !function_body_emitted(function, backend_reachable(backend))
-            : !th_is_closed(ir_module_types(body->owner), body->type)
-                || (backend->runtime_bound
-                    && !pointer_set_has(&backend->runtime, function)
-                    && !pointer_set_has(&backend->runtime, body)))
-            continue;
+            : !cached_body_linked(backend, function, body)) continue;
         LLVMTypeRef signature = function_type(module, body);
         core_buffer_t name = {0};
         append_function_symbol(&name, function);

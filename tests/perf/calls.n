@@ -1,3 +1,5 @@
+import sys.os
+
 record Box {
     value: int
 }
@@ -13,5 +15,5 @@ func fib(n: int) -> int {
     return fib(n - 1) + fib(n - 2)
 }
 
-let scale = cast[int](__os_arg_count())
+let scale = cast[int](sys.os.arg_count())
 require fib(37 + scale) == 39088169

@@ -166,41 +166,54 @@ error[E0102]: unknown type: `sizeof` takes one type name
 error[E0102]: unknown type: `File`
   --> dsl.md-33.writ:1:13
 == dsl.md example 34
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-34.writ:19:27
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-34.writ:20:59
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-34.writ:21:41
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-34.writ:22:41
-error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
-  --> dsl.md-34.writ:23:46
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> dsl.md-34.writ:4:1
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> dsl.md-34.writ:9:1
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> dsl.md-34.writ:14:1
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> dsl.md-34.writ:19:1
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> dsl.md-34.writ:25:1
+error[E0226]: a `syscall` needs a Linux platform whose architecture has a kernel entry
+  --> dsl.md-34.writ:31:1
 == dsl.md example 35
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-35.writ:19:27
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-35.writ:20:59
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-35.writ:21:41
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-35.writ:22:41
+error[E0901]: not supported yet: a result type no transport rule covers (dsl.md §8.9)
+  --> dsl.md-35.writ:23:46
 == dsl.md example 36
-error[E0901]: not supported yet: interfaces (dsl.md §9.1)
-  --> dsl.md-36.writ:2:1
-error[E0901]: not supported yet: interfaces (dsl.md §9.1)
-  --> dsl.md-36.writ:6:1
 == dsl.md example 37
+error[E0901]: not supported yet: interfaces (dsl.md §9.1)
+  --> dsl.md-37.writ:2:1
+error[E0901]: not supported yet: interfaces (dsl.md §9.1)
+  --> dsl.md-37.writ:6:1
 == dsl.md example 38
 == dsl.md example 39
 == dsl.md example 40
-error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
-  --> dsl.md-40.writ:1:1
-error[E0102]: unknown type: `sqlite3`
-  --> dsl.md-40.writ:3:16
-error[E0102]: unknown type: `sqlite3_stmt`
-  --> dsl.md-40.writ:4:16
-error[E0106]: `refine` names no function: `sqlite3_prepare_v2`
-  --> dsl.md-40.writ:6:1
-error[E0106]: `refine` names no function: `sqlite3_column_blob`
-  --> dsl.md-40.writ:13:1
 == dsl.md example 41
-error[E0106]: `refine` names no function: `some_api`
+error[E0901]: not supported yet: `import` inside a contract; run `writ import` and `use` the draft
   --> dsl.md-41.writ:1:1
+error[E0102]: unknown type: `sqlite3`
+  --> dsl.md-41.writ:3:16
+error[E0102]: unknown type: `sqlite3_stmt`
+  --> dsl.md-41.writ:4:16
+error[E0106]: `refine` names no function: `sqlite3_prepare_v2`
+  --> dsl.md-41.writ:6:1
+error[E0106]: `refine` names no function: `sqlite3_column_blob`
+  --> dsl.md-41.writ:13:1
 == dsl.md example 42
+error[E0106]: `refine` names no function: `some_api`
+  --> dsl.md-42.writ:1:1
 == dsl.md example 43
+== dsl.md example 44
 == call-plan.md example 1
 error[E0102]: unknown type: `z_stream`
   --> call-plan.md-1.writ:1:25

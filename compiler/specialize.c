@@ -1596,7 +1596,8 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 else if (instance) continue;
                 if (!target || !target->n_blocks) continue;
                 th_ctx *types = ir_module_types(target->owner);
-                if (open_caller && target == callee->owner
+                if (open_caller
+                    && target == n00bb_cached_body(callee->owner)
                     && !th_is_closed(types, target->type)) continue;
                 if (th_is_closed(types, target->type)) {
                     valid = open_caller

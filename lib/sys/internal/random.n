@@ -1,16 +1,11 @@
-func fill(modify buffer: Array[u8]) -> nil fail: int {
-    let count: uint = __array_length(buffer)
-    if count == 0 {
-        return
-    }
-    let status = __os_random_bytes(unsafe_cast[Ref[byte]] ref buffer[0],
-                                        count)
-    if status < 0 {
-        fail status
-    }
+import internal.errno
+import internal.os
+
+func fill(modify buffer: Array[u8]) fail: internal.errno.Errno {
+    internal.os.random_bytes(buffer, 0, __array_length(buffer))!
 }
 
-func fill(modify value: 'T) -> nil fail: int where 'T : Integer {
+func fill(modify value: 'T) fail: internal.errno.Errno where 'T : Integer {
     var bytes: Array[u8] = new[Array[u8]](16)
     fill(bytes)!
     var bits: u128 = 0

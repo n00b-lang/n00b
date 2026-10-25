@@ -1,0 +1,5 @@
+import internal.pool
+
+package sys.pool {
+    export internal.pool
+}

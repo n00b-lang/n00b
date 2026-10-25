@@ -105,8 +105,10 @@ void n00bb_cache_seeds(const n00bb_cache_t *cache, th_ctx *types,
 bool n00bb_cache_instance_object(n00bb_cache_t *cache,
     core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     const n00bb_specialization_t *item, n00bb_cache_module_object_t *object);
+// With `clean_only`, an SCC is snapshotted only when none of its modules,
+// nor any module it imports, reported an error.
 bool n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
-                          n00bb_link_analysis_t *analysis);
+                          n00bb_link_analysis_t *analysis, bool clean_only);
 void n00bb_cache_capture_summaries(n00bb_cache_t *cache,
                                    n00bb_link_analysis_t *analysis,
                                    uint8_t phase);

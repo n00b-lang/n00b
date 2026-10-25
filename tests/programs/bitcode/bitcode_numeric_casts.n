@@ -21,4 +21,67 @@ rest %= 2.0
 assert rest == 1.5
 let undefined: f64 = rest % 0.0
 assert !(undefined == undefined)
+
+# Distinct types go through the type they were created from, so literals
+# and other integer widths convert with `cast`.
+type Cast_Id = i32
+let id_two: Cast_Id = cast[Cast_Id] 2
+assert cast[i32](id_two) == 2
+let id_negative: Cast_Id = cast[Cast_Id] -5
+assert cast[i64](id_negative) == -5
+let id_unsafe: Cast_Id = unsafe_cast[Cast_Id] 2
+assert cast[u64](id_unsafe) == 2
+
+# `unsafe_cast` reinterprets enums and integers without a membership check.
+enum Cast_Code {
+    first = 1,
+    second = 2,
+}
+let code_source: i32 = 2
+let code: Cast_Code = unsafe_cast[Cast_Code](code_source)
+assert code == Cast_Code.second
+assert cast[i32](code) == 2
+let code_outside: Cast_Code = unsafe_cast[Cast_Code](code_source + 1)
+assert unsafe_cast[i32](code_outside) == 3
+
+# An open enum holds every value of its storage type, named or not, and
+# `cast` converts it both ways.
+open enum Cast_Errno: i32 {
+    eperm = 1,
+    eagain = 11,
+    ewouldblock = 11,
+}
+let unnamed_errno: Cast_Errno = cast[Cast_Errno](133)
+assert cast[i32](unnamed_errno) == 133
+assert unnamed_errno != Cast_Errno.eperm
+assert Cast_Errno.eagain == Cast_Errno.ewouldblock
+assert cast[i64](cast[Cast_Errno](-5)) == -5
+assert cast[Cast_Errno](11) == Cast_Errno.eagain
+
+# Without `: T`, an open enum's storage is the smallest of 8, 16, 32 or 64
+# bits that holds its items.
+open enum Cast_Small {
+    one = 1,
+}
+assert cast[u8](cast[Cast_Small](250)) == 250
+
+# A closed enum can declare its storage too.
+enum Cast_Stored: u16 {
+    first = 1,
+}
+assert cast[u16](Cast_Stored.first) == 1
+
+# Enums implement Equal, so their options compare.
+let some_code: Cast_Code? = Cast_Code.second
+let no_code: Cast_Code? = nil
+assert some_code != no_code
+assert some_code == some_code
+let some_errno: Cast_Errno? = cast[Cast_Errno](4000)
+let same_errno: Cast_Errno? = cast[Cast_Errno](4000)
+assert some_errno == same_errno
+
+# `unsafe_cast` reinterprets the bits of floats and same-width integers.
+let float_bits: u64 = unsafe_cast[u64](1.5)
+assert float_bits == 0x3ff8000000000000
+assert unsafe_cast[f64](float_bits) == 1.5
 __fd_write(2, "ok")

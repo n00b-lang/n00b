@@ -1,0 +1,31 @@
+# A literal whose only binding is raw calls the C function directly, with
+# no shim, and still links the library it names.
+when target_os() == "linux" {
+    [-
+    library rawz
+    link "z"
+    # The system zlib is built against glibc.
+    link "c"
+
+    fn compressBound(source_len: c_ulong) -> c_ulong
+      effects none
+
+    binding {
+        raw "compressBound"
+    }
+    -]'ffi
+} else {
+    [-
+    library rawz
+    link "z"
+
+    fn compressBound(source_len: c_ulong) -> c_ulong
+      effects none
+
+    binding {
+        raw "compressBound"
+    }
+    -]'ffi
+}
+
+require compress_bound_raw(100) >= 100

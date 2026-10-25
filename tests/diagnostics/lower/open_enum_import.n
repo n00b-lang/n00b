@@ -1,0 +1,14 @@
+import signals
+
+# The enum stays open when it is imported, so naming its items does not
+# cover every value.
+func code(signal: signals.Signal) -> int {
+    switch signal {
+        case hup:
+            return 1
+        case term:
+            return 2
+    }
+}
+
+require code(signals.Signal.term) == 2

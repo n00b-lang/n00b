@@ -6,13 +6,16 @@ build_dir=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
+# The toolchain is moved before it runs anything, so a standard library
+# prepared at install time would be rebuilt for its new place anyway; the
+# run after the move shows the installed compiler builds a program.
 "$source_root/tools/install.sh" --build "$build_dir" --prefix "$tmp/first" \
-    --no-modify-path >"$tmp/install.log" 2>&1 || {
+    --no-modify-path --no-prepare >"$tmp/install.log" 2>&1 || {
     cat "$tmp/install.log" >&2
     exit 1
 }
 "$source_root/tools/install.sh" --build "$build_dir" --prefix "$tmp/first" \
-    --link --no-modify-path >"$tmp/link.log" 2>&1 || {
+    --link --no-modify-path --no-prepare >"$tmp/link.log" 2>&1 || {
     cat "$tmp/link.log" >&2
     exit 1
 }

@@ -1,4 +1,4 @@
-const text = [-
+[-
 library text
 fn text_length(s: *cstr) -> usize
 fn text_greeting() -> *cstr static
@@ -12,7 +12,7 @@ binding {
 }
 -]'ffi
 
-const kept = [-
+[-
 library kept
 
 opaque stmt_state
@@ -38,10 +38,11 @@ fn stmt_release(stmt: consume ?Stmt)
 
 binding {
     policy bind_text.dtor use TEXT_STATIC
+    name stmt_release "stmt_close"
 }
 -]'ffi
 
-const kw = [-
+[-
 library keywords
 
 opaque db_state
@@ -84,10 +85,11 @@ fn db_close(db: consume ?Db)
 
 binding {
     keywords Limits as record
+    name db_close "db_close"
 }
 -]'ffi
 
-const cursor = [-
+[-
 library cursor
 
 opaque db_state
@@ -102,9 +104,14 @@ fn iter_new(db: Source) -> own ?Iter with db
 fn iter_next(iter: Iter) -> c_int
 fn iter_close(iter: consume ?Iter)
   effects none
+
+binding {
+    name source_close "source_close"
+    name iter_close "iter_close"
+}
 -]'ffi
 
-const hooks = [-
+[-
 library hooks
 
 callback Hook = fn(context: *void userdata, value: c_int) -> c_int
@@ -116,7 +123,7 @@ fn hook_context() -> u64
 fn hook_unsubscribe(id: u64)
 -]'ffi
 
-const sorter = [-
+[-
 library sorter
 
 callback Compare = fn(a: *void, b: *void) -> c_int
@@ -131,7 +138,7 @@ binding {
 }
 -]'ffi
 
-const guard = [-
+[-
 library guard
 
 callback Compute = fn(value: c_int) -> c_int
@@ -144,7 +151,7 @@ binding {
 }
 -]'ffi
 
-const kv = [-
+[-
 library kv
 
 allocator kvheap alloc kv_malloc release kv_free
@@ -192,6 +199,8 @@ fn kv_live() -> c_int
 
 binding {
     strip_prefix "kv_"
+    type Db as "Store"
+    type Iter as "Store_Iter"
     method Db.put = kv_put
     method Db.get = kv_get
     method Db.iter = kv_iter_new
@@ -202,7 +211,7 @@ binding {
 }
 -]'ffi
 
-const dispatch = [-
+[-
 library dispatch
 fn fire(handle: u64, value: c_int) -> c_int
 fn read_int(address: usize) -> c_int
@@ -233,7 +242,7 @@ func dispatch_doubler(handle: u64, arguments: uint, returned: uint) -> i32 {
     if doubler == nil {
         return -1
     }
-    dispatch.write_int_raw(returned, doubler.call(dispatch.read_int_raw(arguments)))
+    write_int_raw(returned, doubler.call(read_int_raw(arguments)))
     return 0
 }
 
@@ -246,14 +255,14 @@ func churn(rounds: i32) {
     }
 }
 
-func bind(statement: kept.Stmt) fail: kept.Error {
+func bind(statement: Stmt) fail: Ffi_Error {
     let text = "kept text that is longer than the short form"
-    kept.bind_text(statement, text)!
+    bind_text(statement, text)!
 }
 
-func open_iter(seed: i32) -> cursor.Iter {
-    let db = cursor.source_open(seed)
-    return cursor.iter_new(db)
+func open_iter(seed: i32) -> Iter {
+    let db = source_open(seed)
+    return iter_new(db)
 }
 
 func triple(value: i32) -> i32 {
@@ -261,7 +270,7 @@ func triple(value: i32) -> i32 {
 }
 
 func descending(a: uint, b: uint) -> i32 {
-    return cast[i32](sorter.byte_at_raw(b)) - cast[i32]sorter.byte_at_raw(a)
+    return cast[i32](byte_at_raw(b)) - cast[i32]byte_at_raw(a)
 }
 
 func checked_double(value: i32) -> i32 {
@@ -272,28 +281,28 @@ func checked_double(value: i32) -> i32 {
 }
 
 try {
-    require text.text_length("hello")! == 5
-    require text.text_length("a string longer than the short form")! == 35
-    require text.text_greeting()! == "héllo from C"
-    require text.text_fill(64)! == "filled by C"
+    require text_length("hello")! == 5
+    require text_length("a string longer than the short form")! == 35
+    require text_greeting()! == "héllo from C"
+    require text_fill(64)! == "filled by C"
 } fail(failure) {
     require false
 }
 try {
-    text.text_invalid()!
+    text_invalid()!
     require false
 } fail(failure) {
     require failure.code == -3
 }
 try {
-    text.text_fill_invalid(64)!
+    text_fill_invalid(64)!
     require false
 } fail(failure) {
     require failure.code == -3
 }
 
 try {
-    var statement = kept.stmt_open()
+    var statement = stmt_open()
     bind(statement)!
     var i = 0
     var junk: string = ""
@@ -301,15 +310,15 @@ try {
         junk = junk + "x"
         i = i + 1
     }
-    require kept.stmt_byte(statement, 0) == 107
-    require kept.stmt_byte(statement, 5) == 116
-    kept.close(statement)!
+    require stmt_byte(statement, 0) == 107
+    require stmt_byte(statement, 5) == 116
+    stmt_close(statement)!
 } fail(failure) {
     require false
 }
 try {
-    var closed = kept.stmt_open()
-    kept.close(closed)!
+    var closed = stmt_open()
+    stmt_close(closed)!
     bind(closed)!
     require false
 } fail(failure) {
@@ -318,21 +327,21 @@ try {
 }
 
 try {
-    var defaults = kw.db_open("defaults")!
-    require kw.db_present(defaults) == 0
-    require kw.db_timeout(defaults) == 30000
-    var tuned = kw.db_open("tuned", timeout_ms = 5, cache_kb = 64)!
-    require kw.db_present(tuned) == 5
-    require kw.db_timeout(tuned) == 5
-    require kw.db_cache(tuned) == 64
-    require kw.db_flags(tuned) == 804
-    require kw.db_flags(tuned, flags = 9) == 809
-    require kw.db_depth(tuned) == 3
-    require kw.db_depth(tuned, depth = 7) == 7
-    let limits: kw.Db_Limit_Options = (max_rows = 50, min_rows = nil)
-    require kw.db_limit(tuned, limits) == 49999
-    kw.close(defaults)!
-    kw.close(tuned)!
+    var defaults = db_open("defaults")!
+    require db_present(defaults) == 0
+    require db_timeout(defaults) == 30000
+    var tuned = db_open("tuned", timeout_ms = 5, cache_kb = 64)!
+    require db_present(tuned) == 5
+    require db_timeout(tuned) == 5
+    require db_cache(tuned) == 64
+    require db_flags(tuned) == 804
+    require db_flags(tuned, flags = 9) == 809
+    require db_depth(tuned) == 3
+    require db_depth(tuned, depth = 7) == 7
+    let limits: Db_Limit_Options = (max_rows = 50, min_rows = nil)
+    require db_limit(tuned, limits) == 49999
+    db_close(defaults)!
+    db_close(tuned)!
 } fail(failure) {
     require false
 }
@@ -341,63 +350,63 @@ var k: i32 = 0
 while k < 100 {
     var iter = open_iter(k)
     churn(100000)
-    require cursor.iter_next(iter) == k
-    require cursor.iter_next(iter) == k + 1
+    require iter_next(iter) == k
+    require iter_next(iter) == k + 1
     try {
-        cursor.close(iter)!
+        iter_close(iter)!
     } fail(failure) {
         require false
     }
     k = k + 1
 }
 
-let id = hooks.hook_subscribe(callback[hooks.Hook](ref triple))
-let first = hooks.hook_context()
+let id = hook_subscribe(callback[Hook](ref triple))
+let first = hook_context()
 churn(200000)
 try {
-    require hooks.hook_fire(5) == 15
-    require hooks.hook_fire(-2) == -6
-    hooks.hook_unsubscribe(id)!
-    require hooks.hook_fire(1) == -1
-    let again = hooks.hook_subscribe(callback[hooks.Hook](ref triple))
-    require hooks.hook_context() == first
-    require hooks.hook_fire(2) == 6
-    hooks.hook_unsubscribe(again)!
+    require hook_fire(5) == 15
+    require hook_fire(-2) == -6
+    hook_unsubscribe(id)!
+    require hook_fire(1) == -1
+    let again = hook_subscribe(callback[Hook](ref triple))
+    require hook_context() == first
+    require hook_fire(2) == 6
+    hook_unsubscribe(again)!
 } fail(failure) {
     require false
 }
 
 let items: Array[u8] = [3, 9, 1, 7]
 try {
-    require sorter.nth_sorted(items, 0)! == 9
-    require sorter.nth_sorted(items, 1)! == 7
-    require sorter.nth_sorted(items, 3)! == 1
+    require nth_sorted(items, 0)! == 9
+    require nth_sorted(items, 1)! == 7
+    require nth_sorted(items, 3)! == 1
 } fail(failure) {
     require false
 }
 
-require guard.guarded_call(21) == 42
-require guard.guarded_call(-1) == -1000
-require guard.guarded_call(5) == 10
+require guarded_call(21) == 42
+require guarded_call(-1) == -1000
+require guarded_call(5) == 10
 
 try {
-    let db = kv.db_open("store")!
-    kv.put(db, [97, 49], [111, 110, 101])!
-    kv.put(db, [97, 50], [116, 119, 111])!
-    kv.put(db, [98, 49], [120])!
-    let found = kv.get(db, [97, 50])!
+    let db = store_open("store")!
+    put(db, [97, 49], [111, 110, 101])!
+    put(db, [97, 50], [116, 119, 111])!
+    put(db, [98, 49], [120])!
+    let found = get(db, [97, 50])!
     require found != nil
     if found != nil {
         require found.len() == 3
         require found[0] == 116
     }
-    require kv.get(db, [122])! == nil
-    require kv.live_raw() == 0
-    let iter = kv.iter(db, [97])!
+    require get(db, [122])! == nil
+    require live_raw() == 0
+    let walk = iter(db, [97])!
     var keys = 0
     var more = true
     while more {
-        let entry = kv.next(iter)!
+        let entry = next(walk)!
         if entry != nil {
             require entry.key.len() == 2
             require entry.val.len() == 3
@@ -413,10 +422,10 @@ try {
 }
 
 let handle = __ffi_table_insert(doublers, callback[Doubler](ref twice))
-require dispatch.fire_raw(handle, 21) == 42
+require fire_raw(handle, 21) == 42
 __ffi_table_free(doublers, handle)
-require dispatch.fire_raw(handle, 21) == -200
+require fire_raw(handle, 21) == -200
 let reinserted = __ffi_table_insert(doublers, callback[Doubler](ref twice))
 require reinserted == handle
-require dispatch.fire_raw(reinserted, 5) == 10
+require fire_raw(reinserted, 5) == 10
 __fd_write(2, "ok")

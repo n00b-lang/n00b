@@ -86,6 +86,7 @@ dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
     for (size_t s = 0; s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type) continue;
             ir_layout_compute(state->ir_module, symbol->type, nullptr);
             ir_descriptor_t *descriptor = ir_layout_of(state->ir_module,

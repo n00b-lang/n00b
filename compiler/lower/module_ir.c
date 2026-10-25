@@ -228,6 +228,7 @@ add_context_hook_functions(parse_grammar_t *grammar,
     for (size_t s = 0; ok && s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
              ok && symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             if (!context_symbol(grammar, symbol)) continue;
             if (state->interface_module) {
                 core_link_declaration_t *context_declaration =
@@ -406,6 +407,7 @@ register_nominal_types(parse_grammar_t *grammar,
          scope; scope = scope->all_next) {
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type
                 || !!parse_sym_binding_origin(symbol) != imported) continue;
             bool nominal = symbol->decl_node
@@ -492,6 +494,7 @@ register_record_types(parse_grammar_t *grammar,
         for (size_t s = 0; valid && s < types.len; s++) {
             for (parse_sym_entry_t *symbol = types.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
+                if (n00bb_injected_member(symbol)) continue;
                 parse_scope_t *members = symbol->member_scope;
                 if (symbol->kind != PARSE_SYM_TYPEDEF || !members ||
                     !core_string_eq(members->scope_tag,
@@ -566,6 +569,7 @@ register_imported_record_layouts(parse_grammar_t *grammar,
     for (size_t s = 0; s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             parse_scope_t *members = symbol->member_scope;
             if (symbol->kind != PARSE_SYM_TYPEDEF || !symbol->type ||
                 !members || !core_string_eq(members->scope_tag,
@@ -932,6 +936,7 @@ register_module_globals(parse_grammar_t *grammar,
     for (size_t s = 0; ok && s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
              ok && symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             if (symbol->kind != PARSE_SYM_VARIABLE
                 || context_symbol(grammar, symbol)
                 || (!symbol_binding_node(symbol)
@@ -1080,6 +1085,7 @@ bind_module_global_identities(ir_ctx_t *ir_context,
         for (size_t s = 0; ok && s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  ok && symbol; symbol = symbol->next_in_scope) {
+                if (n00bb_injected_member(symbol)) continue;
                 if (symbol->kind != PARSE_SYM_VARIABLE
                     || !n00bb_unit_defines_global(analysis, source, symbol)
                     || !is_module_global_symbol(analysis->grammar, symbol))
@@ -1463,6 +1469,16 @@ attach_cached_body(ir_ctx_t *ir_context, ir_func_t *function, ir_func_t *body)
 {
     ir_value_t *address = body ? ir_func_address(body->owner, body) : nullptr;
     if (body) function->definition = body;
+    // A function with no written return type gets it from its body. The
+    // interface keeps it open; the build that cached the body settled it.
+    th_type *declared = body && th_kind_of(th_resolve(function->type))
+            == TH_FUNCTION
+        ? th_resolve(th_func_ret(th_resolve(function->type))) : nullptr;
+    th_type *settled = declared && th_kind_of(declared) == TH_VAR
+            && th_kind_of(th_resolve(body->type)) == TH_FUNCTION
+        ? th_resolve(th_func_ret(th_resolve(body->type))) : nullptr;
+    if (settled && th_is_closed(ir_module_types(body->owner), settled))
+        (void)th_match(declared, settled);
     return !body || (address && ir_annot_set(ir_context, &function->annots,
         (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.cached_body"), .kind = IR_ANNOT_VALUE,
                      .v = address}));
@@ -1639,6 +1655,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
                  symbol; symbol = symbol->next_in_scope) {
+                if (n00bb_injected_member(symbol)) continue;
                 if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type)
                     continue;
                 bool definition = function_symbol_at(grammar,
@@ -1792,6 +1809,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                                 CORE_STRING_STATIC("trait"))) continue;
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
+                if (n00bb_injected_member(symbol)) continue;
                 if (symbol->kind != PARSE_SYM_FUNCTION) continue;
                 core_buffer_t name = {0};
                 core_buffer_printf(&name, "__trait_req_%.*s_%.*s",
@@ -1866,6 +1884,7 @@ validate_module_declarations(parse_grammar_t *grammar,
     for (size_t s = 0; valid && s < scopes.len; s++) {
         for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
              symbol; symbol = symbol->next_in_scope) {
+            if (n00bb_injected_member(symbol)) continue;
             parse_tree_t *binding = symbol_binding_node(symbol);
             if (symbol->kind == PARSE_SYM_FUNCTION
                 || symbol->kind == PARSE_SYM_MODULE

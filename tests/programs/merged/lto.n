@@ -1,5 +1,6 @@
 import containers.tree
 import containers.traits
+import sys.os
 import sys.threads
 
 var values: Dict[int, int] = new[Dict[int, int]]()
@@ -234,13 +235,14 @@ func string_behaviour_checks() {
     require b == "x"
     require "x" == b
     require b.hash() == "x".hash()
-    var read_fd: int = -1
-    var write_fd: int = -1
-    require __os_pipe(ref read_fd, ref write_fd) == 0
-    let fd: i32 = cast[i32] write_fd
-    require b.raw_repr(fd) == "x".raw_repr(fd)
-    require __os_close(read_fd) == 0
-    require __os_close(write_fd) == 0
+    try {
+        let ends: sys.os.Pipe = sys.os.pipe()!
+        require b.raw_repr(ends.write) == "x".raw_repr(ends.write)
+        sys.os.close(ends.read)!
+        sys.os.close(ends.write)!
+    } fail(failure) {
+        require false
+    }
 }
 
 from_bytes_checks()
@@ -288,23 +290,21 @@ var keep: Ref[Fin]? = nil
 var on_main: Atomic[bool] = false
 var finalized: Atomic[uint] = 0
 var appended: Atomic[bool] = false
-var seed: byte = 0
 
 func __finalize(consume self: Ref[Fin]) {
-    if __os_thread_is_main() != 0 {
+    if sys.threads.thread_is_main() {
         __atomic_store(ref on_main, true)
     }
     __atomic_fetch_add(ref finalized, 1)
 }
 
-func appender(argument: Ref[byte]) -> Ref[byte] {
+func appender() {
     var i: int = 0
     while i < 1000 {
         g += "z"
         i += 1
     }
     __atomic_store(ref appended, true)
-    return argument
 }
 
 func churn(n: int) {
@@ -319,7 +319,8 @@ func churn(n: int) {
 
 func sliced() -> bool {
     let s: string = g
-    require sys.threads.thread_start(ref appender, ref seed)
+    require sys.threads.thread_start(
+        callback[sys.threads.Thread_Entry](ref appender))
     churn(3000000)
     while !__atomic_load(ref appended) {
         sys.threads.thread_yield()
@@ -332,7 +333,7 @@ let deadline: u64 = __os_now_ns() + 30_000_000_000
 while __atomic_load(ref finalized) == 0 {
     require __os_now_ns() < deadline
     __gc_enter_blocking()
-    __os_thread_yield()
+    sys.threads.thread_yield()
     __gc_leave_blocking()
 }
 func current_len() -> uint {

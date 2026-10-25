@@ -1,0 +1,3 @@
+tests/diagnostics/lower/open_enum_switch.n:23:12: error N00B-S0013: this `switch` has no case for other values of `Signal`, so `open_code` can reach its end without returning a value
+  tests/diagnostics/lower/open_enum_switch.n:22:6: note: `open_code` returns `int`
+  help: add the missing cases, an `else`, or a `return` after the `switch`

@@ -1341,8 +1341,8 @@ shim_text(const writ_c_context_t *c, const writ_plan_view_t *const *plans, size_
     return writ_emit_finish(&emit, c->model->session);
 }
 
-static writ_str_t
-upper(writ_session_t *session, writ_str_t text)
+writ_str_t
+writ_c_upper_prefix(writ_session_t *session, writ_str_t text)
 {
     writ_str_t copy = writ_str_copy(session, text.data, text.length);
     for (size_t i = 0; i < copy.length; i++) {
@@ -1414,7 +1414,8 @@ writ_gen_c(const writ_model_t *model, const writ_gen_c_request_t *request, const
     }
     writ_session_t *session = model->session;
     writ_str_t prefix = request->prefix.length ? request->prefix : writ_c_default_prefix(model);
-    writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length), upper(session, prefix),
+    writ_c_context_t c = {model, writ_str_copy(session, prefix.data, prefix.length),
+                          writ_c_upper_prefix(session, prefix),
                           request->struct_size >= sizeof(writ_gen_c_request_t) && request->pointer_normalized};
     size_t total = writ_model_fn_count(model);
     size_t capacity = 0;

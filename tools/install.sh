@@ -7,6 +7,7 @@ PREFIX=""
 PREFIX_GIVEN=no
 LINK=no
 PATH_CHOICE=ask
+PREPARE=yes
 MODE=install
 
 die() {
@@ -23,8 +24,11 @@ usage_error() {
 usage() {
     cat <<'USAGE'
 Usage: tools/install.sh --build DIR [--prefix DIR] [--link]
-                        [--add-to-path | --no-modify-path]
+                        [--add-to-path | --no-modify-path] [--no-prepare]
        tools/install.sh --uninstall [--prefix DIR]
+
+  --no-prepare  don't build the standard library ahead of time; the first
+                program built with the toolchain builds it instead
 USAGE
 }
 
@@ -43,6 +47,7 @@ while [ "$#" -gt 0 ]; do
         --link) LINK=yes ;;
         --add-to-path) PATH_CHOICE=add ;;
         --no-modify-path) PATH_CHOICE=skip ;;
+        --no-prepare) PREPARE=no ;;
         --uninstall) MODE=uninstall ;;
         -h|--help) usage; exit 0 ;;
         *) usage_error "unknown option '$1'" ;;
@@ -194,6 +199,12 @@ stage_files() {
     cp "$COMPILER" "$STAGE/bin/n00b" || return 1
     cp "$BUILD/libn00b-abi-runtime.a" "$BUILD/libn00b-abi-runtime.bc" \
        "$BUILD/n00b-comptime.o" "$STAGE/lib/" || return 1
+    # Linux's runtime built against libc, for programs that link "c".
+    if [ -f "$BUILD/libn00b-abi-runtime-libc.a" ]; then
+        cp "$BUILD/libn00b-abi-runtime-libc.a" \
+           "$BUILD/libn00b-abi-runtime-libc.bc" \
+           "$BUILD/n00b-comptime-libc.o" "$STAGE/lib/" || return 1
+    fi
     for cross in "$BUILD"/*/libn00b-abi-runtime.a; do
         [ -f "$cross" ] || continue
         profile="$(basename "$(dirname "$cross")")"
@@ -256,17 +267,19 @@ if [ "$PREFIX_GIVEN" = no ] && ! on_path "$BIN"; then
 fi
 advance "linked n00b"
 
-WARM="$(mktemp -d "${TMPDIR:-/tmp}/n00b-install.XXXXXX")"
-printf 'var ready = 1\n' > "$WARM/warm.n"
-START=$(date +%s)
-if ! (cd "$WARM" && "$DEST/bin/n00b" build --output "$WARM/warm" warm.n \
-        > "$WARM/log" 2>&1); then
-    cat "$WARM/log" >&2
+if [ "$PREPARE" = yes ]; then
+    WARM="$(mktemp -d "${TMPDIR:-/tmp}/n00b-install.XXXXXX")"
+    printf 'var ready = 1\n' > "$WARM/warm.n"
+    START=$(date +%s)
+    if ! (cd "$WARM" && "$DEST/bin/n00b" build --output "$WARM/warm" warm.n \
+            > "$WARM/log" 2>&1); then
+        cat "$WARM/log" >&2
+        rm -rf "$WARM"
+        die "the installed compiler could not build a test program"
+    fi
     rm -rf "$WARM"
-    die "the installed compiler could not build a test program"
+    advance "prepared the standard library ($(( $(date +%s) - START ))s)"
 fi
-rm -rf "$WARM"
-advance "prepared the standard library ($(( $(date +%s) - START ))s)"
 
 "$DEST/bin/n00b" --version > /dev/null 2>&1 || die "the installed compiler does not run"
 advance "verified"

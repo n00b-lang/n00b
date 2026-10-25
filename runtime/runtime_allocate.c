@@ -3,7 +3,10 @@
 #include "n00b-abi-v1.h"
 #include "runtime_panic.h"
 
-#if !defined(_WIN32)
+#if defined(__linux__) && defined(N00B_LIBC_FREE)
+#include <sys/sysinfo.h>
+#include "builtin_os_syscall.h"
+#elif !defined(_WIN32)
 #include <unistd.h>
 #endif
 
@@ -16,7 +19,18 @@ n00b_os_physical_memory(void)
 {
     static _Atomic uint64_t cached;
     uint64_t bytes = atomic_load_explicit(&cached, memory_order_relaxed);
-#if !defined(_WIN32)
+#if defined(__linux__) && defined(N00B_LIBC_FREE)
+    if (!bytes) {
+        // The kernel's struct sysinfo; total RAM is in units of mem_unit.
+        struct sysinfo info = {0};
+        long result = n00b_linux_syscall6(__NR_sysinfo, (long)&info, 0, 0, 0,
+                                          0, 0);
+        bytes = result == 0 && info.totalram
+            ? (uint64_t)info.totalram * (info.mem_unit ? info.mem_unit : 1)
+            : UINT64_MAX;
+        atomic_store_explicit(&cached, bytes, memory_order_relaxed);
+    }
+#elif !defined(_WIN32)
     if (!bytes) {
         long pages = sysconf(_SC_PHYS_PAGES);
         long page_size = sysconf(_SC_PAGESIZE);

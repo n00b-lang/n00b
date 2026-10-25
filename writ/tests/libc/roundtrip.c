@@ -58,11 +58,12 @@ files(void)
            "open with a mode argument fails in a missing directory");
     expect(detail == ENOENT, "open reports ENOENT");
     libc_str_t args[] = {{"one", 3}, {"two", 3}};
-    expect(libc_execl("/nonexistent/writ", 17, "writ", 4, args, 2, &detail) == libc_execl_error,
+    int returned = 0;
+    expect(libc_execl("/nonexistent/writ", 17, "writ", 4, args, 2, &returned, &detail) == libc_execl_error,
            "execl of a missing program fails");
     expect(detail == ENOENT, "execl reports ENOENT");
     libc_str_t many[9] = {{"a", 1}, {"a", 1}, {"a", 1}, {"a", 1}, {"a", 1}, {"a", 1}, {"a", 1}, {"a", 1}, {"a", 1}};
-    expect(libc_execl("/nonexistent/writ", 17, "writ", 4, many, 9, &detail) == LIBC_ARGUMENT_ERROR,
+    expect(libc_execl("/nonexistent/writ", 17, "writ", 4, many, 9, &returned, &detail) == LIBC_ARGUMENT_ERROR,
            "more arguments than the widest call shim is an argument error");
 }
 

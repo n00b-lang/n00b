@@ -1,0 +1,54 @@
+# A C variadic function through an unnamed `...` pack: as a List (the
+# default) and, bound by the name the plan gives the pack, as an Array.
+# Each call passes elements wider than a byte, so the shim must count
+# elements, not bytes.
+
+[-
+library c
+link "c"
+header <fcntl.h>
+fn fcntl(fd: c_int, cmd: c_int, ... of c_int) -> c_int
+  effects io
+-]'ffi
+
+[-
+library c
+link "c"
+header <fcntl.h>
+fn fcntl(fd: c_int, cmd: c_int, ... of c_int) -> c_int
+  effects io
+binding {
+    pack fcntl.args as array
+    name fcntl "fcntl_array"
+}
+-]'ffi
+
+private const get_descriptor_flags: i32 = 1
+private const close_on_exec: i32 = 1
+
+private func duplicate_close_on_exec() -> i32 {
+    when target_os() == "linux" {
+        return 1030
+    } else {
+        return 67
+    }
+}
+
+try {
+    let from_list: i32 = fcntl(2, duplicate_close_on_exec(), [10])!
+    require from_list >= 10
+    require fcntl(from_list, get_descriptor_flags, [])! == close_on_exec
+} fail(failure) {
+    require false
+}
+
+try {
+    let floor: Array[i32] = [20]
+    let from_array: i32 = fcntl_array(2, duplicate_close_on_exec(), floor)!
+    require from_array >= 20
+    let none: Array[i32] = []
+    require fcntl_array(from_array, get_descriptor_flags, none)!
+        == close_on_exec
+} fail(failure) {
+    require false
+}

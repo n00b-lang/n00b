@@ -1,0 +1,17 @@
+import closed_errs
+
+# A closed enum can't hold errnos it doesn't name, so it can't be the
+# type syscall failures arrive as. The error is reported at the binding.
+[-
+library kernel
+platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+syscall write(fd: c_int, buf: *u8, count: usize) -> isize
+  number 1 when arch == x86_64
+  number 64 when arch == aarch64
+  effects output, blocking
+
+binding {
+    error * -> "closed_errs.Closed_Errno"
+}
+-]'ffi

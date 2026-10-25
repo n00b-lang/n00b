@@ -8,6 +8,9 @@
 #if defined(__linux__)
 #include "builtin_os_syscall.h"
 #include <linux/fcntl.h>
+#if defined(N00B_LIBC_FREE)
+#include "linux_start.h"
+#endif
 
 enum {
     LINUX_PROT_READ = 1, LINUX_PROT_WRITE = 2,
@@ -169,57 +172,6 @@ static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
     return result < 0 ? -1 : 0;
 }
 
-static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
-{
-    return n00b_linux_syscall6(__NR_openat, AT_FDCWD, (long)path, (long)flags,
-                               (long)mode, 0, 0);
-}
-
-static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
-{
-    return n00b_linux_syscall6(__NR_read, (long)fd, (long)buffer, (long)count,
-                               0, 0, 0);
-}
-
-static int64_t os_random_raw(uint8_t *buffer, uint64_t count)
-{
-    return n00b_linux_syscall6(__NR_getrandom, (long)buffer, (long)count, 0,
-                               0, 0, 0);
-}
-
-static int64_t os_close_raw(int64_t fd)
-{
-    return n00b_linux_syscall6(__NR_close, (long)fd, 0, 0, 0, 0, 0);
-}
-
-static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
-{
-    return n00b_linux_syscall6(__NR_lseek, (long)fd, (long)offset,
-                               (long)whence, 0, 0, 0);
-}
-
-enum { LINUX_TCGETS = 0x5401, LINUX_TIOCGWINSZ = 0x5413, LINUX_ENOTTY = 25 };
-
-static int64_t os_fd_is_tty_raw(int64_t fd)
-{
-    uint64_t termios[8];
-    long result = n00b_linux_syscall6(__NR_ioctl, (long)fd, LINUX_TCGETS,
-                                      (long)termios, 0, 0, 0);
-    if (result >= 0) return 1;
-    return result == -LINUX_ENOTTY ? 0 : result;
-}
-
-static int64_t os_terminal_size_raw(int64_t fd, uint16_t winsize[4])
-{
-    return n00b_linux_syscall6(__NR_ioctl, (long)fd, LINUX_TIOCGWINSZ,
-                               (long)winsize, 0, 0, 0);
-}
-
-static int64_t os_pipe_raw(int32_t fds[2])
-{
-    return n00b_linux_syscall6(__NR_pipe2, (long)fds, O_CLOEXEC, 0, 0, 0, 0);
-}
-
 [[noreturn]] static void os_exit_raw(int64_t code)
 {
     for (;;)
@@ -291,6 +243,12 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
     return address != NULL;
 }
 
+// There is no libc errno here: a syscall returns the negated errno itself.
+static int32_t os_errno_raw(void)
+{
+    return 0;
+}
+
 #elif defined(__APPLE__)
 
 #include <mach-o/dyld.h>
@@ -357,32 +315,6 @@ static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
     return mprotect(address, bytes, (int)protection) == 0 ? 0 : -1;
 }
 
-static int64_t os_errno_result(int64_t result)
-{
-    return result < 0 ? -(int64_t)errno : result;
-}
-
-static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
-{
-    return os_errno_result(open((const char *)path, (int)flags, (int)mode));
-}
-
-static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
-{
-    return os_errno_result(read((int)fd, buffer, (size_t)count));
-}
-
-static int64_t os_random_raw(uint8_t *buffer, uint64_t count)
-{
-    size_t chunk = count > 256 ? 256 : (size_t)count;
-    return getentropy(buffer, chunk) == 0 ? (int64_t)chunk : -(int64_t)errno;
-}
-
-static int64_t os_close_raw(int64_t fd)
-{
-    return os_errno_result(close((int)fd));
-}
-
 [[noreturn]] static void os_exit_raw(int64_t code)
 {
     _exit((int)code);
@@ -444,35 +376,6 @@ static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
     return 0;
 }
 
-static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
-{
-    return os_errno_result(lseek((int)fd, (off_t)offset, whence));
-}
-
-static int64_t os_fd_is_tty_raw(int64_t fd)
-{
-    struct termios settings;
-    int64_t result = os_errno_result(ioctl((int)fd, TIOCGETA, &settings));
-    if (result >= 0) return 1;
-    return result == -ENOTTY ? 0 : result;
-}
-
-static int64_t os_terminal_size_raw(int64_t fd, uint16_t winsize[4])
-{
-    return os_errno_result(ioctl((int)fd, TIOCGWINSZ, winsize));
-}
-
-static int64_t os_pipe_raw(int32_t fds[2])
-{
-    int pair[2];
-    int64_t result = os_errno_result(pipe(pair));
-    if (result < 0) return result;
-    (void)fcntl(pair[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(pair[1], F_SETFD, FD_CLOEXEC);
-    fds[0] = pair[0];
-    fds[1] = pair[1];
-    return 0;
-}
 
 static bool os_map_file_raw(const char *path, const uint8_t **bytes,
                             uint64_t *length)
@@ -513,6 +416,12 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
 {
     (void)bytes;
     return address != NULL;
+}
+
+// libSystem's per-thread errno, which every libSystem call sets on failure.
+static int32_t os_errno_raw(void)
+{
+    return errno;
 }
 
 #elif defined(_WIN32)
@@ -608,50 +517,7 @@ static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
     return VirtualProtect(address, bytes, mode, &old) ? 0 : -1;
 }
 
-static int64_t os_errno_result(int64_t result)
-{
-    return result < 0 ? -(int64_t)errno : result;
-}
-
 static wchar_t *os_wide(const uint8_t *path);
-
-static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
-{
-    wchar_t *wide = os_wide(path);
-    if (!wide) return -EINVAL;
-    int64_t result = os_errno_result(_wopen(wide, (int)flags | _O_BINARY,
-                                            (int)mode));
-    free(wide);
-    return result;
-}
-
-static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
-{
-    unsigned chunk = count > INT_MAX ? INT_MAX : (unsigned)count;
-    return os_errno_result(_read((int)fd, buffer, chunk));
-}
-
-typedef BOOL (WINAPI *os_process_prng_t)(PBYTE data, SIZE_T bytes);
-
-static int64_t os_random_raw(uint8_t *buffer, uint64_t count)
-{
-    static _Atomic(os_process_prng_t) cached;
-    os_process_prng_t prng = atomic_load(&cached);
-    if (!prng) {
-        HMODULE module = LoadLibraryW(L"bcryptprimitives.dll");
-        prng = module ? (os_process_prng_t)(void *)GetProcAddress(module,
-                                                     "ProcessPrng")
-                      : NULL;
-        atomic_store(&cached, prng);
-    }
-    if (!prng) return -38;
-    return prng(buffer, (SIZE_T)count) ? (int64_t)count : -5;
-}
-
-static int64_t os_close_raw(int64_t fd)
-{
-    return os_errno_result(_close((int)fd));
-}
 
 [[noreturn]] static void os_exit_raw(int64_t code)
 {
@@ -677,37 +543,6 @@ static int32_t os_futex_wait_raw(_Atomic uint32_t *word, uint32_t expected,
 static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
 {
     WakeByAddressAll((void *)word);
-    return 0;
-}
-
-static int64_t os_seek_raw(int64_t fd, int64_t offset, int32_t whence)
-{
-    return os_errno_result(_lseeki64((int)fd, offset, whence));
-}
-
-static int64_t os_fd_is_tty_raw(int64_t fd)
-{
-    return _isatty((int)fd) ? 1 : 0;
-}
-
-static int64_t os_terminal_size_raw(int64_t fd, uint16_t winsize[4])
-{
-    CONSOLE_SCREEN_BUFFER_INFO info;
-    HANDLE handle = (HANDLE)_get_osfhandle((int)fd);
-    if (handle == INVALID_HANDLE_VALUE
-        || !GetConsoleScreenBufferInfo(handle, &info)) return -25;
-    winsize[0] = (uint16_t)(info.srWindow.Bottom - info.srWindow.Top + 1);
-    winsize[1] = (uint16_t)(info.srWindow.Right - info.srWindow.Left + 1);
-    return 0;
-}
-
-static int64_t os_pipe_raw(int32_t fds[2])
-{
-    int pair[2];
-    int64_t result = os_errno_result(_pipe(pair, 65536, _O_BINARY));
-    if (result < 0) return result;
-    fds[0] = pair[0];
-    fds[1] = pair[1];
     return 0;
 }
 
@@ -787,6 +622,12 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
     return at >= low && at < high && high - at >= bytes;
 }
 
+// The CRT's per-thread errno.
+static int32_t os_errno_raw(void)
+{
+    return errno;
+}
+
 #else
 #error "builtin/os requires macOS, Linux, or Windows"
 #endif
@@ -820,16 +661,52 @@ void n00b_os_set_thread_exit_hook(void (*hook)(void))
     atomic_store(&thread_exit_hook, hook);
 }
 
+#if defined(__linux__) && defined(N00B_LIBC_FREE)
+// Without malloc, a thread's start packet gets a page of its own.
+static os_thread_packet_t *packet_new(void)
+{
+    long area = n00b_linux_syscall6(__NR_mmap, 0, (long)os_page_size(),
+        LINUX_PROT_READ | LINUX_PROT_WRITE, LINUX_MAP_PRIVATE_ANON, -1, 0);
+    return area < 0 && area > -4096 ? NULL : (os_thread_packet_t *)area;
+}
+
+static void packet_free(os_thread_packet_t *packet)
+{
+    (void)n00b_linux_syscall6(__NR_munmap, (long)packet, (long)os_page_size(),
+                              0, 0, 0, 0);
+}
+#else
+static os_thread_packet_t *packet_new(void)
+{
+    return malloc(sizeof(os_thread_packet_t));
+}
+
+static void packet_free(os_thread_packet_t *packet)
+{
+    free(packet);
+}
+#endif
+
+// The collector's detach (sys.internal.gc.alloc.detach_runtime_mutator).
+// Programs define it; this weak stand-in serves C programs that link the
+// runtime without a collector.
+__attribute__((weak)) void n00b_gc_detach_thread(void)
+{
+}
+
 static void *os_thread_begin(void *raw)
 {
     os_thread_packet_t packet = *(os_thread_packet_t *)raw;
-    free(raw);
+    packet_free(raw);
     n00bb_runtime_install_failure_handlers();
     void (*hook)(void) = atomic_load(&thread_start_hook);
     if (hook) hook();
     void (*seed)(void *) = atomic_load(&thread_seed_hook);
     if (seed) seed(packet.seed);
     void *result = packet.entry(packet.argument);
+    // A thread that ran n00b code is attached to the collector; it must
+    // leave before it ends, or a collection would wait for it forever.
+    n00b_gc_detach_thread();
     void (*exit_hook)(void) = atomic_load(&thread_exit_hook);
     if (exit_hook) exit_hook();
     return result;
@@ -850,6 +727,19 @@ static int32_t os_thread_start_raw(os_thread_packet_t *packet)
     if (!thread) return -1;
     CloseHandle(thread);
     return 0;
+}
+
+#elif defined(__linux__) && defined(N00B_LIBC_FREE)
+
+// Threads without libc: linux_start.c clones them.
+static void os_thread_begin_linux(void *raw)
+{
+    (void)os_thread_begin(raw);
+}
+
+static int32_t os_thread_start_raw(os_thread_packet_t *packet)
+{
+    return n00b_linux_thread_start(os_thread_begin_linux, packet);
 }
 
 #else
@@ -874,44 +764,14 @@ static int32_t os_thread_start_raw(os_thread_packet_t *packet)
 
 int32_t n00b_os_thread_start(n00b_os_thread_entry entry, void *argument)
 {
-    os_thread_packet_t *packet = entry ? malloc(sizeof(*packet)) : NULL;
+    os_thread_packet_t *packet = entry ? packet_new() : NULL;
     if (!packet) return -1;
     void *(*spawn)(void) = atomic_load(&thread_spawn_hook);
     *packet = (os_thread_packet_t){.entry = entry, .argument = argument,
                                    .seed = spawn ? spawn() : NULL};
     if (!os_thread_start_raw(packet)) return 0;
-    free(packet);
+    packet_free(packet);
     return -1;
-}
-
-int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode)
-{
-    return path ? os_open_raw(path, flags, mode) : -14;
-}
-
-int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count)
-{
-    if (!count) return 0;
-    return buffer ? os_read_raw(fd, buffer, count) : -14;
-}
-
-int64_t n00b_os_random_bytes(uint8_t *buffer, uint64_t count)
-{
-    if (count && !buffer) return -14;
-    uint64_t done = 0;
-    while (done < count) {
-        int64_t got = os_random_raw(buffer + done, count - done);
-        if (got == -4) continue;
-        if (got < 0) return got;
-        if (got == 0) return -5;
-        done += (uint64_t)got;
-    }
-    return 0;
-}
-
-int64_t n00b_os_close(int64_t fd)
-{
-    return os_close_raw(fd);
 }
 
 extern void (*n00b_comptime_exit)(int64_t code);
@@ -935,12 +795,12 @@ int32_t n00b_os_futex_wake_all(uint8_t *word)
                 : -14;
 }
 
-int64_t n00b_os_seek(int64_t fd, int64_t offset, int32_t whence)
-{
-    return os_seek_raw(fd, offset, whence);
-}
-
+#if defined(__linux__) && defined(N00B_LIBC_FREE)
+#include "linux_start.h"
+#define environ n00b_linux_environ
+#else
 extern char **environ;
+#endif
 
 uint64_t n00b_os_env_count(void)
 {
@@ -976,31 +836,9 @@ const uint8_t *n00b_os_arg_at(uint64_t index)
         ? (const uint8_t *)saved_argv[index] : NULL;
 }
 
-int64_t n00b_os_fd_is_tty(int64_t fd)
+int32_t n00b_os_errno(void)
 {
-    return os_fd_is_tty_raw(fd);
-}
-
-int64_t n00b_os_terminal_size(int64_t fd, uint16_t *rows, uint16_t *cols)
-{
-    uint16_t winsize[4] = {0};
-    if (!rows || !cols) return -14;
-    int64_t result = os_terminal_size_raw(fd, winsize);
-    if (result < 0) return result;
-    *rows = winsize[0];
-    *cols = winsize[1];
-    return 0;
-}
-
-int64_t n00b_os_pipe(int64_t *read_fd, int64_t *write_fd)
-{
-    int32_t fds[2] = {-1, -1};
-    if (!read_fd || !write_fd) return -14;
-    int64_t result = os_pipe_raw(fds);
-    if (result < 0) return result;
-    *read_fd = fds[0];
-    *write_fd = fds[1];
-    return 0;
+    return os_errno_raw();
 }
 
 size_t n00b_os_page_size(void)

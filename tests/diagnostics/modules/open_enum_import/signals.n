@@ -1,0 +1,4 @@
+open enum Signal: i32 {
+    hup = 1,
+    term = 2,
+}

@@ -1052,6 +1052,10 @@ effect_named(const writ_model_t *model, writ_sym_t name)
         {"input", WRIT_EFFECTS_INPUT},
         {"output", WRIT_EFFECTS_OUTPUT},
         {"io", WRIT_EFFECTS_INPUT | WRIT_EFFECTS_OUTPUT},
+        {"env", WRIT_EFFECTS_ENV},
+        {"clock", WRIT_EFFECTS_CLOCK},
+        {"random", WRIT_EFFECTS_RANDOM},
+        {"threads", WRIT_EFFECTS_THREADS},
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         if (writ_is_text(model, name, names[i].text)) {
@@ -1203,6 +1207,22 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
     case WRIT_N_NOTE:
         fn->note = node->name;
         return;
+    case WRIT_N_SYSCALL_NUMBER: {
+        uint32_t when = first_of(model, id, WRIT_N_WHEN_PART);
+        if (when && !writ_condition_holds(model, child(model, when, 0))) {
+            return;
+        }
+        uint32_t expr = child(model, id, 0);
+        int64_t value = 0;
+        fn->syscall_number_node = id;
+        fn->has_syscall_number = expr && writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, expr)
+                                 && writ_expr_eval(model, expr, nullptr, &value) && value >= 0;
+        fn->syscall_number = value;
+        return;
+    }
+    case WRIT_N_INFALLIBLE:
+        fn->infallible = true;
+        return;
     case WRIT_N_SOURCE:
         fn->source_name = node->name;
         fn->source_macro = first_of(model, id, WRIT_N_MACRO) != 0;
@@ -1263,6 +1283,8 @@ is_clause(writ_node_kind_t kind)
     case WRIT_N_SIGNAL_SAFE:
     case WRIT_N_SINCE:
     case WRIT_N_REMOVED:
+    case WRIT_N_SYSCALL_NUMBER:
+    case WRIT_N_INFALLIBLE:
         return true;
     default:
         return false;
@@ -1731,6 +1753,9 @@ resolve_decl(resolver_t *r, uint32_t id)
         return;
     case WRIT_N_CALLBACK:
         resolve_fn(r, id, WRIT_FN_CALLBACK);
+        return;
+    case WRIT_N_SYSCALL:
+        resolve_fn(r, id, WRIT_FN_SYSCALL);
         return;
     case WRIT_N_STRUCT:
     case WRIT_N_KEYWORDS:

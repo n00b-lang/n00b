@@ -13,13 +13,34 @@
 #include "lib/alloc.h"
 
 const char *const *
-n00bb_system_libraries(const core_target_desc_t *target)
+n00bb_system_libraries(const core_target_desc_t *target, bool libc)
 {
     static const char *const mach_o[] = {nullptr};
-    static const char *const elf[] = {nullptr};
+    // Linux programs link no libc and no C startup files: the runtime's
+    // _start begins the program. Compiler-rt still supplies the compiler's
+    // own helpers, such as 128-bit division.
+    static const char *const elf[] = {"-static", "-nostartfiles", "-nolibc",
+                                      "--rtlib=compiler-rt",
+                                      "--unwindlib=none", nullptr};
+    // A program whose FFI contracts link "c" is an ordinary libc program,
+    // with the runtime built against libc.
+    static const char *const elf_libc[] = {"-lpthread", "-lm", "-ldl",
+                                           nullptr};
     static const char *const coff[] = {"-lsynchronization", nullptr};
     return target->object_format == CORE_TARGET_OBJECT_MACH_O ? mach_o
-        : target->object_format == CORE_TARGET_OBJECT_COFF ? coff : elf;
+        : target->object_format == CORE_TARGET_OBJECT_COFF ? coff
+        : libc ? elf_libc : elf;
+}
+
+bool
+n00bb_links_libc(const core_target_desc_t *target,
+                 const core_string_t *libraries, size_t count)
+{
+    if (target->object_format != CORE_TARGET_OBJECT_ELF) return false;
+    for (size_t i = 0; i < count; i++)
+        if (core_string_eq(libraries[i], CORE_STRING_STATIC("c")))
+            return true;
+    return false;
 }
 
 core_string_t

@@ -262,6 +262,11 @@ n00b_builtin_native_symbol_name(uint64_t address)
     for (DWORD i = 0; i < exports->NumberOfNames; i++)
         if (functions[ordinals[i]] == relative) return base + names[i];
     return NULL;
+#elif defined(N00B_LIBC_FREE)
+    // No dynamic linker to ask. Capturing compile-time values, which needs
+    // names, runs in the compiler, not in libc-free programs.
+    (void)address;
+    return NULL;
 #else
     Dl_info info = {0};
     if (!dladdr((const void *)(uintptr_t)address, &info) || !info.dli_sname

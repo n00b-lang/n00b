@@ -1,6 +1,6 @@
 import resharp
 
-func leak(text: string) fail: resharp.Error {
+func leak(text: string) fail: Ffi_Error {
     let pattern = resharp.regex_new(text)!
     require resharp.is_match(pattern, "abc")!
 }

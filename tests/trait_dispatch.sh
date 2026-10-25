@@ -9,8 +9,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 for mode in boxed; do
     flags=
     if test "$mode" = boxed; then flags=--no-specialize; fi
-    if ! "$compiler" build $flags --cache "$tmp/cache" \
-        --output "$tmp/$mode" "$program" \
+    if ! "$compiler" build $flags --output "$tmp/$mode" "$program" \
         >"$tmp/$mode.compile.out" 2>"$tmp/$mode.compile.err"; then
         cat "$tmp/$mode.compile.out" "$tmp/$mode.compile.err" >&2
         exit 1

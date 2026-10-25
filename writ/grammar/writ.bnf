@@ -31,7 +31,7 @@
 <feature-source> ::= %"cargo" | %"define" | %"configure"
 <version-directive> ::= %"version" %"query" %IDENTIFIER %"(" %")" %"->" <type> %"format" <text>
 
-<decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <union-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <keywords-decl> | <fn-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
+<decl> ::= <const-decl> | <alias-decl> | <opaque-decl> | <handle-decl> | <struct-decl> | <union-decl> | <enum-decl> | <flags-decl> | <callback-decl> | <keywords-decl> | <fn-decl> | <syscall-decl> | <refine-decl> | <allocator-decl> | <when-decl> | <var-decl> | <interface-decl> | <symbol-decl> | <conventions-decl> | <channel-decl> | <impl-decl> | <rust-error-decl>
 <const-decl> ::= %"const" %IDENTIFIER %":" <type> %"=" <expr>
 <alias-decl> ::= %"type" %IDENTIFIER %"=" <type>
 <opaque-decl> ::= %"opaque" %IDENTIFIER <source-clause>? <thread-rule>?
@@ -71,6 +71,10 @@
 <keyword-field> ::= %IDENTIFIER %":" <slot-type> <keyword-default>? <none-value>?
 <keyword-default> ::= %"=" <expr>
 <fn-decl> ::= %"fn" %IDENTIFIER <signature> <fn-clause>*
+<syscall-decl> ::= %"syscall" %IDENTIFIER <signature> <syscall-clause>*
+<syscall-clause> ::= <number-clause> | <infallible-clause> | <fn-clause>
+<number-clause> ::= %"number" <expr> <when-part>?
+<infallible-clause> ::= %"infallible"
 <signature> ::= %"(" (<param-item> (%"," <param-item>)* %","?)? %")" <fn-result>?
 <param-item> ::= <param> | <varargs> | <self-param>
 <param> ::= %IDENTIFIER %":" <mode>? <slot-type>

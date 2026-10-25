@@ -27,7 +27,8 @@ Usage: ./build.sh [command] [args]
                       -O0 and -Ofast, plus Go and Python (--skip c|go|python)
   tu <file.c>         recompile exactly one source file
   install [opts]      compile, then install a toolchain and make it active
-                      (--prefix DIR, --link, --add-to-path, --no-modify-path)
+                      (--prefix DIR, --link, --add-to-path, --no-modify-path,
+                      --no-prepare)
   uninstall [opts]    remove every installed toolchain (--prefix DIR)
   linux [--arch A] <command>
                       run any of these commands in a Linux container;
