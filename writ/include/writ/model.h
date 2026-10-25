@@ -296,6 +296,7 @@ struct writ_slot_view {
     writ_str_t name;
     const writ_type_view_t *type;
     writ_mode_t mode;
+    bool mode_written;
     writ_extent_kind_t extent_kind;
     uint32_t count_expr;
     uint32_t cap_expr;

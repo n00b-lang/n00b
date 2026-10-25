@@ -1,6 +1,6 @@
 import src
 
-func start() {
+func main() {
     if src.maybe != nil {
         src.maybe = nil
         let b: int = src.maybe

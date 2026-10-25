@@ -9,7 +9,7 @@ func larger(a: int, b: int) -> int {
     return b
 }
 
-func start() {
+func main() {
     alpha.note("x")
     alpha.flush()
     sys.env.exit(sorter.pick(callback[sorter.Pick](ref larger), 3, 9))

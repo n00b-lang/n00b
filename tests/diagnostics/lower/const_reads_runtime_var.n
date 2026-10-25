@@ -10,7 +10,7 @@ const DIRECT = count + 1
 const THROUGH = doubled()
 const FINE = ready + 1
 
-func start() {
+func main() {
     count = 4
     later = 5
     require FINE == 4

@@ -807,6 +807,7 @@ bool n00bb_builtin_bit_count_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_gc_memory_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_volatile_load_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_signal_fence_function(parse_sym_entry_t *symbol);
+bool n00bb_builtin_machine_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_comptime_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_prefetch_function(parse_sym_entry_t *symbol);
 bool n00bb_builtin_atomic_rmw_function(parse_sym_entry_t *symbol);

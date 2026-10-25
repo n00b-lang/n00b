@@ -4,5 +4,5 @@ if comptime() {
         n = n + 1
     }
 }
-func start() {
+func main() {
 }

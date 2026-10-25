@@ -67,80 +67,6 @@ static bool os_thread_is_main(void)
         == n00b_linux_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0);
 }
 
-static bool maps_hex(char **cursor, char *end, uintptr_t *value)
-{
-    uintptr_t result = 0;
-    bool saw = false;
-    while (*cursor < end) {
-        char c = **cursor;
-        unsigned digit;
-        if (c >= '0' && c <= '9') digit = (unsigned)(c - '0');
-        else if (c >= 'a' && c <= 'f') digit = (unsigned)(c - 'a' + 10);
-        else if (c >= 'A' && c <= 'F') digit = (unsigned)(c - 'A' + 10);
-        else break;
-        if (result > (UINTPTR_MAX >> 4)) return false;
-        result = (result << 4) | digit;
-        (*cursor)++;
-        saw = true;
-    }
-    *value = result;
-    return saw;
-}
-
-static bool maps_stack_high(char *line, char *end, uintptr_t target,
-                            uintptr_t *high)
-{
-    uintptr_t low;
-    uintptr_t limit;
-    if (!maps_hex(&line, end, &low) || line >= end || *line++ != '-'
-        || !maps_hex(&line, end, &limit)) return false;
-    if (target < low || target >= limit) return false;
-    *high = limit;
-    return true;
-}
-
-static uintptr_t os_thread_stack_high_self(void)
-{
-    static const char path[] = "/proc/self/maps";
-    char anchor;
-    const uintptr_t target = (uintptr_t)&anchor;
-    long fd = n00b_linux_syscall6(__NR_openat, AT_FDCWD, (long)path,
-                                   O_RDONLY | O_CLOEXEC, 0, 0, 0);
-    if (fd < 0) return 0;
-
-    char buffer[32768];
-    size_t used = 0;
-    uintptr_t high = 0;
-    for (;;) {
-        if (used == sizeof(buffer)) break;
-        long n = n00b_linux_syscall6(__NR_read, fd,
-                                     (long)(buffer + used),
-                                     (long)(sizeof(buffer) - used), 0, 0, 0);
-        if (n < 0) break;
-        used += (size_t)n;
-        char *line = buffer;
-        char *end = buffer + used;
-        while (line < end) {
-            char *newline = line;
-            while (newline < end && *newline != '\n') newline++;
-            if (newline == end) break;
-            if (maps_stack_high(line, newline, target, &high)) break;
-            line = newline + 1;
-        }
-        if (high) break;
-        if (n == 0) {
-            if (line < end)
-                (void)maps_stack_high(line, end, target, &high);
-            break;
-        }
-        size_t remaining = (size_t)(end - line);
-        for (size_t i = 0; i < remaining; i++) buffer[i] = line[i];
-        used = remaining;
-    }
-    (void)n00b_linux_syscall6(__NR_close, fd, 0, 0, 0, 0, 0);
-    return high;
-}
-
 static uint64_t os_now_ns(void)
 {
     struct { long sec, nsec; } stamp = {0};
@@ -241,11 +167,6 @@ static uint64_t os_thread_id(void)
 static bool os_thread_is_main(void)
 {
     return pthread_main_np() == 1;
-}
-
-static uintptr_t os_thread_stack_high_self(void)
-{
-    return (uintptr_t)pthread_get_stackaddr_np(pthread_self());
 }
 
 static uint64_t os_now_ns(void)
@@ -349,12 +270,6 @@ __attribute__((constructor)) static void os_record_main_thread(void)
 static bool os_thread_is_main(void)
 {
     return GetCurrentThreadId() == os_main_thread;
-}
-
-static uintptr_t os_thread_stack_high_self(void)
-{
-    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
-    return (uintptr_t)tib->StackBase;
 }
 
 static uint64_t os_now_ns(void)
@@ -688,11 +603,6 @@ void n00b_os_thread_yield(void)
     os_thread_yield();
 }
 
-void n00b_os_thread_fence(void)
-{
-    atomic_thread_fence(memory_order_seq_cst);
-}
-
 uint64_t n00b_os_thread_is_main(void)
 {
     return os_thread_is_main() ? 1 : 0;
@@ -703,51 +613,9 @@ uint64_t n00b_os_thread_id(void)
     return os_thread_id();
 }
 
-void *n00b_os_thread_stack_high_self(void)
-{
-    return (void *)os_thread_stack_high_self();
-}
-
-uint64_t n00b_os_stack_address(void)
-{
-    return (uint64_t)(uintptr_t)__builtin_frame_address(0);
-}
-
-size_t n00b_os_stack_red_zone_bytes(void)
-{
-#if (defined(__x86_64__) && !defined(_WIN32)) \
-    || (defined(__APPLE__) && defined(__aarch64__))
-    return 128;
-#else
-    return 0;
-#endif
-}
-
-uint64_t n00b_os_frame_pointer_chain(void)
-{
-#if defined(_WIN32)
-    return 0;
-#else
-    return 1;
-#endif
-}
-
 uint64_t n00b_os_now_ns(void)
 {
     return os_now_ns();
-}
-
-void n00b_os_cpu_relax(void)
-{
-#if defined(_WIN32)
-    YieldProcessor();
-#elif defined(__x86_64__) || defined(__i386__)
-    __asm__ volatile("pause");
-#elif defined(__aarch64__) || defined(__arm__)
-    __asm__ volatile("yield");
-#else
-    atomic_signal_fence(memory_order_seq_cst);
-#endif
 }
 
 void *n00b_os_map_zeroed(size_t bytes, size_t alignment)

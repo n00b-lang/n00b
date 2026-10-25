@@ -5815,7 +5815,7 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     n00bb_cache_refreeze_modules(cache, &refreeze);
     if (refreeze.byte_len) {
         n00bb_cache_log_restart(CORE_STRING_STATIC(
-            "comptime_start changes the state of cached modules"));
+            "comptime_main changes the state of cached modules"));
         restart_excluding_cached(argv, argv0, &refreeze);
     }
     core_buffer_release(&refreeze);

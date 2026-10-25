@@ -125,6 +125,14 @@ let packed = compress(data, 6)
   (`Ref[byte]?` when nullable), so the GC keeps the object alive through
   the call; a pointer result is its address as `uint`. A declaration whose
   facts include `unknown` can only be bound this way.
+- The compiler assumes a raw binding (or a `syscall`) both reads and
+  writes through each pointer argument. A mode written in the contract
+  narrows that: `in` means the callee only reads (`write`'s buffer), and
+  `out` means it only fills the memory without reading it (`read`'s
+  buffer, a `timespec` result). Passing `ref x` to an `out` pointer, even
+  through `unsafe_cast`, sets all of `x`, so `x` need not be set before
+  the call; any other pointer argument is a read of `x`, and `x` must be
+  fully set first.
 - A declaration that reaches an `unknown` fact and is neither hidden nor
   raw is E0508, and the compile fails.
 

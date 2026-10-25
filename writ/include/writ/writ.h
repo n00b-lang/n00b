@@ -78,6 +78,7 @@ enum {
     WRIT_EFFECTS_CLOCK     = 1u << 9,
     WRIT_EFFECTS_RANDOM    = 1u << 10,
     WRIT_EFFECTS_THREADS   = 1u << 11,
+    WRIT_EFFECTS_HINT      = 1u << 12,
 };
 
 typedef struct {

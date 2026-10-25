@@ -1163,6 +1163,53 @@ report_dead_store(const ir_instr_t *store, void *context)
         N00BB_NO_ARGS);
 }
 
+typedef struct {
+    core_translation_unit_t *unit;
+    size_t                   count;
+} unset_report_t;
+
+static void
+report_unset_local(void *context, const ir_func_t *function,
+                   const ir_local_t *local, const ir_instr_t *at,
+                   core_string_t path)
+{
+    (void)function;
+    unset_report_t *reports = context;
+    core_translation_unit_t *unit = reports->unit;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    reports->count++;
+    n00bb_report(diagnostics, unit, N00B_DIAG_READ_BEFORE_ASSIGNMENT,
+        n00bb_span_location(at->span), N00B_TEXT_IR_UNSET_READ,
+        N00BB_ARGS(ARG_TEXT(path)));
+    if (!ir_span_known(local->span)) return;
+    core_string_t name = ir_local_label(local);
+    n00bb_report_secondary(diagnostics, unit,
+        n00bb_span_location(local->span), N00B_TEXT_IS_DECLARED_HERE,
+        N00BB_ARGS(ARG_TEXT(name)));
+    core_free(name.data);
+}
+
+// A local whose address is taken is set and read through it, a field at a
+// time or by the calls it's handed to, which the reaching definitions of
+// lowering can't see: every variable must be set in full before it's used.
+bool
+validate_unset_locals(n00bb_link_analysis_t *analysis)
+{
+    unset_report_t reports = {0};
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        reports.unit = analysis->units.data[u];
+        ir_module_t *module = tu_state(reports.unit)->interface_module
+            ? nullptr : unit_module(tu_state(reports.unit));
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            if (function->n_blocks)
+                ir_unset_locals(analysis->summaries, function,
+                                report_unset_local, &reports);
+        }
+    }
+    return !reports.count;
+}
+
 void
 warn_dead_stores(n00bb_link_analysis_t *analysis)
 {
@@ -1757,11 +1804,19 @@ validate_thread_function_reads(
              scope = scope->all_next) {
             for (parse_sym_entry_t *thread_global = scope->first_in_scope;
                  thread_global; thread_global = thread_global->next_in_scope) {
-                if (!is_module_global_symbol(analysis->grammar,
-                        thread_global) || !thread_global->is_thread_local)
+                // A thread-local, or a module variable with no initializer,
+                // is read from a function that may run before anything
+                // sets it.
+                if (thread_global->kind != PARSE_SYM_VARIABLE
+                    || !is_module_global_symbol(analysis->grammar,
+                                                thread_global)
+                    || (!thread_global->is_thread_local
+                        && global_has_explicit_initializer(analysis->grammar,
+                                                           thread_global)))
                     continue;
                 ir_global_t *global = link_ir_global_for_symbol(analysis,
                                                                 thread_global);
+                if (!global && !thread_global->is_thread_local) continue;
                 if (!global || !runtime_init_is_target(runtime, global))
                     return false;
                 ir_splace_t place = ir_splace_global(global);
@@ -1786,7 +1841,9 @@ validate_thread_function_reads(
                     n00bb_report(core_translation_unit_diagnostics(unit), unit,
                         N00B_DIAG_GLOBAL_READ_BEFORE_INIT,
                         n00bb_span_location(read->span),
-                        N00B_TEXT_THREAD_READ_BEFORE_INIT,
+                        thread_global->is_thread_local
+                            ? N00B_TEXT_THREAD_READ_BEFORE_INIT
+                            : N00B_TEXT_GLOBAL_READ_BEFORE_SET,
                         N00BB_ARGS(ARG_TEXT(thread_global->name)));
                 }
             }

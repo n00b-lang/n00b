@@ -153,7 +153,9 @@ static uint8_t
 cached_call_effect(flow_query_t *q, const ir_instr_t *call,
                    ir_path_outcome_t outcome)
 {
-    if (!q->effects) return call_effect(q, call, outcome);
+    // A call's effect on one leaf of the place isn't its effect on the
+    // place, so only whole-place effects are cached.
+    if (!q->effects || q->leaf) return call_effect(q, call, outcome);
     if (!ir_splace_eq(&q->effects_place, q->target)) {
         core_dict_free(q->effects);
         core_dict_init(q->effects, nullptr, nullptr);
@@ -349,7 +351,7 @@ enum {
         | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
         | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
         | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_MAY_DIVERGE
-        | IR_SUMMARY_FINALIZES_PARAMS,
+        | IR_SUMMARY_FINALIZES_PARAMS | IR_SUMMARY_HINTS,
 };
 
 static const ir_value_t *
@@ -549,7 +551,7 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
 }
 
 static uint32_t
-allocation_flags(const ir_func_t *f, const ir_instr_t *in)
+instruction_flags(const ir_func_t *f, const ir_instr_t *in)
 {
     switch (in->op) {
     case IR_OP_ALLOC:
@@ -570,6 +572,11 @@ allocation_flags(const ir_func_t *f, const ir_instr_t *in)
     case IR_OP_BUFFER_AS_STRING:
     case IR_OP_BUFFER_SLICE_END:
         return IR_SUMMARY_MAY_COLLECT;
+    // A pause or a fence changes no value, but is there for when things
+    // happen, so the call that makes one is kept and isn't pointless.
+    case IR_OP_CPU_RELAX:
+    case IR_OP_THREAD_FENCE:
+        return IR_SUMMARY_HINTS;
     default:
         return 0;
     }
@@ -781,7 +788,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *in = block->instrs[i];
             if (is_call(in)) compose_call(summaries, summary, in);
-            add_flags(summary, allocation_flags(f, in), in, nullptr,
+            add_flags(summary, instruction_flags(f, in), in, nullptr,
                       (core_string_t){0});
         }
     }
@@ -892,7 +899,6 @@ summarize_writes(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt,
         ir_spath_t *path = &summary->paths.data[i];
         ir_splace_t targets[2];
         uint32_t    count = (path->flags & IR_SPATH_WRITE) && path->depth
-                && !(path->flags & IR_SPATH_DEEP)
                 && (path->flags & IR_SPATH_MUST) != IR_SPATH_MUST
             ? query_path_places(&q, summary, i, targets) : 0;
         for (uint32_t t = 0; t < count; t++)

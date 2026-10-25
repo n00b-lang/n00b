@@ -484,6 +484,7 @@ describe_flag(core_string_t flag)
         {IR_SUMMARY_MAY_INPUT, N00B_TEXT_FLAG_MAY_INPUT},
         {IR_SUMMARY_CALLS_FINALIZERS, N00B_TEXT_FLAG_CALLS_FINALIZERS},
         {IR_SUMMARY_STARTS_THREADS, N00B_TEXT_FLAG_STARTS_THREADS},
+        {IR_SUMMARY_HINTS, N00B_TEXT_FLAG_HINTS},
     };
     uint64_t bits = 0;
     if (ir_summary_effect_lookup(flag, &bits))

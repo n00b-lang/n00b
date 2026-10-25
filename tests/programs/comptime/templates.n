@@ -2,7 +2,7 @@ func make(y: int) -> Array[int] {
     return [1, 2, y, 4, 5]
 }
 
-func start() {
+func main() {
     var a: Array[int] = make(30)
     var b: Array[int] = make(31)
     a[0] = 100

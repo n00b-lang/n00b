@@ -133,6 +133,7 @@ build_slots(writ_model_t *model)
             .name          = sym(model, record->name),
             .type          = type_view(model, record->type),
             .mode          = record->mode,
+            .mode_written  = record->mode_written,
             .extent_kind   = record->extent_kind,
             .count_expr    = record->count_expr,
             .cap_expr      = record->cap_expr,

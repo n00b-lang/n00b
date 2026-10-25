@@ -165,7 +165,8 @@ canonical_tree(const n00b_t *g, const writ_n00b_type_t *type)
 
 static void
 add_extern_as(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n00b_type_t *const *params,
-              size_t count, const writ_n00b_type_t *result, writ_effects_t effects, const writ_fn_view_t *fn)
+              size_t count, const writ_n00b_type_t *result, writ_effects_t effects, const writ_fn_view_t *fn,
+              const writ_n00b_access_t *access)
 {
     const writ_n00b_type_t **canonical = writ_alloc(g->session, sizeof(*canonical) * (count ? count : 1));
     for (size_t i = 0; i < count; i++) {
@@ -175,6 +176,7 @@ add_extern_as(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n0
                                     .name = name,
                                     .symbol = symbol,
                                     .params = canonical,
+                                    .param_access = access,
                                     .params_count = count,
                                     .result = canonical_tree(g, result),
                                     .pure = fn && fn->is_pure,
@@ -183,25 +185,27 @@ add_extern_as(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n0
                                 }));
 }
 
-static void
-add_extern_with(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n00b_type_t *const *params,
-                size_t count, const writ_n00b_type_t *result, const writ_fn_view_t *fn)
+static writ_n00b_access_t
+slot_access(const writ_fn_view_t *fn, uint32_t index)
 {
-    add_extern_as(g, name, symbol, params, count, result, fn->effects, fn);
+    const writ_slot_view_t *slot = index < fn->slots_count ? &fn->slots[index] : nullptr;
+    bool stated = slot && slot->mode_written && slot->type && slot->type->kind == WRIT_TYPE_POINTER;
+    return !stated ? WRIT_N00B_ACCESS_ANY : slot->mode == WRIT_MODE_IN ? WRIT_N00B_ACCESS_READ_ONLY
+           : slot->mode == WRIT_MODE_OUT ? WRIT_N00B_ACCESS_WRITE_ONLY : WRIT_N00B_ACCESS_ANY;
 }
 
 static void
 add_extern(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n00b_type_t *const *params, size_t count,
            const writ_n00b_type_t *result)
 {
-    add_extern_as(g, name, symbol, params, count, result, 0, nullptr);
+    add_extern_as(g, name, symbol, params, count, result, 0, nullptr, nullptr);
 }
 
 static void
 add_copy_helper(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_n00b_type_t *const *params,
                 size_t count, const writ_n00b_type_t *result)
 {
-    add_extern_as(g, name, symbol, params, count, result, WRIT_EFFECTS_DECLARED, nullptr);
+    add_extern_as(g, name, symbol, params, count, result, WRIT_EFFECTS_DECLARED, nullptr, nullptr);
 }
 
 static void
@@ -1802,8 +1806,9 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
             named(g, writ_cstr("uint")),
             ref_of(g, named(g, writ_str_format(g->session, "%.*s_Arguments", S(name)))),
         };
-        add_extern(g, copy, callback_helper_symbol(g, callback, "arguments_copy"), params, 2,
-                   named(g, writ_cstr("nil")));
+        static const writ_n00b_access_t fills[] = {WRIT_N00B_ACCESS_ANY, WRIT_N00B_ACCESS_WRITE_ONLY};
+        add_extern_as(g, copy, callback_helper_symbol(g, callback, "arguments_copy"), params, 2,
+                      named(g, writ_cstr("nil")), 0, nullptr, fills);
     }
     if (returns) {
         const writ_n00b_type_t *params[] = {named(g, writ_cstr("uint")), named(g, result)};
@@ -2127,9 +2132,12 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     core_list_t(shim_param_t) params = core_list_new(shim_param_t);
     shim_params(g, fn, plan, &params);
     const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (2 * params.len + 1));
+    writ_n00b_access_t *access = writ_alloc(g->session, sizeof(*access) * (2 * params.len + 1));
     size_t typed = 0;
     for (size_t i = 0; i < params.len; i++) {
         if (params.data[i].kind != PARAM_OWNED && params.data[i].kind != PARAM_PROVIDED) {
+            uint32_t slot = plan->items[params.data[i].item].contract_slot;
+            access[typed] = params.data[i].kind == PARAM_POINTER ? slot_access(plan->fn, slot) : WRIT_N00B_ACCESS_ANY;
             types[typed++] = params.data[i].n00b_type;
         }
     }
@@ -2146,8 +2154,8 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
     writ_str_t n00b_ret = !writ_c_returns_directly(&g->c, plan) ? prim(g, "i%u", 32)
                           : is_pointer(ret)               ? writ_cstr("uint")
                                                           : scalar_type(g, direct ? direct->type : nullptr);
-    add_extern_with(g, writ_str_format(g->session, "__%.*s", S(writ_c_plan_name(&g->c, plan))), shim_symbol(g, plan),
-                    types, typed, named(g, n00b_ret), plan->fn);
+    add_extern_as(g, writ_str_format(g->session, "__%.*s", S(writ_c_plan_name(&g->c, plan))), shim_symbol(g, plan),
+                  types, typed, named(g, n00b_ret), plan->fn->effects, plan->fn, access);
     core_list_free(params);
 }
 
@@ -3331,33 +3339,6 @@ raw_type(const n00b_t *g, const writ_type_view_t *type)
 }
 
 static void
-emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_bound_fn_t bound)
-{
-    const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (fn->slots_count ? fn->slots_count : 1));
-    for (size_t s = 0; s < fn->slots_count; s++) {
-        types[s] = raw_param_type(g, fn->slots[s].type);
-    }
-    writ_str_t result = raw_type(g, fn->result ? fn->result->type : nullptr);
-    add_extern_with(g, writ_str_format(g->session, "__%.*s_raw", S(bound.name)), fn->link_symbol, types,
-                    fn->slots_count, named(g, result), fn);
-    writ_emit_line(emit, "");
-    mark(g, emit, fn->declared_at, fn->contract_name);
-    writ_emit_text(emit, "func %.*s_raw(", S(bound.name));
-    for (size_t s = 0; s < fn->slots_count; s++) {
-        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
-        writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(type_text(g, types[s])));
-    }
-    writ_emit_line(emit, ") -> %.*s {", S(result));
-    writ_emit_text(emit, "    %s__%.*s_raw(", writ_str_eq(result, writ_cstr("nil")) ? "" : "return ", S(bound.name));
-    for (size_t s = 0; s < fn->slots_count; s++) {
-        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
-        writ_emit_text(emit, "%s%.*s", s ? ", " : "", S(name));
-    }
-    writ_emit_line(emit, ")");
-    writ_emit_line(emit, "}");
-}
-
-static void
 emit_policy_dispatch(const n00b_t *g, writ_emit_t *emit, size_t fn)
 {
     const writ_plan_view_t *plan = bound_plan(g, fn, 0);
@@ -3435,6 +3416,45 @@ syscall_type(const n00b_t *g, const writ_type_view_t *type, bool result)
     return named(g, scalar_type(g, type));
 }
 
+// Raw and syscall parameters go to C or the kernel as they are.
+static const writ_n00b_type_t **
+direct_params(const n00b_t *g, const writ_fn_view_t *fn, bool syscall, const writ_n00b_access_t **access)
+{
+    const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (fn->slots_count + 1));
+    writ_n00b_access_t *each = writ_alloc(g->session, sizeof(*each) * (fn->slots_count + 1));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        types[s] = syscall ? syscall_type(g, fn->slots[s].type, false) : raw_param_type(g, fn->slots[s].type);
+        each[s] = slot_access(fn, (uint32_t)s);
+    }
+    *access = each;
+    return types;
+}
+
+static void
+emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_bound_fn_t bound)
+{
+    const writ_n00b_access_t *access = nullptr;
+    const writ_n00b_type_t **types = direct_params(g, fn, false, &access);
+    writ_str_t result = raw_type(g, fn->result ? fn->result->type : nullptr);
+    add_extern_as(g, writ_str_format(g->session, "__%.*s_raw", S(bound.name)), fn->link_symbol, types,
+                  fn->slots_count, named(g, result), fn->effects, fn, access);
+    writ_emit_line(emit, "");
+    mark(g, emit, fn->declared_at, fn->contract_name);
+    writ_emit_text(emit, "func %.*s_raw(", S(bound.name));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
+        writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(name), S(type_text(g, types[s])));
+    }
+    writ_emit_line(emit, ") -> %.*s {", S(result));
+    writ_emit_text(emit, "    %s__%.*s_raw(", writ_str_eq(result, writ_cstr("nil")) ? "" : "return ", S(bound.name));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
+        writ_emit_text(emit, "%s%.*s", s ? ", " : "", S(name));
+    }
+    writ_emit_line(emit, ")");
+    writ_emit_line(emit, "}");
+}
+
 // Emits a `syscall` as an extern whose symbol `n00b.syscall.<number>` the
 // n00b compiler lowers to the kernel-entry instruction, and a wrapper that
 // does the in-band errno check, the result conversion and, for `blocking`
@@ -3447,14 +3467,13 @@ emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
     if (!fn->has_syscall_number || hidden) {
         return;
     }
-    const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (fn->slots_count ? fn->slots_count : 1));
-    for (size_t s = 0; s < fn->slots_count; s++) {
-        types[s] = syscall_type(g, fn->slots[s].type, false);
-    }
+    const writ_n00b_access_t *access = nullptr;
+    const writ_n00b_type_t **types = direct_params(g, fn, true, &access);
     bool has_result = fn->result != nullptr;
     writ_str_t entry = writ_str_format(g->session, "__%.*s_syscall", S(name));
     writ_str_t symbol = writ_str_format(g->session, "n00b.syscall.%lld", (long long)fn->syscall_number);
-    add_extern_with(g, entry, symbol, types, fn->slots_count, named(g, writ_cstr(has_result ? "int" : "nil")), fn);
+    add_extern_as(g, entry, symbol, types, fn->slots_count, named(g, writ_cstr(has_result ? "int" : "nil")),
+                  fn->effects, fn, access);
 
     writ_span_t error_at = fn->declared_at;
     writ_str_t error = writ_binding_error_for(g->b, fn->contract_name, &error_at);

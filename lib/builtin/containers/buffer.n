@@ -24,7 +24,7 @@ private const align_unit: uint = 8
 
 private func spin_wait(modify attempt: u32) {
     if attempt < 64 {
-        __os_cpu_relax()
+        __cpu_relax()
         attempt += 1
         return
     }

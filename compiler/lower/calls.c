@@ -347,11 +347,30 @@ n00bb_emit_intrinsic(ir_lower_context_t *context, parse_sym_entry_t *symbol,
     bool gc_memory_builtin = n00bb_builtin_gc_memory_function(symbol);
     bool volatile_load_builtin = n00bb_builtin_volatile_load_function(symbol);
     bool signal_fence_builtin = n00bb_builtin_signal_fence_function(symbol);
+    bool machine_builtin = n00bb_builtin_machine_function(symbol);
     bool comptime_builtin = n00bb_builtin_comptime_function(symbol);
     bool prefetch_builtin = n00bb_builtin_prefetch_function(symbol);
     bool atomic_rmw_builtin = n00bb_builtin_atomic_rmw_function(symbol);
     bool atomic_cas_builtin = n00bb_builtin_atomic_cas_function(symbol);
     bool atomic_access_builtin = n00bb_builtin_atomic_access_function(symbol);
+    if (machine_builtin) {
+        bool address = core_string_eq(symbol->name,
+            CORE_STRING_STATIC("__stack_pointer"));
+        ir_op_t op = address ? IR_OP_STACK_POINTER
+            : core_string_eq(symbol->name, CORE_STRING_STATIC("__cpu_relax"))
+                ? IR_OP_CPU_RELAX : IR_OP_THREAD_FENCE;
+        bool valid = !count && !copyouts;
+        ir_instr_t *instruction = valid
+            ? ir_lower_emit_instruction(context, op, span) : nullptr;
+        if (!instruction)
+            return lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_NO_ARGUMENTS);
+        if (!address) return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
+        return ir_lower_set_temp_dest(context, instruction,
+                CORE_STRING_STATIC("__n00bb_"), call_result_type)
+            ? (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest}
+            : lower_internal(context, span, "could not emit stack pointer");
+    }
     if (option_builtin) {
         ir_op_t option_op = core_string_eq(symbol->name,
                 CORE_STRING_STATIC("__option_is_nil"))
@@ -786,6 +805,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool gc_memory_builtin = n00bb_builtin_gc_memory_function(symbol);
     bool volatile_load_builtin = n00bb_builtin_volatile_load_function(symbol);
     bool signal_fence_builtin = n00bb_builtin_signal_fence_function(symbol);
+    bool machine_builtin = n00bb_builtin_machine_function(symbol);
     bool comptime_builtin = n00bb_builtin_comptime_function(symbol);
     bool prefetch_builtin = n00bb_builtin_prefetch_function(symbol);
     bool atomic_rmw_builtin = n00bb_builtin_atomic_rmw_function(symbol);
@@ -799,6 +819,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         || gc_memory_builtin
         || volatile_load_builtin
         || signal_fence_builtin
+        || machine_builtin
         || comptime_builtin
         || prefetch_builtin
         || atomic_rmw_builtin
@@ -1236,6 +1257,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     bool intrinsic = option_builtin || byte_offset_builtin
         || byte_diff_builtin || unsafe_arithmetic || bit_count_builtin
         || gc_memory_builtin || volatile_load_builtin || signal_fence_builtin
+        || machine_builtin
         || comptime_builtin || prefetch_builtin || atomic_rmw_builtin
         || atomic_cas_builtin || atomic_access_builtin;
     th_type *intrinsic_contract = n00bb_symbol_signature(symbol);

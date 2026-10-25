@@ -1,0 +1,94 @@
+# A local whose address is taken is set and read through it, a field at a
+# time or by the calls it's handed to; every read needs what it reads set.
+
+record Pair {
+    a: int
+    b: int
+}
+
+record Outer {
+    inner: Pair
+    c: int
+}
+
+record Slots {
+    values: Array[int][2]
+    count: int
+}
+
+func first(p: Ref[Pair]) -> int {
+    return p.__value.a
+}
+
+func fill(p: Ref[Pair]) {
+    p.__value.a = 1
+    p.__value.b = 2
+}
+
+func other_field() -> int {
+    var p: Pair
+    p.a = 1
+    return p.b
+}
+
+func handed_to_reader() -> int {
+    var p: Pair
+    return first(ref p)
+}
+
+func nested() -> int {
+    var o: Outer
+    o.inner.a = 1
+    o.c = 3
+    return o.inner.b
+}
+
+func one_branch(flag: bool) -> int {
+    var p: Pair
+    if flag {
+        p.a = 1
+        p.b = 1
+    }
+    return p.a
+}
+
+func scalar_beside_array() -> int {
+    var s: Slots
+    s.values[0] = 1
+    return s.count
+}
+
+func every_field() -> Pair {
+    var p: Pair
+    p.a = 1
+    p.b = 2
+    return p
+}
+
+func only_what_was_set() -> int {
+    var p: Pair
+    p.a = 1
+    return p.a
+}
+
+func filled_by_callee() -> int {
+    var p: Pair
+    fill(ref p)
+    return p.b
+}
+
+func arrays_start_zeroed() -> int {
+    var s: Slots
+    s.values[0] = 1
+    return s.values[1]
+}
+
+_ = other_field()
+_ = handed_to_reader()
+_ = nested()
+_ = one_branch(true)
+_ = scalar_beside_array()
+_ = every_field()
+_ = only_what_was_set()
+_ = filled_by_callee()
+_ = arrays_start_zeroed()

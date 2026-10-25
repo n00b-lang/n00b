@@ -80,12 +80,20 @@ runtime_init_entries(parse_grammar_t *grammar,
              scope = scope->all_next) {
             for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
                  symbol = symbol->next_in_scope) {
+                // Thread-locals start unset on every thread, and a module
+                // variable without an initializer is unset until code sets
+                // it: reads of either are checked from every entry.
                 if (symbol->kind == PARSE_SYM_VARIABLE
-                    && symbol->is_thread_local
-                    && is_module_global_symbol(grammar, symbol)) {
+                    && is_module_global_symbol(grammar, symbol)
+                    && (symbol->is_thread_local
+                        || !global_has_explicit_initializer(grammar,
+                                                            symbol))) {
+                    // A module variable nothing lowered has no storage to
+                    // read; a thread-local always has.
                     ir_global_t *global = link_ir_global_for_symbol(analysis,
                                                                     symbol);
-                    if (!runtime_init_target_add(runtime, global))
+                    if ((global || symbol->is_thread_local)
+                        && !runtime_init_target_add(runtime, global))
                         return false;
                 }
                 if (!thread_runtime_entry_function(grammar, symbol)) continue;

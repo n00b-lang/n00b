@@ -14,7 +14,7 @@ func measure(value: 'T) -> int where 'T: Measured {
     return size(value)
 }
 
-func start() -> nil {
+func main() -> nil {
     let handle: Handle = (fd = 3)
     require measure(handle) == 3
 }

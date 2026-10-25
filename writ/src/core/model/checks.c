@@ -741,8 +741,13 @@ static bool
 syscall_register(const writ_model_t *model, const writ_slot_rec_t *slot)
 {
     const writ_type_rec_t *type = writ_type(model, slot->type);
-    bool plain = slot->mode == WRIT_MODE_IN && slot->extent_kind == WRIT_EXTENT_NONE && !slot->own
-                 && !slot->release && !slot->alloc && !slot->userdata && !slot->span_node && !slot->null_if_empty;
+    // A pointer's mode only says what the kernel does through it; the
+    // pointer itself still goes in a register.
+    bool pointer = type->key.kind == WRIT_TYPE_POINTER;
+    bool mode = slot->mode == WRIT_MODE_IN
+                || (pointer && (slot->mode == WRIT_MODE_OUT || slot->mode == WRIT_MODE_INOUT));
+    bool plain = mode && slot->extent_kind == WRIT_EXTENT_NONE && !slot->own && !slot->release && !slot->alloc
+                 && !slot->userdata && !slot->span_node && !slot->null_if_empty;
     if (!plain) {
         return false;
     }

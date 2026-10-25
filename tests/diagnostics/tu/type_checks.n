@@ -117,7 +117,7 @@ func reset(modify value: 'T) -> nil {
     value = 0
 }
 
-func start() -> nil {
+func main() -> nil {
     var count: int = 5
     reset(count)
     require count == 0

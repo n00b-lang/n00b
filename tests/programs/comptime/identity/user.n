@@ -6,7 +6,7 @@ if comptime() {
     mine = registry.entries
 }
 
-func start() {
+func main() {
     if mine != nil and registry.entries != nil {
         let a: List[registry.Entry] = mine
         let b: List[registry.Entry] = registry.entries

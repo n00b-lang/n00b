@@ -1,0 +1,14 @@
+import sys.threads
+
+# Yielding and the spin-wait hint change nothing a caller can see, but
+# they're called for when they happen, so ignoring their results is fine.
+
+func spin() {
+    sys.threads.cpu_relax()
+    sys.threads.thread_yield()
+    sys.threads.thread_fence()
+}
+
+func main() {
+    spin()
+}

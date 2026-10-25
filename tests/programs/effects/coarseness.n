@@ -10,7 +10,7 @@ func len_of(items: List[int]) -> uint {
     return items.len()
 }
 
-func start() -> nil {
+func main() -> nil {
     var table: Dict[int, int] = {}
     _ = lookup(table, 1)
     _ = hash_str("a")

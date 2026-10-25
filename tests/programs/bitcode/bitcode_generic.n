@@ -59,7 +59,7 @@ const boxed_integer = box_integer(6 * 7)
 const boxed_string = box_string("a string long enough to live on the heap")
 const at_build: string = phase()
 
-func start() -> nil {
+func main() -> nil {
     var total: int = 2 + 3
     require total == 5
     require handler.call(41) == 42

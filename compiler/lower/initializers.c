@@ -35,7 +35,7 @@ lower_module_initializer(ir_lowerer_t *lowerer,
                          core_list_t(core_translation_unit_ptr_t) *units,
                          ir_ctx_t *ir_context);
 static ir_func_t *
-comptime_start_function(core_translation_unit_t *unit, bool *ok);
+comptime_main_function(core_translation_unit_t *unit, bool *ok);
 static ir_func_t *
 comptime_native(ir_ctx_t *ir_context, ir_module_t *module, core_string_t name,
                 core_string_t result);
@@ -369,7 +369,7 @@ lower_module_initializer(ir_lowerer_t *lowerer,
 }
 
 static ir_func_t *
-comptime_start_function(core_translation_unit_t *unit, bool *ok)
+comptime_main_function(core_translation_unit_t *unit, bool *ok)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     *ok = true;
@@ -429,7 +429,7 @@ add_comptime_transition(ir_ctx_t *ir_context, core_translation_unit_t *unit,
                         ir_func_t *function)
 {
     bool ok = true;
-    ir_func_t *start = comptime_start_function(unit, &ok);
+    ir_func_t *start = comptime_main_function(unit, &ok);
     if (!ok) return false;
     ir_module_t *module = function->owner;
     th_type *bool_type = n00bb_ir_builtin_type(module,

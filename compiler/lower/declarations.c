@@ -166,6 +166,64 @@ n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
     return false;
 }
 
+// True when `type` is a record any of whose fields, or the fields of the
+// records it holds, is an array.
+static bool
+record_holds_array(th_ctx *types, th_type *type, uint32_t depth)
+{
+    th_type *record = depth < 8 && type ? th_fields_record(types, type)
+                                        : nullptr;
+    for (size_t i = 0; record && i < th_record_len(record); i++) {
+        th_type *field = th_resolve(th_record_member(record, i)->type);
+        if (field && (th_kind_of(field) == TH_SEQUENCE
+                      || record_holds_array(types, field, depth + 1)))
+            return true;
+    }
+    return false;
+}
+
+// A record declared without a value starts with its inline arrays zeroed,
+// as a bounded array does on its own; its other fields still need values
+// before they're read. The fill is marked so the check for reads of unset
+// values counts only the inline arrays as set.
+static bool
+zero_declared_record(ir_lower_context_t *context, ir_local_t *local,
+                     ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    if (!local || !record_holds_array(types, local->type, 0)) return true;
+    n00bb_lower_context_t *lower = context->user;
+    th_type *address_type = th_ind(types, 0, local->type);
+    th_type *byte = n00bb_ir_builtin_type(context->module,
+                                          CORE_STRING_STATIC("byte"));
+    th_type *uint_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("uint"));
+    ir_instr_t *address = address_type && byte && uint_type
+        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
+        : nullptr;
+    bool ok = address
+        && ir_lower_set_temp_dest(context, address,
+               CORE_STRING_STATIC("__n00bb_zeroed_"), address_type)
+        && ir_instr_operand_local(address, local);
+    ir_instr_t *zero = ok ? n00bb_emit_uint_constant(context, byte, 0, span,
+        CORE_STRING_STATIC("__n00bb_zero")) : nullptr;
+    ir_instr_t *size = zero
+        ? ir_lower_emit_instruction(context, IR_OP_SIZEOF, span) : nullptr;
+    ok = size && ir_lower_set_temp_dest(context, size,
+            CORE_STRING_STATIC("__n00bb_size_"), uint_type)
+        && ir_instr_operand_type(size, local->type);
+    ir_instr_t *fill = ok
+        ? ir_lower_emit_instruction(context, IR_OP_MEMSET, span) : nullptr;
+    ok = fill && ir_instr_operand_value(fill, address->dest)
+        && ir_instr_operand_value(fill, zero->dest)
+        && ir_instr_operand_value(fill, size->dest)
+        && ir_annot_set(lower->ir_context, &fill->annots, (ir_annot_t){
+               .key = CORE_STRING_STATIC("ir.declaration_zero"),
+               .kind = IR_ANNOT_BOOL, .b = true});
+    if (!ok) lower_internal(context, span, "could not zero the declared record");
+    return ok;
+}
+
 bool
 n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
@@ -191,10 +249,13 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not bind runtime array dimensions");
             return false;
         }
-        if (!expression)
-            return !symbol || symbol->mutability != PARSE_SYM_MUTABLE
-                || n00bb_allocate_declared_array(context, local, shape,
-                       lower_span_for_tree(context, visit->node));
+        if (!expression) {
+            if (!symbol || symbol->mutability != PARSE_SYM_MUTABLE)
+                return true;
+            ir_span_t span = lower_span_for_tree(context, visit->node);
+            return n00bb_allocate_declared_array(context, local, shape, span)
+                && zero_declared_record(context, local, span);
+        }
         if (!n00bb_shape_has_constraints(shape)) return true;
         ir_value_t *value = ir_lower_node_value(context, expression);
         if (!value || !n00bb_attach_expression_shape(context, visit->grammar,

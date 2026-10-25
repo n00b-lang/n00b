@@ -6,48 +6,11 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
-#include <pthread.h>
 #include <unistd.h>
 #endif
 
-// Suspending and resuming threads is n00b code now; its test is
-// tests/programs/os/os_threads.n. This checks the stack bound on a thread
-// other than the main one.
-
-static atomic_uint_fast64_t worker_stack_high;
-
-#if defined(_WIN32)
-static DWORD WINAPI stack_worker(void *unused)
-#else
-static void *stack_worker(void *unused)
-#endif
-{
-    (void)unused;
-    char stack_anchor;
-    atomic_store(&worker_stack_high,
-                 (uintptr_t)n00b_os_thread_stack_high_self());
-    assert(atomic_load(&worker_stack_high) > (uintptr_t)&stack_anchor);
-#if defined(_WIN32)
-    return 0;
-#else
-    return NULL;
-#endif
-}
-
-static void test_thread_stack(void)
-{
-#if defined(_WIN32)
-    HANDLE worker = CreateThread(NULL, 0, stack_worker, NULL, 0, NULL);
-    assert(worker != NULL);
-    assert(WaitForSingleObject(worker, INFINITE) == WAIT_OBJECT_0);
-    CloseHandle(worker);
-#else
-    pthread_t worker;
-    assert(pthread_create(&worker, NULL, stack_worker, NULL) == 0);
-    assert(pthread_join(worker, NULL) == 0);
-#endif
-    assert(atomic_load(&worker_stack_high) != 0);
-}
+// Thread control and the stack queries are n00b code now; their tests are
+// tests/programs/os/os_threads.n. This checks what the runtime keeps in C.
 
 // The page size, from the platform: the runtime's own is n00b code now.
 static size_t page_size(void)
@@ -65,15 +28,6 @@ static size_t page_size(void)
 int main(void)
 {
     size_t page = page_size();
-    char stack_anchor;
-    assert((uintptr_t)n00b_os_thread_stack_high_self()
-           > (uintptr_t)&stack_anchor);
-#if (defined(__x86_64__) && !defined(_WIN32)) \
-    || (defined(__APPLE__) && defined(__aarch64__))
-    assert(n00b_os_stack_red_zone_bytes() == 128);
-#else
-    assert(n00b_os_stack_red_zone_bytes() == 0);
-#endif
     assert(page && !(page & (page - 1)));
     assert(n00b_os_thread_id() != 0);
     assert(n00b_os_thread_id() == n00b_os_thread_id());
@@ -100,6 +54,5 @@ int main(void)
 
     assert(n00b_os_map_zeroed(0, 0) == NULL);
     assert(n00b_os_map_zeroed(page, 3) == NULL);
-    test_thread_stack();
     return 0;
 }

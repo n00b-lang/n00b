@@ -69,7 +69,7 @@ func thread_main(argument: Ref[byte]) -> Ref[byte] {
 func park(heap: Ref[internal.gc.core.Heap]) {
     let attached: Ref[internal.gc.core.Mutator]? = internal.gc.alloc.attached_mutator()
     if attached != nil {
-        __os_thread_capture_self(ref attached.__value.captured)
+        internal.threads.thread_capture_self(ref attached.__value.captured)
         internal.gc.handshake.enter_blocking(attached)
     }
     internal.locks.condition_lock(ref heap.__value.fin_wake)
@@ -356,7 +356,7 @@ func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
     let begun: u64 = __unobserved(internal.clock.now_ns())
     let startup_limit: u64 = begun + startup_wait_ns
     var deadline: u64 = begun + stall_wait_ns
-    __os_thread_capture_self(ref mutator.__value.captured)
+    internal.threads.thread_capture_self(ref mutator.__value.captured)
     internal.gc.handshake.enter_blocking(mutator)
     internal.locks.condition_lock(ref heap.__value.fin_progress)
     while pending(heap) > limit and completed(heap) == start {

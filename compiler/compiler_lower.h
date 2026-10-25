@@ -6,9 +6,9 @@
 #include "lib/target.h"
 
 #define N00BB_MODULE_INIT_NAME "__n00bb_module_init"
-#define N00BB_START_NAME "start"
+#define N00BB_START_NAME "main"
 #define N00BB_CONST_INIT_NAME "__n00bb_const_init"
-#define N00BB_COMPTIME_START_NAME "comptime_start"
+#define N00BB_COMPTIME_START_NAME "comptime_main"
 #define N00BB_COMPTIME_FREEZE_NATIVE "n00b_comptime_freeze"
 #define N00BB_COMPTIME_TRANSITION_KEY "n00bb.comptime.transition"
 

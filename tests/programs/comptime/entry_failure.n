@@ -3,5 +3,5 @@ import sys.os
 if comptime() {
     sys.os.exit(3)
 }
-func start() {
+func main() {
 }

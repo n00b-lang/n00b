@@ -88,7 +88,7 @@ case $group in
 imports)
     N00B_PATH="$programs/imports" warns changer N00B-B0114 \
         "imported state kept" "$programs/imports/changer.n"
-    N00B_PATH="$programs/imports" prints starter "comptime_start change kept" \
+    N00B_PATH="$programs/imports" prints starter "comptime_main change kept" \
         "$programs/imports/starter.n"
     N00B_PATH="$programs/identity" prints identity \
         "same object across modules" "$programs/identity/user.n" ;;
@@ -108,7 +108,7 @@ mutable at runtime" "$programs/record_list.n"
     N00B_PATH="$programs/imported" prints imported "five" \
         "$programs/imported/app.n" ;;
 start)
-    prints comptime_start "comptime_start ran" "$programs/comptime_start.n"
+    prints comptime_main "comptime_main ran" "$programs/comptime_main.n"
     prints start_reads_comptime "ok" "$programs/start_reads_comptime.n"
     prunes runtime_prune "bumped recomputed
 phase recomputed

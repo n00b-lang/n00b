@@ -210,6 +210,7 @@ static const core_string_t result_effects[] = {
     CORE_STRING_STATIC("may_output"),
     CORE_STRING_STATIC("calls_finalizers"),
     CORE_STRING_STATIC("starts_threads"),
+    CORE_STRING_STATIC("hints"),
 };
 
 static const core_string_t assert_effects[] = {

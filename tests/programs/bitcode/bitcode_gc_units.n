@@ -943,7 +943,7 @@ func gc_epoch() {
         bump.limit = __gc_byte_offset(base,
             (first + 2) * sys.gc.core.line_bytes)
         var marker: sys.gc.core.Marker
-        marker.heap = heap
+        sys.gc.mark.marker_init(marker, heap, false)
         sys.gc.collect.reserve_bump(ref marker, ref bump, false)
         assert sys.gc.core.line_marked_in(base, first, heap.__value.mark_epoch)
         assert sys.gc.core.line_marked_in(base, first + 1, heap.__value.mark_epoch)
@@ -998,10 +998,8 @@ func gc_epoch() {
         sys.gc.core.mark_lines(base, first * sys.gc.core.line_bytes,
             sys.gc.core.line_bytes, 256)
         assert sys.gc.core.line_marked_in(base, first, 256)
-        var wrap_bump: sys.gc.core.Bump
-        wrap_bump.blk = block
-        wrap_bump.seen_epoch = 256
-        wrap_bump.line = first
+        var wrap_bump: sys.gc.core.Bump = (cursor = nil, limit = nil,
+            blk = block, line = first, seen_epoch = 256, cache = nil)
         require sys.gc.core.bump_next_hole(ref wrap_bump, sys.gc.core.line_bytes)
         let next_cursor: Ref[byte]? = wrap_bump.cursor
         if next_cursor != nil {
@@ -2305,7 +2303,7 @@ func gc_builtin_os() {
             sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
         if mapped != nil {
             let snapshot: Ref[sys.threads.Thread_Context] = unsafe_cast[Ref[sys.threads.Thread_Context]] mapped
-            __os_thread_capture_self(snapshot)
+            sys.threads.thread_capture_self(snapshot)
             assert snapshot.__value.sp != nil
             assert snapshot.__value.nregs != 0
             sys.memory.unmap(snapshot, sys.abi.size_bytes(row))

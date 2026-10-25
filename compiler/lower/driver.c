@@ -805,7 +805,8 @@ analyze_lowered_program(parse_grammar_t *grammar, core_link_unit_t *link,
     if (ok) {
         bool returns = validate_missing_returns(analysis);
         bool asserts = validate_assert_side_effects(analysis);
-        ok = ((returns && asserts) || explained_by_errors(&units))
+        bool unset = validate_unset_locals(analysis);
+        ok = ((returns && asserts && unset) || explained_by_errors(&units))
             && n00bb_publish_function_summaries(analysis)
             && publish_declarations(analysis);
     }

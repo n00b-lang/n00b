@@ -481,7 +481,7 @@ private const themes_writer_bit: u32 = 0x8000_0000
 
 private func themes_spin_wait(modify attempt: u32) {
     if attempt < 64 {
-        __os_cpu_relax()
+        __cpu_relax()
         attempt += 1
         return
     }

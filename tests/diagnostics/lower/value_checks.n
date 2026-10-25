@@ -52,7 +52,7 @@ func phase() -> int {
 
 const at_build: int = phase()
 
-func start() -> nil {
+func main() -> nil {
     require phase() + at_build == 3
 }
 var counter: int = 0

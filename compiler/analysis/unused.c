@@ -276,9 +276,8 @@ literal_handler(n00bb_tu_state_t *state, parse_sym_entry_t *symbol)
 static bool
 entry_name(core_string_t name)
 {
-    return core_string_eq(name, CORE_STRING_STATIC("start"))
-        || core_string_eq(name, CORE_STRING_STATIC("main"))
-        || core_string_eq(name, CORE_STRING_STATIC("comptime_start"));
+    return core_string_eq(name, CORE_STRING_STATIC("main"))
+        || core_string_eq(name, CORE_STRING_STATIC("comptime_main"));
 }
 
 static core_string_t

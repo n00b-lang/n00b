@@ -19,11 +19,14 @@ record Thread_Context layout(c) {
 [-
 library n00b
 
-fn n00b_os_thread_yield()
-  effects none
 fn n00b_os_thread_id() -> u64
   effects none
 fn n00b_os_thread_is_main() -> u64
+  effects none
+# Saves the calling thread's registers, its stack and frame pointers and
+# its return address in a `Thread_Context`. It's assembly, which the
+# runtime's own entry to a blocking call also uses.
+fn n00b_os_thread_capture_self(snapshot: out *u8)
   effects none
 
 binding {
@@ -64,11 +67,11 @@ func thread_is_main() -> bool {
 }
 
 func thread_yield() {
-    n00b_os_thread_yield_raw()
+    internal.os.thread_yield()
 }
 
 func thread_fence() {
-    __os_thread_fence()
+    __thread_fence()
 }
 
 func futex_wait(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint) -> i32 {
@@ -84,19 +87,41 @@ func thread_id() -> uint {
 }
 
 func thread_stack_high_self() -> Ref[byte]? {
-    return __os_thread_stack_high_self()
+    return internal.os.thread_stack_high_self()
 }
 
+# The stack pointer: an address below every frame the caller's thread has
+# on its stack.
 func stack_address() -> uint {
-    return __os_stack_address()
+    return __stack_pointer()
 }
 
+# The bytes below the stack pointer that a function may use without moving
+# it, which the platform's ABI promises signal handlers leave alone.
 func stack_red_zone_bytes() -> uint {
-    return __os_stack_red_zone_bytes()
+    when target_arch() == "x86" and target_os() != "windows" {
+        return 128
+    } else when target_os() == "macos" {
+        return 128
+    } else {
+        return 0
+    }
 }
 
+# True where every frame saves its caller's frame pointer, so the frames
+# chain (everywhere but Windows).
 func frame_pointer_chain() -> bool {
-    return __os_frame_pointer_chain() != 0
+    when target_os() == "windows" {
+        return false
+    } else {
+        return true
+    }
+}
+
+# Saves the calling thread's registers in `snapshot`, so a collector can scan
+# what they hold.
+func thread_capture_self(snapshot: Ref[Thread_Context]) {
+    n00b_os_thread_capture_self_raw(unsafe_cast[Ref[byte]] snapshot)
 }
 
 func thread_control_self() -> uint {
@@ -112,6 +137,8 @@ func thread_resume(control: uint, snapshot: Ref[Thread_Context]) -> i32 {
     return internal.os.thread_resume(control, snapshot)
 }
 
+# Tells the processor this thread is spinning on a value another thread
+# will change.
 func cpu_relax() {
-    __os_cpu_relax()
+    __cpu_relax()
 }

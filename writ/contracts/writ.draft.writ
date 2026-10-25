@@ -169,37 +169,38 @@ struct writ_policy_arm_view_t @size(160) @align(8) {
     span_events_count: usize @144
     span_events: ?writ_event_view_t @152
 }
-struct writ_slot_view_t @size(272) @align(8) {
+struct writ_slot_view_t @size(280) @align(8) {
     struct_size: usize @0
     name: writ_str_t @8
     type: ?writ_type_view_t @24
     mode: writ_mode_t @32
-    extent_kind: writ_extent_kind_t @36
-    count_expr: u32 @40
-    cap_expr: u32 @44
-    len_expr: u32 @48
-    span: writ_span_kind_t @52
-    span_with: writ_str_t @56
-    own: bool @72
-    release: writ_str_t @80
-    alloc: writ_str_t @96
-    null_if_empty: bool @112
-    is_private: bool @113
-    offset: u32 @116
-    declared_at: writ_span_t @120
-    physical: ?writ_type_view_t @152
-    userdata: bool @160
-    userdata_for: writ_str_t @168
-    has_default: bool @184
-    default_value: i64 @192
-    has_none: bool @200
-    none_value: i64 @208
-    policy_arms_count: usize @216
-    policy_arms: ?writ_policy_arm_view_t @224
-    span_by: writ_str_t @232
-    span_events_count: usize @248
-    span_events: ?writ_event_view_t @256
-    tag_field: u32 @264
+    mode_written: bool @36
+    extent_kind: writ_extent_kind_t @40
+    count_expr: u32 @44
+    cap_expr: u32 @48
+    len_expr: u32 @52
+    span: writ_span_kind_t @56
+    span_with: writ_str_t @64
+    own: bool @80
+    release: writ_str_t @88
+    alloc: writ_str_t @104
+    null_if_empty: bool @120
+    is_private: bool @121
+    offset: u32 @124
+    declared_at: writ_span_t @128
+    physical: ?writ_type_view_t @160
+    userdata: bool @168
+    userdata_for: writ_str_t @176
+    has_default: bool @192
+    default_value: i64 @200
+    has_none: bool @208
+    none_value: i64 @216
+    policy_arms_count: usize @224
+    policy_arms: ?writ_policy_arm_view_t @232
+    span_by: writ_str_t @240
+    span_events_count: usize @256
+    span_events: ?writ_event_view_t @264
+    tag_field: u32 @272
 }
 struct writ_outcome_view_t @size(40) @align(8) {
     struct_size: usize @0
@@ -417,15 +418,17 @@ struct writ_n00b_type_t @size(32) @align(8) {
     name: writ_str_t @8
     item: ?writ_n00b_type_t @24
 }
-struct writ_n00b_extern_t @size(96) @align(8) {
+type writ_n00b_access_t = u8
+struct writ_n00b_extern_t @size(104) @align(8) {
     name: writ_str_t @0
     symbol: writ_str_t @16
     params: ??writ_n00b_type_t @32
-    params_count: usize @40
-    result: ?writ_n00b_type_t @48
-    pure: bool @56
-    effects: writ_effects_t @60
-    declared_at: writ_span_t @64
+    param_access: ?writ_n00b_access_t @40
+    params_count: usize @48
+    result: ?writ_n00b_type_t @56
+    pure: bool @64
+    effects: writ_effects_t @68
+    declared_at: writ_span_t @72
 }
 struct writ_n00b_export_t @size(32) @align(8) {
     function: writ_str_t @0
@@ -485,6 +488,7 @@ const WRIT_EFFECTS_ENV: c_int = 256
 const WRIT_EFFECTS_CLOCK: c_int = 512
 const WRIT_EFFECTS_RANDOM: c_int = 1024
 const WRIT_EFFECTS_THREADS: c_int = 2048
+const WRIT_EFFECTS_HINT: c_int = 4096
 const WRIT_TYPE_VOID: c_int = 0
 const WRIT_TYPE_INT: c_int = 1
 const WRIT_TYPE_FLOAT: c_int = 2
@@ -628,6 +632,9 @@ const WRIT_PRESENCE_MASK: c_int = 1
 const WRIT_PRESENCE_SIZE: c_int = 2
 const WRIT_PRESENCE_SENTINEL: c_int = 3
 const WRIT_PRESENCE_ALWAYS: c_int = 4
+const WRIT_N00B_ACCESS_ANY: c_int = 0
+const WRIT_N00B_ACCESS_READ_ONLY: c_int = 1
+const WRIT_N00B_ACCESS_WRITE_ONLY: c_int = 2
 
 fn writ_api_version() -> u32
 fn writ_session_new(config: ?writ_session_config_t) -> ?writ_session_t unknown

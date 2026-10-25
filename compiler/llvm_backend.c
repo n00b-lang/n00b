@@ -9827,6 +9827,61 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (count || instruction->dest || instruction->n_mods) break;
         return LLVMBuildFence(state->builder,
             LLVMAtomicOrderingSequentiallyConsistent, true, "") != nullptr;
+    case IR_OP_SIZEOF: {
+        // The bytes a value of the type takes in memory, which the backend
+        // lays out from the type's own layout.
+        if (count != 1 || operands[0].kind != IR_OPD_TYPE
+            || !instruction->dest) break;
+        LLVMContextRef context = LLVMGetModuleContext(state->module);
+        LLVMTypeRef sized = value_type(state->function->owner,
+                                       operands[0].type, context);
+        LLVMTypeRef wanted = value_type(state->function->owner,
+                                        instruction->dest->type, context);
+        LLVMTargetDataRef layout = LLVMGetModuleDataLayout(state->module);
+        if (!sized || !wanted || !layout
+            || LLVMGetTypeKind(wanted) != LLVMIntegerTypeKind) break;
+        return save_result(state, instruction,
+            LLVMConstInt(wanted, LLVMABISizeOfType(layout, sized), false));
+    }
+    case IR_OP_THREAD_FENCE:
+        if (count || instruction->dest || instruction->n_mods) break;
+        return LLVMBuildFence(state->builder,
+            LLVMAtomicOrderingSequentiallyConsistent, false, "") != nullptr;
+    case IR_OP_CPU_RELAX: {
+        if (count || instruction->dest || instruction->n_mods) break;
+        // The spin-wait hint: x86's `pause`, aarch64's `yield`.
+        const char *triple = LLVMGetTarget(state->module);
+        bool x86 = triple && !strncmp(triple, "x86_64", 6);
+        const char *text = x86 ? "pause" : "yield";
+        LLVMTypeRef signature = LLVMFunctionType(
+            LLVMVoidTypeInContext(LLVMGetModuleContext(state->module)),
+            nullptr, 0, false);
+        LLVMValueRef hint = LLVMGetInlineAsm(signature, text, strlen(text),
+            "~{memory}", strlen("~{memory}"), true, false,
+            LLVMInlineAsmDialectATT, false);
+        return hint && LLVMBuildCall2(state->builder, signature, hint,
+                                      nullptr, 0, "") != nullptr;
+    }
+    case IR_OP_STACK_POINTER: {
+        // The stack pointer where the instruction runs, which is below
+        // every frame of the function, inlined or not.
+        if (count || !instruction->dest || instruction->n_mods) break;
+        LLVMContextRef context = LLVMGetModuleContext(state->module);
+        LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+        unsigned id = LLVMLookupIntrinsicID("llvm.stacksave",
+                                            sizeof("llvm.stacksave") - 1);
+        LLVMValueRef intrinsic = LLVMGetIntrinsicDeclaration(state->module,
+            id, &pointer, 1);
+        LLVMValueRef stack = intrinsic ? LLVMBuildCall2(state->builder,
+            LLVMGlobalGetValueType(intrinsic), intrinsic, nullptr, 0,
+            "stack") : nullptr;
+        LLVMTypeRef wanted = value_type(state->function->owner,
+            instruction->dest->type, context);
+        if (!stack || !wanted
+            || LLVMGetTypeKind(wanted) != LLVMIntegerTypeKind) break;
+        return save_result(state, instruction,
+            LLVMBuildPtrToInt(state->builder, stack, wanted, "stack.pointer"));
+    }
     case IR_OP_PREFETCH: {
         if (count != 1 || instruction->dest || instruction->n_mods
             || operands[0].kind != IR_OPD_VALUE) break;

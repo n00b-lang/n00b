@@ -103,6 +103,7 @@ typedef struct {
     uint32_t           owner;
     writ_type_id       type;
     writ_mode_t        mode;
+    bool               mode_written;
     writ_extent_kind_t extent_kind;
     uint32_t           count_expr;
     uint32_t           cap_expr;

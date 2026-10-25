@@ -1358,6 +1358,8 @@ generators. Anyone can declare more:
 #   clock      reads a clock
 #   random     reads a source of randomness
 #   threads    starts threads
+#   hint       changes nothing a caller can see, but is called for when it
+#              happens: a yield to the scheduler, a spin-wait pause
 
 # user-declared: carried through to the lowered form and to bindings
 effect input                     # reads from the outside world
@@ -1885,10 +1887,16 @@ here, plus a `number` for that architecture on each declaration.
   integer no wider than a pointer (including aliases of one), or a
   pointer `*T` / `?T` (E0227 otherwise).
 - A pointer's `T` is documentation only. Every pointer argument passes
-  just an address: no shape, extent, mode, span or ownership. Writing any
-  of those (array extents, `cstr`, `out`/`inout`/`consume`/`keep`/`moved`,
-  `own`, slot attributes) on a `syscall` is E0227. Strings must be
-  NUL-terminated by the caller; buffers are the caller's to size.
+  just an address: no shape, extent, span or ownership. Writing any of
+  those (array extents, `cstr`, `consume`/`keep`/`moved`, `own`, slot
+  attributes) on a `syscall` is E0227. Strings must be NUL-terminated by
+  the caller; buffers are the caller's to size.
+- A pointer may say what the kernel does through it: `out` when the
+  kernel only fills the memory (`clock_gettime`'s timespec), `inout` when
+  it reads and then writes it, and `in` when it only reads it (`write`'s
+  buffer). Bindings for languages that track effects use the mode; with
+  none stated, they assume the kernel may both read and write. A mode on
+  an integer parameter is E0227.
 - Floating-point values, records or unions passed by value, enums, flags,
   handles, callbacks, variadics and packs are E0227. Code that wants typed
   views of these values wraps the `syscall`.
@@ -1926,7 +1934,7 @@ A contract made only of `syscall`s needs no `link`.
 **Effects are required.** A `syscall` without an `effects` clause is
 E0229, and so is one that names an effect other than the built-in ones
 (`none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`,
-`threads`) or `input`, `output` and `io`.
+`threads`, `hint`) or `input`, `output` and `io`.
 Unknown effects would make every caller unanalyzable, and whoever writes
 the declaration knows what the call does. The `effects` clause on a
 `syscall` is part of the core tier.
@@ -1971,7 +1979,7 @@ no symbols.
 | E0226 | A `syscall` where some platform in scope isn't Linux, or has an `arch` with no kernel-entry row |
 | E0227 | A `syscall` with more than six parameters; a parameter or result that isn't a pointer-width-or-narrower integer or a pointer; a shape, mode, ownership or slot attribute; or no result without `noreturn` |
 | E0228 | A `syscall` with any `fn` clause other than `effects` and `note`, including every error clause (`infallible` is the only error control) |
-| E0229 | A `syscall` with no `effects` clause, or with an effect outside `none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`, `threads`, `input`, `output`, `io` |
+| E0229 | A `syscall` with no `effects` clause, or with an effect outside `none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`, `threads`, `hint`, `input`, `output`, `io` |
 | E0230 | A `syscall` with no `number` on some listed platform, or whose number isn't a non-negative integer constant |
 
 ---

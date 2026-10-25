@@ -12,7 +12,7 @@ sys.internal.clock.now_ns: () -> uint
   traps arithmetic
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
   effects may_fail may_trap reinterprets reads_random
-  reads+writes buffer.__value[]...
+  writes buffer.__value[]...
   traps explicit bounds arithmetic
 sys.internal.random.fill: (modify 'T) -> nil fail: Errno
   effects may_fail may_trap may_allocate may_collect allocates_direct reinterprets reads_random

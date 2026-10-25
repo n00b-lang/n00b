@@ -30,7 +30,7 @@ record Comptime_Pair layout(c) {
     right: int
 }
 
-func comptime_start() -> nil {
+func comptime_main() -> nil {
     var sample: Sample
     sample.weight = 1.25
     require sample.weight * 2.0 == 2.5
@@ -2198,7 +2198,7 @@ func local_reference_store_check() {
     require literal.len() == 3 and literal[2] == 6
 }
 
-func start() -> nil {
+func main() -> nil {
     local_reference_store_check()
     array_value_index_check()
     gc_array_backing_check()

@@ -1,7 +1,7 @@
-func comptime_start() -> nil {
+func comptime_main() -> nil {
     raw_debug("compile-debug\n")
 }
 
-func start() -> nil {
+func main() -> nil {
     raw_debug("runtime-debug\n")
 }

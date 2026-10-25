@@ -519,6 +519,7 @@ native_effects(writ_effects_t declared)
         {WRIT_EFFECTS_CLOCK, IR_SUMMARY_READS_CLOCK},
         {WRIT_EFFECTS_RANDOM, IR_SUMMARY_READS_RANDOM},
         {WRIT_EFFECTS_THREADS, IR_SUMMARY_STARTS_THREADS},
+        {WRIT_EFFECTS_HINT, IR_SUMMARY_HINTS},
     };
     uint32_t flags = 0;
     for (size_t i = 0; i < sizeof(effects) / sizeof(effects[0]); i++)
@@ -541,8 +542,15 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
         const writ_n00b_extern_t *declared = &externs->items[i];
         n00bb_native_type_t **params = declared->params_count
             ? core_alloc_array(n00bb_native_type_t *, declared->params_count) : nullptr;
-        for (size_t p = 0; p < declared->params_count; p++)
+        uint16_t read_only = 0, write_only = 0;
+        for (size_t p = 0; p < declared->params_count; p++) {
             params[p] = keep_type(declared->params[p]);
+            writ_n00b_access_t access = declared->param_access
+                ? declared->param_access[p] : WRIT_N00B_ACCESS_ANY;
+            if (p >= 16) continue;
+            if (access == WRIT_N00B_ACCESS_READ_ONLY) read_only |= (uint16_t)(1u << p);
+            if (access == WRIT_N00B_ACCESS_WRITE_ONLY) write_only |= (uint16_t)(1u << p);
+        }
         natives->items[i] = (n00bb_native_declaration_t){
             .name        = core_string_dup(as_core(declared->name)),
             .symbol      = core_string_dup(as_core(declared->symbol)),
@@ -551,6 +559,8 @@ keep_externs(const writ_n00b_externs_t *externs, n00bb_native_declarations_t *na
             .result      = keep_type(declared->result),
             .pure        = declared->pure,
             .effects     = native_effects(declared->effects),
+            .read_only   = read_only,
+            .write_only  = write_only,
         };
     }
     natives->count = externs->count;

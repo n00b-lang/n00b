@@ -22,12 +22,12 @@ record Stored {
 
 const stored: Stored = (level = 2, archived = 9)
 
-func make(x: int) -> Point {
+func make(x: int) -> int {
     var p: Point
     p.x = x
     p.y = x + 1
     p.note = 7
-    return p
+    return p.x + p.y
 }
 
 func pair(x: int) -> Pair {
@@ -40,7 +40,7 @@ func pair(x: int) -> Pair {
 var w: Wire
 w.tag = 1
 let p = make(3)
-require p.x + p.y == 7
+require p == 7
 require w.tag == 1
 require stored.level == 2
 require pair(1) == pair(1)

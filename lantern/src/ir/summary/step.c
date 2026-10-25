@@ -293,9 +293,11 @@ argument_is(flow_query_t *q, const ir_instr_t *call, const ir_spath_t *path,
             if (items.data[i].flow != PT_SAME || items.data[i].depth)
                 items.len = 0;
     }
+    // Asked about one leaf of the place, the argument must lead to it (a
+    // pointer parameter's referent is a leaf below the parameter itself).
     ir_spath_t mapped;
     bool matches = definite_path(pt, &items, &mapped)
-        && covers_place(&mapped, want, nullptr);
+        && covers_place(&mapped, want, q->leaf);
     core_list_free(items);
     pt->at = at;
     return matches;

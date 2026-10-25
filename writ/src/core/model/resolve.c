@@ -908,6 +908,7 @@ resolve_slot(resolver_t *r, uint32_t id, uint32_t owner)
         .name          = node->name,
         .owner         = owner,
         .mode          = node->kind == WRIT_N_PARAM ? mode_of(model, node->payload) : WRIT_MODE_IN,
+        .mode_written  = node->kind == WRIT_N_PARAM && node->payload != 0,
         .offset_assert = WRIT_NONE,
         .tag_field     = WRIT_NONE,
         .loc           = node->loc,
@@ -1056,6 +1057,7 @@ effect_named(const writ_model_t *model, writ_sym_t name)
         {"clock", WRIT_EFFECTS_CLOCK},
         {"random", WRIT_EFFECTS_RANDOM},
         {"threads", WRIT_EFFECTS_THREADS},
+        {"hint", WRIT_EFFECTS_HINT},
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         if (writ_is_text(model, name, names[i].text)) {

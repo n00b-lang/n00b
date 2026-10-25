@@ -43,7 +43,6 @@ static const n00bb_axiom_t axioms[] = {
            IR_SUMMARY_MAY_BLOCK, 0, 0),
     NATIVE("__comptime_freeze", "n00b_comptime_freeze", NATIVE_OUTPUT, 0, 0),
     NATIVE("__comptime_frozen", "n00b_comptime_frozen", 0, 0, 0),
-    NATIVE("__os_thread_fence", "n00b_os_thread_fence", 0, 0, 0),
     {.key = N00BB_AXIOM_NATIVE, .name = CORE_STRING_STATIC("__os_thread_start"),
      .native = CORE_STRING_STATIC("n00b_os_thread_start"),
      .effects = IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
@@ -58,16 +57,6 @@ static const n00bb_axiom_t axioms[] = {
     COLLECTION_FREE_NATIVE("__function_writes", "n00bb_function_writes", 0,
                            0, 0),
     COLLECTION_FREE_NATIVE("__unobserved", "n00bb_unobserved", 0, 0, 0),
-    NATIVE("__os_thread_stack_high_self", "n00b_os_thread_stack_high_self",
-           0, 0, 0),
-    NATIVE("__os_stack_address", "n00b_os_stack_address", 0, 0, 0),
-    NATIVE("__os_stack_red_zone_bytes", "n00b_os_stack_red_zone_bytes", 0,
-           0, 0),
-    NATIVE("__os_frame_pointer_chain", "n00b_os_frame_pointer_chain", 0, 0,
-           0),
-    NATIVE("__os_thread_capture_self", "n00b_os_thread_capture_self", 0, 0,
-           0x1),
-    NATIVE("__os_cpu_relax", "n00b_os_cpu_relax", 0, 0, 0),
     NATIVE("__report_failure", "n00bb_runtime_report_failure",
            IR_SUMMARY_MAY_TRAP | IR_SUMMARY_DIVERGES, 0, 0),
     NATIVE("__abi_type", "n00b_builtin_abi_type", 0, 0, 0),
@@ -340,12 +329,31 @@ n00bb_axiom_note_pure_native(core_string_t symbol)
     note_generated_native(symbol, NATIVE_PURE, (core_string_t){0});
 }
 
+// A foreign native's entry packs its kind in bits 0-1, its effects from bit
+// 2, and which parameters it only reads or only writes in the high halves.
+_Static_assert(sizeof(uintptr_t) == 8, "foreign natives pack 64 bits");
+enum { NATIVE_EFFECT_BITS = 30, NATIVE_READ_ONLY = 32, NATIVE_WRITE_ONLY = 48 };
+
 void
 n00bb_axiom_note_foreign_native(core_string_t symbol, core_string_t name,
-                                uint32_t effects)
+                                uint32_t effects, uint16_t read_only,
+                                uint16_t write_only)
 {
-    note_generated_native(symbol, NATIVE_FOREIGN | ((uintptr_t)effects << 2),
-                          name);
+    note_generated_native(symbol, NATIVE_FOREIGN
+        | ((uintptr_t)(effects & ((1u << NATIVE_EFFECT_BITS) - 1)) << 2)
+        | ((uintptr_t)read_only << NATIVE_READ_ONLY)
+        | ((uintptr_t)write_only << NATIVE_WRITE_ONLY), name);
+}
+
+bool
+n00bb_axiom_foreign_access(const ir_func_t *function, uint16_t *read_only,
+                           uint16_t *write_only)
+{
+    uintptr_t kind = generated_native(function);
+    if ((kind & 3) != NATIVE_FOREIGN) return false;
+    *read_only = (uint16_t)(kind >> NATIVE_READ_ONLY);
+    *write_only = (uint16_t)(kind >> NATIVE_WRITE_ONLY);
+    return true;
 }
 
 core_string_t
@@ -371,6 +379,6 @@ n00bb_axiom_foreign_native(const ir_func_t *function, uint32_t *effects)
 {
     uintptr_t kind = generated_native(function);
     if ((kind & 3) != NATIVE_FOREIGN) return false;
-    *effects = (uint32_t)(kind >> 2);
+    *effects = (uint32_t)(kind >> 2) & ((1u << NATIVE_EFFECT_BITS) - 1);
     return true;
 }

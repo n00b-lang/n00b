@@ -2009,6 +2009,9 @@ n00bb_report_unused_items(n00bb_link_analysis_t *analysis);
 void
 warn_dead_stores(n00bb_link_analysis_t *analysis);
 
+bool
+validate_unset_locals(n00bb_link_analysis_t *analysis);
+
 typedef struct {
     int32_t  file;
     uint32_t start;

@@ -897,7 +897,7 @@ check_pure_callee(void *context, const ir_func_t *target,
     const uint32_t effects = IR_SUMMARY_MAY_FAIL | IR_SUMMARY_MAY_BLOCK
         | IR_SUMMARY_DIVERGES | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
         | IR_SUMMARY_CALLS_FINALIZERS | IR_SUMMARY_STARTS_THREADS
-        | IR_SUMMARY_OBSERVES;
+        | IR_SUMMARY_OBSERVES | IR_SUMMARY_HINTS;
     bool *pure = context;
     *pure = *pure && !(summary->flags & effects);
     for (size_t i = 0; *pure && i < summary->paths.len; i++)

@@ -213,7 +213,7 @@ func wait_for_cycle(heap: Ref[internal.gc.core.Heap]) {
     var current: Ref[internal.gc.core.Mutator]? = mine
     while current != nil {
         let mutator: Ref[internal.gc.core.Mutator] = current
-        __os_thread_capture_self(ref mutator.__value.captured)
+        internal.threads.thread_capture_self(ref mutator.__value.captured)
         enter_blocking(mutator)
         current = mutator.__value.wait_next
     }

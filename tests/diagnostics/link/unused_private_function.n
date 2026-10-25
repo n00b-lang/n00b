@@ -4,6 +4,3 @@ private func helper() -> int {
 
 func main() {
 }
-
-func start() {
-}

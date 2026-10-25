@@ -257,7 +257,7 @@ func mark_thread_roots(marker: Ref[internal.gc.core.Marker],
     }
     let high: Ref[byte] = required_stack_high(mutator)
     if mutator.__value.thread_id == internal.threads.thread_id() {
-        __os_thread_capture_self(ref mutator.__value.captured)
+        internal.threads.thread_capture_self(ref mutator.__value.captured)
         scan_context_registers(marker, ref mutator.__value.captured)
         let self_sp: Ref[byte]? = mutator.__value.captured.sp
         if self_sp != nil {
