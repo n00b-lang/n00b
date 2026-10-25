@@ -1074,6 +1074,57 @@ cache_record_layout_request(parse_grammar_t *grammar,
         CORE_STRING_STATIC("n00bb.record-layout-request"), stored);
 }
 
+// True when a name in `node` couldn't be found, which was reported then.
+static bool
+has_unresolved_name(parse_tree_t *node)
+{
+    if (!node) return false;
+    if (parse_tree_unresolved_name(node).data
+        && parse_tree_resolution(node).kind == PARSE_NODE_RESOLUTION_NONE)
+        return true;
+    if (core_tree_is_leaf(node)) return false;
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        if (has_unresolved_name(core_tree_child(node, i))) return true;
+    return false;
+}
+
+bool
+n00bb_record_alignment(parse_grammar_t *grammar,
+                       core_translation_unit_t *unit,
+                       parse_sym_entry_t *symbol, bool report,
+                       uint32_t *bytes)
+{
+    *bytes = 0;
+    n00bb_record_layout_request_t *request = symbol ? parse_sym_binding(
+        symbol, CORE_STRING_STATIC("n00bb.record-layout-request")) : nullptr;
+    if (!request) return true;
+    if (request->alignment_invalid) return false;
+    if (request->alignment_bytes || !request->alignment_expression) {
+        *bytes = request->alignment_bytes;
+        return true;
+    }
+    n00bb_static_value_t value = {0};
+    bool valid = n00bb_trivial_static_value(grammar, tu_state(unit),
+            request->alignment_expression, &value)
+        && value.kind == N00BB_STATIC_VALUE_INT
+        && value.as.integer > 0 && value.as.integer <= UINT32_MAX
+        && !(value.as.integer & (value.as.integer - 1));
+    if (!valid) {
+        if (!report) return false;
+        request->alignment_invalid = true;
+        if (has_unresolved_name(request->alignment_expression)) return false;
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_RECORD_ALIGNMENT_INVALID,
+            link_source_location(request->alignment_expression),
+            N00B_TEXT_RECORD_ALIGNMENT_INVALID,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
+        return false;
+    }
+    request->alignment_bytes = (uint32_t)value.as.integer;
+    *bytes = request->alignment_bytes;
+    return true;
+}
+
 static parse_sym_entry_t *
 member_field_named(parse_scope_t *scope, core_string_t name)
 {

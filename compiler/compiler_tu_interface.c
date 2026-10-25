@@ -2080,13 +2080,24 @@ materialize_interface_module_symbols(n00bb_interface_context_t *loader,
                     CORE_STRING_STATIC("n00b.record-layout"), 1,
                     &layout_size);
                 if (layout) {
-                    n00bb_record_layout_request_t *request = layout_size == 1
-                        && layout[0] <= N00BB_RECORD_C
+                    // The policy, then for `align(N)` N in 4 little-endian
+                    // bytes.
+                    uint32_t alignment = layout_size == 5
+                        ? (uint32_t)layout[1] | (uint32_t)layout[2] << 8
+                            | (uint32_t)layout[3] << 16
+                            | (uint32_t)layout[4] << 24
+                        : 0;
+                    bool well_formed = layout[0] <= N00BB_RECORD_C
+                        && (layout_size == 1
+                            || (layout_size == 5 && alignment
+                                && !(alignment & (alignment - 1))));
+                    n00bb_record_layout_request_t *request = well_formed
                         ? core_arena_alloc(&state->semantic_values,
                                            sizeof(*request)) : nullptr;
                     if (request)
                         *request = (n00bb_record_layout_request_t){
                             .policy = (n00bb_record_policy_t)layout[0],
+                            .alignment_bytes = alignment,
                         };
                     if (!request || !parse_sym_set_binding(symbol,
                             CORE_STRING_STATIC("n00bb.record-layout-request"),

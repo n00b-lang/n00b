@@ -566,12 +566,35 @@ compare_layout_runs(const void *left, const void *right)
     return 0;
 }
 
+// `alignment_bytes`, when not 0, raises the record's alignment to that
+// power of two and pads its size to a multiple of it, as C's `_Alignas`
+// does. It can't lower it: then this fails with `*natural_bytes` set to the
+// alignment the fields need.
+static bool
+publish_record_layout(
+    ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    n00bb_record_policy_t policy, bool structural,
+    const n00bb_abi_record_member_t *members, size_t count,
+    uint32_t alignment_bytes, uint32_t *natural_bytes);
+
 bool
 n00bb_abi_publish_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
     n00bb_record_policy_t policy, bool structural,
     const n00bb_abi_record_member_t *members, size_t count)
 {
+    return publish_record_layout(module, type, target, policy, structural,
+                                 members, count, 0, nullptr);
+}
+
+static bool
+publish_record_layout(
+    ir_module_t *module, th_type *type, const core_target_desc_t *target,
+    n00bb_record_policy_t policy, bool structural,
+    const n00bb_abi_record_member_t *members, size_t count,
+    uint32_t alignment_bytes, uint32_t *natural_bytes)
+{
+    if (natural_bytes) *natural_bytes = 0;
     if (!module || !type || !target || !target->triple.data
         || (count && !members)
         || !core_string_eq(ir_module_target(module), target->triple)
@@ -690,6 +713,20 @@ n00bb_abi_publish_record_layout(
     n00bb_record_layout_t placement = {0};
     if (ok) ok = n00bb_abi_place_record(fields, count, policy,
                                        structural, placements, &placement);
+    if (ok && alignment_bytes) {
+        uint64_t wanted = (uint64_t)alignment_bytes * 8;
+        if (wanted < placement.alignment_bits) {
+            if (natural_bytes)
+                *natural_bytes = (uint32_t)(placement.alignment_bits / 8);
+            ok = false;
+        }
+        else if (placement.intrinsic_bits > UINT64_MAX - (wanted - 1)) ok = false;
+        else {
+            placement.alignment_bits = wanted;
+            placement.intrinsic_bits = (placement.intrinsic_bits + wanted - 1)
+                & ~(wanted - 1);
+        }
+    }
     ir_layout_bit_run_t *occupied = ok && occupied_count
         ? core_alloc_array(ir_layout_bit_run_t, occupied_count) : nullptr;
     ir_layout_bit_run_t *member_occupied = ok && occupied_count
@@ -820,11 +857,13 @@ n00bb_abi_publish_record_layout(
 bool
 n00bb_abi_publish_c_record_layout(
     ir_module_t *module, th_type *type, const core_target_desc_t *target,
-    const n00bb_abi_record_member_t *members, size_t count)
+    const n00bb_abi_record_member_t *members, size_t count,
+    uint32_t alignment_bytes, uint32_t *natural_bytes)
 {
+    if (natural_bytes) *natural_bytes = 0;
     if (!count) return false;
-    return n00bb_abi_publish_record_layout(module, type, target,
-        N00BB_RECORD_C, false, members, count);
+    return publish_record_layout(module, type, target, N00BB_RECORD_C, false,
+        members, count, alignment_bytes, natural_bytes);
 }
 
 static bool

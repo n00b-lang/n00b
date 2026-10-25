@@ -324,8 +324,9 @@ requested_record_symbol_for_type(n00bb_link_analysis_t *analysis,
                     n00bb_record_layout_request_t *request =
                         parse_sym_binding(symbol, CORE_STRING_STATIC(
                             "n00bb.record-layout-request"));
-                    if (!request || request->alignment_expression
-                        || !symbol->type) continue;
+                    if (!request || !symbol->type
+                        || (n00bb_record_request_aligned(request)
+                            && request->policy != N00BB_RECORD_C)) continue;
                     core_list_push(analysis->record_requests,
                         ((n00bb_record_request_site_t){
                             .typehash = th_hash(types,
@@ -452,10 +453,33 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
                     N00BB_FIELD_UNION_KEY))->group : 0,
         };
     }
+    uint32_t alignment = 0, natural = 0;
+    if (valid && !n00bb_record_alignment(analysis->grammar, owner, symbol,
+                                         true, &alignment)) {
+        core_free(members);
+        core_list_free(fields);
+        return false;
+    }
     if (valid) valid = n00bb_abi_publish_c_record_layout(module,
-        record, &analysis->target, members, fields.len);
+        record, &analysis->target, members, fields.len, alignment, &natural);
     core_free(members);
     core_list_free(fields);
+    if (!valid && natural) {
+        n00bb_record_layout_request_t *request = parse_sym_binding(symbol,
+            CORE_STRING_STATIC("n00bb.record-layout-request"));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(owner);
+        if (n00bb_report(diagnostics, owner,
+            N00B_DIAG_RECORD_ALIGNMENT_TOO_SMALL,
+            link_source_location(request && request->alignment_node
+                ? request->alignment_node : symbol->decl_node),
+            N00B_TEXT_RECORD_ALIGNMENT_TOO_SMALL,
+            N00BB_ARGS(ARG_NUMBER(alignment), ARG_TEXT(symbol->name),
+                       ARG_NUMBER(natural))))
+            n00bb_report_help(diagnostics, N00B_TEXT_USE_ALIGN_OR_REMOVE_IT,
+                N00BB_ARGS(ARG_NUMBER(natural)));
+        return false;
+    }
     if (!valid && !call_units_failed(analysis->units.data,
                                      analysis->units.len))
         n00bb_internal_error(core_translation_unit_diagnostics(owner), owner,
@@ -481,8 +505,7 @@ publish_requested_c_record_layouts(n00bb_link_analysis_t *analysis)
                 n00bb_record_layout_request_t *request = parse_sym_binding(
                     symbol, CORE_STRING_STATIC(
                         "n00bb.record-layout-request"));
-                if (!request || request->policy != N00BB_RECORD_C
-                    || request->alignment_expression) continue;
+                if (!request || request->policy != N00BB_RECORD_C) continue;
                 for (size_t d = 0; d < analysis->units.len; d++) {
                     core_translation_unit_t *importer =
                         analysis->units.data[d];
@@ -518,8 +541,9 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
                     symbol, CORE_STRING_STATIC(
                         "n00bb.record-layout-request"));
                 if (!request) continue;
-                if (!request->alignment_expression) {
-                    if (request->policy == N00BB_RECORD_C) continue;
+                // `align(...)` is implemented for `layout(c)` records.
+                if (request->policy == N00BB_RECORD_C) continue;
+                if (!n00bb_record_request_aligned(request)) {
                     if (request->policy == N00BB_RECORD_ORDERED
                         && symbol->type) {
                         ir_module_t *module = state->ir_module;
@@ -529,15 +553,24 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
                                 analysis->target.triple)) continue;
                     }
                 }
-                bool alignment = request->alignment_expression != nullptr;
-                n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                if (n00bb_record_request_aligned(request)) {
+                    if (n00bb_report(diagnostics, unit,
+                            N00B_DIAG_LAYOUT_MODIFIER_UNSUPPORTED,
+                            link_source_location(request->alignment_node),
+                            N00B_TEXT_ALIGN_NEEDS_LAYOUT_C,
+                            N00BB_ARGS(ARG_TEXT(symbol->name))))
+                        n00bb_report_help(diagnostics,
+                            N00B_TEXT_ADD_LAYOUT_C_OR_REMOVE_ALIGN,
+                            N00BB_NO_ARGS);
+                    return false;
+                }
+                n00bb_report(diagnostics, unit,
                     N00B_DIAG_LAYOUT_MODIFIER_UNSUPPORTED,
-                    link_source_location(alignment ? request->alignment_node
-                                                   : request->policy_node),
+                    link_source_location(request->policy_node),
                     N00B_TEXT_LAYOUT_UNSUPPORTED_FOR_TARGET,
-                    N00BB_ARGS(ARG_TEXT(alignment
-                                   ? CORE_STRING_STATIC("align(...)")
-                                   : CORE_STRING_STATIC("layout(ordered)")),
+                    N00BB_ARGS(ARG_TEXT(CORE_STRING_STATIC("layout(ordered)")),
                                ARG_TEXT(symbol->name),
                                ARG_TEXT(analysis->target.triple)));
                 return false;

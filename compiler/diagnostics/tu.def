@@ -252,9 +252,10 @@ N00B_DIAG(DUPLICATE_LAYOUT_MODIFIER, "N00B-T0567", ERROR,
     "a record has two layout policies or two alignments",
     "A record takes at most one `layout(...)` and one `align(...)`.")
 N00B_DIAG(LAYOUT_MODIFIER_UNSUPPORTED, "N00B-T0568", ERROR,
-    "a record layout modifier is not supported yet for the target",
-    "`align(...)` and `layout(ordered)` are not supported yet for every\n"
-    "target. Use `layout(c)` or remove the modifier.")
+    "a record layout modifier is not supported yet",
+    "`align(...)` works only on `layout(c)` records so far, and\n"
+    "`layout(ordered)` is not supported yet for every target. Use\n"
+    "`layout(c)` or remove the modifier.")
 N00B_DIAG(C_LAYOUT_FIELD_TYPE, "N00B-T0569", ERROR,
     "a field of a `layout(c)` record has a type with no C representation",
     "Fields of a `layout(c)` record must have C-compatible types: sized\n"
@@ -398,3 +399,13 @@ N00B_DIAG(ENUM_STORAGE_TOO_NARROW, "N00B-T0596", ERROR,
     "an enum item's value does not fit the enum's storage type",
     "Every item of `enum Name: T` must have a value that `T` can hold.\n"
     "Use a wider storage type, or leave it out to let the compiler choose.")
+N00B_DIAG(RECORD_ALIGNMENT_INVALID, "N00B-T0597", ERROR,
+    "a record's `align(...)` is not a constant power of two",
+    "`align(N)` sets a record's alignment to `N` bytes, so `N` must be a\n"
+    "constant power of two:\n"
+    "    record Context layout(c) align(16) { ... }")
+N00B_DIAG(RECORD_ALIGNMENT_TOO_SMALL, "N00B-T0598", ERROR,
+    "a record's `align(...)` is less than its fields need",
+    "`align(N)` can raise a record's alignment, as C's `_Alignas` does, but\n"
+    "not lower it below what its fields need. Use a larger `N`, or remove\n"
+    "`align(...)`.")

@@ -1,0 +1,1 @@
+tests/diagnostics/tu/record_align_named.n:2:30: error N00B-T0597: the alignment of record `Named` must be a constant power of two

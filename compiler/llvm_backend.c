@@ -881,7 +881,9 @@ record_shape_build(ir_module_t *requester, th_type *type,
         || count != th_record_len(definition) || count > UINT32_MAX
         || !ir_layout_final_stride_bits(layout, &stride_bits)
         || stride_bits % 8) return false;
-    size_t capacity = 2 * count + 1;
+    // A pad before each field, the fields, the tail pad, and the empty
+    // element that raises the alignment for `align(N)`.
+    size_t capacity = 2 * count + 2;
     shape->layout = layout;
     shape->definition = definition;
     shape->slots = calloc(count ? count : 1, sizeof(*shape->slots));
@@ -1013,13 +1015,25 @@ record_shape_build(ir_module_t *requester, th_type *type,
     uint64_t stride = stride_bits / 8;
     uint64_t natural_end = (cursor + record_alignment - 1) / record_alignment
         * record_alignment;
-    if (ok && (cursor > stride || record_alignment != layout->alignment_bytes))
+    // A record's `align(N)` can ask for more than its fields need.
+    bool raised = record_alignment < layout->alignment_bytes;
+    if (ok && (cursor > stride
+               || (!raised && record_alignment != layout->alignment_bytes)
+               || (raised && stride % layout->alignment_bytes)))
         ok = false;
-    if (ok && natural_end != stride)
+    if (ok && (natural_end != stride || (raised && cursor != stride)))
         ok = stride - cursor <= UINT32_MAX
             && record_shape_push(shape, capacity, LLVMArrayType(
                 LLVMInt8TypeInContext(context), (unsigned)(stride - cursor)),
                 cursor, true);
+    // An empty array of an N-byte vector, which LLVM aligns to N, gives the
+    // struct that alignment without taking any space.
+    if (ok && raised)
+        ok = layout->alignment_bytes <= UINT32_MAX
+            && record_shape_push(shape, capacity, LLVMArrayType(
+                LLVMVectorType(LLVMInt8TypeInContext(context),
+                               (unsigned)layout->alignment_bytes), 0),
+                stride, true);
     free(order);
     if (!ok) record_shape_release(shape);
     return ok;

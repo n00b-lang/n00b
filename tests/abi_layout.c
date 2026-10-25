@@ -451,7 +451,8 @@ int main(void)
         ok = ok && check_scalar(module, &target, u32, 32, 32, 4)
             && check_nested_value_stride(module, &target, types)
             && n00bb_abi_publish_c_record_layout(module, c_record, &target,
-                c_members, sizeof(c_members) / sizeof(c_members[0]));
+                c_members, sizeof(c_members) / sizeof(c_members[0]), 0,
+                nullptr);
         const ir_final_layout_t *c_layout = ir_layout_final(
             module, c_record, target.triple);
         ir_descriptor_t *c_descriptor = ir_layout_of(module, c_record,
@@ -473,6 +474,24 @@ int main(void)
             && ir_layout_compute(module, c_record, nullptr)
             && c_descriptor->size.value == 8
             && c_descriptor->align.value == 4;
+        // `align(16)` raises the alignment and pads the size to match;
+        // `align(2)` is less than the fields need, so it's refused.
+        th_type *aligned_record = TH_NAME(types, "AlignedCRecord");
+        th_type *narrow_record = TH_NAME(types, "NarrowCRecord");
+        uint32_t natural = 0;
+        ok = ok && n00bb_abi_publish_c_record_layout(module, aligned_record,
+                &target, c_members, sizeof(c_members) / sizeof(c_members[0]),
+                16, &natural)
+            && natural == 0
+            && !n00bb_abi_publish_c_record_layout(module, narrow_record,
+                &target, c_members, sizeof(c_members) / sizeof(c_members[0]),
+                2, &natural)
+            && natural == 4;
+        const ir_final_layout_t *aligned_layout = ir_layout_final(
+            module, aligned_record, target.triple);
+        ok = ok && aligned_layout && aligned_layout->alignment_bytes == 16
+            && aligned_layout->intrinsic_bits == 128
+            && aligned_layout->members[1].bit_offset == 32;
         th_type *byte = TH_NAME(types, "byte");
         th_type *byte_array = th_array(types, byte);
         n00bb_abi_record_member_t inline_members[] = {
@@ -516,7 +535,7 @@ int main(void)
         ok = ok && n00bb_abi_publish_record_layout(module, packed_array,
             &target, N00BB_RECORD_DEFAULT, false, &bool_array_member, 1)
             && n00bb_abi_publish_c_record_layout(module, c_bool_array,
-                &target, &bool_array_member, 1);
+                &target, &bool_array_member, 1, 0, nullptr);
         const ir_final_layout_t *packed_array_layout = ir_layout_final(
             module, packed_array, target.triple);
         const ir_final_layout_t *c_bool_array_layout = ir_layout_final(
@@ -536,7 +555,7 @@ int main(void)
         };
         ok = ok && n00bb_abi_publish_c_record_layout(module,
             nested_record, &target, nested_members,
-            sizeof(nested_members) / sizeof(nested_members[0]));
+            sizeof(nested_members) / sizeof(nested_members[0]), 0, nullptr);
         const ir_final_layout_t *nested_layout = ir_layout_final(
             module, nested_record, target.triple);
         ok = ok && nested_layout && nested_layout->intrinsic_bits == 96
@@ -554,7 +573,7 @@ int main(void)
         c_members[1].c_compatible = false;
         ok = ok && !n00bb_abi_publish_c_record_layout(module,
             rejected_record, &target, c_members,
-            sizeof(c_members) / sizeof(c_members[0]));
+            sizeof(c_members) / sizeof(c_members[0]), 0, nullptr);
         th_type *bits3 = th_bits(types, 3);
         th_type *default_record = TH_NAME(types, "DefaultRecord");
         th_type *ordered_record = TH_NAME(types, "OrderedRecord");
@@ -642,9 +661,9 @@ int main(void)
         th_type *rejected_packed_c = TH_NAME(types, "RejectedPackedC");
         packed_members[0].c_compatible = true;
         ok = ok && !n00bb_abi_publish_c_record_layout(module,
-            rejected_packed_c, &target, packed_members, 3);
+            rejected_packed_c, &target, packed_members, 3, 0, nullptr);
         ok = ok && !n00bb_abi_publish_c_record_layout(module,
-            TH_NAME(types, "EmptyCRecord"), &target, nullptr, 0);
+            TH_NAME(types, "EmptyCRecord"), &target, nullptr, 0, 0, nullptr);
         th_type *rejected_packed_atomic = TH_NAME(types,
                                                    "RejectedPackedAtomic");
         packed_members[0].type = atomic;

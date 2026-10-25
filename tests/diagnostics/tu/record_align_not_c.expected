@@ -1,0 +1,2 @@
+tests/diagnostics/tu/record_align_not_c.n:1:14: error N00B-T0568: `align(...)` on record `Plain` is supported only with `layout(c)` so far
+  help: add `layout(c)`, or remove `align(...)`

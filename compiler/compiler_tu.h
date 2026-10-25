@@ -94,6 +94,13 @@ th_type *n00bb_variant_arm_payload_type(th_ctx *types, th_type *variant,
 bool cache_record_layout_request(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *declaration);
+// The `align(N)` of record `symbol`, in bytes, or 0 without one. False when
+// N isn't a constant power of two; with `report`, that's reported once and
+// remembered. Without it, N may just not be known yet.
+bool n00bb_record_alignment(parse_grammar_t *grammar,
+                            core_translation_unit_t *unit,
+                            parse_sym_entry_t *symbol, bool report,
+                            uint32_t *bytes);
 bool cache_record_field_extents(parse_grammar_t *grammar,
                                 core_translation_unit_t *unit,
                                 parse_tree_t *declaration);

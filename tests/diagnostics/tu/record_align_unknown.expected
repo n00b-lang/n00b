@@ -1,0 +1,1 @@
+tests/diagnostics/tu/record_align_unknown.n:1:32: error N00B-N0001: cannot find `size_of_nothing` in this scope

@@ -78,7 +78,7 @@ array-uint-index-n00b	pr	19	sh "$SRC/tests/array_uint_index.sh" "$BUILD/n00b" "$
 index-read-variant-override-n00b	pr	16	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_index_read_variant_override.n"
 shift-count-n00b	pr	20	sh "$SRC/tests/shift_count_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs"
 numeric-casts-n00b	pr	6	sh "$SRC/tests/numeric_casts.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_numeric_casts.n" "$SRC/tests/programs/bitcode/bitcode_numeric_cast_trap.n"
-inline-array-layout-n00b	pr	3	sh "$SRC/tests/inline_array_layout.sh" "$BUILD/n00b" "$SRC/tests/programs/inline_array_record_layout.n"
+record-layout-n00b	pr	20	sh "$SRC/tests/inline_array_layout.sh" "$BUILD/n00b" "$SRC/tests/programs/inline_array_record_layout.n" && sh "$SRC/tests/aligned_records.sh" "$BUILD/n00b" "$SRC/tests/programs/aligned_records"
 runtime-array-bound-n00b	pr	2	sh "$SRC/tests/runtime_array_bound.sh" "$BUILD/n00b" "$SRC/tests/programs/array_runtime_sized_declaration.n"
 builtin-abi-n00b	pr	3	sh "$SRC/tests/builtin_abi_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_abi.n"
 builtin-debug	pr	5	sh "$SRC/tests/builtin_debug.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_debug.n"
