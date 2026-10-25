@@ -828,8 +828,9 @@ writes_definitely(pt_t *pt, const ir_instr_t *call)
     if (!sole_callee(pt, call)) return false;
     const ir_summary_t *callee = callees_of(pt, call)->callees.data[0];
     const flow_table_t *flows  = &callee->flows[IR_SFLOW_STORES];
+    const bool         *must   = must_dests(pt, callee);
     for (size_t d = 0; d < flows->dests.len; d++)
-        if (must_dest(callee, flows->dests.data[d].to)) return true;
+        if (must[d]) return true;
     return false;
 }
 

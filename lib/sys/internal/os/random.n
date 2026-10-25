@@ -1,0 +1,102 @@
+# Random bytes from the operating system.
+
+import internal.errno
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    # Blocks only until the kernel's entropy pool is first initialized.
+    syscall getrandom(buf: out *u8, count: usize, flags: c_uint) -> isize
+      number 318 when arch == x86_64
+      number 278 when arch == aarch64
+      effects random, blocking
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    # At most 256 bytes a call.
+    fn getentropy(buf: *u8, count: usize) -> c_int
+      error ret == -1 via errno
+      effects random
+    -]'ffi
+
+    bring errno_of from internal.os.support
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+    link "bcrypt"
+
+    fn BCryptGenRandom(algorithm: isize, buf: out *u8, count: c_ulong,
+                       flags: c_ulong) -> c_long
+      effects random
+
+    binding {
+        name BCryptGenRandom "gen_random"
+        raw "BCryptGenRandom"
+    }
+    -]'ffi
+
+    bring chunk from internal.os.support
+    # BCRYPT_USE_SYSTEM_PREFERRED_RNG.
+    private const system_rng: u32 = 2
+}
+
+# Fills `buffer[start:end]` with random bytes from the operating
+# system.
+func random_bytes(buffer: Array[u8], start: uint, end: uint)
+    fail: internal.errno.Errno {
+    require start <= end and end <= __array_length(buffer)
+    var at: uint = start
+    while at < end {
+        let into: Ref[byte] = unsafe_cast[Ref[byte]] ref buffer[at]
+        when target_os() == "linux" {
+            try {
+                let got: int = getrandom(into, end - at, 0)!
+                if got <= 0 {
+                    fail internal.errno.Errno.EIO
+                }
+                at += cast[uint](got)
+            } fail(e) {
+                if e != internal.errno.Errno.EINTR {
+                    fail e
+                }
+            }
+        } else when target_os() == "macos" {
+            var chunk: uint = end - at
+            if chunk > 256 {
+                chunk = 256
+            }
+            try {
+                getentropy(into, chunk)!
+            } fail(failure) {
+                fail errno_of(failure)
+            }
+            at += chunk
+        } else when target_os() == "windows" {
+            let count: uint = chunk(end - at)
+            if gen_random_raw(0, into, cast[u32](count),
+                                          system_rng) != 0 {
+                fail internal.errno.Errno.EIO
+            }
+            at += count
+        } else {
+            fail internal.errno.Errno.ENOSYS
+        }
+    }
+}

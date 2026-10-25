@@ -1,0 +1,101 @@
+# Moving a file descriptor's offset.
+
+import internal.errno
+bring errno_of from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall lseek(fd: c_int, offset: isize, whence: c_int) -> isize
+      number 8 when arch == x86_64
+      number 62 when arch == aarch64
+      effects input
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn errno_location() -> *c_int static per thread
+      source "errno" macro
+      symbol "__error" when os == macos
+    error_channel errno per thread {
+        value errno_location()
+    }
+
+    fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize
+      error ret == -1 via errno
+      effects input
+    -]'ffi
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn _errno() -> *c_int static per thread
+    error_channel errno per thread {
+        value _errno()
+    }
+
+    fn _lseeki64(fd: c_int, offset: i64, origin: c_int) -> i64
+      error ret == -1 via errno
+      effects input
+    fn _get_osfhandle(fd: c_int) -> isize
+      effects input
+    fn GetFileType(handle: isize) -> c_uint
+      effects input
+
+    binding {
+        name _lseeki64 "lseek"
+        name GetFileType "file_type"
+        raw "_get_osfhandle"
+        raw "GetFileType"
+    }
+    -]'ffi
+
+    # FILE_TYPE_DISK: the only kind of file a seek moves through.
+    private const file_type_disk: u32 = 1
+}
+
+enum Whence {
+    start = 0,
+    current = 1,
+    end = 2,
+}
+
+# Moves `fd`'s offset; returns the new offset from the start of the file.
+func seek(fd: i32, offset: int, whence: Whence) -> uint
+    fail: internal.errno.Errno {
+    when target_os() == "linux" {
+        return cast[uint](lseek(fd, offset, cast[i32](whence))!)
+    } else when target_os() == "macos" {
+        try {
+            return cast[uint](lseek(fd, offset, cast[i32](whence))!)
+        } fail(failure) {
+            fail errno_of(failure)
+        }
+    } else when target_os() == "windows" {
+        # The C runtime's seek on a pipe or console is undefined rather than
+        # an error, so those fail here as they do elsewhere.
+        let handle: int = get_osfhandle_raw(fd)
+        if handle == -1 {
+            fail internal.errno.Errno.EBADF
+        }
+        if file_type_raw(handle) != file_type_disk {
+            fail internal.errno.Errno.ESPIPE
+        }
+        try {
+            return cast[uint](lseek(fd, offset, cast[i32](whence))!)
+        } fail(failure) {
+            fail errno_of(failure)
+        }
+    } else {
+        fail internal.errno.Errno.ENOSYS
+    }
+}

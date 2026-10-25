@@ -1,0 +1,86 @@
+# Changing the access to mapped memory.
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    syscall mprotect(address: *u8, length: usize, protection: c_int) -> c_int
+      number 10 when arch == x86_64
+      number 226 when arch == aarch64
+      effects alloc
+
+    binding {
+        error * -> "internal.errno.Errno"
+    }
+    -]'ffi
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    # The collector calls this, so it's raw: no shim, nothing allocated.
+    fn mprotect(address: *void, length: usize, protection: c_int) -> c_int
+      effects alloc
+
+    binding {
+        raw "mprotect"
+    }
+    -]'ffi
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    # The collector calls this, so it's raw: no shim, nothing allocated.
+    fn VirtualProtect(address: *void, size: usize, protection: u32,
+                      old: out *u32) -> c_int
+      effects alloc
+
+    binding {
+        name VirtualProtect "virtual_protect"
+        raw "VirtualProtect"
+    }
+    -]'ffi
+
+    # PAGE_NOACCESS, PAGE_READONLY and PAGE_READWRITE.
+    private const page_no_access: u32 = 1
+    private const page_read_only: u32 = 2
+    private const page_read_write: u32 = 4
+}
+
+# Sets the access to the `bytes` at `address`: no access, read
+# (`flags` 1), or read and write (3); 0, or -1 on failure.
+func protect(address: Ref[byte], bytes: uint, flags: u32) -> i32 {
+    if bytes == 0 or (flags & ~cast[u32](3)) != 0 {
+        return -1
+    }
+    when target_os() == "linux" {
+        try {
+            _ = mprotect(address, bytes, cast[i32](flags))!
+            return 0
+        } fail(failure) {
+            return -1
+        }
+    } else when target_os() == "macos" {
+        if mprotect_raw(address, bytes, cast[i32](flags)) != 0 {
+            return -1
+        }
+        return 0
+    } else when target_os() == "windows" {
+        var mode: u32 = page_read_write
+        if flags == 0 {
+            mode = page_no_access
+        } elif flags == 1 {
+            mode = page_read_only
+        }
+        var old: u32 = 0
+        if virtual_protect_raw(address, bytes, mode,
+                unsafe_cast[Ref[byte]] (ref old)) == 0 {
+            return -1
+        }
+        return 0
+    } else {
+        return -1
+    }
+}

@@ -1,0 +1,61 @@
+# The process's arguments and environment, which the runtime saved when the
+# program started, on every platform.
+
+[-
+library n00b
+
+fn n00b_os_arg_count() -> u64
+  effects env
+fn n00b_os_arg_at(index: u64) -> ?u8 static
+  effects env
+fn n00b_os_env_count() -> u64
+  effects env
+fn n00b_os_env_at(index: u64) -> ?u8 static
+  effects env
+
+binding {
+    raw "n00b_os_*"
+}
+-]'ffi
+
+# A copy of the NUL-terminated C string at `address`, which is not 0.
+private func c_string(address: uint) -> string {
+    let base: Ref[byte] =
+        unsafe_cast[Ref[byte]](unsafe_cast[Foreign[byte]](address))
+    var length: uint = 0
+    while __gc_byte_offset(base, cast[int](length)).__value != 0 {
+        length += 1
+    }
+    var bytes: Array[u8] = new[Array[u8]](length)
+    if length > 0 {
+        __gc_memcpy(unsafe_cast[Ref[byte]] ref bytes[0], base, length)
+    }
+    return from_raw(ref bytes, cast[int](length), copy = false)
+}
+
+private func c_string_or_nil(address: uint) -> string? {
+    if address == 0 {
+        return nil
+    }
+    return c_string(address)
+}
+
+# The number of command-line arguments, the program's name included.
+func arg_count() -> uint {
+    return n00b_os_arg_count_raw()
+}
+
+# Argument `index`, or nil past the last.
+func arg_at(index: uint) -> string? {
+    return c_string_or_nil(n00b_os_arg_at_raw(index))
+}
+
+# The number of `NAME=value` environment entries.
+func env_count() -> uint {
+    return n00b_os_env_count_raw()
+}
+
+# Environment entry `index`, as `NAME=value`, or nil past the last.
+func env_at(index: uint) -> string? {
+    return c_string_or_nil(n00b_os_env_at_raw(index))
+}

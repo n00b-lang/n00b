@@ -1,21 +1,23 @@
-import internal.os
+import internal.os.map
+import internal.os.page
+import internal.os.protect
 
 const PROT_NONE:         u32  = 0
 const PROT_READ:         u32  = 1
 const PROT_WRITE:        u32  = 2
 
 func page_size() -> uint {
-    return internal.os.page_size()
+    return internal.os.page.page_size()
 }
 
 func map_zeroed(bytes: uint, alignment: uint) -> Ref[byte]? {
-    return internal.os.map_zeroed(bytes, alignment)
+    return internal.os.map.map_zeroed(bytes, alignment)
 }
 
 func unmap(address: Ref['T], bytes: uint) -> i32 {
-    return internal.os.unmap(unsafe_cast[Ref[byte]] address, bytes)
+    return internal.os.map.unmap(unsafe_cast[Ref[byte]] address, bytes)
 }
 
 func protect(address: Ref[byte], bytes: uint, flags: u32) -> i32 {
-    return internal.os.protect(address, bytes, flags)
+    return internal.os.protect.protect(address, bytes, flags)
 }

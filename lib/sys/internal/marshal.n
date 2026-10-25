@@ -3,7 +3,7 @@ import internal.gc.core
 import internal.gc.registry
 import internal.gc.alloc
 import internal.gc.mark
-import internal.os
+import internal.os.write
 
 const capture_fd: i32 = 3
 
@@ -828,7 +828,7 @@ func write_block(base: Ref[byte], size: uint) {
     while done < size {
         var wrote: uint = 0
         try {
-            wrote = internal.os.write_bytes(capture_fd,
+            wrote = internal.os.write.write_bytes(capture_fd,
                 __gc_byte_offset(base, cast[int] done), size - done)!
         } fail(failure) {
         }

@@ -1,0 +1,143 @@
+# Waiting on and waking an address.
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    # One system call, declared once for waiting and once for waking. The
+    # wait isn't `blocking`, which would wrap it in the collector's blocking
+    # transitions: its callers make those themselves (the locks' futex_park),
+    # and the collector's own waits must not make them at all.
+    syscall futex_wait(word: in *u32, operation: c_int, expected: c_uint,
+                       timeout: in ?u8) -> c_int
+      number 202 when arch == x86_64
+      number 98 when arch == aarch64
+      effects sync
+    syscall futex_wake(word: in *u32, operation: c_int, count: c_int) -> c_int
+      number 202 when arch == x86_64
+      number 98 when arch == aarch64
+      effects sync
+
+    binding {
+        error * -> "internal.errno.Errno"
+        # This module's own function of the name is the API.
+        name futex_wait "syscall_futex_wait"
+    }
+    -]'ffi
+
+    bring Timespec from internal.os.support
+    private const futex_wait_private: i32 = 128
+    private const futex_wake_private: i32 = 129
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    # libSystem's address waits, which it has exported since macOS 10.12.
+    fn __ulock_wait2(operation: u32, address: in *void, expected: u64,
+                     timeout_ns: u64, expected2: u64) -> c_int
+      effects sync, blocking
+    fn __ulock_wake(operation: u32, address: in *void, wake_value: u64) -> c_int
+      effects sync
+
+    binding {
+        raw "__ulock_wait2"
+        raw "__ulock_wake"
+    }
+    -]'ffi
+
+    # UL_COMPARE_AND_WAIT, and ULF_WAKE_ALL.
+    private const ulock_compare_and_wait: u32 = 1
+    private const ulock_wake_all: u32 = 0x100
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+    link "synchronization"
+
+    fn WaitOnAddress(address: in *void, compare: in *void, size: usize,
+                     milliseconds: u32) -> c_int
+      effects sync, blocking
+    fn WakeByAddressAll(address: in *void)
+      effects sync
+
+    binding {
+        name WaitOnAddress "wait_on_address"
+        name WakeByAddressAll "wake_by_address_all"
+        raw "WaitOnAddress"
+        raw "WakeByAddressAll"
+    }
+    -]'ffi
+
+    private const wait_forever: u32 = 0xffffffff
+}
+
+# Waits while `word` holds `expected`, at most `timeout_ns` (0 waits
+# without a limit). Returns 0 on a wake, a spurious wake included, or an
+# errno.
+func futex_wait(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint)
+    -> i32 {
+    # Reading the word first also brings its page in: macOS fails a wait
+    # on a page that was never touched rather than faulting it in.
+    if __atomic_load(word) != expected {
+        return 0
+    }
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] word
+    when target_os() == "linux" {
+        var stamp: Timespec = (
+            seconds = cast[i64](timeout_ns / 1000000000),
+            nanoseconds = cast[i64](timeout_ns % 1000000000))
+        var limit: Ref[byte]? = nil
+        if timeout_ns != 0 {
+            limit = unsafe_cast[Ref[byte]] (ref stamp)
+        }
+        try {
+            _ = syscall_futex_wait(at, futex_wait_private, expected, limit)!
+            return 0
+        } fail(e) {
+            return cast[i32](e)
+        }
+    } else when target_os() == "macos" {
+        _ = ulock_wait2_raw(ulock_compare_and_wait, at,
+            cast[u64](expected), cast[u64](timeout_ns), 0)
+        return 0
+    } else when target_os() == "windows" {
+        var milliseconds: u32 = wait_forever
+        if timeout_ns != 0 {
+            let rounded: uint = (timeout_ns + 999999) / 1000000
+            if rounded >= cast[uint](wait_forever) {
+                milliseconds = wait_forever - 1
+            } else {
+                milliseconds = cast[u32](rounded)
+            }
+        }
+        var compare: u32 = expected
+        let size: uint = 4
+        _ = wait_on_address_raw(at, unsafe_cast[Ref[byte]] (ref compare),
+            size, milliseconds)
+        return 0
+    } else {
+        return 0
+    }
+}
+
+# Wakes every thread waiting on `word`.
+func futex_wake_all(word: Ref[Atomic[u32]]) -> i32 {
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] word
+    when target_os() == "linux" {
+        try {
+            return futex_wake(at, futex_wake_private, 0x7fffffff)!
+        } fail(e) {
+            return 0
+        }
+    } else when target_os() == "macos" {
+        _ = ulock_wake_raw(ulock_compare_and_wait | ulock_wake_all, at, 0)
+        return 0
+    } else when target_os() == "windows" {
+        wake_by_address_all_raw(at)
+        return 0
+    } else {
+        return 0
+    }
+}

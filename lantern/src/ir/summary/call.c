@@ -901,23 +901,65 @@ mapped_output(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(values);
 }
 
-static bool
-must_dest(const ir_summary_t *callee, const ir_spath_t *to)
+// A write path's place, for finding the one a store destination names.
+static core_hash_value_t
+written_place_hash(void *key)
 {
-    if (to->flags & IR_SPATH_DEEP) return false;
+    const ir_spath_t *path = key;
+    uint64_t head[4] = {
+        (uint64_t)path->output << 8 | (uint64_t)path->root,
+        path->root == IR_SPLACE_PARAM || path->root == IR_SPLACE_SOURCE
+                || path->root == IR_SPLACE_HEAP ? path->param : 0,
+        named_root(path->root) ? (uint64_t)(uintptr_t)path->global : 0,
+        path->depth};
+    core_hash_value_t hash = core_hash_raw(head, sizeof(head));
+    for (uint32_t s = 0; s < path->depth; s++)
+        hash = hash * 31 + core_string_hash(path->steps[s]);
+    return hash;
+}
+
+static bool
+written_place_eq(const void *a, const void *b)
+{
+    const ir_spath_t *x = a, *y = b;
+    return same_path_root(x, y) && x->depth == y->depth
+        && steps_prefix(x->depth, x->steps, y->depth, y->steps);
+}
+
+// Whether the callee surely writes each of its store destinations: the
+// first non-deep write path to the destination's place says.
+static const bool *
+must_dests(pt_t *pt, const ir_summary_t *callee)
+{
+    const flow_table_t *flows = &callee->flows[IR_SFLOW_STORES];
+    bool  found = false;
+    bool *must  = core_dict_get(&pt->must_dests, (void *)callee, &found);
+    if (found) return must;
+    must = core_alloc_array(bool, flows->dests.len + 1);
     bool returns = !(callee->flags & (IR_SUMMARY_DIVERGES
                                       | IR_SUMMARY_NO_RETURN));
     bool fails   = callee->flags & IR_SUMMARY_MAY_FAIL;
+    core_dict_t writes;
+    core_dict_init(&writes, written_place_hash, written_place_eq);
     for (size_t p = 0; p < callee->paths.len; p++) {
         const ir_spath_t *path = &callee->paths.data[p];
-        if (!(path->flags & IR_SPATH_WRITE) || (path->flags & IR_SPATH_DEEP)
-            || !same_path_root(path, to) || path->depth != to->depth
-            || !steps_prefix(path->depth, path->steps, to->depth, to->steps))
+        if (!(path->flags & IR_SPATH_WRITE) || (path->flags & IR_SPATH_DEEP))
             continue;
-        return (!returns || (path->flags & IR_SPATH_MUST_SUCCESS))
+        bool seen = false;
+        (void)core_dict_get(&writes, (void *)path, &seen);
+        if (!seen) core_dict_put(&writes, (void *)path, (void *)path);
+    }
+    for (size_t d = 0; d < flows->dests.len; d++) {
+        const ir_spath_t *to = flows->dests.data[d].to;
+        if (to->flags & IR_SPATH_DEEP) continue;
+        bool              seen = false;
+        const ir_spath_t *path = core_dict_get(&writes, (void *)to, &seen);
+        must[d] = seen && (!returns || (path->flags & IR_SPATH_MUST_SUCCESS))
             && (!fails || (path->flags & IR_SPATH_MUST_FAILURE));
     }
-    return false;
+    core_dict_free(&writes);
+    core_dict_put(&pt->must_dests, (void *)callee, must);
+    return must;
 }
 
 static bool
@@ -946,8 +988,7 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     mapped_sources_t    mapped;
     mapped_sources_init(&mapped, call, callee, IR_SFLOW_STORES);
     for (size_t d = 0; d < flows->dests.len; d++) {
-        store_pair_t pair = {.must = sole
-                                 && must_dest(callee, flows->dests.data[d].to)};
+        store_pair_t pair = {.must = sole && must_dests(pt, callee)[d]};
         size_t source = shared[d] == d ? SIZE_MAX : paired[shared[d]];
         if (shared[d] == d) flowed_items(pt, &mapped, groups, d, &pair.from);
         for (size_t i = 0; source < pairs.len

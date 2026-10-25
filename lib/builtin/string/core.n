@@ -1,7 +1,7 @@
 import containers.list
 import hex
 import string.style
-import sys.os
+import sys.os.kernel
 
 private record String_Words layout(c) {
     data:     Ref[byte]
@@ -258,7 +258,7 @@ private func write_all(fd: i32, data: Ref[byte], len: uint) -> bool {
     var done: uint = 0
     while done < len {
         try {
-            let wrote: uint = sys.os.write_bytes(fd,
+            let wrote: uint = sys.os.kernel.write_bytes(fd,
                 __gc_byte_offset(data, cast[int] done), len - done)!
             if wrote == 0 {
                 return false

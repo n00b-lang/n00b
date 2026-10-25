@@ -159,8 +159,15 @@ typedef struct {
     const ir_spath_t  *leaf;
     core_dict_t       *path_places;
     core_dict_t       *stores;
+    // Calls' effects on the place `effects_place`, and on each of its
+    // leaves: `leaf_effects` maps a leaf's interned steps to its own dict.
     core_dict_t       *effects;
+    core_dict_t       *leaf_effects;
     ir_splace_t        effects_place;
+    // Per callee summary, its paths indexed by the place they reach; and
+    // what the finalizer and thread entries touch, per place.
+    core_dict_t       *access_index;
+    core_dict_t       *entry_access;
 } flow_query_t;
 
 typedef struct {
@@ -351,6 +358,8 @@ struct pt_t {
     core_dict_t            escaped;
     bool                   escaped_built;
     core_dict_t            flow_groups;
+    // Per callee, whether each of its store destinations is surely written.
+    core_dict_t            must_dests;
     core_dict_t            value_groups;
     core_list_t(pt_external_writes_t) external_writes;
     core_list_t(uint32_t)  described;

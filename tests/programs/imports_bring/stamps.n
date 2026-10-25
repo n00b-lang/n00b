@@ -1,0 +1,12 @@
+record Stamp layout(c) {
+    seconds:     i64
+    nanoseconds: i64
+}
+
+# The record's first word, read from its C layout.
+func first_word(stamp: Ref[Stamp]) -> i64 {
+    let words: Array[i64] = [0, 0]
+    __gc_memcpy(unsafe_cast[Ref[byte]] ref words[0],
+        unsafe_cast[Ref[byte]] stamp, 16)
+    return words[0]
+}

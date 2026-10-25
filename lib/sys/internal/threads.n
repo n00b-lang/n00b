@@ -1,4 +1,5 @@
-import internal.os
+import internal.os.futex
+import internal.os.thread
 
 const context_registers: uint = 48
 
@@ -73,7 +74,7 @@ func thread_is_main() -> bool {
 }
 
 func thread_yield() {
-    internal.os.thread_yield()
+    internal.os.thread.thread_yield()
 }
 
 func thread_fence() {
@@ -81,11 +82,11 @@ func thread_fence() {
 }
 
 func futex_wait(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint) -> i32 {
-    return internal.os.futex_wait(word, expected, timeout_ns)
+    return internal.os.futex.futex_wait(word, expected, timeout_ns)
 }
 
 func futex_wake_all(word: Ref[Atomic[u32]]) -> i32 {
-    return internal.os.futex_wake_all(word)
+    return internal.os.futex.futex_wake_all(word)
 }
 
 func thread_id() -> uint {
@@ -93,7 +94,7 @@ func thread_id() -> uint {
 }
 
 func thread_stack_high_self() -> Ref[byte]? {
-    return internal.os.thread_stack_high_self()
+    return internal.os.thread.thread_stack_high_self()
 }
 
 # The stack pointer: an address below every frame the caller's thread has
@@ -131,16 +132,7 @@ func thread_capture_self(snapshot: Ref[Thread_Context]) {
 }
 
 func thread_control_self() -> uint {
-    return internal.os.thread_control_self()
-}
-
-func thread_suspend(control: uint, snapshot: Ref[Thread_Context], timeout_ns: u64)
-                   -> i32 {
-    return internal.os.thread_suspend(control, snapshot, timeout_ns)
-}
-
-func thread_resume(control: uint, snapshot: Ref[Thread_Context]) -> i32 {
-    return internal.os.thread_resume(control, snapshot)
+    return internal.os.thread.thread_control_self()
 }
 
 # Tells the processor this thread is spinning on a value another thread

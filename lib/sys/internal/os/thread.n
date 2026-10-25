@@ -1,0 +1,149 @@
+# The calling thread: starting others, yielding, its stack and its id.
+
+import internal.threads
+bring address_ref from internal.os.support
+
+when target_os() == "linux" {
+    [-
+    library kernel
+    platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+    # Always succeeds.
+    syscall sched_yield() -> c_int
+      number 24 when arch == x86_64
+      number 124 when arch == aarch64
+      infallible
+      effects hint
+    syscall gettid() -> c_int
+      number 186 when arch == x86_64
+      number 178 when arch == aarch64
+      infallible
+      effects none
+    -]'ffi
+
+    [-
+    library n00b
+
+    # The address just past the top of the stack holding `sp`: the runtime
+    # made every thread's stack, and the kernel the main thread's.
+    fn n00b_linux_stack_high(sp: usize) -> usize
+      effects none
+
+    binding {
+        raw "n00b_linux_stack_high"
+    }
+    -]'ffi
+
+    # The calling thread's stack top, kept after the first query, which may
+    # take the runtime's thread list lock.
+    thread var linux_stack_high: uint = 0
+} else when target_os() == "macos" {
+    [-
+    library c
+    platforms aarch64-apple-darwin, x86_64-apple-darwin
+
+    fn sched_yield() -> c_int
+      effects hint
+    # A pthread_t is opaque: n00b only hands it back, so it's an integer
+    # here.
+    fn pthread_self() -> uptr
+      effects none
+    fn pthread_mach_thread_np(thread: uptr) -> u32
+      effects none
+    # The address just past the top of the thread's stack, as an integer:
+    # it's C memory, which n00b only compares against.
+    fn pthread_get_stackaddr_np(thread: uptr) -> uptr
+      effects none
+
+    binding {
+        raw "sched_yield"
+        raw "pthread_self"
+        raw "pthread_mach_thread_np"
+        raw "pthread_get_stackaddr_np"
+    }
+    -]'ffi
+} else when target_os() == "windows" {
+    [-
+    library c
+    platforms x86_64-w64-windows-gnu
+
+    fn SwitchToThread() -> c_int
+      effects hint
+    # The bounds of the calling thread's stack (Windows 8 and later).
+    fn GetCurrentThreadStackLimits(low: out *uptr, high: out *uptr)
+      effects none
+    fn GetCurrentThreadId() -> u32
+      effects none
+
+    binding {
+        name SwitchToThread "switch_to_thread"
+        name GetCurrentThreadStackLimits "thread_stack_limits"
+        name GetCurrentThreadId "current_thread_id"
+        raw "SwitchToThread"
+        raw "GetCurrentThreadStackLimits"
+        raw "GetCurrentThreadId"
+    }
+    -]'ffi
+}
+
+# Starts a thread that runs `entry`; false when it can't be started. Make
+# the entry with `callback[sys.threads.Thread_Entry](ref f, ...)`, binding
+# any arguments `f` takes.
+func thread_start(entry: internal.threads.Thread_Entry) -> bool {
+    return internal.threads.thread_start(entry)
+}
+
+# The calling thread's id, unique among running threads.
+func thread_id() -> uint {
+    return internal.threads.thread_id()
+}
+
+# True on the thread that started the program.
+func thread_is_main() -> bool {
+    return internal.threads.thread_is_main()
+}
+
+# Lets other threads run.
+func thread_yield() {
+    when target_os() == "linux" {
+        _ = sched_yield()
+    } else when target_os() == "macos" {
+        _ = sched_yield_raw()
+    } else when target_os() == "windows" {
+        _ = switch_to_thread_raw()
+    }
+}
+
+# The address just past the top of the calling thread's stack, which grows
+# down from it; nil when it can't be found.
+func thread_stack_high_self() -> Ref[byte]? {
+    when target_os() == "linux" {
+        if linux_stack_high == 0 {
+            linux_stack_high = n00b_linux_stack_high_raw(__stack_pointer())
+        }
+        return address_ref(linux_stack_high)
+    } else when target_os() == "macos" {
+        return address_ref(pthread_get_stackaddr_np_raw(pthread_self_raw()))
+    } else when target_os() == "windows" {
+        var low: uint
+        var high: uint
+        thread_stack_limits_raw(unsafe_cast[Ref[byte]] (ref low),
+                                unsafe_cast[Ref[byte]] (ref high))
+        return address_ref(high)
+    } else {
+        return nil
+    }
+}
+
+# An id for the calling thread that thread_suspend and thread_resume take.
+func thread_control_self() -> uint {
+    when target_os() == "linux" {
+        return cast[uint](gettid())
+    } else when target_os() == "macos" {
+        return cast[uint](pthread_mach_thread_np_raw(pthread_self_raw()))
+    } else when target_os() == "windows" {
+        return cast[uint](current_thread_id_raw())
+    } else {
+        return 0
+    }
+}

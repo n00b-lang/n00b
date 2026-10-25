@@ -100,6 +100,9 @@ typedef struct {
     core_list_t(core_string_t) search_paths;
     bool                       exports;
     bool                       used;
+    // The program calls one of the literal's shims, so they're compiled; a
+    // literal used only through its raw bindings needs just its libraries.
+    bool                       shims_used;
     // The module the literal generated.
     core_string_t              module;
     // The contract files the literal reads, so a cache can tell when it
@@ -447,7 +450,7 @@ refresh_selection(n00bb_ffi_t *ffi)
         if (!record->used) {
             continue;
         }
-        for (size_t j = 0; j < record->shims.len; j++)
+        for (size_t j = 0; record->shims_used && j < record->shims.len; j++)
             core_list_push(ffi->selected_shims, record->shims.data[j]);
         push_all(&ffi->archives, &record->archives);
         push_all(&ffi->libraries, &record->libraries);
@@ -467,13 +470,15 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     // raw bindings calls directly: either way its libraries are needed.
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
-        record->used = record->exports;
+        record->shims_used = record->exports;
         core_string_t prefix = record->prefix;
+        for (size_t j = 0; !record->shims_used && j < count; j++)
+            record->shims_used = symbols[j].u8_bytes > prefix.u8_bytes
+                && core_string_starts_with(symbols[j], prefix)
+                && symbols[j].data[prefix.u8_bytes] == '_';
+        record->used = record->shims_used;
         for (size_t j = 0; !record->used && j < count; j++)
-            record->used = (symbols[j].u8_bytes > prefix.u8_bytes
-                    && core_string_starts_with(symbols[j], prefix)
-                    && symbols[j].data[prefix.u8_bytes] == '_')
-                || contains(&record->symbols, symbols[j]);
+            record->used = contains(&record->symbols, symbols[j]);
     }
     refresh_selection(ffi);
 }
@@ -1122,6 +1127,7 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         .search_paths = core_list_new(core_string_t),
         .inputs       = core_list_new(core_string_t),
         .used         = true,
+        .shims_used   = true,
     };
     for (size_t i = 0; i < writ_unit_file_count(literal); i++) {
         push_unique(&record.inputs, writ_unit_file_at(literal, i));

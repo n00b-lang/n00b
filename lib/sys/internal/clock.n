@@ -1,5 +1,5 @@
-import internal.os
+import internal.os.clock
 
 func now_ns() -> u64 {
-    return internal.os.now_ns()
+    return internal.os.clock.now_ns()
 }

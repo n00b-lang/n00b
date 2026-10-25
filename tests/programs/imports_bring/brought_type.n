@@ -1,0 +1,19 @@
+# A brought type names the provider's type wherever a type is written: in a
+# local, a parameter and a module variable alike.
+import stamps
+bring Stamp from stamps
+
+func seconds_of(stamp: Stamp) -> i64 {
+    return stamp.seconds
+}
+
+func local_first_word() -> i64 {
+    var stamp: Stamp = (seconds = 7, nanoseconds = 9)
+    return stamps.first_word(ref stamp)
+}
+
+var kept: Stamp = (seconds = 3, nanoseconds = 4)
+
+require local_first_word() == 7
+require seconds_of((seconds = 5, nanoseconds = 6)) == 5
+require stamps.first_word(ref kept) == 3
