@@ -1358,6 +1358,8 @@ generators. Anyone can declare more:
 #   clock      reads a clock
 #   random     reads a source of randomness
 #   threads    starts threads
+#   sync       waits on, wakes or controls other threads (a futex, a thread
+#              suspend); what they wrote is what the caller sees after
 #   hint       changes nothing a caller can see, but is called for when it
 #              happens: a yield to the scheduler, a spin-wait pause
 
@@ -1934,7 +1936,7 @@ A contract made only of `syscall`s needs no `link`.
 **Effects are required.** A `syscall` without an `effects` clause is
 E0229, and so is one that names an effect other than the built-in ones
 (`none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`,
-`threads`, `hint`) or `input`, `output` and `io`.
+`threads`, `sync`, `hint`) or `input`, `output` and `io`.
 Unknown effects would make every caller unanalyzable, and whoever writes
 the declaration knows what the call does. The `effects` clause on a
 `syscall` is part of the core tier.
@@ -1979,7 +1981,7 @@ no symbols.
 | E0226 | A `syscall` where some platform in scope isn't Linux, or has an `arch` with no kernel-entry row |
 | E0227 | A `syscall` with more than six parameters; a parameter or result that isn't a pointer-width-or-narrower integer or a pointer; a shape, mode, ownership or slot attribute; or no result without `noreturn` |
 | E0228 | A `syscall` with any `fn` clause other than `effects` and `note`, including every error clause (`infallible` is the only error control) |
-| E0229 | A `syscall` with no `effects` clause, or with an effect outside `none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`, `threads`, `hint`, `input`, `output`, `io` |
+| E0229 | A `syscall` with no `effects` clause, or with an effect outside `none`, `blocking`, `noreturn`, `alloc`, `env`, `clock`, `random`, `threads`, `sync`, `hint`, `input`, `output`, `io` |
 | E0230 | A `syscall` with no `number` on some listed platform, or whose number isn't a non-negative integer constant |
 
 ---

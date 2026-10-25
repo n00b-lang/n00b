@@ -1058,6 +1058,7 @@ effect_named(const writ_model_t *model, writ_sym_t name)
         {"random", WRIT_EFFECTS_RANDOM},
         {"threads", WRIT_EFFECTS_THREADS},
         {"hint", WRIT_EFFECTS_HINT},
+        {"sync", WRIT_EFFECTS_SYNC},
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         if (writ_is_text(model, name, names[i].text)) {

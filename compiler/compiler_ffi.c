@@ -520,6 +520,7 @@ native_effects(writ_effects_t declared)
         {WRIT_EFFECTS_RANDOM, IR_SUMMARY_READS_RANDOM},
         {WRIT_EFFECTS_THREADS, IR_SUMMARY_STARTS_THREADS},
         {WRIT_EFFECTS_HINT, IR_SUMMARY_HINTS},
+        {WRIT_EFFECTS_SYNC, IR_SUMMARY_SYNCS},
     };
     uint32_t flags = 0;
     for (size_t i = 0; i < sizeof(effects) / sizeof(effects[0]); i++)

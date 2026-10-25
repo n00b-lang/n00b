@@ -85,11 +85,11 @@ when target_os() == "linux" {
                        timeout: in ?u8) -> c_int
       number 202 when arch == x86_64
       number 98 when arch == aarch64
-      effects threads
+      effects sync
     syscall futex_wake(word: in *u32, operation: c_int, count: c_int) -> c_int
       number 202 when arch == x86_64
       number 98 when arch == aarch64
-      effects threads
+      effects sync
     # Always succeeds.
     syscall sched_yield() -> c_int
       number 24 when arch == x86_64
@@ -122,12 +122,12 @@ when target_os() == "linux" {
                          mask_size: usize) -> c_int
       number 13 when arch == x86_64
       number 134 when arch == aarch64
-      effects threads
+      effects sync
     syscall rt_tgsigqueueinfo(process: c_int, thread: c_int, signal: c_int,
                               info: in *u8) -> c_int
       number 297 when arch == x86_64
       number 240 when arch == aarch64
-      effects threads
+      effects sync
 
     # The runtime's exit, which also ends evaluation at compile time.
     fn n00b_os_exit(code: i64)
@@ -259,9 +259,9 @@ when target_os() == "linux" {
     # libSystem's address waits, which it has exported since macOS 10.12.
     fn __ulock_wait2(operation: u32, address: in *void, expected: u64,
                      timeout_ns: u64, expected2: u64) -> c_int
-      effects threads, blocking
+      effects sync, blocking
     fn __ulock_wake(operation: u32, address: in *void, wake_value: u64) -> c_int
-      effects threads
+      effects sync
     fn sched_yield() -> c_int
       effects hint
 
@@ -276,14 +276,14 @@ when target_os() == "linux" {
     fn pthread_get_stackaddr_np(thread: uptr) -> uptr
       effects none
     fn thread_suspend(port: u32) -> c_int
-      effects threads
+      effects sync
     fn thread_resume(port: u32) -> c_int
-      effects threads
+      effects sync
     # `count` holds the state's size in 32-bit units going in, and how many
     # were filled coming out.
     fn thread_get_state(port: u32, flavor: c_int, state: out *u32,
                         count: inout *u32) -> c_int
-      effects threads
+      effects sync
 
     binding {
         name thread_suspend "mach_thread_suspend"
@@ -412,9 +412,9 @@ when target_os() == "linux" {
       effects clock
     fn WaitOnAddress(address: in *void, compare: in *void, size: usize,
                      milliseconds: u32) -> c_int
-      effects threads, blocking
+      effects sync, blocking
     fn WakeByAddressAll(address: in *void)
-      effects threads
+      effects sync
     fn SwitchToThread() -> c_int
       effects hint
     # The bounds of the calling thread's stack (Windows 8 and later).
@@ -425,16 +425,16 @@ when target_os() == "linux" {
     fn GetCurrentThreadId() -> u32
       effects none
     fn OpenThread(access: u32, inherit: c_int, thread: u32) -> isize
-      effects threads
+      effects sync
     fn SuspendThread(thread: isize) -> u32
-      effects threads
+      effects sync
     fn ResumeThread(thread: isize) -> u32
-      effects threads
+      effects sync
     # The context's flags, saying which registers to get, are set going in.
     fn GetThreadContext(thread: isize, context: inout *u8) -> c_int
-      effects threads
+      effects sync
     fn CloseHandle(handle: isize) -> c_int
-      effects threads
+      effects sync
     # The runtime's exit, which also ends evaluation at compile time.
     fn n00b_os_exit(code: i64)
       effects noreturn, output

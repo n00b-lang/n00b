@@ -489,6 +489,7 @@ const WRIT_EFFECTS_CLOCK: c_int = 512
 const WRIT_EFFECTS_RANDOM: c_int = 1024
 const WRIT_EFFECTS_THREADS: c_int = 2048
 const WRIT_EFFECTS_HINT: c_int = 4096
+const WRIT_EFFECTS_SYNC: c_int = 8192
 const WRIT_TYPE_VOID: c_int = 0
 const WRIT_TYPE_INT: c_int = 1
 const WRIT_TYPE_FLOAT: c_int = 2
