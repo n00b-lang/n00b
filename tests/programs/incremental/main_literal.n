@@ -1,0 +1,9 @@
+import sys.threads
+
+# Thread_Entry is declared by an 'ffi literal in sys.internal.threads and
+# exported through the sys.threads package; a cached build must still see it
+# and link the literal's C shims.
+func work() {
+}
+
+require sys.threads.thread_start(callback[sys.threads.Thread_Entry](ref work))

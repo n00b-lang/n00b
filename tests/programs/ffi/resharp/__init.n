@@ -1,13 +1,17 @@
-const resharp = [-
+[-
 use <resharp.writ>
 
 binding {
     string Regex::is_match.input as string
     buffer Regex::find_all.input as borrow
-    error * -> "resharp.Error"
 }
 -]'ffi
 
 package resharp {
-    export resharp
+    export Regex
+    export Match
+    export regex_new
+    export is_match
+    export find_all
+    export close
 }

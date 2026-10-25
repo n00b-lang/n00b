@@ -14,7 +14,7 @@ An `'ffi` literal is an **embedded writ unit** (`dsl.md` §9.3): a contract,
 then at most one binding block whose header is implied.
 
 ```
-const zlib = [-
+[-
     use <zlib.writ>
 
     binding {
@@ -22,7 +22,7 @@ const zlib = [-
     }
 -]'ffi
 
-let packed = zlib.compress(data, 6)
+let packed = compress(data, 6)
 ```
 
 - **The contract part** is any contract directives and declarations
@@ -47,32 +47,28 @@ let packed = zlib.compress(data, 6)
 
 - The preprocessor binds the literal when it evaluates it. There is no
   separate call to make.
-- `'ffi` is declared in n00b's builtin library as
-  `litmod<fence> ffi(source: string) -> Module`, and the compiler supplies
-  its behaviour. `Module` is a builtin type. At run time, a `Module` value
-  is a reference to the module's reflection entry.
-
-  ```
-  const zlib = [- use <zlib.writ> -]'ffi
-  import zlib from [- use <zlib.writ> -]'ffi
-  ```
-
-  Both declare the module `zlib`. A `const` of type `Module` is a module in
-  every respect, and `import NAME from EXPR` accepts any `Module`
-  expression known at compile time.
-- Static member access (`zlib.compress(...)`), `export` and package
-  flattening need a `Module` known at compile time: a `const` or an
-  `import`. Any other `Module` value is used through reflection.
-- The module is the bound API's namespace: every bound function, type
-  and constant is reached through it (`zlib.compress`, `zlib.Stream`,
-  `zlib.Z_OK`). Nothing is added to the enclosing module's scope.
-- The program carries the generated declarations, shims and link
-  requirements, and the module's reflection entry like any other module.
-  The writ unit and the literal's text never reach it.
-- Every bound name in n00b code therefore leads back to a visible
-  declaration: the const or import, then its literal, then the contract
-  it `use`s. `n00bb --show-ffi MODULE.NAME` prints the generated n00b
-  declarations, and go-to-definition on a bound name lands in them.
+- A literal is a statement on its own at module level, or in a
+  module-level `when` when it's for some platforms only. It can't
+  initialize a variable, and it can't be written in a function.
+- The bound functions, types and constants are declared in the module the
+  literal is in, as if they were written there. In that module they're
+  called by name (`compress(...)`); another module reaches them through
+  the module (`zlib.compress`, `zlib.Stream`, `zlib.Z_OK` when the
+  literal is in `zlib`).
+- They follow the visibility rules of the module's own declarations:
+  constants and the bound API are public, and the generator's helpers are
+  private. A package manifest exports them, or leaves them out, like any
+  other member (§9).
+- A bound name that the module already declares is an error, reported at
+  the literal. Rename the binding with `name` or leave it out with `hide`
+  (§2.3).
+- The compiler supplies `'ffi`'s behaviour. The program carries the
+  generated declarations, shims and link requirements; the writ unit and
+  the literal's text never reach it.
+- Every bound name in n00b code leads back to its literal, then to the
+  contract it `use`s. `n00b build PROGRAM --show-ffi MODULE:LINE` prints
+  the n00b declarations generated for the literal whose `[-` is on line
+  LINE of MODULE.
 
 ---
 
@@ -82,18 +78,20 @@ let packed = zlib.compress(data, 6)
 
 | Contract | n00b | Default |
 |---|---|---|
-| The contract | The module the literal declares | — |
+| The contract | Declarations in the module the literal is in | — |
 | `fn f` | `func f` in the module | Name after `strip_prefix`, in `snake` case |
 | `handle H`, `opaque` crossing as a handle | `type H` holding the C value | `Snake_Case` |
 | `struct S` | `type S layout(c) { ... }` | `Snake_Case` |
-| `enum E`, `flags F` | n00b `enum` / flag set with the same values | `Snake_Case`; members `upper` |
+| `enum E : T` | `open enum E: T` with the same values; a `closed` contract enum becomes a closed n00b `enum E: T` | `Snake_Case`; members `upper` |
+| `flags F` | n00b flag set with the same values | `Snake_Case`; members `upper` |
 | `const C` | `const C` | `upper` case |
 | `callback C` | n00b `callback` type | `Snake_Case` |
 
 - Names that collide with n00b's reserved words get a trailing `_`.
-- Two contract declarations that end up with one n00b name in the module
-  are E0505, reported at the later declaration's binding item, or at the
-  `strip_prefix` that caused it.
+- Two contract declarations that end up with one n00b name are E0505,
+  reported at the later declaration's binding item, or at the
+  `strip_prefix` that caused it. A bound name that collides with one of
+  the module's own declarations is reported by the n00b compiler (§1.1).
 - A `lang rust` contract names impl items as `T::m`. `name`, `method`,
   `hide` and the other items accept `T::m` wherever they accept a
   function name.
@@ -121,9 +119,12 @@ let packed = zlib.compress(data, 6)
 - `hide "glob"` removes declarations from the bound API. Hidden
   declarations still exist in the contract, so a binding can hide a
   function another function's plan calls (an error-detail function, say).
-- `raw "glob"` binds a declaration whose facts include `unknown`. It is
-  bound with raw pointers (`ptr`) for every slot the contract can't
-  describe, and its n00b name gets the suffix `_raw`.
+- `raw "glob"` binds a declaration without a shim: the n00b function
+  calls the C symbol directly, and its n00b name gets the suffix `_raw`.
+  Integers keep their width. A pointer argument is `Ref[byte]`
+  (`Ref[byte]?` when nullable), so the GC keeps the object alive through
+  the call; a pointer result is its address as `uint`. A declaration whose
+  facts include `unknown` can only be bound this way.
 - A declaration that reaches an `unknown` fact and is neither hidden nor
   raw is E0508, and the compile fails.
 
@@ -217,7 +218,7 @@ call `regex.is_match("text")`.
 `compress2` therefore binds as:
 
 ```
-func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
+func compress(source: Array[u8], level: i32) -> Array[u8] fail: Ffi_Error
 ```
 
 ---
@@ -225,16 +226,19 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 ## 4. Errors
 
 - A function with `error` or `failure` outcomes returns `T fail: E`.
-- `E` is the binding's `error PATTERN -> "Type"` choice. The default is a
-  generated `type Error` in the module (`zlib.Error`):
+- `E` is the binding's `error PATTERN -> "Type"` choice. The default is
+  the builtin record `Ffi_Error`, which every literal shares:
 
   ```
-  type Error {
-      code:   i64        # the `via` value, or the status itself
-      text:   string?    # the error channel's text, when there is one
-      fn:     string     # the contract function that failed
+  record Ffi_Error {
+      code: i64        # the `via` value, or the status itself
+      text: string?    # the error channel's text, when there is one
+      fn:   string     # the contract function that failed
   }
   ```
+
+  A binding that wants failures its callers can tell apart from other
+  libraries' names its own type.
 
 - Error detail comes from the contract, never from the binding:
   - `via expr` fills `code`, and `text` when the expression is text
@@ -261,7 +265,7 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 | `until next f(...)` / `until release(...)` borrowed results | Copied before the next call (`borrow ... as copy`, the default and the only choice, since `lifetimes no`) |
 | `own ... release g` | Wrapped in a handle type whose `close()` calls `g` |
 | Policy parameters | `policy f.p use ARM` fixes the arm and removes `p`. Without one, `p` becomes an enum parameter of the n00b function with a member per arm, and each arm is also bound as `f_arm`. The `else` arm is the member `OWNED`: the shim hands C its own copy of the slot the arm consumes, with a destructor it provides. |
-| `consume` | The n00b wrapper is marked closed after the call; using it again fails with `Error` |
+| `consume` | The n00b wrapper is marked closed after the call; using it again fails with the binding's error type |
 
 - **Handles close explicitly.** `close()` is the release. A handle that
   is collected while still open is reported in debug builds and released
@@ -291,21 +295,155 @@ func compress(source: Array[u8], level: i32) -> Array[u8] fail: zlib.Error
 
 - `load static` (default): symbols are linked; libraries come from the
   contract's `link`, as `-l`, `-framework` or `.lib` per platform.
-- `load dynamic`: the namespace gains
-  `func open(path: string?) -> nil fail: Error`, called as
-  `resharp.open(nil)`. With no path it searches
+- `load dynamic`: the module gains
+  `func open(path: string?) -> nil fail: Ffi_Error`, called as `open(nil)`
+  (`resharp.open(nil)` from another module); a module that has its own
+  `open` renames it with `name`. With no path it searches
   the binding's `search_path`s and the platform's default for the
   library name. Missing symbols are reported by `open`, except those
   marked `weak`, `since` or feature-gated, which fail when called.
 - `library "name" when os == linux` overrides the library file per
   platform, for both modes.
+- `link "c"` names the target's C library. It's never passed as `-l`, and
+  it needs no probe. On Linux, n00b programs link no libc: they're static
+  binaries started by the runtime, and the n00b pool allocator
+  (`sys.pool`) serves C's `malloc` family for shims. A contract whose C
+  code needs libc says `link "c"`, as does a contract for any system
+  library built against glibc. The program is then an ordinary libc
+  program, linked against the n00b runtime built for libc, and so is its
+  compile-time runner. On other platforms the C library is always linked,
+  so `link "c"` changes nothing.
+
+### 7.1 System calls
+
+A `syscall` declaration (`dsl.md` §7.7) is a minimal proxy for the
+kernel ABI, and its n00b binding is just as minimal. Names follow §2.
+None of the type choices in §3 apply, and neither does `Ffi_Error` (§4).
+
+**Signature.**
+
+| Contract | n00b |
+|---|---|
+| Integer parameter or result | The n00b integer of the same width and signedness |
+| `*T` parameter | `Ref[byte]` |
+| `?T` parameter | `Ref[byte]?` (`nil` passes 0) |
+| Pointer result | `uint`: the address. Memory the kernel hands back, such as an `mmap` region, isn't GC memory. |
+| The errno check | `fail: E`, carrying the positive errno. `E` is `i32` unless the binding chooses a type (below). `infallible` syscalls have no `fail:` channel. |
+
+**The errno type.** The binding's `error * -> "Type"` item (§4) chooses
+`E` for every syscall in the literal. For a syscall, `Type` must be an
+`open enum` or a distinct integer type (`type Errno = i32`). The generated
+code converts the errno with `cast[Type]`, with no constructor and no
+allocation. The type must hold every errno, not only the ones it names,
+because the kernel can return codes newer than any table. A closed enum
+doesn't qualify: converting an integer to one isn't a safe cast. Any
+other type is E0515. A literal whose `fn`s have error clauses needs a §4
+error type for those, so keep `syscall`s in a literal of their own.
+
+The `os` module defines `open enum Errno: i32`, with member values chosen
+per platform by `when`. Linux uses the same numbers on x86_64 and aarch64,
+but macOS doesn't (`EAGAIN` is 11 on Linux and 35 on macOS). Shims
+written over libSystem or Windows fail with that same type.
+
+So, with `error * -> "Errno"`,
+`syscall write(fd: c_int, buf: *u8, count: usize) -> isize` binds as
+
+```n00b
+func write(fd: i32, buf: Ref[byte], count: uint) -> int fail: Errno
+```
+
+- **GC memory versus addresses.** A `Ref[byte]` is a GC reference, so the
+  object stays alive through the call. Memory outside the GC heap, such as
+  the address `mmap` returned that `munmap` later takes, is declared
+  `usize` in the contract and passed as `uint`.
+- **No allocation.** The failure is a scalar errno, so a syscall binding
+  never allocates and is safe on paths that can't allocate.
+
+**Lowering.**
+
+- **No shim and no symbol.** The generated n00b function calls an extern
+  marked as a kernel entry with its number for the target. Instead of
+  emitting a call, the compiler emits the instruction inline as an LLVM
+  inline-asm expression. Its constraints come from the kernel-entry table
+  in `dsl.md` §7.7, and it is always marked as having side effects and
+  clobbering memory. Nothing is linked and no C is involved, so a Linux
+  build stays libc-free.
+- **The errno check is n00b code** in the generated function: the range
+  test on the raw register, `fail` with `-ret`, then the conversion to
+  the result type.
+- **Always available.** `load dynamic` doesn't apply: `open()` doesn't
+  check syscalls, and they never fail as unavailable.
+- **No stack map.** The instruction isn't a call, so it gets no stack map,
+  and a non-blocking syscall is invisible to the collector.
+- **Blocking syscalls.** For a syscall with the `blocking` effect, the
+  generated function enters the collector's blocking state just before the
+  instruction and leaves it just after: the same transitions
+  `__gc_enter_blocking` and `__gc_leave_blocking` make today. `Ref[byte]`
+  arguments live in the frame across both transitions, so their objects
+  stay reachable. While the thread is blocked, a collection can run on
+  another thread. The caller must therefore make sure that memory the
+  kernel writes during a blocking syscall holds no GC references (byte
+  buffers are the normal case). The binding can't check this, because the
+  pointee type is erased.
+- **Effects** map onto the compiler's effect summary as they do for a
+  `fn` (`compiler_ffi.c`, `native_effects`). `dsl.md` §7.7 limits a
+  syscall to effects that function maps, so a syscall never contributes
+  the "unknown" summary.
+
+**Platform structure.** Syscalls exist only on Linux targets, so a module
+that also builds elsewhere chooses an implementation per platform with
+`when`. Typed APIs, buffer handling, errno names and any retrying belong
+in that n00b code, not in the contract:
+
+```n00b
+when target_os() == "linux" {
+    open enum Errno: i32 {
+        EPERM       = 1,
+        ENOENT      = 2,
+        EINTR       = 4,
+        EAGAIN      = 11,
+        EWOULDBLOCK = 11,
+        # ...
+    }
+
+    [-
+        library kernel
+        platforms x86_64-linux-gnu, aarch64-linux-gnu
+
+        syscall write(fd: c_int, buf: *u8, count: usize) -> isize
+          number 1 when arch == x86_64
+          number 64 when arch == aarch64
+          effects output, blocking
+
+        binding {
+            error * -> "Errno"
+            # This module's own `write` is the API.
+            name write "syscall_write"
+        }
+    -]'ffi
+
+    func write(fd: i32, data: Array[u8]) -> int fail: Errno {
+        let count: uint = __array_length(data)
+        if count == 0 {
+            return 0
+        }
+        return syscall_write(fd, unsafe_cast[Ref[byte]] ref data[0], count)!
+    }
+}
+```
+
+On macOS and Windows the same function is written over libSystem or
+runtime helpers instead. Reading errno after a raw libSystem call is
+correct only if nothing between the call and the read can overwrite it.
+Whether n00b can place a collector safepoint there has not been checked
+yet.
 
 ---
 
 ## 8. Export
 
 ```
-const kv_api = [-
+[-
     use "kv.writ"
 
     binding export {
@@ -322,8 +460,8 @@ const kv_api = [-
 -]'ffi
 ```
 
-- An export literal's module is empty. Its name identifies the export,
-  for `--show-ffi` and for the package that builds the library.
+- An export literal declares nothing in its module. `--show-ffi` finds it
+  by its module and line, like an import literal.
 - Every declaration the contract provides needs a `provide` (E0509).
 - The n00b function's signature must be the one the import mapping
   (§2–§4) would generate for that declaration. Mismatches are reported
@@ -342,25 +480,24 @@ const kv_api = [-
 
 ## 9. Packages
 
-The module an `'ffi` literal declares follows n00b's package rules like
-any other module.
+A literal's bound names are members of the module it's in, so they follow
+n00b's package rules like the rest of that module.
 
-- **Inside the package**, a `public const` module is reached by importing
-  the file module that declares it. A module declared with
-  `import NAME from` has the visibility of any other import.
-- **Outside the package**, a consumer sees it only through the logical
-  view a `package` statement builds:
-  - `export zlib` puts the bound names directly into the package's
-    namespace;
-  - it takes no `as`, because a module export takes none;
-  - to keep the bound names under their own name, export the module from
-    a subpackage and export that subpackage.
+- **Inside the package**, they're reached by importing the module the
+  literal is in.
+- **Outside the package**, a consumer sees them only through the logical
+  view a `package` statement builds. A package with no manifest exports
+  what the module's default visibility makes public. A manifest decides
+  for itself: `export MODULE` exports all the module's public members,
+  the bound names among them, and `export MODULE.name` exports one.
+- To keep the bound names under their own name, put the literal in its
+  own module and export that from a subpackage.
 
 A package that is a C library's binding and nothing else keeps the
 literal in the package's `__init.n`:
 
 ```
-public const zlib = [-
+[-
     use <zlib.writ>
 
     binding {
@@ -368,10 +505,6 @@ public const zlib = [-
         name zlibVersion "version"
     }
 -]'ffi
-
-package zlib {
-    export zlib
-}
 ```
 
 A consumer imports the package and calls through its name:
@@ -383,10 +516,11 @@ let packed = zlib.compress(data, 6)
 ```
 
 A package that contains a binding alongside other code gives the binding
-a subpackage:
+its own module and a subpackage:
 
 ```
 import archive.formats
+import archive.zlib_binding
 
 package archive {
     export formats.open_archive
@@ -394,7 +528,7 @@ package archive {
 }
 
 package archive.zlib {
-    export formats.zlib
+    export zlib_binding
 }
 ```
 
@@ -414,15 +548,14 @@ file. The n00b compiler forwards them through `core_diagnostics_report_at`
 |---|---|
 | E0501–E0513 | As in `dsl.md` §9.3; E0510 covers a literal with more than one binding part |
 | E0514 | A literal whose contract part doesn't name exactly one `library`, or whose binding has a `module` item |
-
+| E0515 | An `error * -> "Type"` choice for a literal with `syscall`s, where `Type` isn't an `open enum` or a distinct integer type (§7.1) |
 The n00b compiler itself rejects:
 
-- static member access, `export` or `import … from` on a `Module` value
-  not known at compile time;
+- a literal that initializes a variable, or isn't a statement at module
+  level;
+- a bound name the module already declares, at the literal;
 - a user literal modifier named `ffi`, as it does for any user modifier
-  that would shadow a builtin one;
-- exporting the module with `as`, with the same diagnostic as any renamed
-  module export (N00BB-M0007).
+  that would shadow a builtin one.
 
 Errors in the generated n00b source (an `error` type without
 `from_ffi`, an exported function with the wrong signature) report at the
@@ -435,7 +568,7 @@ binding item that chose them.
 ### 11.1 zlib
 
 ```
-public const zlib = [-
+[-
     use <zlib.writ>
 
     binding {
@@ -453,7 +586,7 @@ public const zlib = [-
 ### 11.2 resharp
 
 ```
-public const resharp = [-
+[-
     use <resharp.writ>
 
     binding {
@@ -461,7 +594,6 @@ public const resharp = [-
         search_path "target/release"
         string Regex::is_match.input as string
         buffer Regex::find_all.input as borrow
-        error * -> "resharp.Error"
     }
 -]'ffi
 ```
@@ -470,11 +602,12 @@ Bound API:
 
 ```
 type Regex {}
-func regex_new(pattern: string) -> Regex fail: Error
+func open(path: string?) -> nil fail: Ffi_Error
+func regex_new(pattern: string) -> Regex fail: Ffi_Error
 func __init(modify self: Regex, pattern: string)
-func regex_with_options(pattern: string, options: Regex_Options) -> Regex fail: Error
-func is_match(self: Regex, input: string) -> bool fail: Error
-func find_all(self: Regex, input: Array[u8]) -> Array[Match] fail: Error
+func regex_with_options(pattern: string, options: Regex_Options) -> Regex fail: Ffi_Error
+func is_match(self: Regex, input: string) -> bool fail: Ffi_Error
+func find_all(self: Regex, input: Array[u8]) -> Array[Match] fail: Ffi_Error
 func close(modify self: Regex)
 ```
 
@@ -483,7 +616,7 @@ func close(modify self: Regex)
 Import:
 
 ```
-public const kv = [-
+[-
     use "kv.writ"
 
     binding {

@@ -1,4 +1,4 @@
-const zlib = [-
+[-
 use <zlib.writ>
 
 binding {
@@ -13,5 +13,5 @@ binding {
 -]'ffi
 
 package zlib_renamed {
-    export zlib as deflate
+    export Z_OK as ok
 }

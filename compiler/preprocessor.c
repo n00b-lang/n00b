@@ -1846,8 +1846,28 @@ remember_const(pp_context_t *ctx, parse_tree_t *decl)
     }
 }
 
+// The node names of the two `when` forms: in a function body, and at
+// module level, where the branches hold module declarations.
+typedef struct {
+    const char *body;
+    const char *else_when;
+    const char *otherwise;
+} when_form_t;
+
+static const when_form_t body_when = {"body", "else-when-clause",
+                                      "ctime-else"};
+static const when_form_t top_when = {"top-when-body", "top-else-when-clause",
+                                     "top-ctime-else"};
+
+static core_string_t
+when_name(const char *name)
+{
+    return core_string_borrow(name, strlen(name));
+}
+
 static parse_tree_t *
-selected_when_body(pp_context_t *ctx, parse_tree_t *when)
+selected_when_body(pp_context_t *ctx, parse_tree_t *when,
+                   const when_form_t *form)
 {
     parse_tree_t *condition = nullptr;
     parse_tree_t *body = nullptr;
@@ -1855,7 +1875,8 @@ selected_when_body(pp_context_t *ctx, parse_tree_t *when)
         parse_tree_t *child = core_tree_child(when, i);
         if (is_name(ctx->grammar, child, "expression") && !condition)
             condition = child;
-        else if (is_name(ctx->grammar, child, "body") && !body)
+        else if (node_named(ctx->grammar, child, when_name(form->body))
+                 && !body)
             body = child;
     }
     if (!condition || !body) return nullptr;
@@ -1868,11 +1889,12 @@ selected_when_body(pp_context_t *ctx, parse_tree_t *when)
     for (size_t i = 0; else_when_group
             && i < core_tree_num_children(else_when_group); i++) {
         parse_tree_t *clause = core_tree_child(else_when_group, i);
-        if (!is_name(ctx->grammar, clause, "else-when-clause")) continue;
+        if (!node_named(ctx->grammar, clause, when_name(form->else_when)))
+            continue;
         parse_tree_t *clause_condition = parse_tree_find_direct_child_by_nt_name(
             ctx->grammar, clause, CORE_STRING_STATIC("expression"));
         parse_tree_t *clause_body = parse_tree_find_direct_child_by_nt_name(
-            ctx->grammar, clause, CORE_STRING_STATIC("body"));
+            ctx->grammar, clause, when_name(form->body));
         if (!clause_condition || !clause_body) continue;
         if (!evaluate_when_condition(ctx, clause_condition, &selected))
             return nullptr;
@@ -1884,9 +1906,9 @@ selected_when_body(pp_context_t *ctx, parse_tree_t *when)
     parse_tree_t *else_clause = else_group
         && core_tree_num_children(else_group) == 1
             ? core_tree_child(else_group, 0) : nullptr;
-    if (is_name(ctx->grammar, else_clause, "ctime-else"))
+    if (node_named(ctx->grammar, else_clause, when_name(form->otherwise)))
         return parse_tree_find_direct_child_by_nt_name(ctx->grammar,
-            else_clause, CORE_STRING_STATIC("body"));
+            else_clause, when_name(form->body));
     return nullptr;
 }
 
@@ -2370,46 +2392,62 @@ import_node(pp_context_t *ctx, core_string_t name)
     return nullptr;
 }
 
+// A module literal declares its names into the module it's written in, so
+// it isn't a value: one that initializes a variable is an error.
 static bool
-module_literal_const(pp_context_t *ctx, parse_visit_t *visit, bool module_level)
+module_literal_assigned(pp_context_t *ctx, parse_visit_t *visit)
 {
-    parse_tree_t *decl = visit->node;
-    parse_tree_t *prefix = parse_tree_find_direct_child_by_nt_name(
-        ctx->grammar, decl, CORE_STRING_STATIC("declaration-prefix"));
-    core_string_t binding_kind = first_leaf_text(ctx,
-        parse_tree_find_direct_child_by_nt_name(ctx->grammar, prefix,
-            CORE_STRING_STATIC("binding-kind")));
     parse_tree_t *list = parse_tree_find_direct_child_by_nt_name(
-        ctx->grammar, decl, CORE_STRING_STATIC("sym-decl-list"));
-    size_t symbols = 0;
-    parse_tree_t *literal = nullptr;
-    core_string_t modifier = {0};
-    core_string_t name = {0};
+        ctx->grammar, visit->node, CORE_STRING_STATIC("sym-decl-list"));
     for (size_t i = 0; list && i < core_tree_num_children(list); i++) {
         parse_tree_t *sym = core_tree_child(list, i);
-        if (!is_name(ctx->grammar, sym, "sym-decl") || !core_tree_num_children(sym)) continue;
-        symbols++;
+        if (!is_name(ctx->grammar, sym, "sym-decl")) continue;
         for (size_t k = 1; k < core_tree_num_children(sym); k++) {
             parse_tree_t *child = core_tree_child(sym, k);
+            core_string_t modifier = {0};
             parse_tree_t *leaf = is_name(ctx->grammar, child, "expression")
                 ? module_literal_leaf(ctx, child, &modifier) : nullptr;
             if (leaf) {
-                literal = leaf;
-                name = leaf_text(ctx, core_tree_child(sym, 0));
+                pp_error(ctx, leaf, N00B_DIAG_MODULE_LITERAL_PLACEMENT,
+                    N00B_TEXT_A_MODULE_LITERAL_MUST_INITIALIZE,
+                    N00BB_NO_ARGS);
+                return true;
             }
         }
     }
+    return false;
+}
+
+// A module literal standing alone at module level. The compiler generates
+// the literal's declarations as a module of their own, imported under a
+// name no code can write, and puts its public declarations into this
+// module's scope (see inject_literal_declarations), as if declared here.
+static bool
+module_literal_statement(pp_context_t *ctx, parse_visit_t *visit,
+                         bool module_level)
+{
+    core_string_t modifier = {0};
+    parse_tree_t *expression = core_tree_num_children(visit->node)
+        ? core_tree_child(visit->node, 0) : nullptr;
+    parse_tree_t *literal = expression
+        ? module_literal_leaf(ctx, expression, &modifier) : nullptr;
     if (!literal) return false;
-    if (!core_string_eq(binding_kind, CORE_STRING_STATIC("const")) || symbols != 1) {
-        pp_error(ctx, literal, N00B_DIAG_MODULE_LITERAL_PLACEMENT,
-            N00B_TEXT_A_MODULE_LITERAL_MUST_INITIALIZE,
-            N00BB_NO_ARGS);
-        return true;
-    }
     if (!module_level) {
         pp_error(ctx, literal, N00B_DIAG_MODULE_LITERAL_PLACEMENT,
             N00B_TEXT_A_MODULE_LITERAL_MUST_INITIALIZE_2,
             N00BB_NO_ARGS);
+        return true;
+    }
+    parse_token_info_t *token = parse_node_token(literal);
+    core_buffer_t hidden = {0};
+    core_buffer_printf(&hidden, "__%.*s_literal_%zu",
+        (int)modifier.u8_bytes, modifier.data,
+        token ? (size_t)parse_token_line(token) : (size_t)0);
+    core_string_t name = store_semantic_string(tu_state(ctx->unit),
+        core_buffer_string(&hidden));
+    core_buffer_release(&hidden);
+    if (!name.data) {
+        pp_internal(ctx, literal, "could not name a module literal");
         return true;
     }
     if (!ctx->options->load_module_literal) {
@@ -2437,6 +2475,10 @@ module_literal_const(pp_context_t *ctx, parse_visit_t *visit, bool module_level)
         pp_internal(ctx, literal, "could not bind a generated module");
         return true;
     }
+    n00bb_tu_state_t *state = tu_state(ctx->unit);
+    for (size_t i = 0; state && i < state->import_aliases.len; i++)
+        if (core_string_eq(state->import_aliases.data[i].name, name))
+            state->import_aliases.data[i].injected = true;
     visit->replace = replacement;
     return true;
 }
@@ -2523,14 +2565,23 @@ preprocess_prepare(parse_visit_t *visit)
     while (walk->frames.len <= (size_t)visit->depth)
         core_list_push(walk->frames, ((pp_walk_frame_t){0}));
     pp_walk_frame_t *frame = &walk->frames.data[visit->depth];
-    if (frame->revisit_body == node) {
+    pp_walk_frame_t *parent = visit->depth > 0
+        ? &walk->frames.data[visit->depth - 1] : nullptr;
+    if (frame->revisit_body == node
+        && is_name(ctx->grammar, node, "top-when-body")) {
+        // A module-level `when` branch stays at module level: its imports,
+        // constants and module literals are the module's own.
+        frame->selected_import_body = parent ? parent->selected_import_body
+                                             : nullptr;
+        frame->current_body = parent ? parent->current_body : nullptr;
+        frame->revisit_body = nullptr;
+    }
+    else if (frame->revisit_body == node) {
         frame->selected_import_body = node;
         frame->current_body = node;
         frame->revisit_body = nullptr;
     }
     else {
-        pp_walk_frame_t *parent = visit->depth > 0
-            ? &walk->frames.data[visit->depth - 1] : nullptr;
         *frame = (pp_walk_frame_t){
             .selected_import_body = parent ? parent->selected_import_body : nullptr,
             .current_body = parent ? parent->current_body : nullptr,
@@ -2596,9 +2647,12 @@ preprocess_prepare(parse_visit_t *visit)
             return PARSE_VISIT_CONTINUE;
         }
     }
+    if (is_name(ctx->grammar, node, "expression-stmt")
+        && module_literal_statement(ctx, visit, !frame->current_body))
+        return ctx->failed ? PARSE_VISIT_ERROR : PARSE_VISIT_PRUNE;
     if (is_name(ctx->grammar, node, "variable-decl")) {
-        if (module_literal_const(ctx, visit, !frame->current_body))
-            return ctx->failed ? PARSE_VISIT_ERROR : PARSE_VISIT_PRUNE;
+        if (module_literal_assigned(ctx, visit))
+            return PARSE_VISIT_ERROR;
         remember_const(ctx, node);
         if (ctx->failed) return PARSE_VISIT_ERROR;
     }
@@ -2610,8 +2664,10 @@ preprocess_prepare(parse_visit_t *visit)
             N00BB_NO_ARGS);
         return PARSE_VISIT_ERROR;
     }
-    if (is_name(ctx->grammar, node, "when-stmt")) {
-        parse_tree_t *body = selected_when_body(ctx, node);
+    bool top_level_when = is_name(ctx->grammar, node, "top-when-stmt");
+    if (top_level_when || is_name(ctx->grammar, node, "when-stmt")) {
+        parse_tree_t *body = selected_when_body(ctx, node,
+            top_level_when ? &top_when : &body_when);
         if (ctx->failed) return PARSE_VISIT_ERROR;
         if (!body) {
             visit->remove = true;
@@ -3413,7 +3469,13 @@ preprocess_discover(parse_visit_t *visit)
                 .has_location = true,
             };
     }
-    if (is_name(ctx->grammar, node, "top-level-stmt")) {
+    // Statements inside a module-level `when` branch are processed when the
+    // chosen branch replaces the `when`; the others are discarded with it.
+    bool in_when_branch = false;
+    for (parse_tree_t *at = parse_tree_parent(node); at && !in_when_branch;
+         at = parse_tree_parent(at))
+        in_when_branch = is_name(ctx->grammar, at, "top-when-body");
+    if (is_name(ctx->grammar, node, "top-level-stmt") && !in_when_branch) {
         parse_tree_t *import = parse_tree_find_direct_child_by_nt_name(
             ctx->grammar, node, CORE_STRING_STATIC("import-stmt"));
         if (import) {

@@ -1,0 +1,6 @@
+# ffi_basics reads a contract by path; this module finds the same contract
+# on the search path. Its `LIMIT` would collide with that one's, so it gets a
+# module of its own, and ffi_basics reaches it as `basics_search.LIMIT`.
+[-
+use <limits.writ>
+-]'ffi

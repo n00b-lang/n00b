@@ -393,6 +393,16 @@ item_tree(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
     }
 }
 
+// A rest pack the binding presents as a `List`. C reads an array, so the
+// wrapper copies the list into one before the call.
+static bool
+list_pack(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
+{
+    const writ_plan_item_view_t *item = &plan->items[index];
+    return item->shape == WRIT_SHAPE_REST_PACK
+        && !writ_str_eq(writ_binding_slot_repr(g->b, fn, item->name), writ_cstr("array"));
+}
+
 static writ_str_t
 item_type(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
 {
@@ -410,6 +420,14 @@ static bool
 is_pointer(writ_str_t c_type)
 {
     return ends_with(c_type, "*");
+}
+
+// A pointer to void, whose elements have no size: `void *` or
+// `const void *`.
+static bool
+void_pointer(writ_str_t c_type)
+{
+    return ends_with(c_type, "void *") || ends_with(c_type, "void*");
 }
 
 static const writ_type_view_t *
@@ -506,7 +524,9 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
                 param.kind = PARAM_VALUE;
                 param.text = writ_str_eq(item_type(g, fn, plan, index), writ_cstr("string"));
                 param.n00b_type = ref_of(g, param.text ? array_of(g, named(g, writ_cstr("u8")))
-                                                       : item_tree(g, fn, plan, index));
+                                            : list_pack(g, fn, plan, index)
+                                                ? array_of(g, named(g, scalar_type(g, item->type)))
+                                                : item_tree(g, fn, plan, index));
                 param.borrow = item->after_call == WRIT_AFTER_BORROWED
                             && writ_str_eq(writ_binding_slot_repr(g->b, fn, item->name), writ_cstr("borrow"));
             } else if (writ_c_by_pointer(&g->c, item) || record_target(item)) {
@@ -916,13 +936,21 @@ emit_c_shim(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
             writ_emit_line(emit, "size_t %.*s_length = 0;", S(p->name));
             writ_emit_line(emit, "const void *%.*s_borrowed = n00b_ffi_borrow((void *)%.*s, &%.*s_length, 0);",
                            S(p->name), S(p->name), S(p->name));
-            writ_emit_line(emit, "uint8_t *%.*s_data = malloc(%.*s_length + 1);", S(p->name), S(p->name));
-            writ_emit_open(emit, "if (%.*s_data && %.*s_length)", S(p->name), S(p->name));
-            writ_emit_line(emit, "memcpy(%.*s_data, %.*s_borrowed, %.*s_length);", S(p->name), S(p->name),
+            // The borrowed length counts elements; the copy is in bytes,
+            // with a terminating zero byte for text.
+            if (void_pointer(p->c_type)) {
+                writ_emit_line(emit, "size_t %.*s_bytes = %.*s_length;", S(p->name), S(p->name));
+            } else {
+                writ_emit_line(emit, "size_t %.*s_bytes = %.*s_length * sizeof(*(%.*s)0);", S(p->name),
+                               S(p->name), S(p->c_type));
+            }
+            writ_emit_line(emit, "uint8_t *%.*s_data = malloc(%.*s_bytes + 1);", S(p->name), S(p->name));
+            writ_emit_open(emit, "if (%.*s_data && %.*s_bytes)", S(p->name), S(p->name));
+            writ_emit_line(emit, "memcpy(%.*s_data, %.*s_borrowed, %.*s_bytes);", S(p->name), S(p->name),
                            S(p->name));
             writ_emit_close(emit, nullptr);
             writ_emit_open(emit, "if (%.*s_data)", S(p->name));
-            writ_emit_line(emit, "%.*s_data[%.*s_length] = 0;", S(p->name), S(p->name));
+            writ_emit_line(emit, "%.*s_data[%.*s_bytes] = 0;", S(p->name), S(p->name));
             writ_emit_close(emit, nullptr);
             writ_emit_line(emit, "n00b_ffi_release((void *)%.*s);", S(p->name));
             copies++;
@@ -1180,7 +1208,7 @@ emit_n00b_array_takers(const n00b_t *g, writ_emit_t *emit)
         add_copy_helper(g, take, writ_str_format(g->session, "%.*s_take_array_%.*s", S(g->shim), S(name)), params, 3,
                         named(g, writ_cstr("nil")));
         writ_emit_line(emit, "");
-        writ_emit_open(emit, "func __ffi_take_array_%.*s(data: uint, length: uint) -> %.*s", S(name), S(array));
+        writ_emit_open(emit, "private func __ffi_take_array_%.*s(data: uint, length: uint) -> %.*s", S(name), S(array));
         writ_emit_line(emit, "var items: %.*s = new[%.*s](cast[int]length)", S(array), S(array));
         writ_emit_line(emit, "%.*s(data, length, ref items)", S(take));
         writ_emit_line(emit, "return items");
@@ -1246,7 +1274,7 @@ static void
 emit_optional_taker(writ_emit_t *emit, writ_str_t name, writ_str_t type)
 {
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func __ffi_take_optional_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s?", S(name), S(type));
+    writ_emit_open(emit, "private func __ffi_take_optional_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s?", S(name), S(type));
     writ_emit_line(emit, "let value: Ffi_Bytes = bytes.__value");
     writ_emit_open(emit, "if value.data == 0");
     writ_emit_line(emit, "return nil");
@@ -1262,7 +1290,7 @@ emit_n00b_record_taker(const n00b_t *g, writ_emit_t *emit, const writ_record_vie
     writ_str_t type = writ_binding_type(g->b, record->name);
     const writ_n00b_type_t *take_params[WRIT_C_MAX_ARITY + 1] = {ref_of(g, named(g, writ_cstr("Ffi_Bytes")))};
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func __ffi_take_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s", S(record->name), S(type));
+    writ_emit_open(emit, "private func __ffi_take_%.*s(bytes: Ref[Ffi_Bytes]) -> %.*s", S(record->name), S(type));
     writ_emit_line(emit, "let value: Ffi_Bytes = bytes.__value");
     writ_emit_text(emit, "var lifted: %.*s = (", S(type));
     for (size_t f = 0; f < count; f++) {
@@ -1334,7 +1362,7 @@ emit_cstr_n00b_helpers(const n00b_t *g, writ_emit_t *emit)
     add_copy_helper(g, writ_cstr("__ffi_cstr_copy"), writ_str_format(g->session, "%.*s_cstr_copy", S(g->shim)),
                     copy_params, 2, named(g, writ_cstr("nil")));
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool");
+    writ_emit_open(emit, "private func __ffi_copy_cstr(address: uint, text: Ref[string]) -> bool");
     writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int]__ffi_cstr_length(address))");
     writ_emit_line(emit, "__ffi_cstr_copy(address, ref bytes)");
     writ_emit_line(emit, "return __string_from_utf8(ref bytes, text)");
@@ -1727,7 +1755,7 @@ static void
 emit_table(writ_emit_t *emit, writ_str_t table, writ_str_t element)
 {
     writ_emit_line(emit,
-                   "var %.*s: Ffi_Table[%.*s] = (slots = new[Array[%.*s?]](0), owners = new[Array[uint]](0), "
+                   "private var %.*s: Ffi_Table[%.*s] = (slots = new[Array[%.*s?]](0), owners = new[Array[uint]](0), "
                    "next_free = new[Array[uint]](0), count = 0, free_head = 0)",
                    S(table), S(element), S(element));
 }
@@ -1757,23 +1785,23 @@ emit_callback_invoker(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *
     writ_str_t entry = writ_str_format(g->session, "%.*s_Callback", S(name));
     writ_str_t table = callback_table(g, name, "callbacks");
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "record %.*s", S(entry));
+    writ_emit_open(emit, "private record %.*s", S(entry));
     writ_emit_line(emit, "value: %.*s", S(name));
     writ_emit_line(emit, "once: bool");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
     emit_table(emit, table, entry);
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func %.*s(value: %.*s, once: bool) -> u64", S(callback_table(g, name, "register")), S(name));
+    writ_emit_open(emit, "private func %.*s(value: %.*s, once: bool) -> u64", S(callback_table(g, name, "register")), S(name));
     writ_emit_line(emit, "let entry: %.*s = (value = value, once = once)", S(entry));
     writ_emit_line(emit, "return __ffi_table_insert(%.*s, entry)", S(table));
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func %.*s(handle: u64)", S(callback_table(g, name, "free")));
+    writ_emit_open(emit, "private func %.*s(handle: u64)", S(callback_table(g, name, "free")));
     writ_emit_line(emit, "__ffi_table_free(%.*s, handle)", S(table));
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func %.*s(handle: u64, arguments: uint, returned: uint) -> i32",
+    writ_emit_open(emit, "private func %.*s(handle: u64, arguments: uint, returned: uint) -> i32",
                    S(callback_table(g, name, "dispatch")));
     writ_emit_line(emit, "let entry = __ffi_table_get(%.*s, handle)", S(table));
     writ_emit_open(emit, "if entry == nil");
@@ -1819,7 +1847,7 @@ emit_callback_type(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *cal
     bool packed = callback->slots_count > 1;
     if (packed) {
         writ_emit_line(emit, "");
-        writ_emit_open(emit, "record %.*s_Arguments layout(c)", S(name));
+        writ_emit_open(emit, "private record %.*s_Arguments layout(c)", S(name));
         for (size_t i = 0; i < callback->slots_count; i++) {
             if (i != receiver) {
                 writ_emit_line(emit, "%.*s: %.*s",
@@ -1932,7 +1960,7 @@ emit_handle_type(const n00b_t *g, writ_emit_t *emit, const writ_handle_view_t *h
     writ_str_t raw = raw_of(g, handle->type, writ_cstr("self"));
     writ_str_t initial = typed ? writ_str_format(g->session, "unsafe_cast[%.*s] raw", S(typed->raw_type))
                                : writ_cstr("raw");
-    writ_emit_open(emit, "record %.*s_Cell", S(type));
+    writ_emit_open(emit, "private record %.*s_Cell", S(type));
     writ_emit_line(emit, "raw: %.*s", S(typed ? typed->raw_type : writ_cstr("uint")));
     for (size_t s = 0; s < source_count; s++) {
         fields[s] = keep_field(g, sources[s]);
@@ -1980,11 +2008,6 @@ static void
 emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
 {
     const writ_model_t *model = g->model;
-    writ_emit_open(emit, "record Error");
-    writ_emit_line(emit, "code: %.*s", S(code_type(g)));
-    writ_emit_line(emit, "text: string?");
-    writ_emit_line(emit, "fn: string");
-    writ_emit_close(emit, nullptr);
     for (size_t i = 0; handles && i < writ_model_handle_count(model); i++) {
         emit_handle_type(g, emit, writ_model_handle_at(model, i));
     }
@@ -2029,7 +2052,11 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
             emit_flagset(g, emit, view);
             continue;
         }
-        writ_emit_open(emit, "enum %.*s", S(writ_binding_type(g->b, view->name)));
+        // A C enum can hold values the contract doesn't list unless the
+        // contract says `closed`, and its storage is the C base type.
+        writ_str_t base = view->base ? scalar_type(g, view->base) : (writ_str_t){0};
+        writ_emit_open(emit, "%senum %.*s%s%.*s", view->closed ? "" : "open ",
+                       S(writ_binding_type(g->b, view->name)), base.length ? ": " : "", S(base));
         for (size_t k = 0; k < view->items_count; k++) {
             writ_str_t item = writ_profile_name(g->profile, WRIT_NAMING_CONST, view->items[k].name);
             writ_emit_line(emit, "%.*s = %lld%s", S(item), (long long)view->items[k].value,
@@ -2050,7 +2077,11 @@ emit_types(const n00b_t *g, writ_emit_t *emit, bool handles)
             || (!constant->text.length && (kind == WRIT_TYPE_POINTER || kind == WRIT_TYPE_CALLBACK))) {
             continue;
         }
-        writ_str_t name = writ_profile_name(g->profile, WRIT_NAMING_CONST, constant->name);
+        bool hidden = false;
+        writ_str_t name = writ_binding_const(g->b, constant->name, &hidden);
+        if (hidden) {
+            continue;
+        }
         mark(g, emit, constant->declared_at, constant->name);
         if (constant->text.length) {
             writ_emit_line(emit, "const %.*s: string = \"%.*s\"", S(name), S(constant->text));
@@ -2140,8 +2171,11 @@ receiver_type(const wrapper_t *w, uint32_t item)
 static writ_str_t
 error_type(const wrapper_t *w)
 {
+    // The default is the builtin `Ffi_Error`, shared by every literal, since
+    // a literal's declarations join the module it's written in.
+    // A binding's own `error * -> "Type"` is used as written.
     writ_str_t error = w->bound.error;
-    return writ_str_eq(error, writ_cstr("Error")) || ends_with(error, ".Error") ? writ_cstr("Error") : error;
+    return writ_str_eq(error, writ_cstr("Error")) ? writ_cstr("Ffi_Error") : error;
 }
 
 static bool
@@ -2317,9 +2351,9 @@ static void
 emit_fail(const wrapper_t *w, writ_emit_t *emit, writ_str_t code, writ_str_t text)
 {
     writ_str_t type = error_type(w);
-    if (writ_str_eq(type, writ_cstr("Error"))) {
-        writ_emit_line(emit, "let failure: Error = (code = %.*s, text = %.*s, fn = \"%.*s\")", S(code), S(text),
-                       S(w->plan->fn->contract_name));
+    if (writ_str_eq(type, writ_cstr("Ffi_Error"))) {
+        writ_emit_line(emit, "let failure: Ffi_Error = (code = %.*s, text = %.*s, fn = \"%.*s\")", S(code),
+                       S(text), S(w->plan->fn->contract_name));
         writ_emit_line(emit, "fail failure");
         return;
     }
@@ -2622,8 +2656,10 @@ emit_wrapper_params(const wrapper_t *w, writ_emit_t *emit, uint32_t keywords, bo
         bool modify = (i == w->receiver && consumes(w, i))
                    || (plan->items[i].role == WRIT_ROLE_INPUT_OUTPUT && record_target(&plan->items[i]));
         writ_str_t type = i == keywords ? options_type_name(w) : receiver_type(w, i);
-        writ_emit_text(emit, "%s%s%.*s: %.*s", *first ? "" : ", ", modify ? "modify " : "", S(local_name(w, i)),
-                       S(type));
+        // A rest pack is only read: its elements are copied to C.
+        bool view = !modify && plan->items[i].shape == WRIT_SHAPE_REST_PACK;
+        writ_emit_text(emit, "%s%s%.*s: %.*s", *first ? "" : ", ", modify ? "modify " : view ? "view " : "",
+                       S(local_name(w, i)), S(type));
         *first = false;
     }
     if (keywords != WRIT_PLAN_NONE && !options_record) {
@@ -2888,13 +2924,13 @@ contract_has_event(const n00b_t *g, writ_str_t id)
 static void
 emit_event(writ_emit_t *emit, writ_str_t id, writ_str_t keys)
 {
-    writ_emit_line(emit, "__ffi_event(\"%.*s\", [%.*s]'array, __os_thread_id())", S(id), S(keys));
+    writ_emit_line(emit, "__ffi_event(\"%.*s\", [%.*s]'array, __ffi_thread_id())", S(id), S(keys));
 }
 
 static void
 emit_event_key(writ_emit_t *emit, writ_str_t id, writ_str_t key)
 {
-    writ_emit_line(emit, "__ffi_event_key(\"%.*s\", %.*s, __os_thread_id())", S(id), S(key));
+    writ_emit_line(emit, "__ffi_event_key(\"%.*s\", %.*s, __ffi_thread_id())", S(id), S(key));
 }
 
 static void
@@ -2990,7 +3026,7 @@ emit_holds(const wrapper_t *w, writ_emit_t *emit, const core_list_t(shim_param_t
         writ_str_t list = writ_str_from_buffer(w->g->session, keys);
         writ_emit_line(emit, "__ffi_hold(%.*s_group, cast[u64](%.*s), ref %.*s, \"%.*s\", [%.*s]'array, %s)", S(name),
                        S(token), S(release), S(event_id(w->g, w->plan->fn, event)), S(list),
-                       event->on_thread ? "__os_thread_id()" : "0");
+                       event->on_thread ? "__ffi_thread_id()" : "0");
     }
 }
 
@@ -3088,6 +3124,15 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
         if (p->kind == PARAM_VALUE && p->text) {
             writ_emit_line(emit, "var %.*s_value: Array[u8] = __text_byte_array(%.*s)", S(local_name(&w, p->item)),
                            S(local_name(&w, p->item)));
+        } else if (p->kind == PARAM_VALUE && p->item != w.receiver && list_pack(g, fn, plan, p->item)) {
+            writ_str_t local = local_name(&w, p->item);
+            writ_emit_line(emit, "var %.*s_value = new[%.*s](%.*s.len())", S(local),
+                           S(type_text(g, p->n00b_type->item)), S(local));
+            writ_emit_line(emit, "var %.*s_at: uint = 0", S(local));
+            writ_emit_open(emit, "for %.*s_item in %.*s", S(local), S(local));
+            writ_emit_line(emit, "%.*s_value[%.*s_at] = %.*s_item", S(local), S(local), S(local));
+            writ_emit_line(emit, "%.*s_at += 1", S(local));
+            writ_emit_close(emit, nullptr);
         } else if (p->kind == PARAM_VALUE && p->item != w.receiver) {
             writ_emit_line(emit, "var %.*s_value = %.*s", S(local_name(&w, p->item)), S(local_name(&w, p->item)));
         } else if (p->kind == PARAM_OUT && p->storage) {
@@ -3225,6 +3270,21 @@ emit_wrapper(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view
     }
 }
 
+static writ_str_t raw_type(const n00b_t *g, const writ_type_view_t *type);
+
+// A raw binding passes a pointer argument as `Ref[byte]` (`Ref[byte]?` when
+// nullable): the GC sees the reference, so the object stays alive through
+// the call. Results stay addresses (`uint`), since C memory isn't GC memory.
+static const writ_n00b_type_t *
+raw_param_type(const n00b_t *g, const writ_type_view_t *type)
+{
+    if (type && type->kind == WRIT_TYPE_POINTER) {
+        const writ_n00b_type_t *ref = ref_of(g, named(g, writ_cstr("byte")));
+        return type->nullable ? option_of(g, ref) : ref;
+    }
+    return named(g, raw_type(g, type));
+}
+
 static writ_str_t
 raw_type(const n00b_t *g, const writ_type_view_t *type)
 {
@@ -3247,7 +3307,7 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
 {
     const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (fn->slots_count ? fn->slots_count : 1));
     for (size_t s = 0; s < fn->slots_count; s++) {
-        types[s] = named(g, raw_type(g, fn->slots[s].type));
+        types[s] = raw_param_type(g, fn->slots[s].type);
     }
     writ_str_t result = raw_type(g, fn->result ? fn->result->type : nullptr);
     add_extern_with(g, writ_str_format(g->session, "__%.*s_raw", S(bound.name)), fn->link_symbol, types,
@@ -3331,11 +3391,158 @@ emit_policy_dispatch(const n00b_t *g, writ_emit_t *emit, size_t fn)
     writ_emit_close(emit, nullptr);
 }
 
+// A `syscall` slot as n00b sees it (ffi-spec.md §7.1): integers keep their
+// width, pointer arguments are `Ref[byte]` (`Ref[byte]?` when nullable),
+// and a pointer result is the address as `uint`.
+static const writ_n00b_type_t *
+syscall_type(const n00b_t *g, const writ_type_view_t *type, bool result)
+{
+    if (type && type->kind == WRIT_TYPE_POINTER) {
+        if (result) {
+            return named(g, writ_cstr("uint"));
+        }
+        const writ_n00b_type_t *ref = ref_of(g, named(g, writ_cstr("byte")));
+        return type->nullable ? option_of(g, ref) : ref;
+    }
+    return named(g, scalar_type(g, type));
+}
+
+// Emits a `syscall` as an extern whose symbol `n00b.syscall.<number>` the
+// n00b compiler lowers to the kernel-entry instruction, and a wrapper that
+// does the in-band errno check, the result conversion and, for `blocking`
+// calls, the collector's blocking transitions.
+static void
+emit_syscall(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn)
+{
+    bool hidden = false;
+    writ_str_t name = writ_binding_syscall(g->b, fn->contract_name, &hidden);
+    if (!fn->has_syscall_number || hidden) {
+        return;
+    }
+    const writ_n00b_type_t **types = writ_alloc(g->session, sizeof(*types) * (fn->slots_count ? fn->slots_count : 1));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        types[s] = syscall_type(g, fn->slots[s].type, false);
+    }
+    bool has_result = fn->result != nullptr;
+    writ_str_t entry = writ_str_format(g->session, "__%.*s_syscall", S(name));
+    writ_str_t symbol = writ_str_format(g->session, "n00b.syscall.%lld", (long long)fn->syscall_number);
+    add_extern_with(g, entry, symbol, types, fn->slots_count, named(g, writ_cstr(has_result ? "int" : "nil")), fn);
+
+    writ_span_t error_at = fn->declared_at;
+    writ_str_t error = writ_binding_error_for(g->b, fn->contract_name, &error_at);
+    if (!error.length) {
+        error = writ_cstr("i32");
+    }
+    bool fails = has_result && !fn->infallible;
+    bool blocking = (fn->effects & WRIT_EFFECTS_BLOCKING) != 0;
+    bool pointer_result = has_result && fn->result->type && fn->result->type->kind == WRIT_TYPE_POINTER;
+    writ_str_t result = has_result ? type_text(g, syscall_type(g, fn->result->type, true)) : writ_cstr("nil");
+
+    if (fails) {
+        // The errno conversion is its own function so the compiler can tell
+        // it apart: a type that can't take every errno is reported as the
+        // wrong failure type, at the binding's `error` item.
+        writ_emit_line(emit, "");
+        writ_emit_line(emit, "private func __%.*s_syscall_errno(code: int) -> %.*s {", S(name), S(error));
+        mark(g, emit, error_at, fn->contract_name);
+        writ_emit_line(emit, "    return cast[%.*s](code)", S(error));
+        writ_emit_line(emit, "}");
+    }
+    writ_emit_line(emit, "");
+    mark(g, emit, fn->declared_at, fn->contract_name);
+    writ_emit_text(emit, "func %.*s(", S(name));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        writ_str_t param = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
+        writ_emit_text(emit, "%s%.*s: %.*s", s ? ", " : "", S(param), S(type_text(g, types[s])));
+    }
+    writ_emit_text(emit, ")");
+    if (has_result) {
+        writ_emit_text(emit, " -> %.*s", S(result));
+    }
+    if (fails) {
+        writ_emit_text(emit, " fail: %.*s", S(error));
+    }
+    writ_emit_line(emit, " {");
+    if (blocking) {
+        writ_emit_line(emit, "    __gc_enter_blocking()");
+    }
+    writ_emit_text(emit, "    %s%.*s(", has_result ? "let ret: int = " : "", S(entry));
+    for (size_t s = 0; s < fn->slots_count; s++) {
+        writ_str_t param = writ_profile_name(g->profile, WRIT_NAMING_FIELD, fn->slots[s].name);
+        writ_emit_text(emit, "%s%.*s", s ? ", " : "", S(param));
+    }
+    writ_emit_line(emit, ")");
+    if (blocking) {
+        writ_emit_line(emit, "    __gc_leave_blocking()");
+    }
+    if (fails) {
+        writ_emit_line(emit, "    if ret < 0 and ret >= -4095 {");
+        writ_emit_line(emit, "        fail __%.*s_syscall_errno(-ret)", S(name));
+        writ_emit_line(emit, "    }");
+    }
+    if (pointer_result) {
+        writ_emit_line(emit, "    return unsafe_cast[uint](ret)");
+    } else if (has_result && (writ_str_eq(result, writ_cstr("int")) || writ_str_eq(result, writ_cstr("i64")))) {
+        writ_emit_line(emit, "    return ret");
+    } else if (has_result) {
+        writ_emit_line(emit, "    return cast[%.*s](ret)", S(result));
+    }
+    writ_emit_line(emit, "}");
+}
+
+// Emits `import module` unless `seen` already holds it.
+static void
+emit_import_once(const n00b_t *g, writ_emit_t *emit, core_list_t(writ_sym_t) *seen, writ_sym_t module)
+{
+    for (size_t s = 0; s < seen->len; s++) {
+        if (seen->data[s] == module) {
+            return;
+        }
+    }
+    core_list_push(*seen, module);
+    writ_str_t name = writ_sym_str(g->session, module);
+    writ_emit_line(emit, "import %.*s", S(name));
+}
+
+// A syscall's error type may live in another module (`errs.Errno`); the
+// generated module imports each such module once.
+static void
+import_error_module(const n00b_t *g, writ_emit_t *emit, core_list_t(writ_sym_t) *seen, writ_str_t error)
+{
+    size_t dot = error.length;
+    while (dot && error.data[dot - 1] != '.') {
+        dot--;
+    }
+    if (dot >= 2) {
+        emit_import_once(g, emit, seen, writ_intern_str(g->session, (writ_str_t){error.data, dot - 1}));
+    }
+}
+
+// The generated module imports the modules of the error types its binding
+// names, so `error * -> "pkg.Type"` resolves.
+static void
+emit_error_imports(const n00b_t *g, writ_emit_t *emit)
+{
+    core_list_t(writ_sym_t) seen = core_list_new(writ_sym_t);
+    for (size_t i = 0; i < writ_model_syscall_count(g->model); i++) {
+        import_error_module(g, emit, &seen,
+                            writ_binding_error_for(g->b, writ_model_syscall_at(g->model, i)->contract_name, nullptr));
+    }
+    for (size_t i = 0; i < writ_model_fn_count(g->model); i++) {
+        if (bound_fn(g, i).bound) {
+            import_error_module(g, emit, &seen,
+                                writ_binding_error_for(g->b, writ_model_fn_at(g->model, i)->contract_name, nullptr));
+        }
+    }
+    core_list_free(seen);
+}
+
 static writ_str_t
 n00b_text(const n00b_t *g)
 {
     writ_emit_t emit;
     writ_emit_init(&emit);
+    emit_error_imports(g, &emit);
     emit_types(g, &emit, true);
     size_t count = writ_model_fn_count(g->model);
     for (size_t i = 0; i < count; i++) {
@@ -3347,6 +3554,9 @@ n00b_text(const n00b_t *g)
                 emit_extern(g, &emit, i, bound_plan(g, i, k));
             }
         }
+    }
+    for (size_t i = 0; i < writ_model_syscall_count(g->model); i++) {
+        emit_syscall(g, &emit, writ_model_syscall_at(g->model, i));
     }
     bool takes_bytes = false;
     for (size_t i = 0; i < g->externs->len; i++) {
@@ -3361,7 +3571,7 @@ n00b_text(const n00b_t *g)
         add_copy_helper(g, writ_cstr("__ffi_kept_release"), writ_str_format(g->session, "%.*s_kept_free", S(g->shim)),
                         kept_params, 1, named(g, writ_cstr("nil")));
         writ_emit_line(&emit, "");
-        writ_emit_line(&emit, "func __ffi_kept_free(kept: u64) {");
+        writ_emit_line(&emit, "private func __ffi_kept_free(kept: u64) {");
         writ_emit_line(&emit, "    __ffi_kept_release(kept)");
         writ_emit_line(&emit, "}");
     }
@@ -3370,7 +3580,7 @@ n00b_text(const n00b_t *g)
         add_copy_helper(g, writ_cstr("__ffi_bytes_take"), writ_str_format(g->session, "%.*s_take_bytes", S(g->shim)),
                         take_params, 2, named(g, writ_cstr("nil")));
         writ_emit_line(&emit, "");
-        writ_emit_line(&emit, "func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {");
+        writ_emit_line(&emit, "private func __ffi_take_bytes(bytes: Ref[Ffi_Bytes]) -> Array[u8] {");
         writ_emit_line(&emit, "    let value: Ffi_Bytes = bytes.__value");
         writ_emit_line(&emit, "    var copied: Array[u8] = new[Array[u8]](cast[int]value.length)");
         writ_emit_line(&emit, "    __ffi_bytes_take(bytes, ref copied)");
@@ -3382,14 +3592,14 @@ n00b_text(const n00b_t *g)
     }
     if (takes_bytes && takes_text(g)) {
         writ_emit_line(&emit, "");
-        writ_emit_open(&emit, "func __ffi_take_text(bytes: Ref[Ffi_Bytes], text: Ref[string]) -> bool");
+        writ_emit_open(&emit, "private func __ffi_take_text(bytes: Ref[Ffi_Bytes], text: Ref[string]) -> bool");
         writ_emit_line(&emit, "var copied = __ffi_take_bytes(bytes)");
         writ_emit_line(&emit, "return __string_from_utf8(ref copied, text)");
         writ_emit_close(&emit, nullptr);
     }
     if (takes_bytes && takes_detail_text(g)) {
         writ_emit_line(&emit, "");
-        writ_emit_open(&emit, "func __ffi_take_string(bytes: Ref[Ffi_Bytes]) -> string?");
+        writ_emit_open(&emit, "private func __ffi_take_string(bytes: Ref[Ffi_Bytes]) -> string?");
         writ_emit_line(&emit, "var text: string = \"\"");
         writ_emit_open(&emit, "if __ffi_take_text(bytes, ref text)");
         writ_emit_line(&emit, "return text");
@@ -3548,14 +3758,14 @@ emit_export_thread_checks(const n00b_t *g, writ_emit_t *emit, const wrapper_t *w
 {
     const writ_plan_view_t *plan = w->plan;
     if (plan->fn->thread == WRIT_THREAD_MAIN) {
-        writ_emit_line(emit, "assert __os_thread_is_main() != 0");
+        writ_emit_line(emit, "assert __ffi_on_main_thread()");
     }
     for (uint32_t i = 0; plan->fn->thread == WRIT_THREAD_UNSTATED && i < plan->items_count; i++) {
         const writ_handle_view_t *handle = exposed_input(w, i) && is_handle(&plan->items[i])
                                                ? writ_model_handle_named(g->model, plan->items[i].type->name)
                                                : nullptr;
         if (handle && handle->thread_rule == WRIT_THREAD_RULE_AFFINE) {
-            writ_emit_line(emit, "assert __ffi_table_owner(__handles_%.*s, cast[u64]%.*s) == __os_thread_id()",
+            writ_emit_line(emit, "__ffi_check_owner(__handles_%.*s, cast[u64]%.*s)",
                            S(handle->name), S(export_slot_named(g, plan, i, WRIT_PART_WHOLE)));
         }
     }
@@ -3749,13 +3959,13 @@ emit_export_handles(const n00b_t *g, writ_emit_t *emit)
         writ_emit_line(emit, "");
         emit_table(emit, writ_str_format(g->session, "__handles_%.*s", S(handle->name)), implementation);
         writ_emit_line(emit, "");
-        writ_emit_open(emit, "func __export_%.*s(handle: uint) -> %.*s?", S(handle->name), S(implementation));
+        writ_emit_open(emit, "private func __export_%.*s(handle: uint) -> %.*s?", S(handle->name), S(implementation));
         writ_emit_line(emit, "return __ffi_table_get(__handles_%.*s, cast[u64]handle)", S(handle->name));
         writ_emit_close(emit, nullptr);
         writ_emit_line(emit, "");
-        writ_emit_open(emit, "func __export_release_%.*s(handle: uint)", S(handle->name));
+        writ_emit_open(emit, "private func __export_release_%.*s(handle: uint)", S(handle->name));
         if (handle->thread_rule == WRIT_THREAD_RULE_AFFINE) {
-            writ_emit_line(emit, "assert __ffi_table_owner(__handles_%.*s, cast[u64]handle) == __os_thread_id()",
+            writ_emit_line(emit, "__ffi_check_owner(__handles_%.*s, cast[u64]handle)",
                            S(handle->name));
         }
         writ_emit_line(emit, "__export_drop(%zu * 4294967296 + handle)", i + 1);
@@ -3771,16 +3981,16 @@ emit_export_holds(const n00b_t *g, writ_emit_t *emit)
     add_extern(g, writ_cstr("__export_address"), writ_str_format(g->session, "%.*s_export_address", S(g->shim)),
                address, 1, named(g, writ_cstr("uint")));
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "record Export_Hold");
+    writ_emit_open(emit, "private record Export_Hold");
     writ_emit_line(emit, "private handle: uint");
     writ_emit_line(emit, "private items: List[Array[u8]]");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_line(emit, "var __export_holds: List[Export_Hold] = new[List[Export_Hold]]()");
-    writ_emit_line(emit, "var __export_texts: List[Array[u8]] = new[List[Array[u8]]]()");
-    writ_emit_line(emit, "var __export_text_addresses: List[uint] = new[List[uint]]()");
+    writ_emit_line(emit, "private var __export_holds: List[Export_Hold] = new[List[Export_Hold]]()");
+    writ_emit_line(emit, "private var __export_texts: List[Array[u8]] = new[List[Array[u8]]]()");
+    writ_emit_line(emit, "private var __export_text_addresses: List[uint] = new[List[uint]]()");
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func __export_drop(handle: uint)");
+    writ_emit_open(emit, "private func __export_drop(handle: uint)");
     writ_emit_line(emit, "var kept: List[Export_Hold] = new[List[Export_Hold]]()");
     writ_emit_open(emit, "for hold in __export_holds");
     writ_emit_open(emit, "if hold.handle != handle");
@@ -3790,13 +4000,13 @@ emit_export_holds(const n00b_t *g, writ_emit_t *emit)
     writ_emit_line(emit, "__export_holds = kept");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func __export_hold(handle: uint, items: List[Array[u8]])");
+    writ_emit_open(emit, "private func __export_hold(handle: uint, items: List[Array[u8]])");
     writ_emit_line(emit, "__export_drop(handle)");
     writ_emit_line(emit, "let hold: Export_Hold = (handle = handle, items = items)");
     writ_emit_line(emit, "__export_holds.append(hold)");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func __export_same(left: Array[u8], right: Array[u8]) -> bool");
+    writ_emit_open(emit, "private func __export_same(left: Array[u8], right: Array[u8]) -> bool");
     writ_emit_open(emit, "if left.len() != right.len()");
     writ_emit_line(emit, "return false");
     writ_emit_close(emit, nullptr);
@@ -3810,7 +4020,7 @@ emit_export_holds(const n00b_t *g, writ_emit_t *emit)
     writ_emit_line(emit, "return true");
     writ_emit_close(emit, nullptr);
     writ_emit_line(emit, "");
-    writ_emit_open(emit, "func __export_text(text: string) -> uint");
+    writ_emit_open(emit, "private func __export_text(text: string) -> uint");
     writ_emit_line(emit, "let source: Array[u8] = __text_byte_array(text)");
     writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int](source.len()) + 1)");
     writ_emit_line(emit, "var k: uint = 0");
@@ -3844,7 +4054,7 @@ emit_export_record_keep(const n00b_t *g, writ_emit_t *emit, const writ_record_vi
     add_extern(g, fill, writ_str_format(g->session, "%.*s_export_%.*s_fill", S(g->shim), S(record->name)), params,
                count + 1, named(g, writ_cstr("nil")));
     writ_emit_line(emit, "");
-    writ_emit_text(emit, "func __export_keep_%.*s(handle: uint", S(record->name));
+    writ_emit_text(emit, "private func __export_keep_%.*s(handle: uint", S(record->name));
     for (size_t f = 0; f < count; f++) {
         writ_emit_text(emit, ", %.*s: Array[%.*s]", S(writ_profile_name(g->profile, WRIT_NAMING_FIELD, fields[f]->name)),
                        S(scalar_type(g, fields[f]->type->target)));
@@ -3906,16 +4116,8 @@ emit_export_imports(const n00b_t *g, writ_emit_t *emit)
         if (!dot) {
             continue;
         }
-        writ_sym_t module = writ_intern_str(g->session, (writ_str_t){target.data, (size_t)(dot - target.data)});
-        bool known = false;
-        for (size_t s = 0; s < seen.len && !known; s++) {
-            known = seen.data[s] == module;
-        }
-        if (!known) {
-            core_list_push(seen, module);
-            writ_str_t name = writ_sym_str(g->session, module);
-            writ_emit_line(emit, "import %.*s", S(name));
-        }
+        emit_import_once(g, emit, &seen,
+                         writ_intern_str(g->session, (writ_str_t){target.data, (size_t)(dot - target.data)}));
     }
     core_list_free(seen);
     writ_emit_line(emit, "");
@@ -4337,7 +4539,7 @@ writ_gen_n00b(const writ_gen_n00b_request_t *request, const writ_output_t *outpu
     writ_str_t module = request->module_name.length ? request->module_name : writ_model_library(model)->name;
     core_list_t(writ_n00b_extern_t) extern_list = core_list_new(writ_n00b_extern_t);
     n00b_t g = {.b = b, .model = model, .profile = writ_binding_profile(b), .session = session, .shim = prefix,
-                .c = {model, prefix, writ_name_case(session, prefix, WRIT_CASE_UPPER), true},
+                .c = {model, prefix, writ_c_upper_prefix(session, prefix), true},
                 .map = core_buffer_empty(), .type_namespace = request->type_namespace, .externs = &extern_list};
     writ_on_session_free(session, map_release, g.map);
     core_list_t(plan_patch_t) patches = core_list_new(plan_patch_t);

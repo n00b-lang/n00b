@@ -536,7 +536,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     "could not cache a top-level statement node");
                 return;
             }
-            core_list_push(state->module_top_level_statements, statement);
+            // A module-level `when` leaves its chosen branch in place; the
+            // branch's own top-level statements are recorded one by one.
+            if (!NT_IS(grammar, statement, "top-when-body"))
+                core_list_push(state->module_top_level_statements, statement);
         }
         if (NT_IS(grammar, node, "mark-annotation"))
             core_list_push(state->mark_annotations, node);
@@ -1074,7 +1077,8 @@ declare_nominal_types(parse_grammar_t *grammar, th_ctx *types,
         for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
              symbol = symbol->next_in_scope) {
             if (symbol->type || symbol->kind != PARSE_SYM_TYPEDEF
-                || !symbol->decl_node) continue;
+                || !symbol->decl_node || n00bb_injected_member(symbol))
+                continue;
             core_buffer_t qualified = {0};
             append_module_type_name(unit, symbol->name, &qualified);
             if (qualified.data)
@@ -1253,6 +1257,125 @@ order_component_bodies(core_list_t(core_translation_unit_ptr_t) *members)
     core_list_free(ordered);
 }
 
+// Puts one namespace of a literal's generated declarations into `unit`'s
+// module scope: each public one becomes a member of the module, standing
+// for the generated declaration.
+static bool
+inject_literal_namespace(core_translation_unit_t *unit, parse_symtab_t *symtab,
+                         parse_scope_t *into, parse_scope_t *from,
+                         bool from_interface,
+                         const n00bb_import_alias_t *alias)
+{
+    bool ok = true;
+    for (parse_sym_entry_t *symbol = from ? from->first_in_scope : nullptr;
+         symbol; symbol = symbol->next_in_scope) {
+        parse_sym_entry_t *origin = canonical_symbol(symbol);
+        // Hooks (`__init`, `__finalize`, ...) are found through their type,
+        // never by name in a module, so they don't become members.
+        bool hook = core_string_starts_with(symbol->name,
+                                            CORE_STRING_STATIC("__"));
+        // A cached module's declarations come from its interface, which
+        // has no syntax: every one of them is declared.
+        if (!origin || (!symbol->decl_node && !from_interface)
+            || symbol_is_private(origin)
+            || symbol->kind == PARSE_SYM_MODULE || hook) continue;
+        parse_sym_entry_t *existing = parse_symtab_lookup_in(into,
+                                                             symbol->name);
+        if (existing && canonical_symbol(existing) == origin) continue;
+        if (existing) {
+            // Reported at the literal that brings the name in: the other
+            // declaration may be in another literal's generated module.
+            core_diag_location_t at = alias->literal_line
+                ? (core_diag_location_t){
+                      .line = alias->literal_line,
+                      .column = alias->literal_column,
+                      .end_line = alias->literal_line,
+                      .end_column = alias->literal_column,
+                      .has_location = true,
+                  }
+                : link_source_location(existing->decl_node);
+            n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                N00B_DIAG_DUPLICATE_DECLARATION, at,
+                N00B_TEXT_IS_ALREADY_DECLARED_IN_THIS,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+            ok = false;
+            continue;
+        }
+        core_string_t ns = symbol->scope && symbol->scope->ns
+            ? symbol->scope->ns->ns_name : CORE_STRING_STATIC("");
+        parse_symtab_enter_scope_all(symtab, into);
+        parse_sym_entry_t *binding = parse_symtab_add(symtab, ns,
+            symbol->name, symbol->kind, symbol->decl_node);
+        parse_symtab_leave_scope_all(symtab);
+        if (!binding || !parse_sym_set_binding_origin(binding, origin)
+            || !parse_sym_set_binding(binding,
+                   CORE_STRING_STATIC(N00BB_INJECTED_MEMBER_KEY), origin))
+            return false;
+        // A declaration from an interface has no syntax: its export origin
+        // is what marks it a declaration, for the member too.
+        void *export_origin = parse_sym_binding(origin,
+            CORE_STRING_STATIC("n00bb.export-origin"));
+        if (export_origin && !parse_sym_set_binding(binding,
+                CORE_STRING_STATIC("n00bb.export-origin"), export_origin))
+            return false;
+        copy_export_binding_facts(binding, origin);
+    }
+    return ok;
+}
+
+// A module literal's generated module can share a component with the module
+// it's written in, so its declarations may get their types only after the
+// members standing for them are made: copy the facts again once they have.
+static void
+refresh_literal_members(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state || !state->annotations) return;
+    for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+         scope; scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope)
+            if (n00bb_injected_member(symbol))
+                copy_export_binding_facts(symbol, canonical_symbol(symbol));
+}
+
+// A module literal's declarations are members of the module it's written
+// in (see module_literal_statement in preprocessor.c): the bound API is
+// named like the module's own declarations, and is exported, or not, by
+// the same rules.
+static bool
+inject_literal_declarations(core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    parse_scope_t *scope = symtab ? module_scope(state) : nullptr;
+    bool ok = true;
+    for (size_t i = 0; scope && i < state->import_aliases.len; i++) {
+        n00bb_import_alias_t *alias = &state->import_aliases.data[i];
+        n00bb_tu_state_t *generated = alias->injected
+            ? tu_state(alias->unit) : nullptr;
+        parse_symtab_t *generated_symtab = generated && generated->annotations
+            ? generated->annotations->symtab : nullptr;
+        parse_scope_t *values = generated_symtab ? module_scope(generated)
+                                                 : nullptr;
+        if (!values) continue;
+        bool from_interface = generated->interface_module;
+        // The module may declare no types of its own yet.
+        parse_symtab_ns(symtab, CORE_STRING_STATIC("type"));
+        ok = inject_literal_namespace(unit, symtab, scope, values,
+                                      from_interface, alias) && ok;
+        ok = inject_literal_namespace(unit, symtab,
+            parse_symtab_scope_in_namespace(symtab, scope,
+                                            CORE_STRING_STATIC("type")),
+            parse_symtab_scope_in_namespace(generated_symtab, values,
+                                            CORE_STRING_STATIC("type")),
+            from_interface, alias)
+            && ok;
+    }
+    return ok;
+}
+
 static bool
 annotate_component(parse_grammar_t *grammar, th_ctx *types,
                    core_list_t(core_translation_unit_ptr_t) *members,
@@ -1262,21 +1385,37 @@ annotate_component(parse_grammar_t *grammar, th_ctx *types,
         if (!declare_unit(grammar, types, members->data[i])) return false;
     if (!bind_imported_module_scopes(members)) return false;
     for (size_t i = 0; i < members->len; i++)
+        if (!inject_literal_declarations(members->data[i])) return false;
+    for (size_t i = 0; i < members->len; i++)
         declare_nominal_types(grammar, types, members->data[i]);
+    for (size_t i = 0; i < members->len; i++)
+        refresh_literal_members(members->data[i]);
     for (size_t i = 0; i < members->len; i++) {
         core_translation_unit_t *unit = members->data[i];
         if (!annotate_type_declarations(grammar, types, unit,
                 n00bb_tu_parsed_tree(tu_state(unit)))) return false;
     }
+    for (size_t i = 0; i < members->len; i++)
+        refresh_literal_members(members->data[i]);
     if (members->len > 1 && !prepopulate_component_package_interfaces(
             members->data, members->len)) return false;
     if (members->len > 1) order_component_bodies(members);
     for (size_t i = 0; i < members->len; i++) {
         if (!annotate_unit_bodies(grammar, types, members->data[i], finish,
                                   context)) return false;
+        for (size_t j = 0; members->len > 1 && j < members->len; j++)
+            refresh_literal_members(members->data[j]);
         if (members->len > 1 && !refresh_component_export_bindings(
                 members->data, members->len)) return false;
     }
+    return true;
+}
+
+bool
+n00bb_inject_interface_literals(core_translation_unit_t *unit)
+{
+    if (!inject_literal_declarations(unit)) return false;
+    refresh_literal_members(unit);
     return true;
 }
 

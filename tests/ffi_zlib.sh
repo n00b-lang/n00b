@@ -25,15 +25,15 @@ builds_and_runs() {
 case $part in
 const)
     builds_and_runs zlib_const
-    nm "$tmp/zlib_const" | grep -q 'zlib\.__ffi___init_zlib\.uncompress$'
-    if nm "$tmp/zlib_const" | grep -q 'zlib\.__ffi___init_zlib\.compress$'; then
+    nm "$tmp/zlib_const" | grep -q 'zlib\.__ffi___init___ffi_literal_1\.uncompress$'
+    if nm "$tmp/zlib_const" | grep -q 'zlib\.__ffi___init___ffi_literal_1\.compress$'; then
         echo "zlib_const shipped the build-time compress call" >&2
         exit 1
     fi
     ;;
 litmod)
     builds_and_runs zlib_litmod
-    if nm "$tmp/zlib_litmod" | grep -qE 'n00b_ffi_[0-9]+_| U _?(crc32|compress2|inflate|deflate)$'; then
+    if nm "$tmp/zlib_litmod" | grep -qE 'n00b_ffi_zlib_| U _?(crc32|compress2|inflate|deflate)$'; then
         echo "zlib_litmod linked zlib without using it at run time" >&2
         exit 1
     fi
@@ -46,7 +46,7 @@ modules)
     fi
 
     "$compiler" build --contract-dir "$contract_dir" \
-        --show-ffi zlib.__init.zlib zlib_const.n \
+        --show-ffi zlib.__init:1 zlib_const.n \
         >"$tmp/show-ffi" 2>"$tmp/show-ffi.log" || {
         cat "$tmp/show-ffi.log" >&2
         exit 1
@@ -61,14 +61,13 @@ modules)
     test ! -s "$tmp/show-ffi.log"
     test ! -e zlib_const
 
-    if "$compiler" check --contract-dir "$contract_dir" zlib_renamed_export.n \
+    # A manifest re-exports a literal's names like any other member, and
+    # two literals' failures share `Ffi_Error`, so one handler takes both.
+    if ! "$compiler" check --contract-dir "$contract_dir" zlib_renamed_export.n \
         zlib_mixed_try.n >"$tmp/renamed.log" 2>&1; then
-        echo "zlib_renamed_export unexpectedly checked" >&2
+        cat "$tmp/renamed.log" >&2
         exit 1
     fi
-    grep -q 'N00B-M0016' "$tmp/renamed.log"
-    grep -q 'N00B-T1008: this can fail with `zlib\.Error`, but other failures reaching the same handler are `archive\.zlib\.Error`' \
-        "$tmp/renamed.log"
     if grep -q 'N00B-I' "$tmp/renamed.log"; then
         cat "$tmp/renamed.log" >&2
         exit 1
@@ -79,12 +78,12 @@ modules)
         cat "$tmp/library.log" >&2
         exit 1
     }
-    shim=n00b_ffi_0
+    shim=n00b_ffi_zlib___ffi___init___ffi_literal_1
     "$register_object" "$tmp/zlib.n00bm" '>=2' \
-        --ffi-module zlib.__ffi___init_zlib \
-        Error@1 Stream@7 Deflate_Outcome Inflate_Outcome@108 Z_OK@37 Z_BUF_ERROR \
-        ZLIB_VERSION deflate deflate_end inflate inflate_end compress@157 \
-        compress_bound uncompress@178 adler32 crc32 deflate_init inflate_init \
+        --ffi-module zlib.__ffi___init___ffi_literal_1 \
+        Stream@2 Deflate_Outcome Inflate_Outcome@103 Z_OK@32 Z_BUF_ERROR \
+        ZLIB_VERSION deflate deflate_end inflate inflate_end compress@152 \
+        compress_bound uncompress@173 adler32 crc32 deflate_init inflate_init \
         __ffi_take_bytes \
         "__deflate=${shim}_n00b_deflate" "__deflateEnd=${shim}_n00b_deflateEnd" \
         "__inflate=${shim}_n00b_inflate" "__inflateEnd=${shim}_n00b_inflateEnd" \

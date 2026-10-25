@@ -1370,6 +1370,33 @@ n00bb_rewrite_method_call(n00bb_rewrite_t *rewrite, ir_instr_t *in,
                : !current && !ir_instr_set_call_signature(in,
                                                           target->signature))
         return false;
+    // The call's result was typed from a copy of the callee's signature.
+    // A callee with no written return type learns it from its body, which
+    // may be typed after this call, so the copy can still hold a variable.
+    // The final signature has the answer.
+    th_type *settled = ir_instr_call_signature(in);
+    th_type *body_ret = th_kind_of(th_resolve(function->type)) == TH_FUNCTION
+        ? th_resolve(th_func_ret(function->type)) : nullptr;
+    // A cached callee was typed by an earlier build: its kept body has it.
+    ir_func_t *cached = body_ret && !th_is_closed(types, body_ret)
+        ? n00bb_cached_body(function) : nullptr;
+    if (cached && cached != function
+        && th_kind_of(th_resolve(cached->type)) == TH_FUNCTION)
+        body_ret = th_resolve(th_func_ret(cached->type));
+    th_type *call_ret = settled && th_kind_of(th_resolve(settled))
+        == TH_FUNCTION ? th_resolve(th_func_ret(settled)) : nullptr;
+    if (call_ret && th_kind_of(call_ret) == TH_VAR && body_ret
+        && th_is_closed(types, body_ret))
+        (void)th_match(call_ret, body_ret);
+    if (in->dest && settled && th_is_closed(types, settled)
+        && !th_is_closed(types, in->dest->type)) {
+        th_type *outcome = ir_call_outcome_type(rewrite->context.module,
+                                                settled);
+        if (outcome && th_matches(in->dest->type, outcome))
+            (void)th_match(in->dest->type, outcome);
+        else if (th_matches(in->dest->type, th_func_ret(settled)))
+            (void)th_match(in->dest->type, th_func_ret(settled));
+    }
     if (!n00bb_place_named_arguments(in, function)) return false;
     for (uint32_t p = in->n_operands - 1; th_kind_of(signature) == TH_FUNCTION
          && p < th_func_nparams(signature); p++) {

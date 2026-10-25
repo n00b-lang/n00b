@@ -456,6 +456,17 @@ typedef struct {
     core_string_t name;
     core_translation_unit_t *unit;
     bool renamed;
+    // The module a module literal generated: its public declarations are
+    // members of the importing module.
+    bool injected;
+    // For a module literal: its modifier, the byte span of its text in the
+    // importing module's source and where that text starts, so a cached
+    // build can generate it again.
+    core_string_t literal_modifier;
+    size_t literal_start;
+    size_t literal_end;
+    uint32_t literal_line;
+    uint32_t literal_column;
 } n00bb_import_alias_t;
 core_list_decl(n00bb_import_alias_t);
 
@@ -678,9 +689,15 @@ parse_tree_t *n00bb_string_where_buffer_site(parse_grammar_t *grammar,
                                              parse_tree_t *node,
                                              th_type *expected);
 void cache_type_syntax_node(parse_grammar_t *grammar, parse_tree_t *node);
+// Declares a cached module's module literals' names into it, once its
+// interface is restored; its generated modules' interfaces come first.
+bool n00bb_inject_interface_literals(core_translation_unit_t *unit);
 bool register_native_declarations(parse_annot_result_t *annotations,
                                   th_ctx *types,
                                   n00bb_native_declarations_t natives);
+// Notes what the analyses know about natives: pure, or their declared
+// effects.
+void n00bb_note_native_axioms(n00bb_native_declarations_t natives);
 bool register_builtin_symbols(parse_annot_result_t *annotations,
                               n00bb_tu_state_t *state, th_ctx *types);
 bool n00bb_register_operator_function(th_env *environment, th_ctx *types,

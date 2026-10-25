@@ -1,4 +1,4 @@
-const sorter = [-
+[-
 library sorter
 
 callback Compare = fn(a: *void, b: *void) -> c_int
@@ -14,14 +14,14 @@ binding {
 -]'ffi
 
 func descending(a: uint, b: uint) -> i32 {
-    return cast[i32](sorter.byte_at_raw(b)) - cast[i32]sorter.byte_at_raw(a)
+    return cast[i32](byte_at_raw(b)) - cast[i32]byte_at_raw(a)
 }
 
 let items: Array[u8] = [3, 9, 1, 7]
 try {
-    require sorter.nth_sorted(items, 0)! == 9
-    require sorter.nth_sorted(items, 1)! == 7
-    require sorter.nth_sorted(items, 3)! == 1
+    require nth_sorted(items, 0)! == 9
+    require nth_sorted(items, 1)! == 7
+    require nth_sorted(items, 3)! == 1
 } fail(failure) {
     require false
 }

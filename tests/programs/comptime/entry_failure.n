@@ -1,5 +1,7 @@
+import sys.os
+
 if comptime() {
-    __os_exit(3)
+    sys.os.exit(3)
 }
 func start() {
 }

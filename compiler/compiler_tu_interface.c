@@ -324,13 +324,32 @@ materialize_interface_callback(n00bb_interface_context_t *loader,
 
 
 
+enum { ENUM_VALUES_HEADER = 16 };
+
+// Reads the storage an enum's interface records: whether it is open, and
+// its declared or chosen storage width and signedness.
+static bool
+decode_interface_enum_storage(const uint8_t *data, size_t size,
+                              n00bb_enum_range_t *range)
+{
+    if (!data || size < ENUM_VALUES_HEADER || memcmp(data, "N0E2", 4))
+        return false;
+    if (data[4] > 1 || data[5] > 1 || data[6] > 1 || data[7]) return false;
+    range->is_open = data[4] != 0;
+    range->explicit_storage = data[5] != 0;
+    range->storage_signed = data[6] != 0;
+    range->storage_bits = read_u32_le(data + 8);
+    return range->storage_bits != 0;
+}
+
 static bool
 decode_interface_enum_value(const uint8_t *data, size_t size,
                             core_string_t member_name,
                             n00bb_enum_value_t *value)
 {
-    if (!data || size < 8 || memcmp(data, "N0EV", 4)) return false;
-    size_t offset = 4;
+    if (!data || size < ENUM_VALUES_HEADER || memcmp(data, "N0E2", 4))
+        return false;
+    size_t offset = 12;
     uint32_t count = read_u32_le(data + offset);
     offset += 4;
     bool found = false;
@@ -1569,8 +1588,10 @@ materialize_interface_type_members(n00bb_interface_context_t *loader,
     core_free(order);
     core_free(positions);
     if (ok && declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_ENUM)
-        ok = n00bb_bind_enum_range(state->types, &state->semantic_values,
-                             type_symbol, range);
+        ok = decode_interface_enum_storage(enum_values, enum_values_size,
+                                           &range)
+            && n00bb_bind_enum_range(state->types, &state->semantic_values,
+                                     type_symbol, range);
     const n00bb_flagset_info_t *flagset_info = ok
         && declaration->type_shape_kind == TH_ENV_TYPE_SHAPE_BITSET
         ? parse_sym_binding(type_symbol,
@@ -2271,6 +2292,10 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
                          || !restore_interface_litmod_aliases(loader, unit))) {
             restored = false;
             failure = CORE_STRING_STATIC("interface module has malformed literal modifiers");
+        }
+        if (restored && !n00bb_inject_interface_literals(unit)) {
+            restored = false;
+            failure = CORE_STRING_STATIC("its module literals' names could not be declared");
         }
         if (!restored) {
             core_diagnostics_t *diagnostics =

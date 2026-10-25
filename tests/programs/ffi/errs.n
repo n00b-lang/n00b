@@ -1,0 +1,10 @@
+record Zip_Error {
+    code: i64
+    text: string?
+    fn: string
+}
+func __init(modify self: Zip_Error, code: i64, text: string?, fn: string) {
+    self.code = code
+    self.text = text
+    self.fn = fn
+}

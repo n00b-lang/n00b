@@ -1,4 +1,4 @@
-const c = [-
+[-
 library c
 const LIMIT: c_int = 40
 binding {

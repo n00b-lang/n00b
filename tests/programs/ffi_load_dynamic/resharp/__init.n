@@ -1,4 +1,4 @@
-const resharp = [-
+[-
 use <resharp.writ>
 
 binding {
@@ -7,5 +7,5 @@ binding {
 -]'ffi
 
 package resharp {
-    export resharp
+    export regex_new
 }

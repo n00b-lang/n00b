@@ -328,6 +328,9 @@ record_item(recorder_t *recorder, unit_facts_t *facts,
             unused_kind_t kind)
 {
     n00bb_link_analysis_t *analysis = recorder->analysis;
+    // A module literal's member stands for a declaration of the literal's
+    // generated module, whose uses are tracked there.
+    if (n00bb_injected_member(symbol)) return;
     n00bb_tu_state_t *state = tu_state(unit);
     core_string_t module = unit->module.identifier;
     uint8_t flags = symbol_is_private(symbol) ? UNUSED_PRIVATE : 0;

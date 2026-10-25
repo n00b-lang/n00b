@@ -1,0 +1,18 @@
+import errs
+[-
+library c
+link "c"
+header <stdlib.h>
+fn getenv(name: *cstr) -> ?cstr static
+binding {
+    error * -> "errs.Zip_Error"
+}
+-]'ffi
+
+func start() {
+    try {
+        _ = getenv("HOME")!
+    } fail(e) {
+        let z: errs.Zip_Error = e
+    }
+}

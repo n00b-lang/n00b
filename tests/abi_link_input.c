@@ -247,6 +247,14 @@ select_fixture_graph(abi_fixture_graph_t *graph, const core_string_t *paths,
             while (imported < count
                 && !core_string_eq(graph->objects[imported].name,
                     view_text(name))) imported++;
+            if (imported == count) {
+                core_string_t missing = view_text(name);
+                fprintf(stderr, "fixture graph: %.*s requires %.*s, "
+                    "which is not among the fixture objects\n",
+                    (int)graph->objects[i].name.u8_bytes,
+                    graph->objects[i].name.data,
+                    (int)missing.u8_bytes, missing.data);
+            }
             assert(imported < count
                 && core_translation_unit_add_import(
                     &graph->objects[i].unit,

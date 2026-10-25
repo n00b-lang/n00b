@@ -97,6 +97,11 @@ typedef struct {
     core_list_t(core_string_t) search_paths;
     bool                       exports;
     bool                       used;
+    // The module the literal generated.
+    core_string_t              module;
+    // The contract files the literal reads, so a cache can tell when it
+    // would generate something else.
+    core_list_t(core_string_t) inputs;
 } ffi_literal_t;
 
 core_list_decl(ffi_literal_t);
@@ -115,9 +120,11 @@ struct n00bb_ffi {
     core_list_t(core_string_t)     transports;
     core_list_t(core_string_t)     frameworks;
     core_list_t(core_string_t)     search_paths;
-    size_t                         literals;
     core_list_t(ffi_literal_t)     records;
     core_list_t(size_t)            selected_shims;
+    // The writ platform contracts are resolved for: the build target, or
+    // the host when the target has no writ platform.
+    const char                    *platform;
 };
 
 static writ_str_t
@@ -186,6 +193,27 @@ n00bb_ffi_new(void)
 }
 
 void
+n00bb_ffi_set_target(n00bb_ffi_t *ffi, core_string_t profile)
+{
+    static const struct {
+        const char *profile;
+        const char *platform;
+    } platforms[] = {
+        {"x86_64-linux", "x86_64-linux-gnu"},
+        {"arm64-linux", "aarch64-linux-gnu"},
+        {"arm64-macos", "aarch64-apple-darwin"},
+        {"x86_64-windows", "x86_64-w64-windows-gnu"},
+    };
+    if (!ffi) return;
+    ffi->platform = nullptr;
+    for (size_t i = 0; i < sizeof(platforms) / sizeof(platforms[0]); i++) {
+        if (core_string_eq(profile, core_string_borrow(platforms[i].profile,
+                                                       strlen(platforms[i].profile))))
+            ffi->platform = platforms[i].platform;
+    }
+}
+
+void
 n00bb_ffi_free(n00bb_ffi_t *ffi)
 {
     if (!ffi) {
@@ -209,11 +237,13 @@ n00bb_ffi_free(n00bb_ffi_t *ffi)
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
         core_free(record->prefix.data);
+        core_free(record->module.data);
         core_list_free(record->shims);
         free_strings(&record->archives);
         free_strings(&record->libraries);
         free_strings(&record->frameworks);
         free_strings(&record->search_paths);
+        free_strings(&record->inputs);
     }
     core_list_free(ffi->records);
     core_list_free(ffi->selected_shims);
@@ -428,28 +458,16 @@ n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count)
     if (!ffi) {
         return;
     }
-    core_dict_t by_prefix;
-    core_dict_init_string(&by_prefix);
+    // A literal's shims are named with its prefix and an underscore.
     for (size_t i = 0; i < ffi->records.len; i++) {
         ffi_literal_t *record = &ffi->records.data[i];
         record->used = record->exports;
-        core_dict_put(&by_prefix, &record->prefix, record);
+        core_string_t prefix = record->prefix;
+        for (size_t j = 0; !record->used && j < count; j++)
+            record->used = symbols[j].u8_bytes > prefix.u8_bytes
+                && core_string_starts_with(symbols[j], prefix)
+                && symbols[j].data[prefix.u8_bytes] == '_';
     }
-    core_string_t stem = CORE_STRING_STATIC("n00b_ffi_");
-    for (size_t j = 0; j < count; j++) {
-        core_string_t symbol = symbols[j];
-        if (!core_string_starts_with(symbol, stem)) continue;
-        size_t end = stem.u8_bytes;
-        while (end < symbol.u8_bytes && symbol.data[end] >= '0'
-               && symbol.data[end] <= '9') end++;
-        if (end == stem.u8_bytes || end >= symbol.u8_bytes
-            || symbol.data[end] != '_') continue;
-        core_string_t prefix = core_string_slice(symbol, 0, end);
-        bool found = false;
-        ffi_literal_t *record = core_dict_get(&by_prefix, &prefix, &found);
-        if (found) record->used = true;
-    }
-    core_dict_free(&by_prefix);
     refresh_selection(ffi);
 }
 
@@ -490,6 +508,10 @@ native_effects(writ_effects_t declared)
         {WRIT_EFFECTS_INPUT, IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_INPUT},
         {WRIT_EFFECTS_OUTPUT, IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_OUTPUT},
         {WRIT_EFFECTS_CALLBACKS, IR_SUMMARY_CALLS_CALLBACKS},
+        {WRIT_EFFECTS_ENV, IR_SUMMARY_READS_ENV},
+        {WRIT_EFFECTS_CLOCK, IR_SUMMARY_READS_CLOCK},
+        {WRIT_EFFECTS_RANDOM, IR_SUMMARY_READS_RANDOM},
+        {WRIT_EFFECTS_THREADS, IR_SUMMARY_STARTS_THREADS},
     };
     uint32_t flags = 0;
     for (size_t i = 0; i < sizeof(effects) / sizeof(effects[0]); i++)
@@ -636,7 +658,17 @@ run_logged(char **arguments, core_string_t log)
 static bool
 library_found(n00bb_ffi_t *ffi, core_string_t library)
 {
-    if (contains(&ffi->found_libraries, library) || contains(&ffi->transports, library)) {
+    // Every target has a C library.
+    if (core_string_eq(library, CORE_STRING_STATIC("c"))
+        || contains(&ffi->found_libraries, library) || contains(&ffi->transports, library)) {
+        return true;
+    }
+    // The probe links with the host's linker, which can't see another
+    // target's libraries; when cross-compiling, the program's own link
+    // reports a missing one.
+    writ_str_t host = writ_platform_host_triple();
+    if (ffi->platform && (strlen(ffi->platform) != host.length
+                          || memcmp(ffi->platform, host.data, host.length) != 0)) {
         return true;
     }
     core_string_t directory = temporary_directory("n00bb-probe.");
@@ -1047,7 +1079,11 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
     const writ_binding_t *binding = nullptr;
     writ_str_t language = {"n00b", 4};
     bool ok = writ_unit_add_embedded(literal, language, where, as_writ(text), nullptr) == WRIT_OK
-           && writ_platform_from_triple(ffi->session, writ_platform_host_triple(), &platform) == WRIT_OK
+           && writ_platform_from_triple(ffi->session,
+                                        ffi->platform
+                                            ? as_writ(core_string_borrow(ffi->platform, strlen(ffi->platform)))
+                                            : writ_platform_host_triple(),
+                                        &platform) == WRIT_OK
            && writ_resolve(literal, platform, &model) == WRIT_OK;
     if (ok) {
         writ_bind_request_t request = {.struct_size = sizeof(request), .profiles = ffi->profiles,
@@ -1065,12 +1101,26 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         .libraries    = core_list_new(core_string_t),
         .frameworks   = core_list_new(core_string_t),
         .search_paths = core_list_new(core_string_t),
+        .inputs       = core_list_new(core_string_t),
         .used         = true,
     };
+    for (size_t i = 0; i < writ_unit_file_count(literal); i++) {
+        push_unique(&record.inputs, writ_unit_file_at(literal, i));
+    }
     if (ok) {
+        // Named for the module the literal generates, so its C symbols are
+        // the same in every build, whatever else is compiled with it: a
+        // cached or separately compiled object still finds its shims.
         core_buffer_t prefix = {0};
-        core_buffer_printf(&prefix, "n00b_ffi_%zu", ffi->literals++);
+        core_buffer_puts(&prefix, "n00b_ffi_");
+        for (size_t c = 0; c < module.u8_bytes; c++) {
+            char ch = module.data[c];
+            bool plain = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '_';
+            core_buffer_putc(&prefix, plain ? ch : '_');
+        }
         record.prefix = core_string_dup(core_buffer_string(&prefix));
+        record.module = core_string_dup(module);
         writ_gen_n00b_request_t request = {.struct_size = sizeof(request), .binding = binding,
                                            .module_name = as_writ(name),
                                            .shim_prefix = (writ_str_t){prefix.data, prefix.byte_len},
@@ -1119,9 +1169,31 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         free_strings(&record.libraries);
         free_strings(&record.frameworks);
         free_strings(&record.search_paths);
+        free_strings(&record.inputs);
     }
     forward_diagnostics(ffi, unit, first, origin);
     return ok;
+}
+
+void
+n00bb_ffi_inputs(void *context, core_string_t module, core_buffer_t *out)
+{
+    n00bb_ffi_t *ffi = context;
+    if (!ffi || !out) {
+        return;
+    }
+    pthread_mutex_lock(&ffi->lock);
+    for (size_t i = 0; i < ffi->records.len; i++) {
+        const ffi_literal_t *record = &ffi->records.data[i];
+        if (!core_string_eq(record->module, module)) {
+            continue;
+        }
+        for (size_t j = 0; j < record->inputs.len; j++) {
+            core_buffer_append_string(out, record->inputs.data[j]);
+            core_buffer_putc(out, '\n');
+        }
+    }
+    pthread_mutex_unlock(&ffi->lock);
 }
 
 bool
@@ -1300,6 +1372,11 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
     }
     if (core_string_find(triple, CORE_STRING_STATIC("windows")) < 0) {
         arguments[next++] = "-fPIC";
+    }
+    // Linux programs link no libc, so nothing provides the stack
+    // protector's guard value.
+    if (core_string_find(triple, CORE_STRING_STATIC("linux")) >= 0) {
+        arguments[next++] = "-fno-stack-protector";
     }
     for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
         arguments[next++] = "-I";

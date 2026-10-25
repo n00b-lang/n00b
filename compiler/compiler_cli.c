@@ -31,7 +31,7 @@
          "load a frozen semantic library interface")
 #define SHOW_FFI_FLAG \
     FLAG("--show-ffi", NO_ALIAS, WORD, true, \
-         "print the n00b source generated for MODULE.NAME")
+         "print the n00b source generated for the 'ffi literal at MODULE:LINE")
 #define FRONT_END_DUMP_FLAGS \
     DEV_FLAG("--dump-tokens", NO_ALIAS, BOOL, false, \
              "dump tokens after lexing and continue"), \
@@ -240,6 +240,8 @@ static const parse_cmdr_flag_t LIBRARY_FLAGS[] = {
     LOWERING_DUMP_FLAGS,
     FLAG("--emit-interface", NO_ALIAS, WORD, true,
          "write a frozen semantic interface archive"),
+    DEV_FLAG("--dev-module-abi", NO_ALIAS, WORD, true,
+             "also write each module's ABI object into this directory"),
     END_FLAGS,
 };
 
@@ -339,8 +341,6 @@ static const parse_cmdr_cmd_t COMMANDS[] = {
             "explain a diagnostic code such as N00B-T0042, or a function's "
             "effects: explain effects MODULE.FUNCTION [module|file]",
             EXPLAIN_FLAGS, "code", 1, 3, false),
-    COMMAND("compile", "emit ABI metadata for one translation unit",
-            LOWERING_FLAGS, "input", 1, 1, true),
     COMMAND("preprocess", "emit preprocessor output for one input",
             PREPROCESS_FLAGS, "input", 1, 1, true),
     COMMAND("lower", "lower a module and its imports to Lantern IR",
