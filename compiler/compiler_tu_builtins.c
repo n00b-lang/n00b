@@ -393,8 +393,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         CORE_STRING_STATIC("sys.internal.threads.Thread_Context"));
     th_type *thread_context_ref = thread_context
         ? th_ind(types, 0, thread_context) : nullptr;
-    th_type *suspend_args[] = {uint, thread_context_ref, u64};
-    th_type *resume_args[] = {uint, thread_context_ref};
     th_type *capture_args[] = {thread_context_ref};
     th_type *entry_item = th_var(types);
     th_type *argument_item = th_var(types);
@@ -452,17 +450,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__os_frame_pointer_chain"),
             uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_control_self"),
-            uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_capture_self"),
             nil_type, capture_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_suspend"), i32,
-            suspend_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_resume"), i32,
-            resume_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_cpu_relax"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,

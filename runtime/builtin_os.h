@@ -44,17 +44,15 @@ const uint8_t *n00b_os_env_at(uint64_t index);
 void n00b_os_save_args(int32_t argc, char **argv);
 uint64_t n00b_os_arg_count(void);
 const uint8_t *n00b_os_arg_at(uint64_t index);
-// The calling thread's errno from the platform C library, read right after
-// a failed raw call: libSystem's on macOS, the CRT's on Windows. Linux has
-// no libc errno (syscalls return it), so it is 0 there.
-uint64_t n00b_os_thread_control_self(void);
 void n00b_os_thread_capture_self(n00b_os_thread_context *context);
 void n00b_os_gc_enter_blocking(void);
-int32_t n00b_os_thread_suspend(uint64_t control,
-                               n00b_os_thread_context *context,
-                               uint64_t timeout_ns);
-int32_t n00b_os_thread_resume(uint64_t control,
-                              n00b_os_thread_context *context);
+#if defined(__linux__)
+// The addresses sys.os installs for its stop-the-world signal: the handler,
+// which saves the stopped thread's registers, and its rt_sigreturn
+// trampoline.
+uintptr_t n00b_linux_stw_handler(void);
+uintptr_t n00b_linux_stw_restorer(void);
+#endif
 bool n00b_os_map_file(const char *path, const uint8_t **bytes,
                       uint64_t *length);
 uint64_t n00b_os_executable_path(uint8_t *buffer, uint64_t capacity);

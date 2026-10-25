@@ -10,17 +10,16 @@
 #include <unistd.h>
 #endif
 
-enum { TEST_TIMEOUT_NS = 2000000000 };
+// Suspending and resuming threads is n00b code now; its test is
+// tests/programs/os/os_threads.n. This checks the stack bound on a thread
+// other than the main one.
 
-static atomic_uint_fast64_t worker_control;
 static atomic_uint_fast64_t worker_stack_high;
-static atomic_uint_fast64_t worker_ticks;
-static atomic_bool worker_done;
 
 #if defined(_WIN32)
-static DWORD WINAPI stw_worker(void *unused)
+static DWORD WINAPI stack_worker(void *unused)
 #else
-static void *stw_worker(void *unused)
+static void *stack_worker(void *unused)
 #endif
 {
     (void)unused;
@@ -28,9 +27,6 @@ static void *stw_worker(void *unused)
     atomic_store(&worker_stack_high,
                  (uintptr_t)n00b_os_thread_stack_high_self());
     assert(atomic_load(&worker_stack_high) > (uintptr_t)&stack_anchor);
-    atomic_store(&worker_control, n00b_os_thread_control_self());
-    while (!atomic_load(&worker_done))
-        atomic_fetch_add(&worker_ticks, 1);
 #if defined(_WIN32)
     return 0;
 #else
@@ -38,42 +34,19 @@ static void *stw_worker(void *unused)
 #endif
 }
 
-static void test_thread_suspend(void)
+static void test_thread_stack(void)
 {
 #if defined(_WIN32)
-    HANDLE worker = CreateThread(NULL, 0, stw_worker, NULL, 0, NULL);
+    HANDLE worker = CreateThread(NULL, 0, stack_worker, NULL, 0, NULL);
     assert(worker != NULL);
-#else
-    pthread_t worker;
-    assert(pthread_create(&worker, NULL, stw_worker, NULL) == 0);
-#endif
-    uint64_t started = n00b_os_now_ns();
-    while (!atomic_load(&worker_control) || atomic_load(&worker_ticks) < 1000) {
-        assert(n00b_os_now_ns() - started < TEST_TIMEOUT_NS);
-        n00b_os_thread_yield();
-    }
-    uint64_t control = atomic_load(&worker_control);
-    n00b_os_thread_context context = {0};
-    assert(n00b_os_thread_suspend(control, &context, TEST_TIMEOUT_NS) == 0);
-    assert(context.sp != 0 && context.pc != 0 && context.nregs != 0);
-    uint64_t stopped_ticks = atomic_load(&worker_ticks);
-    uint64_t pause_start = n00b_os_now_ns();
-    while (n00b_os_now_ns() - pause_start < 1000000)
-        n00b_os_cpu_relax();
-    assert(atomic_load(&worker_ticks) == stopped_ticks);
-    assert(n00b_os_thread_resume(control, &context) == 0);
-    started = n00b_os_now_ns();
-    while (atomic_load(&worker_ticks) == stopped_ticks) {
-        assert(n00b_os_now_ns() - started < TEST_TIMEOUT_NS);
-        n00b_os_thread_yield();
-    }
-    atomic_store(&worker_done, true);
-#if defined(_WIN32)
     assert(WaitForSingleObject(worker, INFINITE) == WAIT_OBJECT_0);
     CloseHandle(worker);
 #else
+    pthread_t worker;
+    assert(pthread_create(&worker, NULL, stack_worker, NULL) == 0);
     assert(pthread_join(worker, NULL) == 0);
 #endif
+    assert(atomic_load(&worker_stack_high) != 0);
 }
 
 // The page size, from the platform: the runtime's own is n00b code now.
@@ -127,6 +100,6 @@ int main(void)
 
     assert(n00b_os_map_zeroed(0, 0) == NULL);
     assert(n00b_os_map_zeroed(page, 3) == NULL);
-    test_thread_suspend();
+    test_thread_stack();
     return 0;
 }

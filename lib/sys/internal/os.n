@@ -95,12 +95,42 @@ when target_os() == "linux" {
       number 179 when arch == aarch64
       effects env
 
+    # Stopping a thread for the collector: a queued signal, which carries
+    # the context its handler fills.
+    syscall gettid() -> c_int
+      number 186 when arch == x86_64
+      number 178 when arch == aarch64
+      infallible
+      effects none
+    syscall getpid() -> c_int
+      number 39 when arch == x86_64
+      number 172 when arch == aarch64
+      infallible
+      effects none
+    syscall rt_sigaction(signal: c_int, action: *u8, old: ?u8,
+                         mask_size: usize) -> c_int
+      number 13 when arch == x86_64
+      number 134 when arch == aarch64
+      effects threads
+    syscall rt_tgsigqueueinfo(process: c_int, thread: c_int, signal: c_int,
+                              info: *u8) -> c_int
+      number 297 when arch == x86_64
+      number 240 when arch == aarch64
+      effects threads
+
     # The runtime's exit, which also ends evaluation at compile time.
     fn n00b_os_exit(code: i64)
       effects noreturn, output
     # An entry of the auxiliary vector the kernel passed the program, which
     # the runtime's start code keeps; 0 when there's none.
     fn n00b_linux_auxv(type: usize) -> usize
+      effects none
+    # The runtime's stop-the-world signal handler and its rt_sigreturn
+    # trampoline, which can't be n00b code: the handler runs on a thread
+    # stopped at an arbitrary instruction.
+    fn n00b_linux_stw_handler() -> usize
+      effects none
+    fn n00b_linux_stw_restorer() -> usize
       effects none
 
     binding {
@@ -112,6 +142,8 @@ when target_os() == "linux" {
         name futex_wait "syscall_futex_wait"
         raw "n00b_os_exit"
         raw "n00b_linux_auxv"
+        raw "n00b_linux_stw_handler"
+        raw "n00b_linux_stw_restorer"
     }
     -]'ffi
 
@@ -123,6 +155,12 @@ when target_os() == "linux" {
     private const futex_wait_private: i32 = 128
     private const futex_wake_private: i32 = 129
     private const clock_monotonic: i32 = 1
+    # The real-time signal that stops a thread, and SI_QUEUE, the code of a
+    # signal queued with a value.
+    private const stw_signal: i32 = 40
+    private const signal_queued: i32 = -1
+    # SA_SIGINFO | SA_RESTART | SA_RESTORER.
+    private const stw_action_flags: u64 = 0x14000004
 
     # ioctl requests, the same on x86_64 and aarch64.
     private const get_terminal_attributes: u64 = 0x5401
@@ -208,7 +246,29 @@ when target_os() == "linux" {
     fn __ulock_wake(operation: u32, address: *void, wake_value: u64) -> c_int
       effects threads
 
+    # Stopping a thread for the collector, through its Mach port. A
+    # pthread_t is opaque: n00b only hands it back, so it's an integer here.
+    fn pthread_self() -> uptr
+      effects none
+    fn pthread_mach_thread_np(thread: uptr) -> u32
+      effects none
+    fn thread_suspend(port: u32) -> c_int
+      effects threads
+    fn thread_resume(port: u32) -> c_int
+      effects threads
+    fn thread_get_state(port: u32, flavor: c_int, state: *u32,
+                        count: *u32) -> c_int
+      effects threads
+
     binding {
+        name thread_suspend "mach_thread_suspend"
+        name thread_resume "mach_thread_resume"
+        name thread_get_state "mach_thread_get_state"
+        raw "pthread_self"
+        raw "pthread_mach_thread_np"
+        raw "thread_suspend"
+        raw "thread_resume"
+        raw "thread_get_state"
         raw "n00b_os_exit"
         raw "mmap"
         raw "munmap"
@@ -242,6 +302,12 @@ when target_os() == "linux" {
     # UL_COMPARE_AND_WAIT, and ULF_WAKE_ALL.
     private const ulock_compare_and_wait: u32 = 1
     private const ulock_wake_all: u32 = 0x100
+    # ARM_THREAD_STATE64 and x86_THREAD_STATE64, and their sizes in 32-bit
+    # units.
+    private const arm_thread_state: i32 = 6
+    private const arm_thread_state_count: u32 = 68
+    private const x86_thread_state: i32 = 4
+    private const x86_thread_state_count: u32 = 42
 
     # Open flags.
     private const close_on_exec: u32 = 0x1000000
@@ -320,6 +386,20 @@ when target_os() == "linux" {
       effects threads, blocking
     fn WakeByAddressAll(address: *void)
       effects threads
+
+    # Stopping a thread for the collector.
+    fn GetCurrentThreadId() -> u32
+      effects none
+    fn OpenThread(access: u32, inherit: c_int, thread: u32) -> isize
+      effects threads
+    fn SuspendThread(thread: isize) -> u32
+      effects threads
+    fn ResumeThread(thread: isize) -> u32
+      effects threads
+    fn GetThreadContext(thread: isize, context: *u8) -> c_int
+      effects threads
+    fn CloseHandle(handle: isize) -> c_int
+      effects threads
     # The runtime's exit, which also ends evaluation at compile time.
     fn n00b_os_exit(code: i64)
       effects noreturn, output
@@ -360,6 +440,18 @@ when target_os() == "linux" {
         raw "QueryPerformanceFrequency"
         raw "WaitOnAddress"
         raw "WakeByAddressAll"
+        name GetCurrentThreadId "current_thread_id"
+        name OpenThread "open_thread"
+        name SuspendThread "suspend_thread"
+        name ResumeThread "resume_thread"
+        name GetThreadContext "thread_context"
+        name CloseHandle "close_handle"
+        raw "GetCurrentThreadId"
+        raw "OpenThread"
+        raw "SuspendThread"
+        raw "ResumeThread"
+        raw "GetThreadContext"
+        raw "CloseHandle"
     }
     -]'ffi
 
@@ -393,6 +485,11 @@ when target_os() == "linux" {
     private const page_read_only: u32 = 2
     private const page_read_write: u32 = 4
     private const wait_forever: u32 = 0xffffffff
+    # THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, CONTEXT_CONTROL |
+    # CONTEXT_INTEGER for x86_64, and SuspendThread's failure.
+    private const thread_stop_access: u32 = 0xa
+    private const context_control_integer: u32 = 0x100003
+    private const suspend_failed: u32 = 0xffffffff
 
     private func chunk(count: uint) -> uint {
         if count > chunk_limit {
@@ -1301,5 +1398,283 @@ func physical_memory() -> uint {
         return cast[uint](status.total_physical)
     } else {
         return unknown
+    }
+}
+
+# Stopping a thread for the collector: thread_suspend stops the thread that
+# `control` names and saves its registers in `snapshot`; thread_resume lets
+# it run again. `control` is what that thread's thread_control_self
+# returned. Each returns 0, or -1 on failure.
+
+# The start of Linux's struct kernel_sigaction.
+private record Linux_Sigaction layout(c) {
+    handler:  u64
+    flags:    u64
+    restorer: u64
+    mask:     u64
+}
+
+# Linux's siginfo for a queued signal, whose value is the context to fill.
+private record Linux_Siginfo layout(c) {
+    signal:  i32
+    error:   i32
+    code:    i32
+    padding: i32
+    process: i32
+    user:    u32
+    value:   u64
+    rest:    Array[u64][12]
+}
+
+# macOS's arm_thread_state64_t.
+private record Arm_Thread_State layout(c) {
+    x:     Array[u64][29]
+    fp:    u64
+    lr:    u64
+    sp:    u64
+    pc:    u64
+    cpsr:  u32
+    flags: u32
+}
+
+# macOS's x86_thread_state64_t: rax, rbx, rcx, rdx, rdi, rsi, rbp, rsp,
+# r8 to r15, rip, rflags, cs, fs and gs.
+private record X86_Thread_State layout(c) {
+    registers: Array[u64][21]
+}
+
+# Windows' x86_64 CONTEXT, which GetThreadContext needs 16-byte aligned.
+private record Windows_Context layout(c) align(16) {
+    homes:     Array[u64][6]
+    flags:     u32
+    mxcsr:     u32
+    segments:  Array[u16][6]
+    eflags:    u32
+    debug:     Array[u64][6]
+    rax:       u64
+    rcx:       u64
+    rdx:       u64
+    rbx:       u64
+    rsp:       u64
+    rbp:       u64
+    rsi:       u64
+    rdi:       u64
+    r8:        u64
+    r9:        u64
+    r10:       u64
+    r11:       u64
+    r12:       u64
+    r13:       u64
+    r14:       u64
+    r15:       u64
+    rip:       u64
+    rest:      Array[u64][122]
+}
+
+# 0 while the Linux stop signal's handler isn't installed, 1 while it's
+# being installed, 2 once it is, and 3 if it couldn't be.
+private var stw_handler_state: Atomic[u32] = 0
+
+private func install_stw_handler() -> bool {
+    when target_os() == "linux" {
+        if __atomic_compare_exchange(ref stw_handler_state, 0, 1) {
+            var action: Linux_Sigaction = (
+                handler = cast[u64](n00b_linux_stw_handler_raw()),
+                flags = stw_action_flags,
+                restorer = cast[u64](n00b_linux_stw_restorer_raw()),
+                mask = 0)
+            var state: u32 = 2
+            try {
+                _ = rt_sigaction(stw_signal,
+                    unsafe_cast[Ref[byte]] (ref action), nil, 8)!
+            } fail(failure) {
+                state = 3
+            }
+            __atomic_store(ref stw_handler_state, state)
+        }
+        while __atomic_load(ref stw_handler_state) == 1 {
+            __os_cpu_relax()
+        }
+        return __atomic_load(ref stw_handler_state) == 2
+    } else {
+        return false
+    }
+}
+
+# An id for the calling thread that thread_suspend and thread_resume take.
+func thread_control_self() -> uint {
+    when target_os() == "linux" {
+        return cast[uint](gettid())
+    } else when target_os() == "macos" {
+        return cast[uint](pthread_mach_thread_np_raw(pthread_self_raw()))
+    } else when target_os() == "windows" {
+        return cast[uint](current_thread_id_raw())
+    } else {
+        return 0
+    }
+}
+
+func thread_suspend(control: uint,
+                    snapshot: Ref[internal.threads.Thread_Context],
+                    timeout_ns: u64) -> i32 {
+    if control == 0 {
+        return -1
+    }
+    when target_os() == "linux" {
+        if !install_stw_handler() {
+            return -1
+        }
+        snapshot.__value.thread_id = cast[u64](control)
+        snapshot.__value.nregs = 0
+        __atomic_store(ref snapshot.__value.parked, 0)
+        let process: i32 = getpid()
+        var info: Linux_Siginfo = (signal = stw_signal, error = 0,
+            code = signal_queued, padding = 0, process = process, user = 0,
+            value = cast[u64](__abi_ref_address(
+                unsafe_cast[Ref[byte]] snapshot)),
+            rest = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        try {
+            _ = rt_tgsigqueueinfo(process, cast[i32](control), stw_signal,
+                unsafe_cast[Ref[byte]] (ref info))!
+        } fail(failure) {
+            return -1
+        }
+        # The handler, on the stopped thread, sets `parked` once it has
+        # saved the registers.
+        let started: u64 = now_ns()
+        while __atomic_load(ref snapshot.__value.parked) == 0 {
+            require timeout_ns == 0 or now_ns() - started <= timeout_ns
+            __os_cpu_relax()
+        }
+        return 0
+    } else when target_os() == "macos" {
+        let port: u32 = cast[u32](control)
+        if mach_thread_suspend_raw(port) != 0 {
+            return -1
+        }
+        var count: u32 = 0
+        when target_arch() == "arm" {
+            var state: Arm_Thread_State
+            count = arm_thread_state_count
+            if mach_thread_get_state_raw(port, arm_thread_state,
+                    unsafe_cast[Ref[byte]] (ref state),
+                    unsafe_cast[Ref[byte]] (ref count)) != 0 {
+                _ = mach_thread_resume_raw(port)
+                return -1
+            }
+            snapshot.__value.sp = address_ref(cast[uint](state.sp))
+            snapshot.__value.fp = address_ref(cast[uint](state.fp))
+            snapshot.__value.pc = address_ref(cast[uint](state.pc))
+            var i: uint = 0
+            while i < 29 {
+                snapshot.__value.regs[i] = cast[uint](state.x[i])
+                i += 1
+            }
+            snapshot.__value.regs[29] = cast[uint](state.fp)
+            snapshot.__value.regs[30] = cast[uint](state.lr)
+            snapshot.__value.nregs = 31
+        } else {
+            var state: X86_Thread_State
+            count = x86_thread_state_count
+            if mach_thread_get_state_raw(port, x86_thread_state,
+                    unsafe_cast[Ref[byte]] (ref state),
+                    unsafe_cast[Ref[byte]] (ref count)) != 0 {
+                _ = mach_thread_resume_raw(port)
+                return -1
+            }
+            snapshot.__value.sp = address_ref(cast[uint](state.registers[7]))
+            snapshot.__value.fp = address_ref(cast[uint](state.registers[6]))
+            snapshot.__value.pc = address_ref(cast[uint](state.registers[16]))
+            # Every general register but rsp.
+            var i: uint = 0
+            var saved: uint = 0
+            while i < 16 {
+                if i != 7 {
+                    snapshot.__value.regs[saved] =
+                        cast[uint](state.registers[i])
+                    saved += 1
+                }
+                i += 1
+            }
+            snapshot.__value.nregs = saved
+        }
+        snapshot.__value.handle = control
+        snapshot.__value.thread_id = 0
+        __atomic_store(ref snapshot.__value.parked, 1)
+        return 0
+    } else when target_os() == "windows" {
+        let handle: int = open_thread_raw(thread_stop_access, 0,
+                                          cast[u32](control))
+        if handle == 0 {
+            return -1
+        }
+        if suspend_thread_raw(handle) == suspend_failed {
+            _ = close_handle_raw(handle)
+            return -1
+        }
+        var state: Windows_Context
+        state.flags = context_control_integer
+        if thread_context_raw(handle, unsafe_cast[Ref[byte]] (ref state))
+                == 0 {
+            _ = resume_thread_raw(handle)
+            _ = close_handle_raw(handle)
+            return -1
+        }
+        snapshot.__value.sp = address_ref(cast[uint](state.rsp))
+        snapshot.__value.fp = address_ref(cast[uint](state.rbp))
+        snapshot.__value.pc = address_ref(cast[uint](state.rip))
+        let registers: Array[u64][15] = [state.rax, state.rbx, state.rcx,
+            state.rdx, state.rsi, state.rdi, state.rbp, state.r8, state.r9,
+            state.r10, state.r11, state.r12, state.r13, state.r14, state.r15]
+        var i: uint = 0
+        while i < 15 {
+            snapshot.__value.regs[i] = cast[uint](registers[i])
+            i += 1
+        }
+        snapshot.__value.nregs = 15
+        snapshot.__value.handle = cast[uint](handle)
+        snapshot.__value.thread_id = cast[u64](control)
+        __atomic_store(ref snapshot.__value.parked, 1)
+        return 0
+    } else {
+        return -1
+    }
+}
+
+func thread_resume(control: uint,
+                   snapshot: Ref[internal.threads.Thread_Context]) -> i32 {
+    if __atomic_load(ref snapshot.__value.parked) == 0 {
+        return -1
+    }
+    when target_os() == "linux" {
+        if snapshot.__value.thread_id != cast[u64](control) {
+            return -1
+        }
+        snapshot.__value.nregs = 0
+        # The handler waiting on the stopped thread sees this and returns.
+        __atomic_store(ref snapshot.__value.parked, 0)
+        return 0
+    } else when target_os() == "macos" {
+        if snapshot.__value.handle != control
+                or mach_thread_resume_raw(cast[u32](control)) != 0 {
+            return -1
+        }
+        __atomic_store(ref snapshot.__value.parked, 0)
+        snapshot.__value.nregs = 0
+        snapshot.__value.handle = 0
+        return 0
+    } else when target_os() == "windows" {
+        let handle: uint = snapshot.__value.handle
+        if snapshot.__value.thread_id != cast[u64](control) or handle == 0
+                or resume_thread_raw(cast[int](handle)) == suspend_failed {
+            return -1
+        }
+        __atomic_store(ref snapshot.__value.parked, 0)
+        snapshot.__value.nregs = 0
+        snapshot.__value.handle = 0
+        _ = close_handle_raw(cast[int](handle))
+        return 0
+    } else {
+        return -1
     }
 }

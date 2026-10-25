@@ -100,16 +100,16 @@ func frame_pointer_chain() -> bool {
 }
 
 func thread_control_self() -> uint {
-    return __os_thread_control_self()
+    return internal.os.thread_control_self()
 }
 
 func thread_suspend(control: uint, snapshot: Ref[Thread_Context], timeout_ns: u64)
                    -> i32 {
-    return __os_thread_suspend(control, snapshot, timeout_ns)
+    return internal.os.thread_suspend(control, snapshot, timeout_ns)
 }
 
 func thread_resume(control: uint, snapshot: Ref[Thread_Context]) -> i32 {
-    return __os_thread_resume(control, snapshot)
+    return internal.os.thread_resume(control, snapshot)
 }
 
 func cpu_relax() {
