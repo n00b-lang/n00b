@@ -1,3 +1,5 @@
+import sys.os
+
 func never(n: int) -> int {
     let zero: int = 0
     return n / zero
@@ -16,7 +18,7 @@ func f_1() -> int {
 }
 
 func die(code: int) {
-    __os_exit(code)
+    sys.os.exit(cast[i32](code))
 }
 
 func after_return(n: int) -> int {
@@ -196,14 +198,14 @@ func read_unset() -> int {
     return value
 }
 
-const sys = [-
+[-
 library c
 
 fn abs(x: c_int) -> c_int
 -]'ffi
 
 require f(true) == 1
-require sys.abs(-3)! == 3
+require abs(-3)! == 3
 
 record Tuple_Target {
     x: int

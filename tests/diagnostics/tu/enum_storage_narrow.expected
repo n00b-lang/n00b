@@ -1,0 +1,2 @@
+tests/diagnostics/tu/enum_storage_narrow.n:1:30: error N00B-T0596: enum `Negative_Unsigned` has negative items, which the unsigned type `u32` cannot hold
+  help: use a signed storage type, or remove `: u32` to let the compiler choose

@@ -13,7 +13,7 @@ private func raw_lb_class(cp: char) -> internal.types.Lb {
         return internal.types.Lb.xx
     }
 
-    return cast[internal.types.Lb] generated.linebreak.lb_stage2[
+    return unsafe_cast[internal.types.Lb] generated.linebreak.lb_stage2[
         cast[u32](generated.linebreak.lb_stage1(v >> 8)) * 256 + (v & 0xff)]
 }
 

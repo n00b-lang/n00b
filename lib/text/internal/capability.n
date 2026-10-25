@@ -77,12 +77,12 @@ private func compute_env_ceiling() -> internal.color.Color_Depth {
 func terminal_color_depth(fd: int) -> internal.color.Color_Depth {
     let forced: u8 = forced_depth
     if forced != forced_depth_unset {
-        return cast[internal.color.Color_Depth] forced
+        return unsafe_cast[internal.color.Color_Depth] forced
     }
     var ceiling: internal.color.Color_Depth = internal.color.Color_Depth.mono
     if env_scanned {
         let scanned: u8 = env_ceiling
-        ceiling = cast[internal.color.Color_Depth] scanned
+        ceiling = unsafe_cast[internal.color.Color_Depth] scanned
     }
     else {
         ceiling = compute_env_ceiling()

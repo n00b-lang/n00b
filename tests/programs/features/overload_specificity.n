@@ -10,7 +10,10 @@ func imported_overloads() -> bool fail: int {
     var bytes: Array[u8] = new[Array[u8]](1)
     overload_imported.put(bytes)!
     let hash: u128 = overload_imported.hashed(number)!
-    return number == 7 and bytes[0] == 9 and hash != 0
+    var small: u8 = 0
+    overload_imported.store(small)!
+    overload_imported.store(bytes)!
+    return number == 7 and hash != 0 and small == 5 and bytes[0] == 6
 }
 
 func imported_overloads_hold() -> bool {
@@ -65,11 +68,40 @@ func constrained(item: 'T) -> int {
     return 1
 }
 
+func optional_ref(memory: Ref[byte]?) -> int {
+    return 1
+}
+
+func optional_ref(left: Ref[byte], right: int) -> int {
+    return 2
+}
+
 func constrained(item: 'T) -> int where 'T: != string {
     return 2
 }
 
+func optional_box(item: Box?) -> int {
+    return 1
+}
+
+func optional_box(left: int, right: int) -> int {
+    return 2
+}
+
+func exact_over_optional(item: Box?) -> int {
+    return 1
+}
+
+func exact_over_optional(item: Box) -> int {
+    return 2
+}
+
 let box: Box = (value = 4)
+require optional_box(box) == 1
+require exact_over_optional(box) == 2
+var cell: Array[u8] = new[Array[u8]](1)
+let raw: Ref[byte] = unsafe_cast[Ref[byte]] ref cell[0]
+require optional_ref(raw) == 1
 require concrete_first(box) == 2
 require generic_first(box) == 2
 require concrete_first(4) == 1

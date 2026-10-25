@@ -1,0 +1,2 @@
+tests/diagnostics/tu/enum_storage.n:1:24: error N00B-T0595: enum `Not_Integer` cannot be stored as `f64`, which is not a fixed-width integer type
+  help: use one of `i8`, `i16`, `i32`, `i64`, `i128`, `u8`, `u16`, `u32`, `u64` or `u128`

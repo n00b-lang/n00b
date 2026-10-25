@@ -1,2 +1,2 @@
 tests/diagnostics/coercion/theme_builtin_view.n:10:15: error N00B-T0005: parameter 1 (`self`) of `set_role` is `Ref[Theme]`, but this argument is `View[Theme]`
-  lib/text/internal/theme.n:674:6: note: `set_role` is declared here
+  lib/text/internal/theme.n:675:6: note: `set_role` is declared here

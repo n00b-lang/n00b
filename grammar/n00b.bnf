@@ -19,7 +19,7 @@
                    | <if-stmt>
                    | <for-stmt>
                    | <while-stmt>
-                   | <when-stmt>
+                   | <top-when-stmt>
                    | <typecase-stmt>
                    | <switch-stmt>
                    | <try-stmt>
@@ -153,6 +153,14 @@
 <when-stmt> ::= %"when" <expression> <body> <else-when-clause>* <ctime-else>?
 <else-when-clause> ::= %"else" %"when" <expression> <body>
 <ctime-else> ::= %"else" <body>
+
+# At module level, a `when` branch holds anything a module can: types,
+# enums, functions, constants, imports. The preprocessor keeps the chosen
+# branch, and its declarations belong to the module (no block scope).
+<top-when-stmt> ::= %"when" <expression> <top-when-body> <top-else-when-clause>* <top-ctime-else>?
+<top-else-when-clause> ::= %"else" %"when" <expression> <top-when-body>
+<top-ctime-else> ::= %"else" <top-when-body>
+<top-when-body> @hardline($1) @indent($1) @hardline($2) ::= <block-start> <other-top-stmts>? <block-end>
 
 <typecase-stmt> @scope("typecase") @switch($1, $3) @hardline($3) @indent($3) @hardline($4) ::=
        %"typecase" <expression> <block-start> <typecase-cases> <block-end>
@@ -459,9 +467,13 @@
 
 <error-type> @nospace($1) ::= %"fail" %":" <one-tspec>
 
-<enum-stmt> @namespace("type") @scope("enum", $1) @type($1) @exposes ::= <enum-prefix> %IDENTIFIER <block-start> <enum-items> <block-end>
+<enum-stmt> @namespace("type") @scope("enum", $1) @type($1) @exposes ::= <enum-prefix> %IDENTIFIER <enum-storage>? <block-start> <enum-items> <block-end>
 
-<enum-prefix> ::= <member-visibility>? %"enum"
+<enum-prefix> ::= <member-visibility>? <enum-open>? %"enum"
+
+<enum-open> ::= %"open"
+
+<enum-storage> ::= %":" <type-spec>
 
 <enum-items> @nospace($1) @nospace($2) ::= <enum-item> (<eos>* %"," <eos>* <enum-item>)* (<eos>* %",")?
 

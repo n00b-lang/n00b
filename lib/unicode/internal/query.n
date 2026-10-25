@@ -169,7 +169,7 @@ func matches(self: internal.types.Char_Filter, cp: char) -> bool {
 
     if self.kind == internal.types.Char_Filter_Kind.property {
         return internal.properties.has_property(cp,
-            cast[internal.types.Property] self.lo)
+            unsafe_cast[internal.types.Property] self.lo)
     }
 
     if self.kind == internal.types.Char_Filter_Kind.block {
@@ -474,7 +474,7 @@ func gc_by_name(name: string) -> internal.types.Gc? {
     var i: uint = 0
     while i < gc_names.len() {
         if gc_names[i] == name {
-            return cast[internal.types.Gc] i
+            return unsafe_cast[internal.types.Gc] i
         }
         i += 1
     }

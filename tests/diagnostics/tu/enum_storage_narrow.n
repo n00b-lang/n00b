@@ -1,0 +1,6 @@
+open enum Negative_Unsigned: u32 {
+    below = -1,
+    above = 1,
+}
+
+require cast[i64](Negative_Unsigned.above) == 1

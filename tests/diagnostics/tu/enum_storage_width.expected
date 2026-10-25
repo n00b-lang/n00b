@@ -1,0 +1,2 @@
+tests/diagnostics/tu/enum_storage_width.n:1:18: error N00B-T0596: the items of enum `Too_Narrow` need 9 bits, which `u8` cannot hold
+  help: use a wider storage type, or remove `: u8` to let the compiler choose

@@ -1,0 +1,5 @@
+tests/diagnostics/lower/enum_casts.n:7:12: error N00B-T1043: `cast` cannot convert `i32` to enum `Level`, because not every value is a member
+  help: if the value is known to be a member, write `unsafe_cast[Level](...)`
+tests/diagnostics/lower/enum_casts.n:11:12: error N00B-T1042: `u8` is too narrow to hold every value of enum `Level`, which needs 9 bits
+  help: cast to an integer type with at least 9 bits, or use `unsafe_cast` to keep the low bits
+tests/diagnostics/lower/enum_casts.n:15:12: error N00B-T1004: `unsafe_cast` cannot convert `f64` to `u32`: their sizes are not compatible
