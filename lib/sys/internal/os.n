@@ -61,19 +61,68 @@ when target_os() == "linux" {
       number 278 when arch == aarch64
       effects random, blocking
 
+    syscall mmap(address: ?u8, length: usize, protection: c_int,
+                 flags: c_int, fd: c_int, offset: isize) -> *u8
+      number 9 when arch == x86_64
+      number 222 when arch == aarch64
+      effects alloc
+    syscall munmap(address: *u8, length: usize) -> c_int
+      number 11 when arch == x86_64
+      number 215 when arch == aarch64
+      effects alloc
+    syscall mprotect(address: *u8, length: usize, protection: c_int) -> c_int
+      number 10 when arch == x86_64
+      number 226 when arch == aarch64
+      effects alloc
+
+    # One system call, declared once for waiting and once for waking.
+    syscall futex_wait(word: *u32, operation: c_int, expected: c_uint,
+                       timeout: ?u8) -> c_int
+      number 202 when arch == x86_64
+      number 98 when arch == aarch64
+      effects threads, blocking
+    syscall futex_wake(word: *u32, operation: c_int, count: c_int) -> c_int
+      number 202 when arch == x86_64
+      number 98 when arch == aarch64
+      effects threads
+
+    syscall clock_gettime(clock: c_int, stamp: *u8) -> c_int
+      number 228 when arch == x86_64
+      number 113 when arch == aarch64
+      effects clock
+    syscall sysinfo(info: *u8) -> c_int
+      number 99 when arch == x86_64
+      number 179 when arch == aarch64
+      effects env
+
     # The runtime's exit, which also ends evaluation at compile time.
     fn n00b_os_exit(code: i64)
       effects noreturn, output
+    # An entry of the auxiliary vector the kernel passed the program, which
+    # the runtime's start code keeps; 0 when there's none.
+    fn n00b_linux_auxv(type: usize) -> usize
+      effects none
 
     binding {
         error * -> "internal.errno.Errno"
-        # This module's own read, write and close are the API.
+        # This module's own functions of these names are the API.
         name read "syscall_read"
         name write "syscall_write"
         name close "syscall_close"
+        name futex_wait "syscall_futex_wait"
         raw "n00b_os_exit"
+        raw "n00b_linux_auxv"
     }
     -]'ffi
+
+    # The auxiliary vector's page size entry, AT_PAGESZ.
+    private const auxv_page_size: u64 = 6
+    # PROT_READ | PROT_WRITE, and MAP_PRIVATE | MAP_ANONYMOUS.
+    private const map_read_write: i32 = 3
+    private const map_private_anonymous: i32 = 0x22
+    private const futex_wait_private: i32 = 128
+    private const futex_wake_private: i32 = 129
+    private const clock_monotonic: i32 = 1
 
     # ioctl requests, the same on x86_64 and aarch64.
     private const get_terminal_attributes: u64 = 0x5401
@@ -140,8 +189,34 @@ when target_os() == "linux" {
     fn n00b_os_exit(code: i64)
       effects noreturn, output
 
+    # The collector calls these, so they're raw: no shim, nothing allocated.
+    fn mmap(address: ?void, length: usize, protection: c_int, flags: c_int,
+            fd: c_int, offset: i64) -> own ?void release munmap
+      effects alloc
+    fn munmap(address: *void, length: usize) -> c_int
+      effects alloc
+    fn mprotect(address: *void, length: usize, protection: c_int) -> c_int
+      effects alloc
+    fn sysconf(name: c_int) -> c_long
+      effects env
+    fn clock_gettime_nsec_np(clock: c_uint) -> u64
+      effects clock
+    # libSystem's address waits, which it has exported since macOS 10.12.
+    fn __ulock_wait2(operation: u32, address: *void, expected: u64,
+                     timeout_ns: u64, expected2: u64) -> c_int
+      effects threads, blocking
+    fn __ulock_wake(operation: u32, address: *void, wake_value: u64) -> c_int
+      effects threads
+
     binding {
         raw "n00b_os_exit"
+        raw "mmap"
+        raw "munmap"
+        raw "mprotect"
+        raw "sysconf"
+        raw "clock_gettime_nsec_np"
+        raw "__ulock_wait2"
+        raw "__ulock_wake"
         pack fcntl.args as array
         pack open.args as array
         pack ioctl.args as array
@@ -158,6 +233,16 @@ when target_os() == "linux" {
     private const descriptor_close_on_exec: i32 = 1
     private const get_window_size: u64 = 0x40087468
 
+    # PROT_READ | PROT_WRITE, and MAP_PRIVATE | MAP_ANON.
+    private const map_read_write: i32 = 3
+    private const map_private_anonymous: i32 = 0x1002
+    private const sysconf_page_size: i32 = 29
+    private const sysconf_physical_pages: i32 = 200
+    private const clock_monotonic: u32 = 6
+    # UL_COMPARE_AND_WAIT, and ULF_WAKE_ALL.
+    private const ulock_compare_and_wait: u32 = 1
+    private const ulock_wake_all: u32 = 0x100
+
     # Open flags.
     private const close_on_exec: u32 = 0x1000000
     private const open_create: u32 = 0x200
@@ -171,6 +256,7 @@ when target_os() == "linux" {
     library c
     platforms x86_64-w64-windows-gnu
     link "bcrypt"
+    link "synchronization"
 
     # A failure of the descriptor calls carries the errno, read right after
     # the call.
@@ -209,6 +295,31 @@ when target_os() == "linux" {
     fn BCryptGenRandom(algorithm: isize, buf: *u8, count: c_ulong,
                        flags: c_ulong) -> c_long
       effects random
+
+    # The collector calls these, so they're raw: no shim, nothing allocated.
+    fn VirtualAlloc(address: ?void, size: usize, kind: u32,
+                    protection: u32) -> own ?void release VirtualFree
+      effects alloc
+    fn VirtualFree(address: *void, size: usize, kind: u32) -> c_int
+      effects alloc
+    fn VirtualProtect(address: *void, size: usize, protection: u32,
+                      old: *u32) -> c_int
+      effects alloc
+    fn VirtualQuery(address: *void, info: *u8, length: usize) -> usize
+      effects none
+    fn GetSystemInfo(info: *u8)
+      effects none
+    fn GlobalMemoryStatusEx(status: *u8) -> c_int
+      effects env
+    fn QueryPerformanceCounter(count: *i64) -> c_int
+      effects clock
+    fn QueryPerformanceFrequency(frequency: *i64) -> c_int
+      effects clock
+    fn WaitOnAddress(address: *void, compare: *void, size: usize,
+                     milliseconds: u32) -> c_int
+      effects threads, blocking
+    fn WakeByAddressAll(address: *void)
+      effects threads
     # The runtime's exit, which also ends evaluation at compile time.
     fn n00b_os_exit(code: i64)
       effects noreturn, output
@@ -229,6 +340,26 @@ when target_os() == "linux" {
         raw "GetFileType"
         raw "BCryptGenRandom"
         raw "n00b_os_exit"
+        name VirtualAlloc "virtual_alloc"
+        name VirtualFree "virtual_free"
+        name VirtualProtect "virtual_protect"
+        name VirtualQuery "virtual_query"
+        name GetSystemInfo "system_info"
+        name GlobalMemoryStatusEx "memory_status"
+        name QueryPerformanceCounter "performance_counter"
+        name QueryPerformanceFrequency "performance_frequency"
+        name WaitOnAddress "wait_on_address"
+        name WakeByAddressAll "wake_by_address_all"
+        raw "VirtualAlloc"
+        raw "VirtualFree"
+        raw "VirtualProtect"
+        raw "VirtualQuery"
+        raw "GetSystemInfo"
+        raw "GlobalMemoryStatusEx"
+        raw "QueryPerformanceCounter"
+        raw "QueryPerformanceFrequency"
+        raw "WaitOnAddress"
+        raw "WakeByAddressAll"
     }
     -]'ffi
 
@@ -250,6 +381,18 @@ when target_os() == "linux" {
     private const file_type_disk: u32 = 1
     # Each call moves at most this many bytes, which a c_uint count holds.
     private const chunk_limit: uint = 0x40000000
+
+    # MEM_COMMIT | MEM_RESERVE, MEM_DECOMMIT, MEM_RELEASE and MEM_FREE.
+    private const memory_commit_reserve: u32 = 0x3000
+    private const memory_decommit: u32 = 0x4000
+    private const memory_release: u32 = 0x8000
+    private const memory_free: u32 = 0x10000
+    private const memory_committed: u32 = 0x1000
+    # PAGE_NOACCESS, PAGE_READONLY and PAGE_READWRITE.
+    private const page_no_access: u32 = 1
+    private const page_read_only: u32 = 2
+    private const page_read_write: u32 = 4
+    private const wait_forever: u32 = 0xffffffff
 
     private func chunk(count: uint) -> uint {
         if count > chunk_limit {
@@ -730,4 +873,433 @@ func env_at(index: uint) -> string? {
 # Ends the process with `code`. At compile time, ends the evaluation instead.
 func exit(code: i32) {
     n00b_os_exit_raw(cast[int](code))
+}
+
+# The memory and timing calls below are the collector's: they allocate
+# nothing and take no locks, so they can run before a thread has a mutator.
+
+# The C address `address` as a reference; it isn't 0.
+private func address_at(address: uint) -> Ref[byte] {
+    return unsafe_cast[Ref[byte]](unsafe_cast[Foreign[byte]](address))
+}
+
+# The C address `address` as a reference, or nil for 0.
+private func address_ref(address: uint) -> Ref[byte]? {
+    if address == 0 {
+        return nil
+    }
+    return address_at(address)
+}
+
+private record Timespec layout(c) {
+    seconds:     i64
+    nanoseconds: i64
+}
+
+# Linux's struct sysinfo.
+private record Linux_Sysinfo layout(c) {
+    uptime:      i64
+    load_1:      u64
+    load_5:      u64
+    load_15:     u64
+    total_ram:   u64
+    free_ram:    u64
+    shared_ram:  u64
+    buffer_ram:  u64
+    total_swap:  u64
+    free_swap:   u64
+    processes:   u16
+    padding_1:   u16
+    padding_2:   u32
+    total_high:  u64
+    free_high:   u64
+    memory_unit: u32
+    padding_3:   u32
+}
+
+# Windows' SYSTEM_INFO.
+private record Windows_System_Info layout(c) {
+    architecture:           u32
+    page_size:              u32
+    minimum_address:        u64
+    maximum_address:        u64
+    processor_mask:         u64
+    processors:             u32
+    processor_type:         u32
+    allocation_granularity: u32
+    processor_level:        u16
+    processor_revision:     u16
+}
+
+# Windows' MEMORYSTATUSEX.
+private record Windows_Memory_Status layout(c) {
+    length:                     u32
+    load:                       u32
+    total_physical:             u64
+    available_physical:         u64
+    total_page_file:            u64
+    available_page_file:        u64
+    total_virtual:              u64
+    available_virtual:          u64
+    available_extended_virtual: u64
+}
+
+# Windows' MEMORY_BASIC_INFORMATION.
+private record Windows_Memory_Info layout(c) {
+    base:               u64
+    allocation_base:    u64
+    allocation_protect: u32
+    partition:          u32
+    region_size:        u64
+    state:              u32
+    protection:         u32
+    kind:               u32
+    padding:            u32
+}
+
+private func windows_system_info() -> Windows_System_Info {
+    var info: Windows_System_Info = (architecture = 0, page_size = 0,
+        minimum_address = 0, maximum_address = 0, processor_mask = 0,
+        processors = 0, processor_type = 0, allocation_granularity = 0,
+        processor_level = 0, processor_revision = 0)
+    when target_os() == "windows" {
+        system_info_raw(unsafe_cast[Ref[byte]] (ref info))
+    }
+    return info
+}
+
+# The size of a memory page, or 0 if it can't be found.
+func page_size() -> uint {
+    when target_os() == "linux" {
+        return n00b_linux_auxv_raw(cast[uint](auxv_page_size))
+    } else when target_os() == "macos" {
+        let size: int = sysconf_raw(sysconf_page_size)
+        if size > 0 {
+            return cast[uint](size)
+        }
+        return 0
+    } else when target_os() == "windows" {
+        return cast[uint](windows_system_info().page_size)
+    } else {
+        return 0
+    }
+}
+
+# Maps `bytes` of zeroed, readable and writable memory; nil on failure.
+private func map_pages(bytes: uint) -> Ref[byte]? {
+    when target_os() == "linux" {
+        try {
+            return address_ref(mmap(nil, bytes, map_read_write,
+                map_private_anonymous, -1, 0)!)
+        } fail(failure) {
+            return nil
+        }
+    } else when target_os() == "macos" {
+        let address: uint = mmap_raw(nil, bytes, map_read_write,
+            map_private_anonymous, -1, 0)
+        # MAP_FAILED.
+        if address == ~cast[uint](0) {
+            return nil
+        }
+        return address_ref(address)
+    } else when target_os() == "windows" {
+        return address_ref(virtual_alloc_raw(nil, bytes,
+            memory_commit_reserve, page_read_write))
+    } else {
+        return nil
+    }
+}
+
+# Unmaps the `bytes` at `address`; 0, or -1 on failure.
+private func unmap_pages(address: Ref[byte], bytes: uint) -> i32 {
+    when target_os() == "linux" {
+        try {
+            _ = munmap(address, bytes)!
+            return 0
+        } fail(failure) {
+            return -1
+        }
+    } else when target_os() == "macos" {
+        if munmap_raw(address, bytes) != 0 {
+            return -1
+        }
+        return 0
+    } else when target_os() == "windows" {
+        # Decommits the pages, then releases the whole reservation once none
+        # of it is committed: Windows releases only whole reservations.
+        var info: Windows_Memory_Info = (base = 0, allocation_base = 0,
+            allocation_protect = 0, partition = 0, region_size = 0,
+            state = 0, protection = 0, kind = 0, padding = 0)
+        let size: uint = 48
+        if virtual_query_raw(address, unsafe_cast[Ref[byte]] (ref info),
+                size) == 0 or info.state == memory_free {
+            return -1
+        }
+        let base: uint = cast[uint](info.allocation_base)
+        if virtual_free_raw(address, bytes, memory_decommit) == 0 {
+            return -1
+        }
+        var cursor: uint = base
+        while virtual_query_raw(address_at(cursor),
+                unsafe_cast[Ref[byte]] (ref info), size) != 0
+                and cast[uint](info.allocation_base) == base {
+            if info.state == memory_committed {
+                return 0
+            }
+            cursor = cast[uint](info.base) + cast[uint](info.region_size)
+        }
+        if virtual_free_raw(address_at(base), 0, memory_release) == 0 {
+            return -1
+        }
+        return 0
+    } else {
+        return -1
+    }
+}
+
+# Maps `bytes` of zeroed memory aligned to `alignment`, a power of two or
+# 0 for page alignment; nil on failure.
+func map_zeroed(bytes: uint, alignment: uint) -> Ref[byte]? {
+    if bytes == 0 {
+        return nil
+    }
+    if alignment == 0 {
+        return map_pages(bytes)
+    }
+    if (alignment & (alignment - 1)) != 0 {
+        return nil
+    }
+    let page: uint = page_size()
+    if page == 0 {
+        return nil
+    }
+    if alignment <= page {
+        return map_pages(bytes)
+    }
+    when target_os() == "windows" {
+        # Windows aligns every mapping to its allocation granularity.
+        if alignment > cast[uint](windows_system_info().allocation_granularity) {
+            return nil
+        }
+        return map_pages(bytes)
+    } else {
+        # Maps an extra `alignment` bytes, then unmaps what lies outside the
+        # aligned range.
+        let most: uint = ~cast[uint](0)
+        if bytes > most - alignment or bytes > most - page + 1 {
+            return nil
+        }
+        let rounded: uint = (bytes + page - 1) & ~(page - 1)
+        if rounded > most - alignment {
+            return nil
+        }
+        let mapping: Ref[byte]? = map_pages(rounded + alignment)
+        if mapping == nil {
+            return nil
+        }
+        let start: Ref[byte] = mapping
+        let base: uint = __abi_ref_address(start)
+        let aligned: uint = (base + alignment - 1) & ~(alignment - 1)
+        let head: uint = aligned - base
+        let tail: uint = alignment - head
+        if head != 0 and unmap_pages(start, head) != 0 {
+            _ = unmap_pages(start, rounded + alignment)
+            return nil
+        }
+        if tail != 0 and unmap_pages(address_at(aligned + rounded), tail) != 0 {
+            _ = unmap_pages(address_at(aligned), rounded + tail)
+            return nil
+        }
+        return address_ref(aligned)
+    }
+}
+
+# Unmaps the `bytes` at `address`, which map_zeroed returned; 0, or -1 on
+# failure.
+func unmap(address: Ref[byte], bytes: uint) -> i32 {
+    if bytes == 0 {
+        return -1
+    }
+    return unmap_pages(address, bytes)
+}
+
+# Sets the access to the `bytes` at `address`: no access, read
+# (`flags` 1), or read and write (3); 0, or -1 on failure.
+func protect(address: Ref[byte], bytes: uint, flags: u32) -> i32 {
+    if bytes == 0 or (flags & ~cast[u32](3)) != 0 {
+        return -1
+    }
+    when target_os() == "linux" {
+        try {
+            _ = mprotect(address, bytes, cast[i32](flags))!
+            return 0
+        } fail(failure) {
+            return -1
+        }
+    } else when target_os() == "macos" {
+        if mprotect_raw(address, bytes, cast[i32](flags)) != 0 {
+            return -1
+        }
+        return 0
+    } else when target_os() == "windows" {
+        var mode: u32 = page_read_write
+        if flags == 0 {
+            mode = page_no_access
+        } elif flags == 1 {
+            mode = page_read_only
+        }
+        var old: u32 = 0
+        if virtual_protect_raw(address, bytes, mode,
+                unsafe_cast[Ref[byte]] (ref old)) == 0 {
+            return -1
+        }
+        return 0
+    } else {
+        return -1
+    }
+}
+
+# Waits while `word` holds `expected`, at most `timeout_ns` (0 waits
+# without a limit). Returns 0 on a wake, a spurious wake included, or an
+# errno.
+func futex_wait(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint)
+    -> i32 {
+    # Reading the word first also brings its page in: macOS fails a wait
+    # on a page that was never touched rather than faulting it in.
+    if __atomic_load(word) != expected {
+        return 0
+    }
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] word
+    when target_os() == "linux" {
+        var stamp: Timespec = (
+            seconds = cast[i64](timeout_ns / 1000000000),
+            nanoseconds = cast[i64](timeout_ns % 1000000000))
+        var limit: Ref[byte]? = nil
+        if timeout_ns != 0 {
+            limit = unsafe_cast[Ref[byte]] (ref stamp)
+        }
+        try {
+            _ = syscall_futex_wait(at, futex_wait_private, expected, limit)!
+            return 0
+        } fail(e) {
+            return cast[i32](e)
+        }
+    } else when target_os() == "macos" {
+        _ = ulock_wait2_raw(ulock_compare_and_wait, at,
+            cast[u64](expected), cast[u64](timeout_ns), 0)
+        return 0
+    } else when target_os() == "windows" {
+        var milliseconds: u32 = wait_forever
+        if timeout_ns != 0 {
+            let rounded: uint = (timeout_ns + 999999) / 1000000
+            if rounded >= cast[uint](wait_forever) {
+                milliseconds = wait_forever - 1
+            } else {
+                milliseconds = cast[u32](rounded)
+            }
+        }
+        var compare: u32 = expected
+        let size: uint = 4
+        _ = wait_on_address_raw(at, unsafe_cast[Ref[byte]] (ref compare),
+            size, milliseconds)
+        return 0
+    } else {
+        return 0
+    }
+}
+
+# Wakes every thread waiting on `word`.
+func futex_wake_all(word: Ref[Atomic[u32]]) -> i32 {
+    let at: Ref[byte] = unsafe_cast[Ref[byte]] word
+    when target_os() == "linux" {
+        try {
+            return futex_wake(at, futex_wake_private, 0x7fffffff)!
+        } fail(e) {
+            return 0
+        }
+    } else when target_os() == "macos" {
+        _ = ulock_wake_raw(ulock_compare_and_wait | ulock_wake_all, at, 0)
+        return 0
+    } else when target_os() == "windows" {
+        wake_by_address_all_raw(at)
+        return 0
+    } else {
+        return 0
+    }
+}
+
+# Nanoseconds on a clock that never goes back, from an arbitrary start.
+func now_ns() -> u64 {
+    when target_os() == "linux" {
+        var stamp: Timespec = (seconds = 0, nanoseconds = 0)
+        try {
+            _ = clock_gettime(clock_monotonic,
+                unsafe_cast[Ref[byte]] (ref stamp))!
+        } fail(failure) {
+            return 0
+        }
+        return cast[u64](stamp.seconds) * 1000000000 +
+            cast[u64](stamp.nanoseconds)
+    } else when target_os() == "macos" {
+        return clock_gettime_nsec_np_raw(clock_monotonic)
+    } else when target_os() == "windows" {
+        var counter: i64 = 0
+        var frequency: i64 = 0
+        if performance_counter_raw(unsafe_cast[Ref[byte]] (ref counter)) == 0
+                or performance_frequency_raw(
+                    unsafe_cast[Ref[byte]] (ref frequency)) == 0
+                or frequency <= 0 {
+            return 0
+        }
+        let ticks: u64 = cast[u64](counter)
+        let rate: u64 = cast[u64](frequency)
+        return (ticks / rate) * 1000000000 +
+            ((ticks % rate) * 1000000000) / rate
+    } else {
+        return 0
+    }
+}
+
+# The machine's physical memory in bytes, or the largest uint if it can't
+# be found.
+func physical_memory() -> uint {
+    let unknown: uint = ~cast[uint](0)
+    when target_os() == "linux" {
+        var info: Linux_Sysinfo = (uptime = 0, load_1 = 0, load_5 = 0,
+            load_15 = 0, total_ram = 0, free_ram = 0, shared_ram = 0,
+            buffer_ram = 0, total_swap = 0, free_swap = 0, processes = 0,
+            padding_1 = 0, padding_2 = 0, total_high = 0, free_high = 0,
+            memory_unit = 0, padding_3 = 0)
+        try {
+            _ = sysinfo(unsafe_cast[Ref[byte]] (ref info))!
+        } fail(failure) {
+            return unknown
+        }
+        if info.total_ram == 0 {
+            return unknown
+        }
+        var unit: u64 = cast[u64](info.memory_unit)
+        if unit == 0 {
+            unit = 1
+        }
+        return cast[uint](info.total_ram * unit)
+    } else when target_os() == "macos" {
+        let pages: int = sysconf_raw(sysconf_physical_pages)
+        let size: int = sysconf_raw(sysconf_page_size)
+        if pages <= 0 or size <= 0 {
+            return unknown
+        }
+        return cast[uint](pages) * cast[uint](size)
+    } else when target_os() == "windows" {
+        var status: Windows_Memory_Status = (length = 64, load = 0,
+            total_physical = 0, available_physical = 0, total_page_file = 0,
+            available_page_file = 0, total_virtual = 0,
+            available_virtual = 0, available_extended_virtual = 0)
+        if memory_status_raw(unsafe_cast[Ref[byte]] (ref status)) == 0 {
+            return unknown
+        }
+        return cast[uint](status.total_physical)
+    } else {
+        return unknown
+    }
 }

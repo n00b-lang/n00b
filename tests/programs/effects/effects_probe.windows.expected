@@ -8,7 +8,8 @@ sys.internal.env.args: () -> List[string]
   reads ?...
   traps explicit bounds unwrap arithmetic
 sys.internal.clock.now_ns: () -> uint
-  effects may_collect reads_clock
+  effects may_trap reinterprets reads_clock
+  traps arithmetic
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
   effects may_fail may_trap reinterprets reads_random
   reads+writes buffer.__value[]...

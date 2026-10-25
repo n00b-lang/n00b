@@ -1,3 +1,4 @@
+import internal.clock
 import internal.abi
 import internal.gc.core
 import internal.gc.alloc
@@ -25,7 +26,7 @@ func stop_world(heap: Ref[internal.gc.core.Heap]) {
     internal.gc.registry.write_lock(heap)
     internal.gc.mark.pool_lock(heap)
     __atomic_store(ref heap.__value.stw, true)
-    heap.__value.pause_start = __unobserved(__os_now_ns())
+    heap.__value.pause_start = __unobserved(internal.clock.now_ns())
     internal.gc.world.stop(heap)
     internal.gc.mark.pool_unlock(heap)
     internal.gc.registry.write_unlock(heap)
@@ -41,7 +42,7 @@ func start_world(heap: Ref[internal.gc.core.Heap]) {
     }
     __atomic_store(ref heap.__value.stw, false)
     internal.locks.mutex_unlock(ref heap.__value.fin)
-    heap.__value.last_pause_ns = __unobserved(__os_now_ns()) - heap.__value.pause_start
+    heap.__value.last_pause_ns = __unobserved(internal.clock.now_ns()) - heap.__value.pause_start
     heap.__value.pauses += 1
     heap.__value.total_pause_ns += heap.__value.last_pause_ns
     if heap.__value.last_pause_ns > heap.__value.max_pause_ns {
@@ -60,7 +61,7 @@ func start_world(heap: Ref[internal.gc.core.Heap]) {
 func emit_cycle(heap: Ref[internal.gc.core.Heap], kind: i32) {
     var info: internal.gc.core.Cycle_Info = heap.__value.cycle
     info.kind = kind
-    info.duration_ns = __unobserved(__os_now_ns()) - heap.__value.cycle_start
+    info.duration_ns = __unobserved(internal.clock.now_ns()) - heap.__value.cycle_start
     info.rounds = cast[u32](heap.__value.hs_rounds) - info.rounds
     info.stragglers = cast[u32](heap.__value.hs_stragglers) - info.stragglers
     let ready: Ref[(internal.gc.core.Cycle_Info, Ref[byte]?) -> nil]? = heap.__value.cfg.on_cycle
@@ -635,7 +636,7 @@ func begin_epoch_locked(heap: Ref[internal.gc.core.Heap]) {
     heap.__value.cycle.epoch = heap.__value.mark_epoch
     heap.__value.cycle.rounds = cast[u32](heap.__value.hs_rounds)
     heap.__value.cycle.stragglers = cast[u32](heap.__value.hs_stragglers)
-    heap.__value.cycle_start = __unobserved(__os_now_ns())
+    heap.__value.cycle_start = __unobserved(internal.clock.now_ns())
 }
 
 func end_epoch_locked(heap: Ref[internal.gc.core.Heap]) {

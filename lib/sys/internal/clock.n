@@ -1,3 +1,5 @@
+import internal.os
+
 func now_ns() -> u64 {
-    return __os_now_ns()
+    return internal.os.now_ns()
 }

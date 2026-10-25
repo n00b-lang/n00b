@@ -19,15 +19,8 @@ typedef struct {
     void *pc;
 } n00b_os_thread_context;
 
-enum {
-    N00B_OS_PROT_NONE = 0,
-    N00B_OS_PROT_READ = 1,
-    N00B_OS_PROT_WRITE = 2,
-};
-
 typedef void *(*n00b_os_thread_entry)(void *);
 
-size_t n00b_os_page_size(void);
 void n00b_os_thread_yield(void);
 void n00b_os_thread_fence(void);
 uint64_t n00b_os_thread_id(void);
@@ -45,11 +38,7 @@ uint64_t n00b_os_now_ns(void);
 void n00b_os_cpu_relax(void);
 void *n00b_os_map_zeroed(size_t bytes, size_t alignment);
 int32_t n00b_os_unmap(void *address, size_t bytes);
-int32_t n00b_os_protect(void *address, size_t bytes, uint32_t protection);
 [[noreturn]] void n00b_os_exit(int64_t code);
-int32_t n00b_os_futex_wait(uint8_t *word, uint32_t expected,
-                           uint64_t timeout_ns);
-int32_t n00b_os_futex_wake_all(uint8_t *word);
 uint64_t n00b_os_env_count(void);
 const uint8_t *n00b_os_env_at(uint64_t index);
 void n00b_os_save_args(int32_t argc, char **argv);

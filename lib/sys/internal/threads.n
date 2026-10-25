@@ -1,3 +1,5 @@
+import internal.os
+
 const context_registers: uint = 48
 
 record Thread_Context layout(c) {
@@ -70,11 +72,11 @@ func thread_fence() {
 }
 
 func futex_wait(word: Ref[Atomic[u32]], expected: u32, timeout_ns: uint) -> i32 {
-    return __os_futex_wait(word, expected, timeout_ns)
+    return internal.os.futex_wait(word, expected, timeout_ns)
 }
 
 func futex_wake_all(word: Ref[Atomic[u32]]) -> i32 {
-    return __os_futex_wake_all(word)
+    return internal.os.futex_wake_all(word)
 }
 
 func thread_id() -> uint {

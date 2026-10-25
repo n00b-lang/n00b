@@ -429,17 +429,17 @@ func __finalize(consume self: Ref[Sample]) {
 }
 
 func wait_finalized(count: uint) {
-    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    let deadline: u64 = sys.clock.now_ns() + 30_000_000_000
     while __atomic_load(ref finalized) < count {
-        require __os_now_ns() < deadline
+        require sys.clock.now_ns() < deadline
         sys.threads.thread_yield()
     }
 }
 
 func wait_blocked() {
-    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    let deadline: u64 = sys.clock.now_ns() + 30_000_000_000
     while !__atomic_load(ref blocked) {
-        require __os_now_ns() < deadline
+        require sys.clock.now_ns() < deadline
         sys.threads.thread_yield()
     }
 }
@@ -2849,9 +2849,9 @@ func gc_option_tag() {
     flagged_holder = new[Flagged_Holder]()
     // Dead objects are finalized by the collections that would also miss the
     // live one; making them is also what brings those collections.
-    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    let deadline: u64 = sys.clock.now_ns() + 30_000_000_000
     while __atomic_load(ref watched_dead) < 1024 {
-        require __os_now_ns() < deadline
+        require sys.clock.now_ns() < deadline
         for i: int from 0 until 64 {
             watched(false)
         }

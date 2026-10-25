@@ -1,3 +1,4 @@
+import internal.os
 import internal.threads
 import internal.abi
 import internal.gc.hash
@@ -34,7 +35,7 @@ var marking_heaps:              Atomic[u32] = 0
 var request_limit:              uint = 0xffffffffffffffff
 
 func resolve_request_limit() {
-    request_limit = __os_physical_memory()
+    request_limit = internal.os.physical_memory()
 }
 
 record Array_Backing {

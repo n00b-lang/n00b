@@ -386,14 +386,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *u64 = th_name(types, CORE_STRING_STATIC("uint"));
     th_type *uint = th_name(types, CORE_STRING_STATIC("uint"));
     th_type *i32 = th_name(types, CORE_STRING_STATIC("i32"));
-    th_type *mapped_item = th_var(types);
-    th_type *reference = mapped_item ? th_ind(types, 0, mapped_item) : nullptr;
     th_type *byte_reference = byte ? th_ind(types, 0, byte) : nullptr;
     th_type *optional_reference = byte_reference
         ? th_option(types, byte_reference) : nullptr;
-    th_type *map_args[] = {uint, uint};
-    th_type *unmap_args[] = {reference, uint};
-    th_type *protect_args[] = {byte_reference, uint, u32};
     th_type *thread_context = th_name(types,
         CORE_STRING_STATIC("sys.internal.threads.Thread_Context"));
     th_type *thread_context_ref = thread_context
@@ -401,14 +396,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *suspend_args[] = {uint, thread_context_ref, u64};
     th_type *resume_args[] = {uint, thread_context_ref};
     th_type *capture_args[] = {thread_context_ref};
-    th_type *wait_item = th_var(types);
-    th_type *wake_item = th_var(types);
-    th_type *futex_wait_args[] = {
-        wait_item ? th_ind(types, 0, wait_item) : nullptr, u32, uint,
-    };
-    th_type *futex_wake_args[] = {
-        wake_item ? th_ind(types, 0, wake_item) : nullptr,
-    };
     th_type *entry_item = th_var(types);
     th_type *argument_item = th_var(types);
     th_type *thread_start_args[] = {
@@ -435,18 +422,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *unobserved = th_var(types);
     th_type *unobserved_args[] = {unobserved};
     return register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_page_size"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__gc_enter_blocking"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__gc_leave_blocking"), nil_type, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_physical_memory"), uint, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_futex_wait"), i32, futex_wait_args, 3)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_futex_wake_all"), i32,
-            futex_wake_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_fence"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -486,20 +464,10 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__os_thread_resume"), i32,
             resume_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_now_ns"),
-            th_name(types, CORE_STRING_STATIC("uint")), nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_cpu_relax"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__report_failure"), nil_type,
-            failure_args, 5)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_map_zeroed"),
-            optional_reference, map_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_unmap"), i32, unmap_args, 2)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_protect"), i32, protect_args, 3);
+            failure_args, 5);
 }
 
 static bool

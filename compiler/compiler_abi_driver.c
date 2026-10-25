@@ -482,14 +482,13 @@ n00bb_unmanaged_os_mapping(const ir_value_t *value, void *context)
         || value->def->op != IR_OP_CALL
         || !value->def->n_operands) return false;
     const ir_value_t *callee = ir_operand_value(&value->def->operands[0]);
-    return callee && callee->kind == IR_VAL_FUNC && callee->owner
-        && callee->owner->owner
-        && core_string_eq(ir_module_name(callee->owner->owner),
-                          CORE_STRING_STATIC("sys.internal.memory"))
-        && (core_string_eq(callee->owner->name,
-                           CORE_STRING_STATIC("map_zeroed"))
-            || core_string_eq(callee->owner->name,
-                              CORE_STRING_STATIC("__os_map_zeroed")));
+    if (!callee || callee->kind != IR_VAL_FUNC || !callee->owner
+        || !callee->owner->owner
+        || !core_string_eq(callee->owner->name,
+                           CORE_STRING_STATIC("map_zeroed"))) return false;
+    core_string_t module = ir_module_name(callee->owner->owner);
+    return core_string_eq(module, CORE_STRING_STATIC("sys.internal.memory"))
+        || core_string_eq(module, CORE_STRING_STATIC("sys.internal.os"));
 }
 
 static bool
