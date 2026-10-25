@@ -3011,7 +3011,11 @@ run_locate_jobs(core_work_queue_t *queue, n00bb_resolver_t *resolver,
                 core_translation_unit_t *unit = core_work_job_result(
                     queue, requests->ordered.data[i].job);
                 if (!semantic_annotate_closure(grammar, types, unit,
-                        finish_semantic_unit, &loader.interfaces))
+                        &(n00bb_semantic_hooks_t){
+                            .restore = restore_semantic_unit,
+                            .finish = finish_semantic_unit,
+                            .context = &loader.interfaces,
+                        }))
                     success = false;
             }
         }

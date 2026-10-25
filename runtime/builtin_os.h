@@ -58,7 +58,6 @@ const uint8_t *n00b_os_arg_at(uint64_t index);
 // The calling thread's errno from the platform C library, read right after
 // a failed raw call: libSystem's on macOS, the CRT's on Windows. Linux has
 // no libc errno (syscalls return it), so it is 0 there.
-int32_t n00b_os_errno(void);
 uint64_t n00b_os_thread_control_self(void);
 void n00b_os_thread_capture_self(n00b_os_thread_context *context);
 void n00b_os_gc_enter_blocking(void);

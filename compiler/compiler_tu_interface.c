@@ -2279,8 +2279,11 @@ restore_interface_litmod_aliases(n00bb_interface_context_t *loader,
     return at == size;
 }
 
+// Declares a cached module's symbols from its interface. Every module of an
+// import cycle is restored before any of them resolves its package exports,
+// since a package can export a whole module from later in the cycle.
 bool
-finish_semantic_unit(void *context, core_translation_unit_t *unit)
+restore_semantic_unit(void *context, core_translation_unit_t *unit)
 {
     n00bb_interface_context_t *loader = context;
     n00bb_tu_state_t *state = tu_state(unit);
@@ -2313,6 +2316,14 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
             return false;
         }
     }
+    return true;
+}
+
+bool
+finish_semantic_unit(void *context, core_translation_unit_t *unit)
+{
+    (void)context;
+    n00bb_tu_state_t *state = tu_state(unit);
     if (!initialize_unit_package_interfaces(unit)
         || ((!state->interface_module || state->package_manifest_restored)
             && !populate_unit_package_interfaces(unit)))

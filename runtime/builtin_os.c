@@ -243,12 +243,6 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
     return address != NULL;
 }
 
-// There is no libc errno here: a syscall returns the negated errno itself.
-static int32_t os_errno_raw(void)
-{
-    return 0;
-}
-
 #elif defined(__APPLE__)
 
 #include <mach-o/dyld.h>
@@ -416,12 +410,6 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
 {
     (void)bytes;
     return address != NULL;
-}
-
-// libSystem's per-thread errno, which every libSystem call sets on failure.
-static int32_t os_errno_raw(void)
-{
-    return errno;
 }
 
 #elif defined(_WIN32)
@@ -620,12 +608,6 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
     GetCurrentThreadStackLimits(&low, &high);
     uintptr_t at = (uintptr_t)address;
     return at >= low && at < high && high - at >= bytes;
-}
-
-// The CRT's per-thread errno.
-static int32_t os_errno_raw(void)
-{
-    return errno;
 }
 
 #else
@@ -834,11 +816,6 @@ const uint8_t *n00b_os_arg_at(uint64_t index)
 {
     return saved_argv && index < n00b_os_arg_count()
         ? (const uint8_t *)saved_argv[index] : NULL;
-}
-
-int32_t n00b_os_errno(void)
-{
-    return os_errno_raw();
 }
 
 size_t n00b_os_page_size(void)

@@ -3,6 +3,7 @@ import internal.gc.core
 import internal.gc.registry
 import internal.gc.alloc
 import internal.gc.mark
+import internal.os
 
 const capture_fd: i32 = 3
 
@@ -819,13 +820,20 @@ func copy_literal(source: Ref[byte], destination: Ref[byte], type_index: u32) {
 
 func write_word(value: u64, bytes: u32) {
     var buffer: u64 = value
-    require __write_bytes(capture_fd, unsafe_cast[Ref[byte]] (ref buffer),
-        bytes) == cast[i32]bytes
+    write_block(unsafe_cast[Ref[byte]] (ref buffer), cast[uint]bytes)
 }
 
 func write_block(base: Ref[byte], size: uint) {
-    if size != 0 {
-        require __write_bytes(capture_fd, base, cast[u32]size) == cast[i32]size
+    var done: uint = 0
+    while done < size {
+        var wrote: uint = 0
+        try {
+            wrote = internal.os.write_bytes(capture_fd,
+                __gc_byte_offset(base, cast[int] done), size - done)!
+        } fail(failure) {
+        }
+        require wrote != 0
+        done += wrote
     }
 }
 

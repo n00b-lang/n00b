@@ -401,7 +401,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *suspend_args[] = {uint, thread_context_ref, u64};
     th_type *resume_args[] = {uint, thread_context_ref};
     th_type *capture_args[] = {thread_context_ref};
-    th_type *write_args[] = {i32, byte_reference, u32};
     th_type *wait_item = th_var(types);
     th_type *wake_item = th_var(types);
     th_type *futex_wait_args[] = {
@@ -444,14 +443,10 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_physical_memory"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_errno"), i32, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_futex_wait"), i32, futex_wait_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_futex_wake_all"), i32,
             futex_wake_args, 1)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__write_bytes"), i32, write_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_fence"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,

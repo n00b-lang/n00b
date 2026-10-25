@@ -7,9 +7,9 @@
 #
 # Linux enters the kernel directly, through writ `syscall` declarations: no
 # libc and no C shim. macOS calls libSystem, which is its only stable
-# kernel interface, through raw bindings, and reads errno right after a
-# failure. Windows calls the C runtime's descriptor functions the same way,
-# and Win32 for what they don't cover (the console, randomness).
+# kernel interface, and Windows the C runtime's descriptor functions; the
+# bindings read errno right after a failed call. Windows calls Win32 for
+# what the C runtime doesn't cover (the console, randomness).
 
 import internal.errno
 import internal.threads
@@ -92,29 +92,37 @@ when target_os() == "linux" {
     library c
     platforms aarch64-apple-darwin, x86_64-apple-darwin
 
-    fn read(fd: c_int, buf: *u8, count: usize) -> isize
-      effects input, blocking
-    fn write(fd: c_int, buf: *u8, count: usize) -> isize
-      effects output, blocking
-    fn close(fd: c_int) -> c_int
-      effects input
-    fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize
-      effects input
-    # macOS has no pipe2: the ends are marked close-on-exec with fcntl.
-    fn pipe(fds: *c_int) -> c_int
-      effects input
-    fn isatty(fd: c_int) -> c_int
-      effects input
-
-    # The variadic calls go through generated shims, since a variadic C
-    # call's arguments aren't passed like a fixed one's. Their failures
-    # carry the errno.
+    # A failure carries the errno, read right after the call.
     fn errno_location() -> *c_int static per thread
       source "errno" macro
       symbol "__error" when os == macos
     error_channel errno per thread {
         value errno_location()
     }
+
+    fn read(fd: c_int, buf: *u8, count: usize) -> isize
+      error ret == -1 via errno
+      effects input, blocking
+    fn write(fd: c_int, buf: *u8, count: usize) -> isize
+      error ret == -1 via errno
+      effects output, blocking
+    fn close(fd: c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+    fn lseek(fd: c_int, offset: isize, whence: c_int) -> isize
+      error ret == -1 via errno
+      effects input
+    # macOS has no pipe2: the ends are marked close-on-exec with fcntl.
+    fn pipe(fds: *c_int) -> c_int
+      error ret == -1 via errno
+      effects input
+    # 0 with ENOTTY for a descriptor that isn't a terminal.
+    fn isatty(fd: c_int) -> c_int
+      error ret == 0 via errno
+      effects input
+
+    # The variadic calls go through generated shims, since a variadic C
+    # call's arguments aren't passed like a fixed one's.
     fn fcntl(fd: c_int, cmd: c_int, ... of c_int) -> c_int
       error ret == -1 via errno
       effects input
@@ -126,24 +134,22 @@ when target_os() == "linux" {
       effects input
     # At most 256 bytes a call.
     fn getentropy(buf: *u8, count: usize) -> c_int
+      error ret == -1 via errno
       effects random
     # The runtime's exit, which also ends evaluation at compile time.
     fn n00b_os_exit(code: i64)
       effects noreturn, output
 
     binding {
-        raw "read"
-        raw "write"
-        raw "close"
-        raw "lseek"
-        raw "pipe"
-        raw "isatty"
-        raw "getentropy"
         raw "n00b_os_exit"
         pack fcntl.args as array
         pack open.args as array
         pack ioctl.args as array
-        # This module's own open is the API.
+        # This module's own functions of these names are the API.
+        name read "c_read"
+        name write "c_write"
+        name close "c_close"
+        name pipe "c_pipe"
         name open "open_variadic"
     }
     -]'ffi
@@ -151,11 +157,6 @@ when target_os() == "linux" {
     private const set_descriptor_flags: i32 = 2
     private const descriptor_close_on_exec: i32 = 1
     private const get_window_size: u64 = 0x40087468
-
-    # The errno a shimmed call's failure carries.
-    private func errno_of(failure: Ffi_Error) -> internal.errno.Errno {
-        return cast[internal.errno.Errno](failure.code)
-    }
 
     # Open flags.
     private const close_on_exec: u32 = 0x1000000
@@ -171,15 +172,27 @@ when target_os() == "linux" {
     platforms x86_64-w64-windows-gnu
     link "bcrypt"
 
+    # A failure of the descriptor calls carries the errno, read right after
+    # the call.
+    fn _errno() -> *c_int static per thread
+    error_channel errno per thread {
+        value _errno()
+    }
+
     fn _read(fd: c_int, buf: *u8, count: c_uint) -> c_int
+      error ret == -1 via errno
       effects input, blocking
     fn _write(fd: c_int, buf: *u8, count: c_uint) -> c_int
+      error ret == -1 via errno
       effects output, blocking
     fn _close(fd: c_int) -> c_int
+      error ret == -1 via errno
       effects input
     fn _lseeki64(fd: c_int, offset: i64, origin: c_int) -> i64
+      error ret == -1 via errno
       effects input
     fn _pipe(fds: *c_int, size: c_uint, mode: c_int) -> c_int
+      error ret == -1 via errno
       effects input
     # Returns the errno itself; the path is UTF-16.
     fn _wsopen_s(fd: *c_int, path: *u16, flags: c_int, share: c_int,
@@ -201,10 +214,17 @@ when target_os() == "linux" {
       effects noreturn, output
 
     binding {
+        name _read "c_read"
+        name _write "c_write"
+        name _close "c_close"
+        name _pipe "c_pipe"
+        name _lseeki64 "lseek"
         name GetConsoleScreenBufferInfo "console_buffer_info"
         name GetFileType "file_type"
         name BCryptGenRandom "gen_random"
-        raw "_*"
+        raw "_wsopen_s"
+        raw "_isatty"
+        raw "_get_osfhandle"
         raw "GetConsoleScreenBufferInfo"
         raw "GetFileType"
         raw "BCryptGenRandom"
@@ -276,9 +296,9 @@ record Pipe {
     write: i32
 }
 
-# The errno a failed libSystem call left on this thread.
-private func last_errno() -> internal.errno.Errno {
-    return cast[internal.errno.Errno](__os_errno())
+# The errno a C library call's failure carries.
+private func errno_of(failure: Ffi_Error) -> internal.errno.Errno {
+    return cast[internal.errno.Errno](failure.code)
 }
 
 # Reads into `buffer[start:end]`; returns the number of bytes read, which
@@ -295,18 +315,18 @@ func read(fd: i32, buffer: Array[u8], start: uint, end: uint) -> uint
             when target_os() == "linux" {
                 return cast[uint](syscall_read(fd, at, end - start)!)
             } else when target_os() == "macos" {
-                let got: int = read_raw(fd, at, end - start)
-                if got < 0 {
-                    fail last_errno()
+                try {
+                    return cast[uint](c_read(fd, at, end - start)!)
+                } fail(failure) {
+                    fail errno_of(failure)
                 }
-                return cast[uint](got)
             } else when target_os() == "windows" {
-                let got: i32 = read_raw(fd, at,
-                    cast[u32](chunk(end - start)))
-                if got < 0 {
-                    fail last_errno()
+                try {
+                    return cast[uint](c_read(fd, at,
+                        cast[u32](chunk(end - start)))!)
+                } fail(failure) {
+                    fail errno_of(failure)
                 }
-                return cast[uint](got)
             } else {
                 fail internal.errno.Errno.ENOSYS
             }
@@ -326,24 +346,34 @@ func write(fd: i32, data: Array[u8], start: uint, end: uint) -> uint
     if start == end {
         return 0
     }
-    let at: Ref[byte] = unsafe_cast[Ref[byte]] ref data[start]
+    return write_bytes(fd, unsafe_cast[Ref[byte]] ref data[start],
+        end - start)!
+}
+
+# Writes the `count` bytes at `at`; returns the number written, which may
+# be fewer than asked. An interrupted write is retried.
+func write_bytes(fd: i32, at: Ref[byte], count: uint) -> uint
+    fail: internal.errno.Errno {
+    if count == 0 {
+        return 0
+    }
     while true {
         try {
             when target_os() == "linux" {
-                return cast[uint](syscall_write(fd, at, end - start)!)
+                return cast[uint](syscall_write(fd, at, count)!)
             } else when target_os() == "macos" {
-                let wrote: int = write_raw(fd, at, end - start)
-                if wrote < 0 {
-                    fail last_errno()
+                try {
+                    return cast[uint](c_write(fd, at, count)!)
+                } fail(failure) {
+                    fail errno_of(failure)
                 }
-                return cast[uint](wrote)
             } else when target_os() == "windows" {
-                let wrote: i32 = write_raw(fd, at,
-                    cast[u32](chunk(end - start)))
-                if wrote < 0 {
-                    fail last_errno()
+                try {
+                    return cast[uint](c_write(fd, at,
+                        cast[u32](chunk(count)))!)
+                } fail(failure) {
+                    fail errno_of(failure)
                 }
-                return cast[uint](wrote)
             } else {
                 fail internal.errno.Errno.ENOSYS
             }
@@ -360,13 +390,11 @@ func write(fd: i32, data: Array[u8], start: uint, end: uint) -> uint
 func close(fd: i32) fail: internal.errno.Errno {
     when target_os() == "linux" {
         syscall_close(fd)!
-    } else when target_os() == "macos" {
-        if close_raw(fd) < 0 {
-            fail last_errno()
-        }
-    } else when target_os() == "windows" {
-        if close_raw(fd) < 0 {
-            fail last_errno()
+    } else when target_os() == "macos" or target_os() == "windows" {
+        try {
+            c_close(fd)!
+        } fail(failure) {
+            fail errno_of(failure)
         }
     } else {
         fail internal.errno.Errno.ENOSYS
@@ -379,11 +407,11 @@ func seek(fd: i32, offset: int, whence: Whence) -> uint
     when target_os() == "linux" {
         return cast[uint](lseek(fd, offset, cast[i32](whence))!)
     } else when target_os() == "macos" {
-        let position: int = lseek_raw(fd, offset, cast[i32](whence))
-        if position < 0 {
-            fail last_errno()
+        try {
+            return cast[uint](lseek(fd, offset, cast[i32](whence))!)
+        } fail(failure) {
+            fail errno_of(failure)
         }
-        return cast[uint](position)
     } else when target_os() == "windows" {
         # The C runtime's seek on a pipe or console is undefined rather than
         # an error, so those fail here as they do elsewhere.
@@ -394,12 +422,11 @@ func seek(fd: i32, offset: int, whence: Whence) -> uint
         if file_type_raw(handle) != file_type_disk {
             fail internal.errno.Errno.ESPIPE
         }
-        let position: i64 = lseeki64_raw(fd, offset,
-                                                 cast[i32](whence))
-        if position < 0 {
-            fail last_errno()
+        try {
+            return cast[uint](lseek(fd, offset, cast[i32](whence))!)
+        } fail(failure) {
+            fail errno_of(failure)
         }
-        return cast[uint](position)
     } else {
         fail internal.errno.Errno.ENOSYS
     }
@@ -412,22 +439,28 @@ func pipe() -> Pipe fail: internal.errno.Errno {
     when target_os() == "linux" {
         pipe2(at, cast[i32](close_on_exec))!
     } else when target_os() == "macos" {
-        if pipe_raw(at) != 0 {
-            fail last_errno()
+        try {
+            c_pipe(at)!
+        } fail(failure) {
+            fail errno_of(failure)
         }
         let flags: Array[i32] = [descriptor_close_on_exec]
         try {
             fcntl(fds[0], set_descriptor_flags, flags)!
             fcntl(fds[1], set_descriptor_flags, flags)!
         } fail(failure) {
-            _ = close_raw(fds[0])
-            _ = close_raw(fds[1])
+            try {
+                c_close(fds[0])!
+                c_close(fds[1])!
+            } fail(ignored) {
+            }
             fail errno_of(failure)
         }
     } else when target_os() == "windows" {
-        if pipe_raw(at, 0x10000,
-                cast[i32](open_binary | close_on_exec)) != 0 {
-            fail last_errno()
+        try {
+            c_pipe(at, 0x10000, cast[i32](open_binary | close_on_exec))!
+        } fail(failure) {
+            fail errno_of(failure)
         }
     } else {
         fail internal.errno.Errno.ENOSYS
@@ -536,14 +569,16 @@ func is_terminal(fd: i32) -> bool fail: internal.errno.Errno {
             fail e
         }
     } else when target_os() == "macos" {
-        if isatty_raw(fd) == 1 {
+        try {
+            _ = isatty(fd)!
             return true
+        } fail(failure) {
+            let e: internal.errno.Errno = errno_of(failure)
+            if e == internal.errno.Errno.ENOTTY {
+                return false
+            }
+            fail e
         }
-        let e: internal.errno.Errno = last_errno()
-        if e == internal.errno.Errno.ENOTTY {
-            return false
-        }
-        fail e
     } else when target_os() == "windows" {
         # A console or other character device.
         return isatty_raw(fd) != 0
@@ -609,8 +644,10 @@ func random_bytes(buffer: Array[u8], start: uint, end: uint)
             if chunk > 256 {
                 chunk = 256
             }
-            if getentropy_raw(into, chunk) != 0 {
-                fail last_errno()
+            try {
+                getentropy(into, chunk)!
+            } fail(failure) {
+                fail errno_of(failure)
             }
             at += chunk
         } else when target_os() == "windows" {

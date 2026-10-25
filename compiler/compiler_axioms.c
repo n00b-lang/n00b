@@ -46,14 +46,11 @@ static const n00bb_axiom_t axioms[] = {
            IR_SUMMARY_READS_ENV, 0, 0),
     // Input, not pure: errno means something only right after the call that
     // set it, so reads must not be merged or moved.
-    NATIVE("__os_errno", "n00b_os_errno", NATIVE_INPUT, 0, 0),
     NATIVE("__comptime_freeze", "n00b_comptime_freeze", NATIVE_OUTPUT, 0, 0),
     NATIVE("__comptime_frozen", "n00b_comptime_frozen", 0, 0, 0),
     NATIVE("__os_futex_wait", "n00b_os_futex_wait", IR_SUMMARY_MAY_BLOCK,
            0x1, 0),
     NATIVE("__os_futex_wake_all", "n00b_os_futex_wake_all", 0, 0, 0),
-    NATIVE("__write_bytes", "n00bb_runtime_write_bytes",
-           NATIVE_BLOCKING_OUTPUT, 0x2, 0),
     NATIVE("__os_thread_fence", "n00b_os_thread_fence", 0, 0, 0),
     {.key = N00BB_AXIOM_NATIVE, .name = CORE_STRING_STATIC("__os_thread_start"),
      .native = CORE_STRING_STATIC("n00b_os_thread_start"),

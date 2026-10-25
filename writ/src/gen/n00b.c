@@ -219,7 +219,11 @@ mark(const n00b_t *g, const writ_emit_t *emit, writ_span_t span, writ_str_t name
 typedef enum {
     PARAM_SCALAR,
     PARAM_VALUE,
+    // A handle's or other C memory's address, as `uint`.
     PARAM_ADDRESS,
+    // A pointer into n00b memory, as `Ref[byte]`, so the GC keeps the
+    // object alive through the call.
+    PARAM_POINTER,
     PARAM_RECORD,
     PARAM_STORAGE,
     PARAM_OUT,
@@ -351,6 +355,8 @@ lifted_record(const n00b_t *g, const writ_type_view_t *type)
     return liftable_record(g->model, record) ? record : nullptr;
 }
 
+static bool pointer_input(const writ_plan_item_view_t *item);
+
 static const writ_n00b_type_t *
 item_tree(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t index)
 {
@@ -388,6 +394,10 @@ item_tree(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, uint32_t ind
     default:
         if (record_target(item) && lifted_record(g, record_target(item)) && optional_result(item)) {
             return option_of(g, named(g, scalar_type(g, record_target(item))));
+        }
+        if (pointer_input(item)) {
+            const writ_n00b_type_t *ref = ref_of(g, named(g, writ_cstr("byte")));
+            return item->type->nullable ? option_of(g, ref) : ref;
         }
         return named(g, scalar_type(g, record_target(item) ? record_target(item) : item->type));
     }
@@ -444,6 +454,21 @@ static bool
 is_handle(const writ_plan_item_view_t *item)
 {
     return item->shape == WRIT_SHAPE_HANDLE || (item->type && item->type->kind == WRIT_TYPE_HANDLE);
+}
+
+// A pointer argument to bytes, integers or floats: n00b passes the memory it
+// points into as `Ref[byte]`, as a raw binding does, so the GC keeps the
+// object alive through the call. Pointers to declared types stay addresses.
+static bool
+pointer_input(const writ_plan_item_view_t *item)
+{
+    if (!writ_c_is_input(item) || is_handle(item)
+        || item->shape == WRIT_SHAPE_CALLBACK || !item->type
+        || item->type->kind != WRIT_TYPE_POINTER) return false;
+    const writ_type_view_t *target = item->type->target;
+    return !target || target->kind == WRIT_TYPE_VOID
+        || target->kind == WRIT_TYPE_BOOL || target->kind == WRIT_TYPE_INT
+        || target->kind == WRIT_TYPE_FLOAT;
 }
 
 static bool
@@ -534,6 +559,9 @@ shim_params(const n00b_t *g, size_t fn, const writ_plan_view_t *plan, core_list_
                 bool opaque = opaque_record(g, record);
                 param.kind = opaque ? PARAM_STORAGE : PARAM_RECORD;
                 param.n00b_type = ref_of(g, opaque ? buffer_tree(g) : named(g, scalar_type(g, record)));
+            } else if (pointer_input(item)) {
+                param.kind = PARAM_POINTER;
+                param.n00b_type = item_tree(g, fn, plan, index);
             } else if (is_pointer(param.c_type)) {
                 param.kind = PARAM_ADDRESS;
                 param.n00b_type = named(g, writ_cstr("uint"));

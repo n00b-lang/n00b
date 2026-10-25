@@ -1,6 +1,7 @@
 import containers.list
 import hex
 import string.style
+import sys.os
 
 private record String_Words layout(c) {
     data:     Ref[byte]
@@ -256,16 +257,16 @@ private const fd_chunk_limit: uint = 0x7fffffff
 private func write_all(fd: i32, data: Ref[byte], len: uint) -> bool {
     var done: uint = 0
     while done < len {
-        var chunk: uint = len - done
-        if chunk > fd_chunk_limit {
-            chunk = fd_chunk_limit
-        }
-        let wrote: i32 = __write_bytes(fd,
-            __gc_byte_offset(data, cast[int] done), cast[u32] chunk)
-        if wrote <= 0 {
+        try {
+            let wrote: uint = sys.os.write_bytes(fd,
+                __gc_byte_offset(data, cast[int] done), len - done)!
+            if wrote == 0 {
+                return false
+            }
+            done += wrote
+        } fail(failure) {
             return false
         }
-        done += cast[uint] wrote
     }
     return true
 }

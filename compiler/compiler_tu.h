@@ -827,11 +827,17 @@ bool type_may_contain_reference_alias(th_ctx *types, th_type *type);
 bool n00bb_type_reaches_shared_state(th_ctx *types, th_type *type);
 bool n00bb_unit_type_reaches_shared_state(n00bb_tu_state_t *state,
                                           th_type *type);
-typedef bool (*n00bb_semantic_unit_finish_t)(void *context,
+typedef bool (*n00bb_semantic_unit_hook_t)(void *context,
     core_translation_unit_t *unit);
+// `restore` runs as each module's walk ends; `finish` runs once every module
+// of its import cycle has been walked and restored.
+typedef struct {
+    n00bb_semantic_unit_hook_t restore;
+    n00bb_semantic_unit_hook_t finish;
+    void *context;
+} n00bb_semantic_hooks_t;
 bool semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
-    core_translation_unit_t *unit, n00bb_semantic_unit_finish_t finish,
-    void *context);
+    core_translation_unit_t *unit, const n00bb_semantic_hooks_t *hooks);
 bool is_reference_symbol(parse_sym_entry_t *symbol);
 bool is_integer_type(th_type *type);
 bool validate_cached_array_dimensions(parse_grammar_t *grammar,

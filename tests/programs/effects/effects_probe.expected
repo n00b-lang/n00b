@@ -10,11 +10,11 @@ sys.internal.env.args: () -> List[string]
 sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
-  effects may_fail may_trap may_io may_collect reinterprets may_input reads_random
+  effects may_fail may_trap reinterprets reads_random
   reads+writes buffer.__value[]...
   traps explicit bounds arithmetic
 sys.internal.random.fill: (modify 'T) -> nil fail: Errno
-  effects may_fail may_trap may_allocate may_io may_collect allocates_direct reinterprets may_input reads_random
+  effects may_fail may_trap may_allocate may_collect allocates_direct reinterprets reads_random
   traps explicit bounds arithmetic
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
