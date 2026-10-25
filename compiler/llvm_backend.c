@@ -3765,6 +3765,36 @@ gc_array_storage(lower_state_t *state, LLVMValueRef type_index,
                           "array.storage");
 }
 
+// An array storage placement keeps in the frame: one it proved stays in the
+// call, of at most 1024 plain scalars, not made in a loop.
+static bool
+frame_array_placed(const ir_instr_t *instruction)
+{
+    ir_annot_t *placed = ir_annot_get((ir_annots_t *)&instruction->annots,
+        CORE_STRING_STATIC("ir.allocation_local"));
+    return placed && placed->kind == IR_ANNOT_BOOL && placed->b;
+}
+
+// A frame array's elements, zeroed. Its descriptor is a constant (the
+// array's lengths are loaded as invariant, which memory written here
+// wouldn't be), and nothing outside the call sees the array, so the two
+// needn't sit together as they do in a collected array.
+static LLVMValueRef
+frame_array_data(lower_state_t *state, uint64_t bytes, uint64_t alignment)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i8 = LLVMInt8TypeInContext(context);
+    if (!bytes) bytes = 1;
+    LLVMValueRef data = entry_alloca(state, LLVMArrayType(i8,
+                                                          (unsigned)bytes));
+    if (!data) return nullptr;
+    LLVMSetAlignment(data, (unsigned)alignment);
+    LLVMBuildMemSet(state->builder, data, LLVMConstNull(i8),
+        LLVMConstInt(LLVMInt64TypeInContext(context), bytes, false),
+        (unsigned)alignment);
+    return data;
+}
+
 static bool
 array_requires_flat_storage(const ir_instr_t *instruction)
 {
@@ -3893,13 +3923,17 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMValueRef descriptor = array_descriptor(state, count);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-    LLVMValueRef storage = gc_array_storage(state,
-        runtime_type_index_value(state, type),
-        LLVMConstInt(i64, byte_size, false), alignment, descriptor);
+    bool frame = frame_array_placed(instruction);
+    LLVMValueRef storage = frame ? descriptor
+        : gc_array_storage(state, runtime_type_index_value(state, type),
+            LLVMConstInt(i64, byte_size, false), alignment, descriptor);
     if (!storage) return nullptr;
     LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
-    LLVMValueRef data = LLVMBuildGEP2(state->builder,
-        LLVMInt8TypeInContext(context), storage, &offset, 1, "array.data");
+    LLVMValueRef data = frame
+        ? frame_array_data(state, payload_bytes, alignment)
+        : LLVMBuildGEP2(state->builder, LLVMInt8TypeInContext(context),
+                        storage, &offset, 1, "array.data");
+    if (!data) return nullptr;
     bool templated = !packed_width && count > 1
         && literal_template(state, instruction, element, element_type, stride,
                             data);
@@ -4070,12 +4104,20 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMValueRef bytes = LLVMBuildAdd(state->builder,
         LLVMConstInt(i64, data_offset, false), allocated_bytes,
         "array.new.total.bytes");
-    LLVMValueRef storage = gc_array_storage(state,
-        runtime_type_index_value(state, type), bytes, alignment, descriptor);
+    bool frame = frame_array_placed(instruction) && rank == 1
+        && LLVMIsConstant(count) && LLVMIsConstant(allocated_bytes);
+    LLVMValueRef storage = frame
+        ? array_descriptor(state, LLVMConstIntGetZExtValue(count))
+        : gc_array_storage(state, runtime_type_index_value(state, type),
+                           bytes, alignment, descriptor);
     if (!storage) return nullptr;
     LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
-    LLVMValueRef data = LLVMBuildGEP2(state->builder, i8, storage, &offset,
-        1, "array.new.data");
+    LLVMValueRef data = frame
+        ? frame_array_data(state, LLVMConstIntGetZExtValue(allocated_bytes),
+                           alignment)
+        : LLVMBuildGEP2(state->builder, i8, storage, &offset, 1,
+                        "array.new.data");
+    if (!data) return nullptr;
     LLVMValueRef array = LLVMBuildInsertValue(state->builder,
         LLVMGetUndef(result_type), data, 0, "array.new.with.data");
     return LLVMBuildInsertValue(state->builder, array, storage, 1,

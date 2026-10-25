@@ -559,12 +559,31 @@ instruction_flags(const ir_func_t *f, const ir_instr_t *in)
             ? 0
             : IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
                 | IR_SUMMARY_ALLOCATES_DIRECT;
-    case IR_OP_ARRAY_NEW:
+    case IR_OP_ARRAY_NEW: {
+        // An array storage placement keeps in the frame isn't allocated.
+        ir_annot_t *placed = ir_annot_get((ir_annots_t *)&in->annots,
+            CORE_STRING_STATIC("ir.allocation_local"));
+        if (placed && placed->kind == IR_ANNOT_BOOL && placed->b) return 0;
+    }
         return in->dest && th_is_closed(ir_module_types(f->owner),
                                         in->dest->type)
             ? IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
                 | IR_SUMMARY_ALLOCATES_DIRECT
             : IR_SUMMARY_MAY_ALLOCATE;
+    case IR_OP_AGGREGATE: {
+        // An array built from its elements is allocated like `array.new`'s,
+        // unless storage placement keeps it in the frame.
+        th_type *type = in->dest ? th_resolve(in->dest->type) : nullptr;
+        ir_annot_t *placed = ir_annot_get((ir_annots_t *)&in->annots,
+            CORE_STRING_STATIC("ir.allocation_local"));
+        if (!type || th_kind_of(type) != TH_SEQUENCE
+            || (placed && placed->kind == IR_ANNOT_BOOL && placed->b))
+            return 0;
+        return th_is_closed(ir_module_types(f->owner), in->dest->type)
+            ? IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
+                | IR_SUMMARY_ALLOCATES_DIRECT
+            : IR_SUMMARY_MAY_ALLOCATE;
+    }
     case IR_OP_ALLOC_USING:
     case IR_OP_ARRAY_NEW_USING:
     case IR_OP_BOX:

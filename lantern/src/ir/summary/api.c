@@ -969,6 +969,10 @@ static bool
 summary_writes(write_query_t *q, const ir_summary_t *summary, bool follow)
 {
     if (!summary) return true;
+    // While a call blocks, other threads run, and what they write to shared
+    // memory is what the caller sees afterwards (waiting on a futex is how
+    // a lock hands over the data it guards).
+    if (summary->flags & IR_SUMMARY_MAY_BLOCK) return true;
     for (size_t i = 0; i < summary->paths.len; i++) {
         const ir_spath_t *path = &summary->paths.data[i];
         ir_splace_t       places[2];

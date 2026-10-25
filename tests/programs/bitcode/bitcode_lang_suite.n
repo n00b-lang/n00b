@@ -544,6 +544,34 @@ func quiet_clock() -> uint {
     return __unobserved(sys.clock.now_ns())
 }
 
+# Bounded arrays of scalars that stay in the call live in its frame, so
+# making them allocates nothing; one that's returned is still allocated.
+record Frame_Words layout(c) {
+    tag: u32
+    words: Array[u64][4]
+}
+
+func frame_literal(x: u64) -> u64 {
+    let words: Array[u64][3] = [x, x + 1, x + 2]
+    return words[0] + words[1] + words[2]
+}
+
+func frame_zeroed() -> u64 {
+    var words: Array[u64][8]
+    words[3] = 9
+    return words[3] + words[4]
+}
+
+func frame_field(x: u32) -> u64 {
+    var held: Frame_Words = (tag = x, words = [1, 2, 3, 4])
+    return held.words[2] + cast[u64](held.tag)
+}
+
+func heap_literal() -> Array[u64] {
+    let words: Array[u64] = [7, 8, 9]
+    return words
+}
+
 const square_is_quiet: bool = forbids_effect(effects_square, input) and
     forbids_effect(effects_square, output)
 
@@ -558,6 +586,10 @@ may_effect(effects_allocate, allocates)
 forbids_effect(effects_allocate, nondeterministic)
 may_effect(effects_random, random) and forbids_effect(effects_random, output)
 forbids_effect(effects_square, nondeterministic)
+forbids_effect(frame_literal, allocates) and forbids_effect(frame_zeroed, allocates)
+forbids_effect(frame_field, allocates) and may_effect(heap_literal, allocates)
+require frame_literal(5) == 18 and frame_zeroed() == 9 and frame_field(1) == 4
+require heap_literal()[2] == 9
 
 func function_effects_check() {
     require square_is_quiet

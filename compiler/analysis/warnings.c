@@ -732,11 +732,15 @@ starts_threads(ir_summaries_t *summaries, const ir_func_t *function)
 }
 
 // The function a thread entry argument runs: a function value, or the
-// handler of a callback made from one.
+// handler of a callback made from one. A raw binding takes the function's
+// address cast to a plain pointer.
 static const ir_value_t *
 entry_function_value(const ir_value_t *argument)
 {
     const ir_value_t *value = copied_source(argument);
+    if (value && value->kind == IR_VAL_INSTR && value->def
+        && value->def->op == IR_OP_BITCAST && value->def->n_operands == 1)
+        value = copied_source(ir_operand_value(&value->def->operands[0]));
     const ir_instr_t *creation = value ? value->def : nullptr;
     if (creation && creation->op == IR_OP_CALLBACK_CREATE
         && creation->n_operands && creation->operands[0].kind == IR_OPD_VALUE)

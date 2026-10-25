@@ -43,12 +43,6 @@ static const n00bb_axiom_t axioms[] = {
            IR_SUMMARY_MAY_BLOCK, 0, 0),
     NATIVE("__comptime_freeze", "n00b_comptime_freeze", NATIVE_OUTPUT, 0, 0),
     NATIVE("__comptime_frozen", "n00b_comptime_frozen", 0, 0, 0),
-    {.key = N00BB_AXIOM_NATIVE, .name = CORE_STRING_STATIC("__os_thread_start"),
-     .native = CORE_STRING_STATIC("n00b_os_thread_start"),
-     .effects = IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
-         | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_STARTS_THREADS,
-     .entries = 0x1,
-     .returns = IR_SRETURN_NONE},
     COLLECTION_FREE_NATIVE("__effect_query", "n00bb_effect_query", 0, 0, 0),
     COLLECTION_FREE_NATIVE("__function_has_effect",
                            "n00bb_function_has_effect", 0, 0, 0),

@@ -13,11 +13,11 @@ sys.internal.env.args: () -> List[string]
   traps explicit bounds unwrap arithmetic
   output result data[(new in sys.internal.env.args:15:29)] control[]
   output (new in builtin.containers.list.__init:15:18).leases data[(new in builtin.containers.lease.__init:25:19) (new in builtin.containers.lease.replace_storage:81:23) (new in builtin.containers.lease.writable:61:23)] control[]
-  output (new in builtin.containers.list.__init:15:18).storage... data[(new in builtin.string.core.long_bytes:190:12)... (new in sys.internal.os.c_string:1101:28)... (new in sys.internal.os.c_string:1101:9)... (reads_env) ?...] control[]
+  output (new in builtin.containers.list.__init:15:18).storage... data[(new in builtin.string.core.long_bytes:190:12)... (new in sys.internal.os.c_string:1009:28)... (new in sys.internal.os.c_string:1009:9)... (reads_env) ?...] control[]
   output (new in builtin.string.core.long_bytes:190:12)[]... data[?...] control[]
   output (new in sys.internal.env.args:15:29).items data[(new in builtin.containers.list.__init:15:18)] control[]
-  output (new in sys.internal.os.c_string:1101:28)[]... data[?...] control[]
-  output (new in sys.internal.os.c_string:1101:9) data[(new in sys.internal.os.c_string:1101:28)] control[]
+  output (new in sys.internal.os.c_string:1009:28)[]... data[?...] control[]
+  output (new in sys.internal.os.c_string:1009:9) data[(new in sys.internal.os.c_string:1009:28)] control[]
 sys.internal.clock.now_ns: () -> uint
   effects reads_clock
   output result data[(reads_clock) ?...] control[]

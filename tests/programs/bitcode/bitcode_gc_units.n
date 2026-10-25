@@ -2290,7 +2290,8 @@ func gc_builtin_os() {
     let current_thread: uint = sys.threads.thread_id()
     assert current_thread != 0
     assert current_thread == sys.threads.thread_id()
-    assert sys.threads.thread_stack_high_self() != nil
+    let stack_high: Ref[byte]? = sys.threads.thread_stack_high_self()
+    assert stack_high != nil
     let red_zone: uint = sys.threads.stack_red_zone_bytes()
     assert red_zone == cast[uint](0) or red_zone == cast[uint](128)
     assert sys.threads.thread_control_self() != 0

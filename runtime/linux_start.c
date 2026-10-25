@@ -516,6 +516,43 @@ n00b_linux_thread_start(void (*entry)(void *), void *argument)
     return 0;
 }
 
+// The address just past the top of the main thread's stack.
+static uintptr_t main_stack_high;
+
+// The kernel copies the program's file name (AT_EXECFN) to the very top of
+// the initial stack, with only a null word above it, so the stack's mapping
+// ends at the page boundary after it.
+static uintptr_t
+initial_stack_high(uintptr_t *stack)
+{
+    const char *name = (const char *)n00b_linux_auxv(31);
+    uintptr_t end = (uintptr_t)stack;
+    if (name) {
+        while (*name) name++;
+        end = (uintptr_t)name + 1 + sizeof(uintptr_t);
+    }
+    return round_up(end, page_bytes());
+}
+
+uintptr_t
+n00b_linux_stack_high(uintptr_t sp)
+{
+    // The main thread's is known without the thread list, whose lock a
+    // thread stopped for the collector may hold.
+    if (n00b_linux_syscall6(__NR_gettid, 0, 0, 0, 0, 0, 0)
+        == n00b_linux_syscall6(__NR_getpid, 0, 0, 0, 0, 0, 0))
+        return main_stack_high;
+    uintptr_t high = 0;
+    lock_threads();
+    for (thread_area_t *area = threads; area && !high; area = area->next) {
+        uintptr_t base = (uintptr_t)area;
+        if (sp >= base && sp < base + area->bytes)
+            high = base + area->bytes - page_bytes();
+    }
+    unlock_threads();
+    return high;
+}
+
 // ---------------------------------------------------------------------------
 // Startup.
 
@@ -529,6 +566,7 @@ n00b_linux_start(uintptr_t *stack)
     while (*end) end++;
     n00b_linux_environ = environment;
     auxiliary_vector = (const uintptr_t *)(end + 1);
+    main_stack_high = initial_stack_high(stack);
 
     find_tls_template();
     long area = n00b_linux_syscall6(__NR_mmap, 0,

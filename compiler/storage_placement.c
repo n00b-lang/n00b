@@ -4,6 +4,9 @@
 #include "ir/pass.h"
 #include "lib/alloc.h"
 #include "ir/typelang.h"
+#include "ir/shape.h"
+#include "ir/layout.h"
+#include "ir/operands.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
 #include "lib/list.h"
@@ -319,26 +322,227 @@ block_in_cycle(ir_block_t *block)
     return cycle;
 }
 
+// A bounded array of plain scalars (integers, floats, bools, bytes), made
+// whole by one instruction: zeroed (`array.new`) or from its elements (an
+// array literal). Its storage holds no references, so it can live in the
+// frame when it doesn't outlive the call.
+static bool
+frame_array(const ir_instr_t *in)
+{
+    th_type *type = in->dest ? th_resolve(in->dest->type) : nullptr;
+    th_type *element = type && th_kind_of(type) == TH_SEQUENCE
+        ? th_resolve(th_seq_elem(type)) : nullptr;
+    const th_builtin_type_t *builtin = element ? th_builtin_of(element)
+                                               : nullptr;
+    bool scalar = element && (th_kind_of(element) == TH_BITINT
+                              || (builtin && builtin->scalar));
+    if (!scalar) return false;
+    // A scalar is at most 16 bytes, so this keeps a frame array within
+    // 16 KiB.
+    enum { FRAME_ELEMENTS = 1024 };
+    if (in->op == IR_OP_AGGREGATE) {
+        ir_aggregate_form_t form;
+        return in->n_operands <= FRAME_ELEMENTS
+            && (!ir_instr_aggregate_form(in, &form)
+                || form == IR_AGGREGATE_ELEMENTS);
+    }
+    ir_array_init_t init;
+    ir_shape_extent_t extent;
+    ir_shape_t *shape = in->op == IR_OP_ARRAY_NEW ? ir_value_shape(in->dest)
+                                                  : nullptr;
+    return shape && ir_shape_rank(shape) == 1
+        && ir_shape_extent(shape, 0, &extent)
+        && extent.kind == IR_SHAPE_EXTENT_STATIC
+        && extent.static_value <= FRAME_ELEMENTS
+        && ir_instr_array_init(in, &init)
+        && init == IR_ARRAY_INIT_LANGUAGE_ZERO;
+}
+
+typedef const ir_value_t *placed_value_ptr_t;
+core_list_decl(placed_value_ptr_t);
+
+typedef struct {
+    const ir_instr_t *user;
+    uint32_t          operand;
+} placed_use_t;
+core_list_decl(placed_use_t);
+typedef core_list_t(placed_use_t) placed_uses_t;
+
+// Each value's uses in the function, built once for the arrays it holds.
+static void
+index_uses(ir_func_t *function, core_dict_t *uses)
+{
+    core_dict_init(uses, nullptr, nullptr);
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = function->blocks[b]->instrs[i];
+            for (uint32_t o = 0; o < in->n_operands; o++) {
+                const ir_value_t *value = ir_operand_value(&in->operands[o]);
+                if (!value) continue;
+                bool found = false;
+                placed_uses_t *list = core_dict_get(uses, (void *)value,
+                                                    &found);
+                if (!found) {
+                    list = core_alloc(placed_uses_t);
+                    *list = core_list_new(placed_use_t);
+                    core_dict_put(uses, (void *)value, list);
+                }
+                core_list_push(*list, ((placed_use_t){in, o}));
+            }
+        }
+}
+
+static void
+free_uses(core_dict_t *uses)
+{
+    core_dict_foreach(uses, item) {
+        placed_uses_t *list = item->value;
+        core_list_free(*list);
+        core_free(list);
+    }
+    core_dict_free(uses);
+}
+
+static const placed_uses_t *
+uses_of(core_dict_t *uses, const ir_value_t *value)
+{
+    bool found = false;
+    placed_uses_t *list = value ? core_dict_get(uses, (void *)value, &found)
+                                : nullptr;
+    return found ? list : nullptr;
+}
+
+// Whether every use of `value`, an element's address, loads or stores
+// through it.
+static bool
+only_accessed(core_dict_t *uses, const ir_value_t *value)
+{
+    const placed_uses_t *list = uses_of(uses, value);
+    for (size_t u = 0; list && u < list->len; u++) {
+        ir_op_t op = list->data[u].user->op;
+        if (!((op == IR_OP_LOAD || op == IR_OP_STORE)
+              && list->data[u].operand == 0)) return false;
+    }
+    return value != nullptr;
+}
+
+// Whether every use of `value`, the address of a local holding an array,
+// takes an element's address that is only loaded or stored through.
+static bool
+only_indexed(core_dict_t *uses, const ir_value_t *value)
+{
+    const placed_uses_t *list = uses_of(uses, value);
+    for (size_t u = 0; list && u < list->len; u++) {
+        const ir_instr_t *in = list->data[u].user;
+        if (!(in->op == IR_OP_INDEX && list->data[u].operand == 0
+              && only_accessed(uses, in->dest))) return false;
+    }
+    return value != nullptr;
+}
+
+// Whether `user` uses the array `value` (operand `at`) only for its
+// elements, keeping it within the call. An element's address may only be
+// loaded or stored through, and a copy may go to a local or into an inline
+// array field of a record literal.
+static bool
+array_use_stays(ir_func_t *function, core_dict_t *uses,
+                const ir_instr_t *user, uint32_t at,
+                core_list_t(placed_value_ptr_t) *follow)
+{
+    switch (user->op) {
+    case IR_OP_SEQUENCE_GET:
+    case IR_OP_SEQUENCE_LENGTH:
+    case IR_OP_SEQUENCE_SHAPE_CHECK:
+    case IR_OP_SEQUENCE_SET:
+        return at == 0;
+    case IR_OP_INDEX:
+        return at == 0 && only_accessed(uses, user->dest);
+    case IR_OP_ADDRESS_OF:
+        // The address of a local holding the array, to set an element.
+        return at == 0 && only_indexed(uses, user->dest);
+    case IR_OP_COPY:
+        if (user->dest_kind == IR_DEST_LOCAL) {
+            if (!user->dest_local) return false;
+            core_list_push(*follow, user->dest_local->value);
+            return true;
+        }
+        if (user->dest) core_list_push(*follow, user->dest);
+        return user->dest != nullptr;
+    case IR_OP_AGGREGATE: {
+        th_type *record = user->dest ? th_resolve(user->dest->type) : nullptr;
+        th_type *fields = record ? th_fields_record(
+            ir_module_types(function->owner), record) : nullptr;
+        const th_member *member = fields && at < th_record_len(fields)
+            ? th_record_member(fields, at) : nullptr;
+        bool known = false;
+        return member && ir_layout_member_inline(function->owner, record,
+                                                 member->name, &known);
+    }
+    default:
+        return false;
+    }
+}
+
+// The function's use index, built the first time an array needs it.
+static core_dict_t *
+indexed_uses(ir_func_t *function, core_dict_t *uses, bool *indexed)
+{
+    if (!*indexed) index_uses(function, uses);
+    *indexed = true;
+    return uses;
+}
+
+// An array stays in the call when every use of it, and of each copy of it,
+// only reaches its elements.
+static bool
+array_stays(ir_func_t *function, core_dict_t *uses, const ir_value_t *array)
+{
+    core_list_t(placed_value_ptr_t) pending = core_list_new(placed_value_ptr_t);
+    core_dict_t seen;
+    core_dict_init(&seen, nullptr, nullptr);
+    core_list_push(pending, array);
+    bool stays = true;
+    while (stays && pending.len) {
+        const ir_value_t *value = pending.data[--pending.len];
+        if (!core_dict_add(&seen, (void *)value, (void *)value)) continue;
+        const placed_uses_t *list = uses_of(uses, value);
+        for (size_t u = 0; stays && list && u < list->len; u++)
+            stays = array_use_stays(function, uses, list->data[u].user,
+                                    list->data[u].operand, &pending);
+    }
+    core_dict_free(&seen);
+    core_list_free(pending);
+    return stays;
+}
+
 static bool
 annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
                      ir_func_t *function)
 {
     core_list_t(placed_alloc_t) found = core_list_new(placed_alloc_t);
+    core_dict_t uses;
+    bool indexed = false;
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *allocation = block->instrs[i];
             bool required = false;
-            if (allocation->op != IR_OP_ALLOC || !allocation->dest
-                || ir_instr_storage_class(allocation, &required).data
-                || required) continue;
+            bool array = frame_array(allocation);
+            if ((allocation->op != IR_OP_ALLOC && !array) || !allocation->dest
+                || (!array
+                    && (ir_instr_storage_class(allocation, &required).data
+                        || required))) continue;
             core_list_push(found, ((placed_alloc_t){
                 .allocation = allocation,
-                .local      = !ir_address_escapes(summaries, function,
-                                                  allocation->dest)
+                .local      = (array ? array_stays(function,
+                                       indexed_uses(function, &uses, &indexed),
+                                       allocation->dest)
+                               : !ir_address_escapes(summaries, function,
+                                                     allocation->dest))
                     && !block_in_cycle(block)}));
         }
     }
+    if (indexed) free_uses(&uses);
     bool ok = true;
     for (size_t a = 0; a < found.len; a++)
         if (!found.data[a].local)

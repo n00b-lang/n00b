@@ -103,6 +103,11 @@ func check_hints() {
     }
 }
 
+# Stopping the world can't allocate: an allocation there would start a
+# collection inside the one that's stopping it.
+forbids_effect(sys.os.thread_suspend, allocates)
+forbids_effect(sys.os.thread_resume, allocates)
+
 require stack_ok()
 check_hints()
 check_suspend()

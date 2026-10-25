@@ -23,6 +23,11 @@ fn n00b_os_thread_id() -> u64
   effects none
 fn n00b_os_thread_is_main() -> u64
   effects none
+# Starts a thread that runs `entry(argument)`. The runtime makes the thread
+# and attaches it to the collector before the entry runs, which n00b code
+# can't do on a thread that isn't attached yet.
+fn n00b_os_thread_start(entry: *void, argument: ?void) -> c_int
+  effects threads, alloc, blocking
 # Saves the calling thread's registers, its stack and frame pointers and
 # its return address in a `Thread_Context`. It's assembly, which the
 # runtime's own entry to a blocking call also uses.
@@ -59,7 +64,8 @@ func thread_start(entry: Thread_Entry) -> bool {
 # a mutator, where a callback (an object on the heap) can't be made.
 func collector_thread_start(entry: Ref[(Ref[byte]) -> Ref[byte]],
                             argument: Ref[byte]) -> bool {
-    return __os_thread_start(entry, argument) == 0
+    return n00b_os_thread_start_raw(unsafe_cast[Ref[byte]] entry,
+                                    argument) == 0
 }
 
 func thread_is_main() -> bool {

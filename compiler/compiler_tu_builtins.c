@@ -396,13 +396,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
 {
     th_type *u32 = th_name(types, CORE_STRING_STATIC("u32"));
     th_type *u64 = th_name(types, CORE_STRING_STATIC("uint"));
-    th_type *i32 = th_name(types, CORE_STRING_STATIC("i32"));
-    th_type *entry_item = th_var(types);
-    th_type *argument_item = th_var(types);
-    th_type *thread_start_args[] = {
-        entry_item ? th_ind(types, 0, entry_item) : nullptr,
-        argument_item ? th_ind(types, 0, argument_item) : nullptr,
-    };
     th_type *failure_args[] = {
         u32, u64, u64, u64, th_name(types, CORE_STRING_STATIC("string")),
     };
@@ -426,9 +419,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__gc_enter_blocking"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__gc_leave_blocking"), nil_type, nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__os_thread_start"), i32,
-            thread_start_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_has_effect"), boolean,
             has_effect_args, 2)

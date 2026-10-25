@@ -20,6 +20,12 @@ uintptr_t n00b_linux_tls_init(void *area);
 // -1 if the thread could not be made.
 int32_t n00b_linux_thread_start(void (*entry)(void *), void *argument);
 
+// The address just past the top of the calling thread's stack, which
+// holds `sp`: the main thread's, or one the runtime started; 0 for any
+// other. Other than the main thread's, it takes the thread list's lock, so
+// callers keep the answer.
+uintptr_t n00b_linux_stack_high(uintptr_t sp);
+
 // Stand-ins for the libc calls the compile-time runtime makes.
 #include <stddef.h>
 void *n00b_linux_calloc(size_t count, size_t size);

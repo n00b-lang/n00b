@@ -50,19 +50,6 @@ when target_os() == "linux" {
       number 56 when arch == aarch64
       effects input, blocking
 
-    # The files in /proc are made by the kernel as they're read, so these
-    # never wait, and the collector can use them before its thread is
-    # attached.
-    syscall proc_openat(dirfd: c_int, path: in *u8, flags: c_int,
-                        mode: c_uint) -> c_int
-      number 257 when arch == x86_64
-      number 56 when arch == aarch64
-      effects input
-    syscall proc_read(fd: c_int, buf: out *u8, count: usize) -> isize
-      number 0 when arch == x86_64
-      number 63 when arch == aarch64
-      effects input
-
     # Only the terminal queries are made, which fill `arg`.
     syscall ioctl(fd: c_int, request: c_ulong, arg: out *u8) -> c_int
       number 16 when arch == x86_64
@@ -90,12 +77,15 @@ when target_os() == "linux" {
       number 226 when arch == aarch64
       effects alloc
 
-    # One system call, declared once for waiting and once for waking.
+    # One system call, declared once for waiting and once for waking. The
+    # wait isn't `blocking`, which would wrap it in the collector's blocking
+    # transitions: its callers make those themselves (the locks' futex_park),
+    # and the collector's own waits must not make them at all.
     syscall futex_wait(word: in *u32, operation: c_int, expected: c_uint,
                        timeout: in ?u8) -> c_int
       number 202 when arch == x86_64
       number 98 when arch == aarch64
-      effects threads, blocking
+      effects threads
     syscall futex_wake(word: in *u32, operation: c_int, count: c_int) -> c_int
       number 202 when arch == x86_64
       number 98 when arch == aarch64
@@ -146,6 +136,10 @@ when target_os() == "linux" {
     # the runtime's start code keeps; 0 when there's none.
     fn n00b_linux_auxv(type: usize) -> usize
       effects none
+    # The address just past the top of the stack holding `sp`: the runtime
+    # made every thread's stack, and the kernel the main thread's.
+    fn n00b_linux_stack_high(sp: usize) -> usize
+      effects none
     # The runtime's stop-the-world signal handler and its rt_sigreturn
     # trampoline, which can't be n00b code: the handler runs on a thread
     # stopped at an arbitrary instruction.
@@ -163,6 +157,7 @@ when target_os() == "linux" {
         name futex_wait "syscall_futex_wait"
         raw "n00b_os_exit"
         raw "n00b_linux_auxv"
+        raw "n00b_linux_stack_high"
         raw "n00b_linux_stw_handler"
         raw "n00b_linux_stw_restorer"
     }
@@ -195,10 +190,6 @@ when target_os() == "linux" {
     private const open_append: u32 = 0x400
     # AT_FDCWD: paths are relative to the working directory.
     private const at_working_directory: i32 = -100
-    # "/proc/self/maps", NUL-terminated, as two little-endian words, so the
-    # collector can name it without making a string.
-    private const maps_path_head: u64 = 0x65732f636f72702f
-    private const maps_path_tail: u64 = 0x007370616d2f666c
 } else when target_os() == "macos" {
     [-
     library c
@@ -981,11 +972,19 @@ func thread_yield() {
     }
 }
 
+# The calling thread's stack top on Linux, kept after the first query,
+# which may take the runtime's thread list lock.
+thread var linux_stack_high: uint = 0
+
 # The address just past the top of the calling thread's stack, which grows
 # down from it; nil when it can't be found.
 func thread_stack_high_self() -> Ref[byte]? {
     when target_os() == "linux" {
-        return address_ref(linux_stack_high(internal.threads.stack_address()))
+        if linux_stack_high == 0 {
+            linux_stack_high = n00b_linux_stack_high_raw(
+                internal.threads.stack_address())
+        }
+        return address_ref(linux_stack_high)
     } else when target_os() == "macos" {
         return address_ref(pthread_get_stackaddr_np_raw(pthread_self_raw()))
     } else when target_os() == "windows" {
@@ -996,97 +995,6 @@ func thread_stack_high_self() -> Ref[byte]? {
         return address_ref(high)
     } else {
         return nil
-    }
-}
-
-# A chunk of /proc/self/maps, read into the stack.
-private record Maps_Chunk layout(c) {
-    bytes: Array[u8][4096]
-}
-
-# The path /proc/self/maps, as the kernel reads it.
-private record Maps_Path layout(c) {
-    head: u64
-    tail: u64
-}
-
-# The value of the hex digit `c`, or 16 when it isn't one.
-private func hex_digit(c: u8) -> uint {
-    if c >= 48 and c <= 57 {
-        return cast[uint](c - 48)
-    }
-    if c >= 97 and c <= 102 {
-        return cast[uint](c - 87)
-    }
-    if c >= 65 and c <= 70 {
-        return cast[uint](c - 55)
-    }
-    return 16
-}
-
-# Linux has no call for a thread's stack, so this finds the mapping that
-# holds `target` in /proc/self/maps, whose lines start "low-high ", and
-# returns its end. 0 when there's none.
-private func linux_stack_high(target: uint) -> uint {
-    when target_os() == "linux" {
-        var path: Maps_Path = (head = maps_path_head, tail = maps_path_tail)
-        var fd: i32 = -1
-        try {
-            fd = proc_openat(at_working_directory,
-                             unsafe_cast[Ref[byte]] (ref path),
-                             cast[i32](close_on_exec), 0)!
-        } fail(failure) {
-            return 0
-        }
-        var chunk: Maps_Chunk
-        var low: uint = 0
-        var high: uint = 0
-        # Which part of the line is being read: 0 the start of the mapping,
-        # 1 its end, and 2 the rest.
-        var part: u32 = 0
-        var found: uint = 0
-        while found == 0 {
-            var got: int = 0
-            try {
-                got = proc_read(fd, unsafe_cast[Ref[byte]] (ref chunk), 4096)!
-            } fail(failure) {
-                break
-            }
-            if got <= 0 {
-                break
-            }
-            var i: uint = 0
-            while i < cast[uint](got) and found == 0 {
-                let c: u8 = chunk.bytes[i]
-                if c == 10 {
-                    low = 0
-                    high = 0
-                    part = 0
-                } else if part < 2 {
-                    let digit: uint = hex_digit(c)
-                    if digit < 16 and part == 0 {
-                        low = unsafe_add(unsafe_mul(low, 16), digit)
-                    } else if digit < 16 {
-                        high = unsafe_add(unsafe_mul(high, 16), digit)
-                    } else if part == 0 and c == 45 {
-                        part = 1
-                    } else {
-                        if part == 1 and target >= low and target < high {
-                            found = high
-                        }
-                        part = 2
-                    }
-                }
-                i += 1
-            }
-        }
-        try {
-            _ = syscall_close(fd)!
-        } fail(failure) {
-        }
-        return found
-    } else {
-        return 0
     }
 }
 
