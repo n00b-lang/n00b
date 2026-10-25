@@ -31,6 +31,9 @@ struct ir_value_numbers_t {
     const ir_pdg_t               *pdg;
     ir_pdg_memory_t                  *memssa;
     core_dict_t                   of_value;
+    // A global's number, by its identity: the same global can be named by
+    // more than one value (as in IR read back from an archive).
+    core_dict_t                   of_global;
     core_dict_t                   by_key;
     core_list_t(vn_key_ptr_t)     keys;
     core_list_t(vn_constant_t)    constants;
@@ -88,7 +91,15 @@ operand_number(ir_value_numbers_t *n, const ir_value_t *value)
     if (!value) return 0;
     uint32_t number = known_number(n, value);
     if (number || value->kind == IR_VAL_INSTR) return number;
-    number = fresh(n);
+    ir_global_t *global = value->kind == IR_VAL_GLOBAL && value->global
+        ? ir_global_identity(value->global) : nullptr;
+    bool found = false;
+    if (global)
+        number = (uint32_t)(uintptr_t)core_dict_get(&n->of_global, global,
+                                                    &found);
+    if (!found) number = fresh(n);
+    if (global && !found)
+        core_dict_put(&n->of_global, global, (void *)(uintptr_t)number);
     assign(n, value, number);
     return number;
 }
@@ -450,6 +461,7 @@ ir_value_numbers_build(ir_func_t *f, const ir_pdg_t *pdg)
     n->pdg = pdg;
     n->memssa = memssa;
     core_dict_init(&n->of_value, nullptr, nullptr);
+    core_dict_init(&n->of_global, nullptr, nullptr);
     core_dict_init(&n->by_key, key_hash, key_eq);
     n->keys = core_list_new(vn_key_ptr_t);
     n->constants = core_list_new(vn_constant_t);
@@ -482,6 +494,7 @@ ir_value_numbers_free(ir_value_numbers_t *n)
     core_list_free(n->keys);
     core_list_free(n->constants);
     core_dict_free(&n->of_value);
+    core_dict_free(&n->of_global);
     core_dict_free(&n->by_key);
     core_free(n);
 }

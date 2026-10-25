@@ -533,9 +533,11 @@ append_call_specialization(n00bb_abi_type_index_t *index,
 {
     if (instruction->op != IR_OP_CALL || !instruction->n_operands)
         return true;
+    // A cached module's function is a declaration here; the types its body
+    // builds for this call are in the cached body.
     ir_value_t *callee = ir_operand_value(&instruction->operands[0]);
     ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
-        ? callee->owner : nullptr;
+        ? n00bb_cached_body(callee->owner) : nullptr;
     th_type *actual = ir_instr_call_signature(instruction);
     th_ctx *types = ir_module_types(index->module);
     if (!target || !target->type || !actual

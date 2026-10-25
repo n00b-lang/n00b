@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -426,6 +428,37 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     }
 }
 
+static core_string_t canonical_path(core_string_t path);
+
+// What a module a literal generated is made from: the source of the module
+// the literal is in, then each contract file the literal reads (path and
+// contents), one per line of `inputs`. A file that can't be read counts as
+// empty, the same when stored and when checked.
+static void
+generated_source_bytes(core_string_t owner_path, core_string_t inputs,
+                       core_buffer_t *out)
+{
+    uint8_t *bytes = nullptr;
+    size_t length = 0;
+    if (read_file(owner_path, &bytes, &length) && bytes)
+        core_buffer_append(out, (const char *)bytes, length);
+    core_free(bytes);
+    size_t at = 0;
+    while (inputs.data && at < inputs.u8_bytes) {
+        size_t end = at;
+        while (end < inputs.u8_bytes && inputs.data[end] != '\n') end++;
+        core_string_t path = core_string_slice(inputs, at, end - at);
+        at = end + 1;
+        if (!path.u8_bytes) continue;
+        put_text(out, path);
+        bytes = nullptr;
+        length = 0;
+        if (read_file(path, &bytes, &length) && bytes)
+            core_buffer_append(out, (const char *)bytes, length);
+        core_free(bytes);
+    }
+}
+
 static void
 freshness_member(core_buffer_t *input, const void *name, size_t name_bytes,
                  const void *source, size_t source_bytes)
@@ -441,10 +474,26 @@ scc_freshness(cache_scc_t *scc)
     core_buffer_puts(&input, "n00b.scc.freshness.v1");
     for (size_t m = 0; m < scc->members.len; m++) {
         core_translation_unit_t *unit = scc->members.data[m];
-        freshness_member(&input, unit->module.identifier.data,
-                         unit->module.identifier.u8_bytes,
-                         core_source_file_contents(&unit->source).data,
-                         core_source_file_size(&unit->source));
+        // A generated module is fresh while the module its literal is in
+        // is, so it's keyed by that module's source, as a cached build
+        // checks it.
+        core_string_t owner = {0}, owner_path = {0};
+        if (n00bb_source_file_generated_owner(&unit->source, &owner,
+                                              &owner_path)) {
+            core_string_t canonical = canonical_path(owner_path);
+            core_buffer_t made = {0};
+            generated_source_bytes(canonical,
+                n00bb_source_file_generated_inputs(&unit->source), &made);
+            core_free(canonical.data);
+            freshness_member(&input, unit->module.identifier.data,
+                             unit->module.identifier.u8_bytes,
+                             made.data ? made.data : "", made.byte_len);
+            core_buffer_release(&made);
+        } else
+            freshness_member(&input, unit->module.identifier.data,
+                             unit->module.identifier.u8_bytes,
+                             core_source_file_contents(&unit->source).data,
+                             core_source_file_size(&unit->source));
         for (size_t i = 0; i < core_translation_unit_import_count(unit);
              i++) {
             core_string_t name =
@@ -574,6 +623,13 @@ typedef struct {
     uint64_t source_hash;
     core_list_t(core_string_t) imports;
     ir_module_t *module;
+    // A module a module literal generated has no file of its own: it is
+    // as fresh as the module the literal is in, which this names, with
+    // that module's source path and the hash of its source.
+    core_string_t owner;
+    core_string_t owner_path;
+    uint64_t owner_hash;
+    core_buffer_t inputs;
 } cache_member_t;
 core_list_decl(cache_member_t);
 
@@ -583,7 +639,11 @@ typedef struct {
 } cache_link_t;
 core_list_decl(cache_link_t);
 
-constexpr size_t cache_module_candidates = 8;
+// How many builds of one module the cache keeps: one per configuration a
+// project builds it in (debug, release, LTO, the C library, ...), and a few
+// from other compilers sharing the cache.
+constexpr size_t cache_module_candidates = 32;
+constexpr size_t cache_foreign_candidates = 4;
 
 typedef enum {
     ENTRY_UNKNOWN,
@@ -715,7 +775,7 @@ scc_key(const n00bb_cache_t *cache, uint64_t freshness,
         const uint64_t *inlined, size_t inlined_count)
 {
     core_buffer_t key = {0};
-    core_buffer_puts(&key, "n00b.scc.key.v2");
+    core_buffer_puts(&key, "n00b.scc.key.v4");
     put_u64(&key, freshness);
     put_u32(&key, (uint32_t)import_count);
     for (size_t i = 0; i < import_count; i++) put_u64(&key, imports[i]);
@@ -842,6 +902,9 @@ entry_release(cache_entry_t *entry)
         cache_member_t *member = &entry->members.data[m];
         core_free(member->name.data);
         core_free(member->path.data);
+        core_free(member->owner.data);
+        core_free(member->owner_path.data);
+        core_buffer_release(&member->inputs);
         for (size_t i = 0; i < member->imports.len; i++)
             core_free(member->imports.data[i].data);
         core_list_free(member->imports);
@@ -897,6 +960,20 @@ entry_parse(cache_entry_t *entry, const uint8_t *data, size_t length)
         for (uint32_t i = 0; !r.failed && i < imports; i++) {
             core_string_t name = read_text(&r);
             if (name.data) core_list_push(member.imports, name);
+        }
+        if (read_u32(&r)) {
+            member.owner = read_text(&r);
+            member.owner_path = read_text(&r);
+            member.owner_hash = read_u64(&r);
+            uint32_t inputs = read_u32(&r);
+            for (uint32_t i = 0; !r.failed && i < inputs; i++) {
+                core_string_t path = read_text(&r);
+                if (path.data) {
+                    core_buffer_append_string(&member.inputs, path);
+                    core_buffer_putc(&member.inputs, '\n');
+                }
+                core_free(path.data);
+            }
         }
         core_list_push(entry->members, member);
     }
@@ -981,14 +1058,15 @@ inlined_entry(n00bb_cache_t *cache, core_string_t module, uint64_t freshness)
 }
 
 static bool
-member_still_located(const n00bb_cache_t *cache, const cache_member_t *member)
+still_located(const n00bb_cache_t *cache, core_string_t name,
+              core_string_t path)
 {
     if (!cache->locate) return true;
     core_string_t located = {0};
-    if (!cache->locate(cache->locate_context, member->name, &located))
+    if (!cache->locate(cache->locate_context, name, &located))
         return false;
     core_string_t canonical = canonical_path(located);
-    bool same = core_string_eq(canonical, member->path);
+    bool same = core_string_eq(canonical, path);
     core_free(canonical.data);
     core_free(located.data);
     return same;
@@ -1004,20 +1082,33 @@ entry_fresh(const n00bb_cache_t *cache, const cache_entry_t *entry)
         const cache_member_t *member = &entry->members.data[m];
         uint8_t *source = nullptr;
         size_t source_bytes = 0;
+        // A generated module is checked by the module its literal is in,
+        // and by the contract files the literal reads.
+        bool generated = member->owner.data != nullptr;
+        core_string_t name = generated ? member->owner : member->name;
+        core_string_t path = generated ? member->owner_path : member->path;
+        uint64_t hash = generated ? member->owner_hash : member->source_hash;
+        core_buffer_t made = {0};
+        if (generated)
+            generated_source_bytes(path,
+                core_buffer_string(&member->inputs), &made);
         ok = module_has_key(cache, member->name, entry->key)
             && (!cache->root_path.data
                 || !core_string_eq(member->path, cache->root_path))
-            && member_still_located(cache, member)
-            && read_file(member->path, &source, &source_bytes)
-            && core_xxh3_64bits_raw(source ? (const void *)source : "",
-                                    source_bytes) == member->source_hash;
+            && still_located(cache, name, path)
+            && (generated || read_file(path, &source, &source_bytes));
+        const void *bytes = generated ? (made.data ? made.data : "")
+                                      : (source ? (const void *)source : "");
+        size_t length = generated ? made.byte_len : source_bytes;
+        ok = ok && core_xxh3_64bits_raw(bytes, length) == hash;
         if (ok) {
             freshness_member(&freshness, member->name.data,
-                             member->name.u8_bytes, source, source_bytes);
+                             member->name.u8_bytes, bytes, length);
             for (size_t i = 0; i < member->imports.len; i++)
                 put_text(&freshness, member->imports.data[i]);
         }
         core_free(source);
+        core_buffer_release(&made);
     }
     ok = ok && buffer_hash(&freshness) == entry->freshness;
     core_buffer_release(&freshness);
@@ -1337,8 +1428,12 @@ scc_in_stdlib(const n00bb_cache_t *cache, const cache_scc_t *scc)
     if (!cache->stdlib_root.u8_bytes) return false;
     bool inside = scc->members.len > 0;
     for (size_t m = 0; inside && m < scc->members.len; m++) {
-        core_string_t path = canonical_path(core_source_file_path(
-            &scc->members.data[m]->source));
+        // A generated module is where the module its literal is in is.
+        core_string_t owner = {0}, owner_path = {0};
+        const core_source_file_t *source = &scc->members.data[m]->source;
+        core_string_t path = canonical_path(
+            n00bb_source_file_generated_owner(source, &owner, &owner_path)
+                ? owner_path : core_source_file_path(source));
         inside = path.u8_bytes > cache->stdlib_root.u8_bytes
             && core_string_starts_with(path, cache->stdlib_root)
             && path.data[cache->stdlib_root.u8_bytes] == '/';
@@ -1545,6 +1640,8 @@ member_names(const cache_entry_t *entry, core_buffer_t *out)
     }
 }
 
+static bool take_fill_lock(n00bb_cache_t *cache);
+
 n00bb_cache_t *
 n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                  core_string_t triple,
@@ -1653,6 +1750,11 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
                                     &entry->members.data[m].name))
                 core_dict_put(&cache->loaded_members,
                               &entry->members.data[m].name, e + 1);
+    }
+    if (take_fill_lock(cache)) {
+        n00bb_cache_free(cache);
+        return n00bb_cache_open(root_path, args, triple, ir_context, locate,
+                                locate_context, libraries);
     }
     return cache;
 }
@@ -2034,6 +2136,12 @@ n00bb_cache_assumptions_hold(n00bb_cache_t *cache,
             put_bytes(&identity, scc->interface, scc->interface_bytes);
             ok = buffer_hash(&identity) == import->value;
             core_buffer_release(&identity);
+            if (!ok) {
+                core_string_t phase = phase_name();
+                cache_log("%.*s assumption: %.*s's interface changed",
+                          (int)phase.u8_bytes, phase.data,
+                          (int)import->name.u8_bytes, import->name.data);
+            }
         }
     }
     sccs_release(&sccs);
@@ -2397,16 +2505,37 @@ n00bb_cache_capture_summaries(n00bb_cache_t *cache,
                          phase);
 }
 
+static bool
+scc_clean(const core_list_t(cache_scc_t) *sccs, size_t s, uint8_t *clean)
+{
+    if (clean[s]) return clean[s] == 1;
+    const cache_scc_t *scc = &sccs->data[s];
+    bool ok = true;
+    for (size_t m = 0; ok && m < scc->members.len; m++)
+        ok = !core_diagnostics_failed(core_translation_unit_diagnostics(
+            scc->members.data[m]));
+    clean[s] = 2;
+    for (size_t i = 0; ok && i < scc->imports.len; i++)
+        ok = scc->imports.data[i] < sccs->len
+            && scc_clean(sccs, scc->imports.data[i], clean);
+    clean[s] = ok ? 1 : 2;
+    return ok;
+}
+
 bool
 n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
-                     n00bb_link_analysis_t *analysis)
+                     n00bb_link_analysis_t *analysis, bool clean_only)
 {
     if (!cache || !link) return false;
     core_list_t(cache_scc_t) sccs = core_list_new(cache_scc_t);
     bool ok = collect_sccs(link, &sccs, true);
+    // 0 unknown, 1 clean, 2 failed (an import cycle among SCCs can't happen).
+    uint8_t *clean = clean_only && ok
+        ? core_alloc_array(uint8_t, sccs.len ? sccs.len : 1) : nullptr;
     for (size_t s = 0; ok && s < sccs.len; s++) {
         cache_scc_t *scc = &sccs.data[s];
-        if (scc->root || scc->cached) continue;
+        if (scc->root || scc->cached
+            || (clean && !scc_clean(&sccs, s, clean))) continue;
         ir_module_t **modules = core_alloc_array(ir_module_t *,
                                                  scc->members.len);
         for (size_t m = 0; m < scc->members.len; m++)
@@ -2441,6 +2570,7 @@ n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link,
         if (saved) core_list_push(cache->snapshots, snapshot);
         else snapshot_release(&snapshot);
     }
+    core_free(clean);
     sccs_release(&sccs);
     return ok;
 }
@@ -2660,6 +2790,36 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
                 core_translation_unit_import(unit, i)->module.identifier;
             put_bytes(&manifest, name.data, name.u8_bytes);
         }
+        core_string_t owner = {0}, owner_path = {0};
+        core_string_t owner_canonical = {0};
+        if (n00bb_source_file_generated_owner(&unit->source, &owner,
+                                              &owner_path))
+            owner_canonical = canonical_path(owner_path);
+        put_u32(&manifest, owner_canonical.data ? 1 : 0);
+        if (owner_canonical.data) {
+            core_string_t inputs =
+                n00bb_source_file_generated_inputs(&unit->source);
+            core_buffer_t made = {0};
+            generated_source_bytes(owner_canonical, inputs, &made);
+            put_text(&manifest, owner);
+            put_text(&manifest, owner_canonical);
+            put_u64(&manifest, core_xxh3_64bits_raw(
+                made.data ? made.data : "", made.byte_len));
+            core_buffer_release(&made);
+            uint32_t count = 0;
+            for (size_t c = 0; c < inputs.u8_bytes; c++)
+                if (inputs.data[c] == '\n') count++;
+            put_u32(&manifest, count);
+            size_t at = 0;
+            while (inputs.data && at < inputs.u8_bytes) {
+                size_t end = at;
+                while (end < inputs.u8_bytes && inputs.data[end] != '\n')
+                    end++;
+                put_text(&manifest, core_string_slice(inputs, at, end - at));
+                at = end + 1;
+            }
+        }
+        core_free(owner_canonical.data);
     }
     put_links(&manifest, sccs, &scc->imports, false);
     put_summary_links(&manifest, sccs, scc);
@@ -2800,6 +2960,7 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         uint8_t *previous = nullptr;
         size_t previous_bytes = 0;
         size_t kept = 1;
+        size_t foreign = 0;
         size_t at = 0;
         uint64_t older = 0;
         uint64_t compiler = 0;
@@ -2808,11 +2969,14 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         while (readable && next_key_line(previous, previous_bytes, &at,
                                          &older, &compiler)) {
             if (!older || older == scc->key) continue;
-            if (compiler && kept < cache_module_candidates) {
+            bool ours = compiler == cache->compiler;
+            if (compiler && (ours ? kept < cache_module_candidates
+                                  : foreign < cache_foreign_candidates)) {
                 core_buffer_printf(&key, "%016llx %016llx\n",
                                    (unsigned long long)older,
                                    (unsigned long long)compiler);
-                kept++;
+                if (ours) kept++;
+                else foreign++;
                 continue;
             }
             core_buffer_t stale = {0};
@@ -3157,6 +3321,63 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     return ok;
 }
 
+// Held by the one process compiling the builtin library for a variant, so
+// others building the same variant wait and reuse what it stores instead of
+// all compiling it at once. Released once it has stored, or when it exits.
+// A process waits at most once: a build that fails stores nothing, and the
+// processes that waited on it then compile side by side rather than queue.
+static int fill_lock = -1;
+static bool fill_waited = false;
+
+static void
+release_fill_lock(void)
+{
+    if (fill_lock < 0) return;
+    (void)flock(fill_lock, LOCK_UN);
+    close(fill_lock);
+    fill_lock = -1;
+}
+
+// Takes the fill lock for this cache's variant when the builtin library
+// isn't cached. Returns true when another process held it: it has stored
+// what it built, and the cache should be read again.
+static bool
+take_fill_lock(n00bb_cache_t *cache)
+{
+    core_string_t builtin = CORE_STRING_STATIC("builtin.__init");
+    if (fill_lock >= 0 || fill_waited || !cache->shared.data
+        || core_dict_contains(&cache->loaded_members, &builtin))
+        return false;
+    core_buffer_t variant = {0};
+    put_text(&variant, phase_name());
+    put_u64(&variant, cache->compiler);
+    put_bytes(&variant, cache->flags.data, cache->flags.byte_len);
+    put_text(&variant, cache->triple);
+    core_buffer_t path = {0};
+    core_buffer_append_string(&path, cache->shared);
+    core_buffer_printf(&path, "/fill-%016llx.lock",
+                       (unsigned long long)buffer_hash(&variant));
+    core_buffer_release(&variant);
+    bool waited = false;
+    int fd = n00bb_make_directories(cache->shared)
+        ? open(path.data, O_CREAT | O_RDWR | O_CLOEXEC, 0644) : -1;
+    if (fd >= 0 && flock(fd, LOCK_EX | LOCK_NB) != 0) {
+        core_string_t phase = phase_name();
+        cache_log("%.*s wait for another build to cache builtin",
+                  (int)phase.u8_bytes, phase.data);
+        waited = flock(fd, LOCK_EX) == 0;
+        // Whatever the filler stored is there now; this process doesn't
+        // become the next filler.
+        if (waited) (void)flock(fd, LOCK_UN);
+        close(fd);
+        fd = -1;
+        fill_waited = true;
+    }
+    fill_lock = fd;
+    core_buffer_release(&path);
+    return waited;
+}
+
 bool
 n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                   n00bb_link_analysis_t *analysis,
@@ -3214,5 +3435,6 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
         if (object && ok)
             log_instance(CORE_STRING_STATIC("store"), item);
     }
+    release_fill_lock();
     return ok;
 }

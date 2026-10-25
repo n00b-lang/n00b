@@ -606,7 +606,6 @@ typedef struct {
     core_list_t(n00bb_cache_module_object_t) *kept;
     const core_list_t(n00bb_ir_func_ptr_t) *runtime_functions;
     const core_dict_t *mutator_decisions;
-    bool keep_shims;
 } module_emission_t;
 
 typedef struct {
@@ -630,6 +629,9 @@ typedef struct {
     core_buffer_t *bitcode;
     const uint8_t *cached;
     size_t cached_bytes;
+    // For a module emitted from its cached IR: the functions that may be
+    // emitted, the program's and the cached bodies it reaches.
+    core_list_t(n00bb_ir_func_ptr_t) reachable;
     n00bb_llvm_backend_t *backend;
     core_buffer_t object;
     core_diagnostics_t *diagnostics;
@@ -682,8 +684,13 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
     bool ok = (!table_symbol.data
             || n00bb_llvm_backend_bind_index_table(backend, &index_table))
         && n00bb_llvm_backend_bind_reachable_functions(backend,
-            analysis->emitted_functions.data,
-            analysis->emitted_functions.len, emission->callback_bindings)
+            item->reachable.data ? item->reachable.data
+                                 : analysis->emitted_functions.data,
+            item->reachable.data ? item->reachable.len
+                                 : analysis->emitted_functions.len,
+            emission->callback_bindings)
+        && n00bb_llvm_backend_bind_cached_functions(backend,
+            analysis->cached_functions.data, analysis->cached_functions.len)
         && n00bb_llvm_backend_bind_storage_origin(backend,
             emission->storage_origin)
         && (!emission->runtime_functions
@@ -893,6 +900,7 @@ release_module_object(module_object_t *item)
     n00bb_llvm_backend_free(item->backend);
     core_diagnostics_free(item->diagnostics);
     core_buffer_release(&item->object);
+    if (item->reachable.data) core_list_free(item->reachable);
     *item = (module_object_t){0};
 }
 
@@ -1403,7 +1411,36 @@ typedef struct {
     bool debug_enabled;
     bool native_cpu;
     bool precise_stacks;
+    // The shims and libraries the runtime program needs, once known.
+    n00bb_native_inputs_t runtime_native;
 } program_link_t;
+
+// Links the C shims' bitcode into one object, for the program's link.
+static bool
+shim_object(const n00bb_native_inputs_t *native, n00bb_link_analysis_t *analysis,
+            bool debug_enabled, bool native_cpu, char **out,
+            core_diagnostics_t *diagnostics)
+{
+    *out = nullptr;
+    if (!native->bitcode_count) return true;
+    n00bb_llvm_bitcode_input_t *inputs = calloc(native->bitcode_count,
+                                                sizeof(*inputs));
+    bool ok = inputs != nullptr;
+    for (size_t i = 0; ok && i < native->bitcode_count; i++)
+        inputs[i] = (n00bb_llvm_bitcode_input_t){
+            .data = native->bitcode[i].data,
+            .length = native->bitcode[i].byte_len,
+        };
+    core_buffer_t object = {0};
+    if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs,
+        native->bitcode_count, debug_enabled, native_cpu,
+        analysis->target.enabled_features, false, &object, diagnostics);
+    if (ok) *out = temporary_object_argument(object.data, object.byte_len);
+    ok = ok && *out;
+    core_buffer_release(&object);
+    free(inputs);
+    return ok;
+}
 
 static bool
 link_program(const program_link_t *program, char *extra_object,
@@ -1433,9 +1470,12 @@ link_program(const program_link_t *program, char *extra_object,
     for (size_t i = 0; ok && i < native->search_path_count; i++)
         native_arguments[native_used++] = n00bb_flag_argument("-L",
             native->search_paths[i]);
+    // "c" is the target's C library: the linker adds it whenever the
+    // program links libc (see n00bb_links_libc), so it is no -l flag.
     for (size_t i = 0; ok && i < native->library_count; i++)
-        native_arguments[native_used++] = n00bb_flag_argument("-l",
-            native->libraries[i]);
+        if (!core_string_eq(native->libraries[i], CORE_STRING_STATIC("c")))
+            native_arguments[native_used++] = n00bb_flag_argument("-l",
+                native->libraries[i]);
     for (size_t i = 0; ok && i < native->framework_count; i++) {
         native_arguments[native_used++] = core_string_to_cstr(
             CORE_STRING_STATIC("-framework"));
@@ -1468,7 +1508,10 @@ link_program(const program_link_t *program, char *extra_object,
         for (size_t i = 0; i < native_used; i++)
             arguments[tail++] = native_arguments[i];
         for (const char *const *library =
-                 n00bb_system_libraries(&analysis->target);
+                 n00bb_system_libraries(&analysis->target,
+                     n00bb_links_libc(&analysis->target,
+                         program->native->libraries,
+                         program->native->library_count));
              *library; library++)
             arguments[tail++] = (char *)*library;
         if (analysis->target.object_format == CORE_TARGET_OBJECT_COFF)
@@ -1600,15 +1643,19 @@ run_comptime(core_link_unit_t *link, program_link_t *program,
         return true;
     }
     bool ok = true;
+    // A program that links libc runs its compile-time code against libc too.
+    const char *comptime_runtime = n00bb_links_libc(&analysis->target,
+            program->native->libraries, program->native->library_count)
+        ? N00BB_LIBC_COMPTIME_RUNTIME : N00BB_COMPTIME_RUNTIME;
     core_string_t runtime_name = n00bb_archive_path(
-        CORE_STRING_STATIC(N00BB_COMPTIME_RUNTIME));
+        core_string_borrow(comptime_runtime, strlen(comptime_runtime)));
     char *runtime = runtime_name.data ? core_string_to_cstr(runtime_name)
                                       : nullptr;
     core_free(runtime_name.data);
     if (ok && !runtime) {
         n00bb_report(diagnostics, nullptr, N00B_DIAG_RUNTIME_LIBRARY_MISSING,
             (core_diag_location_t){}, N00B_TEXT_THE_N00B_RUNTIME_LIBRARY_IS,
-            N00BB_ARGS(ARG_NATIVE(N00BB_COMPTIME_RUNTIME),
+            N00BB_ARGS(ARG_NATIVE(comptime_runtime),
                        ARG_TEXT(n00bb_toolchain()->runtime)));
         ok = false;
     }
@@ -1691,21 +1738,6 @@ run_comptime(core_link_unit_t *link, program_link_t *program,
     return ok;
 }
 
-static bool
-reaches_ffi_shim(const core_list_t(n00bb_ir_func_ptr_t) *functions)
-{
-    core_string_t prefix = CORE_STRING_STATIC("n00b_ffi_");
-    for (size_t i = 0; i < functions->len; i++) {
-        const ir_func_t *function = functions->data[i];
-        core_string_t name = function->name;
-        if (!function->n_blocks && core_string_starts_with(name, prefix)
-            && name.u8_bytes > prefix.u8_bytes
-            && name.data[prefix.u8_bytes] >= '0'
-            && name.data[prefix.u8_bytes] <= '9') return true;
-    }
-    return false;
-}
-
 static void
 cached_mutator_decisions(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
@@ -1736,15 +1768,35 @@ cached_mutator_decisions(core_link_unit_t *link,
     }
 }
 
+// A cached module a module literal generated. Its runtime object keeps only
+// what the program that built it called, so each program emits its own.
+static bool
+cached_generated_unit(core_translation_unit_t *unit)
+{
+    return tu_state(unit)->interface_module
+        && n00bb_generated_source(core_source_file_path(&unit->source));
+}
+
 static bool
 cached_runtime_object(n00bb_link_analysis_t *analysis,
                       core_translation_unit_t *unit,
                       n00bb_cache_module_object_t *out)
 {
-    return tu_state(unit)->interface_module
+    return tu_state(unit)->interface_module && !cached_generated_unit(unit)
         && n00bb_cache_module_object(analysis->cache,
                ir_module_name(tu_state(unit)->ir_module), out)
         && out->runtime_object;
+}
+
+// A literal's generated module is whole in the compile-time program, so
+// the runtime program always gets its own copy.
+static bool
+any_generated_unit(core_translation_unit_t *const *order, size_t count)
+{
+    for (size_t i = 0; i < count; i++)
+        if (n00bb_generated_source(core_source_file_path(&order[i]->source)))
+            return true;
+    return false;
 }
 
 static bool
@@ -1834,11 +1886,19 @@ units_to_reemit(const n00bb_link_analysis_t *analysis,
         if (function->n_blocks && !core_dict_contains(&runtime, function))
             core_dict_put(&stale, function->owner, function->owner);
     }
+    // The root's tables name every function the program emits; with a
+    // literal's module cut down at run time, they're emitted again too.
+    bool generated = any_generated_unit(order, count);
     for (size_t i = 0; i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order[i]);
-        if (state->interface_module || core_dict_contains(&listed, order[i])
-            || !core_dict_contains(&stale, state->ir_module)) continue;
-        core_list_push(units, order[i]);
+        if (core_dict_contains(&listed, order[i])) continue;
+        bool root = state->link
+            && order[i] == core_link_unit_root(state->link, 0);
+        if (cached_generated_unit(order[i])
+            || (!state->interface_module
+                && (core_dict_contains(&stale, state->ir_module)
+                    || (generated && root))))
+            core_list_push(units, order[i]);
     }
     core_dict_free(&stale);
     core_dict_free(&runtime);
@@ -1872,14 +1932,32 @@ emit_runtime_objects(core_link_unit_t *link,
     runtime.native_frames = n00bb_native_frames_new(
         emission->analysis->target.object_format);
     size_t modules = program->object_slots - 4;
-    if (program->objects[modules + 3] && !emission->keep_shims
-        && !reaches_ffi_shim(&runtime_functions)) {
-        unlink(program->objects[modules + 3]);
-        core_free(program->objects[modules + 3]);
-        program->objects[modules + 3] = nullptr;
+    bool ok = runtime.native_frames != nullptr;
+    // The compile-time program links every shim its code may call; the
+    // runtime program only those its runtime code calls, and only their
+    // libraries.
+    const n00bb_native_inputs_t *native = program->native;
+    if (ok && native && native->select_runtime) {
+        core_list_t(core_string_t) symbols = core_list_new(core_string_t);
+        for (size_t i = 0; i < runtime_functions.len; i++)
+            if (!runtime_functions.data[i]->n_blocks
+                && runtime_functions.data[i]->name.data)
+                core_list_push(symbols, runtime_functions.data[i]->name);
+        ok = native->select_runtime(native->select_context, symbols.data,
+                                    symbols.len, &program->runtime_native);
+        core_list_free(symbols);
+        if (ok) program->native = &program->runtime_native;
+        if (program->objects[modules + 3]) {
+            unlink(program->objects[modules + 3]);
+            core_free(program->objects[modules + 3]);
+            program->objects[modules + 3] = nullptr;
+        }
+        if (ok && !emission->lto)
+            ok = shim_object(program->native, emission->analysis,
+                emission->debug_enabled, emission->native_cpu,
+                &program->objects[modules + 3], diagnostics);
     }
     bool *fresh = core_alloc_array(bool, program->object_slots);
-    bool ok = runtime.native_frames != nullptr;
     core_translation_unit_t *root = core_link_unit_root(link, 0);
     for (size_t u = 0; ok && u < units->len; u++) {
         size_t slot = 0;
@@ -1897,11 +1975,34 @@ emit_runtime_objects(core_link_unit_t *link,
             .object_path = &path,
             .bitcode = emission->lto ? &bitcode : nullptr,
         };
-        (void)begin_module_object(&runtime, &item,
+        ir_module_t *cached = cached_generated_unit(order[slot])
+            ? n00bb_cache_module(emission->analysis->cache,
+                                 order[slot]->module.identifier)
+            : nullptr;
+        if (cached) {
+            n00bb_link_analysis_t *analysis = emission->analysis;
+            item.module = cached;
+            item.reachable = core_list_new(n00bb_ir_func_ptr_t);
+            for (size_t f = 0; f < analysis->emitted_functions.len; f++)
+                core_list_push(item.reachable,
+                               analysis->emitted_functions.data[f]);
+            for (size_t f = 0; f < analysis->cached_functions.len; f++)
+                if (analysis->cached_functions.data[f]->owner == cached)
+                    core_list_push(item.reachable,
+                                   analysis->cached_functions.data[f]);
+        }
+        // A generated module's runtime object is this program's alone, so
+        // it isn't kept in the cache.
+        module_emission_t unkept = runtime;
+        unkept.kept = nullptr;
+        module_emission_t *use = n00bb_generated_source(
+                core_source_file_path(&order[slot]->source))
+            ? &unkept : &runtime;
+        (void)begin_module_object(use, &item,
             core_translation_unit_diagnostics(order[slot]),
             order[slot] == root ? root_entry : nullptr);
         finish_if_needed(&item);
-        ok = complete_module_object(&runtime, &item);
+        ok = complete_module_object(use, &item);
         release_module_object(&item);
         if (ok && emission->lto) {
             core_buffer_release(&program->lto_modules[slot]);
@@ -2179,7 +2280,6 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     module_emission_t emission = {
         .kept = &kept,
         .mutator_decisions = &mutator_decisions,
-        .keep_shims = native && native->exports,
         .analysis = analysis, .args = args,
         .debug_enabled = debug_enabled, .native_cpu = native_cpu,
         .lto = lto,
@@ -2279,23 +2379,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     ok = ok && emitted;
     if (ok && !lto && native->bitcode_count) {
         build_stage = "compiling C shims";
-        n00bb_llvm_bitcode_input_t *inputs = calloc(native->bitcode_count,
-                                                    sizeof(*inputs));
-        ok = inputs != nullptr;
-        for (size_t i = 0; ok && i < native->bitcode_count; i++)
-            inputs[i] = (n00bb_llvm_bitcode_input_t){
-                .data = native->bitcode[i].data,
-                .length = native->bitcode[i].byte_len,
-            };
-        core_buffer_t object = {0};
-        if (ok) ok = n00bb_llvm_backend_link_bitcode(inputs,
-            native->bitcode_count, debug_enabled, native_cpu,
-            analysis->target.enabled_features, false, &object, diagnostics);
-        if (ok) objects[modules + 3] = temporary_object_argument(
-            object.data, object.byte_len);
-        ok = ok && objects[modules + 3];
-        core_buffer_release(&object);
-        free(inputs);
+        ok = shim_object(native, analysis, debug_enabled, native_cpu,
+                         &objects[modules + 3], diagnostics);
     }
     if (ok && !lto) {
         uint8_t *frame_object = nullptr;
@@ -2310,8 +2395,14 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     char *output = plan.output;
     char *staging = plan.staging;
     core_string_t output_name = core_string_borrow(output, plan.output_length);
+    bool libc = n00bb_links_libc(&analysis->target, native->libraries,
+                                 native->library_count);
+    const char *runtime_archive = libc ? N00BB_LIBC_RUNTIME_ARCHIVE
+                                       : N00BB_RUNTIME_ARCHIVE;
+    const char *runtime_bitcode = libc ? N00BB_LIBC_RUNTIME_BITCODE
+                                       : N00BB_RUNTIME_BITCODE;
     core_string_t archive_name = n00bb_archive_path(
-        CORE_STRING_STATIC(N00BB_RUNTIME_ARCHIVE));
+        core_string_borrow(runtime_archive, strlen(runtime_archive)));
     char *archive = core_string_to_cstr(archive_name);
     core_free(archive_name.data);
     if (ok) build_stage = "linking native executable";
@@ -2340,7 +2431,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_string_t runtime = n00bb_toolchain()->runtime;
         n00bb_report(diagnostics, nullptr, N00B_DIAG_RUNTIME_LIBRARY_MISSING,
             (core_diag_location_t){}, N00B_TEXT_THE_N00B_RUNTIME_LIBRARY_IS,
-            N00BB_ARGS(ARG_NATIVE(N00BB_RUNTIME_ARCHIVE), ARG_TEXT(runtime)));
+            N00BB_ARGS(ARG_NATIVE(runtime_archive), ARG_TEXT(runtime)));
         n00bb_report_help(diagnostics,
             N00B_TEXT_REINSTALL_THE_TOOLCHAIN_OR_REBUILD,
             N00BB_NO_ARGS);
@@ -2361,7 +2452,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         ok = run_comptime(link, &program, order.data, count, lto,
                           debug_enabled, &kept, &runtime_units, diagnostics)
             && ((!runtime_units.len
-                 && !any_cached_runtime_object(analysis, order.data, count))
+                 && !any_cached_runtime_object(analysis, order.data, count)
+                 && !any_generated_unit(order.data, count))
                 || emit_runtime_objects(link, &emission,
                     &program, order.data, count, &runtime_units, &root_entry,
                     diagnostics));
@@ -2369,7 +2461,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (ok && lto) {
             build_stage = "link-time optimization";
             core_string_t runtime_path = n00bb_archive_path(
-                CORE_STRING_STATIC(N00BB_RUNTIME_BITCODE));
+                core_string_borrow(runtime_bitcode, strlen(runtime_bitcode)));
             ok = runtime_path.data && n00bb_read_bitcode(runtime_path,
                     &lto_modules[modules])
                 && lto_link(&program, true, objects, diagnostics);
@@ -2693,8 +2785,7 @@ abi_emit_source_unit(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
 bool
 n00bb_emit_abi_artifacts(core_link_unit_t *link,
                          n00bb_link_analysis_t *analysis,
-                         bool debug_enabled,
-                         bool root_only)
+                         bool debug_enabled)
 {
     if (!link || !analysis || !core_link_unit_graph_is_finalized(link)
         || core_link_unit_stage_state(link,
@@ -2706,7 +2797,6 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
     for (size_t i = 0; valid && i < count; i++) {
         core_translation_unit_t *unit = core_link_unit_translation_unit(link,
             i);
-        if (root_only && unit != core_link_unit_root(link, 0)) continue;
         n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
         if (!state || !state->ir_module) {
             valid = false;
@@ -2744,7 +2834,7 @@ n00bb_emit_abi_artifacts(core_link_unit_t *link,
             break;
         }
     }
-    for (size_t i = 0; valid && !root_only
+    for (size_t i = 0; valid
          && i < analysis->specializations.len; i++) {
         valid = emit_specialization_abi(link, analysis,
             &analysis->specializations.data[i], debug_enabled, &sources);
@@ -2828,33 +2918,32 @@ n00bb_write_abi_bytes(core_string_t requested, const uint8_t *object,
 }
 
 bool
-n00bb_write_compile_abi_artifact(core_link_unit_t *link,
-                                 parse_cmdr_result_t *args,
+n00bb_write_module_abi_artifacts(core_link_unit_t *link,
+                                 core_string_t directory,
                                  core_diagnostics_t *diagnostics)
 {
-    core_translation_unit_t *unit = link && core_link_unit_root_count(link) == 1
-        ? core_link_unit_root(link, 0) : nullptr;
-    core_link_artifact_view_t view = {0};
-    if (!unit || !core_link_unit_require_artifact(link,
-            unit->module.identifier, CORE_STRING_STATIC("n00bb.abi.object"),
-            1, &view)) return false;
-    const n00bb_abi_artifact_t *artifact = view.payload;
-    if (!artifact || !artifact->object || !artifact->object_bytes)
-        return false;
-
-    core_string_t requested = parse_cmdr_flag_str(args,
-        CORE_STRING_STATIC("--output"));
-    core_buffer_t default_name = {0};
-    if (!requested.data) {
-        core_buffer_printf(&default_name, "%.*s.n00bm",
+    bool saved = link && directory.data;
+    size_t count = saved ? core_link_unit_translation_unit_count(link) : 0;
+    for (size_t i = 0; saved && i < count; i++) {
+        core_translation_unit_t *unit = core_link_unit_translation_unit(link,
+                                                                        i);
+        core_link_artifact_view_t view = {0};
+        if (!unit || !core_link_unit_require_artifact(link,
+                unit->module.identifier,
+                CORE_STRING_STATIC("n00bb.abi.object"), 1, &view))
+            continue;
+        const n00bb_abi_artifact_t *artifact = view.payload;
+        if (!artifact || !artifact->object || !artifact->object_bytes)
+            continue;
+        core_buffer_t path = {0};
+        core_buffer_printf(&path, "%.*s/%.*s.n00bm",
+            (int)directory.u8_bytes, directory.data,
             (int)unit->module.identifier.u8_bytes,
             unit->module.identifier.data);
-        requested = core_string_borrow(default_name.data,
-                                       default_name.byte_len);
+        saved = n00bb_write_abi_bytes(core_buffer_string(&path),
+            artifact->object, artifact->object_bytes, unit, diagnostics);
+        core_buffer_release(&path);
     }
-    bool saved = n00bb_write_abi_bytes(requested, artifact->object,
-        artifact->object_bytes, unit, diagnostics);
-    core_buffer_release(&default_name);
     return saved;
 }
 

@@ -11,6 +11,13 @@ program=$2
 expected=$3
 names=$4
 shift 4
+# What the OS layer does differs by platform (Linux enters the kernel with
+# syscalls; macOS reads errno after libSystem calls), so a platform can have
+# its own expectations, NAME.linux.expected beside NAME.expected.
+platform=$(uname -s | tr '[:upper:]' '[:lower:]')
+if [ -f "${expected%.expected}.$platform.expected" ]; then
+    expected="${expected%.expected}.$platform.expected"
+fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 

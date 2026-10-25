@@ -1,0 +1,87 @@
+builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
+  reads_globals   builtin.hashing.secret.__value[]...
+  allocates       builtin.containers.dict.insert_entry (138:27) -> builtin.containers.dict.prepare (118:5) -> builtin.containers.dict.compact (82:13) -> builtin.containers.lease.__write (66:17) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
+  panics          here (140:33)
+  param self      writer, lends
+  param key       reader, lends
+  param value     reader, lends
+  detail          may_collect allocates_direct reinterprets finalizes_params
+builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
+  reads_globals   builtin.hashing.secret.__value[]...
+  allocates       builtin.containers.dict.key_hash (105:67) -> builtin.containers.dict.hash (34:12) -> builtin.containers.dict.insertion_keys (365:18) -> builtin.containers.dict.key_slice (307:12) -> here (286:28)
+  panics          here (109:34)
+  param self      reader
+  param key       reader
+  detail          may_collect allocates_direct reinterprets finalizes_params
+builtin.containers.dict.len: (Dict['K, 'V]) -> uint
+  no effects      
+  param self      reader
+builtin.containers.dict.__iterator: (Dict['K, 'V]) -> Dict_Cursor['K, 'V]
+  allocates       builtin.containers.lease.__ref_create (189:37) -> here (35:28)
+  param self      reader, lends
+  detail          may_collect allocates_direct
+builtin.containers.list.append: (List['T], 'T, bool) -> nil
+  allocates       builtin.containers.list.ensure_capacity (150:5) -> here (138:28)
+  panics          here (150:27)
+  param self      writer, lends
+  param value     untouched, lends
+  param front     untouched
+  detail          may_collect allocates_direct finalizes_params
+builtin.containers.list.pop: (List['T], bool) -> 'T?
+  allocates       builtin.containers.lease.__write (190:13) -> builtin.containers.lease.writable (95:33) -> builtin.containers.array.__copy (60:24) -> here (7:27)
+  panics          here (187:32)
+  param self      writer, lends
+  param front     untouched
+  detail          may_collect allocates_direct finalizes_params
+builtin.containers.list.len: (List['T]) -> uint
+  no effects      
+  param self      reader
+builtin.containers.list.__iterator: (List['T]) -> Lease_Cursor['T]
+  allocates       builtin.containers.lease.__ref_create (264:41) -> here (35:28)
+  param self      reader, lends
+  detail          may_collect allocates_direct
+sys.internal.fs.read_file: (string) -> Array[u8] fail: Errno
+  input           sys.internal.fs.open_read (27:19) -> sys.internal.os.open (5:12) -> sys.internal.__ffi_os___ffi_literal_18.openat (463:24) -> sys.internal.__ffi_os___ffi_literal_18.openat_syscall (77:20)
+  blocks          sys.internal.fs.open_read (27:19) -> sys.internal.os.open (5:12) -> sys.internal.__ffi_os___ffi_literal_18.openat (463:24) -> sys.internal.__ffi_os___ffi_literal_18.n00b_os_gc_enter_blocking (76:5)
+  allocates       sys.internal.fs.open_read (27:19) -> sys.internal.os.open (5:12) -> here (431:28)
+  panics          here (38:13)
+  param path      reader
+  detail          may_io may_collect allocates_direct reinterprets
+sys.internal.env.args: () -> List[string]
+  env             sys.internal.os.arg_count (16:24) -> sys.internal.__ffi_os___ffi_literal_238.n00b_os_arg_count_raw (660:12) -> sys.internal.__ffi_os___ffi_literal_238.n00b_os_arg_count (3:12)
+  reads_globals   sys.internal.os.arg_count (16:24) -> sys.internal.__ffi_os___ffi_literal_238.n00b_os_arg_count_raw (660:12) -> sys.internal.__ffi_os___ffi_literal_238.n00b_os_arg_count (3:12)
+  allocates       here (15:29)
+  panics          here (19:24)
+  detail          may_collect allocates_direct reinterprets
+sys.internal.env.exit: (int) -> nil
+  output          sys.internal.os.exit (26:5) -> sys.internal.__ffi_os___ffi_literal_18.n00b_os_exit_raw (680:5) -> sys.internal.__ffi_os___ffi_literal_18.n00b_os_exit (4:5)
+  panics          here (26:22)
+  noreturn        always: sys.internal.os.exit (26:5) -> sys.internal.__ffi_os___ffi_literal_18.n00b_os_exit_raw (680:5) -> sys.internal.__ffi_os___ffi_literal_18.n00b_os_exit (4:5)
+  param code      untouched
+  detail          may_io
+sys.internal.clock.now_ns: () -> uint
+  clock           sys.internal.clock.n00b_os_now_ns (2:12)
+  detail          may_collect
+sys.internal.random.fill: (modify Array[u8]) -> nil fail: Errno
+  random          sys.internal.os.random_bytes (5:5) -> sys.internal.__ffi_os___ffi_literal_18.getrandom (582:32) -> sys.internal.__ffi_os___ffi_literal_18.getrandom_syscall (103:20)
+  blocks          sys.internal.os.random_bytes (5:5) -> sys.internal.__ffi_os___ffi_literal_18.getrandom (582:32) -> sys.internal.__ffi_os___ffi_literal_18.n00b_os_gc_enter_blocking (102:5)
+  panics          sys.internal.os.random_bytes (5:5) -> here (576:13)
+  param buffer    writer, lends
+  detail          may_collect reinterprets
+sys.internal.random.fill: (modify 'T) -> nil fail: Errno
+  random          sys.internal.random.fill (10:5) -> sys.internal.os.random_bytes (5:5) -> sys.internal.__ffi_os___ffi_literal_18.getrandom (582:32) -> sys.internal.__ffi_os___ffi_literal_18.getrandom_syscall (103:20)
+  blocks          sys.internal.random.fill (10:5) -> sys.internal.os.random_bytes (5:5) -> sys.internal.__ffi_os___ffi_literal_18.getrandom (582:32) -> sys.internal.__ffi_os___ffi_literal_18.n00b_os_gc_enter_blocking (102:5)
+  allocates       here (9:28)
+  panics          here (14:17)
+  param value     untouched
+  detail          may_collect allocates_direct reinterprets
+builtin.io.debug.raw_debug: (string) -> nil
+  output          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (276:9) -> builtin.string.core.n00bb_runtime_write_bytes (263:26)
+  blocks          builtin.string.core.__fd_write (6:5) -> builtin.string.core.write_all (276:9) -> builtin.string.core.n00bb_runtime_write_bytes (263:26)
+  panics          builtin.string.core.__fd_write (6:5) -> here (282:12)
+  param s         reader
+  detail          may_io may_collect reinterprets
+builtin.panic.panic: (string) -> nil
+  panics          builtin.panic.n00bb_runtime_report_failure (7:5)
+  param message   untouched
+  detail          may_collect

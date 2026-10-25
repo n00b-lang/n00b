@@ -9,7 +9,7 @@ n00b/builtin-debug 3.51
 n00b/calls-n00b 23.57
 n00b/closed-world-n00b 8.72
 n00b/coercion-borrow 5.89
-n00b/compile-module-n00b 2.80
+n00b/library-module-n00b 2.80
 n00b/config-layers 0.16
 n00b/consts-literals-n00b 3.24
 n00b/diagnostics 143.14
