@@ -246,10 +246,14 @@ N00B_DIAG(LITERAL_MODIFIER_SIGNATURE, "N00B-T0536", ERROR,
     "A literal modifier takes the literal as its one typed parameter (a\n"
     "fence may add `site: Literal_Site`), returns the value it builds, and\n"
     "declares `fail: string`.")
-N00B_DIAG(LOOP_BINDINGS_MISMATCH, "N00B-T0537", ERROR,
-    "the names in a `for` loop do not match the shape of its items",
-    "Loop names bind the positions of tuple items in order, or the fields of\n"
-    "record items by name. A single name binds the whole item.")
+N00B_DIAG(TUPLE_PATTERN, "N00B-T0537", ERROR,
+    "an unpacking pattern does not match the value it unpacks",
+    "A pattern unpacks a positional tuple by position, naming every element:\n"
+    "    var (a, b) = pair\n"
+    "and a field tuple or record by field name, in any order:\n"
+    "    var (x = left, y = top) = point\n"
+    "A bare name in a field pattern unpacks the field of that name, `_`\n"
+    "skips an element, and a single name binds the whole value.")
 N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
     "a `for` loop iterates over a value that cannot be iterated",
     "A `for` loop needs a value whose type implements the `Iterable` trait,\n"

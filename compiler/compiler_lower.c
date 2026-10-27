@@ -2594,6 +2594,41 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
     return true;
 }
 
+static ir_value_t *
+n00bb_project_binding(ir_lower_context_t *context, ir_value_t *value,
+                      parse_sym_entry_t *binding, ir_span_t span)
+{
+    const n00bb_binding_projection_t *projection = parse_sym_binding(binding,
+        CORE_STRING_STATIC("n00bb.pattern-projection"));
+    th_ctx *types = ir_module_types(context->module);
+    for (size_t i = 0; value && projection && i < projection->count; i++) {
+        const n00bb_projection_step_t *step = &projection->steps[i];
+        th_type *from = th_resolve(value->type);
+        th_type *type = nullptr;
+        if (step->positional)
+            type = static_tuple_element_type(from, step->index, nullptr);
+        else {
+            th_type *shape = th_kind_of(from) == TH_RECORD ? from
+                : th_type_definition(types, from);
+            shape = shape ? th_resolve(shape) : nullptr;
+            type = shape && th_kind_of(shape) == TH_RECORD
+                ? record_lookup_text(nullptr, shape, step->name) : nullptr;
+        }
+        if (!type && i + 1 == projection->count) type = binding->type;
+        ir_instr_t *extract = type ? ir_lower_emit_instruction(context,
+            step->positional ? IR_OP_EXTRACT_INDEX : IR_OP_EXTRACT, span)
+            : nullptr;
+        bool ok = extract && ir_lower_set_temp_dest(context, extract,
+                CORE_STRING_STATIC("__n00bb_unpacked_"), type)
+            && ir_instr_operand_value(extract, value)
+            && (step->positional
+                ? ir_instr_operand_uint(extract, step->index)
+                : ir_instr_operand_name(extract, step->name));
+        value = ok ? extract->dest : nullptr;
+    }
+    return value;
+}
+
 static bool
 n00bb_lower_container_body_enter(ir_lower_context_t *context,
                                  n00bb_lower_context_t *lower,
@@ -2701,26 +2736,12 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
     for (size_t i = 0; i < frame->iteration_bindings.len; i++) {
         parse_sym_entry_t *binding = frame->iteration_bindings.data[i];
         ir_local_t *local = ir_lower_bound_local(context, binding);
-        ir_value_t *value = get->dest;
-        n00bb_loop_binding_projection_t *projection = parse_sym_binding(
-            binding, CORE_STRING_STATIC("n00bb.loop-binding-projection"));
-        if (projection) {
-            ir_instr_t *extract = ir_lower_emit_instruction(context,
-                projection->positional ? IR_OP_EXTRACT_INDEX : IR_OP_EXTRACT,
-                span);
-            if (!extract || !ir_lower_set_temp_dest(context, extract,
-                                                    CORE_STRING_STATIC("__n00bb_iteration_field_"),
-                                                    binding->type)
-                || !ir_instr_operand_value(extract, get->dest)
-                || (projection->positional
-                    ? !ir_instr_operand_uint(extract, projection->index)
-                    : !ir_instr_operand_name(extract,
-                                              projection->name))) {
-                lower_internal(context, span,
-                            "could not destructure the iteration item");
-                return false;
-            }
-            value = extract->dest;
+        ir_value_t *value = n00bb_project_binding(context, get->dest,
+                                                  binding, span);
+        if (!value) {
+            lower_internal(context, span,
+                           "could not destructure the iteration item");
+            return false;
         }
         if (!local || !ir_lower_bind_scoped_value(context, binding, value,
                                                    local)) {

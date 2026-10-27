@@ -46,9 +46,19 @@ typedef struct {
     size_t index;
     core_string_t name;
     bool positional;
-} n00bb_loop_binding_projection_t;
+} n00bb_projection_step_t;
+core_list_decl(n00bb_projection_step_t);
+typedef struct {
+    n00bb_projection_step_t *steps;
+    size_t count;
+} n00bb_binding_projection_t;
 void collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(parse_tree_ptr_t) *bindings);
+parse_tree_t *n00bb_pattern_owner(parse_grammar_t *grammar,
+                                  parse_tree_t *node);
+bool n00bb_bind_pattern(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, parse_tree_t *pattern,
+                        th_type *type);
 bool measure_static_shape_prefix(ir_shape_t *shape,
                                  uint32_t flat_prefix_rank);
 th_type *record_template_type(th_ctx *types, core_string_t name,
