@@ -24,3 +24,5 @@ tests/diagnostics/tu/declarations.n:35:1: error N00B-T0581: cannot assign to an 
   help: build a new tuple and assign that instead
 tests/diagnostics/tu/declarations.n:36:17: warning N00B-P0034: this trailing comma ends the statement, but it reads as though the list continues on the next line
   help: remove the comma
+tests/diagnostics/tu/declarations.n:37:1: error N00B-S0019: this assigns into a literal value, which nothing can read afterward
+  help: store the value in a variable first, then assign into the variable

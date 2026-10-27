@@ -988,7 +988,7 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
         for (parse_tree_t *path = use; path != parent;
              path = parse_tree_parent(path)) {
             parse_tree_t *ancestor = parse_tree_parent(path);
-            if (nt_is(grammar, ancestor, CORE_STRING_STATIC("postfix-expr"))
+            if ((nt_is(grammar, ancestor, CORE_STRING_STATIC("postfix-expr")) || nt_is(grammar, ancestor, CORE_STRING_STATIC("place")))
                 && core_tree_num_children(ancestor) > 1
                 && core_tree_child(ancestor, 0) == path) {
                 core_string_t trait = {0}, method = {0};

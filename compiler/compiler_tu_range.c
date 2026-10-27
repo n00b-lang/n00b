@@ -630,7 +630,7 @@ n00bb_range_proven_above_int64(parse_grammar_t *grammar,
     uint64_t constant = 0;
     if (n00bb_range_constant_uint64(grammar, node, &constant))
         return constant > INT64_MAX;
-    if (nt_is(grammar, node, CORE_STRING_STATIC("primary"))) {
+    if ((nt_is(grammar, node, CORE_STRING_STATIC("primary")) || n00bb_name_place(grammar, node))) {
         const n00bb_symbol_range_t *known = n00bb_range_for_symbol(state,
             n00bb_integer_reference_symbol(node));
         return known && known->range.lo > INT64_MAX;

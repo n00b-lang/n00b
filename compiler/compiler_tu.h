@@ -1519,6 +1519,13 @@ nt_is(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
         && core_string_eq(parse_tree_nt_name(grammar, node), name);
 }
 
+static inline bool
+n00bb_name_place(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, node, CORE_STRING_STATIC("place"))
+        && core_tree_num_children(node) == 1;
+}
+
 static inline parse_tree_t *
 child_nt(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
 {

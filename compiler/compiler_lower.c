@@ -650,10 +650,10 @@ static parse_tree_t *
 n00bb_switch_tag_primary(parse_grammar_t *grammar, parse_tree_t *expression)
 {
     parse_tree_t *node = expression;
-    while (node && !core_tree_is_leaf(node) && !nt_is(grammar, node, CORE_STRING_STATIC("primary"))
+    while (node && !core_tree_is_leaf(node) && !(nt_is(grammar, node, CORE_STRING_STATIC("primary")) || n00bb_name_place(grammar, node))
            && core_tree_num_children(node) == 1)
         node = core_tree_child(node, 0);
-    return nt_is(grammar, node, CORE_STRING_STATIC("primary")) ? node : nullptr;
+    return (nt_is(grammar, node, CORE_STRING_STATIC("primary")) || n00bb_name_place(grammar, node)) ? node : nullptr;
 }
 
 
@@ -4859,7 +4859,7 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
                             bool entering, void *state)
 {
     (void)state;
-    if (entering || !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("postfix-expr"))
+    if (entering || !(nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("postfix-expr")) || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("place")))
         || core_tree_num_children(visit->node) < 3
         || !parse_tree_leaf_is(core_tree_child(visit->node, 1),
                                CORE_STRING_STATIC("."))) return true;
@@ -14701,8 +14701,8 @@ n00bb_constructor_assignment_target(ir_lower_context_t *context,
             break;
         }
         if (core_tree_num_children(parent) != 1) break;
-        if (!nt_is(visit->grammar, parent, CORE_STRING_STATIC("primary"))
-            && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("postfix-expr"))
+        if (!(nt_is(visit->grammar, parent, CORE_STRING_STATIC("primary")) || n00bb_name_place(visit->grammar, parent))
+            && !(nt_is(visit->grammar, parent, CORE_STRING_STATIC("postfix-expr")) || nt_is(visit->grammar, parent, CORE_STRING_STATIC("place")))
             && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("unary-expr"))
             && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("mul-expr"))
             && !nt_is(visit->grammar, parent, CORE_STRING_STATIC("add-expr"))

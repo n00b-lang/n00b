@@ -266,7 +266,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (!core_tree_is_leaf(value) && !parse_tree_argument_type(value))
             parse_tree_set_argument_type(value, th_var(state->types));
     }
-    if (entering && NT_IS(grammar, node, "postfix-expr")
+    if (entering && (NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
         && core_tree_num_children(node) >= 3
         && parse_tree_leaf_is(core_tree_child(node, 1),
                               CORE_STRING_STATIC("("))
@@ -403,7 +403,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     core_string_t literal_terminal = cache
         ? cache->literal_terminal : (core_string_t){0};
     if (entering) {
-        if (NT_IS(grammar, node, "postfix-expr"))
+        if ((NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place")))
             parse_tree_set_index_address_access(node,
                 n00bb_index_reference_storage(grammar, node));
         if (field_record_declaration(grammar, node)) {

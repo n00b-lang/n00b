@@ -51,7 +51,7 @@ names_symbol(parse_grammar_t *grammar, parse_tree_t *node,
              parse_sym_entry_t *symbol)
 {
     for (parse_tree_t *at = node; at; ) {
-        if (NT_IS(grammar, at, "primary")) return referenced_symbol(at) == symbol;
+        if ((NT_IS(grammar, at, "primary") || n00bb_name_place(grammar, at))) return referenced_symbol(at) == symbol;
         if (core_tree_is_leaf(at) || core_tree_num_children(at) != 1) {
             if (NT_IS(grammar, at, "tuple-or-paren")
                 && core_tree_num_children(at) == 3) {
@@ -234,7 +234,7 @@ scan_assignments(assignment_scan_t *scan, parse_tree_t *region,
                  parse_tree_t *node)
 {
     if (!node || scan->invalidator) return;
-    if (NT_IS(scan->grammar, node, "primary")
+    if ((NT_IS(scan->grammar, node, "primary") || n00bb_name_place(scan->grammar, node))
         && referenced_symbol(node) == scan->symbol && node != scan->use) {
         parse_tree_t *parent = parse_tree_parent(node);
         bool written = is_whole_assignment_target(scan->grammar, node)
@@ -459,7 +459,7 @@ receives_option_method(parse_grammar_t *grammar, parse_tree_t *use)
         if (core_tree_is_leaf(at)) return false;
         size_t children = core_tree_num_children(at);
         if (children == 1) continue;
-        if (!NT_IS(grammar, at, "postfix-expr") || children != 3
+        if (!(NT_IS(grammar, at, "postfix-expr") || NT_IS(grammar, at, "place")) || children != 3
             || core_tree_child(at, 0) != child)
             return false;
         core_string_t member = parse_tree_leaf_text(core_tree_child(at, 2));
@@ -507,11 +507,11 @@ parse_tree_t *
 n00bb_narrowing_ended_by(parse_grammar_t *grammar, parse_tree_t *use)
 {
     parse_tree_t *reference = use;
-    while (reference && !NT_IS(grammar, reference, "primary")
+    while (reference && !(NT_IS(grammar, reference, "primary") || n00bb_name_place(grammar, reference))
            && !core_tree_is_leaf(reference)
            && core_tree_num_children(reference) == 1)
         reference = core_tree_child(reference, 0);
-    if (!reference || !NT_IS(grammar, reference, "primary")) return nullptr;
+    if (!reference || !(NT_IS(grammar, reference, "primary") || n00bb_name_place(grammar, reference))) return nullptr;
     parse_sym_entry_t *symbol = referenced_symbol(reference);
     if (!narrowable_symbol(symbol)) return nullptr;
     parse_tree_t *lost = nullptr;

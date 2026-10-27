@@ -34,3 +34,4 @@ let beyond = indexed[2]
 var ordered = (1, 2)
 ordered[0] = 5
 var trailing = 1,
+[1, 2][0] = 3

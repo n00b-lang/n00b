@@ -2822,6 +2822,27 @@ preprocess_discover(parse_visit_t *visit)
     if (is_name(ctx->grammar, node, "variable-decl")
         || is_name(ctx->grammar, node, "import-stmt"))
         report_statement_trailing_comma(ctx, node);
+    while (is_name(ctx->grammar, node, "place")
+           && core_tree_num_children(node) == 3
+           && is_name(ctx->grammar, core_tree_child(node, 1), "place")) {
+        parse_tree_t *close = core_tree_remove_child(node, 2);
+        parse_tree_t *inner = core_tree_remove_child(node, 1);
+        parse_tree_t *open = core_tree_remove_child(node, 0);
+        parse_tree_free(close);
+        parse_tree_free(open);
+        core_tree_node_value(node).rule_index =
+            core_tree_node_value(inner).rule_index;
+        while (core_tree_num_children(inner)) {
+            parse_tree_t *child = core_tree_remove_child(inner, 0);
+            if (!core_tree_add_child(node, child)) {
+                parse_tree_free(child);
+                parse_tree_free(inner);
+                pp_internal(ctx, node, "could not unwrap a parenthesized assignment target");
+                return PARSE_VISIT_ERROR;
+            }
+        }
+        parse_tree_free(inner);
+    }
     const core_string_t case_blocks[] = {
         CORE_STRING_STATIC("switch-case-block"),
         CORE_STRING_STATIC("typecase-case-block"),

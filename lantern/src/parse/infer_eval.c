@@ -105,7 +105,7 @@ static th_type *transparent_expression_type(ictx *c, parse_tree_t *node)
 static parse_tree_t *method_call_parent(ictx *c)
 {
     parse_tree_t *parent = c->v->parent;
-    return node_is(c->v->grammar, parent, "postfix-expr") &&
+    return (node_is(c->v->grammar, parent, "postfix-expr") || node_is(c->v->grammar, parent, "place")) &&
            core_tree_num_children(parent) >= 3 &&
            core_tree_child(parent, 0) == c->v->node &&
            core_tree_is_leaf(core_tree_child(parent, 1)) &&
@@ -116,7 +116,7 @@ static parse_tree_t *method_call_parent(ictx *c)
 
 static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
 {
-    if (!node_is(c->v->grammar, call, "postfix-expr") ||
+    if (!(node_is(c->v->grammar, call, "postfix-expr") || node_is(c->v->grammar, call, "place")) ||
         core_tree_num_children(call) < 3 ||
         !core_tree_is_leaf(core_tree_child(call, 1)) ||
         !parse_tree_leaf_is(core_tree_child(call, 1),
@@ -188,10 +188,10 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
 static bool
 call_has_member_callee(ictx *c, parse_tree_t *call)
 {
-    if (!node_is(c->v->grammar, call, "postfix-expr")
+    if (!(node_is(c->v->grammar, call, "postfix-expr") || node_is(c->v->grammar, call, "place"))
         || !core_tree_num_children(call)) return false;
     parse_tree_t *callee = core_tree_child(call, 0);
-    return node_is(c->v->grammar, callee, "postfix-expr")
+    return (node_is(c->v->grammar, callee, "postfix-expr") || node_is(c->v->grammar, callee, "place"))
         && core_tree_num_children(callee) >= 3
         && core_tree_is_leaf(core_tree_child(callee, 1))
         && parse_tree_leaf_is(core_tree_child(callee, 1),
