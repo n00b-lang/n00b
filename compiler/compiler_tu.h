@@ -384,6 +384,9 @@ typedef struct {
     bool shape_literal_pending;
     bool shape_literal_resolved;
     bool overload_conversion_warning_reported;
+    bool tuple_index_known;
+    bool tuple_index_reported;
+    uint32_t tuple_index;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -1282,6 +1285,10 @@ n00bb_node_facts_t *n00bb_node_facts(parse_tree_t *node);
 n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
 parse_tree_t *n00bb_node_record_literal_origin(parse_tree_t *node);
+bool n00bb_node_tuple_index(parse_tree_t *node, uint32_t *index);
+th_type *n00bb_tuple_element(th_ctx *types, parse_grammar_t *grammar,
+                             parse_tree_t *index, th_type *tuple, bool write,
+                             void *context);
 parse_sym_entry_t *bound_function_symbol(parse_tree_t *node);
 th_type *n00bb_reference_definition(th_ctx *types, th_type *type);
 th_type *n00bb_dereferenced_type(th_ctx *types, th_type *type);

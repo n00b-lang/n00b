@@ -421,3 +421,17 @@ N00B_DIAG(TUPLE_ONE_ELEMENT, "N00B-T0580", ERROR,
     "A value is its own one-tuple, so `(a)` and `a` are the same and\n"
     "`Tuple[T]` is just `T`. Write the element type alone:\n"
     "    var count: int")
+N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
+    "an element of a tuple is assigned",
+    "Tuples are values that cannot change in place. Build a new tuple and\n"
+    "assign it instead:\n"
+    "    point = (x = 3, y = point.y)")
+N00B_DIAG(TUPLE_INDEX_NOT_CONSTANT, "N00B-T0582", ERROR,
+    "a tuple is indexed by a value that is not a compile-time constant",
+    "The elements of a tuple can have different types, so the index has to\n"
+    "be known when the program is compiled:\n"
+    "    let pair = (1, \"one\")\n"
+    "    let name = pair[1]")
+N00B_DIAG(TUPLE_INDEX_RANGE, "N00B-T0583", ERROR,
+    "a tuple index is out of range",
+    "A tuple with n elements is indexed from 0 to n - 1.")

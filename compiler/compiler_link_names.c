@@ -636,6 +636,13 @@ n00bb_report_inference_failure(void *context, parse_visit_t *visit,
         ? n00bb_print_type(types, expected) : (core_string_t){0};
     core_string_t got_text = got ? n00bb_print_type(types, got)
                                  : (core_string_t){0};
+    bool field_access = core_string_eq(
+            parse_tree_nt_name(visit->grammar, visit->node),
+            CORE_STRING_STATIC("postfix-expr"))
+        && core_tree_num_children(visit->node) == 3
+        && parse_tree_leaf_is(core_tree_child(visit->node, 1),
+                              CORE_STRING_STATIC("."));
+    if (kind == TH_ERR_NO_SUCH_FIELD && got && field_access) return;
     if (kind == TH_ERR_NO_SUCH_FIELD && got) {
         n00bb_report(diagnostics, unit, N00B_DIAG_FIELD_MISSING, at,
             N00B_TEXT_HAS_NO_SUCH_FIELD,

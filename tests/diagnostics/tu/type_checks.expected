@@ -61,9 +61,9 @@ tests/diagnostics/tu/type_checks.n:140:16: error N00B-N0001: cannot find `undefi
 tests/diagnostics/tu/type_checks.n:142:6: error N00B-T0546: the body of `risky` fails with an integer, but `risky` is declared to fail with `string`
 tests/diagnostics/tu/type_checks.n:146:20: error N00B-T0530: `"three"` is `string`, but the other items of this literal are integers
   tests/diagnostics/tu/type_checks.n:146:14: note: the first item is here
-tests/diagnostics/tu/type_checks.n:148:24: error N00B-T0500: `(a = "no", b = 2)` is `(a: string, b: {integer})`, but `wrong_pair` is declared `Pair`
+tests/diagnostics/tu/type_checks.n:148:24: error N00B-T0500: `(a = "no", b = 2)` is `Tuple[a: string, b: {integer}]`, but `wrong_pair` is declared `Pair`
   tests/diagnostics/tu/type_checks.n:148:17: note: `wrong_pair` is declared `Pair` here
-tests/diagnostics/tu/type_checks.n:149:24: error N00B-T0500: `(a = 1)` is `(a: {integer})`, but `pair_as_int` is declared `int`
+tests/diagnostics/tu/type_checks.n:149:24: error N00B-T0500: `(a = 1)` is `Tuple[a: {integer}]`, but `pair_as_int` is declared `int`
   tests/diagnostics/tu/type_checks.n:149:18: note: `pair_as_int` is declared `int` here
 tests/diagnostics/tu/type_checks.n:155:29: error N00B-N0003: module `native` has no function `nope`
 tests/diagnostics/tu/type_checks.n:157:21: error N00B-T0005: parameter 1 (`n`) of `h_1` is `int`, but this argument is `string`

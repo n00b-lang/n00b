@@ -853,6 +853,17 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             return element;
         }
         parse_tree_t *assignment = assignment_target(c->v);
+        th_type *receiver = th_resolve(t);
+        if (c->hooks.tuple_element && core_tree_num_children(result_node) >= 4
+            && th_builtin_applied(receiver, TH_BUILTIN_TUPLE,
+                                  th_named_nargs(receiver))) {
+            th_type *element = c->hooks.tuple_element(c->tc,
+                c->v->grammar, core_tree_child(result_node, 2), receiver,
+                assignment != nullptr, c->hooks.tuple_element_context);
+            if (element) return element;
+            c->failed = true;
+            return result;
+        }
         if (assignment) {
             th_type *call_shape = index_store_call_shape(c, result,
                                                          assignment);

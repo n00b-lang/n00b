@@ -3907,7 +3907,8 @@ remember_link_use_site(parse_grammar_t *grammar,
     core_string_t dispatch_trait = {0}, dispatch_method = {0};
     bool index_dispatch = index_dispatch_for_node(
         grammar, node, &dispatch_trait, &dispatch_method);
-    if (index_dispatch && parse_tree_is_index_address_access(node))
+    if (index_dispatch && (parse_tree_is_index_address_access(node)
+                           || n00bb_node_tuple_index(node, nullptr)))
         return;
     bool operator_dispatch = binary_operator_dispatch_for_node(
         grammar, node, &dispatch_trait, &dispatch_method)
@@ -6473,6 +6474,8 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
                                           unit);
     parse_annot_result_set_symbol_type_hook(state->annotations,
                                             n00bb_narrowed_symbol_type, unit);
+    parse_annot_result_set_tuple_element_hook(state->annotations,
+                                              n00bb_tuple_element, unit);
     parse_annot_result_set_node_callback(state->annotations,
                                          initial_symbol_node,
                                          state->annotations);
@@ -6666,6 +6669,52 @@ array_dimension_extent(parse_grammar_t *grammar, parse_tree_t *expression)
                                                 : IR_SHAPE_EXTENT_UNRESOLVED,
         .expression = expression,
     };
+}
+
+th_type *
+n00bb_tuple_element(th_ctx *types, parse_grammar_t *grammar,
+                    parse_tree_t *index, th_type *tuple, bool write,
+                    void *context)
+{
+    core_translation_unit_t *unit = context;
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_tree_t *access = parse_tree_parent(index);
+    n00bb_node_facts_t *facts = state && access
+        ? n00bb_ensure_node_facts(state, access) : nullptr;
+    if (!facts) return nullptr;
+    if (facts->tuple_index_known && !write)
+        return static_tuple_element_type(tuple, facts->tuple_index, nullptr);
+    parse_tree_t *expression = CHILD_NT(grammar, index, "expression");
+    size_t count = th_named_nargs(tuple);
+    uint64_t at = 0;
+    bool constant = fold_static_extent(grammar, expression, 0, &at);
+    if (!write && constant && at < count) {
+        facts->tuple_index_known = true;
+        facts->tuple_index = (uint32_t)at;
+        return static_tuple_element_type(tuple, at, nullptr);
+    }
+    if (facts->tuple_index_reported) return th_poison(types);
+    facts->tuple_index_reported = true;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (write) {
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_IMMUTABLE,
+                link_source_location(access), N00B_TEXT_TUPLE_IMMUTABLE,
+                N00BB_NO_ARGS))
+            n00bb_report_help(diagnostics, N00B_TEXT_TUPLE_IMMUTABLE_HELP,
+                              N00BB_NO_ARGS);
+    }
+    else if (!constant) {
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_INDEX_NOT_CONSTANT,
+                link_source_location(index), N00B_TEXT_TUPLE_INDEX_NOT_CONSTANT,
+                N00BB_NO_ARGS))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_TUPLE_INDEX_NOT_CONSTANT_HELP, N00BB_NO_ARGS);
+    }
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_INDEX_RANGE,
+            link_source_location(index), N00B_TEXT_TUPLE_INDEX_RANGE,
+            N00BB_ARGS(ARG_NUMBER(count), ARG_NUMBER(at)));
+    return th_poison(types);
 }
 
 bool
@@ -10473,6 +10522,15 @@ n00bb_node_record_literal_origin(parse_tree_t *node)
 {
     n00bb_node_facts_t *facts = n00bb_node_facts(node);
     return facts ? facts->record_literal_origin : nullptr;
+}
+
+bool
+n00bb_node_tuple_index(parse_tree_t *node, uint32_t *index)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    if (!facts || !facts->tuple_index_known) return false;
+    if (index) *index = facts->tuple_index;
+    return true;
 }
 
 th_type *

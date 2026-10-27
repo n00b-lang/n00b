@@ -12841,6 +12841,21 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             || core_string_eq(index_trait,
                               CORE_STRING_STATIC("Index_Slice_Write"))))
         return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
+    uint32_t tuple_index = 0;
+    if (index_call && n00bb_node_tuple_index(call_node, &tuple_index)) {
+        ir_value_t *tuple = ir_lower_node_value(context,
+                                                core_tree_child(call_node, 0));
+        ir_instr_t *extract = tuple
+            ? ir_lower_emit_instruction(context, IR_OP_EXTRACT_INDEX, span)
+            : nullptr;
+        if (!extract || !ir_lower_set_temp_dest(context, extract,
+                CORE_STRING_STATIC("__n00bb_"), result_type)
+            || !ir_instr_operand_value(extract, tuple)
+            || !ir_instr_operand_uint(extract, tuple_index))
+            return lower_internal(context, span,
+                                  "could not emit a tuple element read");
+        return (ir_lower_result_t){IR_LOWER_VALUE, extract->dest};
+    }
     n00bb_link_use_site_t *index_site = index_call && caller_state
         ? link_use_site_for_node(caller_state, call_node) : nullptr;
     parse_cf_label_t *call_label = lower && caller_state

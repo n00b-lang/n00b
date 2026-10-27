@@ -1601,6 +1601,16 @@ parse_annot_result_set_symbol_type_hook(parse_annot_result_t *result,
 }
 
 void
+parse_annot_result_set_tuple_element_hook(parse_annot_result_t *result,
+                                          parse_infer_tuple_element_fn hook,
+                                          void *context)
+{
+    if (!result) return;
+    result->infer_hooks.tuple_element = hook;
+    result->infer_hooks.tuple_element_context = context;
+}
+
+void
 parse_annot_result_set_infer_reporter(parse_annot_result_t *result,
                                       parse_annot_infer_reporter_fn reporter,
                                       void *context)

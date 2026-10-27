@@ -276,8 +276,10 @@ static void plan_record(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const 
     size_t  n  = t->record.n;
     size_t *ix = sorted_members(c, t);
 
-    core_buffer_puts(b, "(");
-    wlit(w, ")");
+    core_buffer_append_string(b, source_spelling(c)
+        ? CORE_STRING_STATIC("Tuple[") : CORE_STRING_STATIC("("));
+    wtext(w, source_spelling(c) ? CORE_STRING_STATIC("]")
+                                : CORE_STRING_STATIC(")"));
 
     for (size_t k = n; k-- > 0;) {
         const th_member *m = &t->record.members[ix[k]];
@@ -394,8 +396,9 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         if (!t->named.is_variant && all_types
             && core_string_eq(t->named.name, CORE_STRING_STATIC(TH_TUPLE))) {
             core_buffer_append_string(b, source_spelling(c)
-                ? CORE_STRING_STATIC("(") : CORE_STRING_STATIC("t("));
-            wlit(w, ")");
+                ? CORE_STRING_STATIC("Tuple[") : CORE_STRING_STATIC("t("));
+            wtext(w, source_spelling(c) ? CORE_STRING_STATIC("]")
+                                        : CORE_STRING_STATIC(")"));
 
             for (size_t k = t->named.nargs; k-- > 0;) {
                 wtype(w, t->named.args[k].type);

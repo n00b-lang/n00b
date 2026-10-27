@@ -42,12 +42,17 @@ typedef th_type *(*parse_infer_type_node_resolver_fn)(
 typedef th_type *(*parse_infer_symbol_type_fn)(
     th_ctx *types, parse_sym_entry_t *symbol, parse_tree_t *use,
     th_type *declared, void *context);
+typedef th_type *(*parse_infer_tuple_element_fn)(
+    th_ctx *types, parse_grammar_t *grammar, parse_tree_t *index,
+    th_type *tuple, bool write, void *context);
 
 typedef struct {
     parse_infer_type_node_resolver_fn type_node_resolver;
     void *type_node_resolver_context;
     parse_infer_symbol_type_fn symbol_type;
     void *symbol_type_context;
+    parse_infer_tuple_element_fn tuple_element;
+    void *tuple_element_context;
 } parse_infer_hooks_t;
 
 struct parse_infer_expr_t {
