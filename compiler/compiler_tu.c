@@ -1783,7 +1783,8 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
                                         "named-field-list");
         if (fields) {
             th_type *shape = static_record_shape(state, type);
-            if (!shape || th_kind_of(shape) != TH_RECORD) return false;
+            if (!shape || th_kind_of(shape) != TH_RECORD
+                || n00bb_type_has_constructor(state->unit, type)) return false;
             core_list_t(parse_tree_ptr_t) source_fields =
                 core_list_new(parse_tree_ptr_t);
             bool ok = collect_ordered_children(fields, &source_fields);
@@ -3466,6 +3467,40 @@ n00bb_field_tuple(th_ctx *types, th_member *members, size_t count)
 {
     if (count) qsort(members, count, sizeof(th_member), th_cmp_member);
     return th_record(types, members, count);
+}
+
+bool
+n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type)
+{
+    n00bb_tu_state_t *caller = unit ? tu_state(unit) : nullptr;
+    n00bb_link_analysis_t *analysis = caller ? caller->link_analysis : nullptr;
+    type = type ? th_resolve(type) : nullptr;
+    bool found = false;
+    for (size_t i = 0; analysis && type && !found
+         && i < analysis->units.len; i++) {
+        core_translation_unit_t *owner = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(owner);
+        if (!state || !state->annotations) continue;
+        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
+        for (size_t s = 0; !found && s < scopes.len; s++)
+            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
+                 !found && symbol; symbol = symbol->next_in_scope) {
+                if (symbol->kind != PARSE_SYM_FUNCTION
+                    || !core_string_eq(symbol->name,
+                                       CORE_STRING_STATIC("__init"))
+                    || !n00bb_member_visible_to(unit, owner, symbol))
+                    continue;
+                th_type *signature = constructor_signature_instance(
+                    caller->types, symbol);
+                const th_param *self = signature
+                    && th_kind_of(signature) == TH_FUNCTION
+                    && th_func_nparams(signature)
+                    ? th_func_param(signature, 0) : nullptr;
+                found = self && th_env_type_pattern_subsumes(self->type, type);
+            }
+        core_list_free(scopes);
+    }
+    return found;
 }
 
 bool

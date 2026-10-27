@@ -6347,6 +6347,158 @@ report_undefined_cast(ir_lower_context_t *context, th_ctx *types,
     return result;
 }
 
+static ir_value_t *n00bb_object_from_fields(ir_lower_context_t *context,
+    ir_value_t *fields, th_type *object_type, ir_span_t span);
+static ir_value_t *n00bb_reference_view(ir_lower_context_t *context,
+                                        ir_value_t *value, ir_span_t span);
+static ir_value_t *widened_value(ir_lower_context_t *context,
+    ir_value_t *value, th_type *target, ir_span_t span);
+
+static th_type *
+structural_shape(th_ctx *types, th_type *type, bool *named,
+                 th_type **object_shape)
+{
+    type = type ? th_resolve(type) : nullptr;
+    *named = false;
+    *object_shape = nullptr;
+    if (!type) return nullptr;
+    if (th_kind_of(type) == TH_RECORD) return type;
+    bool variant = false;
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, nullptr, &variant, nullptr) || variant)
+        return nullptr;
+    *named = true;
+    th_type *shape = type;
+    if (n00bb_object_type(types, type)) {
+        shape = th_resolve(th_ind_referent(
+            n00bb_reference_definition(types, type)));
+        *object_shape = shape;
+    }
+    th_type *definition = shape ? th_type_definition(types, shape) : nullptr;
+    definition = definition ? th_resolve(definition) : nullptr;
+    return definition && th_kind_of(definition) == TH_RECORD
+        ? definition : nullptr;
+}
+
+static bool
+structural_field_fits(ir_lower_context_t *context, th_type *from,
+                      th_type *to)
+{
+    if (ir_type_eq(context->module, from, to)) return true;
+    return is_integer_type(from) && is_integer_type(to)
+        && machine_promotes(ir_machine_of(context->module, from),
+                            ir_machine_of(context->module, to));
+}
+
+static ir_lower_result_t
+report_tuple_cast_field(ir_lower_context_t *context, th_type *from,
+                        th_type *target, core_string_t field, ir_span_t span)
+{
+    core_string_t from_text = lower_type_text(context, from);
+    core_string_t target_text = lower_type_text(context, target);
+    ir_lower_result_t result = lower_report(context, N00B_DIAG_TUPLE_CAST,
+        span, N00B_TEXT_TUPLE_CAST_FIELD,
+        N00BB_ARGS(ARG_TEXT(from_text), ARG_TEXT(target_text),
+                   ARG_TEXT(field)));
+    core_free(from_text.data);
+    core_free(target_text.data);
+    return result;
+}
+
+static bool
+n00bb_lower_structural_cast(ir_lower_context_t *context, ir_value_t *value,
+                            th_type *target, bool unsafe_cast, ir_span_t span,
+                            ir_lower_result_t *result)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *from = value->type;
+    bool from_named = false, to_named = false;
+    th_type *from_object = nullptr, *to_object = nullptr;
+    th_type *source = structural_shape(types, from, &from_named, &from_object);
+    th_type *destination = structural_shape(types, target, &to_named,
+                                            &to_object);
+    th_type *resolved = th_resolve(from);
+    if (destination && to_named
+        && th_builtin_applied(resolved, TH_BUILTIN_TUPLE,
+                              th_named_nargs(resolved))) {
+        core_string_t from_text = lower_type_text(context, from);
+        core_string_t target_text = lower_type_text(context, target);
+        *result = lower_report(context, N00B_DIAG_TUPLE_CAST, span,
+            N00B_TEXT_TUPLE_POSITIONAL_CAST,
+            N00BB_ARGS(ARG_TEXT(from_text), ARG_TEXT(target_text)));
+        lower_help(context, N00B_TEXT_TUPLE_POSITIONAL_CAST_HELP,
+                   N00BB_NO_ARGS);
+        core_free(from_text.data);
+        core_free(target_text.data);
+        return true;
+    }
+    if (!source || !destination || from_named == to_named) return false;
+    n00bb_lower_context_t *lower = context->user;
+    if (to_named && !unsafe_cast
+        && n00bb_type_has_constructor(lower->unit, target)) {
+        core_string_t target_text = lower_type_text(context, target);
+        *result = lower_report(context, N00B_DIAG_TUPLE_CONSTRUCTOR, span,
+            N00B_TEXT_TUPLE_CAST_CONSTRUCTOR,
+            N00BB_ARGS(ARG_TEXT(target_text)));
+        lower_help(context, N00B_TEXT_TUPLE_CONSTRUCTOR_HELP,
+                   N00BB_ARGS(ARG_TEXT(target_text)));
+        core_free(target_text.data);
+        return true;
+    }
+    for (size_t i = 0; i < th_record_len(source); i++) {
+        core_string_t name = th_record_member(source, i)->name;
+        if (!record_lookup_text(nullptr, destination, name)) {
+            *result = report_tuple_cast_field(context, from, target, name,
+                                              span);
+            return true;
+        }
+    }
+    for (size_t i = 0; i < th_record_len(destination); i++) {
+        const th_member *member = th_record_member(destination, i);
+        th_type *field = record_lookup_text(nullptr, source, member->name);
+        if (!field || !structural_field_fits(context, field, member->type)) {
+            *result = report_tuple_cast_field(context, from, target,
+                                              member->name, span);
+            return true;
+        }
+    }
+    if (from_object) {
+        ir_value_t *view = n00bb_reference_view(context, value, span);
+        value = view ? n00bb_emit_indirect_read(context, view, from_object,
+                                                span) : nullptr;
+    }
+    ir_value_t **items = core_alloc_array(ir_value_t *,
+                                          th_record_len(destination));
+    bool ok = value && items;
+    for (size_t i = 0; ok && i < th_record_len(destination); i++) {
+        const th_member *member = th_record_member(destination, i);
+        ir_instr_t *extract = ir_lower_emit_instruction(context,
+                                                        IR_OP_EXTRACT, span);
+        ok = extract && ir_lower_set_temp_dest(context, extract,
+                CORE_STRING_STATIC("__n00bb_"),
+                record_lookup_text(nullptr, source, member->name))
+            && ir_instr_operand_value(extract, value)
+            && ir_instr_operand_name(extract, member->name);
+        items[i] = ok ? widened_value(context, extract->dest, member->type,
+                                      span) : nullptr;
+        ok = items[i] != nullptr;
+    }
+    ir_instr_t *aggregate = ok
+        ? ir_lower_emit_instruction(context, IR_OP_AGGREGATE, span) : nullptr;
+    ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
+        CORE_STRING_STATIC("__n00bb_cast_"), to_object ? to_object : target);
+    for (size_t i = 0; ok && i < th_record_len(destination); i++)
+        ok = ir_instr_operand_value(aggregate, items[i]);
+    core_free(items);
+    ir_value_t *built = ok ? aggregate->dest : nullptr;
+    if (built && to_object)
+        built = n00bb_object_from_fields(context, built, target, span);
+    *result = built ? (ir_lower_result_t){IR_LOWER_VALUE, built}
+        : lower_internal(context, span,
+                         "could not emit a structural tuple cast");
+    return true;
+}
+
 static ir_lower_result_t
 n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  ir_value_t *const *operands, size_t operand_count,
@@ -6375,6 +6527,10 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *from = operands[0]->type;
     bool unsafe_cast = parse_tree_leaf_is(core_tree_child(visit->node, 0),
                                           CORE_STRING_STATIC("unsafe_cast"));
+    ir_lower_result_t structural = {0};
+    if (n00bb_lower_structural_cast(context, operands[0], target, unsafe_cast,
+                                    span, &structural))
+        return structural;
     uint8_t source_attrs = 0, target_attrs = 0;
     bool plain_reference_cast = th_ind_attrs(from, &source_attrs)
         && th_ind_attrs(target, &target_attrs)
@@ -7161,10 +7317,22 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
         ir_span_t span = lower_span_for_tree(context, visit->node);
         th_type *object_type = n00bb_object_type(
             ir_module_types(context->module), type) ? type : nullptr;
+        th_type *built_type = object_type ? object_type : type;
         if (object_type)
             type = th_auto_deref(ir_module_types(context->module), type);
         bool variant = false;
         (void)th_named_info(th_resolve(type), nullptr, &variant, nullptr);
+        if (!variant && th_kind_of(th_resolve(built_type)) == TH_NAMED
+            && n00bb_type_has_constructor(lower->unit, built_type)) {
+            core_string_t type_text = lower_type_text(context, built_type);
+            lower_report(context, N00B_DIAG_TUPLE_CONSTRUCTOR, span,
+                N00B_TEXT_TUPLE_LITERAL_CONSTRUCTOR,
+                N00BB_ARGS(ARG_TEXT(type_text)));
+            lower_help(context, N00B_TEXT_TUPLE_CONSTRUCTOR_HELP,
+                       N00BB_ARGS(ARG_TEXT(type_text)));
+            core_free(type_text.data);
+            return false;
+        }
         if (variant) {
             n00bb_ordered_nodes_t *ordered = tu
                 ? n00bb_node_ordered_nodes(named_fields) : nullptr;
