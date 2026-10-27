@@ -7248,8 +7248,23 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                 IR_OP_AGGREGATE, span);
             bool ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
                 CORE_STRING_STATIC("__n00bb_"), type);
-            for (size_t i = 0; ok && i < parts->values.len; i++)
-                ok = ir_instr_operand_value(aggregate, parts->values.data[i]);
+            bool by_name = definition
+                && th_record_len(definition) == parts->values.len;
+            for (size_t j = 0; ok && j < parts->values.len; j++) {
+                size_t i = j;
+                if (by_name) {
+                    core_string_t member = th_record_member(definition, j)->name;
+                    for (i = 0; i < parts->values.len; i++) {
+                        parse_tree_t *field = parse_tree_parent(
+                            parts->expressions.data[i]);
+                        if (field && core_string_eq(first_token_text(field),
+                                                    member)) break;
+                    }
+                }
+                ok = i < parts->values.len
+                    && ir_instr_operand_value(aggregate,
+                                              parts->values.data[i]);
+            }
             if (!ok)
                 return lower_internal(context,
                     lower_span_for_tree(context, visit->node),
@@ -10966,6 +10981,30 @@ n00bb_lower_referent_read(ir_lower_context_t *context, parse_visit_t *visit,
 }
 
 static ir_lower_result_t
+n00bb_lower_tuple_field(ir_lower_context_t *context, parse_visit_t *visit,
+                        th_type *result_type, ir_span_t span)
+{
+    if (n00bb_simple_assignment_field_target(visit->grammar, visit->node))
+        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
+    parse_tree_t *base_node = core_tree_child(visit->node, 0);
+    ir_value_t *base = ir_lower_node_value(context, base_node);
+    th_type *record = base ? th_resolve(base->type) : nullptr;
+    core_string_t name = parse_tree_leaf_text(core_tree_child(visit->node, 2));
+    if (!record || th_kind_of(record) != TH_RECORD
+        || !record_lookup_text(nullptr, record, name))
+        return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
+    ir_instr_t *extract = ir_lower_emit_instruction(context, IR_OP_EXTRACT,
+                                                    span);
+    if (!extract || !ir_lower_set_temp_dest(context, extract,
+        CORE_STRING_STATIC("__n00bb_"), result_type)
+        || !ir_instr_operand_value(extract, base)
+        || !ir_instr_operand_name(extract, name))
+        return lower_internal(context, span,
+                              "could not emit a tuple field read");
+    return (ir_lower_result_t){IR_LOWER_VALUE, extract->dest};
+}
+
+static ir_lower_result_t
 n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                           ir_value_t *const *operands, size_t operand_count,
                           th_type *result_type, ir_span_t span, void *state)
@@ -11045,6 +11084,9 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                 "could not emit the enum constant");
         return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
     }
+    if (resolution.kind == PARSE_NODE_RESOLUTION_NONE
+        && core_tree_num_children(visit->node) == 3)
+        return n00bb_lower_tuple_field(context, visit, result_type, span);
     if (resolution.kind != PARSE_NODE_RESOLUTION_SYMBOL
         || !resolution.target.symbol
         || resolution.target.symbol->kind != PARSE_SYM_VARIABLE)

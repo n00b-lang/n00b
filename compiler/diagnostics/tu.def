@@ -407,3 +407,17 @@ N00B_DIAG(ATOMIC_UNSUPPORTED, "N00B-T0577", ERROR,
     "the target has no atomic operations for a type",
     "Atomic values must fit the atomic instructions of the target. Use a\n"
     "smaller element type, or protect the value with a lock.")
+N00B_DIAG(TUPLE_FIELD_REPEATED, "N00B-T0578", ERROR,
+    "a field tuple type names a field twice",
+    "Each field of a field tuple has its own name:\n"
+    "    var point: Tuple[x: int, y: int]")
+N00B_DIAG(TUPLE_NAMED_ARGUMENTS, "N00B-T0579", ERROR,
+    "a type other than Tuple is given named type arguments",
+    "Only `Tuple` takes named elements, which make a field tuple:\n"
+    "    var point: Tuple[x: int, y: int]\n"
+    "Other generic types take their type arguments by position.")
+N00B_DIAG(TUPLE_ONE_ELEMENT, "N00B-T0580", ERROR,
+    "a positional tuple type has one element",
+    "A value is its own one-tuple, so `(a)` and `a` are the same and\n"
+    "`Tuple[T]` is just `T`. Write the element type alone:\n"
+    "    var count: int")

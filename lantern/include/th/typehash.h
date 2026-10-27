@@ -413,6 +413,7 @@ bool     th_seq_extent(const th_type *type, uint64_t *extent);
 size_t th_record_len(const th_type *type);
 const th_member *th_record_member(const th_type *type, size_t i);
 th_type *th_record_lookup(const th_type *type, core_string_t name);
+int      th_cmp_member(const void *a, const void *b);
 
 bool th_trait_name(const th_type *type, core_string_t *name);
 size_t th_trait_len(const th_type *type);

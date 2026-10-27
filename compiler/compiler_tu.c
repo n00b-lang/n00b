@@ -3461,6 +3461,13 @@ static_record_shape(n00bb_tu_state_t *state, th_type *type)
     return shape;
 }
 
+th_type *
+n00bb_field_tuple(th_ctx *types, th_member *members, size_t count)
+{
+    if (count) qsort(members, count, sizeof(th_member), th_cmp_member);
+    return th_record(types, members, count);
+}
+
 bool
 infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_tu_state_t *state)
@@ -3501,7 +3508,8 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
             .type = field_type,
         }));
     }
-    th_type *record = th_record(state->types, members.data, members.len);
+    th_type *record = n00bb_field_tuple(state->types, members.data,
+                                        members.len);
     core_list_free(members);
     if (!record) return false;
     th_type *existing = parse_tree_type(node);
@@ -14894,6 +14902,68 @@ has_direct_leaf_text(parse_tree_t *node, core_string_t text)
 }
 
 static th_type *
+compose_field_tuple(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                    parse_tree_t *type_node, parse_tree_t *fields, bool tuple)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (!tuple) {
+        core_string_t name = n00bb_node_source_text(unit, type_node,
+            n00bb_text_form(N00B_TEXT_THIS_TYPE));
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_NAMED_ARGUMENTS,
+                link_source_location(fields), N00B_TEXT_TUPLE_NAMED_ARGUMENTS,
+                N00BB_ARGS(ARG_TEXT(name))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_TUPLE_NAMED_ARGUMENTS_HELP, N00BB_NO_ARGS);
+        return th_poison(state->types);
+    }
+    core_list_t(th_member) members = core_list_new(th_member);
+    core_list_t(parse_tree_ptr_t) names = core_list_new(parse_tree_ptr_t);
+    bool valid = true;
+    for (size_t i = 0; valid && i < core_tree_num_children(fields); i++) {
+        parse_tree_t *field = core_tree_child(fields, i);
+        if (NT_IS(grammar, field, "tspec-field-list")) {
+            fields = field;
+            i = SIZE_MAX;
+            continue;
+        }
+        if (!NT_IS(grammar, field, "tspec-field")) continue;
+        parse_tree_t *name_node = core_tree_child(field, 0);
+        parse_tree_t *type = CHILD_NT(grammar, field, "union-tspec");
+        th_type *field_type = type ? parse_tree_type(type) : nullptr;
+        if (!field_type) {
+            core_list_free(members);
+            core_list_free(names);
+            return nullptr;
+        }
+        core_string_t name = parse_tree_leaf_text(name_node);
+        for (size_t j = 0; j < names.len; j++) {
+            if (!core_string_eq(parse_tree_leaf_text(names.data[j]), name))
+                continue;
+            if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_FIELD_REPEATED,
+                    link_source_location(name_node),
+                    N00B_TEXT_TUPLE_FIELD_REPEATED, N00BB_ARGS(ARG_TEXT(name))))
+                n00bb_report_secondary(diagnostics, unit,
+                    link_source_location(names.data[j]),
+                    N00B_TEXT_TUPLE_FIELD_FIRST, N00BB_ARGS(ARG_TEXT(name)));
+            valid = false;
+            break;
+        }
+        core_list_push(names, name_node);
+        core_list_push(members, ((th_member){
+            .name = store_semantic_string(state, name),
+            .type = field_type,
+        }));
+    }
+    th_type *result = valid
+        ? n00bb_field_tuple(state->types, members.data, members.len)
+        : th_poison(state->types);
+    core_list_free(members);
+    core_list_free(names);
+    return result;
+}
+
+static th_type *
 compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
                       parse_tree_t *node)
 {
@@ -14968,6 +15038,11 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     if (!application || !NT_IS(grammar, type_node, "member-chain"))
         return base;
+    bool tuple = member_chain_is_name(grammar, type_node,
+                                      CORE_STRING_STATIC("Tuple"));
+    parse_tree_t *fields = CHILD_NT(grammar, application, "tspec-field-list");
+    if (fields)
+        return compose_field_tuple(grammar, unit, type_node, fields, tuple);
     core_string_t name = {};
     bool is_variant = false;
     size_t declared_arity = 0;
@@ -14977,6 +15052,21 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     core_list_t(th_arg) arguments = core_list_new(th_arg);
     bool valid = list && append_type_argument_pack(
         parse_tree_type(list), &arguments);
+    if (tuple && valid && arguments.len == 1) {
+        core_string_t element = arguments.data[0].kind == TH_ARG_TYPE
+            ? n00bb_print_type_for_user(state->types, arguments.data[0].type)
+            : core_string_dup(n00bb_text_form(N00B_TEXT_THIS_TYPE));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_ONE_ELEMENT,
+                link_source_location(application), N00B_TEXT_TUPLE_ONE_ELEMENT,
+                N00BB_ARGS(ARG_TEXT(element))))
+            n00bb_report_help(diagnostics, N00B_TEXT_TUPLE_ONE_ELEMENT_HELP,
+                              N00BB_ARGS(ARG_TEXT(element)));
+        core_free(element.data);
+        core_list_free(arguments);
+        return th_poison(state->types);
+    }
     if (!declared_arity && !is_variant)
         declared_arity = th_generic_arity(state->types, name);
     if (valid && declared_arity && declared_arity != arguments.len) {

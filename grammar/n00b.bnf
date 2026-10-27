@@ -714,6 +714,12 @@
 
 <tspec-application> @nospace ::=
     %"[" <tspec-list> %"]"
+<tspec-application> @nospace ::=
+    %"[" <tspec-field-list> %"]"
+
+<tspec-field-list> ::= <tspec-field> %"," <tspec-field-list>
+                    | <tspec-field>
+                    | <tspec-field> %","
 <array-dimensions> @disambig(n00bb_prefer_type_application, 100) ::=
     <array-dimension>+
 <array-dimension> @nospace ::= %"[" <expression>? %"]"
