@@ -1,11 +1,13 @@
 #pragma once
 
+#include <pthread.h>
+
 #include "lib/module.h"
 #include "compiler_module_literal.h"
+#include "toolchain.h"
 
 typedef struct n00bb_resolver_t n00bb_resolver_t;
 
-core_string_t n00bb_executable_path(core_string_t argv0);
 n00bb_resolver_t *n00bb_resolver_new(core_string_t argv0,
                                      core_diagnostics_t *diagnostics);
 void n00bb_resolver_free(n00bb_resolver_t *resolver);
@@ -41,8 +43,11 @@ core_string_t n00bb_package_id(const core_translation_unit_t *unit);
 core_string_t n00bb_package_namespace(const core_translation_unit_t *unit);
 void n00bb_source_file_set_package(core_source_file_t *source,
                                   core_string_t package_id);
-core_string_t n00bb_resolver_search_description(
-    n00bb_resolver_t *resolver, core_string_t operand);
+void n00bb_resolver_note_roots(n00bb_resolver_t *resolver,
+                               core_diagnostics_t *diagnostics);
+void n00bb_resolver_note_search(n00bb_resolver_t *resolver,
+                                core_string_t operand,
+                                core_diagnostics_t *diagnostics);
 bool n00bb_resolver_supports_locator(n00bb_resolver_t *resolver,
                                      core_string_t operand,
                                      core_string_t *unsupported_scheme);
@@ -64,7 +69,13 @@ bool n00bb_resolver_internal_import(n00bb_resolver_t *resolver,
                                     const core_translation_unit_t *importer,
                                     core_string_t name,
                                     core_module_spec_t *resolved);
+bool n00bb_resolver_ambiguous_module(n00bb_resolver_t *resolver,
+                                     const core_translation_unit_t *importer,
+                                     core_string_t name,
+                                     core_string_t *module_path,
+                                     core_string_t *directory_path);
 void n00bb_resolver_store_package_syntax(n00bb_resolver_t *resolver,
                                          core_string_t source_path,
                                          const void *names, size_t size);
-core_string_t n00bb_grammar_path(core_string_t argv0);
+bool n00bb_start_worker(pthread_t *thread, void *(*start)(void *),
+                        void *argument);

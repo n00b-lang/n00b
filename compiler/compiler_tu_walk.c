@@ -119,39 +119,96 @@ report_view_write(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 || n00bb_reference_definition(state->types, base));
     }
     if (!through_shared) return;
-    core_buffer_t message = {0};
-    const char *kind = origin->kind == PARSE_SYM_PARAM ? "view parameter"
-                                                       : "constant";
-    core_buffer_printf(&message,
-        "cannot write through %s '%.*s'; nothing reachable from a %s is "
-        "writable", kind, (int)origin->name.u8_bytes, origin->name.data,
-        kind);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0066"),
-        core_buffer_string(&message), link_source_location(target));
-    core_buffer_release(&message);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    bool parameter = origin->kind == PARSE_SYM_PARAM;
+    if (!n00bb_report(diagnostics, unit, N00B_DIAG_WRITE_THROUGH_READ_ONLY,
+            link_source_location(target),
+            parameter ? N00B_TEXT_CANNOT_WRITE_THROUGH_VIEW
+                      : N00B_TEXT_CANNOT_WRITE_THROUGH_CONSTANT,
+            N00BB_ARGS(ARG_TEXT(origin->name))))
+        return;
+    n00bb_report_label(diagnostics, N00B_TEXT_WRITTEN_HERE, N00BB_NO_ARGS);
+    if (origin->decl_node)
+        n00bb_report_secondary(diagnostics, nullptr,
+            link_source_location(origin->decl_node),
+            N00B_TEXT_IS_DECLARED_HERE, N00BB_ARGS(ARG_TEXT(origin->name)));
+    n00bb_report_help(diagnostics, parameter
+            ? N00B_TEXT_DECLARE_AS_A_MODIFY_PARAMETER
+            : N00B_TEXT_DECLARE_WITH_VAR_TO_MAKE,
+        N00BB_ARGS(ARG_TEXT(origin->name)));
 }
 
 static void
-report_literal_failure(core_translation_unit_t *unit, parse_tree_t *node,
-                       size_t before, core_string_t code,
-                       core_string_t message)
+report_untyped_container_literal(parse_grammar_t *grammar,
+                                 core_translation_unit_t *unit,
+                                 parse_tree_t *node, size_t before)
 {
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    if (core_diagnostics_count(diagnostics) == before)
-        core_diagnostics_report_at(diagnostics, unit, CORE_DIAG_ERROR,
-            code, message, link_source_location(node));
+    if (core_diagnostics_count(diagnostics) != before) return;
+    bool list = NT_IS(grammar, node, "list-lit");
+    if (!n00bb_report(diagnostics, unit, N00B_DIAG_CONTAINER_LITERAL_UNTYPED,
+            link_source_location(node),
+            list ? N00B_TEXT_CANNOT_INFER_LIST_ITEM
+                 : N00B_TEXT_CANNOT_INFER_DICT_ITEM, N00BB_NO_ARGS))
+        return;
+    n00bb_report_help(diagnostics, list ? N00B_TEXT_GIVE_LIST_VARIABLE_A_TYPE
+                                        : N00B_TEXT_GIVE_DICT_VARIABLE_A_TYPE,
+                      N00BB_NO_ARGS);
+}
+
+static void
+report_modifier_without_literal(core_translation_unit_t *unit,
+                                parse_tree_t *node, core_string_t modifier,
+                                bool parenthesized)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (!n00bb_report(diagnostics, unit,
+            N00B_DIAG_LITERAL_MODIFIER_NOT_ON_LITERAL,
+            link_source_location(node),
+            parenthesized ? N00B_TEXT_MODIFIER_AFTER_PARENTHESES
+                          : N00B_TEXT_MODIFIER_MUST_FOLLOW_LITERAL,
+            N00BB_ARGS(ARG_TEXT(modifier))))
+        return;
+    n00bb_report_help(diagnostics, N00B_TEXT_PUT_THE_MODIFIER_DIRECTLY_AFTER,
+        N00BB_NO_ARGS);
+}
+
+static void
+report_type_declaration_form(core_translation_unit_t *unit,
+                             parse_tree_t *node)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    parse_sym_entry_t *declared = parse_tree_sym(node);
+    if (!declared || !declared->name.data) {
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_DECLARATION_FORM,
+            link_source_location(node), N00B_TEXT_TYPE_IS_NOT_A_DECLARATION,
+            N00BB_NO_ARGS))
+            n00bb_report_help(diagnostics, N00B_TEXT_USE_RECORD_FOR_A_VALUE,
+                N00BB_NO_ARGS);
+        return;
+    }
+    int len = (int)declared->name.u8_bytes;
+    const char *name = declared->name.data;
+    if (n00bb_report(diagnostics, unit, N00B_DIAG_TYPE_DECLARATION_FORM,
+        link_source_location(node), N00B_TEXT_TYPE_IS_NOT_A_DECLARATION_2,
+        N00BB_ARGS(ARG_TEXT(core_string_borrow(name, (size_t)(len))))))
+        n00bb_report_help(diagnostics, N00B_TEXT_USE_RECORD_FOR_A_VALUE_2,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(name, (size_t)(len))),
+                       ARG_TEXT(core_string_borrow(name, (size_t)(len)))));
 }
 
 static bool
 infer_literal_reporting(parse_grammar_t *grammar,
-                        core_translation_unit_t *unit, parse_tree_t *node,
-                        core_string_t code, core_string_t message)
+                        core_translation_unit_t *unit, parse_tree_t *node)
 {
-    size_t before = core_diagnostics_count(
-        core_translation_unit_diagnostics(unit));
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    size_t before = core_diagnostics_count(diagnostics);
     if (infer_user_literal_type(grammar, unit, node, nullptr)) return true;
-    report_literal_failure(unit, node, before, code, message);
+    if (core_diagnostics_count(diagnostics) != before) return false;
+    core_string_t modifier = literal_modifier(grammar, node);
+    n00bb_report(diagnostics, unit, N00B_DIAG_LITERAL_MODIFIER_PAYLOAD,
+        link_source_location(node), N00B_TEXT_LITERAL_MODIFIER_DOES_NOT_ACCEPT,
+        N00BB_ARGS(ARG_TEXT(modifier)));
     return false;
 }
 
@@ -163,6 +220,27 @@ integer_copy_declaration(parse_grammar_t *grammar, parse_tree_t *node,
         || CHILD_NT(grammar, node, "type-spec")) return false;
     parse_tree_t *initializer = CHILD_NT(grammar, node, "expression");
     return initializer && is_integer_type(parse_tree_type(initializer));
+}
+
+static void
+place_record_literal(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                     n00bb_tu_state_t *state, parse_tree_t *expression,
+                     th_type *expected,
+                     const n00bb_value_destination_t *destination)
+{
+    if (!expression || !expected) return;
+    bool placed = contextualize_record_literal(grammar, unit, state,
+                                               expression, expected);
+    if (!n00bb_node_record_literal_origin(expression)) return;
+    th_type *actual = parse_tree_type(expression);
+    th_type *target = expected;
+    th_type *payload = nullptr;
+    if (n00bb_option_type_element(expected, &payload) && payload)
+        target = payload;
+    if (placed && actual && th_unify_probe(state->types, actual, target))
+        return;
+    n00bb_report_value_type_mismatch(unit, expression, actual, expected,
+                                     destination);
 }
 
 static void
@@ -289,7 +367,10 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         && (is_integer_type(compound_target)
             || n00bb_open_integer(compound_target));
     bool integer_copy = integer_copy_declaration(grammar, node, entering);
+    bool path_root_past_fields = resolve_type_path_root_past_fields(grammar,
+        unit, node, parent);
     if (variant_payload || flagset_field || type_reference
+        || path_root_past_fields
         || invalid_field_access || intrinsic_binary || intrinsic_unary
         || integer_compound || integer_copy
         || (modified_numeric && n00bb_nil_spelling(first_token_text(node))))
@@ -298,16 +379,22 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         || core_string_eq(literal_terminal, CORE_STRING_STATIC("INT_LIT"))
         || core_string_eq(literal_terminal, CORE_STRING_STATIC("HEX_LIT")))
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_LITERAL);
-    if (type_reference)
+    if (type_reference || path_root_past_fields)
         (void)parse_visit_suppress_annotation(visit, PARSE_ANNOT_VARREF);
     if (step == SEMANTIC_PREPARE_EXIT && NT_IS(grammar, node, "tspec-tvar")
-        && !signature_typevar_for_node(grammar, unit, node))
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-            CORE_STRING_STATIC(
-                "could not bind this type variable to its callable signature"),
-            link_source_location(node));
+        && !signature_typevar_for_node(grammar, unit, node)) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        core_string_t spelling = n00bb_node_source_text(unit, node,
+            n00bb_text_form(N00B_TEXT_THIS_TYPE_VARIABLE));
+        if (n00bb_report(diagnostics, unit,
+            N00B_DIAG_TYPE_VARIABLE_OUTSIDE_SIGNATURE,
+            link_source_location(node), N00B_TEXT_TYPE_VARIABLE_DOES_NOT_BELONG,
+            N00BB_ARGS(ARG_TEXT(spelling))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_TYPE_VARIABLES_ARE_DECLARED_BY,
+                N00BB_NO_ARGS);
+    }
     return;
     }
     bool type_reference = cache && cache->type_reference;
@@ -322,21 +409,15 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (field_record_declaration(grammar, node)) {
             parse_sym_entry_t *symbol = parse_tree_sym(node);
             if (!symbol || symbol->kind != PARSE_SYM_TYPEDEF) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
-                    CORE_STRING_STATIC("record declaration has no type symbol"),
-                    link_source_location(node));
+                n00bb_tu_internal_error(unit, node, "checking declarations",
+                    "record declaration has no type symbol");
                 return;
             }
             th_type *named = symbol->type ? th_resolve(symbol->type)
                                           : nullptr;
             if (!named || th_kind_of(named) != TH_NAMED) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
-                    CORE_STRING_STATIC("record type name conflicts with its symbol"),
-                    link_source_location(node));
+                n00bb_tu_internal_error(unit, node, "checking declarations",
+                    "record type name conflicts with its symbol");
                 return;
             }
             parse_tree_set_type(node, named);
@@ -353,31 +434,20 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             parse_tree_t *inner = core_tree_child(node, 1);
             parse_sym_entry_t *symbol = attached_symbol(grammar, unit, inner);
             if (symbol && !parse_tree_set_resolution_symbol(node, symbol)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0013"),
-                    CORE_STRING_STATIC(
-                        "could not retain parenthesized symbol resolution"),
-                    link_source_location(node));
+                n00bb_tu_internal_error(unit, node, "resolving names",
+                    "could not retain parenthesized symbol resolution");
                 return;
             }
         }
         if (!apply_typecase_narrowing(grammar, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-TYPECASE"),
-                CORE_STRING_STATIC(
-                    "could not bind a reference to its narrowed typecase subject"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "checking types",
+                "could not bind a reference to its narrowed typecase subject");
             return;
         }
         n00bb_apply_atomic_load(grammar, unit, node);
         if (!bind_builtin_reference(grammar, state, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                CORE_STRING_STATIC("could not bind the builtin reference"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "resolving names",
+                "could not bind the builtin reference");
             return;
         }
         if (member_access_node(grammar, node) == node
@@ -391,21 +461,27 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 ? core_tree_child(access, 0) : nullptr;
             if (atomic_root && element && receiver) {
                 parse_tree_set_type(receiver, element);
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0017"),
-                    CORE_STRING_STATIC(
-                        "atomic values cannot be updated through a field; assign the whole value"),
-                link_source_location(node));
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                if (n00bb_report(diagnostics, unit,
+                    N00B_DIAG_ATOMIC_FIELD_UPDATE, link_source_location(node),
+                    N00B_TEXT_IS_ATOMIC_SO_ITS_FIELDS,
+                    N00BB_ARGS(ARG_TEXT(atomic_root->name)))) {
+                    if (atomic_root->decl_node)
+                        n00bb_report_secondary(diagnostics, nullptr,
+                            link_source_location(atomic_root->decl_node),
+                            N00B_TEXT_IS_DECLARED_HERE,
+                            N00BB_ARGS(ARG_TEXT(atomic_root->name)));
+                    n00bb_report_help(diagnostics,
+                        N00B_TEXT_BUILD_THE_UPDATED_VALUE_AND,
+                        N00BB_ARGS(ARG_TEXT(atomic_root->name)));
+                }
             }
         }
-        bind_declared_type_from_node(grammar, node);
+        bind_declared_type_from_node(grammar, state->types, node);
         if (!n00bb_cache_contextual_integer(grammar, state, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                CORE_STRING_STATIC("could not constrain integer literal"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "checking types",
+                "could not constrain integer literal");
             return;
         }
         if (NT_IS(grammar, node, "simple-lit")) {
@@ -491,7 +567,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     && n00bb_type_interval(declared[s], &bounds)
                     && !ir_interval_meet(range, bounds, nullptr)) {
                     n00bb_report_integer_misfit(state, node,
-                        CORE_STRING_STATIC("value"), range, declared[s]);
+                        false, range, declared[s]);
                     break;
                 }
             }
@@ -499,9 +575,14 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (NT_IS(grammar, node, "sym-decl")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
             parse_tree_t *initializer = CHILD_NT(grammar, node, "expression");
-            contextualize_record_literal(grammar, unit, state, initializer,
-                type_spec ? parse_tree_type(type_spec) : nullptr);
             parse_sym_entry_t *declared = parse_tree_sym(node);
+            n00bb_value_destination_t variable = {
+                .kind = N00BB_DESTINATION_VARIABLE,
+                .name = declared ? declared->name : (core_string_t){0},
+                .declared_at = type_spec,
+            };
+            place_record_literal(grammar, unit, state, initializer,
+                type_spec ? parse_tree_type(type_spec) : nullptr, &variable);
             if (declared && !type_spec && initializer
                 && is_integer_type(parse_tree_type(initializer))) {
                 th_type *class = n00bb_integer_variable(state, 0);
@@ -526,17 +607,29 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
         if (NT_IS(grammar, node, "default-param")) {
             parse_tree_t *type_spec = CHILD_NT(grammar, node, "type-spec");
+            parse_sym_entry_t *parameter = parse_tree_sym(node);
+            n00bb_value_destination_t variable = {
+                .kind = N00BB_DESTINATION_VARIABLE,
+                .name = parameter ? parameter->name : (core_string_t){0},
+                .declared_at = type_spec,
+            };
             if (type_spec)
-                contextualize_record_literal(grammar, unit, state,
+                place_record_literal(grammar, unit, state,
                     CHILD_NT(grammar, node, "expression"),
-                    parse_tree_type(type_spec));
+                    parse_tree_type(type_spec), &variable);
         }
         if (NT_IS(grammar, node, "assign-stmt")
             && core_tree_num_children(node) == 3) {
-            contextualize_record_literal(grammar, unit, state,
-                core_tree_child(node, 2),
-                record_literal_expected_type(grammar, state->types,
-                    core_tree_child(node, 2)));
+            parse_tree_t *value = core_tree_child(node, 2);
+            th_type *expected = record_literal_expected_type(grammar,
+                state->types, value);
+            n00bb_value_destination_t target = {
+                .kind = N00BB_DESTINATION_EXPECTED,
+            };
+            place_record_literal(grammar, unit, state, value,
+                expected ? expected
+                         : parse_tree_type(core_tree_child(node, 0)),
+                &target);
         }
         if ((NT_IS(grammar, node, "assign-stmt")
              || NT_IS(grammar, node, "binop-assign-stmt"))
@@ -566,11 +659,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 n00bb_node_facts_t *facts = n00bb_ensure_node_facts(state,
                                                                      node);
                 if (!facts) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                        CORE_STRING_STATIC("could not retain record literal origin"),
-                        link_source_location(node));
+                    n00bb_tu_internal_error(unit, node, "checking types",
+                        "could not retain record literal origin");
                     return;
                 }
                 facts->record_literal_origin = origin;
@@ -631,24 +721,31 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 && (open_integer
                     || (th_kind_of(value_type) != TH_VAR
                         && th_is_closed(state->types, value_type)))) {
-                core_buffer_t message = {0};
-                core_string_t value_text = open_integer
-                    ? CORE_STRING_STATIC("an integer")
-                    : n00bb_print_type(state->types, value_type);
-                core_string_t variable = th_var_name(target_type);
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                core_string_t variable = n00bb_print_type_brief(state->types,
+                                                                target_type);
+                core_string_t value_text = n00bb_node_source_text(unit,
+                    value, n00bb_text_form(N00B_TEXT_THIS_VALUE));
                 core_string_t target_text = n00bb_node_source_text(unit,
-                    target, CORE_STRING_STATIC("this target"));
-                core_buffer_printf(&message,
-                    "cannot assign %.*s to '%.*s': its type is the type parameter `%.*s, which can be any type",
-                    (int)value_text.u8_bytes, value_text.data,
-                    (int)target_text.u8_bytes, target_text.data,
-                    (int)variable.u8_bytes, variable.data);
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0046"),
-                    core_string_borrow(message.data, message.byte_len),
-                    link_source_location(node));
-                core_buffer_release(&message);
+                    target, n00bb_text_form(N00B_TEXT_THIS_TARGET));
+                if (n00bb_report(diagnostics, unit,
+                    N00B_DIAG_ASSIGN_TO_TYPE_PARAMETER,
+                    link_source_location(value),
+                    N00B_TEXT_CANNOT_ASSIGN_TO_ITS_TYPE,
+                    N00BB_ARGS(ARG_TEXT(value_text), ARG_TEXT(target_text),
+                               ARG_TEXT(variable)))) {
+                    if (open_integer)
+                        n00bb_report_label(diagnostics, N00B_TEXT_AN_INTEGER,
+                                           N00BB_NO_ARGS);
+                    else
+                        n00bb_report_label(diagnostics, N00B_TEXT_QUOTED_NAME,
+                            N00BB_ARGS(ARG_TEXT(n00bb_print_type(
+                                state->types, value_type))));
+                    n00bb_report_help(diagnostics,
+                        N00B_TEXT_ONLY_A_VALUE_OF_TYPE,
+                        N00BB_ARGS(ARG_TEXT(variable), ARG_TEXT(target_text)));
+                }
             }
         }
         cache_wrapped_symbol_resolution(grammar, unit, node);
@@ -706,12 +803,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
         if (NT_IS(grammar, node, "module-import")
             && !untyped_module_name(state, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                CORE_STRING_STATIC(
-                    "could not keep the imported module name out of value inference"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "checking types",
+                "could not keep the imported module name out of value "
+                "inference");
             return;
         }
         record_function_exit_fact(grammar, unit, node, state);
@@ -725,33 +819,20 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             bool typed = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                 && resolution.target.symbol->type;
             if (!typed && !n00bb_pending_type_reference(state, node)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                    CORE_STRING_STATIC(
-                        "could not hold the imported type reference until its module is typed"),
-                    link_source_location(node));
+                n00bb_tu_internal_error(unit, node, "resolving names",
+                    "could not hold the imported type reference until its "
+                    "module is typed");
                 return;
             }
             if (typed) {
                 parse_tree_set_type(node, resolution.target.symbol->type);
-                if (!parse_sym_add_use(resolution.target.symbol, node)) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0013"),
-                        CORE_STRING_STATIC(
-                            "could not bind the imported type reference node"),
-                        link_source_location(node));
-                }
+                if (!parse_sym_add_use(resolution.target.symbol, node))
+                    n00bb_tu_internal_error(unit, node, "resolving names",
+                        "could not bind the imported type reference node");
                 else if (!bind_array_shape_alias_source(grammar, node,
-                        resolution.target.symbol)) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0013"),
-                        CORE_STRING_STATIC(
-                            "could not bind the imported alias shape source"),
-                        link_source_location(node));
-                }
+                        resolution.target.symbol))
+                    n00bb_tu_internal_error(unit, node, "resolving names",
+                        "could not bind the imported alias shape source");
             }
         }
         resolve_local_type_reference(grammar, unit, node, parent);
@@ -765,33 +846,32 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     }
     if (!entering && NT_IS(grammar, node, "enum-item")
         && !cache_enum_item_value(grammar, state, node)) {
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0018"),
-            CORE_STRING_STATIC("enum item value must be an integer literal"),
-            link_source_location(node));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        parse_tree_t *value = CHILD_NT(grammar,
+            CHILD_NT(grammar, node, "enum-value"), "simple-lit");
+        parse_sym_entry_t *item = parse_tree_sym(node);
+        core_string_t name = item ? item->name : CORE_STRING_STATIC("item");
+        core_string_t value_text = n00bb_node_source_text(unit, value,
+            n00bb_text_form(N00B_TEXT_THIS_VALUE));
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_ENUM_VALUE_NOT_INTEGER,
+            link_source_location(value ? value : node),
+            N00B_TEXT_THE_VALUE_OF_ENUM_ITEM,
+            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(value_text))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_WRITE_A_DECIMAL_OR_HEXADECIMAL,
+                N00BB_ARGS(ARG_TEXT(name)));
         return;
     }
-    core_buffer_t flagset_reason = {0};
     if (!entering && state->flagset_scope
-        && !cache_flagset_semantics(grammar, unit, state, node,
-                                    &flagset_reason)) {
+        && !cache_flagset_semantics(grammar, unit, state, node)) {
         parse_tree_t *declaration = state->flagset_scope;
         parse_sym_entry_t *owner = declaration
             ? parse_tree_sym(declaration) : nullptr;
-        if (owner && !parse_sym_binding(owner,
-                CORE_STRING_STATIC("n00bb.flagset-invalid"))) {
-            parse_sym_set_binding(owner,
-                CORE_STRING_STATIC("n00bb.flagset-invalid"), owner);
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0019"),
-                flagset_reason.byte_len
-                    ? core_string_borrow(flagset_reason.data,
-                                         flagset_reason.byte_len)
-                    : CORE_STRING_STATIC("invalid flagset value"),
-                link_source_location(node));
-        }
-        core_buffer_release(&flagset_reason);
+        if (n00bb_flagset_first_problem(owner))
+            n00bb_tu_internal_error_unless_reported(unit, node,
+                "checking declarations",
+                "could not compute the value of a flagset member");
         return;
     }
     if (!entering && NT_IS(grammar, node, "simple-lit")
@@ -799,19 +879,13 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         && !refine_integer_literal_type(grammar, unit, node, state))
         return;
     if (!entering && !cache_ordered_array_dimensions(grammar, state, node)) {
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0007"),
-            CORE_STRING_STATIC("could not cache array type dimensions"),
-            link_source_location(node));
+        n00bb_tu_internal_error(unit, node, "checking types",
+            "could not cache array type dimensions");
         return;
     }
     if (!entering && !cache_typecase_arm_types(grammar, state, node)) {
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-TYPECASE"),
-            CORE_STRING_STATIC("could not cache typecase arm types"),
-            link_source_location(node));
+        n00bb_tu_internal_error(unit, node, "checking types",
+            "could not cache typecase arm types");
         return;
     }
     if (entering
@@ -831,23 +905,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             parse_tree_t *type_node = CHILD_NT(grammar, node, "type-spec");
             th_type *type = type_node ? parse_tree_type(type_node) : nullptr;
             if (!arm || !type) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-                    CORE_STRING_STATIC(
-                        "could not bind the variant arm's cached payload type"),
-                    link_source_location(node));
+                n00bb_tu_internal_error_unless_reported(unit, node,
+                    "checking declarations",
+                    "variant arm has no payload type");
                 return;
             }
             if (arm->type) {
                 type = th_unify_in_place(state->types, arm->type, type);
                 if (!type) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-                        CORE_STRING_STATIC(
-                            "variant arm payload conflicts with its cached type"),
-                        link_source_location(node));
+                    n00bb_tu_internal_error_unless_reported(unit, node,
+                        "checking declarations",
+                        "variant arm payload conflicts with its cached type");
                     return;
                 }
             }
@@ -875,10 +943,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 size_t before = core_diagnostics_count(
                     core_translation_unit_diagnostics(unit));
                 if (!n00bb_type_shape_literal(grammar, unit, node)) {
-                    report_literal_failure(unit, node, before,
-                        CORE_STRING_STATIC("N00BB-T0010"),
-                        CORE_STRING_STATIC(
-                            "could not infer the container literal's type"));
+                    report_untyped_container_literal(grammar, unit, node,
+                                                     before);
                     return;
                 }
             }
@@ -922,29 +988,32 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                     : braces ? infer_brace_modifier_type(grammar, node, state)
                     : infer_string_modifier_type(grammar, node, state);
                 if (!inferred) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
-                        CORE_STRING_STATIC("literal modifier conflicts with its payload"),
-                        link_source_location(node));
+                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                        N00B_DIAG_LITERAL_MODIFIER_PAYLOAD,
+                        link_source_location(node),
+                        N00B_TEXT_LITERAL_MODIFIER_DOES_NOT_ACCEPT,
+                        N00BB_ARGS(ARG_TEXT(modifier)));
                     return;
                 }
             }
-            else if (!infer_literal_reporting(grammar, unit, node,
-                    CORE_STRING_STATIC("N00BB-T0030"),
-                    CORE_STRING_STATIC(
-                        "literal handler cannot specialize for this payload")))
+            else if (!infer_literal_reporting(grammar, unit, node))
                 return;
         }
     }
-    if (!entering && NT_IS(grammar, node, "new-expr")
-        && !infer_new_expression_type(grammar, node, state)) {
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0011"),
-            CORE_STRING_STATIC("could not resolve the new-expression type"),
-            link_source_location(node));
-        return;
+    if (!entering && NT_IS(grammar, node, "new-expr")) {
+        th_type *expected = parse_tree_type(node);
+        if (!infer_new_expression_type(grammar, node, state)) {
+            parse_tree_t *type_node = CHILD_NT(grammar, node, "type-spec");
+            th_type *created = type_node ? parse_tree_type(type_node)
+                                         : nullptr;
+            if (created && expected)
+                n00bb_report_value_type_mismatch(unit, node, created,
+                                                 expected, nullptr);
+            else
+                n00bb_tu_internal_error_unless_reported(unit, node,
+                    "checking types", "`new` expression has no type");
+            return;
+        }
     }
     if (!entering && NT_IS(grammar, node, "callback-expr")
         && !infer_callback_expression_type(grammar, unit, node, state))
@@ -957,12 +1026,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (symbol) validate_builtin_generic_type_arity(grammar, node, unit,
                                                        symbol->type);
         if (!record_function_parameter_fact(grammar, node, state)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                CORE_STRING_STATIC(
-                    "could not retain the function parameter type fact"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "checking declarations",
+                "could not retain the function parameter type fact");
             return;
         }
     }
@@ -978,12 +1043,8 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             if (!parameter_facts
                 || !parse_sym_set_binding(symbol, N00BB_PARAMETER_FACTS_KEY,
                                           parameter_facts)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                    CORE_STRING_STATIC(
-                        "could not initialize parameter facts"),
-                    link_source_location(node));
+                n00bb_tu_internal_error(unit, node, "checking declarations",
+                    "could not initialize parameter facts");
                 return;
             }
         }
@@ -1037,11 +1098,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         }
         core_list_free(declared);
         if (!valid) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-                CORE_STRING_STATIC("could not apply trait constraints"),
-                link_source_location(node));
+            n00bb_tu_internal_error_unless_reported(unit, node,
+                "checking declarations",
+                "could not apply the trait's where clause");
             return;
         }
     }
@@ -1059,23 +1118,15 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     if (!entering) {
         if (!cache_ordered_literal_children(grammar, state, node)
             || !cache_static_literal_node(grammar, state, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0007"),
-                CORE_STRING_STATIC(
-                    "could not cache ordered literal child references"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "checking types",
+                "could not cache ordered literal child references");
             return;
         }
         if (NT_IS(grammar, node, "top-level-stmt")) {
             parse_tree_t *statement = top_level_statement_child(grammar, node);
             if (!statement) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0010"),
-                    CORE_STRING_STATIC(
-                        "could not cache a top-level statement node"),
-                    link_source_location(node));
+                n00bb_tu_internal_error(unit, node, "checking declarations",
+                    "could not cache a top-level statement node");
                 return;
             }
             core_list_push(state->module_top_level_statements, statement);
@@ -1088,18 +1139,17 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 && !parse_sym_set_binding(symbol,
                     CORE_STRING_STATIC("n00bb.initializer-expression"),
                     initializer)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                    CORE_STRING_STATIC("could not retain symbol initializer"),
-                    link_source_location(node));
+                n00bb_tu_internal_error(unit, node, "checking declarations",
+                    "could not retain symbol initializer");
                 return;
             }
             th_type *declared = type_spec
                 ? declared_type_from_node(grammar, unit, type_spec) : nullptr;
             if (symbol && declared) {
-                symbol->type = declared;
-                parse_tree_set_type(node, declared);
+                th_type *unified = unify_declared_symbol_type(state->types,
+                    symbol, declared);
+                symbol->type = unified ? unified : declared;
+                parse_tree_set_type(node, symbol->type);
                 parse_tree_set_type(type_spec, declared);
                 validate_builtin_generic_type_arity(grammar, type_spec, unit,
                                                     declared);
@@ -1118,12 +1168,9 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                 n00bb_static_value_t *stored = core_arena_alloc(
                     &state->semantic_values, sizeof(*stored));
                 if (!stored) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0007"),
-                        CORE_STRING_STATIC(
-                            "could not retain a semantic static value"),
-                        link_source_location(declaration));
+                    n00bb_tu_internal_error(unit, declaration,
+                        "checking declarations",
+                        "could not retain a semantic static value");
                     return;
                 }
                 *stored = value;
@@ -1136,138 +1183,83 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             bool shape = CHILD_NT(grammar, node, "named-field-list")
                 || core_tree_num_children(node) == 5;
             if (shape)
-                (void)infer_literal_reporting(grammar, unit, node,
-                    CORE_STRING_STATIC("N00BB-T0030"),
-                    CORE_STRING_STATIC(
-                        "literal handler cannot specialize for this payload"));
+                (void)infer_literal_reporting(grammar, unit, node);
             else
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0030"),
-                    CORE_STRING_STATIC(
-                        "literal modifier requires a tuple or record literal"),
-                    link_source_location(node));
+                report_modifier_without_literal(unit, node,
+                    literal_modifier(grammar, node), true);
         }
         else if (NT_IS(grammar, node, "tuple-or-paren")
             && CHILD_NT(grammar, node, "named-field-list")
             && (!contextualize_record_fields_before_inference(grammar,
                     unit, state, node)
                 || !infer_anonymous_record(grammar, node, state))) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0006"),
-                CORE_STRING_STATIC(
-                    "could not construct the anonymous record type"),
-                link_source_location(node));
+            n00bb_tu_internal_error_unless_reported(unit, node,
+                "checking types",
+                "could not construct the anonymous record type");
             return;
         }
         if (NT_IS(grammar, node, "tuple-or-paren")
             && !literal_modifier(grammar, node).data
             && !CHILD_NT(grammar, node, "named-field-list")
             && !infer_tuple_literal_type(grammar, node, state)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0008"),
-                CORE_STRING_STATIC("could not infer the tuple literal type"),
-                link_source_location(node));
+            n00bb_tu_internal_error_unless_reported(unit, node,
+                "checking types", "could not infer the tuple literal type");
             return;
         }
         if (NT_IS(grammar, node, "type-decl")) {
-            parse_sym_entry_t *declared = parse_tree_sym(node);
-            core_string_t name = declared ? declared->name
-                                          : CORE_STRING_STATIC("X");
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "`type %.*s { ... }` is not a declaration form; use "
-                "`record %.*s { ... }` for a value that is copied or "
-                "`object %.*s { ... }` for a value that is shared",
-                (int)name.u8_bytes, name.data, (int)name.u8_bytes, name.data,
-                (int)name.u8_bytes, name.data);
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0063"),
-                core_buffer_string(&message), link_source_location(node));
-            core_buffer_release(&message);
+            report_type_declaration_form(unit, node);
             return;
         }
         if (field_record_declaration(grammar, node)) {
             if (!cache_record_layout_request(grammar, unit, node)) {
-                if (!core_diagnostics_failed(
-                        core_translation_unit_diagnostics(unit)))
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
-                        CORE_STRING_STATIC(
-                            "could not retain the record layout request"),
-                        link_source_location(node));
+                n00bb_tu_internal_error_unless_reported(unit, node,
+                    "checking declarations",
+                    "could not retain the record layout request");
                 return;
             }
             if (!cache_record_field_extents(grammar, unit, node)) {
-                if (!core_diagnostics_failed(
-                        core_translation_unit_diagnostics(unit)))
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0037"),
-                        CORE_STRING_STATIC(
-                            "could not retain the record field extents"),
-                        link_source_location(node));
+                n00bb_tu_internal_error_unless_reported(unit, node,
+                    "checking declarations",
+                    "could not retain the record field extents");
                 return;
             }
             if (!register_record_semantic_shape(grammar, unit, node)) {
-                if (!core_translation_unit_has_fatal_diagnostics(unit))
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0005"),
-                        CORE_STRING_STATIC(
-                            "could not register the record shape for semantic analysis"),
-                        link_source_location(node));
+                n00bb_tu_internal_error_unless_reported(unit, node,
+                    "checking declarations",
+                    "could not register the record shape");
                 return;
             }
         }
         if (NT_IS(grammar, node, "variant-decl")
             && !finalize_variant_symbol_type(grammar, node, unit, state)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0012"),
-                CORE_STRING_STATIC(
-                    "could not resolve the declared variant type"),
-                link_source_location(node));
+            n00bb_tu_internal_error_unless_reported(unit, node,
+                "checking declarations",
+                "could not resolve the declared variant type");
             return;
         }
         if (NT_IS(grammar, node, "enum-stmt")
             && !finalize_enum_symbol_type(grammar, node, unit, state)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0012"),
-                CORE_STRING_STATIC(
-                    "could not resolve the declared enum type"),
-                link_source_location(node));
+            n00bb_tu_internal_error_unless_reported(unit, node,
+                "checking declarations",
+                "could not resolve the declared enum type");
             return;
         }
         if (NT_IS(grammar, node, "flagset-stmt")
             && !finalize_flagset_symbol_type(grammar, node, unit, state)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0019"),
-                CORE_STRING_STATIC("could not resolve the declared flagset type"),
-                link_source_location(node));
+            n00bb_tu_internal_error_unless_reported(unit, node,
+                "checking declarations",
+                "could not resolve the declared flagset type");
             return;
         }
         remember_link_use_site(grammar, unit, state, node);
         if (!record_generic_operator_failure(grammar, state, node)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                CORE_STRING_STATIC("could not retain operator failure constraints"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "checking types",
+                "could not retain operator failure constraints");
             return;
         }
         if (!cache_return_source_fact(grammar, node, state)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                CORE_STRING_STATIC("could not retain return-source facts"),
-                link_source_location(node));
+            n00bb_tu_internal_error(unit, node, "checking types",
+                "could not retain return-source facts");
             return;
         }
         record_reference_facts(grammar, unit, node);
@@ -1306,12 +1298,22 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
                         ranged, range)
                     : source && th_unify_in_place(state->types, argument,
                                                    source))) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
-                    CORE_STRING_STATIC(
-                        "indexed assignment value has an incompatible type"),
-                    link_source_location(node));
+                parse_tree_t *statement = parse_tree_parent(node);
+                parse_tree_t *target = statement
+                    && core_tree_num_children(statement) == 3
+                    ? core_tree_child(statement, 0) : nullptr;
+                parse_tree_t *indexing = target
+                    ? n00bb_index_expression_node(grammar, target) : nullptr;
+                parse_tree_t *container = indexing
+                    && core_tree_num_children(indexing)
+                    ? core_tree_child(indexing, 0) : nullptr;
+                n00bb_value_destination_t destination = {
+                    .kind = N00BB_DESTINATION_ELEMENT,
+                    .name = container ? n00bb_value_spelling(unit, container)
+                                      : (core_string_t){0},
+                };
+                n00bb_report_value_type_mismatch(unit, node, source,
+                                                 argument, &destination);
                 return;
             }
         }
@@ -1331,6 +1333,8 @@ typedef struct {
     core_translation_unit_t *unit;
     core_list_t(semantic_walk_frame_t) frames;
     bool skip_typed_ahead;
+    size_t errors_seen;
+    parse_tree_t *failed_statement;
 } semantic_walk_context_t;
 
 static bool
@@ -1365,12 +1369,123 @@ executable_scope_node(parse_grammar_t *grammar, parse_tree_t *node)
     return false;
 }
 
-static parse_visit_outcome_t
-semantic_walk_status(semantic_walk_context_t *walk)
+static size_t
+unit_error_count(core_translation_unit_t *unit)
 {
-    return core_diagnostics_failed(
-        core_translation_unit_diagnostics(walk->unit))
-        ? PARSE_VISIT_ERROR : PARSE_VISIT_CONTINUE;
+    const core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(unit);
+    return core_diagnostics_count_severity(diagnostics, CORE_DIAG_ERROR)
+        + core_diagnostics_count_severity(diagnostics, CORE_DIAG_FATAL)
+        + core_diagnostics_count_severity(diagnostics, CORE_DIAG_INTERNAL);
+}
+
+static bool
+declared_within(parse_sym_entry_t *symbol, parse_tree_t *statement)
+{
+    for (parse_tree_t *at = symbol->decl_node; at; at = parse_tree_parent(at))
+        if (at == statement) return true;
+    return false;
+}
+
+static parse_tree_t *
+declared_type_spec(parse_grammar_t *grammar, parse_sym_entry_t *symbol,
+                   parse_tree_t *statement)
+{
+    for (parse_tree_t *at = symbol->decl_node; at && at != statement;
+         at = parse_tree_parent(at)) {
+        parse_tree_t *type_spec = CHILD_NT(grammar, at, "type-spec");
+        if (type_spec) return type_spec;
+    }
+    return nullptr;
+}
+
+static void
+poison_statement_exits(semantic_walk_context_t *walk, parse_tree_t *node,
+                       th_type *poison)
+{
+    parse_grammar_t *grammar = walk->context->grammar;
+    if (!node || core_tree_is_leaf(node) || NT_IS(grammar, node, "func-def"))
+        return;
+    if (NT_IS(grammar, node, "return-stmt")
+        || NT_IS(grammar, node, "fail-stmt")) {
+        parse_tree_t *value = CHILD_NT(grammar, node, "expression");
+        if (value) parse_tree_set_type(value, poison);
+        record_function_exit_fact(grammar, walk->unit, node,
+                                  tu_state(walk->unit));
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        poison_statement_exits(walk, core_tree_child(node, i), poison);
+}
+
+static void
+poison_failed_statement(semantic_walk_context_t *walk,
+                          parse_tree_t *statement)
+{
+    n00bb_tu_state_t *state = tu_state(walk->unit);
+    th_ctx *types = walk->context->types;
+    th_type *poison = th_poison(types);
+    if (NT_IS(walk->context->grammar, statement, "body-stmt"))
+        poison_statement_exits(walk, statement, poison);
+    for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+         scope; scope = scope->all_next) {
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            if (symbol->kind != PARSE_SYM_VARIABLE
+                || !declared_within(symbol, statement)) continue;
+            parse_tree_t *type_spec = declared_type_spec(
+                walk->context->grammar, symbol, statement);
+            th_type *declared = type_spec ? parse_tree_type(type_spec)
+                                          : nullptr;
+            if (type_spec && declared) {
+                if (!symbol->type) symbol->type = declared;
+                continue;
+            }
+            th_type *current = symbol->type ? th_resolve(symbol->type)
+                                            : nullptr;
+            if (current && th_kind_of(current) == TH_VAR)
+                (void)th_unify_in_place(types, current, poison);
+            else symbol->type = poison;
+        }
+    }
+    for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
+         scope; scope = scope->all_next) {
+        if (!scope->node || !n00bb_field_scope_tag(scope->scope_tag))
+            continue;
+        bool inside = false;
+        for (parse_tree_t *at = scope->node; at && !inside;
+             at = parse_tree_parent(at))
+            inside = at == statement;
+        parse_sym_entry_t *record = inside ? parse_tree_sym(scope->node)
+                                           : nullptr;
+        if (record && field_record_declaration(walk->context->grammar,
+                                               scope->node)
+            && (!record->type || !th_type_definition(types, record->type)))
+            (void)register_record_semantic_shape(walk->context->grammar,
+                                                 walk->unit, scope->node);
+    }
+}
+
+static parse_visit_outcome_t
+semantic_walk_status(semantic_walk_context_t *walk, parse_tree_t *node)
+{
+    size_t errors = unit_error_count(walk->unit);
+    if (errors > walk->errors_seen) {
+        walk->errors_seen = errors;
+        parse_tree_t *statement = node;
+        while (statement
+               && !NT_IS(walk->context->grammar, statement, "top-level-stmt")
+               && !NT_IS(walk->context->grammar, statement, "body-stmt"))
+            statement = parse_tree_parent(statement);
+        if (!statement) return PARSE_VISIT_ERROR;
+        walk->failed_statement = statement;
+        poison_failed_statement(walk, statement);
+    }
+    if (!walk->failed_statement) return PARSE_VISIT_CONTINUE;
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at))
+        if (at == walk->failed_statement) return PARSE_VISIT_PRUNE;
+    walk->failed_statement = nullptr;
+    return PARSE_VISIT_CONTINUE;
 }
 
 static th_type *
@@ -1427,13 +1542,9 @@ semantic_walk_prepare(parse_visit_t *visit)
         if (token && core_option_is_set(parse_token_postfix_modifier(token))
             && !literal_modifier_terminal(context->grammar, visit->node,
                                           visit->parent))
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0010"),
-                CORE_STRING_STATIC("literal modifier requires a supported literal shape"),
-                link_source_location(visit->parent ? visit->parent
-                                                   : visit->node));
-        return semantic_walk_status(walk);
+            report_modifier_without_literal(unit, visit->node,
+                core_option_get(parse_token_postfix_modifier(token)), false);
+        return semantic_walk_status(walk, visit->node);
     }
     if (NT_IS(context->grammar, visit->node, "list-lit")
         && !parse_tree_type(visit->node)) {
@@ -1450,7 +1561,7 @@ semantic_walk_prepare(parse_visit_t *visit)
     semantic_annotation_node(context, unit, visit->node, visit->parent,
                              SEMANTIC_PREPARE_ENTER, visit,
                              &frame->annotation_cache);
-    return semantic_walk_status(walk);
+    return semantic_walk_status(walk, visit->node);
 }
 
 static parse_visit_outcome_t
@@ -1461,7 +1572,7 @@ semantic_walk_after_enter(parse_visit_t *visit)
     semantic_annotation_node(walk->context, walk->unit, visit->node,
                              visit->parent, SEMANTIC_AFTER_ENTER, nullptr,
                              &frame->annotation_cache);
-    return semantic_walk_status(walk);
+    return semantic_walk_status(walk, visit->node);
 }
 
 static parse_visit_outcome_t
@@ -1473,7 +1584,7 @@ semantic_walk_before_exit(parse_visit_t *visit)
     semantic_annotation_node(walk->context, walk->unit, visit->node,
                              visit->parent, SEMANTIC_PREPARE_EXIT, visit,
                              &frame->annotation_cache);
-    return semantic_walk_status(walk);
+    return semantic_walk_status(walk, visit->node);
 }
 
 static parse_visit_outcome_t
@@ -1484,7 +1595,7 @@ semantic_walk_after_reference_exit(parse_visit_t *visit)
     semantic_annotation_node(walk->context, walk->unit, visit->node,
                              visit->parent, SEMANTIC_AFTER_REFERENCE_EXIT,
                              nullptr, &frame->annotation_cache);
-    return semantic_walk_status(walk);
+    return semantic_walk_status(walk, visit->node);
 }
 
 static parse_visit_outcome_t
@@ -1501,11 +1612,9 @@ semantic_walk_after_exit(parse_visit_t *visit)
     if (frame->in_expression
         && !cache_alias_edges(walk->context->grammar, visit->node,
                               tu_state(walk->unit)))
-        core_diagnostics_report_at(core_translation_unit_diagnostics(walk->unit),
-            walk->unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-            CORE_STRING_STATIC("could not retain alias edges"),
-            link_source_location(visit->node));
-    return semantic_walk_status(walk);
+        n00bb_tu_internal_error(walk->unit, visit->node, "checking types",
+            "could not retain alias edges");
+    return semantic_walk_status(walk, visit->node);
 }
 
 static bool
@@ -1615,11 +1724,18 @@ infer_indexed_switch_variant_subject(parse_grammar_t *grammar,
     th_type *unified = th_unify_in_place(tu_state(unit)->types,
                                         symbol->type, candidate);
     if (unified) return true;
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
-        CORE_STRING_STATIC(
-            "switch cases conflict with the inferred subject type"),
-        link_source_location(switch_node));
+    th_ctx *types = tu_state(unit)->types;
+    core_string_t variant = n00bb_print_type(types, candidate);
+    core_string_t actual = n00bb_print_type(types, symbol->type);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (n00bb_report(diagnostics, unit, N00B_DIAG_SWITCH_CASE_SUBJECT_MISMATCH,
+        link_source_location(subject_expression),
+        N00B_TEXT_THE_CASES_OF_THIS_SWITCH,
+        N00BB_ARGS(ARG_TEXT(variant), ARG_TEXT(symbol->name), ARG_TEXT(actual)))
+        && symbol->decl_node)
+        n00bb_report_secondary(diagnostics, nullptr,
+            link_source_location(symbol->decl_node), N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
     return false;
 }
 
@@ -1650,7 +1766,7 @@ semantic_walk_child_complete(parse_visit_t *visit)
         && NT_IS(context->grammar, child, "context-hook-params"))
         record_context_hook_signature(context->grammar, unit, node,
                                       tu_state(unit));
-    return semantic_walk_status(walk);
+    return semantic_walk_status(walk, visit->node);
 }
 
 static bool
@@ -1673,6 +1789,7 @@ run_semantic_walk(parse_grammar_t *grammar, th_ctx *types,
         .context = &context,
         .unit = unit,
         .skip_typed_ahead = skip_typed_ahead,
+        .errors_seen = unit_error_count(unit),
     };
     parse_tree_walk_t *walk = parse_tree_walk_new(grammar,
                                                   &walk_context);
@@ -1739,16 +1856,17 @@ report_imported_module_name(core_translation_unit_t *unit,
                             core_string_t name, parse_tree_t *import,
                             core_diag_location_t location)
 {
-    core_diag_location_t imported = link_source_location(import);
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "'%.*s' cannot be declared here because this module imports module '%.*s' (line %u)",
-        (int)name.u8_bytes, name.data, (int)name.u8_bytes, name.data,
-        imported.line);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0012"),
-        core_string_borrow(message.data, message.byte_len), location);
-    core_buffer_release(&message);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (!n00bb_report(diagnostics, unit, N00B_DIAG_NAME_SHADOWS_PACKAGE,
+        location, N00B_TEXT_CANNOT_BE_DECLARED_HERE_BECAUSE_2,
+        N00BB_ARGS(ARG_TEXT(name),
+                   ARG_TEXT(name))))
+        return;
+    n00bb_report_secondary(diagnostics, nullptr, link_source_location(import),
+        N00B_TEXT_MODULE_IS_IMPORTED_HERE,
+        N00BB_ARGS(ARG_TEXT(name)));
+    n00bb_report_help(diagnostics, N00B_TEXT_RENAME_THIS_DECLARATION_OR_IMPORT,
+        N00BB_ARGS(ARG_TEXT(name)));
 }
 
 bool
@@ -1951,13 +2069,23 @@ static bool
 annotate_type_declarations(parse_grammar_t *grammar, th_ctx *types,
                            core_translation_unit_t *unit, parse_tree_t *node)
 {
+    const core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(unit);
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
         if (core_tree_is_leaf(child) || executable_scope_node(grammar, child))
             continue;
-        if (!(type_declaration_node(grammar, child)
-              ? type_declaration_ahead(grammar, types, unit, child)
-              : annotate_type_declarations(grammar, types, unit, child)))
+        size_t failures = core_diagnostics_failures(diagnostics);
+        size_t internal = core_diagnostics_count_severity(diagnostics,
+                                                          CORE_DIAG_INTERNAL);
+        if (type_declaration_node(grammar, child)
+            ? type_declaration_ahead(grammar, types, unit, child)
+            : annotate_type_declarations(grammar, types, unit, child))
+            continue;
+        if (!field_record_declaration(grammar, child)
+            || core_diagnostics_failures(diagnostics) == failures
+            || core_diagnostics_count_severity(diagnostics,
+                   CORE_DIAG_INTERNAL) != internal)
             return false;
     }
     return true;
@@ -1974,13 +2102,17 @@ annotate_unit_bodies(parse_grammar_t *grammar, th_ctx *types,
         || !report_shadowed_litmods(unit, state)) return false;
     bool annotated = run_semantic_walk(grammar, types, unit, tree, nullptr,
                                        0, 0, true);
+    const core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(unit);
+    bool reported = core_diagnostics_failed(diagnostics);
     if (!reject_imported_module_names(grammar, unit, state, tree)
-        || !annotated
+        || (!annotated && !reported)
         || !resolve_forward_literal_sites(unit, state)
         || core_translation_unit_has_fatal_diagnostics(unit)
-        || core_diagnostics_failed(core_translation_unit_diagnostics(unit))
+        || core_diagnostics_count_severity(diagnostics, CORE_DIAG_INTERNAL)
         || (finish && !finish(context, unit))) return false;
     n00bb_index_type_symbols(state);
+    state->semantic_errors = core_diagnostics_failed(diagnostics);
     state->semantic_annotation_complete = true;
     return true;
 }
@@ -2056,6 +2188,7 @@ typedef struct {
     size_t index;
     size_t low;
     bool on_stack;
+    bool blocked;
 } component_vertex_t;
 
 typedef struct {
@@ -2066,6 +2199,7 @@ typedef struct {
     core_dict_t vertices;
     core_list_t(core_translation_unit_ptr_t) stack;
     size_t next_index;
+    bool failed;
 } component_search_t;
 
 static bool
@@ -2090,6 +2224,10 @@ annotate_components_from(component_search_t *search,
         n00bb_tu_state_t *imported_state = tu_state(imported);
         if (!imported_state) return false;
         if (imported_state->semantic_annotation_complete) continue;
+        if (imported_state->semantic_annotation_failed) {
+            vertex->blocked = true;
+            continue;
+        }
         bool found = false;
         component_vertex_t *next = core_dict_get(&search->vertices,
                                                  imported, &found);
@@ -2097,6 +2235,8 @@ annotate_components_from(component_search_t *search,
             if (!annotate_components_from(search, imported, &next))
                 return false;
             if (next->low < vertex->low) vertex->low = next->low;
+            if (imported_state->semantic_annotation_failed)
+                vertex->blocked = true;
         }
         else if (next->on_stack && next->index < vertex->low)
             vertex->low = next->index;
@@ -2105,18 +2245,25 @@ annotate_components_from(component_search_t *search,
     core_list_t(core_translation_unit_ptr_t) members =
         core_list_new(core_translation_unit_ptr_t);
     core_translation_unit_t *member = nullptr;
+    bool blocked = false;
     do {
         member = search->stack.data[--search->stack.len];
         component_vertex_t *popped = core_dict_get(&search->vertices,
                                                    member, nullptr);
         popped->on_stack = false;
+        blocked = blocked || popped->blocked;
         core_list_push(members, member);
     } while (member != unit);
-    bool annotated = annotate_component(search->grammar, search->types,
-                                        &members, search->finish,
-                                        search->context);
+    bool annotated = !blocked
+        && annotate_component(search->grammar, search->types, &members,
+                              search->finish, search->context);
+    if (!annotated) {
+        for (size_t i = 0; i < members.len; i++)
+            tu_state(members.data[i])->semantic_annotation_failed = true;
+        search->failed = true;
+    }
     core_list_free(members);
-    return annotated;
+    return true;
 }
 
 bool
@@ -2125,7 +2272,7 @@ semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
     void *context)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    if (!state) return false;
+    if (!state || state->semantic_annotation_failed) return false;
     if (state->semantic_annotation_complete) return true;
     component_search_t search = {
         .grammar = grammar,
@@ -2140,5 +2287,5 @@ semantic_annotate_closure(parse_grammar_t *grammar, th_ctx *types,
     core_dict_foreach(&search.vertices, item) core_free(item->value);
     core_dict_free(&search.vertices);
     core_list_free(search.stack);
-    return annotated;
+    return annotated && !search.failed;
 }

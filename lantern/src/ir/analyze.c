@@ -11,26 +11,28 @@
 #include "ir/walk.h"
 #include "lib/dict.h"
 
-static void say(ir_diags_t *d, ir_diagcode_t code, const ir_instr_t *in,
-                const ir_block_t *b, const ir_func_t *f, core_string_t label,
-                core_string_t prefix, core_string_t name, core_string_t suffix)
+static ir_diag_t *say(ir_diags_t *d, ir_diagcode_t code, const ir_instr_t *in,
+                      const ir_block_t *b, const ir_func_t *f,
+                      ir_message_t message)
 {
-    ir_diag_t *dg = ir_diag_begin_at(d, code, in, b, f, label);
+    ir_diag_t *dg = ir_diag_begin_at(d, code, in, b, f, IR_NO_LABEL);
 
-    if (!dg) {
+    if (dg) {
+        ir_diag_message(dg, d, message);
+    }
+    return dg;
+}
+
+static void note_declaration(ir_diags_t *d, ir_diag_t *dg,
+                             const ir_local_t *l)
+{
+    if (!dg || !ir_span_known(l->span)) {
         return;
     }
-
-    core_buffer_t *sb = core_buffer_empty();
-
-    core_buffer_append_string(sb, prefix);
-    core_buffer_append_string(sb, name);
-    core_buffer_append_string(sb, suffix);
-
-    core_string_t msg = core_buffer_take_string(sb);
-
-    ir_diag_message(dg, d, msg);
-    core_free(msg.data);
+    core_string_t name = ir_local_label(l);
+    ir_diag_secondary(d, dg, l->span,
+                      IR_MESSAGE_ARGS(DECLARED_HERE, CORE_TEXT_STRING(name)));
+    core_free(name.data);
 }
 
 typedef struct {
@@ -81,9 +83,8 @@ static bool analyze_block(ir_visit_t *vi)
 
     if (b->index) {
         say(a->d, IR_DIAG_DEAD_CODE, b->n_instrs ? b->instrs[0] : nullptr, b,
-            vi->func, CORE_STRING_STATIC("this block"),
-            CORE_STRING_STATIC("no path from the entry block reaches "),
-            b->name, CORE_STRING_STATIC(""));
+            vi->func,
+            IR_MESSAGE_ARGS(DEAD_BLOCK, CORE_TEXT_STRING(b->name)));
     }
 
     return false;
@@ -100,19 +101,19 @@ static bool analyze_operand(ir_visit_t *vi)
             CORE_STRING_STATIC("ir.copyout_read"));
         bool returned = vi->instr->op == IR_OP_RETURN
             || (copyout && copyout->kind == IR_ANNOT_BOOL && copyout->b);
-        say(a->d, IR_DIAG_UNSET_LOCAL, vi->instr, vi->block, vi->func,
-            returned ? CORE_STRING_STATIC("this return")
-                     : CORE_STRING_STATIC("this read"),
-            l->source_name.data ? CORE_STRING_STATIC("'")
-                                : CORE_STRING_STATIC("$"),
-            ir_local_display_name(l),
-            returned
-                ? l->source_name.data
-                    ? CORE_STRING_STATIC("' is not assigned on every path to this return")
-                    : CORE_STRING_STATIC(" is not assigned on every path to this return")
-                : l->source_name.data
-                    ? CORE_STRING_STATIC("' is read on a path that does not assign it")
-                    : CORE_STRING_STATIC(" is read on a path that does not assign it"));
+        if (!l->synthetic) {
+            core_string_t name = ir_local_label(l);
+            ir_diag_t *dg = say(a->d, IR_DIAG_UNSET_LOCAL, vi->instr,
+                vi->block, vi->func, returned
+                    ? IR_MESSAGE_ARGS(UNSET_AT_RETURN, CORE_TEXT_STRING(name))
+                    : IR_MESSAGE_ARGS(UNSET_READ, CORE_TEXT_STRING(name)));
+            core_free(name.data);
+            note_declaration(a->d, dg, l);
+        }
+        else {
+            say(a->d, IR_DIAG_UNSET_LOCAL, vi->instr, vi->block, vi->func,
+                IR_MESSAGE(UNSET_TEMPORARY));
+        }
     }
 
     return true;
@@ -126,14 +127,18 @@ static bool analyze_instr_end(ir_visit_t *vi)
     ir_local_t *l = in->dest_kind == IR_DEST_LOCAL ? in->dest_local : nullptr;
 
     if (l && !l->synthetic && !ir_rd_reaches_a_use(a->rd, in)) {
-        say(a->d, IR_DIAG_UNUSED_LOCAL, in, vi->block, vi->func,
-            CORE_STRING_STATIC("this assignment"),
-            l->source_name.data ? CORE_STRING_STATIC("'")
-                                : CORE_STRING_STATIC("$"),
-            ir_local_display_name(l),
-            l->source_name.data
-                ? CORE_STRING_STATIC("' is assigned here and never read afterward")
-                : CORE_STRING_STATIC(" is assigned here and never read afterward"));
+        core_string_t name = ir_local_display_name(l);
+        ir_span_t span = ir_diag_name_span(in->span, name);
+        ir_diag_t *dg = ir_span_known(span)
+            ? ir_diag_begin(a->d, IR_DIAG_UNUSED_LOCAL, span, IR_NO_LABEL)
+            : ir_diag_begin_at(a->d, IR_DIAG_UNUSED_LOCAL, in, vi->block,
+                               vi->func, IR_NO_LABEL);
+        if (dg) {
+            core_string_t shown = ir_local_label(l);
+            ir_diag_message(dg, a->d, IR_MESSAGE_ARGS(UNUSED_ASSIGNMENT,
+                                                      CORE_TEXT_STRING(shown)));
+            core_free(shown.data);
+        }
     }
 
     return true;
@@ -409,25 +414,32 @@ bool ir_report_unbounded_recursion(ir_summaries_t *summaries, ir_func_t *f,
         return false;
     }
 
-    ir_span_t span = ir_func_report_span(f);
+    ir_span_t span = IR_SPAN_UNKNOWN;
+
+    for (uint32_t b = 0; !ir_span_known(span) && b < f->n_blocks; b++) {
+        for (uint32_t i = 0; !ir_span_known(span)
+             && i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            const ir_value_t *callee = in->op == IR_OP_CALL && in->n_operands
+                ? ir_operand_value(&in->operands[0]) : nullptr;
+
+            if (callee && callee->kind == IR_VAL_FUNC && callee->owner == f) {
+                span = in->span;
+            }
+        }
+    }
+    if (!ir_span_known(span)) {
+        span = ir_func_report_span(f);
+    }
 
     ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_UNBOUNDED_RECURSION, span,
-                                  CORE_STRING_STATIC("this function"));
+                                  IR_MESSAGE(CALLS_ITSELF_AGAIN));
 
     if (!dg) {
         return false;
     }
-
-    core_buffer_t *sb = core_buffer_empty();
-
-    core_buffer_puts(sb, "function '");
-    core_buffer_append_string(sb, f->name);
-    core_buffer_puts(sb, "' recurses with no path that returns");
-
-    core_string_t msg = core_buffer_take_string(sb);
-
-    ir_diag_message(dg, d, msg);
-    core_free(msg.data);
+    ir_diag_message(dg, d, IR_MESSAGE_ARGS(UNBOUNDED_RECURSION,
+                                           CORE_TEXT_STRING(f->name)));
 
     return true;
 }

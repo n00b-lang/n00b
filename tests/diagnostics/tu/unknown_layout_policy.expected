@@ -1,0 +1,2 @@
+tests/diagnostics/tu/unknown_layout_policy.n:1:17: error N00B-T0566: `weird` is not a record layout policy
+  help: write `layout(c)` or `layout(ordered)`

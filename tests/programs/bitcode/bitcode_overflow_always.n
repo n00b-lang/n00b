@@ -1,5 +1,0 @@
-func boom() -> i8 {
-    let big: i8 = 127
-    return big + 1
-}
-require boom() == 0

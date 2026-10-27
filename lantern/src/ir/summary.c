@@ -4,6 +4,7 @@
 #include "ir/analyses.h"
 #include "ir/layout.h"
 #include "ir/summary.h"
+#include "ir/text.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -14,7 +15,6 @@ core_list_decl(ir_sfield_t);
 core_list_decl(ir_strap_site_t);
 core_list_decl(ir_sinput_t);
 core_list_decl(ir_soutput_t);
-core_list_decl(uint32_t);
 core_list_decl(uint8_t);
 typedef ir_func_t *summary_func_ptr_t;
 core_list_decl(summary_func_ptr_t);
@@ -3677,21 +3677,28 @@ put_u32(core_buffer_t *out, uint32_t value)
 }
 
 static void
-put_text(core_buffer_t *out, core_string_t text)
+put_text(core_buffer_t *out, const ir_summary_texts_t *texts,
+         core_string_t text)
 {
+    if (texts) {
+        put_u32(out, text.data && text.u8_bytes
+            ? texts->intern(texts->context, text) : 0);
+        return;
+    }
     put_u32(out, text.data ? (uint32_t)text.u8_bytes : 0);
     if (text.data && text.u8_bytes)
         core_buffer_append(out, text.data, text.u8_bytes);
 }
 
 static void
-put_global(core_buffer_t *out, const ir_global_t *global)
+put_global(core_buffer_t *out, const ir_summary_texts_t *texts,
+           const ir_global_t *global)
 {
     const ir_global_t *identity = global ? ir_global_identity(global)
                                          : nullptr;
-    put_text(out, identity && identity->owner
+    put_text(out, texts, identity && identity->owner
         ? ir_module_name(identity->owner) : (core_string_t){0});
-    put_text(out, identity ? identity->name : (core_string_t){0});
+    put_text(out, texts, identity ? identity->name : (core_string_t){0});
 }
 
 static void
@@ -3725,31 +3732,34 @@ put_flow(core_buffer_t *out, const ir_sflow_t *flow)
 }
 
 static void
-put_place_type(core_buffer_t *out, th_ctx *types, const ir_splace_t *place)
+put_place_type(core_buffer_t *out, const ir_summary_texts_t *texts,
+               th_ctx *types, const ir_splace_t *place)
 {
     bool named = place->kind == IR_SPLACE_GLOBAL
         || place->kind == IR_SPLACE_THREAD;
-    put_text(out, !named && types && place->type
-        ? th_print(types, place->type) : (core_string_t){0});
+    put_text(out, texts, !named && types && place->type
+        ? ir_types_text(types, place->type) : (core_string_t){0});
 }
 
 static void
-put_splace(core_buffer_t *out, th_ctx *types, const ir_splace_t *place)
+put_splace(core_buffer_t *out, const ir_summary_texts_t *texts,
+           th_ctx *types, const ir_splace_t *place)
 {
     put_u8(out, place->kind);
     put_u32(out, place->param);
-    put_global(out, place->kind == IR_SPLACE_GLOBAL
+    put_global(out, texts, place->kind == IR_SPLACE_GLOBAL
             || place->kind == IR_SPLACE_THREAD ? place->global : nullptr);
-    put_place_type(out, types, place);
+    put_place_type(out, texts, types, place);
 }
 
-bool
-ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
+static bool
+encode_summary(const ir_summary_t *summary, core_buffer_t *out,
+               const ir_summary_texts_t *texts)
 {
-    if (!summary || !out) return false;
+    if (!summary || !out || (texts && !texts->intern)) return false;
     th_ctx *types = summary->function && summary->function->owner
         ? ir_module_types(summary->function->owner) : nullptr;
-    core_buffer_append(out, "IRSM", 4);
+    core_buffer_append(out, texts ? "IRSN" : "IRSM", 4);
     put_u8(out, SUMMARY_CODEC_VERSION);
     put_u32(out, summary->flags);
     put_u8(out, summary->all_escape);
@@ -3766,7 +3776,7 @@ ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
         put_u8(out, summary->escapes.data[i]);
     put_u8(out, summary->returned.kind);
     put_u32(out, summary->returned.param);
-    put_global(out, summary->returned.kind == IR_SRETURN_GLOBAL
+    put_global(out, texts, summary->returned.kind == IR_SRETURN_GLOBAL
         ? summary->returned.global : nullptr);
     put_u32(out, (uint32_t)summary->accesses.len);
     for (size_t i = 0; i < summary->accesses.len; i++) {
@@ -3774,10 +3784,10 @@ ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
         put_u8(out, access->place.kind);
         put_u8(out, access->flags);
         put_u32(out, access->place.param);
-        put_global(out, access->place.kind == IR_SPLACE_GLOBAL
+        put_global(out, texts, access->place.kind == IR_SPLACE_GLOBAL
                 || access->place.kind == IR_SPLACE_THREAD
             ? access->place.global : nullptr);
-        put_place_type(out, types, &access->place);
+        put_place_type(out, texts, types, &access->place);
     }
     put_flow(out, &summary->flow);
     put_u32(out, (uint32_t)summary->inputs.len);
@@ -3785,15 +3795,15 @@ ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
         const ir_sinput_t *input = &summary->inputs.data[i];
         put_u8(out, input->kind);
         put_u32(out, input->param);
-        put_splace(out, types, &input->place);
-        put_text(out, input->kind == IR_SINPUT_CALL ? input->callee
+        put_splace(out, texts, types, &input->place);
+        put_text(out, texts, input->kind == IR_SINPUT_CALL ? input->callee
                                                    : (core_string_t){0});
     }
     put_u32(out, (uint32_t)summary->outputs.len);
     for (size_t i = 0; i < summary->outputs.len; i++) {
         const ir_soutput_t *output = &summary->outputs.data[i];
         put_u8(out, output->kind);
-        put_splace(out, types, &output->place);
+        put_splace(out, texts, types, &output->place);
         put_u32(out, output->data_first);
         put_u32(out, output->data_count);
         put_u32(out, output->control_first);
@@ -3805,11 +3815,25 @@ ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
     return true;
 }
 
+bool
+ir_summary_encode(const ir_summary_t *summary, core_buffer_t *out)
+{
+    return encode_summary(summary, out, nullptr);
+}
+
+bool
+ir_summary_encode_with(const ir_summary_t *summary, core_buffer_t *out,
+                       const ir_summary_texts_t *texts)
+{
+    return texts && encode_summary(summary, out, texts);
+}
+
 typedef struct {
     const uint8_t *data;
     size_t         size;
     size_t         at;
     bool           failed;
+    const ir_summary_texts_t *texts;
 } summary_reader_t;
 
 static uint8_t
@@ -3833,6 +3857,12 @@ get_u32(summary_reader_t *r)
 static core_string_t
 get_text(summary_reader_t *r)
 {
+    if (r->texts) {
+        uint32_t reference = get_u32(r);
+        return reference && !r->failed
+            ? r->texts->lookup(r->texts->context, reference)
+            : (core_string_t){0};
+    }
     uint32_t length = get_u32(r);
     if (r->failed || length > r->size - r->at) {
         r->failed = true;
@@ -3918,13 +3948,15 @@ get_flow(summary_reader_t *r, ir_sflow_t *flow)
     }
 }
 
-ir_summary_t *
-ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
-                  const uint8_t *data, size_t size,
-                  ir_summary_global_fn resolve, void *context)
+static ir_summary_t *
+decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
+               const uint8_t *data, size_t size,
+               ir_summary_global_fn resolve, void *context,
+               const ir_summary_texts_t *texts)
 {
-    summary_reader_t r = {.data = data, .size = size};
-    if (!data || size < 5 || memcmp(data, "IRSM", 4)
+    summary_reader_t r = {.data = data, .size = size, .texts = texts};
+    if (!data || size < 5 || (texts && !texts->lookup)
+        || memcmp(data, texts ? "IRSN" : "IRSM", 4)
         || data[4] != SUMMARY_CODEC_VERSION) return nullptr;
     r.at = 5;
     th_ctx *types = function && function->owner
@@ -4009,4 +4041,24 @@ ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
     }
     if (summaries) core_list_push(summaries->owned, summary);
     return summary;
+}
+
+ir_summary_t *
+ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
+                  const uint8_t *data, size_t size,
+                  ir_summary_global_fn resolve, void *context)
+{
+    return decode_summary(summaries, function, data, size, resolve, context,
+                          nullptr);
+}
+
+ir_summary_t *
+ir_summary_decode_with(ir_summaries_t *summaries, const ir_func_t *function,
+                       const uint8_t *data, size_t size,
+                       ir_summary_global_fn resolve, void *context,
+                       const ir_summary_texts_t *texts)
+{
+    return texts ? decode_summary(summaries, function, data, size, resolve,
+                                  context, texts)
+                 : nullptr;
 }

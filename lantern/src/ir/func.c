@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
+#include "ir/analyses.h"
 
 #include "lib/dict.h"
 
@@ -615,6 +616,27 @@ ir_func_t *ir_func_at(ir_module_t *m, size_t i)
     return m && i < m->n_funcs ? m->funcs[i] : nullptr;
 }
 
+bool ir_func_discard_body(ir_func_t *f)
+{
+    if (!f) {
+        return false;
+    }
+
+    ir_func_release_analyses(f);
+    f->n_blocks    = 0;
+    f->n_locals    = 0;
+    f->block_index = nullptr;
+    f->local_index = nullptr;
+    f->value_index = nullptr;
+    f->regions     = nullptr;
+    f->linkage     = IR_LINK_EXTERN;
+    for (uint32_t i = 0; i < f->n_params; i++) {
+        ir_index_add(f->owner->ctx, &f->value_index, f->params[i]->name,
+                     f->params[i]);
+    }
+    return true;
+}
+
 ir_value_t *ir_param_add(ir_func_t *f, core_string_t name, th_type *type)
 {
     if (!f || !name.data || !type) {
@@ -1031,9 +1053,7 @@ bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
         return false;
 
     size_t count = (size_t)count_annot->i.mag;
-    ir_alias_target_t *targets = count
-        ? calloc(count, sizeof(*targets)) : nullptr;
-    if (count && !targets) return false;
+    ir_alias_target_t *targets = core_alloc_array(ir_alias_target_t, count);
     bool valid = true;
     for (size_t i = 0; valid && i < count; i++) {
         char key[48];
@@ -1051,7 +1071,7 @@ bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
     }
     bool copied = valid && ir_value_set_alias_targets(ctx, destination,
         targets, count, complete_annot->b);
-    free(targets);
+    core_free(targets);
     return copied;
 }
 
@@ -1067,6 +1087,14 @@ core_string_t ir_local_display_name(const ir_local_t *local)
 {
     if (!local) return CORE_STRING_STATIC("?");
     return local->source_name.data ? local->source_name : local->name;
+}
+
+core_string_t ir_local_label(const ir_local_t *local)
+{
+    core_buffer_t *out = core_buffer_empty();
+    if (local && !local->source_name.data) core_buffer_putc(out, '$');
+    core_buffer_append_string(out, ir_local_display_name(local));
+    return core_buffer_take_string(out);
 }
 
 core_string_t ir_value_display_name(const ir_value_t *value)

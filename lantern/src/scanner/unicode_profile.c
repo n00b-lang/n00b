@@ -1,38 +1,22 @@
 #include "private/scanner/unicode_profile.h"
+#include "private/unicode/ucd.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
+#include "unicode/encoding.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#ifdef LANTERN_HAVE_ICU
-#include <unicode/uchar.h>
-#include <unicode/unorm2.h>
-#include <unicode/uscript.h>
-#include <unicode/uspoof.h>
-#include <unicode/ustring.h>
-#include <unicode/utf8.h>
-#endif
-
 struct scan_unicode_profile_t {
     scan_lex_identifier_profile_t spec;
-#ifdef LANTERN_HAVE_ICU
-    UScriptCode *scripts;
-    size_t       script_count;
-    const UNormalizer2 *normalizer;
-    USpoofChecker      *spoof;
-#endif
+    bool restrict_scripts;
+    bool allowed_scripts[256];
 };
 
 core_string_t
 scan_unicode_profile_version(void)
 {
-#ifdef LANTERN_HAVE_ICU
-    static const char text[] = U_UNICODE_VERSION;
-    return core_string_borrow(text, sizeof(text) - 1);
-#else
-    return (core_string_t){0};
-#endif
+    return ucd_version();
 }
 
 core_string_t
@@ -58,7 +42,6 @@ set_error(core_string_t *error, const char *fmt, ...)
     *error = core_buffer_take_string(buf);
 }
 
-#ifdef LANTERN_HAVE_ICU
 static bool
 version_matches(core_string_t requested)
 {
@@ -73,7 +56,6 @@ version_matches(core_string_t requested)
         && (requested.u8_bytes == actual.u8_bytes
             || actual.data[requested.u8_bytes] == '.');
 }
-#endif
 
 scan_unicode_profile_t *
 scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
@@ -82,11 +64,6 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
     if (!spec || !spec->name.data) {
         return nullptr;
     }
-#ifndef LANTERN_HAVE_ICU
-    set_error(error,
-              "Unicode identifier profiles require an ICU-enabled build");
-    return nullptr;
-#else
     if (!version_matches(spec->unicode_version)) {
         core_string_t actual = scan_unicode_profile_version();
         set_error(error,
@@ -103,19 +80,8 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
 
     for (const core_string_t *name = spec->scripts;
          name && name->data; name++) {
-        char *text = core_string_to_cstr(*name);
-        UErrorCode status = U_ZERO_ERROR;
-        int32_t count = uscript_getCode(text, nullptr, 0, &status);
-        UScriptCode *codes = count > 0
-                                 ? core_alloc_array(UScriptCode, count)
-                                 : nullptr;
-        if (codes) {
-            status = U_ZERO_ERROR;
-            count = uscript_getCode(text, codes, count, &status);
-        }
-        core_free(text);
-        if (!codes || U_FAILURE(status) || count < 1) {
-            core_free(codes);
+        uint8_t script = 0;
+        if (!ucd_script_named(*name, &script)) {
             set_error(error,
                      "Unicode profile '%.*s' names unknown script '%.*s'",
                      (int)spec->name.u8_bytes, spec->name.data,
@@ -123,60 +89,15 @@ scan_unicode_profile_compile(const scan_lex_identifier_profile_t *spec,
             scan_unicode_profile_free(profile);
             return nullptr;
         }
-        for (int32_t i = 0; i < count; i++) {
-            bool duplicate = false;
-            for (size_t j = 0; j < profile->script_count; j++) {
-                duplicate = duplicate || profile->scripts[j] == codes[i];
-            }
-            if (!duplicate) {
-                profile->scripts = core_realloc(
-                    profile->scripts,
-                    (profile->script_count + 1)
-                        * sizeof(*profile->scripts));
-                profile->scripts[profile->script_count++] = codes[i];
-            }
-        }
-        core_free(codes);
-    }
-
-    UErrorCode status = U_ZERO_ERROR;
-    if (spec->normalization == SCAN_LEX_NORMALIZE_NFC) {
-        profile->normalizer = unorm2_getNFCInstance(&status);
-    }
-    else if (spec->normalization == SCAN_LEX_NORMALIZE_NFKC) {
-        profile->normalizer = unorm2_getNFKCInstance(&status);
-    }
-    if (U_FAILURE(status)) {
-        set_error(error, "cannot initialize Unicode normalizer");
-        scan_unicode_profile_free(profile);
-        return nullptr;
-    }
-
-    if (spec->diagnose_confusables) {
-        status = U_ZERO_ERROR;
-        profile->spoof = uspoof_open(&status);
-        if (U_FAILURE(status)) {
-            set_error(error, "cannot initialize confusable checks");
-            scan_unicode_profile_free(profile);
-            return nullptr;
-        }
+        profile->restrict_scripts = true;
+        profile->allowed_scripts[script] = true;
     }
     return profile;
-#endif
 }
 
 void
 scan_unicode_profile_free(scan_unicode_profile_t *profile)
 {
-    if (!profile) {
-        return;
-    }
-#ifdef LANTERN_HAVE_ICU
-    if (profile->spoof) {
-        uspoof_close(profile->spoof);
-    }
-    core_free(profile->scripts);
-#endif
     core_free(profile);
 }
 
@@ -184,103 +105,70 @@ bool
 scan_unicode_profile_is_start(const scan_unicode_profile_t *profile,
                               core_codepoint_t cp)
 {
-#ifdef LANTERN_HAVE_ICU
-    return u_hasBinaryProperty(cp, UCHAR_XID_START)
+    return ucd_is_xid_start(cp)
         || cp == '_'
         || (profile->spec.emoji != SCAN_LEX_EMOJI_REJECT
-            && u_hasBinaryProperty(cp, UCHAR_EXTENDED_PICTOGRAPHIC));
-#else
-    (void)profile; (void)cp;
-    return false;
-#endif
+            && ucd_is_extended_pictographic(cp));
 }
 
 bool
 scan_unicode_profile_is_continue(const scan_unicode_profile_t *profile,
                                  core_codepoint_t cp)
 {
-#ifdef LANTERN_HAVE_ICU
-    return u_hasBinaryProperty(cp, UCHAR_XID_CONTINUE)
+    return ucd_is_xid_continue(cp)
         || (profile->spec.emoji != SCAN_LEX_EMOJI_REJECT
-            && u_hasBinaryProperty(cp, UCHAR_EXTENDED_PICTOGRAPHIC));
-#else
-    (void)profile; (void)cp;
-    return false;
-#endif
+            && ucd_is_extended_pictographic(cp));
 }
 
-#ifdef LANTERN_HAVE_ICU
 static bool
-script_allowed(const scan_unicode_profile_t *profile, UScriptCode script)
+script_allowed(const scan_unicode_profile_t *profile, uint8_t script)
 {
-    if (!profile->script_count || script == USCRIPT_COMMON
-        || script == USCRIPT_INHERITED) {
-        return true;
-    }
-    for (size_t i = 0; i < profile->script_count; i++) {
-        if (profile->scripts[i] == script) {
-            return true;
-        }
-    }
-    return false;
+    return !profile->restrict_scripts || script == UCD_SCRIPT_COMMON
+        || script == UCD_SCRIPT_INHERITED || profile->allowed_scripts[script];
 }
 
-static core_string_t
-normalize(const scan_unicode_profile_t *profile, core_string_t input)
+static bool
+diagnose(scan_unicode_identifier_result_t *result, scan_problem_t problem,
+         size_t start, size_t end)
 {
-    if (!profile->normalizer) {
-        return (core_string_t){0};
-    }
-    UErrorCode status = U_ZERO_ERROR;
-    int32_t u16_len = 0;
-    u_strFromUTF8(nullptr, 0, &u16_len, input.data, (int32_t)input.u8_bytes,
-                  &status);
-    if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
-        return (core_string_t){0};
-    }
-    status = U_ZERO_ERROR;
-    UChar *u16 = core_alloc_array(UChar, (size_t)u16_len + 1);
-    u_strFromUTF8(u16, u16_len + 1, nullptr, input.data,
-                  (int32_t)input.u8_bytes, &status);
-    if (U_FAILURE(status)) {
-        core_free(u16);
-        return (core_string_t){0};
-    }
-    status = U_ZERO_ERROR;
-    int32_t normalized_len = unorm2_normalize(profile->normalizer, u16, u16_len,
-                                               nullptr, 0, &status);
-    if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
-        core_free(u16);
-        return (core_string_t){0};
-    }
-    status = U_ZERO_ERROR;
-    UChar *normalized = core_alloc_array(UChar, (size_t)normalized_len + 1);
-    unorm2_normalize(profile->normalizer, u16, u16_len, normalized,
-                     normalized_len + 1, &status);
-    core_free(u16);
-    if (U_FAILURE(status)) {
-        core_free(normalized);
-        return (core_string_t){0};
-    }
-    int32_t utf8_len = 0;
-    status = U_ZERO_ERROR;
-    u_strToUTF8(nullptr, 0, &utf8_len, normalized, normalized_len, &status);
-    if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
-        core_free(normalized);
-        return (core_string_t){0};
-    }
-    status = U_ZERO_ERROR;
-    char *utf8 = core_alloc_size(1, (size_t)utf8_len + 1);
-    u_strToUTF8(utf8, utf8_len + 1, nullptr, normalized, normalized_len,
-                &status);
-    core_free(normalized);
-    if (U_FAILURE(status)) {
-        core_free(utf8);
-        return (core_string_t){0};
-    }
-    return (core_string_t){.data = utf8, .u8_bytes = (size_t)utf8_len};
+    result->diagnosed = true;
+    result->problem = problem;
+    result->diagnostic_start = start;
+    result->diagnostic_end = end;
+    return true;
 }
-#endif
+
+static bool
+check_normalized(const scan_unicode_profile_t *profile, core_string_t spelling,
+                 scan_unicode_identifier_result_t *result)
+{
+    if (profile->spec.normalization == SCAN_LEX_NORMALIZE_NONE) {
+        return false;
+    }
+    bool compat = profile->spec.normalization == SCAN_LEX_NORMALIZE_NFKC;
+    core_string_t normalized = ucd_normalize(spelling,
+                                             compat ? UCD_NFKC : UCD_NFC);
+    if (!normalized.data || core_string_eq(normalized, spelling)) {
+        core_free(normalized.data);
+        return false;
+    }
+    size_t start = 0;
+    while (start < spelling.u8_bytes && start < normalized.u8_bytes
+           && spelling.data[start] == normalized.data[start]) {
+        start++;
+    }
+    while (start > 0 && ((unsigned char)spelling.data[start] & 0xC0) == 0x80) {
+        start--;
+    }
+    result->diagnosed = true;
+    result->problem = compat
+        ? SCAN_PROBLEM_WITH(IDENTIFIER_NOT_NFKC, normalized)
+                             : SCAN_PROBLEM_WITH(IDENTIFIER_NOT_NFC,
+                                 normalized);
+    result->diagnostic_start = start;
+    result->diagnostic_end = spelling.u8_bytes;
+    return true;
+}
 
 bool
 scan_unicode_profile_process(const scan_unicode_profile_t *profile,
@@ -291,71 +179,51 @@ scan_unicode_profile_process(const scan_unicode_profile_t *profile,
         return false;
     }
     *result = (scan_unicode_identifier_result_t){0};
-#ifndef LANTERN_HAVE_ICU
-    (void)spelling;
-    return false;
-#else
-    UScriptCode seen = USCRIPT_INVALID_CODE;
-    int32_t at = 0;
-    while (at < (int32_t)spelling.u8_bytes) {
-        int32_t start = at;
-        UChar32 cp;
-        U8_NEXT(spelling.data, at, (int32_t)spelling.u8_bytes, cp);
+    uint8_t seen = UCD_SCRIPT_UNKNOWN;
+    bool have_seen = false;
+    uint32_t at = 0;
+    while (at < spelling.u8_bytes) {
+        size_t start = at;
+        int32_t cp = unicode_utf8_decode(spelling.data,
+                                         (uint32_t)spelling.u8_bytes, &at);
         if (cp < 0) {
-            result->diagnostic = CORE_STRING_STATIC("invalid UTF-8 in identifier");
-            result->diagnostic_start = (size_t)start;
-            result->diagnostic_end = (size_t)at;
-            return true;
+            return diagnose(result,
+                            SCAN_PROBLEM(IDENTIFIER_INVALID_UTF8),
+                            start, start + 1);
         }
-        UErrorCode status = U_ZERO_ERROR;
-        UScriptCode script = uscript_getScript(cp, &status);
-        if (U_FAILURE(status) || !script_allowed(profile, script)) {
-            result->diagnostic = CORE_STRING_STATIC("identifier uses a disallowed script");
-            result->diagnostic_start = (size_t)start;
-            result->diagnostic_end = (size_t)at;
-            return true;
+        uint8_t script = ucd_script((core_codepoint_t)cp);
+        if (!script_allowed(profile, script)) {
+            return diagnose(result, SCAN_PROBLEM(IDENTIFIER_DISALLOWED_SCRIPT),
+                            start, at);
         }
         if (profile->spec.emoji == SCAN_LEX_EMOJI_DIAGNOSE
-            && u_hasBinaryProperty(cp, UCHAR_EXTENDED_PICTOGRAPHIC)) {
-            result->diagnostic = CORE_STRING_STATIC("emoji is discouraged in identifiers");
-            result->diagnostic_start = (size_t)start;
-            result->diagnostic_end = (size_t)at;
-            return true;
+            && ucd_is_extended_pictographic((core_codepoint_t)cp)) {
+            return diagnose(result, SCAN_PROBLEM(IDENTIFIER_EMOJI),
+                            start, at);
         }
-        if (script != USCRIPT_COMMON && script != USCRIPT_INHERITED) {
-            if (profile->spec.diagnose_mixed_scripts
-                && seen != USCRIPT_INVALID_CODE && seen != script) {
-                result->diagnostic = CORE_STRING_STATIC("identifier mixes scripts");
-                result->diagnostic_start = (size_t)start;
-                result->diagnostic_end = (size_t)at;
-                return true;
+        if (script != UCD_SCRIPT_COMMON && script != UCD_SCRIPT_INHERITED) {
+            if (profile->spec.diagnose_mixed_scripts && have_seen
+                && seen != script) {
+                return diagnose(result, SCAN_PROBLEM(IDENTIFIER_MIXED_SCRIPTS),
+                                start, at);
             }
             seen = script;
+            have_seen = true;
         }
     }
 
-    if (profile->spoof) {
-        UErrorCode status = U_ZERO_ERROR;
-        int32_t needed = uspoof_getSkeletonUTF8(
-            profile->spoof, 0, spelling.data, (int32_t)spelling.u8_bytes,
-            nullptr, 0, &status);
-        status = U_ZERO_ERROR;
-        char *skeleton = core_alloc_size(1, (size_t)needed + 1);
-        uspoof_getSkeletonUTF8(profile->spoof, 0, spelling.data,
-                              (int32_t)spelling.u8_bytes, skeleton,
-                              needed + 1, &status);
-        bool changed = U_SUCCESS(status)
-                    && ((size_t)needed != spelling.u8_bytes
-                        || memcmp(skeleton, spelling.data, (size_t)needed));
-        core_free(skeleton);
+    if (check_normalized(profile, spelling, result)) {
+        return true;
+    }
+
+    if (profile->spec.diagnose_confusables) {
+        core_string_t skeleton = ucd_skeleton(spelling);
+        bool changed = skeleton.data && !core_string_eq(skeleton, spelling);
+        core_free(skeleton.data);
         if (changed) {
-            result->diagnostic = CORE_STRING_STATIC("identifier has a confusable spelling");
-            result->diagnostic_end = spelling.u8_bytes;
-            return true;
+            return diagnose(result, SCAN_PROBLEM(IDENTIFIER_CONFUSABLE),
+                            0, spelling.u8_bytes);
         }
     }
-
-    result->normalized = normalize(profile, spelling);
     return true;
-#endif
 }

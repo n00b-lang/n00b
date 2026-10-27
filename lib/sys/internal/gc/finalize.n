@@ -61,7 +61,11 @@ func thread_main(argument: Ref[byte]) -> Ref[byte] {
 }
 
 func park(heap: Ref[internal.gc.core.Heap]) {
-    internal.gc.alloc.attached_enter_blocking()
+    let attached: Ref[internal.gc.core.Mutator]? = internal.gc.alloc.attached_mutator()
+    if attached != nil {
+        __os_thread_capture_self(ref attached.get().captured)
+        internal.gc.handshake.enter_blocking(attached.get())
+    }
     while true {
         let seq: u32 = internal.gc.sync.event_enter(ref heap.fin_wake)
         if __atomic_load(ref heap.shutdown) or pending(heap) != 0 {
@@ -358,6 +362,7 @@ func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
     }
 
     let deadline: u64 = internal.clock.now_ns() + stall_wait_ns
+    __os_thread_capture_self(ref mutator.captured)
     internal.gc.handshake.enter_blocking(mutator)
     while true {
         let seq: u32 = internal.gc.sync.event_enter(ref heap.fin_progress)

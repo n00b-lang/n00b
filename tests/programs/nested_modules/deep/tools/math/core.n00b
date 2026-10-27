@@ -1,7 +1,0 @@
-record DeepAnswer {
-    amount: int
-}
-
-func answer(item: DeepAnswer) -> int {
-    return item.amount
-}

@@ -21,6 +21,10 @@ core_option_t(core_string_t) parse_node_name(parse_tree_t *t);
 
 void *parse_tree_walk(parse_grammar_t *g, parse_tree_t *node, void *thunk);
 
+parse_tree_t *parse_tree_new_node(parse_nt_node_t value);
+
+parse_tree_t *parse_tree_new_owned_leaf(parse_token_info_t *token);
+
 void parse_tree_free(parse_tree_t *t);
 
 void parse_tree_free_node(parse_tree_t *t);
@@ -33,13 +37,13 @@ static inline parse_node_semantic_t *
 parse_tree_semantic(const parse_tree_t *node)
 {
     return node && !node->is_leaf
-        ? &((parse_tree_t *)node)->node.value.semantic : nullptr;
+        ? &((parse_tree_t *)node)->node->value.semantic : nullptr;
 }
 
 static inline bool
 parse_tree_is_group(const parse_tree_t *node)
 {
-    return node && !node->is_leaf && node->node.value.group_top;
+    return node && !node->is_leaf && node->node->value.group_top;
 }
 
 static inline const parse_node_facts_t *

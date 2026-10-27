@@ -6,10 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cached_body.h"
+#include "ir/analyses.h"
 #include "ir/ir.h"
 #include "ir/layout.h"
 #include "ir/liveness.h"
+#include "ir/summary.h"
 #include "lib/alloc.h"
+#include "lib/dict.h"
 #include "ir/typelang.h"
 #include "lib/hash.h"
 #include "th/typehash.h"
@@ -158,12 +162,48 @@ n00bb_frame_type_class(ir_func_t *function, th_type *type)
 }
 
 static inline bool
+n00bb_frame_foreign_call(const ir_instr_t *instruction)
+{
+    if (instruction->op == IR_OP_CALLBACK_INVOKE) return true;
+    if (instruction->op != IR_OP_CALL || !instruction->n_operands)
+        return false;
+    const ir_value_t *callee = ir_operand_value(&instruction->operands[0]);
+    if (!callee || callee->kind != IR_VAL_FUNC || !callee->owner) return true;
+    ir_func_t *target = n00bb_cached_body(callee->owner);
+    if (!ir_annot_get(&target->annots, CORE_STRING_STATIC("n00bb.abi.native")))
+        return false;
+    ir_summary_t *summary = ir_summary_of(ir_analysis_summaries(), target);
+    return !summary || (ir_summary_flags(summary) & IR_SUMMARY_MAY_COLLECT);
+}
+
+static inline bool
 n00bb_frame_values_across(ir_func_t *function, ir_value_t **values,
                           size_t count, bool *across)
 {
     if (!ir_live_across_points(ir_func_liveness(function), values, count,
-                               n00bb_frame_call_point, nullptr, across))
+                               n00bb_frame_call_point, nullptr, across)) {
         for (size_t v = 0; v < count; v++) across[v] = true;
+        return true;
+    }
+    core_dict_t positions;
+    core_dict_init(&positions, nullptr, nullptr);
+    for (size_t v = 0; v < count; v++)
+        core_dict_put(&positions, values[v], (void *)(uintptr_t)(v + 1));
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *instruction = function->blocks[b]->instrs[i];
+            if (!n00bb_frame_foreign_call(instruction)) continue;
+            for (uint32_t o = 0; o < instruction->n_operands; o++) {
+                const ir_value_t *operand =
+                    ir_operand_value(&instruction->operands[o]);
+                uintptr_t position = operand
+                    ? (uintptr_t)core_dict_get(&positions, (void *)operand,
+                                               nullptr)
+                    : 0;
+                if (position) across[position - 1] = true;
+            }
+        }
+    core_dict_free(&positions);
     return true;
 }
 

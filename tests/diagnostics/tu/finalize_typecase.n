@@ -1,0 +1,10 @@
+record Sample {
+    value: int
+}
+
+func __finalize(consume self: Sample) {
+}
+func f() -> int { return 1 }
+typecase f() {
+case int { require true }
+}

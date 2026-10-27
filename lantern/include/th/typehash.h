@@ -15,6 +15,7 @@
 #define TH_UNTYPED       "__ty.untyped"
 #define TH_ERASED        "__ty.erased"
 #define TH_BOTTOM        "__ty.bottom"
+#define TH_POISON        "__ty.poison"
 
 typedef enum : uint8_t {
     TH_NAMED = 0,
@@ -106,6 +107,7 @@ typedef struct {
     core_string_t    option_suffix;
     bool             omit_constraints;
     bool             omit_nil_failure;
+    bool             source_spelling;
 } th_print_options_t;
 
 typedef th_type *(*th_method_resolver_fn)(th_ctx *ctx, th_type *receiver,
@@ -156,12 +158,7 @@ typedef enum : uint8_t {
     TH_CON_HAS_PARAM,
     TH_CON_PROMOTES,
     TH_CON_EXCLUDES,
-    /* Resolve a named receiver method when this variable becomes concrete.
-     * `call`, when present, is the positional/keyword call shape without the
-     * receiver; its return type is `result`. */
     TH_CON_METHOD,
-    /* Restrict a variable to a structural type family without fixing its
-     * parameters, such as the width and signedness of a bit integer. */
     TH_CON_KIND,
     TH_CON_INTEGER,
 } th_con_kind;
@@ -178,13 +175,9 @@ typedef enum : uint8_t {
 
 typedef struct {
     th_con_kind kind;
-    /* Environment-backed constraints retain the visibility perspective in
-     * which they were authored, even when resolution is deferred. */
     core_string_t scope_module;
     core_string_t scope_package;
     bool has_scope;
-    /* The source span active when the constraint was authored, restored
-     * while a deferred check reports against it. */
     th_span_t span;
     union {
         th_kind type_kind;
@@ -217,7 +210,6 @@ typedef struct {
     };
 } th_constraint;
 
-/* Declared interface requirements, separate from inference obligations. */
 typedef struct {
     th_type *subject;
     th_con_kind kind;
@@ -254,7 +246,6 @@ typedef struct {
 th_ctx *th_ctx_new(void);
 void    th_ctx_free(th_ctx *ctx);
 uint64_t th_type_graph_revision(th_type *const *roots, size_t count);
-/* Deep-copy a type graph into another type context, preserving graph sharing. */
 th_type *th_type_clone(th_ctx *destination, const th_type *source);
 th_type *th_type_clone_fresh(th_ctx *destination, const th_type *source);
 typedef struct th_type_cloner th_type_cloner_t;
@@ -264,8 +255,6 @@ th_type_cloner_t *th_type_cloner_new(th_ctx *destination,
 th_type *th_type_cloner_clone(th_type_cloner_t *cloner,
                               const th_type *source);
 void th_type_cloner_free(th_type_cloner_t *cloner);
-/* Clone related roots with one graph map, retaining shared variables and
- * constraint references between roots. */
 bool th_type_clone_many(th_ctx *destination, const th_type *const *sources,
                         th_type **copies, size_t count);
 
@@ -279,8 +268,6 @@ th_type_reader_t *th_type_reader_open(th_ctx *ctx, const uint8_t *data,
                                       size_t length, size_t *consumed);
 th_type *th_type_reader_get(const th_type_reader_t *reader, uint32_t index);
 void th_type_reader_free(th_type_reader_t *reader);
-/* Clone a graph while replacing selected source nodes with existing nodes.
- * Replacements are borrowed and must outlive the result. */
 th_type *th_type_clone_replacing(th_ctx *destination, const th_type *source,
                                  const th_type *const *from,
                                  th_type *const *to, size_t count);
@@ -290,9 +277,6 @@ typedef bool (*th_normalizer)(void *state, core_string_t in,
 
 void th_ctx_set_normalizer(th_ctx *ctx, th_normalizer fn, void *state);
 void th_install_nfc(th_ctx *ctx);
-/* Set the current module/package perspective used when new environment-backed
- * constraints are created. This may be called before an environment is
- * attached; existing constraints retain their captured scope. */
 bool th_ctx_set_scope(th_ctx *ctx, core_string_t module,
                       core_string_t package);
 
@@ -309,15 +293,12 @@ bool     th_indirection_attrs(core_string_t name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
 th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
-/* A named interface whose method order is part of its type identity. */
 th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
                   const th_member *methods, size_t n,
                   const th_trait_requirement *requirements, size_t nr);
 th_type *th_record_stub(th_ctx *ctx);
 void     th_record_fill(th_ctx *ctx, th_type *stub, const th_member *members,
                         size_t n);
-/* Associate a named type with its structural definition in this type context.
- * Definitions are semantic metadata and do not change the named type's identity. */
 typedef enum : uint8_t {
     TH_BUILTIN_NONE,
     TH_BUILTIN_SCALAR,
@@ -364,6 +345,7 @@ th_type *th_builtin_item(th_ctx *ctx, const th_type *type,
                          th_builtin_kind_t kind, size_t index);
 
 bool     th_type_define(th_ctx *ctx, th_type *type, th_type *definition);
+size_t   th_generic_arity(th_ctx *ctx, core_string_t name);
 bool     th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
                               void *owner);
 th_type *th_type_definition(th_ctx *ctx, const th_type *type);
@@ -373,8 +355,6 @@ th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
                              core_string_t name);
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *params, size_t np,
                  const th_param *rest, const th_kwparam *kw, size_t nkw);
-/* The optional error type is a separate callable channel, not part of ret.
- * Pass nullptr when the function type has no failure channel. */
 th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
                             const th_param *params, size_t np,
                             const th_param *rest, const th_kwparam *kw,
@@ -464,9 +444,6 @@ bool th_var_index(const th_type *type, uint64_t *index);
 core_string_t th_var_name(const th_type *type);
 
 bool   th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c);
-/* Attach a deferred method-call obligation to a concrete or unresolved
- * receiver. `call` is the positional/keyword argument shape excluding the
- * receiver; `result` is unified with the selected method's return type. */
 bool   th_require_method(th_ctx *ctx, th_type *receiver, core_string_t name,
                          th_type *result, th_type *call);
 bool   th_require_method_in_place(th_ctx *ctx, th_type *receiver,
@@ -476,8 +453,6 @@ bool   th_require_method_at(th_ctx *ctx, th_type *receiver, core_string_t name,
                             core_string_t in_place, th_type *result,
                             th_type *call, const void *site);
 bool   th_awaits_method_result(th_ctx *ctx, th_type *type);
-/* Connect an existing deferred method-call obligation to its enclosing
- * failure channel without adding a second method constraint. */
 bool   th_method_obligation_set_error(th_ctx *ctx, th_type *receiver,
                                       core_string_t name, th_type *result,
                                       th_type *error);
@@ -494,8 +469,6 @@ bool   th_method_obligation_bind_keywords(th_ctx *ctx, th_type *receiver,
                                           size_t formal_count);
 size_t th_var_constraint_count(const th_type *var);
 bool   th_var_constraint_at(const th_type *var, size_t i, th_constraint *out);
-/* Recheck method obligations deferred until an environment is attached.
- * th_ctx_set_environment() calls this automatically. */
 bool   th_ctx_validate_constraints(th_ctx *ctx);
 
 void th_register_promotion(th_ctx *ctx, core_string_t from, core_string_t to);
@@ -563,8 +536,6 @@ bool   th_register_method_resolver(th_ctx *ctx,
                                    th_method_resolver_fn resolver,
                                    void *user);
 th_type *th_method_lookup(th_ctx *ctx, th_type *receiver, core_string_t name);
-/* For an unresolved constrained type variable, true means the trait is a
- * retained obligation, not proof of a concrete implementation or dispatch. */
 bool   th_implements(th_ctx *ctx, th_type *type, core_string_t iface);
 size_t th_infer_ifaces(th_ctx *ctx, th_type *type, core_string_t *out,
                        size_t max);
@@ -573,16 +544,16 @@ th_type *th_resolve(th_type *type);
 
 bool     th_is_erased(const th_type *type);
 bool     th_is_bottom(const th_type *type);
+th_type *th_poison(th_ctx *ctx);
+bool     th_is_poison(const th_type *type);
+bool     th_mentions_poison(th_type *type);
 size_t   th_free_vars(th_ctx *ctx, th_type *type, th_type ***out);
 bool     th_is_closed(th_ctx *ctx, th_type *type);
 bool     th_occurs(th_ctx *ctx, th_type *var, th_type *type);
 th_type *th_apply_subst(th_ctx *ctx, th_type *type);
-/* Unifies fresh copies of both inputs; neither input is constrained. */
 th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b);
-/* Probes unification on fresh copies without retaining failure diagnostics. */
 bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b);
 bool th_unifies(th_ctx *ctx, th_type *a, th_type *b);
-/* Constrains the original monomorphic variables; failure may leave bindings. */
 th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b);
 th_type *th_instantiate(th_ctx *ctx, th_type *type);
 th_type *th_generalize(th_ctx *ctx, th_type *type);

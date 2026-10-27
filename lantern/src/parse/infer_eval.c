@@ -27,8 +27,7 @@ typedef struct {
     th_ctx       *tc;
     parse_symtab_t *st;
     parse_visit_t  *v;
-    parse_infer_type_node_resolver_fn type_node_resolver;
-    void *type_node_resolver_context;
+    parse_infer_hooks_t hooks;
     core_list_t(tvar_t) tvars;
     bool          failed;
 } ictx;
@@ -570,8 +569,7 @@ tvar(ictx *c, core_string_t name)
         }
     }
 
-    th_type *t = th_var_named(c->tc,
-                              name.data ? name : CORE_STRING_STATIC("t"));
+    th_type *t = th_var(c->tc);
 
     core_list_push(c->tvars, ((tvar_t){.name = name, .var = t}));
 
@@ -643,7 +641,12 @@ symbol_type(ictx *c, int32_t ix)
         sym->type = fresh(c);
     }
 
-    return instantiate_symbol_type(c, sym);
+    th_type *declared = instantiate_symbol_type(c, sym);
+    th_type *narrowed = c->hooks.symbol_type
+        ? c->hooks.symbol_type(c->tc, sym, c->v->node, declared,
+                               c->hooks.symbol_type_context)
+        : nullptr;
+    return narrowed ? narrowed : declared;
 }
 
 static th_type *
@@ -768,6 +771,7 @@ referent_projection(ictx *c, th_type *receiver)
     th_type *resolved = th_resolve(receiver);
     if (resolved && th_kind_of(resolved) == TH_INDIRECTION)
         return th_ind_referent(resolved);
+    if (th_is_poison(resolved)) return resolved;
     th_type *result = fresh(c);
     if (resolved && th_kind_of(resolved) == TH_VAR
         && th_unify_in_place(c->tc, resolved, th_ind(c->tc, 0, result)))
@@ -1081,9 +1085,9 @@ spread_args(ictx *c, int32_t ix, core_list_t(th_arg) * out)
             continue;
         }
 
-        th_type *t = c->type_node_resolver
-            ? c->type_node_resolver(c->tc, c->v->grammar, k,
-                                    c->type_node_resolver_context)
+        th_type *t = c->hooks.type_node_resolver
+            ? c->hooks.type_node_resolver(c->tc, c->v->grammar, k,
+                                          c->hooks.type_node_resolver_context)
             : nullptr;
         if (!t) t = parse_tree_type(k);
 
@@ -1338,10 +1342,9 @@ eval(ictx *c, const parse_infer_expr_t *e)
 }
 
 th_type *
-parse_infer_eval_with_type_node_resolver(
+parse_infer_eval_with_hooks(
     const parse_infer_expr_t *e, parse_visit_t *v, th_ctx *tc,
-    parse_symtab_t *st, parse_infer_type_node_resolver_fn resolver,
-    void *resolver_context, bool *ok)
+    parse_symtab_t *st, const parse_infer_hooks_t *hooks, bool *ok)
 {
     if (ok) {
         *ok = false;
@@ -1387,8 +1390,7 @@ parse_infer_eval_with_type_node_resolver(
         .tc = tc,
         .st = st,
         .v = v,
-        .type_node_resolver = resolver,
-        .type_node_resolver_context = resolver_context,
+        .hooks = hooks ? *hooks : (parse_infer_hooks_t){0},
         .tvars = core_list_new(tvar_t),
     };
 
@@ -1408,6 +1410,5 @@ th_type *
 parse_infer_eval(const parse_infer_expr_t *e, parse_visit_t *v, th_ctx *tc,
                  parse_symtab_t *st, bool *ok)
 {
-    return parse_infer_eval_with_type_node_resolver(e, v, tc, st,
-        nullptr, nullptr, ok);
+    return parse_infer_eval_with_hooks(e, v, tc, st, nullptr, ok);
 }

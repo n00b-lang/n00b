@@ -1,0 +1,28 @@
+let n = 3
+if n {
+    require n == 3
+}
+record Point {
+    x: int
+}
+
+object Counter {
+    count: int
+}
+
+func fill(out c: Counter) {
+    c = (count = 0)
+}
+
+func keep(c: Counter) {
+    fill(c)
+}
+func g() -> int {
+    return 4
+}
+func f() -> int {
+    g()
+    1 + 2
+    return 0
+}
+require f() == 0

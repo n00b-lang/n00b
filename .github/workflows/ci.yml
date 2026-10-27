@@ -1,0 +1,166 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main, "ci/**"]
+  workflow_dispatch:
+    inputs:
+      cross_windows:
+        description: Cross-build program tests on Linux and run them on Windows
+        type: boolean
+        default: false
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+          - platform: macos-arm64
+            runner: macos-26
+    env:
+      N00B_TEST_BUDGET_SCALE: "50"
+      N00B_WALL_BUDGET_SCALE: "50"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 22 (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
+          sudo bash "$RUNNER_TEMP/llvm.sh" 22
+          sudo apt-get install -y --no-install-recommends \
+            llvm-22-dev libclang-22-dev libclang-rt-22-dev llvm-22-tools \
+            zlib1g-dev libzstd-dev
+          echo "LLVM_CONFIG=/usr/lib/llvm-22/bin/llvm-config" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      - name: Install LLVM 22 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm@22 zstd
+          echo "LLVM_CONFIG=$(brew --prefix llvm@22)/bin/llvm-config" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Test
+        run: ./build.sh test-all
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.platform }}
+          path: build/test-results
+          if-no-files-found: ignore
+
+  windows-native:
+    name: windows-x86_64 (native)
+    runs-on: windows-2025
+    timeout-minutes: 150
+    env:
+      N00B_TEST_BUDGET_SCALE: "50"
+      N00B_WALL_BUDGET_SCALE: "50"
+      MSYS: winsymlinks:nativestrict
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Keep line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            make python git diffutils
+            mingw-w64-clang-x86_64-zstd
+            mingw-w64-clang-x86_64-zlib
+
+      - name: Install LLVM 22
+        run: |
+          base=https://repo.msys2.org/mingw/clang64
+          packages=""
+          for p in llvm llvm-libs llvm-tools clang clang-libs lld compiler-rt; do
+            packages="$packages $base/mingw-w64-clang-x86_64-$p-22.1.8-3-any.pkg.tar.zst"
+          done
+          pacman -U --noconfirm $packages
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Test
+        run: ./build.sh test-all
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-windows-x86_64
+          path: build/test-results
+          if-no-files-found: ignore
+
+  windows-build:
+    name: windows-x86_64 (cross-build)
+    if: inputs.cross_windows
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 22 and mingw-w64
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
+          sudo bash "$RUNNER_TEMP/llvm.sh" 22
+          sudo apt-get install -y --no-install-recommends \
+            llvm-22-dev libclang-22-dev libclang-rt-22-dev llvm-22-tools \
+            lld-22 gcc-mingw-w64-x86-64 zlib1g-dev libzstd-dev
+          echo "LLVM_CONFIG=/usr/lib/llvm-22/bin/llvm-config" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Cross-build program tests
+        run: python3 tools/cross_tests.py build --compiler build/n00b --target x86_64-windows --out cross-windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-windows
+          path: cross-windows
+
+  windows-run:
+    name: windows-x86_64
+    needs: windows-build
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-windows
+          path: cross-windows
+
+      - name: Run program tests
+        run: python tools/cross_tests.py run --dir cross-windows

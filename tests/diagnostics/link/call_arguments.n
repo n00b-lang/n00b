@@ -1,0 +1,40 @@
+func twice(n: int) -> int {
+    return n * 2
+}
+
+require twice("four") == 8
+context Label(s: string) {
+    enter() {
+    }
+    ensure() {
+    }
+}
+
+func f(x: int) -> int {
+    return x
+}
+
+var b: Buffer = buffer_from_string("abc")
+with Label("a", "b") {
+}
+with Label() {
+}
+with Label(s = b) {
+    b += "x"
+}
+with Label(s = 1) {
+}
+with Label(b) {
+    b += "x"
+}
+require f(x = "str") == 1
+func add(a: int, b: int) -> int {
+    return a + b
+}
+
+require add(1) == 3
+func area(width: int, height: int) -> int {
+    return width * height
+}
+
+require area(2, width = 3) == 6

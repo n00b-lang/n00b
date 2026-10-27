@@ -73,11 +73,11 @@ mix(uint64_t state, uint64_t word)
 static uint64_t
 mix_annots(uint64_t h, const ir_annots_t *annots)
 {
-    h = mix(h, annots->n);
-    return annots->n
-        ? mix(h, core_xxh3_64bits_raw(annots->a,
-                                      annots->n * sizeof(ir_annot_t)))
-        : h;
+    for (uint32_t i = 0; i < annots->n; i++) {
+        if (annots->a[i].derived_from) continue;
+        h = mix(h, core_xxh3_64bits_raw(&annots->a[i], sizeof(ir_annot_t)));
+    }
+    return h;
 }
 
 static uint64_t
@@ -116,7 +116,7 @@ fingerprint(const ir_func_t *f)
         h = mix(h, (uint64_t)(uintptr_t)local);
         h = mix(h, (uint64_t)(uintptr_t)local->type);
         h = mix(h, local->address_taken);
-        h = mix_value(h, local->value);
+        if (local->value) h = mix_annots(h, &local->value->annots);
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         const ir_block_t *block = f->blocks[b];

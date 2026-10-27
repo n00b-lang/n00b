@@ -741,6 +741,7 @@ n00bb_abi_apply_link_patches(
             if (table->kind == N00B_ABI_TABLE_U32_STREAM
                 || table->kind == N00B_ABI_TABLE_U64_STREAM
                 || table->kind == N00B_ABI_TABLE_BYTE_STREAM
+                || table->kind == N00B_ABI_TABLE_SUMMARY_STREAM
                 || table->kind == N00B_ABI_TABLE_REQUIREMENT
                 || table->kind == N00B_ABI_TABLE_INDEX_PATCH) continue;
             const core_index_remap_t *remap =
@@ -780,10 +781,24 @@ n00bb_abi_apply_link_patches(
     return true;
 }
 
+static void
+strip_summaries(n00bb_abi_merged_rows_t *merged)
+{
+    for (size_t i = 0; i < merged->table_count; i++) {
+        n00bb_abi_merged_table_t *table = &merged->tables[i];
+        if (table->kind == N00B_ABI_TABLE_SUMMARY_STREAM)
+            table->record_count = 0;
+        if (table->kind != N00B_ABI_TABLE_FUNCTION) continue;
+        for (uint32_t row = 0; row < table->record_count; row++)
+            ((n00b_abi_function_v1 *)(table->records
+                + (size_t)row * table->record_bytes))->summary_offset = 0;
+    }
+}
+
 static bool
 link_selected_objects(
     const n00bb_abi_selected_objects_t *selected,
-    const core_target_desc_t *target,
+    const core_target_desc_t *target, bool keep_summaries,
     n00bb_abi_link_semantics_fn semantics, void *context,
     n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,
@@ -889,6 +904,7 @@ link_selected_objects(
                 native.relocations[i].symbol_index =
                     (uint32_t)native.symbol_count;
 
+    if (valid && !keep_summaries) strip_summaries(&merged);
     size_t row_count = 0;
     if (valid) {
         stage = CORE_STRING_STATIC("table packing");
@@ -1112,7 +1128,7 @@ n00bb_abi_link_selected_objects(
     const core_target_desc_t *target,
     uint8_t **out_object, size_t *out_object_bytes)
 {
-    return link_selected_objects(selected, target, nullptr, nullptr,
+    return link_selected_objects(selected, target, true, nullptr, nullptr,
                                  nullptr, nullptr, out_object,
                                  out_object_bytes, nullptr,
                                  nullptr, nullptr);
@@ -1122,6 +1138,7 @@ bool
 n00bb_abi_link_objects_with_semantics(
     core_link_unit_t *link, const core_target_desc_t *target,
     const n00bb_abi_object_input_t *candidates, size_t candidate_count,
+    bool keep_summaries,
     n00bb_abi_link_semantics_fn semantics, void *context,
     n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,
@@ -1135,7 +1152,8 @@ n00bb_abi_link_objects_with_semantics(
     n00bb_abi_selected_objects_t selected = {0};
     if (!n00bb_abi_select_objects(link, target, candidates,
                                   candidate_count, &selected)) return false;
-    bool valid = link_selected_objects(&selected, target, semantics, context,
+    bool valid = link_selected_objects(&selected, target, keep_summaries,
+                                       semantics, context,
                                        validate, validation_context,
                                        out_object, out_object_bytes,
                                        failure_stage, plan_failure,
@@ -1151,7 +1169,7 @@ n00bb_abi_link_objects(
     uint8_t **out_object, size_t *out_object_bytes)
 {
     return n00bb_abi_link_objects_with_semantics(link, target, candidates,
-        candidate_count, nullptr, nullptr, nullptr, nullptr,
+        candidate_count, true, nullptr, nullptr, nullptr, nullptr,
         out_object, out_object_bytes,
         nullptr, nullptr, nullptr);
 }

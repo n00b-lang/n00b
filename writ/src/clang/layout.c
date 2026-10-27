@@ -74,15 +74,16 @@ verify_record(writ_tu_t *tu, const writ_model_t *model, const writ_record_rec_t 
     lookup_type(tu, &lookup);
     writ_str_t name = writ_sym_str(session, record->name);
     if (!lookup.matched) {
-        writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, record->loc, "`%.*s` is not declared by the headers",
-                    S(lookup.spelling));
+        writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, record->loc,
+                    WRIT_MESSAGE(IS_NOT_DECLARED_BY_THE, WRIT_ARG(lookup.spelling)));
         return;
     }
     long long size = clang_Type_getSizeOf(lookup.found);
     long long align = clang_Type_getAlignOf(lookup.found);
     if (size != type->size || align != type->align) {
-        writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, record->loc, "`%.*s` is %lld bytes aligned to %lld; the contract computes %u aligned to %u",
-                    S(name), size, align, type->size, type->align);
+        writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, record->loc,
+                    WRIT_MESSAGE(IS_BYTES_ALIGNED_TO_THE, WRIT_ARG(name), CORE_TEXT_NUMBER(size),
+                                 CORE_TEXT_NUMBER(align), CORE_TEXT_NUMBER(type->size), CORE_TEXT_NUMBER(type->align)));
     }
     writ_emit_line(report, "%.*s size %lld align %lld", S(name), size, align);
     for (uint32_t i = 0; i < record->field_count; i++) {
@@ -90,8 +91,10 @@ verify_record(writ_tu_t *tu, const writ_model_t *model, const writ_record_rec_t 
         writ_str_t field_name = writ_sym_str(session, field->name);
         long long offset = clang_Type_getOffsetOf(lookup.found, writ_str_copy(session, field_name.data, field_name.length).data);
         if (offset < 0 || offset / 8 != field->offset) {
-            writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, field->loc, "`%.*s.%.*s` is at %lld; the contract computes %u",
-                        S(name), S(field_name), offset < 0 ? offset : offset / 8, field->offset);
+            writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, field->loc,
+                        WRIT_MESSAGE(IS_AT_THE_CONTRACT_COMPUTES, WRIT_ARG(name), WRIT_ARG(field_name),
+                                     CORE_TEXT_NUMBER(offset < 0 ? offset : offset / 8),
+                                     CORE_TEXT_NUMBER(field->offset)));
         }
         writ_emit_line(report, "  @%lld %.*s", offset / 8, S(field_name));
     }
@@ -131,7 +134,7 @@ writ_clang_verify_layout(const writ_model_t *model, writ_str_t sysroot, writ_str
     }
     writ_status_t status = writ_tu_open(session, &tu, library->platform, &request, false, &error);
     if (status != WRIT_OK) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "%.*s", S(error));
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, WRIT_MESSAGE(TEXT, WRIT_ARG(error)));
         writ_emit_discard(&emit);
         writ_diag_flush(session, first_diag);
         return status;

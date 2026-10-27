@@ -1,0 +1,5 @@
+import foo
+
+package module_ambiguous {
+    export foo.value
+}

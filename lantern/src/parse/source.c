@@ -1,5 +1,6 @@
 #include "parse/source.h"
 #include "lib/alloc.h"
+#include "lib/list.h"
 #include "unicode/encoding.h"
 
 #include <pthread.h>
@@ -10,6 +11,9 @@
 #define SOURCE_CHUNK_SIZE (1u << SOURCE_CHUNK_BITS)
 #define SOURCE_CHUNK_COUNT 4096u
 
+typedef char *char_ptr;
+core_list_decl(char_ptr);
+
 typedef struct parse_source_t {
     _Atomic(char *)  text;
     _Atomic(size_t)  length;
@@ -17,13 +21,9 @@ typedef struct parse_source_t {
     _Atomic(char *)  values;
     size_t           values_length;
     size_t           values_capacity;
-    char           **retired;
-    size_t           retired_count;
-    size_t           retired_capacity;
+    core_list_t(char_ptr) retired;
     core_option_t(core_string_t) name;
-    uint32_t        *line_starts;
-    size_t           line_count;
-    size_t           line_capacity;
+    core_list_t(uint32_t) line_starts;
     size_t           lines_scanned;
     pthread_mutex_t  lock;
     _Atomic(uint32_t) refs;
@@ -68,9 +68,8 @@ parse_source_new(core_option_t(core_string_t) name)
         source->name = core_option_set(core_string_t,
                                        core_string_dup(core_option_get(name)));
     }
-    source->line_starts = core_alloc_array(uint32_t, 16);
-    source->line_capacity = 16;
-    source->line_count = 1;
+    source->line_starts = core_list_new(uint32_t);
+    core_list_push(source->line_starts, 0u);
 
     pthread_mutex_lock(&source_registry_lock);
     uint32_t id = source_next_id;
@@ -84,7 +83,7 @@ parse_source_new(core_option_t(core_string_t) name)
 
     if (!slot) {
         pthread_mutex_destroy(&source->lock);
-        core_free(source->line_starts);
+        core_list_free(source->line_starts);
         if (core_option_is_set(source->name))
             core_free(core_option_get(source->name).data);
         core_free(source);
@@ -111,12 +110,12 @@ parse_source_release(uint32_t id)
                           memory_order_release);
     pthread_mutex_unlock(&source_registry_lock);
 
-    for (size_t i = 0; i < source->retired_count; i++)
-        core_free(source->retired[i]);
-    core_free(source->retired);
+    for (size_t i = 0; i < source->retired.len; i++)
+        core_free(source->retired.data[i]);
+    core_list_free(source->retired);
     core_free(atomic_load(&source->text));
     core_free(atomic_load(&source->values));
-    core_free(source->line_starts);
+    core_list_free(source->line_starts);
     if (core_option_is_set(source->name))
         core_free(core_option_get(source->name).data);
     pthread_mutex_destroy(&source->lock);
@@ -127,23 +126,16 @@ static void
 retire_text(parse_source_t *source, char *text)
 {
     if (!text) return;
-    if (source->retired_count == source->retired_capacity) {
-        size_t capacity = source->retired_capacity
-            ? source->retired_capacity * 2 : 4;
-        source->retired = core_realloc(source->retired,
-                                       capacity * sizeof(char *));
-        source->retired_capacity = capacity;
-    }
-    source->retired[source->retired_count++] = text;
+    core_list_push(source->retired, text);
 }
 
 static void
 truncate_lines(parse_source_t *source, size_t offset)
 {
-    while (source->line_count > 1
-           && source->line_starts[source->line_count - 1] > offset)
-        source->line_count--;
-    size_t start = source->line_starts[source->line_count - 1];
+    while (source->line_starts.len > 1
+           && source->line_starts.data[source->line_starts.len - 1] > offset)
+        source->line_starts.len--;
+    size_t start = source->line_starts.data[source->line_starts.len - 1];
     if (source->lines_scanned > start) source->lines_scanned = start;
 }
 
@@ -309,13 +301,7 @@ extend_lines(parse_source_t *source, const char *text, size_t limit)
             continue;
         }
         if (!line_terminator(cp)) continue;
-        if (source->line_count == source->line_capacity) {
-            source->line_capacity *= 2;
-            source->line_starts = core_realloc(
-                source->line_starts,
-                source->line_capacity * sizeof(uint32_t));
-        }
-        source->line_starts[source->line_count++] = pos;
+        core_list_push(source->line_starts, pos);
     }
     if (pos > source->lines_scanned) source->lines_scanned = pos;
 }
@@ -337,15 +323,15 @@ parse_source_position(uint32_t id, size_t offset, uint32_t *line,
     if (source->lines_scanned < offset) extend_lines(source, text, offset);
 
     size_t low = 0;
-    size_t high = source->line_count;
+    size_t high = source->line_starts.len;
     while (high - low > 1) {
         size_t mid = low + (high - low) / 2;
-        if (source->line_starts[mid] <= offset) low = mid;
+        if (source->line_starts.data[mid] <= offset) low = mid;
         else high = mid;
     }
 
     uint32_t count = 1;
-    uint32_t pos = source->line_starts[low];
+    uint32_t pos = source->line_starts.data[low];
     while (pos < offset) {
         if (unicode_utf8_decode(text, (uint32_t)length, &pos) < 0) pos++;
         count++;

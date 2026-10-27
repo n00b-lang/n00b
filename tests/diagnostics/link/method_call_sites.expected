@@ -1,0 +1,14 @@
+tests/diagnostics/link/method_call_sites.n:14:26: error N00B-T0001: `scale` takes 1 argument, but this call passes 2
+  tests/diagnostics/link/method_call_sites.n:2:10: note: `scale` is declared here
+  help: remove the extra argument
+tests/diagnostics/link/method_call_sites.n:18:12: error N00B-T0002: `scale` takes 1 argument, but this call passes 0
+  tests/diagnostics/link/method_call_sites.n:2:10: note: `scale` is declared here
+tests/diagnostics/link/method_call_sites.n:22:28: error N00B-T0005: parameter 1 (`by`) of `scale` is `int`, but this argument is `string`
+  tests/diagnostics/link/method_call_sites.n:2:10: note: `scale` is declared here
+tests/diagnostics/link/method_call_sites.n:26:20: error N00B-T0001: `scale` takes 1 argument, but this call passes 2
+  tests/diagnostics/link/method_call_sites.n:9:6: note: `scale` is declared here
+  help: remove the extra argument
+tests/diagnostics/link/method_call_sites.n:27:9: error N00B-T0002: `scale` takes 1 argument, but this call passes 0
+  tests/diagnostics/link/method_call_sites.n:9:6: note: `scale` is declared here
+tests/diagnostics/link/method_call_sites.n:28:22: error N00B-T0005: parameter 1 (`by`) of `scale` is `int`, but this argument is `string`
+  tests/diagnostics/link/method_call_sites.n:9:6: note: `scale` is declared here

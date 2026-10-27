@@ -1,0 +1,386 @@
+N00B_DIAG(SYNTAX_UNEXPECTED_TOKEN, "N00B-P0001", ERROR,
+    "a token appears where the grammar does not allow it",
+    "The parser reached a token that cannot continue the construct it was\n"
+    "reading. The message names the token, the construct, and what could\n"
+    "have appeared instead. Check for a missing operator, comma or bracket\n"
+    "just before the token, for example `let x = 1 2` needs `1 + 2`.")
+N00B_DIAG(SYNTAX_UNEXPECTED_END, "N00B-P0002", ERROR,
+    "the file ends in the middle of a construct",
+    "The file ended while a declaration, statement or expression was still\n"
+    "incomplete. Finish the construct the message names, for example by\n"
+    "adding the missing expression after `=`.")
+N00B_DIAG(SYNTAX_UNCLOSED_DELIMITER, "N00B-P0003", ERROR,
+    "a `{`, `(` or `[` is never closed",
+    "Every opening bracket needs a matching closing bracket. The message\n"
+    "points at the bracket that is still open when the file ends. When a\n"
+    "closing `}` lines up with an outer block instead of its own, the inner\n"
+    "block is usually the one missing its `}`.")
+N00B_DIAG(SYNTAX_UNMATCHED_CLOSER, "N00B-P0004", ERROR,
+    "a closing bracket has no matching opening bracket",
+    "A `}`, `)` or `]` appears without an open bracket of the same kind\n"
+    "before it, or while a different kind of bracket is still open. Remove\n"
+    "the stray bracket or add the opening bracket it was meant to close.")
+N00B_DIAG(SYNTAX_UNKNOWN_KEYWORD, "N00B-P0005", ERROR,
+    "a statement starts with a misspelled keyword",
+    "A statement begins with a name that is close to a keyword, followed by\n"
+    "something that cannot follow a name. This is usually a typo such as\n"
+    "`fucn main()` for `func main()`.")
+N00B_DIAG(SYNTAX_BLANK_LINE_IN_STATEMENT, "N00B-P0006", ERROR,
+    "a statement continues across a blank line",
+    "A statement may continue onto the next line, but a blank line always\n"
+    "ends it. The statement before the blank line is incomplete. Finish it\n"
+    "on its own lines, or remove the blank line.")
+N00B_DIAG(SYNTAX_COMMENT_IN_STATEMENT, "N00B-P0007", ERROR,
+    "a statement continues past a line with a comment",
+    "A line that carries a comment cannot be continued on the next line.\n"
+    "Finish the statement on the commented line, or move the comment.")
+N00B_DIAG(SYNTAX_UNEXPECTED_INDENT, "N00B-P0008", ERROR,
+    "a line is indented where no block starts",
+    "Indentation opens a block only after a `:` at the end of a line.\n"
+    "Indent the line like the statement before it, or start a block.")
+N00B_DIAG(SYNTAX_MISPLACED_PASS, "N00B-P0009", ERROR,
+    "`pass` appears somewhere other than an empty body",
+    "`pass` stands for an empty body of a block, case branch, context,\n"
+    "package or union. It cannot appear next to other statements or inside\n"
+    "an expression.")
+N00B_DIAG(SYNTAX_COMPTIME_BLOCK, "N00B-P0010", ERROR,
+    "`comptime` is used as a block keyword",
+    "`comptime` is a function that reports whether code runs at build time.\n"
+    "Write `if comptime() { ... } else { ... }` instead of `comptime { }`.")
+N00B_DIAG(LEX_UNTERMINATED_STRING, "N00B-L0001", ERROR,
+    "a string or character literal is not closed",
+    "A quoted literal must end with its closing quote on the same line.\n"
+    "Add the missing quote, or write a line break inside the string as\n"
+    "`\\n`.")
+N00B_DIAG(LEX_UNTERMINATED_COMMENT, "N00B-L0002", ERROR,
+    "a block comment is not closed",
+    "A comment that starts with `/*` must end with `*/`. The file ended\n"
+    "before the comment was closed.")
+N00B_DIAG(LEX_INVALID_ESCAPE, "N00B-L0003", ERROR,
+    "a string contains an escape sequence that does not exist",
+    "Valid escapes are `\\a`, `\\b`, `\\f`, `\\n`, `\\r`, `\\t`, `\\v`, `\\0`,\n"
+    "`\\\\`, `\\\"`, `\\'`, `\\xHH`, `\\uHHHH` and `\\UHHHHHHHH`. Write a literal\n"
+    "backslash as `\\\\`.")
+N00B_DIAG(LEX_MALFORMED_NUMBER, "N00B-L0004", ERROR,
+    "a number literal is malformed",
+    "A number is digits with optional `_` separators, a decimal point and\n"
+    "an exponent, or `0x` followed by hexadecimal digits. Letters directly\n"
+    "after the digits are not allowed: write `12 abc`, not `12abc`.")
+N00B_DIAG(LEX_IDENTIFIER_NOT_NFC, "N00B-L0005", ERROR,
+    "an identifier is not in Unicode normalization form C",
+    "Identifiers must be written in NFC so that names that look the same\n"
+    "are the same. The message shows the normalized spelling to use.")
+N00B_DIAG(LEX_IDENTIFIER_SCRIPT, "N00B-L0006", ERROR,
+    "an identifier mixes writing systems or uses a disallowed character",
+    "An identifier may not combine letters from different scripts, contain\n"
+    "emoji, or contain invalid UTF-8. Rename it using one script.")
+N00B_DIAG(LEX_TAB_INDENT, "N00B-L0007", ERROR,
+    "a line is indented with tabs or with a mix of tabs and spaces",
+    "n00b indents with spaces only. Replace the tabs with spaces.")
+N00B_DIAG(LEX_INCONSISTENT_DEDENT, "N00B-L0008", ERROR,
+    "a line is dedented to a level no enclosing block uses",
+    "When a line is indented less than the one before it, its indentation\n"
+    "must match an enclosing block exactly. Line it up with that block.")
+N00B_DIAG(LEX_UNEXPECTED_CHARACTER, "N00B-L0009", ERROR,
+    "the source contains a character that starts no token",
+    "The character cannot begin any name, number, operator or literal.\n"
+    "Remove it, or put it inside a string literal.")
+N00B_DIAG(LEX_CHARACTER_LITERAL_LENGTH, "N00B-L0010", ERROR,
+    "a character literal does not hold exactly one character",
+    "A literal in single quotes such as `'a'` holds one character. Use\n"
+    "double quotes for a string.")
+N00B_DIAG(LEX_BIDI_CONTROL, "N00B-L0011", ERROR,
+    "the source contains an invisible bidirectional control character",
+    "Bidirectional control characters can make code display differently\n"
+    "from how it compiles, so they are not allowed in source text. A string\n"
+    "literal can write one as an escape such as `\\u202E`.")
+N00B_DIAG(LEX_BIDI_CONTROL_IN_FENCE, "N00B-L0012", WARNING,
+    "a fenced text block contains an invisible bidirectional control",
+    "The fenced block keeps the character, but it can make the text display\n"
+    "differently from its contents.")
+N00B_DIAG(LEX_UNTERMINATED_FENCE, "N00B-L0013", ERROR,
+    "a fenced text block is not closed",
+    "A fenced block that starts with `[---` must end with a matching\n"
+    "closing fence before the end of the file.")
+N00B_DIAG(LEX_INVALID_TOKEN, "N00B-L0014", ERROR,
+    "the source contains text that forms no valid token",
+    "The text cannot be read as a name, number, operator or literal. The\n"
+    "message describes what is wrong with it.")
+N00B_DIAG(LEX_SOURCE_WARNING, "N00B-L0015", WARNING,
+    "the source contains text that is accepted but discouraged",
+    "The message describes the problem. The program still compiles.")
+N00B_DIAG(SYNTAX_MIXED_SPELLING, "N00B-P0011", WARNING,
+    "a file spells the same construct in two different ways",
+    "n00b accepts several spellings for some constructs, such as `{ }` or\n"
+    "`:` with indentation for blocks, and `&&` or `and`. Within one file,\n"
+    "pick one spelling. `--syntax-preference CLASS=SPELLING` sets the\n"
+    "preferred one, and `--no-syntax-warnings` turns these warnings off.")
+N00B_DIAG(SYNTAX_NONPREFERRED_SPELLING, "N00B-P0012", WARNING,
+    "a construct uses a spelling other than the preferred one",
+    "The file consistently uses a spelling that is not the preferred one.\n"
+    "Use the suggested spelling, or set your preference with\n"
+    "`--syntax-preference CLASS=SPELLING`.")
+N00B_DIAG(COMPILE_ERROR_CALLED, "N00B-P0013", ERROR,
+    "a `compile_error` call was reached while compiling",
+    "`compile_error(\"message\")` stops the build with your message when the\n"
+    "compiler evaluates it, usually inside a `when` branch that rejects an\n"
+    "unsupported configuration.")
+N00B_DIAG(COMPILE_WARNING_CALLED, "N00B-P0014", WARNING,
+    "a `compile_warning` call was reached while compiling",
+    "`compile_warning(\"message\")` prints your message as a warning when the\n"
+    "compiler evaluates it. The build continues.")
+N00B_DIAG(COMPTIME_EXPRESSION_FORM, "N00B-P0015", ERROR,
+    "an expression that is evaluated while compiling uses a form it cannot",
+    "`when` conditions and other compile-time expressions may use literals,\n"
+    "`const` names, compile-time functions such as `target_os()`, and\n"
+    "arithmetic, comparison and logical operators. Member access, indexing,\n"
+    "casts, references and literal modifiers are not available there.")
+N00B_DIAG(COMPTIME_INTEGER_RANGE, "N00B-P0016", ERROR,
+    "an integer in a compile-time expression is out of range",
+    "Compile-time integers are 128-bit signed values. Use a smaller value.")
+N00B_DIAG(COMPTIME_FLOAT_RANGE, "N00B-P0017", ERROR,
+    "a floating-point number in a compile-time expression is out of range",
+    "Compile-time floating-point values are 64-bit. Use a value that fits.")
+N00B_DIAG(COMPTIME_AMBIGUOUS_NAME, "N00B-P0018", ERROR,
+    "a name in a compile-time expression refers to more than one module",
+    "Several imported modules provide a `const` or module with this name.\n"
+    "Qualify the name with its module path, for example `config.DEBUG`.")
+N00B_DIAG(COMPTIME_NOT_CONST, "N00B-P0019", ERROR,
+    "a compile-time expression uses a value that is not a compile-time const",
+    "Only `const` declarations whose initializers are themselves\n"
+    "compile-time expressions can be used in `when` conditions and other\n"
+    "compile-time expressions. Variables cannot.")
+N00B_DIAG(COMPTIME_BUILTIN_ARITY, "N00B-P0020", ERROR,
+    "a compile-time function is called with the wrong number of arguments",
+    "Functions such as `target_os()` take no arguments, and functions such\n"
+    "as `preproc_value(\"NAME\")` take exactly one. Check the call.")
+N00B_DIAG(COMPTIME_BUILTIN_ARGUMENT, "N00B-P0021", ERROR,
+    "a compile-time function needs a string argument",
+    "`compile_error`, `compile_warning`, `preproc_value` and similar\n"
+    "functions take one string literal or string `const`.")
+N00B_DIAG(COMPTIME_UNKNOWN_FUNCTION, "N00B-P0022", ERROR,
+    "a compile-time expression calls a function that is not available there",
+    "Only the compile-time functions, such as `target_os()`, `target_arch()`\n"
+    "and `preproc_value()`, can be called in `when` conditions and other\n"
+    "compile-time expressions.")
+N00B_DIAG(COMPTIME_TARGET_QUERY_UNAVAILABLE, "N00B-P0023", ERROR,
+    "a compile-time target query has no answer for the current target",
+    "Some target queries are only defined for some platforms. Guard the\n"
+    "call with a `when` on `target_os()` or `target_arch()`.")
+N00B_DIAG(COMPTIME_NO_SOURCE_DIR, "N00B-P0024", ERROR,
+    "`source_dir()` is used in a module that has no source file",
+    "Generated modules have no directory. Use `source_dir()` only in modules\n"
+    "that come from files.")
+N00B_DIAG(COMPTIME_UNDEFINED_VALUE, "N00B-P0025", ERROR,
+    "`preproc_value` asks for a value that was not supplied",
+    "Supply the value on the command line with `--define NAME=VALUE`, or\n"
+    "check `preproc_defines(\"NAME\")` before reading it.")
+N00B_DIAG(COMPTIME_DEFINE_RANGE, "N00B-P0026", ERROR,
+    "a value supplied with `--define` is out of range",
+    "Integers supplied with `--define` must fit in 128 bits and\n"
+    "floating-point values in 64 bits.")
+N00B_DIAG(COMPTIME_OPERAND_TYPE, "N00B-P0027", ERROR,
+    "a compile-time operator is applied to values of the wrong type",
+    "Arithmetic needs numbers, logical operators need `bool`, and both sides\n"
+    "of a comparison must have the same type.")
+N00B_DIAG(COMPTIME_OVERFLOW, "N00B-P0028", ERROR,
+    "compile-time arithmetic overflows",
+    "Compile-time integer arithmetic is checked 128-bit arithmetic; the\n"
+    "result does not fit, or the expression divides by zero.")
+N00B_DIAG(WHEN_CONDITION_NOT_BOOL, "N00B-P0029", ERROR,
+    "a `when` condition is not a `bool`",
+    "`when` selects code while compiling, so its condition must be a\n"
+    "compile-time `bool`, for example `when target_os() == \"linux\" { }`.")
+N00B_DIAG(MODULE_LITERAL_PLACEMENT, "N00B-P0030", ERROR,
+    "a module literal is used somewhere other than a module-level `const`",
+    "A module literal such as an `'ffi` block generates a module, so it can\n"
+    "only initialize one `const` declared at module level:\n"
+    "`const zlib = 'ffi[--- ... ---]`.")
+N00B_DIAG(LITMOD_UNKNOWN_KIND, "N00B-P0031", ERROR,
+    "a literal modifier names a literal kind that does not exist",
+    "A literal modifier is declared as `<kind> litmod <name>`, where kind is\n"
+    "a literal kind such as `string`, `int`, `float`, `list` or `record`.")
+N00B_DIAG(LITMOD_DUPLICATE, "N00B-P0032", ERROR,
+    "a module declares the same literal modifier twice",
+    "Each module may declare one literal modifier per name and literal kind.\n"
+    "Remove or rename one of the declarations.")
+N00B_DIAG(INVALID_SYNTAX_PREFERENCE, "N00B-P0033", ERROR,
+    "a `--syntax-preference` value is not a known class and spelling",
+    "Write `--syntax-preference CLASS=SPELLING`, for example\n"
+    "`--syntax-preference blocks={}`.")
+N00B_DIAG(IMPORT_NOT_FOUND, "N00B-M0001", ERROR,
+    "an imported module cannot be found",
+    "The module is not in the current directory, in a package root on\n"
+    "`N00B_PATH`, or in the toolchain library. The message lists the places\n"
+    "searched. Check the spelling, or add the directory that holds it to\n"
+    "`N00B_PATH`.")
+N00B_DIAG(IMPORT_UNREADABLE, "N00B-M0002", ERROR,
+    "an imported module exists but cannot be read",
+    "The file was found, but reading it failed. The message gives the\n"
+    "reason, such as missing permission.")
+N00B_DIAG(IMPORT_UNSUPPORTED_LOCATOR, "N00B-M0003", ERROR,
+    "an import uses a source locator scheme this compiler does not support",
+    "Import modules by name, such as `import os.path`, or by a supported\n"
+    "locator.")
+N00B_DIAG(IMPORT_OWN_NAMESPACE, "N00B-M0004", ERROR,
+    "a package imports itself through its external name",
+    "Inside a package, import its modules by their internal names. The\n"
+    "external name is for other packages.")
+N00B_DIAG(IMPORT_ALIAS_CONFLICT, "N00B-M0005", ERROR,
+    "an `import ... as` name is already used for another module",
+    "Each `as` name in a module must refer to one module. Choose a\n"
+    "different name.")
+N00B_DIAG(PACKAGE_MULTIPLE_MANIFESTS, "N00B-M0006", ERROR,
+    "more than one manifest declares the same package",
+    "A package is declared by exactly one `package` block. Remove the extra\n"
+    "declaration.")
+N00B_DIAG(PACKAGE_PARENT_MANIFEST_MISSING, "N00B-M0007", ERROR,
+    "a subpackage is declared without a manifest for its parent package",
+    "Declaring package `a.b` requires a manifest that declares package `a`.")
+N00B_DIAG(IMPORT_LIBRARY_SOURCE, "N00B-M0008", ERROR,
+    "a module inside another package is imported directly",
+    "Another package's modules are reached through its manifest. Import\n"
+    "the package name the manifest exports, not the source module.")
+N00B_DIAG(PACKAGE_EXPORTS_NOTHING, "N00B-M0009", ERROR,
+    "an imported package exports nothing and has no subpackages",
+    "Importing the package would give access to nothing. Add `export`\n"
+    "statements to its `package` block.")
+N00B_DIAG(PACKAGE_SINGLE_SUBPACKAGE, "N00B-M0010", WARNING,
+    "a package exports nothing and holds a single subpackage",
+    "The package only wraps one subpackage. Import the subpackage directly,\n"
+    "or export names from the package.")
+N00B_DIAG(IMPORT_PLACEMENT, "N00B-M0011", ERROR,
+    "an `import` appears inside a block",
+    "Imports are allowed at module level, or directly inside a `when`\n"
+    "branch at module level.")
+N00B_DIAG(IMPORT_CYCLE_DEPENDENCY, "N00B-M0012", WARNING,
+    "a compile-time value depends on a module that is part of an import cycle",
+    "Modules in an import cycle are processed in a fixed order, so a\n"
+    "compile-time value read from one of them may not be the final one.\n"
+    "Move the value to a module outside the cycle.")
+N00B_DIAG(NAME_SHADOWS_PACKAGE, "N00B-M0013", ERROR,
+    "a declaration uses a name that refers to a package this module uses",
+    "Rename the declaration, or import the package under another name with\n"
+    "`import ... as`.")
+N00B_DIAG(MANIFEST_OUTSIDE_PACKAGE, "N00B-M0014", ERROR,
+    "a `package` block appears outside a source package",
+    "Manifests are modules inside a source package directory; a module\n"
+    "outside one cannot declare packages.")
+N00B_DIAG(PACKAGE_DECLARED_TWICE, "N00B-M0015", ERROR,
+    "a manifest declares the same package more than once",
+    "Merge the `package` blocks into one.")
+N00B_DIAG(EXPORT_FILESYSTEM_RENAME, "N00B-M0016", ERROR,
+    "an export renames a module that comes from the filesystem",
+    "Modules found as files keep their file names. Export them without\n"
+    "`as`.")
+N00B_DIAG(EXPORT_PRIVATE, "N00B-M0017", ERROR,
+    "a manifest exports a private declaration",
+    "Only declarations visible outside their module can be exported.")
+N00B_DIAG(EXPORT_NOT_FOUND, "N00B-M0018", ERROR,
+    "an `export` names something that does not exist",
+    "The exported name must be a module or declaration of this package.\n"
+    "Check the spelling.")
+N00B_DIAG(EXPORT_DUPLICATE, "N00B-M0019", ERROR,
+    "the same name is exported twice to the same destination",
+    "Remove the repeated `export`.")
+N00B_DIAG(EXPORT_FOREIGN, "N00B-M0020", ERROR,
+    "a manifest exports a declaration from another package",
+    "A manifest can only export declarations of its own package.")
+N00B_DIAG(PACKAGE_OTHER_OWNER, "N00B-M0021", WARNING,
+    "a manifest declares a package outside its own package",
+    "A manifest usually declares its own package and its subpackages.\n"
+    "Declaring another package here is allowed, but easy to miss.")
+N00B_DIAG(EXTERNAL_NAME_AMBIGUOUS, "N00B-M0022", ERROR,
+    "a package's external name is both an export and a subpackage",
+    "In a package's external view, `p.x` must mean one thing. The manifest\n"
+    "exports `x` from package `p` and also declares package `p.x`. Rename\n"
+    "the export or the subpackage.")
+N00B_DIAG(MODULE_DIRECTORY_AMBIGUOUS, "N00B-M0023", ERROR,
+    "a module file and a directory have the same name",
+    "A package's names follow its files, so `x.n` next to a directory `x/`\n"
+    "makes `x` mean two things. Rename the module or the directory.")
+N00B_DIAG(INPUT_NOT_FOUND, "N00B-B0001", ERROR,
+    "a module or file named on the command line cannot be found",
+    "Pass a path to a `.n` file or the name of a module on the search path.\n"
+    "The message lists the places searched.")
+N00B_DIAG(INPUT_UNREADABLE, "N00B-B0002", ERROR,
+    "a file named on the command line cannot be read",
+    "The path exists but cannot be read as a source file, for example\n"
+    "because it is a directory or permission is missing.")
+N00B_DIAG(BUILD_EXTRA_OPERANDS, "N00B-B0003", ERROR,
+    "`n00b build` is given more than one module or file",
+    "`n00b build` compiles one program. Build each program separately.")
+N00B_DIAG(INVALID_NATIVE_ROOT, "N00B-B0004", ERROR,
+    "a `--native-root NAME=SYMBOL` alias cannot be registered",
+    "The alias needs a qualified function name and a symbol name, and each\n"
+    "name may be aliased only once.")
+N00B_DIAG(OPTION_REQUIRES_LIBRARY, "N00B-B0005", ERROR,
+    "`--emit-interface` is used without the `library` command",
+    "Semantic interfaces are produced by `n00b library --emit-interface`.")
+N00B_DIAG(INTERFACE_UNREADABLE, "N00B-B0006", ERROR,
+    "a `--link-interface` file cannot be loaded",
+    "The file is missing, unreadable, or not a semantic interface written\n"
+    "by this toolchain.")
+N00B_DIAG(INTERFACE_WRITE_FAILED, "N00B-B0007", ERROR,
+    "a semantic interface file cannot be written",
+    "Check that the directory exists and is writable.")
+N00B_DIAG(DUPLICATE_INPUT_MODULE, "N00B-B0008", ERROR,
+    "two command-line inputs name the same module",
+    "Each input must be a different module. Remove one of them.")
+N00B_DIAG(INVALID_INPUT_NAME, "N00B-B0009", ERROR,
+    "a command-line input is neither a file path nor a module name",
+    "Pass a path to a `.n` file, or a dotted module name such as\n"
+    "`app.main`.")
+N00B_DIAG(WORKING_DIRECTORY_UNAVAILABLE, "N00B-B0010", ERROR,
+    "the current directory cannot be determined",
+    "n00b resolves modules relative to the current directory. It may have\n"
+    "been removed, or permission to read it is missing.")
+N00B_DIAG(PACKAGE_SCAN_FAILED, "N00B-B0011", ERROR,
+    "the package directories cannot be scanned",
+    "n00b lists the source files under each package root before building.\n"
+    "A directory on the search path could not be read.")
+N00B_DIAG(BUILD_TIME_RUN_FAILED, "N00B-B0012", ERROR,
+    "the program run that computes compile-time values failed",
+    "Programs that use `comptime()` or build-time constants are first built\n"
+    "and run to compute those values. That run failed; its output appears\n"
+    "above.")
+N00B_DIAG(FMT_OUTPUT_ARGUMENTS, "N00B-B0013", ERROR,
+    "`n00b fmt --output` is used with several inputs or with `--check`",
+    "`--output` writes one formatted file, so it takes exactly one input and\n"
+    "cannot be combined with `--check`.")
+N00B_DIAG(FMT_WRITE_FAILED, "N00B-B0014", ERROR,
+    "`n00b fmt` cannot write the formatted file",
+    "Check that the file or directory is writable.")
+N00B_DIAG(CONFLICTING_CPU_OPTIONS, "N00B-B0015", ERROR,
+    "`--native` and `--generic` are both given",
+    "`--native` tunes code for this machine's processor and `--generic`\n"
+    "for any processor of the architecture. Choose one.")
+N00B_DIAG(JOBS_OUT_OF_RANGE, "N00B-B0016", ERROR,
+    "`--jobs` is outside 0 to 128",
+    "`--jobs N` sets the number of worker threads; 0 picks a default.")
+N00B_DIAG(TOOLCHAIN_GRAMMAR_UNAVAILABLE, "N00B-B0017", ERROR,
+    "the toolchain's n00b grammar cannot be loaded",
+    "The installed toolchain is incomplete or damaged. Reinstall it, or\n"
+    "check `N00B_TOOLCHAIN` with `n00b env`.")
+N00B_DIAG(FFI_LITERAL_NOT_FOUND, "N00B-B0018", ERROR,
+    "`--show-ffi` names an `'ffi` literal that does not exist",
+    "Pass the name of a `const` initialized with an `'ffi` literal.")
+N00B_DIAG(HEADER_WRITE_FAILED, "N00B-B0019", ERROR,
+    "the generated C header cannot be written",
+    "Check that the output directory exists and is writable.")
+N00B_DIAG(COMMAND_NOT_IMPLEMENTED, "N00B-B0020", ERROR,
+    "the command is not implemented yet",
+    "The command parsed its inputs but has no implementation yet.")
+N00B_DIAG(BUILD_FAILED, "N00B-B0021", ERROR,
+    "the build stopped because of the errors above",
+    "Fix the errors reported before this line and build again.")
+N00B_DIAG(GENERIC_SPECIALIZATION_FAILED, "N00B-B0022", ERROR,
+    "a generic function cannot be specialized for the types it is used with",
+    "Building a program makes a copy of each generic function for every set\n"
+    "of types it is called with. This fails when the set never ends, for\n"
+    "example when a generic function calls itself with a growing type.")
+N00B_DIAG(PATH_ENTRY_OUTSIDE_CWD, "N00B-B0024", ERROR,
+    "a relative `N00B_PATH` entry points outside the current directory",
+    "Relative `N00B_PATH` entries are resolved against the current directory\n"
+    "and must stay inside it, so a build does not depend on where it starts.\n"
+    "Use an absolute path for directories elsewhere.")

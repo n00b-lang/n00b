@@ -1,0 +1,24 @@
+tests/diagnostics/lower/assign_once.n:3:5: error: `a` can be assigned only once, but this can assign it a second time
+
+    3 |     a = 2
+      |     ^^^^^
+
+  it may already be assigned here:
+
+    2 |     let a = 1
+      |         ^^^^^
+
+tests/diagnostics/lower/assign_once.n:12:5: error: `a` can be assigned only once, but this can assign it a second time
+
+    12 |     a = 2
+       |     ^^^^^
+
+  it may already be assigned here:
+
+    10 |         a = 1
+       |         ^^^^^
+
+  `a` is declared here:
+
+     8 |     let a: int
+       |         ^

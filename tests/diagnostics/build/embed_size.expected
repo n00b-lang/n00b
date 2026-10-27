@@ -1,0 +1,5 @@
+panic: tests/diagnostics/build/embed_u16.bin is 6 bytes, not a whole number of 4-byte u32 elements
+  --> tests/diagnostics/build/embed_size.n:1:25
+backtrace:
+error N00B-B0012: the build-time program exited with status 101
+  note: the program is run while building to compute compile-time values; its output appears above

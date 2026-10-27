@@ -1,5 +1,5 @@
 #include "core.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "lib/work_queue.h"
 #include "harness.h"
 

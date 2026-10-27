@@ -1,0 +1,5 @@
+panic: assertion `n > 10` failed (`n` is 2)
+  --> tests/diagnostics/runtime/failures.n:21:12
+backtrace:
+  at checked (tests/diagnostics/runtime/failures.n:21:12)
+  at run (tests/diagnostics/runtime/failures.n:105:17)

@@ -30,9 +30,33 @@ bool parse_pwz_parse_prefix(parse_pwz_parser_t   *p,
 
 parse_tree_t *parse_pwz_get_tree(parse_pwz_parser_t *p);
 
+bool parse_pwz_parse_range(parse_pwz_parser_t   *p,
+                           parse_token_stream_t *ts,
+                           int32_t               first,
+                           int32_t               end);
+
 int32_t parse_pwz_error_pos(parse_pwz_parser_t *p);
 bool parse_pwz_error_unterminated(parse_pwz_parser_t *p);
 bool parse_pwz_error_commented(parse_pwz_parser_t *p);
+
+#define PARSE_PWZ_EXPECTED_DEPTH 64
+
+typedef struct {
+    core_string_t rule;
+    int32_t       start;
+} parse_pwz_rule_frame_t;
+
+typedef struct {
+    int32_t                tid;
+    core_string_t          spelling;
+    parse_pwz_rule_frame_t frames[PARSE_PWZ_EXPECTED_DEPTH];
+    uint8_t                frame_count;
+} parse_pwz_expected_t;
+
+bool parse_pwz_collect_expected(parse_pwz_parser_t *p, int32_t pos);
+size_t parse_pwz_expected_count(const parse_pwz_parser_t *p);
+const parse_pwz_expected_t *parse_pwz_expected_at(const parse_pwz_parser_t *p,
+                                                  size_t index);
 
 void parse_pwz_set_disambiguator(parse_pwz_parser_t    *p,
                                parse_pwz_disambig_fn  cb,

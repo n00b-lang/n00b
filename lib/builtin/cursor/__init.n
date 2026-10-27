@@ -1,8 +1,0 @@
-import cursor
-
-package cursor {
-    export cursor.Cursor
-    export cursor.iter
-    export cursor.next
-    export cursor.cleanup
-}

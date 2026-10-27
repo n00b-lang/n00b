@@ -299,8 +299,8 @@ test_nonterminal_lowering_callbacks(void)
     check("an absent nonterminal callback reports a lowering error",
           missing_registered && missing.status == IR_LOWER_FAILED
               && ir_diags_count(diagnostics) == before_missing + 1
-              && missing_diagnostic && missing_diagnostic->message.data
-              && core_string_find(missing_diagnostic->message,
+              && missing_diagnostic && ir_diag_item(diagnostics, missing_diagnostic)->message.data
+              && core_string_find(ir_diag_item(diagnostics, missing_diagnostic)->message,
                                   S("absent_nt")) >= 0);
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
@@ -385,7 +385,8 @@ main(void)
           "<callee> @emit(\"reference\") ::= \"f\"\n"
           "<argument> @emit(\"reference\") ::= \"a\"\n"
           "<ret> @emit(\"return\", $1) ::= \"r\" <literal>\n"
-          "<publish> @scope(\"publish\") ::= <left>\n");
+          "<publish> @scope(\"publish\") ::= <left>\n"
+          "<discard> @discards($0) ::= <left> \";\"\n");
     parse_grammar_t *grammar = parse_grammar_new();
     bool grammar_loaded = parse_bnf_load(
         grammar_text, CORE_STRING_STATIC("sum"), grammar);
@@ -770,6 +771,28 @@ main(void)
         : (ir_lower_result_t){.status = IR_LOWER_FAILED};
     check("a callback can publish a synthesized node value",
           published.status == IR_LOWER_VALUE && published.value == left);
+    parse_pwz_free(parser);
+    scan_token_stream_free(tokens);
+
+    ir_diags_t *discard_diags = ir_diags_new(ctx, nullptr);
+    ir_lower_context_t discard_context = lower;
+    discard_context.diagnostics = discard_diags;
+    bool parsed_discard = parse_lowering_fixture(
+        grammar, S("discard"), S("a;"), &parser, &tokens, &tree);
+    left_node = parsed_discard ? find_nonterminal(grammar, tree, S("left"))
+                               : nullptr;
+    parse_tree_set_sym(left_node, &left_symbol);
+    parse_tree_set_type(left_node, i32);
+    ir_lower_result_t discarded = left_node
+        ? ir_lower_tree(lowerer, &discard_context, grammar, tree)
+        : (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    const ir_diag_t *unused = ir_diags_at(discard_diags, 0);
+    check("a discarded non-call value reports that its result is unused",
+          discarded.status != IR_LOWER_FAILED
+              && ir_diags_count(discard_diags) == 1 && unused
+              && unused->code == IR_DIAG_UNUSED_RESULT);
+    produced[IR_DIAG_UNUSED_RESULT] = unused
+        && unused->code == IR_DIAG_UNUSED_RESULT;
     parse_pwz_free(parser);
     scan_token_stream_free(tokens);
 

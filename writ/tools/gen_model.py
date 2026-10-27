@@ -1,9 +1,7 @@
 import re
 import sys
 
-def_path, output_path = sys.argv[1], sys.argv[2]
-mode = sys.argv[3] if len(sys.argv) > 3 else ""
-extra_path = sys.argv[4] if len(sys.argv) > 4 else None
+def_path, mode, paths = sys.argv[1], sys.argv[2], sys.argv[3:]
 
 call = re.compile(r"^(WRIT_[A-Z]+)\((.*)\)\s*$")
 enums, views, order = [], {}, []
@@ -169,17 +167,27 @@ def json_text():
     return "\n".join(out)
 
 
-header = header_text()
+def current(path):
+    try:
+        with open(path, encoding="utf-8") as existing:
+            return existing.read()
+    except FileNotFoundError:
+        return None
+
+
+def write(path, text):
+    if current(path) != text:
+        with open(path, "w", encoding="utf-8") as out:
+            out.write(text)
+
+
 if mode == "--check":
-    with open(output_path, encoding="utf-8") as existing:
-        if existing.read() != header:
-            sys.exit(f"{output_path} is stale; regenerate it from {def_path}")
-elif mode == "--names":
-    with open(extra_path, "w", encoding="utf-8") as out:
-        out.write(names_text())
-elif mode == "--json":
-    with open(extra_path, "w", encoding="utf-8") as out:
-        out.write(json_text())
+    if current(paths[0]) != header_text():
+        sys.exit(f"{paths[0]} is stale; regenerate it from {def_path}")
+elif mode == "--header":
+    write(paths[0], header_text())
+elif mode == "--internal":
+    write(paths[0], names_text())
+    write(paths[1], json_text())
 else:
-    with open(output_path, "w", encoding="utf-8") as out:
-        out.write(header)
+    sys.exit("usage: gen_model.py DEF --check|--header HEADER | --internal NAMES JSON")

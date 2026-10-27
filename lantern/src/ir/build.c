@@ -136,10 +136,10 @@ static void bfail_as(B *b, ir_diagcode_t code, ir_span_t at,
         return;
     }
 
-    ir_diag_t *dg = ir_diag_begin(b->d, code, at, what);
+    ir_diag_t *dg = ir_diag_begin(b->d, code, at, IR_DETAIL(what));
 
     if (dg) {
-        ir_diag_message(dg, b->d, what);
+        ir_diag_message(dg, b->d, IR_DETAIL(what));
     }
 }
 
@@ -2808,12 +2808,11 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, core_string_t text, int32_t file,
                                  parse_token_endcol(token))
                   : ir_span_make(file, 0, 0, 1, 1, 1, 1);
         ir_diag_t *dg = ir_diag_begin(d, IR_DIAG_PARSE, span,
-                                      CORE_STRING_STATIC("here"));
+                                      IR_MESSAGE(HERE));
 
         if (dg) {
             ir_diag_message(dg, d,
-                            CORE_STRING_STATIC(
-                                "this is not a module; parsing stopped here"));
+                            IR_MESSAGE(NOT_A_MODULE));
         }
         parse_pwz_free(p);
         scan_token_stream_free(ts);
@@ -2833,11 +2832,10 @@ ir_module_t *ir_module_parse(ir_ctx_t *ctx, core_string_t text, int32_t file,
     if (!ir_typelang_install(w, g, b.types)) {
         ir_diag_t *dg = ir_diag_begin(
             d, IR_DIAG_INTERNAL, ir_span_make(file, 0, 0, 1, 1, 1, 1),
-            CORE_STRING_STATIC("here"));
+            IR_MESSAGE(HERE));
         if (dg) {
             ir_diag_message(dg, d,
-                            CORE_STRING_STATIC(
-                                "could not install typelang reducers"));
+                            IR_MESSAGE(TYPELANG_REDUCERS_FAILED));
         }
         parse_tree_walk_free(w);
         ir_typelang_lower_free(b.types);

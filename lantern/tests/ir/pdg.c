@@ -6,6 +6,8 @@
 #include "ir/pdg.h"
 #include "ir/text.h"
 #include "ir/doms.h"
+#include "ir/option_proof.h"
+#include "ir/summary.h"
 #include "ir/verify.h"
 #include "lib/buffer.h"
 #include "harness.h"
@@ -79,7 +81,7 @@ static bool told(run_t *r, core_string_t text)
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         const ir_diag_t *dg = ir_diags_at(r->d, i);
 
-        if (contains(dg->primary.label, text) || contains(dg->message, text)) {
+        if (contains(ir_diag_item(r->d, dg)->label, text) || contains(ir_diag_item(r->d, dg)->message, text)) {
             return true;
         }
     }
@@ -548,11 +550,11 @@ static void test_the_cdg_is_over_blocks(void)
         check("the nested-branch function parses", false);
         for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
             const ir_diag_t *diag = ir_diags_at(r->d, i);
-            core_string_t    msg  = diag->message.data ? diag->message
+            core_string_t    msg  = ir_diag_item(r->d, diag)->message.data ? ir_diag_item(r->d, diag)->message
                                                        : S("(no message)");
             printf("  parse diagnostic at %u:%u: %.*s\n",
-                   diag->primary.span.start_line,
-                   diag->primary.span.start_col,
+                   diag->span.start_line,
+                   diag->span.start_col,
                    (int)msg.u8_bytes, msg.data);
         }
         done(r);
@@ -707,6 +709,40 @@ static void test_where_the_other_three_live(void)
     done(r);
 }
 
+static void test_an_unproven_option_is_reported(void)
+{
+    run_t *r = load(MOD("  func @f(%o: Option[i32]) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %v: i32 = option.get %o\n"
+                        "      return %v\n"
+                        "  }\n"));
+
+    ir_check_option_proofs(r->m, r->d);
+    check("E040 an option read with no nil test before it is reported",
+          counted(r, IR_DIAG_UNPROVEN_OPTION) == 1
+              && told(r, S("may be nil here")));
+    done(r);
+}
+
+static void test_unbounded_recursion_is_reported(void)
+{
+    run_t *r = load(MOD("  func @f(%a: i32) -> i32 {\n"
+                        "    block entry:\n"
+                        "      %r: i32 = call @f, %a\n"
+                        "      return %r\n"
+                        "  }\n"));
+    ir_func_t      *f         = func_of(r);
+    ir_summaries_t *summaries = f ? ir_summaries_compute(&f, 1, nullptr)
+                                  : nullptr;
+
+    check("W041 a function that only returns through itself is reported",
+          summaries && ir_report_unbounded_recursion(summaries, f, r->d)
+              && counted(r, IR_DIAG_UNBOUNDED_RECURSION) == 1
+              && told(r, S("calls itself on every path")));
+    ir_summaries_free(summaries);
+    done(r);
+}
+
 static void test_every_analysis_diagnostic_has_a_place(void)
 {
     run_t *r = load(MOD("  func @f(%c: bool, %a: i32) -> i32 {\n"
@@ -734,8 +770,8 @@ static void test_every_analysis_diagnostic_has_a_place(void)
         check("the diagnostic has a code",
               ir_diag_code(dg->code).data != nullptr);
         check("and a span that names a place in the source",
-              dg->primary.span.file >= 0
-                  && dg->primary.span.start_line > 0);
+              dg->span.file >= 0
+                  && dg->span.start_line > 0);
     }
 
     core_string_t text = ir_diags_render_text(r->d, nullptr);
@@ -763,6 +799,8 @@ int main(void)
     test_use_before_definition_is_reported();
     test_unused_assignment_is_reported();
     test_where_the_other_three_live();
+    test_an_unproven_option_is_reported();
+    test_unbounded_recursion_is_reported();
     test_every_analysis_diagnostic_has_a_place();
 
     dump_produced_codes("produced-codes-pdg.txt", produced);

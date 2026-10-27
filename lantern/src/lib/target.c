@@ -49,6 +49,11 @@ bool core_target_profile(core_string_t triple, uint64_t enabled_features,
         profile.object_format = CORE_TARGET_OBJECT_MACH_O;
         profile.call_abi = CORE_TARGET_CALL_DARWIN_AARCH64;
     }
+    else if (core_string_eq(triple, CORE_STRING_STATIC("arm64-linux"))) {
+        profile.triple = CORE_STRING_STATIC("arm64-linux");
+        profile.object_format = CORE_TARGET_OBJECT_ELF;
+        profile.call_abi = CORE_TARGET_CALL_AAPCS64;
+    }
     else if (core_string_eq(triple, CORE_STRING_STATIC("x86_64-windows"))) {
         profile.triple = CORE_STRING_STATIC("x86_64-windows");
         profile.object_format = CORE_TARGET_OBJECT_COFF;
@@ -59,6 +64,22 @@ bool core_target_profile(core_string_t triple, uint64_t enabled_features,
     if (!core_target_validate(&profile)) return false;
     *out = profile;
     return true;
+}
+
+bool core_target_host(core_target_desc_t *out)
+{
+#if defined(__APPLE__) && defined(__aarch64__)
+    return core_target_profile(CORE_STRING_STATIC("arm64-macos"), 0, out);
+#elif defined(__linux__) && defined(__x86_64__)
+    return core_target_profile(CORE_STRING_STATIC("x86_64-linux"), 0, out);
+#elif defined(__linux__) && defined(__aarch64__)
+    return core_target_profile(CORE_STRING_STATIC("arm64-linux"), 0, out);
+#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
+    return core_target_profile(CORE_STRING_STATIC("x86_64-windows"), 0, out);
+#else
+    (void)out;
+    return false;
+#endif
 }
 
 static bool power_of_two(uint32_t value)

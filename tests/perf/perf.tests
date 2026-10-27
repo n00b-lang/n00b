@@ -1,0 +1,8 @@
+# name	program
+hello	hello.n
+alloc-records	alloc_records.n
+string-churn	string_churn.n
+deep-stack	deep_stack.n
+calls	calls.n
+containers	containers.n
+retained-graph	retained_graph.n

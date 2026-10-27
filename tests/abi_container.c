@@ -131,7 +131,7 @@ int main(void)
         !n00bb_abi_container_write(image, sizeof(image), &invalid,
                                    &entry, &schema, 1, false));
     invalid = authored;
-    invalid.key.target_id = N00BB_ABI_TARGET_X86_64_WINDOWS + 1;
+    invalid.key.target_id = N00BB_ABI_TARGET_ARM64_LINUX + 1;
     ok &= EXPECT("writer rejects unsupported target",
         !n00bb_abi_container_write(image, sizeof(image), &invalid,
                                    &entry, &schema, 1, false));

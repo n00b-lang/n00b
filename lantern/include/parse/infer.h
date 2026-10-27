@@ -39,6 +39,16 @@ typedef struct parse_infer_expr_t parse_infer_expr_t;
 typedef th_type *(*parse_infer_type_node_resolver_fn)(
     th_ctx *types, parse_grammar_t *grammar, parse_tree_t *node,
     void *context);
+typedef th_type *(*parse_infer_symbol_type_fn)(
+    th_ctx *types, parse_sym_entry_t *symbol, parse_tree_t *use,
+    th_type *declared, void *context);
+
+typedef struct {
+    parse_infer_type_node_resolver_fn type_node_resolver;
+    void *type_node_resolver_context;
+    parse_infer_symbol_type_fn symbol_type;
+    void *symbol_type_context;
+} parse_infer_hooks_t;
 
 struct parse_infer_expr_t {
     parse_infer_kind_t   kind;
@@ -73,7 +83,6 @@ th_type *parse_infer_eval(const parse_infer_expr_t *e,
                         th_ctx                 *tc,
                         parse_symtab_t           *st,
                         bool                   *ok);
-th_type *parse_infer_eval_with_type_node_resolver(
+th_type *parse_infer_eval_with_hooks(
     const parse_infer_expr_t *e, parse_visit_t *v, th_ctx *tc,
-    parse_symtab_t *st, parse_infer_type_node_resolver_fn resolver,
-    void *resolver_context, bool *ok);
+    parse_symtab_t *st, const parse_infer_hooks_t *hooks, bool *ok);

@@ -5,4 +5,23 @@ func twice(value: int) -> int {
 const answer: int = twice(21)
 
 require answer == 42
+
+var value: int
+var through_ref: int
+
+func read_value() -> int {
+    return value
+}
+
+func read_ref_value() -> int {
+    return (ref through_ref).__value
+}
+
+value = 7
+(ref through_ref).__value = 9
+let reader: Ref[() -> int] = ref read_value
+require reader.call() == 7
+let ref_reader: Ref[() -> int] = ref read_ref_value
+require ref_reader.call() == 9
+
 var written: i32 = __fd_write(1, "top")

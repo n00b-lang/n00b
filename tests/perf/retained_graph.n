@@ -1,0 +1,42 @@
+record Node {
+    value: int
+    next:  Ref[Node]?
+}
+
+var sink: Ref[Node]? = nil
+
+func build(length: int) -> Ref[Node]? {
+    var head: Ref[Node]? = nil
+    var i = 0
+    while i < length {
+        var node: Node = (value = i, next = head)
+        head = ref node
+        i += 1
+    }
+    return head
+}
+
+func sum(head: Ref[Node]?) -> int {
+    var total = 0
+    var cursor: Ref[Node]? = head
+    while cursor != nil {
+        let node: Ref[Node] = cursor.get()
+        total += node.value
+        cursor = node.next
+    }
+    return total
+}
+
+func run(live: int, churn: int) -> int {
+    let kept: Ref[Node]? = build(live)
+    var i = 0
+    while i < churn {
+        var made: Node = (value = i, next = nil)
+        sink = ref made
+        i += 1
+    }
+    return sum(kept)
+}
+
+let scale = cast[int](__os_arg_count())
+require run(1000000 * scale, 20000000) == 1000000 * scale * 999999 / 2

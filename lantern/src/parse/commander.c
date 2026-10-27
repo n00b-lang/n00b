@@ -56,6 +56,7 @@ typedef struct {
     parse_cmdr_arg_type_t value_type;
     bool                takes_value;
     bool                repeatable;
+    bool                hidden;
     core_string_t        doc;
     int64_t             terminal_id;
 } parse_cmdr_flag_spec_t;
@@ -70,6 +71,7 @@ typedef struct {
 typedef struct parse_cmdr_command parse_cmdr_command_t;
 
 core_list_decl(parse_cmdr_arg_t);
+core_list_decl(parse_cmdr_error_t);
 core_list_decl(parse_cmdr_flag_spec_t);
 core_list_decl(parse_cmdr_positional_spec_t);
 core_list_decl(parse_cmdr_command_t);
@@ -80,6 +82,7 @@ struct parse_cmdr_command {
     core_list_t(parse_cmdr_flag_spec_t)          flags;
     core_list_t(parse_cmdr_positional_spec_t)    positionals;
     core_list_t(parse_cmdr_command_t)            subcommands;
+    bool                                       hidden;
 };
 
 struct parse_cmdr_t {
@@ -99,6 +102,8 @@ struct parse_cmdr_result_t {
     core_dict_t                   repeated_flags;
     core_list_t(parse_cmdr_arg_t)   args;
     core_list_t(core_string_t)     errors;
+    core_list_t(parse_cmdr_error_t) details;
+    bool                         command_given;
     bool                         ok;
     parse_tree_t            *tree;
 };
@@ -147,12 +152,10 @@ find_flag(parse_cmdr_command_t *cmd, core_string_t flag_name)
 }
 
 static void parse_cmdr_set_name(parse_cmdr_t *c, core_string_t name);
-static void parse_cmdr_add_command(parse_cmdr_t *c, core_string_t name,
-                                 core_string_t doc);
+static void parse_cmdr_add_command(parse_cmdr_t *c,
+                                 const parse_cmdr_cmd_t *spec);
 static void parse_cmdr_add_flag(parse_cmdr_t *c, core_string_t command,
-                              core_string_t flag_name,
-                              parse_cmdr_arg_type_t type, bool takes_value,
-                              core_string_t doc);
+                              const parse_cmdr_flag_t *spec);
 static void parse_cmdr_add_flag_alias(parse_cmdr_t *c, core_string_t command,
                                     core_string_t flag_name,
                                     core_string_t alias);
@@ -162,22 +165,11 @@ static void parse_cmdr_add_positional(parse_cmdr_t *c, core_string_t command,
                                     int max);
 static void parse_cmdr_finalize(parse_cmdr_t *c);
 
-static int32_t      parse_cmdr_command_count(parse_cmdr_t *c);
-static core_string_t parse_cmdr_command_name(parse_cmdr_t *c, int32_t index);
-static core_string_t parse_cmdr_command_doc(parse_cmdr_t *c, int32_t index);
-static int32_t      parse_cmdr_flag_count(parse_cmdr_t *c, core_string_t command);
-static core_string_t parse_cmdr_flag_name(parse_cmdr_t *c, core_string_t command,
-                                       int32_t index);
-static core_string_t parse_cmdr_flag_doc(parse_cmdr_t *c, core_string_t command,
-                                      int32_t index);
-static bool parse_cmdr_flag_takes_value(parse_cmdr_t *c, core_string_t command,
-                                      int32_t index);
-
 static void
 add_flags(parse_cmdr_t *c, core_string_t cmd, const parse_cmdr_flag_t *flags)
 {
     for (const parse_cmdr_flag_t *f = flags; f && f->name.data; f++) {
-        parse_cmdr_add_flag(c, cmd, f->name, f->type, f->takes_value, f->doc);
+        parse_cmdr_add_flag(c, cmd, f);
 
         if (f->alias.data) {
             parse_cmdr_add_flag_alias(c, cmd, f->name, f->alias);
@@ -207,7 +199,7 @@ parse_cmdr_new(const parse_cmdr_spec_t *spec)
     }
 
     for (const parse_cmdr_cmd_t *k = spec->commands; k && k->name.data; k++) {
-        parse_cmdr_add_command(c, k->name, k->doc);
+        parse_cmdr_add_command(c, k);
         add_flags(c, k->name, k->flags);
 
         if (k->arg.data) {
@@ -233,62 +225,196 @@ parse_cmdr_flag_set_repeatable(parse_cmdr_t *c, core_string_t command,
     return true;
 }
 
-void
-parse_cmdr_print_usage(parse_cmdr_t *c, FILE *out)
+static void
+flag_label(core_buffer_t *out, const parse_cmdr_flag_spec_t *f)
+{
+    if (f->short_name.data) {
+        core_buffer_append_string(out, f->short_name);
+        core_buffer_puts(out, ", ");
+    }
+    else {
+        core_buffer_puts(out, "    ");
+    }
+
+    core_buffer_append_string(out, f->name);
+
+    if (f->takes_value && f->value_type == PARSE_CMDR_TYPE_INT) {
+        core_buffer_puts(out, " <n>");
+    }
+    else if (f->takes_value) {
+        core_buffer_puts(out, " <value>");
+    }
+}
+
+static void
+print_flag_section(FILE *out, core_string_t title,
+                   const parse_cmdr_command_t *cmd, bool all)
+{
+    size_t width = 0;
+    size_t shown = 0;
+
+    for (size_t i = 0; i < cmd->flags.len; i++) {
+        const parse_cmdr_flag_spec_t *f = &cmd->flags.data[i];
+
+        if (f->hidden && !all) {
+            continue;
+        }
+
+        core_buffer_t label = {0};
+
+        flag_label(&label, f);
+        if (label.byte_len > width) {
+            width = label.byte_len;
+        }
+        core_buffer_release(&label);
+        shown++;
+    }
+
+    if (!shown) {
+        return;
+    }
+
+    fprintf(out, "\n%.*s:\n", (int)title.u8_bytes, title.data);
+
+    for (size_t i = 0; i < cmd->flags.len; i++) {
+        const parse_cmdr_flag_spec_t *f = &cmd->flags.data[i];
+
+        if (f->hidden && !all) {
+            continue;
+        }
+
+        core_buffer_t label = {0};
+
+        flag_label(&label, f);
+        fprintf(out, "  %-*.*s  %.*s\n", (int)width, (int)label.byte_len,
+                label.data, (int)f->doc.u8_bytes, f->doc.data);
+        core_buffer_release(&label);
+    }
+}
+
+static void
+print_command_list(FILE *out, parse_cmdr_t *c, bool all)
+{
+    size_t width = 0;
+
+    for (size_t i = 0; i < c->root.subcommands.len; i++) {
+        const parse_cmdr_command_t *cmd = &c->root.subcommands.data[i];
+
+        if ((!cmd->hidden || all) && cmd->name.u8_bytes > width) {
+            width = cmd->name.u8_bytes;
+        }
+    }
+
+    if (!width) {
+        return;
+    }
+
+    fputs("\ncommands:\n", out);
+
+    for (size_t i = 0; i < c->root.subcommands.len; i++) {
+        const parse_cmdr_command_t *cmd = &c->root.subcommands.data[i];
+
+        if (cmd->hidden && !all) {
+            continue;
+        }
+
+        fprintf(out, "  %-*.*s  %.*s\n", (int)width, (int)cmd->name.u8_bytes,
+                cmd->name.data, (int)cmd->doc.u8_bytes, cmd->doc.data);
+    }
+}
+
+static void
+print_banner(FILE *out, parse_cmdr_t *c)
+{
+    if (c->banner.data) {
+        fprintf(out, "%.*s\n", (int)c->banner.u8_bytes, c->banner.data);
+    }
+}
+
+static void
+print_listing(parse_cmdr_t *c, FILE *out, bool all)
 {
     if (!c || !out) {
         return;
     }
 
-    if (c->banner.data) {
-        fprintf(out, "%.*s\n\n", (int)c->banner.u8_bytes, c->banner.data);
-    }
+    print_banner(out, c);
+    print_command_list(out, c, all);
+    print_flag_section(out, CORE_STRING_STATIC("options"), &c->root, all);
 
-    int32_t n = parse_cmdr_command_count(c);
+    for (size_t i = 0; i < c->root.subcommands.len; i++) {
+        const parse_cmdr_command_t *cmd = &c->root.subcommands.data[i];
 
-    for (int32_t i = 0; i < n; i++) {
-        core_string_t name = parse_cmdr_command_name(c, i);
-        core_string_t doc  = parse_cmdr_command_doc(c, i);
-
-        fprintf(out, "  %-9.*s %.*s\n", (int)name.u8_bytes, name.data,
-                (int)doc.u8_bytes, doc.data);
-    }
-
-    if (n > 0) {
-        fputc('\n', out);
-    }
-
-    for (int32_t k = -1; k < n; k++) {
-        core_string_t cmd = k < 0 ? (core_string_t){0}
-                                 : parse_cmdr_command_name(c, k);
-        int32_t      nf  = parse_cmdr_flag_count(c, cmd);
-
-        for (int32_t i = 0; i < nf; i++) {
-            core_string_t name = parse_cmdr_flag_name(c, cmd, i);
-
-            if (core_string_eq(name, CORE_STRING_STATIC("--help"))) {
-                continue;
-            }
-
-            core_buffer_t sb = {0};
-
-            core_buffer_append_string(&sb, name);
-            if (parse_cmdr_flag_takes_value(c, cmd, i)) {
-                core_buffer_puts(&sb, " <value>");
-            }
-
-            core_string_t label = core_buffer_string(&sb);
-            core_string_t doc   = parse_cmdr_flag_doc(c, cmd, i);
-
-            fprintf(out, "  %-18.*s %.*s\n", (int)label.u8_bytes, label.data,
-                    (int)doc.u8_bytes, doc.data);
-            core_buffer_release(&sb);
+        if (cmd->hidden && !all) {
+            continue;
         }
 
-        if (k < 0 && nf > 0) {
-            fputc('\n', out);
-        }
+        core_buffer_t title = {0};
+
+        core_buffer_append_string(&title, cmd->name);
+        core_buffer_puts(&title, " options");
+        print_flag_section(out, core_buffer_string(&title), cmd, all);
+        core_buffer_release(&title);
     }
+}
+
+void
+parse_cmdr_print_usage(parse_cmdr_t *c, FILE *out)
+{
+    print_listing(c, out, false);
+}
+
+void
+parse_cmdr_print_all(parse_cmdr_t *c, FILE *out)
+{
+    print_listing(c, out, true);
+}
+
+void
+parse_cmdr_print_summary(parse_cmdr_t *c, FILE *out)
+{
+    if (!c || !out) {
+        return;
+    }
+
+    print_banner(out, c);
+    print_command_list(out, c, false);
+    print_flag_section(out, CORE_STRING_STATIC("options"), &c->root, false);
+}
+
+bool
+parse_cmdr_has_command(parse_cmdr_t *c, core_string_t command)
+{
+    return c && command.u8_bytes && find_command(c, command);
+}
+
+bool
+parse_cmdr_print_command_help(parse_cmdr_t *c, core_string_t command,
+                              FILE *out)
+{
+    if (!parse_cmdr_has_command(c, command) || !out) {
+        return false;
+    }
+
+    const parse_cmdr_command_t *cmd = find_command(c, command);
+
+    fprintf(out, "usage: %.*s %.*s [options]", (int)c->name.u8_bytes,
+            c->name.data, (int)cmd->name.u8_bytes, cmd->name.data);
+
+    for (size_t i = 0; i < cmd->positionals.len; i++) {
+        const parse_cmdr_positional_spec_t *p = &cmd->positionals.data[i];
+
+        fprintf(out, " %s<%.*s>%s%s", p->min ? "" : "[",
+                (int)p->name.u8_bytes, p->name.data,
+                p->max == 1 ? "" : "...", p->min ? "" : "]");
+    }
+
+    fprintf(out, "\n\n%.*s\n", (int)cmd->doc.u8_bytes, cmd->doc.data);
+    print_flag_section(out, CORE_STRING_STATIC("options"), cmd, false);
+    print_flag_section(out, CORE_STRING_STATIC("global options"), &c->root,
+                       false);
+
+    return true;
 }
 
 static void
@@ -348,9 +474,9 @@ parse_cmdr_set_name(parse_cmdr_t *c, core_string_t name)
 }
 
 static void
-parse_cmdr_add_command(parse_cmdr_t *c, core_string_t name, core_string_t doc)
+parse_cmdr_add_command(parse_cmdr_t *c, const parse_cmdr_cmd_t *spec)
 {
-    if (!c || !name.data) {
+    if (!c || !spec->name.data) {
         return;
     }
 
@@ -359,17 +485,17 @@ parse_cmdr_add_command(parse_cmdr_t *c, core_string_t name, core_string_t doc)
     parse_cmdr_command_t *cmd
         = &c->root.subcommands.data[c->root.subcommands.len - 1];
 
-    cmd->name = cmdr_intern(name);
-    cmd->doc  = cmdr_intern(doc);
+    cmd->name   = cmdr_intern(spec->name);
+    cmd->doc    = cmdr_intern(spec->doc);
+    cmd->hidden = spec->hidden;
 }
 
 
 static void
 parse_cmdr_add_flag(parse_cmdr_t *c, core_string_t command,
-                  core_string_t flag_name, parse_cmdr_arg_type_t type,
-                  bool takes_value, core_string_t doc)
+                  const parse_cmdr_flag_t *spec)
 {
-    if (!c || !flag_name.data) {
+    if (!c || !spec->name.data) {
         return;
     }
 
@@ -383,10 +509,11 @@ parse_cmdr_add_flag(parse_cmdr_t *c, core_string_t command,
 
     parse_cmdr_flag_spec_t *f = &cmd->flags.data[cmd->flags.len - 1];
 
-    f->name        = cmdr_intern(flag_name);
-    f->value_type  = type;
-    f->takes_value = takes_value;
-    f->doc         = cmdr_intern(doc);
+    f->name        = cmdr_intern(spec->name);
+    f->value_type  = spec->type;
+    f->takes_value = spec->takes_value;
+    f->hidden      = spec->hidden;
+    f->doc         = cmdr_intern(spec->doc);
 }
 
 static void
@@ -475,21 +602,23 @@ build_flag_nt(parse_cmdr_t *c, [[maybe_unused]] parse_cmdr_command_t *cmd,
     int64_t bool_tid = c->tok_ids[PARSE_CMDR_TID_BOOL];
 
     if (f->takes_value) {
-        parse_add_rule_v(c->grammar, nt_id, 3,
-            (parse_match_t[]){PARSE_TERMINAL(flag_tid),
-                            PARSE_TERMINAL(eq_tid),
-                            PARSE_TERMINAL(word_tid)});
-
-        if (f->short_name.data) {
-            int64_t short_tid = parse_register_terminal(
-                c->grammar, f->short_name);
+        int64_t value_tids[] = {word_tid, int_tid, flt_tid, bool_tid};
+        int64_t short_tid = f->short_name.data
+            ? parse_register_terminal(c->grammar, f->short_name) : 0;
+        for (size_t v = 0; v < sizeof(value_tids) / sizeof(value_tids[0]);
+             v++) {
+            parse_add_rule_v(c->grammar, nt_id, 3,
+                (parse_match_t[]){PARSE_TERMINAL(flag_tid),
+                                PARSE_TERMINAL(eq_tid),
+                                PARSE_TERMINAL(value_tids[v])});
+            if (!short_tid) continue;
             parse_add_rule_v(c->grammar, nt_id, 3,
                 (parse_match_t[]){PARSE_TERMINAL(short_tid),
                                 PARSE_TERMINAL(eq_tid),
-                                PARSE_TERMINAL(word_tid)});
+                                PARSE_TERMINAL(value_tids[v])});
             parse_add_rule_v(c->grammar, nt_id, 2,
                 (parse_match_t[]){PARSE_TERMINAL(short_tid),
-                                PARSE_TERMINAL(word_tid)});
+                                PARSE_TERMINAL(value_tids[v])});
         }
 
         parse_add_rule_v(c->grammar, nt_id, 2,
@@ -990,18 +1119,155 @@ cmdr_tokenize(const core_string_t *argv, int argc, parse_cmdr_t *c,
     return 0;
 }
 
+static void
+record_error(parse_cmdr_result_t *r, parse_cmdr_error_t detail,
+             core_string_t message)
+{
+    r->ok = false;
+    if (!r->errors.data) r->errors = core_list_new(core_string_t);
+    if (!r->details.data) r->details = core_list_new(parse_cmdr_error_t);
+    detail.flag = detail.flag.data ? cmdr_intern(detail.flag)
+                                   : (core_string_t){0};
+    detail.value = detail.value.data ? cmdr_intern(detail.value)
+                                     : (core_string_t){0};
+    core_list_push(r->details, detail);
+    core_list_push(r->errors, cmdr_intern(message));
+}
+
 static parse_cmdr_result_t *
 make_error_result(core_string_t msg)
 {
     parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
     core_dict_init_string(&r->flags);
     core_dict_init_string(&r->repeated_flags);
-    r->ok       = false;
-    r->errors = core_list_new_cap(core_string_t, 1);
-
-    core_list_push(r->errors, cmdr_intern(msg));
+    record_error(r, (parse_cmdr_error_t){.kind = PARSE_CMDR_ERROR_SYNTAX},
+                 msg);
 
     return r;
+}
+
+static core_string_t
+token_text(parse_token_info_t *token)
+{
+    core_option_t(core_string_t) value = parse_token_value(token);
+    return core_option_is_set(value) ? core_option_get(value)
+                                     : (core_string_t){0};
+}
+
+static bool
+flag_token(parse_cmdr_t *c, parse_token_info_t *token)
+{
+    int64_t tid = parse_token_tid(token);
+    if (tid == c->tok_ids[PARSE_CMDR_TID_FLAG]) return true;
+    if (tid == c->tok_ids[PARSE_CMDR_TID_INT]
+        || tid == c->tok_ids[PARSE_CMDR_TID_FLOAT]
+        || tid == c->tok_ids[PARSE_CMDR_TID_DD] || tid == PARSE_TOK_EOF)
+        return false;
+    core_string_t text = token_text(token);
+    return text.u8_bytes > 1 && text.data[0] == '-';
+}
+
+static void
+report_flag_error(parse_cmdr_result_t *r, parse_cmdr_error_kind_t kind,
+                  core_string_t flag, core_string_t value)
+{
+    core_buffer_t message = {0};
+    switch (kind) {
+    case PARSE_CMDR_ERROR_UNKNOWN_FLAG:
+        core_buffer_printf(&message, "unknown option '%.*s'",
+                           (int)flag.u8_bytes, flag.data);
+        break;
+    case PARSE_CMDR_ERROR_MISSING_VALUE:
+        core_buffer_printf(&message, "option '%.*s' needs a value",
+                           (int)flag.u8_bytes, flag.data);
+        break;
+    case PARSE_CMDR_ERROR_INVALID_INTEGER:
+        core_buffer_printf(&message, "option '%.*s' takes an integer, not '%.*s'",
+                           (int)flag.u8_bytes, flag.data,
+                           (int)value.u8_bytes, value.data);
+        break;
+    case PARSE_CMDR_ERROR_INVALID_NUMBER:
+        core_buffer_printf(&message, "option '%.*s' takes a number, not '%.*s'",
+                           (int)flag.u8_bytes, flag.data,
+                           (int)value.u8_bytes, value.data);
+        break;
+    default:
+        core_buffer_printf(&message, "option '%.*s' does not take a value",
+                           (int)flag.u8_bytes, flag.data);
+        break;
+    }
+    record_error(r, (parse_cmdr_error_t){.kind = kind, .flag = flag,
+                                         .value = value},
+                 core_buffer_string(&message));
+    core_buffer_release(&message);
+}
+
+static bool
+integer_text(core_string_t text)
+{
+    int64_t value = 0;
+    size_t consumed = 0;
+    return text.u8_bytes && core_string_parse_i64(text, 10, &value, &consumed)
+        && consumed == text.u8_bytes;
+}
+
+static bool
+validate_flag_tokens(parse_cmdr_t *c, parse_cmdr_command_t *scope,
+                     parse_token_info_t **tokens, int32_t count,
+                     parse_cmdr_result_t *r)
+{
+    int64_t eq_tid = c->tok_ids[PARSE_CMDR_TID_EQ];
+    for (int32_t i = 0; i < count; i++) {
+        int64_t tid = parse_token_tid(tokens[i]);
+        if (tid == c->tok_ids[PARSE_CMDR_TID_DD]) break;
+        if (!flag_token(c, tokens[i])) continue;
+        core_string_t text = token_text(tokens[i]);
+        parse_cmdr_flag_spec_t *flag = tid == c->tok_ids[PARSE_CMDR_TID_FLAG]
+            ? nullptr : find_flag_scoped(c, scope, text);
+        if (!flag) {
+            if (tid == c->tok_ids[PARSE_CMDR_TID_FLAG])
+                report_flag_error(r, PARSE_CMDR_ERROR_UNKNOWN_FLAG, text,
+                                  (core_string_t){0});
+            if (i + 1 < count && parse_token_tid(tokens[i + 1]) == eq_tid)
+                i += 2;
+            continue;
+        }
+        bool assigned = i + 1 < count
+            && parse_token_tid(tokens[i + 1]) == eq_tid;
+        if (!flag->takes_value) {
+            if (assigned) {
+                report_flag_error(r, PARSE_CMDR_ERROR_UNEXPECTED_VALUE, text,
+                                  token_text(tokens[i + 2]));
+                i += 2;
+            }
+            continue;
+        }
+        int32_t at = assigned ? i + 2 : i + 1;
+        int64_t value_tid = at < count ? parse_token_tid(tokens[at])
+                                       : PARSE_TOK_EOF;
+        core_string_t value = at < count ? token_text(tokens[at])
+                                         : (core_string_t){0};
+        bool missing = value_tid == PARSE_TOK_EOF
+            || value_tid == c->tok_ids[PARSE_CMDR_TID_DD]
+            || (!assigned && at < count && flag_token(c, tokens[at]))
+            || !value.u8_bytes;
+        if (missing) {
+            report_flag_error(r, PARSE_CMDR_ERROR_MISSING_VALUE, text,
+                              (core_string_t){0});
+            if (assigned) i = at;
+            continue;
+        }
+        if (flag->value_type == PARSE_CMDR_TYPE_INT && !integer_text(value))
+            report_flag_error(r, PARSE_CMDR_ERROR_INVALID_INTEGER, text,
+                              value);
+        else if (flag->value_type == PARSE_CMDR_TYPE_FLOAT
+                 && value_tid != c->tok_ids[PARSE_CMDR_TID_FLOAT]
+                 && !integer_text(value))
+            report_flag_error(r, PARSE_CMDR_ERROR_INVALID_NUMBER, text,
+                              value);
+        i = at;
+    }
+    return r->errors.len == 0;
 }
 
 static parse_cmdr_val_t
@@ -1095,7 +1361,8 @@ extract_result_from_tree(parse_cmdr_t *c, parse_tree_t *tree,
     parse_tree_walk_free(w);
 
     int32_t n = (int32_t)texts.len;
-    if (scope && scope != &c->root) r->command = cmdr_intern(scope->name);
+    if (!r->command.data && scope && scope != &c->root)
+        r->command = cmdr_intern(scope->name);
     bool past_dd = false;
 
     for (int32_t i = 0; i < n; i++) {
@@ -1235,24 +1502,26 @@ validate_positional_count(parse_cmdr_t *c, parse_cmdr_result_t *r)
 
     if (r->args.len >= min && (unbounded || r->args.len <= max)) return;
 
-    r->ok = false;
-    if (!r->errors.data) r->errors = core_list_new(core_string_t);
     core_buffer_t message = {0};
+    parse_cmdr_error_t detail = {.given = r->args.len};
     if (r->args.len < min) {
+        detail.kind = PARSE_CMDR_ERROR_TOO_FEW_ARGUMENTS;
+        detail.limit = min;
         core_buffer_printf(&message, "expected at least %zu argument", min);
         if (min != 1) {
             core_buffer_putc(&message, 's');
         }
     }
     else {
+        detail.kind = PARSE_CMDR_ERROR_TOO_MANY_ARGUMENTS;
+        detail.limit = max;
+        detail.value = r->args.data[max].value;
         core_buffer_printf(&message, "expected at most %zu argument", max);
         if (max != 1) {
             core_buffer_putc(&message, 's');
         }
     }
-    core_list_push(r->errors,
-                   core_string_from_raw(message.data,
-                                        (int64_t)message.byte_len));
+    record_error(r, detail, core_buffer_string(&message));
     core_buffer_release(&message);
 }
 
@@ -1270,82 +1539,6 @@ free_tokens(parse_token_info_t **tokens, int32_t n_tokens)
     }
 
     core_free(tokens);
-}
-
-static int32_t
-parse_cmdr_command_count(parse_cmdr_t *c)
-{
-    return c ? (int32_t)c->root.subcommands.len : 0;
-}
-
-static parse_cmdr_command_t *
-command_at(parse_cmdr_t *c, int32_t index)
-{
-    if (!c || index < 0 || (size_t)index >= c->root.subcommands.len) {
-        return nullptr;
-    }
-
-    return &c->root.subcommands.data[index];
-}
-
-static core_string_t
-parse_cmdr_command_name(parse_cmdr_t *c, int32_t index)
-{
-    parse_cmdr_command_t *cmd = command_at(c, index);
-
-    return cmd ? cmd->name : (core_string_t){0};
-}
-
-static core_string_t
-parse_cmdr_command_doc(parse_cmdr_t *c, int32_t index)
-{
-    parse_cmdr_command_t *cmd = command_at(c, index);
-
-    return cmd ? cmd->doc : (core_string_t){0};
-}
-
-static parse_cmdr_flag_spec_t *
-flag_at(parse_cmdr_t *c, core_string_t command, int32_t index)
-{
-    parse_cmdr_command_t *cmd = c ? find_command(c, command) : nullptr;
-
-    if (!cmd || index < 0 || (size_t)index >= cmd->flags.len) {
-        return nullptr;
-    }
-
-    return &cmd->flags.data[index];
-}
-
-static int32_t
-parse_cmdr_flag_count(parse_cmdr_t *c, core_string_t command)
-{
-    parse_cmdr_command_t *cmd = c ? find_command(c, command) : nullptr;
-
-    return cmd ? (int32_t)cmd->flags.len : 0;
-}
-
-static core_string_t
-parse_cmdr_flag_name(parse_cmdr_t *c, core_string_t command, int32_t index)
-{
-    parse_cmdr_flag_spec_t *f = flag_at(c, command, index);
-
-    return f ? f->name : (core_string_t){0};
-}
-
-static core_string_t
-parse_cmdr_flag_doc(parse_cmdr_t *c, core_string_t command, int32_t index)
-{
-    parse_cmdr_flag_spec_t *f = flag_at(c, command, index);
-
-    return f ? f->doc : (core_string_t){0};
-}
-
-static bool
-parse_cmdr_flag_takes_value(parse_cmdr_t *c, core_string_t command, int32_t index)
-{
-    parse_cmdr_flag_spec_t *f = flag_at(c, command, index);
-
-    return f && f->takes_value;
 }
 
 parse_cmdr_result_t *
@@ -1383,6 +1576,7 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
     int command_index = -1;
     parse_cmdr_command_t *scope = command_in_args(c, argv, nargs,
                                                    &command_index);
+    bool command_given = scope != &c->root;
     core_string_t *defaulted = nullptr;
     if (scope == &c->root && c->default_command.data
         && find_command(c, c->default_command) != &c->root) {
@@ -1413,6 +1607,17 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
         return make_error_result(CORE_STRING_STATIC("tokenization failed"));
     }
 
+    parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
+    core_dict_init_string(&r->flags);
+    core_dict_init_string(&r->repeated_flags);
+    r->command_given = command_given;
+    if (scope != &c->root) r->command = cmdr_intern(scope->name);
+
+    if (!validate_flag_tokens(c, scope, tokens, n_tokens, r)) {
+        free_tokens(tokens, n_tokens);
+        return r;
+    }
+
     parse_token_stream_t *ts = scan_token_stream_from_array(tokens, n_tokens);
     parse_pwz_parser_t   *pp
         = parse_pwz_new_for_start(c->grammar,
@@ -1421,14 +1626,7 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
                                       CORE_STRING_STATIC("cmd"))));
     bool parse_ok = parse_pwz_parse(pp, ts);
 
-    parse_cmdr_result_t *r = core_alloc(parse_cmdr_result_t);
-    core_dict_init_string(&r->flags);
-    core_dict_init_string(&r->repeated_flags);
-
     if (!parse_ok) {
-        r->ok       = false;
-        r->errors = core_list_new_cap(core_string_t, 1);
-
         int32_t             at    = parse_pwz_error_pos(pp);
         parse_token_info_t *token = at >= 0 && at < n_tokens ? tokens[at] : nullptr;
         core_buffer_t       message = {0};
@@ -1446,9 +1644,12 @@ parse_cmdr_parse(parse_cmdr_t *c, int nargs, const char **args)
         else {
             core_buffer_printf(&message, "parse failed");
         }
-        core_list_push(r->errors,
-                      cmdr_intern(core_string_borrow(message.data,
-                                                     message.byte_len)));
+        record_error(r, (parse_cmdr_error_t){
+                .kind = PARSE_CMDR_ERROR_SYNTAX,
+                .value = core_option_is_set(token_value)
+                    ? core_option_get(token_value) : (core_string_t){0},
+            },
+            core_buffer_string(&message));
         core_buffer_release(&message);
     }
     else {
@@ -1496,6 +1697,20 @@ parse_cmdr_result_error(parse_cmdr_result_t *r, int index)
     if (!r || index < 0 || (size_t)index >= r->errors.len)
         return (core_string_t){0};
     return r->errors.data[index];
+}
+
+parse_cmdr_error_t
+parse_cmdr_result_error_detail(parse_cmdr_result_t *r, int index)
+{
+    if (!r || index < 0 || (size_t)index >= r->details.len)
+        return (parse_cmdr_error_t){.kind = PARSE_CMDR_ERROR_SYNTAX};
+    return r->details.data[index];
+}
+
+bool
+parse_cmdr_result_command_given(parse_cmdr_result_t *r)
+{
+    return r && r->command_given;
 }
 
 bool
@@ -1647,6 +1862,13 @@ parse_cmdr_result_free(parse_cmdr_result_t *r)
     }
 
     core_list_free(r->errors);
+
+    for (size_t i = 0; i < r->details.len; i++) {
+        core_free(r->details.data[i].flag.data);
+        core_free(r->details.data[i].value.data);
+    }
+
+    core_list_free(r->details);
 
     r->tree = nullptr;
 

@@ -1,0 +1,3 @@
+tests/diagnostics/coercion/private_state.n:3:26: error N00B-N0006: field `lock` of `Buffer` is private to module `builtin.containers.buffer`
+  lib/builtin/containers/buffer.n:6:13: note: field `lock` is declared here
+  help: use a function of module `builtin.containers.buffer` to read or change it, or remove `private` from the field

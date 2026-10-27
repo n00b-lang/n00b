@@ -3,7 +3,6 @@
 #include <assert.h>
 #include <stdbool.h>
 
-/* A by-value result whose error and success payloads may have distinct types. */
 #define core_result_decl(Name, Value, Error)                                      \
     typedef struct Name {                                                        \
         bool is_ok;                                                              \

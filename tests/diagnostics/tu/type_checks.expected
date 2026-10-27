@@ -1,0 +1,76 @@
+tests/diagnostics/tu/type_checks.n:2:21: error N00B-T0524: integer constant 300 does not fit in `u8`
+  help: use a wider integer type, or a value inside the range of `u8`
+tests/diagnostics/tu/type_checks.n:10:9: error N00B-T0524: integer value 18446744073709551616 does not fit in `uint`
+  help: use a wider integer type, or a value inside the range of `uint`
+tests/diagnostics/tu/type_checks.n:25:5: error N00B-T0501: cannot write through constant `bytes`; nothing reachable from a constant is writable
+  tests/diagnostics/tu/type_checks.n:20:7: note: `bytes` is declared here
+  help: declare `bytes` with `var` to make it writable
+tests/diagnostics/tu/type_checks.n:29:5: error N00B-T0501: cannot write through constant `bytes`; nothing reachable from a constant is writable
+  tests/diagnostics/tu/type_checks.n:20:7: note: `bytes` is declared here
+  help: declare `bytes` with `var` to make it writable
+tests/diagnostics/tu/type_checks.n:33:5: error N00B-T0501: cannot write through constant `grid`; nothing reachable from a constant is writable
+  tests/diagnostics/tu/type_checks.n:21:7: note: `grid` is declared here
+  help: declare `grid` with `var` to make it writable
+tests/diagnostics/tu/type_checks.n:37:5: error N00B-T0501: cannot write through constant `points`; nothing reachable from a constant is writable
+  tests/diagnostics/tu/type_checks.n:22:7: note: `points` is declared here
+  help: declare `points` with `var` to make it writable
+tests/diagnostics/tu/type_checks.n:44:1: error N00B-T0501: cannot write through constant `FIXED`; nothing reachable from a constant is writable
+  tests/diagnostics/tu/type_checks.n:19:7: note: `FIXED` is declared here
+  help: declare `FIXED` with `var` to make it writable
+tests/diagnostics/tu/type_checks.n:50:17: error N00B-T0552: the receiver of `__finalize` cannot be optional (`Ref[Sample]?`); a finalizer always runs on a live value
+  help: write `func __finalize(consume self: Ref[T])`
+tests/diagnostics/tu/type_checks.n:53:12: error N00B-T0500: `0xff & 0x0f` is an integer, but `f` returns `i32`
+  tests/diagnostics/tu/type_checks.n:52:13: note: the return type of `f` is declared here
+tests/diagnostics/tu/type_checks.n:57:12: error N00B-T0515: `Dict` takes 2 type arguments, but 1 is given
+  lib/builtin/containers/dict.n:21:8: note: `Dict` is declared here
+  help: add the missing type argument
+tests/diagnostics/tu/type_checks.n:61:16: error N00B-T0515: `Box` takes 1 type argument, but 2 are given
+  tests/diagnostics/tu/type_checks.n:58:8: note: `Box` is declared here
+  help: remove the extra type argument
+tests/diagnostics/tu/type_checks.n:64:16: error N00B-T0515: `List` takes 1 type argument, but 2 are given
+  lib/builtin/containers/list.n:6:8: note: `List` is declared here
+  help: remove the extra type argument
+tests/diagnostics/tu/type_checks.n:66:12: error N00B-T0500: `"bob"` is `string`, but `name` returns `int`
+  tests/diagnostics/tu/type_checks.n:65:16: note: the return type of `name` is declared here
+tests/diagnostics/tu/type_checks.n:76:11: error N00B-N0005: `Point` has no field `z`
+  note: `Point` has fields `x` and `y`
+  tests/diagnostics/tu/type_checks.n:70:8: note: type `Point` is declared here
+tests/diagnostics/tu/type_checks.n:79:9: error N00B-T0518: `+` needs operands of the same type, but `a` is an integer and `b` is `string`
+  help: convert one operand so both have the same type
+tests/diagnostics/tu/type_checks.n:89:9: error N00B-T0516: `v` is `int?` and may be `nil`, so it cannot be used with `+`
+  help: test it against `nil` first; inside `if v != nil { ... }`, `v` is `int`
+tests/diagnostics/tu/type_checks.n:95:5: error N00B-T0501: cannot write through view parameter `c`; nothing reachable from a view parameter is writable
+  tests/diagnostics/tu/type_checks.n:94:11: note: `c` is declared here
+  help: declare `c` as a `modify` parameter to write through it
+tests/diagnostics/tu/type_checks.n:100:5: error N00B-T0501: cannot write through view parameter `c`; nothing reachable from a view parameter is writable
+  tests/diagnostics/tu/type_checks.n:98:19: note: `c` is declared here
+  help: declare `c` as a `modify` parameter to write through it
+tests/diagnostics/tu/type_checks.n:108:12: error N00B-T0500: `5` is an integer, but `g` returns `bool`
+  tests/diagnostics/tu/type_checks.n:107:13: note: the return type of `g` is declared here
+tests/diagnostics/tu/type_checks.n:112:12: error N00B-T0500: `"s"` is `string`, but `h` returns `int`
+  tests/diagnostics/tu/type_checks.n:111:13: note: the return type of `h` is declared here
+tests/diagnostics/tu/type_checks.n:117:13: error N00B-T0504: cannot assign `0` to `value`: its type is the type parameter `'T`, which can be any type
+  help: only a value of type `'T`, such as another parameter of that type, can be stored in `value`
+tests/diagnostics/tu/type_checks.n:125:8: error N00B-T0502: type variable `'T` does not belong to an enclosing function, record, variant or trait
+  help: type variables are declared by using them in a function signature or a generic type declaration; use a concrete type here
+tests/diagnostics/tu/type_checks.n:134:13: error N00B-T0518: `+` needs operands of the same type, but `3.5` is `f64` and `true` is `bool`
+  help: convert one operand so both have the same type
+tests/diagnostics/tu/type_checks.n:137:18: error N00B-T0500: `"a"` is `string`, which does not convert to `int`
+tests/diagnostics/tu/type_checks.n:138:19: error N00B-T0500: `7` is `u8`, which does not convert to `bool`
+tests/diagnostics/tu/type_checks.n:140:16: error N00B-N0001: cannot find `undefined_name` in this scope
+tests/diagnostics/tu/type_checks.n:142:6: error N00B-T0546: the body of `risky` fails with an integer, but `risky` is declared to fail with `string`
+tests/diagnostics/tu/type_checks.n:146:20: error N00B-T0530: `"three"` is `string`, but the other items of this literal are integers
+  tests/diagnostics/tu/type_checks.n:146:14: note: the first item is here
+tests/diagnostics/tu/type_checks.n:148:24: error N00B-T0500: `(a = "no", b = 2)` is `(a: string, b: {integer})`, but `wrong_pair` is declared `Pair`
+  tests/diagnostics/tu/type_checks.n:148:17: note: `wrong_pair` is declared `Pair` here
+tests/diagnostics/tu/type_checks.n:149:24: error N00B-T0500: `(a = 1)` is `(a: {integer})`, but `pair_as_int` is declared `int`
+  tests/diagnostics/tu/type_checks.n:149:18: note: `pair_as_int` is declared `int` here
+tests/diagnostics/tu/type_checks.n:155:29: error N00B-N0003: module `native` has no function `nope`
+tests/diagnostics/tu/type_checks.n:157:21: error N00B-T0005: parameter 1 (`n`) of `h_1` is `int`, but this argument is `string`
+  tests/diagnostics/tu/type_checks.n:164:6: note: `h_1` is declared here
+tests/diagnostics/tu/type_checks.n:158:25: error N00B-T0001: `h_1` takes 1 argument, but this call passes 2
+  tests/diagnostics/tu/type_checks.n:164:6: note: `h_1` is declared here
+  help: remove the extra argument
+tests/diagnostics/tu/type_checks.n:160:18: error N00B-T0018: `string` does not implement `Multiply` for these arguments
+  note: 13 implementations of `Multiply` were considered
+tests/diagnostics/tu/type_checks.n:161:23: error N00B-T0500: `9` is `u8`, which does not convert to `bool`

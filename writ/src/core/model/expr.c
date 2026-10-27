@@ -46,7 +46,7 @@ static void
 report_unknown(writ_model_t *model, const writ_node_t *node)
 {
     writ_str_t name = writ_sym_str(model->session, node->name);
-    writ_report(model->session, WRIT_D_UNKNOWN_NAME, node->loc, "`%.*s`", (int)name.length, name.data);
+    writ_report(model->session, WRIT_D_UNKNOWN_NAME, node->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(name)));
 }
 
 static bool
@@ -156,7 +156,7 @@ check_member(checker_t *c, uint32_t expr, const writ_node_t *node)
         const writ_slot_rec_t *slot = &model->slots.data[target.index];
         if (slot->mode != WRIT_MODE_INOUT || !slot_is_integer_cell(model, target.index)) {
             writ_str_t name = writ_sym_str(model->session, slot->name);
-            writ_report(model->session, WRIT_D_BAD_PHASE, node->loc, "`%.*s` is not one", S(name));
+            writ_report(model->session, WRIT_D_BAD_PHASE, node->loc, WRIT_MESSAGE(IS_NOT_ONE, WRIT_ARG(name)));
             return false;
         }
         *ref_slot(model, expr) = (writ_ref_t){WRIT_REF_SLOT, before ? WRIT_REF_BEFORE : WRIT_REF_AFTER, target.index};
@@ -178,8 +178,8 @@ check_member(checker_t *c, uint32_t expr, const writ_node_t *node)
             }
         }
     }
-    writ_report(model->session, WRIT_D_UNKNOWN_NAME, node->loc, "no field `%.*s`",
-                (int)writ_sym_str(model->session, node->name).length, writ_sym_str(model->session, node->name).data);
+    writ_report(model->session, WRIT_D_UNKNOWN_NAME, node->loc,
+                WRIT_MESSAGE(NO_FIELD, WRIT_ARG(writ_sym_str(model->session, node->name))));
     return false;
 }
 
@@ -194,9 +194,9 @@ check_deref(checker_t *c, uint32_t expr, const writ_node_t *node)
     if (target.kind != WRIT_REF_SLOT || !slot_is_integer_cell(model, target.index)) {
         if (target.kind == WRIT_REF_SLOT) {
             writ_str_t name = writ_sym_str(model->session, model->slots.data[target.index].name);
-            writ_report(model->session, WRIT_D_BAD_DEREF, node->loc, "`%.*s` is not a pointer to an integer", S(name));
+            writ_report(model->session, WRIT_D_BAD_DEREF, node->loc, WRIT_MESSAGE(IS_NOT_A_POINTER_TO, WRIT_ARG(name)));
         } else {
-            writ_report(model->session, WRIT_D_BAD_DEREF, node->loc, nullptr);
+            writ_report(model->session, WRIT_D_BAD_DEREF, node->loc, WRIT_NO_DETAIL);
         }
         return false;
     }
@@ -215,7 +215,7 @@ check_builtin_call(checker_t *c, uint32_t expr, const writ_node_t *node, const w
         const writ_node_t *arg = writ_node(model->unit, writ_node_child(model->unit, expr, 1));
         writ_type_id type = node->child_count == 2 && arg->kind == WRIT_N_EXPR_NAME ? writ_type_named(model, arg->name) : 0;
         if (!type) {
-            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, "`sizeof` takes one type name");
+            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, WRIT_BARE(SIZEOF_TAKES_ONE_TYPE_NAME));
             return false;
         }
         *ref_slot(model, expr) = (writ_ref_t){WRIT_REF_SIZEOF, WRIT_REF_VALUE, type};
@@ -226,7 +226,8 @@ check_builtin_call(checker_t *c, uint32_t expr, const writ_node_t *node, const w
         return false;
     }
     if (node->child_count != 3) {
-        writ_report(model->session, WRIT_D_BAD_ARITY, node->loc, "expected 2, found %u", node->child_count - 1);
+        writ_report(model->session, WRIT_D_BAD_ARITY, node->loc,
+                    WRIT_MESSAGE(EXPECTED_2_FOUND, CORE_TEXT_NUMBER(node->child_count - 1)));
         return false;
     }
     *ref_slot(model, callee_id) = (writ_ref_t){WRIT_REF_BUILTIN, WRIT_REF_VALUE, is_min ? WRIT_BUILTIN_MIN : WRIT_BUILTIN_MAX};
@@ -252,8 +253,8 @@ check_call(checker_t *c, uint32_t expr, const writ_node_t *node)
     }
     if (!known) {
         writ_str_t text = writ_loc_text(model->session, callee_node->loc);
-        writ_report(model->session, WRIT_D_UNKNOWN_NAME, callee_node->loc, "`%.*s` is not a function",
-                    (int)text.length, text.data);
+        writ_report(model->session, WRIT_D_UNKNOWN_NAME, callee_node->loc,
+                    WRIT_MESSAGE(IS_NOT_A_FUNCTION, WRIT_ARG(text)));
         return false;
     }
     const writ_fn_rec_t *record = &model->fns.data[target];
@@ -262,12 +263,13 @@ check_call(checker_t *c, uint32_t expr, const writ_node_t *node)
         c->owner = target;
     } else if (!record->pure && !c->impure) {
         writ_str_t name = writ_sym_str(model->session, record->name);
-        writ_report(model->session, WRIT_D_CALL_NOT_PURE, node->loc, "`%.*s`", (int)name.length, name.data);
+        writ_report(model->session, WRIT_D_CALL_NOT_PURE, node->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(name)));
         return false;
     }
     if (node->child_count - 1 != record->slot_count) {
-        writ_report(model->session, WRIT_D_BAD_ARITY, node->loc, "expected %u, found %u", record->slot_count,
-                    node->child_count - 1);
+        writ_report(model->session, WRIT_D_BAD_ARITY, node->loc,
+                    WRIT_MESSAGE(EXPECTED_FOUND, CORE_TEXT_NUMBER(record->slot_count),
+                                 CORE_TEXT_NUMBER(node->child_count - 1)));
         return false;
     }
     *ref_slot(model, callee) = (writ_ref_t){WRIT_REF_FN, WRIT_REF_VALUE, target};
@@ -299,14 +301,15 @@ check(checker_t *c, uint32_t expr)
     case WRIT_N_EXPR_FEATURE:
     case WRIT_N_EXPR_IN:
         if (c->scope != WRIT_EXPR_SCOPE_CONDITION) {
-            writ_report(model->session, WRIT_D_BAD_CONDITION, node->loc, "only `when` conditions test platforms");
+            writ_report(model->session, WRIT_D_BAD_CONDITION, node->loc,
+                        WRIT_BARE(ONLY_WHEN_CONDITIONS_TEST_PLATFORMS));
             return false;
         }
         return node->kind != WRIT_N_EXPR_IN || check(c, writ_node_child(model->unit, expr, 0));
     case WRIT_N_EXPR_VIEW:
         if (!writ_type_named(model, node->name)) {
             writ_str_t text = writ_sym_str(model->session, node->name);
-            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, "`%.*s`", (int)text.length, text.data);
+            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
             return false;
         }
         return check(c, writ_node_child(model->unit, expr, 0));
@@ -517,7 +520,7 @@ writ_condition_holds(writ_model_t *model, uint32_t expr)
         return false;
     }
     if (!writ_expr_eval(model, expr, nullptr, &value)) {
-        writ_report(model->session, WRIT_D_BAD_CONDITION, writ_node(model->unit, expr)->loc, nullptr);
+        writ_report(model->session, WRIT_D_BAD_CONDITION, writ_node(model->unit, expr)->loc, WRIT_NO_DETAIL);
         return false;
     }
     return value != 0;

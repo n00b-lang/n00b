@@ -1,0 +1,5 @@
+panic: global `value` is read before it is initialized
+  --> tests/diagnostics/runtime/failures.n:98:5
+backtrace:
+  at read_value (tests/diagnostics/runtime/failures.n:98:5)
+  at run (tests/diagnostics/runtime/failures.n:142:9)

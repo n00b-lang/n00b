@@ -1,0 +1,60 @@
+#pragma once
+
+#include <stdint.h>
+
+typedef enum : uint32_t {
+    N00BB_FAILURE_PANIC = 0,
+    N00BB_FAILURE_REQUIRE = 1,
+    N00BB_FAILURE_ASSERT = 2,
+    N00BB_FAILURE_UNREACHABLE = 3,
+    N00BB_FAILURE_INDEX = 4,
+    N00BB_FAILURE_DIVIDE_BY_ZERO = 5,
+    N00BB_FAILURE_REMAINDER_BY_ZERO = 6,
+    N00BB_FAILURE_OVERFLOW = 7,
+    N00BB_FAILURE_SHIFT = 8,
+    N00BB_FAILURE_CAST = 9,
+    N00BB_FAILURE_ENUM = 10,
+    N00BB_FAILURE_VARIANT = 11,
+    N00BB_FAILURE_UNINITIALIZED = 12,
+    N00BB_FAILURE_ALLOCATION_SIZE = 13,
+    N00BB_FAILURE_OUT_OF_MEMORY = 14,
+    N00BB_FAILURE_STACK_OVERFLOW = 15,
+    N00BB_FAILURE_UNCAUGHT = 16,
+    N00BB_FAILURE_ZERO_STEP = 17,
+    N00BB_FAILURE_MISSING_RETURN = 18,
+    N00BB_FAILURE_SHAPE = 19,
+    N00BB_FAILURE_NULL_CALLBACK = 20,
+    N00BB_FAILURE_LENGTH = 21,
+    N00BB_FAILURE_INVARIANT = 22,
+    N00BB_FAILURE_RANGE = 23,
+    N00BB_FAILURE_OS = 24,
+} n00bb_failure_kind_t;
+
+typedef enum : uint64_t {
+    N00BB_INVARIANT_UNTYPED_ALLOCATION = 1,
+    N00BB_INVARIANT_UNKNOWN_ALLOCATOR = 2,
+    N00BB_INVARIANT_NATIVE_CALL_WITHOUT_MUTATOR = 3,
+    N00BB_INVARIANT_UNKNOWN_FINALIZER = 4,
+    N00BB_INVARIANT_METADATA_REJECTED = 5,
+} n00bb_runtime_invariant_t;
+
+typedef enum : uint32_t {
+    N00BB_OPERAND_NONE = 0,
+    N00BB_OPERAND_SIGNED = 1,
+    N00BB_OPERAND_UNSIGNED = 2,
+    N00BB_OPERAND_BOOL = 3,
+    N00BB_OPERAND_FLOAT = 4,
+    N00BB_OPERAND_STRING = 5,
+    N00BB_OPERAND_CHAR = 6,
+} n00bb_operand_format_t;
+
+#define N00BB_FAILURE_KIND_ANNOTATION "n00bb.failure.kind"
+#define N00BB_FAILURE_TEXT_ANNOTATION "n00bb.failure.text"
+#define N00BB_FAILURE_DETAIL_ANNOTATION "n00bb.failure.detail"
+#define N00BB_FAILURE_OPERANDS_ANNOTATION "n00bb.failure.operands"
+#define N00BB_FAILURE_OPERAND_SEPARATOR '\x1f'
+
+[[noreturn]] void n00bb_runtime_check_failed(const void *site,
+                                             const void *values);
+[[noreturn]] void n00bb_runtime_fail(uint32_t kind, uint64_t value);
+void n00bb_runtime_install_failure_handlers(void);

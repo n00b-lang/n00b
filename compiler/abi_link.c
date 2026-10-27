@@ -1773,6 +1773,7 @@ link_kind_is_stream(uint32_t kind)
 {
     return kind == N00B_ABI_TABLE_U32_STREAM
         || kind == N00B_ABI_TABLE_BYTE_STREAM
+        || kind == N00B_ABI_TABLE_SUMMARY_STREAM
         || kind == N00B_ABI_TABLE_U64_STREAM;
 }
 
@@ -2566,31 +2567,53 @@ remap_range(const n00bb_abi_object_view_t *view,
 }
 
 static bool
+summary_word(const n00bb_abi_object_view_t *view, uint32_t offset,
+             uint32_t *out)
+{
+    uint8_t bytes[4];
+    for (uint32_t i = 0; i < 4; i++) {
+        const uint8_t *byte = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_SUMMARY_STREAM, offset + i);
+        if (!byte) return false;
+        bytes[i] = *byte;
+    }
+    *out = core_le_load_u32(bytes);
+    return true;
+}
+
+bool
+n00bb_abi_summary_extent(const n00bb_abi_object_view_t *view,
+                         uint32_t offset, uint32_t *names, uint32_t *bytes)
+{
+    const n00bb_abi_directory_entry_t *table =
+        n00bb_abi_object_table(view, N00B_ABI_TABLE_SUMMARY_STREAM);
+    uint32_t body, count;
+    if (!table || offset >= table->record_count
+        || table->record_count - offset < 8
+        || !summary_word(view, offset, &body)
+        || body > table->record_count - offset - 8
+        || !summary_word(view, offset + 4 + body, &count)
+        || count > (table->record_count - offset - 8 - body) / 4)
+        return false;
+    *names = offset + 8 + body;
+    *bytes = 8 + body + 4 * count;
+    return true;
+}
+
+static bool
 remap_function_summary(const n00bb_abi_object_view_t *view,
                        const n00bb_abi_index_plan_t *plan,
                        size_t input_index, n00b_abi_function_v1 *function)
 {
     uint32_t offset = function->summary_offset;
     if (!offset) return true;
-    const n00bb_abi_directory_entry_t *table =
-        n00bb_abi_object_table(view, N00B_ABI_TABLE_BYTE_STREAM);
-    if (!table || offset >= table->record_count
-        || table->record_count - offset < 4) return false;
-    uint8_t length[4];
-    for (uint32_t i = 0; i < 4; i++) {
-        const uint8_t *byte = n00bb_abi_object_row(view,
-            N00B_ABI_TABLE_BYTE_STREAM, offset + i);
-        if (!byte) return false;
-        length[i] = *byte;
-    }
-    uint32_t count = core_le_load_u32(length);
-    if (count > table->record_count - offset - 4) return false;
-    uint32_t first, last;
-    if (!n00bb_abi_index_plan_map(plan, input_index,
-            N00B_ABI_TABLE_BYTE_STREAM, offset, &first)
+    uint32_t names, bytes, first, last;
+    if (!n00bb_abi_summary_extent(view, offset, &names, &bytes)
         || !n00bb_abi_index_plan_map(plan, input_index,
-            N00B_ABI_TABLE_BYTE_STREAM, offset + 3 + count, &last)
-        || !first || last < first || last - first != 3 + count)
+            N00B_ABI_TABLE_SUMMARY_STREAM, offset, &first)
+        || !n00bb_abi_index_plan_map(plan, input_index,
+            N00B_ABI_TABLE_SUMMARY_STREAM, offset + bytes - 1, &last)
+        || !first || last < first || last - first != bytes - 1)
         return false;
     function->summary_offset = first;
     return true;
@@ -4113,6 +4136,51 @@ n00bb_abi_add_native_bindings(
     return true;
 }
 
+static bool
+remap_summary_names(const n00bb_abi_selected_objects_t *selected,
+                    const n00bb_abi_index_plan_t *plan,
+                    n00bb_abi_merged_rows_t *built,
+                    n00bb_abi_row_origin_t **origins, size_t table_count)
+{
+    size_t function_table = table_count;
+    for (size_t i = 0; i < table_count; i++)
+        if (built->tables[i].kind == N00B_ABI_TABLE_FUNCTION)
+            function_table = i;
+    n00bb_abi_merged_table_t *summaries = nullptr;
+    for (size_t i = 0; i < table_count; i++)
+        if (built->tables[i].kind == N00B_ABI_TABLE_SUMMARY_STREAM)
+            summaries = &built->tables[i];
+    if (function_table == table_count) return true;
+    const n00bb_abi_merged_table_t *functions = &built->tables[function_table];
+    for (uint32_t final = 1; final < functions->record_count; final++) {
+        const n00b_abi_function_v1 *row = (const void *)(functions->records
+            + (size_t)final * functions->record_bytes);
+        if (!row->summary_offset) continue;
+        n00bb_abi_row_origin_t origin = origins[function_table][final];
+        const n00bb_abi_object_view_t *view = &selected->views[origin.input];
+        const n00b_abi_function_v1 *source = n00bb_abi_object_row(view,
+            N00B_ABI_TABLE_FUNCTION, origin.local);
+        uint32_t names, bytes;
+        if (!summaries || !source || !n00bb_abi_summary_extent(view,
+                source->summary_offset, &names, &bytes)
+            || row->summary_offset > summaries->record_count
+            || bytes > summaries->record_count - row->summary_offset)
+            return false;
+        uint32_t count = (source->summary_offset + bytes - names) / 4;
+        uint8_t *destination = summaries->records + row->summary_offset
+            + (names - source->summary_offset);
+        for (uint32_t n = 0; n < count; n++) {
+            uint32_t mapped;
+            if (!n00bb_abi_index_plan_map(plan, origin.input,
+                    N00B_ABI_TABLE_STATIC_STRING,
+                    core_le_load_u32(destination + 4 * n), &mapped)
+                || !mapped) return false;
+            core_le_store_u32(destination + 4 * n, mapped);
+        }
+    }
+    return true;
+}
+
 bool
 n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                      const n00bb_abi_index_plan_t *plan,
@@ -4327,6 +4395,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
         const n00bb_abi_merged_table_t *table = &built.tables[ti];
         if (table->kind != N00B_ABI_TABLE_U64_STREAM
             && table->kind != N00B_ABI_TABLE_BYTE_STREAM
+            && table->kind != N00B_ABI_TABLE_SUMMARY_STREAM
             && table->kind != N00B_ABI_TABLE_U32_STREAM) continue;
         uint32_t count = table->kind == N00B_ABI_TABLE_U32_STREAM
             ? base_u32_count : table->record_count;
@@ -4368,6 +4437,8 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
                 table->record_bytes, built.strings);
         }
     }
+    if (valid) valid = remap_summary_names(selected, plan, &built,
+                                           origins, schema_count);
     if (valid) valid = complete_merged_traces(&built);
     core_free(scratch);
     for (size_t i = 0; i < schema_count; i++) {

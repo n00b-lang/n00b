@@ -459,8 +459,7 @@ ir_liveness_query_t *
 ir_liveness_query_new(const ir_value_t *value)
 {
     if (!value) return NULL;
-    ir_liveness_query_t *query = calloc(1, sizeof(*query));
-    if (!query) return NULL;
+    ir_liveness_query_t *query = core_alloc(ir_liveness_query_t);
     query->value = value;
     query->complete = collect_alias_closure(value, &query->aliases);
     query->live = ir_func_liveness(value->owner);
@@ -472,7 +471,7 @@ ir_liveness_query_free(ir_liveness_query_t *query)
 {
     if (!query) return;
     core_list_free(query->aliases);
-    free(query);
+    core_free(query);
 }
 
 static ir_liveness_t
@@ -591,9 +590,8 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
     for (uint32_t b = 0; b < function->n_blocks; b++)
         if (function->blocks[b]->n_instrs > widest)
             widest = function->blocks[b]->n_instrs;
-    ir_liveness_t *states = calloc(widest ? widest : 1, sizeof(*states));
-    ir_liveness_t *scratch = calloc(widest ? widest : 1, sizeof(*scratch));
-    ok = states && scratch;
+    ir_liveness_t *states = core_alloc_array(ir_liveness_t, widest);
+    ir_liveness_t *scratch = core_alloc_array(ir_liveness_t, widest);
     for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         ir_instr_t *terminator = ir_block_terminator(block);
@@ -638,8 +636,8 @@ ir_liveness_query_visit_endpoints(const ir_liveness_query_t *query,
             });
         }
     }
-    free(states);
-    free(scratch);
+    core_free(states);
+    core_free(scratch);
     return ok;
 }
 

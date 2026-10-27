@@ -160,7 +160,6 @@ func safepoint(mutator: Ref[internal.gc.core.Mutator]) {
 }
 
 func enter_blocking(mutator: Ref[internal.gc.core.Mutator]) {
-    internal.threads.thread_capture_self(ref mutator.captured)
     mutator.blocked_sp = mutator.captured.sp
     __atomic_store(ref mutator.blocking, 1)
     safepoint(mutator)
@@ -215,6 +214,7 @@ func wait_for_cycle(heap: Ref[internal.gc.core.Heap]) {
     var current: Ref[internal.gc.core.Mutator]? = mine
     while current != nil {
         let mutator: Ref[internal.gc.core.Mutator] = current.get()
+        __os_thread_capture_self(ref mutator.captured)
         enter_blocking(mutator)
         current = mutator.wait_next
     }

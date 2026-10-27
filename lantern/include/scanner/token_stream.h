@@ -10,7 +10,7 @@ struct parse_token_stream_t {
     uint32_t            source;
 
     parse_token_info_t **tokens;
-    int32_t             token_cap;
+    size_t              token_cap;
     int32_t             token_count;
 
     int32_t            pos;
@@ -59,12 +59,9 @@ extern parse_token_info_t *scan_stream_lookback(parse_token_stream_t *ts,
 
 extern parse_token_info_t *scan_stream_get(parse_token_stream_t *ts, int32_t pos);
 
-/* Find the token preceding a buffered token; stable token indices are not
- * stream positions after edits or token-to-trivia conversion. */
 extern parse_token_info_t *scan_stream_previous_token(
     parse_token_stream_t *ts, const parse_token_info_t *token);
 
-/* Replace a buffered token with whitespace trivia, removing it from the stream. */
 extern bool scan_stream_token_to_trivia(parse_token_stream_t *ts, int32_t pos);
 
 extern int32_t scan_stream_token_count(parse_token_stream_t *ts);

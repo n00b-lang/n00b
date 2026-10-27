@@ -4,13 +4,14 @@
 
 #include <llvm-c/BitReader.h>
 #include <llvm-c/Core.h>
+#include <llvm-c/TargetMachine.h>
 
 #include "ir/ir.h"
 #include "ir/layout.h"
 #include "ir/summary.h"
 #include "ir/typelang.h"
 #include "lib/buffer.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "llvm_backend.h"
 #include "n00b-abi-v1.h"
 #include "runtime_native_roots.h"
@@ -96,7 +97,9 @@ main(void)
     const ir_profile_t profile = {
         .name = S("llvm-test"), .scalars = scalars, .n_scalars = 5,
     };
-    const core_string_t target = S("x86_64-unknown-linux-gnu");
+    core_target_desc_t host;
+    assert(core_target_host(&host));
+    const core_string_t target = host.triple;
     ir_module_t *runtime = ir_module_new(context, S("probe"), &profile,
                                          target);
     ir_func_t *function = FUNC_ADD(runtime, "entry",
@@ -744,7 +747,11 @@ main(void)
     assert(!LLVMParseBitcodeInContext2(reader, source, &parsed));
     assert(parsed);
     core_string_t parsed_target = core_string_from_cstr(LLVMGetTarget(parsed));
-    assert(core_string_eq(parsed_target, target));
+    char *host_triple = LLVMGetDefaultTargetTriple();
+    core_string_t host_target = core_string_from_cstr(host_triple);
+    LLVMDisposeMessage(host_triple);
+    assert(core_string_eq(parsed_target, host_target));
+    core_free(host_target.data);
     core_free(parsed_target.data);
     LLVMValueRef lowered_thread = LLVMGetNamedGlobal(parsed,
         "thread_counter");

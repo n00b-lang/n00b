@@ -29,9 +29,10 @@ writ_tu_open(writ_session_t *session, writ_tu_t *tu, writ_str_t triple, const wr
              bool macros, writ_str_t *error)
 {
     *tu = (writ_tu_t){.session = session, .request = request};
-    size_t capacity = 12 + 2 * (request->defines_count + request->include_paths_count);
+    size_t capacity = 13 + 2 * (request->defines_count + request->include_paths_count);
     const char **args = writ_alloc(session, sizeof(char *) * capacity);
     int count = 0;
+    args[count++] = writ_tool_path(session, "clang").data;
     args[count++] = "-x";
     args[count++] = "c";
     args[count++] = "-std=c11";
@@ -63,8 +64,8 @@ writ_tu_open(writ_session_t *session, writ_tu_t *tu, writ_str_t triple, const wr
     struct CXUnsavedFile unsaved = {"writ-import.c", text.data, (unsigned long)text.length};
     tu->index = clang_createIndex(0, 0);
     unsigned options = CXTranslationUnit_SkipFunctionBodies | (macros ? CXTranslationUnit_DetailedPreprocessingRecord : 0);
-    enum CXErrorCode code = clang_parseTranslationUnit2(tu->index, "writ-import.c", args, count, &unsaved, 1, options,
-                                                        &tu->unit);
+    enum CXErrorCode code = clang_parseTranslationUnit2FullArgv(tu->index, "writ-import.c", args, count, &unsaved, 1,
+                                                                options, &tu->unit);
     if (code != CXError_Success || !tu->unit) {
         *error = writ_cstr("libclang could not parse the headers");
         writ_tu_close(tu);

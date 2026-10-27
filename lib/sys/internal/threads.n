@@ -47,12 +47,12 @@ func stack_red_zone_bytes() -> uint {
     return __os_stack_red_zone_bytes()
 }
 
-func thread_control_self() -> uint {
-    return __os_thread_control_self()
+func frame_pointer_chain() -> bool {
+    return __os_frame_pointer_chain() != 0
 }
 
-func thread_capture_self(snapshot: Ref[Thread_Context]) {
-    __os_thread_capture_self(snapshot)
+func thread_control_self() -> uint {
+    return __os_thread_control_self()
 }
 
 func thread_suspend(control: uint, snapshot: Ref[Thread_Context], timeout_ns: u64)

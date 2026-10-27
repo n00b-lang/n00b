@@ -74,6 +74,7 @@ static const n00bb_abi_table_schema_t v1_schemas[] = {
     SCHEMA(TYPE_ARGUMENT, n00b_abi_type_argument_v1),
     SCHEMA(CALL_SHAPE, n00b_abi_call_shape_v1),
     SCHEMA(BAKED_NODE, n00b_abi_baked_node_v1),
+    SCHEMA(SUMMARY_STREAM, uint8_t),
 };
 
 const n00bb_abi_table_schema_t *

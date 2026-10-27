@@ -3,6 +3,7 @@
 #include <sys/stat.h>
 
 #include "internal.h"
+#include "lib/os.h"
 
 typedef struct {
     writ_session_t *session;
@@ -17,7 +18,7 @@ make_parents(char *path)
             continue;
         }
         *cursor = 0;
-        int made = mkdir(path, 0777);
+        int made = core_os_make_directory(core_string_borrow(path, (size_t)(cursor - path)), 0777) ? 0 : -1;
         *cursor = '/';
         if (made && errno != EEXIST) {
             return WRIT_IO_FAILED;

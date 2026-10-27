@@ -480,9 +480,9 @@ static bool told(env *e, core_string_t text)
     for (uint32_t i = 0; i < ir_diags_count(e->d); i++) {
         const ir_diag_t *dg = ir_diags_at(e->d, i);
 
-        if ((dg->primary.label.data
-             && core_string_find(dg->primary.label, text) >= 0)
-            || (dg->message.data && core_string_find(dg->message, text) >= 0)) {
+        if ((ir_diag_item(e->d, dg)->label.data
+             && core_string_find(ir_diag_item(e->d, dg)->label, text) >= 0)
+            || (ir_diag_item(e->d, dg)->message.data && core_string_find(ir_diag_item(e->d, dg)->message, text) >= 0)) {
             return true;
         }
     }

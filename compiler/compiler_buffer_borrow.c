@@ -6,15 +6,46 @@
 #include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
 #include "cached_body.h"
+#include "diagnostics.h"
 #include "sequence_transfer.h"
 
 #include "ir/doms.h"
 #include "ir/liveness.h"
 #include "ir/pass.h"
 
-static const core_string_t borrow_diagnostic_text = CORE_STRING_STATIC(
-    "this use of a Buffer as a string outlives a safe borrow; consume it "
-    "with to_string(b), or keep b with to_string(buffer_from_string(b))");
+static core_diag_location_t
+borrow_location(ir_span_t span)
+{
+    if (!ir_span_known(span)) return (core_diag_location_t){0};
+    return (core_diag_location_t){
+        .line = span.start_line,
+        .column = span.start_col,
+        .end_line = span.end_line,
+        .end_column = span.end_col,
+        .has_location = true,
+    };
+}
+
+static core_string_t
+source_name_of(core_string_t name)
+{
+    for (size_t i = name.u8_bytes; i > 0; i--)
+        if (name.data[i - 1] == '.')
+            return core_string_slice(name, i, name.u8_bytes - i);
+    return name;
+}
+
+static void
+borrow_internal(ir_diags_t *diagnostics, ir_func_t *function,
+                const ir_instr_t *at, const char *what)
+{
+    core_diagnostics_t *destination = ir_diags_destination(diagnostics);
+    if (!destination) return;
+    n00bb_internal_error(destination, ir_diags_unit(diagnostics),
+        borrow_location(at ? at->span : function->span),
+        "checking borrows", "%s in `%.*s`", what,
+        (int)function->name.u8_bytes, function->name.data);
+}
 
 static const core_string_t buffer_state_type_name =
     CORE_STRING_STATIC("builtin.containers.buffer.Buffer"
@@ -1305,36 +1336,29 @@ typedef struct {
 
 static void
 report_borrow(window_t *window, const ir_instr_t *offender,
-              core_string_t label)
+              n00bb_text_t label)
 {
-    ir_diag_t *diagnostic = ir_diag_begin_at(window->diagnostics,
-        label.data ? IR_DIAG_VERIFY_LIFETIME : IR_DIAG_INTERNAL,
-        window->conversion, window->conversion->block, window->function,
-        CORE_STRING_STATIC("this Buffer is borrowed as a string here"));
-    core_buffer_t message = {0};
-    if (!label.data)
-        core_buffer_puts(&message,
-                         "the Buffer borrow analysis could not complete for this "
-                         "conversion");
-    else if (offender && offender->span.start_line)
-        core_buffer_printf(&message, "%.*s (%.*s, at line %u, column %u)",
-                           (int)borrow_diagnostic_text.u8_bytes,
-                           borrow_diagnostic_text.data,
-                           (int)label.u8_bytes, label.data,
-                           offender->span.start_line,
-                           offender->span.start_col);
-    else
-        core_buffer_printf(&message, "%.*s (%.*s)",
-                           (int)borrow_diagnostic_text.u8_bytes,
-                           borrow_diagnostic_text.data,
-                           (int)label.u8_bytes, label.data);
-    core_string_t text = core_buffer_string(&message);
-    if (text.u8_bytes > 511) text.u8_bytes = 511;
-    ir_diag_message(diagnostic, window->diagnostics, text);
-    core_buffer_release(&message);
-    if (offender && label.data)
-        ir_diag_secondary(window->diagnostics, diagnostic, offender->span,
-                          label);
+    if (label == N00B_TEXT_COUNT) {
+        borrow_internal(window->diagnostics, window->function,
+            window->conversion, "the Buffer borrow analysis could not "
+            "complete");
+        return;
+    }
+    core_diagnostics_t *destination =
+        ir_diags_destination(window->diagnostics);
+    if (!destination) return;
+    n00bb_report(destination, ir_diags_unit(window->diagnostics),
+        N00B_DIAG_BUFFER_BORROW_OUTLIVED,
+        borrow_location(window->conversion->span),
+        N00B_TEXT_THIS_BUFFER_IS_USED_AS,
+        N00BB_NO_ARGS);
+    n00bb_report_label(destination, N00B_TEXT_BORROWED_AS_A_STRING_HERE,
+        N00BB_NO_ARGS);
+    if (offender && ir_span_known(offender->span))
+        n00bb_report_secondary(destination, nullptr,
+            borrow_location(offender->span), label, N00BB_NO_ARGS);
+    n00bb_report_help(destination, N00B_TEXT_CONSUME_THE_BUFFER_WITH_TO,
+        N00BB_NO_ARGS);
 }
 
 static bool
@@ -1615,7 +1639,7 @@ typedef struct {
     bool *after;
     uint32_t after_cap;
     ir_instr_t *offender;
-    core_string_t reason;
+    n00bb_text_t reason;
     root_set_t source;
     bool source_global;
     bool conditional;
@@ -1661,7 +1685,7 @@ roots_reach_global(const walk_t *walk, const root_set_t *roots)
 }
 
 static void
-blame(walk_t *walk, ir_instr_t *offender, core_string_t reason)
+blame(walk_t *walk, ir_instr_t *offender, n00bb_text_t reason)
 {
     if (walk->offender) return;
     walk->offender = offender;
@@ -1754,17 +1778,14 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     window_t *window = walk->window;
     if (stores_into_aggregate(window, instruction)
         || call_wraps_view(window, instruction))
-        blame(walk, instruction, CORE_STRING_STATIC(
-              "the borrowed string is stored into a field, element or "
-              "container here"));
+        blame(walk, instruction, N00B_TEXT_BORROW_STORED);
     if (instruction->op == IR_OP_RETURN || instruction->op == IR_OP_FAIL) {
         uint32_t index = 0;
         for (uint32_t o = 0; o < instruction->n_operands; o++)
             if (tracked_index(window, operand_at(instruction, o), &index))
                 blame(walk, instruction, instruction->op == IR_OP_RETURN
-                      ? CORE_STRING_STATIC("the borrowed string is returned here")
-                      : CORE_STRING_STATIC(
-                          "the borrowed string is the failure value here"));
+                      ? N00B_TEXT_BORROW_RETURNED
+                      : N00B_TEXT_BORROW_FAILURE_VALUE);
         return true;
     }
     bool call = is_call(instruction);
@@ -1772,8 +1793,7 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     const ir_sflow_t *effects = call
         ? call_effects(window->origins, instruction) : nullptr;
     if (call && (!effects || effects->opaque)) {
-        blame(walk, instruction, CORE_STRING_STATIC(
-              "this indirect or unknown call may write the borrowed Buffer"));
+        blame(walk, instruction, N00B_TEXT_BORROW_UNKNOWN_CALL_WRITES);
         return true;
     }
     root_set_t written = {0};
@@ -1786,8 +1806,8 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
                    && (writes_nonlocal
                        || roots_reach_global(walk, &written)))))
         blame(walk, instruction, call
-              ? CORE_STRING_STATIC("this call may write the borrowed Buffer")
-              : CORE_STRING_STATIC("this store may write the borrowed Buffer"));
+              ? N00B_TEXT_BORROW_CALL_WRITES
+              : N00B_TEXT_BORROW_STORE_WRITES);
     free(written.items);
     return ok;
 }
@@ -1885,8 +1905,7 @@ walk_window(walk_t *walk)
                         + frame->block->index] = true;
         if (walk->state[successor->index] == BLOCK_ACTIVE
             || successor == origin) {
-            blame(walk, terminator, CORE_STRING_STATIC(
-                  "the borrow is still live around this loop"));
+            blame(walk, terminator, N00B_TEXT_BORROW_LIVE_AROUND_LOOP);
             break;
         }
         if (walk->state[successor->index] == BLOCK_DONE) continue;
@@ -1929,14 +1948,12 @@ check_escapes(window_t *window, walk_t *walk)
             if (!escapes_at(window, block->instrs[i], &escapes))
                 return false;
             if (!escapes) continue;
-            blame(walk, block->instrs[i], CORE_STRING_STATIC(
-                  "the borrowed string is stored or passed where it may be "
-                  "kept"));
+            blame(walk, block->instrs[i], N00B_TEXT_BORROW_KEPT_HERE);
             return true;
         }
     }
     blame(walk, window->conversion,
-          CORE_STRING_STATIC("the borrowed string may be kept"));
+          N00B_TEXT_BORROW_MAY_BE_KEPT);
     return true;
 }
 
@@ -1995,7 +2012,7 @@ borrow_conversion(ir_diags_t *diagnostics, ir_func_t *function,
         ok = capture_buffer(&window)
             && insert_ends(&window, &walk.sites, nullptr);
     if (!ok)
-        report_borrow(&window, nullptr, (core_string_t){});
+        report_borrow(&window, nullptr, N00B_TEXT_COUNT);
     bool accepted = ok && !walk.offender;
     free(walk.sites.items);
     free(walk.state);
@@ -2114,25 +2131,30 @@ static void
 report_guarded_write(ir_diags_t *diagnostics, ir_func_t *function,
                      const ir_instr_t *offender, const ir_value_t *guarded)
 {
-    core_buffer_t label = {0};
-    core_string_t name = !guarded ? (core_string_t){}
-        : guarded->kind == IR_VAL_GLOBAL ? guarded->global->name
-                                         : guarded->name;
-    if (!guarded)
-        core_buffer_puts(&label, "the write analysis could not complete for "
-                                 "this function");
-    else
-        core_buffer_printf(&label, "%s memory reachable from %s '%.*s'",
-            is_call(offender) ? "this call may write" : "this writes",
-            guarded->kind == IR_VAL_GLOBAL ? "constant" : "view parameter",
-            (int)name.u8_bytes, name.data);
-    core_string_t text = core_buffer_string(&label);
-    if (text.u8_bytes > 511) text.u8_bytes = 511;
-    ir_diag_t *diagnostic = ir_diag_begin_at(diagnostics,
-        guarded ? IR_DIAG_GUARDED_WRITE : IR_DIAG_INTERNAL, offender,
-        offender ? offender->block : nullptr, function, text);
-    ir_diag_message(diagnostic, diagnostics, text);
-    core_buffer_release(&label);
+    if (!guarded) {
+        borrow_internal(diagnostics, function, offender,
+                        "the write analysis could not complete");
+        return;
+    }
+    core_diagnostics_t *destination = ir_diags_destination(diagnostics);
+    if (!destination) return;
+    bool constant = guarded->kind == IR_VAL_GLOBAL;
+    core_string_t name = source_name_of(constant ? guarded->global->name
+                                                 : guarded->name);
+    bool call = offender && is_call(offender);
+    n00bb_text_t message = constant
+        ? call ? N00B_TEXT_CALL_MAY_WRITE_CONSTANT : N00B_TEXT_WRITES_CONSTANT
+        : call ? N00B_TEXT_CALL_MAY_WRITE_VIEW : N00B_TEXT_WRITES_VIEW;
+    n00bb_report(destination, ir_diags_unit(diagnostics), N00B_DIAG_VIEW_WRITE,
+        borrow_location(offender ? offender->span : function->span), message,
+        N00BB_ARGS(ARG_TEXT(name)));
+    if (constant && ir_span_known(guarded->global->span))
+        n00bb_report_secondary(destination, nullptr,
+            borrow_location(guarded->global->span), N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(name)));
+    n00bb_report_help(destination, constant
+        ? N00B_TEXT_WRITE_TO_A_COPY : N00B_TEXT_TAKE_IT_AS_MODIFY,
+        N00BB_NO_ARGS);
 }
 
 static const ir_value_t *
@@ -2226,21 +2248,34 @@ escaped_view(origins_t *state, ir_instr_t *instruction, uint64_t views,
 }
 
 static void
-report_view_escape(ir_diags_t *diagnostics, ir_func_t *function,
-                   const ir_instr_t *offender, const ir_value_t *parameter)
+report_view_escape(ir_diags_t *diagnostics, const ir_instr_t *offender,
+                   const ir_value_t *parameter)
 {
-    core_buffer_t label = {0};
-    core_buffer_printf(&label, "%s a reference reachable from view "
-        "parameter '%.*s' where it outlives the call; only returning it is "
-        "allowed",
-        is_call(offender) ? "this call may keep" : "this stores",
-        (int)parameter->name.u8_bytes, parameter->name.data);
-    core_string_t text = core_buffer_string(&label);
-    if (text.u8_bytes > 511) text.u8_bytes = 511;
-    ir_diag_t *diagnostic = ir_diag_begin_at(diagnostics,
-        IR_DIAG_VIEW_ESCAPE, offender, offender->block, function, text);
-    ir_diag_message(diagnostic, diagnostics, text);
-    core_buffer_release(&label);
+    core_diagnostics_t *destination = ir_diags_destination(diagnostics);
+    if (!destination) return;
+    n00bb_report(destination, ir_diags_unit(diagnostics), N00B_DIAG_VIEW_ESCAPE,
+        borrow_location(offender->span),
+        is_call(offender) ? N00B_TEXT_CALL_MAY_KEEP_VIEW
+                          : N00B_TEXT_STORES_VIEW,
+        N00BB_ARGS(ARG_TEXT(parameter->name)));
+    const ir_value_t *target = offender->n_operands
+        && offender->operands[0].kind == IR_OPD_VALUE
+        ? offender->operands[0].value : nullptr;
+    if (!is_call(offender) && target && target->global
+        && ir_span_known(target->global->span)) {
+        core_string_t name = source_name_of(target->global->name);
+        n00bb_report_secondary(destination, nullptr,
+            borrow_location(target->global->span), N00B_TEXT_OUTLIVES_THE_CALL,
+            N00BB_ARGS(ARG_TEXT(name)));
+    }
+    else if (!is_call(offender) && target && target->def
+             && ir_span_known(target->def->span))
+        n00bb_report_secondary(destination, nullptr,
+            borrow_location(target->def->span),
+            N00B_TEXT_THIS_PLACE_OUTLIVES_THE_CALL,
+            N00BB_NO_ARGS);
+    n00bb_report_help(destination, N00B_TEXT_STORE_A_COPY_OR_RETURN,
+        N00BB_NO_ARGS);
 }
 
 static bool
@@ -2276,8 +2311,7 @@ guard_function(ir_diags_t *diagnostics, contents_table_t *table,
             const ir_value_t *escaped = ok && views
                 ? escaped_view(&state, instruction, views, &ok) : nullptr;
             if (escaped) {
-                report_view_escape(diagnostics, function, instruction,
-                                   escaped);
+                report_view_escape(diagnostics, instruction, escaped);
                 accepted = false;
             }
         }
@@ -2302,7 +2336,7 @@ n00bb_buffer_borrow_pass(ir_module_t *module, ir_summaries_t *summaries,
     }
     for (size_t f = 0; f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);
-        size_t count = ok ? collect_conversions(function, nullptr) : 0;
+        size_t count = collect_conversions(function, nullptr);
         if (count && !borrow_function(diagnostics, &table, summaries, types,
                                       function, count))
             ok = false;

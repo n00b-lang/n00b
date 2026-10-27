@@ -52,9 +52,6 @@ bool core_csp_post_in_with_provenance(core_csp_store_t *store,
                                       core_csp_var_id_t x,
                                       core_csp_domain_t domain,
                                       void *provenance);
-/* Posts sum(coeffs[i] * vars[i]) == rhs. Bounds propagation is conservative
- * when intermediate bounds exceed int64; fully grounded sums are checked
- * exactly across the supported variable/term count. */
 bool core_csp_post_linear(core_csp_store_t *store,
                           const core_csp_var_id_t *vars, const int64_t *coeffs,
                           int32_t count, int64_t rhs);
@@ -69,8 +66,6 @@ bool core_csp_post_alldiff_with_provenance(core_csp_store_t *store,
                                            int32_t count, void *provenance);
 
 bool core_csp_propagate(core_csp_store_t *store);
-/* Provenance is borrowed. A failed constraint ID is valid until backtracking
- * past that constraint or freeing the store. */
 int32_t core_csp_failed_constraint(const core_csp_store_t *store);
 void *core_csp_failed_provenance(const core_csp_store_t *store);
 void core_csp_push_state(core_csp_store_t *store);

@@ -12,6 +12,8 @@ enum {
     ELF_RELA_BYTES = 24,
     ELF_USER_SECTION_BASE = 4,
     ELF_RESERVED_SECTION_START = 0xff00,
+    ELF_RELOC_X86_64_64 = 1,
+    ELF_RELOC_AARCH64_ABS64 = 257,
 };
 
 bool core_object_emit_elf_native_section_index(size_t section_count,
@@ -65,7 +67,8 @@ bool core_object_emit_elf(const core_target_desc_t *target,
                           size_t relocation_count,
                           uint8_t **out_image, size_t *out_size)
 {
-    if (target->call_abi != CORE_TARGET_CALL_SYSV_AMD64 ||
+    bool aarch64 = target->call_abi == CORE_TARGET_CALL_AAPCS64;
+    if ((!aarch64 && target->call_abi != CORE_TARGET_CALL_SYSV_AMD64) ||
         section_count > ELF_RESERVED_SECTION_START - ELF_USER_SECTION_BASE ||
         symbol_count >= UINT32_MAX) return false;
 
@@ -88,15 +91,18 @@ bool core_object_emit_elf(const core_target_desc_t *target,
     for (size_t i = 0; i < symbol_count; i++)
         local_count += !symbols[i].exported;
 
+    static const core_string_t stack_note =
+        CORE_STRING_STATIC(".note.GNU-stack");
     size_t section_headers, shstr_size = 1, str_size = 1;
-    if (!core_object_size_add(ELF_USER_SECTION_BASE, section_count,
+    if (!core_object_size_add(ELF_USER_SECTION_BASE + 1, section_count,
                               &section_headers) ||
         !core_object_size_add(section_headers, rel_section_count,
                               &section_headers) ||
         section_headers > UINT32_MAX ||
         !add_name(&shstr_size, CORE_STRING_STATIC(".shstrtab")) ||
         !add_name(&shstr_size, CORE_STRING_STATIC(".strtab")) ||
-        !add_name(&shstr_size, CORE_STRING_STATIC(".symtab"))) goto done;
+        !add_name(&shstr_size, CORE_STRING_STATIC(".symtab")) ||
+        !add_name(&shstr_size, stack_note)) goto done;
     for (size_t i = 0; i < section_count; i++) {
         if (!add_name(&shstr_size, sections[i].name)) goto done;
         if (rel_counts[i] &&
@@ -142,7 +148,8 @@ bool core_object_emit_elf(const core_target_desc_t *target,
     image[5] = 1;
     image[6] = 1;
     core_le_store_u16(image + 16, 1);
-    core_le_store_u16(image + 18, 62);
+    core_le_store_u16(image + 18, aarch64 ? CORE_OBJECT_MACHINE_ELF_AARCH64
+                                          : CORE_OBJECT_MACHINE_ELF_X86_64);
     core_le_store_u32(image + 20, 1);
     core_le_store_u64(image + 40, shdr_offset);
     core_le_store_u16(image + 52, ELF_HEADER_BYTES);
@@ -163,6 +170,8 @@ bool core_object_emit_elf(const core_target_desc_t *target,
     uint32_t symtab_name = (uint32_t)(string_cursor - shstr_offset);
     memcpy(image + string_cursor, ".symtab", 8);
     string_cursor += 8;
+    uint32_t stack_note_name = (uint32_t)(string_cursor - shstr_offset);
+    put_name(image, &string_cursor, stack_note);
     for (size_t i = 0; i < section_count; i++) {
         section_names[i] = (uint32_t)(string_cursor - shstr_offset);
         put_name(image, &string_cursor, sections[i].name);
@@ -189,13 +198,14 @@ bool core_object_emit_elf(const core_target_desc_t *target,
         entry[4] = (symbols[i].exported ? 0x10 : 0)
             | (symbols[i].section_index
                 && sections[symbols[i].section_index - 1].is_thread_local
-                    ? 6 : 0);
+                    ? 6 : symbols[i].size ? 1 : 0);
         core_le_store_u16(entry + 6,
                           symbols[i].section_index
                               ? (uint16_t)(ELF_USER_SECTION_BASE +
                                            symbols[i].section_index - 1)
                               : 0);
         core_le_store_u64(entry + 8, symbols[i].section_offset);
+        core_le_store_u64(entry + 16, symbols[i].size);
     }
 
     write_section_header(image + shdr_offset + ELF_SECTION_BYTES, shstr_name,
@@ -227,6 +237,9 @@ bool core_object_emit_elf(const core_target_desc_t *target,
                              3, (uint32_t)(ELF_USER_SECTION_BASE + i),
                              8, ELF_RELA_BYTES);
     }
+    write_section_header(image + shdr_offset +
+                             rel_header_index * ELF_SECTION_BYTES,
+                         stack_note_name, 1, 0, shdr_offset, 0, 0, 0, 1, 0);
     for (size_t i = 0; i < relocation_count; i++) {
         const core_object_emit_absolute64_t *rel = &relocations[i];
         size_t section = rel->section_index - 1;
@@ -234,7 +247,9 @@ bool core_object_emit_elf(const core_target_desc_t *target,
                          (size_t)rel_written[section]++ * ELF_RELA_BYTES;
         core_le_store_u64(entry, rel->section_offset);
         core_le_store_u64(entry + 8,
-                          ((uint64_t)symbol_map[rel->symbol_index] << 32) | 1);
+                          ((uint64_t)symbol_map[rel->symbol_index] << 32)
+                              | (aarch64 ? ELF_RELOC_AARCH64_ABS64
+                                         : ELF_RELOC_X86_64_64));
         core_le_store_u64(entry + 16, rel->addend_bits);
         core_le_store_u64(image + data_offsets[section] + rel->section_offset,
                           rel->addend_bits);

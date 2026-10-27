@@ -74,7 +74,7 @@ complain_at(ir_module_t *m, ir_diags_t *d, ir_diagcode_t code,
     ir_diag_t *dg = ir_diag_begin_at(d, code, in, in ? in->block : nullptr,
                                      in && in->block ? in->block->owner
                                                      : nullptr,
-                                     label);
+                                     IR_DETAIL(label));
 
     if (!dg) {
         return nullptr;
@@ -89,7 +89,7 @@ complain_at(ir_module_t *m, ir_diags_t *d, ir_diagcode_t code,
 
     core_string_t msg = core_buffer_take_string(b);
 
-    ir_diag_message(dg, d, msg);
+    ir_diag_message(dg, d, IR_DETAIL(msg));
     core_free(msg.data);
 
     return dg;
@@ -117,7 +117,7 @@ static void blame_at(ir_diags_t *d, ir_diag_t *dg, ir_instr_t *in,
                                                          : nullptr;
 
     if (v && v->def && ir_span_known(v->def->span)) {
-        ir_diag_secondary(d, dg, v->def->span, label);
+        ir_diag_secondary(d, dg, v->def->span, IR_DETAIL(label));
     }
 }
 

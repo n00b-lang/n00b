@@ -42,6 +42,7 @@ struct writ_unit {
     core_list_t(writ_unit_root_t)  roots;
     core_list_t(writ_loc_t)        tokens;
     core_list_t(uint32_t)          files;
+    core_list_t(uint32_t)          contract_dirs;
     writ_sym_t                     language;
 };
 

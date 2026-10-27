@@ -49,8 +49,9 @@ typedef struct {
 typedef struct {
     writ_str_t name;
     writ_str_t symbol;
-    writ_str_t signature;
-    bool       pure;
+    writ_str_t  signature;
+    bool        pure;
+    writ_span_t declared_at;
 } writ_n00b_extern_t;
 
 typedef struct {

@@ -1,4 +1,5 @@
 #include "builtin_os.h"
+#include "runtime_panic.h"
 
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -243,8 +244,50 @@ static int32_t os_futex_wake_all_raw(_Atomic uint32_t *word)
         LINUX_FUTEX_WAKE_PRIVATE, 0x7fffffff, 0, 0, 0);
 }
 
+static bool os_map_file_raw(const char *path, const uint8_t **bytes,
+                            uint64_t *length)
+{
+    long fd = n00b_linux_syscall6(__NR_openat, AT_FDCWD, (long)path, 0, 0, 0,
+                                  0);
+    if (fd < 0) return false;
+    long size = n00b_linux_syscall6(__NR_lseek, fd, 0, 2, 0, 0, 0);
+    long mapped = size > 0
+        ? n00b_linux_syscall6(__NR_mmap, 0, size, 1, 2, fd, 0) : -1;
+    n00b_linux_syscall6(__NR_close, fd, 0, 0, 0, 0, 0);
+    if (size <= 0 || (mapped < 0 && mapped > -4096)) return false;
+    *bytes = (const uint8_t *)mapped;
+    *length = (uint64_t)size;
+    return true;
+}
+
+static uint64_t os_executable_path_raw(uint8_t *buffer, uint64_t capacity)
+{
+    long used = n00b_linux_syscall6(__NR_readlinkat, AT_FDCWD,
+        (long)"/proc/self/exe", (long)buffer, (long)capacity, 0, 0);
+    if (used <= 0 || (uint64_t)used >= capacity) return 0;
+    buffer[used] = 0;
+    return (uint64_t)used;
+}
+
+static uint64_t os_current_directory_raw(uint8_t *buffer, uint64_t capacity)
+{
+    long used = n00b_linux_syscall6(__NR_getcwd, (long)buffer,
+                                    (long)capacity, 0, 0, 0, 0);
+    if (used <= 0) return 0;
+    uint64_t length = 0;
+    while (length < capacity && buffer[length]) length++;
+    return length < capacity ? length : 0;
+}
+
+static bool os_on_stack_raw(const void *address, uint64_t bytes)
+{
+    (void)bytes;
+    return address != NULL;
+}
+
 #elif defined(__APPLE__)
 
+#include <mach-o/dyld.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <errno.h>
@@ -418,6 +461,47 @@ static int64_t os_pipe_raw(int32_t fds[2])
     return 0;
 }
 
+static bool os_map_file_raw(const char *path, const uint8_t **bytes,
+                            uint64_t *length)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    off_t size = lseek(fd, 0, SEEK_END);
+    void *mapped = size > 0
+        ? mmap(NULL, (size_t)size, PROT_READ, MAP_PRIVATE, fd, 0) : MAP_FAILED;
+    close(fd);
+    if (mapped == MAP_FAILED) return false;
+    *bytes = mapped;
+    *length = (uint64_t)size;
+    return true;
+}
+
+static uint64_t os_text_length(const uint8_t *buffer, uint64_t capacity)
+{
+    uint64_t length = 0;
+    while (length < capacity && buffer[length]) length++;
+    return length < capacity ? length : 0;
+}
+
+static uint64_t os_executable_path_raw(uint8_t *buffer, uint64_t capacity)
+{
+    uint32_t size = capacity > UINT32_MAX ? UINT32_MAX : (uint32_t)capacity;
+    if (_NSGetExecutablePath((char *)buffer, &size)) return 0;
+    return os_text_length(buffer, capacity);
+}
+
+static uint64_t os_current_directory_raw(uint8_t *buffer, uint64_t capacity)
+{
+    if (!getcwd((char *)buffer, (size_t)capacity)) return 0;
+    return os_text_length(buffer, capacity);
+}
+
+static bool os_on_stack_raw(const void *address, uint64_t bytes)
+{
+    (void)bytes;
+    return address != NULL;
+}
+
 #elif defined(_WIN32)
 
 #define WIN32_LEAN_AND_MEAN
@@ -437,9 +521,16 @@ static uint64_t os_thread_id(void)
     return (uint64_t)GetCurrentThreadId();
 }
 
+static DWORD os_main_thread;
+
+__attribute__((constructor)) static void os_record_main_thread(void)
+{
+    os_main_thread = GetCurrentThreadId();
+}
+
 static bool os_thread_is_main(void)
 {
-    return false;
+    return GetCurrentThreadId() == os_main_thread;
 }
 
 static uintptr_t os_thread_stack_high_self(void)
@@ -482,8 +573,18 @@ static void *os_map_raw(size_t bytes)
 
 static int32_t os_unmap_raw(void *address, size_t bytes)
 {
-    (void)bytes;
-    return VirtualFree(address, 0, MEM_RELEASE) ? 0 : -1;
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery(address, &info, sizeof info) || info.State == MEM_FREE)
+        return -1;
+    uint8_t *base = info.AllocationBase;
+    if (!VirtualFree(address, bytes, MEM_DECOMMIT)) return -1;
+    uint8_t *cursor = base;
+    while (VirtualQuery(cursor, &info, sizeof info)
+           && info.AllocationBase == base) {
+        if (info.State == MEM_COMMIT) return 0;
+        cursor = (uint8_t *)info.BaseAddress + info.RegionSize;
+    }
+    return VirtualFree(base, 0, MEM_RELEASE) ? 0 : -1;
 }
 
 static int32_t os_protect_raw(void *address, size_t bytes, uint32_t protection)
@@ -499,10 +600,16 @@ static int64_t os_errno_result(int64_t result)
     return result < 0 ? -(int64_t)errno : result;
 }
 
+static wchar_t *os_wide(const uint8_t *path);
+
 static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
 {
-    return os_errno_result(_open((const char *)path, (int)flags | _O_BINARY,
-                                 (int)mode));
+    wchar_t *wide = os_wide(path);
+    if (!wide) return -EINVAL;
+    int64_t result = os_errno_result(_wopen(wide, (int)flags | _O_BINARY,
+                                            (int)mode));
+    free(wide);
+    return result;
 }
 
 static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
@@ -574,6 +681,82 @@ static int64_t os_pipe_raw(int32_t fds[2])
     return 0;
 }
 
+static wchar_t *os_wide(const uint8_t *path)
+{
+    int units = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                    (const char *)path, -1, NULL, 0);
+    wchar_t *wide = units > 0 ? malloc((size_t)units * sizeof(wchar_t))
+                              : NULL;
+    if (wide && !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+                                     (const char *)path, -1, wide, units)) {
+        free(wide);
+        wide = NULL;
+    }
+    return wide;
+}
+
+static uint64_t os_utf8_path(const wchar_t *wide, DWORD units,
+                             uint8_t *buffer, uint64_t capacity)
+{
+    int limit = capacity > INT_MAX ? INT_MAX : (int)capacity;
+    int length = units ? WideCharToMultiByte(CP_UTF8, 0, wide, (int)units,
+        (char *)buffer, limit, NULL, NULL) : 0;
+    if (length <= 0 || (uint64_t)length >= capacity) return 0;
+    for (int i = 0; i < length; i++)
+        if (buffer[i] == '\\') buffer[i] = '/';
+    buffer[length] = 0;
+    return (uint64_t)length;
+}
+
+static bool os_map_file_raw(const char *path, const uint8_t **bytes,
+                            uint64_t *length)
+{
+    wchar_t *wide = os_wide((const uint8_t *)path);
+    HANDLE file = wide ? CreateFileW(wide, GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL)
+        : INVALID_HANDLE_VALUE;
+    free(wide);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER size = {0};
+    HANDLE section = GetFileSizeEx(file, &size) && size.QuadPart > 0
+        ? CreateFileMappingW(file, NULL, PAGE_READONLY, 0, 0, NULL) : NULL;
+    CloseHandle(file);
+    const void *view = section
+        ? MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0) : NULL;
+    if (section) CloseHandle(section);
+    if (!view) return false;
+    *bytes = view;
+    *length = (uint64_t)size.QuadPart;
+    return true;
+}
+
+static wchar_t os_path_units[32768];
+
+static uint64_t os_executable_path_raw(uint8_t *buffer, uint64_t capacity)
+{
+    DWORD limit = sizeof os_path_units / sizeof os_path_units[0];
+    DWORD units = GetModuleFileNameW(NULL, os_path_units, limit);
+    return units && units < limit
+        ? os_utf8_path(os_path_units, units, buffer, capacity) : 0;
+}
+
+static uint64_t os_current_directory_raw(uint8_t *buffer, uint64_t capacity)
+{
+    DWORD limit = sizeof os_path_units / sizeof os_path_units[0];
+    DWORD units = GetCurrentDirectoryW(limit, os_path_units);
+    return units && units < limit
+        ? os_utf8_path(os_path_units, units, buffer, capacity) : 0;
+}
+
+static bool os_on_stack_raw(const void *address, uint64_t bytes)
+{
+    ULONG_PTR low = 0;
+    ULONG_PTR high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    uintptr_t at = (uintptr_t)address;
+    return at >= low && at < high && high - at >= bytes;
+}
+
 #else
 #error "builtin/os requires macOS, Linux, or Windows"
 #endif
@@ -594,6 +777,7 @@ static void *os_thread_begin(void *raw)
 {
     os_thread_packet_t packet = *(os_thread_packet_t *)raw;
     free(raw);
+    n00bb_runtime_install_failure_handlers();
     void (*hook)(void) = atomic_load(&thread_start_hook);
     if (hook) hook();
     return packet.entry(packet.argument);
@@ -707,6 +891,7 @@ void n00b_os_save_args(int32_t argc, char **argv)
 {
     saved_argc = argc;
     saved_argv = argv;
+    n00bb_runtime_install_failure_handlers();
 }
 
 uint64_t n00b_os_arg_count(void)
@@ -784,10 +969,20 @@ uint64_t n00b_os_stack_address(void)
 
 size_t n00b_os_stack_red_zone_bytes(void)
 {
-#if defined(__x86_64__) || (defined(__APPLE__) && defined(__aarch64__))
+#if (defined(__x86_64__) && !defined(_WIN32)) \
+    || (defined(__APPLE__) && defined(__aarch64__))
     return 128;
 #else
     return 0;
+#endif
+}
+
+uint64_t n00b_os_frame_pointer_chain(void)
+{
+#if defined(_WIN32)
+    return 0;
+#else
+    return 1;
 #endif
 }
 
@@ -851,4 +1046,26 @@ int32_t n00b_os_protect(void *address, size_t bytes, uint32_t protection)
 {
     if (!address || !bytes || (protection & ~UINT32_C(3))) return -1;
     return os_protect_raw(address, bytes, protection);
+}
+
+bool n00b_os_map_file(const char *path, const uint8_t **bytes,
+                      uint64_t *length)
+{
+    return path && bytes && length && os_map_file_raw(path, bytes, length);
+}
+
+uint64_t n00b_os_executable_path(uint8_t *buffer, uint64_t capacity)
+{
+    return buffer && capacity ? os_executable_path_raw(buffer, capacity) : 0;
+}
+
+uint64_t n00b_os_current_directory(uint8_t *buffer, uint64_t capacity)
+{
+    return buffer && capacity ? os_current_directory_raw(buffer, capacity)
+                              : 0;
+}
+
+bool n00b_os_on_stack(const void *address, uint64_t bytes)
+{
+    return os_on_stack_raw(address, bytes);
 }

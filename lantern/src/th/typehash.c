@@ -669,7 +669,8 @@ static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
 
         if (!ctx->norm(ctx->norm_state, s, &o)) {
             th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
-                   CORE_STRING_STATIC("name normalization failed"));
+                   CORE_STRING_STATIC(
+                       "the name is not in Unicode normal form C"));
 
             return false;
         }
@@ -683,8 +684,8 @@ static bool name(th_ctx *ctx, core_buffer_t *b, core_string_t s)
         if ((unsigned char)s.data[i] >= 0x80) {
             th_err(ctx, TH_ERR_BAD_NAME, (core_string_t){}, nullptr, nullptr,
                    CORE_STRING_STATIC(
-                       "non-ASCII name requires an NFC normalizer; "
-                       "call th_ctx_set_normalizer"));
+                       "a non-ASCII type name cannot be checked without "
+                       "Unicode normalization"));
 
             return false;
         }
@@ -973,7 +974,8 @@ static bool enc_plan(th_enc *e, eframe *f)
             th_err(e->ctx, TH_ERR_FREE_VAR, (core_string_t){}, nullptr,
                    (th_type *)t,
                    CORE_STRING_STATIC(
-                       "free variable has no index; normalize first"));
+                       "a type still contains an unresolved type "
+                       "variable"));
 
             return false;
         }

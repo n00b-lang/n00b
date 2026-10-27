@@ -145,7 +145,7 @@ writ_type_declare(writ_model_t *model, writ_sym_t name, writ_type_id type, writ_
 {
     if (!core_dict_add(&model->type_names, name, type)) {
         writ_str_t text = writ_sym_str(model->session, name);
-        writ_report(model->session, WRIT_D_DUPLICATE, loc, "type `%.*s`", (int)text.length, text.data);
+        writ_report(model->session, WRIT_D_DUPLICATE, loc, WRIT_MESSAGE(TYPE, WRIT_ARG(text)));
         return false;
     }
     return true;

@@ -1,0 +1,2 @@
+tests/diagnostics/front/undefined_define.n:1:6: error N00B-P0025: no value was supplied for `NOPE`
+  help: pass `--define NOPE=VALUE`, or test `preproc_defines("NOPE")` first

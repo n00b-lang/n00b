@@ -213,7 +213,8 @@ static bool find_coff(const uint8_t *image, size_t size, core_string_t name,
 {
     if (!span(size, 0, 20)) return false;
     uint16_t machine = core_le_load_u16(image);
-    if (machine != 0x8664 && machine != 0xaa64) return false;
+    if (machine != CORE_OBJECT_MACHINE_COFF_X86_64
+        && machine != CORE_OBJECT_MACHINE_COFF_ARM64) return false;
     uint16_t count = core_le_load_u16(image + 2);
     uint16_t optional_size = core_le_load_u16(image + 16);
     if (optional_size || !table_span(size, 20, count, 40)) return false;
@@ -284,8 +285,10 @@ bool core_object_absolute64_relocation_at(
             (section->relocation_has_explicit_addend ? 24u : 16u)) return false;
         uint64_t info = core_le_load_u64(raw + 8);
         uint32_t type = (uint32_t)info;
-        if (!((section->machine == 62 && type == 1) ||
-              (section->machine == 183 && type == 257))) return false;
+        if (!((section->machine == CORE_OBJECT_MACHINE_ELF_X86_64
+               && type == 1)
+              || (section->machine == CORE_OBJECT_MACHINE_ELF_AARCH64
+                  && type == 257))) return false;
         result.section_offset = core_le_load_u64(raw);
         result.native_symbol_index = (uint32_t)(info >> 32);
         break;
@@ -295,8 +298,8 @@ bool core_object_absolute64_relocation_at(
         uint32_t address = core_le_load_u32(raw);
         uint32_t info = core_le_load_u32(raw + 4);
         if ((address & 0x80000000u) ||
-            !(section->machine == 0x01000007 ||
-              section->machine == 0x0100000c) ||
+            !(section->machine == CORE_OBJECT_MACHINE_MACHO_X86_64 ||
+              section->machine == CORE_OBJECT_MACHINE_MACHO_ARM64) ||
             ((info >> 24) & 1) || ((info >> 25) & 3) != 3 ||
             ((info >> 28) & 15) != 0) return false;
         result.section_offset = address;
@@ -306,7 +309,7 @@ bool core_object_absolute64_relocation_at(
     }
     case CORE_TARGET_OBJECT_COFF:
         if (section->relocation_entry_size != 10 ||
-            section->machine != 0x8664 ||
+            section->machine != CORE_OBJECT_MACHINE_COFF_X86_64 ||
             core_le_load_u16(raw + 8) != 1) return false;
         result.section_offset = core_le_load_u32(raw);
         result.native_symbol_index = core_le_load_u32(raw + 4);
@@ -320,6 +323,95 @@ bool core_object_absolute64_relocation_at(
             ? core_le_load_u64(raw + 16)
             : core_le_load_u64(section->bytes + result.section_offset);
     *out = result;
+    return true;
+}
+
+bool core_object_relocation_at(const core_object_section_t *section,
+                               core_target_object_format_t format,
+                               uint32_t index,
+                               core_object_relocation_t *out)
+{
+    if (!section || !out || !section->relocations ||
+        index >= section->relocation_count) return false;
+    const uint8_t *raw = section->relocations +
+                         (size_t)index * section->relocation_entry_size;
+    core_object_relocation_t result = {0};
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF: {
+        if (!section->relocation_has_explicit_addend
+            || section->relocation_entry_size < 24) return false;
+        uint64_t info = core_le_load_u64(raw + 8);
+        result.section_offset = core_le_load_u64(raw);
+        result.native_symbol_index = (uint32_t)(info >> 32);
+        result.type = (uint32_t)info;
+        result.addend = (int64_t)core_le_load_u64(raw + 16);
+        break;
+    }
+    case CORE_TARGET_OBJECT_MACH_O: {
+        if (section->relocation_entry_size != 8) return false;
+        uint32_t address = core_le_load_u32(raw);
+        uint32_t info = core_le_load_u32(raw + 4);
+        uint32_t length = (info >> 25) & 3;
+        if ((address & 0x80000000u) || length < 2
+            || !span(section->size, address, 1u << length)) return false;
+        result.section_offset = address;
+        result.native_symbol_index = info & 0x00ffffffu;
+        result.target_is_section = !((info >> 27) & 1);
+        result.type = (info >> 28) & 15;
+        result.addend = length == 3
+            ? (int64_t)core_le_load_u64(section->bytes + address)
+            : (int32_t)core_le_load_u32(section->bytes + address);
+        break;
+    }
+    case CORE_TARGET_OBJECT_COFF: {
+        if (section->relocation_entry_size != 10
+            || section->machine != CORE_OBJECT_MACHINE_COFF_X86_64) return false;
+        uint32_t address = core_le_load_u32(raw);
+        uint16_t type = core_le_load_u16(raw + 8);
+        uint32_t width = type == 1 ? 8 : 4;
+        if (!type || type > 0x10 || !span(section->size, address, width))
+            return false;
+        result.section_offset = address;
+        result.native_symbol_index = core_le_load_u32(raw + 4);
+        result.type = type;
+        result.addend = width == 8
+            ? (int64_t)core_le_load_u64(section->bytes + address)
+            : (int32_t)core_le_load_u32(section->bytes + address);
+        break;
+    }
+    default:
+        return false;
+    }
+    *out = result;
+    return true;
+}
+
+bool core_object_relocation_target(const void *image, size_t image_size,
+                                   core_target_object_format_t format,
+                                   const core_object_section_t *section,
+                                   const core_object_relocation_t *relocation,
+                                   uint32_t *out_section,
+                                   uint64_t *out_offset)
+{
+    if (!image || !section || !relocation || !out_section || !out_offset)
+        return false;
+    if (relocation->target_is_section) {
+        core_object_section_t target;
+        if (!core_object_section_at(image, image_size, format,
+                relocation->native_symbol_index, &target)
+            || (uint64_t)relocation->addend < target.virtual_address)
+            return false;
+        *out_section = relocation->native_symbol_index;
+        *out_offset = (uint64_t)relocation->addend - target.virtual_address;
+        return true;
+    }
+    core_object_symbol_t symbol;
+    if (!core_object_symbol_at(image, image_size, format, section,
+            relocation->native_symbol_index, &symbol)
+        || !symbol.native_section_index) return false;
+    *out_section = symbol.native_section_index;
+    *out_offset = (uint64_t)((int64_t)symbol.section_offset
+                             + relocation->addend);
     return true;
 }
 
@@ -392,8 +484,8 @@ bool core_object_section_count(const void *image, size_t image_size,
     }
     case CORE_TARGET_OBJECT_COFF:
         if (!span(image_size, 0, 20) ||
-            (core_le_load_u16(bytes) != 0x8664
-                && core_le_load_u16(bytes) != 0xaa64) ||
+            (core_le_load_u16(bytes) != CORE_OBJECT_MACHINE_COFF_X86_64
+                && core_le_load_u16(bytes) != CORE_OBJECT_MACHINE_COFF_ARM64) ||
             core_le_load_u16(bytes + 16) != 0) return false;
         count = core_le_load_u16(bytes + 2);
         if (!table_span(image_size, 20, count, 40)) return false;
@@ -562,6 +654,134 @@ bool core_object_symbol_name_at(const void *image, size_t image_size,
     }
 }
 
+typedef struct {
+    const uint8_t *entries;
+    uint64_t count;
+    uint64_t width;
+    uint64_t declared_offset;
+} symbol_table_t;
+
+static bool symbol_table(const uint8_t *image, size_t size,
+                         core_target_object_format_t format,
+                         const core_object_section_t *section,
+                         symbol_table_t *out)
+{
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF: {
+        uint32_t sections;
+        if (!core_object_section_count(image, size, format, &sections))
+            return false;
+        uint64_t headers = core_le_load_u64(image + 40);
+        uint16_t width = core_le_load_u16(image + 58);
+        uint32_t index = section->native_symbol_table_index;
+        if (!index || index > sections) return false;
+        const uint8_t *table = image + headers + (uint64_t)index * width;
+        uint64_t offset = core_le_load_u64(table + 24);
+        uint64_t length = core_le_load_u64(table + 32);
+        uint64_t entry_size = core_le_load_u64(table + 56);
+        if (core_le_load_u32(table + 4) != 2 || entry_size < 24
+            || length % entry_size || !span(size, offset, length))
+            return false;
+        *out = (symbol_table_t){image + offset, length / entry_size,
+                                entry_size, 16};
+        return true;
+    }
+    case CORE_TARGET_OBJECT_MACH_O: {
+        uint32_t command_count = core_le_load_u32(image + 16);
+        uint32_t command_bytes = core_le_load_u32(image + 20);
+        if (!span(size, 32, command_bytes)) return false;
+        size_t cursor = 32, end = 32 + command_bytes;
+        for (uint32_t i = 0; i < command_count; i++) {
+            if (!span(end, cursor, 8)) return false;
+            uint32_t command = core_le_load_u32(image + cursor);
+            uint32_t length = core_le_load_u32(image + cursor + 4);
+            if (length < 8 || !span(end, cursor, length)) return false;
+            if (command == 2 && length >= 24) {
+                uint32_t offset = core_le_load_u32(image + cursor + 8);
+                uint32_t count = core_le_load_u32(image + cursor + 12);
+                if (!table_span(size, offset, count, 16)) return false;
+                *out = (symbol_table_t){image + offset, count, 16, 0};
+                return true;
+            }
+            cursor += length;
+        }
+        return false;
+    }
+    case CORE_TARGET_OBJECT_COFF: {
+        uint32_t offset = core_le_load_u32(image + 8);
+        uint32_t count = core_le_load_u32(image + 12);
+        if (!offset || !table_span(size, offset, count, 18)) return false;
+        *out = (symbol_table_t){image + offset, count, 18, 0};
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+typedef struct {
+    uint32_t section;
+    uint64_t offset;
+    bool exported;
+} symbol_entry_t;
+
+static bool symbol_entry(const uint8_t *image, size_t size,
+                         core_target_object_format_t format,
+                         const symbol_table_t *table, uint64_t index,
+                         symbol_entry_t *out)
+{
+    const uint8_t *entry = table->entries + index * table->width;
+    uint32_t sections;
+    if (!core_object_section_count(image, size, format, &sections))
+        return false;
+    switch (format) {
+    case CORE_TARGET_OBJECT_ELF: {
+        uint8_t binding = entry[4] >> 4;
+        uint16_t place = core_le_load_u16(entry + 6);
+        if ((entry[4] & 0x0f) == 4 || binding > 2 || place >= 0xff00
+            || place > sections) return false;
+        *out = (symbol_entry_t){
+            .section = place,
+            .offset = place ? core_le_load_u64(entry + 8) : 0,
+            .exported = binding != 0,
+        };
+        return true;
+    }
+    case CORE_TARGET_OBJECT_MACH_O: {
+        uint8_t kind = entry[4] & 0x0e;
+        if ((entry[4] & 0xe0) || (kind != 0 && kind != 0x0e)
+            || (kind == 0 && entry[5])
+            || (kind == 0x0e && (!entry[5] || entry[5] > sections)))
+            return false;
+        *out = (symbol_entry_t){.exported = (entry[4] & 1) != 0};
+        if (kind == 0) return true;
+        core_object_section_t target;
+        if (!core_object_section_at(image, size, format, entry[5], &target))
+            return false;
+        uint64_t address = core_le_load_u64(entry + 8);
+        if (address < target.virtual_address
+            || address - target.virtual_address > target.size) return false;
+        out->section = entry[5];
+        out->offset = address - target.virtual_address;
+        return true;
+    }
+    case CORE_TARGET_OBJECT_COFF: {
+        int16_t place = (int16_t)core_le_load_u16(entry + 12);
+        uint8_t storage_class = entry[16];
+        if (place < 0 || (uint32_t)place > sections
+            || (storage_class != 2 && storage_class != 3)) return false;
+        *out = (symbol_entry_t){
+            .section = (uint32_t)place,
+            .offset = place ? core_le_load_u32(entry + 8) : 0,
+            .exported = storage_class == 2,
+        };
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 bool core_object_symbol_at(const void *image, size_t image_size,
                            core_target_object_format_t format,
                            const core_object_section_t *section,
@@ -569,101 +789,58 @@ bool core_object_symbol_at(const void *image, size_t image_size,
                            core_object_symbol_t *out)
 {
     if (!image || !section || !out) return false;
+    symbol_table_t table;
+    symbol_entry_t entry;
     core_object_symbol_t result = {0};
     if (!core_object_symbol_name_at(image, image_size, format, section,
-                                    native_symbol_index, &result.name))
-        return false;
-    const uint8_t *bytes = image;
-    uint32_t section_count;
-    if (!core_object_section_count(image, image_size, format,
-                                   &section_count)) return false;
-    switch (format) {
-    case CORE_TARGET_OBJECT_ELF: {
-        uint64_t headers = core_le_load_u64(bytes + 40);
-        uint16_t width = core_le_load_u16(bytes + 58);
-        uint32_t table_index = section->native_symbol_table_index;
-        if (!table_index || table_index > section_count) return false;
-        const uint8_t *table = bytes + headers + (uint64_t)table_index * width;
-        uint64_t offset = core_le_load_u64(table + 24);
-        uint64_t length = core_le_load_u64(table + 32);
-        uint64_t entry_size = core_le_load_u64(table + 56);
-        if (entry_size < 24 || native_symbol_index >= length / entry_size)
-            return false;
-        const uint8_t *entry = bytes + offset
-            + (uint64_t)native_symbol_index * entry_size;
-        uint8_t binding = entry[4] >> 4;
-        uint16_t section_index = core_le_load_u16(entry + 6);
-        if (binding > 1 || (entry[4] & 0x0f) || entry[5]
-            || section_index >= 0xff00
-            || section_index > section_count) return false;
-        result.exported = binding == 1;
-        result.native_section_index = section_index;
-        result.section_offset = section_index
-            ? core_le_load_u64(entry + 8) : 0;
-        break;
-    }
-    case CORE_TARGET_OBJECT_MACH_O: {
-        uint32_t command_count = core_le_load_u32(bytes + 16);
-        uint32_t command_bytes = core_le_load_u32(bytes + 20);
-        size_t cursor = 32, end = 32 + command_bytes;
-        bool found = false;
-        for (uint32_t i = 0; i < command_count; i++) {
-            uint32_t command = core_le_load_u32(bytes + cursor);
-            uint32_t size = core_le_load_u32(bytes + cursor + 4);
-            if (command == 2) {
-                uint32_t offset = core_le_load_u32(bytes + cursor + 8);
-                const uint8_t *entry = bytes + offset
-                    + (uint64_t)native_symbol_index * 16;
-                uint8_t kind = entry[4] & 0x0e;
-                uint8_t section_index = entry[5];
-                if ((entry[4] & 0xf0) || core_le_load_u16(entry + 6)
-                    || (kind != 0 && kind != 0x0e)
-                    || (kind == 0 && section_index)
-                    || (kind == 0x0e
-                        && (!section_index || section_index > section_count)))
-                    return false;
-                result.exported = (entry[4] & 1) != 0;
-                result.native_section_index = section_index;
-                if (section_index) {
-                    core_object_section_t target;
-                    if (!core_object_section_at(image, image_size, format,
-                                                section_index, &target))
-                        return false;
-                    uint64_t address = core_le_load_u64(entry + 8);
-                    if (address < target.virtual_address
-                        || address - target.virtual_address > target.size)
-                        return false;
-                    result.section_offset = address
-                        - target.virtual_address;
-                }
-                found = true;
-                break;
-            }
-            cursor += size;
-            if (cursor > end) return false;
-        }
-        if (!found) return false;
-        break;
-    }
-    case CORE_TARGET_OBJECT_COFF: {
-        uint32_t offset = core_le_load_u32(bytes + 8);
-        const uint8_t *entry = bytes + offset
-            + (uint64_t)native_symbol_index * 18;
-        int16_t section_index = (int16_t)core_le_load_u16(entry + 12);
-        uint8_t storage_class = entry[16];
-        if (section_index < 0
-            || (uint32_t)section_index > section_count
-            || (storage_class != 2 && storage_class != 3)
-            || core_le_load_u16(entry + 14) || entry[17]) return false;
-        result.exported = storage_class == 2;
-        result.native_section_index = (uint32_t)section_index;
-        result.section_offset = section_index
-            ? core_le_load_u32(entry + 8) : 0;
-        break;
-    }
-    default:
-        return false;
-    }
+                                    native_symbol_index, &result.name)
+        || !symbol_table(image, image_size, format, section, &table)
+        || native_symbol_index >= table.count
+        || !symbol_entry(image, image_size, format, &table,
+                         native_symbol_index, &entry)) return false;
+    result.native_section_index = entry.section;
+    result.section_offset = entry.offset;
+    result.exported = entry.exported;
     *out = result;
+    return true;
+}
+
+bool core_object_symbol_extent(const void *image, size_t image_size,
+                               core_target_object_format_t format,
+                               const core_object_section_t *section,
+                               uint32_t native_symbol_index,
+                               uint64_t *out_bytes)
+{
+    if (!image || !section || !out_bytes) return false;
+    const uint8_t *bytes = image;
+    symbol_table_t table;
+    symbol_entry_t home;
+    if (!symbol_table(bytes, image_size, format, section, &table)
+        || native_symbol_index >= table.count
+        || !symbol_entry(bytes, image_size, format, &table,
+                         native_symbol_index, &home) || !home.section)
+        return false;
+    if (table.declared_offset) {
+        uint64_t declared = core_le_load_u64(table.entries
+            + native_symbol_index * table.width + table.declared_offset);
+        if (declared) {
+            *out_bytes = declared;
+            return true;
+        }
+    }
+    core_object_section_t owner;
+    if (!core_object_section_at(image, image_size, format, home.section,
+                                &owner) || home.offset >= owner.size)
+        return false;
+    uint64_t end = owner.size;
+    for (uint64_t i = 0; i < table.count; i++) {
+        symbol_entry_t other;
+        if (symbol_entry(bytes, image_size, format, &table, i, &other)
+            && other.section == home.section && other.offset > home.offset
+            && other.offset < end) end = other.offset;
+        if (format == CORE_TARGET_OBJECT_COFF)
+            i += table.entries[i * table.width + 17];
+    }
+    *out_bytes = end - home.offset;
     return true;
 }

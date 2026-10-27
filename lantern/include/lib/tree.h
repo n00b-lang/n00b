@@ -12,9 +12,17 @@
 #endif
 
 #define core_tree_tid(N, L) typeid(core_tree, N, __, L)
+#define core_tree_body_tid(N, L) typeid(core_tree_body, N, __, L)
 #define _core_tree_helper(name, N, L) typeid(name, N, __, L)
 
 #define core_tree_decl(N, L)                                                   \
+    struct core_tree_tid(N, L);                                                \
+    struct core_tree_body_tid(N, L) {                                          \
+        N value;                                                               \
+        struct core_tree_tid(N, L) * *children;                                \
+        uint32_t num_children;                                                 \
+        uint32_t capacity;                                                     \
+    };                                                                         \
     struct core_tree_tid(N, L) {                                               \
         struct core_tree_tid(N, L) *first_leaf;                                \
         struct core_tree_tid(N, L) **parents;                                  \
@@ -22,13 +30,9 @@
         uint32_t num_parents;                                                  \
         uint32_t parent_capacity;                                              \
         bool is_leaf;                                                          \
+        bool owns_leaf;                                                        \
         union {                                                                \
-            struct {                                                           \
-                N value;                                                       \
-                struct core_tree_tid(N, L) * *children;                        \
-                uint32_t num_children;                                         \
-                uint32_t capacity;                                             \
-            } node;                                                            \
+            struct core_tree_body_tid(N, L) *node;                             \
             L leaf;                                                            \
         };                                                                     \
     };                                                                         \
@@ -40,8 +44,8 @@
         core_tree_t(N, L) *previous = node->first_leaf;                        \
         core_tree_t(N, L) *first = node->is_leaf ? node : nullptr;             \
         if (!node->is_leaf) {                                                  \
-            for (size_t i = 0; i < node->node.num_children; i++) {             \
-                core_tree_t(N, L) *child = node->node.children[i];             \
+            for (size_t i = 0; i < node->node->num_children; i++) {            \
+                core_tree_t(N, L) *child = node->node->children[i];            \
                 if (child && child->first_leaf) {                              \
                     first = child->first_leaf;                                 \
                     break;                                                     \
@@ -56,34 +60,39 @@
 
 #define core_tree_t(N, L) struct core_tree_tid(N, L)
 
+#define core_tree_body_offset(N, L)                                            \
+    ((sizeof(core_tree_t(N, L)) + alignof(struct core_tree_body_tid(N, L))     \
+      - 1) & ~(alignof(struct core_tree_body_tid(N, L)) - 1))
+
 #define core_tree_node(N, L, val, ...)                                         \
     ({                                                                         \
-        core_tree_t(N, L) *_bt = core_alloc(core_tree_t(N, L));               \
+        core_tree_t(N, L) *_bt = core_alloc_size(1,                            \
+            core_tree_body_offset(N, L)                                        \
+            + sizeof(struct core_tree_body_tid(N, L)));                        \
         if (_bt) {                                                             \
             _bt->is_leaf    = false;                                           \
-            _bt->node.value = (val);                                           \
+            _bt->node = (struct core_tree_body_tid(N, L) *)                    \
+                ((char *)_bt + core_tree_body_offset(N, L));                   \
+            _bt->node->value = (val);                                          \
             _bt->first_leaf = nullptr;                                         \
             _bt->parents = nullptr;                                            \
             _bt->num_parents = 0;                                              \
             _bt->parent_capacity = 0;                                          \
             _bt->refresh_first_leaf =                                          \
                 _core_tree_helper(_core_tree_refresh_up, N, L);                \
-            _bt->node.children =                                               \
+            _bt->node->children =                                              \
                 core_alloc_array(core_tree_t(N, L) *,                          \
                                 CORE_TREE_INITIAL_CAPACITY);                   \
-            _bt->node.num_children = 0;                                        \
-            _bt->node.capacity     = CORE_TREE_INITIAL_CAPACITY;               \
+            _bt->node->num_children = 0;                                       \
+            _bt->node->capacity     = CORE_TREE_INITIAL_CAPACITY;              \
         }                                                                      \
         _bt;                                                                   \
     })
 
-#define core_tree_leaf_size(N, L)                                              \
-    (offsetof(core_tree_t(N, L), leaf) + sizeof(L))
-
 #define core_tree_leaf(N, L, val)                                              \
     ({                                                                         \
         core_tree_t(N, L) *_bt =                                               \
-            _core_calloc(1, core_tree_leaf_size(N, L));                        \
+            _core_calloc(1, sizeof(core_tree_t(N, L)));                        \
         if (_bt) {                                                             \
             _bt->is_leaf = true;                                               \
             _bt->leaf    = (val);                                              \
@@ -99,15 +108,15 @@
 
 #define _core_tree_grow_children(_ptr, _new_cap)                               \
     do {                                                                       \
-        size_t _old_n   = (_ptr)->node.num_children;                           \
-        size_t _elem_sz = sizeof(*(_ptr)->node.children);                      \
-        void  *_new_buf = core_alloc_size((_new_cap), _elem_sz);              \
+        size_t _old_n   = (_ptr)->node->num_children;                          \
+        size_t _elem_sz = sizeof(*(_ptr)->node->children);                     \
+        void  *_new_buf = core_alloc_size((_new_cap), _elem_sz);               \
         if (_old_n > 0) {                                                      \
-            memcpy(_new_buf, (_ptr)->node.children, _old_n * _elem_sz);        \
+            memcpy(_new_buf, (_ptr)->node->children, _old_n * _elem_sz);       \
         }                                                                      \
-        core_free((_ptr)->node.children);                                      \
-        (_ptr)->node.children = _new_buf;                                      \
-        (_ptr)->node.capacity = (_new_cap);                                    \
+        core_free((_ptr)->node->children);                                     \
+        (_ptr)->node->children = _new_buf;                                     \
+        (_ptr)->node->capacity = (_new_cap);                                   \
     } while (0)
 
 #define _core_tree_add_parent(child, parent)                                   \
@@ -130,12 +139,12 @@
         true;                                                                  \
     })
 
-#define _core_tree_remove_parent(child, parent)                               \
+#define _core_tree_remove_parent(child, parent)                                \
     do {                                                                       \
         auto _rp_c = (child);                                                  \
         auto _rp_p = (parent);                                                 \
         for (size_t _rp_i = 0; _rp_i < _rp_c->num_parents; _rp_i++) {          \
-            if (_rp_c->parents[_rp_i] != _rp_p) continue;                     \
+            if (_rp_c->parents[_rp_i] != _rp_p) continue;                      \
             memmove(&_rp_c->parents[_rp_i], &_rp_c->parents[_rp_i + 1],        \
                 (_rp_c->num_parents - _rp_i - 1) * sizeof(*_rp_c->parents));   \
             _rp_c->num_parents--;                                              \
@@ -143,13 +152,13 @@
         }                                                                      \
     } while (0)
 
-#define _core_tree_has_child(parent, child)                                   \
+#define _core_tree_has_child(parent, child)                                    \
     ({                                                                         \
         auto _hc_p = (parent);                                                 \
         auto _hc_c = (child);                                                  \
         bool _hc_found = false;                                                \
-        for (size_t _hc_i = 0; _hc_i < _hc_p->node.num_children; _hc_i++)      \
-            _hc_found |= _hc_p->node.children[_hc_i] == _hc_c;                \
+        for (size_t _hc_i = 0; _hc_i < _hc_p->node->num_children; _hc_i++)     \
+            _hc_found |= _hc_p->node->children[_hc_i] == _hc_c;                \
         _hc_found;                                                             \
     })
 
@@ -159,13 +168,13 @@
         auto _c  = (child);                                                    \
         bool _ok = false;                                                      \
         if (_p && !_p->is_leaf && _c) {                                        \
-            if (_p->node.num_children >= _p->node.capacity) {                  \
-                size_t _nc = _p->node.capacity                                 \
-                    ? _p->node.capacity * 2                                    \
+            if (_p->node->num_children >= _p->node->capacity) {                \
+                size_t _nc = _p->node->capacity                                \
+                    ? _p->node->capacity * 2                                   \
                     : CORE_TREE_INITIAL_CAPACITY;                              \
                 _core_tree_grow_children(_p, _nc);                             \
             }                                                                  \
-            _p->node.children[_p->node.num_children++] = _c;                   \
+            _p->node->children[_p->node->num_children++] = _c;                 \
             _core_tree_add_parent(_c, _p);                                     \
             _p->refresh_first_leaf(_p);                                        \
             _ok = true;                                                        \
@@ -177,7 +186,7 @@
     ({                                                                         \
         core_tree_t(N, L) *_an = core_tree_node(N, L, val);                    \
         if (_an && !core_tree_add_child(parent, _an)) {                        \
-            core_free(_an->node.children);                                     \
+            core_free(_an->node->children);                                    \
             core_free(_an);                                                    \
             _an = nullptr;                                                     \
         }                                                                      \
@@ -200,13 +209,13 @@
         auto   _sc_c  = (child);                                               \
         size_t _sc_i  = (i);                                                   \
         auto   _sc_old = _sc_p && !_sc_p->is_leaf                              \
-            && _sc_i < _sc_p->node.num_children                                \
-                ? _sc_p->node.children[_sc_i] : nullptr;                      \
+            && _sc_i < _sc_p->node->num_children                               \
+                ? _sc_p->node->children[_sc_i] : nullptr;                      \
         bool   _sc_ok = false;                                                 \
-        if (_sc_p && !_sc_p->is_leaf && _sc_i < _sc_p->node.num_children) {    \
+        if (_sc_p && !_sc_p->is_leaf && _sc_i < _sc_p->node->num_children) {   \
             if (_sc_c == _sc_old || !_sc_c                                     \
                 || _core_tree_add_parent(_sc_c, _sc_p)) {                      \
-                _sc_p->node.children[_sc_i] = _sc_c;                           \
+                _sc_p->node->children[_sc_i] = _sc_c;                          \
                 if (_sc_old && !_core_tree_has_child(_sc_p, _sc_old))          \
                     _core_tree_remove_parent(_sc_old, _sc_p);                  \
                 _sc_p->refresh_first_leaf(_sc_p);                              \
@@ -222,17 +231,17 @@
         size_t        _rc_i       = (i);                                       \
         typeof(_rc_p) _rc_removed = nullptr;                                   \
         if (_rc_p && !_rc_p->is_leaf                                           \
-            && _rc_i < _rc_p->node.num_children) {                             \
-            _rc_removed    = _rc_p->node.children[_rc_i];                      \
-            size_t _rc_rem = _rc_p->node.num_children - _rc_i - 1;            \
+            && _rc_i < _rc_p->node->num_children) {                            \
+            _rc_removed    = _rc_p->node->children[_rc_i];                     \
+            size_t _rc_rem = _rc_p->node->num_children - _rc_i - 1;            \
             if (_rc_rem > 0) {                                                 \
-                memmove(&_rc_p->node.children[_rc_i],                          \
-                        &_rc_p->node.children[_rc_i + 1],                      \
-                        _rc_rem * sizeof(*_rc_p->node.children));              \
+                memmove(&_rc_p->node->children[_rc_i],                         \
+                        &_rc_p->node->children[_rc_i + 1],                     \
+                        _rc_rem * sizeof(*_rc_p->node->children));             \
             }                                                                  \
-            _rc_p->node.num_children--;                                        \
-            if (_rc_removed                                                \
-                && !_core_tree_has_child(_rc_p, _rc_removed))                 \
+            _rc_p->node->num_children--;                                       \
+            if (_rc_removed                                                    \
+                && !_core_tree_has_child(_rc_p, _rc_removed))                  \
                 _core_tree_remove_parent(_rc_removed, _rc_p);                  \
             _rc_p->refresh_first_leaf(_rc_p);                                  \
         }                                                                      \
@@ -246,22 +255,22 @@
         size_t _ic_i  = (i);                                                   \
         bool   _ic_ok = false;                                                 \
         if (_ic_p && !_ic_p->is_leaf && _ic_c                                  \
-            && _ic_i <= _ic_p->node.num_children) {                            \
+            && _ic_i <= _ic_p->node->num_children) {                           \
             _core_tree_add_parent(_ic_c, _ic_p);                               \
-            if (_ic_p->node.num_children >= _ic_p->node.capacity) {            \
-                size_t _ic_nc = _ic_p->node.capacity                           \
-                    ? _ic_p->node.capacity * 2                                 \
+            if (_ic_p->node->num_children >= _ic_p->node->capacity) {          \
+                size_t _ic_nc = _ic_p->node->capacity                          \
+                    ? _ic_p->node->capacity * 2                                \
                     : CORE_TREE_INITIAL_CAPACITY;                              \
                 _core_tree_grow_children(_ic_p, _ic_nc);                       \
             }                                                                  \
-            size_t _ic_shift = _ic_p->node.num_children - _ic_i;               \
+            size_t _ic_shift = _ic_p->node->num_children - _ic_i;              \
             if (_ic_shift > 0) {                                               \
-                memmove(&_ic_p->node.children[_ic_i + 1],                      \
-                        &_ic_p->node.children[_ic_i],                          \
-                        _ic_shift * sizeof(*_ic_p->node.children));            \
+                memmove(&_ic_p->node->children[_ic_i + 1],                     \
+                        &_ic_p->node->children[_ic_i],                         \
+                        _ic_shift * sizeof(*_ic_p->node->children));           \
             }                                                                  \
-            _ic_p->node.children[_ic_i] = _ic_c;                               \
-            _ic_p->node.num_children++;                                        \
+            _ic_p->node->children[_ic_i] = _ic_c;                              \
+            _ic_p->node->num_children++;                                       \
             _ic_p->refresh_first_leaf(_ic_p);                                  \
             _ic_ok = true;                                                     \
         }                                                                      \
@@ -271,21 +280,21 @@
 #define core_tree_replace_children(t, arr, count)                              \
     do {                                                                       \
         auto _rpl_p = (t);                                                     \
-        typeof(_rpl_p->node.children) _rpl_arr = (arr);                        \
+        typeof(_rpl_p->node->children) _rpl_arr = (arr);                       \
         size_t _rpl_count = (count);                                           \
         if (_rpl_p && !_rpl_p->is_leaf) {                                      \
-            for (size_t _rpl_i = 0; _rpl_i < _rpl_p->node.num_children;        \
+            for (size_t _rpl_i = 0; _rpl_i < _rpl_p->node->num_children;       \
                  _rpl_i++) {                                                   \
-                auto _rpl_old = _rpl_p->node.children[_rpl_i];                 \
+                auto _rpl_old = _rpl_p->node->children[_rpl_i];                \
                 bool _rpl_kept = false;                                        \
                 for (size_t _rpl_j = 0; _rpl_j < _rpl_count; _rpl_j++)         \
                     _rpl_kept |= _rpl_arr[_rpl_j] == _rpl_old;                 \
                 if (_rpl_old && !_rpl_kept)                                    \
                     _core_tree_remove_parent(_rpl_old, _rpl_p);                \
             }                                                                  \
-            _rpl_p->node.children = _rpl_arr;                                  \
-            _rpl_p->node.num_children = _rpl_count;                            \
-            _rpl_p->node.capacity = _rpl_count;                                \
+            _rpl_p->node->children = _rpl_arr;                                 \
+            _rpl_p->node->num_children = _rpl_count;                           \
+            _rpl_p->node->capacity = _rpl_count;                               \
             for (size_t _rpl_i = 0; _rpl_i < _rpl_count; _rpl_i++)             \
                 _core_tree_add_parent(_rpl_arr[_rpl_i], _rpl_p);               \
             _rpl_p->refresh_first_leaf(_rpl_p);                                \
@@ -299,15 +308,15 @@
     (*({                                                                       \
         auto _nv_t = (t);                                                      \
         assert(!_nv_t->is_leaf);                                               \
-        &_nv_t->node.value;                                                    \
+        &_nv_t->node->value;                                                   \
     }))
-#define core_tree_num_children(t)   ((t)->is_leaf ? 0 : (t)->node.num_children)
-#define core_tree_child(t, i)       ((t)->node.children[i])
+#define core_tree_num_children(t)   ((t)->is_leaf ? 0 : (t)->node->num_children)
+#define core_tree_child(t, i)       ((t)->node->children[i])
 #define core_tree_first_leaf_node(t) ((t)->first_leaf)
 
 #define core_tree_foreach_child(t, var)                                        \
-    for (size_t _i = 0, _n = core_tree_num_children(t); _i < _n; ++_i)        \
-        for (typeof((t)->node.children[0]) var = (t)->node.children[_i],       \
+    for (size_t _i = 0, _n = core_tree_num_children(t); _i < _n; ++_i)         \
+        for (typeof((t)->node->children[0]) var = (t)->node->children[_i],     \
                  *_once = (void *)1;                                           \
              _once;                                                            \
              _once = nullptr)
@@ -318,9 +327,9 @@
             auto _fr_parent = (t)->parents[0];                                 \
             bool _fr_removed = false;                                          \
             if (_fr_parent && !_fr_parent->is_leaf) {                          \
-                for (size_t _fr_i = 0; _fr_i < _fr_parent->node.num_children; \
+                for (size_t _fr_i = 0; _fr_i < _fr_parent->node->num_children; \
                      _fr_i++) {                                                \
-                    if (_fr_parent->node.children[_fr_i] != (t)) continue;     \
+                    if (_fr_parent->node->children[_fr_i] != (t)) continue;    \
                     core_tree_remove_child(_fr_parent, _fr_i);                 \
                     _fr_removed = true;                                        \
                     break;                                                     \
@@ -329,11 +338,11 @@
             if (!_fr_removed) _core_tree_remove_parent((t), _fr_parent);       \
         }                                                                      \
         if ((t) && !(t)->is_leaf) {                                            \
-            for (size_t _fr_i = 0; _fr_i < (t)->node.num_children; _fr_i++) {  \
-                auto _fr_child = (t)->node.children[_fr_i];                    \
+            for (size_t _fr_i = 0; _fr_i < (t)->node->num_children; _fr_i++) { \
+                auto _fr_child = (t)->node->children[_fr_i];                   \
                 if (_fr_child) _core_tree_remove_parent(_fr_child, (t));       \
             }                                                                  \
-            core_free((t)->node.children);                                     \
+            core_free((t)->node->children);                                    \
         }                                                                      \
         if (t) core_free((t)->parents);                                        \
         core_free(t);                                                          \

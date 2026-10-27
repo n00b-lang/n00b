@@ -1,0 +1,9 @@
+func start() {
+    let label = "safe‮"
+    require label != ""
+}
+let c = 'ab'
+let s = "a\qb"
+let x = 12abc
+func f() -> int:
+	return 1

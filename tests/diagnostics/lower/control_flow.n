@@ -1,0 +1,78 @@
+let a = []
+func f() -> int {
+    break
+    return 1
+}
+require f() == 1
+func g(n: int) -> int fail: string {
+    if n < 0 {
+        fail "negative"
+    }
+    return n
+}
+func f_1() -> int {
+    return g(3)
+}
+require f_1() == 3
+func f_2() -> int {
+    let a: int
+    for i from 0 until 3 {
+        a = i
+    }
+    return 0
+}
+require f_2() == 0
+func f_3(n: int, b: bool) -> bool {
+    return b and n
+}
+require f_3(1, true)
+record Point_4 {
+    x: int
+}
+
+object Counter_4 {
+    count: int
+}
+
+func reset(modify c: Counter_4) {
+    c = (count = 0)
+}
+
+func keep(c: Counter_4) {
+    reset(c)
+}
+record Point_5 {
+    x: int
+}
+
+object Counter_5 {
+    count: int
+}
+
+func record_in(p: Point_5) {
+    p.x = 1
+}
+func pick(t: string) -> string {
+    let s: string = try { -> t } fail(e) { -> "none" }
+    return s
+}
+
+require pick("abc") == "abc"
+func fill(out a: int, out b: int) {
+    a = 1
+    b = 2
+}
+func f_7() -> int {
+    var x = 0
+    fill(x, x)
+    return x
+}
+require f_7() == 2
+func f_8(n: int) -> int {
+    var i = n
+    while i {
+        i = i - 1
+    }
+    return i
+}
+require f_8(3) == 0

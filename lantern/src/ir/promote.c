@@ -23,27 +23,23 @@ static void warn_unset(P *p, const ir_local_t *l)
         return;
     }
 
-    ir_diag_t *dg = ir_diag_begin_at(p->opts->diags, IR_DIAG_UNSET_LOCAL,
-                                     nullptr, ir_block_entry(p->f), p->f,
-                                     CORE_STRING_STATIC("this local"));
+    ir_diag_t *dg = ir_span_known(l->span)
+        ? ir_diag_begin(p->opts->diags, IR_DIAG_UNSET_LOCAL, l->span,
+                        IR_NO_LABEL)
+        : ir_diag_begin_at(p->opts->diags, IR_DIAG_UNSET_LOCAL, nullptr,
+                           ir_block_entry(p->f), p->f, IR_NO_LABEL);
 
     if (!dg) {
         return;
     }
-
-    core_buffer_t *b = core_buffer_empty();
-
-    if (l->source_name.data) core_buffer_puts(b, "'");
-    else core_buffer_puts(b, "$");
-    core_buffer_append_string(b, ir_local_display_name(l));
-    if (l->source_name.data) core_buffer_puts(b, "'");
-    core_buffer_puts(b, " is read on a path that does not assign it, so "
-                        "promote supplied undef");
-
-    core_string_t msg = core_buffer_take_string(b);
-
-    ir_diag_message(dg, p->opts->diags, msg);
-    core_free(msg.data);
+    if (l->synthetic) {
+        ir_diag_message(dg, p->opts->diags, IR_MESSAGE(UNSET_TEMPORARY));
+        return;
+    }
+    core_string_t name = ir_local_label(l);
+    ir_diag_message(dg, p->opts->diags,
+                    IR_MESSAGE_ARGS(UNSET_READ, CORE_TEXT_STRING(name)));
+    core_free(name.data);
 }
 
 static core_string_t bounded_name(char *name, size_t capacity, int written)

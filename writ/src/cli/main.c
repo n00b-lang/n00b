@@ -526,6 +526,7 @@ static const struct {
 int
 main(int argc, char **argv)
 {
+    writ_platform_binary_io();
     if (argc >= 2 && !strcmp(argv[1], "--version")) {
         printf("writ api %u\n", writ_api_version());
         return 0;

@@ -1,0 +1,36 @@
+library unions
+
+enum ValueKind : c_int { VK_INT = 1, VK_REAL = 2, VK_TEXT = 3, VK_NULL = 5 }
+
+union Raw @size(8) @align(8) { i: i64, d: f64, p: *void }
+
+struct Value @size(16) @align(8) {
+    kind: c_int as ValueKind @0
+    v: union by kind @8 {
+        VK_INT => i: i64
+        VK_REAL => d: f32
+        VK_TEXT => s: *cstr
+        VK_NULL => _
+    }
+i: i64, d: f64, p: *void }
+
+struct Value @size(16) @align(8) {
+    kind: c_int as ValueKind @0
+    v: union by kind @8 {
+        VK_INT => i: i64
+        VK_REAL => d: f32
+        VK_TEXT => s: *cstr
+        VK_NULL => _
+    }
+}
+
+struct Cell @size(16) {
+   }
+
+struct Cell @size(16) {
+    raw: Raw @0
+    flag: u8 @8
+}
+
+fn value_kind(value: *Value) -> c_int
+fn cell_flag(cell: *Cell, raw: *Raw) -> u8

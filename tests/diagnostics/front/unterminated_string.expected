@@ -1,0 +1,3 @@
+tests/diagnostics/front/unterminated_string.n:1:15: error N00B-L0001: unterminated string
+  tests/diagnostics/front/unterminated_string.n:1:9: note: the string starts here
+  help: add the closing `"`

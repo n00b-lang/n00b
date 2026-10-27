@@ -1,0 +1,73 @@
+import baked_slots_dep
+
+callback Add_One {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func add_one(value: int) -> int {
+    return value + 1
+}
+
+func make_callback() -> Add_One {
+    return callback[Add_One](ref add_one)
+}
+
+func box_integer(value: int) -> Any {
+    return cast[Any] value
+}
+
+func box_string(value: string) -> Any {
+    return cast[Any] value
+}
+
+func inspect_integer(value: Any) -> int {
+    return typecase value {
+        case int { -> value }
+        else { -> 0 }
+    }
+}
+
+func inspect_string(value: Any) -> string {
+    return typecase value {
+        case string { -> value }
+        else { -> "bad" }
+    }
+}
+
+func phase() -> string {
+    if comptime() {
+        return "build"
+    }
+    return "ship"
+}
+
+func shared(flag: bool) -> int {
+    let base: int = 40
+    let offset: int = base + 2
+    let scaled: int = offset * 3
+    var total: int = scaled - 26
+    if flag {
+        total = total + 1
+    }
+    return total
+}
+
+const handler = make_callback()
+const scale = baked_slots_dep.make_scale()
+const boxed_integer = box_integer(6 * 7)
+const boxed_string = box_string("a string long enough to live on the heap")
+const at_build: string = phase()
+
+func start() -> nil {
+    var total: int = 2 + 3
+    require total == 5
+    require handler.call(41) == 42
+    require scale.call(14) == 42
+    require inspect_integer(boxed_integer) == 42
+    let text = inspect_string(boxed_string)
+    require text == "a string long enough to live on the heap"
+    require at_build == "build"
+    require phase() == "ship"
+    require shared(true) == 101
+}

@@ -195,9 +195,10 @@ bind_slot(builder_t *b, uint32_t slot, uint32_t item, writ_part_t part)
 }
 
 static void
-unsupported(builder_t *b, const writ_slot_rec_t *slot, const char *what)
+unsupported(builder_t *b, const writ_slot_rec_t *slot, writ_text_t what)
 {
-    writ_report(b->model->session, WRIT_D_UNSUPPORTED, slot ? slot->loc : b->record->loc, "%s", what);
+    writ_report(b->model->session, WRIT_D_UNSUPPORTED, slot ? slot->loc : b->record->loc,
+                WRIT_MESSAGE(TEXT, CORE_TEXT_PHRASE(what)));
     b->supported = false;
 }
 
@@ -245,7 +246,7 @@ plan_count_array(builder_t *b, uint32_t index)
     writ_ref_t count = writ_expr_ref(b->model, slot->count_expr);
     uint32_t length = param_index(b, count);
     if (length == WRIT_NONE || count.phase != WRIT_REF_VALUE) {
-        unsupported(b, slot, "array extents that are not a single parameter");
+        unsupported(b, slot, WRIT_TEXT_UNSUPPORTED_ARRAY_EXTENTS_NOT_SINGLE);
         return;
     }
     b->hidden[length] = true;
@@ -434,7 +435,7 @@ lift_pointer_result(builder_t *b, const writ_slot_rec_t *slot, uint32_t item, wr
         source.kind = WRIT_STEP_COPY_BORROWED;
         break;
     default:
-        unsupported(b, slot, "a binding for a pointer whose lifetime is `unknown`");
+        unsupported(b, slot, WRIT_TEXT_UNSUPPORTED_BINDING_POINTER_WHOSE_LIFETIME);
         return;
     }
     emit_outcomes(b, true, false, source);
@@ -448,11 +449,11 @@ plan_out_sized(builder_t *b, uint32_t index)
     writ_ref_t count = writ_expr_ref(b->model, slot->count_expr);
     uint32_t length = param_index(b, count);
     if (length == WRIT_NONE || count.phase == WRIT_REF_VALUE || contract_slot(b, length)->mode != WRIT_MODE_OUT) {
-        unsupported(b, slot, "output array extents that are not a single output parameter");
+        unsupported(b, slot, WRIT_TEXT_UNSUPPORTED_OUTPUT_ARRAY_EXTENTS_NOT);
         return;
     }
     if (!slot->own) {
-        unsupported(b, slot, "output arrays returned through a pointer that are not `own`");
+        unsupported(b, slot, WRIT_TEXT_UNSUPPORTED_OUTPUT_ARRAYS_RETURNED_THROUGH);
         return;
     }
     uint32_t item = add_item(b, slot->name, WRIT_ROLE_RESULT, array_shape(b, target), WRIT_AFTER_CALLER_OWNS, target,
@@ -653,12 +654,12 @@ plan_inputs(builder_t *b)
             plan_callback_input(b, i);
         } else if (slot->extent_kind == WRIT_EXTENT_UNKNOWN || slot->span == WRIT_SPAN_UNKNOWN
                    || slot->mode == WRIT_MODE_UNKNOWN) {
-            unsupported(b, slot, "a binding for a parameter with `unknown` facts");
+            unsupported(b, slot, WRIT_TEXT_UNSUPPORTED_BINDING_PARAMETER_UNKNOWN_FACTS);
         } else if (slot->mode == WRIT_MODE_OUT && type->key.kind == WRIT_TYPE_ARRAY) {
             if (slot->extent_kind == WRIT_EXTENT_BOUNDED) {
                 plan_bounded_output(b, i);
             } else {
-                unsupported(b, slot, "output arrays without `cap ..., len ...`");
+                unsupported(b, slot, WRIT_TEXT_UNSUPPORTED_OUTPUT_ARRAYS_WITHOUT_CAP);
             }
         } else if (slot->mode == WRIT_MODE_OUT && type->key.kind == WRIT_TYPE_POINTER) {
             plan_out_pointer(b, i);
@@ -667,7 +668,7 @@ plan_inputs(builder_t *b)
         } else if (slot->mode == WRIT_MODE_IN && is_text(b, slot->type)) {
             plan_text_input(b, i);
         } else if (type->key.kind == WRIT_TYPE_ARRAY || slot->mode == WRIT_MODE_OUT || slot->mode == WRIT_MODE_KEEP) {
-            unsupported(b, slot, "this parameter shape");
+            unsupported(b, slot, WRIT_TEXT_UNSUPPORTED_PARAMETER_SHAPE);
         } else {
             plan_value_input(b, i);
         }
@@ -815,7 +816,7 @@ plan_varargs(builder_t *b)
         return;
     }
     if (record->varargs != WRIT_VARARGS_OF && record->varargs != WRIT_VARARGS_UNTIL && record->varargs != WRIT_VARARGS_COUNT) {
-        unsupported(b, nullptr, "a binding for `...` with no element rule");
+        unsupported(b, nullptr, WRIT_TEXT_UNSUPPORTED_BINDING_ELEMENT_RULE);
         return;
     }
     uint32_t item = add_item(b, sym(b, "args"), WRIT_ROLE_PACK, WRIT_SHAPE_REST_PACK, WRIT_AFTER_BORROWED,

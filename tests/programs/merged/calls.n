@@ -1,0 +1,411 @@
+import sys.env
+import sys.term
+
+func take(cache_kb: u32?) -> u32 {
+    if cache_kb == nil {
+        return 0
+    }
+    return cache_kb.get()
+}
+
+func open(path: string, cache_kb: u32? = nil, ratio: f64? = nil) -> u32 {
+    if ratio != nil {
+        return 1
+    }
+    return take(cache_kb)
+}
+
+require take(64) == 64
+let opt_x: u32? = 5
+require take(opt_x) == 5
+require take(nil) == 0
+require open("a") == 0
+require open("a", cache_kb = 64) == 64
+require open("a", ratio = 0.5) == 1
+
+func method_length(a: Array[int]) -> int {
+    let n = a.len()
+    return n
+}
+
+func free_length(a: Array[int]) -> int {
+    let n = len(a)
+    return n
+}
+
+require method_length([1, 2]) == 2
+require free_length([1]) == 1
+
+record Point {
+    x: int
+    y: int
+}
+
+func maybe(n: int) -> int? {
+    if n > 0 {
+        return n
+    }
+    return nil
+}
+
+let opt_items: Array[u8]? = [1, 2]
+require opt_items != nil
+var opt_later: Array[u8]? = nil
+opt_later = [3, 4]
+require opt_later != nil
+let opt_point: Point? = (x = 1, y = 2)
+require opt_point != nil
+let opt_counts: Array[int?] = [1, nil, maybe(3)]
+require opt_counts[1] == nil
+require opt_counts[2] != nil
+let opt_points: Array[Point?] = [(x = 5, y = 6), nil]
+let opt_first = opt_points[0]
+require opt_first != nil
+require opt_first.get().y == 6
+
+func branch_narrow(x: u8) -> u8 {
+    return x
+}
+
+func branch_pick(c: bool, k: int) -> uint {
+    return if c { -> 1 } elif k > 2 { -> 5 } else { -> 0 }
+}
+
+func total(c: bool) -> uint {
+    var n: uint = 3
+    n = if c { -> 2 } else { -> n }
+    let extra: uint = if c { -> 1 } else { -> 0 }
+    let small: u8 = if c { -> if c { -> 7 } else { -> 8 } } else { -> 0 }
+    let s: u8 = branch_narrow(if c { -> 4 } else { -> 1 })
+    return n + extra + cast[uint] small + cast[uint] s + branch_pick(c, 3)
+}
+
+require total(true) == 15
+require total(false) == 9
+
+trait Measured {
+    func measure(self: 'T, scale: u8) -> u8
+}
+
+func measure(self: Point, scale: u8) -> u8 {
+    return scale
+}
+
+trait Scaled {
+    func scale(self: 'T, by: int, offset: int = 0) -> int
+}
+
+func scale(self: Point, by: int, offset: int = 0) -> int {
+    return self.x * by + offset
+}
+
+func shifted(item: 'T) -> int {
+    return item.scale(offset = 1, by = 2)
+}
+
+func doubled(item: 'T) -> int {
+    return item.scale(by = 2)
+}
+
+func measured(item: 'T) -> u8 {
+    return item.measure(scale = 200)
+}
+
+func keyword_narrow(value: u8, ratio: f64 = 0.5) -> u8 {
+    return value
+}
+
+func sum(point: Point) -> int {
+    return point.x + point.y
+}
+
+func keyword_pick(chosen: 'T, other: 'T) -> 'T {
+    return chosen
+}
+
+func size(text: string) -> uint {
+    return byte_len(text)
+}
+
+func keyword_maybe(value: int?) -> int {
+    return value.get_or_else(default = 7)
+}
+
+record Holder {
+    n: u8
+}
+
+func __init(modify self: Holder, count: u8) {
+    self.n = count
+}
+
+context Label(width: u8, origin: Point) {
+    enter() {
+    }
+    ensure() {
+    }
+}
+
+var kw_b: Buffer = buffer_from_string("abc")
+let kw_h: Holder = new[Holder](count = 200)
+var kw_p: Point = (x = 1, y = 2)
+
+require keyword_narrow(value = 250) == 250
+require keyword_narrow(ratio = 2.0, value = 3) == 3
+require sum(point = (x = 3, y = 4)) == 7
+require keyword_pick(other = "kw_b", chosen = "a") == "a"
+require sum(point = keyword_pick(other = kw_p, chosen = (x = 5, y = 6))) == 11
+require size(text = kw_b) == 3
+require keyword_maybe(value = 5) == 5
+require keyword_maybe(value = nil) == 7
+require kw_p.measure(scale = 255) == 255
+require shifted(kw_p) == 3
+require doubled(kw_p) == 2
+require measured(kw_p) == 200
+require kw_h.n == 200
+with Label(width = 255, origin = (x = 0, y = 0)) {
+}
+
+func unsigned(capacity: uint = 0) -> uint { return capacity }
+func unsigned_nonzero(capacity: uint = 17) -> uint { return capacity }
+func unsigned_computed(capacity: uint = 4 + 3) -> uint { return capacity }
+func tiny(value: byte = 23) -> byte { return value }
+func tiny_computed(value: byte = 4 + 3) -> byte { return value }
+func signed(value: int = 31) -> int { return value }
+
+require unsigned() == 0
+require unsigned(capacity = 9) == 9
+require unsigned_nonzero() == 17
+require unsigned_computed() == 7
+require tiny() == 23
+require tiny_computed() == 7
+require tiny(value = 42) == 42
+require signed() == 31
+require signed(value = 37) == 37
+
+func delayed(value: int) -> int {
+    let result: int
+    result = value
+    return result
+}
+
+func either(flag: bool) -> int {
+    let result: int
+    if flag {
+        result = 1
+    } else {
+        result = 2
+    }
+    return result
+}
+
+func count_up(limit: uint) -> int {
+    var at: int = 0
+    while at < limit {
+        at += 1
+    }
+    return at
+}
+
+func byte_zero(value: byte) -> byte { return value }
+func signed_alias(value: i64) -> int { return value }
+
+require delayed(7) == 7
+require either(true) == 1
+require either(false) == 2
+require count_up(3) == 3
+require byte_zero(0) == 0
+require signed_alias(7) == 7
+
+func g(x: int) -> int {
+    return x + 1
+}
+
+func typed(x: int) -> int {
+    let g: int = g(x)
+    return g
+}
+
+func untyped(x: int) -> int {
+    let g = g(x)
+    return g
+}
+
+func outer(x: int) -> int {
+    if x > 0 {
+        let x: int = x + 1
+        return x
+    }
+    return 0
+}
+
+func length(s: string) -> uint {
+    let byte_len: uint = byte_len(s)
+    return byte_len
+}
+
+require typed(2) == 3
+require untyped(4) == 5
+require outer(1) == 2
+require length("abc") == 3
+
+record Mark {
+    at: uint
+}
+
+func span(s: string, n: int, scale: int = 1) -> string fail: string {
+    return byte_slice(s, 0, n * scale)
+}
+
+func span(c: Mark, d: Mark) -> uint {
+    return d.at - c.at
+}
+
+func overload_measure() -> uint {
+    let a: Mark = (at = 2)
+    let b: Mark = (at = 9)
+    let gap = span(a, b)
+    var text: string = ""
+    var wide: string = ""
+    try {
+        text = span("abcd", 2)!
+        wide = span("abcdef", 2, scale = 2)!
+    } fail(failure) {
+    }
+    return gap + byte_len(text) + byte_len(wide)
+}
+
+require overload_measure() == 13
+
+func try_pick(v: int) -> int fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+    return v
+}
+
+func caught(v: int) -> bool {
+    var matched = false
+    try {
+        try_pick(v)!
+    } fail(e) {
+        matched = e == "negative"
+    }
+    return matched
+}
+
+func ignored(v: int) -> bool {
+    var failed = false
+    try {
+        try_pick(v)!
+    } fail() {
+        failed = true
+    }
+    return failed
+}
+
+require caught(-1)
+require !caught(1)
+require ignored(-1)
+require !ignored(1)
+let fallback = try {
+    -> try_pick(-3)!
+} fail() {
+    -> 7
+}
+require fallback == 7
+let matched = try {
+    -> try_pick(-1)! == 3
+} fail(e) {
+    -> e == "negative"
+}
+require matched
+let try_typed = try {
+    -> try_pick(-2)! == 3
+} fail(e: string) {
+    -> e == "negative"
+}
+require try_typed
+let try_value = try {
+    -> try_pick(5)!
+} fail(e) {
+    -> 0
+}
+require try_value == 5
+
+func check(v: int) fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+}
+
+func check_return(v: int) fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+    return
+}
+
+func fallible_pick(v: int) fail: string {
+    if v < 0 {
+        fail "negative"
+    }
+    return v + 1
+}
+
+var fallible_failed = false
+try {
+    check(1)!
+    check_return(1)!
+    check(-1)!
+    require false
+} fail(e) {
+    fallible_failed = e == "negative"
+}
+require fallible_failed
+try {
+    require fallible_pick(4)! == 5
+} fail(e) {
+    require false
+}
+
+func has_equals(entry: string) -> bool {
+    var i: uint = 0
+    while i < byte_len(entry) {
+        if byte_at(entry, i) == 0x3d {
+            return i > 0
+        }
+        i += 1
+    }
+    return false
+}
+
+require sys.env.count() > 0
+var i: uint = 0
+while i < sys.env.count() {
+    let entry: string? = sys.env.at(i)
+    require entry != nil
+    require has_equals(entry.get())
+    i += 1
+}
+require sys.env.at(sys.env.count()) == nil
+
+var read_fd: int = -1
+var write_fd: int = -1
+require __os_pipe(ref read_fd, ref write_fd) == 0
+try {
+    require !sys.term.fd_is_tty(read_fd)!
+} fail(failure) {
+    require false
+}
+var rows: u16 = 0
+var cols: u16 = 0
+try {
+    sys.term.terminal_size(read_fd, rows, cols)!
+    require false
+} fail(failure) {
+    require failure < 0
+}
+require __os_close(read_fd) == 0
+require __os_close(write_fd) == 0
+__fd_write(2, "ok")

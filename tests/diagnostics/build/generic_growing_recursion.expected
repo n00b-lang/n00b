@@ -1,0 +1,2 @@
+tests/diagnostics/build/generic_growing_recursion.n:1:13: note N00B-S0064: parameter `x` could be `view`: `nested` never writes anything reachable from it
+tests/diagnostics/build/generic_growing_recursion.n:6:12: error N00B-B0022: 'nested' calls itself with a type that grows on every call: its instance (u8, int) -> int makes this call, which needs (List[u8], int) -> int, so no finite set of instances exists; a recursive call in a generic function must not wrap its own type arguments

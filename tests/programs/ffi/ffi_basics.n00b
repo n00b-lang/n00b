@@ -1,0 +1,36 @@
+const c = [-
+# marker-literal-5be1
+library c
+enum color : c_int { RED = 1, GREEN = 2 }
+const LIMIT: c_int = 40
+-]'ffi
+
+const limits_path = [-
+use "contracts/limits.writ"
+-]'ffi
+
+const limits_search = [-
+use <limits.writ>
+-]'ffi
+
+const raw_c = [-
+library c
+fn abs(x: c_int) -> c_int
+binding {
+    raw "abs"
+}
+-]'ffi
+
+const shim_c = [-
+library c
+header <stdlib.h>
+fn abs(x: c_int) -> c_int
+-]'ffi
+
+require c.LIMIT == 40
+require c.Color.GREEN != c.Color.RED
+require limits_path.LIMIT == 40
+require limits_search.LIMIT == 40
+require raw_c.abs_raw(-5) == 5
+require shim_c.abs(-5) == 5
+__fd_write(2, "ok")

@@ -1,0 +1,2 @@
+tests/diagnostics/lower/try_two_failures.n:14:21: error N00B-T1008: this can fail with `int`, but other failures reaching the same handler are `string`
+  help: convert the failures to one type before they reach the handler

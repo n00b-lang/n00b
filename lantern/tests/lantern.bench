@@ -1,0 +1,4 @@
+ir-scale	bench	180	"$BUILD/tests/ir_scale"
+ir-text-soak	bench	30	"$BUILD/tests/ir_text" "$SRC/tests/ir/golden"
+lexer-throughput	bench	180	"$BUILD/tests/scanner_lex_perf"
+ir-gates	bench	180	sh "$SRC/tests/gates.sh" "$SRC" "$BUILD/tests/ir_diag" "$BUILD/tests/ir_text" "$BUILD/tests/ir_typing" "$BUILD/tests/ir_verify" "$BUILD/tests/ir_layout" "$BUILD/tests/ir_promote" "$BUILD/tests/ir_structure" "$BUILD/tests/ir_pdg" "$BUILD/tests/ir_lower"

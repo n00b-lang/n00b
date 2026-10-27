@@ -21,7 +21,6 @@ core_list_decl(n00b_abi_tag_extractor_v1);
 core_list_decl(n00b_abi_trace_v1);
 core_list_decl(n00b_abi_trace_child_v1);
 core_list_decl(n00b_abi_trace_arm_v1);
-core_list_decl(uint32_t);
 
 typedef enum {
     TRACE_UNSEEN,

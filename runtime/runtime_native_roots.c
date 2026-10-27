@@ -9,7 +9,8 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
         sizeof(allocator_unmanaged_parameters)
             / sizeof(allocator_unmanaged_parameters[0])},
     {"sys.internal.gc.alloc.mutator_for_native", "n00b_gc_mutator", nullptr, 0},
-    {"sys.internal.gc.alloc.enter_blocking_runtime", nullptr, nullptr, 0},
+    {"sys.internal.gc.alloc.enter_blocking_from",
+        "n00b_gc_enter_blocking_from", nullptr, 0},
     {"sys.internal.gc.alloc.leave_blocking_runtime", nullptr, nullptr, 0},
     {"sys.internal.gc.alloc.native_root_depth", "n00b_gc_root_depth", nullptr, 0},
     {"sys.internal.gc.alloc.native_root_push", "n00b_gc_root_push", nullptr, 0},

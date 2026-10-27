@@ -1,16 +1,10 @@
-#define _XOPEN_SOURCE 700
-#define _DARWIN_C_SOURCE 1
-
-#include <dirent.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include "core.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
+#include "lib/os.h"
 #include "lib/snapshot_inventory.h"
 #include "harness.h"
 
@@ -64,85 +58,75 @@ write_file(core_string_t path, core_string_t contents)
 static bool
 make_directory(core_string_t path)
 {
-    char *native = core_string_to_cstr(path);
-    bool ok = mkdir(native, 0700) == 0;
-    core_free(native);
-    return ok;
+    return core_os_make_directory(path, 0700);
 }
 
 static bool
 remove_file(core_string_t path)
 {
-    char *native = core_string_to_cstr(path);
-    bool ok = unlink(native) == 0;
-    core_free(native);
-    return ok;
+    return core_os_remove_file(path);
 }
 
 static bool
 remove_directory(core_string_t path)
 {
-    char *native = core_string_to_cstr(path);
-    bool ok = rmdir(native) == 0;
-    core_free(native);
-    return ok;
+    return core_os_remove_directory(path);
 }
 
 static bool
 path_exists(core_string_t path)
 {
-    char *native = core_string_to_cstr(path);
-    bool ok = access(native, F_OK) == 0;
-    core_free(native);
-    return ok;
+    core_os_file_info_t info = {0};
+    return core_os_stat(path, true, &info) == CORE_OS_FOUND;
 }
 
 static void
 remove_directory_files(core_string_t directory)
 {
-    char *native = core_string_to_cstr(directory);
-    DIR *files = opendir(native);
-    core_free(native);
+    core_os_dir_t *files = core_os_dir_open(directory, nullptr);
     if (!files) return;
-    struct dirent *item;
-    while ((item = readdir(files))) {
-        core_string_t name = core_string_from_cstr(item->d_name);
-        if (!core_string_eq(name, S(".")) && !core_string_eq(name, S(".."))) {
-            core_string_t path = join(directory, name);
-            remove_file(path);
-            core_free(path.data);
-        }
-        core_free(name.data);
+    core_string_t name = {};
+    while (core_os_dir_next(files, &name, nullptr)) {
+        core_string_t path = join(directory, name);
+        remove_file(path);
+        core_free(path.data);
     }
-    closedir(files);
+    core_os_dir_close(files);
+}
+
+static core_string_t
+temporary_directory(core_string_t stem)
+{
+    core_string_t root = core_os_temp_root();
+    core_string_t prefix = join(root, stem);
+    core_string_t created = core_os_make_unique_directory(prefix);
+    core_free(prefix.data);
+    core_free(root.data);
+    return created;
 }
 
 static void
 test_local_persistence(void)
 {
-    char directory[] = "/tmp/lantern-persist-XXXXXX";
-    char *created = mkdtemp(directory);
-    check("persistent test root exists", created != nullptr);
-    if (!created) return;
-    char cache_directory[] = "/tmp/lantern-persist-cache-XXXXXX";
-    char *cache_created = mkdtemp(cache_directory);
-    check("persistent cache root exists", cache_created != nullptr);
-    if (!cache_created) return;
-    char *cache_resolved = realpath(cache_created, nullptr);
-    core_string_t cache_root = core_string_from_cstr(cache_resolved);
-    free(cache_resolved);
-    core_string_t root = core_string_from_cstr(created);
+    core_string_t root = temporary_directory(S("lantern-persist-"));
+    check("persistent test root exists", root.data != nullptr);
+    if (!root.data) return;
+    core_string_t cache_created = temporary_directory(
+        S("lantern-persist-cache-"));
+    check("persistent cache root exists", cache_created.data != nullptr);
+    if (!cache_created.data) return;
+    core_string_t cache_root = core_os_real_path(cache_created);
+    core_free(cache_created.data);
     core_string_t package = join(root, S("demo"));
     core_string_t source = join(package, S("facade.n"));
     core_string_t nested = join(package, S("inner"));
     core_string_t added = join(nested, S("added.n"));
     check("persistent package directory exists", make_directory(package));
-    char *package_resolved = realpath(created, nullptr);
-    core_string_t resolved_root = core_string_from_cstr(package_resolved);
-    free(package_resolved);
+    core_string_t resolved_root = core_os_real_path(root);
     core_string_t resolved_package = join(resolved_root, S("demo"));
-    core_string_t metadata = join(cache_root,
-        core_string_slice(resolved_package, 1, resolved_package.u8_bytes - 1));
+    core_string_t package_key = core_os_root_relative(resolved_package);
+    core_string_t metadata = join(cache_root, package_key);
+    core_free(package_key.data);
     core_string_t cache = join(metadata, S("inventory-v1"));
     core_string_t in_tree = join(package, S(".n00b-cache"));
     check("persistent source writes",
@@ -248,11 +232,9 @@ test_local_persistence(void)
 int
 main(void)
 {
-    char directory[] = "/tmp/lantern-inventory-XXXXXX";
-    char *created = mkdtemp(directory);
-    check("temporary root exists", created != nullptr);
-    if (!created) return report("source snapshot inventory");
-    core_string_t root = core_string_from_cstr(created);
+    core_string_t root = temporary_directory(S("lantern-inventory-"));
+    check("temporary root exists", root.data != nullptr);
+    if (!root.data) return report("source snapshot inventory");
     core_string_t subdir = join(root, S("pkg"));
     core_string_t source_path = join(subdir, S("manifest.n"));
     core_string_t ignored_path = join(root, S("notes.txt"));

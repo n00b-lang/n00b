@@ -1,2 +1,0 @@
-var total: int = 2 + 3
-require total == 5

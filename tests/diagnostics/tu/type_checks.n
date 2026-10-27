@@ -1,0 +1,167 @@
+func narrow() -> u8 {
+    let small: u8 = 200 + 100
+    return small
+}
+
+narrow()
+func big() -> u64 {
+    return 5
+}
+require big() != 0x10000000000000000
+record P {
+    x: u32
+}
+
+object Counter_2 {
+    count: int
+}
+
+const FIXED: Counter_2 = (count = 1)
+const bytes: Array[u8] = new[Array[u8]](4)
+const grid: Array[Array[u8]] = new[Array[Array[u8]]](2, 2)
+const points: Array[P] = [(x = 1), (x = 2)]
+
+func element() {
+    bytes[1] = 2
+}
+
+func compound() {
+    bytes[1] += 2
+}
+
+func nested() {
+    grid[1][0] = 3
+}
+
+func field() {
+    points[0].x += 4
+}
+
+element()
+compound()
+nested()
+field()
+FIXED.count = 5
+require points[0].x == 1
+record Sample {
+    value: int
+}
+
+func __finalize(consume self: Ref[Sample]?) {
+}
+func f() -> i32 {
+    return 0xff & 0x0f
+}
+
+f()
+var d: Dict[int] = {:}
+record Box {
+    v: 'T
+}
+func get(b: Box[int, int]) -> int {
+    return 1
+}
+var items: List[int, int] = []
+func name() -> int {
+    return "bob"
+}
+
+require name() == 1
+record Point {
+    x: int
+    y: int
+}
+
+let p: Point = (x = 1, y = 2)
+require p.z == 3
+let a = 1
+let b = "two"
+require a + b == 3
+func find(n: int) -> int? {
+    if n > 0 {
+        return n
+    }
+    return nil
+}
+
+let v = find(3)
+let w: int = v
+require v + 1 == 4
+object Counter_11 {
+    n: int
+}
+
+func bump(view c: Counter_11) {
+    c.n = c.n + 1
+}
+
+func view_derived(view c: Counter_11) {
+    let other = c
+    other.n = 3
+}
+
+let c: Counter_11 = (n = 0)
+bump(c)
+view_derived(c)
+require c.n == 1
+func g() -> bool {
+    return 5
+}
+
+func h() -> int {
+    return "s"
+}
+
+require g() and h() == 1
+func reset(modify value: 'T) -> nil {
+    value = 0
+}
+
+func start() -> nil {
+    var count: int = 5
+    reset(count)
+    require count == 0
+}
+let x: 'T = 5
+record Pair {
+    a: int
+    b: string
+}
+record Sq {
+    s: f64
+}
+func poisoned(n: int) -> int {
+    let q = 3.5 + true
+    let r: string = q
+    let s = q.len() + q.field * 2
+    let t: int = "a"
+    let u: bool = 7
+    for item in q { require item }
+    return q + undefined_name
+}
+func risky(n: int) -> int fail: string {
+    if n < 0 { fail 3 }
+    return n
+}
+let mixed = [1, 2, "three"]
+let squares: List[Sq] = [(s = 1.0), (s = 2.0)]
+let wrong_pair: Pair = (a = "no", b = 2)
+let pair_as_int: int = (a = 1)
+const native = [-
+library c
+
+fn abs(x: c_int) -> c_int
+-]'ffi
+let missing_member = native.nope(1)
+func calls_after_errors() -> int {
+    let first = h_1("wrong")
+    let second = h_1(1, 2)
+    let text: string = "s"
+    let scaled = text * 2
+    let after: bool = 9
+    return first + second
+}
+func h_1(n: int) -> int {
+    return n
+}
+require poisoned(1) + risky(1)! + calls_after_errors() == squares.len()

@@ -85,12 +85,17 @@ typedef enum {
 void report_call_type_error(core_translation_unit_t *unit,
     parse_tree_t *call, th_ctx *types, th_type *actual, th_type *expected,
     n00bb_call_role_t role);
+void n00bb_report_argument_type(core_translation_unit_t *unit,
+    th_ctx *types, parse_tree_t *argument, th_type *actual, th_type *expected,
+    parse_sym_entry_t *callee, size_t position, core_string_t parameter);
 typedef struct {
     parse_tree_t *argument;
     th_type *expected;
     bool keyword;
     bool writes;
     th_mode mode;
+    size_t parameter;
+    core_string_t parameter_name;
 } n00bb_call_binding_t;
 core_list_decl(n00bb_call_binding_t);
 bool n00bb_bind_call_arguments(parse_grammar_t *grammar,
@@ -366,11 +371,11 @@ bool n00bb_report_name_conflict(parse_grammar_t *grammar,
 bool n00bb_resolve_overload_reference(parse_grammar_t *grammar,
     core_link_unit_t *link, n00bb_tu_state_t *state, parse_tree_t *callee,
     parse_sym_entry_t *selected);
-void n00bb_describe_candidate(parse_grammar_t *grammar,
-    n00bb_tu_state_t *state, parse_sym_entry_t *symbol, core_buffer_t *out);
-void n00bb_describe_candidates(parse_grammar_t *grammar,
+core_string_t n00bb_describe_candidate(parse_grammar_t *grammar,
+    n00bb_tu_state_t *state, parse_sym_entry_t *symbol);
+core_string_t n00bb_describe_candidates(parse_grammar_t *grammar,
     n00bb_tu_state_t *state,
-    const core_list_t(parse_sym_entry_ptr_t) *symbols, core_buffer_t *out);
+    const core_list_t(parse_sym_entry_ptr_t) *symbols);
 bool n00bb_function_has_overloads(n00bb_tu_state_t *state,
     parse_sym_entry_t *symbol, n00bb_call_lookup_t lookup);
 parse_sym_entry_t *n00bb_module_view_member(parse_symtab_t *symtab,
@@ -459,6 +464,12 @@ typedef struct {
     core_translation_unit_t *unit;
     core_string_t name;
 } n00bb_missing_return_t;
+
+typedef struct {
+    core_string_t module;
+    ir_span_t span;
+} n00bb_failed_region_t;
+core_list_decl(n00bb_failed_region_t);
 core_list_decl(n00bb_missing_return_t);
 
 typedef struct n00bb_link_analysis_t {
@@ -508,6 +519,7 @@ typedef struct n00bb_link_analysis_t {
     struct n00bb_rule_facts_t *rule_facts;
     core_dict_t dead_code_sites;
     bool dead_code_sites_ready;
+    core_list_t(n00bb_failed_region_t) failed_regions;
     core_list_t(n00bb_assert_site_t) assert_sites;
     core_list_t(n00bb_missing_return_t) missing_returns;
     n00bb_interface_summaries_t *interface_summaries;
@@ -522,6 +534,7 @@ typedef struct n00bb_link_analysis_t {
     size_t native_root_count;
     bool may_link_further;
     bool closed_world;
+    bool keep_summaries;
     bool returned_parameters_computed;
     n00bb_resolver_t *resolver;
     struct n00bb_cache_t *cache;
@@ -584,6 +597,7 @@ core_link_stage_result_t n00bb_link_stage_ir_bindings(
     core_link_unit_t *link, uint32_t stage_kind, void *opaque);
 bool validate_package_interfaces(n00bb_link_analysis_t *analysis);
 bool populate_package_interfaces(n00bb_link_analysis_t *analysis);
+bool reject_ambiguous_external_names(n00bb_link_analysis_t *analysis);
 parse_sym_entry_t *n00bb_package_module_view(parse_symtab_t *symtab,
                                              parse_scope_t *scope,
                                              core_string_t name);
@@ -600,3 +614,39 @@ bool prepopulate_component_package_interfaces(
     core_translation_unit_t *const *members, size_t count);
 bool refresh_component_export_bindings(
     core_translation_unit_t *const *members, size_t count);
+typedef enum {
+    N00BB_NAMES_VALUES = 1u << 0,
+    N00BB_NAMES_TYPES = 1u << 1,
+} n00bb_name_kinds_t;
+core_diag_location_t n00bb_node_span(parse_tree_t *node);
+core_diag_location_t n00bb_symbol_location(parse_sym_entry_t *symbol);
+core_diag_location_t n00bb_symbol_declaration_location(
+    parse_sym_entry_t *symbol);
+void n00bb_record_declaration_sites(parse_grammar_t *grammar,
+                                    core_translation_unit_t *unit);
+void n00bb_diag_declared_here(core_diagnostics_t *diagnostics,
+    parse_sym_entry_t *symbol, n00bb_text_t text);
+core_list_t(core_string_t) n00bb_visible_names(core_translation_unit_t *unit,
+    parse_scope_t *scope, n00bb_name_kinds_t kinds);
+bool n00bb_suggest_visible_name(core_diagnostics_t *diagnostics,
+    core_translation_unit_t *unit, parse_scope_t *scope, core_string_t name,
+    n00bb_name_kinds_t kinds);
+bool n00bb_suggest_scope_member(core_diagnostics_t *diagnostics,
+    core_translation_unit_t *consumer, core_translation_unit_t *provider,
+    parse_scope_t *scope, core_string_t name);
+bool n00bb_explain_hidden_name(core_diagnostics_t *diagnostics,
+    core_translation_unit_t *unit, parse_scope_t *scope, core_string_t name,
+    bool type_reference);
+void n00bb_report_missing_field(core_translation_unit_t *unit, th_ctx *types,
+    parse_tree_t *member_node, th_type *receiver_type, core_string_t member,
+    parse_scope_t *record_scope, parse_sym_entry_t *record_symbol);
+core_list_t(parse_sym_entry_ptr_t) n00bb_call_overload_candidates(
+    n00bb_tu_state_t *state, parse_sym_entry_t *symbol,
+    n00bb_call_lookup_t lookup);
+void n00bb_report_missing_method(core_translation_unit_t *unit,
+    th_ctx *types, parse_tree_t *member, th_type *receiver_type,
+    core_string_t method, bool ambiguous);
+th_env *n00bb_compose_environments(const th_env *const *inputs, size_t count,
+    th_ctx *types, core_translation_unit_t *unit);
+void n00bb_report_inference_failure(void *context, parse_visit_t *visit,
+    th_ctx *types, const th_error_t *reason);

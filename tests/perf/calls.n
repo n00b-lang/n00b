@@ -1,0 +1,17 @@
+record Box {
+    value: int
+}
+
+var sink: Ref[Box]? = nil
+
+func fib(n: int) -> int {
+    if n < 2 {
+        var leaf: Box = (value = n)
+        sink = ref leaf
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+let scale = cast[int](__os_arg_count())
+require fib(37 + scale) == 39088169

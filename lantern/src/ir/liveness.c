@@ -10,8 +10,6 @@
 #include "lib/hash.h"
 #include "lib/list.h"
 
-core_list_decl(uint32_t);
-
 typedef struct {
     bool *live_in;
     bool *live_out;

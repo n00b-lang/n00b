@@ -82,8 +82,7 @@ th_type *ir_trait_vtable_type(th_ctx *types,
       ir_trait_value_type(types),
       CORE_STRING_STATIC(IR_TRAIT_VALUE_DATA_FIELD));
   if (!data_type) return nullptr;
-  th_member *slots = calloc(method_count + 1, sizeof(th_member));
-  if (!slots) return nullptr;
+  th_member *slots = core_alloc_array(th_member, method_count + 1);
   slots[0] = (th_member){
       .name = CORE_STRING_STATIC(IR_TRAIT_VTABLE_TYPE_INFO_FIELD),
       .type = th_name(types, CORE_STRING_STATIC("u32")),
@@ -94,17 +93,17 @@ th_type *ir_trait_vtable_type(th_ctx *types,
                        CORE_STRING_STATIC(IR_TRAIT_VTABLE_TYPE_INFO_FIELD)) ||
         !lowered_signatures[i] ||
         th_kind_of(lowered_signatures[i]) != TH_FUNCTION) {
-      free(slots);
+      core_free(slots);
       return nullptr;
     }
     const th_param *receiver = th_func_param(lowered_signatures[i], 0);
     if (!receiver || th_hash(types, receiver->type) != th_hash(types, data_type)) {
-      free(slots);
+      core_free(slots);
       return nullptr;
     }
     for (size_t j = 0; j < i; j++)
       if (core_string_eq(method_names[i], method_names[j])) {
-        free(slots);
+        core_free(slots);
         return nullptr;
       }
     slots[i + 1] = (th_member){
@@ -113,7 +112,7 @@ th_type *ir_trait_vtable_type(th_ctx *types,
     };
   }
   th_type *record = th_record(types, slots, method_count + 1);
-  free(slots);
+  core_free(slots);
   return record;
 }
 
@@ -125,18 +124,17 @@ ir_global_t *ir_trait_vtable_global_add(
       !adapters || !method_count)
     return nullptr;
   th_ctx *types = ir_ctx_types(module->ctx);
-  th_type **signatures = calloc(method_count, sizeof(*signatures));
-  if (!signatures) return nullptr;
+  th_type **signatures = core_alloc_array(th_type *, method_count);
   for (size_t i = 0; i < method_count; i++) {
     if (!adapters[i] || adapters[i]->owner != module) {
-      free(signatures);
+      core_free(signatures);
       return nullptr;
     }
     signatures[i] = adapters[i]->type;
   }
   th_type *vtable_type = ir_trait_vtable_type(
       types, method_names, (th_type *const *)signatures, method_count);
-  free(signatures);
+  core_free(signatures);
   if (!vtable_type) return nullptr;
 
   ir_global_t *global = ir_global_add(module, global_name, vtable_type);
@@ -144,8 +142,8 @@ ir_global_t *ir_trait_vtable_global_add(
   global->is_static = true;
   global->mutability = IR_MUT_CONST;
 
-  ir_global_init_value_t *values = calloc(method_count + 1, sizeof(*values));
-  if (!values) return nullptr;
+  ir_global_init_value_t *values =
+      core_alloc_array(ir_global_init_value_t, method_count + 1);
   values[0].member = CORE_STRING_STATIC(IR_TRAIT_VTABLE_TYPE_INFO_FIELD);
   values[0].kind = IR_GLOBAL_INIT_INT;
   values[0].integer = ir_lit_of(type_info_index);
@@ -159,7 +157,7 @@ ir_global_t *ir_trait_vtable_global_add(
   if (ok)
     ok = ir_global_set_record_initializer(module, global, values,
                                            method_count + 1);
-  free(values);
+  core_free(values);
   return ok ? global : nullptr;
 }
 

@@ -1,0 +1,5 @@
+panic: cast of 300 to `u8` is out of range
+  --> tests/diagnostics/runtime/failures.n:26:12
+backtrace:
+  at narrow (tests/diagnostics/runtime/failures.n:26:12)
+  at run (tests/diagnostics/runtime/failures.n:107:17)

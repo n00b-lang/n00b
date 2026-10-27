@@ -1,0 +1,5 @@
+tests/diagnostics/front/missing_brace.n:8:1: error N00B-P0003: unclosed `{`
+  tests/diagnostics/front/missing_brace.n:1:23: note: `{` is opened here
+  tests/diagnostics/front/missing_brace.n:2:14: note: this `{` may be the one missing its `}`
+  tests/diagnostics/front/missing_brace.n:5:1: note: this `}` is indented like an outer line
+  help: add the missing `}`

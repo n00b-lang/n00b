@@ -1,0 +1,417 @@
+N00B_DIAG(LET_ASSIGNED_TWICE, "N00B-S0001", ERROR,
+    "a `let` is assigned after it was initialized",
+    "A `let` gets exactly one value. Assigning it again, or assigning it on\n"
+    "a path where it may already hold a value, is an error.\n"
+    "Declare it with `var` if it must change:\n"
+    "    var total = 0\n"
+    "    total = 5")
+N00B_DIAG(LET_INITIALIZED_IN_LOOP, "N00B-S0002", ERROR,
+    "a `let` declared outside a loop is initialized inside it",
+    "A loop body can run more than once, so initializing a `let` declared\n"
+    "outside the loop could assign it twice. Declare the `let` inside the\n"
+    "loop, or use `var`.")
+N00B_DIAG(USE_AFTER_CONSUME, "N00B-S0003", ERROR,
+    "a value is used after it may have been consumed",
+    "Passing a value to a `consume` parameter hands it over; the caller\n"
+    "cannot use it afterwards on any path. Pass a copy if you still need\n"
+    "the value, or stop using it after the call.")
+N00B_DIAG(READ_BEFORE_ASSIGNMENT, "N00B-S0004", ERROR,
+    "a variable is read on a path where it has no value",
+    "Every path to a read must assign the variable first. Give the variable\n"
+    "an initial value, or assign it on every path:\n"
+    "    var x = 0")
+N00B_DIAG(UNREACHABLE_CODE, "N00B-S0005", WARNING,
+    "code can never run",
+    "No path reaches this code: something before it always returns, fails,\n"
+    "loops forever or calls a function that never returns, or a constant\n"
+    "condition skips it. Remove the code or fix the condition.")
+N00B_DIAG(UNUSED_ASSIGNMENT, "N00B-S0006", WARNING,
+    "a stored value is never read",
+    "The value assigned here is overwritten or discarded before anything\n"
+    "reads it, so the assignment has no effect. Remove it, or use the\n"
+    "value.")
+N00B_DIAG(UNUSED_VALUE, "N00B-S0007", WARNING,
+    "the value of an expression statement is never used",
+    "An expression used as a statement computes a value that is thrown\n"
+    "away. Use the value, assign it, or remove the statement. Inside\n"
+    "function bodies this is an error.")
+N00B_DIAG(UNBOUNDED_RECURSION, "N00B-S0008", WARNING,
+    "a function calls itself on every path",
+    "Every path through the function calls the function again before it can\n"
+    "return, so a call never finishes. Add a path that returns without\n"
+    "recursing.")
+N00B_DIAG(OPTION_NOT_PROVEN, "N00B-S0009", ERROR,
+    "an option's value is used where it may be nil",
+    "A value of type `T?` can be nil. Test it before using its value, with\n"
+    "no assignment to it in between:\n"
+    "    if x != nil {\n"
+    "        return x + 1\n"
+    "    }")
+N00B_DIAG(VIEW_WRITE, "N00B-S0010", ERROR,
+    "a write reaches memory reachable from a view parameter or constant",
+    "Nothing reachable from a `view` parameter or a constant may be\n"
+    "written, including through calls. Take the parameter as `modify`, or\n"
+    "write to a copy.")
+N00B_DIAG(VIEW_ESCAPE, "N00B-S0011", ERROR,
+    "a reference reachable from a view parameter outlives the call",
+    "A `view` parameter is only borrowed for the call. Storing a reference\n"
+    "to it, or to anything reachable from it, somewhere that outlives the\n"
+    "call is not allowed; only returning it is. Store a copy instead.")
+N00B_DIAG(MISSING_RETURN, "N00B-S0012", ERROR,
+    "a function can reach the end of its body without returning a value",
+    "A function with a result type must end every path with `return`,\n"
+    "`fail`, or a call that never returns. Add the missing `return`.")
+N00B_DIAG(SWITCH_NOT_EXHAUSTIVE, "N00B-S0013", ERROR,
+    "a `switch` does not handle every possible value",
+    "A `switch` on a variant without `else` must have a case for every arm,\n"
+    "and a `switch` that a function relies on to return must cover every\n"
+    "value. Add the missing cases or an `else`.")
+N00B_DIAG(TYPECASE_NOT_EXHAUSTIVE, "N00B-S0014", ERROR,
+    "a `typecase` without `else` does not handle every type",
+    "Without `else`, a `typecase` needs a `case` for every type its subject\n"
+    "can have. Add the missing cases or an `else`.")
+N00B_DIAG(ASSERT_SIDE_EFFECT, "N00B-S0015", ERROR,
+    "an `assert` condition changes program state",
+    "`assert` conditions do not run in release builds, so they must not\n"
+    "change anything. Compute the value before the `assert`:\n"
+    "    let ok = bump()\n"
+    "    assert ok")
+N00B_DIAG(OUTPUT_ARGUMENT_NOT_WRITABLE, "N00B-S0016", ERROR,
+    "an `out` or `modify` argument is not writable",
+    "An `out` or `modify` parameter writes back to its argument, so the\n"
+    "argument must be a `var`, a writable field or element, or a `modify`\n"
+    "parameter. A `let`, a constant or an `in` parameter cannot be passed.")
+N00B_DIAG(SAME_OUTPUT_TWICE, "N00B-S0017", ERROR,
+    "one variable is passed to two output parameters of a call",
+    "Each `out` or `modify` parameter writes back to its argument, so one\n"
+    "variable cannot receive two of them. Pass separate variables.")
+N00B_DIAG(CONSUME_PART, "N00B-S0018", ERROR,
+    "a field or element is passed to a `consume` parameter",
+    "Only a whole variable or a temporary value can be consumed. Consume\n"
+    "the whole value, or pass a copy of the field or element.")
+N00B_DIAG(NOT_WRITABLE, "N00B-S0019", ERROR,
+    "an assignment target cannot be written",
+    "The target belongs to a `let`, a constant, an `in` or `view`\n"
+    "parameter, or is a field that is not mutable. Declare the variable\n"
+    "with `var` or take the parameter as `modify`.")
+N00B_DIAG(TRY_CANNOT_FAIL, "N00B-S0020", ERROR,
+    "a `try` has a failure handler but nothing in it can fail",
+    "The `fail` handler of this `try` can never run because nothing in the\n"
+    "body can fail. Remove the `try` and its handler.")
+N00B_DIAG(TYPECASE_CASE_UNREACHABLE, "N00B-S0021", WARNING,
+    "a `typecase` case can never match",
+    "Earlier cases already handle every type this case covers, or the\n"
+    "subject can never have this type. Remove the case or reorder the\n"
+    "cases.")
+N00B_DIAG(JUMP_OUTSIDE_LOOP, "N00B-S0022", ERROR,
+    "`break` or `continue` is used outside a loop",
+    "`continue` must be inside a loop; `break` must be inside a loop,\n"
+    "`switch` or `typecase`.")
+N00B_DIAG(IF_VALUE_WITHOUT_ELSE, "N00B-S0023", ERROR,
+    "an `if` used as a value has no `else`",
+    "When an `if` produces a value, every path must produce one, so it\n"
+    "needs an `else` with the value to use when no condition holds.")
+N00B_DIAG(FAIL_WITHOUT_FAILURE_TYPE, "N00B-S0024", ERROR,
+    "`fail` is used where no failure type is declared",
+    "`fail` passes a failure to the caller, so the enclosing function must\n"
+    "declare a failure type:\n"
+    "    func parse(s: string) -> int fail: string {")
+N00B_DIAG(FAILURE_NOT_PROPAGATED, "N00B-S0025", ERROR,
+    "a call that can fail is neither propagated nor handled",
+    "A call to a function that can fail needs a trailing `!` to pass the\n"
+    "failure on, or a `try` to handle it:\n"
+    "    let n = parse(text)!")
+N00B_DIAG(PROPAGATE_INFALLIBLE, "N00B-S0026", ERROR,
+    "`!` is used on something that cannot fail",
+    "A trailing `!` passes a failure to the caller, but this call has no\n"
+    "failure to pass. Remove the `!`.")
+N00B_DIAG(TOP_LEVEL_FAILURE, "N00B-S0027", ERROR,
+    "top-level code can fail with nothing to pass the failure to",
+    "Top-level statements have no caller, so a failure there cannot be\n"
+    "propagated with `!`. Handle it with `try`, or move the code into a\n"
+    "function that declares a failure type.")
+N00B_DIAG(SWITCH_CASE_NOT_CONSTANT, "N00B-S0028", ERROR,
+    "a `switch` case is not a constant it can match",
+    "`switch` cases must be integer, boolean, enum or variant constants,\n"
+    "or ranges with integer literal bounds such as `case 1 to 9:`. Test\n"
+    "other values with `if` and `elif`.")
+N00B_DIAG(DUPLICATE_SWITCH_CASE, "N00B-S0030", ERROR,
+    "a `switch` handles the same arm twice",
+    "Each arm can appear in only one `case`. Remove or merge the duplicate.")
+N00B_DIAG(SUBJECT_NOT_VARIABLE, "N00B-S0031", ERROR,
+    "a `typecase` or variant `switch` subject is not a variable",
+    "`typecase` and `switch` on a variant narrow their subject inside each\n"
+    "case, so the subject must be a variable or parameter. Store the value\n"
+    "in a variable first.")
+N00B_DIAG(TYPECASE_WITHOUT_CASES, "N00B-S0032", ERROR,
+    "a `typecase` has no `case`",
+    "A `typecase` needs at least one `case`.")
+N00B_DIAG(ARM_HAS_NO_PAYLOAD, "N00B-S0033", ERROR,
+    "the value of a variant arm that carries no value is read",
+    "This arm of the variant has no payload, so there is nothing to read.\n"
+    "Test for the arm without reading its value.")
+N00B_DIAG(VALUE_BLOCK_WITHOUT_VALUE, "N00B-S0034", ERROR,
+    "a block used as a value can end without producing one",
+    "Every path through a block or expression that is used as a value must\n"
+    "end with the value it produces.")
+N00B_DIAG(DEFAULT_CYCLE, "N00B-S0035", ERROR,
+    "default parameter values depend on each other in a cycle",
+    "A default value can use other parameters, but not in a cycle. Remove\n"
+    "the cycle, or pass one of the parameters explicitly.")
+N00B_DIAG(DEFAULT_ORDER, "N00B-S0036", ERROR,
+    "a default parameter value reads a parameter that has no value yet",
+    "This default value uses a parameter whose own value is not known at\n"
+    "that point. Change the dependencies between the defaults.")
+N00B_DIAG(CONTEXT_OUTSIDE_WITH, "N00B-S0037", ERROR,
+    "a context is called outside a `with` statement",
+    "A context declaration is entered with `with`, which runs its hooks.\n"
+    "Call it as part of a `with` statement.")
+N00B_DIAG(ATOMIC_PART_UPDATE, "N00B-S0038", ERROR,
+    "an atomic value is updated one field at a time",
+    "An atomic value changes as a whole. Build the new value and assign the\n"
+    "whole atomic at once.")
+N00B_DIAG(NOT_SUPPORTED_YET, "N00B-S0039", ERROR,
+    "the program uses a construct the compiler does not support yet",
+    "The language allows this construct, but this compiler cannot build it\n"
+    "yet. The message names the construct; write the code another way for\n"
+    "now.")
+N00B_DIAG(CONTEXT_HOOK_CANNOT_FAIL, "N00B-S0040", ERROR,
+    "a context hook that cannot report failures declares a failure type",
+    "This hook runs where a failure cannot be passed on. Handle the failure\n"
+    "inside the hook.")
+N00B_DIAG(VALUE_UNAVAILABLE_IN_PHASE, "N00B-S0041", ERROR,
+    "a variable is read when it has no value",
+    "A value computed only when the program runs cannot be read while the\n"
+    "program is built, and the other way around. At build time only `const`\n"
+    "values and `comptime` results are available.")
+N00B_DIAG(RANGE_STEP_ZERO, "N00B-S0042", ERROR,
+    "a range loop has a step of 0",
+    "A step of 0 never advances, so the loop would never end. Use a\n"
+    "positive or negative step.")
+N00B_DIAG(UNREACHABLE_TOP_LEVEL, "N00B-S0043", ERROR,
+    "a top-level statement can never run",
+    "The top-level code before this statement always stops, so the\n"
+    "statement never runs. Remove it, or what stops the code before it.")
+N00B_DIAG(OUTPUT_PARAMETER_DEFAULT, "N00B-S0044", ERROR,
+    "an `out` or `modify` parameter has a default value",
+    "A default value only makes sense for a parameter the function reads.\n"
+    "Remove the default, or make the parameter an `in` parameter.")
+N00B_DIAG(CONSUME_ESCAPED, "N00B-S0045", ERROR,
+    "a value is consumed while references to it may still be in use",
+    "Consuming a value hands it over, so nothing else may still refer to\n"
+    "it. Pass a copy, or stop keeping references to the value.")
+N00B_DIAG(CONST_WITHOUT_VALUE, "N00B-S0046", ERROR,
+    "a `const` has no value known when the program is built",
+    "A `const` needs an initializer the compiler can evaluate:\n"
+    "    const LIMIT = 64")
+N00B_DIAG(CONST_NOT_STORABLE, "N00B-S0047", ERROR,
+    "the value of a `const` cannot be stored in the program",
+    "The value computed for this `const` contains something that cannot be\n"
+    "written into the program image. The message names the part that\n"
+    "cannot be stored.")
+N00B_DIAG(COMPTIME_NEEDS_START, "N00B-S0048", ERROR,
+    "`comptime()` is used in a root module without `func start() -> nil`",
+    "Build-time evaluation needs the root module to separate build-time\n"
+    "work from run-time work. Add `func start() -> nil` to the root\n"
+    "module.")
+N00B_DIAG(CONST_READS_RUNTIME_VALUE, "N00B-S0049", ERROR,
+    "a `const` reads a global that is set only when the program runs",
+    "In a root module without `func start() -> nil`, top-level code runs\n"
+    "only when the program runs, so a `const` cannot read what it sets.")
+N00B_DIAG(LITERAL_HANDLER_CYCLE, "N00B-S0050", ERROR,
+    "a literal modifier depends on the literal it builds",
+    "The function that builds this literal needs the literal's own value,\n"
+    "so it can never run. Break the dependency.")
+N00B_DIAG(MODULE_INIT_CYCLE, "N00B-S0051", ERROR,
+    "modules read each other's globals while they initialize",
+    "No module in the cycle can initialize first, because each reads a\n"
+    "global of another before that global is set. Move the reads into\n"
+    "functions that run after initialization, or break the cycle.")
+N00B_DIAG(GLOBAL_READ_BEFORE_INIT, "N00B-S0052", ERROR,
+    "a global is read before it is initialized",
+    "Initialization runs in order, so a global cannot be read before its\n"
+    "initializer has run. Move the declaration above its first use, or\n"
+    "give the global an explicit initializer.")
+N00B_DIAG(OVERFLOW_ALWAYS, "N00B-S0053", ERROR,
+    "an integer operation always overflows",
+    "For every value the operands can have, the result does not fit the\n"
+    "type. Use a wider type, or `unsafe_add`, `unsafe_sub` or `unsafe_mul`\n"
+    "for wrapping arithmetic.")
+N00B_DIAG(OVERFLOW_POSSIBLE, "N00B-S0054", WARNING,
+    "an integer operation may overflow",
+    "For some values the operands can have, the result does not fit the\n"
+    "type, and the program stops there when it runs. Check the operands\n"
+    "first or use a wider type.")
+N00B_DIAG(DIVISOR_ZERO, "N00B-S0055", ERROR,
+    "a divisor is always zero",
+    "Dividing by zero stops the program. Fix the divisor.")
+N00B_DIAG(DIVISOR_MAY_BE_ZERO, "N00B-S0056", WARNING,
+    "a divisor may be zero",
+    "For some values the divisor is zero, and the program stops there when\n"
+    "it runs. Test the divisor first.")
+N00B_DIAG(SHIFT_OUT_OF_RANGE, "N00B-S0057", ERROR,
+    "a shift amount is always out of range",
+    "A shift amount must be at least 0 and less than the width of the type.")
+N00B_DIAG(SHIFT_MAY_BE_OUT_OF_RANGE, "N00B-S0058", WARNING,
+    "a shift amount may be out of range",
+    "For some values the shift amount is negative or at least the width of\n"
+    "the type, and the program stops there when it runs.")
+N00B_DIAG(CONSTANT_CONDITION, "N00B-S0059", WARNING,
+    "a condition always has the same value",
+    "The values that reach this test make it always true or always false,\n"
+    "so one branch never runs.")
+N00B_DIAG(DATA_RACE, "N00B-S0060", WARNING,
+    "a global is shared between threads without synchronization",
+    "A thread writes this global without atomics or a lock while another\n"
+    "thread can access it. Make it atomic or guard every access with a\n"
+    "lock.")
+N00B_DIAG(UNUSED_FIELD, "N00B-S0061", WARNING,
+    "a record field is never read",
+    "Nothing reads this field. Remove it, or use it.")
+N00B_DIAG(CALL_WITHOUT_EFFECT, "N00B-S0062", WARNING,
+    "a call has no effect and its result is ignored",
+    "The called function changes nothing the caller can see, so ignoring\n"
+    "its result makes the call pointless. Use the result or remove the\n"
+    "call.")
+N00B_DIAG(UNUSED_PARAMETER, "N00B-S0063", WARNING,
+    "a parameter is never used",
+    "Nothing in the function uses this parameter. Remove it, or name it\n"
+    "with a leading `_` if a signature requires it.")
+N00B_DIAG(PARAMETER_COULD_BE_VIEW, "N00B-S0064", INFO,
+    "a parameter could be declared `view`",
+    "The function never writes anything reachable from this parameter, so\n"
+    "declaring it `view` documents that and lets callers pass shared\n"
+    "values.")
+N00B_DIAG(REF_NOT_ADDRESSABLE, "N00B-S0065", ERROR,
+    "`ref` is applied to a temporary value",
+    "`ref` needs storage to point at: a variable, field or element. Store\n"
+    "the value in a `var` and take a `ref` to that.")
+N00B_DIAG(BUFFER_BORROW_OUTLIVED, "N00B-S0066", ERROR,
+    "a `Buffer` is used as a `string` after the borrow stops being safe",
+    "A `Buffer` passed where a `string` is expected is borrowed, not\n"
+    "copied, so the `Buffer` must not change while the `string` is in use.\n"
+    "Consume the buffer with `to_string(b)`, or copy it with\n"
+    "`to_string(buffer_from_string(b))`.")
+N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
+    "a condition is not a `bool`",
+    "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"
+    "of `and`, `or` and `not`, must be `bool`. Write the comparison you\n"
+    "mean:\n"
+    "    if n != 0 {")
+N00B_DIAG(BITWISE_NEEDS_UNSIGNED, "N00B-T1001", ERROR,
+    "a bitwise operation or shift is applied to a signed value",
+    "`~`, shifts and other bit operations work on unsigned integers and\n"
+    "flagsets. Convert the value to an unsigned type, or use `unsafe_not`,\n"
+    "`unsafe_shl` or `unsafe_shr` for signed integers.")
+N00B_DIAG(NIL_COMPARE_NOT_OPTION, "N00B-T1003", ERROR,
+    "a value that can never be nil is compared with nil",
+    "Only options, such as `int?`, can be nil.")
+N00B_DIAG(UNSAFE_CAST_OPERANDS, "N00B-T1004", ERROR,
+    "`unsafe_cast` is used between types it cannot convert",
+    "`unsafe_cast` reinterprets integers and plain references. Use `cast`\n"
+    "for other conversions.")
+N00B_DIAG(CAST_NOT_DEFINED, "N00B-T1005", ERROR,
+    "a cast is used between types with no conversion",
+    "No conversion is defined between these types. Convert in steps, or\n"
+    "use `unsafe_cast` to reinterpret a reference.")
+N00B_DIAG(FLAGSET_INTEGER_TOO_NARROW, "N00B-T1006", ERROR,
+    "an integer type is too narrow for a flagset",
+    "Casting between a flagset and an integer needs an integer with a bit\n"
+    "for every flag. Use a wider unsigned type.")
+N00B_DIAG(FAILURE_TYPE_MISMATCH, "N00B-T1007", ERROR,
+    "a failure does not have the type the enclosing code fails with",
+    "A failure that is passed on must have the failure type of the\n"
+    "enclosing function or `try` handler. Convert it, or handle it with\n"
+    "`try`.")
+N00B_DIAG(TRY_FAILURE_TYPES_DIFFER, "N00B-T1008", ERROR,
+    "failures with different types reach the same `try` handler",
+    "All failures handled by one `fail` handler must have one type. Convert\n"
+    "them to a common type before they reach the handler.")
+N00B_DIAG(UNION_FIELD_REQUIRED, "N00B-T1010", ERROR,
+    "a literal leaves out a union field that has no default",
+    "This union field cannot be filled in automatically. Give it a value in\n"
+    "the literal.")
+N00B_DIAG(VARIANT_LITERAL_ARMS, "N00B-T1011", ERROR,
+    "a variant literal does not name exactly one arm",
+    "A variant holds one arm at a time, so its literal names exactly one\n"
+    "arm.")
+N00B_DIAG(AMBIGUOUS_LITERAL_CONSTRUCTOR, "N00B-T1013", ERROR,
+    "more than one `__init` can build a literal",
+    "Several visible `__init` functions accept this literal. Remove one, or\n"
+    "write the conversion explicitly.")
+N00B_DIAG(NO_LITERAL_CONSTRUCTOR, "N00B-T1014", ERROR,
+    "no `__init` can build a literal of the expected type",
+    "A literal converts to a type through an `__init` that takes the\n"
+    "literal's value. Declare one where this code can see it, or write a\n"
+    "value of the right type.")
+N00B_DIAG(LITERAL_CONSTRUCTOR_TRAIT, "N00B-T1015", ERROR,
+    "the `__init` that builds a literal needs a trait the type lacks",
+    "The `__init` that would build this literal requires a trait the type\n"
+    "does not implement. Implement the trait or use another type.")
+N00B_DIAG(EMPTY_DICT_AS_SET, "N00B-T1016", ERROR,
+    "`{:}` is used where a set is expected",
+    "`{:}` is an empty dictionary. Write `{}` for an empty set.")
+N00B_DIAG(NEW_VARIANT_ARGUMENTS, "N00B-T1017", ERROR,
+    "`new` for a variant is given arguments",
+    "`new` creates an empty variant; assign the arm you want afterwards.")
+N00B_DIAG(ARRAY_DIMENSIONS, "N00B-T1018", ERROR,
+    "`new` for an array is given the wrong dimensions",
+    "Pass one positional size for each dimension of the array type that\n"
+    "has no size, outermost first.")
+N00B_DIAG(ARRAY_EXTENT_NOT_CONSTANT, "N00B-T1019", ERROR,
+    "an array size is not known where it is needed",
+    "A fixed array size must be a constant known at compile time. Use a\n"
+    "`const`, or leave the dimension unsized and pass its size to `new`.")
+N00B_DIAG(ARRAY_INDEX_TYPE, "N00B-T1020", ERROR,
+    "an array index is not an integer",
+    "Arrays are indexed by integers.")
+N00B_DIAG(BUILTIN_ARGUMENTS, "N00B-T1026", ERROR,
+    "a builtin function is given arguments it does not take",
+    "The message says what the builtin takes.")
+N00B_DIAG(CONTEXT_PARAMETER_MODE, "N00B-T1028", ERROR,
+    "a context parameter is not an `in` parameter",
+    "Context parameters are read when the context is entered, so they must\n"
+    "be `in` parameters.")
+N00B_DIAG(VALUE_NEEDS_REFERENCE, "N00B-T1030", ERROR,
+    "`__value` is used on something that is not a reference",
+    "`__value` reads or writes through a `Ref` or `Foreign` value.")
+N00B_DIAG(INIT_SIGNATURE, "N00B-T1031", ERROR,
+    "the `__init` that `new` calls returns a value or can fail",
+    "An `__init` used by `new` initializes its receiver; it returns nothing\n"
+    "and cannot fail.")
+N00B_DIAG(CONSTRUCTOR_ARGUMENTS, "N00B-T1032", ERROR,
+    "the arguments of `new` do not match an `__init`",
+    "Pass the arguments that the type's `__init` declares.")
+N00B_DIAG(UNION_VARIABLE, "N00B-T1033", ERROR,
+    "a variable would hold an anonymous union",
+    "A value whose type is one of several types cannot be stored as is.\n"
+    "Give the variable a concrete type, or declare a variant for the\n"
+    "alternatives.")
+N00B_DIAG(RECORD_HAS_CONSTRUCTOR, "N00B-T1034", ERROR,
+    "a field literal is used for a record that has an `__init`",
+    "A record with an `__init` is built through it, so a field literal\n"
+    "does not convert implicitly. Write `cast[T](...)` or `new[T](...)`.")
+N00B_DIAG(UNION_DISCRIMINANT_TYPE, "N00B-T1036", ERROR,
+    "a union discriminant is not an 8, 16 or 32-bit integer",
+    "The field that selects a union arm must be an 8, 16 or 32-bit\n"
+    "integer.")
+N00B_DIAG(EXTENT_NEEDS_FOREIGN, "N00B-T1037", ERROR,
+    "an extent clause is used on a field that is not `Foreign[...]`",
+    "`count` and `until` clauses describe foreign memory, so only\n"
+    "`Foreign[...]` fields can have them.")
+N00B_DIAG(EXTENT_COUNT_TYPE, "N00B-T1038", ERROR,
+    "the `count` field of an extent clause is not an integer",
+    "The field named by `count` holds the number of elements, so it must\n"
+    "have an integer type.")
+N00B_DIAG(TYPE_PARAMETER_FIXED, "N00B-T1039", ERROR,
+    "a function body fixes a declared type parameter to one type",
+    "A declared type parameter must work for any type. Use the concrete\n"
+    "type instead of the parameter, or make the body generic.")
+N00B_DIAG(NIL_CONSTANT, "N00B-T1040", ERROR,
+    "a `const` would hold `nil`",
+    "A `const` holds a value of an ordinary type; `nil` on its own is not\n"
+    "one.")
+N00B_DIAG(UNKNOWN_JUMP_LABEL, "N00B-N1002", ERROR,
+    "`break` or `continue` names a label that does not enclose it",
+    "The label must belong to an enclosing loop, or for `break`, an\n"
+    "enclosing `switch` or `typecase`.")

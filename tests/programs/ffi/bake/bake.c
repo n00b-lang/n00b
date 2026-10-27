@@ -125,8 +125,8 @@ bake_query(bake_root_t *root, int32_t key)
         return ++root->cache;
     case BAKE_QUERY_FD: {
         unsigned char byte = 0;
-        return root->fd >= 0 && pread(root->fd, &byte, 1, 0) == 1
-            ? (int64_t)byte : -1;
+        return root->fd >= 0 && lseek(root->fd, 0, SEEK_SET) == 0
+            && read(root->fd, &byte, 1) == 1 ? (int64_t)byte : -1;
     }
     default:
         return -1;

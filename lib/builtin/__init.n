@@ -19,6 +19,8 @@ import bitptr
 import abi
 import litmod_site
 import embed
+import sort
+import floating
 
 package builtin {
     export bitptr.Bitptr
@@ -49,6 +51,7 @@ package builtin {
     export abi.Tag_Extractor_Record to sys
     export abi.Frame_Layout_Record to sys
     export abi.Native_Frame_Record to sys
+    export abi.Native_Frame_Root to sys
     export abi.Storage_Record to sys
     export abi.Symbol_Record to sys
     export abi.Module_Record to sys
@@ -174,4 +177,19 @@ package builtin {
     export io.raw.Raw_Repr
     export litmod_site.Literal_Site
     export embed.embed
+    export panic.os_failure to sys
+}
+
+package sort {
+    export sort.sort
+    export sort.sort_by
+    export sort.order
+    export sort.natural_compare
+}
+
+package cursor {
+    export cursor.Cursor
+    export cursor.iter
+    export cursor.next
+    export cursor.cleanup
 }

@@ -1,0 +1,25 @@
+tests/diagnostics/lower/control_flow.n:1:9: error N00B-T0510: cannot infer the element type of the empty list assigned to `a`
+  help: annotate it: `let a: List[int] = []`
+tests/diagnostics/lower/control_flow.n:3:5: error N00B-S0022: `break` is used outside any loop, `switch` or `typecase`
+tests/diagnostics/lower/control_flow.n:14:12: error N00B-S0025: `g` can fail with `string`, so this call needs a trailing `!` or a `try`
+  tests/diagnostics/lower/control_flow.n:7:6: note: `g` is declared here
+  help: write `g(...)!` to pass the failure to the caller, or handle it with `try`
+tests/diagnostics/lower/control_flow.n:20:9: error N00B-S0002: `a` is a `let` declared outside this loop, so it cannot be initialized inside it
+  tests/diagnostics/lower/control_flow.n:18:9: note: `a` is declared here
+  tests/diagnostics/lower/control_flow.n:19:5: note: this loop can run the assignment more than once
+  help: declare `a` with `var`, or declare it inside the loop
+tests/diagnostics/lower/control_flow.n:26:18: error N00B-T1000: `n` is `int`, but an operand of `and` must be `bool`
+  help: write the comparison you mean, such as `n != 0`
+tests/diagnostics/lower/control_flow.n:42:11: error N00B-S0016: `c` is an `in` parameter, so it cannot be passed to `modify` parameter `c` of `reset`
+  tests/diagnostics/lower/control_flow.n:41:11: note: `c` is declared here
+  help: declare `c` as `modify c`, or copy it into a `var` and pass that
+tests/diagnostics/lower/control_flow.n:53:5: error N00B-S0019: `p` is an `in` parameter, so its field `x` cannot be assigned
+  tests/diagnostics/lower/control_flow.n:52:16: note: `p` is declared here
+  help: declare it as `modify p` to let the function change the caller's value
+tests/diagnostics/lower/control_flow.n:56:21: error N00B-S0020: nothing in this `try` can fail, so its `fail` handler can never run
+  help: remove the `try` and its handler
+tests/diagnostics/lower/control_flow.n:67:13: error N00B-S0017: `x` is passed to more than one `out` or `modify` parameter of `fill`
+  tests/diagnostics/lower/control_flow.n:67:10: note: first passed here
+  help: pass a separate variable to each output parameter
+tests/diagnostics/lower/control_flow.n:73:11: error N00B-T1000: `i` is `int`, but a `while` condition must be `bool`
+  help: write the comparison you mean, such as `i != 0`

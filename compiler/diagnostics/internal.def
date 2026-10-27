@@ -1,0 +1,5 @@
+N00B_DIAG(INTERNAL, "N00B-I0001", INTERNAL,
+    "the compiler failed an internal consistency check",
+    "This is a bug in n00b, not in your program. The message names the\n"
+    "compiler stage that failed. Please report it together with the full\n"
+    "output and the smallest source that reproduces it.")

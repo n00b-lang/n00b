@@ -99,7 +99,7 @@ canonical_type(const n00b_t *g, core_buffer_t *out, writ_str_t text)
 
 static void
 add_extern_with(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_str_t *params, size_t count,
-                writ_str_t result, bool pure)
+                writ_str_t result, bool pure, writ_span_t declared_at)
 {
     core_buffer_t signature = {0};
     core_buffer_printf(&signature, "(");
@@ -115,6 +115,7 @@ add_extern_with(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_
                                     .symbol = symbol,
                                     .signature = writ_str_copy(g->session, signature.data, signature.byte_len),
                                     .pure = pure,
+                                    .declared_at = declared_at,
                                 }));
     core_buffer_release(&signature);
 }
@@ -123,7 +124,7 @@ static void
 add_extern(const n00b_t *g, writ_str_t name, writ_str_t symbol, const writ_str_t *params, size_t count,
            writ_str_t result)
 {
-    add_extern_with(g, name, symbol, params, count, result, false);
+    add_extern_with(g, name, symbol, params, count, result, false, (writ_span_t){0});
 }
 
 static void
@@ -1987,7 +1988,7 @@ emit_extern(const n00b_t *g, writ_emit_t *emit, size_t fn, const writ_plan_view_
                           : is_pointer(ret)               ? writ_cstr("uint")
                                                           : scalar_type(g, direct ? direct->type : nullptr);
     add_extern_with(g, writ_str_format(g->session, "__%.*s", S(writ_c_plan_name(&g->c, plan))), shim_symbol(g, plan),
-                    types, typed, n00b_ret, plan->fn->is_pure);
+                    types, typed, n00b_ret, plan->fn->is_pure, plan->fn->declared_at);
     core_list_free(params);
 }
 
@@ -3137,7 +3138,7 @@ emit_raw(const n00b_t *g, writ_emit_t *emit, const writ_fn_view_t *fn, writ_boun
     }
     writ_str_t result = raw_type(g, fn->result ? fn->result->type : nullptr);
     add_extern_with(g, writ_str_format(g->session, "__%.*s_raw", S(bound.name)), fn->link_symbol, types,
-                    fn->slots_count, result, fn->is_pure);
+                    fn->slots_count, result, fn->is_pure, fn->declared_at);
     writ_emit_line(emit, "");
     mark(g, emit, fn->declared_at, fn->contract_name);
     writ_emit_text(emit, "func %.*s_raw(", S(bound.name));
@@ -3915,7 +3916,7 @@ static void
 emit_export_entry_body(const n00b_t *g, writ_emit_t *emit, writ_str_t panic, bool pointer, bool has_result)
 {
     (void)g;
-    writ_emit_line(emit, "uint64_t buffer[24];");
+    writ_emit_line(emit, "uint64_t buffer[32];");
     writ_emit_line(emit, "uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);");
     writ_emit_open(emit, "if (n00b_ffi_unwind_save(buffer))");
     writ_emit_line(emit, "n00b_ffi_leave(previous);");

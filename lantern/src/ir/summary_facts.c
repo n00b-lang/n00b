@@ -39,6 +39,7 @@ typedef enum : uint8_t {
     REL_CALL_DIVERGES,
     REL_CALL_READS_ENTRY,
     REL_CALL_READS_UNSEEN,
+    REL_CALL_READS_ARGUMENT,
     REL_FIELD_READ,
     REL_FIELD_WRITTEN,
     REL_RECORD_READ,
@@ -78,6 +79,8 @@ static const struct {
     [REL_CALL_DIVERGES]        = {CORE_STRING_STATIC("call_diverges"), 1},
     [REL_CALL_READS_ENTRY]     = {CORE_STRING_STATIC("call_reads_entry"), 2},
     [REL_CALL_READS_UNSEEN]    = {CORE_STRING_STATIC("call_reads_unseen"), 1},
+    [REL_CALL_READS_ARGUMENT]  = {CORE_STRING_STATIC("call_reads_argument"),
+                                  2},
     [REL_FIELD_READ]           = {CORE_STRING_STATIC("field_read"), 2},
     [REL_FIELD_WRITTEN]        = {CORE_STRING_STATIC("field_written"), 2},
     [REL_RECORD_READ]          = {CORE_STRING_STATIC("record_read"), 1},
@@ -192,6 +195,9 @@ static const rule_t rules[] = {
     {ATOM1(REL_CALL_READS_UNSEEN, "S"), 2,
      {ATOM2(REL_CALL_READS_ENTRY, "S", "P"),
       ATOM2(REL_PLACE_KIND, "P", "unknown")}},
+    {ATOM2(REL_CALL_READS_ARGUMENT, "S", "I"), 2,
+     {ATOM2(REL_CALL_READS_ENTRY, "S", "P"),
+      ATOM2(REL_PARAM_PLACE, "P", "I")}},
     {ATOM2(REL_FIELD_READ, "R", "F"), 2,
      {ATOM1(REL_MEMBER, "G"), ATOM4(REL_FIELD, "G", "R", "F", "read")}},
     {ATOM2(REL_FIELD_WRITTEN, "R", "F"), 2,
@@ -621,6 +627,43 @@ ir_summary_facts_call_diverges(ir_summary_facts_t *facts,
     return site_holds(facts, REL_CALL_DIVERGES, call);
 }
 
+static bool
+argument_addresses(ir_func_t *function, ir_places_t **places,
+                   const ir_value_t *argument, const ir_splace_t *place)
+{
+    if (!ir_summary_argument_addressable(function, argument)) return false;
+    if (!*places) *places = ir_func_places(function);
+    const uint32_t *ids   = nullptr;
+    uint32_t        count = 0;
+    if (!*places || !ir_places_of(*places, argument, &ids, &count))
+        return false;
+    for (uint32_t i = 0; i < count; i++) {
+        ir_splace_t mapped;
+        if (ir_summary_place_of(function, ir_place_at(*places, ids[i]),
+                                &mapped)
+            && ir_splace_eq(&mapped, place)) return true;
+    }
+    return false;
+}
+
+static bool
+call_reads_argument_place(ir_summary_facts_t *facts, const ir_instr_t *call,
+                          core_datalog_symbol_t site,
+                          const ir_splace_t *place)
+{
+    ir_func_t   *function = call->block ? call->block->owner : nullptr;
+    ir_places_t *places   = nullptr;
+    for (uint32_t o = 1; function && o < call->n_operands; o++) {
+        core_datalog_symbol_t tuple[2] = {site, integer(facts, o - 1)};
+        if (core_datalog_contains(facts->engine,
+                                  facts->ids[REL_CALL_READS_ARGUMENT], tuple)
+            && argument_addresses(function, &places,
+                                  ir_operand_value(&call->operands[o]),
+                                  place)) return true;
+    }
+    return false;
+}
+
 bool
 ir_summary_facts_call_reads_entry(ir_summary_facts_t *facts,
                                   const ir_instr_t *call,
@@ -637,11 +680,13 @@ ir_summary_facts_call_reads_entry(ir_summary_facts_t *facts,
     bool         found = false;
     void        *id    = index && key ? core_dict_get(index, key, &found)
                                       : nullptr;
-    if (!found) return false;
     core_datalog_symbol_t tuple[2] = {site,
                                       integer(facts, (int64_t)(uintptr_t)id)};
-    return core_datalog_contains(facts->engine,
-                                 facts->ids[REL_CALL_READS_ENTRY], tuple);
+    if (found && core_datalog_contains(facts->engine,
+                                       facts->ids[REL_CALL_READS_ENTRY],
+                                       tuple))
+        return true;
+    return call_reads_argument_place(facts, call, site, place);
 }
 
 uint8_t

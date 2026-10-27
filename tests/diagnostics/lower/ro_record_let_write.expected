@@ -1,0 +1,3 @@
+tests/diagnostics/lower/ro_record_let_write.n:10:1: error N00B-S0019: `frozen` is a `let`, so its field `x` cannot be assigned
+  tests/diagnostics/lower/ro_record_let_write.n:9:5: note: `frozen` is declared here
+  help: declare `frozen` with `var` to allow changes

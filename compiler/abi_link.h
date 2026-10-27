@@ -296,6 +296,9 @@ bool n00bb_abi_consolidate_native_strings(
  * requirements are removed only after resolution; unsupported patch and
  * dispatch records fail without changing the output. The object is owned
  * by the caller and is not an executable. */
+bool n00bb_abi_summary_extent(const n00bb_abi_object_view_t *view,
+                              uint32_t offset, uint32_t *names,
+                              uint32_t *bytes);
 bool n00bb_abi_link_selected_objects(
     const n00bb_abi_selected_objects_t *selected,
     const core_target_desc_t *target,
@@ -314,6 +317,7 @@ typedef bool (*n00bb_abi_link_validation_fn)(
 bool n00bb_abi_link_objects_with_semantics(
     core_link_unit_t *link, const core_target_desc_t *target,
     const n00bb_abi_object_input_t *candidates, size_t candidate_count,
+    bool keep_summaries,
     n00bb_abi_link_semantics_fn semantics, void *context,
     n00bb_abi_link_validation_fn validate, void *validation_context,
     uint8_t **out_object, size_t *out_object_bytes,

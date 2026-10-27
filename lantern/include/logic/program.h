@@ -12,8 +12,6 @@ void core_logic_program_free(core_logic_program_t *program);
 
 core_datalog_engine_t *core_logic_datalog(core_logic_program_t *program);
 
-/* Domain ownership transfers to the program, including when an existing
- * named variable makes the new domain redundant. */
 core_csp_var_id_t core_logic_csp_var(core_logic_program_t *program,
                                      core_string_t name,
                                      core_csp_domain_t domain);

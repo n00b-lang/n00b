@@ -249,6 +249,30 @@ static void test_trap_summaries_leave_out_proven_checks(void)
     ir_ctx_free(ctx);
 }
 
+typedef struct {
+    core_string_t texts[8];
+    uint32_t count;
+} text_table_t;
+
+static uint32_t
+intern_text(void *context, core_string_t text)
+{
+    text_table_t *table = context;
+    for (uint32_t i = 0; i < table->count; i++)
+        if (core_string_eq(table->texts[i], text)) return i + 1;
+    if (table->count == 8) return 0;
+    table->texts[table->count++] = text;
+    return table->count;
+}
+
+static core_string_t
+lookup_text(void *context, uint32_t reference)
+{
+    text_table_t *table = context;
+    return reference && reference <= table->count
+        ? table->texts[reference - 1] : (core_string_t){0};
+}
+
 static void test_decoded_summaries_keep_heap_types(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -283,6 +307,28 @@ static void test_decoded_summaries_keep_heap_types(void)
     check("the summary writes a typed heap place", heap != nullptr);
     check("the decoded heap place keeps its type",
           kept && th_hash(types, kept) == th_hash(types, heap));
+    text_table_t table = {0};
+    ir_summary_texts_t texts = {
+        .intern = intern_text, .lookup = lookup_text, .context = &table,
+    };
+    core_buffer_t referenced = {0};
+    check("the summary encodes with a text table",
+          ir_summary_encode_with(summary, &referenced, &texts)
+          && table.count > 0);
+    ir_summary_t *resolved = ir_summary_decode_with(summaries, f,
+        (const uint8_t *)referenced.data, referenced.byte_len, nullptr,
+        nullptr, &texts);
+    th_type *named = nullptr;
+    for (uint32_t a = 0; resolved && a < ir_summary_access_count(resolved);
+         a++)
+        if (ir_summary_access_at(resolved, a)->place.kind == IR_SPLACE_HEAP)
+            named = ir_summary_access_at(resolved, a)->place.type;
+    check("a table-encoded heap place keeps its type",
+          named && th_hash(types, named) == th_hash(types, heap));
+    check("table encodings need a table to decode",
+          !ir_summary_decode(summaries, f, (const uint8_t *)referenced.data,
+                             referenced.byte_len, nullptr, nullptr));
+    core_buffer_release(&referenced);
     core_buffer_release(&encoded);
     ir_summaries_free(summaries);
     ir_ctx_free(ctx);

@@ -2260,11 +2260,18 @@ finish_semantic_unit(void *context, core_translation_unit_t *unit)
             failure = CORE_STRING_STATIC("interface module has malformed literal modifiers");
         }
         if (!restored) {
-            core_diagnostics_report(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0046"),
-                failure.data ? failure
-                    : CORE_STRING_STATIC("could not restore interface symbols"));
+            core_diagnostics_t *diagnostics =
+                core_translation_unit_diagnostics(unit);
+            core_string_t module = unit->module.identifier;
+            core_string_t reason = failure.data ? failure
+                : CORE_STRING_STATIC("its symbols could not be read");
+            n00bb_internal_error(diagnostics, unit, (core_diag_location_t){0},
+                "loading module interfaces",
+                "could not restore the interface of module `%.*s`: %.*s",
+                (int)module.u8_bytes, module.data, (int)reason.u8_bytes,
+                reason.data);
+            n00bb_report_note(diagnostics, N00B_TEXT_N00B_CACHE_CLEAN_AND_A,
+                N00BB_NO_ARGS);
             return false;
         }
     }

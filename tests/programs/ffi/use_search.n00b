@@ -1,5 +1,0 @@
-const limits = [-
-use <limits.writ>
--]'ffi
-
-require limits.LIMIT == 40

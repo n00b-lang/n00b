@@ -1,0 +1,12 @@
+#include "diagnostics/front.def"
+#include "diagnostics/link.def"
+#include "diagnostics/tu.def"
+#include "diagnostics/lower.def"
+#include "diagnostics/build.def"
+#include "diagnostics/command.def"
+#include "diagnostics/runtime.def"
+#define N00B_WRIT_DIAG(id, code, severity, title, explanation) \
+    N00B_DIAG(WRIT_##id, code, severity, title, explanation)
+#include "diagnostics/writ.def"
+#undef N00B_WRIT_DIAG
+#include "diagnostics/internal.def"

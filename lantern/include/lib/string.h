@@ -1,11 +1,7 @@
 #pragma once
 
 #include "core.h"
-
-struct core_string_t {
-    char  *data;
-    size_t u8_bytes;
-};
+#include "lib/string_type.h"
 
 typedef struct {
     uint32_t line;

@@ -1,0 +1,17 @@
+func f(n: int) -> int fail: string {
+    if n < 0 {
+        fail "negative"
+    }
+    return n
+}
+func g(n: int) -> int fail: int {
+    if n < 0 {
+        fail n
+    }
+    return n
+}
+try {
+    require f(1)! + g(2)! == 3
+} fail(failure) {
+    require false
+}

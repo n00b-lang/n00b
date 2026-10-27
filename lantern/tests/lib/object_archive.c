@@ -9,6 +9,19 @@
 
 #include "harness.h"
 #include "lib/object_archive.h"
+#include "lib/os.h"
+#include "lib/buffer.h"
+
+static int temp_file(const char *prefix, core_string_t *path) {
+  core_string_t root = core_os_temp_root();
+  core_buffer_t stem = {0};
+  core_buffer_append_string(&stem, root);
+  core_buffer_printf(&stem, "/%s", prefix);
+  int fd = core_os_make_unique_file(core_buffer_string(&stem), path);
+  core_buffer_release(&stem);
+  core_free(root.data);
+  return fd;
+}
 
 #define TEST_NODE_TYPE UINT64_C(0x746573742e6e6f64)
 #define TEST_ARCHIVE_ABI UINT64_C(0x746573742e617263)
@@ -115,13 +128,12 @@ static void node_destroy(void *object, void *user_data) {
 }
 
 int main(void) {
-  char path_bytes[] = "/tmp/lantern-object-archive-XXXXXX";
-  char path2_bytes[] = "/tmp/lantern-object-archive-second-XXXXXX";
-  core_string_t path = core_string_borrow(path_bytes, sizeof path_bytes - 1);
-  core_string_t path2 = core_string_borrow(path2_bytes,
-                                           sizeof path2_bytes - 1);
-  int fd = mkstemp(path_bytes);
-  int fd2 = mkstemp(path2_bytes);
+  core_string_t path = {0};
+  core_string_t path2 = {0};
+  int fd = temp_file("lantern-object-archive-", &path);
+  int fd2 = temp_file("lantern-object-archive-second-", &path2);
+  char *path_bytes = core_string_to_cstr(path);
+  char *path2_bytes = core_string_to_cstr(path2);
   check("temporary archive path is available", fd >= 0);
   check("second temporary archive path is available", fd2 >= 0);
   if (fd < 0 || fd2 < 0)

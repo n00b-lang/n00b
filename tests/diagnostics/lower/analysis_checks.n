@@ -1,0 +1,111 @@
+var counter = 0
+func bump() -> bool {
+    counter = counter + 1
+    return true
+}
+func f() -> int {
+    assert bump()
+    return counter
+}
+func fill(target: Ref[int]) -> bool {
+    target.__value = 7
+    return true
+}
+var value: int = 0
+assert fill(ref value)
+require f() >= 0
+require value == 7
+object Counter_1 {
+    count: int
+}
+func drop(consume c: Counter_1) {
+}
+func f_1() {
+    var c: Counter_1 = (count = 1)
+    drop(c)
+    drop(c)
+}
+f_1()
+record Pair {
+    x: int
+    y: int
+}
+
+func total(p: Pair) -> int {
+    return p.x + p.y
+}
+
+func first(r: Ref[Pair]) -> int {
+    r.y = r.x
+    return r.y
+}
+
+var pointer_state: Atomic[Ref[byte]?]
+var p: Pair
+var q: Pair
+p.x = 1
+let observed: Ref[byte]? = __atomic_load(ref pointer_state)
+require total(p) == 1
+require observed == nil
+require first(ref q) == 0
+let x = 1
+x = 2
+require x == 2
+func f_4(c: bool) -> int {
+    if c {
+        return 1
+    }
+}
+require f_4(true) == 1
+enum Color {
+    Red, Green, Blue
+}
+
+func name(c: Color) -> int {
+    switch c {
+    case Color.Red:
+        return 1
+    case Color.Green:
+        return 2
+    }
+}
+
+require name(Color.Red) == 1
+record Point {
+    x: int
+}
+
+object Counter_5 {
+    count: int
+}
+
+const FIXED: Counter_5 = (count = 1)
+
+func poke(c: Counter_5) {
+    c.count = 9
+}
+
+poke(FIXED)
+func f_6(x: int?) -> int {
+    return x.get()
+}
+require f_6(3) == 3
+record Entry {
+    value: int?
+}
+
+func clear(modify entry: Entry) {
+    entry.value = nil
+}
+
+func run(entry: Entry, other: Ref[Entry]) -> int {
+    var copy: Entry = entry
+    if copy.value != nil {
+        copy.value = nil
+        return copy.value.get()
+    }
+    return 1
+}
+
+var entry: Entry = (value = 4)
+require run(entry, ref entry) > 0

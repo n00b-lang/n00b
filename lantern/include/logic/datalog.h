@@ -126,8 +126,6 @@ core_datalog_int_result_t
 core_datalog_symbol_integer(const core_datalog_engine_t *engine,
                             core_datalog_symbol_t symbol);
 
-/* Facts copy their tuple. Rules take ownership of all nested arrays and
- * expression trees when accepted; a rejected rule remains caller-owned. */
 bool core_datalog_add_fact(core_datalog_engine_t *engine,
                            core_datalog_relation_id_t relation, int32_t arity,
                            const core_datalog_symbol_t *arguments);
@@ -147,8 +145,6 @@ bool core_datalog_explain(const core_datalog_engine_t *engine,
                           core_datalog_relation_id_t relation,
                           const core_datalog_symbol_t *arguments,
                           core_datalog_explain_fn visit, void *context);
-/* Queries are read-only and may run concurrently with other queries, provided
- * no thread mutates or destroys the engine until all queries have returned. */
 void core_datalog_query(const core_datalog_engine_t *engine,
                         core_datalog_relation_id_t relation,
                         core_datalog_query_fn callback, void *context);

@@ -319,7 +319,7 @@ resolve_fn(writ_binding_t *b, uint32_t item, writ_str_t text, bool slot)
     size_t fn = fn_named(b, target);
     if (fn == writ_model_fn_count(b->model) || (slot && !known_slot(b, fn, target.member))
         || (!slot && target.member.length)) {
-        writ_report(b->session, WRIT_D_BIND_TARGET, at(b, item)->loc, "`%.*s`", S(text));
+        writ_report(b->session, WRIT_D_BIND_TARGET, at(b, item)->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
         return writ_model_fn_count(b->model);
     }
     return fn;
@@ -353,13 +353,14 @@ apply_method(writ_binding_t *b, uint32_t id)
         return;
     }
     if (!type_named(b, owner.name) || !owner.member.length) {
-        writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no type `%.*s`", S(owner.name));
+        writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, WRIT_MESSAGE(NO_TYPE, WRIT_ARG(owner.name)));
         return;
     }
     bool is_static = writ_str_eq(text_of(b, item->payload), writ_cstr("static"));
     if (!is_static && !receives(b, fn, owner.name)) {
-        writ_report(b->session, WRIT_D_BIND_RECEIVER, item->loc, "`%.*s` takes no `%.*s`",
-                    S(writ_model_fn_at(b->model, fn)->contract_name), S(owner.name));
+        writ_report(
+            b->session, WRIT_D_BIND_RECEIVER, item->loc,
+            WRIT_MESSAGE(TAKES_NO, WRIT_ARG(writ_model_fn_at(b->model, fn)->contract_name), WRIT_ARG(owner.name)));
         return;
     }
     fn_decision_t *d = &b->fns[fn];
@@ -390,11 +391,11 @@ apply_policy(writ_binding_t *b, uint32_t id)
                 return;
             }
         }
-        writ_report(b->session, WRIT_D_BIND_NOT_OPEN, item->loc, "`%.*s` names no arm of `%.*s`",
-                    S(text_of(b, item->name)), S(slot->name));
+        writ_report(b->session, WRIT_D_BIND_NOT_OPEN, item->loc,
+                    WRIT_MESSAGE(NAMES_NO_ARM_OF, WRIT_ARG(text_of(b, item->name)), WRIT_ARG(slot->name)));
         return;
     }
-    writ_report(b->session, WRIT_D_BIND_NOT_OPEN, item->loc, "the contract has no policy parameter here");
+    writ_report(b->session, WRIT_D_BIND_NOT_OPEN, item->loc, WRIT_BARE(THE_CONTRACT_HAS_NO_POLICY));
 }
 
 static writ_str_t
@@ -429,10 +430,10 @@ apply_keywords(writ_binding_t *b, uint32_t id)
         }
     }
     if (!matched) {
-        writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no keyword pack of `%.*s`", S(target));
+        writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, WRIT_MESSAGE(NO_KEYWORD_PACK_OF, WRIT_ARG(target)));
     } else if (!repr) {
-        writ_report(b->session, WRIT_D_BIND_REPR, item->loc, "`keywords %.*s` for a keywords slot",
-                    S(text_of(b, item->name)));
+        writ_report(b->session, WRIT_D_BIND_REPR, item->loc,
+                    WRIT_MESSAGE(KEYWORDS_FOR_A_KEYWORDS_SLOT, WRIT_ARG(text_of(b, item->name))));
     }
 }
 
@@ -455,8 +456,9 @@ apply_repr(writ_binding_t *b, uint32_t id)
                                                                      : WRIT_N_PACK_NATIVE;
     bool fits = repr && repr->item == wanted;
     if (!fits) {
-        writ_report(b->session, WRIT_D_BIND_REPR, item->loc, "`%.*s %.*s` for a %s slot", S(kind), S(chosen),
-                    slot ? form_names[slot->form] : "plain");
+        writ_report(b->session, WRIT_D_BIND_REPR, item->loc,
+                    WRIT_MESSAGE(REPR_FOR_SLOT, WRIT_ARG(kind), WRIT_ARG(chosen),
+                                 WRIT_ARG(writ_cstr(slot ? form_names[slot->form] : "plain"))));
         return;
     }
     slot->repr = (choice_t){chosen, true};
@@ -473,10 +475,11 @@ apply_borrow(writ_binding_t *b, uint32_t id)
     slot_decision_t *slot = slot_named(b, fn, split(text).member);
     writ_str_t mode = text_of(b, at(b, id)->payload);
     if (!slot || !slot->borrow.text.length) {
-        writ_report(b->session, WRIT_D_BIND_NOT_OPEN, at(b, id)->loc, "`%.*s` is not borrowed from the library",
-                    S(text));
+        writ_report(b->session, WRIT_D_BIND_NOT_OPEN, at(b, id)->loc,
+                    WRIT_MESSAGE(IS_NOT_BORROWED_FROM_THE, WRIT_ARG(text)));
     } else if (writ_str_eq(mode, writ_cstr("lifetime")) && !b->profile->lifetimes) {
-        writ_report(b->session, WRIT_D_BIND_PROFILE, at(b, id)->loc, "`%.*s` has no lifetimes", S(b->language));
+        writ_report(b->session, WRIT_D_BIND_PROFILE, at(b, id)->loc,
+                    WRIT_MESSAGE(HAS_NO_LIFETIMES, WRIT_ARG(b->language)));
     } else {
         slot->borrow = (choice_t){mode, true};
     }
@@ -495,7 +498,8 @@ apply_glob(writ_binding_t *b, uint32_t id, bool hide)
         }
     }
     if (!any) {
-        writ_report(b->session, WRIT_D_BIND_TARGET, at(b, id)->loc, "`%.*s` matches no function", S(pattern));
+        writ_report(b->session, WRIT_D_BIND_TARGET, at(b, id)->loc,
+                    WRIT_MESSAGE(MATCHES_NO_FUNCTION, WRIT_ARG(pattern)));
     }
 }
 
@@ -520,8 +524,10 @@ static bool
 for_side(writ_binding_t *b, uint32_t id, bool export_item)
 {
     if (export_item != b->export_side) {
-        writ_report(b->session, WRIT_D_BIND_DIRECTION, at(b, id)->loc, "`%s` belongs to an %s binding",
-                    writ_node_kind_name(at(b, id)->kind), export_item ? "export" : "import");
+        writ_str_t kind = writ_cstr(writ_node_kind_name(at(b, id)->kind));
+        writ_report(b->session, WRIT_D_BIND_DIRECTION, at(b, id)->loc,
+                    export_item ? WRIT_MESSAGE(BELONGS_TO_EXPORT, WRIT_ARG(kind))
+                                : WRIT_MESSAGE(BELONGS_TO_IMPORT, WRIT_ARG(kind)));
         return false;
     }
     return true;
@@ -540,8 +546,10 @@ apply_item(writ_binding_t *b, uint32_t id)
         type_decision_t *type = type_named(b, text_of(b, item->name));
         bool callback = writ_model_callback_named(b->model, text_of(b, item->name)) != nullptr;
         if (!type || callback != (item->kind == WRIT_N_CALLBACK_AS)) {
-            writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no %s `%.*s`",
-                        item->kind == WRIT_N_CALLBACK_AS ? "callback" : "type", S(text_of(b, item->name)));
+            writ_str_t name = text_of(b, item->name);
+            writ_report(b->session, WRIT_D_BIND_TARGET, item->loc,
+                        item->kind == WRIT_N_CALLBACK_AS ? WRIT_MESSAGE(NO_CALLBACK, WRIT_ARG(name))
+                                                         : WRIT_MESSAGE(NO_TYPE, WRIT_ARG(name)));
         } else {
             type->name = (choice_t){child_text(b, id, WRIT_N_TEXT), true};
         }
@@ -585,7 +593,7 @@ apply_item(writ_binding_t *b, uint32_t id)
         if (for_side(b, id, false)) {
             b->load = (choice_t){text_of(b, item->payload), true};
             if (writ_str_eq(b->load.text, writ_cstr("dynamic"))) {
-                writ_report(b->session, WRIT_D_UNSUPPORTED, item->loc, "`load dynamic`");
+                writ_report(b->session, WRIT_D_UNSUPPORTED, item->loc, WRIT_BARE(LOAD_DYNAMIC));
             }
         }
         return;
@@ -608,7 +616,7 @@ apply_item(writ_binding_t *b, uint32_t id)
         if (for_side(b, id, true)) {
             writ_str_t handle = text_of(b, at(b, writ_node_child(b->unit, id, 0))->name);
             if (!writ_model_handle_named(b->model, handle)) {
-                writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, "no handle `%.*s`", S(handle));
+                writ_report(b->session, WRIT_D_BIND_TARGET, item->loc, WRIT_MESSAGE(NO_HANDLE, WRIT_ARG(handle)));
                 return;
             }
             core_list_push(b->implementations,
@@ -665,9 +673,10 @@ check_clashes(writ_binding_t *b)
         for (size_t j = i + 1; j < count && bound(&b->fns[i]); j++) {
             const fn_decision_t *x = &b->fns[i], *y = &b->fns[j];
             if (bound(y) && writ_str_eq(x->owner, y->owner) && writ_str_eq(x->name.text, y->name.text)) {
-                writ_report(b->session, WRIT_D_BIND_NAME_CLASH, b->anchor, "`%.*s` and `%.*s` are both `%.*s`",
-                            S(writ_model_fn_at(b->model, i)->contract_name),
-                            S(writ_model_fn_at(b->model, j)->contract_name), S(x->name.text));
+                writ_report(b->session, WRIT_D_BIND_NAME_CLASH, b->anchor,
+                            WRIT_MESSAGE(AND_ARE_BOTH, WRIT_ARG(writ_model_fn_at(b->model, i)->contract_name),
+                                         WRIT_ARG(writ_model_fn_at(b->model, j)->contract_name),
+                                         WRIT_ARG(x->name.text)));
             }
         }
     }
@@ -697,27 +706,27 @@ check_fns(writ_binding_t *b)
         }
         if (!d->raw && writ_fn_has_unknown_facts(fn)) {
             writ_loc_t block = b->anchor;
-            uint32_t diag = writ_report(b->session, WRIT_D_BIND_UNKNOWN, block, "`%.*s`", S(fn->contract_name));
+            uint32_t diag = writ_report(b->session, WRIT_D_BIND_UNKNOWN, block,
+                        WRIT_MESSAGE(TEXT_2, WRIT_ARG(fn->contract_name)));
             if (b->block) {
                 writ_loc_t brace = {block.source, block.end - 1, block.end - 1};
                 writ_report_suggest(b->session, diag, brace,
                                     writ_str_format(b->session, "    raw \"%.*s\"\n", S(fn->contract_name)),
-                                    writ_cstr("bind it without safety"));
+                                    WRIT_BARE(BIND_WITHOUT_SAFETY));
             }
         }
         bool c_variadic = fn->varargs != WRIT_VARARGS_NONE && fn->varargs != WRIT_VARARGS_VA_LIST;
         if (c_variadic && !b->profile->variadic_call && !b->export_side) {
-            writ_report(b->session, WRIT_D_BIND_PROFILE, b->anchor, "`%.*s` cannot call C variadic `%.*s`",
-                        S(b->language), S(fn->contract_name));
+            writ_report(b->session, WRIT_D_BIND_PROFILE, b->anchor,
+                        WRIT_MESSAGE(CANNOT_CALL_C_VARIADIC, WRIT_ARG(b->language), WRIT_ARG(fn->contract_name)));
         }
         if (b->export_side && !d->provide.length) {
-            writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor, "`%.*s`", S(fn->contract_name));
+            writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor, WRIT_MESSAGE(TEXT_2, WRIT_ARG(fn->contract_name)));
         }
         if (b->export_side && d->provide.length
             && (fn->thread == WRIT_THREAD_SAME || fn->thread == WRIT_THREAD_SAME_AS)) {
             writ_report(b->session, WRIT_D_BIND_PROFILE, d->provided_at,
-                        "an exported function cannot check `thread same` or `thread same_as`: `%.*s`",
-                        S(fn->contract_name));
+                        WRIT_MESSAGE(AN_EXPORTED_FUNCTION_CANNOT_CHECK, WRIT_ARG(fn->contract_name)));
         }
         for (size_t s = 0; !b->export_side && !d->raw && s < fn->slots_count; s++) {
             const writ_slot_view_t *slot = &fn->slots[s];
@@ -725,8 +734,8 @@ check_fns(writ_binding_t *b)
                 || callback_has_userdata(b, slot->type) || writ_binding_slot_provide(b, i, slot->name).length) {
                 continue;
             }
-            writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor, "`%.*s.%.*s` has no `userdata`",
-                        S(fn->contract_name), S(slot->name));
+            writ_report(b->session, WRIT_D_BIND_PROVIDE, b->anchor,
+                        WRIT_MESSAGE(HAS_NO_USERDATA, WRIT_ARG(fn->contract_name), WRIT_ARG(slot->name)));
         }
     }
 }
@@ -738,8 +747,8 @@ find_embedded_block(writ_binding_t *b, writ_str_t library)
     uint32_t first = 0, count = 0;
     for (uint32_t block = 0; (block = writ_unit_next_item(unit, WRIT_N_BINDING, block)); count++) {
         if (count == 1) {
-            writ_report(b->session, WRIT_D_BIND_LANGUAGE, at(b, block)->loc, "`%.*s`",
-                        S(text_of(b, unit->language)));
+            writ_report(b->session, WRIT_D_BIND_LANGUAGE, at(b, block)->loc,
+                        WRIT_MESSAGE(TEXT_2, WRIT_ARG(text_of(b, unit->language))));
             return false;
         }
         first = block;
@@ -753,7 +762,7 @@ find_embedded_block(writ_binding_t *b, writ_str_t library)
         b->anchor = at(b, first)->loc;
     }
     if (!library.length) {
-        writ_report(b->session, WRIT_D_EMBEDDED_SHAPE, b->anchor, "no `library` in the contract");
+        writ_report(b->session, WRIT_D_EMBEDDED_SHAPE, b->anchor, WRIT_BARE(NO_LIBRARY_IN_THE_CONTRACT));
         return false;
     }
     b->block    = first;
@@ -775,12 +784,13 @@ find_block(writ_binding_t *b, const writ_bind_request_t *request, writ_str_t lib
     }
     writ_str_t language = chosen ? child_text(b, chosen, WRIT_N_REF) : (writ_str_t){"", 0};
     if (!chosen || (request->language.length && (count != 1 || !writ_str_eq(language, request->language)))) {
-        writ_report(b->session, WRIT_D_BIND_LANGUAGE, chosen ? at(b, chosen)->loc : WRIT_NO_LOC, "`%.*s`",
-                    S(request->language.length ? request->language : writ_cstr("any")));
+        writ_report(b->session, WRIT_D_BIND_LANGUAGE, chosen ? at(b, chosen)->loc : WRIT_NO_LOC,
+                    WRIT_MESSAGE(TEXT_2, WRIT_ARG(request->language.length ? request->language : writ_cstr("any"))));
         return false;
     }
     if (!writ_str_eq(text_of(b, at(b, chosen)->name), library)) {
-        writ_report(b->session, WRIT_D_BIND_CONTRACT, at(b, chosen)->loc, "the contract is `%.*s`", S(library));
+        writ_report(b->session, WRIT_D_BIND_CONTRACT, at(b, chosen)->loc,
+                    WRIT_MESSAGE(THE_CONTRACT_IS, WRIT_ARG(library)));
         return false;
     }
     b->language = language;
@@ -836,8 +846,7 @@ writ_bind(const writ_model_t *model, const writ_bind_request_t *request, const w
             if (at(b, item)->kind == WRIT_N_STRIP_PREFIX) {
                 core_list_push(b->prefixes, at(b, item)->name);
             } else if (at(b, item)->kind == WRIT_N_MODULE && b->unit->language) {
-                writ_report(session, WRIT_D_EMBEDDED_SHAPE, at(b, item)->loc,
-                            "the host decides where the bound API lives");
+                writ_report(session, WRIT_D_EMBEDDED_SHAPE, at(b, item)->loc, WRIT_BARE(THE_HOST_DECIDES_WHERE_THE));
             } else if (at(b, item)->kind == WRIT_N_MODULE) {
                 b->module = (choice_t){text_of(b, at(b, item)->name), true};
             }

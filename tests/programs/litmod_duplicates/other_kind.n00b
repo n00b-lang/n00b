@@ -1,7 +1,0 @@
-import provider
-
-int litmod stamp(repr: string) -> string fail: string {
-    return repr
-}
-
-require 7'stamp == "7"

@@ -7,6 +7,7 @@
 #include "compiler_cache.h"
 #include "compiler_link.h"
 #include "compiler_tu.h"
+#include "diagnostics.h"
 #include "parse/tree_util.h"
 #include "compiler_native_roots.h"
 #include "record_layout_request.h"
@@ -688,12 +689,10 @@ bind_deferred_method_failure(core_translation_unit_t *unit,
         if (failure && th_method_obligation_set_error(state->types,
                 variable, constraint.method.name,
                 constraint.method.result, failure)) continue;
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
-            CORE_STRING_STATIC(
-                "could not bind the trait method failure channel"),
-            link_source_location(site));
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            n00bb_node_span(site), "resolving trait methods",
+            "could not record the failure type of `%.*s` on a generic value",
+            (int)method_name.u8_bytes, method_name.data);
         return false;
     }
     return true;
@@ -1086,18 +1085,13 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                         else reads++;
                     }
                     if (writes && reads) continue;
-                    core_buffer_t message = {0};
-                    core_buffer_printf(&message, "field '%.*s' %s",
-                        (int)symbol->name.u8_bytes, symbol->name.data,
-                        writes ? "is set but never read" : "is never set");
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_WARNING,
-                        writes ? CORE_STRING_STATIC("N00BB-W0002")
-                               : CORE_STRING_STATIC("N00BB-W0001"),
-                        core_buffer_string(&message),
-                        link_source_location(symbol->decl_node));
-                    core_buffer_release(&message);
+                    n00bb_report(core_translation_unit_diagnostics(unit),
+                        unit, writes ? N00B_DIAG_FIELD_NEVER_READ
+                                     : N00B_DIAG_FIELD_NEVER_SET,
+                        n00bb_symbol_location(symbol),
+                        writes ? N00B_TEXT_FIELD_SET_NEVER_READ
+                               : N00B_TEXT_FIELD_NEVER_SET,
+                        N00BB_ARGS(ARG_TEXT(symbol->name)));
                     continue;
                 }
                 if (symbol->kind != PARSE_SYM_FUNCTION
@@ -1112,7 +1106,13 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                     && (core_string_eq(symbol->name,
                             CORE_STRING_STATIC("start"))
                         || core_string_eq(symbol->name,
+                            CORE_STRING_STATIC("main"))
+                        || core_string_eq(symbol->name,
                             CORE_STRING_STATIC("comptime_start")))) continue;
+                bool module_level = scope->scope_tag.data
+                    && core_string_eq(scope->scope_tag,
+                                      CORE_STRING_STATIC("module"));
+                if (module_level && symbol_is_exportable(symbol)) continue;
                 bool native_root = false;
                 core_string_t module_name = unit->module.identifier;
                 for (size_t r = 0; r < analysis->native_root_count; r++) {
@@ -1131,19 +1131,16 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
                         break;
                     }
                 if (literal_handler) continue;
-                bool public = symbol_is_exportable(symbol);
-                core_buffer_t message = {0};
-                core_buffer_printf(&message, "%sfunction '%.*s' is never used",
-                    public ? "public " : "",
-                    (int)symbol->name.u8_bytes, symbol->name.data);
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_WARNING,
-                    public ? CORE_STRING_STATIC(N00BB_PUBLIC_UNUSED_CODE)
-                           : CORE_STRING_STATIC("N00BB-W0003"),
-                    core_buffer_string(&message),
-                    link_source_location(symbol->decl_node));
-                core_buffer_release(&message);
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                n00bb_report(diagnostics, unit, N00B_DIAG_UNUSED_FUNCTION,
+                    n00bb_symbol_location(symbol),
+                    module_level ? N00B_TEXT_PRIVATE_FUNCTION_NEVER_CALLED
+                                 : N00B_TEXT_FUNCTION_NEVER_CALLED,
+                    N00BB_ARGS(ARG_TEXT(symbol->name)));
+                n00bb_report_help(diagnostics, module_level
+                    ? N00B_TEXT_CALL_UNPRIVATE_OR_DELETE
+                    : N00B_TEXT_CALL_OR_DELETE, N00BB_NO_ARGS);
             }
         }
     }
@@ -1153,6 +1150,53 @@ diagnose_unused_link_symbols(parse_grammar_t *grammar,
 }
 
 
+
+static void
+report_undeclared_generic_method(core_translation_unit_t *unit,
+                                 n00bb_tu_state_t *state, parse_tree_t *node,
+                                 th_type *receiver_type, core_string_t method)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t type_text = receiver_type
+        ? n00bb_print_type(state->types, receiver_type)
+        : n00bb_text_form(N00B_TEXT_THIS_GENERIC_TYPE);
+    n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_METHOD_UNDECLARED,
+        n00bb_node_span(node), N00B_TEXT_NO_TRAIT_DECLARES_SO_IT,
+        N00BB_ARGS(ARG_TEXT(method), ARG_TEXT(type_text)));
+    n00bb_report_help(diagnostics, N00B_TEXT_DECLARE_IN_A_TRAIT,
+        N00BB_ARGS(ARG_TEXT(method)));
+}
+
+static void
+report_operator_not_implemented(core_translation_unit_t *unit,
+                                n00bb_tu_state_t *state,
+                                n00bb_link_use_site_t *site,
+                                th_type *receiver_type,
+                                core_string_t trait_name)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t trait = trait_name.data ? trait_name : site->dispatch_trait;
+    core_string_t type_text = receiver_type
+        ? n00bb_print_type(state->types, receiver_type)
+        : n00bb_text_form(N00B_TEXT_THIS_VALUE);
+    bool binary = site->operator_dispatch
+        && core_tree_num_children(site->node) == 3;
+    core_string_t operator = site->operator_dispatch
+        ? first_token_text(core_tree_child(site->node, binary ? 1 : 0))
+        : (core_string_t){0};
+    if (operator.u8_bytes)
+        n00bb_report(diagnostics, unit, N00B_DIAG_OPERATOR_NOT_IMPLEMENTED,
+            n00bb_node_span(site->node), N00B_TEXT_DOES_NOT_SUPPORT,
+            N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(operator)));
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_OPERATOR_NOT_IMPLEMENTED,
+            n00bb_node_span(site->node),
+            N00B_TEXT_DOES_NOT_SUPPORT_THIS_OPERATION,
+            N00BB_ARGS(ARG_TEXT(type_text)));
+    if (trait.u8_bytes)
+        n00bb_report_note(diagnostics, N00B_TEXT_IT_NEEDS_AN_IMPLEMENTATION_OF,
+            N00BB_ARGS(ARG_TEXT(trait), ARG_TEXT(type_text)));
+}
 
 static bool
 validate_enclosing_return_type(parse_grammar_t *grammar,
@@ -1174,12 +1218,19 @@ validate_enclosing_return_type(parse_grammar_t *grammar,
         if (n00bb_option_type_element(expected, &element)
             && (th_is_nil(actual)
                 || th_unifies(state->types, element, actual))) return true;
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit, CORE_DIAG_ERROR,
-            CORE_STRING_STATIC("N00BB-T0001"),
-            CORE_STRING_STATIC(
-                "function return expression does not match its declared result type after trait resolution"),
-            link_source_location(at));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        core_string_t expected_text = n00bb_print_type(state->types,
+                                                       expected);
+        core_string_t actual_text = n00bb_print_type(state->types, actual);
+        n00bb_report(diagnostics, unit, N00B_DIAG_VALUE_TYPE_MISMATCH,
+            n00bb_node_span(expression), N00B_TEXT_RETURNS_BUT_THIS_VALUE_IS,
+            N00BB_ARGS(ARG_TEXT(function->name), ARG_TEXT(expected_text),
+                       ARG_TEXT(actual_text)));
+        n00bb_report_label(diagnostics, N00B_TEXT_EXPECTED,
+            N00BB_ARGS(ARG_TEXT(expected_text)));
+        n00bb_diag_declared_here(diagnostics, function,
+            N00B_TEXT_IS_DECLARED_HERE);
         return false;
     }
     return true;
@@ -1236,24 +1287,65 @@ validate_index_dispatch_result(parse_grammar_t *grammar,
         parse_tree_set_type(site->node, actual);
         return validate_enclosing_return_type(grammar, unit, state, site);
     }
-    core_buffer_t message = {0};
     core_string_t actual_text = actual
         ? n00bb_print_type(state->types, actual)
         : CORE_STRING_STATIC("unknown");
     core_string_t expected_text = expected
         ? n00bb_print_type(state->types, expected)
         : CORE_STRING_STATIC("unknown");
-    core_buffer_printf(&message,
-        "index expression type %.*s does not match resolved trait result %.*s",
-        (int)actual_text.u8_bytes, actual_text.data,
-        (int)expected_text.u8_bytes, expected_text.data);
-    core_diagnostics_report_at(
-        core_translation_unit_diagnostics(unit), unit, CORE_DIAG_ERROR,
-        CORE_STRING_STATIC("N00BB-T0001"),
-        core_buffer_string(&message),
-        link_source_location(site->node));
-    core_buffer_release(&message);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    n00bb_report(diagnostics, unit, N00B_DIAG_INDEX_RESULT_TYPE,
+        n00bb_node_span(site->node), N00B_TEXT_INDEXING_HERE_PRODUCES_BUT_IT,
+        N00BB_ARGS(ARG_TEXT(expected_text), ARG_TEXT(actual_text)));
+    n00bb_report_label(diagnostics, N00B_TEXT_THIS_IS,
+        N00BB_ARGS(ARG_TEXT(expected_text)));
     return false;
+}
+
+static void
+report_operator_operands(core_translation_unit_t *unit,
+                         n00bb_tu_state_t *state, n00bb_link_use_site_t *site,
+                         th_type *receiver, th_type *argument,
+                         th_type *signature)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    bool unary = core_tree_num_children(site->node) == 2;
+    core_string_t operator = first_token_text(
+        core_tree_child(site->node, unary ? 0 : 1));
+    parse_tree_t *left = operator_receiver_node(site);
+    core_diag_location_t at = n00bb_node_span(site->node);
+    th_type *element = nullptr;
+    if (receiver && n00bb_option_type_element(receiver, &element)) {
+        core_string_t text = n00bb_node_source_text(unit, left,
+            n00bb_text_form(N00B_TEXT_THIS_VALUE));
+        core_string_t type_text = n00bb_print_type(state->types, receiver);
+        n00bb_report(diagnostics, unit, N00B_DIAG_OPTION_USED_AS_VALUE,
+            n00bb_node_span(left), N00B_TEXT_IS_WHICH_MAY_BE_NIL,
+            N00BB_ARGS(ARG_TEXT(text), ARG_TEXT(type_text),
+                       ARG_TEXT(operator)));
+        n00bb_report_label(diagnostics, N00B_TEXT_MAY_BE_NIL, N00BB_NO_ARGS);
+        n00bb_report_help(diagnostics, N00B_TEXT_STORE_IT_IN_A_VARIABLE_2,
+            N00BB_NO_ARGS);
+        return;
+    }
+    core_string_t left_text = receiver
+        ? n00bb_print_type(state->types, receiver) : CORE_STRING_STATIC("_");
+    core_string_t right_text = argument
+        ? n00bb_print_type(state->types, argument) : CORE_STRING_STATIC("_");
+    if (unary)
+        n00bb_report(diagnostics, unit, N00B_DIAG_OPERATOR_OPERAND_TYPES, at,
+            N00B_TEXT_CANNOT_BE_APPLIED_TO_HERE,
+            N00BB_ARGS(ARG_TEXT(operator), ARG_TEXT(left_text)));
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_OPERATOR_OPERAND_TYPES, at,
+            N00B_TEXT_CANNOT_COMBINE_AND_HERE,
+            N00BB_ARGS(ARG_TEXT(operator), ARG_TEXT(left_text),
+                       ARG_TEXT(right_text)));
+    if (signature && th_kind_of(signature) == TH_FUNCTION) {
+        core_string_t expected = n00bb_print_type(state->types, signature);
+        n00bb_report_note(diagnostics, N00B_TEXT_THE_THAT_APPLIES_HAS_SIGNATURE,
+            N00BB_ARGS(ARG_TEXT(operator), ARG_TEXT(expected)));
+    }
 }
 
 static bool
@@ -1293,11 +1385,8 @@ validate_operator_dispatch_result(parse_grammar_t *grammar,
         && th_unify_in_place(state->types, th_func_ret(signature), result);
     if (valid)
         return validate_enclosing_return_type(grammar, unit, state, site);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-        unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0001"),
-        CORE_STRING_STATIC(
-            "operator operands or result do not match the resolved trait method"),
-        link_source_location(site->node));
+    report_operator_operands(unit, state, site, receiver, argument,
+                             signature);
     return false;
 }
 
@@ -1571,47 +1660,42 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
             core_list_free(candidates);
             return false;
         }
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
         if (string_argument) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0036"),
-                core_string_borrow(n00bb_string_to_buffer_text,
-                    sizeof(n00bb_string_to_buffer_text) - 1),
-                link_source_location(string_argument));
+            core_string_t text = n00bb_node_source_text(unit,
+                string_argument, n00bb_text_form(N00B_TEXT_THIS_VALUE));
+            n00bb_report(diagnostics, unit, N00B_DIAG_STRING_NOT_BUFFER,
+                n00bb_node_span(string_argument), N00B_TEXT_IS_A_STRING_BUT_A,
+                N00BB_ARGS(ARG_TEXT(text)));
+            n00bb_report_help(diagnostics, N00B_TEXT_WRITE_BUFFER_FROM_STRING,
+                N00BB_ARGS(ARG_TEXT(text)));
             core_list_free(candidates);
             return false;
         }
-        core_buffer_t message = {0};
+        core_string_t constructed = n00bb_print_type(state->types, target);
+        core_diag_location_t at = n00bb_node_span(site->node);
         if (constraint_failures == 1) {
             core_string_t failed_type = failed_constraint_type
                 ? n00bb_print_type(state->types, failed_constraint_type)
-                : CORE_STRING_STATIC("");
-            core_buffer_printf(&message,
-                "constructed type requires trait '%.*s'%s%.*s",
-                (int)failed_constraint.u8_bytes, failed_constraint.data,
-                failed_constraint_type ? " for " : "",
-                (int)failed_type.u8_bytes, failed_type.data);
+                : n00bb_text_form(N00B_TEXT_THE_ARGUMENT);
+            n00bb_report(diagnostics, unit,
+                N00B_DIAG_CONSTRUCTOR_TRAIT_REQUIRED, at,
+                N00B_TEXT_BUILDING_THIS_WAY_NEEDS_TO,
+                N00BB_ARGS(ARG_TEXT(constructed), ARG_TEXT(failed_type),
+                           ARG_TEXT(failed_constraint)));
         }
-        else {
-            core_string_t constructed = n00bb_print_type(state->types,
-                                                         target);
-            if (!pattern_matches)
-                core_buffer_printf(&message,
-                    "%.*s has no visible `__init`",
-                    (int)constructed.u8_bytes, constructed.data);
-            else
-                core_buffer_printf(&message,
-                    "no visible `__init` for %.*s accepts these arguments "
-                    "(%zu considered)",
-                    (int)constructed.u8_bytes, constructed.data,
-                    pattern_matches);
+        else if (!pattern_matches) {
+            n00bb_report(diagnostics, unit, N00B_DIAG_CONSTRUCTOR_MISSING, at,
+                N00B_TEXT_HAS_NO_VISIBLE_INIT_SO,
+                N00BB_ARGS(ARG_TEXT(constructed)));
+            n00bb_report_help(diagnostics, N00B_TEXT_DECLARE_AN_INIT_FOR_OR,
+                N00BB_ARGS(ARG_TEXT(constructed)));
         }
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0020"),
-            core_string_borrow(message.data, message.byte_len),
-            link_source_location(site->node));
-        core_buffer_release(&message);
+        else
+            n00bb_report(diagnostics, unit, N00B_DIAG_CONSTRUCTOR_NO_MATCH, at,
+                N00B_TEXT_NONE_OF_THE_VISIBLE_INIT,
+                N00BB_ARGS(ARG_NUMBER(pattern_matches), ARG_TEXT(constructed)));
         core_list_free(candidates);
         return false;
     }
@@ -1634,12 +1718,17 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
         }
         if (dominated) continue;
         if (selected != SIZE_MAX) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0021"),
-                CORE_STRING_STATIC(
-                    "multiple equally specific __init functions match this construction"),
-                link_source_location(site->node));
+            core_diagnostics_t *diagnostics =
+                core_translation_unit_diagnostics(unit);
+            core_string_t constructed = n00bb_print_type(state->types,
+                                                         target);
+            n00bb_report(diagnostics, unit, N00B_DIAG_CONSTRUCTOR_AMBIGUOUS,
+                n00bb_node_span(site->node), N00B_TEXT_MORE_THAN_ONE_INIT_OF,
+                N00BB_ARGS(ARG_TEXT(constructed)));
+            n00bb_diag_declared_here(diagnostics,
+                candidates.data[selected].symbol, N00B_TEXT_IS_DECLARED_HERE);
+            n00bb_diag_declared_here(diagnostics, candidates.data[i].symbol,
+                                     N00B_TEXT_IS_DECLARED_HERE);
             core_list_free(candidates);
             return false;
         }
@@ -1753,6 +1842,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                                   n00bb_link_analysis_t *analysis,
                                   const th_env *environment)
 {
+    bool user_errors = false;
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
@@ -1763,6 +1853,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
         if (state->link_use_sites.len && !order) return false;
         for (size_t s = 0; s < state->link_use_sites.len; s++) {
             n00bb_link_use_site_t *site = &state->link_use_sites.data[order[s]];
+            if (site->unresolved) continue;
             if (site->callback_call) {
                 if (site->reference
                     && core_link_reference_is_deferred(site->reference)
@@ -1941,19 +2032,26 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         implementation))
                     implementation = nullptr;
                 if (!implementation) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0025"),
-                        status == TH_ENV_METHOD_AMBIGUOUS
-                            ? CORE_STRING_STATIC(
-                                "callback setup is ambiguous for the selected handler type")
-                            : status == TH_ENV_METHOD_FOUND
-                                ? CORE_STRING_STATIC(
-                                    "callback setup implementation must not be private")
-                            : CORE_STRING_STATIC(
-                                "callback setup has no visible compatible implementation"),
-                        link_source_location(site->node));
-                    return false;
+                    core_diagnostics_t *diagnostics =
+                        core_translation_unit_diagnostics(unit);
+                    core_diag_location_t at = n00bb_node_span(site->node);
+                    if (status == TH_ENV_METHOD_AMBIGUOUS)
+                        n00bb_report(diagnostics, unit,
+                            N00B_DIAG_CALLBACK_AMBIGUOUS, at,
+                            N00B_TEXT_MORE_THAN_ONE_CALLBACK_SETUP,
+                            N00BB_NO_ARGS);
+                    else if (status == TH_ENV_METHOD_FOUND)
+                        n00bb_report(diagnostics, unit,
+                            N00B_DIAG_CALLBACK_PRIVATE, at,
+                            N00B_TEXT_THE_CALLBACK_SETUP_THAT_FITS,
+                            N00BB_NO_ARGS);
+                    else
+                        n00bb_report(diagnostics, unit,
+                            N00B_DIAG_CALLBACK_MISSING, at,
+                            N00B_TEXT_NO_VISIBLE_CALLBACK_SETUP_FITS,
+                            N00BB_NO_ARGS);
+                    user_errors = true;
+                    continue;
                 }
                 site->resolved_trait_name = trait_name;
                 continue;
@@ -1972,7 +2070,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
             if (!core_link_reference_is_deferred(reference)) {
                 if (!validate_trait_dispatch_result(grammar, unit, state,
                                                     site, dispatch_symbol))
-                    return false;
+                    user_errors = true;
                 continue;
             }
             if (site->dispatch_trait.data) {
@@ -1983,6 +2081,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 th_type *receiver_type = site->dispatch_receiver_type
                     ? site->dispatch_receiver_type
                     : receiver ? parse_tree_type(receiver) : nullptr;
+                if (th_is_poison(receiver_type)) continue;
                 parse_sym_entry_t *in_place = receiver_type
                     && nt_is(grammar, site->node, CORE_STRING_STATIC("binop-assign-stmt"))
                     ? resolve_in_place_method(link, unit, state, site,
@@ -2074,13 +2173,11 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         trait_method_requirement_symbol(grammar, analysis,
                             unit, trait_name, site->dispatch_method);
                     if (!requirement) {
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(unit), unit,
-                            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0011"),
-                            CORE_STRING_STATIC(
-                                "generic trait constraint has no matching method declaration"),
-                            link_source_location(site->node));
-                        return false;
+                        report_undeclared_generic_method(unit, state,
+                            site->node, receiver_type,
+                            site->dispatch_method);
+                        user_errors = true;
+                        continue;
                     }
                     if (!bind_deferred_method_failure(unit, state,
                             site->node, receiver_type,
@@ -2092,8 +2189,10 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                                                              requirement))
                         return false;
                     if (!validate_trait_dispatch_result(grammar, unit, state,
-                                                        site, requirement))
-                        return false;
+                                                        site, requirement)) {
+                        user_errors = true;
+                        continue;
+                    }
                     if (has_trait_constraint(receiver_type, trait_name)
                         && !plan_closed_trait_dispatch(link, analysis,
                             environment, unit, site, trait_name,
@@ -2106,30 +2205,16 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 }
                 else if (site->optional_dispatch) continue;
                 else {
-                    core_buffer_t message = {0};
-                    core_string_t trait_text = trait_name.data ? trait_name
-                        : CORE_STRING_STATIC("<unknown trait>");
-                    core_string_t receiver_text = receiver_type
-                        ? th_print(state->types, receiver_type)
-                        : CORE_STRING_STATIC("<unknown receiver>");
-                    core_buffer_printf(&message,
-                        "operator or indexing operation has no linked %.*s.%.*s implementation for %.*s",
-                        (int)trait_text.u8_bytes, trait_text.data,
-                        (int)site->dispatch_method.u8_bytes,
-                        site->dispatch_method.data
-                            ? site->dispatch_method.data : "",
-                        (int)receiver_text.u8_bytes, receiver_text.data);
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0011"),
-                        core_string_borrow(message.data, message.byte_len),
-                        link_source_location(site->node));
-                    core_buffer_release(&message);
-                    return false;
+                    report_operator_not_implemented(unit, state, site,
+                        receiver_type, trait_name);
+                    user_errors = true;
+                    continue;
                 }
                 if (!validate_trait_dispatch_result(grammar, unit, state,
-                                                    site, implementation))
-                    return false;
+                                                    site, implementation)) {
+                    user_errors = true;
+                    continue;
+                }
             }
             parse_node_resolution_t resolution =
                 parse_tree_resolution(site->node);
@@ -2149,6 +2234,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     ? core_tree_child(site->node, 0) : nullptr;
                 th_type *receiver_type = receiver
                     ? parse_tree_type(receiver) : nullptr;
+                if (th_is_poison(receiver_type)) continue;
                 core_string_t method_name = core_tree_num_children(site->node) >= 3
                     ? first_token_text(core_tree_child(site->node, 2))
                     : (core_string_t){0};
@@ -2170,26 +2256,26 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         deferred_trait_method_requirement(grammar, analysis,
                             unit, receiver_type, method_name);
                     if (!requirement) {
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(unit), unit,
-                            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0010"),
-                            CORE_STRING_STATIC(
-                                "generic trait constraint has no matching method declaration"),
-                            link_source_location(site->node));
-                        return false;
+                        report_undeclared_generic_method(unit, state,
+                            site->node, receiver_type, method_name);
+                        user_errors = true;
+                        continue;
                     }
                     if (!bind_deferred_method_failure(unit, state,
                             site->node, receiver_type, method_name,
                             requirement)) return false;
                     if (!n00bb_bind_method_keywords(grammar, state->types,
                             receiver_type, method_name, requirement)) {
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(unit), unit,
-                            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
-                            CORE_STRING_STATIC(
-                                "named arguments do not bind to the trait method's parameters"),
-                            link_source_location(site->node));
-                        return false;
+                        n00bb_report(core_translation_unit_diagnostics(unit),
+                            unit, N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
+                            n00bb_node_span(site->node),
+                            N00B_TEXT_THE_NAMED_ARGUMENTS_OF_THIS,
+                            N00BB_ARGS(ARG_TEXT(method_name)));
+                        n00bb_diag_declared_here(
+                            core_translation_unit_diagnostics(unit),
+                            requirement, N00B_TEXT_IS_DECLARED_HERE);
+                        user_errors = true;
+                        continue;
                     }
                     site->symbol = requirement;
                     parse_sym_add_use(requirement, site->node);
@@ -2215,12 +2301,16 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                             N00BB_LINK_STAGE_IR_BINDINGS)) return false;
                     continue;
                 }
-                core_diagnostics_report_at(
+                if (receiver_type && method_name.data) {
+                    n00bb_report_missing_method(unit, state->types,
+                        site->node, receiver_type, method_name, false);
+                    user_errors = true;
+                    continue;
+                }
+                n00bb_internal_error(
                     core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0010"),
-                    CORE_STRING_STATIC(
-                        "trait dispatch did not resolve to a linked function declaration"),
-                    link_source_location(site->node));
+                    n00bb_node_span(site->node), "resolving trait methods",
+                    "this method call has no receiver type or method name");
                 return false;
             }
             core_buffer_t key = {0};
@@ -2234,7 +2324,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
             site->symbol = symbol;
         }
     }
-    return core_link_unit_validate(link)
+    return !user_errors && core_link_unit_validate(link)
         && bind_link_references_to_nodes(grammar, link);
 }
 
@@ -2386,6 +2476,58 @@ add_trait_specialization_fact(core_link_unit_t *link,
     return true;
 }
 
+static void
+report_generic_trait_failure(core_translation_unit_t *unit, th_ctx *types,
+                             parse_tree_t *call_node,
+                             parse_sym_entry_t *function,
+                             th_type *argument_type, core_string_t trait,
+                             core_string_t method, bool ambiguous)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t type_text = argument_type
+        ? n00bb_print_type(types, argument_type)
+        : n00bb_text_form(N00B_TEXT_THE_ARGUMENTS_TYPE);
+    if (ambiguous)
+        n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_TRAIT_AMBIGUOUS,
+            n00bb_node_span(call_node), N00B_TEXT_USES_AND_MORE_THAN_ONE,
+            N00BB_ARGS(ARG_TEXT(function->name), ARG_TEXT(trait),
+                       ARG_TEXT(method), ARG_TEXT(type_text)));
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_GENERIC_TRAIT_MISSING,
+            n00bb_node_span(call_node), N00B_TEXT_USES_WHICH_DOES_NOT_IMPLEMENT,
+            N00BB_ARGS(ARG_TEXT(function->name), ARG_TEXT(trait),
+                       ARG_TEXT(method), ARG_TEXT(type_text)));
+    n00bb_diag_declared_here(diagnostics, function, N00B_TEXT_IS_DECLARED_HERE);
+}
+
+static void
+report_generic_argument(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, th_ctx *types,
+                        parse_tree_t *call_node, parse_sym_entry_t *function,
+                        size_t index, th_type *argument_type,
+                        th_type *parameter_type)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    parse_tree_t *argument = index != SIZE_MAX
+        ? call_argument_for_parameter(grammar, call_node, function, index,
+                                      false)
+        : nullptr;
+    if (!argument || !argument_type || !parameter_type) {
+        n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
+            n00bb_node_span(call_node), N00B_TEXT_THE_ARGUMENTS_OF_THIS_CALL,
+            N00BB_ARGS(ARG_TEXT(function->name)));
+        n00bb_diag_declared_here(diagnostics, function,
+            N00B_TEXT_IS_DECLARED_HERE);
+        return;
+    }
+    core_string_t name = {0};
+    (void)function_parameter_info(grammar, function,
+        callable_formal_parameters(grammar, function), index, nullptr, &name,
+        nullptr, nullptr);
+    n00bb_report_argument_type(unit, types, argument, argument_type,
+                               parameter_type, function, index, name);
+}
+
 static bool
 diagnose_ambiguous_generic_trait_call(parse_grammar_t *grammar,
     core_translation_unit_t *call_unit, parse_tree_t *call_node,
@@ -2432,12 +2574,9 @@ diagnose_ambiguous_generic_trait_call(parse_grammar_t *grammar,
         th_env_method_status_t status = th_env_method_resolve(types,
             argument_type, trait_name, requirement->name, &method);
         if (status != TH_ENV_METHOD_AMBIGUOUS) continue;
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(call_unit), call_unit,
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0003"),
-            CORE_STRING_STATIC(
-                "generic instantiation has ambiguous trait dispatch"),
-            link_source_location(call_node));
+        report_generic_trait_failure(call_unit, types, call_node,
+            generic_function, argument_type, trait_name, requirement->name,
+            true);
         return true;
     }
     return false;
@@ -2503,13 +2642,14 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     return false;
                 }
                 if (function_state->types != call_state->types) {
-                    core_diagnostics_report_at(
+                    n00bb_internal_error(
                         core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-T0004"),
-                        CORE_STRING_STATIC(
-                            "trait specialization crossed type universes"),
-                        link_source_location(call_node));
+                        call_unit, n00bb_node_span(call_node),
+                        "specializing generic calls",
+                        "`%.*s` and this call were checked with separate "
+                        "sets of types",
+                        (int)generic_function->name.u8_bytes,
+                        generic_function->name.data);
                     core_list_free(formals);
                     core_dict_free(&seen_calls);
                     return false;
@@ -2749,7 +2889,6 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                 size_t failed_argument_index = SIZE_MAX;
                 th_type *failed_parameter_type = nullptr;
                 th_type *failed_argument_type = nullptr;
-                core_string_t failed_unification_reason = {0};
                 for (size_t p = 0; p < formals.len; p++) {
                     parse_tree_t *argument = call_argument_for_parameter(
                         analysis->grammar, call_node, generic_function, p,
@@ -2763,7 +2902,6 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     char field[N00BB_SPECIALIZATION_FIELD_SIZE];
                     th_type *parameter = th_record_lookup(copy,
                         specialization_field(field, "parameter_%zu", p));
-                    size_t errors_before = th_error_count(types);
                     bool matched = parameter
                         && ((is_integer_type(parameter)
                                 && is_integer_type(argument_type))
@@ -2774,11 +2912,6 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         failed_argument_index = p;
                         failed_parameter_type = parameter;
                         failed_argument_type = argument_type;
-                        th_error_t error = {0};
-                        if (th_error_count(types) > errors_before
-                            && th_error_at(types, th_error_count(types) - 1,
-                                           &error))
-                            failed_unification_reason = error.message;
                         break;
                     }
                 }
@@ -2794,34 +2927,10 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         core_dict_free(&seen_calls);
                         return false;
                     }
-                    core_buffer_t message = {0};
-                    if (failed_argument_index != SIZE_MAX
-                        && failed_parameter_type && failed_argument_type) {
-                        core_string_t argument_text = n00bb_print_type(types,
-                            failed_argument_type);
-                        core_string_t parameter_text = n00bb_print_type(
-                            types, failed_parameter_type);
-                        bool has_reason = failed_unification_reason.data;
-                        core_buffer_printf(&message,
-                            "generic call argument %zu has type '%.*s', which does not satisfy parameter type '%.*s'%s%.*s",
-                            failed_argument_index + 1,
-                            (int)argument_text.u8_bytes, argument_text.data,
-                            (int)parameter_text.u8_bytes, parameter_text.data,
-                            has_reason ? ": " : "",
-                            has_reason
-                                ? (int)failed_unification_reason.u8_bytes : 0,
-                            has_reason ? failed_unification_reason.data : "");
-                    }
-                    else
-                        core_buffer_printf(&message,
-                            "generic call arguments do not satisfy the function's type contract");
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-T0003"),
-                        core_buffer_string(&message),
-                        link_source_location(call_node));
-                    core_buffer_release(&message);
+                    report_generic_argument(analysis->grammar, call_unit,
+                        types, call_node, generic_function,
+                        failed_argument_index, failed_argument_type,
+                        failed_parameter_type);
                     core_list_free(formals);
                     core_dict_free(&seen_calls);
                     return false;
@@ -2857,13 +2966,14 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                 if (!returns_match) {
                     core_list_free(trait_argument_positions);
                     core_list_free(trait_argument_types);
-                    core_diagnostics_report_at(
+                    n00bb_report(core_translation_unit_diagnostics(call_unit),
+                        call_unit, N00B_DIAG_GENERIC_RETURN_TYPE,
+                        n00bb_node_span(call_node),
+                        N00B_TEXT_FOR_THESE_ARGUMENTS_RETURNS_VALUES,
+                        N00BB_ARGS(ARG_TEXT(generic_function->name)));
+                    n00bb_diag_declared_here(
                         core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_ERROR,
-                        CORE_STRING_STATIC("N00BB-T0001"),
-                        CORE_STRING_STATIC(
-                            "specialized generic return values do not match the function result type"),
-                        link_source_location(call_node));
+                        generic_function, N00B_TEXT_IS_DECLARED_HERE);
                     continue;
                 }
                 core_string_t trait_name = {0};
@@ -2912,16 +3022,10 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     types, receiver_type, trait_name,
                     requirement->name, &method);
                 if (status != TH_ENV_METHOD_FOUND) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-T0003"),
-                        status == TH_ENV_METHOD_AMBIGUOUS
-                            ? CORE_STRING_STATIC(
-                                "generic instantiation has ambiguous trait dispatch")
-                            : CORE_STRING_STATIC(
-                                "generic instantiation has no matching trait implementation"),
-                        link_source_location(call_node));
+                    report_generic_trait_failure(call_unit, types, call_node,
+                        generic_function, receiver_type, trait_name,
+                        requirement->name,
+                        status == TH_ENV_METHOD_AMBIGUOUS);
                     core_list_free(trait_argument_positions);
                     core_list_free(trait_argument_types);
                     core_list_free(formals);
@@ -2950,13 +3054,13 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                 if (!target_symbol
                     || !th_env_signature_channels(types, target_contract,
                         &target_signature, &target_failure)) {
-                    core_diagnostics_report_at(
+                    n00bb_internal_error(
                         core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-L0047"),
-                        CORE_STRING_STATIC(
-                            "resolved generic trait target has no callable symbol signature"),
-                        link_source_location(call_node));
+                        call_unit, n00bb_node_span(call_node),
+                        "specializing generic calls",
+                        "the implementation of `%.*s` chosen for this call "
+                        "has no signature", (int)requirement->name.u8_bytes,
+                        requirement->name.data);
                     core_list_free(trait_argument_positions);
                     core_list_free(trait_argument_types);
                     core_list_free(formals);
@@ -2968,13 +3072,13 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         producer_stage, call_unit, call_node, trait_use->node,
                         generic_function, receiver_type, target,
                         CORE_LINK_DEPENDENCY_RESOLVED, &specialization)) {
-                    core_diagnostics_report_at(
+                    n00bb_internal_error(
                         core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-L0047"),
-                        CORE_STRING_STATIC(
-                            "resolved generic trait implementation has no canonical LinkUnit declaration"),
-                        link_source_location(call_node));
+                        call_unit, n00bb_node_span(call_node),
+                        "specializing generic calls",
+                        "the implementation of `%.*s` chosen for this call "
+                        "has no declaration", (int)requirement->name.u8_bytes,
+                        requirement->name.data);
                     core_list_free(trait_argument_positions);
                     core_list_free(trait_argument_types);
                     core_list_free(formals);
@@ -2990,13 +3094,13 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                 th_type *copied_function_failure = th_record_lookup(copy,
                     CORE_STRING_STATIC("function_failure"));
                 if (!target_receiver) {
-                    core_diagnostics_report_at(
+                    n00bb_internal_error(
                         core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-L0047"),
-                        CORE_STRING_STATIC(
-                            "resolved generic trait target has no receiver parameter"),
-                        link_source_location(call_node));
+                        call_unit, n00bb_node_span(call_node),
+                        "specializing generic calls",
+                        "the implementation of `%.*s` chosen for this call "
+                        "takes no receiver", (int)requirement->name.u8_bytes,
+                        requirement->name.data);
                     core_list_free(trait_argument_positions);
                     core_list_free(trait_argument_types);
                     core_list_free(formals);
@@ -3056,13 +3160,12 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     th_type *combined_failure = specialization
                         ? th_type_clone(types, resolved_failure) : nullptr;
                     if (!combined_failure) {
-                        core_diagnostics_report_at(
+                        n00bb_report(
                             core_translation_unit_diagnostics(call_unit),
-                            call_unit, CORE_DIAG_ERROR,
-                            CORE_STRING_STATIC("N00BB-T0001"),
-                            CORE_STRING_STATIC(
-                                "generic trait specializations have incompatible failure channels"),
-                            link_source_location(call_node));
+                            call_unit, N00B_DIAG_FAILURE_TYPES_INCOMPATIBLE,
+                            n00bb_node_span(call_node),
+                            N00B_TEXT_THE_FAILURES_CAN_RAISE_FOR,
+                            N00BB_ARGS(ARG_TEXT(generic_function->name)));
                         target_matches = false;
                     }
                     else specialization->failure_type = combined_failure;
@@ -3079,13 +3182,13 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     ? parse_tree_type(generic_call->self)
                     : call_node ? parse_tree_type(call_node) : nullptr;
                 if (!callsite_result || !copied_function_result) {
-                    core_diagnostics_report_at(
+                    n00bb_internal_error(
                         core_translation_unit_diagnostics(call_unit),
-                        call_unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-T0004"),
-                        CORE_STRING_STATIC(
-                            "generic trait specialization has no cached call-result type"),
-                        link_source_location(call_node));
+                        call_unit, n00bb_node_span(call_node),
+                        "specializing generic calls",
+                        "this call to `%.*s` has no result type",
+                        (int)generic_function->name.u8_bytes,
+                        generic_function->name.data);
                     core_list_free(formals);
                     core_dict_free(&seen_calls);
                     return false;

@@ -1,0 +1,8 @@
+func reset(v: int?) -> int {
+    var w = v
+    if w != nil {
+        w = nil
+        return w + 1
+    }
+    return 0
+}

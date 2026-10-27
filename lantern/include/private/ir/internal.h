@@ -129,7 +129,6 @@ ir_local_t *ir_rd_def_local(const ir_rd_t *r, uint32_t d);
 uint32_t    ir_rd_def_tok(const ir_rd_t *r, uint32_t d);
 uint32_t    ir_rd_use_tok(ir_rd_t *r, ir_instr_t *use, ir_local_t *l);
 
-void          ir_quote(core_buffer_t *b, core_string_t s);
 void          ir_lit_into(core_buffer_t *b, ir_lit_t v);
 core_string_t ir_lit_text(ir_lit_t v);
 

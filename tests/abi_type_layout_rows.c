@@ -90,13 +90,13 @@ main(void)
         && ir_layout_publish_final(runtime, concrete, S("x86_64-linux"),
                                    &concrete_layout));
     parse_symtab_t *generic_symbols = parse_symtab_new();
-    parse_tree_t generic_node = {0};
+    parse_tree_t *generic_node = parse_tree_new_node((parse_nt_node_t){0});
     assert(generic_symbols);
     parse_symtab_push_scope(generic_symbols, CORE_STRING_STATIC("type"),
                             CORE_STRING_STATIC("module"));
     parse_sym_entry_t *generic_owner = parse_symtab_add(generic_symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("Pair"),
-        PARSE_SYM_TYPEDEF, &generic_node);
+        PARSE_SYM_TYPEDEF, generic_node);
     n00bb_typevar_binding_t parameter = {
         .name = CORE_STRING_STATIC("T"), .type = item,
     };
@@ -167,7 +167,9 @@ main(void)
     n00bb_abi_type_index_free(index);
 
     parse_symtab_t *symbols = parse_symtab_new();
-    parse_tree_t type_node = {0}, field_node = {0}, policy_node = {0};
+    parse_tree_t *type_node = parse_tree_new_node((parse_nt_node_t){0});
+    parse_tree_t *field_node = parse_tree_new_node((parse_nt_node_t){0});
+    parse_tree_t *policy_node = parse_tree_new_node((parse_nt_node_t){0});
     parse_symtab_push_scope(symbols, CORE_STRING_STATIC("type"),
                             CORE_STRING_STATIC("module"));
     parse_scope_t *module_scope = parse_symtab_current_scope(symbols,
@@ -175,12 +177,12 @@ main(void)
     module_scope->scope_tag = CORE_STRING_STATIC("module");
     parse_sym_entry_t *owner = parse_symtab_add(symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("Item"),
-        PARSE_SYM_TYPEDEF, &type_node);
+        PARSE_SYM_TYPEDEF, type_node);
     owner->type = th_name(types, S("example.Item"));
     owner->adt_kind = CORE_STRING_STATIC("record");
     owner->visibility = CORE_STRING_STATIC("public");
     n00bb_record_layout_request_t request = {
-        .policy = N00BB_RECORD_ORDERED, .policy_node = &policy_node,
+        .policy = N00BB_RECORD_ORDERED, .policy_node = policy_node,
     };
     assert(parse_sym_set_binding(owner,
         CORE_STRING_STATIC("n00bb.record-layout-request"), &request));
@@ -190,7 +192,7 @@ main(void)
         CORE_STRING_STATIC("type"));
     parse_sym_entry_t *field = parse_symtab_add(symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("value"),
-        PARSE_SYM_VARIABLE, &field_node);
+        PARSE_SYM_VARIABLE, field_node);
     field->type = th_bitint(types, 64, true);
     field->is_field = true;
     field->owner_type = owner;

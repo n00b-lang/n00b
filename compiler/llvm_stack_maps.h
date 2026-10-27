@@ -12,9 +12,16 @@ typedef enum {
 } n00bb_llvm_stackmap_kind_t;
 
 typedef struct {
-    core_object_symbol_name_t function;
-    uint64_t id;
+    core_object_symbol_name_t name;
     uint64_t stack_bytes;
+    uint64_t code_bytes;
+    uint32_t section;
+    uint64_t offset;
+} n00bb_llvm_stack_function_t;
+
+typedef struct {
+    const n00bb_llvm_stack_function_t *function;
+    uint64_t id;
     uint32_t instruction_offset;
     uint8_t kind;
     uint16_t dwarf_register;
@@ -22,12 +29,16 @@ typedef struct {
     int32_t frame_offset;
 } n00bb_llvm_stack_location_t;
 
-#define N00BB_LLVM_FRAME_SENTINEL_ID UINT64_MAX
 #define N00BB_LLVM_FRAME_CONSERVATIVE_ID (UINT64_MAX - 1)
 
-typedef bool (*n00bb_llvm_stack_location_fn)(void *context,
-    const n00bb_llvm_stack_location_t *location);
+typedef struct {
+    bool (*function)(void *context,
+                     const n00bb_llvm_stack_function_t *function);
+    bool (*location)(void *context,
+                     const n00bb_llvm_stack_location_t *location);
+    void *context;
+} n00bb_llvm_stack_visitor_t;
 
 bool n00bb_llvm_stack_maps_visit(const void *object, size_t object_bytes,
-    core_target_object_format_t format, n00bb_llvm_stack_location_fn visit,
-    void *context, bool *found);
+    core_target_object_format_t format,
+    const n00bb_llvm_stack_visitor_t *visitor, bool *found);

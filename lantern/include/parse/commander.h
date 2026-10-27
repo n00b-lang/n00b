@@ -19,6 +19,8 @@ typedef struct {
     parse_cmdr_arg_type_t type;
     bool                takes_value;
     core_string_t        doc;
+    bool                hidden;
+    const void          *setting;
 } parse_cmdr_flag_t;
 
 typedef struct {
@@ -27,7 +29,8 @@ typedef struct {
     const parse_cmdr_flag_t *flags;
     core_string_t           arg;
     int                    min_args;
-    int                    max_args; /* Negative means unbounded. */
+    int                    max_args;
+    bool                   hidden;
 } parse_cmdr_cmd_t;
 
 typedef struct {
@@ -37,9 +40,28 @@ typedef struct {
     const parse_cmdr_cmd_t  *commands;
     core_string_t           arg;
     int                    min_args;
-    int                    max_args; /* Negative means unbounded. */
+    int                    max_args;
     core_string_t           default_command;
 } parse_cmdr_spec_t;
+
+typedef enum {
+    PARSE_CMDR_ERROR_SYNTAX,
+    PARSE_CMDR_ERROR_UNKNOWN_FLAG,
+    PARSE_CMDR_ERROR_MISSING_VALUE,
+    PARSE_CMDR_ERROR_INVALID_INTEGER,
+    PARSE_CMDR_ERROR_INVALID_NUMBER,
+    PARSE_CMDR_ERROR_UNEXPECTED_VALUE,
+    PARSE_CMDR_ERROR_TOO_FEW_ARGUMENTS,
+    PARSE_CMDR_ERROR_TOO_MANY_ARGUMENTS,
+} parse_cmdr_error_kind_t;
+
+typedef struct {
+    parse_cmdr_error_kind_t kind;
+    core_string_t           flag;
+    core_string_t           value;
+    size_t                  limit;
+    size_t                  given;
+} parse_cmdr_error_t;
 
 typedef struct parse_cmdr_t        parse_cmdr_t;
 typedef struct parse_cmdr_result_t parse_cmdr_result_t;
@@ -51,6 +73,11 @@ bool        parse_cmdr_flag_set_repeatable(parse_cmdr_t *c,
                                            core_string_t flag,
                                            bool repeatable);
 void        parse_cmdr_print_usage(parse_cmdr_t *c, FILE *out);
+void        parse_cmdr_print_summary(parse_cmdr_t *c, FILE *out);
+bool        parse_cmdr_print_command_help(parse_cmdr_t *c,
+                                          core_string_t command, FILE *out);
+void        parse_cmdr_print_all(parse_cmdr_t *c, FILE *out);
+bool        parse_cmdr_has_command(parse_cmdr_t *c, core_string_t command);
 
 parse_cmdr_result_t *parse_cmdr_parse(parse_cmdr_t *c, int nargs,
                                   const char **args);
@@ -60,6 +87,9 @@ bool         parse_cmdr_result_ok(parse_cmdr_result_t *r);
 core_string_t parse_cmdr_result_command(parse_cmdr_result_t *r);
 int32_t      parse_cmdr_result_error_count(parse_cmdr_result_t *r);
 core_string_t parse_cmdr_result_error(parse_cmdr_result_t *r, int index);
+parse_cmdr_error_t parse_cmdr_result_error_detail(parse_cmdr_result_t *r,
+                                                  int index);
+bool         parse_cmdr_result_command_given(parse_cmdr_result_t *r);
 
 bool         parse_cmdr_flag_present(parse_cmdr_result_t *r, core_string_t flag);
 core_string_t parse_cmdr_flag_str(parse_cmdr_result_t *r, core_string_t flag);

@@ -3,6 +3,7 @@ set -eu
 
 compiler=$1
 sources=$2
+part=$3
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 N00B_CACHE="$tmp/cache"
@@ -44,66 +45,64 @@ expect_stored() {
     test "$actual" = "$2" || fail "$1: stored '$actual', expected '$2'"
 }
 
+edits() {
+    grep -q '^runtime store scc ping,pong$' "$tmp/log" \
+        || fail "cycle: ping and pong were not stored as one SCC"
+
+    build work main.n
+    expect_stored "unchanged rebuild" ""
+    if grep -q '^runtime store instance ' "$tmp/log"; then
+        fail "unchanged rebuild stored an instantiation"
+    fi
+
+    sed 's/return 41/return 40 + 1/' "$tmp/work/leaf.n" >"$tmp/leaf.n"
+    mv "$tmp/leaf.n" "$tmp/work/leaf.n"
+    build work main.n
+    expect_stored "leaf body edit" "leaf"
+
+    printf 'func leaf_value() -> int {\n    let values: Array[int] = [40, 1]\n    return values[0] + values[1]\n}\n' \
+        >"$tmp/work/leaf.n"
+    build work main.n
+    grep -q '^runtime restart cached summary assumptions do not hold$' \
+        "$tmp/log" || fail "summary edit: the optimistic build did not restart"
+    expect_stored "summary edit" "helper leaf"
+}
+
+shapes() {
+    printf '\nfunc leaf_extra() -> int {\n    return 1\n}\n' \
+        >>"$tmp/work/leaf.n"
+    build work main.n
+    expect_stored "leaf interface edit" "helper leaf"
+
+    sed 's/value \* 2/value + value/' "$tmp/work/shapes.n" >"$tmp/shapes.n"
+    mv "$tmp/shapes.n" "$tmp/work/shapes.n"
+    sed 's/return 0$/return n - n/' "$tmp/work/pong.n" >"$tmp/pong.n"
+    mv "$tmp/pong.n" "$tmp/work/pong.n"
+    build work main.n
+    expect_stored "inline body and cycle edit" "ping,pong shapes user"
+}
+
+instances() {
+    build work main_new.n
+    count=$(grep -c '^runtime store instance boxes\.pick$' "$tmp/log" || true)
+    test "$count" = 1 \
+        || fail "new instantiation: stored $count boxes.pick instantiations"
+    grep -q '^runtime reuse instance boxes\.pick$' "$tmp/log" \
+        || fail "new instantiation: the cached boxes.pick instantiation was not reused"
+
+    prepare second
+    build second main_new.n
+    grep -q '^runtime reuse scc builtin\.' "$tmp/log" \
+        || fail "shared stdlib: a second project reused no builtin SCC"
+    if grep -q '^runtime store scc builtin\.' "$tmp/log"; then
+        fail "shared stdlib: a second project stored its own builtin SCCs"
+    fi
+}
+
+case $part in
+edits|shapes|instances) ;;
+*) fail "unknown part $part" ;;
+esac
 prepare work
 build work main.n
-grep -q '^runtime store scc ping,pong$' "$tmp/log" \
-    || fail "cycle: ping and pong were not stored as one SCC"
-
-build work main.n
-expect_stored "unchanged rebuild" ""
-if grep -q '^runtime store instance ' "$tmp/log"; then
-    fail "unchanged rebuild stored an instantiation"
-fi
-
-sed 's/return 41/return 40 + 1/' "$tmp/work/leaf.n" >"$tmp/leaf.n"
-mv "$tmp/leaf.n" "$tmp/work/leaf.n"
-build work main.n
-expect_stored "leaf body edit" "leaf"
-
-printf 'func leaf_value() -> int {\n    let values: Array[int] = [40, 1]\n    return values[0] + values[1]\n}\n' \
-    >"$tmp/work/leaf.n"
-build work main.n
-grep -q '^runtime restart cached summary assumptions do not hold$' \
-    "$tmp/log" || fail "summary edit: the optimistic build did not restart"
-expect_stored "summary edit" "helper leaf"
-
-printf '\nfunc leaf_extra() -> int {\n    return 1\n}\n' \
-    >>"$tmp/work/leaf.n"
-build work main.n
-expect_stored "leaf interface edit" "helper leaf"
-
-sed 's/value \* 2/value + value/' "$tmp/work/shapes.n" >"$tmp/shapes.n"
-mv "$tmp/shapes.n" "$tmp/work/shapes.n"
-build work main.n
-expect_stored "inline body edit" "shapes user"
-
-sed 's/return 0$/return n - n/' "$tmp/work/pong.n" >"$tmp/pong.n"
-mv "$tmp/pong.n" "$tmp/work/pong.n"
-build work main.n
-expect_stored "cycle edit" "ping,pong"
-
-build work main_new.n
-count=$(grep -c '^runtime store instance boxes\.pick$' "$tmp/log" || true)
-test "$count" = 1 \
-    || fail "new instantiation: stored $count boxes.pick instantiations"
-grep -q '^runtime reuse instance boxes\.pick$' "$tmp/log" \
-    || fail "new instantiation: the cached boxes.pick instantiation was not reused"
-
-prepare first
-prepare second
-build first main.n
-build second main_new.n
-shared=0
-first_objects="$N00B_CACHE/obj$(cd "$tmp/first" && pwd -P)"
-second_objects="$N00B_CACHE/obj$(cd "$tmp/second" && pwd -P)"
-for key in "$first_objects/modules"/builtin.*.runtime.key; do
-    name=$(basename "$key")
-    other="$second_objects/modules/$name"
-    test -f "$other" || continue
-    cmp -s "$key" "$other" || fail "identical object: $name keys differ"
-    object=$(cat "$key").n00bo
-    cmp -s "$first_objects/$object" "$second_objects/$object" \
-        || fail "identical object: $name objects differ"
-    shared=$((shared + 1))
-done
-test "$shared" -gt 0 || fail "identical object: no builtin SCC was shared"
+"$part"

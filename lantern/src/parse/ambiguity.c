@@ -47,41 +47,6 @@ parse_ambiguity_severity_name(parse_ambiguity_severity_t severity) {
   return CORE_STRING_STATIC("unknown");
 }
 
-static void json_string(core_buffer_t *buffer, core_string_t value) {
-  core_buffer_putc(buffer, '"');
-
-  for (size_t i = 0; i < value.u8_bytes; i++) {
-    unsigned char c = (unsigned char)value.data[i];
-
-    switch (c) {
-    case '"':
-      core_buffer_puts(buffer, "\\\"");
-      break;
-    case '\\':
-      core_buffer_puts(buffer, "\\\\");
-      break;
-    case '\n':
-      core_buffer_puts(buffer, "\\n");
-      break;
-    case '\r':
-      core_buffer_puts(buffer, "\\r");
-      break;
-    case '\t':
-      core_buffer_puts(buffer, "\\t");
-      break;
-    default:
-      if (c < 0x20) {
-        core_buffer_printf(buffer, "\\u%04x", c);
-      } else {
-        core_buffer_putc(buffer, (char)c);
-      }
-      break;
-    }
-  }
-
-  core_buffer_putc(buffer, '"');
-}
-
 core_string_t
 parse_ambiguity_format_json(const parse_ambiguity_list_t *findings) {
   core_buffer_t buffer = {0};
@@ -105,7 +70,7 @@ parse_ambiguity_format_json(const parse_ambiguity_list_t *findings) {
                          (int)kind.u8_bytes, kind.data,
                          (int)severity.u8_bytes, severity.data,
                          (long long)finding->nonterminal);
-      json_string(&buffer, finding->nonterminal_name);
+      core_buffer_append_quoted(&buffer, finding->nonterminal_name);
       core_buffer_printf(&buffer,
                          ",\"rule_a\":%d,"
                          "\"rule_b\":%d,\"witness_is_prefix\":",
@@ -116,9 +81,9 @@ parse_ambiguity_format_json(const parse_ambiguity_list_t *findings) {
         core_buffer_puts(&buffer, "false");
       }
       core_buffer_puts(&buffer, ",\"source_origin_a\":");
-      json_string(&buffer, finding->source_origin_a);
+      core_buffer_append_quoted(&buffer, finding->source_origin_a);
       core_buffer_puts(&buffer, ",\"source_origin_b\":");
-      json_string(&buffer, finding->source_origin_b);
+      core_buffer_append_quoted(&buffer, finding->source_origin_b);
       core_buffer_puts(&buffer, ",\"estimated_forest_nodes\":");
       core_buffer_printf(&buffer,
                          "%u,\"estimated_score_calls\":%u,"
@@ -127,19 +92,19 @@ parse_ambiguity_format_json(const parse_ambiguity_list_t *findings) {
                          finding->estimated_forest_nodes,
                          finding->estimated_score_calls,
                          finding->score_tie_count, finding->parse_tree_count);
-      json_string(&buffer, finding->witness);
+      core_buffer_append_quoted(&buffer, finding->witness);
       core_buffer_puts(&buffer, ",\"derivations\":[");
       for (size_t j = 0; j < finding->derivations.len; j++) {
         if (j) {
           core_buffer_putc(&buffer, ',');
         }
-        json_string(&buffer, finding->derivations.data[j]);
+        core_buffer_append_quoted(&buffer, finding->derivations.data[j]);
       }
       core_buffer_putc(&buffer, ']');
       core_buffer_puts(&buffer, ",\"explanation\":");
-      json_string(&buffer, finding->explanation);
+      core_buffer_append_quoted(&buffer, finding->explanation);
       core_buffer_puts(&buffer, ",\"prescription\":");
-      json_string(&buffer, finding->prescription);
+      core_buffer_append_quoted(&buffer, finding->prescription);
       core_buffer_putc(&buffer, '}');
     }
   }
@@ -251,8 +216,6 @@ static core_string_t common_prefix_witness(const parse_rule_t *a,
   return used ? core_string_from_raw(text, (int64_t)used) : (core_string_t){0};
 }
 
-/* FIRST sets and bounded derivations identify candidates; this validates a
- * concrete sequence against the actual parser before reporting ambiguity. */
 static void append_derivation_tree(parse_grammar_t *grammar, parse_tree_t *tree,
                                    core_buffer_t *buffer, uint32_t depth) {
   if (!tree) {
@@ -1102,7 +1065,6 @@ parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
           }
 
           if (exact_candidate) {
-            /* Keep the complete derivation witness. */
           } else if (common_terminal_prefix(rule_a, rule_b, &token)) {
             has_token = true;
             kind = PARSE_AMBIG_COMMON_PREFIX;
@@ -1121,8 +1083,6 @@ parse_grammar_audit_ambiguity(parse_grammar_t *grammar,
                 "make optionality explicit or separate the follow rule");
           } else if (first_overlap_token(rule_a, rule_b, &token)) {
             has_token = true;
-            /* The FIRST-set witness is still useful even when
-             * the overlap comes through a nonterminal. */
           }
 
           if (has_token && !witness.data) {

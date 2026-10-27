@@ -1,0 +1,2 @@
+tests/diagnostics/lower/toplevel_fail.n:7:9: error N00B-S0027: this call can fail with `string`, but it is top-level code, which has no caller to pass the failure to
+  help: handle the failure with `try`, or move this code into a function that declares a failure type

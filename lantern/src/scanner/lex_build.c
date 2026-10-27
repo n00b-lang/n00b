@@ -2339,6 +2339,19 @@ build_fallback(lex_build_t *b, const scan_lex_decl_t *a)
     else {
         oops(b, "fallback", mode);
     }
+    for (size_t i = 0; i < core_list_len(a->lex_opts); i++) {
+        const scan_lex_opt_t *o = &a->lex_opts.data[i];
+
+        if (!o->name.data) {
+            continue;
+        }
+        if (named(o, "recover") && !core_list_len(o->args)) {
+            b->spec.fallback_recovers = true;
+        }
+        else {
+            oops(b, "fallback", o->name);
+        }
+    }
 }
 
 static void

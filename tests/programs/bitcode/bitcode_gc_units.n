@@ -1,0 +1,2654 @@
+import sys.abi
+import sys.clock
+import sys.gc.alloc
+import sys.gc.collect
+import sys.gc.core
+import sys.gc.finalize
+import sys.gc.handshake
+import sys.gc.hash
+import sys.gc.heap
+import sys.gc.los
+import sys.gc.mark
+import sys.gc.mutator
+import sys.gc.registry
+import sys.gc.roots
+import sys.gc.sync
+import sys.memory
+import sys.threads
+import gc_root_support
+
+func offset_round_trip() -> bool {
+    var anchor: byte = 0
+    let base: Ref[byte] = ref anchor
+    let index: uint = 0
+    let cell: Ref[byte] = __gc_byte_offset(base, index)
+    let value: byte = 42
+    cell.__value = value
+    return cell.__value == value
+}
+
+func offset_backwards() -> bool {
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(32, 16)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let tail: Ref[byte] = __gc_byte_offset(base, 16)
+        let head: Ref[byte] = __gc_byte_offset(tail, -16)
+        let same: bool = head == base
+        sys.memory.unmap(base, 32)
+        return same
+    }
+    require false
+}
+
+func mapped_heap() -> Ref[sys.gc.core.Heap] {
+    let probe: Ref[sys.gc.core.Heap]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row.get()), sys.abi.alignment_bytes(row.get()))
+        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Heap]] mapped.get() }
+    }
+    require false
+}
+
+func unmap_heap(heap: Ref[sys.gc.core.Heap]) {
+    let probe: Ref[sys.gc.core.Heap]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        sys.memory.unmap(heap, sys.abi.size_bytes(row.get()))
+        return
+    }
+    require false
+}
+
+func u64_record() -> Ref[sys.abi.Type_Record] {
+    let probe: u64 = 0
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+func add_block(heap: Ref[sys.gc.core.Heap]) -> Ref[sys.gc.core.Block_Metadata] {
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(
+        sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+        let registered: bool = sys.gc.registry.region_add(heap, base, end)
+        require registered
+        let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+        sys.gc.core.block_init(heap, block)
+        return block
+    }
+    require false
+}
+
+func mapped_marker() -> Ref[sys.gc.core.Marker] {
+    let probe: Ref[sys.gc.core.Marker]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row.get()), sys.abi.alignment_bytes(row.get()))
+        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Marker]] mapped.get() }
+    }
+    require false
+}
+
+func mapped_header() -> Ref[sys.gc.core.Object_Header] {
+    let probe: Ref[sys.gc.core.Object_Header]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row.get()), sys.abi.alignment_bytes(row.get()))
+        if mapped != nil { return unsafe_cast[Ref[sys.gc.core.Object_Header]] mapped.get() }
+    }
+    require false
+}
+
+func mutator_record() -> Ref[sys.abi.Type_Record] {
+    let probe: Ref[sys.gc.core.Mutator]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    if row != nil { return row.get() }
+    require false
+}
+
+func place_object(base: Ref[byte], offset: uint, payload_bytes: u64,
+                  marked: bool) -> Ref[sys.gc.core.Object_Header] {
+    let address: Ref[byte] = __gc_byte_offset(base, offset)
+    let header: Ref[sys.gc.core.Object_Header] = unsafe_cast[Ref[sys.gc.core.Object_Header]] address
+    header.type_index = 1
+    header.meta = sys.gc.core.meta_make(payload_bytes, 0)
+    let granule: uint = offset / sys.gc.core.granule_bytes
+    let word: uint = granule / sys.gc.core.word_bits
+    let mask: u64 = cast[u64](1) << (granule % sys.gc.core.word_bits)
+    __atomic_fetch_or(sys.gc.core.start_word_at(base, word), mask)
+    if marked { __atomic_fetch_or(sys.gc.core.mark_word_at(base, word), mask) }
+    return header
+}
+
+record Node {
+    next: Ref[byte]?
+}
+
+record Inline_Nodes {
+    items: Array[Node][513]
+}
+
+func check_record_trace(heap: Ref[sys.gc.core.Heap],
+                        mutator: Ref[sys.gc.core.Mutator], payload: Ref[byte]) {
+    let node_probe: Ref[Node]? = nil
+    let node_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(node_probe))
+    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(marker_probe))
+    if node_row != nil {
+        if marker_row != nil {
+            assert node_row.get().tracing_index != 0
+            let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(
+                node_row.get().tracing_index)
+            if trace != nil {
+                let node_payload: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, trace.get().type_index,
+                    sys.abi.size_bytes(node_row.get()),
+                    sys.abi.alignment_bytes(node_row.get()), false)
+                if node_payload != nil {
+                    let node: Ref[Node] = unsafe_cast[Ref[Node]] node_payload.get()
+                    node.next = payload
+                    let linked: Ref[byte]? = node.next
+                    if linked != nil { assert linked.get() == payload }
+                    else { require false }
+                    __atomic_store(ref heap.marking, true)
+                    sys.gc.mark.barrier_value(mutator, node_payload.get(),
+                                                  trace.get().type_index)
+                    assert mutator.write_buffer_count == 1
+                    mutator.write_buffer_count = 0
+                    __atomic_store(ref heap.marking, false)
+                    let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                        sys.abi.size_bytes(marker_row.get()),
+                        sys.abi.alignment_bytes(marker_row.get()))
+                    if marker_map != nil {
+                        let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                        sys.gc.mark.marker_init(marker.__value, heap, false)
+                        sys.gc.mark.mark_object(marker, node_payload)
+                        assert sys.gc.mark.is_marked(heap, node_payload.get())
+                        assert !sys.gc.mark.is_marked(heap, payload)
+                        require sys.gc.mark.marker_drain(marker, 0) == 1
+                        assert sys.gc.mark.is_marked(heap, payload)
+                        sys.memory.unmap(marker_map.get(),
+                            sys.abi.size_bytes(marker_row.get()))
+                        return
+                    }
+                }
+            }
+        }
+    }
+    require false
+}
+
+func check_array_trace(heap: Ref[sys.gc.core.Heap],
+                       mutator: Ref[sys.gc.core.Mutator], target: Ref[byte]) {
+    let array_probe: Ref[Array[Node]]? = nil
+    let array_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(array_probe))
+    let node_probe: Ref[Node]? = nil
+    let node_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(node_probe))
+    let shape_probe: Ref[sys.abi.Array_Descriptor_Header]? = nil
+    let shape_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(shape_probe))
+    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(marker_probe))
+    if array_row != nil {
+        if node_row != nil {
+            if shape_row != nil {
+                if marker_row != nil {
+                    let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(
+                        array_row.get().tracing_index)
+                    if trace != nil {
+                        let array_payload: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                            mutator, ref mutator.small, trace.get().type_index,
+                            sys.abi.size_bytes(array_row.get()),
+                            sys.abi.alignment_bytes(array_row.get()), false)
+                        let data_bytes: uint = cast[uint]513 * sys.abi.size_bytes(node_row.get())
+                        let data: Ref[byte]? = sys.memory.map_zeroed(data_bytes,
+                            sys.abi.alignment_bytes(node_row.get()))
+                        let shape_bytes: uint = sys.abi.size_bytes(shape_row.get())
+                        let shape_map: Ref[byte]? = sys.memory.map_zeroed(shape_bytes,
+                            sys.abi.alignment_bytes(shape_row.get()))
+                        if array_payload != nil {
+                            if data != nil {
+                                if shape_map != nil {
+                                    let value: Ref[sys.abi.Array_Value] = unsafe_cast[Ref[sys.abi.Array_Value]] array_payload.get()
+                                    let shape: Ref[sys.abi.Array_Descriptor_Header] = unsafe_cast[Ref[sys.abi.Array_Descriptor_Header]] shape_map.get()
+                                    shape.total_count = 513
+                                    shape.rank = 1
+                                    shape.flat_rank = 1
+                                    value.data = data
+                                    value.descriptor = shape
+                                    let last: Ref[Node] = unsafe_cast[Ref[Node]] __gc_byte_offset(
+                                        data.get(), cast[uint]512 * sys.abi.size_bytes(node_row.get()))
+                                    last.next = target
+                                    let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                                        sys.abi.size_bytes(marker_row.get()),
+                                        sys.abi.alignment_bytes(marker_row.get()))
+                                    if marker_map != nil {
+                                        let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                                        sys.gc.mark.marker_init(marker.__value, heap, false)
+                                        sys.gc.mark.mark_object(marker, array_payload)
+                                        assert !sys.gc.mark.is_marked(heap, target)
+                                        require sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
+                                        assert !sys.gc.mark.is_marked(heap, target)
+                                        require sys.gc.mark.marker_drain(marker, 0) >= cast[uint]1
+                                        assert sys.gc.mark.is_marked(heap, target)
+                                        sys.memory.unmap(marker_map.get(),
+                                            sys.abi.size_bytes(marker_row.get()))
+                                        sys.memory.unmap(shape_map.get(), shape_bytes)
+                                        sys.memory.unmap(data.get(), data_bytes)
+                                        return
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    require false
+}
+
+func check_inline_trace(heap: Ref[sys.gc.core.Heap],
+                        mutator: Ref[sys.gc.core.Mutator], target: Ref[byte]) {
+    let record_probe: Ref[Inline_Nodes]? = nil
+    let record_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(record_probe))
+    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(marker_probe))
+    if record_row != nil {
+        if marker_row != nil {
+            let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(
+                record_row.get().tracing_index)
+            if trace != nil {
+                let payload: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, trace.get().type_index,
+                    sys.abi.size_bytes(record_row.get()),
+                    sys.abi.alignment_bytes(record_row.get()), false)
+                if payload != nil {
+                    let holder: Ref[Inline_Nodes] = unsafe_cast[Ref[Inline_Nodes]] payload.get()
+                    let last: Ref[Node] = ref holder.items [512]
+                    last.next = target
+                    let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                        sys.abi.size_bytes(marker_row.get()),
+                        sys.abi.alignment_bytes(marker_row.get()))
+                    if marker_map != nil {
+                        let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                        sys.gc.mark.marker_init(marker.__value, heap, false)
+                        sys.gc.mark.mark_object(marker, payload)
+                        assert !sys.gc.mark.is_marked(heap, target)
+                        require sys.gc.mark.marker_drain(marker, 1) == cast[uint]1
+                        assert !sys.gc.mark.is_marked(heap, target)
+                        require sys.gc.mark.marker_drain(marker, 0) >= cast[uint]1
+                        assert sys.gc.mark.is_marked(heap, target)
+                        sys.memory.unmap(marker_map.get(),
+                            sys.abi.size_bytes(marker_row.get()))
+                        return
+                    }
+                }
+            }
+        }
+    }
+    require false
+}
+
+func check_barrier_queue(heap: Ref[sys.gc.core.Heap],
+                         mutator: Ref[sys.gc.core.Mutator], target: Ref[byte]) {
+    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(marker_probe))
+    if marker_row != nil {
+        let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(marker_row.get()),
+            sys.abi.alignment_bytes(marker_row.get()))
+        if marker_map != nil {
+            let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+            sys.gc.mark.marker_init(marker.__value, heap, false)
+            assert !sys.gc.mark.is_marked(heap, target)
+            mutator.write_buffer_epoch = heap.mark_epoch
+            let slot: Ref[Ref[byte]?] = ref mutator.write_buffer [0]
+            slot.__value = target
+            mutator.write_buffer_count = 1
+            sys.gc.sync.ticket_lock(ref heap.lock)
+            sys.gc.mark.barrier_flush_locked(mutator)
+            assert mutator.write_buffer_count == 0
+            assert heap.barrier_queue_count == 1
+            sys.gc.mark.barrier_queue_drain(marker)
+            assert heap.barrier_queue_count == 0
+            sys.gc.sync.ticket_unlock(ref heap.lock)
+            assert sys.gc.mark.is_marked(heap, target)
+            sys.memory.unmap(marker_map.get(),
+                sys.abi.size_bytes(marker_row.get()))
+            return
+        }
+    }
+    require false
+}
+
+func check_mutator_roots(heap: Ref[sys.gc.core.Heap],
+                         mutator: Ref[sys.gc.core.Mutator],
+                         rooted: Ref[byte], last_alloc: Ref[byte]) {
+    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(marker_probe))
+    if marker_row != nil {
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(marker_row.get()),
+            sys.abi.alignment_bytes(marker_row.get()))
+        if mapped != nil {
+            let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] mapped.get()
+            sys.gc.mark.marker_init(marker.__value, heap, false)
+            assert !sys.gc.mark.is_marked(heap, rooted)
+            assert !sys.gc.mark.is_marked(heap, last_alloc)
+            var slot: Ref[byte]? = rooted
+            let pushed: bool = sys.gc.roots.push(mutator, ref slot)
+            assert pushed
+            mutator.thread_id = sys.threads.thread_id()
+            sys.gc.collect.mark_mutator_roots(marker, mutator)
+            assert sys.gc.mark.is_marked(heap, rooted)
+            assert !sys.gc.mark.is_marked(heap, last_alloc)
+            sys.gc.roots.pop(mutator, 0)
+            mutator.thread_id = 0
+            sys.gc.collect.mark_mutator_roots(marker, mutator)
+            assert sys.gc.mark.is_marked(heap, last_alloc)
+            sys.gc.roots.free(mutator)
+            sys.memory.unmap(marker, sys.abi.size_bytes(marker_row.get()))
+            return
+        }
+    }
+    require false
+}
+
+record Constructed_Record {
+    payload: int
+}
+
+func __init(modify self: Constructed_Record, payload: int) {
+    self.payload = payload
+}
+
+func construct_record(payload: int) -> Constructed_Record {
+    return new[Constructed_Record](payload)
+}
+
+variant Root_Variant {
+    payload: Ref[byte]
+    empty: nil
+}
+
+record Nested_Arm {
+    child: Ref[byte]?
+}
+
+variant Nested_Root {
+    data: Nested_Arm
+    empty: nil
+}
+
+var static_root: Ref[byte]? = nil
+var rooted_text: string = "this is a long static string root"
+var variant_root: Root_Variant
+var nested_root: Nested_Root
+
+variant_root = new[Root_Variant]()
+
+record Sample {
+    value: int
+}
+
+var finalized: Atomic[uint] = 0
+var off_main: Atomic[uint] = 0
+var gate_closed: Atomic[bool] = false
+var blocked: Atomic[bool] = false
+
+func __finalize(consume self: Ref[Sample]) {
+    require self.value == 0
+    if __os_thread_is_main() == 0 {
+        __atomic_fetch_add(ref off_main, 1)
+    }
+    while __atomic_load(ref gate_closed) {
+        __atomic_store(ref blocked, true)
+        __os_thread_yield()
+    }
+    __atomic_fetch_add(ref finalized, 1)
+}
+
+func wait_finalized(count: uint) {
+    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    while __atomic_load(ref finalized) < count {
+        require __os_now_ns() < deadline
+        __os_thread_yield()
+    }
+}
+
+func wait_blocked() {
+    let deadline: u64 = __os_now_ns() + 30_000_000_000
+    while !__atomic_load(ref blocked) {
+        require __os_now_ns() < deadline
+        __os_thread_yield()
+    }
+}
+
+record Twin {
+    other: Ref[Twin]?
+    id: int
+    magic: int
+}
+
+var twin_finalized: int = 0
+var seen_first: bool = false
+var seen_second: bool = false
+
+func __finalize(consume self: Ref[Twin]) {
+    require self.magic == 713
+    let partner: Ref[Twin]? = self.other
+    require partner != nil
+    let other: Ref[Twin] = partner.get()
+    require other.magic == 713
+    require other.id != self.id
+    let backlink: Ref[Twin]? = other.other
+    require backlink != nil
+    require backlink.get() == self
+    if self.id == 0 {
+        require !seen_first
+        seen_first = true
+    } elif self.id == 1 {
+        require !seen_second
+        seen_second = true
+    } else { require false }
+    twin_finalized += 1
+}
+
+func allocate_twin(mutator: Ref[sys.gc.core.Mutator], type_index: u32,
+                   bytes: uint, alignment: uint, id: int) -> Ref[Twin]? {
+    let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+        mutator, ref mutator.small, type_index, bytes, alignment, true)
+    if allocated == nil { return nil }
+    let twin: Ref[Twin] = unsafe_cast[Ref[Twin]] allocated.get()
+    twin.other = nil
+    twin.id = id
+    twin.magic = 713
+    return twin
+}
+
+record Ref_Sample {
+    value: int
+}
+
+record Plain {
+    value: int
+}
+
+var ref_finalized: int = 0
+
+func __finalize(consume self: Ref[Ref_Sample]) {
+    require self.value == 0
+    ref_finalized = ref_finalized + 1
+}
+
+record Finalized_Record {
+    payload: int
+}
+
+func __init(modify self: Finalized_Record, payload: int) {
+    self.payload = payload
+}
+
+func __finalize(consume self: Ref[Finalized_Record]) {
+    require self.payload == 42
+}
+
+func construct_finalized() -> Ref[Finalized_Record] {
+    var value: Finalized_Record = new[Finalized_Record](42)
+    return ref value
+}
+
+func gc_atomic() {
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(32768, 32768)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let word: Ref[Atomic[u64]] = sys.gc.core.start_word_at(base, 0)
+        assert __atomic_fetch_or(word, 1) == 0
+        assert __atomic_fetch_or(word, 4) == 1
+        assert __atomic_fetch_or(word, 0) == 5
+        let missed: bool = __atomic_compare_exchange(word, 4, 8)
+        assert !missed
+        let changed: bool = __atomic_compare_exchange(word, 5, 9)
+        assert changed
+        assert __atomic_fetch_or_release(word, 2) == 9
+        assert __atomic_fetch_or_relaxed(word, 4) == 11
+        let current: u64 = __atomic_load(word)
+        assert current == 15
+        assert __atomic_load_relaxed(word) == current
+        assert __atomic_load_acquire(word) == current
+        __atomic_store_relaxed(word, current)
+        __atomic_store_release(word, current)
+        assert __atomic_load(word) == current
+        assert __atomic_fetch_add_relaxed(word, 1) == 15
+        assert __atomic_exchange_relaxed(word, 17) == 16
+        assert __atomic_exchange_acquire(word, 18) == 17
+        assert __atomic_load(word) == 18
+        sys.memory.unmap(base, 32768)
+    } else {
+        assert false
+    }
+}
+
+func gc_atomic_rmw_u32() {
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(4096, 4096)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let state: Ref[Atomic[u32]] = unsafe_cast[Ref[Atomic[u32]]] base
+        let initial: u32 = 0xff
+        let low: u32 = 0x0f
+        let high: u32 = 0x10
+        __atomic_store(state, initial)
+        assert __atomic_fetch_and(state, low) == initial
+        assert __atomic_fetch_or(state, high) == low
+        assert __atomic_load(state) == low | high
+        sys.memory.unmap(base, 4096)
+    } else {
+        assert false
+    }
+}
+
+func gc_byte_offset() {
+    require offset_round_trip() and offset_backwards()
+}
+
+func gc_memcpy() {
+    let page: uint = sys.memory.page_size()
+    let source: Ref[byte]? = sys.memory.map_zeroed(page, page)
+    let destination: Ref[byte]? = sys.memory.map_zeroed(page, page)
+    if source != nil {
+        if destination != nil {
+            let src: Ref[byte] = source.get()
+            let dst: Ref[byte] = destination.get()
+            let pattern: byte = 0x5a
+            __gc_memset(src, pattern, page)
+            __gc_memcpy(dst, src, page)
+            var word: u64 = 0
+            __gc_memcpy(ref word, src, 8)
+            assert word == 0x5a5a5a5a5a5a5a5a
+            word = 0
+            __gc_memcpy(dst, ref word, 8)
+            assert dst.__value == cast[byte](0)
+            __gc_memcpy(dst, src, 8)
+            let last: Ref[byte] = __gc_byte_offset(dst, page - 1)
+            assert dst.__value == pattern
+            assert last.__value == pattern
+            sys.memory.unmap(src, page)
+            sys.memory.unmap(dst, page)
+        } else { require false }
+    } else { require false }
+}
+
+func gc_block() {
+    let block_bytes: uint = 32768
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(block_bytes, block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let heap: Ref[sys.gc.core.Heap] = mapped_heap()
+        let heap_type: Ref[sys.abi.Type_Record]? = sys.abi.reference_target(typeof(heap))
+        if heap_type != nil {
+            assert heap_type.get().kind == cast[u32](sys.abi.Type_Kind.record_type)
+            let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(heap_type.get().tracing_index)
+            if trace != nil {
+                var found_cache: bool = false
+                var ordinal: u32 = 0
+                while ordinal < trace.get().fixed_children.count {
+                    let index: i64 = sys.abi.range_index(
+                        trace.get().fixed_children, ordinal)
+                    assert index > 0
+                    let child: Ref[sys.abi.Trace_Child_Record]? = sys.abi.trace_child_at(cast[u32] index)
+                    if child != nil {
+                        if child.get().repeat_count == cast[u64](sys.gc.core.los_classes) {
+                            let element: Ref[sys.abi.Type_Record]? = sys.abi.type_at(child.get().child_type_index)
+                            if element != nil {
+                                assert element.get().kind == cast[u32](sys.abi.Type_Kind.option_type)
+                                assert child.get().stride_bits == element.get().size_bits
+                                found_cache = true
+                            } else {
+                                require false
+                            }
+                        }
+                    } else {
+                        require false
+                    }
+                    ordinal += 1
+                }
+                assert found_cache
+            } else {
+                require false
+            }
+        } else {
+            require false
+        }
+        let epoch: u32 = 1
+        heap.cfg.poison_free = false
+        heap.epoch = epoch
+        heap.mark_epoch = epoch
+        heap.all_blocks = nil
+        heap.nblocks = 0
+        heap.los_bytes = 0
+        heap.los_cache_bytes = 0
+        heap.cfg.max_heap_bytes = 0
+        require sys.gc.los.cache_take(heap, 10 * 1024) == nil
+        sys.gc.los.cache_drain(heap)
+        let metadata: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+        sys.gc.core.block_init(heap, metadata)
+        assert heap.nblocks == 1
+        assert sys.gc.core.committed_bytes(heap) == block_bytes
+        assert !sys.gc.core.over_max(heap, 1)
+        heap.cfg.max_heap_bytes = block_bytes
+        assert sys.gc.core.over_max(heap, 1)
+        assert sys.gc.core.over_max(heap, ~cast[uint](0))
+        let linked: Ref[sys.gc.core.Block_Metadata]? = heap.all_blocks
+        if linked != nil {
+            assert linked.get() == metadata
+        } else {
+            require false
+        }
+        assert metadata.magic == 0x6d616e69
+        assert cast[u8] metadata.state == cast[u8] sys.gc.core.Block_State.retired
+        assert metadata.free_lines == 249
+        assert metadata.sweep_epoch == epoch
+        assert sys.gc.core.read_epoch(metadata) == epoch
+        let marked: u32 = __atomic_load(ref metadata.mark_epoch)
+        let black: u32 = __atomic_load(ref metadata.black_epoch)
+        assert marked == epoch
+        assert black == 0
+        sys.gc.core.raise_black(metadata, 2)
+        assert __atomic_load(ref metadata.black_epoch) == 2
+        sys.gc.core.raise_black(metadata, 1)
+        assert __atomic_load(ref metadata.black_epoch) == 2
+        assert !__atomic_load(ref metadata.in_final)
+        __atomic_store(ref metadata.in_final, true)
+        assert __atomic_load(ref metadata.in_final)
+        __atomic_store(ref metadata.in_final, false)
+        __gc_signal_fence()
+        var bump: sys.gc.core.Bump
+        var mutator: sys.gc.core.Mutator
+        mutator.heap = heap
+        mutator.black = false
+        let attached: Ref[sys.gc.core.Block_Metadata]? = metadata
+        sys.gc.core.bump_attach(ref mutator, ref bump, attached)
+        let empty_cache: Ref[sys.gc.core.Block_Metadata]? = nil
+        __atomic_store(ref bump.cache, empty_cache)
+        assert sys.gc.core.bump_room(ref bump) == 0
+        let found: bool = sys.gc.core.bump_next_hole(ref bump, 32)
+        assert found
+        assert sys.gc.core.bump_room(ref bump) == block_bytes - 896
+        let cursor: Ref[byte]? = bump.cursor
+        if cursor != nil {
+            let expected: byte = 42
+            cursor.get().__value = 42
+            let cell: Ref[byte] = __gc_byte_offset(base, 896)
+            assert __gc_byte_diff(cell, base) == 896
+            assert __gc_byte_diff(base, cell) == -896
+            assert cell.__value == expected
+            let header: Ref[sys.gc.core.Object_Header] = unsafe_cast[Ref[sys.gc.core.Object_Header]] cell
+            header.meta = sys.gc.core.meta_make(32, 0)
+            assert sys.gc.core.meta_payload_bytes(header.meta) == 32
+            assert sys.gc.core.object_bytes(header) == 48
+            assert sys.gc.core.block_of(header) == metadata
+            let payload: Ref[byte] = sys.gc.core.payload_of(header)
+            assert !sys.gc.mark.is_marked(heap, payload)
+            let granule: uint = 896 / sys.gc.core.granule_bytes
+            let word: Ref[Atomic[u64]] = sys.gc.core.mark_word_at(
+                base, granule / sys.gc.core.word_bits)
+            let mask: u64 = cast[u64](1) << (granule % sys.gc.core.word_bits)
+            __atomic_fetch_or(word, mask)
+            assert sys.gc.mark.is_marked(heap, payload)
+            heap.mark_epoch = epoch + 1
+            assert !sys.gc.mark.is_marked(heap, payload)
+            heap.mark_epoch = epoch
+        } else {
+            assert false
+        }
+        let protected_end: Ref[byte] = __gc_byte_offset(base, 1024)
+        bump.limit = protected_end
+        sys.gc.handshake.reserve_own_hole(ref bump, epoch)
+        assert __atomic_load(ref metadata.line_marks[7]) == cast[u8](epoch)
+        assert __gc_byte_diff(ref metadata.line_marks[8],
+            ref metadata.line_marks[7]) == 1
+        assert __atomic_load(ref metadata.line_marks[8]) != cast[u8](epoch)
+        bump.cursor = __gc_byte_offset(base, 1000)
+        bump.limit = __gc_byte_offset(base, 1200)
+        sys.gc.handshake.reserve_own_hole(ref bump, epoch)
+        assert __atomic_load(ref metadata.line_marks[8]) == cast[u8](epoch)
+        assert __atomic_load(ref metadata.line_marks[9]) == cast[u8](epoch)
+        assert __atomic_load(ref metadata.line_marks[10]) != cast[u8](epoch)
+        let exhausted: bool = sys.gc.core.bump_next_hole(ref bump, block_bytes)
+        assert !exhausted
+        let cached: Ref[sys.gc.core.Block_Metadata]? = metadata
+        __atomic_store(ref bump.cache, cached)
+        let popped: Ref[sys.gc.core.Block_Metadata]? = sys.gc.core.cache_pop(ref bump)
+        assert popped != nil
+        assert __atomic_load(ref bump.cache) == nil
+        unmap_heap(heap)
+        sys.memory.unmap(base, block_bytes)
+    } else {
+        assert false
+    }
+}
+
+func gc_block_registry() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            require sys.gc.registry.region_add(heap, base, end)
+            let key: uint = __abi_ref_address(base) / sys.gc.core.block_bytes
+            let found: Ref[byte]? = sys.gc.hash.tab_lookup(ref heap.blocks, key)
+            if found != nil { assert found.get() == base } else { require false }
+            assert heap.heap_lo <= __abi_ref_address(base)
+            assert heap.heap_hi >= __abi_ref_address(end)
+            let block: Ref[sys.gc.core.Block_Metadata] = unsafe_cast[Ref[sys.gc.core.Block_Metadata]] base
+            sys.gc.core.block_init(heap, block)
+            let start: uint = sys.gc.core.header_lines() * sys.gc.core.line_bytes
+            let header_base: Ref[byte] = __gc_byte_offset(base, start)
+            let header: Ref[sys.gc.core.Object_Header] = unsafe_cast[Ref[sys.gc.core.Object_Header]] header_base
+            header.type_index = 1
+            header.meta = sys.gc.core.meta_make(32, 0)
+            let granule: uint = start / sys.gc.core.granule_bytes
+            let mask: u64 = cast[u64](1) << (granule % sys.gc.core.word_bits)
+            __atomic_fetch_or(sys.gc.core.start_word_at(base,
+                granule / sys.gc.core.word_bits), mask)
+            sys.gc.registry.registry_read_lock(heap)
+            assert sys.gc.registry.find_object(heap, __abi_ref_address(base)) == nil
+            let exact: Ref[sys.gc.core.Object_Header]? = sys.gc.registry.find_object(
+                heap, __abi_ref_address(header_base))
+            if exact != nil { assert exact.get() == header } else { require false }
+            let interior: Ref[sys.gc.core.Object_Header]? = sys.gc.registry.find_object(
+                heap, __abi_ref_address(header_base) + 47)
+            if interior != nil { assert interior.get() == header } else { require false }
+            assert sys.gc.registry.find_object(heap, __abi_ref_address(header_base) + 48) == nil
+            sys.gc.registry.registry_read_unlock(heap)
+            sys.gc.alloc.block_release(heap, block)
+            assert sys.gc.hash.tab_lookup(ref heap.blocks, key) == nil
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_recycle() {
+    let block_bytes: uint = 32768
+    let line_bytes: uint = 128
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(block_bytes, block_bytes)
+    if mapped != nil {
+        let base: Ref[byte] = mapped.get()
+        let heap: Ref[sys.gc.core.Heap] = mapped_heap()
+        let metadata: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+        heap.epoch = 1
+        heap.mark_epoch = 1
+        heap.cfg.poison_free = false
+        heap.all_blocks = nil
+        heap.nblocks = 0
+        sys.gc.core.block_init(heap, metadata)
+        var bump: sys.gc.core.Bump
+        bump.cursor = nil
+        bump.limit = nil
+        bump.blk = metadata
+        bump.line = 7
+        bump.seen_epoch = 1
+        let empty_cache: Ref[sys.gc.core.Block_Metadata]? = nil
+        __atomic_store(ref bump.cache, empty_cache)
+        let found: bool = sys.gc.core.bump_next_hole(ref bump, 16)
+        assert found
+        let first_cursor: Ref[byte]? = bump.cursor
+        if first_cursor != nil {
+            let first: uint = cast[uint] __gc_byte_diff(first_cursor.get(), base)
+            let stale: Ref[byte] = __gc_byte_offset(first_cursor.get(),
+                                                     2 * line_bytes)
+            stale.__value = 42
+            bump.cursor = bump.limit
+            assert sys.gc.core.bump_room(ref bump) == 0
+            let exhausted: bool = sys.gc.core.bump_next_hole(ref bump, 16)
+            assert !exhausted
+            metadata.sweep_epoch = 2
+            sys.gc.core.mark_lines(base, first, 16, 2)
+            let reused_hole: bool = sys.gc.core.bump_next_hole(ref bump, 16)
+            assert reused_hole
+            let reused: Ref[byte]? = bump.cursor
+            if reused != nil {
+                assert __gc_byte_diff(reused.get(), base) == cast[int](first + 2 * line_bytes)
+                assert reused.get().__value == 0
+            } else {
+                assert false
+            }
+        } else {
+            assert false
+        }
+        unmap_heap(heap)
+        sys.memory.unmap(base, block_bytes)
+    } else {
+        assert false
+    }
+}
+
+func gc_heap() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let expected_initial: uint = 4 * 1024 * 1024
+        assert heap.cfg.initial_heap_bytes == expected_initial
+        assert heap.cfg.growth_factor == 2.0
+        assert heap.target_bytes == heap.cfg.initial_heap_bytes
+        assert heap.alloc_budget == heap.cfg.initial_heap_bytes
+        assert heap.epoch == 1
+        assert heap.mark_epoch == 1
+        let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if attached != nil {
+            assert heap.nmutators == 1
+            var slot: Ref[byte]? = nil
+            require sys.gc.roots.push(attached.get(), ref slot)
+            assert sys.gc.roots.depth(attached.get()) == 1
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else {
+        require false
+    }
+
+    let probe: Ref[sys.gc.core.Config]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        let size: uint = sys.abi.size_bytes(row.get())
+        let mapping: Ref[byte]? = sys.memory.map_zeroed(size,
+            sys.abi.alignment_bytes(row.get()))
+        if mapping != nil {
+            let config: Ref[sys.gc.core.Config] = unsafe_cast[Ref[sys.gc.core.Config]] mapping.get()
+            sys.gc.heap.config_default(config.__value)
+            config.initial_heap_bytes = 1
+            config.growth_factor = 0.5
+            config.max_heap_bytes = sys.gc.core.block_bytes * 2
+            let custom: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(config)
+            if custom != nil {
+                let heap: Ref[sys.gc.core.Heap] = custom.get()
+                assert heap.cfg.initial_heap_bytes == config.max_heap_bytes
+                assert heap.cfg.growth_factor == 1.0
+                assert heap.target_bytes == config.max_heap_bytes
+                sys.gc.heap.destroy(heap)
+            } else { require false }
+            sys.memory.unmap(config, size)
+        } else { require false }
+    } else { require false }
+
+    let retained: u64 = 0x12345678
+    let item: Ref[sys.abi.Type_Record] = u64_record()
+    let item_bytes: uint = sys.abi.size_bytes(item)
+    let item_alignment: uint = sys.abi.alignment_bytes(item)
+    var slots: Ref[byte]? = nil
+    var capacity: uint = 0
+    require sys.gc.heap.grow_array(ref slots, ref capacity,
+                                      item_bytes, item_alignment, 0, 1)
+    let initial: Ref[byte]? = slots
+    if initial != nil {
+        let first: Ref[u64] = unsafe_cast[Ref[u64]] initial.get()
+        first.__value = retained
+    } else { require false }
+    require sys.gc.heap.grow_array(ref slots, ref capacity,
+                                      item_bytes, item_alignment,
+                                      1, capacity + 1)
+    let regrown: Ref[byte]? = slots
+    if regrown != nil {
+        let grown: Ref[u64] = unsafe_cast[Ref[u64]] regrown.get()
+        assert grown.__value == retained
+        sys.memory.unmap(grown, capacity * item_bytes)
+    } else { require false }
+}
+
+func gc_epoch() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        assert heap.epoch == 1
+        assert heap.mark_epoch == 1
+        heap.hs_rounds = 3
+        heap.hs_stragglers = 2
+        __atomic_store(ref heap.cnt_objects, 9)
+        sys.gc.collect.begin_epoch_locked(heap)
+        assert heap.epoch == 1
+        assert heap.mark_epoch == 2
+        assert __atomic_load(ref heap.cnt_objects) == 0
+        assert heap.cycle.epoch == 2
+        assert heap.cycle.rounds == 3
+        assert heap.cycle.stragglers == 2
+        assert heap.cycle_start != 0
+        let block: Ref[sys.gc.core.Block_Metadata] = add_block(heap)
+        let base: Ref[byte] = unsafe_cast[Ref[byte]] block
+        let first: uint = sys.gc.core.header_lines()
+        var bump: sys.gc.core.Bump
+        bump.cursor = __gc_byte_offset(base,
+            first * sys.gc.core.line_bytes + 64)
+        bump.limit = __gc_byte_offset(base,
+            (first + 2) * sys.gc.core.line_bytes)
+        var marker: sys.gc.core.Marker
+        marker.heap = heap
+        sys.gc.collect.reserve_bump(ref marker, ref bump, false)
+        assert sys.gc.core.line_marked_in(base, first, heap.mark_epoch)
+        assert sys.gc.core.line_marked_in(base, first + 1, heap.mark_epoch)
+        assert !sys.gc.core.line_marked_in(base, first + 2, heap.mark_epoch)
+        let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if attached != nil {
+            let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+            mutator.overflow.blk = block
+            mutator.overflow.cursor = __gc_byte_offset(base,
+                (first + 3) * sys.gc.core.line_bytes + 16)
+            mutator.overflow.limit = __gc_byte_offset(base,
+                (first + 5) * sys.gc.core.line_bytes)
+            sys.gc.collect.reserve_bumps(ref marker)
+            assert sys.gc.core.line_marked_in(base, first + 4, heap.mark_epoch)
+            assert !sys.gc.core.line_marked_in(base, first + 5, heap.mark_epoch)
+            mutator.write_buffer_epoch = heap.mark_epoch
+            (ref mutator.write_buffer[0]).__value = nil
+            mutator.write_buffer_count = 1
+            sys.gc.collect.drain_barrier_buffers(ref marker)
+            assert mutator.write_buffer_count == 0
+            sys.gc.mutator.destroy(mutator)
+        } else { require false }
+
+        __atomic_store(ref heap.marking, true)
+        heap.black_alloc = true
+        __atomic_store(ref heap.cnt_objects, 4)
+        __atomic_store(ref heap.cnt_bytes, 128)
+        heap.alloc_since_gc = 256
+        sys.gc.collect.end_epoch_locked(heap)
+        assert heap.epoch == 2
+        assert !__atomic_load(ref heap.marking)
+        assert !heap.black_alloc
+        assert heap.collections == 1
+        assert heap.last_marked_objects == 4
+        assert heap.last_marked_bytes == 128
+        assert heap.cycle.marked_objects == 4
+        assert heap.cycle.marked_bytes == 128
+        assert heap.cycle.allocated_bytes == 256
+        assert heap.live_bytes == 128
+        assert heap.alloc_since_gc == 0
+        assert __atomic_load(ref heap.nunswept) == 1
+        let cursor: Ref[sys.gc.core.Block_Metadata]? = heap.sweep_cursor
+        if cursor != nil { assert cursor.get() == block }
+        else { require false }
+        assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.sweeping)
+        sys.gc.collect.sweep_all(heap)
+        assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
+        assert __atomic_load(ref heap.nunswept) == 0
+        assert block.sweep_epoch == heap.epoch
+        let previous_sweep: u32 = block.sweep_epoch
+        block.sweep_epoch = 256
+        sys.gc.core.mark_lines(base, first * sys.gc.core.line_bytes,
+            sys.gc.core.line_bytes, 256)
+        assert sys.gc.core.line_marked_in(base, first, 256)
+        var wrap_bump: sys.gc.core.Bump
+        wrap_bump.blk = block
+        wrap_bump.seen_epoch = 256
+        wrap_bump.line = first
+        require sys.gc.core.bump_next_hole(ref wrap_bump, sys.gc.core.line_bytes)
+        let next_cursor: Ref[byte]? = wrap_bump.cursor
+        if next_cursor != nil {
+            assert __abi_ref_address(next_cursor.get()) ==
+                __abi_ref_address(base) + (first + 2) * sys.gc.core.line_bytes
+        } else { require false }
+        block.sweep_epoch = previous_sweep
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_los() {
+    let heap: Ref[sys.gc.core.Heap] = mapped_heap()
+    heap.target_bytes = 8 * 1024 * 1024
+    let total: uint = 16 * 1024
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(total, 16)
+    if mapped != nil {
+        let object: Ref[sys.gc.core.Los_Obj] = unsafe_cast[Ref[sys.gc.core.Los_Obj]] mapped.get()
+        object.bytes = total
+        object.mapping = mapped.get()
+        object.mapped_bytes = total
+        let header: Ref[sys.gc.core.Object_Header] = ref object.hdr
+        assert sys.gc.core.los_of(header) == object
+        assert sys.gc.core.header_of(sys.gc.core.payload_of(header)) == header
+        header.meta = sys.gc.core.obj_large
+        heap.mark_epoch = 1
+        let payload: Ref[byte] = sys.gc.core.payload_of(header)
+        assert !sys.gc.mark.is_marked(heap, payload)
+        __atomic_store(ref object.marked, heap.mark_epoch)
+        assert sys.gc.mark.is_marked(heap, payload)
+        heap.los_count = 1
+        heap.los_bytes = total
+        require sys.gc.registry.los_register(heap, object)
+        sys.gc.los.release(heap, object)
+        assert heap.los_count == 0
+        assert heap.los_bytes == 0
+        assert heap.los_cache_bytes == total
+
+        let reused: Ref[sys.gc.core.Los_Obj]? = sys.gc.los.cache_take(heap, total)
+        if reused != nil {
+            assert reused.get() == object
+            assert heap.los_cache_bytes == 0
+            heap.los_count = 1
+            heap.los_bytes = total
+            sys.gc.los.release(heap, reused.get())
+            sys.gc.los.cache_drain(heap)
+            assert heap.los_cache_bytes == 0
+        } else {
+            require false
+        }
+        sys.gc.registry.regions_free(heap)
+        unmap_heap(heap)
+    } else {
+        require false
+    }
+}
+
+func gc_los_allocate() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mutator_probe: Ref[sys.gc.core.Mutator]? = nil
+        let mutator_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+            typeof(mutator_probe))
+        if mutator_row != nil {
+            let mutator_bytes: uint = sys.abi.size_bytes(mutator_row.get())
+            let mapped: Ref[byte]? = sys.memory.map_zeroed(mutator_bytes,
+                sys.abi.alignment_bytes(mutator_row.get()))
+            if mapped != nil {
+                let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mapped.get()
+                mutator.heap = heap
+                let sample: byte = 0
+                let type_index: u32 = cast[u32](typeof(sample))
+                assert sys.abi.type_at(type_index) != nil
+                let bytes: uint = 16 * 1024
+
+                let first: Ref[byte]? = sys.gc.los.allocate_locked(
+                    heap, mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
+                if first != nil {
+                    let payload: Ref[byte] = first.get()
+                    assert payload.__value == cast[byte](0)
+                    payload.__value = cast[byte](0xa5)
+                    let object: Ref[sys.gc.core.Los_Obj] = sys.gc.core.los_of(
+                        sys.gc.core.header_of(payload))
+                    assert object.hdr.type_index == type_index
+                    assert object.mapping == unsafe_cast[Ref[byte]] object
+                    assert object.bytes == object.mapped_bytes
+                    assert sys.gc.core.meta_payload_bytes(object.hdr.meta) == cast[u64](bytes)
+                    let last: Ref[byte]? = mutator.last_alloc
+                    if last != nil { assert last.get() == payload } else { require false }
+                    assert heap.los_count == 1
+                    sys.gc.registry.registry_read_lock(heap)
+                    assert sys.gc.registry.find_object(heap,
+                        __abi_ref_address(payload) + bytes - 1) != nil
+                    sys.gc.registry.registry_read_unlock(heap)
+
+                    var published: Ref[byte]? = nil
+                    let aligned: Ref[byte]? = sys.gc.los.allocate_locked(
+                        heap, mutator, type_index, bytes, 128, false, nil,
+                        ref published)
+                    if aligned != nil {
+                        let aligned_payload: Ref[byte] = aligned.get()
+                        if published != nil {
+                            assert published.get() == aligned_payload
+                        } else { require false }
+                        assert mutator.last_alloc == nil
+                        let second: Ref[sys.gc.core.Los_Obj] = sys.gc.core.los_of(
+                            sys.gc.core.header_of(aligned_payload))
+                        assert __abi_ref_address(aligned_payload) % 128 == 0
+                        assert second.mapping != unsafe_cast[Ref[byte]] second
+                        assert second.mapped_bytes > second.bytes
+                        assert heap.los_count == 2
+                        assert heap.los_bytes == object.mapped_bytes + second.mapped_bytes
+                        heap.los = nil
+                        sys.gc.los.release(heap, second)
+                        assert heap.los_count == 1
+                        assert heap.los_cache_bytes == 0
+                    } else { require false }
+
+                    sys.gc.los.release(heap, object)
+                    assert heap.los_count == 0
+                    assert heap.los_bytes == 0
+                    assert heap.los_cache_bytes == object.mapped_bytes
+                    let reused: Ref[byte]? = sys.gc.los.allocate_locked(
+                        heap, mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
+                    if reused != nil {
+                        assert reused.get() == payload
+                        assert reused.get().__value == cast[byte](0)
+                        assert heap.los_count == 1
+                        assert heap.los_cache_bytes == 0
+                        heap.los = nil
+                        sys.gc.los.release(heap, object)
+                    } else { require false }
+                    sys.gc.los.cache_drain(heap)
+                } else { require false }
+                sys.memory.unmap(mutator, mutator_bytes)
+            } else { require false }
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_los_registry() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let bytes: uint = 16 * 1024
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(bytes, sys.gc.core.granule_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let object: Ref[sys.gc.core.Los_Obj] = unsafe_cast[Ref[sys.gc.core.Los_Obj]] base
+            object.bytes = bytes
+            object.mapping = base
+            object.mapped_bytes = bytes
+            object.hdr.type_index = 1
+            object.hdr.meta = sys.gc.core.meta_make(cast[u64](bytes),
+                cast[u32](sys.gc.core.obj_large))
+            require sys.gc.registry.los_register(heap, object)
+            let interior: Ref[byte] = __gc_byte_offset(base, bytes - 1)
+            let found: Ref[sys.gc.core.Los_Obj]? = sys.gc.registry.los_find(
+                heap, __abi_ref_address(interior))
+            if found != nil { assert found.get() == object } else { require false }
+            sys.gc.registry.registry_read_lock(heap)
+            let header: Ref[sys.gc.core.Object_Header]? = sys.gc.registry.find_object(
+                heap, __abi_ref_address(interior))
+            if header != nil { assert header.get() == ref object.hdr } else { require false }
+            sys.gc.registry.registry_read_unlock(heap)
+            heap.los = object
+            heap.los_count = 1
+            heap.los_bytes = bytes
+            __atomic_store(ref object.marked, heap.epoch)
+            __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
+            require sys.gc.collect.sweep_some(heap, 1)
+            assert heap.los != nil
+            assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
+
+            heap.epoch += 1
+            heap.los_cursor = ref heap.los
+            __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
+            require sys.gc.collect.sweep_some(heap, 1)
+            assert heap.los == nil
+            assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
+            assert heap.los_cache_bytes == bytes
+            assert sys.gc.registry.los_find(heap,
+                __abi_ref_address(interior)) != nil
+            sys.gc.registry.registry_read_lock(heap)
+            assert sys.gc.registry.find_object(heap, __abi_ref_address(interior)) == nil
+            sys.gc.registry.registry_read_unlock(heap)
+            let reused: Ref[sys.gc.core.Los_Obj]? = sys.gc.los.cache_take(heap, bytes)
+            if reused != nil { assert reused.get() == object } else { require false }
+            assert heap.los_cache_bytes == 0
+            heap.release_los = object
+            sys.gc.collect.release_los(heap)
+            assert heap.release_los == nil
+            assert sys.gc.registry.los_find(heap, __abi_ref_address(interior)) == nil
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_los_pacing() {
+    var config: sys.gc.core.Config
+    sys.gc.heap.config_default(config)
+    config.initial_heap_bytes = 4 * sys.gc.core.block_bytes
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if attached != nil {
+            let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+            let sample: byte = 0
+            let type_index: u32 = cast[u32](typeof(sample))
+            let bytes: uint = 2 * sys.gc.los.los_threshold
+            let first: Ref[byte]? = sys.gc.alloc.allocate_large(
+                mutator, type_index, bytes, sys.gc.core.granule_bytes, false)
+            if first != nil {
+                first.get().__value = cast[byte](0x5a)
+                var root: Ref[byte]? = first
+                require sys.gc.roots.push(mutator, ref root)
+                var index: uint = 0
+                while index < config.initial_heap_bytes / bytes * 3 {
+                    let allocated: Ref[byte]? = sys.gc.alloc.allocate_large(
+                        mutator, type_index, bytes, sys.gc.core.granule_bytes,
+                        false)
+                    require allocated != nil
+                    index += 1
+                }
+                require heap.collections != 0
+                require first.get().__value == cast[byte](0x5a)
+                sys.gc.roots.pop(mutator, 0)
+            } else { require false }
+            sys.gc.mutator.destroy(mutator)
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_mark_pool() {
+    let heap: Ref[sys.gc.core.Heap] = mapped_heap()
+    require sys.gc.mark.mark_quiescent(heap)
+    let marker: Ref[sys.gc.core.Marker] = mapped_marker()
+    let header: Ref[sys.gc.core.Object_Header] = mapped_header()
+    __gc_prefetch(header)
+    sys.gc.mark.marker_init(marker.__value, heap, false)
+    sys.gc.mark.drain_to_termination(marker)
+    require sys.gc.mark.mark_quiescent(heap)
+    var pushed: uint = 0
+    while pushed < sys.gc.core.packet_cap + 1 {
+        sys.gc.mark.push(marker, header)
+        pushed += 1
+    }
+    assert heap.pool_chunks != nil
+    assert marker.holding
+    assert heap.pool_active == 1
+    let published: Ref[sys.gc.core.Packet]? = heap.pool_full
+    if published != nil {
+        assert published.get().n == sys.gc.core.packet_cap
+    } else {
+        require false
+    }
+    let output: Ref[sys.gc.core.Packet]? = marker.output
+    if output != nil {
+        let packet: Ref[sys.gc.core.Packet] = output.get()
+        assert packet.n == 1
+        let entry: Ref[sys.gc.core.Packet_Entry] = ref packet.entries[0]
+        let saved: Ref[sys.gc.core.Object_Header]? = entry.header
+        if saved != nil { assert saved.get() == header } else { require false }
+    } else {
+        require false
+    }
+    marker.objects = 1
+    marker.bytes = 16
+    sys.gc.mark.marker_flush(marker)
+    assert !marker.holding
+    assert heap.pool_active == 0
+    assert heap.pool_full != nil
+    assert __atomic_load(ref heap.work_progress.seq) != 0
+    assert __atomic_load(ref heap.cnt_objects) == 1
+    assert __atomic_load(ref heap.cnt_bytes) == 16
+    require !sys.gc.mark.mark_quiescent(heap)
+    var pending: Ref[sys.gc.core.Packet]? = heap.pool_full
+    while pending != nil {
+        let packet: Ref[sys.gc.core.Packet] = pending.get()
+        packet.n = 0
+        pending = packet.next
+    }
+    sys.gc.mark.drain_to_termination(marker)
+    require sys.gc.mark.mark_quiescent(heap)
+    sys.gc.mark.pool_free_all(heap)
+    assert heap.pool_chunks == nil
+    assert heap.pool_empty == nil
+    assert heap.pool_full == nil
+    let probe: Ref[sys.gc.core.Heap]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        sys.memory.unmap(heap, sys.abi.size_bytes(row.get()))
+        let marker_probe: Ref[sys.gc.core.Marker]? = nil
+        let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(marker_probe))
+        if marker_row != nil { sys.memory.unmap(marker, sys.abi.size_bytes(marker_row.get())) }
+        let header_probe: Ref[sys.gc.core.Object_Header]? = nil
+        let header_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(header_probe))
+        if header_row != nil { sys.memory.unmap(header, sys.abi.size_bytes(header_row.get())) }
+    } else {
+        require false
+    }
+}
+
+func gc_pacing() {
+    let candidate: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if candidate != nil {
+        let heap: Ref[sys.gc.core.Heap] = candidate.get()
+        let mib: uint = 1024 * 1024
+        heap.last_marked_bytes = 8 * mib
+        heap.alloc_since_gc = 99
+        sys.gc.collect.update_pacing(heap)
+        assert heap.live_bytes == 8 * mib
+        assert heap.target_bytes == 16 * mib
+        assert heap.alloc_budget == 8 * mib
+        assert heap.keep_bytes == 24 * mib
+        assert heap.alloc_since_gc == 0
+
+        heap.cfg.max_heap_bytes = 12 * mib
+        sys.gc.collect.update_pacing(heap)
+        assert heap.target_bytes == 12 * mib
+        assert heap.alloc_budget == 4 * mib
+        assert heap.keep_bytes == 12 * mib
+
+        heap.cfg.max_heap_bytes = 0
+        heap.cfg.initial_heap_bytes = 4 * sys.gc.core.block_bytes
+        heap.cfg.growth_factor = 1.75
+        heap.last_marked_bytes = 100001
+        sys.gc.collect.update_pacing(heap)
+        assert heap.target_bytes == 175001
+        assert heap.alloc_budget == 8 * sys.gc.core.block_bytes
+        assert heap.keep_bytes == 175001 + 8 * sys.gc.core.block_bytes
+
+        heap.cfg.growth_factor = 2.0
+        heap.last_marked_bytes = ~cast[uint](0)
+        sys.gc.collect.update_pacing(heap)
+        assert heap.target_bytes == ~cast[uint](0)
+        assert heap.alloc_budget == 8 * sys.gc.core.block_bytes
+        assert heap.keep_bytes == ~cast[uint](0)
+
+        __atomic_store(ref heap.cnt_objects, 1)
+        __atomic_store(ref heap.cnt_bytes, 2)
+        __atomic_store(ref heap.cnt_worker_objects, 3)
+        __atomic_store(ref heap.cnt_stack_words, 4)
+        __atomic_store(ref heap.cnt_frame_slots, 5)
+        __atomic_store(ref heap.cnt_hits, 6)
+        sys.gc.collect.reset_counters(heap)
+        assert __atomic_load(ref heap.cnt_objects) == 0
+        assert __atomic_load(ref heap.cnt_bytes) == 0
+        assert __atomic_load(ref heap.cnt_worker_objects) == 0
+        assert __atomic_load(ref heap.cnt_stack_words) == 0
+        assert __atomic_load(ref heap.cnt_frame_slots) == 0
+        assert __atomic_load(ref heap.cnt_hits) == 0
+
+        sys.gc.heap.destroy(heap)
+    } else { assert false }
+}
+
+func gc_reclaim_caches() {
+    let candidate: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if candidate != nil {
+        let heap: Ref[sys.gc.core.Heap] = candidate.get()
+        let probe: Ref[sys.gc.core.Mutator]? = nil
+        let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+            typeof(probe))
+        if row != nil {
+            let mutator_bytes: uint = sys.abi.size_bytes(row.get())
+            let mutator_storage: Ref[byte]? = sys.memory.map_zeroed(
+                mutator_bytes, sys.abi.alignment_bytes(row.get()))
+            if mutator_storage != nil {
+                let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mutator_storage.get()
+                mutator.heap = heap
+                heap.mutators = mutator
+                heap.nmutators = 1
+
+                let storage: Ref[byte]? = sys.memory.map_zeroed(
+                    2 * sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+                if storage != nil {
+                    let first: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(storage.get())
+                    let second: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(__gc_byte_offset(
+                            storage.get(), sys.gc.core.block_bytes))
+                    sys.gc.core.block_init(heap, first)
+                    sys.gc.core.block_init(heap, second)
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.owned)
+                    sys.gc.core.set_block_state(heap, second, sys.gc.core.Block_State.owned)
+                    __atomic_store(ref mutator.small.cache, first)
+                    __atomic_store(ref mutator.overflow.cache, second)
+                    assert __atomic_load(ref heap.nowned) == 2
+
+                    sys.gc.collect.reclaim_caches(heap)
+                    assert __atomic_load(ref mutator.small.cache) == nil
+                    assert __atomic_load(ref mutator.overflow.cache) == nil
+                    assert first.state == cast[u8](sys.gc.core.Block_State.retired)
+                    assert second.state == cast[u8](sys.gc.core.Block_State.retired)
+                    assert __atomic_load(ref heap.nowned) == 0
+
+                    heap.keep_bytes = sys.gc.core.committed_bytes(heap)
+                    heap.alloc_since_gc = sys.gc.core.capacity(first)
+                    first.sweep_epoch = heap.epoch - 1
+                    __atomic_store(ref heap.nunswept, 1)
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.owned)
+                    __atomic_store(ref mutator.small.cache, first)
+                    sys.gc.alloc.bump_release(heap, ref mutator.small)
+                    assert __atomic_load(ref mutator.small.cache) == nil
+                    assert first.state == cast[u8](sys.gc.core.Block_State.free)
+                    let free_head: Ref[sys.gc.core.Block_Metadata]? = heap.free_blocks
+                    if free_head != nil { assert free_head.get() == first } else { require false }
+                    assert heap.nfree == 1
+                    assert heap.alloc_since_gc == 0
+                    assert __atomic_load(ref heap.nunswept) == 0
+
+                    sys.gc.core.set_block_state(heap, second, sys.gc.core.Block_State.owned)
+                    mutator.small.blk = second
+                    mutator.small.cursor = storage.get()
+                    mutator.small.limit = storage.get()
+                    sys.gc.alloc.bump_release(heap, ref mutator.small)
+                    assert second.state == cast[u8](sys.gc.core.Block_State.retired)
+                    assert mutator.small.blk == nil
+                    assert mutator.small.cursor == nil
+                    assert mutator.small.limit == nil
+                    assert mutator.small.line == sys.gc.core.header_lines()
+
+                    heap.free_blocks = nil
+                    heap.nfree = 0
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.owned)
+                    first.on_owned = true
+                    first.own_next = nil
+                    heap.owned = first
+                    first.sweep_epoch = heap.epoch - 1
+                    __atomic_store(ref heap.nunswept, 1)
+                    sys.gc.collect.prune_owned(heap, true)
+                    assert first.sweep_epoch == heap.epoch
+                    assert __atomic_load(ref heap.nunswept) == 0
+                    let owned: Ref[sys.gc.core.Block_Metadata]? = heap.owned
+                    if owned != nil { assert owned.get() == first } else { require false }
+                    sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.retired)
+                    sys.gc.collect.prune_owned(heap, false)
+                    assert heap.owned == nil
+                    assert first.own_next == nil
+                    assert !first.on_owned
+
+                    heap.mutators = nil
+                    heap.nmutators = 0
+                    sys.memory.unmap(mutator, mutator_bytes)
+                    sys.gc.heap.destroy(heap)
+                } else { assert false }
+            } else { assert false }
+        } else { assert false }
+    } else { assert false }
+}
+
+func gc_roots() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let row: Ref[sys.abi.Type_Record] = mutator_record()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
+        if mapped != nil {
+            let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mapped.get()
+            mutator.heap = heap
+            let slot_probe: Ref[byte]? = nil
+            let slot_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(slot_probe))
+            if slot_row != nil {
+                let slot_bytes: uint = sys.abi.size_bytes(slot_row.get())
+                let slot_mapping: Ref[byte]? = sys.memory.map_zeroed(
+                    slot_bytes, sys.abi.alignment_bytes(slot_row.get()))
+                if slot_mapping != nil {
+                    let slot_address: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] slot_mapping.get()
+                    var index: uint = 0
+                    while index < 257 {
+                        require sys.gc.roots.push(mutator, slot_address)
+                        index += 1
+                    }
+                    assert sys.gc.roots.depth(mutator) == 257
+                    let stored: Ref[byte]? = mutator.roots
+                    if stored != nil {
+                        let first: Ref[sys.gc.roots.Root_Entry] = unsafe_cast[Ref[sys.gc.roots.Root_Entry]] stored.get()
+                        assert first.slot == slot_address
+                    } else { require false }
+                    assert sys.gc.roots.slot_at(mutator, 0) == slot_address
+                    assert sys.gc.roots.slot_at(mutator, 256) == slot_address
+                    sys.gc.roots.pop(mutator, 1)
+                    assert sys.gc.roots.depth(mutator) == 1
+                    sys.gc.roots.free(mutator)
+                    assert mutator.roots == nil
+                    let second_mapping: Ref[byte]? = sys.memory.map_zeroed(
+                        slot_bytes, sys.abi.alignment_bytes(slot_row.get()))
+                    if second_mapping != nil {
+                        let second_slot: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] second_mapping.get()
+                        require sys.gc.roots.add_global(heap, slot_address)
+                        require sys.gc.roots.add_global(heap, second_slot)
+                        require sys.gc.roots.add_global(heap, slot_address)
+                        assert heap.nglobals == 3
+                        assert sys.gc.roots.global_slot_at(heap, 0) == slot_address
+                        assert sys.gc.roots.global_slot_at(heap, 1) == second_slot
+                        assert sys.gc.roots.global_slot_at(heap, 2) == slot_address
+                        sys.gc.roots.remove_global(heap, slot_address)
+                        assert heap.nglobals == 2
+                        assert sys.gc.roots.global_slot_at(heap, 0) == slot_address
+                        assert sys.gc.roots.global_slot_at(heap, 1) == second_slot
+                        sys.gc.roots.remove_global(heap, second_slot)
+                        assert heap.nglobals == 1
+                        assert sys.gc.roots.global_slot_at(heap, 0) == slot_address
+                        sys.gc.roots.remove_global(heap, slot_address)
+                        assert heap.nglobals == 0
+                        sys.memory.unmap(second_mapping.get(), slot_bytes)
+                        let many: uint = 1000
+                        let many_mapping: Ref[byte]? = sys.memory.map_zeroed(
+                            many * slot_bytes, sys.abi.alignment_bytes(slot_row.get()))
+                        if many_mapping != nil {
+                            let slots: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] many_mapping.get()
+                            var item: uint = 0
+                            while item < many {
+                                let entry: Ref[Ref[byte]?] = __gc_byte_offset(slots, item * slot_bytes)
+                                require sys.gc.roots.add_global(heap, entry)
+                                if item % 7 == 0 {
+                                    require sys.gc.roots.add_global(heap, entry)
+                                }
+                                item += 1
+                            }
+                            var registered: uint = heap.nglobals
+                            item = 0
+                            while item < many {
+                                let index: uint = item * 7919 % many
+                                if index % 3 != 0 {
+                                    sys.gc.roots.remove_global(heap,
+                                        __gc_byte_offset(slots, index * slot_bytes))
+                                    registered -= 1
+                                }
+                                item += 1
+                            }
+                            assert heap.nglobals == registered
+                            item = 0
+                            while item < many {
+                                let entry: Ref[Ref[byte]?] = __gc_byte_offset(slots, item * slot_bytes)
+                                if item % 3 == 0 {
+                                    sys.gc.roots.remove_global(heap, entry)
+                                }
+                                if item % 7 == 0 {
+                                    sys.gc.roots.remove_global(heap, entry)
+                                }
+                                item += 1
+                            }
+                            assert heap.nglobals == 0
+                            sys.memory.unmap(many_mapping.get(), many * slot_bytes)
+                        } else { require false }
+                    } else { require false }
+                    sys.memory.unmap(slot_mapping.get(), slot_bytes)
+                } else { require false }
+            } else { require false }
+            sys.memory.unmap(mutator, sys.abi.size_bytes(row))
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_sweep() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            require sys.gc.registry.region_add(heap, base, end)
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+
+            let first: uint = sys.gc.core.header_lines() * sys.gc.core.line_bytes
+            let dead: uint = first + 64
+            let black: uint = first + 128
+            place_object(base, first, 32, true)
+            place_object(base, dead, 16, false)
+            place_object(base, black, 144, true)
+            let epoch: u32 = heap.epoch
+            __atomic_store(ref block.black_epoch, epoch)
+            block.sweep_epoch = epoch - 1
+            __atomic_store(ref heap.nunswept, 1)
+
+            sys.gc.collect.sweep_block(heap, block, epoch)
+            assert sys.gc.core.object_started(base, first)
+            assert !sys.gc.core.object_started(base, dead)
+            assert sys.gc.core.object_started(base, black)
+            let usable: uint = sys.gc.core.block_bytes / sys.gc.core.line_bytes - sys.gc.core.header_lines()
+            assert cast[uint](block.free_lines) == usable - 4
+            assert __atomic_load(ref heap.nunswept) == 0
+            assert block.sweep_epoch == epoch
+
+            heap.cfg.poison_free = true
+            heap.epoch = epoch + 1
+            __atomic_store(ref heap.nunswept, 1)
+            sys.gc.collect.sweep_block(heap, block, heap.epoch)
+            assert !sys.gc.core.object_started(base, first)
+            assert !sys.gc.core.object_started(base, black)
+            assert cast[uint](block.free_lines) == usable
+            assert __atomic_load(ref heap.nunswept) == 0
+            assert __gc_byte_offset(base, first).__value == cast[byte](0xdb)
+
+            heap.cfg.poison_free = false
+            heap.epoch += 1
+            heap.sweep_cursor = block
+            heap.keep_bytes = sys.gc.core.committed_bytes(heap)
+            __atomic_store(ref heap.nunswept, 1)
+            __atomic_store(ref heap.phase, cast[u32](sys.gc.core.Phase.sweeping))
+            require sys.gc.collect.sweep_some(heap, 1)
+            assert __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.idle)
+            assert block.state == cast[u8](sys.gc.core.Block_State.free)
+            assert heap.nfree == 1
+            assert cast[uint](block.free_lines) == usable
+            assert __atomic_load(ref heap.nunswept) == 0
+            sys.gc.collect.sweep_all(heap)
+
+            heap.free_blocks = nil
+            heap.nfree = 0
+            sys.gc.alloc.block_release(heap, block)
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_grow_batch() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let row: Ref[sys.abi.Type_Record] = mutator_record()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
+        if mapped != nil {
+            let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mapped.get()
+            mutator.heap = heap
+            let first: Ref[sys.gc.core.Block_Metadata]? = sys.gc.alloc.grow_batch(heap, mutator)
+            assert first != nil
+            assert heap.nblocks > 0
+            assert heap.nfree > 0
+            assert __atomic_load(ref heap.nowned) > 0
+            assert heap.nfree + __atomic_load(ref heap.nowned) == heap.nblocks
+            assert heap.blocks.n == heap.nblocks
+            sys.gc.heap.destroy(heap)
+            sys.memory.unmap(mutator, sys.abi.size_bytes(row))
+        } else { require false }
+    } else { require false }
+}
+
+func gc_handshake_stack() {
+    var config: sys.gc.core.Config
+    sys.gc.heap.config_default(config)
+    config.scan_stacks = true
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let active: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if active != nil {
+            let mutator: Ref[sys.gc.core.Mutator] = active.get()
+            __atomic_store(ref heap.hs_kind,
+                cast[u32](sys.gc.core.Handshake_Kind.scan))
+            __atomic_store(ref mutator.hs_state,
+                cast[u32](sys.gc.core.Handshake_State.requested))
+            __atomic_store(ref heap.hs_pending, 1)
+            sys.gc.handshake.safepoint(mutator)
+            require __atomic_load(ref heap.hs_pending) == 0
+            require __atomic_load(ref heap.cnt_stack_words) != 0
+            require __atomic_load(ref heap.cnt_frame_slots) != 0
+            sys.gc.handshake.enter_blocking(mutator)
+            require __atomic_load(ref mutator.blocking) == 1
+            require mutator.blocked_sp != nil
+            sys.gc.handshake.run_handshake_cycle(heap)
+            require heap.hs_cycles == 1
+            require heap.collections == 1
+            require __atomic_load(ref heap.hs_pending) == 0
+            require __atomic_load(ref heap.phase) == cast[u32](sys.gc.core.Phase.sweeping)
+            sys.gc.handshake.leave_blocking(mutator)
+            require __atomic_load(ref mutator.blocking) == 0
+            sys.gc.mutator.destroy(mutator)
+            sys.gc.heap.destroy(heap)
+        } else { require false }
+    } else { require false }
+}
+
+func gc_handshake_sweep() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let first_map: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        let cached_map: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        let probe: Ref[sys.gc.core.Mutator]? = nil
+        let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+            typeof(probe))
+        if first_map != nil and cached_map != nil and row != nil {
+            let first_base: Ref[byte] = first_map.get()
+            let cached_base: Ref[byte] = cached_map.get()
+            let first_end: Ref[byte] = __gc_byte_offset(first_base,
+                sys.gc.core.block_bytes)
+            let cached_end: Ref[byte] = __gc_byte_offset(cached_base,
+                sys.gc.core.block_bytes)
+            let first_added: bool = sys.gc.registry.region_add(
+                heap, first_base, first_end)
+            let cached_added: bool = sys.gc.registry.region_add(
+                heap, cached_base, cached_end)
+            assert first_added and cached_added
+            let first: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(
+                first_base)
+            let cached: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(
+                cached_base)
+            sys.gc.core.block_init(heap, first)
+            sys.gc.core.block_init(heap, cached)
+            let mutator_map: Ref[byte]? = sys.memory.map_zeroed(
+                sys.abi.size_bytes(row.get()),
+                sys.abi.alignment_bytes(row.get()))
+            if mutator_map != nil {
+                let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mutator_map.get()
+                mutator.heap = heap
+                sys.gc.core.set_block_state(heap, first, sys.gc.core.Block_State.owned)
+                sys.gc.core.set_block_state(heap, cached, sys.gc.core.Block_State.owned)
+                first.owner = mutator
+                cached.owner = mutator
+                mutator.small.blk = first
+                let hole_start: uint = sys.gc.core.header_lines() * sys.gc.core.line_bytes
+                mutator.small.cursor = __gc_byte_offset(first_base, hole_start)
+                mutator.small.limit = __gc_byte_offset(first_base,
+                    hole_start + sys.gc.core.line_bytes)
+                __atomic_store(ref mutator.small.cache, cached)
+                heap.epoch += 1
+                __atomic_store(ref heap.nunswept, 2)
+                sys.gc.handshake.sweep_own_blocks(heap, mutator, heap.epoch)
+                assert first.sweep_epoch == heap.epoch
+                assert cached.sweep_epoch == heap.epoch
+                assert __atomic_load(ref heap.nunswept) == 0
+                assert sys.gc.core.line_marked_in(first_base,
+                    sys.gc.core.header_lines(), heap.epoch)
+                let usable: uint = sys.gc.core.block_bytes / sys.gc.core.line_bytes - sys.gc.core.header_lines()
+                assert cast[uint](first.free_lines) == usable - 2
+                assert cast[uint](cached.free_lines) == usable
+                sys.gc.handshake.sweep_own_blocks(heap, mutator, heap.epoch)
+                assert __atomic_load(ref heap.nunswept) == 0
+
+                heap.mark_epoch = heap.epoch + 1
+                __atomic_store(ref heap.hs_kind,
+                    cast[u32](sys.gc.core.Handshake_Kind.on))
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](sys.gc.core.Handshake_State.requested))
+                __atomic_store(ref heap.hs_pending, 1)
+                sys.gc.handshake.safepoint(mutator)
+                assert mutator.black
+                assert __atomic_load(ref first.black_epoch) == heap.mark_epoch
+                assert __atomic_load(ref mutator.hs_state) == cast[u32](sys.gc.core.Handshake_State.done)
+                assert __atomic_load(ref heap.hs_pending) == 0
+
+                __atomic_store(ref heap.hs_kind,
+                    cast[u32](sys.gc.core.Handshake_Kind.scan))
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](sys.gc.core.Handshake_State.requested))
+                __atomic_store(ref heap.hs_pending, 1)
+                sys.gc.handshake.safepoint(mutator)
+                assert __atomic_load(ref mutator.hs_state) == cast[u32](sys.gc.core.Handshake_State.done)
+                assert __atomic_load(ref heap.hs_pending) == 0
+
+                __atomic_store(ref heap.hs_kind,
+                    cast[u32](sys.gc.core.Handshake_Kind.sweep))
+                __atomic_store(ref mutator.hs_state,
+                    cast[u32](sys.gc.core.Handshake_State.requested))
+                __atomic_store(ref heap.hs_pending, 1)
+                sys.gc.handshake.safepoint(mutator)
+                assert !mutator.black
+                assert __atomic_load(ref mutator.hs_state) == cast[u32](sys.gc.core.Handshake_State.done)
+                assert __atomic_load(ref heap.hs_pending) == 0
+                assert __atomic_load(ref heap.hs_answered.seq) == 3
+                sys.gc.alloc.block_release(heap, first)
+                sys.gc.alloc.block_release(heap, cached)
+                sys.memory.unmap(mutator, sys.abi.size_bytes(row.get()))
+                sys.gc.heap.destroy(heap)
+            } else { require false }
+        } else { require false }
+    } else { require false }
+}
+
+func gc_mutator_lifecycle() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let first: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+        if first != nil {
+            let second: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+            if second != nil {
+                let primary: Ref[sys.gc.core.Mutator] = first.get()
+                let other: Ref[sys.gc.core.Mutator] = second.get()
+                assert heap.nmutators == 2
+                assert heap.threads.n == 1
+                assert primary.thread_primary
+                assert !other.thread_primary
+                assert primary.thread_id == sys.threads.thread_id()
+                assert primary.thread_control == sys.threads.thread_control_self()
+                let primary_stack_hi: Ref[byte]? = primary.stack_hi
+                let current_stack_hi: Ref[byte]? = sys.threads.thread_stack_high_self()
+                if primary_stack_hi != nil {
+                    if current_stack_hi != nil {
+                        assert __abi_ref_address(primary_stack_hi.get()) == __abi_ref_address(current_stack_hi.get())
+                    } else { require false }
+                } else { require false }
+                assert other.thread_id == primary.thread_id
+                let other_stack_hi: Ref[byte]? = other.stack_hi
+                if other_stack_hi != nil {
+                    if primary_stack_hi != nil {
+                        assert __abi_ref_address(other_stack_hi.get()) == __abi_ref_address(primary_stack_hi.get())
+                    } else { require false }
+                } else { require false }
+                sys.gc.collect.stop_world(heap)
+                assert __atomic_load(ref heap.stw)
+                assert !primary.ctx_valid
+                sys.gc.collect.start_world(heap)
+                assert !__atomic_load(ref heap.stw)
+                assert heap.pauses == 1
+                let primary_next: Ref[sys.gc.core.Mutator]? = primary.thread_next
+                if primary_next != nil { assert primary_next.get() == other }
+                else { require false }
+                let other_next: Ref[sys.gc.core.Mutator]? = other.thread_next
+                if other_next != nil { assert other_next.get() == primary }
+                else { require false }
+                heap.hs_active = true
+                __atomic_store(ref heap.hs_kind,
+                    cast[u32](sys.gc.core.Handshake_Kind.on))
+                let third: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+                if third != nil {
+                    let survivor: Ref[sys.gc.core.Mutator] = third.get()
+                    assert heap.nmutators == 3
+                    assert heap.threads.n == 1
+                    assert __atomic_load(ref heap.hs_pending) == 1
+                    assert __atomic_load(ref survivor.hs_state) == cast[u32](sys.gc.core.Handshake_State.requested)
+                    let next_after_primary: Ref[sys.gc.core.Mutator]? = primary.thread_next
+                    if next_after_primary != nil {
+                        assert next_after_primary.get() == survivor
+                    } else { require false }
+                    sys.gc.mutator.destroy(other)
+                    assert heap.nmutators == 2
+                    let next_after_unlink: Ref[sys.gc.core.Mutator]? = survivor.thread_next
+                    if next_after_unlink != nil { assert next_after_unlink.get() == primary }
+                    else { require false }
+                    sys.gc.mutator.park(survivor)
+                    assert __atomic_load(ref heap.hs_pending) == 0
+                    assert __atomic_load(ref survivor.hs_state) == cast[u32](sys.gc.core.Handshake_State.done)
+                    heap.hs_active = false
+                    sys.gc.mutator.destroy(primary)
+                    assert heap.nmutators == 1
+                    assert heap.threads.n == 1
+                    assert survivor.thread_primary
+                    let remaining_next: Ref[sys.gc.core.Mutator]? = survivor.thread_next
+                    if remaining_next != nil { assert remaining_next.get() == survivor }
+                    else { require false }
+                    let indexed: Ref[byte]? = sys.gc.hash.tab_lookup(
+                        ref heap.threads, survivor.thread_id)
+                    if indexed != nil {
+                        assert indexed.get() == unsafe_cast[Ref[byte]] survivor
+                    } else { require false }
+                    let buffered: Ref[byte] = unsafe_cast[Ref[byte]] heap
+                    survivor.write_buffer_epoch = heap.mark_epoch
+                    (ref survivor.write_buffer [0]).__value = buffered
+                    survivor.write_buffer_count = 1
+                    survivor.objects_allocated = 3
+                    survivor.bytes_allocated = 64
+                    survivor.refills = 2
+                    survivor.locked_refills = 1
+                    __atomic_store(ref survivor.hs_state,
+                        cast[u32](sys.gc.core.Handshake_State.requested))
+                    __atomic_store(ref heap.hs_pending, cast[u32](1))
+                    sys.gc.mutator.destroy(survivor)
+                    assert heap.nmutators == 0
+                    assert heap.threads.n == 0
+                    assert __atomic_load(ref heap.hs_pending) == 0
+                    assert heap.retired_objects == 3
+                    assert heap.retired_bytes == 64
+                    assert heap.retired_refills == 2
+                    assert heap.retired_locked_refills == 1
+                    assert heap.barrier_queue_count == 1
+                    let queue: Ref[byte]? = heap.barrier_queue
+                    if queue != nil {
+                        let slot: Ref[Atomic[Ref[byte]?]] = unsafe_cast[Ref[Atomic[Ref[byte]?]]] queue.get()
+                        let value: Ref[byte]? = __atomic_load(slot)
+                        if value != nil { assert value.get() == buffered }
+                        else { require false }
+                    } else { require false }
+                    sys.gc.heap.destroy(heap)
+                } else { require false }
+            } else { require false }
+        } else { require false }
+    } else { require false }
+}
+
+func gc_worker_shutdown() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        __atomic_store(ref heap.shutdown, true)
+        sys.gc.collect.worker(heap)
+        require __atomic_load(ref heap.nworkers) == 0
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_small_allocate() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            require sys.gc.registry.region_add(heap, base, end)
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+            let mutator_probe: Ref[sys.gc.core.Mutator]? = nil
+            let mutator_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+                typeof(mutator_probe))
+            if mutator_row != nil {
+                let mutator_bytes: uint = sys.abi.size_bytes(mutator_row.get())
+                let mutator_map: Ref[byte]? = sys.memory.map_zeroed(mutator_bytes,
+                    sys.abi.alignment_bytes(mutator_row.get()))
+                if mutator_map != nil {
+                    let mutator: Ref[sys.gc.core.Mutator] = unsafe_cast[Ref[sys.gc.core.Mutator]] mutator_map.get()
+                    mutator.heap = heap
+                    mutator.black = false
+                    var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+                    sys.gc.core.own(heap, mutator, block, ref owned)
+                    let attached: Ref[sys.gc.core.Block_Metadata]? = block
+                    sys.gc.core.bump_attach(mutator, ref mutator.small, attached)
+                    require sys.gc.core.bump_next_hole(ref mutator.small, 48)
+                    let sample: byte = 0
+                    let type_index: u32 = cast[u32](typeof(sample))
+
+                    let first: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                        mutator, ref mutator.small, type_index, 24,
+                        sys.gc.core.granule_bytes, false)
+                    if first != nil {
+                        let payload: Ref[byte] = first.get()
+                        let header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(payload)
+                        assert header.type_index == type_index
+                        assert sys.gc.core.meta_payload_bytes(header.meta) == 24
+                        assert sys.gc.core.object_started(base,
+                            __abi_ref_address(header) - __abi_ref_address(base))
+                        assert !sys.gc.mark.is_marked(heap, payload)
+                        let last: Ref[byte]? = mutator.last_alloc
+                        if last != nil { assert last.get() == payload }
+                        else { require false }
+                        check_record_trace(heap, mutator, payload)
+                        let array_target: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                            mutator, ref mutator.small, type_index, 8,
+                            sys.gc.core.granule_bytes, false)
+                        if array_target != nil {
+                            check_array_trace(heap, mutator, array_target.get())
+                        } else { require false }
+                        let inline_target: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                            mutator, ref mutator.small, type_index, 8,
+                            sys.gc.core.granule_bytes, false)
+                        if inline_target != nil {
+                            check_inline_trace(heap, mutator, inline_target.get())
+                        } else { require false }
+                        let barrier_target: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                            mutator, ref mutator.small, type_index, 8,
+                            sys.gc.core.granule_bytes, false)
+                        if barrier_target != nil {
+                            check_barrier_queue(heap, mutator, barrier_target.get())
+                        } else { require false }
+                        let rooted: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                            mutator, ref mutator.small, type_index, 8,
+                            sys.gc.core.granule_bytes, false)
+                        if rooted != nil {
+                            let newest: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                sys.gc.core.granule_bytes, false)
+                            if newest != nil {
+                                check_mutator_roots(heap, mutator,
+                                    rooted.get(), newest.get())
+                            } else { require false }
+                        } else { require false }
+                    } else { require false }
+
+                    let finalizable: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                        mutator, ref mutator.small, type_index, 16,
+                        sys.gc.core.granule_bytes, true)
+                    if finalizable != nil {
+                        let header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(finalizable.get())
+                        assert (header.meta & sys.gc.core.obj_final) != 0
+                        assert __atomic_load(ref block.nfinal) == 1
+                        assert __atomic_load(ref block.in_final)
+                        let final_head: Ref[sys.gc.core.Block_Metadata]? = __atomic_load(ref heap.final_blocks)
+                        if final_head != nil { assert final_head.get() == block }
+                        else { require false }
+                    } else { require false }
+
+                    mutator.black = true
+                    let black: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                        mutator, ref mutator.small, type_index, 8,
+                        sys.gc.core.granule_bytes, false)
+                    if black != nil {
+                        assert sys.gc.mark.is_marked(heap, black.get())
+                    } else { require false }
+                    var published: Ref[byte]? = nil
+                    let into: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                        mutator, ref mutator.small, type_index, 8,
+                        sys.gc.core.granule_bytes, false, nil, ref published)
+                    if into != nil {
+                        if published != nil {
+                            assert published.get() == into.get()
+                        } else { require false }
+                    } else { require false }
+                    assert mutator.last_alloc == nil
+                    assert mutator.objects_allocated == 12
+                    sys.memory.unmap(mutator, mutator_bytes)
+                } else { require false }
+            } else { require false }
+        } else { require false }
+        sys.gc.heap.destroy(heap)
+    } else { require false }
+}
+
+func gc_allocate() {
+    let sample: byte = 0
+    let type_index: u32 = cast[u32](typeof(sample))
+    let result: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+        type_index, 8, cast[u32](sys.gc.core.granule_bytes), nil)
+    if result != nil {
+        let header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(result.get())
+        require header.type_index == type_index
+        require sys.gc.core.meta_payload_bytes(header.meta) == 8
+        let over_alignment: u32 = cast[u32](sys.gc.core.granule_bytes * 2)
+        let over_aligned: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+            type_index, 8, over_alignment, nil)
+        if over_aligned != nil {
+            require __abi_ref_address(over_aligned.get()) % cast[uint](over_alignment) == 0
+            let over_header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(
+                over_aligned.get())
+            require (over_header.meta & sys.gc.core.obj_large) != 0
+        } else { require false }
+    } else { require false }
+}
+
+func gc_empty_array_backing() {
+    let empty: Array[byte] = []'array
+    let type_index: u32 = cast[u32](typeof(empty))
+    let probe: Ref[sys.abi.Array_Descriptor_Header]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(probe))
+    if row != nil {
+        let header_bytes: uint = sys.abi.size_bytes(row.get())
+        let descriptor_bytes: uint = header_bytes + 8
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(descriptor_bytes,
+            sys.abi.alignment_bytes(row.get()))
+        if mapped != nil {
+            let descriptor: Ref[sys.abi.Array_Descriptor_Header] = unsafe_cast[Ref[sys.abi.Array_Descriptor_Header]] mapped.get()
+            descriptor.total_count = 0
+            descriptor.rank = 1
+            descriptor.flat_rank = 1
+            let payload_bytes: uint = sys.gc.core.array_backing_offset(
+                type_index, descriptor)
+            require payload_bytes == descriptor_bytes
+            let backing: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+                type_index, cast[u64](payload_bytes),
+                cast[u32](sys.gc.core.granule_bytes), descriptor)
+            if backing != nil {
+                let header: Ref[sys.gc.core.Object_Header] = sys.gc.core.header_of(
+                    backing.get())
+                assert sys.gc.core.meta_payload_bytes(header.meta) == payload_bytes
+                assert (header.meta & sys.gc.core.obj_array_backing) != 0
+                sys.memory.unmap(mapped.get(), descriptor_bytes)
+            } else { require false }
+        } else { require false }
+    } else { require false }
+}
+
+func gc_new_record() {
+    let value: Constructed_Record = construct_record(42)
+    assert value.payload == 42
+    let second: Constructed_Record = construct_record(7)
+    assert second.payload == 7
+    let type_index: u32 = cast[u32](typeof(value))
+    let type_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(type_index)
+    if type_row != nil {
+        var slot: Ref[byte]? = nil
+        let allocated: Ref[byte]? = sys.gc.alloc.allocate_runtime_into(
+            type_index, cast[u64](sys.abi.size_bytes(type_row.get())),
+            cast[u32](sys.abi.alignment_bytes(type_row.get())), nil,
+            ref slot)
+        if allocated != nil {
+            if slot != nil {
+                assert slot.get() == allocated.get()
+            } else { require false }
+            let rejected: Ref[byte]? = sys.gc.alloc.allocate_runtime_into(
+                0, 0, 1, nil, ref slot)
+            assert rejected == nil
+            if slot != nil {
+                assert slot.get() == allocated.get()
+            } else { require false }
+        } else { require false }
+    } else { require false }
+}
+
+func gc_global_mark() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapping: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        if mapping != nil {
+            let base: Ref[byte] = mapping.get()
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            require sys.gc.registry.region_add(heap, base, end)
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+            if attached != nil {
+                let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+                var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+                sys.gc.core.own(heap, mutator, block, ref owned)
+                let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+                require sys.gc.core.bump_next_hole(ref mutator.small, 48)
+                let sample: byte = 0
+                let type_index: u32 = cast[u32](typeof(sample))
+                let first: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    sys.gc.core.granule_bytes, false)
+                let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    sys.gc.core.granule_bytes, false)
+                let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    sys.gc.core.granule_bytes, false)
+                if first != nil and second != nil and third != nil {
+                    let slot_probe: Ref[byte]? = nil
+                    let slot_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(slot_probe))
+                    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+                    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(marker_probe))
+                    if slot_row != nil and marker_row != nil {
+                        let slot_bytes: uint = sys.abi.size_bytes(slot_row.get())
+                        let marker_bytes: uint = sys.abi.size_bytes(marker_row.get())
+                        let slot_map: Ref[byte]? = sys.memory.map_zeroed(
+                            slot_bytes, sys.abi.alignment_bytes(slot_row.get()))
+                        let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                            marker_bytes, sys.abi.alignment_bytes(marker_row.get()))
+                        if slot_map != nil and marker_map != nil {
+                            let slot: Ref[Ref[byte]?] = unsafe_cast[Ref[Ref[byte]?]] slot_map.get()
+                            let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                            slot.__value = first
+                            require sys.gc.roots.add_global(heap, slot)
+                            sys.gc.mark.marker_init(marker.__value, heap, false)
+                            sys.gc.collect.mark_global_roots(marker)
+                            assert sys.gc.mark.is_marked(heap, first.get())
+                            assert !sys.gc.mark.is_marked(heap, second.get())
+                            sys.gc.roots.remove_global(heap, slot)
+                            slot.__value = second
+                            require sys.gc.roots.push(mutator, slot)
+                            sys.gc.collect.mark_roots(marker)
+                            assert sys.gc.mark.is_marked(heap, second.get())
+                            sys.gc.roots.pop(mutator, 0)
+                            assert !sys.gc.mark.is_marked(heap, third.get())
+                            __atomic_store(ref heap.marking, true)
+                            sys.gc.mark.barrier_pointer(mutator, slot_map.get())
+                            assert mutator.write_buffer_count == 0
+                            sys.gc.mark.barrier_pointer(mutator, third)
+                            assert mutator.write_buffer_count == 1
+                            __atomic_store(ref heap.hs_kind,
+                                cast[u32](sys.gc.core.Handshake_Kind.scan))
+                            __atomic_store(ref mutator.hs_state,
+                                cast[u32](sys.gc.core.Handshake_State.requested))
+                            __atomic_store(ref heap.hs_pending, 1)
+                            sys.gc.handshake.safepoint(mutator)
+                            assert sys.gc.mark.is_marked(heap, third.get())
+                            assert mutator.write_buffer_count == 0
+                            assert __atomic_load(ref heap.round_dirty)
+                            let fourth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                sys.gc.core.granule_bytes, false)
+                            if fourth != nil {
+                                var count: uint = 0
+                                while count < sys.gc.core.write_buffer_cap {
+                                    sys.gc.mark.write_barrier(mutator, fourth)
+                                    count += 1
+                                }
+                                assert mutator.write_buffer_count == 0
+                                assert heap.barrier_queue_count == sys.gc.core.write_buffer_cap
+                                sys.gc.mark.barrier_queue_drain(marker)
+                                assert heap.barrier_queue_count == 0
+                                assert sys.gc.mark.is_marked(heap, fourth.get())
+                                let fifth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                    mutator, ref mutator.small, type_index, 8,
+                                    sys.gc.core.granule_bytes, false)
+                                if fifth != nil {
+                                    var word: uint = __abi_ref_address(fifth.get())
+                                    let low: Ref[byte] = unsafe_cast[Ref[byte]] ref word
+                                    let word_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(word))
+                                    if word_row != nil {
+                                        let high: Ref[byte] = __gc_byte_offset(low,
+                                            sys.abi.size_bytes(word_row.get()))
+                                        assert !sys.gc.mark.is_marked(heap, fifth.get())
+                                        sys.gc.collect.scan_words(marker, low, high)
+                                        assert sys.gc.mark.is_marked(heap, fifth.get())
+                                    } else { require false }
+                                } else { require false }
+                            } else { require false }
+                            let rooted: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                sys.gc.core.granule_bytes, false)
+                            if rooted != nil {
+                                assert !sys.gc.mark.is_marked(heap, rooted.get())
+                                static_root = rooted
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, rooted.get())
+                                static_root = nil
+                            } else { require false }
+                            let imported: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                sys.gc.core.granule_bytes, false)
+                            if imported != nil {
+                                assert !sys.gc.mark.is_marked(heap, imported.get())
+                                gc_root_support.imported_root = imported
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, imported.get())
+                                gc_root_support.imported_root = nil
+                            } else { require false }
+                            let variant_value: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                sys.gc.core.granule_bytes, false)
+                            if variant_value != nil {
+                                assert !sys.gc.mark.is_marked(heap, variant_value.get())
+                                variant_root.payload = variant_value.get()
+                                switch variant_root {
+                                    case payload {
+                                        assert variant_root.payload == variant_value.get()
+                                    }
+                                    case empty { require false }
+                                }
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, variant_value.get())
+                                variant_root.empty = nil
+                                switch variant_root {
+                                    case payload { require false }
+                                    case empty {}
+                                }
+                                variant_root = new[Root_Variant]()
+                            } else { require false }
+                            let nested_value: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, type_index, 8,
+                                sys.gc.core.granule_bytes, false)
+                            if nested_value != nil {
+                                assert !sys.gc.mark.is_marked(heap, nested_value.get())
+                                nested_root.data = (child = nested_value)
+                                sys.gc.collect.mark_global_roots(marker)
+                                assert sys.gc.mark.is_marked(heap, nested_value.get())
+                                nested_root.empty = nil
+                            } else { require false }
+                            let words_before: uint = marker.stack_words
+                            heap.cfg.scan_stacks = true
+                            sys.gc.collect.mark_roots(marker)
+                            assert marker.stack_words > words_before
+                            heap.cfg.scan_stacks = false
+                            sys.memory.unmap(marker, marker_bytes)
+                            sys.memory.unmap(slot, slot_bytes)
+                        } else { require false }
+                    } else { require false }
+                } else { require false }
+                sys.gc.mutator.destroy(mutator)
+            } else { require false }
+            sys.gc.heap.destroy(heap)
+        } else { require false }
+    } else { require false }
+}
+
+func gc_builtin_os() {
+    let page: uint = sys.memory.page_size()
+    let current_thread: uint = sys.threads.thread_id()
+    assert current_thread != 0
+    assert current_thread == sys.threads.thread_id()
+    assert sys.threads.thread_stack_high_self() != nil
+    let red_zone: uint = sys.threads.stack_red_zone_bytes()
+    assert red_zone == cast[uint](0) or red_zone == cast[uint](128)
+    assert sys.threads.thread_control_self() != 0
+    let context_probe: Ref[sys.threads.Thread_Context]? = nil
+    let context_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(context_probe))
+    if context_row != nil {
+        let row: Ref[sys.abi.Type_Record] = context_row.get()
+        assert sys.abi.size_bytes(row) != 0
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.abi.size_bytes(row), sys.abi.alignment_bytes(row))
+        if mapped != nil {
+            let snapshot: Ref[sys.threads.Thread_Context] = unsafe_cast[Ref[sys.threads.Thread_Context]] mapped.get()
+            __os_thread_capture_self(snapshot)
+            assert snapshot.sp != nil
+            assert snapshot.nregs != 0
+            sys.memory.unmap(snapshot, sys.abi.size_bytes(row))
+        } else { require false }
+    } else { require false }
+    let before: u64 = sys.clock.now_ns()
+    let after: u64 = sys.clock.now_ns()
+    assert before != 0 and after >= before
+    let mapped: Ref[byte]? = sys.memory.map_zeroed(page, page)
+    if mapped != nil {
+        let address: Ref[byte] = mapped.get()
+        let word: Ref[u64] = unsafe_cast[Ref[u64]] address
+        let direct: Ref[u32] = unsafe_cast[Ref[u32]] word
+        assert __abi_ref_address(direct) == __abi_ref_address(word)
+        let roundtrip: Ref[byte] = unsafe_cast[Ref[byte]] word
+        assert roundtrip == address
+        sys.memory.protect(address, page, sys.memory.PROT_READ)
+        sys.memory.protect(address, page,
+                           sys.memory.PROT_READ | sys.memory.PROT_WRITE)
+        sys.memory.unmap(word, page)
+        let invalid: Ref[byte]? = sys.memory.map_zeroed(0, page)
+        require invalid == nil
+    } else {
+        require false
+    }
+}
+
+func gc_finalize() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            let registered: bool = sys.gc.registry.region_add(heap, base, end)
+            require registered
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+            if attached != nil {
+                let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+                var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+                sys.gc.core.own(heap, mutator, block, ref owned)
+                let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+                let found: bool = sys.gc.core.bump_next_hole(ref mutator.small, 48)
+                require found
+                let sample: Ref[Sample]? = nil
+                let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(sample))
+                require option_row != nil
+                let reference_index: i64 = sys.abi.range_index(option_row.get().components, 0)
+                require reference_index > 0
+                let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
+                require reference_row != nil
+                let type_index: i64 = sys.abi.range_index(reference_row.get().components, 0)
+                require type_index > 0
+                let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, cast[u32] type_index, 8,
+                    sys.gc.core.granule_bytes, true)
+                if allocated != nil {
+                    let payload: Ref[byte] = allocated.get()
+                    assert __atomic_load(ref block.nfinal) == 1
+                    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+                    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+                        typeof(marker_probe))
+                    if marker_row != nil {
+                        let marker_bytes: uint = sys.abi.size_bytes(marker_row.get())
+                        let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                            marker_bytes, sys.abi.alignment_bytes(marker_row.get()))
+                        if marker_map != nil {
+                            let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                            sys.gc.mark.marker_init(marker.__value, heap, false)
+                            sys.gc.sync.ticket_lock(ref heap.lock)
+                            sys.gc.finalize.find_dead_locked(marker)
+                            sys.gc.sync.ticket_unlock(ref heap.lock)
+                            assert __atomic_load(ref heap.fin_notify)
+                            assert __atomic_load(ref heap.fin_thread) == 0
+                            assert heap.finq_n == 1
+                            assert __atomic_load(ref block.nfinal) == 0
+                            assert !__atomic_load(ref block.in_final)
+                            assert (sys.gc.core.header_of(payload).meta & sys.gc.core.obj_final) == 0
+                            assert sys.gc.mark.is_marked(heap, payload)
+                            let queue: Ref[byte]? = heap.finq
+                            if queue != nil {
+                                let entry: Ref[sys.gc.core.Final_Entry] = unsafe_cast[Ref[sys.gc.core.Final_Entry]] queue.get()
+                                assert entry.payload == payload
+                            } else { require false }
+                            marker.bytes = 123
+                            sys.gc.finalize.mark_locked(marker)
+                            assert marker.bytes == 123
+                            sys.gc.finalize.find_dead_locked(marker)
+                            assert heap.finq_n == 1
+                            require sys.gc.finalize.run(heap, 0) == 1
+                            assert __atomic_load(ref finalized) == 1
+                            assert __atomic_load(ref off_main) == 0
+                            assert heap.finq_n == 0
+                            assert heap.running == nil
+                            require sys.gc.finalize.run(heap, 0) == 0
+                            assert __atomic_load(ref finalized) == 1
+
+                            heap.cfg.finalizer_backlog_limit = 1
+                            let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, cast[u32] type_index, 8,
+                                sys.gc.core.granule_bytes, true)
+                            require second != nil
+                            let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, cast[u32] type_index, 8,
+                                sys.gc.core.granule_bytes, true)
+                            require third != nil
+                            sys.gc.sync.ticket_lock(ref heap.lock)
+                            sys.gc.finalize.find_dead_locked(marker)
+                            sys.gc.sync.ticket_unlock(ref heap.lock)
+                            assert heap.finq_n == 2
+                            sys.gc.finalize.backpressure(mutator)
+                            wait_finalized(3)
+                            assert __atomic_load(ref off_main) == 2
+                            assert __atomic_load(ref heap.fin_stalled) == 0
+
+                            __atomic_store(ref gate_closed, true)
+                            let fourth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, cast[u32] type_index, 8,
+                                sys.gc.core.granule_bytes, true)
+                            require fourth != nil
+                            sys.gc.sync.ticket_lock(ref heap.lock)
+                            sys.gc.finalize.find_dead_locked(marker)
+                            sys.gc.heap.unlock(heap)
+                            wait_blocked()
+                            let fifth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, cast[u32] type_index, 8,
+                                sys.gc.core.granule_bytes, true)
+                            require fifth != nil
+                            let sixth: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                                mutator, ref mutator.small, cast[u32] type_index, 8,
+                                sys.gc.core.granule_bytes, true)
+                            require sixth != nil
+                            sys.gc.sync.ticket_lock(ref heap.lock)
+                            sys.gc.finalize.find_dead_locked(marker)
+                            sys.gc.heap.unlock(heap)
+                            assert heap.finq_n == 2
+                            sys.gc.finalize.backpressure(mutator)
+                            assert __atomic_load(ref heap.fin_stalled) == 4
+                            sys.gc.finalize.backpressure(mutator)
+                            assert heap.finq_n == 2
+                            assert __atomic_load(ref finalized) == 3
+                            __atomic_store(ref gate_closed, false)
+                            wait_finalized(6)
+                            assert __atomic_load(ref off_main) == 5
+                            sys.memory.unmap(marker, marker_bytes)
+                        } else { require false }
+                    } else { require false }
+                } else { require false }
+                sys.gc.mutator.destroy(mutator)
+            } else { require false }
+            sys.gc.heap.destroy(heap)
+            assert __atomic_load(ref finalized) == 6
+        } else { require false }
+    } else { require false }
+}
+
+func gc_finalizer_cycle() {
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    require created != nil
+    let heap: Ref[sys.gc.core.Heap] = created.get()
+    let mapping: Ref[byte]? = sys.memory.map_zeroed(
+        sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+    require mapping != nil
+    let base: Ref[byte] = mapping.get()
+    let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+    require sys.gc.registry.region_add(heap, base, end)
+    let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+    sys.gc.core.block_init(heap, block)
+    let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+    require attached != nil
+    let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+    var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+    sys.gc.core.own(heap, mutator, block, ref owned)
+    let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+    sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+    require sys.gc.core.bump_next_hole(ref mutator.small, 48)
+
+    let probe: Ref[Twin]? = nil
+    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(
+        typeof(probe))
+    require option_row != nil
+    let reference_index: i64 = sys.abi.range_index(
+        option_row.get().components, 0)
+    require reference_index > 0
+    let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(
+        cast[u32] reference_index)
+    require reference_row != nil
+    let index: i64 = sys.abi.range_index(reference_row.get().components, 0)
+    require index > 0
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] index)
+    require row != nil
+    let bytes: uint = sys.abi.size_bytes(row.get())
+    let alignment: uint = sys.abi.alignment_bytes(row.get())
+    let first: Ref[Twin]? = allocate_twin(mutator, cast[u32] index,
+        bytes, alignment, 0)
+    let second: Ref[Twin]? = allocate_twin(mutator, cast[u32] index,
+        bytes, alignment, 1)
+    require first != nil and second != nil
+    let a: Ref[Twin] = first.get()
+    let b: Ref[Twin] = second.get()
+    a.other = b
+    b.other = a
+
+    var marker: sys.gc.core.Marker
+    sys.gc.mark.marker_init(marker, heap, false)
+    sys.gc.sync.ticket_lock(ref heap.lock)
+    sys.gc.finalize.find_dead_locked(ref marker)
+    sys.gc.sync.ticket_unlock(ref heap.lock)
+    require heap.finq_n == 2
+    require sys.gc.finalize.run(heap, 0) == 2
+    require twin_finalized == 2
+    require seen_first and seen_second
+
+    sys.gc.mutator.destroy(mutator)
+    sys.gc.heap.destroy(heap)
+}
+
+func gc_finalize_ref() {
+    let probe: Ref[Ref_Sample]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(probe))
+    require row != nil
+    require row.get().finalizer_function_index != 0
+    let plain_probe: Ref[Plain]? = nil
+    let plain_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(typeof(plain_probe))
+    require plain_row != nil
+    require plain_row.get().finalizer_function_index == 0
+    let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(probe))
+    require option_row != nil
+    let reference_index: i64 = sys.abi.range_index(option_row.get().components, 0)
+    require reference_index > 0
+    let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
+    require reference_row != nil
+    let sample_index: i64 = sys.abi.range_index(reference_row.get().components, 0)
+    require sample_index > 0
+    let storage: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+        cast[u32] sample_index, cast[u64](sys.abi.size_bytes(row.get())),
+        cast[u32](sys.abi.alignment_bytes(row.get())), nil)
+    require storage != nil
+    require (sys.gc.core.header_of(storage.get()).meta & sys.gc.core.obj_final) != 0
+    __gc_invoke_finalizer(cast[u32] sample_index, storage.get())
+    require ref_finalized == 1
+}
+
+func gc_known_finalizer() {
+    let value: Ref[Finalized_Record] = construct_finalized()
+    require value.payload == 42
+    let exemplar: Finalized_Record = new[Finalized_Record](42)
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(
+        typeof(exemplar))
+    require row != nil
+    require row.get().finalizer_function_index != 0
+}
+
+func gc_destroy_blocked_finalizer() {
+    __atomic_store(ref finalized, 0)
+    __atomic_store(ref off_main, 0)
+    __atomic_store(ref blocked, false)
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(nil)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            let registered: bool = sys.gc.registry.region_add(heap, base, end)
+            require registered
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+            if attached != nil {
+                let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+                var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+                sys.gc.core.own(heap, mutator, block, ref owned)
+                let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+                let found: bool = sys.gc.core.bump_next_hole(ref mutator.small, 48)
+                require found
+                let sample: Ref[Sample]? = nil
+                let option_row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(sample))
+                require option_row != nil
+                let reference_index: i64 = sys.abi.range_index(option_row.get().components, 0)
+                require reference_index > 0
+                let reference_row: Ref[sys.abi.Type_Record]? = sys.abi.type_at(cast[u32] reference_index)
+                require reference_row != nil
+                let type_index: i64 = sys.abi.range_index(reference_row.get().components, 0)
+                require type_index > 0
+                let allocated: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, cast[u32] type_index, 8,
+                    sys.gc.core.granule_bytes, true)
+                if allocated != nil {
+                    let payload: Ref[byte] = allocated.get()
+                    assert __atomic_load(ref block.nfinal) == 1
+                    let marker_probe: Ref[sys.gc.core.Marker]? = nil
+                    let marker_row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+                        typeof(marker_probe))
+                    if marker_row != nil {
+                        let marker_bytes: uint = sys.abi.size_bytes(marker_row.get())
+                        let marker_map: Ref[byte]? = sys.memory.map_zeroed(
+                            marker_bytes, sys.abi.alignment_bytes(marker_row.get()))
+                        if marker_map != nil {
+                            let marker: Ref[sys.gc.core.Marker] = unsafe_cast[Ref[sys.gc.core.Marker]] marker_map.get()
+                            sys.gc.mark.marker_init(marker.__value, heap, false)
+                            sys.gc.sync.ticket_lock(ref heap.lock)
+                            sys.gc.finalize.find_dead_locked(marker)
+                            sys.gc.sync.ticket_unlock(ref heap.lock)
+                            __atomic_store(ref gate_closed, true)
+                            sys.gc.finalize.wake(heap)
+                            wait_blocked()
+                            sys.memory.unmap(marker, marker_bytes)
+                        } else { require false }
+                    } else { require false }
+                } else { require false }
+                sys.gc.mutator.destroy(mutator)
+            } else { require false }
+            sys.gc.heap.destroy(heap)
+            __atomic_store(ref gate_closed, false)
+            wait_finalized(1)
+        } else { require false }
+    } else { require false }
+}
+
+gc_atomic()
+gc_atomic_rmw_u32()
+gc_byte_offset()
+gc_memcpy()
+gc_block()
+gc_block_registry()
+gc_recycle()
+gc_heap()
+gc_epoch()
+gc_los()
+gc_los_allocate()
+gc_los_registry()
+gc_los_pacing()
+gc_mark_pool()
+gc_pacing()
+gc_reclaim_caches()
+gc_roots()
+gc_sweep()
+gc_grow_batch()
+gc_handshake_stack()
+gc_handshake_sweep()
+gc_mutator_lifecycle()
+gc_worker_shutdown()
+gc_small_allocate()
+gc_allocate()
+gc_empty_array_backing()
+gc_new_record()
+gc_global_mark()
+gc_builtin_os()
+gc_finalize()
+gc_finalizer_cycle()
+gc_finalize_ref()
+gc_known_finalizer()
+gc_destroy_blocked_finalizer()
+__fd_write(2, "ok")

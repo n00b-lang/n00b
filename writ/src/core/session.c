@@ -1,3 +1,4 @@
+#include "lib/os.h"
 #include "internal.h"
 
 #include "lib/hash.h"
@@ -65,19 +66,21 @@ static writ_str_t
 contract_in(writ_session_t *session, writ_str_t dir, writ_str_t name)
 {
     writ_str_t path = writ_str_format(session, "%.*s/%.*s", S(dir), S(name));
-    FILE      *file = fopen(path.data, "rb");
-    if (!file) {
-        return (writ_str_t){nullptr, 0};
-    }
-    fclose(file);
-    return path;
+    return core_os_is_regular_file(core_string_borrow(path.data, path.length)) ? path : (writ_str_t){nullptr, 0};
 }
 
 writ_str_t
-writ_find_contract(writ_session_t *session, writ_str_t name)
+writ_find_contract(writ_session_t *session, const uint32_t *unit_dirs,
+                   size_t unit_dir_count, writ_str_t name)
 {
     core_list_foreach(session->contract_dirs, dir) {
         writ_str_t found = contract_in(session, writ_sym_str(session, *dir), name);
+        if (found.length) {
+            return found;
+        }
+    }
+    for (size_t i = 0; i < unit_dir_count; i++) {
+        writ_str_t found = contract_in(session, writ_sym_str(session, unit_dirs[i]), name);
         if (found.length) {
             return found;
         }

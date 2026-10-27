@@ -4,12 +4,6 @@
 #include "lib/link_unit.h"
 #include "parse/commander.h"
 
-#ifdef __APPLE__
-#define N00BB_NATIVE_LINKER "/usr/bin/clang"
-#else
-#define N00BB_NATIVE_LINKER "clang"
-#endif
-
 typedef struct {
     const core_buffer_t *bitcode;
     size_t bitcode_count;
@@ -24,7 +18,7 @@ typedef struct {
 } n00bb_native_inputs_t;
 
 bool n00bb_build_time_run_needed(const n00bb_link_analysis_t *analysis);
-void n00bb_remove_executable(const char *path);
+void n00bb_remove_executable(core_string_t path);
 bool n00bb_build_executable(core_link_unit_t *link,
                             n00bb_link_analysis_t *analysis,
                             parse_cmdr_result_t *args,

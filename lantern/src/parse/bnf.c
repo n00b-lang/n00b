@@ -1,6 +1,7 @@
 
 #include "parse/bnf.h"
 #include "lib/list.h"
+#include "lib/os.h"
 #include "parse/annot_args.h"
 #include "parse/annotation.h"
 #include "parse/pwz.h"
@@ -143,7 +144,7 @@ static core_string_t bnf_join_continuations(core_string_t input) {
 
   size_t len = input.u8_bytes;
   const char *src = input.data;
-  char *result = core_alloc_array(char, len + 1);
+  char *result = core_alloc_array(char, len + 2);
   size_t ri = 0;
   bool in_sq = false;
   bool in_dq = false;
@@ -202,6 +203,9 @@ static core_string_t bnf_join_continuations(core_string_t input) {
     result[ri++] = src[i];
   }
 
+  if (ri > 0 && result[ri - 1] != '\n') {
+    result[ri++] = '\n';
+  }
   result[ri] = '\0';
 
   return core_string_borrow(result, ri);
@@ -1839,14 +1843,6 @@ static bool parse_bnf_load_impl(core_string_t bnf_text,
   core_free(trimmed.data);
   trimmed = joined;
 
-  size_t len = trimmed.u8_bytes;
-
-  if (len > 0 && trimmed.data[len - 1] != '\n') {
-    trimmed.data = core_realloc(trimmed.data, len + 1);
-    trimmed.data[len] = '\n';
-    trimmed.u8_bytes = len + 1;
-  }
-
   bnf_src = trimmed;
 
   core_buffer_t *bnf_buf =
@@ -2015,7 +2011,7 @@ static core_string_t relative_to(core_string_t origin, core_string_t imported) {
     return (core_string_t){};
   }
 
-  if (imported.data[0] == '/') {
+  if (core_os_is_absolute(imported)) {
     return core_string_dup(imported);
   }
 

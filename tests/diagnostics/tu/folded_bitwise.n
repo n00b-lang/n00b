@@ -1,0 +1,29 @@
+var x: i32 = 0
+x = 3 | 4
+const mask = 0xff & 0x0f
+
+func f_1() -> i32 {
+    let x: i32 = mask
+    return x
+}
+
+f_1()
+func f_2() -> i32 {
+    let x: i32 = 0xff & 0x0f
+    return x
+}
+
+f_2()
+record Holder {
+    __value: int
+}
+
+func __equl(a: Holder, b: Holder) -> bool {
+    return true
+}
+
+func __equal(a: Holder, b: Holder) -> bool {
+    return true
+}
+
+var __mine: int = 1

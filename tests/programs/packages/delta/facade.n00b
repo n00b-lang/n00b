@@ -1,7 +1,8 @@
 import impl
 
 package delta {
-    when target_os() == "macos" or target_os() == "linux" {
+    when target_os() == "macos" or target_os() == "linux"
+        or target_os() == "windows" {
         export impl.selected
     } else {
         export impl.rejected

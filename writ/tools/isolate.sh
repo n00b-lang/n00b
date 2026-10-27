@@ -12,6 +12,11 @@ rm -rf "$work"
 mkdir -p "$work"
 
 case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        cp "$raw" "$out"
+        rm -rf "$work"
+        exit 0
+        ;;
     Darwin)
         "$compiler" -r -nostdlib -o "$work/writ.o" -Wl,-all_load "$raw" "$lantern" \
             -Wl,-exported_symbols_list,"$exports"

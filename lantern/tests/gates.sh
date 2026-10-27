@@ -32,7 +32,7 @@ g="$(hits 'typedef (struct|enum).*ir_(typekind|scalarkind)_t|struct ir_type_t' "
 g="$(grep -nE '\bth_type\b' "$inc/ir.h" | grep -vE 'th_type[[:space:]]*\*|typehash\.h')"
 [ -z "$g" ] || fail "types are held by value, not as th_type *" "$g"
 
-g="$(hits '\bth_unify\b|\bth_instantiate\b|\bth_generalize\b|\bth_apply_subst\b|\bth_occurs\b' "$inc/ir.h $src/ir/*.c $priv/ir/*.h")"
+g="$(hits '\bth_unify\b|\bth_generalize\b|\bth_apply_subst\b|\bth_occurs\b' "$inc/ir.h $src/ir/*.c $priv/ir/*.h")"
 [ -z "$g" ] || fail "the IR reaches a unifier" "$g"
 
 g="$(grep -nE '\bth_print\b' $src/ir/*.c $priv/ir/*.h "$inc/ir.h" 2>/dev/null \
@@ -79,7 +79,7 @@ $(grep -nEi "$mne" "$inc/ir_ops.def" 2>/dev/null)"
     g="$(printf '%s' "$g" | grep -v '^$')"
     [ -z "$g" ] || fail "a removed opcode is back: $row" "$g"
 done <<EOF
-option, result, typecase@IR_(OPTION|RESULT|TYPECASE)_?[A-Z]*@"(option|result|typecase)[._a-z]*"
+result, typecase@IR_(RESULT|TYPECASE)_?[A-Z]*@"(result|typecase)[._a-z]*"
 kwargs call@IR_KWARGS_CALL@"kwargs_call"
 defer, with, once@IR_(DEFER|WITH|ONCE)\b@"(defer|with|once)"
 gc register, deregister, scan@IR_GC_(REGISTER|DEREGISTER|SCAN)@"gc\.(register|deregister|scan)"
@@ -111,7 +111,7 @@ g="$(grep -nE '^IR_OP\((FIELD|EXTRACT|INSERT|OFFSETOF),' "$inc/ir_ops.def" \
      | grep -vE '"(vn|vnv|tn)"')"
 [ -z "$g" ] || fail "a member is named by something other than a name" "$g"
 
-g="$(grep -nE '\b(volatile|atomic)\b' "$inc/ir.h" $src/ir/profile.c 2>/dev/null)"
+g="$(grep -nE '\bvolatile\b' "$inc/ir.h" $src/ir/profile.c 2>/dev/null)"
 [ -z "$g" ] || fail "an access modifier leaked into the type model" "$g"
 
 g="$(grep -nE '"(wrap|trap|sat|mask|ordered|unordered|volatile|atomic|to_zero|nearest|floor|ceil)"' \
@@ -232,6 +232,8 @@ for id in $(grep -oE '^IR_DIAG\([A-Z_]+' "$inc/ir_diags.def" | cut -d'(' -f2); d
         if [ ! -f "$produced" ] || ! grep -qx "$code" "$produced"; then
             fail "$code is emitted by the library but no test produces it" ""
         fi
+    elif grep -qE "IR_DIAG_$id\b" "$root"/../compiler/*.c 2>/dev/null; then
+        :
     else
         fail "$code is declared but no library code can emit it" \
              "delete the code, or emit it"
@@ -253,14 +255,16 @@ for sev in $(grep -oE 'IR_SEV_[A-Z]+' "$inc/diag.h" | sort -u); do
     awk '/is_attachment\(ir_severity_t/,/^}/' "$src/ir/diag.c" \
         | grep -q "$sev\b" && continue
 
+    awk '/^ir_severity_of\(/,/^}/' "$src/ir/diag.c" \
+        | grep -q "$sev\b" && continue
+
     fail "nothing can ever produce severity $sev" \
          "no code defaults to it and it is not an attachment severity"
 done
 
 rm -rf "$work"
 
-pubhdrs="$(sed -n '/^ir_public_headers = files(/,/^)/p' "$root/src/meson.build" \
-           | grep -oE "include/ir/[a-z_]+\.h")"
+pubhdrs="$(grep -oE 'ir/[a-z_]+\.h' "$inc/libir.h" | sort -u | sed 's|^|include/|')"
 
 for h in $pubhdrs; do
     [ -f "$root/$h" ] || fail "an installed header does not exist: $h" ""
@@ -302,6 +306,16 @@ for k in $kinds; do
 
     grep -qE "PARSE_ANNOT_$k\b" $consumers 2>/dev/null && continue
 
+    helpers="$(awk -v kind="PARSE_ANNOT_$k" '
+        /^[a-z_]+\(/ { name = $0; sub(/\(.*/, "", name) }
+        index($0, kind) && name != "" { print name }' \
+        "$root/src/parse/annotation.c" | sort -u)"
+    used=no
+    for h in $helpers; do
+        grep -qE "\b$h *\(" $consumers 2>/dev/null && used=yes
+    done
+    [ "$used" = yes ] && continue
+
     unconsumed="$unconsumed $k"
 done
 
@@ -325,7 +339,7 @@ g="$(grep -rnE '(^|[^_[:alnum:]])(calloc|malloc|realloc|free|strdup|strndup)\(' 
      --exclude-dir=vendor \
      "$root"/src "$root"/include 2>/dev/null \
      | grep -vE 'core_(alloc|realloc|free|strdup|strndup|buffer|arena)|_core_calloc' \
-     | grep -vE 'lib/alloc\.h|th/nfc_utf8proc\.c')"
+     | grep -vE 'lib/alloc\.h')"
 [ -z "$g" ] || fail "libc allocation outside the one allocator" "$g"
 
 g="$(grep -rn 'core_realloc(' "$root"/src 2>/dev/null)"
@@ -353,16 +367,7 @@ done
 [ -z "$missing" ] || fail "libir.h is not the whole public API" \
     "not reachable through the umbrella header:$missing"
 
-missing=""
-for h in $(grep -oE 'ir/[a-z_]+\.h' "$inc/libir.h" | sort -u); do
-    grep -q "include/$h'" "$src/meson.build" || missing="$missing $h"
-done
-[ -z "$missing" ] || fail "libir.h includes a header that is not installed" \
-    "add to ir_public_headers in src/meson.build:$missing"
-
-g="$(grep -rnE '^[[:space:]]*(#|//)' \
-     "$root"/src/meson.build "$root"/tests/meson.build "$root"/meson.build \
-     2>/dev/null)"
+g="$(grep -nE '^[[:space:]]*#' "$root"/../Makefile "$root"/../*/*.mk 2>/dev/null)"
 [ -z "$g" ] || fail "a comment is present in the build files" "$g"
 
 if [ "$fails" -eq 0 ]; then

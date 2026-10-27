@@ -8,7 +8,6 @@
 #include "lib/list.h"
 
 core_list_decl(n00b_abi_function_v1);
-core_list_decl(uint32_t);
 typedef ir_func_t *ir_func_ptr_t;
 core_list_decl(ir_func_ptr_t);
 

@@ -1,6 +1,7 @@
 #ifndef N00B_BUILTIN_OS_H
 #define N00B_BUILTIN_OS_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
@@ -36,6 +37,7 @@ void n00b_os_set_thread_start_hook(void (*hook)(void));
 void *n00b_os_thread_stack_high_self(void);
 uint64_t n00b_os_stack_address(void);
 size_t n00b_os_stack_red_zone_bytes(void);
+uint64_t n00b_os_frame_pointer_chain(void);
 uint64_t n00b_os_now_ns(void);
 void n00b_os_cpu_relax(void);
 void *n00b_os_map_zeroed(size_t bytes, size_t alignment);
@@ -59,9 +61,15 @@ int64_t n00b_os_terminal_size(int64_t fd, uint16_t *rows, uint16_t *cols);
 int64_t n00b_os_pipe(int64_t *read_fd, int64_t *write_fd);
 uint64_t n00b_os_thread_control_self(void);
 void n00b_os_thread_capture_self(n00b_os_thread_context *context);
+void n00b_os_gc_enter_blocking(void);
 int32_t n00b_os_thread_suspend(uint64_t control,
                                n00b_os_thread_context *context,
                                uint64_t timeout_ns);
 int32_t n00b_os_thread_resume(uint64_t control,
                               n00b_os_thread_context *context);
+bool n00b_os_map_file(const char *path, const uint8_t **bytes,
+                      uint64_t *length);
+uint64_t n00b_os_executable_path(uint8_t *buffer, uint64_t capacity);
+uint64_t n00b_os_current_directory(uint8_t *buffer, uint64_t capacity);
+bool n00b_os_on_stack(const void *address, uint64_t bytes);
 #endif

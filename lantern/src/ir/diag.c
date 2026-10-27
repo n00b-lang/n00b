@@ -1,40 +1,32 @@
 #include <stdlib.h>
-#include <string.h>
 
 #include "private/ir/internal.h"
 #include "ir/diag.h"
-#include "lib/dict.h"
+#include "lib/buffer.h"
 
+static const core_diag_code_t codes[IR_DIAG_COUNT] = {
 #define IR_DIAG(id, code, sev, text) \
-    {CORE_STRING_STATIC(code), IR_SEV_##sev, CORE_STRING_STATIC(text)},
-
-static const struct {
-    core_string_t code;
-    ir_severity_t severity;
-    core_string_t text;
-} codes[IR_DIAG_COUNT] = {
+    {CORE_STRING_STATIC(code), CORE_DIAG_##sev, CORE_STRING_STATIC(text), {}},
 #include "ir/ir_diags.def"
+#undef IR_DIAG
 };
 
-#undef IR_DIAG
+static const core_text_form_t text_forms[] = {
+#define IR_TEXT(id, text) {CORE_STRING_STATIC(text), CORE_STRING_STATIC(text)},
+#include "ir/ir_texts.def"
+#undef IR_TEXT
+};
 
-core_string_t ir_severity_name(ir_severity_t s)
-{
-    switch (s) {
-    case IR_SEV_ERROR:
-        return CORE_STRING_STATIC("error");
-    case IR_SEV_WARNING:
-        return CORE_STRING_STATIC("warning");
-    case IR_SEV_NOTE:
-        return CORE_STRING_STATIC("note");
-    case IR_SEV_HELP:
-        return CORE_STRING_STATIC("help");
-    case IR_SEV_INFO:
-        return CORE_STRING_STATIC("info");
-    default:
-        return CORE_STRING_STATIC("?");
-    }
-}
+static const core_text_catalog_t text_catalog = {
+    .forms = text_forms,
+    .count = IR_TEXT_COUNT,
+};
+
+const core_diag_domain_t ir_diag_domain = {
+    .codes = codes,
+    .count = IR_DIAG_COUNT,
+    .texts = &text_catalog,
+};
 
 core_string_t ir_diag_code(ir_diagcode_t c)
 {
@@ -43,54 +35,20 @@ core_string_t ir_diag_code(ir_diagcode_t c)
 
 core_string_t ir_diag_default_text(ir_diagcode_t c)
 {
-    return c < IR_DIAG_COUNT ? codes[c].text : (core_string_t){};
+    return c < IR_DIAG_COUNT ? codes[c].title : (core_string_t){};
 }
 
-ir_severity_t ir_diag_default_severity(ir_diagcode_t c)
+core_diag_severity_t ir_diag_default_severity(ir_diagcode_t c)
 {
-    return c < IR_DIAG_COUNT ? codes[c].severity : IR_SEV_ERROR;
-}
-
-static core_dict_t code_index;
-static bool        code_ready;
-
-static void free_code_index(void)
-{
-    core_dict_free(&code_index);
-    code_ready = false;
-}
-
-static void build_code_index(void)
-{
-    core_dict_init_string(&code_index);
-
-    for (uint16_t i = 0; i < IR_DIAG_COUNT; i++) {
-        _core_dict_put(&code_index, (void *)&codes[i].code,
-                       (void *)(uintptr_t)i);
-    }
-
-    code_ready = true;
-    atexit(free_code_index);
+    return c < IR_DIAG_COUNT ? codes[c].severity : CORE_DIAG_ERROR;
 }
 
 bool ir_diag_code_lookup(core_string_t code, ir_diagcode_t *out)
 {
-    if (!code.data) {
-        return false;
-    }
-
-    if (!code_ready) {
-        build_code_index();
-    }
-
-    bool  found = false;
-    void *val   = _core_dict_get(&code_index, &code, &found);
-
-    if (found && out) {
-        *out = (ir_diagcode_t)(uintptr_t)val;
-    }
-
-    return found;
+    uint32_t id = 0;
+    if (!core_diag_domain_lookup(&ir_diag_domain, code, &id)) return false;
+    if (out) *out = (ir_diagcode_t)id;
+    return true;
 }
 
 typedef struct {
@@ -150,49 +108,60 @@ bool ir_policy_set(ir_policy_t *p, core_string_t key, ir_outcome_t outcome)
     return true;
 }
 
-ir_outcome_t ir_policy_for(const ir_policy_t *p, core_string_t code)
+static const ir_rule_entry_t *
+policy_rule(const ir_policy_t *p, core_string_t code)
 {
-    if (!p || !code.data) {
-        return IR_POLICY_DEFAULT;
-    }
+    const ir_rule_entry_t *best = nullptr;
 
-    ir_outcome_t best     = IR_POLICY_DEFAULT;
-    size_t       best_len = 0;
-    bool         found    = false;
-
-    for (size_t i = 0; i < p->n; i++) {
-        core_string_t k = p->rules[i].key;
-        size_t        n = k.u8_bytes;
-
-        if (!core_string_starts_with(code, k)) {
-            continue;
-        }
-
-        if (!found || n > best_len) {
-            best     = p->rules[i].outcome;
-            best_len = n;
-            found    = true;
+    for (size_t i = 0; p && code.data && i < p->n; i++) {
+        if (core_string_starts_with(code, p->rules[i].key)
+            && (!best || p->rules[i].key.u8_bytes > best->key.u8_bytes)) {
+            best = &p->rules[i];
         }
     }
 
     return best;
 }
 
+ir_outcome_t ir_policy_for(const ir_policy_t *p, core_string_t code)
+{
+    const ir_rule_entry_t *rule = policy_rule(p, code);
+
+    return rule ? rule->outcome : IR_POLICY_DEFAULT;
+}
+
 struct ir_diags_t {
-    ir_ctx_t    *ctx;
-    ir_policy_t *policy;
-    core_diagnostics_t *core;
-    core_diagnostics_t *destination;
+    ir_ctx_t                      *ctx;
+    ir_policy_t                   *policy;
+    core_diagnostics_t            *items;
     const core_translation_unit_t *unit;
-    ir_diag_t   *v;
-    uint32_t     n;
-    uint32_t     cap;
-    uint64_t     seq;
-    bool         sorted;
-    bool         anchored;
+    bool                           attached;
+    ir_diag_report_fn              report;
+    void                          *report_state;
+    ir_text_fn                     text;
+    void                          *text_state;
+    ir_diag_t                     *v;
+    uint32_t                       n;
+    uint32_t                       cap;
 };
 
-static bool core_policy(void *, core_diag_severity_t *, core_string_t);
+static core_diag_location_t
+location_of(ir_span_t span)
+{
+    if (!ir_span_known(span)) return (core_diag_location_t){0};
+    return (core_diag_location_t){
+        .line = span.start_line,
+        .column = span.start_col,
+        .end_line = span.end_line,
+        .end_column = span.end_col,
+        .has_location = true,
+    };
+}
+
+static void free_items(void *items)
+{
+    core_diagnostics_free(items);
+}
 
 ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
 {
@@ -204,10 +173,8 @@ ir_diags_t *ir_diags_new(ir_ctx_t *ctx, ir_policy_t *policy)
 
     d->ctx    = ctx;
     d->policy = policy;
-    d->core   = core_diagnostics_new();
-    d->sorted = true;
-    core_diagnostics_set_policy(d->core, core_policy, policy);
-    ir_ctx_on_free(ctx, (void (*)(void *))core_diagnostics_free, d->core);
+    d->items  = core_diagnostics_new();
+    ir_ctx_on_free(ctx, free_items, d->items);
 
     return d;
 }
@@ -216,149 +183,161 @@ ir_diags_t *ir_diags_new_attached(
     ir_ctx_t *ctx, ir_policy_t *policy, core_diagnostics_t *destination,
     const core_translation_unit_t *unit)
 {
-    if (!destination || !unit) return nullptr;
-    ir_diags_t *d = ir_diags_new(ctx, policy);
-    if (!d) return nullptr;
-    d->destination = destination;
-    d->unit = unit;
+    if (!ctx || !destination || !unit) return nullptr;
+    ir_diags_t *d = ir_alloc(ctx, sizeof(ir_diags_t));
+    d->ctx      = ctx;
+    d->policy   = policy;
+    d->items    = destination;
+    d->unit     = unit;
+    d->attached = true;
     return d;
 }
 
-static bool is_attachment(ir_severity_t s)
+void ir_diags_set_reporter(ir_diags_t *d, ir_diag_report_fn report,
+                           void *state)
 {
-    return s == IR_SEV_NOTE || s == IR_SEV_HELP;
+    if (!d) return;
+    d->report = report;
+    d->report_state = state;
 }
 
-static core_diag_severity_t
-core_severity_of(ir_severity_t severity)
+core_string_t ir_message_default_text(ir_message_t message)
 {
-    return severity == IR_SEV_WARNING ? CORE_DIAG_WARNING
-        : severity == IR_SEV_NOTE ? CORE_DIAG_NOTE
-        : severity == IR_SEV_HELP ? CORE_DIAG_HELP
-        : severity == IR_SEV_INFO ? CORE_DIAG_INFO : CORE_DIAG_ERROR;
+    return core_text_render(&text_catalog, message.text, message.args);
 }
 
-static ir_severity_t
-ir_severity_of(core_diag_severity_t severity)
+void ir_diags_set_text(ir_diags_t *d, ir_text_fn text, void *state)
 {
-    return severity == CORE_DIAG_WARNING ? IR_SEV_WARNING
-        : severity == CORE_DIAG_NOTE ? IR_SEV_NOTE
-        : severity == CORE_DIAG_HELP ? IR_SEV_HELP
-        : severity == CORE_DIAG_INFO ? IR_SEV_INFO : IR_SEV_ERROR;
+    if (!d) return;
+    d->text = text;
+    d->text_state = state;
+}
+
+static core_string_t render(const ir_diags_t *d, ir_message_t message)
+{
+    return d->text ? d->text(d->text_state, message)
+                   : ir_message_default_text(message);
+}
+
+ir_span_t ir_diag_name_span(ir_span_t span, core_string_t name)
+{
+    uint32_t columns = 0;
+
+    for (size_t i = 0; i < name.u8_bytes; i++) {
+        columns += ((uint8_t)name.data[i] & 0xc0) != 0x80;
+    }
+    if (!ir_span_known(span) || !name.u8_bytes
+        || span.start_line != span.end_line
+        || span.end_byte < span.start_byte + name.u8_bytes
+        || span.end_col < span.start_col + columns) {
+        return IR_SPAN_UNKNOWN;
+    }
+    span.end_byte = span.start_byte + (uint32_t)name.u8_bytes;
+    span.end_col  = span.start_col + columns;
+
+    return span;
+}
+
+core_diagnostics_t *ir_diags_destination(const ir_diags_t *d)
+{
+    return d && d->attached ? d->items : nullptr;
+}
+
+const core_translation_unit_t *ir_diags_unit(const ir_diags_t *d)
+{
+    return d ? d->unit : nullptr;
 }
 
 static bool
-core_policy(void *context, core_diag_severity_t *severity, core_string_t code)
+apply_policy(const ir_policy_t *policy, core_diag_severity_t *severity,
+             core_string_t code)
 {
-    ir_policy_t *policy = context;
-    ir_outcome_t outcome = ir_policy_for(policy, code);
-    bool attached = *severity == CORE_DIAG_NOTE || *severity == CORE_DIAG_HELP;
-    switch (outcome) {
+    switch (ir_policy_for(policy, code)) {
     case IR_POLICY_ALLOW: return false;
-    case IR_POLICY_WARN:
-        if (!attached) *severity = CORE_DIAG_WARNING;
-        break;
+    case IR_POLICY_WARN: *severity = CORE_DIAG_WARNING; break;
     case IR_POLICY_DENY:
-    case IR_POLICY_FORBID:
-        if (!attached) *severity = CORE_DIAG_ERROR;
-        break;
+    case IR_POLICY_FORBID: *severity = CORE_DIAG_ERROR; break;
     default: break;
     }
     return true;
 }
 
-static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_severity_t sev,
-                       ir_span_t span, core_string_t label)
+static void
+note_promotion(ir_diags_t *d, size_t index, core_string_t code)
+{
+    const ir_rule_entry_t *rule = policy_rule(d->policy, code);
+    core_string_t text = render(d, rule
+        ? IR_MESSAGE_ARGS(PROMOTED_BY_RULE, CORE_TEXT_STRING(rule->key))
+        : IR_MESSAGE(PROMOTED));
+    core_diagnostic_add_part(d->items, index, CORE_DIAG_PART_NOTE,
+                             (core_string_t){}, (core_diag_location_t){},
+                             text);
+    core_free(text.data);
+}
+
+static size_t
+report(ir_diags_t *d, ir_diagcode_t code, core_diag_severity_t severity,
+       ir_span_t span)
+{
+    core_diag_location_t at = location_of(span);
+    core_string_t message = ir_diag_default_text(code);
+    if (d->report)
+        return d->report(d->report_state, d, code, severity, at, message);
+    size_t index = core_diagnostics_count(d->items);
+    if (!core_diagnostics_report_at(d->items, d->unit, severity,
+            ir_diag_code(code), message, at)
+        || core_diagnostics_count(d->items) == index)
+        return SIZE_MAX;
+    return index;
+}
+
+static ir_diag_t *push(ir_diags_t *d, ir_diagcode_t code, ir_span_t span,
+                       ir_message_t label)
 {
     if (!d || code >= IR_DIAG_COUNT) {
         return nullptr;
     }
 
-    if (is_attachment(sev) && !d->anchored) {
-        if (code != IR_DIAG_ORPHAN_NOTE) {
-            ir_diag_t *dg = push(d, IR_DIAG_ORPHAN_NOTE, IR_SEV_ERROR, span,
-                                 label);
-
-            if (dg) {
-                ir_diag_message(dg, d,
-                                CORE_STRING_STATIC(
-                                    "a note or help has nothing to attach "
-                                    "to, and they never stand alone"));
-            }
-        }
-
+    core_diag_severity_t declared = ir_diag_default_severity(code);
+    core_diag_severity_t severity = declared;
+    if (!apply_policy(d->policy, &severity, ir_diag_code(code))) {
         return nullptr;
     }
+    size_t index = report(d, code, severity, span);
+    if (index == SIZE_MAX) {
+        return nullptr;
+    }
+    if (label.text < IR_TEXT_COUNT) {
+        core_string_t text = render(d, label);
+        core_diagnostic_set_label(d->items, index, text);
+        core_free(text.data);
+    }
+    if (!d->report && declared == CORE_DIAG_WARNING
+        && severity == CORE_DIAG_ERROR) {
+        note_promotion(d, index, ir_diag_code(code));
+    }
 
-    core_diag_severity_t core_severity = core_severity_of(sev);
-    size_t core_index = core_diagnostics_count(d->core);
-    if (!core_diagnostics_report(d->core, nullptr, core_severity,
-            ir_diag_code(code), ir_diag_default_text(code))) {
-        return nullptr;
-    }
-    const core_diagnostic_t *core_item =
-        core_diagnostics_at(d->core, core_index);
-    if (!core_item) {
-        return nullptr;
-    }
-    sev = ir_severity_of(core_item->severity);
-    size_t destination_index = SIZE_MAX;
-    if (d->destination && d->unit) {
-        core_diag_location_t location = {0};
-        if (ir_span_known(span)) {
-            location = (core_diag_location_t){
-                .line = span.start_line,
-                .column = span.start_col,
-                .end_line = span.end_line,
-                .end_column = span.end_col,
-                .has_location = true,
-            };
-        }
-        destination_index = core_diagnostics_count(d->destination);
-        if (!core_diagnostics_report_at(d->destination, d->unit,
-                core_severity_of(sev),
-                ir_diag_code(code), ir_diag_default_text(code), location)
-            || core_diagnostics_count(d->destination) == destination_index)
-            destination_index = SIZE_MAX;
-    }
     size_t cap = d->cap;
 
     d->v = ir_grow(d->ctx, d->v, &cap, d->n + 1u, sizeof(ir_diag_t));
-
     if (!d->v) {
         return nullptr;
     }
     d->cap = (uint32_t)cap;
+    d->v[d->n] = (ir_diag_t){.code = code, .span = span, .index = index};
 
-    ir_diag_t *dg = &d->v[d->n++];
-
-    memset(dg, 0, sizeof(*dg));
-    dg->severity      = sev;
-    dg->code          = code;
-    dg->message       = ir_diag_default_text(code);
-    dg->primary.span  = span;
-    dg->primary.label = label.data ? ir_strdup(d->ctx, label)
-                                   : (core_string_t){};
-    dg->seq           = d->seq++;
-    dg->core_index     = core_index;
-    dg->destination_index = destination_index;
-
-    d->sorted   = false;
-    d->anchored = d->anchored
-               || (!is_attachment(sev) && code != IR_DIAG_ORPHAN_NOTE);
-
-    return dg;
+    return &d->v[d->n++];
 }
 
 ir_diag_t *ir_diag_begin(ir_diags_t *d, ir_diagcode_t code, ir_span_t span,
-                         core_string_t label)
+                         ir_message_t label)
 {
-    return push(d, code, ir_diag_default_severity(code), span, label);
+    return push(d, code, span, label);
 }
 
 ir_diag_t *ir_diag_begin_at(ir_diags_t *d, ir_diagcode_t code,
                             const ir_instr_t *in, const ir_block_t *b,
-                            const ir_func_t *f, core_string_t label)
+                            const ir_func_t *f, ir_message_t label)
 {
     ir_span_t span = IR_SPAN_UNKNOWN;
 
@@ -393,230 +372,126 @@ ir_diag_t *ir_diag_begin_at(ir_diags_t *d, ir_diagcode_t code,
         }
     }
 
-    return push(d, code, ir_diag_default_severity(code), span, label);
+    return push(d, code, span, label);
 }
 
-bool ir_diag_note(ir_diags_t *d, ir_severity_t sev, ir_diagcode_t code,
-                  ir_span_t span, core_string_t label)
+bool ir_diag_message(ir_diag_t *dg, ir_diags_t *d, ir_message_t message)
 {
-    if (!is_attachment(sev)) {
-        return false;
-    }
-
-    return push(d, code, sev, span, label) != nullptr;
-}
-
-bool ir_diag_message(ir_diag_t *dg, ir_diags_t *d, core_string_t message)
-{
-    if (!dg || !d || !message.data) {
-        return false;
-    }
-
-    dg->message = ir_strdup(d->ctx, message);
-
-    core_diagnostic_set_message(d->core, dg->core_index, message);
-    if (d->destination && dg->destination_index != SIZE_MAX)
-        core_diagnostic_set_message(d->destination,
-                                    dg->destination_index, message);
-
-    return dg->message.data != nullptr;
+    if (!dg || !d) return false;
+    core_string_t text = render(d, message);
+    bool ok = text.data
+        && core_diagnostic_set_message(d->items, dg->index, text);
+    core_free(text.data);
+    return ok;
 }
 
 bool ir_diag_secondary(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
-                       core_string_t label)
+                       ir_message_t label)
 {
     if (!d || !dg) {
         return false;
     }
-
-    size_t cap = dg->cap_secondary;
-
-    dg->secondary = ir_grow(d->ctx, dg->secondary, &cap, dg->n_secondary + 1u,
-                            sizeof(ir_label_t));
-
-    if (!dg->secondary) {
-        return false;
-    }
-    dg->cap_secondary = (uint32_t)cap;
-
-    dg->secondary[dg->n_secondary].span  = span;
-    dg->secondary[dg->n_secondary].label = label.data
-                                               ? ir_strdup(d->ctx, label)
-                                               : (core_string_t){};
-    dg->n_secondary++;
-
-    return true;
+    core_string_t text = render(d, label);
+    bool ok = core_diagnostic_add_part(d->items, dg->index,
+        ir_span_known(span) ? CORE_DIAG_PART_SPAN : CORE_DIAG_PART_NOTE,
+        (core_string_t){}, location_of(span), text);
+    core_free(text.data);
+    return ok;
 }
 
-bool ir_diag_suggest(ir_diags_t *d, ir_diag_t *dg, ir_span_t span,
-                     core_string_t replacement, core_string_t description)
+bool ir_diag_help(ir_diags_t *d, ir_diag_t *dg, ir_message_t message)
 {
-    if (!d || !dg || !replacement.data) {
-        return false;
-    }
-
-    size_t cap = dg->cap_suggestions;
-
-    dg->suggestions = ir_grow(d->ctx, dg->suggestions, &cap,
-                              dg->n_suggestions + 1u,
-                              sizeof(ir_suggestion_t));
-
-    if (!dg->suggestions) {
-        return false;
-    }
-    dg->cap_suggestions = (uint32_t)cap;
-
-    ir_suggestion_t *s = &dg->suggestions[dg->n_suggestions++];
-
-    s->span        = span;
-    s->replacement = ir_strdup(d->ctx, replacement);
-    s->description = description.data ? ir_strdup(d->ctx, description)
-                                      : (core_string_t){};
-
-    return true;
-}
-
-bool ir_diag_origin(ir_diag_t *dg, ir_origin_t *o)
-{
-    if (!dg) {
-        return false;
-    }
-    dg->origin = o;
-
-    return true;
+    if (!d || !dg) return false;
+    core_string_t text = render(d, message);
+    bool ok = text.u8_bytes
+        && core_diagnostic_add_part(d->items, dg->index, CORE_DIAG_PART_HELP,
+                                    (core_string_t){},
+                                    (core_diag_location_t){}, text);
+    core_free(text.data);
+    return ok;
 }
 
 uint32_t ir_diags_count(const ir_diags_t *d)
 {
-    return d ? (uint32_t)core_diagnostics_count(d->core) : 0;
+    return d ? d->n : 0;
 }
 
-const ir_diag_t *ir_diags_at(ir_diags_t *d, uint32_t i)
+const ir_diag_t *ir_diags_at(const ir_diags_t *d, uint32_t i)
 {
-    if (!d || i >= d->n) {
-        return nullptr;
-    }
-    ir_diags_sort(d);
+    return d && i < d->n ? &d->v[i] : nullptr;
+}
 
-    return &d->v[i];
+const core_diagnostic_t *ir_diag_item(const ir_diags_t *d,
+                                      const ir_diag_t *dg)
+{
+    return d && dg ? core_diagnostics_at(d->items, dg->index) : nullptr;
 }
 
 bool ir_diags_failed(const ir_diags_t *d)
 {
-    if (!d) return false;
-    return d->destination ? core_diagnostics_failed(d->destination)
-                          : core_diagnostics_failed(d->core);
+    return d && core_diagnostics_failed(d->items);
 }
 
-uint32_t ir_diags_count_of(const ir_diags_t *d, ir_severity_t sev)
+static core_string_t file_name(const ir_render_t *r, int32_t file)
+{
+    core_string_t p = r && r->module && file >= 0
+        ? ir_file_path(r->module, file) : (core_string_t){};
+
+    if (!p.data && r && file == 0 && r->path.u8_bytes) {
+        p = r->path;
+    }
+
+    return p.data ? p : CORE_STRING_STATIC("<unknown>");
+}
+
+static core_string_t source_for_path(void *context, core_string_t path)
+{
+    const ir_render_t *r = context;
+
+    if (!r || !r->source) {
+        return (core_string_t){};
+    }
+
+    size_t count = r->module ? ir_file_count(r->module) : 0;
+
+    for (size_t file = 0; file < (count ? count : 1); file++) {
+        if (core_string_eq(file_name(r, (int32_t)file), path)) {
+            return r->source(r->state, (int32_t)file);
+        }
+    }
+
+    return (core_string_t){};
+}
+
+static void name_files(ir_diags_t *d, const ir_render_t *r)
+{
+    for (uint32_t i = 0; i < d->n; i++) {
+        if (ir_span_known(d->v[i].span)) {
+            core_diagnostic_set_path(d->items, d->v[i].index,
+                                     file_name(r, d->v[i].span.file));
+        }
+    }
+}
+
+core_string_t ir_diags_render_text(ir_diags_t *d, const ir_render_t *r)
 {
     if (!d) {
-        return 0;
+        return (core_string_t){};
     }
-
-    return (uint32_t)core_diagnostics_count_severity(d->core,
-                                                     core_severity_of(sev));
+    name_files(d, r);
+    return core_diagnostics_render(d->items, (core_diag_render_t){
+        .color = r && r->color,
+        .sorted = true,
+        .source = source_for_path,
+        .source_context = (void *)r,
+    });
 }
 
-bool ir_diags_merge(ir_diags_t *dst, ir_diags_t *src)
+core_string_t ir_diags_render_json(ir_diags_t *d, const ir_render_t *r)
 {
-    if (!dst || !src) {
-        return false;
+    if (!d) {
+        return (core_string_t){};
     }
-
-    if (dst->ctx != src->ctx) {
-        return false;
-    }
-
-    size_t core_base = core_diagnostics_count(dst->core);
-    if (!core_diagnostics_merge(dst->core, src->core)) return false;
-
-    size_t cap = dst->cap;
-
-    dst->v = ir_grow(dst->ctx, dst->v, &cap, dst->n + src->n,
-                     sizeof(ir_diag_t));
-
-    if (!dst->v) {
-        return false;
-    }
-    dst->cap = (uint32_t)cap;
-
-    for (uint32_t i = 0; i < src->n; i++) {
-        dst->v[dst->n]      = src->v[i];
-        dst->v[dst->n].seq  = dst->seq++;
-        dst->v[dst->n].core_index += core_base;
-        dst->v[dst->n].destination_index = SIZE_MAX;
-        if (dst->destination && dst->unit) {
-            const ir_diag_t *source_diag = &src->v[i];
-            const core_diagnostic_t *source_core =
-                core_diagnostics_at(src->core, source_diag->core_index);
-            if (source_core) {
-                core_diag_location_t location = {0};
-                if (ir_span_known(source_diag->primary.span)) {
-                    ir_span_t span = source_diag->primary.span;
-                    location = (core_diag_location_t){
-                        .line = span.start_line,
-                        .column = span.start_col,
-                        .end_line = span.end_line,
-                        .end_column = span.end_col,
-                        .has_location = true,
-                    };
-                }
-                size_t index = core_diagnostics_count(dst->destination);
-                if (core_diagnostics_report_at(dst->destination, dst->unit,
-                        core_severity_of(source_diag->severity),
-                        ir_diag_code(source_diag->code),
-                        source_core->message, location)
-                    && core_diagnostics_count(dst->destination) > index)
-                    dst->v[dst->n].destination_index = index;
-            }
-        }
-        dst->n++;
-    }
-    dst->anchored |= src->anchored;
-    dst->sorted = false;
-
-    return true;
-}
-
-static int cmp_diag(const void *a, const void *b)
-{
-    const ir_diag_t *x = a, *y = b;
-    bool             xk = ir_span_known(x->primary.span);
-    bool             yk = ir_span_known(y->primary.span);
-
-    if (xk != yk) {
-        return xk ? -1 : 1;
-    }
-
-    if (xk) {
-        if (x->primary.span.file != y->primary.span.file) {
-            return x->primary.span.file < y->primary.span.file ? -1 : 1;
-        }
-
-        if (x->primary.span.start_byte != y->primary.span.start_byte) {
-            return x->primary.span.start_byte < y->primary.span.start_byte
-                       ? -1
-                       : 1;
-        }
-    }
-
-    if (x->severity != y->severity) {
-        return x->severity < y->severity ? -1 : 1;
-    }
-
-    if (x->code != y->code) {
-        return x->code < y->code ? -1 : 1;
-    }
-
-    return x->seq < y->seq ? -1 : x->seq > y->seq ? 1 : 0;
-}
-
-void ir_diags_sort(ir_diags_t *d)
-{
-    if (!d || d->sorted) {
-        return;
-    }
-    qsort(d->v, d->n, sizeof(ir_diag_t), cmp_diag);
-    d->sorted = true;
+    name_files(d, r);
+    return core_diagnostics_render_json(d->items);
 }

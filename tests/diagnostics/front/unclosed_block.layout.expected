@@ -1,0 +1,21 @@
+tests/diagnostics/front/unclosed_block.n:4:1: error: expected `}`, the end of the statement, a statement, `->` or the end of the indented block, found `func` in function `f`
+
+    4 | func g() -> int {
+      | ^^^^
+
+  this `{` is never closed:
+
+    1 | func f() -> int {
+      |                 ^
+
+  help: add the missing `}` before this line
+
+tests/diagnostics/front/unclosed_block.n:5:15: error: expected an expression, found end of line in a `return` statement
+
+    5 |     return 2 +
+      |               ^
+
+tests/diagnostics/front/unclosed_block.n:9:13: error: unexpected `)` with no matching `(`
+
+    9 |     let x = )
+      |             ^ no `(` is open here

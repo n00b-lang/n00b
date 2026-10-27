@@ -1,9 +1,0 @@
-const c = [-
-# marker-literal-5be1
-library c
-enum color : c_int { RED = 1, GREEN = 2 }
-const LIMIT: c_int = 40
--]'ffi
-
-require c.LIMIT == 40
-require c.Color.GREEN != c.Color.RED

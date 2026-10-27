@@ -17,7 +17,6 @@ typedef struct {
     uint32_t count;
 } place_span_t;
 core_list_decl(place_span_t);
-core_list_decl(uint32_t);
 
 struct ir_places_t {
     ir_module_t                      *module;

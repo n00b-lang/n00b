@@ -49,10 +49,10 @@ main(void)
         && n00bb_abi_type_index_add(index, record, &record_index));
 
     parse_symtab_t *symbols = parse_symtab_new();
-    parse_tree_t declaration = {0};
+    parse_tree_t *declaration = parse_tree_new_node((parse_nt_node_t){0});
     parse_sym_entry_t *owner = parse_symtab_add(symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("AVeryLongRecordTypeName"),
-        PARSE_SYM_TYPEDEF, &declaration);
+        PARSE_SYM_TYPEDEF, declaration);
     assert(owner);
     owner->type = record;
     owner->adt_kind = CORE_STRING_STATIC("record");

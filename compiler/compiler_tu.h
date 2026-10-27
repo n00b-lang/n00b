@@ -8,7 +8,7 @@
 #include "lib/dict.h"
 #include "lib/link_unit.h"
 #include "lib/list.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "compiler_visibility.h"
 #include "parse/annot_walk.h"
 #include "parse/tree_util.h"
@@ -23,10 +23,10 @@
 #include "compiler_system.h"
 #include "signature_typevars.h"
 #include "preprocessor.h"
+#include "diagnostics.h"
 
 #define N00BB_PARAMETER_FACTS_KEY \
     CORE_STRING_STATIC("n00bb.parameter-facts")
-#define N00BB_PUBLIC_UNUSED_CODE "N00BB-W0020"
 
 core_list_decl(th_param);
 core_list_decl(th_trait_requirement);
@@ -134,8 +134,32 @@ bool register_user_litmod_alias(void *context, core_translation_unit_t *unit,
 bool validate_litmod_aliases(core_translation_unit_t *unit);
 th_type *n00bb_atomic_element_type(th_type *type);
 bool n00bb_option_type_element(th_type *type, th_type **element);
-void n00bb_append_dereference_hint(core_buffer_t *message, th_ctx *types,
-                                   th_type *value, th_type *wanted);
+
+typedef enum {
+    N00BB_DESTINATION_EXPECTED,
+    N00BB_DESTINATION_VARIABLE,
+    N00BB_DESTINATION_FIELD,
+    N00BB_DESTINATION_RETURN,
+    N00BB_DESTINATION_ELEMENT,
+    N00BB_DESTINATION_ARGUMENT,
+} n00bb_destination_kind_t;
+
+typedef struct {
+    n00bb_destination_kind_t kind;
+    core_string_t name;
+    core_string_t owner;
+    size_t position;
+    parse_tree_t *declared_at;
+    core_translation_unit_t *declared_in;
+} n00bb_value_destination_t;
+
+bool n00bb_value_needs_dereference(th_ctx *types, th_type *value,
+                                   th_type *wanted);
+core_string_t n00bb_value_spelling(core_translation_unit_t *unit,
+                                   parse_tree_t *value);
+void n00bb_report_value_type_mismatch(core_translation_unit_t *unit,
+    parse_tree_t *value, th_type *actual, th_type *expected,
+    const n00bb_value_destination_t *destination);
 th_type *n00bb_operand_value_type(th_type *operand, bool comparison);
 enum { N00BB_MAX_SIZED_BITS = sizeof(ir_uint_t) * CHAR_BIT };
 typedef struct {
@@ -163,6 +187,7 @@ const n00bb_binary_operator_t *n00bb_binary_operator_assigned(
     core_string_t spelling);
 const n00bb_binary_operator_t *n00bb_binary_operator_method(
     core_string_t method);
+bool n00bb_trap_integer_arithmetic(ir_instr_t *instruction, ir_class_t class);
 bool binary_operator_dispatch_for_node(parse_grammar_t *grammar,
                                        parse_tree_t *node,
                                        core_string_t *trait,
@@ -215,13 +240,19 @@ void refresh_cached_type_path(parse_grammar_t *grammar,
 bool is_type_reference_node_at(parse_grammar_t *grammar, parse_tree_t *node,
                                parse_tree_t *parent);
 bool is_type_reference_node(parse_grammar_t *grammar, parse_tree_t *node);
+bool resolve_type_path_root_past_fields(parse_grammar_t *grammar,
+                                        core_translation_unit_t *unit,
+                                        parse_tree_t *node,
+                                        parse_tree_t *parent);
 bool inside_array_dimension(parse_grammar_t *grammar, parse_tree_t *node);
 core_string_t bare_type_reference_name(parse_grammar_t *grammar,
                                        parse_tree_t *node);
 bool bind_array_shape_alias_source(parse_grammar_t *grammar,
                                    parse_tree_t *type_reference,
                                    parse_sym_entry_t *alias);
-void bind_declared_type_from_node(parse_grammar_t *grammar,
+th_type *unify_declared_symbol_type(th_ctx *types, parse_sym_entry_t *symbol,
+                                    th_type *declared);
+void bind_declared_type_from_node(parse_grammar_t *grammar, th_ctx *types,
                                   parse_tree_t *node);
 parse_sym_entry_t *attached_symbol(parse_grammar_t *grammar,
                                    core_translation_unit_t *unit,
@@ -530,6 +561,7 @@ typedef struct {
     bool trait_reference;
     bool variant_case_candidate;
     bool constructor_call;
+    bool unresolved;
     bool init_call;
     bool callback_call;
     bool callback_setup;
@@ -646,6 +678,7 @@ typedef struct {
     core_dict_t integer_edge_sites;
     core_dict_t integer_range_nodes;
     core_dict_t integer_tracked_symbols;
+    core_dict_t failed_calls;
     core_list_t(parse_tree_ptr_t) integer_shift_sites;
     core_dict_t integer_shift_seen;
     core_list_t(parse_tree_ptr_t) literal_site_nodes;
@@ -655,6 +688,7 @@ typedef struct {
     core_dict_t declarations_typed_ahead;
     core_link_unit_t *link;
     core_diag_location_t build_time_use;
+    core_dict_t build_time_queries;
     n00bb_link_analysis_t *link_analysis;
     th_ctx *types;
     ir_module_t *ir_module;
@@ -672,12 +706,16 @@ typedef struct {
     bool integer_range_use_symbol_facts;
     bool integer_range_roles_ready;
     bool inference_finalized;
+    core_buffer_t declaration_sites;
     bool interface_module;
     bool import_failure_reported;
     bool package_interface;
     bool package_manifest_restored;
     bool semantic_annotation_started;
     bool semantic_annotation_complete;
+    bool semantic_errors;
+    bool initializer_excluded;
+    bool semantic_annotation_failed;
     bool type_symbols_indexed;
     core_dict_t type_symbol_index;
     parse_tree_t *flagset_scope;
@@ -757,6 +795,7 @@ bool n00bb_type_shape_literal(parse_grammar_t *grammar,
 bool n00bb_resolve_shape_literal(parse_grammar_t *grammar,
                                  core_translation_unit_t *unit,
                                  parse_tree_t *node);
+void n00bb_poison_node(n00bb_tu_state_t *state, parse_tree_t *node);
 bool n00bb_resolve_shape_literals(parse_grammar_t *grammar,
                                   core_translation_unit_t *unit);
 bool resolve_forward_literal_sites(core_translation_unit_t *unit,
@@ -951,7 +990,7 @@ void n00bb_settle_symbol_range(n00bb_tu_state_t *state, parse_tree_t *node,
 void n00bb_integer_boundary(n00bb_tu_state_t *state, parse_tree_t *node,
                             th_type *target);
 void n00bb_report_integer_misfit(n00bb_tu_state_t *state, parse_tree_t *node,
-                                 core_string_t noun, ir_interval_t range,
+                                 bool constant, ir_interval_t range,
                                  th_type *target);
 void n00bb_report_integer_narrowing(n00bb_tu_state_t *state,
                                     parse_tree_t *node, ir_interval_t range,
@@ -1013,6 +1052,24 @@ bool n00bb_literal_adopts_open_type(parse_grammar_t *grammar,
 static constexpr char n00bb_string_to_buffer_text[] =
     "a string is immutable and does not convert to Buffer; use "
     "buffer_from_string(s)";
+void n00bb_report_string_not_buffer(core_translation_unit_t *unit,
+                                    parse_tree_t *value);
+bool n00bb_report_option_operand(core_translation_unit_t *unit, th_ctx *types,
+                                 core_string_t operator_text,
+                                 parse_tree_t *operand, th_type *type);
+void n00bb_report_operator_operands(core_translation_unit_t *unit,
+                                    n00bb_tu_state_t *state,
+                                    parse_tree_t *node,
+                                    core_string_t operator_text,
+                                    parse_tree_t *left, th_type *left_type,
+                                    parse_tree_t *right, th_type *right_type);
+void n00bb_report_shift_count_range(core_translation_unit_t *unit,
+                                    parse_tree_t *at, ir_interval_t count,
+                                    uint64_t width, core_string_t type_text);
+void n00bb_report_integer_constant_range(core_translation_unit_t *unit,
+                                         parse_tree_t *at,
+                                         core_string_t value,
+                                         core_string_t target);
 static constexpr char n00bb_buffer_type_name[] =
     "builtin.containers.buffer.Buffer";
 bool n00bb_value_coerces(th_ctx *types, th_type *from, th_type *to);
@@ -1075,8 +1132,8 @@ core_string_t n00bb_node_source_text(core_translation_unit_t *unit,
                                      core_string_t fallback);
 bool cache_flagset_semantics(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
-                             n00bb_tu_state_t *state, parse_tree_t *node,
-                             core_buffer_t *reason);
+                             n00bb_tu_state_t *state, parse_tree_t *node);
+bool n00bb_flagset_first_problem(parse_sym_entry_t *owner);
 void n00bb_range_enter_node(parse_grammar_t *grammar,
                             n00bb_tu_state_t *state, parse_tree_t *node,
                             parse_tree_t *parent);
@@ -1099,6 +1156,26 @@ core_translation_unit_t *find_direct_import(core_translation_unit_t *unit,
 n00bb_package_declaration_t *find_package_declaration(
     core_translation_unit_t *unit, core_string_t name);
 core_diag_location_t link_source_location(parse_tree_t *node);
+
+static inline void
+n00bb_tu_internal_error(core_translation_unit_t *unit, parse_tree_t *node,
+                        const char *stage, const char *what)
+{
+    n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+        node ? link_source_location(node) : (core_diag_location_t){0},
+        stage, "%s", what);
+}
+
+static inline void
+n00bb_tu_internal_error_unless_reported(core_translation_unit_t *unit,
+                                        parse_tree_t *node,
+                                        const char *stage, const char *what)
+{
+    if (core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+        return;
+    n00bb_tu_internal_error(unit, node, stage, what);
+}
+
 parse_sym_entry_t *canonical_symbol(parse_sym_entry_t *symbol);
 parse_sym_entry_t *n00bb_scope_named_next(parse_scope_t *scope,
     core_string_t name, parse_sym_entry_t *previous);
@@ -1285,6 +1362,8 @@ bool resolve_function_parameter_facts(parse_grammar_t *grammar,
     n00bb_tu_state_t *state, n00bb_function_parameter_facts_t *facts,
     core_list_t(th_param) *params, th_param *rest, bool *has_rest);
 core_string_t n00bb_print_type(th_ctx *types, th_type *type);
+core_string_t n00bb_print_type_qualified(th_ctx *types, th_type *type);
+core_string_t n00bb_print_type_for_user(th_ctx *types, th_type *type);
 core_string_t n00bb_print_type_brief(th_ctx *types, th_type *type);
 th_type *function_with_error_channel(th_ctx *types, th_type *function,
     th_type *error_type);
@@ -1389,6 +1468,8 @@ bool n00bb_tu_remember_selected_when_body(void *opaque,
     core_translation_unit_t *unit, parse_tree_t *body);
 bool n00bb_tu_remember_build_time_use(void *opaque,
     core_translation_unit_t *unit, parse_tree_t *node);
+bool n00bb_tu_build_time_query_at(core_translation_unit_t *unit,
+    uint32_t line, uint32_t column);
 void finalize_module_inference(core_translation_unit_t *unit);
 void propagate_tree_type_to_wrappers(parse_tree_t *node, th_ctx *types,
                                      th_type *previous, th_type *type);

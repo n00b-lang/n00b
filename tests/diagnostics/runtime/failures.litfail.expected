@@ -1,0 +1,5 @@
+panic: uncaught failure "runtime literal failure"
+  --> tests/diagnostics/runtime/failures.n:60:12
+backtrace:
+  at uncaught (tests/diagnostics/runtime/failures.n:60:12)
+  at run (tests/diagnostics/runtime/failures.n:124:9)

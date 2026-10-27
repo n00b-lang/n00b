@@ -18,10 +18,20 @@ typedef enum {
     CORE_TARGET_OBJECT_OTHER,
 } core_target_object_format_t;
 
+enum {
+    CORE_OBJECT_MACHINE_ELF_X86_64 = 62,
+    CORE_OBJECT_MACHINE_ELF_AARCH64 = 183,
+    CORE_OBJECT_MACHINE_MACHO_X86_64 = 0x01000007,
+    CORE_OBJECT_MACHINE_MACHO_ARM64 = 0x0100000c,
+    CORE_OBJECT_MACHINE_COFF_X86_64 = 0x8664,
+    CORE_OBJECT_MACHINE_COFF_ARM64 = 0xaa64,
+};
+
 typedef enum {
     CORE_TARGET_CALL_SYSV_AMD64,
     CORE_TARGET_CALL_DARWIN_AARCH64,
     CORE_TARGET_CALL_WINDOWS_X64,
+    CORE_TARGET_CALL_AAPCS64,
     CORE_TARGET_CALL_OTHER,
 } core_target_call_abi_t;
 
@@ -36,9 +46,6 @@ typedef struct {
     uint64_t required_features;
 } core_target_atomic_t;
 
-/* Width tables are borrowed and immutable for the descriptor's lifetime.
- * Integer and floating widths increase strictly; atomic widths may repeat
- * for alternate feature requirements. Feature bits are target-specific. */
 typedef struct {
     core_string_t triple;
     core_target_endian_t endian;
@@ -59,11 +66,9 @@ typedef struct {
 
 #define CORE_TARGET_FEATURE_NATIVE_ATOMIC128 (UINT64_C(1) << 0)
 
-/* Fill one of the known target profiles. The feature mask is a guarantee
- * supplied by the caller, not a CPU probe. Unknown triples or features fail
- * without modifying `out`; clients may also provide their own descriptors. */
 bool core_target_profile(core_string_t triple, uint64_t enabled_features,
                          core_target_desc_t *out);
+bool core_target_host(core_target_desc_t *out);
 bool core_target_validate(const core_target_desc_t *target);
 const core_target_scalar_t *core_target_integer_for_bits(
     const core_target_desc_t *target, uint32_t minimum_bits);

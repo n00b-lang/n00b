@@ -1,4 +1,6 @@
+#include "cache_location.h"
 #include "llvm_native_cache.h"
+#include "lib/alloc.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -18,8 +20,8 @@ int main(int argc, char **argv)
     assert(argc > 0 && argv[0]);
     char directory[] = "/tmp/n00bb-native-cache-test-XXXXXX";
     assert(mkdtemp(directory));
-    assert(!setenv("N00B_CACHE", directory, 1));
     core_string_t directory_name = core_string_from_cstr(directory);
+    n00bb_cache_set_root(directory_name);
     core_string_t executable = core_string_from_cstr(argv[0]);
     n00bb_native_cache_t *cache = n00bb_native_cache_open(executable);
     assert(cache);
@@ -47,7 +49,7 @@ int main(int argc, char **argv)
     core_buffer_release(&readback);
 
     core_buffer_t text = {0};
-    core_buffer_printf(&text, "%.*s/native/%016llx%016llx.o",
+    core_buffer_printf(&text, "%.*s/dev/native/%016llx%016llx.o",
         (int)directory_name.u8_bytes, directory_name.data,
         (unsigned long long)(key >> 64),
         (unsigned long long)key);
@@ -75,7 +77,9 @@ int main(int argc, char **argv)
     assert(blocked);
     file = fopen(blocked, "wb");
     assert(file && !fclose(file));
-    assert(!setenv("N00B_CACHE", blocked, 1));
+    core_string_t blocked_root = core_string_from_cstr(blocked);
+    n00bb_cache_set_root(blocked_root);
+    core_free(blocked_root.data);
     assert(!n00bb_native_cache_open(executable));
     assert(!unlink(blocked));
     core_buffer_printf(&text, "%.*s/new-directory",
@@ -83,21 +87,34 @@ int main(int argc, char **argv)
     char *nested = core_string_to_cstr(core_buffer_string(&text));
     core_buffer_release(&text);
     assert(nested);
-    assert(!setenv("N00B_CACHE", nested, 1));
+    core_string_t nested_root = core_string_from_cstr(nested);
+    n00bb_cache_set_root(nested_root);
+    core_free(nested_root.data);
     cache = n00bb_native_cache_open(executable);
     assert(cache);
     n00bb_native_cache_close(cache);
-    core_buffer_printf(&text, "%.*s/new-directory/native",
+    core_buffer_printf(&text, "%.*s/new-directory/dev/native",
         (int)directory_name.u8_bytes, directory_name.data);
     char *nested_native = core_string_to_cstr(core_buffer_string(&text));
     core_buffer_release(&text);
-    core_buffer_printf(&text, "%.*s/native",
+    core_buffer_printf(&text, "%.*s/new-directory/dev",
+        (int)directory_name.u8_bytes, directory_name.data);
+    char *nested_key = core_string_to_cstr(core_buffer_string(&text));
+    core_buffer_release(&text);
+    core_buffer_printf(&text, "%.*s/dev/native",
         (int)directory_name.u8_bytes, directory_name.data);
     char *native = core_string_to_cstr(core_buffer_string(&text));
     core_buffer_release(&text);
-    assert(nested_native && native);
-    assert(!rmdir(nested_native) && !rmdir(nested));
-    assert(!unlink(path) && !rmdir(native) && !rmdir(directory));
+    core_buffer_printf(&text, "%.*s/dev",
+        (int)directory_name.u8_bytes, directory_name.data);
+    char *key_directory = core_string_to_cstr(core_buffer_string(&text));
+    core_buffer_release(&text);
+    assert(nested_native && nested_key && native && key_directory);
+    assert(!rmdir(nested_native) && !rmdir(nested_key) && !rmdir(nested));
+    assert(!unlink(path) && !rmdir(native) && !rmdir(key_directory)
+           && !rmdir(directory));
+    core_free(key_directory);
+    core_free(nested_key);
     core_free(native);
     core_free(nested_native);
     core_free(nested);

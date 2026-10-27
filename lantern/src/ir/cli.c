@@ -95,30 +95,33 @@ static const struct {
 
 static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
     {CORE_STRING_STATIC("--help"), CORE_STRING_STATIC("-h"),
-     PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help")},
-    {{0}, {0}, 0, false, {0}},
+     PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help"), false,
+     nullptr},
+    {0},
 };
 
 static const parse_cmdr_flag_t CMD_FLAGS[] = {
     {CORE_STRING_STATIC("--profile"), {0}, PARSE_CMDR_TYPE_WORD, true,
-     CORE_STRING_STATIC("bce (default) or synth")},
+     CORE_STRING_STATIC("bce (default) or synth"), false, nullptr},
     {CORE_STRING_STATIC("--json"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("render diagnostics as JSON")},
+     CORE_STRING_STATIC("render diagnostics as JSON"), false, nullptr},
     {CORE_STRING_STATIC("--help"), CORE_STRING_STATIC("-h"),
-     PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help")},
-    {{0}, {0}, 0, false, {0}},
+     PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help"), false,
+     nullptr},
+    {0},
 };
 
 static const parse_cmdr_flag_t PASS_FLAGS[] = {
     {CORE_STRING_STATIC("--profile"), {0}, PARSE_CMDR_TYPE_WORD, true,
-     CORE_STRING_STATIC("bce (default) or synth")},
+     CORE_STRING_STATIC("bce (default) or synth"), false, nullptr},
     {CORE_STRING_STATIC("--json"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     CORE_STRING_STATIC("render diagnostics as JSON")},
+     CORE_STRING_STATIC("render diagnostics as JSON"), false, nullptr},
     {CORE_STRING_STATIC("--help"), CORE_STRING_STATIC("-h"),
-     PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help")},
+     PARSE_CMDR_TYPE_BOOL, false, CORE_STRING_STATIC("show this help"), false,
+     nullptr},
     {CORE_STRING_STATIC("--passes"), {0}, PARSE_CMDR_TYPE_WORD, true,
-     CORE_STRING_STATIC("comma separated, in order")},
-    {{0}, {0}, 0, false, {0}},
+     CORE_STRING_STATIC("comma separated, in order"), false, nullptr},
+    {0},
 };
 
 static parse_cmdr_t *build_cli(void)
@@ -210,7 +213,8 @@ static void report(job *j, FILE *out, bool json)
         return;
     }
 
-    ir_render_t   r    = {.source = source_of, .state = j, .module = j->m};
+    ir_render_t   r    = {.source = source_of, .state = j, .module = j->m,
+                          .path = j->path};
     core_string_t text = json ? ir_diags_render_json(j->d, &r)
                               : ir_diags_render_text(j->d, &r);
 

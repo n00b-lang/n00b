@@ -3,6 +3,9 @@
 
 #include "preprocessor.h"
 #include "compiler_tu.h"
+#include "compiler_lower.h"
+#include "diagnostics.h"
+#include <stdarg.h>
 
 #include <errno.h>
 #include <math.h>
@@ -14,8 +17,9 @@
 #include "ir/interval.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "lib/list.h"
+#include "lib/os.h"
 #include "lib/tree.h"
 #include "parse/annot_walk.h"
 #include "parse/rewrite.h"
@@ -139,10 +143,12 @@ struct n00bb_preprocessor_t {
     pp_context_t context;
 };
 
-static void pp_report(pp_context_t *ctx, parse_tree_t *at,
-                      core_string_t message);
-#define pp_error(ctx, at, lit) \
-    pp_report((ctx), (at), CORE_STRING_STATIC(lit))
+static void
+pp_error(pp_context_t *ctx, parse_tree_t *at, n00bb_diag_t id,
+         n00bb_text_t text, n00bb_args_t args);
+static void pp_internal(pp_context_t *ctx, parse_tree_t *at,
+                        const char *what);
+static core_string_t node_text(pp_context_t *ctx, parse_tree_t *node);
 static void pp_warn_cycle_dependency(pp_context_t *ctx,
                                     parse_tree_t *at,
                                     core_string_t module);
@@ -253,7 +259,7 @@ decode_quoted_string(pp_context_t *ctx, core_string_t raw,
     core_buffer_t *buffer = core_buffer_empty();
     if (!n00bb_decode_string_literal(raw, buffer)) {
         core_buffer_free(buffer);
-        pp_error(ctx, nullptr, "invalid escape in preprocessor string literal");
+        pp_internal(ctx, nullptr, "could not decode a string literal escape");
         return false;
     }
     size_t length = buffer->byte_len;
@@ -350,29 +356,66 @@ nil_spelling(core_string_t spelling)
         || core_string_eq(spelling, CORE_STRING_STATIC("None"));
 }
 
-static void
-pp_report(pp_context_t *ctx, parse_tree_t *at, core_string_t message)
+static parse_token_info_t *
+last_terminal(parse_tree_t *node)
 {
-    parse_token_info_t *token = parse_tree_find_first_terminal(at);
-    core_buffer_t text = {0};
-    core_buffer_append_string(&text, message);
-    core_string_t report = core_buffer_string(&text);
-    if (report.u8_bytes > 319) report.u8_bytes = 319;
-    core_diag_location_t location = token
-        ? (core_diag_location_t){
-              .line = parse_token_line(token),
-              .column = parse_token_column(token),
-              .end_line = parse_token_endline(token),
-              .end_column = parse_token_endcol(token),
-              .has_location = true,
-          }
-        : (core_diag_location_t){0};
-    core_diagnostics_report_at(core_translation_unit_diagnostics(ctx->unit),
-                               ctx->unit, CORE_DIAG_ERROR,
-                               CORE_STRING_STATIC("N00BB-PP0001"),
-                               report.data ? report : CORE_STRING_STATIC(""),
-                               location);
-    core_buffer_release(&text);
+    if (!node) return nullptr;
+    if (core_tree_is_leaf(node)) return parse_node_token(node);
+    for (size_t i = core_tree_num_children(node); i > 0; i--) {
+        parse_token_info_t *token = last_terminal(core_tree_child(node, i - 1));
+        if (token) return token;
+    }
+    return nullptr;
+}
+
+static core_diag_location_t
+node_location(parse_tree_t *node)
+{
+    parse_token_info_t *first = node ? parse_tree_find_first_terminal(node)
+                                     : nullptr;
+    parse_token_info_t *last = last_terminal(node);
+    if (!first) return (core_diag_location_t){0};
+    if (!last || parse_token_endline(last) < parse_token_line(first))
+        last = first;
+    return (core_diag_location_t){
+        .line = parse_token_line(first),
+        .column = parse_token_column(first),
+        .end_line = parse_token_endline(last),
+        .end_column = parse_token_endcol(last),
+        .has_location = true,
+    };
+}
+
+static core_string_t
+node_text(pp_context_t *ctx, parse_tree_t *node)
+{
+    parse_token_info_t *first = node ? parse_tree_find_first_terminal(node)
+                                     : nullptr;
+    parse_token_info_t *last = last_terminal(node);
+    if (!first || !last) return (core_string_t){0};
+    core_string_t source = core_source_file_contents(&ctx->unit->source);
+    size_t size = core_source_file_size(&ctx->unit->source);
+    size_t start = parse_token_start_byte(first);
+    size_t end = parse_token_end_byte(last);
+    if (start > end || end > size) return (core_string_t){0};
+    return core_string_borrow(source.data + start, end - start);
+}
+
+static void
+pp_error(pp_context_t *ctx, parse_tree_t *at, n00bb_diag_t id,
+         n00bb_text_t text, n00bb_args_t args)
+{
+    n00bb_report(core_translation_unit_diagnostics(ctx->unit), ctx->unit, id,
+                 node_location(at), text, args);
+    if (n00bb_diag_severity(id) != CORE_DIAG_WARNING) ctx->failed = true;
+}
+
+static void
+pp_internal(pp_context_t *ctx, parse_tree_t *at, const char *what)
+{
+    n00bb_internal_error(core_translation_unit_diagnostics(ctx->unit),
+                         ctx->unit, node_location(at),
+                         "evaluating compile-time code", "%s", what);
     ctx->failed = true;
 }
 
@@ -520,19 +563,12 @@ pp_warn_cycle_dependency(pp_context_t *ctx, parse_tree_t *at,
                                ctx->modules.data[i].unit->module.identifier))
             continue;
         ctx->cycle_warning_emitted = true;
-        core_buffer_t *message = core_buffer_empty();
-        parse_token_info_t *token = parse_tree_find_first_terminal(at);
-        if (token)
-            core_buffer_printf(message, "line %u, column %u: ",
-                               parse_token_line(token),
-                               parse_token_column(token));
-        core_buffer_printf(message,
-            "preprocessor value depends on cyclic import '%.*s'; results follow deterministic import order",
-            (int)module.u8_bytes, module.data);
-        core_diagnostics_report(core_translation_unit_diagnostics(ctx->unit),
-            ctx->unit, CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-PPW0002"),
-            core_string_borrow(message->data, message->byte_len));
-        core_buffer_free(message);
+        pp_error(ctx, at, N00B_DIAG_IMPORT_CYCLE_DEPENDENCY,
+            N00B_TEXT_THIS_COMPILE_TIME_VALUE_DEPENDS,
+            N00BB_ARGS(ARG_TEXT(module)));
+        n00bb_report_note(core_translation_unit_diagnostics(ctx->unit),
+            N00B_TEXT_MODULES_IN_A_CYCLE_ARE,
+            N00BB_NO_ARGS);
         return;
     }
 }
@@ -745,23 +781,22 @@ register_litmod_declaration(pp_context_t *ctx, parse_tree_t *function)
     if (nil_spelling(kind)) kind = CORE_STRING_STATIC("nil");
     core_string_t function_name = leaf_text(ctx, primary);
     if (!known_litmod_kind(kind)) {
-        pp_error(ctx, kind_node, "unknown literal modifier kind");
+        pp_error(ctx, kind_node, N00B_DIAG_LITMOD_UNKNOWN_KIND,
+            N00B_TEXT_IS_NOT_A_LITERAL_KIND,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(kind.data ? kind.data : "",
+                                                   (size_t)(kind.u8_bytes)))));
         return false;
     }
     if (!kind.data || !function_name.data || !ctx->options
         || !ctx->options->register_litmod) {
-        pp_error(ctx, function, "invalid literal modifier declaration");
+        pp_internal(ctx, function, "could not read a literal modifier declaration");
         return false;
     }
     if (ctx->options->register_litmod(ctx->options->litmod_context,
             ctx->unit, function, function_name, kind)) return true;
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "literal modifier '%.*s' for %.*s literals is already declared in this module",
-        (int)function_name.u8_bytes, function_name.data,
-        (int)kind.u8_bytes, kind.data);
-    pp_report(ctx, primary, core_buffer_string(&message));
-    core_buffer_release(&message);
+    pp_error(ctx, primary, N00B_DIAG_LITMOD_DUPLICATE,
+        N00B_TEXT_LITERAL_MODIFIER_FOR_LITERALS_IS_4,
+        N00BB_ARGS(ARG_TEXT(function_name), ARG_TEXT(kind)));
     return false;
 }
 
@@ -774,14 +809,14 @@ register_litmod_alias(pp_context_t *ctx, parse_tree_t *statement)
         ctx->grammar, statement, CORE_STRING_STATIC("litmod-alias-target"));
     if (!alias || !target || !ctx->options
         || !ctx->options->register_litmod_alias) {
-        pp_error(ctx, statement, "invalid literal modifier alias");
+        pp_internal(ctx, statement, "could not read a literal modifier alias");
         return false;
     }
     if (ctx->options->register_litmod_alias(ctx->options->litmod_context,
             ctx->unit, statement, first_leaf_text(ctx, alias),
             first_leaf_text(ctx, target)))
         return true;
-    pp_error(ctx, statement, "could not record the literal modifier alias");
+    pp_internal(ctx, statement, "could not record a literal modifier alias");
     return false;
 }
 
@@ -847,8 +882,9 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         parse_token_info_t *token = leaf ? parse_node_token(leaf) : nullptr;
         if (!token) return false;
         if (core_option_is_set(parse_token_postfix_modifier(token))) {
-            pp_error(ctx, node,
-                     "literal modifiers are not allowed in a preprocessor condition");
+            pp_error(ctx, node, N00B_DIAG_COMPTIME_EXPRESSION_FORM,
+                N00B_TEXT_A_LITERAL_MODIFIER_CANNOT_BE,
+                N00BB_NO_ARGS);
             return false;
         }
         core_string_t terminal = parse_terminal_name(ctx->grammar,
@@ -861,7 +897,9 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
                 *out = (pp_value_t){.kind = PP_INT, .as.integer = integer};
                 return true;
             }
-            pp_error(ctx, node, "integer literal is outside the preprocessor i128 range");
+            pp_error(ctx, node, N00B_DIAG_COMPTIME_INTEGER_RANGE,
+                N00B_TEXT_INTEGER_DOES_NOT_FIT_IN,
+                N00BB_ARGS(ARG_TEXT(text)));
             return false;
         }
         if (core_string_eq(terminal, CORE_STRING_STATIC("FLOAT_LIT"))) {
@@ -870,7 +908,9 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
                 *out = (pp_value_t){.kind = PP_FLOAT, .as.real = value};
                 return true;
             }
-            pp_error(ctx, node, "invalid floating-point literal in preprocessor expression");
+            pp_error(ctx, node, N00B_DIAG_COMPTIME_FLOAT_RANGE,
+                N00B_TEXT_NUMBER_IS_OUTSIDE_THE_RANGE,
+                N00BB_ARGS(ARG_TEXT(text)));
             return false;
         }
         if (core_string_eq(terminal, CORE_STRING_STATIC("STRING_LIT"))) {
@@ -879,7 +919,7 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
                 *out = (pp_value_t){.kind = PP_STRING, .as.string = decoded};
                 return true;
             }
-            pp_error(ctx, node, "invalid simple string literal in preprocessor expression");
+            pp_internal(ctx, node, "could not decode a string literal");
             return false;
         }
         if (core_string_eq(terminal, CORE_STRING_STATIC("true"))
@@ -908,7 +948,9 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             *out = (pp_value_t){.kind = PP_INT, .as.integer = integer};
             return true;
         }
-        pp_error(ctx, node, "integer literal is outside the preprocessor i128 range");
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_INTEGER_RANGE,
+            N00B_TEXT_INTEGER_DOES_NOT_FIT_IN,
+            N00BB_ARGS(ARG_TEXT(text)));
         return false;
     }
     if (is_name(ctx->grammar, node, "float-lit")) {
@@ -918,7 +960,9 @@ parse_literal(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             *out = (pp_value_t){.kind = PP_FLOAT, .as.real = value};
             return true;
         }
-        pp_error(ctx, node, "invalid floating-point literal in preprocessor expression");
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_FLOAT_RANGE,
+            N00B_TEXT_NUMBER_IS_OUTSIDE_THE_RANGE,
+            N00BB_ARGS(ARG_TEXT(text)));
         return false;
     }
     if (is_name(ctx->grammar, node, "string-lit")) {
@@ -1127,11 +1171,20 @@ eval_leaf_identifier(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         if (lookup == PP_LOOKUP_FOUND) return true;
     }
     if (lookup == PP_LOOKUP_AMBIGUOUS) {
-        pp_error(ctx, node,
-            "imported const name is ambiguous; qualify it with its module path");
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_AMBIGUOUS_NAME,
+            N00B_TEXT_NAMES_A_CONST_IN_MORE,
+            N00BB_ARGS(ARG_TEXT(name)));
+        n00bb_report_help(core_translation_unit_diagnostics(ctx->unit),
+            N00B_TEXT_QUALIFY_IT_WITH_ITS_MODULE,
+            N00BB_NO_ARGS);
         return false;
     }
-    pp_error(ctx, node, "preprocessor expression refers to an ineligible const variable");
+    pp_error(ctx, node, N00B_DIAG_COMPTIME_NOT_CONST,
+        N00B_TEXT_CANNOT_BE_USED_IN_A,
+        N00BB_ARGS(ARG_TEXT(name)));
+    n00bb_report_note(core_translation_unit_diagnostics(ctx->unit),
+        N00B_TEXT_ONLY_CONST_VALUES_WITH_COMPILE,
+        N00BB_NO_ARGS);
     return false;
 }
 
@@ -1157,7 +1210,10 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         || core_string_eq(name, CORE_STRING_STATIC("compile_warning"))
         || core_string_eq(name, CORE_STRING_STATIC("compile_error"));
     if (argument_count != (needs_string ? 1u : 0u)) {
-        pp_error(ctx, call, "processor-time builtin called with the wrong number of arguments");
+        pp_error(ctx, call, N00B_DIAG_COMPTIME_BUILTIN_ARITY,
+                 needs_string ? N00B_TEXT_TAKES_ONE_ARGUMENT
+                              : N00B_TEXT_TAKES_NO_ARGUMENTS,
+                 N00BB_ARGS(ARG_TEXT(name), ARG_NUMBER(argument_count)));
         return false;
     }
     parse_tree_t *arg = nullptr;
@@ -1174,7 +1230,9 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         if (!eval_expr(ctx, arg, &arg_value)
             || (arg_value.kind != PP_STRING
                 && !(ctx->type_only && arg_value.kind == PP_ANY))) {
-            pp_error(ctx, call, "preprocessor builtin argument must have type string");
+            pp_error(ctx, call, N00B_DIAG_COMPTIME_BUILTIN_ARGUMENT,
+                N00B_TEXT_THE_ARGUMENT_OF_MUST_BE,
+                N00BB_ARGS(ARG_TEXT(name)));
             return false;
         }
         if (arg_value.kind == PP_STRING) argument = arg_value.as.string;
@@ -1207,8 +1265,9 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         }
         else if (n00bb_preprocessor_builtin_name(name)) kind = PP_INT;
         else {
-            pp_error(ctx, call,
-                     "unsupported processor-time builtin in preprocessor expression");
+            pp_error(ctx, call, N00B_DIAG_COMPTIME_UNKNOWN_FUNCTION,
+                N00B_TEXT_CANNOT_BE_CALLED_IN_A,
+                N00BB_ARGS(ARG_TEXT(name)));
             return false;
         }
         *out = (pp_value_t){.kind = kind};
@@ -1217,66 +1276,48 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("compile_warning"))
         || core_string_eq(name, CORE_STRING_STATIC("compile_error"))) {
         if (!arg) {
-            pp_error(ctx, call, "compile-time diagnostic requires one string argument");
+            pp_error(ctx, call, N00B_DIAG_COMPTIME_BUILTIN_ARGUMENT,
+                N00B_TEXT_TAKES_ONE_STRING_ARGUMENT,
+                N00BB_ARGS(ARG_TEXT(name)));
             return false;
         }
         bool fatal = core_string_eq(name, CORE_STRING_STATIC("compile_error"));
-        parse_token_info_t *token = parse_tree_find_first_terminal(call);
-        core_buffer_t *message = core_buffer_empty();
-        if (token)
-            core_buffer_printf(message, "line %u, column %u: ",
-                               parse_token_line(token),
-                               parse_token_column(token));
-        core_buffer_append(message, argument.data, argument.u8_bytes);
-        core_diagnostics_report(core_translation_unit_diagnostics(ctx->unit),
-            ctx->unit, fatal ? CORE_DIAG_FATAL : CORE_DIAG_WARNING,
-            fatal ? CORE_STRING_STATIC("N00BB-PP0002")
-                  : CORE_STRING_STATIC("N00BB-PPW0001"),
-            core_string_borrow(message->data, message->byte_len));
-        core_buffer_free(message);
-        if (fatal) ctx->failed = true;
+        pp_error(ctx, call, fatal ? N00B_DIAG_COMPILE_ERROR_CALLED
+                                  : N00B_DIAG_COMPILE_WARNING_CALLED,
+                                      N00B_TEXT_TEXT,
+            N00BB_ARGS(ARG_TEXT(argument)));
         *out = (pp_value_t){.kind = PP_INVALID};
         return true;
     }
 #define PP_INT(v) do { *out = (pp_value_t){.kind = PP_INT, .as.integer = (v)}; return true; } while (0)
 #define PP_STRING(v) do { *out = (pp_value_t){.kind = PP_STRING, .as.string = own_string(ctx, core_string_dup(CORE_STRING_STATIC(v)))}; return true; } while (0)
-    if (core_string_eq(name, CORE_STRING_STATIC("target_os"))) {
-#if defined(__APPLE__)
-        PP_STRING("macos");
-#elif defined(_WIN32)
-        PP_STRING("windows");
-#elif defined(__linux__)
-        PP_STRING("linux");
-#else
-        pp_error(ctx, call, "unsupported target operating system");
+    bool target_query = core_string_eq(name, CORE_STRING_STATIC("target_os"))
+        || core_string_eq(name, CORE_STRING_STATIC("target_arch"))
+        || core_string_eq(name, CORE_STRING_STATIC("target_alu"))
+        || core_string_eq(name, CORE_STRING_STATIC("target_is_little_endian"));
+    core_target_desc_t target;
+    if (target_query && !n00bb_output_target_profile(&target)) {
+        pp_internal(ctx, call, "the build has no target profile");
         return false;
-#endif
+    }
+    if (core_string_eq(name, CORE_STRING_STATIC("target_os"))) {
+        int64_t dash = core_string_find_byte(target.triple, '-');
+        *out = (pp_value_t){.kind = PP_STRING, .as.string = own_string(ctx,
+            core_string_dup(core_string_slice(target.triple,
+                (size_t)dash + 1,
+                target.triple.u8_bytes - (size_t)dash - 1)))};
+        return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("target_arch"))) {
-#if defined(__x86_64__) || defined(_M_X64)
-        PP_STRING("x86");
-#elif defined(__aarch64__) || defined(_M_ARM64)
+        if (core_string_starts_with(target.triple,
+                CORE_STRING_STATIC("x86_64-"))) PP_STRING("x86");
         PP_STRING("arm");
-#else
-        pp_error(ctx, call, "unsupported target architecture");
-        return false;
-#endif
     }
-    if (core_string_eq(name, CORE_STRING_STATIC("target_alu"))) {
-#if defined(__x86_64__) || defined(_M_X64) \
-    || defined(__aarch64__) || defined(_M_ARM64)
-        PP_INT(64);
-#else
-        pp_error(ctx, call, "target ALU is unavailable for this architecture");
-        return false;
-#endif
-    }
+    if (core_string_eq(name, CORE_STRING_STATIC("target_alu")))
+        PP_INT(target.alu_bits);
     if (core_string_eq(name, CORE_STRING_STATIC("target_is_little_endian"))) {
-#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-        *out = (pp_value_t){.kind = PP_BOOL, .as.boolean = false};
-#else
-        *out = (pp_value_t){.kind = PP_BOOL, .as.boolean = true};
-#endif
+        *out = (pp_value_t){.kind = PP_BOOL,
+            .as.boolean = target.endian == CORE_TARGET_LITTLE_ENDIAN};
         return true;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("debug_enabled"))) {
@@ -1288,7 +1329,7 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         if (ctx->options && ctx->options->build_time_use
             && !ctx->options->build_time_use(
                 ctx->options->selected_body_context, ctx->unit, call)) {
-            pp_error(ctx, call, "cannot record the comptime() use");
+            pp_internal(ctx, call, "could not record a `comptime()` use");
             return false;
         }
         *out = (pp_value_t){.kind = PP_BOOL,
@@ -1305,14 +1346,18 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
         || core_string_eq(name, CORE_STRING_STATIC("target_os_minor"))
         || core_string_eq(name, CORE_STRING_STATIC("target_os_patch"))) {
 #if defined(__APPLE__) && defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__)
-        int version = __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__;
-        if (core_string_eq(name, CORE_STRING_STATIC("target_os_major"))) PP_INT(version / 10000);
-        if (core_string_eq(name, CORE_STRING_STATIC("target_os_minor"))) PP_INT((version / 100) % 100);
-        PP_INT(version % 100);
-#else
-        pp_error(ctx, call, "target OS version is unavailable for this target");
-        return false;
+        core_target_desc_t os_target;
+        if (!n00bb_cross_target(&os_target)) {
+            int version = __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__;
+            if (core_string_eq(name, CORE_STRING_STATIC("target_os_major"))) PP_INT(version / 10000);
+            if (core_string_eq(name, CORE_STRING_STATIC("target_os_minor"))) PP_INT((version / 100) % 100);
+            PP_INT(version % 100);
+        }
 #endif
+        pp_error(ctx, call, N00B_DIAG_COMPTIME_TARGET_QUERY_UNAVAILABLE,
+            N00B_TEXT_HAS_NO_VALUE_FOR_THIS,
+            N00BB_ARGS(ARG_TEXT(name)));
+        return false;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_major"))) PP_INT(0);
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_minor"))) PP_INT(1);
@@ -1320,16 +1365,14 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
     if (core_string_eq(name, CORE_STRING_STATIC("n00b_impl"))) PP_STRING("n00bb");
     if (core_string_eq(name, CORE_STRING_STATIC("source_dir"))) {
         core_string_t path = core_source_file_path(&ctx->unit->source);
-        char *copy = core_string_to_cstr(path);
-        char *native = copy ? realpath(copy, nullptr) : nullptr;
-        core_free(copy);
-        core_string_t resolved = core_string_from_cstr(native);
-        free(native);
+        core_string_t resolved = core_os_real_path(path);
         int64_t slash = resolved.data
             ? core_string_rfind_byte(resolved, '/') : -1;
         if (slash < 0) {
             core_free(resolved.data);
-            pp_error(ctx, call, "source_dir() has no resolvable source file");
+            pp_error(ctx, call, N00B_DIAG_COMPTIME_NO_SOURCE_DIR,
+                N00B_TEXT_SOURCE_DIR_HAS_NO_VALUE,
+                N00BB_NO_ARGS);
             return false;
         }
         resolved.u8_bytes = (size_t)slash;
@@ -1342,15 +1385,15 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
 #undef PP_STRING
 
     if (needs_string && !arg) {
-        pp_error(ctx, call, "preprocessor builtin requires one string argument");
+        pp_error(ctx, call, N00B_DIAG_COMPTIME_BUILTIN_ARGUMENT,
+            N00B_TEXT_TAKES_ONE_STRING_ARGUMENT,
+            N00BB_ARGS(ARG_TEXT(name)));
         return false;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("preproc_env"))
         || core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))) {
-        char *key = core_string_to_cstr(argument.data ? argument
-                                                      : CORE_STRING_STATIC(""));
-        core_string_t value = core_string_from_cstr(getenv(key));
-        core_free(key);
+        core_string_t value = core_os_environment(argument.data ? argument
+                                                  : CORE_STRING_STATIC(""));
         bool defines = value.data != nullptr;
         if (core_string_eq(name, CORE_STRING_STATIC("preproc_env_defines"))) {
             core_free(value.data);
@@ -1371,7 +1414,12 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
             return true;
         }
         if (!defined) {
-            pp_error(ctx, call, "preproc_value() has no externally supplied value");
+            pp_error(ctx, call, N00B_DIAG_COMPTIME_UNDEFINED_VALUE,
+                N00B_TEXT_NO_VALUE_WAS_SUPPLIED_FOR,
+                N00BB_ARGS(ARG_TEXT(argument)));
+            n00bb_report_help(core_translation_unit_diagnostics(ctx->unit),
+                N00B_TEXT_PASS_DEFINE_VALUE_OR_TEST,
+                N00BB_ARGS(ARG_TEXT(argument), ARG_TEXT(argument)));
             return false;
         }
         if (core_string_eq(raw, CORE_STRING_STATIC("true"))
@@ -1386,8 +1434,9 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
             return true;
         }
         if (integer_syntax(raw)) {
-            pp_error(ctx, call,
-                     "external integer value is outside the preprocessor i128 range");
+            pp_error(ctx, call, N00B_DIAG_COMPTIME_DEFINE_RANGE,
+                N00B_TEXT_THE_VALUE_SUPPLIED_FOR_DOES,
+                N00BB_ARGS(ARG_TEXT(raw), ARG_TEXT(argument)));
             return false;
         }
         double real = 0;
@@ -1400,8 +1449,9 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
                 || core_string_find_byte(raw, 'E') >= 0);
         if (float_value) {
             if (errno == ERANGE || !isfinite(real)) {
-                pp_error(ctx, call,
-                         "external float value is outside the preprocessor f64 range");
+                pp_error(ctx, call, N00B_DIAG_COMPTIME_DEFINE_RANGE,
+                    N00B_TEXT_THE_VALUE_SUPPLIED_FOR_IS,
+                    N00BB_ARGS(ARG_TEXT(raw), ARG_TEXT(argument)));
                 return false;
             }
             *out = (pp_value_t){.kind = PP_FLOAT, .as.real = real};
@@ -1417,7 +1467,9 @@ eval_builtin(pp_context_t *ctx, parse_tree_t *call, pp_value_t *out)
                 (int64_t)raw.u8_bytes))};
         return true;
     }
-    pp_error(ctx, call, "unsupported processor-time builtin in preprocessor expression");
+    pp_error(ctx, call, N00B_DIAG_COMPTIME_UNKNOWN_FUNCTION,
+        N00B_TEXT_CANNOT_BE_CALLED_IN_A,
+        N00BB_ARGS(ARG_TEXT(name)));
     return false;
 }
 
@@ -1430,7 +1482,10 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
     core_string_t name = node_name(ctx->grammar, node);
     if (is_literal_node(ctx->grammar, node)) {
         if (parse_literal(ctx, node, out)) return true;
-        pp_error(ctx, node, "only simple primitive literals are allowed in preprocessor expressions");
+        core_string_t literal = node_text(ctx, node);
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_EXPRESSION_FORM,
+            N00B_TEXT_CANNOT_BE_USED_IN_A_2,
+            N00BB_ARGS(ARG_TEXT(literal)));
         return false;
     }
     if (core_string_eq(name, CORE_STRING_STATIC("primary"))) {
@@ -1454,11 +1509,22 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             pp_lookup_t lookup = qualified_binding_lookup(ctx, node, out);
             if (lookup == PP_LOOKUP_FOUND) return true;
             if (lookup == PP_LOOKUP_AMBIGUOUS) {
-                pp_error(ctx, node,
-                    "module qualifier is ambiguous; include its package path");
+                core_string_t qualified = node_text(ctx, node);
+                pp_error(ctx, node, N00B_DIAG_COMPTIME_AMBIGUOUS_NAME,
+                    N00B_TEXT_THE_MODULE_NAMED_IN_MATCHES,
+                    N00BB_ARGS(ARG_TEXT(qualified)));
+                n00bb_report_help(core_translation_unit_diagnostics(ctx->unit),
+                    N00B_TEXT_INCLUDE_ITS_PACKAGE_PATH,
+                    N00BB_NO_ARGS);
                 return false;
             }
-            pp_error(ctx, node, "preprocessor expression refers to an ineligible imported const");
+            core_string_t qualified = node_text(ctx, node);
+            pp_error(ctx, node, N00B_DIAG_COMPTIME_NOT_CONST,
+                N00B_TEXT_CANNOT_BE_USED_IN_A,
+                N00BB_ARGS(ARG_TEXT(qualified)));
+            n00bb_report_note(core_translation_unit_diagnostics(ctx->unit),
+                N00B_TEXT_ONLY_CONST_VALUES_WITH_COMPILE,
+                N00BB_NO_ARGS);
             return false;
         }
         if (postfix_has_token(node, CORE_STRING_STATIC("(")))
@@ -1501,8 +1567,9 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
                              || operand.kind == PP_ANY))
                     result = operand.kind;
                 if (result == PP_INVALID) {
-                    pp_error(ctx, node,
-                             "unary operator is not valid for this preprocessor value type");
+                    pp_error(ctx, node, N00B_DIAG_COMPTIME_OPERAND_TYPE,
+                        N00B_TEXT_OPERATOR_CANNOT_BE_APPLIED_TO,
+                        N00BB_ARGS(ARG_TEXT(op)));
                     return false;
                 }
                 *out = (pp_value_t){.kind = result};
@@ -1517,13 +1584,17 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
                 *out = (pp_value_t){.kind = PP_FLOAT, .as.real = -operand.as.real};
             else if (core_string_eq(op, CORE_STRING_STATIC("-")) && operand.kind == PP_INT) {
                 if (operand.as.integer == -((__int128)(((unsigned __int128)1 << 127) - 1)) - 1) {
-                    pp_error(ctx, node, "checked i128 negation overflow");
+                    pp_error(ctx, node, N00B_DIAG_COMPTIME_OVERFLOW,
+                        N00B_TEXT_NEGATING_THIS_VALUE_OVERFLOWS_A,
+                        N00BB_NO_ARGS);
                     return false;
                 }
                 *out = (pp_value_t){.kind = PP_INT, .as.integer = -operand.as.integer};
             }
             else {
-                pp_error(ctx, node, "unary operator is not valid for this preprocessor value type");
+                pp_error(ctx, node, N00B_DIAG_COMPTIME_OPERAND_TYPE,
+                    N00B_TEXT_OPERATOR_CANNOT_BE_APPLIED_TO,
+                    N00BB_ARGS(ARG_TEXT(op)));
                 return false;
             }
             return true;
@@ -1553,8 +1624,9 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
         if (ctx->type_only) {
             pp_kind_t result = binary_result_kind(op, left.kind, right.kind);
             if (result == PP_INVALID) {
-                pp_error(ctx, node,
-                         "operator or operand type is not supported by the preprocessor");
+                pp_error(ctx, node, N00B_DIAG_COMPTIME_OPERAND_TYPE,
+                    N00B_TEXT_OPERATOR_CANNOT_BE_APPLIED_TO_2,
+                    N00BB_ARGS(ARG_TEXT(op)));
                 return false;
             }
             *out = (pp_value_t){.kind = result};
@@ -1646,13 +1718,28 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
     }
 
 invalid:
-    pp_error(ctx, node, "expression form is not allowed in a preprocessor condition");
+    {
+        core_string_t text = node_text(ctx, node);
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_EXPRESSION_FORM,
+            N00B_TEXT_CANNOT_BE_USED_IN_A,
+            N00BB_ARGS(ARG_TEXT(text)));
+    }
     return false;
 type_error:
-    pp_error(ctx, node, "operator or operand type is not supported by the preprocessor");
+    {
+        core_string_t text = node_text(ctx, node);
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_OPERAND_TYPE,
+            N00B_TEXT_APPLIES_AN_OPERATOR_TO_VALUES,
+            N00BB_ARGS(ARG_TEXT(text)));
+    }
     return false;
 arithmetic_error:
-    pp_error(ctx, node, "invalid or overflowing checked i128 arithmetic");
+    {
+        core_string_t text = node_text(ctx, node);
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_OVERFLOW,
+            N00B_TEXT_OVERFLOWS_A_128_BIT_INTEGER,
+            N00BB_ARGS(ARG_TEXT(text)));
+    }
     return false;
 }
 
@@ -1793,7 +1880,9 @@ evaluate_when_condition(pp_context_t *ctx, parse_tree_t *condition,
     ctx->owned_strings.len = owned_mark;
     if (!typed || ctx->failed) return false;
     if (value.kind != PP_BOOL) {
-        pp_error(ctx, condition, "when condition must have static type bool");
+        pp_error(ctx, condition, N00B_DIAG_WHEN_CONDITION_NOT_BOOL,
+            N00B_TEXT_THIS_WHEN_CONDITION_IS_NOT,
+            N00BB_NO_ARGS);
         return false;
     }
     *selected = value.as.boolean;
@@ -1834,13 +1923,10 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
         }
     }
     if (!permitted) {
-        char message[192];
-        int length = snprintf(message, sizeof(message),
-            "expression form '%.*s' is not allowed in a preprocessor condition",
-            (int)name.u8_bytes, name.data);
-        if (length < 0) length = 0;
-        if ((size_t)length >= sizeof(message)) length = sizeof(message) - 1;
-        pp_report(ctx, node, core_string_borrow(message, (size_t)length));
+        core_string_t text = node_text(ctx, node);
+        pp_error(ctx, node, N00B_DIAG_COMPTIME_EXPRESSION_FORM,
+            N00B_TEXT_CANNOT_BE_USED_IN_A,
+            N00BB_ARGS(ARG_TEXT(text)));
         return false;
     }
 
@@ -1863,8 +1949,10 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
             bool valid = collect_name_chain(ctx, node, chain);
             core_buffer_free(chain);
             if (!valid) {
-                pp_error(ctx, node,
-                         "only qualified const names are allowed as member expressions");
+                core_string_t text = node_text(ctx, node);
+                pp_error(ctx, node, N00B_DIAG_COMPTIME_EXPRESSION_FORM,
+                    N00B_TEXT_CANNOT_BE_USED_IN_A_3,
+                    N00BB_ARGS(ARG_TEXT(text)));
                 return false;
             }
         }
@@ -1878,8 +1966,10 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
                                                        callee->byte_len));
             core_buffer_free(callee);
             if (!valid) {
-                pp_error(ctx, node,
-                         "only processor-time builtins may be called in a preprocessor condition");
+                core_string_t text = node_text(ctx, node);
+                pp_error(ctx, node, N00B_DIAG_COMPTIME_UNKNOWN_FUNCTION,
+                    N00B_TEXT_CALLS_A_FUNCTION_THAT_IS,
+                    N00BB_ARGS(ARG_TEXT(text)));
                 return false;
             }
         }
@@ -1887,8 +1977,10 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
                  && (parse_tree_leaf_is(operator, CORE_STRING_STATIC("["))
                      || parse_tree_leaf_is(operator,
                                            CORE_STRING_STATIC("!")))) {
-            pp_error(ctx, node,
-                     "member access, indexing, and postfix operators are not allowed in a preprocessor condition");
+            core_string_t text = node_text(ctx, node);
+            pp_error(ctx, node, N00B_DIAG_COMPTIME_EXPRESSION_FORM,
+                N00B_TEXT_CANNOT_BE_USED_IN_A_4,
+                N00BB_ARGS(ARG_TEXT(text)));
             return false;
         }
     }
@@ -1903,8 +1995,10 @@ validate_expr_forms(pp_context_t *ctx, parse_tree_t *node)
                 || core_string_eq(op, CORE_STRING_STATIC("+"));
         }
         if (!allowed) {
-            pp_error(ctx, node,
-                     "casts and reference operators are not allowed in a preprocessor condition");
+            core_string_t text = node_text(ctx, node);
+            pp_error(ctx, node, N00B_DIAG_COMPTIME_EXPRESSION_FORM,
+                N00B_TEXT_CANNOT_BE_USED_IN_A_5,
+                N00BB_ARGS(ARG_TEXT(text)));
             return false;
         }
     }
@@ -2080,7 +2174,7 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
     if (!eval_builtin(ctx, node, &value)) return false;
     parse_tree_t *primary = make_value_literal(ctx, value);
     if (!primary) {
-        pp_error(ctx, node, "cannot materialize processor-time result as a literal");
+        pp_internal(ctx, node, "could not turn a compile-time value into a literal");
         return false;
     }
     parse_token_info_t *source = parse_tree_find_first_terminal(node);
@@ -2098,7 +2192,7 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
         parse_tree_free(primary);
         if (!core_tree_add_child(node, simple)) {
             parse_tree_free(simple);
-            pp_error(ctx, node, "cannot rewrite processor-time literal");
+            pp_internal(ctx, node, "could not rewrite a compile-time value as a literal");
             return false;
         }
         return true;
@@ -2113,7 +2207,7 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
     if (primary_rule < 0 || !call || core_tree_is_leaf(call)
         || !is_name(ctx->grammar, call, "postfix-expr")) {
         parse_tree_free(primary);
-        pp_error(ctx, node, "cannot rewrite processor-time literal");
+        pp_internal(ctx, node, "could not rewrite a compile-time value as a literal");
         return false;
     }
     while (core_tree_num_children(call))
@@ -2121,7 +2215,7 @@ replace_builtin(pp_context_t *ctx, parse_visit_t *visit)
     core_tree_node_value(call).rule_index = primary_rule;
     if (!core_tree_add_child(call, primary)) {
         parse_tree_free(primary);
-        pp_error(ctx, node, "cannot rewrite processor-time literal");
+        pp_internal(ctx, node, "could not rewrite a compile-time value as a literal");
         return false;
     }
     return true;
@@ -2240,15 +2334,19 @@ module_literal_const(pp_context_t *ctx, parse_visit_t *visit, bool module_level)
     }
     if (!literal) return false;
     if (!core_string_eq(binding_kind, CORE_STRING_STATIC("const")) || symbols != 1) {
-        pp_error(ctx, literal, "a module literal initializes exactly one const");
+        pp_error(ctx, literal, N00B_DIAG_MODULE_LITERAL_PLACEMENT,
+            N00B_TEXT_A_MODULE_LITERAL_MUST_INITIALIZE,
+            N00BB_NO_ARGS);
         return true;
     }
     if (!module_level) {
-        pp_error(ctx, literal, "a module literal const must be declared at module level");
+        pp_error(ctx, literal, N00B_DIAG_MODULE_LITERAL_PLACEMENT,
+            N00B_TEXT_A_MODULE_LITERAL_MUST_INITIALIZE_2,
+            N00BB_NO_ARGS);
         return true;
     }
     if (!ctx->options->load_module_literal) {
-        pp_error(ctx, literal, "no generator is configured for module literals");
+        pp_internal(ctx, literal, "no generator is configured for module literals");
         return true;
     }
     core_translation_unit_t *module = nullptr;
@@ -2259,7 +2357,7 @@ module_literal_const(pp_context_t *ctx, parse_visit_t *visit, bool module_level)
             ctx->grammar, ctx->unit, literal, modifier, name, &module, &tree)
         || !module || !tree) {
         if (core_diagnostics_count(diags) == diagnostic_count)
-            pp_error(ctx, literal, "cannot generate the module for this literal");
+            pp_internal(ctx, literal, "a module literal failed without a diagnostic");
         else ctx->failed = true;
         return true;
     }
@@ -2269,7 +2367,7 @@ module_literal_const(pp_context_t *ctx, parse_visit_t *visit, bool module_level)
     }
     parse_tree_t *replacement = import_node(ctx, name);
     if (!replacement) {
-        pp_error(ctx, literal, "cannot bind the generated module");
+        pp_internal(ctx, literal, "could not bind a generated module");
         return true;
     }
     visit->replace = replacement;
@@ -2294,7 +2392,7 @@ process_import(pp_context_t *ctx, parse_tree_t *import,
                parse_tree_t *statement)
 {
     if (!ctx->options || !ctx->options->load_import) {
-        pp_error(ctx, statement, "no module loader is configured for imports");
+        pp_internal(ctx, statement, "no module loader is configured for imports");
         return false;
     }
     core_translation_unit_t *imported = nullptr;
@@ -2308,12 +2406,12 @@ process_import(pp_context_t *ctx, parse_tree_t *import,
             || (ctx->options->import_failure_reported
                 && ctx->options->import_failure_reported(ctx->unit));
         if (!reported)
-            pp_error(ctx, statement, "cannot load imported module");
+            pp_internal(ctx, statement, "an import failed without a diagnostic");
         else ctx->failed = true;
         return false;
     }
     if (!core_translation_unit_add_import(ctx->unit, imported)) {
-        pp_error(ctx, statement, "cannot record imported module reference");
+        pp_internal(ctx, statement, "could not record an imported module");
         return false;
     }
     if (ctx->options->record_import
@@ -2385,7 +2483,7 @@ preprocess_prepare(parse_visit_t *visit)
         if (ctx->options->build_time_use
             && !ctx->options->build_time_use(
                 ctx->options->selected_body_context, ctx->unit, node)) {
-            pp_error(ctx, node, "cannot record the comptime_start() use");
+            pp_internal(ctx, node, "could not record a `comptime_start()` use");
             return PARSE_VISIT_ERROR;
         }
         visit->remove = true;
@@ -2398,8 +2496,9 @@ preprocess_prepare(parse_visit_t *visit)
     if (is_name(ctx->grammar, node, "import-stmt")) {
         if (frame->current_body
             && frame->current_body != frame->selected_import_body) {
-            pp_error(ctx, node,
-                "imports are only allowed at module level or directly in a selected when branch");
+            pp_error(ctx, node, N00B_DIAG_IMPORT_PLACEMENT,
+                N00B_TEXT_IMPORT_MUST_BE_AT_MODULE,
+                N00BB_NO_ARGS);
             return PARSE_VISIT_ERROR;
         }
         core_list_t(parse_tree_ptr_t) sources =
@@ -2453,7 +2552,9 @@ preprocess_prepare(parse_visit_t *visit)
     core_string_t misplaced = {0};
     if (is_name(ctx->grammar, node, "embed-lit")
         && module_literal_leaf(ctx, node, &misplaced)) {
-        pp_error(ctx, node, "a module literal only initializes a module-level const");
+        pp_error(ctx, node, N00B_DIAG_MODULE_LITERAL_PLACEMENT,
+            N00B_TEXT_A_MODULE_LITERAL_CAN_ONLY,
+            N00BB_NO_ARGS);
         return PARSE_VISIT_ERROR;
     }
     if (is_name(ctx->grammar, node, "when-stmt")) {
@@ -2465,7 +2566,7 @@ preprocess_prepare(parse_visit_t *visit)
         }
         parse_tree_t *replacement = parse_tree_clone(body);
         if (!replacement) {
-            pp_error(ctx, node, "cannot copy the selected when body");
+            pp_internal(ctx, node, "could not copy the selected `when` body");
             return PARSE_VISIT_ERROR;
         }
         if (ctx->options && ctx->options->selected_body
@@ -2473,7 +2574,7 @@ preprocess_prepare(parse_visit_t *visit)
                 ctx->options->selected_body_context, ctx->unit,
                 replacement)) {
             parse_tree_free(replacement);
-            pp_error(ctx, node, "cannot retain the selected when body");
+            pp_internal(ctx, node, "could not keep the selected `when` body");
             return PARSE_VISIT_ERROR;
         }
         frame->revisit_body = replacement;
@@ -2517,6 +2618,8 @@ typedef struct {
     core_list_t(pp_deferred_stmt_t) *imports;
     core_list_t(pp_deferred_stmt_t) *deferred;
     uint32_t *spelling_lines;
+    core_diag_location_t *spelling_sites;
+    core_list_t(parse_tree_ptr_t) case_openers;
 } pp_discovery_t;
 
 static pp_spelling_t
@@ -2602,67 +2705,83 @@ syntax_preferences(pp_context_t *ctx,
     return true;
 }
 
+static core_diag_location_t
+spelling_location(const uint32_t lines[PP_SPELL_COUNT],
+                  const core_diag_location_t sites[PP_SPELL_COUNT],
+                  pp_spelling_t spelling)
+{
+    if (sites[spelling].has_location && sites[spelling].line == lines[spelling])
+        return sites[spelling];
+    return (core_diag_location_t){
+        .line = lines[spelling], .column = 1,
+        .end_line = lines[spelling], .end_column = 1,
+        .has_location = true,
+    };
+}
+
 static void
 report_syntax_spellings(pp_context_t *ctx,
                         const uint32_t lines[PP_SPELL_COUNT],
+                        const core_diag_location_t sites[PP_SPELL_COUNT],
                         const pp_spelling_t preferred[PP_STYLE_SET_COUNT])
 {
     if (ctx->options && ctx->options->disable_syntax_warnings) return;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(ctx->unit);
     for (pp_style_set_t set = 0; set < PP_STYLE_SET_COUNT; set++) {
         size_t count = 0;
-        uint32_t report_line = 0;
-        pp_spelling_t used = PP_SPELL_COUNT;
+        pp_spelling_t latest = PP_SPELL_COUNT;
         for (pp_spelling_t i = 0; i < PP_SPELL_COUNT; i++) {
             if (pp_spellings[i].set != set || !lines[i]) continue;
             count++;
-            used = i;
-            if (!report_line || lines[i] > report_line) report_line = lines[i];
+            if (latest == PP_SPELL_COUNT || lines[i] > lines[latest])
+                latest = i;
         }
-        core_buffer_t *message = core_buffer_empty();
         if (count > 1) {
-            core_buffer_printf(message, "inconsistent spelling for %.*s: ",
-                (int)pp_spellings[used].concept.u8_bytes,
-                pp_spellings[used].concept.data);
-            size_t emitted = 0;
+            core_string_t concept = pp_spellings[latest].concept;
+            core_string_t spelling = pp_spellings[latest].spelling;
+            core_buffer_t others = {0};
+            size_t listed = 0;
             for (pp_spelling_t i = 0; i < PP_SPELL_COUNT; i++) {
-                if (pp_spellings[i].set != set || !lines[i]) continue;
-                if (emitted++)
-                    core_buffer_append_string(message,
-                                              CORE_STRING_STATIC(", "));
-                core_buffer_printf(message, "'%.*s' on line %u",
-                    (int)pp_spellings[i].spelling.u8_bytes,
-                    pp_spellings[i].spelling.data, lines[i]);
+                if (pp_spellings[i].set != set || !lines[i] || i == latest)
+                    continue;
+                if (listed++)
+                    core_buffer_printf(&others, "%s",
+                                       listed + 1 == count ? " and " : ", ");
+                core_buffer_printf(&others, "`%.*s`",
+                                   (int)pp_spellings[i].spelling.u8_bytes,
+                                   pp_spellings[i].spelling.data);
             }
-            core_diag_location_t location = {
-                .line = report_line, .column = 1,
-                .end_line = report_line, .end_column = 1,
-                .has_location = true,
-            };
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(ctx->unit), ctx->unit,
-                CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-PPW0003"),
-                core_buffer_string(message), location);
+            n00bb_report(diagnostics, ctx->unit,
+                N00B_DIAG_SYNTAX_MIXED_SPELLING,
+                spelling_location(lines, sites, latest),
+                N00B_TEXT_INCONSISTENT_SPELLING_FOR_HERE_BUT,
+                N00BB_ARGS(ARG_TEXT(concept), ARG_TEXT(spelling),
+                           ARG_TEXT(core_buffer_string(&others))));
+            core_buffer_release(&others);
+            for (pp_spelling_t i = 0; i < PP_SPELL_COUNT; i++) {
+                if (pp_spellings[i].set != set || !lines[i] || i == latest)
+                    continue;
+                n00bb_report_secondary(diagnostics, nullptr,
+                    spelling_location(lines, sites, i), N00B_TEXT_IS_USED_HERE,
+                    N00BB_ARGS(ARG_TEXT(pp_spellings[i].spelling)));
+            }
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_USE_ONE_SPELLING_FOR_THROUGHOUT,
+                N00BB_ARGS(ARG_TEXT(concept)));
         }
-        else if (count == 1 && used != preferred[set]) {
-            core_buffer_printf(message,
-                "'%.*s' is not the preferred spelling for %.*s; use '%.*s' instead",
-                (int)pp_spellings[used].spelling.u8_bytes,
-                pp_spellings[used].spelling.data,
-                (int)pp_spellings[used].concept.u8_bytes,
-                pp_spellings[used].concept.data,
-                (int)pp_spellings[preferred[set]].spelling.u8_bytes,
-                pp_spellings[preferred[set]].spelling.data);
-            core_diag_location_t location = {
-                .line = lines[used], .column = 1,
-                .end_line = lines[used], .end_column = 1,
-                .has_location = true,
-            };
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(ctx->unit), ctx->unit,
-                CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-PPW0004"),
-                core_buffer_string(message), location);
+        else if (count == 1 && latest != preferred[set]) {
+            core_string_t concept = pp_spellings[latest].concept;
+            core_string_t spelling = pp_spellings[latest].spelling;
+            core_string_t wanted = pp_spellings[preferred[set]].spelling;
+            n00bb_report(diagnostics, ctx->unit,
+                N00B_DIAG_SYNTAX_NONPREFERRED_SPELLING,
+                spelling_location(lines, sites, latest),
+                N00B_TEXT_IS_NOT_THE_PREFERRED_SPELLING,
+                N00BB_ARGS(ARG_TEXT(spelling), ARG_TEXT(concept)));
+            n00bb_report_help(diagnostics, N00B_TEXT_WRITE_INSTEAD,
+                N00BB_ARGS(ARG_TEXT(wanted)));
         }
-        core_buffer_free(message);
     }
 }
 
@@ -2674,10 +2793,49 @@ preprocess_discover(parse_visit_t *visit)
     parse_tree_t *node = visit->node;
     if (ctx->failed) return PARSE_VISIT_ERROR;
     if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
-    pp_spelling_t spelling = style_spelling(ctx, node);
+    const core_string_t case_blocks[] = {
+        CORE_STRING_STATIC("switch-case-block"),
+        CORE_STRING_STATIC("typecase-case-block"),
+        CORE_STRING_STATIC("case-else"),
+        CORE_STRING_STATIC("switch-value-case-block"),
+        CORE_STRING_STATIC("typecase-value-case-block"),
+        CORE_STRING_STATIC("switch-value-else"),
+        CORE_STRING_STATIC("typecase-value-else"),
+    };
+    for (size_t i = 0; i < sizeof(case_blocks) / sizeof(case_blocks[0]); i++) {
+        if (!node_named(ctx->grammar, node, case_blocks[i])) continue;
+        parse_tree_t *body = parse_tree_find_direct_child_by_nt_name(
+            ctx->grammar, node, CORE_STRING_STATIC("body"));
+        if (!body)
+            body = parse_tree_find_direct_child_by_nt_name(
+                ctx->grammar, node, CORE_STRING_STATIC("value-body"));
+        parse_tree_t *opener = body
+            ? parse_tree_find_direct_child_by_nt_name(
+                  ctx->grammar, body, CORE_STRING_STATIC("block-start"))
+            : nullptr;
+        if (opener) core_list_push(discovery->case_openers, opener);
+        break;
+    }
+    bool case_opener = false;
+    for (size_t i = 0; i < discovery->case_openers.len && !case_opener; i++)
+        case_opener = discovery->case_openers.data[i] == node;
+    pp_spelling_t spelling = case_opener ? PP_SPELL_COUNT
+                                         : style_spelling(ctx, node);
     if (spelling != PP_SPELL_COUNT && !discovery->spelling_lines[spelling]) {
         parse_token_info_t *token = parse_tree_find_first_terminal(node);
         if (token) discovery->spelling_lines[spelling] = parse_token_line(token);
+    }
+    if (spelling != PP_SPELL_COUNT
+        && !discovery->spelling_sites[spelling].has_location) {
+        parse_token_info_t *token = parse_tree_find_first_terminal(node);
+        if (token)
+            discovery->spelling_sites[spelling] = (core_diag_location_t){
+                .line = parse_token_line(token),
+                .column = parse_token_column(token),
+                .end_line = parse_token_endline(token),
+                .end_column = parse_token_endcol(token),
+                .has_location = true,
+            };
     }
     if (is_name(ctx->grammar, node, "top-level-stmt")) {
         parse_tree_t *import = parse_tree_find_direct_child_by_nt_name(
@@ -2767,11 +2925,13 @@ check_pass_statements(pp_context_t *ctx, parse_tree_t *node,
     if (!node || core_tree_is_leaf(node) || ctx->failed) return;
     if (is_name(ctx->grammar, node, "pass-stmt")) {
         if (!block)
-            pp_error(ctx, node,
-                     "'pass' may only appear as the only statement of a block");
+            pp_error(ctx, node, N00B_DIAG_SYNTAX_MISPLACED_PASS,
+                N00B_TEXT_PASS_CAN_ONLY_BE_THE,
+                N00BB_NO_ARGS);
         else if (items > 1)
-            pp_error(ctx, node,
-                     "'pass' must be the only statement in its block");
+            pp_error(ctx, node, N00B_DIAG_SYNTAX_MISPLACED_PASS,
+                N00B_TEXT_PASS_MUST_BE_THE_ONLY,
+                N00BB_NO_ARGS);
         return;
     }
     if (opens_block(ctx, node)) {
@@ -2816,24 +2976,25 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     bool valid_preferences = syntax_preferences(ctx, preferred,
                                                 &invalid_preference);
     if (!valid_preferences && ctx->module_stack.len == 1) {
-        core_buffer_t *message = core_buffer_empty();
-        core_buffer_printf(message,
-                           "invalid syntax preference '%.*s'; expected CLASS=SPELLING",
-                           (int)invalid_preference.u8_bytes,
-                           invalid_preference.data);
-        pp_report(ctx, tree, core_buffer_string(message));
-        core_buffer_free(message);
+        n00bb_report(core_translation_unit_diagnostics(unit), nullptr,
+            N00B_DIAG_INVALID_SYNTAX_PREFERENCE, (core_diag_location_t){},
+            N00B_TEXT_SYNTAX_PREFERENCE_IS_NOT_A,
+            N00BB_ARGS(ARG_TEXT(invalid_preference)));
+        n00bb_report_help(core_translation_unit_diagnostics(unit),
+            N00B_TEXT_WRITE_SYNTAX_PREFERENCE_CLASS_SPELLING,
+            N00BB_NO_ARGS);
         ctx->failed = true;
     }
     const core_string_t implicit_imports[] = {
         CORE_STRING_STATIC("builtin"),
     };
-    for (size_t i = 0; ctx->options && ctx->options->load_implicit_import
+    for (size_t i = 0; !ctx->failed && ctx->options
+         && ctx->options->load_implicit_import
          && i < sizeof(implicit_imports) / sizeof(implicit_imports[0]); i++) {
         if (ctx->options->load_implicit_import(ctx->options->import_context,
                 ctx->grammar, unit, implicit_imports[i])) continue;
         if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
-            pp_error(ctx, tree, "cannot load an implicit import");
+            pp_internal(ctx, tree, "could not load the implicit `builtin` import");
         ctx->failed = true;
         break;
     }
@@ -2845,9 +3006,12 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     n00bb_tu_state_t *tu = core_translation_unit_user_data(unit);
     uint32_t *spelling_lines = tu ? tu->syntax_spelling_lines
                                   : local_spelling_lines;
+    core_diag_location_t spelling_sites[PP_SPELL_COUNT] = {};
     pp_discovery_t discovery = {
         .ctx = ctx, .imports = &imports, .deferred = &deferred,
         .spelling_lines = spelling_lines,
+        .spelling_sites = spelling_sites,
+        .case_openers = core_list_new(parse_tree_ptr_t),
     };
     parse_tree_walk_t *discovery_walk = parse_tree_walk_new(ctx->grammar,
                                                              &discovery);
@@ -2856,6 +3020,7 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     parse_tree_walk_run(discovery_walk, tree);
     if (parse_tree_walk_failed(discovery_walk)) ctx->failed = true;
     parse_tree_walk_free(discovery_walk);
+    core_list_free(discovery.case_openers);
     pp_walk_t evaluation = {
         .ctx = ctx, .frames = core_list_new(pp_walk_frame_t),
     };
@@ -2868,13 +3033,13 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     for (size_t i = 0; i < imports.len && !ctx->failed; i++)
         if (!process_deferred_statement(ctx, evaluation_walk,
                                         imports.data[i])) {
-            pp_error(ctx, tree, "module import tree changed during preprocessing");
+            pp_internal(ctx, tree, "the module's imports changed while being evaluated");
             break;
         }
     for (size_t i = 0; i < deferred.len && !ctx->failed; i++)
         if (!process_deferred_statement(ctx, evaluation_walk,
                                         deferred.data[i])) {
-            pp_error(ctx, tree, "module statement tree changed during preprocessing");
+            pp_internal(ctx, tree, "the module's statements changed while being evaluated");
             break;
         }
     parse_tree_walk_free(evaluation_walk);
@@ -2883,7 +3048,8 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     core_list_free(deferred);
     if (!ctx->failed) check_pass_statements(ctx, tree, nullptr, 0);
     if (!ctx->failed)
-        report_syntax_spellings(ctx, spelling_lines, preferred);
+        report_syntax_spellings(ctx, spelling_lines, spelling_sites,
+                                preferred);
     bool succeeded = !ctx->failed
         && !core_diagnostics_failed(core_translation_unit_diagnostics(unit));
     if (!succeeded) ctx->failed = true;

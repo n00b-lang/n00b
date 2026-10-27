@@ -1,0 +1,3 @@
+tests/diagnostics/link/overload_no_match.n:9:9: error N00B-T0011: no overload of `f` accepts arguments (f64)
+  tests/diagnostics/link/overload_no_match.n:5:6: note: candidate `overload_no_match.f(string) -> int` is declared here
+  tests/diagnostics/link/overload_no_match.n:1:6: note: candidate `overload_no_match.f(int) -> int` is declared here

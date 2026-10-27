@@ -5,9 +5,9 @@
 typedef struct scan_unicode_profile_t scan_unicode_profile_t;
 
 typedef struct {
-    core_string_t normalized;
-    core_string_t diagnostic;
-    size_t        diagnostic_start;
+    bool           diagnosed;
+    scan_problem_t problem;
+    size_t         diagnostic_start;
     size_t        diagnostic_end;
 } scan_unicode_identifier_result_t;
 

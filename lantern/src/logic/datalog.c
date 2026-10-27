@@ -34,11 +34,8 @@ core_list_decl(core_datalog_goal_t);
 typedef core_string_t *datalog_string_ptr_t;
 core_list_decl(datalog_string_ptr_t);
 
-typedef struct {
-  size_t *data;
-  size_t len;
-  size_t cap;
-} datalog_offset_list_t;
+core_list_decl(size_t);
+typedef core_list_t(size_t) datalog_offset_list_t;
 
 typedef struct {
   core_datalog_relation_id_t id;
@@ -638,12 +635,7 @@ static void relation_rebuild_indexes(datalog_relation_t *relation) {
         *offsets = (datalog_offset_list_t){0};
         core_dict_put(&relation->column_indexes[col], key, (uintptr_t)offsets);
       }
-      if (offsets->len == offsets->cap) {
-        offsets->cap = offsets->cap ? offsets->cap * 2 : 4;
-        offsets->data =
-            core_realloc(offsets->data, offsets->cap * sizeof(*offsets->data));
-      }
-      offsets->data[offsets->len++] = offset;
+      core_list_push(*offsets, offset);
     }
   }
   relation->indexes_dirty = false;

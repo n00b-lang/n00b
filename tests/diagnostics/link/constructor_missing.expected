@@ -1,0 +1,2 @@
+tests/diagnostics/link/constructor_missing.n:9:19: error N00B-T0002: `__init` takes 1 argument, but this call passes 0
+  tests/diagnostics/link/constructor_missing.n:5:6: note: `__init` is declared here

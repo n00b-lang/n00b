@@ -21,9 +21,9 @@ int main(void)
     const n00bb_abi_table_schema_t *official =
         n00bb_abi_v1_table_schemas(&schema_count);
     bool ok = EXPECT("every v1 table kind has one schema",
-        schema_count == N00B_ABI_TABLE_BAKED_NODE);
+        schema_count == N00B_ABI_TABLE_LAST);
     for (uint32_t kind = N00B_ABI_TABLE_PACKAGE;
-         kind <= N00B_ABI_TABLE_BAKED_NODE; kind++) {
+         kind <= N00B_ABI_TABLE_LAST; kind++) {
         size_t matches = 0;
         for (size_t i = 0; i < schema_count; i++) {
             if (official[i].kind != kind) continue;

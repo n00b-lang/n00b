@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "writ/diag.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -63,14 +65,16 @@ enum {
 };
 
 typedef struct {
-    writ_span_t span;
-    writ_str_t  label;
+    writ_span_t         span;
+    writ_str_t          label;
+    core_text_message_t text;
 } writ_diag_label_t;
 
 typedef struct {
-    writ_span_t span;
-    writ_str_t  replacement;
-    writ_str_t  description;
+    writ_span_t         span;
+    writ_str_t          replacement;
+    writ_str_t          description;
+    core_text_message_t text;
 } writ_diag_suggestion_t;
 
 typedef struct {
@@ -86,6 +90,8 @@ typedef struct {
     const writ_diag_label_t      *notes;
     size_t                        suggestion_count;
     const writ_diag_suggestion_t *suggestions;
+    uint32_t                      code_id;
+    core_text_message_t           detail;
 } writ_diag_t;
 
 typedef void (*writ_diag_sink_fn)(void *context, const writ_diag_t *diag);
@@ -123,6 +129,7 @@ writ_status_t     writ_diag_render(const writ_session_t *session, const writ_dia
                                    writ_str_t *rendered);
 
 writ_unit_t  *writ_unit_new(writ_session_t *session);
+writ_status_t writ_unit_add_contract_dir(writ_unit_t *unit, writ_str_t dir);
 writ_status_t writ_unit_add_source(writ_unit_t *unit, writ_source_kind_t kind,
                                    writ_origin_t origin, writ_str_t text,
                                    uint32_t *source_id);
@@ -136,6 +143,7 @@ writ_status_t writ_unit_dump(const writ_unit_t *unit, writ_str_t *rendered);
 writ_status_t writ_format_unit(const writ_unit_t *unit, const writ_output_t *output);
 
 writ_str_t    writ_platform_host_triple(void);
+void          writ_platform_binary_io(void);
 writ_status_t writ_platform_from_triple(writ_session_t *session, writ_str_t triple,
                                         writ_platform_t **platform);
 writ_str_t    writ_platform_triple(const writ_platform_t *platform);

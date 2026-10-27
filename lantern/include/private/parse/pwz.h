@@ -166,6 +166,8 @@ typedef struct {
 
 core_list_decl(pwz_step_t);
 
+core_list_decl(parse_pwz_expected_t);
+
 typedef enum {
     PWZ_RUN_NONE,
     PWZ_RUN_ENDED,
@@ -202,6 +204,10 @@ struct parse_pwz_parser_t {
     int32_t                     longest_end;
 
     parse_token_stream_t         *stream;
+    int32_t                     stream_first;
+    int32_t                     stream_end;
+    int32_t                     expected_pos;
+    core_list_t(parse_pwz_expected_t) expected;
 
     parse_tree_t           *result_tree;
     parse_tree_array_t      result_trees;

@@ -15,7 +15,6 @@
 
 core_list_decl(n00b_abi_storage_v1);
 core_list_decl(n00b_abi_baked_node_v1);
-core_list_decl(uint32_t);
 core_list_decl(n00bb_abi_storage_relocation_t);
 
 typedef struct {

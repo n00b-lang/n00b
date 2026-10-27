@@ -9,12 +9,13 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 (cd "$(dirname "$program")" \
     && "$compiler" lower --dump-ranges "$(basename "$program")") \
-    >"$tmp/output" 2>&1
+    >"$tmp/output" 2>"$tmp/errors"
 failed=0
 for module in "$@"; do
     grep "^range $module " "$tmp/output" >"$tmp/pairs" || true
     if ! test -s "$tmp/pairs"; then
         echo "$module: no shared range pairs" >&2
+        cat "$tmp/errors" >&2
         failed=1
         continue
     fi

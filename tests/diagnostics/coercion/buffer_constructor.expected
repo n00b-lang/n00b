@@ -1,0 +1,2 @@
+tests/diagnostics/coercion/buffer_constructor.n:7:29: error N00B-T0529: `"x"` is a string, but a `Buffer` is required here
+  help: write `buffer_from_string("x")`

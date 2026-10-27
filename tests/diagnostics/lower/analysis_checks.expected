@@ -1,0 +1,36 @@
+tests/diagnostics/lower/analysis_checks.n:7:5: error N00B-S0015: this `assert` condition has a side effect: it calls `bump`; `bump` writes global `counter`; global `counter` is visible outside the call
+  tests/diagnostics/lower/analysis_checks.n:7:12: note: the side effect starts here
+  tests/diagnostics/lower/analysis_checks.n:3:5: note: `counter` is written here
+  help: `assert` conditions do not run in release builds; compute the value before the `assert`
+tests/diagnostics/lower/analysis_checks.n:8:12: warning N00B-T0525: integer values 0..18446744073709551615 may not fit in `int`
+  note: the program stops with a panic when a value does not fit
+tests/diagnostics/lower/analysis_checks.n:15:1: error N00B-S0015: this `assert` condition has a side effect: it calls `fill`; `fill` writes through its argument 1; argument 1 is the address of the caller's own storage
+  tests/diagnostics/lower/analysis_checks.n:15:8: note: the side effect starts here
+  help: `assert` conditions do not run in release builds; compute the value before the `assert`
+tests/diagnostics/lower/analysis_checks.n:26:10: error N00B-S0003: `c` is used here after it may have been consumed
+  tests/diagnostics/lower/analysis_checks.n:25:10: note: `c` is consumed here
+  help: a consumed value cannot be used again; pass a copy to the `consume` parameter if you still need it
+tests/diagnostics/lower/analysis_checks.n:47:46: error N00B-S0052: this initializer reads global `pointer_state` which has no explicit initializer
+  tests/diagnostics/lower/analysis_checks.n:43:5: note: `pointer_state` is declared here
+tests/diagnostics/lower/analysis_checks.n:48:15: error N00B-S0052: this initializer reads global `p` before it is guaranteed to be initialized through the call to `total`
+  tests/diagnostics/lower/analysis_checks.n:44:5: note: `p` is declared here
+tests/diagnostics/lower/analysis_checks.n:50:19: error N00B-S0052: this initializer reads global `q` before it is guaranteed to be initialized through the call to `first`
+  tests/diagnostics/lower/analysis_checks.n:45:5: note: `q` is declared here
+tests/diagnostics/lower/analysis_checks.n:52:1: error N00B-S0001: `x` is a `let`, so it cannot be assigned again
+  tests/diagnostics/lower/analysis_checks.n:51:5: note: `x` is declared here
+  tests/diagnostics/lower/analysis_checks.n:51:9: note: it is first initialized here
+  help: declare `x` with `var` to allow assignment
+tests/diagnostics/lower/analysis_checks.n:54:6: error N00B-S0012: `f_4` can reach the end of its body without returning a value
+  tests/diagnostics/lower/analysis_checks.n:58:1: note: a path through the body reaches its end here
+  help: add a `return` on every path through the body
+tests/diagnostics/lower/analysis_checks.n:65:12: error N00B-S0013: this `switch` has no case for `Color.Blue`, so `name` can reach its end without returning a value
+  tests/diagnostics/lower/analysis_checks.n:64:6: note: `name` returns `int`
+  help: add the missing cases, an `else`, or a `return` after the `switch`
+tests/diagnostics/lower/analysis_checks.n:88:1: error N00B-S0010: this call may write memory reachable from constant `FIXED`, which must not change
+  tests/diagnostics/lower/analysis_checks.n:82:7: note: `FIXED` is declared here
+  help: write to a copy of the constant instead
+tests/diagnostics/lower/analysis_checks.n:90:12: error N00B-S0009: `x` may be nil here
+  help: use its value only where a test such as `x != nil` proves it, with no assignment to it in between
+tests/diagnostics/lower/analysis_checks.n:105:16: error N00B-S0009: `copy.value` may be nil here
+  tests/diagnostics/lower/analysis_checks.n:104:9: note: `copy.value` is assigned here, after the test
+  help: use its value only where a test such as `copy.value != nil` proves it, with no assignment to it in between

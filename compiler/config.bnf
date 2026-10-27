@@ -1,0 +1,7 @@
+<config> ::= <item> | <item> <config>
+<item> ::= <section> | <setting>
+<section> ::= %"[" %IDENTIFIER %"]"
+<setting> ::= %IDENTIFIER %"=" <value>
+<value> ::= %STRING | %INTEGER | %"true" | %"false" | <list>
+<list> ::= %"[" %"]" | %"[" <elements> %"]"
+<elements> ::= <value> | <value> %"," | <value> %"," <elements>

@@ -34,21 +34,38 @@ typedef enum : uint8_t {
     SCAN_STATUS_RECOVERED,
 } scan_status_t;
 
+typedef enum : uint8_t {
+#define SCAN_DIAG(id, text) SCAN_DIAG_##id,
+#include "scanner/scan_diags.def"
+#undef SCAN_DIAG
+    SCAN_DIAG_COUNT,
+} scan_diag_kind_t;
+
 typedef struct {
-    scan_status_t status;
-    core_string_t message;
-    core_string_t lexer;
-    size_t        start_byte;
-    size_t        end_byte;
+    scan_diag_kind_t kind;
+    core_string_t    detail;
+} scan_problem_t;
+
+#define SCAN_PROBLEM(id) ((scan_problem_t){.kind = SCAN_DIAG_##id})
+#define SCAN_PROBLEM_WITH(id, text) \
+    ((scan_problem_t){.kind = SCAN_DIAG_##id, .detail = (text)})
+
+typedef struct {
+    scan_status_t  status;
+    scan_problem_t problem;
+    core_string_t  lexer;
+    size_t         start_byte;
+    size_t         end_byte;
 } scan_diagnostic_t;
 
 typedef struct {
-    core_string_t message;
-    size_t        start_byte;
-    size_t        end_byte;
+    scan_problem_t problem;
+    size_t         start_byte;
+    size_t         end_byte;
 } scan_warning_t;
 
 core_list_decl(scan_warning_t);
+core_list_decl(scan_diagnostic_t);
 
 struct parse_scanner_t {
     core_buffer_t     *buffer;
@@ -95,18 +112,19 @@ struct parse_scanner_t {
     bool              token_suffix_lookahead;
     bool              append_closed;
     scan_status_t     status;
-    core_string_t     status_message;
+    scan_problem_t    status_problem;
     core_string_t     lexer_context;
     core_string_t     status_lexer;
     size_t            status_start_byte;
     size_t            status_end_byte;
     bool              recovery_enabled;
     bool              had_recovery;
-    core_string_t     recovery_message;
+    scan_problem_t    recovery_problem;
     core_string_t     recovery_lexer;
     size_t            recovery_start_byte;
     size_t            recovery_end_byte;
     core_list_t(scan_warning_t) warnings;
+    core_list_t(scan_diagnostic_t) recoveries;
     scan_span_check_cb_t span_check_cb;
     size_t            checked_to;
 };
@@ -141,14 +159,17 @@ extern void scan_scanner_set_finalize_callback(parse_scanner_t *s,
 
 extern bool scan_scanner_discard_consumed(parse_scanner_t *s);
 
-extern void scan_set_incomplete(parse_scanner_t *s, core_string_t message,
+extern void scan_set_incomplete(parse_scanner_t *s, scan_problem_t problem,
                                 size_t start_byte);
 
-extern void scan_set_invalid(parse_scanner_t *s, core_string_t message,
+extern void scan_set_invalid(parse_scanner_t *s, scan_problem_t problem,
                              size_t start_byte);
 
-extern void scan_set_recovered(parse_scanner_t *s, core_string_t message,
+extern void scan_set_recovered(parse_scanner_t *s, scan_problem_t problem,
                                size_t start_byte, size_t end_byte);
+
+extern core_string_t scan_problem_text(scan_problem_t problem);
+extern scan_problem_t scan_problem_copy(scan_problem_t problem);
 
 extern bool scan_scanner_set_recovery(parse_scanner_t *s, bool enable);
 
@@ -158,7 +179,7 @@ extern scan_status_t scan_status(const parse_scanner_t *s);
 
 extern bool scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out);
 
-extern void scan_add_warning(parse_scanner_t *s, core_string_t message,
+extern void scan_add_warning(parse_scanner_t *s, scan_problem_t problem,
                              size_t start_byte, size_t end_byte);
 extern size_t scan_warning_count(const parse_scanner_t *s);
 extern void scan_scanner_set_span_check(parse_scanner_t *s,
@@ -167,6 +188,9 @@ extern void scan_scanner_check_rest(parse_scanner_t *s);
 extern void scan_scanner_rewind_checks(parse_scanner_t *s, size_t to);
 extern const scan_warning_t *scan_warning_at(const parse_scanner_t *s,
                                              size_t index);
+extern size_t scan_recovery_count(const parse_scanner_t *s);
+extern const scan_diagnostic_t *scan_recovery_at(const parse_scanner_t *s,
+                                                 size_t index);
 
 extern bool scan_scanner_append(parse_scanner_t *s, core_string_t data);
 

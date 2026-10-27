@@ -196,7 +196,6 @@ parse_token_copy(const parse_token_info_t *token, bool with_trivia)
 
     copy->fields = token->fields;
     copy->fields.holds_source = false;
-    copy->fields.tree_owned = false;
     parse_token_set_source(copy, token->fields.source);
 
     if (token->extras) {
@@ -219,27 +218,6 @@ parse_token_copy(const parse_token_info_t *token, bool with_trivia)
     }
 
     return copy;
-}
-
-parse_token_info_t *
-parse_token_clone_for_tree(const parse_token_info_t *token)
-{
-    parse_token_info_t *copy = parse_token_copy(token, true);
-
-    if (copy) {
-        copy->fields.tree_owned = true;
-    }
-    return copy;
-}
-
-void
-parse_token_free_from_tree(parse_token_info_t *token)
-{
-    if (!token || !token->fields.tree_owned) {
-        return;
-    }
-
-    parse_token_free(token);
 }
 
 core_option_t(core_string_t)

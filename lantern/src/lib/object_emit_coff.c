@@ -94,7 +94,7 @@ bool core_object_emit_coff(const core_target_desc_t *target,
     if (!core_object_size_add(offset, string_size, &offset)) goto done;
     image = core_alloc_size(offset, 1);
 
-    core_le_store_u16(image, 0x8664);
+    core_le_store_u16(image, CORE_OBJECT_MACHINE_COFF_X86_64);
     core_le_store_u16(image + 2, (uint16_t)section_count);
     core_le_store_u32(image + 8, (uint32_t)symtab_offset);
     core_le_store_u32(image + 12, (uint32_t)symbol_count);

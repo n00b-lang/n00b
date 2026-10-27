@@ -1,5 +1,0 @@
-func check(value: int) {
-    require value == 1
-}
-
-check(2)

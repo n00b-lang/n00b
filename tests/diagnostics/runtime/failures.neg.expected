@@ -1,0 +1,5 @@
+panic: cast of -1 to `uint` is out of range
+  --> tests/diagnostics/runtime/failures.n:64:12
+backtrace:
+  at tou (tests/diagnostics/runtime/failures.n:64:12)
+  at run (tests/diagnostics/runtime/failures.n:126:17)

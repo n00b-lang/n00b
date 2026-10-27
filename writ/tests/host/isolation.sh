@@ -28,6 +28,6 @@ int main(void) {
     return !ok;
 }
 EOF
-"$compiler" -std=c11 -I"$headers" "$work/host.c" "$library" "$@" -Wl,-rpath,"$(cd "$(dirname "$library")" && pwd)" \
+"$compiler" -std=c11 ${N00B_SANITIZE_FLAGS:-} -I"$headers" "$work/host.c" "$library" "$@" -Wl,-rpath,"$(cd "$(dirname "$library")" && pwd)" \
     -o "$work/host"
 "$work/host"

@@ -1502,8 +1502,9 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
 
             static const ir_op_t terms[] = {IR_OP_JUMP, IR_OP_RETURN,
                                             IR_OP_BRANCH, IR_OP_SWITCH,
-                                            IR_OP_UNREACHABLE};
-            ir_op_t     term = terms[next_term++ % 5];
+                                            IR_OP_UNREACHABLE, IR_OP_FAIL,
+                                            IR_OP_TRAP};
+            ir_op_t     term = terms[next_term++ % (sizeof(terms) / sizeof(terms[0]))];
             ir_instr_t *t    = ir_instr_add(b, term);
 
             gen_ops[term]++;
@@ -1530,9 +1531,14 @@ static ir_module_t *gen_module(ir_ctx_t *ctx, uint32_t seq)
                 break;
 
             case IR_OP_RETURN:
+            case IR_OP_TRAP:
                 if (vals.n && rnd(2)) {
                     ir_instr_operand_value(t, vals.v[rnd(vals.n)]);
                 }
+                break;
+
+            case IR_OP_FAIL:
+                ir_instr_operand_value(t, vals.v[rnd(vals.n)]);
                 break;
 
             default:
@@ -1686,7 +1692,7 @@ static void test_an_error_points_at_what_it_is_about(void)
         }
 
         const ir_diag_t *dg  = ir_diags_at(d, 0);
-        ir_span_t        s   = dg->primary.span;
+        ir_span_t        s   = dg->span;
         size_t           n   = cases[i].token.u8_bytes;
         size_t           len = cases[i].src.u8_bytes;
 

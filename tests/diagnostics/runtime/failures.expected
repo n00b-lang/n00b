@@ -1,0 +1,8 @@
+tests/diagnostics/runtime/failures.n:4:29: note N00B-S0064: parameter `items` could be `view`: `always_fail` never writes anything reachable from it
+tests/diagnostics/runtime/failures.n:4:29: warning N00B-S0063: parameter `items` is never used
+  help: if a signature requires it, name it `_items`
+tests/diagnostics/runtime/failures.n:31:9: warning N00B-S0006: the value assigned to `b` here is never read
+tests/diagnostics/runtime/failures.n:37:9: warning N00B-S0006: the value assigned to `b` here is never read
+tests/diagnostics/runtime/failures.n:43:9: warning N00B-S0006: the value assigned to `b` here is never read
+tests/diagnostics/runtime/failures.n:55:11: note N00B-S0064: parameter `a` could be `view`: `pick` never writes anything reachable from it
+tests/diagnostics/runtime/failures.n:126:17: warning N00B-S0059: this condition is always false, so the other branch never runs

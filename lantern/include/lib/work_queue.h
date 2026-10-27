@@ -33,16 +33,11 @@ core_work_submit_result_t core_work_submit(
     core_work_job_t *const *dependencies, size_t dependency_count,
     core_work_job_t **out);
 
-/* Blocks until a ready job is available or every submitted job is terminal. */
 bool core_work_take(core_work_queue_t *q, core_work_job_t **out);
-/* Like core_work_take(), but only claims jobs of `kind`. This permits
- * dedicated worker pools for independent phases on one dependency graph. */
 bool core_work_take_kind(core_work_queue_t *q, uint32_t kind,
                          core_work_job_t **out);
 bool core_work_complete(core_work_queue_t *q, core_work_job_t *job,
                         bool succeeded, void *result);
-/* A fatal diagnostic on `unit` makes this phase fail even if its worker
- * otherwise succeeded, which also fails all dependent jobs. */
 bool core_work_complete_tu(core_work_queue_t *q, core_work_job_t *job,
                           core_translation_unit_t *unit, bool succeeded);
 bool core_work_wait(core_work_queue_t *q, core_work_job_t *job);

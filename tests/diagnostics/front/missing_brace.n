@@ -1,0 +1,7 @@
+func f(a: int) -> int {
+    if a > 1 {
+        return a
+    return 0
+}
+
+require f(2) == 2

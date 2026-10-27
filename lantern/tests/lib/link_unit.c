@@ -311,8 +311,9 @@ test_link_unit_conflicts_and_payload_ownership(void)
                              CORE_STRING_STATIC("value"), &missing);
     check("unresolved references become link-unit diagnostics",
           !core_link_unit_validate(link)
-              && core_diagnostics_has_fatal(
+              && core_diagnostics_failed(
                   core_link_unit_diagnostics(link))
+              && core_link_unit_has_fatal_diagnostics(link)
               && !core_link_reference_target(missing));
     core_link_unit_free(link);
 

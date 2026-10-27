@@ -9,7 +9,7 @@ int32_t n00b_ffi_unwind_save(uint64_t *buffer) __attribute__((returns_twice));
 int
 guarded_call(compute_fn compute, int value)
 {
-    uint64_t buffer[24];
+    uint64_t buffer[32];
     uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
     if (n00b_ffi_unwind_save(buffer)) {
         n00b_ffi_leave(previous);

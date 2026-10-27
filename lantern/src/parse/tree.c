@@ -105,18 +105,38 @@ parse_tree_free(parse_tree_t *t)
         parse_tree_t *n = stack.data[--stack.len];
 
         if (!n->is_leaf) {
-            for (size_t i = 0; i < n->node.num_children; i++) {
-                core_list_push(stack, n->node.children[i]);
+            for (size_t i = 0; i < n->node->num_children; i++) {
+                core_list_push(stack, n->node->children[i]);
             }
         }
         else {
-            parse_token_free_from_tree(core_tree_leaf_value(n));
+            if (n->owns_leaf) parse_token_free(core_tree_leaf_value(n));
         }
 
         parse_tree_free_node(n);
     }
 
     core_list_free(stack);
+}
+
+parse_tree_t *
+parse_tree_new_node(parse_nt_node_t value)
+{
+    return core_tree_node(parse_nt_node_t, parse_token_info_ptr_t, value);
+}
+
+parse_tree_t *
+parse_tree_new_owned_leaf(parse_token_info_t *token)
+{
+    if (!token) return nullptr;
+    parse_tree_t *leaf = core_tree_leaf(parse_nt_node_t,
+                                        parse_token_info_ptr_t, token);
+    if (!leaf) {
+        parse_token_free(token);
+        return nullptr;
+    }
+    leaf->owns_leaf = true;
+    return leaf;
 }
 
 void

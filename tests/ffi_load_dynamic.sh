@@ -13,7 +13,7 @@ if "$compiler" build --contract-dir "$contract_dir" --output "$tmp/program" \
     echo "a binding with load dynamic was accepted" >&2
     exit 1
 fi
-if ! grep -q 'error\[E0901\]: not supported yet: `load dynamic`' \
+if ! grep -q 'error N00B-F1901: not supported yet: `load dynamic`' \
         "$tmp/build.log"; then
     cat "$tmp/build.log" >&2
     exit 1

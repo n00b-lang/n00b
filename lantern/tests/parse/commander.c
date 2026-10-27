@@ -7,25 +7,25 @@ static parse_cmdr_t *tool(void)
 {
     static const parse_cmdr_flag_t global_flags[] = {
         {CORE_STRING_STATIC("--trace"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-         CORE_STRING_STATIC("enable tracing")},
-        {{0}, {0}, 0, false, {0}},
+         CORE_STRING_STATIC("enable tracing"), false, nullptr},
+        {0},
     };
     static const parse_cmdr_flag_t build_flags[] = {
         {CORE_STRING_STATIC("--json"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-         CORE_STRING_STATIC("j")},
+         CORE_STRING_STATIC("j"), false, nullptr},
         {CORE_STRING_STATIC("--out"), CORE_STRING_STATIC("-o"),
-         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("o")},
-        {{0}, {0}, 0, false, {0}},
+         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("o"), false, nullptr},
+        {0},
     };
 
     static const parse_cmdr_cmd_t commands[] = {
         {CORE_STRING_STATIC("build"), CORE_STRING_STATIC("build it"),
-         build_flags, CORE_STRING_STATIC("file"), 1, 1},
+         build_flags, CORE_STRING_STATIC("file"), 1, 1, false},
         {CORE_STRING_STATIC("clean"), CORE_STRING_STATIC("clean it"),
-         nullptr, {0}, 0, 0},
+         nullptr, {0}, 0, 0, false},
         {CORE_STRING_STATIC("library"), CORE_STRING_STATIC("build a library"),
-         nullptr, CORE_STRING_STATIC("file"), 1, -1},
-        {{0}, {0}, nullptr, {0}, 0, 0},
+         nullptr, CORE_STRING_STATIC("file"), 1, -1, false},
+        {0},
     };
 
     static const parse_cmdr_spec_t spec = {
@@ -194,17 +194,19 @@ static void test_flags_before_commands_and_command_scope_precedence(void)
     parse_cmdr_free(tool_cli);
 
     static const parse_cmdr_flag_t root_flags[] = {
-        {CORE_STRING_STATIC("--scope"), {0}, PARSE_CMDR_TYPE_WORD, true, {0}},
-        {{0}, {0}, 0, false, {0}},
+        {CORE_STRING_STATIC("--scope"), {0}, PARSE_CMDR_TYPE_WORD, true, {0}, false,
+         nullptr},
+        {0},
     };
     static const parse_cmdr_flag_t local_flags[] = {
-        {CORE_STRING_STATIC("--scope"), {0}, PARSE_CMDR_TYPE_BOOL, false, {0}},
-        {{0}, {0}, 0, false, {0}},
+        {CORE_STRING_STATIC("--scope"), {0}, PARSE_CMDR_TYPE_BOOL, false, {0}, false,
+         nullptr},
+        {0},
     };
     static const parse_cmdr_cmd_t commands[] = {
         {CORE_STRING_STATIC("build"), {0}, local_flags,
-         CORE_STRING_STATIC("file"), 1, 1},
-        {{0}, {0}, nullptr, {0}, 0, 0},
+         CORE_STRING_STATIC("file"), 1, 1, false},
+        {0},
     };
     static const parse_cmdr_spec_t spec = {
         .tool = CORE_STRING_STATIC("tool"), .flags = root_flags,
@@ -245,8 +247,9 @@ static void test_repeatable_flags_preserve_all_values(void)
 {
     static const parse_cmdr_flag_t flags[] = {
         {CORE_STRING_STATIC("--define"), CORE_STRING_STATIC("-D"),
-         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("definition")},
-        {{0}, {0}, 0, false, {0}},
+         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("definition"), false,
+         nullptr},
+        {0},
     };
     static const parse_cmdr_spec_t spec = {
         .tool = CORE_STRING_STATIC("tool"), .flags = flags,
@@ -274,15 +277,15 @@ static void test_a_bare_invocation_runs_the_default_command(void)
 {
     static const parse_cmdr_flag_t build_flags[] = {
         {CORE_STRING_STATIC("--out"), CORE_STRING_STATIC("-o"),
-         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("o")},
-        {{0}, {0}, 0, false, {0}},
+         PARSE_CMDR_TYPE_WORD, true, CORE_STRING_STATIC("o"), false, nullptr},
+        {0},
     };
     static const parse_cmdr_cmd_t commands[] = {
         {CORE_STRING_STATIC("build"), CORE_STRING_STATIC("build it"),
-         build_flags, CORE_STRING_STATIC("file"), 1, 1},
+         build_flags, CORE_STRING_STATIC("file"), 1, 1, false},
         {CORE_STRING_STATIC("clean"), CORE_STRING_STATIC("clean it"),
-         nullptr, {0}, 0, 0},
-        {{0}, {0}, nullptr, {0}, 0, 0},
+         nullptr, {0}, 0, 0, false},
+        {0},
     };
     static const parse_cmdr_spec_t spec = {
         .tool = CORE_STRING_STATIC("tool"), .commands = commands,
@@ -307,8 +310,46 @@ static void test_a_bare_invocation_runs_the_default_command(void)
     parse_cmdr_free(c);
 }
 
+static void test_integer_options_reject_words(void)
+{
+    static const parse_cmdr_flag_t flags[] = {
+        {CORE_STRING_STATIC("--keep"), CORE_STRING_STATIC("-k"),
+         PARSE_CMDR_TYPE_INT, true, CORE_STRING_STATIC("count"), false,
+         nullptr},
+        {0},
+    };
+    static const parse_cmdr_spec_t spec = {
+        .tool = CORE_STRING_STATIC("tool"), .flags = flags,
+        .arg = CORE_STRING_STATIC("file"), .min_args = 1, .max_args = 1,
+    };
+    parse_cmdr_t *c = parse_cmdr_new(&spec);
+    parse_cmdr_result_t *word = parse_cmdr_parse(c, 3,
+        (const char *[]) {"--keep", "abc", "a.n"});
+    parse_cmdr_error_t error = parse_cmdr_result_error_detail(word, 0);
+    check("an integer option rejects a word",
+          !parse_cmdr_result_ok(word)
+              && error.kind == PARSE_CMDR_ERROR_INVALID_INTEGER
+              && core_string_eq(error.value, CORE_STRING_STATIC("abc")));
+    parse_cmdr_result_free(word);
+    parse_cmdr_result_t *assigned = parse_cmdr_parse(c, 2,
+        (const char *[]) {"--keep=4", "a.n"});
+    check("an integer option accepts --flag=value",
+          parse_cmdr_result_ok(assigned)
+              && parse_cmdr_flag_int(assigned, CORE_STRING_STATIC("--keep"),
+                                     0) == 4);
+    parse_cmdr_result_free(assigned);
+    parse_cmdr_result_t *missing = parse_cmdr_parse(c, 2,
+        (const char *[]) {"a.n", "--keep"});
+    check("a valued option at the end reports its missing value",
+          parse_cmdr_result_error_detail(missing, 0).kind
+              == PARSE_CMDR_ERROR_MISSING_VALUE);
+    parse_cmdr_result_free(missing);
+    parse_cmdr_free(c);
+}
+
 int main(void)
 {
+    test_integer_options_reject_words();
     test_a_command_and_its_arguments_come_back();
     test_flags_in_every_spelling();
     test_an_undeclared_flag_is_an_error();

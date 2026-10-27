@@ -386,6 +386,8 @@ struct ir_dead_code_t {
     bool                        *covered;
     int64_t                     *cut;
     core_list_t(ir_dead_site_t)  sites;
+    ir_const_varies_fn           varies;
+    void                        *context;
 };
 
 static bool
@@ -398,7 +400,8 @@ user_instruction(const ir_instr_t *in)
 }
 
 static bool
-constant_condition(const ir_instr_t *terminator, bool *truth)
+constant_condition(const ir_dead_code_t *dead, const ir_instr_t *terminator,
+                   bool *truth)
 {
     if (!terminator || terminator->op != IR_OP_BRANCH
         || terminator->n_operands != 3) return false;
@@ -406,7 +409,8 @@ constant_condition(const ir_instr_t *terminator, bool *truth)
     const ir_instr_t *def = condition ? condition->def : nullptr;
     if (!def || def->op != IR_OP_CONST || def->n_operands != 1
         || def->operands[0].kind != IR_OPD_CONST
-        || def->operands[0].lit.is_float) return false;
+        || def->operands[0].lit.is_float
+        || (dead->varies && dead->varies(dead->context, def))) return false;
     *truth = def->operands[0].lit.i.mag != 0;
     return true;
 }
@@ -461,7 +465,8 @@ add_dead_site(ir_dead_code_t *dead, const ir_instr_t *site,
 }
 
 ir_dead_code_t *
-ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges, void *context)
+ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges,
+                   ir_const_varies_fn varies, void *context)
 {
     if (!f || !f->n_blocks) return nullptr;
     ir_dead_code_t *dead = core_alloc(ir_dead_code_t);
@@ -470,6 +475,8 @@ ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges, void *context)
     dead->covered = core_alloc_array(bool, f->n_blocks);
     dead->cut     = core_alloc_array(int64_t, f->n_blocks);
     dead->sites   = core_list_new(ir_dead_site_t);
+    dead->varies  = varies;
+    dead->context = context;
     for (uint32_t b = 0; b < f->n_blocks; b++) dead->cut[b] = -1;
     ir_block_t *entry = ir_block_entry(f);
     core_list_t(site_block_ptr_t) work = core_list_new(site_block_ptr_t);
@@ -487,7 +494,7 @@ ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges, void *context)
         if (dead->cut[block->index] >= 0) continue;
         ir_instr_t *terminator = ir_block_terminator(block);
         bool truth = false;
-        bool constant = constant_condition(terminator, &truth);
+        bool constant = constant_condition(dead, terminator, &truth);
         for (uint32_t s = 0; terminator && s < ir_succ_count(terminator);
              s++) {
             ir_block_t *next = ir_succ_at(terminator, s);
@@ -513,7 +520,7 @@ ir_dead_code_build(ir_func_t *f, ir_call_diverges_fn diverges, void *context)
         }
         ir_instr_t *terminator = ir_block_terminator(block);
         bool truth = false;
-        if (!constant_condition(terminator, &truth)) continue;
+        if (!constant_condition(dead, terminator, &truth)) continue;
         ir_block_t *untaken = ir_succ_of(&terminator->operands[truth ? 2 : 1]);
         if (!untaken || dead->live[untaken->index]
             || dead->covered[untaken->index]) continue;

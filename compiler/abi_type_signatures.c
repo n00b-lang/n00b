@@ -9,7 +9,6 @@
 
 core_list_decl(n00b_abi_call_signature_v1);
 core_list_decl(n00b_abi_parameter_v1);
-core_list_decl(uint32_t);
 
 static bool
 passing_mode(th_mode mode, uint32_t *out)

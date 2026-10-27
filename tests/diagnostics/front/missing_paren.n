@@ -1,0 +1,5 @@
+func f(a: int, b: int) -> int {
+    return a + b
+}
+
+require f(1, 2 == 3

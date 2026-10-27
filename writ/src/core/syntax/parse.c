@@ -1,6 +1,8 @@
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "lib/os.h"
 #include "syntax.h"
 
 #include "parse/ambiguity.h"
@@ -102,14 +104,6 @@ typedef struct {
     parse_nt_id_t    embedded_start;
 } writ_grammar_t;
 
-static void
-grammar_release(void *object)
-{
-    writ_grammar_t *grammar = object;
-    core_dict_free(&grammar->rule_by_id);
-    parse_grammar_free(grammar->grammar);
-}
-
 static parse_nt_id_t
 nonterminal_id(parse_grammar_t *grammar, const char *name)
 {
@@ -130,20 +124,21 @@ static const grammar_spec_t grammar_specs[] = {
     [WRIT_GRAMMAR_JSON] = {{.data = (char *)json_grammar_text, .u8_bytes = sizeof(json_grammar_text) - 1}, &json_lexer, "json-file", "json-file", "json-file"},
 };
 
+static writ_grammar_t  *loaded_grammars[WRIT_GRAMMAR_COUNT];
+static pthread_mutex_t  loaded_grammars_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static writ_grammar_t *
-grammar_for(writ_session_t *session, writ_grammar_id_t which)
+load_grammar(writ_grammar_id_t which)
 {
-    if (session->grammars[which]) {
-        return session->grammars[which];
-    }
     const grammar_spec_t *spec = &grammar_specs[which];
-    writ_grammar_t *grammar = writ_alloc(session, sizeof(writ_grammar_t));
+    writ_grammar_t *grammar = core_alloc(writ_grammar_t);
     grammar->grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar->grammar, false);
     parse_bnf_declare_terminals(grammar->grammar, spec->text);
     if (!parse_bnf_load(spec->text, core_string_borrow(spec->file, strlen(spec->file)), grammar->grammar)
         || !scan_grammar_set_lex(grammar->grammar, spec->lexer)) {
         parse_grammar_free(grammar->grammar);
+        core_free(grammar);
         return nullptr;
     }
     core_dict_init(&grammar->rule_by_id, nullptr, nullptr);
@@ -156,8 +151,19 @@ grammar_for(writ_session_t *session, writ_grammar_id_t which)
     grammar->file_start         = nonterminal_id(grammar->grammar, spec->file);
     grammar->declarations_start = nonterminal_id(grammar->grammar, spec->declarations);
     grammar->embedded_start     = nonterminal_id(grammar->grammar, spec->embedded);
-    session->grammars[which]    = grammar;
-    writ_on_session_free(session, grammar_release, grammar);
+    parse_grammar_finalize(grammar->grammar);
+    return grammar;
+}
+
+static writ_grammar_t *
+grammar_for(writ_grammar_id_t which)
+{
+    pthread_mutex_lock(&loaded_grammars_lock);
+    if (!loaded_grammars[which]) {
+        loaded_grammars[which] = load_grammar(which);
+    }
+    writ_grammar_t *grammar = loaded_grammars[which];
+    pthread_mutex_unlock(&loaded_grammars_lock);
     return grammar;
 }
 
@@ -326,8 +332,10 @@ report_syntax_error(writ_session_t *session, uint32_t source, parse_token_stream
 {
     scan_diagnostic_t lexical;
     if (scanner && scan_status(scanner) == SCAN_STATUS_INVALID && scan_diagnostic(scanner, &lexical)) {
+        core_string_t text = scan_problem_text(lexical.problem);
         writ_report(session, WRIT_D_LEXICAL, (writ_loc_t){source, (uint32_t)lexical.start_byte, (uint32_t)lexical.end_byte},
-                    "%.*s", (int)lexical.message.u8_bytes, lexical.message.data);
+                    WRIT_MESSAGE(TEXT, CORE_TEXT_STRING(text)));
+        core_free(text.data);
         return;
     }
     scan_stream_reset(stream);
@@ -335,7 +343,7 @@ report_syntax_error(writ_session_t *session, uint32_t source, parse_token_stream
     const writ_source_t *text = writ_source_at(session, source);
     if (!token) {
         uint32_t end = (uint32_t)text->text.length;
-        writ_report(session, WRIT_D_SYNTAX, (writ_loc_t){source, end, end}, "unexpected end of input");
+        writ_report(session, WRIT_D_SYNTAX, (writ_loc_t){source, end, end}, WRIT_BARE(UNEXPECTED_END_OF_INPUT));
         return;
     }
     writ_loc_t loc = {source, (uint32_t)parse_token_start_byte(token), (uint32_t)parse_token_end_byte(token)};
@@ -349,17 +357,17 @@ report_syntax_error(writ_session_t *session, uint32_t source, parse_token_stream
                                                  writ_cstr("binding")));
     }
     if (second_binding) {
-        writ_report(session, WRIT_D_BIND_LANGUAGE, loc, "a second binding part");
+        writ_report(session, WRIT_D_BIND_LANGUAGE, loc, WRIT_BARE(A_SECOND_BINDING_PART));
         return;
     }
-    writ_report(session, WRIT_D_SYNTAX, loc, "unexpected `%.*s`", (int)spelling.length, spelling.data);
+    writ_report(session, WRIT_D_SYNTAX, loc, WRIT_MESSAGE(UNEXPECTED, WRIT_ARG(spelling)));
 }
 
 static writ_status_t
 parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind, writ_grammar_id_t which)
 {
     writ_session_t *session = unit->session;
-    writ_grammar_t *grammar = grammar_for(session, which);
+    writ_grammar_t *grammar = grammar_for(which);
     if (!grammar) {
         return WRIT_TOOL_FAILED;
     }
@@ -381,7 +389,8 @@ parse_source(writ_unit_t *unit, uint32_t source, writ_source_kind_t kind, writ_g
     } else {
         parse_forest_t forest = parse_pwz_get_forest(parser);
         if (parse_forest_count(&forest) > 1) {
-            writ_report(session, WRIT_D_AMBIGUOUS, (writ_loc_t){source, 0, (uint32_t)text->text.length}, nullptr);
+            writ_report(session, WRIT_D_AMBIGUOUS, (writ_loc_t){source, 0, (uint32_t)text->text.length},
+                        WRIT_NO_DETAIL);
         }
         converter_t converter = {unit, session, grammar, source, core_list_new(uint32_t)};
         writ_loc_t loc;
@@ -434,6 +443,9 @@ static writ_status_t
 read_source(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
 {
     writ_str_t terminated = writ_str_copy(unit->session, path.data, path.length);
+    if (!core_os_is_regular_file(core_string_borrow(terminated.data, terminated.length))) {
+        return WRIT_IO_FAILED;
+    }
     FILE *file = fopen(terminated.data, "rb");
     if (!file) {
         return WRIT_IO_FAILED;
@@ -500,7 +512,8 @@ writ_unit_add_file(writ_unit_t *unit, writ_str_t path, uint32_t *source_id)
 writ_str_t
 writ_syntax_audit(writ_session_t *session, bool candidates)
 {
-    writ_grammar_t *grammar = grammar_for(session, WRIT_GRAMMAR_WRIT);
+    (void)session;
+    writ_grammar_t *grammar = grammar_for(WRIT_GRAMMAR_WRIT);
     if (!grammar) {
         return writ_cstr("the grammar does not load\n");
     }

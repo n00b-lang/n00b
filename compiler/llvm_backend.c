@@ -19,6 +19,8 @@
 #include "llvm_native_cache.h"
 #include "n00b-abi-v1.h"
 #include "compiler_native_roots.h"
+#include "runtime_panic.h"
+#include "llvm_diagnostics.h"
 #include <time.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitReader.h>
@@ -37,6 +39,7 @@
 #include <string.h>
 
 #include "lib/alloc.h"
+#include "lib/byteorder.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
 #include "lib/object_section.h"
@@ -51,7 +54,6 @@ typedef struct {
     th_type *handler_signature;
 } callback_binding_t;
 core_list_decl(callback_binding_t);
-core_list_decl(uint32_t);
 
 typedef struct {
     ir_module_t *module;
@@ -244,7 +246,11 @@ debug_location(LLVMBuilderRef builder, LLVMMetadataRef subprogram,
                const ir_func_t *function, int32_t file, ir_span_t span)
 {
     if (!subprogram) return;
-    bool known = span.file >= 0 && span.file == file && span.start_line > 0;
+    bool same_file = span.file >= 0 && file >= 0
+        && (span.file == file
+            || core_string_eq(ir_file_path(function->owner, span.file),
+                              ir_file_path(function->owner, file)));
+    bool known = same_file && span.start_line > 0;
     unsigned line = known ? (unsigned)span.start_line
         : function->span.start_line > 0 ? (unsigned)function->span.start_line
         : 0;
@@ -314,6 +320,7 @@ struct n00bb_llvm_backend_t {
     bool reachable_bound;
     ir_storage_origin_t *storage_origin;
     bool emit_frame_maps;
+    bool panic_trap;
     n00bb_native_cache_t *native_cache;
     const n00bb_llvm_callback_bindings_t *callback_bindings;
     bool prepared;
@@ -419,22 +426,69 @@ typedef struct {
 static bool
 backend_report(core_diagnostics_t *diagnostics, core_string_t message)
 {
-    if (diagnostics)
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR,
-            CORE_STRING_STATIC("N00BB-B0006"), message);
+    n00bb_backend_internal_error(diagnostics, (core_diag_location_t){},
+                                 message);
     return false;
 }
 
 #define backend_error(diagnostics, lit) \
     backend_report((diagnostics), CORE_STRING_STATIC(lit))
 
-static bool
-backend_llvm_report(core_diagnostics_t *diagnostics, const char *llvm_message,
-                    core_string_t fallback)
+static void
+note_llvm_text(core_diagnostics_t *diagnostics, const char *llvm_message)
 {
     core_string_t text = core_string_from_cstr(llvm_message);
-    backend_report(diagnostics, text.data ? text : fallback);
+    if (text.data && text.u8_bytes)
+        n00bb_report_note(diagnostics, N00B_TEXT_LLVM_REPORTED,
+            N00BB_ARGS(ARG_TEXT(text)));
     core_free(text.data);
+}
+
+static bool
+backend_llvm_report(core_diagnostics_t *diagnostics, const char *llvm_message,
+                    core_string_t context)
+{
+    if (!diagnostics) return false;
+    backend_report(diagnostics, context);
+    note_llvm_text(diagnostics, llvm_message);
+    return false;
+}
+
+static bool
+backend_internal_at(core_diagnostics_t *diagnostics, const ir_module_t *owner,
+                    ir_span_t span, core_string_t message)
+{
+    if (!diagnostics) return false;
+    core_string_t path = owner && span.file >= 0 && span.start_line > 0
+        ? ir_file_path(owner, span.file) : (core_string_t){0};
+    n00bb_backend_internal_error(diagnostics, path.data
+        ? (core_diag_location_t){
+              .line = (uint32_t)span.start_line,
+              .column = (uint32_t)span.start_col,
+              .end_line = (uint32_t)span.end_line,
+              .end_column = (uint32_t)span.end_col,
+              .has_location = true,
+          }
+        : (core_diag_location_t){}, message);
+    size_t count = core_diagnostics_count(diagnostics);
+    if (path.data && count) core_diagnostic_set_path(diagnostics, count - 1,
+                                                     path);
+    return false;
+}
+
+static bool
+backend_target_unavailable(core_diagnostics_t *diagnostics,
+                           const char *triple, const char *llvm_message)
+{
+    if (!diagnostics) return false;
+    core_string_t machine = core_string_from_cstr(triple);
+    n00bb_report(diagnostics, nullptr, N00B_DIAG_BACKEND_TARGET_UNAVAILABLE,
+        (core_diag_location_t){}, N00B_TEXT_THIS_TOOLCHAIN_S_LLVM_CANNOT,
+        N00BB_ARGS(ARG_TEXT(machine)));
+    note_llvm_text(diagnostics, llvm_message);
+    n00bb_report_help(diagnostics, N00B_TEXT_INSTALL_A_N00B_TOOLCHAIN_BUILT,
+        N00BB_NO_ARGS);
+    core_free(machine.data);
     return false;
 }
 
@@ -508,17 +562,8 @@ unsupported(lower_state_t *state, const ir_instr_t *instruction)
         core_string_t callee_module = ir_module_name(callee->owner);
         core_buffer_printf(&message, " (callee '%.*s.%.*s')",
             TEXT_ARGS(callee_module), TEXT_ARGS(callee->name));    }
-    if (state->diagnostics) {
-        core_diagnostics_report_at(state->diagnostics, nullptr,
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0006"),
-            core_buffer_string(&message), (core_diag_location_t){
-                .line = instruction->span.start_line,
-                .column = instruction->span.start_col,
-                .end_line = instruction->span.end_line,
-                .end_column = instruction->span.end_col,
-                .has_location = instruction->span.start_line != 0,
-            });
-    }
+    backend_internal_at(state->diagnostics, state->function->owner,
+                        instruction->span, core_buffer_string(&message));
     core_buffer_release(&message);
     return false;
 }
@@ -1270,7 +1315,25 @@ static LLVMTypeRef native_function_type(LLVMModuleRef target,
                                         bool native_binding);
 static LLVMTypeRef optional_record_type(LLVMModuleRef target,
                                         ir_func_t *function);
-static void emit_trap_if(lower_state_t *state, LLVMValueRef condition);
+typedef struct {
+    core_string_t text;
+    n00bb_operand_format_t format;
+    uint32_t width;
+    LLVMValueRef value;
+} failure_operand_t;
+
+typedef struct {
+    n00bb_failure_kind_t kind;
+    core_string_t text;
+    core_string_t detail;
+    th_type *detail_type;
+    const failure_operand_t *operands;
+    size_t operand_count;
+    const ir_span_t *span;
+} failure_t;
+
+static void emit_failure_if(lower_state_t *state, LLVMValueRef condition,
+                            const failure_t *failure);
 static uint32_t runtime_type_index(lower_state_t *state, th_type *type);
 static uint32_t runtime_function_index(lower_state_t *state,
                                        const ir_func_t *function);
@@ -1386,7 +1449,11 @@ guard_global_read(lower_state_t *state, const ir_global_t *global)
     LLVMSetOrdering(ready, LLVMAtomicOrderingAcquire);
     LLVMValueRef uninitialized = LLVMBuildICmp(state->builder, LLVMIntEQ,
         ready, LLVMConstNull(LLVMTypeOf(ready)), "global.uninitialized");
-    emit_trap_if(state, uninitialized);
+    emit_failure_if(state, uninitialized, &(failure_t){
+        .kind = N00BB_FAILURE_UNINITIALIZED, .text = identity->name,
+        .span = state->current_instruction
+            ? &state->current_instruction->span : &identity->span,
+    });
     return true;
 }
 
@@ -1744,6 +1811,9 @@ static LLVMValueRef aggregate_element(lower_state_t *state,
                                       LLVMValueRef aggregate,
                                       unsigned element, const char *name);
 
+static bool write_frame_root(lower_state_t *state, uint32_t slot,
+                             LLVMValueRef value, th_type *type);
+
 static bool
 spill_root_slot(lower_state_t *state, LLVMValueRef value)
 {
@@ -1883,16 +1953,9 @@ save_result(lower_state_t *state, const ir_instr_t *instruction,
     if (state->frame_roots && instruction->op != IR_OP_PHI) {
         const core_indexed_entry_t *root = core_indexed_table_find(
             state->frame_roots, instruction->dest);
-        if (root) {
-            LLVMValueRef stored = LLVMIsUndef(value) || LLVMIsPoison(value)
-                ? LLVMConstNull(LLVMTypeOf(value)) : value;
-            LLVMValueRef pointer = frame_root_pointer(state, stored,
-                instruction->dest->type);
-            if (!pointer) return false;
-            LLVMValueRef write = LLVMBuildStore(state->builder, pointer,
-                state->frame_slots[root->index]);
-            LLVMSetVolatile(write, true);
-        }
+        if (root && !write_frame_root(state, root->index, value,
+                                      instruction->dest->type))
+            return false;
     }
     return true;
 }
@@ -1908,13 +1971,9 @@ store_phi_frame_roots(lower_state_t *state, const ir_block_t *block,
             state->frame_roots, instruction->dest);
         if (!root) continue;
         LLVMValueRef value = lowered_value(state, instruction->dest);
-        if (!value) return false;
-        LLVMValueRef pointer = frame_root_pointer(state, value,
-            instruction->dest->type);
-        if (!pointer) return false;
-        LLVMValueRef write = LLVMBuildStore(state->builder, pointer,
-            state->frame_slots[root->index]);
-        LLVMSetVolatile(write, true);
+        if (!value || !write_frame_root(state, root->index, value,
+                                        instruction->dest->type))
+            return false;
     }
     return true;
 }
@@ -1941,55 +2000,250 @@ save_call_output(lower_state_t *state, const ir_instr_t *call,
                                                        storage, type}));
 }
 
+static LLVMValueRef entry_alloca(lower_state_t *state, LLVMTypeRef type);
+static LLVMValueRef string_value(LLVMModuleRef module, const uint8_t *bytes,
+                                 size_t length, uint64_t encoding);
+
 static LLVMValueRef
-trap_function(lower_state_t *state)
+failure_string(LLVMModuleRef module, core_string_t text)
 {
-    unsigned id = LLVMLookupIntrinsicID("llvm.trap", sizeof("llvm.trap") - 1);
-    return LLVMGetIntrinsicDeclaration(state->module, id, nullptr, 0);
+    bool wide = false;
+    for (size_t i = 0; i < text.u8_bytes; i++)
+        if ((unsigned char)text.data[i] & 0x80) wide = true;
+    return string_value(module, (const uint8_t *)(text.data ? text.data : ""),
+        text.data ? text.u8_bytes : 0,
+        wide ? N00B_ABI_STRING_UTF8 : N00B_ABI_STRING_ASCII);
+}
+
+static LLVMValueRef
+failure_operand_sites(lower_state_t *state, const failure_t *failure)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    if (!failure->operand_count) return LLVMConstNull(pointer);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMValueRef *rows = calloc(failure->operand_count, sizeof(*rows));
+    if (!rows) return LLVMConstNull(pointer);
+    LLVMTypeRef row_type = nullptr;
+    for (size_t i = 0; i < failure->operand_count; i++) {
+        LLVMValueRef fields[] = {
+            failure_string(state->module, failure->operands[i].text),
+            LLVMConstInt(i32, failure->operands[i].format, false),
+            LLVMConstInt(i32, failure->operands[i].width, false),
+        };
+        rows[i] = LLVMConstStructInContext(context, fields, 3, false);
+        row_type = LLVMTypeOf(rows[i]);
+    }
+    LLVMValueRef table = LLVMConstArray2(row_type, rows,
+                                         failure->operand_count);
+    free(rows);
+    LLVMValueRef global = LLVMAddGlobal(state->module, LLVMTypeOf(table),
+                                        "n00bb.failure.operands");
+    LLVMSetInitializer(global, table);
+    LLVMSetGlobalConstant(global, true);
+    LLVMSetLinkage(global, LLVMPrivateLinkage);
+    return global;
+}
+
+static LLVMValueRef
+failure_site(lower_state_t *state, const failure_t *failure)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    const ir_span_t *span = failure->span ? failure->span
+        : state->current_instruction ? &state->current_instruction->span
+        : nullptr;
+    core_string_t path = span && span->file >= 0
+        ? ir_file_path(state->function->owner, span->file)
+        : (core_string_t){0};
+    bool located = path.data && span->start_line > 0;
+    th_print_options_t spelling = {
+        .sequence = CORE_STRING_STATIC("Array"),
+        .reference = CORE_STRING_STATIC("Ref"),
+        .option_suffix = CORE_STRING_STATIC("?"),
+        .omit_constraints = true,
+        .omit_nil_failure = true,
+    };
+    core_string_t detail = failure->detail.data || !failure->detail_type
+        ? failure->detail
+        : th_print_with_options(ir_module_types(state->function->owner),
+                                failure->detail_type, &spelling);
+    LLVMValueRef fields[] = {
+        failure_string(state->module, located ? path : (core_string_t){0}),
+        failure_string(state->module, failure->text),
+        failure_string(state->module, detail),
+        LLVMConstInt(i32, failure->kind, false),
+        LLVMConstInt(i32, located ? (uint64_t)span->start_line : 0, false),
+        LLVMConstInt(i32, located ? (uint64_t)span->start_col : 0, false),
+        LLVMConstInt(i32, failure->operand_count, false),
+        failure_operand_sites(state, failure),
+    };
+    LLVMValueRef site = LLVMConstStructInContext(context, fields,
+        sizeof(fields) / sizeof(fields[0]), false);
+    LLVMValueRef global = LLVMAddGlobal(state->module, LLVMTypeOf(site),
+                                        "n00bb.failure.site");
+    LLVMSetInitializer(global, site);
+    LLVMSetGlobalConstant(global, true);
+    LLVMSetLinkage(global, LLVMPrivateLinkage);
+    LLVMSetAlignment(global, 8);
+    return global;
 }
 
 static void
-emit_trap_reason(lower_state_t *state, core_string_t reason)
+store_failure_value(lower_state_t *state, LLVMValueRef slot,
+                    const failure_operand_t *operand)
 {
-    if (!reason.data) {
-        LLVMValueRef function = trap_function(state);
-        LLVMBuildCall2(state->builder, LLVMGlobalGetValueType(function),
-                       function, nullptr, 0, "");
-        LLVMBuildUnreachable(state->builder);
-        return;
-    }
     LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i128 = LLVMIntTypeInContext(context, 128);
+    LLVMValueRef value = operand->value;
+    if (!value) return;
+    LLVMTypeRef type = LLVMTypeOf(value);
+    LLVMTypeKind kind = LLVMGetTypeKind(type);
+    LLVMValueRef stored = nullptr;
+    if (kind == LLVMIntegerTypeKind)
+        stored = LLVMGetIntTypeWidth(type) > 128 ? nullptr
+            : LLVMBuildIntCast2(state->builder, value, i128,
+                operand->format == N00BB_OPERAND_SIGNED, "failure.value");
+    else if (kind == LLVMFloatTypeKind || kind == LLVMHalfTypeKind)
+        stored = LLVMBuildFPExt(state->builder, value,
+            LLVMDoubleTypeInContext(context), "failure.value");
+    else if (kind == LLVMDoubleTypeKind || kind == LLVMStructTypeKind)
+        stored = value;
+    else if (kind == LLVMPointerTypeKind)
+        stored = LLVMBuildPtrToInt(state->builder, value, i128,
+                                   "failure.value");
+    if (!stored) return;
+    LLVMValueRef store = LLVMBuildStore(state->builder, stored, slot);
+    LLVMSetAlignment(store, 8);
+}
+
+static void
+emit_failure(lower_state_t *state, const failure_t *failure)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-    LLVMTypeRef parameters[] = {pointer, i64};
-    LLVMTypeRef trap_type = LLVMFunctionType(
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMValueRef site = failure_site(state, failure);
+    LLVMValueRef values = LLVMConstNull(pointer);
+    if (failure->operand_count) {
+        LLVMTypeRef slot_type = LLVMArrayType2(i64, 2);
+        LLVMTypeRef table_type = LLVMArrayType2(slot_type,
+                                                failure->operand_count);
+        LLVMValueRef table = entry_alloca(state, table_type);
+        LLVMSetAlignment(table, 16);
+        LLVMBuildStore(state->builder, LLVMConstNull(table_type), table);
+        for (size_t i = 0; i < failure->operand_count; i++) {
+            LLVMValueRef indices[] = {
+                LLVMConstInt(i64, 0, false), LLVMConstInt(i64, i, false),
+            };
+            LLVMValueRef slot = LLVMBuildInBoundsGEP2(state->builder,
+                table_type, table, indices, 2, "failure.slot");
+            store_failure_value(state, slot, &failure->operands[i]);
+        }
+        values = table;
+    }
+    LLVMTypeRef parameters[] = {pointer, pointer};
+    LLVMTypeRef report_type = LLVMFunctionType(
         LLVMVoidTypeInContext(context), parameters, 2, false);
-    LLVMValueRef trap = LLVMGetNamedFunction(state->module,
-                                             "n00bb_runtime_trap");
-    if (!trap) {
-        trap = LLVMAddFunction(state->module, "n00bb_runtime_trap",
-                               trap_type);
+    LLVMValueRef report = LLVMGetNamedFunction(state->module,
+        "n00bb_runtime_check_failed");
+    if (!report) {
+        report = LLVMAddFunction(state->module,
+            "n00bb_runtime_check_failed", report_type);
         unsigned kinds[] = {
             LLVMGetEnumAttributeKindForName("noreturn", 8),
             LLVMGetEnumAttributeKindForName("cold", 4),
         };
         for (size_t i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
-            LLVMAddAttributeAtIndex(trap, LLVMAttributeFunctionIndex,
+            LLVMAddAttributeAtIndex(report, LLVMAttributeFunctionIndex,
                 LLVMCreateEnumAttribute(context, kinds[i], 0));
     }
-    LLVMValueRef text = global_string_ptr(state->builder, reason,
-                                          "trap.reason");
-    LLVMValueRef arguments[] = {text,
-        LLVMConstInt(i64, reason.u8_bytes, false)};
-    LLVMBuildCall2(state->builder, trap_type, trap, arguments, 2, "");
+    LLVMValueRef arguments[] = {site, values};
+    LLVMBuildCall2(state->builder, report_type, report, arguments, 2, "");
     LLVMBuildUnreachable(state->builder);
 }
 
 static void
-emit_trap(lower_state_t *state)
+emit_failure_if(lower_state_t *state, LLVMValueRef condition,
+                const failure_t *failure)
 {
-    emit_trap_reason(state, CORE_STRING_STATIC("runtime check failed"));
+    if (LLVMIsAConstantInt(condition)
+        && !LLVMConstIntGetZExtValue(condition)) return;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMValueRef function = LLVMGetBasicBlockParent(
+        LLVMGetInsertBlock(state->builder));
+    LLVMBasicBlockRef bad = LLVMAppendBasicBlockInContext(context,
+        function, "check.failed");
+    LLVMBasicBlockRef good = LLVMAppendBasicBlockInContext(context,
+        function, "check.passed");
+    LLVMBuildCondBr(state->builder, condition, bad, good);
+    LLVMPositionBuilderAtEnd(state->builder, bad);
+    emit_failure(state, failure);
+    LLVMPositionBuilderAtEnd(state->builder, good);
 }
+
+static failure_operand_t
+integer_operand(lower_state_t *state, LLVMValueRef value, th_type *type)
+{
+    ir_machine_t machine = type
+        ? ir_machine_of(state->function->owner, type) : (ir_machine_t){0};
+    unsigned storage = value
+        && LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMIntegerTypeKind
+        ? LLVMGetIntTypeWidth(LLVMTypeOf(value)) : 0;
+    uint32_t width = machine.width && machine.width <= storage
+        ? machine.width : storage;
+    return (failure_operand_t){
+        .format = machine.class == IR_CLASS_SINT ? N00BB_OPERAND_SIGNED
+            : machine.class == IR_CLASS_BOOL ? N00BB_OPERAND_BOOL
+            : N00BB_OPERAND_UNSIGNED,
+        .width = width,
+        .value = value,
+    };
+}
+
+static failure_operand_t
+unsigned_operand(LLVMValueRef value)
+{
+    unsigned width = value
+        && LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMIntegerTypeKind
+        ? LLVMGetIntTypeWidth(LLVMTypeOf(value)) : 64;
+    return (failure_operand_t){
+        .format = N00BB_OPERAND_UNSIGNED, .width = width, .value = value,
+    };
+}
+
+static failure_operand_t
+signed_operand(LLVMValueRef value)
+{
+    failure_operand_t operand = unsigned_operand(value);
+    operand.format = N00BB_OPERAND_SIGNED;
+    return operand;
+}
+
+static void
+emit_runtime_invariant(LLVMBuilderRef builder, LLVMModuleRef module,
+                       n00bb_runtime_invariant_t invariant)
+{
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMTypeRef parameters[] = {
+        LLVMInt32TypeInContext(context), LLVMInt64TypeInContext(context),
+    };
+    LLVMTypeRef fail_type = LLVMFunctionType(LLVMVoidTypeInContext(context),
+                                             parameters, 2, false);
+    LLVMValueRef fail = LLVMGetNamedFunction(module, "n00bb_runtime_fail");
+    if (!fail) fail = LLVMAddFunction(module, "n00bb_runtime_fail",
+                                      fail_type);
+    LLVMValueRef arguments[] = {
+        LLVMConstInt(parameters[0], N00BB_FAILURE_INVARIANT, false),
+        LLVMConstInt(parameters[1], invariant, false),
+    };
+    LLVMBuildCall2(builder, fail_type, fail, arguments, 2, "");
+    LLVMBuildUnreachable(builder);
+}
+
+#define emit_invariant_if(state, condition, lit)                          \
+    emit_failure_if((state), (condition), &(failure_t){                  \
+        .kind = N00BB_FAILURE_INVARIANT, .text = CORE_STRING_STATIC(lit)})
 
 static LLVMValueRef
 bitset_mask(lower_state_t *state, th_type *type)
@@ -2012,24 +2266,6 @@ bitset_mask(lower_state_t *state, th_type *type)
     return LLVMConstIntOfArbitraryPrecision(storage, 2, words);
 }
 
-static void
-emit_trap_if(lower_state_t *state, LLVMValueRef condition)
-{
-    if (LLVMIsAConstantInt(condition)
-        && !LLVMConstIntGetZExtValue(condition)) return;
-    LLVMContextRef context = LLVMGetModuleContext(state->module);
-    LLVMValueRef function = LLVMGetBasicBlockParent(
-        LLVMGetInsertBlock(state->builder));
-    LLVMBasicBlockRef bad = LLVMAppendBasicBlockInContext(context,
-        function, "arithmetic.trap");
-    LLVMBasicBlockRef good = LLVMAppendBasicBlockInContext(context,
-        function, "arithmetic.cont");
-    LLVMBuildCondBr(state->builder, condition, bad, good);
-    LLVMPositionBuilderAtEnd(state->builder, bad);
-    emit_trap(state);
-    LLVMPositionBuilderAtEnd(state->builder, good);
-}
-
 static LLVMValueRef
 array_helper_index(lower_state_t *state, LLVMValueRef index, th_type *type)
 {
@@ -2044,15 +2280,36 @@ array_helper_index(lower_state_t *state, LLVMValueRef index, th_type *type)
         LLVMValueRef too_large = LLVMBuildICmp(state->builder, LLVMIntUGT,
             index, LLVMConstInt(source, INT64_MAX, false),
             "array.index.too.large");
-        emit_trap_if(state, too_large);
+        failure_operand_t operand = unsigned_operand(index);
+        emit_failure_if(state, too_large, &(failure_t){
+            .kind = N00BB_FAILURE_INDEX,
+            .detail = CORE_STRING_STATIC("an array"),
+            .operands = &operand, .operand_count = 1,
+        });
     }
     return LLVMBuildIntCast2(state->builder, index, i64, signed_index,
                              "generic.array.index");
 }
 
+static core_string_t
+operator_text(ir_op_t op)
+{
+    switch (op) {
+    case IR_OP_ADD: return CORE_STRING_STATIC("+");
+    case IR_OP_SUB:
+    case IR_OP_NEG: return CORE_STRING_STATIC("-");
+    case IR_OP_MUL: return CORE_STRING_STATIC("*");
+    case IR_OP_DIV: return CORE_STRING_STATIC("/");
+    case IR_OP_REM: return CORE_STRING_STATIC("%");
+    case IR_OP_SHL: return CORE_STRING_STATIC("<<");
+    case IR_OP_SHR: return CORE_STRING_STATIC(">>");
+    default: return CORE_STRING_STATIC("?");
+    }
+}
+
 static LLVMValueRef
 semantic_integer_result(lower_state_t *state, LLVMValueRef value,
-                        th_type *type, bool checked)
+                        th_type *type, const failure_t *overflow)
 {
     if (!value || LLVMGetTypeKind(LLVMTypeOf(value)) != LLVMIntegerTypeKind)
         return value;
@@ -2069,9 +2326,9 @@ semantic_integer_result(lower_state_t *state, LLVMValueRef value,
                         "integer.signed_bits")
         : LLVMBuildZExt(state->builder, narrow, LLVMTypeOf(value),
                         "integer.unsigned_bits");
-    if (checked)
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
-            value, canonical, "integer.semantic_overflow"));
+    if (overflow)
+        emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+            value, canonical, "integer.semantic_overflow"), overflow);
     return canonical;
 }
 
@@ -2430,9 +2687,10 @@ packed_bitptr_prepare(lower_state_t *state, LLVMValueRef bitptr,
         "bitptr.io.end");
     if (!base || !start || !end || LLVMTypeOf(start) != i16
         || LLVMTypeOf(end) != i16) return false;
-    emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+    emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
         LLVMBuildSub(state->builder, end, start, "bitptr.io.width"),
-        LLVMConstInt(i16, width, false), "bitptr.io.invalid.width"));
+        LLVMConstInt(i16, width, false), "bitptr.io.invalid.width"),
+        "a bit pointer does not match the width of its target");
     LLVMValueRef bytes = LLVMBuildLShr(state->builder,
         LLVMBuildAdd(state->builder, end,
             LLVMConstInt(i16, N00B_ABI_ARRAY_ORIGIN_BIT_MASK, false),
@@ -2975,6 +3233,7 @@ aggregate_element(lower_state_t *state, LLVMValueRef aggregate,
         || !large_aggregate(state, type))
         return LLVMBuildExtractValue(state->builder, aggregate, element, name);
     LLVMBasicBlockRef resume = LLVMGetInsertBlock(state->builder);
+    LLVMMetadataRef location = LLVMGetCurrentDebugLocation2(state->builder);
     LLVMValueRef after = LLVMGetNextInstruction(aggregate);
     if (after) LLVMPositionBuilderBefore(state->builder, after);
     else LLVMPositionBuilderAtEnd(state->builder,
@@ -2984,6 +3243,7 @@ aggregate_element(lower_state_t *state, LLVMValueRef aggregate,
     LLVMValueRef value = LLVMBuildLoad2(state->builder,
         LLVMStructGetTypeAtIndex(type, element), address, name);
     LLVMPositionBuilderAtEnd(state->builder, resume);
+    LLVMSetCurrentDebugLocation2(state->builder, location);
     return value;
 }
 
@@ -3040,10 +3300,18 @@ inline_array_from_value(lower_state_t *state, LLVMValueRef array,
         LLVMBuildStructGEP2(state->builder, array_descriptor_type(context),
                             descriptor, 5, "inline.source.length.address"),
         "inline.source.length");
-    emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE, length,
-        LLVMConstInt(LLVMInt64TypeInContext(context),
-                     LLVMGetArrayLength(storage), false),
-        "inline.source.mismatch"));
+    LLVMValueRef expected = LLVMConstInt(LLVMInt64TypeInContext(context),
+                                         LLVMGetArrayLength(storage), false);
+    failure_operand_t lengths[] = {
+        unsigned_operand(expected), unsigned_operand(length),
+    };
+    emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE, length,
+        expected, "inline.source.mismatch"), &(failure_t){
+            .kind = N00BB_FAILURE_SHAPE,
+            .text = CORE_STRING_STATIC(
+                "the array length does not match the fixed-size array"),
+            .operands = lengths, .operand_count = 2,
+        });
     return LLVMBuildLoad2(state->builder, storage, data, "inline.source");
 }
 
@@ -3079,8 +3347,10 @@ array_from_inline(lower_state_t *state, LLVMValueRef items, th_type *type)
         "sys.internal.gc.alloc.allocate_runtime", pointer, parameters,
         arguments, 4);
     if (!backing) return nullptr;
-    emit_trap_if(state, LLVMBuildIsNull(state->builder, backing,
-                                        "inline.array.missing"));
+    emit_failure_if(state, LLVMBuildIsNull(state->builder, backing,
+        "inline.array.missing"), &(failure_t){
+            .kind = N00BB_FAILURE_OUT_OF_MEMORY, .detail_type = type,
+        });
     LLVMBuildMemCpy(state->builder, backing, 8, descriptor, 8,
                     LLVMConstInt(i64, descriptor_bytes, false));
     LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
@@ -3620,6 +3890,11 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
         LLVMBuildStore(state->builder, extent, slot);
     }
 
+    failure_operand_t requested = unsigned_operand(count);
+    failure_t too_large = {
+        .kind = N00BB_FAILURE_ALLOCATION_SIZE, .detail_type = type,
+        .operands = &requested, .operand_count = 1,
+    };
     LLVMValueRef data_bytes;
     if (packed_width) {
         LLVMTypeRef i128 = LLVMInt128TypeInContext(context);
@@ -3635,15 +3910,15 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
             LLVMConstInt(i128, 3, false), "array.new.bytes.wide");
         data_bytes = LLVMBuildTrunc(state->builder, bytes_wide, i64,
             "array.new.data.bytes");
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntUGT,
+        emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntUGT,
             bytes_wide,
             LLVMConstInt(i128, UINT64_MAX - data_offset, false),
-            "array.new.too.large"));
+            "array.new.too.large"), &too_large);
     } else {
         LLVMValueRef limit = LLVMConstInt(i64,
             (UINT64_MAX - data_offset) / stride, false);
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntUGT,
-            count, limit, "array.new.too.large"));
+        emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntUGT,
+            count, limit, "array.new.too.large"), &too_large);
         data_bytes = LLVMBuildMul(state->builder, count,
             LLVMConstInt(i64, stride, false), "array.new.data.bytes");
     }
@@ -3754,8 +4029,17 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
         descriptor, 1, "array.parent.rank.slot");
     LLVMValueRef actual_rank = LLVMBuildLoad2(state->builder, i32,
         rank_slot, "array.parent.rank");
-    emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
-        actual_rank, LLVMConstInt(i32, rank, false), "array.rank.mismatch"));
+    LLVMValueRef expected_rank = LLVMConstInt(i32, rank, false);
+    failure_operand_t ranks[] = {
+        unsigned_operand(expected_rank), unsigned_operand(actual_rank),
+    };
+    emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+        actual_rank, expected_rank, "array.rank.mismatch"), &(failure_t){
+            .kind = N00BB_FAILURE_SHAPE,
+            .text = CORE_STRING_STATIC(
+                "the array has a different number of dimensions"),
+            .operands = ranks, .operand_count = 2,
+        });
     LLVMValueRef total_slot = LLVMBuildStructGEP2(state->builder, header,
         descriptor, 0, "array.parent.total.slot");
     LLVMValueRef total = LLVMBuildLoad2(state->builder, i64,
@@ -3775,11 +4059,12 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
             descriptor, 3, "array.parent.flags.slot");
         origin = LLVMBuildLoad2(state->builder, i32, flags_slot,
             "array.parent.bit.origin");
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+        emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
             LLVMBuildAnd(state->builder, origin,
                 LLVMConstInt(i32, ~N00B_ABI_ARRAY_ORIGIN_BIT_MASK, false),
                 "array.parent.invalid.flags"), LLVMConstNull(i32),
-            "array.parent.flags.invalid"));
+            "array.parent.flags.invalid"),
+            "a packed array descriptor has invalid flags");
         LLVMTypeRef i128 = LLVMInt128TypeInContext(context);
         LLVMValueRef bit_offset = LLVMBuildAdd(state->builder,
             LLVMBuildMul(state->builder,
@@ -3805,8 +4090,9 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
         LLVMValueRef stride = array_flat_item_stride(state, parent_type,
             flat_rank, 2, &alignment);
         if (!stride) return nullptr;
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
-            stride, LLVMConstNull(i64), "array.flat.rank.invalid"));
+        emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
+            stride, LLVMConstNull(i64), "array.flat.rank.invalid"),
+            "an array descriptor has an invalid flat rank");
         LLVMValueRef row_bytes = LLVMBuildMul(state->builder, row_count,
             stride, "array.row.bytes");
         offset = LLVMBuildMul(state->builder, position,
@@ -3929,7 +4215,9 @@ copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
     uint64_t packed_width = packed_array_width(owner, leaf);
     LLVMValueRef packed = LLVMBuildICmp(state->builder, LLVMIntEQ,
         stride, LLVMConstNull(i64), "array.copy.packed");
-    if (!packed_width) emit_trap_if(state, packed);
+    if (!packed_width)
+        emit_invariant_if(state, packed,
+                          "an array descriptor has an invalid flat rank");
     LLVMValueRef descriptor_bytes = LLVMBuildAdd(state->builder,
         LLVMConstInt(i64, sizeof(n00b_abi_array_descriptor_header_v1),
                      false),
@@ -3960,11 +4248,12 @@ copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
             descriptor_type, descriptor, 3, "array.copy.flags.address");
         LLVMValueRef flags = LLVMBuildLoad2(state->builder, i32,
             flags_address, "array.copy.flags");
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+        emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
             LLVMBuildAnd(state->builder, flags,
                 LLVMConstInt(i32, ~N00B_ABI_ARRAY_ORIGIN_BIT_MASK, false),
                 "array.copy.invalid.flags"), LLVMConstNull(i32),
-            "array.copy.flags.invalid"));
+            "array.copy.flags.invalid"),
+            "a packed array descriptor has invalid flags");
         LLVMTypeRef i128 = LLVMInt128TypeInContext(context);
         LLVMValueRef bit_extent = LLVMBuildAdd(state->builder,
             LLVMBuildMul(state->builder,
@@ -3984,7 +4273,8 @@ copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
         data_bytes = LLVMBuildSelect(state->builder, packed, packed_bytes,
             regular_bytes, "array.copy.data.bytes");
     }
-    emit_trap_if(state, LLVMBuildOr(state->builder,
+    failure_operand_t copied_count = unsigned_operand(count);
+    emit_failure_if(state, LLVMBuildOr(state->builder,
         LLVMBuildAnd(state->builder,
             LLVMBuildNot(state->builder, packed,
                 "array.copy.not.packed"),
@@ -3995,7 +4285,11 @@ copy_sequence_value(lower_state_t *state, LLVMValueRef value, th_type *type)
             LLVMBuildSub(state->builder,
                 LLVMConstInt(i64, UINT64_MAX, false), data_offset,
                 "array.copy.available.data"),
-            "array.copy.data.too.large"), "array.copy.too.large"));
+            "array.copy.data.too.large"), "array.copy.too.large"),
+        &(failure_t){
+            .kind = N00BB_FAILURE_ALLOCATION_SIZE, .detail_type = type,
+            .operands = &copied_count, .operand_count = 1,
+        });
     LLVMValueRef extent = LLVMBuildAdd(state->builder, data_offset,
         LLVMBuildSelect(state->builder,
             LLVMBuildICmp(state->builder, LLVMIntEQ, count,
@@ -4115,7 +4409,15 @@ copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
                 source_extent, "array.row.extent.mismatch"),
             "array.row.invalid.extent");
     }
-    emit_trap_if(state, invalid);
+    failure_operand_t row_counts[] = {
+        unsigned_operand(count), unsigned_operand(source_count),
+    };
+    emit_failure_if(state, invalid, &(failure_t){
+        .kind = N00BB_FAILURE_SHAPE,
+        .text = CORE_STRING_STATIC(
+            "the assigned row has a different shape than the row it replaces"),
+        .operands = row_counts, .operand_count = 2,
+    });
     if (packed_width) {
         LLVMValueRef target_flags_slot = LLVMBuildStructGEP2(state->builder,
             descriptor_type, target_descriptor, 3, "array.row.target.flags.slot");
@@ -4127,20 +4429,22 @@ copy_rectangular_row(lower_state_t *state, LLVMValueRef address,
             source_flags_slot, "array.row.source.origin");
         LLVMValueRef flags = LLVMBuildOr(state->builder,
             target_origin, source_origin, "array.row.flags");
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+        emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
             LLVMBuildAnd(state->builder, flags,
                 LLVMConstInt(i32, ~N00B_ABI_ARRAY_ORIGIN_BIT_MASK, false),
                 "array.row.invalid.flags"), LLVMConstNull(i32),
-            "array.row.flags.invalid"));
+            "array.row.flags.invalid"),
+            "a packed array descriptor has invalid flags");
         LLVMTypeRef i128 = LLVMInt128TypeInContext(context);
         LLVMValueRef bit_count = LLVMBuildMul(state->builder,
             LLVMBuildZExt(state->builder, count, i128,
                 "array.row.count.wide"),
             LLVMConstInt(i128, packed_width, false),
             "array.row.bit.count");
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntUGT,
+        emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntUGT,
             bit_count, LLVMConstInt(i128, UINT64_MAX, false),
-            "array.row.bit.count.too.large"));
+            "array.row.bit.count.too.large"),
+            "a packed array row has more bits than fit in memory");
         return copy_bool_bits(state, target_data, target_origin,
             source_data, source_origin,
             LLVMBuildTrunc(state->builder, bit_count, i64,
@@ -4706,13 +5010,117 @@ static LLVMValueRef
 entry_alloca(lower_state_t *state, LLVMTypeRef type)
 {
     LLVMBasicBlockRef current = LLVMGetInsertBlock(state->builder);
+    LLVMMetadataRef location = LLVMGetCurrentDebugLocation2(state->builder);
     LLVMBasicBlockRef entry = LLVMGetFirstBasicBlock(state->target_function);
     LLVMValueRef first = LLVMGetFirstInstruction(entry);
     if (first) LLVMPositionBuilderBefore(state->builder, first);
     else LLVMPositionBuilderAtEnd(state->builder, entry);
     LLVMValueRef slot = LLVMBuildAlloca(state->builder, type, "storage");
     LLVMPositionBuilderAtEnd(state->builder, current);
+    LLVMSetCurrentDebugLocation2(state->builder, location);
     return slot;
+}
+
+static bool
+win64_module(LLVMModuleRef module)
+{
+    core_string_t triple = core_string_from_cstr(LLVMGetTarget(module));
+    bool windows = triple.data
+        && core_string_find(triple, CORE_STRING_STATIC("x86_64")) >= 0
+        && core_string_find(triple, CORE_STRING_STATIC("windows")) >= 0;
+    core_free(triple.data);
+    return windows;
+}
+
+static bool
+win64_aggregate(LLVMTypeRef type)
+{
+    LLVMTypeKind kind = LLVMGetTypeKind(type);
+    return kind == LLVMStructTypeKind || kind == LLVMArrayTypeKind;
+}
+
+static LLVMTypeRef
+win64_transport(LLVMModuleRef module, LLVMTypeRef type)
+{
+    if (!win64_aggregate(type)) return type;
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    unsigned long long size = LLVMABISizeOfType(
+        LLVMGetModuleDataLayout(module), type);
+    if (size == 1 || size == 2 || size == 4 || size == 8)
+        return LLVMIntTypeInContext(context, (unsigned)size * 8);
+    return LLVMPointerTypeInContext(context, 0);
+}
+
+static LLVMTypeRef
+win64_native_signature(LLVMModuleRef module, LLVMTypeRef signature)
+{
+    unsigned count = LLVMCountParamTypes(signature);
+    LLVMTypeRef *parameters = calloc(count + 1, sizeof(*parameters));
+    if (!parameters) return nullptr;
+    LLVMGetParamTypes(signature, parameters + 1);
+    for (unsigned i = 1; i <= count; i++)
+        parameters[i] = win64_transport(module, parameters[i]);
+    LLVMTypeRef result = LLVMGetReturnType(signature);
+    LLVMTypeRef returned = win64_transport(module, result);
+    bool indirect = win64_aggregate(result)
+        && LLVMGetTypeKind(returned) == LLVMPointerTypeKind;
+    if (indirect) {
+        parameters[0] = returned;
+        returned = LLVMVoidTypeInContext(LLVMGetModuleContext(module));
+    }
+    LLVMTypeRef type = LLVMFunctionType(returned,
+        indirect ? parameters : parameters + 1, count + indirect,
+        LLVMIsFunctionVarArg(signature));
+    free(parameters);
+    return type;
+}
+
+static LLVMValueRef
+win64_native_call(lower_state_t *state, LLVMTypeRef signature,
+                  LLVMValueRef callee, LLVMValueRef *arguments,
+                  unsigned count)
+{
+    LLVMTypeRef native = LLVMGlobalGetValueType(callee);
+    unsigned native_count = LLVMCountParamTypes(native);
+    bool indirect = native_count == count + 1;
+    LLVMTypeRef *native_types = calloc(native_count + 1,
+                                       sizeof(*native_types));
+    LLVMValueRef *passed = calloc(native_count + 1, sizeof(*passed));
+    if (!native_types || !passed) {
+        free(native_types);
+        free(passed);
+        return nullptr;
+    }
+    LLVMGetParamTypes(native, native_types);
+    LLVMTypeRef result = LLVMGetReturnType(signature);
+    LLVMValueRef result_slot = indirect ? entry_alloca(state, result)
+                                        : nullptr;
+    if (indirect) passed[0] = result_slot;
+    for (unsigned i = 0; i < count; i++) {
+        LLVMTypeRef wanted = native_types[i + indirect];
+        if (LLVMTypeOf(arguments[i]) == wanted) {
+            passed[i + indirect] = arguments[i];
+            continue;
+        }
+        LLVMValueRef copy = entry_alloca(state, LLVMTypeOf(arguments[i]));
+        LLVMBuildStore(state->builder, arguments[i], copy);
+        passed[i + indirect] = LLVMGetTypeKind(wanted) == LLVMPointerTypeKind
+            ? copy : LLVMBuildLoad2(state->builder, wanted, copy,
+                                    "native.argument");
+    }
+    LLVMTypeRef returned = LLVMGetReturnType(native);
+    bool returns_value = LLVMGetTypeKind(returned) != LLVMVoidTypeKind;
+    LLVMValueRef call = LLVMBuildCall2(state->builder, native, callee,
+        passed, native_count, returns_value ? "native.call" : "");
+    free(native_types);
+    free(passed);
+    if (indirect)
+        return LLVMBuildLoad2(state->builder, result, result_slot,
+                              "native.result");
+    if (!returns_value || returned == result) return call;
+    LLVMValueRef bits = entry_alloca(state, result);
+    LLVMBuildStore(state->builder, call, bits);
+    return LLVMBuildLoad2(state->builder, result, bits, "native.result");
 }
 
 static LLVMValueRef
@@ -4750,8 +5158,12 @@ mutator_allocation(lower_state_t *state, LLVMValueRef type_index, uint64_t bytes
     };
     LLVMValueRef result = LLVMBuildCall2(state->builder, allocator_type,
                                          allocator, args, 7, "storage");
-    emit_trap_if(state, LLVMBuildIsNull(state->builder, result,
-                                        "allocation.failed"));
+    failure_operand_t requested = unsigned_operand(args[2]);
+    emit_failure_if(state, LLVMBuildIsNull(state->builder, result,
+        "allocation.failed"), &(failure_t){
+            .kind = N00BB_FAILURE_OUT_OF_MEMORY,
+            .operands = &requested, .operand_count = 1,
+        });
     return result;
 }
 
@@ -5613,6 +6025,7 @@ packed_option_presence_byte(lower_state_t *state, LLVMValueRef value,
     bool in_memory = LLVMIsALoadInst(value) && !LLVMGetVolatile(value)
         && LLVMGetOrdering(value) == LLVMAtomicOrderingNotAtomic;
     LLVMBasicBlockRef resume = LLVMGetInsertBlock(state->builder);
+    LLVMMetadataRef location = LLVMGetCurrentDebugLocation2(state->builder);
     LLVMValueRef base = nullptr;
     if (in_memory) {
         LLVMValueRef after = LLVMGetNextInstruction(value);
@@ -5633,7 +6046,10 @@ packed_option_presence_byte(lower_state_t *state, LLVMValueRef value,
     LLVMSetAlignment(byte, 1);
     LLVMValueRef presence = LLVMBuildAnd(state->builder, byte, mask,
                                          "option.presence");
-    if (in_memory) LLVMPositionBuilderAtEnd(state->builder, resume);
+    if (in_memory) {
+        LLVMPositionBuilderAtEnd(state->builder, resume);
+        LLVMSetCurrentDebugLocation2(state->builder, location);
+    }
     return presence;
 }
 
@@ -6251,8 +6667,12 @@ runtime_sized_payload_in(lower_state_t *state, bool use_frame,
         "sys.internal.gc.alloc.allocate_runtime", pointer, parameters,
         arguments, 4);
     if (!heap) return nullptr;
-    emit_trap_if(state, LLVMBuildIsNull(state->builder, heap,
-                                        "payload.heap.missing"));
+    failure_operand_t requested = unsigned_operand(bytes);
+    emit_failure_if(state, LLVMBuildIsNull(state->builder, heap,
+        "payload.heap.missing"), &(failure_t){
+            .kind = N00BB_FAILURE_OUT_OF_MEMORY,
+            .operands = &requested, .operand_count = 1,
+        });
     LLVMValueRef heap_bits = LLVMBuildPtrToInt(state->builder, heap, i64,
                                                "payload.heap.bits");
     LLVMBuildBr(state->builder, done);
@@ -6567,7 +6987,15 @@ checked_array_index(lower_state_t *state, LLVMValueRef index,
     if (check_bounds) {
         LLVMValueRef invalid = LLVMBuildICmp(state->builder, LLVMIntUGE,
             position, bound, "index.out.of.bounds");
-        emit_trap_if(state, invalid);
+        failure_operand_t bounds[] = {
+            signed_index ? signed_operand(index) : unsigned_operand(index),
+            unsigned_operand(limit),
+        };
+        emit_failure_if(state, invalid, &(failure_t){
+            .kind = N00BB_FAILURE_INDEX,
+            .detail = CORE_STRING_STATIC("an array"),
+            .operands = bounds, .operand_count = 2,
+        });
     }
     return position;
 }
@@ -6763,6 +7191,135 @@ retained_source(ir_func_t *function, const ir_value_t *value)
         value = source->operands[0].value;
     }
     return nullptr;
+}
+
+enum { MAX_FAILURE_OPERANDS = 16 };
+
+static const ir_instr_t *
+narrowed_arithmetic(const ir_value_t *source)
+{
+    const ir_instr_t *definition = source && source->kind == IR_VAL_INSTR
+        ? source->def : nullptr;
+    if (!definition) return nullptr;
+    bool binary = definition->op == IR_OP_ADD || definition->op == IR_OP_SUB
+        || definition->op == IR_OP_MUL || definition->op == IR_OP_SHL;
+    uint32_t expected = binary ? 2 : definition->op == IR_OP_NEG ? 1 : 0;
+    if (!expected || definition->n_operands != expected) return nullptr;
+    for (uint32_t i = 0; i < expected; i++)
+        if (definition->operands[i].kind != IR_OPD_VALUE
+            || !definition->operands[i].value) return nullptr;
+    return definition;
+}
+
+static const ir_instr_t *
+shift_using_count(const ir_func_t *function, const ir_value_t *count)
+{
+    if (!count) return nullptr;
+    for (uint32_t b = 0; b < function->n_blocks; b++)
+        for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *candidate = function->blocks[b]->instrs[i];
+            if ((candidate->op == IR_OP_SHL || candidate->op == IR_OP_SHR)
+                && candidate->n_operands == 2
+                && ir_operand_value(&candidate->operands[1]) == count
+                && ir_operand_value(&candidate->operands[0]))
+                return candidate;
+        }
+    return nullptr;
+}
+
+static failure_operand_t
+value_operand(lower_state_t *state, const ir_value_t *value)
+{
+    LLVMValueRef lowered = lowered_value(state, value);
+    if (!lowered || !value->type) return (failure_operand_t){0};
+    ir_machine_t machine = ir_machine_of(state->function->owner, value->type);
+    if (machine.role == IR_ROLE_CHAR
+        && LLVMGetTypeKind(LLVMTypeOf(lowered)) == LLVMIntegerTypeKind)
+        return (failure_operand_t){
+            .format = N00BB_OPERAND_CHAR, .width = 32, .value = lowered,
+        };
+    if ((machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT
+         || machine.class == IR_CLASS_BOOL)
+        && LLVMGetTypeKind(LLVMTypeOf(lowered)) == LLVMIntegerTypeKind)
+        return integer_operand(state, lowered, value->type);
+    if (machine.class == IR_CLASS_FLOAT && floating_type(LLVMTypeOf(lowered)))
+        return (failure_operand_t){
+            .format = N00BB_OPERAND_FLOAT, .width = 64, .value = lowered,
+        };
+    if (is_string_type(th_resolve(value->type))
+        && LLVMGetTypeKind(LLVMTypeOf(lowered)) == LLVMStructTypeKind)
+        return (failure_operand_t){
+            .format = N00BB_OPERAND_STRING, .width = 128, .value = lowered,
+        };
+    return (failure_operand_t){0};
+}
+
+static core_string_t
+trap_annotation_text(ir_instr_t *instruction, core_string_t key)
+{
+    ir_annot_t *annotation = ir_annot_get(&instruction->annots, key);
+    return annotation && annotation->kind == IR_ANNOT_STR
+        ? annotation->s : (core_string_t){0};
+}
+
+static core_string_t
+next_operand_text(core_string_t *texts)
+{
+    core_string_t text = *texts;
+    for (size_t i = 0; i < texts->u8_bytes; i++)
+        if (texts->data[i] == N00BB_FAILURE_OPERAND_SEPARATOR) {
+            text.u8_bytes = i;
+            texts->data += i + 1;
+            texts->u8_bytes -= i + 1;
+            return text;
+        }
+    *texts = (core_string_t){0};
+    return text;
+}
+
+static bool
+emit_trap_failure(lower_state_t *state, ir_instr_t *instruction)
+{
+    ir_annot_t *kind = ir_annot_get(&instruction->annots,
+        CORE_STRING_STATIC(N00BB_FAILURE_KIND_ANNOTATION));
+    failure_t failure = {
+        .kind = kind && kind->kind == IR_ANNOT_INT
+            ? (n00bb_failure_kind_t)kind->i.mag : N00BB_FAILURE_INVARIANT,
+        .text = trap_annotation_text(instruction,
+            CORE_STRING_STATIC(N00BB_FAILURE_TEXT_ANNOTATION)),
+        .detail = trap_annotation_text(instruction,
+            CORE_STRING_STATIC(N00BB_FAILURE_DETAIL_ANNOTATION)),
+        .span = &instruction->span,
+    };
+    if (!kind && !failure.text.data)
+        failure.text = CORE_STRING_STATIC("reached code that cannot run");
+    failure_operand_t operands[MAX_FAILURE_OPERANDS] = {0};
+    if (instruction->n_operands == 1) {
+        ir_value_t *value = instruction->operands[0].value;
+        ir_instr_t *definition = value && value->kind == IR_VAL_INSTR
+            ? value->def : nullptr;
+        core_string_t texts = trap_annotation_text(instruction,
+            CORE_STRING_STATIC(N00BB_FAILURE_OPERANDS_ANNOTATION));
+        if (texts.data && definition && definition->op == IR_OP_AGGREGATE) {
+            for (uint32_t i = 0; i < definition->n_operands
+                     && failure.operand_count < MAX_FAILURE_OPERANDS; i++) {
+                core_string_t text = next_operand_text(&texts);
+                if (definition->operands[i].kind != IR_OPD_VALUE) continue;
+                failure_operand_t operand = value_operand(state,
+                    definition->operands[i].value);
+                if (!operand.format) continue;
+                operand.text = text;
+                operands[failure.operand_count++] = operand;
+            }
+        } else if (value) {
+            failure_operand_t operand = value_operand(state, value);
+            if (operand.format) operands[failure.operand_count++] = operand;
+            if (!failure.detail.data) failure.detail_type = value->type;
+        }
+    }
+    failure.operands = operands;
+    emit_failure(state, &failure);
+    return true;
 }
 
 static bool
@@ -7031,9 +7588,15 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMValueRef outside = LLVMBuildAnd(state->builder, value,
                 LLVMBuildNot(state->builder, wide_mask, "bitset.invalid"),
                 "bitset.outside");
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+            failure_operand_t bits = integer_operand(state, value,
+                operands[0].value->type);
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
                 outside, LLVMConstNull(LLVMTypeOf(value)),
-                "bitset.out_of_range"));
+                "bitset.out_of_range"), &(failure_t){
+                    .kind = N00BB_FAILURE_CAST,
+                    .detail_type = instruction->dest->type,
+                    .operands = &bits, .operand_count = 1,
+                });
         }
         result = target_bits == source_bits ? value
             : target_bits < source_bits
@@ -7628,7 +8191,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             ir_annot_t *direct = ir_annot_get(&instruction->annots,
                 CORE_STRING_STATIC("n00bb.array.direct_ref"));
             if (direct && direct->kind == IR_ANNOT_BOOL && direct->b) {
-                emit_trap_if(state, rectangular);
+                emit_invariant_if(state, rectangular,
+                    "a reference into a multi-dimensional array row "
+                    "was taken directly");
                 result = LLVMBuildInBoundsGEP2(state->builder,
                     array, base, &position, 1, "index.address");
                 return save_result(state, instruction, result);
@@ -7673,9 +8238,10 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 LLVMConstInt(LLVMTypeOf(flags),
                     ~N00B_ABI_ARRAY_ORIGIN_BIT_MASK, false),
                 "array.invalid.flags");
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+            emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
                 invalid_flags, LLVMConstNull(LLVMTypeOf(flags)),
-                "array.flags.invalid"));
+                "array.flags.invalid"),
+                "a packed array descriptor has invalid flags");
             LLVMTypeRef i128 = LLVMInt128TypeInContext(context);
             LLVMValueRef bit_position = LLVMBuildAdd(state->builder,
                 LLVMBuildMul(state->builder,
@@ -7812,30 +8378,35 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 || !ir_instr_has_mod(instruction, CORE_STRING_STATIC("to_zero"))
                 || !floating_type(LLVMTypeOf(source))
                 || LLVMGetTypeKind(target) != LLVMIntegerTypeKind) break;
-            unsigned id = LLVMLookupIntrinsicID("llvm.trunc",
-                                               sizeof("llvm.trunc") - 1);
             LLVMTypeRef source_type = LLVMTypeOf(source);
-            LLVMValueRef truncation = LLVMGetIntrinsicDeclaration(
-                state->module, id, &source_type, 1);
-            LLVMValueRef truncated = truncation ? LLVMBuildCall2(
-                state->builder, LLVMGlobalGetValueType(truncation), truncation,
-                &source, 1, "cast.trunc_float") : nullptr;
-            if (!truncated) break;
             unsigned width = LLVMGetIntTypeWidth(target);
             double upper = 1.0;
             for (unsigned bit = to.class == IR_CLASS_SINT ? 1 : 0;
                  bit < width; bit++) upper *= 2.0;
-            LLVMValueRef lower_bound = LLVMConstReal(source_type,
-                to.class == IR_CLASS_SINT ? -upper : 0.0);
+            double lower = to.class == IR_CLASS_SINT ? -upper : 0.0;
+            LLVMValueRef below_lower = LLVMConstReal(source_type, lower - 1.0);
+            LLVMBool lossy = false;
+            bool open_lower = LLVMConstRealGetDouble(below_lower, &lossy)
+                != lower;
+            LLVMValueRef lower_bound = open_lower ? below_lower
+                : LLVMConstReal(source_type, lower);
             LLVMValueRef upper_bound = LLVMConstReal(source_type, upper);
             LLVMValueRef above_lower = LLVMBuildFCmp(state->builder,
-                LLVMRealOGE, truncated, lower_bound, "cast.above_lower");
+                open_lower ? LLVMRealOGT : LLVMRealOGE, source, lower_bound,
+                "cast.above_lower");
             LLVMValueRef below_upper = LLVMBuildFCmp(state->builder,
-                LLVMRealOLT, truncated, upper_bound, "cast.below_upper");
+                LLVMRealOLT, source, upper_bound, "cast.below_upper");
             LLVMValueRef in_range = LLVMBuildAnd(state->builder, above_lower,
                 below_upper, "cast.in_range");
-            emit_trap_if(state, LLVMBuildNot(state->builder, in_range,
-                                            "cast.invalid_float"));
+            failure_operand_t floating = {
+                .format = N00BB_OPERAND_FLOAT, .width = 64, .value = source,
+            };
+            emit_failure_if(state, LLVMBuildNot(state->builder, in_range,
+                "cast.invalid_float"), &(failure_t){
+                    .kind = N00BB_FAILURE_CAST,
+                    .detail_type = instruction->dest->type,
+                    .operands = &floating, .operand_count = 1,
+                });
             result = to.class == IR_CLASS_SINT
                 ? LLVMBuildFPToSI(state->builder, source, target, "cast.fptosi")
                 : LLVMBuildFPToUI(state->builder, source, target, "cast.fptoui");
@@ -7853,10 +8424,47 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         unsigned to_width = LLVMGetIntTypeWidth(target);
         bool checked = ir_instr_has_mod(instruction, CORE_STRING_STATIC("trap"))
             && !overflow_proven(state, instruction);
+        const ir_instr_t *shift = checked
+            ? shift_using_count(state->function, instruction->dest) : nullptr;
+        th_type *shifted_type = shift
+            ? ir_operand_value(&shift->operands[0])->type : nullptr;
+        failure_operand_t cast_source[] = {
+            integer_operand(state, source, operands[0].value->type),
+            unsigned_operand(LLVMConstInt(LLVMInt32TypeInContext(
+                LLVMGetModuleContext(state->module)), shifted_type
+                    ? ir_machine_of(state->function->owner,
+                                    shifted_type).width : 0, false)),
+        };
+        failure_t cast_range = {
+            .kind = shift ? N00BB_FAILURE_SHIFT : N00BB_FAILURE_CAST,
+            .detail_type = shift ? shifted_type : instruction->dest->type,
+            .operands = cast_source, .operand_count = shift ? 2 : 1,
+        };
+        const ir_instr_t *arithmetic = checked && !shift
+            ? narrowed_arithmetic(operands[0].value) : nullptr;
+        if (arithmetic && !instruction->span.implied
+            && (arithmetic->span.start_line != instruction->span.start_line
+                || arithmetic->span.start_col
+                    != instruction->span.start_col))
+            arithmetic = nullptr;
+        failure_operand_t arithmetic_operands[2] = {0};
+        for (uint32_t i = 0; arithmetic && i < arithmetic->n_operands; i++)
+            arithmetic_operands[i] = integer_operand(state,
+                lowered_value(state, arithmetic->operands[i].value),
+                arithmetic->operands[i].value->type);
+        if (arithmetic)
+            cast_range = (failure_t){
+                .kind = N00BB_FAILURE_OVERFLOW,
+                .text = operator_text(arithmetic->op),
+                .detail_type = instruction->dest->type,
+                .operands = arithmetic_operands,
+                .operand_count = arithmetic->n_operands,
+            };
         if (checked && from.class == IR_CLASS_SINT
             && to.class == IR_CLASS_UINT)
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntSLT,
-                source, LLVMConstNull(LLVMTypeOf(source)), "cast.negative"));
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntSLT,
+                source, LLVMConstNull(LLVMTypeOf(source)), "cast.negative"),
+                &cast_range);
         result = to_width == from_width ? source
             : to_width < from_width
                 ? LLVMBuildTrunc(state->builder, source, target, "cast.trunc")
@@ -7886,13 +8494,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                                 "cast.restore")
                 : LLVMBuildZExt(state->builder, narrow, LLVMTypeOf(source),
                                 "cast.restore");
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
-                restored, source, "cast.out_of_range"));
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+                restored, source, "cast.out_of_range"), &cast_range);
         }
         if (checked && from.class == IR_CLASS_UINT
             && to.class == IR_CLASS_SINT)
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntSLT,
-                result, LLVMConstNull(target), "cast.to_signed_overflow"));
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntSLT,
+                result, LLVMConstNull(target), "cast.to_signed_overflow"),
+                &cast_range);
         return save_result(state, instruction, result);
     }
     case IR_OP_ATOMIC_WRAP: {
@@ -8830,9 +9439,17 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             rank_slot, "array.shape.rank");
         uint32_t expected_rank = ir_shape_rank(instruction->shape_constraint);
         if (!expected_rank) break;
-        emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
-            rank, LLVMConstInt(i32, expected_rank, false),
-            "array.shape.rank.mismatch"));
+        LLVMValueRef wanted_rank = LLVMConstInt(i32, expected_rank, false);
+        failure_operand_t ranks[] = {
+            unsigned_operand(wanted_rank), unsigned_operand(rank),
+        };
+        emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+            rank, wanted_rank, "array.shape.rank.mismatch"), &(failure_t){
+                .kind = N00BB_FAILURE_SHAPE,
+                .text = CORE_STRING_STATIC(
+                    "the array has a different number of dimensions"),
+                .operands = ranks, .operand_count = 2,
+            });
         LLVMValueRef first_extent = LLVMBuildStructGEP2(state->builder,
             descriptor_type, descriptor, 5, "array.shape.extents");
         for (uint32_t i = 0; i < expected_rank; i++) {
@@ -8851,8 +9468,17 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 first_extent, &offset, 1, "array.shape.extent.slot");
             LLVMValueRef actual = LLVMBuildLoad2(state->builder, i64,
                 slot, "array.shape.extent");
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
-                actual, wanted, "array.shape.extent.mismatch"));
+            failure_operand_t extents[] = {
+                unsigned_operand(wanted), unsigned_operand(actual),
+            };
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+                actual, wanted, "array.shape.extent.mismatch"), &(failure_t){
+                    .kind = N00BB_FAILURE_SHAPE,
+                    .text = CORE_STRING_STATIC(
+                        "the array has a different length than its type "
+                        "requires"),
+                    .operands = extents, .operand_count = 2,
+                });
         }
         return true;
     }
@@ -8865,6 +9491,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (!value) break;
         LLVMTypeRef type = LLVMTypeOf(value);
         bool checked = false;
+        failure_operand_t negated_operand = integer_operand(state, value,
+            operands[0].value->type);
+        failure_t negation_overflow = {
+            .kind = N00BB_FAILURE_OVERFLOW,
+            .text = operator_text(IR_OP_NEG),
+            .detail_type = operands[0].value->type,
+            .operands = &negated_operand, .operand_count = 1,
+        };
         if (floating_type(type)) {
             if (instruction->n_mods) break;
             result = LLVMBuildFNeg(state->builder, value, "negated");
@@ -8893,21 +9527,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                                                "negated");
                 LLVMValueRef overflow = LLVMBuildExtractValue(state->builder,
                     pair, 1, "overflow");
-                LLVMValueRef function = LLVMGetBasicBlockParent(
-                    LLVMGetInsertBlock(state->builder));
-                LLVMContextRef context = LLVMGetModuleContext(state->module);
-                LLVMBasicBlockRef bad = LLVMAppendBasicBlockInContext(context,
-                    function, "overflow");
-                LLVMBasicBlockRef good = LLVMAppendBasicBlockInContext(context,
-                    function, "neg.cont");
-                LLVMBuildCondBr(state->builder, overflow, bad, good);
-                LLVMPositionBuilderAtEnd(state->builder, bad);
-                emit_trap(state);
-                LLVMPositionBuilderAtEnd(state->builder, good);
+                emit_failure_if(state, overflow, &negation_overflow);
             }
         } else break;
         result = semantic_integer_result(state, result,
-            operands[0].value->type, checked);
+            operands[0].value->type, checked ? &negation_overflow : nullptr);
         return result && save_result(state, instruction, result);
     }
     case IR_OP_ADD:
@@ -8932,6 +9556,16 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return save_result(state, instruction, result);
         }
         if (LLVMGetTypeKind(LLVMTypeOf(left)) != LLVMIntegerTypeKind) break;
+        failure_operand_t arithmetic_operands[] = {
+            integer_operand(state, left, operands[0].value->type),
+            integer_operand(state, right, operands[0].value->type),
+        };
+        failure_t arithmetic_overflow = {
+            .kind = N00BB_FAILURE_OVERFLOW,
+            .text = operator_text(instruction->op),
+            .detail_type = operands[0].value->type,
+            .operands = arithmetic_operands, .operand_count = 2,
+        };
         bool safe_sub = overflow_proven(state, instruction)
             || (instruction->op == IR_OP_SUB
                 && ir_range_unsigned_sub_safe(state->ranges, instruction));
@@ -8965,7 +9599,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                                            "arithmetic.result");
             LLVMValueRef overflow = LLVMBuildExtractValue(state->builder, pair,
                 1, "overflow");
-            emit_trap_if(state, overflow);
+            emit_failure_if(state, overflow, &arithmetic_overflow);
         } else {
             result = instruction->op == IR_OP_ADD
                 ? LLVMBuildAdd(state->builder, left, right, "arithmetic")
@@ -8975,7 +9609,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         }
         result = semantic_integer_result(state, result,
             operands[0].value->type,
-            ir_instr_has_mod(instruction, CORE_STRING_STATIC("trap")) && !safe_sub);
+            ir_instr_has_mod(instruction, CORE_STRING_STATIC("trap"))
+                && !safe_sub ? &arithmetic_overflow : nullptr);
         return save_result(state, instruction, result);
     }
     case IR_OP_DIV:
@@ -8987,10 +9622,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (!left || !right || LLVMTypeOf(left) != LLVMTypeOf(right)) break;
         LLVMTypeRef type = LLVMTypeOf(left);
         if (floating_type(type)) {
-            if (instruction->n_mods) break;
-            result = instruction->op == IR_OP_DIV
-                ? LLVMBuildFDiv(state->builder, left, right, "quotient")
-                : LLVMBuildFRem(state->builder, left, right, "remainder");
+            if (instruction->n_mods || instruction->op != IR_OP_DIV) break;
+            result = LLVMBuildFDiv(state->builder, left, right, "quotient");
             return save_result(state, instruction, result);
         }
         if (LLVMGetTypeKind(type) != LLVMIntegerTypeKind
@@ -9005,9 +9638,25 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         bool nonzero = ir_range_site_proven(state->ranges, instruction,
                                             IR_SITE_DIVISOR);
         bool proven = overflow_proven(state, instruction);
+        failure_operand_t division_operands[] = {
+            integer_operand(state, left, operands[0].value->type),
+            integer_operand(state, right, operands[0].value->type),
+        };
+        failure_t division_overflow = {
+            .kind = N00BB_FAILURE_OVERFLOW,
+            .text = operator_text(instruction->op),
+            .detail_type = operands[0].value->type,
+            .operands = division_operands, .operand_count = 2,
+        };
         if (!nonzero)
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
-                right, zero, "div.zero"));
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
+                right, zero, "div.zero"), &(failure_t){
+                    .kind = instruction->op == IR_OP_DIV
+                        ? N00BB_FAILURE_DIVIDE_BY_ZERO
+                        : N00BB_FAILURE_REMAINDER_BY_ZERO,
+                    .detail_type = operands[0].value->type,
+                    .operands = division_operands, .operand_count = 1,
+                });
         if (machine.class == IR_CLASS_SINT && !proven) {
             unsigned width = LLVMGetIntTypeWidth(type);
             unsigned nwords = (width + 63) / 64;
@@ -9021,8 +9670,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 left, min, "div.min");
             LLVMValueRef minus_one = LLVMBuildICmp(state->builder, LLVMIntEQ,
                 right, LLVMConstAllOnes(type), "div.minus_one");
-            emit_trap_if(state, LLVMBuildAnd(state->builder,
-                min_left, minus_one, "div.overflow"));
+            emit_failure_if(state, LLVMBuildAnd(state->builder,
+                min_left, minus_one, "div.overflow"), &division_overflow);
         }
         result = instruction->op == IR_OP_DIV
             ? machine.class == IR_CLASS_SINT
@@ -9032,7 +9681,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 ? LLVMBuildSRem(state->builder, left, right, "remainder")
                 : LLVMBuildURem(state->builder, left, right, "remainder");
         result = semantic_integer_result(state, result,
-            operands[0].value->type, instruction->n_mods != 0 && !proven);
+            operands[0].value->type,
+            instruction->n_mods != 0 && !proven ? &division_overflow
+                                                : nullptr);
         return save_result(state, instruction, result);
     }
     case IR_OP_AND:
@@ -9052,7 +9703,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 ? LLVMBuildOr(state->builder, left, right, "bit.or")
                 : LLVMBuildXor(state->builder, left, right, "bit.xor");
         result = semantic_integer_result(state, result,
-            operands[0].value->type, false);
+            operands[0].value->type, nullptr);
         return save_result(state, instruction, result);
     }
     case IR_OP_SHL:
@@ -9084,10 +9735,22 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         unsigned count_width = LLVMGetIntTypeWidth(count_type);
         bool count_proven = ir_range_site_proven(state->ranges, instruction,
                                                  IR_SITE_SHIFT_AMOUNT);
+        failure_operand_t shift_operands[] = {
+            integer_operand(state, right, operands[1].value->type),
+            unsigned_operand(LLVMConstInt(LLVMInt32TypeInContext(
+                LLVMGetModuleContext(state->module)), value_machine.width,
+                false)),
+        };
+        failure_t shift_range = {
+            .kind = N00BB_FAILURE_SHIFT,
+            .detail_type = operands[0].value->type,
+            .operands = shift_operands, .operand_count = 2,
+        };
         if (instruction->n_mods && !count_proven) {
             if (count_machine.class == IR_CLASS_SINT)
-                emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntSLT,
-                    right, LLVMConstNull(count_type), "shift.negative"));
+                emit_failure_if(state, LLVMBuildICmp(state->builder,
+                    LLVMIntSLT, right, LLVMConstNull(count_type),
+                    "shift.negative"), &shift_range);
             bool count_type_proves_range = count_machine.class == IR_CLASS_UINT
                 && count_machine.width < 64
                 && (UINT64_C(1) << count_machine.width)
@@ -9102,10 +9765,10 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 LLVMValueRef checked_count = count_width == check_width
                     ? right : LLVMBuildZExt(state->builder, right, check_type,
                                            "shift.count.wide");
-                emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntUGE,
-                    checked_count, LLVMConstInt(check_type,
+                emit_failure_if(state, LLVMBuildICmp(state->builder,
+                    LLVMIntUGE, checked_count, LLVMConstInt(check_type,
                                                 value_machine.width, false),
-                    "shift.range"));
+                    "shift.range"), &shift_range);
             }
         }
         LLVMValueRef amount = count_width == value_width ? right
@@ -9118,17 +9781,28 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 : LLVMBuildLShr(state->builder, left, amount, "shift.right");
         bool overflow_checked = instruction->op == IR_OP_SHL && trapping
             && !overflow_proven(state, instruction);
+        failure_operand_t shifted_operands[] = {
+            integer_operand(state, left, operands[0].value->type),
+            integer_operand(state, right, operands[1].value->type),
+        };
+        failure_t shift_overflow = {
+            .kind = N00BB_FAILURE_OVERFLOW,
+            .text = operator_text(instruction->op),
+            .detail_type = operands[0].value->type,
+            .operands = shifted_operands, .operand_count = 2,
+        };
         if (overflow_checked) {
             LLVMValueRef restored = value_machine.class == IR_CLASS_SINT
                 ? LLVMBuildAShr(state->builder, result, amount,
                                 "shift.restored")
                 : LLVMBuildLShr(state->builder, result, amount,
                                 "shift.restored");
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
-                restored, left, "shift.overflow"));
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+                restored, left, "shift.overflow"), &shift_overflow);
         }
         result = semantic_integer_result(state, result,
-            operands[0].value->type, overflow_checked);
+            operands[0].value->type,
+            overflow_checked ? &shift_overflow : nullptr);
         return save_result(state, instruction, result);
     }
     case IR_OP_EQ:
@@ -9318,10 +9992,16 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             LLVMValueRef physical = variant_physical_tag(state, storage,
                 layout);
             if (!physical) break;
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
+            failure_operand_t held = unsigned_operand(physical);
+            emit_failure_if(state, LLVMBuildICmp(state->builder, LLVMIntNE,
                 physical, LLVMConstInt(LLVMTypeOf(physical),
                     (uint64_t)member->ordinal + 1, false),
-                "variant.wrong.arm"));
+                "variant.wrong.arm"), &(failure_t){
+                    .kind = N00BB_FAILURE_VARIANT,
+                    .text = operands[1].name,
+                    .detail_type = operands[0].value->type,
+                    .operands = &held, .operand_count = 1,
+                });
             LLVMValueRef address = variant_byte_address(state, storage,
                 payload_offset);
             result = address ? LLVMBuildLoad2(state->builder, payload_type,
@@ -9407,9 +10087,10 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 || LLVMGlobalGetValueType(lookup) != index_signature) break;
             index_value = LLVMBuildCall2(state->builder, index_signature,
                 lookup, &address, 1, "callback.handler.index");
-            emit_trap_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
+            emit_invariant_if(state, LLVMBuildICmp(state->builder, LLVMIntEQ,
                 index_value, LLVMConstNull(i32),
-                "callback.handler.unknown"));
+                "callback.handler.unknown"),
+                "a callback handler is not a known n00b function");
         }
         LLVMValueRef callback = LLVMGetUndef(type);
         callback = LLVMBuildInsertValue(state->builder, callback,
@@ -9707,8 +10388,13 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         LLVMValueRef callee = LLVMBuildCall2(state->builder, resolver_type,
             resolver, &index, 1, "callback.target");
         if (!callee) break;
-        emit_trap_if(state, LLVMBuildIsNull(state->builder, callee,
-                                            "callback.unresolved"));
+        failure_t unset_callback = {
+            .kind = N00BB_FAILURE_NULL_CALLBACK,
+            .detail_type = operands[0].kind == IR_OPD_VALUE
+                ? operands[0].value->type : nullptr,
+        };
+        emit_failure_if(state, LLVMBuildIsNull(state->builder, callee,
+            "callback.unresolved"), &unset_callback);
         LLVMValueRef *arguments = parameter_count
             ? calloc(parameter_count, sizeof(*arguments)) : nullptr;
         LLVMTypeRef *expected = parameter_count
@@ -9730,8 +10416,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 "callback.environment");
             valid = native_state && environment && expected[0] == pointer;
             if (valid) {
-                emit_trap_if(state, LLVMBuildIsNull(state->builder,
-                    environment, "callback.missing.environment"));
+                emit_failure_if(state, LLVMBuildIsNull(state->builder,
+                    environment, "callback.missing.environment"),
+                    &unset_callback);
                 state_storage = entry_alloca(state, native_state);
                 LLVMValueRef input = LLVMBuildLoad2(state->builder,
                     native_state, environment, "callback.state.input");
@@ -10003,13 +10690,18 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         bool mutator_call = !native && target
             && pointer_set_has(state->mutator_functions, target);
         LLVMValueRef callee = nullptr;
+        LLVMTypeRef native_logical = nullptr;
         if (native && native->kind == IR_ANNOT_STR && native->s.data) {
-            LLVMTypeRef signature = function_type(state->module, target);
-            if (!signature) break;
+            native_logical = function_type(state->module, target);
+            if (!native_logical) break;
+            LLVMTypeRef declared = win64_module(state->module)
+                ? win64_native_signature(state->module, native_logical)
+                : native_logical;
+            if (!declared) break;
             callee = named_function(state->module, native->s);
             if (!callee)
-                callee = add_function(state->module, native->s, signature);
-            if (!callee || LLVMGlobalGetValueType(callee) != signature) break;
+                callee = add_function(state->module, native->s, declared);
+            if (!callee || LLVMGlobalGetValueType(callee) != declared) break;
         } else if (mutator_call) {
             callee = mutator_function(state->module, target);
             if (!callee) {
@@ -10022,8 +10714,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 core_buffer_release(&name);
             }
         } else callee = lowered_value(state, operands[0].value);
-        LLVMTypeRef signature = target && callee
-            ? LLVMGlobalGetValueType(callee)
+        LLVMTypeRef signature = native_logical ? native_logical
+            : target && callee ? LLVMGlobalGetValueType(callee)
             : native_function_type(state->module, state->function->owner,
                                    ir_instr_call_signature(instruction),
                                    false);
@@ -10279,7 +10971,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         valid = valid && native_index == native_count;
         bool returns_void = LLVMGetTypeKind(LLVMGetReturnType(signature))
             == LLVMVoidTypeKind;
-        if (valid)
+        if (valid && native_logical
+            && LLVMGlobalGetValueType(callee) != native_logical)
+            result = win64_native_call(state, signature, callee, arguments,
+                                       native_count);
+        else if (valid)
             result = LLVMBuildCall2(state->builder, signature,
                 callee, arguments,
                 native_count,
@@ -10507,21 +11203,8 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         result = escape_boxes(state, result);
         return result && emit_outcome_return(state, result, true);
     case IR_OP_TRAP:
-        if (count != 0) break;
-        {
-            core_string_t path = instruction->span.file >= 0
-                ? ir_file_path(state->function->owner, instruction->span.file)
-                : (core_string_t){0};
-            core_buffer_t reason = {0};
-            if (path.data)
-                core_buffer_printf(&reason, "check failed at %.*s:%d:%d",
-                    TEXT_ARGS(path), instruction->span.start_line,
-                    instruction->span.start_col);
-            else core_buffer_puts(&reason, "check failed");
-            emit_trap_reason(state, core_buffer_string(&reason));
-            core_buffer_release(&reason);
-        }
-        return true;
+        if (count > 1 || (count && operands[0].kind != IR_OPD_VALUE)) break;
+        return emit_trap_failure(state, instruction);
     default:
         break;
     }
@@ -10739,13 +11422,8 @@ lower_mutator_wrapper(LLVMModuleRef target, ir_func_t *function,
     LLVMBuildCondBr(builder, LLVMBuildIsNull(builder, mutator, "no.mutator"),
         missing, ready);
     LLVMPositionBuilderAtEnd(builder, missing);
-    unsigned trap_id = LLVMLookupIntrinsicID("llvm.trap",
-        sizeof("llvm.trap") - 1);
-    LLVMValueRef trap = LLVMGetIntrinsicDeclaration(target, trap_id,
-        nullptr, 0);
-    LLVMBuildCall2(builder, LLVMGlobalGetValueType(trap), trap, nullptr, 0,
-        "");
-    LLVMBuildUnreachable(builder);
+    emit_runtime_invariant(builder, target,
+                           N00BB_INVARIANT_NATIVE_CALL_WITHOUT_MUTATOR);
     LLVMPositionBuilderAtEnd(builder, ready);
     arguments[count] = mutator;
     LLVMTypeRef signature = LLVMGlobalGetValueType(body);
@@ -10787,6 +11465,125 @@ frame_stable_root_source(lower_state_t *state, ir_value_t *value)
     return value;
 }
 
+enum { frame_root_word_limit = 16 };
+
+static uint32_t
+frame_root_words(LLVMTypeRef type)
+{
+    switch (LLVMGetTypeKind(type)) {
+    case LLVMPointerTypeKind:
+        return 1;
+    case LLVMIntegerTypeKind:
+        return LLVMGetIntTypeWidth(type) == 64;
+    case LLVMStructTypeKind: {
+        uint32_t words = 0;
+        unsigned count = LLVMCountStructElementTypes(type);
+        for (unsigned i = 0; i < count && words <= frame_root_word_limit; i++)
+            words += frame_root_words(LLVMStructGetTypeAtIndex(type, i));
+        return words;
+    }
+    case LLVMArrayTypeKind: {
+        uint64_t length = LLVMGetArrayLength2(type);
+        uint32_t each = frame_root_words(LLVMGetElementType(type));
+        return each && length > frame_root_word_limit
+            ? frame_root_word_limit + 1 : (uint32_t)length * each;
+    }
+    default:
+        return 0;
+    }
+}
+
+static bool
+frame_root_traced(lower_state_t *state, ir_value_t *value)
+{
+    return value
+        && !n00bb_frame_native_pointer(state->function->owner, value->type)
+        && n00bb_frame_traced_value(state->function, value->type);
+}
+
+static uint32_t
+frame_root_slot_count(lower_state_t *state, ir_value_t *value)
+{
+    if (!frame_root_traced(state, value)) return 1;
+    LLVMTypeRef type = value_type(state->function->owner, value->type,
+                                  LLVMGetModuleContext(state->module));
+    return type ? frame_root_words(type) : frame_root_word_limit + 1;
+}
+
+static bool
+store_frame_root_words(lower_state_t *state, LLVMValueRef value,
+                       size_t *next)
+{
+    LLVMTypeRef type = LLVMTypeOf(value);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(
+        LLVMGetModuleContext(state->module), 0);
+    switch (LLVMGetTypeKind(type)) {
+    case LLVMPointerTypeKind:
+    case LLVMIntegerTypeKind: {
+        if (LLVMGetTypeKind(type) == LLVMIntegerTypeKind) {
+            if (LLVMGetIntTypeWidth(type) != 64) return true;
+            value = LLVMBuildIntToPtr(state->builder, value, pointer,
+                                      "gc.root.word");
+        }
+        LLVMValueRef write = value ? LLVMBuildStore(state->builder, value,
+            state->frame_slots[(*next)++]) : nullptr;
+        if (write) LLVMSetVolatile(write, true);
+        return write != nullptr;
+    }
+    case LLVMStructTypeKind:
+    case LLVMArrayTypeKind: {
+        unsigned count = LLVMGetTypeKind(type) == LLVMStructTypeKind
+            ? LLVMCountStructElementTypes(type)
+            : (unsigned)LLVMGetArrayLength2(type);
+        for (unsigned i = 0; i < count; i++) {
+            LLVMValueRef part = LLVMBuildExtractValue(state->builder, value,
+                                                      i, "gc.root.part");
+            if (!part || !store_frame_root_words(state, part, next))
+                return false;
+        }
+        return true;
+    }
+    default:
+        return true;
+    }
+}
+
+static bool
+write_frame_root(lower_state_t *state, uint32_t slot, LLVMValueRef value,
+                 th_type *type)
+{
+    if (LLVMIsUndef(value) || LLVMIsPoison(value))
+        value = LLVMConstNull(LLVMTypeOf(value));
+    if (n00bb_frame_native_pointer(state->function->owner, type)) {
+        LLVMValueRef pointer = frame_root_pointer(state, value, type);
+        LLVMValueRef write = pointer ? LLVMBuildStore(state->builder,
+            pointer, state->frame_slots[slot]) : nullptr;
+        if (write) LLVMSetVolatile(write, true);
+        return write != nullptr;
+    }
+    LLVMTypeRef native = value_type(state->function->owner, type,
+                                    LLVMGetModuleContext(state->module));
+    if (!native) return false;
+    if (LLVMTypeOf(value) != native
+        && LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMPointerTypeKind
+        && LLVMGetTypeKind(native) != LLVMPointerTypeKind)
+        value = LLVMBuildLoad2(state->builder, native, value, "gc.root.load");
+    size_t limit = slot + frame_root_words(native);
+    if (!value || frame_root_words(LLVMTypeOf(value)) > limit - slot)
+        return false;
+    size_t next = slot;
+    if (!store_frame_root_words(state, value, &next)) return false;
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(
+        LLVMGetModuleContext(state->module), 0);
+    for (; next < limit; next++) {
+        LLVMValueRef write = LLVMBuildStore(state->builder,
+            LLVMConstNull(pointer), state->frame_slots[next]);
+        if (!write) return false;
+        LLVMSetVolatile(write, true);
+    }
+    return true;
+}
+
 static bool
 frame_root_needs_slot(lower_state_t *state, n00bb_frame_root_kind_t kind,
                       ir_value_t *value, ir_local_t *local)
@@ -10795,8 +11592,10 @@ frame_root_needs_slot(lower_state_t *state, n00bb_frame_root_kind_t kind,
             || kind == N00BB_FRAME_ROOT_INSTR
             || kind == N00BB_FRAME_ROOT_LOCAL)
         && (value || local)
-        && n00bb_frame_native_pointer(state->function->owner,
-                                      value ? value->type : local->type)
+        && (n00bb_frame_native_pointer(state->function->owner,
+                                       value ? value->type : local->type)
+            || (kind != N00BB_FRAME_ROOT_LOCAL
+                && frame_root_traced(state, value)))
         && !(kind == N00BB_FRAME_ROOT_INSTR && value->def
              && value->def->op == IR_OP_OPTION_NONE)
         && (!value || !ir_storage_origin_unmanaged(state->storage_origin,
@@ -10846,15 +11645,20 @@ count_frame_root(void *opaque, n00bb_frame_root_kind_t kind,
     // Specialized trait dispatch can leave impossible typecase arms in IR.
     if (frame_root_unreachable_narrow(count->state, kind, value, instruction))
         return true;
+    bool traced = kind != N00BB_FRAME_ROOT_LOCAL
+        && frame_root_traced(count->state, value);
+    uint32_t slots = traced ? frame_root_slot_count(count->state, value) : 1;
     if ((kind != N00BB_FRAME_ROOT_PARAM
          && kind != N00BB_FRAME_ROOT_INSTR
          && kind != N00BB_FRAME_ROOT_LOCAL)
         || (!value && !local)
-        || !n00bb_frame_native_pointer(count->state->function->owner,
-                                       value ? value->type : local->type))
+        || slots > frame_root_word_limit
+        || (!traced && !n00bb_frame_native_pointer(
+                count->state->function->owner,
+                value ? value->type : local->type)))
         count->possible = false;
     else if (frame_root_needs_slot(count->state, kind, value, local))
-        count->count++;
+        count->count += slots;
     return true;
 }
 
@@ -10867,30 +11671,35 @@ frame_root_slot(void *opaque, n00bb_frame_root_kind_t kind,
     lower_state_t *state = opaque;
     if (frame_root_unreachable_narrow(state, kind, value, instruction)
         || !frame_root_needs_slot(state, kind, value, local)) return true;
-    index = state->frame_slot_count++;
+    uint32_t slots = kind == N00BB_FRAME_ROOT_LOCAL ? 1
+        : frame_root_slot_count(state, value);
+    if (!slots) return true;
+    index = state->frame_slot_count;
+    state->frame_slot_count += slots;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-    LLVMValueRef slot = LLVMBuildAlloca(state->builder, pointer, "gc.root");
-    if (!slot) return false;
-    LLVMValueRef empty = LLVMBuildStore(state->builder,
-        LLVMConstNull(pointer), slot);
-    LLVMSetVolatile(empty, true);
     unsigned init_kind = LLVMGetMDKindIDInContext(context, gc_root_init_metadata,
         sizeof(gc_root_init_metadata) - 1);
-    LLVMSetMetadata(empty, init_kind, LLVMMetadataAsValue(context,
-        LLVMMDNodeInContext2(context, nullptr, 0)));
+    for (uint32_t i = 0; i < slots; i++) {
+        LLVMValueRef slot = LLVMBuildAlloca(state->builder, pointer,
+                                            "gc.root");
+        if (!slot) return false;
+        LLVMValueRef empty = LLVMBuildStore(state->builder,
+            LLVMConstNull(pointer), slot);
+        LLVMSetVolatile(empty, true);
+        LLVMSetMetadata(empty, init_kind, LLVMMetadataAsValue(context,
+            LLVMMDNodeInContext2(context, nullptr, 0)));
+        state->frame_slots[index + i] = slot;
+    }
     if (!core_indexed_table_reserve(state->frame_roots, (uint32_t)index,
                                     value ? (const void *)value
                                           : (const void *)local, nullptr))
         return false;
-    state->frame_slots[index] = slot;
     if (kind == N00BB_FRAME_ROOT_PARAM) {
         LLVMValueRef parameter = lowered_value(state, value);
-        LLVMValueRef root = parameter
-            ? frame_root_pointer(state, parameter, value->type) : nullptr;
-        if (!root || LLVMTypeOf(root) != pointer) return false;
-        LLVMValueRef write = LLVMBuildStore(state->builder, root, slot);
-        LLVMSetVolatile(write, true);
+        if (!parameter
+            || !write_frame_root(state, (uint32_t)index, parameter,
+                                 value->type)) return false;
     }
     return true;
 }
@@ -11034,24 +11843,18 @@ prepare_frame_map(lower_state_t *state)
     n00bb_frame_root_list_release(&roots);
     if (!counted || count > UINT32_MAX - 2) return false;
     if (!selected.possible) return mark_conservative_frame(state);
-    if (!count) return true;
-    if (!slotted) return false;
+    if (count && !slotted) return false;
     LLVMTypeRef signature = nullptr;
     LLVMValueRef intrinsic = stack_map_intrinsic(state->module, &signature);
     if (!intrinsic) return false;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
-    core_buffer_t name = {0};
-    append_function_symbol(&name, state->function);
-    uint64_t id = core_hash_raw(name.data, name.byte_len);
-    if (id == N00BB_LLVM_FRAME_SENTINEL_ID
-        || id == N00BB_LLVM_FRAME_CONSERVATIVE_ID) id = 0;
-    core_buffer_release(&name);
     LLVMValueRef *arguments = calloc(count + 2, sizeof(*arguments));
     if (!arguments) return false;
-    arguments[0] = LLVMConstInt(LLVMInt64TypeInContext(context), id, false);
+    arguments[0] = LLVMConstInt(LLVMInt64TypeInContext(context), 0, false);
     arguments[1] = LLVMConstInt(LLVMInt32TypeInContext(context), 0, false);
-    memcpy(arguments + 2, state->frame_slots,
-           count * sizeof(*state->frame_slots));
+    if (count)
+        memcpy(arguments + 2, state->frame_slots,
+               count * sizeof(*state->frame_slots));
     LLVMValueRef call = LLVMBuildCall2(state->builder, signature, intrinsic,
                                       arguments, (unsigned)(count + 2), "");
     free(arguments);
@@ -11181,18 +11984,10 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
             != LLVMCountParams(target_function)) {
         core_buffer_t message = {0};
         core_buffer_printf(&message,
-            "LLVM backend cannot lower function '%.*s': its signature or body is unavailable",
+            "the signature or body of '%.*s' is unavailable",
             TEXT_ARGS(function->name));
-        if (diagnostics)
-            core_diagnostics_report_at(diagnostics, nullptr,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0006"),
-                core_buffer_string(&message), (core_diag_location_t){
-                    .line = function->span.start_line,
-                    .column = function->span.start_col,
-                    .end_line = function->span.end_line,
-                    .end_column = function->span.end_col,
-                    .has_location = function->span.start_line != 0,
-                });
+        backend_internal_at(diagnostics, function->owner, function->span,
+                            core_buffer_string(&message));
         core_buffer_release(&message);
         return false;
     }
@@ -11371,26 +12166,64 @@ lower_function(LLVMModuleRef target, const ir_module_t *source,
     return ok;
 }
 
+static core_diag_location_t
+span_location(ir_span_t span)
+{
+    return (core_diag_location_t){
+        .line = span.start_line > 0 ? (uint32_t)span.start_line : 0,
+        .column = span.start_col > 0 ? (uint32_t)span.start_col : 0,
+        .end_line = span.end_line > 0 ? (uint32_t)span.end_line : 0,
+        .end_column = span.end_col > 0 ? (uint32_t)span.end_col : 0,
+        .has_location = span.start_line > 0,
+    };
+}
+
+static core_string_t
+span_path(const ir_module_t *owner, ir_span_t span)
+{
+    return owner && span.file >= 0 && span.start_line > 0
+        ? ir_file_path(owner, span.file) : (core_string_t){0};
+}
+
 static bool
-inline_error(core_diagnostics_t *diagnostics, const ir_func_t *function,
-             core_string_t detail)
+inline_error(core_diagnostics_t *diagnostics, n00bb_diag_t id,
+             const ir_func_t *function, const ir_func_t *site_owner,
+             const ir_instr_t *site, n00bb_text_t help)
 {
     if (!diagnostics) return false;
-    core_buffer_t message = {0};
-    core_string_t module_name = ir_module_name(function->owner);
-    core_buffer_printf(&message, "inline function '%.*s.%.*s' %.*s",
-        TEXT_ARGS(module_name), TEXT_ARGS(function->name),
-        TEXT_ARGS(detail));
-    core_diagnostics_report_at(diagnostics, nullptr, CORE_DIAG_FATAL,
-        CORE_STRING_STATIC("N00BB-B0006"),
-        core_buffer_string(&message), (core_diag_location_t){
-            .line = function->span.start_line,
-            .column = function->span.start_col,
-            .end_line = function->span.end_line,
-            .end_column = function->span.end_col,
-            .has_location = function->span.start_line != 0,
-        });
-    core_buffer_release(&message);
+    ir_span_t span = site ? site->span : function->span;
+    const ir_module_t *owner = site ? site_owner->owner : function->owner;
+    core_string_t name = function->name;
+    bool reported = false;
+    if (id == N00B_DIAG_INLINE_FUNCTION_RECURSIVE && site_owner != function)
+        reported = n00bb_report(diagnostics, nullptr, id, span_location(span),
+            N00B_TEXT_INLINE_FUNCTION_CALLS_ITSELF_THROUGH,
+            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(site_owner->name)));
+    else if (id == N00B_DIAG_INLINE_FUNCTION_RECURSIVE)
+        reported = n00bb_report(diagnostics, nullptr, id, span_location(span),
+            N00B_TEXT_INLINE_FUNCTION_CALLS_ITSELF,
+            N00BB_ARGS(ARG_TEXT(name)));
+    else if (id == N00B_DIAG_INLINE_FUNCTION_INDIRECT_CALL)
+        reported = n00bb_report(diagnostics, nullptr, id, span_location(span),
+            N00B_TEXT_INLINE_FUNCTION_MAKES_AN_INDIRECT,
+            N00BB_ARGS(ARG_TEXT(name)));
+    else
+        reported = n00bb_report(diagnostics, nullptr, id, span_location(span),
+            N00B_TEXT_INLINE_FUNCTION_CANNOT_BE_USED,
+            N00BB_ARGS(ARG_TEXT(name)));
+    size_t count = core_diagnostics_count(diagnostics);
+    core_string_t path = span_path(owner, span);
+    if (reported && count && path.data)
+        core_diagnostic_set_path(diagnostics, count - 1, path);
+    core_string_t declared = span_path(function->owner, function->span);
+    if (reported && site && declared.data) {
+        core_string_t label = n00bb_text(N00B_TEXT_DECLARED_INLINE_HERE,
+                                         N00BB_NO_ARGS);
+        core_diag_secondary_path(diagnostics, declared,
+                                 span_location(function->span), label);
+        core_free(label.data);
+    }
+    if (reported) n00bb_report_help(diagnostics, help, N00BB_NO_ARGS);
     return false;
 }
 
@@ -11406,12 +12239,15 @@ inline_reaches_self(ir_func_t *current, ir_func_t *start,
             if (instruction->op != IR_OP_CALL) continue;
             ir_func_t *callee = n00bb_direct_call_target(instruction);
             if (!callee && current == start)
-                return inline_error(diagnostics, start,
-                    CORE_STRING_STATIC("contains an indirect call whose recursion cannot be checked"));
+                return inline_error(diagnostics,
+                    N00B_DIAG_INLINE_FUNCTION_INDIRECT_CALL, start, current,
+                    instruction, N00B_TEXT_PHRASE_CALL_A_NAMED_FUNCTION_OR);
             if (!callee) continue;
             if (callee == start)
-                return inline_error(diagnostics, start,
-                    CORE_STRING_STATIC("participates in direct or indirect recursion"));
+                return inline_error(diagnostics,
+                    N00B_DIAG_INLINE_FUNCTION_RECURSIVE, start, current,
+                    instruction,
+                    N00B_TEXT_PHRASE_REMOVE_INLINE_FROM_THE_FUNCTION);
             if (callee->n_blocks && !inline_reaches_self(callee, start,
                     visited, diagnostics)) return false;
         }
@@ -11435,15 +12271,26 @@ collect_inline_callees(ir_func_t *function, pointer_set_t *collected,
                     ? n00bb_cached_body(used->value->owner) : nullptr;
                 if (value && ir_func_is_always_inline(value)
                     && (instruction->op != IR_OP_CALL || operand != 0))
-                    return inline_error(diagnostics, value,
-                        CORE_STRING_STATIC("cannot be used as a function value"));
+                    return inline_error(diagnostics,
+                        N00B_DIAG_INLINE_FUNCTION_AS_VALUE, value, function,
+                        instruction,
+                        N00B_TEXT_PHRASE_REMOVE_INLINE_FROM_THE_FUNCTION_2);
             }
             ir_func_t *callee = n00bb_direct_call_target(instruction);
             if (!callee || !ir_func_is_always_inline(callee)
                 || pointer_set_has(collected, callee)) continue;
-            if (!callee->n_blocks)
-                return inline_error(diagnostics, callee,
-                    CORE_STRING_STATIC("has no body available at this call site"));
+            if (!callee->n_blocks) {
+                core_string_t callee_module = ir_module_name(callee->owner);
+                core_buffer_t message = {0};
+                core_buffer_printf(&message,
+                    "the body of inline function '%.*s.%.*s' is not "
+                    "available where it is called",
+                    TEXT_ARGS(callee_module), TEXT_ARGS(callee->name));
+                backend_internal_at(diagnostics, function->owner,
+                    instruction->span, core_buffer_string(&message));
+                core_buffer_release(&message);
+                return false;
+            }
             pointer_set_t visited = pointer_set_new();
             bool valid = inline_reaches_self(callee, callee, &visited,
                                              diagnostics);
@@ -11795,14 +12642,51 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
     return true;
 }
 
-static bool native_target_ready(void);
+static void initialize_llvm_targets(void);
+
+char *
+n00bb_llvm_target_triple(core_string_t profile)
+{
+    core_target_desc_t host;
+    if (core_target_host(&host) && core_string_eq(profile, host.triple)) {
+        char *native = LLVMGetDefaultTargetTriple();
+        core_string_t text = core_string_from_cstr(native);
+        LLVMDisposeMessage(native);
+        char *owned = core_string_to_cstr(text);
+        core_free(text.data);
+        return owned;
+    }
+    core_string_t triple =
+        core_string_eq(profile, CORE_STRING_STATIC("x86_64-windows"))
+            ? CORE_STRING_STATIC("x86_64-w64-windows-gnu")
+        : core_string_eq(profile, CORE_STRING_STATIC("x86_64-linux"))
+            ? CORE_STRING_STATIC("x86_64-pc-linux-gnu")
+        : core_string_eq(profile, CORE_STRING_STATIC("arm64-linux"))
+            ? CORE_STRING_STATIC("aarch64-unknown-linux-gnu")
+        : core_string_eq(profile, CORE_STRING_STATIC("arm64-macos"))
+            ? CORE_STRING_STATIC("arm64-apple-macosx14.0.0")
+        : (core_string_t){};
+    return triple.data ? core_string_to_cstr(triple) : nullptr;
+}
+
+static char *
+module_llvm_triple(LLVMModuleRef module)
+{
+    const char *triple = LLVMGetTarget(module);
+    return triple && triple[0] ? LLVMCreateMessage(triple)
+                               : LLVMGetDefaultTargetTriple();
+}
 
 static bool
 set_native_layout(LLVMModuleRef module, core_string_t cpu,
                   core_string_t features)
 {
-    if (!native_target_ready()) return false;
-    char *triple = LLVMGetDefaultTargetTriple();
+    initialize_llvm_targets();
+    core_string_t profile = core_string_from_cstr(LLVMGetTarget(module));
+    char *triple = profile.data ? n00bb_llvm_target_triple(profile)
+                                : nullptr;
+    core_free(profile.data);
+    if (triple) LLVMSetTarget(module, triple);
     LLVMTargetRef target = nullptr;
     char *message = nullptr;
     bool ok = triple && !LLVMGetTargetFromTriple(triple, &target, &message);
@@ -11823,7 +12707,7 @@ set_native_layout(LLVMModuleRef module, core_string_t cpu,
     if (layout) LLVMDisposeTargetData(layout);
     if (machine) LLVMDisposeTargetMachine(machine);
     if (message) LLVMDisposeMessage(message);
-    if (triple) LLVMDisposeMessage(triple);
+    core_free(triple);
     return ok;
 }
 
@@ -12043,6 +12927,12 @@ n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend)
 }
 
 void
+n00bb_llvm_backend_enable_panic_trap(n00bb_llvm_backend_t *backend)
+{
+    if (backend) backend->panic_trap = true;
+}
+
+void
 n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
     n00bb_native_cache_t *cache)
 {
@@ -12195,13 +13085,8 @@ emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
         LLVMBuildRetVoid(builder);
     }
     LLVMPositionBuilderAtEnd(builder, missing);
-    unsigned trap_id = LLVMLookupIntrinsicID("llvm.trap",
-                                              sizeof("llvm.trap") - 1);
-    LLVMValueRef trap = LLVMGetIntrinsicDeclaration(module, trap_id,
-                                                     nullptr, 0);
-    LLVMBuildCall2(builder, LLVMGlobalGetValueType(trap), trap, nullptr, 0,
-                   "");
-    LLVMBuildUnreachable(builder);
+    emit_runtime_invariant(builder, module,
+                           N00BB_INVARIANT_UNKNOWN_FINALIZER);
     LLVMDisposeBuilder(builder);
     return valid || backend_error(diagnostics,
         "finalizer bridge target has an invalid native signature");
@@ -12275,6 +13160,76 @@ keep_entry_frames(LLVMModuleRef module)
             LLVMAddAttributeAtIndex(callee, LLVMAttributeFunctionIndex,
                 LLVMCreateEnumAttribute(context, kind, 0));
         }
+}
+
+static bool
+reports_failure(LLVMValueRef callee)
+{
+    static const core_string_t reporters[] = {
+        CORE_STRING_STATIC("builtin.panic."),
+        CORE_STRING_STATIC("n00bb_runtime_"),
+    };
+    size_t length = 0;
+    const char *name = LLVMGetValueName2(callee, &length);
+    core_string_t text = {.data = (char *)name, .u8_bytes = length};
+    for (size_t i = 0; i < sizeof(reporters) / sizeof(reporters[0]); i++)
+        if (text.u8_bytes >= reporters[i].u8_bytes
+            && core_string_eq(core_string_slice(text, 0,
+                   reporters[i].u8_bytes), reporters[i]))
+            return true;
+    return false;
+}
+
+static void
+keep_call_frames(LLVMModuleRef module)
+{
+    LLVMContextRef context = LLVMGetModuleContext(module);
+    LLVMAttributeRef nomerge = LLVMCreateEnumAttribute(context,
+        LLVMGetEnumAttributeKindForName("nomerge", 7), 0);
+    for (LLVMValueRef function = LLVMGetFirstFunction(module); function;
+         function = LLVMGetNextFunction(function))
+        for (LLVMBasicBlockRef block = LLVMGetFirstBasicBlock(function);
+             block; block = LLVMGetNextBasicBlock(block))
+            for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
+                 instruction;
+                 instruction = LLVMGetNextInstruction(instruction)) {
+                LLVMValueRef callee = LLVMIsACallInst(instruction)
+                    ? LLVMGetCalledValue(instruction) : nullptr;
+                if (!callee || !LLVMIsAFunction(callee)
+                    || LLVMGetIntrinsicID(callee)) continue;
+                LLVMAddCallSiteAttribute(instruction,
+                    LLVMAttributeFunctionIndex, nomerge);
+                if (reports_failure(callee))
+                    LLVMSetTailCallKind(instruction,
+                                        LLVMTailCallKindNoTail);
+            }
+}
+
+static void
+writable_stack_maps(uint8_t *object, size_t length)
+{
+    static const char section[] = ".llvm_stackmaps";
+    if (length < 64 || memcmp(object, "\x7f" "ELF", 4) || object[4] != 2)
+        return;
+    uint64_t headers = core_le_load_u64(object + 40);
+    uint16_t entry = core_le_load_u16(object + 58);
+    uint16_t count = core_le_load_u16(object + 60);
+    uint16_t names_index = core_le_load_u16(object + 62);
+    if (entry < 64 || names_index >= count || headers > length
+        || (uint64_t)count * entry > length - headers) return;
+    const uint8_t *names_header = object + headers
+        + (uint64_t)names_index * entry;
+    uint64_t names = core_le_load_u64(names_header + 24);
+    uint64_t names_size = core_le_load_u64(names_header + 32);
+    if (names > length || names_size > length - names) return;
+    for (uint16_t i = 0; i < count; i++) {
+        uint8_t *header = object + headers + (uint64_t)i * entry;
+        uint32_t name = core_le_load_u32(header);
+        if (name >= names_size || names_size - name < sizeof(section)
+            || memcmp(object + names + name, section, sizeof(section)))
+            continue;
+        core_le_store_u64(header + 8, core_le_load_u64(header + 8) | 1);
+    }
 }
 
 static bool
@@ -12400,7 +13355,7 @@ prune_null_frame_roots(LLVMModuleRef module, LLVMBuilderRef builder)
                         if (i < 2 || !pointer_set_has(&dead, operand))
                             args[kept++] = operand;
                     }
-                    if (kept != count && kept > 2) {
+                    if (kept != count) {
                         LLVMPositionBuilderBefore(builder, instruction);
                         ok = LLVMBuildCall2(builder,
                             LLVMGlobalGetValueType(map), map, args, kept,
@@ -12639,15 +13594,14 @@ discard_unpublished_frame_roots(LLVMValueRef function, unsigned init_kind)
 }
 
 static bool
-emit_frame_sentinels(LLVMModuleRef module,
-                     core_diagnostics_t *diagnostics)
+emit_frame_maps(LLVMModuleRef module, core_diagnostics_t *diagnostics)
 {
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMValueRef map = LLVMGetNamedFunction(module, stack_map_name);
     if (!map) return true;
     LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
     if (!builder) return backend_error(diagnostics,
-        "could not create frame sentinel builder");
+        "could not create frame map builder");
     if (!prune_null_frame_roots(module, builder)) {
         LLVMDisposeBuilder(builder);
         return backend_error(diagnostics,
@@ -12659,8 +13613,6 @@ emit_frame_sentinels(LLVMModuleRef module,
             "could not merge equivalent native frame roots");
     }
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     unsigned init_kind = LLVMGetMDKindIDInContext(context,
         gc_root_init_metadata, sizeof(gc_root_init_metadata) - 1);
     bool ok = true;
@@ -12689,12 +13641,13 @@ emit_frame_sentinels(LLVMModuleRef module,
         pointer_set_t roots = pointer_set_new();
         pointer_set_t cleared = pointer_set_new();
         core_list_t(LLVMValueRef) clears = core_list_new(LLVMValueRef);
-        bool possible = true;
+        bool possible = true, mapped = false;
         for (LLVMBasicBlockRef block = entry; block;
              block = LLVMGetNextBasicBlock(block))
             for (LLVMValueRef instruction = LLVMGetFirstInstruction(block);
                  instruction; instruction = LLVMGetNextInstruction(instruction))
                 if (is_stack_map_call(instruction)) {
+                    mapped = true;
                     unsigned count = LLVMGetNumArgOperands(instruction);
                     for (unsigned i = 2; i < count; i++) {
                         LLVMValueRef root = LLVMGetOperand(instruction, i);
@@ -12710,7 +13663,7 @@ emit_frame_sentinels(LLVMModuleRef module,
                     core_list_push(clears, instruction);
                     pointer_set_add(&cleared, LLVMGetOperand(instruction, 1));
                 }
-        possible = possible && roots.items.len
+        possible = possible && mapped
             && cleared.items.len == roots.items.len;
         for (size_t i = 0; possible && i < cleared.items.len; i++)
             possible = pointer_set_has(&roots, cleared.items.data[i]);
@@ -12734,12 +13687,7 @@ emit_frame_sentinels(LLVMModuleRef module,
                     LLVMInstructionEraseFromParent(instruction);
                 instruction = next;
             }
-        LLVMValueRef last_root = nullptr;
-        for (LLVMValueRef instruction = LLVMGetFirstInstruction(entry);
-             instruction; instruction = LLVMGetNextInstruction(instruction))
-            if (pointer_set_has(&roots, instruction)) last_root = instruction;
-        LLVMValueRef last_init = nullptr;
-        bool initialized = last_root != nullptr;
+        bool initialized = true;
         for (size_t i = 0; initialized && i < roots.items.len; i++) {
             LLVMValueRef slot = roots.items.data[i];
             LLVMValueRef next = LLVMGetNextInstruction(slot);
@@ -12750,49 +13698,22 @@ emit_frame_sentinels(LLVMModuleRef module,
             }
             initialized = init != nullptr;
             if (init) LLVMSetVolatile(init, true);
-            if (slot == last_root) last_init = init;
         }
-        if (!initialized) last_init = nullptr;
-        for (size_t i = 0; last_init && i < clears.len; i++)
+        for (size_t i = 0; initialized && i < clears.len; i++)
             LLVMInstructionEraseFromParent(clears.data[i]);
         pointer_set_free(&roots);
         core_list_free(clears);
-        if (!last_init) {
+        if (!initialized) {
             ok = false;
-            failed_step = last_root
-                ? CORE_STRING_STATIC("initializing entry root slots")
-                : CORE_STRING_STATIC("finding entry root slots");
+            failed_step = CORE_STRING_STATIC("initializing entry root slots");
             break;
         }
-        LLVMValueRef next = LLVMGetNextInstruction(last_init);
-        if (!next) { ok = false; break; }
-        LLVMPositionBuilderBefore(builder, next);
-        size_t length = 0;
-        const char *function_name = LLVMGetValueName2(function, &length);
-        if (!function_name || length > INT_MAX) { ok = false; break; }
-        core_buffer_t symbol = {0};
-        core_buffer_printf(&symbol, "__n00bb_gc_frame.%.*s",
-                           (int)length, function_name);
-        LLVMValueRef descriptor = add_global(module,
-            LLVMInt8TypeInContext(context), core_buffer_string(&symbol));
-        core_buffer_release(&symbol);
-        if (!descriptor) { ok = false; break; }
-        LLVMValueRef slot = LLVMBuildAlloca(builder, pointer,
-                                            "gc.frame.descriptor");
-        LLVMValueRef write = LLVMBuildStore(builder, descriptor, slot);
-        LLVMSetVolatile(write, true);
-        LLVMValueRef args[] = {
-            LLVMConstInt(i64, N00BB_LLVM_FRAME_SENTINEL_ID, false),
-            LLVMConstInt(i32, 0, false), slot,
-        };
-        ok = LLVMBuildCall2(builder, LLVMGlobalGetValueType(map), map,
-                            args, 3, "") != nullptr;
     }
     LLVMDisposeBuilder(builder);
     if (ok) return true;
     core_buffer_t message = {0};
     core_buffer_printf(&message,
-        "could not emit native frame sentinels in %.*s (%.*s)",
+        "could not emit native frame maps in %.*s (%.*s)",
         failed_function ? (int)failed_function_length
                         : (int)sizeof("unknown function") - 1,
         failed_function ? failed_function : "unknown function",
@@ -12857,22 +13778,27 @@ static bool emit_native_module(n00bb_llvm_backend_t *backend,
     LLVMModuleRef module, core_buffer_t *out,
     core_diagnostics_t *diagnostics);
 
-static pthread_once_t native_target_once = PTHREAD_ONCE_INIT;
-static bool native_target_available;
+static pthread_once_t llvm_targets_once = PTHREAD_ONCE_INIT;
 
 static void
-initialize_native_target(void)
+initialize_llvm_target_set(void)
 {
-    native_target_available = !LLVMInitializeNativeTarget()
-        && !LLVMInitializeNativeAsmPrinter()
-        && !LLVMInitializeNativeAsmParser();
+    LLVMInitializeX86TargetInfo();
+    LLVMInitializeX86Target();
+    LLVMInitializeX86TargetMC();
+    LLVMInitializeX86AsmPrinter();
+    LLVMInitializeX86AsmParser();
+    LLVMInitializeAArch64TargetInfo();
+    LLVMInitializeAArch64Target();
+    LLVMInitializeAArch64TargetMC();
+    LLVMInitializeAArch64AsmPrinter();
+    LLVMInitializeAArch64AsmParser();
 }
 
-static bool
-native_target_ready(void)
+static void
+initialize_llvm_targets(void)
 {
-    pthread_once(&native_target_once, initialize_native_target);
-    return native_target_available;
+    pthread_once(&llvm_targets_once, initialize_llvm_target_set);
 }
 
 static bool
@@ -12884,8 +13810,7 @@ prepare_image(n00bb_llvm_backend_t *backend,
     if (!backend || (initializer_count && !entry_initializers)
         || (initializer_count && !metadata_bytes))
         return backend_error(diagnostics, "invalid LLVM object arguments");
-    if (!native_target_ready())
-        return backend_error(diagnostics, "LLVM native target is unavailable");
+    initialize_llvm_targets();
     if (!lower_backend(backend, diagnostics)) return false;
     LLVMModuleRef module = backend->module;
     LLVMContextRef context = backend->context;
@@ -12908,6 +13833,11 @@ prepare_image(n00bb_llvm_backend_t *backend,
         LLVMTypeRef signature = LLVMFunctionType(result, entry_params, 2,
                                                  false);
         LLVMValueRef entry = LLVMAddFunction(module, "main", signature);
+        if (backend->panic_trap) {
+            LLVMTypeRef byte = LLVMInt8TypeInContext(context);
+            LLVMValueRef trap = LLVMAddGlobal(module, byte, "n00b_panic_trap");
+            LLVMSetInitializer(trap, LLVMConstInt(byte, 1, false));
+        }
         LLVMBasicBlockRef block = LLVMAppendBasicBlockInContext(context, entry,
             "entry");
         LLVMBuilderRef builder = LLVMCreateBuilderInContext(context);
@@ -12973,12 +13903,8 @@ prepare_image(n00bb_llvm_backend_t *backend,
                 entry, "run.initializers");
             LLVMBuildCondBr(builder, failed, rejected, ready);
             LLVMPositionBuilderAtEnd(builder, rejected);
-            LLVMValueRef trap = LLVMGetIntrinsicDeclaration(module,
-                LLVMLookupIntrinsicID("llvm.trap", sizeof("llvm.trap") - 1),
-                nullptr, 0);
-            LLVMBuildCall2(builder, LLVMGlobalGetValueType(trap), trap,
-                nullptr, 0, "");
-            LLVMBuildUnreachable(builder);
+            emit_runtime_invariant(builder, module,
+                                   N00BB_INVARIANT_METADATA_REJECTED);
             LLVMPositionBuilderAtEnd(builder, ready);
             LLVMTypeRef relocate_type = LLVMFunctionType(
                 LLVMVoidTypeInContext(context), nullptr, 0, false);
@@ -13003,15 +13929,25 @@ prepare_image(n00bb_llvm_backend_t *backend,
         LLVMDisposeBuilder(builder);
         keep_entry_frames(module);
     }
+    keep_call_frames(module);
 
     LLVMAttributeRef frame_pointer = LLVMCreateStringAttribute(context,
         "frame-pointer", sizeof("frame-pointer") - 1,
         "all", sizeof("all") - 1);
+    core_string_t triple = core_string_from_cstr(LLVMGetTarget(module));
+    bool compact_unwind = triple.data && core_string_find(triple,
+        CORE_STRING_STATIC("apple")) >= 0;
+    core_free(triple.data);
+    LLVMAttributeRef unwind_table = LLVMCreateEnumAttribute(context,
+        LLVMGetEnumAttributeKindForName("uwtable", sizeof("uwtable") - 1), 2);
     for (LLVMValueRef function = LLVMGetFirstFunction(module); function;
          function = LLVMGetNextFunction(function)) {
-        if (LLVMCountBasicBlocks(function))
+        if (!LLVMCountBasicBlocks(function)) continue;
+        LLVMAddAttributeAtIndex(function, LLVMAttributeFunctionIndex,
+                                frame_pointer);
+        if (!compact_unwind)
             LLVMAddAttributeAtIndex(function, LLVMAttributeFunctionIndex,
-                                    frame_pointer);
+                                    unwind_table);
     }
 
     char *message = nullptr;
@@ -13074,8 +14010,10 @@ emit_code_map(LLVMModuleRef module, core_diagnostics_t *diagnostics)
         && (core_string_find(triple, CORE_STRING_STATIC("linux")) >= 0
             || core_string_find(triple, CORE_STRING_STATIC("elf")) >= 0
             || core_string_find(triple, CORE_STRING_STATIC("bsd")) >= 0);
+    bool coff = triple.data
+        && core_string_find(triple, CORE_STRING_STATIC("windows")) >= 0;
     core_free(triple.data);
-    if (!mach_o && !elf) return true;
+    if (!mach_o && !elf && !coff) return true;
     LLVMContextRef context = LLVMGetModuleContext(module);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
@@ -13121,7 +14059,8 @@ emit_code_map(LLVMModuleRef module, core_diagnostics_t *diagnostics)
         LLVMSetLinkage(table, LLVMPrivateLinkage);
         LLVMSetGlobalConstant(table, true);
         LLVMSetAlignment(table, 8);
-        LLVMSetSection(table, mach_o ? "__DATA,__n00b_code" : "n00b_code");
+        LLVMSetSection(table, mach_o ? "__DATA,__n00b_code"
+                            : coff ? "n00b_code$m" : "n00b_code");
         append_used_global(module, table);
         char *message = nullptr;
         ok = !LLVMVerifyModule(module, LLVMReturnStatusAction, &message);
@@ -13141,16 +14080,22 @@ profile_now(void)
     return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
 }
 
+static bool profiling;
+
+void
+n00bb_llvm_set_profiling(bool enabled)
+{
+    profiling = enabled;
+}
+
 static bool
 emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
                    core_buffer_t *out, core_diagnostics_t *diagnostics)
 {
-    double profile_started = getenv("N00BB_PROFILE_COMPILE")
-        ? profile_now() : -1;
+    double profile_started = profiling ? profile_now() : -1;
     char *message = nullptr;
-    if (!native_target_ready())
-        return backend_error(diagnostics, "LLVM native target is unavailable");
-    char *triple = LLVMGetDefaultTargetTriple();
+    initialize_llvm_targets();
+    char *triple = module_llvm_triple(module);
     core_uint128_t cache_key = 0;
     if (backend->native_cache && triple) {
         LLVMMemoryBufferRef preopt = LLVMWriteBitcodeToMemoryBuffer(module);
@@ -13164,7 +14109,7 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
             LLVMDisposeMemoryBuffer(preopt);
             if (n00bb_native_cache_read(backend->native_cache, cache_key,
                     out)) {
-                if (getenv("N00BB_PROFILE_COMPILE")) {
+                if (profiling) {
                     core_string_t module_name =
                         ir_module_name(backend->source);
                     fprintf(stderr, "PROFILE llvm-cache-hit %.*s\n",
@@ -13178,8 +14123,7 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     LLVMTargetRef target = nullptr;
     bool ok = triple && !LLVMGetTargetFromTriple(triple, &target, &message);
     if (!ok) {
-        backend_llvm_report(diagnostics, message,
-            CORE_STRING_STATIC("LLVM target is unavailable"));
+        backend_target_unavailable(diagnostics, triple, message);
         if (message) LLVMDisposeMessage(message);
         if (triple) LLVMDisposeMessage(triple);
         return false;
@@ -13198,9 +14142,23 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     core_free(cpu_text);
     core_free(feature_text);
     LLVMSetTarget(module, triple);
+    if (!machine) {
+        core_string_t machine_name = core_string_from_cstr(triple);
+        core_string_t cpu = backend->cpu_name.data ? backend->cpu_name
+                                                   : CORE_STRING_STATIC("generic");
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_BACKEND_TARGET_CPU,
+            (core_diag_location_t){}, N00B_TEXT_LLVM_CANNOT_GENERATE_CODE_FOR,
+            N00BB_ARGS(ARG_TEXT(machine_name), ARG_TEXT(cpu)));
+        if (backend->cpu_features.u8_bytes)
+            n00bb_report_note(diagnostics, N00B_TEXT_REQUESTED_CPU_FEATURES,
+                N00BB_ARGS(ARG_TEXT(backend->cpu_features)));
+        n00bb_report_help(diagnostics, N00B_TEXT_BUILD_WITH_GENERIC_TO_TARGET,
+            N00BB_NO_ARGS);
+        core_free(machine_name.data);
+        LLVMDisposeMessage(triple);
+        return false;
+    }
     LLVMDisposeMessage(triple);
-    if (!machine)
-        return backend_error(diagnostics, "could not create LLVM target machine");
     LLVMTargetDataRef layout = LLVMCreateTargetDataLayout(machine);
     char *layout_text = LLVMCopyStringRepOfTargetData(layout);
     LLVMSetDataLayout(module, layout_text);
@@ -13220,7 +14178,7 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
         return false;
     }
     if (backend->emit_frame_maps
-        && !emit_frame_sentinels(module, diagnostics)) {
+        && !emit_frame_maps(module, diagnostics)) {
         LLVMDisposeTargetMachine(machine);
         return false;
     }
@@ -13244,15 +14202,24 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     ok = !LLVMTargetMachineEmitToMemoryBuffer(machine, module,
         LLVMObjectFile, &message, &object);
     if (ok) {
-        const char *bytes = LLVMGetBufferStart(object);
+        size_t start = out->byte_len;
         size_t length = LLVMGetBufferSize(object);
-        core_buffer_append(out, bytes, length);
+        core_buffer_append(out, LLVMGetBufferStart(object), length);
+        uint8_t *bytes = (uint8_t *)out->data + start;
+        writable_stack_maps(bytes, out->byte_len - start);
         if (cache_key)
             n00bb_native_cache_write(backend->native_cache, cache_key,
-                bytes, length);
+                (const char *)bytes, length);
     }
-    else backend_llvm_report(diagnostics, message,
-        CORE_STRING_STATIC("LLVM object emission failed"));
+    else if (diagnostics) {
+        core_string_t module_name = backend && backend->source
+            ? ir_module_name(backend->source)
+            : n00bb_text_form(N00B_TEXT_THE_LINKED_PROGRAM);
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_BACKEND_OBJECT_EMISSION,
+            (core_diag_location_t){}, N00B_TEXT_LLVM_COULD_NOT_WRITE_THE,
+            N00BB_ARGS(ARG_TEXT(module_name)));
+        note_llvm_text(diagnostics, message);
+    }
     if (ok && profile_started >= 0) {
         size_t functions = 0, instructions = 0, largest = 0;
         LLVMValueRef largest_function = nullptr;
@@ -13334,6 +14301,33 @@ n00bb_llvm_backend_emit_linkable_bitcode(n00bb_llvm_backend_t *backend,
         metadata_bytes, true, out, diagnostics);
 }
 
+static void
+report_lto_diagnostic(LLVMDiagnosticInfoRef info, void *context)
+{
+    core_diagnostics_t *diagnostics = context;
+    char *description = LLVMGetDiagInfoDescription(info);
+    core_string_t text = core_string_from_cstr(description);
+    static const core_string_t dwarf_version =
+        CORE_STRING_STATIC("linking module flags 'Dwarf Version'");
+    bool dwarf_mismatch = text.u8_bytes >= dwarf_version.u8_bytes
+        && core_string_eq(core_string_slice(text, 0, dwarf_version.u8_bytes),
+                          dwarf_version);
+    LLVMDiagnosticSeverity severity = LLVMGetDiagInfoSeverity(info);
+    if (diagnostics && !dwarf_mismatch && text.u8_bytes) {
+        if (severity == LLVMDSError) {
+            backend_report(diagnostics, CORE_STRING_STATIC(
+                "LLVM failed while linking the program for --lto"));
+            note_llvm_text(diagnostics, description);
+        }
+        else if (severity == LLVMDSWarning)
+            n00bb_report(diagnostics, nullptr, N00B_DIAG_BACKEND_LLVM_WARNING,
+                (core_diag_location_t){}, N00B_TEXT_LLVM_REPORTED_A_WARNING,
+                N00BB_ARGS(ARG_TEXT(text)));
+    }
+    core_free(text.data);
+    LLVMDisposeMessage(description);
+}
+
 bool
 n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
     size_t count, bool debug_enabled, bool native_cpu, bool emit_frame_maps,
@@ -13344,6 +14338,8 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
     LLVMContextRef context = LLVMContextCreate();
     if (!context)
         return backend_error(diagnostics, "could not create LTO context");
+    LLVMContextSetDiagnosticHandler(context, report_lto_diagnostic,
+                                    diagnostics);
     LLVMModuleRef linked = nullptr;
     bool ok = true;
     for (size_t i = 0; ok && i < count; i++) {
@@ -13360,11 +14356,7 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
             backend_error(diagnostics, "could not parse LTO bitcode module");
             break;
         }
-        char *triple = LLVMGetDefaultTargetTriple();
-        if (triple) {
-            LLVMSetTarget(next, triple);
-            LLVMDisposeMessage(triple);
-        }
+        if (linked) LLVMSetTarget(next, LLVMGetTarget(linked));
         core_string_t linked_layout = linked
             ? core_string_from_cstr(LLVMGetDataLayoutStr(linked))
             : (core_string_t){0};
@@ -13405,6 +14397,7 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
     }
     if (ok) {
         keep_entry_frames(linked);
+        keep_call_frames(linked);
         char *message = nullptr;
         if (LLVMVerifyModule(linked, LLVMReturnStatusAction, &message))
             ok = backend_llvm_report(diagnostics, message,

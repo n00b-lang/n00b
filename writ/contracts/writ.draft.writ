@@ -29,28 +29,53 @@ struct writ_span_t @size(32) @align(8) {
     column: u32 @28
 }
 type writ_severity_t = u32
-struct writ_diag_label_t @size(48) @align(8) {
+struct core_string_t @size(16) @align(8) {
+    data: ?c_char @0
+    u8_bytes: usize @8
+}
+struct core_text_arg_t @size(64) @align(8) {
+    kind: c_uint @0
+    text: core_string_t @8
+    native: ?c_char @24
+    number: i64 @32
+    phrase: u32 @40
+    items: ?core_string_t @48
+    count: usize @56
+}
+struct core_text_args_t @size(16) @align(8) {
+    at: ?core_text_arg_t @0
+    count: usize @8
+}
+struct core_text_message_t @size(24) @align(8) {
+    text: u32 @0
+    args: core_text_args_t @8
+}
+struct writ_diag_label_t @size(72) @align(8) {
     span: writ_span_t @0
     label: writ_str_t @32
+    text: core_text_message_t @48
 }
-struct writ_diag_suggestion_t @size(64) @align(8) {
+struct writ_diag_suggestion_t @size(88) @align(8) {
     span: writ_span_t @0
     replacement: writ_str_t @32
     description: writ_str_t @48
+    text: core_text_message_t @64
 }
-struct writ_diag_t @size(160) @align(8) {
+struct writ_diag_t @size(216) @align(8) {
     struct_size: usize @0
     code: writ_str_t @8
     severity: writ_severity_t @24
     message: writ_str_t @32
     path: writ_str_t @48
     primary: writ_diag_label_t @64
-    secondary_count: usize @112
-    secondary: ?writ_diag_label_t @120
-    note_count: usize @128
-    notes: ?writ_diag_label_t @136
-    suggestion_count: usize @144
-    suggestions: ?writ_diag_suggestion_t @152
+    secondary_count: usize @136
+    secondary: ?writ_diag_label_t @144
+    note_count: usize @152
+    notes: ?writ_diag_label_t @160
+    suggestion_count: usize @168
+    suggestions: ?writ_diag_suggestion_t @176
+    code_id: u32 @184
+    detail: core_text_message_t @192
 }
 callback writ_diag_sink_fn = fn(p0: ?void, p1: ?writ_diag_t)
 struct writ_process_runner_t @size(16) @align(8) {
@@ -375,11 +400,12 @@ struct writ_gen_n00b_request_t @size(64) @align(8) {
     shim_prefix: writ_str_t @32
     type_namespace: writ_str_t @48
 }
-struct writ_n00b_extern_t @size(56) @align(8) {
+struct writ_n00b_extern_t @size(88) @align(8) {
     name: writ_str_t @0
     symbol: writ_str_t @16
     signature: writ_str_t @32
     pure: bool @48
+    declared_at: writ_span_t @56
 }
 struct writ_n00b_export_t @size(32) @align(8) {
     function: writ_str_t @0
@@ -579,6 +605,7 @@ fn writ_diag_count(session: ?writ_session_t) -> usize
 fn writ_diag_at(session: ?writ_session_t, index: usize) -> ?writ_diag_t unknown
 fn writ_diag_render(session: ?writ_session_t, diag: ?writ_diag_t, rendered: unknown ?writ_str_t) -> writ_status_t
 fn writ_unit_new(session: unknown ?writ_session_t) -> ?writ_unit_t unknown
+fn writ_unit_add_contract_dir(unit: unknown ?writ_unit_t, dir: writ_str_t) -> writ_status_t
 fn writ_unit_add_source(unit: unknown ?writ_unit_t, kind: writ_source_kind_t, origin: writ_origin_t, text: writ_str_t, source_id: unknown ?u32) -> writ_status_t
 fn writ_unit_add_file(unit: unknown ?writ_unit_t, path: writ_str_t, source_id: unknown ?u32) -> writ_status_t
 fn writ_unit_add_embedded(unit: unknown ?writ_unit_t, language: writ_str_t, origin: writ_origin_t, text: writ_str_t, source_id: unknown ?u32) -> writ_status_t
@@ -587,6 +614,7 @@ fn writ_unit_file_at(unit: ?writ_unit_t, index: usize) -> writ_str_t
 fn writ_unit_dump(unit: ?writ_unit_t, rendered: unknown ?writ_str_t) -> writ_status_t
 fn writ_format_unit(unit: ?writ_unit_t, output: ?writ_output_t) -> writ_status_t
 fn writ_platform_host_triple() -> writ_str_t
+fn writ_platform_binary_io()
 fn writ_platform_from_triple(session: unknown ?writ_session_t, triple: writ_str_t, platform: unknown ??writ_platform_t) -> writ_status_t
 fn writ_platform_triple(platform: ?writ_platform_t) -> writ_str_t
 fn writ_platform_set_version(platform: unknown ?writ_platform_t, library: writ_str_t, version: writ_str_t) -> writ_status_t

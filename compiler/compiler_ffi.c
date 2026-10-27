@@ -3,24 +3,25 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <ftw.h>
 #include <pthread.h>
-#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "compiler_native_roots.h"
 #include "compiler_phases.h"
+#include "config.h"
 #include "llvm_native_cache.h"
 #include "lib/alloc.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "lib/hash.h"
+#include "lib/os.h"
+#include "lib/process.h"
 #include "lib/list.h"
 #include "lib/string.h"
+#include "diagnostics.h"
 #include "driver.h"
 #include "writ/gen.h"
 
@@ -31,6 +32,60 @@ typedef struct {
 
 core_list_decl(ffi_output_t);
 core_list_decl(size_t);
+core_list_decl(n00bb_ffi_symbol_t);
+
+static pthread_mutex_t declared_symbols_lock = PTHREAD_MUTEX_INITIALIZER;
+static core_list_t(n00bb_ffi_symbol_t) declared_symbols;
+
+static void
+remember_declared_symbols(const writ_n00b_externs_t *externs, core_translation_unit_t *unit,
+                          core_string_t literal, n00bb_literal_origin_t origin)
+{
+    pthread_mutex_lock(&declared_symbols_lock);
+    if (!declared_symbols.data) {
+        declared_symbols = core_list_new(n00bb_ffi_symbol_t);
+    }
+    for (size_t i = 0; i < externs->count; i++) {
+        core_string_t function = core_string_borrow(externs->items[i].name.data, externs->items[i].name.length);
+        if (core_string_starts_with(function, CORE_STRING_STATIC("__"))) {
+            function = core_string_slice(function, 2, function.u8_bytes - 2);
+        }
+        core_buffer_t name = {0};
+        core_buffer_printf(&name, "%.*s.%.*s", (int)literal.u8_bytes, literal.data, (int)function.u8_bytes,
+                           function.data);
+        core_list_push(declared_symbols, ((n00bb_ffi_symbol_t){
+                                             .symbol = core_string_dup(core_string_borrow(
+                                                 externs->items[i].symbol.data, externs->items[i].symbol.length)),
+                                             .name   = core_string_dup(core_buffer_string(&name)),
+                                             .unit   = unit,
+                                             .line   = externs->items[i].declared_at.line
+                                                           ? externs->items[i].declared_at.line : origin.line,
+                                             .column = externs->items[i].declared_at.line
+                                                           ? externs->items[i].declared_at.column : origin.column,
+                                         }));
+        core_buffer_release(&name);
+    }
+    pthread_mutex_unlock(&declared_symbols_lock);
+}
+
+bool
+n00bb_ffi_declared_symbol(core_string_t symbol, n00bb_ffi_symbol_t *out)
+{
+    bool found = false;
+    pthread_mutex_lock(&declared_symbols_lock);
+    for (size_t i = 0; !found && i < declared_symbols.len; i++) {
+        core_string_t declared = declared_symbols.data[i].symbol;
+        bool shim_for_symbol = declared.u8_bytes > symbol.u8_bytes
+                            && core_string_ends_with(declared, symbol)
+                            && declared.data[declared.u8_bytes - symbol.u8_bytes - 1] == '_';
+        if (core_string_eq(declared, symbol) || shim_for_symbol) {
+            *out = declared_symbols.data[i];
+            found = true;
+        }
+    }
+    pthread_mutex_unlock(&declared_symbols_lock);
+    return found;
+}
 
 typedef struct {
     core_string_t              prefix;
@@ -50,7 +105,6 @@ struct n00bb_ffi {
     writ_session_t                *session;
     writ_unit_t                   *profiles;
     core_list_t(core_string_t)     contract_dirs;
-    core_list_t(core_string_t)     package_dirs;
     core_list_t(core_string_t)     inputs;
     core_list_t(ffi_output_t)      shims;
     core_list_t(core_string_t)     headers;
@@ -114,7 +168,6 @@ n00bb_ffi_new(void)
     }
     *ffi = (n00bb_ffi_t){
         .contract_dirs = core_list_new(core_string_t),
-        .package_dirs  = core_list_new(core_string_t),
         .inputs       = core_list_new(core_string_t),
         .shims         = core_list_new(ffi_output_t),
         .headers       = core_list_new(core_string_t),
@@ -139,7 +192,6 @@ n00bb_ffi_free(n00bb_ffi_t *ffi)
     }
     writ_session_free(ffi->session);
     free_strings(&ffi->contract_dirs);
-    free_strings(&ffi->package_dirs);
     free_strings(&ffi->inputs);
     for (size_t i = 0; i < ffi->shims.len; i++) {
         core_free((void *)ffi->shims.data[i].name.data);
@@ -191,11 +243,15 @@ open_session(n00bb_ffi_t *ffi)
     for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
         writ_session_add_contract_dir(ffi->session, as_writ(ffi->contract_dirs.data[i]));
     }
-    core_string_t profile = CORE_STRING_STATIC(N00BB_WRIT_PROFILE_DIR "/n00b.writ");
+    const n00bb_toolchain_t *toolchain = n00bb_toolchain();
+    writ_session_add_contract_dir(ffi->session, as_writ(toolchain->writ_contracts));
+    core_string_t profile = core_os_path_join(toolchain->writ_profiles,
+                                            CORE_STRING_STATIC("n00b.writ"));
     ffi->profiles = writ_unit_new(ffi->session);
     if (writ_unit_add_file(ffi->profiles, as_writ(profile), nullptr) != WRIT_OK) {
         ffi->profiles = nullptr;
     }
+    core_free(profile.data);
     return ffi->profiles != nullptr;
 }
 
@@ -212,30 +268,100 @@ capture_file(void *context, writ_str_t path, writ_str_t contents)
     return WRIT_OK;
 }
 
+static const n00bb_diag_t writ_codes[] = {
+#define WRIT_DIAG(id, code, severity, text) N00B_DIAG_WRIT_##id,
+#include "writ/diag_codes.def"
+#undef WRIT_DIAG
+};
+
+static const n00bb_text_t writ_texts[] = {
+#define WRIT_TEXT(id, text) N00B_TEXT_WRIT_##id,
+#include "writ/diag_texts.def"
+#undef WRIT_TEXT
+};
+
+static core_string_t
+writ_text(core_text_message_t message)
+{
+    if (message.text >= WRIT_TEXT_COUNT) return (core_string_t){0};
+    core_text_arg_t *args = core_alloc_array(core_text_arg_t, message.args.count);
+    for (size_t i = 0; i < message.args.count; i++) {
+        args[i] = message.args.at[i];
+        if (args[i].kind == CORE_TEXT_ARG_PHRASE && args[i].phrase < WRIT_TEXT_COUNT)
+            args[i].phrase = writ_texts[args[i].phrase];
+    }
+    core_string_t text = n00bb_text(writ_texts[message.text], (n00bb_args_t){args, message.args.count});
+    core_free(args);
+    return text;
+}
+
+static core_diag_location_t
+writ_location(writ_span_t span)
+{
+    if (!span.line) return (core_diag_location_t){0};
+    uint64_t width = span.end_byte > span.start_byte ? span.end_byte - span.start_byte : 1;
+    return (core_diag_location_t){
+        .line         = span.line,
+        .column       = span.column,
+        .end_line     = span.line,
+        .end_column   = span.column + (uint32_t)width,
+        .has_location = true,
+    };
+}
+
 static void
 forward_diagnostics(n00bb_ffi_t *ffi, core_translation_unit_t *unit, size_t first, n00bb_literal_origin_t origin)
 {
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     for (size_t i = first; i < writ_diag_count(ffi->session); i++) {
         const writ_diag_t *diag = writ_diag_at(ffi->session, i);
-        core_diag_severity_t severity = diag->severity == WRIT_ERROR     ? CORE_DIAG_ERROR
-                                        : diag->severity == WRIT_WARNING ? CORE_DIAG_WARNING
-                                                                         : CORE_DIAG_NOTE;
-        core_diag_location_t location = {
-            .line         = diag->primary.span.line,
-            .column       = diag->primary.span.column,
-            .end_line     = diag->primary.span.line,
-            .end_column   = diag->primary.span.column,
-            .has_location = diag->primary.span.line != 0,
-        };
+        core_diag_location_t location = writ_location(diag->primary.span);
         if (!location.has_location) {
             location = (core_diag_location_t){origin.line, origin.column, origin.line, origin.column, true};
         }
         size_t index = core_diagnostics_count(diagnostics);
-        core_diagnostics_report_at(diagnostics, unit, severity, as_core(diag->code), as_core(diag->message),
-                                   location);
+        if (diag->code_id >= WRIT_D_COUNT) {
+            n00bb_internal_error(diagnostics, unit, location, "checking an 'ffi contract",
+                                 "%.*s (%.*s)", (int)diag->message.length, diag->message.data,
+                                 (int)diag->code.length, diag->code.data);
+            continue;
+        }
+        n00bb_diag_t id = writ_codes[diag->code_id];
+        core_string_t detail = writ_text(diag->detail);
+        bool reported = detail.data
+            ? n00bb_report(diagnostics, unit, id, location, N00B_TEXT_WRIT_TITLE_DETAIL,
+                           N00BB_ARGS(ARG_TEXT(n00bb_diag_title(id)), ARG_TEXT(detail)))
+            : n00bb_report(diagnostics, unit, id, location, N00B_TEXT_TEXT,
+                           N00BB_ARGS(ARG_TEXT(n00bb_diag_title(id))));
+        core_free(detail.data);
+        if (!reported) continue;
         if (diag->path.length && core_diagnostics_count(diagnostics) > index) {
             core_diagnostic_set_path(diagnostics, index, as_core(diag->path));
+        }
+        core_string_t label = writ_text(diag->primary.text);
+        core_diag_label(diagnostics, label);
+        core_free(label.data);
+        for (size_t s = 0; s < diag->secondary_count; s++) {
+            label = writ_text(diag->secondary[s].text);
+            core_diag_secondary_path(diagnostics, diag->path.length ? as_core(diag->path) : (core_string_t){},
+                                     writ_location(diag->secondary[s].span), label);
+            core_free(label.data);
+        }
+        for (size_t n = 0; n < diag->note_count; n++) {
+            label = writ_text(diag->notes[n].text);
+            core_diag_note(diagnostics, label);
+            core_free(label.data);
+        }
+        for (size_t s = 0; s < diag->suggestion_count; s++) {
+            const writ_diag_suggestion_t *suggestion = &diag->suggestions[s];
+            label = writ_text(suggestion->text);
+            if (label.data)
+                n00bb_report_help(diagnostics, N00B_TEXT_TEXT_2,
+                    N00BB_ARGS(ARG_TEXT(label), ARG_TEXT(as_core(suggestion->replacement))));
+            else
+                n00bb_report_help(diagnostics, N00B_TEXT_WRITE,
+                    N00BB_ARGS(ARG_TEXT(as_core(suggestion->replacement))));
+            core_free(label.data);
         }
     }
 }
@@ -378,82 +504,85 @@ register_exports(const writ_n00b_externs_t *externs, core_string_t module)
     return true;
 }
 
-extern char **environ;
 
 static bool
 write_whole_file(core_string_t path, core_string_t contents)
 {
-    char *native_path = core_string_to_cstr(path);
-    FILE *file = native_path ? fopen(native_path, "wb") : nullptr;
-    core_free(native_path);
-    if (!file) {
-        return false;
-    }
-    bool ok = fwrite(contents.data, 1, contents.u8_bytes, file) == contents.u8_bytes;
-    return fclose(file) == 0 && ok;
+    return core_os_write_file_atomic(path, contents.data, contents.u8_bytes);
 }
 
 static void
 unlink_path(core_string_t path)
 {
-    char *native_path = core_string_to_cstr(path);
-    if (native_path) {
-        unlink(native_path);
-    }
-    core_free(native_path);
+    core_os_remove_file(path);
+}
+
+static core_string_t
+temporary_directory(const char *prefix)
+{
+    core_string_t root = core_os_temp_root();
+    core_buffer_t stem = {0};
+    core_buffer_append_string(&stem, root);
+    core_buffer_printf(&stem, "/%s", prefix);
+    core_string_t directory = core_os_make_unique_directory(core_buffer_string(&stem));
+    core_buffer_release(&stem);
+    core_free(root.data);
+    return directory;
+}
+
+static void
+remove_directory(core_string_t path)
+{
+    char *native = core_string_to_cstr(path);
+    if (native) rmdir(native);
+    core_free(native);
+    core_free(path.data);
 }
 
 static bool
 make_directory(core_string_t path)
 {
-    char *native_path = core_string_to_cstr(path);
-    bool ok = native_path && (!mkdir(native_path, 0700) || errno == EEXIST);
-    core_free(native_path);
-    return ok;
+    return core_os_make_directory(path, 0700);
 }
 
 static bool
 read_whole_file(core_string_t path, core_buffer_t *out)
 {
-    char *native_path = core_string_to_cstr(path);
-    FILE *file = native_path ? fopen(native_path, "rb") : nullptr;
-    core_free(native_path);
-    if (!file) {
-        return false;
-    }
-    char chunk[65536];
-    size_t count = 0;
-    while ((count = fread(chunk, 1, sizeof chunk, file)) != 0) {
-        core_buffer_append(out, chunk, count);
-    }
-    bool ok = !ferror(file);
-    fclose(file);
-    return ok && out->byte_len;
+    char *bytes = nullptr;
+    size_t size = 0;
+    if (!core_os_read_file(path, &bytes, &size)) return false;
+    core_buffer_append(out, bytes, size);
+    core_free(bytes);
+    return out->byte_len != 0;
 }
 
 static void
-report_error(core_translation_unit_t *unit, n00bb_literal_origin_t origin, core_string_t code, core_string_t message)
+report_error(core_translation_unit_t *unit, n00bb_literal_origin_t origin,
+             n00bb_diag_t id, n00bb_text_t message, n00bb_args_t args)
 {
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit, CORE_DIAG_ERROR, code, message,
-                               (core_diag_location_t){origin.line, origin.column, origin.line, origin.column, true});
+    n00bb_report(core_translation_unit_diagnostics(unit), unit, id,
+        (core_diag_location_t){origin.line, origin.column, origin.line,
+                               origin.column, true},
+        message, args);
 }
 
 static bool
 run_logged(char **arguments, core_string_t log)
 {
-    posix_spawn_file_actions_t actions;
-    if (posix_spawn_file_actions_init(&actions)) {
+    if (!arguments[0]) {
         return false;
     }
-    char *native_log = core_string_to_cstr(log.data ? log : CORE_STRING_STATIC("/dev/null"));
-    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, native_log, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
-    pid_t child = 0;
-    int status = 0;
-    bool ok = !posix_spawnp(&child, arguments[0], &actions, nullptr, arguments, environ)
-           && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    posix_spawn_file_actions_destroy(&actions);
-    core_free(native_log);
+    core_buffer_t output = {0};
+    core_buffer_t errors = {0};
+    core_process_status_t status = {0};
+    bool ok = !core_process_capture(arguments, nullptr, 0, &output, &errors, &status)
+           && status.exited && status.code == 0;
+    if (log.data) {
+        core_buffer_append(&output, errors.data, errors.byte_len);
+        core_os_write_file_atomic(log, output.data, output.byte_len);
+    }
+    core_buffer_release(&output);
+    core_buffer_release(&errors);
     return ok;
 }
 
@@ -463,8 +592,8 @@ library_found(n00bb_ffi_t *ffi, core_string_t library)
     if (contains(&ffi->found_libraries, library) || contains(&ffi->transports, library)) {
         return true;
     }
-    char directory[] = "/tmp/n00bb-probe.XXXXXX";
-    if (!mkdtemp(directory)) {
+    core_string_t directory = temporary_directory("n00bb-probe.");
+    if (!directory.data) {
         return false;
     }
     core_list_t(core_buffer_t) flags = core_list_new(core_buffer_t);
@@ -475,15 +604,19 @@ library_found(n00bb_ffi_t *ffi, core_string_t library)
     }
     core_buffer_t named = {0}, output = {0};
     core_buffer_printf(&named, "-l%.*s", (int)library.u8_bytes, library.data);
-    core_buffer_append(&output, directory, sizeof(directory) - 1);
+    core_buffer_append_string(&output, directory);
     core_buffer_puts(&output, "/probe");
+    core_buffer_t source = {0};
+    core_buffer_append_string(&source, directory);
+    core_buffer_puts(&source, "/probe.c");
+    bool empty = core_os_write_file_atomic(core_buffer_string(&source), "", 0);
+    char *native_source = core_string_to_cstr(core_buffer_string(&source));
+    core_buffer_release(&source);
     char **arguments = core_alloc_array(char *, flags.len + 10);
     size_t next = 0;
-    arguments[next++] = N00BB_NATIVE_LINKER;
+    arguments[next++] = n00bb_toolchain()->linker;
     arguments[next++] = "-shared";
-    arguments[next++] = "-x";
-    arguments[next++] = "c";
-    arguments[next++] = "/dev/null";
+    arguments[next++] = native_source;
     size_t first_owned = next;
     for (size_t i = 0; i < flags.len; i++) {
         arguments[next++] = core_string_to_cstr(core_buffer_string(&flags.data[i]));
@@ -494,9 +627,11 @@ library_found(n00bb_ffi_t *ffi, core_string_t library)
     arguments[next++] = "-o";
     arguments[next++] = native_output;
     arguments[next] = nullptr;
-    bool found = run_logged(arguments, (core_string_t){});
+    bool found = empty && run_logged(arguments, (core_string_t){});
     unlink(native_output);
-    rmdir(directory);
+    if (native_source) unlink(native_source);
+    core_free(native_source);
+    remove_directory(directory);
     for (size_t i = first_owned; i < owned_end; i++) {
         core_free(arguments[i]);
     }
@@ -522,31 +657,23 @@ check_libraries(n00bb_ffi_t *ffi, core_translation_unit_t *unit, n00bb_literal_o
     for (size_t i = 0; i < links->libraries_count; i++) {
         core_string_t library = as_core(links->libraries[i]);
         if (!library_found(ffi, library)) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message, "native library '%.*s' required by this 'ffi literal is not available to link",
-                               (int)library.u8_bytes, library.data);
-            report_error(unit, origin, CORE_STRING_STATIC("N00BB-F0001"), core_buffer_string(&message));
-            core_buffer_release(&message);
+            report_error(unit, origin, N00B_DIAG_NATIVE_LIBRARY_MISSING,
+                         N00B_TEXT_FFI_LIBRARY_NOT_FOUND,
+                         N00BB_ARGS(ARG_TEXT(library)));
+            core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+            if (ffi->search_paths.len)
+                n00bb_report_note(diagnostics,
+                    N00B_TEXT_SEARCHED_THE_SYSTEM_LIBRARY_PATHS,
+                    N00BB_ARGS(ARG_NAMES(ffi->search_paths.data,
+                                         ffi->search_paths.len)));
+            n00bb_report_help(diagnostics, N00B_TEXT_INSTALL_LIB_OR_ADD_THE,
+                N00BB_ARGS(ARG_TEXT(library)));
             ok = false;
         }
     }
     return ok;
 }
 
-static int
-remove_entry(const char *path, const struct stat *status, int kind, struct FTW *walk)
-{
-    (void)status;
-    (void)kind;
-    (void)walk;
-    return remove(path);
-}
-
-void
-n00bb_remove_tree(const char *path)
-{
-    if (path) nftw(path, remove_entry, 16, FTW_DEPTH | FTW_PHYS);
-}
 
 static bool
 write_crate(core_string_t directory, const capture_t *crate)
@@ -605,7 +732,7 @@ build_crate(core_string_t directory)
     core_buffer_append_string(&log, directory);
     core_buffer_puts(&log, "/cargo.log");
     char *native_manifest = core_string_to_cstr(core_buffer_string(&manifest));
-    char *arguments[] = {N00BB_CARGO, "rustc", "--release", "--lib", "--crate-type", "staticlib", "--manifest-path",
+    char *arguments[] = {n00bb_toolchain()->cargo, "rustc", "--release", "--lib", "--crate-type", "staticlib", "--manifest-path",
                          native_manifest, "--", "--print", "native-static-libs", nullptr};
     bool ok = run_logged(arguments, core_buffer_string(&log)) && read_whole_file(core_buffer_string(&log), &text);
     core_free(native_manifest);
@@ -713,13 +840,19 @@ keep_transport(n00bb_ffi_t *ffi, ffi_literal_t *record, core_translation_unit_t 
     writ_status_t status = writ_gen_rust(model, &request, &output);
     bool ok = status == WRIT_OK || status == WRIT_INVALID_ARGUMENT;
     core_string_t root = {};
-    if (ok && status == WRIT_OK && !*N00BB_CARGO) {
-        report_error(unit, origin, CORE_STRING_STATIC("N00BB-F0002"),
-                     CORE_STRING_STATIC("this 'ffi literal needs a Rust transport crate, but this n00bb was built without Rust transports"));
+    if (ok && status == WRIT_OK && !n00bb_toolchain()->cargo) {
+        report_error(unit, origin, N00B_DIAG_RUST_TRANSPORT_UNAVAILABLE,
+                     N00B_TEXT_FFI_NEEDS_RUST, N00BB_NO_ARGS);
+        n00bb_report_help(core_translation_unit_diagnostics(unit),
+            N00B_TEXT_REBUILD_N00B_WITH_N00B_RUST,
+            N00BB_NO_ARGS);
         ok = false;
     } else if (ok && status == WRIT_OK && !(root = n00bb_native_cache_root()).data) {
-        report_error(unit, origin, CORE_STRING_STATIC("N00BB-F0003"),
-                     CORE_STRING_STATIC("no cache directory is available for the Rust transport crate"));
+        report_error(unit, origin, N00B_DIAG_TRANSPORT_CACHE_UNAVAILABLE,
+                     N00B_TEXT_FFI_NO_CACHE_FOR_RUST, N00BB_NO_ARGS);
+        n00bb_report_help(core_translation_unit_diagnostics(unit),
+            N00B_TEXT_SET_N00B_CACHE_TO_A_2,
+            N00BB_NO_ARGS);
         ok = false;
     } else if (ok && status == WRIT_OK) {
         core_buffer_t payload = {0}, directory = {0};
@@ -739,34 +872,40 @@ keep_transport(n00bb_ffi_t *ffi, ffi_literal_t *record, core_translation_unit_t 
         core_buffer_append_string(&directory, root);
         core_buffer_puts(&directory, "/rust");
         ok = make_directory(core_buffer_string(&directory));
+        int directory_error = ok ? 0 : errno;
         core_buffer_printf(&directory, "/%016llx%016llx", (unsigned long long)(key >> 64), (unsigned long long)key);
         if (ok && !keep_crate(ffi, record, core_buffer_string(&directory))) {
             core_buffer_t staging = {0};
             core_buffer_append_string(&staging, core_buffer_string(&directory));
-            core_buffer_puts(&staging, ".XXXXXX");
-            char *native_staging = core_string_to_cstr(core_buffer_string(&staging));
-            ok = native_staging && mkdtemp(native_staging);
-            if (ok) {
-                memcpy(staging.data, native_staging, staging.byte_len);
-            }
+            core_buffer_puts(&staging, ".");
+            core_string_t made = core_os_make_unique_directory(core_buffer_string(&staging));
+            ok = made.data != nullptr;
+            core_buffer_release(&staging);
+            core_buffer_append_string(&staging, made);
+            core_free(made.data);
             ok = ok && write_crate(core_buffer_string(&staging), &crate);
-            bool built = ok && build_crate(core_buffer_string(&staging));
-            char *native_directory = core_string_to_cstr(core_buffer_string(&directory));
-            if (built && rename(native_staging, native_directory)) {
-                n00bb_remove_tree(native_staging);
+            if (!ok) {
+                directory_error = errno ? errno : EIO;
             }
-            core_free(native_directory);
-            core_free(native_staging);
+            bool built = ok && build_crate(core_buffer_string(&staging));
+            if (built && !core_os_rename_replace(core_buffer_string(&staging),
+                                                 core_buffer_string(&directory)))
+                core_os_remove_tree(core_buffer_string(&staging), nullptr);
             if (ok && !built) {
-                core_buffer_t message = {0};
-                core_buffer_puts(&message, "building the Rust transport crate failed; cargo output is in ");
-                core_buffer_append_string(&message, core_buffer_string(&staging));
-                core_buffer_puts(&message, "/cargo.log");
-                report_error(unit, origin, CORE_STRING_STATIC("N00BB-F0004"), core_buffer_string(&message));
-                core_buffer_release(&message);
+                report_error(unit, origin, N00B_DIAG_TRANSPORT_BUILD_FAILED,
+                             N00B_TEXT_FFI_CARGO_FAILED, N00BB_NO_ARGS);
+                n00bb_report_note(core_translation_unit_diagnostics(unit),
+                    N00B_TEXT_CARGO_S_OUTPUT_IS_IN,
+                    N00BB_ARGS(ARG_TEXT(core_buffer_string(&staging))));
             }
             ok = built && keep_crate(ffi, record, core_buffer_string(&directory));
             core_buffer_release(&staging);
+        }
+        if (directory_error) {
+            report_error(unit, origin, N00B_DIAG_TRANSPORT_CACHE_UNAVAILABLE,
+                         N00B_TEXT_FFI_CANNOT_CREATE_CRATE,
+                         N00BB_ARGS(ARG_TEXT(root),
+                                    ARG_ERRNO(directory_error)));
         }
         core_buffer_release(&payload);
         core_buffer_release(&directory);
@@ -825,6 +964,25 @@ keep_origins(core_string_t map, n00bb_line_origins_t *origins)
     return true;
 }
 
+static void
+add_package_contracts(writ_unit_t *literal, core_translation_unit_t *unit)
+{
+    core_string_t package = n00bb_package_id(unit);
+    core_buffer_t dir = {0};
+    if (core_string_eq(package, CORE_STRING_STATIC("default"))) {
+        core_string_t path = core_source_file_path(&unit->source);
+        size_t cut = path.u8_bytes;
+        while (cut && path.data[cut - 1] != '/') {
+            cut--;
+        }
+        core_buffer_printf(&dir, "%.*scontracts", (int)cut, path.data);
+    } else {
+        core_buffer_printf(&dir, "%.*s/contracts", (int)package.u8_bytes, package.data);
+    }
+    writ_unit_add_contract_dir(literal, (writ_str_t){dir.data, dir.byte_len});
+    core_buffer_release(&dir);
+}
+
 static bool
 generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t name, core_string_t module,
                 n00bb_literal_origin_t origin, core_string_t text, core_buffer_t *source,
@@ -832,6 +990,9 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
 {
     size_t first = writ_diag_count(ffi->session);
     writ_unit_t *literal = writ_unit_new(ffi->session);
+    if (literal) {
+        add_package_contracts(literal, unit);
+    }
     writ_origin_t where = {.host_path = as_writ(origin.host_path), .first_line = origin.line,
                            .first_column = origin.column, .first_byte = origin.byte};
     writ_platform_t *platform = nullptr;
@@ -871,6 +1032,9 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
         writ_n00b_externs_t externs = {0};
         ok = writ_gen_n00b(&request, &output, &links, &externs) == WRIT_OK && keep_externs(&externs, natives)
           && register_exports(&externs, module);
+        if (ok) {
+            remember_declared_symbols(&externs, unit, name, origin);
+        }
         record.exports = externs.exports_count != 0;
         if (ok && externs.header.length) {
             push_unique(&ffi->headers, externs.header);
@@ -913,30 +1077,6 @@ generate_locked(n00bb_ffi_t *ffi, core_translation_unit_t *unit, core_string_t n
     return ok;
 }
 
-static void
-add_package_contracts(n00bb_ffi_t *ffi, core_translation_unit_t *unit)
-{
-    core_string_t package = n00bb_package_id(unit);
-    core_buffer_t dir = {0};
-    if (core_string_eq(package, CORE_STRING_STATIC("default"))) {
-        core_string_t path = core_source_file_path(&unit->source);
-        size_t cut = path.u8_bytes;
-        while (cut && path.data[cut - 1] != '/') {
-            cut--;
-        }
-        core_buffer_printf(&dir, "%.*scontracts", (int)cut, path.data);
-    } else {
-        core_buffer_printf(&dir, "%.*s/contracts", (int)package.u8_bytes, package.data);
-    }
-    writ_str_t added = {dir.data, dir.byte_len};
-    size_t before = ffi->package_dirs.len;
-    push_unique(&ffi->package_dirs, added);
-    if (ffi->package_dirs.len > before) {
-        writ_session_add_contract_dir(ffi->session, added);
-    }
-    core_buffer_release(&dir);
-}
-
 bool
 n00bb_ffi_generate(void *context, core_translation_unit_t *unit, core_string_t name, core_string_t module,
                    n00bb_literal_origin_t origin, core_string_t text, core_buffer_t *source,
@@ -949,7 +1089,6 @@ n00bb_ffi_generate(void *context, core_translation_unit_t *unit, core_string_t n
     pthread_mutex_lock(&ffi->lock);
     bool ok = open_session(ffi);
     if (ok) {
-        add_package_contracts(ffi, unit);
         ok = generate_locked(ffi, unit, name, module, origin, text, source, natives, origins);
     }
     pthread_mutex_unlock(&ffi->lock);
@@ -1057,7 +1196,7 @@ static core_string_t
 sdk_root(void)
 {
 #ifdef __APPLE__
-    core_string_t configured = core_string_from_cstr(getenv("SDKROOT"));
+    core_string_t configured = core_os_environment(CORE_STRING_STATIC("SDKROOT"));
     if (configured.u8_bytes) {
         return configured;
     }
@@ -1097,9 +1236,9 @@ static bool
 run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory, core_string_t source,
           core_string_t output)
 {
-    const char *compiler = getenv("N00BB_CC");
+    const char *compiler = n00bb_toolchain()->clang;
     if (!compiler) {
-        compiler = N00BB_LLVM_CLANG;
+        return false;
     }
     core_buffer_t target = {0};
     core_buffer_puts(&target, "--target=");
@@ -1116,11 +1255,14 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
     size_t held = 0;
     char *native_directory = owned[held++] = core_string_to_cstr(directory);
     char *native_target = owned[held++] = core_string_to_cstr(core_buffer_string(&target));
-    char *fixed[] = {(char *)compiler, native_target, "-std=c11", "-O2", "-fPIC", "-c", "-emit-llvm",
+    char *fixed[] = {(char *)compiler, native_target, "-std=c11", "-O2", "-c", "-emit-llvm",
                      "-I", native_directory};
     size_t next = 0;
     for (; next < sizeof(fixed) / sizeof(fixed[0]); next++) {
         arguments[next] = fixed[next];
+    }
+    if (core_string_find(triple, CORE_STRING_STATIC("windows")) < 0) {
+        arguments[next++] = "-fPIC";
     }
     for (size_t i = 0; i < ffi->contract_dirs.len; i++) {
         arguments[next++] = "-I";
@@ -1135,10 +1277,11 @@ run_clang(const n00bb_ffi_t *ffi, core_string_t triple, core_string_t directory,
     arguments[next++] = "-o";
     arguments[next++] = owned[held++] = core_string_to_cstr(output);
     arguments[next] = nullptr;
-    pid_t child = 0;
-    int status = 0;
-    bool ok = !posix_spawnp(&child, compiler, nullptr, nullptr, arguments, environ)
-           && waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    core_process_spec_t spec = {.arguments = arguments, .search_path = true};
+    core_process_t child;
+    core_process_status_t status = {0};
+    bool ok = !core_process_start(&spec, &child) && core_process_wait(child, &status)
+           && status.exited && status.code == 0;
     for (size_t i = 0; i < held; i++) {
         core_free(owned[i]);
     }
@@ -1175,11 +1318,10 @@ shim_key(const n00bb_ffi_t *ffi, const n00bb_native_cache_t *cache, core_string_
 static bool
 compile_uncached(const n00bb_ffi_t *ffi, core_string_t triple, size_t index, core_buffer_t *bitcode)
 {
-    char directory[] = "/tmp/n00bb-shims.XXXXXX";
-    if (!mkdtemp(directory)) {
+    core_string_t directory_text = temporary_directory("n00bb-shims.");
+    if (!directory_text.data) {
         return false;
     }
-    core_string_t directory_text = core_string_borrow(directory, sizeof(directory) - 1);
     core_list_t(core_buffer_t) written = core_list_new(core_buffer_t);
     bool ok = true;
     for (size_t i = 0; ok && i < ffi->shims.len; i++) {
@@ -1211,7 +1353,7 @@ compile_uncached(const n00bb_ffi_t *ffi, core_string_t triple, size_t index, cor
     core_list_free(written);
     core_buffer_release(&source);
     core_buffer_release(&output);
-    rmdir(directory);
+    remove_directory(directory_text);
     return ok;
 }
 
@@ -1222,7 +1364,8 @@ n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, core_string_t triple, core_string_t ex
     if (!ffi || !triple.data || !bitcode) {
         return false;
     }
-    n00bb_native_cache_t *cache = executable_path.data && !getenv("N00BB_NO_NATIVE_CACHE")
+    n00bb_native_cache_t *cache = executable_path.data
+        && !n00bb_setting_bool(N00BB_KEY_DEV_NO_NATIVE_CACHE)
                                     ? n00bb_native_cache_open(executable_path)
                                     : nullptr;
     bool ok = true;
@@ -1244,12 +1387,22 @@ n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, core_string_t triple, core_string_t ex
             core_list_push(*bitcode, compiled);
         } else {
             core_buffer_release(&compiled);
-            core_buffer_t message = {0};
-            core_buffer_printf(&message, "could not compile the C shim %.*s",
-                               (int)ffi->shims.data[i].name.u8_bytes, ffi->shims.data[i].name.data);
-            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0025"),
-                                    core_string_borrow(message.data, message.byte_len));
-            core_buffer_release(&message);
+            if (!n00bb_toolchain()->clang) {
+                n00bb_report(diagnostics, nullptr, N00B_DIAG_LINKER_NOT_FOUND,
+                    (core_diag_location_t){}, N00B_TEXT_NO_CLANG_WAS_FOUND_TO_2,
+                    N00BB_NO_ARGS);
+                n00bb_report_help(diagnostics,
+                    N00B_TEXT_INSTALL_LLVM_OR_SET_N00B,
+                    N00BB_NO_ARGS);
+            } else {
+                n00bb_report(diagnostics, nullptr,
+                    N00B_DIAG_SHIM_COMPILE_FAILED, (core_diag_location_t){},
+                    N00B_TEXT_THE_C_CODE_GENERATED_FOR,
+                    N00BB_ARGS(ARG_TEXT(ffi->shims.data[i].name)));
+                n00bb_report_note(diagnostics,
+                    N00B_TEXT_CLANG_S_MESSAGES_ARE_PRINTED,
+                    N00BB_NO_ARGS);
+            }
         }
     }
     n00bb_native_cache_close(cache);

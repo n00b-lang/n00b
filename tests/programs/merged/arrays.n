@@ -1,0 +1,203 @@
+func fill(n: uint) -> uint {
+    var cells: Array[uint][n]
+    var grid: Array[i32][2][3]
+    var bytes: Array[u8][128]
+    require cells[n - 1] == 0
+    cells[0] = n
+    grid[1][2] = 7
+    bytes[127] = 1
+    require grid[0][0] == 0
+    return cells[0] + cast[uint] grid[1][2] + cast[uint] bytes[127]
+}
+
+func assign_once() -> u8 {
+    let bytes: Array[u8][4]
+    bytes = new[Array[u8][4]]()
+    return bytes[2]
+}
+
+require fill(4) == 12
+require assign_once() == 0
+
+var compound_counts: Array[u32] = new[Array[u32]](4)
+var compound_bytes: Array[u8] = new[Array[u8]](4)
+var compound_fixed: Array[i16][3] = new[Array[i16][3]]()
+let compound_k: u8 = 2
+let compound_i: u32 = 1
+compound_counts[compound_k] += 1
+compound_counts[2] += 4
+compound_bytes[compound_i] += 3
+compound_bytes[compound_i] |= 8
+compound_fixed[0] -= 7
+require compound_counts[2] == 5
+require compound_bytes[1] == 11
+require compound_fixed[0] == -7
+
+record P {
+    x: u32
+}
+
+var points: Array[P] = new[Array[P]](2)
+var field_fixed: Array[P][2] = new[Array[P][2]]()
+points[1] = (x = 3)
+field_fixed[0] = (x = 1)
+points[1].x += 4
+points[0] = (x = 0)
+points[0].x = 5
+field_fixed[0].x *= 6
+require points[1].x == 7
+require points[0].x == 5
+require field_fixed[0].x == 6
+
+var shift_bytes: Array[u8] = new[Array[u8]](4)
+var shift_words: Array[u32] = new[Array[u32]](2)
+let shift_i: u32 = 1
+shift_bytes[shift_i] = 1
+shift_bytes[shift_i] = shift_bytes[shift_i] << 2
+shift_bytes[shift_i] <<= 1
+shift_words[0] = 256
+shift_words[0] >>= 4
+require shift_bytes[1] == 8
+require shift_words[0] == 16
+
+var store_counts: Array[u32] = new[Array[u32]](4)
+var store_bytes: Array[u8] = new[Array[u8]](4)
+var store_chars: Array[char] = new[Array[char]](4)
+store_counts[2] = 1
+store_bytes[store_counts[2]] = 9
+store_bytes[store_counts[2]] += 1
+store_chars[cast[uint] store_counts[2]] = 'x'
+require store_bytes[1] == 10
+require store_chars[1] == 'x'
+
+func runtime_sized(n: uint) -> u8 {
+    let bytes: Array[u8] = new[Array[u8]](n)
+    bytes[2] = 3
+    bytes[2] += 1
+    return bytes[2]
+}
+
+func let_fixed() -> u32 {
+    let words: Array[u32][4] = new[Array[u32][4]]()
+    words[3] = 9
+    return words[3]
+}
+
+func let_grid() -> i32 {
+    let cells: Array[i32][2][3] = new[Array[i32][2][3]]()
+    cells[1][2] = 7
+    return cells[1][2]
+}
+
+func deferred() -> u8 {
+    let bytes: Array[u8][4]
+    bytes = new[Array[u8][4]]()
+    bytes[1] = 5
+    return bytes[1]
+}
+
+require runtime_sized(4) == 4
+require let_fixed() == 9
+require let_grid() == 7
+require deferred() == 5
+
+func at(value: 'V, index: int) -> byte {
+    typecase value {
+        case Array[byte] { return value[index] }
+        else { return 0 }
+    }
+}
+
+var typecase_bytes: Array[byte] = new[Array[byte]](2)
+typecase_bytes[0] = cast[byte]7
+typecase_bytes[1] = cast[byte]9
+require at(typecase_bytes, 0) == 7
+require at(typecase_bytes, 1) == 9
+require at(42, 0) == 0
+
+enum Tc { none = 0, upper }
+
+const enum_fixed: Array[Tc] = [Tc.upper]
+
+func update() -> bool {
+    var cases: Array[Tc] = [Tc.none, Tc.upper, Tc.none]
+    cases[2] = Tc.upper
+    cases[1] = Tc.none
+    var flags: Array[bool] = [true, false]
+    flags[1] = true
+    return cases[2] == Tc.upper and cases[1] == Tc.none and
+        cases[0] != Tc.upper and flags[1]
+}
+
+require enum_fixed[0] == Tc.upper
+require update()
+
+var literal_bytes: List[byte] = []
+literal_bytes.append(65)
+require literal_bytes[0] == 65
+literal_bytes[0] = 72
+require literal_bytes[0] == 72
+
+func literal_total(values: Array[u8]) -> uint {
+    var sum: uint = 0
+    for value in values {
+        sum = sum + cast[uint]value
+    }
+    return sum
+}
+
+func listed(values: List[int]) -> uint {
+    return values.len()
+}
+
+require literal_total([1, 2, 250]) == 253
+require literal_total([]) == 0
+require listed([1, 2]) == 2
+
+func range_sum(n: uint, m: i32, items: Array[u8]) -> uint {
+    var total: uint = 0
+    for i from 0 until n step 2 {
+        total += i
+    }
+    var k: i32 = 0
+    for j from 0 to m {
+        k += j
+    }
+    for i from 0 until items.len() {
+        total += cast[uint] items[i]
+    }
+    var best: u8 = 0
+    for i: u8 from 0 until 6 {
+        best = i
+    }
+    return total + cast[uint] k + cast[uint] best
+}
+
+require range_sum(5, 3, [1, 2]) == 6 + 6 + 3 + 5
+
+func change(modify target: int) -> int {
+    target = 10
+    return 2
+}
+
+func compound() -> int {
+    var value = 1
+    value += change(value)
+    return value
+}
+
+var order_total = 1
+
+func order_change() -> int {
+    order_total = 10
+    return 2
+}
+
+func order_compound() -> int {
+    order_total += order_change()
+    return order_total
+}
+
+require compound() == 3
+require order_compound() == 3
+__fd_write(2, "ok")

@@ -1,0 +1,13 @@
+tests/diagnostics/tu/declarations.n:1:6: error N00B-T0553: `__finalize` cannot fail
+tests/diagnostics/tu/declarations.n:1:6: error N00B-T0554: `__finalize` returns `int`, but it must return no value
+tests/diagnostics/tu/declarations.n:1:17: error N00B-T0552: the receiver of `__finalize` must be declared `consume`
+  help: write `func __finalize(consume self: Ref[T])`
+tests/diagnostics/tu/declarations.n:13:5: error N00B-N0501: `x` is already declared in this scope
+  tests/diagnostics/tu/declarations.n:12:5: note: `x` is first declared here
+  help: rename one of them, or assign to the existing `x` instead of declaring it again
+tests/diagnostics/tu/declarations.n:19:13: error N00B-N0502: `x` cannot be declared here because the outer `x` is already used earlier in this block
+  tests/diagnostics/tu/declarations.n:16:9: note: the outer `x` is declared here
+  tests/diagnostics/tu/declarations.n:18:17: note: the outer `x` is used here
+  help: give the inner binding a different name
+tests/diagnostics/tu/declarations.n:26:14: error N00B-T0522: shift count 9 is outside 0..7 for `u8`
+  note: a value of type `u8` has 8 bits, so it can shift by at most 7

@@ -2,27 +2,71 @@
 
 #include "compiler_link.h"
 #include "compiler_tu.h"
+#include "diagnostics.h"
 #include "parse/tree_util.h"
 
 typedef struct {
     parse_grammar_t *grammar;
 } module_inference_context_t;
 
-void
-n00bb_append_dereference_hint(core_buffer_t *message, th_ctx *types,
-                              th_type *value, th_type *wanted)
+static bool
+dereference_would_fit(th_ctx *types, th_type *value, th_type *wanted)
 {
     value = value ? th_resolve(value) : nullptr;
     wanted = wanted ? th_resolve(wanted) : nullptr;
     if (!value || !wanted || th_kind_of(value) != TH_INDIRECTION
-        || th_kind_of(wanted) == TH_INDIRECTION) return;
+        || th_kind_of(wanted) == TH_INDIRECTION) return false;
     th_type *referent = th_resolve(th_ind_referent(value));
     th_type *element = th_option_item(wanted);
-    if (th_unify_probe(types, referent, wanted)
+    return th_unify_probe(types, referent, wanted)
         || (is_integer_type(referent) && is_integer_type(wanted))
-        || (element && th_unify_probe(types, referent, element)))
-        core_buffer_printf(message,
-            "; read the referenced value with '.__value'");
+        || (element && th_unify_probe(types, referent, element));
+}
+
+static void
+add_dereference_help(core_diagnostics_t *diagnostics, th_ctx *types,
+                     th_type *value, th_type *wanted)
+{
+    if (dereference_would_fit(types, value, wanted))
+        n00bb_report_help(diagnostics,
+            N00B_TEXT_READ_THE_REFERENCED_VALUE_WITH, N00BB_NO_ARGS);
+}
+
+static core_string_t
+callee_display_name(parse_sym_entry_t *callee)
+{
+    return callee && callee->name.u8_bytes && callee->name.data[0] != '$'
+        ? callee->name : (core_string_t){0};
+}
+
+void
+n00bb_report_argument_type(core_translation_unit_t *unit, th_ctx *types,
+                           parse_tree_t *argument, th_type *actual,
+                           th_type *expected, parse_sym_entry_t *callee,
+                           size_t position, core_string_t parameter)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t actual_text = n00bb_print_type(types, actual);
+    core_string_t expected_text = n00bb_print_type(types, expected);
+    core_string_t name = callee_display_name(callee);
+    n00bb_text_t subject = parameter.u8_bytes
+        ? name.u8_bytes ? N00B_TEXT_PARAMETER_NAMED_OF
+                        : N00B_TEXT_PARAMETER_NAMED
+        : name.u8_bytes ? N00B_TEXT_PARAMETER_NUMBER_OF
+                        : N00B_TEXT_PARAMETER_NUMBER;
+    core_string_t subject_text = n00bb_text(subject,
+        N00BB_ARGS(ARG_NUMBER(position + 1), ARG_TEXT(parameter),
+                   ARG_TEXT(name)));
+    n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
+        n00bb_node_span(argument), N00B_TEXT_IS_BUT_THIS_ARGUMENT_IS,
+        N00BB_ARGS(ARG_TEXT(subject_text), ARG_TEXT(expected_text),
+                   ARG_TEXT(actual_text)));
+    core_free(subject_text.data);
+    n00bb_report_label(diagnostics, N00B_TEXT_EXPECTED,
+        N00BB_ARGS(ARG_TEXT(expected_text)));
+    if (callee) n00bb_diag_declared_here(diagnostics, callee,
+        N00B_TEXT_IS_DECLARED_HERE);
+    add_dereference_help(diagnostics, types, actual, expected);
 }
 
 void
@@ -30,50 +74,54 @@ report_call_type_error(core_translation_unit_t *unit, parse_tree_t *call,
                        th_ctx *types, th_type *actual, th_type *expected,
                        n00bb_call_role_t role)
 {
-    core_buffer_t message = {0};
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     core_string_t actual_text = actual ? n00bb_print_type(types, actual)
                                        : CORE_STRING_STATIC("unknown");
     core_string_t expected_text = expected
         ? n00bb_print_type(types, expected) : CORE_STRING_STATIC("unknown");
     int actual_size = (int)actual_text.u8_bytes;
     int expected_size = (int)expected_text.u8_bytes;
+    core_string_t text = n00bb_node_source_text(unit, call,
+        n00bb_text_form(N00B_TEXT_THIS_VALUE));
+    core_diag_location_t at = n00bb_node_span(call);
     switch (role) {
     case N00BB_CALL_ARGUMENT:
-        core_buffer_printf(&message,
-            "argument of type %.*s does not convert to parameter type %.*s",
-            actual_size, actual_text.data, expected_size, expected_text.data);
-        break;
+        n00bb_report_argument_type(unit, types, call, actual, expected,
+                                   nullptr, 0, (core_string_t){0});
+        return;
     case N00BB_CALL_RECEIVER:
-        core_buffer_printf(&message,
-            "receiver of type %.*s does not match the method's receiver type %.*s",
-            actual_size, actual_text.data, expected_size, expected_text.data);
-        break;
+        n00bb_report(diagnostics, unit, N00B_DIAG_METHOD_RECEIVER_TYPE, at,
+                     N00B_TEXT_THIS_METHOD_TAKES_BEFORE_THE,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(expected_text.data,
+                (size_t)(expected_size))), ARG_TEXT(text),
+            ARG_TEXT(core_string_borrow(actual_text.data,
+                                        (size_t)(actual_size)))));
+        n00bb_report_label(diagnostics, N00B_TEXT_EXPECTED,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(expected_text.data,
+                                                   (size_t)(expected_size)))));
+        add_dereference_help(diagnostics, types, actual, expected);
+        return;
     case N00BB_CALL_RESULT:
-        core_buffer_printf(&message,
-            "this function returns %.*s, which does not match its use as %.*s",
-            expected_size, expected_text.data, actual_size, actual_text.data);
-        break;
+        n00bb_report(diagnostics, unit, N00B_DIAG_CALL_RESULT_TYPE, at,
+                     N00B_TEXT_THIS_CALL_RETURNS_BUT_ITS,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(expected_text.data,
+                (size_t)(expected_size))),
+            ARG_TEXT(core_string_borrow(actual_text.data,
+                                        (size_t)(actual_size)))));
+        n00bb_report_label(diagnostics, N00B_TEXT_RETURNS,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(expected_text.data,
+                                                   (size_t)(expected_size)))));
+        add_dereference_help(diagnostics, types, expected, actual);
+        return;
     case N00BB_CALL_SIGNATURE:
-        core_buffer_printf(&message, "call signature %.*s does not match %.*s",
-            actual_size, actual_text.data, expected_size, expected_text.data);
-        break;
+        n00bb_report(diagnostics, unit, N00B_DIAG_TRAIT_SIGNATURE_MISMATCH, at,
+                     N00B_TEXT_THE_IMPLEMENTATION_CHOSEN_FOR_THIS,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(expected_text.data,
+                (size_t)(expected_size))),
+            ARG_TEXT(core_string_borrow(actual_text.data,
+                                        (size_t)(actual_size)))));
+        return;
     }
-    if (role == N00BB_CALL_RESULT)
-        n00bb_append_dereference_hint(&message, types, expected, actual);
-    else
-        n00bb_append_dereference_hint(&message, types, actual, expected);
-    parse_token_info_t *site = parse_tree_find_first_terminal(call);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0002"),
-        core_buffer_string(&message),
-        site ? (core_diag_location_t){
-            .line = parse_token_line(site),
-            .column = parse_token_column(site),
-            .end_line = parse_token_endline(site),
-            .end_column = parse_token_endcol(site),
-            .has_location = true,
-        } : (core_diag_location_t){0});
-    core_buffer_release(&message);
 }
 
 bool
@@ -87,15 +135,21 @@ unify_call_node_type(core_translation_unit_t *unit,
         parse_tree_set_type(typed_node, expected);
         return true;
     }
+    bool integer_result = role == N00BB_CALL_RESULT
+        && is_integer_type(actual) && is_integer_type(expected)
+        && th_hash(state->types, actual) != th_hash(state->types, expected);
     bool converted = false;
     core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     size_t reported = core_diagnostics_count(diagnostics);
     th_type *materialized = n00bb_type_materialize(state->link_analysis
             ? state->link_analysis->grammar : nullptr,
-        state, typed_node, actual, expected, &converted);
+        state, typed_node, integer_result ? expected : actual,
+        integer_result ? actual : expected, &converted);
     if (!materialized && core_diagnostics_count(diagnostics) == reported)
         report_call_type_error(unit, diagnostic_node, state->types, actual,
                                expected, role);
+    if (materialized && integer_result)
+        parse_tree_set_type(typed_node, expected);
     return materialized != nullptr;
 }
 
@@ -104,17 +158,18 @@ n00bb_report_conversion_error(core_translation_unit_t *unit,
                               parse_tree_t *site, th_ctx *types,
                               th_type *value, th_type *target)
 {
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     core_string_t actual_text = n00bb_print_type(types, value);
     core_string_t expected_text = n00bb_print_type(types, target);
-    core_buffer_t message = {0};
-    core_buffer_printf(&message, "value of type %.*s does not convert to %.*s",
-        (int)actual_text.u8_bytes, actual_text.data,
-        (int)expected_text.u8_bytes, expected_text.data);
-    n00bb_append_dereference_hint(&message, types, value, target);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0042"),
-        core_buffer_string(&message), link_source_location(site));
-    core_buffer_release(&message);
+    core_string_t text = n00bb_node_source_text(unit, site,
+        n00bb_text_form(N00B_TEXT_THIS_VALUE));
+    n00bb_report(diagnostics, unit, N00B_DIAG_VALUE_TYPE_MISMATCH,
+        n00bb_node_span(site), N00B_TEXT_IS_WHICH_DOES_NOT_CONVERT,
+        N00BB_ARGS(ARG_TEXT(text), ARG_TEXT(actual_text),
+                   ARG_TEXT(expected_text)));
+    n00bb_report_label(diagnostics, N00B_TEXT_EXPECTED,
+        N00BB_ARGS(ARG_TEXT(expected_text)));
+    add_dereference_help(diagnostics, types, value, target);
 }
 
 bool
@@ -122,6 +177,8 @@ n00bb_check_deferred_conversions(core_translation_unit_t *unit)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state) return true;
+    size_t failures = core_diagnostics_failures(
+        core_translation_unit_diagnostics(unit));
     for (size_t i = 0; i < state->deferred_conversions.len; i++) {
         n00bb_deferred_conversion_t *pending =
             &state->deferred_conversions.data[i];
@@ -138,13 +195,12 @@ n00bb_check_deferred_conversions(core_translation_unit_t *unit)
         if (n00bb_type_materialize(state->link_analysis
                 ? state->link_analysis->grammar : nullptr, state,
                 pending->site, value, target, &converted)) continue;
-        if (core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
-            continue;
         n00bb_report_conversion_error(unit, pending->site, state->types,
                                       value, target);
     }
     state->deferred_conversions.len = 0;
-    return !core_diagnostics_failed(core_translation_unit_diagnostics(unit));
+    return core_diagnostics_failures(core_translation_unit_diagnostics(unit))
+        == failures;
 }
 
 bool
@@ -373,10 +429,12 @@ rebind_call_callee(parse_grammar_t *grammar, n00bb_tu_state_t *state,
 
 static void
 unify_call_argument(parse_grammar_t *grammar, core_translation_unit_t *unit,
-                    n00bb_tu_state_t *state, parse_tree_t *diagnostic_node,
-                    parse_tree_t *argument, th_type *expected,
-                    bool context_call, bool writes)
+                    n00bb_tu_state_t *state, parse_sym_entry_t *callee,
+                    const n00bb_call_binding_t *binding, bool context_call)
 {
+    parse_tree_t *argument = binding->argument;
+    th_type *expected = binding->expected;
+    bool writes = binding->writes;
     th_type *actual = parse_tree_type(argument);
     if (writes && is_integer_type(expected)) {
         parse_tree_t *lvalue = n00bb_simple_lvalue(argument);
@@ -390,11 +448,25 @@ unify_call_argument(parse_grammar_t *grammar, core_translation_unit_t *unit,
             return;
         }
     }
-    if (context_call && n00bb_value_coerces(state->types, actual, expected))
-        report_call_type_error(unit, argument, state->types, actual,
-                               expected, N00BB_CALL_ARGUMENT);
-    else (void)unify_call_node_type(unit, state, diagnostic_node, argument,
-                                    actual, expected, N00BB_CALL_ARGUMENT);
+    bool fits = actual && expected
+        && !(context_call
+             && n00bb_value_coerces(state->types, actual, expected));
+    if (fits && n00bb_value_coerces(state->types, expected, actual))
+        parse_tree_set_type(argument, expected);
+    else if (actual && expected) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        size_t reported = core_diagnostics_count(diagnostics);
+        bool converted = false;
+        th_type *materialized = fits
+            ? n00bb_type_materialize(grammar, state, argument, actual,
+                                     expected, &converted)
+            : nullptr;
+        if (!materialized && core_diagnostics_count(diagnostics) == reported)
+            n00bb_report_argument_type(unit, state->types, argument, actual,
+                expected, callee, binding->parameter,
+                binding->parameter_name);
+    }
     (void)n00bb_contextual_float_literal(argument, expected);
 }
 
@@ -409,20 +481,22 @@ check_call_argument_mode(parse_grammar_t *grammar,
         ? n00bb_addressable_root_lvalue(grammar, argument) : nullptr;
     parse_sym_entry_t *root_symbol = root
         ? attached_symbol(grammar, unit, root) : nullptr;
-    core_buffer_t message = {0};
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
     if (root_symbol
         && root_symbol->kind == PARSE_SYM_PARAM
         && th_mode_is_in(root_symbol->has_mode ? root_symbol->mode : TH_IN)) {
-        core_buffer_printf(&message,
-            "'%.*s' is %s parameter, so it cannot be passed to a consume "
-            "parameter",
-            (int)root_symbol->name.u8_bytes, root_symbol->name.data,
-            root_symbol->has_mode && root_symbol->mode == TH_VIEW
-                ? "a view" : "an in");
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0064"),
-            core_buffer_string(&message), link_source_location(argument));
-        core_buffer_release(&message);
+        bool view = root_symbol->has_mode && root_symbol->mode == TH_VIEW;
+        n00bb_report(diagnostics, unit, N00B_DIAG_CONSUME_BORROWED_PARAMETER,
+            n00bb_node_span(argument), N00B_TEXT_CONSUME_BORROWED,
+            N00BB_ARGS(ARG_TEXT(root_symbol->name),
+                       ARG_PHRASE_ID(view ? N00B_TEXT_VIEW_PARAMETER
+                                          : N00B_TEXT_IN_PARAMETER)));
+        n00bb_report_label(diagnostics, N00B_TEXT_BORROWED_NOT_OWNED,
+            N00BB_NO_ARGS);
+        n00bb_diag_declared_here(diagnostics, root_symbol,
+            N00B_TEXT_IS_DECLARED_HERE);
+        n00bb_report_help(diagnostics, N00B_TEXT_PASS_A_COPY_OR_DECLARE,
+            N00BB_ARGS(ARG_TEXT(root_symbol->name)));
         return;
     }
     th_type *type = parse_tree_type(argument);
@@ -436,41 +510,172 @@ check_call_argument_mode(parse_grammar_t *grammar,
         parse_sym_set_binding(in_parameter, n00bb_view_blocked_binding,
                               in_parameter);
     if (!origin) return;
-    core_buffer_printf(&message,
-        "this value comes from view parameter '%.*s' and can reach shared "
-        "state, so it can only be passed to a view parameter",
-        (int)origin->name.u8_bytes, origin->name.data);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0065"),
-        core_buffer_string(&message), link_source_location(argument));
-    core_buffer_release(&message);
+    n00bb_report(diagnostics, unit, N00B_DIAG_VIEW_VALUE_TO_NON_VIEW,
+        n00bb_node_span(argument), N00B_TEXT_THIS_VALUE_IS_REACHED_THROUGH,
+        N00BB_ARGS(ARG_TEXT(origin->name)));
+    n00bb_report_label(diagnostics, N00B_TEXT_READ_ONLY_THROUGH,
+        N00BB_ARGS(ARG_TEXT(origin->name)));
+    n00bb_diag_declared_here(diagnostics, origin, N00B_TEXT_IS_DECLARED_HERE);
 }
 
-static void
-report_call_binding_error(core_translation_unit_t *unit, parse_tree_t *node,
-                          core_string_t code, core_string_t message)
-{
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, code, message, link_source_location(node));
-}
+typedef struct {
+    parse_grammar_t *grammar;
+    core_translation_unit_t *unit;
+    parse_sym_entry_t *callee;
+    parse_tree_t *formals;
+    size_t offset;
+    size_t parameter_count;
+    bool variadic;
+} call_shape_t;
 
-static void
-report_missing_parameter(parse_grammar_t *grammar,
-                         core_translation_unit_t *unit,
-                         parse_sym_entry_t *callee, parse_tree_t *formals,
-                         size_t index, parse_tree_t *site)
+static core_string_t
+parameter_name(const call_shape_t *shape, size_t index)
 {
     core_string_t name = {0};
-    (void)function_parameter_info(grammar, callee, formals, index, nullptr,
-                                  &name, nullptr, nullptr);
-    core_buffer_t message = {0};
-    core_buffer_printf(&message, "call omits the required parameter '%.*s'",
-                       (int)name.u8_bytes, name.data ? name.data : "");
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0040"),
-        core_string_borrow(message.data, message.byte_len),
-        link_source_location(site));
-    core_buffer_release(&message);
+    if (shape->callee)
+        (void)function_parameter_info(shape->grammar, shape->callee,
+            shape->formals, index, nullptr, &name, nullptr, nullptr);
+    return name;
+}
+
+static bool
+parameter_optional(const call_shape_t *shape, size_t index)
+{
+    uint8_t flags = 0;
+    return shape->callee
+        && function_parameter_info(shape->grammar, shape->callee,
+               shape->formals, index, nullptr, nullptr, &flags, nullptr)
+        && (flags & 1u);
+}
+
+static void
+report_arity(const call_shape_t *shape, n00bb_diag_t id,
+             core_diag_location_t at, size_t passed)
+{
+    size_t required = 0, total = 0;
+    for (size_t i = shape->offset; i < shape->parameter_count; i++) {
+        total++;
+        if (!parameter_optional(shape, i)) required++;
+    }
+    core_string_t count = n00bb_text(shape->variadic
+            ? N00B_TEXT_AT_LEAST_ARGUMENTS
+            : required == total ? N00B_TEXT_ARGUMENT_COUNT
+                                : N00B_TEXT_ARGUMENT_RANGE,
+        N00BB_ARGS(ARG_NUMBER(required == total || shape->variadic
+                                  ? required : total),
+                   ARG_NUMBER(required)));
+    core_string_t name = callee_display_name(shape->callee);
+    n00bb_report(core_translation_unit_diagnostics(shape->unit),
+        shape->unit, id, at,
+        name.u8_bytes ? N00B_TEXT_TAKES_BUT_CALL_PASSES
+                      : N00B_TEXT_FUNCTION_TAKES_BUT_CALL_PASSES,
+        N00BB_ARGS(ARG_TEXT(count), ARG_NUMBER(passed), ARG_TEXT(name)));
+    core_free(count.data);
+}
+
+static void
+report_too_many_arguments(const call_shape_t *shape,
+                          const core_list_t(n00bb_tree_ptr_t) *positional,
+                          size_t first_extra, size_t keyword_count)
+{
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(shape->unit);
+    core_diag_location_t at = n00bb_node_span(positional->data[first_extra]);
+    core_diag_location_t last = n00bb_node_span(
+        positional->data[positional->len - 1]);
+    at.end_line = last.end_line;
+    at.end_column = last.end_column;
+    size_t extra = positional->len - first_extra;
+    report_arity(shape, N00B_DIAG_CALL_TOO_MANY_ARGUMENTS, at,
+                 positional->len + keyword_count);
+    n00bb_report_label(diagnostics, N00B_TEXT_UNEXPECTED_ARGUMENTS,
+                       N00BB_ARGS(ARG_NUMBER(extra)));
+    if (shape->callee) n00bb_diag_declared_here(diagnostics, shape->callee,
+                                                N00B_TEXT_IS_DECLARED_HERE);
+    n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_EXTRA_ARGUMENTS,
+                      N00BB_ARGS(ARG_NUMBER(extra)));
+}
+
+static void
+report_missing_arguments(const call_shape_t *shape, parse_tree_t *site,
+                         const bool *bound, size_t passed)
+{
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(shape->unit);
+    core_list_t(core_string_t) missing = core_list_new(core_string_t);
+    for (size_t i = shape->offset; i < shape->parameter_count; i++) {
+        if (bound[i] || parameter_optional(shape, i)) continue;
+        core_string_t name = parameter_name(shape, i);
+        core_list_push(missing, name.u8_bytes
+            ? n00bb_text(N00B_TEXT_QUOTED_NAME, N00BB_ARGS(ARG_TEXT(name)))
+            : n00bb_text(N00B_TEXT_PARAMETER_NUMBER,
+                         N00BB_ARGS(ARG_NUMBER(i - shape->offset + 1))));
+    }
+    if (missing.len) {
+        report_arity(shape, N00B_DIAG_CALL_MISSING_ARGUMENT,
+                     n00bb_node_span(site), passed);
+        n00bb_report_label(diagnostics, N00B_TEXT_MISSING,
+            N00BB_ARGS(ARG_LIST(missing.data, missing.len)));
+    }
+    for (size_t i = 0; i < missing.len; i++) core_free(missing.data[i].data);
+    bool reported = missing.len != 0;
+    core_list_free(missing);
+    if (!reported) return;
+    if (shape->callee) n00bb_diag_declared_here(diagnostics, shape->callee,
+                                                N00B_TEXT_IS_DECLARED_HERE);
+}
+
+static void
+report_unknown_keyword(const call_shape_t *shape, parse_tree_t *keyword,
+                       core_string_t name)
+{
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(shape->unit);
+    core_string_t callee = callee_display_name(shape->callee);
+    if (callee.u8_bytes)
+        n00bb_report(diagnostics, shape->unit,
+            N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
+            link_source_location(keyword), N00B_TEXT_HAS_NO_PARAMETER_NAMED,
+            N00BB_ARGS(ARG_TEXT(callee), ARG_TEXT(name)));
+    else
+        n00bb_report(diagnostics, shape->unit,
+            N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
+            link_source_location(keyword),
+            N00B_TEXT_THIS_FUNCTION_HAS_NO_PARAMETER,
+            N00BB_ARGS(ARG_TEXT(name)));
+    n00bb_report_label(diagnostics, N00B_TEXT_UNKNOWN_PARAMETER, N00BB_NO_ARGS);
+    core_list_t(core_string_t) names = core_list_new(core_string_t);
+    for (size_t i = shape->offset;; i++) {
+        core_string_t candidate = {0};
+        if (!shape->callee || !function_parameter_info(shape->grammar,
+                shape->callee, shape->formals, i, nullptr, &candidate,
+                nullptr, nullptr)) break;
+        if (candidate.u8_bytes) core_list_push(names, candidate);
+    }
+    if (!n00bb_diag_did_you_mean(diagnostics, name, names.data, names.len)
+        && names.len)
+        n00bb_report_note(diagnostics, N00B_TEXT_THE_PARAMETERS_ARE,
+            N00BB_ARGS(ARG_NAMES(names.data, names.len)));
+    core_list_free(names);
+    if (shape->callee) n00bb_diag_declared_here(diagnostics, shape->callee,
+                                                N00B_TEXT_IS_DECLARED_HERE);
+}
+
+static void
+report_repeated_argument(const call_shape_t *shape, parse_tree_t *keyword,
+                         parse_tree_t *first, core_string_t name)
+{
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(shape->unit);
+    n00bb_report(diagnostics, shape->unit, N00B_DIAG_CALL_ARGUMENT_REPEATED,
+        link_source_location(keyword), N00B_TEXT_PARAMETER_IS_GIVEN_AN_ARGUMENT,
+        N00BB_ARGS(ARG_TEXT(name)));
+    n00bb_report_label(diagnostics, N00B_TEXT_SECOND_ARGUMENT_FOR,
+        N00BB_ARGS(ARG_TEXT(name)));
+    if (first)
+        n00bb_report_secondary(diagnostics, nullptr, n00bb_node_span(first),
+            N00B_TEXT_IS_FIRST_GIVEN_HERE,
+            N00BB_ARGS(ARG_TEXT(name)));
 }
 
 bool
@@ -485,8 +690,17 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
     if (!signature || th_kind_of(signature) != TH_FUNCTION) return true;
     size_t parameter_count = th_func_nparams(signature);
     const th_param *rest = th_func_rest(signature);
+    parse_tree_t *formals = callee
+        ? callable_formal_parameters(grammar, callee) : nullptr;
+    call_shape_t shape = {
+        .grammar = grammar, .unit = unit, .callee = callee,
+        .formals = formals, .offset = offset,
+        .parameter_count = parameter_count, .variadic = rest != nullptr,
+    };
     bool *bound = core_alloc_array(bool,
                                    parameter_count ? parameter_count : 1);
+    parse_tree_t **supplied = core_alloc_array(parse_tree_t *,
+        parameter_count ? parameter_count : 1);
     for (size_t i = 0; i < offset && i < parameter_count; i++)
         bound[i] = true;
     bool valid = true;
@@ -495,42 +709,43 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
     collect_positional_nodes(grammar,
         child_nt(grammar, call_args, CORE_STRING_STATIC("positional-args")),
         &positional);
-    for (size_t i = 0; i < positional.len; i++) {
-        size_t index = i + offset;
-        const th_param *parameter = index < parameter_count
-            ? th_func_param(signature, index) : rest;
-        if (!parameter) {
-            report_call_binding_error(unit, positional.data[i],
-                CORE_STRING_STATIC("N00BB-T0039"),
-                CORE_STRING_STATIC(
-                    "call passes more arguments than its function has parameters"));
-            valid = false;
-            break;
-        }
-        if (index < parameter_count) bound[index] = true;
-        if (!core_tree_is_leaf(positional.data[i]))
-            core_list_push(*bindings, ((n00bb_call_binding_t){
-                positional.data[i], parameter->type, false,
-                th_mode_produces_output(parameter->mode), parameter->mode}));
-    }
-    core_list_free(positional);
-    parse_tree_t *formals = callee
-        ? callable_formal_parameters(grammar, callee) : nullptr;
     core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
     if (callee)
         collect_keyword_nodes(grammar,
             child_nt(grammar, call_args, CORE_STRING_STATIC("keyword-args")),
             &keywords);
+    for (size_t i = 0; i < positional.len; i++) {
+        size_t index = i + offset;
+        const th_param *parameter = index < parameter_count
+            ? th_func_param(signature, index) : rest;
+        if (!parameter) {
+            report_too_many_arguments(&shape, &positional, i, keywords.len);
+            valid = false;
+            break;
+        }
+        if (index < parameter_count) {
+            bound[index] = true;
+            supplied[index] = positional.data[i];
+        }
+        if (!core_tree_is_leaf(positional.data[i]))
+            core_list_push(*bindings, ((n00bb_call_binding_t){
+                positional.data[i], parameter->type, false,
+                th_mode_produces_output(parameter->mode), parameter->mode,
+                index - offset, parameter_name(&shape, index)}));
+    }
+    size_t passed = positional.len + keywords.len;
+    core_list_free(positional);
     for (size_t i = 0; i < keywords.len; i++) {
         parse_tree_t *keyword = keywords.data[i];
         parse_tree_t *argument = child_nt(grammar, keyword,
                                           CORE_STRING_STATIC("expression"));
+        core_string_t keyword_name = call_keyword_name(keyword);
         size_t index = 0;
         th_type *expected = nullptr;
         bool writes = false;
         th_mode mode = TH_IN;
         if (function_parameter_named(grammar, callee, formals,
-                call_keyword_name(keyword), &index)) {
+                keyword_name, &index)) {
             const th_param *parameter = th_func_param(signature, index);
             const th_kwparam *option = index >= parameter_count
                 ? th_func_kw(signature, index - parameter_count) : nullptr;
@@ -540,35 +755,165 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
             mode = parameter ? parameter->mode : option ? option->mode : TH_IN;
         }
         if (!expected) {
-            report_call_binding_error(unit, keyword,
-                CORE_STRING_STATIC("N00BB-T0037"),
-                CORE_STRING_STATIC("named argument does not match a parameter"));
+            report_unknown_keyword(&shape, keyword, keyword_name);
             valid = false;
             continue;
         }
         if (index < parameter_count && bound[index]) {
-            report_call_binding_error(unit, keyword,
-                CORE_STRING_STATIC("N00BB-T0038"),
-                CORE_STRING_STATIC("a parameter is supplied more than once"));
+            report_repeated_argument(&shape, keyword, supplied[index],
+                                     keyword_name);
             valid = false;
             continue;
         }
-        if (index < parameter_count) bound[index] = true;
+        if (index < parameter_count) {
+            bound[index] = true;
+            supplied[index] = keyword;
+        }
         if (argument && !core_tree_is_leaf(argument))
             core_list_push(*bindings, ((n00bb_call_binding_t){
-                argument, expected, true, writes, mode}));
+                argument, expected, true, writes, mode,
+                index >= offset ? index - offset : index, keyword_name}));
     }
     core_list_free(keywords);
+    bool missing = false;
     for (size_t i = 0; valid && callee && i < parameter_count; i++) {
         uint8_t flags = 0;
         if (bound[i] || !function_parameter_info(grammar, callee, formals,
                 i, nullptr, nullptr, &flags, nullptr)
             || (flags & 1u)) continue;
-        report_missing_parameter(grammar, unit, callee, formals, i, site);
+        missing = true;
+    }
+    if (missing) {
+        report_missing_arguments(&shape, site, bound, passed);
         valid = false;
     }
+    core_free(supplied);
     core_free(bound);
     return valid;
+}
+
+static void
+argument_types_text(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                    parse_cf_label_t *label, core_buffer_t *out)
+{
+    core_list_t(n00bb_tree_ptr_t) arguments =
+        core_list_new(n00bb_tree_ptr_t);
+    if (label->then_body)
+        collect_positional_nodes(grammar,
+            child_nt(grammar, label->then_body,
+                     CORE_STRING_STATIC("positional-args")), &arguments);
+    core_buffer_putc(out, '(');
+    for (size_t i = 0; i < arguments.len; i++) {
+        th_type *type = parse_tree_type(arguments.data[i]);
+        core_string_t text = type ? n00bb_print_type(state->types, type)
+                                  : CORE_STRING_STATIC("_");
+        core_buffer_printf(out, "%s%.*s", i ? ", " : "",
+                           (int)text.u8_bytes, text.data);
+    }
+    core_buffer_putc(out, ')');
+    core_list_free(arguments);
+}
+
+static void
+report_overload_failure(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit,
+                        n00bb_tu_state_t *state, parse_cf_label_t *label,
+                        parse_sym_entry_t *callee, n00bb_call_lookup_t lookup,
+                        const n00bb_overload_choice_t *choice)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_diag_location_t at = n00bb_node_span(label->self);
+    int name_size = (int)callee->name.u8_bytes;
+    const char *name = callee->name.data;
+    core_buffer_t arguments = {0};
+    argument_types_text(grammar, state, label, &arguments);
+    const core_list_t(parse_sym_entry_ptr_t) *listed = &choice->matches;
+    core_list_t(parse_sym_entry_ptr_t) candidates = {0};
+    switch (choice->status) {
+    case N00BB_OVERLOAD_PENDING:
+        n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_NEEDS_TYPE, at,
+                     N00B_TEXT_CANNOT_CHOOSE_AN_OVERLOAD_OF,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(name,
+                                                   (size_t)(name_size)))));
+        n00bb_report_label(diagnostics, N00B_TEXT_ARGUMENTS_ARE,
+            N00BB_ARGS(ARG_TEXT(core_buffer_string(&arguments))));
+        n00bb_report_help(diagnostics, N00B_TEXT_ANNOTATE_THE_ARGUMENT_OR_THE,
+            N00BB_NO_ARGS);
+        candidates = n00bb_call_overload_candidates(state, callee, lookup);
+        listed = &candidates;
+        break;
+    case N00BB_OVERLOAD_NO_MATCH:
+        n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_NO_MATCH, at,
+                     N00B_TEXT_NO_OVERLOAD_OF_ACCEPTS_ARGUMENTS,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(name, (size_t)(name_size))),
+                       ARG_TEXT(core_buffer_string(&arguments))));
+        candidates = n00bb_call_overload_candidates(state, callee, lookup);
+        listed = &candidates;
+        break;
+    case N00BB_OVERLOAD_CONFLICT:
+        n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_FROM_SEVERAL_MODULES,
+                     at, N00B_TEXT_NAMES_FUNCTIONS_FROM_DIFFERENT_MODULES,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(name,
+                                                   (size_t)(name_size)))));
+        n00bb_report_help(diagnostics, N00B_TEXT_CALL_THE_ONE_YOU_MEAN,
+            N00BB_NO_ARGS);
+        break;
+    default:
+        n00bb_report(diagnostics, unit, N00B_DIAG_OVERLOAD_AMBIGUOUS, at,
+                     N00B_TEXT_MORE_THAN_ONE_OVERLOAD_OF,
+            N00BB_ARGS(ARG_TEXT(core_string_borrow(name, (size_t)(name_size))),
+                       ARG_TEXT(core_buffer_string(&arguments))));
+        n00bb_report_help(diagnostics, N00B_TEXT_ANNOTATE_AN_ARGUMENT_WITH_THE,
+            N00BB_NO_ARGS);
+        break;
+    }
+    core_buffer_release(&arguments);
+    for (size_t i = 0; i < listed->len; i++) {
+        parse_sym_entry_t *candidate = listed->data[i];
+        core_diag_location_t where = n00bb_symbol_location(candidate);
+        core_string_t text = n00bb_describe_candidate(grammar, state,
+                                                      candidate);
+        parse_sym_entry_t *origin = canonical_symbol(candidate);
+        if (where.has_location)
+            n00bb_report_secondary(diagnostics, origin->owner_unit, where,
+                N00B_TEXT_CANDIDATE_IS_DECLARED_HERE,
+                N00BB_ARGS(ARG_TEXT(text)));
+        else
+            n00bb_report_note(diagnostics, N00B_TEXT_CANDIDATE,
+                N00BB_ARGS(ARG_TEXT(text)));
+        core_free(text.data);
+    }
+    core_list_free(candidates);
+}
+
+static void
+settle_failed_call(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                   core_translation_unit_t *unit, parse_cf_label_t *label,
+                   size_t failures)
+{
+    if (!label || core_diagnostics_failures(
+            core_translation_unit_diagnostics(unit)) <= failures) return;
+    core_dict_put(&state->failed_calls, label, label);
+    n00bb_poison_node(state, label->self);
+    parse_sym_entry_t *caller = enclosing_function_symbol(grammar,
+                                                          label->self);
+    th_type *contract = caller ? (caller->callable_contract
+        ? caller->callable_contract : caller->type) : nullptr;
+    if (contract && !th_is_closed(state->types, contract)) {
+        caller->callable_contract = th_poison(state->types);
+        caller->type = caller->callable_contract;
+    }
+}
+
+static bool
+callee_unresolved(n00bb_tu_state_t *state, parse_tree_t *callee)
+{
+    for (parse_tree_t *at = callee; at; at = core_tree_is_leaf(at)
+             || !core_tree_num_children(at) ? nullptr : core_tree_child(at, 0)) {
+        n00bb_link_use_site_t *use = link_use_site_for_node(state, at);
+        if (use) return use->unresolved;
+    }
+    return false;
 }
 
 static void
@@ -584,23 +929,33 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
     if (resolve_member_calls
         && !th_ctx_set_environment_scope(state->types,
             unit->module.identifier, n00bb_package_id(unit))) {
-        core_diagnostics_report(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-            CORE_STRING_STATIC("could not set call-site type-environment scope"));
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){}, "checking calls",
+            "could not select the trait implementations visible to module "
+            "`%.*s`", (int)unit->module.identifier.u8_bytes,
+            unit->module.identifier.data);
         return;
     }
 
+    parse_cf_label_t *pending = nullptr;
+    size_t failures = 0;
     for (size_t label_index = 0;
          label_index < state->annotations->cf_label_order.len;
          label_index++) {
+        settle_failed_call(grammar, state, unit, pending, failures);
+        pending = nullptr;
         parse_cf_label_t *label =
             state->annotations->cf_label_order.data[label_index];
         if (!label) continue;
         if (label->kind != PARSE_CF_CALL || !label->cond ||
             core_tree_is_leaf(label->cond)) continue;
+        if (core_dict_contains(&state->failed_calls, label)) continue;
 
         parse_tree_t *member = member_access_node(grammar, label->cond);
         if ((member != nullptr) != resolve_member_calls) continue;
+        pending = label;
+        failures = core_diagnostics_failures(
+            core_translation_unit_diagnostics(unit));
         parse_sym_entry_t *callee_symbol = bound_function_symbol(label->cond);
         if (deferred_trait_requirements_only) {
             n00bb_link_use_site_t *site = member
@@ -635,50 +990,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 continue;
             }
             if (choice.status != N00BB_OVERLOAD_SELECTED) {
-                core_buffer_t message = {0};
-                switch (choice.status) {
-                case N00BB_OVERLOAD_PENDING:
-                    core_buffer_puts(&message,
-                        "overloaded call needs a known argument type");
-                    break;
-                case N00BB_OVERLOAD_NO_MATCH:
-                    core_buffer_puts(&message,
-                        "no overload accepts these arguments");
-                    break;
-                case N00BB_OVERLOAD_CONFLICT:
-                    core_buffer_printf(&message,
-                        "'%.*s' names functions from different modules that "
-                        "all accept this call: ",
-                        (int)callee_symbol->name.u8_bytes,
-                        callee_symbol->name.data);
-                    n00bb_describe_candidates(grammar, state,
-                                              &choice.matches, &message);
-                    core_buffer_puts(&message,
-                        "; call the one you mean by its qualified path");
-                    break;
-                default:
-                    core_buffer_puts(&message,
-                        "multiple equally specific overloads accept this call");
-                    if (choice.matches.len) {
-                        core_buffer_puts(&message, ": ");
-                        n00bb_describe_candidates(grammar, state,
-                                                  &choice.matches, &message);
-                    }
-                    break;
-                }
-                core_string_t code = choice.status == N00BB_OVERLOAD_PENDING
-                    ? CORE_STRING_STATIC("N00BB-T0055")
-                    : choice.status == N00BB_OVERLOAD_NO_MATCH
-                    ? CORE_STRING_STATIC("N00BB-T0053")
-                    : choice.status == N00BB_OVERLOAD_CONFLICT
-                    ? CORE_STRING_STATIC("N00BB-T0056")
-                    : CORE_STRING_STATIC("N00BB-T0054");
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, code,
-                    core_string_borrow(message.data, message.byte_len),
-                    link_source_location(label->self));
-                core_buffer_release(&message);
+                report_overload_failure(grammar, unit, state, label,
+                                        callee_symbol, lookup, &choice);
                 n00bb_overload_choice_release(&choice);
                 continue;
             }
@@ -687,12 +1000,20 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 ? n00bb_ensure_node_facts(state, label->self) : nullptr;
             if (facts && !facts->overload_conversion_warning_reported) {
                 facts->overload_conversion_warning_reported = true;
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0008"),
-                    CORE_STRING_STATIC(
-                        "an exact overload was selected over an overload requiring conversion"),
-                    link_source_location(label->self));
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                parse_sym_entry_t *chosen = choice.symbol
+                    ? choice.symbol : callee_symbol;
+                core_string_t chosen_text = n00bb_describe_candidate(grammar,
+                    state, chosen);
+                n00bb_report(diagnostics, unit,
+                    N00B_DIAG_OVERLOAD_PREFERS_EXACT,
+                    n00bb_node_span(label->self),
+                    N00B_TEXT_THIS_CALL_USES_WHICH_TAKES,
+                    N00BB_ARGS(ARG_TEXT(chosen_text)));
+                core_free(chosen_text.data);
+                n00bb_diag_declared_here(diagnostics, chosen,
+                    N00B_TEXT_IS_DECLARED_HERE);
             }
             if (choice.symbol && choice.symbol != callee_symbol) {
                 rebind_call_callee(grammar, state, label->self, label,
@@ -701,12 +1022,11 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             }
             if (!n00bb_resolve_overload_reference(grammar, link, state,
                     member ? member : label->cond, callee_symbol)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0004"),
-                    CORE_STRING_STATIC(
-                        "could not bind the selected overload in the link unit"),
-                    link_source_location(label->self));
+                n00bb_internal_error(core_translation_unit_diagnostics(unit),
+                    unit, n00bb_node_span(label->self), "choosing overloads",
+                    "could not connect this call to the chosen overload of "
+                    "`%.*s`", (int)callee_symbol->name.u8_bytes,
+                    callee_symbol->name.data);
                 continue;
             }
         }
@@ -718,6 +1038,13 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         th_type *signature = context_call ? context_target->type
             : callee_symbol ? callee_symbol->type
             : parse_tree_type(label->cond);
+        if (th_is_poison(signature)
+            || callee_unresolved(state, label->cond)) {
+            th_type *result = parse_tree_type(label->self);
+            if (result) (void)th_unify_in_place(state->types, result,
+                                                th_poison(state->types));
+            continue;
+        }
         bool signature_instantiated = false;
         parse_sym_entry_t *keyword_callee = nullptr;
         if (!member_call && callee_symbol
@@ -734,6 +1061,12 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                 state, member);
             th_type *receiver_type = receiver_node
                 ? parse_tree_type(receiver_node) : nullptr;
+            if (th_is_poison(receiver_type)) {
+                th_type *result = parse_tree_type(label->self);
+                if (result) (void)th_unify_in_place(state->types, result,
+                                                    receiver_type);
+                continue;
+            }
             th_type *caller_contract = caller_symbol
                 ? (caller_symbol->callable_contract
                     ? caller_symbol->callable_contract
@@ -764,12 +1097,11 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                         th_env_method_requirement_t, requirement_count)
                         : nullptr;
                 if (requirement_count && !requirements) {
-                    core_diagnostics_report_at(
+                    n00bb_internal_error(
                         core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-                        CORE_STRING_STATIC(
-                            "could not inspect generic trait method requirements"),
-                        link_source_location(member));
+                        n00bb_node_span(member), "checking calls",
+                        "could not list the traits that declare `%.*s`",
+                        (int)method_text.u8_bytes, method_text.data);
                     continue;
                 }
                 if (requirement_count)
@@ -892,34 +1224,21 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
                             signature_instantiated = true;
                         }
                         else {
-                            core_diagnostics_report_at(
+                            n00bb_internal_error(
                                 core_translation_unit_diagnostics(unit), unit,
-                                CORE_DIAG_ERROR,
-                                CORE_STRING_STATIC("N00BB-T0002"),
-                                CORE_STRING_STATIC(
-                                    "resolved trait target has no callable signature"),
-                                link_source_location(member));
+                                n00bb_node_span(member), "checking calls",
+                                "the implementation of `%.*s` has no "
+                                "signature", (int)method_name.u8_bytes,
+                                method_name.data);
                             continue;
                         }
                     }
                 }
                 else if (receiver_type &&
-                         th_kind_of(th_resolve(receiver_type)) != TH_VAR) {
-                    core_buffer_t message = {0};
-                    core_string_t receiver_text = n00bb_print_type(
-                        state->types, receiver_type);
-                    core_buffer_printf(&message,
-                        "no matching trait method '%.*s' for receiver type %.*s",
-                        (int)method_text.u8_bytes,
-                        method_text.data ? method_text.data : "",
-                        (int)receiver_text.u8_bytes, receiver_text.data);
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0003"),
-                        core_string_borrow(message.data, message.byte_len),
-                        link_source_location(member));
-                    core_buffer_release(&message);
-                }
+                         th_kind_of(th_resolve(receiver_type)) != TH_VAR)
+                    n00bb_report_missing_method(unit, state->types, member,
+                        receiver_type, method_text,
+                        method_status == TH_ENV_METHOD_AMBIGUOUS);
             }
         }
         th_type *result = label->self ? parse_tree_type(label->self) : nullptr;
@@ -937,7 +1256,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             parse_tree_t *receiver_node = core_tree_child(member, 0);
             th_type *receiver_type = receiver_node
                 ? parse_tree_type(receiver_node) : nullptr;
-            if (!receiver || !unify_call_node_type(unit, state, label->self,
+            if (!receiver || !unify_call_node_type(unit, state, receiver_node,
                     receiver_node, receiver_type, receiver->type,
                     N00BB_CALL_RECEIVER))
                 continue;
@@ -953,10 +1272,8 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
             label->then_body, parameter_offset, label->self, &bindings);
         for (size_t i = 0; i < bindings.len; i++) {
             n00bb_call_binding_t *binding = &bindings.data[i];
-            unify_call_argument(grammar, unit, state,
-                binding->keyword ? binding->argument : label->self,
-                binding->argument, binding->expected, context_call,
-                binding->writes);
+            unify_call_argument(grammar, unit, state, named, binding,
+                                context_call);
             check_call_argument_mode(grammar, unit, state,
                                      binding->argument, binding->mode);
         }
@@ -996,6 +1313,7 @@ unify_call_results(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (failure_type)
             (void)parse_tree_set_error_type(label->self, failure_type);
     }
+    settle_failed_call(grammar, state, unit, pending, failures);
 }
 
 static core_buffer_t
@@ -1058,6 +1376,19 @@ call_units_failed(core_translation_unit_t *const *units, size_t unit_count)
     return false;
 }
 
+static size_t
+call_unit_internal_errors(core_translation_unit_t *const *units,
+                          size_t unit_count)
+{
+    size_t internal = 0;
+    for (size_t i = 0; i < unit_count; i++)
+        if (units[i])
+            internal += core_diagnostics_count_severity(
+                core_translation_unit_diagnostics(units[i]),
+                CORE_DIAG_INTERNAL);
+    return internal;
+}
+
 bool
 unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
                          core_translation_unit_t *const *units,
@@ -1066,6 +1397,7 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
                          bool deferred_trait_requirements_only,
                          bool settle_overloads)
 {
+    size_t internal = call_unit_internal_errors(units, unit_count);
     size_t call_count = 0;
     for (size_t i = 0; i < unit_count; i++) {
         n00bb_tu_state_t *state = tu_state(units[i]);
@@ -1095,7 +1427,7 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
                     true, deferred_trait_requirements_only,
                     force_overloads, &deferred);
         }
-        if (call_units_failed(units, unit_count)) {
+        if (call_unit_internal_errors(units, unit_count) > internal) {
             core_buffer_release(&before);
             call_site_index_free(&call_sites);
             return false;
@@ -1119,10 +1451,10 @@ unify_calls_until_stable(parse_grammar_t *grammar, core_link_unit_t *link,
     call_site_index_free(&call_sites);
 
     if (unit_count && units[0])
-        core_diagnostics_report(core_translation_unit_diagnostics(units[0]),
-            units[0], CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0004"),
-            CORE_STRING_STATIC(
-                "call type constraints did not stabilize in the shared inference universe"));
+        n00bb_internal_error(core_translation_unit_diagnostics(units[0]),
+            units[0], (core_diag_location_t){}, "checking calls",
+            "the types of calls kept changing after %zu rounds",
+            call_count + 2);
     return false;
 }
 
@@ -1150,12 +1482,13 @@ finalize_module_group_contracts(void *context,
         if (!state || !state->types || !state->annotations
             || !state->annotations->symtab) {
             if (members[i])
-                core_diagnostics_report(
+                n00bb_internal_error(
                     core_translation_unit_diagnostics(members[i]),
-                    members[i], CORE_DIAG_FATAL,
-                    CORE_STRING_STATIC("N00BB-T0004"),
-                    CORE_STRING_STATIC(
-                        "source module has no complete semantic state"));
+                    members[i], (core_diag_location_t){},
+                    "checking function signatures",
+                    "module `%.*s` reached checking without its declarations",
+                    (int)members[i]->module.identifier.u8_bytes,
+                    members[i]->module.identifier.data);
             return false;
         }
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
@@ -1173,15 +1506,18 @@ finalize_module_group_contracts(void *context,
                         ? th_unify(state->types, body, declared)
                         : body ? body : symbol->type;
                     if (!contract_type) {
-                        core_diagnostics_report_at(
-                            core_translation_unit_diagnostics(members[i]),
-                            members[i], CORE_DIAG_FATAL,
-                            CORE_STRING_STATIC("N00BB-T0004"),
-                            CORE_STRING_STATIC(
-                                "could not join the declared and inferred function contracts"),
-                            symbol->decl_node
-                                ? link_source_location(symbol->decl_node)
-                                : (core_diag_location_t){0});
+                        core_diagnostics_t *diagnostics =
+                            core_translation_unit_diagnostics(members[i]);
+                        core_string_t declared_text = n00bb_print_type(
+                            state->types, declared);
+                        core_string_t body_text = n00bb_print_type(
+                            state->types, body);
+                        n00bb_report(diagnostics, members[i],
+                            N00B_DIAG_TYPE_MISMATCH,
+                            n00bb_symbol_location(symbol),
+                            N00B_TEXT_IS_DECLARED_AS_BUT_ITS,
+                            N00BB_ARGS(ARG_TEXT(symbol->name),
+                                ARG_TEXT(declared_text), ARG_TEXT(body_text)));
                         core_list_free(scopes);
                         return false;
                     }

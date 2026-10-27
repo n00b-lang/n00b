@@ -20,6 +20,8 @@ typedef struct {
     ir_module_t *m;
     ir_diags_t  *d;
     bool         bad;
+    bool         bad_module;
+    core_dict_t  bad_functions;
     ir_func_t   *dom_for;
     ir_doms_t   *dom;
     size_t       dom_scope;
@@ -57,11 +59,28 @@ static ir_doms_t *doms(V *v, ir_func_t *f)
 
 #define SARG(s) (int)(s).u8_bytes, (s).data
 
+static void mark_bad(V *v, const ir_instr_t *in, const ir_block_t *b)
+{
+    ir_func_t *f = in && in->block ? in->block->owner
+                 : b ? b->owner : nullptr;
+
+    v->bad = true;
+    if (!v->d) {
+        return;
+    }
+    if (f) {
+        core_dict_put(&v->bad_functions, f, f);
+    }
+    else {
+        v->bad_module = true;
+    }
+}
+
 __attribute__((format(printf, 6, 7))) static void
 broke_at(V *v, ir_diagcode_t code, ir_instr_t *in, ir_block_t *b,
          core_string_t rule, const char *fmt, ...)
 {
-    v->bad = true;
+    mark_bad(v, in, b);
 
     if (!v->d) {
         return;
@@ -70,7 +89,7 @@ broke_at(V *v, ir_diagcode_t code, ir_instr_t *in, ir_block_t *b,
     ir_func_t *f  = in && in->block ? in->block->owner
                   : b               ? b->owner
                                     : nullptr;
-    ir_diag_t *dg = ir_diag_begin_at(v->d, code, in, b, f, rule);
+    ir_diag_t *dg = ir_diag_begin_at(v->d, code, in, b, f, IR_DETAIL(rule));
 
     if (!dg) {
         return;
@@ -85,7 +104,7 @@ broke_at(V *v, ir_diagcode_t code, ir_instr_t *in, ir_block_t *b,
 
     core_string_t msg = core_buffer_take_string(sb);
 
-    ir_diag_message(dg, v->d, msg);
+    ir_diag_message(dg, v->d, IR_DETAIL(msg));
     core_free(msg.data);
 }
 
@@ -443,10 +462,11 @@ static bool typed_global(ir_visit_t *vi)
     if (vi->global->has_static_initializer
         && !ir_global_static_initializer_valid(v->m, vi->global)) {
         v->bad = true;
+        v->bad_module = v->bad_module || v->d;
         if (v->d) {
             ir_diag_t *diagnostic = ir_diag_begin(v->d,
                 IR_DIAG_VERIFY_TYPED, vi->global->span,
-                CORE_STRING_STATIC("this global static initializer"));
+                IR_MESSAGE(THIS_GLOBAL_STATIC_INITIALIZER));
             if (diagnostic) {
                 core_buffer_t *sb = core_buffer_empty();
                 core_buffer_printf(sb,
@@ -454,7 +474,7 @@ static bool typed_global(ir_visit_t *vi)
                     SARG(vi->global->name));
                 core_string_t message = core_buffer_take_string(sb);
                 ir_diag_message(diagnostic, v->d,
-                                core_string_slice(message, 0, 255));
+                                IR_DETAIL(core_string_slice(message, 0, 255)));
                 core_free(message.data);
             }
         }
@@ -476,10 +496,11 @@ static bool typed_global(ir_visit_t *vi)
         && selected.data && core_string_eq(requested, selected)) return true;
 
     v->bad = true;
+    v->bad_module = v->bad_module || v->d;
     if (v->d) {
         ir_diag_t *diagnostic = ir_diag_begin(v->d,
             IR_DIAG_VERIFY_STORAGE, vi->global->span,
-            CORE_STRING_STATIC("this global storage requirement"));
+            IR_MESSAGE(THIS_GLOBAL_STORAGE_REQUIREMENT));
         if (diagnostic) {
             core_buffer_t *sb = core_buffer_empty();
             core_buffer_printf(sb,
@@ -491,7 +512,7 @@ static bool typed_global(ir_visit_t *vi)
                                    : CORE_STRING_STATIC("(missing)")));
             core_string_t message = core_buffer_take_string(sb);
             ir_diag_message(diagnostic, v->d,
-                            core_string_slice(message, 0, 319));
+                            IR_DETAIL(core_string_slice(message, 0, 319)));
             core_free(message.data);
         }
     }
@@ -918,6 +939,57 @@ static bool binding_reentry_header(V *v, ir_func_t *function,
     return true;
 }
 
+static core_string_t unqualified(core_string_t name)
+{
+    for (size_t i = name.u8_bytes; i > 0; i--) {
+        if (name.data[i - 1] == '.') {
+            return core_string_slice(name, i, name.u8_bytes - i);
+        }
+    }
+    return name;
+}
+
+static void report_reinitialized(V *v, ir_instr_t *instruction,
+                                 ir_block_t *block, const ir_value_t *binding,
+                                 core_string_t name,
+                                 const uint64_t *state, ptrdiff_t event,
+                                 ir_instr_t **events, size_t count)
+{
+    mark_bad(v, instruction, block);
+    if (!v->d) {
+        return;
+    }
+    ir_diag_t *dg = ir_diag_begin_at(v->d, IR_DIAG_IMMUTABLE_REINITIALIZED,
+                                     instruction, block, block->owner,
+                                     IR_NO_LABEL);
+    if (!dg) {
+        return;
+    }
+    core_string_t shown = unqualified(name);
+    ir_diag_message(dg, v->d,
+                    IR_MESSAGE_ARGS(ASSIGNED_TWICE, CORE_TEXT_STRING(shown)));
+    ir_span_t earlier = IR_SPAN_UNKNOWN;
+    for (size_t i = 0; i < count; i++) {
+        if ((ptrdiff_t)i == event || !(state[i / 64] & (UINT64_C(1) << (i % 64)))
+            || !ir_span_known(events[i]->span)) {
+            continue;
+        }
+        earlier = events[i]->span;
+        ir_diag_secondary(v->d, dg, earlier,
+                          IR_MESSAGE(MAY_ALREADY_BE_ASSIGNED));
+        break;
+    }
+    ir_span_t declared = binding && binding->local ? binding->local->span
+                       : binding && binding->global ? binding->global->span
+                                                    : IR_SPAN_UNKNOWN;
+    if (ir_span_known(declared)
+        && !(ir_span_known(earlier)
+             && earlier.start_byte == declared.start_byte)) {
+        ir_diag_secondary(v->d, dg, declared,
+            IR_MESSAGE_ARGS(DECLARED_HERE, CORE_TEXT_STRING(shown)));
+    }
+}
+
 static void verify_binding_initialization_events(
     V *v, ir_func_t *function, ir_doms_t *graph, ir_block_t *entry,
     ir_value_t *binding)
@@ -958,18 +1030,9 @@ static void verify_binding_initialization_events(
         goto done;
     }
     size_t cells = (size_t)block_count * words;
-    uint64_t *in = calloc(cells, sizeof(*in));
-    uint64_t *out = calloc(cells, sizeof(*out));
-    uint64_t *state = calloc(words, sizeof(*state));
-    if (!in || !out || !state) {
-        free(in);
-        free(out);
-        free(state);
-        broke(v, IR_DIAG_VERIFY_PHASE, nullptr, entry,
-              "phase.binding-initialization-analysis",
-              "could not analyze binding initialization paths");
-        goto done;
-    }
+    uint64_t *in = core_alloc_array(uint64_t, cells);
+    uint64_t *out = core_alloc_array(uint64_t, cells);
+    uint64_t *state = core_alloc_array(uint64_t, words);
 
     bool changed;
     do {
@@ -1033,19 +1096,18 @@ static void verify_binding_initialization_events(
                 prior_distinct_site |= prior != 0;
             }
             if (prior_distinct_site) {
-                broke(v, IR_DIAG_VERIFY_PHASE, instruction, block,
-                      "phase.binding-initialized-once",
-                      "'%.*s' is immutable, but a path through this code initializes it more than once",
-                      SARG(name));
+                report_reinitialized(v, instruction, block, binding, name,
+                                     state,
+                                     event, events.data, events.len);
                 diagnosed = true;
                 break;
             }
             state[event_word] |= event_bit;
         }
     }
-    free(in);
-    free(out);
-    free(state);
+    core_free(in);
+    core_free(out);
+    core_free(state);
 done:
     core_list_free(events);
 }
@@ -1312,7 +1374,7 @@ static bool typed_instr_end(ir_visit_t *vi)
               SARG(ir_module_op_spelling(v->m, in->op)));
     }
     else if (verdict != IR_RULE_ACCEPT) {
-        v->bad = true;
+        mark_bad(v, in, vi->block);
     }
 
     return true;
@@ -1714,22 +1776,17 @@ static void audit_spans(V *v)
     for (uint32_t i = 0; i < n; i++) {
         const ir_diag_t *dg = ir_diags_at(v->d, i);
 
-        if (ir_span_known(dg->primary.span) || dg->severity == IR_SEV_NOTE
-            || dg->severity == IR_SEV_HELP) {
+        if (ir_span_known(dg->span)) {
             continue;
         }
 
         ir_diag_t *bug = ir_diag_begin(v->d, IR_DIAG_NO_PRIMARY_SPAN,
                                        ir_module_span(v->m),
-                                       CORE_STRING_STATIC(
-                                           "reported without a location"));
+                                       IR_MESSAGE(NO_PRIMARY_SPAN_LABEL));
 
         if (bug) {
             ir_diag_message(bug, v->d,
-                            CORE_STRING_STATIC(
-                                "a diagnostic was reported with no primary "
-                                "span, which is a bug in whatever reported "
-                                "it"));
+                            IR_MESSAGE(NO_PRIMARY_SPAN));
         }
 
         return;
@@ -1817,13 +1874,15 @@ static ir_props_t with_needs(ir_props_t want)
 }
 
 static ir_props_t run_phases(ir_module_t *m, ir_props_t want, ir_diags_t *out,
-                             bool only_when_claimed)
+                             bool only_when_claimed,
+                             ir_verify_failures_t *failures)
 {
     V          v    = {.m = m, .d = out};
     ir_props_t run  = with_needs(want);
     ir_props_t held = 0;
 
     core_dict_init(&v.checked, nullptr, nullptr);
+    core_dict_init(&v.bad_functions, nullptr, nullptr);
 
     v.collect = ir_walk_new(&v);
 
@@ -1856,6 +1915,18 @@ static ir_props_t run_phases(ir_module_t *m, ir_props_t want, ir_diags_t *out,
     audit_spans(&v);
 
     if (v.dom_scoped) ir_analysis_scope_end(v.dom_scope);
+    if (failures) {
+        failures->module    = v.bad_module;
+        failures->count     = 0;
+        failures->functions = core_alloc_array(ir_func_t *,
+                                               core_dict_len(&v.bad_functions) + 1);
+        core_dict_foreach(&v.bad_functions, item) {
+            if (failures->functions) {
+                failures->functions[failures->count++] = item->value;
+            }
+        }
+    }
+    core_dict_free(&v.bad_functions);
     core_dict_free(&v.checked);
     ir_walk_free(v.collect);
 
@@ -1864,10 +1935,24 @@ static ir_props_t run_phases(ir_module_t *m, ir_props_t want, ir_diags_t *out,
 
 ir_props_t ir_verify_only(ir_module_t *m, ir_props_t want, ir_diags_t *out)
 {
-    return m ? run_phases(m, want, out, false) : 0;
+    return m ? run_phases(m, want, out, false, nullptr) : 0;
+}
+
+void ir_verify_failures_release(ir_verify_failures_t *failures)
+{
+    if (failures) {
+        core_free(failures->functions);
+        *failures = (ir_verify_failures_t){0};
+    }
 }
 
 ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
+{
+    return ir_verify_with_failures(m, out, nullptr);
+}
+
+ir_props_t ir_verify_with_failures(ir_module_t *m, ir_diags_t *out,
+                                   ir_verify_failures_t *failures)
 {
     if (!m) {
         return 0;
@@ -1879,7 +1964,7 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
         checked |= PHASES[i].prop;
     }
 
-    ir_props_t held    = run_phases(m, checked, out, true);
+    ir_props_t held    = run_phases(m, checked, out, true, failures);
     ir_props_t claimed = ir_module_props(m);
     ir_props_t lost    = (ir_props_t)(claimed & checked & ~held);
 
@@ -1891,7 +1976,7 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
 
         ir_diag_t *dg = ir_diag_begin(out, IR_DIAG_VERIFY_CLAIM,
                                       ir_module_span(m),
-                                      CORE_STRING_STATIC("claimed here"));
+                                      IR_MESSAGE(CLAIMED_HERE));
 
         if (dg) {
             core_buffer_t *sb = core_buffer_empty();
@@ -1902,7 +1987,7 @@ ir_props_t ir_verify(ir_module_t *m, ir_diags_t *out)
 
             core_string_t msg = core_buffer_take_string(sb);
 
-            ir_diag_message(dg, out, msg);
+            ir_diag_message(dg, out, IR_DETAIL(msg));
             core_free(msg.data);
         }
     }
@@ -1922,10 +2007,10 @@ typedef struct {
     core_string_t what;
 } ir_locrec_t;
 
+core_list_decl(ir_locrec_t);
+
 struct ir_locsnap_t {
-    ir_locrec_t *v;
-    size_t       n;
-    size_t       cap;
+    core_list_t(ir_locrec_t) records;
 };
 
 static bool live_instr(ir_visit_t *vi)
@@ -1941,11 +2026,8 @@ static void snap_one(ir_locsnap_t *s, ir_span_t span, ir_instr_t *in,
     if (!ir_span_known(span)) {
         return;
     }
-    if (s->n == s->cap) {
-        s->cap = s->cap ? s->cap * 2 : 64;
-        s->v   = core_realloc(s->v, s->cap * sizeof(ir_locrec_t));
-    }
-    s->v[s->n++] = (ir_locrec_t){.span = span, .in = in, .b = b, .what = what};
+    core_list_push(s->records, ((ir_locrec_t){
+        .span = span, .in = in, .b = b, .what = what}));
 }
 
 static bool snap_func(ir_visit_t *vi)
@@ -1985,7 +2067,7 @@ void ir_loc_snapshot_free(ir_locsnap_t *s)
     if (!s) {
         return;
     }
-    core_free(s->v);
+    core_list_free(s->records);
     core_free(s);
 }
 
@@ -2027,8 +2109,8 @@ bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m,
     ir_walk_run(w, m);
     ir_walk_free(w);
 
-    for (size_t i = 0; i < before->n; i++) {
-        ir_locrec_t *r = &before->v[i];
+    for (size_t i = 0; i < before->records.len; i++) {
+        ir_locrec_t *r = &before->records.data[i];
 
         if (r->in && !holds(&here, r->in)) {
             continue;
@@ -2048,7 +2130,7 @@ bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m,
 
         ir_diag_t *dg = ir_diag_begin_at(out, IR_DIAG_LOCATION_LOST, r->in,
                                          r->b, nullptr,
-                                         CORE_STRING_STATIC("here"));
+                                         IR_MESSAGE(HERE));
 
         if (dg) {
             core_buffer_t *sb = core_buffer_empty();
@@ -2060,7 +2142,7 @@ bool ir_loc_monotone(ir_locsnap_t *before, ir_module_t *m,
 
             core_string_t msg = core_buffer_take_string(sb);
 
-            ir_diag_message(dg, out, msg);
+            ir_diag_message(dg, out, IR_DETAIL(msg));
             core_free(msg.data);
         }
     }

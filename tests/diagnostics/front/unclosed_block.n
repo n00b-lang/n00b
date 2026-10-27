@@ -1,0 +1,10 @@
+func f() -> int {
+    return 1
+
+func g() -> int {
+    return 2 +
+}
+
+func h() {
+    let x = )
+}

@@ -628,11 +628,35 @@ allowed_fit(th_type *variable, const range_node_t *class)
 }
 
 static void
-report(const range_node_t *class, core_string_t message)
+report_unfit_integer(const range_node_t *class, bool bitwise)
 {
-    core_diagnostics_report_at(core_translation_unit_diagnostics(class->unit),
-        class->unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
-        message, link_source_location(class->site));
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(class->unit);
+    core_string_t spelled = n00bb_value_spelling(class->unit, class->site);
+    core_string_t subject = spelled.data
+        ? n00bb_text(N00B_TEXT_QUOTED_NAME, N00BB_ARGS(ARG_TEXT(spelled)))
+        : n00bb_text(N00B_TEXT_THIS_VALUE, N00BB_NO_ARGS);
+    core_buffer_t range = {0};
+    if (class->known) {
+        ir_int_append(&range, class->lo);
+        core_buffer_puts(&range, "..");
+        ir_int_append(&range, class->hi);
+    }
+    bool reported = n00bb_report(diagnostics, class->unit,
+        bitwise ? N00B_DIAG_BITWISE_NEGATIVE : N00B_DIAG_INTEGER_TOO_LARGE,
+        link_source_location(class->site),
+        bitwise ? N00B_TEXT_IS_USED_WITH_BITWISE_OPERATORS
+                : N00B_TEXT_NO_INTEGER_TYPE_HOLDS_EVERY,
+        N00BB_ARGS(ARG_TEXT(subject)));
+    if (reported && range.byte_len)
+        n00bb_report_note(diagnostics, N00B_TEXT_ITS_VALUES_RANGE_OVER,
+            N00BB_ARGS(ARG_TEXT(core_buffer_string(&range))));
+    if (reported)
+        n00bb_report_help(diagnostics, bitwise
+            ? N00B_TEXT_GIVE_IT_UNSIGNED_TYPE
+            : N00B_TEXT_GIVE_IT_EXPLICIT_TYPE, N00BB_NO_ARGS);
+    core_free(subject.data);
+    core_buffer_release(&range);
 }
 
 static bool
@@ -650,7 +674,7 @@ check_seed_fits(n00bb_tu_state_t *state, const n00bb_integer_seed_t *seed,
                                     seed->hi}, width, is_signed)))
         return true;
     n00bb_report_integer_misfit(state, seed->site,
-        CORE_STRING_STATIC("constant"), ir_interval_point(seed->lo), type);
+        true, ir_interval_point(seed->lo), type);
     return false;
 }
 
@@ -1287,7 +1311,7 @@ check_boundaries(n00bb_tu_state_t *state)
         }
         if (!ir_interval_meet(range, bounds, nullptr)) {
             n00bb_report_integer_misfit(state, entry->key,
-                CORE_STRING_STATIC("value"), range, target);
+                false, range, target);
             ok = false;
         }
         else if (range.lo < bounds.lo || range.hi > bounds.hi)
@@ -1312,10 +1336,9 @@ check_shift_counts(core_translation_unit_t *unit, n00bb_tu_state_t *state)
         if (!width || !n00bb_current_integer_range(
                 core_tree_child(site, 2), &count)
             || (count.lo >= 0 && count.lo < (ir_int_t)width)) continue;
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0047"),
-            CORE_STRING_STATIC("shift count is outside the receiver width"),
-            link_source_location(core_tree_child(site, 2)));
+        th_type *receiver = parse_tree_type(core_tree_child(site, 0));
+        n00bb_report_shift_count_range(unit, core_tree_child(site, 2), count,
+            width, n00bb_print_type(state->types, receiver));
         ok = false;
     }
     state->integer_shift_sites.len = 0;
@@ -1426,15 +1449,20 @@ n00bb_ground_integers(core_translation_unit_t *const *units,
         th_type *allowed = allowed_fit(type, class);
         if (allowed) chosen = allowed;
         if (!chosen) {
-            report(class, (flags & TH_INTEGER_UNSIGNED)
-                ? CORE_STRING_STATIC(
-                      "a bitwise integer value can be negative; give it an unsigned type")
-                : CORE_STRING_STATIC("no integer type holds this value"));
+            report_unfit_integer(class, (flags & TH_INTEGER_UNSIGNED) != 0);
             ok = false;
             continue;
         }
         if (!th_ground_integer(class->state->types, class->type, chosen)) {
-            report(class, th_last_error(class->state->types));
+            core_string_t reason = th_last_error(class->state->types);
+            if (!core_diagnostics_failed(
+                    core_translation_unit_diagnostics(class->unit)))
+                n00bb_internal_error(
+                    core_translation_unit_diagnostics(class->unit),
+                    class->unit, link_source_location(class->site),
+                    "choosing integer types",
+                    "could not give this integer its chosen type: %.*s",
+                    (int)reason.u8_bytes, reason.data);
             ok = false;
         }
         else *grounded = true;

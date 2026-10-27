@@ -1,0 +1,9 @@
+func f(a: int) -> int {
+    return a
+}
+
+func f(a: string) -> int {
+    return 2
+}
+
+require f(1.5) == 1

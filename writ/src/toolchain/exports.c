@@ -1,5 +1,6 @@
 #include <sys/stat.h>
 
+#include "lib/string.h"
 #include "toolchain.h"
 
 static bool
@@ -19,6 +20,11 @@ find_binary(const writ_model_t *model, writ_str_t sysroot)
     }
     writ_str_t link = library->links[0];
     writ_str_t root = writ_sysroot(session, sysroot);
+    if (model->platform->object_format == writ_intern(session, "coff", 4)) {
+        writ_str_t prefix = session->llvm_prefix.length ? session->llvm_prefix : root;
+        writ_str_t candidate = writ_str_format(session, "%.*s/lib/lib%.*s.dll.a", S(prefix), S(link));
+        return exists(session, candidate) ? candidate : writ_cstr("");
+    }
     const char *patterns[] = {"%.*s/usr/lib/lib%.*s.tbd", "%.*s/usr/lib/lib%.*s.dylib",
                               "%.*s/usr/lib/aarch64-linux-gnu/lib%.*s.so", "%.*s/usr/lib/x86_64-linux-gnu/lib%.*s.so",
                               "%.*s/usr/lib/lib%.*s.so", "%.*s/lib/aarch64-linux-gnu/lib%.*s.so.1"};
@@ -65,17 +71,24 @@ writ_toolchain_verify_symbols(const writ_model_t *model, writ_str_t binary, writ
     size_t first_diag = session->diags.len;
     writ_str_t path = binary.length ? binary : find_binary(model, sysroot);
     if (!path.length) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "no binary found for the library's `link`");
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, WRIT_BARE(NO_BINARY_FOUND_FOR_THE));
         writ_diag_flush(session, first_diag);
         return WRIT_HAS_ERRORS;
     }
-    bool macho = model->platform->object_format == writ_intern(session, "macho", 5);
-    const char *argv[] = {writ_tool_path(session, "llvm-nm").data, "-g", "--defined-only",
-                          macho ? writ_str_copy(session, path.data, path.length).data : "-D",
-                          macho ? nullptr : writ_str_copy(session, path.data, path.length).data, nullptr};
+    writ_sym_t format = model->platform->object_format;
+    bool macho = format == writ_intern(session, "macho", 5);
+    bool elf = format == writ_intern(session, "elf", 3);
+    bool dll = format == writ_intern(session, "coff", 4)
+            && core_string_ends_with(core_string_borrow(path.data, path.length), CORE_STRING_STATIC(".dll"));
+    const char *file = writ_str_copy(session, path.data, path.length).data;
+    const char *tool = dll ? "llvm-readobj" : "llvm-nm";
+    const char *nm[] = {writ_tool_path(session, tool).data, "-g", "--defined-only", elf ? "-D" : file,
+                        elf ? file : nullptr, nullptr};
+    const char *readobj[] = {nm[0], "--coff-exports", file, nullptr};
     writ_run_result_t result;
-    if (writ_run(session, argv, writ_cstr(""), &result) != WRIT_OK || result.exit_code) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "llvm-nm failed on %.*s: %.*s", S(path), S(result.err));
+    if (writ_run(session, dll ? readobj : nm, writ_cstr(""), &result) != WRIT_OK || result.exit_code) {
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC,
+                    WRIT_MESSAGE(FAILED_ON, WRIT_ARG(writ_cstr(tool)), WRIT_ARG(path), WRIT_ARG(result.err)));
         writ_diag_flush(session, first_diag);
         return WRIT_HAS_ERRORS;
     }
@@ -92,7 +105,7 @@ writ_toolchain_verify_symbols(const writ_model_t *model, writ_str_t binary, writ
         writ_sym_t decorated = writ_intern_str(session, writ_str_format(session, "%s%.*s", macho ? "_" : "", S(symbol)));
         bool present = writ_map_get(symbols, decorated, nullptr);
         if (!present) {
-            writ_report(session, WRIT_D_SYMBOL_MISSING, fn->loc, "`%.*s` in %.*s", S(symbol), S(path));
+            writ_report(session, WRIT_D_SYMBOL_MISSING, fn->loc, WRIT_MESSAGE(IN, WRIT_ARG(symbol), WRIT_ARG(path)));
         }
         writ_emit_line(&emit, "%s %.*s", present ? "ok" : "missing", S(symbol));
     }

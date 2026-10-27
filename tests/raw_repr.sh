@@ -2,55 +2,50 @@
 set -eu
 
 compiler=$1
-program=$2
-out_of_range=$3
-defaults=$4
-array_overrides=$5
-reference=$6
-element_override=$7
-nested_override=$8
+program_dir=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-"$compiler" build --output "$tmp/raw-repr" "$program" 2>"$tmp/compile.err"
-"$tmp/raw-repr" >"$tmp/stdout" 2>"$tmp/stderr"
-test ! -s "$tmp/stdout"
-test "$(cat "$tmp/stderr")" = "$(printf 'bool\nstring\n')"
-"$compiler" build --output "$tmp/defaults" "$defaults" \
-    2>"$tmp/defaults.compile.err"
-"$tmp/defaults" >"$tmp/defaults.stdout" 2>"$tmp/defaults.stderr"
-test ! -s "$tmp/defaults.stdout"
-test "$(cat "$tmp/defaults.stderr")" = \
+runs() {
+    "$compiler" build --output "$tmp/$1" "$program_dir/bitcode_raw_repr_$1.n00b" \
+        2>"$tmp/$1.compile.err" || {
+        cat "$tmp/$1.compile.err" >&2
+        exit 1
+    }
+    "$tmp/$1" >"$tmp/$1.stdout" 2>"$tmp/$1.stderr"
+    test ! -s "$tmp/$1.stdout"
+}
+
+case $3 in
+overrides)
+    runs overrides
+    test "$(cat "$tmp/overrides.stderr")" = \
+        "$(printf 'bool\nstring\n[item, item]\n[inner, inner]\n')"
+    runs array_override
+    test "$(cat "$tmp/array_override.stderr")" = \
+        "$(printf 'int array override\narray override\n')"
+    exit 0
+    ;;
+defaults) ;;
+*)
+    echo "unknown part $3" >&2
+    exit 2
+    ;;
+esac
+
+runs defaults
+head -n 15 "$tmp/defaults.stderr" >"$tmp/defaults.values"
+test "$(cat "$tmp/defaults.values")" = \
     "$(printf 'True\nFalse\n42\n-17\n3.5\n-0.0\n1.0e6\n1.0e-5\n[1, 2]\n[1.25, 2.5]\n[a, b]\n[[1, 2], [3]]\n<bitcode_raw_repr_defaults.Sample>\n<bitcode_raw_repr_defaults.Sample>\n2.5\n')"
-"$compiler" build --output "$tmp/array-overrides" "$array_overrides" \
-    2>"$tmp/array-overrides.compile.err"
-"$tmp/array-overrides" >"$tmp/array-overrides.stdout" \
-    2>"$tmp/array-overrides.stderr"
-test ! -s "$tmp/array-overrides.stdout"
-test "$(cat "$tmp/array-overrides.stderr")" = \
-    "$(printf 'int array override\narray override\n')"
-"$compiler" build --output "$tmp/element-override" "$element_override" \
-    2>"$tmp/element-override.compile.err"
-"$tmp/element-override" >"$tmp/element-override.stdout" \
-    2>"$tmp/element-override.stderr"
-test ! -s "$tmp/element-override.stdout"
-test "$(cat "$tmp/element-override.stderr")" = '[item, item]'
-"$compiler" build --output "$tmp/nested-override" "$nested_override" \
-    2>"$tmp/nested-override.compile.err"
-"$tmp/nested-override" >"$tmp/nested-override.stdout" \
-    2>"$tmp/nested-override.stderr"
-test ! -s "$tmp/nested-override.stdout"
-test "$(cat "$tmp/nested-override.stderr")" = '[inner, inner]'
-"$compiler" build --output "$tmp/reference" "$reference" \
-    2>"$tmp/reference.compile.err"
-"$tmp/reference" >"$tmp/reference.stdout" \
-    2>"$tmp/reference.stderr"
-test ! -s "$tmp/reference.stdout"
+tail -n +16 "$tmp/defaults.stderr" >"$tmp/reference.stderr"
 grep -Eq '^[[:xdigit:]]{16}$' "$tmp/reference.stderr"
 test "$(wc -l <"$tmp/reference.stderr")" -eq 1
-! grep -Eq '^0{16}$' "$tmp/reference.stderr"
-if "$compiler" build --output "$tmp/out-of-range" "$out_of_range" \
+if grep -Eq '^0{16}$' "$tmp/reference.stderr"; then
+    exit 1
+fi
+
+if "$compiler" check "$program_dir/bitcode_raw_repr_out_of_range.n00b" \
     >"$tmp/negative.stdout" 2>"$tmp/negative.stderr"; then
     exit 1
 fi
-grep -q 'integer constant 2147483648 does not fit i32' "$tmp/negative.stderr"
+grep -q 'integer constant 2147483648 does not fit in `i32`' "$tmp/negative.stderr"

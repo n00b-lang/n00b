@@ -9,6 +9,7 @@ alias type Trace_Arm_Record = builtin.Trace_Arm_Record
 alias type Tag_Extractor_Record = builtin.Tag_Extractor_Record
 alias type Frame_Layout_Record = builtin.Frame_Layout_Record
 alias type Native_Frame_Record = builtin.Native_Frame_Record
+alias type Native_Frame_Root = builtin.Native_Frame_Root
 alias type Storage_Record = builtin.Storage_Record
 alias type Symbol_Record = builtin.Symbol_Record
 alias type Module_Record = builtin.Module_Record
@@ -117,14 +118,17 @@ func frame_layout_at(index: u32) -> Ref[Frame_Layout_Record]? {
     return __abi_frame_layout(index)
 }
 
-func native_frame_at(fp: Ref[byte], low: Ref[byte],
-                            high: Ref[byte]) -> Ref[Native_Frame_Record]? {
-    return __abi_native_frame_at(fp, low, high)
+func native_frame_count() -> u32 {
+    return __abi_native_frame_count()
 }
 
-func native_frame_root_offset(frame: Ref[Native_Frame_Record],
-                                     ordinal: u32) -> i32 {
-    return __abi_native_frame_root_offset(frame, ordinal)
+func native_frame(index: u32) -> Ref[Native_Frame_Record]? {
+    return __abi_native_frame(index)
+}
+
+func native_frame_root(frame: Ref[Native_Frame_Record],
+                       ordinal: u32) -> Ref[Native_Frame_Root] {
+    return __abi_native_frame_root(frame, ordinal)
 }
 
 func storage_count() -> u32 {

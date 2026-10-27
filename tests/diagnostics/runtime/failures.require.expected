@@ -1,0 +1,4 @@
+panic: requirement `doubled(2) == 5` failed (`doubled(2)` is 4)
+  --> tests/diagnostics/runtime/failures.n:137:17
+backtrace:
+  at run (tests/diagnostics/runtime/failures.n:137:17)

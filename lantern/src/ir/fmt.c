@@ -3,44 +3,6 @@
 
 #include "private/ir/internal.h"
 
-static void escape(core_buffer_t *b, core_string_t s)
-{
-    for (size_t i = 0; s.data && i < s.u8_bytes; i++) {
-        unsigned char c = (unsigned char)s.data[i];
-        switch (c) {
-        case '"':
-            core_buffer_puts(b, "\\\"");
-            break;
-        case '\\':
-            core_buffer_puts(b, "\\\\");
-            break;
-        case '\n':
-            core_buffer_puts(b, "\\n");
-            break;
-        case '\t':
-            core_buffer_puts(b, "\\t");
-            break;
-        case '\r':
-            core_buffer_puts(b, "\\r");
-            break;
-        default:
-            if (c < 0x20 || c == 0x7f) {
-                core_buffer_printf(b, "\\u%04x", c);
-            }
-            else {
-                core_buffer_append(b, &s.data[i], 1);
-            }
-        }
-    }
-}
-
-void ir_quote(core_buffer_t *b, core_string_t s)
-{
-    core_buffer_puts(b, "\"");
-    escape(b, s);
-    core_buffer_puts(b, "\"");
-}
-
 void ir_lit_into(core_buffer_t *b, ir_lit_t v)
 {
     static const char HEX[] = "0123456789abcdef";

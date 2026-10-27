@@ -1,3 +1,0 @@
-func start(value: int) -> nil {
-    require value == 0
-}

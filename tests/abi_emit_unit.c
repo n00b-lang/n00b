@@ -112,8 +112,8 @@ check_type_descriptor_storage(void)
         CORE_STRING_STATIC("value"));
     assert(module_scope);
     module_scope->scope_tag = CORE_STRING_STATIC("module");
-    parse_tree_t node = {0};
-    core_tree_node_value(&node).end = 1;
+    parse_tree_t *node = parse_tree_new_node((parse_nt_node_t){0});
+    core_tree_node_value(node).end = 1;
     parse_token_info_t *token = parse_token_new();
     parse_token_set_origin(token, PARSE_TOKEN_SOURCE);
     parse_token_set_span(token, 0, sizeof(source_text) - 1);
@@ -123,7 +123,7 @@ check_type_descriptor_storage(void)
     assert(tokens);
     parse_sym_entry_t *symbol = parse_symtab_add(symbols,
         CORE_STRING_STATIC("value"), CORE_STRING_STATIC("selected_type"),
-        PARSE_SYM_VARIABLE, &node);
+        PARSE_SYM_VARIABLE, node);
     assert(symbol);
     symbol->type = typespec;
     n00bb_abi_type_index_t *index = n00bb_abi_type_index_new(runtime);
@@ -471,10 +471,10 @@ check_empty_unit(core_string_t triple, uint32_t target_id,
     }
     assert(found_module && found_source);
 
-    parse_tree_t declaration_node = {0};
+    parse_tree_t *declaration_node = parse_tree_new_node((parse_nt_node_t){0});
     assert(parse_symtab_add(symbols, CORE_STRING_STATIC("value"),
         CORE_STRING_STATIC("declared"), PARSE_SYM_VARIABLE,
-        &declaration_node));
+        declaration_node));
     n00bb_abi_packed_tables_t rejected = {0};
     uint8_t *rejected_object = nullptr;
     size_t rejected_bytes = 0;
@@ -508,5 +508,8 @@ main(void)
         S("__n00b_strings"));
     check_empty_unit(S("x86_64-windows"), N00BB_ABI_TARGET_X86_64_WINDOWS,
         (core_string_t){}, S(".n00b$M"), (core_string_t){}, S(".rdata$S"));
+    check_empty_unit(S("arm64-linux"), N00BB_ABI_TARGET_ARM64_LINUX,
+        (core_string_t){}, S(".data.rel.ro.n00b_meta"), (core_string_t){},
+        S(".rodata.n00b_strings"));
     return 0;
 }

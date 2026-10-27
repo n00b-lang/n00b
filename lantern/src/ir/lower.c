@@ -470,6 +470,14 @@ ir_lower_suppress_emit(ir_lower_context_t *context, parse_tree_t *node)
     return true;
 }
 
+bool
+ir_lower_emit_suppressed(ir_lower_context_t *context, parse_tree_t *node)
+{
+    ir_lower_tree_state_t *state = lower_active_tree(context);
+    return state && node
+        && core_dict_contains(&state->suppressed_emits, node);
+}
+
 static bool
 lower_bind_symbol(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                   ir_value_t *value, ir_local_t *local,
@@ -772,8 +780,8 @@ lower_failure_text(ir_lower_context_t *context, ir_diagcode_t code,
 {
     if (context && context->diagnostics) {
         ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics, code,
-                                              span, (core_string_t){});
-        ir_diag_message(diagnostic, context->diagnostics, message);
+                                              span, IR_NO_LABEL);
+        ir_diag_message(diagnostic, context->diagnostics, IR_DETAIL(message));
     }
     return (ir_lower_result_t){.status = IR_LOWER_FAILED};
 }
@@ -1061,6 +1069,20 @@ lower_builtin_action(ir_lower_context_t *context, core_string_t action,
         if (!value)
             return lower_failure(context, IR_DIAG_INTERNAL, span,
                                  "could not emit a local read");
+        th_type *option_item = result_type && value->type
+            ? th_option_item(th_resolve(value->type)) : nullptr;
+        if (option_item && ir_type_eq(context->module, option_item,
+                                      result_type)) {
+            ir_instr_t *narrowed = ir_lower_emit_instruction(context,
+                IR_OP_OPTION_GET, span);
+            if (!narrowed
+                || !ir_lower_set_temp_dest(context, narrowed,
+                       CORE_STRING_STATIC("__narrowed_"), result_type)
+                || !ir_instr_operand_value(narrowed, value))
+                return lower_failure(context, IR_DIAG_INTERNAL, span,
+                                     "could not read a narrowed option");
+            value = narrowed->dest;
+        }
         bool open_function_reference = result_type
             && value->kind == IR_VAL_FUNC
             && th_kind_of(th_resolve(value->type)) == TH_FUNCTION
@@ -1116,18 +1138,18 @@ lower_builtin_action(ir_lower_context_t *context, core_string_t action,
                                 CORE_STRING_STATIC("f64"))
                  || core_string_eq(literal_annotation->op_kind,
                                    CORE_STRING_STATIC("float"))) {
-            char *digits = malloc(text.u8_bytes + 1);
+            char *digits = core_alloc_array(char, text.u8_bytes + 1);
             size_t length = 0;
-            for (size_t i = 0; digits && i < text.u8_bytes; i++)
+            for (size_t i = 0; i < text.u8_bytes; i++)
                 if (text.data[i] != '_') digits[length++] = text.data[i];
             double value = 0.0;
             size_t consumed = 0;
-            bool parsed = digits
-                && core_string_parse_f64(core_string_borrow(digits, length),
-                                         &value, &consumed)
+            bool parsed =
+                core_string_parse_f64(core_string_borrow(digits, length),
+                                      &value, &consumed)
                 && consumed == length;
             emitted = parsed && ir_instr_operand_float(instruction, value);
-            free(digits);
+            core_free(digits);
         }
         if (!emitted)
             return lower_failure(context, IR_DIAG_TYPE_LITERAL, span,
@@ -1392,9 +1414,9 @@ static bool lower_tree_discard_post(parse_visit_t *visit)
     }
     ir_diag_t *diagnostic = ir_diag_begin(state->context->diagnostics,
         IR_DIAG_UNUSED_RESULT, span_of_tree(state->context, expression),
-        CORE_STRING_STATIC("this value"));
+        IR_NO_LABEL);
     ir_diag_message(diagnostic, state->context->diagnostics,
-        CORE_STRING_STATIC("the value of this expression is never used"));
+        IR_MESSAGE(UNUSED_RESULT));
     return true;
 }
 

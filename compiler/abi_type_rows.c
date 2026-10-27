@@ -12,8 +12,6 @@
 #include "enum_value.h"
 #include "flagset_value.h"
 #include "signature_typevars.h"
-
-core_list_decl(uint32_t);
 core_list_decl(n00b_abi_type_argument_v1);
 
 static bool

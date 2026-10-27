@@ -1,0 +1,2 @@
+tests/diagnostics/packages/private_export/facade.n00b:2:5: error N00B-M0017: `hidden` is private to its module and cannot be exported
+  tests/diagnostics/packages/private_export/facade.n00b:5:15: note: `hidden` is declared here

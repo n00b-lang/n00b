@@ -1,0 +1,42 @@
+N00BB_SETTING(BUILD_JOBS, "build", "jobs", INT, "4", RANGE(0, 128))
+N00BB_SETTING(BUILD_DEFINES, "build", "defines", STRINGS, "")
+N00BB_SETTING(BUILD_RELEASE, "build", "release", BOOL, "false")
+N00BB_SETTING(BUILD_TARGET, "build", "target", CHOICE, "host",
+    ENVIRONMENT("N00B_TARGET"),
+    .choices = CORE_STRING_STATIC(
+        "host arm64-macos x86_64-linux arm64-linux x86_64-windows"))
+N00BB_SETTING(BUILD_NATIVE, "build", "native", BOOL, NATIVE_DEFAULT)
+N00BB_SETTING(BUILD_LTO, "build", "lto", BOOL, "false")
+N00BB_SETTING(BUILD_PANIC_TRAP, "build", "panic_trap", BOOL, "false")
+N00BB_SETTING(BUILD_UNCHECKED_WIDE_NARROWING, "build",
+    "unchecked_wide_narrowing", BOOL, "false")
+N00BB_SETTING(PATHS_CONTRACT_DIRS, "paths", "contract_dirs", PATHS, "")
+N00BB_SETTING(PATHS_PATH, "paths", "path", PATHS, "", ENVIRONMENT("N00B_PATH"))
+N00BB_SETTING(PATHS_CACHE, "paths", "cache", PATH, "",
+    ENVIRONMENT("N00B_CACHE"))
+N00BB_SETTING(TOOLS_CLANG, "tools", "clang", PROGRAM, "",
+    ENVIRONMENT("N00B_CLANG"))
+N00BB_SETTING(TOOLS_CARGO, "tools", "cargo", PROGRAM, "",
+    ENVIRONMENT("N00B_CARGO"))
+N00BB_SETTING(WARNINGS_PACKAGE, "warnings", "package", BOOL, "false")
+N00BB_SETTING(SYNTAX_PREFERENCES, "syntax", "preferences", STRINGS, "")
+N00BB_SETTING(SYNTAX_WARNINGS, "syntax", "warnings", BOOL, "true")
+N00BB_SETTING(DIAGNOSTICS_TERSE, "diagnostics", "terse", BOOL, "false",
+    ENVIRONMENT_MATCH("N00B_DIAGNOSTICS", "terse"))
+N00BB_SETTING(DIAGNOSTICS_HINTS, "diagnostics", "hints", BOOL, "true")
+N00BB_SETTING(DIAGNOSTICS_COLOR, "diagnostics", "color", CHOICE, "auto",
+    ENVIRONMENT_MATCH("NO_COLOR", "never"),
+    .choices = CORE_STRING_STATIC("auto always never"))
+N00BB_SETTING(FMT_ASCII_TAGS, "fmt", "ascii_tags", BOOL, "false")
+N00BB_SETTING(TOOLCHAIN_KEEP, "toolchain", "keep", INT, "1",
+    RANGE(0, INT64_MAX))
+N00BB_SETTING(DEV_PROFILE_COMPILE, "dev", "profile_compile", BOOL, "false",
+    ENVIRONMENT("N00BB_PROFILE_COMPILE"))
+N00BB_SETTING(DEV_CACHE_LOG, "dev", "cache_log", PATH, "",
+    ENVIRONMENT("N00BB_CACHE_LOG"))
+N00BB_SETTING(DEV_NO_OBJECT_CACHE, "dev", "no_object_cache", BOOL, "false",
+    ENVIRONMENT("N00BB_NO_OBJECT_CACHE"))
+N00BB_SETTING(DEV_NO_NATIVE_CACHE, "dev", "no_native_cache", BOOL, "false",
+    ENVIRONMENT("N00BB_NO_NATIVE_CACHE"))
+N00BB_SETTING(DEV_NO_PACKAGE_CACHE, "dev", "no_package_cache", BOOL, "false",
+    ENVIRONMENT("N00BB_NO_PACKAGE_CACHE"))

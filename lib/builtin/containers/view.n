@@ -1,3 +1,5 @@
+import panic
+
 record View {
     items:    Array['T]
     start_ix: int
@@ -17,7 +19,10 @@ func __slice(self: Array['T], start_ix: int, end_ix: int) -> View['T] {
 }
 
 func __read(self: View['T], index: int) -> 'T {
-    require index >= 0 and index < self.end_ix - self.start_ix
+    let length: int = self.end_ix - self.start_ix
+    if index < 0 or index >= length {
+        panic.index_out_of_range(index, cast[uint] length, "a view")
+    }
     return self.items[self.start_ix + index]
 }
 

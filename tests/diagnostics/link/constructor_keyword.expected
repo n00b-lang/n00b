@@ -1,0 +1,1 @@
+tests/diagnostics/link/constructor_keyword.n:9:17: error N00B-T0024: none of the 1 visible `__init` functions of `Holder` accepts these arguments

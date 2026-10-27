@@ -1,0 +1,49 @@
+tests/diagnostics/coercion/borrow.n:10:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:12:5: note: the borrowed string is stored or passed where it may be kept
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:18:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:19:5: note: the borrowed string is the failure value here
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:22:9: warning N00B-S0006: the value assigned to `n` here is never read
+tests/diagnostics/coercion/borrow.n:29:19: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:29:5: note: the borrowed string is stored into a field, element or container here
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:44:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:45:19: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:60:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:61:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:73:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:74:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:91:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:92:18: note: this indirect or unknown call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:98:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:101:5: note: the borrow is still live around this loop
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:115:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:118:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:128:13: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:129:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:139:31: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:139:26: note: the borrowed string is stored into a field, element or container here
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:155:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:156:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:162:21: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:165:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:171:5: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:171:5: note: the borrowed string is returned here
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:176:15: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:176:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`
+tests/diagnostics/coercion/borrow.n:181:24: error N00B-S0066: this `Buffer` is used as a `string` for longer than the borrow is safe
+  tests/diagnostics/coercion/borrow.n:182:5: note: this call may write the borrowed Buffer
+  help: consume the buffer with `to_string(b)`, or keep it and copy with `to_string(buffer_from_string(b))`

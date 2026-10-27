@@ -5,20 +5,21 @@
 #include "core.h"
 #include "lib/buffer.h"
 #include "lib/dict.h"
+#include "lib/list.h"
 #include "lib/string.h"
 
 typedef struct core_diagnostics_t core_diagnostics_t;
+typedef struct core_translation_unit_t *core_tu_ptr_t;
+core_list_decl(core_tu_ptr_t);
 
 typedef void (*core_module_user_data_free_fn)(void *data);
 
-/* user_data is opaque to Lantern; release invokes user_data_free if set. */
 typedef struct {
     core_string_t identifier;
     void *user_data;
     core_module_user_data_free_fn user_data_free;
 } core_module_spec_t;
 
-/* Initialization owns path/contents; release also invokes the data cleanup. */
 typedef struct {
     core_string_t path;
     core_buffer_t *contents;
@@ -28,17 +29,15 @@ typedef struct {
     bool has_identity;
 } core_source_file_t;
 
-/* TU initialization copies module identity and takes the source file. */
 typedef struct core_translation_unit_t {
     core_module_spec_t module;
     core_source_file_t source;
-    struct core_translation_unit_t **imports;
-    size_t import_count;
-    size_t import_capacity;
+    core_list_t(core_tu_ptr_t) imports;
     core_dict_t imports_by_unit;
     core_dict_t imports_by_module;
     uint64_t import_revision;
     bool imports_finalized;
+    bool import_conflict;
     void *user_data;
     core_module_user_data_free_fn user_data_free;
     core_diagnostics_t *diagnostics;
@@ -53,10 +52,6 @@ typedef enum {
 typedef core_module_resolve_status_t (*core_module_resolve_fn)(
     void *context, const core_module_spec_t *module, core_source_file_t *out);
 
-/* Discovery enumerates source-module candidates for a logical module that
- * could not be resolved directly. Candidate specs are borrowed for the
- * duration of emit. Language frontends decide whether a candidate actually
- * declares the requested logical module. */
 typedef bool (*core_module_discovery_emit_fn)(
     void *context, const core_module_spec_t *candidate);
 typedef core_module_resolve_status_t (*core_module_discover_fn)(
@@ -104,12 +99,8 @@ core_diagnostics_t *core_translation_unit_diagnostics(
     core_translation_unit_t *unit);
 bool core_translation_unit_has_fatal_diagnostics(
     const core_translation_unit_t *unit);
-/* Imported TUs are borrowed; their owner must keep them alive as long as the
- * importing TU may use these references. Re-adding the same TU is ignored;
- * a distinct TU with the same module identity is diagnosed and rejected. */
 bool core_translation_unit_add_import(core_translation_unit_t *unit,
-                                      core_translation_unit_t *imported);
-size_t core_translation_unit_import_count(
+                                      core_translation_unit_t *imported);size_t core_translation_unit_import_count(
     const core_translation_unit_t *unit);
 core_translation_unit_t *core_translation_unit_import(
     const core_translation_unit_t *unit, size_t index);
@@ -117,13 +108,9 @@ core_translation_unit_t *core_translation_unit_find_import(
     const core_translation_unit_t *unit, core_string_t module);
 uint64_t core_translation_unit_import_revision(
     const core_translation_unit_t *unit);
-/* Finalized imports are immutable; adding another import reports a fatal TU
- * diagnostic and fails. Finalize only after import discovery is complete. */
 bool core_translation_unit_finalize_imports(core_translation_unit_t *unit);
 bool core_translation_unit_imports_finalized(
     const core_translation_unit_t *unit);
-/* Visits reachable import-graph SCCs dependency-first. The member array is
- * borrowed for the duration of the callback. */
 bool core_translation_unit_visit_sccs(core_translation_unit_t *root,
                                       core_translation_unit_scc_fn callback,
                                       void *context);

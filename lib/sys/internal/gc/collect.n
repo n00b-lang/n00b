@@ -2,6 +2,7 @@ import internal.abi
 import internal.gc.core
 import internal.gc.alloc
 import internal.gc.finalize
+import internal.gc.frames
 import internal.gc.handshake
 import internal.gc.heap
 import internal.gc.los
@@ -110,8 +111,20 @@ func scan_words(marker: Ref[internal.gc.core.Marker], low: Ref[byte],
     }
 }
 
+const frame_record_words: uint = 2
+const frame_row_whole:    u32  = 1
+
+func context_pc(snapshot: Ref[internal.threads.Thread_Context]) -> uint {
+    let pc: Ref[byte]? = snapshot.pc
+    if pc != nil {
+        return __abi_ref_address(pc.get())
+    }
+    return 0
+}
+
 func scan_stack(marker: Ref[internal.gc.core.Marker], sp: Ref[byte],
-                       fp: Ref[byte]?, high: Ref[byte], interrupted: bool) {
+                       fp: Ref[byte]?, pc: uint, high: Ref[byte],
+                       interrupted: bool) {
     var low: Ref[byte] = sp
     if interrupted {
         let red_zone: uint = internal.threads.stack_red_zone_bytes()
@@ -119,36 +132,48 @@ func scan_stack(marker: Ref[internal.gc.core.Marker], sp: Ref[byte],
             low = __gc_byte_offset(sp, -cast[i128](red_zone))
         }
     }
-    let limit: uint       = __abi_ref_address(high)
-    let width: uint       = stack_word_width()
-    var start: Ref[byte]  = low
-    var frame: Ref[byte]? = fp
-    # The captured top frame may include a frameless native callee.
-    var first: bool = true
+    let limit:          uint       = __abi_ref_address(high)
+    let width:          uint       = stack_word_width()
+    let chained:        bool       = internal.threads.frame_pointer_chain()
+    var start:          Ref[byte]  = low
+    var frame:          Ref[byte]? = fp
+    var return_address: uint       = pc
+    var callee_mapped:  bool       = false
     while frame != nil {
         let address: uint = __abi_ref_address(frame.get())
-        if address < __abi_ref_address(start) or address >= limit or
-            address % width != 0 or limit - address < width {
+        let frame_info: Ref[internal.abi.Native_Frame_Record]? =
+            internal.gc.frames.frame_for(return_address)
+        var record_offset: i128 = 0
+        if frame_info != nil {
+            record_offset = cast[i128](frame_info.get().record_offset)
+        } elif !chained {
             break
         }
+        let record_end: i128 = cast[i128](address) + record_offset +
+            cast[i128](frame_record_words * width)
+        if address < __abi_ref_address(start) or address >= limit or
+            address % width != 0 or record_offset < 0 or
+            record_offset % cast[i128](width) != 0 or
+            record_end > cast[i128](limit) {
+            break
+        }
+        let frame_record: Ref[byte] = __gc_byte_offset(frame.get(), record_offset)
+        let caller:       uint      = stack_word_at(frame_record)
+        var ceiling:      uint      = limit
+        if caller > address and caller < limit {
+            ceiling = caller
+        }
         var mapped: bool = false
-        if !first {
-            let frame_info: Ref[internal.abi.Native_Frame_Record]? =
-                internal.abi.native_frame_at(frame.get(), start, high)
-            if frame_info != nil {
-                mapped = scan_native_frame(marker, start, frame.get(),
-                                           frame_info.get())
-            }
+        if frame_info != nil and (frame_info.get().flags & frame_row_whole) == 0 {
+            mapped = scan_native_frame(marker, start, frame.get(), frame_record,
+                                       ceiling, frame_info.get())
         }
-        if mapped {
-            scan_callee_saved_spills(marker, start, frame.get())
-        }
-        if !mapped {
+        if !mapped or !callee_mapped {
             scan_words(marker, start, frame.get())
         }
-        first = false
+        callee_mapped = mapped
         start = frame.get()
-        let caller: uint = stack_word_at(frame.get())
+        return_address = stack_word_at(__gc_byte_offset(frame_record, width))
         if caller <= address or caller >= limit {
             break
         }
@@ -159,42 +184,24 @@ func scan_stack(marker: Ref[internal.gc.core.Marker], sp: Ref[byte],
     }
 }
 
-const callee_saved_spill_words: uint = 18
-
-func scan_callee_saved_spills(marker: Ref[internal.gc.core.Marker],
-                              low: Ref[byte], fp: Ref[byte]) {
-    let window: uint = callee_saved_spill_words * stack_word_width()
-    let span:   uint = __abi_ref_address(fp) - __abi_ref_address(low)
-    if span <= window {
-        scan_words(marker, low, fp)
-    }
-    else {
-        scan_words(marker, __gc_byte_offset(fp, -cast[i128](window)), fp)
-    }
-}
-
 func scan_native_frame(marker: Ref[internal.gc.core.Marker], low: Ref[byte],
-                       fp: Ref[byte],
+                       fp: Ref[byte], frame_record: Ref[byte], ceiling: uint,
                        frame_info: Ref[internal.abi.Native_Frame_Record]) -> bool {
-    let span:  uint = __abi_ref_address(fp) - __abi_ref_address(low)
-    let width: uint = stack_word_width()
-    var index: u32  = 0
+    let base:       i128 = cast[i128](__abi_ref_address(fp))
+    let floor:      i128 = cast[i128](__abi_ref_address(low))
+    let saved:      i128 = cast[i128](__abi_ref_address(frame_record))
+    let saved_end:  i128 = saved + cast[i128](frame_record_words * stack_word_width())
+    var index:      u32  = 0
     while index < frame_info.root_count {
-        let offset: i32 = internal.abi.native_frame_root_offset(frame_info, index)
-        if offset >= 0 {
+        let root:  Ref[internal.abi.Native_Frame_Root] = internal.abi.native_frame_root(frame_info, index)
+        let first: i128 = base + cast[i128](root.offset)
+        let last:  i128 = first + cast[i128](root.bytes)
+        if first < floor or last > cast[i128](ceiling) or
+            (first < saved_end and last > saved) {
             return false
         }
-        let distance: uint = cast[uint](-cast[i128](offset))
-        if distance < width or distance > span {
-            return false
-        }
-        index += 1
-    }
-    index = 0
-    while index < frame_info.root_count {
-        let offset: i32       = internal.abi.native_frame_root_offset(frame_info, index)
-        let slot:   Ref[byte] = __gc_byte_offset(fp, offset)
-        internal.gc.mark.mark_ambiguous(marker, stack_word_at(slot))
+        let slot: Ref[byte] = __gc_byte_offset(fp, root.offset)
+        scan_words(marker, slot, __gc_byte_offset(slot, cast[uint](root.bytes)))
         marker.frame_slots += 1
         index += 1
     }
@@ -248,12 +255,12 @@ func mark_thread_roots(marker: Ref[internal.gc.core.Marker],
     }
     let high: Ref[byte] = required_stack_high(mutator)
     if mutator.thread_id == internal.threads.thread_id() {
-        internal.threads.thread_capture_self(ref mutator.captured)
+        __os_thread_capture_self(ref mutator.captured)
         scan_context_registers(marker, ref mutator.captured)
         let self_sp: Ref[byte]? = mutator.captured.sp
         if self_sp != nil {
             scan_stack(marker, self_sp.get(), mutator.captured.fp,
-                high, false)
+                context_pc(ref mutator.captured), high, false)
         } else {
             require false
         }
@@ -262,7 +269,7 @@ func mark_thread_roots(marker: Ref[internal.gc.core.Marker],
         let blocked_sp: Ref[byte]? = mutator.blocked_sp
         if blocked_sp != nil {
             scan_stack(marker, blocked_sp.get(), mutator.captured.fp,
-                high, false)
+                context_pc(ref mutator.captured), high, false)
         } else {
             require false
         }
@@ -271,7 +278,7 @@ func mark_thread_roots(marker: Ref[internal.gc.core.Marker],
         scan_context_registers(marker, ref mutator.captured)
         let stopped_sp: Ref[byte]? = mutator.captured.sp
         if stopped_sp != nil {
-            scan_stack(marker, stopped_sp.get(), mutator.captured.fp,
+            scan_stack(marker, stopped_sp.get(), mutator.captured.fp, 0,
                 high, true)
         } else {
             require false

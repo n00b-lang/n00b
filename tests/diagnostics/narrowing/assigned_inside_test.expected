@@ -1,0 +1,3 @@
+tests/diagnostics/narrowing/assigned_inside_test.n:5:16: error N00B-T0516: `w` is `int?` and may be `nil`, so it cannot be used with `+`
+  tests/diagnostics/narrowing/assigned_inside_test.n:4:9: note: `w` is assigned here, after the `nil` test
+  help: use `w` before assigning it, or test it against `nil` again

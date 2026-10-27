@@ -1,0 +1,3 @@
+tests/diagnostics/front/missing_import.n:1:8: error N00B-M0001: cannot find module `nosuchmodule`
+  note: searched the toolchain library
+  note: searched the current directory

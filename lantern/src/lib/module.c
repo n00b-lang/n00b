@@ -1,13 +1,12 @@
 #include "lib/module.h"
 
 #include "lib/alloc.h"
-#include "lib/diagnostic.h"
+#include "lib/buffer.h"
+#include "diag/diagnostics.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
+#include "lib/link_unit.h"
 #include "lib/list.h"
-
-typedef core_translation_unit_t *core_tu_ptr_t;
-core_list_decl(core_tu_ptr_t);
 
 typedef struct {
     core_list_t(core_tu_ptr_t) *units;
@@ -228,7 +227,7 @@ core_translation_unit_release(core_translation_unit_t *unit)
     core_diagnostics_free(unit->diagnostics);
     core_dict_free(&unit->imports_by_unit);
     core_dict_free(&unit->imports_by_module);
-    core_free(unit->imports);
+    core_list_free(unit->imports);
     core_module_spec_release(&unit->module);
     core_source_file_release(&unit->source);
     *unit = (core_translation_unit_t){0};
@@ -260,7 +259,8 @@ core_translation_unit_diagnostics(core_translation_unit_t *unit)
 bool
 core_translation_unit_has_fatal_diagnostics(const core_translation_unit_t *unit)
 {
-    return unit && core_diagnostics_has_fatal(unit->diagnostics);
+    return unit && (unit->import_conflict
+                    || core_diagnostics_has_fatal(unit->diagnostics));
 }
 
 bool
@@ -269,26 +269,39 @@ core_translation_unit_add_import(core_translation_unit_t *unit,
 {
     if (!unit || !imported) return false;
     if (unit->imports_finalized) {
-        core_diagnostics_report(unit->diagnostics, unit, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("LANTERN-L0004"),
-            CORE_STRING_STATIC("cannot add an import after translation unit imports are finalized"));
+        core_link_report_internal(unit->diagnostics, unit,
+            (core_diag_location_t){0},
+            CORE_STRING_STATIC("recording the modules a file imports"),
+            CORE_STRING_STATIC("cannot add an import after translation unit "
+                               "imports are finalized"));
         return false;
     }
     if (core_dict_contains(&unit->imports_by_unit, imported)) return true;
-    if (core_dict_contains(&unit->imports_by_module,
-                           &imported->module.identifier)) {
-        core_diagnostics_report(unit->diagnostics, unit, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("LANTERN-L0001"),
-            CORE_STRING_STATIC("translation unit imports distinct sources with the same module identity"));
+    bool found = false;
+    core_translation_unit_t *existing = core_dict_get(
+        &unit->imports_by_module, &imported->module.identifier, &found);
+    if (found) {
+        core_string_t module = imported->module.identifier;
+        core_string_t first = existing
+            ? core_source_file_path(&existing->source) : (core_string_t){0};
+        core_string_t second = core_source_file_path(&imported->source);
+        core_buffer_t message = {0};
+        core_buffer_printf(&message, "module `%.*s` is imported from two "
+                           "different files, `%.*s` and `%.*s`",
+                           (int)module.u8_bytes, module.data,
+                           (int)first.u8_bytes, first.data,
+                           (int)second.u8_bytes, second.data);
+        unit->import_conflict = true;
+        core_link_report_problem(unit->diagnostics, unit,
+            (core_diag_location_t){0}, CORE_LINK_PROBLEM_SAME_MODULE,
+            core_buffer_string(&message));
+        core_buffer_release(&message);
+        core_diag_help(unit->diagnostics, CORE_STRING_STATIC(
+            "a module name must name one file; rename or remove one of "
+            "them, or check N00B_PATH for a second copy"));
         return false;
     }
-    if (unit->import_count == unit->import_capacity) {
-        size_t capacity = unit->import_capacity ? unit->import_capacity * 2 : 4;
-        unit->imports = core_realloc(unit->imports,
-                                     sizeof(*unit->imports) * capacity);
-        unit->import_capacity = capacity;
-    }
-    unit->imports[unit->import_count++] = imported;
+    core_list_push(unit->imports, imported);
     core_dict_add(&unit->imports_by_unit, imported, imported);
     core_dict_add(&unit->imports_by_module,
                   &imported->module.identifier, imported);
@@ -299,14 +312,15 @@ core_translation_unit_add_import(core_translation_unit_t *unit,
 size_t
 core_translation_unit_import_count(const core_translation_unit_t *unit)
 {
-    return unit ? unit->import_count : 0;
+    return unit ? unit->imports.len : 0;
 }
 
 core_translation_unit_t *
 core_translation_unit_import(const core_translation_unit_t *unit,
                              size_t index)
 {
-    return unit && index < unit->import_count ? unit->imports[index] : nullptr;
+    return unit && index < unit->imports.len ? unit->imports.data[index]
+                                             : nullptr;
 }
 
 core_translation_unit_t *

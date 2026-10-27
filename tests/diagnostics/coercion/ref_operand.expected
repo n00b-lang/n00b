@@ -1,0 +1,2 @@
+tests/diagnostics/coercion/ref_operand.n:3:14: error N00B-T0518: `+` needs operands of the same type, but `r` is `Ref[int]` and `1` is an integer
+  help: read the referenced value with `.__value`

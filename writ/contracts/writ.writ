@@ -1,5 +1,6 @@
 use "writ.draft.writ"
 include_path "include"
+include_path "../lantern/include"
 
 handle Session = *writ_session_t release writ_session_free thread_affine
 
@@ -45,6 +46,11 @@ refine writ_diag_render {
 refine writ_unit_new {
     session: Session
     -> ?writ_unit_t with session
+}
+
+refine writ_unit_add_contract_dir {
+    unit: inout *writ_unit_t
+    error ret != WRIT_OK via ret
 }
 
 refine writ_unit_add_source {

@@ -17,14 +17,10 @@ bool   parse_grammar_report_undefined(const parse_grammar_t *g, FILE *out);
 parse_nonterm_t *parse_nonterm(parse_grammar_t *g, core_string_t name);
 parse_nonterm_t *parse_find_nonterm(parse_grammar_t *g, core_string_t name);
 int64_t         parse_nonterm_id(parse_nonterm_t *nt);
-/* Returns the production index whose entire right-hand side is one
- * nonterminal child, or -1 when no such production exists. */
 int32_t parse_grammar_single_child_rule(parse_grammar_t *g,
                                         core_string_t parent,
                                         core_string_t child);
 int64_t         parse_register_terminal(parse_grammar_t *g, core_string_t name);
-/* Unlike parse_register_terminal(), this always assigns a named-token ID,
- * including when `name` contains exactly one character. */
 int64_t         parse_register_named_terminal(parse_grammar_t *g,
                                               core_string_t name);
 

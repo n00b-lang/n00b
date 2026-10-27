@@ -1,9 +1,12 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "compiler_link.h"
+#include "diagnostics.h"
 #include "signature_typevars.h"
 #include "compiler_tu.h"
+#include "driver.h"
 #include "record_layout_request.h"
 #include "enum_value.h"
 #include "flagset_value.h"
@@ -185,17 +188,12 @@ register_unit_array_shape_metadata(parse_grammar_t *grammar,
              ok && symbol; symbol = symbol->next_in_scope) {
             ok = register_array_shape_for_symbol(grammar, unit, environment,
                                                   symbol, false);
-            if (!ok) {
-                core_buffer_t message = {0};
-                core_buffer_printf(&message,
-                    "could not export array-shape metadata for '%.*s'",
+            if (!ok)
+                n00bb_internal_error(core_translation_unit_diagnostics(unit),
+                    unit, (core_diag_location_t){},
+                    "exporting the module interface",
+                    "could not export array-shape metadata for `%.*s`",
                     (int)symbol->name.u8_bytes, symbol->name.data);
-                core_diagnostics_report(core_translation_unit_diagnostics(
-                    unit), unit, CORE_DIAG_FATAL,
-                    CORE_STRING_STATIC("N00BB-L0062"),
-                    core_string_borrow(message.data, message.byte_len));
-                core_buffer_release(&message);
-            }
         }
     for (size_t i = 0; ok && i < types.len; i++)
         for (parse_sym_entry_t *symbol = types.data[i]->first_in_scope;
@@ -203,17 +201,14 @@ register_unit_array_shape_metadata(parse_grammar_t *grammar,
             if (is_named_type_declaration(grammar, symbol)) {
                 ok = register_array_shape_for_symbol(grammar, unit,
                     environment, symbol, true);
-                if (!ok) {
-                    core_buffer_t message = {0};
-                    core_buffer_printf(&message,
-                        "could not export array-shape metadata for type '%.*s'",
-                        (int)symbol->name.u8_bytes, symbol->name.data);
-                    core_diagnostics_report(core_translation_unit_diagnostics(
-                        unit), unit, CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-L0062"),
-                        core_string_borrow(message.data, message.byte_len));
-                    core_buffer_release(&message);
-                }
+                if (!ok)
+                    n00bb_internal_error(
+                        core_translation_unit_diagnostics(unit), unit,
+                        (core_diag_location_t){},
+                        "exporting the module interface",
+                        "could not export array-shape metadata for type "
+                        "`%.*s`", (int)symbol->name.u8_bytes,
+                        symbol->name.data);
             }
     core_list_free(values);
     core_list_free(types);
@@ -706,9 +701,9 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
     }
     core_list_free(type_module_scopes);
     if (!ok)
-        core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0063"),
-            CORE_STRING_STATIC("failed while exporting named type declarations"));
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){}, "exporting the module interface",
+            "could not export the named type declarations");
 
     for (parse_scope_t *scope = state->annotations->symtab->all_scopes;
          ok && scope; scope = scope->all_next) {
@@ -832,9 +827,9 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
     }
     if (!ok && !core_diagnostics_failed(
             core_translation_unit_diagnostics(unit)))
-        core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0064"),
-            CORE_STRING_STATIC("failed while exporting trait contracts"));
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){}, "exporting the module interface",
+            "could not export the trait contracts");
 
     for (size_t s = 0; ok && s < module_level_scopes.len; s++) {
         for (parse_sym_entry_t *symbol = module_level_scopes.data[s]->first_in_scope;
@@ -1111,16 +1106,13 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
             core_buffer_release(&qualified);
             if (!ok && !core_diagnostics_failed(
                     core_translation_unit_diagnostics(unit))) {
-                core_buffer_t message = {0};
-                core_buffer_printf(&message,
-                    "failed to register %.*s for '%.*s'",
+                n00bb_internal_error(
+                    core_translation_unit_diagnostics(unit), unit,
+                    (core_diag_location_t){},
+                    "exporting the module interface",
+                    "could not export the %.*s of `%.*s`",
                     (int)export_failure.u8_bytes, export_failure.data,
                     (int)symbol->name.u8_bytes, symbol->name.data);
-                core_diagnostics_report(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0066"),
-                    core_string_borrow(message.data, message.byte_len));
-                core_buffer_release(&message);
             }
         }
     }
@@ -1129,10 +1121,12 @@ register_unit_environment(parse_grammar_t *grammar, th_env *environment,
         ok = register_unit_array_shape_metadata(grammar, unit, environment);
         if (!ok && !core_diagnostics_failed(
                 core_translation_unit_diagnostics(unit)))
-            core_diagnostics_report(core_translation_unit_diagnostics(unit),
-                unit, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0065"),
-                CORE_STRING_STATIC("failed while exporting array-shape metadata"));
+            n00bb_internal_error(core_translation_unit_diagnostics(unit),
+                unit, (core_diag_location_t){},
+                "exporting the module interface",
+                "could not export the array-shape metadata");
     }
+    if (ok) n00bb_record_declaration_sites(grammar, unit);
     return ok;
 }
 
@@ -1685,6 +1679,15 @@ package_diagnostic(core_translation_unit_t *unit, parse_tree_t *node,
         CORE_DIAG_ERROR, code, message, link_source_location(node));
 }
 
+static void
+package_error(core_translation_unit_t *unit, parse_tree_t *node,
+              n00bb_diag_t id, n00bb_text_t text, n00bb_args_t args)
+{
+    n00bb_report(core_translation_unit_diagnostics(unit), unit, id,
+                 node ? link_source_location(node) : (core_diag_location_t){},
+                 text, args);
+}
+
 static parse_scope_t *
 package_import_scope(core_translation_unit_t *importer, core_string_t name,
                      core_translation_unit_t *imported)
@@ -1722,10 +1725,10 @@ initialize_unit_package_interfaces(core_translation_unit_t *unit)
         n00bb_package_declaration_t *package =
             &state->package_declarations.data[p];
         if (!package_name_owned_by_unit(package->name, unit)) {
-            package_diagnostic(unit, package->node,
-                CORE_STRING_STATIC("N00BB-M0004"),
-                CORE_STRING_STATIC(
-                    "a package manifest must be declared inside a named source package"));
+            package_error(unit, package->node,
+                N00B_DIAG_MANIFEST_OUTSIDE_PACKAGE,
+                N00B_TEXT_PACKAGE_IS_DECLARED_OUTSIDE_A,
+                N00BB_ARGS(ARG_TEXT(package->name)));
             return false;
         }
         if (!package->scope) {
@@ -1743,6 +1746,25 @@ initialize_unit_package_interfaces(core_translation_unit_t *unit)
     return true;
 }
 
+static core_string_t
+leading_segment(core_string_t name)
+{
+    int64_t separator = core_string_find_byte(name, '.');
+    return separator < 0 ? name
+        : core_string_slice(name, 0, (size_t)separator);
+}
+
+static void
+warn_package_other_owner(core_translation_unit_t *unit,
+                         n00bb_package_declaration_t *package)
+{
+    core_string_t owner = leading_segment(unit->module.identifier);
+    if (core_string_eq(leading_segment(package->name), owner)) return;
+    package_error(unit, package->node, N00B_DIAG_PACKAGE_OTHER_OWNER,
+        N00B_TEXT_PACKAGE_IS_DECLARED_BY_A,
+        N00BB_ARGS(ARG_TEXT(package->name), ARG_TEXT(owner)));
+}
+
 bool
 validate_package_interfaces(n00bb_link_analysis_t *analysis)
 {
@@ -1753,6 +1775,7 @@ validate_package_interfaces(n00bb_link_analysis_t *analysis)
         for (size_t p = 0; p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
+            warn_package_other_owner(unit, package);
             for (size_t ou = 0; ou <= u; ou++) {
                 n00bb_tu_state_t *other_state = tu_state(
                     analysis->units.data[ou]);
@@ -1762,10 +1785,18 @@ validate_package_interfaces(n00bb_link_analysis_t *analysis)
                     if (core_string_eq(
                             other_state->package_declarations.data[op].name,
                             package->name)) {
-                        package_diagnostic(unit, package->node,
-                            CORE_STRING_STATIC("N00BB-M0001"),
-                            CORE_STRING_STATIC(
-                                "a package interface may have only one declaration"));
+                        package_error(unit, package->node,
+                            N00B_DIAG_PACKAGE_DECLARED_TWICE,
+                            N00B_TEXT_PACKAGE_IS_DECLARED_MORE_THAN,
+                            N00BB_ARGS(ARG_TEXT(package->name)));
+                        parse_tree_t *first = other_state
+                            ->package_declarations.data[op].node;
+                        n00bb_report_secondary(
+                            core_translation_unit_diagnostics(unit),
+                            analysis->units.data[ou],
+                            link_source_location(first),
+                            N00B_TEXT_PACKAGE_IS_FIRST_DECLARED_HERE,
+                            N00BB_ARGS(ARG_TEXT(package->name)));
                         return false;
                     }
             }
@@ -1774,6 +1805,84 @@ validate_package_interfaces(n00bb_link_analysis_t *analysis)
     return true;
 }
 
+
+static n00bb_package_declaration_t *
+declared_package(n00bb_link_analysis_t *analysis, core_string_t name,
+                 core_translation_unit_t **unit_out)
+{
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
+        for (size_t p = 0; state && p < state->package_declarations.len; p++)
+            if (core_string_eq(state->package_declarations.data[p].name,
+                               name)) {
+                *unit_out = analysis->units.data[u];
+                return &state->package_declarations.data[p];
+            }
+    }
+    return nullptr;
+}
+
+static parse_sym_entry_t *
+external_name_in(core_translation_unit_t *unit,
+                 n00bb_package_declaration_t *package, core_string_t name)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    if (!symtab || !package->scope) return nullptr;
+    static const core_string_t namespaces[] = {
+        CORE_STRING_STATIC("type"),
+        CORE_STRING_STATIC(N00BB_MODULE_VIEW_NAMESPACE),
+    };
+    parse_sym_entry_t *entry = n00bb_scope_named_next(package->scope, name,
+                                                      nullptr);
+    for (size_t i = 0; !entry && i < sizeof(namespaces)
+                                     / sizeof(namespaces[0]); i++) {
+        parse_scope_t *scope = parse_symtab_scope_in_namespace(symtab,
+            package->scope, namespaces[i]);
+        entry = scope ? n00bb_scope_named_next(scope, name, nullptr)
+                      : nullptr;
+    }
+    return entry;
+}
+
+bool
+reject_ambiguous_external_names(n00bb_link_analysis_t *analysis)
+{
+    bool ok = true;
+    for (size_t u = 0; u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        n00bb_tu_state_t *state = tu_state(unit);
+        for (size_t p = 0; state && p < state->package_declarations.len;
+             p++) {
+            n00bb_package_declaration_t *package =
+                &state->package_declarations.data[p];
+            int64_t dot = core_string_rfind_byte(package->name, '.');
+            if (dot < 0) continue;
+            core_string_t parent_name = core_string_slice(package->name, 0,
+                                                          (size_t)dot);
+            core_string_t member = core_string_slice(package->name,
+                (size_t)dot + 1, package->name.u8_bytes - (size_t)dot - 1);
+            core_translation_unit_t *parent_unit = nullptr;
+            n00bb_package_declaration_t *parent = declared_package(analysis,
+                parent_name, &parent_unit);
+            parse_sym_entry_t *taken = parent
+                ? external_name_in(parent_unit, parent, member) : nullptr;
+            if (!taken) continue;
+            package_error(unit, package->node,
+                N00B_DIAG_EXTERNAL_NAME_AMBIGUOUS,
+                N00B_TEXT_IS_BOTH_A_SUBPACKAGE_AND,
+                N00BB_ARGS(ARG_TEXT(package->name), ARG_TEXT(parent_name)));
+            if (taken->decl_node)
+                n00bb_report_secondary(core_translation_unit_diagnostics(unit),
+                    parent_unit, link_source_location(taken->decl_node),
+                    N00B_TEXT_IS_EXPORTED_HERE,
+                    N00BB_ARGS(ARG_TEXT(member)));
+            ok = false;
+        }
+    }
+    return ok;
+}
 
 static parse_sym_entry_t *
 existing_export_binding(parse_scope_t *scope, core_string_t name,
@@ -2042,10 +2151,13 @@ resolve_one_package_export(core_translation_unit_t *unit,
     }
     if (source_unit && prefix_end == source.u8_bytes) {
         if (export->renamed) {
-            package_diagnostic(unit, export->node,
-                CORE_STRING_STATIC("N00BB-M0007"),
-                CORE_STRING_STATIC(
-                    "a filesystem module export cannot be renamed"));
+            package_error(unit, export->node,
+                N00B_DIAG_EXPORT_FILESYSTEM_RENAME,
+                N00B_TEXT_MODULE_COMES_FROM_A_FILE,
+                N00BB_ARGS(ARG_TEXT(export->source_name)));
+            n00bb_report_help(core_translation_unit_diagnostics(unit),
+                N00B_TEXT_REMOVE_THE_AS_PART_OF,
+                N00BB_NO_ARGS);
             return -1;
         }
         export->module_export = true;
@@ -2117,9 +2229,15 @@ resolve_one_package_export(core_translation_unit_t *unit,
     }
     symbol = canonical_symbol(symbol);
     if (!symbol_is_exportable(symbol)) {
-        package_diagnostic(unit, export->node,
-            CORE_STRING_STATIC("N00BB-M0008"),
-            CORE_STRING_STATIC("private declarations cannot be exported"));
+        package_error(unit, export->node, N00B_DIAG_EXPORT_PRIVATE,
+            N00B_TEXT_IS_PRIVATE_TO_ITS_MODULE,
+            N00BB_ARGS(ARG_TEXT(export->source_name)));
+        core_diag_location_t declared =
+            n00bb_symbol_declaration_location(symbol);
+        if (declared.has_location)
+            n00bb_report_secondary(core_translation_unit_diagnostics(unit),
+                source_unit, declared, N00B_TEXT_IS_DECLARED_HERE,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
         return -1;
     }
     export->source_unit = source_unit;
@@ -2201,10 +2319,9 @@ report_unresolved_package_exports(core_translation_unit_t *unit)
                 &state->package_declarations.data[p].exports.data[e];
             if (!export->symbol && !export->module_export
                 && !export->litmod_alias)
-                package_diagnostic(unit, export->node,
-                    CORE_STRING_STATIC("N00BB-M0009"),
-                    CORE_STRING_STATIC(
-                        "package export source cannot be resolved"));
+                package_error(unit, export->node, N00B_DIAG_EXPORT_NOT_FOUND,
+                    N00B_TEXT_THIS_PACKAGE_HAS_NO_MODULE,
+                    N00BB_ARGS(ARG_TEXT(export->source_name)));
         }
 }
 
@@ -2235,10 +2352,15 @@ reject_duplicate_exports(core_translation_unit_t *unit)
                 if (!exports_same_symbol(&package->exports.data[earlier],
                                          &package->exports.data[later]))
                     continue;
-                package_diagnostic(unit, package->exports.data[later].node,
-                    CORE_STRING_STATIC("N00BB-M0013"),
-                    CORE_STRING_STATIC(
-                        "this symbol is already exported to the same destination"));
+                n00bb_package_export_t *repeated = &package->exports.data[later];
+                package_error(unit, repeated->node, N00B_DIAG_EXPORT_DUPLICATE,
+                    N00B_TEXT_IS_ALREADY_EXPORTED,
+                    N00BB_ARGS(ARG_TEXT(repeated->source_name)));
+                n00bb_report_secondary(core_translation_unit_diagnostics(unit),
+                    nullptr,
+                    link_source_location(package->exports.data[earlier].node),
+                    N00B_TEXT_IT_IS_FIRST_EXPORTED_HERE,
+                    N00BB_NO_ARGS);
                 valid = false;
                 break;
             }
@@ -2323,10 +2445,11 @@ populate_package_interfaces(n00bb_link_analysis_t *analysis)
                          && granted_to(export->source_unit,
                                        canonical_symbol(export->symbol),
                                        package->name))) {
-                    package_diagnostic(unit, export->node,
-                        CORE_STRING_STATIC("N00BB-M0010"),
-                        CORE_STRING_STATIC(
-                            "a manifest can export only symbols from its own source package"));
+                    core_string_t foreign = n00bb_package_namespace(owner);
+                    package_error(unit, export->node, N00B_DIAG_EXPORT_FOREIGN,
+                        N00B_TEXT_BELONGS_TO_PACKAGE_SO_THIS,
+                        N00BB_ARGS(ARG_TEXT(export->source_name),
+                                   ARG_TEXT(foreign)));
                     return false;
                 }
             }
@@ -2339,17 +2462,12 @@ static void
 report_implicit_package_name(core_translation_unit_t *unit,
                              parse_sym_entry_t *existing, core_string_t name)
 {
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "'%.*s' cannot be declared here because it names a package this module uses",
-        (int)name.u8_bytes, name.data);
-    core_diag_location_t location = existing->decl_node
-        ? link_source_location(existing->decl_node)
-        : (core_diag_location_t){0};
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-M0012"),
-        core_string_borrow(message.data, message.byte_len), location);
-    core_buffer_release(&message);
+    package_error(unit, existing->decl_node, N00B_DIAG_NAME_SHADOWS_PACKAGE,
+        N00B_TEXT_CANNOT_BE_DECLARED_HERE_BECAUSE,
+        N00BB_ARGS(ARG_TEXT(name)));
+    n00bb_report_help(core_translation_unit_diagnostics(unit),
+        N00B_TEXT_RENAME_THE_DECLARATION_OR_IMPORT,
+        N00BB_NO_ARGS);
 }
 
 static bool

@@ -1,8 +1,0 @@
-import sort
-
-package sort {
-    export sort.sort
-    export sort.sort_by
-    export sort.order
-    export sort.natural_compare
-}

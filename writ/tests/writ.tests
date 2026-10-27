@@ -1,0 +1,110 @@
+api-session	dev,asan	2	cd "$SRC" && "$BUILD/tests/api-session"
+host-embedded	dev,asan	2	"$BUILD/tests/host-embedded" "$SRC"
+core-internals	dev	2	"$BUILD/tests/core-internals"
+host-isolation	dev,unix	2	"$SRC/tests/host/isolation.sh" "$CC" libwrit.a "$SRC/include" "$BUILD/tests/host-isolation" "-I$SRC/../lantern/include"
+host-isolation-shared	dev,unix	2	DYLD_LIBRARY_PATH="$BUILD" LD_LIBRARY_PATH="$BUILD" "$SRC/tests/host/isolation.sh" "$CC" "$WRIT_SHARED" "$SRC/include" "$BUILD/tests/host-isolation-shared" "-I$SRC/../lantern/include"
+headers-c11	dev	2	"$CC" -std=c11 -pedantic-errors -Werror -fsyntax-only -x c "-I$SRC/include" "-I$SRC/../lantern/include" "$SRC/tests/host/headers.h"
+headers-c++17	dev	2	"$CC" -std=c++17 -pedantic-errors -Werror -fsyntax-only -x c++ "-I$SRC/include" "-I$SRC/../lantern/include" "$SRC/tests/host/headers.h"
+model-header-current	dev	2	python3 "$SRC/tools/gen_model.py" "$SRC/defs/model_fields.def" --check "$SRC/include/writ/model.h"
+keywords-are-identifiers	dev	2	"$BUILD/writ" parse tests/keywords.writ
+spec-examples	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/spec/examples.out" -- "$(command -v python3)" "$SRC/tests/spec_examples.py" "$BUILD/writ" dsl.md call-plan.md
+fmt-roundtrip	pr	6	python3 "$SRC/tests/fmt_roundtrip.py" "$BUILD/writ" "$SRC/dsl.md" "$SRC/call-plan.md" "$SRC/tests/libc/libc.writ" "$SRC/contracts/zlib.writ" "$SRC/contracts/zlib/$HOST_TRIPLE.writ" "$SRC/tests/skeleton/zlib.writ" "$SRC/ffi-spec.md" "$SRC/contracts/resharp.writ" "$SRC/tests/resharp/resharp.derived.writ" "$SRC/tests/spans/spans.writ" "$SRC/profiles/c.writ" "$SRC/profiles/rust.writ" "$SRC/profiles/n00b.writ" "$SRC/tests/bind/kv.export.writ" "$SRC/tests/embedded/zlib_search.writ" "$SRC/tests/embedded/export.writ" "$SRC/tests/embedded/refine.writ" "$SRC/tests/unions/unions.writ" "$SRC/tests/check/union.writ"
+fuzz-parse	pr,asan	5	"$BUILD/tests/fuzz-parse" -runs=3000 -max_len=2048 "-seed_inputs=$SRC/tests/fuzz/duplicate_records.writ,$SRC/tests/fuzz/directory_use.writ,$SRC/tests/libc/libc.writ,$SRC/tests/zlib/zlib.writ,$SRC/tests/skeleton/zlib.writ,$SRC/tests/resharp/resharp.derived.writ,$SRC/tests/bind/kv.n00b.writ,$SRC/tests/embedded/zlib_search.writ,$SRC/tests/embedded/export.writ,$SRC/tests/embedded/e0510.writ,$SRC/tests/unions/unions.writ,$SRC/contracts/zlib/$HOST_TRIPLE.writ"
+grammar-audit	dev	2	"$BUILD/tests/grammar-audit"
+zlib-plans	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/plan/zlib.full.plan" -- ./writ --platform aarch64-apple-darwin plan tests/zlib/zlib.writ
+libc-plans	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/plan/libc.full.plan" -- ./writ --platform aarch64-apple-darwin plan tests/libc/libc.writ
+lower-golden	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/lower/zlib.json" -- ./writ --platform aarch64-apple-darwin lower tests/skeleton/zlib.writ
+plan-golden	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/plan/zlib.plan" -- ./writ plan tests/skeleton/zlib.writ
+fix-return-span	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/return_span.fixed" --fails -- ./writ --fix check tests/check/return_span.writ
+fix-binding-raw	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0508.fixed" --fails -- ./writ --fix bind tests/bind/unknown.writ tests/bind/e0508.writ --profile profiles/n00b.writ
+check-unknown_type	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/unknown_type.out" --fails -- ./writ check tests/check/unknown_type.writ
+check-not_pure	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/not_pure.out" --fails -- ./writ check tests/check/not_pure.writ
+check-bad_phase	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/bad_phase.out" --fails -- ./writ check tests/check/bad_phase.writ
+check-out_unbounded	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/out_unbounded.out" --fails -- ./writ check tests/check/out_unbounded.writ
+check-syntax	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/syntax.out" --fails -- ./writ check tests/check/syntax.writ
+check-duplicate	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/duplicate.out" --fails -- ./writ check tests/check/duplicate.writ
+check-reinterpret	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/reinterpret.out" --fails -- ./writ check tests/check/reinterpret.writ
+check-view_domain	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/view_domain.out" --fails -- ./writ check tests/check/view_domain.writ
+check-return_span	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/return_span.out" --fails -- ./writ check tests/check/return_span.writ
+check-record_none	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/record_none.out" --fails -- ./writ check tests/check/record_none.writ
+check-userdata	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/userdata.out" --fails -- ./writ check tests/check/userdata.writ
+check-keywords	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/keywords.out" --fails -- ./writ check tests/check/keywords.writ
+check-policy	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/policy.out" --fails -- ./writ check tests/check/policy.writ
+check-events	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/events.out" --fails -- ./writ check tests/check/events.writ
+check-union	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/check/union.out" --fails -- ./writ check tests/check/union.writ
+zlib-import	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/contracts/zlib/$HOST_TRIPLE.writ" -- ./writ import --library zlib --header zlib.h --link z -o - --only zlibVersion --only crc32 --only adler32 --only compressBound --only compress2 --only uncompress --only deflate --only deflateEnd --only deflateInit --only deflateInit_ --only inflate --only inflateEnd --only inflateInit --only inflateInit_
+writ-contract	dev	2	cd "$SRC" && DYLD_LIBRARY_PATH="$BUILD" LD_LIBRARY_PATH="$BUILD" "$BUILD/writ" verify contracts/writ.writ --binary "$BUILD/$WRIT_SHARED"
+writ-contract-draft	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/contracts/writ.draft.writ" -- ./writ import --library writ --header writ/writ.h --header writ/model.h --header writ/gen.h --header writ/toolchain.h --link writ -I include -I ../lantern/include -o -
+zlib-verify	dev	2	"$BUILD/writ" verify "$SRC/tests/zlib/zlib.writ"
+libc-verify	dev	2	"$BUILD/writ" verify "$SRC/tests/libc/libc.writ"
+unions-import	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/unions/import.writ" -- ./writ import --library unions --header unions.h -I tests/unions -o -
+unions-verify	dev	2	cd "$SRC" && "$BUILD/writ" verify tests/unions/tagged.writ
+libc-conformance	dev,asan	2	"$BUILD/tests/libc-conformance"
+libc-roundtrip	dev,asan	2	"$BUILD/tests/libc-roundtrip"
+zlib-conformance	dev,asan	2	"$BUILD/tests/zlib-conformance"
+zlib-roundtrip	dev,asan	2	"$BUILD/tests/zlib-roundtrip"
+callbacks-conformance	dev,asan	2	"$BUILD/tests/callbacks-conformance"
+callbacks-roundtrip	dev,asan	2	"$BUILD/tests/callbacks-roundtrip"
+keywords-conformance	dev,asan	2	"$BUILD/tests/keywords-conformance"
+policy-conformance	dev,asan	2	"$BUILD/tests/policy-conformance"
+unions-conformance	dev,asan	2	"$BUILD/tests/unions-conformance"
+bind-zlib.n00b	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/zlib.n00b.out" -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/zlib.n00b.writ --profile profiles/n00b.writ --language n00b
+bind-resharp.n00b	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/resharp.n00b.out" -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind contracts/resharp.writ tests/bind/resharp.n00b.writ --profile profiles/n00b.writ
+bind-kv.n00b	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/kv.n00b.out" -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/bind/kv.writ tests/bind/kv.n00b.writ --profile profiles/n00b.writ
+bind-kv.export	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/kv.export.out" -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/bind/kv.writ tests/bind/kv.export.writ --profile profiles/n00b.writ
+bind-e0501	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0501.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0501.writ --profile profiles/n00b.writ
+bind-e0502	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0502.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0502.writ --profile profiles/n00b.writ
+bind-e0503	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0503.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0503.writ --profile profiles/n00b.writ
+bind-e0504	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0504.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/bind/kv.writ tests/bind/e0504.writ --profile profiles/n00b.writ
+bind-e0505	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0505.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0505.writ --profile profiles/n00b.writ
+bind-e0506	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0506.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0506.writ --profile profiles/n00b.writ
+bind-e0507	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0507.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0507.writ --profile profiles/n00b.writ
+bind-e0508	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0508.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/bind/unknown.writ tests/bind/e0508.writ --profile profiles/n00b.writ
+bind-e0509	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0509.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/bind/kv.writ tests/bind/e0509.writ --profile profiles/n00b.writ
+bind-e0510	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0510.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0510.writ --profile profiles/n00b.writ --language n00b
+bind-e0511	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0511.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0511.writ --profile profiles/n00b.writ
+bind-e0512	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0512.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/zlib.n00b.writ --profile tests/bind/e0512.profile.writ
+bind-e0513	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/e0513.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/zlib/zlib.writ tests/bind/e0513.writ --profile profiles/n00b.writ
+bind-load_dynamic	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/load_dynamic.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind contracts/resharp.writ tests/bind/load_dynamic.writ --profile profiles/n00b.writ
+bind-callback_as	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/bind/callback_as.out" --fails -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups bind tests/callbacks/callbacks.writ tests/bind/callback_as.writ --profile profiles/n00b.writ
+embedded-zlib_path	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/zlib_path.out" -- ./writ --platform aarch64-apple-darwin --embedded n00b bind tests/embedded/zlib_path.writ --profile profiles/n00b.writ
+embedded-zlib_search	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/zlib_search.out" -- ./writ --platform aarch64-apple-darwin --embedded n00b --contract-dir contracts bind tests/embedded/zlib_search.writ --profile profiles/n00b.writ
+embedded-defaults	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/defaults.out" -- ./writ --platform aarch64-apple-darwin --embedded n00b bind tests/embedded/defaults.writ --profile profiles/n00b.writ
+embedded-export	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/export.out" -- ./writ --platform aarch64-apple-darwin --embedded n00b bind tests/embedded/export.writ --profile profiles/n00b.writ
+embedded-refine	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/refine.out" -- ./writ --platform aarch64-apple-darwin --embedded n00b --contract-dir contracts lower tests/embedded/refine.writ
+embedded-e0510	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/e0510.out" --fails -- ./writ --platform aarch64-apple-darwin --embedded n00b --contract-dir contracts bind tests/embedded/e0510.writ --profile profiles/n00b.writ
+embedded-e0514_module	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/e0514_module.out" --fails -- ./writ --platform aarch64-apple-darwin --embedded n00b --contract-dir contracts bind tests/embedded/e0514_module.writ --profile profiles/n00b.writ
+embedded-e0514_none	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/e0514_none.out" --fails -- ./writ --platform aarch64-apple-darwin --embedded n00b bind tests/embedded/e0514_none.writ --profile profiles/n00b.writ
+embedded-e0514_two	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/e0514_two.out" --fails -- ./writ --platform aarch64-apple-darwin --embedded n00b --contract-dir contracts bind tests/embedded/e0514_two.writ --profile profiles/n00b.writ
+embedded-e0003_path	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/e0003_path.out" --fails -- ./writ --platform aarch64-apple-darwin --embedded n00b bind tests/embedded/e0003_path.writ --profile profiles/n00b.writ
+embedded-e0003_search	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/e0003_search.out" --fails -- ./writ --platform aarch64-apple-darwin --embedded n00b --contract-dir contracts bind tests/embedded/e0003_search.writ --profile profiles/n00b.writ
+embedded-use_broken	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/use_broken.out" --fails -- ./writ --platform aarch64-apple-darwin --embedded n00b bind tests/embedded/use_broken.writ --profile profiles/n00b.writ
+embedded-zlib_env	dev	2	WRIT_CONTRACT_PATH="$SRC/tests/missing:$SRC/contracts" python3 "$SRC/tests/run_golden.py" "$SRC/tests/embedded/zlib_env.out" -- ./writ --platform aarch64-apple-darwin --embedded n00b bind tests/embedded/zlib_env.writ --profile profiles/n00b.writ
+gen-n00b-zlib	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/zlib.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/zlib.writ --profile profiles/n00b.writ -o -
+gen-n00b-resharp	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/resharp.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/resharp.writ --profile profiles/n00b.writ -o -
+gen-n00b-kv	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/kv.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/kv.writ --profile profiles/n00b.writ -o -
+gen-n00b-kv_export	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/kv_export.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/kv_export.writ --profile profiles/n00b.writ -o -
+gen-n00b-float_record	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/float_record.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/float_record.writ --profile profiles/n00b.writ -o -
+gen-n00b-callbacks	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/callbacks.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/callbacks.writ --profile profiles/n00b.writ -o -
+gen-n00b-keywords	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/keywords.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/keywords.writ --profile profiles/n00b.writ -o -
+gen-n00b-policy	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/policy.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/policy.writ --profile profiles/n00b.writ -o -
+gen-n00b-policy_fixed	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/policy_fixed.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/policy_fixed.writ --profile profiles/n00b.writ -o -
+gen-n00b-unions	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/unions.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/unions.writ --profile profiles/n00b.writ -o -
+gen-n00b-bake	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/gen_n00b/bake.out" --stdout -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups --contract-dir contracts gen n00b --embedded tests/gen_n00b/bake.writ --profile profiles/n00b.writ -o -
+gen-n00b-compile	dev	2	python3 "$SRC/tests/gen_n00b/compile.py" ./writ "$CC" "$HOST_TRIPLE" "$SRC" zlib resharp kv_export float_record callbacks keywords policy policy_fixed unions
+resharp-derive	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/resharp/resharp.derived.writ" -- ./writ derive contracts/resharp.writ
+resharp-plans	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/plan/resharp.full.plan" -- ./writ --platform aarch64-apple-darwin --feature experimental_capture_groups plan contracts/resharp.writ
+resharp-transport-registry	dev	2	python3 "$SRC/tests/run_golden.py" "$SRC/tests/resharp/transport.registry.out" --stdout -- ./writ gen rust contracts/resharp.writ -o -
+resharp-import	pr,rust,serial	600	CARGO_TARGET_DIR="$BUILD/resharp-target" python3 "$SRC/tests/run_golden.py" "$SRC/contracts/resharp.writ" --stdout -- ./writ --feature experimental_capture_groups import --library resharp --crate resharp --rust "$RESHARP_ROOT/Cargo.toml" -o -
+resharp-transport-plain	pr,rust,serial	1800	python3 "$SRC/tests/resharp/transport.py" "$BUILD/writ" "$SRC" "$RESHARP_ROOT" "$BUILD/resharp-plain" "$CC" plain
+resharp-transport-features	pr,rust,serial	1800	python3 "$SRC/tests/resharp/transport.py" "$BUILD/writ" "$SRC" "$RESHARP_ROOT" "$BUILD/resharp-features" "$CC" features
+resharp-transport-miri	pr,rust,serial	1800	python3 "$SRC/tests/resharp/transport.py" "$BUILD/writ" "$SRC" "$RESHARP_ROOT" "$BUILD/resharp-miri" "$CC" miri
+spans-conformance	dev,asan	2	"$BUILD/tests/spans-conformance"
+check-alloc	dev	2	python3 "$SRC/tools/check_alloc.py" "$SRC/src"
+check-alloc-planted	dev,xfail	2	python3 "$SRC/tools/check_alloc.py" "$SRC/tests/enforce/alloc"
+check-containers	dev	2	python3 "$SRC/tools/check_containers.py" "$SRC/src"
+check-containers-planted	dev,xfail	2	python3 "$SRC/tools/check_containers.py" "$SRC/tests/enforce/containers"
+check-dupes	pr	4	python3 "$SRC/tools/dupes.py" "$SRC/src"
+check-dupes-planted	dev,xfail	2	python3 "$SRC/tools/dupes.py" "$SRC/tests/enforce/dupes"
+check-budget	dev	2	python3 "$SRC/tools/loc_budget.py" "$SRC/implementation.md" "$SRC/src"
+check-budget-planted	dev,xfail	2	python3 "$SRC/tools/loc_budget.py" "$SRC/tests/enforce/budget/plan.md" "$SRC/src"

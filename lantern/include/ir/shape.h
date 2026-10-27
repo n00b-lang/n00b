@@ -26,13 +26,9 @@ typedef enum : uint8_t {
 typedef struct {
     ir_shape_extent_kind_t kind;
     uint64_t static_value;
-    /* Borrowed source-language expression, retained before it has an IR value. */
     const void *expression;
-    /* Borrowed result in the full-comptime or runtime IR graph. */
     ir_value_t *value;
-    /* Borrowed full-comptime function that produces a deferred extent. */
     ir_func_t *producer;
-    /* Stable producer identity when the function is not resident locally. */
     core_string_t producer_identifier;
 } ir_shape_extent_t;
 
@@ -47,10 +43,8 @@ typedef enum : uint8_t {
 typedef struct {
     ir_shape_measure_kind_t kind;
     uint64_t static_value;
-    /* Optional symbolic expression when no IR graph value exists yet. */
     const void *expression;
     ir_value_t *value;
-    /* Borrowed full-comptime function producing this measure. */
     ir_func_t *producer;
 } ir_shape_measure_t;
 
@@ -81,7 +75,6 @@ bool ir_shape_set_stride(ir_shape_t *shape, uint32_t dimension,
                          ir_shape_measure_t stride);
 bool ir_shape_stride(const ir_shape_t *shape, uint32_t dimension,
                      ir_shape_measure_t *out);
-/* Project a nested sequence shape after consuming leading dimensions. */
 ir_shape_t *ir_shape_suffix(ir_ctx_t *ctx, const ir_shape_t *shape,
                             uint32_t dimensions);
 

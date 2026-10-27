@@ -1,0 +1,7 @@
+record Holder {
+    n: int
+}
+func __init(modify self: Holder, b: Buffer) {
+    self.n = 1
+}
+let h: Holder = new[Holder]("x")

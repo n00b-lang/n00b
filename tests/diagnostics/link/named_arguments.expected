@@ -1,0 +1,6 @@
+tests/diagnostics/link/named_arguments.n:5:19: error N00B-T0001: `add` takes 2 arguments, but this call passes 3
+  tests/diagnostics/link/named_arguments.n:1:6: note: `add` is declared here
+  help: remove the extra argument
+tests/diagnostics/link/named_arguments.n:10:25: error N00B-T0003: `area` has no parameter named `hieght`
+  help: did you mean `height`?
+  tests/diagnostics/link/named_arguments.n:6:6: note: `area` is declared here

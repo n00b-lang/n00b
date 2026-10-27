@@ -7,6 +7,19 @@
 
 #include "harness.h"
 #include "th/environment.h"
+#include "lib/os.h"
+#include "lib/buffer.h"
+
+static int temp_file(const char *prefix, core_string_t *path) {
+  core_string_t root = core_os_temp_root();
+  core_buffer_t stem = {0};
+  core_buffer_append_string(&stem, root);
+  core_buffer_printf(&stem, "/%s", prefix);
+  int fd = core_os_make_unique_file(core_buffer_string(&stem), path);
+  core_buffer_release(&stem);
+  core_free(root.data);
+  return fd;
+}
 
 #define S(x) CORE_STRING_STATIC(x)
 
@@ -318,9 +331,9 @@ static void test_kind_constraint_archive(void) {
                                  S("sized"), S("base"), TH_ENV_PUBLIC,
                                  th_bits(types, 8))
         && th_env_freeze(env));
-  char path[] = "/tmp/lantern-kind-env-XXXXXX";
-  core_string_t path_text = core_string_borrow(path, sizeof(path) - 1);
-  int fd = mkstemp(path);
+  core_string_t path_text = {0};
+  int fd = temp_file("lantern-kind-env-", &path_text);
+  char *path = core_string_to_cstr(path_text);
   if (fd >= 0) { close(fd); unlink(path); }
   core_object_archive_error_t error;
   bool saved = fd >= 0 && th_env_save(env, path_text, 0, &error);
@@ -554,9 +567,9 @@ static void test_trait_type_identity(void) {
                               S("constrained_type"), S("base"), S("base"),
                               TH_ENV_PUBLIC, constrained) &&
         th_env_freeze(environment));
-  char path[] = "/tmp/lantern-trait-type-XXXXXX";
-  core_string_t path_text = core_string_borrow(path, sizeof(path) - 1);
-  int fd = mkstemp(path);
+  core_string_t path_text = {0};
+  int fd = temp_file("lantern-trait-type-", &path_text);
+  char *path = core_string_to_cstr(path_text);
   if (fd >= 0) { close(fd); unlink(path); }
   core_object_archive_error_t error;
   bool saved = fd >= 0 && th_env_save(environment, path_text, 0, &error);
@@ -1978,10 +1991,9 @@ int main(void) {
             th_unify(source_check_types, source_method.error_type,
                      th_name(source_check_types, S("FetchError"))));
 
-  char image_path[] = "/tmp/lantern-th-env-XXXXXX";
-  core_string_t image_path_text =
-      core_string_borrow(image_path, sizeof(image_path) - 1);
-  int image_fd = mkstemp(image_path);
+  core_string_t image_path_text = {0};
+  int image_fd = temp_file("lantern-th-env-", &image_path_text);
+  char *image_path = core_string_to_cstr(image_path_text);
   check("temporary environment image path is available", image_fd >= 0);
   if (image_fd >= 0) {
     close(image_fd);
@@ -2779,10 +2791,9 @@ int main(void) {
             !th_env_replace_metadata(replacement_env,
                 TH_ENV_METADATA_ENVIRONMENT, S("phase"), S("result"), 1,
                 provisional_metadata, sizeof(provisional_metadata)));
-  char replacement_path[] = "/tmp/lantern-th-meta-XXXXXX";
-  core_string_t replacement_path_text =
-      core_string_borrow(replacement_path, sizeof(replacement_path) - 1);
-  int replacement_fd = mkstemp(replacement_path);
+  core_string_t replacement_path_text = {0};
+  int replacement_fd = temp_file("lantern-th-meta-", &replacement_path_text);
+  char *replacement_path = core_string_to_cstr(replacement_path_text);
   if (replacement_fd >= 0) {
     close(replacement_fd);
     unlink(replacement_path);

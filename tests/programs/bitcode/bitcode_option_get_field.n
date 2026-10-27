@@ -1,9 +1,0 @@
-record Item {
-    value: u32
-}
-
-func set_value(item: Ref[Item]?) {
-    if item != nil {
-        item.get().value = 3
-    }
-}

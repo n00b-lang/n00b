@@ -1,0 +1,6 @@
+record Point {
+    x: int
+}
+
+let p: Point = (x = 1)
+require p.length() == 1

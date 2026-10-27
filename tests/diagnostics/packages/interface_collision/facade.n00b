@@ -1,0 +1,9 @@
+import item
+
+package interface_collision {
+    export item
+}
+
+package interface_collision.item {
+    export item.value
+}

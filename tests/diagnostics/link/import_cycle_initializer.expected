@@ -1,0 +1,2 @@
+tests/diagnostics/modules/import_cycle_initializer/beta.n:3:14: error N00B-S0051: modules `alpha`, `beta` read each other's globals while they initialize, so no initialization order works
+  help: move the read into a function that runs after initialization, or break the cycle between the modules

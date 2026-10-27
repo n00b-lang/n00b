@@ -1,0 +1,30 @@
+import ping
+import pong
+import first
+import second
+import third
+import forest
+import tree
+
+require ping.ping(5) == 0
+require pong.pong(4) == 0
+require ping.base == 10
+require pong.offset == 11
+require ping.after == 12
+
+require first.walk(7) == 7
+require third.weigh(first.token(4)) == 8
+require second.relay(5) == 5
+require third.depth == 3
+
+var grove = forest.make_forest(3)
+var oak = tree.make_tree(grove)
+
+require forest.first_label(oak) == 1
+require forest.holder().tree.label == 9
+require tree.depth(oak) == 1
+require tree.measured(grove) == 6
+require tree.paired(grove) == 6
+require forest.total() == 7
+require forest.planted.size == 4
+__fd_write(2, "ok")

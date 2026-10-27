@@ -1,3 +1,6 @@
+import panic
+import string.core
+
 callback Comparator {
     call (left: 'T, right: 'T) -> Comparison
     handler (left: 'T, right: 'T) -> Comparison
@@ -15,7 +18,10 @@ func natural_compare(left: 'T, right: 'T) -> Comparison where 'T : Comparable {
 
 inline func order(by: Comparator['T], left: 'T, right: 'T) -> Comparison {
     let result: Comparison = by.call(left, right)
-    require result != Comparison.unordered
+    if result == Comparison.unordered {
+        panic.panic("cannot sort values that compare as unordered, " +
+            "such as a NaN float")
+    }
     return result
 }
 

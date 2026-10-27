@@ -7,10 +7,6 @@
 #define ASSERT(expr) check(#expr, (expr))
 #define ASSERT_EQ(a, b) check(#a " == " #b, (a) == (b))
 
-// ============================================================================
-// Lifecycle
-// ============================================================================
-
 TEST(test_store_new_free) {
   core_csp_store_t *s = core_csp_store_new();
   ASSERT(s != nullptr);
@@ -59,10 +55,6 @@ TEST(test_singleton_var) {
 
   core_csp_store_free(s);
 }
-
-// ============================================================================
-// Constraint posting and propagation
-// ============================================================================
 
 TEST(test_eq_const) {
   core_csp_store_t *s = core_csp_store_new();
@@ -178,14 +170,7 @@ TEST(test_in) {
   core_csp_store_free(s);
 }
 
-// ============================================================================
-// Combined constraint propagation
-// ============================================================================
-
 TEST(test_combined_propagation) {
-  // X in [0, 100], Y in [0, 100]
-  // X < Y, Y = 50
-  // Expected: X in [0, 49], Y = 50
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(0, 100));
@@ -204,7 +189,6 @@ TEST(test_combined_propagation) {
 }
 
 TEST(test_chain_propagation) {
-  // X < Y < Z, Z = 5
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(0, 100));
@@ -224,10 +208,6 @@ TEST(test_chain_propagation) {
 
   core_csp_store_free(s);
 }
-
-// ============================================================================
-// Backtracking
-// ============================================================================
 
 TEST(test_backtracking) {
   core_csp_store_t *s = core_csp_store_new();
@@ -278,10 +258,6 @@ TEST(test_nested_backtracking) {
   core_csp_store_free(s);
 }
 
-// ============================================================================
-// Failure detection
-// ============================================================================
-
 TEST(test_failure_detection) {
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
@@ -289,7 +265,6 @@ TEST(test_failure_detection) {
   core_csp_var_id_t y =
       core_csp_new_var(s, CORE_STRING_STATIC("Y"), core_csp_dom_range(10, 20));
 
-  // X = Y should fail (disjoint domains).
   bool ok = core_csp_post_eq(s, x, y);
   ASSERT(!ok);
 
@@ -332,44 +307,31 @@ TEST(test_failed_provenance_rolls_back_with_constraint) {
   core_csp_store_free(s);
 }
 
-// ============================================================================
-// Bug fix regression tests
-// ============================================================================
-
 TEST(test_entailment_after_backtrack) {
-  // Bug fix 1a regression test:
-  // Post EQ, let it become entailed (both ground), pop, verify
-  // the constraint re-propagates correctly on the restored domains.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 10));
   core_csp_var_id_t y =
       core_csp_new_var(s, CORE_STRING_STATIC("Y"), core_csp_dom_range(1, 10));
 
-  // Post X = Y.
   core_csp_post_eq(s, x, y);
 
   core_csp_push_state(s);
 
-  // Narrow X to singleton 5 -> Y also narrows to 5 -> EQ is entailed.
   core_csp_post_eq_const(s, x, 5);
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, x)));
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, y)));
   ASSERT_EQ(core_result_get_ok(core_csp_var_value(s, x)), 5);
   ASSERT_EQ(core_result_get_ok(core_csp_var_value(s, y)), 5);
 
-  // Pop: X and Y restored to [1, 10].
   core_csp_pop_state(s);
   ASSERT(!core_result_get_ok(core_csp_var_is_ground(s, x)));
   ASSERT(!core_result_get_ok(core_csp_var_is_ground(s, y)));
 
-  // Now narrow X to 3 — Y should also narrow to 3 via the EQ
-  // constraint, which must NOT still be marked entailed.
   bool ok = core_csp_post_eq_const(s, x, 3);
   ASSERT(ok);
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, x)));
   ASSERT_EQ(core_result_get_ok(core_csp_var_value(s, x)), 3);
-  // The EQ constraint should have re-propagated.
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, y)));
   ASSERT_EQ(core_result_get_ok(core_csp_var_value(s, y)), 3);
 
@@ -377,28 +339,22 @@ TEST(test_entailment_after_backtrack) {
 }
 
 TEST(test_constraint_backtracking) {
-  // Bug fix 1b regression test:
-  // Push, post constraint, pop — verify the constraint is removed
-  // and doesn't affect further propagation.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 100));
 
   core_csp_push_state(s);
 
-  // Post X = 50 during this branch.
   core_csp_post_eq_const(s, x, 50);
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, x)));
   ASSERT_EQ(core_result_get_ok(core_csp_var_value(s, x)), 50);
 
-  // Pop: X restored to [1, 100], and the eq_const constraint is gone.
   core_csp_pop_state(s);
   ASSERT(!core_result_get_ok(core_csp_var_is_ground(s, x)));
   ASSERT_EQ(core_csp_dom_min(core_result_get_ok(core_csp_var_domain(s, x))), 1);
   ASSERT_EQ(core_csp_dom_max(core_result_get_ok(core_csp_var_domain(s, x))),
             100);
 
-  // Post X = 75 — should succeed because the old constraint is gone.
   bool ok = core_csp_post_eq_const(s, x, 75);
   ASSERT(ok);
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, x)));
@@ -408,8 +364,6 @@ TEST(test_constraint_backtracking) {
 }
 
 TEST(test_backtrack_with_ne_constraint) {
-  // More complex regression test: NE constraint posted in branch
-  // should not persist after pop.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 3));
@@ -418,21 +372,18 @@ TEST(test_backtrack_with_ne_constraint) {
 
   core_csp_push_state(s);
 
-  // Post X != Y: removes 2 from X -> X = {1, 3}.
   core_csp_post_ne(s, x, y);
   ASSERT(
       !core_csp_dom_contains(core_result_get_ok(core_csp_var_domain(s, x)), 2));
 
   core_csp_pop_state(s);
 
-  // X should be restored to {1, 2, 3}.
   ASSERT_EQ(
       (int64_t)core_csp_dom_size(core_result_get_ok(core_csp_var_domain(s, x))),
       3);
   ASSERT(
       core_csp_dom_contains(core_result_get_ok(core_csp_var_domain(s, x)), 2));
 
-  // Should be able to set X = 2 now (no NE constraint).
   bool ok = core_csp_post_eq_const(s, x, 2);
   ASSERT(ok);
   ASSERT_EQ(core_result_get_ok(core_csp_var_value(s, x)), 2);
@@ -440,13 +391,7 @@ TEST(test_backtrack_with_ne_constraint) {
   core_csp_store_free(s);
 }
 
-// ============================================================================
-// LINEAR constraint
-// ============================================================================
-
 TEST(test_linear_basic) {
-  // X + Y = 10, X in [0,10], Y in [0,10]
-  // Should narrow both to [0,10] (unchanged), but establish the constraint.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(0, 10));
@@ -459,7 +404,6 @@ TEST(test_linear_basic) {
   bool ok = core_csp_post_linear(s, vars, coeffs, 2, 10);
   ASSERT(ok);
 
-  // Both domains should still include 0..10.
   const core_csp_domain_t *dx = core_result_get_ok(core_csp_var_domain(s, x));
   const core_csp_domain_t *dy = core_result_get_ok(core_csp_var_domain(s, y));
   ASSERT_EQ(core_csp_dom_min(dx), 0);
@@ -471,11 +415,6 @@ TEST(test_linear_basic) {
 }
 
 TEST(test_linear_narrowing) {
-  // 2*X + 3*Y = 12, X in [0,10], Y in [0,10]
-  // X: ceil(12 - 3*10) / 2 .. floor(12 - 3*0) / 2 = ceil(-18/2)..floor(12/2) =
-  // 0..6
-  //    but also X >= 0, so [0, 6]
-  // Y: (12 - 2*6) / 3 .. (12 - 2*0) / 3 = 0/3..12/3 = 0..4
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(0, 10));
@@ -497,8 +436,6 @@ TEST(test_linear_narrowing) {
 }
 
 TEST(test_linear_infeasible) {
-  // X + Y = 100, X in [0,10], Y in [0,10]
-  // sum_hi = 20 < 100 → fail
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(0, 10));
@@ -515,9 +452,6 @@ TEST(test_linear_infeasible) {
 }
 
 TEST(test_linear_negative_coeffs) {
-  // X - Y = 0 (i.e., X = Y), X in [1,5], Y in [3,8]
-  // X: needs Y in [3,5] → X in [3,5]
-  // Y: needs X in [3,5] → Y in [3,5]
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 5));
@@ -541,9 +475,6 @@ TEST(test_linear_negative_coeffs) {
 }
 
 TEST(test_linear_with_label) {
-  // X + Y = 7, X in [1,5], Y in [1,5]
-  // After propagation: X in [2,5], Y in [2,5]
-  // Label should find a solution.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 5));
@@ -567,9 +498,6 @@ TEST(test_linear_with_label) {
 }
 
 TEST(test_linear_three_vars) {
-  // X + Y + Z = 6, all in [1,3]
-  // After propagation: each in [1,3] (sum_lo=3, sum_hi=9, rhs=6 in range)
-  // Label should find solutions like (1,2,3), (2,2,2), etc.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 3));
@@ -680,12 +608,7 @@ TEST(test_linear_matches_small_integer_enumeration) {
   ASSERT(matches);
 }
 
-// ============================================================================
-// ALLDIFF constraint
-// ============================================================================
-
 TEST(test_alldiff_basic) {
-  // Three vars in [1,3], all different → exactly one solution per permutation.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 3));
@@ -702,7 +625,6 @@ TEST(test_alldiff_basic) {
 }
 
 TEST(test_alldiff_infeasible) {
-  // Three vars in [1,2], all different → only 2 values for 3 vars → fail.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 2));
@@ -719,9 +641,6 @@ TEST(test_alldiff_infeasible) {
 }
 
 TEST(test_alldiff_pruning) {
-  // X in {1}, Y in {1,2}, Z in {1,2,3}, all different.
-  // X=1 is forced → Régin should prune 1 from Y and Z.
-  // Y forced to {2} → Z forced to {3}.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_singleton(1));
@@ -734,7 +653,6 @@ TEST(test_alldiff_pruning) {
   bool ok = core_csp_post_alldiff(s, vars, 3);
   ASSERT(ok);
 
-  // All should be ground after domain-consistent pruning.
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, x)));
   ASSERT_EQ(core_result_get_ok(core_csp_var_value(s, x)), 1);
   ASSERT(core_result_get_ok(core_csp_var_is_ground(s, y)));
@@ -746,7 +664,6 @@ TEST(test_alldiff_pruning) {
 }
 
 TEST(test_alldiff_with_label) {
-  // Four vars in [1,4], all different → 4! = 24 solutions.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t a =
       core_csp_new_var(s, CORE_STRING_STATIC("A"), core_csp_dom_range(1, 4));
@@ -768,7 +685,6 @@ TEST(test_alldiff_with_label) {
 }
 
 TEST(test_alldiff_single_var) {
-  // Edge case: alldiff with 1 var is trivially entailed.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 10));
@@ -809,8 +725,6 @@ TEST(test_alldiff_defers_broad_intervals) {
 }
 
 TEST(test_alldiff_partial_overlap) {
-  // X in [1,3], Y in [2,4], Z in [3,5], all different.
-  // Should be satisfiable. Label and verify.
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 3));
@@ -835,8 +749,6 @@ TEST(test_alldiff_partial_overlap) {
 }
 
 TEST(test_linear_plus_alldiff) {
-  // X + Y + Z = 6, all in [1,4], all different.
-  // Valid solutions: permutations of (1,2,3) only (sum=6).
   core_csp_store_t *s = core_csp_store_new();
   core_csp_var_id_t x =
       core_csp_new_var(s, CORE_STRING_STATIC("X"), core_csp_dom_range(1, 4));
@@ -854,7 +766,6 @@ TEST(test_linear_plus_alldiff) {
   ok = core_csp_post_alldiff(s, vars_diff, 3);
   ASSERT(ok);
 
-  // Should have exactly 3! = 6 solutions (permutations of 1,2,3).
   int64_t count = core_csp_label_all(s, nullptr, nullptr);
   ASSERT_EQ(count, 6);
 
@@ -888,10 +799,6 @@ TEST(test_label_all_visits_domains_over_64_values) {
       core_csp_dom_size(core_result_get_ok(core_csp_var_domain(store, 0))), 70);
   core_csp_store_free(store);
 }
-
-// ============================================================================
-// Test runner
-// ============================================================================
 
 static void run_tests(void) {
   RUN_TEST(test_store_new_free);

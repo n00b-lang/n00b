@@ -12,7 +12,6 @@ void core_csp_dom_free(core_csp_domain_t *domain);
 
 int64_t core_csp_dom_min(const core_csp_domain_t *domain);
 int64_t core_csp_dom_max(const core_csp_domain_t *domain);
-/* Returns the exact size when representable, otherwise saturates at INT64_MAX. */
 int64_t core_csp_dom_size(const core_csp_domain_t *domain);
 bool core_csp_dom_is_singleton(const core_csp_domain_t *domain);
 bool core_csp_dom_is_empty(const core_csp_domain_t *domain);

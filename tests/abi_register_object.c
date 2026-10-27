@@ -18,6 +18,8 @@ host_triple(void)
     return CORE_STRING_STATIC("arm64-macos");
 #elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
     return CORE_STRING_STATIC("x86_64-windows");
+#elif defined(__linux__) && defined(__aarch64__)
+    return CORE_STRING_STATIC("arm64-linux");
 #else
     return CORE_STRING_STATIC("x86_64-linux");
 #endif
@@ -172,12 +174,12 @@ main(int argc, char **argv)
         if (!core_object_section_at(object, object_bytes,
                 target.object_format, i, &sections[i])) continue;
         size_t bytes = sections[i].size;
-        assert(bytes && bytes <= SIZE_MAX - 63);
+        assert(bytes <= SIZE_MAX - 63);
         void *allocation = malloc(bytes + 63);
         assert(allocation);
         loaded[i] = (uint8_t *)(((uintptr_t)allocation + 63)
             & ~(uintptr_t)63);
-        memcpy(loaded[i], sections[i].bytes, bytes);
+        if (bytes) memcpy(loaded[i], sections[i].bytes, bytes);
     }
     for (uint32_t i = 1; i <= section_count; i++) {
         if (!loaded[i]) continue;

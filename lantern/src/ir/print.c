@@ -13,15 +13,20 @@
 #include "parse/tree_print.h"
 #include "scanner/token_stream.h"
 
-core_string_t ir_type_text(ir_module_t *m, th_type *t)
+core_string_t ir_types_text(th_ctx *types, th_type *t)
 {
-    if (!m || !t) {
+    if (!types || !t) {
         return CORE_STRING_STATIC("?");
     }
 
-    core_string_t s = th_print(ir_ctx_types(m->ctx), t);
+    core_string_t s = th_print(types, t);
 
     return s.data ? s : CORE_STRING_STATIC("?");
+}
+
+core_string_t ir_type_text(ir_module_t *m, th_type *t)
+{
+    return ir_types_text(m ? ir_ctx_types(m->ctx) : nullptr, t);
 }
 
 static void put_text(core_buffer_t *b, core_string_t s)
@@ -103,7 +108,7 @@ static void put_origin(core_buffer_t *b, const ir_origin_t *o)
         core_buffer_puts(b, ", ");
 
         if (o->agent.data) {
-            ir_quote(b, o->agent);
+            core_buffer_append_quoted(b, o->agent);
         }
         else {
             core_buffer_puts(b, "\"\"");
@@ -147,7 +152,7 @@ static void put_annots(core_buffer_t *b, ir_module_t *m, ir_annots_t *a)
             ir_lit_into(b, an->i);
             break;
         case IR_ANNOT_STR:
-            ir_quote(b, an->s.data ? an->s : CORE_STRING_STATIC(""));
+            core_buffer_append_quoted(b, an->s.data ? an->s : CORE_STRING_STATIC(""));
             break;
         case IR_ANNOT_TYPE:
             put_type(b, m, an->t);
@@ -236,7 +241,7 @@ static void put_operand(core_buffer_t *b, ir_module_t *m, const ir_operand_t *o)
         break;
 
     case IR_OPD_NAME:
-        ir_quote(b, o->name.data ? o->name : CORE_STRING_STATIC(""));
+        core_buffer_append_quoted(b, o->name.data ? o->name : CORE_STRING_STATIC(""));
         break;
 
     case IR_OPD_BLOCK:
@@ -358,7 +363,7 @@ static void put_init(core_buffer_t *b, bool has, bool is_float,
     core_buffer_puts(b, " = ");
 
     if (is_string) {
-        ir_quote(b, string);
+        core_buffer_append_quoted(b, string);
         return;
     }
 
@@ -396,7 +401,7 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
         core_buffer_puts(b, "nil");
         break;
     case IR_GLOBAL_INIT_STRING:
-        ir_quote(b, value->string);
+        core_buffer_append_quoted(b, value->string);
         break;
     case IR_GLOBAL_INIT_SYMBOL:
         core_buffer_puts(b, "@");
@@ -404,7 +409,7 @@ static void put_global_init_value(core_buffer_t *b, ir_module_t *m,
         break;
     case IR_GLOBAL_INIT_PHASE_RESULT:
         core_buffer_puts(b, "$");
-        ir_quote(b, value->phase_result.identifier);
+        core_buffer_append_quoted(b, value->phase_result.identifier);
         break;
     case IR_GLOBAL_INIT_TYPE:
         core_buffer_puts(b, "type(");
@@ -497,7 +502,7 @@ static bool put_layout_val(core_buffer_t *b, ir_module_t *m,
 
         if (v->sym == IR_SYM_OFFSETOF) {
             core_buffer_puts(b, ", ");
-            ir_quote(b, v->member);
+            core_buffer_append_quoted(b, v->member);
         }
         core_buffer_puts(b, ")");
 
@@ -545,7 +550,7 @@ static void put_layouts(core_buffer_t *b, ir_module_t *m)
                 && (!module_target.data
                     || !core_string_eq(d->target, module_target))) {
                 core_buffer_puts(b, " for ");
-                ir_quote(b, d->target);
+                core_buffer_append_quoted(b, d->target);
             }
             else if (!d->target.data && module_target.data) {
                 core_buffer_puts(b, " without target");

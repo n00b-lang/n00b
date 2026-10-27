@@ -220,6 +220,20 @@ ir_summary_t *ir_summary_decode(ir_summaries_t *summaries,
                                 const ir_func_t *function,
                                 const uint8_t *data, size_t size,
                                 ir_summary_global_fn resolve, void *context);
+typedef struct {
+    uint32_t (*intern)(void *context, core_string_t text);
+    core_string_t (*lookup)(void *context, uint32_t reference);
+    void *context;
+} ir_summary_texts_t;
+bool          ir_summary_encode_with(const ir_summary_t *summary,
+                                     core_buffer_t *out,
+                                     const ir_summary_texts_t *texts);
+ir_summary_t *ir_summary_decode_with(ir_summaries_t *summaries,
+                                     const ir_func_t *function,
+                                     const uint8_t *data, size_t size,
+                                     ir_summary_global_fn resolve,
+                                     void *context,
+                                     const ir_summary_texts_t *texts);
 bool         ir_summary_call_diverges(ir_summaries_t *summaries,
                                       const ir_instr_t *call);
 bool         ir_summary_place_unseen(ir_summaries_t *summaries,

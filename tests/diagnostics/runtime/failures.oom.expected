@@ -1,0 +1,5 @@
+panic: out of memory while allocating 1099511627808 bytes
+  --> tests/diagnostics/runtime/failures.n:16:25
+backtrace:
+  at make_oom (tests/diagnostics/runtime/failures.n:16:25)
+  at run (tests/diagnostics/runtime/failures.n:128:17)

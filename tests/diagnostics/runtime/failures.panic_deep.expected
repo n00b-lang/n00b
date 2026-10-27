@@ -1,0 +1,6 @@
+panic: inner failed
+  --> tests/diagnostics/runtime/failures.n:73:9
+backtrace:
+  at inner (tests/diagnostics/runtime/failures.n:73:9)
+  at outer (tests/diagnostics/runtime/failures.n:79:12)
+  at run (tests/diagnostics/runtime/failures.n:133:17)

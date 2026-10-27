@@ -14,14 +14,14 @@ if ! "$compiler" build --output "$tmp/qualified" \
 fi
 "$tmp/qualified" 2>"$tmp/qualified.out"
 grep -Fq ok "$tmp/qualified.out"
+grep -Fq 'N00B-N0018: `byte_len` overlaps' "$tmp/qualified.log"
 
 rejects() {
     name=$1
     pattern=$2
     printf '%b' "$3" >"$tmp/$name.n"
-    if "$compiler" build --output "$tmp/$name" "$tmp/$name.n" \
-        >"$tmp/$name.log" 2>&1; then
-        echo "$name unexpectedly built" >&2
+    if "$compiler" check "$tmp/$name.n" >"$tmp/$name.log" 2>&1; then
+        echo "$name unexpectedly checked" >&2
         exit 1
     fi
     if ! grep -Fq -- "$pattern" "$tmp/$name.log"; then
@@ -31,22 +31,13 @@ rejects() {
     fi
 }
 
-rejects call_conflict N00BB-T0056 \
+rejects call_conflict N00B-T0013 \
     'import pk\nrequire pk.size("abc") == 3\n'
-rejects value_conflict N00BB-T0057 \
+rejects value_conflict N00B-N0013 \
     'import pk\nrequire pk.limit == 1\n'
-rejects clobbered_function N00BB-T0058 \
+rejects clobbered_function N00B-N0012 \
     'let len = 4\nrequire len("abc") == 3\n'
-rejects shadowed_type N00BB-T0059 \
+rejects shadowed_type N00B-N0011 \
     'record List {\n    x: int\n}\n'
-rejects ambiguous_dispatch "call one statically" \
+rejects ambiguous_dispatch "call one directly by its qualified path" \
     'import pk\nlet it: pk.Item = (w = 3)\nrequire it.area() == 1\n'
-
-printf '%b' "func len(x: 'T) -> uint {\n    return 9\n}\nrequire len(3) == 9\n" \
-    >"$tmp/overlap.n"
-if ! "$compiler" build --output "$tmp/overlap" "$tmp/overlap.n" \
-    >"$tmp/overlap.log" 2>&1; then
-    cat "$tmp/overlap.log" >&2
-    exit 1
-fi
-grep -Fq N00BB-W0019 "$tmp/overlap.log"
