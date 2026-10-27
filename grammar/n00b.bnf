@@ -123,6 +123,7 @@
 <for-range-var> ::= <for-binding>
 <for-var-list> ::= <for-binding>
 <for-var-list> ::= <for-binding> %"," <for-var-list>
+<for-var-list> ::= <for-binding> %","
 
 <for-binding> @declares($0) @infer("`t") ::= %IDENTIFIER
 <for-binding> @declares($1) @infer("`t") ::= %"let" %IDENTIFIER
@@ -292,7 +293,7 @@
 
 <assert-stmt> ::= (%"assert"|%"require") <expression>
 
-<import-stmt> ::= %"import" <module-import> (%"," <module-import>)*
+<import-stmt> ::= %"import" <module-import> (%"," <module-import>)* %","?
 <import-stmt> ::= %"import" <module-import> %"bring" <brought-names>
 <import-stmt> ::= %"bring" <brought-symbols> %"from" <module-source>
 <module-import> @declares($0, "module") ::= <module-source>
@@ -300,7 +301,7 @@
 <module-source> ::= <member-chain>
 <brought-symbols> ::= %"all"
 <brought-symbols> ::= <brought-names>
-<brought-names> ::= <brought-symbol> (%"," <brought-symbol>)*
+<brought-names> ::= <brought-symbol> (%"," <brought-symbol>)* %","?
 <brought-symbol> ::= %IDENTIFIER (%"as" %IDENTIFIER)?
 
 <package-decl> ::= %"package" <dotted-name> <package-body>
@@ -322,6 +323,7 @@
 
 <sym-decl-list> ::= <sym-decl> %"," <sym-decl-list>
                   | <sym-decl>
+                  | <sym-decl> %","
 
 <sym-decl> @declares($0, $2) @assigns($0, $4) @infer("$4 converts ($0 unify $2)") @nospace($1) ::=
          %IDENTIFIER %":" <type-spec> <assign-op> <expression>
@@ -681,6 +683,8 @@
 
 <tuple-or-paren> @infer("`t") @nospace($1) @nospace($2) @nospace($4) ::= %"(" <expression> %"," <expr-comma-list> %")"
 <tuple-or-paren> @infer("$1") @nospace ::= %"(" <expression> %")"
+<tuple-or-paren> @infer("$1") @nospace ::= %"(" <expression> <trailing-paren>
+<trailing-paren> @nospace ::= %"," %")"
 <tuple-or-paren> @infer("`t") @nospace($1) @nospace($2) ::= %"(" <named-field-list> %")"
 
 <named-field-list> ::= <named-field> %"," <named-field-list>
@@ -694,6 +698,7 @@
 
 <expr-comma-list> ::= <expression> %"," <expr-comma-list>
                     | <expression>
+                    | <expression> %","
 
 <type-spec> ::= <one-tspec> <where-clause>?
 
@@ -736,6 +741,7 @@
               | <union-tspec> %","
 
 <tspec-func> @nospace($1) @nospace($2) ::= %"(" <tspec-func-params> %")" <tspec-function-result>
+<tspec-func> @nospace($1) @nospace($2) @nospace($3) ::= %"(" <tspec-func-params> %"," %")" <tspec-function-result>
                | %"(" %")" <tspec-function-result>
 
 <tspec-function-result> ::= <return-type> <error-type>?
@@ -758,7 +764,7 @@
 <tspec-vargs> ::= %"*" <union-tspec>
 <tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
 
-<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)*
+<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)* %","?
 
 <type-constraint> ::= %TYPE_VAR %":" <constraint-list>
 
