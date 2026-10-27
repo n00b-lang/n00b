@@ -11,9 +11,11 @@ import internal.threads
 const thread_idle:    u32  = 0
 const thread_running: u32  = 1
 const thread_closed:  u32  = 2
+const thread_starting: u32 = 3
 const stall_wait_ns:  u64  = 10_000_000
 
 thread var in_finalizers: bool = false
+thread var finalizer_thread: bool = false
 
 func notify(heap: Ref[internal.gc.core.Heap]) {
     if !__atomic_load(ref heap.fin_notify) or
@@ -30,7 +32,7 @@ func wake(heap: Ref[internal.gc.core.Heap]) {
         return
     }
     __atomic_fetch_add(ref heap.fin_live, 1)
-    if !__atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_running) {
+    if !__atomic_compare_exchange(ref heap.fin_thread, thread_idle, thread_starting) {
         __atomic_fetch_sub(ref heap.fin_live, 1)
         return
     }
@@ -49,6 +51,7 @@ func release_live(heap: Ref[internal.gc.core.Heap]) {
 
 func thread_main(argument: Ref[byte]) -> Ref[byte] {
     let heap: Ref[internal.gc.core.Heap] = unsafe_cast[Ref[internal.gc.core.Heap]] argument
+    finalizer_thread = true
     while !__atomic_load(ref heap.shutdown) {
         while !__atomic_load(ref heap.shutdown) and
             run(heap, internal.gc.core.final_batch) != 0 {
@@ -294,6 +297,10 @@ func run(heap: Ref[internal.gc.core.Heap], maximum: uint) -> uint {
             }
             heap.running = ref batch
             heap.running_n += count
+            if finalizer_thread {
+                __atomic_compare_exchange(ref heap.fin_thread, thread_starting,
+                                          thread_running)
+            }
         }
         internal.gc.sync.ticket_unlock(ref heap.fin)
         if count == 0 {
@@ -352,7 +359,7 @@ func completed(heap: Ref[internal.gc.core.Heap]) -> uint {
 func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
     let heap:  Ref[internal.gc.core.Heap] = mutator.heap
     let limit: uint                 = heap.cfg.finalizer_backlog_limit
-    if limit == 0 or in_finalizers or pending(heap) <= limit {
+    if limit == 0 or in_finalizers or finalizer_thread or pending(heap) <= limit {
         return
     }
     wake(heap)
@@ -361,7 +368,7 @@ func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
         return
     }
 
-    let deadline: u64 = internal.clock.now_ns() + stall_wait_ns
+    var deadline: u64 = internal.clock.now_ns() + stall_wait_ns
     __os_thread_capture_self(ref mutator.captured)
     internal.gc.handshake.enter_blocking(mutator)
     while true {
@@ -371,6 +378,9 @@ func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
             break
         }
         let now: u64 = internal.clock.now_ns()
+        if __atomic_load(ref heap.fin_thread) == thread_starting {
+            deadline = now + stall_wait_ns
+        }
         if now >= deadline {
             __atomic_store(ref heap.fin_stalled, start + 1)
             internal.gc.sync.event_leave(ref heap.fin_progress)
