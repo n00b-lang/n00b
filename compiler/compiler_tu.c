@@ -923,7 +923,7 @@ bind_assignment_target(pattern_binder_t *binder, parse_tree_t *target,
     bool fits = th_kind_of(declared) == TH_VAR
         ? th_unify_in_place(types, symbol->type, type) != nullptr
         : th_unify_probe(types, type, symbol->type)
-            || th_converts(types, type, symbol->type, target,
+            || th_converts(types, type, symbol->type, nullptr,
                            binder->grammar);
     if (!fits) {
         core_string_t from = n00bb_print_type(types, type);
@@ -8141,7 +8141,7 @@ n00bb_report_value_type_mismatch(core_translation_unit_t *unit,
                    ARG_TEXT(wanted_text)));
     core_free(wanted_text.data);
     if (reported)
-        n00bb_report_label(diagnostics, N00B_TEXT_THIS_IS,
+        n00bb_report_label(diagnostics, N00B_TEXT_THIS_IS_2,
                            N00BB_ARGS(ARG_TEXT(actual_text)));
     core_free(actual_text.data);
     if (!reported) return;

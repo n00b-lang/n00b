@@ -11,3 +11,16 @@ tests/diagnostics/tu/declarations.n:19:13: error N00B-N0502: `x` cannot be decla
   help: give the inner binding a different name
 tests/diagnostics/tu/declarations.n:26:14: error N00B-T0522: shift count 9 is outside 0..7 for `u8`
   note: a value of type `u8` has 8 bits, so it can shift by at most 7
+tests/diagnostics/tu/declarations.n:27:29: error N00B-T0578: field `x` appears more than once in this tuple type
+  tests/diagnostics/tu/declarations.n:27:21: note: `x` is first named here
+tests/diagnostics/tu/declarations.n:28:18: error N00B-T0579: `List` does not take named type arguments
+  help: only `Tuple` takes named elements, as in `Tuple[x: int, y: int]`
+tests/diagnostics/tu/declarations.n:29:18: error N00B-T0580: `Tuple[int]` has one element, and a value is its own one-tuple
+  help: write `int`
+tests/diagnostics/tu/declarations.n:32:22: error N00B-T0582: a tuple index must be a compile-time constant
+  help: each element can have its own type, so the index picks the type; write a constant such as `0`
+tests/diagnostics/tu/declarations.n:33:22: error N00B-T0583: this tuple has 2 elements, so index 2 is out of range
+tests/diagnostics/tu/declarations.n:35:1: error N00B-T0581: cannot assign to an element of a tuple; tuples are immutable
+  help: build a new tuple and assign that instead
+tests/diagnostics/tu/declarations.n:36:17: warning N00B-P0034: this trailing comma ends the statement, but it reads as though the list continues on the next line
+  help: remove the comma

@@ -7187,7 +7187,7 @@ n00bb_lower_tuple_parts(ir_lower_context_t *context, parse_visit_t *visit,
         return true;
     n00bb_lower_context_t *lower = context->user;
     size_t child_count = core_tree_num_children(visit->node);
-    if (child_count != 1 && child_count != 3)
+    if (child_count < 1 || child_count > 3)
         return lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "tuple expression list has an unexpected shape").status

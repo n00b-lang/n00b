@@ -74,3 +74,5 @@ tests/diagnostics/tu/type_checks.n:158:25: error N00B-T0001: `h_1` takes 1 argum
 tests/diagnostics/tu/type_checks.n:160:18: error N00B-T0018: `string` does not implement `Multiply` for these arguments
   note: 13 implementations of `Multiply` were considered
 tests/diagnostics/tu/type_checks.n:161:23: error N00B-T0500: `9` is `u8`, which does not convert to `bool`
+tests/diagnostics/tu/type_checks.n:169:1: error N00B-T0581: cannot assign to an element of a tuple; tuples are immutable
+  help: build a new tuple and assign that instead

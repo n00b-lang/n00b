@@ -506,8 +506,6 @@ resolve_inferred_field_references(core_link_unit_t *link,
                             N00B_TEXT_TUPLE_IMMUTABLE, N00BB_NO_ARGS))
                         n00bb_report_help(diagnostics,
                             N00B_TEXT_TUPLE_IMMUTABLE_HELP, N00BB_NO_ARGS);
-                    all_resolved = false;
-                    continue;
                 }
                 if (!bind_resolved_field_type(unit, state, node,
                                               member_type))
