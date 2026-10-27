@@ -1,0 +1,99 @@
+name: windows-flakes
+
+on:
+  push:
+    branches: ["flake/**"]
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: Test names to run each round
+        type: string
+        default: gc-units-n00b imports-bring program-args diagnostics bitcode-build-time ffi-serve
+      rounds:
+        description: Rounds to run
+        type: number
+        default: 6
+      cold:
+        description: Clear the compiler cache before each round
+        type: boolean
+        default: true
+
+concurrency:
+  group: windows-flakes-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hunt:
+    name: windows-x86_64 (flakes)
+    runs-on: windows-2025
+    timeout-minutes: 150
+    env:
+      N00B_TEST_BUDGET_SCALE: "50"
+      N00B_WALL_BUDGET_SCALE: "50"
+      MSYS: winsymlinks:nativestrict
+      TESTS: ${{ inputs.tests || 'gc-units-n00b imports-bring program-args diagnostics bitcode-build-time ffi-serve' }}
+      ROUNDS: ${{ inputs.rounds || 6 }}
+      COLD: ${{ inputs.cold == false && 'false' || 'true' }}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Keep line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: false
+          install: >-
+            make python git diffutils
+            mingw-w64-clang-x86_64-zstd
+            mingw-w64-clang-x86_64-zlib
+
+      - name: Install LLVM 22
+        run: |
+          base=https://repo.msys2.org/mingw/clang64
+          packages=""
+          for p in llvm llvm-libs llvm-tools clang clang-libs lld compiler-rt; do
+            packages="$packages $base/mingw-w64-clang-x86_64-$p-22.1.8-3-any.pkg.tar.zst"
+          done
+          pacman -U --noconfirm $packages
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Run rounds
+        run: |
+          failed=0
+          mkdir -p rounds
+          for round in $(seq 1 "$ROUNDS"); do
+            echo "::group::round $round"
+            if [ "$COLD" = true ]; then rm -rf build/n00b-cache; fi
+            rm -rf build/test-results
+            if ./build.sh test $TESTS > "rounds/round-$round.out" 2>&1; then
+              echo "round $round: pass"
+            else
+              echo "round $round: FAIL"
+              failed=$((failed + 1))
+            fi
+            grep -E '^(FAIL|OVER) ' "rounds/round-$round.out" || true
+            if [ -d build/test-results ]; then cp -r build/test-results "rounds/results-$round"; fi
+            echo "::endgroup::"
+          done
+          echo "$failed of $ROUNDS rounds failed"
+          grep -h -E '^(FAIL|OVER) ' rounds/round-*.out | sed 's/ (.*//' | sort | uniq -c || true
+          [ "$failed" -eq 0 ]
+
+      - name: Upload rounds
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-flake-rounds
+          path: rounds
+          if-no-files-found: ignore
