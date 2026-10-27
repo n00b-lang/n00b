@@ -1,4 +1,4 @@
-tests/diagnostics/front/syntax.n:1:5: error N00B-P0001: expected a name, found `=` in a variable declaration
+tests/diagnostics/front/syntax.n:1:5: error N00B-P0001: expected `(` or a name, found `=` in a variable declaration
 tests/diagnostics/front/syntax.n:18:1: error N00B-P0010: `comptime` is a function, not a block keyword
   help: write `if comptime() { ... } else { ... }`
 tests/diagnostics/front/syntax.n:23:8: error N00B-P0001: expected an expression, found end of line in the declaration of `x`

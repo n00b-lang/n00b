@@ -399,6 +399,7 @@ typedef struct {
     bool tuple_index_known;
     bool tuple_index_reported;
     uint32_t tuple_index;
+    n00bb_binding_projection_t *projection;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -668,6 +669,7 @@ typedef struct {
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
+    core_list_t(parse_tree_ptr_t) assignment_patterns;
     core_list_t(n00bb_literal_constant_t) literal_constants;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;

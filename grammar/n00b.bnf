@@ -489,7 +489,16 @@
                     | %"(" <flagset-value> %")"
 <flagset-name> @varref($0) ::= %IDENTIFIER
 
-<assign-stmt> @assigns($0, $2) @infer("$2 converts $0") ::= <expression> <assign-op> <expression>
+<assign-stmt> @assigns($0, $2) @infer("$2 converts $0") @disambig(n00bb_prefer_assignment_pattern, 100) ::= <expression> <assign-op> <expression>
+<assign-stmt> ::= <assign-pattern> <assign-op> <expression>
+<assign-pattern> @nospace($1) ::= %"(" <assign-pattern-items> %")"
+<assign-pattern-items> ::= <assign-pattern-item> %"," <assign-pattern-items>
+                        | <assign-pattern-item>
+                        | <assign-pattern-item> %","
+<assign-pattern-item> ::= <assign-pattern-target>
+<assign-pattern-item> ::= %IDENTIFIER <assign-op> <assign-pattern-target>
+<assign-pattern-target> ::= <assign-target> | <pattern-skip> | <assign-pattern>
+<assign-target> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
 <discard-stmt> ::= %_ <assign-op> <expression>
 
 <binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __add, __add_assign)") ::= <expression> <plus-assign-op> <expression>

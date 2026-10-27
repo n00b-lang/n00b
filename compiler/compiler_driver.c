@@ -1227,6 +1227,13 @@ n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
         return core_string_eq(spelling, CORE_STRING_STATIC("null"))
             || core_string_eq(spelling, CORE_STRING_STATIC("None"));
     }
+    if (core_string_eq(predicate,
+                       CORE_STRING_STATIC("n00bb_prefer_assignment_pattern"))) {
+        core_option_t(core_string_t) value = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        return core_option_is_set(value)
+            && core_string_eq(core_option_get(value), CORE_STRING_STATIC("("));
+    }
     return core_string_eq(predicate,
         CORE_STRING_STATIC("n00bb_prefer_type_application"));
 }

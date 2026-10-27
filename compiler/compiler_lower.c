@@ -2595,11 +2595,10 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
 }
 
 static ir_value_t *
-n00bb_project_binding(ir_lower_context_t *context, ir_value_t *value,
-                      parse_sym_entry_t *binding, ir_span_t span)
+n00bb_project_value(ir_lower_context_t *context, ir_value_t *value,
+                    const n00bb_binding_projection_t *projection,
+                    th_type *final_type, ir_span_t span)
 {
-    const n00bb_binding_projection_t *projection = parse_sym_binding(binding,
-        CORE_STRING_STATIC("n00bb.pattern-projection"));
     th_ctx *types = ir_module_types(context->module);
     for (size_t i = 0; value && projection && i < projection->count; i++) {
         const n00bb_projection_step_t *step = &projection->steps[i];
@@ -2614,7 +2613,7 @@ n00bb_project_binding(ir_lower_context_t *context, ir_value_t *value,
             type = shape && th_kind_of(shape) == TH_RECORD
                 ? record_lookup_text(nullptr, shape, step->name) : nullptr;
         }
-        if (!type && i + 1 == projection->count) type = binding->type;
+        if (!type && i + 1 == projection->count) type = final_type;
         ir_instr_t *extract = type ? ir_lower_emit_instruction(context,
             step->positional ? IR_OP_EXTRACT_INDEX : IR_OP_EXTRACT, span)
             : nullptr;
@@ -2627,6 +2626,84 @@ n00bb_project_binding(ir_lower_context_t *context, ir_value_t *value,
         value = ok ? extract->dest : nullptr;
     }
     return value;
+}
+
+static ir_value_t *
+n00bb_project_binding(ir_lower_context_t *context, ir_value_t *value,
+                      parse_sym_entry_t *binding, ir_span_t span)
+{
+    return n00bb_project_value(context, value, parse_sym_binding(binding,
+        CORE_STRING_STATIC("n00bb.pattern-projection")), binding->type, span);
+}
+
+static void
+collect_assignment_targets(parse_grammar_t *grammar, parse_tree_t *node,
+                           core_list_t(parse_tree_ptr_t) *targets)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("assign-target"))) {
+        core_list_push(*targets, node);
+        return;
+    }
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_assignment_targets(grammar, core_tree_child(node, i),
+                                   targets);
+}
+
+static void report_let_reassigned(ir_lower_context_t *context,
+                                  parse_tree_t *target,
+                                  parse_sym_entry_t *symbol);
+
+static bool
+n00bb_lower_assignment_pattern(ir_lower_context_t *context,
+                               parse_visit_t *visit, bool entering,
+                               void *state)
+{
+    (void)state;
+    parse_tree_t *pattern = core_tree_num_children(visit->node)
+        ? core_tree_child(visit->node, 0) : nullptr;
+    if (entering || !nt_is(visit->grammar, pattern,
+                           CORE_STRING_STATIC("assign-pattern"))) return true;
+    ir_value_t *value = ir_lower_node_value(context,
+                                            core_tree_child(visit->node, 2));
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    core_list_t(parse_tree_ptr_t) targets = core_list_new(parse_tree_ptr_t);
+    collect_assignment_targets(visit->grammar, pattern, &targets);
+    bool ok = value != nullptr;
+    for (size_t i = 0; ok && i < targets.len; i++) {
+        parse_tree_t *target = targets.data[i];
+        parse_node_resolution_t resolution = parse_tree_resolution(target);
+        parse_sym_entry_t *symbol = resolution.kind
+                == PARSE_NODE_RESOLUTION_SYMBOL
+            ? resolution.target.symbol : nullptr;
+        n00bb_node_facts_t *facts = n00bb_node_facts(target);
+        if (!symbol || !facts || !facts->projection) {
+            ok = false;
+            break;
+        }
+        if ((symbol->mutability == PARSE_SYM_IMMUTABLE
+             || symbol->mutability == PARSE_SYM_CONST)
+            && !symbol->type_from_assignment) {
+            report_let_reassigned(context, target, symbol);
+            core_list_free(targets);
+            return false;
+        }
+        th_type *type = th_apply_subst(ir_module_types(context->module),
+                                       symbol->type);
+        ir_value_t *element = n00bb_project_value(context, value,
+            facts->projection, type, span);
+        element = element ? n00bb_materialize(context, target, element, type,
+                                              span) : nullptr;
+        ok = element && ir_lower_assign_symbol(context, symbol, element,
+                                               false, span).status
+            != IR_LOWER_FAILED;
+    }
+    core_list_free(targets);
+    if (!ok)
+        return lower_internal(context, span,
+                              "could not unpack the assignment pattern")
+            .status != IR_LOWER_FAILED;
+    return true;
 }
 
 static bool
@@ -26194,7 +26271,10 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             CORE_STRING_STATIC("tuple-or-paren"), n00bb_lower_tuple_literal, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("variable-decl"),
-            n00bb_lower_declaration_pattern, nullptr);
+            n00bb_lower_declaration_pattern, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("assign-stmt"),
+            n00bb_lower_assignment_pattern, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                          n00bb_lower_with_scope, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,
