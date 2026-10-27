@@ -329,6 +329,7 @@
 <dotted-name> ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
 
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <sym-decl-list>
+<variable-decl> ::= <member-visibility>? <declaration-prefix> <binding-pattern> <assign-op> <expression>
 
 <visible-inferred-assign> @visibility("private") ::= %"private" <assign-stmt>
 

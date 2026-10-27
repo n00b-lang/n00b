@@ -86,6 +86,8 @@ bool cache_iteration_plan(parse_grammar_t *grammar,
                           core_translation_unit_t *unit, parse_tree_t *loop,
                           th_type *source_type, th_type *cursor_type,
                           th_type *item_type);
+void resolve_declaration_patterns(parse_grammar_t *grammar,
+                                  core_translation_unit_t *unit);
 bool resolve_for_binding_types(parse_grammar_t *grammar,
                                core_translation_unit_t *unit);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,

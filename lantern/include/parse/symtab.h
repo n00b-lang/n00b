@@ -116,6 +116,7 @@ struct parse_sym_entry_t {
     size_t                     use_count;
     size_t                     use_capacity;
     bool                       type_is_inferred;
+    bool                       type_from_assignment;
     th_type                 *type;
     th_type                 *error_type;
     th_type                 *callable_contract;

@@ -512,6 +512,7 @@ N00B_TEXT(PATTERN_POSITIONAL_NAME, "`{0}` is a positional tuple, so its elements
 N00B_TEXT(PATTERN_NEEDS_NAME, "`{0}` is unpacked by field name, so this element needs one: `name = ...`")
 N00B_TEXT(PATTERN_UNKNOWN_FIELD, "`{0}` has no field `{1}` to unpack")
 N00B_TEXT(PATTERN_REPEATED_FIELD, "field `{0}` is unpacked more than once")
+N00B_TEXT(PATTERN_CONST, "a `const` cannot unpack a pattern; declare these names with `let`")
 N00B_TEXT(IS_NOT_A_CALLBACK_TYPE, "`{0}` is not a callback type")
 N00B_TEXT(NAME_A_TYPE_DECLARED_WITH, "name a type declared with `callback`, which lists its `call`, `handler` and `setup` roles")
 N00B_TEXT(CALLBACK_STATE_MUST_BE_WRITABLE, "callback state `{0}` must be writable")

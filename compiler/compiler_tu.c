@@ -1372,6 +1372,45 @@ collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
     }
 }
 
+void
+resolve_declaration_patterns(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    core_list_t(parse_tree_ptr_t) done = core_list_new(parse_tree_ptr_t);
+    for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+         scope; scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            parse_tree_t *declaration = n00bb_pattern_owner(grammar,
+                                                            symbol->decl_node);
+            if (!NT_IS(grammar, declaration, "variable-decl")) continue;
+            bool seen = false;
+            for (size_t i = 0; i < done.len && !seen; i++)
+                seen = done.data[i] == declaration;
+            if (seen) continue;
+            core_list_push(done, declaration);
+            parse_tree_t *pattern = CHILD_NT(grammar, declaration,
+                                             "binding-pattern");
+            parse_tree_t *prefix = CHILD_NT(grammar, declaration,
+                                            "declaration-prefix");
+            if (core_string_eq(first_token_text(CHILD_NT(grammar, prefix,
+                    "binding-kind")), CORE_STRING_STATIC("const"))) {
+                n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                    N00B_DIAG_TUPLE_PATTERN, link_source_location(pattern),
+                    N00B_TEXT_PATTERN_CONST, N00BB_NO_ARGS);
+                poison_pattern_bindings(grammar, state, pattern);
+                continue;
+            }
+            parse_tree_t *value = CHILD_NT(grammar, declaration, "expression");
+            (void)n00bb_bind_pattern(grammar, unit, pattern,
+                                     value ? parse_tree_type(value) : nullptr);
+        }
+    core_list_free(done);
+}
+
 bool
 resolve_for_binding_types(parse_grammar_t *grammar,
                           core_translation_unit_t *unit)
@@ -11654,11 +11693,14 @@ static void
 apply_decl_binding(parse_grammar_t *grammar, parse_tree_t *node,
                    parse_sym_mutability_t mutability, bool threaded)
 {
-    if (!node || !NT_IS(grammar, node, "sym-decl")) return;
+    if (!node || (!NT_IS(grammar, node, "sym-decl")
+                  && !NT_IS(grammar, node, "pattern-binding"))) return;
     parse_sym_entry_t *symbol = parse_tree_sym(node);
     if (!symbol) return;
     symbol->mutability = mutability;
     symbol->is_thread_local = threaded;
+    symbol->type_from_assignment = NT_IS(grammar, node, "sym-decl")
+        && core_tree_num_children(node) == 1;
     bool function_local = scope_is_within_function(symbol->scope);
     parse_sym_set_storage_duration(symbol, threaded
         ? PARSE_SYM_STORAGE_THREAD
@@ -11739,7 +11781,8 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                 N00B_TEXT_REMOVE_PRIVATE_HERE,
                 N00BB_NO_ARGS);
     }
-    if (NT_IS(visit->grammar, visit->node, "sym-decl")
+    if ((NT_IS(visit->grammar, visit->node, "sym-decl")
+         || NT_IS(visit->grammar, visit->node, "pattern-binding"))
         && declared && declared->decl_node == visit->node
         && declared->shadowed
         && declared->shadowed->kind != PARSE_SYM_MODULE
@@ -11762,7 +11805,14 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         return;
     }
 
-    if (NT_IS(visit->grammar, visit->node, "sym-decl")) {
+    bool declared_pattern = NT_IS(visit->grammar,
+        n00bb_pattern_owner(visit->grammar, visit->node), "variable-decl");
+    if (declared_pattern && declared
+        && !parse_sym_add_definition(declared, visit->node))
+        n00bb_internal_error(annotations->diagnostics,
+            annotations->diagnostic_unit, link_source_location(visit->node),
+            "resolving names", "could not record the binding definition site");
+    if (NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern) {
         parse_tree_t *declaration = parse_tree_parent(visit->node);
         while (declaration && !NT_IS(visit->grammar, declaration,
                                     "variable-decl"))

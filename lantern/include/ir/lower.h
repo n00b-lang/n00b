@@ -95,6 +95,10 @@ ir_value_t *ir_lower_local_address(ir_lower_context_t *context,
                                    ir_local_t *local);
 ir_value_t *ir_lower_bound_value(ir_lower_context_t *context,
                                  parse_sym_entry_t *symbol);
+ir_lower_result_t ir_lower_assign_symbol(ir_lower_context_t *context,
+                                         parse_sym_entry_t *symbol,
+                                         ir_value_t *value, bool initializes,
+                                         ir_span_t span);
 bool ir_lowerer_register(ir_lowerer_t *lowerer, core_string_t action,
                          ir_lower_action_fn callback, void *state);
 bool ir_lowerer_register_visit(ir_lowerer_t *lowerer,

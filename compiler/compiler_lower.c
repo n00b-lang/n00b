@@ -2630,6 +2630,42 @@ n00bb_project_binding(ir_lower_context_t *context, ir_value_t *value,
 }
 
 static bool
+n00bb_lower_declaration_pattern(ir_lower_context_t *context,
+                                parse_visit_t *visit, bool entering,
+                                void *state)
+{
+    (void)state;
+    parse_tree_t *pattern = child_nt(visit->grammar, visit->node,
+                                     CORE_STRING_STATIC("binding-pattern"));
+    if (entering || !pattern) return true;
+    parse_tree_t *source = child_nt(visit->grammar, visit->node,
+                                    CORE_STRING_STATIC("expression"));
+    ir_value_t *value = source ? ir_lower_node_value(context, source)
+                               : nullptr;
+    ir_span_t span = lower_span_for_tree(context, visit->node);
+    core_list_t(parse_tree_ptr_t) bindings = core_list_new(parse_tree_ptr_t);
+    collect_for_bindings(visit->grammar, pattern, &bindings);
+    bool ok = value != nullptr;
+    for (size_t i = 0; ok && i < bindings.len; i++) {
+        parse_sym_entry_t *symbol = parse_tree_sym(bindings.data[i]);
+        ir_value_t *element = symbol
+            ? n00bb_project_binding(context, value, symbol, span) : nullptr;
+        element = element ? n00bb_materialize(context, bindings.data[i],
+            element, th_apply_subst(ir_module_types(context->module),
+                                    symbol->type), span) : nullptr;
+        ok = element && ir_lower_assign_symbol(context, symbol, element,
+                                               true, span).status
+            != IR_LOWER_FAILED;
+    }
+    core_list_free(bindings);
+    if (!ok)
+        return lower_internal(context, span,
+                              "could not unpack the declaration pattern")
+            .status != IR_LOWER_FAILED;
+    return true;
+}
+
+static bool
 n00bb_lower_container_body_enter(ir_lower_context_t *context,
                                  n00bb_lower_context_t *lower,
                                  n00bb_loop_frame_t *frame)
@@ -15500,9 +15536,14 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                           bool entering, void *state)
 {
     (void)state;
-    if (!nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("sym-decl")))
+    bool pattern = nt_is(visit->grammar,
+        n00bb_pattern_owner(visit->grammar, visit->node),
+        CORE_STRING_STATIC("variable-decl"));
+    if (!pattern
+        && !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("sym-decl")))
         return true;
     parse_sym_entry_t *symbol = parse_tree_sym(visit->node);
+    if (!entering && pattern) return true;
     if (!entering) {
         parse_tree_t *expression = child_nt(visit->grammar, visit->node,
                                             CORE_STRING_STATIC("expression"));
@@ -19497,6 +19538,8 @@ validate_module_declarations(parse_grammar_t *grammar,
             if (symbol->kind == PARSE_SYM_VARIABLE
                 && symbol->type
                 && (nt_is(grammar, binding, CORE_STRING_STATIC("sym-decl"))
+                    || nt_is(grammar, binding,
+                             CORE_STRING_STATIC("pattern-binding"))
                     || nt_is(grammar, binding, CORE_STRING_STATIC("assign-stmt")))) {
                 bool registered = link_ir_global_for_symbol(
                     state->link_analysis, symbol) != nullptr;
@@ -19703,6 +19746,8 @@ bind_missing_external(ir_lower_context_t *context,
     parse_tree_t *binding = symbol_binding_node(symbol);
     if (!owner_state || (!owner_state->interface_module && (!binding
         || (!nt_is(lower->grammar, binding, CORE_STRING_STATIC("sym-decl"))
+            && !nt_is(lower->grammar, binding,
+                      CORE_STRING_STATIC("pattern-binding"))
             && !nt_is(lower->grammar, binding, CORE_STRING_STATIC("assign-stmt"))))))
         return false;
     ir_global_t *global = link_ir_global_for_symbol(
@@ -20601,6 +20646,10 @@ collect_dynamic_global_initializers(parse_grammar_t *grammar,
                                     core_list_t(n00bb_tree_ptr_t) *roots)
 {
     if (!nt_is(grammar, node, CORE_STRING_STATIC("variable-decl"))) return;
+    if (child_nt(grammar, node, CORE_STRING_STATIC("binding-pattern"))) {
+        core_list_push(*roots, node);
+        return;
+    }
     parse_tree_t *list = child_nt(grammar, node, CORE_STRING_STATIC("sym-decl-list"));
     collect_dynamic_sym_declarations(grammar, tu_state(unit), list, roots);
 }
@@ -26142,7 +26191,10 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("named-field-list"), n00bb_lower_named_field_parts, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("tuple-or-paren"), n00bb_lower_tuple_literal, nullptr);
+            CORE_STRING_STATIC("tuple-or-paren"), n00bb_lower_tuple_literal, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("variable-decl"),
+            n00bb_lower_declaration_pattern, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                          n00bb_lower_with_scope, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,

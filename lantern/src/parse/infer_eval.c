@@ -293,9 +293,8 @@ static bool bare_declared_target(parse_tree_t *node)
             resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
                 ? resolution.target.symbol : parse_tree_sym(node);
         if (symbol)
-            return symbol->kind == PARSE_SYM_VARIABLE && symbol->decl_node
-                && !core_tree_is_leaf(symbol->decl_node)
-                && core_tree_num_children(symbol->decl_node) == 1;
+            return symbol->kind == PARSE_SYM_VARIABLE
+                && symbol->type_from_assignment;
         node = !core_tree_is_leaf(node) && core_tree_num_children(node) == 1
             ? core_tree_child(node, 0) : nullptr;
     }

@@ -125,6 +125,8 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
         return CORE_LINK_STAGE_RESULT_FAILED;
     }
     for (size_t i = 0; i < units->len; i++)
+        resolve_declaration_patterns(analysis->grammar, units->data[i]);
+    for (size_t i = 0; i < units->len; i++)
         if (!resolve_for_binding_types(analysis->grammar,
                                        units->data[i])) {
             th_env_free(environment);

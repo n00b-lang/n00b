@@ -46,6 +46,8 @@ global_has_explicit_initializer(parse_grammar_t *grammar,
     if (symbol->has_comptime_value && symbol->comptime_value) return true;
     if (symbol->decl_node
         && child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("expression"))) return true;
+    if (nt_is(grammar, n00bb_pattern_owner(grammar, symbol->decl_node),
+              CORE_STRING_STATIC("variable-decl"))) return true;
     for (size_t i = 0; i < symbol->definition_count; i++) {
         parse_tree_t *definition = symbol->definition_nodes[i];
         if (!child_nt(grammar, definition, CORE_STRING_STATIC("expression"))) continue;
