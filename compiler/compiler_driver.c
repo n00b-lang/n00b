@@ -2023,9 +2023,12 @@ discover_package_import(import_driver_t *driver,
             claim_manifest_failure(driver, job, unit, importer);
             continue;
         }
-        if (!in_progress
-            && !find_package_declaration(unit, logical->identifier))
-            continue;
+        bool declares = in_progress
+            ? !state->interface_module
+                || interface_declares_package(&driver->loader->interfaces,
+                       unit->module.identifier, logical->identifier)
+            : find_package_declaration(unit, logical->identifier) != nullptr;
+        if (!declares) continue;
         if (selected && selected != unit) {
             import_report(importer, statement,
                 N00B_DIAG_PACKAGE_MULTIPLE_MANIFESTS,

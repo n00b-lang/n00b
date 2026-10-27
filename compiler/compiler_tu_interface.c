@@ -1150,6 +1150,31 @@ read_manifest_text(n00bb_tu_state_t *state, const uint8_t *data, size_t size,
 }
 
 bool
+interface_declares_package(const n00bb_interface_context_t *context,
+                           core_string_t module, core_string_t package)
+{
+    for (size_t i = 0; i < context->linked_interface_count; i++) {
+        const th_env *environment = context->linked_interfaces[i];
+        for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, m, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || metadata.version != 1
+                || !core_string_eq(metadata.key,
+                       CORE_STRING_STATIC("n00b.package-manifest"))
+                || !core_string_eq(metadata.owner_name, package)
+                || metadata.size < 4) continue;
+            uint32_t length = read_u32_le(metadata.data);
+            if (length <= metadata.size - 4
+                && core_string_eq(core_string_borrow(
+                       (const char *)metadata.data + 4, length), module))
+                return true;
+        }
+    }
+    return false;
+}
+
+bool
 interface_restore_package_declarations(
     const n00bb_interface_context_t *context, core_translation_unit_t *unit)
 {
