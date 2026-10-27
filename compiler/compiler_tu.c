@@ -3503,6 +3503,42 @@ n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type)
     return found;
 }
 
+void
+n00bb_report_untyped_variables(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    parse_symtab_t *symbols = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    for (parse_scope_t *scope = symbols ? symbols->all_scopes : nullptr; scope;
+         scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            parse_tree_t *declaration = symbol->decl_node;
+            th_type *type = symbol->type ? th_resolve(symbol->type) : nullptr;
+            if (symbol->kind != PARSE_SYM_VARIABLE || !declaration
+                || !NT_IS(grammar, declaration, "sym-decl")
+                || core_tree_num_children(declaration) != 1
+                || (type && th_kind_of(type) != TH_VAR)) continue;
+            parse_tree_t *variable = parse_tree_parent(declaration);
+            while (variable && !NT_IS(grammar, variable, "variable-decl"))
+                variable = parse_tree_parent(variable);
+            parse_tree_t *prefix = CHILD_NT(grammar, variable,
+                                            "declaration-prefix");
+            core_string_t keyword = first_token_text(CHILD_NT(grammar, prefix,
+                                                              "binding-kind"));
+            if (!keyword.u8_bytes) keyword = CORE_STRING_STATIC("var");
+            if (n00bb_report(diagnostics, unit, N00B_DIAG_VARIABLE_UNTYPED,
+                    link_source_location(declaration),
+                    N00B_TEXT_VARIABLE_UNTYPED,
+                    N00BB_ARGS(ARG_TEXT(symbol->name))))
+                n00bb_report_help(diagnostics, N00B_TEXT_VARIABLE_UNTYPED_HELP,
+                    N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(keyword)));
+            symbol->type = th_poison(state->types);
+        }
+}
+
 bool
 infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_tu_state_t *state)

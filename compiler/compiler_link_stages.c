@@ -185,6 +185,7 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
     for (size_t i = 0; i < units->len; i++) {
         (void)n00bb_check_deferred_conversions(units->data[i]);
         (void)diagnose_reserved_declarations(units->data[i], environment);
+        n00bb_report_untyped_variables(analysis->grammar, units->data[i]);
     }
     for (size_t i = 0; i < units->len; i++) {
         n00bb_tu_state_t *state = tu_state(units->data[i]);

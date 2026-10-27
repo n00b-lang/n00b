@@ -835,6 +835,8 @@ bool semantic_static_literal_value(parse_grammar_t *grammar,
 th_type *static_record_shape(n00bb_tu_state_t *state, th_type *type);
 th_type *n00bb_field_tuple(th_ctx *types, th_member *members, size_t count);
 bool n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type);
+void n00bb_report_untyped_variables(parse_grammar_t *grammar,
+                                    core_translation_unit_t *unit);
 bool infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
                             n00bb_tu_state_t *state);
 bool contextualize_record_literal(parse_grammar_t *grammar,

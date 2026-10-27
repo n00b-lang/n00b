@@ -445,3 +445,9 @@ N00B_DIAG(TUPLE_CAST, "N00B-T0585", ERROR,
     "`cast[T]` converts between a field tuple and a record or object whose\n"
     "fields have the same names and compatible types, in either direction.\n"
     "A positional tuple never converts to a record or object.")
+N00B_DIAG(VARIABLE_UNTYPED, "N00B-T0586", ERROR,
+    "a variable's type cannot be inferred",
+    "A variable declared without a type or an initial value takes its type\n"
+    "from what is later assigned to it. When nothing settles it, give it a\n"
+    "type:\n"
+    "    var count: int")

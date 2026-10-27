@@ -285,6 +285,23 @@ static parse_tree_t *assignment_target(parse_visit_t *visit)
     }
 }
 
+static bool bare_declared_target(parse_tree_t *node)
+{
+    while (node) {
+        parse_node_resolution_t resolution = parse_tree_resolution(node);
+        parse_sym_entry_t *symbol =
+            resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+                ? resolution.target.symbol : parse_tree_sym(node);
+        if (symbol)
+            return symbol->kind == PARSE_SYM_VARIABLE && symbol->decl_node
+                && !core_tree_is_leaf(symbol->decl_node)
+                && core_tree_num_children(symbol->decl_node) == 1;
+        node = !core_tree_is_leaf(node) && core_tree_num_children(node) == 1
+            ? core_tree_child(node, 0) : nullptr;
+    }
+    return false;
+}
+
 static bool indexed_target(parse_tree_t *node)
 {
     while (node && !core_tree_is_leaf(node)
@@ -1328,6 +1345,11 @@ eval(ictx *c, const parse_infer_expr_t *e)
             ? child(c, e->lhs->index) : nullptr;
         if (e->rhs && e->rhs->kind == PARSE_INFER_CHILD
             && indexed_target(child(c, e->rhs->index))) return target;
+        th_type *open = th_resolve(target);
+        if (open && th_kind_of(open) == TH_VAR && e->rhs
+            && e->rhs->kind == PARSE_INFER_CHILD
+            && bare_declared_target(child(c, e->rhs->index)))
+            return th_unify_in_place(c->tc, value, target);
         if (th_converts(c->tc, value, target, site, c->v->grammar)
             || th_custom_coerces(c->tc, value, target)) return target;
         return th_unify_in_place(c->tc, value, target);
