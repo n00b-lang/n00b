@@ -1,0 +1,2 @@
+tests/diagnostics/tu/enum_value_not_integer.n:1:20: error N00B-T0505: the value of enum item `Red` must be an integer literal, not `"x"`
+  help: write a decimal or hexadecimal integer, such as `Red = 1`

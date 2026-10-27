@@ -1,0 +1,1 @@
+tests/diagnostics/front/pass_not_alone.n:2:5: error N00B-P0009: `pass` must be the only statement in its block

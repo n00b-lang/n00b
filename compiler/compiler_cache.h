@@ -49,13 +49,14 @@ bool n00bb_cache_symbol_uses(const n00bb_cache_t *cache, core_string_t module,
 
 n00bb_cache_t *n00bb_cache_open(core_string_t root_path,
                                 parse_cmdr_result_t *args,
-                                core_string_t compiler_path,
                                 core_string_t triple, ir_ctx_t *ir_context,
                                 n00bb_cache_locate_fn locate,
                                 void *locate_context);
 bool n00bb_cache_module_source(const n00bb_cache_t *cache,
                                core_string_t module, core_string_t *path,
                                uint64_t *source_hash);
+bool n00bb_cache_declaration_sites(const n00bb_cache_t *cache,
+                                   core_string_t module, core_buffer_t *out);
 bool n00bb_cache_replay_warnings(const n00bb_cache_t *cache,
                                  const core_translation_unit_t *unit,
                                  core_diagnostics_t *into);
@@ -72,9 +73,13 @@ void n00bb_cache_log_restart(core_string_t reason);
 bool n00bb_cache_check_dispatch(n00bb_cache_t *cache,
                                 n00bb_link_analysis_t *analysis,
                                 const th_env *environment);
+void n00bb_cache_objectless_modules(const n00bb_cache_t *cache,
+                                    core_buffer_t *out);
 void n00bb_cache_stale_modules(const n00bb_cache_t *cache,
                                core_buffer_t *out);
-bool n00bb_cache_assumptions_hold(const n00bb_cache_t *cache,
+void n00bb_cache_unloadable_modules(const n00bb_cache_t *cache,
+                                    core_buffer_t *out);
+bool n00bb_cache_assumptions_hold(n00bb_cache_t *cache,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis);
 bool n00bb_cache_record_summaries(n00bb_cache_t *cache,
@@ -102,6 +107,7 @@ bool n00bb_cache_instance_object(n00bb_cache_t *cache,
     core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     const n00bb_specialization_t *item, n00bb_cache_module_object_t *object);
 bool n00bb_cache_snapshot(n00bb_cache_t *cache, core_link_unit_t *link);
+void n00bb_cache_set_check_only(bool check_only);
 bool n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
                        n00bb_link_analysis_t *analysis,
                        const n00bb_cache_module_object_t *objects,

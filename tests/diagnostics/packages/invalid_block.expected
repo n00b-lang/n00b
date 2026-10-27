@@ -1,0 +1,2 @@
+tests/diagnostics/packages/invalid_block/facade.n00b:3:9: error N00B-N0509: a package block may contain only `export` and `when` statements
+  help: move this statement out of the package block; imports go before it

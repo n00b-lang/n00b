@@ -120,5 +120,8 @@ main(void)
     check_target(S("x86_64-windows"), N00BB_ABI_TARGET_X86_64_WINDOWS,
                  S(".n00b$M"), (core_string_t){}, S(".data"),
                  (core_string_t){});
+    check_target(S("arm64-linux"), N00BB_ABI_TARGET_ARM64_LINUX,
+                 S(".data.rel.ro.n00b_meta"), (core_string_t){}, S(".data"),
+                 (core_string_t){});
     return 0;
 }

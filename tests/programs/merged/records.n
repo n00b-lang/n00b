@@ -1,0 +1,366 @@
+record Point {
+    x: int
+    y: int
+}
+
+object Counter {
+    count: int
+    label: string
+}
+
+const ORIGIN: Point = (x = 0, y = 0)
+
+func shift(p: Point) -> Point {
+    var moved: Point = p
+    moved.x = moved.x + 1
+    return moved
+}
+
+func bump(c: Counter) {
+    c.count = c.count + 1
+}
+
+func peek(view c: Counter) -> int {
+    return c.count
+}
+
+func label_of(view c: Counter) -> string {
+    let text: string = c.label
+    return text
+}
+
+func double_peek(view c: Counter) -> int {
+    return peek(c) * 2
+}
+
+func pass_back(view c: Counter) -> Counter {
+    return c
+}
+
+var copied: int = 0
+
+func copy_out(view c: Counter) {
+    copied = c.count
+}
+
+func grow(modify p: Point) {
+    p.y = p.y + 10
+}
+
+func replace(modify c: Counter) {
+    c = (count = 100, label = "replaced")
+}
+
+func make_point(out p: Point) {
+    p = (x = 7, y = 8)
+}
+
+func take(consume c: Counter) -> int {
+    c = (count = c.count + 1000, label = c.label)
+    return c.count
+}
+
+var first: Point = (x = 1, y = 2)
+var second: Point = first
+second.x = 50
+require first.x == 1 and second.x == 50
+
+let fixed: Point = (x = 3, y = 4)
+require shift(fixed).x == 4 and fixed.x == 3
+
+let counter: Counter = (count = 1, label = "c")
+let alias_of_counter: Counter = counter
+alias_of_counter.count = 5
+require counter.count == 5
+bump(counter)
+require counter.count == 6 and alias_of_counter.count == 6
+
+require peek(counter) == 6 and double_peek(counter) == 12
+require label_of(counter) == "c"
+require pass_back(counter) == counter
+copy_out(counter)
+require copied == 6
+
+grow(first)
+require first.y == 12
+
+var slot: Counter = counter
+replace(slot)
+require slot.count == 100 and counter.count == 6
+
+var made: Point
+make_point(made)
+require made.x == 7 and made.y == 8
+
+let given: Counter = (count = 1, label = "given")
+require take(given) == 1001
+
+require ORIGIN.x == 0 and peek(counter) == 6
+
+let items: List[int] = [1, 2]
+let shared_items = items
+shared_items.append(3)
+items[0] = 9
+require len(items) == 3 and shared_items[0] == 9
+
+enum Mode {
+    a = 0, b = 1, c = 2
+}
+
+flagset Perm {
+    read, write, exec
+}
+
+record Inner {
+    on:   bool
+    mode: Mode
+}
+
+record Packed {
+    name:  string
+    x:     bool
+    mode:  Mode
+    small: u:3
+    perm:  Perm
+    maybe: bool?
+    count: int
+    inner: Inner
+    y:     bool
+}
+
+const base: Packed = (name = "base", x = true, mode = Mode.c, small = 5,
+                      perm = Perm.write, maybe = false, count = 7,
+                      inner = (on = true, mode = Mode.b), y = false)
+
+func flip(modify v: bool) {
+    v = !v
+}
+
+func set_mode(modify m: Mode) {
+    m = Mode.a
+}
+
+func check(packed_p: Packed?) -> int {
+    if packed_p == nil {
+        return 0
+    }
+    return packed_p.get().count
+}
+
+var packed_p: Packed = base
+require packed_p.x
+require packed_p.mode == Mode.c
+require packed_p.small == 5
+require packed_p.perm == Perm.write
+require packed_p.maybe != nil
+require packed_p.count == 7
+require packed_p.inner.on
+require packed_p.inner.mode == Mode.b
+require !packed_p.y
+require packed_p.name == "base"
+packed_p.y = true
+packed_p.mode = Mode.b
+packed_p.small = 6
+packed_p.inner.mode = Mode.c
+packed_p.maybe = nil
+require packed_p.y and packed_p.x
+require packed_p.mode == Mode.b
+require packed_p.small == 6
+require packed_p.inner.mode == Mode.c
+require packed_p.maybe == nil
+flip(packed_p.x)
+require !packed_p.x
+set_mode(packed_p.mode)
+require packed_p.mode == Mode.a
+require check(packed_p) == 7
+require check(nil) == 0
+var ps: Array[Packed] = new[Array[Packed]](3)
+ps[1] = packed_p
+require ps[1].small == 6
+require !ps[0].y
+var modes: Array[Mode] = new[Array[Mode]](5)
+modes[3] = Mode.c
+require modes[3] == Mode.c
+require modes[2] == Mode.a
+var smalls: Array[u:3] = new[Array[u:3]](4)
+smalls[2] = 7
+require smalls[2] == 7
+var perms: Array[Perm] = new[Array[Perm]](2)
+perms[1] = Perm.read + Perm.exec
+require perms[1] == Perm.read + Perm.exec
+let q: Packed = (name = "q", x = false, mode = Mode.a, small = 1,
+                 perm = Perm.exec, maybe = true, count = 3,
+                 inner = (on = false, mode = Mode.a), y = true)
+require q.y and !q.x and q.small == 1
+record Pair {
+    lo:   char
+    hi:   char
+    prev: Mode
+    last: Mode
+}
+const max_char: char = cast[char](0x10ffff)
+var pair: Pair = (lo = 'a', hi = max_char, prev = Mode.b, last = Mode.c)
+require pair.lo == 'a' and pair.hi == max_char
+require pair.prev == Mode.b and pair.last == Mode.c
+pair.last = Mode.a
+pair.hi = 'z'
+require pair.prev == Mode.b and pair.last == Mode.a and pair.hi == 'z'
+
+record Cell {
+    width: u8
+    label: string
+}
+
+func weight(c: Cell) -> int {
+    return cast[int] c.width + cast[int] byte_len(c.label)
+}
+
+func cell_total() -> int {
+    var cells: List[Cell] = new[List[Cell]]()
+    cells.append((width = 3, label = "ab"))
+    return weight((width = 1, label = "x")) + weight(cells[0])
+}
+
+require cell_total() == 7
+
+record Nil_Failure {
+    code: i64
+    text: string?
+    origin: string
+}
+
+func make_failure(c: i32) -> Nil_Failure {
+    let nil_failure: Nil_Failure = (code = cast[i64]c, text = nil, origin = "x")
+    return nil_failure
+}
+
+let nil_failure = make_failure(3)
+require nil_failure.code == 3
+require nil_failure.text == nil
+
+record Handle {
+    raw: uint
+}
+
+func make_handle(raw: uint) -> Handle {
+    return (raw = raw)
+}
+
+func checked(raw: uint) -> Handle fail: string {
+    if raw == 0 {
+        fail "zero"
+    }
+    return (raw = raw + 1)
+}
+
+require make_handle(5).raw == 5
+try {
+    require checked(1)!.raw == 2
+} fail(failure) {
+    require false
+}
+
+record Box {
+    cap: u32
+    low: u8
+    limit: i16?
+}
+
+func __init(modify self: Box, cap: u32, low: u8 = 1, limit: i16? = nil) {
+    self.cap = cap
+    self.low = low
+    self.limit = limit
+}
+
+var box_plain: Box = new[Box](64)
+var named: Box = new[Box](70000, low = 200, limit = -3)
+require box_plain.cap == 64
+require box_plain.low == 1
+require named.cap == 70000
+require named.low == 200
+require named.limit.get_or_else(0) == -3
+
+record Failure {
+    code: i64
+    text: string?
+    limit: u32?
+}
+
+func __init(modify self: Failure, code: i64, text: string?, limit: u32? = nil) {
+    self.code = code
+    self.text = text
+    self.limit = limit
+}
+
+func risky(code: i64) -> nil fail: Failure {
+    fail new[Failure](code, nil)
+}
+
+func limit_of(failure: Failure) -> u32 {
+    let limit = failure.limit
+    if limit == nil {
+        return 0
+    }
+    return limit.get()
+}
+
+let failure_plain = new[Failure](cast[i64]1, "named", 7)
+require failure_plain.text != nil
+require limit_of(failure_plain) == 7
+let empty = new[Failure](cast[i64]2, nil, limit = 9)
+require empty.text == nil
+require limit_of(empty) == 9
+try {
+    risky(3)!
+} fail(failure) {
+    require failure.code == 3
+    require limit_of(failure) == 0
+}
+
+let bytes: Ffi_Bytes = (data = cast[uint]0, length = cast[uint]3)
+require bytes.length == 3
+
+record R {
+    types: u8
+    io: u8
+}
+
+var r: R = (types = 3, io = 4)
+r.io += 1
+require r.types == 3
+require r.io == 5
+
+record Node {
+    value: int
+}
+
+var width: Atomic[u32] = 5
+var small: Atomic[i8] = -3
+var flag: Atomic[bool] = false
+var ratio: Atomic[f64] = 1.5
+var head: Atomic[Ref[Node]?] = nil
+
+func same(x: u32) -> u32 {
+    return x
+}
+
+func atomic_bump(modify c: Atomic[u32]) {
+    c = c + 1
+}
+
+func loads() -> bool {
+    flag = !flag
+    let w: u32 = width
+    let total: u32 = w + same(width) + width
+    var node: Node = (value = 7)
+    head = ref node
+    let h: Ref[Node]? = head
+    var copy: Atomic[u32] = width
+    atomic_bump(copy)
+    return flag and total == 15 and width == 5 and small == -3 and
+        ratio * 2.0 == 3.0 and h != nil and h.get().value == 7 and
+        copy == 6
+}
+
+require loads()
+__fd_write(2, "ok")

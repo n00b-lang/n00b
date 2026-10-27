@@ -8,6 +8,8 @@
 
 #if defined(__linux__) && defined(__x86_64__)
 #define HOST_TARGET N00B_ABI_TARGET_X86_64_LINUX
+#elif defined(__linux__) && defined(__aarch64__)
+#define HOST_TARGET N00B_ABI_TARGET_ARM64_LINUX
 #elif defined(__APPLE__) && defined(__aarch64__)
 #define HOST_TARGET N00B_ABI_TARGET_ARM64_MACOS
 #elif defined(_WIN32) && defined(_M_X64)

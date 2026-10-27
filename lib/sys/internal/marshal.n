@@ -260,8 +260,15 @@ func redirect(graph: Ref[Graph], slot: Ref[byte], target: u32,
     internal.gc.alloc.barrier_pointer_runtime(moved)
 }
 
+func traced_base(node: Graph_Node) -> Ref[byte] {
+    if node.copy != nil {
+        return node.copy.get()
+    }
+    return node.base
+}
+
 func node_offset(graph: Ref[Graph], node: u32, address: Ref[byte]) -> uint {
-    return __abi_ref_address(address) - __abi_ref_address(graph.nodes[cast[int]node].base)
+    return __abi_ref_address(address) - __abi_ref_address(traced_base(graph.nodes[cast[int]node]))
 }
 
 func set_origin(graph: Ref[Graph], node: u32, parent: u32, slot: Ref[byte]) {
@@ -760,10 +767,7 @@ func visit_value(graph: Ref[Graph], source: u32, address: Ref[byte],
 
 func trace_node(graph: Ref[Graph], index: u32) {
     let node: Graph_Node = graph.nodes[cast[int]index]
-    var base: Ref[byte] = node.base
-    if node.copy != nil {
-        base = node.copy.get()
-    }
+    let base: Ref[byte] = traced_base(node)
     if (node.flags & internal.abi.baked_foreign) != 0 {
         let element: Ref[internal.abi.Type_Record] = type_row(node.type_index)
         if node.merged_into >= 0 or element.tracing_index == 0 {

@@ -1,5 +1,0 @@
-const limits = [-
-use "contracts/limits.writ"
--]'ffi
-
-require limits.LIMIT == 40

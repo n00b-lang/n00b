@@ -16,24 +16,28 @@
 #define CHECK(condition) do { if (!(condition)) abort(); } while (0)
 
 static bool
+check_function(void *context, const n00bb_llvm_stack_function_t *function)
+{
+    (void)context;
+    bool named_probe = false;
+    for (size_t i = 0; i + 5 <= function->name.length; i++)
+        if (!memcmp(function->name.bytes + i, "probe", 5))
+            named_probe = true;
+    CHECK(named_probe);
+    CHECK(function->code_bytes > 0);
+    CHECK(function->stack_bytes >= sizeof(void *));
+    return true;
+}
+
+static bool
 check_location(void *context, const n00bb_llvm_stack_location_t *location)
 {
     unsigned *count = context;
     (*count)++;
-    bool named_probe = false;
-    for (size_t i = 0; i + 5 <= location->function.length; i++)
-        if (!memcmp(location->function.bytes + i, "probe", 5))
-            named_probe = true;
-    CHECK(named_probe);
-    CHECK(location->id == 42
-        || location->id == 43
-        || location->id == N00BB_LLVM_FRAME_SENTINEL_ID);
-    CHECK(location->size_bytes == sizeof(void *));
-    CHECK(location->stack_bytes >= sizeof(void *));
+    CHECK(location->id == 42 || location->id == 43);
     if (location->id == 43)
         CHECK(location->kind == N00BB_LLVM_STACKMAP_REGISTER);
-    else CHECK(location->kind == N00BB_LLVM_STACKMAP_DIRECT
-               && location->frame_offset < 0);
+    else CHECK(location->kind == N00BB_LLVM_STACKMAP_DIRECT);
     return true;
 }
 
@@ -62,6 +66,11 @@ check_target(const char *triple,
     LLVMValueRef store = LLVMBuildStore(builder, LLVMGetParam(function, 0),
                                        root);
     LLVMSetVolatile(store, true);
+    LLVMValueRef spill = LLVMBuildAlloca(builder,
+        LLVMArrayType2(pointer, 64), "spill");
+    LLVMValueRef spilled = LLVMBuildStore(builder, LLVMGetParam(function, 0),
+                                         spill);
+    LLVMSetVolatile(spilled, true);
     LLVMTypeRef parameters[] = {
         LLVMInt64TypeInContext(context), LLVMInt32TypeInContext(context)
     };
@@ -71,20 +80,9 @@ check_target(const char *triple,
                                        map_type);
     LLVMValueRef operands[] = {
         LLVMConstInt(parameters[0], 42, false),
-        LLVMConstInt(parameters[1], 0, false), root,
+        LLVMConstInt(parameters[1], 0, false), root, spill,
     };
-    LLVMBuildCall2(builder, map_type, map, operands, 3, "");
-    LLVMValueRef descriptor = LLVMAddGlobal(module,
-        LLVMInt8TypeInContext(context),
-        "__n00bb_gc_frame.frame_map_probe");
-    LLVMValueRef sentinel = LLVMBuildAlloca(builder, pointer, "sentinel");
-    LLVMValueRef marker = LLVMBuildStore(builder, descriptor, sentinel);
-    LLVMSetVolatile(marker, true);
-    LLVMValueRef sentinel_operands[] = {
-        LLVMConstInt(parameters[0], N00BB_LLVM_FRAME_SENTINEL_ID, false),
-        LLVMConstInt(parameters[1], 0, false), sentinel,
-    };
-    LLVMBuildCall2(builder, map_type, map, sentinel_operands, 3, "");
+    LLVMBuildCall2(builder, map_type, map, operands, 4, "");
     LLVMBuildRetVoid(builder);
     LLVMValueRef register_probe = LLVMAddFunction(module,
         "frame_map_register_probe", signature);
@@ -99,19 +97,6 @@ check_target(const char *triple,
         LLVMGetParam(register_probe, 0),
     };
     LLVMBuildCall2(builder, map_type, map, register_operands, 3, "");
-    LLVMValueRef register_descriptor = LLVMAddGlobal(module,
-        LLVMInt8TypeInContext(context),
-        "__n00bb_gc_frame.frame_map_register_probe");
-    LLVMValueRef register_sentinel = LLVMBuildAlloca(builder, pointer,
-        "sentinel");
-    LLVMValueRef register_marker = LLVMBuildStore(builder,
-        register_descriptor, register_sentinel);
-    LLVMSetVolatile(register_marker, true);
-    LLVMValueRef register_sentinel_operands[] = {
-        LLVMConstInt(parameters[0], N00BB_LLVM_FRAME_SENTINEL_ID, false),
-        LLVMConstInt(parameters[1], 0, false), register_sentinel,
-    };
-    LLVMBuildCall2(builder, map_type, map, register_sentinel_operands, 3, "");
     LLVMBuildRetVoid(builder);
     LLVMDisposeBuilder(builder);
 
@@ -137,9 +122,13 @@ check_target(const char *triple,
         LLVMObjectFile, &message, &object));
     unsigned count = 0;
     bool found = false;
+    n00bb_llvm_stack_visitor_t visitor = {
+        .function = check_function, .location = check_location,
+        .context = &count,
+    };
     CHECK(n00bb_llvm_stack_maps_visit(LLVMGetBufferStart(object),
-        LLVMGetBufferSize(object), format, check_location, &count, &found));
-    CHECK(found && count == 4);
+        LLVMGetBufferSize(object), format, &visitor, &found));
+    CHECK(found && count == 3);
     core_string_t profile = format == CORE_TARGET_OBJECT_MACH_O
         ? CORE_STRING_STATIC("arm64-macos")
         : format == CORE_TARGET_OBJECT_COFF
@@ -164,10 +153,39 @@ check_target(const char *triple,
                 ? CORE_STRING_STATIC(".n00b$F")
                 : CORE_STRING_STATIC(".data.rel.ro.n00b_frames"),
         &section));
-    CHECK(core_le_load_u32(section.bytes) == 2);
-    CHECK(core_le_load_u32(section.bytes + 4) == 1);
-    CHECK(section.relocation_count == 2);
-    CHECK(core_le_load_u32(section.bytes + 8 + 24 + 12) == 0);
+    uint32_t rows = core_le_load_u32(section.bytes);
+    bool windows = format == CORE_TARGET_OBJECT_COFF;
+    CHECK(section.relocation_count == rows);
+    CHECK(rows == (windows ? 2u : 1u));
+    uint32_t precise = 0;
+    bool spread = false;
+    for (uint32_t row = 0; row < rows; row++) {
+        const uint8_t *frame = section.bytes + 8 + row * 32;
+        int32_t record = (int32_t)core_le_load_u32(frame + 20);
+        uint32_t flags = core_le_load_u32(frame + 24);
+        CHECK(core_le_load_u32(frame + 8) > 0);
+        CHECK(windows ? record >= 0 && record % 8 == 0 : record == 0);
+        CHECK(flags <= 1 && core_le_load_u32(frame + 28) == 0);
+        if (flags) {
+            CHECK(windows && core_le_load_u32(frame + 12) == 0);
+            continue;
+        }
+        precise++;
+        CHECK(!windows || record > 0);
+        CHECK(core_le_load_u32(frame + 12) >= 1);
+        bool rooted = false;
+        for (uint32_t i = 0; i < core_le_load_u32(frame + 12); i++) {
+            const uint8_t *root = section.bytes + 8 + rows * 32
+                + (core_le_load_u32(frame + 16) + i) * 8;
+            int32_t offset = (int32_t)core_le_load_u32(root);
+            CHECK(core_le_load_u32(root + 4) == 8);
+            CHECK(offset + 8 <= record || offset >= record + 16);
+            rooted = rooted || offset < record;
+            spread = spread || offset > 0;
+        }
+        CHECK(rooted);
+    }
+    CHECK(precise == 1 && spread == windows);
     core_free(companion);
     n00bb_native_frames_free(frames);
     LLVMDisposeMemoryBuffer(object);

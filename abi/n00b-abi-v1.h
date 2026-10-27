@@ -113,6 +113,7 @@ typedef enum {
     N00B_ABI_TARGET_X86_64_LINUX = 1,
     N00B_ABI_TARGET_ARM64_MACOS = 2,
     N00B_ABI_TARGET_X86_64_WINDOWS = 3,
+    N00B_ABI_TARGET_ARM64_LINUX = 4,
 } n00b_abi_target_v1;
 
 typedef enum {
@@ -159,6 +160,8 @@ typedef enum {
     N00B_ABI_TABLE_TYPE_ARGUMENT,
     N00B_ABI_TABLE_CALL_SHAPE,
     N00B_ABI_TABLE_BAKED_NODE,
+    N00B_ABI_TABLE_SUMMARY_STREAM,
+    N00B_ABI_TABLE_LAST = N00B_ABI_TABLE_SUMMARY_STREAM,
 } n00b_abi_table_kind_v1;
 
 typedef enum {

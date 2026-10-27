@@ -1,0 +1,2789 @@
+import sys.abi
+import sys.gc.alloc
+import sys.gc.collect
+import text
+import unicode
+import unicode.idna
+import unicode.query
+import unicode.security
+
+record String_Words layout(c) {
+    data:     Ref[byte]
+    selector: u64
+}
+
+record String_Words_Opt layout(c) {
+    data:     Ref[byte]?
+    selector: u64
+}
+
+var failures: int = 0
+
+func check(ok: bool, probe: string, code: string) {
+    if !ok {
+        __fd_write(2, "FAIL " + probe + " " + code + "\n")
+        failures += 1
+    }
+}
+
+func report(probe: string, failed: string?) {
+    if failed != nil {
+        check(false, probe, failed.get())
+    }
+}
+
+func rich_over(body: Ref[text.Rich_Body]) -> string {
+    var words: String_Words = (data = unsafe_cast[Ref[byte]] body,
+                               selector = str_tag_rich << 62)
+    let view: Ref[string] = unsafe_cast[Ref[string]] ref words
+    let s: string = view.__value
+    return s
+}
+
+func body_of(s: string) -> Ref[text.Rich_Body] {
+    var copy: string = s
+    let words: Ref[String_Words] = unsafe_cast[Ref[String_Words]] ref copy
+    return unsafe_cast[Ref[text.Rich_Body]] words.data
+}
+
+func is_rich(s: string) -> bool {
+    return cast[u64] tag(s) == str_tag_rich
+}
+
+func one_record() -> List[text.Style_Record] {
+    var records: List[text.Style_Record] = new[List[text.Style_Record]]()
+    let blank: text.Style_Record = (start_ix = nil, end_ix = nil,
+                                    style_tag = nil, format_spec = nil,
+                                    substitution = (none = nil))
+    records.append(blank)
+    return records
+}
+
+func opt_is(o: u32?, v: u32) -> bool {
+    if o == nil {
+        return false
+    }
+    return o.get() == v
+}
+
+func repr_of(s: string) -> string {
+    var read_fd: int = -1
+    var write_fd: int = -1
+    require __os_pipe(ref read_fd, ref write_fd) == 0
+    let count: i32 = s.raw_repr(cast[i32] write_fd)
+    require count >= 0
+    let written: uint = cast[uint] count
+    require __os_close(write_fd) == 0
+    var bytes: Array[u8] = new[Array[u8]](cast[int] written)
+    let got: int = __os_read(read_fd, unsafe_cast[Ref[byte]] ref bytes[0],
+                             written)
+    require got == cast[int] written
+    require __os_close(read_fd) == 0
+    return from_raw(ref bytes, got)
+}
+
+func check_encode(cp: char, want: string) {
+    let s: string = from_char(cp)
+    require byte_len(s) == byte_len(want)
+    var i: uint = 0
+    while i < byte_len(want) {
+        require byte_at(s, i) == byte_at(want, i)
+        i += 1
+    }
+}
+
+func check_rejected(cp: char) {
+    require byte_len(from_char(cp)) == 0
+}
+
+func core_probe_main() {
+    check_encode('A', "A")
+    check_encode(cast[char] 0xe9, "é")
+    check_encode(cast[char] 0x20ac, "€")
+    check_encode(cast[char] 0x1f4a9, "\U0001f4a9")
+    require encoding(from_char('A')) == Str_Encoding.ascii
+    require encoding(from_char(cast[char] 0xe9)) == Str_Encoding.utf8
+    check_rejected(cast[char] 0xd800)
+    check_rejected(cast[char] 0xdfff)
+    check_rejected(cast[char] 0x110000)
+}
+
+func rstr_check(s: string, bytes: uint, cps: uint) {
+    require byte_len(s) == bytes
+    require len(s) == cps
+}
+
+func c_length(bytes: Array[u8]) -> uint {
+    var n: uint = 0
+    while n < __array_length(bytes) and bytes[n] != 0 {
+        n += 1
+    }
+    return n
+}
+
+func cstring_of(s: string) -> Array[u8] {
+    let empty: Array[u8] = new[Array[u8]](0)
+    let result = try {
+        -> to_cstring(s)!
+    } fail(e) {
+        -> empty
+    }
+    return result
+}
+
+func embedded_nul_rejected(s: string) -> bool {
+    var rejected = false
+    try {
+        to_cstring(s)!
+    } fail(e) {
+        rejected = e == String_Error.embedded_nul
+    }
+    return rejected
+}
+
+func run_cstring_checks() {
+    let shortish: string = "inline"
+    let longish: string = "a string well past the inline capacity"
+    require c_length(cstring_of(shortish)) == byte_len(shortish)
+    let long_bytes: Array[u8] = cstring_of(longish)
+    require __array_length(long_bytes) >= byte_len(longish)
+    var i: uint = 0
+    while i < byte_len(longish) {
+        require long_bytes[i] == byte_at(longish, i)
+        i += 1
+    }
+    var raw: Array[u8] = new[Array[u8]](3)
+    raw[0] = 0x61
+    raw[1] = 0
+    raw[2] = 0x62
+    require embedded_nul_rejected(from_raw(ref raw, 3))
+    var buf: Array[u8] = new[Array[u8]](64)
+    let copied = try {
+        -> to_cstring(shortish, copy = true, buf = buf)!
+    } fail(e) {
+        -> new[Array[u8]](0)
+    }
+    require c_length(copied) == byte_len(shortish)
+    var j: uint = 0
+    while j < byte_len(shortish) {
+        require copied[j] == byte_at(shortish, j)
+        j += 1
+    }
+}
+
+func raw_long(selector: u64) -> string {
+    var words: String_Words_Opt = (data = nil, selector = selector)
+    let view: Ref[string] = unsafe_cast[Ref[string]] ref words
+    let s: string = view.__value
+    return s
+}
+
+func check_length_width() {
+    let wide: u64 = (3 << 58) | 12345
+    let s: string = raw_long((1 << 62) | wide)
+    require tag(s) == 1
+    require byte_len(s) == cast[uint] wide
+    let maximal: u64 = (1 << 60) - 1
+    let m: string = raw_long((1 << 62) | maximal)
+    require tag(m) == 1
+    require byte_len(m) == cast[uint] maximal
+}
+
+func check_ascii_flag() {
+    let plain: string = "short"
+    let wide: string = "héllo"
+    require encoding(plain) == Str_Encoding.ascii
+    require encoding(wide) == Str_Encoding.utf8
+    var broken: Array[u8] = new[Array[u8]](6)
+    broken[0] = 0x68
+    broken[1] = 0xc3
+    broken[2] = 0x28
+    broken[3] = 0x6c
+    broken[4] = 0x6c
+    broken[5] = 0x6f
+    require encoding(from_raw(ref broken, 6)) == Str_Encoding.binary
+    var plain_bytes: Array[u8] = new[Array[u8]](cast[int] byte_len(plain))
+    var i: uint = 0
+    while i < byte_len(plain) {
+        plain_bytes[i] = byte_at(plain, i)
+        i += 1
+    }
+    var wide_bytes: Array[u8] = new[Array[u8]](cast[int] byte_len(wide))
+    var k: uint = 0
+    while k < byte_len(wide) {
+        wide_bytes[k] = byte_at(wide, k)
+        k += 1
+    }
+    require encoding(from_raw(ref plain_bytes, cast[int] byte_len(plain))) ==
+        Str_Encoding.ascii
+    require encoding(from_raw(ref wide_bytes, cast[int] byte_len(wide))) ==
+        Str_Encoding.utf8
+    let maximal: u64 = (1 << 60) - 1
+    let s: string = raw_long((1 << 62) | (1 << 60) | maximal)
+    require tag(s) == 1
+    require byte_len(s) == cast[uint] maximal
+    require style_ref(plain) == 0
+}
+
+func rstr_probe_main() {
+    rstr_check("", 0, 0)
+    rstr_check("hello", 5, 5)
+    rstr_check("héllo", 6, 5)
+    rstr_check("\U0001f4a9", 4, 1)
+    rstr_check("a€b", 5, 3)
+    let a: string = "distinct"
+    let b: string = "distinct"
+    let c: string = "different"
+    require a == b
+    require a != c
+    run_cstring_checks()
+    check_length_width()
+    check_ascii_flag()
+}
+
+let raw_literal_p: string = [- hello -]
+
+func raw_check(got: string, want: string) {
+    require got == want
+}
+
+func raw_literal_probe_main() {
+    raw_check([- hi -], "hi")
+    raw_check([- C:\new -], "C:\\new")
+    raw_check([-- has -] in --], "has -] in")
+    raw_check([- "q" -], "\"q\"")
+    require byte_len(raw_literal_p) == 5
+    require byte_at(raw_literal_p, 0) == 0x68 and byte_at(raw_literal_p, 4) == 0x6f
+    raw_check(raw_literal_p, "hello")
+}
+
+func bytes_of(s: string) -> Array[u8] {
+    var out: Array[u8] = new[Array[u8]](cast[int] byte_len(s))
+    var i: uint = 0
+    while i < byte_len(s) {
+        out[i] = byte_at(s, i)
+        i += 1
+    }
+    return out
+}
+
+func encoding_filled(n: int) -> Array[u8] {
+    var out: Array[u8] = new[Array[u8]](n)
+    var i: int = 0
+    while i < n {
+        out[i] = 0x61
+        i += 1
+    }
+    return out
+}
+
+func as_text_fails(s: string) -> bool {
+    var failed = false
+    try {
+        as_text(s)!
+    } fail(e) {
+        failed = e == String_Error.bad_encoding
+    }
+    return failed
+}
+
+func as_text_encoding(s: string) -> Str_Encoding {
+    let revealed = try {
+        -> encoding(as_text(s)!)
+    } fail(e) {
+        -> Str_Encoding.binary
+    }
+    return revealed
+}
+
+func string_encoding_probe() -> string? {
+    let long_ascii: string = "abcdefghijklmnopqrstuvwxyz0123456789" +
+        "abcdefghijklmnopqrstuvwxyz0123456789"
+    if encoding_of(long_ascii) != Str_Encoding.ascii {
+        return "1"
+    }
+
+    let pair: string = "世界"
+    let long_utf8: string = pair + pair + pair + pair + pair + pair + pair +
+        pair
+    if encoding_of(long_utf8) != Str_Encoding.utf8 {
+        return "2"
+    }
+
+    var long_bad: Array[u8] = encoding_filled(40)
+    long_bad[37] = 0xed
+    long_bad[38] = 0xa0
+    long_bad[39] = 0x80
+    if encoding_of(from_raw(ref long_bad, 40)) != Str_Encoding.binary {
+        return "3"
+    }
+
+    var straddle: Array[u8] = encoding_filled(40)
+    straddle[15] = 0xf0
+    straddle[16] = 0x9f
+    straddle[17] = 0x98
+    straddle[18] = 0x80
+    if encoding_of(from_raw(ref straddle, 40)) != Str_Encoding.utf8 {
+        return "4"
+    }
+
+    let ascii_lit: string = "plain ascii"
+    var ascii_bytes: Array[u8] = bytes_of(ascii_lit)
+    let narrowed: string = from_raw(ref ascii_bytes, 11,
+                                    encoding = Str_Encoding.utf8)
+    if encoding(narrowed) != Str_Encoding.ascii {
+        return "5"
+    }
+
+    let utf8_lit: string = "世"
+    var utf8_bytes: Array[u8] = bytes_of(utf8_lit)
+    let kept: string = from_raw(ref utf8_bytes, 3,
+                                encoding = Str_Encoding.utf8)
+    if encoding(kept) != Str_Encoding.utf8 {
+        return "6"
+    }
+
+    var bad_bytes: Array[u8] = new[Array[u8]](3)
+    bad_bytes[0] = 0xed
+    bad_bytes[1] = 0xa0
+    bad_bytes[2] = 0x80
+    let as_bin: string = from_raw(ref bad_bytes, 3,
+                                  encoding = Str_Encoding.binary)
+    if encoding(as_bin) != Str_Encoding.binary {
+        return "7"
+    }
+    if !as_text_fails(as_bin) {
+        return "8"
+    }
+
+    let hidden: string = from_raw(ref utf8_bytes, 3,
+                                  encoding = Str_Encoding.binary)
+    if as_text_encoding(hidden) != Str_Encoding.utf8 {
+        return "9"
+    }
+
+    let forced: string = from_raw(ref utf8_bytes, 3,
+                                  encoding = Str_Encoding.ascii,
+                                  unsafe = true)
+    if encoding(forced) != Str_Encoding.ascii {
+        return "10"
+    }
+
+    if encoding(from_char('a')) != Str_Encoding.ascii {
+        return "11"
+    }
+    if encoding(from_char(cast[char] 0x4e16)) != Str_Encoding.utf8 {
+        return "12"
+    }
+
+    if encoding(empty_string()) != Str_Encoding.ascii {
+        return "13"
+    }
+    return nil
+}
+
+func make_long() -> string {
+    var bytes: Array[u8] = new[Array[u8]](4000)
+    var i: uint = 0
+    while i < 4000 {
+        bytes[i] = cast[u8] (0x41 + i % 26)
+        i += 1
+    }
+    return from_raw(ref bytes, 4000)
+}
+
+func churn() {
+    var round: uint = 0
+    while round < 5000 {
+        var junk: Array[u8] = new[Array[u8]](4000)
+        var j: uint = 0
+        while j < 4000 {
+            junk[j] = 0x5a
+            j += 64
+        }
+        round += 1
+    }
+}
+
+var span_gc_base: string = make_long()
+let span_gc_span: string = byte_slice(span_gc_base, 1000, 1100)
+require tag(span_gc_span) == 2
+
+func span_gc_probe_main() {
+    span_gc_base = ""
+    churn()
+    churn()
+    require byte_len(span_gc_span) == 100
+    var i: uint = 0
+    while i < 100 {
+        require byte_at(span_gc_span, i) == cast[u8] (0x41 + (1000 + i) % 26)
+        i += 1
+    }
+}
+
+func offset_filled(n: uint, first: u8) -> Array[u8] {
+    var bytes: Array[u8] = new[Array[u8]](n)
+    var i: uint = 0
+    while i < n {
+        bytes[i] = first + cast[u8](i % 26)
+        i += 1
+    }
+    return bytes
+}
+
+func offset_same(s: string, src: Array[u8], at: uint, n: uint) -> bool {
+    if byte_len(s) != n {
+        return false
+    }
+    var i: uint = 0
+    while i < n {
+        if byte_at(s, i) != src[at + i] {
+            return false
+        }
+        i += 1
+    }
+    return true
+}
+
+func spans_share_storage() -> bool {
+    var local: Array[u8] = offset_filled(64, 0x61)
+    let one: string = from_raw(ref local, 40, copy = false)
+    let two: string = from_raw(ref local, 40, copy = false)
+    return string_backing_at(one) == string_backing_at(two) and
+        string_backing_at(one) == __abi_ref_address(ref local[0])
+}
+
+func adopt_shares_storage() -> bool {
+    var local: Array[u8] = offset_filled(32, 0x61)
+    let adopted: string = adopt(ref local, 32)
+    return string_backing_at(adopted) == __abi_ref_address(ref local[0])
+}
+
+func utf8_shares_storage() -> bool {
+    var local: Array[u8] = offset_filled(32, 0x61)
+    var decoded: string = ""
+    return __string_from_utf8(ref local, ref decoded) and
+        string_backing_at(decoded) == __abi_ref_address(ref local[0])
+}
+
+var offset_pool: Array[u8] = offset_filled(64, 0x61)
+let short_view: string = from_raw(ref offset_pool, 3, at = 5, copy = false)
+
+func raw_offset_probe_main() {
+    require offset_same(short_view, offset_pool, 5, 3)
+    let offset_shared: string = from_raw(ref offset_pool, 30, at = 10, copy = false)
+    let offset_copied: string = from_raw(ref offset_pool, 30, at = 10)
+    require offset_same(offset_shared, offset_pool, 10, 30)
+    require offset_same(offset_copied, offset_pool, 10, 30)
+    require tag(offset_shared) == cast[u8] str_tag_span
+    require tag(offset_copied) != cast[u8] str_tag_span
+    require string_backing_at(offset_shared) == __abi_ref_address(ref offset_pool[10])
+    require string_backing_at(offset_copied) != __abi_ref_address(ref offset_pool[10])
+    offset_pool[10] = 0x5a
+    require byte_at(offset_shared, 0) == 0x5a
+    require byte_at(offset_copied, 0) == 0x6b
+    require spans_share_storage()
+    require adopt_shares_storage()
+    require utf8_shares_storage()
+
+    var terminated: Array[u8] = offset_filled(8, 0x41)
+    terminated[6] = 0
+    require byte_len(from_raw(ref terminated, -1, at = 2)) == 4
+    require byte_len(from_raw(ref offset_pool, 0, at = 64)) == 0
+}
+
+let fancy: string = "«b»Hello«/b» «i»world«/i»"'r
+
+func check_rich(s: string, plain: string, markup: string) {
+    require tag(s) == 3
+    require byte_len(s) == byte_len(plain)
+    var walked: Array[u8] = __text_byte_array(s)
+    let flat: string = from_raw(ref walked, cast[int] byte_len(plain))
+    require tag(flat) != 3
+    require flat == plain
+    require repr_of(s) == markup
+}
+
+func local_literals() {
+    check_rich("«b»Hi«/b»"'r, "Hi", "r\"«b»Hi«/b»\"")
+    check_rich("«u»a rich literal well past the inline capacity«/u»"'r,
+               "a rich literal well past the inline capacity",
+               "r\"«u»a rich literal well past the inline capacity«/u»\"")
+    check_rich("x «#» y «#:04d» «#a_rather_long_argument_name»"'r, "x  y  ",
+               "r\"x «#0» y «#1:04d» «#a_rather_long_argument_name»\"")
+}
+
+func dispatch() {
+    let bold: string = "«b»Hi«/b»"'r
+    let same: string = "«b»Hi«/b»"'r
+    let italic: string = "«i»Hi«/i»"'r
+    require bold == same
+    require bold != italic
+    require bold != "Hi"
+    require "Hi" < bold
+    require !(bold < same)
+    require bold.hash() == same.hash()
+    require bold.hash() != "Hi".hash()
+    require bold.hash() != italic.hash()
+    require bold <= same and bold >= same
+    require bold > "Hi"
+}
+
+func rich_body_text_offset() -> u64? {
+    let probe: text.Rich_Body? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.type_for(typeof(probe))
+    if row == nil {
+        return nil
+    }
+    let body: Ref[sys.abi.Type_Record]? = sys.abi.first_component(row.get())
+    if body == nil {
+        return nil
+    }
+    let fields: sys.abi.Range = body.get().fields_or_arms
+    var i: u32 = 0
+    while i < fields.count {
+        let index: i64 = sys.abi.range_index(fields, i)
+        if index >= 0 {
+            let field: Ref[sys.abi.Field_Record]? =
+                sys.abi.field_at(cast[u32] index)
+            if field != nil and field.get().declaration_ordinal == 0 {
+                return field.get().logical_bit_offset
+            }
+        }
+        i += 1
+    }
+    return nil
+}
+
+let text_offset: u64? = rich_body_text_offset()
+
+func string_rich_literal_main() {
+    require text_offset != nil
+    require text_offset.get() == 0
+    check_rich(fancy, "Hello world", "r\"«b»Hello«/b» «i»world«/i»\"")
+    local_literals()
+    dispatch()
+}
+
+private func same_string(a: string, b: string) -> bool {
+    if byte_len(a) != byte_len(b) {
+        return false
+    }
+
+    for i from 0 until byte_len(a) {
+        if byte_at(a, i) != byte_at(b, i) {
+            return false
+        }
+    }
+
+    return true
+}
+
+private func cp_index(arr: List[char], i: uint) -> char {
+    return arr[cast[int] i]
+}
+
+private func unit_index(arr: List[u16], i: uint) -> u16 {
+    return arr[cast[int] i]
+}
+
+func transcode_probe() -> string? {
+    let mixed: string = "Aé世😀"
+
+    var cps: List[char] = []
+    try {
+        cps = unicode.utf32_from_string(mixed)!
+    } fail(e) {
+        return "1"
+    }
+
+    if cps.len() != 4 or cp_index(cps, 0) != cast[char] 0x41 or
+       cp_index(cps, 1) != cast[char] 0x00e9 or
+       cp_index(cps, 2) != cast[char] 0x4e16 or
+       cp_index(cps, 3) != cast[char] 0x1f600 {
+        return "2"
+    }
+
+    var back32_ok: bool = false
+    try {
+        back32_ok = same_string(unicode.utf32_to_string(cps)!, mixed)
+    } fail(e) {
+        back32_ok = false
+    }
+    if !back32_ok {
+        return "3"
+    }
+
+    var units: List[u16] = []
+    try {
+        units = unicode.utf16_from_string(mixed)!
+    } fail(e) {
+        return "4"
+    }
+
+    if units.len() != 5 or unit_index(units, 0) != 0x41 or
+       unit_index(units, 1) != 0x00e9 or unit_index(units, 2) != 0x4e16 or
+       unit_index(units, 3) != 0xd83d or unit_index(units, 4) != 0xde00 {
+        return "5"
+    }
+
+    var back16_ok: bool = false
+    try {
+        back16_ok = same_string(unicode.utf16_to_string(units)!, mixed)
+    } fail(e) {
+        back16_ok = false
+    }
+    if !back16_ok {
+        return "6"
+    }
+
+    var junk: Array[u8] = new[Array[u8]](2)
+    junk[0] = 0xff
+    junk[1] = 0xfe
+    let binary: string = from_raw(ref junk, 2)
+
+    var transcoded: bool = false
+    try {
+        unicode.utf32_from_string(binary)!
+        transcoded = true
+    } fail(e) {
+        transcoded = false
+    }
+    if !transcoded {
+        try {
+            unicode.utf16_from_string(binary)!
+            transcoded = true
+        } fail(e) {
+            transcoded = false
+        }
+    }
+    if transcoded {
+        return "7"
+    }
+
+    var too_big: List[char] = []
+    too_big.append(cast[char] 0x110000)
+
+    var too_big_ok: bool = false
+    try {
+        unicode.utf32_to_string(too_big)!
+        too_big_ok = true
+    } fail(e) {
+        too_big_ok = false
+    }
+    if too_big_ok {
+        return "8"
+    }
+
+    var lone: List[char] = []
+    lone.append(cast[char] 0xd800)
+
+    var lone_ok: bool = false
+    try {
+        unicode.utf32_to_string(lone)!
+        lone_ok = true
+    } fail(e) {
+        lone_ok = false
+    }
+    if lone_ok {
+        return "9"
+    }
+
+    var empty_ok: bool = false
+    try {
+        empty_ok = unicode.utf32_from_string(empty_string())!.len() == 0
+    } fail(e) {
+        empty_ok = false
+    }
+    if !empty_ok {
+        return "10"
+    }
+
+    return nil
+}
+
+private func name_is(got: string, want: string) -> bool {
+    if byte_len(got) != byte_len(want) {
+        return false
+    }
+
+    for i from 0 until byte_len(got) {
+        if byte_at(got, i) != byte_at(want, i) {
+            return false
+        }
+    }
+
+    return true
+}
+
+private func decodes_to(s: string, want: char, want_pos: u32) -> bool {
+    var pos: u32 = 0
+    var got: char = cast[char] 0
+
+    try {
+        got = unicode.utf8_decode(s, pos)!
+    } fail(e) {
+        return false
+    }
+
+    return got == want and pos == want_pos
+}
+
+private func roundtrips(cp: char, want_len: u64) -> bool {
+    let s: string = from_char(cp)
+
+    if byte_len(s) != want_len {
+        return false
+    }
+
+    return decodes_to(s, cp, cast[u32] want_len)
+}
+
+func unicode_encoding_probe() -> string? {
+    if !roundtrips('A', 1) {
+        return "1"
+    }
+
+    if !roundtrips(cast[char] 0x00e9, 2) {
+        return "2"
+    }
+
+    if !roundtrips(cast[char] 0x4e16, 3) {
+        return "3"
+    }
+
+    if !roundtrips(cast[char] 0x1f600, 4) {
+        return "4"
+    }
+
+    let mixed: string = "A\u00e9\u4e16"
+    var pos: u32 = 0
+
+    var walked: bool = false
+    try {
+        walked = unicode.utf8_decode(mixed, pos)! == 'A' and
+                 unicode.utf8_decode(mixed, pos)! == cast[char] 0x00e9 and
+                 unicode.utf8_decode(mixed, pos)! == cast[char] 0x4e16
+    } fail(e) {
+        walked = false
+    }
+    if !walked {
+        return "5"
+    }
+
+    var past_end: bool = false
+    try {
+        unicode.utf8_decode(mixed, pos)!
+        past_end = true
+    } fail(e) {
+        past_end = false
+    }
+    if past_end {
+        return "6"
+    }
+
+    var lead: Array[u8] = new[Array[u8]](1)
+    lead[0] = 0xff
+    let bad_lead: string = from_raw(ref lead, 1)
+
+    pos = 0
+
+    var lead_ok: bool = false
+    try {
+        unicode.utf8_decode(bad_lead, pos)!
+        lead_ok = true
+    } fail(e) {
+        lead_ok = false
+    }
+    if lead_ok {
+        return "7"
+    }
+
+    var trunc: Array[u8] = new[Array[u8]](2)
+    trunc[0] = 0xe4
+    trunc[1] = 0xb8
+    let truncated: string = from_raw(ref trunc, 2)
+
+    pos = 0
+
+    var trunc_ok: bool = false
+    try {
+        unicode.utf8_decode(truncated, pos)!
+        trunc_ok = true
+    } fail(e) {
+        trunc_ok = false
+    }
+    if trunc_ok {
+        return "8"
+    }
+
+    var sur: Array[u8] = new[Array[u8]](3)
+    sur[0] = 0xed
+    sur[1] = 0xa0
+    sur[2] = 0x80
+    let surrogate: string = from_raw(ref sur, 3)
+
+    pos = 0
+
+    var sur_ok: bool = false
+    try {
+        unicode.utf8_decode(surrogate, pos)!
+        sur_ok = true
+    } fail(e) {
+        sur_ok = false
+    }
+    if sur_ok {
+        return "9"
+    }
+
+    var over: Array[u8] = new[Array[u8]](2)
+    over[0] = 0xc0
+    over[1] = 0xaf
+    let overlong: string = from_raw(ref over, 2)
+
+    pos = 0
+
+    var over_ok: bool = false
+    try {
+        unicode.utf8_decode(overlong, pos)!
+        over_ok = true
+    } fail(e) {
+        over_ok = false
+    }
+    if over_ok {
+        return "10"
+    }
+
+    var bom_len: u32 = 0
+
+    if unicode.detect_bom("\ufeffabc", bom_len) != unicode.Bom.utf8 or
+       bom_len != 3 {
+        return "11"
+    }
+
+    var u16le: Array[u8] = new[Array[u8]](4)
+    u16le[0] = 0xff
+    u16le[1] = 0xfe
+    u16le[2] = 0x61
+    u16le[3] = 0
+    let le_stream: string = from_raw(ref u16le, 4)
+
+    if unicode.detect_bom(le_stream, bom_len) != unicode.Bom.utf16_le or
+       bom_len != 2 {
+        return "12"
+    }
+
+    var u32be: Array[u8] = new[Array[u8]](4)
+    u32be[0] = 0
+    u32be[1] = 0
+    u32be[2] = 0xfe
+    u32be[3] = 0xff
+    let be_stream: string = from_raw(ref u32be, 4)
+
+    if unicode.detect_bom(be_stream, bom_len) != unicode.Bom.utf32_be or
+       bom_len != 4 {
+        return "13"
+    }
+
+    if unicode.detect_bom("test", bom_len) != unicode.Bom.none or
+       bom_len != 0 {
+        return "14"
+    }
+
+    if unicode.general_category('A') != unicode.Gc.lu or
+       unicode.combining_class(cast[char] 0x0301) != 230 or
+       unicode.char_width(cast[char] 0x4e16) != 2 or
+       unicode.display_width("A\u4e16") != 3 or
+       !unicode.has_property('A', unicode.Property.uppercase) {
+        return "19"
+    }
+
+    let nfd_e: string = unicode.nfd("\u00e9")
+
+    if byte_len(nfd_e) != 3 or byte_at(nfd_e, 0) != 0x65 {
+        return "20"
+    }
+
+    let nfd_for_nfc: string = nfd_e
+    let nfc_back: string = unicode.nfc(nfd_for_nfc)
+
+    if byte_len(nfc_back) != 2 or byte_at(nfc_back, 0) != 0xc3 {
+        return "21"
+    }
+
+    let hangul: string = unicode.nfd("\uac00")
+
+    if byte_len(hangul) != 6 {
+        return "22"
+    }
+
+    let ligature: string = unicode.nfkc("\ufb01")
+
+    if byte_len(ligature) != 2 or byte_at(ligature, 0) != 0x66 or
+       byte_at(ligature, 1) != 0x69 {
+        return "23"
+    }
+
+    if !unicode.is_nfc("abc") or unicode.is_nfc(nfd_e) or
+       !unicode.is_nfd(nfd_e) {
+        return "24"
+    }
+
+    if unicode.toupper_char('a') != 'A' or unicode.tolower_char('A') != 'a' or
+       unicode.casefold_char('A') != 'a' {
+        return "25"
+    }
+
+    let up: string = unicode.toupper("stra\u00dfe")
+
+    if byte_len(up) != 7 or byte_at(up, 4) != 0x53 or
+       byte_at(up, 5) != 0x53 {
+        return "26"
+    }
+
+    if unicode.casecmp("HELLO", "hello") != 0 or
+       unicode.casecmp("abc", "abd") >= 0 {
+        return "27"
+    }
+
+    let title: string = unicode.totitle("hello world")
+
+    if byte_len(title) != 11 or byte_at(title, 0) != 0x48 or
+       byte_at(title, 6) != 0x57 {
+        return "28"
+    }
+
+    if !unicode.is_emoji(cast[char] 0x1f600) or unicode.is_emoji('A') {
+        return "29"
+    }
+
+    let flag: unicode.Emoji_Scan =
+        unicode.emoji_scan("\U0001f1fa\U0001f1f8", 0)
+
+    if flag.kind != unicode.Emoji_Type.flag or flag.seq_bytes != 8 {
+        return "30"
+    }
+
+    let zwj: unicode.Emoji_Scan =
+        unicode.emoji_scan("\U0001f469\u200d\U0001f4bb", 0)
+
+    if zwj.kind != unicode.Emoji_Type.zwj_seq or zwj.seq_bytes != 11 {
+        return "31"
+    }
+
+    let none: unicode.Emoji_Scan = unicode.emoji_scan("abc", 0)
+
+    if none.kind != unicode.Emoji_Type.none or none.seq_bytes != 0 {
+        return "32"
+    }
+
+    if !unicode.query.matches(unicode.query.filter_gc(unicode.Gc.lu), 'A') or
+       unicode.query.matches(unicode.query.filter_gc(unicode.Gc.lu), 'a') or
+       !unicode.query.matches(unicode.query.filter_range(cast[char] 0x41,
+                                             cast[char] 0x5a), 'Q') {
+        return "33"
+    }
+
+    let ri: List[unicode.Char_Pair] =
+        unicode.query.ranges(unicode.query.filter_range(cast[char] 0x1f1e6,
+                                            cast[char] 0x1f1ff))
+
+    if ri.len() != 1 {
+        return "34"
+    }
+
+    let pair: unicode.Char_Pair = ri[0]
+
+    if pair.lo != cast[char] 0x1f1e6 or pair.hi != cast[char] 0x1f1ff {
+        return "35"
+    }
+
+    let cpn: string? = unicode.query.char_name('A')
+
+    if cpn == nil or !name_is(cpn.get(), "LATIN CAPITAL LETTER A") {
+        return "36"
+    }
+
+    let rev: char? = unicode.query.char_from_name("LATIN SMALL LETTER Z")
+
+    if rev == nil or rev.get() != 'z' {
+        return "37"
+    }
+
+    if unicode.query.char_name(cast[char] 0xe000) != nil {
+        return "38"
+    }
+
+    let sc: unicode.Script? = unicode.query.script_by_name("Greek")
+
+    if sc == nil or unicode.query.script(cast[char] 0x0391) != sc.get() {
+        return "39"
+    }
+
+    if unicode.grapheme_count("abc") != 3 {
+        return "40"
+    }
+
+    if unicode.grapheme_count("e\u0301") != 1 {
+        return "41"
+    }
+
+    if unicode.grapheme_count("\r\n") != 1 {
+        return "42"
+    }
+
+    if unicode.grapheme_count("\U0001f1fa\U0001f1f8") != 1 {
+        return "43"
+    }
+
+    if unicode.grapheme_count("\U0001f1fa\U0001f1f8\U0001f1fa") != 2 {
+        return "44"
+    }
+
+    if unicode.grapheme_count("\U0001f469\u200d\U0001f4bb") != 1 {
+        return "45"
+    }
+
+    if unicode.grapheme_count("\uac01") != 1 {
+        return "46"
+    }
+
+    var wit: unicode.Break_Iter = unicode.word_iter("Hello, world!")
+    var wb_count: u32 = 0
+    var wb_first: u32 = 0
+
+    while unicode.next(wit) != nil {
+        if wb_count == 0 {
+            wb_first = wit.byte_pos
+        }
+
+        wb_count += 1
+    }
+
+    if wb_first != 5 {
+        return "47"
+    }
+
+    var nit: unicode.Break_Iter = unicode.word_iter("3.14")
+    var nb: u32 = 0
+
+    while unicode.next(nit) != nil {
+        nb += 1
+    }
+
+    if nb != 1 {
+        return "48"
+    }
+
+    var ait: unicode.Break_Iter = unicode.word_iter("can't")
+    var ab: u32 = 0
+
+    while unicode.next(ait) != nil {
+        ab += 1
+    }
+
+    if ab != 1 {
+        return "49"
+    }
+
+    var sit: unicode.Break_Iter =
+        unicode.sentence_iter("Hi there. How are you?")
+    var sb_count: u32 = 0
+    var sb_first: u32 = 0
+
+    while unicode.next(sit) != nil {
+        if sb_count == 0 {
+            sb_first = sit.byte_pos
+        }
+
+        sb_count += 1
+    }
+
+    if sb_count != 2 or sb_first != 10 {
+        return "50"
+    }
+
+    var lw: unicode.Break_Iter = unicode.sentence_iter("etc. and more.")
+    var lc: u32 = 0
+
+    while unicode.next(lw) != nil {
+        lc += 1
+    }
+
+    if lc != 1 {
+        return "51"
+    }
+
+    var abbr: unicode.Break_Iter =
+        unicode.sentence_iter("See Dr. Smith now.")
+    var uc: u32 = 0
+
+    while unicode.next(abbr) != nil {
+        uc += 1
+    }
+
+    if uc != 2 {
+        return "52"
+    }
+
+    let lba: List[u8] = unicode.linebreaks("ab cd")
+
+    if lba.len() != 5 {
+        return "53"
+    }
+
+    if lba[1] != cast[u8] unicode.Lb_Action.none or
+       lba[3] != cast[u8] unicode.Lb_Action.allowed {
+        return "54"
+    }
+
+    let lbm: List[u8] = unicode.linebreaks("a\nb")
+
+    if lbm[2] != cast[u8] unicode.Lb_Action.mandatory {
+        return "55"
+    }
+
+    if unicode.line_break(' ') != unicode.Lb.sp or
+       unicode.line_break('a') != unicode.Lb.al {
+        return "56"
+    }
+
+    if !unicode.is_valid_identifier("abc_1") or
+       unicode.is_valid_identifier("1abc") or
+       unicode.is_valid_identifier("") or
+       !unicode.is_xid_start('a') or
+       unicode.is_xid_start('1') or
+       !unicode.is_xid_continue('1') {
+        return "64"
+    }
+
+    if !unicode.security.is_confusable("good", "goo\u0501") {
+        return "65"
+    }
+
+    if unicode.security.is_confusable("abc", "xyz") {
+        return "66"
+    }
+
+    if unicode.security.script_restriction("hello") !=
+       unicode.security.Restriction.ascii_only {
+        return "67"
+    }
+
+    if unicode.security.script_restriction("\u043f\u0440\u0438") !=
+       unicode.security.Restriction.single_script {
+        return "68"
+    }
+
+    if !unicode.security.has_mixed_scripts("a\u0440c") {
+        return "69"
+    }
+
+    if unicode.security.script_restriction("a\u6f22\u304b\u30ab") !=
+       unicode.security.Restriction.highly_restrictive {
+        return "83"
+    }
+
+    if unicode.security.script_restriction("a\u6f22\u3105") !=
+       unicode.security.Restriction.highly_restrictive {
+        return "84"
+    }
+
+    if unicode.security.script_restriction("a\u6f22\ud55c") !=
+       unicode.security.Restriction.highly_restrictive {
+        return "85"
+    }
+
+    if unicode.security.script_restriction("a\u0440") ==
+       unicode.security.Restriction.moderately_restrictive {
+        return "86"
+    }
+
+    if unicode.security.script_restriction("a\u03b1") ==
+       unicode.security.Restriction.moderately_restrictive {
+        return "87"
+    }
+
+    if unicode.security.script_restriction("a\u05d0") !=
+       unicode.security.Restriction.moderately_restrictive {
+        return "88"
+    }
+
+    var iu_ok: bool = false
+    try {
+        iu_ok = name_is(unicode.idna.idna_to_unicode("xn--bcher-kva.de")!,
+                        "b\u00fccher.de")
+    } fail(e) {
+        iu_ok = false
+    }
+    if !iu_ok {
+        return "71"
+    }
+
+    if encoding(unicode.nfc("abc")) != Str_Encoding.ascii or
+       encoding(unicode.nfc("\u4e16")) != Str_Encoding.utf8 {
+        return "81"
+    }
+
+    if encoding(unicode.toupper("stra\u00dfe")) != Str_Encoding.ascii {
+        return "82"
+    }
+
+    if !name_is(unicode.query.script_name(unicode.query.script(cast[char] 0x0378)),
+                "Unknown") or
+       unicode.east_asian_width(cast[char] 0x3400) != unicode.Eaw.w {
+        return "900"
+    }
+
+    if unicode.query.bidi_class(cast[char] 0x0590) != unicode.Bidi_Class.r or
+       unicode.query.bidi_class(cast[char] 0x074b) != unicode.Bidi_Class.al or
+       unicode.query.bidi_class(cast[char] 0x20c1) != unicode.Bidi_Class.et {
+        return "901"
+    }
+
+    let spua_b: unicode.Block = unicode.query.block(cast[char] 0x100000)
+    let spua_b_id: unicode.Block? =
+        unicode.query.block_by_name("Supplementary Private Use Area-B")
+
+    if !name_is(unicode.query.block_name(spua_b),
+                "Supplementary Private Use Area-B") or
+       spua_b_id == nil or spua_b_id.get() != spua_b {
+        return "902"
+    }
+
+    if !name_is(unicode.nfc("\u1100\u1161\u11c3"), "\uac00\u11c3") {
+        return "903"
+    }
+
+    var tail: Array[u8] = new[Array[u8]](32)
+    var k: int = 0
+    while k < 30 {
+        tail[k] = 0x61
+        k += 1
+    }
+    tail[30] = 0xe4
+    tail[31] = 0xb8
+
+    if unicode.encoding_of(from_raw(ref tail, 32)) != Str_Encoding.binary {
+        return "904"
+    }
+
+    if unicode.security.script_restriction("\u65e5\u672c\u8a9e\u3072\u3089\u304c\u306a") !=
+       unicode.security.Restriction.single_script {
+        return "905"
+    }
+
+    let sigma: string = unicode.tolower("\u039f\u0394\u039f\u03a3")
+    let sigma_len: uint = byte_len(sigma)
+
+    if sigma_len < 2 or byte_at(sigma, sigma_len - 2) != 0xcf or
+       byte_at(sigma, sigma_len - 1) != 0x82 {
+        return "906"
+    }
+
+    var trip_ok: bool = false
+    try {
+        trip_ok = name_is(
+            unicode.idna.idna_to_unicode(unicode.idna.idna_to_ascii("\u4f8b\u3048.com")!)!,
+            "\u4f8b\u3048.com")
+    } fail(e) {
+        trip_ok = false
+    }
+    if !trip_ok {
+        return "907"
+    }
+
+    return nil
+}
+
+func color_probe_main() {
+    let c: text.Color = text.color_rgb(0x12, 0x34, 0x56)
+    check(c == 0x123456, "color_probe", "1")
+    check(text.color_red(c) == 0x12 and text.color_green(c) == 0x34 and
+          text.color_blue(c) == 0x56, "color_probe", "2")
+    check(text.color_quantize_256(0x000000) == 16, "color_probe", "3")
+    check(text.color_quantize_256(0xffffff) == 231, "color_probe", "4")
+    check(text.color_quantize_256(0xff0000) == 196, "color_probe", "5")
+    check(text.color_quantize_256(0x808080) == 244, "color_probe", "6")
+    check(text.color_quantize_16(0x000000) == 0 and
+          text.color_quantize_16(0xffffff) == 15, "color_probe", "7")
+    check(text.color_quantize_16(0xff0000) == 9, "color_probe", "8")
+    check(text.color_quantize_16(0xc0c0c0) == 7 and
+          text.color_quantize_16(0x808080) == 8, "color_probe", "9")
+    let some: text.Color? = 0x123456
+    check(text.color_for_depth(some, text.Color_Depth.mono) == nil, "color_probe", "10")
+    let kept: text.Color? = text.color_for_depth(some,
+                                                 text.Color_Depth.truecolor)
+    check(kept != nil and kept.get() == 0x123456, "color_probe", "11")
+    check(text.color_for_depth(nil, text.Color_Depth.truecolor) == nil, "color_probe", "12")
+}
+
+func capability_probe_main() {
+    var read_fd: int = -1
+    var write_fd: int = -1
+    require __os_pipe(ref read_fd, ref write_fd) == 0
+    text.terminal_force_color_depth(nil)
+    check(text.terminal_color_depth(read_fd) == text.Color_Depth.mono, "capability_probe", "1")
+    text.terminal_force_color_depth(text.Color_Depth.truecolor)
+    check(text.terminal_color_depth(read_fd) == text.Color_Depth.truecolor,
+          "capability_probe", "2")
+    text.terminal_force_color_depth(text.Color_Depth.colors_256)
+    check(text.terminal_color_depth(read_fd) == text.Color_Depth.colors_256,
+          "capability_probe", "3")
+    text.terminal_force_color_depth(nil)
+    check(text.terminal_color_depth(read_fd) == text.Color_Depth.mono, "capability_probe", "4")
+    check(text.terminal_width(read_fd) == nil, "capability_probe", "5")
+    require __os_close(write_fd) == 0
+    require __os_close(read_fd) == 0
+}
+
+let all_themes: Array[text.Border_Theme] = [
+    text.border_plain,
+    text.border_bold,
+    text.border_double,
+    text.border_dash,
+    text.border_bold_dash,
+    text.border_dash2,
+    text.border_bold_dash2,
+    text.border_ascii,
+    text.border_rounded,
+]
+
+func glyph_set(c: char) -> bool {
+    return cast[u32] c != 0
+}
+
+func border_probe_main() {
+    check(all_themes.len() == 9, "border_probe", "1")
+    var i: uint = 0
+    while i < all_themes.len() {
+        let t: text.Border_Theme = all_themes[i]
+        check(glyph_set(t.horizontal) and glyph_set(t.vertical) and
+              glyph_set(t.upper_left) and glyph_set(t.upper_right) and
+              glyph_set(t.lower_left) and glyph_set(t.lower_right) and
+              glyph_set(t.cross) and glyph_set(t.top_t) and
+              glyph_set(t.bottom_t) and glyph_set(t.left_t) and
+              glyph_set(t.right_t), "border_probe", "2")
+        i += 1
+    }
+    check(cast[u32] text.border_plain.horizontal == 0x2500 and
+          cast[u32] text.border_plain.vertical == 0x2502 and
+          cast[u32] text.border_plain.upper_left == 0x250c and
+          cast[u32] text.border_plain.cross == 0x253c, "border_probe", "3")
+    check(cast[u32] text.border_double.horizontal == 0x2550 and
+          cast[u32] text.border_double.cross == 0x256c, "border_probe", "4")
+    check(cast[u32] text.border_rounded.upper_left == 0x256d and
+          cast[u32] text.border_rounded.lower_right == 0x256f, "border_probe", "5")
+    check(text.border_ascii.horizontal == '-' and
+          text.border_ascii.vertical == '|' and
+          text.border_ascii.upper_left == '/' and
+          text.border_ascii.upper_right == '\\' and
+          text.border_ascii.cross == '+', "border_probe", "6")
+    check(text.Border_Set.sides == text.Border_Set.left + text.Border_Set.right
+          and cast[u64] text.Border_Set.all == 0x3f, "border_probe", "7")
+}
+
+var rs_body: text.Rich_Body = (s = "hello world", style_info = one_record(),
+                               base_style = nil, opaque = false)
+let rs: string = rich_over(ref rs_body)
+var rs_outer_body: text.Rich_Body = (s = rs, style_info = one_record(),
+                                     base_style = nil, opaque = false)
+let rs_outer: string = rich_over(ref rs_outer_body)
+
+func rich_static_checks() {
+    check(is_rich(rs), "rich_static_probe", "1")
+    check(body_of(rs) == ref rs_body, "rich_static_probe", "2")
+    check(byte_len(rs_body.s) == 11, "rich_static_probe", "3")
+    check(rs_body.style_info.len() == 1, "rich_static_probe", "4")
+    let base: string = builtin.text(rs)
+    check(!is_rich(base) and byte_len(base) == 11, "rich_static_probe", "5")
+    check(is_rich(rs_outer) and is_rich(rs_outer_body.s), "rich_static_probe", "6")
+    let nested: string = builtin.text(rs_outer)
+    check(!is_rich(nested) and byte_len(nested) == 11, "rich_static_probe", "7")
+    let plain: string = builtin.text("not rich")
+    check(!is_rich(plain) and byte_len(plain) == 8, "rich_static_probe", "8")
+    check(byte_len(rs) == 11 and byte_len(rs_outer) == 11, "rich_static_probe", "9")
+    check(byte_at(rs, 0) == cast[u8] 'h' and byte_at(rs_outer, 0) == cast[u8] 'h',
+          "rich_static_probe", "10")
+    check(byte_len(buffer_from_string(rs_outer)) == 11, "rich_static_probe", "11")
+}
+
+func record_count(s: string) -> uint {
+    if !is_rich(s) {
+        return 0
+    }
+    return body_of(s).style_info.len()
+}
+
+func push_span(modify spans: List[text.Style_Span], start: u32, end: u32,
+               tag: string) {
+    let s: text.Style_Span = (start = start, end = end, tag = tag)
+    spans.append(s)
+}
+
+func byte_slice_of(s: string, start: i64, end: i64) -> string {
+    var got: string = ""
+    try {
+        got = text.slice(s, start, end, unit = text.Index_Unit.byte)!
+    } fail(failure) {
+        got = ""
+    }
+    return got
+}
+
+func rich_build_checks() {
+    var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
+    push_span(spans, 0, 4, "b")
+    let built: string = text.rich_string("text", spans)
+    check(is_rich(built), "rich_build_probe", "1")
+    check(byte_len(built) == 4 and byte_at(built, 0) == cast[u8] 't', "rich_build_probe", "2")
+    check(record_count(built) == 1, "rich_build_probe", "3")
+
+    let literal: string = "«b»text«/b»"'r
+    check(built == literal, "rich_build_probe", "4")
+    check(built.hash() == literal.hash(), "rich_build_probe", "5")
+
+    var ext: List[text.Style_Span] = new[List[text.Style_Span]]()
+    push_span(ext, 0, text.index_extends, "b")
+    let open_ended: string = text.rich_string("text", ext)
+    let unclosed: string = "«b»text"'r
+    check(open_ended == unclosed, "rich_build_probe", "6")
+    check(built != open_ended, "rich_build_probe", "7")
+
+    var many: List[text.Style_Span] = new[List[text.Style_Span]]()
+    push_span(many, 0, 2, "b")
+    push_span(many, 2, 4, "@error")
+    let two: string = text.rich_string("text", many)
+    check(record_count(two) == 2, "rich_build_probe", "8")
+    if record_count(two) == 2 {
+        let second: text.Style_Record = body_of(two).style_info[1]
+        check(opt_is(second.start_ix, 2) and opt_is(second.end_ix, 4), "rich_build_probe", "9")
+        check(second.style_tag != nil, "rich_build_probe", "10")
+    }
+
+    let nested: string = "«b»alpha «i»beta«/i»«/b»"'r
+    let tail: string = byte_slice_of(nested, 6, 10)
+    check(text.eq(tail, "beta"), "rich_build_probe", "11")
+    check(record_count(tail) == 2, "rich_build_probe", "12")
+    if record_count(tail) == 2 {
+        let recs: List[text.Style_Record] = body_of(tail).style_info
+        var clipped: bool = true
+        for i from 0 until 2 {
+            clipped = clipped and opt_is(recs[i].start_ix, 0) and
+                opt_is(recs[i].end_ix, 4)
+        }
+        check(clipped, "rich_build_probe", "13")
+    }
+
+    let head: string = byte_slice_of(nested, 0, 5)
+    check(record_count(head) == 1, "rich_build_probe", "14")
+
+    let carry: string = byte_slice_of("«b»head tail"'r, 5, 9)
+    check(record_count(carry) == 1, "rich_build_probe", "15")
+    if record_count(carry) == 1 {
+        let er: text.Style_Record = body_of(carry).style_info[0]
+        check(opt_is(er.start_ix, 0) and
+              opt_is(er.end_ix, text.index_extends), "rich_build_probe", "16")
+    }
+}
+
+const max_runs = 16
+
+func yes(v: bool?) -> bool {
+    if v == nil {
+        return false
+    }
+    return v.get()
+}
+
+func styled(bold: bool?, italic: bool?) -> text.Text_Style {
+    return (bold = bold, italic = italic, underline = nil,
+            double_underline = nil, strikethrough = nil, reverse = nil,
+            dim = nil, blink = nil, text_case = text.Text_Case.none,
+            font_hint = text.Font_Hint.default, font_index = nil,
+            fg_palette_ix = nil, bg_palette_ix = nil, fg_rgb = nil,
+            bg_rgb = nil, font_size = nil)
+}
+
+func run_list(s: string) -> List[text.Style_Run] {
+    var c: text.Cascade = new[text.Cascade](s)
+    var runs: List[text.Style_Run] = new[List[text.Style_Run]]()
+    while runs.len() < max_runs {
+        let run: text.Style_Run? = text.next(c)
+        if run == nil {
+            break
+        }
+        runs.append(run.get())
+    }
+    return runs
+}
+
+func tiles(runs: List[text.Style_Run], len: u32) -> bool {
+    let n: int = cast[int] runs.len()
+    if n == 0 {
+        return len == 0
+    }
+    if runs[0].start != 0 or runs[n - 1].end != len {
+        return false
+    }
+    for i from 1 until n {
+        if runs[i].start != runs[i - 1].end {
+            return false
+        }
+    }
+    return true
+}
+
+var outer_body: text.Rich_Body = (s = "",
+                                  style_info = new[List[text.Style_Record]](),
+                                  base_style = nil, opaque = false)
+let outer: string = rich_over(ref outer_body)
+var mid_body: text.Rich_Body = (s = "hi",
+                                style_info = new[List[text.Style_Record]](),
+                                base_style = nil, opaque = false)
+let mid: string = rich_over(ref mid_body)
+
+func nested_spans() -> string {
+    var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
+    for k from 0 until 40 {
+        var tag: string = "i"
+        if k == 39 {
+            tag = "b"
+        }
+        let span: text.Style_Span = (start = 0, end = cast[u32](40 - k),
+                                     tag = tag)
+        spans.append(span)
+    }
+    return text.rich_string(text.repeat("x", 40), spans)
+}
+
+func cascade_checks() {
+    var runs: List[text.Style_Run] = run_list("plain")
+    check(runs.len() == 1 and runs[0].start == 0 and runs[0].end == 5 and
+          text.is_empty(runs[0].style), "cascade_probe", "1")
+
+    runs = run_list("«b»hi«/b»"'r)
+    check(runs.len() == 1 and runs[0].end == 2 and yes(runs[0].style.bold),
+          "cascade_probe", "2")
+
+    runs = run_list("«b»a«i»b«/i»c«/b»"'r)
+    check(runs.len() == 3 and tiles(runs, 3), "cascade_probe", "3")
+    if runs.len() == 3 {
+        check(yes(runs[0].style.bold) and !yes(runs[0].style.italic) and
+              yes(runs[1].style.bold) and yes(runs[1].style.italic) and
+              yes(runs[2].style.bold) and !yes(runs[2].style.italic), "cascade_probe", "4")
+    }
+
+    runs = run_list("«u»a«b»b«/u»c«/b»"'r)
+    check(runs.len() == 3 and tiles(runs, 3), "cascade_probe", "5")
+    if runs.len() == 3 {
+        check(yes(runs[0].style.underline) and !yes(runs[0].style.bold) and
+              yes(runs[1].style.underline) and yes(runs[1].style.bold) and
+              !yes(runs[2].style.underline) and yes(runs[2].style.bold),
+              "cascade_probe", "6")
+    }
+
+    runs = run_list("«b»text"'r)
+    check(runs.len() == 1 and runs[0].end == 4 and yes(runs[0].style.bold),
+          "cascade_probe", "7")
+
+    mid_body.base_style = styled(nil, true)
+    mid_body.opaque = false
+    outer_body.s = mid
+    outer_body.base_style = styled(true, nil)
+    runs = run_list(outer)
+    check(runs.len() == 1 and yes(runs[0].style.bold) and
+          yes(runs[0].style.italic), "cascade_probe", "8")
+
+    mid_body.opaque = true
+    runs = run_list(outer)
+    check(runs.len() == 1 and yes(runs[0].style.italic), "cascade_probe", "9")
+    check(runs.len() == 1 and !yes(runs[0].style.bold), "cascade_probe", "10")
+
+    let slotted: string = "«b»«#0»«/b»x"'r
+    check(byte_len(slotted) == 1, "cascade_probe", "11")
+    check(!yes(text.cascade_style_index(slotted, 0, inclusive = false).bold),
+          "cascade_probe", "12")
+    check(yes(text.cascade_style_index(slotted, 0, inclusive = true).bold),
+          "cascade_probe", "13")
+    check(yes(text.cascade_style_index("«b»hi«/b»"'r, 0).bold) and
+          !yes(text.cascade_style_index("«b»hi«/b»"'r, 2).bold), "cascade_probe", "14")
+
+    let deep: text.Text_Style = text.cascade_style_index(nested_spans(), 0)
+    check(yes(deep.bold) and yes(deep.italic), "cascade_probe", "900")
+}
+
+func results_for(n: int) -> Array[text.Layout_Result] {
+    var r: Array[text.Layout_Result] = new[Array[text.Layout_Result]](n)
+    for i from 0 until n {
+        r[i] = (computed_min = 0, computed_max = 0, computed_pref = 0,
+                size = 0, has_max = false)
+    }
+    return r
+}
+
+func blank_item() -> text.Layout {
+    return (min = nil, max = nil, pref = nil, priority = 0,
+            flex_multiple = 0, child_gap = 0)
+}
+
+func total_size(r: Array[text.Layout_Result], n: i64) -> i64 {
+    var sum: i64 = 0
+    for i from 0 until n {
+        sum += r[i].size
+    }
+    return sum
+}
+
+func fixed_item(min: i64, pref: i64, max: i64) -> text.Layout {
+    var item: text.Layout = blank_item()
+    if min >= 0 {
+        item.min = text.abs_dim(min)
+    }
+    if pref >= 0 {
+        item.pref = text.abs_dim(pref)
+    }
+    if max >= 0 {
+        item.max = text.abs_dim(max)
+    }
+    return item
+}
+
+func layout_checks() {
+    var one: Array[text.Layout] = new[Array[text.Layout]](1)
+    var r1: Array[text.Layout_Result] = results_for(1)
+    one[0] = fixed_item(-1, 40, -1)
+    text.layout_calculate(one, r1, 1, 80)
+    check(r1[0].size == 40, "layout_probe", "1")
+
+    var two: Array[text.Layout] = new[Array[text.Layout]](2)
+    var r2: Array[text.Layout_Result] = results_for(2)
+    two[0] = fixed_item(10, 30, -1)
+    two[1] = fixed_item(10, 30, -1)
+    text.layout_calculate(two, r2, 2, 80)
+    check(r2[0].size == 30 and r2[1].size == 30, "layout_probe", "2")
+
+    var capped: Array[text.Layout] = new[Array[text.Layout]](2)
+    var r3: Array[text.Layout_Result] = results_for(2)
+    capped[0] = fixed_item(-1, 20, 25)
+    capped[1] = fixed_item(-1, 20, 25)
+    text.layout_calculate(capped, r3, 2, 80)
+    check(r3[0].size <= 25 and r3[1].size <= 25, "layout_probe", "3")
+
+    var flex: Array[text.Layout] = new[Array[text.Layout]](3)
+    var r4: Array[text.Layout_Result] = results_for(3)
+    flex[0] = fixed_item(10, -1, -1)
+    flex[0].flex_multiple = 1
+    flex[1] = fixed_item(10, -1, -1)
+    flex[1].flex_multiple = 2
+    flex[2] = fixed_item(10, -1, -1)
+    flex[2].flex_multiple = 1
+    text.layout_calculate(flex, r4, 3, 90)
+    check(total_size(r4, 3) == 90, "layout_probe", "4")
+    check(r4[1].size > r4[0].size and r4[1].size > r4[2].size, "layout_probe", "5")
+
+    var over: Array[text.Layout] = new[Array[text.Layout]](3)
+    var r5: Array[text.Layout_Result] = results_for(3)
+    over[0] = fixed_item(5, 30, -1)
+    over[1] = fixed_item(5, 30, -1)
+    over[2] = fixed_item(5, 30, -1)
+    text.layout_calculate(over, r5, 3, 50)
+    check(total_size(r5, 3) <= 50 and r5[0].size >= 5 and r5[1].size >= 5 and
+          r5[2].size >= 5, "layout_probe", "6")
+
+    var pri: Array[text.Layout] = new[Array[text.Layout]](3)
+    var r6: Array[text.Layout_Result] = results_for(3)
+    pri[0] = fixed_item(10, 20, -1)
+    pri[0].priority = 0
+    pri[1] = fixed_item(10, 20, -1)
+    pri[1].priority = 10
+    pri[2] = fixed_item(10, 20, -1)
+    pri[2].priority = 5
+    text.layout_calculate(pri, r6, 3, 15)
+    check(r6[1].size >= r6[0].size and r6[1].size >= r6[2].size and
+          total_size(r6, 3) <= 15, "layout_probe", "7")
+
+    var pct: Array[text.Layout] = new[Array[text.Layout]](2)
+    var r7: Array[text.Layout_Result] = results_for(2)
+    pct[0] = blank_item()
+    pct[1] = blank_item()
+    pct[0].pref = text.pct_dim(0.25)
+    pct[1].pref = text.pct_dim(0.50)
+    text.layout_calculate(pct, r7, 2, 100)
+    check(r7[0].size == 25 and r7[1].size == 50, "layout_probe", "8")
+
+    text.layout_calculate(one, r1, 0, 100)
+
+    var exact: Array[text.Layout] = new[Array[text.Layout]](3)
+    var r8: Array[text.Layout_Result] = results_for(3)
+    exact[0] = fixed_item(-1, 20, -1)
+    exact[1] = fixed_item(-1, 30, -1)
+    exact[2] = fixed_item(-1, 50, -1)
+    text.layout_calculate(exact, r8, 3, 100)
+    check(r8[0].size == 20 and r8[1].size == 30 and r8[2].size == 50, "layout_probe", "9")
+
+    var zero_max: Array[text.Layout] = new[Array[text.Layout]](2)
+    var r9: Array[text.Layout_Result] = results_for(2)
+    zero_max[0] = fixed_item(-1, -1, 0)
+    zero_max[1] = fixed_item(-1, 10, -1)
+    zero_max[1].flex_multiple = 1
+    text.layout_calculate(zero_max, r9, 2, 40)
+    check(r9[0].size == 0, "layout_probe", "10")
+    check(r9[0].has_max and !r9[1].has_max, "layout_probe", "11")
+
+    var many: Array[text.Layout] = new[Array[text.Layout]](40)
+    var r900: Array[text.Layout_Result] = results_for(40)
+    for i from 0 until 40 {
+        if i % 2 == 0 {
+            many[i] = fixed_item(1, 1, 3)
+        }
+        else {
+            many[i] = fixed_item(1, 1, -1)
+            many[i].flex_multiple = 1
+        }
+    }
+    text.layout_calculate(many, r900, 40, 200)
+    var own: bool = total_size(r900, 40) == 200
+    for i from 0 until 40 {
+        if i % 2 == 0 {
+            own = own and r900[i].size == 3 and r900[i].has_max
+        }
+        else {
+            own = own and r900[i].size == 7 and !r900[i].has_max
+        }
+    }
+    check(own, "layout_probe", "900")
+}
+
+func same(a: string, b: string) -> bool {
+    return text.eq(a, b)
+}
+
+func same_opt(a: string?, b: string) -> bool {
+    if a == nil {
+        return false
+    }
+    return text.eq(a.get(), b)
+}
+
+func index_of(s: string, n: i64, unit: text.Index_Unit) -> string? {
+    var got: string? = nil
+    try {
+        got = text.index(s, n, unit = unit)!
+    } fail(failure) {
+        got = nil
+    }
+    return got
+}
+
+func slice_of(s: string, start: i64, end: i64, unit: text.Index_Unit)
+    -> string? {
+    var got: string? = nil
+    try {
+        got = text.slice(s, start, end, unit = unit)!
+    } fail(failure) {
+        got = nil
+    }
+    return got
+}
+
+func find_of(s: string, sub: string, unit: text.Index_Unit) -> uint? {
+    var got: uint? = nil
+    try {
+        got = text.find(s, sub, unit = unit)!
+    } fail(failure) {
+        got = nil
+    }
+    return got
+}
+
+func cased(s: string, which: int) -> string? {
+    var got: string? = nil
+    try {
+        if which == 0 {
+            got = text.upper(s)!
+        }
+        elif which == 1 {
+            got = text.lower(s)!
+        }
+        elif which == 2 {
+            got = text.fold(s)!
+        }
+        else {
+            got = text.title(s)!
+        }
+    } fail(failure) {
+        got = nil
+    }
+    return got
+}
+
+func seeks(modify c: text.Str_Cursor, n: i64) -> bool {
+    let got: bool = try {
+        -> text.seek(c, n)!
+    } fail(failure) {
+        -> false
+    }
+    return got
+}
+
+func check_ascii_identity() {
+    let s: string = "plain ascii text"
+    let n: u64 = text.unit_count(s, text.Index_Unit.char)
+    check(n == 16, "text_string_probe", "1")
+    check(text.unit_count(s, text.Index_Unit.char) == n and
+          text.unit_count(s, text.Index_Unit.byte) == n, "text_string_probe", "37")
+    var i: u64 = 0
+    while i <= n {
+        check(text.unit_to_byte(s, text.Index_Unit.char, i) == i, "text_string_probe", "2")
+        check(text.byte_to_unit(s, text.Index_Unit.char, i) == i, "text_string_probe", "3")
+        i += 1
+    }
+}
+
+func check_crlf_clusters() {
+    let s: string = "a\r\nb"
+    check(text.unit_count(s, text.Index_Unit.byte) == 4, "text_string_probe", "4")
+    check(text.unit_count(s, text.Index_Unit.char) == 4, "text_string_probe", "5")
+    check(text.unit_count(s, text.Index_Unit.cluster) == 3, "text_string_probe", "6")
+    let mid: string? = index_of(s, 1, text.Index_Unit.cluster)
+    check(mid != nil and
+          text.unit_count(mid.get_or_else(""), text.Index_Unit.byte) == 2,
+          "text_string_probe", "7")
+}
+
+func check_utf8_units() {
+    let s: string = "a世z"
+    check(text.unit_count(s, text.Index_Unit.byte) == 5 and
+          text.unit_count(s, text.Index_Unit.char) == 3 and
+          text.unit_count(s, text.Index_Unit.cluster) == 3, "text_string_probe", "8")
+    check(same_opt(index_of(s, 1, text.Index_Unit.char), "世"), "text_string_probe", "9")
+    check(same_opt(index_of(s, -1, text.Index_Unit.char), "z"), "text_string_probe", "10")
+    let cp: char = try {
+        -> text.char_index(s, 1)!
+    } fail(failure) {
+        -> '\0'
+    }
+    check(cast[u32] cp == 0x4e16, "text_string_probe", "11")
+    check(same_opt(slice_of(s, 1, 3, text.Index_Unit.char), "世z"),
+          "text_string_probe", "12")
+    check(index_of(s, 3, text.Index_Unit.char) == nil, "text_string_probe", "30")
+}
+
+func check_combining_cluster() {
+    let s: string = "éx"
+    check(text.unit_count(s, text.Index_Unit.char) == 3, "text_string_probe", "13")
+    check(text.unit_count(s, text.Index_Unit.cluster) == 2, "text_string_probe", "14")
+    check(same_opt(index_of(s, 0, text.Index_Unit.cluster), "é"), "text_string_probe", "15")
+}
+
+func check_find() {
+    let s: string = "a世zz"
+    let rune_hit: uint? = find_of(s, "z", text.Index_Unit.char)
+    check(rune_hit != nil and rune_hit.get_or_else(0) == 2, "text_string_probe", "16")
+    let byte_hit: uint? = find_of(s, "z", text.Index_Unit.byte)
+    check(byte_hit != nil and byte_hit.get_or_else(0) == 4, "text_string_probe", "17")
+    check(find_of(s, "q", text.Index_Unit.char) == nil, "text_string_probe", "18")
+}
+
+func check_binary() {
+    var raw: Array[u8] = new[Array[u8]](3)
+    raw[0] = 0xff
+    raw[1] = 0xfe
+    raw[2] = 0x01
+    let b: string = from_raw(ref raw, 3, encoding = Str_Encoding.binary)
+    check(text.unit_count(b, text.Index_Unit.byte) == 3 and
+          text.unit_count(b, text.Index_Unit.char) == 3 and
+          text.unit_count(b, text.Index_Unit.cluster) == 3, "text_string_probe", "19")
+    check(cased(b, 0) == nil, "text_string_probe", "20")
+}
+
+func check_case() {
+    check(same_opt(cased("abc", 0), "ABC") and
+          same_opt(cased("ABC", 1), "abc") and
+          same_opt(cased("ABC", 2), "abc"), "text_string_probe", "21")
+    check(same_opt(cased("straße", 0), "STRASSE"), "text_string_probe", "22")
+    check(same_opt(cased("hello world", 3), "Hello World"), "text_string_probe", "35")
+}
+
+func check_cursor() {
+    let s: string = "a世z"
+    var c: text.Str_Cursor = text.cursor(s, text.Index_Unit.char)
+    var n: u64 = 0
+    while text.next(c) != nil {
+        n += 1
+    }
+    check(n == 3 and text.at_end(c), "text_string_probe", "23")
+    check(text.unit_pos(c) == n, "text_string_probe", "36")
+    while text.prev(c) != nil {
+        n -= 1
+    }
+    check(n == 0 and text.byte_pos(c) == 0, "text_string_probe", "24")
+    var a: text.Str_Cursor = text.cursor(s, text.Index_Unit.char)
+    var b: text.Str_Cursor = text.cursor(s, text.Index_Unit.char)
+    check(seeks(a, 1) and seeks(b, 3), "text_string_probe", "31")
+    check(same_opt(slice_of(s, 1, 3, text.Index_Unit.char), text.slice(a, b)),
+          "text_string_probe", "25")
+    check(!seeks(a, 99), "text_string_probe", "32")
+}
+
+func check_cluster_cursor() {
+    let s: string = "é\U0001f1e6\U0001f1e7x"
+    var fwd: text.Str_Cursor = text.cursor(s, text.Index_Unit.cluster)
+    var ends: Array[u64] = new[Array[u64]](8)
+    var n: u64 = 0
+    while text.next(fwd) != nil and n < 8 {
+        ends[n] = text.byte_pos(fwd)
+        n += 1
+    }
+    check(n == 3, "text_string_probe", "26")
+    var back: text.Str_Cursor = text.cursor(s, text.Index_Unit.cluster)
+    check(seeks(back, cast[i64] n), "text_string_probe", "33")
+    var k: u64 = n
+    while k > 0 {
+        check(text.byte_pos(back) == ends[k - 1], "text_string_probe", "27")
+        _ = text.prev(back)
+        k -= 1
+    }
+    check(text.byte_pos(back) == 0, "text_string_probe", "28")
+}
+
+func check_case_matches_unicode() {
+    var cases: Array[string] = new[Array[string]](6)
+    cases[0] = "o'neill mcdonald"
+    cases[1] = "hello world"
+    cases[2] = "a.b.c"
+    cases[3] = "ALL CAPS HERE"
+    cases[4] = "mixed CaSe 123 x"
+    cases[5] = ""
+    var i: int = 0
+    while i < 6 {
+        let s: string = cases[i]
+        let for_title: string = s
+        let for_upper: string = s
+        let for_lower: string = s
+        let for_fold: string = s
+        check(same_opt(cased(s, 3), unicode.totitle(for_title)), "text_string_probe", "38")
+        check(same_opt(cased(s, 0), unicode.toupper(for_upper)), "text_string_probe", "39")
+        check(same_opt(cased(s, 1), unicode.tolower(for_lower)), "text_string_probe", "40")
+        check(same_opt(cased(s, 2), unicode.casefold(for_fold)), "text_string_probe", "41")
+        i += 1
+    }
+}
+
+func check_deep_cluster_cursor() {
+    let s: string = text.repeat("é", 40)
+    let want: u64 = text.unit_count(s, text.Index_Unit.cluster)
+    check(want == 40, "text_string_probe", "42")
+    var fwd: text.Str_Cursor = text.cursor(s, text.Index_Unit.cluster)
+    var ends: Array[u64] = new[Array[u64]](64)
+    var n: u64 = 0
+    while text.next(fwd) != nil and n < 64 {
+        ends[n] = text.byte_pos(fwd)
+        n += 1
+    }
+    check(n == want, "text_string_probe", "43")
+    var back: text.Str_Cursor = text.cursor(s, text.Index_Unit.cluster)
+    check(seeks(back, cast[i64] n), "text_string_probe", "44")
+    var k: u64 = n
+    while k > 0 {
+        check(text.byte_pos(back) == ends[k - 1], "text_string_probe", "45")
+        _ = text.prev(back)
+        k -= 1
+    }
+    check(text.byte_pos(back) == 0 and text.unit_pos(back) == 0, "text_string_probe", "46")
+    var mix: text.Str_Cursor = text.cursor(s, text.Index_Unit.cluster)
+    var j: u64 = 0
+    while j < 20 {
+        _ = text.next(mix)
+        j += 1
+    }
+    var m: u64 = 20
+    while m > 0 {
+        check(text.byte_pos(mix) == ends[m - 1], "text_string_probe", "47")
+        _ = text.prev(mix)
+        _ = text.next(mix)
+        _ = text.prev(mix)
+        m -= 1
+    }
+    check(text.byte_pos(mix) == 0, "text_string_probe", "48")
+}
+
+func check_ops() {
+    check(text.starts_with("hello world", "hello") and
+          !text.starts_with("hello", "hello world") and
+          text.ends_with("hello world", "world") and
+          !text.ends_with("no", "another no"), "text_string_probe", "50")
+    check(same(text.trim("  padded\t\n"), "padded") and
+          same(text.trim("  x", side = text.Trim_Side.start), "x") and
+          same(text.trim("x  ", side = text.Trim_Side.end), "x") and
+          same(text.trim(" z "), "z"), "text_string_probe", "51")
+    check(same(text.repeat("ab", 3), "ababab") and
+          same(text.repeat("ab", 0), ""), "text_string_probe", "52")
+    check(same(text.reverse("abc"), "cba"), "text_string_probe", "53")
+    check(same(text.reverse("xéy"), "yéx"), "text_string_probe", "54")
+    check(same(text.replace("a.b.c", ".", "-"), "a-b-c") and
+          same(text.replace("a.b.c", ".", "-", max = 1), "a-b.c") and
+          same(text.replace("aaa", "a", "bb"), "bbbbbb"), "text_string_probe", "55")
+    check(text.width("ab") == 2 and text.width("世") == 2, "text_string_probe", "56")
+    check(same(text.fit("abc", 5), "abc  ") and
+          same(text.fit("abc", 5, align = text.Align.right), "  abc") and
+          same(text.fit("abcdef", 3), "abc") and
+          same(text.fit("世x", 2), "世"), "text_string_probe", "57")
+    let parts: List[string] = text.split("a,b,,c", ",")
+    check(parts.len() == 4 and same(parts[0], "a") and same(parts[2], "") and
+          same(parts[3], "c"), "text_string_probe", "58")
+    let lines: List[string] = text.split("a\nb\r\nc", "",
+                                         on = text.Split_On.lines)
+    check(lines.len() == 3, "text_string_probe", "59")
+    let units: List[string] = text.split("éx", "",
+                                         on = text.Split_On.units,
+                                         unit = text.Index_Unit.cluster)
+    check(units.len() == 2 and same(units[0], "é"), "text_string_probe", "60")
+    let cropped: List[string] = text.split(" a , b ", ",", crop = true)
+    check(cropped.len() == 2 and same(cropped[0], "a"), "text_string_probe", "61")
+    let wrapped: List[string] = text.wrap("aaa bbb ccc", 7)
+    check(wrapped.len() >= 2, "text_string_probe", "62")
+}
+
+func check_plain() {
+    let plain: string = "hello"
+    check(text.unit_count(plain, text.Index_Unit.char) == 5, "text_string_probe", "29")
+    check(text.cmp("abc", "abd") < 0 and text.cmp("abd", "abc") > 0 and
+          text.cmp("abc", "abc") == 0, "text_string_probe", "34")
+}
+
+func check_cluster_fit() {
+    let zwj: string = "\U0001f469‍\U0001f4bb"
+    check(same(text.fit(zwj, 2), "  ") and same(text.fit(zwj, 4), zwj), "text_string_probe", "900")
+}
+
+func is_state(v: bool?, want: bool) -> bool {
+    if v == nil {
+        return false
+    }
+    return v.get() == want
+}
+
+func is_color(v: text.Color?, want: text.Color) -> bool {
+    if v == nil {
+        return false
+    }
+    return v.get() == want
+}
+
+func tag_sets_bold(tag: string) -> bool {
+    let s: text.Text_Style = text.intrinsic_tag_style(tag)
+    return is_state(s.bold, true)
+}
+
+func empty_style() -> text.Text_Style {
+    return (bold = nil, italic = nil, underline = nil, double_underline = nil,
+            strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+            text_case = text.Text_Case.none,
+            font_hint = text.Font_Hint.default, font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+            fg_rgb = nil, bg_rgb = nil, font_size = nil)
+}
+
+func style_probe_main() {
+    let empty: text.Text_Style = empty_style()
+    check(text.is_empty(empty), "style_probe", "1")
+    check(text.merge(empty, empty) == empty, "style_probe", "2")
+
+    var bold: text.Text_Style = empty_style()
+    bold.bold = true
+    var italic: text.Text_Style = empty_style()
+    italic.italic = true
+    let both: text.Text_Style = text.merge(bold, italic)
+    check(is_state(both.bold, true) and is_state(both.italic, true), "style_probe", "3")
+
+    var bold_off: text.Text_Style = empty_style()
+    bold_off.bold = false
+    let off: text.Text_Style = text.merge(bold, bold_off)
+    check(is_state(off.bold, false), "style_probe", "4")
+    check(is_state(text.merge(bold, empty).bold, true), "style_probe", "5")
+
+    var upper: text.Text_Style = empty_style()
+    upper.text_case = text.Text_Case.upper
+    var lower: text.Text_Style = empty_style()
+    lower.text_case = text.Text_Case.lower
+    check(text.merge(upper, lower).text_case == text.Text_Case.lower, "style_probe", "6")
+    check(text.merge(upper, empty).text_case == text.Text_Case.upper, "style_probe", "7")
+
+    var red: text.Text_Style = empty_style()
+    red.fg_rgb = 0xff0000
+    var blue: text.Text_Style = empty_style()
+    blue.fg_rgb = 0x0000ff
+    let won: text.Text_Style = text.merge(red, blue)
+    check(is_color(won.fg_rgb, 0x0000ff), "style_probe", "8")
+    let kept: text.Text_Style = text.merge(red, empty)
+    check(is_color(kept.fg_rgb, 0xff0000), "style_probe", "9")
+
+    check(bold != italic and bold == bold, "style_probe", "10")
+    check(tag_sets_bold("b") and tag_sets_bold("bold"), "style_probe", "11")
+    check(is_state(text.intrinsic_tag_style("2u").double_underline, true) and
+          is_state(text.intrinsic_tag_style("uu").double_underline, true),
+          "style_probe", "12")
+    check(is_state(text.intrinsic_tag_style("faint").dim, true) and
+          is_state(text.intrinsic_tag_style("dim").dim, true), "style_probe", "13")
+    check(is_state(text.intrinsic_tag_style("strikethrough").strikethrough,
+                   true) and
+          is_state(text.intrinsic_tag_style("st").strikethrough, true) and
+          is_state(text.intrinsic_tag_style("strike").strikethrough, true),
+          "style_probe", "14")
+    check(text.intrinsic_tag_style("allcaps").text_case ==
+              text.Text_Case.caps and
+          text.intrinsic_tag_style("t").text_case == text.Text_Case.title and
+          text.intrinsic_tag_style("l").text_case == text.Text_Case.lower and
+          text.intrinsic_tag_style("up").text_case == text.Text_Case.upper,
+          "style_probe", "15")
+    check(text.is_empty(text.intrinsic_tag_style("nosuchtag")), "style_probe", "16")
+    check(text.is_empty(text.intrinsic_tag_style("@error")), "style_probe", "17")
+}
+
+func no_records() -> List[text.Style_Record] {
+    return new[List[text.Style_Record]]()
+}
+
+var plain_body: text.Rich_Body = (s = "hello", style_info = no_records(),
+                                  base_style = nil, opaque = false)
+var based_body: text.Rich_Body = (s = "hello", style_info = no_records(),
+                                  base_style = nil, opaque = false)
+var opaque_body: text.Rich_Body = (s = "hello", style_info = no_records(),
+                                   base_style = nil, opaque = true)
+
+let plain_s: string = rich_over(ref plain_body)
+let based_s: string = rich_over(ref based_body)
+let opaque_s: string = rich_over(ref opaque_body)
+
+var bold_outer_body: text.Rich_Body = (s = "«b»hello"'r,
+                                       style_info = no_records(),
+                                       base_style = nil, opaque = false)
+var italic_outer_body: text.Rich_Body = (s = "«i»hello"'r,
+                                         style_info = no_records(),
+                                         base_style = nil, opaque = false)
+
+let bold_outer: string = rich_over(ref bold_outer_body)
+let italic_outer: string = rich_over(ref italic_outer_body)
+
+func style_fields_probe_main() {
+    check(plain_body.base_style == nil, "style_fields_probe", "1")
+    check(!plain_body.opaque, "style_fields_probe", "2")
+
+    let bold: text.Text_Style = (
+        bold = true, italic = nil, underline = nil, double_underline = nil,
+        strikethrough = nil, reverse = nil, dim = nil, blink = nil,
+        text_case = text.Text_Case.none, font_hint = text.Font_Hint.default,
+        font_index = nil, fg_palette_ix = nil, bg_palette_ix = nil,
+        fg_rgb = nil, bg_rgb = nil, font_size = nil)
+    based_body.base_style = bold
+
+    check(plain_s != based_s, "style_fields_probe", "3")
+    check(plain_s.hash() != based_s.hash(), "style_fields_probe", "4")
+    check(plain_s != opaque_s, "style_fields_probe", "5")
+    check(plain_s.hash() != opaque_s.hash(), "style_fields_probe", "6")
+    check(plain_s == plain_s and plain_s.hash() == plain_s.hash(), "style_fields_probe", "7")
+
+    check(cast[u64] tag(bold_outer_body.s) == str_tag_rich and
+          cast[u64] tag(italic_outer_body.s) == str_tag_rich, "style_fields_probe", "900")
+    check(bold_outer != italic_outer and
+          bold_outer.hash() != italic_outer.hash(), "style_fields_probe", "900")
+}
+
+var wrap_body: text.Rich_Body = (s = "", style_info = one_record(),
+                                 base_style = nil, opaque = false)
+let wrapped: string = rich_over(ref wrap_body)
+
+func tag_is_b(r: text.Style_Record) -> bool {
+    if r.style_tag == nil {
+        return false
+    }
+    let tag: string = r.style_tag.get()
+    return byte_len(tag) == 1 and byte_at(tag, 0) == cast[u8] 'b'
+}
+
+func collect() {
+    let mutator = sys.gc.alloc.mutator_for_native()
+    require mutator != nil
+    sys.gc.collect.collect(mutator.get().heap)
+}
+
+func rich_literal_probe_main() {
+    let closed: string = "«b»text«/b»"'r
+    let unclosed: string = "«b»text"'r
+    check(is_rich(closed) and is_rich(unclosed), "rich_literal_probe", "1")
+    check(byte_len(closed) == 4 and byte_len(unclosed) == 4, "rich_literal_probe", "2")
+
+    let cbody: Ref[text.Rich_Body] = body_of(closed)
+    let ubody: Ref[text.Rich_Body] = body_of(unclosed)
+    check(cbody.style_info.len() == 1 and ubody.style_info.len() == 1, "rich_literal_probe", "3")
+
+    let c: text.Style_Record = cbody.style_info[0]
+    check(opt_is(c.start_ix, 0), "rich_literal_probe", "4")
+    check(opt_is(c.end_ix, 4), "rich_literal_probe", "5")
+    check(tag_is_b(c), "rich_literal_probe", "6")
+
+    let u: text.Style_Record = ubody.style_info[0]
+    check(opt_is(u.end_ix, text.index_extends), "rich_literal_probe", "7")
+    check(tag_is_b(u), "rich_literal_probe", "8")
+
+    wrap_body.s = closed
+
+    collect()
+
+    check(byte_len(closed) == 4 and cbody.style_info.len() == 1, "rich_literal_probe", "9")
+    check(byte_at(closed, 0) == cast[u8] 't', "rich_literal_probe", "10")
+    check(is_rich(wrapped) and is_rich(wrap_body.s), "rich_literal_probe", "11")
+    check(byte_len(wrapped) == 4 and byte_at(wrapped, 0) == cast[u8] 't',
+          "rich_literal_probe", "12")
+}
+
+func rich_repr_probe_main() {
+    let shrt: string = "hi"
+    check(repr_of(shrt) == "hi", "rich_repr_probe", "1")
+
+    let lng: string = "abcdefghijklmnopqrstuvwxyz"
+    check(cast[u64] tag(lng) == str_tag_long, "rich_repr_probe", "2")
+    check(repr_of(lng) == "abcdefghijklmnopqrstuvwxyz", "rich_repr_probe", "3")
+
+    let slice: string = byte_slice(lng, 3, 8)
+    check(repr_of(slice) == "defgh", "rich_repr_probe", "4")
+
+    let rich: string = "«b»example «#arg:>10»«/b» "'r
+    check(repr_of(rich) == "r\"«b»example «#arg:>10»«/b» \"", "rich_repr_probe", "5")
+
+    let indexed: string = "«i»«#»-«#»«/i»"'r
+    check(repr_of(indexed) == "r\"«i»«#0»-«#1»«/i»\"", "rich_repr_probe", "6")
+
+    let nested: string = "«b»a«i»b«/i»c«/b»"'r
+    check(repr_of(nested) == "r\"«b»a«i»b«/i»c«/b»\"", "rich_repr_probe", "10")
+
+    let crossing: string = "«u»a«b»b«/u»c«/b»"'r
+    check(repr_of(crossing) == "r\"«u»a«b»b«/u»c«/b»\"", "rich_repr_probe", "11")
+
+    let open_ended: string = "«b»tail"'r
+    check(repr_of(open_ended) == "r\"«b»tail\"", "rich_repr_probe", "12")
+
+    let slotted: string = "x«#0»y«#name:>4»"'r
+    check(repr_of(slotted) == "r\"x«#0»y«#name:>4»\"", "rich_repr_probe", "13")
+
+    var spans: List[text.Style_Span] = new[List[text.Style_Span]]()
+    let under: text.Style_Span = (start = 0, end = 5, tag = "u")
+    spans.append(under)
+    let layered: string = text.rich_string("«b»alpha«/b»"'r, spans)
+    check(repr_of(layered) == "r\"«u»«b»alpha«/b»«/u»\"", "rich_repr_probe", "14")
+}
+
+func cell_is(t: text.Table, row: uint, col: uint, want: string) -> bool {
+    var cell: text.Table_Cell
+    try {
+        cell = text.cell_index(t, row, col)!
+    } fail(e: Container_Err) {
+        return false
+    }
+    return cell.content == want
+}
+
+func words(a: string, b: string, c: string) -> List[string] {
+    var out: List[string] = new[List[string]]()
+    out.append(a)
+    out.append(b)
+    out.append(c)
+    return out
+}
+
+func abs_of(d: text.Layout_Dim?) -> i64 {
+    if d == nil {
+        return -1
+    }
+    let v: text.Layout_Dim = d.get()
+    switch v {
+        case abs {
+            return v.abs
+        }
+        case pct {
+            return -2
+        }
+    }
+}
+
+func is_pct(d: text.Layout_Dim?) -> bool {
+    if d == nil {
+        return false
+    }
+    let v: text.Layout_Dim = d.get()
+    switch v {
+        case pct {
+            return true
+        }
+        else {
+            return false
+        }
+    }
+}
+
+func theme_is(p: text.Box_Props, want: Ref[text.Border_Theme]) -> bool {
+    let have: Ref[text.Border_Theme]? = p.border_theme
+    if have == nil {
+        return false
+    }
+    return have.get() == want
+}
+
+func zero_props() -> text.Box_Props {
+    return (border_theme = nil, border_style = nil,
+            fill_style = nil, text_style = nil,
+            borders = text.Border_Set.none, pad_top = 0, pad_bottom = 0,
+            pad_left = 0, pad_right = 0, alignment = text.Align.left,
+            valignment = text.Valign.top)
+}
+
+func col_sizes_match(a: text.Table, b: text.Table) -> bool {
+    let n: i64 = cast[i64] text.col_count(a)
+    if n != cast[i64] text.col_count(b) {
+        return false
+    }
+    for i from 0 until n {
+        if a.col_results[i].size != b.col_results[i].size {
+            return false
+        }
+    }
+    return true
+}
+
+func spec_unchanged(t: text.Table, col: uint) -> bool {
+    var spec: text.Table_Col_Spec
+    try {
+        spec = text.col_spec(t, col)!
+    } fail(e: Container_Err) {
+        return false
+    }
+    return spec.mode == text.Col_Mode.fit and spec.min == nil and
+        spec.max == nil and spec.pref == nil
+}
+
+func table_checks() {
+    let std: text.Table_Style = text.table_style_default()
+    check(theme_is(std.table_props, ref text.border_rounded) and
+          std.table_props.borders == text.Border_Set.all and
+          std.alt_cell_props != nil, "table_probe", "1")
+    check(std.cell_props.pad_left == 1 and std.cell_props.pad_right == 1 and
+          std.cell_props.alignment == text.Align.left and
+          std.header_props.alignment == text.Align.center, "table_probe", "2")
+    let head_opt: text.Text_Style? = std.header_props.text_style
+    var head_ok: bool = false
+    if head_opt != nil {
+        let head: text.Text_Style = head_opt.get()
+        head_ok = head.bold.get_or_else(false) and
+            head.text_case == text.Text_Case.upper and
+            head.fg_palette_ix != nil
+    }
+    check(head_ok, "table_probe", "3")
+
+    let simple: text.Table_Style = text.table_style_simple()
+    check(theme_is(simple.table_props, ref text.border_plain) and
+          simple.table_props.borders ==
+          text.Border_Set.top + text.Border_Set.bottom +
+          text.Border_Set.interior_h and
+          simple.alt_cell_props == nil, "table_probe", "4")
+
+    let ornate: text.Table_Style = text.table_style_ornate()
+    check(theme_is(ornate.table_props, ref text.border_double) and
+          ornate.alt_cell_props != nil, "table_probe", "5")
+
+    let minimal: text.Table_Style = text.table_style_minimal()
+    check(minimal.table_props.borders == text.Border_Set.none and
+          minimal.alt_cell_props == nil, "table_probe", "6")
+
+    let ascii: text.Table_Style = text.table_style_ascii()
+    check(theme_is(ascii.table_props, ref text.border_ascii) and
+          ascii.table_props.borders == text.Border_Set.all, "table_probe", "7")
+
+    let unset: text.Box_Props = zero_props()
+    let bare: text.Box_Props = text.box_props_new(unset)
+    check(theme_is(bare, ref text.border_plain), "table_probe", "8")
+
+    var t: text.Table = new[text.Table]()
+    text.col_flex(t, 2)
+    text.col_fit(t)
+    text.col_fixed(t, 20)
+    text.add_cell(t, "a0")
+    text.add_cell(t, "a1")
+    text.add_cell(t, "a2")
+    text.end_row(t)
+    text.add_cell(t, "b0")
+    text.add_cell(t, "b1")
+    text.empty_cell(t)
+    text.end(t)
+    check(text.col_count(t) == 3 and text.row_count(t) == 2, "table_probe", "9")
+    check(cell_is(t, 0, 0, "a0") and cell_is(t, 1, 1, "b1") and
+          cell_is(t, 1, 2, ""), "table_probe", "10")
+
+    var specs_ok: bool = true
+    var specs_match: bool = false
+    try {
+        let c0: text.Table_Col_Spec = text.col_spec(t, 0)!
+        let c2: text.Table_Col_Spec = text.col_spec(t, 2)!
+        specs_match = c0.mode == text.Col_Mode.flex and
+                      c0.flex_multiple == 2 and
+                      c2.mode == text.Col_Mode.fixed and c2.pref != nil and
+                      abs_of(c2.pref) == 20
+    } fail(e: Container_Err) {
+        specs_ok = false
+    }
+    check(specs_ok, "table_probe", "11")
+    if specs_ok {
+        check(specs_match, "table_probe", "12")
+    }
+
+    var auto_cols: text.Table = new[text.Table]()
+    text.add_cell(auto_cols, "x")
+    text.add_cell(auto_cols, "y")
+    text.add_cell(auto_cols, "z")
+    text.end_row(auto_cols)
+    check(text.col_count(auto_cols) == 3, "table_probe", "13")
+
+    var spanned: text.Table = new[text.Table](num_cols = 3)
+    text.add_cell(spanned, "wide", col_span = -1)
+    text.end_row(spanned)
+    var wide_ok: bool = false
+    try {
+        wide_ok = text.cell_index(spanned, 0, 0)!.col_span == 3
+    } fail(e: Container_Err) {
+        wide_ok = false
+    }
+    check(wide_ok, "table_probe", "14")
+
+    var ring: text.Table = new[text.Table](num_cols = 1, max_rows = 2)
+    text.add_cell(ring, "r0")
+    text.end_row(ring)
+    text.add_cell(ring, "r1")
+    text.end_row(ring)
+    text.add_cell(ring, "r2")
+    text.end_row(ring)
+    text.add_cell(ring, "r3")
+    text.end_row(ring)
+    check(text.row_count(ring) == 2 and ring.total_added == 4, "table_probe", "15")
+    check(cell_is(ring, 0, 0, "r2") and cell_is(ring, 1, 0, "r3"), "table_probe", "16")
+    check(text.row_cell_count(ring, 0) == 1, "table_probe", "17")
+
+    var casc: text.Table = new[text.Table](num_cols = 2)
+    text.add_cell(casc, "h0")
+    text.add_cell(casc, "h1")
+    text.end_row(casc)
+    text.add_cell(casc, "o0")
+    text.add_cell(casc, "o1", cell_props = bare)
+    text.end_row(casc)
+    let r0: text.Box_Props = text.resolve_cell_props(casc, 0, 0)
+    check(r0.alignment == text.Align.center, "table_probe", "18")
+
+    var styled: text.Table_Cell
+    try {
+        styled = text.cell_index(casc, 1, 1)!
+    } fail(e: Container_Err) {
+        require false
+    }
+    let rc: text.Box_Props = text.resolve_cell_props(casc, 1, 1,
+                                                     cell = styled)
+    check(theme_is(rc, ref text.border_plain) and rc.pad_left == 0,
+          "table_probe", "19")
+
+    var right: text.Box_Props = zero_props()
+    right.alignment = text.Align.right
+    let colp: text.Box_Props = text.box_props_new(right)
+    var over_ok: bool = true
+    try {
+        text.set_col_props(casc, 0, colp)!
+        text.set_col_priority(casc, 0, 7)!
+    } fail(e: Container_Err) {
+        over_ok = false
+    }
+    check(over_ok, "table_probe", "20")
+    let over: text.Box_Props = text.resolve_cell_props(casc, 0, 0)
+    check(over.alignment == text.Align.right, "table_probe", "21")
+
+    var pri_ok: bool = false
+    try {
+        pri_ok = text.col_spec(casc, 0)!.priority == 7 and
+            !casc.layout_valid
+    } fail(e: Container_Err) {
+        pri_ok = false
+    }
+    check(pri_ok, "table_probe", "22")
+
+    var ranged: text.Table = new[text.Table]()
+    text.col_range(ranged, 4, 12)
+    text.col_pct(ranged, 0.25, 0.5)
+    var rspec: text.Table_Col_Spec
+    var pspec: text.Table_Col_Spec
+    try {
+        rspec = text.col_spec(ranged, 0)!
+        pspec = text.col_spec(ranged, 1)!
+    } fail(e: Container_Err) {
+        require false
+    }
+    require rspec.min != nil and rspec.max != nil
+    require pspec.min != nil and pspec.max != nil
+    check(abs_of(rspec.min) == 4 and abs_of(rspec.max) == 12 and
+          is_pct(pspec.max), "table_probe", "23")
+    check(rspec.pref == nil, "table_probe", "30")
+    let p_min: text.Layout_Dim? = pspec.min
+    let r_max: text.Layout_Dim? = rspec.max
+    var dims_ok: bool = false
+    if p_min != nil and r_max != nil {
+        let pct_val: text.Layout_Dim = p_min.get()
+        let abs_val: text.Layout_Dim = r_max.get()
+        dims_ok = text.resolve(pct_val, 100) == 25 and
+            text.resolve(abs_val, 100) == 12
+    }
+    check(dims_ok, "table_probe", "24")
+    text.invalidate(ranged)
+
+    let parsed: text.Table = text.table_from_string("a,b\nc,d\n")
+    check(text.row_count(parsed) == 2 and text.col_count(parsed) == 2, "table_probe", "25")
+    check(cell_is(parsed, 1, 1, "d"), "table_probe", "26")
+
+    let callout: text.Table = text.table_callout("note")
+    check(text.row_count(callout) == 1 and text.col_count(callout) == 1 and
+          callout.default_cell_props.pad_left == 2, "table_probe", "27")
+
+    let flow: text.Table = text.table_flow(words("one", "two", "three"))
+    check(text.col_count(flow) == 3 and text.row_count(flow) == 1, "table_probe", "28")
+    var flow_flex: bool = false
+    try {
+        flow_flex = text.col_spec(flow, 2)!.mode == text.Col_Mode.flex
+    } fail(e: Container_Err) {
+        require false
+    }
+    check(flow_flex, "table_probe", "29")
+
+    var bulk: text.Table = new[text.Table](num_cols = 3)
+    text.add_row(bulk, words("p", "q", "r"))
+    text.add_row(bulk, words("s", "t", "u"))
+    check(text.row_count(bulk) == 2 and cell_is(bulk, 1, 2, "u"), "table_probe", "33")
+
+    var second_cells: uint = 0
+    var second_ok: bool = true
+    try {
+        second_cells = text.row_index(bulk, 1)!.cells.len()
+    } fail(e: Container_Err) {
+        second_ok = false
+    }
+    check(second_ok, "table_probe", "31")
+    if second_ok {
+        var past_end: bool = false
+        try {
+            text.row_index(bulk, 2)!
+        } fail(e: Container_Err) {
+            past_end = true
+        }
+        check(second_cells == 3 and past_end, "table_probe", "32")
+    }
+
+    var alone: text.Table = new[text.Table]()
+    text.add_cell(alone, "alpha beta gamma delta epsilon zeta eta theta rho")
+    text.add_cell(alone, "delta")
+    text.end_row(alone)
+    text.add_cell(alone, "epsilon zeta")
+    text.add_cell(alone, "eta theta iota kappa")
+    text.end_row(alone)
+    var scanned: text.Table = new[text.Table]()
+    text.add_cell(scanned,
+                  "alpha beta gamma delta epsilon zeta eta theta rho")
+    text.add_cell(scanned, "delta")
+    text.end_row(scanned)
+    text.add_cell(scanned, "epsilon zeta")
+    text.add_cell(scanned, "eta theta iota kappa")
+    text.end_row(scanned)
+    text.natural_width(scanned)
+    text.compute_layout(scanned, 40)
+    text.compute_layout(alone, 40)
+    check(col_sizes_match(scanned, alone) and spec_unchanged(scanned, 0) and
+          spec_unchanged(scanned, 1), "table_probe", "900")
+}
+
+var override_theme: text.Theme = (
+    name = "", description = "",
+    palette = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
+    ],
+    styles = nil, roles = nil)
+
+func same_name(t: Ref[text.Theme], want: string) -> bool {
+    return t.name == want
+}
+
+func is_yes(v: bool?) -> bool {
+    return v.get_or_else(false)
+}
+
+func ix_of(v: i8?) -> i8 {
+    return v.get_or_else(-1)
+}
+
+func slot(ix: text.Palette_Ix) -> i8 {
+    return cast[i8] ix
+}
+
+func pal(t: Ref[text.Theme], ix: text.Palette_Ix) -> text.Color {
+    let c: text.Color? = text.palette(t.__value, ix)
+    if c == nil {
+        return -1
+    }
+    return c.get()
+}
+
+func style_of(bold: bool?, italic: bool?, dim: bool?,
+              fg: i8?) -> text.Text_Style {
+    return (bold = bold, italic = italic, underline = nil,
+            double_underline = nil, strikethrough = nil, reverse = nil,
+            dim = dim, blink = nil, text_case = text.Text_Case.none,
+            font_hint = text.Font_Hint.default, font_index = nil,
+            fg_palette_ix = fg, bg_palette_ix = nil, fg_rgb = nil,
+            bg_rgb = nil, font_size = nil)
+}
+
+func builtin_checks() {
+    check(text.theme_builtin_count() == 18, "theme_probe", "1")
+    var i: uint = 0
+    while i < text.theme_builtin_count() {
+        let t: Ref[text.Theme] = text.theme_builtin(i)
+        check(byte_len(t.name) != 0 and byte_len(t.description) != 0, "theme_probe", "2")
+        check(text.theme_lookup(t.name) != nil, "theme_probe", "3")
+        var s: i8 = 0
+        while s < slot(text.Palette_Ix.palette_size) {
+            check(text.palette(t.__value, cast[text.Palette_Ix] s) != nil, "theme_probe", "4")
+            s += 1
+        }
+        check(text.palette(t.__value, text.Palette_Ix.palette_size) == nil, "theme_probe", "5")
+        i += 1
+    }
+}
+
+func theme_probe_main() {
+    builtin_checks()
+    let dark: Ref[text.Theme]? = text.theme_lookup("n00b-dark")
+    check(dark != nil, "theme_probe", "6")
+    let d: Ref[text.Theme] = dark.get_or_else(text.theme_builtin(0))
+    check(pal(d, text.Palette_Ix.background) == 0x1a1b26 and
+          pal(d, text.Palette_Ix.error_tone) == 0xf7768e and
+          pal(d, text.Palette_Ix.text_primary) == 0xc0caf5, "theme_probe", "7")
+    check(text.theme_lookup("no-such-theme") == nil, "theme_probe", "8")
+    check(same_name(text.theme_current(), "n00b-classic"), "theme_probe", "9")
+    check(text.theme_set_current("dracula") and
+          same_name(text.theme_current(), "dracula"), "theme_probe", "10")
+    check(!text.theme_set_current("no-such-theme"), "theme_probe", "11")
+    check(same_name(text.theme_current(), "dracula"), "theme_probe", "12")
+
+    override_theme.name = "n00b-dark"
+    override_theme.description = "registered override"
+    override_theme.palette[cast[uint] text.Palette_Ix.background] = 0x010203
+    text.install(ref override_theme)
+    let after: Ref[text.Theme]? = text.theme_lookup("n00b-dark")
+    check(after != nil and
+          pal(after.get(), text.Palette_Ix.background) == 0x010203, "theme_probe", "13")
+    check(pal(d, text.Palette_Ix.background) == 0x1a1b26, "theme_probe", "14")
+
+    let cur: Ref[text.Theme] = text.theme_current()
+    check(is_yes(text.style_for_tag(cur.__value,"b").bold), "theme_probe", "15")
+    let err: text.Text_Style = text.style_for_tag(cur.__value,"@error")
+    check(is_yes(err.bold) and err.fg_palette_ix != nil and
+          ix_of(err.fg_palette_ix) == slot(text.Palette_Ix.error_tone), "theme_probe", "16")
+    let h1: text.Text_Style = text.style_for_tag(cur.__value,"h1")
+    check(is_yes(h1.bold) and h1.text_case == text.Text_Case.upper and
+          ix_of(h1.fg_palette_ix) == slot(text.Palette_Ix.primary), "theme_probe", "17")
+    check(text.style_for_tag(cur.__value,"@code").font_hint == text.Font_Hint.mono,
+          "theme_probe", "18")
+    check(text.is_empty(text.style_for_tag(cur.__value,"@nope")) and
+          text.is_empty(text.style_for_tag(cur.__value,"nope")) and
+          text.is_empty(text.style_for_tag(cur.__value,"")), "theme_probe", "19")
+    let coloured_roles: Array[string] = [
+        "@code",
+        "@heading",
+        "@body",
+        "@error",
+        "@success",
+        "@muted",
+        "@link",
+        "@label",
+        "@button",
+        "@input",
+    ]
+    var i: uint = 0
+    while i < coloured_roles.len() {
+        let rs: text.Text_Style = text.style_for_tag(cur.__value,coloured_roles[i])
+        if rs.fg_palette_ix == nil {
+            __fd_write(2, coloured_roles[i] + "\n")
+        }
+        check(rs.fg_palette_ix != nil, "theme_probe", "20")
+        i += 1
+    }
+    check(text.style_for_tag(cur.__value,"@mono").fg_palette_ix == nil, "theme_probe", "21")
+
+    let derived: Ref[text.Theme] = text.copy(cur.__value, "probe-derived")
+    text.set_role(derived, "@link",
+                  style_of(true, nil, nil, slot(text.Palette_Ix.accent)))
+    let dlink: text.Text_Style = text.style_for_tag(derived.__value,"@link")
+    check(is_yes(dlink.bold) and
+          ix_of(dlink.fg_palette_ix) == slot(text.Palette_Ix.accent), "theme_probe", "22")
+    let olink: text.Text_Style = text.style_for_tag(cur.__value,"@link")
+    check(!is_yes(olink.bold) and
+          ix_of(olink.fg_palette_ix) == slot(text.Palette_Ix.info), "theme_probe", "23")
+    text.set_role(derived, "@brandnew", style_of(nil, true, nil, nil))
+    check(is_yes(text.style_for_tag(derived.__value,"@brandnew").italic), "theme_probe", "24")
+    text.set_style(derived, "h1", style_of(nil, nil, true, nil))
+    check(is_yes(text.style_for_tag(derived.__value,"h1").dim) and
+          !is_yes(text.style_for_tag(cur.__value,"h1").dim), "theme_probe", "25")
+    text.install(derived)
+    check(text.theme_set_current("probe-derived") and
+          same_name(text.theme_current(), "probe-derived"), "theme_probe", "26")
+
+    text.set_role(ref override_theme, "@probe", style_of(nil, true, nil, nil))
+    let kept: text.Text_Style = text.style_for_tag(override_theme, "@error")
+    check(is_yes(kept.bold) and
+          ix_of(kept.fg_palette_ix) == slot(text.Palette_Ix.error_tone) and
+          is_yes(text.style_for_tag(override_theme, "@probe").italic), "theme_probe", "900")
+
+    require text.theme_set_current("dracula")
+}
+
+core_probe_main()
+rstr_probe_main()
+raw_literal_probe_main()
+report("string_encoding_probe", string_encoding_probe())
+span_gc_probe_main()
+raw_offset_probe_main()
+string_rich_literal_main()
+report("transcode_probe", transcode_probe())
+report("unicode_encoding_probe", unicode_encoding_probe())
+color_probe_main()
+capability_probe_main()
+border_probe_main()
+rich_static_checks()
+rich_build_checks()
+cascade_checks()
+layout_checks()
+check_ascii_identity()
+check_crlf_clusters()
+check_utf8_units()
+check_combining_cluster()
+check_find()
+check_binary()
+check_case()
+check_cursor()
+check_cluster_cursor()
+check_deep_cluster_cursor()
+check_case_matches_unicode()
+check_ops()
+check_plain()
+check_cluster_fit()
+style_probe_main()
+style_fields_probe_main()
+rich_literal_probe_main()
+rich_repr_probe_main()
+table_checks()
+theme_probe_main()
+if failures == 0 {
+    __fd_write(2, "ok")
+}

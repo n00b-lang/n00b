@@ -295,7 +295,7 @@ static bool merge_method_types(th_ctx *ctx, th_type *a, th_type *b,
     if (!uni(ctx, a, b, seen)) {
         if (th_error_count(ctx) == before)
             th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
-                   CORE_STRING_STATIC("types do not unify"));
+                   CORE_STRING_STATIC("the types do not match"));
         return false;
     }
     th_normalize(th_apply_subst(ctx, a));
@@ -384,8 +384,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
                        : CORE_STRING_STATIC("has_param"),
                    have, want,
                    CORE_STRING_STATIC(
-                       "constraint conflicts with one already on the "
-                       "variable"));
+                       "the value is used with two different types"));
 
             return false;
         }
@@ -1318,10 +1317,38 @@ static bool nullary_name(const th_type *t, core_string_t *name)
     return true;
 }
 
+static bool poison_constraint_types(th_ctx *ctx, const th_type *var,
+                                    th_type *poison, core_dict_t *seen)
+{
+    for (size_t i = 0; i < var->var.cons.len; i++) {
+        const th_constraint *constraint = &var->var.cons.data[i];
+        th_type *dependent = nullptr;
+        switch (constraint->kind) {
+        case TH_CON_METHOD:
+            dependent = constraint->method.result;
+            break;
+        case TH_CON_HAS_FIELD:
+            dependent = constraint->field.type;
+            break;
+        case TH_CON_HAS_PARAM:
+            dependent = constraint->param.type;
+            break;
+        default:
+            break;
+        }
+        if (dependent && !uni(ctx, dependent, poison, seen)) return false;
+    }
+    return true;
+}
+
 static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                                   th_type *bound_to, core_dict_t *seen)
 {
     th_type *bt = th_resolve(bound_to);
+
+    if (th_is_poison(bt)) {
+        return poison_constraint_types(ctx, var, bt, seen);
+    }
 
     if (bt && bt->kind == TH_VAR) {
         for (size_t i = 0; i < var->var.cons.len; i++) {
@@ -1361,7 +1388,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("kind"),
                        nullptr, bound_to,
                        CORE_STRING_STATIC(
-                           "constraint kind does not match the type family"));
+                           "the value has the wrong kind of type"));
                 return false;
             }
             break;
@@ -1376,7 +1403,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                        nullptr, bound_to,
                        class == TH_INTEGER_NONE
                            ? CORE_STRING_STATIC(
-                                 "an integer value cannot take this type")
+                                 "an integer cannot have this type")
                            : CORE_STRING_STATIC(
                                  "a bitwise integer value needs an unsigned type"));
                 return false;
@@ -1387,7 +1414,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             if (!uni(ctx, bound_to, c->target, seen)) {
                 th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("unifies"),
                        c->target, bound_to,
-                       CORE_STRING_STATIC("constraint unifies failed"));
+                       CORE_STRING_STATIC("the types do not match"));
 
                 return false;
             }
@@ -1424,7 +1451,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("one_of"),
                        nullptr, bound_to,
                        CORE_STRING_STATIC(
-                           "constraint one_of matched no alternative"));
+                           "the type is not one of the types allowed here"));
 
                 return false;
             }
@@ -1436,7 +1463,8 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("promotes"),
                        c->target, bound_to,
                        CORE_STRING_STATIC(
-                           "constraint promotes has no promotion path"));
+                           "the value cannot be widened to the type required "
+                           "here"));
 
                 return false;
             }
@@ -1460,7 +1488,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 th_err(ctx, TH_ERR_CONSTRAINT, CORE_STRING_STATIC("excludes"),
                        c->target, bound_to,
                        CORE_STRING_STATIC(
-                           "constraint excludes matched the excluded type"));
+                           "this type is not allowed here"));
 
                 return false;
             }
@@ -1478,7 +1506,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                        CORE_STRING_STATIC("has_field"), c->field.type,
                        bound_to,
                        CORE_STRING_STATIC(
-                           "constraint has_field: no such field"));
+                           "the type has no field with that name"));
 
                 return false;
             }
@@ -1489,8 +1517,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                 th_err(ctx, TH_ERR_CONSTRAINT,
                        CORE_STRING_STATIC("has_field"), c->field.type, m,
                        CORE_STRING_STATIC(
-                           "constraint has_field: field type does not "
-                           "unify"));
+                           "the field's type does not match its use"));
 
                 return false;
             }
@@ -1505,8 +1532,8 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                        CORE_STRING_STATIC("has_param"), c->param.type,
                        bound_to,
                        CORE_STRING_STATIC(
-                           "constraint has_param: no parameter at that "
-                           "index"));
+                           "the function has no parameter at that "
+                           "position"));
 
                 return false;
             }
@@ -1518,7 +1545,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                        CORE_STRING_STATIC("has_param"), c->param.type,
                        bound_to,
                        CORE_STRING_STATIC(
-                           "constraint has_param: parameter is not a type"));
+                           "the value is not a function"));
 
                 return false;
             }
@@ -1530,8 +1557,8 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                        CORE_STRING_STATIC("has_param"), c->param.type,
                        a->type,
                        CORE_STRING_STATIC(
-                           "constraint has_param: parameter does not "
-                           "unify"));
+                           "the parameter's type does not match the "
+                           "argument"));
 
                 return false;
             }
@@ -1557,8 +1584,8 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
             if (!implements) {
                 th_err(ctx, TH_ERR_CONSTRAINT, c->iface, nullptr, bound_to,
                        CORE_STRING_STATIC(
-                           "constraint implements: interface not "
-                           "satisfied"));
+                           "the type does not implement the required "
+                           "trait"));
 
                 return false;
             }
@@ -1684,7 +1711,16 @@ bool th_ctx_validate_constraints(th_ctx *ctx)
         core_dict_init(&seen, nullptr, nullptr);
         bool valid = con_check(ctx, variable, bound_to, &seen);
         uni_seen_free(&seen);
-        if (!valid) return false;
+        if (valid) continue;
+        core_dict_init(&seen, nullptr, nullptr);
+        (void)poison_constraint_types(ctx, variable, th_poison(ctx), &seen);
+        uni_seen_free(&seen);
+        size_t rest = ctx->pending_environment_constraints.len - i - 1;
+        memmove(&ctx->pending_environment_constraints.data[pending],
+                &ctx->pending_environment_constraints.data[i + 1],
+                rest * sizeof(*ctx->pending_environment_constraints.data));
+        ctx->pending_environment_constraints.len = pending + rest;
+        return false;
     }
     ctx->pending_environment_constraints.len = pending;
     return true;
@@ -2046,17 +2082,15 @@ bool th_is_closed(th_ctx *ctx, th_type *t)
     return th_free_vars(ctx, t, nullptr) == 0;
 }
 
-bool th_occurs(th_ctx *ctx, th_type *var, th_type *t)
+static bool type_contains(th_type *t,
+                          bool (*matches)(const th_type *, const void *),
+                          const void *target)
 {
-    (void)ctx;
-
     core_dict_t seen;
     core_list_t(th_occ_ptr_t) work = core_list_new_cap(th_occ_ptr_t, 16);
     bool                      hit  = false;
 
     core_dict_init(&seen, nullptr, nullptr);
-
-    var = th_resolve(var);
 
     core_list_push(work, t);
 
@@ -2067,7 +2101,7 @@ bool th_occurs(th_ctx *ctx, th_type *var, th_type *t)
             continue;
         }
 
-        if (cur == var) {
+        if (matches(cur, target)) {
             hit = true;
 
             break;
@@ -2144,6 +2178,28 @@ bool th_occurs(th_ctx *ctx, th_type *var, th_type *t)
     core_list_free(work);
 
     return hit;
+}
+
+static bool is_target(const th_type *candidate, const void *target)
+{
+    return candidate == target;
+}
+
+static bool is_poison_type(const th_type *candidate, const void *target)
+{
+    (void)target;
+    return th_is_poison(candidate);
+}
+
+bool th_occurs(th_ctx *ctx, th_type *var, th_type *t)
+{
+    (void)ctx;
+    return type_contains(t, is_target, th_resolve(var));
+}
+
+bool th_mentions_poison(th_type *t)
+{
+    return t && type_contains(t, is_poison_type, nullptr);
 }
 
 static th_type *dup_shallow(th_ctx *ctx, const th_type *t)
@@ -2418,7 +2474,7 @@ static bool uni_named(th_ctx *ctx, th_type *a, th_type *b,
     if (a->named.nargs != b->named.nargs) {
         th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
                CORE_STRING_STATIC(
-                   "the two applications have different argument counts"));
+                   "the types take different numbers of type arguments"));
 
         return false;
     }
@@ -2428,7 +2484,7 @@ static bool uni_named(th_ctx *ctx, th_type *a, th_type *b,
 
         if (x->kind != y->kind) {
             th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
-                   CORE_STRING_STATIC("an argument differs in kind"));
+                   CORE_STRING_STATIC("a type argument differs"));
 
             return false;
         }
@@ -2438,7 +2494,7 @@ static bool uni_named(th_ctx *ctx, th_type *a, th_type *b,
         }
         else if (!arg_eq(x, y)) {
             th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
-                   CORE_STRING_STATIC("a non-type argument differs"));
+                   CORE_STRING_STATIC("a type argument has a different value"));
 
             return false;
         }
@@ -2453,7 +2509,7 @@ static bool uni_record(th_ctx *ctx, th_type *a, th_type *b,
     if (a->record.n != b->record.n) {
         th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
                CORE_STRING_STATIC(
-                   "the two records have different member counts"));
+                   "the records have different numbers of fields"));
 
         return false;
     }
@@ -2477,7 +2533,7 @@ static bool uni_record(th_ctx *ctx, th_type *a, th_type *b,
         if (!found) {
             th_err(ctx, TH_ERR_NO_SUCH_FIELD, a->record.members[i].name,
                    b, a,
-                   CORE_STRING_STATIC("the other record has no such member"));
+                   CORE_STRING_STATIC("the other record has no such field"));
             ok = false;
 
             break;
@@ -2497,7 +2553,8 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
     if (!a->fn.rest != !b->fn.rest || a->fn.np != b->fn.np
         || a->fn.nkw != b->fn.nkw || !a->fn.error != !b->fn.error) {
         th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
-               CORE_STRING_STATIC("the two signatures differ in arity"));
+               CORE_STRING_STATIC(
+                   "the functions take different numbers of parameters"));
 
         return false;
     }
@@ -2520,7 +2577,8 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
         if (!found || k->mode != a->fn.kw[i].mode) {
             th_err(ctx, TH_ERR_MISSING_KEYWORD, a->fn.kw[i].name, b, a,
                    CORE_STRING_STATIC(
-                       "the other signature lacks that keyword parameter"));
+                       "the other function has no parameter with that "
+                       "name"));
             kw_ok = false;
 
             break;
@@ -2538,7 +2596,8 @@ static bool uni_func(th_ctx *ctx, th_type *a, th_type *b,
     if (a->fn.rest) {
         if (a->fn.rest->mode != b->fn.rest->mode) {
             th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
-                   CORE_STRING_STATIC("the rest parameters differ in mode"));
+                   CORE_STRING_STATIC(
+                       "the variadic parameters differ in mode"));
 
             return false;
         }
@@ -2570,7 +2629,7 @@ static bool uni_sum(th_ctx *ctx, th_type *a, th_type *b, core_list_t(tpair) *w)
 {
     if (a->sum.comb != b->sum.comb || a->sum.n != b->sum.n) {
         th_err(ctx, TH_ERR_ARITY_MISMATCH, (core_string_t){}, b, a,
-               CORE_STRING_STATIC("the two composites differ in shape"));
+               CORE_STRING_STATIC("the types have different shapes"));
 
         return false;
     }
@@ -2722,6 +2781,10 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
             b = t;
         }
 
+        if (a->kind != TH_VAR && (th_is_poison(a) || th_is_poison(b))) {
+            continue;
+        }
+
         uint8_t integer_flags = 0;
         if (boundary && a->kind == TH_VAR && b->kind != TH_VAR
             && !ctx->grounding_integers && ctx->integer_class
@@ -2743,8 +2806,7 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
             if (th_occurs(ctx, a, b)) {
                 th_err(ctx, TH_ERR_OCCURS, (core_string_t){}, a, b,
                        CORE_STRING_STATIC(
-                           "the variable occurs in the type it would be "
-                           "bound to"));
+                           "a type would have to contain itself"));
                 ok = false;
                 break;
             }
@@ -2761,7 +2823,7 @@ static bool uni(th_ctx *ctx, th_type *a0, th_type *b0, core_dict_t *seen)
 
         if (a->kind != b->kind) {
             th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
-                   CORE_STRING_STATIC("the two types are of different kinds"));
+                   CORE_STRING_STATIC("the types are of different kinds"));
             ok = false;
             break;
         }
@@ -2810,7 +2872,7 @@ th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
     if (!uni_in_place(ctx, ia, ib)) {
         if (th_error_count(ctx) == before) {
             th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, ib, ia,
-                   CORE_STRING_STATIC("types do not unify"));
+                   CORE_STRING_STATIC("the types do not match"));
         }
 
         return nullptr;
@@ -2855,7 +2917,7 @@ th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
     if (!uni_in_place(ctx, a, b)) {
         if (th_error_count(ctx) == before) {
             th_err(ctx, TH_ERR_UNIFY, (core_string_t){}, b, a,
-                   CORE_STRING_STATIC("types do not unify"));
+                   CORE_STRING_STATIC("the types do not match"));
         }
         return nullptr;
     }

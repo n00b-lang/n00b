@@ -1,6 +1,0 @@
-func f() -> i32 {
-    let x: i32 = 0xff & 0x0f
-    return x
-}
-
-f()

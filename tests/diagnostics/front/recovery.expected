@@ -1,0 +1,12 @@
+tests/diagnostics/front/recovery.n:2:16: error N00B-P0001: expected an expression, found `*` in the declaration of `x`
+tests/diagnostics/front/recovery.n:4:1: error N00B-P0006: expected an expression, found a blank line in the declaration of `y`
+  note: a statement may continue onto the next line, but a blank line ends it
+tests/diagnostics/front/recovery.n:7:9: error N00B-P0001: expected an expression, found `=` in the declaration of `z`
+tests/diagnostics/front/recovery.n:10:19: error N00B-P0001: expected `}`, `,`, the end of the statement, an operator, `:` or one of 5 other tokens, found `3` in the declaration of `q`
+tests/diagnostics/front/recovery.n:12:23: error N00B-P0001: expected `)`, `,`, an operator, `:`, `(` or one of 3 other tokens, found end of line in parentheses
+  tests/diagnostics/front/recovery.n:12:18: note: `(` is opened here and never closed
+tests/diagnostics/front/recovery.n:14:1: error N00B-P0005: unknown keyword `fucn`
+  help: did you mean `func` or `fn`?
+tests/diagnostics/front/recovery.n:18:18: error N00B-P0001: expected `]`, `,`, an operator, `:`, `(` or one of 3 other tokens, found end of line in a list literal
+  tests/diagnostics/front/recovery.n:18:13: note: `[` is opened here and never closed
+tests/diagnostics/front/recovery.n:23:2: error N00B-P0004: unexpected `}` with no matching `{`

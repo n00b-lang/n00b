@@ -1536,7 +1536,8 @@ static void test_heredoc_families(void) {
   check("disallowed heredoc quote forms are malformed headers",
         scan_diagnostic(ts->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INVALID &&
-            core_string_find(diagnostic.message, S("quoted heredoc tag")) >= 0);
+            diagnostic.problem.kind
+                == SCAN_DIAG_HEREDOC_TAG_QUOTED_NOT_PERMITTED);
   scan_token_stream_free(ts);
 
   ts = scan_tokenize_owned(g, S("x <<A\nbody\n"));
@@ -1546,7 +1547,7 @@ static void test_heredoc_families(void) {
   check("missing queued bodies remain distinguishably incomplete",
         scan_diagnostic(ts->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INCOMPLETE &&
-            core_string_find(diagnostic.message, S("queued heredoc")) >= 0);
+            diagnostic.problem.kind == SCAN_DIAG_HEREDOC_QUEUED_UNTERMINATED);
   scan_token_stream_free(ts);
 
   parse_grammar_free(g);
@@ -1611,7 +1612,8 @@ static void test_literal_postprocessing_hooks(void) {
         scan_diagnostic(ts->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INVALID &&
             diagnostic.start_byte == 1 && diagnostic.end_byte == 4 &&
-            core_string_eq(diagnostic.message, S("bad literal")));
+            diagnostic.problem.kind == SCAN_DIAG_HOOK_MESSAGE &&
+            core_string_eq(diagnostic.problem.detail, S("bad literal")));
   scan_token_stream_free(ts);
 
   ts = scan_tokenize_owned(g, S("\"wrong\""));
@@ -1621,7 +1623,7 @@ static void test_literal_postprocessing_hooks(void) {
   check("hooks cannot select undeclared token metadata",
         scan_diagnostic(ts->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INVALID &&
-            core_string_find(diagnostic.message, S("undeclared token")) >= 0);
+            diagnostic.problem.kind == SCAN_DIAG_HOOK_UNDECLARED_TOKEN);
   scan_token_stream_free(ts);
   parse_grammar_free(g);
 
@@ -1772,11 +1774,11 @@ static void test_comment_region_anchors_are_trivia(void) {
   check("comments expose membership in every containing region",
         comment && parse_trivia_region_count(comment) == 1
             && parse_trivia_in_region(comment, open->region_id));
-  parse_token_info_t *tree_token = parse_token_clone_for_tree(name);
+  parse_token_info_t *tree_token = parse_token_copy(name, true);
   parse_trivia_t *tree_comment = parse_token_leading_trivia(tree_token)->next;
   check("parse-tree token clones preserve comment-region metadata",
         tree_comment && parse_trivia_in_region(tree_comment, open->region_id));
-  parse_token_free_from_tree(tree_token);
+  parse_token_free(tree_token);
   scan_token_stream_free(stream);
   scan_scanner_free(scanner);
   core_buffer_free(buffer);
@@ -1816,9 +1818,12 @@ static void test_comment_region_anchors_are_trivia(void) {
             && parse_trivia_in_region(comment_b, open_b->region_id));
   scan_token_stream_free(stream);
 
-  check("comment-region names match after NFC normalization",
-        source_status(g, "#[e\xCC\x81#\n# note\n#]\xC3\xA9#\nname") ==
+  check("comment-region names in NFC match",
+        source_status(g, "#[\xC3\xA9#\n# note\n#]\xC3\xA9#\nname") ==
             SCAN_STATUS_COMPLETE);
+  check("comment-region names not in NFC are rejected",
+        source_status(g, "#[e\xCC\x81#\n# note\n#]e\xCC\x81#\nname") ==
+            SCAN_STATUS_INVALID);
 
   stream = scan_tokenize_owned(
       g, S("# before\n#[r#\n# content\n#]r#\n# after\n\nname"));
@@ -3355,7 +3360,7 @@ static void test_malformed_token_recovery(void) {
   check("recovery retains the original malformed-token diagnostic",
         scan_diagnostic(scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_RECOVERED &&
-            core_string_find(diagnostic.message, S("numeric")) >= 0 &&
+            diagnostic.problem.kind == SCAN_DIAG_NUMBER_MALFORMED &&
             diagnostic.start_byte == 0);
 
   scan_token_stream_free(ts);
@@ -3861,7 +3866,8 @@ static void test_strings_distinguish_incomplete_from_invalid(void) {
   check("incomplete scanner diagnostics remain inspectable",
         scan_diagnostic(stream->scanner, &diagnostic) &&
             diagnostic.status == SCAN_STATUS_INCOMPLETE &&
-            diagnostic.message.data && diagnostic.start_byte == 0 &&
+            diagnostic.problem.kind == SCAN_DIAG_STRING_UNTERMINATED &&
+            diagnostic.start_byte == 0 &&
             diagnostic.end_byte == 5);
   scan_token_stream_free(stream);
 
@@ -3945,45 +3951,32 @@ static parse_grammar_t *unicode_confusable_grammar(void) {
 
 static void test_unicode_identifier_profiles(void) {
   core_string_t version = scan_lex_unicode_version();
-
-  if (!version.data) {
-    parse_grammar_t *g = unicode_identifier_grammar((core_string_t){0});
-    check("Unicode profiles fail clearly without a provider",
-          g && !scan_grammar_lex_compiled(g) &&
-              core_string_find(scan_lex_build_error(), S("ICU-enabled")) >= 0);
-    parse_grammar_free(g);
-    return;
-  }
-
   parse_grammar_t *g = unicode_identifier_grammar(version);
   core_buffer_t *buf = nullptr;
   parse_scanner_t *sc = nullptr;
   parse_token_stream_t *ts = scan_tokenize(g, S("e\xCC\x81 "), &buf, &sc);
   parse_token_info_t *tok = scan_stream_next(ts);
-  core_string_t value = tok && parse_token_has_value(tok)
-                            ? core_option_get(parse_token_value(tok))
-                            : (core_string_t){0};
-  scan_stream_next(ts);
-  check("identifier normalization preserves original source spans",
-        tok && parse_token_start_byte(tok) == 0 &&
-            parse_token_end_byte(tok) == 3 && value.u8_bytes == 2 &&
-            !memcmp(value.data, "\xC3\xA9", 2) &&
-            scan_status(sc) == SCAN_STATUS_COMPLETE);
+  core_string_t value = {0};
+  check("an identifier not in NFC is rejected with its composed spelling",
+        scan_status(sc) == SCAN_STATUS_INVALID && sc->status_start_byte == 0 &&
+            sc->status_end_byte == 3 &&
+            sc->status_problem.kind == SCAN_DIAG_IDENTIFIER_NOT_NFC &&
+            core_string_eq(sc->status_problem.detail, S("\xC3\xA9")));
   scan_token_stream_free(ts);
   scan_scanner_free(sc);
   core_buffer_free(buf);
 
   ts = scan_tokenize_incremental_owned(g);
   bool resumed =
-      scan_stream_append(ts, S("e")) && scan_stream_next(ts) == nullptr &&
-      scan_stream_append(ts, S("\xCC")) && scan_stream_next(ts) == nullptr &&
-      scan_stream_append(ts, S("\x81 "));
+      scan_stream_append(ts, S("caf")) && scan_stream_next(ts) == nullptr &&
+      scan_stream_append(ts, S("\xC3")) && scan_stream_next(ts) == nullptr &&
+      scan_stream_append(ts, S("\xA9 "));
   tok = resumed ? scan_stream_next(ts) : nullptr;
   value = tok && parse_token_has_value(tok)
               ? core_option_get(parse_token_value(tok))
               : (core_string_t){0};
   check("Unicode identifiers resume across one-byte UTF-8 chunks",
-        tok && value.u8_bytes == 2 && !memcmp(value.data, "\xC3\xA9", 2));
+        tok && value.u8_bytes == 5 && !memcmp(value.data, "caf\xC3\xA9", 5));
   scan_token_stream_free(ts);
 
   buf = nullptr;

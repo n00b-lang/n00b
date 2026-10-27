@@ -1,7 +1,0 @@
-func f(x: int) -> int {
-    return x
-}
-
-require f(x = "str") == 1
-require f(y = 1) == 1
-require f(1, x = 1) == 1

@@ -1,0 +1,2 @@
+tests/diagnostics/tu/plain_ref_cast.n:5:26: error N00B-T1005: cannot cast `Ref[byte]` to `Ref[uint]`: no conversion is defined between them
+  help: reinterpreting a reference needs `unsafe_cast`

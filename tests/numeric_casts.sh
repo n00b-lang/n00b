@@ -17,9 +17,9 @@ test "$(cat "$tmp/stderr")" = ok
     >"$tmp/compile.out" 2>"$tmp/compile.err"
 status=0
 (ulimit -c 0; "$tmp/invalid") >"$tmp/stdout" 2>"$tmp/stderr" || status=$?
-test "$status" -eq 133 || test "$status" -eq 132
+test "$status" -eq 101
 test ! -s "$tmp/stdout"
-grep -q '^before' "$tmp/stderr"
+grep -q '^beforepanic: cast of .* to `uint` is out of range$' "$tmp/stderr"
 if grep -q 'after' "$tmp/stderr"; then
     echo 'out-of-range float-to-integer cast returned' >&2
     exit 1

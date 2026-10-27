@@ -7,14 +7,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <spawn.h>
-#include <sys/wait.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
-extern char **environ;
 
 #include "driver.h"
+#include "diagnostics.h"
 #include "compiler_cli.h"
+#include "config.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
 #include "compiler_lower.h"
@@ -30,6 +30,8 @@ extern char **environ;
 #include "abi_static_graph.h"
 #include "global_metadata.h"
 #include "llvm_backend.h"
+#include "lib/os.h"
+#include "lib/process.h"
 #include "llvm_native_cache.h"
 #include "native_frame_maps.h"
 #include "n00b-abi-v1.h"
@@ -42,7 +44,7 @@ extern char **environ;
 #include "lib/indexed_table.h"
 #include "lib/target.h"
 #include "lib/object_section.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "parse/commander.h"
 #include "parse/tree.h"
 #include "ir/ir.h"
@@ -92,11 +94,12 @@ host_object_archive(parse_cmdr_result_t *args, int32_t count,
     core_buffer_printf(&path, "%s.hosts.a", staging);
     char *archive = core_string_to_cstr(core_buffer_string(&path));
     core_buffer_release(&path);
-    char **arguments = archive
+    const char *archiver = n00bb_toolchain()->archiver;
+    char **arguments = archive && archiver
         ? calloc((size_t)count + 4, sizeof(*arguments)) : nullptr;
     bool ok = arguments != nullptr;
     if (ok) {
-        arguments[0] = "ar";
+        arguments[0] = (char *)archiver;
         arguments[1] = "crs";
         arguments[2] = archive;
     }
@@ -108,12 +111,13 @@ host_object_archive(parse_cmdr_result_t *args, int32_t count,
         if (ok && archive_file(object)) core_free(object);
         else if (ok) arguments[3 + objects++] = object;
     }
-    pid_t child = 0;
-    int status = 0;
+    core_process_spec_t spec = {.arguments = arguments, .search_path = true};
+    core_process_t child;
+    core_process_status_t status = {0};
     ok = ok && (!objects
-        || (!posix_spawnp(&child, "ar", nullptr, nullptr, arguments, environ)
-            && waitpid(child, &status, 0) == child && WIFEXITED(status)
-            && WEXITSTATUS(status) == 0));
+        || (!core_process_start(&spec, &child)
+            && core_process_wait(child, &status) && status.exited
+            && status.code == 0));
     for (int32_t i = 0; arguments && i < objects; i++)
         core_free(arguments[3 + i]);
     free(arguments);
@@ -221,17 +225,12 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
                 matched = global;
             }
         }
-        if (valid && !matched) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "linked storage row %u has no IR global for '%.*s.%.*s'",
+        if (valid && !matched)
+            n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+                "matching linked globals to their storage",
+                "linked storage row %u has no IR global for `%.*s.%.*s`",
                 i, (int)module_name.length, module_name.bytes,
                 (int)symbol_name.length, symbol_name.bytes);
-            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-                CORE_STRING_STATIC("N00BB-B0010"),
-                core_string_borrow(message.data, message.byte_len));
-            core_buffer_release(&message);
-        }
         valid = valid && matched && count < capacity;
         for (size_t j = 0; valid && j < count; j++)
             if (bindings[j].global == matched) valid = false;
@@ -259,18 +258,14 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
             bool found = false;
             for (size_t j = 0; j < count; j++)
                 if (bindings[j].global == global) { found = true; break; }
-            if (!found) {
-                core_buffer_t message = {0};
-                core_buffer_printf(&message,
-                    "runtime global '%.*s.%.*s' has no linked storage row",
+            if (!found)
+                n00bb_internal_error(diagnostics, nullptr,
+                    (core_diag_location_t){},
+                    "matching linked globals to their storage",
+                    "runtime global `%.*s.%.*s` has no linked storage row",
                     (int)ir_module_name(runtime).u8_bytes,
                     ir_module_name(runtime).data,
                     (int)global->name.u8_bytes, global->name.data);
-                core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-                    CORE_STRING_STATIC("N00BB-B0010"),
-                    core_string_borrow(message.data, message.byte_len));
-                core_buffer_release(&message);
-            }
             valid = found;
         }
     }
@@ -483,14 +478,10 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
         if (core_link_unit_require_contribution(link, (core_string_t){0},
                 required[i], 1, &contribution))
             continue;
-        core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            "executable build requires complete %.*s facts",
+        n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+            "checking the program is ready to build",
+            "the program is missing complete `%.*s` facts",
             (int)required[i].u8_bytes, required[i].data);
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0012"),
-            core_string_borrow(message.data, message.byte_len));
-        core_buffer_release(&message);
         return false;
     }
 
@@ -525,21 +516,17 @@ n00bb_validate_executable_completeness(core_link_unit_t *link,
             break;
         }
         if (valid) continue;
-        core_buffer_t message = {0};
         core_string_t owner_name = function && function->owner
             ? ir_module_name(function->owner)
             : CORE_STRING_STATIC("<unknown>");
         core_string_t function_name = function && function->name.data
             ? function->name : CORE_STRING_STATIC("<unknown>");
-        core_buffer_printf(&message,
-            "executable build has incomplete %s for reachable function %.*s.%.*s",
+        n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+            "checking the program is ready to build",
+            "incomplete %s for reachable function `%.*s.%.*s`",
             missing ? missing : "facts",
             (int)owner_name.u8_bytes, owner_name.data,
             (int)function_name.u8_bytes, function_name.data);
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0012"),
-            core_string_borrow(message.data, message.byte_len));
-        core_buffer_release(&message);
         return false;
     }
     return true;
@@ -556,27 +543,34 @@ n00bb_flag_argument(const char *prefix, core_string_t value)
     return native;
 }
 
-static char *
-debug_bundle_path(core_string_t executable)
+static core_string_t
+debug_bundle(core_string_t executable)
 {
     core_buffer_t bundle = {0};
     core_buffer_append_string(&bundle, executable);
     core_buffer_puts(&bundle, ".dSYM");
-    char *path = core_string_to_cstr(core_buffer_string(&bundle));
+    core_string_t path = core_string_dup(core_buffer_string(&bundle));
     core_buffer_release(&bundle);
     return path;
 }
 
-void
-n00bb_remove_executable(const char *path)
+static char *
+debug_bundle_path(core_string_t executable)
 {
-    if (!path) return;
-    unlink(path);
-    core_string_t executable = core_string_from_cstr(path);
-    char *bundle = debug_bundle_path(executable);
-    n00bb_remove_tree(bundle);
-    core_free(bundle);
-    core_free(executable.data);
+    core_string_t bundle = debug_bundle(executable);
+    char *path = core_string_to_cstr(bundle);
+    core_free(bundle.data);
+    return path;
+}
+
+void
+n00bb_remove_executable(core_string_t path)
+{
+    if (!path.data) return;
+    core_os_remove_file(path);
+    core_string_t bundle = debug_bundle(path);
+    core_os_remove_tree(bundle, nullptr);
+    core_free(bundle.data);
 }
 
 bool
@@ -683,6 +677,8 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
     if (ok && !parse_cmdr_flag_present(emission->args,
             CORE_STRING_STATIC("--gc-conservative-stacks")))
         ok = n00bb_llvm_backend_enable_frame_maps(backend);
+    if (n00bb_setting_bool(N00BB_KEY_BUILD_PANIC_TRAP))
+        n00bb_llvm_backend_enable_panic_trap(backend);
     ok = ok && n00bb_llvm_backend_bind_type_indices(backend,
             emission->type_indices, emission->type_index_count)
         && n00bb_llvm_backend_bind_function_indices(backend,
@@ -764,8 +760,8 @@ native_pipeline_start(native_pipeline_t *pipeline, module_object_t *items,
     pthread_cond_init(&pipeline->changed, nullptr);
     pipeline->threads = core_alloc_array(pthread_t, workers);
     while (pipeline->thread_count < workers
-           && pthread_create(&pipeline->threads[pipeline->thread_count],
-                             nullptr, native_worker, pipeline) == 0)
+           && n00bb_start_worker(&pipeline->threads[pipeline->thread_count],
+                                 native_worker, pipeline))
         pipeline->thread_count++;
 }
 
@@ -825,7 +821,7 @@ complete_module_object(const module_emission_t *emission,
     }
     n00bb_llvm_backend_free(item->backend);
     item->backend = nullptr;
-    if (getenv("N00BB_PROFILE_COMPILE")) {
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE)) {
         core_string_t name = ir_module_name(item->module);
         fprintf(stderr, "PROFILE module-object %.3f %.*s\n", item->seconds,
             (int)name.u8_bytes, name.data);
@@ -924,6 +920,401 @@ module_emitter_finish(module_emitter_t *emitter)
     return emitter->ok;
 }
 
+typedef struct {
+    char *output;
+    size_t output_length;
+    char *staging;
+    bool device;
+} output_plan_t;
+
+static void
+report_output_failure(core_diagnostics_t *diagnostics, const char *output,
+                      int failure)
+{
+    core_string_t path = core_string_from_cstr(output);
+    core_string_t directory = core_os_path_parent(path);
+    if (failure == ENOENT || failure == ENOTDIR)
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_OUTPUT_NOT_WRITABLE,
+            (core_diag_location_t){}, N00B_TEXT_CANNOT_WRITE_THE_DIRECTORY_DOES,
+            N00BB_ARGS(ARG_NATIVE(output), ARG_TEXT(directory)));
+    else if (failure == EISDIR) {
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_OUTPUT_NOT_WRITABLE,
+            (core_diag_location_t){}, N00B_TEXT_CANNOT_WRITE_THE_EXECUTABLE_TO,
+            N00BB_ARGS(ARG_NATIVE(output)));
+        n00bb_report_help(diagnostics, N00B_TEXT_NAME_THE_EXECUTABLE_FILE_WITH,
+            N00BB_NO_ARGS);
+    }
+    else if (failure == EACCES || failure == EPERM || failure == EROFS)
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_OUTPUT_NOT_WRITABLE,
+            (core_diag_location_t){}, N00B_TEXT_CANNOT_WRITE_IN,
+            N00BB_ARGS(ARG_NATIVE(output), ARG_ERRNO(failure),
+                       ARG_TEXT(directory)));
+    else
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_OUTPUT_NOT_WRITABLE,
+            (core_diag_location_t){}, N00B_TEXT_CANNOT_WRITE,
+            N00BB_ARGS(ARG_NATIVE(output), ARG_ERRNO(failure)));
+    core_free(directory.data);
+    core_free(path.data);
+}
+
+static bool
+prepare_output(parse_cmdr_result_t *args, output_plan_t *plan,
+               core_diagnostics_t *diagnostics)
+{
+    core_string_t requested = parse_cmdr_flag_str(args,
+        CORE_STRING_STATIC("--output"));
+    core_string_t name = requested.data ? core_string_dup(requested)
+        : n00bb_default_output_name(parse_cmdr_arg_str(args, 0));
+    *plan = (output_plan_t){
+        .output = core_string_to_cstr(name),
+        .output_length = name.u8_bytes,
+    };
+    core_free(name.data);
+    struct stat info;
+    if (!stat(plan->output, &info)) {
+        if (S_ISDIR(info.st_mode)) {
+            report_output_failure(diagnostics, plan->output, EISDIR);
+            core_free(plan->output);
+            return false;
+        }
+        plan->device = !S_ISREG(info.st_mode);
+    }
+    core_buffer_t staging = {0};
+    if (plan->device) {
+        core_string_t temporary = core_os_temp_root();
+        core_buffer_printf(&staging, "%.*s/n00bb-link-",
+                           (int)temporary.u8_bytes, temporary.data);
+        core_free(temporary.data);
+    }
+    else core_buffer_printf(&staging, "%s.", plan->output);
+    core_string_t made = {};
+    int fd = core_os_make_unique_file(core_buffer_string(&staging), &made);
+    core_buffer_release(&staging);
+    plan->staging = fd >= 0 ? core_string_to_cstr(made) : nullptr;
+    core_free(made.data);
+    if (fd < 0) {
+        report_output_failure(diagnostics, plan->output, errno);
+        core_free(plan->staging);
+        core_free(plan->output);
+        *plan = (output_plan_t){0};
+        return false;
+    }
+    close(fd);
+    unlink(plan->staging);
+    return true;
+}
+
+static bool
+copy_to_device(const char *from, const char *to)
+{
+    int source = open(from, O_RDONLY);
+    int target = source >= 0 ? open(to, O_WRONLY) : -1;
+    bool ok = source >= 0 && target >= 0;
+    char chunk[65536];
+    ssize_t got = 0;
+    while (ok && (got = read(source, chunk, sizeof chunk)) > 0)
+        ok = write(target, chunk, (size_t)got) == got;
+    ok = ok && got == 0;
+    int failure = errno;
+    if (source >= 0) close(source);
+    if (target >= 0) close(target);
+    errno = failure;
+    return ok;
+}
+
+static bool
+finish_output(output_plan_t *plan, core_diagnostics_t *diagnostics)
+{
+    core_string_t staging = core_string_from_cstr(plan->staging);
+    core_string_t output = core_string_borrow(plan->output,
+                                              plan->output_length);
+    bool ok = plan->device ? copy_to_device(plan->staging, plan->output)
+                           : core_os_rename_replace(staging, output);
+    core_free(staging.data);
+    if (!ok) report_output_failure(diagnostics, plan->output,
+                                   errno ? errno : EIO);
+    return ok;
+}
+
+static void
+release_output(output_plan_t *plan)
+{
+    if (plan->staging) unlink(plan->staging);
+    core_free(plan->staging);
+    plan->staging = nullptr;
+}
+
+typedef struct {
+    char **arguments;
+    char **objects;
+    size_t object_count;
+    const char *staging;
+    const char *output;
+    bool mach_o;
+} link_report_t;
+
+static void
+replace_all(core_buffer_t *text, core_string_t needle,
+            core_string_t replacement)
+{
+    if (!needle.u8_bytes || !text->byte_len) return;
+    core_buffer_t result = {0};
+    core_string_t rest = core_buffer_string(text);
+    for (;;) {
+        int64_t at = core_string_find(rest, needle);
+        if (at < 0) break;
+        core_buffer_append(&result, rest.data, (size_t)at);
+        core_buffer_append_string(&result, replacement);
+        rest = core_string_slice(rest, (size_t)at + needle.u8_bytes,
+                                 rest.u8_bytes - (size_t)at - needle.u8_bytes);
+    }
+    core_buffer_append_string(&result, rest);
+    core_buffer_release(text);
+    *text = result;
+}
+
+static void
+hide_generated_paths(const link_report_t *report, core_buffer_t *text)
+{
+    core_string_t generated = CORE_STRING_STATIC("<generated object>");
+    for (size_t i = 0; i < report->object_count; i++) {
+        if (!report->objects[i]) continue;
+        core_string_t path = core_string_from_cstr(report->objects[i]);
+        replace_all(text, path, generated);
+        int64_t slash = core_string_rfind_byte(path, '/');
+        if (slash >= 0)
+            replace_all(text, core_string_slice(path, (size_t)slash + 1,
+                path.u8_bytes - (size_t)slash - 1), generated);
+        core_free(path.data);
+    }
+    core_string_t staging = core_string_from_cstr(report->staging);
+    core_string_t output = core_string_from_cstr(report->output);
+    replace_all(text, staging, output);
+    core_free(output.data);
+    core_free(staging.data);
+}
+
+static bool
+generated_object(const link_report_t *report, const char *argument)
+{
+    for (size_t i = 0; i < report->object_count; i++)
+        if (report->objects[i] == argument) return true;
+    return false;
+}
+
+static void
+format_link_command(const link_report_t *report, core_buffer_t *out)
+{
+    size_t generated = 0;
+    for (size_t i = 0; report->arguments[i]; i++)
+        generated += generated_object(report, report->arguments[i]);
+    bool shown_generated = false;
+    for (size_t i = 0; report->arguments[i]; i++) {
+        const char *argument = report->arguments[i];
+        if (generated_object(report, argument)) {
+            if (shown_generated) continue;
+            shown_generated = true;
+            core_buffer_printf(out, " <%zu generated object%s>", generated,
+                               generated == 1 ? "" : "s");
+            continue;
+        }
+        if (argument == report->staging) argument = report->output;
+        core_string_t text = core_string_from_cstr(argument);
+        bool quote = core_string_find_byte(text, ' ') >= 0;
+        core_buffer_printf(out, "%s%s%.*s%s", i ? " " : "", quote ? "'" : "",
+                           (int)text.u8_bytes, text.data, quote ? "'" : "");
+        core_free(text.data);
+    }
+}
+
+core_list_decl(core_string_t);
+
+static void
+add_symbol(core_list_t(core_string_t) *symbols, core_string_t symbol)
+{
+    for (size_t i = 0; i < symbols->len; i++)
+        if (core_string_eq(symbols->data[i], symbol)) return;
+    core_list_push(*symbols, core_string_dup(symbol));
+}
+
+static core_string_t
+between(core_string_t line, core_string_t opener, char closer)
+{
+    int64_t start = core_string_find(line, opener);
+    if (start < 0) return (core_string_t){0};
+    core_string_t rest = core_string_slice(line,
+        (size_t)start + opener.u8_bytes,
+        line.u8_bytes - (size_t)start - opener.u8_bytes);
+    int64_t end = closer ? core_string_find_byte(rest, closer)
+                         : (int64_t)rest.u8_bytes;
+    return end > 0 ? core_string_slice(rest, 0, (size_t)end)
+                   : (core_string_t){0};
+}
+
+static core_list_t(core_string_t)
+undefined_symbols(core_string_t text)
+{
+    core_list_t(core_string_t) symbols = core_list_new(core_string_t);
+    bool mach_o_section = false;
+    size_t at = 0;
+    while (at < text.u8_bytes) {
+        size_t end = at;
+        while (end < text.u8_bytes && text.data[end] != '\n') end++;
+        size_t stop = end > at && text.data[end - 1] == '\r' ? end - 1 : end;
+        core_string_t line = core_string_slice(text, at, stop - at);
+        at = end + 1;
+        if (core_string_starts_with(line,
+                CORE_STRING_STATIC("Undefined symbols for architecture"))) {
+            mach_o_section = true;
+            continue;
+        }
+        core_string_t symbol = {0};
+        if (mach_o_section
+            && core_string_find(line, CORE_STRING_STATIC("referenced from"))
+                   >= 0)
+            symbol = between(line, CORE_STRING_STATIC("\""), '"');
+        if (!symbol.u8_bytes)
+            symbol = between(line, CORE_STRING_STATIC("undefined symbol: "),
+                             0);
+        if (!symbol.u8_bytes)
+            symbol = between(line,
+                             CORE_STRING_STATIC("undefined reference to `"),
+                             '\'');
+        if (symbol.u8_bytes) add_symbol(&symbols, symbol);
+    }
+    return symbols;
+}
+
+static void
+report_undefined_symbol(core_diagnostics_t *diagnostics,
+                        const link_report_t *report, core_string_t symbol)
+{
+    core_string_t c_name = report->mach_o && symbol.u8_bytes > 1
+            && symbol.data[0] == '_'
+        ? core_string_slice(symbol, 1, symbol.u8_bytes - 1) : symbol;
+    n00bb_ffi_symbol_t declared;
+    if (n00bb_ffi_declared_symbol(c_name, &declared)) {
+        n00bb_report(diagnostics, declared.unit,
+            N00B_DIAG_UNDEFINED_NATIVE_SYMBOL,
+            (core_diag_location_t){declared.line, declared.column,
+                                   declared.line, declared.column, true},
+                                   N00B_TEXT_IS_DECLARED_IN_AN_FFI,
+            N00BB_ARGS(ARG_TEXT(declared.name), ARG_TEXT(c_name)));
+        n00bb_report_label(diagnostics, N00B_TEXT_DECLARED_HERE, N00BB_NO_ARGS);
+    }
+    else
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_UNDEFINED_NATIVE_SYMBOL,
+            (core_diag_location_t){}, N00B_TEXT_NOTHING_LINKED_INTO_THE_PROGRAM,
+            N00BB_ARGS(ARG_TEXT(c_name)));
+}
+
+static void
+report_link_failure(core_diagnostics_t *diagnostics,
+                    const link_report_t *report, core_process_status_t status,
+                    core_buffer_t *output)
+{
+    hide_generated_paths(report, output);
+    core_buffer_t command = {0};
+    format_link_command(report, &command);
+    core_list_t(core_string_t) symbols =
+        undefined_symbols(core_buffer_string(output));
+    if (symbols.len && status.exited) {
+        for (size_t i = 0; i < symbols.len; i++)
+            report_undefined_symbol(diagnostics, report, symbols.data[i]);
+        n00bb_report_help(diagnostics, N00B_TEXT_NAME_THE_DEFINING_LIBRARY,
+                          N00BB_ARGS(ARG_NUMBER(symbols.len)));
+    }
+    else {
+        if (!status.exited)
+            n00bb_report(diagnostics, nullptr, N00B_DIAG_LINK_FAILED,
+                (core_diag_location_t){}, N00B_TEXT_THE_LINKER_WAS_STOPPED_BY,
+                N00BB_ARGS(ARG_NATIVE(report->arguments[0]),
+                    ARG_NUMBER(status.code),
+                ARG_NATIVE(core_process_signal_name(status.code))));
+        else
+            n00bb_report(diagnostics, nullptr, N00B_DIAG_LINK_FAILED,
+                (core_diag_location_t){}, N00B_TEXT_THE_LINKER_FAILED_WITH_EXIT,
+                N00BB_ARGS(ARG_NATIVE(report->arguments[0]),
+                           ARG_NUMBER(status.code)));
+        core_string_t text = core_buffer_string(output);
+        size_t at = 0;
+        size_t shown = 0;
+        while (at < text.u8_bytes && shown < 20) {
+            size_t end = at;
+            while (end < text.u8_bytes && text.data[end] != '\n') end++;
+            core_string_t line = core_string_slice(text, at, end - at);
+            at = end + 1;
+            if (!line.u8_bytes) continue;
+            n00bb_report_note(diagnostics, N00B_TEXT_LINKER,
+                N00BB_ARGS(ARG_TEXT(line)));
+            shown++;
+        }
+    }
+    n00bb_report_note(diagnostics, N00B_TEXT_LINK_COMMAND,
+        N00BB_ARGS(ARG_TEXT(core_buffer_string(&command))));
+    for (size_t i = 0; i < symbols.len; i++) core_free(symbols.data[i].data);
+    core_list_free(symbols);
+    core_buffer_release(&command);
+}
+
+static void
+report_link_warnings(core_diagnostics_t *diagnostics, core_string_t text)
+{
+    static const core_string_t marker = CORE_STRING_STATIC("warning: ");
+    bool open = false;
+    size_t at = 0;
+    while (at < text.u8_bytes) {
+        size_t end = at;
+        while (end < text.u8_bytes && text.data[end] != '\n') end++;
+        core_string_t line = core_string_slice(text, at, end - at);
+        at = end + 1;
+        if (!line.u8_bytes) continue;
+        int64_t warning = core_string_find(line, marker);
+        if (warning < 0 && open) {
+            n00bb_report_note(diagnostics, N00B_TEXT_LINKER,
+                N00BB_ARGS(ARG_TEXT(line)));
+            continue;
+        }
+        core_string_t message = warning < 0 ? line
+            : core_string_slice(line, (size_t)warning + marker.u8_bytes,
+                  line.u8_bytes - (size_t)warning - marker.u8_bytes);
+        open = n00bb_report(diagnostics, nullptr, N00B_DIAG_LINKER_WARNING,
+            (core_diag_location_t){}, N00B_TEXT_THE_LINKER_WARNS,
+            N00BB_ARGS(ARG_TEXT(message)));
+    }
+}
+
+static bool
+run_linker(const link_report_t *report, core_diagnostics_t *diagnostics)
+{
+    core_buffer_t output = {0};
+    core_buffer_t errors = {0};
+    core_process_status_t status = {0};
+    int launched = core_process_capture(report->arguments, nullptr, 0,
+                                        &output, &errors, &status);
+    if (launched) {
+        core_buffer_release(&output);
+        core_buffer_release(&errors);
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_LINKER_START_FAILED,
+            (core_diag_location_t){}, N00B_TEXT_CANNOT_START_THE_LINKER,
+            N00BB_ARGS(ARG_NATIVE(report->arguments[0]), ARG_ERRNO(launched)));
+        n00bb_report_help(diagnostics, N00B_TEXT_INSTALL_LLVM_OR_SET_N00B,
+            N00BB_NO_ARGS);
+        return false;
+    }
+    bool ok = status.exited && status.code == 0;
+    if (errors.byte_len) core_buffer_append(&output, errors.data,
+                                            errors.byte_len);
+    core_buffer_release(&errors);
+    if (ok && output.byte_len) {
+        hide_generated_paths(report, &output);
+        report_link_warnings(diagnostics, core_buffer_string(&output));
+    }
+    else if (!ok) report_link_failure(diagnostics, report, status, &output);
+    core_buffer_release(&output);
+    return ok;
+}
+
 bool
 n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                        parse_cmdr_result_t *args, bool debug_enabled,
@@ -947,15 +1338,15 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             : (core_diag_location_t){0};
         core_string_t found = n00bb_print_type(ir_module_types(start->owner),
                                                start_type);
-        core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            "the root module's start must be 'func start() -> nil', not '%.*s'",
-            (int)found.u8_bytes, found.data);
-        core_diagnostics_report_at(
-            root ? core_translation_unit_diagnostics(root) : diagnostics,
-            root, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0030"),
-            core_buffer_string(&message), location);
-        core_buffer_release(&message);
+        core_diagnostics_t *sink = root ? core_translation_unit_diagnostics(root)
+                                        : diagnostics;
+        n00bb_report(sink, root, N00B_DIAG_START_SIGNATURE, location,
+            N00B_TEXT_START_MUST_TAKE_NO_PARAMETERS,
+            N00BB_ARGS(ARG_TEXT(found)));
+        n00bb_report_label(sink, N00B_TEXT_THE_PROGRAM_BEGINS_HERE,
+            N00BB_NO_ARGS);
+        n00bb_report_help(sink, N00B_TEXT_DECLARE_IT_AS_FUNC_START,
+            N00BB_NO_ARGS);
         return false;
     }
     const n00bb_native_inputs_t no_native = {0};
@@ -968,9 +1359,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     for (size_t i = 0; ok && i < analysis->initializer_order.len; i++)
         core_list_push(order, analysis->initializer_order.data[i]);
     if (!ok) {
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0010"),
-            CORE_STRING_STATIC("runtime initializer order is unavailable"));
+        n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+            "ordering module initializers",
+            "runtime initializer order is unavailable");
         core_list_free(order);
         return false;
     }
@@ -979,9 +1370,14 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_list_free(order);
         return false;
     }
+    output_plan_t plan = {0};
+    if (!prepare_output(args, &plan, diagnostics)) {
+        core_list_free(order);
+        return false;
+    }
     size_t count = order.len;
     size_t modules = count + analysis->specializations.len;
-    bool lto = parse_cmdr_flag_present(args, CORE_STRING_STATIC("--lto"));
+    bool lto = n00bb_setting_bool(N00BB_KEY_BUILD_LTO);
     core_string_t *names = calloc(2 * count + 2, sizeof(*names));
     char **objects = calloc(modules + 4, sizeof(*objects));
     core_buffer_t *lto_modules = lto
@@ -1045,15 +1441,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             }
             n00bb_abi_object_close(&view);
         }
-        if (!ok) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "could not read linked ABI type table while %s", read_stage);
-            core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-                CORE_STRING_STATIC("N00BB-B0010"),
-                core_string_borrow(message.data, message.byte_len));
-            core_buffer_release(&message);
-        }
+        if (!ok)
+            n00bb_internal_error(diagnostics, nullptr,
+                (core_diag_location_t){}, "reading the linked type table",
+                "could not read the linked ABI type table while %s",
+                read_stage);
     }
     core_object_section_t metadata = {0};
     if (ok) build_stage = "emitting native module objects";
@@ -1079,9 +1471,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     for (size_t i = 0; ok && i < count; i++) {
         n00bb_tu_state_t *state = tu_state(order.data[i]);
         if (!state || !state->ir_module) {
-            core_diagnostics_report(diagnostics, order.data[i],
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0012"),
-                CORE_STRING_STATIC("native build is missing a module"));
+            n00bb_internal_error(diagnostics, order.data[i],
+                (core_diag_location_t){}, "emitting native code",
+                "the module has no intermediate code to emit");
             ok = false;
             break;
         }
@@ -1126,9 +1518,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             n00bb_closed_callers, false,
             &origin_context) : nullptr;
     if (ok && !storage_origin) {
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0012"),
-            CORE_STRING_STATIC("could not analyze native storage origins"));
+        n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+            "emitting native code",
+            "could not analyze native storage origins");
         ok = false;
     }
     n00bb_llvm_callback_bindings_t *callback_bindings = ok
@@ -1140,8 +1532,9 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         ? n00bb_native_frames_new(analysis->target.object_format) : nullptr;
     if (ok && !native_frames) ok = false;
     core_string_t executable_path = ok && !lto
-        ? n00bb_executable_path(compiler_path) : (core_string_t){};
+        ? core_os_executable_path(compiler_path) : (core_string_t){};
     n00bb_native_cache_t *native_cache = executable_path.data
+        && !n00bb_setting_bool(N00BB_KEY_DEV_NO_NATIVE_CACHE)
         ? n00bb_native_cache_open(executable_path) : nullptr;
     core_free(executable_path.data);
     core_list_t(n00bb_cache_module_object_t) kept =
@@ -1160,8 +1553,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         .global_binding_count = global_binding_count,
         .native_frames = native_frames, .diagnostics = diagnostics,
     };
-    int64_t requested_workers = parse_cmdr_flag_int(args,
-        CORE_STRING_STATIC("--jobs"), 4);
+    int64_t requested_workers = n00bb_setting_int(
+        N00BB_KEY_BUILD_JOBS);
     size_t native_workers = requested_workers > 0
         ? (size_t)requested_workers : 1;
     module_emitter_t emitter;
@@ -1235,8 +1628,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     ok = ok && emitted;
     if (ok && lto) {
         build_stage = "link-time optimization";
-        core_string_t runtime_path = n00bb_archive_path(compiler_path,
-            CORE_STRING_STATIC("libn00b-abi-runtime.bc"));
+        core_string_t runtime_path = n00bb_archive_path(
+            CORE_STRING_STATIC(N00BB_RUNTIME_BITCODE));
         ok = runtime_path.data && n00bb_read_bitcode(runtime_path,
             &lto_modules[modules]);
         core_free(runtime_path.data);
@@ -1299,36 +1692,46 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_free(frame_object);
         ok = ok && objects[modules + 1];
     }
-    core_string_t requested = parse_cmdr_flag_str(args,
-        CORE_STRING_STATIC("--output"));
-    core_string_t output_name = requested.data
-        ? requested : CORE_STRING_STATIC("a.out");
-    char *output = core_string_to_cstr(output_name);
-    core_buffer_t staging_template = {0};
-    core_buffer_append_string(&staging_template, output_name);
-    core_buffer_puts(&staging_template, ".XXXXXX");
-    char *staging = output
-        ? core_string_to_cstr(core_buffer_string(&staging_template))
-        : nullptr;
-    core_buffer_release(&staging_template);
-    if (staging) {
-        int staging_fd = mkstemp(staging);
-        if (staging_fd < 0) ok = false;
-        else {
-            close(staging_fd);
-            unlink(staging);
-        }
-    } else ok = false;
-    core_string_t archive_name = n00bb_archive_path(compiler_path,
-        CORE_STRING_STATIC("libn00b-abi-runtime.a"));
+    char *output = plan.output;
+    char *staging = plan.staging;
+    core_string_t output_name = core_string_borrow(output, plan.output_length);
+    core_string_t archive_name = n00bb_archive_path(
+        CORE_STRING_STATIC(N00BB_RUNTIME_ARCHIVE));
     char *archive = core_string_to_cstr(archive_name);
     core_free(archive_name.data);
-    int link_spawn_error = 0;
-    int link_exit_status = -1;
-    int output_rename_error = 0;
     if (ok) build_stage = "linking native executable";
+    core_target_desc_t link_target;
+    bool cross = n00bb_cross_target(&link_target);
+    char *cross_triple = cross
+        ? n00bb_llvm_target_triple(link_target.triple) : nullptr;
+    char *target_flag = nullptr;
+    if (cross_triple) {
+        core_buffer_t flag = {0};
+        core_buffer_printf(&flag, "--target=%s", cross_triple);
+        target_flag = core_string_to_cstr(core_buffer_string(&flag));
+        core_buffer_release(&flag);
+    }
+    const char *linker = cross ? n00bb_toolchain()->clang
+                               : n00bb_toolchain()->linker;
+    if (ok && !linker) {
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_LINKER_NOT_FOUND,
+            (core_diag_location_t){}, N00B_TEXT_NO_CLANG_WAS_FOUND_TO,
+            N00BB_NO_ARGS);
+        n00bb_report_help(diagnostics, N00B_TEXT_INSTALL_LLVM_OR_SET_N00B,
+            N00BB_NO_ARGS);
+        ok = false;
+    }
+    if (ok && !archive) {
+        core_string_t runtime = n00bb_toolchain()->runtime;
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_RUNTIME_LIBRARY_MISSING,
+            (core_diag_location_t){}, N00B_TEXT_THE_N00B_RUNTIME_LIBRARY_IS,
+            N00BB_ARGS(ARG_NATIVE(N00BB_RUNTIME_ARCHIVE), ARG_TEXT(runtime)));
+        n00bb_report_help(diagnostics,
+            N00B_TEXT_REINSTALL_THE_TOOLCHAIN_OR_REBUILD,
+            N00BB_NO_ARGS);
+        ok = false;
+    }
     if (ok && archive) {
-        const char *linker = N00BB_NATIVE_LINKER;
         int32_t extra_count = parse_cmdr_flag_value_count(args,
             CORE_STRING_STATIC("--link-object"));
         bool lazy_hosts = extra_count > 0
@@ -1346,7 +1749,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             + 2 * native->framework_count;
         char **arguments = calloc(object_count + (size_t)extra_count
                                       + native_flags
-                                      + N00BB_SYSTEM_LIBRARY_COUNT + 7,
+                                      + N00BB_SYSTEM_LIBRARY_LIMIT + 10,
                                   sizeof(*arguments));
         char **native_arguments = native_flags
             ? calloc(native_flags, sizeof(*native_arguments)) : nullptr;
@@ -1372,6 +1775,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (ok) {
             arguments[0] = (char *)linker;
             size_t next = 1;
+            if (target_flag) {
+                arguments[next++] = target_flag;
+                arguments[next++] = "-fuse-ld=lld";
+            }
             for (size_t i = 0; i < modules + 4; i++)
                 if (objects[i]) arguments[next++] = objects[i];
             for (int32_t i = 0; ok && i < extra_count; i++) {
@@ -1388,44 +1795,46 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
                 arguments[tail++] = archive;
                 for (size_t i = 0; i < native_used; i++)
                     arguments[tail++] = native_arguments[i];
-                for (size_t s = 0; s < N00BB_SYSTEM_LIBRARY_COUNT; s++)
-                    arguments[tail++] = (char *)n00bb_system_libraries[s];
-                if (analysis->target.object_format == CORE_TARGET_OBJECT_ELF
-                    && parse_cmdr_flag_present(args,
-                        CORE_STRING_STATIC("--build-time")))
-                    arguments[tail++] = "-rdynamic";
+                for (const char *const *library =
+                         n00bb_system_libraries(&analysis->target);
+                     *library; library++)
+                    arguments[tail++] = (char *)*library;
+                if (parse_cmdr_flag_present(args,
+                        CORE_STRING_STATIC("--build-time"))) {
+                    if (analysis->target.object_format
+                        == CORE_TARGET_OBJECT_ELF)
+                        arguments[tail++] = "-rdynamic";
+                    else if (analysis->target.object_format
+                             == CORE_TARGET_OBJECT_COFF)
+                        arguments[tail++] = "-Wl,--export-all-symbols";
+                }
+                if (analysis->target.object_format == CORE_TARGET_OBJECT_COFF)
+                    arguments[tail++] = "-Wl,--stack,8388608";
                 arguments[tail++] = "-o";
                 arguments[tail] = staging;
-                pid_t child = 0;
-                int launched = posix_spawnp(&child, arguments[0], nullptr,
-                    nullptr, arguments, environ);
-                if (launched) {
-                    link_spawn_error = launched;
-                    ok = false;
-                }
-                else {
-                    int status = 0;
-                    bool waited = waitpid(child, &status, 0) == child;
-                    if (waited && WIFEXITED(status))
-                        link_exit_status = WEXITSTATUS(status);
-                    ok = waited && link_exit_status == 0;
-                }
+                link_report_t report = {
+                    .arguments = arguments,
+                    .objects = objects,
+                    .object_count = modules + 4,
+                    .staging = staging,
+                    .output = output,
+                    .mach_o = analysis->target.object_format
+                        == CORE_TARGET_OBJECT_MACH_O,
+                };
+                ok = run_linker(&report, diagnostics);
             }
-            if (ok && rename(staging, output)) {
-                output_rename_error = errno;
-                ok = false;
-            }
+            if (ok) ok = finish_output(&plan, diagnostics);
 #ifdef __APPLE__
-            if (ok && debug_enabled) {
+            if (ok && debug_enabled && !plan.device
+                && analysis->target.object_format
+                    == CORE_TARGET_OBJECT_MACH_O) {
                 char *native_bundle = debug_bundle_path(output_name);
                 char *dsymutil[] = {"/usr/bin/dsymutil", (char *)output, "-o",
                                     native_bundle, nullptr};
-                pid_t child = 0;
-                if (native_bundle && !posix_spawn(&child, dsymutil[0], nullptr,
-                                                  nullptr, dsymutil, environ)) {
-                    int status = 0;
-                    (void)waitpid(child, &status, 0);
-                }
+                core_process_spec_t spec = {.arguments = dsymutil};
+                core_process_t child;
+                if (native_bundle && !core_process_start(&spec, &child))
+                    (void)core_process_wait(child, nullptr);
                 core_free(native_bundle);
             }
 #endif
@@ -1451,9 +1860,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     for (size_t i = 0; i < kept.len; i++)
         free((void *)kept.data[i].native);
     core_list_free(kept);
-    if (staging) unlink(staging);
-    free(staging);
+    release_output(&plan);
     core_free(archive);
+    core_free(target_flag);
+    core_free(cross_triple);
     for (size_t i = 0; i < modules + 4; i++) {
         if (objects && objects[i]) {
             unlink(objects[i]);
@@ -1480,24 +1890,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     ir_storage_origin_free(storage_origin);
     n00bb_llvm_callback_bindings_free(callback_bindings);
     core_list_free(order);
-    if (!ok && !core_diagnostics_failed(diagnostics)) {
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "could not build native executable while %s",
-            build_stage);
-        if (link_spawn_error)
-            core_buffer_printf(&message, ": linker could not start: %s",
-                strerror(link_spawn_error));
-        else if (link_exit_status > 0)
-            core_buffer_printf(&message, ": linker exited with status %d",
-                link_exit_status);
-        else if (output_rename_error)
-            core_buffer_printf(&message, ": output rename failed: %s",
-                strerror(output_rename_error));
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0011"),
-            core_buffer_string(&message));
-        core_buffer_release(&message);
-    }
+    if (!ok && !core_diagnostics_failed(diagnostics))
+        n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+            build_stage, "could not build the native executable `%.*s`",
+            (int)output_name.u8_bytes, output_name.data);
     core_free(output);
     return ok;
 }
@@ -1918,18 +2314,12 @@ n00bb_write_abi_bytes(core_string_t requested, const uint8_t *object,
     if (!requested.data || !requested.u8_bytes || !object || !object_bytes)
         return false;
     char *path = core_string_to_cstr(requested);
-    FILE *file = fopen(path, "wb");
-    bool saved = file && fwrite(object, 1, object_bytes, file) == object_bytes;
-    if (file && fclose(file)) saved = false;
-    if (!saved) {
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "could not write ABI metadata '%.*s'",
-                           (int)requested.u8_bytes, requested.data);
-        core_diagnostics_report(diagnostics, unit, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0008"),
-            core_string_borrow(message.data, message.byte_len));
-        core_buffer_release(&message);
-    }
+    errno = 0;
+    bool saved = core_os_write_file_atomic(requested, object, object_bytes);
+    int failure = saved ? 0 : errno;
+    (void)unit;
+    if (!saved)
+        report_output_failure(diagnostics, path, failure ? failure : EIO);
     core_free(path);
     return saved;
 }
@@ -2045,7 +2435,8 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
     n00bb_abi_native_rebase_failure_t rebase_failure = {0};
     n00b_abi_error_v1 validation_error = {0};
     if (valid) valid = n00bb_abi_link_objects_with_semantics(link, target,
-        inputs, count, n00bb_abi_link_semantic_rows, &semantics,
+        inputs, count, !final_image || analysis->keep_summaries,
+        n00bb_abi_link_semantic_rows, &semantics,
         final_image ? n00bb_validate_linked_metadata : nullptr,
         &validation_error,
         &object, &object_bytes, &failure_stage, &plan_failure,
@@ -2123,9 +2514,9 @@ n00bb_link_abi_artifact(core_link_unit_t *link,
                 validation_error.status, validation_error.table_kind,
                 validation_error.record_index,
                 (unsigned long long)validation_error.byte_offset);
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0010"),
-            core_string_borrow(message.data, message.byte_len));
+        n00bb_internal_error(diagnostics, nullptr, (core_diag_location_t){},
+            "linking the program's ABI metadata", "%.*s",
+            (int)message.byte_len, message.data);
         core_buffer_release(&message);
         return false;
     }
@@ -2144,9 +2535,9 @@ n00bb_write_library_abi_artifact(core_link_unit_t *link,
     core_string_t requested = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));
     if (!requested.data || !requested.u8_bytes) {
-        core_diagnostics_report(diagnostics, nullptr, CORE_DIAG_FATAL,
-            CORE_STRING_STATIC("N00BB-B0009"),
-            CORE_STRING_STATIC("library ABI output requires --output"));
+        n00bb_report(diagnostics, nullptr, N00B_DIAG_LIBRARY_NEEDS_OUTPUT,
+            (core_diag_location_t){}, N00B_TEXT_LIBRARY_NEEDS_OUTPUT_FILE_FOR,
+            N00BB_NO_ARGS);
         return false;
     }
     uint8_t *object = nullptr;

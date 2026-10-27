@@ -1,0 +1,85 @@
+import sys.abi
+
+type Word = u64
+alias type Count = uint
+enum Status { ready = 1, done = 2 }
+
+record Chain_Node {
+    value: int
+    next: Ref[Chain_Node]?
+}
+
+var shared: Ref[int]? = nil
+var retained_slot: Ref[Ref[int]?]? = nil
+
+func copy_word(value: Word) -> Word {
+    return value
+}
+
+func copy_count(value: Count) -> Count {
+    return value
+}
+
+func copy_status(value: Status) -> Status {
+    return value
+}
+
+func copy_slice(value: i:7) -> i:7 {
+    return value
+}
+
+func __init(modify self: Chain_Node, value: int, next: Ref[Chain_Node]?) {
+    self.value = value
+    self.next = next
+}
+
+func prepend(value: int, next: Ref[Chain_Node]?) -> Ref[Chain_Node] {
+    var node: Chain_Node = new[Chain_Node](value, next)
+    return ref node
+}
+
+func check_type_only_probe() {
+    let probe: Ref[byte]? = nil
+    let target: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(probe))
+    if target != nil {
+        assert sys.abi.size_bytes(target.get()) == 1
+    } else { require false }
+}
+
+func publish_value(slot: Ref[Ref[int]?]) {
+    (ref shared).__value = slot.__value
+}
+
+func publish_local() {
+    var target: int = 7
+    var slot: Ref[int]? = ref target
+    publish_value(ref slot)
+}
+
+func return_value(slot: Ref[Ref[int]?]) -> Ref[int]? {
+    return slot.__value
+}
+
+func return_local() -> Ref[int]? {
+    var returned_target: int = 11
+    var returned_slot: Ref[int]? = ref returned_target
+    return return_value(ref returned_slot)
+}
+
+func retain_address(retained_address: Ref[Ref[int]?]) {
+    retained_slot = retained_address
+}
+
+func expose_slot() {
+    var retained_target: int = 13
+    var local_slot: Ref[int]? = ref retained_target
+    retain_address(ref local_slot)
+}
+
+let head: Ref[Chain_Node] = prepend(1, nil)
+require head.value == 1
+check_type_only_probe()
+publish_local()
+return_local()
+expose_slot()

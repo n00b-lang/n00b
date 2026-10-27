@@ -1,0 +1,5 @@
+panic: `-9223372036854775808 / -1` overflows `int`
+  --> tests/diagnostics/runtime/failures.n:52:12
+backtrace:
+  at div_min (tests/diagnostics/runtime/failures.n:52:12)
+  at run (tests/diagnostics/runtime/failures.n:117:17)

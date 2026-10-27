@@ -22,7 +22,9 @@ static bool contains(core_string_t haystack, core_string_t needle)
 static ir_diag_t *beg(ir_diags_t *d, ir_diagcode_t code, ir_span_t span,
                       core_string_t label)
 {
-    ir_diag_t *dg = ir_diag_begin(d, code, span, label);
+    ir_diag_t *dg = ir_diag_begin(d, code, span,
+        label.u8_bytes ? IR_DETAIL(label)
+                                     : IR_NO_LABEL);
 
     if (dg) {
         produced[code] = true;
@@ -35,25 +37,15 @@ static ir_diag_t *beg_at(ir_diags_t *d, ir_diagcode_t code,
                          const ir_instr_t *in, const ir_block_t *b,
                          const ir_func_t *f, core_string_t label)
 {
-    ir_diag_t *dg = ir_diag_begin_at(d, code, in, b, f, label);
+    ir_diag_t *dg = ir_diag_begin_at(d, code, in, b, f,
+        label.u8_bytes ? IR_DETAIL(label)
+                                     : IR_NO_LABEL);
 
     if (dg) {
         produced[code] = true;
     }
 
     return dg;
-}
-
-static bool note(ir_diags_t *d, ir_severity_t sev, ir_diagcode_t code,
-                 ir_span_t span, core_string_t label)
-{
-    bool ok = ir_diag_note(d, sev, code, span, label);
-
-    if (ok) {
-        produced[code] = true;
-    }
-
-    return ok;
 }
 
 static const core_string_t SRC = CORE_STRING_STATIC(
@@ -71,6 +63,23 @@ static core_string_t source_of(void *state, int32_t file)
     }
 
     return SRC;
+}
+
+static const core_diagnostic_t *item(const ir_diags_t *d, const ir_diag_t *dg)
+{
+    return ir_diag_item(d, dg);
+}
+
+static uint32_t count_severity(const ir_diags_t *d,
+                               core_diag_severity_t severity)
+{
+    uint32_t n = 0;
+
+    for (uint32_t i = 0; i < ir_diags_count(d); i++) {
+        n += item(d, ir_diags_at(d, i))->severity == severity;
+    }
+
+    return n;
 }
 
 static ir_module_t *mod(ir_ctx_t *ctx)
@@ -124,17 +133,10 @@ static void test_registry(void)
         }
     }
 
-    check("severities are named",
-          core_string_eq(ir_severity_name(IR_SEV_ERROR), S("error"))
-              && core_string_eq(ir_severity_name(IR_SEV_WARNING),
-                                S("warning"))
-              && core_string_eq(ir_severity_name(IR_SEV_NOTE), S("note"))
-              && core_string_eq(ir_severity_name(IR_SEV_HELP), S("help")));
-
     check("a code carries a default severity",
-          ir_diag_default_severity(IR_DIAG_INTERNAL) == IR_SEV_ERROR
+          ir_diag_default_severity(IR_DIAG_INTERNAL) == CORE_DIAG_ERROR
               && ir_diag_default_severity(IR_DIAG_AUTHORED_ANNOT)
-                     == IR_SEV_WARNING);
+                     == CORE_DIAG_WARNING);
 }
 
 static void test_diagnostics_attach_to_translation_units(void)
@@ -156,8 +158,9 @@ static void test_diagnostics_attach_to_translation_units(void)
                                                      destination, &unit);
     ir_span_t span = ir_span_make(0, 0, 5, 2, 3, 2, 8);
     ir_diag_t *item = ir_diag_begin(diagnostics, IR_DIAG_UNKNOWN_OPCODE,
-                                    span, S("invalid key"));
-    ir_diag_message(item, diagnostics, S("lowering metadata is invalid"));
+                                    span, IR_DETAIL(S("invalid key")));
+    ir_diag_message(item, diagnostics,
+        IR_DETAIL(S("lowering metadata is invalid")));
     const core_diagnostic_t *attached = core_diagnostics_at(destination, 0);
     check("IR diagnostics land in the owning TU with source identity",
           attached
@@ -172,26 +175,15 @@ static void test_diagnostics_attach_to_translation_units(void)
           ir_diags_failed(diagnostics)
               && core_diagnostics_failed(destination));
 
-    ir_diags_t *more = ir_diags_new(ctx, nullptr);
-    ir_diag_t *merged = ir_diag_begin(more, IR_DIAG_TYPE_MISMATCH, span,
-                                      S("from another pass"));
-    ir_diag_message(merged, more, S("operand types disagree"));
-    check("merged pass diagnostics also attach to the TU",
-          ir_diags_merge(diagnostics, more)
-              && core_diagnostics_count(destination) == 2
-              && core_string_eq(
-                  core_diagnostics_at(destination, 1)->message,
-                  S("operand types disagree")));
-
     ir_policy_t *policy = ir_policy_new(ctx);
     ir_policy_set(policy, S("IR-W0027"), IR_POLICY_DENY);
     ir_diags_t *promoted = ir_diags_new_attached(ctx, policy,
                                                  destination, &unit);
     ir_diag_t *unset = ir_diag_begin(promoted, IR_DIAG_UNSET_LOCAL,
-                                     span, S("unset local"));
-    ir_diag_message(unset, promoted, S("read before assignment"));
+                                     span, IR_DETAIL(S("unset local")));
+    ir_diag_message(unset, promoted, IR_DETAIL(S("read before assignment")));
     const core_diagnostic_t *promoted_item =
-        core_diagnostics_at(destination, 2);
+        core_diagnostics_at(destination, 1);
     check("attached diagnostics preserve promoted severity",
           promoted_item && promoted_item->severity == CORE_DIAG_ERROR
               && ir_diags_failed(promoted));
@@ -216,70 +208,33 @@ static void test_emit(void)
     check("a diagnostic is emitted", dg != nullptr);
     check("it is counted", ir_diags_count(d) == 1);
     check("it takes the code's default severity",
-          dg->severity == IR_SEV_ERROR);
+          item(d, dg)->severity == CORE_DIAG_ERROR);
     check("it takes the code's default message",
-          core_string_eq(dg->message,
+          core_string_eq(item(d, dg)->message,
                          ir_diag_default_text(IR_DIAG_INTERNAL)));
     check("an error means failure", ir_diags_failed(d));
 
-    ir_diag_message(dg, d, S("custom wording"));
+    ir_diag_message(dg, d, IR_DETAIL(S("custom wording")));
     check("the message is overridable",
-          core_string_eq(dg->message, S("custom wording")));
+          core_string_eq(item(d, dg)->message, S("custom wording")));
 
     ir_diag_t *spanless = beg(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, S("x"));
 
     check("a diagnostic with no span is still recorded, not dropped",
           spanless != nullptr);
     check("and its span is unknown, for the verifier to flag",
-          spanless && !ir_span_known(spanless->primary.span));
+          spanless && !ir_span_known(spanless->span));
 
     beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2), NO_TEXT);
     check("errors and warnings accumulate", ir_diags_count(d) == 3);
     check("warnings are counted separately",
-          ir_diags_count_of(d, IR_SEV_WARNING) == 1
-              && ir_diags_count_of(d, IR_SEV_ERROR) == 2);
+          count_severity(d, CORE_DIAG_WARNING) == 1
+              && count_severity(d, CORE_DIAG_ERROR) == 2);
 
     beg(d, IR_DIAG_UNKNOWN_OPCODE, at(0, 1, 1, 1, 2), NO_TEXT);
     check("diagnostics keep accumulating", ir_diags_count(d) == 4);
     check("and the new error is counted with the errors",
-          ir_diags_count_of(d, IR_SEV_ERROR) == 3);
-
-    ir_ctx_free(ctx);
-}
-
-static void test_notes(void)
-{
-    ir_ctx_t   *ctx = ir_ctx_new();
-    ir_diags_t *d   = ir_diags_new(ctx, nullptr);
-
-    check("a note with nothing to attach to is refused",
-          !note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
-                        S("orphan")));
-    check("a help with nothing to attach to is refused",
-          !note(d, IR_SEV_HELP, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
-                        S("orphan")));
-    check("neither is recorded as a note", ir_diags_count(d) == 2);
-
-    for (uint32_t i = 0; i < ir_diags_count(d); i++) {
-        const ir_diag_t *dg = ir_diags_at(d, i);
-
-        produced[dg->code] = true;
-        check("the orphan is reported rather than dropped in silence",
-              dg->code == IR_DIAG_ORPHAN_NOTE
-                  && dg->severity == IR_SEV_ERROR);
-    }
-
-    beg(d, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), S("anchor"));
-
-    check("a note attaches to a preceding diagnostic",
-          note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2),
-                       S("attached")));
-    check("a note may have an unknown span",
-          note(d, IR_SEV_NOTE, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN,
-                       S("spanless")));
-    check("an error severity is refused by the note API",
-          !note(d, IR_SEV_ERROR, IR_DIAG_INTERNAL,
-                        at(0, 1, 1, 1, 2), S("x")));
+          count_severity(d, CORE_DIAG_ERROR) == 3);
 
     ir_ctx_free(ctx);
 }
@@ -335,7 +290,7 @@ static void test_policy_effects(void)
                                   NO_TEXT);
 
     check("deny promotes a warning to an error",
-          dg && dg->severity == IR_SEV_ERROR);
+          dg && item(d, dg)->severity == CORE_DIAG_ERROR);
 
     ir_policy_set(p, S("IR-E0001"), IR_POLICY_WARN);
 
@@ -343,14 +298,14 @@ static void test_policy_effects(void)
                                   NO_TEXT);
 
     check("warn demotes an error to a warning",
-          dw && dw->severity == IR_SEV_WARNING);
+          dw && item(d, dw)->severity == CORE_DIAG_WARNING);
 
     ir_policy_set(p, S("IR-W0005"), IR_POLICY_FORBID);
 
     ir_diag_t *df = beg(d, IR_DIAG_AUTHORED_ANNOT, at(0, 1, 1, 1, 2),
                                   NO_TEXT);
 
-    check("forbid promotes like deny", df && df->severity == IR_SEV_ERROR);
+    check("forbid promotes like deny", df && item(d, df)->severity == CORE_DIAG_ERROR);
 
     ir_ctx_free(ctx);
 }
@@ -374,77 +329,21 @@ static void test_span_fallback(void)
     ir_diag_t *g1 = beg_at(d, IR_DIAG_INTERNAL, in, b, f, NO_TEXT);
 
     check("with only a function span, the function's is used",
-          g1 && g1->primary.span.start_line == 1);
+          g1 && g1->span.start_line == 1);
 
     b->span = at(14, 22, 2, 3, 10);
 
     ir_diag_t *g2 = beg_at(d, IR_DIAG_INTERNAL, in, b, f, NO_TEXT);
 
     check("a block span beats the function's",
-          g2 && g2->primary.span.start_line == 2);
+          g2 && g2->span.start_line == 2);
 
     in->span = at(24, 40, 3, 3, 18);
 
     ir_diag_t *g3 = beg_at(d, IR_DIAG_INTERNAL, in, b, f, NO_TEXT);
 
     check("an instruction span beats the block's",
-          g3 && g3->primary.span.start_line == 3);
-
-    ir_ctx_free(ctx);
-}
-
-static void test_ordering(void)
-{
-    ir_ctx_t    *ctx = ir_ctx_new();
-    ir_module_t *m   = mod(ctx);
-
-    ir_file_add(m, S("b.bce"));
-
-    ir_diags_t *d = ir_diags_new(ctx, nullptr);
-
-    beg(d, IR_DIAG_INTERNAL, ir_span_make(1, 5, 6, 1, 1, 1, 2), S("z"));
-    beg(d, IR_DIAG_INTERNAL, at(40, 41, 3, 1, 2), S("c"));
-    beg(d, IR_DIAG_INTERNAL, at(4, 5, 1, 5, 6), S("a"));
-    beg(d, IR_DIAG_INTERNAL, at(20, 21, 2, 3, 4), S("b"));
-    ir_diags_sort(d);
-
-    const core_string_t want[] = {S("a"), S("b"), S("c"), S("z")};
-
-    for (uint32_t i = 0; i < 4; i++) {
-        const ir_diag_t *g = ir_diags_at(d, i);
-
-        if (!g || !g->primary.label.data
-            || !core_string_eq(g->primary.label, want[i])) {
-            core_string_t shown = g && g->primary.label.data
-                ? g->primary.label : S("?");
-
-            printf("FAIL  ordering: slot %u is %.*s, wanted %.*s\n", i,
-                   (int)shown.u8_bytes, shown.data,
-                   (int)want[i].u8_bytes, want[i].data);
-            fails++;
-        }
-    }
-
-    ir_diags_t *e = ir_diags_new(ctx, nullptr);
-    ir_span_t   s = at(4, 5, 1, 5, 6);
-
-    beg(e, IR_DIAG_MISSING_PROFILE, s, S("second"));
-    beg(e, IR_DIAG_INTERNAL, s, S("first"));
-    ir_diags_sort(e);
-    check("at one position, ties break by code",
-          core_string_eq(ir_diags_at(e, 0)->primary.label, S("first")));
-
-    ir_diags_t *g = ir_diags_new(ctx, nullptr);
-
-    beg(g, IR_DIAG_INTERNAL, s, S("one"));
-    beg(g, IR_DIAG_INTERNAL, s, S("two"));
-    beg(g, IR_DIAG_INTERNAL, s, S("three"));
-    ir_diags_sort(g);
-    check("identical codes at one position keep insertion order",
-          core_string_eq(ir_diags_at(g, 0)->primary.label, S("one"))
-              && core_string_eq(ir_diags_at(g, 1)->primary.label, S("two"))
-              && core_string_eq(ir_diags_at(g, 2)->primary.label,
-                                S("three")));
+          g3 && g3->span.start_line == 3);
 
     ir_ctx_free(ctx);
 }
@@ -650,36 +549,9 @@ static void test_type_errors_import_once(void)
     const ir_diag_t *diagnostic = ir_diags_at(diags, 0);
     check("the diagnostic retains both type names",
           diagnostic && diagnostic->code == IR_DIAG_TYPE_MISMATCH
-              && contains(diagnostic->message, S("int"))
-              && contains(diagnostic->message, S("string")));
+              && contains(item(diags, diagnostic)->message, S("int"))
+              && contains(item(diags, diagnostic)->message, S("string")));
     produced[IR_DIAG_TYPE_MISMATCH] = diagnostic != nullptr;
-    ir_ctx_free(ctx);
-}
-
-static void test_merge(void)
-{
-    ir_ctx_t   *ctx = ir_ctx_new();
-    ir_diags_t *a   = ir_diags_new(ctx, nullptr);
-    ir_diags_t *b   = ir_diags_new(ctx, nullptr);
-
-    beg(a, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), S("a1"));
-    beg(b, IR_DIAG_INTERNAL, at(4, 5, 1, 5, 6), S("b1"));
-    beg(b, IR_DIAG_AUTHORED_ANNOT, at(6, 7, 1, 7, 8), S("b2"));
-
-    check("merge succeeds", ir_diags_merge(a, b));
-    check("merged diagnostics are counted", ir_diags_count(a) == 3);
-    check("and their severities come across",
-          ir_diags_count_of(a, IR_SEV_ERROR) == 2
-              && ir_diags_count_of(a, IR_SEV_WARNING) == 1);
-
-    ir_ctx_t   *other = ir_ctx_new();
-    ir_diags_t *far   = ir_diags_new(other, nullptr);
-
-    beg(far, IR_DIAG_INTERNAL, at(0, 1, 1, 1, 2), S("elsewhere"));
-    check("merging across contexts is refused", !ir_diags_merge(a, far));
-    check("the refused merge changed nothing", ir_diags_count(a) == 3);
-
-    ir_ctx_free(other);
     ir_ctx_free(ctx);
 }
 
@@ -763,22 +635,13 @@ static void test_rendering(core_string_t golden_dir)
     ir_diag_t *dg = beg(d, IR_DIAG_BAD_ANNOT_KEY,
                                   at(16, 19, 2, 3, 6), S("this key"));
 
-    ir_diag_message(dg, d, S("annotation key is not namespaced"));
-    ir_diag_secondary(d, dg, at(27, 31, 3, 3, 8), S("declared here"));
-    ir_diag_secondary(d, dg, at(38, 41, 3, 14, 17), S("and used here"));
-    ir_diag_suggest(d, dg, at(16, 19, 2, 3, 6), S("bce.acc"),
-                    S("namespace it with the profile"));
-
-    ir_origin_t *src = ir_origin_new(ctx, IR_ORIGIN_SOURCE,
-                                     at(16, 19, 2, 3, 6), NO_TEXT, nullptr);
-    ir_origin_t *exp = ir_origin_new(ctx, IR_ORIGIN_EXPANDED_FROM,
-                                     at(0, 4, 1, 1, 5), S("macro"), src);
-    ir_origin_t *inl = ir_origin_new(ctx, IR_ORIGIN_INLINED_FROM,
-                                     at(27, 31, 3, 3, 8), S("inline"), exp);
-
-    ir_diag_origin(dg, inl);
-    note(d, IR_SEV_NOTE, IR_DIAG_BAD_ANNOT_KEY, at(0, 4, 1, 1, 5),
-                 S("the enclosing function"));
+    ir_diag_message(dg, d, IR_DETAIL(S("annotation key is not namespaced")));
+    ir_diag_secondary(d, dg, at(27, 31, 3, 3, 8),
+        IR_DETAIL(S("declared here")));
+    ir_diag_secondary(d, dg, at(38, 41, 3, 14, 17),
+        IR_DETAIL(S("and used here")));
+    ir_diag_help(d, dg,
+        IR_DETAIL(S("namespace it with the profile: `bce.acc`")));
 
     beg(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, NO_TEXT);
 
@@ -798,21 +661,6 @@ static void test_rendering(core_string_t golden_dir)
     core_free(p2.data);
     core_free(js.data);
 
-    core_string_t chain = ir_diags_render_text(d, &r);
-    int64_t       inner = core_string_find(chain, S("inlined from here"));
-    int64_t       outer = core_string_find(chain, S("expanded from here"));
-
-    check("origin notes render innermost first",
-          inner >= 0 && outer >= 0 && inner < outer);
-    check("a SOURCE origin is not rendered as a note",
-          !contains(chain, S("from here by (null)")));
-
-    int64_t arrow = core_string_find(chain, S("--> sum.bce:2:3"));
-
-    check("the primary location precedes the origin notes",
-          arrow >= 0 && inner >= 0 && arrow < inner);
-    core_free(chain.data);
-
     ir_render_t   bare = {.module = m};
     core_string_t nc   = ir_diags_render_text(d, &bare);
 
@@ -824,7 +672,7 @@ static void test_rendering(core_string_t golden_dir)
 
     core_string_t spanless = ir_diags_render_text(d, &r);
     int64_t       entry    = core_string_find(spanless,
-        S("error[IR-E0001]: internal error"));
+        S("error: internal error"));
 
     check("a span-less diagnostic still renders", entry >= 0);
     check("and carries no invented location",
@@ -832,7 +680,7 @@ static void test_rendering(core_string_t golden_dir)
               && !contains(core_string_slice(spanless, (size_t)entry,
                                              spanless.u8_bytes
                                                  - (size_t)entry),
-                           S("-->")));
+                           S("sum.bce")));
     check("and sorts after the located ones",
           entry >= 0 && core_string_find(spanless, S("sum.bce:2:3")) < entry);
     core_free(spanless.data);
@@ -849,16 +697,13 @@ int main(int argc, char **argv)
     test_registry();
     test_diagnostics_attach_to_translation_units();
     test_emit();
-    test_notes();
     test_policy();
     test_policy_effects();
     test_span_fallback();
-    test_ordering();
     test_ordering_is_deterministic();
     test_pass_declarations();
     test_type_errors_import_once();
     test_errors_do_not_stop_the_pipeline();
-    test_merge();
     test_rendering(golden);
     dump_produced_codes("produced-codes-diag.txt", produced);
 

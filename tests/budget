@@ -1,0 +1,31 @@
+dev wall 14
+dev test 2
+pr wall 90
+pr test 20
+dev tests 214
+pr tests 86
+release lto-n00b
+release ffi
+release array-uint-index-n00b
+release ffi-resharp
+exempt lto-n00b 31
+exempt diagnostics 36
+exempt check-programs-a 36
+exempt check-programs-b 36
+exempt ffi 28
+exempt ffi-zlib 23
+exempt text-theme-builtin-immutable 25
+exempt incremental-cache 35
+exempt install 23
+exempt gc-units-n00b 30
+exempt lang-suite-n00b 28
+exempt calls-n00b 30
+exempt generics-text-n00b 21
+exempt ffi-zlib-litmod 21
+exempt incremental-cache-shapes 31
+exempt incremental-cache-instances 38
+exempt bitcode-build-time 28
+exempt resharp-import 600
+exempt resharp-transport-plain 1800
+exempt resharp-transport-features 1800
+exempt resharp-transport-miri 1800

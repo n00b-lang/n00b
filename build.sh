@@ -3,227 +3,169 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
-LANTERN_BUILD_DIR="${LANTERN_BUILD_DIR:-$ROOT/lantern/build}"
-WRIT_ROOT="${WRIT_ROOT:-$ROOT/writ}"
-WRIT_PLATFORM="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m)"
-WRIT_BUILD_DIR="${WRIT_BUILD_DIR:-$WRIT_ROOT/build-$WRIT_PLATFORM}"
-MESON_PKG_CONFIG_PATH=""
-
-if [ -z "${LLVM_CONFIG:-}" ] && [ "$(uname -s)" = Darwin ] \
-    && command -v brew >/dev/null 2>&1; then
-    LLVM_PREFIX="$(brew --prefix llvm 2>/dev/null)" || LLVM_PREFIX=""
-    if [ -x "$LLVM_PREFIX/bin/llvm-config" ] \
-        && "$LLVM_PREFIX/bin/llvm-config" --libfiles core bitwriter bitreader \
-            >/dev/null 2>&1; then
-        export LLVM_CONFIG="$LLVM_PREFIX/bin/llvm-config"
-    fi
-fi
-
-if [ "$(uname -s)" = Darwin ] && [ -z "${SDKROOT:-}" ]; then
-    if command -v xcrun >/dev/null 2>&1; then
-        SDKROOT="$(xcrun --show-sdk-path)"
-        export SDKROOT
-    fi
-fi
+JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 
 usage() {
     cat <<'USAGE'
 Usage: ./build.sh [command] [args]
 
-  (no command)        configure if needed, compile only
-  configure [opts]    reconfigure from scratch; opts go to meson setup
-  compile [opts]      compile only; opts go to meson compile
-  test [names/opts]   compile, then run every test outside the slow suite
-                      (or the selected tests)
-  test-all [opts]     compile, then run every test, slow suite included
-  bench [opts]        compile, then run the benchmarks and gates
-  tu <file.c>         recompile exactly one lantern source file
-  linux <command>     run any of these commands in the Linux container
+  (no command)        configure if needed, compile
+  configure [VAR=x]   reconfigure; BUILD_TYPE=debug|debugoptimized|release|
+                      sanitize, LLVM_CONFIG=path, N00B_RUST=1
+  compile             compile only
+  test [names]        compile, then run the dev tier (run after every change;
+                      budget in tests/budget), or the named tests
+  test-pr             compile, then run the pr tier (run before raising a PR)
+  test-all            compile, then run both tiers
+  test-lantern        compile, then run lantern's tests
+  test-writ           compile, then run writ's tests
+  bench               compile, then run lantern's benchmarks and gates
+  perf [opts] [names] compile, then run the performance suite in tests/perf
+                      (--baseline REV|COMPILER|RESULTS.json, --runs N,
+                      --threshold PCT); fails on regressions past threshold
+  tu <file.c>         recompile exactly one source file
+  install [opts]      compile, then install a toolchain and make it active
+                      (--prefix DIR, --link, --add-to-path, --no-modify-path)
+  uninstall [opts]    remove every installed toolchain (--prefix DIR)
+  linux [--arch A] <command>
+                      run any of these commands in a Linux container;
+                      A is x86_64 (default) or arm64, or set LINUX_ARCH
   clean               remove the build directory
 
-This is the only supported path. It exists so nothing has to reach for
-meson or ninja by hand; reaching past it is how flags drift between what a
-check runs and what the build runs.
-
-BUILD_DIR overrides the build directory (default: build/).
+This wraps make; ./build.sh and make produce the same build. BUILD_DIR
+overrides the build directory (default: build/), JOBS the parallelism.
 USAGE
 }
 
-ensure_configured() {
-    [ -f "$BUILD_DIR/build.ninja" ] && return 0
-
-    meson setup "$BUILD_DIR" "$ROOT"
-}
-
-prepare_dependencies() {
-    BUILD_DIR="$LANTERN_BUILD_DIR" \
-        "$ROOT/lantern/build.sh" compile || return 1
-    BUILD_DIR="$WRIT_BUILD_DIR" "$WRIT_ROOT/build.sh" compile || return 1
-    local -a pkg_paths
-    local -a unique_paths=("$LANTERN_BUILD_DIR/meson-uninstalled"
-                           "$WRIT_BUILD_DIR/meson-uninstalled")
-    local pkg_path
-    local existing
-    local seen
-    IFS=: read -r -a pkg_paths <<< "${PKG_CONFIG_PATH:-}"
-    for pkg_path in "${pkg_paths[@]}"; do
-        [ -n "$pkg_path" ] || continue
-        seen=false
-        for existing in "${unique_paths[@]}"; do
-            if [ "$pkg_path" = "$existing" ]; then
-                seen=true
-                break
-            fi
-        done
-        [ "$seen" = true ] || unique_paths+=("$pkg_path")
-    done
-    PKG_CONFIG_PATH="${unique_paths[0]}"
-    MESON_PKG_CONFIG_PATH="${unique_paths[0]}"
-    for pkg_path in "${unique_paths[@]:1}"; do
-        PKG_CONFIG_PATH+=":$pkg_path"
-        MESON_PKG_CONFIG_PATH+=",$pkg_path"
-    done
-    export PKG_CONFIG_PATH
-    if [ -f "$BUILD_DIR/build.ninja" ]; then
-        meson configure "$BUILD_DIR" \
-            -Dpkg_config_path="$MESON_PKG_CONFIG_PATH" || return 1
-    fi
-}
-
-do_configure() {
-    prepare_dependencies || return 1
-    rm -rf "$BUILD_DIR"
-    meson setup "$BUILD_DIR" "$ROOT" \
-        -Dpkg_config_path="$MESON_PKG_CONFIG_PATH" "$@"
-}
-
-do_compile() {
-    prepare_dependencies || return 1
-    ensure_configured || return 1
-    meson compile -C "$BUILD_DIR" "$@"
-}
-
-# Recompile one source file with the build's own flags, so a syntax or
-# transform error is reported without waiting on the whole tree.
-do_tu() {
-    local src="$1"
-
-    ensure_configured || return 1
-
-    if [ ! -f "$BUILD_DIR/compile_commands.json" ]; then
-        echo "no compile_commands.json in $BUILD_DIR" >&2
-        exit 1
-    fi
-
-    python3 - "$BUILD_DIR/compile_commands.json" "$src" <<'PY'
-import json, os, shlex, subprocess, sys
-
-ccjson, want = sys.argv[1], os.path.abspath(sys.argv[2])
-entries = json.load(open(ccjson))
-
-for e in entries:
-    f = os.path.abspath(os.path.join(e.get("directory", "."), e["file"]))
-    if f != want:
-        continue
-    os.chdir(e.get("directory", "."))
-    cmd = e.get("command")
-    argv = shlex.split(cmd) if cmd else e["arguments"]
-    sys.exit(subprocess.call(argv))
-
-print("not a source file in this build: %s" % want, file=sys.stderr)
-sys.exit(1)
-PY
-}
-
-refuse_stale() {
-    echo "lantern: compile failed; refusing to run $1 against a stale" >&2
-    echo "         binary. Fix the build and re-run." >&2
+fail() {
+    printf 'build.sh: error: %s\n' "$1" >&2
     exit 1
 }
 
-do_test() {
-    do_compile || refuse_stale tests
-
-    if [ "$#" -eq 0 ]; then
-        meson test -C "$BUILD_DIR" --no-suite slow
-    else
-        meson test -C "$BUILD_DIR" "$@"
-    fi
+usage_error() {
+    printf 'build.sh: error: %s\n' "$1" >&2
+    printf "Run './build.sh help' for the commands.\n" >&2
+    exit 2
 }
 
-do_test_all() {
-    do_compile || refuse_stale tests
-
-    meson test -C "$BUILD_DIR" "$@"
+run_make() {
+    make -C "$ROOT" --no-print-directory -j"$JOBS" B="$BUILD_DIR" "$@"
 }
 
-do_bench() {
-    do_compile || refuse_stale benchmarks
+check_test_names() {
+    local known name
+    known="$(awk -F'\t' '!/^#/ && NF { print $1 }' \
+        "$ROOT/tests/n00b.tests" "$ROOT/lantern/tests/lantern.tests" \
+        "$ROOT/writ/tests/writ.tests")"
+    for name in "$@"; do
+        printf '%s\n' "$known" | grep -qxF -- "$name" ||
+            usage_error "no test named '$name'; test names are the first column of tests/n00b.tests, lantern/tests/lantern.tests and writ/tests/writ.tests"
+    done
+}
 
-    meson test -C "$BUILD_DIR" --benchmark "$@"
+config_matches() {
+    local config="$BUILD_DIR/config.mk"
+    [ -f "$config" ] || return 0
+    grep -qx "N00B_RUST := ${N00B_RUST:-0}" "$config"
+}
+
+do_configure() {
+    local assignment
+    for assignment in "$@"; do
+        case "$assignment" in
+            *=*) export "${assignment?}" ;;
+            *) usage_error "configure takes VAR=value settings, not '$assignment'" ;;
+        esac
+    done
+    rm -f "$BUILD_DIR/config.mk"
+    run_make "$BUILD_DIR/config.mk"
+}
+
+do_tu() {
+    local file="${1#"$ROOT"/}"
+    local object
+    case "$file" in
+        lantern/*) object="$BUILD_DIR/lantern/obj/${file%.c}.o" ;;
+        writ/*) object="$BUILD_DIR/writ/obj/${file%.c}.o" ;;
+        *) object="$BUILD_DIR/obj/${file%.c}.o" ;;
+    esac
+    case "$file" in
+        *.c) ;;
+        *) usage_error "tu takes a C source file, not '$1'" ;;
+    esac
+    [ -f "$ROOT/$file" ] || fail "no source file '$file' in $ROOT"
+    rm -f "$object"
+    run_make "$object"
 }
 
 do_linux() {
+    local arch="${LINUX_ARCH:-x86_64}"
+    if [ "${1:-}" = "--arch" ]; then
+        [ $# -ge 2 ] || usage_error "--arch needs x86_64 or arm64"
+        arch="$2"
+        shift 2
+    fi
+    local platform
+    case "$arch" in
+        x86_64|amd64) arch=x86_64 platform=amd64 ;;
+        arm64|aarch64) arch=arm64 platform=arm64 ;;
+        *) usage_error "unknown Linux architecture '$arch'; use x86_64 or arm64" ;;
+    esac
+    [ $# -ge 1 ] || usage_error "linux needs a command to run, such as 'test'"
     local engine
-    engine="$(command -v podman || command -v docker)" || {
-        echo "no container engine" >&2
-        exit 1
-    }
-    local writ_resharp="${RESHARP_ROOT:-$HOME/resharp-writ}"
-    "$engine" build -q --platform linux/amd64 -t n00bb-linux \
+    engine="$(command -v podman || command -v docker)" ||
+        fail "linux needs podman or docker on PATH"
+    local native emulated=0
+    native="$("$engine" info --format '{{.Host.Arch}}' 2>/dev/null)"
+    [ "$native" = "$platform" ] || emulated=1
+    local scale="${N00B_TEST_BUDGET_SCALE:-$((emulated ? 24 : 2))}"
+    local cores host_cores
+    cores="$("$engine" info --format '{{.Host.CPUs}}' 2>/dev/null)"
+    host_cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+    [ "${cores:-0}" -gt 0 ] 2>/dev/null || cores="$host_cores"
+    local wall_scale="${N00B_WALL_BUDGET_SCALE:-$((scale * ((host_cores + cores - 1) / cores)))}"
+    local rust=()
+    if [ "${N00B_RUST:-0}" = 1 ]; then
+        rust=(-v "${RESHARP_ROOT:-$HOME/resharp-writ}:/work/resharp-writ:ro"
+              -e RESHARP_ROOT=/work/resharp-writ)
+    fi
+    "$engine" build -q --platform "linux/$platform" -t "n00bb-linux-$arch" \
         -f "$ROOT/tools/linux.Dockerfile" "$ROOT/tools" >/dev/null || exit 1
-    "$engine" run --rm --platform linux/amd64 \
+    "$engine" run --rm --platform "linux/$platform" \
         -v "$ROOT:/work/n00bb" \
-        -v "$writ_resharp:/work/resharp-writ:ro" \
-        -e BUILD_DIR=/work/n00bb/build-linux-x86_64 \
-        -e LANTERN_BUILD_DIR=/work/n00bb/lantern/build-linux-x86_64 \
-        -e RESHARP_ROOT=/work/resharp-writ \
-        -e RESHARP_VERIFIED="$(tr -d '[:space:]' < "$WRIT_ROOT/deps/RESHARP_REVISION")" \
-        -w /work/n00bb n00bb-linux ./build.sh "$@"
+        -e BUILD_DIR="/work/n00bb/build-linux-$arch" \
+        -e N00B_EMULATED="$emulated" \
+        -e N00B_RUST="${N00B_RUST:-0}" \
+        -e N00B_TEST_BUDGET_SCALE="$scale" \
+        -e N00B_WALL_BUDGET_SCALE="$wall_scale" \
+        "${rust[@]+"${rust[@]}"}" \
+        -w /work/n00bb "n00bb-linux-$arch" ./build.sh "$@"
 }
 
+config_matches || rm -f "$BUILD_DIR/config.mk"
+
 case "${1:-}" in
-    "")
-        do_compile
-        ;;
-    configure)
-        shift
-        do_configure "$@"
-        ;;
-    compile)
-        shift
-        do_compile "$@"
-        ;;
+    ""|compile) run_make all ;;
+    configure) shift; do_configure "$@" ;;
     test)
         shift
-        do_test "$@"
-        ;;
-    test-all)
+        if [ "$#" -gt 0 ]; then
+            check_test_names "$@"
+            run_make test T="$*"
+        else run_make test; fi ;;
+    test-pr|test-all|test-lantern|test-writ|bench) run_make "$1" ;;
+    perf)
         shift
-        do_test_all "$@"
-        ;;
-    bench)
-        shift
-        do_bench "$@"
-        ;;
-    linux)
-        shift
-        [ $# -ge 1 ] || { usage; exit 1; }
-        do_linux "$@"
-        ;;
+        run_make all >/dev/null && python3 "$ROOT/tools/perf.py" --source "$ROOT" \
+            --build "$BUILD_DIR" "$@" ;;
     tu)
         shift
-        [ $# -ge 1 ] || { usage; exit 1; }
-        do_tu "$@"
-        ;;
-    clean)
-        rm -rf "$BUILD_DIR"
-        ;;
-    -h|--help|help)
-        usage
-        ;;
-    *)
-        usage
-        exit 1
-        ;;
+        [ $# -eq 1 ] || usage_error "tu takes exactly one C source file"
+        do_tu "$1" ;;
+    install) shift; run_make install INSTALL_FLAGS="$*" ;;
+    uninstall) shift; "$ROOT/tools/install.sh" --uninstall "$@" ;;
+    linux) shift; do_linux "$@" ;;
+    clean) rm -rf "$BUILD_DIR" ;;
+    -h|--help|help) usage ;;
+    *) usage_error "unknown command '$1'" ;;
 esac

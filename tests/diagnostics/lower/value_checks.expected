@@ -1,0 +1,34 @@
+tests/diagnostics/lower/value_checks.n:3:12: error N00B-S0055: the divisor is always invalid: 0
+tests/diagnostics/lower/value_checks.n:8:12: error N00B-S0053: this operation always overflows: 128
+tests/diagnostics/lower/value_checks.n:15:9: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/value_checks.n:24:9: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/value_checks.n:30:12: warning N00B-S0005: this code can never run: no path reaches it
+tests/diagnostics/lower/value_checks.n:35:9: warning N00B-S0005: this code can never run: it calls `die`; `die` never returns
+  tests/diagnostics/lower/value_checks.n:34:5: note: this call never returns
+tests/diagnostics/lower/value_checks.n:59:8: warning N00B-S0059: this condition is always true, so the other branch never runs
+tests/diagnostics/lower/value_checks.n:67:16: warning N00B-S0054: this operation may overflow: [-9223372036854775808, 9223372036854775807] and [-9223372036854775808, 4]
+tests/diagnostics/lower/value_checks.n:67:16: warning N00B-S0056: the divisor may be invalid: [-9223372036854775808, 4]
+tests/diagnostics/lower/value_checks.n:74:16: warning N00B-S0058: the shift amount may be invalid: [0, 39]
+tests/diagnostics/lower/value_checks.n:80:12: warning N00B-S0054: this operation may overflow: [0, 99] and 200
+tests/diagnostics/lower/value_checks.n:112:9: warning N00B-S0006: the value assigned to `b` here is never read
+tests/diagnostics/lower/value_checks.n:113:5: warning N00B-S0006: the value assigned to `b` here is never read
+tests/diagnostics/lower/value_checks.n:118:9: warning N00B-S0006: the value assigned to `a` here is never read
+tests/diagnostics/lower/value_checks.n:120:9: warning N00B-S0006: the value assigned to `never` here is never read
+tests/diagnostics/lower/value_checks.n:121:9: warning N00B-S0006: the value assigned to `total` here is never read
+tests/diagnostics/lower/value_checks.n:124:5: warning N00B-S0006: this stored value is overwritten or discarded before it is read
+tests/diagnostics/lower/value_checks.n:133:12: warning N00B-S0008: `spin` calls itself on every path, so a call to it never returns
+tests/diagnostics/lower/value_checks.n:154:5: error N00B-S0010: this call may write memory reachable from view parameter `c`, which must not change
+  help: take the parameter as `modify` if the function must change it
+tests/diagnostics/lower/value_checks.n:180:5: error N00B-S0011: this stores a reference reachable from view parameter `c` where it outlives the call
+  tests/diagnostics/lower/value_checks.n:176:5: note: `kept` outlives the call
+  help: store a copy, or return the reference instead of keeping it
+tests/diagnostics/lower/value_checks.n:184:5: error N00B-S0011: this stores a reference reachable from view parameter `o` where it outlives the call
+  tests/diagnostics/lower/value_checks.n:177:5: note: `kept_leaf` outlives the call
+  help: store a copy, or return the reference instead of keeping it
+tests/diagnostics/lower/value_checks.n:191:12: error N00B-S0004: `x` is read on a path where it has no value
+  tests/diagnostics/lower/value_checks.n:187:9: note: `x` is declared here
+tests/diagnostics/lower/value_checks.n:196:12: error N00B-S0004: `value` is read on a path where it has no value
+  tests/diagnostics/lower/value_checks.n:195:9: note: `value` is declared here
+tests/diagnostics/lower/value_checks.n:206:9: error N00B-S0026: `abs` cannot fail, so this `!` has nothing to propagate
+  tests/diagnostics/lower/value_checks.n:202:1: note: `abs` is declared here
+  help: remove the `!`

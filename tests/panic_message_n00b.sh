@@ -15,7 +15,7 @@ fi
 status=0
 (ulimit -c 0; exec "$tmp/program" >"$tmp/stdout" 2>"$tmp/stderr") \
     2>/dev/null || status=$?
-if test "$status" -ne 133 || test -s "$tmp/stdout" \
+if test "$status" -ne 101 || test -s "$tmp/stdout" \
     || test "$(sed -n 1p "$tmp/stderr")" != "panic: $message"; then
     echo "exit status $status" >&2
     cat "$tmp/stdout" "$tmp/stderr" >&2

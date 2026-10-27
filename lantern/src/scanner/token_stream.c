@@ -1,6 +1,7 @@
 
-#include "scanner/token_stream.h"
+#include "private/scanner/token_stream.h"
 #include "unicode/encoding.h"
+#include "lib/list.h"
 #include "lib/string.h"
 #include "lib/option.h"
 #include <assert.h>
@@ -8,6 +9,17 @@
 #include <string.h>
 
 #define SCAN_EDIT_CHECKPOINT_TOKENS 32
+
+void
+scan_stream_reserve_tokens(parse_token_stream_t *ts, size_t needed)
+{
+    void *data = ts->tokens;
+    if (!core_list_reserve_raw(&data, &ts->token_cap, needed,
+                               sizeof(*ts->tokens))) {
+        abort();
+    }
+    ts->tokens = data;
+}
 
 struct scan_stream_checkpoint_t {
     int32_t token_count;
@@ -24,6 +36,17 @@ struct scan_stream_checkpoint_t {
     parse_trivia_t *pending_leading;
     parse_trivia_t *pending_trailing;
 };
+
+static void
+ensure_checkpoint_capacity(parse_token_stream_t *ts, size_t needed)
+{
+    void *data = ts->checkpoints;
+    if (!core_list_reserve_raw(&data, &ts->checkpoint_cap, needed,
+                               sizeof(*ts->checkpoints))) {
+        abort();
+    }
+    ts->checkpoints = data;
+}
 
 static parse_trivia_t *
 clone_trivia(const parse_trivia_t *source)
@@ -99,14 +122,7 @@ maybe_checkpoint(parse_token_stream_t *ts)
                == ts->token_count) {
         return;
     }
-    if (ts->checkpoint_count == ts->checkpoint_cap) {
-        size_t cap = ts->checkpoint_cap ? ts->checkpoint_cap * 2 : 16;
-        ts->checkpoints = core_realloc(ts->checkpoints,
-                                       cap * sizeof(*ts->checkpoints));
-        memset(ts->checkpoints + ts->checkpoint_cap, 0,
-               (cap - ts->checkpoint_cap) * sizeof(*ts->checkpoints));
-        ts->checkpoint_cap = cap;
-    }
+    ensure_checkpoint_capacity(ts, ts->checkpoint_count + 1);
 
     scan_stream_checkpoint_t *cp = &ts->checkpoints[ts->checkpoint_count++];
     *cp = (scan_stream_checkpoint_t){
@@ -126,22 +142,6 @@ maybe_checkpoint(parse_token_stream_t *ts)
     };
 }
 
-static void
-ensure_checkpoint_capacity(parse_token_stream_t *ts, size_t needed)
-{
-    if (needed <= ts->checkpoint_cap) {
-        return;
-    }
-    size_t cap = ts->checkpoint_cap ? ts->checkpoint_cap : 16;
-    while (cap < needed) {
-        cap *= 2;
-    }
-    ts->checkpoints = core_realloc(ts->checkpoints,
-                                   cap * sizeof(*ts->checkpoints));
-    memset(ts->checkpoints + ts->checkpoint_cap, 0,
-           (cap - ts->checkpoint_cap) * sizeof(*ts->checkpoints));
-    ts->checkpoint_cap = cap;
-}
 
 static void free_stream_token(parse_token_info_t *tok);
 
@@ -363,15 +363,7 @@ try_converge(parse_token_stream_t *ts)
             continue;
         }
         int32_t add = ts->stale_count - stale_at;
-        if (ts->token_count + add > ts->token_cap) {
-            int32_t cap = ts->token_cap;
-            while (cap < ts->token_count + add) {
-                cap *= 2;
-            }
-            ts->tokens = core_realloc(ts->tokens,
-                                      (size_t)cap * sizeof(*ts->tokens));
-            ts->token_cap = cap;
-        }
+        scan_stream_reserve_tokens(ts, (size_t)(ts->token_count + add));
         for (int32_t j = stale_at; j < ts->stale_count; j++) {
             parse_token_info_t *token = ts->stale_tokens[j];
             shift_reused_token(token, cp, s, ts->stale_byte_delta);
@@ -421,8 +413,8 @@ try_converge(parse_token_stream_t *ts)
         s->at_eof = true;
         s->status = s->had_recovery ? SCAN_STATUS_RECOVERED
                                     : SCAN_STATUS_COMPLETE;
-        s->status_message = s->had_recovery ? s->recovery_message
-                                            : (core_string_t){0};
+        s->status_problem = s->had_recovery ? s->recovery_problem
+                                            : (scan_problem_t){0};
         s->status_lexer = s->had_recovery ? s->recovery_lexer
                                           : (core_string_t){0};
         s->status_start_byte = s->had_recovery
@@ -971,12 +963,12 @@ scan_stream_replace(parse_token_stream_t *ts,
     s->lexer_context = cp->lexer_context;
     s->at_eof = false;
     s->status = SCAN_STATUS_ACTIVE;
-    s->status_message = (core_string_t){0};
+    s->status_problem = (scan_problem_t){0};
     s->status_lexer = (core_string_t){0};
     s->status_start_byte = 0;
     s->status_end_byte = 0;
     s->had_recovery = false;
-    s->recovery_message = (core_string_t){0};
+    s->recovery_problem = (scan_problem_t){0};
     s->recovery_lexer = (core_string_t){0};
     s->recovery_start_byte = 0;
     s->recovery_end_byte = 0;
@@ -1075,19 +1067,7 @@ array_scan_cb(parse_scanner_t *s)
 
     parse_token_stream_t *ts = s->stream;
 
-    if (ts->token_count >= ts->token_cap) {
-        int32_t new_cap = ts->token_cap ? ts->token_cap * 2 : 128;
-        parse_token_info_t **new_tokens = core_alloc_array(parse_token_info_t *, new_cap);
-
-        if (ts->tokens && ts->token_count > 0) {
-            memcpy(new_tokens, ts->tokens,
-                   (size_t)ts->token_count * sizeof(parse_token_info_t *));
-        }
-
-        core_free(ts->tokens);
-        ts->tokens    = new_tokens;
-        ts->token_cap = new_cap;
-    }
+    scan_stream_reserve_tokens(ts, (size_t)ts->token_count + 1);
 
     parse_token_info_t *copy = parse_token_copy(src, false);
 
@@ -1141,21 +1121,7 @@ typedef struct {
 static void
 cp_scan_emit(parse_token_stream_t *ts, parse_token_info_t *tok)
 {
-    if (ts->token_count >= ts->token_cap) {
-        int32_t new_cap = ts->token_cap ? ts->token_cap * 2 : 128;
-        parse_token_info_t **new_tokens
-            = core_alloc_array(parse_token_info_t *, new_cap);
-
-        if (ts->tokens && ts->token_count > 0) {
-            memcpy(new_tokens, ts->tokens,
-                   (size_t)ts->token_count * sizeof(parse_token_info_t *));
-        }
-
-        core_free(ts->tokens);
-        ts->tokens    = new_tokens;
-        ts->token_cap = new_cap;
-    }
-
+    scan_stream_reserve_tokens(ts, (size_t)ts->token_count + 1);
     ts->tokens[ts->token_count++] = tok;
 }
 

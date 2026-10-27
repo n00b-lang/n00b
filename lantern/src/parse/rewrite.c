@@ -16,9 +16,8 @@ parse_tree_clone(const parse_tree_t *tree)
 
     if (core_tree_is_leaf(tree)) {
         parse_token_info_t *src = core_tree_leaf_value(tree);
-        parse_token_info_t *tok = parse_token_clone_for_tree(src);
 
-        return core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t, tok);
+        return parse_tree_new_owned_leaf(parse_token_copy(src, true));
     }
 
     parse_nt_node_t     pn  = core_tree_node_value(tree);
@@ -87,7 +86,6 @@ parse_tree_make_synthetic_token(int64_t tid, core_string_t text)
 
     parse_token_set_tid(tok, (int32_t)tid);
     parse_token_set_origin(tok, PARSE_TOKEN_SYNTHETIC);
-    parse_token_set_tree_owned(tok, true);
 
     if (text.data) {
         parse_token_set_value(tok,
@@ -96,7 +94,7 @@ parse_tree_make_synthetic_token(int64_t tid, core_string_t text)
                               true);
     }
 
-    return core_tree_leaf(parse_nt_node_t, parse_token_info_ptr_t, tok);
+    return parse_tree_new_owned_leaf(tok);
 }
 
 typedef struct {

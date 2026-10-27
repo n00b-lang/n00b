@@ -1,0 +1,409 @@
+N00B_DIAG(VALUE_TYPE_MISMATCH, "N00B-T0500", ERROR,
+    "a value does not have the type its destination requires",
+    "A value stored in a variable, field, element or parameter, or returned\n"
+    "from a function, must have the type declared for that destination.\n"
+    "Convert the value, or change the declared type:\n"
+    "    let x: int = 5\n"
+    "    let s: string = \"5\"")
+N00B_DIAG(WRITE_THROUGH_READ_ONLY, "N00B-T0501", ERROR,
+    "a write reaches through a view parameter or a constant",
+    "Nothing reachable from a `view` parameter or a constant may be\n"
+    "modified. Declare the parameter `modify` (or the value `var`) when the\n"
+    "function needs to write through it:\n"
+    "    func bump(modify c: Counter) { c.count = c.count + 1 }")
+N00B_DIAG(TYPE_VARIABLE_OUTSIDE_SIGNATURE, "N00B-T0502", ERROR,
+    "a type variable appears outside any generic declaration",
+    "A type variable such as 'T is introduced by the signature of a\n"
+    "function or by a generic record, variant or trait declaration, and is\n"
+    "only meaningful inside it. Outside one, use a concrete type:\n"
+    "    func first(items: List['T]) -> 'T { return items[0] }")
+N00B_DIAG(ATOMIC_FIELD_UPDATE, "N00B-T0503", ERROR,
+    "a field of an atomic value is assigned on its own",
+    "An atomic value is read and written as a whole, so a single field\n"
+    "cannot be updated in place. Build the new value and assign all of it.")
+N00B_DIAG(ASSIGN_TO_TYPE_PARAMETER, "N00B-T0504", ERROR,
+    "a concrete value is assigned to a place whose type is a type parameter",
+    "Inside a generic function, a place typed 'T can hold any type the\n"
+    "caller chooses, so a value of one particular type cannot be stored\n"
+    "there. Only values of type 'T, such as other parameters, can be.")
+N00B_DIAG(ENUM_VALUE_NOT_INTEGER, "N00B-T0505", ERROR,
+    "an enum item is given a value that is not an integer literal",
+    "Enum item values are written as decimal or hexadecimal integer\n"
+    "literals:\n"
+    "    enum Color { Red = 1, Green = 0x2 }")
+N00B_DIAG(FLAGSET_EMPTY, "N00B-T0506", ERROR,
+    "a flagset declares no primitive flags",
+    "A flagset needs at least one flag declared by name; combinations are\n"
+    "built from those flags:\n"
+    "    flagset Mode { Read, Write, Both = Read + Write }")
+N00B_DIAG(FLAGSET_UNKNOWN_FLAG, "N00B-T0507", ERROR,
+    "a flagset combination names a flag that is not declared before it",
+    "A combination may only use flags declared earlier in the same\n"
+    "flagset. Declare the flag first, or move the combination after it.")
+N00B_DIAG(FLAGSET_TOO_MANY_FLAGS, "N00B-T0508", ERROR,
+    "a flagset declares more than 128 primitive flags",
+    "A flagset holds at most 128 primitive flags. Split the flags across\n"
+    "several flagsets.")
+N00B_DIAG(FLAGSET_DUPLICATE_VALUE, "N00B-T0509", ERROR,
+    "two members of a flagset have the same value",
+    "Every flag and combination in a flagset must have a distinct value.\n"
+    "Remove the duplicate or give it a different combination.")
+N00B_DIAG(CONTAINER_LITERAL_UNTYPED, "N00B-T0510", ERROR,
+    "the item type of a container literal cannot be inferred",
+    "An empty list, dict or set literal says nothing about the type of its\n"
+    "items. Give the variable a type:\n"
+    "    let names: List[string] = []")
+N00B_DIAG(LITERAL_MODIFIER_PAYLOAD, "N00B-T0511", ERROR,
+    "a literal modifier does not accept the literal it follows",
+    "Each literal modifier handles particular kinds of literal, such as\n"
+    "strings or lists. Use a literal of a kind the modifier accepts, or a\n"
+    "different modifier.")
+N00B_DIAG(LITERAL_MODIFIER_NOT_ON_LITERAL, "N00B-T0512", ERROR,
+    "a literal modifier follows something that is not a literal",
+    "A literal modifier is written directly after a literal, such as\n"
+    "\"text\"'r or [1, 2]'set. It cannot follow a name or a parenthesized\n"
+    "expression.")
+N00B_DIAG(TYPE_DECLARATION_FORM, "N00B-T0513", ERROR,
+    "a type is declared with `type` instead of `record` or `object`",
+    "Use `record` for a value that is copied on assignment and `object` for\n"
+    "a value that is shared:\n"
+    "    record Point { x: int; y: int }")
+N00B_DIAG(SWITCH_CASE_SUBJECT_MISMATCH, "N00B-T0514", ERROR,
+    "switch cases name variant arms of a type the subject does not have",
+    "The cases of a switch over a variant must name arms of the subject's\n"
+    "own variant type. Switch on a value of that variant type, or name the\n"
+    "arms of the subject's type.")
+N00B_DIAG(DUPLICATE_DECLARATION, "N00B-N0501", ERROR,
+    "a name is declared twice in the same scope",
+    "Each name can be declared once per scope. Rename one declaration, or\n"
+    "assign to the existing variable instead of declaring it again:\n"
+    "    var x = 1\n"
+    "    x = 2")
+N00B_DIAG(SHADOW_USED_LET, "N00B-N0502", ERROR,
+    "a nested declaration hides an outer `let` that the block already used",
+    "Inside one block a name must mean one thing. When a block has already\n"
+    "used an outer `let` binding, it cannot declare a new binding with the\n"
+    "same name later. Give the inner binding a different name.")
+N00B_DIAG(SHADOW_LET, "N00B-N0503", WARNING,
+    "a nested declaration hides an outer `let` binding",
+    "Reusing the name of an outer `let` binding makes the outer value\n"
+    "unreachable for the rest of the block, which is easy to misread. Give\n"
+    "the inner binding a different name.")
+N00B_DIAG(OPAQUE_TYPE_FIELD, "N00B-N0505", ERROR,
+    "a field of a type whose fields are hidden is used outside its module",
+    "A module can export a type without its fields. Outside that module the\n"
+    "type's fields cannot be read or written; use the functions the module\n"
+    "exports for it.")
+N00B_DIAG(TYPE_NAME_IS_VALUE, "N00B-N0507", ERROR,
+    "a type and a value in the same scope have the same name",
+    "Types and values share one set of names in a scope, so a type cannot\n"
+    "have the name of a variable or function declared beside it. Rename\n"
+    "one of them.")
+N00B_DIAG(PACKAGE_BLOCK_STATEMENT, "N00B-N0509", ERROR,
+    "a package block contains a statement other than `export` or `when`",
+    "A `package` block lists what the package exports, optionally under\n"
+    "`when` conditions. Imports and other statements go before the block.")
+N00B_DIAG(REDUNDANT_PRIVATE, "N00B-N0510", ERROR,
+    "a field inside a `private` block is also marked `private`",
+    "Every field in a `private` block is already private. Remove the extra\n"
+    "`private` on the field.")
+N00B_DIAG(LOOP_NAME_BINDS_WHOLE_ITEM, "N00B-N0511", WARNING,
+    "a single loop name does not match a field of the item, so it binds the whole item",
+    "When a loop names one binding and the items are records, the name is\n"
+    "matched against the item's fields. A name that matches no field binds\n"
+    "the whole item instead; write `let` before it to say so:\n"
+    "    for let entry in entries { ... }")
+N00B_DIAG(TYPECASE_NAME_CLASH, "N00B-N0512", ERROR,
+    "a `typecase` arm declares the name it narrows",
+    "Inside a `typecase` arm the subject's name already refers to the\n"
+    "narrowed value. Declaring that name again in the arm would hide it;\n"
+    "use a different name.")
+N00B_DIAG(UNKNOWN_LITERAL_MODIFIER, "N00B-N0513", ERROR,
+    "no visible literal modifier handles this kind of literal",
+    "A literal modifier must be declared in this module or exported by an\n"
+    "imported module, and must handle the kind of literal it follows.\n"
+    "Declare it, import the module that exports it, or use another one.")
+N00B_DIAG(AMBIGUOUS_LITERAL_MODIFIER, "N00B-N0514", ERROR,
+    "more than one imported module exports the same literal modifier",
+    "Two imported modules export a literal modifier with this name for the\n"
+    "same kind of literal, so the use is ambiguous. Import only one of\n"
+    "them, or alias one modifier under another name.")
+N00B_DIAG(LITERAL_MODIFIER_CLASH, "N00B-N0515", ERROR,
+    "a literal modifier is declared with a name that is already in use",
+    "A literal modifier name can refer to only one modifier for each kind\n"
+    "of literal in a module, including modifiers that imports make\n"
+    "visible. Choose a different name.")
+N00B_DIAG(LITERAL_MODIFIER_ALIAS_UNKNOWN, "N00B-N0516", ERROR,
+    "a literal modifier alias refers to a modifier that is not visible",
+    "An alias for a literal modifier must name a modifier that is declared\n"
+    "in this module or exported by an imported module.")
+N00B_DIAG(CONFLICTING_TYPE_DEFINITION, "N00B-N0517", ERROR,
+    "one type name is given two different definitions",
+    "A type is defined once. Rename one of the definitions, or remove the\n"
+    "duplicate.")
+N00B_DIAG(COUNT_FIELD_UNKNOWN, "N00B-N0518", ERROR,
+    "a `count` clause names a field the record does not have",
+    "`count n` says another field of the same record holds the number of\n"
+    "elements behind a `Foreign[...]` field. Name an existing integer field\n"
+    "other than the pointer field itself.")
+N00B_DIAG(UNION_BY_UNKNOWN_FIELD, "N00B-N0519", ERROR,
+    "`union by` names something other than a plain field of the record",
+    "`union by tag` selects the union arm using an integer field of the\n"
+    "same record declared outside the union. Name such a field.")
+N00B_DIAG(GENERIC_ARITY, "N00B-T0515", ERROR,
+    "a generic type is given the wrong number of type arguments",
+    "A generic type takes exactly the type arguments its declaration lists:\n"
+    "    var items: List[int] = []\n"
+    "    var table: Dict[string, int] = {:}")
+N00B_DIAG(OPTION_USED_AS_VALUE, "N00B-T0516", ERROR,
+    "an option that may be nil is used where its value is needed",
+    "A value of type `T?` may be nil, so operators cannot use it directly.\n"
+    "Test the variable against nil; where the test holds, the variable is a\n"
+    "plain `T` until it is assigned again:\n"
+    "    if v != nil {\n"
+    "        total = v + 1\n"
+    "    }")
+N00B_DIAG(OPTION_COMPARED_WITH_VALUE, "N00B-T0517", ERROR,
+    "an option is compared with something other than nil",
+    "An option can only be compared with `nil`. Check it against nil first,\n"
+    "then compare its value.")
+N00B_DIAG(OPERATOR_OPERANDS_MISMATCH, "N00B-T0518", ERROR,
+    "a binary operator is applied to operands of different types",
+    "Arithmetic, bitwise and comparison operators need both operands to have\n"
+    "the same type. Convert one operand so the types match.")
+N00B_DIAG(OPERATOR_OPERAND_TYPE, "N00B-T0519", ERROR,
+    "an operator is applied to a value of a type it does not support",
+    "Each built-in operator works on particular types: `~` on integers and\n"
+    "flagsets, unary `+` on numbers. Use an operand of a supported type.")
+N00B_DIAG(OPERATOR_RESULT_MISMATCH, "N00B-T0520", ERROR,
+    "an operator's result is used as a different type",
+    "The result of an operator has a fixed type, such as `bool` for a\n"
+    "comparison. It cannot be used where a different type is expected.")
+N00B_DIAG(SHIFT_SIGNED_OPERAND, "N00B-T0521", ERROR,
+    "a value that can be negative is shifted",
+    "The built-in shifts work on unsigned integers and `bits` values.\n"
+    "Convert a signed value to an unsigned type before shifting it.")
+N00B_DIAG(SHIFT_COUNT_RANGE, "N00B-T0522", ERROR,
+    "a shift count is negative or not smaller than the width of the value",
+    "A value with N bits can be shifted by 0 to N-1 places. A larger or\n"
+    "negative count is an error when it is known at compile time.")
+N00B_DIAG(SHIFT_COUNT_SIGNED, "N00B-T0523", ERROR,
+    "a shift count has a signed type",
+    "Shift counts must have an unsigned type. Convert the count first.")
+N00B_DIAG(INTEGER_CONSTANT_RANGE, "N00B-T0524", ERROR,
+    "an integer constant does not fit the type it is used as",
+    "A constant must lie within the range of the integer type it is given.\n"
+    "Use a wider type or a smaller value:\n"
+    "    let small: u8 = 255")
+N00B_DIAG(INTEGER_NARROWING, "N00B-T0525", WARNING,
+    "an integer conversion may receive values that do not fit",
+    "The compiler could not prove every value fits the target type. If a\n"
+    "value does not fit when the program runs, it stops with a panic.\n"
+    "Check the value first, or use a wider type.")
+N00B_DIAG(INTEGER_TOO_LARGE, "N00B-T0526", ERROR,
+    "no integer type can hold every value an integer can have",
+    "Integer values are limited to 128 bits. Give the value an explicit\n"
+    "type or keep its range within what an integer type can hold.")
+N00B_DIAG(BITWISE_NEGATIVE, "N00B-T0527", ERROR,
+    "a value used with bitwise operators can be negative",
+    "Bitwise operators work on unsigned integers, so a value used with them\n"
+    "needs an unsigned type and cannot hold negative values.")
+N00B_DIAG(CONSTANT_ZERO_DIVISOR, "N00B-T0528", ERROR,
+    "a division or remainder has a divisor that is always zero",
+    "Dividing by zero is never valid. Use a nonzero divisor.")
+N00B_DIAG(STRING_NOT_BUFFER, "N00B-T0529", ERROR,
+    "a string is used where a Buffer is required",
+    "A string is immutable and does not convert to a Buffer. Copy it:\n"
+    "    let b = buffer_from_string(s)")
+N00B_DIAG(LITERAL_ITEM_TYPE_MISMATCH, "N00B-T0530", ERROR,
+    "the items of a list, set or dict literal have different types",
+    "All items of a container literal must share one type. Convert the item\n"
+    "that differs, or give the container an explicit item type.")
+N00B_DIAG(LITERAL_ITEMS_DO_NOT_FIT, "N00B-T0531", ERROR,
+    "the items of a literal do not fit the type it builds",
+    "A literal built by a literal modifier must have items the modifier can\n"
+    "accept for the type it produces.")
+N00B_DIAG(EMPTY_BRACES_AMBIGUOUS, "N00B-T0532", ERROR,
+    "an empty `{}` could be a set or a dict",
+    "Nothing says whether an empty `{}` is a set or a dict. Give the\n"
+    "variable a type, or write `{:}` for an empty dict.")
+N00B_DIAG(SHAPE_LITERAL_DEFAULT_CONFLICT, "N00B-T0533", ERROR,
+    "a literal's default type conflicts with how it is used",
+    "A literal with no other type information gets a default type, such as\n"
+    "`List` for `[...]`. If it is then used as a different type, give it\n"
+    "that type explicitly.")
+N00B_DIAG(SHAPE_LITERAL_NO_HANDLER, "N00B-T0534", ERROR,
+    "no literal modifier can build the expected type from this literal",
+    "A literal used as a type other than its default is built by a literal\n"
+    "modifier for that type. None is visible here; import one, or build the\n"
+    "value another way.")
+N00B_DIAG(SHAPE_LITERAL_AMBIGUOUS_HANDLER, "N00B-T0535", ERROR,
+    "several literal modifiers can build the expected type from this literal",
+    "More than one visible literal modifier produces the expected type. Name\n"
+    "the one you mean after the literal.")
+N00B_DIAG(LITERAL_MODIFIER_SIGNATURE, "N00B-T0536", ERROR,
+    "a literal modifier is declared with the wrong signature",
+    "A literal modifier takes the literal as its one typed parameter (a\n"
+    "fence may add `site: Literal_Site`), returns the value it builds, and\n"
+    "declares `fail: string`.")
+N00B_DIAG(LOOP_BINDINGS_MISMATCH, "N00B-T0537", ERROR,
+    "the names in a `for` loop do not match the shape of its items",
+    "Loop names bind the positions of tuple items in order, or the fields of\n"
+    "record items by name. A single name binds the whole item.")
+N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
+    "a `for` loop iterates over a value that cannot be iterated",
+    "A `for` loop needs a value whose type implements the `Iterable` trait,\n"
+    "such as a list or a range.")
+N00B_DIAG(CALLBACK_NOT_A_CONTRACT, "N00B-T0539", ERROR,
+    "`callback[...]` names a type that is not a callback type",
+    "`callback[T](...)` creates a callback of a type declared with\n"
+    "`callback`, which lists its `call`, `handler` and `setup` roles.")
+N00B_DIAG(CALLBACK_STATE_NOT_WRITABLE, "N00B-T0540", ERROR,
+    "the state given to a callback cannot be written",
+    "A stateful callback updates its state, so the state must be declared\n"
+    "with `var`.")
+N00B_DIAG(CALLBACK_STATE_UNINITIALIZED, "N00B-T0541", ERROR,
+    "the state given to a callback is not initialized",
+    "A callback's state must hold a value before the callback is created.")
+N00B_DIAG(CALLBACK_ARGUMENTS_MISMATCH, "N00B-T0542", ERROR,
+    "the arguments to `callback[...]` do not match its handler and setup",
+    "`callback[T](handler)` takes a handler matching the `handler` role, and\n"
+    "for a stateful callback the state and the remaining `setup` arguments.")
+N00B_DIAG(CALLBACK_TYPE_UNDETERMINED, "N00B-T0543", ERROR,
+    "the arguments to `callback[...]` leave type parameters undetermined",
+    "Every type parameter of a generic callback type must be fixed by the\n"
+    "handler or state, or written explicitly.")
+N00B_DIAG(CALLBACK_ROLES_MISMATCH, "N00B-T0544", ERROR,
+    "the roles of a callback declaration do not fit together",
+    "A callback has a `call` and a `handler` role. The handler takes the\n"
+    "call's parameters, after a `modify` state when there is a `setup`\n"
+    "role; `setup` takes references to the handler and the state.")
+N00B_DIAG(CONFLICTING_RETURNS, "N00B-T0545", ERROR,
+    "the return statements of a function produce different types",
+    "Without a declared return type, every `return` in a function must\n"
+    "produce the same type. Declare the return type, or make the returns\n"
+    "agree.")
+N00B_DIAG(FUNCTION_BODY_SIGNATURE_MISMATCH, "N00B-T0546", ERROR,
+    "a function body returns or fails with a type its declaration does not allow",
+    "The values a function returns, and the failures it raises, must match\n"
+    "the return and `fail:` types in its declaration.")
+N00B_DIAG(PARAMETER_TYPE_CONFLICT, "N00B-T0547", ERROR,
+    "a parameter's declared type conflicts with another type it is given",
+    "A parameter has one type. Its declared type must agree with its\n"
+    "default value and with other declarations of the same function.")
+N00B_DIAG(INIT_RECEIVER, "N00B-T0548", ERROR,
+    "`__init` does not take the constructed value as its first parameter",
+    "An `__init` function receives the value being constructed as its first\n"
+    "parameter: `modify self: T` for a record, `self: T` or `modify self: T`\n"
+    "for an object.")
+N00B_DIAG(INIT_ON_VARIANT, "N00B-T0549", ERROR,
+    "a variant type declares `__init`",
+    "Variants are constructed by selecting an arm and giving its payload, so\n"
+    "they cannot declare `__init`. Initialize the arm's payload type instead.")
+N00B_DIAG(INIT_CANNOT_FAIL, "N00B-T0550", ERROR,
+    "`__init` declares or raises a failure",
+    "Construction cannot fail. Write a factory function that can fail and\n"
+    "returns the constructed value instead.")
+N00B_DIAG(INIT_RETURNS_VALUE, "N00B-T0551", ERROR,
+    "`__init` returns a value",
+    "`__init` fills in the value it receives and returns nothing. Use a\n"
+    "factory function to produce a value.")
+N00B_DIAG(FINALIZE_RECEIVER, "N00B-T0552", ERROR,
+    "`__finalize` does not take one `consume` reference to the finalized value",
+    "A finalizer takes exactly one parameter, a non-optional reference to\n"
+    "the value being finalized, declared `consume`:\n"
+    "    func __finalize(consume self: Ref[Handle]) { ... }")
+N00B_DIAG(FINALIZE_CANNOT_FAIL, "N00B-T0553", ERROR,
+    "`__finalize` declares or raises a failure",
+    "A finalizer runs when a value is destroyed and has no caller to report\n"
+    "to, so it cannot fail.")
+N00B_DIAG(FINALIZE_RETURNS_VALUE, "N00B-T0554", ERROR,
+    "`__finalize` returns a value",
+    "A finalizer returns nothing.")
+N00B_DIAG(CONTEXT_FAIL_WITHOUT_TYPE, "N00B-T0555", ERROR,
+    "a context has a `fail` hook but no failure type",
+    "A context's `fail` hook receives the context's failure value, so the\n"
+    "context must declare `fail: T`. Add it, or remove the hook.")
+N00B_DIAG(CONTEXT_HOOK_PARAMETER, "N00B-T0556", ERROR,
+    "a context hook's parameter has a different type than the context gives it",
+    "The `enter` hook's parameter receives the provided value and the `fail`\n"
+    "hook's parameter the failure value; their declared types must match.")
+N00B_DIAG(ARRAY_SIZE_NOT_POSITIVE, "N00B-T0557", ERROR,
+    "an array size is zero or negative",
+    "Each sized array dimension holds at least one element:\n"
+    "    var cells: Array[int][16]")
+N00B_DIAG(ARRAY_SIZED_AFTER_UNSIZED, "N00B-T0558", ERROR,
+    "a sized array dimension follows an unsized one",
+    "In an array type, sized dimensions come first and unsized ones last:\n"
+    "    Array[int][4][]")
+N00B_DIAG(ARRAY_SIZE_NOT_INTEGER, "N00B-T0559", ERROR,
+    "an array size is not an integer",
+    "Array dimensions are integer constants or integer expressions.")
+N00B_DIAG(ARRAY_TYPE_SYNTAX, "N00B-T0560", ERROR,
+    "array dimensions follow something other than `Array[Element]`",
+    "An array type names its element type first, then its sizes:\n"
+    "    Array[Node][513]")
+N00B_DIAG(SIZED_INTEGER_WIDTH, "N00B-T0561", ERROR,
+    "a sized integer or `bits` type has a width outside 1..128",
+    "`i:N`, `u:N` and `bits:N` take a width from 1 to 128.")
+N00B_DIAG(NIL_UNION_ARM, "N00B-T0562", ERROR,
+    "`nil` is written as an arm of a union type",
+    "A union type cannot list `nil` as an arm. Write the type as an option,\n"
+    "`T?`, to allow nil.")
+N00B_DIAG(TYPECASE_SUBJECT, "N00B-T0563", ERROR,
+    "a `typecase` subject is not a variable or parameter",
+    "`typecase` narrows the type of a variable or parameter inside each arm,\n"
+    "so its subject must be one. Store an expression in a variable first.")
+N00B_DIAG(COMPOSITE_FLAGSET_WRITE, "N00B-T0564", WARNING,
+    "a combined flagset member is assigned a boolean",
+    "Assigning to a member that combines several flags sets or clears all\n"
+    "of them at once. Assign the individual flags if that is not intended.")
+N00B_DIAG(FLAGSET_PIPE_UNION, "N00B-T0565", WARNING,
+    "`|` is used for a flagset union",
+    "Flagset unions are written with `+`. `|` is still accepted while code\n"
+    "migrates.")
+N00B_DIAG(UNKNOWN_LAYOUT_POLICY, "N00B-T0566", ERROR,
+    "`layout(...)` names a policy that does not exist",
+    "Record layout policies are `layout(c)` and `layout(ordered)`.")
+N00B_DIAG(DUPLICATE_LAYOUT_MODIFIER, "N00B-T0567", ERROR,
+    "a record has two layout policies or two alignments",
+    "A record takes at most one `layout(...)` and one `align(...)`.")
+N00B_DIAG(LAYOUT_MODIFIER_UNSUPPORTED, "N00B-T0568", ERROR,
+    "a record layout modifier is not supported yet for the target",
+    "`align(...)` and `layout(ordered)` are not supported yet for every\n"
+    "target. Use `layout(c)` or remove the modifier.")
+N00B_DIAG(C_LAYOUT_FIELD_TYPE, "N00B-T0569", ERROR,
+    "a field of a `layout(c)` record has a type with no C representation",
+    "Fields of a `layout(c)` record must have C-compatible types: sized\n"
+    "integers, floats, `Foreign[...]` pointers and other `layout(c)`\n"
+    "records.")
+N00B_DIAG(UNION_NEEDS_C_LAYOUT, "N00B-T0570", ERROR,
+    "a record with a union is not declared `layout(c)`",
+    "Unions exist to match C structures, so a record holding one must be\n"
+    "declared `layout(c)`.")
+N00B_DIAG(RECORD_MULTIPLE_UNIONS, "N00B-T0571", ERROR,
+    "a record holds more than one union",
+    "A record holds at most one union. Merge the arms into one union.")
+N00B_DIAG(UNION_ARM_VALUE_NOT_CONSTANT, "N00B-T0572", ERROR,
+    "a union arm's tag value is not a constant integer",
+    "Each union arm is selected by a constant integer tag value.")
+N00B_DIAG(UNION_ARM_DUPLICATE_VALUE, "N00B-T0573", ERROR,
+    "two union arms have the same tag value",
+    "Each arm of a union needs a distinct tag value.")
+N00B_DIAG(UNTIL_SENTINEL_NOT_CONSTANT, "N00B-T0574", ERROR,
+    "an `until` sentinel is not a constant integer",
+    "`until v` ends a `Foreign[...]` sequence at the first element equal to\n"
+    "v, so v must be a constant integer.")
+N00B_DIAG(EXTENT_ON_NON_FOREIGN_FIELD, "N00B-T0575", ERROR,
+    "an `until` or `count` clause is attached to a field that is not a `Foreign` pointer",
+    "`until` and `count` describe how many elements a `Foreign[...]` field\n"
+    "points at, so they only apply to such fields.")
+N00B_DIAG(TYPE_CONTAINS_ITSELF, "N00B-T0576", ERROR,
+    "a type contains itself by value",
+    "A value cannot contain a copy of itself. Break the cycle with a\n"
+    "reference, such as a `Ref[...]` or option field, or make one of the\n"
+    "types an `object`.")
+N00B_DIAG(ATOMIC_UNSUPPORTED, "N00B-T0577", ERROR,
+    "the target has no atomic operations for a type",
+    "Atomic values must fit the atomic instructions of the target. Use a\n"
+    "smaller element type, or protect the value with a lock.")

@@ -1,26 +1,18 @@
-  note[IR-E0004]: annotation key is not namespaced
-    --> sum.bce:1:1
-     |
-   1 | func sum(n) {
-     | ^^^^ the enclosing function
+sum.bce:2:3: error: annotation key is not namespaced
 
-error[IR-E0004]: annotation key is not namespaced
-  --> sum.bce:2:3
-     |
-   2 |   acc = 0
-     |   ^^^ this key
-  --> sum.bce:3:3
-     |
-   3 |   café = acc + n
-     |   ^^^^^ declared here
-  --> sum.bce:3:14
-     |
-   3 |   café = acc + n
-     |              ^^^ and used here
-  note: inlined from here by inline (sum.bce:3:3)
-  note: expanded from here by macro (sum.bce:1:1)
-  help: namespace it with the profile
-      + bce.acc
+    2 |   acc = 0
+      |   ^^^ this key
 
-error[IR-E0001]: internal error
+  declared here:
 
+    3 |   café = acc + n
+      |   ^^^^^
+
+  and used here:
+
+    3 |   café = acc + n
+      |              ^^^
+
+  help: namespace it with the profile: `bce.acc`
+
+error: internal error

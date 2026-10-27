@@ -1,0 +1,329 @@
+import containers.tree
+import containers.traits
+
+var values: Dict[int, int] = new[Dict[int, int]]()
+require values.len() == 0
+require values.get(7) == nil
+require !values.replace(7, 99)
+require values.add(7, 11)
+require !values.add(7, 99)
+require values.replace(7, 12)
+let replaced: int? = values.get(7)
+if replaced != nil { require replaced.get() == 12 } else { require false }
+require values.len() == 1
+let dict_first: int? = values.get(7)
+if dict_first != nil { require dict_first.get() == 12 } else { require false }
+let prior: int? = values.put(7, 13)
+if prior != nil { require prior.get() == 12 } else { require false }
+let updated: int? = values.get(7)
+if updated != nil { require updated.get() == 13 } else { require false }
+require values.remove(7)
+require values.get(7) == nil
+require values.len() == 0
+
+variant Generic_Choice {
+    empty: nil
+    value: 'T
+}
+
+func tree_width(handle: 'T) -> uint
+                where 'T : builtin . containers . traits . TreeLike {
+    return handle.child_count()
+}
+
+var choice: Generic_Choice[int] = new[Generic_Choice[int]]()
+choice.value = 17
+switch choice {
+    case empty {
+        require false
+    }
+    case value {
+        require choice.value == 17
+    }
+}
+choice.empty = nil
+switch choice {
+    case empty {
+    }
+    case value {
+        require false
+    }
+}
+
+let root:   containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
+let first:  containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
+let second: containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
+let third:  containers.tree.Tree[int, string] = new[containers.tree.Tree[int, string]]()
+
+require !containers.tree.is_leaf(root)
+require containers.tree.node(root) == nil
+require containers.tree.leaf(root) == nil
+containers.tree.set_node(root, 7)
+let node_value: Ref[int]? = containers.tree.node(root)
+if node_value != nil {
+    node_value.get().__value = 9
+} else {
+    require false
+}
+let changed: Ref[int]? = containers.tree.node(root)
+if changed != nil {
+    require changed.get().__value == 9
+} else {
+    require false
+}
+
+containers.tree.set_leaf(first, "first")
+require containers.tree.is_leaf(first)
+require containers.tree.node(first) == nil
+let first_value: Ref[string]? = containers.tree.leaf(first)
+if first_value != nil {
+    require first_value.get().__value == "first"
+} else {
+    require false
+}
+containers.tree.set_node(first, 11)
+require !containers.tree.is_leaf(first)
+require containers.tree.leaf(first) == nil
+
+require containers.tree.add_child(root, first)
+require containers.tree.add_child(root, second)
+require containers.tree.insert_child(root, 1, third)
+require tree_width(root) == 3
+require containers.tree.child_count(root) == 3
+let middle: containers.tree.Tree[int, string]? =
+    containers.tree.child(root, 1)
+if middle != nil {
+    require middle.get() == third
+} else {
+    require false
+}
+let last: containers.tree.Tree[int, string]? =
+    containers.tree.child(root, -1)
+if last != nil {
+    require last.get() == second
+} else {
+    require false
+}
+require containers.tree.child(root, 3) == nil
+require containers.tree.child(root, -4) == nil
+require containers.tree.depth(third) == 1
+require containers.tree.root(third) == root
+require !containers.tree.add_child(root, first)
+require !containers.tree.add_child(first, root)
+require !containers.tree.insert_child(root, 4, root)
+
+let removed: containers.tree.Tree[int, string]? =
+    containers.tree.remove_child(root, 1)
+if removed != nil {
+    require removed.get() == third
+} else {
+    require false
+}
+require containers.tree.parent(third) == nil
+require containers.tree.depth(third) == 0
+require containers.tree.child_count(root) == 2
+require containers.tree.remove_child(root, 2) == nil
+require containers.tree.add_child(first, third)
+require containers.tree.depth(third) == 2
+require containers.tree.root(third) == root
+
+func view_len(s: string) -> uint {
+    return byte_len(s)
+}
+
+func same_text(s: string, expected: string) -> bool {
+    return s == expected
+}
+
+func from_bytes_checks() {
+    var bytes: Array[u8] = new[Array[u8]](3)
+    bytes[0] = 0x61
+    bytes[1] = 0x62
+    bytes[2] = 0x63
+    var b: Buffer = buffer_from_bytes(bytes, 3)
+    require same_text(b, "abc")
+    var more: Array[u8] = new[Array[u8]](2)
+    more[0] = 0x64
+    more[1] = 0x65
+    append_bytes(b, more, 2)
+    require same_text(b, "abcde")
+    require byte_len(b) == 5
+    let empty: Buffer = empty_buffer()
+    require byte_len(empty) == 0
+}
+
+func char_count_checks() {
+    let ascii: Buffer = buffer_from_string("hello")
+    let mixed: Buffer = buffer_from_string("héllo € \U0001f4a9")
+    require len(ascii) == 5
+    require len(mixed) == 9
+    require len(empty_buffer()) == 0
+    var joined: Buffer = buffer_from_string(ascii)
+    joined += mixed
+    require byte_len(joined) == 20
+    require len(joined) == 14
+}
+
+func literal_checks() {
+    var b: Buffer = buffer_from_string("hello")
+    try {
+        set_index(b, 0, 0x48)!
+    } fail(e) {
+        require false
+    }
+    require same_text(b, "Hello")
+    var twin: Buffer = buffer_from_string("Hello")
+    require b.hash() == twin.hash()
+    require view_len(b) == 5
+}
+
+func to_string_checks() {
+    var b: Buffer = empty_buffer()
+    b += "a string that is long enough to need heap storage"
+    let before: uint = string_backing_at(b)
+    let s: string = to_string(b)
+    require s == "a string that is long enough to need heap storage"
+    require before != 0
+    require string_backing_at(s) == before
+}
+
+func length_checks() {
+    var b: Buffer = empty_buffer()
+    b += "abc"
+    b += "defg"
+    require byte_len(b) == 7
+}
+
+func operator_checks() {
+    var a: Buffer = buffer_from_string("left")
+    var b: Buffer = buffer_from_string("right")
+    var joined: Buffer = a + b
+    require same_text(joined, "leftright")
+    require same_text(a, "left")
+    a += "x"
+    require same_text(a, "leftx")
+    let prefixed: string = "x" + a
+    require prefixed == "xleftx"
+}
+
+func copy_checks() {
+    var b: Buffer = buffer_from_string("original")
+    var copy: Buffer = buffer_from_string(b)
+    b += "!"
+    require same_text(copy, "original")
+    require same_text(b, "original!")
+}
+
+func borrow_checks() {
+    var b: Buffer = buffer_from_string("borrowed")
+    require view_len(b) == 8
+    require same_text(b, "borrowed")
+}
+
+func snapshot_checks() {
+    var b: Buffer = buffer_from_string("before")
+    let kept: string = to_string(buffer_from_string(b))
+    b += " after"
+    require kept == "before"
+    require same_text(b, "before after")
+}
+
+func string_behaviour_checks() {
+    var b: Buffer = buffer_from_string("x")
+    require b == "x"
+    require "x" == b
+    require b.hash() == "x".hash()
+    var read_fd: int = -1
+    var write_fd: int = -1
+    require __os_pipe(ref read_fd, ref write_fd) == 0
+    let fd: i32 = cast[i32] write_fd
+    require b.raw_repr(fd) == "x".raw_repr(fd)
+    require __os_close(read_fd) == 0
+    require __os_close(write_fd) == 0
+}
+
+from_bytes_checks()
+char_count_checks()
+literal_checks()
+to_string_checks()
+length_checks()
+operator_checks()
+copy_checks()
+borrow_checks()
+snapshot_checks()
+string_behaviour_checks()
+
+var data: Array[u8] = new[Array[u8]](4200)
+var i: uint = 0
+while i < 4200 {
+    data[i] = unsafe_cast[u8]((i * 131 + 7) & 0xff)
+    i += 1
+}
+func prefix_hash(n: int) -> u128 {
+    return from_raw(ref data, n, encoding = Str_Encoding.binary).hash()
+}
+require prefix_hash(0) == 0x99aa06d3014798d86001c324468d497f
+require prefix_hash(1) == 0x495b62073ef70ca44c5cca45d0f4811f
+require prefix_hash(3) == 0x390cdc5b4a895dd76e3e2670e61106ac
+require prefix_hash(4) == 0xaa6e2f274640a3f43d668af6f2a44d77
+require prefix_hash(8) == 0x6a86a3bda6af4e3d61ddbe7f31a6100d
+require prefix_hash(9) == 0x664c7ca18afd62558c7b67fd458a936b
+require prefix_hash(16) == 0x7f9a218b0425449ae2ce54a7c19c730d
+require prefix_hash(17) == 0x66fc23f6439dbd778d96ef110fcdebb4
+require prefix_hash(128) == 0xaec730751478556cff361dec1385710a
+require prefix_hash(129) == 0x98cd36ccbb5579264545b3a09738e31a
+require prefix_hash(240) == 0x5293e17bf553903d3f2c53e72293711f
+require prefix_hash(241) == 0xb53840fe3fedf161956cae592c67279e
+require prefix_hash(1024) == 0xf69630613f24324d70bd377d9574f4bb
+require prefix_hash(1025) == 0x621af7b8277effa466c4487c41e127a7
+require prefix_hash(4200) == 0x007161758707bfa270f62ca10c1e5638
+
+record Fin {
+    v: int
+}
+
+var g: Buffer = buffer_from_string("hello world this is long")
+var keep: Ref[Fin]? = nil
+var on_main: Atomic[bool] = false
+var finalized: Atomic[uint] = 0
+
+func __finalize(consume self: Ref[Fin]) {
+    if __os_thread_is_main() != 0 {
+        __atomic_store(ref on_main, true)
+    }
+    g += "z"
+    __atomic_fetch_add(ref finalized, 1)
+}
+
+func churn(n: int) {
+    var i: int = 0
+    while i < n {
+        var f: Fin = (v = i)
+        keep = ref f
+        i += 1
+    }
+    require keep != nil and keep.get().v == n - 1
+}
+
+func borrowed() -> uint {
+    let s: string = g
+    churn(3000000)
+    return byte_len(s)
+}
+
+require borrowed() == 24
+let deadline: u64 = __os_now_ns() + 30_000_000_000
+while __atomic_load(ref finalized) == 0 {
+    require __os_now_ns() < deadline
+    __gc_enter_blocking()
+    __os_thread_yield()
+    __gc_leave_blocking()
+}
+func current_len() -> uint {
+    let s: string = g
+    return byte_len(s)
+}
+
+require !__atomic_load(ref on_main)
+require current_len() > 24
+__fd_write(2, "ok")

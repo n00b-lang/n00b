@@ -37,6 +37,7 @@ typedef struct {
     uint32_t    total;
     uint8_t    *forward;
     uint8_t    *backward;
+    ir_instr_t *killer;
 } proof_t;
 
 static option_key_t key_of(ir_value_t *v)
@@ -249,8 +250,24 @@ static void reach(proof_t *p, uint8_t *set, ir_instr_t *from,
     core_free(stack);
 }
 
+static bool writes_present(const option_key_t *key, ir_instr_t *in)
+{
+    uint32_t at = in->op == IR_OP_STORE ? 1 : 0;
+
+    if (key->depth || (in->op != IR_OP_STORE && in->op != IR_OP_COPY)
+        || in->n_operands != at + 1) {
+        return false;
+    }
+    ir_value_t *value = ir_operand_value(&in->operands[at]);
+
+    return value && value->def && value->def->op == IR_OP_OPTION_SOME;
+}
+
 static bool writes_root(const option_key_t *key, ir_instr_t *in)
 {
+    if (writes_present(key, in)) {
+        return false;
+    }
     if (key->kind == ROOT_LOCAL) {
         if (in->dest_kind == IR_DEST_LOCAL && in->dest_local == key->local) {
             return true;
@@ -318,6 +335,9 @@ static bool stable(proof_t *p, const option_key_t *key, ir_instr_t *test,
             uint32_t id = instr_id(p, in);
 
             if (p->forward[id] && p->backward[id] && writes_root(key, in)) {
+                if (!p->killer && ir_span_known(in->span)) {
+                    p->killer = in;
+                }
                 return false;
             }
         }
@@ -428,40 +448,78 @@ static core_string_t key_name(ir_func_t *f, const option_key_t *key)
     return result;
 }
 
+static ir_instr_t *global_load(const option_key_t *key)
+{
+    ir_instr_t *def = key->kind == ROOT_VALUE && key->value
+        ? key->value->def : nullptr;
+    ir_value_t *cell = def && def->op == IR_OP_LOAD && def->n_operands == 1
+        ? ir_operand_value(&def->operands[0]) : nullptr;
+
+    return cell && cell->kind == IR_VAL_GLOBAL && cell->global ? def
+                                                              : nullptr;
+}
+
+static core_string_t global_key_name(ir_instr_t *load,
+                                     const option_key_t *key)
+{
+    core_string_t full = ir_operand_value(&load->operands[0])->global->name;
+    core_buffer_t name = {0};
+    size_t start = 0;
+
+    for (size_t i = full.u8_bytes; i > 0 && !start; i--) {
+        if (full.data[i - 1] == '.') {
+            start = i;
+        }
+    }
+    core_buffer_append_string(&name, core_string_slice(full, start,
+                                                       full.u8_bytes - start));
+    for (uint32_t i = 0; i < key->depth; i++) {
+        if (core_string_eq(key->fields[i], CORE_STRING_STATIC("!"))) {
+            continue;
+        }
+        core_buffer_append_string(&name, CORE_STRING_STATIC("."));
+        core_buffer_append_string(&name, key->fields[i]);
+    }
+    core_string_t result = core_string_dup(core_buffer_string(&name));
+    core_buffer_release(&name);
+    return result;
+}
+
 static void report(ir_diags_t *d, proof_t *p, ir_instr_t *get,
                    const option_key_t *key)
 {
-    ir_diag_t *dg = ir_diag_begin_at(d, IR_DIAG_UNPROVEN_OPTION, get,
-                                     get->block, p->f,
-                                     CORE_STRING_STATIC("this use"));
+    core_string_t name = key_name(p->f, key);
+    ir_instr_t *global_read = !name.data ? global_load(key) : nullptr;
+    if (global_read) {
+        name = global_key_name(global_read, key);
+    }
+    ir_instr_t *at = global_read && ir_span_known(global_read->span)
+        ? global_read
+        : name.data && key->read && ir_span_known(key->read->span)
+        ? key->read : get;
+    ir_span_t named = name.data ? ir_diag_name_span(at->span, name)
+                                : IR_SPAN_UNKNOWN;
+    ir_diag_t *dg = ir_span_known(named)
+        ? ir_diag_begin(d, IR_DIAG_UNPROVEN_OPTION, named,
+                        IR_MESSAGE(MAY_BE_NIL))
+        : ir_diag_begin_at(d, IR_DIAG_UNPROVEN_OPTION, at, at->block, p->f,
+                           IR_MESSAGE(MAY_BE_NIL));
     if (!dg) {
+        core_free(name.data);
         return;
     }
-    core_string_t name = key_name(p->f, key);
-    core_buffer_t message = {0};
-
-    if (name.data && key->kind == ROOT_REFERENCE) {
-        core_buffer_append_string(&message, CORE_STRING_STATIC("'"));
-        core_buffer_append_string(&message, name);
-        core_buffer_append_string(&message, CORE_STRING_STATIC(
-            "' is read through a reference, so a test against nil does not "
-            "keep it non-nil; copy it into a local with `let` and test the "
-            "local"));
-    } else if (name.data) {
-        core_buffer_append_string(&message, CORE_STRING_STATIC("'"));
-        core_buffer_append_string(&message, name);
-        core_buffer_append_string(&message, CORE_STRING_STATIC(
-            "' may be nil here; use its value only where a test such as `"));
-        core_buffer_append_string(&message, name);
-        core_buffer_append_string(&message, CORE_STRING_STATIC(
-            " != nil` proves it, with no assignment to it in between"));
-    } else {
-        core_buffer_append_string(&message, CORE_STRING_STATIC(
-            "this option may be nil here; store it in a variable and test "
-            "the variable against nil before using its value"));
-    }
-    ir_diag_message(dg, d, core_buffer_string(&message));
-    core_buffer_release(&message);
+    core_text_args_t shown = CORE_TEXT_ARGS(CORE_TEXT_STRING(name));
+    bool copy = global_read || (name.data && key->kind == ROOT_REFERENCE);
+    ir_text_t message = global_read ? IR_TEXT_GLOBAL_MAY_BE_NIL
+        : copy ? IR_TEXT_REFERENCE_MAY_BE_NIL
+        : name.data ? IR_TEXT_NAMED_MAY_BE_NIL : IR_TEXT_OPTION_MAY_BE_NIL;
+    ir_text_t help = copy ? IR_TEXT_COPY_INTO_LOCAL
+        : name.data ? IR_TEXT_TEST_BEFORE_USE : IR_TEXT_STORE_AND_TEST;
+    ir_diag_message(dg, d, (ir_message_t){message, shown});
+    if (p->killer && name.data)
+        ir_diag_secondary(d, dg, p->killer->span,
+                          (ir_message_t){IR_TEXT_ASSIGNED_AFTER_TEST, shown});
+    ir_diag_help(d, dg, (ir_message_t){help, shown});
     core_free(name.data);
 }
 
@@ -499,6 +557,7 @@ static void check_func(ir_func_t *f, ir_diags_t *d)
             }
             option_key_t key = key_of(ir_operand_value(&in->operands[0]));
 
+            p.killer = nullptr;
             if (!controlled_proof(&p, in, &key)) {
                 report(d, &p, in, &key);
             }

@@ -1,0 +1,8 @@
+tests/diagnostics/tu/folded_bitwise.n:2:5: error N00B-T0500: `3 | 4` is `u8`, which does not convert to `i32`
+tests/diagnostics/tu/folded_bitwise.n:6:18: error N00B-T0500: `mask` is `u8`, which does not convert to `i32`
+tests/diagnostics/tu/folded_bitwise.n:12:18: error N00B-T0500: `0xff & 0x0f` is `u8`, which does not convert to `i32`
+tests/diagnostics/tu/folded_bitwise.n:18:5: error N00B-N0008: `__value` is the built-in dereference member and cannot be declared
+tests/diagnostics/tu/folded_bitwise.n:21:6: error N00B-N0008: `__equl` is not a language hook, and names starting with `__` are reserved for the language
+  help: did you mean the `__equal` hook?
+tests/diagnostics/tu/folded_bitwise.n:29:5: error N00B-N0008: `__mine` is not a language hook, and names starting with `__` are reserved for the language
+  help: choose a name that does not start with `__`

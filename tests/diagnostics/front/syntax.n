@@ -1,0 +1,31 @@
+let = 5
+require 1 == 1
+enum Color {
+    Red, Green
+}
+
+func name(c: Color) -> int {
+    switch c {
+    case Color.Red:
+        return 1
+    case Color.Green:
+        return 2
+    }
+    return 0
+}
+
+require name(Color.Red) == 1
+comptime {
+    var x = 1
+} else {
+    var y = 2
+}
+let x =
+require 1 == 1
+func f(a int) -> int {
+    return a
+}
+require f(1) == 1
+let a = )
+let b = ]
+require 1 == 1

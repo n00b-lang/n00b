@@ -1,0 +1,5 @@
+import first
+import second
+let p: first.Pair = first.pair()
+let own: int = "importer error"
+require first.a() + p.left == second.b()

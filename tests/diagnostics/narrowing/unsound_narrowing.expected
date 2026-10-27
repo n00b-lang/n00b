@@ -1,0 +1,12 @@
+tests/diagnostics/narrowing/unsound_narrowing.n:19:12: error N00B-S0009: `copy.value` may be nil here
+  tests/diagnostics/narrowing/unsound_narrowing.n:18:5: note: `copy.value` is assigned here, after the test
+  help: use its value only where a test such as `copy.value != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/unsound_narrowing.n:26:16: error N00B-S0009: `copy.value` may be nil here
+  tests/diagnostics/narrowing/unsound_narrowing.n:25:23: note: `copy.value` is assigned here, after the test
+  help: use its value only where a test such as `copy.value != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/unsound_narrowing.n:33:16: error N00B-S0009: this option may be nil here
+  help: store it in a variable and test the variable against nil before using its value
+tests/diagnostics/narrowing/unsound_narrowing.n:42:12: error N00B-S0009: `entry.value` may be nil here
+  help: use its value only where a test such as `entry.value != nil` proves it, with no assignment to it in between
+tests/diagnostics/narrowing/unsound_narrowing.n:49:18: error N00B-S0009: `entry.value` may be nil here
+  help: use its value only where a test such as `entry.value != nil` proves it, with no assignment to it in between

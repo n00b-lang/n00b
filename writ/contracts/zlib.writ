@@ -7,6 +7,9 @@ when platform in [aarch64-linux-gnu] {
 when platform in [x86_64-linux-gnu] {
     use "zlib/x86_64-linux-gnu.writ"
 }
+when platform in [x86_64-w64-windows-gnu] {
+    use "zlib/x86_64-w64-windows-gnu.writ"
+}
 
 refine alloc_func {
     -> own ?void

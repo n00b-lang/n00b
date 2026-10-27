@@ -30,6 +30,9 @@ n00bb_abi_image_key_for_target(const core_target_desc_t *target,
     if (target->object_format == CORE_TARGET_OBJECT_ELF
         && target->call_abi == CORE_TARGET_CALL_SYSV_AMD64)
         id = N00BB_ABI_TARGET_X86_64_LINUX;
+    else if (target->object_format == CORE_TARGET_OBJECT_ELF
+             && target->call_abi == CORE_TARGET_CALL_AAPCS64)
+        id = N00BB_ABI_TARGET_ARM64_LINUX;
     else if (target->object_format == CORE_TARGET_OBJECT_MACH_O
              && target->call_abi == CORE_TARGET_CALL_DARWIN_AARCH64)
         id = N00BB_ABI_TARGET_ARM64_MACOS;
@@ -53,7 +56,8 @@ valid_key(const n00bb_abi_image_key_t *key)
     return key
         && (key->target_id == N00BB_ABI_TARGET_X86_64_LINUX
             || key->target_id == N00BB_ABI_TARGET_ARM64_MACOS
-            || key->target_id == N00BB_ABI_TARGET_X86_64_WINDOWS)
+            || key->target_id == N00BB_ABI_TARGET_X86_64_WINDOWS
+            || key->target_id == N00BB_ABI_TARGET_ARM64_LINUX)
         && key->abi_profile_id == N00BB_ABI_PROFILE_ID
         && !key->feature_bits
         && !(key->cpu_profile & ~N00BB_ABI_CPU_NATIVE_ATOMIC128)

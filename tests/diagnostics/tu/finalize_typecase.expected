@@ -1,0 +1,4 @@
+tests/diagnostics/tu/finalize_typecase.n:5:17: error N00B-T0552: the receiver of `__finalize` must be a `Ref` to the value being finalized, not `Sample`
+  help: write `func __finalize(consume self: Ref[T])`
+tests/diagnostics/tu/finalize_typecase.n:8:10: error N00B-T0563: `typecase` needs a variable or parameter to narrow, but its subject is `f()`
+  help: store the value in a variable first, then `typecase` on the variable

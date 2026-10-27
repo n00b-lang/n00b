@@ -1,11 +1,5 @@
 #include "logic/clpfd_label.h"
 
-// ---------------------------------------------------------------------------
-// MRV variable selection
-// ---------------------------------------------------------------------------
-
-// Returns the ID of the unground variable with the smallest domain,
-// or -1 if all variables are ground.
 static core_csp_var_id_t
 select_mrv(core_csp_store_t *s)
 {
@@ -31,10 +25,6 @@ select_mrv(core_csp_store_t *s)
 
     return best;
 }
-
-// ---------------------------------------------------------------------------
-// Recursive labeling (find-first)
-// ---------------------------------------------------------------------------
 
 typedef struct {
     core_csp_store_t *store;
@@ -64,12 +54,9 @@ label_recursive(core_csp_store_t *s)
     core_csp_var_id_t var = select_mrv(s);
 
     if (var < 0) {
-        // All variables are ground — solution found.
         return true;
     }
 
-    // Snapshot the domain values before trying assignments.
-    // We need a copy because push/pop will modify the domain.
     core_csp_domain_result_t dr = core_csp_var_domain(s, var);
     core_csp_domain_t snapshot =
         core_csp_dom_clone(core_result_get_ok(dr));
@@ -79,19 +66,11 @@ label_recursive(core_csp_store_t *s)
     return branch.found;
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 bool
 core_csp_label(core_csp_store_t *s)
 {
     return label_recursive(s);
 }
-
-// ---------------------------------------------------------------------------
-// Enumerate-all labeling
-// ---------------------------------------------------------------------------
 
 typedef struct {
     core_csp_solution_cb cb;
@@ -130,7 +109,6 @@ label_all_recursive(core_csp_store_t *s, label_all_state_t *state)
     core_csp_var_id_t var = select_mrv(s);
 
     if (var < 0) {
-        // All variables ground — report solution.
         state->count++;
         if (state->cb && !state->cb(s, state->ctx)) {
             state->stopped = true;

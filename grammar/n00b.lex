@@ -49,5 +49,11 @@
 @lex-layout(indent("INDENT", "DEDENT"), newline("NEWLINE", "each"),
 	    tabs("reject"), mixed_indent("reject"), brackets("()[]"),
 	    bracket_newlines("keep"), dedent_newline("emit"))
-@lex-fallback("reject")
+@lex-fallback("reject", recover)
 @lex-bidi("reject")
+@lex-recover("STRING_LIT", as("STRING_LIT"), sync('"', "\n"), consume)
+@lex-recover("CHAR_LIT", as("CHAR_LIT"), sync("'", "\n"), consume)
+@lex-recover("INT_LIT", as("INT_LIT"))
+@lex-recover("FLOAT_LIT", as("FLOAT_LIT"))
+@lex-recover("HEX_LIT", as("HEX_LIT"))
+@lex-recover("IDENTIFIER", as("IDENTIFIER"))

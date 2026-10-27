@@ -1,4 +1,4 @@
-alias litmod shown = stamp
+alias litmod only = stamp
 
 quotes litmod stamp(text: string) -> int fail: string {
     return 1

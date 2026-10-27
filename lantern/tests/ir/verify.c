@@ -80,7 +80,7 @@ static bool told(ir_diags_t *d, core_string_t text)
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         const ir_diag_t *dg = ir_diags_at(d, i);
 
-        if (contains(dg->primary.label, text) || contains(dg->message, text)) {
+        if (contains(ir_diag_item(d, dg)->label, text) || contains(ir_diag_item(d, dg)->message, text)) {
             return true;
         }
     }
@@ -98,12 +98,8 @@ static bool every_diag_is_placed_and_named(ir_diags_t *d)
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         const ir_diag_t *dg = ir_diags_at(d, i);
 
-        if (dg->severity == IR_SEV_NOTE || dg->severity == IR_SEV_HELP) {
-            continue;
-        }
-
-        if (!ir_span_known(dg->primary.span) || !dg->primary.label.data
-            || !dg->message.data) {
+        if (!ir_span_known(dg->span) || !ir_diag_item(d, dg)->label.data
+            || !ir_diag_item(d, dg)->message.data) {
             return false;
         }
     }
@@ -526,9 +522,9 @@ static void test_parsed_rules_the_builder_prevents(void)
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
         const ir_diag_t *dg = ir_diags_at(d, i);
 
-        if (!ir_span_known(dg->primary.span) || !dg->primary.label.data) {
+        if (!ir_span_known(dg->span) || !ir_diag_item(d, dg)->label.data) {
             core_string_t code    = ir_diag_code(dg->code);
-            core_string_t message = dg->message.data ? dg->message
+            core_string_t message = ir_diag_item(d, dg)->message.data ? ir_diag_item(d, dg)->message
                                                      : S("(no message)");
 
             printf("FAIL  unplaced or unnamed: %.*s / %.*s\n",
@@ -1034,7 +1030,7 @@ static void test_spanless_diagnostic_is_a_bug(void)
     ir_func_t   *f   = nullptr;
     ir_module_t *m   = built(ctx, &f);
 
-    ir_diag_begin(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, (core_string_t){});
+    ir_diag_begin(d, IR_DIAG_INTERNAL, IR_SPAN_UNKNOWN, IR_NO_LABEL);
     ir_verify(m, d);
 
     for (uint32_t i = 0; i < ir_diags_count(d); i++) {
@@ -2049,9 +2045,9 @@ static bool has_multiple_initialization_diagnostic(ir_diags_t *diagnostics)
 {
     for (uint32_t i = 0; i < ir_diags_count(diagnostics); i++) {
         const ir_diag_t *diagnostic = ir_diags_at(diagnostics, i);
-        if (diagnostic->code == IR_DIAG_VERIFY_PHASE
-            && contains(diagnostic->message,
-                        S("initializes it more than once"))) return true;
+        if (diagnostic->code == IR_DIAG_IMMUTABLE_REINITIALIZED
+            && contains(ir_diag_item(diagnostics, diagnostic)->message,
+                        S("can assign it a second time"))) return true;
     }
     return false;
 }
@@ -2433,9 +2429,10 @@ static void test_local_phase_writes(void)
         for (uint32_t i = 0; i < ir_diags_count(diags); i++) {
             const ir_diag_t *diagnostic = ir_diags_at(diags, i);
             produced[diagnostic->code] = true;
-            duplicate_diagnostic |= diagnostic->code == IR_DIAG_VERIFY_PHASE
-                && contains(diagnostic->message,
-                            S("initializes it more than once"));
+            duplicate_diagnostic |=
+                diagnostic->code == IR_DIAG_IMMUTABLE_REINITIALIZED
+                && contains(ir_diag_item(diags, diagnostic)->message,
+                            S("can assign it a second time"));
         }
         check("typed IR rejects multiple immutable initialization sites on one path",
               !(held & IR_PROP_TYPED) && duplicate_diagnostic);

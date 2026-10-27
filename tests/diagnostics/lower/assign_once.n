@@ -1,0 +1,15 @@
+func f() -> int {
+    let a = 1
+    a = 2
+    return a
+}
+require f() == 2
+func f_1(c: bool) -> int {
+    let a: int
+    if c {
+        a = 1
+    }
+    a = 2
+    return a
+}
+require f_1(true) == 2

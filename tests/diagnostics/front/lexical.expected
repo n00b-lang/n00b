@@ -1,0 +1,10 @@
+tests/diagnostics/front/lexical.n:2:22: error N00B-L0011: invisible bidirectional control character U+202E is not allowed in source text
+  note: it can make code display differently from how it compiles
+  help: inside a string literal, write it as `\u202E`
+tests/diagnostics/front/lexical.n:5:9: error N00B-L0010: a character literal must hold exactly one character
+  help: use double quotes for a string
+tests/diagnostics/front/lexical.n:6:11: error N00B-L0003: invalid escape `\q` in string
+  help: write a backslash as `\\`; see `n00b explain N00B-L0003` for the valid escapes
+tests/diagnostics/front/lexical.n:7:9: error N00B-L0004: malformed number `12abc`
+tests/diagnostics/front/lexical.n:9:1: error N00B-L0007: this line indents with a tab
+  help: indent with spaces only

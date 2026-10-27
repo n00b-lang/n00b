@@ -42,6 +42,8 @@ host_triple(void)
     return S("arm64-macos");
 #elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
     return S("x86_64-windows");
+#elif defined(__linux__) && defined(__aarch64__)
+    return S("arm64-linux");
 #else
     return S("x86_64-linux");
 #endif
@@ -324,7 +326,8 @@ check_remapped_rows(const n00bb_abi_selected_objects_t *selected,
             const n00bb_abi_directory_entry_t *entry = &view->directory[table];
             if (entry->kind == N00B_ABI_TABLE_U32_STREAM
                 || entry->kind == N00B_ABI_TABLE_U64_STREAM
-                || entry->kind == N00B_ABI_TABLE_BYTE_STREAM) continue;
+                || entry->kind == N00B_ABI_TABLE_BYTE_STREAM
+                || entry->kind == N00B_ABI_TABLE_SUMMARY_STREAM) continue;
             void *row = malloc(entry->record_bytes);
             assert(row);
             for (uint32_t local = 0; local < entry->record_count; local++) {

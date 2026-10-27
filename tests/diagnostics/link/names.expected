@@ -1,0 +1,7 @@
+tests/diagnostics/link/names.n:5:6: error N00B-N0017: function `f` is defined more than once
+  tests/diagnostics/link/names.n:1:6: note: `f` is first defined here
+  help: remove one definition, rename it, or give it different parameter types
+tests/diagnostics/link/names.n:12:12: error N00B-N0001: cannot find `countr` in this scope
+  help: did you mean `counter`?
+tests/diagnostics/link/names.n:19:9: error N00B-N0001: cannot find `ad` in this scope
+  help: did you mean `add`?

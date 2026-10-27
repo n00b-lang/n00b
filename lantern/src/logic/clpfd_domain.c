@@ -3,10 +3,6 @@
 
 #include <string.h>
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 static int
 cmp_i64(const void *a, const void *b)
 {
@@ -33,10 +29,6 @@ clz64(uint64_t x)
 {
     return __builtin_clzll(x);
 }
-
-// ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
 
 core_csp_domain_t
 core_csp_dom_range(int64_t lo, int64_t hi)
@@ -66,12 +58,10 @@ core_csp_dom_from_values(const int64_t *vals, int32_t count)
         return core_variant_empty(core_csp_domain_t);
     }
 
-    // Copy and sort.
     int64_t *sorted = core_alloc_array(int64_t, count);
     memcpy(sorted, vals, count * sizeof(int64_t));
     qsort(sorted, count, sizeof(int64_t), cmp_i64);
 
-    // Deduplicate.
     int32_t unique = 1;
 
     for (int32_t i = 1; i < count; i++) {
@@ -82,7 +72,6 @@ core_csp_dom_from_values(const int64_t *vals, int32_t count)
 
     uint64_t span = (uint64_t)sorted[unique - 1] - (uint64_t)sorted[0];
 
-    // Check if it's a contiguous interval.
     if (span == (uint64_t)(unique - 1)) {
         int64_t lo = sorted[0];
         int64_t hi = sorted[unique - 1];
@@ -90,7 +79,6 @@ core_csp_dom_from_values(const int64_t *vals, int32_t count)
         return core_csp_dom_range(lo, hi);
     }
 
-    // Check if bitset representation works (range <= 64).
     if (span < 64) {
         core_csp_dom_bitset_t bs = {
             .base = sorted[0],
@@ -106,7 +94,6 @@ core_csp_dom_from_values(const int64_t *vals, int32_t count)
         return core_csp_domain_set(core_csp_domain_t, core_csp_dom_bitset_t, bs);
     }
 
-    // Sparse.
     return core_csp_domain_set(core_csp_domain_t,
                             core_csp_dom_sparse_t,
                             ((core_csp_dom_sparse_t){
@@ -157,10 +144,6 @@ core_csp_dom_free(core_csp_domain_t *d)
     *d = core_variant_empty(core_csp_domain_t);
 }
 
-// ---------------------------------------------------------------------------
-// Queries
-// ---------------------------------------------------------------------------
-
 int64_t
 core_csp_dom_min(const core_csp_domain_t *d)
 {
@@ -175,7 +158,7 @@ core_csp_dom_min(const core_csp_domain_t *d)
         core_csp_dom_sparse_t sp = core_csp_domain_get(*d, core_csp_dom_sparse_t);
         return sp.count > 0 ? sp.values[0] : 0;
     }
-    default: // empty
+    default:
         return 0;
     }
 }
@@ -194,7 +177,7 @@ core_csp_dom_max(const core_csp_domain_t *d)
         core_csp_dom_sparse_t sp = core_csp_domain_get(*d, core_csp_dom_sparse_t);
         return sp.count > 0 ? sp.values[sp.count - 1] : 0;
     }
-    default: // empty
+    default:
         return 0;
     }
 }
@@ -214,7 +197,7 @@ core_csp_dom_size(const core_csp_domain_t *d)
         return popcount64(core_csp_domain_get(*d, core_csp_dom_bitset_t).bits);
     case core_csp_domain_tag(core_csp_dom_sparse_t):
         return core_csp_domain_get(*d, core_csp_dom_sparse_t).count;
-    default: // empty
+    default:
         return 0;
     }
 }
@@ -289,7 +272,7 @@ core_csp_dom_contains(const core_csp_domain_t *d, int64_t val)
 
         return false;
     }
-    default: // empty
+    default:
         return false;
     }
 }
@@ -330,10 +313,6 @@ core_csp_dom_visit(const core_csp_domain_t *d,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Interval -> bitset/sparse promotion
-// ---------------------------------------------------------------------------
-
 static core_csp_domain_t
 interval_to_bitset(int64_t lo, int64_t hi)
 {
@@ -366,10 +345,6 @@ interval_to_sparse(int64_t lo, int64_t hi)
     return core_csp_domain_set(core_csp_domain_t, core_csp_dom_sparse_t, sp);
 }
 
-// ---------------------------------------------------------------------------
-// Narrowing
-// ---------------------------------------------------------------------------
-
 bool
 core_csp_dom_intersect(core_csp_domain_t *d, const core_csp_domain_t *other)
 {
@@ -383,7 +358,6 @@ core_csp_dom_intersect(core_csp_domain_t *d, const core_csp_domain_t *other)
         return true;
     }
 
-    // Interval ∩ Interval
     if (core_csp_domain_is_type(*d, core_csp_dom_interval_t)
         && core_csp_domain_is_type(*other, core_csp_dom_interval_t)) {
         core_csp_dom_interval_t di = core_csp_domain_get(*d,
@@ -409,7 +383,6 @@ core_csp_dom_intersect(core_csp_domain_t *d, const core_csp_domain_t *other)
         return changed;
     }
 
-    // Bitset ∩ Bitset (possibly different bases)
     if (core_csp_domain_is_type(*d, core_csp_dom_bitset_t)
         && core_csp_domain_is_type(*other, core_csp_dom_bitset_t)) {
         core_csp_dom_bitset_t db = core_csp_domain_get(*d, core_csp_dom_bitset_t);
@@ -451,8 +424,6 @@ core_csp_dom_intersect(core_csp_domain_t *d, const core_csp_domain_t *other)
         return changed;
     }
 
-    // General case: build result via membership test.
-    // Collect values from d that are also in other using a dynamic buffer.
     int64_t *tmp       = nullptr;
     int32_t  tmp_count = 0;
     int32_t  tmp_cap   = 0;
@@ -572,7 +543,6 @@ core_csp_dom_remove_value(core_csp_domain_t *d, int64_t val)
             return true;
         }
 
-        // Hole in the middle — promote to bitset or sparse.
         int64_t range = iv.hi - iv.lo + 1;
 
         if (range <= 64) {
@@ -585,7 +555,6 @@ core_csp_dom_remove_value(core_csp_domain_t *d, int64_t val)
         }
 
         *d = interval_to_sparse(iv.lo, iv.hi);
-        // Fall through to sparse removal.
     }
         [[fallthrough]];
     case core_csp_domain_tag(core_csp_dom_sparse_t): {
@@ -639,7 +608,7 @@ core_csp_dom_remove_value(core_csp_domain_t *d, int64_t val)
 
         return true;
     }
-    default: // empty
+    default:
         return false;
     }
 }

@@ -28,7 +28,7 @@ typedef struct {
     core_string_t value;
     core_string_t token;
     core_string_t type;
-    core_string_t diagnostic;
+    scan_problem_t problem;
     size_t        diagnostic_start;
     size_t        diagnostic_end;
 } scan_lex_literal_result_t;
@@ -125,8 +125,6 @@ typedef struct {
 typedef struct {
     core_string_t prefix;
     core_string_t tok;
-    /* Adjacent preceding token names that receive the sigil as a modifier.
-     * Otherwise the lexer emits tok. The array ends with an empty string. */
     const core_string_t *attach_after;
     bool         digits_only;
     bool         before_string;
@@ -350,6 +348,7 @@ typedef struct {
     core_string_t tok_ident_upper;
     scan_lex_identifier_profile_t identifier_profile;
     scan_lex_fallback_t fallback;
+    bool fallback_recovers;
     scan_lex_bidi_policy_t bidi;
     scan_lex_whitespace_t whitespace;
 } scan_lex_spec_t;

@@ -6,11 +6,11 @@
 #include <fcntl.h>
 #include <stdalign.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "lib/alloc.h"
+#include "lib/os.h"
 
 #define CORE_PERSIST_ARENA_MAGIC UINT64_C(0x4c414e544152454e)
 #define CORE_PERSIST_ARENA_VERSION 1
@@ -163,9 +163,8 @@ bool core_persist_arena_create(core_string_t path, size_t capacity,
     return fail(error, CORE_PERSIST_ARENA_IO_ERROR);
   }
 
-  void *mapping = mmap(nullptr, mapping_size, PROT_READ | PROT_WRITE,
-                       MAP_SHARED, fd, 0);
-  if (mapping == MAP_FAILED) {
+  void *mapping = core_os_map(fd, mapping_size, true, false, nullptr);
+  if (!mapping) {
     close(fd);
     unlink(cpath);
     core_free(cpath);
@@ -196,8 +195,8 @@ bool core_persist_arena_create(core_string_t path, size_t capacity,
 static bool read_header(int fd, core_persist_arena_header_t *header) {
   size_t done = 0;
   while (done < sizeof(*header)) {
-    ssize_t count = pread(fd, (char *)header + done, sizeof(*header) - done,
-                          (off_t)done);
+    long long count = core_os_read_at(fd, (char *)header + done,
+                                      sizeof(*header) - done, done);
     if (count <= 0)
       return false;
     done += (size_t)count;
@@ -250,17 +249,15 @@ static bool open_arena(core_string_t path, uint64_t abi_tag, bool writable,
     return fail(error, CORE_PERSIST_ARENA_BAD_FORMAT);
   }
 
-  int protection = PROT_READ | (writable ? PROT_WRITE : 0);
   void *requested = relocated ? nullptr : (void *)(uintptr_t)header.mapping_base;
-  int flags = relocated ? MAP_PRIVATE : MAP_SHARED;
-  void *mapping = mmap(requested, (size_t)header.mapping_size, protection,
-                       flags, fd, 0);
-  if (mapping == MAP_FAILED) {
+  void *mapping = core_os_map(fd, (size_t)header.mapping_size, writable,
+                              relocated, requested);
+  if (!mapping) {
     close(fd);
     return fail(error, CORE_PERSIST_ARENA_ADDRESS_UNAVAILABLE);
   }
   if (!relocated && mapping != requested) {
-    munmap(mapping, (size_t)header.mapping_size);
+    core_os_unmap(mapping, (size_t)header.mapping_size);
     close(fd);
     return fail(error, CORE_PERSIST_ARENA_ADDRESS_UNAVAILABLE);
   }
@@ -445,8 +442,7 @@ bool core_persist_arena_sync(core_persist_arena_t *arena,
     set_error(error, CORE_PERSIST_ARENA_OK);
     return true;
   }
-  if (msync(arena->mapping, arena->mapping_size, MS_SYNC) != 0 ||
-      fsync(arena->fd) != 0)
+  if (!core_os_sync(arena->mapping, arena->mapping_size, arena->fd))
     return fail(error, CORE_PERSIST_ARENA_IO_ERROR);
   set_error(error, CORE_PERSIST_ARENA_OK);
   return true;
@@ -458,12 +454,11 @@ bool core_persist_arena_close(core_persist_arena_t *arena,
     return fail(error, CORE_PERSIST_ARENA_INVALID_ARGUMENT);
   bool ok = true;
   if (arena->writable && !arena->private_mapping &&
-      (msync(arena->mapping, arena->mapping_size, MS_SYNC) != 0 ||
-       fsync(arena->fd) != 0)) {
+      !core_os_sync(arena->mapping, arena->mapping_size, arena->fd)) {
     set_error(error, CORE_PERSIST_ARENA_IO_ERROR);
     ok = false;
   }
-  if (munmap(arena->mapping, arena->mapping_size) != 0) {
+  if (!core_os_unmap(arena->mapping, arena->mapping_size)) {
     set_error(error, CORE_PERSIST_ARENA_IO_ERROR);
     ok = false;
   }

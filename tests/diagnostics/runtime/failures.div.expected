@@ -1,0 +1,5 @@
+panic: division of 1 by zero
+  --> tests/diagnostics/runtime/failures.n:48:12
+backtrace:
+  at div (tests/diagnostics/runtime/failures.n:48:12)
+  at run (tests/diagnostics/runtime/failures.n:115:17)

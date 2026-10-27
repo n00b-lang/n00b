@@ -9,6 +9,19 @@
 
 #include "harness.h"
 #include "lib/persist_arena.h"
+#include "lib/os.h"
+#include "lib/buffer.h"
+
+static int temp_file(const char *prefix, core_string_t *path) {
+  core_string_t root = core_os_temp_root();
+  core_buffer_t stem = {0};
+  core_buffer_append_string(&stem, root);
+  core_buffer_printf(&stem, "/%s", prefix);
+  int fd = core_os_make_unique_file(core_buffer_string(&stem), path);
+  core_buffer_release(&stem);
+  core_free(root.data);
+  return fd;
+}
 
 typedef struct persist_node {
   char *name;
@@ -17,9 +30,9 @@ typedef struct persist_node {
 } persist_node_t;
 
 static void test_native_abi_tag(void) {
-  char path[] = "/tmp/lantern-persist-abi-XXXXXX";
-  core_string_t target = core_string_borrow(path, sizeof path - 1);
-  int placeholder = mkstemp(path);
+  core_string_t target = {0};
+  int placeholder = temp_file("lantern-persist-abi-", &target);
+  char *path = core_string_to_cstr(target);
   check("temporary ABI-tag path is available", placeholder >= 0);
   if (placeholder < 0) return;
   close(placeholder);
@@ -49,9 +62,9 @@ static void test_native_abi_tag(void) {
 }
 
 static void test_round_trip_and_address_collision(void) {
-  char path[] = "/tmp/lantern-persist-arena-XXXXXX";
-  core_string_t target = core_string_borrow(path, sizeof path - 1);
-  int placeholder = mkstemp(path);
+  core_string_t target = {0};
+  int placeholder = temp_file("lantern-persist-arena-", &target);
+  char *path = core_string_to_cstr(target);
   check("temporary snapshot path is available", placeholder >= 0);
   if (placeholder < 0)
     return;
@@ -168,9 +181,9 @@ static void test_round_trip_and_address_collision(void) {
 }
 
 static void test_malformed_file(void) {
-  char path[] = "/tmp/lantern-persist-bad-XXXXXX";
-  core_string_t target = core_string_borrow(path, sizeof path - 1);
-  int fd = mkstemp(path);
+  core_string_t target = {0};
+  int fd = temp_file("lantern-persist-bad-", &target);
+  char *path = core_string_to_cstr(target);
   check("temporary malformed-file path is available", fd >= 0);
   if (fd < 0)
     return;

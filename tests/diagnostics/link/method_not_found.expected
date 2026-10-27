@@ -1,0 +1,2 @@
+tests/diagnostics/link/method_not_found.n:6:9: error N00B-T0017: `Point` has no method `length`
+  note: methods come from traits that `Point` implements, and none of them declares `length`

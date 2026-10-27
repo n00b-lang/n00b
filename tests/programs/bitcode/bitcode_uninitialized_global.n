@@ -1,4 +1,0 @@
-var pointer_state: Atomic[Ref[byte]?]
-
-let observed: Ref[byte]? = __atomic_load(ref pointer_state)
-require observed == nil

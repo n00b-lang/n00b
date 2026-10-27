@@ -1,0 +1,5 @@
+tests/diagnostics/front/unclosed_block.n:4:1: error N00B-P0001: expected `}`, the end of the statement, a statement, `->` or the end of the indented block, found `func` in function `f`
+  tests/diagnostics/front/unclosed_block.n:1:17: note: this `{` is never closed
+  help: add the missing `}` before this line
+tests/diagnostics/front/unclosed_block.n:5:15: error N00B-P0001: expected an expression, found end of line in a `return` statement
+tests/diagnostics/front/unclosed_block.n:9:13: error N00B-P0004: unexpected `)` with no matching `(`

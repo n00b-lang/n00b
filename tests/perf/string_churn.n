@@ -1,0 +1,15 @@
+func run(rounds: int, tail: string) -> uint {
+    var junk: string = ""
+    var total: uint = 0
+    var round = 0
+    while round < rounds {
+        junk = "x" + tail
+        total += byte_len(junk)
+        round += 1
+    }
+    return total
+}
+
+let scale = cast[int](__os_arg_count())
+let tail: string = "a piece of text long enough to need the heap"
+require run(10000000 * scale, tail) == cast[uint](10000000 * scale) * (byte_len(tail) + 1)

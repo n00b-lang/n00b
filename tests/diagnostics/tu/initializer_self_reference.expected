@@ -1,0 +1,1 @@
+tests/diagnostics/tu/initializer_self_reference.n:2:18: error N00B-N0001: cannot find `y` in this scope

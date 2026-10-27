@@ -6,15 +6,12 @@ program=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-"$compiler" build --output "$tmp/program" "$program" >"$tmp/build" 2>&1 || {
+"$compiler" build --dump-ir --output "$tmp/program" "$program" \
+    >"$tmp/ir" 2>"$tmp/build" || {
     cat "$tmp/build" >&2
     exit 1
 }
 "$tmp/program"
-"$compiler" lower --dump-ir "$program" >"$tmp/ir" 2>"$tmp/lower" || {
-    cat "$tmp/lower" >&2
-    exit 1
-}
 
 body() {
     awk -v name="$1" '

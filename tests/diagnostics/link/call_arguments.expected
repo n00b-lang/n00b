@@ -1,0 +1,19 @@
+tests/diagnostics/link/call_arguments.n:5:15: error N00B-T0005: parameter 1 (`n`) of `twice` is `int`, but this argument is `string`
+  tests/diagnostics/link/call_arguments.n:1:6: note: `twice` is declared here
+tests/diagnostics/link/call_arguments.n:18:17: error N00B-T0001: `Label` takes 1 argument, but this call passes 2
+  tests/diagnostics/link/call_arguments.n:6:9: note: `Label` is declared here
+  help: remove the extra argument
+tests/diagnostics/link/call_arguments.n:20:6: error N00B-T0002: `Label` takes 1 argument, but this call passes 0
+  tests/diagnostics/link/call_arguments.n:6:9: note: `Label` is declared here
+tests/diagnostics/link/call_arguments.n:22:16: error N00B-T0005: parameter 1 (`s`) of `Label` is `string`, but this argument is `Buffer`
+  tests/diagnostics/link/call_arguments.n:6:9: note: `Label` is declared here
+tests/diagnostics/link/call_arguments.n:25:16: error N00B-T0005: parameter 1 (`s`) of `Label` is `string`, but this argument is `{integer}`
+  tests/diagnostics/link/call_arguments.n:6:9: note: `Label` is declared here
+tests/diagnostics/link/call_arguments.n:27:12: error N00B-T0005: parameter 1 (`s`) of `Label` is `string`, but this argument is `Buffer`
+  tests/diagnostics/link/call_arguments.n:6:9: note: `Label` is declared here
+tests/diagnostics/link/call_arguments.n:30:15: error N00B-T0005: parameter 1 (`x`) of `f` is `int`, but this argument is `string`
+  tests/diagnostics/link/call_arguments.n:13:6: note: `f` is declared here
+tests/diagnostics/link/call_arguments.n:35:9: error N00B-T0002: `add` takes 2 arguments, but this call passes 1
+  tests/diagnostics/link/call_arguments.n:31:6: note: `add` is declared here
+tests/diagnostics/link/call_arguments.n:40:17: error N00B-T0004: parameter `width` is given an argument twice
+  tests/diagnostics/link/call_arguments.n:40:14: note: `width` is first given here

@@ -1,0 +1,2 @@
+tests/diagnostics/tu/const_range_untyped.n:4:21: error N00B-T0524: integer value 300 does not fit in `u8`
+  help: use a wider integer type, or a value inside the range of `u8`

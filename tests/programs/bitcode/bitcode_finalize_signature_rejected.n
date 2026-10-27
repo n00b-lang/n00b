@@ -1,3 +1,0 @@
-func __finalize(self: int) -> int fail: string {
-    return 1
-}

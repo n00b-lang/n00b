@@ -1,0 +1,57 @@
+record Entry {
+    value: int?
+}
+
+func clear(modify entry: Entry) {
+    entry.value = nil
+}
+
+func twice(value: int) -> int {
+    return value * 2
+}
+
+func modified(entry: Entry) -> int {
+    var copy: Entry = entry
+    if copy.value == nil {
+        return 0
+    }
+    clear(copy)
+    return copy.value.get()
+}
+
+func referenced(entry: Entry) -> int {
+    var copy: Entry = entry
+    if copy.value != nil {
+        let pointer = ref copy
+        return copy.value.get()
+    }
+    return 1
+}
+
+func through_ref(other: Ref[Entry]) -> int {
+    if other.value != nil {
+        return other.value.get()
+    }
+    return 1
+}
+
+func wrong_branch(entry: Entry) -> int {
+    if entry.value != nil {
+        return 0
+    }
+    return entry.value.get()
+}
+
+func promoted_wrong_branch(entry: Entry) -> int {
+    if entry.value != nil {
+        return 0
+    }
+    return twice(entry.value)
+}
+
+var entry: Entry = (value = 4)
+require modified(entry) > 0
+require referenced(entry) > 0
+require through_ref(ref entry) > 0
+require wrong_branch(entry) > 0
+require promoted_wrong_branch(entry) == 0

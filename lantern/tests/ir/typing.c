@@ -3359,13 +3359,13 @@ static void test_diagnostics_point_at_operands(void)
                         : nullptr;
 
     check("the diagnostic is at the instruction",
-          dg && dg->primary.span.start_line == 5);
+          dg && dg->span.start_line == 5);
     check("and names both types",
-          dg && core_string_find(dg->message, S("i32")) >= 0
-              && core_string_find(dg->message, S("u64")) >= 0);
+          dg && core_string_find(ir_diag_item(e->d, dg)->message, S("i32")) >= 0
+              && core_string_find(ir_diag_item(e->d, dg)->message, S("u64")) >= 0);
     check("and points at where the operand was defined",
-          dg && dg->n_secondary == 1
-              && dg->secondary[0].span.start_line == 2);
+          dg && ir_diag_item(e->d, dg)->parts.len == 1
+              && ir_diag_item(e->d, dg)->parts.data[0].location.line == 2);
 
     close_env(e);
 }
@@ -3400,7 +3400,7 @@ static void test_a_rule_will_not_overwrite_an_authored_annotation(void)
     check("and the rule said so rather than overwriting in silence",
           said && said->code == IR_DIAG_AUTHORED_ANNOT);
     check("which is a warning, because the output is still valid",
-          said && said->severity == IR_SEV_WARNING);
+          said && ir_diag_item(e->d, said)->severity == CORE_DIAG_WARNING);
 
     ir_instr_t *clean = op(e, IR_OP_ADD);
 

@@ -179,7 +179,6 @@ struct parse_sym_entry_t {
 struct parse_scope_t {
     parse_scope_t      *parent;
     core_translation_unit_t *owner_unit;
-    /* The matching scope in the default namespace. */
     parse_scope_t      *lexical_scope;
     parse_namespace_t  *ns;
     core_string_t      name;
@@ -213,11 +212,8 @@ struct parse_symtab_t {
     core_dict_t       *nominal_types;
 };
 
-/* Returning false stops the visit; otherwise every scope in the namespace is
- * visited. Iteration order is unspecified. */
 typedef bool (*parse_symtab_scope_visitor_fn)(parse_scope_t *scope,
                                              void *context);
-/* Returning false stops symbol visitation and makes the API return false. */
 typedef bool (*parse_symtab_symbol_visitor_fn)(parse_sym_entry_t *symbol,
                                                void *context);
 
@@ -230,8 +226,6 @@ parse_namespace_t *parse_symtab_ns(parse_symtab_t *st, core_string_t ns_name);
 bool parse_symtab_visit_namespace_scopes(
     parse_symtab_t *st, core_string_t ns_name,
     parse_symtab_scope_visitor_fn visitor, void *context);
-/* Visit same-name symbols declared in the corresponding lexical scope across
- * namespaces. This does not search parent scopes or impose collision policy. */
 bool parse_symtab_visit_name_across_namespaces(
     parse_symtab_t *st, parse_scope_t *scope, core_string_t name,
     parse_symtab_symbol_visitor_fn visitor, void *context);
@@ -239,7 +233,6 @@ bool parse_symtab_visit_name_across_namespaces(
 void parse_symtab_push_scope(parse_symtab_t *st, core_string_t ns_name,
                            core_string_t scope_name);
 void parse_symtab_pop_scope(parse_symtab_t *st, core_string_t ns_name);
-/* Create/pop the same lexical scope in every namespace. */
 void parse_symtab_push_scope_all(parse_symtab_t *st,
                                  core_string_t scope_name);
 void parse_symtab_pop_scope_all(parse_symtab_t *st);
@@ -249,7 +242,6 @@ void parse_symtab_enter_scope(parse_symtab_t *st, core_string_t ns_name,
 void parse_symtab_leave_scope(parse_symtab_t *st, core_string_t ns_name);
 void parse_symtab_enter_scope_all(parse_symtab_t *st, parse_scope_t *scope);
 void parse_symtab_leave_scope_all(parse_symtab_t *st);
-/* Find the namespace-specific peer for a lexical scope. */
 parse_scope_t *parse_symtab_scope_in_namespace(parse_symtab_t *st,
                                                parse_scope_t *scope,
                                                core_string_t ns_name);
@@ -257,14 +249,9 @@ parse_scope_t *parse_symtab_scope_in_namespace(parse_symtab_t *st,
 parse_sym_entry_t *parse_symtab_add(parse_symtab_t *st, core_string_t ns_name,
                                    core_string_t name, parse_sym_kind_t kind,
                                    parse_tree_t *decl_node);
-/* Namespaced opaque semantic attachments are borrowed by the symbol table.
- * They may be populated during analysis, then read concurrently after the
- * symbol graph is finalized. */
 bool parse_sym_set_binding(parse_sym_entry_t *symbol, core_string_t key,
                            void *value);
 void *parse_sym_binding(const parse_sym_entry_t *symbol, core_string_t key);
-/* Associate a semantic shadow/view with the symbol supplying its runtime
- * storage. Ordinary lexical shadowing leaves this unset. */
 bool parse_sym_set_binding_origin(parse_sym_entry_t *symbol,
                                  parse_sym_entry_t *origin);
 parse_sym_entry_t *parse_sym_binding_origin(const parse_sym_entry_t *symbol);
@@ -286,8 +273,6 @@ bool parse_sym_can_initialize(const parse_sym_entry_t *symbol,
 void parse_sym_set_phase_values(parse_sym_entry_t *symbol,
                                 void *comptime_value,
                                 void *runtime_initializer);
-/* Use explicit presence flags when a valid phase value may have a null
- * payload; the convenience setter above treats null as absent. */
 void parse_sym_set_phase_values_with_presence(
     parse_sym_entry_t *symbol, bool has_comptime_value,
     void *comptime_value, bool has_runtime_initializer,
@@ -296,8 +281,6 @@ bool parse_sym_get_comptime_value(const parse_sym_entry_t *symbol,
                                   void **value);
 bool parse_sym_get_runtime_initializer(const parse_sym_entry_t *symbol,
                                       void **value);
-/* Bindings are borrowed phase-specific IR/source handles, not serialized
- * values. Passing null clears that phase's binding. */
 bool parse_sym_set_phase_binding(parse_sym_entry_t *symbol,
                                  parse_sym_phase_t phase, void *binding);
 void *parse_sym_phase_binding(const parse_sym_entry_t *symbol,
@@ -319,8 +302,6 @@ core_string_t parse_sym_storage_duration_name(
     parse_sym_storage_duration_t duration);
 void parse_sym_set_lifetime(parse_sym_entry_t *symbol,
                             parse_sym_lifetime_t lifetime);
-/* Start anchors are borrowed IR points, keyed by owning function and binding.
- * Multiple anchors allow mutually exclusive binding initializations. */
 bool parse_sym_set_lifetime_start(parse_sym_entry_t *symbol,
                                   parse_sym_lifetime_start_t start);
 size_t parse_sym_lifetime_start_count(const parse_sym_entry_t *symbol);
@@ -349,9 +330,6 @@ bool parse_symtab_update_alias_use(parse_sym_entry_t *alias,
                                    bool escapes);
 void parse_sym_set_alias_analysis_complete(parse_sym_entry_t *symbol,
                                            bool complete);
-/* Points use one monotonically ordered analysis timeline. This is
- * conservative: incomplete, unknown, or escaping aliases make finalization
- * unsafe. */
 bool parse_sym_can_finalize_at(const parse_sym_entry_t *symbol,
                                uint64_t point);
 size_t parse_sym_alias_count(const parse_sym_entry_t *symbol);
@@ -381,7 +359,6 @@ bool parse_symtab_bind_nominal_type(parse_symtab_t *st, th_type *type,
 parse_sym_entry_t *parse_symtab_nominal_type(parse_symtab_t *st,
                                             th_type *type);
 
-/* Resolve a single-name reference node using its cached name and scope. */
 parse_sym_entry_t *parse_symtab_resolve_node(parse_symtab_t *st,
                                              parse_tree_t *node,
                                              core_string_t ns_name);

@@ -1,0 +1,3 @@
+tests/diagnostics/tu/type_parameter_fixed.n:13:1: error N00B-T1039: type parameter `T` of `measure` is fixed to `Handle` by the function's own body
+  note: a declared type parameter must stay generic
+  help: use `Handle` instead of the type parameter, or make the body work for any type

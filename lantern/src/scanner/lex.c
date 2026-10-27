@@ -7,6 +7,7 @@
 #include "private/parse/unicode_class.h"
 #include "private/scanner/lex_program.h"
 #include "private/scanner/unicode_profile.h"
+#include "private/unicode/ucd.h"
 #include "scanner/token_stream.h"
 #include "scanner/tokenizer.h"
 #include "unicode/encoding.h"
@@ -16,7 +17,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include <utf8proc.h>
 
 static pthread_mutex_t lex_compile_lock = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local core_string_t lex_compile_error;
@@ -61,21 +61,18 @@ static void clear_region_links(parse_trivia_t *trivia) {
   trivia->regions = nullptr;
 }
 
-static bool normalize_region_name(parse_scanner_t *s, parse_trivia_t *trivia) {
-  utf8proc_uint8_t *normalized = nullptr;
-  utf8proc_ssize_t len = utf8proc_map(
-      (const utf8proc_uint8_t *)trivia->region_name.data,
-      (utf8proc_ssize_t)trivia->region_name.u8_bytes, &normalized,
-      UTF8PROC_STABLE | UTF8PROC_COMPOSE);
-  if (len < 0) {
-    scan_set_invalid(s, CORE_STRING_STATIC("invalid comment-region name"),
+static bool check_region_name(parse_scanner_t *s, parse_trivia_t *trivia) {
+  core_string_t normalized = ucd_normalize(trivia->region_name, UCD_NFC);
+  bool decoded = normalized.data != nullptr;
+  bool valid = decoded && core_string_eq(normalized, trivia->region_name);
+  core_free(normalized.data);
+  if (!valid) {
+    scan_set_invalid(s, decoded
+                            ? SCAN_PROBLEM(COMMENT_REGION_NAME_NOT_NFC)
+                            : SCAN_PROBLEM(COMMENT_REGION_NAME_INVALID),
                      trivia->start_byte - s->source_base);
-    return false;
   }
-  if (trivia->owns_region_name) core_free(trivia->region_name.data);
-  trivia->region_name = core_string_borrow((const char *)normalized, (size_t)len);
-  trivia->owns_region_name = true;
-  return true;
+  return valid;
 }
 
 static void add_region_link(parse_trivia_t *trivia, uint64_t region_id) {
@@ -219,7 +216,7 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
         || items[i]->kind == PARSE_TRIVIA_REGION_CLOSE) {
       anchor_count++;
       items[i]->anchor_order = anchor_count;
-      if (!normalize_region_name(s, items[i])) {
+      if (!check_region_name(s, items[i])) {
         core_free(items);
         return false;
       }
@@ -247,7 +244,7 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
       match--;
     }
     if (!match) {
-      scan_set_invalid(s, CORE_STRING_STATIC("unmatched comment-region close"),
+      scan_set_invalid(s, SCAN_PROBLEM(COMMENT_REGION_UNMATCHED_CLOSE),
                        anchor->start_byte - s->source_base);
       core_free(opens);
       core_free(pairs);
@@ -264,7 +261,7 @@ bool scan_lex_finalize_regions(parse_scanner_t *s) {
 
   if (open_count) {
     parse_trivia_t *open = opens[open_count - 1];
-    scan_set_invalid(s, CORE_STRING_STATIC("unclosed comment region"),
+    scan_set_invalid(s, SCAN_PROBLEM(COMMENT_REGION_UNCLOSED),
                      open->start_byte - s->source_base);
     core_free(opens);
     core_free(pairs);
@@ -762,10 +759,10 @@ struct scan_lex_session_t {
 
   size_t skip_from;
   size_t skip_to;
-  core_string_t hook_diagnostic;
+  scan_problem_t status_diagnostic;
   const lex_recovery_t *pending_recovery;
-  core_string_t pending_recovery_message;
-  core_string_t recovery_diagnostic;
+  scan_problem_t pending_recovery_message;
+  scan_problem_t recovery_diagnostic;
   parse_token_info_t *pending_recovery_token;
   size_t pending_recovery_start;
   size_t pending_recovery_end;
@@ -852,11 +849,9 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   if (!spec || !g) {
     return nullptr;
   }
-  scan_lex_issue_t *issues = nullptr;
-  size_t issue_count = 0;
+  core_list_t(scan_lex_issue_t) issues = {};
   core_string_t analysis_error = {};
-  bool analyzed = scan_lex_analyze_spec(spec, g, &analysis_error, &issues,
-                                        &issue_count);
+  bool analyzed = scan_lex_analyze_spec(spec, g, &analysis_error, &issues);
   lex_compile_error_set(analysis_error);
   if (!analyzed) {
     return nullptr;
@@ -868,7 +863,6 @@ static scan_lex_t *scan_lex_compile_base(const scan_lex_spec_t *spec,
   lex->g = g;
   lex->refs = 1;
   lex->issues = issues;
-  lex->issue_count = issue_count;
   lex->term_nodes = core_list_new(lex_term_node_t);
   lex->term_edges = core_list_new(lex_term_edge_t);
   lex->opener_nodes = core_list_new(lex_term_node_t);
@@ -1408,11 +1402,7 @@ void scan_lex_free(scan_lex_t *lex) {
 
   core_free(lex->literal_hooks);
   core_free(lex->recoveries);
-  for (size_t i = 0; i < lex->issue_count; i++) {
-    core_free(lex->issues[i].token.data);
-    core_free(lex->issues[i].origin.data);
-  }
-  core_free(lex->issues);
+  scan_lex_issues_free(&lex->issues);
   scan_unicode_profile_free(lex->identifier_profile);
 
   core_free(lex->codepoint_terminals.slots);
@@ -1499,9 +1489,9 @@ scan_lex_session_clone_frame(const scan_lex_session_t *source,
   copy->pending_fence_prefix = nullptr;
   copy->pending_embed_prefix = nullptr;
   copy->fence_probe_skip_until = nullptr;
-  copy->hook_diagnostic = (core_string_t){0};
-  copy->pending_recovery_message = (core_string_t){0};
-  copy->recovery_diagnostic = (core_string_t){0};
+  copy->status_diagnostic = (scan_problem_t){0};
+  copy->pending_recovery_message = (scan_problem_t){0};
+  copy->recovery_diagnostic = (scan_problem_t){0};
   copy->pending_recovery_token = nullptr;
 
   if (source->modes.len) {
@@ -1554,16 +1544,10 @@ scan_lex_session_clone_frame(const scan_lex_session_t *source,
            source->program->fence_count *
                sizeof(*copy->fence_probe_skip_until));
   }
-  if (source->hook_diagnostic.data) {
-    copy->hook_diagnostic = core_string_dup(source->hook_diagnostic);
-  }
-  if (source->pending_recovery_message.data) {
-    copy->pending_recovery_message =
-        core_string_dup(source->pending_recovery_message);
-  }
-  if (source->recovery_diagnostic.data) {
-    copy->recovery_diagnostic = core_string_dup(source->recovery_diagnostic);
-  }
+  copy->status_diagnostic = scan_problem_copy(source->status_diagnostic);
+  copy->pending_recovery_message =
+      scan_problem_copy(source->pending_recovery_message);
+  copy->recovery_diagnostic = scan_problem_copy(source->recovery_diagnostic);
   copy->pending_recovery_token =
       clone_pending_recovery_token(source->pending_recovery_token);
   copy->child = scan_lex_session_clone_frame(source->child, copy);
@@ -1602,9 +1586,9 @@ static void normalize_session_for_comparison(scan_lex_session_t *session) {
   session->pending_fence_prefix = nullptr;
   session->pending_embed_prefix = nullptr;
   session->fence_probe_skip_until = nullptr;
-  session->hook_diagnostic = (core_string_t){0};
-  session->pending_recovery_message = (core_string_t){0};
-  session->recovery_diagnostic = (core_string_t){0};
+  session->status_diagnostic = (scan_problem_t){0};
+  session->pending_recovery_message = (scan_problem_t){0};
+  session->recovery_diagnostic = (scan_problem_t){0};
   session->pending_recovery_token = nullptr;
 
   session->embed_start = 0;
@@ -1791,9 +1775,9 @@ static void scan_lex_session_free_frame(scan_lex_session_t *session) {
   core_free(session->pending_fence_prefix);
   core_free(session->pending_embed_prefix);
   core_free(session->fence_probe_skip_until);
-  core_free(session->hook_diagnostic.data);
-  core_free(session->pending_recovery_message.data);
-  core_free(session->recovery_diagnostic.data);
+  core_free(session->status_diagnostic.detail.data);
+  core_free(session->pending_recovery_message.detail.data);
+  core_free(session->recovery_diagnostic.detail.data);
   free_pending_recovery_token(session->pending_recovery_token);
   core_free(session);
 }
@@ -1809,15 +1793,15 @@ void scan_lex_session_free(void *state) {
 }
 
 size_t scan_lex_issue_count(const scan_lex_t *lex) {
-  return lex ? lex->issue_count : 0;
+  return lex ? lex->issues.len : 0;
 }
 
 bool scan_lex_issue(const scan_lex_t *lex, size_t index,
                     scan_lex_issue_t *out) {
-  if (!lex || !out || index >= lex->issue_count) {
+  if (!lex || !out || index >= lex->issues.len) {
     return false;
   }
-  *out = lex->issues[index];
+  *out = lex->issues.data[index];
   return true;
 }
 
@@ -1910,12 +1894,12 @@ void scan_lex_reset_state(parse_scanner_t *s) {
   lex->pending_embed_match = 0;
   core_free(lex->pending_embed_prefix);
   lex->pending_embed_prefix = nullptr;
-  core_free(lex->hook_diagnostic.data);
-  lex->hook_diagnostic = (core_string_t){0};
-  core_free(lex->pending_recovery_message.data);
-  lex->pending_recovery_message = (core_string_t){0};
-  core_free(lex->recovery_diagnostic.data);
-  lex->recovery_diagnostic = (core_string_t){0};
+  core_free(lex->status_diagnostic.detail.data);
+  lex->status_diagnostic = (scan_problem_t){0};
+  core_free(lex->pending_recovery_message.detail.data);
+  lex->pending_recovery_message = (scan_problem_t){0};
+  core_free(lex->recovery_diagnostic.detail.data);
+  lex->recovery_diagnostic = (scan_problem_t){0};
   free_pending_recovery_token(lex->pending_recovery_token);
   lex->pending_recovery_token = nullptr;
   lex->pending_recovery = nullptr;
@@ -2105,7 +2089,7 @@ static bool recipe_opener_may_continue(parse_scanner_t *s, bool resume) {
     run->pending_opener = true;
     run->pending_opener_node = node;
     run->pending_opener_consumed = consumed;
-    scan_set_incomplete(s, CORE_STRING_STATIC("token opener may continue"),
+    scan_set_incomplete(s, SCAN_PROBLEM(TOKEN_OPENER_MAY_CONTINUE),
                         s->mark);
     return true;
   }
@@ -2306,7 +2290,7 @@ static bool scan_fence_body(parse_scanner_t *s, const scan_lex_fence_t *f,
   run->pending_fence_label_end = label_end;
   run->pending_fence_search = search;
   run->pending_fence_match = matched;
-  scan_set_incomplete(s, CORE_STRING_STATIC("unterminated fenced literal"),
+  scan_set_incomplete(s, SCAN_PROBLEM(FENCE_UNTERMINATED),
                       s->mark);
 
   return false;
@@ -2366,7 +2350,7 @@ static bool try_fence(parse_scanner_t *s) {
         run->pending_fence_label_start = s->cursor;
         run->pending_fence_label_end = s->cursor;
         scan_set_incomplete(
-            s, CORE_STRING_STATIC("incomplete fenced literal opener"), s->mark);
+            s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
         return false;
       }
       record_failed_fence_probe(run, s, f);
@@ -2400,7 +2384,7 @@ static bool try_fence(parse_scanner_t *s) {
         run->pending_fence_label_end = label_end;
         run->pending_fence_open = true;
         scan_set_incomplete(
-            s, CORE_STRING_STATIC("incomplete fenced literal opener"), s->mark);
+            s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
 
         return false;
       }
@@ -2462,7 +2446,7 @@ static bool resume_fence(parse_scanner_t *s) {
       run->pending_fence_label_start = s->cursor;
       run->pending_fence_label_end = s->cursor;
       scan_set_incomplete(
-          s, CORE_STRING_STATIC("incomplete fenced literal opener"), s->mark);
+          s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
       return false;
     }
     if (level < f->minimum) {
@@ -2500,7 +2484,7 @@ static bool resume_fence(parse_scanner_t *s) {
       run->pending_fence_label_end = label_end;
       run->pending_fence_open = true;
       scan_set_incomplete(
-          s, CORE_STRING_STATIC("incomplete fenced literal opener"), s->mark);
+          s, SCAN_PROBLEM(FENCE_OPENER_INCOMPLETE), s->mark);
 
       return false;
     }
@@ -2520,23 +2504,23 @@ static bool resume_fence(parse_scanner_t *s) {
   return scan_fence_body(s, f, level, content, label_start, label_end);
 }
 
-static void literal_hook_invalid(parse_scanner_t *s, core_string_t message,
+static void literal_hook_invalid(parse_scanner_t *s, scan_problem_t problem,
                                  size_t relative_start, size_t relative_end) {
   parse_token_info_t *token = scan_prev_token(s);
   size_t local_start = parse_token_start_byte(token) - s->source_base
                      + relative_start;
 
-  scan_set_invalid(s, message, local_start);
+  scan_set_invalid(s, problem, local_start);
   s->status_end_byte = parse_token_start_byte(token) + relative_end;
 }
 
-static void previous_token_invalid(parse_scanner_t *s, core_string_t message) {
+static void previous_token_invalid(parse_scanner_t *s, scan_problem_t problem) {
   parse_token_info_t *token = scan_prev_token(s);
   size_t start = token && parse_token_start_byte(token) >= s->source_base
                      ? parse_token_start_byte(token) - s->source_base
                      : s->mark;
 
-  scan_set_invalid(s, message, start);
+  scan_set_invalid(s, problem, start);
 }
 
 static bool at_bytes(parse_scanner_t *s, size_t pos, core_string_t text) {
@@ -2613,16 +2597,16 @@ static void apply_literal_hook(parse_scanner_t *s) {
 
   if (!scan_lex_literal_hook_call(recipe->hook, &input, &result)) {
     literal_hook_invalid(
-        s, CORE_STRING_STATIC("literal hook is no longer registered"), 0,
+        s, SCAN_PROBLEM(HOOK_UNREGISTERED), 0,
         input.spelling.u8_bytes);
     return;
   }
 
   if (!result.accepted) {
-    core_free(run->hook_diagnostic.data);
-    run->hook_diagnostic = result.diagnostic;
-    result.diagnostic = (core_string_t){0};
-    literal_hook_invalid(s, run->hook_diagnostic, result.diagnostic_start,
+    core_free(run->status_diagnostic.detail.data);
+    run->status_diagnostic = result.problem;
+    result.problem = (scan_problem_t){0};
+    literal_hook_invalid(s, run->status_diagnostic, result.diagnostic_start,
                          result.diagnostic_end);
     scan_lex_literal_result_free(&result);
     return;
@@ -2631,14 +2615,14 @@ static void apply_literal_hook(parse_scanner_t *s) {
   if (result.token.data && !core_string_eq(result.token, recipe->token) &&
       !literal_hook_declares(recipe->outputs, result.token)) {
     literal_hook_invalid(
-        s, CORE_STRING_STATIC("literal hook selected an undeclared token"), 0,
+        s, SCAN_PROBLEM(HOOK_UNDECLARED_TOKEN), 0,
         input.spelling.u8_bytes);
     scan_lex_literal_result_free(&result);
     return;
   }
   if (result.type.data && !literal_hook_declares(recipe->types, result.type)) {
     literal_hook_invalid(
-        s, CORE_STRING_STATIC("literal hook selected undeclared type metadata"),
+        s, SCAN_PROBLEM(HOOK_UNDECLARED_TYPE),
         0, input.spelling.u8_bytes);
     scan_lex_literal_result_free(&result);
     return;
@@ -2717,14 +2701,14 @@ static bool validate_embedded_body(parse_scanner_t *outer,
     scan_diagnostic_t diagnostic = {0};
 
     if (scan_diagnostic(scanner, &diagnostic)) {
-      scan_set_invalid(outer, diagnostic.message,
+      scan_set_invalid(outer, diagnostic.problem,
                        content_start + diagnostic.start_byte);
       outer->status_end_byte =
           outer->source_base + content_start + diagnostic.end_byte;
       outer->status_lexer =
           diagnostic.lexer.data ? diagnostic.lexer : program->spec->name;
     } else {
-      scan_set_invalid(outer, CORE_STRING_STATIC("invalid embedded region"),
+      scan_set_invalid(outer, SCAN_PROBLEM(EMBED_INVALID),
                        content_start);
       outer->status_lexer = program->spec->name;
     }
@@ -2768,7 +2752,7 @@ static bool resume_embed_token(parse_scanner_t *s) {
   if (!closed) {
     run->pending_embed_search = search;
     run->pending_embed_match = matched;
-    scan_set_incomplete(s, CORE_STRING_STATIC("unterminated embedded region"),
+    scan_set_incomplete(s, SCAN_PROBLEM(EMBED_UNTERMINATED),
                         s->mark);
     return false;
   }
@@ -2843,7 +2827,7 @@ static inline_embed_result_t try_inline_embed(parse_scanner_t *s) {
   if (!s->source_final && longer_partial &&
       (!hit || available == hit->open.u8_bytes)) {
     scan_set_incomplete(
-        s, CORE_STRING_STATIC("embedded delimiter may continue"), s->cursor);
+        s, SCAN_PROBLEM(EMBED_DELIMITER_MAY_CONTINUE), s->cursor);
     return INLINE_EMBED_STOP;
   }
 
@@ -2920,7 +2904,7 @@ static bool scan_outside(parse_scanner_t *s) {
 
       if (!s->source_final && partial_at_end(s, e->open)) {
         scan_set_incomplete(
-            s, CORE_STRING_STATIC("embedded delimiter may continue"),
+            s, SCAN_PROBLEM(EMBED_DELIMITER_MAY_CONTINUE),
             s->cursor);
         break;
       }
@@ -3129,10 +3113,10 @@ static embed_close_result_t try_embedded_close(parse_scanner_t *s) {
   if (scan_at_eof(s)) {
     if (!s->source_final) {
       scan_set_incomplete(
-          s, CORE_STRING_STATIC("embedded closing delimiter may continue"),
+          s, SCAN_PROBLEM(EMBED_CLOSE_MAY_CONTINUE),
           s->cursor);
     } else {
-      scan_set_incomplete(s, CORE_STRING_STATIC("unterminated embedded region"),
+      scan_set_incomplete(s, SCAN_PROBLEM(EMBED_UNTERMINATED),
                           run->embed_start);
     }
 
@@ -3143,8 +3127,8 @@ static embed_close_result_t try_embedded_close(parse_scanner_t *s) {
     scan_set_incomplete(
         s,
         s->source_final
-            ? CORE_STRING_STATIC("unterminated embedded region")
-            : CORE_STRING_STATIC("embedded closing delimiter may continue"),
+            ? SCAN_PROBLEM(EMBED_UNTERMINATED)
+            : SCAN_PROBLEM(EMBED_CLOSE_MAY_CONTINUE),
         s->source_final ? run->embed_start : s->cursor);
     return EMBED_CLOSE_STOP;
   }
@@ -3250,7 +3234,7 @@ static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
       }
 
       if (result == ESCAPE_INVALID) {
-        scan_set_invalid(s, CORE_STRING_STATIC("invalid string escape"),
+        scan_set_invalid(s, SCAN_PROBLEM(STRING_INVALID_ESCAPE),
                          s->mark);
       }
 
@@ -3286,8 +3270,7 @@ static body_stop scan_body(parse_scanner_t *s, const scan_lex_string_t *str,
       if ((str->flags & SCAN_LEX_STR_ONE_SCALAR) && *scalar_count != 1) {
         scan_set_invalid(
             s,
-            CORE_STRING_STATIC(
-                "character literal must contain exactly one scalar"),
+            SCAN_PROBLEM(CHARACTER_LENGTH),
             s->mark);
       }
 
@@ -3370,7 +3353,7 @@ static bool try_string(parse_scanner_t *s) {
     run->pending_string_scalars = scalars;
     run->pending_string_delimiter_depth = delimiter_depth;
     run->pending_string_tail = false;
-    scan_set_incomplete(s, CORE_STRING_STATIC("unterminated string literal"),
+    scan_set_incomplete(s, SCAN_PROBLEM(STRING_UNTERMINATED),
                         s->mark);
 
     return false;
@@ -3380,7 +3363,7 @@ static bool try_string(parse_scanner_t *s) {
 
   if (stop == BODY_INVALID_NEWLINE) {
     previous_token_invalid(s,
-                           CORE_STRING_STATIC("newline in single-line string"));
+                           SCAN_PROBLEM(STRING_NEWLINE));
   }
 
   return true;
@@ -3410,7 +3393,7 @@ static bool resume_string(parse_scanner_t *s, bool mark) {
     run->pending_string_scalars = scalars;
     run->pending_string_delimiter_depth = m->delimiter_depth;
     run->pending_string_tail = true;
-    scan_set_incomplete(s, CORE_STRING_STATIC("unterminated string literal"),
+    scan_set_incomplete(s, SCAN_PROBLEM(STRING_UNTERMINATED),
                         s->mark);
 
     return false;
@@ -3421,7 +3404,7 @@ static bool resume_string(parse_scanner_t *s, bool mark) {
 
   if (stop == BODY_INVALID_NEWLINE) {
     previous_token_invalid(s,
-                           CORE_STRING_STATIC("newline in single-line string"));
+                           SCAN_PROBLEM(STRING_NEWLINE));
   }
 
   return true;
@@ -3435,7 +3418,7 @@ static bool resume_pending_string(parse_scanner_t *s) {
                              &run->pending_string_delimiter_depth);
 
   if (stop == BODY_UNTERMINATED) {
-    scan_set_incomplete(s, CORE_STRING_STATIC("unterminated string literal"),
+    scan_set_incomplete(s, SCAN_PROBLEM(STRING_UNTERMINATED),
                         s->mark);
 
     return false;
@@ -3472,7 +3455,7 @@ static bool resume_pending_string(parse_scanner_t *s) {
 
   if (stop == BODY_INVALID_NEWLINE) {
     previous_token_invalid(s,
-                           CORE_STRING_STATIC("newline in single-line string"));
+                           SCAN_PROBLEM(STRING_NEWLINE));
   }
 
   return true;
@@ -3500,7 +3483,7 @@ static region_result_t try_region(parse_scanner_t *s) {
       }
       else if (!s->source_final && partial_at_end(s, prefixes[i])) {
         scan_set_incomplete(s,
-            CORE_STRING_STATIC("region anchor may continue"), s->cursor);
+            SCAN_PROBLEM(REGION_ANCHOR_MAY_CONTINUE), s->cursor);
         return REGION_STOP;
       }
     }
@@ -3508,7 +3491,7 @@ static region_result_t try_region(parse_scanner_t *s) {
   if (!matched) return REGION_NONE;
   if (run->line_has_token) {
     scan_set_invalid(s,
-        CORE_STRING_STATIC("region anchor must be the only non-whitespace text on its line"),
+        SCAN_PROBLEM(REGION_ANCHOR_NOT_ALONE),
         s->cursor);
     return REGION_STOP;
   }
@@ -3523,11 +3506,11 @@ static region_result_t try_region(parse_scanner_t *s) {
   }
   if (scan_at_eof(s) && !s->source_final) {
     scan_set_incomplete(s,
-        CORE_STRING_STATIC("region anchor may continue"), s->mark);
+        SCAN_PROBLEM(REGION_ANCHOR_MAY_CONTINUE), s->mark);
     return REGION_STOP;
   }
   if (scan_at_eof(s) || core_codepoint_is_line_terminator(scan_peek(s, 0))) {
-    scan_set_invalid(s, CORE_STRING_STATIC("malformed region anchor"),
+    scan_set_invalid(s, SCAN_PROBLEM(REGION_ANCHOR_MALFORMED),
                      s->mark);
     return REGION_STOP;
   }
@@ -3536,7 +3519,7 @@ static region_result_t try_region(parse_scanner_t *s) {
   while (!scan_at_eof(s) && !core_codepoint_is_line_terminator(scan_peek(s, 0))) {
     if (!is_line_whitespace(scan_peek(s, 0))) {
       scan_set_invalid(s,
-          CORE_STRING_STATIC("region anchor must be the only non-whitespace text on its line"),
+          SCAN_PROBLEM(REGION_ANCHOR_NOT_ALONE),
           s->mark);
       return REGION_STOP;
     }
@@ -3590,7 +3573,7 @@ static bool try_comment(parse_scanner_t *s) {
 
         run->pending_comment = c;
         run->pending_comment_depth = 0;
-        scan_set_incomplete(s, CORE_STRING_STATIC("line comment may continue"),
+        scan_set_incomplete(s, SCAN_PROBLEM(LINE_COMMENT_MAY_CONTINUE),
                             s->mark);
 
         return false;
@@ -3632,7 +3615,7 @@ static bool try_comment(parse_scanner_t *s) {
         run->pending_comment_depth = depth;
         run->pending_comment_fill_level = fill_level;
         core_free(filled_close.data);
-        scan_set_incomplete(s, CORE_STRING_STATIC("unterminated block comment"),
+        scan_set_incomplete(s, SCAN_PROBLEM(BLOCK_COMMENT_UNTERMINATED),
                             s->mark);
 
         return false;
@@ -3664,7 +3647,7 @@ static bool resume_comment(parse_scanner_t *s) {
     }
 
     if (scan_at_eof(s) && !s->source_final) {
-      scan_set_incomplete(s, CORE_STRING_STATIC("line comment may continue"),
+      scan_set_incomplete(s, SCAN_PROBLEM(LINE_COMMENT_MAY_CONTINUE),
                           s->mark);
 
       return false;
@@ -3711,7 +3694,7 @@ static bool resume_comment(parse_scanner_t *s) {
   if (depth > 0) {
     run->pending_comment_depth = depth;
     core_free(filled_close.data);
-    scan_set_incomplete(s, CORE_STRING_STATIC("unterminated block comment"),
+    scan_set_incomplete(s, SCAN_PROBLEM(BLOCK_COMMENT_UNTERMINATED),
                         s->mark);
 
     return false;
@@ -3737,7 +3720,7 @@ static bool number_digit(const scan_lex_t *lex, core_codepoint_t c,
 }
 
 static void number_wait(parse_scanner_t *s) {
-  scan_set_incomplete(s, CORE_STRING_STATIC("numeric literal may continue"),
+  scan_set_incomplete(s, SCAN_PROBLEM(NUMBER_MAY_CONTINUE),
                       s->mark);
 }
 
@@ -4051,7 +4034,7 @@ static bool continue_number(parse_scanner_t *s) {
       emit_named(s, tok, fallback);
       if (malformed) {
         previous_token_invalid(s,
-                               CORE_STRING_STATIC("malformed numeric literal"));
+                               SCAN_PROBLEM(NUMBER_MALFORMED));
       }
       return true;
     }
@@ -4194,7 +4177,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
         at = next;
       }
       if (at == s->input.u8_bytes && !s->source_final) {
-        scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
+        scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE),
                             s->cursor);
         return false;
       }
@@ -4210,7 +4193,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
 
   if (!best) {
     if (awaiting_body) {
-      scan_set_incomplete(s, CORE_STRING_STATIC("sigil needs a body"),
+      scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_NEEDS_BODY),
                           s->cursor);
     }
     return false;
@@ -4235,7 +4218,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
 
     if (attach) {
       run->pending_attached_sigil = best;
-      scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
+      scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE),
                           s->mark);
       return false;
     }
@@ -4243,7 +4226,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
     run->pending_identifier = true;
     run->pending_identifier_tid = tid_for(lex->g, best->tok, lex->tid_ident);
     run->pending_identifier_digits = best->digits_only;
-    scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"), s->mark);
+    scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE), s->mark);
 
     return false;
   }
@@ -4252,7 +4235,7 @@ static bool try_sigil(parse_scanner_t *s, bool before_string) {
     parse_token_info_t *previous = scan_prev_token(s);
     if (!previous
         || core_option_is_set(parse_token_postfix_modifier(previous))) {
-      scan_set_invalid(s, CORE_STRING_STATIC("invalid postfix modifier"),
+      scan_set_invalid(s, SCAN_PROBLEM(POSTFIX_INVALID),
                        s->mark);
       return false;
     }
@@ -4356,14 +4339,14 @@ static bool try_regex(parse_scanner_t *s) {
         run->pending_regex = r;
         run->pending_regex_in_class = in_class;
         scan_set_incomplete(
-            s, CORE_STRING_STATIC("unterminated regular expression"), s->mark);
+            s, SCAN_PROBLEM(REGEX_UNTERMINATED), s->mark);
 
         return false;
       }
 
       emit_named(s, r->tok, PARSE_TOK_STRING_LIT);
       previous_token_invalid(
-          s, CORE_STRING_STATIC("newline in regular expression"));
+          s, SCAN_PROBLEM(REGEX_NEWLINE));
 
       return true;
     }
@@ -4387,7 +4370,7 @@ static bool resume_regex(parse_scanner_t *s) {
 
   if (stop == BODY_UNTERMINATED) {
     scan_set_incomplete(
-        s, CORE_STRING_STATIC("unterminated regular expression"), s->mark);
+        s, SCAN_PROBLEM(REGEX_UNTERMINATED), s->mark);
 
     return false;
   }
@@ -4398,7 +4381,7 @@ static bool resume_regex(parse_scanner_t *s) {
   if (stop == BODY_INVALID_NEWLINE) {
     emit_named(s, r->tok, PARSE_TOK_STRING_LIT);
     previous_token_invalid(s,
-                           CORE_STRING_STATIC("newline in regular expression"));
+                           SCAN_PROBLEM(REGEX_NEWLINE));
 
     return true;
   }
@@ -4555,7 +4538,7 @@ static bool scan_heredoc_lines(parse_scanner_t *s, const scan_lex_heredoc_t *h,
   run->pending_heredoc_indent = at_indent;
   run->pending_heredoc_rejected = rejected;
   s->work_bytes += s->input.u8_bytes - work_start;
-  scan_set_incomplete(s, CORE_STRING_STATIC("unterminated heredoc"), s->mark);
+  scan_set_incomplete(s, SCAN_PROBLEM(HEREDOC_UNTERMINATED), s->mark);
   s->status_end_byte = s->source_base + s->input.u8_bytes;
 
   return false;
@@ -4578,13 +4561,13 @@ static core_string_t heredoc_token(const scan_lex_heredoc_t *h,
   return h->tok;
 }
 
-static bool invalid_heredoc_header(parse_scanner_t *s, core_string_t message,
+static bool invalid_heredoc_header(parse_scanner_t *s, scan_problem_t problem,
                                    size_t at) {
   scan_lex_session_t *run = s->user_state;
 
   run->pending_heredoc = nullptr;
   run->pending_heredoc_header_phase = HEREDOC_HEADER_NONE;
-  scan_set_invalid(s, message, at);
+  scan_set_invalid(s, problem, at);
   return false;
 }
 
@@ -4612,13 +4595,13 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
                                  : SCAN_LEX_HEREDOC_DOUBLE_QUOTED;
       if (!(header->quotes & quote_kind)) {
         return invalid_heredoc_header(
-            s, CORE_STRING_STATIC("quoted heredoc tag is not permitted"), scan);
+            s, SCAN_PROBLEM(HEREDOC_TAG_QUOTED_NOT_PERMITTED), scan);
       }
       run->pending_heredoc_quote = quote;
       scan++;
     } else if (!(header->quotes & SCAN_LEX_HEREDOC_UNQUOTED)) {
       return invalid_heredoc_header(
-          s, CORE_STRING_STATIC("heredoc tag must be quoted"), scan);
+          s, SCAN_PROBLEM(HEREDOC_TAG_MUST_BE_QUOTED), scan);
     }
 
     run->pending_heredoc_quote_kind = quote_kind;
@@ -4640,7 +4623,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
       }
       if (scan == s->input.u8_bytes || s->input.data[scan] == '\n') {
         return invalid_heredoc_header(
-            s, CORE_STRING_STATIC("unterminated quoted heredoc tag"),
+            s, SCAN_PROBLEM(HEREDOC_TAG_UNTERMINATED),
             run->pending_heredoc_tag_start - 1);
       }
       run->pending_heredoc_tag_end = scan;
@@ -4658,7 +4641,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
                        !(cp < 128 && heredoc_tag_extra(header->tag_start_extra,
                                                        (uint8_t)cp)))) {
           return invalid_heredoc_header(
-              s, CORE_STRING_STATIC("invalid heredoc tag"), scan);
+              s, SCAN_PROBLEM(HEREDOC_TAG_INVALID), scan);
         }
         scan = next;
       }
@@ -4672,7 +4655,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
             goto wait;
           }
           return invalid_heredoc_header(
-              s, CORE_STRING_STATIC("invalid UTF-8 in heredoc tag"), scan);
+              s, SCAN_PROBLEM(HEREDOC_TAG_INVALID_UTF8), scan);
         }
         if (!unicode_is_id_continue((core_codepoint_t)cp) &&
             !(cp < 128 &&
@@ -4688,7 +4671,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
     }
 
     if (run->pending_heredoc_tag_end == run->pending_heredoc_tag_start) {
-      return invalid_heredoc_header(s, CORE_STRING_STATIC("empty heredoc tag"),
+      return invalid_heredoc_header(s, SCAN_PROBLEM(HEREDOC_TAG_EMPTY),
                                     scan);
     }
     run->pending_heredoc_header_phase = HEREDOC_HEADER_LINE;
@@ -4728,7 +4711,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
     if (!header->trailing_text && s->input.data[scan] != ' ' &&
         s->input.data[scan] != '\t') {
       return invalid_heredoc_header(
-          s, CORE_STRING_STATIC("unexpected text after heredoc tag"), scan);
+          s, SCAN_PROBLEM(HEREDOC_TAG_TRAILING_TEXT), scan);
     }
     scan++;
   }
@@ -4752,7 +4735,7 @@ static bool continue_heredoc_header(parse_scanner_t *s) {
 wait:
   s->work_bytes += scan - work_start;
   run->pending_heredoc_header_scan = scan;
-  scan_set_incomplete(s, CORE_STRING_STATIC("heredoc header may continue"),
+  scan_set_incomplete(s, SCAN_PROBLEM(HEREDOC_HEADER_MAY_CONTINUE),
                       s->mark);
   return false;
 }
@@ -4850,7 +4833,7 @@ static bool scan_terminal_trie(parse_scanner_t *s, size_t min_len,
     run->pending_terminal_best_len = best_len;
     run->pending_terminal_best_tid = best_tid;
     run->pending_terminal_min_len = min_len;
-    scan_set_incomplete(s, CORE_STRING_STATIC("terminal may continue"),
+    scan_set_incomplete(s, SCAN_PROBLEM(TERMINAL_MAY_CONTINUE),
                         s->mark);
 
     return false;
@@ -4911,22 +4894,20 @@ static void apply_identifier_profile(parse_scanner_t *s) {
     return;
   }
 
-  if (result.normalized.data && core_string_eq(result.normalized, spelling)) {
-    core_free(result.normalized.data);
+  if (!result.diagnosed) {
+    return;
   }
-  else if (result.normalized.data) {
-    parse_token_set_value(token,
-                          core_option_set(core_string_t, result.normalized),
-                          true);
+  if (s->status == SCAN_STATUS_INVALID) {
+    core_free(result.problem.detail.data);
+    return;
   }
-
-  if (result.diagnostic.data) {
-    size_t local_start = parse_token_start_byte(token) - s->source_base
-                       + result.diagnostic_start;
-    scan_set_invalid(s, result.diagnostic, local_start);
-    s->status_end_byte = parse_token_start_byte(token)
-                       + result.diagnostic_end;
-  }
+  core_free(run->status_diagnostic.detail.data);
+  run->status_diagnostic = result.problem;
+  size_t local_start = parse_token_start_byte(token) - s->source_base
+                     + result.diagnostic_start;
+  scan_set_invalid(s, run->status_diagnostic, local_start);
+  s->status_end_byte = parse_token_start_byte(token)
+                     + result.diagnostic_end;
 }
 
 static bool try_identifier(parse_scanner_t *s) {
@@ -4957,7 +4938,7 @@ static bool try_identifier(parse_scanner_t *s) {
     run->pending_identifier = true;
     run->pending_identifier_tid = upper ? lex->tid_ident_upper : lex->tid_ident;
     run->pending_identifier_digits = false;
-    scan_set_incomplete(s, CORE_STRING_STATIC("identifier may continue"),
+    scan_set_incomplete(s, SCAN_PROBLEM(IDENTIFIER_MAY_CONTINUE),
                         s->mark);
 
     return false;
@@ -4980,7 +4961,7 @@ static bool resume_identifier(parse_scanner_t *s) {
   }
 
   if (scan_at_eof(s) && !s->source_final) {
-    scan_set_incomplete(s, CORE_STRING_STATIC("identifier may continue"),
+    scan_set_incomplete(s, SCAN_PROBLEM(IDENTIFIER_MAY_CONTINUE),
                         s->mark);
 
     return false;
@@ -5134,9 +5115,9 @@ static indent_line_kind_t indent_line_kind(parse_scanner_t *s,
   return partial ? INDENT_LINE_INCOMPLETE : INDENT_LINE_CONTENT;
 }
 
-static void invalid_indent(parse_scanner_t *s, core_string_t message,
+static void invalid_indent(parse_scanner_t *s, scan_problem_t problem,
                            size_t start, size_t end) {
-  scan_set_invalid(s, message, start);
+  scan_set_invalid(s, problem, start);
   s->status_end_byte = s->source_base + end;
 }
 
@@ -5155,7 +5136,7 @@ static layout_result_t do_layout(parse_scanner_t *s) {
 
   if (kind == INDENT_LINE_INCOMPLETE) {
     save_pending_indent(run, m);
-    scan_set_incomplete(s, CORE_STRING_STATIC("indentation may continue"),
+    scan_set_incomplete(s, SCAN_PROBLEM(INDENTATION_MAY_CONTINUE),
                         s->cursor);
     return LAYOUT_STOP;
   }
@@ -5173,14 +5154,14 @@ static layout_result_t do_layout(parse_scanner_t *s) {
   }
 
   if (m.has_tab && spec->indent_tabs == SCAN_LEX_INDENT_REJECT) {
-    invalid_indent(s, CORE_STRING_STATIC("tabs are not allowed in indentation"),
+    invalid_indent(s, SCAN_PROBLEM(TABS_IN_INDENTATION),
                    m.first_tab, m.first_tab + 1);
     return LAYOUT_STOP;
   }
 
   if (m.has_tab && m.has_space &&
       spec->indent_mixed == SCAN_LEX_INDENT_REJECT) {
-    invalid_indent(s, CORE_STRING_STATIC("mixed indentation is not allowed"),
+    invalid_indent(s, SCAN_PROBLEM(MIXED_INDENTATION),
                    s->cursor, m.end);
     return LAYOUT_STOP;
   }
@@ -5190,7 +5171,7 @@ static layout_result_t do_layout(parse_scanner_t *s) {
 
     if (m.end > s->cursor && spec->indent_alignment == SCAN_LEX_INDENT_REJECT) {
       invalid_indent(s,
-                     CORE_STRING_STATIC("alignment indentation is not allowed"),
+                     SCAN_PROBLEM(ALIGNMENT_INDENTATION),
                      s->cursor, m.end);
       return LAYOUT_STOP;
     }
@@ -5235,8 +5216,7 @@ static layout_result_t do_layout(parse_scanner_t *s) {
     if (landed != m.column &&
         spec->indent_unmatched == SCAN_LEX_INDENT_REJECT) {
       invalid_indent(s,
-                     CORE_STRING_STATIC(
-                         "dedent does not match an earlier indentation level"),
+                     SCAN_PROBLEM(DEDENT_MISMATCH),
                      s->cursor, m.end);
       return LAYOUT_STOP;
     }
@@ -5332,7 +5312,7 @@ static bool process_queued_heredocs(parse_scanner_t *s) {
       run->pending_heredoc_match = matched;
       run->pending_heredoc_indent = at_indent;
       run->pending_heredoc_rejected = rejected;
-      scan_set_incomplete(s, CORE_STRING_STATIC("unterminated queued heredoc"),
+      scan_set_incomplete(s, SCAN_PROBLEM(HEREDOC_QUEUED_UNTERMINATED),
                           body);
       s->status_end_byte = s->source_base + s->input.u8_bytes;
       return false;
@@ -5434,11 +5414,11 @@ static bool finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
     }
   }
 
-  core_string_t message = run->pending_recovery_message;
+  scan_problem_t message = run->pending_recovery_message;
   if (!s->had_recovery) {
-    core_free(run->recovery_diagnostic.data);
+    core_free(run->recovery_diagnostic.detail.data);
     run->recovery_diagnostic = run->pending_recovery_message;
-    run->pending_recovery_message = (core_string_t){0};
+    run->pending_recovery_message = (scan_problem_t){0};
     message = run->recovery_diagnostic;
   }
 
@@ -5450,8 +5430,8 @@ static bool finish_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
                    : start;
   scan_set_recovered(s, message, start, end);
 
-  core_free(run->pending_recovery_message.data);
-  run->pending_recovery_message = (core_string_t){0};
+  core_free(run->pending_recovery_message.detail.data);
+  run->pending_recovery_message = (scan_problem_t){0};
   run->pending_recovery = nullptr;
   run->pending_recovery_token = nullptr;
   run->pending_recovery_start = 0;
@@ -5486,14 +5466,14 @@ static bool continue_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
     }
     if (boundary == RECOVERY_PARTIAL_BOUNDARY && !s->source_final) {
       scan_set_incomplete(
-          s, CORE_STRING_STATIC("recovery boundary may continue"), s->cursor);
+          s, SCAN_PROBLEM(RECOVERY_MAY_CONTINUE), s->cursor);
       return false;
     }
     scan_advance(s);
   }
 
   if (!s->source_final) {
-    scan_set_incomplete(s, CORE_STRING_STATIC("recovery boundary may continue"),
+    scan_set_incomplete(s, SCAN_PROBLEM(RECOVERY_MAY_CONTINUE),
                         s->cursor);
     return false;
   }
@@ -5515,11 +5495,11 @@ static bool begin_recovery(parse_scanner_t *s, scan_lex_session_t *run) {
       s->stream->tokens[s->stream->token_count - 1] == token) {
     s->stream->tokens[--s->stream->token_count] = nullptr;
   }
-  run->pending_recovery_message = core_string_dup(s->status_message);
+  run->pending_recovery_message = scan_problem_copy(s->status_problem);
   run->pending_recovery_start = s->status_start_byte;
   run->pending_recovery_end = s->status_end_byte;
   s->status = SCAN_STATUS_ACTIVE;
-  s->status_message = (core_string_t){0};
+  s->status_problem = (scan_problem_t){0};
   s->status_lexer = (core_string_t){0};
   s->status_start_byte = 0;
   s->status_end_byte = 0;
@@ -5565,7 +5545,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     while (!scan_at_eof(s) && unicode_is_id_continue(scan_peek(s, 0)))
       scan_advance(s);
     if (scan_at_eof(s) && !s->source_final) {
-      scan_set_incomplete(s, CORE_STRING_STATIC("sigil may continue"),
+      scan_set_incomplete(s, SCAN_PROBLEM(SIGIL_MAY_CONTINUE),
                           s->mark);
       return false;
     }
@@ -5573,7 +5553,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     parse_token_info_t *previous = scan_prev_token(s);
     if (!previous
         || core_option_is_set(parse_token_postfix_modifier(previous))) {
-      scan_set_invalid(s, CORE_STRING_STATIC("invalid postfix modifier"),
+      scan_set_invalid(s, SCAN_PROBLEM(POSTFIX_INVALID),
                        s->mark);
       return false;
     }
@@ -5738,7 +5718,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     if (c == '\t' && lex->spec->indent_tabs == SCAN_LEX_INDENT_REJECT) {
       size_t start = s->cursor;
       scan_advance(s);
-      scan_set_invalid(s, CORE_STRING_STATIC("tabs are not allowed"), start);
+      scan_set_invalid(s, SCAN_PROBLEM(TABS_NOT_ALLOWED), start);
       return false;
     }
 
@@ -5752,7 +5732,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
     if (lex->spec->line_continue.data && !s->source_final &&
         partial_at_end(s, lex->spec->line_continue)) {
       scan_set_incomplete(
-          s, CORE_STRING_STATIC("line continuation may continue"), s->cursor);
+          s, SCAN_PROBLEM(LINE_CONTINUATION_MAY_CONTINUE), s->cursor);
       return false;
     }
 
@@ -5774,7 +5754,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
 
       if (at == s->input.u8_bytes && !s->source_final) {
         scan_set_incomplete(
-            s, CORE_STRING_STATIC("line continuation may continue"), s->cursor);
+            s, SCAN_PROBLEM(LINE_CONTINUATION_MAY_CONTINUE), s->cursor);
         return false;
       }
     }
@@ -5831,7 +5811,7 @@ static bool scan_lex_scan_one(parse_scanner_t *s) {
 
     if (core_list_len(run->heredoc_queue)) {
       scan_set_incomplete(
-          s, CORE_STRING_STATIC("queued heredoc bodies did not begin"),
+          s, SCAN_PROBLEM(HEREDOC_QUEUED_NOT_BEGUN),
           s->cursor);
       return false;
     }
@@ -6055,7 +6035,12 @@ dispatch:
       tid_set_contains(&lex->codepoint_terminals, (int32_t)c);
 
   if (lex->spec->fallback == SCAN_LEX_FALLBACK_REJECT && !declared_codepoint) {
-    scan_set_invalid(s, CORE_STRING_STATIC("unexpected character"), s->mark);
+    if (s->recovery_enabled && lex->spec->fallback_recovers) {
+      scan_set_recovered(s, SCAN_PROBLEM(UNEXPECTED_CHARACTER),
+                         s->mark, s->cursor);
+    } else {
+      scan_set_invalid(s, SCAN_PROBLEM(UNEXPECTED_CHARACTER), s->mark);
+    }
     scan_emit_marked(s, PARSE_TOK_OTHER);
   } else {
     scan_emit_marked(s, (int32_t)c);
@@ -6099,20 +6084,11 @@ bool scan_lex_scan(parse_scanner_t *s) {
 
 typedef struct {
   core_codepoint_t codepoint;
-  core_string_t rejected;
-  core_string_t warned;
+  core_string_t name;
 } bidi_control_t;
 
 static const bidi_control_t bidi_controls[] = {
-#define BIDI_ENTRY(cp, name)                                                   \
-  {cp,                                                                         \
-   CORE_STRING_STATIC("invisible bidirectional control character " name       \
-                      " can make code display differently from how it "        \
-                      "compiles, so it is not allowed in source text; a "      \
-                      "string literal can write it as an escape"),             \
-   CORE_STRING_STATIC("fence literal contains invisible bidirectional "       \
-                      "control character " name ", which can make it display " \
-                      "differently from its contents")},
+#define BIDI_ENTRY(cp, name) {cp, CORE_STRING_STATIC(name)},
     BIDI_CONTROLS(BIDI_ENTRY)
 #undef BIDI_ENTRY
 };
@@ -6180,12 +6156,14 @@ void scan_lex_check_span(parse_scanner_t *s, size_t start, size_t end,
     if (policy == SCAN_LEX_BIDI_REJECT) {
       size_t cursor = s->cursor;
       s->cursor = at + length;
-      scan_set_invalid(s, control->rejected, at);
+      scan_set_invalid(s, SCAN_PROBLEM_WITH(BIDI_CONTROL, control->name), at);
       s->cursor = cursor;
       return;
     }
     if (policy == SCAN_LEX_BIDI_WARN) {
-      scan_add_warning(s, control->warned, at, at + length);
+      scan_add_warning(s,
+          SCAN_PROBLEM_WITH(FENCE_BIDI_CONTROL, control->name), at,
+          at + length);
     }
     at += length - 1;
   }

@@ -107,9 +107,10 @@ ir_interval_of_width(uint64_t width, bool is_signed)
         return is_signed ? (ir_interval_t){ir_int_min, ir_int_max}
                          : (ir_interval_t){0, ir_int_max};
     if (!width) return (ir_interval_t){0, 0};
-    ir_int_t span = (ir_int_t)1 << (is_signed ? width - 1 : width);
-    return is_signed ? (ir_interval_t){-span, span - 1}
-                     : (ir_interval_t){0, span - 1};
+    uint64_t bits = is_signed ? width - 1 : width;
+    ir_int_t high = bits >= 127 ? ir_int_max : ((ir_int_t)1 << bits) - 1;
+    return is_signed ? (ir_interval_t){-high - 1, high}
+                     : (ir_interval_t){0, high};
 }
 
 bool

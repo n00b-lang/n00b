@@ -1,6 +1,7 @@
 import containers.traits
 import containers.view
 import cursor
+import panic
 
 object List {
     items: Array['T]
@@ -27,8 +28,16 @@ func checked_index(self: List['T], index: int) -> int {
     if at < 0 {
         at += cast[int]self.count
     }
-    require at >= 0 and cast[uint]at < self.count
+    if at < 0 or cast[uint]at >= self.count {
+        panic.index_out_of_range(index, self.count, "a list")
+    }
     return at
+}
+
+private func check_range(self: List['T], start: int, end: int) {
+    if start < 0 or end < start or cast[uint]end > self.count {
+        panic.range_out_of_bounds(start, end, self.count, "a list")
+    }
 }
 
 func __read(self: List['T], index: int) -> 'T {
@@ -41,8 +50,7 @@ func __write(self: List['T], index: int, value: 'T) {
 
 func __slice(self: List['T], start_ix: int,
                     end_ix: int) -> containers.view.View['T] {
-    require start_ix >= 0 and end_ix >= start_ix
-    require cast[uint]end_ix <= self.count
+    check_range(self, start_ix, end_ix)
     let length: int       = end_ix - start_ix
     var items:  Array['T] = new[Array['T]](length)
     var at:     int       = 0
@@ -73,8 +81,7 @@ func __write_slice(self: List['T], start_ix: int?,
     if start < 0 {
         start += cast[int]self.count
     }
-    require start >= 0 and end >= start
-    require cast[uint]end <= self.count
+    check_range(self, start, end)
 
     let incoming: uint      = values.count
     var snapshot: Array['T] = new[Array['T]](cast[int]incoming)
@@ -152,7 +159,10 @@ func append(self: List['T], value: 'T,
 }
 
 func insert(self: List['T], index: int, value: 'T) {
-    require index >= 0 and cast[uint]index <= self.count
+    if index < 0 or cast[uint]index > self.count {
+        panic.index_out_of_range(index, self.count + 1,
+                                 "an insertion into a list")
+    }
     ensure_capacity(self, self.count + 1)
     var at: uint = self.count
     while at > cast[uint]index {

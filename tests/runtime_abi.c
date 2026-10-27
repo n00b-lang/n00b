@@ -27,6 +27,10 @@
 
 #if defined(__linux__) && defined(__x86_64__)
 #define HOST_TARGET N00B_ABI_TARGET_X86_64_LINUX
+#elif defined(__linux__) && defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#define HOST_TARGET N00B_ABI_TARGET_ARM64_LINUX
 #elif defined(__APPLE__) && defined(__aarch64__)
 #include <sys/sysctl.h>
 #define HOST_TARGET N00B_ABI_TARGET_ARM64_MACOS
@@ -817,6 +821,10 @@ main(int argc, char **argv)
 #if defined(__APPLE__) && defined(__aarch64__)
     if (host_feature("hw.optional.arm.FEAT_LSE2")
         && host_feature("hw.optional.armv8_1_atomics"))
+        image.header.cpu_profile = N00B_ABI_CPU_NATIVE_ATOMIC128;
+#elif defined(__linux__) && defined(__aarch64__)
+    if ((getauxval(AT_HWCAP) & HWCAP_ATOMICS)
+        && (getauxval(AT_HWCAP) & HWCAP_USCAT))
         image.header.cpu_profile = N00B_ABI_CPU_NATIVE_ATOMIC128;
 #endif
     assert(n00b_abi_v1_validate_image(&descriptor, &error)

@@ -1,0 +1,2 @@
+tests/diagnostics/lower/script_comptime.n:1:6: error N00B-S0048: `comptime()` and `comptime_start()` need `func start() -> nil` in the root module
+  help: add `func start() -> nil` to the root module

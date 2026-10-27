@@ -1,0 +1,5 @@
+panic: `Array[int]` of 4611686018427387903 elements is too large to allocate
+  --> tests/diagnostics/runtime/failures.n:11:25
+backtrace:
+  at make_alloc (tests/diagnostics/runtime/failures.n:11:25)
+  at run (tests/diagnostics/runtime/failures.n:103:17)

@@ -1,3 +1,4 @@
+import fcntl
 import os
 import re
 import shutil
@@ -24,6 +25,8 @@ def run(command, **options):
     return result.stdout + result.stderr
 
 
+target_lock = open(target + ".lock", "w")
+fcntl.flock(target_lock, fcntl.LOCK_EX)
 shutil.rmtree(work, ignore_errors=True)
 run([writ, *features, "gen", "rust", contract, "--crate-path", os.path.join(resharp_root, "resharp-engine"), "-o", crate])
 shutil.copy(os.path.join(resharp_root, "Cargo.lock"), crate)

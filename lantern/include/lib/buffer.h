@@ -122,6 +122,26 @@ core_buffer_printf(core_buffer_t *buf, const char *fmt, ...)
     va_end(ap);
 }
 
+static inline void
+core_buffer_append_quoted(core_buffer_t *buf, core_string_t s)
+{
+    core_buffer_putc(buf, '"');
+    for (size_t i = 0; s.data && i < s.u8_bytes; i++) {
+        unsigned char c = (unsigned char)s.data[i];
+        switch (c) {
+        case '"': core_buffer_puts(buf, "\\\""); break;
+        case '\\': core_buffer_puts(buf, "\\\\"); break;
+        case '\n': core_buffer_puts(buf, "\\n"); break;
+        case '\t': core_buffer_puts(buf, "\\t"); break;
+        case '\r': core_buffer_puts(buf, "\\r"); break;
+        default:
+            if (c < 0x20 || c == 0x7f) core_buffer_printf(buf, "\\u%04x", c);
+            else core_buffer_putc(buf, (char)c);
+        }
+    }
+    core_buffer_putc(buf, '"');
+}
+
 static inline char *
 core_buffer_take(core_buffer_t *buf)
 {

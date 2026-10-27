@@ -1,4 +1,0 @@
-import alpha
-import beta
-
-require alpha.a == beta.b

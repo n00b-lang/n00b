@@ -1,5 +1,0 @@
-import trait_archive_other.impl
-
-package trait_archive_other {
-    export trait_archive_other.impl.ArchiveOther
-}

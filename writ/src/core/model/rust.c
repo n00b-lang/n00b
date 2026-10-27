@@ -27,9 +27,9 @@ is(const reader_t *r, writ_sym_t sym, const char *text)
 }
 
 static void
-reject(reader_t *r, uint32_t id, const char *what)
+reject(reader_t *r, uint32_t id, writ_text_t what)
 {
-    writ_report(r->unit->session, WRIT_D_UNSUPPORTED, node(r, id)->loc, "%s", what);
+    writ_report(r->unit->session, WRIT_D_UNSUPPORTED, node(r, id)->loc, WRIT_MESSAGE(TEXT, CORE_TEXT_PHRASE(what)));
     r->failed = true;
 }
 
@@ -144,9 +144,9 @@ read_fn(reader_t *r, uint32_t id, writ_sym_t feature)
     writ_rust_t *rust = r->rust;
     writ_rust_fn_t fn = {.owner = r->self, .name = node(r, id)->name, .feature = feature,
                          .first = (uint32_t)rust->members.len};
-    const char *problem = nullptr;
+    writ_text_t problem = WRIT_TEXT_COUNT;
     uint32_t at = id;
-    for (uint32_t i = 0; !problem && i < node(r, id)->child_count; i++) {
+    for (uint32_t i = 0; problem == WRIT_TEXT_COUNT && i < node(r, id)->child_count; i++) {
         at = writ_node_child(r->unit, id, i);
         const writ_node_t *p = node(r, at);
         if (p->kind == WRIT_N_SELF_PARAM) {
@@ -157,19 +157,19 @@ read_fn(reader_t *r, uint32_t id, writ_sym_t feature)
             if (!read_value(r, writ_node_child(r->unit, at, 0), &member.value) || member.value.optional
                 || member.value.kind == WRIT_RUST_UNIT || member.value.kind == WRIT_RUST_STRING
                 || member.value.kind == WRIT_RUST_VEC) {
-                problem = "a parameter type no transport rule covers (dsl.md §8.9)";
+                problem = WRIT_TEXT_UNSUPPORTED_PARAMETER_TYPE_TRANSPORT_RULE;
             }
             core_list_push(rust->members, member);
             fn.count++;
         } else if (p->kind == WRIT_N_RESULT
                    && (!read_value(r, writ_node_child(r->unit, at, 0), &fn.result) || fn.result.borrowed
                        || fn.result.kind == WRIT_RUST_STR || fn.result.kind == WRIT_RUST_SLICE)) {
-            problem = "a result type no transport rule covers (dsl.md §8.9)";
+            problem = WRIT_TEXT_UNSUPPORTED_RESULT_TYPE_TRANSPORT_RULE;
         } else if (p->kind != WRIT_N_RESULT) {
-            problem = "clauses on Rust functions";
+            problem = WRIT_TEXT_UNSUPPORTED_CLAUSES_ON_RUST_FUNCTIONS;
         }
     }
-    if (!problem) {
+    if (problem == WRIT_TEXT_COUNT) {
         core_list_push(rust->fns, fn);
     } else if (r->skipped) {
         core_list_push(*r->skipped, id);
@@ -185,7 +185,7 @@ read_when(reader_t *r, uint32_t id)
 {
     const writ_node_t *condition = node(r, writ_node_child(r->unit, id, 0));
     if (condition->kind != WRIT_N_EXPR_FEATURE || writ_node_first_of(r->unit, id, WRIT_N_ELSE)) {
-        reject(r, id, "conditions in a Rust contract other than `when feature F`");
+        reject(r, id, WRIT_TEXT_UNSUPPORTED_CONDITIONS_RUST_CONTRACT_WHEN);
         return;
     }
     read_items(r, id, 1, condition->name);
@@ -197,7 +197,7 @@ read_impl(reader_t *r, uint32_t id, writ_sym_t feature)
     r->self = node(r, id)->name;
     const writ_rust_type_t *owner = writ_rust_type(r->rust, r->self);
     if (!owner || owner->kind == WRIT_RUST_ENUM) {
-        reject(r, id, "`impl` blocks for types other than declared structs and opaque types");
+        reject(r, id, WRIT_TEXT_UNSUPPORTED_IMPL_BLOCKS_TYPES_DECLARED);
         return;
     }
     read_items(r, id, 0, feature);
@@ -219,11 +219,11 @@ read_type(reader_t *r, uint32_t id, writ_rust_kind_t kind)
         if (node(r, part)->kind == WRIT_N_FIELD
             && (!read_value(r, writ_node_child(r->unit, part, 0), &member.value)
                 || member.value.kind != WRIT_RUST_PRIM || member.value.optional)) {
-            reject(r, part, "struct fields other than primitives in a Rust contract");
+            reject(r, part, WRIT_TEXT_UNSUPPORTED_STRUCT_FIELDS_PRIMITIVES_RUST);
             return;
         }
         if (node(r, part)->kind == WRIT_N_ENUM_ITEM && node(r, part)->child_count) {
-            reject(r, part, "explicit discriminants in a Rust contract");
+            reject(r, part, WRIT_TEXT_UNSUPPORTED_EXPLICIT_DISCRIMINANTS_RUST_CONTRACT);
             return;
         }
         core_list_push(rust->members, member);
@@ -253,7 +253,7 @@ read_items(reader_t *r, uint32_t parent, uint32_t from, writ_sym_t feature)
             break;
         case WRIT_N_FEATURE:
             if (!is(r, item->payload, "cargo")) {
-                reject(r, id, "features in a Rust contract are cargo features");
+                reject(r, id, WRIT_TEXT_UNSUPPORTED_FEATURES_RUST_CONTRACT_CARGO);
                 break;
             }
             core_list_push(rust->features,
@@ -264,7 +264,7 @@ read_items(reader_t *r, uint32_t parent, uint32_t from, writ_sym_t feature)
         case WRIT_N_STRUCT:
         case WRIT_N_OPAQUE:
             if (node(r, parent)->kind != WRIT_N_FILE) {
-                reject(r, id, "type declarations inside `impl` or `when` in a Rust contract");
+                reject(r, id, WRIT_TEXT_UNSUPPORTED_TYPE_DECLARATIONS_INSIDE_IMPL);
             }
             break;
         case WRIT_N_IMPL:
@@ -275,13 +275,13 @@ read_items(reader_t *r, uint32_t parent, uint32_t from, writ_sym_t feature)
             break;
         case WRIT_N_FN:
             if (!r->self) {
-                reject(r, id, "free functions in a Rust contract; declare them in an `impl` block");
+                reject(r, id, WRIT_TEXT_UNSUPPORTED_FREE_FUNCTIONS_RUST_CONTRACT);
                 break;
             }
             read_fn(r, id, feature);
             break;
         default:
-            reject(r, id, "this declaration in a Rust contract (dsl.md §8.9)");
+            reject(r, id, WRIT_TEXT_UNSUPPORTED_DECLARATION_RUST_CONTRACT);
             break;
         }
     }

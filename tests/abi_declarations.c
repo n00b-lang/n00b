@@ -55,14 +55,15 @@ main(void)
     parse_token_stream_t *tokens = scan_token_stream_from_array(
         tokens_array, 2);
     assert(tokens);
-    parse_tree_t type_declaration = {0}, field_declaration = {0};
-    parse_tree_t foreign_use = {0};
-    core_tree_node_value(&type_declaration).start = 0;
-    core_tree_node_value(&type_declaration).end = 2;
-    core_tree_node_value(&field_declaration).start = 1;
-    core_tree_node_value(&field_declaration).end = 2;
-    core_tree_node_value(&foreign_use).start = 0;
-    core_tree_node_value(&foreign_use).end = 1;
+    parse_tree_t *type_declaration = parse_tree_new_node((parse_nt_node_t){0});
+    parse_tree_t *field_declaration = parse_tree_new_node((parse_nt_node_t){0});
+    parse_tree_t *foreign_use = parse_tree_new_node((parse_nt_node_t){0});
+    core_tree_node_value(type_declaration).start = 0;
+    core_tree_node_value(type_declaration).end = 2;
+    core_tree_node_value(field_declaration).start = 1;
+    core_tree_node_value(field_declaration).end = 2;
+    core_tree_node_value(foreign_use).start = 0;
+    core_tree_node_value(foreign_use).end = 1;
 
     const char foreign_text[] = "value";
     core_module_spec_t foreign_spec = {0};
@@ -82,7 +83,7 @@ main(void)
         foreign_tokens_array, 1);
     assert(foreign_tokens);
     test_sources_t sources = {
-        .foreign_node = &foreign_use, .foreign_unit = &foreign_unit,
+        .foreign_node = foreign_use, .foreign_unit = &foreign_unit,
         .foreign_tokens = foreign_tokens, .local_unit = &unit,
         .local_tokens = tokens,
     };
@@ -95,7 +96,7 @@ main(void)
     module_scope->scope_tag = CORE_STRING_STATIC("module");
     parse_sym_entry_t *type_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("Item"),
-        PARSE_SYM_TYPEDEF, &type_declaration);
+        PARSE_SYM_TYPEDEF, type_declaration);
     type_symbol->adt_kind = CORE_STRING_STATIC("record");
     type_symbol->visibility = CORE_STRING_STATIC("public");
     parse_symtab_push_scope(symtab, CORE_STRING_STATIC("type"),
@@ -105,10 +106,10 @@ main(void)
     record_scope->scope_tag = CORE_STRING_STATIC("type");
     parse_sym_entry_t *field_symbol = parse_symtab_add(symtab,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("value"),
-        PARSE_SYM_VARIABLE, &field_declaration);
+        PARSE_SYM_VARIABLE, field_declaration);
     field_symbol->is_field = true;
     field_symbol->owner_type = type_symbol;
-    assert(parse_sym_add_use(field_symbol, &foreign_use));
+    assert(parse_sym_add_use(field_symbol, foreign_use));
     ir_ctx_t *context = ir_ctx_new();
     const ir_profile_t profile = {.name = CORE_STRING_STATIC("n00b")};
     ir_module_t *module = ir_module_new(context,

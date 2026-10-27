@@ -924,7 +924,6 @@ static core_string_t render(pr_t *p, doc_t *root)
             break;
 
         case D_TRIVIA_NEST:
-            /* Keep delimiters in place while indenting their comments. */
             core_list_push(stack, ((rframe_t){
                 .doc = f.doc->kids[0], .ind = f.ind,
                 .trivia_indent = f.trivia_indent + p->indent,

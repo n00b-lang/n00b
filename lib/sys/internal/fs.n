@@ -5,6 +5,8 @@ private inline func open_read_flags() -> int {
         return 0x80000
     } else when target_os() == "macos" {
         return 0x1000000
+    } else when target_os() == "windows" {
+        return 0x80
     } else {
         return 0
     }
@@ -96,7 +98,7 @@ func data_file(path: string) -> Array[u8] {
     try {
         data = read_file(path)!
     } fail(failure) {
-        panic("cannot read data file " + path)
+        os_failure("cannot read data file " + path, failure)
     }
     return data
 }

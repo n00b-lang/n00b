@@ -49,7 +49,7 @@ memory_transport(bool is_return, core_target_call_abi_t abi)
 }
 
 static bool
-darwin_hfa(const core_target_desc_t *target,
+aarch64_hfa(const core_target_desc_t *target,
            const core_target_aggregate_t *aggregate,
            core_target_aggregate_class_t *result)
 {
@@ -87,7 +87,7 @@ core_target_classify_aggregate(const core_target_desc_t *target,
 {
     if (!out || !valid_aggregate(target, aggregate)
         || target->call_abi < CORE_TARGET_CALL_SYSV_AMD64
-        || target->call_abi > CORE_TARGET_CALL_WINDOWS_X64)
+        || target->call_abi > CORE_TARGET_CALL_AAPCS64)
         return false;
     core_target_aggregate_class_t result = {0};
     if (!aggregate->size_bytes) {
@@ -134,7 +134,8 @@ core_target_classify_aggregate(const core_target_desc_t *target,
         }
         break;
     case CORE_TARGET_CALL_DARWIN_AARCH64:
-        if (darwin_hfa(target, aggregate, &result)) break;
+    case CORE_TARGET_CALL_AAPCS64:
+        if (aarch64_hfa(target, aggregate, &result)) break;
         if (aggregate->size_bytes > 2 * TARGET_WORD_BYTES) {
             result.transport = CORE_TARGET_TRANSPORT_INDIRECT;
             break;

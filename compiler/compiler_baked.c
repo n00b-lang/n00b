@@ -9,6 +9,19 @@
 static core_buffer_t baked_capture;
 static bool baked_capture_read;
 static bool baked_capture_full;
+static bool baked_values_opaque;
+
+void
+n00bb_set_baked_values_opaque(bool opaque)
+{
+    baked_values_opaque = opaque;
+}
+
+bool
+n00bb_baked_values_opaque(void)
+{
+    return baked_values_opaque;
+}
 
 void
 n00bb_set_baked_capture(const uint8_t *data, size_t size, bool full)

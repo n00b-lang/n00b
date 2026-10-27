@@ -1,0 +1,26 @@
+func __finalize(self: int) -> int fail: string {
+    return 1
+}
+func f_1() -> int {
+    return 1
+}
+
+func f_1() -> int {
+    return 2
+}
+
+let x = 1
+let x = 2
+require f_1() == x
+func f_2() -> int {
+    let x = 1
+    if x > 0 {
+        let y = x
+        let x = 2
+        return x + y
+    }
+    return x
+}
+require f_2() == 3
+let a: u8 = 1
+let b = a << 9

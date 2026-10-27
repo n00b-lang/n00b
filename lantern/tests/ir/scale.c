@@ -436,7 +436,7 @@ static void test_structure_is_linear_in_the_loops(void)
     for (uint32_t s = 1; s <= 2; s *= 2) {
         ir_ctx_t    *c    = ir_ctx_new();
         ir_diags_t  *d    = ir_diags_new(c, nullptr);
-        ir_module_t *m    = looped(c, 600 * s);
+        ir_module_t *m    = looped(c, 2400 * s);
         size_t       base = ir_ctx_bytes(c);
         clock_t      a    = clock();
 
@@ -446,7 +446,7 @@ static void test_structure_is_linear_in_the_loops(void)
         size_t now_bytes = ir_ctx_bytes(c) - base;
 
         if (fails || getenv("IR_SCALE_REPORT")) {
-            printf("      %u loops: structure %.1f ms, %.1f MB\n", 600 * s,
+            printf("      %u loops: structure %.1f ms, %.1f MB\n", 2400 * s,
                    now_ms, (double)now_bytes / 1048576.0);
         }
 

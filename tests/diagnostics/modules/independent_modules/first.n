@@ -1,0 +1,10 @@
+func a() -> int {
+    return "x"
+}
+record Pair {
+    left: int
+    right: Dict[int]
+}
+func pair() -> Pair {
+    return (left = 1, right = {:})
+}

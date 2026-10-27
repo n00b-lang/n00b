@@ -1,0 +1,5 @@
+let x: Strng = "a"
+func f(p: Pointt) -> int {
+    return 1
+}
+require f(1) == 1

@@ -3,8 +3,6 @@
 #include <assert.h>
 #include <stddef.h>
 
-/* Declare a value with up to four C alternatives. Tag zero is empty; the
- * make/get suffixes select one-based alternatives in declaration order. */
 #define core_variant_decl_2(Name, T1, T2)                                        \
     typedef struct Name {                                                        \
         size_t tag;                                                              \

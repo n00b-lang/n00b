@@ -1,0 +1,1469 @@
+import sys.abi
+import sys.effects
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.heap
+import sys.gc.los
+
+const HALF: f32 = 0.5
+const extent: uint = 4
+
+record Sample layout(c) {
+    weight: f32
+    total: f64
+    count: i32
+}
+
+record Deferred_Array {
+    items: Array[int][extent]
+}
+
+record Comptime_Pair layout(c) {
+    left: int
+    right: int
+}
+
+func comptime_start() -> nil {
+    var sample: Sample
+    sample.weight = 1.25
+    require sample.weight * 2.0 == 2.5
+    var pair: Comptime_Pair
+    pair.left = 3
+    pair.right = 4
+    require pair.left + pair.right == 7
+}
+
+when false {
+    let unused = new[Unavailable_Type]()
+}
+
+func array_value_index_check() {
+    let values = [11, 29]'array
+    require values[0] == 11
+    require values[-1] == 29
+}
+
+record Backing_Item {
+    value: int
+}
+
+func __init(modify self: Backing_Item, value: int) {
+    self.value = value
+}
+
+func make_item(value: int) -> Ref[Backing_Item] {
+    var item: Backing_Item = new[Backing_Item](value)
+    return ref item
+}
+
+func gc_array_backing_check() {
+    let first: Ref[Backing_Item] = make_item(7)
+    let second: Ref[Backing_Item] = make_item(9)
+    let values = [first, second]'array
+    require values[0].value == 7
+    require values[1].value == 9
+}
+
+func bit_count_check() {
+    let word: uint = 0x1000
+    assert __count_leading_zeros(word) == 51
+    assert __count_trailing_zeros(word) == 12
+    let zero: uint = 0
+    assert __count_leading_zeros(zero) == 64
+    assert __count_trailing_zeros(zero) == 64
+}
+
+func ffi_borrow_check() {
+    var bytes: Array[u8] = [1, 2, 3, 4, 5]
+    var length: uint = 0
+    let address = __ffi_borrow(ref bytes, ref length, 0)
+    assert length == 5
+    assert address != 0
+    __ffi_release(ref bytes)
+}
+
+func integer_complement_check() {
+    let word: u32 = 0x80000000
+    assert ~word == 0x7fffffff
+    let narrow: bits:5 = cast[bits:5] 5
+    assert ~narrow == cast[bits:5] 26
+    let signed: i:5 = cast[i:5] 0
+    assert unsafe_not(signed) == cast[i:5] -1
+}
+
+type Word = u64
+type Text = string
+
+func round_trip(value: u64) -> u64 {
+    let tagged: Word = cast[Word] value
+    return cast[u64] tagged
+}
+
+func text_round_trip(value: string) -> string {
+    let tagged: Text = cast[Text] value
+    return cast[string] tagged
+}
+
+func nominal_cast_check() {
+    require round_trip(42) == 42
+    require text_round_trip("ok") == "ok"
+}
+
+func fill(out value: int, input: int) {
+    value = input
+}
+
+func fill_pointer(out value: Ref[byte]?, input: Ref[byte]) {
+    value = input
+}
+
+func copyout_check() {
+    var value: int
+    fill(value, 42)
+    assert value == 42
+    var target: byte = 7
+    var pointer: Ref[byte]? = nil
+    fill_pointer(pointer, ref target)
+    assert pointer != nil
+}
+
+func guard(x: Ref[byte]?) -> uint {
+    let next: Ref[byte]? = x
+    if next == nil { return 0 }
+    return __abi_ref_address(next.get())
+}
+
+func required(x: Ref[byte]?) -> uint {
+    require x != nil
+    return __abi_ref_address(x.get())
+}
+
+func option_guard_flow_check() {
+    require guard(nil) == 0
+    var value: byte = 1
+    let pointer: Ref[byte]? = ref value
+    require required(pointer) == __abi_ref_address(ref value)
+}
+
+variant Choice {
+    number: int
+    empty: nil
+}
+
+func variant_array_literal_check() {
+    let values: Array[Choice] = [(number = 7), (empty = nil)]
+    let first = values[0]
+    switch first {
+        case number { require first.number == 7 }
+        case empty { require false }
+    }
+    var saw_empty = false
+    let second = values[1]
+    switch second {
+        case number { require false }
+        case empty { saw_empty = true }
+    }
+    require saw_empty
+}
+
+func read_at(values: Array['T], index: uint) -> 'T {
+    return values[index]
+}
+
+record Slots {
+    values: Array[int][2]
+}
+
+func array_index_write_check() {
+    var slots: Slots
+    slots.values[0] = 11
+    let index: uint = 1
+    slots.values[index] = 29
+    assert slots.values[index] == 29
+    var values: Array[int] = new[Array[int]](2)
+    values[index] = 29
+    assert read_at(values, index) == 29
+    assert (ref slots.values[0]).__value == 11
+    assert (ref slots.values[1]).__value == 29
+}
+
+func right(x: uint) -> int {
+    if x != 0 and debug_enabled() {
+        return 1
+    }
+    return 0
+}
+
+func left(x: uint) -> int {
+    if debug_enabled() and x != 0 {
+        return 1
+    }
+    return 0
+}
+
+func builtin_operand_check() {
+    assert right(3) == 1
+    assert right(0) == 0
+    assert left(3) == 1
+    assert left(0) == 0
+}
+
+record E {
+    code: i64
+    count: i64?
+    text: string?
+}
+
+func option_record_fields_check() {
+    let e: E = (code = -3, count = 4, text = "a longer piece of option text")
+    let count = e.count
+    let text = e.text
+    assert count != nil
+    assert text != nil
+    if count != nil {
+        assert count.get() == 4
+    }
+    if text != nil {
+        assert text.get() == "a longer piece of option text"
+    }
+    let n: E = (code = 1, count = nil, text = nil)
+    assert n.count == nil
+    assert n.text == nil
+}
+
+func abi_square(n: int) -> int {
+    return n * n
+}
+
+func abi_summaries_check() {
+    var index: u32 = 1
+    var summarized: u32 = 0
+    var total: u32 = 0
+    while true {
+        let found = sys.abi.function_at(index)
+        if found == nil {
+            break
+        }
+        total += 1
+        if found.get().summary_offset != 0 {
+            summarized += 1
+        }
+        index += 1
+    }
+    require abi_square(3) == 9
+    require total > 0
+    require summarized == 0
+}
+
+flagset Permissions {
+    read,
+    write,
+    both = read +
+        write,
+}
+
+func operator_newlines_check() {
+    var value: uint =
+        3 +
+        4 *
+        2
+    value +=
+        1
+    require value ==
+        12
+    require (value &
+        3) ==
+        0
+    require (1 <<
+        2) ==
+        4
+    require true and
+        true or
+        false
+}
+
+record Tally {
+    count: int
+    calls: int
+}
+
+func __add_assign(modify self: Tally, other: int) {
+    self.count += other
+    self.calls += 1
+}
+
+record Sum_Pair {
+    value: int
+}
+
+func __add(self: Sum_Pair, other: int) -> Sum_Pair {
+    return (value = self.value + other)
+}
+
+func compound_in_place_check() {
+    var tally: Tally = (count = 1, calls = 0)
+    tally += 4
+    tally += 5
+    require tally.count == 10 and tally.calls == 2
+    var pair: Sum_Pair = (value = 1)
+    pair += 2
+    require pair.value == 3
+}
+
+record Counter {
+    hits: Atomic[uint]
+    name: string
+}
+
+record Node {
+    value: int
+}
+
+var atomic_state: Atomic[uint] = 5
+var atomic_pointer: Atomic[Ref[byte]?] = nil
+var atomic_head: Atomic[Ref[Node]?] = nil
+
+func atomic_global_check() {
+    require __atomic_load(ref atomic_pointer) == nil
+    let old: uint = __atomic_exchange(ref atomic_state, 6)
+    require old == 5
+    require __atomic_load(ref atomic_state) == 6
+    let counter: Counter = (hits = 3, name = "x")
+    require __atomic_load(ref counter.hits) == 3
+    require counter.name == "x"
+    require __atomic_load(ref atomic_head) == nil
+    var node: Node = (value = 7)
+    __atomic_store(ref atomic_head, ref node)
+    let stored = __atomic_load(ref atomic_head)
+    require stored != nil
+    require stored.get().value == 7
+}
+
+func box_integer(value: int) -> Any {
+    return cast[Any] value
+}
+
+func box_string(value: string) -> Any {
+    return cast[Any] value
+}
+
+func inspect_integer(value: Any) -> int {
+    return typecase value {
+        case int { -> value }
+        else { -> 0 }
+    }
+}
+
+func inspect_string(value: Any) -> string {
+    return typecase value {
+        case string { -> value }
+        else { -> "bad" }
+    }
+}
+
+func echo_box(value: Any) -> Any {
+    return value
+}
+
+func any_box_check() {
+    require inspect_integer(box_integer(42)) == 42
+    require inspect_string(echo_box(box_string("ok"))) == "ok"
+}
+
+record Boxed_Entry {
+    value: int
+    other: Any
+}
+
+var boxed_entries: List[Boxed_Entry] = new[List[Boxed_Entry]]()
+
+func fill_boxed_entries() {
+    var i = 0
+    while i < 64 {
+        let text = "boxed text that is long enough to need heap storage " + "x"
+        let e: Boxed_Entry = (value = i, other = cast[Any]text)
+        boxed_entries.append(e)
+        i = i + 1
+    }
+}
+
+func count_bad_boxed_entries() -> int {
+    var bad = 0
+    var i = 0
+    while i < 64 {
+        let entry = boxed_entries[i]
+        let other = entry.other
+        let text = typecase other {
+            case string { -> other }
+            else { -> "" }
+        }
+        if text != "boxed text that is long enough to need heap storage x" {
+            bad = bad + 1
+        }
+        i = i + 1
+    }
+    return bad
+}
+
+func any_record_field_check() {
+    fill_boxed_entries()
+    var junk: string = ""
+    var j = 0
+    while j < 200000 {
+        junk = "y" + "another piece of text long enough to need the heap"
+        j = j + 1
+    }
+    require count_bad_boxed_entries() == 0
+}
+
+func mix(a: u64, b: u64) -> u64 {
+    return unsafe_sub(unsafe_shl(unsafe_add(unsafe_mul(a, 0x100000001B3), b),
+                                 7), 1)
+}
+
+const folded: u64 = mix(0xFFFFFFFFFFFFFFFF, 3)
+
+func unsafe_arithmetic_check() {
+    let high: uint = 9223372036854775807
+    assert unsafe_mul(high, 3) == 9223372036854775805
+    let multiplier: uint = 0x9e3779b97f4a7c15
+    assert unsafe_mul(multiplier, 0) == 0
+    let count: uint = 3
+    let shifted: uint = 1 << count
+    assert shifted == 8
+    assert unsafe_mul(3, 7) == 21
+    let top: u8 = 250
+    assert unsafe_add(top, 10) == 4
+    let one: u32 = 1
+    assert unsafe_sub(one, 2) == 0xFFFFFFFF
+    let bits: u16 = 0x8001
+    assert unsafe_shl(bits, 1) == 2
+    let peak: i32 = 2147483647
+    assert unsafe_add(peak, 1) == -2147483648
+    assert mix(0xFFFFFFFFFFFFFFFF, 3) == folded
+    let wide: u64 = 0x100000102
+    assert unsafe_cast[u8] wide == 2
+    let negative: i64 = -1
+    assert unsafe_cast[u16] negative == 65535
+    let quotient: i32 = -9
+    assert quotient / 4 == -2 and quotient % 4 == -1
+}
+
+func die(code: int) {
+    __os_exit(code)
+}
+
+func pick(flag: bool) -> int {
+    if flag {
+        return 1
+    }
+    die(2)
+}
+
+func direct(flag: bool) -> int {
+    if flag {
+        return 1
+    }
+    __os_exit(2)
+}
+
+func diverging_choose(flag: bool) -> int {
+    let chosen: int
+    if flag {
+        chosen = 1
+    } else {
+        die(3)
+    }
+    return chosen
+}
+
+func diverging_paths_check() {
+    require pick(true) == 1
+    require direct(true) == 1
+    require diverging_choose(true) == 1
+}
+
+var bumped_total: int = 0
+
+func effects_square(n: int) -> int {
+    return n * n
+}
+
+func bump(n: int) {
+    bumped_total += n
+}
+
+func shout() {
+    __fd_write(2, "")
+}
+
+const square_effects: u64 = __function_effects(ref effects_square)
+const square_is_quiet: bool = !sys.effects.has_effect(square_effects,
+                                                      sys.effects.may_io)
+
+func function_effects_check() {
+    require square_is_quiet
+    let pure = __function_effects(ref effects_square)
+    require !sys.effects.has_effect(pure, sys.effects.writes_nonlocal)
+    require !sys.effects.has_effect(pure, sys.effects.may_io)
+    require sys.effects.has_effect(pure, sys.effects.traps_arithmetic)
+    require sys.effects.has_effect(__function_effects(ref bump),
+                                   sys.effects.writes_nonlocal)
+    require sys.effects.has_effect(__function_effects(ref shout),
+                                   sys.effects.may_io)
+    require !sys.effects.has_effect(__function_effects(ref bump),
+                                    sys.effects.may_io)
+}
+
+record First {
+    raw: uint
+}
+
+record Second {
+    raw: uint
+}
+
+func measure(value: int) -> int {
+    return value + 1
+}
+
+func measure(value: int, scale: int) -> int {
+    return value * scale
+}
+
+func shut(modify self: First) {
+    self.raw = 1
+}
+
+func shut(modify self: Second) {
+    self.raw = 2
+}
+
+func overloads_check() {
+    assert measure(4) == 5
+    assert measure(4, 3) == 12
+    var first: First = (raw = 0)
+    var second: Second = (raw = 0)
+    shut(second)
+    shut(first)
+    assert first.raw == 1
+    assert second.raw == 2
+}
+
+thread var active: bool = false
+thread var current: Ref[byte]? = nil
+thread var marker: byte = 0
+
+func thread_global_pair_check() {
+    var found_active: bool = false
+    var found_current: bool = false
+    var index: u32 = 1
+    while index < sys.abi.storage_count() {
+        let row: Ref[sys.abi.Storage_Record]? = sys.abi.storage_at(index)
+        if row != nil {
+            if row.get().segment_kind == 3 {
+                let address: Ref[byte]? = sys.abi.storage_address(index)
+                if address != nil {
+                    let actual: uint = __abi_ref_address(address.get())
+                    if actual == __abi_ref_address(ref active) { found_active = true }
+                    if actual == __abi_ref_address(ref current) { found_current = true }
+                } else { require false }
+            }
+        }
+        index += 1
+    }
+    require found_active and found_current
+    assert current == nil
+    active = true
+    assert active
+    assert current == nil
+    current = ref marker
+    if current != nil {
+        require __abi_ref_address(current.get()) == __abi_ref_address(ref marker)
+    } else { require false }
+}
+
+record Cell {
+    raw: uint
+}
+
+record Other_Cell {
+    raw: uint
+}
+
+type Cell_Handle = Ref[Cell]
+alias type Other = Ref[Other_Cell]
+
+func make_cell(raw: uint) -> Cell_Handle {
+    var cell: Cell = (raw = raw)
+    return cast[Cell_Handle](ref cell)
+}
+
+func other(raw: uint) -> Other {
+    var cell: Other_Cell = (raw = raw)
+    return ref cell
+}
+
+func close_cell(self: Cell_Handle) {
+    self.raw = 0
+}
+
+func close_cell(self: Other) {
+    self.raw = 1
+}
+
+func reset(modify self: Other) {
+    self.raw = 2
+}
+
+func clear(modify self: Ref[Cell]) {
+    self.raw = 3
+}
+
+func named_reference_check() {
+    let first = make_cell(7)
+    let copy = first
+    assert copy.raw == 7
+    close_cell(copy)
+    assert first.raw == 0
+    let second = other(9)
+    close_cell(second)
+    assert second.raw == 1
+    var modified = other(5)
+    reset(modified)
+    assert modified.raw == 2
+    var cell: Cell = (raw = 0)
+    var direct: Ref[Cell] = ref cell
+    clear(direct)
+    assert cell.raw == 3
+    var i = 0
+    while i < 5000 {
+        let made = make_cell(cast[uint] i)
+        assert made.raw == cast[uint] i
+        i = i + 1
+    }
+}
+
+record Inner {
+    value: int?
+}
+
+record Entry {
+    value: int?
+    inner: Inner
+}
+
+var narrowing_entries: List[Entry] = new[List[Entry]]()
+
+func peek(entry: Entry) -> int {
+    return 0
+}
+
+func guarded(entry: Entry) -> int {
+    if entry.value != nil {
+        return entry.value.get()
+    }
+    return 0
+}
+
+func field_early(entry: Entry) -> int {
+    if entry.value == nil or entry.inner.value == nil {
+        return 0
+    }
+    return entry.value.get() + entry.inner.value.get()
+}
+
+func local_copy(entry: Entry) -> int {
+    var copy: Entry = entry
+    if copy.value == nil {
+        return 0
+    }
+    let unused = peek(copy)
+    return copy.value.get()
+}
+
+func modified(modify entry: Entry) -> int {
+    if entry.value != nil {
+        return entry.value.get()
+    }
+    return 0
+}
+
+func indexed(index: int) -> int {
+    let entry = narrowing_entries[index]
+    let value = entry.value
+    let inner = entry.inner.value
+    if value == nil or inner == nil {
+        return 0
+    }
+    return value.get() + inner.get()
+}
+
+func twice(value: int) -> int {
+    return value * 2
+}
+
+func argument(entry: Entry) -> int {
+    if entry.value != nil {
+        return twice(entry.value)
+    }
+    return 0
+}
+
+func promoted(entry: Entry?, items: Array[int]?) -> int {
+    if entry == nil or items == nil {
+        return 0
+    }
+    if entry.value == nil or entry.inner.value == nil {
+        return 0
+    }
+    return twice(entry.value.get()) + entry.inner.value.get() +
+        cast[int]items.len() + items[1] + 1 + entry.value.get()
+}
+
+func looked_up(counts: Dict[string, int]) -> int {
+    let found = counts["a"]
+    if found != nil {
+        return twice(found)
+    }
+    return 0
+}
+
+func option_field_narrowing_check() {
+    let inner: Inner = (value = 5)
+    var entry: Entry = (value = 4, inner = inner)
+    narrowing_entries.append(entry)
+    require guarded(entry) == 4
+    require field_early(entry) == 9
+    require local_copy(entry) == 4
+    require modified(entry) == 4
+    require indexed(0) == 9
+    require argument(entry) == 8
+    let items: Array[int] = [10, 20]
+    require promoted(entry, items) == 8 + 5 + 2 + 20 + 1 + 4
+    var counts: Dict[string, int] = {"a": 3}
+    require looked_up(counts) == 6
+}
+
+func rounded_bytes(index: u32) -> uint {
+    let found: Ref[sys.abi.Type_Record]? = sys.abi.type_at(index)
+    if found != nil {
+        return cast[uint]((found.get().size_bits + 7) / 8)
+    }
+    return 0
+}
+
+func combined_bytes(first_index: u32, second_index: u32) -> uint {
+    let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
+    let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
+    if first != nil and second != nil {
+        return cast[uint]((first.get().size_bits + second.get().size_bits) / 8)
+    }
+    return 0
+}
+
+func combined_bytes_else(first_index: u32, second_index: u32) -> uint {
+    let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
+    let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
+    if first == nil or second == nil {
+        return 0
+    } else {
+        return cast[uint]((first.get().size_bits + second.get().size_bits) / 8)
+    }
+}
+
+func first_bytes_after_elif(first_index: u32, second_index: u32) -> uint {
+    let first: Ref[sys.abi.Type_Record]? = sys.abi.type_at(first_index)
+    let second: Ref[sys.abi.Type_Record]? = sys.abi.type_at(second_index)
+    if first == nil {
+        return 0
+    } elif second == nil {
+        return 0
+    } else {
+        return cast[uint](first.get().size_bits / 8)
+    }
+}
+
+func option_get_field_arith_check() {
+    let sample: byte = 0
+    assert rounded_bytes(cast[u32](typeof(sample))) == 1
+    let wider: u32 = 0
+    assert combined_bytes(cast[u32](typeof(sample)),
+        cast[u32](typeof(wider))) == 5
+    assert combined_bytes_else(cast[u32](typeof(sample)),
+        cast[u32](typeof(wider))) == 5
+    assert first_bytes_after_elif(cast[u32](typeof(sample)),
+        cast[u32](typeof(wider))) == 1
+}
+
+func find(n: int) -> int? {
+    if n > 2 {
+        return n
+    }
+    return nil
+}
+
+func add_one(x: int?) -> int {
+    if x != nil {
+        return x + 1
+    }
+    return 0
+}
+
+func early(x: int?) -> int {
+    if x == nil {
+        return -1
+    }
+    return x * 2
+}
+
+func both(a: int?, b: int?) -> int {
+    if a != nil and b != nil {
+        return a + b
+    }
+    return 0
+}
+
+func alternatives(v: int?) -> int {
+    if v == nil {
+        return 0
+    } else {
+        return v + 10
+    }
+}
+
+func either(v: int?) -> bool {
+    if v == nil or v > 3 {
+        return true
+    }
+    return false
+}
+
+func count_up(start: int?) -> int {
+    var v = start
+    var total = 0
+    while v != nil {
+        total = total + v
+        if v > 5 {
+            v = nil
+        } else {
+            v = v + 1
+        }
+    }
+    return total
+}
+
+func explicit(v: int?) -> int {
+    if v != nil {
+        return v.get() + v
+    }
+    return v.get_or_else(7)
+}
+
+record Narrow_Pair {
+    a: int
+    b: int
+    key: Array[int]
+}
+
+func set_both(modify p: Narrow_Pair) -> bool {
+    p.a = 10
+    p.b = 20
+    return true
+}
+
+func swap(modify a: int, modify b: int) {
+    let t = a
+    a = b
+    b = t
+}
+
+func places(e: Narrow_Pair?) -> int {
+    var x = e
+    if x != nil {
+        x.key[0] = 9
+        x.a += 4
+        swap(x.a, x.b)
+        return x.key[0] + x.a * 100 + x.b * 10000
+    }
+    return -1
+}
+
+func in_condition(e: Narrow_Pair?) -> int {
+    var x = e
+    if x != nil and set_both(x) {
+        return x.a + x.b
+    }
+    return -1
+}
+
+func option_narrowing_check() {
+    let top = find(3)
+    if top != nil {
+        require top + 1 == 4
+    }
+    require add_one(find(3)) == 4
+    require add_one(find(1)) == 0
+    require early(find(3)) == 6
+    require early(find(1)) == -1
+    require both(find(3), find(4)) == 7
+    require both(find(3), find(1)) == 0
+    require alternatives(find(3)) == 13
+    require alternatives(find(1)) == 0
+    require either(find(1))
+    require either(find(4))
+    require !either(find(3))
+    require count_up(find(4)) == 4 + 5 + 6
+    require explicit(find(3)) == 6
+    require explicit(find(1)) == 7
+    let pair: Narrow_Pair = (a = 1, b = 2, key = [7, 8])
+    require places(pair) == 9 + 2 * 100 + 5 * 10000
+    require in_condition(pair) == 30
+}
+
+callback Transform {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+
+func plus_one(value: int) -> int {
+    return value + 1
+}
+
+func make_transform(handler: Ref[(int) -> int]) -> Transform {
+    return callback[Transform](handler)
+}
+
+func callback_handler_ref_check() {
+    let cb = make_transform(ref plus_one)
+    require cb.call(41) == 42
+}
+
+record Counter_State {
+    count: int
+}
+
+callback State_Counter {
+    call(value: int) -> int
+    handler(modify state: Counter_State, value: int) -> int
+    setup(handler: Ref[(modify state: Counter_State, value: int) -> int],
+          state: Ref[Counter_State]) -> nil
+}
+
+func state_handle(modify state: Counter_State, value: int) -> int {
+    state.count += value
+    return state.count
+}
+
+func setup(handler: Ref[(modify state: Counter_State, value: int) -> int],
+           state: Ref[Counter_State]) -> nil {
+}
+
+func make_counter(initial: Counter_State) -> State_Counter {
+    var state: Counter_State = initial
+    return callback[State_Counter](ref state_handle, ref state)
+}
+
+func callback_state_check() {
+    var initial: Counter_State
+    initial.count = 0
+    let counter = make_counter(initial)
+    require counter.call(2) == 2
+    require counter.call(3) == 5
+}
+
+record Ref_State {
+    count: int
+}
+
+callback Ref_Counter {
+    call(value: int) -> int
+    handler(modify state: Ref_State, value: int) -> int
+    setup(handler: Ref[(modify state: Ref_State, value: int) -> int],
+          state: Ref[Ref_State]) -> nil
+}
+
+func ref_handle(modify state: Ref_State, value: int) -> int {
+    state.count += value
+    return state.count
+}
+
+func setup(handler: Ref[(modify state: Ref_State, value: int) -> int],
+           state: Ref[Ref_State]) -> nil {
+}
+
+func make_from_ref(state: Ref[Ref_State]) -> Ref_Counter {
+    return callback[Ref_Counter](ref ref_handle, state)
+}
+
+func make_ref_counter(input: Ref_State) -> Ref_Counter {
+    var state = input
+    return make_from_ref(ref state)
+}
+
+func callback_state_ref_check() {
+    var initial: Ref_State
+    initial.count = 0
+    let cb = make_ref_counter(initial)
+    require cb.call(2) == 2
+    require cb.call(3) == 5
+}
+
+record Setup_State {
+    count: int
+}
+
+callback Setup_Counter {
+    call(value: int) -> int
+    handler(modify state: Setup_State, value: int) -> int
+    setup(handler: Ref[(modify state: Setup_State, value: int) -> int],
+          state: Ref[Setup_State], priority: int = 1) -> nil
+}
+
+func setup_handle(modify state: Setup_State, value: int) -> int {
+    state.count += value
+    return state.count
+}
+
+func setup(handler: Ref[(modify state: Setup_State, value: int) -> int],
+           state: Ref[Setup_State], priority: int = 1) -> nil {
+    var current = state.__value
+    current.count = priority
+    state.__value = current
+}
+
+func with_default(input: Setup_State) -> Setup_Counter {
+    var state: Setup_State = input
+    return callback[Setup_Counter](ref setup_handle, ref state)
+}
+
+func with_keyword(input: Setup_State) -> Setup_Counter {
+    var state: Setup_State = input
+    return callback[Setup_Counter](ref setup_handle, ref state, priority = 5)
+}
+
+func callback_setup_check() {
+    var initial: Setup_State
+    initial.count = 0
+    let defaulted = with_default(initial)
+    let named = with_keyword(initial)
+    require defaulted.call(2) == 3
+    require named.call(2) == 7
+}
+
+record Setup_Fail_State {
+    count: int
+}
+
+callback Setup_Fail_Counter {
+    call(value: int) -> int
+    handler(modify state: Setup_Fail_State, value: int) -> int
+    setup(handler: Ref[(modify state: Setup_Fail_State, value: int) -> int],
+          state: Ref[Setup_Fail_State], should_fail: bool) -> nil fail: int
+}
+
+func setup_fail_handle(modify state: Setup_Fail_State, value: int) -> int {
+    state.count += value
+    return state.count
+}
+
+func setup(handler: Ref[(modify state: Setup_Fail_State, value: int) -> int],
+           state: Ref[Setup_Fail_State], should_fail: bool) -> nil fail: int {
+    if should_fail {
+        fail 7
+    }
+}
+
+func make_setup_fail_counter(input: Setup_Fail_State,
+                             should_fail: bool) -> Setup_Fail_Counter fail: int {
+    var state = input
+    return callback[Setup_Fail_Counter](ref setup_fail_handle, ref state,
+                                        should_fail)!
+}
+
+func callback_setup_failure_check() {
+    var initial: Setup_Fail_State
+    initial.count = 0
+    try {
+        let counter = make_setup_fail_counter(initial, false)!
+        require counter.call(2) == 2
+    } fail(err) {
+        require false
+    }
+    try {
+        let unused = make_setup_fail_counter(initial, true)!
+        require false
+    } fail(err) {
+        require true
+    }
+}
+
+record Fail_State {
+    count: int
+}
+
+callback Fail_Counter {
+    call(value: int) -> int fail: string
+    handler(modify state: Fail_State, value: int) -> int fail: string
+    setup(handler: Ref[(modify state: Fail_State, value: int) -> int fail: string],
+          state: Ref[Fail_State]) -> nil fail: string
+}
+
+func fail_handle(modify state: Fail_State, value: int) -> int fail: string {
+    state.count += value
+    if value < 0 {
+        fail "negative"
+    }
+    return state.count
+}
+
+func setup(handler: Ref[(modify state: Fail_State, value: int) -> int fail: string],
+           state: Ref[Fail_State]) -> nil fail: string {
+}
+
+func run_fail_counter(input: Fail_State) -> int fail: string {
+    var state = input
+    let counter = callback[Fail_Counter](ref fail_handle, ref state)!
+    try {
+        let unused = counter.call(-1)!
+        require false
+    } fail(err) {
+        require true
+    }
+    return counter.call(2)!
+}
+
+func callback_failure_check() {
+    var initial: Fail_State
+    initial.count = 0
+    try {
+        require run_fail_counter(initial)! == 2
+    } fail(err) {
+        require false
+    }
+}
+
+func fresh(seed: string) -> string {
+    return seed + " made long enough to need heap storage"
+}
+
+func native_frame_scan_check() {
+    var i = 0
+    var joined: string = ""
+    while i < 30000 {
+        joined = fresh("left") + fresh("right")
+        assert joined == "left made long enough to need heap storageright made long enough to need heap storage"
+        i = i + 1
+    }
+    let mutator = sys.gc.alloc.mutator_for_native()
+    assert mutator != nil
+    if mutator != nil {
+        assert mutator.get().heap.last_stack_words > 0
+        assert mutator.get().heap.last_frame_slots > 0
+    }
+}
+
+record Stress_Node {
+    value: int
+    next: Ref[Stress_Node]?
+}
+
+var stress_head: Ref[Stress_Node]? = nil
+
+func __init(modify self: Stress_Node, value: int, next: Ref[Stress_Node]?) {
+    self.value = value
+    self.next = next
+}
+
+func prepend(value: int, next: Ref[Stress_Node]?) -> Ref[Stress_Node] {
+    var node: Stress_Node = new[Stress_Node](value, next)
+    return ref node
+}
+
+func gc_trace_record_check() {
+    var index: int = 0
+    while index < 128 {
+        stress_head = prepend(index, stress_head)
+        index = index + 1
+    }
+    var config: sys.gc.core.Config
+    sys.gc.heap.config_default(config)
+    let sample: byte = 0
+    let type_index: u32 = cast[u32](typeof(sample))
+    let bytes: uint = 2 * sys.gc.los.los_threshold
+    var churned: uint = 0
+    while churned < 2 * config.initial_heap_bytes {
+        let allocated: Ref[byte]? = sys.gc.alloc.allocate_runtime(
+            type_index, cast[u64](bytes), cast[u32](sys.gc.core.granule_bytes),
+            nil)
+        require allocated != nil
+        churned += bytes
+    }
+    var cursor: Ref[Stress_Node]? = stress_head
+    var expected: int = 127
+    while cursor != nil {
+        let node: Ref[Stress_Node] = cursor.get()
+        require node.value == expected
+        expected = expected - 1
+        cursor = node.next
+    }
+    require expected == -1
+}
+
+func scale(value: f32, factor: f32) -> f32 {
+    return value * factor
+}
+
+func f32_check() {
+    let x: f32 = 1.5
+    let y = scale(x, 2.0)
+    require y == 3.0
+    require y > x
+    require -x < 0.0
+    require y / x == 2.0
+    require y - x == x
+    let wide = cast[f64] y
+    require wide == 3.0
+    require cast[f32] wide == y
+    let tenth: f64 = 0.1
+    require cast[f64] (cast[f32] tenth) != tenth
+    let count = 7
+    require cast[f32] count == 7.0
+    require cast[int] y == 3
+    require HALF + HALF == 1.0
+    var sample: Sample
+    sample.weight = 0.75
+    sample.total = 2.5
+    sample.count = 3
+    require sample.weight * cast[f32] sample.count == 2.25
+    let values: Array[f32][3] = [0.5, 1.5, 2.0]
+    require values[0] + values[1] + values[2] == 4.0
+}
+
+record Item layout(c) {
+    key: i32
+    value: i32
+    label: Foreign[i8]? until 0
+}
+
+record Root layout(c) {
+    early: Foreign[Item]?
+    items: Foreign[Item]? count total
+    total: u64
+    codes: Foreign[i32]? until 0
+    kind: i32
+    v: union by kind {
+        1 => number: i64
+        2 => text: Foreign[i8]? until 0
+    }
+    other: Foreign[i8]? until 0
+}
+
+var anchors: List[Array[u8]] = new[List[Array[u8]]]()
+var item_anchors: List[Array[Item]] = new[List[Array[Item]]]()
+var code_anchors: List[Array[i32]] = new[List[Array[i32]]]()
+
+func c_text(bytes: Array[u8]) -> Foreign[i8]? {
+    anchors.append(bytes)
+    return unsafe_cast[Foreign[i8]?] __abi_ref_address(ref bytes[0])
+}
+
+func make_root() -> Root {
+    let even: Foreign[i8]? = c_text([101, 118, 101, 110, 0])
+    let odd: Foreign[i8]? = c_text([111, 100, 100, 0])
+    var items: Array[Item] = [(key = 1, value = 10, label = even),
+                              (key = 2, value = 20, label = odd),
+                              (key = 3, value = 30, label = even),
+                              (key = 4, value = 40, label = odd)]
+    item_anchors.append(items)
+    var codes: Array[i32] = [3, 5, 7, 0]
+    code_anchors.append(codes)
+    let base: uint = __abi_ref_address(ref items[0])
+    return (early = unsafe_cast[Foreign[Item]?] __abi_ref_address(ref items[2]),
+            items = unsafe_cast[Foreign[Item]?] base, total = 4,
+            codes = unsafe_cast[Foreign[i32]?] __abi_ref_address(ref codes[0]),
+            kind = 2, text = c_text([119, 111, 114, 100, 0]), other = even)
+}
+
+const root: Root = make_root()
+
+func item_at(index: uint) -> Item {
+    let base: Ref[byte] = unsafe_cast[Ref[byte]] root.items
+    let item: Ref[Item] = unsafe_cast[Ref[Item]] __gc_byte_offset(base, index * 16)
+    return item.__value
+}
+
+func bake_foreign_check() {
+    let items: uint = unsafe_cast[uint] root.items
+    require __abi_baked_address(items)
+    require root.total == 4
+    require item_at(0).key == 1
+    require item_at(3).value == 40
+    require unsafe_cast[uint] root.early == items + 32
+    let codes: Ref[byte] = unsafe_cast[Ref[byte]] root.codes
+    let third: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 8)
+    let last: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 12)
+    require third.__value == 7
+    require last.__value == 0
+    require unsafe_cast[uint] item_at(0).label == unsafe_cast[uint] root.other
+    require unsafe_cast[uint] item_at(2).label == unsafe_cast[uint] root.other
+    require __abi_baked_address(unsafe_cast[uint] root.other)
+    let label: string? = foreign_text(item_at(1).label)
+    require label != nil and label.get() == "odd"
+    let text: string? = foreign_text(root.text)
+    require text != nil and text.get() == "word"
+}
+
+trait Checker {
+    func check(self: 'T) -> nil fail: string
+}
+
+trait Measured {
+    func size(self: 'T) -> int
+}
+
+record Checked_Handle {
+    fd: int
+}
+
+func check(self: Checked_Handle) -> nil fail: string {
+    if self.fd < 0 {
+        fail "negative"
+    }
+}
+
+func fixup(modify self: Checked_Handle) -> nil fail: string {
+    if self.fd < 0 {
+        fail "unfixable"
+    }
+    self.fd = 7
+}
+
+func size(self: Checked_Handle) -> int {
+    return self.fd
+}
+
+func verify(value: 'T) -> nil fail: string where 'T: Checker {
+    value.check()!
+}
+
+func repair(modify value: 'T) -> nil fail: string where 'T: Fixup {
+    value.fixup()!
+}
+
+func measured_size(value: 'T) -> int where 'T: Measured {
+    return value.size()
+}
+
+func clear_option(modify value: 'T?) -> nil {
+    value = nil
+}
+
+func generic_trait_calls_check() {
+    var handle: Checked_Handle = (fd = 0)
+    try {
+        verify(handle)!
+        repair(handle)!
+    } fail(failure) {
+        require false
+    }
+    require handle.fd == 7
+    require measured_size(handle) == 7
+    var broken: Checked_Handle = (fd = -1)
+    try {
+        repair(broken)!
+        require false
+    } fail(failure) {
+        require failure == "unfixable"
+    }
+    require broken.fd == -1
+    var item: int? = 5
+    clear_option(item)
+    require item == nil
+}
+
+context Quiet(label: string) {
+    pass
+}
+
+func idle():
+    pass
+
+func braced() {
+    pass
+}
+
+func pass_choose(value: int) -> int {
+    switch value {
+        case 1 {
+            pass
+        }
+        else {
+            pass
+        }
+    }
+    if value > 0 {
+        pass
+    }
+    else {
+        return 1
+    }
+    return 0
+}
+
+func elided() {
+    pass
+    when false {
+        idle()
+    }
+}
+
+func pass_statement_check() {
+    elided()
+    idle()
+    braced()
+    require pass_choose(2) == 0
+}
+
+func start() -> nil {
+    array_value_index_check()
+    gc_array_backing_check()
+    bit_count_check()
+    ffi_borrow_check()
+    integer_complement_check()
+    nominal_cast_check()
+    copyout_check()
+    option_guard_flow_check()
+    variant_array_literal_check()
+    array_index_write_check()
+    builtin_operand_check()
+    option_record_fields_check()
+    abi_summaries_check()
+    operator_newlines_check()
+    compound_in_place_check()
+    atomic_global_check()
+    any_box_check()
+    any_record_field_check()
+    unsafe_arithmetic_check()
+    diverging_paths_check()
+    function_effects_check()
+    overloads_check()
+    thread_global_pair_check()
+    named_reference_check()
+    option_field_narrowing_check()
+    option_get_field_arith_check()
+    option_narrowing_check()
+    callback_handler_ref_check()
+    callback_state_check()
+    callback_state_ref_check()
+    callback_setup_check()
+    callback_setup_failure_check()
+    callback_failure_check()
+    native_frame_scan_check()
+    gc_trace_record_check()
+    f32_check()
+    bake_foreign_check()
+    generic_trait_calls_check()
+    pass_statement_check()
+    __fd_write(2, "ok")
+}

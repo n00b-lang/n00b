@@ -1,0 +1,31 @@
+trait Scaler {
+    func scale(self: 'T, by: int) -> int
+}
+
+record Box {
+    n: int
+}
+
+func scale(self: Box, by: int) -> int {
+    return self.n * by
+}
+
+func many(item: 'T) -> int {
+    return item.scale(1, 2)
+}
+
+func few(item: 'T) -> int {
+    return item.scale()
+}
+
+func twice(item: 'T) -> int {
+    return item.scale(by = "two")
+}
+
+var b: Box = (n = 2)
+require b.scale(1, 2) == 2
+require b.scale() == 2
+require b.scale(by = "two") == 4
+require many(b) == 2
+require few(b) == 2
+require twice(b) == 4

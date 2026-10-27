@@ -15,7 +15,7 @@ static db_state databases[128];
 static iter_state iterators[128];
 
 db_state *
-db_open(int seed)
+source_open(int seed)
 {
     for (size_t i = 0; i < sizeof databases / sizeof databases[0]; i++) {
         if (!databases[i].open) {
@@ -27,7 +27,7 @@ db_open(int seed)
 }
 
 void
-db_close(db_state *db)
+source_close(db_state *db)
 {
     db->open = 0;
 }

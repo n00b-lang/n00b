@@ -16,7 +16,6 @@ typedef struct {
 } memdef_node_t;
 
 core_list_decl(memdef_node_t);
-core_list_decl(uint32_t);
 
 struct ir_memssa_t {
     ir_func_t                 *f;

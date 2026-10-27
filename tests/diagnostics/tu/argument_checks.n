@@ -1,0 +1,29 @@
+func s(x: i16) -> i16 {
+    return x
+}
+
+s(1 << 4)
+func take(cache_kb: u32?) -> u32 {
+    return 0
+}
+
+let text: string = "x"
+require take(text) == 0
+object Counter {
+    count: int
+}
+
+func drop(consume c: Counter) {
+}
+
+func keep(c: Counter) {
+    drop(c)
+}
+
+func read(c: Counter) -> int {
+    return c.count
+}
+
+func pass_view(view c: Counter) -> int {
+    return read(c)
+}

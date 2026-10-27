@@ -1,0 +1,160 @@
+import internal.abi
+import internal.memory
+import internal.threads
+
+record Frame_Span layout(c) {
+    start: uint
+    end:   uint
+    row:   Ref[internal.abi.Native_Frame_Record]?
+}
+
+const index_idle:     u32 = 0
+const index_building: u32 = 1
+const index_ready:    u32 = 2
+const index_failed:   u32 = 3
+
+var index_state: Atomic[u32] = 0
+var spans:       Ref[byte]?  = nil
+var span_count:  uint        = 0
+var span_stride: uint        = 0
+
+func span_record() -> Ref[internal.abi.Type_Record] {
+    let probe: Ref[Frame_Span]?              = nil
+    let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
+    if row != nil {
+        return row.get()
+    }
+    require false
+}
+
+func span_at(base: Ref[byte], index: uint) -> Ref[Frame_Span] {
+    return unsafe_cast[Ref[Frame_Span]] __gc_byte_offset(base,
+                                                         index * span_stride)
+}
+
+func swap_spans(base: Ref[byte], left: uint, right: uint) {
+    let first:  Ref[Frame_Span] = span_at(base, left)
+    let second: Ref[Frame_Span] = span_at(base, right)
+    let held:   Frame_Span      = first.__value
+    first.__value = second.__value
+    second.__value = held
+}
+
+func sift(base: Ref[byte], count: uint, root: uint) {
+    var parent: uint = root
+    while true {
+        var child: uint = parent * 2 + 1
+        if child >= count {
+            return
+        }
+        if child + 1 < count and
+            span_at(base, child + 1).start > span_at(base, child).start {
+            child += 1
+        }
+        if span_at(base, parent).start >= span_at(base, child).start {
+            return
+        }
+        swap_spans(base, parent, child)
+        parent = child
+    }
+}
+
+func sort_spans(base: Ref[byte], count: uint) {
+    var next: uint = count / 2
+    while next > 0 {
+        next -= 1
+        sift(base, count, next)
+    }
+    var end: uint = count
+    while end > 1 {
+        end -= 1
+        swap_spans(base, 0, end)
+        sift(base, end, 0)
+    }
+}
+
+func build() -> bool {
+    let count: uint = cast[uint](internal.abi.native_frame_count())
+    if count == 0 {
+        return true
+    }
+    span_stride = internal.abi.size_bytes(span_record())
+    let memory: Ref[byte]? = internal.memory.map_zeroed(count * span_stride, 8)
+    if memory == nil {
+        return false
+    }
+    let base: Ref[byte] = memory.get()
+    var used:  uint = 0
+    var index: u32  = 0
+    while cast[uint](index) < count {
+        let row: Ref[internal.abi.Native_Frame_Record]? = internal.abi.native_frame(index)
+        if row != nil {
+            let function: Ref[byte]? = row.get().function
+            if function != nil {
+                let start: uint            = __abi_ref_address(function.get())
+                let span:  Ref[Frame_Span] = span_at(base, used)
+                span.start = start
+                span.end = start + cast[uint](row.get().code_bytes)
+                span.row = row
+                used += 1
+            }
+        }
+        index += 1
+    }
+    sort_spans(base, used)
+    spans = memory
+    span_count = used
+    return true
+}
+
+func ready() -> bool {
+    while true {
+        let state: u32 = __atomic_load(ref index_state)
+        if state == index_ready {
+            return true
+        }
+        if state == index_failed {
+            return false
+        }
+        if state == index_idle and
+            __atomic_compare_exchange(ref index_state, index_idle, index_building) {
+            if build() {
+                __atomic_store(ref index_state, index_ready)
+                return true
+            }
+            __atomic_store(ref index_state, index_failed)
+            return false
+        }
+        internal.threads.cpu_relax()
+    }
+}
+
+func frame_for(return_address: uint) -> Ref[internal.abi.Native_Frame_Record]? {
+    if return_address == 0 or !ready() {
+        return nil
+    }
+    let table: Ref[byte]? = spans
+    if table == nil {
+        return nil
+    }
+    let base:   Ref[byte] = table.get()
+    let target: uint      = return_address - 1
+    var low:    uint = 0
+    var high:   uint = span_count
+    while low < high {
+        let middle: uint = low + (high - low) / 2
+        if span_at(base, middle).start <= target {
+            low = middle + 1
+        } else {
+            high = middle
+        }
+    }
+    if low == 0 {
+        return nil
+    }
+    let span: Ref[Frame_Span] = span_at(base, low - 1)
+    if target < span.end {
+        return span.row
+    }
+    return nil
+}

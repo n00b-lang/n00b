@@ -1,2 +1,0 @@
-let bytes: Ffi_Bytes = (data = cast[uint]0, length = cast[uint]3)
-require bytes.length == 3

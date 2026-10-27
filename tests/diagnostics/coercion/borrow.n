@@ -1,0 +1,185 @@
+import sys.gc.finalize
+import sys.gc.alloc
+
+var kept: List[string] = new[List[string]]()
+func keep(s: string) {
+    kept.append(s)
+}
+func escape_site() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    let view: string = b
+    let n: uint = byte_len(view)
+    keep(view)
+    return n
+}
+escape_site()
+func failing() -> uint fail: string {
+    var b: Buffer = buffer_from_string("kept")
+    let view: string = b
+    fail view
+}
+try {
+    let n: uint = failing()!
+} fail(e) {
+}
+record Holder_2 { text: string }
+func keep_2() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    var holder: Holder_2 = (text = "")
+    holder.text = b
+    return byte_len(holder.text)
+}
+keep_2()
+
+
+var g_3: Buffer = buffer_from_string("kept")
+func drain() -> uint {
+    let m: Ref[sys.gc.core.Mutator]? = sys.gc.alloc.mutator_for_native()
+    if m == nil {
+        return 0
+    }
+    return sys.gc.finalize.run(m.get().heap, 0)
+}
+func finalizer_run() -> uint {
+    let view: string = g_3
+    let n: uint = drain()
+    return byte_len(view) + n
+}
+finalizer_run()
+var g_4: Buffer = empty_buffer()
+func make_4() -> Buffer {
+    let x: Buffer = buffer_from_string("kept")
+    g_4 = x
+    return x
+}
+func grow() {
+    g_4 += "!"
+}
+func fresh_global() -> uint {
+    let b: Buffer = make_4()
+    let view: string = b
+    grow()
+    return byte_len(view)
+}
+fresh_global()
+func make_5(out c: Buffer) -> Buffer {
+    let x: Buffer = buffer_from_string("kept")
+    c = x
+    return x
+}
+func fresh_out() -> uint {
+    var c: Buffer = empty_buffer()
+    let b: Buffer = make_5(c)
+    let view: string = b
+    c += "!"
+    return byte_len(view)
+}
+fresh_out()
+callback Step {
+    call(value: int) -> int
+    handler(value: int) -> int
+}
+func bump(value: int) -> int {
+    return value + 1
+}
+func make_6() -> Step {
+    return callback[Step](ref bump)
+}
+func call_inside() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    let step: Step = make_6()
+    let view: string = b
+    let n: int = step.call(1)
+    return byte_len(view) + cast[uint] n
+}
+call_inside()
+func loop_inside() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    let view: string = b
+    var total: uint = 0
+    var i: int = 0
+    while i < 3 {
+        total = total + byte_len(view)
+        i = i + 1
+    }
+    return total
+}
+loop_inside()
+record Pair {
+    b: Buffer
+    n: int
+}
+func memcpy_record() -> uint {
+    var first: Pair = (b = buffer_from_string("kept"), n = 1)
+    var second: Pair = (b = buffer_from_string("other"), n = 2)
+    let view: string = first.b
+    __gc_memcpy(unsafe_cast[Ref[byte]] ref second,
+                unsafe_cast[Ref[byte]] ref first, 16)
+    second.b += "!"
+    return byte_len(view)
+}
+memcpy_record()
+func forward(s: string, out t: string) {
+    t = s
+}
+func out_view() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    var t: string = ""
+    forward(b, t)
+    b += "!"
+    return byte_len(t)
+}
+out_view()
+func hold(s: string) -> Ref[string] {
+    var h: string = s
+    return ref h
+}
+func ref_local() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    let r: Ref[string] = hold(b)
+    b += "!"
+    let t: string = r.__value
+    return byte_len(t)
+}
+ref_local()
+record Holder_11 { b: Buffer }
+func fill(first: Ref[Holder_11], second: Ref[Holder_11]) {
+    let x: Buffer = buffer_from_string("kept")
+    first.b = x
+    second.b = x
+}
+func ref_params() -> uint {
+    var p: Holder_11 = (b = empty_buffer())
+    var q: Holder_11 = (b = empty_buffer())
+    fill(ref p, ref q)
+    let view: string = p.b
+    q.b += "!"
+    return byte_len(view)
+}
+ref_params()
+func ref_view() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    var t: string = b
+    let r: Ref[string] = ref t
+    let u: string = r.__value
+    b += "!"
+    return byte_len(u)
+}
+ref_view()
+func leak() -> string {
+    var b: Buffer = buffer_from_string("kept")
+    return b
+}
+leak()
+func self_concat() {
+    var b: Buffer = buffer_from_string("kept")
+    concat(b, b)
+}
+self_concat()
+func write_inside() -> uint {
+    var b: Buffer = buffer_from_string("kept")
+    let view: string = b
+    b += "!"
+    return byte_len(view)
+}
+write_inside()

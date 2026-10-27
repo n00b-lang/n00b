@@ -116,7 +116,7 @@ bool core_object_emit_macho(const core_target_desc_t *target,
     image = core_alloc_size(offset, 1);
 
     core_le_store_u32(image, 0xfeedfacf);
-    core_le_store_u32(image + 4, 0x0100000c);
+    core_le_store_u32(image + 4, CORE_OBJECT_MACHINE_MACHO_ARM64);
     core_le_store_u32(image + 8, 0);
     core_le_store_u32(image + 12, 1);
     core_le_store_u32(image + 16, 4);

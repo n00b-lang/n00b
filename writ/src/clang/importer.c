@@ -118,7 +118,14 @@ type_text(importer_t *im, CXType type)
             }
             return name;
         }
-        return type_text(im, clang_getTypedefDeclUnderlyingType(decl));
+        CXType underlying = clang_getTypedefDeclUnderlyingType(decl);
+        CXType named = underlying.kind == CXType_Elaborated ? clang_Type_getNamedType(underlying) : underlying;
+        CXCursor record = clang_getTypeDeclaration(named);
+        if (named.kind == CXType_Record && writ_str_eq(spelling(im, record), name)
+            && !writ_map_get(im->record_names, usr(im, record), nullptr)) {
+            writ_map_put(im->record_names, usr(im, record), sym_of(im, name));
+        }
+        return type_text(im, underlying);
     }
     case CXType_Elaborated:
         return type_text(im, clang_Type_getNamedType(type));
@@ -736,7 +743,7 @@ writ_clang_import(writ_session_t *session, const writ_platform_t *platform, cons
     writ_str_t error = {0};
     writ_status_t status = writ_tu_open(session, &im.tu, writ_platform_triple(platform), request, true, &error);
     if (status != WRIT_OK) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "%.*s", S(error));
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, WRIT_MESSAGE(TEXT, WRIT_ARG(error)));
         return status;
     }
     writ_emit_init(&im.types);

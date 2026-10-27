@@ -27,6 +27,17 @@ inline func active_mutator() -> Ref[internal.gc.core.Mutator]? {
     if existing != nil {
         return existing
     }
+    return attach_runtime_mutator()
+}
+
+func create_runtime_heap() -> Ref[internal.gc.core.Heap]? {
+    var config: internal.gc.core.Config
+    internal.gc.heap.config_default(config)
+    config.scan_stacks = true
+    return internal.gc.heap.create(ref config)
+}
+
+func attach_runtime_mutator() -> Ref[internal.gc.core.Mutator]? {
     let prior_barrier: bool = runtime_barrier_active
     runtime_barrier_active = true
     while !__atomic_compare_exchange(ref runtime_heap_lock, 0, 1) {
@@ -34,10 +45,7 @@ inline func active_mutator() -> Ref[internal.gc.core.Mutator]? {
     }
     var heap: Ref[internal.gc.core.Heap]? = __atomic_load(ref runtime_heap)
     if heap == nil {
-        var config: internal.gc.core.Config
-        internal.gc.heap.config_default(config)
-        config.scan_stacks = true
-        heap = internal.gc.heap.create(ref config)
+        heap = create_runtime_heap()
         __atomic_store(ref runtime_heap, heap)
     }
     __atomic_store(ref runtime_heap_lock, 0)
@@ -573,10 +581,20 @@ func mutator_for_native() -> Ref[internal.gc.core.Mutator]? {
     return active_mutator()
 }
 
-func enter_blocking_runtime() {
-    let mutator: Ref[internal.gc.core.Mutator]? = active_mutator()
-    if mutator != nil {
-        internal.gc.handshake.enter_blocking(mutator.get())
+func enter_blocking_from(caller: Ref[internal.threads.Thread_Context]) {
+    let found: Ref[internal.gc.core.Mutator]? = active_mutator()
+    if found != nil {
+        let mutator: Ref[internal.gc.core.Mutator] = found.get()
+        mutator.captured.sp = caller.sp
+        mutator.captured.fp = caller.fp
+        mutator.captured.nregs = caller.nregs
+        var index: uint = 0
+        while index < caller.nregs {
+            mutator.captured.regs[index] = caller.regs[index]
+            index += 1
+        }
+        mutator.captured.pc = caller.pc
+        internal.gc.handshake.enter_blocking(mutator)
     }
 }
 
@@ -587,11 +605,8 @@ func leave_blocking_runtime() {
     }
 }
 
-func attached_enter_blocking() {
-    let mutator: Ref[internal.gc.core.Mutator]? = runtime_mutator
-    if mutator != nil {
-        internal.gc.handshake.enter_blocking(mutator.get())
-    }
+func attached_mutator() -> Ref[internal.gc.core.Mutator]? {
+    return runtime_mutator
 }
 
 func attached_leave_blocking() {

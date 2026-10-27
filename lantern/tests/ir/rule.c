@@ -87,7 +87,7 @@ static ir_rule_result_t reject(ir_module_t *m, ir_instr_t *in, ir_diags_t *d,
 
     if (d) {
         ir_diag_begin_at(d, IR_DIAG_INTERNAL, in, nullptr, nullptr,
-                         S("rejected"));
+                         IR_DETAIL(S("rejected")));
     }
 
     return (ir_rule_result_t){.verdict = IR_RULE_REJECT};

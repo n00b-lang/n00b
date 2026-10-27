@@ -1,0 +1,3 @@
+tests/diagnostics/front/missing_paren.n:6:1: error N00B-P0003: unclosed `(`
+  tests/diagnostics/front/missing_paren.n:5:10: note: `(` is opened here
+  help: add the missing `)`

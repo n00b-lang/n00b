@@ -1285,8 +1285,6 @@ bool th_env_freeze(th_env *env) {
       return false;
     }
   }
-  /* Datalog stores only stable candidate identities; substitutions are
-   * intentionally recomputed by the type layer for each receiver. */
   for (size_t ti = 0; ti < env->traits.len; ti++) {
     th_env_trait_t *trait = &env->traits.data[ti];
     trait->logic_symbol = core_datalog_constant(env->logic, trait->name);

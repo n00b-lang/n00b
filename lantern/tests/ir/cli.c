@@ -378,7 +378,7 @@ static void test_diagnostics_render_both_ways(void)
     run_t       a      = run(text, 3);
 
     check("the human rendering quotes the source line",
-          has(a.out, S("copy $nope")) && has(a.out, S("error[IR-E0009]")));
+          has(a.out, S("copy $nope")) && has(a.out, S("error: ")));
     done(&a);
 
     const char *json[] = {"ir", "parse", "--json", path};
@@ -386,7 +386,7 @@ static void test_diagnostics_render_both_ways(void)
 
     check("the machine rendering is JSON with the same code",
           has(b.out, S("\"code\":\"IR-E0009\""))
-              && has(b.out, S("\"start_line\":7")));
+              && has(b.out, S("\"line\":7")));
     done(&b);
 }
 
@@ -412,11 +412,11 @@ static void test_analyze_is_reachable(void)
     run_t       r      = run(args, 3);
 
     check("analyze reports the unreachable block",
-          said(&r, S("orphan")) && said(&r, S("IR-W0030")));
+          said(&r, S("orphan")) && said(&r, S("can never run")));
     check("and the local read on a path that does not assign it",
-          said(&r, S("IR-W0027")) && said(&r, S("$x")));
+          said(&r, S("`$x` is read on a path where it has no value")));
     check("and the local assigned and never read",
-          said(&r, S("IR-W0031")) && said(&r, S("$y")));
+          said(&r, S("the value assigned to `$y` here is never read")));
     check("and warnings alone are not a failure", r.rc == 0);
     done(&r);
 }

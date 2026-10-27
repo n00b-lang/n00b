@@ -8,11 +8,55 @@
 #include "lib/list.h"
 #include "lib/option.h"
 
+enum { PRINT_BINDER_LIMIT = 32 };
+
 typedef struct {
     th_ctx                   *ctx;
     size_t                    depth;
     const th_print_options_t *options;
+    const th_type            *binders[PRINT_BINDER_LIMIT];
 } pctx;
+
+static bool source_spelling(const pctx *c)
+{
+    return c->options && c->options->source_spelling;
+}
+
+static bool integer_constraint(const th_type *var, bool *is_unsigned)
+{
+    for (size_t i = 0; var && i < var->var.cons.len; i++) {
+        const th_constraint *k = &var->var.cons.data[i];
+        if (k->kind != TH_CON_INTEGER) continue;
+        if (is_unsigned) *is_unsigned = k->integer.flags & TH_INTEGER_UNSIGNED;
+        return true;
+    }
+    return false;
+}
+
+static void source_variable(core_buffer_t *b, const th_type *var)
+{
+    bool is_unsigned = false;
+    if (var && var->var.name.data) {
+        core_buffer_putc(b, '\'');
+        core_buffer_append_string(b, var->var.name);
+    }
+    else if (integer_constraint(var, &is_unsigned))
+        core_buffer_append_string(b, is_unsigned
+            ? CORE_STRING_STATIC("{unsigned integer}")
+            : CORE_STRING_STATIC("{integer}"));
+    else
+        core_buffer_putc(b, '_');
+}
+
+static const th_type *bound_variable(const pctx *c, const th_type *bound)
+{
+    if (!bound->bound.distance || bound->bound.distance > c->depth
+        || c->depth > PRINT_BINDER_LIMIT) return nullptr;
+    const th_type *binder = c->binders[c->depth - bound->bound.distance];
+    if (!binder || !binder->binder.qvars
+        || bound->bound.position >= binder->binder.arity) return nullptr;
+    return th_resolve_c(binder->binder.qvars[bound->bound.position]);
+}
 
 static void varname(core_buffer_t *b, size_t depth, uint64_t pos)
 {
@@ -53,11 +97,12 @@ static const struct {
     {CORE_STRING_STATIC("foreign"), TH_FOREIGN},
 };
 
-static core_string_t mode_name(th_mode m)
+static core_string_t mode_name(const pctx *c, th_mode m)
 {
     switch (m) {
     case TH_OUT:     return CORE_STRING_STATIC("out ");
-    case TH_INOUT:   return CORE_STRING_STATIC("inout ");
+    case TH_INOUT:   return source_spelling(c) ? CORE_STRING_STATIC("modify ")
+                                               : CORE_STRING_STATIC("inout ");
     case TH_CONSUME: return CORE_STRING_STATIC("consume ");
     case TH_VIEW:    return CORE_STRING_STATIC("view ");
     case TH_IN:      return CORE_STRING_STATIC("");
@@ -292,7 +337,7 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
 
     for (size_t k = t->fn.nkw; k-- > 0;) {
         wtype(w, kw[k].type);
-        wtext(w, mode_name(kw[k].mode));
+        wtext(w, mode_name(c, kw[k].mode));
         wlit(w, ": ");
         wtext(w, kw[k].name);
 
@@ -304,8 +349,14 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
 
     if (t->fn.rest) {
         wtype(w, t->fn.rest->type);
-        wlit(w, "*");
-        wtext(w, mode_name(t->fn.rest->mode));
+        if (source_spelling(c)) {
+            wtext(w, mode_name(c, t->fn.rest->mode));
+            wlit(w, "*");
+        }
+        else {
+            wlit(w, "*");
+            wtext(w, mode_name(c, t->fn.rest->mode));
+        }
 
         if (--slot) {
             wlit(w, ", ");
@@ -314,7 +365,7 @@ static void plan_function(pctx *c, core_buffer_t *b, core_list_t(witem) *w, cons
 
     for (size_t k = t->fn.np; k-- > 0;) {
         wtype(w, t->fn.params[k].type);
-        wtext(w, mode_name(t->fn.params[k].mode));
+        wtext(w, mode_name(c, t->fn.params[k].mode));
 
         if (--slot) {
             wlit(w, ", ");
@@ -342,7 +393,8 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
 
         if (!t->named.is_variant && all_types
             && core_string_eq(t->named.name, CORE_STRING_STATIC(TH_TUPLE))) {
-            core_buffer_puts(b, "t(");
+            core_buffer_append_string(b, source_spelling(c)
+                ? CORE_STRING_STATIC("(") : CORE_STRING_STATIC("t("));
             wlit(w, ")");
 
             for (size_t k = t->named.nargs; k-- > 0;) {
@@ -362,7 +414,7 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
             wtype(w, option_item);
             return;
         }
-        if (t->named.is_variant) {
+        if (t->named.is_variant && !source_spelling(c)) {
             core_buffer_puts(b, "variant ");
         }
         core_string_t mapped = c->options && c->options->named
@@ -388,7 +440,13 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
     }
 
     case TH_BITINT:
-        if (t->bitint.flavor == TH_BITINT_BITS)
+        if (source_spelling(c))
+            core_buffer_printf(b, "%s:%" PRIu64,
+                               t->bitint.flavor == TH_BITINT_BITS ? "bits"
+                               : t->bitint.flavor == TH_BITINT_SIGNED ? "i"
+                                                                      : "u",
+                               t->bitint.width);
+        else if (t->bitint.flavor == TH_BITINT_BITS)
             core_buffer_printf(b, "bits:%" PRIu64, t->bitint.width);
         else
             core_buffer_printf(b, t->bitint.flavor == TH_BITINT_SIGNED
@@ -447,6 +505,13 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         return;
 
     case TH_BINDER:
+        if (source_spelling(c)) {
+            if (c->depth < PRINT_BINDER_LIMIT) c->binders[c->depth] = t;
+            c->depth++;
+            wpush(w, (witem){.kind = W_DEPTH_DOWN});
+            wtype(w, t->binder.body);
+            return;
+        }
         core_buffer_puts(b, "forall[");
 
         for (uint64_t i = 0; i < t->binder.arity; i++) {
@@ -466,6 +531,10 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         return;
 
     case TH_BOUND:
+        if (source_spelling(c)) {
+            source_variable(b, bound_variable(c, t));
+            return;
+        }
         core_buffer_puts(b, "`");
 
         if (t->bound.distance == 0 || t->bound.distance > c->depth) {
@@ -478,6 +547,10 @@ static void expand(pctx *c, core_buffer_t *b, core_list_t(witem) *w, const th_ty
         return;
 
     case TH_VAR:
+        if (source_spelling(c)) {
+            source_variable(b, t);
+            return;
+        }
         core_buffer_puts(b, "`");
 
         if (!t->var.has_index) {
@@ -694,6 +767,45 @@ static void emit_binder_where(pctx *c, core_buffer_t *b, th_type *type)
     }
 }
 
+static void emit_source_requirements(core_buffer_t *b, const th_type *var,
+                                     bool *started)
+{
+    var = th_resolve_c(var);
+    if (!var || var->kind != TH_VAR || !var->var.name.data) return;
+    bool listed = false;
+    for (size_t i = 0; i < var->var.cons.len; i++) {
+        const th_constraint *k = &var->var.cons.data[i];
+        if (k->kind != TH_CON_IMPLEMENTS || !k->iface.data) continue;
+        if (!listed) {
+            core_buffer_append_string(b, *started
+                ? CORE_STRING_STATIC(", ") : CORE_STRING_STATIC(" where "));
+            source_variable(b, var);
+            core_buffer_puts(b, ": ");
+        }
+        else core_buffer_puts(b, " + ");
+        core_buffer_append_string(b, k->iface);
+        listed = true;
+        *started = true;
+    }
+}
+
+static void emit_source_where(pctx *c, core_buffer_t *b, th_type *type)
+{
+    const th_type *root = th_resolve_c(type);
+    if (!root) return;
+    bool started = false;
+    if (root->kind == TH_BINDER) {
+        for (uint64_t i = 0; root->binder.qvars && i < root->binder.arity;
+             i++)
+            emit_source_requirements(b, root->binder.qvars[i], &started);
+        return;
+    }
+    th_type **vars = nullptr;
+    size_t nvars = th_free_vars(c->ctx, type, &vars);
+    for (size_t i = 0; i < nvars; i++)
+        emit_source_requirements(b, vars[i], &started);
+}
+
 core_string_t
 th_print_with_options(th_ctx *ctx, th_type *type,
                       const th_print_options_t *options)
@@ -707,7 +819,10 @@ th_print_with_options(th_ctx *ctx, th_type *type,
     core_buffer_t b = {0};
 
     emit(&c, &b, type);
-    if (!options || !options->omit_constraints) {
+    if (options && options->source_spelling) {
+        if (!options->omit_constraints) emit_source_where(&c, &b, type);
+    }
+    else if (!options || !options->omit_constraints) {
         emit_free_where(&c, &b, type);
         emit_binder_where(&c, &b, type);
     }

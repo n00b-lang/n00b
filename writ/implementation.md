@@ -885,7 +885,8 @@ code is listed once in a `.def` table and expanded where needed:
 |---|---|
 | `defs/ast_nodes.def` | Node kinds, the grammar-to-AST mapping, tree dump |
 | `defs/model_fields.def` | The public view structs, the enum name tables, the JSON writer |
-| `defs/diag_codes.def` | Codes, severities, default messages, `diag-codes.md` |
+| `include/writ/diag_codes.def` | Codes, severities, default titles, `diag-codes.md` |
+| `include/writ/diag_texts.def` | Message templates; hosts map each id to their own catalog |
 | `defs/defaults.def` | The defaults table, each entry citing its `dsl.md` section |
 | `defs/checks.def` | Every check, with its tier and `dsl.md` section |
 

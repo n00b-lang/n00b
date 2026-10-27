@@ -7,7 +7,7 @@
 #include "ir/storage_origin.h"
 #include "ir/summary.h"
 #include "lib/buffer.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "lib/target.h"
 
 typedef struct n00bb_llvm_backend_t n00bb_llvm_backend_t;
@@ -75,6 +75,7 @@ bool n00bb_llvm_backend_bind_reachable_functions(
 bool n00bb_llvm_backend_bind_storage_origin(
     n00bb_llvm_backend_t *backend, ir_storage_origin_t *origin);
 bool n00bb_llvm_backend_enable_frame_maps(n00bb_llvm_backend_t *backend);
+void n00bb_llvm_backend_enable_panic_trap(n00bb_llvm_backend_t *backend);
 void n00bb_llvm_backend_bind_native_cache(n00bb_llvm_backend_t *backend,
     n00bb_native_cache_t *cache);
 
@@ -104,6 +105,8 @@ typedef struct {
     bool native_support;
 } n00bb_llvm_bitcode_input_t;
 
+char *n00bb_llvm_target_triple(core_string_t profile);
+void n00bb_llvm_set_profiling(bool enabled);
 bool n00bb_llvm_backend_link_bitcode(
     const n00bb_llvm_bitcode_input_t *inputs, size_t count,
     bool debug_enabled, bool native_cpu, bool emit_frame_maps,

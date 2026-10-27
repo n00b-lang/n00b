@@ -47,7 +47,5 @@ bool ir_walk_stopped(ir_walk_t *w);
 
 typedef bool (*ir_reachable_func_fn)(ir_func_t *function, void *user);
 
-/* Visit each direct-call-reachable function once, beginning with roots.
- * Calls in unreachable basic blocks and indirect calls are excluded. */
 bool ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
                                  ir_reachable_func_fn visit, void *user);

@@ -136,11 +136,18 @@ record Frame_Layout_Record layout(c) {
 }
 
 record Native_Frame_Record layout(c) {
-    function:        Ref[byte]?
-    sentinel_offset: i32
-    root_count:      u32
-    first_root:      u32
-    reserved_zero:   u32
+    function:      Ref[byte]?
+    code_bytes:    u32
+    root_count:    u32
+    first_root:    u32
+    record_offset: i32
+    flags:         u32
+    reserved_zero: u32
+}
+
+record Native_Frame_Root layout(c) {
+    offset: i32
+    bytes:  u32
 }
 
 record Storage_Record layout(c) {

@@ -4,10 +4,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 
 #include "lib/alloc.h"
 #include "lib/buffer.h"
+#include "lib/os.h"
 #include "parse/bnf.h"
 #include "parse/pwz.h"
 #include "parse/tree_dump.h"
@@ -586,9 +586,14 @@ static void test_lexer_files_are_relative_to_the_grammar(void) {
 }
 
 static void test_deep_lexer_fragment_imports(void) {
-  char directory[] = "/tmp/lantern-lexer-imports-XXXXXX";
-  assert(mkdtemp(directory) != nullptr);
-  core_string_t dir = core_string_borrow(directory, sizeof(directory) - 1);
+  core_string_t temp_root = core_os_temp_root();
+  core_buffer_t stem = {0};
+  core_buffer_append_string(&stem, temp_root);
+  core_buffer_puts(&stem, "/lantern-lexer-imports-");
+  core_string_t dir = core_os_make_unique_directory(core_buffer_string(&stem));
+  core_buffer_release(&stem);
+  core_free(temp_root.data);
+  assert(dir.data != nullptr);
 
   enum { IMPORT_COUNT = 80 };
   char *paths[IMPORT_COUNT];
@@ -632,13 +637,14 @@ static void test_deep_lexer_fragment_imports(void) {
   assert(scan_grammar_lex_compiled(grammar) != nullptr);
   parse_grammar_free(grammar);
 
-  unlink(grammar_path);
+  core_os_remove_file(core_string_borrow(grammar_path, grammar_len));
   core_free(grammar_path);
   for (size_t i = 0; i < IMPORT_COUNT; i++) {
-    unlink(paths[i]);
+    core_os_remove_file(core_string_borrow(paths[i], path_lens[i]));
     core_free(paths[i]);
   }
-  rmdir(directory);
+  core_os_remove_directory(dir);
+  core_free(dir.data);
 }
 
 int main(void) {

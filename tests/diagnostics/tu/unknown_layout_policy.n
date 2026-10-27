@@ -1,0 +1,1 @@
+record P layout(weird) { x: int }

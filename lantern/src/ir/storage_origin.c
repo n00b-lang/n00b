@@ -166,8 +166,7 @@ ir_storage_origin_new(ir_func_t *const *reachable, size_t count,
                       bool closed_field_writes, void *context)
 {
     if ((count && !reachable) || !source) return nullptr;
-    ir_storage_origin_t *analysis = calloc(1, sizeof(*analysis));
-    if (!analysis) return nullptr;
+    ir_storage_origin_t *analysis = core_alloc(ir_storage_origin_t);
     analysis->functions = reachable;
     analysis->function_count = count;
     analysis->source = source;
@@ -292,16 +291,16 @@ ir_storage_origin_free(ir_storage_origin_t *analysis)
     core_dict_free(&analysis->dynamic_method_names);
     core_dict_free(&analysis->field_assignment_heads);
     core_dict_free(&analysis->field_proof_heads);
-    free(analysis->assignment_next);
-    free(analysis->call_next);
-    free(analysis->field_assignment_next);
+    core_free(analysis->assignment_next);
+    core_free(analysis->call_next);
+    core_free(analysis->field_assignment_next);
     core_list_free(analysis->assignments);
     core_list_free(analysis->field_assignments);
     core_list_free(analysis->field_proofs);
     core_list_free(analysis->calls);
     core_list_free(analysis->indirect_functions);
     core_list_free(analysis->dynamic_methods);
-    free(analysis);
+    core_free(analysis);
 }
 
 static ir_func_t *
@@ -311,23 +310,15 @@ definition(ir_storage_origin_t *analysis, const ir_func_t *target)
     return core_dict_get(&analysis->definitions, target, nullptr);
 }
 
-static size_t *
-chain_array(size_t count)
-{
-    return calloc(count ? count : 1, sizeof(size_t));
-}
-
 static bool
 build_indexes(ir_storage_origin_t *analysis)
 {
     size_t assignments = analysis->assignments.len;
     size_t calls = analysis->calls.len;
     size_t fields = analysis->field_assignments.len;
-    analysis->assignment_next = chain_array(assignments);
-    analysis->call_next = chain_array(calls);
-    analysis->field_assignment_next = chain_array(fields);
-    if (!analysis->assignment_next || !analysis->call_next
-        || !analysis->field_assignment_next) return false;
+    analysis->assignment_next = core_alloc_array(size_t, assignments);
+    analysis->call_next = core_alloc_array(size_t, calls);
+    analysis->field_assignment_next = core_alloc_array(size_t, fields);
     for (size_t i = assignments; i-- > 0;)
         chain_link(&analysis->assignment_heads, analysis->assignment_next,
                    analysis->assignments.data[i].binding, i);

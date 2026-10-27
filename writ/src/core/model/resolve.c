@@ -1,3 +1,4 @@
+#include "lib/os.h"
 #include "model.h"
 
 typedef struct {
@@ -109,9 +110,10 @@ writ_is_text(const writ_model_t *model, writ_sym_t sym, const char *text)
 }
 
 static void
-unsupported(writ_model_t *model, uint32_t node, const char *what)
+unsupported(writ_model_t *model, uint32_t node, writ_text_t what)
 {
-    writ_report(model->session, WRIT_D_UNSUPPORTED, node_at(model, node)->loc, "%s", what);
+    writ_report(model->session, WRIT_D_UNSUPPORTED, node_at(model, node)->loc,
+                WRIT_MESSAGE(TEXT, CORE_TEXT_PHRASE(what)));
 }
 
 static bool
@@ -119,7 +121,7 @@ declare(writ_model_t *model, writ_sym_t name, writ_scope_kind_t kind, uint32_t i
 {
     if (!core_dict_add(&model->scope, name, ((uintptr_t)kind << 32) | index)) {
         writ_str_t text = writ_sym_str(model->session, name);
-        writ_report(model->session, WRIT_D_DUPLICATE, loc, "`%.*s`", (int)text.length, text.data);
+        writ_report(model->session, WRIT_D_DUPLICATE, loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
         return false;
     }
     return true;
@@ -222,7 +224,8 @@ use_path(writ_unit_t *unit, uint32_t id)
     const writ_node_t *node = writ_node(unit, id);
     writ_sym_t search = use_search_name(unit, id);
     if (search) {
-        return writ_find_contract(session, writ_sym_str(session, search));
+        return writ_find_contract(session, unit->contract_dirs.data, unit->contract_dirs.len,
+                                  writ_sym_str(session, search));
     }
     writ_str_t name = writ_sym_str(session, node->name);
     writ_str_t base = writ_source_at(session, node->loc.source)->path;
@@ -230,7 +233,7 @@ use_path(writ_unit_t *unit, uint32_t id)
     while (cut > 0 && base.data[cut - 1] != '/') {
         cut--;
     }
-    return name.length && name.data[0] == '/'
+    return core_os_is_absolute(core_string_borrow(name.data, name.length))
              ? name
              : writ_str_format(session, "%.*s%.*s", (int)cut, base.data, (int)name.length, name.data);
 }
@@ -288,8 +291,9 @@ gather_use(resolver_t *r, uint32_t id)
     const writ_node_t *node = node_at(model, id);
     writ_str_t path = use_path(unit, id);
     if (!path.length) {
-        writ_report(model->session, WRIT_D_UNREADABLE, node->loc, "`<%.*s>` is not on the contract search path",
-                    S(writ_sym_str(model->session, use_search_name(unit, id))));
+        writ_report(
+            model->session, WRIT_D_UNREADABLE, node->loc,
+            WRIT_MESSAGE(IS_NOT_ON_THE_CONTRACT, WRIT_ARG(writ_sym_str(model->session, use_search_name(unit, id)))));
         return;
     }
     writ_sym_t key = writ_intern_str(model->session, path);
@@ -310,7 +314,7 @@ gather_use(resolver_t *r, uint32_t id)
     }
     size_t first = 0;
     if (load_use(unit, path, &first) == WRIT_IO_FAILED) {
-        writ_report(model->session, WRIT_D_UNREADABLE, node->loc, "`%.*s`", (int)path.length, path.data);
+        writ_report(model->session, WRIT_D_UNREADABLE, node->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(path)));
         return;
     }
     size_t read = unit->roots.len;
@@ -327,9 +331,9 @@ gather_directive(resolver_t *r, uint32_t id)
     switch (node->kind) {
     case WRIT_N_LIBRARY:
         if (model->library && model->unit->language) {
-            writ_report(model->session, WRIT_D_EMBEDDED_SHAPE, node->loc, "a second `library`");
+            writ_report(model->session, WRIT_D_EMBEDDED_SHAPE, node->loc, WRIT_BARE(A_SECOND_LIBRARY));
         } else if (model->library) {
-            writ_report(model->session, WRIT_D_DUPLICATE, node->loc, "`library`");
+            writ_report(model->session, WRIT_D_DUPLICATE, node->loc, WRIT_BARE(LIBRARY));
         }
         model->library = node->name;
         return;
@@ -366,24 +370,24 @@ gather_directive(resolver_t *r, uint32_t id)
         return;
     case WRIT_N_ABI:
         if (!writ_is_text(model, node->name, "c")) {
-            unsupported(model, id, "ABI families other than `c` (dsl.md §9.4)");
+            unsupported(model, id, WRIT_TEXT_UNSUPPORTED_ABI_FAMILIES_C);
         }
         return;
     case WRIT_N_LANG:
         if (!writ_is_text(model, node->payload, "c")) {
-            unsupported(model, id, "contracts for languages other than C");
+            unsupported(model, id, WRIT_TEXT_UNSUPPORTED_CONTRACTS_LANGUAGES_C);
         }
         return;
     case WRIT_N_IMPORT:
-        unsupported(model, id, "`import` inside a contract; run `writ import` and `use` the draft");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_IMPORT_INSIDE_CONTRACT_WRIT);
         return;
     case WRIT_N_CRATE:
-        unsupported(model, id, "`crate` outside a Rust contract");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_CRATE_OUTSIDE_RUST_CONTRACT);
         return;
     case WRIT_N_FEATURE:
         return;
     case WRIT_N_VERSION_QUERY:
-        unsupported(model, id, "library version queries");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_LIBRARY_VERSION_QUERIES);
         return;
     default:
         break;
@@ -483,13 +487,13 @@ gather_decl(resolver_t *r, uint32_t id)
     case WRIT_N_ALIAS:
         if (writ_type_named(model, node->name) || !core_dict_add(&r->aliases, node->name, id)) {
             writ_str_t text = writ_sym_str(model->session, node->name);
-            writ_report(model->session, WRIT_D_DUPLICATE, node->loc, "type `%.*s`", (int)text.length, text.data);
+            writ_report(model->session, WRIT_D_DUPLICATE, node->loc, WRIT_MESSAGE(TYPE, WRIT_ARG(text)));
         }
         return;
     case WRIT_N_CONVENTIONS: {
         uint32_t pattern = first_of(model, id, WRIT_N_PATTERN);
         if (!writ_is_text(model, node->payload, "fn")) {
-            unsupported(model, id, "conventions for handles and structs");
+            unsupported(model, id, WRIT_TEXT_UNSUPPORTED_CONVENTIONS_HANDLES_STRUCTS);
             return;
         }
         core_list_push(model->conventions,
@@ -500,14 +504,14 @@ gather_decl(resolver_t *r, uint32_t id)
         core_list_push(model->refines, id);
         return;
     case WRIT_N_INTERFACE:
-        unsupported(model, id, "interfaces (dsl.md §9.1)");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_INTERFACES);
         return;
     case WRIT_N_SYMBOL_DECL:
-        unsupported(model, id, "symbol declarations (dsl.md §7.4)");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_SYMBOL_DECLARATIONS);
         return;
     case WRIT_N_IMPL:
     case WRIT_N_RUST_ERROR:
-        unsupported(model, id, "Rust declarations (dsl.md §8.9)");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_RUST_DECLARATIONS);
         return;
     case WRIT_N_PROFILE:
     case WRIT_N_BINDING:
@@ -555,7 +559,7 @@ resolve_alias(resolver_t *r, writ_sym_t name)
         return writ_type_named(model, name);
     }
     if (found && state == 1) {
-        writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node_at(model, node)->loc, "alias refers to itself");
+        writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node_at(model, node)->loc, WRIT_BARE(ALIAS_REFERS_TO_ITSELF));
         return 0;
     }
     core_dict_put(&r->alias_state, name, (void *)1);
@@ -573,7 +577,7 @@ named_type(resolver_t *r, uint32_t id, bool handle_base)
     writ_model_t *model = r->model;
     const writ_node_t *node = node_at(model, id);
     if (first_of(model, id, WRIT_N_GENERIC_ARGS)) {
-        unsupported(model, id, "generic Rust types (dsl.md §8.9)");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_GENERIC_RUST_TYPES);
         return 0;
     }
     uint32_t encoding = first_of(model, id, WRIT_N_ENCODING_ARG);
@@ -586,15 +590,15 @@ named_type(resolver_t *r, uint32_t id, bool handle_base)
     }
     if (!type) {
         writ_str_t text = writ_sym_str(model->session, node->name);
-        writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, "`%.*s`", (int)text.length, text.data);
+        writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
         return 0;
     }
     if (encoding) {
         if (writ_type(model, type)->key.kind != WRIT_TYPE_CSTR) {
-            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, "only `cstr` takes an encoding");
+            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node->loc, WRIT_BARE(ONLY_CSTR_TAKES_AN_ENCODING));
             return 0;
         }
-        unsupported(model, encoding, "text encodings other than the library's");
+        unsupported(model, encoding, WRIT_TEXT_UNSUPPORTED_TEXT_ENCODINGS_LIBRARY_S);
         return 0;
     }
     return type;
@@ -651,7 +655,7 @@ take_extent(resolver_t *r, writ_slot_rec_t *slot, uint32_t extent)
         slot->len_expr = child(model, extent, 1);
         return;
     default:
-        unsupported(model, extent, "extents chosen by a condition");
+        unsupported(model, extent, WRIT_TEXT_UNSUPPORTED_EXTENTS_CHOSEN_CONDITION);
         return;
     }
 }
@@ -686,7 +690,7 @@ resolve_type_in(resolver_t *r, uint32_t id, writ_slot_rec_t *slot, bool handle_b
     case WRIT_N_TYPE_ARRAY: {
         uint32_t element = child(model, id, 0);
         if (node_at(model, element)->child_count != 1) {
-            unsupported(model, element, "ownership and spans on array elements");
+            unsupported(model, element, WRIT_TEXT_UNSUPPORTED_OWNERSHIP_SPANS_ON_ARRAY);
             return 0;
         }
         writ_type_id target = resolve_type(r, child(model, element, 0), nullptr);
@@ -733,7 +737,7 @@ resolve_type_in(resolver_t *r, uint32_t id, writ_slot_rec_t *slot, bool handle_b
             return base;
         }
         if (node_at(model, target)->kind != WRIT_N_TYPE_NAMED) {
-            unsupported(model, target, "reinterpreted elements outside a parameter or field");
+            unsupported(model, target, WRIT_TEXT_UNSUPPORTED_REINTERPRETED_ELEMENTS_OUTSIDE_PARAMETER);
             return 0;
         }
         return base ? writ_type_intern(model, (writ_type_key_t){.kind = WRIT_TYPE_VIEW, .target = base,
@@ -741,7 +745,7 @@ resolve_type_in(resolver_t *r, uint32_t id, writ_slot_rec_t *slot, bool handle_b
                     : 0;
     }
     default:
-        unsupported(model, id, "Rust types (dsl.md §8.9)");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_RUST_TYPES);
         return 0;
     }
 }
@@ -888,7 +892,7 @@ resolve_policy_arm(writ_model_t *model, uint32_t id)
             }
             break;
         default:
-            unsupported(model, part, "this policy arm effect");
+            unsupported(model, part, WRIT_TEXT_UNSUPPORTED_POLICY_ARM_EFFECT);
             break;
         }
     }
@@ -936,13 +940,13 @@ resolve_slot(resolver_t *r, uint32_t id, uint32_t owner)
             slot.userdata = true;
             slot.userdata_loc = part->loc;
             if (part->child_count > 1) {
-                unsupported(model, attr, "user data shared by several callbacks");
+                unsupported(model, attr, WRIT_TEXT_UNSUPPORTED_USER_DATA_SHARED_SEVERAL);
             } else if (part->child_count == 1) {
                 slot.userdata_for = node_at(model, child(model, attr, 0))->name;
             }
             break;
         case WRIT_N_ALIGN_ATTR:
-            unsupported(model, attr, "field alignment");
+            unsupported(model, attr, WRIT_TEXT_UNSUPPORTED_FIELD_ALIGNMENT);
             break;
         case WRIT_N_SPAN_CALL:
         case WRIT_N_SPAN_STATIC:
@@ -997,7 +1001,7 @@ slot_ref(writ_model_t *model, const writ_fn_rec_t *fn, uint32_t ref_node)
     uint32_t index = writ_fn_slot_named(model, fn, ref->name);
     if (index == WRIT_NONE) {
         writ_str_t text = writ_sym_str(model->session, ref->name);
-        writ_report(model->session, WRIT_D_UNKNOWN_SLOT, ref->loc, "`%.*s`", (int)text.length, text.data);
+        writ_report(model->session, WRIT_D_UNKNOWN_SLOT, ref->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
     }
     return index;
 }
@@ -1060,8 +1064,8 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
                 uint32_t slot = writ_fn_slot_named(model, fn, node_at(model, assign)->name);
                 if (slot == WRIT_NONE) {
                     writ_str_t text = writ_sym_str(model->session, node_at(model, assign)->name);
-                    writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, assign)->loc, "`%.*s`",
-                                (int)text.length, text.data);
+                    writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, assign)->loc,
+                                WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
                 }
                 core_list_push(model->assigns, ((writ_assign_rec_t){slot, child(model, assign, 0)}));
             }
@@ -1074,7 +1078,8 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
             fn->sizing_slot = writ_fn_slot_named(model, fn, node_at(model, target)->name);
             if (fn->sizing_slot == WRIT_NONE) {
                 writ_str_t text = writ_sym_str(model->session, node_at(model, target)->name);
-                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, target)->loc, "`%.*s`", S(text));
+                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, target)->loc,
+                            WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
             }
         }
         return;
@@ -1169,7 +1174,7 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
         fn->no_symbol = !text;
         fn->link_symbol = text ? node_at(model, text)->name : 0;
         if (first_of(model, id, WRIT_N_SYMBOL_VERSION)) {
-            unsupported(model, id, "versioned symbols");
+            unsupported(model, id, WRIT_TEXT_UNSUPPORTED_VERSIONED_SYMBOLS);
         }
         return;
     }
@@ -1186,7 +1191,7 @@ apply_clause(resolver_t *r, writ_fn_rec_t *fn, uint32_t id, fn_facts_t *stated)
         return;
     case WRIT_N_SINCE:
     case WRIT_N_REMOVED:
-        unsupported(model, id, "`since` and `removed` (they need a version query)");
+        unsupported(model, id, WRIT_TEXT_UNSUPPORTED_SINCE_REMOVED_NEED_VERSION);
         return;
     default:
         return;
@@ -1256,7 +1261,7 @@ convention_for(resolver_t *r, writ_sym_t name, writ_loc_t loc)
         }
     }
     if (tie) {
-        writ_report(model->session, WRIT_D_CONVENTION_TIE, loc, "`%.*s`", (int)text.length, text.data);
+        writ_report(model->session, WRIT_D_CONVENTION_TIE, loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
     }
     return best;
 }
@@ -1282,7 +1287,8 @@ resolve_varargs(resolver_t *r, writ_fn_rec_t *fn, uint32_t id)
         fn->varargs_count_slot = writ_fn_slot_named(model, fn, node_at(model, count)->name);
         if (fn->varargs_count_slot == WRIT_NONE) {
             writ_str_t text = writ_sym_str(model->session, node_at(model, count)->name);
-            writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, count)->loc, "`%.*s`", S(text));
+            writ_report(model->session, WRIT_D_UNKNOWN_SLOT, node_at(model, count)->loc,
+                        WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
         }
     }
 }
@@ -1311,7 +1317,7 @@ resolve_fn(resolver_t *r, uint32_t id, writ_fn_kind_t kind)
             varargs = part;
             break;
         case WRIT_N_SELF_PARAM:
-            unsupported(model, part, "`self` parameters (dsl.md §8.9)");
+            unsupported(model, part, WRIT_TEXT_UNSUPPORTED_SELF_PARAMETERS);
             break;
         default:
             break;
@@ -1369,7 +1375,7 @@ field_value(writ_model_t *model, uint32_t field, writ_node_kind_t kind, int64_t 
     }
     if (!writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, expr)
         || !writ_expr_eval(model, expr, nullptr, value)) {
-        writ_report(model->session, WRIT_D_NOT_CONSTANT, node->loc, nullptr);
+        writ_report(model->session, WRIT_D_NOT_CONSTANT, node->loc, WRIT_NO_DETAIL);
         return false;
     }
     return true;
@@ -1423,13 +1429,13 @@ resolve_union_arms(resolver_t *r, uint32_t id, uint32_t index)
         };
         if (!writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, record.value_expr)
             || !writ_expr_eval(model, record.value_expr, nullptr, &record.value)) {
-            writ_report(model->session, WRIT_D_NOT_CONSTANT, value->loc, nullptr);
+            writ_report(model->session, WRIT_D_NOT_CONSTANT, value->loc, WRIT_NO_DETAIL);
         }
         if (target->kind == WRIT_N_FIELD) {
             record.field = model->records.data[index].field_count++;
             core_list_push(model->slots, resolve_field(r, child(model, arm, 1), index));
         } else if (!writ_is_text(model, target->name, "_")) {
-            writ_report(model->session, WRIT_D_SYNTAX, target->loc, "an arm is `_` or a field");
+            writ_report(model->session, WRIT_D_SYNTAX, target->loc, WRIT_BARE(AN_ARM_IS_OR_A));
         }
         core_list_push(model->union_arms, record);
         model->records.data[index].arm_count++;
@@ -1444,6 +1450,9 @@ resolve_record(resolver_t *r, uint32_t id)
     writ_type_id type = writ_type_named(model, node->name);
     uint32_t index = writ_type(model, type)->decl;
     writ_record_rec_t *record = &model->records.data[index];
+    if (record->loc.source != node->loc.source || record->loc.start != node->loc.start) {
+        return;
+    }
     record->first_field = (uint32_t)model->slots.len;
     for (uint32_t i = 0; i < node->child_count; i++) {
         uint32_t part = child(model, id, i);
@@ -1477,7 +1486,7 @@ resolve_record(resolver_t *r, uint32_t id)
         case WRIT_N_LAYOUT:
             model->records.data[index].explicit_layout = writ_is_text(model, piece->payload, "explicit");
             if (model->records.data[index].explicit_layout) {
-                unsupported(model, part, "explicit layout");
+                unsupported(model, part, WRIT_TEXT_UNSUPPORTED_EXPLICIT_LAYOUT);
             }
             break;
         case WRIT_N_SIZE_ATTR:
@@ -1505,8 +1514,8 @@ resolve_record(resolver_t *r, uint32_t id)
         }
     }
     if (record->presence_name && record->presence_field == WRIT_NONE) {
-        writ_report(model->session, WRIT_D_UNKNOWN_NAME, record->loc, "`%.*s`",
-                    S(writ_sym_str(model->session, record->presence_name)));
+        writ_report(model->session, WRIT_D_UNKNOWN_NAME, record->loc,
+                    WRIT_MESSAGE(TEXT_2, WRIT_ARG(writ_sym_str(model->session, record->presence_name))));
     }
     for (uint32_t f = 0; f < record->field_count; f++) {
         writ_slot_rec_t *field = &model->slots.data[record->first_field + f];
@@ -1579,8 +1588,8 @@ resolve_enum(resolver_t *r, uint32_t id)
                                      .loc = piece->loc};
         if (value && !(writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, value)
                        && writ_expr_eval(model, value, nullptr, &constant.value))) {
-            writ_report(model->session, WRIT_D_NOT_CONSTANT, piece->loc, "`%.*s`",
-                        S(writ_sym_str(model->session, piece->name)));
+            writ_report(model->session, WRIT_D_NOT_CONSTANT, piece->loc,
+                        WRIT_MESSAGE(TEXT_2, WRIT_ARG(writ_sym_str(model->session, piece->name))));
         }
         next = constant.value + 1;
         if (declare(model, constant.name, WRIT_SCOPE_CONST, (uint32_t)model->consts.len, constant.loc)) {
@@ -1609,8 +1618,8 @@ resolve_const(resolver_t *r, uint32_t id)
     } else if (!writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, value)
                || !writ_expr_eval(model, value, nullptr, &record.value)
                || !(writ_type_is_integer(model, record.type) || writ_type_is_pointer(model, record.type))) {
-        writ_report(model->session, WRIT_D_NOT_CONSTANT, record.loc, "`%.*s`",
-                    S(writ_sym_str(model->session, record.name)));
+        writ_report(model->session, WRIT_D_NOT_CONSTANT, record.loc,
+                    WRIT_MESSAGE(TEXT_2, WRIT_ARG(writ_sym_str(model->session, record.name))));
     }
     if (declare(model, record.name, WRIT_SCOPE_CONST, (uint32_t)model->consts.len, record.loc)) {
         core_list_push(model->consts, record);
@@ -1628,7 +1637,7 @@ resolve_channel(resolver_t *r, uint32_t id)
         channel.per_handle = true;
         channel.handle = writ_type_named(model, node_at(model, per_handle)->name);
         if (writ_type(model, channel.handle)->key.kind != WRIT_TYPE_HANDLE) {
-            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node_at(model, per_handle)->loc, "not a handle");
+            writ_report(model->session, WRIT_D_UNKNOWN_TYPE, node_at(model, per_handle)->loc, WRIT_BARE(NOT_A_HANDLE));
         }
     }
     channel.reset = first_of(model, id, WRIT_N_RESET) != 0;
@@ -1745,7 +1754,7 @@ apply_refine(resolver_t *r, uint32_t id)
     }
     if (index == WRIT_NONE) {
         writ_str_t text = writ_sym_str(model->session, node->name);
-        writ_report(model->session, WRIT_D_REFINE_TARGET, node->loc, "`%.*s`", (int)text.length, text.data);
+        writ_report(model->session, WRIT_D_REFINE_TARGET, node->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
         return;
     }
     fn_facts_t stated = {0};
@@ -1758,12 +1767,12 @@ apply_refine(resolver_t *r, uint32_t id)
             target = writ_fn_slot_named(model, fn, piece->name);
             if (target == WRIT_NONE) {
                 writ_str_t text = writ_sym_str(model->session, piece->name);
-                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, piece->loc, "`%.*s`", (int)text.length, text.data);
+                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, piece->loc, WRIT_MESSAGE(TEXT_2, WRIT_ARG(text)));
                 continue;
             }
         } else if (piece->kind == WRIT_N_RESULT) {
             if (!fn->has_result) {
-                writ_report(model->session, WRIT_D_BAD_REFINE, piece->loc, "the function returns nothing");
+                writ_report(model->session, WRIT_D_BAD_REFINE, piece->loc, WRIT_BARE(THE_FUNCTION_RETURNS_NOTHING));
                 continue;
             }
             target = fn->slot_count;
@@ -1772,7 +1781,7 @@ apply_refine(resolver_t *r, uint32_t id)
             writ_slot_rec_t refined = resolve_slot(r, part, index);
             writ_slot_rec_t *slot = &model->slots.data[model->fns.data[index].first_slot + target];
             if (refined.type && !physical_narrowing(model, slot->type, refined.type)) {
-                writ_report(model->session, WRIT_D_BAD_REFINE, piece->loc, "it changes the physical type");
+                writ_report(model->session, WRIT_D_BAD_REFINE, piece->loc, WRIT_BARE(IT_CHANGES_THE_PHYSICAL_TYPE));
                 continue;
             }
             refined.name = slot->name;
@@ -1856,7 +1865,7 @@ check_expressions(writ_model_t *model)
         uint32_t source = model->channels.data[c].source_expr;
         if (node_at(model, source)->kind != WRIT_N_EXPR_CALL) {
             writ_report(model->session, WRIT_D_UNKNOWN_NAME, node_at(model, source)->loc,
-                        "a channel's source is a call to a declared function");
+                        WRIT_BARE(A_CHANNEL_S_SOURCE_IS));
             continue;
         }
         writ_expr_check_in(model, WRIT_EXPR_SCOPE_CHANNEL, WRIT_NONE, source);
@@ -1894,8 +1903,8 @@ resolve_handle_nones(writ_model_t *model, resolver_t *r)
                         && writ_expr_eval(model, expr, nullptr, &handle->none_value)
                         && writ_type_is_integer(model, handle->base);
         if (!handle->has_none) {
-            writ_report(model->session, WRIT_D_BAD_NONE_VALUE, node_at(model, none)->loc, "handle `%.*s`",
-                        S(writ_sym_str(model->session, node->name)));
+            writ_report(model->session, WRIT_D_BAD_NONE_VALUE, node_at(model, none)->loc,
+                        WRIT_MESSAGE(HANDLE, WRIT_ARG(writ_sym_str(model->session, node->name))));
         }
     }
 }

@@ -81,7 +81,8 @@ int main(void)
     char stack_anchor;
     assert((uintptr_t)n00b_os_thread_stack_high_self()
            > (uintptr_t)&stack_anchor);
-#if defined(__x86_64__) || (defined(__APPLE__) && defined(__aarch64__))
+#if (defined(__x86_64__) && !defined(_WIN32)) \
+    || (defined(__APPLE__) && defined(__aarch64__))
     assert(n00b_os_stack_red_zone_bytes() == 128);
 #else
     assert(n00b_os_stack_red_zone_bytes() == 0);

@@ -6,9 +6,9 @@ int
 main(void)
 {
     parse_symtab_t *symbols = parse_symtab_new();
-    parse_tree_t type_declaration = {0};
-    parse_tree_t field_declaration = {0};
-    parse_tree_t synthetic_node = {0};
+    parse_tree_t *type_declaration = parse_tree_new_node((parse_nt_node_t){0});
+    parse_tree_t *field_declaration = parse_tree_new_node((parse_nt_node_t){0});
+    parse_tree_t *synthetic_node = parse_tree_new_node((parse_nt_node_t){0});
     assert(symbols);
     parse_sym_entry_t *builtin = parse_symtab_add(symbols,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("helper"),
@@ -22,7 +22,7 @@ main(void)
     module->scope_tag = CORE_STRING_STATIC("module");
     parse_sym_entry_t *type = parse_symtab_add(symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("Item"),
-        PARSE_SYM_TYPEDEF, &type_declaration);
+        PARSE_SYM_TYPEDEF, type_declaration);
     assert(type);
     parse_symtab_push_scope(symbols, CORE_STRING_STATIC("type"),
                             CORE_STRING_STATIC("record"));
@@ -30,12 +30,12 @@ main(void)
         CORE_STRING_STATIC("type"));
     parse_sym_entry_t *field = parse_symtab_add(symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("value"),
-        PARSE_SYM_VARIABLE, &field_declaration);
+        PARSE_SYM_VARIABLE, field_declaration);
     assert(record && field);
     field->owner_type = type;
     parse_sym_entry_t *synthetic = parse_symtab_add(symbols,
         CORE_STRING_STATIC("type"), CORE_STRING_STATIC("$return"),
-        PARSE_SYM_VARIABLE, &synthetic_node);
+        PARSE_SYM_VARIABLE, synthetic_node);
     assert(synthetic);
     synthetic->is_synthetic = true;
     n00bb_abi_decl_index_t *index = n00bb_abi_decl_index_new(symbols);

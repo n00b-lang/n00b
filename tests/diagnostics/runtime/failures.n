@@ -1,0 +1,147 @@
+import sys.env
+
+alias litmod fault = always_fail
+sequence litmod always_fail(items: Array[int]) -> Array[int] fail: string {
+    fail "runtime literal failure"
+}
+
+var value: int
+
+func make_alloc(n: uint) -> int {
+    let a: Array[int] = new[Array[int]](n)
+    return a[0]
+}
+
+func make_oom(n: uint) -> int {
+    let a: Array[int] = new[Array[int]](n)
+    return a[n - 1]
+}
+
+func checked(n: int) -> int {
+    assert n > 10
+    return n
+}
+
+func narrow(n: int) -> u8 {
+    return cast[u8]n
+}
+
+func const_index() {
+    let a = [1, 2, 3]
+    let b = a[7]
+    __fd_write(2, "after\n")
+}
+
+func dead_array(i: uint) {
+    let a: Array[int] = new[Array[int]](3)
+    let b = a[i]
+    __fd_write(2, "after\n")
+}
+
+func dead_list(i: uint) {
+    let a = [1, 2, 3]
+    let b = a[i]
+    __fd_write(2, "after\n")
+}
+
+func div(a: int, b: int) -> int {
+    return a / b
+}
+
+func div_min(a: i64, b: i64) -> i64 {
+    return a / b
+}
+
+func pick(a: Array[int], i: uint) -> int {
+    return a[i]
+}
+
+func uncaught(x: int) -> Array[int] {
+    return [1, x]'fault
+}
+
+func tou(n: int) -> uint {
+    return cast[uint]n
+}
+
+func add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+func inner(n: int) -> int {
+    if n > 0 {
+        panic("inner failed")
+    }
+    return 0
+}
+
+func outer(n: int) -> int {
+    return inner(n) + 1
+}
+
+func deep(n: int) -> int {
+    if n == 0 {
+        return 0
+    }
+    return deep(n - 1) + 1
+}
+
+func doubled(n: int) -> int {
+    return n * 2
+}
+
+func sh(n: uint, k: uint) -> uint {
+    return n << k
+}
+
+func read_value() -> int {
+    return value
+}
+
+func run(selected: string) {
+    if selected == "alloc" {
+        require make_alloc(4611686018427387903) == 0
+    } elif selected == "assert" {
+        require checked(2) == 2
+    } elif selected == "cast" {
+        require narrow(300) == 1
+    } elif selected == "const_idx" {
+        const_index()
+    } elif selected == "dead_arr" {
+        dead_array(7)
+    } elif selected == "dead_list" {
+        dead_list(7)
+    } elif selected == "div" {
+        require div(1, 0) == 0
+    } elif selected == "divmin" {
+        require div_min(-9223372036854775807 - 1, -1) == 0
+    } elif selected == "index" {
+        let a: Array[int] = new[Array[int]](3)
+        let b = pick(a, 7)
+        __fd_write(2, "after\n")
+        require b == 0
+    } elif selected == "litfail" {
+        uncaught(2)
+    } elif selected == "neg" {
+        require tou(-1) == 1
+    } elif selected == "oom" {
+        require make_oom(137438953472) == 0
+    } elif selected == "ovf" {
+        require add(9223372036854775807, 1) == 0
+    } elif selected == "panic_deep" {
+        var k = 3
+        require outer(k) == 1
+    } elif selected == "recurse" {
+        require deep(100000000) > 0
+    } elif selected == "require" {
+        require doubled(2) == 5
+    } elif selected == "shift" {
+        require sh(1, 70) == 1
+    } elif selected == "uninit" {
+        let reader: Ref[() -> int] = ref read_value
+        reader.call()
+        value = 7
+    }
+}
+
+run(sys.env.args()[1])

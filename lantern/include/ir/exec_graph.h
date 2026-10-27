@@ -30,15 +30,6 @@ typedef ir_exec_graph_outcome_t (*ir_exec_graph_classify_exit_fn)(
     ir_func_t *function, ir_block_t *block, ir_instr_t *terminator,
     void *context);
 
-/*
- * Graph nodes borrow their function/block endpoints from the owning ir_ctx.
- * The context must outlive the graph, and its CFGs must not be structurally
- * changed while the graph is in use. Rebuild the graph after CFG changes.
- * Exit classifiers return NONE for an in-function control-flow terminator;
- * an unclassified terminator rejects function registration so callers cannot
- * silently omit an outcome.
- */
-
 typedef struct {
     uint32_t id;
     core_string_t name;
@@ -113,18 +104,11 @@ bool ir_exec_graph_function_exit_at(const ir_exec_graph_t *graph,
 bool ir_exec_graph_add_edge(ir_exec_graph_t *graph, uint32_t from,
                             uint32_t to,
                             ir_exec_graph_edge_kind_t kind);
-/* REQUIRES edges point from a dependent node to its successful prerequisite. */
-/* A phase.result instruction is a typed input supplied by a compile-time
- * function result. A same-phase consumer requires the producer's successful
- * exits; it is not a call or a value evaluated by Lantern. */
 bool ir_exec_graph_add_phase_result(ir_exec_graph_t *graph,
                                     core_string_t identifier,
                                     uint32_t producer_function,
                                     uint32_t consumer_function,
                                     ir_instr_t *consumer);
-/* A later global initializer may refer to the final value of a global after
- * an earlier phase completes. This records the typed binding without
- * evaluating either phase. */
 bool ir_exec_graph_add_global_result(
     ir_exec_graph_t *graph, core_string_t identifier,
     uint32_t source_phase, uint32_t target_phase,

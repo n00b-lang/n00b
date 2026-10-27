@@ -1,0 +1,59 @@
+import beta
+import delta
+import epsilon
+import first_public
+import second_public
+import aligned
+import aligned.child
+import sys.memory
+import overloads
+import bare.impl
+import bare.extra as x
+import lone.only
+
+require beta.read() == 7
+require delta.selected == 11
+require epsilon.answer == 23
+require first_public.first() + second_public.second() == 42
+
+require aligned.child.answer == 21
+require aligned.doubled() == 42
+
+var values: List[int] = new[List[int]]()
+values.append(42)
+require values[0] == 42
+
+require sys.memory.page_size() == sys.memory.page_size()
+
+require overloads.measure(4) == 5
+require overloads.measure(4, 3) == 12
+
+var second = overloads.second()
+overloads.shut(second)
+require second.raw == 2
+var first = overloads.first()
+overloads.shut(first)
+require first.raw == 1
+overloads.poke(second)
+require second.raw == 3
+require overloads.span(first, first) == 2
+require overloads.span("wide") == "w"
+require overloads.span("wide", scale = 2) == "wi"
+
+let opts: overloads.Opts = (a = 50, b = nil)
+require opts.a != nil
+require opts.b == nil
+
+let found = overloads.find_first(5)
+if found != nil {
+    require found.get().raw == 5
+}
+
+require bare.impl.answer() == 1
+require bare.impl.limit == 3
+require bare.impl.Mode.quiet != bare.impl.Mode.loud
+require x.doubled() == 2
+require "a"'stamp == 4
+require "a"'st == 4
+
+require lone.only.f() == 1

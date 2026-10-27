@@ -26,7 +26,7 @@ parses_n00b(core_string_t text)
 {
     parse_grammar_t *grammar = parse_grammar_new();
     parse_grammar_set_error_recovery(grammar, false);
-    bool ok = parse_bnf_load_file(CORE_STRING_STATIC(N00BB_GRAMMAR_PATH), CORE_STRING_STATIC("module"), grammar);
+    bool ok = parse_bnf_load_file(CORE_STRING_STATIC(N00BB_SOURCE_ROOT "/grammar/n00b.bnf"), CORE_STRING_STATIC("module"), grammar);
     if (ok) {
         parse_grammar_finalize(grammar);
         ok = scan_grammar_lex_compiled(grammar) != nullptr;

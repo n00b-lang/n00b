@@ -1,0 +1,25 @@
+tests/diagnostics/link/names.n:5:6: error: function `f` is defined more than once
+
+    5 | func f() -> int {
+      |      ^ defined again here
+
+  `f` is first defined here:
+
+    1 | func f() -> int {
+      |      ^
+
+  help: remove one definition, rename it, or give it different parameter types
+
+tests/diagnostics/link/names.n:12:12: error: cannot find `countr` in this scope
+
+    12 |     return countr + 1
+       |            ^^^^^^ not found in this scope
+
+  help: did you mean `counter`?
+
+tests/diagnostics/link/names.n:19:9: error: cannot find `ad` in this scope
+
+    19 | let x = ad(1, 2)
+       |         ^^ not found in this scope
+
+  help: did you mean `add`?

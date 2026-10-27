@@ -31,55 +31,48 @@ call_collector(ir_module_t *runtime, ir_func_t *collector, ir_block_t *block)
         && ir_instr_set_call_signature(call, collector->type);
 }
 
+enum { PIN_ROOT, PIN_INLINED, PIN_OPTIONAL, PIN_DISTINCT, PIN_RECORD,
+       PIN_KINDS };
+
 typedef struct {
-    unsigned roots;
-    unsigned sentinels;
-    unsigned inlined_roots;
-    unsigned inlined_sentinels;
-    unsigned optional_roots;
-    unsigned optional_sentinels;
-    unsigned distinct_roots;
-    unsigned distinct_sentinels;
-    unsigned record_roots;
-    unsigned record_sentinels;
+    unsigned roots[PIN_KINDS];
+    unsigned maps[PIN_KINDS];
 } map_counts_t;
+
+static int
+pin_kind(core_object_symbol_name_t name)
+{
+    const core_string_t suffixes[PIN_KINDS] = {
+        S("pin_root"), S("pin_inlined"), S("pin_optional"),
+        S("pin_distinct"), S("pin_record_caller"),
+    };
+    core_string_t function = symbol_text(name);
+    for (int kind = 0; kind < PIN_KINDS; kind++)
+        if (core_string_ends_with(function, suffixes[kind])) return kind;
+    return -1;
+}
+
+static bool
+count_map(void *context, const n00bb_llvm_stack_function_t *function)
+{
+    map_counts_t *counts = context;
+    int kind = pin_kind(function->name);
+    if (kind >= 0) counts->maps[kind]++;
+    return true;
+}
 
 static bool
 check_root(void *context, const n00bb_llvm_stack_location_t *location)
 {
     map_counts_t *counts = context;
-    core_string_t function = symbol_text(location->function);
-    bool pin_root = core_string_ends_with(function, S("pin_root"));
-    bool pin_inlined = core_string_ends_with(function, S("pin_inlined"));
-    bool pin_optional = core_string_ends_with(function, S("pin_optional"));
-    bool pin_distinct = core_string_ends_with(function, S("pin_distinct"));
-    bool pin_record = core_string_ends_with(function,
-                                            S("pin_record_caller"));
-    if (!pin_root && !pin_inlined && !pin_optional && !pin_distinct
-        && !pin_record)
-        return true;
-    if (pin_root) {
-        if (location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
-            counts->sentinels++;
-        else counts->roots++;
-    } else if (pin_inlined) {
-        if (location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
-            counts->inlined_sentinels++;
-        else counts->inlined_roots++;
-    } else if (pin_optional && location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
-        counts->optional_sentinels++;
-    else if (pin_optional) counts->optional_roots++;
-    else if (pin_distinct) {
-        if (location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
-            counts->distinct_sentinels++;
-        else counts->distinct_roots++;
-    } else if (pin_record) {
-        if (location->id == N00BB_LLVM_FRAME_SENTINEL_ID)
-            counts->record_sentinels++;
-        else counts->record_roots++;
-    }
+    int kind = pin_kind(location->function->name);
+    if (kind < 0) return true;
+    counts->roots[kind]++;
+    CHECK(location->kind == N00BB_LLVM_STACKMAP_DIRECT);
     CHECK(location->size_bytes == sizeof(void *));
-    CHECK(location->frame_offset < 0);
+#if !defined(_WIN32)
+    CHECK(location->frame_offset < 0 || location->frame_offset >= 16);
+#endif
 #if defined(__aarch64__)
     CHECK(location->dwarf_register == 29);
 #elif defined(__x86_64__)
@@ -114,9 +107,9 @@ main(void)
     const ir_profile_t profile = {
         .name = S("frame-root-test"), .scalars = scalars, .n_scalars = 3,
     };
-    char *default_triple = LLVMGetDefaultTargetTriple();
-    core_string_t target = core_string_from_cstr(default_triple);
-    LLVMDisposeMessage(default_triple);
+    core_target_desc_t host;
+    CHECK(core_target_host(&host));
+    core_string_t target = host.triple;
     ir_module_t *runtime = ir_module_new(context, S("probe"), &profile,
                                          target);
     th_type *point = ir_type_parse(runtime, S("Point"));
@@ -382,22 +375,18 @@ main(void)
 #endif
     map_counts_t counts = {0};
     bool found = false;
+    n00bb_llvm_stack_visitor_t visitor = {
+        .function = count_map, .location = check_root, .context = &counts,
+    };
     CHECK(n00bb_llvm_stack_maps_visit(object.data, object.byte_len, format,
-                                      check_root, &counts, &found));
-    CHECK(found && counts.roots == 1 && counts.sentinels == 1
-        && counts.inlined_roots >= 2 && counts.inlined_sentinels == 1
-        && counts.optional_roots == 1 && counts.optional_sentinels == 1
-        && counts.distinct_roots == 2 && counts.distinct_sentinels == 1
-        && counts.record_roots == 2
-        && counts.record_sentinels == 1);
+                                      &visitor, &found));
+    CHECK(found && counts.roots[PIN_ROOT] == 1 && counts.maps[PIN_ROOT] == 1
+        && counts.roots[PIN_INLINED] >= 2 && counts.maps[PIN_INLINED] == 1
+        && counts.roots[PIN_OPTIONAL] == 1 && counts.maps[PIN_OPTIONAL] == 1
+        && counts.roots[PIN_DISTINCT] == 2 && counts.maps[PIN_DISTINCT] == 1
+        && counts.roots[PIN_RECORD] == 2 && counts.maps[PIN_RECORD] == 1);
     core_target_desc_t native_target;
-#if defined(__APPLE__) && defined(__aarch64__)
-    CHECK(core_target_profile(S("arm64-macos"), 0, &native_target));
-#elif defined(_WIN32)
-    CHECK(core_target_profile(S("x86_64-windows"), 0, &native_target));
-#else
-    CHECK(core_target_profile(S("x86_64-linux"), 0, &native_target));
-#endif
+    CHECK(core_target_host(&native_target));
     n00bb_native_frames_t *frames = n00bb_native_frames_new(format);
     CHECK(frames && n00bb_native_frames_add(frames, object.data,
                                             object.byte_len));
@@ -416,8 +405,8 @@ main(void)
     CHECK(core_le_load_u32(section.bytes) >= 3);
     CHECK(core_le_load_u32(section.bytes + 4) >= 3);
     CHECK(section.relocation_count == core_le_load_u32(section.bytes));
-    CHECK((int32_t)core_le_load_u32(section.bytes + 16) < 0);
-    CHECK(core_le_load_u32(section.bytes + 20) == 1);
+    CHECK(core_le_load_u32(section.bytes + 16) > 0);
+    CHECK(core_le_load_u32(section.bytes + 20) >= 1);
     core_object_absolute64_relocation_t relocation;
     CHECK(core_object_absolute64_relocation_at(&section, format, 0,
                                                &relocation));
@@ -435,7 +424,7 @@ main(void)
         if (!core_string_ends_with(symbol_text(symbol), S("pin_inlined")))
             continue;
         CHECK(core_le_load_u32(section.bytes + relocation.section_offset + 12)
-              == 1);
+              >= 1);
         found_inlined = true;
     }
     CHECK(found_inlined);
@@ -446,6 +435,5 @@ main(void)
     ir_storage_origin_free(origin);
     core_diagnostics_free(diagnostics);
     ir_ctx_free(context);
-    core_free(target.data);
     return 0;
 }

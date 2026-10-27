@@ -1,0 +1,118 @@
+check-programs-a	dev	36	N00B_PATH="$SRC/tests/programs/bitcode" "$BUILD/n00b" check "$SRC/tests/programs/features/fast_suite.n" "$SRC/tests/programs/bitcode/bitcode_gc_units.n" "$SRC/tests/programs/bitcode/bitcode_lang_suite.n" "$SRC/tests/programs/text/text_suite.n"
+check-programs-b	dev	36	N00B_PATH="$SRC/tests/programs/consts_literals:$SRC/tests/programs/static_encoding:$SRC/tests/programs/import_cycles/cycles" "$BUILD/n00b" check "$SRC/tests/programs/merged/lto.n" "$SRC/tests/programs/merged/arrays.n" "$SRC/tests/programs/merged/records.n" "$SRC/tests/programs/merged/calls.n" "$SRC/tests/programs/merged/generics.n" "$SRC/tests/programs/merged/generics_text.n" "$SRC/tests/programs/consts_literals/consts_literals.n" "$SRC/tests/programs/static_encoding/static_encoding.n" "$SRC/tests/programs/import_cycles/cycles/cycles.n"
+test-gates	dev	2	sh "$SRC/tests/gates.sh" "$SRC"
+abi-static-graph	dev	2	"$BUILD/abi-static-graph-test"
+writ-diagnostics-current	dev	2	python3 "$SRC/tools/gen_writ_diagnostics.py" "$SRC/writ/include/writ/diag_codes.def" "$SRC/compiler/diagnostics/writ.def" --check
+config-layers	pr	2	sh "$SRC/tests/config_layers.sh" "$BUILD/n00b"
+syntax-aliases	pr	6	sh "$SRC/tests/syntax_aliases.sh" "$BUILD/n00b" "$SRC/tests/programs/syntax_aliases.n00b" "$SRC/tests/programs/syntax_preferences.n00b"
+writ-coexistence	dev	2	"$BUILD/writ-coexistence"
+builtin-os	dev	2	"$BUILD/builtin-os-test"
+builtin-abi	dev	2	"$BUILD/builtin-abi-test"
+runtime-abi-io	dev	2	"$BUILD/runtime-abi-io-test"
+runtime-abi	dev	2	"$BUILD/runtime-abi-test"
+runtime-abi-partial-dispatch	dev	2	"$BUILD/runtime-abi-test" --partial-dispatch
+runtime-abi-function-parameters	dev	2	"$BUILD/runtime-abi-test" --function-parameters
+runtime-abi-call-shape	dev	2	"$BUILD/runtime-abi-test" --call-shape
+runtime-abi-scc	dev	2	"$BUILD/runtime-abi-scc-test"
+runtime-abi-scc-acyclic	dev	2	"$BUILD/runtime-abi-scc-test" --acyclic
+runtime-abi-trace	dev	2	"$BUILD/runtime-abi-trace-test"
+runtime-abi-option	dev	2	"$BUILD/runtime-abi-option-test"
+storage-selection	dev	2	"$BUILD/storage-selection-test"
+typehash-abi	dev	2	"$BUILD/typehash-abi-test"
+abi-string-value	dev	2	"$BUILD/abi-string-value-test"
+abi-layout	dev	2	"$BUILD/abi-layout-test"
+unsigned-literal-context	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/unsigned_literal_context.n"
+unsafe-ref-cast	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/unsafe_ref_cast.n"
+abi-record-layout	dev	2	"$BUILD/abi-record-layout-test"
+abi-directory	dev	2	"$BUILD/abi-directory-test"
+abi-container	dev	2	"$BUILD/abi-container-test"
+abi-index-patch	dev	2	"$BUILD/abi-index-patch-test"
+abi-emit	dev	2	"$BUILD/abi-emit-test"
+abi-emit-unit	dev	2	"$BUILD/abi-emit-unit-test"
+abi-emit-strings	dev	2	"$BUILD/abi-emit-strings-test"
+abi-type-rows	dev	2	"$BUILD/abi-type-rows-test"
+abi-type-layout-rows	dev	2	"$BUILD/abi-type-layout-rows-test"
+abi-type-signatures	dev	2	"$BUILD/abi-type-signatures-test"
+abi-decl-index	dev	2	"$BUILD/abi-decl-index-test"
+abi-declarations	dev	2	"$BUILD/abi-declarations-test"
+abi-type-index	dev	2	"$BUILD/abi-type-index-test"
+llvm-backend	dev	2	"$BUILD/llvm-backend-test"
+llvm-native-cache	dev	2	"$BUILD/llvm-native-cache-test"
+llvm-stack-maps	dev	2	"$BUILD/llvm-stack-maps-test"
+llvm-frame-roots	dev	2	"$BUILD/llvm-frame-roots-test"
+lto-n00b	pr	31	sh "$SRC/tests/lto_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/lto.n"
+name-resolution	pr	9	sh "$SRC/tests/name_resolution.sh" "$BUILD/n00b" "$SRC/tests/programs/name_resolution"
+diagnostics	pr	30	sh "$SRC/tests/diagnostics.sh" "$BUILD/n00b" "$SRC"
+imports-bring	pr	18	sh "$SRC/tests/imports_bring.sh" "$BUILD/n00b" "$SRC/tests/programs/imports_bring"
+overload-resolution	pr	17	sh "$SRC/tests/overload_resolution.sh" "$BUILD/n00b" "$SRC/tests/programs/features/overload_specificity.n" "$SRC/tests/programs/features/overload_ambiguous_generic.n"
+import-cycle-declared-shape-n00b	pr	2	sh "$SRC/tests/compile_module.sh" "$BUILD/n00b" "$SRC/tests/programs/import_cycles/declared" shape
+compile-fallible-index-read-n00b	pr	2	sh "$SRC/tests/compile_module.sh" "$BUILD/n00b" "$SRC/tests/programs/compile_mode" fallible_index_read
+static-literals-baked-n00b	pr	7	sh "$SRC/tests/no_build_time_run.sh" "$BUILD/n00b" "$SRC/tests/programs/static_encoding/static_literals.n"
+hello-no-build-time-run-n00b	pr	7	sh "$SRC/tests/no_build_time_run.sh" "$BUILD/n00b" "$SRC/tests/programs/static_encoding/hello.n"
+program-args	pr	3	sh "$SRC/tests/program_args_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/features/program_args.n" alpha 'two words'
+coercion-borrow	pr	8	sh "$SRC/tests/coercion_borrow.sh" "$BUILD/n00b" "$SRC/tests/programs/buffer/coercion_borrow.n"
+visibility-n00b	pr	13	sh "$SRC/tests/visibility_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/type_visibility"
+package-imports	pr	11	sh "$SRC/tests/package_imports.sh" "$BUILD/n00b" "$SRC/tests/programs/packages"
+litmod-duplicates	pr	8	sh "$SRC/tests/litmod_duplicates.sh" "$BUILD/n00b" "$SRC/tests/programs/litmod_duplicates"
+root-modules	pr	11	sh "$SRC/tests/root_modules.sh" "$BUILD/n00b" "$SRC/tests/programs/root_modules"
+ffi	pr	28	sh "$SRC/tests/ffi.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi"
+ffi-bake	pr	20	sh "$SRC/tests/ffi_bake.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi/bake"
+ffi-zlib	pr	23	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts" "$BUILD/abi-register-object-test" modules
+ffi-load-dynamic	pr	2	sh "$SRC/tests/ffi_load_dynamic.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi_load_dynamic" "$SRC/writ/contracts"
+ffi-resharp	pr,rust	20	sh "$SRC/tests/ffi_resharp.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts"
+panic-n00b	pr	11	sh "$SRC/tests/panic_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_panic.n"
+text-theme-builtin-immutable	pr	25	sh "$SRC/tests/panic_message_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/text/theme_builtin_immutable.n" 'builtin themes are immutable; copy the theme first'
+operator-newline-parse	pr	2	sh "$SRC/tests/operator_newline.sh" "$BUILD/n00b" "$SRC/tests/programs/operator_newline_continuation.n" "$SRC/tests/programs/operator_double_newline_rejected.n"
+incremental-cache	pr	35	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" edits
+private-consume-trait-method-n00b	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/bitcode/trait_consume_private.n"
+range-agreement-n00b	pr	2	sh "$SRC/tests/range_agreement.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_shared_ranges.n" bitcode_shared_ranges
+range-agreement-programs	pr	2	sh "$SRC/tests/range_agreement.sh" "$BUILD/n00b" "$SRC/tests/programs/range_agreement/agreement.n" parameters guards loops widths
+thread-races-n00b	pr	2	sh "$SRC/tests/thread_races.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_thread_races.n"
+trap-summaries-n00b	pr	2	sh "$SRC/tests/summary_expected.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_trap_summaries.n" 'summary @bitcode_trap_summaries.both may-trap=>  traps explicit bounds arithmetic' 'summary @bitcode_trap_summaries.square may-trap=>  traps arithmetic' 'summary @bitcode_trap_summaries.checked may-trap=>  traps explicit'
+initializer-read-after-exit-arm-n00b	pr	2	"$BUILD/n00b" lower "$SRC/tests/programs/bitcode/bitcode_initializer_read_after_exit_arm.n"
+indirect-global-init-n00b	pr	4	sh "$SRC/tests/indirect_global_init.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode"
+gc-worker-live-n00b	pr,darwin	16	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_gc_worker_live.n" "$BUILD/gc-worker-thread.o" sys.internal.gc.collect.worker
+array-uint-index-n00b	pr	19	sh "$SRC/tests/array_uint_index.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode"
+index-read-variant-override-n00b	pr	16	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_index_read_variant_override.n"
+shift-count-n00b	pr	20	sh "$SRC/tests/shift_count_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs"
+numeric-casts-n00b	pr	6	sh "$SRC/tests/numeric_casts.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_numeric_casts.n" "$SRC/tests/programs/bitcode/bitcode_numeric_cast_trap.n"
+inline-array-layout-n00b	pr	3	sh "$SRC/tests/inline_array_layout.sh" "$BUILD/n00b" "$SRC/tests/programs/inline_array_record_layout.n"
+runtime-array-bound-n00b	pr	2	sh "$SRC/tests/runtime_array_bound.sh" "$BUILD/n00b" "$SRC/tests/programs/array_runtime_sized_declaration.n"
+builtin-abi-n00b	pr	3	sh "$SRC/tests/builtin_abi_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_abi.n"
+builtin-debug	pr	5	sh "$SRC/tests/builtin_debug.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_debug.n00b"
+raw-repr	pr	13	sh "$SRC/tests/raw_repr.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" defaults
+bitcode-native	pr	18	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" runtime
+inline-n00b	pr	10	sh "$SRC/tests/inline_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/inline"
+abi-link-fixtures	pr	18	sh "$SRC/tests/abi_link_fixtures.sh" "$BUILD/n00b" "$BUILD/abi-record-object-test" "$BUILD/abi-link-input-test" "$BUILD/abi-register-object-test"
+formatter	pr	5	sh "$SRC/tests/formatter.sh" "$BUILD/n00b"
+unicode-tables-match	dev	2	python3 "$SRC/tools/check_unicode_tables.py" --root "$SRC"
+install	pr,serial	23	sh "$SRC/tests/install.sh" "$SRC" "$BUILD"
+fast-suite-n00b	pr	20	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/features/fast_suite.n"
+gc-units-n00b	pr	30	N00B_PATH="$SRC/tests/programs/bitcode" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_gc_units.n"
+lang-suite-n00b	pr	28	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_lang_suite.n"
+text-suite	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/text/text_suite.n"
+arrays-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/arrays.n"
+records-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/records.n"
+calls-n00b	pr	30	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/calls.n"
+generics-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/generics.n"
+generics-text-n00b	pr	21	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/generics_text.n"
+consts-literals-n00b	pr	5	N00B_PATH="$SRC/tests/programs/consts_literals" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/consts_literals/consts_literals.n"
+static-encoding-n00b	pr	15	N00B_PATH="$SRC/tests/programs/static_encoding" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/static_encoding/static_encoding.n"
+static-encoding-baked-n00b	pr	7	N00B_PATH="$SRC/tests/programs/static_encoding" sh "$SRC/tests/no_build_time_run.sh" "$BUILD/n00b" "$SRC/tests/programs/static_encoding/static_encoding.n" 2
+import-cycles-n00b	pr	16	N00B_PATH="$SRC/tests/programs/import_cycles/cycles" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/import_cycles/cycles/cycles.n"
+ffi-basics	pr	19	sh "$SRC/tests/ffi_native.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" basics
+ffi-linked	pr	14	sh "$SRC/tests/ffi_native.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" linked
+ffi-package	pr	15	sh "$SRC/tests/ffi_native.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" package
+ffi-serve	pr	20	sh "$SRC/tests/ffi_native.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" serve
+ffi-trip	pr	17	sh "$SRC/tests/ffi_native.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" trip
+ffi-edit	pr	19	sh "$SRC/tests/ffi_native.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" edit
+ffi-zlib-const	pr	20	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts" "$BUILD/abi-register-object-test" const
+ffi-zlib-litmod	pr	21	sh "$SRC/tests/ffi_zlib.sh" "$BUILD/n00b" "$SRC/tests/programs/ffi" "$SRC/writ/contracts" "$BUILD/abi-register-object-test" litmod
+unicode-conformance	pr	13	cd "$SRC/tests/programs/unicode" && sh "$SRC/tests/program_args_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/unicode/conformance.n" grapheme word sentence line normalization bidi collation idna
+storage-facts-n00b	pr	5	sh "$SRC/tests/storage_facts.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_storage_facts.n"
+incremental-cache-shapes	pr	31	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" shapes
+incremental-cache-instances	pr	38	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" instances
+closed-world-n00b	pr	11	sh "$SRC/tests/closed_world.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_closed_world.n"
+raw-repr-overrides	pr	17	sh "$SRC/tests/raw_repr.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" overrides
+bitcode-build-time	pr	28	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" build-time
+bitcode-litmod	pr	11	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" litmod

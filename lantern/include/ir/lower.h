@@ -52,24 +52,18 @@ ir_value_t *ir_lower_node_value(ir_lower_context_t *context,
                                 parse_tree_t *node);
 bool ir_lower_set_node_value(ir_lower_context_t *context,
                              parse_tree_t *node, ir_value_t *value);
-/* Suppress only this node's annotation-driven emit action. Children are
- * still lowered and remain available to visit callbacks. */
 bool ir_lower_suppress_emit(ir_lower_context_t *context, parse_tree_t *node);
-/* Claim a custom assignment on node entry; its lowering callback must emit
- * the assignment operation before the node exits. */
+bool ir_lower_emit_suppressed(ir_lower_context_t *context,
+                              parse_tree_t *node);
 bool ir_lower_handle_assignment(ir_lower_context_t *context,
                                 parse_tree_t *assignment);
 bool ir_lower_finish_assignment(ir_lower_context_t *context,
                                 parse_tree_t *assignment,
                                 parse_tree_t *completed_node);
-/* Keep an assignment target in value context while leaving the assignment's
- * annotation-driven emit operation active. Useful for read-modify-write. */
 bool ir_lower_evaluate_assignment_target(ir_lower_context_t *context,
                                          parse_tree_t *assignment);
 bool ir_lower_skip_value(ir_lower_context_t *context, parse_tree_t *owner,
                          parse_tree_t *node);
-/* Append one non-terminator or terminator to the current block, attaching its
- * source span and updating reachability for terminators. */
 ir_instr_t *ir_lower_emit_instruction(ir_lower_context_t *context,
                                       ir_op_t op, ir_span_t span);
 ir_instr_t *ir_lower_emit_terminator(ir_lower_context_t *context,
@@ -83,14 +77,11 @@ bool ir_lower_bind_value(ir_lower_context_t *context,
                          parse_sym_entry_t *symbol, ir_value_t *value);
 bool ir_lower_bind_local(ir_lower_context_t *context,
                          parse_sym_entry_t *symbol, ir_local_t *local);
-/* Replace the active binding for a symbol after a staged lowering step. */
 bool ir_lower_rebind_local(ir_lower_context_t *context,
                            parse_sym_entry_t *symbol, ir_local_t *local);
-/* Bind a source local to an explicit address-backed storage value. */
 bool ir_lower_bind_local_storage(ir_lower_context_t *context,
                                  parse_sym_entry_t *symbol,
                                  ir_local_t *local, ir_value_t *address);
-/* Scoped bindings shadow earlier entries until restored to a checkpoint. */
 void *ir_lower_bindings_checkpoint(ir_lower_context_t *context);
 bool ir_lower_bindings_restore(ir_lower_context_t *context, void *checkpoint);
 bool ir_lower_bind_scoped_value(ir_lower_context_t *context,
@@ -109,8 +100,6 @@ bool ir_lowerer_register(ir_lowerer_t *lowerer, core_string_t action,
 bool ir_lowerer_register_visit(ir_lowerer_t *lowerer,
                                parse_annot_kind_t kind,
                                ir_lower_visit_fn callback, void *state);
-/* Nonterminal callbacks run before annotations on entry and after child
- * lowering on exit. A callback may prune its current subtree on entry. */
 bool ir_lowerer_register_nt_visit(ir_lowerer_t *lowerer,
                                  core_string_t nonterminal,
                                  ir_lower_visit_fn callback, void *state);

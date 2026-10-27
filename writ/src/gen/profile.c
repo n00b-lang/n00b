@@ -49,8 +49,7 @@ read_repr(reader_t *r, uint32_t id, const writ_node_t *item)
     } else if (type->kind == WRIT_N_TYPE_BYTES) {
         repr.form = is(profile, type->payload, "utf8") ? WRIT_REPR_UTF8 : WRIT_REPR_BYTES;
     } else {
-        writ_report(profile->session, WRIT_D_UNKNOWN_TYPE, type->loc,
-                    "a representation converts to `cstr`, `utf8[n]` or `bytes[n]`");
+        writ_report(profile->session, WRIT_D_UNKNOWN_TYPE, type->loc, WRIT_BARE(A_REPRESENTATION_CONVERTS_TO_CSTR));
         return;
     }
     put_repr(profile, repr);
@@ -62,8 +61,8 @@ single(reader_t *r, uint32_t id, const writ_node_t *item)
     uint32_t key = item->kind == WRIT_N_VARIADIC_ITEM && is(r->profile, item->payload, "define") ? WRIT_N_COUNT
                                                                                                    : item->kind;
     if (r->seen[key]) {
-        uint32_t diag = writ_report(r->profile->session, WRIT_D_PROFILE_REPEAT, item->loc, nullptr);
-        writ_report_label(r->profile->session, diag, node(r, r->seen[key])->loc, writ_cstr("first stated here"));
+        uint32_t diag = writ_report(r->profile->session, WRIT_D_PROFILE_REPEAT, item->loc, WRIT_NO_DETAIL);
+        writ_report_label(r->profile->session, diag, node(r, r->seen[key])->loc, WRIT_BARE(FIRST_STATED_HERE));
         return false;
     }
     r->seen[key] = id;
@@ -97,8 +96,7 @@ read_item(reader_t *r, uint32_t id)
                 }
             }
         }
-        writ_report(profile->session, WRIT_D_UNKNOWN_NAME, item->loc, "naming takes fn, type, const, field or module, "
-                                                                      "and snake, Snake_Case, pascal, camel, upper or keep");
+        writ_report(profile->session, WRIT_D_UNKNOWN_NAME, item->loc, WRIT_BARE(NAMING_TAKES_FN_TYPE_CONST));
         return;
     }
     case WRIT_N_PRIM_ITEM: {
@@ -170,7 +168,7 @@ writ_profile_read(writ_unit_t *unit, writ_sym_t language)
     }
     if (!found) {
         writ_str_t name = writ_sym_str(session, language);
-        writ_report(session, WRIT_D_NO_PROFILE, WRIT_NO_LOC, "`%.*s`", S(name));
+        writ_report(session, WRIT_D_NO_PROFILE, WRIT_NO_LOC, WRIT_MESSAGE(TEXT_2, WRIT_ARG(name)));
         return nullptr;
     }
     return profile;

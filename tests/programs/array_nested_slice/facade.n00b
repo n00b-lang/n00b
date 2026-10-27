@@ -1,7 +1,0 @@
-import array_nested_slice.contract
-import array_nested_slice.array_impl
-import array_nested_slice.view_impl
-
-package array_nested_slice {
-    export array_nested_slice.contract.Index_Slice
-}

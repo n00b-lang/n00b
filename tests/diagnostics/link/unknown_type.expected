@@ -1,0 +1,3 @@
+tests/diagnostics/link/unknown_type.n:1:8: error N00B-N0002: cannot find type `Strng` in this scope
+  help: did you mean `string`?
+tests/diagnostics/link/unknown_type.n:2:11: error N00B-N0002: cannot find type `Pointt` in this scope

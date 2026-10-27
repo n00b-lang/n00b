@@ -56,7 +56,7 @@ static bool told(run_t *r, core_string_t text)
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         const ir_diag_t *dg = ir_diags_at(r->d, i);
 
-        if (contains(dg->primary.label, text) || contains(dg->message, text)) {
+        if (contains(ir_diag_item(r->d, dg)->label, text) || contains(ir_diag_item(r->d, dg)->message, text)) {
             return true;
         }
     }

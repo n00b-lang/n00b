@@ -104,7 +104,6 @@ typedef struct {
     uint32_t origin             : 1;
     uint32_t system_header      : 1;
     uint32_t no_trivia          : 1;
-    uint32_t tree_owned         : 1;
     uint32_t layout_mismatch    : 1;
     uint32_t ignore_if_no_match : 1;
     uint32_t value_from_source  : 1;
@@ -133,8 +132,6 @@ void parse_trivia_free(parse_trivia_t *t);
 size_t parse_trivia_region_count(const parse_trivia_t *trivia);
 uint64_t parse_trivia_region_at(const parse_trivia_t *trivia, size_t index);
 bool parse_trivia_in_region(const parse_trivia_t *trivia, uint64_t region_id);
-parse_token_info_t *parse_token_clone_for_tree(const parse_token_info_t *token);
-void                parse_token_free_from_tree(parse_token_info_t *token);
 
 parse_token_info_t *parse_token_new(void);
 void parse_token_free(parse_token_info_t *token);
@@ -232,17 +229,6 @@ parse_token_set_no_trivia(parse_token_info_t *token, bool value)
     token->fields.no_trivia = value;
 }
 
-static inline bool
-parse_token_tree_owned(const parse_token_info_t *token)
-{
-    return token->fields.tree_owned;
-}
-
-static inline void
-parse_token_set_tree_owned(parse_token_info_t *token, bool value)
-{
-    token->fields.tree_owned = value;
-}
 
 static inline bool
 parse_token_layout_mismatch(const parse_token_info_t *token)

@@ -207,16 +207,9 @@ report_growing_instantiation(n00bb_specialization_failure_t *report,
                              th_type *signature, th_ctx *types)
 {
     if (!report) return;
-    core_string_t before = n00bb_print_type(types, earlier->signature);
-    core_string_t after = n00bb_print_type(types, signature);
-    core_buffer_printf(&report->message,
-        "'%.*s' calls itself with a type that grows on every call: its "
-        "instance %.*s makes this call, which needs %.*s, so no finite set "
-        "of instances exists; a recursive call in a generic function must "
-        "not wrap its own type arguments",
-        (int)target->name.u8_bytes, target->name.data,
-        (int)before.u8_bytes, before.data,
-        (int)after.u8_bytes, after.data);
+    report->function = target->name;
+    report->before = n00bb_print_type(types, earlier->signature);
+    report->after = n00bb_print_type(types, signature);
     report->module = ir_module_name(target->owner);
     report->span = call->span;
     report->located = true;
@@ -474,14 +467,8 @@ rewrite_primitive_operator(ir_func_t *function, ir_instr_t *call)
         right = left ? operand_as(function, call, right, result) : nullptr;
         if (!right) return false;
     }
-    if (!become(call, operator->op, left, right, nullptr)) return false;
-    bool integer = class != IR_CLASS_FLOAT;
-    if (integer && ir_op_accepts_mod(call->op, CORE_STRING_STATIC("trap"))
-        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
-    if (class == IR_CLASS_SINT
-        && (call->op == IR_OP_DIV || call->op == IR_OP_REM)
-        && !ir_instr_add_mod(call, CORE_STRING_STATIC("trap"))) return false;
-    return true;
+    return become(call, operator->op, left, right, nullptr)
+        && n00bb_trap_integer_arithmetic(call, class);
 }
 
 static bool
@@ -717,6 +704,11 @@ instantiate(ir_ctx_t *context, ir_func_t *target, th_type *actual,
     th_type **to = core_alloc_array(th_type *, bindings->len);
     core_string_t clone_failure = {};
     ir_func_t *copy = nullptr;
+    for (int32_t file = 0; module; file++) {
+        core_string_t path = ir_file_path(target->owner, file);
+        if (!path.data) break;
+        (void)ir_file_add(module, path);
+    }
     if (module && from && to) {
         for (size_t n = 0; n < bindings->len; n++) {
             from[n] = bindings->data[n].variable;

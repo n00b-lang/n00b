@@ -1,0 +1,19 @@
+let a: Array[Buffer] = [buffer_from_string("a"), "x"]
+let l: List[Buffer] = ["x"]
+record Holder {
+    b: Buffer?
+    n: int
+}
+var h: Holder = (b = "x", n = 1)
+func wrong() -> Buffer {
+    return "text"
+}
+wrong()
+var n_4: int = 1
+let r: Ref[int] = ref n_4
+let k: int = r
+func give(r: Ref[int]) -> int {
+    return r
+}
+var n_5: int = 1
+give(ref n_5)

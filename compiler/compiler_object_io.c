@@ -1,3 +1,4 @@
+#include "lib/os.h"
 #include "compiler_object_io.h"
 
 #include <fcntl.h>
@@ -7,22 +8,38 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "compiler_lower.h"
 #include "driver.h"
 #include "lib/alloc.h"
 
-#ifdef __APPLE__
-const char *const n00bb_system_libraries[N00BB_SYSTEM_LIBRARY_COUNT + 1] = {nullptr};
-#else
-const char *const n00bb_system_libraries[N00BB_SYSTEM_LIBRARY_COUNT + 1] = {"-lm", nullptr};
-#endif
+const char *const *
+n00bb_system_libraries(const core_target_desc_t *target)
+{
+    static const char *const mach_o[] = {nullptr};
+    static const char *const elf[] = {nullptr};
+    static const char *const coff[] = {"-lsynchronization", nullptr};
+    return target->object_format == CORE_TARGET_OBJECT_MACH_O ? mach_o
+        : target->object_format == CORE_TARGET_OBJECT_COFF ? coff : elf;
+}
 
 core_string_t
 n00bb_write_temporary_object(const void *bytes, size_t length)
 {
     if (!bytes || !length) return (core_string_t){};
-    char path[] = "/tmp/n00bb-code-XXXXXX";
-    int fd = mkstemp(path);
-    if (fd < 0) return (core_string_t){};
+    core_string_t root = core_os_temp_root();
+    core_buffer_t stem = {0};
+    core_buffer_append_string(&stem, root);
+    core_buffer_puts(&stem, "/n00bb-code-");
+    core_free(root.data);
+    core_string_t made = {};
+    int fd = core_os_make_unique_file(core_buffer_string(&stem), &made);
+    core_buffer_release(&stem);
+    char *path = fd >= 0 ? core_string_to_cstr(made) : nullptr;
+    core_free(made.data);
+    if (fd < 0 || !path) {
+        if (fd >= 0) close(fd);
+        return (core_string_t){};
+    }
     bool ok = true;
     size_t offset = 0;
     while (offset < length) {
@@ -37,45 +54,28 @@ n00bb_write_temporary_object(const void *bytes, size_t length)
     if (close(fd)) ok = false;
     if (!ok) {
         unlink(path);
+        core_free(path);
         return (core_string_t){};
     }
-    core_string_t result = core_string_from_raw(path, sizeof(path) - 1);
+    core_string_t result = core_string_from_cstr(path);
     if (!result.data) unlink(path);
+    core_free(path);
     return result;
 }
 
-static bool
-readable_path(const core_buffer_t *path)
-{
-    char *native_path = core_string_to_cstr(core_buffer_string(path));
-    bool readable = native_path && !access(native_path, R_OK);
-    core_free(native_path);
-    return readable;
-}
-
 core_string_t
-n00bb_archive_path(core_string_t compiler_path, core_string_t archive_name)
+n00bb_archive_path(core_string_t archive_name)
 {
-    core_string_t executable = n00bb_executable_path(compiler_path);
-    int64_t slash = executable.data
-        ? core_string_rfind_byte(executable, '/') : -1;
-    core_buffer_t archive = {0};
-    if (slash >= 0) {
-        core_buffer_printf(&archive, "%.*s/%.*s",
-            (int)slash, executable.data,
-            (int)archive_name.u8_bytes, archive_name.data);
-        if (!readable_path(&archive)) {
-            core_buffer_release(&archive);
-            core_buffer_printf(&archive, "%.*s/../lib/%.*s",
-                (int)slash, executable.data,
-                (int)archive_name.u8_bytes, archive_name.data);
-        }
-    }
-    core_string_t path = readable_path(&archive)
-        ? core_string_dup(core_buffer_string(&archive)) : (core_string_t){};
-    core_buffer_release(&archive);
-    core_free(executable.data);
-    return path;
+    core_target_desc_t target;
+    core_string_t runtime = n00bb_toolchain()->runtime;
+    bool cross = n00bb_cross_target(&target);
+    core_string_t directory = cross ? core_os_path_join(runtime, target.triple)
+                                    : runtime;
+    core_string_t path = core_os_path_join(directory, archive_name);
+    if (cross) core_free(directory.data);
+    if (core_os_is_regular_file(path)) return path;
+    core_free(path.data);
+    return (core_string_t){};
 }
 
 bool

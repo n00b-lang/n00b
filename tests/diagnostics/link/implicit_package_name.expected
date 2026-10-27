@@ -1,0 +1,2 @@
+tests/diagnostics/link/implicit_package_name.n:1:1: error N00B-M0013: `builtin` cannot be declared here because it names a package this module uses
+  help: rename the declaration, or import the package with `import ... as`

@@ -1,0 +1,41 @@
+tests/diagnostics/tu/argument_checks.n:5:3: error: parameter 1 (`x`) of `s` is `i16`, but this argument is `{unsigned integer}`
+
+    5 | s(1 << 4)
+      |   ^^^^^^ expected `i16`
+
+  `s` is declared here:
+
+    1 | func s(x: i16) -> i16 {
+      |      ^
+
+tests/diagnostics/tu/argument_checks.n:11:14: error: parameter 1 (`cache_kb`) of `take` is `u32?`, but this argument is `string`
+
+    11 | require take(text) == 0
+       |              ^^^^ expected `u32?`
+
+  `take` is declared here:
+
+     6 | func take(cache_kb: u32?) -> u32 {
+       |      ^^^^
+
+tests/diagnostics/tu/argument_checks.n:20:10: error: `c` is an `in` parameter, so it cannot be passed to a `consume` parameter
+
+    20 |     drop(c)
+       |          ^ borrowed, not owned
+
+  `c` is declared here:
+
+    19 | func keep(c: Counter) {
+       |           ^
+
+  help: pass a copy, or declare `c` as `consume`
+
+tests/diagnostics/tu/argument_checks.n:28:17: error: this value is reached through `view` parameter `c`, so it can only be passed to a `view` parameter
+
+    28 |     return read(c)
+       |                 ^ read-only through `c`
+
+  `c` is declared here:
+
+    27 | func pass_view(view c: Counter) -> int {
+       |                     ^

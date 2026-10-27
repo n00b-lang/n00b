@@ -104,7 +104,7 @@ void writ_kv_export_kv_entry_fill(void *storage, void *key, void *val) {
 int64_t writ_kv___export_kv_open(uint64_t, uint64_t, uint64_t failed);
 int kv_open(const char *path, kv_db * *out_db)
 {
-    uint64_t buffer[24];
+    uint64_t buffer[32];
     uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
     if (n00b_ffi_unwind_save(buffer)) {
         n00b_ffi_leave(previous);
@@ -123,7 +123,7 @@ int kv_open(const char *path, kv_db * *out_db)
 int64_t writ_kv___export_kv_put(uint64_t, uint64_t, size_t, uint64_t, size_t, uint64_t failed);
 int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_t vlen)
 {
-    uint64_t buffer[24];
+    uint64_t buffer[32];
     uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
     if (n00b_ffi_unwind_save(buffer)) {
         n00b_ffi_leave(previous);
@@ -142,7 +142,7 @@ int kv_put(kv_db *db, const uint8_t *key, size_t klen, const uint8_t *val, size_
 int64_t writ_kv___export_kv_get(uint64_t, uint64_t, size_t, uint64_t, uint64_t, uint64_t failed);
 int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_t *out_len)
 {
-    uint64_t buffer[24];
+    uint64_t buffer[32];
     uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
     if (n00b_ffi_unwind_save(buffer)) {
         n00b_ffi_leave(previous);
@@ -161,7 +161,7 @@ int kv_get(kv_db *db, const uint8_t *key, size_t klen, uint8_t * *out_val, size_
 uint64_t writ_kv___export_kv_iter_new(uint64_t, uint64_t, size_t, uint64_t failed);
 kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen)
 {
-    uint64_t buffer[24];
+    uint64_t buffer[32];
     uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
     if (n00b_ffi_unwind_save(buffer)) {
         n00b_ffi_leave(previous);
@@ -176,7 +176,7 @@ kv_iter * kv_iter_new(kv_db *db, const uint8_t *prefix, size_t plen)
 uint64_t writ_kv___export_kv_iter_next(uint64_t, uint64_t failed);
 kv_entry * kv_iter_next(kv_iter *it)
 {
-    uint64_t buffer[24];
+    uint64_t buffer[32];
     uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
     if (n00b_ffi_unwind_save(buffer)) {
         n00b_ffi_leave(previous);
@@ -191,7 +191,7 @@ kv_entry * kv_iter_next(kv_iter *it)
 uint64_t writ_kv___export_kv_errstr(int, uint64_t failed);
 const char * kv_errstr(int s)
 {
-    uint64_t buffer[24];
+    uint64_t buffer[32];
     uint64_t previous = n00b_ffi_enter((uint64_t)(uintptr_t)buffer);
     if (n00b_ffi_unwind_save(buffer)) {
         n00b_ffi_leave(previous);

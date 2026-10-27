@@ -1,4 +1,7 @@
 #include "compiler_system.h"
+#include "diagnostics.h"
+
+#include "lib/list.h"
 
 static const core_string_t system_roots[] = {
     CORE_STRING_STATIC("builtin"),
@@ -62,34 +65,12 @@ trait_method(const th_type *methods, size_t index)
                                            : th_record_member(methods, index);
 }
 
-static size_t
-edit_distance(core_string_t left, core_string_t right)
-{
-    if (left.u8_bytes > 64 || right.u8_bytes > 64) return SIZE_MAX;
-    size_t row[65];
-    for (size_t j = 0; j <= right.u8_bytes; j++) row[j] = j;
-    for (size_t i = 1; i <= left.u8_bytes; i++) {
-        size_t diagonal = row[0];
-        row[0] = i;
-        for (size_t j = 1; j <= right.u8_bytes; j++) {
-            size_t above = row[j];
-            size_t substitute = diagonal
-                + (left.data[i - 1] == right.data[j - 1] ? 0 : 1);
-            size_t best = above + 1 < row[j - 1] + 1 ? above + 1
-                                                     : row[j - 1] + 1;
-            row[j] = substitute < best ? substitute : best;
-            diagonal = above;
-        }
-    }
-    return row[right.u8_bytes];
-}
+core_list_decl(core_string_t);
 
-static core_string_t
-scan_language_hooks(const th_env *environment, core_string_t name,
-                    size_t *distance)
+static core_list_t(core_string_t)
+language_hooks(const th_env *environment)
 {
-    core_string_t nearest = {0};
-    *distance = SIZE_MAX;
+    core_list_t(core_string_t) hooks = core_list_new(core_string_t);
     size_t count = environment ? th_env_declaration_count(environment) : 0;
     for (size_t d = 0; d < count; d++) {
         th_env_declaration_view_t view = {0};
@@ -100,30 +81,32 @@ scan_language_hooks(const th_env *environment, core_string_t name,
         const th_type *methods = trait_methods(&view, &members);
         for (size_t m = 0; m < members; m++) {
             const th_member *method = trait_method(methods, m);
-            if (!method || !n00bb_reserved_name(method->name)) continue;
-            size_t gap = edit_distance(name, method->name);
-            if (gap < *distance) {
-                *distance = gap;
-                nearest = method->name;
-            }
-            if (gap == 0) return nearest;
+            if (method && n00bb_reserved_name(method->name))
+                core_list_push(hooks, method->name);
         }
     }
-    return nearest;
+    return hooks;
 }
 
 bool
 n00bb_language_hook(const th_env *environment, core_string_t name)
 {
-    size_t distance;
-    scan_language_hooks(environment, name, &distance);
-    return distance == 0;
+    core_list_t(core_string_t) hooks = language_hooks(environment);
+    bool found = false;
+    for (size_t i = 0; i < hooks.len && !found; i++)
+        found = core_string_eq(hooks.data[i], name);
+    core_list_free(hooks);
+    return found;
 }
 
 core_string_t
 n00bb_nearest_language_hook(const th_env *environment, core_string_t name)
 {
-    size_t distance;
-    core_string_t nearest = scan_language_hooks(environment, name, &distance);
-    return distance > 0 && distance <= 2 ? nearest : (core_string_t){0};
+    core_list_t(core_string_t) hooks = language_hooks(environment);
+    size_t best[1];
+    core_string_t nearest = !n00bb_language_hook(environment, name)
+        && n00bb_closest_names(name, hooks.data, hooks.len, best, 1)
+        ? hooks.data[best[0]] : (core_string_t){0};
+    core_list_free(hooks);
+    return nearest;
 }

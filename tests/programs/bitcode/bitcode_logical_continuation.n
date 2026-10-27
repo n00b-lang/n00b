@@ -1,9 +1,0 @@
-func conjunction(a: bool, b: bool) -> bool {
-    return a and
-        b
-}
-
-func disjunction(a: bool, b: bool) -> bool {
-    return a or
-        b
-}

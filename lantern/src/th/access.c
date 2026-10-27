@@ -447,6 +447,18 @@ static th_type_record_t *record_insert(th_ctx *ctx, th_type *type,
     return &ctx->type_records.data[ctx->type_records.len - 1];
 }
 
+enum { GENERIC_ARITY_LIMIT = 64 };
+
+size_t th_generic_arity(th_ctx *ctx, core_string_t name)
+{
+    if (!ctx || !name.data || !ctx->generic_type_heads) return 0;
+    for (size_t nargs = 1; nargs <= GENERIC_ARITY_LIMIT; nargs++)
+        if (record_at(ctx, ctx->generic_type_heads,
+                      (const void *)(uintptr_t)head_hash(name, nargs)))
+            return nargs;
+    return 0;
+}
+
 bool th_type_define_owned(th_ctx *ctx, th_type *type, th_type *definition,
                           void *owner)
 {
@@ -533,6 +545,7 @@ th_type *th_record_lookup_in(th_ctx *ctx, const th_type *type,
 {
     th_type *member = th_record_lookup(type, name);
     if (member || !ctx) return member;
+    if (th_is_poison(type)) return (th_type *)th_resolve_c(type);
     th_type *definition = th_type_definition(ctx, type);
     return definition ? th_record_lookup(definition, name) : nullptr;
 }
@@ -709,4 +722,14 @@ bool th_is_erased(const th_type *t)
 bool th_is_bottom(const th_type *t)
 {
     return named_is(t, CORE_STRING_STATIC(TH_BOTTOM));
+}
+
+th_type *th_poison(th_ctx *ctx)
+{
+    return th_name(ctx, CORE_STRING_STATIC(TH_POISON));
+}
+
+bool th_is_poison(const th_type *t)
+{
+    return named_is(t, CORE_STRING_STATIC(TH_POISON));
 }

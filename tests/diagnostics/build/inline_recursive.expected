@@ -1,0 +1,7 @@
+tests/diagnostics/build/inline_recursive.n:1:1: warning N00B-S0008: `first` calls itself on every path, so a call to it never returns
+tests/diagnostics/build/inline_recursive.n:5:1: warning N00B-S0008: `second` calls itself on every path, so a call to it never returns
+tests/diagnostics/build/inline_recursive.n:6:12: error N00B-B1004: inline function `first` calls itself through `second`
+  tests/diagnostics/build/inline_recursive.n:1:1: note: declared inline here
+  help: remove `inline` from the function; a function that calls itself cannot be inlined
+tests/diagnostics/build/inline_recursive.n:9:21: warning N00B-S0005: this code can never run: it calls `first`; `first` never returns
+  tests/diagnostics/build/inline_recursive.n:9:9: note: this call never returns

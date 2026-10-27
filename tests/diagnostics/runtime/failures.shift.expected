@@ -1,0 +1,5 @@
+panic: shift amount 70 is out of range for `uint`, which has 64 bits
+  --> tests/diagnostics/runtime/failures.n:94:17
+backtrace:
+  at sh (tests/diagnostics/runtime/failures.n:94:17)
+  at run (tests/diagnostics/runtime/failures.n:139:17)

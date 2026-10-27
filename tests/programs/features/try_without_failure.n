@@ -1,6 +1,0 @@
-func pick(t: string) -> string {
-    let s: string = try { -> t } fail(e) { -> "none" }
-    return s
-}
-
-require pick("abc") == "abc"

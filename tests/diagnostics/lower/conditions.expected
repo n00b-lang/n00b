@@ -1,0 +1,7 @@
+tests/diagnostics/lower/conditions.n:2:4: error N00B-T1000: `n` is `u8`, but an `if` condition must be `bool`
+  help: write the comparison you mean, such as `n != 0`
+tests/diagnostics/lower/conditions.n:18:10: error N00B-S0016: `c` is an `in` parameter, so it cannot be passed to `out` parameter `c` of `fill`
+  tests/diagnostics/lower/conditions.n:17:11: note: `c` is declared here
+  help: declare `c` as `modify c`, or copy it into a `var` and pass that
+tests/diagnostics/lower/conditions.n:25:5: error N00B-S0007: the value of this expression is never used
+  note: promoted to an error by the rule that function bodies use every value they compute

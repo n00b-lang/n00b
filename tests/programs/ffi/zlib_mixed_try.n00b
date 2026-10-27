@@ -1,0 +1,11 @@
+import zlib
+import archive.zlib
+
+let text: Array[u8] = [120, 121, 122]
+try {
+    let packed = archive.zlib.compress(text, 9)!
+    let unpacked = zlib.uncompress(64, packed)!
+    require __array_length(unpacked) == 3
+} fail(failure) {
+    require false
+}

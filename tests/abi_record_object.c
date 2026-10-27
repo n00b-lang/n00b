@@ -953,7 +953,7 @@ check_storage(const uint8_t *object, size_t length,
     const uint32_t kinds[] = {N00B_ABI_STORAGE_READ_ONLY,
         N00B_ABI_STORAGE_WRITABLE, N00B_ABI_STORAGE_TLS};
     const uint64_t values[] = {42, 3, 7};
-    const core_string_t elf_names[] = {S(".rodata.n00b_static"),
+    const core_string_t elf_names[] = {S(".data.rel.ro.n00b_static"),
         S(".data.n00b_static"), S(".tdata.n00b_static")};
     const core_string_t mach_names[] = {S("__n00b_ro"), S("__n00b_data"),
         S("__n00b_tls")};
@@ -1165,7 +1165,7 @@ check_string_storage(const uint8_t *object, size_t length,
                 : format == CORE_TARGET_OBJECT_COFF
                     ? (tls ? S(".tls$N") : S(".rdata$N"))
                     : (tls ? S(".tdata.n00b_static")
-                           : S(".rodata.n00b_static")), &section));
+                           : S(".data.rel.ro.n00b_static")), &section));
         assert(row->segment_index == section.native_index
             && row->byte_offset <= section.size
             && row->byte_length <= section.size - row->byte_offset);
@@ -1281,7 +1281,7 @@ check_array_storage(const uint8_t *object, size_t length,
     assert(core_object_section_find(object, length, format, segment,
         format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_ro")
         : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$N")
-        : S(".rodata.n00b_static"), &value));
+        : S(".data.rel.ro.n00b_static"), &value));
     assert(backing.size == 48 && value.size == 16
         && row->segment_index == value.native_index
         && core_le_load_u64(backing.bytes) == 1
@@ -1390,7 +1390,7 @@ check_nested_array_storage(const uint8_t *object, size_t length,
     assert(core_object_section_find(object, length, format, segment,
         format == CORE_TARGET_OBJECT_MACH_O ? S("__n00b_ro")
         : format == CORE_TARGET_OBJECT_COFF ? S(".rdata$N")
-        : S(".rodata.n00b_static"), &value));
+        : S(".data.rel.ro.n00b_static"), &value));
     assert(row->segment_index == value.native_index
         && value.size == 16 && value.relocation_count == 2
         && backing.size == (ragged ? 160u : 72u)

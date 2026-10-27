@@ -1,0 +1,436 @@
+import sys.abi
+import sys.gc.core
+import sys.gc.alloc
+import sys.gc.collect
+import sys.gc.heap
+import sys.gc.los
+import sys.gc.mark
+import sys.gc.mutator
+import sys.gc.registry
+import sys.gc.roots
+import sys.locks
+import sys.memory
+import sys.threads
+
+record Point {
+    x: int
+    y: int
+}
+
+func bump(modify n: int) {
+    n += 1
+}
+
+func cell(r: Ref[int]) -> Ref[int] {
+    return r
+}
+
+func local_cases() {
+    var a: int = 1
+    let r: Ref[int] = ref a
+    require r.__value == 1
+    r.__value = 5
+    r.__value += 2
+    bump(r.__value)
+    require a == 8
+    let same: Ref[int] = ref r.__value
+    same.__value = 20
+    cell(r).__value -= 1
+    require a == 19
+    var p: Point = (x = 1, y = 2)
+    let rp: Ref[Point] = ref p
+    rp.x = 10
+    rp.__value.y = 30
+    let whole: Point = rp.__value
+    require whole.x == 10 and whole.y == 30
+    rp.__value = (x = 4, y = 5)
+    require p.x == 4 and p.y == 5
+    let rr: Ref[Ref[int]] = ref r
+    rr.__value.__value = 40
+    require a == 40
+}
+
+local_cases()
+
+var g: int = 1
+let gr: Ref[int] = ref g
+gr.__value = 5
+require g == 5
+gr.__value += 2
+require g == 7
+bump(gr.__value)
+require g == 8
+
+func widened_returned() -> int {
+    var n = 1
+    let r = ref n
+    n = 2
+    return r.__value
+}
+
+func widened_bound() -> int {
+    var n = 1
+    let r = ref n
+    let k: int = r.__value
+    return k
+}
+
+require widened_returned() == 2
+require widened_bound() == 1
+
+func spread(n: uint) -> int {
+    var sum = 0
+    for i from 0 until n {
+        sum = sum + cast[int](i % 1000)
+    }
+    return sum
+}
+
+func operand_widening_main() {
+    let n: uint = 70000 + cast[uint](__os_arg_count())
+    assert spread(n) > 0
+}
+
+operand_widening_main()
+
+func make() -> List[int] {
+    return [1, 2]
+}
+
+func fill(s: Set[int]) -> int {
+    return 1
+}
+
+func head(xs: Array[int]) -> int {
+    return xs[0]
+}
+
+func shape_literal_main() {
+    var xs = [1, 2, 3]
+    xs.append(4)
+    var total = 0
+    for x in xs {
+        total += x
+    }
+    assert total == 10
+    let nested = [[1], [2, 3]]
+    assert nested[1][1] == 3
+    let made = make()
+    assert made[0] == 1
+    assert fill({}) == 1
+    let d = {"a": 1}
+    let found = d["a"]
+    assert found != nil
+    let arr = [7, 8]
+    assert head(arr) == 7
+    let s = {4, 5}
+    assert s.len() == 2
+}
+
+shape_literal_main()
+
+func join(left: string, right: string) -> string {
+    return left + right
+}
+
+func same(text: string) -> string {
+    return text
+}
+
+const joined = join("compile-time ", "concatenation result")
+const returned = same("returned at compile time")
+
+assert joined == "compile-time concatenation result"
+assert returned == "returned at compile time"
+assert join("ab", "cd") == "abcd"
+var direct: string = "start"
+direct = direct + " and a direct module-level concatenation"
+assert direct == "start and a direct module-level concatenation"
+var joined_total: string = ""
+var join_round = 0
+while join_round < 20000 {
+    joined_total = join("x", "a long enough piece of text to allocate")
+    join_round = join_round + 1
+}
+assert joined_total == "xa long enough piece of text to allocate"
+var bytes: Array[u8] = [104, 195, 169, 108, 108, 111, 32, 116, 104, 101, 114, 101, 32, 108, 111, 110, 103]
+var text: string = ""
+require __string_from_utf8(ref bytes, ref text)
+assert text == "héllo there long"
+var invalid: Array[u8] = [104, 255]
+require !__string_from_utf8(ref invalid, ref text)
+var overlong: Array[u8] = [192, 175]
+require !__string_from_utf8(ref overlong, ref text)
+
+var seed: byte = 0
+var guard: sys.locks.Mutex = (state = 0, should_wake = 0, owner = 0,
+                               nesting = 0)
+var table: sys.locks.Rw_Lock
+var signal: sys.locks.Condition = (
+    mutex = (state = 0, should_wake = 0, owner = 0, nesting = 0),
+    epoch = 0, waiters = 0, wake_slots = 0)
+var ready: Atomic[int] = 0
+var locked_total: int = 0
+var locks_finished: Atomic[int] = 0
+
+func signaller(argument: Ref[byte]) -> Ref[byte] {
+    sys.locks.condition_lock(ref signal)
+    __atomic_store(ref ready, 1)
+    sys.locks.condition_notify(ref signal, all = true, unlock = true)
+    __atomic_fetch_add(ref locks_finished, 1)
+    return argument
+}
+
+func worker(argument: Ref[byte]) -> Ref[byte] {
+    var round: int = 0
+    while round < 1000 {
+        sys.locks.mutex_lock(ref guard)
+        locked_total += 1
+        sys.locks.mutex_unlock(ref guard)
+        round += 1
+    }
+    sys.locks.rw_write_lock(ref table)
+    sys.locks.rw_read_lock(ref table)
+    sys.locks.rw_unlock(ref table)
+    sys.locks.rw_unlock(ref table)
+    __atomic_fetch_add(ref locks_finished, 1)
+    return argument
+}
+
+sys.locks.rw_lock_init(ref table)
+require sys.threads.thread_start(ref worker, ref seed)
+require sys.threads.thread_start(ref worker, ref seed)
+while __atomic_load(ref locks_finished) < 2 {
+    sys.threads.thread_yield()
+}
+sys.locks.mutex_lock(ref guard)
+sys.locks.mutex_lock(ref guard)
+require locked_total == 2000
+sys.locks.mutex_unlock(ref guard)
+sys.locks.mutex_unlock(ref guard)
+require sys.locks.mutex_try_lock(ref guard)
+sys.locks.mutex_unlock(ref guard)
+sys.locks.condition_lock(ref signal)
+require sys.threads.thread_start(ref signaller, ref seed)
+while __atomic_load(ref ready) == 0 {
+    require sys.locks.condition_wait(ref signal, timeout_ns = 5_000_000_000,
+                                     unlock = false)
+}
+sys.locks.condition_unlock(ref signal)
+while __atomic_load(ref locks_finished) < 3 {
+    sys.threads.thread_yield()
+}
+require !sys.locks.condition_wait(ref signal, timeout_ns = 1_000_000)
+
+record Holder {
+    count: uint
+    cells: Array[uint][3]
+}
+
+thread var held: Holder = (count = 2, cells = [5, 6, 7])
+thread var grid: Array[uint][2][2] = [[1, 2], [3, 4]]
+thread var names: Array[string][2] =
+    ["a fairly long string value one", "a fairly long string value two"]
+var written: Atomic[int] = 0
+var seen: Atomic[uint] = 0
+var storage_finished: Atomic[int] = 0
+
+func writer(argument: Ref[byte]) -> Ref[byte] {
+    held.cells[1] = 70
+    grid[1][0] = 30
+    __atomic_store(ref written, 1)
+    __atomic_fetch_add(ref storage_finished, 1)
+    return argument
+}
+
+func reader(argument: Ref[byte]) -> Ref[byte] {
+    while __atomic_load(ref written) == 0 {
+        sys.threads.thread_yield()
+    }
+    __atomic_store(ref seen, held.cells[1] * 100 + grid[1][0])
+    __atomic_fetch_add(ref storage_finished, 1)
+    return argument
+}
+
+func copied_cells(h: Holder) -> Array[uint] {
+    var cells: Array[uint] = h.cells
+    cells[0] = 99
+    return cells
+}
+
+func thread_storage_main() {
+    require held.cells[2] == 7
+    require grid[0][1] == 2
+    require names[1] == "a fairly long string value two"
+    require sys.threads.thread_start(ref writer, ref seed)
+    require sys.threads.thread_start(ref reader, ref seed)
+    while __atomic_load(ref storage_finished) < 2 {
+        sys.threads.thread_yield()
+    }
+    require __atomic_load(ref seen) == 603
+    require held.cells[1] == 6
+    require grid[1][0] == 3
+    require copied_cells(held)[0] == 99
+    require held.cells[0] == 5
+}
+
+thread_storage_main()
+
+var pause_count: uint = 0
+var cycle_count: uint = 0
+thread var tls_slot: Ref[byte]? = nil
+
+record Stack_Cell {
+    child: Ref[byte]?
+}
+
+func __init(modify self: Stack_Cell, child: Ref[byte]?) {
+    self.child = child
+}
+
+func make_stack_cell(mutator: Ref[sys.gc.core.Mutator]) -> Stack_Cell {
+    let probe: byte = 0
+    let child: Ref[byte]? = sys.gc.alloc.allocate_large(mutator,
+        cast[u32](typeof(probe)), sys.gc.los.los_threshold,
+        sys.gc.core.granule_bytes, false)
+    require child != nil
+    let cell: Stack_Cell = new[Stack_Cell](child)
+    return cell
+}
+
+func report_pause(ns: u64, user: Ref[byte]?) {
+    pause_count += 1
+}
+
+func report_cycle(info: sys.gc.core.Cycle_Info, user: Ref[byte]?) {
+    assert info.kind == 0
+    cycle_count += 1
+}
+
+func gc_collect_main() {
+    let frame: Ref[sys.abi.Frame_Layout_Record]? = sys.abi.frame_layout_at(1)
+    require frame != nil
+    require frame.get().function_index != 0
+    require frame.get().frame_byte_extent >= cast[u64](sys.abi.frame_root_offset)
+    var frame_index: u32 = 1
+    var found_typed_frame: bool = false
+    var found_rootless_frame: bool = false
+    var candidate: Ref[sys.abi.Frame_Layout_Record]? =
+        sys.abi.frame_layout_at(frame_index)
+    while candidate != nil {
+        let layout: Ref[sys.abi.Frame_Layout_Record] =
+            candidate.get()
+        if layout.shadow_frame_type_index != 0 {
+            found_typed_frame = true
+        }
+        if layout.frame_byte_extent == cast[u64](sys.abi.frame_root_offset) {
+            found_rootless_frame = true
+        }
+        frame_index += 1
+        candidate = sys.abi.frame_layout_at(frame_index)
+    }
+    require found_typed_frame
+    require found_rootless_frame
+    var config: sys.gc.core.Config
+    sys.gc.heap.config_default(config)
+    config.on_pause = ref report_pause
+    config.on_cycle = ref report_cycle
+    let created: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
+    if created != nil {
+        let heap: Ref[sys.gc.core.Heap] = created.get()
+        let mapped: Ref[byte]? = sys.memory.map_zeroed(
+            sys.gc.core.block_bytes, sys.gc.core.block_bytes)
+        if mapped != nil {
+            let base: Ref[byte] = mapped.get()
+            let end: Ref[byte] = __gc_byte_offset(base, sys.gc.core.block_bytes)
+            require sys.gc.registry.region_add(heap, base, end)
+            let block: Ref[sys.gc.core.Block_Metadata] = sys.gc.core.block_metadata_at(base)
+            sys.gc.core.block_init(heap, block)
+            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(heap)
+            if attached != nil {
+                let mutator: Ref[sys.gc.core.Mutator] = attached.get()
+                var saw_tls_slot: bool = false
+                var tls_index: uint = 0
+                while tls_index < mutator.ntls_roots {
+                    let entry: Ref[sys.gc.roots.TLS_Root_Entry] = sys.gc.roots.tls_root_at(mutator, tls_index)
+                    if __abi_ref_address(entry.address) == __abi_ref_address(ref tls_slot) {
+                        saw_tls_slot = true
+                    }
+                    tls_index += 1
+                }
+                require saw_tls_slot
+                var owned: Ref[sys.gc.core.Block_Metadata]? = nil
+                sys.gc.core.own(heap, mutator, block, ref owned)
+                let assigned: Ref[sys.gc.core.Block_Metadata]? = block
+                sys.gc.core.bump_attach(mutator, ref mutator.small, assigned)
+                require sys.gc.core.bump_next_hole(ref mutator.small, 48)
+                let probe: byte = 0
+                let type_index: u32 = cast[u32](typeof(probe))
+                let first: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    sys.gc.core.granule_bytes, false)
+                let second: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    sys.gc.core.granule_bytes, false)
+                let third: Ref[byte]? = sys.gc.alloc.allocate_reserved(
+                    mutator, ref mutator.small, type_index, 8,
+                    sys.gc.core.granule_bytes, false)
+                if first != nil and second != nil and third != nil {
+                    var slot: Ref[byte]? = first
+                    require sys.gc.roots.push(mutator, ref slot)
+                    tls_slot = third
+                    let first_offset: uint = __abi_ref_address(
+                        sys.gc.core.header_of(first.get())) - __abi_ref_address(base)
+                    let second_offset: uint = __abi_ref_address(
+                        sys.gc.core.header_of(second.get())) - __abi_ref_address(base)
+                    let third_offset: uint = __abi_ref_address(
+                        sys.gc.core.header_of(third.get())) - __abi_ref_address(base)
+                    sys.gc.collect.collect(heap)
+                    assert heap.collections == 1
+                    let stats: sys.gc.core.Stats = sys.gc.heap.get_stats(heap)
+                    assert stats.collections == 1
+                    assert stats.objects_allocated >= 2
+                    assert stats.blocks_total == heap.nblocks
+                    assert stats.pauses == heap.pauses
+                    assert stats.last_pause_ns == heap.last_pause_ns
+                    assert stats.max_pause_ns >= stats.last_pause_ns
+                    assert stats.total_pause_ns >= stats.last_pause_ns
+                    assert stats.finalizers_pending == 0
+                    assert sys.gc.core.object_started(base, first_offset)
+                    assert !sys.gc.core.object_started(base, second_offset)
+                    assert sys.gc.core.object_started(base, third_offset)
+                    tls_slot = nil
+                    sys.gc.roots.pop(mutator, 0)
+                    sys.gc.collect.collect_start(heap)
+                    while sys.gc.collect.collect_step(heap, 1) {}
+                    sys.gc.collect.collect_finish(heap)
+                    assert heap.collections == 2
+                    assert pause_count >= 2
+                    assert cycle_count == 2
+                } else { require false }
+                sys.gc.mutator.destroy(mutator)
+            } else { require false }
+            sys.gc.heap.destroy(heap)
+        } else { require false }
+        config.scan_stacks = true
+        let stack_heap: Ref[sys.gc.core.Heap]? = sys.gc.heap.create(ref config)
+        if stack_heap != nil {
+            let scanning: Ref[sys.gc.core.Heap] = stack_heap.get()
+            let attached: Ref[sys.gc.core.Mutator]? = sys.gc.mutator.create(scanning)
+            if attached != nil {
+                let cell: Stack_Cell = make_stack_cell(attached.get())
+                sys.gc.collect.collect(scanning)
+                let rooted: Ref[byte]? = cell.child
+                require rooted != nil
+                require sys.gc.mark.is_marked(scanning, rooted.get())
+                let stats: sys.gc.core.Stats = sys.gc.heap.get_stats(scanning)
+                assert stats.last_stack_words != 0
+                sys.gc.mutator.destroy(attached.get())
+            } else { require false }
+            sys.gc.heap.destroy(scanning)
+        } else { require false }
+    } else { require false }
+}
+
+gc_collect_main()
+__fd_write(2, "ok")

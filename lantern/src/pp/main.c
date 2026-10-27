@@ -50,27 +50,31 @@ static const language_t LANGUAGES[] = {
 
 static const parse_cmdr_flag_t FLAGS[] = {
     {S("--language"), S("-l"), PARSE_CMDR_TYPE_WORD, true,
-     S("override the language instead of guessing from the extension")},
+     S("override the language instead of guessing from the extension"), false,
+     nullptr},
     {S("--grammar"), S("-g"), PARSE_CMDR_TYPE_WORD, true,
-     S("read the grammar from this .bnf file instead of the built-in one")},
+     S("read the grammar from this .bnf file instead of the built-in one"),
+     false, nullptr},
     {S("--start"), {0}, PARSE_CMDR_TYPE_WORD, true,
-     S("start symbol, when it is not the grammar's first production")},
+     S("start symbol, when it is not the grammar's first production"), false,
+     nullptr},
     {S("--width"), S("-w"), PARSE_CMDR_TYPE_INT, true,
-     S("column to wrap at (default 80)")},
+     S("column to wrap at (default 80)"), false, nullptr},
     {S("--indent"), S("-i"), PARSE_CMDR_TYPE_INT, true,
-     S("spaces per indent level (default 4)")},
+     S("spaces per indent level (default 4)"), false, nullptr},
     {S("--tokens"), S("-t"), PARSE_CMDR_TYPE_BOOL, false,
-     S("write the token stream instead of formatted source")},
+     S("write the token stream instead of formatted source"), false, nullptr},
     {S("--languages"), {0}, PARSE_CMDR_TYPE_BOOL, false,
-     S("list the languages that are known, and exit")},
+     S("list the languages that are known, and exit"), false, nullptr},
     {S("--grammar-dir"), {0}, PARSE_CMDR_TYPE_WORD, true,
-     S("where to look for the built-in grammars")},
-    {S("--help"), S("-h"), PARSE_CMDR_TYPE_BOOL, false, S("show this help")},
-    {{0}, {0}, 0, false, {0}},
+     S("where to look for the built-in grammars"), false, nullptr},
+    {S("--help"), S("-h"), PARSE_CMDR_TYPE_BOOL, false, S("show this help"),
+     false, nullptr},
+    {0},
 };
 
 static const parse_cmdr_cmd_t COMMANDS[] = {
-    {{0}, {0}, nullptr, {0}, 0, 0},
+    {0},
 };
 
 static core_string_t

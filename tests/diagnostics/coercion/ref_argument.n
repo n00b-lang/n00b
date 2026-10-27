@@ -1,0 +1,5 @@
+func take(n: int) -> int {
+    return n
+}
+var n: int = 1
+take(ref n)

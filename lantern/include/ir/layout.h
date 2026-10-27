@@ -127,14 +127,9 @@ bool ir_layout_pin_variant(ir_module_t *m, th_type *t, ir_variant_repr_t r);
 bool ir_layout_pin_indirect(ir_module_t *m, th_type *t, ir_indirect_repr_t r);
 
 bool ir_layout_run(ir_module_t *m, ir_diags_t *d);
-/* Compute one type's layout even when the type is not reachable from an IR
- * value or instruction. The descriptor is stored for the module target. */
 bool ir_layout_compute(ir_module_t *m, th_type *type, ir_diags_t *d);
 bool ir_layout_is_settled(const ir_layout_val_t *v);
 
-/* Publishes a validated, bit-precise layout for one type and target. All
- * arrays and names are copied into the module context. A published layout is
- * immutable until the type's layout is invalidated. */
 bool ir_layout_publish_final(ir_module_t *m, th_type *t, core_string_t target,
                              const ir_final_layout_t *layout);
 bool ir_layout_copy_final(ir_module_t *m, th_type *destination,

@@ -1,0 +1,5 @@
+tests/diagnostics/lower/assign_once.n:3:5: error N00B-S0001: `a` can be assigned only once, but this can assign it a second time
+  tests/diagnostics/lower/assign_once.n:2:9: note: it may already be assigned here
+tests/diagnostics/lower/assign_once.n:12:5: error N00B-S0001: `a` can be assigned only once, but this can assign it a second time
+  tests/diagnostics/lower/assign_once.n:10:9: note: it may already be assigned here
+  tests/diagnostics/lower/assign_once.n:8:9: note: `a` is declared here

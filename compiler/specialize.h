@@ -29,6 +29,9 @@ typedef struct {
 typedef struct {
     core_buffer_t message;
     core_string_t module;
+    core_string_t function;
+    core_string_t before;
+    core_string_t after;
     ir_span_t span;
     bool located;
 } n00bb_specialization_failure_t;

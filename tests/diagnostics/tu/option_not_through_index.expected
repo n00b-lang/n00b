@@ -1,0 +1,2 @@
+tests/diagnostics/tu/option_not_through_index.n:9:8: error N00B-T0516: this value is `int?`, which may be nil, and options do not implement `Not`
+  help: store it in a variable and test the variable against nil before using it

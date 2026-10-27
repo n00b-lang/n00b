@@ -19,6 +19,7 @@ typedef enum {
     N00BB_ABI_TARGET_X86_64_LINUX = 1,
     N00BB_ABI_TARGET_ARM64_MACOS = 2,
     N00BB_ABI_TARGET_X86_64_WINDOWS = 3,
+    N00BB_ABI_TARGET_ARM64_LINUX = 4,
 } n00bb_abi_target_id_t;
 
 typedef struct {

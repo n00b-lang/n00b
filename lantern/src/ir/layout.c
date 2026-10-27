@@ -612,7 +612,7 @@ static void refuse(L *l, th_type *t, const char *what, ...)
 
     ir_diag_t *dg = ir_diag_begin(l->d, IR_DIAG_LAYOUT_PIN,
                                   ir_module_span(l->m),
-                                  CORE_STRING_STATIC("this layout"));
+                                  IR_MESSAGE(THIS_LAYOUT));
 
     if (!dg) {
         return;
@@ -631,7 +631,7 @@ static void refuse(L *l, th_type *t, const char *what, ...)
 
     core_string_t msg = core_buffer_take_string(b);
 
-    ir_diag_message(dg, l->d, msg);
+    ir_diag_message(dg, l->d, IR_DETAIL(msg));
     core_free(msg.data);
 }
 

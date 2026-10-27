@@ -1,0 +1,1 @@
+require byte_len("hello") == 5

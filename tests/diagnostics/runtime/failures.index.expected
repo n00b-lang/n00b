@@ -1,0 +1,5 @@
+panic: index 7 is out of range for an array of length 3
+  --> tests/diagnostics/runtime/failures.n:56:12
+backtrace:
+  at pick (tests/diagnostics/runtime/failures.n:56:12)
+  at run (tests/diagnostics/runtime/failures.n:120:17)

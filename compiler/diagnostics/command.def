@@ -1,0 +1,165 @@
+N00B_DIAG(UNKNOWN_DIAGNOSTIC_CODE, "N00B-C0001", ERROR,
+    "the code given to `n00b explain` does not exist",
+    "`n00b explain` takes a diagnostic code such as N00B-T0042, with or\n"
+    "without the N00B- prefix. Codes appear in diagnostics printed with\n"
+    "--terse-diagnostics.")
+N00B_DIAG(UNKNOWN_COMMAND, "N00B-C0002", ERROR,
+    "the command line names a command that does not exist",
+    "The first word after `n00b` is either a command (build, run, fmt, ...)\n"
+    "or a module or file to build. A word that is neither is reported here.\n"
+    "Run `n00b help` for the list of commands.")
+N00B_DIAG(UNKNOWN_OPTION, "N00B-C0003", ERROR,
+    "the command line uses an option the command does not have",
+    "Each command accepts its own options plus the global ones.\n"
+    "Run `n00b help <command>` to see them, or `n00b --help-all` for every\n"
+    "option including developer ones.")
+N00B_DIAG(OPTION_MISSING_VALUE, "N00B-C0004", ERROR,
+    "an option that takes a value is given none",
+    "Options such as `--output` and `--jobs` need a value, written either as\n"
+    "the next word or after `=`:\n"
+    "    n00b build --output app main.n\n"
+    "    n00b build --jobs=8 main.n")
+N00B_DIAG(OPTION_INVALID_NUMBER, "N00B-C0005", ERROR,
+    "a numeric option is given a value that is not a number",
+    "Options such as `--jobs` and `--keep` take a whole number written in\n"
+    "decimal, for example `--jobs 8` or `--keep=2`.")
+N00B_DIAG(OPTION_UNEXPECTED_VALUE, "N00B-C0006", ERROR,
+    "an on/off option is given a value",
+    "Switches such as `--release` or `--lto` are turned on by naming them;\n"
+    "they take no value. Write `--release`, not `--release=yes`.")
+N00B_DIAG(MISSING_ARGUMENT, "N00B-C0007", ERROR,
+    "a command is missing a required argument",
+    "Most commands need an input, for example the module or file to build:\n"
+    "    n00b build main.n\n"
+    "Run `n00b help <command>` to see what a command expects.")
+N00B_DIAG(EXTRA_ARGUMENT, "N00B-C0008", ERROR,
+    "a command is given more arguments than it takes",
+    "`build` and `run` take exactly one module or file. To pass arguments\n"
+    "to the program itself, put them after `--`:\n"
+    "    n00b run main.n -- --verbose input.txt")
+N00B_DIAG(COMMAND_LINE_SYNTAX, "N00B-C0009", ERROR,
+    "the command line cannot be understood",
+    "A word on the command line does not fit where it appears. Check the\n"
+    "order of options and inputs against `n00b help <command>`.")
+N00B_DIAG(UNKNOWN_ACTION, "N00B-C0010", ERROR,
+    "a command is given an action or choice it does not have",
+    "Some commands take a fixed word as their argument: `toolchain` takes\n"
+    "list, use, remove, prune, pin or unpin; `cache` takes clean;\n"
+    "`completions` takes bash, zsh, fish or powershell; `help` takes the\n"
+    "name of a command.")
+N00B_DIAG(INVALID_OPTION_VALUE, "N00B-C0011", ERROR,
+    "an option is given a value in the wrong form",
+    "The value is present but does not have the shape the option needs.\n"
+    "The message names the form expected; `n00b help <command>` describes\n"
+    "each option.")
+N00B_DIAG(LIBRARY_NEEDS_OUTPUT, "N00B-C0012", ERROR,
+    "`n00b library` is run without saying what to write",
+    "`library` writes ABI metadata with `--output <file>` or a semantic\n"
+    "interface with `--emit-interface <file>`; give one of them:\n"
+    "    n00b library --emit-interface mylib.n00bi mylib")
+N00B_DIAG(TOOLCHAIN_NOT_FOUND, "N00B-C0020", ERROR,
+    "no installed toolchain matches the one requested",
+    "A toolchain is named by its id, its version, a unique prefix of its id,\n"
+    "or `latest`. `n00b toolchain list` shows what is installed; a checkout\n"
+    "installs a new one with `./build.sh install`.")
+N00B_DIAG(TOOLCHAIN_AMBIGUOUS, "N00B-C0021", ERROR,
+    "the requested toolchain matches more than one installed toolchain",
+    "A prefix must pick out exactly one toolchain. Use a longer prefix or the\n"
+    "full id shown by `n00b toolchain list`.")
+N00B_DIAG(TOOLCHAIN_SELECTION_INVALID, "N00B-C0022", ERROR,
+    "a toolchain pin or N00B_TOOLCHAIN names a toolchain that is not installed",
+    "A `.n00b-toolchain` file in this directory or a parent, or the\n"
+    "N00B_TOOLCHAIN environment variable, picks which installed toolchain\n"
+    "runs. Fix it by pinning an installed toolchain (`n00b toolchain pin\n"
+    "<id>`), removing the pin (`n00b toolchain unpin` in the directory that\n"
+    "holds it), or setting N00B_TOOLCHAIN=latest.")
+N00B_DIAG(TOOLCHAIN_START_FAILED, "N00B-C0023", ERROR,
+    "the selected toolchain's compiler cannot be started",
+    "The toolchain is listed as installed but its `bin/n00b` could not be\n"
+    "run. Reinstall it with `./build.sh install`, or remove it with\n"
+    "`n00b toolchain remove <id>`.")
+N00B_DIAG(TOOLCHAIN_REMOVE_ACTIVE, "N00B-C0024", ERROR,
+    "the toolchain to remove is the active one",
+    "The active toolchain is the one `n00b` runs by default, so it cannot be\n"
+    "removed. Switch to another first with `n00b toolchain use <id>`.")
+N00B_DIAG(TOOLCHAIN_CHANGE_FAILED, "N00B-C0025", ERROR,
+    "a toolchain operation could not change files on disk",
+    "Switching, removing or pinning a toolchain writes to the toolchain store\n"
+    "or the current directory. The message names the path and the reason\n"
+    "the operating system gave; fix the permissions or free the space.")
+N00B_DIAG(TOOLCHAIN_NEEDS_SPEC, "N00B-C0026", ERROR,
+    "a toolchain action that needs a toolchain is given none",
+    "`toolchain use`, `remove` and `pin` take the toolchain to act on:\n"
+    "    n00b toolchain use latest\n"
+    "    n00b toolchain pin 0.3.0")
+N00B_DIAG(NO_TOOLCHAIN_PIN, "N00B-C0027", ERROR,
+    "`n00b toolchain unpin` finds no pin in the current directory",
+    "A pin is a `.n00b-toolchain` file. `unpin` removes the one in the\n"
+    "current directory only; run it in the directory that holds the pin.")
+N00B_DIAG(CACHE_UNAVAILABLE, "N00B-C0030", ERROR,
+    "there is no cache directory to use",
+    "n00b keeps its cache under N00B_CACHE, XDG_CACHE_HOME or your home\n"
+    "directory. None of them is set; set N00B_CACHE to a writable directory.")
+N00B_DIAG(CACHE_REMOVE_FAILED, "N00B-C0031", ERROR,
+    "part of the cache could not be removed",
+    "The message names the path and the reason the operating system gave.\n"
+    "Fix the permissions, or remove the directory by hand.")
+N00B_DIAG(CACHE_UNUSABLE, "N00B-C0032", WARNING,
+    "the cache directory cannot be created or written",
+    "Builds still work, but nothing is cached, so every build starts from\n"
+    "scratch. Point N00B_CACHE at a writable directory, or unset it to use\n"
+    "the default location.")
+N00B_DIAG(PACKAGE_PATH_MISSING, "N00B-C0033", WARNING,
+    "a package search directory is not a directory",
+    "N00B_PATH, `--path` and the `paths.path` setting list extra\n"
+    "directories to search for packages. An entry that does not exist is\n"
+    "skipped; remove it or fix the path.")
+N00B_DIAG(CONTRACT_DIR_MISSING, "N00B-C0034", WARNING,
+    "a writ contract directory does not exist",
+    "`--contract-dir` and the `paths.contract_dirs` setting add directories\n"
+    "of writ contracts for 'ffi literals. A directory that does not exist is\n"
+    "skipped; fix the path or drop it.")
+N00B_DIAG(PROCESS_START_FAILED, "N00B-C0040", ERROR,
+    "`n00b run` cannot start the compiler or the built program",
+    "The message names the program and the reason the operating system\n"
+    "gave. If the program was built but cannot run, check that the cache\n"
+    "directory is not mounted noexec, or set N00B_CACHE elsewhere.")
+N00B_DIAG(CONFIG_SYNTAX, "N00B-C0100", ERROR,
+    "a configuration file cannot be read as settings",
+    "n00b reads settings from ~/.config/n00b/config.cfg and from the\n"
+    "nearest n00b.cfg above the current directory. Each file is a list of\n"
+    "[section] headers and `name = value` settings; a value is true,\n"
+    "false, a whole number, a quoted string, or a list of quoted strings\n"
+    "in brackets. `#` starts a comment:\n"
+    "    [diagnostics]\n"
+    "    color = \"never\"\n"
+    "Fix the file at the location shown; `n00b config` shows the result.")
+N00B_DIAG(CONFIG_REDEFINED, "N00B-C0101", ERROR,
+    "a configuration file sets one setting twice",
+    "Each setting may be set once per file. Remove one of the two.")
+N00B_DIAG(CONFIG_UNKNOWN_SETTING, "N00B-C0102", WARNING,
+    "a configuration file names a setting that does not exist",
+    "Every setting belongs to a section such as [build] or [diagnostics].\n"
+    "An unknown section or key is ignored. Run `n00b config` to list every\n"
+    "setting with its current value.")
+N00B_DIAG(CONFIG_WRONG_TYPE, "N00B-C0103", ERROR,
+    "a configuration setting has a value of the wrong type",
+    "Each setting takes one kind of value: true or false, a whole number,\n"
+    "a quoted string, or a list of strings. For example:\n"
+    "    [build]\n"
+    "    jobs = 8\n"
+    "    defines = [\"TRACE=1\"]")
+N00B_DIAG(CONFIG_INVALID_VALUE, "N00B-C0104", ERROR,
+    "a configuration setting has a value it does not accept",
+    "The value has the right type but is outside what the setting allows,\n"
+    "such as a worker count above 128 or a color mode other than auto,\n"
+    "always or never.")
+N00B_DIAG(CONFIG_UNREADABLE, "N00B-C0105", ERROR,
+    "a configuration file exists but cannot be read",
+    "The message names the file and the reason the operating system gave.\n"
+    "Fix its permissions, or move it aside.")
+N00B_DIAG(COMPTIME_DISABLED, "N00B-C0106", ERROR,
+    "the program needs the comptime phase, but `--no-comptime` turns it off",
+    "Some constants or literals in the program are computed by running code\n"
+    "at build time. `--no-comptime` skips that run, so the program cannot be\n"
+    "built with it. Build without the flag.")

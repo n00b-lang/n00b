@@ -12,7 +12,7 @@ if ! "$compiler" lower "$program" >"$tmp/out" 2>"$tmp/err"; then
     exit 1
 fi
 
-count=$(grep -c 'warning\[N00BB-PPW0003\]' "$tmp/err")
+count=$(grep -c 'warning N00B-P0011:' "$tmp/err")
 if [ "$count" -ne 9 ]; then
     cat "$tmp/err" >&2
     echo "expected 9 mixed-syntax warnings, got $count" >&2
@@ -35,7 +35,7 @@ if ! "$compiler" lower "$preferences_program" >"$tmp/out" 2>"$tmp/err"; then
     cat "$tmp/err" >&2
     exit 1
 fi
-count=$(grep -c 'warning\[N00BB-PPW0004\]' "$tmp/err")
+count=$(grep -c 'warning N00B-P0012:' "$tmp/err")
 if [ "$count" -ne 9 ]; then
     cat "$tmp/err" >&2
     echo "expected 9 preference warnings, got $count" >&2
@@ -57,7 +57,7 @@ if ! "$compiler" "$@" lower "$preferences_program" \
     cat "$tmp/err" >&2
     exit 1
 fi
-if grep -q 'warning\[N00BB-PPW0004\]' "$tmp/err"; then
+if grep -q 'warning N00B-P0012:' "$tmp/err"; then
     cat "$tmp/err" >&2
     echo "preference overrides did not suppress preference warnings" >&2
     exit 1
@@ -68,7 +68,7 @@ if ! "$compiler" --no-syntax-warnings lower "$program" \
     cat "$tmp/err" >&2
     exit 1
 fi
-if grep -q 'warning\[N00BB-PPW000[34]\]' "$tmp/err"; then
+if grep -q 'warning N00B-P001[12]:' "$tmp/err"; then
     cat "$tmp/err" >&2
     echo "--no-syntax-warnings did not suppress syntax warnings" >&2
     exit 1
@@ -79,7 +79,7 @@ if "$compiler" --syntax-preference function=bogus lower \
     echo "invalid syntax preference unexpectedly succeeded" >&2
     exit 1
 fi
-grep -q "invalid syntax preference 'function=bogus'" "$tmp/err" || {
+grep -q 'error N00B-P0033: `--syntax-preference function=bogus`' "$tmp/err" || {
     cat "$tmp/err" >&2
     echo "missing invalid syntax preference diagnostic" >&2
     exit 1

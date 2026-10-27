@@ -1,0 +1,249 @@
+N00B_WRIT_DIAG(SYNTAX, "N00B-F1001", ERROR,
+    "syntax error",
+    "The contract inside an 'ffi literal (or a .writ file it names) could not\n"
+    "be read as written. Fix the contract at the location shown.")
+N00B_WRIT_DIAG(LEXICAL, "N00B-F1002", ERROR,
+    "invalid token",
+    "The contract inside an 'ffi literal (or a .writ file it names) could not\n"
+    "be read as written. Fix the contract at the location shown.")
+N00B_WRIT_DIAG(UNREADABLE, "N00B-F1003", ERROR,
+    "cannot read file",
+    "The contract inside an 'ffi literal (or a .writ file it names) could not\n"
+    "be read as written. Fix the contract at the location shown.")
+N00B_WRIT_DIAG(AMBIGUOUS, "N00B-F1004", INTERNAL,
+    "the contract grammar produced more than one parse",
+    "This is a bug in the contract grammar, not in your program. Please\n"
+    "report it together with the contract that reproduces it.")
+N00B_WRIT_DIAG(DUPLICATE, "N00B-F1101", ERROR,
+    "duplicate declaration",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(UNKNOWN_TYPE, "N00B-F1102", ERROR,
+    "unknown type",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(UNKNOWN_NAME, "N00B-F1103", ERROR,
+    "unknown name",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(NOT_CONSTANT, "N00B-F1104", ERROR,
+    "constant values must be integer expressions",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(BAD_REFINE, "N00B-F1105", ERROR,
+    "a refinement may only add facts or narrow them",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(REFINE_TARGET, "N00B-F1106", ERROR,
+    "`refine` names no function",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(CONVENTION_TIE, "N00B-F1107", ERROR,
+    "two conventions match with the same literal prefix",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(UNKNOWN_PLATFORM, "N00B-F1108", ERROR,
+    "unknown platform",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(BAD_CONDITION, "N00B-F1109", ERROR,
+    "a condition tests platform facts, features and versions only",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(UNKNOWN_SLOT, "N00B-F1110", ERROR,
+    "no such parameter",
+    "A declaration in the 'ffi contract is invalid or refers to something\n"
+    "the contract does not declare. Fix the declaration at the location shown.")
+N00B_WRIT_DIAG(BAD_PHASE, "N00B-F1201", ERROR,
+    "`.in` and `.out` apply only to inout integer parameters",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(EXTENT_NOT_INTEGER, "N00B-F1202", ERROR,
+    "array extents must be integers",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(CALL_NOT_PURE, "N00B-F1203", ERROR,
+    "expressions may only call functions declared pure",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(SIZING_WITHOUT_OUTPUT, "N00B-F1204", ERROR,
+    "`sizing` needs an out array with `cap ..., len ...`",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(OUT_NEEDS_BOUND, "N00B-F1205", ERROR,
+    "an out array needs a count or `cap ..., len ...`",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(BOUND_CELL, "N00B-F1206", ERROR,
+    "a bounded array's capacity and length must use one inout integer parameter",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(BAD_ARITY, "N00B-F1207", ERROR,
+    "wrong number of arguments",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(OUTCOMES_OPEN, "N00B-F1208", ERROR,
+    "the last outcome must have no predicate",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(ERROR_AND_OUTCOMES, "N00B-F1209", ERROR,
+    "a function states either `error` or `outcome` clauses, not both",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(LAYOUT_MISMATCH, "N00B-F1210", ERROR,
+    "the asserted layout does not match the platform's C layout",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(PROMOTED_VARARG, "N00B-F1211", ERROR,
+    "C promotes this variadic argument type",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(RETURN_NEEDS_SPAN, "N00B-F1212", ERROR,
+    "a returned pointer needs `own`, a span, or `unknown`",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(BAD_NONE_VALUE, "N00B-F1213", ERROR,
+    "a `none` value must be an integer constant of its field's or handle's type",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(FORMAT_NOT_TEXT, "N00B-F1214", ERROR,
+    "invalid `format printf`",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(ON_UNKNOWN_OUTCOME, "N00B-F1215", ERROR,
+    "`on` names no outcome of this function",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(REINTERPRET, "N00B-F1216", ERROR,
+    "cannot reinterpret the array's elements",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(VIEW_DOMAIN, "N00B-F1217", ERROR,
+    "the success domain does not fit the result's view",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(TEXT_CHANNEL, "N00B-F1218", ERROR,
+    "invalid text channel",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(PACK_KEYWORDS, "N00B-F1220", ERROR,
+    "`pack keywords` needs a pointer to a `keywords` record",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(PRESENCE, "N00B-F1221", ERROR,
+    "invalid keyword presence",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(POLICY, "N00B-F1222", ERROR,
+    "invalid policy",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(BAD_USERDATA, "N00B-F1219", ERROR,
+    "invalid `userdata`",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(EVENT, "N00B-F1223", ERROR,
+    "invalid event",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(UNION_TAG, "N00B-F1224", ERROR,
+    "invalid `union by`",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(BAD_DEREF, "N00B-F1225", ERROR,
+    "`*` reads an integer through a pointer parameter",
+    "A type, parameter or clause in the 'ffi contract does not describe the\n"
+    "C interface consistently. Fix the clause at the location shown.")
+N00B_WRIT_DIAG(TOOLCHAIN, "N00B-F1301", ERROR,
+    "toolchain failure",
+    "The contract was checked against the C compiler and the library, and\n"
+    "they disagree. The message says which part; fix the contract or the\n"
+    "build setup.")
+N00B_WRIT_DIAG(LAYOUT_TOOLCHAIN, "N00B-F1302", ERROR,
+    "the contract's layout disagrees with the compiler",
+    "The contract was checked against the C compiler and the library, and\n"
+    "they disagree. The message says which part; fix the contract or the\n"
+    "build setup.")
+N00B_WRIT_DIAG(SYMBOL_MISSING, "N00B-F1303", ERROR,
+    "symbol not exported by the library",
+    "The contract was checked against the C compiler and the library, and\n"
+    "they disagree. The message says which part; fix the contract or the\n"
+    "build setup.")
+N00B_WRIT_DIAG(NOT_TRANSPORTED, "N00B-F1304", NOTE,
+    "left out: no transport rule covers its signature",
+    "The contract was checked against the C compiler and the library, and\n"
+    "they disagree. The message says which part; fix the contract or the\n"
+    "build setup.")
+N00B_WRIT_DIAG(BIND_TARGET, "N00B-F1501", ERROR,
+    "the binding names nothing in the contract",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_REPR, "N00B-F1502", ERROR,
+    "the profile has no such representation for this slot",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_NOT_OPEN, "N00B-F1503", ERROR,
+    "the contract does not leave this choice open",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_PROFILE, "N00B-F1504", ERROR,
+    "the language profile cannot express this choice",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_NAME_CLASH, "N00B-F1505", ERROR,
+    "two declarations get the same name",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_RECEIVER, "N00B-F1506", ERROR,
+    "the function takes no parameter of the receiver type",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_DIRECTION, "N00B-F1507", ERROR,
+    "this item belongs to the other direction",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_UNKNOWN, "N00B-F1508", ERROR,
+    "the declaration reaches an `unknown` fact; hide it or bind it `raw`",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_PROVIDE, "N00B-F1509", ERROR,
+    "nothing provides this declaration",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_LANGUAGE, "N00B-F1510", ERROR,
+    "expected exactly one binding for this language",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(BIND_CONTRACT, "N00B-F1511", ERROR,
+    "the binding is for a different contract",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(PROFILE_REPEAT, "N00B-F1512", ERROR,
+    "this profile item may appear once",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(NO_PROFILE, "N00B-F1513", ERROR,
+    "no profile for this language",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(EMBEDDED_SHAPE, "N00B-F1514", ERROR,
+    "an embedded unit names one library and binds it without `module`",
+    "The `binding` block of an 'ffi literal chooses how the contract appears\n"
+    "in n00b. The choice at the location shown is not valid for this\n"
+    "contract.")
+N00B_WRIT_DIAG(UNSUPPORTED, "N00B-F1901", ERROR,
+    "not supported yet",
+    "This 'ffi contract feature is not supported yet.")

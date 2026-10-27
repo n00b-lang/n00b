@@ -1,0 +1,2 @@
+tests/diagnostics/lower/script_const_reads_var.n:2:1: error N00B-S0049: this `const` reads `count`, which is set only when the program runs
+  note: in a root module without `func start() -> nil`, top-level code runs only when the program runs

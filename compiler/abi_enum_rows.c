@@ -10,7 +10,6 @@
 typedef parse_sym_entry_t *enum_symbol_ptr_t;
 core_list_decl(enum_symbol_ptr_t);
 core_list_decl(n00b_abi_enum_item_v1);
-core_list_decl(uint32_t);
 
 bool
 n00bb_abi_enum_rows_build(n00bb_abi_type_index_t *index,

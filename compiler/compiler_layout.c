@@ -16,7 +16,7 @@
 #include "lib/buffer.h"
 #include "lib/list.h"
 #include "lib/link_unit.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "ir/ir.h"
 #include "ir/layout.h"
 #include "th/environment.h"
@@ -62,39 +62,27 @@ publish_known_scalar_layouts(n00bb_link_analysis_t *analysis)
                         module, type, &analysis->target,
                         flagset_info->atomic_count);
                 if (layout_ok) continue;
-                core_buffer_t message = {0};
                 core_string_t printed = n00bb_print_type(
                     ir_module_types(module), type ? type : symbol->type);
-                core_buffer_printf(&message,
-                    "could not finalize ABI layout for type '%.*s'",
-                    (int)printed.u8_bytes, printed.data);
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
-                    core_buffer_string(&message),
-                    symbol->decl_node
+                n00bb_internal_error(core_translation_unit_diagnostics(unit),
+                    unit, symbol->decl_node
                         ? link_source_location(symbol->decl_node)
-                        : (core_diag_location_t){0});
-                core_buffer_release(&message);
+                        : (core_diag_location_t){0},
+                    "computing type layouts",
+                    "could not compute the memory layout of `%.*s`",
+                    (int)printed.u8_bytes, printed.data);
                 return false;
             }
         }
         th_type *failed_type = nullptr;
         if (n00bb_abi_publish_interned_direct_layouts(
                 module, &analysis->target, &failed_type)) continue;
-        core_buffer_t message = {0};
-        core_string_t printed = failed_type
-            ? n00bb_print_type(ir_module_types(module), failed_type)
-            : CORE_STRING_STATIC("unknown");
-        core_buffer_printf(&message,
-            "could not finalize ABI layout for IR type '%.*s'",
+        core_string_t printed = n00bb_print_type(ir_module_types(module),
+                                                 failed_type);
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){0}, "computing type layouts",
+            "could not compute the memory layout of `%.*s`",
             (int)printed.u8_bytes, printed.data);
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0067"),
-            core_buffer_string(&message),
-            (core_diag_location_t){0});
-        core_buffer_release(&message);
         return false;
     }
     return true;
@@ -118,7 +106,6 @@ inline_layout_cycle(ir_module_t *module, th_type *type, core_string_t via,
             if (active->data[i] != type) continue;
             core_string_t printed = n00bb_print_type(
                 ir_module_types(module), type);
-            core_buffer_puts(message, "inline layout cycle: ");
             core_buffer_append_string(message, printed);
             for (size_t j = i + 1; j < active->len; j++) {
                 core_string_t step = n00bb_print_type(
@@ -189,14 +176,19 @@ validate_inline_layout_cycles(n00bb_link_analysis_t *analysis)
                     (core_string_t){}, &active, &edges, &message);
                 core_list_free(active);
                 core_list_free(edges);
-                if (cycle)
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0068"),
-                        core_buffer_string(&message),
-                        symbol->decl_node
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(unit);
+                if (cycle
+                    && n00bb_report(diagnostics, unit,
+                        N00B_DIAG_TYPE_CONTAINS_ITSELF, symbol->decl_node
                             ? link_source_location(symbol->decl_node)
-                            : (core_diag_location_t){0});
+                            : (core_diag_location_t){0},
+                                N00B_TEXT_CONTAINS_ITSELF_BY_VALUE_THROUGH,
+                        N00BB_ARGS(ARG_TEXT(symbol->name),
+                                   ARG_TEXT(core_buffer_string(&message)))))
+                    n00bb_report_help(diagnostics,
+                        N00B_TEXT_BREAK_THE_CYCLE_WITH_A,
+                        N00BB_NO_ARGS);
                 core_buffer_release(&message);
                 if (cycle) return false;
             }
@@ -439,16 +431,17 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
             }
         }
         if (!compatible) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "field '%.*s' has no C-compatible finalized ABI representation",
-                (int)field->name.u8_bytes, field->name.data);
-            core_diagnostics_report_at(core_translation_unit_diagnostics(
-                owner), owner, CORE_DIAG_FATAL,
-                CORE_STRING_STATIC("N00BB-L0069"),
-                core_buffer_string(&message),
-                link_source_location(field->decl_node));
-            core_buffer_release(&message);
+            core_diagnostics_t *diagnostics =
+                core_translation_unit_diagnostics(owner);
+            core_string_t shown = n00bb_print_type(ir_module_types(module),
+                                                   physical);
+            if (n00bb_report(diagnostics, owner, N00B_DIAG_C_LAYOUT_FIELD_TYPE,
+                link_source_location(field->decl_node),
+                N00B_TEXT_FIELD_OF_LAYOUT_C_RECORD,
+                N00BB_ARGS(ARG_TEXT(field->name), ARG_TEXT(symbol->name),
+                           ARG_TEXT(shown))))
+                n00bb_report_help(diagnostics, N00B_TEXT_USE_A_SIZED_INTEGER_A,
+                    N00BB_NO_ARGS);
             valid = false;
             break;
         }
@@ -470,10 +463,10 @@ publish_c_record_symbol(n00bb_link_analysis_t *analysis,
     core_list_free(fields);
     if (!valid && !call_units_failed(analysis->units.data,
                                      analysis->units.len))
-        core_diagnostics_report_at(core_translation_unit_diagnostics(owner),
-            owner, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
-            CORE_STRING_STATIC("could not finalize C record layout"),
-            link_source_location(symbol->decl_node));
+        n00bb_internal_error(core_translation_unit_diagnostics(owner), owner,
+            link_source_location(symbol->decl_node), "computing type layouts",
+            "could not compute the C layout of `%.*s`",
+            (int)symbol->name.u8_bytes, symbol->name.data);
     return valid;
 }
 
@@ -541,13 +534,17 @@ reject_unlowered_record_layout_requests(n00bb_link_analysis_t *analysis)
                                 analysis->target.triple)) continue;
                     }
                 }
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0069"),
-                    CORE_STRING_STATIC(
-                        "record layout modifiers are not finalized for this target"),
-                    link_source_location(request->policy_node
-                        ? request->policy_node : request->alignment_node));
+                bool alignment = request->alignment_expression != nullptr;
+                n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                    N00B_DIAG_LAYOUT_MODIFIER_UNSUPPORTED,
+                    link_source_location(alignment ? request->alignment_node
+                                                   : request->policy_node),
+                    N00B_TEXT_LAYOUT_UNSUPPORTED_FOR_TARGET,
+                    N00BB_ARGS(ARG_TEXT(alignment
+                                   ? CORE_STRING_STATIC("align(...)")
+                                   : CORE_STRING_STATIC("layout(ordered)")),
+                               ARG_TEXT(symbol->name),
+                               ARG_TEXT(analysis->target.triple)));
                 return false;
             }
         }
@@ -836,12 +833,16 @@ finalize_atomic_aggregate_layouts(n00bb_link_analysis_t *analysis)
                         location = link_source_location(symbol->decl_node);
                         break;
                     }
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0051"),
-                CORE_STRING_STATIC(
-                    "atomic type is not supported by the selected target"),
-                location);
+            core_string_t shown = n00bb_print_type(ir_module_types(module),
+                                                   type);
+            core_diagnostics_t *diagnostics =
+                core_translation_unit_diagnostics(unit);
+            if (n00bb_report(diagnostics, unit, N00B_DIAG_ATOMIC_UNSUPPORTED,
+                location, N00B_TEXT_TARGET_HAS_NO_ATOMIC_OPERATIONS,
+                N00BB_ARGS(ARG_TEXT(analysis->target.triple), ARG_TEXT(shown))))
+                n00bb_report_help(diagnostics,
+                    N00B_TEXT_USE_A_SMALLER_ELEMENT_TYPE,
+                    N00BB_NO_ARGS);
             return false;
         }
     }

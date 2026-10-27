@@ -84,19 +84,19 @@ main(void)
 
     parse_symtab_t *symbols = parse_symtab_new();
     assert(symbols);
-    parse_tree_t declaration = {0};
+    parse_tree_t *declaration = parse_tree_new_node((parse_nt_node_t){0});
     parse_sym_entry_t *declared = parse_symtab_add(symbols,
         CORE_STRING_STATIC(""), CORE_STRING_STATIC("from_symbol"),
-        PARSE_SYM_VARIABLE, &declaration);
+        PARSE_SYM_VARIABLE, declaration);
     parse_sym_entry_t *unused_builtin = parse_symtab_add(symbols,
         CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("unused"),
         PARSE_SYM_FUNCTION, nullptr);
     parse_sym_entry_t *module_alias = parse_symtab_add(symbols,
         CORE_STRING_STATIC(""), CORE_STRING_STATIC("dependency"),
-        PARSE_SYM_MODULE, &declaration);
+        PARSE_SYM_MODULE, declaration);
     parse_sym_entry_t *synthetic = parse_symtab_add(symbols,
         CORE_STRING_STATIC(""), CORE_STRING_STATIC("generated"),
-        PARSE_SYM_VARIABLE, &declaration);
+        PARSE_SYM_VARIABLE, declaration);
     assert(declared && unused_builtin && module_alias && synthetic);
     th_type *string = th_name(types, S("string"));
     th_type *unused = th_name(types, S("only_unused_builtin"));

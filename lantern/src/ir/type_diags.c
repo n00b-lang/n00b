@@ -117,7 +117,7 @@ uint32_t ir_import_type_errors(ir_module_t *m, ir_diags_t *d)
         }
 
         ir_diag_t *dg = ir_diag_begin(d, code_for(e.kind), span_from(m, e.span),
-                                      th_err_kind_name(e.kind));
+                                      IR_DETAIL(th_err_kind_name(e.kind)));
 
         if (!dg) {
             continue;
@@ -129,12 +129,12 @@ uint32_t ir_import_type_errors(ir_module_t *m, ir_diags_t *d)
 
         core_string_t msg = core_buffer_take_string(sb);
 
-        ir_diag_message(dg, d, msg);
+        ir_diag_message(dg, d, IR_DETAIL(msg));
         core_free(msg.data);
 
         if (e.has_related) {
             ir_diag_secondary(d, dg, span_from(m, e.related),
-                              CORE_STRING_STATIC("related"));
+                              IR_MESSAGE(RELATED));
         }
 
         made++;

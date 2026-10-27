@@ -62,6 +62,7 @@ bool        ir_paths_reach(ir_func_t *f, ir_path_step_fn step, void *context,
                            const ir_instr_t *at);
 
 typedef bool (*ir_call_diverges_fn)(void *context, const ir_instr_t *call);
+typedef bool (*ir_const_varies_fn)(void *context, const ir_instr_t *constant);
 
 typedef enum : uint8_t {
     IR_DEAD_UNREACHED,
@@ -79,6 +80,7 @@ typedef struct ir_dead_code_t ir_dead_code_t;
 
 ir_dead_code_t       *ir_dead_code_build(ir_func_t *f,
                                          ir_call_diverges_fn diverges,
+                                         ir_const_varies_fn varies,
                                          void *context);
 void                  ir_dead_code_free(ir_dead_code_t *dead);
 bool                  ir_dead_code_instr(const ir_dead_code_t *dead,

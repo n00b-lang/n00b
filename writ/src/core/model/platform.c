@@ -1,4 +1,5 @@
 #include "model.h"
+#include "lib/os.h"
 
 typedef struct {
     const char *triple;
@@ -17,6 +18,7 @@ static const platform_row_t platforms[] = {
     {"aarch64-linux-gnu", "linux", "aarch64", "gnu", "glibc", "libstdcxx", "lp64", "elf"},
     {"x86_64-linux-gnu", "linux", "x86_64", "gnu", "glibc", "libstdcxx", "lp64", "elf"},
     {"x86_64-pc-windows-msvc", "windows", "x86_64", "msvc", "msvcrt", "msvc", "llp64", "coff"},
+    {"x86_64-w64-windows-gnu", "windows", "x86_64", "gnu", "msvcrt", "libcxx", "llp64", "coff"},
 };
 
 static const struct {
@@ -27,6 +29,8 @@ static const struct {
     {"x86_64-unknown-linux-gnu", "x86_64-linux-gnu"},
     {"arm64-apple-darwin", "aarch64-apple-darwin"},
     {"arm64-apple-macosx", "aarch64-apple-darwin"},
+    {"x86_64-pc-windows-gnu", "x86_64-w64-windows-gnu"},
+    {"x86_64-w64-mingw32", "x86_64-w64-windows-gnu"},
 };
 
 static writ_sym_t
@@ -82,6 +86,12 @@ writ_platform_from_triple(writ_session_t *session, writ_str_t triple, writ_platf
     return WRIT_INVALID_ARGUMENT;
 }
 
+void
+writ_platform_binary_io(void)
+{
+    core_os_binary_io();
+}
+
 writ_str_t
 writ_platform_host_triple(void)
 {
@@ -93,6 +103,8 @@ writ_platform_host_triple(void)
     return writ_cstr("aarch64-linux-gnu");
 #elif defined(__linux__)
     return writ_cstr("x86_64-linux-gnu");
+#elif defined(__MINGW32__)
+    return writ_cstr("x86_64-w64-windows-gnu");
 #else
     return writ_cstr("x86_64-pc-windows-msvc");
 #endif

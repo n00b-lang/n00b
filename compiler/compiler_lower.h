@@ -2,6 +2,7 @@
 
 #include "compiler_tu.h"
 #include "lib/link_unit.h"
+#include "lib/target.h"
 
 #define N00BB_MODULE_INIT_NAME "__n00bb_module_init"
 #define N00BB_LITERAL_INIT_NAME "__n00bb_literal_init"
@@ -34,7 +35,9 @@ bool build_emitted_functions(n00bb_link_analysis_t *analysis);
 bool n00bb_boxed_signature_position(ir_module_t *module, th_type *type);
 ir_module_t *n00bb_source_unit_module(void *context, core_string_t name);
 ir_module_t *n00bb_linked_unit_module(n00bb_link_analysis_t *analysis,
-                                      core_string_t name);bool n00bb_host_target_profile(core_target_desc_t *target);
+                                      core_string_t name);
+bool n00bb_output_target_profile(core_target_desc_t *target);
+bool n00bb_cross_target(core_target_desc_t *target);
 bool bind_link_declarations_to_ir(parse_grammar_t *grammar,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis,

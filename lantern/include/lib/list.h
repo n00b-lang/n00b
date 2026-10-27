@@ -25,6 +25,7 @@
 
 core_list_decl(int);
 core_list_decl(int32_t);
+core_list_decl(uint32_t);
 core_list_decl(core_string_t);
 
 static inline bool

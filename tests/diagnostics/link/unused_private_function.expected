@@ -1,0 +1,2 @@
+tests/diagnostics/link/unused_private_function.n:1:14: warning N00B-N0019: private function `helper` is never called
+  help: call it, remove `private` so other modules can use it, or delete it

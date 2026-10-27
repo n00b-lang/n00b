@@ -1,0 +1,23 @@
+func f(a: int) -> int {
+    let x = 1 +* 2
+    let y = 2 +
+
+    return a
+}
+let z = = 3
+func g() -> nil {
+    if true {
+        let q = 3 3
+    }
+    let w: int = (1, 2
+}
+fucn h() {
+}
+require f(1) == 1
+func f_1() -> int {
+    let a = [1, 2
+    return 1
+}
+func g_1() -> int {
+    return 2
+}}

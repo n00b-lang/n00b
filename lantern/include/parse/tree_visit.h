@@ -45,18 +45,6 @@ typedef struct {
 typedef bool (*parse_visit_fn)(parse_visit_t *v);
 typedef parse_visit_outcome_t (*parse_walk_stage_fn)(parse_visit_t *v);
 
-/* PREPARE may replace or prune before any node annotation runs. Enter
- * annotations follow node/NT entry; AFTER_ENTER follows annotations.
- * CHILD_COMPLETE runs on the parent before its next child. BEFORE_EXIT,
- * reverse annotations, node/NT exit, and AFTER_EXIT follow the children.
- * STOP ends the walk; ERROR also marks it failed. A prune cannot be undone
- * by another callback's continue. Callbacks reporting ERROR own diagnostics.
- * PREPARE and AFTER_EXIT may replace or remove the current node. A PREPARE
- * replacement may request another PREPARE on the replacement. Removing a
- * child visits the sibling shifted into its slot next. Replaced/removed nodes
- * are detached, not freed: callers must take and dispose of them. Replaced
- * node facts are not copied; the new node must establish its own facts. */
-
 parse_tree_walk_t *parse_tree_walk_new(parse_grammar_t *g, void *user);
 void             parse_tree_walk_free(parse_tree_walk_t *w);
 
@@ -86,7 +74,6 @@ bool parse_walk_on_annotation_boundary(parse_tree_walk_t *w,
                                        void *thunk);
 
 void parse_tree_walk_run(parse_tree_walk_t *w, parse_tree_t *root);
-/* Preserve a subtree root's position in its owning tree during the walk. */
 void parse_tree_walk_run_with_parent(parse_tree_walk_t *w,
                                      parse_tree_t *root,
                                      parse_tree_t *parent,
@@ -127,7 +114,6 @@ void *parse_tree_walk_reduce(parse_tree_walk_t *w, parse_tree_t *root);
 void parse_tree_walk_stop(parse_tree_walk_t *w);
 bool parse_tree_walk_stopped(parse_tree_walk_t *w);
 bool parse_tree_walk_failed(parse_tree_walk_t *w);
-/* Returns one detached subtree, or null when none remains. The caller owns it. */
 parse_tree_t *parse_tree_walk_take_detached(parse_tree_walk_t *w);
 
 parse_tree_t *parse_tree_walk_rewrite(parse_tree_walk_t  *w,

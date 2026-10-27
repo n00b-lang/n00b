@@ -16,6 +16,7 @@ typedef struct {
     ir_module_t *store;
     ir_module_t *runtime_body;
     ir_module_t *store_body;
+    ir_module_t *floating;
     core_dict_t emitted;
 } box_calls_t;
 
@@ -875,6 +876,25 @@ rewrite_type_test(box_calls_t *calls, ir_func_t *caller,
 }
 
 static bool
+rewrite_float_remainder(box_calls_t *calls, ir_func_t *caller,
+                        ir_instr_t *instruction)
+{
+    ir_value_t *arguments[2] = {0};
+    for (uint32_t k = 0; k < 2 && k < instruction->n_operands; k++)
+        if (instruction->operands[k].kind == IR_OPD_VALUE)
+            arguments[k] = instruction->operands[k].value;
+    if (instruction->n_operands != 2 || !arguments[0] || !arguments[1])
+        return true;
+    ir_machine_t machine = ir_machine_of(caller->owner, arguments[0]->type);
+    if (machine.class != IR_CLASS_FLOAT) return true;
+    ir_func_t *target = calls->floating ? ir_func_find(calls->floating,
+        machine.width == 32 ? CORE_STRING_STATIC("remainder_f32")
+                            : CORE_STRING_STATIC("remainder_f64")) : nullptr;
+    return target && retarget(calls, caller, instruction, target, nullptr, 0,
+                              arguments, 2);
+}
+
+static bool
 rewrite_type_of(box_calls_t *calls, ir_func_t *caller,
                 ir_instr_t *instruction)
 {
@@ -1469,6 +1489,10 @@ rewrite_emitted(box_calls_t *calls)
                 case IR_OP_TYPE_OF:
                     rewritten = rewrite_type_of(calls,function, instruction);
                     break;
+                case IR_OP_REM:
+                    rewritten = rewrite_float_remainder(calls, function,
+                                                        instruction);
+                    break;
                 case IR_OP_TYPE_TEST:
                     rewritten = rewrite_type_test(calls,function,
                                                   instruction);
@@ -1579,8 +1603,10 @@ n00bb_rewrite_box_operations(n00bb_link_analysis_t *analysis)
             ? n00bb_cache_module(analysis->cache, runtime) : nullptr,
         .store_body = analysis->cache
             ? n00bb_cache_module(analysis->cache, store) : nullptr,
+        .floating = n00bb_linked_unit_module(analysis,
+            CORE_STRING_STATIC("builtin.floating")),
     };
-    if (!calls.runtime) return true;
+    if (!calls.runtime && !calls.floating) return true;
     core_dict_init(&calls.emitted, nullptr, nullptr);
     for (size_t f = 0; f < analysis->emitted_functions.len; f++)
         core_dict_put(&calls.emitted, analysis->emitted_functions.data[f], 1);

@@ -1,0 +1,2 @@
+tests/diagnostics/build/start_signature.n:1:1: error N00B-B0105: `start` must take no parameters and return nil, but it is `() -> int`
+  help: declare it as `func start() -> nil`

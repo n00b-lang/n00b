@@ -531,7 +531,7 @@ static bool told(run_t *r, core_string_t text)
     for (uint32_t i = 0; i < ir_diags_count(r->d); i++) {
         const ir_diag_t *dg = ir_diags_at(r->d, i);
 
-        if (has(dg->primary.label, text) || has(dg->message, text)) {
+        if (has(ir_diag_item(r->d, dg)->label, text) || has(ir_diag_item(r->d, dg)->message, text)) {
             return true;
         }
     }
@@ -565,7 +565,7 @@ static void test_a_local_read_before_it_is_set(void)
     check("the result verifies as SSA",
           (ir_verify(r->m, r->d) & IR_PROP_SSA) != 0);
     check("and the reader is warned rather than left to find it later",
-          told(r, S("read on a path that does not assign it")));
+          told(r, S("is read on a path where it has no value")));
     done(r);
 
     run_t            *n    = load(MOD("  func @f(%a: i32) -> i32 {\n"

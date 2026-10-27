@@ -1,3 +1,0 @@
-import sys.memory
-
-require sys.memory.page_size() == sys.memory.page_size()

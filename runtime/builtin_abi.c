@@ -1,5 +1,9 @@
 #define _GNU_SOURCE
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 #include "builtin_abi.h"
 
 const n00b_abi_type_v1 *
@@ -215,8 +219,32 @@ n00b_builtin_abi_ref_address(const void *value)
 const uint8_t *
 n00b_builtin_native_symbol_name(uint64_t address)
 {
+#if defined(_WIN32)
+    HMODULE module = NULL;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)(uintptr_t)address, &module))
+        return NULL;
+    const uint8_t *base = (const uint8_t *)module;
+    const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+    const IMAGE_NT_HEADERS *headers =
+        (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+    const IMAGE_DATA_DIRECTORY *directory = &headers->OptionalHeader
+        .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    if (!directory->VirtualAddress) return NULL;
+    const IMAGE_EXPORT_DIRECTORY *exports =
+        (const IMAGE_EXPORT_DIRECTORY *)(base + directory->VirtualAddress);
+    const DWORD *functions = (const DWORD *)(base + exports->AddressOfFunctions);
+    const DWORD *names = (const DWORD *)(base + exports->AddressOfNames);
+    const WORD *ordinals = (const WORD *)(base + exports->AddressOfNameOrdinals);
+    uint64_t relative = address - (uint64_t)(uintptr_t)base;
+    for (DWORD i = 0; i < exports->NumberOfNames; i++)
+        if (functions[ordinals[i]] == relative) return base + names[i];
+    return NULL;
+#else
     Dl_info info = {0};
     if (!dladdr((const void *)(uintptr_t)address, &info) || !info.dli_sname
         || (uint64_t)(uintptr_t)info.dli_saddr != address) return NULL;
     return (const uint8_t *)info.dli_sname;
+#endif
 }

@@ -347,7 +347,7 @@ static void kept_authored(ir_diags_t *d, ir_instr_t *in, core_string_t key,
 {
     ir_diag_t *dg = ir_diag_begin_at(d, IR_DIAG_AUTHORED_ANNOT, in, in->block,
                                      in->block ? in->block->owner : nullptr,
-                                     CORE_STRING_STATIC("this instruction"));
+                                     IR_MESSAGE(THIS_INSTRUCTION));
 
     if (!dg) {
         return;
@@ -363,7 +363,7 @@ static void kept_authored(ir_diags_t *d, ir_instr_t *in, core_string_t key,
 
     core_string_t msg = core_buffer_take_string(b);
 
-    ir_diag_message(dg, d, msg);
+    ir_diag_message(dg, d, IR_DETAIL(msg));
     core_free(msg.data);
 }
 
@@ -461,8 +461,7 @@ ir_rule_result_t ir_rule_apply(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
                                                  in->block,
                                                  in->block ? in->block->owner
                                                            : nullptr,
-                                                 CORE_STRING_STATIC(
-                                                     "destination type"));
+                                                 IR_MESSAGE(DESTINATION_TYPE));
 
                 if (dg) {
                     core_buffer_t *b = core_buffer_empty();
@@ -474,7 +473,7 @@ ir_rule_result_t ir_rule_apply(ir_module_t *m, ir_rules_t *rs, ir_instr_t *in,
 
                     core_string_t msg = core_buffer_take_string(b);
 
-                    ir_diag_message(dg, d, msg);
+                    ir_diag_message(dg, d, IR_DETAIL(msg));
                     core_free(msg.data);
                 }
 

@@ -7,8 +7,6 @@
 
 th_type *ir_typelang_parse(th_ctx *ctx, core_string_t src,
                            core_string_t *err);
-/* The returned function type owns the failure channel; `failure` mirrors it
- * for callers that need to inspect the channels separately. */
 th_type *ir_typelang_parse_function(th_ctx *ctx, core_string_t src,
                                     th_type **failure, core_string_t *err);
 

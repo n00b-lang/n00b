@@ -1,3 +1,0 @@
-import delta
-
-require delta.rejected == 12

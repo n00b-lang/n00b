@@ -227,7 +227,8 @@ emit_fn(importer_t *im, writ_emit_t *e, uint32_t entry, writ_str_t owner)
     } else {
         writ_sym_t key = writ_intern_str(im->session, writ_str_format(im->session, "%.*s::%.*s", S(owner), S(name)));
         writ_map_put(im->skipped, key, 1);
-        writ_report(im->session, WRIT_D_NOT_TRANSPORTED, WRIT_NO_LOC, "`%.*s::%.*s`", S(owner), S(name));
+        writ_report(im->session, WRIT_D_NOT_TRANSPORTED, WRIT_NO_LOC,
+                    WRIT_MESSAGE(TEXT_3, WRIT_ARG(owner), WRIT_ARG(name)));
     }
     core_buffer_free(line);
 }
@@ -407,8 +408,8 @@ crosses(importer_t *im, uint32_t entry, bool report)
         uint64_t seen = 0;
         if (report && !writ_map_get(im->skipped, writ_intern_str(im->session, name), &seen)) {
             writ_map_put(im->skipped, writ_intern_str(im->session, name), 1);
-            writ_report(im->session, WRIT_D_NOT_TRANSPORTED, WRIT_NO_LOC, "`%.*s` has generic parameters",
-                        S(name));
+            writ_report(im->session, WRIT_D_NOT_TRANSPORTED, WRIT_NO_LOC,
+                        WRIT_MESSAGE(HAS_GENERIC_PARAMETERS, WRIT_ARG(name)));
         }
         return false;
     }
@@ -471,7 +472,8 @@ note_skipped(importer_t *im, writ_str_t contract)
         writ_str_t name = writ_sym_str(im->session, writ_node(probe, *fn)->name);
         writ_sym_t key = writ_intern_str(im->session, writ_str_format(im->session, "%.*s::%.*s", S(owner), S(name)));
         writ_map_put(im->skipped, key, 1);
-        writ_report(im->session, WRIT_D_NOT_TRANSPORTED, WRIT_NO_LOC, "`%.*s::%.*s`", S(owner), S(name));
+        writ_report(im->session, WRIT_D_NOT_TRANSPORTED, WRIT_NO_LOC,
+                    WRIT_MESSAGE(TEXT_3, WRIT_ARG(owner), WRIT_ARG(name)));
     }
     core_list_free(skipped);
 }
@@ -493,13 +495,13 @@ run_rustdoc(writ_session_t *session, const writ_rust_import_request_t *request, 
     }
     writ_run_result_t result;
     if (writ_run(session, argv, (writ_str_t){0}, &result) != WRIT_OK || result.exit_code) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "cargo rustdoc failed: %.*s", S(result.err));
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, WRIT_MESSAGE(CARGO_RUSTDOC_FAILED, WRIT_ARG(result.err)));
         return WRIT_TOOL_FAILED;
     }
     const char *metadata[] = {"cargo", "metadata", "-q", "--format-version", "1", "--no-deps", "--manifest-path",
                               argv[6], nullptr};
     if (writ_run(session, metadata, (writ_str_t){0}, &result) != WRIT_OK || result.exit_code) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "cargo metadata failed: %.*s", S(result.err));
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, WRIT_MESSAGE(CARGO_METADATA_FAILED, WRIT_ARG(result.err)));
         return WRIT_TOOL_FAILED;
     }
     const char *key = "\"target_directory\":\"";
@@ -540,8 +542,9 @@ writ_toolchain_import_rust(writ_session_t *session, const writ_rust_import_reque
     }
     uint64_t format = number(&im, get(&im, im.index, "format_version"));
     if (format != RUSTDOC_FORMAT) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "rustdoc JSON format %llu; writ reads format %d",
-                    (unsigned long long)format, RUSTDOC_FORMAT);
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC,
+                    WRIT_MESSAGE(RUSTDOC_JSON_FORMAT_WRIT_READS, CORE_TEXT_NUMBER((unsigned long long)format),
+                                 CORE_TEXT_NUMBER(RUSTDOC_FORMAT)));
         return WRIT_TOOL_FAILED;
     }
     uint32_t index = get(&im, im.index, "index");

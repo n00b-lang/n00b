@@ -3,6 +3,7 @@ import containers.hash_index
 import containers.view
 import cursor
 import sort
+import panic
 
 enum Sort_Order { none, insertion, key, value }
 
@@ -224,6 +225,8 @@ func compare_key(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
         return key.__cmp(right.key)
     }
         else {
+        panic.panic("cannot sort a dictionary by key: its key type is not " +
+            "`Comparable`")
         require false
     }
     }
@@ -236,6 +239,8 @@ func compare_value(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
         return value.__cmp(right.value)
     }
         else {
+        panic.panic("cannot sort a dictionary by value: its value type is " +
+            "not `Comparable`")
         require false
     }
     }

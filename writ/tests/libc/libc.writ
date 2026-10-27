@@ -13,6 +13,7 @@ fn errno_location() -> *c_int static per thread
   source "errno" macro
   symbol "__error" when os == macos
   symbol "__errno_location" when libc == glibc
+  symbol "_errno" when os == windows
 
 error_channel errno per thread reset before call {
     value errno_location()

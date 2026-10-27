@@ -1,0 +1,207 @@
+import sys.fs
+import table_consts
+
+const base = 36
+const tmin = 1
+const tmax = 26
+const folded_width = 4
+const height = 8
+const area = folded_width * height
+const mask = (1 << 4) - 1
+
+func threshold(d: i32) -> bool {
+    return d > ((base - tmin) * tmax) / 2
+}
+
+func narrow(x: u8) -> u8 {
+    return x
+}
+
+func signed16(x: i16) -> i16 {
+    return x
+}
+
+func folded_wide(x: u64) -> u64 {
+    return x
+}
+
+func folded_plain(x: int) -> int {
+    return x
+}
+
+var d: i32 = 455
+var folded_small: u8 = 7
+let sum: u8 = 200 + 55
+let top: u16 = 1 << 15
+let low: u32 = 0xff & 0x0f
+let quotient: i32 = -7 / 2
+let remainder: i32 = -7 % 2
+let negated: i16 = -(3 * 100)
+let unknown = 2 * 3
+var folded_cells: Array[u8][area] = new[Array[u8][area]]()
+
+require !threshold(d)
+require threshold(d + 1)
+require d == (36 - 1) * 26 / 2
+require d < base * tmax - tmin
+require narrow(base - tmin) == 35
+require narrow(folded_small + 2 * 3) == 13
+require signed16(-(tmax * 100)) == -2600
+require folded_wide((1 << 40) + base) == 1099511627812
+require sum == 255
+require top == 32768
+require low == 15
+require quotient == -3
+require remainder == -1
+require negated == -300
+require folded_plain(unknown) == 6
+require narrow(area) == 32
+require narrow(mask) == 15
+require __array_length(folded_cells) == 32
+
+const untyped_width = 32
+const offset = -5
+
+func takes(x: u32) -> u32 {
+    return x
+}
+
+func untyped_wide(x: u64) -> u64 {
+    return x
+}
+
+let index: u32 = 3
+let size: u64 = table_consts.table_size
+let slot: u32 = table_consts.empty_slot
+let shifted: i16 = offset
+let untyped_plain = untyped_width
+var untyped_cells: Array[u8][untyped_width] = new[Array[u8][untyped_width]]()
+var items: Array[char][table_consts.max_items] =
+    new[Array[char][table_consts.max_items]]()
+
+require takes(untyped_width) == 32
+require untyped_wide(table_consts.table_size) == 2048
+require index < untyped_width
+require index < table_consts.max_items
+require index + untyped_width == 35
+require index + table_consts.max_items == 21
+require (index & untyped_width) == 0
+require size == 2048
+require slot == 0xFFFFFFFF
+require shifted == -5
+require untyped_plain == 32
+require __array_length(untyped_cells) == 32
+require __array_length(items) == 18
+
+const digit_big: u32 = 0x8000_0000
+const million: int = 1_000_000
+const ratio: f64 = 1_000.25
+let local_ratio: f64 = 2_000.5
+var digit_cells: Array[u8][1_6] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+require digit_big == 0x80000000
+require million == 1000000
+require ratio == 1000.25
+require local_ratio == 2000.5
+require __array_length(digit_cells) == 16
+
+func big() -> u128 {
+    return 0xffffffffffffffffffffffffffffffff
+}
+func small() -> i128 {
+    return -5
+}
+require big() == 0xffffffffffffffffffffffffffffffff
+require big() != 0x99aa06d3014798d86001c324468d497f
+require small() > -0x80000000000000000000000000000000
+let wide_x: u128 = 0x1_0000_0000_0000_0000
+require wide_x == 0x10000000000000000
+
+record Lanes {
+    lanes: Array[u8][4]
+}
+
+const table: Array[u8] = sys.fs.data_file(source_dir() + "/data_file.bin")
+const lanes: Lanes = (lanes = [table[0], table[1], table[2], table[4]])
+
+require __array_length(table) == 5
+require table[0] == 0x41
+require table[3] == 0
+require table[4] == 0xff
+require lanes.lanes[1] == 0x42
+require lanes.lanes[3] == 0xff
+
+record Span {
+    low:  u32
+    high: u32
+}
+
+fence litmod located(contents: string, site: Literal_Site) -> uint fail: string {
+    if contents != "here" {
+        fail "unexpected fence contents"
+    }
+    return site.line * 1000 + site.column
+}
+
+let words: Array[u16] = [- embed_u16.bin -]'embed
+require __array_length(words) == 3
+require words[0] == 1 and words[1] == 2 and words[2] == 0x0103
+
+let spans: Array[Span] = [- embed_spans.bin -]'embed
+require __array_length(spans) == 2
+require spans[0].low == 1 and spans[0].high == 2
+require spans[1].low == 3 and spans[1].high == 4
+
+let where: uint = [- here -]'located
+require where == 155019
+
+alias litmod verbatim = raw_text
+quotes litmod raw_text(text: string) -> string fail: string {
+    return text
+}
+
+func rejected(text: string) -> bool {
+    let decoded = try {
+        -> decode_escapes(text)!
+    } fail(e) {
+        -> "rejected"
+    }
+    return decoded == "rejected"
+}
+
+func local_spelling() -> uint {
+    return byte_len("x\ty"'verbatim)
+}
+
+let spelled: string = "a\nb"'verbatim
+require byte_len(spelled) == 4
+require local_spelling() == 4
+let decoded: string = try {
+    -> decode_escapes(spelled)!
+} fail(e) {
+    -> ""
+}
+require byte_len(decoded) == 3
+require decoded == "a\nb"
+let accent: string = try {
+    -> decode_escapes("caf\\u00e9 \\x41\\U0001F600 \\t\\\"")!
+} fail(e) {
+    -> ""
+}
+require accent == "café \x41\U0001F600 \t\""
+require rejected("bad \\q escape")
+require rejected("short \\u12")
+require rejected("trailing \\")
+require rejected("\\uD800")
+
+let values: List[int] = [1, 2]'l
+require values.len() == 2
+
+const primes = [2, 3, 5, 7, 11]
+const names = {"a": 1, "b": 2}
+const static_words = ["static", "litmod"]
+
+require primes[3] == 7 and primes.len() == 5
+require names["b"].get_or_else(0) == 2
+require static_words[1] == "litmod"
+__fd_write(2, "ok")

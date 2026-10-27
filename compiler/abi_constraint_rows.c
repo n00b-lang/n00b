@@ -10,7 +10,6 @@
 core_list_decl(n00b_abi_constraint_v1);
 core_list_decl(n00b_abi_call_shape_v1);
 core_list_decl(n00b_abi_parameter_v1);
-core_list_decl(uint32_t);
 
 static bool
 encode_name(n00bb_abi_name_pool_t *names, core_string_t text,

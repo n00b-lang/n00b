@@ -2,11 +2,11 @@
 
 #include "model.h"
 
-#define SYM(model, sym) S(writ_sym_str((model)->session, (sym)))
+#define SYM(model, sym) S(writ_sym_str(model->session, (sym)))
 
 #define EACH_FN(model, f, fn)                                                                                          \
-    for (uint32_t f = 0; f < (model)->fns.len; f++)                                                                     \
-        for (const writ_fn_rec_t *fn = &(model)->fns.data[f]; fn; fn = nullptr)
+    for (uint32_t f = 0; f < model->fns.len; f++)                                                                     \
+        for (const writ_fn_rec_t *fn = &model->fns.data[f]; fn; fn = nullptr)
 
 #define EACH_PARAM(model, fn, s, slot)                                                                                 \
     for (uint32_t s = 0; s < (fn)->slot_count; s++)                                                                     \
@@ -25,7 +25,8 @@ out_arrays_have_extents(writ_model_t *model)
         EACH_PARAM(model, fn, s, slot) {
             if (is_out_array(model, slot) && slot->extent_kind != WRIT_EXTENT_BOUNDED
                 && slot->extent_kind != WRIT_EXTENT_COUNT) {
-                writ_report(model->session, WRIT_D_OUT_NEEDS_BOUND, slot->loc, "`%.*s`", SYM(model, slot->name));
+                writ_report(model->session, WRIT_D_OUT_NEEDS_BOUND, slot->loc,
+                            WRIT_MESSAGE(TEXT_2, WRIT_ARG(writ_sym_str(model->session, slot->name))));
             }
         }
     }
@@ -46,7 +47,8 @@ bounded_extents_resolve(writ_model_t *model)
                       && writ_type_is_integer(model, model->slots.data[cap.index].type);
             bool same_cell = len.kind == WRIT_REF_SLOT && len.phase == WRIT_REF_AFTER && len.index == cap.index;
             if (!(cell && same_cell) && !(value && !(len.kind == WRIT_REF_SLOT && len.phase == WRIT_REF_BEFORE))) {
-                writ_report(model->session, WRIT_D_BOUND_CELL, slot->loc, "`%.*s`", SYM(model, slot->name));
+                writ_report(model->session, WRIT_D_BOUND_CELL, slot->loc,
+                            WRIT_MESSAGE(TEXT_2, WRIT_ARG(writ_sym_str(model->session, slot->name))));
             }
         }
     }
@@ -60,8 +62,8 @@ extents_integer(writ_model_t *model)
         writ_ref_t count = writ_expr_ref(model, slot->count_expr);
         if (slot->extent_kind == WRIT_EXTENT_COUNT && (count.kind == WRIT_REF_SLOT || count.kind == WRIT_REF_FIELD)
             && count.phase == WRIT_REF_VALUE && !writ_type_is_integer(model, model->slots.data[count.index].type)) {
-            writ_report(model->session, WRIT_D_EXTENT_NOT_INTEGER, slot->loc, "the count of `%.*s` is not an integer",
-                        SYM(model, slot->name));
+            writ_report(model->session, WRIT_D_EXTENT_NOT_INTEGER, slot->loc,
+                        WRIT_MESSAGE(THE_COUNT_OF_IS_NOT, WRIT_ARG(writ_sym_str(model->session, slot->name))));
         }
     }
 }
@@ -78,7 +80,8 @@ sizing_has_output(writ_model_t *model)
             found = found || (is_out_array(model, slot) && slot->extent_kind == WRIT_EXTENT_BOUNDED);
         }
         if (!found) {
-            writ_report(model->session, WRIT_D_SIZING_WITHOUT_OUTPUT, fn->loc, "`%.*s` has none", SYM(model, fn->name));
+            writ_report(model->session, WRIT_D_SIZING_WITHOUT_OUTPUT, fn->loc,
+                        WRIT_MESSAGE(HAS_NONE, WRIT_ARG(writ_sym_str(model->session, fn->name))));
         }
     }
 }
@@ -96,11 +99,12 @@ outcomes_closed(writ_model_t *model)
             has_outcome = has_outcome || kind == WRIT_N_OUTCOME;
         }
         if (has_error && has_outcome) {
-            writ_report(model->session, WRIT_D_ERROR_AND_OUTCOMES, fn->loc, "`%.*s` states both", SYM(model, fn->name));
+            writ_report(model->session, WRIT_D_ERROR_AND_OUTCOMES, fn->loc,
+                        WRIT_MESSAGE(STATES_BOTH, WRIT_ARG(writ_sym_str(model->session, fn->name))));
         }
         if (fn->outcome_count && model->outcomes.data[fn->first_outcome + fn->outcome_count - 1].when_expr) {
             writ_report(model->session, WRIT_D_OUTCOMES_OPEN,
-                        model->outcomes.data[fn->first_outcome + fn->outcome_count - 1].loc, nullptr);
+                        model->outcomes.data[fn->first_outcome + fn->outcome_count - 1].loc, WRIT_NO_DETAIL);
         }
     }
 }
@@ -118,8 +122,9 @@ on_names_outcomes(writ_model_t *model)
                      || (writ_is_text(model, on->outcome, "error") && outcome->kind == WRIT_OUTCOME_FAILURE);
             }
             if (!found) {
-                writ_report(model->session, WRIT_D_ON_UNKNOWN_OUTCOME, on->loc, "`%.*s` has no outcome `%.*s`",
-                            SYM(model, fn->name), SYM(model, on->outcome));
+                writ_report(model->session, WRIT_D_ON_UNKNOWN_OUTCOME, on->loc,
+                            WRIT_MESSAGE(HAS_NO_OUTCOME, WRIT_ARG(writ_sym_str(model->session, fn->name)),
+                                         WRIT_ARG(writ_sym_str(model->session, on->outcome))));
             }
         }
     }
@@ -135,11 +140,10 @@ returns_have_spans(writ_model_t *model)
         const writ_slot_rec_t *result = writ_fn_slot(model, fn, fn->slot_count);
         writ_type_kind_t kind = writ_type(model, result->type)->key.kind;
         if ((kind == WRIT_TYPE_POINTER || kind == WRIT_TYPE_ARRAY) && !result->own && !result->span) {
-            uint32_t diag = writ_report(model->session, WRIT_D_RETURN_NEEDS_SPAN, result->loc, "the result of `%.*s`",
-                                        SYM(model, fn->name));
+            uint32_t diag = writ_report(model->session, WRIT_D_RETURN_NEEDS_SPAN, result->loc,
+                        WRIT_MESSAGE(THE_RESULT_OF, WRIT_ARG(writ_sym_str(model->session, fn->name))));
             writ_loc_t end = {result->loc.source, result->loc.end, result->loc.end};
-            writ_report_suggest(model->session, diag, end, writ_cstr(" unknown"),
-                                writ_cstr("mark the lifetime unknown until it is known"));
+            writ_report_suggest(model->session, diag, end, writ_cstr(" unknown"), WRIT_BARE(MARK_LIFETIME_UNKNOWN));
         }
     }
 }
@@ -153,12 +157,14 @@ varargs_promoted(writ_model_t *model)
         }
         const writ_type_rec_t *element = writ_type(model, writ_type_physical(model, fn->varargs_type));
         if ((element->key.kind == WRIT_TYPE_INT || element->key.kind == WRIT_TYPE_BOOL) && element->size < 4) {
-            writ_report(model->session, WRIT_D_PROMOTED_VARARG, fn->loc, "`%.*s` arrives as `c_int`; declare it `c_int`",
-                        SYM(model, element->key.name));
+            writ_report(
+                model->session, WRIT_D_PROMOTED_VARARG, fn->loc,
+                WRIT_MESSAGE(ARRIVES_AS_C_INT_DECLARE, WRIT_ARG(writ_sym_str(model->session, element->key.name))));
         }
         if (element->key.kind == WRIT_TYPE_FLOAT && element->size < 8) {
-            writ_report(model->session, WRIT_D_PROMOTED_VARARG, fn->loc, "`%.*s` arrives as `f64`; declare it `f64`",
-                        SYM(model, element->key.name));
+            writ_report(
+                model->session, WRIT_D_PROMOTED_VARARG, fn->loc,
+                WRIT_MESSAGE(ARRIVES_AS_F64_DECLARE_IT, WRIT_ARG(writ_sym_str(model->session, element->key.name))));
         }
     }
 }
@@ -174,11 +180,11 @@ format_names_text(writ_model_t *model)
         const writ_type_rec_t *type = writ_type(model, slot->type);
         bool text = type->key.kind == WRIT_TYPE_POINTER && writ_type(model, type->key.target)->key.kind == WRIT_TYPE_CSTR;
         if (!text) {
-            writ_report(model->session, WRIT_D_FORMAT_NOT_TEXT, slot->loc, "`%.*s` is not a `*cstr`",
-                        SYM(model, slot->name));
+            writ_report(model->session, WRIT_D_FORMAT_NOT_TEXT, slot->loc,
+                        WRIT_MESSAGE(IS_NOT_A_CSTR, WRIT_ARG(writ_sym_str(model->session, slot->name))));
         } else if (fn->varargs != WRIT_VARARGS_FORMAT && fn->varargs != WRIT_VARARGS_VA_LIST) {
             writ_report(model->session, WRIT_D_FORMAT_NOT_TEXT, slot->loc,
-                        "`%.*s` takes neither `...` nor a `va_list`", SYM(model, fn->name));
+                        WRIT_MESSAGE(TAKES_NEITHER_NOR_A_VA, WRIT_ARG(writ_sym_str(model->session, fn->name))));
         }
     }
 }
@@ -211,18 +217,20 @@ layout_assertions(writ_model_t *model)
         bool found = false;
         uint32_t size = record->size_assert ? asserted_size(model, record->size_assert, &found) : 0;
         if (found && size != type->size) {
-            writ_report(model->session, WRIT_D_LAYOUT_MISMATCH, record->loc, "size %u asserted, %u computed", size,
-                        type->size);
+            writ_report(model->session, WRIT_D_LAYOUT_MISMATCH, record->loc,
+                        WRIT_MESSAGE(SIZE_ASSERTED_COMPUTED, CORE_TEXT_NUMBER(size), CORE_TEXT_NUMBER(type->size)));
         }
         if (record->align_assert && record->align_assert != type->align) {
-            writ_report(model->session, WRIT_D_LAYOUT_MISMATCH, record->loc, "alignment %u asserted, %u computed",
-                        record->align_assert, type->align);
+            writ_report(model->session, WRIT_D_LAYOUT_MISMATCH, record->loc,
+                        WRIT_MESSAGE(ALIGNMENT_ASSERTED_COMPUTED, CORE_TEXT_NUMBER(record->align_assert),
+                                     CORE_TEXT_NUMBER(type->align)));
         }
         for (uint32_t i = 0; i < record->field_count; i++) {
             const writ_slot_rec_t *field = &model->slots.data[record->first_field + i];
             if (field->offset_assert != WRIT_NONE && field->offset_assert != field->offset) {
-                writ_report(model->session, WRIT_D_LAYOUT_MISMATCH, field->loc, "offset %u asserted, %u computed",
-                            field->offset_assert, field->offset);
+                writ_report(model->session, WRIT_D_LAYOUT_MISMATCH, field->loc,
+                            WRIT_MESSAGE(OFFSET_ASSERTED_COMPUTED, CORE_TEXT_NUMBER(field->offset_assert),
+                                         CORE_TEXT_NUMBER(field->offset)));
             }
         }
     }
@@ -252,15 +260,15 @@ reinterpreted_elements(writ_model_t *model)
         writ_str_t name = writ_sym_str(model->session, slot->name);
         if (!unit || !unit->size || !element || element->key.kind != WRIT_TYPE_RECORD) {
             writ_report(model->session, WRIT_D_REINTERPRET, slot->loc,
-                        "`%.*s` must be an array of records over a pointer to a sized element", S(name));
+                        WRIT_MESSAGE(MUST_BE_AN_ARRAY_OF, WRIT_ARG(name)));
         } else if (element->size % unit->size) {
             writ_report(model->session, WRIT_D_REINTERPRET, slot->loc,
-                        "`%.*s`: a %u-byte record is not a whole number of %u-byte physical elements", S(name),
-                        element->size, unit->size);
+                        WRIT_MESSAGE(A_BYTE_RECORD_IS_NOT, WRIT_ARG(name), CORE_TEXT_NUMBER(element->size),
+                                     CORE_TEXT_NUMBER(unit->size)));
         } else if (packed != element->size) {
             writ_report(model->session, WRIT_D_REINTERPRET, slot->loc,
-                        "`%.*s`: the record's fields fill %u of its %u bytes; padding cannot be reinterpreted", S(name),
-                        packed, element->size);
+                        WRIT_MESSAGE(THE_RECORD_S_FIELDS_FILL, WRIT_ARG(name), CORE_TEXT_NUMBER(packed),
+                                     CORE_TEXT_NUMBER(element->size)));
         }
     }
 }
@@ -318,8 +326,9 @@ views_fit_success_domain(writ_model_t *model)
             }
             if (!member && succeeds(model, fn, outside[i])) {
                 writ_str_t name = writ_sym_str(model->session, e->name);
-                writ_report(model->session, WRIT_D_VIEW_DOMAIN, result->loc, "%lld succeeds but is not a `%.*s`",
-                            (long long)outside[i], S(name));
+                writ_report(
+                    model->session, WRIT_D_VIEW_DOMAIN, result->loc,
+                    WRIT_MESSAGE(SUCCEEDS_BUT_IS_NOT_A, CORE_TEXT_NUMBER((long long)outside[i]), WRIT_ARG(name)));
                 break;
             }
         }
@@ -343,11 +352,12 @@ record_nones_fit(writ_model_t *model)
             int64_t evaluated = 0;
             if (!field) {
                 writ_str_t name = writ_sym_str(model->session, node->name);
-                writ_report(model->session, WRIT_D_UNKNOWN_NAME, node->loc, "no field `%.*s`", S(name));
+                writ_report(model->session, WRIT_D_UNKNOWN_NAME, node->loc, WRIT_MESSAGE(NO_FIELD, WRIT_ARG(name)));
             } else if (!writ_type_is_integer(model, field->type)
                        || !writ_expr_check_in(model, WRIT_EXPR_SCOPE_CONSTANT, WRIT_NONE, expr)
                        || !writ_expr_eval(model, expr, nullptr, &evaluated)) {
-                writ_report(model->session, WRIT_D_BAD_NONE_VALUE, node->loc, "field `%.*s`", SYM(model, field->name));
+                writ_report(model->session, WRIT_D_BAD_NONE_VALUE, node->loc,
+                            WRIT_MESSAGE(FIELD, WRIT_ARG(writ_sym_str(model->session, field->name))));
             }
         }
     }
@@ -369,11 +379,11 @@ text_channels_have_buffers(writ_model_t *model)
         }
         if (buffers != 1) {
             writ_report(model->session, WRIT_D_TEXT_CHANNEL, channel->loc,
-                        "`%.*s` fills %u out arrays with `cap ..., len ...`; a text channel needs exactly one",
-                        SYM(model, fn->name), buffers);
+                        WRIT_MESSAGE(FILLS_OUT_ARRAYS_WITH_CAP, WRIT_ARG(writ_sym_str(model->session, fn->name)),
+                                     CORE_TEXT_NUMBER(buffers)));
         } else if (fn->sizing != WRIT_SIZING_RETRY && fn->sizing != WRIT_SIZING_QUERY) {
             writ_report(model->session, WRIT_D_TEXT_CHANNEL, channel->loc,
-                        "`%.*s` needs `sizing retry` or `sizing query`", SYM(model, fn->name));
+                        WRIT_MESSAGE(NEEDS_SIZING_RETRY_OR_SIZING, WRIT_ARG(writ_sym_str(model->session, fn->name))));
         }
     }
 }
@@ -397,11 +407,12 @@ userdata_pairs(writ_model_t *model)
             if (fn->kind == WRIT_FN_CALLBACK) {
                 if (slot->userdata_for) {
                     writ_report(model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc,
-                                "inside callback `%.*s`, `userdata` names no parameter; it marks where the context "
-                                "arrives", SYM(model, fn->name));
+                                WRIT_MESSAGE(INSIDE_CALLBACK_USERDATA_NAMES_NO,
+                                             WRIT_ARG(writ_sym_str(model->session, fn->name))));
                 } else if (++receivers > 1) {
                     writ_report(model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc,
-                                "callback `%.*s` already has a `userdata` parameter", SYM(model, fn->name));
+                                WRIT_MESSAGE(CALLBACK_ALREADY_HAS_A_USERDATA,
+                                             WRIT_ARG(writ_sym_str(model->session, fn->name))));
                 }
                 continue;
             }
@@ -412,8 +423,8 @@ userdata_pairs(writ_model_t *model)
                 }
             }
             if (slot->userdata_for && target == WRIT_NONE) {
-                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, slot->userdata_loc, "`%.*s`",
-                            SYM(model, slot->userdata_for));
+                writ_report(model->session, WRIT_D_UNKNOWN_SLOT, slot->userdata_loc,
+                            WRIT_MESSAGE(TEXT_2, WRIT_ARG(writ_sym_str(model->session, slot->userdata_for))));
                 continue;
             }
             bool paired = false;
@@ -422,13 +433,16 @@ userdata_pairs(writ_model_t *model)
             }
             if (target == WRIT_NONE) {
                 writ_report(model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc,
-                            "`%.*s` must name the callback parameter it travels with", SYM(model, slot->name));
+                            WRIT_MESSAGE(MUST_NAME_THE_CALLBACK_PARAMETER,
+                                         WRIT_ARG(writ_sym_str(model->session, slot->name))));
             } else if (!is_callback_slot(model, writ_fn_slot(model, fn, target))) {
-                writ_report(model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc, "`%.*s` is not a callback",
-                            SYM(model, slot->userdata_for));
+                writ_report(
+                    model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc,
+                    WRIT_MESSAGE(IS_NOT_A_CALLBACK, WRIT_ARG(writ_sym_str(model->session, slot->userdata_for))));
             } else if (paired) {
                 writ_report(model->session, WRIT_D_BAD_USERDATA, slot->userdata_loc,
-                            "callback `%.*s` has more than one `userdata` parameter", SYM(model, slot->userdata_for));
+                            WRIT_MESSAGE(CALLBACK_HAS_MORE_THAN_ONE,
+                                         WRIT_ARG(writ_sym_str(model->session, slot->userdata_for))));
             }
         }
     }
@@ -457,8 +471,8 @@ check_presence(writ_model_t *model, const writ_record_rec_t *record)
             const writ_slot_rec_t *field = &model->slots.data[record->first_field + f];
             if (!field->has_none && !writ_type_is_pointer(model, field->type)) {
                 writ_report(model->session, WRIT_D_PRESENCE, record->loc,
-                            "under `sentinel`, keyword `%.*s` needs a `none` value or a pointer type",
-                            SYM(model, field->name));
+                            WRIT_MESSAGE(UNDER_SENTINEL_KEYWORD_NEEDS_A,
+                                         WRIT_ARG(writ_sym_str(model->session, field->name))));
                 return;
             }
         }
@@ -470,15 +484,15 @@ check_presence(writ_model_t *model, const writ_record_rec_t *record)
     }
     const writ_slot_rec_t *field = &model->slots.data[record->first_field + record->presence_field];
     if (!writ_type_is_integer(model, field->type)) {
-        writ_report(model->session, WRIT_D_PRESENCE, record->loc, "presence field `%.*s` is not an integer",
-                    SYM(model, field->name));
+        writ_report(model->session, WRIT_D_PRESENCE, record->loc,
+                    WRIT_MESSAGE(PRESENCE_FIELD_IS_NOT_AN, WRIT_ARG(writ_sym_str(model->session, field->name))));
         return;
     }
     uint32_t bits = 8 * writ_type(model, writ_type_physical(model, field->type))->size;
     if (record->presence == WRIT_PRESENCE_MASK && record->field_count - 1 > bits) {
         writ_report(model->session, WRIT_D_PRESENCE, record->loc,
-                    "mask field `%.*s` has %u bits for %u keywords", SYM(model, field->name), bits,
-                    record->field_count - 1);
+                    WRIT_MESSAGE(MASK_FIELD_HAS_BITS_FOR, WRIT_ARG(writ_sym_str(model->session, field->name)),
+                                 CORE_TEXT_NUMBER(bits), CORE_TEXT_NUMBER(record->field_count - 1)));
     }
 }
 
@@ -488,8 +502,8 @@ keyword_packs(writ_model_t *model)
     EACH_FN(model, f, fn) {
         if (fn->keywords_slot != WRIT_NONE && !keywords_record(model, writ_fn_slot(model, fn, fn->keywords_slot)->type)) {
             const writ_slot_rec_t *slot = writ_fn_slot(model, fn, fn->keywords_slot);
-            writ_report(model->session, WRIT_D_PACK_KEYWORDS, slot->loc, "`%.*s` does not point to one",
-                        SYM(model, slot->name));
+            writ_report(model->session, WRIT_D_PACK_KEYWORDS, slot->loc,
+                        WRIT_MESSAGE(DOES_NOT_POINT_TO_ONE, WRIT_ARG(writ_sym_str(model->session, slot->name))));
         }
     }
     for (uint32_t r = 0; r < model->records.len; r++) {
@@ -506,27 +520,30 @@ check_arm(writ_model_t *model, const writ_fn_rec_t *fn, const writ_slot_rec_t *s
         target = target || writ_fn_slot(model, fn, t)->name == arm->target;
     }
     if (!target) {
-        writ_report(model->session, WRIT_D_POLICY, arm->loc, "`%.*s` has no parameter `%.*s`", SYM(model, fn->name),
-                    SYM(model, arm->target));
+        writ_report(model->session, WRIT_D_POLICY, arm->loc,
+                    WRIT_MESSAGE(HAS_NO_PARAMETER, WRIT_ARG(writ_sym_str(model->session, fn->name)),
+                                 WRIT_ARG(writ_sym_str(model->session, arm->target))));
         return;
     }
     if (arm->is_else) {
         if (elses > 1) {
-            writ_report(model->session, WRIT_D_POLICY, arm->loc, "`%.*s` has more than one `else` arm",
-                        SYM(model, slot->name));
+            writ_report(model->session, WRIT_D_POLICY, arm->loc,
+                        WRIT_MESSAGE(HAS_MORE_THAN_ONE_ELSE, WRIT_ARG(writ_sym_str(model->session, slot->name))));
         }
         return;
     }
     for (size_t c = 0; c < model->consts.len; c++) {
         if (model->consts.data[c].name == arm->constant) {
             if (writ_type_physical(model, model->consts.data[c].type) != writ_type_physical(model, slot->type)) {
-                writ_report(model->session, WRIT_D_POLICY, arm->loc, "`%.*s` is not of the type of `%.*s`",
-                            SYM(model, arm->constant), SYM(model, slot->name));
+                writ_report(model->session, WRIT_D_POLICY, arm->loc,
+                            WRIT_MESSAGE(IS_NOT_OF_THE_TYPE, WRIT_ARG(writ_sym_str(model->session, arm->constant)),
+                                         WRIT_ARG(writ_sym_str(model->session, slot->name))));
             }
             return;
         }
     }
-    writ_report(model->session, WRIT_D_POLICY, arm->loc, "`%.*s` is not a constant", SYM(model, arm->constant));
+    writ_report(model->session, WRIT_D_POLICY, arm->loc,
+                WRIT_MESSAGE(IS_NOT_A_CONSTANT, WRIT_ARG(writ_sym_str(model->session, arm->constant))));
 }
 
 static void
@@ -543,7 +560,7 @@ policy_arms(writ_model_t *model)
                 check_arm(model, fn, slot, arm, elses);
             }
             if (policies > 1) {
-                writ_report(model->session, WRIT_D_UNSUPPORTED, slot->loc, "more than one policy parameter");
+                writ_report(model->session, WRIT_D_UNSUPPORTED, slot->loc, WRIT_BARE(MORE_THAN_ONE_POLICY_PARAMETER));
             }
             if (!slot->span_by) {
                 continue;
@@ -557,12 +574,14 @@ policy_arms(writ_model_t *model)
                 }
             }
             if (!named) {
-                writ_report(model->session, WRIT_D_POLICY, slot->loc, "`span by %.*s`: `%.*s` is not a policy parameter",
-                            SYM(model, slot->span_by), SYM(model, slot->span_by));
+                writ_report(model->session, WRIT_D_POLICY, slot->loc,
+                            WRIT_MESSAGE(SPAN_BY_IS_NOT_A, WRIT_ARG(writ_sym_str(model->session, slot->span_by)),
+                                         WRIT_ARG(writ_sym_str(model->session, slot->span_by))));
             } else if (!sets) {
                 writ_report(model->session, WRIT_D_POLICY, slot->loc,
-                            "`span by %.*s`: no arm of `%.*s` sets `%.*s`", SYM(model, slot->span_by),
-                            SYM(model, slot->span_by), SYM(model, slot->name));
+                            WRIT_MESSAGE(SPAN_BY_NO_ARM_OF, WRIT_ARG(writ_sym_str(model->session, slot->span_by)),
+                                         WRIT_ARG(writ_sym_str(model->session, slot->span_by)),
+                                         WRIT_ARG(writ_sym_str(model->session, slot->name))));
             }
         }
     }
@@ -599,13 +618,14 @@ check_event(writ_model_t *model, const writ_fn_rec_t *fn, const writ_event_rec_t
     for (uint32_t a = 0; a < event->arg_count; a++) {
         const writ_event_arg_rec_t *arg = &model->event_args.data[event->first_arg + a];
         if (arg->kind == WRIT_EVENT_ARG_RESULT && !event_arg_slot(model, fn, arg)) {
-            writ_report(model->session, WRIT_D_EVENT, event->loc, "`%.*s` has no result for `ret`",
-                        SYM(model, fn->name));
+            writ_report(model->session, WRIT_D_EVENT, event->loc,
+                        WRIT_MESSAGE(HAS_NO_RESULT_FOR_RET, WRIT_ARG(writ_sym_str(model->session, fn->name))));
             return;
         }
         if (arg->kind == WRIT_EVENT_ARG_SLOT && !event_arg_slot(model, fn, arg)) {
-            writ_report(model->session, WRIT_D_EVENT, event->loc, "`%.*s` has no parameter `%.*s`",
-                        SYM(model, fn->name), SYM(model, arg->name));
+            writ_report(model->session, WRIT_D_EVENT, event->loc,
+                        WRIT_MESSAGE(HAS_NO_PARAMETER, WRIT_ARG(writ_sym_str(model->session, fn->name)),
+                                     WRIT_ARG(writ_sym_str(model->session, arg->name))));
             return;
         }
     }
@@ -614,20 +634,24 @@ check_event(writ_model_t *model, const writ_fn_rec_t *fn, const writ_event_rec_t
         const writ_slot_rec_t *subject = event->arg_count == 1
             ? event_arg_slot(model, fn, &model->event_args.data[event->first_arg]) : nullptr;
         if (!subject) {
-            writ_report(model->session, WRIT_D_EVENT, event->loc, "`%s` takes one handle parameter", word);
+            writ_report(model->session, WRIT_D_EVENT, event->loc,
+                        WRIT_MESSAGE(TAKES_ONE_HANDLE_PARAMETER, WRIT_ARG(writ_cstr(word))));
         } else if (writ_type(model, subject->type)->key.kind != WRIT_TYPE_HANDLE) {
-            writ_report(model->session, WRIT_D_EVENT, event->loc, "`%s(%.*s)`: `%.*s` is not a handle", word,
-                        SYM(model, subject->name), SYM(model, subject->name));
+            writ_report(model->session, WRIT_D_EVENT, event->loc,
+                        WRIT_MESSAGE(IS_NOT_A_HANDLE, WRIT_ARG(writ_cstr(word)),
+                                     WRIT_ARG(writ_sym_str(model->session, subject->name)),
+                                     WRIT_ARG(writ_sym_str(model->session, subject->name))));
         }
         return;
     }
     const writ_fn_rec_t *target = event_target(model, event->function);
     if (!target) {
-        writ_report(model->session, WRIT_D_EVENT, event->loc, "`%.*s` is not a function of the contract",
-                    SYM(model, event->function));
+        writ_report(model->session, WRIT_D_EVENT, event->loc,
+                    WRIT_MESSAGE(IS_NOT_A_FUNCTION_OF, WRIT_ARG(writ_sym_str(model->session, event->function))));
     } else if (event->arg_count > target->slot_count) {
-        writ_report(model->session, WRIT_D_EVENT, event->loc, "`%.*s` takes %u parameters, not %u",
-                    SYM(model, event->function), target->slot_count, event->arg_count);
+        writ_report(model->session, WRIT_D_EVENT, event->loc,
+                    WRIT_MESSAGE(TAKES_PARAMETERS_NOT, WRIT_ARG(writ_sym_str(model->session, event->function)),
+                                 CORE_TEXT_NUMBER(target->slot_count), CORE_TEXT_NUMBER(event->arg_count)));
     }
 }
 
@@ -686,8 +710,9 @@ union_tags(writ_model_t *model)
         const writ_slot_rec_t *tag = field->tag_field == WRIT_NONE ? nullptr
                                                                    : &model->slots.data[owner->first_field + field->tag_field];
         if (!tag || !writ_type_is_integer(model, tag->type)) {
-            writ_report(model->session, WRIT_D_UNION_TAG, field->loc, "`%.*s` is not an earlier integer field",
-                        S(writ_sym_str(model->session, field->tag_name)));
+            writ_report(
+                model->session, WRIT_D_UNION_TAG, field->loc,
+                WRIT_MESSAGE(IS_NOT_AN_EARLIER_INTEGER, WRIT_ARG(writ_sym_str(model->session, field->tag_name))));
             continue;
         }
         uint32_t enumeration = tag_enum(model, tag->type);
@@ -698,12 +723,12 @@ union_tags(writ_model_t *model)
                 repeated = repeated || model->union_arms.data[tagged->first_arm + b].value == arm->value;
             }
             if (repeated) {
-                writ_report(model->session, WRIT_D_UNION_TAG, arm->loc, "value %lld names two arms",
-                            (long long)arm->value);
+                writ_report(model->session, WRIT_D_UNION_TAG, arm->loc,
+                            WRIT_MESSAGE(VALUE_NAMES_TWO_ARMS, CORE_TEXT_NUMBER((long long)arm->value)));
             } else if (!arm_in_enum(model, arm, enumeration)) {
-                writ_report(model->session, WRIT_D_UNION_TAG, arm->loc, "`%.*s` is not an item of `%.*s`",
-                            S(writ_sym_str(model->session, arm->constant)),
-                            S(writ_sym_str(model->session, model->enums.data[enumeration].name)));
+                writ_report(model->session, WRIT_D_UNION_TAG, arm->loc,
+                            WRIT_MESSAGE(IS_NOT_AN_ITEM_OF, WRIT_ARG(writ_sym_str(model->session, arm->constant)),
+                                         WRIT_ARG(writ_sym_str(model->session, model->enums.data[enumeration].name))));
             }
         }
     }

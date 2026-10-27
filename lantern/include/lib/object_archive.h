@@ -48,8 +48,6 @@ typedef struct {
   void *user_data;
 } core_object_archive_type_t;
 
-/* Register codecs before use. Do not mutate a registry while save/load calls
- * are using it; concurrent calls may share a fully populated registry. */
 core_object_archive_registry_t *core_object_archive_registry_new(void);
 void core_object_archive_registry_free(core_object_archive_registry_t *registry);
 bool core_object_archive_register(core_object_archive_registry_t *registry,
@@ -61,8 +59,6 @@ bool core_object_writer_u32(core_object_writer_t *writer, uint32_t value);
 bool core_object_writer_u64(core_object_writer_t *writer, uint64_t value);
 bool core_object_writer_string(core_object_writer_t *writer,
                                core_string_t value);
-/* A null reference may use type_id 0; non-null references require a registered
- * nonzero type ID. */
 bool core_object_writer_ref(core_object_writer_t *writer, uint64_t type_id,
                             const void *object);
 
@@ -74,19 +70,9 @@ bool core_object_reader_u32(core_object_reader_t *reader, uint32_t *out);
 bool core_object_reader_u64(core_object_reader_t *reader, uint64_t *out);
 bool core_object_reader_string(core_object_reader_t *reader,
                                core_string_t *out);
-/* A nonzero type ID requires an exact match. Zero accepts any registered type;
- * null references are accepted for either form. */
 bool core_object_reader_ref(core_object_reader_t *reader, uint64_t type_id,
                             void **out);
 
-/* Every reachable object kind must have a registered codec. The mapped image
- * uses stable type/version records and object IDs; codecs own payload schemas.
- * The image's ABI tag still applies because its record layout is native.
- * Allocate hooks use core_persist_arena_alloc_transient(); restored objects
- * then live in the archive's arena without changing its persisted boundary.
- * All loaded object pointers are borrowed from the archive and expire on close;
- * optional finalize hooks run after every object's references are restored;
- * destroy hooks release codec-owned external resources on failure or close. */
 bool core_object_archive_save(core_string_t path, size_t capacity,
                              uint64_t abi_tag,
                              core_object_archive_registry_t *registry,

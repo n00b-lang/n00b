@@ -1,0 +1,12 @@
+tests/diagnostics/link/import_name_clash.n:8:1: error N00B-M0013: `util` cannot be declared here because this module imports module `util`
+  tests/diagnostics/link/import_name_clash.n:1:8: note: module `util` is imported here
+  help: rename this declaration, or import the module under another name with `import util as other`
+tests/diagnostics/link/import_name_clash.n:12:1: error N00B-M0013: `shape` cannot be declared here because this module imports module `shape`
+  tests/diagnostics/link/import_name_clash.n:2:8: note: module `shape` is imported here
+  help: rename this declaration, or import the module under another name with `import shape as other`
+tests/diagnostics/link/import_name_clash.n:16:7: error N00B-M0013: `limit` cannot be declared here because this module imports module `limit`
+  tests/diagnostics/link/import_name_clash.n:3:8: note: module `limit` is imported here
+  help: rename this declaration, or import the module under another name with `import limit as other`
+tests/diagnostics/link/import_name_clash.n:18:5: error N00B-M0013: `counter` cannot be declared here because this module imports module `counter`
+  tests/diagnostics/link/import_name_clash.n:4:8: note: module `counter` is imported here
+  help: rename this declaration, or import the module under another name with `import counter as other`

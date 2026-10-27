@@ -145,7 +145,8 @@ bool core_object_emit_native_section_index(
         return false;
     switch (target->object_format) {
     case CORE_TARGET_OBJECT_ELF:
-        if (target->call_abi != CORE_TARGET_CALL_SYSV_AMD64) return false;
+        if (target->call_abi != CORE_TARGET_CALL_SYSV_AMD64
+            && target->call_abi != CORE_TARGET_CALL_AAPCS64) return false;
         return core_object_emit_elf_native_section_index(
             section_count, input_section_index, native_section_index);
     case CORE_TARGET_OBJECT_MACH_O:

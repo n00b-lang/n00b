@@ -1,3 +1,0 @@
-trait CycleEcho {
-    func echo(self: 'T) -> 'T
-}

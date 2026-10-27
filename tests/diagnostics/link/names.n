@@ -1,0 +1,20 @@
+func f() -> int {
+    return 1
+}
+
+func f() -> int {
+    return 2
+}
+
+require f() == 1
+func f_1() -> int {
+    let counter = 1
+    return countr + 1
+}
+require f_1() == 2
+func add(a: int, b: int) -> int {
+    return a + b
+}
+
+let x = ad(1, 2)
+require x == 3

@@ -1,0 +1,39 @@
+N00B_DIAG(BACKEND_TARGET_UNAVAILABLE, "N00B-B1000", ERROR,
+    "LLVM cannot generate code for this machine",
+    "The LLVM libraries this toolchain was built with do not include a code\n"
+    "generator for the machine n00b is running on, so no program can be\n"
+    "built. Install a toolchain built for this machine, or point\n"
+    "N00B_TOOLCHAIN at one.")
+N00B_DIAG(BACKEND_TARGET_CPU, "N00B-B1001", ERROR,
+    "LLVM cannot generate code for the selected CPU",
+    "n00b asks LLVM to tune code for a CPU: this machine's CPU by default on\n"
+    "macOS and with --native, the baseline CPU with --generic. LLVM rejected\n"
+    "the CPU or its feature list. Build with --generic to use the baseline\n"
+    "CPU for the target.")
+N00B_DIAG(BACKEND_OBJECT_EMISSION, "N00B-B1002", ERROR,
+    "LLVM could not write machine code for a module",
+    "LLVM failed while writing the object code for one module of the\n"
+    "program. The message includes LLVM's own explanation. This usually\n"
+    "means the machine ran out of memory or the generated code exceeds a\n"
+    "limit of the target, such as the size of a single function.")
+N00B_DIAG(INLINE_FUNCTION_RECURSIVE, "N00B-B1004", ERROR,
+    "an `inline` function calls itself, directly or through other functions",
+    "An `inline` function is copied into every caller, so it cannot reach a\n"
+    "call to itself: the copy would never end. Remove `inline`, or move the\n"
+    "recursive part into a separate function that is not inline.")
+N00B_DIAG(INLINE_FUNCTION_INDIRECT_CALL, "N00B-B1005", ERROR,
+    "an `inline` function calls through a function value",
+    "n00b checks that an `inline` function never reaches a call to itself.\n"
+    "A call through a callback or function value could lead anywhere, so\n"
+    "it cannot be checked. Call a named function instead, or remove\n"
+    "`inline`.")
+N00B_DIAG(INLINE_FUNCTION_AS_VALUE, "N00B-B1006", ERROR,
+    "an `inline` function is used as a function value",
+    "An `inline` function has no address of its own: it exists only as\n"
+    "copies inside its callers, so it cannot be stored, passed or returned\n"
+    "as a value. Remove `inline` to use the function as a value.")
+N00B_DIAG(BACKEND_LLVM_WARNING, "N00B-B1003", WARNING,
+    "LLVM reported a problem while optimizing the whole program",
+    "With --lto, n00b links every module and the runtime into one LLVM\n"
+    "module before optimizing it. LLVM reported something unexpected while\n"
+    "doing so; the program was still built. The message is LLVM's own.")

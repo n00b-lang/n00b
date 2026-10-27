@@ -1,0 +1,3 @@
+bring all from shapes
+
+require triangle() == 3 and circle() == 9

@@ -54,6 +54,7 @@ writ_unit_new(writ_session_t *session)
         .roots    = core_list_new(writ_unit_root_t),
         .tokens   = core_list_new(writ_loc_t),
         .files    = core_list_new(uint32_t),
+        .contract_dirs = core_list_new(uint32_t),
     };
     core_list_push(unit->nodes, ((writ_node_t){0}));
     writ_on_session_free(session, writ_unit_release, unit);
@@ -69,6 +70,17 @@ writ_unit_release(void *object)
     core_list_free(unit->roots);
     core_list_free(unit->tokens);
     core_list_free(unit->files);
+    core_list_free(unit->contract_dirs);
+}
+
+writ_status_t
+writ_unit_add_contract_dir(writ_unit_t *unit, writ_str_t dir)
+{
+    if (!unit || !dir.length) {
+        return WRIT_INVALID_ARGUMENT;
+    }
+    core_list_push(unit->contract_dirs, writ_intern_str(unit->session, dir));
+    return WRIT_OK;
 }
 
 size_t

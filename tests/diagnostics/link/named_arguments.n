@@ -1,0 +1,10 @@
+func add(a: int, b: int) -> int {
+    return a + b
+}
+
+require add(1, 2, 3) == 3
+func area(width: int, height: int) -> int {
+    return width * height
+}
+
+require area(width = 2, hieght = 3) == 6

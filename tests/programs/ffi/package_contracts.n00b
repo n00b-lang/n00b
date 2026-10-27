@@ -1,3 +1,8 @@
 import ffipkg
 
+const limits = [-
+use <limits.writ>
+-]'ffi
+
 require ffipkg.limit() == 7
+require limits.LIMIT == 40

@@ -1,5 +1,0 @@
-when false {
-    let unused = new[Unavailable_Type]()
-}
-
-__fd_write(2, "ok")

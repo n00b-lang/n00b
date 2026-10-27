@@ -11,4 +11,11 @@ if ! "$compiler" build --release --lto --output "$tmp/program" "$program" \
     cat "$tmp/compile.out" "$tmp/compile.err" >&2
     exit 1
 fi
-"$tmp/program"
+if ! "$tmp/program" >"$tmp/stdout" 2>"$tmp/stderr"; then
+    cat "$tmp/stdout" "$tmp/stderr" >&2
+    exit 1
+fi
+if test -s "$tmp/stdout" || test "$(cat "$tmp/stderr")" != ok; then
+    cat "$tmp/stdout" "$tmp/stderr" >&2
+    exit 1
+fi

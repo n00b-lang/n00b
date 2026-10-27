@@ -1,0 +1,8 @@
+func f(n: int) -> int fail: string {
+    if n < 0 {
+        fail "negative"
+    }
+    return n
+}
+let x = f(-1)!
+require x == 1

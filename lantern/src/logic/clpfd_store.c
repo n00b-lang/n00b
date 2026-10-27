@@ -1,12 +1,10 @@
 #include "logic/clpfd_store.h"
 #include "lib/alloc.h"
+#include "lib/list.h"
 
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
-
-// ---------------------------------------------------------------------------
-// Internal structures
-// ---------------------------------------------------------------------------
 
 typedef struct {
   int32_t *indices;
@@ -19,28 +17,23 @@ typedef struct {
   core_csp_domain_t old_domain;
 } csp_trail_entry_t;
 
-// Choice point: records both trail and constraint positions.
 typedef struct {
   int32_t trail_mark;
   int32_t con_mark;
 } csp_choice_point_t;
 
 struct core_csp_store {
-  // Variables
   core_csp_var_t *vars;
   int32_t var_count;
   int32_t var_cap;
 
-  // Constraints
   core_csp_constraint_t *constraints;
   int32_t con_count;
   int32_t con_cap;
 
-  // Watchlist: var_id -> list of constraint indices
   csp_index_list_t *watchlist;
   int32_t watchlist_cap;
 
-  // AC-3 propagation queue (circular buffer)
   int32_t *queue;
   int32_t queue_head;
   int32_t queue_tail;
@@ -48,12 +41,10 @@ struct core_csp_store {
   bool *in_queue;
   int32_t in_queue_cap;
 
-  // Trail for backtracking
   csp_trail_entry_t *trail;
   int32_t trail_len;
   int32_t trail_cap;
 
-  // Choice point stack
   csp_choice_point_t *choice_points;
   int32_t cp_count;
   int32_t cp_cap;
@@ -62,24 +53,14 @@ struct core_csp_store {
   int32_t failed_constraint;
 };
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-static void *grow_zeroed(void *data, int32_t old_cap, int32_t new_cap,
-                         size_t elem_size) {
-  char *grown = core_realloc(data, (size_t)new_cap * elem_size);
-  memset(grown + (size_t)old_cap * elem_size, 0,
-         (size_t)(new_cap - old_cap) * elem_size);
-  return grown;
-}
-
-static int32_t grown_cap(int32_t cap, int32_t initial, int32_t needed) {
-  int32_t new_cap = cap ? cap : initial;
-  while (new_cap <= needed) {
-    new_cap *= 2;
+static void reserve_zeroed(void **data, int32_t *capacity, int32_t needed,
+                           size_t element_size) {
+  size_t grown = (size_t)*capacity;
+  if (!core_list_reserve_raw(data, &grown, (size_t)needed, element_size) ||
+      grown > INT32_MAX) {
+    abort();
   }
-  return new_cap;
+  *capacity = (int32_t)grown;
 }
 
 static void watchlist_add(core_csp_store_t *s, core_csp_var_id_t var,
@@ -90,16 +71,11 @@ static void watchlist_add(core_csp_store_t *s, core_csp_var_id_t var,
 
   csp_index_list_t *wl = &s->watchlist[var];
 
-  if (wl->count >= wl->cap) {
-    int32_t new_cap = grown_cap(wl->cap, 4, wl->count);
-    wl->indices = grow_zeroed(wl->indices, wl->cap, new_cap, sizeof(int32_t));
-    wl->cap = new_cap;
-  }
-
+  reserve_zeroed((void **)&wl->indices, &wl->cap, wl->count + 1,
+                 sizeof(int32_t));
   wl->indices[wl->count++] = con_idx;
 }
 
-// Remove all watchlist entries for constraint con_idx.
 static void watchlist_remove(core_csp_store_t *s, int32_t con_idx) {
   core_csp_constraint_t *con = &s->constraints[con_idx];
 
@@ -122,40 +98,29 @@ static void watchlist_remove(core_csp_store_t *s, int32_t con_idx) {
 }
 
 static void ensure_watchlist(core_csp_store_t *s, int32_t var_count) {
-  if (var_count <= s->watchlist_cap) {
-    return;
-  }
-
-  int32_t new_cap = grown_cap(s->watchlist_cap, 16, var_count - 1);
-  s->watchlist = grow_zeroed(s->watchlist, s->watchlist_cap, new_cap,
-                             sizeof(csp_index_list_t));
-  s->watchlist_cap = new_cap;
+  reserve_zeroed((void **)&s->watchlist, &s->watchlist_cap, var_count,
+                 sizeof(csp_index_list_t));
 }
 
 static void enqueue_constraint(core_csp_store_t *s, int32_t con_idx) {
-  if (con_idx < 0 || con_idx >= s->in_queue_cap) {
-    int32_t new_cap = grown_cap(s->in_queue_cap, 16, con_idx);
-    s->in_queue = grow_zeroed(s->in_queue, s->in_queue_cap, new_cap,
-                              sizeof(bool));
-    s->in_queue_cap = new_cap;
-  }
+  reserve_zeroed((void **)&s->in_queue, &s->in_queue_cap, con_idx + 1,
+                 sizeof(bool));
 
   if (s->in_queue[con_idx]) {
     return;
   }
 
-  // Grow queue if needed.
   int32_t next_tail = (s->queue_tail + 1) % s->queue_cap;
 
   if (next_tail == s->queue_head) {
     int32_t old_cap = s->queue_cap;
-    s->queue = core_realloc(s->queue, (size_t)old_cap * 2 * sizeof(int32_t));
+    reserve_zeroed((void **)&s->queue, &s->queue_cap, old_cap * 2,
+                   sizeof(int32_t));
     if (s->queue_tail < s->queue_head) {
       memcpy(&s->queue[old_cap], s->queue,
              (size_t)s->queue_tail * sizeof(int32_t));
       s->queue_tail += old_cap;
     }
-    s->queue_cap = old_cap * 2;
   }
 
   s->queue[s->queue_tail] = con_idx;
@@ -192,13 +157,8 @@ static void enqueue_watching(core_csp_store_t *s, core_csp_var_id_t var) {
 }
 
 static void trail_save(core_csp_store_t *s, core_csp_var_id_t var) {
-  if (s->trail_len >= s->trail_cap) {
-    int32_t new_cap = grown_cap(s->trail_cap, 64, s->trail_len);
-    s->trail = grow_zeroed(s->trail, s->trail_cap, new_cap,
-                           sizeof(csp_trail_entry_t));
-    s->trail_cap = new_cap;
-  }
-
+  reserve_zeroed((void **)&s->trail, &s->trail_cap, s->trail_len + 1,
+                 sizeof(csp_trail_entry_t));
   s->trail[s->trail_len].var = var;
   s->trail[s->trail_len].old_domain = core_csp_dom_clone(&s->vars[var].domain);
   s->trail_len++;
@@ -215,10 +175,6 @@ static void update_ground(core_csp_store_t *s, core_csp_var_id_t var) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle
-// ---------------------------------------------------------------------------
-
 core_csp_store_t *core_csp_store_new(void) {
   core_csp_store_t *s = core_alloc(core_csp_store_t);
   s->queue_cap = 64;
@@ -233,7 +189,6 @@ void core_csp_store_free(core_csp_store_t *s) {
     return;
   }
 
-  // Free variable names and their owned domains.
   for (int32_t i = 0; i < s->var_count; i++) {
     core_free(s->vars[i].name.data);
     core_csp_dom_free(&s->vars[i].domain);
@@ -241,7 +196,6 @@ void core_csp_store_free(core_csp_store_t *s) {
 
   core_free(s->vars);
 
-  // Free constraints.
   for (int32_t i = 0; i < s->con_count; i++) {
     core_free(s->constraints[i].vars);
     core_free(s->constraints[i].coeffs);
@@ -250,18 +204,15 @@ void core_csp_store_free(core_csp_store_t *s) {
 
   core_free(s->constraints);
 
-  // Free watchlists.
   for (int32_t i = 0; i < s->watchlist_cap; i++) {
     core_free(s->watchlist[i].indices);
   }
 
   core_free(s->watchlist);
 
-  // Free queue.
   core_free(s->queue);
   core_free(s->in_queue);
 
-  // Free trail.
   for (int32_t i = 0; i < s->trail_len; i++) {
     core_csp_dom_free(&s->trail[i].old_domain);
   }
@@ -271,17 +222,10 @@ void core_csp_store_free(core_csp_store_t *s) {
   core_free(s);
 }
 
-// ---------------------------------------------------------------------------
-// Variables
-// ---------------------------------------------------------------------------
-
 core_csp_var_id_t core_csp_new_var(core_csp_store_t *s, core_string_t name,
                                    core_csp_domain_t dom) {
-  if (s->var_count >= s->var_cap) {
-    int32_t new_cap = grown_cap(s->var_cap, 16, s->var_count);
-    s->vars = grow_zeroed(s->vars, s->var_cap, new_cap, sizeof(core_csp_var_t));
-    s->var_cap = new_cap;
-  }
+  reserve_zeroed((void **)&s->vars, &s->var_cap, s->var_count + 1,
+                 sizeof(core_csp_var_t));
 
   core_csp_var_id_t id = s->var_count;
   core_csp_var_t *v = &s->vars[s->var_count++];
@@ -335,10 +279,6 @@ core_csp_int_result_t core_csp_var_value(core_csp_store_t *s,
   return core_result_ok(core_csp_int_result_t, s->vars[v].value);
 }
 
-// ---------------------------------------------------------------------------
-// Variable queries
-// ---------------------------------------------------------------------------
-
 int32_t core_csp_var_count(const core_csp_store_t *s) { return s->var_count; }
 
 int32_t core_csp_dom_iterate(core_csp_store_t *s, core_csp_var_id_t v,
@@ -385,34 +325,24 @@ int32_t core_csp_dom_iterate(core_csp_store_t *s, core_csp_var_id_t v,
     }
     break;
   }
-  default: // empty
+  default:
     break;
   }
 
   return count;
 }
 
-// ---------------------------------------------------------------------------
-// Constraint posting
-// ---------------------------------------------------------------------------
-
 static int32_t add_constraint(core_csp_store_t *s, core_csp_constraint_t con) {
-  if (s->con_count >= s->con_cap) {
-    int32_t new_cap = grown_cap(s->con_cap, 16, s->con_count);
-    s->constraints = grow_zeroed(s->constraints, s->con_cap, new_cap,
-                                 sizeof(core_csp_constraint_t));
-    s->con_cap = new_cap;
-  }
+  reserve_zeroed((void **)&s->constraints, &s->con_cap, s->con_count + 1,
+                 sizeof(core_csp_constraint_t));
 
   int32_t idx = s->con_count;
   s->constraints[s->con_count++] = con;
 
-  // Add to watchlists.
   for (int32_t i = 0; i < con.var_count; i++) {
     watchlist_add(s, con.vars[i], idx);
   }
 
-  // Enqueue for initial propagation.
   enqueue_constraint(s, idx);
 
   return idx;
@@ -531,7 +461,7 @@ bool core_csp_post_in_with_provenance(core_csp_store_t *s, core_csp_var_id_t x,
   con.var_count = 1;
   con.vars = core_alloc_array(core_csp_var_id_t, 1);
   con.vars[0] = x;
-  con.in_domain = dom; // Takes ownership.
+  con.in_domain = dom;
   con.provenance = provenance;
 
   add_constraint(s, con);
@@ -583,17 +513,9 @@ bool core_csp_post_alldiff_with_provenance(core_csp_store_t *s,
   return core_csp_propagate(s);
 }
 
-// ---------------------------------------------------------------------------
-// Backtracking
-// ---------------------------------------------------------------------------
-
 void core_csp_push_state(core_csp_store_t *s) {
-  if (s->cp_count >= s->cp_cap) {
-    int32_t new_cap = grown_cap(s->cp_cap, 16, s->cp_count);
-    s->choice_points = grow_zeroed(s->choice_points, s->cp_cap, new_cap,
-                                   sizeof(csp_choice_point_t));
-    s->cp_cap = new_cap;
-  }
+  reserve_zeroed((void **)&s->choice_points, &s->cp_cap, s->cp_count + 1,
+                 sizeof(csp_choice_point_t));
 
   s->choice_points[s->cp_count].trail_mark = s->trail_len;
   s->choice_points[s->cp_count].con_mark = s->con_count;
@@ -607,18 +529,15 @@ void core_csp_pop_state(core_csp_store_t *s) {
 
   csp_choice_point_t cp = s->choice_points[--s->cp_count];
 
-  // Undo trail entries in reverse order.
   for (int32_t i = s->trail_len - 1; i >= cp.trail_mark; i--) {
     core_csp_var_id_t var = s->trail[i].var;
     core_csp_dom_free(&s->vars[var].domain);
     s->vars[var].domain = s->trail[i].old_domain;
-    // Don't free trail entry's domain — it was moved into the variable.
     update_ground(s, var);
   }
 
   s->trail_len = cp.trail_mark;
 
-  // Remove constraints added since the choice point.
   for (int32_t i = s->con_count - 1; i >= cp.con_mark; i--) {
     watchlist_remove(s, i);
     core_free(s->constraints[i].vars);
@@ -630,7 +549,6 @@ void core_csp_pop_state(core_csp_store_t *s) {
   s->failed = false;
   s->failed_constraint = -1;
 
-  // Clear the propagation queue.
   s->queue_head = 0;
   s->queue_tail = 0;
 
@@ -638,22 +556,16 @@ void core_csp_pop_state(core_csp_store_t *s) {
     memset(s->in_queue, 0, s->in_queue_cap * sizeof(bool));
   }
 
-  // Reset entailment and failed flags for all surviving constraints.
   for (int32_t i = 0; i < s->con_count; i++) {
     s->constraints[i].entailed = false;
     s->constraints[i].failed = false;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Propagation
-// ---------------------------------------------------------------------------
-
 static bool propagate_eq(core_csp_store_t *s, core_csp_constraint_t *con) {
   core_csp_var_id_t x = con->vars[0];
   core_csp_var_id_t y = con->vars[1];
 
-  // Intersect X with Y's domain.
   core_csp_domain_t y_clone = core_csp_dom_clone(&s->vars[y].domain);
   trail_save(s, x);
 
@@ -664,7 +576,6 @@ static bool propagate_eq(core_csp_store_t *s, core_csp_constraint_t *con) {
 
   core_csp_dom_free(&y_clone);
 
-  // Intersect Y with X's domain.
   core_csp_domain_t x_clone = core_csp_dom_clone(&s->vars[x].domain);
   trail_save(s, y);
 
@@ -682,7 +593,6 @@ static bool propagate_eq(core_csp_store_t *s, core_csp_constraint_t *con) {
     return false;
   }
 
-  // Check entailment: both ground and equal.
   if (s->vars[x].ground && s->vars[y].ground &&
       s->vars[x].value == s->vars[y].value) {
     con->entailed = true;
@@ -720,7 +630,6 @@ static bool propagate_ne(core_csp_store_t *s, core_csp_constraint_t *con) {
   core_csp_var_id_t x = con->vars[0];
   core_csp_var_id_t y = con->vars[1];
 
-  // If X is ground, remove X's value from Y.
   if (s->vars[x].ground) {
     if (core_csp_dom_contains(&s->vars[y].domain, s->vars[x].value)) {
       trail_save(s, y);
@@ -736,7 +645,6 @@ static bool propagate_ne(core_csp_store_t *s, core_csp_constraint_t *con) {
     }
   }
 
-  // If Y is ground, remove Y's value from X.
   if (s->vars[y].ground) {
     if (core_csp_dom_contains(&s->vars[x].domain, s->vars[y].value)) {
       trail_save(s, x);
@@ -752,7 +660,6 @@ static bool propagate_ne(core_csp_store_t *s, core_csp_constraint_t *con) {
     }
   }
 
-  // Entailed if both ground and not equal.
   if (s->vars[x].ground && s->vars[y].ground &&
       s->vars[x].value != s->vars[y].value) {
     con->entailed = true;
@@ -765,7 +672,6 @@ static bool propagate_lt(core_csp_store_t *s, core_csp_constraint_t *con) {
   core_csp_var_id_t x = con->vars[0];
   core_csp_var_id_t y = con->vars[1];
 
-  // X.max < Y.max (so X.max <= Y.max - 1)
   int64_t y_max = core_csp_dom_max(&s->vars[y].domain);
   trail_save(s, x);
 
@@ -774,7 +680,6 @@ static bool propagate_lt(core_csp_store_t *s, core_csp_constraint_t *con) {
     enqueue_watching(s, x);
   }
 
-  // Y.min > X.min (so Y.min >= X.min + 1)
   int64_t x_min = core_csp_dom_min(&s->vars[x].domain);
   trail_save(s, y);
 
@@ -790,7 +695,6 @@ static bool propagate_lt(core_csp_store_t *s, core_csp_constraint_t *con) {
     return false;
   }
 
-  // Entailed if X.max < Y.min.
   if (core_csp_dom_max(&s->vars[x].domain) <
       core_csp_dom_min(&s->vars[y].domain)) {
     con->entailed = true;
@@ -803,7 +707,6 @@ static bool propagate_le(core_csp_store_t *s, core_csp_constraint_t *con) {
   core_csp_var_id_t x = con->vars[0];
   core_csp_var_id_t y = con->vars[1];
 
-  // X.max <= Y.max
   int64_t y_max = core_csp_dom_max(&s->vars[y].domain);
   trail_save(s, x);
 
@@ -812,7 +715,6 @@ static bool propagate_le(core_csp_store_t *s, core_csp_constraint_t *con) {
     enqueue_watching(s, x);
   }
 
-  // Y.min >= X.min
   int64_t x_min = core_csp_dom_min(&s->vars[x].domain);
   trail_save(s, y);
 
@@ -852,17 +754,10 @@ static bool propagate_in(core_csp_store_t *s, core_csp_constraint_t *con) {
     return false;
   }
 
-  con->entailed = true; // IN constraint only needs to fire once.
+  con->entailed = true;
 
   return true;
 }
-
-// ---------------------------------------------------------------------------
-// LINEAR propagator: a1*X1 + a2*X2 + ... = c
-//
-// Bounds propagation: for each Xi, compute the feasible range of Xi
-// from the bounds of all other variables, then narrow Xi's domain.
-// ---------------------------------------------------------------------------
 
 typedef __int128 csp_i128_t;
 typedef unsigned __int128 csp_u128_t;
@@ -1038,31 +933,14 @@ static bool propagate_linear(core_csp_store_t *s, core_csp_constraint_t *con) {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// ALLDIFF propagator: Régin's algorithm
-//
-// Uses maximum bipartite matching to achieve domain consistency.
-// 1. Build bipartite graph: variables ↔ values
-// 2. Find maximum matching via augmenting paths
-// 3. Identify edges that cannot participate in any maximum matching
-// 4. Remove those values from domains
-// ---------------------------------------------------------------------------
-
-// Value node indexing: values in the union of all domains are mapped
-// to indices 0..num_values-1 via a sorted unique array.
-
 typedef struct {
-  // Value mapping
-  int64_t *vals; // Sorted unique values from all domains
+  int64_t *vals;
   int32_t num_vals;
 
-  // Matching: match_var[i] = value index matched to var i, or -1
-  //           match_val[j] = var index matched to value j, or -1
   int32_t *match_var;
   int32_t *match_val;
 
-  // Adjacency: for each variable, which value indices are in its domain
-  int32_t **adj; // adj[i] = array of value indices
+  int32_t **adj;
   int32_t *adj_count;
 
   int32_t num_vars;
@@ -1075,7 +953,6 @@ static int cmp_int64(const void *a, const void *b) {
 }
 
 static int32_t val_index(const int64_t *vals, int32_t num_vals, int64_t v) {
-  // Binary search in sorted vals array.
   int32_t lo = 0, hi = num_vals - 1;
 
   while (lo <= hi) {
@@ -1093,8 +970,6 @@ static int32_t val_index(const int64_t *vals, int32_t num_vals, int64_t v) {
   return -1;
 }
 
-// Augmenting path search from an unmatched variable.
-// Returns true if an augmenting path was found (and matching updated).
 static bool augment(alldiff_graph_t *g, int32_t var, bool *visited) {
   for (int32_t k = 0; k < g->adj_count[var]; k++) {
     int32_t val_idx = g->adj[var][k];
@@ -1104,7 +979,6 @@ static bool augment(alldiff_graph_t *g, int32_t var, bool *visited) {
     }
     visited[val_idx] = true;
 
-    // If this value is unmatched, or its current match can be rerouted
     if (g->match_val[val_idx] < 0 ||
         augment(g, g->match_val[val_idx], visited)) {
       g->match_var[var] = val_idx;
@@ -1116,7 +990,6 @@ static bool augment(alldiff_graph_t *g, int32_t var, bool *visited) {
   return false;
 }
 
-// Find maximum matching via Kuhn's algorithm (augmenting paths).
 static int32_t max_matching(alldiff_graph_t *g) {
   int32_t matched = 0;
 
@@ -1138,14 +1011,6 @@ static int32_t max_matching(alldiff_graph_t *g) {
   return matched;
 }
 
-// Tarjan's SCC on the residual graph to find prunable edges.
-// In the residual graph:
-//   - Matched edges go from value → variable
-//   - Unmatched edges go from variable → value
-//   - Free (unmatched) values are roots for DFS
-// An edge (var, val) can be pruned if it's not in the matching AND
-// var and val are in different SCCs of the residual graph.
-
 typedef struct {
   int32_t *stack;
   bool *on_stack;
@@ -1155,11 +1020,9 @@ typedef struct {
   int32_t stack_top;
   int32_t next_index;
   int32_t next_scc;
-  int32_t total_nodes; // num_vars + num_vals
+  int32_t total_nodes;
 } scc_state_t;
 
-// Node numbering: variables are 0..num_vars-1, values are
-// num_vars..num_vars+num_vals-1
 #define VAR_NODE(i) (i)
 #define VAL_NODE(j, nv) ((nv) + (j))
 
@@ -1174,12 +1037,11 @@ static void scc_strongconnect(alldiff_graph_t *g, scc_state_t *st,
   int32_t nv = g->num_vars;
 
   if (node < nv) {
-    // Variable node: edges to unmatched values
     int32_t var = node;
     for (int32_t k = 0; k < g->adj_count[var]; k++) {
       int32_t val_idx = g->adj[var][k];
       if (val_idx == g->match_var[var]) {
-        continue; // Skip matched edge (goes other direction)
+        continue;
       }
       int32_t target = VAL_NODE(val_idx, nv);
       if (st->index[target] < 0) {
@@ -1194,7 +1056,6 @@ static void scc_strongconnect(alldiff_graph_t *g, scc_state_t *st,
       }
     }
   } else {
-    // Value node: edge to matched variable (if any)
     int32_t val_idx = node - nv;
     int32_t matched_var = g->match_val[val_idx];
     if (matched_var >= 0) {
@@ -1212,7 +1073,6 @@ static void scc_strongconnect(alldiff_graph_t *g, scc_state_t *st,
     }
   }
 
-  // Root of SCC?
   if (st->lowlink[node] == st->index[node]) {
     int32_t scc = st->next_scc++;
     int32_t w;
@@ -1232,8 +1092,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     return true;
   }
 
-  // Matching-based propagation expands domains into individual values. For
-  // very broad intervals, defer this constraint until domains are narrowed.
   const int32_t max_expanded_values = 1 << 20;
   int32_t total_vals_cap = 0;
   bool broad_domain = false;
@@ -1257,7 +1115,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
   int64_t *all_vals = core_alloc_array(int64_t, total_vals_cap + 1);
   int32_t all_count = 0;
 
-  // Collect callback
   for (int32_t i = 0; i < n; i++) {
     core_csp_domain_t *dom = &s->vars[con->vars[i]].domain;
 
@@ -1288,7 +1145,7 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
       }
       break;
     }
-    default: // empty
+    default:
       con->failed = true;
       s->failed = true;
       core_free(all_vals);
@@ -1296,7 +1153,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     }
   }
 
-  // Sort and deduplicate
   qsort(all_vals, all_count, sizeof(int64_t), cmp_int64);
   int32_t unique_count = 0;
   for (int32_t i = 0; i < all_count; i++) {
@@ -1305,7 +1161,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     }
   }
 
-  // Build graph
   alldiff_graph_t g;
   g.num_vars = n;
   g.num_vals = unique_count;
@@ -1355,17 +1210,14 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     }
   }
 
-  // Find maximum matching
   int32_t matched = max_matching(&g);
 
   if (matched < n) {
-    // Not enough values to satisfy alldiff → fail
     con->failed = true;
     s->failed = true;
     goto cleanup;
   }
 
-  // Run Tarjan's SCC on residual graph to find prunable edges.
   int32_t total_nodes = n + unique_count;
 
   scc_state_t st;
@@ -1382,7 +1234,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     st.index[i] = -1;
   }
 
-  // Start DFS from free (unmatched) value nodes, then remaining.
   for (int32_t j = 0; j < unique_count; j++) {
     if (g.match_val[j] < 0 && st.index[VAL_NODE(j, n)] < 0) {
       scc_strongconnect(&g, &st, VAL_NODE(j, n));
@@ -1394,9 +1245,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     }
   }
 
-  // Prune: remove (var, val) edges where:
-  //   - The edge is NOT in the matching, AND
-  //   - var and val are in different SCCs
   for (int32_t i = 0; i < n; i++) {
     core_csp_var_id_t vi = con->vars[i];
     int32_t var_scc = st.scc_id[VAR_NODE(i)];
@@ -1404,7 +1252,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     for (int32_t k = 0; k < g.adj_count[i]; k++) {
       int32_t val_idx = g.adj[i][k];
 
-      // Skip matched edge
       if (g.match_var[i] == val_idx) {
         continue;
       }
@@ -1412,14 +1259,12 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
       int32_t val_scc = st.scc_id[VAL_NODE(val_idx, n)];
 
       if (var_scc != val_scc) {
-        // This value can be pruned from this variable's domain.
         trail_save(s, vi);
         core_csp_dom_remove_value(&s->vars[vi].domain, all_vals[val_idx]);
 
         if (core_csp_dom_is_empty(&s->vars[vi].domain)) {
           con->failed = true;
           s->failed = true;
-          // Free SCC state
           core_free(st.stack);
           core_free(st.on_stack);
           core_free(st.index);
@@ -1434,7 +1279,6 @@ static bool propagate_alldiff(core_csp_store_t *s, core_csp_constraint_t *con) {
     }
   }
 
-  // Check entailment: all vars ground with distinct values
   bool all_ground = true;
   for (int32_t i = 0; i < n; i++) {
     if (!s->vars[con->vars[i]].ground) {

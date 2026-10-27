@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -5,16 +6,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <spawn.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
-extern char **environ;
 
 double n00bb_profile_seconds(void);
 
 #include "driver.h"
+#include "lib/os.h"
 #include "compiler_cli.h"
 #include "compiler_tu.h"
 #include "compiler_link.h"
@@ -22,6 +21,9 @@ double n00bb_profile_seconds(void);
 #include "compiler_buffer_borrow.h"
 #include "compiler_ir_setup.h"
 #include "compiler_lower.h"
+#include "config.h"
+#include "diagnostics.h"
+#include "runtime_panic.h"
 #include "interface_summaries.h"
 #include "storage_placement.h"
 #include "compiler_cache.h"
@@ -56,7 +58,7 @@ double n00bb_profile_seconds(void);
 #include "lib/target.h"
 #include "lib/object_section.h"
 #include "lib/work_queue.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "parse/commander.h"
 #include "parse/bnf.h"
 #include "parse/grammar.h"
@@ -102,10 +104,10 @@ n00bb_prepare_ir_bindings(core_link_unit_t *link,
     if (!bind_link_declarations_to_ir(analysis->grammar, link, analysis,
                                       stage_kind)) {
         if (!core_link_unit_has_fatal_diagnostics(link))
-            core_diagnostics_report(core_translation_unit_diagnostics(
+            n00bb_internal_error(core_translation_unit_diagnostics(
                     analysis->units.data[0]), analysis->units.data[0],
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0031"),
-                CORE_STRING_STATIC("could not bind link declarations to Lantern IR"));
+                (core_diag_location_t){0}, "preparing code generation",
+                "could not bind program declarations to their IR");
         return false;
     }
     if (!select_storage_placement(analysis)) return false;
@@ -113,16 +115,16 @@ n00bb_prepare_ir_bindings(core_link_unit_t *link,
         if (!core_diagnostics_failed(core_translation_unit_diagnostics(
                 analysis->units.data[0])) &&
             !core_link_unit_has_fatal_diagnostics(link))
-            core_diagnostics_report(core_link_unit_diagnostics(link), nullptr,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0032"),
-                CORE_STRING_STATIC("Lantern rejected the link unit"));
+            n00bb_internal_error(core_link_unit_diagnostics(link), nullptr,
+                (core_diag_location_t){0}, "preparing code generation",
+                "the program's declarations failed validation");
         return false;
     }
     if (!bind_link_references_to_nodes(analysis->grammar, link)) {
-        core_diagnostics_report(core_translation_unit_diagnostics(
+        n00bb_internal_error(core_translation_unit_diagnostics(
                 analysis->units.data[0]), analysis->units.data[0],
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0033"),
-            CORE_STRING_STATIC("could not bind link references to source nodes"));
+            (core_diag_location_t){0}, "preparing code generation",
+            "could not bind references to their source");
         return false;
     }
     for (size_t i = 0; i < analysis->units.len; i++)
@@ -130,10 +132,10 @@ n00bb_prepare_ir_bindings(core_link_unit_t *link,
                 analysis->units.data[i], analysis->ir_context)) {
             if (!core_diagnostics_failed(core_translation_unit_diagnostics(
                     analysis->units.data[i])))
-                core_diagnostics_report(core_translation_unit_diagnostics(
+                n00bb_internal_error(core_translation_unit_diagnostics(
                         analysis->units.data[i]), analysis->units.data[i],
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0034"),
-                    CORE_STRING_STATIC("could not validate module declarations in Lantern IR"));
+                    (core_diag_location_t){0}, "preparing code generation",
+                    "could not validate the module's declarations");
             return false;
         }
     return true;
@@ -151,21 +153,24 @@ typedef struct {
 } n00bb_call_actual_t;
 core_list_decl(n00bb_call_actual_t);
 
+bool
+n00bb_output_target_profile(core_target_desc_t *target)
+{
+    core_string_t selected = n00bb_setting_string(
+        N00BB_KEY_BUILD_TARGET);
+    if (n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME
+        || !selected.u8_bytes
+        || core_string_eq(selected, CORE_STRING_STATIC("host")))
+        return core_target_host(target);
+    return core_target_profile(selected, 0, target);
+}
 
 bool
-n00bb_host_target_profile(core_target_desc_t *target)
+n00bb_cross_target(core_target_desc_t *target)
 {
-#if defined(__APPLE__) && defined(__aarch64__)
-    return core_target_profile(CORE_STRING_STATIC("arm64-macos"), 0, target);
-#elif defined(__linux__) && defined(__x86_64__)
-    return core_target_profile(CORE_STRING_STATIC("x86_64-linux"), 0, target);
-#elif defined(_WIN32) && (defined(_M_X64) || defined(__x86_64__))
-    return core_target_profile(CORE_STRING_STATIC("x86_64-windows"), 0,
-                               target);
-#else
-    (void)target;
-    return false;
-#endif
+    core_target_desc_t host;
+    return n00bb_output_target_profile(target) && core_target_host(&host)
+        && !core_string_eq(target->triple, host.triple);
 }
 
 
@@ -177,8 +182,6 @@ core_list_decl(th_member);
 typedef bool (*n00bb_expression_result_hook_t)(ir_lower_context_t *context,
     ir_value_t **value, void *data);
 
-
-core_list_decl(uint32_t);
 
 typedef struct {
     parse_tree_t *expression;
@@ -250,6 +253,19 @@ static ir_value_t *n00bb_record_field_address(
 static ir_value_t *n00bb_addressable_expression_address(
     ir_lower_context_t *context, parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *node, ir_span_t span);
+static bool n00bb_is_narrowed_use(ir_lower_context_t *context,
+                                  parse_tree_t *node, th_type *storage);
+static void n00bb_note_narrowed_write(ir_lower_context_t *context,
+                                      parse_grammar_t *grammar,
+                                      parse_tree_t *node,
+                                      parse_sym_entry_t *symbol);
+static bool n00bb_store_written_narrowed_roots(ir_lower_context_t *context,
+                                               parse_tree_t *anchor,
+                                               ir_span_t span);
+static ir_value_t *n00bb_narrowed_place(
+    ir_lower_context_t *context, parse_grammar_t *grammar,
+    parse_tree_t *node, parse_sym_entry_t *symbol, th_type *storage,
+    ir_span_t span);
 static th_type *lowered_rest_type(th_ctx *types, const th_param *source,
                                   th_mode mode, th_param *lowered);
 static ir_value_t *n00bb_emit_outcome_payload(ir_lower_context_t *context,
@@ -268,8 +284,6 @@ static bool n00bb_check_phase_read(ir_lower_context_t *context,
                                    void *state);
 static bool n00bb_failure_channel_accepts(ir_lower_context_t *context,
                                            th_type *failure);
-static bool n00bb_reject_runtime_initializer_failure(
-    ir_lower_context_t *context, ir_span_t span);
 
 
 static bool n00bb_register_callback_representation(ir_module_t *module,
@@ -506,6 +520,14 @@ typedef struct {
 } n00bb_pending_copyouts_t;
 core_list_decl(n00bb_pending_copyouts_t);
 
+typedef struct {
+    parse_sym_entry_t *symbol;
+    parse_tree_t *anchor;
+    ir_local_t *local;
+    bool written;
+} n00bb_narrowed_root_t;
+core_list_decl(n00bb_narrowed_root_t);
+
 static void
 n00bb_order_copyouts(core_list_t(n00bb_copyout_t) *copyouts)
 {
@@ -554,11 +576,13 @@ typedef struct {
     core_list_t(n00bb_require_frame_t) requires;
     core_list_t(n00bb_switch_frame_t) switches;
     core_list_t(n00bb_typecase_frame_t) typecases;
+    size_t skipped_failures;
     core_list_t(n00bb_value_block_frame_t) value_blocks;
     core_list_t(n00bb_try_frame_t) tries;
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_copyout_t) parameters_to_copy_out;
     core_list_t(n00bb_pending_copyouts_t) pending_call_copyouts;
+    core_list_t(n00bb_narrowed_root_t) narrowed_roots;
     core_list_t(n00bb_default_param_t) default_params;
     n00bb_default_param_t *active_default_param;
     core_list_t(n00bb_tuple_parts_t) tuple_parts;
@@ -567,6 +591,9 @@ typedef struct {
     ir_block_t *condition_scratch;
     uint64_t next_block_id;
     uint64_t next_control_order;
+    ir_block_t *switch_gap_join;
+    parse_tree_t *switch_gap_subject;
+    core_string_t switch_gap_missing;
 } n00bb_lower_context_t;
 
 static ir_instr_t *n00bb_emit_closed_trait_call(
@@ -683,19 +710,208 @@ function_with_return_type(th_ctx *types, th_type *function,
 
 
 static ir_lower_result_t
+lower_internal_string(ir_lower_context_t *context, ir_span_t span,
+                      core_string_t what);
+
+static ir_lower_result_t
 lower_error_text(ir_lower_context_t *context, ir_diagcode_t code,
                  ir_span_t span, core_string_t message)
 {
-    if (context && context->diagnostics) {
-        ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics, code,
-                                              span, (core_string_t){});
-        ir_diag_message(diagnostic, context->diagnostics, message);
-    }
-    return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    (void)code;
+    return lower_internal_string(context, span, message);
 }
 
 #define lower_error(context, code, span, literal) \
     lower_error_text((context), (code), (span), CORE_STRING_STATIC(literal))
+
+static core_diag_location_t
+span_location(ir_span_t span)
+{
+    if (!ir_span_known(span)) return (core_diag_location_t){0};
+    return (core_diag_location_t){
+        .line = span.start_line,
+        .column = span.start_col,
+        .end_line = span.end_line,
+        .end_column = span.end_col,
+        .has_location = true,
+    };
+}
+
+static void report_at(core_translation_unit_t *unit, n00bb_diag_t id,
+                      const ir_instr_t *in, n00bb_text_t message,
+                      n00bb_args_t args);
+
+static bool
+ir_code_registry_entry(ir_diagcode_t code, n00bb_diag_t *out)
+{
+    switch (code) {
+    case IR_DIAG_UNSET_LOCAL: *out = N00B_DIAG_READ_BEFORE_ASSIGNMENT; return true;
+    case IR_DIAG_DEAD_CODE: *out = N00B_DIAG_UNREACHABLE_CODE; return true;
+    case IR_DIAG_UNUSED_LOCAL: *out = N00B_DIAG_UNUSED_ASSIGNMENT; return true;
+    case IR_DIAG_UNUSED_RESULT: *out = N00B_DIAG_UNUSED_VALUE; return true;
+    case IR_DIAG_UNBOUNDED_RECURSION:
+        *out = N00B_DIAG_UNBOUNDED_RECURSION;
+        return true;
+    case IR_DIAG_UNPROVEN_OPTION: *out = N00B_DIAG_OPTION_NOT_PROVEN; return true;
+    case IR_DIAG_GUARDED_WRITE: *out = N00B_DIAG_VIEW_WRITE; return true;
+    case IR_DIAG_VIEW_ESCAPE: *out = N00B_DIAG_VIEW_ESCAPE; return true;
+    case IR_DIAG_IMMUTABLE_REINITIALIZED:
+        *out = N00B_DIAG_LET_ASSIGNED_TWICE;
+        return true;
+    default: return false;
+    }
+}
+
+static size_t
+report_ir_diagnostic(void *state, ir_diags_t *d, ir_diagcode_t code,
+                     core_diag_severity_t severity, core_diag_location_t at,
+                     core_string_t message)
+{
+    const char *policy = state;
+    core_diagnostics_t *destination = ir_diags_destination(d);
+    const core_translation_unit_t *unit = ir_diags_unit(d);
+    if (!destination) return SIZE_MAX;
+    size_t index = core_diagnostics_count(destination);
+    n00bb_diag_t id;
+    if (!ir_code_registry_entry(code, &id)) {
+        if (severity != CORE_DIAG_ERROR && severity != CORE_DIAG_FATAL
+            && severity != CORE_DIAG_INTERNAL)
+            return SIZE_MAX;
+        n00bb_internal_error(destination, unit, at, "analyzing the program",
+                             "%.*s", (int)message.u8_bytes, message.data);
+        return core_diagnostics_count(destination) > index ? index : SIZE_MAX;
+    }
+    core_diag_severity_t registered = n00bb_diag_severity(id);
+    bool promoted = registered == CORE_DIAG_WARNING
+        && severity == CORE_DIAG_ERROR;
+    if (!core_diagnostics_report_at(destination, unit,
+            promoted ? CORE_DIAG_ERROR : registered, n00bb_diag_code(id),
+            n00bb_diag_title(id), at)
+        || core_diagnostics_count(destination) == index)
+        return SIZE_MAX;
+    if (promoted && policy)
+        n00bb_report_note(destination, N00B_TEXT_PROMOTED_BY_POLICY,
+                          N00BB_ARGS(ARG_NATIVE(policy)));
+    else if (promoted)
+        n00bb_report_note(destination, N00B_TEXT_PROMOTED_BY_DEFAULT_POLICY,
+                          N00BB_NO_ARGS);
+    return index;
+}
+
+static ir_diags_t *
+attach_ir_diags(ir_ctx_t *ir_context, ir_policy_t *policy,
+                core_translation_unit_t *unit, const char *policy_name)
+{
+    ir_diags_t *diagnostics = ir_diags_new_attached(ir_context, policy,
+        core_translation_unit_diagnostics(unit), unit);
+    if (!diagnostics) return nullptr;
+    ir_diags_set_reporter(diagnostics, report_ir_diagnostic,
+                          (void *)policy_name);
+    ir_diags_set_text(diagnostics, n00bb_ir_text, nullptr);
+    return diagnostics;
+}
+
+static core_diagnostics_t *
+lower_diagnostics(ir_lower_context_t *context)
+{
+    return context ? ir_diags_destination(context->diagnostics) : nullptr;
+}
+
+static size_t
+lower_failures(ir_lower_context_t *context)
+{
+    return core_diagnostics_failures(lower_diagnostics(context));
+}
+
+static const core_translation_unit_t *
+lower_unit(ir_lower_context_t *context)
+{
+    return context ? ir_diags_unit(context->diagnostics) : nullptr;
+}
+
+static ir_lower_result_t
+lower_report(ir_lower_context_t *context, n00bb_diag_t id, ir_span_t span,
+             n00bb_text_t text, n00bb_args_t args)
+{
+    n00bb_report(lower_diagnostics(context), lower_unit(context), id,
+                 span_location(span), text, args);
+    return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+}
+
+static void
+lower_label(ir_lower_context_t *context, n00bb_text_t text, n00bb_args_t args)
+{
+    n00bb_report_label(lower_diagnostics(context), text, args);
+}
+
+static void
+lower_secondary(ir_lower_context_t *context, ir_span_t span,
+                n00bb_text_t text, n00bb_args_t args)
+{
+    if (ir_span_known(span))
+        n00bb_report_secondary(lower_diagnostics(context), nullptr,
+                               span_location(span), text, args);
+}
+
+static void
+lower_declared_secondary(ir_lower_context_t *context,
+                         parse_sym_entry_t *symbol, n00bb_text_t text,
+                         n00bb_args_t args)
+{
+    parse_sym_entry_t *origin = symbol ? canonical_symbol(symbol) : nullptr;
+    core_diag_location_t at = n00bb_symbol_location(origin);
+    if (at.has_location && origin->owner_unit)
+        n00bb_report_secondary(lower_diagnostics(context), origin->owner_unit,
+                               at, text, args);
+}
+
+static void
+lower_note(ir_lower_context_t *context, n00bb_text_t text, n00bb_args_t args)
+{
+    n00bb_report_note(lower_diagnostics(context), text, args);
+}
+
+static void
+lower_help(ir_lower_context_t *context, n00bb_text_t text, n00bb_args_t args)
+{
+    n00bb_report_help(lower_diagnostics(context), text, args);
+}
+
+static ir_lower_result_t
+lower_internal_string(ir_lower_context_t *context, ir_span_t span,
+                      core_string_t what)
+{
+    core_diagnostics_t *diagnostics = lower_diagnostics(context);
+    if (!diagnostics) return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    n00bb_lower_context_t *lower = context->user;
+    parse_sym_entry_t *function = lower ? lower->function_symbol : nullptr;
+    char stage[256];
+    if (function && function->name.u8_bytes
+        && !core_string_starts_with(function->name,
+                                    CORE_STRING_STATIC("__")))
+        snprintf(stage, sizeof(stage), "generating code for `%.*s`",
+                 (int)function->name.u8_bytes, function->name.data);
+    else
+        snprintf(stage, sizeof(stage), "generating code for top-level "
+                 "statements");
+    n00bb_internal_error(diagnostics, lower_unit(context),
+                         span_location(span), stage, "%.*s",
+                         (int)what.u8_bytes, what.data);
+    return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+}
+
+#define lower_internal(context, span, literal) \
+    lower_internal_string((context), (span), CORE_STRING_STATIC(literal))
+
+static ir_lower_result_t
+lower_failed_after(ir_lower_context_t *context, ir_span_t span,
+                   core_string_t what)
+{
+    core_diagnostics_t *diagnostics = lower_diagnostics(context);
+    if (diagnostics && core_diagnostics_failed(diagnostics))
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    return lower_internal_string(context, span, what);
+}
 
 static parse_token_info_t *
 last_tree_terminal(parse_tree_t *node)
@@ -724,6 +940,401 @@ lower_span_for_tree(ir_lower_context_t *context, parse_tree_t *node)
                         (uint32_t)parse_token_end_byte(last),
                         parse_token_line(first), parse_token_column(first),
                         parse_token_endline(last), parse_token_endcol(last));
+}
+
+static ir_span_t
+lower_span_for_first_token(ir_lower_context_t *context, parse_tree_t *node)
+{
+    parse_token_info_t *first = node ? parse_tree_find_first_terminal(node)
+                                     : nullptr;
+    if (!context || context->file_id < 0 || !first
+        || parse_token_end_byte(first) > UINT32_MAX)
+        return IR_SPAN_UNKNOWN;
+    return ir_span_make(context->file_id,
+                        (uint32_t)parse_token_start_byte(first),
+                        (uint32_t)parse_token_end_byte(first),
+                        parse_token_line(first), parse_token_column(first),
+                        parse_token_endline(first), parse_token_endcol(first));
+}
+
+static parse_tree_t *
+leaf_named(parse_tree_t *node, core_string_t name)
+{
+    if (!node) return nullptr;
+    if (core_tree_is_leaf(node))
+        return core_string_eq(first_token_text(node), name) ? node : nullptr;
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_tree_t *found = leaf_named(core_tree_child(node, i), name);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+static ir_span_t
+lower_symbol_name_span(ir_lower_context_t *context, parse_sym_entry_t *symbol)
+{
+    if (!symbol || !symbol->decl_node) return IR_SPAN_UNKNOWN;
+    parse_tree_t *name = leaf_named(symbol->decl_node, symbol->name);
+    return lower_span_for_tree(context, name ? name : symbol->decl_node);
+}
+
+static core_string_t
+source_text_of(const core_translation_unit_t *unit, parse_tree_t *node)
+{
+    if (!node) return (core_string_t){0};
+    parse_token_info_t *first = parse_tree_find_first_terminal(node);
+    parse_token_info_t *last = last_tree_terminal(node);
+    if (!unit || !first || !last) return (core_string_t){0};
+    core_string_t source = core_source_file_contents(&unit->source);
+    size_t start = parse_token_start_byte(first);
+    size_t end = parse_token_end_byte(last);
+    if (!source.data || end <= start || end > source.u8_bytes
+        || end - start > 60)
+        return (core_string_t){0};
+    core_string_t text = core_string_slice(source, start, end - start);
+    for (size_t i = 0; i < text.u8_bytes; i++)
+        if (text.data[i] == '\n' || text.data[i] == '\r')
+            return (core_string_t){0};
+    return text;
+}
+
+static core_string_t
+unqualified_name(core_string_t name)
+{
+    for (size_t i = name.u8_bytes; i > 0; i--)
+        if (name.data[i - 1] == '.')
+            return core_string_slice(name, i, name.u8_bytes - i);
+    return name;
+}
+
+static core_string_t
+lower_type_text(ir_lower_context_t *context, th_type *type)
+{
+    th_ctx *types = context && context->module
+        ? ir_module_types(context->module) : nullptr;
+    if (!types || !type) return core_string_dup(CORE_STRING_STATIC("?"));
+    core_string_t text = n00bb_print_type(types, type);
+    return core_string_dup(text.data ? text : CORE_STRING_STATIC("?"));
+}
+
+static void
+lower_type_text_pair(ir_lower_context_t *context, th_type *first,
+                     th_type *second, core_string_t *first_text,
+                     core_string_t *second_text)
+{
+    *first_text = lower_type_text(context, first);
+    *second_text = lower_type_text(context, second);
+    th_ctx *types = context && context->module
+        ? ir_module_types(context->module) : nullptr;
+    if (!types || !first || !second
+        || !core_string_eq(*first_text, *second_text)) return;
+    core_string_t first_qualified = n00bb_print_type_for_user(types, first);
+    core_string_t second_qualified = n00bb_print_type_for_user(types, second);
+    if (!first_qualified.data || !second_qualified.data) {
+        core_free(first_qualified.data);
+        core_free(second_qualified.data);
+        return;
+    }
+    core_free(first_text->data);
+    core_free(second_text->data);
+    *first_text = first_qualified;
+    *second_text = second_qualified;
+}
+
+static parse_sym_entry_t *
+lower_user_function(ir_lower_context_t *context)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    parse_sym_entry_t *function = lower ? lower->function_symbol : nullptr;
+    if (!function || core_string_starts_with(function->name,
+                                             CORE_STRING_STATIC("__")))
+        return nullptr;
+    return function;
+}
+
+static void
+report_uncaught_failure(ir_lower_context_t *context, ir_span_t span,
+                        th_type *error_type, n00bb_text_t source)
+{
+    parse_sym_entry_t *function = lower_user_function(context);
+    th_type *channel = function && function->type
+        ? th_func_error(function->type) : nullptr;
+    core_string_t error_text = lower_type_text(context, error_type);
+    if (!function) {
+        lower_report(context, N00B_DIAG_TOP_LEVEL_FAILURE, span,
+            N00B_TEXT_CAN_FAIL_WITH_BUT_IT,
+            N00BB_ARGS(ARG_PHRASE_ID(source), ARG_TEXT(error_text)));
+        lower_help(context, N00B_TEXT_HANDLE_THE_FAILURE_WITH_TRY,
+            N00BB_NO_ARGS);
+        core_free(error_text.data);
+        return;
+    }
+    if (!channel || th_is_nil(channel))
+        lower_report(context, N00B_DIAG_FAILURE_TYPE_MISMATCH, span,
+            N00B_TEXT_CAN_FAIL_WITH_BUT_DECLARES,
+            N00BB_ARGS(ARG_PHRASE_ID(source), ARG_TEXT(error_text),
+                       ARG_TEXT(function->name)));
+    else {
+        core_string_t channel_text = {0};
+        core_free(error_text.data);
+        lower_type_text_pair(context, error_type, channel, &error_text,
+                             &channel_text);
+        lower_report(context, N00B_DIAG_FAILURE_TYPE_MISMATCH, span,
+            N00B_TEXT_CAN_FAIL_WITH_BUT_FAILS,
+            N00BB_ARGS(ARG_PHRASE_ID(source), ARG_TEXT(error_text),
+                       ARG_TEXT(function->name), ARG_TEXT(channel_text)));
+        core_free(channel_text.data);
+    }
+    lower_help(context, N00B_TEXT_HANDLE_THE_FAILURE_WITH_TRY_2, N00BB_NO_ARGS);
+    core_free(error_text.data);
+}
+
+static core_string_t
+mode_keyword(th_mode mode)
+{
+    switch (mode) {
+    case TH_OUT: return CORE_STRING_STATIC("out");
+    case TH_INOUT: return CORE_STRING_STATIC("modify");
+    case TH_CONSUME: return CORE_STRING_STATIC("consume");
+    case TH_VIEW: return CORE_STRING_STATIC("view");
+    default: return CORE_STRING_STATIC("in");
+    }
+}
+
+static n00bb_text_t
+mode_parameter(th_mode mode)
+{
+    switch (mode) {
+    case TH_OUT: return N00B_TEXT_OUT_PARAMETER;
+    case TH_INOUT: return N00B_TEXT_MODIFY_PARAMETER;
+    case TH_CONSUME: return N00B_TEXT_CONSUME_PARAMETER;
+    case TH_VIEW: return N00B_TEXT_VIEW_PARAMETER;
+    default: return N00B_TEXT_IN_PARAMETER;
+    }
+}
+
+static core_string_t
+describe_parameter_target(th_mode mode, parse_sym_entry_t *callee,
+                          core_string_t parameter)
+{
+    if (parameter.u8_bytes && callee)
+        return n00bb_text(N00B_TEXT_PARAMETER_TARGET_NAMED,
+            N00BB_ARGS(ARG_TEXT(mode_keyword(mode)), ARG_TEXT(parameter),
+                       ARG_TEXT(callee->name)));
+    if (callee)
+        return n00bb_text(N00B_TEXT_PARAMETER_TARGET_OF,
+            N00BB_ARGS(ARG_TEXT(mode_keyword(mode)), ARG_TEXT(callee->name)));
+    return n00bb_text(N00B_TEXT_PARAMETER_TARGET,
+                      N00BB_ARGS(ARG_TEXT(mode_keyword(mode))));
+}
+
+static void
+report_unwritable_output(ir_lower_context_t *context,
+                         parse_grammar_t *grammar, parse_tree_t *argument,
+                         th_mode mode, parse_sym_entry_t *callee,
+                         core_string_t parameter)
+{
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    parse_tree_t *lvalue = n00bb_simple_lvalue(argument);
+    parse_sym_entry_t *variable = lvalue && lower
+        ? attached_symbol(grammar, lower->unit, lvalue) : nullptr;
+    core_string_t target = describe_parameter_target(mode, callee, parameter);
+    ir_span_t span = lower_span_for_tree(context, argument);
+    if (variable && variable->kind == PARSE_SYM_PARAM
+        && !(variable->has_mode && th_mode_produces_output(variable->mode))) {
+        th_mode own = variable->has_mode ? variable->mode : TH_IN;
+        lower_report(context, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, span,
+            N00B_TEXT_PARAMETER_CANNOT_BE_PASSED,
+            N00BB_ARGS(ARG_TEXT(variable->name),
+                       ARG_PHRASE_ID(mode_parameter(own)), ARG_TEXT(target)));
+        lower_declared_secondary(context, variable, N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(variable->name)));
+        lower_help(context, N00B_TEXT_DECLARE_AS_MODIFY_OR_COPY,
+            N00BB_ARGS(ARG_TEXT(variable->name), ARG_TEXT(variable->name)));
+    }
+    else if (variable && (variable->mutability == PARSE_SYM_IMMUTABLE
+                          || variable->mutability == PARSE_SYM_CONST)) {
+        core_string_t kind = variable->mutability == PARSE_SYM_CONST
+            ? CORE_STRING_STATIC("const") : CORE_STRING_STATIC("let");
+        lower_report(context, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, span,
+            N00B_TEXT_IS_A_SO_IT_CANNOT,
+            N00BB_ARGS(ARG_TEXT(variable->name), ARG_TEXT(kind),
+                       ARG_TEXT(target)));
+        lower_declared_secondary(context, variable, N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(variable->name)));
+        lower_help(context, N00B_TEXT_DECLARE_WITH_VAR,
+            N00BB_ARGS(ARG_TEXT(variable->name)));
+    }
+    else
+        lower_report(context, N00B_DIAG_OUTPUT_ARGUMENT_NOT_WRITABLE, span,
+            N00B_TEXT_ONLY_A_VARIABLE_FIELD_OR, N00BB_ARGS(ARG_TEXT(target)));
+    core_free(target.data);
+}
+
+static void
+report_argument_type(ir_lower_context_t *context, parse_tree_t *argument,
+                     th_type *actual, th_type *expected,
+                     parse_sym_entry_t *callee, core_string_t parameter)
+{
+    core_string_t actual_text = lower_type_text(context, actual);
+    core_string_t expected_text = lower_type_text(context, expected);
+    core_string_t text = source_text_of(lower_unit(context), argument);
+    ir_span_t span = lower_span_for_tree(context, argument);
+    if (parameter.u8_bytes && callee)
+        lower_report(context, N00B_DIAG_CALL_ARGUMENT_TYPE, span,
+            N00B_TEXT_IS_BUT_PARAMETER_OF_IS,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                : n00bb_text_form(N00B_TEXT_THIS_ARGUMENT)),
+            ARG_TEXT(actual_text), ARG_TEXT(parameter), ARG_TEXT(callee->name),
+            ARG_TEXT(expected_text)));
+    else
+        lower_report(context, N00B_DIAG_CALL_ARGUMENT_TYPE, span,
+            N00B_TEXT_IS_BUT_THE_EXTRA_ARGUMENTS,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                : n00bb_text_form(N00B_TEXT_THIS_ARGUMENT)),
+            ARG_TEXT(actual_text),
+            ARG_TEXT(callee ? callee->name
+                : n00bb_text_form(N00B_TEXT_THE_CALL)),
+            ARG_TEXT(expected_text)));
+    lower_label(context, N00B_TEXT_QUOTED_NAME,
+        N00BB_ARGS(ARG_TEXT(actual_text)));
+    if (callee)
+        lower_secondary(context, lower_span_for_tree(context,
+            callee->decl_node), N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(callee->name)));
+    core_free(actual_text.data);
+    core_free(expected_text.data);
+}
+
+static void
+report_not_writable(ir_lower_context_t *context, parse_tree_t *target,
+                    parse_sym_entry_t *root, n00bb_text_t part,
+                    core_string_t name)
+{
+    ir_span_t span = lower_span_for_tree(context, target);
+    core_string_t text = source_text_of(lower_unit(context), target);
+    core_string_t subject = n00bb_text(part, N00BB_ARGS(ARG_TEXT(name)));
+    if (root && root->kind == PARSE_SYM_PARAM
+        && !(root->has_mode && th_mode_produces_output(root->mode))) {
+        th_mode own = root->has_mode ? root->mode : TH_IN;
+        lower_report(context, N00B_DIAG_NOT_WRITABLE, span,
+            N00B_TEXT_PARAMETER_CANNOT_BE_ASSIGNED,
+            N00BB_ARGS(ARG_TEXT(root->name),
+                       ARG_PHRASE_ID(mode_parameter(own)), ARG_TEXT(subject)));
+        lower_declared_secondary(context, root, N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(root->name)));
+        lower_help(context, N00B_TEXT_DECLARE_IT_AS_MODIFY_TO,
+            N00BB_ARGS(ARG_TEXT(root->name)));
+    }
+    else if (root && (root->mutability == PARSE_SYM_IMMUTABLE
+                      || root->mutability == PARSE_SYM_CONST)) {
+        core_string_t kind = root->mutability == PARSE_SYM_CONST
+            ? CORE_STRING_STATIC("const") : CORE_STRING_STATIC("let");
+        lower_report(context, N00B_DIAG_NOT_WRITABLE, span,
+            N00B_TEXT_IS_A_SO_CANNOT_BE,
+            N00BB_ARGS(ARG_TEXT(root->name), ARG_TEXT(kind),
+                       ARG_TEXT(subject)));
+        lower_declared_secondary(context, root, N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(root->name)));
+        if (root->mutability == PARSE_SYM_IMMUTABLE)
+            lower_help(context, N00B_TEXT_DECLARE_WITH_VAR_TO_ALLOW,
+                N00BB_ARGS(ARG_TEXT(root->name)));
+    }
+    else if (text.u8_bytes)
+        lower_report(context, N00B_DIAG_NOT_WRITABLE, span,
+            N00B_TEXT_CANNOT_BE_ASSIGNED_HERE, N00BB_ARGS(ARG_TEXT(text)));
+    else
+        lower_report(context, N00B_DIAG_NOT_WRITABLE, span,
+            N00B_TEXT_THIS_CANNOT_BE_ASSIGNED_HERE, N00BB_NO_ARGS);
+    core_free(subject.data);
+}
+
+static bool
+skip_rejected_statement(ir_lower_context_t *context, parse_tree_t *node)
+{
+    n00bb_lower_context_t *lower = context->user;
+    if (lower) lower->skipped_failures++;
+    return ir_lower_suppress_emit(context, node);
+}
+
+static void
+report_let_reassigned(ir_lower_context_t *context, parse_tree_t *target,
+                      parse_sym_entry_t *symbol)
+{
+    lower_report(context, N00B_DIAG_LET_ASSIGNED_TWICE,
+        lower_span_for_tree(context, target), N00B_TEXT_IS_A_LET_SO_IT,
+        N00BB_ARGS(ARG_TEXT(symbol->name)));
+    lower_declared_secondary(context, symbol, N00B_TEXT_IS_DECLARED_HERE,
+        N00BB_ARGS(ARG_TEXT(symbol->name)));
+    if (symbol->initializer_node)
+        lower_secondary(context,
+            lower_span_for_tree(context, symbol->initializer_node),
+            N00B_TEXT_IT_IS_FIRST_INITIALIZED_HERE,
+            N00BB_NO_ARGS);
+    lower_help(context, N00B_TEXT_DECLARE_WITH_VAR_TO_ALLOW_2,
+        N00BB_ARGS(ARG_TEXT(symbol->name)));
+}
+
+static ir_lower_result_t
+lower_builtin_failure(ir_lower_context_t *context, bool valid, ir_span_t span,
+                      parse_sym_entry_t *builtin, n00bb_text_t expectation)
+{
+    core_string_t name = builtin ? builtin->name
+                                 : CORE_STRING_STATIC("?");
+    if (valid) {
+        core_buffer_t what = {0};
+        core_buffer_printf(&what, "could not emit a call to `%.*s`",
+                           (int)name.u8_bytes, name.data);
+        ir_lower_result_t result = lower_internal_string(context, span,
+            core_buffer_string(&what));
+        core_buffer_release(&what);
+        return result;
+    }
+    return lower_report(context, N00B_DIAG_BUILTIN_ARGUMENTS, span,
+        N00B_TEXT_BUILTIN_EXPECTS,
+        N00BB_ARGS(ARG_TEXT(name), ARG_PHRASE_ID(expectation)));
+}
+
+static ir_lower_result_t
+lower_condition_error(ir_lower_context_t *context, parse_tree_t *condition,
+                      ir_value_t *value, n00bb_text_t construct)
+{
+    if (!value || !value->type)
+        return lower_internal(context,
+            lower_span_for_tree(context, condition),
+            "a condition has no value");
+    core_string_t type = lower_type_text(context, value->type);
+    core_string_t text = source_text_of(lower_unit(context), condition);
+    ir_span_t span = lower_span_for_tree(context, condition);
+    if (text.u8_bytes)
+        lower_report(context, N00B_DIAG_CONDITION_NOT_BOOL, span,
+            N00B_TEXT_IS_BUT_MUST_BE_BOOL,
+            N00BB_ARGS(ARG_TEXT(text), ARG_TEXT(type),
+                       ARG_PHRASE_ID(construct)));
+    else
+        lower_report(context, N00B_DIAG_CONDITION_NOT_BOOL, span,
+            N00B_TEXT_THIS_EXPRESSION_IS_BUT_MUST,
+            N00BB_ARGS(ARG_TEXT(type), ARG_PHRASE_ID(construct)));
+    if (text.u8_bytes && n00bb_option_type_element(value->type, nullptr))
+        lower_help(context, N00B_TEXT_TO_TEST_FOR_A_VALUE,
+            N00BB_ARGS(ARG_TEXT(text)));
+    else if (text.u8_bytes && is_integer_type(value->type))
+        lower_help(context, N00B_TEXT_WRITE_THE_COMPARISON_YOU_MEAN,
+            N00BB_ARGS(ARG_TEXT(text)));
+    core_free(type.data);
+    return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+}
+
+static n00bb_text_t
+logical_construct(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (nt_is(grammar, node, CORE_STRING_STATIC("and-expr")))
+        return N00B_TEXT_PHRASE_AN_OPERAND_OF_AND;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("or-expr")))
+        return N00B_TEXT_PHRASE_AN_OPERAND_OF_OR;
+    if (nt_is(grammar, node, CORE_STRING_STATIC("while-stmt")))
+        return N00B_TEXT_PHRASE_A_WHILE_CONDITION;
+    return N00B_TEXT_PHRASE_AN_IF_CONDITION;
 }
 
 static ir_block_t *
@@ -822,8 +1433,8 @@ n00bb_lower_atomic_reference(ir_lower_context_t *context,
         ? n00bb_emit_indirect_read(context, address, symbol->type, span)
         : nullptr;
     if (!value || !ir_lower_set_node_value(context, visit->node, value)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "atomic binding has no addressable storage for an atomic load");
+        lower_internal(context, span,
+            "atomic variable has no addressable storage for an atomic load");
         return false;
     }
     return true;
@@ -888,7 +1499,7 @@ n00bb_emit_sequence_shape_check_impl(ir_lower_context_t *context,
                                      IR_OP_SEQUENCE_SHAPE_CHECK, span);
     if (!check || !ir_instr_operand_value(check, value)
         || !ir_instr_set_shape_constraint(check, expected)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not emit a sequence shape check");
         return false;
     }
@@ -1135,6 +1746,8 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                  ir_local_t *local, ir_span_t span)
 {
     if (!context || !symbol || !local) return false;
+    if (!ir_span_known(local->span))
+        local->span = lower_symbol_name_span(context, symbol);
     core_string_t storage_class = symbol->selected_storage_class;
     bool dynamic = symbol->storage_duration == PARSE_SYM_STORAGE_DYNAMIC;
     if ((!storage_class.data || !storage_class.u8_bytes) && !dynamic) {
@@ -1177,14 +1790,9 @@ n00bb_emit_binary_ir_with(ir_lower_context_t *context, ir_op_t op,
         return integer_operation && (!ir_op_accepts_mod(op, CORE_STRING_STATIC("wrap"))
                 || ir_instr_add_mod(instruction, CORE_STRING_STATIC("wrap")))
             ? instruction->dest : nullptr;
-    if (integer_operation
-        && ir_op_accepts_mod(op, CORE_STRING_STATIC("trap"))) {
-        if (!ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap"))) return nullptr;
-        if ((op == IR_OP_DIV || op == IR_OP_REM)
-            && (result_class == IR_CLASS_SINT
-                || operand_class == IR_CLASS_SINT)
-            && !ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap"))) return nullptr;
-    }
+    if (integer_operation && !n00bb_trap_integer_arithmetic(instruction,
+            result_class == IR_CLASS_SINT || operand_class == IR_CLASS_SINT
+                ? IR_CLASS_SINT : IR_CLASS_UINT)) return nullptr;
     if (operand_class == IR_CLASS_FLOAT
         && (op == IR_OP_EQ || op == IR_OP_NE || op == IR_OP_LT
             || op == IR_OP_LE || op == IR_OP_GT || op == IR_OP_GE)
@@ -1387,6 +1995,148 @@ n00bb_jump_targets(n00bb_lower_context_t *lower, parse_grammar_t *grammar,
     return false;
 }
 
+static core_string_t
+n00bb_failure_text(n00bb_lower_context_t *lower, core_string_t text)
+{
+    core_buffer_t flat = {0};
+    bool space = false;
+    for (size_t i = 0; i < text.u8_bytes; i++) {
+        char c = text.data[i];
+        bool blank = c == ' ' || c == '\t' || c == '\n' || c == '\r';
+        if (blank) {
+            space = flat.byte_len != 0;
+            continue;
+        }
+        if (space) core_buffer_putc(&flat, ' ');
+        space = false;
+        core_buffer_putc(&flat, c == N00BB_FAILURE_OPERAND_SEPARATOR ? ' '
+                                                                     : c);
+    }
+    core_string_t result = ir_strdup(lower->ir_context,
+                                     core_buffer_string(&flat));
+    core_buffer_release(&flat);
+    return result;
+}
+
+static bool
+n00bb_describe_failure(n00bb_lower_context_t *lower, ir_instr_t *trap,
+                       n00bb_failure_kind_t kind, core_string_t text,
+                       core_string_t detail)
+{
+    bool ok = ir_annot_set(lower->ir_context, &trap->annots, (ir_annot_t){
+        .key = CORE_STRING_STATIC(N00BB_FAILURE_KIND_ANNOTATION),
+        .kind = IR_ANNOT_INT, .i = ir_lit_of(kind),
+    });
+    if (ok && text.data)
+        ok = ir_annot_set(lower->ir_context, &trap->annots, (ir_annot_t){
+            .key = CORE_STRING_STATIC(N00BB_FAILURE_TEXT_ANNOTATION),
+            .kind = IR_ANNOT_STR, .s = n00bb_failure_text(lower, text),
+        });
+    if (ok && detail.data)
+        ok = ir_annot_set(lower->ir_context, &trap->annots, (ir_annot_t){
+            .key = CORE_STRING_STATIC(N00BB_FAILURE_DETAIL_ANNOTATION),
+            .kind = IR_ANNOT_STR, .s = ir_strdup(lower->ir_context, detail),
+        });
+    return ok;
+}
+
+static bool
+n00bb_reportable_operand(ir_module_t *module, ir_value_t *value)
+{
+    if (!value || !value->type) return false;
+    if (value->def && value->def->op == IR_OP_CONST) return false;
+    ir_machine_t machine = ir_machine_of(module, value->type);
+    return machine.class == IR_CLASS_SINT || machine.class == IR_CLASS_UINT
+        || machine.class == IR_CLASS_BOOL || machine.class == IR_CLASS_FLOAT
+        || th_builtin_kind_of(th_resolve(value->type)) == TH_BUILTIN_STRING;
+}
+
+enum { N00BB_FAILURE_COMPARISONS = 8 };
+
+static bool
+n00bb_comparison_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return node && core_tree_num_children(node) == 3
+        && (nt_is(grammar, node, CORE_STRING_STATIC("equality-expr"))
+            || nt_is(grammar, node, CORE_STRING_STATIC("compare-expr")));
+}
+
+static size_t
+n00bb_failed_comparisons(parse_grammar_t *grammar, parse_tree_t *expression,
+                         bool always, parse_tree_t **out, size_t count)
+{
+    parse_tree_t *core = condition_core(grammar, expression);
+    if (!core || count >= N00BB_FAILURE_COMPARISONS) return count;
+    if (n00bb_comparison_node(grammar, core)) {
+        out[count++] = core;
+        return count;
+    }
+    if (core_tree_num_children(core) != 3) return count;
+    bool is_or = nt_is(grammar, core, CORE_STRING_STATIC("or-expr"));
+    bool is_and = nt_is(grammar, core, CORE_STRING_STATIC("and-expr"));
+    if (!is_or && !is_and) return count;
+    count = n00bb_failed_comparisons(grammar, core_tree_child(core, 0),
+                                     always || is_and, out, count);
+    if (is_or && !always)
+        count = n00bb_failed_comparisons(grammar, core_tree_child(core, 2),
+                                         false, out, count);
+    return count;
+}
+
+static ir_value_t *
+n00bb_condition_operands(ir_lower_context_t *context,
+                         n00bb_lower_context_t *lower,
+                         parse_grammar_t *grammar, parse_tree_t *expression,
+                         ir_block_t *failure, ir_span_t span,
+                         core_string_t *texts)
+{
+    *texts = (core_string_t){0};
+    parse_tree_t *comparisons[N00BB_FAILURE_COMPARISONS] = {0};
+    size_t comparison_count = n00bb_failed_comparisons(grammar, expression,
+        false, comparisons, 0);
+    ir_value_t *values[2 * N00BB_FAILURE_COMPARISONS] = {0};
+    th_type *types[2 * N00BB_FAILURE_COMPARISONS] = {0};
+    core_string_t names[2 * N00BB_FAILURE_COMPARISONS] = {0};
+    core_buffer_t joined = {0};
+    size_t count = 0;
+    for (size_t c = 0; c < comparison_count; c++)
+        for (size_t side = 0; side < 3; side += 2) {
+            parse_tree_t *child = core_tree_child(comparisons[c], side);
+            ir_value_t *value = ir_lower_node_value(context, child);
+            if (!value)
+                value = ir_lower_node_value(context,
+                                            condition_core(grammar, child));
+            if (!n00bb_reportable_operand(context->module, value)) continue;
+            core_string_t text = n00bb_failure_text(lower,
+                n00bb_node_source_text(lower->unit, child,
+                                       (core_string_t){0}));
+            bool repeated = false;
+            for (size_t i = 0; i < count && !repeated; i++)
+                repeated = core_string_eq(names[i], text);
+            if (repeated) continue;
+            if (count) core_buffer_putc(&joined,
+                                        N00BB_FAILURE_OPERAND_SEPARATOR);
+            core_buffer_append_string(&joined, text);
+            names[count] = text;
+            values[count] = value;
+            types[count++] = value->type;
+        }
+    th_type *tuple = count
+        ? th_tuple(ir_module_types(context->module), types, count) : nullptr;
+    ir_instr_t *aggregate = tuple ? ir_instr_add(failure, IR_OP_AGGREGATE)
+                                  : nullptr;
+    bool ok = aggregate && ir_lower_set_temp_dest(context, aggregate,
+        CORE_STRING_STATIC("__n00bb_failure_"), tuple);
+    for (size_t i = 0; ok && i < count; i++)
+        ok = ir_instr_operand_value(aggregate, values[i]);
+    if (ok) {
+        aggregate->span = span;
+        *texts = ir_strdup(lower->ir_context, core_buffer_string(&joined));
+    }
+    core_buffer_release(&joined);
+    return ok ? aggregate->dest : nullptr;
+}
+
 static bool
 n00bb_close_condition_scratch(n00bb_lower_context_t *lower)
 {
@@ -1429,7 +2179,7 @@ n00bb_emit_branch(ir_lower_context_t *context, ir_value_t *condition,
     if (!branch || !ir_instr_operand_value(branch, condition)
         || !ir_instr_operand_block(branch, on_true)
         || !ir_instr_operand_block(branch, on_false)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not emit conditional branch");
         return false;
     }
@@ -1469,7 +2219,7 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
                         || !ir_lower_set_node_value(context, frame.node,
                                                     read->dest)) {
                         core_list_free(frame.arms);
-                        lower_error(context, IR_DIAG_INTERNAL,
+                        lower_internal(context,
                             lower_span_for_tree(context, frame.node),
                             "could not read the value from the if-expression join");
                         return false;
@@ -1500,9 +2250,8 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
         || nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("if-value-expr"));
     if (!expression_form
         && !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("if-stmt"))) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, visit->node),
-                    "this branch form is not lowered yet");
+        lower_internal(context, lower_span_for_tree(context, visit->node),
+                       "branch lowering reached a node that is not a branch");
         return false;
     }
 
@@ -1531,16 +2280,17 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
     }
     if (has_else_clause && !else_body) {
         core_list_free(arms);
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, visit->node),
-                    "this branch form is not lowered yet");
+        lower_internal(context, lower_span_for_tree(context, visit->node),
+                       "an else clause has no body");
         return false;
     }
     if (expression_form && !short_circuit && !else_body) {
         core_list_free(arms);
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, visit->node),
-                    "a value if-expression requires an else body");
+        lower_report(context, N00B_DIAG_IF_VALUE_WITHOUT_ELSE,
+            lower_span_for_tree(context, visit->node),
+            N00B_TEXT_AN_IF_USED_AS_A,
+            N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_ADD_ELSE_WITH_THE_VALUE, N00BB_NO_ARGS);
         return false;
     }
     if (!context->reachable) {
@@ -1631,7 +2381,7 @@ n00bb_lower_branch_annotation(ir_lower_context_t *context,
         context->block = resume;
         if (!jump || !ir_instr_operand_block(jump, join)) {
             core_list_free(arms);
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not emit the short-circuit result");
             return false;
         }
@@ -1690,17 +2440,21 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
         || !ir_type_eq(context->module, start->type, iterator_type)
         || !ir_type_eq(context->module, end->type, iterator_type)
         || !ir_type_eq(context->module, step->type, iterator_type)) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                    "range loop endpoints and step must have one integer type");
+        lower_internal(context, span,
+                       "range loop endpoints and step do not share one "
+                       "integer type");
         return false;
     }
     int64_t step_value = 0;
     if (frame->range_step
         && n00bb_integer_point(frame->range_step, &step_value)
         && step_value == 0) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                    lower_span_for_tree(context, frame->range_step),
-                    "range step must not be zero");
+        lower_report(context, N00B_DIAG_RANGE_STEP_ZERO,
+            lower_span_for_tree(context, frame->range_step),
+            N00B_TEXT_A_RANGE_LOOP_STEP_OF,
+            N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_USE_A_POSITIVE_OR_NEGATIVE,
+            N00BB_NO_ARGS);
         return false;
     }
     frame->range_step_value = step;
@@ -1741,6 +2495,9 @@ n00bb_lower_range_body_enter(ir_lower_context_t *context,
     }
     step_branch->span = span;
     if (trap) trap->span = span;
+    if (trap && !n00bb_describe_failure(lower, trap, N00BB_FAILURE_ZERO_STEP,
+            (core_string_t){0}, (core_string_t){0}))
+        return false;
     frame->range_step_value = step;
     context->block = frame->header;
 
@@ -1846,7 +2603,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
     ir_value_t *source = frame->iteration_source
         ? ir_lower_node_value(context, frame->iteration_source) : nullptr;
     if (!source || !frame->iteration_plan) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        lower_internal(context, span,
                     "container loop has incomplete iteration semantics");
         return false;
     }
@@ -1855,7 +2612,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         frame->iteration_plan->iter_site, source, TH_IN,
         frame->iteration_plan->cursor_type, nullptr, frame->node);
     if (!cursor) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not initialize the iteration cursor");
         return false;
     }
@@ -1863,7 +2620,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
     frame->cleanup_active = true;
     ir_instr_t *enter = ir_instr_add(context->block, IR_OP_JUMP);
     if (!enter || !ir_instr_operand_block(enter, frame->header)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not enter the iteration header");
         return false;
     }
@@ -1881,7 +2638,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
                                     cursor)
             ? frame->iteration_cursor_phi->dest : nullptr;
     if (!current) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not create the iteration cursor phi");
         return false;
     }
@@ -1909,7 +2666,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         && ir_instr_operand_block(branch, cleanup)
         && ir_instr_operand_block(branch, frame->body_block);
     if (!emitted) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not test the next iteration item");
         return false;
     }
@@ -1921,7 +2678,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         return false;
     ir_instr_t *done = ir_instr_add(context->block, IR_OP_JUMP);
     if (!done || !ir_instr_operand_block(done, frame->exit)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not leave an exhausted iteration");
         return false;
     }
@@ -1935,7 +2692,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
                                         CORE_STRING_STATIC("__n00bb_iteration_item_"),
                                         frame->iteration_plan->item_type)
         || !ir_instr_operand_value(get, option)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not extract the next iteration item");
         return false;
     }
@@ -1959,7 +2716,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
                     ? !ir_instr_operand_uint(extract, projection->index)
                     : !ir_instr_operand_name(extract,
                                               projection->name))) {
-                lower_error(context, IR_DIAG_INTERNAL, span,
+                lower_internal(context, span,
                             "could not destructure the iteration item");
                 return false;
             }
@@ -1967,7 +2724,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         }
         if (!local || !ir_lower_bind_scoped_value(context, binding, value,
                                                    local)) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not bind the next iteration item");
             return false;
         }
@@ -2002,9 +2759,8 @@ n00bb_store_try_value(ir_lower_context_t *context,
     if (!store || !frame->result_value
         || !ir_instr_set_dest_local(store, frame->result_value)
         || !ir_instr_operand_value(store, value)) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-            lower_span_for_tree(context, body),
-            "try expression body does not produce a lowered value");
+        lower_internal(context, lower_span_for_tree(context, body),
+            "try expression body produced no value");
         return false;
     }
     return true;
@@ -2014,6 +2770,23 @@ static bool
 n00bb_store_try_error(ir_lower_context_t *context,
                       n00bb_lower_context_t *lower, n00bb_try_frame_t *frame,
                       ir_value_t *error, ir_span_t span);
+
+static bool
+n00bb_report_try_failures_differ(ir_lower_context_t *context,
+                                 th_type *first, th_type *other,
+                                 ir_span_t span)
+{
+    core_string_t first_text = {0};
+    core_string_t other_text = {0};
+    lower_type_text_pair(context, first, other, &first_text, &other_text);
+    lower_report(context, N00B_DIAG_TRY_FAILURE_TYPES_DIFFER, span,
+        N00B_TEXT_THIS_CAN_FAIL_WITH_BUT,
+        N00BB_ARGS(ARG_TEXT(other_text), ARG_TEXT(first_text)));
+    lower_help(context, N00B_TEXT_CONVERT_THE_FAILURES_TO_ONE, N00BB_NO_ARGS);
+    core_free(first_text.data);
+    core_free(other_text.data);
+    return false;
+}
 
 static int
 n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
@@ -2034,7 +2807,7 @@ n00bb_route_try_error(ir_lower_context_t *context, parse_tree_t *source,
         && !n00bb_store_try_error(context, lower, frame, error, span))
         return -1;
     if (!n00bb_emit_jump(context, frame->handler, span)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not route failure to the try handler");
         return -1;
     }
@@ -2051,17 +2824,16 @@ n00bb_store_try_error(ir_lower_context_t *context,
     parse_sym_entry_t *symbol = frame->error_symbol;
     th_ctx *types = tu_state(lower->unit)->types;
     if (!error || !types) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                    "try error handler has no bound error value");
+        lower_internal(context, span,
+                       "try error handler has no bound error value");
         return false;
     }
     th_type *bound_type = symbol->type
         ? th_unify_in_place(types, symbol->type, error->type) : error->type;
-    if (!bound_type) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                    "failure value does not match the try handler error type");
-        return false;
-    }
+    if (!bound_type)
+        return n00bb_report_try_failures_differ(context,
+            frame->error_value ? frame->error_value->type : symbol->type,
+            error->type, span);
     symbol->type = bound_type;
     if (!frame->error_value) {
         char name_buffer[48];
@@ -2071,20 +2843,18 @@ n00bb_store_try_error(ir_lower_context_t *context,
         frame->error_value = ir_local_add(context->function, name,
                                           bound_type);
         if (!frame->error_value) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not allocate the try handler error value");
             return false;
         }
     }
-    if (!ir_type_eq(context->module, frame->error_value->type, bound_type)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                    "failure paths reaching this handler have incompatible types");
-        return false;
-    }
+    if (!ir_type_eq(context->module, frame->error_value->type, bound_type))
+        return n00bb_report_try_failures_differ(context,
+            frame->error_value->type, bound_type, span);
     ir_instr_t *store = ir_lower_emit_instruction(context, IR_OP_COPY, span);
     if (!store || !ir_instr_set_dest_local(store, frame->error_value)
         || !ir_instr_operand_value(store, error)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not store the failure for the try handler");
         return false;
     }
@@ -2126,7 +2896,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                                                    "try_handler");
                 frame.join = n00bb_branch_block(context, lower, "try_join");
                 if (!frame.handler || !frame.join) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, visit->node),
                         "could not create try control-flow blocks");
                     return false;
@@ -2143,7 +2913,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                         ? ir_local_add(context->function, local_name,
                                        result_type) : nullptr;
                     if (!frame.result_value) {
-                        lower_error(context, IR_DIAG_VERIFY_TYPED,
+                        lower_internal(context,
                             lower_span_for_tree(context, visit->node),
                             "try expression has no inferred result type");
                         return false;
@@ -2168,7 +2938,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
                                             frame.result_value->type)
                 || !ir_instr_operand_local(read, frame.result_value)
                 || !ir_lower_set_node_value(context, frame.node, read->dest)) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, frame.node),
                     "could not read the value from the try-expression join");
                 return false;
@@ -2203,12 +2973,12 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
             frame->join_reachable = true;
         }
         if (!frame->error_reachable) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(lower->unit), lower->unit,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0048"),
-                CORE_STRING_STATIC("nothing in this `try` can fail, so its"
-                                   " `fail` handler can never run"),
-                link_source_location(frame->node));
+            lower_report(context, N00B_DIAG_TRY_CANNOT_FAIL,
+                lower_span_for_first_token(context, frame->node),
+                N00B_TEXT_NOTHING_IN_THIS_TRY_CAN,
+                N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_REMOVE_THE_TRY_AND_ITS,
+                N00BB_NO_ARGS);
             return false;
         }
         context->block = frame->handler;
@@ -2237,7 +3007,7 @@ n00bb_lower_try_scope(ir_lower_context_t *context, parse_visit_t *visit,
             if (!frame->error_value
                 || !ir_lower_bind_local(context, symbol,
                                         frame->error_value)) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, visit->node),
                     "could not bind the try handler error value");
                 return false;
@@ -2300,7 +3070,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 frame.continuation = n00bb_branch_block(
                     context, lower, "block_value_cont");
                 if (!frame.result || !frame.continuation) {
-                    lower_error(context, IR_DIAG_VERIFY_TYPED,
+                    lower_internal(context,
                         lower_span_for_tree(context, visit->node),
                         "block value has no result type or continuation");
                     return false;
@@ -2316,9 +3086,12 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             --lower->value_blocks.len];
         if (!frame.active) return true;
         if (!frame.value_written || !context->reachable) {
-            lower_error(context, IR_DIAG_VERIFY_PARSED,
+            lower_report(context, N00B_DIAG_VALUE_BLOCK_WITHOUT_VALUE,
                 lower_span_for_tree(context, visit->node),
-                "value block has no reachable value statement");
+                N00B_TEXT_THIS_BLOCK_IS_USED_AS,
+                N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_END_EVERY_PATH_THROUGH_THE,
+                N00BB_NO_ARGS);
             return false;
         }
         ir_instr_t *read = ir_lower_emit_instruction(context, IR_OP_COPY,
@@ -2328,7 +3101,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                                              frame.result->type)
             || !ir_instr_operand_local(read, frame.result)
             || !ir_lower_set_node_value(context, visit->node, read->dest)) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not read the value block result");
             return false;
@@ -2370,8 +3143,9 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                         CORE_STRING_STATIC("bool"));
                     if (!operand || !bool_type || !ir_type_eq(
                             context->module, operand->type, bool_type)) {
-                        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                                    "logical operands must be bool");
+                        lower_condition_error(context, arm->condition,
+                            operand, logical_construct(visit->grammar,
+                                                       frame->node));
                         return false;
                     }
                     if (!n00bb_emit_branch(context, operand,
@@ -2388,9 +3162,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
             if (!condition || !bool_type
                 || !ir_type_eq(context->module, condition->type, bool_type)) {
-                lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                    lower_span_for_tree(context, frame->node),
-                    "if condition must lower to bool");
+                lower_condition_error(context, arm->condition, condition,
+                    logical_construct(visit->grammar, frame->node));
                 return false;
             }
             ir_block_t *false_block = arm_index + 1 < frame->arms.len
@@ -2413,7 +3186,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 && ir_instr_operand_block(branch,
                     shortcut_true ? arm->body_block : false_block);
             if (!emitted) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not emit conditional branch");
                 return false;
@@ -2428,14 +3201,16 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             }
             else if (context->reachable) {
                 ir_span_t span = lower_span_for_tree(context, frame->node);
+                parse_tree_t *operand_node =
+                    condition_core(visit->grammar, visit->node);
                 ir_value_t *operand = ir_lower_node_value(context,
-                    condition_core(visit->grammar, visit->node));
+                                                          operand_node);
                 th_type *bool_type = th_name(tu_state(lower->unit)->types,
                                              CORE_STRING_STATIC("bool"));
                 if (!operand || !bool_type || !ir_type_eq(context->module,
                         operand->type, bool_type)) {
-                    lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                                "logical operands must be bool");
+                    lower_condition_error(context, operand_node, operand,
+                        logical_construct(visit->grammar, frame->node));
                     return false;
                 }
                 if (!n00bb_emit_branch(context, operand, frame->jump_true,
@@ -2457,9 +3232,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 if (frame->short_circuit && value
                     && !ir_type_eq(context->module, value->type,
                                    frame->result_local->type)) {
-                    lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                        lower_span_for_tree(context, visit->node),
-                        "logical operands must be bool");
+                    lower_condition_error(context, expression, value,
+                        logical_construct(visit->grammar, frame->node));
                     return false;
                 }
                 ir_instr_t *store = value
@@ -2468,16 +3242,16 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 if (!store || !ir_instr_set_dest_local(
                                   store, frame->result_local)
                     || !ir_instr_operand_value(store, value)) {
-                    lower_error(context, IR_DIAG_VERIFY_PARSED,
+                    lower_internal(context,
                         lower_span_for_tree(context, visit->node),
-                        "value if arm does not produce a lowered value");
+                        "an if-expression arm produced no value");
                     return false;
                 }
             }
             if (context->reachable) {
                 ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
                 if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame->node),
                         "could not emit branch join");
                     return false;
@@ -2503,16 +3277,16 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 if (!store || !ir_instr_set_dest_local(
                                   store, frame->result_local)
                     || !ir_instr_operand_value(store, value)) {
-                    lower_error(context, IR_DIAG_VERIFY_PARSED,
+                    lower_internal(context,
                         lower_span_for_tree(context, visit->node),
-                        "value if else arm does not produce a lowered value");
+                        "an if-expression else arm produced no value");
                     return false;
                 }
             }
             if (context->reachable) {
                 ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
                 if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame->node),
                         "could not emit branch join");
                     return false;
@@ -2545,9 +3319,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
             if (!condition || !bool_type
                 || !ir_type_eq(context->module, condition->type, bool_type)) {
-                lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                    lower_span_for_tree(context, frame->node),
-                    "while condition must lower to bool");
+                lower_condition_error(context, frame->condition, condition,
+                                      N00B_TEXT_PHRASE_A_WHILE_CONDITION);
                 return false;
             }
             ir_instr_t *literal = condition->def;
@@ -2563,7 +3336,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 || !ir_instr_operand_block(branch, frame->body_block)
                 || (!forever
                     && !ir_instr_operand_block(branch, frame->exit))) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not emit while condition branch");
                 return false;
@@ -2575,7 +3348,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
         else {
             if (context->reachable) {
                 if (!n00bb_add_iteration_backedge(frame, context->block)) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame->node),
                         "could not add the iteration cursor backedge");
                     return false;
@@ -2583,7 +3356,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
                 if (!jump || !ir_instr_operand_block(
                                  jump, frame->continue_block)) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame->node),
                         "could not emit while back edge");
                     return false;
@@ -2593,7 +3366,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             if (frame->binding_scope_active
                 && !ir_lower_bindings_restore(
                     context, frame->binding_checkpoint)) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not restore bindings after loop body");
                 return false;
@@ -2839,7 +3612,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                                 frame->cases.data[c].block);
                 }
                 if (!emitted) {
-                    lower_error(context, IR_DIAG_VERIFY_PARSED,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame->node),
                         "could not emit switch dispatch");
                     return false;
@@ -2866,16 +3639,16 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 if (!store || !ir_instr_set_dest_local(
                                   store, frame->result_local)
                     || !ir_instr_operand_value(store, value)) {
-                    lower_error(context, IR_DIAG_VERIFY_PARSED,
+                    lower_internal(context,
                         lower_span_for_tree(context, visit->node),
-                        "switch value arm does not produce a lowered value");
+                        "a switch-expression arm produced no value");
                     return false;
                 }
             }
             if (context->reachable) {
                 ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
                 if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame->node),
                         "could not emit switch join");
                     return false;
@@ -2917,6 +3690,69 @@ n00bb_switch_enum_member(parse_grammar_t *grammar,
         || n00bb_flagset_member(member) || !member->has_comptime_value
         || !member->comptime_value) return nullptr;
     return member;
+}
+
+static bool
+switch_patterns_cover(core_list_t(n00bb_switch_case_t) cases, ir_lit_t value)
+{
+    for (size_t c = 0; c < cases.len; c++)
+        for (size_t p = 0; p < cases.data[c].patterns.len; p++) {
+            n00bb_switch_pattern_t *pattern = &cases.data[c].patterns.data[p];
+            if (!pattern->is_range) {
+                if (pattern->lower.mag == value.mag
+                    && pattern->lower.neg == value.neg) return true;
+                continue;
+            }
+            int64_t low = pattern->lower.neg ? -(int64_t)pattern->lower.mag
+                                             : (int64_t)pattern->lower.mag;
+            int64_t high = pattern->upper.neg ? -(int64_t)pattern->upper.mag
+                                              : (int64_t)pattern->upper.mag;
+            int64_t point = value.neg ? -(int64_t)value.mag
+                                      : (int64_t)value.mag;
+            if (point >= low && (pattern->inclusive ? point <= high
+                                                    : point < high))
+                return true;
+        }
+    return false;
+}
+
+static void
+record_enum_switch_gap(n00bb_lower_context_t *lower,
+                       n00bb_switch_frame_t *frame, parse_tree_t *subject)
+{
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    th_type *type = frame->scrutinee ? parse_tree_type(frame->scrutinee)
+                                     : nullptr;
+    parse_sym_entry_t *owner = state && type
+        ? type_symbol_in_loaded_imports(lower->unit, state->types, type,
+                                        nullptr)
+        : nullptr;
+    if (!owner || !owner->member_scope) return;
+    core_buffer_t missing = {0};
+    size_t count = 0;
+    for (parse_sym_entry_t *member = owner->member_scope->first_in_scope;
+         member; member = member->next_in_scope) {
+        if (member->kind != PARSE_SYM_ENUM_CONST
+            || n00bb_flagset_member(member) || !member->has_comptime_value
+            || !member->comptime_value) continue;
+        n00bb_enum_value_t *ordinal = member->comptime_value;
+        ir_lit_t value = {.mag = ordinal->magnitude,
+                          .neg = ordinal->negative};
+        if (switch_patterns_cover(frame->cases, value)) continue;
+        if (count) core_buffer_puts(&missing, ", ");
+        core_buffer_printf(&missing, "`%.*s.%.*s`",
+            (int)owner->name.u8_bytes, owner->name.data,
+            (int)member->name.u8_bytes, member->name.data);
+        count++;
+    }
+    if (count) {
+        core_free(lower->switch_gap_missing.data);
+        lower->switch_gap_missing =
+            core_string_dup(core_buffer_string(&missing));
+        lower->switch_gap_join = frame->join;
+        lower->switch_gap_subject = subject;
+    }
+    core_buffer_release(&missing);
 }
 
 static ir_value_t *
@@ -3030,9 +3866,14 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                                                        &pattern.lower)
                         || !n00bb_switch_case_integer(grammar, bounds[1],
                                                        &pattern.upper)) {
-                        lower_error(context, IR_DIAG_VERIFY_PARSED,
+                        lower_report(context,
+                            N00B_DIAG_SWITCH_CASE_NOT_CONSTANT,
                             lower_span_for_tree(context, current),
-                            "switch ranges require integer literal bounds");
+                            N00B_TEXT_A_SWITCH_RANGE_CASE_NEEDS,
+                            N00BB_NO_ARGS);
+                        lower_help(context,
+                            N00B_TEXT_WRITE_THE_BOUNDS_AS_NUMBERS,
+                            N00BB_NO_ARGS);
                         core_list_free(stack);
                         core_list_free(item.patterns);
                         return false;
@@ -3085,9 +3926,13 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                         }
                     }
                     if (!literal_pattern && !expression) {
-                        lower_error(context, IR_DIAG_VERIFY_PARSED,
+                        lower_report(context,
+                            N00B_DIAG_SWITCH_CASE_NOT_CONSTANT,
                             lower_span_for_tree(context, current),
-                            "switch cases must be integer or boolean literals");
+                            N00B_TEXT_A_SWITCH_CASE_MUST_BE,
+                            N00BB_NO_ARGS);
+                        lower_help(context, N00B_TEXT_TEST_OTHER_VALUES_WITH_IF,
+                            N00BB_NO_ARGS);
                         core_list_free(stack);
                         core_list_free(item.patterns);
                         return false;
@@ -3111,9 +3956,11 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
         }
         core_list_free(stack);
         if (frame->variant_scope && item.patterns.len != 1) {
-            lower_error(context, IR_DIAG_VERIFY_PARSED,
+            lower_report(context, N00B_DIAG_VARIANT_CASE_NOT_ARM,
                 lower_span_for_tree(context, node),
-                "variant switch cases must name exactly one arm");
+                N00B_TEXT_EACH_CASE_OF_A_SWITCH,
+                N00BB_ARGS(ARG_NUMBER(item.patterns.len)));
+            lower_help(context, N00B_TEXT_GIVE_EACH_ARM_ITS_OWN, N00BB_NO_ARGS);
             core_list_free(item.patterns);
             return false;
         }
@@ -3184,9 +4031,8 @@ n00bb_typecase_collect(parse_grammar_t *grammar, parse_tree_t *node,
             ? n00bb_branch_block(context, context->user, "typecase_arm")
             : nullptr;
         if (!type || !body || (frame->active && !block)) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED,
-                lower_span_for_tree(context, node),
-                "typecase arm needs resolved types and a body");
+            lower_internal(context, lower_span_for_tree(context, node),
+                "typecase arm has no resolved types or body");
             return false;
         }
         core_list_push(frame->arms, ((n00bb_typecase_arm_t){
@@ -3248,6 +4094,50 @@ n00bb_typecase_exhaustive(ir_module_t *module, th_type *subject,
         if (n00bb_typecase_case_contains(module, arms.data[c].type, subject))
             return true;
     return false;
+}
+
+static core_list_t(core_string_t)
+n00bb_typecase_missing(ir_lower_context_t *context, th_type *subject,
+                       core_list_t(n00bb_typecase_arm_t) arms)
+{
+    core_list_t(core_string_t) missing = core_list_new(core_string_t);
+    th_comb comb;
+    if (!th_sum_comb(subject, &comb) || comb != TH_UNION) {
+        core_list_push(missing, lower_type_text(context, subject));
+        return missing;
+    }
+    for (size_t i = 0; i < th_sum_len(subject); i++) {
+        bool covered = false;
+        for (size_t c = 0; c < arms.len; c++)
+            covered |= n00bb_typecase_case_contains(
+                context->module, arms.data[c].type, th_sum_arm(subject, i));
+        if (!covered)
+            core_list_push(missing,
+                           lower_type_text(context, th_sum_arm(subject, i)));
+    }
+    return missing;
+}
+
+static core_list_t(core_string_t)
+n00bb_variant_switch_missing(parse_grammar_t *grammar,
+                             parse_scope_t *variant_scope,
+                             core_list_t(n00bb_switch_case_t) cases)
+{
+    core_list_t(core_string_t) missing = core_list_new(core_string_t);
+    for (parse_sym_entry_t *arm = variant_scope
+             ? variant_scope->first_in_scope : nullptr;
+         arm; arm = arm->next_in_scope) {
+        if (!arm->decl_node
+            || !nt_is(grammar, arm->decl_node,
+                      CORE_STRING_STATIC("variant-decl-one")))
+            continue;
+        bool covered = false;
+        for (size_t c = 0; c < cases.len; c++)
+            for (size_t p = 0; p < cases.data[c].patterns.len; p++)
+                covered |= cases.data[c].patterns.data[p].variant_arm == arm;
+        if (!covered) core_list_push(missing, arm->name);
+    }
+    return missing;
 }
 
 static bool
@@ -3356,7 +4246,7 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (entering) {
             if (!frame->emitted && !n00bb_typecase_emit_dispatch(context,
                                                                    frame)) {
-                lower_error(context, IR_DIAG_VERIFY_PARSED,
+                lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not emit typecase dispatch");
                 return false;
@@ -3376,7 +4266,7 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
                                                     arm->type)
                 || !ir_instr_operand_value(narrow, frame->subject_value)
                 || !ir_instr_operand_type(narrow, arm->type)) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not narrow the typecase subject");
                 return false;
@@ -3388,7 +4278,7 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
             if (!arm->subject_shadow
                 || !ir_lower_bind_scoped_value(context, arm->subject_shadow,
                                             narrow->dest, local)) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not bind the narrowed typecase subject");
                 return false;
@@ -3409,16 +4299,17 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
                                frame->result_local->type)
                 || !ir_instr_set_dest_local(store, frame->result_local)
                 || !ir_instr_operand_value(store, value)) {
-                lower_error(context, IR_DIAG_TYPE_MISMATCH,
+                lower_internal(context,
                     lower_span_for_tree(context, visit->node),
-                    "typecase value arm does not match its result type");
+                    "a typecase-expression arm value does not match the "
+                    "result type");
                 return false;
             }
         }
         if (!is_else
             && !ir_lower_bindings_restore(context,
                                             frame->binding_checkpoint)) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, frame->node),
                 "could not restore the typecase subject binding");
             return false;
@@ -3426,7 +4317,7 @@ n00bb_lower_typecase_scope(ir_lower_context_t *context, parse_visit_t *visit,
         if (context->reachable) {
             ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
             if (!jump || !ir_instr_operand_block(jump, frame->join)) {
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, frame->node),
                     "could not emit typecase join");
                 return false;
@@ -3456,9 +4347,12 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
         if (!label || !subject_node || !symbol
             || (symbol->kind != PARSE_SYM_VARIABLE
                 && symbol->kind != PARSE_SYM_PARAM)) {
-            lower_error(context, IR_DIAG_VERIFY_PARSED,
-                lower_span_for_tree(context, visit->node),
-                "typecase subject must be a variable");
+            parse_tree_t *subject = label ? label->cond : visit->node;
+            lower_report(context, N00B_DIAG_SUBJECT_NOT_VARIABLE,
+                lower_span_for_tree(context, subject),
+                N00B_TEXT_A_TYPECASE_SUBJECT_MUST_BE,
+                N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_STORE_THE_VALUE_IN_A, N00BB_NO_ARGS);
             return false;
         }
         n00bb_typecase_frame_t frame = {
@@ -3479,32 +4373,44 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
         }
         if (!frame.arms.len) {
             core_list_free(frame.arms);
-            lower_error(context, IR_DIAG_VERIFY_PARSED,
+            lower_report(context, N00B_DIAG_TYPECASE_WITHOUT_CASES,
                 lower_span_for_tree(context, visit->node),
-                "typecase requires at least one case");
+                N00B_TEXT_THIS_TYPECASE_ON_HAS_NO,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
             return false;
         }
         th_type *subject_type = th_resolve(symbol->type);
+        core_string_t subject_text = lower_type_text(context, subject_type);
         for (size_t i = 0; i < frame.arms.len; i++) {
             if (n00bb_typecase_arm_has_fresh_match(
                     context->module, subject_type, frame.arms, i))
                 continue;
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(lower->unit), lower->unit,
-                CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0006"),
-                CORE_STRING_STATIC(
-                    "typecase case cannot match an unhandled subject type"),
-                link_source_location(frame.arms.data[i].node));
+            lower_report(context, N00B_DIAG_TYPECASE_CASE_UNREACHABLE,
+                lower_span_for_tree(context, frame.arms.data[i].node),
+                N00B_TEXT_THIS_CASE_CAN_NEVER_MATCH,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(subject_text)));
         }
         if (!frame.else_body
             && !n00bb_typecase_exhaustive(context->module, subject_type,
                                            frame.arms)) {
+            core_list_t(core_string_t) missing = n00bb_typecase_missing(
+                context, subject_type, frame.arms);
             core_list_free(frame.arms);
-            lower_error(context, IR_DIAG_TYPE_MISMATCH,
+            lower_report(context, N00B_DIAG_TYPECASE_NOT_EXHAUSTIVE,
                 lower_span_for_tree(context, visit->node),
-                "typecase without else must cover every subject type");
+                N00B_TEXT_TYPECASE_HAS_NO_CASE_FOR,
+                N00BB_ARGS(ARG_TEXT(symbol->name),
+                           ARG_NAMES(missing.data, missing.len)));
+            lower_note(context, N00B_TEXT_IS,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(subject_text)));
+            lower_help(context, N00B_TEXT_ADD_A_CASE_FOR_EACH, N00BB_NO_ARGS);
+            for (size_t i = 0; i < missing.len; i++)
+                core_free(missing.data[i].data);
+            core_list_free(missing);
+            core_free(subject_text.data);
             return false;
         }
+        core_free(subject_text.data);
         if (frame.active) {
             frame.join = n00bb_branch_block(context, lower, "typecase_join");
             if (expression) {
@@ -3518,7 +4424,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
                     : nullptr;
                 if (!frame.result_local) {
                     core_list_free(frame.arms);
-                    lower_error(context, IR_DIAG_VERIFY_TYPED,
+                    lower_internal(context,
                         lower_span_for_tree(context, visit->node),
                         "typecase expression has no inferred result type");
                     return false;
@@ -3531,7 +4437,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
             if (!frame.join || (frame.else_body && !frame.else_block)
                 || !frame.unmatched_block) {
                 core_list_free(frame.arms);
-                lower_error(context, IR_DIAG_INTERNAL,
+                lower_internal(context,
                     lower_span_for_tree(context, visit->node),
                     "could not allocate typecase control-flow blocks");
                 return false;
@@ -3558,7 +4464,7 @@ n00bb_lower_typecase_annotation(ir_lower_context_t *context,
             CORE_STRING_STATIC("__n00bb_typecase_value_"), frame.result_local->type)
             || !ir_instr_operand_local(read, frame.result_local)
             || !ir_lower_set_node_value(context, frame.node, read->dest)) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, frame.node),
                 "could not read the typecase expression result");
             return false;
@@ -3594,7 +4500,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
                 ir_instr_t *unreachable =
                     ir_instr_add(frame.join, IR_OP_UNREACHABLE);
                 if (!unreachable) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame.node),
                         "could not terminate unreachable switch join");
                     return false;
@@ -3608,7 +4514,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
                     || !ir_instr_operand_local(read, frame.result_local)
                     || !ir_lower_set_node_value(context, frame.node,
                                                 read->dest)) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, frame.node),
                         "could not read the value from the switch-expression join");
                     return false;
@@ -3623,9 +4529,8 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
     bool expression = nt_is(visit->grammar, visit->node,
                             CORE_STRING_STATIC("switch-value-expr"));
     if (!expression && !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("switch-stmt"))) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-            lower_span_for_tree(context, visit->node),
-            "typecase is not currently lowered");
+        lower_internal(context, lower_span_for_tree(context, visit->node),
+            "switch lowering reached a node that is not a switch");
         return false;
     }
     parse_cf_label_t *label = parse_cf_label_lookup(
@@ -3661,9 +4566,11 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
         return true;
     }
     if (frame.variant_switch && !frame.variant_subject) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED,
-            lower_span_for_tree(context, frame.node),
-            "variant switch subject must be a variable");
+        lower_report(context, N00B_DIAG_SUBJECT_NOT_VARIABLE,
+            lower_span_for_tree(context, label->cond),
+            N00B_TEXT_A_SWITCH_ON_A_VARIANT,
+            N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_STORE_THE_VALUE_IN_A_2, N00BB_NO_ARGS);
         core_list_free(frame.cases);
         return false;
     }
@@ -3677,7 +4584,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
         frame.result_local = result_type
             ? ir_local_add(context->function, local_name, result_type) : nullptr;
         if (!frame.result_local) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "switch expression has no inferred result type");
             return false;
@@ -3690,15 +4597,21 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
         core_list_free(frame.cases);
         return false;
     }
+    if (!frame.variant_switch && !frame.else_body && !expression)
+        record_enum_switch_gap(lower, &frame, label->cond);
     if (frame.variant_switch) {
         for (size_t c = 0; c < frame.cases.len; c++) {
             n00bb_switch_case_t *item = &frame.cases.data[c];
             parse_sym_entry_t *arm = item->patterns.len == 1
                 ? item->patterns.data[0].variant_arm : nullptr;
             if (!arm) {
-                lower_error(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, item->body),
-                    "variant switch cases must name variant arms");
+                parse_tree_t *pattern = item->patterns.len
+                    ? item->patterns.data[0].expression : nullptr;
+                lower_report(context, N00B_DIAG_VARIANT_CASE_NOT_ARM,
+                    lower_span_for_tree(context,
+                                        pattern ? pattern : item->body),
+                                        N00B_TEXT_EACH_CASE_OF_A_SWITCH_2,
+                    N00BB_NO_ARGS);
                 for (size_t i = 0; i < frame.cases.len; i++)
                     core_list_free(frame.cases.data[i].patterns);
                 core_list_free(frame.cases);
@@ -3708,9 +4621,15 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
                 if (frame.cases.data[previous].patterns.len == 1
                     && frame.cases.data[previous].patterns.data[0].variant_arm
                         == arm) {
-                    lower_error(context, IR_DIAG_VERIFY_PARSED,
-                        lower_span_for_tree(context, frame.node),
-                        "variant switch arm appears more than once");
+                    lower_report(context, N00B_DIAG_DUPLICATE_SWITCH_CASE,
+                        lower_span_for_tree(context,
+                            item->patterns.data[0].expression),
+                            N00B_TEXT_ARM_ALREADY_HAS_A_CASE,
+                        N00BB_ARGS(ARG_TEXT(arm->name)));
+                    lower_secondary(context, lower_span_for_tree(context,
+                        frame.cases.data[previous].patterns.data[0]
+                            .expression), N00B_TEXT_FIRST_HANDLED_HERE,
+                        N00BB_NO_ARGS);
                     for (size_t i = 0; i < frame.cases.len; i++)
                         core_list_free(frame.cases.data[i].patterns);
                     core_list_free(frame.cases);
@@ -3720,9 +4639,17 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
         bool exhaustive = n00bb_variant_switch_exhaustive(
             visit->grammar, frame.variant_scope, frame.cases);
         if (!frame.else_body && !exhaustive) {
-            lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                lower_span_for_tree(context, frame.node),
-                "variant switch without else must cover every arm exactly once");
+            core_list_t(core_string_t) missing = n00bb_variant_switch_missing(
+                visit->grammar, frame.variant_scope, frame.cases);
+            core_string_t subject = source_text_of(lower->unit, label->cond);
+            lower_report(context, N00B_DIAG_SWITCH_NOT_EXHAUSTIVE,
+                lower_span_for_tree(context, label->cond),
+                subject.u8_bytes ? N00B_TEXT_SWITCH_HAS_NO_CASE_FOR
+                                 : N00B_TEXT_SWITCH_SUBJECT_HAS_NO_CASE_FOR,
+                N00BB_ARGS(ARG_NAMES(missing.data, missing.len),
+                           ARG_TEXT(subject)));
+            lower_help(context, N00B_TEXT_ADD_A_CASE_FOR_EACH_2, N00BB_NO_ARGS);
+            core_list_free(missing);
             for (size_t i = 0; i < frame.cases.len; i++)
                 core_list_free(frame.cases.data[i].patterns);
             core_list_free(frame.cases);
@@ -3734,9 +4661,10 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
                 n00bb_switch_pattern_t *pattern =
                     &frame.cases.data[c].patterns.data[p];
                 if (!pattern->is_variant_tag) {
-                    lower_error(context, IR_DIAG_VERIFY_PARSED,
-                        lower_span_for_tree(context, frame.node),
-                        "variant switch cases must name variant arms");
+                    lower_report(context, N00B_DIAG_VARIANT_CASE_NOT_ARM,
+                        lower_span_for_tree(context, pattern->expression),
+                        N00B_TEXT_EACH_CASE_OF_A_SWITCH_2,
+                        N00BB_NO_ARGS);
                     return false;
                 }
                 parse_tree_t *primary = pattern->tag_node;
@@ -3750,7 +4678,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
                         pattern->variant_arm_name)
                     || !ir_lower_set_node_value(context, primary,
                                                 tag_value->dest)) {
-                    lower_error(context, IR_DIAG_INTERNAL,
+                    lower_internal(context,
                         lower_span_for_tree(context, pattern->expression),
                         "could not bind variant case arm tag");
                     return false;
@@ -3778,7 +4706,7 @@ n00bb_lower_switch_annotation(ir_lower_context_t *context,
         ir_instr_t *unreachable = ir_instr_add(frame.default_block,
                                                IR_OP_UNREACHABLE);
         if (!unreachable) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, frame.node),
                 "could not terminate exhaustive variant switch default");
             for (size_t i = 0; i < frame.cases.len; i++)
@@ -3829,9 +4757,10 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
                     th_type *payload_type = th_apply_subst(types,
                         parse_tree_type(visit->node));
                     if (payload_type && th_is_nil(payload_type)) {
-                        lower_error(context, IR_DIAG_TYPE_MISMATCH,
+                        lower_report(context, N00B_DIAG_ARM_HAS_NO_PAYLOAD,
                             lower_span_for_tree(context, visit->node),
-                            "nil variant arm has no readable payload");
+                            N00B_TEXT_ARM_CARRIES_NO_VALUE_SO,
+                            N00BB_ARGS(ARG_TEXT(accessed_arm->name)));
                         return false;
                     }
                     ir_value_t *value = ir_lower_node_value(context,
@@ -3848,7 +4777,7 @@ n00bb_lower_variant_payload(ir_lower_context_t *context, parse_visit_t *visit,
                             pattern->variant_arm_name)
                         || !ir_lower_set_node_value(context, visit->node,
                                                     payload->dest)) {
-                        lower_error(context, IR_DIAG_INTERNAL,
+                        lower_internal(context,
                             lower_span_for_tree(context, visit->node),
                             "could not lower variant payload access");
                         return false;
@@ -3904,9 +4833,11 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     bool container_loop = nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("for-stmt"))
         && child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("for-in-target-list"));
     if (!while_loop && !range_loop && !container_loop) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, visit->node),
-                    "non-range for loops are not lowered yet");
+        lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET,
+            lower_span_for_tree(context, visit->node),
+            N00B_TEXT_NOT_SUPPORTED_YET_THIS_FORM,
+            N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_USE_FOR_I_FROM_A, N00BB_NO_ARGS);
         return false;
     }
 
@@ -3934,9 +4865,10 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         if (!vars || range_bindings.len != 1 || !parts
             || core_tree_num_children(parts) < 3) {
             core_list_free(range_bindings);
-            lower_error(context, IR_DIAG_VERIFY_PARSED,
-                lower_span_for_tree(context, visit->node),
-                "range loops currently require one loop variable and two endpoints");
+            lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET,
+                lower_span_for_tree(context, label->cond),
+                N00B_TEXT_NOT_SUPPORTED_YET_A_RANGE,
+                N00BB_NO_ARGS);
             return false;
         }
         for (size_t i = 0; i < core_tree_num_children(parts); i++) {
@@ -3956,7 +4888,7 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         th_type *iterator_type = iterator_symbol
             ? iterator_symbol->type : nullptr;
         if (!range_start || !range_end || !iterator_symbol || !iterator_type) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "range loop variable or endpoint types are unresolved");
             return false;
@@ -3974,7 +4906,7 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             : nullptr;
         if (!range_binding || !n00bb_bind_local(context, iterator_symbol,
                 range_binding, lower_span_for_tree(context, visit->node))) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not bind range loop variable");
             return false;
@@ -4008,7 +4940,7 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(binding_nodes);
         if (!valid) {
             core_list_free(iteration_bindings);
-            lower_error(context, IR_DIAG_VERIFY_TYPED,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "container loop bindings or iterator type are unresolved");
             return false;
@@ -4028,7 +4960,7 @@ n00bb_lower_loop_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         || !exit || (while_loop && (!jump
             || !ir_instr_operand_block(jump, header)))) {
         core_list_free(iteration_bindings);
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
                     lower_span_for_tree(context, visit->node),
                     "could not create while control-flow blocks");
         return false;
@@ -4117,7 +5049,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             if (!store || !ir_instr_set_dest_local(store, frame->result)
                 || !ir_instr_operand_value(store, value) || !jump
                 || !ir_instr_operand_block(jump, frame->continuation)) {
-                lower_error(context, IR_DIAG_VERIFY_PARSED,
+                lower_internal(context,
                     lower_span_for_tree(context, visit->node),
                     "could not store a block value and continue");
                 return false;
@@ -4182,9 +5114,10 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             }
         }
         if (!function_body_value || nested_value_body) {
-            lower_error(context, IR_DIAG_VERIFY_PARSED,
+            lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET,
                 lower_span_for_tree(context, visit->node),
-                "value statement is not in a supported value-producing block");
+                N00B_TEXT_NOT_SUPPORTED_YET_A_VALUE,
+                N00BB_NO_ARGS);
             return false;
         }
         parse_tree_t *expression = child_nt(visit->grammar, visit->node,
@@ -4195,7 +5128,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             ? th_func_ret(lower->function_symbol->type) : nullptr;
         if (!value || !result_type
             || !ir_type_eq(context->module, value->type, result_type)) {
-            lower_error(context, IR_DIAG_TYPE_MISMATCH,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "function value does not match its success result type");
             return false;
@@ -4204,7 +5137,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         if (!n00bb_emit_success_return(context, value,
                 &lower->parameters_to_copy_out,
                 lower_span_for_tree(context, visit->node))) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not emit function value return");
             return false;
@@ -4220,8 +5153,8 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             ? ir_lower_node_value(context, expression) : nullptr;
         ir_span_t span = lower_span_for_tree(context, visit->node);
         if (!value) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                        "fail statement has no lowered failure value");
+            lower_internal(context, span,
+                           "fail statement has no failure value");
             return false;
         }
         if (!n00bb_emit_with_failure(context, visit->node))
@@ -4231,22 +5164,42 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         th_type *failure_type = lower->function_symbol
             ? th_func_error(lower->function_symbol->type) : nullptr;
         if (!failure_type || th_is_nil(failure_type)) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                "fail statement requires a non-nil function failure type");
+            parse_sym_entry_t *function = lower_user_function(context);
+            if (function)
+                lower_report(context, N00B_DIAG_FAIL_WITHOUT_FAILURE_TYPE, span,
+                    N00B_TEXT_FAIL_IS_USED_IN_WHICH,
+                    N00BB_ARGS(ARG_TEXT(function->name)));
+            else
+                lower_report(context, N00B_DIAG_FAIL_WITHOUT_FAILURE_TYPE, span,
+                    N00B_TEXT_FAIL_IS_USED_OUTSIDE_ANY,
+                    N00BB_NO_ARGS);
+            if (function)
+                lower_help(context, N00B_TEXT_DECLARE_THE_FAILURE_TYPE_AS,
+                    N00BB_ARGS(ARG_TEXT(function->name)));
             return false;
         }
+        th_type *raw_failure = value->type;
         value = n00bb_materialize(context, expression, value, failure_type,
                                   span);
         if (!value || !ir_type_eq(context->module, value->type,
                                   failure_type)) {
-            lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                span,
-                "failure value does not match this function's failure type");
+            core_string_t expected = {0};
+            core_string_t actual = {0};
+            lower_type_text_pair(context, failure_type, raw_failure,
+                                 &expected, &actual);
+            lower_report(context, N00B_DIAG_FAILURE_TYPE_MISMATCH,
+                lower_span_for_tree(context, expression),
+                N00B_TEXT_THIS_FAILS_WITH_BUT_FAILS,
+                N00BB_ARGS(ARG_TEXT(actual),
+                    ARG_TEXT(lower->function_symbol->name),
+                ARG_TEXT(expected)));
+            core_free(expected.data);
+            core_free(actual.data);
             return false;
         }
         ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
         if (!fail || !ir_instr_operand_value(fail, value)) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 span,
                 "could not emit function failure exit");
             return false;
@@ -4259,9 +5212,8 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     if (core_string_eq(name, CORE_STRING_STATIC("return-stmt"))) return true;
     if (!core_string_eq(name, CORE_STRING_STATIC("break-stmt"))
         && !core_string_eq(name, CORE_STRING_STATIC("continue-stmt"))) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, visit->node),
-                    "this jump form is not lowered yet");
+        lower_internal(context, lower_span_for_tree(context, visit->node),
+                       "jump lowering reached a node that is not a jump");
         return false;
     }
     parse_cf_label_t *cf_label = parse_cf_label_lookup(
@@ -4311,11 +5263,16 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
         }
     }
     if (!target && !switch_target && !typecase_target) {
-        lower_error_text(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, visit->node),
-                    target_name.data
-                        ? CORE_STRING_STATIC("jump target does not name an active lowered construct")
-                        : CORE_STRING_STATIC("loop jump appears outside a lowered loop, switch, or typecase"));
+        ir_span_t span = lower_span_for_tree(context, visit->node);
+        if (target_name.data)
+            lower_report(context, N00B_DIAG_UNKNOWN_JUMP_LABEL, span,
+                is_break ? N00B_TEXT_BREAK_NAMES_NO_LABEL
+                         : N00B_TEXT_CONTINUE_NAMES_NO_LABEL,
+                N00BB_ARGS(ARG_TEXT(target_name)));
+        else
+            lower_report(context, N00B_DIAG_JUMP_OUTSIDE_LOOP, span,
+                is_break ? N00B_TEXT_BREAK_OUTSIDE
+                         : N00B_TEXT_CONTINUE_OUTSIDE, N00BB_NO_ARGS);
         return false;
     }
     ir_block_t *destination = typecase_target ? typecase_target->join
@@ -4328,7 +5285,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             return false;
         if (!is_break
             && !n00bb_add_iteration_backedge(target, context->block)) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not add the continued iteration cursor backedge");
             return false;
@@ -4336,7 +5293,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
     }
     ir_instr_t *jump = ir_instr_add(context->block, IR_OP_JUMP);
     if (!jump || !ir_instr_operand_block(jump, destination)) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
                     lower_span_for_tree(context, visit->node),
                     "could not emit loop jump");
         return false;
@@ -4365,8 +5322,8 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
     (void)state;
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     if (!lower || operand_count > 1 || (operand_count && !operands[0]))
-        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-            "return lowering received an invalid success value");
+        return lower_internal(context, span,
+            "return statement received an invalid value");
     ir_value_t *value = operand_count ? operands[0] : nullptr;
     th_type *expected = lower->function_symbol
         ? th_func_ret(lower->function_symbol->type) : nullptr;
@@ -4375,12 +5332,12 @@ n00bb_lower_return(ir_lower_context_t *context, parse_visit_t *visit,
     if (value && expected) {
         value = n00bb_materialize(context, expression, value, expected, span);
         if (!value)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not materialize the returned value");
     }
     if (!n00bb_emit_success_return(context, value,
             &lower->parameters_to_copy_out, span))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not emit the function success result and copy-out values");
     return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
 }
@@ -4393,7 +5350,7 @@ n00bb_emit_comparison_test(ir_lower_context_t *context, ir_value_t *value,
         ? member->comptime_value : nullptr;
     if (!ordinal || !member->type
         || !ir_type_eq(context->module, member->type, value->type))
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return lower_internal(context, span,
             "comparison member has no matching enum value and type");
     ir_instr_t *constant = ir_lower_emit_instruction(context,
                                                      IR_OP_ENUM_CONST, span);
@@ -4408,7 +5365,7 @@ n00bb_emit_comparison_test(ir_lower_context_t *context, ir_value_t *value,
         || !ir_lower_set_temp_dest(context, test, CORE_STRING_STATIC("__n00bb_"), bool_type)
         || !ir_instr_operand_value(test, value)
         || !ir_instr_operand_value(test, constant->dest))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not test the comparison result");
     return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
 }
@@ -4473,8 +5430,8 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
         : th_name(ir_module_types(context->module), CORE_STRING_STATIC("Comparison"));
     if (!comparison_type || !ir_type_eq(context->module, result_type,
             n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"))))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "comparison expression must yield bool");
+        return lower_internal(context, span,
+            "comparison expression does not yield bool");
     ir_lower_result_t called = n00bb_lower_operator_method(context, visit,
         operands, 2, comparison_type, span);
     if (called.status != IR_LOWER_VALUE) return called;
@@ -4487,7 +5444,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
                 analysis, comparison_type, CORE_STRING_STATIC("equal"));
             equal = member
                 ? n00bb_emit_comparison_test(context, comparison, member, span)
-                : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+                : lower_internal(context, span,
                     "Comparison is missing the equal member");
         }
         if (equal.status != IR_LOWER_VALUE
@@ -4500,7 +5457,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_lower_set_temp_dest(context, false_value,
                                        CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_int(false_value, 0))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not emit inequality's false value");
         ir_instr_t *not_equal = ir_lower_emit_instruction(context, IR_OP_EQ,
                                                            span);
@@ -4509,7 +5466,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
                                        CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(not_equal, equal.value)
             || !ir_instr_operand_value(not_equal, false_value->dest))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not negate the equality result");
         return (ir_lower_result_t){IR_LOWER_VALUE, not_equal->dest};
     }
@@ -4521,7 +5478,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
         analysis, comparison_type, first);
     ir_lower_result_t test = first_member
         ? n00bb_emit_comparison_test(context, comparison, first_member, span)
-        : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+        : lower_internal(context, span,
             "Comparison is missing the required ordering member");
     if (test.status != IR_LOWER_VALUE) return test;
     if (!core_string_eq(spelling, CORE_STRING_STATIC("<="))
@@ -4531,7 +5488,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
         analysis, comparison_type, CORE_STRING_STATIC("equal"));
     ir_lower_result_t equal = equal_member
         ? n00bb_emit_comparison_test(context, comparison, equal_member, span)
-        : lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+        : lower_internal(context, span,
             "Comparison is missing the equal member");
     if (equal.status != IR_LOWER_VALUE) return equal;
     ir_instr_t *truth = ir_lower_emit_instruction(context, IR_OP_CONST, span);
@@ -4546,7 +5503,7 @@ n00bb_lower_comparison(ir_lower_context_t *context, parse_visit_t *visit,
         || !ir_instr_operand_value(either, test.value)
         || !ir_instr_operand_value(either, truth->dest)
         || !ir_instr_operand_value(either, equal.value))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not combine comparison outcomes");
     return (ir_lower_result_t){IR_LOWER_VALUE, either->dest};
 }
@@ -4686,7 +5643,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     bool abstract_builtin = builtin_operator_trait
         && (open_dispatch || builtin_requirement);
     if (!callee && !abstract_builtin && !closed_dispatch)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+        return lower_internal(context, span,
             "operator has no resolved trait method in this execution phase");
     th_ctx *types = ir_module_types(context->module);
     th_type *requirement_contract = symbol->callable_contract
@@ -4702,7 +5659,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     if (callable && operand_count <= 2
         && !n00bb_coerce_method_operands(context, visit->node, callable,
             operands, 0, operand_count, coerced, span))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        return lower_internal(context, span,
             "could not borrow the Buffer operand as a string");
     if (callable && operand_count <= 2) operands = coerced;
     th_param parameters[2] = {
@@ -4723,7 +5680,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     if (signature) signature = th_unify_in_place(types, signature, shape);
     if (!signature || th_func_nparams(signature) != operand_count
         || th_func_rest(signature))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        return lower_internal(context, span,
             "operator operands or result do not match its trait method");
     bool semantic_trait_call = !closed_dispatch && !builtin_requirement && symbol->scope
         && core_string_eq(symbol->scope->scope_tag,
@@ -4732,14 +5689,14 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
         callee = n00bb_abstract_trait_requirement(context, site,
             requirement_contract, signature, operands[0], span);
         if (!callee)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not retain the builtin operator trait selection");
     }
     if (semantic_trait_call) {
         callee = n00bb_select_trait_method(context, visit->grammar,
             owner, symbol, signature, operands[0], callee, span);
         if (!callee)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not select the operator trait requirement");
     }
     th_type *failure = th_func_error(signature);
@@ -4752,7 +5709,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
         n00bb_trait_dispatch_entry_t *selected = core_alloc_array(
             n00bb_trait_dispatch_entry_t, closed_dispatch->count);
         if (!selected)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not allocate the closed operator dispatch");
         size_t selected_count = 0;
         bool has_instantiations = false;
@@ -4795,7 +5752,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
         core_list_free(values);
         core_free(selected);
         if (!dispatched)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not emit the closed operator trait dispatch");
         ir_value_t *result = dispatched->dest;
         if (can_fail && !n00bb_unwrap_call_outcome(context, visit, result,
@@ -4811,7 +5768,7 @@ n00bb_lower_operator_method(ir_lower_context_t *context,
     for (size_t i = 0; call_ok && i < operand_count; i++)
         call_ok = ir_instr_operand_value(call, operands[i]);
     if (!call_ok || !ir_instr_set_call_signature(call, signature))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not emit the operator trait method call");
     ir_value_t *result = call->dest;
     if (can_fail && !n00bb_unwrap_call_outcome(context, visit, result,
@@ -4860,7 +5817,7 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *callee = module && function
         ? ir_func_address(module, function) : nullptr;
     if (!callee)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
+        return lower_internal(context, span,
             "in-place assignment method has no function in this phase");
     th_ctx *types = ir_module_types(context->module);
     th_type *contract = symbol->callable_contract
@@ -4869,7 +5826,7 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *coerced[2] = {0};
     if (callable && !n00bb_coerce_method_operands(context, visit->node,
             callable, operands, 1, 2, coerced, span))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        return lower_internal(context, span,
             "could not borrow the Buffer operand as a string");
     if (callable) operands = coerced;
     th_param parameters[2] = {
@@ -4883,7 +5840,7 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *signature = shape ? th_unify(types, callable, shape) : nullptr;
     if (signature) signature = th_unify_in_place(types, signature, shape);
     if (!signature || th_func_nparams(signature) != 2)
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        return lower_internal(context, span,
             "operands do not match the in-place assignment method");
     th_type *failure = th_func_error(signature);
     bool can_fail = failure && !th_is_nil(failure);
@@ -4897,7 +5854,7 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
         || !ir_instr_operand_value(call, operands[0])
         || !ir_instr_operand_value(call, operands[1])
         || !ir_instr_set_call_signature(call, signature))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not emit the in-place assignment call");
     ir_value_t *completed = call->dest;
     if (can_fail && !n00bb_unwrap_call_outcome(context, visit, completed,
@@ -4910,7 +5867,7 @@ n00bb_lower_in_place_method(ir_lower_context_t *context, parse_visit_t *visit,
                                             target_type)
         || !ir_instr_operand_value(updated, completed)
         || !ir_instr_operand_uint(updated, 0))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not read the in-place assignment result");
     return (ir_lower_result_t){IR_LOWER_VALUE, updated->dest};
 }
@@ -4923,8 +5880,21 @@ n00bb_lower_shift_count(ir_lower_context_t *context, parse_tree_t *node,
     th_type *target = n00bb_shift_count_type(ir_module_types(context->module),
                                              receiver);
     if (!target || !value || !n00bb_unsigned_shift_count_type(value->type)) {
-        lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "built-in shift count must be unsigned");
+        if (!target || !value) {
+            lower_internal(context, span, "shift count has no value");
+            return nullptr;
+        }
+        core_string_t type = lower_type_text(context, value->type);
+        core_string_t text = source_text_of(lower_unit(context), node);
+        lower_report(context, N00B_DIAG_SHIFT_COUNT_SIGNED,
+            node ? lower_span_for_tree(context, node) : span,
+            N00B_TEXT_THE_SHIFT_COUNT_IS_BUT,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text : CORE_STRING_STATIC("?")),
+                       ARG_TEXT(type)));
+        lower_help(context, N00B_TEXT_CONVERT_IT_FIRST_AS_IN,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                                : CORE_STRING_STATIC("n"))));
+        core_free(type.data);
         return nullptr;
     }
     if (ir_type_eq(context->module, value->type, target)) return value;
@@ -4940,7 +5910,7 @@ n00bb_lower_shift_count(ir_lower_context_t *context, parse_tree_t *node,
         || !ir_instr_operand_value(cast, value)
         || (source.width > destination.width
             && !ir_instr_add_mod(cast, CORE_STRING_STATIC("trap")))) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
             "could not lower the shift count conversion");
         return nullptr;
     }
@@ -4955,7 +5925,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     (void)state;
     if (operand_count != 2 || !operands || !operands[0] || !operands[1]
         || !result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return lower_internal(context, span,
                            "binary operation has incomplete operands or type");
     core_string_t spelling = core_tree_num_children(visit->node) > 1
         ? first_token_text(core_tree_child(visit->node, 1))
@@ -4991,8 +5961,9 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         op = IR_OP_GT;
     else if (core_string_eq(spelling, CORE_STRING_STATIC(">=")))
         op = IR_OP_GE;
-    else return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                            "this binary operator is not lowered yet");
+    else return lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
+        N00B_TEXT_NOT_SUPPORTED_YET_THE_BUILT,
+        N00BB_ARGS(ARG_TEXT(spelling)));
 
     bool comparison = op == IR_OP_EQ || op == IR_OP_NE || op == IR_OP_LT
         || op == IR_OP_LE || op == IR_OP_GT || op == IR_OP_GE;
@@ -5002,16 +5973,27 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     bool right_nil = th_is_nil(operands[1]->type);
     if (equality && left_nil != right_nil) {
         ir_value_t *option = left_nil ? operands[1] : operands[0];
-        if (!n00bb_option_type_element(option->type, nullptr))
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "nil can only be compared with an option value");
+        if (!n00bb_option_type_element(option->type, nullptr)) {
+            parse_tree_t *side = core_tree_child(visit->node,
+                                                 left_nil ? 2 : 0);
+            core_string_t type = lower_type_text(context, option->type);
+            core_string_t text = source_text_of(lower_unit(context), side);
+            lower_report(context, N00B_DIAG_NIL_COMPARE_NOT_OPTION,
+                lower_span_for_tree(context, side),
+                N00B_TEXT_IS_WHICH_IS_NEVER_NIL,
+                N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                    : n00bb_text_form(N00B_TEXT_THIS_VALUE)), ARG_TEXT(type),
+                ARG_TEXT(type)));
+            core_free(type.data);
+            return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+        }
         ir_instr_t *test = ir_lower_emit_instruction(context,
                                                      IR_OP_OPTION_IS_NIL,
                                                      span);
         if (!test || !ir_lower_set_temp_dest(context, test,
                                              CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(test, option))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not lower option comparison with nil");
         if (op == IR_OP_EQ)
             return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
@@ -5028,7 +6010,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
                                                 CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(negated, test->dest)
             || !ir_instr_operand_value(negated, false_value->dest))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not lower option inequality with nil");
         return (ir_lower_result_t){IR_LOWER_VALUE, negated->dest};
     }
@@ -5039,7 +6021,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         if (!same || !ir_lower_set_temp_dest(context, same,
                                              CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_int(same, is_equal ? 1 : 0))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not lower nil equality");
         return (ir_lower_result_t){IR_LOWER_VALUE, same->dest};
     }
@@ -5073,7 +6055,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     right = right ? ir_lower_value_as(context, right, right_value, right_span)
                   : nullptr;
     if (!left || !right)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not read through an operator operand");
     bool shift = op == IR_OP_SHL || op == IR_OP_SHR;
     th_type *operation_type = result_type;
@@ -5097,7 +6079,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
             right = n00bb_widen_integer_operand(context, right,
                                                 operation_type, right_span);
         if (!left || !right)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not widen an integer operand");
     }
     if (comparison && is_integer_type(left->type)
@@ -5106,13 +6088,13 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         th_type *common = n00bb_common_integer_type(types, left->type,
                                                     right->type);
         if (!common)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "integer comparison has no common type");
         left = n00bb_widen_integer_operand(context, left, common, left_span);
         right = n00bb_widen_integer_operand(context, right, common,
                                             right_span);
         if (!left || !right)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not widen an integer operand");
     }
     if (!shift && !ir_type_eq(context->module, left->type, right->type)) {
@@ -5125,9 +6107,20 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
             if (coerced) left = coerced;
         }
     }
-    if (shift && !n00bb_bitwise_type(left->type))
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "built-in shifts require an unsigned or bit left operand");
+    if (shift && !n00bb_bitwise_type(left->type)) {
+        parse_tree_t *left_node = core_tree_child(visit->node, 0);
+        core_string_t type = lower_type_text(context, left->type);
+        core_string_t text = source_text_of(lower_unit(context), left_node);
+        lower_report(context, N00B_DIAG_BITWISE_NEEDS_UNSIGNED,
+            lower_span_for_tree(context, left_node),
+            N00B_TEXT_IS_BUT_SHIFTS_ONLY_UNSIGNED,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                : n00bb_text_form(N00B_TEXT_THE_LEFT_OPERAND)), ARG_TEXT(type),
+            ARG_TEXT(spelling)));
+        lower_help(context, N00B_TEXT_CONVERT_IT_TO_AN_UNSIGNED, N00BB_NO_ARGS);
+        core_free(type.data);
+        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+    }
     if (shift) {
         right = n00bb_lower_shift_count(context,
             core_tree_child(visit->node, 2), right, left->type, span);
@@ -5136,7 +6129,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
     if (!comparison
         && ((!shift && !th_unify_in_place(types, left->type, right->type))
             || !th_unify_in_place(types, operation_type, left->type)))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        return lower_internal(context, span,
             "built-in operator operands and result have incompatible types");
 
     ir_value_t *value = n00bb_emit_binary_ir(context, op, operation_type,
@@ -5145,7 +6138,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
         value = n00bb_widen_integer_operand(context, value, result_type,
                                             span);
     if (!value)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit a binary IR operation");
     return (ir_lower_result_t){IR_LOWER_VALUE, value};
 }
@@ -5199,19 +6192,19 @@ n00bb_lower_nil_literal(ir_lower_context_t *context, parse_visit_t *visit,
                                                  CORE_STRING_STATIC("__n00bb_"), flagset_type)
             || !ir_instr_operand_name(constant, CORE_STRING_STATIC("nil"))
             || !ir_instr_operand_uint(constant, 0))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not emit an empty flagset value");
         return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
     }
     if (operand_count || !result_type
         || !th_is_nil(result_type))
-        return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                           "nil literal must have the nil sentinel type");
+        return lower_internal(context, span,
+                              "nil literal does not have the nil type");
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_NIL,
                                                         span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
                                                 CORE_STRING_STATIC("__n00bb_"), result_type))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit the nil sentinel");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
@@ -5224,14 +6217,14 @@ n00bb_lower_typeof(ir_lower_context_t *context, parse_visit_t *visit,
     (void)visit;
     (void)state;
     if (operand_count != 1 || !operands || !operands[0] || !result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return lower_internal(context, span,
                            "typeof operand or descriptor type is incomplete");
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_TYPE_OF,
                                                         span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
                                                 CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, operands[0]))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit typeof expression");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
@@ -5275,7 +6268,9 @@ n00bb_lower_enum_from_value(ir_lower_context_t *context,
     ir_block_t *failure = n00bb_branch_block(context, lower,
                                               "enum_cast_failed");
     ir_instr_t *trap = failure ? ir_instr_add(failure, IR_OP_TRAP) : nullptr;
-    if (!join || !failure || !trap)
+    if (!join || !failure || !trap || !ir_instr_operand_value(trap, operand)
+        || !n00bb_describe_failure(lower, trap, N00BB_FAILURE_ENUM,
+               (core_string_t){0}, enum_symbol->name))
         return lower_error(context, IR_DIAG_INTERNAL, span,
             "could not emit the enum range check");
     trap->span = span;
@@ -5343,15 +6338,12 @@ report_undefined_cast(ir_lower_context_t *context, th_ctx *types,
     core_string_t target_text = n00bb_print_type(types, target);
     bool references = th_kind_of(th_resolve(from)) == TH_INDIRECTION
         && th_kind_of(th_resolve(target)) == TH_INDIRECTION;
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "cannot cast %.*s to %.*s: no conversion is defined between them%s",
-        (int)from_text.u8_bytes, from_text.data,
-        (int)target_text.u8_bytes, target_text.data,
-        references ? "; reinterpreting a reference needs `unsafe_cast`" : "");
-    ir_lower_result_t result = lower_error_text(context, IR_DIAG_TYPE_CLASS,
-        span, core_string_borrow(message.data, message.byte_len));
-    core_buffer_release(&message);
+    ir_lower_result_t result = lower_report(context, N00B_DIAG_CAST_NOT_DEFINED,
+        span, N00B_TEXT_CANNOT_CAST_TO_NO_CONVERSION,
+        N00BB_ARGS(ARG_TEXT(from_text), ARG_TEXT(target_text)));
+    if (references)
+        lower_help(context, N00B_TEXT_REINTERPRETING_A_REFERENCE_NEEDS_UNSAFE,
+            N00BB_NO_ARGS);
     return result;
 }
 
@@ -5365,7 +6357,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *target = spec ? parse_tree_type(spec) : nullptr;
     if (operand_count != 1 || !operands || !operands[0] || !result_type
         || !target || !ir_type_eq(context->module, target, result_type))
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return lower_internal(context, span,
                            "cast target and expression type are incomplete");
     if (ir_type_eq(context->module, operands[0]->type, target)) {
         if (operands[0]->owner == context->function)
@@ -5375,7 +6367,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         if (!copy || !ir_lower_set_temp_dest(context, copy, CORE_STRING_STATIC("__n00bb_cast_"),
                                              target)
             || !ir_instr_operand_value(copy, operands[0]))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not emit an identity cast");
         return (ir_lower_result_t){IR_LOWER_VALUE, copy->dest};
     }
@@ -5397,7 +6389,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         word_operand[0] = word ? n00bb_widen_integer_operand(context,
             operands[0], word, span) : nullptr;
         if (!word_operand[0])
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not widen the address operand");
         operands = word_operand;
         from = word_operand[0]->type;
@@ -5420,13 +6412,22 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_instr_operand_value(cast, operands[0])
             || (!machine_promotes(from_machine, target_machine)
                 && !ir_instr_add_mod(cast, CORE_STRING_STATIC("wrap"))))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not emit an unchecked integer cast");
         return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
     }
     if (unsafe_cast && !plain_reference_cast)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "unsafe_cast requires plain references or integers");
+    {
+        core_string_t from_text = lower_type_text(context, from);
+        core_string_t target_text = lower_type_text(context, target);
+        ir_lower_result_t result = lower_report(context,
+            N00B_DIAG_UNSAFE_CAST_OPERANDS, span,
+            N00B_TEXT_UNSAFE_CAST_CANNOT_CONVERT_TO,
+            N00BB_ARGS(ARG_TEXT(from_text), ARG_TEXT(target_text)));
+        core_free(from_text.data);
+        core_free(target_text.data);
+        return result;
+    }
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     parse_sym_entry_t *from_flagset = nullptr;
@@ -5450,9 +6451,20 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                     && integer.width >= info->atomic_count)
                 || (integer.class == IR_CLASS_SINT
                     && integer.width > info->atomic_count));
-        if (!sufficient)
-            return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                "integer type is too narrow to represent every flagset value");
+        if (!sufficient) {
+            core_string_t integer_text = lower_type_text(context,
+                                                         integer_type);
+            ir_lower_result_t result = lower_report(context,
+                N00B_DIAG_FLAGSET_INTEGER_TOO_NARROW, span,
+                N00B_TEXT_IS_TOO_NARROW_TO_HOLD,
+                N00BB_ARGS(ARG_TEXT(integer_text),
+                    ARG_TEXT(flagset_symbol->name),
+                ARG_NUMBER(info ? (unsigned)info->atomic_count : 0u)));
+            lower_help(context, N00B_TEXT_CAST_TO_AN_UNSIGNED_TYPE,
+                N00BB_NO_ARGS);
+            core_free(integer_text.data);
+            return result;
+        }
         ir_instr_t *conversion = ir_lower_emit_instruction(context,
             source_flagset ? IR_OP_BITSET_VALUE
                            : IR_OP_BITSET_FROM_VALUE, span);
@@ -5460,7 +6472,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                                                    CORE_STRING_STATIC("__n00bb_"), target)
             || !ir_instr_operand_value(conversion, operands[0])
             || !ir_instr_add_mod(conversion, CORE_STRING_STATIC("trap")))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not emit the flagset integer conversion");
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
     }
@@ -5485,7 +6497,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                                        CORE_STRING_STATIC("__n00bb_"), target)
             || !ir_instr_operand_value(conversion, operands[0])
             || (!represents_range && !ir_instr_add_mod(conversion, CORE_STRING_STATIC("trap"))))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not emit the semantic enum-to-integer conversion");
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
     }
@@ -5509,7 +6521,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
                  || foreign_pointer_type(from))
                 && !ir_value_set_external_writable_storage(lower->ir_context,
                                                              cast->dest)))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not preserve unsafe reference cast provenance");
         return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
     }
@@ -5522,7 +6534,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *operand_node = core_tree_child(visit->node, 4);
         if (!n00bb_attach_expression_shape(context, visit->grammar,
                                           operand_node, operands[0]))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not retain the cast operand shape");
         ir_instr_t *conversion = ir_lower_emit_instruction(context,
             boxing ? IR_OP_BOX : IR_OP_NOMINAL_CAST, span);
@@ -5531,16 +6543,16 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_instr_operand_value(conversion, operands[0])
             || !ir_value_copy_alias_targets(lower->ir_context,
                 conversion->dest, operands[0]))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not retain semantic cast information");
         if (boxing && th_kind_of(th_resolve(from)) == TH_INDIRECTION
             && !ir_value_add_alias_target(lower->ir_context, conversion->dest,
                 (ir_alias_target_t){.value = operands[0]}))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not retain boxed reference storage");
         if (ir_value_shape(operands[0])
             && !ir_value_set_shape(conversion->dest, ir_value_shape(operands[0])))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not retain cast array shape");
         return (ir_lower_result_t){IR_LOWER_VALUE, conversion->dest};
     }
@@ -5576,7 +6588,7 @@ n00bb_lower_cast(ir_lower_context_t *context, parse_visit_t *visit,
         || !ir_instr_operand_value(cast, operands[0])
         || (needs_check && !ir_instr_add_mod(cast, CORE_STRING_STATIC("trap")))
         || (rounding.data && !ir_instr_add_mod(cast, rounding)))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit a checked cast");
     return (ir_lower_result_t){IR_LOWER_VALUE, cast->dest};
 }
@@ -5601,8 +6613,8 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
         if (!test || !ir_lower_set_temp_dest(context, test,
                                              CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_value(test, operands[0]))
-            return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                               "flagset ! requires a flagset operand and bool result");
+            return lower_internal(context, span,
+                "flagset negation has no flagset operand or bool result");
         return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
     }
     n00bb_link_use_site_t *site = caller
@@ -5610,7 +6622,7 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
     if (site && site->operator_dispatch
         && !primitive_operator_site(caller, site)) {
         if (operand_count != 1 || !operands || !operands[0] || !result_type)
-            return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+            return lower_internal(context, span,
                                "logical negation has incomplete operands or type");
         return n00bb_lower_operator_method(context, visit, operands, 1,
                                            result_type, span);
@@ -5619,23 +6631,29 @@ n00bb_lower_bool_not(ir_lower_context_t *context, parse_visit_t *visit,
     if (operand_count != 1 || !operands || !operands[0] || !result_type
         || !bool_type
         || !ir_type_eq(context->module, operands[0]->type, bool_type)
-        || !ir_type_eq(context->module, result_type, bool_type))
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "logical negation requires a bool operand");
+        || !ir_type_eq(context->module, result_type, bool_type)) {
+        if (operand_count != 1 || !operands || !operands[0])
+            return lower_internal(context, span,
+                                  "logical negation has no operand");
+        return lower_condition_error(context,
+            core_tree_child(visit->node,
+                            core_tree_num_children(visit->node) - 1),
+            operands[0], N00B_TEXT_PHRASE_THE_OPERAND_OF_NOT);
+    }
     ir_instr_t *false_value = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                          span);
     if (!false_value
         || !ir_lower_set_temp_dest(context, false_value,
                                    CORE_STRING_STATIC("__n00bb_"), bool_type)
         || !ir_instr_operand_int(false_value, 0))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit false for logical negation");
     ir_instr_t *equal = ir_lower_emit_instruction(context, IR_OP_EQ, span);
     if (!equal || !ir_lower_set_temp_dest(context, equal,
                                           CORE_STRING_STATIC("__n00bb_"), bool_type)
         || !ir_instr_operand_value(equal, operands[0])
         || !ir_instr_operand_value(equal, false_value->dest))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit logical negation");
     return (ir_lower_result_t){IR_LOWER_VALUE, equal->dest};
 }
@@ -5654,20 +6672,34 @@ n00bb_lower_complement(ir_lower_context_t *context,
     if (!caller || operand_count != 1 || !operands || !operands[0]
         || !result_type
         || !ir_type_eq(context->module, operands[0]->type, result_type))
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "~ requires a flagset or integer operand");
+        return lower_internal(context, span,
+                              "complement has incomplete operands or type");
     bool flagset = n00bb_flagset_type(lower->unit, caller,
                                      operands[0]->type, nullptr);
-    if (!flagset && !n00bb_bitwise_type(operands[0]->type))
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "~ requires a flagset or unsigned integer operand; use "
-            "unsafe_not for signed integers");
+    if (!flagset && !n00bb_bitwise_type(operands[0]->type)) {
+        parse_tree_t *operand = core_tree_child(visit->node,
+            core_tree_num_children(visit->node) - 1);
+        core_string_t type = lower_type_text(context, operands[0]->type);
+        core_string_t text = source_text_of(lower->unit, operand);
+        ir_lower_result_t result = lower_report(context,
+            N00B_DIAG_BITWISE_NEEDS_UNSIGNED,
+            lower_span_for_tree(context, operand),
+            N00B_TEXT_IS_BUT_APPLIES_ONLY_TO,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                : n00bb_text_form(N00B_TEXT_THE_OPERAND)), ARG_TEXT(type)));
+        if (is_integer_type(operands[0]->type))
+            lower_help(context, N00B_TEXT_USE_UNSAFE_NOT_FOR_A,
+                N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                                    : CORE_STRING_STATIC("x"))));
+        core_free(type.data);
+        return result;
+    }
     ir_instr_t *instruction = ir_lower_emit_instruction(context, flagset
         ? IR_OP_BITSET_COMPLEMENT : IR_OP_NOT, span);
     if (!instruction || !ir_lower_set_temp_dest(context, instruction,
                                                 CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, operands[0]))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit complement");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
@@ -5694,7 +6726,7 @@ n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
         return (ir_lower_result_t){IR_LOWER_VALUE, operands[0]};
     }
     if (operand_count != 1 || !operands || !operands[0] || !result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return lower_internal(context, span,
                            "unary negation has incomplete operands or type");
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_use_site_t *site = caller
@@ -5708,7 +6740,7 @@ n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
         operand = n00bb_widen_integer_operand(context, operand, result_type,
                                               span);
     if (!operand)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not widen the negated operand");
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_NEG,
                                                         span);
@@ -5720,7 +6752,7 @@ n00bb_lower_negate(ir_lower_context_t *context, parse_visit_t *visit,
                                                 CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(instruction, operand)
         || (checked_integer && !ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap"))))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit unary negation");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
@@ -5866,9 +6898,9 @@ n00bb_lower_tuple_parts(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_lower_context_t *lower = context->user;
     size_t child_count = core_tree_num_children(visit->node);
     if (child_count != 1 && child_count != 3)
-        return lower_error(context, IR_DIAG_VERIFY_PARSED,
+        return lower_internal(context,
             lower_span_for_tree(context, visit->node),
-            "tuple expression list has an unsupported grammar shape").status
+            "tuple expression list has an unexpected shape").status
             != IR_LOWER_FAILED;
     parse_tree_t *head = core_tree_child(visit->node, 0);
     ir_value_t *head_value = ir_lower_node_value(context, head);
@@ -5880,9 +6912,9 @@ n00bb_lower_tuple_parts(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *tail_node = core_tree_child(visit->node, 2);
         n00bb_tuple_parts_t *tail = n00bb_tuple_parts(lower, tail_node, false);
         if (!tail)
-            return lower_error(context, IR_DIAG_VERIFY_PARSED,
+            return lower_internal(context,
                 lower_span_for_tree(context, visit->node),
-                "tuple expression list lost its lowered suffix").status
+                "tuple expression list lost its trailing elements").status
                 != IR_LOWER_FAILED;
         for (size_t i = 0; i < tail->expressions.len; i++) {
             core_list_push(parts->expressions, tail->expressions.data[i]);
@@ -6016,13 +7048,14 @@ n00bb_lower_union_record_literal(ir_lower_context_t *context,
         }
         operands[j] = n00bb_union_filler(context, member->type, span);
         if (!operands[j]) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "union arm '%.*s' cannot be left out of this literal",
-                (int)member->name.u8_bytes, member->name.data);
-            lower_error_text(context, IR_DIAG_TYPE_LITERAL, span,
-                             core_buffer_string(&message));
-            core_buffer_release(&message);
+            core_string_t member_type = lower_type_text(context,
+                                                        member->type);
+            lower_report(context, N00B_DIAG_UNION_FIELD_REQUIRED, span,
+                N00B_TEXT_THIS_LITERAL_MUST_GIVE_UNION,
+                N00BB_ARGS(ARG_TEXT(member->name), ARG_TEXT(member_type)));
+            lower_help(context, N00B_TEXT_ADD_TO_THE_LITERAL,
+                N00BB_ARGS(ARG_TEXT(member->name)));
+            core_free(member_type.data);
             core_free(operands);
             core_buffer_release(&absent);
             return false;
@@ -6045,7 +7078,7 @@ n00bb_lower_union_record_literal(ir_lower_context_t *context,
             });
     core_buffer_release(&absent);
     if (!ok)
-        return lower_error(context, IR_DIAG_INTERNAL,
+        return lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not emit a record literal with a union")
             .status != IR_LOWER_FAILED;
@@ -6121,7 +7154,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                                                        false);
         th_type *type = parse_tree_type(visit->node);
         if (!parts || !parts->values.len || !type)
-            return lower_error(context, IR_DIAG_VERIFY_TYPED,
+            return lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "named-field literal is missing its inferred type or values")
                 .status != IR_LOWER_FAILED;
@@ -6140,9 +7173,17 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             core_string_t arm = valid
                 ? first_token_text(ordered->nodes[0]) : (core_string_t){0};
             if (!arm.data)
-                return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                    "variant literal requires exactly one named arm")
-                    .status != IR_LOWER_FAILED;
+            {
+                core_string_t type_text = lower_type_text(context, type);
+                lower_report(context, N00B_DIAG_VARIANT_LITERAL_ARMS, span,
+                    N00B_TEXT_A_LITERAL_NAMES_EXACTLY_ONE,
+                    N00BB_ARGS(ARG_TEXT(type_text),
+                               ARG_NUMBER(parts->values.len)));
+                lower_help(context, N00B_TEXT_WRITE_A_SINGLE_ARM_AS,
+                    N00BB_NO_ARGS);
+                core_free(type_text.data);
+                return false;
+            }
             th_type *arms = th_type_definition(
                 ir_module_types(context->module), type);
             th_type *payload = arms && th_kind_of(th_resolve(arms))
@@ -6166,7 +7207,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
                 && ir_value_copy_alias_targets(lower->ir_context,
                     make->dest, parts->values.data[0]);
             if (!ok)
-                return lower_error(context, IR_DIAG_INTERNAL, span,
+                return lower_internal(context, span,
                     "could not lower the selected variant arm")
                     .status != IR_LOWER_FAILED;
             return ir_lower_set_node_value(context, visit->node, make->dest);
@@ -6210,7 +7251,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             for (size_t i = 0; ok && i < parts->values.len; i++)
                 ok = ir_instr_operand_value(aggregate, parts->values.data[i]);
             if (!ok)
-                return lower_error(context, IR_DIAG_INTERNAL,
+                return lower_internal(context,
                     lower_span_for_tree(context, visit->node),
                     "could not emit named-field aggregate")
                     .status != IR_LOWER_FAILED;
@@ -6220,7 +7261,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
             built = n00bb_object_from_fields(context, built, object_type,
                                              span);
             if (!built)
-                return lower_error(context, IR_DIAG_INTERNAL, span,
+                return lower_internal(context, span,
                     "could not allocate the object")
                     .status != IR_LOWER_FAILED;
         }
@@ -6249,9 +7290,9 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *first_value = ir_lower_node_value(context, first);
     th_type *type = parse_tree_type(visit->node);
     if (!parts || !rest || !first_value || !type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED,
+        return lower_internal(context,
             lower_span_for_tree(context, visit->node),
-            "tuple literal is missing an inferred type or lowered element")
+            "tuple literal is missing an inferred type or element")
             .status != IR_LOWER_FAILED;
     core_list_push(parts->expressions, first);
     core_list_push(parts->values, first_value);
@@ -6269,7 +7310,7 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
         else ok = ir_instr_operand_value(aggregate, parts->values.data[i]);
     }
     if (!ok)
-        return lower_error(context, IR_DIAG_INTERNAL,
+        return lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not emit tuple aggregate").status != IR_LOWER_FAILED;
     return ir_lower_set_node_value(context, visit->node, aggregate->dest);
@@ -6290,14 +7331,14 @@ n00bb_lower_char_literal(ir_lower_context_t *context, parse_visit_t *visit,
     if (operand_count || !result_type || !token
         || !core_option_is_set(literal)
         || !n00bb_decode_char_literal(core_option_get(literal), &scalar))
-        return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                           "character literal has no valid scalar value");
+        return lower_internal(context, span,
+                              "character literal has no valid scalar value");
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
                                                      span);
     if (!constant || !ir_lower_set_temp_dest(context, constant, CORE_STRING_STATIC("__n00bb_"),
                                               result_type)
         || !ir_instr_operand_uint(constant, scalar))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit character literal");
     return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
 }
@@ -6315,8 +7356,8 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     core_option_t(core_string_t) literal = token
         ? parse_token_value(token) : core_option_none(core_string_t);
     if (operand_count || !token || !core_option_is_set(literal))
-        return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                           "string literal has no decoded token value");
+        return lower_internal(context, span,
+                              "string literal has no decoded token value");
     core_string_t spelling = core_option_get(literal);
     core_string_t modifier = literal_modifier(visit->grammar, visit->node);
     const n00bb_literal_registration_t *registration = modifier.data
@@ -6330,20 +7371,23 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         return n00bb_lower_user_literal(context, visit, user_site,
                                         result_type, span);
     if (modifier.data && !registration && !user_site)
-        return lower_error_text(context, IR_DIAG_TYPE_LITERAL, span,
-            n00bb_literal_prefix_registered(modifier)
-                ? CORE_STRING_STATIC("literal modifier does not support a string payload")
-                : CORE_STRING_STATIC("no literal handler is registered for this string payload shape"));
+        return n00bb_literal_prefix_registered(modifier)
+            ? lower_report(context, N00B_DIAG_LITERAL_MODIFIER_PAYLOAD, span,
+                N00B_TEXT_LITERAL_MODIFIER_DOES_NOT_TAKE,
+                N00BB_ARGS(ARG_TEXT(modifier)))
+            : lower_report(context, N00B_DIAG_UNKNOWN_LITERAL_MODIFIER, span,
+                N00B_TEXT_NO_LITERAL_MODIFIER_IS_DEFINED,
+                N00BB_ARGS(ARG_TEXT(modifier)));
     if (!result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "string literal has no inferred result type");
+        return lower_internal(context, span,
+                              "string literal has no inferred result type");
     core_buffer_t *decoded = core_buffer_empty();
     bool ok = decoded != nullptr
         && n00bb_decode_string_literal(spelling, decoded);
     if (!ok) {
         core_buffer_free(decoded);
-        return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                           "string literal has an invalid escape sequence");
+        return lower_internal(context, span,
+                              "string literal escape sequence did not decode");
     }
     th_type *resolved = th_resolve(result_type);
     th_type *element_type = th_kind_of(resolved) == TH_SEQUENCE
@@ -6352,8 +7396,9 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
     if (char_array) {
         if (decoded->byte_len > UINT32_MAX) {
             core_buffer_free(decoded);
-            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                               "u32 literal is too large to lower");
+            return lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
+                N00B_TEXT_NOT_SUPPORTED_YET_A_CHARACTER,
+                N00BB_NO_ARGS);
         }
         core_list_t(n00bb_ir_value_ptr_t) values =
             core_list_new(n00bb_ir_value_ptr_t);
@@ -6395,8 +7440,9 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
         core_list_free(values);
         core_buffer_free(decoded);
         if (!ok)
-            return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
-                               "u32 literal contains invalid UTF-8 or could not be lowered");
+            return lower_internal(context, span,
+                "character-array literal has invalid UTF-8 or could not be "
+                "built");
         return (ir_lower_result_t){IR_LOWER_VALUE, aggregate->dest};
     }
     ir_instr_t *instruction = ir_lower_emit_instruction(context, IR_OP_CONST,
@@ -6415,7 +7461,7 @@ n00bb_lower_string_literal(ir_lower_context_t *context,
             });
     core_buffer_free(decoded);
     if (!ok)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit a byte-exact string constant");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
@@ -6425,16 +7471,16 @@ n00bb_lower_literal_element(ir_lower_context_t *context, ir_value_t *value,
                             th_type *target, ir_span_t span)
 {
     if (!value || !target)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "literal element has no value or target type");
+        return lower_internal(context, span,
+                              "literal element has no value or target type");
     ir_value_t *materialized = n00bb_materialize(context, nullptr, value,
                                                  target, span);
     if (!materialized)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not materialize the literal element");
     if (!ir_type_eq(context->module, materialized->type, target))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                           "literal element does not match its target type");
+        return lower_internal(context, span,
+                              "literal element does not match its target type");
     return (ir_lower_result_t){IR_LOWER_VALUE, materialized};
 }
 
@@ -6452,16 +7498,16 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
     core_translation_unit_t *owner = nullptr;
     th_type *signature = nullptr;
     if (!analysis || !result_type || !seed)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "literal constructor has no link context or seed");
     th_ctx *probe = th_ctx_new();
-    core_buffer_t constraint_failure = {0};
+    core_string_t failing_type = {0}, failing_trait = {0};
     if (!probe || !analysis->environment
         || !th_ctx_set_environment(probe, analysis->environment,
                 lower->unit->module.identifier,
                 n00bb_package_id(lower->unit))) {
         th_ctx_free(probe);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not check the literal constructor contract");
     }
     for (size_t i = 0; i < analysis->units.len; i++) {
@@ -6499,7 +7545,7 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
                 if (!th_unify_in_place(probe, self->type, receiver_type)
                     || !th_unify_in_place(probe, input->type, seed_type)) {
                     th_error_t detail = {0};
-                    if (!constraint_failure.data
+                    if (!failing_trait.data
                         && th_error_count(probe) > errors_before
                         && th_error_at(probe, th_error_count(probe) - 1,
                                        &detail)
@@ -6507,20 +7553,31 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
                         core_string_t printed = detail.got
                             ? n00bb_print_type(probe, detail.got)
                             : n00bb_print_type(types, result_type);
-                        core_buffer_printf(&constraint_failure,
-                            "literal constructor requires trait '%.*s' for %.*s",
-                            (int)detail.constraint.u8_bytes,
-                            detail.constraint.data,
-                            (int)printed.u8_bytes, printed.data);
+                        failing_type = printed;
+                        failing_trait = core_string_dup(detail.constraint);
                     }
                     continue;
                 }
                 if (selected) {
                     core_list_free(scopes);
                     th_ctx_free(probe);
-                    core_buffer_release(&constraint_failure);
-                    return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                        "multiple literal constructors match the seed");
+                    core_free(failing_trait.data);
+                {
+                    core_string_t type_text = lower_type_text(context,
+                                                              result_type);
+                    lower_report(context,
+                        N00B_DIAG_AMBIGUOUS_LITERAL_CONSTRUCTOR, span,
+                        N00B_TEXT_MORE_THAN_ONE_INIT_FOR,
+                        N00BB_ARGS(ARG_TEXT(type_text)));
+                    lower_declared_secondary(context, selected,
+                        N00B_TEXT_ONE_IS_DECLARED_HERE,
+                        N00BB_NO_ARGS);
+                    lower_declared_secondary(context, symbol,
+                        N00B_TEXT_ANOTHER_IS_DECLARED_HERE,
+                        N00BB_NO_ARGS);
+                    core_free(type_text.data);
+                    return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+                }
                 }
                 selected = symbol;
                 owner = unit;
@@ -6529,8 +7586,8 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
                 if (!signature) {
                     core_list_free(scopes);
                     th_ctx_free(probe);
-                    core_buffer_release(&constraint_failure);
-                    return lower_error(context, IR_DIAG_INTERNAL, span,
+                    core_free(failing_trait.data);
+                    return lower_internal(context, span,
                         "could not retain the literal constructor signature");
                 }
             }
@@ -6539,18 +7596,26 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
     }
     th_ctx_free(probe);
     if (!selected) {
-        ir_lower_result_t error = lower_error_text(context,
-            constraint_failure.data ? IR_DIAG_TYPE_ARGS
-                                    : IR_DIAG_UNDEFINED_SYMBOL,
-            span, constraint_failure.data
-                ? core_buffer_string(&constraint_failure)
-                : CORE_STRING_STATIC("no visible literal constructor accepts the seed"));
-        core_buffer_release(&constraint_failure);
+        core_string_t type_text = lower_type_text(context, result_type);
+        core_string_t seed_text = lower_type_text(context, seed->type);
+        ir_lower_result_t error = failing_trait.data
+            ? lower_report(context, N00B_DIAG_LITERAL_CONSTRUCTOR_TRAIT, span,
+                N00B_TEXT_INIT_NEEDS_TRAIT,
+                N00BB_ARGS(ARG_TEXT(failing_type), ARG_TEXT(failing_trait)))
+            : lower_report(context, N00B_DIAG_NO_LITERAL_CONSTRUCTOR, span,
+                N00B_TEXT_NO_VISIBLE_INIT_FOR_ACCEPTS,
+                N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(seed_text)));
+        if (!failing_trait.data)
+            lower_help(context, N00B_TEXT_DECLARE_AN_INIT_FOR_THAT,
+                N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(seed_text)));
+        core_free(type_text.data);
+        core_free(seed_text.data);
+        core_free(failing_trait.data);
         return error;
     }
-    core_buffer_release(&constraint_failure);
+    core_free(failing_trait.data);
     if (!parse_sym_add_use(selected, literal))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not record the literal constructor use");
     n00bb_tu_state_t *owner_state = tu_state(owner);
     ir_func_t *function = link_ir_function_for_symbol(analysis, selected);
@@ -6574,12 +7639,12 @@ n00bb_lower_literal_constructor(ir_lower_context_t *context,
         && ir_instr_operand_value(call, seed)
         && ir_instr_set_call_signature(call, signature);
     if (!ok)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit the literal constructor call");
     ir_value_t *value = n00bb_emit_indirect_read(context, allocation->dest,
                                                  result_type, span);
     return value ? (ir_lower_result_t){IR_LOWER_VALUE, value}
-        : lower_error(context, IR_DIAG_INTERNAL, span,
+        : lower_internal(context, span,
                       "could not read the constructed literal");
 }
 
@@ -6594,15 +7659,15 @@ n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
     (void)operand_count;
     (void)state;
     if (!result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "sequence literal has no inferred type");
+        return lower_internal(context, span,
+                              "sequence literal has no inferred type");
     th_type *resolved_type = th_resolve(result_type);
     bool is_list = th_builtin_applied(resolved_type, TH_BUILTIN_CONTAINER_LIST, 1)
         != nullptr;
     bool is_array = th_kind_of(resolved_type) == TH_SEQUENCE;
     if (!is_array && !is_list)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "bracket literal aggregate lowering requires a resolved array or list type");
+        return lower_internal(context, span,
+            "bracket literal has no resolved array or list type");
     const th_arg *list_element = is_list
         ? th_named_arg(resolved_type, 0) : nullptr;
     th_type *element_type = is_array ? th_seq_elem(resolved_type)
@@ -6612,16 +7677,16 @@ n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
         ? th_array(ir_module_types(context->module), element_type)
         : result_type;
     if (!aggregate_type || !element_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "sequence literal element type is unresolved");
+        return lower_internal(context, span,
+                              "sequence literal element type is unresolved");
     core_list_t(n00bb_ir_value_ptr_t) values =
         core_list_new(n00bb_ir_value_ptr_t);
     bool collected = collect_sequence_literal_values(context, visit,
                                                       visit->node, &values);
     if (!collected) {
         core_list_free(values);
-        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-                           "sequence literal element has no lowered value");
+        return lower_internal(context, span,
+                              "sequence literal element has no value");
     }
     core_list_t(n00bb_ir_value_ptr_t) promoted_values =
         core_list_new(n00bb_ir_value_ptr_t);
@@ -6681,7 +7746,7 @@ n00bb_lower_sequence_aggregate(ir_lower_context_t *context,
     core_list_free(promoted_values);
     core_list_free(values);
     if (!ok)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit a sequence aggregate");
     instruction->span = span;
     return is_list
@@ -6735,11 +7800,19 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
     bool is_dict = th_builtin_applied(resolved, TH_BUILTIN_CONTAINER_DICT, 2)
         != nullptr;
     if (dict_only_empty_literal(visit->grammar, visit->node) && is_set)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "{:} is a dictionary literal, not a set literal");
+    {
+        core_string_t type_text = lower_type_text(context, result_type);
+        ir_lower_result_t result = lower_report(context,
+            N00B_DIAG_EMPTY_DICT_AS_SET, span,
+            N00B_TEXT_IS_AN_EMPTY_DICTIONARY_BUT,
+            N00BB_ARGS(ARG_TEXT(type_text)));
+        lower_help(context, N00B_TEXT_WRITE_FOR_AN_EMPTY_SET, N00BB_NO_ARGS);
+        core_free(type_text.data);
+        return result;
+    }
     if (!is_set && !is_dict)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "brace literal needs an inferred set or dictionary type");
+        return lower_internal(context, span,
+            "brace literal has no inferred set or dictionary type");
     const th_arg *first = th_named_arg(resolved, 0);
     const th_arg *second = is_dict ? th_named_arg(resolved, 1) : nullptr;
     th_type *key = first && first->kind == TH_ARG_TYPE
@@ -6747,8 +7820,8 @@ n00bb_lower_brace_literal(ir_lower_context_t *context,
     th_type *value = second && second->kind == TH_ARG_TYPE
         ? second->type : nullptr;
     if (!key || (is_dict && !value))
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "brace literal has unresolved element types");
+        return lower_internal(context, span,
+                              "brace literal has unresolved element types");
     th_type *members[] = {key, value};
     th_type *element = is_dict
         ? th_tuple(ir_module_types(context->module), members, 2) : key;
@@ -6824,7 +7897,7 @@ n00bb_lower_brace_payload(ir_lower_context_t *context,
         ok = ir_instr_operand_value(array, items.data[i]);
     core_list_free(items);
     if (!ok)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not construct the brace handler payload");
     return (ir_lower_result_t){IR_LOWER_VALUE, array->dest};
 }
@@ -6915,7 +7988,7 @@ n00bb_lower_user_parenthesized_payload(ir_lower_context_t *context,
         ok = ir_instr_operand_value(array, values.data[i]);
     core_list_free(values);
     core_list_free(expressions);
-    if (!ok) return lower_error(context, IR_DIAG_INTERNAL, span,
+    if (!ok) return lower_internal(context, span,
         "could not construct the tuple or record handler payload");
     return (ir_lower_result_t){IR_LOWER_VALUE, array->dest};
 }
@@ -6954,12 +8027,8 @@ n00bb_lower_literal_site(ir_lower_context_t *context, parse_visit_t *visit,
     parse_token_info_t *token = parse_tree_find_first_terminal(visit->node);
     if (!lower || !token || !definition
         || th_kind_of(definition) != TH_RECORD) return nullptr;
-    char *copy = core_string_to_cstr(
+    core_string_t path = core_os_real_path(
         core_source_file_path(&lower->unit->source));
-    char *native = copy ? realpath(copy, nullptr) : nullptr;
-    core_free(copy);
-    core_string_t path = core_string_from_cstr(native);
-    free(native);
     size_t count = th_record_len(definition);
     ir_value_t **members = core_alloc_array(ir_value_t *, count ? count : 1);
     bool ok = path.data && members;
@@ -6999,21 +8068,21 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
     bool no_payload = site && core_string_eq(site->registration->kind,
                                              CORE_STRING_STATIC("nil"));
     if (!symbol)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "literal handler has no function symbol");
+        return lower_internal(context, span,
+                              "literal handler has no function symbol");
     if (!function)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "literal handler function is absent from this phase");
+        return lower_internal(context, span,
+            "literal handler function is absent from this phase");
     if (!callee)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "literal handler has no callable IR address");
+        return lower_internal(context, span,
+                              "literal handler has no callable address");
     if (!site || (!no_payload && !site->payload_type) || !site->signature
         || !result_type || !ir_type_eq(context->module, result_type,
                                       th_func_ret(site->signature)))
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "literal handler call type does not match its result");
+        return lower_internal(context, span,
+            "literal handler call type does not match its result");
     if (!parse_sym_add_use(symbol, visit->node))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not record the literal handler use");
     ir_lower_result_t payload = {IR_LOWER_FAILED, nullptr};
     if (core_string_eq(site->registration->kind, CORE_STRING_STATIC("sequence")))
@@ -7108,7 +8177,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
             size_t token_start = parse_token_start_byte(token);
             if (content_start < token_start || content_end < content_start
                 || content_end - token_start > spelling.u8_bytes)
-                return lower_error(context, IR_DIAG_TYPE_LITERAL, span,
+                return lower_internal(context, span,
                     "fence literal has invalid content offsets");
             size_t start = content_start - token_start;
             size_t end = content_end - token_start;
@@ -7131,7 +8200,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         ? n00bb_lower_literal_site(context, visit, span) : nullptr;
     if (n00bb_litmod_takes_site(ir_module_types(context->module),
                                 site->signature) && !literal_site)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not describe the literal's source site");
     th_type *outcome_type = ir_call_outcome_type(context->module,
                                                 site->signature);
@@ -7143,7 +8212,7 @@ n00bb_lower_user_literal(ir_lower_context_t *context,
         || (!no_payload && !ir_instr_operand_value(call, payload.value))
         || (literal_site && !ir_instr_operand_value(call, literal_site))
         || !ir_instr_set_call_signature(call, site->signature))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit the literal handler call");
     ir_value_t *value = nullptr;
     if (!n00bb_unwrap_call_outcome(context, visit, call->dest, span,
@@ -7171,8 +8240,9 @@ n00bb_lower_literal_handler(ir_lower_context_t *context,
     return user_site
         ? n00bb_lower_user_literal(context, visit, user_site,
                                     result_type, span)
-        : lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                      "no literal handler is registered for this shape");
+        : lower_report(context, N00B_DIAG_UNKNOWN_LITERAL_MODIFIER, span,
+            N00B_TEXT_NO_LITERAL_MODIFIER_IS_DEFINED_2,
+            N00BB_NO_ARGS);
 }
 
 static bool
@@ -7241,15 +8311,16 @@ n00bb_declare_literal_constant(n00bb_lower_context_t *lower,
     }
     core_string_t identifier = n00bb_baked_root_identifier(tu->link_analysis,
         unit->module.identifier, name);
+    if (!identifier.data && n00bb_baked_values_opaque())
+        identifier = global->name;
     if (!identifier.data && !n00bb_literal_values_captured()) {
         tu->link_analysis->literal_needed = true;
         return true;
     }
     if (!identifier.data) {
-        core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0026"),
-            CORE_STRING_STATIC(
-                "a static literal has no value from the build-time run"));
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){0}, "reading build-time results",
+            "a static literal has no value from the build-time run");
         return false;
     }
     return ir_global_set_phase_result_initializer(tu->ir_module, global,
@@ -7360,6 +8431,60 @@ literal_backed_initializer(parse_grammar_t *grammar,
     return nullptr;
 }
 
+static void
+report_uninferred_literal(ir_lower_context_t *context,
+                          parse_grammar_t *grammar, parse_tree_t *literal)
+{
+    parse_tree_t *shape = literal;
+    while (shape && !core_tree_is_leaf(shape)
+           && !nt_is(grammar, shape, CORE_STRING_STATIC("list-lit"))
+           && !nt_is(grammar, shape, CORE_STRING_STATIC("dict-or-set-lit"))
+           && core_tree_num_children(shape) == 1)
+        shape = core_tree_child(shape, 0);
+    bool list = nt_is(grammar, shape, CORE_STRING_STATIC("list-lit"));
+    bool brace = nt_is(grammar, shape, CORE_STRING_STATIC("dict-or-set-lit"));
+    parse_tree_t *declaration = nullptr;
+    parse_tree_t *variable = nullptr;
+    for (parse_tree_t *ancestor = parse_tree_parent(literal); ancestor;
+         ancestor = parse_tree_parent(ancestor)) {
+        if (!declaration && nt_is(grammar, ancestor,
+                                  CORE_STRING_STATIC("sym-decl")))
+            declaration = ancestor;
+        if (nt_is(grammar, ancestor, CORE_STRING_STATIC("variable-decl"))) {
+            variable = ancestor;
+            break;
+        }
+        if (nt_is(grammar, ancestor, CORE_STRING_STATIC("statement")))
+            break;
+    }
+    core_string_t name = declaration && variable
+        ? first_token_text(declaration) : (core_string_t){0};
+    parse_tree_t *prefix = variable
+        ? child_nt(grammar, variable,
+                   CORE_STRING_STATIC("declaration-prefix")) : nullptr;
+    core_string_t keyword = first_token_text(child_nt(grammar, prefix,
+        CORE_STRING_STATIC("binding-kind")));
+    if (!keyword.u8_bytes) keyword = CORE_STRING_STATIC("let");
+    n00bb_text_t what = list ? N00B_TEXT_EMPTY_LIST
+        : brace ? N00B_TEXT_EMPTY_COLLECTION : N00B_TEXT_LITERAL;
+    n00bb_text_t aspect = list || brace ? N00B_TEXT_ELEMENT_TYPE
+                                        : N00B_TEXT_TYPE;
+    ir_span_t span = lower_span_for_tree(context, literal);
+    lower_report(context, N00B_DIAG_CONTAINER_LITERAL_UNTYPED, span,
+        name.u8_bytes ? N00B_TEXT_CANNOT_INFER_ASSIGNED
+                      : N00B_TEXT_CANNOT_INFER_THIS,
+        N00BB_ARGS(ARG_PHRASE_ID(aspect), ARG_PHRASE_ID(what),
+                   ARG_TEXT(name)));
+    if (name.u8_bytes && list)
+        lower_help(context, N00B_TEXT_ANNOTATE_IT_LIST_INT,
+            N00BB_ARGS(ARG_TEXT(keyword), ARG_TEXT(name)));
+    else if (name.u8_bytes && brace)
+        lower_help(context, N00B_TEXT_ANNOTATE_IT_AS_IN_DICT,
+            N00BB_ARGS(ARG_TEXT(keyword), ARG_TEXT(name)));
+    else
+        lower_help(context, N00B_TEXT_GIVE_THE_VALUE_A_TYPE, N00BB_NO_ARGS);
+}
+
 static bool
 n00bb_lower_static_litmod(ir_lower_context_t *context,
                           parse_visit_t *visit, bool entering, void *opaque)
@@ -7375,11 +8500,10 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         if (!facts || !facts->static_literal)
             return true;
         th_type *result_type = parse_tree_type(visit->node);
-        if (!result_type || !th_is_closed(tu->types, result_type))
-            return lower_error(context, IR_DIAG_TYPE_CLASS,
-                lower_span_for_tree(context, visit->node),
-                "literal handler result is not concrete at this site")
-                .status != IR_LOWER_FAILED;
+        if (!result_type || !th_is_closed(tu->types, result_type)) {
+            report_uninferred_literal(context, visit->grammar, visit->node);
+            return false;
+        }
         char name_buffer[96];
         core_string_t name = literal_producer_name(visit->node, name_buffer,
                                                    sizeof(name_buffer));
@@ -7400,7 +8524,7 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
         ir_block_t *entry = producer ? ir_block_add(producer, CORE_STRING_STATIC("entry"))
                                      : nullptr;
         if (!entry)
-            return lower_error(context, IR_DIAG_INTERNAL,
+            return lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not create the static literal producer")
                 .status != IR_LOWER_FAILED;
@@ -7468,8 +8592,17 @@ n00bb_emit_contextual_integer_constant(ir_lower_context_t *context,
     if (!type || !is_integer_type(type)) return true;
     if (n00bb_unsigned_literal_origin(visit->node)
         && !n00bb_bitwise_type(type)) {
-        lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "a bitwise or shift integer constant requires an unsigned type");
+        core_string_t type_text = lower_type_text(context, type);
+        core_string_t text = source_text_of(lower_unit(context),
+                                            visit->node);
+        lower_report(context, N00B_DIAG_BITWISE_NEEDS_UNSIGNED, span,
+            N00B_TEXT_IS_USED_IN_A_BITWISE,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                : n00bb_text_form(N00B_TEXT_THIS_CONSTANT)),
+            ARG_TEXT(type_text)));
+        lower_help(context, N00B_TEXT_USE_AN_UNSIGNED_TYPE_WHERE,
+            N00BB_NO_ARGS);
+        core_free(type_text.data);
         return false;
     }
     ir_instr_t *constant = ir_lower_emit_instruction(context, IR_OP_CONST,
@@ -7481,7 +8614,7 @@ n00bb_emit_contextual_integer_constant(ir_lower_context_t *context,
         && ir_lower_set_node_value(context, visit->node, constant->dest)
         && (!prune || ir_lower_prune_node(context, visit->node)))
         return true;
-    lower_error(context, IR_DIAG_INTERNAL, span,
+    lower_internal(context, span,
                 "could not emit an integer constant");
     return false;
 }
@@ -7565,10 +8698,10 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
     n00bb_callback_contract_t *contract =
         n00bb_callback_contract_for_type(state, result_type);
     if (!contract || !contract->call || !contract->handler)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+        return lower_internal(context, span,
             "callback construction has no resolved nominal contract");
     if (!n00bb_register_callback_representation(context->module, result_type))
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+        return lower_internal(context, span,
             "callback construction has no registered value representation");
 
     parse_tree_t *args = child_nt(visit->grammar, visit->node, CORE_STRING_STATIC("call-args"));
@@ -7628,10 +8761,19 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
     if (can_fail != propagated) {
         core_list_free(positional);
         core_list_free(keywords);
-        return lower_error_text(context, IR_DIAG_VERIFY_TYPED, span,
-            can_fail
-                ? CORE_STRING_STATIC("callback setup failure must be propagated with postfix !")
-                : CORE_STRING_STATIC("postfix ! requires a callback setup failure channel"));
+        core_string_t type_text = lower_type_text(context, result_type);
+        ir_lower_result_t result = can_fail
+            ? lower_report(context, N00B_DIAG_FAILURE_NOT_PROPAGATED, span,
+                N00B_TEXT_SETTING_UP_CALLBACK_CAN_FAIL,
+                N00BB_ARGS(ARG_TEXT(type_text)))
+            : lower_report(context, N00B_DIAG_PROPAGATE_INFALLIBLE, span,
+                N00B_TEXT_SETTING_UP_CALLBACK_CANNOT_FAIL,
+                N00BB_ARGS(ARG_TEXT(type_text)));
+        lower_help(context, can_fail ? N00B_TEXT_WRITE_CALLBACK_PROPAGATE
+                                     : N00B_TEXT_REMOVE_THE,
+                   N00BB_NO_ARGS);
+        core_free(type_text.data);
+        return result;
     }
     th_type *construction_signature = nullptr;
     th_type *ir_result = result_type;
@@ -7708,14 +8850,14 @@ n00bb_lower_callback_create(ir_lower_context_t *context,
     core_list_free(positional);
     core_list_free(keywords);
     if (!emitted)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not emit semantic callback construction");
     if (state_reference && !ir_value_add_alias_target(
             lower->ir_context, instruction->dest,
             (ir_alias_target_t){
                 .value = state_reference, .escapes = true,
             }))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not retain callback state alias provenance");
     return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
 }
@@ -7856,8 +8998,8 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     (void)operand_count;
     (void)state;
     if (!result_type)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "new has no resolved result type");
+        return lower_internal(context, span,
+                              "`new` has no resolved result type");
     th_type *resolved_type = th_resolve(result_type);
     bool is_variant = false;
     if (th_named_info(resolved_type, nullptr, &is_variant, nullptr)
@@ -7873,8 +9015,17 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                                      CORE_STRING_STATIC("keyword-args")) != nullptr;
         if (positional.len || has_keywords) {
             core_list_free(positional);
-            return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                "new for a variant takes no arguments; assign a selected arm afterward");
+        {
+            core_string_t type_text = lower_type_text(context, result_type);
+            ir_lower_result_t result = lower_report(context,
+                N00B_DIAG_NEW_VARIANT_ARGUMENTS, span,
+                N00B_TEXT_NEW_FOR_VARIANT_TAKES_NO,
+                N00BB_ARGS(ARG_TEXT(type_text)));
+            lower_help(context, N00B_TEXT_CREATE_IT_WITH_NEW_THEN,
+                N00BB_NO_ARGS);
+            core_free(type_text.data);
+            return result;
+        }
         }
         core_list_free(positional);
         ir_instr_t *instruction = ir_lower_emit_instruction(context,
@@ -7883,7 +9034,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         if (!instruction
             || !ir_lower_set_temp_dest(context, instruction,
                 CORE_STRING_STATIC("__n00bb_variant_new_"), resolved_type))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not emit unset variant storage");
         return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
     }
@@ -7901,7 +9052,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                                                  CORE_STRING_STATIC("__n00bb_"), result_type)
             || !ir_instr_operand_name(constant, CORE_STRING_STATIC("nil"))
             || !ir_instr_operand_uint(constant, 0))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not emit default flagset construction");
         return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
     }
@@ -7911,7 +9062,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     n00bb_tu_state_t *tu = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_analysis_t *analysis = tu ? tu->link_analysis : nullptr;
     if (!lower || !tu || !analysis)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "array construction has no LinkUnit analysis");
     parse_tree_t *type_node = child_nt(visit->grammar, visit->node,
                                        CORE_STRING_STATIC("type-spec"));
@@ -7922,8 +9073,8 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                                          &type_dimensions);
     if (!type_shape_ok) {
         core_list_free(type_dimensions);
-        return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                           "could not determine the array type dimensions");
+        return lower_internal(context, span,
+                              "could not determine the array type dimensions");
     }
     uint32_t rank = 0;
     th_type *leaf = th_resolve(result_type);
@@ -7931,8 +9082,8 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         leaf = th_resolve(th_seq_elem(leaf));
         if (!leaf || rank == UINT32_MAX) {
             core_list_free(type_dimensions);
-            return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                               "new has an invalid array type");
+            return lower_internal(context, span,
+                                  "`new` has an invalid array type");
         }
         rank++;
     }
@@ -7940,8 +9091,9 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
                                        CORE_STRING_STATIC("call-args"));
     if (child_nt(visit->grammar, call_args, CORE_STRING_STATIC("keyword-args"))) {
         core_list_free(type_dimensions);
-        return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                           "array dimensions must be positional arguments");
+        return lower_report(context, N00B_DIAG_ARRAY_DIMENSIONS, span,
+            N00B_TEXT_ARRAY_DIMENSIONS_GIVEN_TO_NEW,
+            N00BB_NO_ARGS);
     }
     core_list_t(n00bb_tree_ptr_t) arguments =
         core_list_new(n00bb_tree_ptr_t);
@@ -7953,8 +9105,8 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     if (type_dimensions.len > rank) {
         core_list_free(arguments);
         core_list_free(type_dimensions);
-        return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                           "array type shape exceeds its sequence rank");
+        return lower_internal(context, span,
+                              "array type shape exceeds its sequence rank");
     }
     uint32_t unsized_count = rank;
     for (size_t i = 0; i < type_dimensions.len; i++)
@@ -7964,8 +9116,17 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         || (!dimension_argument_count && unsized_count)) {
         core_list_free(arguments);
         core_list_free(type_dimensions);
-        return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-            "array construction requires dimensions for a prefix of the unsized extents");
+    {
+        core_string_t type_text = lower_type_text(context, result_type);
+        ir_lower_result_t result = lower_report(context,
+            N00B_DIAG_ARRAY_DIMENSIONS, span,
+            N00B_TEXT_NEW_DIMENSIONS_WITHOUT_SIZE,
+            N00BB_ARGS(ARG_NUMBER(unsized_count), ARG_TEXT(type_text),
+                       ARG_NUMBER(dimension_argument_count)));
+        lower_help(context, N00B_TEXT_PASS_ONE_SIZE_FOR_EACH, N00BB_NO_ARGS);
+        core_free(type_text.data);
+        return result;
+    }
     }
 
     th_type *uint_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("uint"));
@@ -7975,7 +9136,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     if (!one) {
         core_list_free(arguments);
         core_list_free(type_dimensions);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not create the array extent constant");
     }
     core_list_t(n00bb_ir_value_ptr_t) dimension_values =
@@ -8015,15 +9176,17 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         }
         core_string_t name = {0};
         simple_identifier_expression(visit->grammar, expression, &name);
-        core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            "array extent '%.*s' is not a constant the compiler can fold",
-            (int)name.u8_bytes, name.data ? name.data : "");
-        lower_error_text(context, IR_DIAG_TYPE_ARGS,
-            lower_span_for_tree(context, expression),
-            message.data ? core_buffer_string(&message)
-                         : CORE_STRING_STATIC("array extent is not foldable"));
-        core_buffer_release(&message);
+        if (name.u8_bytes)
+            lower_report(context, N00B_DIAG_ARRAY_EXTENT_NOT_CONSTANT,
+                lower_span_for_tree(context, expression),
+                N00B_TEXT_ARRAY_SIZE_MUST_BE_A,
+                N00BB_ARGS(ARG_TEXT(name)));
+        else
+            lower_report(context, N00B_DIAG_ARRAY_EXTENT_NOT_CONSTANT,
+                lower_span_for_tree(context, expression),
+                N00B_TEXT_THIS_ARRAY_SIZE_MUST_BE,
+                N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_USE_A_CONST_OR_LEAVE, N00BB_NO_ARGS);
         ok = false;
     }
     if (!ok) {
@@ -8054,8 +9217,8 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(type_dimensions);
         core_list_free(dimension_values);
         core_list_free(dimension_expressions);
-        return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                           "could not lower array dimensions");
+        return lower_failed_after(context, span,
+            CORE_STRING_STATIC("could not compute the array dimensions"));
     }
 
     ir_shape_extent_t *extents = core_alloc_array(ir_shape_extent_t, rank);
@@ -8080,7 +9243,7 @@ n00bb_lower_array_new(ir_lower_context_t *context, parse_visit_t *visit,
     core_list_free(dimension_values);
     core_list_free(dimension_expressions);
     if (!array)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit semantic array construction");
     return (ir_lower_result_t){IR_LOWER_VALUE, array};
 }
@@ -8215,28 +9378,33 @@ n00bb_emit_context_hook_call(ir_lower_context_t *context,
         ? ir_func_address(state->ir_module, function) : nullptr;
     th_type *signature = function ? th_resolve(function->type) : nullptr;
     if (!address || !signature || th_kind_of(signature) != TH_FUNCTION) {
-        lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                    "context hook has no lowered function");
+        lower_internal(context, span, "context hook has no function");
         return false;
     }
     th_type *error_type = th_func_error(signature);
     bool can_fail = error_type
         && !th_is_nil(error_type);
     if (can_fail && !failure) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                    "this context hook is not allowed to fail");
+        core_string_t name = item->context_symbol
+            ? item->context_symbol->name : CORE_STRING_STATIC("context");
+        lower_report(context, N00B_DIAG_CONTEXT_HOOK_CANNOT_FAIL, span,
+            N00B_TEXT_THIS_HOOK_OF_CONTEXT_DECLARES,
+            N00BB_ARGS(ARG_TEXT(name)));
+        lower_help(context, N00B_TEXT_HANDLE_THE_FAILURE_INSIDE_THE,
+            N00BB_NO_ARGS);
         return false;
     }
     size_t expected = th_func_nparams(signature);
     if (expected != item->captures.len + (hook_value ? 1 : 0)) {
-        lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                    "context hook capture count does not match its signature");
+        lower_internal(context, span,
+                       "context hook capture count does not match its "
+                       "signature");
         return false;
     }
     th_type *result_type = can_fail
         ? ir_call_outcome_type(context->module, signature) : nullptr;
     if (can_fail && !result_type) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not construct the context hook outcome type");
         return false;
     }
@@ -8265,7 +9433,7 @@ n00bb_emit_context_hook_call(ir_lower_context_t *context,
         emitted = ir_instr_operand_value(call,
             item->captures.data[fixed_captures]);
     if (!emitted) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not invoke context hook");
         return false;
     }
@@ -8331,7 +9499,7 @@ n00bb_emit_context_hook_outcome_branch(ir_lower_context_t *context,
         && ir_instr_operand_block(branch, *ok_block)
         && ir_instr_operand_block(branch, *error_block);
     if (!emitted) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not branch on a context hook outcome");
         return false;
     }
@@ -8351,14 +9519,13 @@ n00bb_propagate_context_hook_failure(ir_lower_context_t *context,
     if (routed < 0) return false;
     if (routed) return true;
     if (!n00bb_failure_channel_accepts(context, error->type)) {
-        if (!n00bb_reject_runtime_initializer_failure(context, span))
-            lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "an uncaught context hook error must match the enclosing function's failure channel");
+        report_uncaught_failure(context, span, error->type,
+                                N00B_TEXT_PHRASE_THIS_CONTEXT_HOOK);
         return false;
     }
     ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
     if (!fail || !ir_instr_operand_value(fail, error)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not propagate the context hook error");
         return false;
     }
@@ -8583,14 +9750,13 @@ n00bb_propagate_context_computation_failure(ir_lower_context_t *context,
     if (routed < 0) return false;
     if (routed) return true;
     if (!n00bb_failure_channel_accepts(context, error_type)) {
-        if (!n00bb_reject_runtime_initializer_failure(context, span))
-            lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "an uncaught context-constructor error must match the enclosing function's failure channel");
+        report_uncaught_failure(context, span, error_type,
+                                N00B_TEXT_PHRASE_CONTEXT_ARGUMENTS);
         return false;
     }
     ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
     if (!fail || !ir_instr_operand_value(fail, error)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not propagate context constructor failure");
         return false;
     }
@@ -8612,7 +9778,7 @@ n00bb_call_context_default(ir_lower_context_t *context,
     if (!owner_state || !signature || th_kind_of(signature) != TH_FUNCTION
         || th_func_nparams(signature) != argument_count
         || th_func_rest(signature)) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        lower_internal(context, span,
             "context default helper does not match its dependency contract");
         return nullptr;
     }
@@ -8621,8 +9787,9 @@ n00bb_call_context_default(ir_lower_context_t *context,
         if (!parameter || !arguments[i]
             || !th_unify_in_place(ir_module_types(context->module),
                                   parameter->type, arguments[i]->type)) {
-            lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                "a context default dependency does not match its helper parameter");
+            lower_internal(context, span,
+                "a context default dependency does not match its helper "
+                "parameter");
             return nullptr;
         }
     }
@@ -8633,8 +9800,8 @@ n00bb_call_context_default(ir_lower_context_t *context,
     th_type *result_type = th_func_ret(signature);
     if (!address || !result_type
         || th_is_nil(result_type)) {
-        lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "context defaults must produce a value for their parameter");
+        lower_internal(context, span,
+            "context default produces no value for its parameter");
         return nullptr;
     }
     th_type *outcome_type = can_fail
@@ -8651,7 +9818,7 @@ n00bb_call_context_default(ir_lower_context_t *context,
     for (size_t i = 0; emitted && i < argument_count; i++)
         emitted = ir_instr_operand_value(call, arguments[i]);
     if (!emitted) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not invoke a context default helper");
         return nullptr;
     }
@@ -8664,7 +9831,7 @@ n00bb_call_context_default(ir_lower_context_t *context,
     if (!definition || th_kind_of(definition) != TH_RECORD
         || !th_named_info(outcome_type, nullptr, &variant, nullptr)
         || !variant || !ok_type || !error_payload_type) {
-        lower_error(context, IR_DIAG_TYPE_CLASS, span,
+        lower_internal(context, span,
             "context default outcome is not a complete variant");
         return nullptr;
     }
@@ -8706,7 +9873,7 @@ n00bb_call_context_default(ir_lower_context_t *context,
         && ir_instr_operand_block(branch, ok_block)
         && ir_instr_operand_block(branch, error_block);
     if (!branched) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not branch on context default outcome");
         return nullptr;
     }
@@ -8724,7 +9891,7 @@ n00bb_call_context_default(ir_lower_context_t *context,
     if (th_is_nil(ok_type))
         value = nullptr;
     if (!value) {
-        lower_error(context, IR_DIAG_TYPE_CLASS, span,
+        lower_internal(context, span,
             "context default helper returned no successful value");
         return nullptr;
     }
@@ -8743,8 +9910,18 @@ n00bb_context_ensure_default(
 {
     if (provided_by_parameter[index]) return true;
     if (default_state[index] == 1) {
-        lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                    "context default parameter dependencies are cyclic");
+        parse_sym_entry_t *cyclic = parameters && index < parameters->len
+            ? parameters->data[index] : nullptr;
+        if (cyclic)
+            lower_report(context, N00B_DIAG_DEFAULT_CYCLE, span,
+                N00B_TEXT_THE_DEFAULT_VALUE_OF_PARAMETER,
+                N00BB_ARGS(ARG_TEXT(cyclic->name), ARG_TEXT(symbol->name)));
+        else
+            lower_report(context, N00B_DIAG_DEFAULT_CYCLE, span,
+                N00B_TEXT_THE_DEFAULT_VALUES_OF_CONTEXT,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+        lower_help(context, N00B_TEXT_PASS_ONE_OF_THE_PARAMETERS,
+            N00BB_NO_ARGS);
         return false;
     }
     default_state[index] = 1;
@@ -8760,8 +9937,16 @@ n00bb_context_ensure_default(
         : formal && formal->is_optional;
     if (!optional) {
         default_state[index] = 0;
-        lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                    "context call omits a required parameter");
+        parse_sym_entry_t *missing = parameters && index < parameters->len
+            ? parameters->data[index] : formal;
+        if (missing)
+            lower_report(context, N00B_DIAG_CALL_MISSING_ARGUMENT, span,
+                N00B_TEXT_CONTEXT_NEEDS_A_VALUE_FOR,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(missing->name)));
+        else
+            lower_report(context, N00B_DIAG_CALL_MISSING_ARGUMENT, span,
+                N00B_TEXT_CONTEXT_IS_MISSING_A_REQUIRED,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
         return false;
     }
 
@@ -8874,8 +10059,8 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         ? core_link_declaration_binding(context_declaration, hook_role)
         : nullptr;
     if (!owner_state || !has_enter || !function) {
-        lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-            "context enter hook has no canonical lowered function binding");
+        lower_internal(context, span,
+            "context enter hook has no canonical function");
         return -1;
     }
     ir_value_t *address = function
@@ -8915,15 +10100,15 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             + (rest_parameter != nullptr)) {
         core_list_free(captures);
         core_list_free(actuals);
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                    "archived context parameters do not match its callable contract");
+        lower_internal(context, span,
+            "archived context parameters do not match its callable contract");
         return -1;
     }
     if ((rest_symbol != nullptr) != (rest_parameter != nullptr)) {
         core_list_free(captures);
         core_list_free(actuals);
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                    "context rest parameter does not match its constructor signature");
+        lower_internal(context, span,
+            "context rest parameter does not match its constructor signature");
         return -1;
     }
     core_list_t(n00bb_ir_value_ptr_t) rest_values =
@@ -8940,6 +10125,15 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         collect_positional_nodes(visit->grammar, positional,
                                  &positional_nodes);
     bool mapped = has_rest || positional_nodes.len <= parameter_count;
+    if (!mapped) {
+        lower_report(context, N00B_DIAG_CALL_TOO_MANY_ARGUMENTS,
+            lower_span_for_tree(context,
+                positional_nodes.data[parameter_count]),
+            N00B_TEXT_CONTEXT_TAKES_ARGUMENTS,
+            N00BB_ARGS(ARG_NUMBER(parameter_count), ARG_TEXT(symbol->name),
+                       ARG_NUMBER(positional_nodes.len)));
+        lower_label(context, N00B_TEXT_UNEXPECTED_ARGUMENT, N00BB_NO_ARGS);
+    }
     for (size_t i = 0; mapped && i < positional_nodes.len; i++) {
         if (i < parameter_count) {
             provided_by_parameter[i] = true;
@@ -8970,15 +10164,30 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *argument = child_nt(visit->grammar,
             keyword_nodes.data[i], CORE_STRING_STATIC("expression"));
         if (!named_parameter || !argument || index >= parameter_count) {
-            lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                        "named context argument does not match a parameter");
+            lower_report(context, N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
+                lower_span_for_tree(context, keyword_nodes.data[i]),
+                N00B_TEXT_CONTEXT_HAS_NO_PARAMETER_NAMED,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(name)));
+            if (formal_params) {
+                core_list_t(core_string_t) names =
+                    core_list_new(core_string_t);
+                for (size_t p = 0; p < parameter_count; p++) {
+                    parse_sym_entry_t *candidate = formal_symbol_at(
+                        visit->grammar, formal_params, p, &(size_t){0});
+                    if (candidate) core_list_push(names, candidate->name);
+                }
+                n00bb_diag_did_you_mean(lower_diagnostics(context), name,
+                                        names.data, names.len);
+                core_list_free(names);
+            }
             mapped = false;
             break;
         }
         if (provided_by_parameter[index]) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
+            lower_report(context, N00B_DIAG_CALL_ARGUMENT_REPEATED,
                 lower_span_for_tree(context, keyword_nodes.data[i]),
-                "a context parameter is supplied more than once");
+                N00B_TEXT_PARAMETER_OF_CONTEXT_IS_GIVEN,
+                N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(symbol->name)));
             mapped = false;
             break;
         }
@@ -9005,8 +10214,14 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
                                           : true;
         if ((!interface_context && !formal) || !param
             || !th_mode_is_in(param->mode) || !mode_is_in) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                        "context constructor parameters must be in parameters");
+            if (formal)
+                lower_report(context, N00B_DIAG_CONTEXT_PARAMETER_MODE,
+                    lower_symbol_name_span(context, formal),
+                    N00B_TEXT_PARAMETER_OF_CONTEXT_MUST_BE,
+                    N00BB_ARGS(ARG_TEXT(formal->name), ARG_TEXT(symbol->name)));
+            else
+                lower_internal(context, span,
+                               "context parameter has no declaration");
             mapped = false;
             break;
         }
@@ -9019,16 +10234,34 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             context_interface_parameter(symbol, i, nullptr, &flags,
                                         nullptr);
             if ((flags & 1u) && !(flags & 4u)) {
-                lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                    "the imported context interface does not provide its default computation");
+                lower_internal(context, span,
+                    "the imported context interface does not provide its "
+                    "default computation");
                 mapped = false;
                 break;
             }
         }
     }
     if (mapped && missing_required) {
-        lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                    "context call omits a required parameter");
+        core_list_t(core_string_t) missing = core_list_new(core_string_t);
+        for (size_t i = 0; i < parameter_count; i++) {
+            if (provided_by_parameter[i] || interface_context) continue;
+            parse_sym_entry_t *formal = formal_symbol_at(visit->grammar,
+                formal_params, i, &(size_t){0});
+            if (formal && !formal->is_optional)
+                core_list_push(missing, formal->name);
+        }
+        if (missing.len)
+            lower_report(context, N00B_DIAG_CALL_MISSING_ARGUMENT, span,
+                N00B_TEXT_CONTEXT_NEEDS_VALUES_FOR,
+                N00BB_ARGS(ARG_NAMES(missing.data, missing.len),
+                           ARG_TEXT(symbol->name)));
+        else
+            lower_report(context, N00B_DIAG_CALL_MISSING_ARGUMENT, span,
+                N00B_TEXT_CONTEXT_IS_MISSING_ARGUMENTS,
+                N00BB_ARGS(ARG_NUMBER(missing_required),
+                           ARG_TEXT(symbol->name)));
+        core_list_free(missing);
         mapped = false;
     }
     void *binding_checkpoint = ir_lower_bindings_checkpoint(context);
@@ -9041,10 +10274,19 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             if (!rest_parameter || !value || !th_unify_in_place(
                     ir_module_types(context->module), rest_parameter->type,
                     value->type)) {
-                if (rest_parameter && value)
-                    lower_error(context, IR_DIAG_TYPE_ARGS,
+                if (rest_parameter && value) {
+                    core_string_t expected = lower_type_text(context,
+                        rest_parameter->type);
+                    core_string_t actual = lower_type_text(context,
+                                                           value->type);
+                    lower_report(context, N00B_DIAG_CALL_ARGUMENT_TYPE,
                         lower_span_for_tree(context, actuals.data[i].node),
-                        "context variadic argument does not match its element type");
+                        N00B_TEXT_THIS_ARGUMENT_IS_BUT_THE,
+                        N00BB_ARGS(ARG_TEXT(actual), ARG_TEXT(symbol->name),
+                                   ARG_TEXT(expected)));
+                    core_free(expected.data);
+                    core_free(actual.data);
+                }
                 collected = false;
                 break;
             }
@@ -9076,7 +10318,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         for (size_t i = 0; packed && i < rest_values.len; i++)
             packed = ir_instr_operand_value(array, rest_values.data[i]);
         if (!packed) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not pack context variadic arguments into an array");
             collected = false;
         }
@@ -9124,24 +10366,25 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     core_free(provided_by_parameter);
     if (!collected) {
         core_list_free(captures);
-        if (!ir_diags_failed(context->diagnostics))
-            lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                        "context arguments do not match the constructor signature");
+        lower_failed_after(context, span,
+            CORE_STRING_STATIC("context arguments do not match the "
+                               "constructor signature"));
         return -1;
     }
     for (size_t i = 0; i < parameter_count; i++) {
         const th_param *param = th_func_param(signature, i);
         if (!param || !th_mode_is_in(param->mode)) {
             core_list_free(captures);
-            lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                        "context constructor parameters must be in parameters");
+            lower_internal(context, span,
+                           "context constructor parameter is not `in`");
             return -1;
         }
     }
     if (rest_parameter && !th_mode_is_in(rest_parameter->mode)) {
         core_list_free(captures);
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                    "context variadic parameters must be in parameters");
+        lower_report(context, N00B_DIAG_CONTEXT_PARAMETER_MODE, span,
+            N00B_TEXT_THE_EXTRA_ARGUMENTS_PARAMETER_OF,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
         return -1;
     }
     th_type *provided_type = th_func_ret(signature);
@@ -9155,10 +10398,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             "context enter result type %.*s does not match inferred context-call type %.*s",
             (int)provided_text.u8_bytes, provided_text.data,
             (int)result_text.u8_bytes, result_text.data);
-        ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
-            IR_DIAG_TYPE_MISMATCH, span, (core_string_t){});
-        ir_diag_message(diagnostic, context->diagnostics,
-                        core_buffer_string(&message));
+        lower_internal_string(context, span, core_buffer_string(&message));
         core_buffer_release(&message);
         core_list_free(captures);
         return -1;
@@ -9168,7 +10408,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         ? ir_call_outcome_type(context->module, signature) : provided_type;
     if (!outcome_type) {
         core_list_free(captures);
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not construct the context enter outcome type");
         return -1;
     }
@@ -9186,7 +10426,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!emitted) {
         core_list_free(captures);
     {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not invoke context enter hook");
         return -1;
     }
@@ -9200,8 +10440,8 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!definition || th_kind_of(definition) != TH_RECORD
             || !th_named_info(outcome_type, nullptr, &variant, nullptr)
             || !variant || !ok_type || !error_type) {
-            lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                        "context enter outcome is not a complete variant");
+            lower_internal(context, span,
+                           "context enter outcome is not a complete variant");
             return -1;
         }
         uint64_t id = context->next_value_id++;
@@ -9246,7 +10486,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             && ir_instr_operand_block(branch, ok_block)
             && ir_instr_operand_block(branch, error_block);
         if (!branched) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not branch on context enter outcome");
             return -1;
         }
@@ -9256,7 +10496,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
             context, call->dest, CORE_STRING_STATIC("error"), error_type, span);
         if (!enter_error || !n00bb_emit_with_failure(context,
                                                      visit->node)) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not unwind active contexts after failed enter");
             return -1;
         }
@@ -9265,15 +10505,13 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (routed < 0) return -1;
         if (!routed) {
             if (!n00bb_failure_channel_accepts(context, error_type)) {
-                if (!n00bb_reject_runtime_initializer_failure(context,
-                                                               span))
-                    lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                        "an uncaught context enter error must match the enclosing function's failure channel");
+                report_uncaught_failure(context, span, error_type,
+                    N00B_TEXT_PHRASE_ENTERING_THIS_CONTEXT);
                 return -1;
             }
             ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
             if (!fail || !ir_instr_operand_value(fail, enter_error)) {
-                lower_error(context, IR_DIAG_INTERNAL, span,
+                lower_internal(context, span,
                             "could not propagate context enter failure");
                 return -1;
             }
@@ -9287,7 +10525,7 @@ n00bb_context_call(ir_lower_context_t *context, parse_visit_t *visit,
                                                    CORE_STRING_STATIC("ok"), ok_type, span);
         if (!th_is_nil(ok_type)
             && !provided) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not extract successful context enter value");
             return -1;
         }
@@ -9326,9 +10564,8 @@ n00bb_bind_with_manager(ir_lower_context_t *context, parse_tree_t *node)
     parse_sym_entry_t *binding = parse_symtab_resolve_node(
         tu->annotations->symtab, node, CORE_STRING_STATIC(""));
     if (!binding || !binding->type) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED,
-            lower_span_for_tree(context, node),
-            "named context binding has no inferred type");
+        lower_internal(context, lower_span_for_tree(context, node),
+                       "named context binding has no inferred type");
         return false;
     }
     char local_buffer[48];
@@ -9338,7 +10575,7 @@ n00bb_bind_with_manager(ir_lower_context_t *context, parse_tree_t *node)
     ir_local_t *local = ir_local_add(context->function, local_name,
                                      binding->type);
     if (!local || !ir_lower_bind_local(context, binding, local)) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, node),
             "could not bind the context-provided local");
         return false;
@@ -9558,9 +10795,9 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
                 ok = n00bb_mark_reference_target(context, visit->grammar,
                     visit->node, actuals.data[i]);
                 if (!ok)
-                    lower_error(context, IR_DIAG_TYPE_ARGS,
-                        lower_span_for_tree(context, actuals.data[i]),
-                        "modify variadic arguments must be writable storage locations of the element type");
+                    report_unwritable_output(context, visit->grammar,
+                        actuals.data[i], TH_INOUT, symbol,
+                        (core_string_t){0});
             }
             continue;
         }
@@ -9569,10 +10806,13 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
             || !th_mode_produces_output(mode)) continue;
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
             visit->node, actuals.data[i], mode);
-        if (!ok)
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, actuals.data[i]),
-                "out and modify arguments must be writable storage locations of the parameter type");
+        if (!ok) {
+            core_string_t parameter = {0};
+            function_parameter_info(visit->grammar, symbol, formals, index,
+                                    nullptr, &parameter, nullptr, nullptr);
+            report_unwritable_output(context, visit->grammar,
+                actuals.data[i], mode, symbol, parameter);
+        }
     }
     core_list_free(actuals);
     parse_tree_t *keywords = child_nt(visit->grammar, args, CORE_STRING_STATIC("keyword-args"));
@@ -9593,13 +10833,12 @@ n00bb_mark_call_lvalues(ir_lower_context_t *context, parse_visit_t *visit,
         ok = n00bb_mark_addressable_argument(context, visit->grammar,
             visit->node, argument, mode);
         if (!ok)
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, argument),
-                "out and modify arguments must be writable storage locations of the parameter type");
+            report_unwritable_output(context, visit->grammar, argument,
+                                     mode, symbol, name);
     }
     core_list_free(named);
     if (!ok && !ir_diags_failed(context->diagnostics))
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not mark a call argument as an lvalue");
     return ok;
@@ -9642,9 +10881,9 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
                 ok = n00bb_mark_reference_target(context, visit->grammar,
                     visit->node, positional.data[i]);
                 if (!ok)
-                    lower_error(context, IR_DIAG_TYPE_ARGS,
-                        lower_span_for_tree(context, positional.data[i]),
-                        "modify variadic arguments must be writable storage locations of the element type");
+                    report_unwritable_output(context, visit->grammar,
+                        positional.data[i], TH_INOUT, symbol,
+                        (core_string_t){0});
             }
             continue;
         }
@@ -9656,10 +10895,14 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
         if (th_mode_produces_output(mode)) {
             ok = n00bb_mark_addressable_argument(context, visit->grammar,
                 visit->node, positional.data[i], mode);
-            if (!ok)
-                lower_error(context, IR_DIAG_TYPE_ARGS,
-                    lower_span_for_tree(context, positional.data[i]),
-                    "out and modify arguments must be writable storage locations of the parameter type");
+            if (!ok) {
+                core_string_t parameter = {0};
+                if (!(site->init_call && index == 0))
+                    function_parameter_info(visit->grammar, symbol, formals,
+                        index, nullptr, &parameter, nullptr, nullptr);
+                report_unwritable_output(context, visit->grammar,
+                    positional.data[i], mode, symbol, parameter);
+            }
         }
     }
     core_list_free(positional);
@@ -9682,14 +10925,12 @@ n00bb_mark_constructor_lvalues(ir_lower_context_t *context,
         ok = argument && n00bb_mark_addressable_argument(context,
             visit->grammar, visit->node, argument, mode);
         if (!ok)
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, argument ? argument
-                                                      : keywords.data[i]),
-                "out and modify arguments must be writable storage locations of the parameter type");
+            report_unwritable_output(context, visit->grammar,
+                argument ? argument : keywords.data[i], mode, symbol, name);
     }
     core_list_free(keywords);
     if (!ok && !ir_diags_failed(context->diagnostics))
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not mark a constructor argument as an lvalue");
     return ok;
@@ -9710,15 +10951,16 @@ n00bb_lower_referent_read(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *address = lower ? n00bb_record_field_address(context,
         visit->grammar, lower->unit, visit->node, span) : nullptr;
     if (!address)
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                           "'__value' requires a Ref or Foreign receiver");
+        return lower_report(context, N00B_DIAG_VALUE_NEEDS_REFERENCE, span,
+            N00B_TEXT_VALUE_READS_THROUGH_A_REFERENCE,
+            N00BB_NO_ARGS);
     ir_instr_t *load = ir_lower_emit_instruction(context, IR_OP_LOAD, span);
     if (!load || !ir_lower_set_temp_dest(context, load,
             CORE_STRING_STATIC("__n00bb_"), result_type)
         || !ir_instr_operand_value(load, address)
         || !n00bb_set_reference_access(lower->ir_context, load->dest,
                                        result_type))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not load through a reference");
     return (ir_lower_result_t){IR_LOWER_VALUE, load->dest};
 }
@@ -9731,8 +10973,8 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
     (void)operands;
     (void)state;
     if (operand_count || !result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "module member lowering expects a typed reference");
+        return lower_internal(context, span,
+                              "module member has no type");
     if (referent_access_node(visit->grammar, visit->node))
         return n00bb_lower_referent_read(context, visit, result_type, span);
     parse_node_resolution_t resolution = parse_tree_resolution(visit->node);
@@ -9766,7 +11008,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                     result_type)
                 || !ir_instr_operand_value(test, base)
                 || !ir_instr_operand_value(test, mask->dest))
-                return lower_error(context, IR_DIAG_INTERNAL, span,
+                return lower_internal(context, span,
                                    "could not emit a flagset member test");
             return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
         }
@@ -9774,7 +11016,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             n00bb_flagset_value_t *value = member->has_comptime_value
                 ? member->comptime_value : nullptr;
             if (!value || !member->type)
-                return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+                return lower_internal(context, span,
                     "flagset constant has no matching resolved mask and type");
             ir_instr_t *constant = ir_lower_emit_instruction(context,
                 IR_OP_BITSET_CONST, span);
@@ -9782,7 +11024,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                 CORE_STRING_STATIC("__n00bb_"), result_type)
                 || !ir_instr_operand_name(constant, member->name)
                 || !ir_instr_operand_uint(constant, value->mask))
-                return lower_error(context, IR_DIAG_INTERNAL, span,
+                return lower_internal(context, span,
                     "could not emit the flagset constant");
             return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
         }
@@ -9790,7 +11032,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             ? member->comptime_value : nullptr;
         if (!value || !member->type
             || !ir_type_eq(context->module, result_type, member->type))
-            return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+            return lower_internal(context, span,
                 "enum constant has no matching resolved value and type");
         ir_instr_t *constant = ir_lower_emit_instruction(context,
             IR_OP_ENUM_CONST, span);
@@ -9799,7 +11041,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_instr_operand_name(constant, member->name)
             || !ir_instr_operand_int_lit(constant,
                 (ir_lit_t){.mag = value->magnitude, .neg = value->negative}))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not emit the enum constant");
         return (ir_lower_result_t){IR_LOWER_VALUE, constant->dest};
     }
@@ -9852,7 +11094,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
                 || !ir_instr_operand_value(load, address)
                 || !n00bb_set_reference_access(lower->ir_context,
                                                load->dest, result_type))
-                return lower_error(context, IR_DIAG_INTERNAL, span,
+                return lower_internal(context, span,
                     "could not load a referenced record field");
             return (ir_lower_result_t){IR_LOWER_VALUE, load->dest};
         }
@@ -9864,7 +11106,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_instr_operand_name(extract, member->name)
             || !n00bb_set_reference_access(lower->ir_context,
                                            extract->dest, result_type))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not emit a record field read");
         return (ir_lower_result_t){IR_LOWER_VALUE, extract->dest};
     }
@@ -9881,11 +11123,11 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             ? n00bb_print_type(types, binding->type)
             : CORE_STRING_STATIC("<missing>");
         core_buffer_printf(&message,
-            "resolved module variable has no matching canonical IR binding (node: %.*s, binding: %.*s)",
+            "module variable has no matching canonical storage (use: %.*s, storage: %.*s)",
             (int)node_text.u8_bytes, node_text.data,
             (int)binding_text.u8_bytes, binding_text.data);
-        ir_lower_result_t failed = lower_error_text(context,
-            IR_DIAG_VERIFY_TYPED, span, core_buffer_string(&message));
+        ir_lower_result_t failed = lower_internal_string(context, span,
+            core_buffer_string(&message));
         core_buffer_release(&message);
         return failed;
     }
@@ -9894,7 +11136,7 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
     if (!copy || !ir_lower_set_temp_dest(context, copy, CORE_STRING_STATIC("__n00bb_"),
                                          result_type)
         || !ir_instr_operand_value(copy, binding))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit a module variable read");
     return (ir_lower_result_t){IR_LOWER_VALUE, copy->dest};
 }
@@ -9941,17 +11183,17 @@ n00bb_select_trait_method(ir_lower_context_t *context,
 {
     if (!context || !requirement || !requirement->scope
         || !receiver || !contract)
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection is missing an input"), nullptr);
     bool builtin = parse_sym_binding(requirement,
         CORE_STRING_STATIC("n00bb.builtin-trait-method")) != nullptr;
     if (!owner && !builtin)
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection has no defining unit"), nullptr);
     th_type *method_type = builtin ? signature
         : trait_method_semantic_shape(grammar, owner, requirement, signature);
     if (!method_type)
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection has no semantic signature"), nullptr);
     core_buffer_t trait_name = {0};
     if (builtin)
@@ -9969,25 +11211,25 @@ n00bb_select_trait_method(ir_lower_context_t *context,
         IR_OP_TRAIT_METHOD, span);
     bool selected = selection != nullptr;
     if (!selected)
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection could not create an instruction"),
             nullptr);
     if (selected && !ir_lower_set_temp_dest(context, selection, CORE_STRING_STATIC("__n00bb_"),
                                              method_type))
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection could not define a result"), nullptr);
     if (selected && !ir_instr_operand_name(selection,
                                            core_buffer_string(&trait_name)))
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection could not name its trait"), nullptr);
     if (selected && !ir_instr_operand_name(selection, method_name))
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection could not name its method"), nullptr);
     if (selected && !ir_instr_operand_value(selection, receiver))
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection could not bind its receiver"), nullptr);
     if (selected && !ir_instr_operand_value(selection, contract))
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "trait method selection could not bind its contract"), nullptr);
     core_buffer_release(&trait_name);
     if (!selected) return nullptr;
@@ -10401,17 +11643,12 @@ n00bb_generate_value_methods(n00bb_link_analysis_t *analysis)
                                 "n00bb.generated-value-method"),
                             .kind = IR_ANNOT_BOOL, .b = true});
                 if (!generated) {
-                    core_buffer_t message = {0};
-                    core_buffer_printf(&message,
-                        "could not lower generated value method '%.*s'",
-                        (int)symbol->name.u8_bytes, symbol->name.data);
-                    core_diagnostics_report(
+                    n00bb_internal_error(
                         core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_FATAL,
-                        CORE_STRING_STATIC("N00BB-L0062"),
-                        core_string_borrow(message.data,
-                                           message.byte_len));
-                    core_buffer_release(&message);
+                        link_source_location(symbol->decl_node),
+                        "generating value methods",
+                        "could not generate value method `%.*s`",
+                        (int)symbol->name.u8_bytes, symbol->name.data);
                     core_list_free(scopes);
                     return false;
                 }
@@ -10543,11 +11780,8 @@ n00bb_closed_builtin_operator(ir_lower_context_t *context,
         || !ir_instr_set_dest(value, CORE_STRING_STATIC("result"), return_type)
         || !ir_instr_operand_value(value, left)
         || !ir_instr_operand_value(value, right)) return nullptr;
-    ir_class_t result_class = ir_machine_of(context->module,
-                                           return_type).class;
-    if ((result_class == IR_CLASS_SINT || result_class == IR_CLASS_UINT)
-        && ir_op_accepts_mod(op, CORE_STRING_STATIC("trap"))
-        && !ir_instr_add_mod(value, CORE_STRING_STATIC("trap"))) return nullptr;
+    if (!n00bb_trap_integer_arithmetic(value,
+            ir_machine_of(context->module, return_type).class)) return nullptr;
     if (op == IR_OP_EQ
         && ir_machine_of(context->module, left_type->type).class
             == IR_CLASS_FLOAT
@@ -10885,7 +12119,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
     ir_span_t span = lower_span_for_tree(context, source);
     if (!lower || !state || !analysis || !frame || !site || !symbol
         || !receiver || !return_type)
-        return (lower_error(context, IR_DIAG_VERIFY_TYPED, span,
+        return (lower_internal(context, span,
             "iteration trait call has incomplete semantic bindings"), nullptr);
 
     symbol = linkable_trait_requirement(analysis, lower->unit, site, symbol);
@@ -10924,7 +12158,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
     if (signature) signature = th_unify_in_place(types, signature, shape);
     if (!signature || th_kind_of(signature) != TH_FUNCTION
         || th_func_nparams(signature) != 1 || th_func_rest(signature))
-        return (lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        return (lower_internal(context, span,
             "iteration trait method does not match its required signature"),
                 nullptr);
 
@@ -10968,8 +12202,8 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
         callee = selected ? selection->dest : nullptr;
     }
     if (!callee)
-        return (lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-            "iteration trait method has no IR binding"), nullptr);
+        return (lower_internal(context, span,
+            "iteration trait method has no function"), nullptr);
 
     bool can_fail = failure && !th_is_nil(failure);
     th_type *call_type = can_fail
@@ -10987,7 +12221,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
         && ir_instr_operand_value(call, receiver)
         && ir_instr_set_call_signature(call, signature);
     if (!emitted)
-        return (lower_error(context, IR_DIAG_INTERNAL, span,
+        return (lower_internal(context, span,
             "could not emit the iteration trait call"), nullptr);
 
     ir_value_t *result = call->dest;
@@ -11006,7 +12240,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
             CORE_STRING_STATIC("__n00bb_iteration_cursor_"), receiver->type)
             || !ir_instr_operand_value(output, result)
             || !ir_instr_operand_uint(output, 0)) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not retain the modified iteration cursor");
             return nullptr;
         }
@@ -11043,7 +12277,7 @@ n00bb_emit_consume_value(ir_lower_context_t *context, ir_value_t *value,
         || !ir_instr_operand_value(consume, value)
         || (binding && binding != value
             && !ir_instr_operand_value(consume, binding))) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
             "could not emit the semantic ownership transfer");
         return nullptr;
     }
@@ -11060,9 +12294,13 @@ n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
     parse_tree_t *member = index ? nullptr
         : member_access_node(grammar, argument);
     if (index || member) {
-        lower_error(context, IR_DIAG_TYPE_ARGS,
+        core_string_t text = source_text_of(unit, argument);
+        lower_report(context, N00B_DIAG_CONSUME_PART,
             lower_span_for_tree(context, argument),
-            "consume requires a whole binding or a temporary value, not a field or indexed subobject");
+            index ? N00B_TEXT_CONSUME_ELEMENT : N00B_TEXT_CONSUME_FIELD,
+            N00BB_ARGS(ARG_TEXT(text)));
+        lower_help(context, N00B_TEXT_CONSUME_THE_WHOLE_VALUE_OR,
+            N00BB_NO_ARGS);
         return nullptr;
     }
 
@@ -11079,7 +12317,7 @@ n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
                             : ir_lower_bound_value(context, symbol);
         }
         if (!binding) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, argument),
                 "consumed binding has no lowered semantic identity");
             return nullptr;
@@ -11359,10 +12597,17 @@ n00bb_materialize(ir_lower_context_t *context, parse_tree_t *node,
         parse_tree_t *site = node && lower
             ? n00bb_string_where_buffer_site(lower->grammar, types, node,
                                              target) : nullptr;
-        lower_error_text(context, IR_DIAG_TYPE_MISMATCH,
-                    site ? lower_span_for_tree(context, site) : span,
-                    core_string_borrow(n00bb_string_to_buffer_text,
-                        sizeof(n00bb_string_to_buffer_text) - 1));
+        core_string_t text = site
+            ? source_text_of(lower ? lower->unit : nullptr, site)
+            : (core_string_t){0};
+        lower_report(context, N00B_DIAG_STRING_NOT_BUFFER,
+            site ? lower_span_for_tree(context, site) : span,
+            N00B_TEXT_IS_A_STRING_WHICH_IS,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                                : n00bb_text_form(N00B_TEXT_THIS_VALUE))));
+        lower_help(context, N00B_TEXT_USE_BUFFER_FROM_STRING,
+            N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                                : CORE_STRING_STATIC("s"))));
         return nullptr;
     }
     if (!th_is_closed(types, target) && th_is_closed(types, value->type)
@@ -11460,11 +12705,22 @@ n00bb_out_argument_location(ir_lower_context_t *context,
         : module_target ? member_symbol : nullptr;
     location.local = location.lvalue
         ? ir_lower_bound_local(context, location.symbol) : nullptr;
+    if (location.local && n00bb_is_narrowed_use(context, argument,
+                                                location.local->type)) {
+        location.address = n00bb_narrowed_place(context, grammar, argument,
+            location.symbol, location.local->type,
+            lower_span_for_tree(context, argument));
+        location.local = nullptr;
+    }
     location.global = (location.lvalue || module_target) && !location.local
+            && !location.address
         ? ir_lower_bound_value(context, location.symbol) : nullptr;
-    location.address = member_target
-        ? n00bb_addressable_expression_address(context, grammar, lower->unit,
-            argument, lower_span_for_tree(context, argument)) : nullptr;
+    if (member_target)
+        location.address = n00bb_addressable_expression_address(context,
+            grammar, lower->unit, argument,
+            lower_span_for_tree(context, argument));
+    if (location.symbol)
+        n00bb_note_narrowed_write(context, grammar, argument, location.symbol);
     location.type = location.index_target
         ? parse_tree_type(location.index_target)
         : location.address ? th_ind_referent(location.address->type)
@@ -11506,7 +12762,6 @@ n00bb_materialize_node(ir_lower_context_t *context, parse_tree_t *node,
 }
 
 static bool n00bb_nominal_value_as(ir_lower_context_t *context,
-                                   parse_visit_t *visit,
                                    th_type *target_type,
                                    parse_tree_t *source);
 
@@ -11518,8 +12773,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     (void)operands;
     (void)state;
     if (operand_count || !result_type)
-        return lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                           "call lowering needs a result type");
+        return lower_internal(context, span, "call has no result type");
     ir_lower_result_t context_result = {IR_LOWER_FAILED, nullptr};
     int context_call = n00bb_context_call(context, visit, result_type, span,
                                           &context_result);
@@ -11528,8 +12782,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (context_call > 0)
         return context_result;
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("context-call")))
-        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-            "context call is not inside an active with scope or did not resolve to a context declaration");
+        return lower_report(context, N00B_DIAG_CONTEXT_OUTSIDE_WITH, span,
+            N00B_TEXT_A_CONTEXT_CAN_BE_CALLED,
+            N00BB_NO_ARGS);
     n00bb_lower_context_t *lower = context->user;
     n00bb_tu_state_t *caller_state = lower
         ? tu_state(lower->unit) : nullptr;
@@ -11583,7 +12838,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         : nullptr;
     if (nominal_callback && !n00bb_register_callback_representation(
             context->module, callback_type))
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
+        return lower_internal(context, span,
             "callback call has no registered value representation");
     bool trait_call = index_call || (member_call && !callback_call);
     parse_sym_entry_t *call_annotation_symbol = parse_tree_sym(call_node);
@@ -11593,18 +12848,27 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         && call_annotation_symbol != symbol
         && !(call_annotation_symbol->scope == symbol->scope
              && core_string_eq(call_annotation_symbol->name, symbol->name)))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "call annotation target differs from the bound callee symbol");
     if (symbol && !trait_call) symbol = canonical_symbol(symbol);
     if (symbol && symbol->kind != PARSE_SYM_FUNCTION) symbol = nullptr;
     if (!symbol && trait_call)
-        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-                           "trait-dispatched calls are not lowered yet");
+        return lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
+            N00B_TEXT_NOT_SUPPORTED_YET_A_METHOD,
+            N00BB_NO_ARGS);
     if (!symbol) {
-        ir_diag_t *diagnostic = ir_diag_begin(context->diagnostics,
-            IR_DIAG_UNDEFINED_SYMBOL, span, (core_string_t){});
-        ir_diag_message(diagnostic, context->diagnostics,
-                        CORE_STRING_STATIC("call target did not resolve to a declared function"));
+        parse_tree_t *callee = core_tree_num_children(call_node)
+            ? core_tree_child(call_node, 0) : nullptr;
+        core_string_t text = source_text_of(lower->unit, callee);
+        if (text.u8_bytes)
+            lower_report(context, N00B_DIAG_NOT_CALLABLE,
+                lower_span_for_tree(context, callee),
+                N00B_TEXT_IS_NOT_A_FUNCTION_SO,
+                N00BB_ARGS(ARG_TEXT(text)));
+        else
+            lower_report(context, N00B_DIAG_NOT_CALLABLE, span,
+                N00B_TEXT_THIS_IS_NOT_A_FUNCTION,
+                N00BB_NO_ARGS);
         return (ir_lower_result_t){.status = IR_LOWER_FAILED};
     }
     if (index_call && n00bb_builtin_array_read_function(symbol)) {
@@ -11627,11 +12891,11 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 ir_module_types(context->module), element, result_type)
                 ? n00bb_emit_indirect_read(context, address, element, span)
                 : nullptr;
-            if (!loaded) return lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                span, "builtin array read could not resolve its indexed element");
+            if (!loaded) return lower_internal(context, span,
+                "array read could not resolve its indexed element");
             ir_shape_t *shape = ir_value_shape(address);
             if (shape && !ir_value_set_shape(loaded, shape))
-                return lower_error(context, IR_DIAG_INTERNAL, span,
+                return lower_internal(context, span,
                     "builtin array read could not retain element shape");
             return (ir_lower_result_t){IR_LOWER_VALUE, loaded};
         }
@@ -11652,19 +12916,19 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!receiver || !index || !element
             || !th_unify_in_place(ir_module_types(context->module),
                                   element, result_type))
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "builtin array read could not resolve its indexed element");
+            return lower_internal(context, span,
+                "array read could not resolve its indexed element");
         ir_instr_t *read = ir_lower_emit_instruction(context,
             IR_OP_SEQUENCE_GET, span);
         if (!read || !ir_lower_set_temp_dest(context, read,
             CORE_STRING_STATIC("__n00bb_array_element_"), result_type)
             || !ir_instr_operand_value(read, receiver)
             || !ir_instr_operand_value(read, index))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not emit Array value indexing");
         if (!n00bb_attach_index_load_shape(context, receiver, result_type,
                                            read->dest))
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "builtin array read could not retain element shape");
         return (ir_lower_result_t){IR_LOWER_VALUE, read->dest};
     }
@@ -11689,7 +12953,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         symbol = linkable_trait_requirement(analysis, lower->unit,
                                             dispatch_site, symbol);
         if (!symbol)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "linkable trait call has no accessible method requirement");
     }
     bool semantic_trait_call = trait_call && symbol->scope
@@ -11713,8 +12977,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     core_translation_unit_t *callee_unit = !no_function_body && lower
         ? unit_for_symbol(visit->grammar, lower->units, symbol) : nullptr;
     if (!no_function_body && !callee_unit)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                           "call target is outside the lowered import closure");
+        return lower_internal(context, span,
+                              "call target is outside the imported modules");
     n00bb_tu_state_t *callee_state = callee_unit
         ? tu_state(callee_unit) : nullptr;
     ir_func_t *callee_function = callee_state && symbol
@@ -11734,8 +12998,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
     }
     if (!no_function_body && !callee_function)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                           "call target has no canonical IR binding in the link unit");
+        return lower_internal(context, span,
+                              "call target has no canonical function");
     ir_value_t *callee_value = callback_call && receiver_node
         ? n00bb_promoted_operand(context, receiver_node,
               ir_lower_node_value(context, receiver_node), false, span)
@@ -11743,11 +13007,11 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? ir_func_address(callee_function->owner, callee_function)
                         : nullptr;
     if (callback_call && !callee_value)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                           "callback receiver has no lowered reference value");
+        return lower_internal(context, span,
+                              "callback receiver has no reference value");
     if (!no_function_body && !callee_value)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                           "call target has no lowered function declaration");
+        return lower_internal(context, span,
+                              "call target has no function declaration");
     th_type *callable = symbol->callable_contract
         ? symbol->callable_contract : symbol->type;
     if (callback_call && callee_value) {
@@ -11765,8 +13029,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     th_type *signature = th_type_clone(ir_module_types(context->module),
                                        callable);
     if (!signature || th_kind_of(signature) != TH_FUNCTION)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "call target does not have a function type");
+        return lower_internal(context, span,
+                              "call target does not have a function type");
     th_type *signature_return = th_func_ret(signature);
     th_type *call_constraint = signature_return
         ? function_with_return_type(ir_module_types(context->module),
@@ -11776,8 +13040,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                             call_constraint) : nullptr;
     signature_return = signature ? th_func_ret(signature) : nullptr;
     if (!signature || !signature_return)
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                           "call result does not match the resolved function return type");
+        return lower_internal(context, span,
+            "call result does not match the resolved function return type");
     if (builtin_trait_call) {
         core_buffer_t requirement_name = {0};
         core_string_t trait = dispatch_site
@@ -11806,7 +13070,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         callee_value = requirement
             ? ir_func_address(context->module, requirement) : nullptr;
         if (!callee_value)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not retain builtin trait method requirement");
     }
     if (native_builtin) {
@@ -11827,12 +13091,12 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                     .key = CORE_STRING_STATIC("n00bb.abi.native"),
                     .kind = IR_ANNOT_STR,
                     .s = ir_name,
-                })) return lower_error(context, IR_DIAG_INTERNAL, span,
+                })) return lower_internal(context, span,
                     "could not annotate a native function");
         callee_value = function
             ? ir_func_address(context->module, function) : nullptr;
         if (!callee_value)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not declare a native function");
     }
     parse_tree_set_type(call_node, signature_return);
@@ -11911,6 +13175,17 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         size_t index = positional_offset + i;
         if (index >= parameter_count) {
             if (!th_func_rest(signature) || trait_call) {
+                lower_report(context, N00B_DIAG_CALL_TOO_MANY_ARGUMENTS,
+                    lower_span_for_tree(context, positional_nodes.data[i]),
+                    N00B_TEXT_CALL_TAKES_ARGUMENTS,
+                    N00BB_ARGS(ARG_NUMBER(parameter_count - positional_offset),
+                               ARG_TEXT(symbol->name),
+                               ARG_NUMBER(positional_nodes.len)));
+                lower_label(context, N00B_TEXT_UNEXPECTED_ARGUMENT,
+                    N00BB_NO_ARGS);
+                lower_declared_secondary(context, symbol,
+                    N00B_TEXT_IS_DECLARED_HERE,
+                    N00BB_ARGS(ARG_TEXT(symbol->name)));
                 mapped = false;
                 break;
             }
@@ -11919,6 +13194,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             continue;
         }
         if (provided[index]) {
+            lower_internal(context, span,
+                           "a positional argument was mapped twice");
             mapped = false;
             break;
         }
@@ -11942,15 +13219,36 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         parse_tree_t *argument = child_nt(visit->grammar,
             keyword_nodes.data[i], CORE_STRING_STATIC("expression"));
         if (!has_formal || !argument || index >= parameter_count) {
-            lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-                        "named argument does not match a parameter");
+            lower_report(context, N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
+                lower_span_for_tree(context, keyword_nodes.data[i]),
+                N00B_TEXT_HAS_NO_PARAMETER_NAMED,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(name)));
+            lower_declared_secondary(context, symbol,
+                N00B_TEXT_IS_DECLARED_HERE,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+            core_list_t(core_string_t) names = core_list_new(core_string_t);
+            for (size_t p = positional_offset; p < parameter_count; p++) {
+                core_string_t candidate = {0};
+                if (function_parameter_info(visit->grammar, symbol,
+                        formal_params, p, nullptr, &candidate, nullptr,
+                        nullptr) && candidate.u8_bytes)
+                    core_list_push(names, candidate);
+            }
+            n00bb_diag_did_you_mean(lower_diagnostics(context), name,
+                                    names.data, names.len);
+            core_list_free(names);
             mapped = false;
             break;
         }
         if (provided[index]) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
+            lower_report(context, N00B_DIAG_CALL_ARGUMENT_REPEATED,
                 lower_span_for_tree(context, keyword_nodes.data[i]),
-                "a parameter is supplied more than once");
+                N00B_TEXT_PARAMETER_OF_IS_GIVEN_MORE,
+                N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(symbol->name)));
+            if (argument_by_parameter[index])
+                lower_secondary(context, lower_span_for_tree(context,
+                    argument_by_parameter[index]), N00B_TEXT_FIRST_GIVEN_HERE,
+                    N00BB_NO_ARGS);
             mapped = false;
             break;
         }
@@ -11969,12 +13267,36 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         }
     }
     if (!mapped || missing_required) {
-        if (!mapped && !ir_diags_failed(context->diagnostics))
-            lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                        "call argument does not match a parameter");
-        if (mapped)
-            lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                "call omits a required parameter");
+        if (!mapped)
+            lower_failed_after(context, span, CORE_STRING_STATIC(
+                "call arguments could not be matched to parameters"));
+        if (mapped) {
+            core_list_t(core_string_t) missing = core_list_new(core_string_t);
+            for (size_t i = positional_offset; i < parameter_count; i++) {
+                uint8_t flags = 0;
+                core_string_t parameter = {0};
+                bool known = function_parameter_info(visit->grammar,
+                    symbol, formal_params, i, nullptr, &parameter, &flags,
+                    nullptr);
+                if (!provided[i] && (!known || !(flags & 1u))
+                    && parameter.u8_bytes)
+                    core_list_push(missing, parameter);
+            }
+            if (missing.len)
+                lower_report(context, N00B_DIAG_CALL_MISSING_ARGUMENT, span,
+                    N00B_TEXT_CALL_IS_MISSING_NAMED_ARGUMENTS,
+                    N00BB_ARGS(ARG_NAMES(missing.data, missing.len),
+                               ARG_TEXT(symbol->name)));
+            else
+                lower_report(context, N00B_DIAG_CALL_MISSING_ARGUMENT, span,
+                    N00B_TEXT_CALL_IS_MISSING_ARGUMENTS,
+                    N00BB_ARGS(ARG_NUMBER(missing_required),
+                               ARG_TEXT(symbol->name)));
+            lower_declared_secondary(context, symbol,
+                N00B_TEXT_IS_DECLARED_HERE,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+            core_list_free(missing);
+        }
         core_list_free(actuals);
         core_list_free(values);
         core_list_free(rest_values);
@@ -11994,7 +13316,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_free(argument_by_parameter);
         core_free(value_by_parameter);
         core_free(provided);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not allocate call argument type context");
     }
     for (size_t i = 0; i < actuals.len; i++) {
@@ -12028,9 +13350,12 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                         argument_types[i] ? argument_types[i] : referent)
                     || !th_unify_probe(ir_module_types(context->module),
                                        rest->type, referent)) {
-                    lower_error(context, IR_DIAG_TYPE_ARGS,
-                        lower_span_for_tree(context, argument),
-                        "modify variadic arguments must be writable storage locations of the element type");
+                    if (!referent)
+                        report_unwritable_output(context, visit->grammar,
+                            argument, TH_INOUT, symbol, (core_string_t){0});
+                    else
+                        report_argument_type(context, argument, referent,
+                            rest->type, symbol, (core_string_t){0});
                     collected = false;
                     break;
                 }
@@ -12050,9 +13375,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                         : rest->type,
                     rest->mode == TH_INOUT ? value->type : argument_type)) {
                 if (rest && value)
-                    lower_error(context, IR_DIAG_TYPE_ARGS,
-                        lower_span_for_tree(context, argument),
-                        "variadic argument does not match its element type");
+                    report_argument_type(context, argument,
+                        argument_type ? argument_type : value->type,
+                        rest->type, symbol, (core_string_t){0});
                 collected = false;
                 break;
             }
@@ -12084,7 +13409,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 CORE_STRING_STATIC("ir.array-shape"))
             : function_parameter_shape(symbol, index);
         if (th_mode_is_input_only(mode)) {
-            if (!n00bb_nominal_value_as(context, visit, parameter->type,
+            if (!n00bb_nominal_value_as(context, parameter->type,
                                         argument)) {
                 collected = false;
                 break;
@@ -12101,10 +13426,15 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                     argument_type)
                 || !th_unify_probe(ir_module_types(context->module),
                                    parameter->type, value->type)) {
-                if (value)
-                    lower_error(context, IR_DIAG_TYPE_ARGS,
-                        lower_span_for_tree(context, argument),
-                        "argument type does not match its parameter");
+                if (value) {
+                    core_string_t parameter_name = {0};
+                    function_parameter_info(visit->grammar, symbol,
+                        formal_params, index, nullptr, &parameter_name,
+                        nullptr, nullptr);
+                    report_argument_type(context, argument,
+                        argument_type ? argument_type : value->type,
+                        parameter->type, symbol, parameter_name);
+                }
                 collected = false;
                 break;
             }
@@ -12143,22 +13473,35 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                               parameter->type, target_type);
         if (!target_type || !writable
             || !type_matches) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, argument),
-                "out and modify arguments must be writable storage locations of the parameter type");
+            core_string_t parameter_name = {0};
+            function_parameter_info(visit->grammar, symbol, formal_params,
+                index, nullptr, &parameter_name, nullptr, nullptr);
+            if (target_type && writable)
+                report_argument_type(context, argument, target_type,
+                    parameter->type, symbol, parameter_name);
+            else
+                report_unwritable_output(context, visit->grammar, argument,
+                    mode, symbol, parameter_name);
             collected = false;
             break;
         }
-        bool aliases = false;
+        parse_tree_t *aliased = nullptr;
         for (size_t previous = 0; arg_symbol && lvalue
                 && previous < copyouts.len; previous++)
-            aliases |= copyouts.data[previous].symbol == arg_symbol
+            if (copyouts.data[previous].symbol == arg_symbol
                 && copyouts.data[previous].local == target
-                && copyouts.data[previous].global == global;
-        if (aliases) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
+                && copyouts.data[previous].global == global)
+                aliased = copyouts.data[previous].source_node;
+        if (aliased) {
+            lower_report(context, N00B_DIAG_SAME_OUTPUT_TWICE,
                 lower_span_for_tree(context, argument),
-                "the same variable cannot be passed to multiple out or modify parameters");
+                N00B_TEXT_IS_PASSED_TO_MORE_THAN,
+                N00BB_ARGS(ARG_TEXT(arg_symbol->name), ARG_TEXT(symbol->name)));
+            lower_secondary(context, lower_span_for_tree(context, aliased),
+                N00B_TEXT_FIRST_PASSED_HERE,
+                N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_PASS_A_SEPARATE_VARIABLE_TO,
+                N00BB_NO_ARGS);
             collected = false;
             break;
         }
@@ -12282,10 +13625,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!collected) {
         core_list_free(values);
         core_list_free(copyouts);
-        if (!ir_diags_failed(context->diagnostics))
-            lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                "call arguments could not be lowered for their parameter modes");
-        return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+        return lower_failed_after(context, span, CORE_STRING_STATIC(
+            "call arguments could not be prepared for their parameter "
+            "modes"));
     }
     if (native_builtin && core_string_eq(symbol->name,
             CORE_STRING_STATIC("__array_length"))) {
@@ -12302,9 +13644,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, length->dest}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH, span,
-                "Array length requires one sequence value");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_ONE_ARRAY);
     }
     th_ctx *types = ir_module_types(context->module);
     th_type *fact_failure = nullptr;
@@ -12320,7 +13661,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!signature) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            return lower_internal(context, span,
                 "builtin trait failure does not match its implementation");
         }
     }
@@ -12352,8 +13693,11 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             if (!signature) {
                 core_list_free(values);
                 core_list_free(copyouts);
-                return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                    "builtin trait failure does not match the enclosing function");
+            {
+                report_uncaught_failure(context, span, current_failure,
+                    N00B_TEXT_PHRASE_THIS_CALL);
+                return (ir_lower_result_t){.status = IR_LOWER_FAILED};
+            }
             }
         }
     }
@@ -12376,8 +13720,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (fact_failure_conflict) {
         core_list_free(values);
         core_list_free(copyouts);
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "generic trait specialization has no consistent failure channel");
+        return lower_internal(context, span,
+            "generic trait specialization has no consistent failure type");
     }
     if (fact_failure) {
         th_type *current_failure = th_func_error(signature);
@@ -12391,8 +13735,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!signature) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "call failure type does not match its generic trait specialization");
+            return lower_internal(context, span,
+                "call failure type does not match its generic trait "
+                "specialization");
         }
     }
     th_type *cached_failure = parse_tree_error_type(call_node);
@@ -12408,8 +13753,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!signature) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "call failure type does not match its cached expression channel");
+            return lower_internal(context, span,
+                "call failure type does not match its cached failure type");
         }
     }
     th_type *error_type = th_func_error(signature);
@@ -12418,10 +13763,24 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (has_error != propagated) {
         core_list_free(values);
         core_list_free(copyouts);
-        return lower_error_text(context, IR_DIAG_VERIFY_TYPED, span,
-            has_error
-                ? CORE_STRING_STATIC("a call with an error channel must be used with postfix ! and its return type must match")
-                : CORE_STRING_STATIC("postfix ! requires a failable expression; this call is infallible"));
+        core_string_t error_text = has_error
+            ? lower_type_text(context, error_type) : (core_string_t){0};
+        ir_lower_result_t result = has_error
+            ? lower_report(context, N00B_DIAG_FAILURE_NOT_PROPAGATED, span,
+                N00B_TEXT_CAN_FAIL_WITH_SO_THIS,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(error_text)))
+            : lower_report(context, N00B_DIAG_PROPAGATE_INFALLIBLE, span,
+                N00B_TEXT_CANNOT_FAIL_SO_THIS_HAS,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+        lower_declared_secondary(context, symbol, N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
+        if (has_error)
+            lower_help(context, N00B_TEXT_WRITE_TO_PASS_THE_FAILURE,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+        else
+            lower_help(context, N00B_TEXT_REMOVE_THE, N00BB_NO_ARGS);
+        core_free(error_text.data);
+        return result;
     }
     th_type *call_result_type = has_error
         ? ir_call_outcome_type(context->module, signature)
@@ -12439,10 +13798,10 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             if (!receiver_value || !callee_value) {
                 core_list_free(values);
                 core_list_free(copyouts);
-                return lower_error_text(context, IR_DIAG_INTERNAL, span,
+                return lower_internal_string(context, span,
                     !receiver_value
-                        ? CORE_STRING_STATIC("trait receiver has no lowered value")
-                        : CORE_STRING_STATIC("trait requirement has no lowered address"));
+                        ? CORE_STRING_STATIC("trait receiver has no value")
+                        : CORE_STRING_STATIC("trait requirement has no address"));
             }
             callee_value = n00bb_select_trait_method(context,
                 visit->grammar, callee_unit, symbol, signature,
@@ -12453,7 +13812,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 && !callee_value)) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not select the semantic trait method requirement");
         }
     }
@@ -12479,9 +13838,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(values);
         core_list_free(copyouts);
         if (!emitted)
-            return lower_error(context, valid ? IR_DIAG_INTERNAL
-                                              : IR_DIAG_TYPE_ARGS,
-                span, "option builtin arguments do not match its operation");
+            return lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_ONE_OPTION_VALUE);
         return (ir_lower_result_t){IR_LOWER_VALUE, instruction->dest};
     }
     if (byte_offset_builtin) {
@@ -12496,8 +13854,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!valid) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "byte offset requires a byte reference and an integer offset");
+            return lower_builtin_failure(context, false, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_A_BYTE_REFERENCE_AND);
         }
         ir_instr_t *cast = ir_lower_emit_instruction(context,
             IR_OP_BITCAST, span);
@@ -12519,7 +13877,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, result->dest}
-            : lower_error(context, IR_DIAG_INTERNAL, span,
+            : lower_internal(context, span,
                 "could not emit byte reference offset");
     }
     if (byte_diff_builtin) {
@@ -12538,9 +13896,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, difference->dest}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH,
-                span, "byte difference requires two byte references");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_TWO_BYTE_REFERENCES);
     }
     if (unsafe_arithmetic && unsafe_arithmetic->unary) {
         bool valid = values.len == 1 && !copyouts.len
@@ -12555,9 +13912,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return result
             ? (ir_lower_result_t){IR_LOWER_VALUE, result}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH,
-                span, "unsafe_not requires one integer operand");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_ONE_INTEGER_OPERAND);
     }
     if (unsafe_arithmetic) {
         bool valid = values.len == 2 && !copyouts.len
@@ -12579,9 +13935,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return result
             ? (ir_lower_result_t){IR_LOWER_VALUE, result}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH,
-                span, "unsafe arithmetic requires integer operands of one type");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_TWO_INTEGER_OPERANDS_OF);
     }
     if (bit_count_builtin) {
         th_type *uint_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("uint"));
@@ -12603,9 +13958,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, count->dest}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH,
-                span, "bit count requires one uint operand");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_ONE_UINT_OPERAND);
     }
     if (gc_memory_builtin) {
         bool valid = values.len == 3 && !copyouts.len
@@ -12623,11 +13977,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr}
-            : lower_error_text(context, valid ? IR_DIAG_INTERNAL
-                                              : IR_DIAG_TYPE_MISMATCH,
-                span, copy
-                    ? CORE_STRING_STATIC("memory copy requires destination, source, and length")
-                    : CORE_STRING_STATIC("memory fill requires an address, byte, and length"));
+            : lower_builtin_failure(context, valid, span, symbol, copy
+                ? N00B_TEXT_PHRASE_TAKES_A_DESTINATION_A_SOURCE
+                : N00B_TEXT_PHRASE_TAKES_AN_ADDRESS_A_BYTE);
     }
     if (volatile_load_builtin) {
         bool valid = values.len == 1 && !copyouts.len
@@ -12646,9 +13998,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, load->dest}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH,
-                span, "volatile load requires a reference");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_ONE_REFERENCE);
     }
     if (signal_fence_builtin) {
         bool valid = !values.len && !copyouts.len;
@@ -12659,8 +14010,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return fence
             ? (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr}
-            : lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "signal fence takes no arguments");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_NO_ARGUMENTS);
     }
     if (prefetch_builtin) {
         bool valid = values.len == 1 && !copyouts.len
@@ -12674,9 +14025,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr}
-            : lower_error(context, valid ? IR_DIAG_INTERNAL
-                                         : IR_DIAG_TYPE_MISMATCH,
-                span, "prefetch requires one reference");
+            : lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_ONE_REFERENCE);
     }
     if (atomic_rmw_builtin) {
         th_type *storage = values.len == 2
@@ -12689,8 +14039,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!valid) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "atomic operation needs a matching reference and value");
+            return lower_builtin_failure(context, false, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_A_REFERENCE_TO_AN);
         }
         ir_instr_t *rmw = ir_lower_emit_instruction(context,
             IR_OP_ATOMIC_RMW, span);
@@ -12732,7 +14082,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, rmw->dest}
-            : lower_error(context, IR_DIAG_INTERNAL, span,
+            : lower_internal(context, span,
                 "could not emit atomic operation");
     }
     if (atomic_cas_builtin) {
@@ -12748,8 +14098,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (!valid) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "atomic compare-exchange needs a matching atomic reference and values");
+            return lower_builtin_failure(context, false, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_A_REFERENCE_TO_AN_2);
         }
         ir_instr_t *cas = ir_lower_emit_instruction(context,
             IR_OP_ATOMIC_CAS, span);
@@ -12762,7 +14112,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(copyouts);
         return emitted
             ? (ir_lower_result_t){IR_LOWER_VALUE, cas->dest}
-            : lower_error(context, IR_DIAG_INTERNAL, span,
+            : lower_internal(context, span,
                 "could not emit atomic compare-exchange");
     }
     if (atomic_access_builtin) {
@@ -12807,9 +14157,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         core_list_free(values);
         core_list_free(copyouts);
         if (!emitted)
-            return lower_error(context, valid ? IR_DIAG_INTERNAL
-                                              : IR_DIAG_TYPE_MISMATCH, span,
-                "atomic access needs a matching atomic reference and value");
+            return lower_builtin_failure(context, valid, span, symbol,
+                N00B_TEXT_PHRASE_TAKES_A_REFERENCE_TO_AN);
         return loading
             ? (ir_lower_result_t){IR_LOWER_VALUE, access->dest}
             : (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
@@ -12892,7 +14241,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
     if (!emitted) {
         core_list_free(values);
         core_list_free(copyouts);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit the function call");
     }
     if (dispatch_site && dispatch_site->closed_dispatch
@@ -12907,21 +14256,21 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             instruction->dest, return_shape, span)) {
         core_list_free(values);
         core_list_free(copyouts);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit the function return shape check");
     }
     if (!has_error && return_shape
         && !ir_value_set_shape(instruction->dest, return_shape)) {
         core_list_free(values);
         core_list_free(copyouts);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not attach the checked function return shape");
     }
     if (!n00bb_set_reference_access(lower->ir_context, instruction->dest,
                                     call_result_type)) {
         core_list_free(values);
         core_list_free(copyouts);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not attach the resolved return alias");
     }
     if (index_call
@@ -12938,8 +14287,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                     }))) {
             core_list_free(values);
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "indexed sequence result could not retain receiver shape and alias provenance");
+            return lower_internal(context, span,
+                "indexed sequence result could not retain receiver shape "
+                "and alias provenance");
         }
     }
     core_list_free(values);
@@ -12955,8 +14305,9 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
                 copied = n00bb_emit_call_copyout(context, &copyouts.data[i],
                                                   instruction->dest, span);
             core_list_free(copyouts);
-            if (!copied)
-                return lower_error(context, IR_DIAG_INTERNAL, span,
+            if (!copied
+                || !n00bb_store_written_narrowed_roots(context, nullptr, span))
+                return lower_internal(context, span,
                                    "could not copy out call parameters");
         }
     }
@@ -13021,8 +14372,8 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     parse_sym_entry_t *symbol = site ? site->symbol : nullptr;
     if (!lower || !caller_state || !analysis || !symbol
         || symbol->kind != PARSE_SYM_FUNCTION)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-            "non-array construction has no resolved initializer");
+        return lower_internal(context, span,
+            "`new` has no resolved `__init`");
 
     core_translation_unit_t *callee_unit = unit_for_symbol(visit->grammar,
         lower->units, symbol);
@@ -13035,8 +14386,8 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     ir_value_t *callee = callee_module && callee_function
         ? ir_func_address(callee_module, callee_function) : nullptr;
     if (!callee || !callee_function)
-        return lower_error(context, IR_DIAG_UNDEFINED_SYMBOL, span,
-            "constructor has no semantic IR binding in this phase");
+        return lower_internal(context, span,
+            "`__init` has no function in this execution phase");
 
     th_ctx *types = ir_module_types(context->module);
     th_type *source_type = constructor_signature_instance(types, symbol);
@@ -13044,15 +14395,16 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         || !th_func_nparams(source_type)
         || !th_is_nil(th_func_error(source_type))
         || !th_is_nil(th_func_ret(source_type)))
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-            "resolved __init does not have an infallible, no-value signature");
+        return lower_report(context, N00B_DIAG_INIT_SIGNATURE, span,
+            N00B_TEXT_THE_INIT_THAT_NEW_CALLS,
+            N00BB_NO_ARGS);
     const th_param *receiver = th_func_param(source_type, 0);
     bool object = n00bb_object_type(types, result_type);
     bool object_in = object && receiver && receiver->mode == TH_IN;
     if (!receiver || (receiver->mode != TH_INOUT && !object_in)
         || !th_unify_in_place(types, receiver->type, result_type))
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "constructor receiver does not match the constructed type");
+        return lower_internal(context, span,
+            "`__init` receiver does not match the constructed type");
 
     size_t parameter_count = th_func_nparams(source_type);
     parse_tree_t *function_signature = child_nt(visit->grammar,
@@ -13066,7 +14418,7 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
                           &rest_formal);
     if (symbol->decl_node && formals.len != parameter_count) {
         core_list_free(formals);
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "constructor parameter symbols do not match its signature");
     }
 
@@ -13134,8 +14486,9 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
         core_free(value_by_parameter);
         core_free(provided);
         core_list_free(formals);
-        return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-            "constructor arguments do not match its parameters");
+        return lower_report(context, N00B_DIAG_CONSTRUCTOR_ARGUMENTS, span,
+            N00B_TEXT_THESE_ARGUMENTS_DO_NOT_MATCH,
+            N00BB_NO_ARGS);
     }
 
     core_list_t(n00bb_copyout_t) copyouts =
@@ -13397,27 +14750,27 @@ n00bb_lower_constructor_new(ir_lower_context_t *context, parse_visit_t *visit,
     core_list_free(formals);
     if (!collected) {
         core_list_free(copyouts);
-        return lower_error(context, IR_DIAG_TYPE_ARGS, span,
-            "could not lower arguments or invocation for __init");
+        return lower_failed_after(context, span, CORE_STRING_STATIC(
+            "could not prepare the arguments or call for `__init`"));
     }
     for (size_t i = 0; i < copyouts.len; i++)
         if (!n00bb_emit_call_copyout(context, &copyouts.data[i], call->dest,
                                      span)) {
             core_list_free(copyouts);
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                 "could not copy out constructor arguments");
     }
     core_list_free(copyouts);
     if (direct_assignment
         && !ir_lower_finish_assignment(context, direct_assignment,
                                        visit->node))
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
             "could not complete direct constructor initialization");
     ir_value_t *constructed = object_in ? fresh_object
         : n00bb_emit_indirect_read(context, allocation_address, result_type,
                                    span);
     return constructed ? (ir_lower_result_t){IR_LOWER_VALUE, constructed}
-        : lower_error(context, IR_DIAG_INTERNAL, span,
+        : lower_internal(context, span,
             "could not read the initialized object value");
 }
 
@@ -13480,13 +14833,13 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
     if (!outcome || !th_named_info(outcome->type, nullptr, &variant, nullptr)
         || !variant
         || !definition || th_kind_of(definition) != TH_RECORD)
-        return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
-            "failure propagation requires a complete call outcome");
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "failure propagation has no complete call outcome");
     th_type *ok_type = th_record_lookup(definition, CORE_STRING_STATIC("ok"));
     th_type *error_type = th_record_lookup(definition, CORE_STRING_STATIC("error"));
     if (!ok_type || !error_type)
-        return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS, span,
-            "failure propagation requires a complete call outcome");
+        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
+            "failure propagation has no complete call outcome");
 
     uint64_t block_id = context->next_value_id++;
     char ok_block_buffer[48], error_block_buffer[48];
@@ -13516,9 +14869,7 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
         return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
             "could not unwind active context managers");
     int routed = n00bb_route_try_error(context, visit->node, error, span);
-    if (routed < 0)
-        return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
-            "could not route the call error");
+    if (routed < 0) return false;
     if (!routed) {
         n00bb_lower_context_t *lower = context->user;
         bool literal_producer = lower && lower->has_active_literal;
@@ -13530,17 +14881,19 @@ n00bb_unwrap_call_outcome(ir_lower_context_t *context, parse_visit_t *visit,
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                     "could not lower an unhandled literal failure");
             ir_instr_t *trap = ir_instr_add(context->block, IR_OP_TRAP);
-            if (!trap)
+            if (!trap || !ir_instr_operand_value(trap, error)
+                || !n00bb_describe_failure(lower, trap,
+                       N00BB_FAILURE_UNCAUGHT, (core_string_t){0},
+                       n00bb_print_type(ir_module_types(context->module),
+                                        error_type)))
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                     "could not lower an unhandled call failure");
             trap->span = span;
             context->reachable = false;
         }
         else if (!n00bb_failure_channel_accepts(context, error_type)) {
-            if (n00bb_reject_runtime_initializer_failure(context, span))
-                return false;
-            return n00bb_operator_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "an uncaught call error must match the enclosing function's failure channel");
+            return (report_uncaught_failure(context, span, error_type,
+                                            N00B_TEXT_PHRASE_THIS_CALL), false);
         }
         else {
             ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
@@ -13651,8 +15004,9 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
             if (shape && ir_shape_storage(shape, &layout)
                 && layout.classification_known
                 && layout.flat_prefix_rank > 1)
-                return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS,
-                    span, "ref cannot address a derived rectangular Array suffix");
+                return (lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
+                    N00B_TEXT_NOT_SUPPORTED_YET_REF_TO,
+                    N00BB_NO_ARGS), false);
             if (!ir_annot_set(lower->ir_context, &storage->def->annots,
                     (ir_annot_t){
                         .key = CORE_STRING_STATIC("n00bb.array.direct_ref"),
@@ -13662,9 +15016,19 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
                 return n00bb_operator_error(context, IR_DIAG_INTERNAL,
                     span, "could not mark direct Array element reference");
         }
-        if (!storage)
-            return n00bb_operator_error(context, IR_DIAG_TYPE_CLASS,
-                span, "ref requires an addressable expression");
+        if (!storage) {
+            core_string_t text = operand
+                ? source_text_of(lower ? lower->unit : nullptr, operand)
+                : (core_string_t){0};
+            lower_report(context, N00B_DIAG_REF_NOT_ADDRESSABLE,
+                operand ? lower_span_for_tree(context, operand) : span,
+                N00B_TEXT_REF_NEEDS_A_VARIABLE_FIELD,
+                N00BB_ARGS(ARG_TEXT(text.u8_bytes ? text
+                                    : n00bb_text_form(N00B_TEXT_THIS))));
+            lower_help(context, N00B_TEXT_STORE_THE_VALUE_IN_A_3,
+                N00BB_NO_ARGS);
+            return false;
+        }
         if (!ir_lower_set_node_value(context, visit->node, storage)) {
             n00bb_operator_error(context, IR_DIAG_INTERNAL, span,
                                  "could not retain the reference value");
@@ -13675,9 +15039,10 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
     if (!core_string_eq(visit->annot->op_kind,
                         CORE_STRING_STATIC("unwrap_result"))) {
         if (!entering) return true;
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(context, visit->node),
-                    "this operator is not lowered yet");
+        lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET,
+            lower_span_for_tree(context, visit->node),
+            N00B_TEXT_NOT_SUPPORTED_YET_THE_OPERATOR,
+            N00BB_ARGS(ARG_TEXT(visit->annot->op_kind)));
         return false;
     }
     if (entering) return true;
@@ -13717,6 +15082,9 @@ n00bb_lower_operator_annotation(ir_lower_context_t *context,
         core_list_free(pending->items);
         pending->items = core_list_new(n00bb_copyout_t);
         pending->outcome = nullptr;
+        if (value
+            && !n00bb_store_written_narrowed_roots(context, nullptr, span))
+            value = nullptr;
         break;
     }
     if (!value || !ir_lower_set_node_value(context, visit->node, value))
@@ -13737,8 +15105,8 @@ n00bb_attach_symbol_array_shape(ir_lower_context_t *context,
         lower->unit, lower->ir_context, symbol, type, &complete) : nullptr;
     if (!complete || (shape && value && !ir_value_set_shape(value, shape))
         || (shape && local && !ir_local_set_shape(local, shape))) {
-        lower_error(context, IR_DIAG_INTERNAL,
-            symbol ? lower_span_for_tree(context, symbol->decl_node)
+        lower_internal(context,
+            symbol ? lower_symbol_name_span(context, symbol)
                    : IR_SPAN_UNKNOWN,
             "could not attach the declaration's array shape");
         return false;
@@ -13861,8 +15229,11 @@ n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
         ok = ir_shape_extent(shape, i, &extents[i]);
         if (ok && i < storage.flat_prefix_rank && !extents[i].value
             && extents[i].kind != IR_SHAPE_EXTENT_STATIC) {
-            lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                "array extent is not available where the array is declared");
+            lower_report(context, N00B_DIAG_ARRAY_EXTENT_NOT_CONSTANT, span,
+                N00B_TEXT_THE_SIZE_OF_THIS_ARRAY,
+                N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_USE_A_CONSTANT_SIZE_OR,
+                N00BB_NO_ARGS);
             core_free(extents);
             return false;
         }
@@ -13873,7 +15244,7 @@ n00bb_allocate_declared_array(ir_lower_context_t *context, ir_local_t *local,
     core_free(extents);
     if (array && n00bb_emit_local_write(context, local, array, span))
         return true;
-    lower_error(context, IR_DIAG_INTERNAL, span,
+    lower_internal(context, span,
                 "could not allocate the declared array");
     return false;
 }
@@ -13893,7 +15264,7 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
             ? ir_lower_bound_local(context, symbol) : nullptr;
         ir_shape_t *shape = local ? ir_local_shape(local) : nullptr;
         if (!n00bb_bind_runtime_array_shape(context, shape)) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not bind runtime array dimensions");
             return false;
@@ -13915,9 +15286,8 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
                           CORE_STRING_STATIC("module")))
         return true;
     if (!symbol || !symbol->type) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED,
-            lower_span_for_tree(context, visit->node),
-            "local declaration has no resolved type");
+        lower_internal(context, lower_span_for_tree(context, visit->node),
+                       "local declaration has no resolved type");
         return false;
     }
     char name_buffer[48];
@@ -13928,9 +15298,14 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
     th_comb combination;
     if (type && th_sum_comb(th_resolve(type), &combination)
         && combination == TH_UNION) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH,
+        core_string_t type_text = lower_type_text(context, type);
+        lower_report(context, N00B_DIAG_UNION_VARIABLE,
             lower_span_for_tree(context, visit->node),
-            "an anonymous union cannot be stored as a variable; use a concrete type or a variant");
+            N00B_TEXT_WOULD_HOLD_THE_ANONYMOUS_UNION,
+            N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(type_text)));
+        lower_help(context, N00B_TEXT_GIVE_A_CONCRETE_TYPE_OR,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
+        core_free(type_text.data);
         return false;
     }
     ir_local_t *local = type
@@ -13944,7 +15319,7 @@ n00bb_lower_declare_local(ir_lower_context_t *context, parse_visit_t *visit,
         || !n00bb_bind_local(context, symbol, local,
                                      lower_span_for_tree(context,
                                                          visit->node))) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not bind local declaration");
         return false;
@@ -14024,24 +15399,37 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             && th_kind_of(receiver_type) == TH_SEQUENCE
             ? th_seq_elem(receiver_type) : nullptr;
         ir_span_t span = lower_span_for_tree(context, index_node);
-        parse_visit_t assignment = {.grammar = grammar, .node = site_node};
         if (!source_value && source && element
-            && !n00bb_nominal_value_as(context, &assignment, element,
-                                       source)) return false;
+            && !n00bb_nominal_value_as(context, element, source))
+            return false;
         ir_value_t *value = source_value
             ? n00bb_materialize(context, source, source_value, element, span)
             : source ? n00bb_materialize_node(context, source, element, span)
                      : nullptr;
-        if (!lower || !index_value || !value || !element
-            || !is_integer_type(index_value->type)) {
-            lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                "array index or stored value has an incompatible type");
+        if (!lower || !index_value || !value || !element) {
+            lower_internal(context, span,
+                           "array element store has no index or value");
+            return false;
+        }
+        if (!is_integer_type(index_value->type)) {
+            core_string_t index_text = lower_type_text(context,
+                                                       index_value->type);
+            lower_report(context, N00B_DIAG_ARRAY_INDEX_TYPE, span,
+                N00B_TEXT_AN_ARRAY_INDEX_MUST_BE,
+                N00BB_ARGS(ARG_TEXT(index_text)));
+            core_free(index_text.data);
             return false;
         }
         if (!th_unify_in_place(ir_module_types(context->module),
                                element, value->type)) {
-            lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                "array index or stored value has an incompatible type");
+            core_string_t element_text = lower_type_text(context, element);
+            core_string_t value_text = lower_type_text(context, value->type);
+            lower_report(context, N00B_DIAG_VALUE_TYPE_MISMATCH,
+                lower_span_for_tree(context, source ? source : site_node),
+                N00B_TEXT_THIS_VALUE_IS_BUT_THE,
+                N00BB_ARGS(ARG_TEXT(value_text), ARG_TEXT(element_text)));
+            core_free(element_text.data);
+            core_free(value_text.data);
             return false;
         }
         if (!th_is_closed(ir_module_types(context->module), element)) {
@@ -14053,7 +15441,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             if (!write || !ir_instr_operand_value(write, base)
                 || !ir_instr_operand_value(write, index_value)
                 || !ir_instr_operand_value(write, value)) {
-                lower_error(context, IR_DIAG_INTERNAL, span,
+                lower_internal(context, span,
                     "could not lower generic array indexed assignment");
                 return false;
             }
@@ -14068,13 +15456,13 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                         source ? source : site_node))
                 || !ir_value_add_alias_target(lower->ir_context, address,
                     (ir_alias_target_t){.value = value}))) {
-            lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+            lower_internal(context, span,
                 "could not enforce indexed element shape or alias provenance");
             return false;
         }
         if (!address || !n00bb_emit_indirect_write(context, address,
                                                     value, span)) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                 "could not lower builtin array indexed assignment");
             return false;
         }
@@ -14132,15 +15520,13 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
     if (!lower || !caller || !site || !symbol
         || symbol->kind != PARSE_SYM_FUNCTION
         || !arguments[0]) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-            lower_span_for_tree(context, site_node),
+        lower_internal(context, lower_span_for_tree(context, site_node),
             "indexed assignment has no resolved call operands");
         return false;
     }
     for (size_t i = 1; i < argument_count; i++)
         if (!arguments[i]) {
-        lower_error(context, IR_DIAG_VERIFY_PARSED,
-            lower_span_for_tree(context, site_node),
+        lower_internal(context, lower_span_for_tree(context, site_node),
             "indexed assignment has no resolved call operands");
         return false;
         }
@@ -14148,7 +15534,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             receiver_node, arguments[0])
         || (source && !n00bb_attach_expression_shape(context, grammar,
             source, arguments[argument_count - 1]))) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, site_node),
             "could not restore indexed value shape metadata");
         return false;
@@ -14163,14 +15549,14 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             || !n00bb_emit_sequence_shape_check(context, arguments[2],
                 element_shape, lower_span_for_tree(context,
                     source ? source : site_node))) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, site_node),
                 "could not enforce the indexed element shape");
             return false;
         }
         if (!ir_value_add_alias_target(lower->ir_context, arguments[0],
                 (ir_alias_target_t){.value = arguments[2]})) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, site_node),
                 "could not record the stored element's alias provenance");
             return false;
@@ -14179,7 +15565,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
     symbol = linkable_trait_requirement(caller->link_analysis, lower->unit,
                                         site, symbol);
     if (!symbol) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, site_node),
             "linkable indexed write has no resolved trait requirement");
         return false;
@@ -14211,9 +15597,9 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         || th_kind_of(signature) != TH_FUNCTION
         || th_func_nparams(signature) != argument_count
         || th_func_rest(signature)) {
-        lower_error(context, IR_DIAG_TYPE_ARGS,
-            lower_span_for_tree(context, site_node),
-            "indexed write method parameter count does not match the assignment");
+        lower_internal(context, lower_span_for_tree(context, site_node),
+            "indexed write method parameter count does not match the "
+            "assignment");
         return false;
     }
     th_mode receiver_mode = n00bb_receiver_mode(grammar, symbol);
@@ -14254,9 +15640,15 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                 && receiver_field->mutability != PARSE_SYM_MUTABLE)
             || (!receiver_local && !receiver_global && !receiver_address
                 && !receiver_index))) {
-        lower_error(context, IR_DIAG_TYPE_ARGS,
-            lower_span_for_tree(context, receiver_node),
-            "indexed assignment requires a writable receiver storage location");
+        if (receiver_field && receiver_field->is_field
+            && receiver_field->mutability != PARSE_SYM_MUTABLE)
+            lower_report(context, N00B_DIAG_NOT_WRITABLE,
+                lower_span_for_tree(context, receiver_node),
+                N00B_TEXT_FIELD_IS_NOT_MUTABLE_SO,
+                N00BB_ARGS(ARG_TEXT(receiver_field->name)));
+        else
+            report_not_writable(context, receiver_node, receiver_symbol,
+                                N00B_TEXT_ITS_ELEMENTS, (core_string_t){});
         return false;
     }
     n00bb_copyout_t receiver_copyout = {
@@ -14278,9 +15670,9 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         if (!th_unify_in_place(ir_module_types(context->module), failure,
                 enclosing ? enclosing
                           : th_name(ir_module_types(context->module), CORE_STRING_STATIC("nil")))) {
-            lower_error(context, IR_DIAG_TYPE_MISMATCH,
-                lower_span_for_tree(context, site_node),
-                "an uncaught indexed write failure must match the enclosing function's failure channel");
+            report_uncaught_failure(context,
+                lower_span_for_tree(context, site_node), failure,
+                N00B_TEXT_PHRASE_INDEXED_ASSIGNMENT);
             return false;
         }
         failure = th_resolve(failure);
@@ -14306,11 +15698,22 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             || (i == 0 ? mode != receiver_mode : !th_mode_is_input_only(mode))
             || !th_unify_in_place(ir_module_types(context->module),
                                   parameter->type, arguments[i]->type)) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, i == 0 ? receiver_node
-                    : !slice && i == 1 ? index_arg
-                    : slice && i < 3 ? contents : source),
-                "indexed store argument does not match its resolved parameter");
+            parse_tree_t *offending = i == 0 ? receiver_node
+                : !slice && i == 1 ? index_arg
+                : slice && i < 3 ? contents : source;
+            core_string_t parameter_name = {0};
+            function_parameter_info(grammar, symbol, formal_params, i,
+                                    nullptr, &parameter_name, nullptr,
+                                    nullptr);
+            if (parameter && i > 0 && th_mode_is_input_only(mode)
+                && parameter_name.u8_bytes)
+                report_argument_type(context, offending, arguments[i]->type,
+                    parameter->type, symbol, parameter_name);
+            else
+                lower_internal(context,
+                    lower_span_for_tree(context, offending),
+                    "indexed store argument does not match its parameter "
+                    "mode");
             return false;
         }
     }
@@ -14319,7 +15722,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         callee = n00bb_abstract_trait_requirement(context, site, callable,
             signature, arguments[0], lower_span_for_tree(context, index_node));
         if (!callee) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, site_node),
                 "could not select the indexed write trait requirement");
             return false;
@@ -14330,7 +15733,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             grammar, callee_unit, symbol, signature, arguments[0],
             callee, lower_span_for_tree(context, index_node));
         if (!selection) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, site_node),
                 "could not select the indexed write trait requirement");
             return false;
@@ -14363,7 +15766,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             && ir_instr_set_call_signature(call, call_signature);
     }
     if (!emitted) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, site_node),
             "could not emit the resolved indexed write call");
         return false;
@@ -14413,7 +15816,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
             && ir_instr_operand_block(branch, ok_block)
             && ir_instr_operand_block(branch, error_block);
         if (!branched) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, site_node),
                 "could not branch on the indexed write outcome");
             return false;
@@ -14425,27 +15828,21 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         ir_value_t *error = n00bb_emit_outcome_payload(context, call->dest,
             CORE_STRING_STATIC("error"), failure, span);
         if (!error || !n00bb_emit_with_failure(context, site_node)) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not unwind contexts for indexed write failure");
             return false;
         }
         int routed = n00bb_route_try_error(context, site_node, error, span);
-        if (routed < 0) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
-                        "could not route the indexed write failure");
-            return false;
-        }
+        if (routed < 0) return false;
         if (!routed) {
             if (!n00bb_failure_channel_accepts(context, failure)) {
-                if (!n00bb_reject_runtime_initializer_failure(context,
-                                                               span))
-                    lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                        "an uncaught indexed write failure must match the enclosing function's failure channel");
+                report_uncaught_failure(context, span, failure,
+                                        N00B_TEXT_PHRASE_INDEXED_ASSIGNMENT);
                 return false;
             }
             ir_instr_t *fail = ir_instr_add(context->block, IR_OP_FAIL);
             if (!fail || !ir_instr_operand_value(fail, error)) {
-                lower_error(context, IR_DIAG_INTERNAL, span,
+                lower_internal(context, span,
                             "could not propagate the indexed write failure");
                 return false;
             }
@@ -14462,7 +15859,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
         : call->dest;
     if (!successful || (!shared_receiver && !n00bb_emit_call_copyout(context,
             &receiver_copyout, successful, span))) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
             "could not copy out the indexed write receiver");
         return false;
     }
@@ -14519,8 +15916,8 @@ n00bb_lower_shaped_assignment(ir_lower_context_t *context,
             || !ir_instr_operand_value(store, value)) return false;
         return true;
     }
-    lower_error(context, IR_DIAG_TYPE_ARGS, span,
-                "shaped assignment target has no writable IR binding");
+    lower_internal(context, span,
+                   "shaped assignment target has no writable storage");
     return false;
 }
 
@@ -14558,7 +15955,7 @@ n00bb_materialize_assignment_source(ir_lower_context_t *context,
         return !n00bb_materialized_nil_source(visit->grammar, source, target)
             || ir_lower_skip_value(context, visit->node, source);
     if (!n00bb_materialize_source(context, visit, source, target)) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not materialize the assigned value");
         return false;
@@ -14568,8 +15965,8 @@ n00bb_materialize_assignment_source(ir_lower_context_t *context,
 
 
 static bool
-n00bb_nominal_value_as(ir_lower_context_t *context, parse_visit_t *visit,
-                       th_type *target_type, parse_tree_t *source)
+n00bb_nominal_value_as(ir_lower_context_t *context, th_type *target_type,
+                       parse_tree_t *source)
 {
     n00bb_lower_context_t *lower = context->user;
     ir_value_t *value = source ? ir_lower_node_value(context, source) : nullptr;
@@ -14612,11 +16009,16 @@ n00bb_nominal_value_as(ir_lower_context_t *context, parse_visit_t *visit,
         }
     }
     core_list_free(scopes);
-    if (has_constructor)
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH,
-            lower_span_for_tree(context, visit->node),
-            "named record has a constructor; use an explicit cast or new")
-            .status != IR_LOWER_FAILED;
+    if (has_constructor) {
+        core_string_t type_text = lower_type_text(context, target_type);
+        lower_report(context, N00B_DIAG_RECORD_HAS_CONSTRUCTOR,
+            lower_span_for_tree(context, source), N00B_TEXT_HAS_AN_INIT_SO_A,
+            N00BB_ARGS(ARG_TEXT(type_text)));
+        lower_help(context, N00B_TEXT_WRITE_CAST_OR_NEW,
+            N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(type_text)));
+        core_free(type_text.data);
+        return false;
+    }
 
     value->type = target_type;
     return ir_lower_set_node_value(context, source, value);
@@ -14657,8 +16059,20 @@ n00bb_atomic_assignment_value(ir_lower_context_t *context,
     ir_value_t *address = n00bb_atomic_binding_address(context, symbol, span);
     if (!value || !address
         || !ir_type_eq(context->module, symbol->type, value->type)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "atomic assignment requires a value of the same underlying type and writable storage");
+        if (!value || !address) {
+            lower_internal(context, span,
+                           "atomic assignment has no value or storage");
+            return false;
+        }
+        core_string_t expected = lower_type_text(context, symbol->type);
+        core_string_t actual = lower_type_text(context, value->type);
+        lower_report(context, N00B_DIAG_VALUE_TYPE_MISMATCH,
+            lower_span_for_tree(context, source),
+            N00B_TEXT_THIS_VALUE_IS_BUT_HOLDS,
+            N00BB_ARGS(ARG_TEXT(actual), ARG_TEXT(symbol->name),
+                       ARG_TEXT(expected)));
+        core_free(expected.data);
+        core_free(actual.data);
         return false;
     }
     return n00bb_emit_indirect_write(context, address, value, span);
@@ -14791,6 +16205,12 @@ n00bb_record_field_address(ir_lower_context_t *context,
         ? ir_lower_bound_address(context, symbol) : nullptr;
     ir_local_t *local = symbol
         ? ir_lower_bound_local(context, symbol) : nullptr;
+    ir_value_t *bound = symbol && !local
+        ? ir_lower_bound_value(context, symbol) : nullptr;
+    th_type *storage = local ? local->type : bound ? bound->type : nullptr;
+    if (n00bb_is_narrowed_use(context, node, storage))
+        return n00bb_narrowed_place(context, grammar, node, symbol, storage,
+                                    span);
     if (!address && local) address = ir_lower_local_address(context, local);
     if (address) return address;
     if (local) {
@@ -14832,6 +16252,161 @@ n00bb_record_field_address(ir_lower_context_t *context,
     return nullptr;
 }
 
+static bool
+n00bb_is_narrowed_use(ir_lower_context_t *context, parse_tree_t *node,
+                      th_type *storage)
+{
+    th_type *item = storage ? th_option_item(th_resolve(storage)) : nullptr;
+    while (node && !parse_tree_type(node) && !core_tree_is_leaf(node)
+           && core_tree_num_children(node) == 1)
+        node = core_tree_child(node, 0);
+    th_type *seen = node ? parse_tree_type(node) : nullptr;
+    return item && seen && ir_type_eq(context->module, item, seen);
+}
+
+static parse_tree_t *
+n00bb_narrowed_anchor(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    static const core_string_t anchors[] = {
+        CORE_STRING_STATIC("expression"), CORE_STRING_STATIC("assign-stmt"),
+        CORE_STRING_STATIC("binop-assign-stmt"), CORE_STRING_STATIC("and-rhs"),
+        CORE_STRING_STATIC("or-rhs"),
+    };
+    parse_tree_t *anchor = nullptr;
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        if (nt_is(grammar, at, CORE_STRING_STATIC("body"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("value-body")))
+            break;
+        for (size_t i = 0; i < sizeof(anchors) / sizeof(*anchors); i++)
+            if (nt_is(grammar, at, anchors[i])) anchor = at;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("and-rhs"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("or-rhs")))
+            break;
+    }
+    parse_tree_t *statement = anchor ? parse_tree_parent(anchor) : nullptr;
+    bool assignment = anchor
+        && (nt_is(grammar, anchor, CORE_STRING_STATIC("assign-stmt"))
+            || nt_is(grammar, anchor, CORE_STRING_STATIC("binop-assign-stmt")));
+    return assignment && statement
+        && (nt_is(grammar, statement, CORE_STRING_STATIC("body-stmt"))
+            || nt_is(grammar, statement, CORE_STRING_STATIC("top-level-stmt")))
+        ? statement : anchor;
+}
+
+static n00bb_narrowed_root_t *
+n00bb_find_narrowed_root(n00bb_lower_context_t *lower,
+                         parse_sym_entry_t *symbol, parse_tree_t *anchor)
+{
+    for (size_t i = 0; anchor && i < lower->narrowed_roots.len; i++)
+        if (lower->narrowed_roots.data[i].symbol == symbol
+            && lower->narrowed_roots.data[i].anchor == anchor)
+            return &lower->narrowed_roots.data[i];
+    return nullptr;
+}
+
+static void
+n00bb_note_narrowed_write(ir_lower_context_t *context,
+                          parse_grammar_t *grammar, parse_tree_t *node,
+                          parse_sym_entry_t *symbol)
+{
+    n00bb_narrowed_root_t *root = n00bb_find_narrowed_root(context->user,
+        symbol, n00bb_narrowed_anchor(grammar, node));
+    if (root) root->written = true;
+}
+
+static ir_value_t *
+n00bb_narrowed_place(ir_lower_context_t *context, parse_grammar_t *grammar,
+                     parse_tree_t *node, parse_sym_entry_t *symbol,
+                     th_type *storage, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    parse_tree_t *anchor = n00bb_narrowed_anchor(grammar, node);
+    th_type *item = th_option_item(th_resolve(storage));
+    bool writes = n00bb_assignment_target(grammar, node, nullptr);
+    n00bb_narrowed_root_t *root = n00bb_find_narrowed_root(lower, symbol,
+                                                           anchor);
+    ir_local_t *place = root ? root->local : nullptr;
+    if (root) root->written = root->written || writes;
+    if (!place) {
+        ir_local_t *local = ir_lower_bound_local(context, symbol);
+        ir_value_t *current = local
+            ? n00bb_emit_local_read(context, local, span)
+            : ir_lower_bound_value(context, symbol);
+        ir_instr_t *get = current
+            ? ir_lower_emit_instruction(context, IR_OP_OPTION_GET, span)
+            : nullptr;
+        char name_buffer[48];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_narrowed_%llu",
+            (unsigned long long)context->next_value_id++);
+        if (!get || !ir_lower_set_temp_dest(context, get,
+                CORE_STRING_STATIC("__n00bb_narrowed_value_"), item)
+            || !ir_instr_operand_value(get, current)
+            || !(place = ir_local_add(context->function, name, item))
+            || !n00bb_emit_local_write(context, place, get->dest, span))
+            return nullptr;
+        if (anchor && local)
+            core_list_push(lower->narrowed_roots, ((n00bb_narrowed_root_t){
+                .symbol = symbol, .anchor = anchor, .local = place,
+                .written = writes}));
+    }
+    th_type *address_type = th_ind(ir_module_types(context->module), 0, item);
+    ir_instr_t *take = ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF,
+                                                 span);
+    if (!take || !ir_lower_set_temp_dest(context, take,
+            CORE_STRING_STATIC("__n00bb_narrowed_address_"), address_type)
+        || !ir_instr_operand_local(take, place))
+        return nullptr;
+    return take->dest;
+}
+
+static bool
+n00bb_store_written_narrowed_roots(ir_lower_context_t *context,
+                                   parse_tree_t *anchor, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    for (size_t i = 0; context->reachable && i < lower->narrowed_roots.len;
+         i++) {
+        n00bb_narrowed_root_t *root = &lower->narrowed_roots.data[i];
+        if (!root->written || (anchor && root->anchor != anchor)) continue;
+        root->written = false;
+        if (root->symbol->mutability != PARSE_SYM_MUTABLE) continue;
+        ir_local_t *local = ir_lower_bound_local(context, root->symbol);
+        ir_value_t *payload = n00bb_emit_local_read(context, root->local,
+                                                    span);
+        ir_instr_t *some = payload
+            ? ir_lower_emit_instruction(context, IR_OP_OPTION_SOME, span)
+            : nullptr;
+        if (!some || !ir_lower_set_temp_dest(context, some,
+                CORE_STRING_STATIC("__n00bb_narrowed_store_"), local->type)
+            || !ir_instr_operand_value(some, payload)
+            || !n00bb_emit_local_write(context, local, some->dest, span)) {
+            lower_internal(context, span,
+                "could not store a narrowed value back into its option");
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool
+n00bb_store_narrowed_roots(ir_lower_context_t *context, parse_visit_t *visit,
+                           bool entering, void *opaque)
+{
+    (void)opaque;
+    n00bb_lower_context_t *lower = context ? context->user : nullptr;
+    if (entering || !lower) return true;
+    if (!n00bb_store_written_narrowed_roots(context, visit->node,
+            lower_span_for_tree(context, visit->node)))
+        return false;
+    size_t kept = 0;
+    for (size_t i = 0; i < lower->narrowed_roots.len; i++)
+        if (lower->narrowed_roots.data[i].anchor != visit->node)
+            lower->narrowed_roots.data[kept++] = lower->narrowed_roots.data[i];
+    lower->narrowed_roots.len = kept;
+    return true;
+}
+
 static ir_value_t *
 n00bb_addressable_expression_address(ir_lower_context_t *context,
                                      parse_grammar_t *grammar,
@@ -14846,12 +16421,15 @@ n00bb_addressable_expression_address(ir_lower_context_t *context,
         ir_value_t *binding = ir_lower_bound_value(context, resolved);
         ir_value_t *address = ir_lower_bound_address(context, resolved);
         ir_local_t *local = ir_lower_bound_local(context, resolved);
+        th_type *type = local ? local->type
+            : binding ? binding->type : resolved->type;
+        if (n00bb_is_narrowed_use(context, member, type))
+            return n00bb_narrowed_place(context, grammar, member, resolved,
+                                        type, span);
         if (address) return address;
         if (!local && (!binding
             || (binding->kind != IR_VAL_PARAM
                 && binding->kind != IR_VAL_GLOBAL))) return nullptr;
-        th_type *type = local ? local->type
-            : binding ? binding->type : resolved->type;
         th_type *address_type = type
             ? th_ind(ir_module_types(context->module), 0, type) : nullptr;
         ir_instr_t *take = address_type
@@ -14931,9 +16509,8 @@ n00bb_lower_flagset_field_assignment(ir_lower_context_t *context,
     if (entering) {
         if (!root || !n00bb_root_storage_writable(visit->grammar,
                 ir_module_types(context->module), receiver, root, phase)) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, visit->node),
-                "flagset member assignment requires a writable flagset value");
+            report_not_writable(context, receiver, root, N00B_TEXT_ITS_FLAG,
+                                flag->name);
             return false;
         }
         return ir_lower_handle_assignment(context, visit->node)
@@ -14970,8 +16547,7 @@ n00bb_lower_flagset_field_assignment(ir_lower_context_t *context,
         || !ir_instr_operand_value(updated, mask->dest)
         || !ir_instr_operand_value(updated, assigned)
         || !n00bb_emit_indirect_write(context, address, updated->dest, span)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                    "could not update this flagset member");
+        lower_internal(context, span, "could not update this flagset member");
         return false;
     }
     return true;
@@ -14998,9 +16574,18 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
             || !n00bb_root_storage_writable(visit->grammar,
                    ir_module_types(context->module), target, root,
                    n00bb_compile_phase())) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, visit->node),
-                "record field assignment requires a mutable field on a writable value");
+            if (field->mutability != PARSE_SYM_MUTABLE) {
+                lower_report(context, N00B_DIAG_NOT_WRITABLE,
+                    lower_span_for_tree(context, target),
+                    N00B_TEXT_FIELD_IS_NOT_MUTABLE_SO_2,
+                    N00BB_ARGS(ARG_TEXT(field->name)));
+                lower_declared_secondary(context, field,
+                    N00B_TEXT_IS_DECLARED_HERE,
+                    N00BB_ARGS(ARG_TEXT(field->name)));
+            }
+            else
+                report_not_writable(context, target, root, N00B_TEXT_ITS_FIELD,
+                                    field->name);
             return false;
         }
         return ir_lower_handle_assignment(context, visit->node)
@@ -15018,36 +16603,35 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
                                    resolved_field_type)
         : nullptr;
     if (!value || !address) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        lower_internal(context, span,
             "record field assignment has no value or address");
         return false;
     }
     if (!th_unify_in_place(ir_module_types(context->module),
                            th_ind_referent(address->type), value->type)) {
-        core_buffer_t message = {0};
-        core_string_t field_text = th_print(ir_module_types(context->module),
-                                            th_ind_referent(address->type));
-        core_string_t value_text = th_print(ir_module_types(context->module),
-                                            value->type);
-        core_buffer_printf(&message,
-            "record field assignment value does not match its resolved type "
-            "(field %.*s, value %.*s)",
-            (int)field_text.u8_bytes, field_text.data,
-            (int)value_text.u8_bytes, value_text.data);
-        lower_error_text(context, IR_DIAG_TYPE_MISMATCH, span,
-            core_buffer_string(&message));
-        core_buffer_release(&message);
+        core_string_t field_text = lower_type_text(context,
+            th_ind_referent(address->type));
+        core_string_t value_text = lower_type_text(context, value->type);
+        lower_report(context, N00B_DIAG_VALUE_TYPE_MISMATCH,
+            lower_span_for_tree(context, source),
+            N00B_TEXT_THIS_VALUE_IS_BUT_FIELD,
+            N00BB_ARGS(ARG_TEXT(value_text), ARG_TEXT(field->name),
+                       ARG_TEXT(field_text)));
+        lower_declared_secondary(context, field, N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(field->name)));
+        core_free(field_text.data);
+        core_free(value_text.data);
         return false;
     }
     if (!n00bb_emit_sequence_shape_check(context, value,
             parse_sym_binding(field, CORE_STRING_STATIC("ir.array-shape")),
             span)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        lower_internal(context, span,
             "record field assignment does not match its array shape");
         return false;
     }
     if (!n00bb_emit_indirect_write(context, address, value, span)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        lower_internal(context, span,
             "could not emit the record field store");
         return false;
     }
@@ -15074,12 +16658,28 @@ n00bb_lower_referent_assignment(ir_lower_context_t *context,
     if (!value || !address
         || !th_unify_in_place(ir_module_types(context->module),
                               th_ind_referent(address->type), value->type)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "'__value' assignment needs a reference and a value of its referent type");
+        if (!address)
+            lower_report(context, N00B_DIAG_VALUE_NEEDS_REFERENCE,
+                lower_span_for_tree(context, target),
+                N00B_TEXT_VALUE_WRITES_THROUGH_A_REFERENCE,
+                N00BB_NO_ARGS);
+        else if (!value)
+            lower_internal(context, span, "`__value` assignment has no value");
+        else {
+            core_string_t expected = lower_type_text(context,
+                th_ind_referent(address->type));
+            core_string_t actual = lower_type_text(context, value->type);
+            lower_report(context, N00B_DIAG_VALUE_TYPE_MISMATCH,
+                lower_span_for_tree(context, source),
+                N00B_TEXT_THIS_VALUE_IS_BUT_THE_2,
+                N00BB_ARGS(ARG_TEXT(actual), ARG_TEXT(expected)));
+            core_free(expected.data);
+            core_free(actual.data);
+        }
         return false;
     }
     if (!n00bb_emit_indirect_write(context, address, value, span)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not emit the store through a reference");
         return false;
     }
@@ -15116,9 +16716,9 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
     parse_sym_entry_t *receiver = attached_symbol(visit->grammar, lower->unit,
                                                    receiver_node);
     if (!receiver || !receiver->type || !arm->type) {
-        lower_error(context, IR_DIAG_TYPE_ARGS,
-            lower_span_for_tree(context, visit->node),
-            "variant arm assignment requires a resolved variant value and payload type");
+        lower_internal(context, lower_span_for_tree(context, visit->node),
+            "variant arm assignment has no resolved variant value or "
+            "payload type");
         return false;
     }
     if (entering) {
@@ -15131,9 +16731,14 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
             || !n00bb_root_storage_writable(visit->grammar,
                    ir_module_types(context->module), receiver_node, root,
                    n00bb_compile_phase())) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, visit->node),
-                "variant arm assignment requires a writable variant value");
+            if (receiver->is_field && receiver->mutability != PARSE_SYM_MUTABLE)
+                lower_report(context, N00B_DIAG_NOT_WRITABLE,
+                    lower_span_for_tree(context, receiver_node),
+                    N00B_TEXT_FIELD_IS_NOT_MUTABLE_SO_3,
+                    N00BB_ARGS(ARG_TEXT(receiver->name)));
+            else
+                report_not_writable(context, receiver_node, root,
+                                    N00B_TEXT_ITS_ARM, arm->name);
             return false;
         }
         return ir_lower_handle_assignment(context, visit->node)
@@ -15148,7 +16753,7 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
         || !th_named_info(th_resolve(variant_type), nullptr, &is_variant,
                           nullptr)
         || !is_variant) {
-        lower_error(context, IR_DIAG_TYPE_CLASS, span,
+        lower_internal(context, span,
             "variant arm assignment target does not have a variant type");
         return false;
     }
@@ -15160,20 +16765,20 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
     if (!payload || !arm_type
         || !n00bb_variant_payload_compatible(context, arm_type,
                                                        payload->type)) {
-        core_buffer_t message = {0};
-        core_string_t arm_text = arm_type
-            ? n00bb_print_type(types, arm_type)
-            : CORE_STRING_STATIC("unresolved");
-        core_string_t payload_text = payload
-            ? n00bb_print_type(types, payload->type)
-            : CORE_STRING_STATIC("no value");
-        core_buffer_printf(&message,
-            "variant arm assignment requires payload type %.*s, but got %.*s",
-            (int)arm_text.u8_bytes, arm_text.data,
-            (int)payload_text.u8_bytes, payload_text.data);
-        lower_error_text(context, IR_DIAG_TYPE_MISMATCH, span,
-                         core_buffer_string(&message));
-        core_buffer_release(&message);
+        if (!payload || !arm_type) {
+            lower_internal(context, span,
+                           "variant arm assignment has no payload or type");
+            return false;
+        }
+        core_string_t arm_text = lower_type_text(context, arm_type);
+        core_string_t payload_text = lower_type_text(context, payload->type);
+        lower_report(context, N00B_DIAG_VALUE_TYPE_MISMATCH,
+            lower_span_for_tree(context, source),
+            N00B_TEXT_THIS_VALUE_IS_BUT_ARM,
+            N00BB_ARGS(ARG_TEXT(payload_text), ARG_TEXT(arm->name),
+                       ARG_TEXT(arm_text)));
+        core_free(arm_text.data);
+        core_free(payload_text.data);
         return false;
     }
 
@@ -15183,12 +16788,12 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
         CORE_STRING_STATIC("__n00bb_variant_"), variant_type)
         || !ir_instr_operand_name(make, arm->name)
         || !ir_instr_operand_value(make, payload)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
             "could not construct the selected variant arm");
         return false;
     }
     if (!ir_value_copy_alias_targets(lower->ir_context, make->dest, payload)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
             "could not preserve variant payload alias provenance");
         return false;
     }
@@ -15197,7 +16802,7 @@ n00bb_lower_variant_arm_assignment(ir_lower_context_t *context,
         lower->unit, receiver_node, span);
     if (!address
         || !n00bb_emit_indirect_write(context, address, make->dest, span)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        lower_internal(context, span,
             "could not store the selected variant arm");
         return false;
     }
@@ -15217,7 +16822,7 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         parse_sym_entry_t *declared = parse_tree_sym(visit->node);
         th_type *expected = declared ? declared->type : nullptr;
         if (!entering && source
-            && !n00bb_nominal_value_as(context, visit, expected, source))
+            && !n00bb_nominal_value_as(context, expected, source))
             return false;
         bool atomic_value = false;
         if (!n00bb_atomic_assignment_value(context, visit, target, source,
@@ -15237,13 +16842,15 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         if (!n00bb_shape_has_constraints(shape)) return true;
         if (entering)
             return ir_lower_handle_assignment(context, visit->node);
-        if (n00bb_lower_shaped_assignment(context, visit, target, source))
-            return true;
-        return !ir_diags_failed(context->diagnostics);
+        size_t failures = lower_failures(context);
+        return n00bb_lower_shaped_assignment(context, visit, target, source)
+            || lower_failures(context) == failures;
     }
     bool compound = nt_is(visit->grammar, visit->node,
                           CORE_STRING_STATIC("binop-assign-stmt"));
     if (!compound && !nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("assign-stmt")))
+        return true;
+    if (!entering && ir_lower_emit_suppressed(context, visit->node))
         return true;
     parse_tree_t *target = parse_tree_resolve_child_ref(
         visit->grammar, visit->node, visit->annot->name_ref);
@@ -15268,9 +16875,11 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
                                                     source, entering);
     if (entering && n00bb_atomic_member_lvalue_root(visit->grammar,
             lower ? lower->unit : nullptr, target)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH,
-            lower_span_for_tree(context, visit->node),
-            "atomic values cannot be updated through a field; assign the whole value");
+        lower_report(context, N00B_DIAG_ATOMIC_PART_UPDATE,
+            lower_span_for_tree(context, target),
+            N00B_TEXT_AN_ATOMIC_VALUE_CANNOT_BE,
+            N00BB_NO_ARGS);
+        lower_help(context, N00B_TEXT_BUILD_THE_NEW_VALUE_AND, N00BB_NO_ARGS);
         return false;
     }
     if (!compound) {
@@ -15297,14 +16906,13 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
             : target && !core_tree_is_leaf(target)
                 ? parse_tree_type(target) : nullptr;
         if (!compound
-            && (!n00bb_nominal_value_as(context, visit, target_type, source)
+            && (!n00bb_nominal_value_as(context, target_type, source)
                 || !n00bb_materialize_assignment_source(context, visit,
                        source, target_type, false)))
             return false;
-        if (n00bb_lower_shaped_assignment(context, visit, target, source))
-            return true;
-        if (ir_diags_failed(context->diagnostics)) return false;
-        return true;
+        size_t failures = lower_failures(context);
+        return n00bb_lower_shaped_assignment(context, visit, target, source)
+            || lower_failures(context) == failures;
     }
     if (!compound && n00bb_has_index_store_target(visit->grammar, target)) {
         parse_tree_t *index = n00bb_index_expression_node(visit->grammar,
@@ -15328,7 +16936,7 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         if ((!address_only || !member
                 || ir_lower_suppress_emit(context, member))
             && ir_lower_handle_assignment(context, visit->node)) return true;
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not claim indexed assignment lowering");
         return false;
@@ -15349,9 +16957,8 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         && !ir_lower_bound_local(context, symbol)
         && !ir_lower_bound_address(context, symbol)) {
         if (!symbol->type) {
-            lower_error(context, IR_DIAG_VERIFY_TYPED,
-                lower_span_for_tree(context, visit->node),
-                "inferred assignment has no resolved type");
+            lower_internal(context, lower_span_for_tree(context, visit->node),
+                           "inferred assignment has no resolved type");
             return false;
         }
         char name_buffer[48];
@@ -15368,7 +16975,7 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         if (!local || !n00bb_bind_local(context, symbol, local,
                                          lower_span_for_tree(context,
                                                              visit->node))) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not bind inferred assignment destination");
             return false;
@@ -15383,6 +16990,15 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
               lower ? lower->unit : nullptr, target)
         : symbol;
     bool writable = !write_owner || parse_sym_can_write(write_owner, phase);
+    ir_global_t *static_global = write_owner && !compound && lower
+        && write_owner->mutability == PARSE_SYM_IMMUTABLE
+        ? link_ir_global_for_symbol(tu_state(lower->unit)->link_analysis,
+                                    write_owner)
+        : nullptr;
+    if (static_global && static_global->has_static_initializer) {
+        report_let_reassigned(context, target, write_owner);
+        return skip_rejected_statement(context, visit->node);
+    }
     if (write_owner && !compound
         && write_owner->mutability == PARSE_SYM_IMMUTABLE
         && parse_sym_can_initialize(write_owner, phase)
@@ -15394,9 +17010,19 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
             if (!loop->active || !loop->node
                 || n00bb_binding_in_loop_scope(write_owner, loop->node))
                 continue;
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, visit->node),
-                "a let binding declared outside a loop cannot be initialized inside it");
+            lower_report(context, N00B_DIAG_LET_INITIALIZED_IN_LOOP,
+                lower_span_for_tree(context, target),
+                N00B_TEXT_IS_A_LET_DECLARED_OUTSIDE,
+                N00BB_ARGS(ARG_TEXT(write_owner->name)));
+            lower_declared_secondary(context, write_owner,
+                N00B_TEXT_IS_DECLARED_HERE,
+                N00BB_ARGS(ARG_TEXT(write_owner->name)));
+            lower_secondary(context,
+                lower_span_for_first_token(context, loop->node),
+                N00B_TEXT_THIS_LOOP_CAN_RUN_THE,
+                N00BB_NO_ARGS);
+            lower_help(context, N00B_TEXT_DECLARE_WITH_VAR_OR_DECLARE,
+                N00BB_ARGS(ARG_TEXT(write_owner->name)));
             return false;
         }
         writable = true;
@@ -15413,14 +17039,23 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
         && n00bb_shared_in_place_site(visit->grammar,
                link_use_site_for_node(tu_state(lower->unit), visit->node));
     if (write_owner && !writable && !indexed_compound && !shared_in_place) {
-        lower_error(context, IR_DIAG_TYPE_ARGS,
-            lower_span_for_tree(context, visit->node),
-            "cannot assign to this binding");
-        return false;
+        if (field_compound && field->mutability != PARSE_SYM_MUTABLE)
+            lower_report(context, N00B_DIAG_NOT_WRITABLE,
+                lower_span_for_tree(context, target),
+                N00B_TEXT_FIELD_IS_NOT_MUTABLE_SO_2,
+                N00BB_ARGS(ARG_TEXT(field->name)));
+        else if (!field_compound
+                 && write_owner->mutability == PARSE_SYM_IMMUTABLE)
+            report_let_reassigned(context, target, write_owner);
+        else
+            report_not_writable(context, target, write_owner,
+                field_compound ? N00B_TEXT_ITS_FIELDS : N00B_TEXT_IT,
+                (core_string_t){});
+        return skip_rejected_statement(context, visit->node);
     }
     if (compound && entering
         && !ir_lower_evaluate_assignment_target(context, visit->node)) {
-        lower_error(context, IR_DIAG_INTERNAL,
+        lower_internal(context,
             lower_span_for_tree(context, visit->node),
             "could not evaluate compound assignment target");
         return false;
@@ -15438,7 +17073,7 @@ n00bb_check_assignment(ir_lower_context_t *context, parse_visit_t *visit,
     if (!compound && n00bb_shape_has_constraints(target_shape)) {
         if (!ir_lower_handle_assignment(context, visit->node)
             || !ir_lower_skip_value(context, visit->node, target)) {
-            lower_error(context, IR_DIAG_INTERNAL,
+            lower_internal(context,
                 lower_span_for_tree(context, visit->node),
                 "could not claim shaped assignment lowering");
             return false;
@@ -15499,9 +17134,17 @@ n00bb_check_phase_read(ir_lower_context_t *context, parse_visit_t *visit,
     parse_sym_phase_t phase = n00bb_compile_phase();
     if (parse_sym_can_read(symbol, phase)) return true;
 
-    lower_error(context, IR_DIAG_TYPE_ARGS,
+    bool build_time = phase == PARSE_SYM_PHASE_COMPTIME;
+    lower_report(context, N00B_DIAG_VALUE_UNAVAILABLE_IN_PHASE,
         lower_span_for_tree(context, visit->node),
-        "this binding is not available here");
+        build_time ? N00B_TEXT_NO_VALUE_WHILE_BUILDING
+                   : N00B_TEXT_NO_VALUE_WHEN_RUNNING,
+        N00BB_ARGS(ARG_TEXT(symbol->name)));
+    lower_declared_secondary(context, symbol, N00B_TEXT_IS_DECLARED_HERE,
+        N00BB_ARGS(ARG_TEXT(symbol->name)));
+    if (build_time)
+        lower_help(context, N00B_TEXT_ONLY_CONST_VALUES_AND_VALUES,
+            N00BB_NO_ARGS);
     return false;
 }
 
@@ -15531,8 +17174,8 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     (void)result_type;
     (void)state;
     if (operand_count != 2 || !operands || !operands[0] || !operands[1])
-        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-                           "compound assignment needs its captured target and right operand");
+        return lower_internal(context, span,
+            "compound assignment has no captured target or right operand");
     parse_annotation_t *assigns = visit->rule
         ? parse_rule_find_annot(visit->grammar, visit->rule,
                                 PARSE_ANNOT_ASSIGNS) : nullptr;
@@ -15556,18 +17199,19 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         : local ? local->type
         : binding ? binding->type : symbol ? symbol->type : nullptr;
     if (!local && !address && !global && !field_target && !index_target)
-        return lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-                           "compound assignment target has no writable storage");
+        return lower_internal(context, span,
+                           "compound assignment target has no storage");
     if (!target_type)
-        return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
+        return lower_internal(context, span,
                            "compound assignment target has no resolved type");
 
     const n00bb_binary_operator_t *operator = n00bb_binary_operator_assigned(
         first_token_text(core_tree_num_children(visit->node) > 1
             ? core_tree_child(visit->node, 1) : nullptr));
     if (!operator)
-        return lower_error(context, IR_DIAG_TYPE_CLASS, span,
-                           "this compound assignment operator is not lowered");
+        return lower_report(context, N00B_DIAG_NOT_SUPPORTED_YET, span,
+            N00B_TEXT_NOT_SUPPORTED_YET_THIS_COMPOUND,
+            N00BB_NO_ARGS);
 
     n00bb_tu_state_t *caller = lower ? tu_state(lower->unit) : nullptr;
     n00bb_link_use_site_t *site = caller
@@ -15595,12 +17239,22 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
                                           span)
             : operands[1];
         if (!value)
-            return lower_error(context, IR_DIAG_INTERNAL, span,
+            return lower_internal(context, span,
                                "could not widen an integer operand");
         if (!operator->shift && !ir_type_eq(context->module, target_type,
                                             value->type))
-            return lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-                "compound assignment operands do not match its operator");
+        {
+            core_string_t target_text = lower_type_text(context, target_type);
+            core_string_t value_text = lower_type_text(context, value->type);
+            ir_lower_result_t result = lower_report(context,
+                N00B_DIAG_VALUE_TYPE_MISMATCH,
+                lower_span_for_tree(context, core_tree_child(visit->node, 2)),
+                N00B_TEXT_THIS_VALUE_IS_BUT_THE_3,
+                N00BB_ARGS(ARG_TEXT(value_text), ARG_TEXT(target_text)));
+            core_free(target_text.data);
+            core_free(value_text.data);
+            return result;
+        }
         ir_value_t *right = operator->shift
             ? n00bb_lower_shift_count(context, core_tree_child(visit->node, 2),
                 operands[1], target_type, span) : value;
@@ -15630,7 +17284,7 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
     else if (updated)
         stored = n00bb_emit_indirect_write(context, address, updated, span);
     if (!stored)
-        return lower_error(context, IR_DIAG_INTERNAL, span,
+        return lower_internal(context, span,
                            "could not emit compound assignment store");
     return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
 }
@@ -15671,8 +17325,8 @@ n00bb_capture_compound_target(ir_lower_context_t *context,
     }
     if (value && ir_lower_set_node_value(context, visit->node, value))
         return true;
-    lower_error(context, IR_DIAG_VERIFY_PARSED, span,
-                "compound assignment target has no writable storage");
+    lower_internal(context, span,
+                   "compound assignment target has no storage");
     return false;
 }
 
@@ -16000,18 +17654,6 @@ n00bb_failure_channel_accepts(ir_lower_context_t *context,
 }
 
 static bool
-n00bb_reject_runtime_initializer_failure(ir_lower_context_t *context,
-                                         ir_span_t span)
-{
-    ir_func_t *function = context ? context->function : nullptr;
-    if (!function || !ir_func_is_initializer(function)
-        || ir_func_execution_phase(function) != IR_PHASE_RUNTIME) return false;
-    lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-        "a runtime module initializer has no failure channel; this operation may fail");
-    return true;
-}
-
-static bool
 register_nominal_types(parse_grammar_t *grammar,
                        core_translation_unit_t *unit, ir_module_t *module,
                        bool imported)
@@ -16147,7 +17789,7 @@ register_variant_types(parse_grammar_t *grammar,
 static bool
 register_record_types(parse_grammar_t *grammar,
                       core_translation_unit_t *unit,
-                      ir_module_t *destination, ir_ctx_t *ir_context)
+                      ir_module_t *destination)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !destination || !state->types || !state->annotations
@@ -16212,14 +17854,10 @@ register_record_types(parse_grammar_t *grammar,
                 field->name, field->bit_offset, field->bit_width);
         }
         if (!valid) {
-            ir_diags_t *diagnostics = ir_diags_new_attached(
-                ir_context, nullptr,
-                core_translation_unit_diagnostics(unit), unit);
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_TYPE_MISMATCH, ir_module_span(state->ir_module),
-                CORE_STRING_STATIC("this record declaration"));
-            ir_diag_message(diagnostic, diagnostics,
-                CORE_STRING_STATIC("could not register the record representation in Lantern IR"));
+            n00bb_internal_error(core_translation_unit_diagnostics(unit),
+                unit, link_source_location(scope->node),
+                "registering record types",
+                "could not register the representation of this record");
             return false;
         }
     }
@@ -16475,13 +18113,14 @@ initialize_static_global(parse_grammar_t *grammar,
     if (!initializer && (!symbol->has_comptime_value
                          || !symbol->comptime_value)) {
         if (symbol->mutability == PARSE_SYM_CONST) {
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_VERIFY_TYPED,
-                lower_span_for_tree(&(ir_lower_context_t){.file_id = file_id},
-                                    declaration),
-                CORE_STRING_STATIC("this module global"));
-            ir_diag_message(diagnostic, diagnostics,
-                CORE_STRING_STATIC("const globals require a compile-time initializer"));
+            ir_lower_context_t span_context = {
+                .file_id = file_id, .diagnostics = diagnostics};
+            lower_report(&span_context, N00B_DIAG_CONST_WITHOUT_VALUE,
+                lower_symbol_name_span(&span_context, symbol),
+                N00B_TEXT_IS_A_CONST_SO_IT,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
+            lower_help(&span_context, N00B_TEXT_GIVE_IT_AN_INITIALIZER_AS,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
             return false;
         }
         ir_global_init_value_t *zero = zero_fixed_shape_initializer(module,
@@ -16523,10 +18162,11 @@ initialize_static_global(parse_grammar_t *grammar,
     if (!initialized) {
         if (symbol->mutability != PARSE_SYM_CONST) return true;
         if (!th_is_nil(static_type)) return true;
-        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_TYPE_LITERAL, span, CORE_STRING_STATIC("this global initializer"));
-        ir_diag_message(diagnostic, diagnostics,
-            CORE_STRING_STATIC("nil cannot be stored as an ordinary value"));
+        ir_lower_context_t span_context = {
+            .file_id = file_id, .diagnostics = diagnostics};
+        lower_report(&span_context, N00B_DIAG_NIL_CONSTANT, span,
+            N00B_TEXT_WOULD_HOLD_NIL_WHICH_IS,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
         return false;
     }
     return true;
@@ -16566,27 +18206,21 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
                                 failure_root.u8_bytes - (size_t)colon - 1)
             : failure_root;
         bool dotted = failure_path.u8_bytes && failure_path.data[0] != '[';
-        core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            "const '%.*s' cannot be baked: field '%.*s%.*s%.*s' %.*s",
-            (int)name.u8_bytes, name.data,
-            (int)name.u8_bytes, name.data,
-            dotted ? 1 : 0, ".",
-            (int)failure_path.u8_bytes, failure_path.data,
-            (int)failure_message.u8_bytes, failure_message.data);
-        if (failed && !analysis->baked_failure_reported)
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(source), source,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0032"),
-                core_string_borrow(message.data, message.byte_len),
-                link_source_location(symbol->decl_node));
-        else if (!analysis->baked_failure_reported)
-            core_diagnostics_report(
-                core_translation_unit_diagnostics(source), source,
-                CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0032"),
-                core_string_borrow(message.data, message.byte_len));
+        core_buffer_t access = {0};
+        core_buffer_append_string(&access, name);
+        if (dotted) core_buffer_putc(&access, '.');
+        core_buffer_append_string(&access, failure_path);
+        if (!analysis->baked_failure_reported)
+            n00bb_report(core_translation_unit_diagnostics(source), source,
+                N00B_DIAG_CONST_NOT_STORABLE,
+                failed ? link_source_location(symbol->decl_node)
+                       : (core_diag_location_t){0},
+                N00B_TEXT_CONST_NOT_STORABLE,
+                N00BB_ARGS(ARG_TEXT(name),
+                           ARG_TEXT(core_buffer_string(&access)),
+                           ARG_TEXT(failure_message)));
         analysis->baked_failure_reported = true;
-        core_buffer_release(&message);
+        core_buffer_release(&access);
         return false;
     }
     bool covered = literal_backed || n00bb_full_build_time_stage_ran();
@@ -16594,6 +18228,8 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
         ? n00bb_baked_root_identifier(analysis, source->module.identifier,
                                       symbol->name)
         : (core_string_t){};
+    if (!identifier.data && n00bb_baked_values_opaque())
+        identifier = global->name;
     if (identifier.data)
         return ir_global_set_phase_result_initializer(destination, global,
                                                       identifier);
@@ -16605,15 +18241,10 @@ bake_const_global(core_translation_unit_t *source, ir_module_t *destination,
         analysis->build_time_needed = true;
         return true;
     }
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "const '%.*s' has no value from the build-time run",
+    n00bb_internal_error(core_translation_unit_diagnostics(source), source,
+        link_source_location(symbol->decl_node), "reading build-time results",
+        "const `%.*s` has no value from the build-time run",
         (int)symbol->name.u8_bytes, symbol->name.data);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(source),
-        source, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0026"),
-        core_string_borrow(message.data, message.byte_len),
-        link_source_location(symbol->decl_node));
-    core_buffer_release(&message);
     return false;
 }
 
@@ -16670,8 +18301,8 @@ register_module_globals(parse_grammar_t *grammar,
     if (!source_state || !source_state->annotations || !destination)
         return false;
     if (!*source_diagnostics)
-        *source_diagnostics = ir_diags_new_attached(ir_context, nullptr,
-            core_translation_unit_diagnostics(source), source);
+        *source_diagnostics = attach_ir_diags(ir_context, nullptr, source,
+                                              nullptr);
     ir_diags_t *diagnostics = *source_diagnostics;
     if (!diagnostics) return false;
     int32_t source_file = source_state->ir_module
@@ -16818,27 +18449,24 @@ register_module_globals(parse_grammar_t *grammar,
                                 declaration,
                                 CORE_STRING_STATIC("n00bb.ir.global"),
                                 producer_stage, global)))) {
-                        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                            IR_DIAG_VERIFY_PARSED,
-                            lower_span_for_tree(
-                                &(ir_lower_context_t){.file_id = source_file},
-                                symbol->decl_node),
-                            CORE_STRING_STATIC("this module global"));
-                        ir_diag_message(diagnostic, diagnostics,
-                            CORE_STRING_STATIC("could not bind its IR global to the canonical declaration"));
+                        n00bb_internal_error(
+                            core_translation_unit_diagnostics(source), source,
+                            link_source_location(symbol->decl_node),
+                            "registering module globals",
+                            "could not bind global `%.*s` to its canonical "
+                            "declaration", (int)symbol->name.u8_bytes,
+                            symbol->name.data);
                         ok = false;
                     }
                 }
             }
             else {
-                ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                    IR_DIAG_VERIFY_PARSED,
-                    lower_span_for_tree(
-                        &(ir_lower_context_t){.file_id = source_file},
-                        symbol->decl_node),
-                    CORE_STRING_STATIC("this module global"));
-                ir_diag_message(diagnostic, diagnostics,
-                    CORE_STRING_STATIC("could not create its IR global declaration"));
+                n00bb_internal_error(
+                    core_translation_unit_diagnostics(source), source,
+                    link_source_location(symbol->decl_node),
+                    "registering module globals",
+                    "could not create storage for global `%.*s`",
+                    (int)symbol->name.u8_bytes, symbol->name.data);
                 ok = false;
             }
             core_buffer_release(&name);
@@ -17169,18 +18797,15 @@ interface_function_semantic_type(th_ctx *types, parse_sym_entry_t *symbol)
 }
 
 static bool
-ir_initialization_error_text(core_translation_unit_t *unit,
-                             core_string_t code, core_string_t message)
+ir_initialization_error(core_translation_unit_t *unit, const char *what)
 {
-    if (!core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
-        core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_FATAL, code, message);
+    if (unit
+        && !core_diagnostics_failed(core_translation_unit_diagnostics(unit)))
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){0}, "setting up code generation", "%s",
+            what);
     return false;
 }
-
-#define ir_initialization_error(unit, code, literal) \
-    ir_initialization_error_text((unit), CORE_STRING_STATIC(code), \
-                                 CORE_STRING_STATIC(literal))
 
 static bool
 register_optional_parameter_metadata(parse_grammar_t *grammar,
@@ -17294,10 +18919,10 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
 {
     core_list_t(core_translation_unit_ptr_t) *units = &analysis->units;
     core_target_desc_t target;
-    if (!n00bb_host_target_profile(&target)) {
+    if (!n00bb_output_target_profile(&target)) {
         if (units->len)
-            ir_initialization_error(units->data[0], "N00BB-L0024",
-                "the host is not an ABI v0.1 target");
+            ir_initialization_error(units->data[0],
+                "the target is not an ABI v0.1 target");
         return false;
     }
     analysis->target = target;
@@ -17306,12 +18931,12 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         n00bb_tu_state_t *state = tu_state(unit);
         parse_tree_t *tree = n00bb_tu_parsed_tree(state);
         if (!tree || !state->semantic_annotation_complete)
-            return ir_initialization_error(unit, "N00BB-L0024",
+            return ir_initialization_error(unit,
                 "translation unit has no annotated tree for Lantern IR");
         state->ir_module = ir_module_new(ir_context,
             unit->module.identifier, n00bb_type_profile(), target.triple);
         if (!state->ir_module)
-            return ir_initialization_error(unit, "N00BB-L0024",
+            return ir_initialization_error(unit,
                 "could not allocate the Lantern IR module");
         core_string_t path = core_source_file_path(&unit->source);
         int32_t file_id = ir_file_add(state->ir_module, path);
@@ -17323,20 +18948,20 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
     for (size_t i = 0; i < units->len; i++)
         if (!register_nominal_types(grammar, units->data[i],
                 tu_state(units->data[i])->ir_module, false))
-            return ir_initialization_error(units->data[i], "N00BB-L0026",
+            return ir_initialization_error(units->data[i],
                 "could not retain nominal representations in Lantern IR");
 
     for (size_t i = 0; i < units->len; i++) {
         core_translation_unit_t *unit = units->data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
         if (!register_nominal_types(grammar, unit, module, true))
-            return ir_initialization_error(unit, "N00BB-L0026",
+            return ir_initialization_error(unit,
                 "could not retain nominal representations in Lantern IR");
         if (!register_variant_types(grammar, unit, module))
-            return ir_initialization_error(unit, "N00BB-L0025",
+            return ir_initialization_error(unit,
                 "could not register variant definitions in Lantern IR");
-        if (!register_record_types(grammar, unit, module, ir_context))
-            return ir_initialization_error(unit, "N00BB-L0026",
+        if (!register_record_types(grammar, unit, module))
+            return ir_initialization_error(unit,
                 "could not register record definitions in Lantern IR");
     }
 
@@ -17347,7 +18972,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 || !n00bb_unit_reaches_import(unit, units->data[j])) continue;
             if (!register_imported_record_layouts(grammar, units->data[j],
                                                    tu_state(unit)->ir_module))
-                return ir_initialization_error(unit, "N00BB-L0027",
+                return ir_initialization_error(unit,
                     "could not register imported record layout in Lantern IR");
         }
     }
@@ -17367,16 +18992,15 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                 core_free(reference_pairs);
                 core_free(source_diagnostics);
                 return ir_initialization_error(units->data[i],
-                    "N00BB-L0028",
-                    "could not register module globals in Lantern IR");
+                    "could not register module globals");
             }
     core_dict_free(&references);
     core_free(reference_pairs);
     core_free(source_diagnostics);
     if (!bind_module_global_identities(ir_context, analysis))
         return ir_initialization_error(units->len ? units->data[0] : nullptr,
-            "N00BB-L0028",
-            "could not bind module-local global views to their canonical identities");
+            "could not bind module-local global views to their canonical "
+            "identities");
     size_t declaration_order[units->len + 1];
     size_t source_count = 0;
     for (int pass = 0; pass < 2; pass++)
@@ -17392,11 +19016,11 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
             if (!n00bb_cache_load_ir(analysis->cache, n00bb_source_unit_module,
                     program_interface_module, analysis))
                 return ir_initialization_error(
-                    units->len ? units->data[0] : nullptr, "N00BB-L0028",
+                    units->len ? units->data[0] : nullptr,
                     "could not load the IR of cached SCCs");
             if (!bind_cached_global_identities(ir_context, analysis))
                 return ir_initialization_error(
-                    units->len ? units->data[0] : nullptr, "N00BB-L0028",
+                    units->len ? units->data[0] : nullptr,
                     "could not bind cached globals to their canonical identities");
         }
         if (k == units->len) break;
@@ -17481,24 +19105,26 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                         &(ir_lower_context_t){
                             .file_id = ir_file_count(state->ir_module) - 1},
                         symbol->decl_node);
+                always_inline = always_inline
+                    || (cached_body && ir_func_is_always_inline(cached_body));
                 if (always_inline && function
                     && !ir_func_set_always_inline(ir_context, function, true)) {
                     core_list_free(scopes);
-                    return ir_initialization_error(unit, "N00BB-L0029",
+                    return ir_initialization_error(unit,
                         "could not attach inline semantics to a function");
                 }
                 if (new_function && function
                     && !register_optional_parameter_metadata(
                         grammar, symbol, function)) {
                     core_list_free(scopes);
-                    return ir_initialization_error(unit, "N00BB-L0029",
+                    return ir_initialization_error(unit,
                         "could not attach optional parameter semantics to a function");
                 }
                 if (function && cached_body
                     && !attach_cached_body(ir_context, function,
                                            cached_body)) {
                     core_list_free(scopes);
-                    return ir_initialization_error(unit, "N00BB-L0029",
+                    return ir_initialization_error(unit,
                         "could not attach a cached body to a function");
                 }
                 bool polymorphic_contract = symbol->callable_contract
@@ -17513,7 +19139,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                         || !ir_func_set_callable_contract(
                             function, ir_callable_contract))) {
                     core_list_free(scopes);
-                    return ir_initialization_error(unit, "N00BB-L0029",
+                    return ir_initialization_error(unit,
                         "could not attach a callable contract to a function declaration");
                 }
                 if (!function || !declaration
@@ -17521,7 +19147,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                         CORE_STRING_STATIC("n00bb.ir.function"),
                         producer_stage, function)) {
                     core_list_free(scopes);
-                    return ir_initialization_error(unit, "N00BB-L0029",
+                    return ir_initialization_error(unit,
                         "could not bind function declarations in Lantern IR");
                 }
             }
@@ -17533,7 +19159,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
         n00bb_tu_state_t *state = tu_state(unit);
         parse_symtab_t *symtab = state && state->annotations
             ? state->annotations->symtab : nullptr;
-        if (!symtab) return ir_initialization_error(unit, "N00BB-L0029",
+        if (!symtab) return ir_initialization_error(unit,
             "translation unit has no symbol table for trait requirements");
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
@@ -17574,7 +19200,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
                         CORE_STRING_STATIC("n00bb.ir.function"),
                         producer_stage, function)) {
                     core_buffer_release(&name);
-                    return ir_initialization_error(unit, "N00BB-L0029",
+                    return ir_initialization_error(unit,
                         "could not register an abstract trait method in Lantern IR");
                 }
                 core_buffer_release(&name);
@@ -17584,7 +19210,7 @@ initialize_ir_modules(ir_ctx_t *ir_context, parse_grammar_t *grammar,
     for (size_t i = 0; i < units->len; i++)
         if (!add_context_hook_functions(grammar, units->data[i], analysis,
                                          link, producer_stage))
-            return ir_initialization_error(units->data[i], "N00BB-L0030",
+            return ir_initialization_error(units->data[i],
                 "could not register context hooks in Lantern IR");
     return true;
 }
@@ -17596,11 +19222,12 @@ validate_module_declarations(parse_grammar_t *grammar,
 {
     n00bb_tu_state_t *state = tu_state(unit);
     if (!state || !state->ir_module) return false;
-    ir_diags_t *diagnostics = ir_diags_new_attached(
-        ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
+    ir_diags_t *diagnostics = attach_ir_diags(ir_context, nullptr, unit,
+                                              nullptr);
     if (!diagnostics) return false;
     int32_t file_id = ir_file_count(state->ir_module) - 1;
-    ir_lower_context_t span_context = {.file_id = file_id};
+    ir_lower_context_t span_context = {.file_id = file_id,
+                                       .diagnostics = diagnostics};
     bool valid = true;
     core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
     for (size_t s = 0; valid && s < scopes.len; s++) {
@@ -17629,12 +19256,10 @@ validate_module_declarations(parse_grammar_t *grammar,
                     state->link_analysis, symbol) != nullptr;
                 if (registered) continue;
             }
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_VERIFY_PARSED,
+            lower_report(&span_context, N00B_DIAG_NOT_SUPPORTED_YET,
                 lower_span_for_tree(&span_context, binding),
-                CORE_STRING_STATIC("this module-level binding"));
-            ir_diag_message(diagnostic, diagnostics,
-                CORE_STRING_STATIC("module-level variable bindings are not lowered yet"));
+                N00B_TEXT_NOT_SUPPORTED_YET_THIS_KIND,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
             valid = false;
             break;
         }
@@ -17651,9 +19276,12 @@ n00bb_emit_default_param(ir_lowerer_t *lowerer,
     if (!lowerer || !context || !parameter) return false;
     if (parameter->emitted) return true;
     if (parameter->lowering) {
-        lower_error(context, IR_DIAG_TYPE_ARGS,
-            lower_span_for_tree(context, parameter->symbol->decl_node),
-            "default parameter dependencies are cyclic");
+        lower_report(context, N00B_DIAG_DEFAULT_CYCLE,
+            lower_symbol_name_span(context, parameter->symbol),
+            N00B_TEXT_THE_DEFAULT_VALUE_OF_PARAMETER_2,
+            N00BB_ARGS(ARG_TEXT(parameter->symbol->name)));
+        lower_help(context, N00B_TEXT_REMOVE_THE_CYCLE_BETWEEN_THE,
+            N00BB_NO_ARGS);
         return false;
     }
     parameter->lowering = true;
@@ -17698,7 +19326,7 @@ n00bb_emit_default_param(ir_lowerer_t *lowerer,
         || !ir_instr_operand_value(branch, present_test->dest)
         || !ir_instr_operand_block(branch, provided)
         || !ir_instr_operand_block(branch, missing)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not branch on default argument presence");
         return false;
     }
@@ -17710,7 +19338,7 @@ n00bb_emit_default_param(ir_lowerer_t *lowerer,
     if (!given || !n00bb_emit_local_write(context, parameter->local,
                                            given, span)
         || !n00bb_emit_jump(context, join, span)) {
-        lower_error(context, IR_DIAG_INTERNAL, span,
+        lower_internal(context, span,
                     "could not bind a supplied default argument");
         return false;
     }
@@ -17729,22 +19357,29 @@ n00bb_emit_default_param(ir_lowerer_t *lowerer,
         if (!resolved) return false;
         if (!ir_type_eq(context->module, parameter->local->type,
                         resolved->type)) {
-            lower_error(context, IR_DIAG_TYPE_MISMATCH,
+            core_string_t expected = lower_type_text(context,
+                parameter->local->type);
+            core_string_t actual = lower_type_text(context, resolved->type);
+            lower_report(context, N00B_DIAG_VALUE_TYPE_MISMATCH,
                 lower_span_for_tree(context, parameter->expression),
-                "default parameter value cannot be converted to its declared type");
+                N00B_TEXT_THIS_DEFAULT_VALUE_IS_BUT,
+                N00BB_ARGS(ARG_TEXT(actual), ARG_TEXT(parameter->symbol->name),
+                           ARG_TEXT(expected)));
+            core_free(expected.data);
+            core_free(actual.data);
             return false;
         }
         if (!n00bb_emit_local_write(context, parameter->local, resolved,
                                     span)) {
-            lower_error(context, IR_DIAG_INTERNAL, span,
+            lower_internal(context, span,
                         "could not store a default parameter value");
             return false;
         }
         if (!n00bb_emit_jump(context, join, span)) return false;
     }
     else if (value.status != IR_LOWER_TERMINATED) {
-        lower_error(context, IR_DIAG_VERIFY_TYPED, span,
-                    "a default parameter expression did not produce a value");
+        lower_internal(context, span,
+                       "a default parameter expression produced no value");
         return false;
     }
     context->block = join;
@@ -17783,9 +19418,10 @@ n00bb_initialize_default_reference(ir_lower_context_t *context,
             &lower->default_params.data[i];
         if (parameter->symbol != symbol) continue;
         if (!parameter->emitted) {
-            lower_error(context, IR_DIAG_TYPE_ARGS,
-                lower_span_for_tree(context, symbol->decl_node),
-                "default parameter dependency was not initialized");
+            lower_report(context, N00B_DIAG_DEFAULT_ORDER,
+                lower_span_for_tree(context, visit->node),
+                N00B_TEXT_THIS_DEFAULT_VALUE_READS_PARAMETER,
+                N00BB_ARGS(ARG_TEXT(symbol->name)));
             return false;
         }
         return true;
@@ -17855,16 +19491,17 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     if (!policy || !ir_policy_set(policy, CORE_STRING_STATIC("IR-W0039"),
                                   IR_POLICY_DENY))
         return false;
-    ir_diags_t *diagnostics = ir_diags_new_attached(
-        ir_context, policy, core_translation_unit_diagnostics(unit), unit);
+    ir_diags_t *diagnostics = attach_ir_diags(ir_context, policy, unit,
+        "the rule that function bodies use every value they compute");
     if (!diagnostics) return false;
     size_t collected_rest = rest_parameter && !th_func_rest(function_type);
     if (parameters->len + collected_rest !=
         th_func_nparams(function_type)) {
-        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, CORE_STRING_STATIC("these parameters"));
-        ir_diag_message(diagnostic, diagnostics,
-                        CORE_STRING_STATIC("parameter declarations do not match the callable type"));
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            symbol ? link_source_location(symbol->decl_node)
+                   : (core_diag_location_t){0},
+            "generating code for a function",
+            "parameter declarations do not match the callable type");
         return false;
     }
 
@@ -17888,6 +19525,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .withs = core_list_new(n00bb_with_frame_t),
         .parameters_to_copy_out = core_list_new(n00bb_copyout_t),
         .pending_call_copyouts = core_list_new(n00bb_pending_copyouts_t),
+        .narrowed_roots = core_list_new(n00bb_narrowed_root_t),
         .default_params = core_list_new(n00bb_default_param_t),
         .branches = core_list_new(n00bb_branch_frame_t),
         .switches = core_list_new(n00bb_switch_frame_t),
@@ -17903,6 +19541,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .bind_missing = bind_missing_external,
         .reachable = true,
     };
+    size_t failures = lower_failures(&context);
     bool ok = false;
     for (size_t i = 0; i < parameters->len; i++) {
         parse_sym_entry_t *parameter = parameters->data[i];
@@ -17912,11 +19551,17 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         if (!parameter || !type_param || !parameter->name.data
             || (parameter->is_optional && !th_mode_is_input_only(mode))
             || !th_mode_is_valid(mode)) {
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN, CORE_STRING_STATIC("this parameter"));
-            ir_diag_message(diagnostic, diagnostics,
-                CORE_STRING_STATIC("the parameter has an invalid passing mode, or a copy-out "
-                "parameter has a default"));
+            if (parameter && parameter->name.data && type_param
+                && parameter->is_optional && th_mode_is_valid(mode))
+                lower_report(&context, N00B_DIAG_OUTPUT_PARAMETER_DEFAULT,
+                    lower_symbol_name_span(&context, parameter),
+                    N00B_TEXT_PARAMETER_CANNOT_HAVE_A_DEFAULT,
+                    N00BB_ARGS(ARG_TEXT(mode_keyword(mode)),
+                               ARG_TEXT(parameter->name)));
+            else
+                lower_internal(&context, IR_SPAN_UNKNOWN,
+                    "a parameter has no declaration or an invalid passing "
+                    "mode");
             goto cleanup;
         }
         th_type *signature_parameter_type = type_param->type;
@@ -17925,8 +19570,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                                 signature_parameter_type)
             : signature_parameter_type;
         if (!parameter_type) {
-            lower_error(&context, IR_DIAG_TYPE_MISMATCH, IR_SPAN_UNKNOWN,
-                "parameter symbol type does not match the callable signature");
+            lower_internal(&context, lower_symbol_name_span(&context,
+                                                             parameter),
+                "parameter type does not match the callable signature");
             goto cleanup;
         }
         parameter->type = parameter_type;
@@ -17956,9 +19602,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                     || !ir_value_set_phase_access(ir_context, local_value,
                         IR_PHASE_ACCESS_BOTH, IR_PHASE_ACCESS_BOTH,
                         IR_PHASE_ACCESS_BOTH)) {
-                    lower_error(&context, IR_DIAG_VERIFY_TYPED,
+                    lower_internal(&context,
                         lower_span_for_tree(&context, parameter->decl_node),
-                        "defaulted parameter has an invalid optional IR binding");
+                        "defaulted parameter has no valid optional storage");
                     goto cleanup;
                 }
                 if (!n00bb_attach_symbol_array_shape(&context, grammar,
@@ -18009,7 +19655,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                                                  parameter_span)
                     || !n00bb_emit_local_write(&context, local, value,
                                                parameter_span)) {
-                    lower_error(&context, IR_DIAG_INTERNAL, parameter_span,
+                    lower_internal(&context, parameter_span,
                         "could not place the parameter in selected storage");
                     goto cleanup;
                 }
@@ -18048,14 +19694,15 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 parameter, parameter_type, input, local)
             || !n00bb_bind_local(&context, parameter, local,
                                   parameter_span)) {
-            lower_error(&context, IR_DIAG_VERIFY_TYPED, IR_SPAN_UNKNOWN,
-                "out and modify parameters need matching passing metadata and a typed local copy");
+            lower_internal(&context, parameter_span,
+                "output parameter has no matching passing metadata or "
+                "local copy");
             goto cleanup;
         }
         if (mode == TH_INOUT) {
             if (!n00bb_emit_local_write(&context, local, input,
                                         parameter_span)) {
-                lower_error(&context, IR_DIAG_INTERNAL,
+                lower_internal(&context,
                     lower_span_for_tree(&context, parameter->decl_node),
                     "could not copy a modify parameter into its local storage");
                 goto cleanup;
@@ -18109,7 +19756,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             && n00bb_attach_symbol_array_shape(&context, grammar,
                 rest_parameter, rest_parameter->type, rest_binding, nullptr);
         if (!collected_rest) {
-            lower_error(&context, IR_DIAG_VERIFY_TYPED,
+            lower_internal(&context,
                 lower_span_for_tree(&context, rest_parameter->decl_node),
                 "variadic parameter does not have its collected array type");
             goto cleanup;
@@ -18143,7 +19790,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 parameter->symbol, parameter->local->type, nullptr, bound)
             || !resolved
             || !n00bb_emit_local_write(&context, bound, resolved, span)) {
-            lower_error(&context, IR_DIAG_INTERNAL, span,
+            lower_internal(&context, span,
                 "could not bind the initialized default parameter value");
             goto cleanup;
         }
@@ -18165,7 +19812,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         ir_shape_t *bound_shape = ir_shape_suffix(ir_context, shape, 0);
         if (!bound_shape || !n00bb_lower_signature_array_shape(lowerer,
                 &context, grammar, bound_shape)) {
-            lower_error(&context, IR_DIAG_INTERNAL, span,
+            lower_internal(&context, span,
                 "could not lower a parameter's runtime array dimensions");
             goto cleanup;
         }
@@ -18197,7 +19844,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     if (return_shape && (!lower_data.bound_return_shape
         || !n00bb_lower_signature_array_shape(lowerer, &context,
             grammar, lower_data.bound_return_shape))) {
-        lower_error(&context, IR_DIAG_INTERNAL,
+        lower_internal(&context,
             lower_span_for_tree(&context, symbol->decl_node),
             "could not lower the return's runtime array dimensions");
         goto cleanup;
@@ -18207,9 +19854,12 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
     if (roots) {
         for (size_t i = 0; i < roots->len; i++) {
             if (!context.reachable) {
-                lower_error(&context, IR_DIAG_VERIFY_PARSED,
+                lower_report(&context, N00B_DIAG_UNREACHABLE_TOP_LEVEL,
                     lower_span_for_tree(&context, roots->data[i]),
-                    "module initializer control flow cannot terminate before later top-level statements");
+                    N00B_TEXT_THIS_TOP_LEVEL_STATEMENT_CAN,
+                    N00BB_NO_ARGS);
+                lower_help(&context, N00B_TEXT_REMOVE_THE_STATEMENT_OR_THE,
+                    N00BB_NO_ARGS);
                 lowered.status = IR_LOWER_FAILED;
                 break;
             }
@@ -18221,16 +19871,15 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         }
     }
     else lowered = ir_lower_tree(lowerer, &context, grammar, body);
-    if (lowered.status == IR_LOWER_FAILED || ir_diags_failed(diagnostics))
-        goto cleanup;
+    bool failed = lower_failures(&context)
+        > failures + lower_data.skipped_failures;
+    if (lowered.status == IR_LOWER_FAILED || failed) goto cleanup;
     if (expression_body) {
         if (lowered.status != IR_LOWER_VALUE || !lowered.value) {
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_VERIFY_TYPED,
+            lower_report(&context, N00B_DIAG_VALUE_BLOCK_WITHOUT_VALUE,
                 lower_span_for_tree(&context, body),
-                CORE_STRING_STATIC("this context default expression"));
-            ir_diag_message(diagnostic, diagnostics,
-                CORE_STRING_STATIC("the default expression does not produce a value on every successful path"));
+                N00B_TEXT_THIS_DEFAULT_VALUE_DOES_NOT,
+                N00BB_NO_ARGS);
             goto cleanup;
         }
         if (expression_result_hook
@@ -18250,15 +19899,39 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 ? owner->link_analysis : nullptr;
             ir_instr_t *trap = analysis
                 ? ir_instr_add(context.block, IR_OP_TRAP) : nullptr;
-            if (!trap) goto cleanup;
-            trap->span = lower_span_for_tree(&context, body);
+            if (!trap || !n00bb_describe_failure(&lower_data, trap,
+                    N00BB_FAILURE_MISSING_RETURN,
+                    symbol ? symbol->name : (core_string_t){0},
+                    (core_string_t){0})) goto cleanup;
+            parse_token_info_t *closing = last_tree_terminal(body);
+            trap->span = closing
+                ? ir_span_make(file_id,
+                      (uint32_t)parse_token_start_byte(closing),
+                      (uint32_t)parse_token_end_byte(closing),
+                      parse_token_line(closing), parse_token_column(closing),
+                      parse_token_endline(closing),
+                      parse_token_endcol(closing))
+                : lower_span_for_tree(&context, body);
+            if (lower_data.switch_gap_join == context.block
+                && lower_data.switch_gap_missing.data
+                && lower_data.switch_gap_subject) {
+                trap->span = lower_span_for_tree(&context,
+                    lower_data.switch_gap_subject);
+                if (!ir_annot_set(ir_context, &trap->annots, (ir_annot_t){
+                        .key = CORE_STRING_STATIC("n00bb.switch.missing"),
+                        .kind = IR_ANNOT_STR,
+                        .s = ir_strdup(ir_context,
+                                       lower_data.switch_gap_missing),
+                    })) goto cleanup;
+            }
             core_list_push(analysis->missing_returns,
                 ((n00bb_missing_return_t){
                     .function = function, .trap = trap, .unit = unit,
                     .name = symbol ? symbol->name : (core_string_t){0},
                 }));
             context.reachable = false;
-            ok = !ir_diags_failed(diagnostics);
+            ok = lower_failures(&context)
+                <= failures + lower_data.skipped_failures;
             goto cleanup;
         }
         if (!n00bb_emit_with_success(&context, body)) goto cleanup;
@@ -18268,7 +19941,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 &lower_data.parameters_to_copy_out, implicit_return))
             goto cleanup;
     }
-    ok = !ir_diags_failed(diagnostics);
+    ok = lower_failures(&context) <= failures + lower_data.skipped_failures;
 
 cleanup:
     for (size_t i = 0; i < lower_data.branches.len; i++)
@@ -18296,7 +19969,9 @@ cleanup:
     for (size_t i = 0; i < lower_data.pending_call_copyouts.len; i++)
         core_list_free(lower_data.pending_call_copyouts.data[i].items);
     core_list_free(lower_data.pending_call_copyouts);
+    core_list_free(lower_data.narrowed_roots);
     core_list_free(lower_data.default_params);
+    core_free(lower_data.switch_gap_missing.data);
     for (size_t i = 0; i < lower_data.tuple_parts.len; i++) {
         core_list_free(lower_data.tuple_parts.data[i].expressions);
         core_list_free(lower_data.tuple_parts.data[i].values);
@@ -18305,6 +19980,85 @@ cleanup:
     core_list_free(lower_data.parameters_to_copy_out);
     ir_lower_context_release(&context);
     return ok;
+}
+
+static bool
+span_contains(ir_span_t span, core_diag_location_t at)
+{
+    if (!span.start_line || !at.has_location) return false;
+    bool after_start = at.line > span.start_line
+        || (at.line == span.start_line && at.column >= span.start_col);
+    bool before_end = at.line < span.end_line
+        || (at.line == span.end_line && at.column <= span.end_col);
+    return after_start && before_end;
+}
+
+static ir_func_t *
+function_at(ir_module_t *module, core_diag_location_t at)
+{
+    ir_func_t *found = nullptr;
+    for (size_t f = 0; module && f < ir_func_count(module); f++) {
+        ir_func_t *function = ir_func_at(module, f);
+        if (!function->n_blocks || ir_func_is_initializer(function)
+            || !span_contains(function->span, at))
+            continue;
+        if (!found || function->span.end_line - function->span.start_line
+                < found->span.end_line - found->span.start_line)
+            found = function;
+    }
+    return found;
+}
+
+static bool
+exclude_function(n00bb_link_analysis_t *analysis,
+                 core_translation_unit_t *unit, ir_func_t *function)
+{
+    if (!function) return false;
+    core_list_push(analysis->failed_regions, ((n00bb_failed_region_t){
+        .module = core_string_dup(unit->module.identifier),
+        .span = function->span,
+    }));
+    return ir_func_discard_body(function);
+}
+
+static void
+exclude_failed_functions(n00bb_link_analysis_t *analysis,
+                         core_list_t(core_translation_unit_ptr_t) *units,
+                         size_t *marks)
+{
+    for (size_t u = 0; marks && u < units->len; u++) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(units->data[u]);
+        ir_module_t *module = tu_state(units->data[u])->ir_module;
+        size_t count = core_diagnostics_count(diagnostics);
+        for (size_t i = marks[u]; i < count; i++) {
+            const core_diagnostic_t *item = core_diagnostics_at(diagnostics, i);
+            if (item->severity != CORE_DIAG_ERROR
+                && item->severity != CORE_DIAG_FATAL) continue;
+            ir_func_t *function = function_at(module, item->location);
+            if (function) (void)exclude_function(analysis, units->data[u],
+                                                 function);
+        }
+        marks[u] = count;
+    }
+}
+
+static bool
+explained_by_errors(core_list_t(core_translation_unit_ptr_t) *units)
+{
+    bool reported = false;
+    for (size_t u = 0; u < units->len; u++) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(units->data[u]);
+        for (size_t i = 0; i < core_diagnostics_count(diagnostics); i++) {
+            core_diag_severity_t severity =
+                core_diagnostics_at(diagnostics, i)->severity;
+            if (severity == CORE_DIAG_INTERNAL) return false;
+            reported = reported || severity == CORE_DIAG_ERROR
+                || severity == CORE_DIAG_FATAL;
+        }
+    }
+    return reported;
 }
 
 static bool
@@ -18381,11 +20135,32 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
     if (!context->reachable && !frame.node) return true;
     if (debug_only && !n00bb_record_assert_site(context, lower, span))
         return false;
+    n00bb_failure_kind_t failure_kind = debug_only ? N00BB_FAILURE_ASSERT
+                                                   : N00BB_FAILURE_REQUIRE;
+    core_string_t condition_text = expression
+        ? n00bb_node_source_text(lower->unit, expression, (core_string_t){0})
+        : (core_string_t){0};
+    ir_span_t condition_span = expression
+        ? lower_span_for_tree(context, expression) : span;
     if (frame.node) {
-        ir_instr_t *trap = n00bb_close_condition_scratch(lower)
-            ? ir_instr_add(frame.failure, IR_OP_TRAP) : nullptr;
-        if (!trap) return false;
-        trap->span = span;
+        if (!n00bb_close_condition_scratch(lower)) return false;
+        core_string_t frame_texts = {0};
+        ir_value_t *frame_operands = n00bb_condition_operands(context, lower,
+            visit->grammar, expression, frame.failure, condition_span,
+            &frame_texts);
+        ir_instr_t *trap = ir_instr_add(frame.failure, IR_OP_TRAP);
+        if (!trap || !n00bb_describe_failure(lower, trap, failure_kind,
+                condition_text, (core_string_t){0}))
+            return false;
+        if (frame_operands && (!ir_instr_operand_value(trap, frame_operands)
+                || !ir_annot_set(lower->ir_context, &trap->annots,
+                    (ir_annot_t){
+                        .key = CORE_STRING_STATIC(
+                            N00BB_FAILURE_OPERANDS_ANNOTATION),
+                        .kind = IR_ANNOT_STR, .s = frame_texts,
+                    })))
+            return false;
+        trap->span = condition_span;
         context->block = frame.join;
         context->reachable = true;
         return true;
@@ -18396,8 +20171,8 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
     th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     if (!condition || !bool_type
         || !ir_type_eq(context->module, condition->type, bool_type)) {
-        lower_error(context, IR_DIAG_TYPE_MISMATCH, span,
-            "assert and require conditions must be bool");
+        lower_condition_error(context, expression, condition,
+                              N00B_TEXT_PHRASE_AN_ASSERT_OR_REQUIRE_CONDITION);
         return false;
     }
     ir_instr_t *constant = condition->def;
@@ -18407,7 +20182,11 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
         && !constant->operands[0].lit.is_float
         && !constant->operands[0].lit.i.mag) {
         ir_instr_t *trap = ir_instr_add(context->block, IR_OP_TRAP);
-        if (!trap) return false;
+        if (!trap || !n00bb_describe_failure(lower, trap,
+                N00BB_FAILURE_UNREACHABLE,
+                n00bb_node_source_text(lower->unit, node, (core_string_t){0}),
+                (core_string_t){0}))
+            return false;
         trap->span = span;
         context->reachable = false;
         return true;
@@ -18425,9 +20204,20 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
         return false;
     }
     branch->span = span;
+    core_string_t operand_texts = {0};
+    ir_value_t *operands = n00bb_condition_operands(context, lower,
+        visit->grammar, expression, failure, condition_span, &operand_texts);
     ir_instr_t *trap = ir_instr_add(failure, IR_OP_TRAP);
-    if (!trap) return false;
-    trap->span = span;
+    if (!trap || !n00bb_describe_failure(lower, trap, failure_kind,
+            condition_text, (core_string_t){0}))
+        return false;
+    if (operands && (!ir_instr_operand_value(trap, operands)
+            || !ir_annot_set(lower->ir_context, &trap->annots, (ir_annot_t){
+                .key = CORE_STRING_STATIC(N00BB_FAILURE_OPERANDS_ANNOTATION),
+                .kind = IR_ANNOT_STR, .s = operand_texts,
+            })))
+        return false;
+    trap->span = condition_span;
     context->block = join;
     context->reachable = true;
     return true;
@@ -18646,13 +20436,10 @@ add_module_initializer(ir_ctx_t *ir_context, core_translation_unit_t *unit,
     ir_module_t *module = unit_module(state);
     if (!module) return nullptr;
     if (ir_func_find(module, name)) {
-        ir_diags_t *diagnostics = ir_diags_new_attached(
-            ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
-        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_VERIFY_PARSED, ir_module_span(module),
-            CORE_STRING_STATIC("this generated initializer"));
-        ir_diag_message(diagnostic, diagnostics,
-            CORE_STRING_STATIC("a module declaration uses a reserved initializer name"));
+        n00bb_internal_error(core_translation_unit_diagnostics(unit), unit,
+            (core_diag_location_t){0}, "creating module initializers",
+            "a declaration already uses the initializer name `%.*s`",
+            (int)name.u8_bytes, name.data);
         return nullptr;
     }
     th_type *nil_type = n00bb_ir_builtin_type(module, CORE_STRING_STATIC("nil"));
@@ -18695,11 +20482,13 @@ validate_script_root(parse_grammar_t *grammar, core_translation_unit_t *unit)
     n00bb_tu_state_t *state = tu_state(unit);
     if (!n00bb_root_without_start(grammar, unit)) return true;
     if (state->build_time_use.has_location) {
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0028"),
-            CORE_STRING_STATIC(
-                "comptime() and comptime_start() need 'func start() -> nil' in the root module"),
-            state->build_time_use);
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_COMPTIME_NEEDS_START, state->build_time_use,
+            N00B_TEXT_COMPTIME_AND_COMPTIME_START_NEED,
+            N00BB_NO_ARGS);
+        n00bb_report_help(core_translation_unit_diagnostics(unit),
+            N00B_TEXT_ADD_FUNC_START_NIL_TO,
+            N00BB_NO_ARGS);
         return false;
     }
     bool ok = true;
@@ -18713,15 +20502,14 @@ validate_script_root(parse_grammar_t *grammar, core_translation_unit_t *unit)
         parse_sym_entry_t *read = root_global_read(grammar, unit,
                                                    statement);
         if (!read) continue;
-        core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            "const initializer reads '%.*s', which is set only at run time in a root module without 'func start() -> nil'",
-            (int)read->name.u8_bytes, read->name.data);
-        core_diagnostics_report_at(core_translation_unit_diagnostics(unit),
-            unit, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0029"),
-            core_string_borrow(message.data, message.byte_len),
-            link_source_location(statement));
-        core_buffer_release(&message);
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_CONST_READS_RUNTIME_VALUE,
+            link_source_location(statement),
+            N00B_TEXT_THIS_CONST_READS_WHICH_IS,
+            N00BB_ARGS(ARG_TEXT(read->name)));
+        n00bb_report_note(core_translation_unit_diagnostics(unit),
+            N00B_TEXT_IN_A_ROOT_MODULE_WITHOUT,
+            N00BB_NO_ARGS);
         ok = false;
     }
     return ok;
@@ -18817,10 +20605,12 @@ literal_constant_order(core_translation_unit_t *unit, size_t index,
     if (marks[index] == 2) return true;
     n00bb_literal_constant_t *constant = &state->literal_constants.data[index];
     if (marks[index] == 1) {
-        core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-            CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0031"),
-            CORE_STRING_STATIC(
-                "a literal handler depends on its own literal's result"));
+        n00bb_report(core_translation_unit_diagnostics(unit), unit,
+            N00B_DIAG_LITERAL_HANDLER_CYCLE,
+            constant->global ? span_location(constant->global->span)
+                             : (core_diag_location_t){0},
+                                 N00B_TEXT_THE_LITERAL_MODIFIER_THAT_BUILDS,
+            N00BB_NO_ARGS);
         return false;
     }
     marks[index] = 1;
@@ -19045,6 +20835,54 @@ n00bb_baked_function(const n00bb_link_analysis_t *analysis,
     return nullptr;
 }
 
+static void
+suggest_program_function(core_diagnostics_t *diagnostics, core_string_t name,
+    core_list_t(core_translation_unit_ptr_t) *initializer_order)
+{
+    size_t dot = name.u8_bytes;
+    while (dot > 0 && name.data[dot - 1] != '.') dot--;
+    core_string_t wanted_module = dot ? core_string_slice(name, 0, dot - 1)
+                                      : (core_string_t){};
+    bool module_known = false;
+    for (size_t i = 0; i < initializer_order->len && wanted_module.u8_bytes;
+         i++) {
+        ir_module_t *module = unit_module(tu_state(initializer_order->data[i]));
+        module_known |= module
+            && core_string_eq(ir_module_name(module), wanted_module);
+    }
+    core_list_t(core_string_t) candidates = core_list_new(core_string_t);
+    for (size_t i = 0; i < initializer_order->len; i++) {
+        ir_module_t *module = unit_module(tu_state(initializer_order->data[i]));
+        core_string_t module_name = module ? ir_module_name(module)
+                                           : (core_string_t){};
+        if (!module_name.u8_bytes
+            || (module_known && !core_string_eq(module_name, wanted_module)))
+            continue;
+        for (size_t j = 0; j < ir_func_count(module); j++) {
+            ir_func_t *function = ir_func_at(module, j);
+            if (!function || !function_has_body(function)
+                || core_string_find_byte(function->name, '$') >= 0
+                || core_string_starts_with(function->name,
+                                           CORE_STRING_STATIC("__")))
+                continue;
+            core_buffer_t *qualified = core_buffer_empty();
+            if (!module_known) {
+                core_buffer_append_string(qualified, module_name);
+                core_buffer_puts(qualified, ".");
+            }
+            core_buffer_append_string(qualified, function->name);
+            core_list_push(candidates, core_buffer_take_string(qualified));
+        }
+    }
+    core_string_t compared = module_known
+        ? core_string_slice(name, dot, name.u8_bytes - dot) : name;
+    n00bb_diag_did_you_mean(diagnostics, compared, candidates.data,
+                            candidates.len);
+    for (size_t i = 0; i < candidates.len; i++)
+        core_free(candidates.data[i].data);
+    core_list_free(candidates);
+}
+
 bool
 build_reachable_functions(
     n00bb_link_analysis_t *analysis,
@@ -19126,15 +20964,11 @@ build_reachable_functions(
             }
         }
         if (!found) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "native root '%.*s' has no lowered function body",
-                (int)analysis->native_roots[r].u8_bytes,
-                analysis->native_roots[r].data);
-            core_diagnostics_report(diagnostics, nullptr,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0019"),
-                core_string_borrow(message.data, message.byte_len));
-            core_buffer_release(&message);
+            n00bb_report(diagnostics, nullptr, N00B_DIAG_NATIVE_ROOT_MISSING,
+                (core_diag_location_t){0}, N00B_TEXT_NATIVE_ROOT_NAMES_BUT_THE,
+                N00BB_ARGS(ARG_TEXT(analysis->native_roots[r])));
+            suggest_program_function(diagnostics, analysis->native_roots[r],
+                                     initializer_order);
             core_list_free(roots);
             return false;
         }
@@ -19157,14 +20991,11 @@ build_reachable_functions(
             found = function && function_has_body(function);
         }
         if (!found) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "provided function '%.*s' has no lowered function body",
-                (int)name.u8_bytes, name.data);
-            core_diagnostics_report(diagnostics, nullptr,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0019"),
-                core_string_borrow(message.data, message.byte_len));
-            core_buffer_release(&message);
+            n00bb_report(diagnostics, nullptr,
+                N00B_DIAG_PROVIDED_FUNCTION_MISSING, (core_diag_location_t){0},
+                N00B_TEXT_AN_FFI_BINDING_PROVIDES_BUT,
+                N00BB_ARGS(ARG_TEXT(name)));
+            suggest_program_function(diagnostics, name, initializer_order);
             core_free(name.data);
             core_list_free(roots);
             return false;
@@ -19178,15 +21009,11 @@ build_reachable_functions(
         ir_func_t *function = n00bb_baked_function(analysis, slot->module,
                                                    slot->name);
         if (!function) {
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "baked function '%.*s.%.*s' has no lowered function body",
+            n00bb_internal_error(diagnostics, nullptr,
+                (core_diag_location_t){0}, "collecting native entry points",
+                "baked function `%.*s.%.*s` has no function body",
                 (int)slot->module.u8_bytes, slot->module.data,
                 (int)slot->name.u8_bytes, slot->name.data);
-            core_diagnostics_report(diagnostics, nullptr,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0019"),
-                core_string_borrow(message.data, message.byte_len));
-            core_buffer_release(&message);
             core_list_free(roots);
             return false;
         }
@@ -19258,7 +21085,7 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         n00bb_tu_state_t *state = tu_state(unit);
         bool generated = n00bb_generated_source(
             core_source_file_path(&unit->source));
-        bool root = state && state->link
+        bool root = state && state->link && !state->initializer_excluded
             && unit == core_link_unit_root(state->link, 0);
         ir_module_t *module = unit_module(state);
         for (size_t j = 0; module && j < ir_func_count(module); j++) {
@@ -19352,16 +21179,32 @@ build_n00bb_execution_graph(
 
 static bool
 lower_all_module_initializers(
-    ir_lowerer_t *lowerer, parse_grammar_t *grammar,
+    n00bb_link_analysis_t *analysis, ir_lowerer_t *lowerer,
+    parse_grammar_t *grammar,
     core_list_t(core_translation_unit_ptr_t) *units,
     ir_ctx_t *ir_context)
 {
-    for (size_t i = 0; i < units->len; i++)
-        if (!lower_module_initializer(lowerer, grammar, units->data[i],
-                units, ir_context)
-            || !lower_literal_initializer(ir_context, units->data[i]))
-            return false;
-    return true;
+    static const core_string_t initializers[] = {
+        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME),
+        CORE_STRING_STATIC(N00BB_SCRIPT_BODY_NAME),
+    };
+    bool lowered = true;
+    for (size_t i = 0; i < units->len; i++) {
+        core_translation_unit_t *unit = units->data[i];
+        if (lower_module_initializer(lowerer, grammar, unit, units,
+                                     ir_context)
+            && lower_literal_initializer(ir_context, unit))
+            continue;
+        lowered = false;
+        tu_state(unit)->initializer_excluded = true;
+        ir_module_t *module = unit_module(tu_state(unit));
+        for (size_t f = 0; module && f < 2; f++) {
+            ir_func_t *function = ir_func_find(module, initializers[f]);
+            if (function && function->n_blocks)
+                (void)exclude_function(analysis, unit, function);
+        }
+    }
+    return lowered;
 }
 
 static void
@@ -19948,8 +21791,8 @@ dump_layout_for_unit(parse_grammar_t *grammar, core_translation_unit_t *unit)
             ir_descriptor_t *descriptor = ir_layout_of(state->ir_module,
                 symbol->type, target);
             if (!descriptor) continue;
-            core_string_t printed = n00bb_print_type(state->types,
-                                                     symbol->type);
+            core_string_t printed = n00bb_print_type_qualified(state->types,
+                                                               symbol->type);
             core_string_t target_text = target.data
                 ? target : CORE_STRING_STATIC("<none>");
             printf("layout %.*s target=%.*s size=",
@@ -20037,12 +21880,9 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
             if (argument_count != 1 || !argument
                 || argument->kind != TH_ARG_TYPE
                 || !ir_type_define(module, type, argument->type)) {
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0017"),
-                    CORE_STRING_STATIC(
-                        "could not register the atomic type layout"),
-                    link_source_location(owner));
+                n00bb_internal_error(core_translation_unit_diagnostics(unit),
+                    unit, link_source_location(owner), "laying out types",
+                    "could not register the atomic type layout");
                 ok = false;
                 break;
             }
@@ -20056,12 +21896,12 @@ prepare_ir_type_layouts(parse_grammar_t *grammar,
         if (ok && th_builtin_kind_of(type) == TH_BUILTIN_ATOMIC
             && !atomic_aggregate_layout_pending(module, type, target)
             && !n00bb_atomic_native_support(module, type, target)) {
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-T0051"),
-                CORE_STRING_STATIC(
-                    "atomic type is not supported by the selected target"),
-                link_source_location(owner));
+            core_string_t type_text = n00bb_print_type(
+                ir_module_types(module), type);
+            n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                N00B_DIAG_ATOMIC_UNSUPPORTED, link_source_location(owner),
+                N00B_TEXT_IS_NOT_SUPPORTED_ON_TARGET,
+                N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(target->triple)));
             ok = false;
         }
         break;
@@ -20131,6 +21971,14 @@ prepare_ir_type_layouts_for_symbol(parse_grammar_t *grammar,
     return ok;
 }
 
+static void
+declaration_internal(core_translation_unit_t *owner, core_string_t what)
+{
+    n00bb_internal_error(core_translation_unit_diagnostics(owner), owner,
+        (core_diag_location_t){0}, "binding program declarations", "%.*s",
+        (int)what.u8_bytes, what.data);
+}
+
 bool
 bind_link_declarations_to_ir(parse_grammar_t *grammar,
                              core_link_unit_t *link,
@@ -20164,9 +22012,9 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
                 "LinkUnit declaration '%.*s:%.*s' has no symbol or IR module owner",
                 (int)module.u8_bytes, module.data,
                 (int)key.u8_bytes, key.data);
-            core_diagnostics_report(core_link_unit_diagnostics(link), owner,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0035"),
-                core_string_borrow(message.data, message.byte_len));
+            n00bb_internal_error(core_link_unit_diagnostics(link), owner,
+                (core_diag_location_t){0}, "binding program declarations",
+                "%.*s", (int)message.byte_len, message.data);
             core_buffer_release(&message);
             return false;
         }
@@ -20185,19 +22033,15 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
             th_type *type = link_semantic_type_for_symbol(
                 grammar, owner, symbol);
             if (!type) {
-                core_diagnostics_report(
-                    core_translation_unit_diagnostics(owner), owner,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0006"),
-                    CORE_STRING_STATIC(
+                declaration_internal(owner, CORE_STRING_STATIC(
                         "link-unit declaration has no finalized semantic type"));
                 return false;
             }
             if (!core_link_declaration_set_binding(link, declaration,
                     CORE_STRING_STATIC("n00bb.semantic.type"),
                     producer_stage, type)) {
-                core_diagnostics_report(core_translation_unit_diagnostics(owner),
-                    owner, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0036"),
-                    CORE_STRING_STATIC("could not bind a declaration's semantic type"));
+                declaration_internal(owner, CORE_STRING_STATIC(
+                    "could not bind a declaration's semantic type"));
                 return false;
             }
         }
@@ -20205,30 +22049,21 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
             ir_func_t *function = core_link_declaration_binding(declaration,
                 CORE_STRING_STATIC("n00bb.ir.function"));
             if (!function) {
-                core_diagnostics_report(
-                    core_translation_unit_diagnostics(owner), owner,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0006"),
-                    CORE_STRING_STATIC(
+                declaration_internal(owner, CORE_STRING_STATIC(
                         "link-unit function has no direct canonical IR binding"));
                 return false;
             }
         }
         else if (module_scope && symbol->kind == PARSE_SYM_VARIABLE) {
             if (!symbol->type) {
-                core_diagnostics_report(
-                    core_translation_unit_diagnostics(owner), owner,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0006"),
-                    CORE_STRING_STATIC(
+                declaration_internal(owner, CORE_STRING_STATIC(
                         "link-unit global has no finalized source type"));
                 return false;
             }
             ir_global_t *global = core_link_declaration_binding(declaration,
                 CORE_STRING_STATIC("n00bb.ir.global"));
             if (!global && !state->interface_module) {
-                core_diagnostics_report(
-                    core_translation_unit_diagnostics(owner), owner,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0006"),
-                    CORE_STRING_STATIC(
+                declaration_internal(owner, CORE_STRING_STATIC(
                         "link-unit global has no direct canonical IR binding"));
                 return false;
             }
@@ -20236,19 +22071,15 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
         else if (symbol->kind == PARSE_SYM_TYPEDEF
                  || symbol->kind == PARSE_SYM_TAG) {
             if (!symbol->type) {
-                core_diagnostics_report(
-                    core_translation_unit_diagnostics(owner), owner,
-                    CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0006"),
-                    CORE_STRING_STATIC(
+                declaration_internal(owner, CORE_STRING_STATIC(
                         "link-unit type has no finalized semantic binding"));
                 return false;
             }
             if (!core_link_declaration_set_binding(link, declaration,
                     CORE_STRING_STATIC("n00bb.semantic.type"),
                     producer_stage, symbol->type)) {
-                core_diagnostics_report(core_translation_unit_diagnostics(owner),
-                    owner, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0036"),
-                    CORE_STRING_STATIC("could not bind a declaration's semantic type"));
+                declaration_internal(owner, CORE_STRING_STATIC(
+                    "could not bind a declaration's semantic type"));
                 return false;
             }
         }
@@ -20260,9 +22091,8 @@ bind_link_declarations_to_ir(parse_grammar_t *grammar,
                 && !core_link_declaration_set_binding(link, declaration,
                     CORE_STRING_STATIC("n00bb.semantic.type"),
                     producer_stage, semantic_type)) {
-                core_diagnostics_report(core_translation_unit_diagnostics(owner),
-                    owner, CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0036"),
-                    CORE_STRING_STATIC("could not bind a declaration's semantic type"));
+                declaration_internal(owner, CORE_STRING_STATIC(
+                    "could not bind a declaration's semantic type"));
                 return false;
             }
         }
@@ -20464,7 +22294,7 @@ group_facts(n00bb_link_analysis_t *analysis, const ir_func_t *function,
     *slot = ir_summary_facts_build(analysis->summaries,
                                    rules->members + rules->starts[group],
                                    count, provenance);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE summary-facts %.3f group %zu functions %zu "
                 "facts %lld iterations %lld\n",
             n00bb_profile_seconds() - start, group, count,
@@ -20659,29 +22489,28 @@ report_initializer_cycle(core_link_unit_t *link, size_t scc,
                          core_dict_t *selected,
                          const n00bb_initializer_read_t *read)
 {
-    core_buffer_t message = {0};
-    core_buffer_puts(&message,
-        "initializer dependency cycle requires reading an uninitialized global: no initialization order exists for modules ");
+    core_buffer_t modules = {0};
     size_t listed = 0;
     for (size_t m = 0; m < core_link_unit_scc_member_count(link, scc); m++) {
         core_translation_unit_t *member = core_link_unit_scc_member(link,
                                                                     scc, m);
         if (core_dict_contains(selected, member)) continue;
-        core_buffer_printf(&message, "%s'%.*s'", listed++ ? ", " : "",
+        core_buffer_printf(&modules, "%s`%.*s`", listed++ ? ", " : "",
                            (int)member->module.identifier.u8_bytes,
                            member->module.identifier.data);
     }
-    core_buffer_printf(&message, " (module '%.*s' reads '%.*s.%.*s')",
-        (int)read->source->module.identifier.u8_bytes,
-        read->source->module.identifier.data,
-        (int)read->target->module.identifier.u8_bytes,
-        read->target->module.identifier.data,
-        (int)read->symbol->name.u8_bytes, read->symbol->name.data);
-    core_diagnostics_report_at(
-        core_translation_unit_diagnostics(read->source), read->source,
-        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-L0040"),
-        core_buffer_string(&message), initializer_read_location(read));
-    core_buffer_release(&message);
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(read->source);
+    n00bb_report(diagnostics, read->source, N00B_DIAG_MODULE_INIT_CYCLE,
+        initializer_read_location(read), N00B_TEXT_MODULES_READ_EACH_OTHER_S,
+        N00BB_ARGS(ARG_TEXT(core_buffer_string(&modules))));
+    n00bb_report_label(diagnostics,
+        N00B_TEXT_READS_BEFORE_MODULE_INITIALIZES_IT,
+        N00BB_ARGS(ARG_TEXT(read->symbol->name),
+                   ARG_TEXT(read->target->module.identifier)));
+    n00bb_report_help(diagnostics, N00B_TEXT_MOVE_THE_READ_INTO_A,
+        N00BB_NO_ARGS);
+    core_buffer_release(&modules);
 }
 
 static bool
@@ -21285,6 +23114,17 @@ attach_call_return_aliases(n00bb_link_analysis_t *analysis)
     return true;
 }
 
+static core_string_t
+ir_value_source_name(const ir_value_t *value)
+{
+    if (!value) return (core_string_t){0};
+    if (value->local && value->local->source_name.u8_bytes
+        && !value->local->synthetic)
+        return value->local->source_name;
+    if (value->global) return unqualified_name(value->global->name);
+    return (core_string_t){0};
+}
+
 static bool
 validate_consumed_bindings(n00bb_link_analysis_t *analysis)
 {
@@ -21293,8 +23133,8 @@ validate_consumed_bindings(n00bb_link_analysis_t *analysis)
         core_translation_unit_t *unit = analysis->units.data[u];
         n00bb_tu_state_t *state = tu_state(unit);
         if (!state || !state->ir_module || state->interface_module) continue;
-        ir_diags_t *diagnostics = ir_diags_new_attached(analysis->ir_context,
-            nullptr, core_translation_unit_diagnostics(unit), unit);
+        ir_diags_t *diagnostics = attach_ir_diags(analysis->ir_context,
+            nullptr, unit, nullptr);
         if (!diagnostics) return false;
         ir_module_t *module = state->ir_module;
         for (size_t f = 0; f < ir_func_count(module); f++) {
@@ -21307,12 +23147,24 @@ validate_consumed_bindings(n00bb_link_analysis_t *analysis)
                         || in->operands[1].kind != IR_OPD_VALUE
                         || !n00bb_binding_escapes(analysis->escapes,
                                function, in->operands[1].value)) continue;
-                    ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                        IR_DIAG_TYPE_ARGS, in->span, (core_string_t){});
-                    ir_diag_message(diagnostic, diagnostics,
-                        CORE_STRING_STATIC("consume cannot prove that all "
-                            "aliases to this binding are tracked and "
-                            "non-escaping"));
+                    core_string_t name = ir_value_source_name(
+                        in->operands[1].value);
+                    core_diagnostics_t *destination =
+                        core_translation_unit_diagnostics(unit);
+                    if (name.u8_bytes)
+                        n00bb_report(destination, unit,
+                            N00B_DIAG_CONSUME_ESCAPED, span_location(in->span),
+                            N00B_TEXT_CANNOT_BE_CONSUMED_HERE_A,
+                            N00BB_ARGS(ARG_TEXT(name)));
+                    else
+                        n00bb_report(destination, unit,
+                            N00B_DIAG_CONSUME_ESCAPED, span_location(in->span),
+                            N00B_TEXT_THIS_VALUE_CANNOT_BE_CONSUMED,
+                            N00BB_NO_ARGS);
+                    n00bb_report_help(destination,
+                        N00B_TEXT_PASS_A_COPY_INSTEAD_OR,
+                        N00BB_NO_ARGS);
+                    ok = false;
                 }
             }
         }
@@ -21345,16 +23197,32 @@ assert_side_effect_call(ir_summary_facts_t *facts, n00bb_assert_site_t *site)
 }
 
 typedef struct {
-    core_buffer_t *out;
-    size_t clauses;
+    core_list_t(core_string_t) clauses;
     bool ignored;
     ir_summary_step_t seen[16];
+    const ir_func_t *writer;
+    const ir_global_t *written;
 } n00bb_rule_chain_t;
+
+static void
+report_chain(core_diagnostics_t *diagnostics,
+             const core_translation_unit_t *unit, n00bb_diag_t id,
+             core_diag_location_t at, n00bb_text_t plain,
+             n00bb_text_t explained, n00bb_rule_chain_t *chain)
+{
+    n00bb_report(diagnostics, unit, id, at,
+        chain->clauses.len ? explained : plain,
+        N00BB_ARGS(ARG_CLAUSES(chain->clauses.data, chain->clauses.len)));
+    for (size_t c = 0; c < chain->clauses.len; c++)
+        core_free(chain->clauses.data[c].data);
+    core_list_free(chain->clauses);
+}
 
 static bool
 rule_step_seen(n00bb_rule_chain_t *chain, const ir_summary_step_t *step)
 {
-    size_t count = chain->clauses < 16 ? chain->clauses : 16;
+    size_t clauses = chain->clauses.len;
+    size_t count = clauses < 16 ? clauses : 16;
     for (size_t s = 0; s < count; s++) {
         const ir_summary_step_t *seen = &chain->seen[s];
         if (seen->kind == step->kind && seen->callee == step->callee
@@ -21364,137 +23232,144 @@ rule_step_seen(n00bb_rule_chain_t *chain, const ir_summary_step_t *step)
             && seen->place.global == step->place.global
             && seen->place.param == step->place.param) return true;
     }
-    if (chain->clauses < 16) chain->seen[chain->clauses] = *step;
+    if (clauses < 16) chain->seen[clauses] = *step;
     return false;
 }
 
-static void
-describe_callee(core_buffer_t *out, const ir_func_t *callee)
+static core_string_t
+describe_callee(const ir_func_t *callee)
 {
     if (callee)
-        core_buffer_printf(out, "'%.*s'", (int)callee->name.u8_bytes,
-                           callee->name.data);
-    else core_buffer_puts(out, "code that cannot be seen at compile time");
+        return n00bb_text(N00B_TEXT_QUOTED_NAME,
+                          N00BB_ARGS(ARG_TEXT(callee->name)));
+    return n00bb_text(N00B_TEXT_UNSEEN_CODE, N00BB_NO_ARGS);
 }
 
-static void
-describe_summary_place(core_buffer_t *out, const ir_splace_t *place)
+static core_string_t
+describe_summary_place(const ir_splace_t *place)
 {
     switch (place->kind) {
     case IR_SPLACE_PARAM:
-        core_buffer_printf(out, "through its argument %u", place->param + 1);
-        return;
+        return n00bb_text(N00B_TEXT_PLACE_ARGUMENT,
+                          N00BB_ARGS(ARG_NUMBER(place->param + 1)));
     case IR_SPLACE_GLOBAL:
     case IR_SPLACE_THREAD:
-        if (place->global) {
-            core_buffer_printf(out, "%sglobal '%.*s'",
-                place->kind == IR_SPLACE_THREAD ? "thread " : "",
-                (int)place->global->name.u8_bytes, place->global->name.data);
-            return;
-        }
+        if (place->global)
+            return n00bb_text(place->kind == IR_SPLACE_THREAD
+                    ? N00B_TEXT_PLACE_THREAD_GLOBAL : N00B_TEXT_PLACE_GLOBAL,
+                N00BB_ARGS(ARG_TEXT(unqualified_name(place->global->name))));
         break;
     case IR_SPLACE_HEAP:
-        core_buffer_puts(out, "heap memory");
-        return;
+        return n00bb_text(N00B_TEXT_PLACE_HEAP, N00BB_NO_ARGS);
     case IR_SPLACE_UNKNOWN:
         break;
     }
-    core_buffer_puts(out, "memory it does not own");
+    return n00bb_text(N00B_TEXT_PLACE_UNOWNED, N00BB_NO_ARGS);
 }
 
-static void
-describe_flag(core_buffer_t *out, core_string_t flag)
+static core_string_t
+describe_flag(core_string_t flag)
 {
     static const struct {
         core_string_t flag;
-        const char *text;
+        n00bb_text_t text;
     } phrases[] = {
-        {CORE_STRING_STATIC("diverges"), "never returns"},
-        {CORE_STRING_STATIC("calls_unknown"),
-         "calls code that cannot be seen at compile time"},
-        {CORE_STRING_STATIC("may_fail"), "may fail"},
-        {CORE_STRING_STATIC("may_trap"), "may trap"},
-        {CORE_STRING_STATIC("may_block"), "may block"},
-        {CORE_STRING_STATIC("may_io"), "performs I/O"},
-        {CORE_STRING_STATIC("calls_finalizers"), "may run finalizers"},
-        {CORE_STRING_STATIC("starts_threads"), "starts threads"},
+        {CORE_STRING_STATIC("diverges"), N00B_TEXT_FLAG_DIVERGES},
+        {CORE_STRING_STATIC("calls_unknown"), N00B_TEXT_FLAG_CALLS_UNKNOWN},
+        {CORE_STRING_STATIC("may_fail"), N00B_TEXT_FLAG_MAY_FAIL},
+        {CORE_STRING_STATIC("may_trap"), N00B_TEXT_FLAG_MAY_TRAP},
+        {CORE_STRING_STATIC("may_block"), N00B_TEXT_FLAG_MAY_BLOCK},
+        {CORE_STRING_STATIC("may_io"), N00B_TEXT_FLAG_MAY_IO},
+        {CORE_STRING_STATIC("calls_finalizers"),
+         N00B_TEXT_FLAG_CALLS_FINALIZERS},
+        {CORE_STRING_STATIC("starts_threads"), N00B_TEXT_FLAG_STARTS_THREADS},
     };
     for (size_t p = 0; p < sizeof(phrases) / sizeof(*phrases); p++)
-        if (core_string_eq(phrases[p].flag, flag)) {
-            core_buffer_printf(out, "%s", phrases[p].text);
-            return;
-        }
-    core_buffer_printf(out, "has effect '%.*s'", (int)flag.u8_bytes,
-                       flag.data);
+        if (core_string_eq(phrases[p].flag, flag))
+            return n00bb_text(phrases[p].text, N00BB_NO_ARGS);
+    return n00bb_text(N00B_TEXT_FLAG_OTHER, N00BB_ARGS(ARG_TEXT(flag)));
 }
 
 static bool
 describe_rule_step(void *context, const ir_summary_step_t *step)
 {
     n00bb_rule_chain_t *chain = context;
-    core_buffer_t *out = chain->out;
     if (step->kind == IR_SUMMARY_STEP_RULE
         || step->kind == IR_SUMMARY_STEP_DISCARDED
         || rule_step_seen(chain, step)) return true;
-    core_buffer_printf(out, "%s", chain->clauses++ ? "; " : ": ");
+    core_string_t detail = {0};
+    n00bb_text_t clause = N00B_TEXT_CLAUSE_OUT_ARGUMENT;
     switch (step->kind) {
     case IR_SUMMARY_STEP_OUT_ARGUMENT:
-        core_buffer_puts(out, "it passes an out argument");
         break;
     case IR_SUMMARY_STEP_CALLS:
     case IR_SUMMARY_STEP_CALLS_UNSEEN:
-        if (chain->ignored) {
-            describe_callee(out, step->callee);
-            core_buffer_puts(out, " changes nothing the caller can see and "
-                                  "has no other effect");
-        } else {
-            core_buffer_puts(out, "it calls ");
-            describe_callee(out, step->callee);
-        }
+        clause = chain->ignored ? N00B_TEXT_CLAUSE_CHANGES_NOTHING
+                                : N00B_TEXT_CLAUSE_CALLS;
         break;
     case IR_SUMMARY_STEP_FLAG:
-        describe_callee(out, step->callee);
-        core_buffer_puts(out, " ");
-        describe_flag(out, step->name);
+        clause = N00B_TEXT_CLAUSE_FLAG;
+        detail = describe_flag(step->name);
         break;
-    case IR_SUMMARY_STEP_ACCESS:
-        describe_callee(out, step->callee);
-        core_buffer_printf(out, " %s ", core_string_eq(step->name,
-            CORE_STRING_STATIC("write")) ? "writes" : "reads");
-        describe_summary_place(out, &step->place);
+    case IR_SUMMARY_STEP_ACCESS: {
+        bool write = core_string_eq(step->name, CORE_STRING_STATIC("write"));
+        clause = write ? N00B_TEXT_CLAUSE_WRITES : N00B_TEXT_CLAUSE_READS;
+        detail = describe_summary_place(&step->place);
+        if (write && !chain->writer && step->callee
+            && (step->place.kind == IR_SPLACE_GLOBAL
+                || step->place.kind == IR_SPLACE_THREAD)) {
+            chain->writer = step->callee;
+            chain->written = step->place.global;
+        }
         break;
+    }
     case IR_SUMMARY_STEP_ESCAPE:
-        describe_callee(out, step->callee);
-        core_buffer_printf(out, " keeps the address of its argument %u",
-                           step->param + 1);
+        clause = N00B_TEXT_CLAUSE_ESCAPES;
         break;
     case IR_SUMMARY_STEP_ADDRESSABLE:
-        core_buffer_printf(out, "argument %u is the address of the caller's "
-                           "own storage", step->param + 1);
+        clause = N00B_TEXT_CLAUSE_ADDRESSABLE;
         break;
     case IR_SUMMARY_STEP_PLACE:
-        describe_summary_place(out, &step->place);
-        core_buffer_puts(out, " is visible outside the call");
+        clause = N00B_TEXT_CLAUSE_PLACE_VISIBLE;
+        detail = describe_summary_place(&step->place);
         break;
     case IR_SUMMARY_STEP_RETURNS:
-        describe_callee(out, step->callee);
-        core_buffer_printf(out, " returns its argument %u", step->param + 1);
+        clause = N00B_TEXT_CLAUSE_RETURNS_ARGUMENT;
         break;
     case IR_SUMMARY_STEP_DEPENDS:
-        core_buffer_printf(out, "its result depends on argument %u",
-                           step->param + 1);
+        clause = N00B_TEXT_CLAUSE_DEPENDS;
         break;
     case IR_SUMMARY_STEP_RULE:
     case IR_SUMMARY_STEP_DISCARDED:
         break;
     }
+    core_string_t callee = describe_callee(step->callee);
+    core_list_push(chain->clauses, n00bb_text(clause,
+        N00BB_ARGS(ARG_TEXT(callee), ARG_TEXT(detail),
+                   ARG_NUMBER(step->param + 1))));
+    core_free(callee.data);
+    core_free(detail.data);
     return true;
 }
+
+typedef struct {
+    ir_summary_facts_t      *facts;
+    core_translation_unit_t *unit;
+} dead_code_context_t;
 
 static bool
 call_diverges_by_rule(void *context, const ir_instr_t *call)
 {
-    return ir_summary_facts_call_diverges(context, call);
+    dead_code_context_t *dead = context;
+    return dead->facts && ir_summary_facts_call_diverges(dead->facts, call);
+}
+
+static bool
+const_varies_by_phase(void *context, const ir_instr_t *constant)
+{
+    dead_code_context_t *dead = context;
+    return n00bb_tu_build_time_query_at(dead->unit, constant->span.start_line,
+                                        constant->span.start_col);
 }
 
 static uint64_t
@@ -21521,16 +23396,22 @@ note_dead_code_site(n00bb_link_analysis_t *analysis, core_string_t module,
 
 struct n00bb_diagnostic_filter_t {
     core_dict_t dead_code_sites;
+    bool dead_code_sites_ready;
+    core_list_t(n00bb_failed_region_t) failed_regions;
 };
 
 n00bb_diagnostic_filter_t *
 n00bb_diagnostic_filter_take(n00bb_link_analysis_t *analysis)
 {
-    if (!analysis || !analysis->dead_code_sites_ready) return nullptr;
+    if (!analysis || (!analysis->dead_code_sites_ready
+                      && !analysis->failed_regions.len)) return nullptr;
     n00bb_diagnostic_filter_t *filter = core_alloc(n00bb_diagnostic_filter_t);
     filter->dead_code_sites = analysis->dead_code_sites;
+    filter->dead_code_sites_ready = analysis->dead_code_sites_ready;
+    filter->failed_regions = analysis->failed_regions;
     analysis->dead_code_sites = (core_dict_t){0};
     analysis->dead_code_sites_ready = false;
+    analysis->failed_regions = (core_list_t(n00bb_failed_region_t)){0};
     return filter;
 }
 
@@ -21538,7 +23419,10 @@ void
 n00bb_diagnostic_filter_free(n00bb_diagnostic_filter_t *filter)
 {
     if (!filter) return;
-    core_dict_free(&filter->dead_code_sites);
+    if (filter->dead_code_sites_ready) core_dict_free(&filter->dead_code_sites);
+    for (size_t i = 0; i < filter->failed_regions.len; i++)
+        core_free(filter->failed_regions.data[i].module.data);
+    core_list_free(filter->failed_regions);
     core_free(filter);
 }
 
@@ -21548,8 +23432,16 @@ n00bb_diagnostic_visible(void *context, const core_diagnostic_t *diagnostic)
     n00bb_diagnostic_filter_t *filter = context;
     if (!filter || !core_diag_is_advisory(diagnostic->severity)
         || !diagnostic->location.has_location
-        || core_string_eq(diagnostic->code, CORE_STRING_STATIC("IR-W0030")))
+        || core_string_eq(diagnostic->code,
+                          n00bb_diag_code(N00B_DIAG_UNREACHABLE_CODE)))
         return true;
+    for (size_t i = 0; i < filter->failed_regions.len; i++)
+        if (core_string_eq(filter->failed_regions.data[i].module,
+                           diagnostic->module)
+            && span_contains(filter->failed_regions.data[i].span,
+                             diagnostic->location))
+            return false;
+    if (!filter->dead_code_sites_ready) return true;
     bool dead = false;
     core_dict_get(&filter->dead_code_sites,
                   (void *)(uintptr_t)dead_code_site_key(diagnostic->module,
@@ -21559,11 +23451,15 @@ n00bb_diagnostic_visible(void *context, const core_diagnostic_t *diagnostic)
 }
 
 static ir_dead_code_t *
-dead_code_of(n00bb_link_analysis_t *analysis, ir_func_t *function)
+dead_code_of(n00bb_link_analysis_t *analysis, core_translation_unit_t *unit,
+             ir_func_t *function)
 {
-    ir_summary_facts_t *facts = group_facts(analysis, function, false);
-    return ir_dead_code_build(function,
-                              facts ? call_diverges_by_rule : nullptr, facts);
+    dead_code_context_t context = {
+        .facts = group_facts(analysis, function, false),
+        .unit = unit,
+    };
+    return ir_dead_code_build(function, call_diverges_by_rule,
+                              const_varies_by_phase, &context);
 }
 
 static uint8_t
@@ -21599,18 +23495,18 @@ overflow_narrowed(ir_func_t *function, ir_ranges_t *ranges,
                               ir_operand_value(&in->operands[1]), in));
 }
 
-static void
-format_interval(core_buffer_t *out, ir_interval_t range)
+static core_string_t
+format_interval(ir_interval_t range)
 {
-    if (range.lo == range.hi) {
-        ir_int_append(out, range.lo);
-        return;
-    }
-    core_buffer_puts(out, "[");
+    core_buffer_t *out = core_buffer_empty();
+    if (range.lo != range.hi) core_buffer_puts(out, "[");
     ir_int_append(out, range.lo);
-    core_buffer_puts(out, ", ");
-    ir_int_append(out, range.hi);
-    core_buffer_puts(out, "]");
+    if (range.lo != range.hi) {
+        core_buffer_puts(out, ", ");
+        ir_int_append(out, range.hi);
+        core_buffer_puts(out, "]");
+    }
+    return core_buffer_take_string(out);
 }
 
 static void
@@ -21663,28 +23559,17 @@ diagnose_overflow(n00bb_link_analysis_t *analysis)
                 if (overflow != IR_OVERFLOW_MAY
                     && overflow != IR_OVERFLOW_ALWAYS) continue;
                 bool always = overflow == IR_OVERFLOW_ALWAYS;
-                core_buffer_t message = {0};
-                core_buffer_printf(&message, "%s", always
-                    ? "this operation always overflows: "
-                    : "this operation may overflow: ");
-                format_interval(&message, left);
-                if (!unary) {
-                    core_buffer_puts(&message, " and ");
-                    format_interval(&message, right);
-                }
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    always ? CORE_DIAG_ERROR : CORE_DIAG_WARNING,
-                    always ? CORE_STRING_STATIC("N00BB-L0050")
-                           : CORE_STRING_STATIC("N00BB-W0012"),
-                    core_buffer_string(&message), (core_diag_location_t){
-                        .line = in->span.start_line,
-                        .column = in->span.start_col,
-                        .end_line = in->span.end_line,
-                        .end_column = in->span.end_col,
-                        .has_location = true,
-                    });
-                core_buffer_release(&message);
+                core_string_t left_text = format_interval(left);
+                core_string_t right_text = format_interval(right);
+                report_at(unit, always ? N00B_DIAG_OVERFLOW_ALWAYS
+                                       : N00B_DIAG_OVERFLOW_POSSIBLE, in,
+                    unary ? always ? N00B_TEXT_ALWAYS_OVERFLOWS_UNARY
+                                   : N00B_TEXT_MAY_OVERFLOW_UNARY
+                          : always ? N00B_TEXT_ALWAYS_OVERFLOWS
+                                   : N00B_TEXT_MAY_OVERFLOW,
+                    N00BB_ARGS(ARG_TEXT(left_text), ARG_TEXT(right_text)));
+                core_free(left_text.data);
+                core_free(right_text.data);
                 ok = ok && !always;
             }
         core_dict_free(&counts);
@@ -21814,16 +23699,11 @@ user_span(const ir_instr_t *in)
 }
 
 static void
-report_at(core_translation_unit_t *unit, core_diag_severity_t severity,
-          core_string_t code, core_buffer_t *message, const ir_instr_t *in)
+report_at(core_translation_unit_t *unit, n00bb_diag_t id,
+          const ir_instr_t *in, n00bb_text_t message, n00bb_args_t args)
 {
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        severity, code, core_buffer_string(message), (core_diag_location_t){
-            .line = in->span.start_line, .column = in->span.start_col,
-            .end_line = in->span.end_line, .end_column = in->span.end_col,
-            .has_location = true,
-        });
-    core_buffer_release(message);
+    n00bb_report(core_translation_unit_diagnostics(unit), unit, id,
+                 span_location(in->span), message, args);
 }
 
 static void
@@ -21847,12 +23727,10 @@ check_constant_condition(core_translation_unit_t *unit, ir_ranges_t *ranges,
             : relational == 0 ? COMPARISON_FALSE : COMPARISON_UNKNOWN;
     }
     if (fact == COMPARISON_UNKNOWN) return;
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "this condition is always %s, so the other branch never runs",
-        fact == COMPARISON_TRUE ? "true" : "false");
-    report_at(unit, CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0013"),
-              &message, test);
+    report_at(unit, N00B_DIAG_CONSTANT_CONDITION, test,
+              fact == COMPARISON_TRUE ? N00B_TEXT_CONDITION_ALWAYS_TRUE
+                                      : N00B_TEXT_CONDITION_ALWAYS_FALSE,
+              N00BB_NO_ARGS);
 }
 
 static bool
@@ -21885,15 +23763,18 @@ check_operand_domain(core_translation_unit_t *unit, ir_func_t *function,
     bool may = division ? range.lo <= 0 && range.hi >= 0
                         : range.hi >= width || range.lo < 0;
     if (!always && !(may && narrowed)) return true;
-    core_buffer_t message = {0};
-    core_buffer_printf(&message, "%s %s: ",
-        division ? "the divisor" : "the shift amount",
-        always ? "is always invalid" : "may be invalid");
-    format_interval(&message, range);
-    report_at(unit, always ? CORE_DIAG_ERROR : CORE_DIAG_WARNING,
-              always ? CORE_STRING_STATIC("N00BB-L0051")
-                     : CORE_STRING_STATIC("N00BB-W0014"),
-              &message, in);
+    core_string_t shown = format_interval(range);
+    report_at(unit, division
+                  ? always ? N00B_DIAG_DIVISOR_ZERO
+                           : N00B_DIAG_DIVISOR_MAY_BE_ZERO
+                  : always ? N00B_DIAG_SHIFT_OUT_OF_RANGE
+                           : N00B_DIAG_SHIFT_MAY_BE_OUT_OF_RANGE, in,
+              division ? always ? N00B_TEXT_DIVISOR_ALWAYS_INVALID
+                                : N00B_TEXT_DIVISOR_MAY_BE_INVALID
+                       : always ? N00B_TEXT_SHIFT_ALWAYS_INVALID
+                                : N00B_TEXT_SHIFT_MAY_BE_INVALID,
+              N00BB_ARGS(ARG_TEXT(shown)));
+    core_free(shown.data);
     return !always;
 }
 
@@ -22234,26 +24115,13 @@ report_race(void *context, const ir_race_t *race)
     core_translation_unit_t *unit = unit_for_ir_module(analysis,
         race->site->block->owner->owner);
     if (!unit || tu_state(unit)->interface_module) return;
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "global '%.*s' is written by thread entry '%.*s' without "
-        "atomics or a lock and is accessed by %s",
-        (int)race->place.global->name.u8_bytes,
-        race->place.global->name.data,
-        (int)race->entry->name.u8_bytes, race->entry->name.data,
-        race->self ? "another thread running the same entry"
-                   : "another thread");
-    core_diagnostics_report_at(
-        core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0016"),
-        core_buffer_string(&message), (core_diag_location_t){
-            .line = race->site->span.start_line,
-            .column = race->site->span.start_col,
-            .end_line = race->site->span.end_line,
-            .end_column = race->site->span.end_col,
-            .has_location = race->site->span.start_line != 0,
-        });
-    core_buffer_release(&message);
+    core_string_t global = unqualified_name(race->place.global->name);
+    report_at(unit, N00B_DIAG_DATA_RACE, race->site,
+              race->self ? N00B_TEXT_RACE_SAME_ENTRY : N00B_TEXT_RACE,
+              N00BB_ARGS(ARG_TEXT(global), ARG_TEXT(race->entry->name)));
+    n00bb_report_help(core_translation_unit_diagnostics(unit),
+        N00B_TEXT_MAKE_ATOMIC_OR_GUARD_EVERY,
+        N00BB_ARGS(ARG_TEXT(global)));
 }
 
 static void
@@ -22578,18 +24446,12 @@ warn_unused_fields(n00bb_link_analysis_t *analysis)
         parse_sym_entry_t *symbol = candidate->symbol;
         parse_sym_entry_t *owner = symbol->owner_type;
         if (candidate->flags & IR_SFIELD_READ) continue;
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "field '%.*s' of '%.*s' is %s",
-            (int)symbol->name.u8_bytes, symbol->name.data,
-            (int)owner->name.u8_bytes, owner->name.data,
-            candidate->flags & IR_SFIELD_WRITE ? "written but never read"
-                                               : "never used");
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(candidate->unit),
-            candidate->unit, CORE_DIAG_WARNING,
-            CORE_STRING_STATIC("N00BB-W0015"), core_buffer_string(&message),
-            link_source_location(symbol->decl_node));
-        core_buffer_release(&message);
+        n00bb_report(core_translation_unit_diagnostics(candidate->unit),
+            candidate->unit, N00B_DIAG_UNUSED_FIELD,
+            link_source_location(symbol->decl_node),
+            candidate->flags & IR_SFIELD_WRITE ? N00B_TEXT_FIELD_NEVER_READ
+                                               : N00B_TEXT_FIELD_NEVER_USED,
+            N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(owner->name)));
     }
     core_list_free(candidates);
     core_dict_foreach(&exposed, item) core_dict_string_key_free(item->key);
@@ -22610,25 +24472,14 @@ warn_ignored_results(n00bb_link_analysis_t *analysis,
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 const ir_instr_t *in = function->blocks[b]->instrs[i];
                 if (!ir_summary_facts_ignored_result(facts, in)) continue;
-                core_buffer_t message = {0};
-                core_buffer_puts(&message,
-                    "this call has no effect and its result is ignored");
-                n00bb_rule_chain_t chain = {.out = &message, .ignored = true};
+                n00bb_rule_chain_t chain = {.ignored = true};
                 ir_summary_facts_explain_ignored_result(
                     group_facts(analysis, function, true), in,
                     describe_rule_step, &chain);
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0011"),
-                    core_buffer_string(&message),
-                    (core_diag_location_t){
-                        .line = in->span.start_line,
-                        .column = in->span.start_col,
-                        .end_line = in->span.end_line,
-                        .end_column = in->span.end_col,
-                        .has_location = in->span.start_line != 0,
-                    });
-                core_buffer_release(&message);
+                report_chain(core_translation_unit_diagnostics(unit), unit,
+                    N00B_DIAG_CALL_WITHOUT_EFFECT, span_location(in->span),
+                    N00B_TEXT_RESULT_IGNORED, N00B_TEXT_RESULT_IGNORED_BECAUSE,
+                    &chain);
             }
     }
 }
@@ -22641,18 +24492,10 @@ report_dead_store(const ir_instr_t *store, void *context)
             && store->n_operands > 1
         ? ir_operand_value(&store->operands[1]) : nullptr;
     if (stored && stored->kind == IR_VAL_PARAM) return;
-    core_diagnostics_report_at(
-        core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0010"),
-        CORE_STRING_STATIC(
-            "this stored value is overwritten or discarded before it is read"),
-        (core_diag_location_t){
-            .line = store->span.start_line,
-            .column = store->span.start_col,
-            .end_line = store->span.end_line,
-            .end_column = store->span.end_col,
-            .has_location = true,
-        });
+    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+        N00B_DIAG_UNUSED_ASSIGNMENT, span_location(store->span),
+        N00B_TEXT_THIS_STORED_VALUE_IS_OVERWRITTEN,
+        N00BB_NO_ARGS);
 }
 
 static void
@@ -22798,11 +24641,6 @@ warn_unused_params(n00bb_link_analysis_t *analysis)
             param_site_t *key = core_alloc(param_site_t);
             *key = site;
             core_dict_put(&reported, key, 1);
-            core_buffer_t message = {0};
-            core_buffer_printf(&message,
-                "parameter '%.*s' is never used; name it with a leading "
-                "'_' if it is required by a signature",
-                (int)parameter->name.u8_bytes, parameter->name.data);
             core_diag_location_t location = {
                 .line = span.start_line,
                 .column = span.start_col,
@@ -22813,11 +24651,13 @@ warn_unused_params(n00bb_link_analysis_t *analysis)
             (void)parameter_location(analysis->grammar,
                 ir_function_declaration(analysis, unit, function),
                 parameter->name, &location);
-            core_diagnostics_report_at(
-                core_translation_unit_diagnostics(unit), unit,
-                CORE_DIAG_WARNING, CORE_STRING_STATIC("N00BB-W0018"),
-                core_buffer_string(&message), location);
-            core_buffer_release(&message);
+            n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                N00B_DIAG_UNUSED_PARAMETER, location,
+                N00B_TEXT_PARAMETER_NEVER_USED,
+                N00BB_ARGS(ARG_TEXT(parameter->name)));
+            n00bb_report_help(core_translation_unit_diagnostics(unit),
+                N00B_TEXT_IF_A_SIGNATURE_REQUIRES_IT,
+                N00BB_ARGS(ARG_TEXT(parameter->name)));
         }
         core_free(unused);
     }
@@ -22836,7 +24676,7 @@ warn_dead_code(n00bb_link_analysis_t *analysis, ir_func_t *const *functions,
             && !core_dict_contains((core_dict_t *)instances, function)
             ? unit_for_ir_module(analysis, function->owner) : nullptr;
         if (!unit || tu_state(unit)->interface_module) continue;
-        ir_dead_code_t *dead = dead_code_of(analysis, function);
+        ir_dead_code_t *dead = dead_code_of(analysis, unit, function);
         for (uint32_t b = 0; dead && b < function->n_blocks; b++)
             for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
                 const ir_instr_t *in = function->blocks[b]->instrs[i];
@@ -22844,28 +24684,31 @@ warn_dead_code(n00bb_link_analysis_t *analysis, ir_func_t *const *functions,
                     note_dead_code_site(analysis, unit->module.identifier,
                         in->span.start_line, in->span.start_col);
             }
-        ir_diags_t *diagnostics = ir_dead_code_site_count(dead)
-            ? ir_diags_new_attached(analysis->ir_context, nullptr,
-                  core_translation_unit_diagnostics(unit), unit)
-            : nullptr;
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
         for (uint32_t d = 0; d < ir_dead_code_site_count(dead); d++) {
             const ir_dead_site_t *site = ir_dead_code_site_at(dead, d);
-            core_buffer_t message = {0};
-            core_buffer_puts(&message, "this code can never run");
+            core_diag_location_t at = span_location(site->site->span);
+            n00bb_rule_chain_t chain = {0};
             if (site->kind == IR_DEAD_AFTER_DIVERGING_CALL) {
-                n00bb_rule_chain_t chain = {.out = &message};
                 ir_summary_facts_explain_divergence(
                     group_facts(analysis, function, true), site->cause,
                     describe_rule_step, &chain);
-            } else if (site->kind == IR_DEAD_CONSTANT_CONDITION)
-                core_buffer_puts(&message,
-                    ": the condition that guards it is constant");
-            else core_buffer_puts(&message, ": no path reaches it");
-            ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                IR_DIAG_DEAD_CODE, site->site->span, (core_string_t){});
-            ir_diag_message(diagnostic, diagnostics,
-                            core_buffer_string(&message));
-            core_buffer_release(&message);
+                report_chain(diagnostics, unit, N00B_DIAG_UNREACHABLE_CODE,
+                    at, N00B_TEXT_CODE_NEVER_RUNS,
+                    N00B_TEXT_CODE_NEVER_RUNS_BECAUSE, &chain);
+            }
+            else
+                n00bb_report(diagnostics, unit, N00B_DIAG_UNREACHABLE_CODE,
+                    at, site->kind == IR_DEAD_CONSTANT_CONDITION
+                        ? N00B_TEXT_CODE_NEVER_RUNS_CONSTANT
+                        : N00B_TEXT_CODE_NEVER_RUNS_NO_PATH, N00BB_NO_ARGS);
+            if (site->kind == IR_DEAD_AFTER_DIVERGING_CALL && site->cause
+                && ir_span_known(site->cause->span))
+                n00bb_report_secondary(diagnostics, nullptr,
+                    span_location(site->cause->span),
+                    N00B_TEXT_THIS_CALL_NEVER_RETURNS,
+                    N00BB_NO_ARGS);
         }
         ir_dead_code_free(dead);
     }
@@ -22901,9 +24744,65 @@ warn_unbounded_recursion(n00bb_link_analysis_t *analysis)
             ? unit_for_ir_module(analysis, function->owner) : nullptr;
         if (!unit || tu_state(unit)->interface_module) continue;
         ir_report_unbounded_recursion(analysis->summaries, function,
-            ir_diags_new_attached(analysis->ir_context, nullptr,
-                core_translation_unit_diagnostics(unit), unit));
+            attach_ir_diags(analysis->ir_context, nullptr, unit, nullptr));
     }
+}
+
+static bool
+same_global(const ir_global_t *left, const ir_global_t *right)
+{
+    if (!left || !right) return false;
+    const ir_global_t *a = left->identity ? left->identity : left;
+    const ir_global_t *b = right->identity ? right->identity : right;
+    return a == b || core_string_eq(left->name, right->name);
+}
+
+static const ir_instr_t *
+global_write_in(const ir_func_t *function, const ir_global_t *global)
+{
+    for (uint32_t b = 0; function && b < function->n_blocks; b++) {
+        const ir_block_t *block = function->blocks[b];
+        for (uint32_t i = 0; block && i < block->n_instrs; i++) {
+            const ir_instr_t *in = block->instrs[i];
+            if (in->op != IR_OP_GLOBAL_STORE || !in->n_operands
+                || in->operands[0].kind != IR_OPD_VALUE
+                || !in->operands[0].value
+                || !ir_span_known(in->span)) continue;
+            if (!global || same_global(in->operands[0].value->global, global))
+                return in;
+        }
+    }
+    return nullptr;
+}
+
+static bool
+identifier_byte(uint8_t byte)
+{
+    return byte == '_' || byte >= 0x80 || (byte >= '0' && byte <= '9')
+        || (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z');
+}
+
+static core_diag_location_t
+name_location(core_translation_unit_t *unit, ir_span_t span,
+              core_string_t name)
+{
+    core_string_t source = unit ? core_source_file_contents(&unit->source)
+                                : (core_string_t){0};
+    if (!source.data || !name.u8_bytes || !ir_span_known(span)
+        || span.end_byte > source.u8_bytes || span.start_byte > span.end_byte)
+        return (core_diag_location_t){0};
+    for (size_t at = span.start_byte;
+         at + name.u8_bytes <= span.end_byte; at++) {
+        if (!core_string_eq(core_string_slice(source, at, name.u8_bytes),
+                            name)) continue;
+        bool starts = at == 0 || !identifier_byte((uint8_t)source.data[at - 1]);
+        size_t after = at + name.u8_bytes;
+        bool ends = after >= source.u8_bytes
+            || !identifier_byte((uint8_t)source.data[after]);
+        if (starts && ends)
+            return core_diag_location_span(source, at, after);
+    }
+    return (core_diag_location_t){0};
 }
 
 static bool
@@ -22918,17 +24817,44 @@ validate_missing_returns(n00bb_link_analysis_t *analysis)
         if (!facts || !ir_paths_reach(site->function, diverging_call_step,
                                       facts, site->trap))
             continue;
-        ir_diags_t *diagnostics = ir_diags_new_attached(analysis->ir_context,
-            nullptr, core_translation_unit_diagnostics(site->unit),
-            site->unit);
-        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_VERIFY_TYPED, site->trap->span,
-            CORE_STRING_STATIC("this function body"));
-        char message_buffer[256];
-        ir_diag_message(diagnostic, diagnostics, n00bb_format_name(
-            message_buffer, sizeof(message_buffer),
-            "function '%.*s' can reach its end without returning a value",
-            (int)site->name.u8_bytes, site->name.data));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(site->unit);
+        core_diag_location_t name = name_location(site->unit,
+            site->function->span, site->name);
+        ir_annot_t *missing = ir_annot_get(&site->trap->annots,
+            CORE_STRING_STATIC("n00bb.switch.missing"));
+        th_type *returns = site->function->type
+            ? th_func_ret(th_resolve(site->function->type)) : nullptr;
+        core_string_t return_text = returns
+            ? n00bb_print_type(ir_ctx_types(analysis->ir_context), returns)
+            : (core_string_t){0};
+        if (missing && missing->kind == IR_ANNOT_STR) {
+            n00bb_report(diagnostics, site->unit,
+                N00B_DIAG_SWITCH_NOT_EXHAUSTIVE,
+                span_location(site->trap->span),
+                N00B_TEXT_THIS_SWITCH_HAS_NO_CASE,
+                N00BB_ARGS(ARG_TEXT(missing->s), ARG_TEXT(site->name)));
+            n00bb_report_secondary(diagnostics, nullptr, name,
+                N00B_TEXT_RETURNS_2,
+                N00BB_ARGS(ARG_TEXT(site->name), ARG_TEXT(return_text)));
+            n00bb_report_help(diagnostics, N00B_TEXT_ADD_THE_MISSING_CASES_AN,
+                N00BB_NO_ARGS);
+        }
+        else {
+            n00bb_report(diagnostics, site->unit, N00B_DIAG_MISSING_RETURN,
+                name.has_location ? name : span_location(site->trap->span),
+                N00B_TEXT_CAN_REACH_THE_END_OF,
+                N00BB_ARGS(ARG_TEXT(site->name)));
+            if (return_text.u8_bytes)
+                n00bb_report_label(diagnostics, N00B_TEXT_RETURNS,
+                    N00BB_ARGS(ARG_TEXT(return_text)));
+            n00bb_report_secondary(diagnostics, nullptr,
+                span_location(site->trap->span),
+                N00B_TEXT_A_PATH_THROUGH_THE_BODY,
+                N00BB_NO_ARGS);
+            n00bb_report_help(diagnostics, N00B_TEXT_ADD_A_RETURN_ON_EVERY,
+                N00BB_NO_ARGS);
+        }
         ok = false;
     }
     core_list_free(analysis->missing_returns);
@@ -22948,19 +24874,34 @@ validate_assert_side_effects(n00bb_link_analysis_t *analysis)
         const ir_instr_t *call = facts
             ? assert_side_effect_call(facts, site) : nullptr;
         if (!call) continue;
-        ir_diags_t *diagnostics = ir_diags_new_attached(analysis->ir_context,
-            nullptr, core_translation_unit_diagnostics(site->unit),
-            site->unit);
-        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_VERIFY_TYPED, site->span, (core_string_t){});
-        core_buffer_t message = {0};
-        core_buffer_puts(&message, "assert expression has a side effect");
-        n00bb_rule_chain_t chain = {.out = &message};
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(site->unit);
+        n00bb_rule_chain_t chain = {0};
         ir_summary_facts_explain_side_effect(
             group_facts(analysis, site->function, true), call,
             describe_rule_step, &chain);
-        ir_diag_message(diagnostic, diagnostics, core_buffer_string(&message));
-        core_buffer_release(&message);
+        report_chain(diagnostics, site->unit, N00B_DIAG_ASSERT_SIDE_EFFECT,
+            span_location(site->span), N00B_TEXT_ASSERT_SIDE_EFFECT,
+            N00B_TEXT_ASSERT_SIDE_EFFECT_BECAUSE, &chain);
+        if (ir_span_known(call->span)
+            && (call->span.start_byte != site->span.start_byte
+                || call->span.end_byte != site->span.end_byte))
+            n00bb_report_secondary(diagnostics, nullptr,
+                span_location(call->span),
+                N00B_TEXT_THE_SIDE_EFFECT_STARTS_HERE,
+                N00BB_NO_ARGS);
+        const ir_instr_t *write = chain.writer
+            ? global_write_in(chain.writer, chain.written) : nullptr;
+        core_translation_unit_t *writer_unit = chain.writer
+            ? unit_for_ir_module(analysis, chain.writer->owner) : nullptr;
+        if (write && writer_unit && chain.written) {
+            core_string_t global = unqualified_name(chain.written->name);
+            n00bb_report_secondary(diagnostics, writer_unit,
+                span_location(write->span), N00B_TEXT_IS_WRITTEN_HERE,
+                N00BB_ARGS(ARG_TEXT(global)));
+        }
+        n00bb_report_help(diagnostics, N00B_TEXT_ASSERT_CONDITIONS_DO_NOT_RUN,
+            N00BB_NO_ARGS);
         ok = false;
     }
     core_list_free(analysis->assert_sites);
@@ -23077,19 +25018,19 @@ global_has_writer(n00bb_link_analysis_t *analysis, ir_global_t *global)
     return false;
 }
 
-static void
-append_read_path(core_buffer_t *message, const ir_instr_t *read)
+static core_string_t
+read_path(const ir_instr_t *read)
 {
     const ir_value_t *callee = read && read->op == IR_OP_CALL
             && read->n_operands
         ? ir_operand_value(&read->operands[0]) : nullptr;
     if (callee && callee->kind == IR_VAL_FUNC && callee->owner)
-        core_buffer_printf(message, " through the call to '%.*s'",
-                           (int)callee->owner->name.u8_bytes,
-                           callee->owner->name.data);
-    else if (read && (read->op == IR_OP_CALL
-                      || read->op == IR_OP_CALLBACK_INVOKE))
-        core_buffer_printf(message, " through an indirect call");
+        return n00bb_text(N00B_TEXT_READ_THROUGH_CALL,
+                          N00BB_ARGS(ARG_TEXT(callee->owner->name)));
+    if (read && (read->op == IR_OP_CALL || read->op == IR_OP_CALLBACK_INVOKE))
+        return n00bb_text(N00B_TEXT_READ_THROUGH_INDIRECT_CALL,
+                          N00BB_NO_ARGS);
+    return (core_string_t){0};
 }
 
 static bool
@@ -23116,17 +25057,21 @@ validate_uninitialized_global_reads(
                 && (location.line < parse_token_line(declared)
                     || (location.line == parse_token_line(declared)
                         && location.column < parse_token_column(declared)))) {
-                core_buffer_t message = {0};
-                core_buffer_printf(&message,
-                    "initializer reads global '%.*s' before its initializer runs",
-                    (int)target->name.u8_bytes, target->name.data);
-                append_read_path(&message, read->read);
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(read->source),
-                    read->source, CORE_DIAG_ERROR,
-                    CORE_STRING_STATIC("N00BB-L0043"),
-                    core_buffer_string(&message), location);
-                core_buffer_release(&message);
+                core_string_t path = read_path(read->read);
+                core_diagnostics_t *diagnostics =
+                    core_translation_unit_diagnostics(read->source);
+                n00bb_report(diagnostics, read->source,
+                    N00B_DIAG_GLOBAL_READ_BEFORE_INIT, location,
+                    N00B_TEXT_READS_BEFORE_INITIALIZER,
+                    N00BB_ARGS(ARG_TEXT(target->name), ARG_TEXT(path)));
+                core_free(path.data);
+                n00bb_report_secondary(diagnostics, nullptr,
+                    link_source_location(symbol_binding_node(target)),
+                    N00B_TEXT_IS_INITIALIZED_HERE,
+                    N00BB_ARGS(ARG_TEXT(target->name)));
+                n00bb_report_help(diagnostics,
+                    N00B_TEXT_MOVE_THE_DECLARATION_OF_ABOVE,
+                    N00BB_ARGS(ARG_TEXT(target->name)));
             }
             continue;
         }
@@ -23140,28 +25085,28 @@ validate_uninitialized_global_reads(
         bool same_cycle = initializer_units_share_cycle(
             link, source_unit, read->target);
         bool write_candidate = global_has_writer(analysis, read->global);
-        core_string_t global_kind = target->is_thread_local
-            ? CORE_STRING_STATIC("thread-local global")
-            : CORE_STRING_STATIC("global");
-        core_string_t place = same_cycle
-            ? CORE_STRING_STATIC("initialization in an import cycle")
-            : CORE_STRING_STATIC("initializer");
-        core_buffer_t message = {0};
-        core_buffer_printf(&message, "%.*s reads %.*s '%.*s' %s",
-            (int)place.u8_bytes, place.data,
-            (int)global_kind.u8_bytes, global_kind.data,
-            (int)target->name.u8_bytes, target->name.data,
-            write_candidate || target->is_thread_local
-                ? "before it is guaranteed to be initialized"
-                : "which has no explicit initializer");
-        append_read_path(&message, read->read);
-        core_diagnostics_report_at(
-            core_translation_unit_diagnostics(source_unit), source_unit,
-            CORE_DIAG_ERROR,
-            same_cycle ? CORE_STRING_STATIC("N00BB-L0041")
-                       : CORE_STRING_STATIC("N00BB-L0044"),
-            core_buffer_string(&message), initializer_read_location(read));
-        core_buffer_release(&message);
+        core_string_t global = n00bb_text(target->is_thread_local
+                ? N00B_TEXT_PLACE_THREAD_GLOBAL : N00B_TEXT_PLACE_GLOBAL,
+            N00BB_ARGS(ARG_TEXT(target->name)));
+        core_string_t path = read_path(read->read);
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(source_unit);
+        n00bb_report(diagnostics, source_unit,
+            N00B_DIAG_GLOBAL_READ_BEFORE_INIT, initializer_read_location(read),
+            N00B_TEXT_INITIALIZER_READS_GLOBAL,
+            N00BB_ARGS(ARG_PHRASE_ID(same_cycle
+                           ? N00B_TEXT_CYCLE_INITIALIZATION
+                           : N00B_TEXT_THIS_INITIALIZER),
+                       ARG_TEXT(global),
+                       ARG_PHRASE_ID(write_candidate || target->is_thread_local
+                           ? N00B_TEXT_BEFORE_GUARANTEED_INIT
+                           : N00B_TEXT_HAS_NO_EXPLICIT_INITIALIZER),
+                       ARG_TEXT(path)));
+        core_free(global.data);
+        core_free(path.data);
+        n00bb_report_secondary(diagnostics, read->target,
+            link_source_location(target->decl_node), N00B_TEXT_IS_DECLARED_HERE,
+            N00BB_ARGS(ARG_TEXT(target->name)));
     }
     return true;
 }
@@ -23207,24 +25152,11 @@ validate_thread_function_reads(
                         ? unit_for_ir_module(analysis, function->owner)
                         : nullptr;
                     if (!unit) continue;
-                    core_buffer_t message = {0};
-                    core_buffer_printf(&message,
-                        "runtime function may read thread-local global '%.*s' before a guaranteed initialization",
-                        (int)thread_global->name.u8_bytes,
-                        thread_global->name.data);
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit),
-                        unit, CORE_DIAG_ERROR,
-                        CORE_STRING_STATIC("N00BB-L0044"),
-                        core_string_borrow(message.data, message.byte_len),
-                        (core_diag_location_t){
-                            .line = read->span.start_line,
-                            .column = read->span.start_col,
-                            .end_line = read->span.end_line,
-                            .end_column = read->span.end_col,
-                            .has_location = true,
-                        });
-                    core_buffer_release(&message);
+                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                        N00B_DIAG_GLOBAL_READ_BEFORE_INIT,
+                        span_location(read->span),
+                        N00B_TEXT_THREAD_READ_BEFORE_INIT,
+                        N00BB_ARGS(ARG_TEXT(thread_global->name)));
                 }
             }
         }
@@ -23489,21 +25421,31 @@ validate_consumed_binding_body(parse_sym_entry_t *symbol,
         (void)n00bb_binding_transfer(block, incoming[block->index], binding,
                                      symbol, &bad, &bad_consume);
         if (!bad) continue;
-        ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-            IR_DIAG_TYPE_ARGS, bad->span,
-            bad_consume ? CORE_STRING_STATIC("this consume")
-                        : CORE_STRING_STATIC("this use"));
-        core_string_t shown = binding_name.data ? binding_name
-                                                : binding->name;
-        core_buffer_t message = {0};
-        core_buffer_printf(&message,
-            bad_consume
-                ? "binding '%.*s' is consumed more than once or is not available on every incoming path"
-                : "binding '%.*s' is used after consume or is not available on every incoming path",
-            (int)shown.u8_bytes, shown.data);
-        ir_diag_message(diagnostic, diagnostics,
-                        core_buffer_string(&message));
-        core_buffer_release(&message);
+        core_string_t shown = binding_name.u8_bytes ? binding_name
+            : ir_value_source_name(binding);
+        if (!shown.u8_bytes) shown = n00bb_text_form(N00B_TEXT_THIS_VALUE);
+        core_diagnostics_t *destination = ir_diags_destination(diagnostics);
+        const core_translation_unit_t *unit = ir_diags_unit(diagnostics);
+        n00bb_report(destination, unit, N00B_DIAG_USE_AFTER_CONSUME,
+            span_location(bad->span),
+            bad_consume ? N00B_TEXT_CONSUMED_AGAIN
+                        : N00B_TEXT_USED_AFTER_CONSUME,
+            N00BB_ARGS(ARG_TEXT(shown)));
+        const ir_instr_t *earlier = nullptr;
+        for (uint32_t e = 0; !earlier && e < function->n_blocks; e++)
+            for (uint32_t i = 0; !earlier
+                 && i < function->blocks[e]->n_instrs; i++) {
+                ir_instr_t *in = function->blocks[e]->instrs[i];
+                if (in != bad && ir_span_known(in->span)
+                    && n00bb_consume_identity(in) == binding)
+                    earlier = in;
+            }
+        if (earlier)
+            n00bb_report_secondary(destination, nullptr,
+                span_location(earlier->span), N00B_TEXT_IS_CONSUMED_HERE,
+                N00BB_ARGS(ARG_TEXT(shown)));
+        n00bb_report_help(destination, N00B_TEXT_A_CONSUMED_VALUE_CANNOT_BE,
+            N00BB_NO_ARGS);
         ok = false;
     }
     free(incoming);
@@ -23520,9 +25462,8 @@ n00bb_validate_consume_states(n00bb_link_analysis_t *analysis,
         n00bb_tu_state_t *state = tu_state(unit);
         parse_symtab_t *symtab = state && state->annotations
             ? state->annotations->symtab : nullptr;
-        ir_diags_t *diagnostics = ir_diags_new_attached(
-            analysis->ir_context, nullptr,
-            core_translation_unit_diagnostics(unit), unit);
+        ir_diags_t *diagnostics = attach_ir_diags(analysis->ir_context,
+                                                  nullptr, unit, nullptr);
         if (!symtab || !diagnostics) return false;
         for (parse_scope_t *scope = symtab->all_scopes; scope;
              scope = scope->all_next) {
@@ -23581,30 +25522,38 @@ field_extents_hold(core_list_t(core_translation_unit_ptr_t) *units)
                         th_resolve(member->discriminant->type), &width,
                         &is_signed)
                     || (width != 8 && width != 16 && width != 32))) {
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
-                        CORE_STRING_STATIC("a union discriminant must be an 8, 16 or 32 bit integer"),
-                        link_source_location(member->node));
+                    core_string_t type_text = n00bb_print_type(state->types,
+                        member->discriminant->type);
+                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                        N00B_DIAG_UNION_DISCRIMINANT_TYPE,
+                        link_source_location(member->node),
+                        N00B_TEXT_THE_DISCRIMINANT_IS_BUT_A,
+                        N00BB_ARGS(ARG_TEXT(member->discriminant->name),
+                                   ARG_TEXT(type_text)));
                     ok = false;
                 }
                 n00bb_field_extent_t *extent = symbol->is_field
                     ? parse_sym_binding(symbol, N00BB_FIELD_EXTENT_KEY)
                     : nullptr;
                 if (!extent) continue;
-                core_string_t problem = !foreign_pointer_type(symbol->type)
-                    ? CORE_STRING_STATIC("an extent clause needs a Foreign[...] field")
-                    : extent->count_field && !is_integer_type(
-                        th_resolve(extent->count_field->type))
-                    ? CORE_STRING_STATIC("a 'count' field must have an integer type")
-                    : (core_string_t){};
-                if (!problem.data) continue;
-                core_diagnostics_report_at(
-                    core_translation_unit_diagnostics(unit), unit,
-                    CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0037"),
-                    problem,
-                    link_source_location(extent->node));
-                ok = false;
+                if (!foreign_pointer_type(symbol->type)) {
+                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                        N00B_DIAG_EXTENT_NEEDS_FOREIGN,
+                        link_source_location(extent->node),
+                        N00B_TEXT_FIELD_HAS_AN_EXTENT_CLAUSE,
+                        N00BB_ARGS(ARG_TEXT(symbol->name)));
+                    ok = false;
+                }
+                else if (extent->count_field && !is_integer_type(
+                        th_resolve(extent->count_field->type))) {
+                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                        N00B_DIAG_EXTENT_COUNT_TYPE,
+                        link_source_location(extent->node),
+                        N00B_TEXT_THE_COUNT_FIELD_OF_MUST,
+                        N00BB_ARGS(ARG_TEXT(extent->count_field->name),
+                                   ARG_TEXT(symbol->name)));
+                    ok = false;
+                }
             }
     }
     return ok;
@@ -23637,24 +25586,25 @@ rigid_type_parameters_hold(core_list_t(core_translation_unit_ptr_t) *units)
                             == map->declaration[i];
                     th_type *bound = th_resolve(map->body[i]);
                     if (!parameter || th_kind_of(bound) == TH_VAR) continue;
-                    core_buffer_t message = {0};
                     core_string_t bound_text = n00bb_print_type(state->types,
                                                                 bound);
                     core_string_t parameter_name = {0};
                     for (size_t k = 0; k < declared->len; k++)
                         if (declared->data[k].type == map->declaration[i])
                             parameter_name = declared->data[k].name;
-                    core_buffer_printf(&message,
-                        "type parameter `%.*s of '%.*s' is fixed to %.*s by the function's own body; a declared type parameter stays generic",
-                        (int)parameter_name.u8_bytes, parameter_name.data,
-                        (int)symbol->name.u8_bytes, symbol->name.data,
-                        (int)bound_text.u8_bytes, bound_text.data);
-                    core_diagnostics_report_at(
-                        core_translation_unit_diagnostics(unit), unit,
-                        CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-T0046"),
-                        core_string_borrow(message.data, message.byte_len),
-                        link_source_location(symbol->decl_node));
-                    core_buffer_release(&message);
+                    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                        N00B_DIAG_TYPE_PARAMETER_FIXED,
+                        link_source_location(symbol->decl_node),
+                        N00B_TEXT_TYPE_PARAMETER_FIXED,
+                        N00BB_ARGS(ARG_TEXT(parameter_name),
+                                   ARG_TEXT(symbol->name),
+                                   ARG_TEXT(bound_text)));
+                    n00bb_report_note(core_translation_unit_diagnostics(unit),
+                        N00B_TEXT_A_DECLARED_TYPE_PARAMETER_MUST,
+                        N00BB_NO_ARGS);
+                    n00bb_report_help(core_translation_unit_diagnostics(unit),
+                        N00B_TEXT_USE_INSTEAD_OF_THE_TYPE,
+                        N00BB_ARGS(ARG_TEXT(bound_text)));
                     ok = false;
                 }
             }
@@ -23699,17 +25649,11 @@ static void
 report_view_candidate(core_translation_unit_t *unit,
                       parse_sym_entry_t *function, parse_sym_entry_t *parameter)
 {
-    core_buffer_t message = {0};
-    core_buffer_printf(&message,
-        "parameter '%.*s' could be view: '%.*s' never writes anything "
-        "reachable from it", (int)parameter->name.u8_bytes,
-        parameter->name.data, (int)function->name.u8_bytes,
-        function->name.data);
-    core_diagnostics_report_at(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_INFO, CORE_STRING_STATIC("N00BB-I0001"),
-        core_buffer_string(&message),
-        link_source_location(parameter->decl_node));
-    core_buffer_release(&message);
+    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+        N00B_DIAG_PARAMETER_COULD_BE_VIEW,
+        link_source_location(parameter->decl_node),
+        N00B_TEXT_PARAMETER_COULD_BE_VIEW_NEVER,
+        N00BB_ARGS(ARG_TEXT(parameter->name), ARG_TEXT(function->name)));
 }
 
 static bool
@@ -23751,7 +25695,7 @@ report_view_candidates(parse_grammar_t *grammar,
                 ? ir_summary_of(summaries, function) : nullptr;
             const ir_sflow_t *flow = summary ? ir_summary_flow(summary)
                                              : nullptr;
-            if (!flow || flow->opaque) continue;
+            if (!flow || flow->opaque || !function->n_blocks) continue;
             core_list_t(parse_sym_entry_ptr_t) parameters =
                 core_list_new(parse_sym_entry_ptr_t);
             parse_sym_entry_t *rest = nullptr;
@@ -23933,6 +25877,16 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("top-level-stmt"),
             n00bb_resume_unreachable_statement, nullptr);
+    static const core_string_t narrowed_anchors[] = {
+        CORE_STRING_STATIC("expression"), CORE_STRING_STATIC("assign-stmt"),
+        CORE_STRING_STATIC("binop-assign-stmt"), CORE_STRING_STATIC("and-rhs"),
+        CORE_STRING_STATIC("or-rhs"), CORE_STRING_STATIC("body-stmt"),
+        CORE_STRING_STATIC("top-level-stmt"),
+    };
+    for (size_t i = 0; ok && i < sizeof(narrowed_anchors)
+             / sizeof(*narrowed_anchors); i++)
+        ok = ir_lowerer_register_nt_visit(lowerer, narrowed_anchors[i],
+            n00bb_store_narrowed_roots, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("and-rhs"), n00bb_lower_branch_body, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
@@ -23948,26 +25902,40 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,
                                          n00bb_lower_operator_annotation,
                                          nullptr);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-register %.3f\n",
             n00bb_profile_seconds() - profile_start);
+    size_t *marks = core_alloc_array(size_t, units.len + 1);
+    for (size_t i = 0; marks && i < units.len; i++)
+        marks[i] = core_diagnostics_count(
+            core_translation_unit_diagnostics(units.data[i]));
+    bool bodies_ok = ok;
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);
         core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
-        for (size_t s = 0; ok && s < scopes.len; s++) {
+        bool unit_ok = true;
+        for (size_t s = 0; s < scopes.len; s++) {
             for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
-                 ok && symbol; symbol = symbol->next_in_scope) {
+                 symbol; symbol = symbol->next_in_scope) {
                 if (symbol->kind != PARSE_SYM_FUNCTION || !symbol->type
                     || !function_symbol_at(grammar, symbol->decl_node))
                     continue;
-                ok = lower_function_body(lowerer, grammar, unit, symbol,
-                                         ir_context, &units);
+                if (lower_function_body(lowerer, grammar, unit, symbol,
+                                        ir_context, &units)) continue;
+                ir_func_t *function = link_ir_function_for_symbol(
+                    state->link_analysis, symbol);
+                unit_ok = function && core_diagnostics_failed(
+                        core_translation_unit_diagnostics(unit))
+                    && exclude_function(state->link_analysis, unit, function)
+                    && unit_ok;
             }
         }
         core_list_free(scopes);
+        bodies_ok = bodies_ok && unit_ok;
     }
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    ok = bodies_ok;
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-functions %.3f\n",
             n00bb_profile_seconds() - profile_start);
     for (size_t i = 0; ok && i < units.len; i++) {
@@ -24009,23 +25977,25 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         }
         core_list_free(scopes);
     }
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-contexts %.3f\n",
             n00bb_profile_seconds() - profile_start);
     core_list_t(core_translation_unit_ptr_t) init_order =
         core_list_new(core_translation_unit_ptr_t);
-    ok = ok && n00bb_generate_value_methods(analysis)
-        && lower_all_module_initializers(lowerer, grammar, &units,
-            ir_context)
-        && publish_declared_aggregate_layouts(analysis)
+    ok = ok && n00bb_generate_value_methods(analysis);
+    if (ok && !lower_all_module_initializers(analysis, lowerer, grammar,
+                                             &units, ir_context))
+        ok = explained_by_errors(&units);
+    ok = ok && publish_declared_aggregate_layouts(analysis)
         && publish_interned_variant_layouts(analysis)
         && build_reachable_functions(analysis, &units, diagnostics);
 
     if (ok) ok = diagnose_unused_link_symbols(grammar, analysis);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-initializers %.3f\n",
             n00bb_profile_seconds() - profile_start);
 
+    exclude_failed_functions(analysis, &units, marks);
     if (ok) ok = build_escape_facts(analysis)
         && attach_call_return_aliases(analysis)
         && publish_binding_escapes(analysis)
@@ -24033,20 +26003,31 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     ir_policy_t *verify_policy = ok ? ir_policy_new(ir_context) : nullptr;
     if (ok) ok = verify_policy && ir_policy_set(verify_policy,
         CORE_STRING_STATIC("IR-E0023"), IR_POLICY_ALLOW);
+    bool verified_all = ok;
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
         ir_module_establish(module, IR_PROP_PARSED | IR_PROP_TYPED);
-        ir_diags_t *diagnostics = ir_diags_new_attached(
-            ir_context, verify_policy,
-            core_translation_unit_diagnostics(unit), unit);
-        ir_props_t properties = ir_verify(module, diagnostics);
+        ir_diags_t *diagnostics = attach_ir_diags(ir_context, verify_policy,
+                                                  unit, nullptr);
+        ir_verify_failures_t failures = {0};
+        ir_props_t properties = ir_verify_with_failures(module, diagnostics,
+                                                        &failures);
         ir_props_t verified = IR_PROP_PARSED | IR_PROP_TYPED
             | IR_PROP_VERIFIED;
-        ok = !ir_diags_failed(diagnostics)
-            && (properties & verified) == verified;
+        bool clean = !failures.count && !failures.module;
+        bool contained = failures.count && !failures.module
+            && core_diagnostics_failed(core_translation_unit_diagnostics(unit));
+        for (size_t f = 0; contained && f < failures.count; f++)
+            contained = exclude_function(analysis, unit,
+                                         failures.functions[f]);
+        ir_verify_failures_release(&failures);
+        if (contained) properties = ir_verify(module, nullptr);
+        verified_all = (contained || clean)
+            && (properties & verified) == verified && verified_all;
     }
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    ok = verified_all;
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-verify %.3f\n",
             n00bb_profile_seconds() - profile_start);
     if (ok) {
@@ -24055,45 +26036,60 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0027"), IR_POLICY_DENY)
             && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0030"), IR_POLICY_ALLOW)
             && ir_policy_set(policy, CORE_STRING_STATIC("IR-W0031"), IR_POLICY_WARN);
+        bool analyzed = ok;
         for (size_t i = 0; ok && i < units.len; i++) {
             core_translation_unit_t *unit = units.data[i];
-            ir_diags_t *diagnostics = ir_diags_new_attached(
-                ir_context, policy,
-                core_translation_unit_diagnostics(unit), unit);
+            ir_diags_t *diagnostics = attach_ir_diags(ir_context, policy,
+                                                      unit, nullptr);
             n00bb_mark_synthetic_locals(tu_state(unit)->ir_module);
-            ok = ir_analyze(tu_state(unit)->ir_module, diagnostics)
-                && ir_check_option_proofs(tu_state(unit)->ir_module,
-                                          diagnostics);
+            bool unit_analyzed = ir_analyze(tu_state(unit)->ir_module,
+                                            diagnostics);
+            bool proofs = ir_check_option_proofs(tu_state(unit)->ir_module,
+                                                 diagnostics);
+            analyzed = unit_analyzed && proofs && analyzed;
         }
+        ok = analyzed || explained_by_errors(&units);
     }
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    exclude_failed_functions(analysis, &units, marks);
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-analyze %.3f\n",
             n00bb_profile_seconds() - profile_start);
     if (ok)
-        ok = n00bb_validate_consume_states(analysis, &units);
-    if (ok) ok = validate_consumed_bindings(analysis);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+        ok = n00bb_validate_consume_states(analysis, &units)
+            || explained_by_errors(&units);
+    if (ok) ok = validate_consumed_bindings(analysis)
+        || explained_by_errors(&units);
+    exclude_failed_functions(analysis, &units, marks);
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-consume %.3f\n",
             n00bb_profile_seconds() - profile_start);
     if (ok)
         ok = core_link_unit_run_stage(link,
-                                     N00BB_LINK_STAGE_CFG_LIVENESS);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+                                     N00BB_LINK_STAGE_CFG_LIVENESS)
+            || explained_by_errors(&units);
+    exclude_failed_functions(analysis, &units, marks);
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-cfg-liveness %.3f\n",
             n00bb_profile_seconds() - profile_start);
     if (ok)
         ok = core_link_unit_run_stage(link,
-                N00BB_LINK_STAGE_CLEANUP_OBLIGATIONS);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+                N00BB_LINK_STAGE_CLEANUP_OBLIGATIONS)
+            || explained_by_errors(&units);
+    exclude_failed_functions(analysis, &units, marks);
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-cleanup %.3f\n",
             n00bb_profile_seconds() - profile_start);
     if (ok)
         ok = core_link_unit_run_stage(link,
-                N00BB_LINK_STAGE_STORAGE_LIFETIMES);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+                N00BB_LINK_STAGE_STORAGE_LIFETIMES)
+            || explained_by_errors(&units);
+    exclude_failed_functions(analysis, &units, marks);
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-lifetime %.3f\n",
             n00bb_profile_seconds() - profile_start);
-    if (ok) ok = place_unit_allocations(analysis);
+    if (ok) ok = place_unit_allocations(analysis)
+        || explained_by_errors(&units);
+    exclude_failed_functions(analysis, &units, marks);
     static const ir_pass_t *const lowering_passes[] = {
         &ir_pass_promote,
         &ir_pass_structure,
@@ -24101,19 +26097,21 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     };
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
-        ok = n00bb_buffer_borrow_pass(tu_state(unit)->ir_module,
-            analysis->escapes, ir_diags_new_attached(ir_context, nullptr,
-                core_translation_unit_diagnostics(unit), unit));
-        if (ok) report_view_candidates(grammar, unit, analysis->escapes);
+        bool borrowed = n00bb_buffer_borrow_pass(tu_state(unit)->ir_module,
+            analysis->escapes, attach_ir_diags(ir_context, nullptr, unit,
+                                               nullptr));
+        if (borrowed) report_view_candidates(grammar, unit, analysis->escapes);
+        ok = borrowed || explained_by_errors(&units);
     }
+    exclude_failed_functions(analysis, &units, marks);
+    core_free(marks);
     bool dumps = !analysis->build_time_needed && !analysis->literal_needed;
     if (ok && dump_ir && dumps) ok = n00bb_dump_ir(analysis);
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
-        ir_diags_t *diagnostics = ir_diags_new_attached(
-            ir_context, nullptr,
-            core_translation_unit_diagnostics(unit), unit);
+        ir_diags_t *diagnostics = attach_ir_diags(ir_context, nullptr, unit,
+                                                  nullptr);
         for (size_t p = 0; ok
              && p < sizeof(lowering_passes) / sizeof(lowering_passes[0]);
              p++) {
@@ -24122,17 +26120,18 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                 module, nullptr, &unmet, diagnostics);
             if (result != IR_PASS_OK) {
                 if (result == IR_PASS_UNMET) {
-                    ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                        IR_DIAG_VERIFY_TYPED, ir_module_span(module),
-                        CORE_STRING_STATIC("this lowered module"));
-                    ir_diag_message(diagnostic, diagnostics,
-                        CORE_STRING_STATIC("Lantern pass prerequisites are not satisfied"));
+                    n00bb_internal_error(
+                        core_translation_unit_diagnostics(unit), unit,
+                        (core_diag_location_t){0}, "optimizing the program",
+                        "the prerequisites of pass `%.*s` are not satisfied",
+                        (int)lowering_passes[p]->name.u8_bytes,
+                        lowering_passes[p]->name.data);
                 }
                 ok = false;
             }
         }
     }
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-passes %.3f\n",
             n00bb_profile_seconds() - profile_start);
     if (ok && dump_layout && dumps)
@@ -24141,19 +26140,17 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     for (size_t i = 0; ok && i < units.len; i++) {
         core_translation_unit_t *unit = units.data[i];
         ir_module_t *module = tu_state(unit)->ir_module;
-        ir_diags_t *diagnostics = ir_diags_new_attached(
-            ir_context, nullptr, core_translation_unit_diagnostics(unit), unit);
         for (size_t f = 0; ok && f < ir_func_count(module); f++) {
             ir_func_t *function = ir_func_at(module, f);
             size_t scope = ir_analysis_scope_begin();
             bool built = ir_func_pdg(function) != nullptr;
             ir_analysis_scope_end(scope);
             if (function->n_blocks && !built) {
-                ir_diag_t *diagnostic = ir_diag_begin(diagnostics,
-                    IR_DIAG_INTERNAL, ir_module_span(module),
-                    CORE_STRING_STATIC("this lowered function"));
-                ir_diag_message(diagnostic, diagnostics,
-                    CORE_STRING_STATIC("Lantern could not construct its dependence graph"));
+                n00bb_internal_error(
+                    core_translation_unit_diagnostics(unit), unit,
+                    span_location(function->span), "analyzing the program",
+                    "could not build the dependence graph of `%.*s`",
+                    (int)function->name.u8_bytes, function->name.data);
                 ok = false;
             }
         }
@@ -24200,30 +26197,36 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         warn_unused_fields(analysis);
         warn_shared_global_races(analysis, &runtime_init.entry_functions);
         ok = diagnose_overflow(analysis);
-        ok = diagnose_ranges(analysis) && ok;
+        ok = (diagnose_ranges(analysis) && ok) || explained_by_errors(&units);
     }
-    if (ok) ok = validate_missing_returns(analysis)
-        && validate_assert_side_effects(analysis)
-        && n00bb_publish_function_summaries(analysis);
+    if (ok) {
+        bool returns = validate_missing_returns(analysis);
+        bool asserts = validate_assert_side_effects(analysis);
+        ok = ((returns && asserts) || explained_by_errors(&units))
+            && n00bb_publish_function_summaries(analysis);
+    }
     if (ok && analyze_runtime_init)
         ok = validate_uninitialized_global_reads(link, analysis,
-            &runtime_init, &init_order, &initializer_reads);
+            &runtime_init, &init_order, &initializer_reads)
+            || explained_by_errors(&units);
     core_list_free(initializer_reads);
     if (ok && analyze_runtime_init)
         ok = validate_thread_function_reads(link, analysis, &runtime_init,
-                                            true);
+                                            true)
+            || explained_by_errors(&units);
     rule_facts_end(analysis);
     if (analyze_runtime_init) runtime_init_analysis_release(&runtime_init);
-    if (getenv("N00BB_PROFILE_COMPILE"))
+    if (n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE))
         fprintf(stderr, "PROFILE lower-summaries %.3f\n",
             n00bb_profile_seconds() - profile_start);
 
-    if (ok && !build_n00bb_execution_graph(analysis, &init_order)) {
-        core_diagnostics_report(
+    if (ok && !explained_by_errors(&units)
+        && !build_n00bb_execution_graph(analysis, &init_order)) {
+        n00bb_internal_error(
             core_translation_unit_diagnostics(units.data[0]), units.data[0],
-            CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-L0048"),
-            CORE_STRING_STATIC(
-                "could not construct the execution graph from finalized initializer control flow"));
+            (core_diag_location_t){0}, "ordering module initialization",
+            "could not construct the execution graph from the initializer "
+            "control flow");
         ok = false;
     }
     core_list_free(init_order);
@@ -24248,12 +26251,11 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             core_string_t text = ir_exec_graph_print(
                 analysis->execution_graph);
             if (!text.data) {
-                core_diagnostics_report(
+                n00bb_internal_error(
                     core_translation_unit_diagnostics(units.data[0]),
-                    units.data[0], CORE_DIAG_FATAL,
-                    CORE_STRING_STATIC("N00BB-L0048"),
-                    CORE_STRING_STATIC(
-                        "the finalized execution graph failed validation while dumping"));
+                    units.data[0], (core_diag_location_t){0},
+                    "dumping the execution graph",
+                    "the execution graph failed validation");
                 ok = false;
             }
             else {

@@ -1,0 +1,67 @@
+func remainder_f64(dividend: f64, divisor: f64) -> f64 {
+    if !(dividend - dividend == 0.0) or !(divisor == divisor) or divisor == 0.0 {
+        return (dividend * divisor) / (dividend * divisor)
+    }
+    var rest: f64 = dividend
+    if rest < 0.0 {
+        rest = -rest
+    }
+    var magnitude: f64 = divisor
+    if magnitude < 0.0 {
+        magnitude = -magnitude
+    }
+    if !(magnitude - magnitude == 0.0) or rest < magnitude {
+        return dividend
+    }
+    var step: f64 = magnitude
+    while step <= rest - step {
+        step = step + step
+    }
+    while true {
+        if rest >= step {
+            rest = rest - step
+        }
+        if step == magnitude {
+            break
+        }
+        step = step * 0.5
+    }
+    if dividend < 0.0 {
+        return -rest
+    }
+    return rest
+}
+
+func remainder_f32(dividend: f32, divisor: f32) -> f32 {
+    if !(dividend - dividend == 0.0) or !(divisor == divisor) or divisor == 0.0 {
+        return (dividend * divisor) / (dividend * divisor)
+    }
+    var rest: f32 = dividend
+    if rest < 0.0 {
+        rest = -rest
+    }
+    var magnitude: f32 = divisor
+    if magnitude < 0.0 {
+        magnitude = -magnitude
+    }
+    if !(magnitude - magnitude == 0.0) or rest < magnitude {
+        return dividend
+    }
+    var step: f32 = magnitude
+    while step <= rest - step {
+        step = step + step
+    }
+    while true {
+        if rest >= step {
+            rest = rest - step
+        }
+        if step == magnitude {
+            break
+        }
+        step = step * 0.5
+    }
+    if dividend < 0.0 {
+        return -rest
+    }
+    return rest
+}

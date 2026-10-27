@@ -1,0 +1,152 @@
+func total(items: Array['T], n: int) -> int where 'T: Has_Length {
+    if n == 0 {
+        return 0
+    }
+    return cast[int](items[n - 1].len()) + total(items, n - 1)
+}
+
+func count_down(x: 'T, n: int) -> 'T {
+    if n == 0 {
+        return x
+    }
+    return count_down(x, n - 1)
+}
+
+let words: Array[List[int]] = [[1], [1, 2], [1, 2, 3]]
+require total(words, 3) == 6
+require count_down(7, 5) == 7
+require count_down("s", 3) == "s"
+
+object Box { value: int }
+object OtherBox { value: int }
+
+func append(self: Box, value: int) {
+    self.value = value
+}
+
+func append(self: OtherBox, value: int) {
+    self.value = value + 1
+}
+
+func put_in(modify values: 'L, value: 'T)
+            where 'L: Appendable {
+    values.append(value)
+}
+
+func put_in_typecase(modify values: 'L, value: 'T) {
+    typecase values {
+        case Appendable { values.append(value) }
+        else { require false }
+    }
+}
+
+func put_in_unconstrained(modify values: 'L, value: 'T) {
+    values.append(value)
+}
+
+var box: Box = (value = 0)
+put_in(box, 9)
+require box.value == 9
+put_in_typecase(box, 11)
+require box.value == 11
+put_in_unconstrained(box, 13)
+require box.value == 13
+var other: OtherBox = (value = 0)
+put_in(other, 9)
+require other.value == 10
+put_in_typecase(other, 11)
+require other.value == 12
+put_in_unconstrained(other, 13)
+require other.value == 14
+
+func echo(value: (int | string)) {
+    return value
+}
+
+func is_string(value: (int | string)) -> bool {
+    typecase value {
+        case string { return true }
+        else { return false }
+    }
+}
+
+require echo("hello") == "hello"
+require echo(7) == 7
+require is_string("hello")
+require !is_string(7)
+
+record Meter {
+    value: int
+}
+
+record Counter {
+    value: int
+}
+
+func __add(left: Meter, right: Meter) -> Meter {
+    let result: Meter = (value = left.value + right.value)
+    return result
+}
+
+func __add(left: Counter, right: Counter) -> Counter {
+    let result: Counter = (value = left.value + right.value)
+    return result
+}
+
+func combine(left: 'T, right: 'T) -> 'T where 'T: Add {
+    return left + right
+}
+
+func modulo(view left: 'T, view right: 'T) -> 'T where 'T: Remainder {
+    return left % right
+}
+
+let meter_a: Meter = (value = 2)
+let meter_b: Meter = (value = 3)
+let counter_c: Counter = (value = 11)
+let counter_d: Counter = (value = 13)
+let meter: Meter = combine(meter_a, meter_b)
+let counter: Counter = combine(counter_c, counter_d)
+let integer: int = combine(3, 4)
+require meter.value == 5
+require counter.value == 24
+require integer == 7
+require modulo(-7, 3) == -1
+require modulo(7.5, -2.0) == 1.5
+
+trait Pair_Comparable {
+    func pair_cmp(left: 'T, right: 'T) -> int
+}
+
+func compare_pair(left: 'T, right: 'T) -> int {
+    typecase left {
+        case Pair_Comparable { return left.pair_cmp(right) }
+        else { require false }
+    }
+}
+
+func has_pair_comparable(item: 'T) -> bool {
+    typecase item {
+        case Pair_Comparable { return true }
+        else { return false }
+    }
+}
+
+func compare_self(left: 'T) -> int {
+    typecase left {
+        case Pair_Comparable { return left.pair_cmp(left) }
+        else { require false }
+    }
+}
+
+record Comparable_Item { value: int }
+record Plain_Item { value: int }
+
+func pair_cmp(left: Comparable_Item, right: Comparable_Item) -> int {
+    return left.value - right.value
+}
+
+let item_a: Comparable_Item = (value = 3)
+let item_b: Comparable_Item = (value = 2)
+require compare_self(item_a) == 0
+__fd_write(2, "ok")

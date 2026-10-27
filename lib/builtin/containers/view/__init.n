@@ -1,6 +1,0 @@
-import containers.view
-
-package containers.view {
-    export containers.view.View
-    export containers.view.len
-}

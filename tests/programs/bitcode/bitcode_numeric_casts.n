@@ -7,4 +7,18 @@ assert cast[uint] positive == 3
 let negative: f64 = -3.75
 assert cast[i128] negative == -3
 assert cast[uint] -0.75 == 0
+assert cast[i8] -128.9 == -128
+assert cast[u8] 255.9 == 255
+let dividend: f64 = -7.5
+assert dividend % 2.0 == -1.5
+assert 7.5 % -2.0 == 1.5
+assert 1.0e300 % 3.0 == 0.0
+assert 1.0e308 % 5.0e-324 == 0.0
+let single: f32 = 7.5
+assert single % 2.0 == 1.5
+var rest: f64 = 7.5
+rest %= 2.0
+assert rest == 1.5
+let undefined: f64 = rest % 0.0
+assert !(undefined == undefined)
 __fd_write(2, "ok")

@@ -21,11 +21,13 @@ static bool cross_thread_nfc_hash(void)
     th_ctx *ctx = th_ctx_new();
     th_install_nfc(ctx);
     nfc_worker_t worker = {
-        .ctx = ctx, .type = th_name(ctx, CORE_STRING_STATIC("cafe\xcc\x81"))};
+        .ctx = ctx, .type = th_name(ctx, CORE_STRING_STATIC("caf\xc3\xa9"))};
     pthread_t thread;
     bool ok = pthread_create(&thread, nullptr, hash_on_worker, &worker) == 0;
     if (ok) ok = pthread_join(thread, nullptr) == 0;
-    if (ok) ok = worker.hash == th_hash(ctx, th_name(ctx, CORE_STRING_STATIC("caf\xc3\xa9")));
+    if (ok) ok = worker.hash
+        && worker.hash == th_hash(ctx, th_name(ctx, CORE_STRING_STATIC("caf\xc3\xa9")));
+    if (ok) ok = th_hash(ctx, th_name(ctx, CORE_STRING_STATIC("cafe\xcc\x81"))) == 0;
     th_ctx_free(ctx);
     return ok;
 }

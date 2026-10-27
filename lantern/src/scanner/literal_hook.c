@@ -36,7 +36,7 @@ scan_lex_literal_result_free(scan_lex_literal_result_t *result)
     core_free(result->value.data);
     core_free(result->token.data);
     core_free(result->type.data);
-    core_free(result->diagnostic.data);
+    core_free(result->problem.detail.data);
     *result = (scan_lex_literal_result_t){0};
 }
 
@@ -49,7 +49,7 @@ literal_result_dup(const scan_lex_literal_result_t *source)
     copy->value      = core_string_dup(source->value);
     copy->token      = core_string_dup(source->token);
     copy->type       = core_string_dup(source->type);
-    copy->diagnostic = core_string_dup(source->diagnostic);
+    copy->problem    = scan_problem_copy(source->problem);
     return copy;
 }
 
@@ -61,7 +61,7 @@ literal_result_copy_out(scan_lex_literal_result_t       *out,
     out->value      = core_string_dup(source->value);
     out->token      = core_string_dup(source->token);
     out->type       = core_string_dup(source->type);
-    out->diagnostic = core_string_dup(source->diagnostic);
+    out->problem    = scan_problem_copy(source->problem);
 }
 
 static void
@@ -160,7 +160,8 @@ literal_result_own(scan_lex_literal_borrowed_result_t borrowed,
         .value = core_string_dup(borrowed.borrowed_value),
         .token = core_string_dup(borrowed.borrowed_token),
         .type = core_string_dup(borrowed.borrowed_type),
-        .diagnostic = core_string_dup(borrowed.borrowed_diagnostic),
+        .problem = SCAN_PROBLEM_WITH(HOOK_MESSAGE,
+            core_string_dup(borrowed.borrowed_diagnostic)),
         .diagnostic_start = borrowed.diagnostic_start,
         .diagnostic_end = borrowed.diagnostic_end,
     };
@@ -170,13 +171,12 @@ literal_result_own(scan_lex_literal_borrowed_result_t borrowed,
         || result.diagnostic_end > spelling_bytes) {
         scan_lex_literal_result_free(&result);
         result.accepted = false;
-        result.diagnostic = core_string_dup(CORE_STRING_STATIC(
-            "literal hook returned an invalid diagnostic span"));
+        result.problem = SCAN_PROBLEM(HOOK_INVALID_SPAN);
         result.diagnostic_end = spelling_bytes;
     }
-    if (!result.accepted && !result.diagnostic.data) {
-        result.diagnostic =
-            core_string_dup(CORE_STRING_STATIC("literal hook rejected input"));
+    if (!result.accepted && result.problem.kind == SCAN_DIAG_HOOK_MESSAGE
+        && !result.problem.detail.data) {
+        result.problem = SCAN_PROBLEM(HOOK_REJECTED);
         result.diagnostic_end = spelling_bytes;
     }
     return result;

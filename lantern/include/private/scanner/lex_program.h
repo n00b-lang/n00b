@@ -50,11 +50,13 @@ typedef struct {
 
 core_list_decl(lex_term_node_t);
 core_list_decl(lex_term_edge_t);
+core_list_decl(scan_lex_issue_t);
 
 bool scan_lex_analyze_spec(const scan_lex_spec_t *spec,
                            parse_grammar_t *grammar,
                            core_string_t *error,
-                           scan_lex_issue_t **issues, size_t *issue_count);
+                           core_list_t(scan_lex_issue_t) *issues);
+void scan_lex_issues_free(core_list_t(scan_lex_issue_t) *issues);
 void scan_lex_register_output_terminals(const scan_lex_spec_t *spec,
                                         parse_grammar_t *grammar);
 
@@ -103,8 +105,7 @@ struct scan_lex_t {
     bool         ident_enabled;
     bool         number_enabled;
     scan_unicode_profile_t *identifier_profile;
-    scan_lex_issue_t       *issues;
-    size_t                  issue_count;
+    core_list_t(scan_lex_issue_t) issues;
 
     int32_t tid_newline;
     int32_t tid_indent;

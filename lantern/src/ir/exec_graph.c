@@ -4,6 +4,7 @@
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/exec_graph.h"
+#include "ir/text.h"
 #include "lib/buffer.h"
 #include "lib/list.h"
 
@@ -1047,8 +1048,8 @@ ir_exec_graph_print(const ir_exec_graph_t *graph)
                    result->target_global->name);
         core_buffer_puts(buffer, " type=");
         core_buffer_append_string(buffer,
-                                  th_print(ir_ctx_types(graph->ctx),
-                                           result->type));
+                                  ir_types_text(ir_ctx_types(graph->ctx),
+                                                result->type));
         core_buffer_puts(buffer, "\n");
     }
     return core_buffer_take_string(buffer);

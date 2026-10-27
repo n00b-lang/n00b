@@ -51,7 +51,7 @@ typedef enum : uint8_t {
 
 typedef enum : uint8_t {
     IR_OPD_VALUE,
-    IR_OPD_SPREAD, /* Call-only expansion of a bound rest parameter. */
+    IR_OPD_SPREAD,
     IR_OPD_TYPE,
     IR_OPD_NAME,
     IR_OPD_BLOCK,
@@ -399,7 +399,6 @@ typedef enum : uint8_t {
 
 core_string_t ir_mutability_name(ir_mutability_t m);
 bool        ir_mutability_from_name(core_string_t s, ir_mutability_t *out);
-/* Functions default to runtime. Phase is retained as ordinary IR metadata. */
 bool        ir_func_set_execution_phase(ir_ctx_t *ctx, ir_func_t *function,
                                         ir_execution_phase_t phase);
 ir_execution_phase_t ir_func_execution_phase(const ir_func_t *function);
@@ -409,8 +408,6 @@ bool ir_func_is_initializer(const ir_func_t *function);
 bool ir_func_set_always_inline(ir_ctx_t *ctx, ir_func_t *function,
                                bool enabled);
 bool ir_func_is_always_inline(const ir_func_t *function);
-/* Per-binding phase facts are ordinary metadata and survive IR text round
- * trips. Missing metadata preserves legacy unrestricted access. */
 bool ir_value_set_phase_access(ir_ctx_t *ctx, ir_value_t *value,
                                ir_phase_access_t available,
                                ir_phase_access_t mutable_in,
@@ -419,24 +416,17 @@ bool ir_value_can_read(const ir_value_t *value, ir_execution_phase_t phase);
 bool ir_value_can_write(const ir_value_t *value, ir_execution_phase_t phase);
 bool ir_value_can_initialize(const ir_value_t *value,
                              ir_execution_phase_t phase);
-/* A foreign allocator result owns writable storage outside IR bindings. */
 bool ir_value_set_external_writable_storage(ir_ctx_t *ctx, ir_value_t *value);
 bool ir_value_has_external_writable_storage(const ir_value_t *value);
-/* Indirect access is an effect contract on a reference value, distinct from
- * its by-value IR type and from the identity of storage it may target. */
 bool ir_value_set_indirect_access(ir_ctx_t *ctx, ir_value_t *value,
                                   ir_indirect_access_t access);
 ir_indirect_access_t ir_value_indirect_access(const ir_value_t *value);
-/* Marks a binding whose lexical lifetime is re-entered at a loop header. */
 bool ir_value_set_binding_reentry(ir_value_t *value,
                                   ir_block_t *loop_header);
-/* The existing global mutability is the runtime contract. */
 bool        ir_global_set_comptime_mutability(ir_ctx_t *ctx,
                                               ir_global_t *global,
                                               ir_mutability_t mutability);
 ir_mutability_t ir_global_comptime_mutability(const ir_global_t *global);
-/* Phase access is independent of mutability and initialization eligibility.
- * Unannotated globals retain legacy availability in every phase. */
 bool ir_global_set_phase_access(ir_ctx_t *ctx, ir_global_t *global,
                                 ir_phase_access_t available,
                                 ir_phase_access_t mutable_in,
@@ -551,14 +541,9 @@ void         ir_module_set_target(ir_module_t *m, core_string_t target);
 
 th_type *ir_type_intern(ir_module_t *m, th_type *t);
 th_type *ir_type_parse(ir_module_t *m, core_string_t text);
-/* Returns the return type for an infallible callable, or a context-wide
- * tagged outcome type with `ok` and `error` arms for a callable with a
- * non-void error channel. */
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
 size_t   ir_call_output_count(th_type *callable);
 th_type *ir_call_output_type(th_type *callable, size_t output_index);
-/* Closed types use structural hashes; open types also retain context-local
- * free-variable identities and may change after unification. */
 uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
@@ -580,33 +565,21 @@ ir_origin_t *ir_origin_new(ir_ctx_t *ctx, ir_origin_kind_t kind,
 uint32_t     ir_origin_depth(const ir_origin_t *o);
 
 ir_global_t *ir_global_add(ir_module_t *m, core_string_t name, th_type *type);
-/* Relate a module-local global declaration to its canonical cross-module
- * identity. The identity root must have the same name and type. */
 bool ir_global_set_identity(ir_ctx_t *ctx, ir_global_t *global,
                             ir_global_t *identity);
 ir_global_t *ir_global_identity(const ir_global_t *global);
 ir_module_t *ir_global_owner(const ir_global_t *global);
-/* Set a global's static initializer from length-delimited string bytes. */
 bool ir_global_set_string_initializer(ir_module_t *m, ir_global_t *global,
                                      core_string_t bytes);
-/* Returns an address for a module-owned global. A foreign canonical global
- * may be used when this module declares a same-name, same-type extern. */
 ir_value_t  *ir_global_address(ir_module_t *m, ir_global_t *global);
 ir_value_t  *ir_func_address(ir_module_t *m, ir_func_t *function);
 ir_value_t  *ir_func_reference(ir_module_t *m, ir_func_t *function);
-/* Set a constant record initializer by member name. Symbol values
- * must name a function/global whose address type matches the corresponding
- * indirection member. */
 bool         ir_global_set_record_initializer(
     ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *values, size_t count);
-/* Set a recursively typed static initializer. Aggregate child nodes are
- * copied into the IR context; record and variant children name their member. */
 bool ir_global_set_static_initializer(
     ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *value);
-/* Replace a literal initializer with a typed result supplied by another
- * compilation phase. Repeating the same identifier is idempotent. */
 bool ir_global_set_phase_result_initializer(
     ir_module_t *m, ir_global_t *global, core_string_t identifier);
 bool ir_global_materialize_phase_result(
@@ -620,8 +593,6 @@ ir_global_t *ir_global_at(ir_module_t *m, size_t i);
 
 ir_func_t   *ir_func_add(ir_module_t *m, core_string_t name, th_type *type,
                          ir_linkage_t linkage);
-/* Copy a function's graph into its module while substituting type variables.
- * Analyses depending on value identity must be rerun for the copy. */
 ir_func_t   *ir_func_clone_replacing(ir_func_t *source, core_string_t name,
                                     const th_type *const *from,
                                     th_type *const *to, size_t count,
@@ -631,9 +602,7 @@ ir_func_t   *ir_func_clone_into(ir_func_t *source, ir_module_t *module,
                                 th_type *const *to, size_t count,
                                 core_string_t *failure);
 ir_func_t   *ir_func_find(ir_module_t *m, core_string_t name);
-/* Preserve a universally quantified callable contract separately from the
- * function's IR parameter/result shape. Calls instantiate this contract per
- * use; the contract itself is never refined by a call. */
+bool         ir_func_discard_body(ir_func_t *function);
 bool         ir_func_set_callable_contract(ir_func_t *function,
                                            th_type *contract);
 th_type     *ir_func_callable_contract(const ir_func_t *function);
@@ -653,6 +622,7 @@ ir_local_t  *ir_local_add(ir_func_t *f, core_string_t name, th_type *type);
 bool         ir_local_set_source_name(ir_func_t *f, ir_local_t *local,
                                       core_string_t name);
 core_string_t ir_local_display_name(const ir_local_t *local);
+core_string_t ir_local_label(const ir_local_t *local);
 core_string_t ir_value_display_name(const ir_value_t *value);
 ir_local_t  *ir_local_find(ir_func_t *f, core_string_t name);
 ir_value_t  *ir_value_find(ir_func_t *f, core_string_t name);
@@ -669,52 +639,32 @@ typedef struct {
 } ir_alias_target_t;
 typedef bool (*ir_store_target_visitor_fn)(void *context,
                                            ir_value_t *target);
-/* Attach a complete or partial set of known storage aliases to a value that
- * may refer to external storage, including non-pointer views. The matching
- * reverse edges are added to each target. */
 bool ir_value_set_alias_targets(ir_ctx_t *ctx, ir_value_t *value,
                                 const ir_alias_target_t *targets,
                                 size_t target_count, bool complete);
-/* Add a newly discovered target to an alias set. Incremental additions make
- * the set partial until a later whole-analysis pass proves completeness. */
 bool ir_value_add_alias_target(ir_ctx_t *ctx, ir_value_t *value,
                                ir_alias_target_t target);
-/* Close an incrementally collected alias set once all origins are known. */
 bool ir_value_complete_alias_targets(ir_ctx_t *ctx, ir_value_t *value);
-/* Copy alias facts and reverse edges when a value-preserving projection
- * produces a new value, such as extracting a successful call result. */
 bool ir_value_copy_alias_targets(ir_ctx_t *ctx, ir_value_t *destination,
                                  const ir_value_t *source);
-/* Visits the known storage targets of an indirect store address. Returns
- * false if the target set is incomplete or the visitor stops traversal. */
 bool ir_value_visit_store_targets(const ir_value_t *address,
                                   ir_store_target_visitor_fn visitor,
                                   void *context);
-/* Visits symbolic storage origins for an indirect store address. Formal
- * parameters remain origins even when call-site alias facts are attached. */
 bool ir_value_visit_store_origins(const ir_value_t *address,
                                   ir_store_target_visitor_fn visitor,
                                   void *context);
 bool ir_value_addresses_sequence_contents(const ir_value_t *address);
-/* Returns LIVE if a direct operand use is reachable after `point`, DEAD only
- * when no reachable future use exists, and UNKNOWN for incomplete CFG facts.
- * PHI operands are conservatively treated as uses in their destination block. */
 ir_liveness_t ir_value_liveness_after(const ir_value_t *value,
                                       const ir_instr_t *point);
-/* Queries one CFG edge without merging the other successors of its source.
- * The edge must be present in the source block's terminator. */
 ir_liveness_t ir_value_liveness_on_edge(const ir_value_t *value,
                                         const ir_block_t *from,
                                         const ir_block_t *to);
-/* Extends the direct-use query over the value's complete annotated alias
- * component. Escaping or incomplete alias facts produce UNKNOWN. */
 ir_liveness_t ir_value_alias_liveness_after(const ir_value_t *value,
                                              const ir_instr_t *point);
 ir_liveness_t ir_value_alias_liveness_on_edge(const ir_value_t *value,
                                               const ir_block_t *from,
                                               const ir_block_t *to);
 typedef struct ir_liveness_query ir_liveness_query_t;
-/* Reuses alias facts while the value's IR and annotations remain unchanged. */
 ir_liveness_query_t *ir_liveness_query_new(const ir_value_t *value);
 void ir_liveness_query_free(ir_liveness_query_t *query);
 ir_liveness_t ir_liveness_query_alias_after(
@@ -736,10 +686,6 @@ typedef struct {
 } ir_lifetime_endpoint_t;
 typedef bool (*ir_lifetime_endpoint_visitor_fn)(
     void *context, ir_lifetime_endpoint_t endpoint);
-/* Visits safe last-use endpoints: an instruction point has `point` set, and
- * a branch-specific endpoint has `from` and `to` set. Unknown or escaping
- * alias facts are omitted. Returns false for an incomplete CFG or a visitor
- * that stops traversal. This does not schedule cleanup or finalization. */
 bool ir_value_visit_lifetime_endpoints(
     const ir_value_t *value, ir_lifetime_endpoint_visitor_fn visitor,
     void *context);
@@ -768,13 +714,8 @@ typedef struct {
 } ir_cleanup_range_t;
 bool ir_value_cleanup_range(const ir_value_t *value, ir_value_escape_fn escapes,
                             void *context, ir_cleanup_range_t *out);
-/* Checks alias/lifetime facts at a candidate point; does not schedule or
- * guarantee finalization or reclamation. */
 bool         ir_value_can_finalize_at(const ir_value_t *value,
                                       uint64_t point);
-/* True only when the value and its complete alias component have no
- * reachable uses after this CFG edge. This is an eligibility check, not a
- * storage-policy decision or a cleanup/finalizer scheduling operation. */
 bool         ir_value_can_finalize_on_edge(const ir_value_t *value,
                                             const ir_block_t *from,
                                             const ir_block_t *to);
@@ -790,7 +731,6 @@ bool        ir_instr_set_dest(ir_instr_t *in, core_string_t name,
 bool        ir_instr_set_fresh_dest(ir_instr_t *in, const char *prefix,
                                     th_type *type);
 bool        ir_instr_set_dest_local(ir_instr_t *in, ir_local_t *l);
-/* Storage classes are extensible names. A null class clears the request. */
 bool        ir_instr_set_storage_class(ir_instr_t *allocation,
                                        core_string_t storage_class,
                                        bool required);
@@ -816,9 +756,6 @@ bool ir_instr_set_const_bytes(ir_instr_t *instruction,
 const uint8_t *ir_instr_const_bytes(const ir_instr_t *instruction,
                                    size_t *byte_len);
 core_string_t ir_instr_const_bytes_hex(const ir_instr_t *instruction);
-/* Retain a generic call site's correlated, instantiated signature. A typed
- * generic call requires this so the IR does not re-infer from a frozen
- * universal declaration independently at each operand. */
 bool ir_instr_set_call_signature(ir_instr_t *call, th_type *signature);
 th_type *ir_instr_call_signature(const ir_instr_t *call);
 bool ir_instr_set_callback_contract(ir_instr_t *construction,
@@ -836,8 +773,6 @@ bool ir_instr_set_phase_result(ir_ctx_t *ctx, ir_instr_t *instruction,
                                core_string_t identifier);
 core_string_t ir_instr_phase_result(const ir_instr_t *instruction);
 bool        ir_instr_operand_value(ir_instr_t *in, ir_value_t *v);
-/* Append a call-only spread operand for a parameter added with
- * ir_restparam_add(). */
 bool        ir_instr_operand_spread(ir_instr_t *in, ir_value_t *v);
 bool        ir_instr_operand_local(ir_instr_t *in, ir_local_t *l);
 bool        ir_instr_operand_named(ir_instr_t *in, core_string_t name,

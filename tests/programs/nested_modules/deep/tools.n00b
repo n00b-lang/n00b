@@ -1,5 +1,0 @@
-record Answer {
-    payload: int
-}
-
-func answer(item: Answer) -> int { return item.payload }

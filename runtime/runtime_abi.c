@@ -43,6 +43,17 @@ static bool host_native_atomic128(void)
 }
 
 #define N00B_ABI_HOST_TARGET N00B_ABI_TARGET_X86_64_LINUX
+#elif defined(__linux__) && defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+
+static bool host_native_atomic128(void)
+{
+    unsigned long features = getauxval(AT_HWCAP);
+    return (features & HWCAP_ATOMICS) && (features & HWCAP_USCAT);
+}
+
+#define N00B_ABI_HOST_TARGET N00B_ABI_TARGET_ARM64_LINUX
 #elif defined(__APPLE__) && defined(__aarch64__)
 #include <sys/sysctl.h>
 
@@ -97,8 +108,8 @@ struct n00b_abi_snapshot_v1 {
     size_t named_type_capacity;
     uint32_t *module_name_slots;
     size_t module_name_capacity;
-    n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_BAKED_NODE + 1];
-    const uint8_t *table_bytes[N00B_ABI_TABLE_BAKED_NODE + 1];
+    n00bb_abi_directory_entry_t tables[N00B_ABI_TABLE_LAST + 1];
+    const uint8_t *table_bytes[N00B_ABI_TABLE_LAST + 1];
 };
 
 static _Atomic(const n00b_abi_snapshot_v1 *) current_snapshot;
@@ -169,18 +180,28 @@ registration_error(n00b_abi_error_v1 *error, uint32_t status,
 }
 
 static bool
-header_valid(const n00b_abi_header_v1 *header, uint64_t bytes)
+known_target(uint32_t target)
+{
+    return target == N00B_ABI_TARGET_X86_64_LINUX
+        || target == N00B_ABI_TARGET_ARM64_MACOS
+        || target == N00B_ABI_TARGET_X86_64_WINDOWS
+        || target == N00B_ABI_TARGET_ARM64_LINUX;
+}
+
+static bool
+header_valid(const n00b_abi_header_v1 *header, uint64_t bytes, bool host)
 {
     if (!header) return false;
     for (size_t i = 0; i < 8; i++)
         if (header->magic[i] != (uint8_t)N00B_ABI_V1_MAGIC[i]) return false;
     return header->container_version == N00B_ABI_V1_CONTAINER_VERSION
         && header->header_bytes == sizeof(*header)
-        && header->target_id == N00B_ABI_HOST_TARGET
+        && (host ? header->target_id == N00B_ABI_HOST_TARGET
+                 : known_target(header->target_id))
         && header->abi_profile_id == N00B_ABI_V1_PROFILE_ID
         && !header->feature_bits
         && !(header->cpu_profile & ~N00B_ABI_CPU_NATIVE_ATOMIC128)
-        && (!(header->cpu_profile & N00B_ABI_CPU_NATIVE_ATOMIC128)
+        && (!host || !(header->cpu_profile & N00B_ABI_CPU_NATIVE_ATOMIC128)
             || host_native_atomic128())
         && header->data_layout_profile == N00B_ABI_DATA_LAYOUT_PROFILE_V1
         && !(header->artifact_capabilities
@@ -192,14 +213,14 @@ header_valid(const n00b_abi_header_v1 *header, uint64_t bytes)
         && header->total_extent <= bytes
         && header->directory_offset >= sizeof(*header)
         && header->directory_offset <= header->total_extent
-        && header->directory_count <= N00B_ABI_TABLE_BAKED_NODE;
+        && header->directory_count <= N00B_ABI_TABLE_LAST;
 }
 
 static const n00bb_abi_directory_entry_t *
 table_for(const n00b_abi_snapshot_v1 *snapshot, uint32_t kind)
 {
     if (!snapshot || kind < N00B_ABI_TABLE_PACKAGE
-        || kind > N00B_ABI_TABLE_BAKED_NODE) return nullptr;
+        || kind > N00B_ABI_TABLE_LAST) return nullptr;
     const n00bb_abi_directory_entry_t *table = &snapshot->tables[kind];
     return table->kind ? table : nullptr;
 }
@@ -232,7 +253,7 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                           n00b_abi_error_v1 *error)
 {
     for (uint32_t kind = N00B_ABI_TABLE_PACKAGE;
-         kind <= N00B_ABI_TABLE_BAKED_NODE; kind++) {
+         kind <= N00B_ABI_TABLE_LAST; kind++) {
         const n00bb_abi_directory_entry_t *table = table_for(snapshot, kind);
         if (!table) continue;
         if (kind == N00B_ABI_TABLE_REQUIREMENT
@@ -240,7 +261,8 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
             return invalid_record(error, kind, 0, table->file_offset);
         if (kind == N00B_ABI_TABLE_U32_STREAM
             || kind == N00B_ABI_TABLE_U64_STREAM
-            || kind == N00B_ABI_TABLE_BYTE_STREAM) continue;
+            || kind == N00B_ABI_TABLE_BYTE_STREAM
+            || kind == N00B_ABI_TABLE_SUMMARY_STREAM) continue;
         if (!table->record_count)
             return invalid_record(error, kind, 0, table->file_offset);
         if (kind != N00B_ABI_TABLE_TYPE) {
@@ -2604,7 +2626,7 @@ snapshot_contents_valid(n00b_abi_snapshot_v1 *candidate,
 
 static uint32_t
 prepare_image(const n00b_abi_image_descriptor_v1 *image,
-              bool validate_contents, n00b_abi_snapshot_v1 **out,
+              bool validate_contents, bool host, n00b_abi_snapshot_v1 **out,
               n00b_abi_error_v1 *error)
 {
     if (error) *error = (n00b_abi_error_v1){0};
@@ -2615,7 +2637,7 @@ prepare_image(const n00b_abi_image_descriptor_v1 *image,
         || image->metadata_bytes > SIZE_MAX)
         return registration_error(error, N00B_ABI_BAD_ARGUMENT, 0, 0, 0);
     const n00b_abi_header_v1 *header = image->metadata;
-    if (!header_valid(header, image->metadata_bytes)
+    if (!header_valid(header, image->metadata_bytes, host)
         || (uintptr_t)header % header->required_alignment)
         return registration_error(error, N00B_ABI_BAD_METADATA, 0, 0, 0);
     n00b_abi_snapshot_v1 *candidate = snapshot_alloc(sizeof(*candidate));
@@ -2626,14 +2648,14 @@ prepare_image(const n00b_abi_image_descriptor_v1 *image,
     size_t schema_count = 0;
     const n00bb_abi_table_schema_t *schemas =
         n00bb_abi_v1_table_schemas(&schema_count);
-    n00bb_abi_directory_entry_t directory[N00B_ABI_TABLE_BAKED_NODE];
+    n00bb_abi_directory_entry_t directory[N00B_ABI_TABLE_LAST];
     bool valid = n00bb_abi_directory_validate(candidate->metadata,
         (size_t)candidate->metadata_bytes, sizeof(*header),
         header->directory_offset, header->directory_count,
         header->total_extent, schemas, schema_count, false, directory);
     for (uint32_t i = 0; valid && i < header->directory_count; i++) {
         const n00bb_abi_directory_entry_t *entry = &directory[i];
-        if (entry->kind > N00B_ABI_TABLE_BAKED_NODE
+        if (entry->kind > N00B_ABI_TABLE_LAST
             || candidate->tables[entry->kind].kind) valid = false;
         else {
             n00bb_abi_directory_entry_t *target =
@@ -2669,7 +2691,7 @@ n00b_abi_v1_validate_image(const n00b_abi_image_descriptor_v1 *image,
                            n00b_abi_error_v1 *error)
 {
     n00b_abi_snapshot_v1 *candidate = nullptr;
-    uint32_t status = prepare_image(image, true, &candidate, error);
+    uint32_t status = prepare_image(image, true, false, &candidate, error);
     if (candidate) snapshot_candidate_free(candidate);
     return status;
 }
@@ -2680,8 +2702,8 @@ register_image(const n00b_abi_image_descriptor_v1 *image,
                n00b_abi_error_v1 *error)
 {
     n00b_abi_snapshot_v1 *candidate = nullptr;
-    uint32_t status = prepare_image(image, validate_contents, &candidate,
-                                    error);
+    uint32_t status = prepare_image(image, validate_contents, true,
+                                    &candidate, error);
     if (status != N00B_ABI_OK) return status;
     while (atomic_flag_test_and_set_explicit(&registration_lock,
                                             memory_order_acquire)) {}

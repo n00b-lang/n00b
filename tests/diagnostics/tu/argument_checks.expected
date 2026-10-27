@@ -1,0 +1,9 @@
+tests/diagnostics/tu/argument_checks.n:5:3: error N00B-T0005: parameter 1 (`x`) of `s` is `i16`, but this argument is `{unsigned integer}`
+  tests/diagnostics/tu/argument_checks.n:1:6: note: `s` is declared here
+tests/diagnostics/tu/argument_checks.n:11:14: error N00B-T0005: parameter 1 (`cache_kb`) of `take` is `u32?`, but this argument is `string`
+  tests/diagnostics/tu/argument_checks.n:6:6: note: `take` is declared here
+tests/diagnostics/tu/argument_checks.n:20:10: error N00B-T0015: `c` is an `in` parameter, so it cannot be passed to a `consume` parameter
+  tests/diagnostics/tu/argument_checks.n:19:11: note: `c` is declared here
+  help: pass a copy, or declare `c` as `consume`
+tests/diagnostics/tu/argument_checks.n:28:17: error N00B-T0016: this value is reached through `view` parameter `c`, so it can only be passed to a `view` parameter
+  tests/diagnostics/tu/argument_checks.n:27:21: note: `c` is declared here

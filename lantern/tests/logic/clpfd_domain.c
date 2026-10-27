@@ -6,10 +6,6 @@
 #define ASSERT(expr) check(#expr, (expr))
 #define ASSERT_EQ(a, b) check(#a " == " #b, (a) == (b))
 
-// ============================================================================
-// Construction
-// ============================================================================
-
 TEST(test_extreme_interval_size)
 {
     core_csp_domain_t full = core_csp_dom_range(INT64_MIN, INT64_MAX);
@@ -69,22 +65,16 @@ TEST(test_empty)
 
     core_csp_dom_free(&d);
 
-    // Invalid range should also be empty.
     core_csp_domain_t d2 = core_csp_dom_range(10, 5);
     ASSERT(core_csp_dom_is_empty(&d2));
     core_csp_dom_free(&d2);
 }
-
-// ============================================================================
-// from_values construction
-// ============================================================================
 
 TEST(test_from_values_contiguous)
 {
     int64_t vals[] = {3, 1, 2, 4, 5};
     core_csp_domain_t d = core_csp_dom_from_values(vals, 5);
 
-    // Should be promoted to interval.
     ASSERT(core_csp_domain_is_type(d, core_csp_dom_interval_t));
     ASSERT_EQ(core_csp_dom_min(&d), 1);
     ASSERT_EQ(core_csp_dom_max(&d), 5);
@@ -118,10 +108,6 @@ TEST(test_from_values_dedup)
     core_csp_dom_free(&d);
 }
 
-// ============================================================================
-// Clone
-// ============================================================================
-
 TEST(test_clone)
 {
     core_csp_domain_t d = core_csp_dom_range(1, 100);
@@ -133,7 +119,6 @@ TEST(test_clone)
     core_csp_dom_free(&d);
     core_csp_dom_free(&c);
 
-    // Clone a sparse domain.
     int64_t vals[] = {10, 20, 30};
     d = core_csp_dom_from_values(vals, 3);
     c = core_csp_dom_clone(&d);
@@ -144,10 +129,6 @@ TEST(test_clone)
     core_csp_dom_free(&d);
     core_csp_dom_free(&c);
 }
-
-// ============================================================================
-// Intersection
-// ============================================================================
 
 TEST(test_intersect_intervals)
 {
@@ -190,30 +171,22 @@ TEST(test_intersect_no_change)
     core_csp_dom_free(&b);
 }
 
-// ============================================================================
-// Remove value
-// ============================================================================
-
 TEST(test_remove_value)
 {
     core_csp_domain_t d = core_csp_dom_range(1, 5);
 
-    // Remove from endpoint.
     ASSERT(core_csp_dom_remove_value(&d, 1));
     ASSERT_EQ(core_csp_dom_min(&d), 2);
 
-    // Remove from other endpoint.
     ASSERT(core_csp_dom_remove_value(&d, 5));
     ASSERT_EQ(core_csp_dom_max(&d), 4);
 
-    // Remove from middle (promotes to bitset).
     ASSERT(core_csp_dom_remove_value(&d, 3));
     ASSERT_EQ((int64_t)core_csp_dom_size(&d), 2);
     ASSERT(core_csp_dom_contains(&d, 2));
     ASSERT(core_csp_dom_contains(&d, 4));
     ASSERT(!core_csp_dom_contains(&d, 3));
 
-    // Remove non-existent.
     ASSERT(!core_csp_dom_remove_value(&d, 99));
 
     core_csp_dom_free(&d);
@@ -228,10 +201,6 @@ TEST(test_remove_to_empty)
 
     core_csp_dom_free(&d);
 }
-
-// ============================================================================
-// Restrict min/max
-// ============================================================================
 
 TEST(test_restrict_min)
 {
@@ -265,13 +234,8 @@ TEST(test_restrict_max)
     core_csp_dom_free(&d);
 }
 
-// ============================================================================
-// Bitset-specific tests
-// ============================================================================
-
 TEST(test_bitset_intersect)
 {
-    // Create two bitset domains that overlap partially.
     int64_t a_vals[] = {1, 3, 5, 7};
     int64_t b_vals[] = {3, 5, 8, 10};
 
@@ -305,10 +269,6 @@ TEST(test_bitset_restrict)
 
     core_csp_dom_free(&d);
 }
-
-// ============================================================================
-// Test runner
-// ============================================================================
 
 static void
 run_tests(void)

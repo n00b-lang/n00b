@@ -23,8 +23,9 @@ static int32_t write_bytes(int32_t fd, const uint8_t *bytes, uint32_t count)
 #elif defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <io.h>
 
-enum { FIRST_DYNAMIC_FD = 3 };
+enum { FIRST_DYNAMIC_FD = 1 << 24 };
 
 static SRWLOCK fd_map_lock = SRWLOCK_INIT;
 static HANDLE *fd_handles;
@@ -86,16 +87,7 @@ static int32_t write_bytes(int32_t fd, const uint8_t *bytes, uint32_t count)
         AcquireSRWLockShared(&fd_map_lock);
         handle = slot < fd_handle_count ? fd_handles[slot] : NULL;
     }
-    else {
-        DWORD standard;
-        switch (fd) {
-        case 0: standard = STD_INPUT_HANDLE; break;
-        case 1: standard = STD_OUTPUT_HANDLE; break;
-        case 2: standard = STD_ERROR_HANDLE; break;
-        default: return -1;
-        }
-        handle = GetStdHandle(standard);
-    }
+    else handle = (HANDLE)_get_osfhandle(fd);
     DWORD written = 0;
     int32_t result = handle && handle != INVALID_HANDLE_VALUE
         && WriteFile(handle, bytes, count, &written, NULL)

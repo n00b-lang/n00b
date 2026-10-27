@@ -330,6 +330,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         entry_item ? th_ind(types, 0, entry_item) : nullptr,
         argument_item ? th_ind(types, 0, argument_item) : nullptr,
     };
+    th_type *failure_args[] = {
+        u32, u64, u64, u64, th_name(types, CORE_STRING_STATIC("string")),
+    };
     th_type *effects_subject = th_var(types);
     th_type *effects_args[] = {
         effects_subject ? th_ind(types, 0, effects_subject) : nullptr,
@@ -396,6 +399,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__os_stack_red_zone_bytes"),
             uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_frame_pointer_chain"),
+            uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_control_self"),
             uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -413,7 +419,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_cpu_relax"), nil_type, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__panic_trace"), nil_type, nullptr, 0)
+            CORE_STRING_STATIC("__report_failure"), nil_type,
+            failure_args, 5)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_map_zeroed"),
             optional_reference, map_args, 2)
@@ -491,10 +498,12 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         ? th_ind(types, 0, native_frame) : nullptr;
     th_type *native_frame_result = native_frame_reference
         ? th_option(types, native_frame_reference) : nullptr;
-    th_type *native_frame_args[] = {
-        byte_reference, byte_reference, byte_reference,
-    };
-    th_type *native_offset_args[] = {native_frame_reference, u32};
+    th_type *native_root = th_name(types,
+        CORE_STRING_STATIC("builtin.abi.Native_Frame_Root"));
+    th_type *native_root_reference = native_root
+        ? th_ind(types, 0, native_root) : nullptr;
+    th_type *native_frame_args[] = {u32};
+    th_type *native_root_args[] = {native_frame_reference, u32};
     th_type *item = th_var(types);
     th_type *reference = item ? th_ind(types, 0, item) : nullptr;
     th_type *address_args[] = {reference};
@@ -507,11 +516,13 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
             CORE_STRING_STATIC("__native_symbol_name"),
             bytes_result, baked_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__abi_native_frame_at"),
-            native_frame_result, native_frame_args, 3)
+            CORE_STRING_STATIC("__abi_native_frame_count"), u32, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__abi_native_frame_root_offset"),
-            th_name(types, CORE_STRING_STATIC("i32")), native_offset_args, 2)
+            CORE_STRING_STATIC("__abi_native_frame"),
+            native_frame_result, native_frame_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_native_frame_root"),
+            native_root_reference, native_root_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_storage_count"), u32, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -1315,6 +1326,19 @@ n00bb_binary_operator_method(core_string_t method)
         if (core_string_eq(method, n00bb_binary_operators[i].method))
             return &n00bb_binary_operators[i];
     return nullptr;
+}
+
+bool
+n00bb_trap_integer_arithmetic(ir_instr_t *instruction, ir_class_t class)
+{
+    if ((class != IR_CLASS_SINT && class != IR_CLASS_UINT)
+        || !ir_op_accepts_mod(instruction->op, CORE_STRING_STATIC("trap")))
+        return true;
+    bool divides = instruction->op == IR_OP_DIV
+        || instruction->op == IR_OP_REM;
+    return ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap"))
+        && (!divides || class != IR_CLASS_SINT
+            || ir_instr_add_mod(instruction, CORE_STRING_STATIC("trap")));
 }
 
 static bool

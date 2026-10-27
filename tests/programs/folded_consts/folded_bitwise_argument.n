@@ -1,5 +1,0 @@
-func s(x: i16) -> i16 {
-    return x
-}
-
-s(1 << 4)

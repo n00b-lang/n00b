@@ -1,9 +1,0 @@
-import cycle_trait.b
-import cycle_trait.contract
-
-record CycleWidget {
-}
-
-func echo(self: CycleWidget) -> CycleWidget {
-    return self
-}

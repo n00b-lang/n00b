@@ -1,0 +1,1 @@
+tests/diagnostics/tu/array_size_zero.n:1:23: error N00B-T0557: array size `0` must be at least 1

@@ -100,7 +100,7 @@ report_failures(const writ_model_t *model, writ_str_t output)
             writ_loc_t loc = k == 0 ? model->records.data[index].loc
                            : k == 1 ? model->slots.data[index].loc
                                     : model->consts.data[index].loc;
-            writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, loc, "the compiler's probe disagrees");
+            writ_report(session, WRIT_D_LAYOUT_TOOLCHAIN, loc, WRIT_BARE(THE_COMPILER_S_PROBE_DISAGREES));
         }
     }
 }
@@ -142,11 +142,12 @@ writ_toolchain_verify_probes(const writ_model_t *model, writ_str_t sysroot, writ
     writ_run_result_t result;
     writ_status_t status = writ_run(session, command.argv, probe, &result);
     if (status != WRIT_OK) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "cannot run %s", command.argv[0]);
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC,
+                    WRIT_MESSAGE(CANNOT_RUN, WRIT_ARG(writ_cstr(command.argv[0]))));
     } else if (result.exit_code) {
         report_failures(model, result.err);
         if (session->diags.len == first_diag) {
-            writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "%.*s", S(result.err));
+            writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, WRIT_MESSAGE(TEXT, WRIT_ARG(result.err)));
         }
     }
     *report = probe;
@@ -225,7 +226,7 @@ writ_toolchain_abi_classes(const writ_model_t *model, writ_str_t sysroot, writ_s
     writ_emit_t emit;
     writ_emit_init(&emit);
     if (writ_run(session, command.argv, abi_probe(model), &result) != WRIT_OK || result.exit_code) {
-        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, "the ABI probe does not compile: %.*s", S(result.err));
+        writ_report(session, WRIT_D_TOOLCHAIN, WRIT_NO_LOC, WRIT_MESSAGE(THE_ABI_PROBE_DOES_NOT, WRIT_ARG(result.err)));
     }
     for (uint32_t f = 0; session->diags.len == first_diag && f < model->fns.len; f++) {
         const writ_fn_rec_t *record = &model->fns.data[f];
@@ -235,7 +236,7 @@ writ_toolchain_abi_classes(const writ_model_t *model, writ_str_t sysroot, writ_s
         writ_str_t symbol = writ_sym_str(session, record->link_symbol);
         writ_str_t lowered = declaration_of(model, result.out, symbol);
         if (!lowered.length) {
-            writ_report(session, WRIT_D_TOOLCHAIN, record->loc, "the ABI probe did not declare `%.*s`", S(symbol));
+            writ_report(session, WRIT_D_TOOLCHAIN, record->loc, WRIT_MESSAGE(THE_ABI_PROBE_DID_NOT, WRIT_ARG(symbol)));
         }
         writ_emit_line(&emit, "%.*s: %.*s", S(symbol), S(lowered));
     }

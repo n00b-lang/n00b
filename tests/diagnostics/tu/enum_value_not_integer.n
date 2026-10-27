@@ -1,0 +1,2 @@
+enum Color { Red = "x", Green }
+require Color.Green != Color.Red

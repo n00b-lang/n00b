@@ -1,4 +1,0 @@
-option('lantern_prefix', type: 'string', value: '', description: 'Install prefix of the pinned lantern build')
-option('lantern_root', type: 'string', value: '', description: 'The pinned lantern workspace')
-option('resharp_root', type: 'string', value: '', description: 'The pinned resharp workspace')
-option('llvm_prefix', type: 'string', value: '', description: 'LLVM installation used for clang and its tools')

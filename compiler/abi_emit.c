@@ -5,6 +5,7 @@
 
 #include "abi_container.h"
 #include "abi_string.h"
+#include "lib/link_unit.h"
 #include "abi_constraint_rows.h"
 #include "abi_decl_index.h"
 #include "abi_declarations.h"
@@ -26,7 +27,7 @@
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/byteorder.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
 #include "lib/indexed_table.h"
@@ -334,42 +335,146 @@ build_frame_rows(n00bb_abi_function_rows_t *functions,
     return true;
 }
 
-static bool
-append_bytes(abi_frame_rows_t *frames, const void *data, size_t count)
+typedef core_string_t *summary_key_t;
+core_list_decl(summary_key_t);
+
+typedef struct {
+    uint8_t *bytes;
+    size_t byte_count;
+    n00b_abi_static_string_v1 *strings;
+    size_t string_count;
+    core_dict_t string_rows;
+    core_list_t(summary_key_t) keys;
+    n00bb_abi_name_pool_t *pool;
+    bool failed;
+} abi_summary_rows_t;
+
+typedef struct {
+    abi_summary_rows_t *rows;
+    core_list_t(uint32_t) names;
+    core_dict_t ordinals;
+    core_list_t(summary_key_t) keys;
+} abi_summary_names_t;
+
+static void
+summary_rows_release(abi_summary_rows_t *rows)
 {
-    if (frames->bitmap_count > UINT32_MAX - count) return false;
-    uint8_t *grown = core_realloc(frames->bitmap,
-                                  frames->bitmap_count + count);
+    core_free(rows->bytes);
+    core_free(rows->strings);
+    for (size_t i = 0; i < rows->keys.len; i++)
+        core_dict_string_key_free(rows->keys.data[i]);
+    core_list_free(rows->keys);
+    if (rows->string_rows.buckets) core_dict_free(&rows->string_rows);
+    *rows = (abi_summary_rows_t){0};
+}
+
+static bool
+append_summary_bytes(abi_summary_rows_t *rows, const void *data, size_t count)
+{
+    if (rows->byte_count > UINT32_MAX - count) return false;
+    uint8_t *grown = core_realloc(rows->bytes, rows->byte_count + count);
     if (!grown) return false;
-    frames->bitmap = grown;
-    memcpy(frames->bitmap + frames->bitmap_count, data, count);
-    frames->bitmap_count += count;
+    rows->bytes = grown;
+    memcpy(rows->bytes + rows->byte_count, data, count);
+    rows->byte_count += count;
     return true;
+}
+
+static uint32_t
+static_string_row(abi_summary_rows_t *rows, core_string_t text)
+{
+    bool found = false;
+    uintptr_t row = (uintptr_t)core_dict_get(&rows->string_rows, &text,
+                                              &found);
+    if (found) return (uint32_t)row;
+    n00b_abi_static_string_v1 *grown = core_realloc(rows->strings,
+        (rows->string_count + 1) * sizeof(*grown));
+    core_string_t *key = core_dict_string_key_copy(text);
+    if (!grown || !key || !key->data) {
+        rows->strings = grown ? grown : rows->strings;
+        if (key) core_dict_string_key_free(key);
+        rows->failed = true;
+        return 0;
+    }
+    rows->strings = grown;
+    uint32_t index = (uint32_t)rows->string_count++;
+    rows->strings[index] = (n00b_abi_static_string_v1){0};
+    if (!n00bb_abi_name_pool_encode(rows->pool, text,
+            N00B_ABI_TABLE_STATIC_STRING, index,
+            offsetof(n00b_abi_static_string_v1, value),
+            &rows->strings[index].value)) rows->failed = true;
+    core_list_push(rows->keys, key);
+    core_dict_put(&rows->string_rows, key, index);
+    return index;
+}
+
+static uint32_t
+intern_summary_name(void *context, core_string_t text)
+{
+    abi_summary_names_t *names = context;
+    bool found = false;
+    uintptr_t ordinal = (uintptr_t)core_dict_get(&names->ordinals, &text,
+                                                  &found);
+    if (found) return (uint32_t)ordinal;
+    core_string_t *key = core_dict_string_key_copy(text);
+    if (!key || !key->data) {
+        if (key) core_dict_string_key_free(key);
+        names->rows->failed = true;
+        return 0;
+    }
+    core_list_push(names->names, static_string_row(names->rows, text));
+    core_list_push(names->keys, key);
+    core_dict_put(&names->ordinals, key, names->names.len);
+    return (uint32_t)names->names.len;
 }
 
 static bool
 append_function_summaries(n00bb_abi_function_rows_t *functions,
-                          ir_module_t *runtime, abi_frame_rows_t *frames)
+                          ir_module_t *runtime, abi_summary_rows_t *rows)
 {
     ir_summaries_t *summaries = ir_analysis_summaries();
+    core_dict_init_string(&rows->string_rows);
+    rows->keys = core_list_new(summary_key_t);
+    rows->strings = core_alloc_array(n00b_abi_static_string_v1, 1);
+    if (!rows->strings) return false;
+    rows->string_count = 1;
     for (size_t i = 1; summaries && i < functions->function_count; i++) {
         ir_func_t *function = functions->ir_functions[i];
         ir_summary_t *summary = function && function->owner == runtime
                 && function->n_blocks
             ? ir_summary_of(summaries, function) : nullptr;
+        if (!summary) continue;
+        abi_summary_names_t names = {
+            .rows = rows,
+            .names = core_list_new(uint32_t),
+            .keys = core_list_new(summary_key_t),
+        };
+        core_dict_init_string(&names.ordinals);
+        ir_summary_texts_t texts = {
+            .intern = intern_summary_name, .context = &names,
+        };
         core_buffer_t encoded = {0};
-        if (!summary || !ir_summary_encode(summary, &encoded)) {
-            core_buffer_release(&encoded);
-            continue;
-        }
+        bool ok = ir_summary_encode_with(summary, &encoded, &texts)
+            && !rows->failed;
         uint8_t zero = 0;
-        uint8_t length[4];
-        core_le_store_u32(length, (uint32_t)encoded.byte_len);
-        bool ok = (frames->bitmap_count || append_bytes(frames, &zero, 1));
-        uint32_t offset = (uint32_t)frames->bitmap_count;
-        ok = ok && append_bytes(frames, length, sizeof(length))
-            && append_bytes(frames, encoded.data, encoded.byte_len);
+        uint8_t word[4];
+        ok = ok && (rows->byte_count || append_summary_bytes(rows, &zero, 1));
+        uint32_t offset = (uint32_t)rows->byte_count;
+        core_le_store_u32(word, (uint32_t)encoded.byte_len);
+        ok = ok && append_summary_bytes(rows, word, sizeof(word))
+            && append_summary_bytes(rows, encoded.data, encoded.byte_len);
+        core_le_store_u32(word, (uint32_t)names.names.len);
+        ok = ok && append_summary_bytes(rows, word, sizeof(word));
+        for (size_t n = 0; ok && n < names.names.len; n++) {
+            core_le_store_u32(word, names.names.data[n]);
+            ok = append_summary_bytes(rows, word, sizeof(word));
+        }
         core_buffer_release(&encoded);
+        for (size_t k = 0; k < names.keys.len; k++)
+            core_dict_string_key_free(names.keys.data[k]);
+        core_list_free(names.keys);
+        core_list_free(names.names);
+        core_dict_free(&names.ordinals);
         if (!ok) return false;
         functions->functions[i].summary_offset = offset;
     }
@@ -765,8 +870,9 @@ n00bb_abi_write_object(
 static bool
 abi_unit_error(core_translation_unit_t *unit, core_string_t message)
 {
-    core_diagnostics_report(core_translation_unit_diagnostics(unit), unit,
-        CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"), message);
+    core_link_report_internal(core_translation_unit_diagnostics(unit), unit,
+        (core_diag_location_t){},
+        CORE_STRING_STATIC("writing the module's ABI description"), message);
     return false;
 }
 
@@ -997,7 +1103,7 @@ append_storage_section(const core_target_desc_t *target, uint32_t kind,
     switch (target->object_format) {
     case CORE_TARGET_OBJECT_ELF:
         name = kind == N00B_ABI_STORAGE_READ_ONLY
-            ? CORE_STRING_STATIC(".rodata.n00b_static")
+            ? CORE_STRING_STATIC(".data.rel.ro.n00b_static")
             : kind == N00B_ABI_STORAGE_WRITABLE
                 ? CORE_STRING_STATIC(".data.n00b_static")
                 : CORE_STRING_STATIC(".tdata.n00b_static");
@@ -1027,7 +1133,8 @@ append_storage_section(const core_target_desc_t *target, uint32_t kind,
         .name = name, .segment = segment,
         .bytes = (const uint8_t *)bytes->data, .size = bytes->byte_len,
         .alignment = alignment,
-        .writable = kind != N00B_ABI_STORAGE_READ_ONLY,
+        .writable = kind != N00B_ABI_STORAGE_READ_ONLY
+            || target->object_format == CORE_TARGET_OBJECT_ELF,
         .is_thread_local = kind == N00B_ABI_STORAGE_TLS,
     }));
     return true;
@@ -1188,9 +1295,7 @@ append_imported_type_requirements(
             core_buffer_printf(&message,
                 "imported type declaration '%.*s' is absent from the ABI type catalog",
                 (int)owner->name.u8_bytes, owner->name.data);
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+            abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
             return false;
@@ -1217,9 +1322,7 @@ append_imported_type_requirements(
                 unit->module.identifier.data,
                 owner->decl_node ? "present" : "missing",
                 (unsigned)owner->phases);
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+            abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
             return false;
@@ -1272,9 +1375,7 @@ append_imported_type_requirements(
                 "cannot bind imported type variables for %.*s: %.*s",
                 (int)owner->name.u8_bytes, owner->name.data,
                 (int)reason.u8_bytes, reason.data);
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+            abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
             return false;
@@ -1326,8 +1427,7 @@ imported_module_symbol(const core_link_reference_t *reference,
             symbol ? (unsigned)symbol->kind : 0);
         core_translation_unit_t *referrer =
             core_link_reference_referrer(reference);
-        core_diagnostics_report(core_translation_unit_diagnostics(referrer),
-            referrer, CORE_DIAG_ERROR, CORE_STRING_STATIC("N00BB-B0016"),
+        abi_unit_error(referrer,
             core_string_borrow(message.data, message.byte_len));
         core_buffer_release(&message);
         return false;
@@ -1515,9 +1615,7 @@ append_imported_symbol_requirements(core_link_unit_t *link,
                 "cannot describe imported %.*s.%.*s in the ABI type catalog",
                 (int)module.u8_bytes, module.data,
                 (int)symbol->name.u8_bytes, symbol->name.data);
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+            abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
             valid = false;
@@ -1555,9 +1653,7 @@ append_imported_symbol_requirements(core_link_unit_t *link,
                 (int)module.u8_bytes, module.data,
                 (int)symbol->name.u8_bytes, symbol->name.data,
                 (int)reason.u8_bytes, reason.data);
-            core_diagnostics_report(core_translation_unit_diagnostics(
-                (core_translation_unit_t *)unit), (core_translation_unit_t *)unit,
-                CORE_DIAG_FATAL, CORE_STRING_STATIC("N00BB-B0007"),
+            abi_unit_error((core_translation_unit_t *)unit,
                 core_string_borrow(message.data, message.byte_len));
             core_buffer_release(&message);
         }
@@ -1864,6 +1960,7 @@ n00bb_abi_emit_unit(
     n00bb_abi_declarations_t declaration_rows = {0};
     n00bb_abi_function_rows_t function_rows = {0};
     abi_frame_rows_t frame_rows = {0};
+    abi_summary_rows_t summary_rows = {0};
     n00bb_abi_trait_method_rows_t trait_method_rows = {0};
     n00bb_abi_constraint_rows_t constraint_rows = {0};
     n00bb_abi_storage_rows_t storage_rows = {0};
@@ -1999,9 +2096,10 @@ n00bb_abi_emit_unit(
             build_frame_rows(&function_rows, type_index, &type_rows,
                              (ir_module_t *)runtime_ir, &frame_rows))
         && ABI_STAGE("function summaries",
-            append_function_summaries(&function_rows,
-                                      (ir_module_t *)runtime_ir,
-                                      &frame_rows))
+            ((summary_rows.pool = pool),
+             append_function_summaries(&function_rows,
+                                       (ir_module_t *)runtime_ir,
+                                       &summary_rows)))
         && ABI_STAGE("trait methods",
             n00bb_abi_trait_method_rows_build(type_index, &type_rows,
                 declarations, th_ctx_environment(ir_module_types(
@@ -2446,6 +2544,10 @@ n00bb_abi_emit_unit(
         {N00B_ABI_TABLE_U32_STREAM, stream, stream_count},
         {N00B_ABI_TABLE_BYTE_STREAM, frame_rows.bitmap,
          frame_rows.bitmap_count},
+        {N00B_ABI_TABLE_STATIC_STRING, summary_rows.strings,
+         summary_rows.string_count},
+        {N00B_ABI_TABLE_SUMMARY_STREAM, summary_rows.bytes,
+         summary_rows.byte_count},
         {N00B_ABI_TABLE_INDEX_PATCH, index_patches,
          index_patches ? storage_rows.index_patch_count + 1 : 0},
     };
@@ -2719,6 +2821,7 @@ cleanup:
     n00bb_abi_trait_method_rows_release(&trait_method_rows);
     n00bb_abi_constraint_rows_release(&constraint_rows);
     frame_rows_release(&frame_rows);
+    summary_rows_release(&summary_rows);
     n00bb_abi_function_rows_release(&function_rows);
     n00bb_abi_declarations_release(&declaration_rows);
     n00bb_abi_type_signatures_release(&signature_rows);

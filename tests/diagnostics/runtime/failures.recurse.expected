@@ -1,0 +1,5 @@
+panic: stack overflow
+  --> tests/diagnostics/runtime/failures.n:86:12
+backtrace:
+  at deep (tests/diagnostics/runtime/failures.n:86:12)
+  ... the frame above repeats 126 more times

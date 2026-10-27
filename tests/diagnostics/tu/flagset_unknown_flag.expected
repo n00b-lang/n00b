@@ -1,0 +1,2 @@
+tests/diagnostics/tu/flagset_unknown_flag.n:1:36: error N00B-T0507: `Write` is not a flag declared earlier in flagset `Mode`
+  tests/diagnostics/tu/flagset_unknown_flag.n:1:43: note: `Write` is declared here, after its use

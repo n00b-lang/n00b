@@ -1,7 +1,7 @@
 #pragma once
 
 #include "compiler_module_literal.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
 #include "lib/list.h"
 
 core_list_decl(core_buffer_t);
@@ -13,6 +13,15 @@ typedef struct {
     core_string_t contents;
 } n00bb_ffi_file_t;
 
+typedef struct {
+    core_string_t            symbol;
+    core_string_t            name;
+    core_translation_unit_t *unit;
+    uint32_t                 line;
+    uint32_t                 column;
+} n00bb_ffi_symbol_t;
+
+bool             n00bb_ffi_declared_symbol(core_string_t symbol, n00bb_ffi_symbol_t *out);
 n00bb_ffi_t     *n00bb_ffi_new(void);
 void             n00bb_ffi_free(n00bb_ffi_t *ffi);
 bool             n00bb_ffi_add_contract_dir(n00bb_ffi_t *ffi, core_string_t dir);
@@ -36,4 +45,3 @@ core_string_t    n00bb_ffi_search_path_at(const n00bb_ffi_t *ffi, size_t index);
 void             n00bb_ffi_select(n00bb_ffi_t *ffi, const core_string_t *symbols, size_t count);
 bool             n00bb_ffi_compile_shims(n00bb_ffi_t *ffi, core_string_t triple, core_string_t executable_path,
                                          core_list_t(core_buffer_t) *bitcode, core_diagnostics_t *diagnostics);
-void             n00bb_remove_tree(const char *path);

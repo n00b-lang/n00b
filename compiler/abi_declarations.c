@@ -11,7 +11,6 @@
 
 core_list_decl(n00b_abi_source_location_v1);
 core_list_decl(n00b_abi_source_file_v1);
-core_list_decl(uint32_t);
 typedef const core_translation_unit_t *abi_source_unit_t;
 core_list_decl(abi_source_unit_t);
 

@@ -1,0 +1,2 @@
+flagset Mode { Read, Both = Read + Write, Write }
+let m = Mode.Read

@@ -5,7 +5,8 @@
 #include "writ/writ.h"
 #include "lib/arena.h"
 #include "lib/buffer.h"
-#include "lib/diagnostic.h"
+#include "diag/diagnostics.h"
+#include "diag/text.h"
 #include "lib/dict.h"
 #include "lib/indexed_table.h"
 #include "lib/list.h"
@@ -18,10 +19,19 @@ typedef struct {
     uint32_t end;
 } writ_loc_t;
 
-core_list_decl(uint32_t);
-
 #define WRIT_NO_LOC ((writ_loc_t){UINT32_MAX, 0, 0})
 #define S(text) (int)(text).length, (text).data
+
+static inline core_string_t
+writ_core_string(writ_str_t text)
+{
+    return (core_string_t){(char *)text.data, text.length};
+}
+
+#define WRIT_ARG(value) CORE_TEXT_STRING(writ_core_string(value))
+#define WRIT_MESSAGE(id, ...) CORE_TEXT_MESSAGE(WRIT_TEXT_##id, __VA_ARGS__)
+#define WRIT_BARE(id) CORE_TEXT_BARE(WRIT_TEXT_##id)
+#define WRIT_NO_DETAIL CORE_TEXT_BARE(WRIT_TEXT_COUNT)
 
 typedef struct {
     writ_source_kind_t    kind;
@@ -32,9 +42,10 @@ typedef struct {
 } writ_source_t;
 
 typedef struct {
-    writ_loc_t loc;
-    writ_str_t text;
-    writ_str_t extra;
+    writ_loc_t          loc;
+    writ_str_t          text;
+    writ_str_t          extra;
+    core_text_message_t message;
 } writ_diag_part_t;
 
 core_list_decl(writ_diag_part_t);
@@ -42,6 +53,7 @@ core_list_decl(writ_diag_part_t);
 typedef struct {
     uint32_t                      code;
     writ_str_t                    message;
+    core_text_message_t           detail;
     writ_loc_t                    primary;
     core_list_t(writ_diag_part_t) secondary;
     core_list_t(writ_diag_part_t) suggestions;
@@ -56,13 +68,6 @@ typedef struct {
 core_list_decl(writ_source_t);
 core_list_decl(writ_diag_record_t);
 core_list_decl(writ_cleanup_t);
-
-typedef enum {
-#define WRIT_DIAG(id, code, severity, text) WRIT_D_##id,
-#include "diag_codes.def"
-#undef WRIT_DIAG
-    WRIT_D_COUNT,
-} writ_diag_code_t;
 
 typedef enum {
     WRIT_GRAMMAR_WRIT,
@@ -81,12 +86,12 @@ struct writ_session {
     writ_process_runner_t           runner;
     writ_str_t                      llvm_prefix;
     core_list_t(writ_cleanup_t)     cleanups;
-    void                           *grammars[WRIT_GRAMMAR_COUNT];
     core_list_t(uint32_t)           contract_dirs;
     core_list_t(uint32_t)           env_contract_dirs;
 };
 
-writ_str_t writ_find_contract(writ_session_t *session, writ_str_t name);
+writ_str_t writ_find_contract(writ_session_t *session, const uint32_t *unit_dirs,
+                              size_t unit_dir_count, writ_str_t name);
 
 void      *writ_alloc(writ_session_t *session, size_t size);
 void       writ_on_session_free(writ_session_t *session, void (*release)(void *), void *object);
@@ -119,11 +124,12 @@ writ_str_t           writ_loc_text(const writ_session_t *session, writ_loc_t loc
 writ_loc_t           writ_loc_join(writ_loc_t first, writ_loc_t last);
 
 uint32_t writ_report(writ_session_t *session, writ_diag_code_t code, writ_loc_t loc,
-                     const char *format, ...);
+                     core_text_message_t detail);
 void     writ_report_label(writ_session_t *session, uint32_t diag, writ_loc_t loc,
-                           writ_str_t label);
+                           core_text_message_t label);
 void     writ_report_suggest(writ_session_t *session, uint32_t diag, writ_loc_t loc,
-                             writ_str_t replacement, writ_str_t description);
+                             writ_str_t replacement, core_text_message_t description);
+writ_str_t writ_message_text(writ_session_t *session, core_text_message_t message);
 bool     writ_session_failed(const writ_session_t *session);
 void     writ_diag_flush(writ_session_t *session, size_t from);
 

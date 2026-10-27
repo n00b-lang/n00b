@@ -1,6 +1,7 @@
 
 #include "scanner/scanner.h"
-#include "scanner/token_stream.h"
+#include "diag/text.h"
+#include "private/scanner/token_stream.h"
 #include "private/parse/grammar.h"
 #include <assert.h>
 #include <string.h>
@@ -186,6 +187,15 @@ scan_scanner_new(core_buffer_t                *buf,
     return s;
 }
 
+static void
+clear_recoveries(parse_scanner_t *s)
+{
+    for (size_t i = 0; i < core_list_len(s->recoveries); i++) {
+        core_free(s->recoveries.data[i].problem.detail.data);
+    }
+    core_list_clear(s->recoveries);
+}
+
 void
 scan_scanner_free(parse_scanner_t *s)
 {
@@ -196,6 +206,8 @@ scan_scanner_free(parse_scanner_t *s)
     parse_trivia_free(s->pending_leading);
     parse_trivia_free(s->pending_trailing);
     core_list_free(s->warnings);
+    clear_recoveries(s);
+    core_list_free(s->recoveries);
 
     if (s->state_free_cb) {
         s->state_free_cb(s->user_state);
@@ -312,7 +324,7 @@ scan_scanner_discard_consumed(parse_scanner_t *s)
 }
 
 void
-scan_set_incomplete(parse_scanner_t *s, core_string_t message,
+scan_set_incomplete(parse_scanner_t *s, scan_problem_t problem,
                     size_t start_byte)
 {
     if (!s || s->status == SCAN_STATUS_INVALID) {
@@ -320,14 +332,14 @@ scan_set_incomplete(parse_scanner_t *s, core_string_t message,
     }
 
     s->status            = SCAN_STATUS_INCOMPLETE;
-    s->status_message    = message;
+    s->status_problem    = problem;
     s->status_lexer      = s->lexer_context;
     s->status_start_byte = s->source_base + start_byte;
     s->status_end_byte   = s->source_base + s->cursor;
 }
 
 void
-scan_set_invalid(parse_scanner_t *s, core_string_t message,
+scan_set_invalid(parse_scanner_t *s, scan_problem_t problem,
                  size_t start_byte)
 {
     if (!s || s->status == SCAN_STATUS_INVALID) {
@@ -335,22 +347,36 @@ scan_set_invalid(parse_scanner_t *s, core_string_t message,
     }
 
     s->status            = SCAN_STATUS_INVALID;
-    s->status_message    = message;
+    s->status_problem    = problem;
     s->status_lexer      = s->lexer_context;
     s->status_start_byte = s->source_base + start_byte;
     s->status_end_byte   = s->source_base + s->cursor;
 }
 
+scan_problem_t
+scan_problem_copy(scan_problem_t problem)
+{
+    return (scan_problem_t){problem.kind, core_string_dup(problem.detail)};
+}
+
 void
-scan_set_recovered(parse_scanner_t *s, core_string_t message,
+scan_set_recovered(parse_scanner_t *s, scan_problem_t problem,
                    size_t start_byte, size_t end_byte)
 {
     if (!s) {
         return;
     }
 
+    core_list_push(s->recoveries, ((scan_diagnostic_t){
+                                      .status = SCAN_STATUS_RECOVERED,
+                                      .problem = scan_problem_copy(problem),
+                                      .lexer = s->lexer_context,
+                                      .start_byte = s->source_base + start_byte,
+                                      .end_byte = s->source_base + end_byte,
+                                  }));
+
     if (!s->had_recovery) {
-        s->recovery_message    = message;
+        s->recovery_problem    = problem;
         s->recovery_lexer      = s->lexer_context;
         s->recovery_start_byte = s->source_base + start_byte;
         s->recovery_end_byte   = s->source_base + end_byte;
@@ -358,7 +384,7 @@ scan_set_recovered(parse_scanner_t *s, core_string_t message,
     }
 
     s->status            = SCAN_STATUS_RECOVERED;
-    s->status_message    = s->recovery_message;
+    s->status_problem    = s->recovery_problem;
     s->status_lexer      = s->recovery_lexer;
     s->status_start_byte = s->recovery_start_byte;
     s->status_end_byte   = s->recovery_end_byte;
@@ -397,7 +423,7 @@ scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out)
 
     *out = (scan_diagnostic_t){
         .status = s->status,
-        .message = s->status_message,
+        .problem = s->status_problem,
         .lexer = s->status_lexer,
         .start_byte = s->status_start_byte,
         .end_byte = s->status_end_byte,
@@ -406,7 +432,7 @@ scan_diagnostic(const parse_scanner_t *s, scan_diagnostic_t *out)
 }
 
 void
-scan_add_warning(parse_scanner_t *s, core_string_t message,
+scan_add_warning(parse_scanner_t *s, scan_problem_t problem,
                  size_t start_byte, size_t end_byte)
 {
     if (!s) {
@@ -414,7 +440,7 @@ scan_add_warning(parse_scanner_t *s, core_string_t message,
     }
 
     core_list_push(s->warnings, ((scan_warning_t){
-                                    .message = message,
+                                    .problem = problem,
                                     .start_byte = s->source_base + start_byte,
                                     .end_byte = s->source_base + end_byte,
                                 }));
@@ -452,6 +478,16 @@ scan_scanner_rewind_checks(parse_scanner_t *s, size_t to)
         }
     }
     s->warnings.len = kept;
+    kept = 0;
+    for (size_t i = 0; i < core_list_len(s->recoveries); i++) {
+        if (s->recoveries.data[i].start_byte < s->source_base + to) {
+            s->recoveries.data[kept++] = s->recoveries.data[i];
+        }
+        else {
+            core_free(s->recoveries.data[i].problem.detail.data);
+        }
+    }
+    s->recoveries.len = kept;
 }
 
 size_t
@@ -465,6 +501,19 @@ scan_warning_at(const parse_scanner_t *s, size_t index)
 {
     return s && index < core_list_len(s->warnings)
         ? &s->warnings.data[index] : nullptr;
+}
+
+size_t
+scan_recovery_count(const parse_scanner_t *s)
+{
+    return s ? core_list_len(s->recoveries) : 0;
+}
+
+const scan_diagnostic_t *
+scan_recovery_at(const parse_scanner_t *s, size_t index)
+{
+    return s && index < core_list_len(s->recoveries)
+        ? &s->recoveries.data[index] : nullptr;
 }
 
 bool
@@ -485,7 +534,7 @@ scan_scanner_append(parse_scanner_t *s, core_string_t data)
         s->buffer->byte_len - s->input_offset);
     s->at_eof            = false;
     s->status            = SCAN_STATUS_ACTIVE;
-    s->status_message    = (core_string_t){0};
+    s->status_problem    = (scan_problem_t){0};
     s->status_lexer      = (core_string_t){0};
     s->status_start_byte = 0;
     s->status_end_byte   = 0;
@@ -508,7 +557,7 @@ scan_scanner_finish(parse_scanner_t *s)
     s->append_closed = true;
     s->at_eof = false;
     s->status = SCAN_STATUS_ACTIVE;
-    s->status_message = (core_string_t){0};
+    s->status_problem = (scan_problem_t){0};
     s->status_lexer = (core_string_t){0};
     s->status_start_byte = 0;
     s->status_end_byte = 0;
@@ -538,13 +587,14 @@ scan_scanner_reset(parse_scanner_t *s)
     s->at_eof   = false;
     s->checked_to = 0;
     core_list_clear(s->warnings);
+    clear_recoveries(s);
     s->status   = SCAN_STATUS_ACTIVE;
-    s->status_message = (core_string_t){0};
+    s->status_problem = (scan_problem_t){0};
     s->status_lexer = (core_string_t){0};
     s->status_start_byte = 0;
     s->status_end_byte = 0;
     s->had_recovery = false;
-    s->recovery_message = (core_string_t){0};
+    s->recovery_problem = (scan_problem_t){0};
     s->recovery_lexer = (core_string_t){0};
     s->recovery_start_byte = 0;
     s->recovery_end_byte = 0;
@@ -926,19 +976,7 @@ emit_token(parse_scanner_t *s, int32_t tid,
 
     parse_token_stream_t *ts = s->stream;
 
-    if (ts->token_count >= ts->token_cap) {
-        int32_t new_cap = ts->token_cap ? ts->token_cap * 2 : 128;
-        parse_token_info_t **new_tokens = core_alloc_array(parse_token_info_t *, new_cap);
-
-        if (ts->tokens && ts->token_count > 0) {
-            memcpy(new_tokens, ts->tokens,
-                   (size_t)ts->token_count * sizeof(parse_token_info_t *));
-        }
-
-        core_free(ts->tokens);
-        ts->tokens    = new_tokens;
-        ts->token_cap = new_cap;
-    }
+    scan_stream_reserve_tokens(ts, (size_t)ts->token_count + 1);
 
     parse_token_info_t *tok = parse_token_new();
 
@@ -1253,4 +1291,23 @@ scan_prev_token(parse_scanner_t *s)
     }
 
     return s->stream->tokens[s->stream->token_count - 1];
+}
+
+static const core_text_form_t scan_forms[] = {
+#define SCAN_DIAG(id, text) \
+    {CORE_STRING_STATIC(text), CORE_STRING_STATIC(text)},
+#include "scanner/scan_diags.def"
+#undef SCAN_DIAG
+};
+
+static const core_text_catalog_t scan_catalog = {
+    .forms = scan_forms,
+    .count = SCAN_DIAG_COUNT,
+};
+
+core_string_t
+scan_problem_text(scan_problem_t problem)
+{
+    return core_text_render(&scan_catalog, problem.kind,
+                            CORE_TEXT_ARGS(CORE_TEXT_STRING(problem.detail)));
 }

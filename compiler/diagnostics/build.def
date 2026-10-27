@@ -1,0 +1,100 @@
+N00B_DIAG(OUTPUT_NOT_WRITABLE, "N00B-B0100", ERROR,
+    "an output file cannot be written",
+    "The compiler writes the executable (or other output) to the path given\n"
+    "with `--output`, or next to the input by default. The message names the\n"
+    "path and the reason the operating system gave: a directory that does\n"
+    "not exist, missing permission, or a directory where a file should go.")
+N00B_DIAG(LINKER_NOT_FOUND, "N00B-B0101", ERROR,
+    "there is no linker to build the executable with",
+    "n00b links executables with clang. Install LLVM, or set N00B_CLANG to\n"
+    "a clang executable. `n00b env` shows which clang this toolchain uses.")
+N00B_DIAG(LINKER_START_FAILED, "N00B-B0102", ERROR,
+    "the linker cannot be started",
+    "The linker named in the message exists in the configuration but could\n"
+    "not run. Check N00B_CLANG, or reinstall LLVM; `n00b env` shows the\n"
+    "linker this toolchain uses.")
+N00B_DIAG(UNDEFINED_NATIVE_SYMBOL, "N00B-B0103", ERROR,
+    "the program calls a native function that nothing being linked defines",
+    "A foreign function declared in an 'ffi literal must be supplied by a\n"
+    "native library or object at link time. Name the library in the 'ffi\n"
+    "literal, or pass the object or archive that defines it with\n"
+    "`--link-object <file>`.")
+N00B_DIAG(LINK_FAILED, "N00B-B0104", ERROR,
+    "the linker fails to produce the executable",
+    "The linker reported an error other than a missing symbol, or stopped\n"
+    "abnormally. Its output and the full link command are shown as notes.")
+N00B_DIAG(START_SIGNATURE, "N00B-B0105", ERROR,
+    "the program's `start` function has the wrong signature",
+    "An executable begins at `start` in the root module, which takes no\n"
+    "parameters and returns nothing:\n"
+    "    func start() -> nil {\n"
+    "    }\n"
+    "Report failure by raising or panicking rather than returning a value.")
+N00B_DIAG(RUNTIME_LIBRARY_MISSING, "N00B-B0106", ERROR,
+    "the n00b runtime library is missing from the toolchain",
+    "Every executable links against the runtime library that ships with the\n"
+    "toolchain. It was not found where `n00b env` says it should be;\n"
+    "reinstall the toolchain, or rebuild the checkout.")
+N00B_DIAG(SAME_MODULE_TWO_FILES, "N00B-N1500", ERROR,
+    "one module name resolves to two different files",
+    "Every module name must identify exactly one source file. Two package\n"
+    "roots (the current directory, N00B_PATH entries, the standard library)\n"
+    "can each hold a file for the same name; remove or rename one copy.")
+N00B_DIAG(CONFLICTING_DECLARATIONS, "N00B-N1502", ERROR,
+    "two declarations of one name disagree",
+    "Declarations of the same name in a module must agree on what kind of\n"
+    "thing it is, its visibility and its signature. The message names the\n"
+    "property that differs.")
+N00B_DIAG(UNRESOLVED_DECLARATION, "N00B-N1503", ERROR,
+    "a use refers to a name that no module in the program provides",
+    "The name was expected in the module shown, but nothing linked into the\n"
+    "program declares it. Check the module's exports, or link the\n"
+    "interface that provides it.")
+N00B_DIAG(MODULE_SUPPLIED_TWICE, "N00B-N1504", ERROR,
+    "a module is supplied to the build twice",
+    "A module can come from source or from a linked interface\n"
+    "(`--link-interface`), but only once.")
+N00B_DIAG(STALE_DESCRIPTION, "N00B-N1505", ERROR,
+    "a module description was written by a different compiler version",
+    "Linked interfaces and cached build products carry a format version.\n"
+    "Rebuild the interface with this compiler, or run `n00b cache clean`.")
+N00B_DIAG(NATIVE_LIBRARY_MISSING, "N00B-F0001", ERROR,
+    "a native library named by an 'ffi literal cannot be found",
+    "The linker could not find the library the 'ffi literal asks for. Install\n"
+    "it, or add its directory to the literal's search paths so the linker can\n"
+    "find it.")
+N00B_DIAG(RUST_TRANSPORT_UNAVAILABLE, "N00B-F0002", ERROR,
+    "an 'ffi literal needs Rust transports, which this n00b was built without",
+    "Some foreign interfaces are reached through a generated Rust crate.\n"
+    "Rebuild n00b with N00B_RUST=1 to enable them.")
+N00B_DIAG(TRANSPORT_CACHE_UNAVAILABLE, "N00B-F0003", ERROR,
+    "there is no cache directory to build an 'ffi literal's Rust crate in",
+    "The generated Rust crate is built and kept in the n00b cache. Set\n"
+    "N00B_CACHE to a writable directory.")
+N00B_DIAG(TRANSPORT_BUILD_FAILED, "N00B-F0004", ERROR,
+    "the Rust crate generated for an 'ffi literal fails to build",
+    "cargo could not build the transport crate. The message names the log\n"
+    "with cargo's output; the usual causes are a missing Rust toolchain or a\n"
+    "network failure while fetching dependencies.")
+N00B_DIAG(SHIM_COMPILE_FAILED, "N00B-F0005", ERROR,
+    "the C code generated for an 'ffi literal fails to compile",
+    "Foreign calls go through small C shims compiled with clang against the\n"
+    "headers the 'ffi literal names. The headers must be found and must\n"
+    "declare what the literal describes; clang's own messages are printed\n"
+    "just before this one.")
+N00B_DIAG(PROVIDED_FUNCTION_MISSING, "N00B-F0006", ERROR,
+    "an 'ffi binding provides a function that does not exist",
+    "A `provide` line in an 'ffi binding names the n00b function that\n"
+    "implements a callback, as `module.function`. That function must exist\n"
+    "and have a body:\n"
+    "    provide nth_sorted.compare = \"sorting.descending\"")
+N00B_DIAG(NATIVE_ROOT_MISSING, "N00B-B0107", ERROR,
+    "`--native-root` names a function that does not exist",
+    "`--native-root NAME=module.function` exports an existing n00b\n"
+    "function under a C symbol name. The function must exist in the\n"
+    "program and have a body.")
+N00B_DIAG(LINKER_WARNING, "N00B-B0108", WARNING,
+    "the linker warns about the executable it produced",
+    "The link succeeded, but the linker printed a warning, often about a\n"
+    "native library built for a different platform version or a duplicate\n"
+    "library on the link line. The linker's text is shown as the message.")

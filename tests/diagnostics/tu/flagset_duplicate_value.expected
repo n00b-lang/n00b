@@ -1,0 +1,2 @@
+tests/diagnostics/tu/flagset_duplicate_value.n:1:29: error N00B-T0509: `Again` has the same value as `Read`; each flagset value must be distinct
+  tests/diagnostics/tu/flagset_duplicate_value.n:1:16: note: `Read` is declared here

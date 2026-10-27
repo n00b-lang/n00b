@@ -23,6 +23,7 @@
 <qualified-name> @nospace ::= %IDENTIFIER (%"." <name-segment>)*
 <qualified-name> @nospace ::= %"set" (%"." <name-segment>)*
 <qualified-name> @nospace ::= %"dict" (%"." <name-segment>)*
+<qualified-name> @nospace ::= %"view" (%"." <name-segment>)*
 
 <name-segment> ::= %IDENTIFIER | %"set" | %"dict" | %"variant" | %"forall"
                  | %"bitint" | %"ubitint" | %"i" | %"u" | %"bits" | %"ptr"

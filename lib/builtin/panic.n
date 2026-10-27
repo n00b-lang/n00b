@@ -1,8 +1,23 @@
-import string.core
+private const failure_panic: u32 = 0
+private const failure_index: u32 = 4
+private const failure_range: u32 = 23
+private const failure_os: u32 = 24
 
 func panic(message: string) {
-    string.core.__fd_write(2, "panic: ")
-    string.core.__fd_write(2, message)
-    string.core.__fd_write(2, "\n")
-    __panic_trace()
+    __report_failure(failure_panic, 0, 0, 0, message)
+}
+
+func index_out_of_range(index: int, length: uint, container: string) {
+    __report_failure(failure_index, unsafe_cast[u64] index, length, 0,
+                     container)
+}
+
+func range_out_of_bounds(start: int, end: int, length: uint,
+                         container: string) {
+    __report_failure(failure_range, unsafe_cast[u64] start,
+                     unsafe_cast[u64] end, length, container)
+}
+
+func os_failure(message: string, code: int) {
+    __report_failure(failure_os, unsafe_cast[u64] code, 0, 0, message)
 }

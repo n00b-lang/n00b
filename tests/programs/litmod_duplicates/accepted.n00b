@@ -1,0 +1,12 @@
+import provider
+import alias_pkg
+import alias_only_pkg
+
+int litmod stamp(repr: string) -> string fail: string {
+    return repr
+}
+
+require 7'stamp == "7"
+require "x"'shown == 1
+require "x"'only == 1
+__fd_write(2, "ok")
