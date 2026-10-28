@@ -498,15 +498,8 @@ resolve_inferred_field_references(core_link_unit_t *link,
                     continue;
                 }
                 if (n00bb_assignment_target(analysis->grammar, node,
-                                            nullptr)) {
-                    core_diagnostics_t *diagnostics =
-                        core_translation_unit_diagnostics(unit);
-                    if (n00bb_report(diagnostics, unit,
-                            N00B_DIAG_TUPLE_IMMUTABLE, n00bb_node_span(node),
-                            N00B_TEXT_TUPLE_IMMUTABLE, N00BB_NO_ARGS))
-                        n00bb_report_help(diagnostics,
-                            N00B_TEXT_TUPLE_IMMUTABLE_HELP, N00BB_NO_ARGS);
-                }
+                                            nullptr))
+                    n00bb_report_tuple_immutable(unit, n00bb_node_span(node));
                 if (!bind_resolved_field_type(unit, state, node,
                                               member_type))
                     all_resolved = false;

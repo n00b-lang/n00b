@@ -2082,12 +2082,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     ? site->dispatch_receiver_type
                     : receiver ? parse_tree_type(receiver) : nullptr;
                 if (th_is_poison(receiver_type)) continue;
-                th_type *tuple = receiver_type ? th_resolve(receiver_type)
-                                               : nullptr;
-                if (core_string_starts_with(site->dispatch_trait,
-                        CORE_STRING_STATIC("Index_"))
-                    && th_builtin_applied(tuple, TH_BUILTIN_TUPLE,
-                                          th_named_nargs(tuple))) continue;
+                if (n00bb_node_tuple_access(site->node)) continue;
                 parse_sym_entry_t *in_place = receiver_type
                     && nt_is(grammar, site->node, CORE_STRING_STATIC("binop-assign-stmt"))
                     ? resolve_in_place_method(link, unit, state, site,

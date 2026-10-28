@@ -670,6 +670,7 @@ typedef struct {
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
     core_list_t(parse_tree_ptr_t) assignment_patterns;
+    core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(n00bb_literal_constant_t) literal_constants;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;
@@ -848,7 +849,6 @@ bool semantic_static_literal_value(parse_grammar_t *grammar,
                                    n00bb_tu_state_t *state,
                                    n00bb_static_value_t *out);
 th_type *static_record_shape(n00bb_tu_state_t *state, th_type *type);
-th_type *n00bb_field_tuple(th_ctx *types, th_member *members, size_t count);
 th_type *n00bb_record_shape(n00bb_tu_state_t *state, th_type *type);
 bool n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type);
 void n00bb_report_untyped_variables(parse_grammar_t *grammar,
@@ -1305,6 +1305,9 @@ n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
 parse_tree_t *n00bb_node_record_literal_origin(parse_tree_t *node);
 bool n00bb_node_tuple_index(parse_tree_t *node, uint32_t *index);
+bool n00bb_node_tuple_access(parse_tree_t *node);
+void n00bb_report_tuple_immutable(core_translation_unit_t *unit,
+                                  core_diag_location_t location);
 th_type *n00bb_tuple_element(th_ctx *types, parse_grammar_t *grammar,
                              parse_tree_t *index, th_type *tuple, bool write,
                              void *context);

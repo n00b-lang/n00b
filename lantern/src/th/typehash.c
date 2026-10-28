@@ -1650,6 +1650,12 @@ th_type *th_array_n(th_ctx *ctx, th_type *e, uint64_t n)
     return t;
 }
 
+th_type *th_record_sorted(th_ctx *ctx, th_member *m, size_t n)
+{
+    if (n) qsort(m, n, sizeof(th_member), th_cmp_member);
+    return th_record(ctx, m, n);
+}
+
 th_type *th_record(th_ctx *ctx, const th_member *m, size_t n)
 {
     th_type *t = node(ctx, TH_RECORD);
