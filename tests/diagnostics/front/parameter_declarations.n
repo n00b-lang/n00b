@@ -1,0 +1,27 @@
+func positional_late(k: int = 1, a: int) -> int {
+    return a + k
+}
+
+func varargs_late(a: int, k: int = 1, *rest: int) -> int {
+    return a + k
+}
+
+func varargs_default(*rest: int = 5) -> int {
+    return 0
+}
+
+func modify_keyword(modify k: int = 1) -> int {
+    return k
+}
+
+func out_varargs(a: int, out *rest: int) -> int {
+    return a
+}
+
+func two_varargs(*first: int, *second: int) -> int {
+    return 0
+}
+
+func ordered(a: int, view *rest: int, k: int = 1, consume j: int = 2) -> int {
+    return a + k + j
+}

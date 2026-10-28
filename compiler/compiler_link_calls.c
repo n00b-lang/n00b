@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "call_plan.h"
 #include "compiler_link.h"
 #include "compiler_tu.h"
 #include "diagnostics.h"
@@ -67,6 +68,24 @@ n00bb_report_argument_type(core_translation_unit_t *unit, th_ctx *types,
     if (callee) n00bb_diag_declared_here(diagnostics, callee,
         N00B_TEXT_IS_DECLARED_HERE);
     add_dereference_help(diagnostics, types, actual, expected);
+}
+
+static void
+report_varargs_array(core_translation_unit_t *unit, th_ctx *types,
+                     parse_tree_t *argument, th_type *expected,
+                     parse_sym_entry_t *callee, core_string_t parameter)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t expected_text = n00bb_print_type(types, expected);
+    n00bb_report(diagnostics, unit, N00B_DIAG_CALL_ARGUMENT_TYPE,
+        n00bb_node_span(argument), N00B_TEXT_VARARGS_GIVEN_ARRAY,
+        N00BB_ARGS(ARG_TEXT(callee_display_name(callee)),
+                   ARG_TEXT(parameter)));
+    n00bb_report_label(diagnostics, N00B_TEXT_EXPECTED,
+        N00BB_ARGS(ARG_TEXT(expected_text)));
+    n00bb_report_help(diagnostics, N00B_TEXT_VARARGS_GIVEN_ARRAY_HELP,
+                      N00BB_NO_ARGS);
+    n00bb_diag_declared_here(diagnostics, callee, N00B_TEXT_IS_DECLARED_HERE);
 }
 
 void
@@ -462,7 +481,19 @@ unify_call_argument(parse_grammar_t *grammar, core_translation_unit_t *unit,
             ? n00bb_type_materialize(grammar, state, argument, actual,
                                      expected, &converted)
             : nullptr;
-        if (!materialized && core_diagnostics_count(diagnostics) == reported)
+        bool unreported = !materialized
+            && core_diagnostics_count(diagnostics) == reported;
+        n00bb_static_literal_probe_t literal = find_static_literal(grammar,
+                                                                   argument);
+        bool whole_array = th_kind_of(th_resolve(actual)) == TH_SEQUENCE
+            || (literal.valid
+                && nt_is(grammar, literal.literal,
+                         CORE_STRING_STATIC("list-lit")));
+        if (unreported && binding->rest && whole_array
+            && callee_display_name(callee).u8_bytes)
+            report_varargs_array(unit, state->types, argument, expected,
+                                 callee, binding->parameter_name);
+        else if (unreported)
             n00bb_report_argument_type(unit, state->types, argument, actual,
                 expected, callee, binding->parameter,
                 binding->parameter_name);
@@ -518,165 +549,7 @@ check_call_argument_mode(parse_grammar_t *grammar,
     n00bb_diag_declared_here(diagnostics, origin, N00B_TEXT_IS_DECLARED_HERE);
 }
 
-typedef struct {
-    parse_grammar_t *grammar;
-    core_translation_unit_t *unit;
-    parse_sym_entry_t *callee;
-    parse_tree_t *formals;
-    size_t offset;
-    size_t parameter_count;
-    bool variadic;
-} call_shape_t;
 
-static core_string_t
-parameter_name(const call_shape_t *shape, size_t index)
-{
-    core_string_t name = {0};
-    if (shape->callee)
-        (void)function_parameter_info(shape->grammar, shape->callee,
-            shape->formals, index, nullptr, &name, nullptr, nullptr);
-    return name;
-}
-
-static bool
-parameter_optional(const call_shape_t *shape, size_t index)
-{
-    uint8_t flags = 0;
-    return shape->callee
-        && function_parameter_info(shape->grammar, shape->callee,
-               shape->formals, index, nullptr, nullptr, &flags, nullptr)
-        && (flags & 1u);
-}
-
-static void
-report_arity(const call_shape_t *shape, n00bb_diag_t id,
-             core_diag_location_t at, size_t passed)
-{
-    size_t required = 0, total = 0;
-    for (size_t i = shape->offset; i < shape->parameter_count; i++) {
-        total++;
-        if (!parameter_optional(shape, i)) required++;
-    }
-    core_string_t count = n00bb_text(shape->variadic
-            ? N00B_TEXT_AT_LEAST_ARGUMENTS
-            : required == total ? N00B_TEXT_ARGUMENT_COUNT
-                                : N00B_TEXT_ARGUMENT_RANGE,
-        N00BB_ARGS(ARG_NUMBER(required == total || shape->variadic
-                                  ? required : total),
-                   ARG_NUMBER(required)));
-    core_string_t name = callee_display_name(shape->callee);
-    n00bb_report(core_translation_unit_diagnostics(shape->unit),
-        shape->unit, id, at,
-        name.u8_bytes ? N00B_TEXT_TAKES_BUT_CALL_PASSES
-                      : N00B_TEXT_FUNCTION_TAKES_BUT_CALL_PASSES,
-        N00BB_ARGS(ARG_TEXT(count), ARG_NUMBER(passed), ARG_TEXT(name)));
-    core_free(count.data);
-}
-
-static void
-report_too_many_arguments(const call_shape_t *shape,
-                          const core_list_t(n00bb_tree_ptr_t) *positional,
-                          size_t first_extra, size_t keyword_count)
-{
-    core_diagnostics_t *diagnostics =
-        core_translation_unit_diagnostics(shape->unit);
-    core_diag_location_t at = n00bb_node_span(positional->data[first_extra]);
-    core_diag_location_t last = n00bb_node_span(
-        positional->data[positional->len - 1]);
-    at.end_line = last.end_line;
-    at.end_column = last.end_column;
-    size_t extra = positional->len - first_extra;
-    report_arity(shape, N00B_DIAG_CALL_TOO_MANY_ARGUMENTS, at,
-                 positional->len + keyword_count);
-    n00bb_report_label(diagnostics, N00B_TEXT_UNEXPECTED_ARGUMENTS,
-                       N00BB_ARGS(ARG_NUMBER(extra)));
-    if (shape->callee) n00bb_diag_declared_here(diagnostics, shape->callee,
-                                                N00B_TEXT_IS_DECLARED_HERE);
-    n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_EXTRA_ARGUMENTS,
-                      N00BB_ARGS(ARG_NUMBER(extra)));
-}
-
-static void
-report_missing_arguments(const call_shape_t *shape, parse_tree_t *site,
-                         const bool *bound, size_t passed)
-{
-    core_diagnostics_t *diagnostics =
-        core_translation_unit_diagnostics(shape->unit);
-    core_list_t(core_string_t) missing = core_list_new(core_string_t);
-    for (size_t i = shape->offset; i < shape->parameter_count; i++) {
-        if (bound[i] || parameter_optional(shape, i)) continue;
-        core_string_t name = parameter_name(shape, i);
-        core_list_push(missing, name.u8_bytes
-            ? n00bb_text(N00B_TEXT_QUOTED_NAME, N00BB_ARGS(ARG_TEXT(name)))
-            : n00bb_text(N00B_TEXT_PARAMETER_NUMBER,
-                         N00BB_ARGS(ARG_NUMBER(i - shape->offset + 1))));
-    }
-    if (missing.len) {
-        report_arity(shape, N00B_DIAG_CALL_MISSING_ARGUMENT,
-                     n00bb_node_span(site), passed);
-        n00bb_report_label(diagnostics, N00B_TEXT_MISSING,
-            N00BB_ARGS(ARG_LIST(missing.data, missing.len)));
-    }
-    for (size_t i = 0; i < missing.len; i++) core_free(missing.data[i].data);
-    bool reported = missing.len != 0;
-    core_list_free(missing);
-    if (!reported) return;
-    if (shape->callee) n00bb_diag_declared_here(diagnostics, shape->callee,
-                                                N00B_TEXT_IS_DECLARED_HERE);
-}
-
-static void
-report_unknown_keyword(const call_shape_t *shape, parse_tree_t *keyword,
-                       core_string_t name)
-{
-    core_diagnostics_t *diagnostics =
-        core_translation_unit_diagnostics(shape->unit);
-    core_string_t callee = callee_display_name(shape->callee);
-    if (callee.u8_bytes)
-        n00bb_report(diagnostics, shape->unit,
-            N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
-            link_source_location(keyword), N00B_TEXT_HAS_NO_PARAMETER_NAMED,
-            N00BB_ARGS(ARG_TEXT(callee), ARG_TEXT(name)));
-    else
-        n00bb_report(diagnostics, shape->unit,
-            N00B_DIAG_CALL_UNKNOWN_NAMED_ARGUMENT,
-            link_source_location(keyword),
-            N00B_TEXT_THIS_FUNCTION_HAS_NO_PARAMETER,
-            N00BB_ARGS(ARG_TEXT(name)));
-    n00bb_report_label(diagnostics, N00B_TEXT_UNKNOWN_PARAMETER, N00BB_NO_ARGS);
-    core_list_t(core_string_t) names = core_list_new(core_string_t);
-    for (size_t i = shape->offset;; i++) {
-        core_string_t candidate = {0};
-        if (!shape->callee || !function_parameter_info(shape->grammar,
-                shape->callee, shape->formals, i, nullptr, &candidate,
-                nullptr, nullptr)) break;
-        if (candidate.u8_bytes) core_list_push(names, candidate);
-    }
-    if (!n00bb_diag_did_you_mean(diagnostics, name, names.data, names.len)
-        && names.len)
-        n00bb_report_note(diagnostics, N00B_TEXT_THE_PARAMETERS_ARE,
-            N00BB_ARGS(ARG_NAMES(names.data, names.len)));
-    core_list_free(names);
-    if (shape->callee) n00bb_diag_declared_here(diagnostics, shape->callee,
-                                                N00B_TEXT_IS_DECLARED_HERE);
-}
-
-static void
-report_repeated_argument(const call_shape_t *shape, parse_tree_t *keyword,
-                         parse_tree_t *first, core_string_t name)
-{
-    core_diagnostics_t *diagnostics =
-        core_translation_unit_diagnostics(shape->unit);
-    n00bb_report(diagnostics, shape->unit, N00B_DIAG_CALL_ARGUMENT_REPEATED,
-        link_source_location(keyword), N00B_TEXT_PARAMETER_IS_GIVEN_AN_ARGUMENT,
-        N00BB_ARGS(ARG_TEXT(name)));
-    n00bb_report_label(diagnostics, N00B_TEXT_SECOND_ARGUMENT_FOR,
-        N00BB_ARGS(ARG_TEXT(name)));
-    if (first)
-        n00bb_report_secondary(diagnostics, nullptr, n00bb_node_span(first),
-            N00B_TEXT_IS_FIRST_GIVEN_HERE,
-            N00BB_ARGS(ARG_TEXT(name)));
-}
 
 bool
 n00bb_bind_call_arguments(parse_grammar_t *grammar,
@@ -688,108 +561,38 @@ n00bb_bind_call_arguments(parse_grammar_t *grammar,
 {
     signature = signature ? th_resolve(signature) : nullptr;
     if (!signature || th_kind_of(signature) != TH_FUNCTION) return true;
-    size_t parameter_count = th_func_nparams(signature);
+    n00bb_call_plan_t plan;
+    if (!n00bb_plan_call(&plan, grammar, callee, signature, call_args,
+                         offset)) {
+        n00bb_call_plan_report(&plan, unit,
+            core_translation_unit_diagnostics(unit), site);
+        n00bb_call_plan_free(&plan);
+        return false;
+    }
     const th_param *rest = th_func_rest(signature);
-    parse_tree_t *formals = callee
-        ? callable_formal_parameters(grammar, callee) : nullptr;
-    call_shape_t shape = {
-        .grammar = grammar, .unit = unit, .callee = callee,
-        .formals = formals, .offset = offset,
-        .parameter_count = parameter_count, .variadic = rest != nullptr,
-    };
-    bool *bound = core_alloc_array(bool,
-                                   parameter_count ? parameter_count : 1);
-    parse_tree_t **supplied = core_alloc_array(parse_tree_t *,
-        parameter_count ? parameter_count : 1);
-    for (size_t i = 0; i < offset && i < parameter_count; i++)
-        bound[i] = true;
-    bool valid = true;
-    core_list_t(n00bb_tree_ptr_t) positional =
-        core_list_new(n00bb_tree_ptr_t);
-    collect_positional_nodes(grammar,
-        child_nt(grammar, call_args, CORE_STRING_STATIC("positional-args")),
-        &positional);
-    core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
-    if (callee)
-        collect_keyword_nodes(grammar,
-            child_nt(grammar, call_args, CORE_STRING_STATIC("keyword-args")),
-            &keywords);
-    for (size_t i = 0; i < positional.len; i++) {
-        size_t index = i + offset;
-        const th_param *parameter = index < parameter_count
-            ? th_func_param(signature, index) : rest;
-        if (!parameter) {
-            report_too_many_arguments(&shape, &positional, i, keywords.len);
-            valid = false;
-            break;
-        }
-        if (index < parameter_count) {
-            bound[index] = true;
-            supplied[index] = positional.data[i];
-        }
-        if (!core_tree_is_leaf(positional.data[i]))
-            core_list_push(*bindings, ((n00bb_call_binding_t){
-                positional.data[i], parameter->type, false,
-                th_mode_produces_output(parameter->mode), parameter->mode,
-                index - offset, parameter_name(&shape, index)}));
-    }
-    size_t passed = positional.len + keywords.len;
-    core_list_free(positional);
-    for (size_t i = 0; i < keywords.len; i++) {
-        parse_tree_t *keyword = keywords.data[i];
-        parse_tree_t *argument = child_nt(grammar, keyword,
-                                          CORE_STRING_STATIC("expression"));
-        core_string_t keyword_name = call_keyword_name(keyword);
+    size_t rest_position = 0;
+    for (size_t i = 0; i < n00bb_call_plan_argument_count(&plan); i++) {
         size_t index = 0;
-        th_type *expected = nullptr;
-        bool writes = false;
-        th_mode mode = TH_IN;
-        if (function_parameter_named(grammar, callee, formals,
-                keyword_name, &index)) {
-            const th_param *parameter = th_func_param(signature, index);
-            const th_kwparam *option = index >= parameter_count
-                ? th_func_kw(signature, index - parameter_count) : nullptr;
-            expected = parameter ? parameter->type
-                : option ? option->type : nullptr;
-            writes = parameter && th_mode_produces_output(parameter->mode);
-            mode = parameter ? parameter->mode : option ? option->mode : TH_IN;
-        }
-        if (!expected) {
-            report_unknown_keyword(&shape, keyword, keyword_name);
-            valid = false;
-            continue;
-        }
-        if (index < parameter_count && bound[index]) {
-            report_repeated_argument(&shape, keyword, supplied[index],
-                                     keyword_name);
-            valid = false;
-            continue;
-        }
-        if (index < parameter_count) {
-            bound[index] = true;
-            supplied[index] = keyword;
-        }
-        if (argument && !core_tree_is_leaf(argument))
-            core_list_push(*bindings, ((n00bb_call_binding_t){
-                argument, expected, true, writes, mode,
-                index >= offset ? index - offset : index, keyword_name}));
+        parse_tree_t *argument = n00bb_call_plan_argument(&plan, i, &index);
+        size_t position = index == SIZE_MAX
+            ? plan.parameter_count - offset + rest_position++ : index - offset;
+        if (!argument || core_tree_is_leaf(argument)) continue;
+        const th_param *parameter = index == SIZE_MAX ? rest
+            : index < plan.parameter_count ? th_func_param(signature, index)
+            : nullptr;
+        const th_kwparam *option = parameter ? nullptr
+            : th_func_kw(signature, index - plan.parameter_count);
+        th_mode mode = parameter ? parameter->mode : option->mode;
+        core_list_push(*bindings, ((n00bb_call_binding_t){
+            argument, parameter ? parameter->type : option->type,
+            index != SIZE_MAX && plan.slots[index].by_name,
+            th_mode_produces_output(mode), mode, position,
+            index == SIZE_MAX ? n00bb_call_plan_rest_name(&plan)
+                              : n00bb_call_plan_parameter_name(&plan, index),
+            index == SIZE_MAX}));
     }
-    core_list_free(keywords);
-    bool missing = false;
-    for (size_t i = 0; valid && callee && i < parameter_count; i++) {
-        uint8_t flags = 0;
-        if (bound[i] || !function_parameter_info(grammar, callee, formals,
-                i, nullptr, nullptr, &flags, nullptr)
-            || (flags & 1u)) continue;
-        missing = true;
-    }
-    if (missing) {
-        report_missing_arguments(&shape, site, bound, passed);
-        valid = false;
-    }
-    core_free(supplied);
-    core_free(bound);
-    return valid;
+    n00bb_call_plan_free(&plan);
+    return true;
 }
 
 static void
@@ -1553,76 +1356,21 @@ call_argument_for_parameter(parse_grammar_t *grammar, parse_tree_t *call,
                            parse_sym_entry_t *function, size_t target,
                            bool trait_dispatch)
 {
-    parse_tree_t *signature = child_nt(grammar, function->decl_node,
-                                       CORE_STRING_STATIC("func-type-signature"));
-    parse_tree_t *param_decl = child_nt(grammar, signature,
-                                        CORE_STRING_STATIC("param-decl"));
-    core_list_t(parse_sym_entry_ptr_t) formals =
-        core_list_new(parse_sym_entry_ptr_t);
-    parse_sym_entry_t *rest = nullptr;
-    if (function->decl_node)
-        collect_ir_parameters(grammar, param_decl, &formals, &rest);
-    const uint8_t *interface_params = function->decl_node
-        ? nullptr : function->user_data;
-    uint32_t interface_param_count = 0;
-    if (interface_params && !memcmp(interface_params, "N0FP", 4)
-        && interface_params[4] == 1)
-        interface_param_count = read_u32_le(interface_params + 5);
     if (trait_dispatch && target == 0) {
         parse_tree_t *member = member_access_node(grammar, call);
         if (!member && core_tree_num_children(call))
             member = member_access_node(grammar,
                                          core_tree_child(call, 0));
-        core_list_free(formals);
         return member && core_tree_num_children(member)
             ? core_tree_child(member, 0) : nullptr;
     }
-    if (trait_dispatch) target--;
-    core_string_t target_name = target < formals.len
-        ? formals.data[target]->name : (core_string_t){0};
-    if (interface_params && target < interface_param_count) {
-        size_t offset = 9;
-        for (size_t i = 0; i <= target; i++) {
-            uint16_t name_size = (uint16_t)interface_params[offset]
-                | (uint16_t)interface_params[offset + 1] << 8;
-            offset += 4;
-            if (i == target) {
-                target_name = core_string_borrow(
-                    (const char *)interface_params + offset, name_size);
-                break;
-            }
-            offset += name_size;
-        }
-    }
-    parse_tree_t *args = call_arguments_node(grammar, call);
-    parse_tree_t *positional = child_nt(grammar, args,
-                                        CORE_STRING_STATIC("positional-args"));
-    core_list_t(n00bb_tree_ptr_t) positional_nodes =
-        core_list_new(n00bb_tree_ptr_t);
-    if (positional)
-        collect_positional_nodes(grammar, positional, &positional_nodes);
-    parse_tree_t *found = target < positional_nodes.len
-        ? positional_nodes.data[target] : nullptr;
-    if (!found) {
-        parse_tree_t *keyword_args = child_nt(grammar, args,
-                                              CORE_STRING_STATIC("keyword-args"));
-        core_list_t(n00bb_tree_ptr_t) keywords =
-            core_list_new(n00bb_tree_ptr_t);
-        if (keyword_args)
-            collect_keyword_nodes(grammar, keyword_args, &keywords);
-        for (size_t i = 0; !found && i < keywords.len; i++) {
-            core_string_t name = call_keyword_name(keywords.data[i]);
-            parse_tree_t *expression = child_nt(grammar, keywords.data[i],
-                                                 CORE_STRING_STATIC("expression"));
-            if (target_name.data && name.data && expression
-                && core_string_eq(name, target_name))
-                found = expression;
-        }
-        core_list_free(keywords);
-    }
-    core_list_free(positional_nodes);
-    core_list_free(formals);
-    (void)rest;
+    n00bb_call_plan_t plan;
+    (void)n00bb_plan_call(&plan, grammar, function,
+        function->callable_contract ? function->callable_contract
+                                    : function->type,
+        call_arguments_node(grammar, call), trait_dispatch ? 1 : 0);
+    parse_tree_t *found = n00bb_call_plan_parameter_argument(&plan, target);
+    n00bb_call_plan_free(&plan);
     return found;
 }
 

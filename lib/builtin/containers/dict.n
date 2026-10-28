@@ -327,5 +327,5 @@ func values(self: Dict['K, 'V],
 
 alias litmod d = dict
 dict litmod dict(pairs: Array[Tuple['K, 'V]]) -> Dict['K, 'V] fail: string {
-    return new[Dict['K, 'V]](pairs)
+    return new[Dict['K, 'V]](pairs = pairs)
 }

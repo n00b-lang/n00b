@@ -1,0 +1,20 @@
+func scale(value: int, factor: int = 2) -> int {
+    return value * factor
+}
+
+func area(width: int, height: int) -> int {
+    return width * height
+}
+
+func total(first: int, *rest: int, bias: int = 0) -> int {
+    return first + bias
+}
+
+let positional_keyword = scale(3, 4)
+let mixed = area(2, height = 3)
+let named_varargs = total(1, rest = [2, 3])
+let keyword_first = scale(factor = 3, 4)
+let all_named = area(height = 3, width = 2)
+let extra_items = total(1, 2, 3, bias = 4)
+let keyword_first_items = total(bias = 4, 1, 2, 3)
+let whole_array = total(1, [2, 3])

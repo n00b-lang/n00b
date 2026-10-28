@@ -1,0 +1,15 @@
+func later(k: int = j, j: int = 5) -> int {
+    return k + j
+}
+
+func itself(k: int = k) -> int {
+    return k
+}
+
+func earlier(a: int, *rest: int, k: int = len(rest), j: int = k) -> int {
+    return a + j
+}
+
+require later() == 10
+require itself() == 0
+require earlier(1, 2) == 2

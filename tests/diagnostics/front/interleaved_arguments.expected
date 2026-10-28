@@ -1,0 +1,6 @@
+tests/diagnostics/front/interleaved_arguments.n:5:38: error N00B-P0041: named arguments must come all before or all after the positional arguments
+  help: move the named arguments after the positional ones:
+    5 | let interleaved = total(1, 3, bias = 2)
+tests/diagnostics/front/interleaved_arguments.n:6:33: error N00B-P0041: named arguments must come all before or all after the positional arguments
+  help: move the named arguments after the positional ones:
+    6 | let twice = total(1, scale = 2, bias = 3)

@@ -184,6 +184,39 @@ n00bb_report_help(core_diagnostics_t *d, n00bb_text_t id, n00bb_args_t args)
 }
 
 void
+n00bb_report_fix(core_diagnostics_t *d, const core_translation_unit_t *unit,
+                 const n00bb_edit_t *edits, size_t count)
+{
+    if (!d || !unit || !edits || !count) return;
+    core_string_t source = core_source_file_contents(&unit->source);
+    size_t size = core_source_file_size(&unit->source);
+    size_t start = edits[0].start;
+    size_t end = edits[count - 1].end;
+    for (size_t i = 0; i < count; i++)
+        if (edits[i].start > edits[i].end || edits[i].end > size
+            || (i && edits[i].start < edits[i - 1].end)) return;
+    while (start && source.data[start - 1] != '\n') start--;
+    while (end < size && source.data[end] != '\n') end++;
+    if (end > start && source.data[end - 1] == '\r') end--;
+    core_buffer_t *text = core_buffer_empty();
+    size_t at = start;
+    for (size_t i = 0; i < count; i++) {
+        core_buffer_append(text, source.data + at, edits[i].start - at);
+        core_buffer_append_string(text, edits[i].text);
+        at = edits[i].end;
+    }
+    core_buffer_append(text, source.data + at, end - at);
+    core_string_t lines = core_buffer_take_string(text);
+    core_diag_location_t span = core_diag_location_span(source, start, end);
+    core_diag_fix(d, (core_diag_location_t){
+        .line = span.line,
+        .end_line = span.end_line,
+        .has_location = true,
+    }, lines);
+    core_free(lines.data);
+}
+
+void
 n00bb_internal_error(core_diagnostics_t *d,
                      const core_translation_unit_t *unit,
                      core_diag_location_t at, const char *stage,

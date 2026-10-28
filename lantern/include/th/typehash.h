@@ -360,6 +360,7 @@ th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
                             const th_param *params, size_t np,
                             const th_param *rest, const th_kwparam *kw,
                             size_t nkw);
+th_type *th_func_collect_rest(th_ctx *ctx, th_type *function);
 th_type *th_binder(th_ctx *ctx, uint64_t arity, th_type *body);
 th_type *th_bound(th_ctx *ctx, uint64_t distance, uint64_t position);
 th_type *th_sum(th_ctx *ctx, th_comb comb, th_type *const *arms, size_t n);

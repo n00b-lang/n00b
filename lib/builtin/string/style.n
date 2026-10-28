@@ -775,7 +775,7 @@ func raw_repr_string(s: string, fd: int, common: io.format.Repr_Options?)
         fmt.hex = true
     }
     var bytes: Array[u8] = string.core.__text_byte_array(s)
-    return io.format.format_bytes(fd, ref bytes, len, fmt.common,
+    return io.format.format_bytes(fd, ref bytes, len, common = fmt.common,
                                   byte_literal = fmt.hex,
                                   force_hex = fmt.hex)!
 }
@@ -1249,7 +1249,7 @@ private func escape_length(raw: string, at: uint) -> uint {
 private func parse_rich_markup(raw: string,
                                modify segments: List[Markup_Segment])
     -> string fail: string {
-    var text: containers.buffer.Buffer = new[containers.buffer.Buffer](0)
+    var text: containers.buffer.Buffer = new[containers.buffer.Buffer](length = 0)
     var numbering: Slot_Numbering = (next_auto = 0, saw_auto = false,
                                      saw_explicit = false)
     let n: uint = string.core.byte_len(raw)

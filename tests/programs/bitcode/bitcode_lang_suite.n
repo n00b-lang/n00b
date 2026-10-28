@@ -955,7 +955,7 @@ func unspecialized_pair(first: 'T, second: 'T) -> List['T] {
 
 func unspecialized_chars(source: Array['C]) -> List['C] {
     let cb = callback[Transform](ref plus_one)
-    return new[List['C]](source)
+    return new[List['C]](items = source)
 }
 
 func unspecialized_copy(source: Array['C]) -> Array['C] {
@@ -1064,6 +1064,72 @@ func cached_dispatch_check() {
         require hashed_unspecialized(flag) == flag.hash()
         round += 1
     }
+}
+
+func varargs_total(first: int, *rest: int, bias: int = 0) -> int {
+    var sum = first + bias
+    for item in rest {
+        sum += item
+    }
+    return sum
+}
+
+func varargs_count(*items: 'T) -> int {
+    return len(items)
+}
+
+func varargs_view(view *items: string) -> int {
+    var count = 0
+    for item in items {
+        count += byte_len(item)
+    }
+    return count
+}
+
+func varargs_consume(consume *items: string) -> int {
+    return len(items)
+}
+
+func defaults_in_order(base: int, *rest: int, extra: int = len(rest),
+                       scaled: int = base * extra, last: int = scaled + 1)
+    -> int {
+    return last
+}
+
+var default_calls: int = 0
+func next_default() -> int {
+    default_calls += 1
+    return default_calls
+}
+
+func lazy_default(value: int = next_default()) -> int {
+    return value
+}
+
+func named_area(width: int, height: int) -> int {
+    return width * height
+}
+
+func parameter_rules_check() {
+    require varargs_total(1) == 1
+    require varargs_total(1, 2, 3) == 6
+    require varargs_total(1, 2, 3, bias = 10) == 16
+    require varargs_total(bias = 10, 1, 2, 3) == 16
+    require varargs_count(4, 5, 6) == 3
+    require varargs_count("a", "b") == 2
+    require varargs_view("ab", "cde") == 5
+    require varargs_consume("x", "y", "z") == 3
+    require defaults_in_order(2) == 1
+    require defaults_in_order(2, 7, 8) == 5
+    require defaults_in_order(2, 7, 8, scaled = 10) == 11
+    require defaults_in_order(2, extra = 5) == 11
+    let before = default_calls
+    require lazy_default() == before + 1
+    require lazy_default() == before + 2
+    require lazy_default(value = 0) == 0
+    require default_calls == before + 2
+    require named_area(2, 3) == 6
+    require named_area(height = 3, width = 2) == 6
 }
 
 record Counter_State {
@@ -1672,6 +1738,7 @@ func start() -> nil {
     callback_handler_ref_check()
     unspecialized_box_paths_check()
     cached_dispatch_check()
+    parameter_rules_check()
     callback_state_check()
     callback_state_ref_check()
     callback_setup_check()

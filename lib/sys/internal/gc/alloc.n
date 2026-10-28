@@ -478,7 +478,7 @@ func allocate_large(mutator: Ref[internal.gc.core.Mutator],
         }
         let result: Ref[byte]? = internal.gc.los.allocate_locked(
             heap, mutator, type_index, payload_bytes, alignment, finalizable,
-            instance_descriptor, slot)
+            instance_descriptor = instance_descriptor, slot = slot)
         internal.gc.heap.unlock(heap)
         return result
     }
@@ -508,7 +508,8 @@ inline func allocate_runtime_known_on_mutator_into(mutator: Ref[internal.gc.core
     if bytes > internal.gc.los.los_threshold or
         cast[uint](alignment) > internal.gc.core.granule_bytes {
         return allocate_large(mutator, type_index, payload_bytes,
-            alignment, finalizable, instance_descriptor, slot)
+            alignment, finalizable, instance_descriptor = instance_descriptor,
+            slot = slot)
     }
     return allocate_in_blocks(mutator, type_index, payload_bytes,
         finalizable, bytes, header_bytes, instance_descriptor, slot)

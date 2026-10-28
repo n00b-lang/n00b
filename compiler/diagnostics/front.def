@@ -25,6 +25,12 @@ N00B_DIAG(SYNTAX_UNKNOWN_KEYWORD, "N00B-P0005", ERROR,
     "A statement begins with a name that is close to a keyword, followed by\n"
     "something that cannot follow a name. This is usually a typo such as\n"
     "`fucn main()` for `func main()`.")
+N00B_DIAG(SYNTAX_INTERLEAVED_ARGUMENTS, "N00B-P0041", ERROR,
+    "a call mixes named arguments in among positional ones",
+    "The named arguments of a call form one group, either before all the\n"
+    "positional arguments or after them:\n"
+    "    total(1, 2, 3, bias = 4)\n"
+    "    total(bias = 4, 1, 2, 3)")
 N00B_DIAG(SYNTAX_BLANK_LINE_IN_STATEMENT, "N00B-P0006", ERROR,
     "a statement continues across a blank line",
     "A statement may continue onto the next line, but a blank line always\n"
@@ -235,6 +241,20 @@ N00B_DIAG(CHAINED_COMPARISON, "N00B-P0037", ERROR,
     "A comparison produces a `bool`, so `a < b < c` would compare that\n"
     "`bool` with `c`. Compare each pair separately and join them with\n"
     "`and`, as in `a < b and b < c`.")
+N00B_DIAG(PARAMETER_ORDER, "N00B-P0038", ERROR,
+    "parameters are declared out of order",
+    "A parameter list declares positional parameters first, then at most\n"
+    "one varargs parameter (`*rest: T`), then keyword parameters, which\n"
+    "are the ones with a default value.")
+N00B_DIAG(VARARGS_DEFAULT, "N00B-P0039", ERROR,
+    "the varargs parameter has a default value",
+    "A varargs parameter collects the extra positional arguments of a\n"
+    "call into an array. A call that passes none gets an empty array, so\n"
+    "there is nothing for a default value to do.")
+N00B_DIAG(PARAMETER_MODE, "N00B-P0040", ERROR,
+    "`modify` or `out` is used on a keyword or varargs parameter",
+    "Only positional parameters can be `modify` or `out`. Keyword and\n"
+    "varargs parameters can be `in`, `view` or `consume`.")
 N00B_DIAG(IMPORT_NOT_FOUND, "N00B-M0001", ERROR,
     "an imported module cannot be found",
     "The module is not in the current directory, in a package root on\n"

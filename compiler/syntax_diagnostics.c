@@ -675,6 +675,64 @@ report_keyword_typo(syntax_t *s, parse_pwz_parser_t *parser, int32_t at,
 }
 
 static bool
+report_interleaved_arguments(syntax_t *s, int32_t found)
+{
+    int32_t open = found < s->count ? s->parent[found] : -1;
+    int32_t callee = open > 0 ? tid_at(s, open - 1) : PARSE_TOK_EOF;
+    int32_t close = open >= 0 ? s->match[open] : -1;
+    if (open <= 0 || tid_at(s, open) != '(' || close < 0
+        || (callee != s->identifier && callee != ')' && callee != ']'))
+        return false;
+    int32_t *starts = core_alloc_array(int32_t, close - open + 1);
+    int32_t *ends = core_alloc_array(int32_t, close - open + 1);
+    bool *named = core_alloc_array(bool, close - open + 1);
+    size_t count = 0, changes = 0, misplaced = 0;
+    int32_t start = open + 1;
+    for (int32_t i = open + 1; i <= close; i++) {
+        if (i < close && !(tid_at(s, i) == ',' && s->parent[i] == open))
+            continue;
+        if (i > start) {
+            starts[count] = start;
+            ends[count] = i - 1;
+            named[count] = tid_at(s, start) == s->identifier
+                && core_string_eq(token_source(s, token_at(s, start + 1)),
+                                  CORE_STRING_STATIC("="));
+            if (count && named[count] != named[count - 1]
+                && ++changes == 2) misplaced = count;
+            count++;
+        }
+        start = i + 1;
+    }
+    const n00bb_syntax_input_t *in = s->input;
+    if (changes > 1 && n00bb_report(in->diagnostics, in->unit,
+            N00B_DIAG_SYNTAX_INTERLEAVED_ARGUMENTS,
+            token_location(token_at(s, starts[misplaced])),
+            N00B_TEXT_INTERLEAVED_ARGUMENTS, N00BB_NO_ARGS)) {
+        n00bb_report_help(in->diagnostics,
+            N00B_TEXT_INTERLEAVED_ARGUMENTS_HELP, N00BB_NO_ARGS);
+        core_buffer_t *text = core_buffer_empty();
+        for (int pass = 0; pass < 2; pass++)
+            for (size_t i = 0; i < count; i++) {
+                if (named[i] != (pass == 1)) continue;
+                size_t first = parse_token_start_byte(token_at(s, starts[i]));
+                size_t last = parse_token_end_byte(token_at(s, ends[i]));
+                if (text->byte_len) core_buffer_puts(text, ", ");
+                core_buffer_append(text, in->text.data + first, last - first);
+            }
+        core_string_t replacement = core_buffer_take_string(text);
+        n00bb_report_fix(in->diagnostics, in->unit, &(n00bb_edit_t){
+            parse_token_start_byte(token_at(s, starts[0])),
+            parse_token_end_byte(token_at(s, ends[count - 1])),
+            replacement}, 1);
+        core_free(replacement.data);
+    }
+    core_free(starts);
+    core_free(ends);
+    core_free(named);
+    return changes > 1;
+}
+
+static bool
 previous_is_comptime(const syntax_t *s, int32_t at)
 {
     parse_token_info_t *before = token_at(s, at - 1);
@@ -712,6 +770,7 @@ report_error(syntax_t *s, parse_pwz_parser_t *parser, int32_t at,
             : N00B_TEXT_COMMENT_ENDS_STATEMENT, N00BB_NO_ARGS);
     }
     else if (report_keyword_typo(s, parser, at, window_first)) {}
+    else if (report_interleaved_arguments(s, found)) {}
     else if (tid_at(s, found) == s->indent) {
         report_unexpected(s, parser, at, N00B_DIAG_SYNTAX_UNEXPECTED_INDENT,
             token_location(token_at(s, found)), ARG_PHRASE(INDENTATION));

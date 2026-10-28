@@ -1096,8 +1096,8 @@ func gc_los_allocate() {
 
                     var published: Ref[byte]? = nil
                     let aligned: Ref[byte]? = sys.gc.los.allocate_locked(
-                        heap, mutator, type_index, bytes, 128, false, nil,
-                        ref published)
+                        heap, mutator, type_index, bytes, 128, false,
+                        instance_descriptor = nil, slot = ref published)
                     if aligned != nil {
                         let aligned_payload: Ref[byte] = aligned.get()
                         if published != nil {
@@ -2003,7 +2003,8 @@ func gc_small_allocate() {
                     var published: Ref[byte]? = nil
                     let into: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                         mutator, ref mutator.small, type_index, 8,
-                        sys.gc.core.granule_bytes, false, nil, ref published)
+                        sys.gc.core.granule_bytes, false,
+                        instance_descriptor = nil, slot = ref published)
                     if into != nil {
                         if published != nil {
                             assert published.get() == into.get()

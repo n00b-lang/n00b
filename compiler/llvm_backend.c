@@ -1667,7 +1667,7 @@ lowered_value(lower_state_t *state, const ir_value_t *value)
                                   "optional.value");
         }
         unsigned native_position = state->parameter_base
-            + (unsigned)formal_index;
+            + (unsigned)(formal_index - optional_index);
         if (native_position >= LLVMCountParams(state->target_function))
             return nullptr;
         LLVMValueRef parameter = LLVMGetParam(state->target_function,

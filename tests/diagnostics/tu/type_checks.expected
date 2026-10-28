@@ -68,7 +68,7 @@ tests/diagnostics/tu/type_checks.n:149:24: error N00B-T0500: `(a = 1)` is `Tuple
 tests/diagnostics/tu/type_checks.n:155:29: error N00B-N0003: module `native` has no function `nope`
 tests/diagnostics/tu/type_checks.n:157:21: error N00B-T0005: parameter 1 (`n`) of `h_1` is `int`, but this argument is `string`
   tests/diagnostics/tu/type_checks.n:164:6: note: `h_1` is declared here
-tests/diagnostics/tu/type_checks.n:158:25: error N00B-T0001: `h_1` takes 1 argument, but this call passes 2
+tests/diagnostics/tu/type_checks.n:158:25: error N00B-T0001: `h_1` takes 1 positional argument, but this call passes 2
   tests/diagnostics/tu/type_checks.n:164:6: note: `h_1` is declared here
   help: remove the extra argument
 tests/diagnostics/tu/type_checks.n:160:18: error N00B-T0018: `string` does not implement `Multiply` for these arguments
