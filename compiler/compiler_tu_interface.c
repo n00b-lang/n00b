@@ -1206,6 +1206,34 @@ interface_restore_package_declarations(
     return true;
 }
 
+bool
+interface_may_declare_package(const n00bb_interface_context_t *context,
+                              core_string_t module, core_string_t name)
+{
+    for (size_t i = 0; i < context->linked_interface_count; i++) {
+        const th_env *environment = context->linked_interfaces[i];
+        for (size_t m = 0; m < th_env_metadata_count(environment); m++) {
+            th_env_metadata_view_t metadata = {0};
+            if (!th_env_metadata_at(environment, m, &metadata)
+                || metadata.owner_kind != TH_ENV_METADATA_ENVIRONMENT
+                || metadata.version != 1
+                || !core_string_eq(metadata.owner_name, name)) continue;
+            if (core_string_eq(metadata.key,
+                    CORE_STRING_STATIC("n00b.package-interface"))
+                && core_string_eq(module, name)) return true;
+            if (!core_string_eq(metadata.key,
+                    CORE_STRING_STATIC("n00b.package-manifest"))
+                || metadata.size < 4) continue;
+            uint32_t length = read_u32_le(metadata.data);
+            if (length <= metadata.size - 4
+                && core_string_eq(core_string_borrow(
+                       (const char *)metadata.data + 4, length), module))
+                return true;
+        }
+    }
+    return false;
+}
+
 
 static core_string_t
 interface_visibility_name(th_env_visibility_t visibility)
