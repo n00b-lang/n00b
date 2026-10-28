@@ -1151,7 +1151,8 @@ bool finalize_flagset_symbol_type(parse_grammar_t *grammar,
                                   parse_tree_t *node,
                                   core_translation_unit_t *unit,
                                   n00bb_tu_state_t *state);
-core_string_t n00bb_node_source_text(core_translation_unit_t *unit,
+bool n00bb_node_bytes(parse_tree_t *node, size_t *start, size_t *end);
+core_string_t n00bb_node_source_text(const core_translation_unit_t *unit,
                                      parse_tree_t *node,
                                      core_string_t fallback);
 bool cache_flagset_semantics(parse_grammar_t *grammar,
@@ -1405,6 +1406,8 @@ th_type *function_with_error_channel(th_ctx *types, th_type *function,
     th_type *error_type);
 parse_sym_entry_t *formal_symbol_at(parse_grammar_t *grammar,
     parse_tree_t *node, size_t target, size_t *index);
+parse_sym_entry_t *formal_rest_symbol(parse_grammar_t *grammar,
+                                      parse_tree_t *node);
 void record_function_signature(parse_grammar_t *grammar,
     core_translation_unit_t *unit, parse_tree_t *func,
     n00bb_tu_state_t *state, bool check_body);

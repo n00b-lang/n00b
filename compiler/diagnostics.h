@@ -68,6 +68,16 @@ void n00bb_report_note(core_diagnostics_t *diagnostics, n00bb_text_t text,
 void n00bb_report_help(core_diagnostics_t *diagnostics, n00bb_text_t text,
                        n00bb_args_t args);
 
+typedef struct {
+    size_t start;
+    size_t end;
+    core_string_t text;
+} n00bb_edit_t;
+
+void n00bb_report_fix(core_diagnostics_t *diagnostics,
+                      const core_translation_unit_t *unit,
+                      const n00bb_edit_t *edits, size_t count);
+
 core_string_t n00bb_diag_code(n00bb_diag_t id);
 core_diag_severity_t n00bb_diag_severity(n00bb_diag_t id);
 core_string_t n00bb_diag_title(n00bb_diag_t id);

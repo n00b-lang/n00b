@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "call_plan.h"
 #include "compiler_axioms.h"
 #include "compiler_cache.h"
 #include "compiler_link.h"
@@ -1473,80 +1474,26 @@ constructor_arguments_match(parse_grammar_t *grammar,
         || !th_unify_in_place(state->types, receiver->type, receiver_type))
         return false;
 
-    parse_tree_t *declaration_signature = child_nt(grammar, symbol->decl_node,
-                                                    CORE_STRING_STATIC("func-type-signature"));
-    parse_tree_t *formal_node = declaration_signature
-        ? child_nt(grammar, declaration_signature, CORE_STRING_STATIC("param-decl")) : nullptr;
-    core_list_t(parse_sym_entry_ptr_t) formals =
-        core_list_new(parse_sym_entry_ptr_t);
-    parse_sym_entry_t *rest = nullptr;
-    collect_ir_parameters(grammar, formal_node, &formals, &rest);
-
-    size_t parameter_count = th_func_nparams(signature);
-    bool *provided = parameter_count
-        ? core_alloc_array(bool, parameter_count) : nullptr;
-    bool valid = !parameter_count || provided;
-    if (provided) memset(provided, 0, parameter_count * sizeof(bool));
-    if (valid) provided[0] = true;
-
-    parse_tree_t *call_args = child_nt(grammar, construction, CORE_STRING_STATIC("call-args"));
-    parse_tree_t *positional = child_nt(grammar, call_args, CORE_STRING_STATIC("positional-args"));
-    core_list_t(n00bb_tree_ptr_t) positional_nodes =
-        core_list_new(n00bb_tree_ptr_t);
-    collect_positional_nodes(grammar, positional, &positional_nodes);
-    for (size_t i = existing_target ? 1 : 0;
-         valid && i < positional_nodes.len; i++) {
-        size_t index = existing_target ? i : i + 1;
-        const th_param *parameter = index < parameter_count
-            ? th_func_param(signature, index) : th_func_rest(signature);
-        parse_tree_t *argument = positional_nodes.data[i];
-        th_type *argument_type = parse_tree_type(argument);
-        if (!parameter || !argument_type
-            || (index < parameter_count && provided[index])
-            || !constructor_argument_accepts(state, argument, parameter->type,
-                                             argument_type, string_argument)) {
-            valid = false;
-            break;
-        }
-        if (index < parameter_count) provided[index] = true;
+    n00bb_call_plan_t plan;
+    bool valid = n00bb_call_plan_init(&plan, grammar, symbol, signature, 1);
+    if (valid) {
+        n00bb_call_plan_collect(&plan, child_nt(grammar, construction,
+            CORE_STRING_STATIC("call-args")));
+        if (existing_target && plan.positional.len)
+            core_list_delete(plan.positional, 0);
+        valid = n00bb_call_plan_bind(&plan);
     }
-    core_list_free(positional_nodes);
-
-    parse_tree_t *keyword_args = child_nt(grammar, call_args, CORE_STRING_STATIC("keyword-args"));
-    core_list_t(n00bb_tree_ptr_t) keyword_nodes =
-        core_list_new(n00bb_tree_ptr_t);
-    collect_keyword_nodes(grammar, keyword_args, &keyword_nodes);
-    for (size_t i = 0; valid && i < keyword_nodes.len; i++) {
-        core_string_t name = call_keyword_name(keyword_nodes.data[i]);
-        parse_tree_t *argument = child_nt(grammar, keyword_nodes.data[i],
-                                           CORE_STRING_STATIC("expression"));
+    for (size_t i = 0; valid && i < n00bb_call_plan_argument_count(&plan);
+         i++) {
         size_t index = 0;
-        bool named = function_parameter_named(grammar, symbol, formal_node,
-                                              name, &index);
+        parse_tree_t *argument = n00bb_call_plan_argument(&plan, i, &index);
+        th_type *parameter = n00bb_call_plan_formal_type(&plan, index);
         th_type *argument_type = argument ? parse_tree_type(argument) : nullptr;
-        const th_param *parameter = index < parameter_count
-            ? th_func_param(signature, index) : nullptr;
-        if (!named || index == 0 || !parameter || !argument_type
-            || provided[index]
-            || !constructor_argument_accepts(state, argument, parameter->type,
-                                             argument_type, string_argument)) {
-            valid = false;
-            break;
-        }
-        provided[index] = true;
+        valid = parameter && argument_type
+            && constructor_argument_accepts(state, argument, parameter,
+                                            argument_type, string_argument);
     }
-    core_list_free(keyword_nodes);
-
-    for (size_t i = 1; valid && i < parameter_count; i++) {
-        uint8_t flags = 0;
-        if (provided[i]) continue;
-        if (!function_parameter_info(grammar, symbol, formal_node, i, nullptr,
-                nullptr, &flags, nullptr) || !(flags & 1))
-            valid = false;
-    }
-    if (valid && rest && !th_func_rest(signature)) valid = false;
-    core_free(provided);
-    core_list_free(formals);
+    n00bb_call_plan_free(&plan);
     return valid;
 }
 
@@ -2745,20 +2692,25 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     core_list_new(size_t);
                 core_list_t(th_type_ptr_t) trait_argument_types =
                     core_list_new(th_type_ptr_t);
+                n00bb_call_plan_t trait_plan = {0};
+                if (trait_call_node && !trait_use->operator_dispatch)
+                    (void)n00bb_plan_call(&trait_plan, analysis->grammar,
+                        requirement, requirement_type,
+                        call_arguments_node(analysis->grammar,
+                                            trait_call_node), 1);
                 for (size_t p = 1; (trait_call_node || trait_use->operator_dispatch)
                      && p < requirement_params; p++) {
                     parse_tree_t *argument = trait_use->operator_dispatch
                         ? core_tree_num_children(trait_use->node) == 3 && p == 1
                             ? core_tree_child(trait_use->node, 2) : nullptr
-                        : call_argument_for_parameter(
-                        analysis->grammar, trait_call_node, requirement, p,
-                        true);
+                        : n00bb_call_plan_parameter_argument(&trait_plan, p);
                     th_type *argument_type = argument
                         ? parse_tree_type(argument) : nullptr;
                     if (!argument_type) continue;
                     core_list_push(trait_argument_positions, p);
                     core_list_push(trait_argument_types, argument_type);
                 }
+                n00bb_call_plan_free(&trait_plan);
                 size_t member_count = formals.len + 4
                     + signature_parameter_count
                     + trait_argument_types.len
@@ -2890,10 +2842,15 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                 size_t failed_argument_index = SIZE_MAX;
                 th_type *failed_parameter_type = nullptr;
                 th_type *failed_argument_type = nullptr;
+                n00bb_call_plan_t call_plan;
+                (void)n00bb_plan_call(&call_plan, analysis->grammar,
+                    generic_function, generic_function->callable_contract
+                        ? generic_function->callable_contract
+                        : generic_function->type,
+                    call_arguments_node(analysis->grammar, call_node), 0);
                 for (size_t p = 0; p < formals.len; p++) {
-                    parse_tree_t *argument = call_argument_for_parameter(
-                        analysis->grammar, call_node, generic_function, p,
-                        false);
+                    parse_tree_t *argument =
+                        n00bb_call_plan_parameter_argument(&call_plan, p);
                     if (!argument && formals.data[p]->is_optional)
                         argument = child_nt(analysis->grammar,
                             formals.data[p]->decl_node, CORE_STRING_STATIC("expression"));
@@ -2916,6 +2873,7 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                         break;
                     }
                 }
+                n00bb_call_plan_free(&call_plan);
                 if (!arguments_valid) {
                     core_list_free(trait_argument_positions);
                     core_list_free(trait_argument_types);

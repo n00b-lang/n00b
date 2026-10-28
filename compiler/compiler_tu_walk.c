@@ -55,18 +55,27 @@ last_leaf(parse_tree_t *node)
     return node;
 }
 
+bool
+n00bb_node_bytes(parse_tree_t *node, size_t *start, size_t *end)
+{
+    parse_token_info_t *first = node ? parse_tree_find_first_terminal(node)
+                                     : nullptr;
+    parse_tree_t *leaf = node ? last_leaf(node) : nullptr;
+    parse_token_info_t *last = leaf ? parse_node_token(leaf) : nullptr;
+    if (!first || !last) return false;
+    *start = parse_token_start_byte(first);
+    *end = parse_token_end_byte(last);
+    return *end > *start;
+}
+
 core_string_t
-n00bb_node_source_text(core_translation_unit_t *unit, parse_tree_t *node,
+n00bb_node_source_text(const core_translation_unit_t *unit, parse_tree_t *node,
                        core_string_t fallback)
 {
-    parse_token_info_t *first = parse_tree_find_first_terminal(node);
-    parse_tree_t *leaf = last_leaf(node);
-    parse_token_info_t *last = leaf ? parse_node_token(leaf) : nullptr;
-    if (!unit || !first || !last) return fallback;
+    size_t start = 0, end = 0;
+    if (!unit || !n00bb_node_bytes(node, &start, &end)) return fallback;
     core_string_t contents = core_source_file_contents(&unit->source);
-    size_t start = parse_token_start_byte(first);
-    size_t end = parse_token_end_byte(last);
-    if (end <= start || end > contents.u8_bytes) return fallback;
+    if (end > contents.u8_bytes) return fallback;
     return core_string_slice(contents, start, end - start);
 }
 

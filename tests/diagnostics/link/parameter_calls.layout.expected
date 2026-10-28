@@ -1,0 +1,45 @@
+tests/diagnostics/link/parameter_calls.n:13:35: error: `scale` takes 1 positional argument, but this call passes 2
+
+    13 | let positional_keyword = scale(3, 4)
+       |                                   ^ unexpected argument
+
+  `scale` is declared here:
+
+     1 | func scale(value: int, factor: int = 2) -> int {
+       |      ^^^^^
+
+  help: keyword parameters are only passed by name:
+    13 | let positional_keyword = scale(3, factor = 4)
+
+tests/diagnostics/link/parameter_calls.n:14:21: error: `height` is passed by name, but other positional parameters of `area` are passed by position
+
+    14 | let mixed = area(2, height = 3)
+       |                  ^  ^^^^^^
+
+  help: pass every positional parameter by position, or every one by name:
+    14 | let mixed = area(2, 3)
+    14 | let mixed = area(width = 2, height = 3)
+
+tests/diagnostics/link/parameter_calls.n:15:30: error: `rest` is the varargs parameter of `total`, so it cannot be passed by name
+
+    15 | let named_varargs = total(1, rest = [2, 3])
+       |                              ^^^^
+
+  `total` is declared here:
+
+     9 | func total(first: int, *rest: int, bias: int = 0) -> int {
+       |      ^^^^^
+
+  help: pass its items as extra positional arguments, after the positional ones
+
+tests/diagnostics/link/parameter_calls.n:20:28: error: `total` takes the items of its varargs parameter `rest` one at a time, but this argument is a whole array
+
+    20 | let whole_array = total(1, [2, 3])
+       |                            ^^^^^^ expected `int`
+
+  `total` is declared here:
+
+     9 | func total(first: int, *rest: int, bias: int = 0) -> int {
+       |      ^^^^^
+
+  help: pass each item as its own argument

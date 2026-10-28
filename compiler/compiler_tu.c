@@ -7974,11 +7974,11 @@ parse_sym_entry_t *
 formal_symbol_at(parse_grammar_t *grammar, parse_tree_t *node,
                 size_t target, size_t *index)
 {
-    if (!node || core_tree_is_leaf(node)) return nullptr;
+    if (!node || core_tree_is_leaf(node)
+        || NT_IS(grammar, node, "vargs-param")) return nullptr;
     if (NT_IS(grammar, node, "pos-param")
         || NT_IS(grammar, node, "default-param")
-        || NT_IS(grammar, node, "trait-obj-tref")
-        || NT_IS(grammar, node, "vargs-param")) {
+        || NT_IS(grammar, node, "trait-obj-tref")) {
         parse_sym_entry_t *symbol = parse_tree_sym(node);
         if ((*index)++ == target) return symbol;
         return nullptr;
@@ -7986,6 +7986,19 @@ formal_symbol_at(parse_grammar_t *grammar, parse_tree_t *node,
     for (size_t i = 0; i < core_tree_num_children(node); i++) {
         parse_sym_entry_t *found = formal_symbol_at(grammar,
             core_tree_child(node, i), target, index);
+        if (found) return found;
+    }
+    return nullptr;
+}
+
+parse_sym_entry_t *
+formal_rest_symbol(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return nullptr;
+    if (NT_IS(grammar, node, "vargs-param")) return parse_tree_sym(node);
+    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        parse_sym_entry_t *found = formal_rest_symbol(grammar,
+                                                      core_tree_child(node, i));
         if (found) return found;
     }
     return nullptr;
@@ -8974,11 +8987,12 @@ bind_function_body_signature(core_translation_unit_t *unit,
 
     n00bb_function_parameter_facts_t *facts = parse_sym_binding(symbol,
         N00BB_PARAMETER_FACTS_KEY);
+    size_t fixed = 0;
     for (size_t i = 0; facts && i < facts->param_count; i++) {
         n00bb_function_parameter_ref_t *fact = &facts->params[i];
         const th_param *formal = fact->variadic
             ? th_func_rest(body_type)
-            : th_func_param(body_type, i);
+            : th_func_param(body_type, fixed++);
         th_type *type = formal ? formal->type : nullptr;
         if (fact->variadic && type) type = th_array(state->types, type);
         parse_sym_entry_t *parameter_symbol = fact->node

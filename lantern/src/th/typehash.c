@@ -1901,6 +1901,30 @@ th_type *th_func_with_error(th_ctx *ctx, th_type *ret, th_type *error,
     return t;
 }
 
+th_type *th_func_collect_rest(th_ctx *ctx, th_type *function)
+{
+    function = function ? th_resolve(function) : nullptr;
+    if (function && function->kind == TH_BINDER) {
+        th_type *body = th_func_collect_rest(ctx, function->binder.body);
+        if (body == th_resolve(function->binder.body)) return function;
+        th_type *binder = th_binder(ctx, function->binder.arity, body);
+        binder->binder.qvars = function->binder.qvars;
+        return binder;
+    }
+    if (!function || function->kind != TH_FUNCTION || !function->fn.rest)
+        return function;
+    size_t np = function->fn.np;
+    th_param *params = th_alloc(ctx, (np + 1) * sizeof(th_param));
+    if (np) memcpy(params, function->fn.params, np * sizeof(th_param));
+    params[np] = (th_param){
+        .mode = TH_IN,
+        .type = th_array(ctx, function->fn.rest->type),
+    };
+    return th_func_with_error(ctx, function->fn.ret, function->fn.error,
+                              params, np + 1, nullptr, function->fn.kw,
+                              function->fn.nkw);
+}
+
 th_type *th_func(th_ctx *ctx, th_type *ret, const th_param *p, size_t np,
                  const th_param *rest, const th_kwparam *kw, size_t nkw)
 {

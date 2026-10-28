@@ -165,7 +165,7 @@ func format_bytes(fd: int, bytes: Ref[Array[u8]], len: uint,
 func format_string(fd: int, s: string, common: Repr_Options? = nil)
     -> uint fail: int {
     var bytes: Array[u8] = string_bytes(s)
-    return format_bytes(fd, ref bytes, string.core.byte_len(s), common)!
+    return format_bytes(fd, ref bytes, string.core.byte_len(s), common = common)!
 }
 
 private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,

@@ -18,7 +18,7 @@ func len(self: List['T]) -> uint {
 }
 
 func list_with_length(items: Array['T], n: uint) -> List['T] {
-    let list: List['T] = new[List['T]](items)
+    let list: List['T] = new[List['T]](items = items)
     list.count = n
     return list
 }
@@ -253,7 +253,7 @@ func __add(self: List['T], other: List['T]) -> List['T] {
         at += 1
         right += 1
     }
-    return new[List['T]](items)
+    return new[List['T]](items = items)
 }
 
 func iter(self: List['T]) -> cursor.Cursor['T] {
@@ -270,5 +270,5 @@ func iter(self: List['T]) -> cursor.Cursor['T] {
 
 alias litmod l = list
 sequence litmod list(items: Array['T]) -> List['T] fail: string {
-    return new[List['T]](items)
+    return new[List['T]](items = items)
 }

@@ -160,8 +160,11 @@ N00B_DIAG(DEFAULT_CYCLE, "N00B-S0035", ERROR,
     "the cycle, or pass one of the parameters explicitly.")
 N00B_DIAG(DEFAULT_ORDER, "N00B-S0036", ERROR,
     "a default parameter value reads a parameter that has no value yet",
-    "This default value uses a parameter whose own value is not known at\n"
-    "that point. Change the dependencies between the defaults.")
+    "Keyword defaults are applied left to right, after the positional\n"
+    "parameters and the varargs parameter are bound. A default can use\n"
+    "those and any keyword parameter declared before it, but not one\n"
+    "declared after it:\n"
+    "    func box(width: int, height: int = width, depth: int = height)")
 N00B_DIAG(CONTEXT_OUTSIDE_WITH, "N00B-S0037", ERROR,
     "a context is called outside a `with` statement",
     "A context declaration is entered with `with`, which runs its hooks.\n"

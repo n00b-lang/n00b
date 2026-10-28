@@ -304,7 +304,7 @@ func limit_of(failure: Failure) -> u32 {
     return limit.get()
 }
 
-let failure_plain = new[Failure](cast[i64]1, "named", 7)
+let failure_plain = new[Failure](cast[i64]1, "named", limit = 7)
 require failure_plain.text != nil
 require limit_of(failure_plain) == 7
 let empty = new[Failure](cast[i64]2, nil, limit = 9)

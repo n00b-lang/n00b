@@ -1,0 +1,4 @@
+tests/diagnostics/lower/default_order.n:1:12: error N00B-S0036: the default value of `k` uses `j`, which is declared after it
+  help: a default can use the positional parameters, the varargs parameter, and keyword parameters declared before it
+tests/diagnostics/lower/default_order.n:5:13: error N00B-S0035: the default value of parameter `k` depends on itself
+  help: a default value cannot read the parameter it gives a value to

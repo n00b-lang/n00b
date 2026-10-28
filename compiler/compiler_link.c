@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "call_plan.h"
 #include "compiler_link.h"
 #include "compiler_baked.h"
 #include "interface_summaries.h"
@@ -1260,40 +1261,6 @@ module_member_is_call(parse_grammar_t *grammar, parse_tree_t *node)
 }
 
 static bool
-call_binds_candidate(parse_grammar_t *grammar, parse_sym_entry_t *candidate,
-                     th_type *signature, size_t positional,
-                     core_list_t(n00bb_tree_ptr_t) *keywords)
-{
-    size_t total = th_func_nparams(signature);
-    if (positional > total) return false;
-    candidate = canonical_symbol(candidate);
-    parse_tree_t *formals = candidate->decl_node
-        ? child_nt(grammar, child_nt(grammar, candidate->decl_node,
-                                     CORE_STRING_STATIC("func-type-signature")),
-                   CORE_STRING_STATIC("param-decl"))
-        : nullptr;
-    bool *bound = core_alloc_array(bool, total ? total : 1);
-    for (size_t i = 0; i < positional; i++) bound[i] = true;
-    bool binds = true;
-    for (size_t k = 0; binds && k < keywords->len; k++) {
-        size_t index = 0;
-        core_string_t name = call_keyword_name(keywords->data[k]);
-        binds = name.data && function_parameter_named(grammar, candidate,
-                    formals, name, &index)
-            && index < total && !bound[index];
-        if (binds) bound[index] = true;
-    }
-    for (size_t i = 0; binds && i < total; i++) {
-        uint8_t flags = 0;
-        binds = bound[i] || (function_parameter_info(grammar, candidate,
-                    formals, i, nullptr, nullptr, &flags, nullptr)
-                && (flags & 1u));
-    }
-    core_free(bound);
-    return binds;
-}
-
-static bool
 overload_argument_converts(n00bb_tu_state_t *state, parse_tree_t *argument,
                            th_type *type, th_type *parameter)
 {
@@ -1384,42 +1351,21 @@ overload_constraints_subsume(th_ctx *types, parse_sym_entry_t *general,
 }
 
 static bool
-overload_candidate_fit(parse_grammar_t *grammar, n00bb_tu_state_t *state,
-                       parse_sym_entry_t *candidate, th_type *signature,
-                       core_list_t(n00bb_tree_ptr_t) *positional,
-                       core_list_t(n00bb_tree_ptr_t) *keywords,
+overload_candidate_fit(n00bb_tu_state_t *state, const n00bb_call_plan_t *plan,
                        n00bb_overload_fit_t *fit, bool *pending)
 {
-    size_t count = positional->len + keywords->len;
+    size_t count = n00bb_call_plan_argument_count(plan);
     th_type **actual = core_alloc_array(th_type *, count ? count : 1);
     th_type **formal = core_alloc_array(th_type *, count ? count : 1);
     parse_tree_t **arguments = core_alloc_array(parse_tree_t *,
                                                 count ? count : 1);
     bool valid = true;
-    for (size_t i = 0; i < positional->len; i++) {
-        const th_param *parameter = th_func_param(signature, i);
-        arguments[i] = positional->data[i];
-        actual[i] = parse_tree_type(arguments[i]);
-        formal[i] = parameter ? parameter->type : nullptr;
+    for (size_t i = 0; i < count; i++) {
+        size_t index = 0;
+        arguments[i] = n00bb_call_plan_argument(plan, i, &index);
+        formal[i] = n00bb_call_plan_formal_type(plan, index);
+        actual[i] = arguments[i] ? parse_tree_type(arguments[i]) : nullptr;
         valid &= actual[i] && formal[i];
-    }
-    parse_sym_entry_t *declared = canonical_symbol(candidate);
-    parse_tree_t *formals = declared->decl_node
-        ? child_nt(grammar, child_nt(grammar, declared->decl_node,
-                                     CORE_STRING_STATIC("func-type-signature")),
-                   CORE_STRING_STATIC("param-decl")) : nullptr;
-    for (size_t k = 0; k < keywords->len; k++) {
-        size_t index = 0, slot = positional->len + k;
-        const th_param *parameter = function_parameter_named(grammar,
-                declared, formals, call_keyword_name(keywords->data[k]),
-                &index)
-            ? th_func_param(signature, index) : nullptr;
-        arguments[slot] = child_nt(grammar, keywords->data[k],
-                                  CORE_STRING_STATIC("expression"));
-        actual[slot] = arguments[slot]
-            ? parse_tree_type(arguments[slot]) : nullptr;
-        formal[slot] = parameter ? parameter->type : nullptr;
-        valid &= actual[slot] && formal[slot];
     }
     for (size_t i = 0; valid && i < count; i++)
         if (n00bb_open_integer(actual[i]) && is_integer_type(formal[i])
@@ -1645,16 +1591,6 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         return choice;
     core_list_t(parse_sym_entry_ptr_t) candidates = function_candidates(state,
         symbol, lookup);
-    core_list_t(n00bb_tree_ptr_t) arguments =
-        core_list_new(n00bb_tree_ptr_t);
-    core_list_t(n00bb_tree_ptr_t) keywords = core_list_new(n00bb_tree_ptr_t);
-    if (call->then_body) {
-        collect_positional_nodes(grammar,
-            child_nt(grammar, call->then_body, CORE_STRING_STATIC("positional-args")),
-            &arguments);
-        collect_keyword_nodes(grammar,
-            child_nt(grammar, call->then_body, CORE_STRING_STATIC("keyword-args")), &keywords);
-    }
     core_list_t(n00bb_overload_fit_t) fits =
         core_list_new(n00bb_overload_fit_t);
     parse_sym_entry_t *sole = nullptr;
@@ -1664,22 +1600,21 @@ n00bb_select_call_overload(parse_grammar_t *grammar, n00bb_tu_state_t *state,
         parse_sym_entry_t *candidate = candidates.data[c];
         th_type *signature = candidate->callable_contract
             ? candidate->callable_contract : candidate->type;
-        signature = signature ? th_resolve(signature) : nullptr;
-        if (!signature || th_kind_of(signature) != TH_FUNCTION
-            || !call_binds_candidate(grammar, candidate, signature,
-                                     arguments.len, &keywords)) continue;
+        n00bb_call_plan_t plan;
+        if (!n00bb_plan_call(&plan, grammar, canonical_symbol(candidate),
+                             signature, call->then_body, 0)) {
+            n00bb_call_plan_free(&plan);
+            continue;
+        }
         shapes++;
         sole = candidate;
         n00bb_overload_fit_t fit = {.symbol = candidate};
         bool candidate_pending = false;
-        if (overload_candidate_fit(grammar, state, candidate, signature,
-                                   &arguments, &keywords, &fit,
-                                   &candidate_pending))
+        if (overload_candidate_fit(state, &plan, &fit, &candidate_pending))
             core_list_push(fits, fit);
         pending |= candidate_pending;
+        n00bb_call_plan_free(&plan);
     }
-    core_list_free(arguments);
-    core_list_free(keywords);
     core_list_free(candidates);
     if (shapes == 1) {
         choice.symbol = sole;

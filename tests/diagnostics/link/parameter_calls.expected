@@ -1,0 +1,14 @@
+tests/diagnostics/link/parameter_calls.n:13:35: error N00B-T0001: `scale` takes 1 positional argument, but this call passes 2
+  tests/diagnostics/link/parameter_calls.n:1:6: note: `scale` is declared here
+  help: keyword parameters are only passed by name:
+    13 | let positional_keyword = scale(3, factor = 4)
+tests/diagnostics/link/parameter_calls.n:14:21: error N00B-T0009: `height` is passed by name, but other positional parameters of `area` are passed by position
+  help: pass every positional parameter by position, or every one by name:
+    14 | let mixed = area(2, 3)
+    14 | let mixed = area(width = 2, height = 3)
+tests/diagnostics/link/parameter_calls.n:15:30: error N00B-T0020: `rest` is the varargs parameter of `total`, so it cannot be passed by name
+  help: pass its items as extra positional arguments, after the positional ones
+  tests/diagnostics/link/parameter_calls.n:9:6: note: `total` is declared here
+tests/diagnostics/link/parameter_calls.n:20:28: error N00B-T0005: `total` takes the items of its varargs parameter `rest` one at a time, but this argument is a whole array
+  help: pass each item as its own argument
+  tests/diagnostics/link/parameter_calls.n:9:6: note: `total` is declared here

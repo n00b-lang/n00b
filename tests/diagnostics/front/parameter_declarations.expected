@@ -1,0 +1,17 @@
+tests/diagnostics/front/parameter_declarations.n:1:34: error N00B-P0038: positional parameter `a` must come before keyword parameter `k`
+  help: declare positional parameters first, then the varargs parameter, then keyword parameters:
+    1 | func positional_late(a: int, k: int = 1) -> int {
+tests/diagnostics/front/parameter_declarations.n:5:39: error N00B-P0038: varargs parameter `rest` must come before keyword parameter `k`
+  help: declare positional parameters first, then the varargs parameter, then keyword parameters:
+    5 | func varargs_late(a: int, *rest: int, k: int = 1) -> int {
+tests/diagnostics/front/parameter_declarations.n:9:22: error N00B-P0039: varargs parameter `rest` cannot have a default value
+  help: remove the default; a call that passes no items gets an empty array:
+    9 | func varargs_default(*rest: int) -> int {
+tests/diagnostics/front/parameter_declarations.n:13:21: error N00B-P0040: `modify` cannot be used on keyword parameter `k`
+  help: only positional parameters can be `modify` or `out`; remove `modify`:
+    13 | func modify_keyword(k: int = 1) -> int {
+tests/diagnostics/front/parameter_declarations.n:17:26: error N00B-P0040: `out` cannot be used on varargs parameter `rest`
+  help: only positional parameters can be `modify` or `out`; remove `out`:
+    17 | func out_varargs(a: int, *rest: int) -> int {
+tests/diagnostics/front/parameter_declarations.n:21:31: error N00B-P0038: `second` is a second varargs parameter, but a function can have only one
+  help: combine them into one, or make `second` an ordinary parameter

@@ -1,6 +1,6 @@
 tests/diagnostics/link/call_arguments.n:5:15: error N00B-T0005: parameter 1 (`n`) of `twice` is `int`, but this argument is `string`
   tests/diagnostics/link/call_arguments.n:1:6: note: `twice` is declared here
-tests/diagnostics/link/call_arguments.n:18:17: error N00B-T0001: `Label` takes 1 argument, but this call passes 2
+tests/diagnostics/link/call_arguments.n:18:17: error N00B-T0001: `Label` takes 1 positional argument, but this call passes 2
   tests/diagnostics/link/call_arguments.n:6:9: note: `Label` is declared here
   help: remove the extra argument
 tests/diagnostics/link/call_arguments.n:20:6: error N00B-T0002: `Label` takes 1 argument, but this call passes 0

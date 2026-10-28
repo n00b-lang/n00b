@@ -110,16 +110,30 @@ N00B_DIAG(FIELD_NEVER_READ, "N00B-N0021", WARNING,
     "Values are stored in this field but nothing reads them. Read the field\n"
     "where it is needed, or remove it.")
 N00B_DIAG(CALL_TOO_MANY_ARGUMENTS, "N00B-T0001", ERROR,
-    "a call passes more arguments than the function has parameters",
-    "Each positional argument fills the next parameter of the function, and\n"
-    "this call passes more arguments than there are parameters. Remove the\n"
-    "extra arguments, or call a function that takes them.")
+    "a call passes more positional arguments than the function takes",
+    "Positional arguments fill the function's positional parameters in\n"
+    "order, and any extra ones go to its varargs parameter. Keyword\n"
+    "parameters, the ones with a default value, are only passed by name.\n"
+    "Remove the extra arguments, or pass them by name:\n"
+    "    scale(2, factor = 3)")
 N00B_DIAG(CALL_MISSING_ARGUMENT, "N00B-T0002", ERROR,
     "a call does not supply a required parameter",
-    "Every parameter without a default value needs an argument, by position\n"
-    "or by name:\n"
+    "Every positional parameter needs an argument, either all by position\n"
+    "or all by name:\n"
     "    area(2, 3)\n"
     "    area(width = 2, height = 3)")
+N00B_DIAG(CALL_MIXED_ARGUMENT_STYLES, "N00B-T0009", ERROR,
+    "a call passes positional parameters both by position and by name",
+    "A call supplies a function's positional parameters either all by\n"
+    "position or all by name, not a mix of the two:\n"
+    "    area(2, 3)\n"
+    "    area(width = 2, height = 3)")
+N00B_DIAG(CALL_VARARGS_BY_NAME, "N00B-T0020", ERROR,
+    "a call passes the varargs parameter by name",
+    "The varargs parameter collects the extra positional arguments of a\n"
+    "call. It cannot be named; pass its items after the positional\n"
+    "arguments:\n"
+    "    total(1, 2, 3)")
 N00B_DIAG(CALL_UNKNOWN_NAMED_ARGUMENT, "N00B-T0003", ERROR,
     "a named argument does not match any parameter of the function",
     "`name = value` in a call supplies the parameter called `name`, and the\n"

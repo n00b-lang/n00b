@@ -96,6 +96,7 @@ typedef struct {
     th_mode mode;
     size_t parameter;
     core_string_t parameter_name;
+    bool rest;
 } n00bb_call_binding_t;
 core_list_decl(n00bb_call_binding_t);
 bool n00bb_bind_call_arguments(parse_grammar_t *grammar,

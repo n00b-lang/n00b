@@ -1,0 +1,6 @@
+func total(first: int, *rest: int, bias: int = 0, scale: int = 1) -> int {
+    return first * scale + bias
+}
+
+let interleaved = total(1, bias = 2, 3)
+let twice = total(scale = 2, 1, bias = 3)

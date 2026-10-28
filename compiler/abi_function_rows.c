@@ -148,7 +148,8 @@ n00bb_abi_function_rows_build(
         uint64_t ir_signature_hash = function && function->type
             ? th_hash(ir_module_types(module), function->type) : 0;
         uint64_t source_signature_hash = symbol->type
-            ? th_hash(ir_module_types(module), symbol->type) : 0;
+            ? th_hash(ir_module_types(module), th_func_collect_rest(
+                ir_module_types(module), symbol->type)) : 0;
         if (!function || function->owner != module
             || !ir_signature_hash
             || ir_signature_hash != source_signature_hash
