@@ -18,6 +18,8 @@ typedef struct {
     ir_module_t *store_body;
     ir_module_t *floating;
     core_dict_t emitted;
+    core_dict_t type_indices;
+    ir_func_t *indexed_function;
 } box_calls_t;
 
 typedef enum {
@@ -779,22 +781,45 @@ type_index_of_box(box_calls_t *calls, ir_func_t *caller,
     th_type *u32 = th_name(ir_module_types(caller->owner),
                            CORE_STRING_STATIC("u32"));
     ir_value_t *value = instruction->operands[0].value;
+    if (calls->indexed_function != caller) {
+        core_dict_free(&calls->type_indices);
+        core_dict_init(&calls->type_indices, nullptr, nullptr);
+        calls->indexed_function = caller;
+    }
+    bool known = false;
+    ir_value_t *memo = core_dict_get(&calls->type_indices, value, &known);
+    if (known) return memo;
+    ir_block_t *block = instruction->block;
+    uint32_t at = instruction->index;
+    bool shared = value->kind == IR_VAL_PARAM
+        || (value->kind == IR_VAL_INSTR && value->def && value->def->block);
+    if (value->kind == IR_VAL_PARAM) {
+        block = ir_block_entry(caller);
+        at = 0;
+    }
+    else if (shared) {
+        block = value->def->block;
+        at = value->def->index + 1;
+        while (at < block->n_instrs && block->instrs[at]->op == IR_OP_PHI)
+            at++;
+    }
     th_type *source = th_resolve(value->type);
     bool any = th_builtin_applied(source, TH_BUILTIN_ANY, 0) != nullptr;
     ir_func_t *field = runtime_function(calls, any
         ? CORE_STRING_STATIC("any_type_field")
         : CORE_STRING_STATIC("type_field_of"));
-    ir_instr_t *actual = u32 && field ? fresh_instruction(instruction->block,
-        instruction->index, instruction->span, IR_OP_CALL, u32) : nullptr;
+    ir_instr_t *actual = u32 && field ? fresh_instruction(block, at,
+        instruction->span, IR_OP_CALL, u32) : nullptr;
     if (!actual || !retarget(calls, caller, actual, field, &source,
                              any ? 0 : 1, &value, 1)) return nullptr;
-    ir_value_t *mask = typed_constant(caller, instruction->block,
-        instruction->index, instruction->span, UINT32_C(0x7fffffff),
-        CORE_STRING_STATIC("u32"));
-    ir_instr_t *masked = mask ? fresh_instruction(instruction->block,
-        instruction->index, instruction->span, IR_OP_AND, u32) : nullptr;
-    return masked && ir_instr_operand_value(masked, actual->dest)
-        && ir_instr_operand_value(masked, mask) ? masked->dest : nullptr;
+    ir_value_t *mask = typed_constant(caller, block, actual->index + 1,
+        instruction->span, UINT32_C(0x7fffffff), CORE_STRING_STATIC("u32"));
+    ir_instr_t *masked = mask ? fresh_instruction(block,
+        mask->def->index + 1, instruction->span, IR_OP_AND, u32) : nullptr;
+    if (!masked || !ir_instr_operand_value(masked, actual->dest)
+        || !ir_instr_operand_value(masked, mask)) return nullptr;
+    if (shared) core_dict_put(&calls->type_indices, value, masked->dest);
+    return masked->dest;
 }
 
 static bool
@@ -1608,11 +1633,13 @@ n00bb_rewrite_box_operations(n00bb_link_analysis_t *analysis)
     };
     if (!calls.runtime && !calls.floating) return true;
     core_dict_init(&calls.emitted, nullptr, nullptr);
+    core_dict_init(&calls.type_indices, nullptr, nullptr);
     for (size_t f = 0; f < analysis->emitted_functions.len; f++)
         core_dict_put(&calls.emitted, analysis->emitted_functions.data[f], 1);
     size_t reached = analysis->emitted_functions.len;
     bool ok = rewrite_emitted(&calls);
     if (ok) emit_callees(&calls, reached);
     core_dict_free(&calls.emitted);
+    core_dict_free(&calls.type_indices);
     return ok;
 }
