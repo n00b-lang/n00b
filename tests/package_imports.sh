@@ -7,7 +7,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 cd "$program_dir"
-"$compiler" build --output "$tmp/consumers" package_consumers.n00b \
+"$compiler" build --output "$tmp/consumers" package_consumers.n \
     >"$tmp/consumers.log" 2>&1 || {
     cat "$tmp/consumers.log" >&2
     exit 1
@@ -18,7 +18,7 @@ grep -Fq "N00B-M0010" "$tmp/consumers.log" || {
 }
 "$tmp/consumers"
 
-if "$compiler" build --output "$tmp/inactive" inactive_export_consumer.n00b \
+if "$compiler" build --output "$tmp/inactive" inactive_export_consumer.n \
     >"$tmp/inactive.log" 2>&1; then
     echo 'the inactive export consumer built' >&2
     exit 1
@@ -29,12 +29,12 @@ grep -Fq 'N00B-N0004: `rejected` is not exported' "$tmp/inactive.log" \
     exit 1
 }
 
-if "$compiler" check sys_parent_consumer.n00b aligned.self_import \
-    bundle.self_import aligned.self_reference inactive_export_consumer.n00b \
-    internal_module_consumer.n00b renamed_manifest_consumer.n00b \
-    orphan_manifest_consumer.n00b stranded_consumer.n00b \
-    duplicate_export_consumer.n00b builtin_private_consumer.n00b \
-    missing_manifest_variable_consumer.n00b foreign_export_consumer.n00b \
+if "$compiler" check sys_parent_consumer.n aligned.self_import \
+    bundle.self_import aligned.self_reference inactive_export_consumer.n \
+    internal_module_consumer.n renamed_manifest_consumer.n \
+    orphan_manifest_consumer.n stranded_consumer.n \
+    duplicate_export_consumer.n builtin_private_consumer.n \
+    missing_manifest_variable_consumer.n foreign_export_consumer.n \
     >"$tmp/rejected.log" 2>&1; then
     echo 'the rejected package consumers checked' >&2
     exit 1

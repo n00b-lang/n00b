@@ -9,7 +9,7 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 cd "$program_dir"
 if "$compiler" build --contract-dir "$contract_dir" --output "$tmp/program" \
-        load_dynamic.n00b >"$tmp/build.log" 2>&1; then
+        load_dynamic.n >"$tmp/build.log" 2>&1; then
     echo "a binding with load dynamic was accepted" >&2
     exit 1
 fi

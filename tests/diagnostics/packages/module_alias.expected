@@ -1,2 +1,2 @@
-tests/diagnostics/packages/module_alias/facade.n00b:1:8: error N00B-M0004: `module_alias.impl` is this package's own external name
+tests/diagnostics/packages/module_alias/facade.n:1:8: error N00B-M0004: `module_alias.impl` is this package's own external name
   help: inside a package, import its modules by their internal names

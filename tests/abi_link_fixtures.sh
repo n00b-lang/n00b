@@ -77,22 +77,22 @@ N00B_PATH="$script_dir/programs/abi" "$compiler" compile \
 "$abi_record_object_test" "$tmp/import_enum_abi.n00bm" import-enum
 N00B_PATH="$interface_programs" "$compiler" compile \
     --output "$tmp/import_flagset_abi.n00bm" \
-    "$script_dir/programs/abi/foreign_flagset_user.n00b"
+    "$script_dir/programs/abi/foreign_flagset_user.n"
 "$abi_record_object_test" "$tmp/import_flagset_abi.n00bm" import-flagset
 N00B_PATH="$interface_programs" "$compiler" compile \
     --output "$tmp/import_enum_facade_abi.n00bm" \
-    "$interface_programs/operator_enum_signed_user.n00b"
+    "$interface_programs/operator_enum_signed_user.n"
 [ -s "$tmp/import_enum_facade_abi.n00bm" ]
 N00B_PATH="$interface_programs" "$compiler" library \
     --output "$tmp/linked_flagset_abi.n00bm" \
-    "$script_dir/programs/abi/foreign_flagset_user.n00b"
+    "$script_dir/programs/abi/foreign_flagset_user.n"
 "$abi_link_input_test" --linked-flagset "$tmp/linked_flagset_abi.n00bm"
 "$compiler" compile --output "$tmp/generic_abi.n00bm" \
-    "$script_dir/programs/abi/generic_modify_parameter.n00b"
+    "$script_dir/programs/abi/generic_modify_parameter.n"
 [ -s "$tmp/generic_abi.n00bm" ]
 "$abi_record_object_test" "$tmp/generic_abi.n00bm" generic
 "$compiler" compile --output "$tmp/generic_local_abi.n00bm" \
-    "$script_dir/programs/abi/generic_local.n00b"
+    "$script_dir/programs/abi/generic_local.n"
 [ -s "$tmp/generic_local_abi.n00bm" ]
 "$abi_record_object_test" "$tmp/generic_local_abi.n00bm" generic-local
 N00B_PATH="$script_dir/programs/abi" "$compiler" compile \

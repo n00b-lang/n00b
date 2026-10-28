@@ -15,7 +15,7 @@ builds_and_runs() {
     name=$1
     shift
     if ! "$compiler" build --contract-dir "$contract_dir" "$@" \
-        --output "$tmp/$name" "$name.n00b" >"$tmp/$name.log" 2>&1; then
+        --output "$tmp/$name" "$name.n" >"$tmp/$name.log" 2>&1; then
         cat "$tmp/$name.log" >&2
         exit 1
     fi
@@ -46,7 +46,7 @@ modules)
     fi
 
     "$compiler" build --contract-dir "$contract_dir" \
-        --show-ffi zlib.__init.zlib zlib_const.n00b \
+        --show-ffi zlib.__init.zlib zlib_const.n \
         >"$tmp/show-ffi" 2>"$tmp/show-ffi.log" || {
         cat "$tmp/show-ffi.log" >&2
         exit 1
@@ -61,8 +61,8 @@ modules)
     test ! -s "$tmp/show-ffi.log"
     test ! -e zlib_const
 
-    if "$compiler" check --contract-dir "$contract_dir" zlib_renamed_export.n00b \
-        zlib_mixed_try.n00b >"$tmp/renamed.log" 2>&1; then
+    if "$compiler" check --contract-dir "$contract_dir" zlib_renamed_export.n \
+        zlib_mixed_try.n >"$tmp/renamed.log" 2>&1; then
         echo "zlib_renamed_export unexpectedly checked" >&2
         exit 1
     fi

@@ -17,9 +17,9 @@ fi
 
 mkdir -p "$tmp/project/a/b" "$tmp/project/a/gen/x" "$tmp/project/build/x"
 cd "$tmp/project"
-printf 'require 1 == 1\n' >a/b/mod.n00b
-printf 'require 1 == 1\n' >a/gen/x/hidden.n00b
-printf 'require 1 == 1\n' >build/x/hidden.n00b
+printf 'require 1 == 1\n' >a/b/mod.n
+printf 'require 1 == 1\n' >a/gen/x/hidden.n
+printf 'require 1 == 1\n' >build/x/hidden.n
 echo generated >a/gen/notes.txt
 echo generated >build/notes.txt
 for cache in on off; do

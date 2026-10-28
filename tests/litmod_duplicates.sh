@@ -11,7 +11,7 @@ cd "$program_dir"
 fails_with() {
     name=$1
     pattern=$2
-    if "$compiler" check "$name.n00b" >"$tmp/$name.log" 2>&1; then
+    if "$compiler" check "$name.n" >"$tmp/$name.log" 2>&1; then
         echo "$name unexpectedly checked" >&2
         exit 1
     fi
@@ -28,7 +28,7 @@ fails_with cross_module "literal modifier \`'stamp\` for quotes literals is alre
 fails_with unexported_alias "N00B-N0513"
 fails_with alias_only_target "N00B-N0513"
 
-if ! "$compiler" build --output "$tmp/accepted" accepted.n00b \
+if ! "$compiler" build --output "$tmp/accepted" accepted.n \
     >"$tmp/accepted.log" 2>&1; then
     cat "$tmp/accepted.log" >&2
     exit 1

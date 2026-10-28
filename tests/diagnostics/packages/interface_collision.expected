@@ -1,2 +1,2 @@
-tests/diagnostics/packages/interface_collision/facade.n00b:7:1: error N00B-M0022: `interface_collision.item` is both a subpackage and a name that package `interface_collision` exports
-  tests/diagnostics/packages/interface_collision/facade.n00b:3:1: note: `item` is exported here
+tests/diagnostics/packages/interface_collision/facade.n:7:1: error N00B-M0022: `interface_collision.item` is both a subpackage and a name that package `interface_collision` exports
+  tests/diagnostics/packages/interface_collision/facade.n:3:1: note: `item` is exported here

@@ -4,7 +4,7 @@ test-gates	dev	2	sh "$SRC/tests/gates.sh" "$SRC"
 abi-static-graph	dev	2	"$BUILD/abi-static-graph-test"
 writ-diagnostics-current	dev	2	python3 "$SRC/tools/gen_writ_diagnostics.py" "$SRC/writ/include/writ/diag_codes.def" "$SRC/compiler/diagnostics/writ.def" --check
 config-layers	pr	2	sh "$SRC/tests/config_layers.sh" "$BUILD/n00b"
-syntax-aliases	pr	6	sh "$SRC/tests/syntax_aliases.sh" "$BUILD/n00b" "$SRC/tests/programs/syntax_aliases.n00b" "$SRC/tests/programs/syntax_preferences.n00b"
+syntax-aliases	pr	6	sh "$SRC/tests/syntax_aliases.sh" "$BUILD/n00b" "$SRC/tests/programs/syntax_aliases.n" "$SRC/tests/programs/syntax_preferences.n"
 writ-coexistence	dev	2	"$BUILD/writ-coexistence"
 builtin-os	dev	2	"$BUILD/builtin-os-test"
 builtin-abi	dev	2	"$BUILD/builtin-abi-test"
@@ -79,7 +79,7 @@ numeric-casts-n00b	pr	6	sh "$SRC/tests/numeric_casts.sh" "$BUILD/n00b" "$SRC/tes
 inline-array-layout-n00b	pr	3	sh "$SRC/tests/inline_array_layout.sh" "$BUILD/n00b" "$SRC/tests/programs/inline_array_record_layout.n"
 runtime-array-bound-n00b	pr	2	sh "$SRC/tests/runtime_array_bound.sh" "$BUILD/n00b" "$SRC/tests/programs/array_runtime_sized_declaration.n"
 builtin-abi-n00b	pr	3	sh "$SRC/tests/builtin_abi_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_abi.n"
-builtin-debug	pr	5	sh "$SRC/tests/builtin_debug.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_debug.n00b"
+builtin-debug	pr	5	sh "$SRC/tests/builtin_debug.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_builtin_debug.n"
 raw-repr	pr	13	sh "$SRC/tests/raw_repr.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" defaults
 bitcode-native	pr	18	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" runtime
 inline-n00b	pr	10	sh "$SRC/tests/inline_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/inline"

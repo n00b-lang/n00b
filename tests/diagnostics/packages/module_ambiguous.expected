@@ -1,2 +1,2 @@
-tests/diagnostics/packages/module_ambiguous/facade.n00b:1:8: error N00B-M0023: `module_ambiguous.foo` is ambiguous: `tests/diagnostics/packages/module_ambiguous/foo.n00b` and the directory `tests/diagnostics/packages/module_ambiguous/foo` both claim it
+tests/diagnostics/packages/module_ambiguous/facade.n:1:8: error N00B-M0023: `module_ambiguous.foo` is ambiguous: `tests/diagnostics/packages/module_ambiguous/foo.n` and the directory `tests/diagnostics/packages/module_ambiguous/foo` both claim it
   help: rename the module or the directory

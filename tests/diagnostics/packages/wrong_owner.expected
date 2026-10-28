@@ -1,1 +1,1 @@
-tests/diagnostics/packages/wrong_owner/facade.n00b:1:1: warning N00B-M0021: package `another_owner` is declared by a manifest of package `wrong_owner`
+tests/diagnostics/packages/wrong_owner/facade.n:1:1: warning N00B-M0021: package `another_owner` is declared by a manifest of package `wrong_owner`
