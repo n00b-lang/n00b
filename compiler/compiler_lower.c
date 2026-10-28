@@ -17570,7 +17570,9 @@ n00bb_capture_compound_target(ir_lower_context_t *context,
     parse_tree_t *parent = parse_tree_parent(visit->node);
     if (entering || !context->reachable || !parent
         || !nt_is(visit->grammar, parent, CORE_STRING_STATIC("binop-assign-stmt"))
-        || core_tree_child(parent, 0) != visit->node) return true;
+        || core_tree_child(parent, 0) != visit->node
+        || (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("place"))
+            && !n00bb_name_place(visit->grammar, visit->node))) return true;
     parse_sym_entry_t *symbol = n00bb_compound_target_symbol(context, visit->node);
     ir_local_t *local = ir_lower_bound_local(context, symbol);
     ir_value_t *address = ir_lower_bound_address(context, symbol);
@@ -26149,7 +26151,10 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("assert-stmt"), n00bb_lower_assert_statement, nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
-        CORE_STRING_STATIC("expression"), n00bb_capture_compound_target, nullptr);
+        CORE_STRING_STATIC("expression"), n00bb_capture_compound_target, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("place"), n00bb_capture_compound_target,
+            nullptr);
     ok = ok && ir_lowerer_register_nt_visit(lowerer,
         CORE_STRING_STATIC("case-expr-item"), n00bb_prune_enum_case, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
