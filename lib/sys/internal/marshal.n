@@ -321,13 +321,13 @@ func sentinel_count(pointer: Ref[byte], element: Ref[internal.abi.Type_Record],
     }
     var mask: u64 = 0xffffffffffffffff
     if width < 64 {
-        mask = (cast[u64]1 << cast[u64]width) - 1
+        mask = (cast[u64](1) << cast[u64]width) - 1
     }
     let stride: uint = internal.abi.size_bytes(element)
     var count: u64 = 0
     while true {
         let value: u64 = internal.gc.mark.trace_unit(
-            __gc_byte_offset(pointer, cast[uint]count * stride), width)
+            __gc_byte_offset(pointer, cast[uint](count) * stride), width)
         count += 1
         if value == (sentinel & mask) {
             return count
@@ -483,7 +483,7 @@ func visit_foreign(graph: Ref[Graph], source: u32, parent: Ref[byte],
         return
     }
     let target: i64 = foreign_node(graph, source, slot, pointer,
-        cast[uint]count * internal.abi.size_bytes(element),
+        cast[uint](count) * internal.abi.size_bytes(element),
         cast[u32]element_index)
     if target >= 0 {
         add_edge(graph, source, slot, cast[u32]target, pointer)
@@ -605,11 +605,11 @@ func visit_elements(graph: Ref[Graph], source: u32, data: Ref[byte],
     }
     let alignment:     uint = internal.abi.alignment_bytes(element)
     let element_bytes: uint = internal.abi.size_bytes(element)
-    let stride:        uint = (element_bytes + alignment - 1) / alignment * alignment
+    let stride:        uint = ((element_bytes + alignment - 1) / alignment) * alignment
     var index: u64 = 0
     while index < shape.total_count {
         visit_value(graph, source,
-            __gc_byte_offset(data, cast[uint]index * stride), child_type)
+            __gc_byte_offset(data, cast[uint](index) * stride), child_type)
         index += 1
     }
 }
@@ -632,10 +632,10 @@ func visit_static_array(graph: Ref[Graph], source: u32, address: Ref[byte],
         internal.gc.core.array_flat_element_index(type_index, shape.flat_rank))
     let alignment:     uint = internal.abi.alignment_bytes(element)
     let element_bytes: uint = internal.abi.size_bytes(element)
-    let stride:        uint = (element_bytes + alignment - 1) / alignment * alignment
+    let stride:        uint = ((element_bytes + alignment - 1) / alignment) * alignment
     let known: bool = node_containing(graph, __abi_ref_address(data)) >= 0
     let data_node: u32 = static_node(graph, data,
-        cast[uint]shape.total_count * stride, cast[u32]alignment)
+        cast[uint](shape.total_count) * stride, cast[u32]alignment)
     let descriptor: Ref[byte] = unsafe_cast[Ref[byte]] shape
     let descriptor_node: u32 = static_node(graph, descriptor,
         internal.gc.core.array_descriptor_bytes(shape), 8)
@@ -777,7 +777,7 @@ func trace_node(graph: Ref[Graph], index: u32) {
         var ordinal: u64 = 0
         while ordinal < node.count {
             visit_value(graph, index,
-                __gc_byte_offset(base, cast[uint]ordinal * stride),
+                __gc_byte_offset(base, cast[uint](ordinal) * stride),
                 node.type_index)
             ordinal += 1
         }
@@ -1002,14 +1002,14 @@ func write_failure(graph: Ref[Graph]) {
     }
     write_word(0xffffffffffffffff, 8)
     var root_index: int = 0
-    while root_index < cast[int]graph.roots.len() and
+    while root_index < cast[int](graph.roots.len()) and
         graph.roots[root_index].node != node {
         root_index += 1
     }
     require root_index < cast[int]graph.roots.len()
     write_string(graph.roots[root_index].module_path)
     write_string(graph.roots[root_index].name)
-    var hop: int = cast[int]hops.len() - 1
+    var hop: int = cast[int](hops.len()) - 1
     while hop >= 0 {
         let entry: Graph_Node = graph.nodes[cast[int]hops[hop]]
         var at: uint = offsets[hop]

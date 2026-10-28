@@ -20,7 +20,7 @@ func mapping_bytes(payload_bytes: uint, alignment: uint) -> uint {
         payload_bytes > maximum - header_bytes - granule + 1 {
         return 0
     }
-    let object_bytes: uint = (header_bytes + payload_bytes + granule - 1) / granule * granule
+    let object_bytes: uint = ((header_bytes + payload_bytes + granule - 1) / granule) * granule
     if object_bytes > maximum - prefix {
         return 0
     }
@@ -139,7 +139,7 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
     let header_bytes: uint = internal.gc.core.object_header_bytes()
     let granule:      uint = internal.gc.core.granule_bytes
     let unrounded:    uint = header_bytes + payload_bytes
-    let object_bytes: uint = (unrounded + granule - 1) / granule * granule
+    let object_bytes: uint = ((unrounded + granule - 1) / granule) * granule
     let total:        uint = prefix + object_bytes
     require object_bytes > los_threshold or alignment > granule
 

@@ -93,7 +93,7 @@ func skeleton(consume s: string) -> string {
 
     var pos: u32 = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         var cp: char = cast[char] 0
 
         try {
@@ -251,7 +251,7 @@ func script_restriction(s: string) -> Restriction {
     var any_char: bool = false
     var pos: u32 = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         var cp: char = cast[char] 0
 
         try {
@@ -264,7 +264,7 @@ func script_restriction(s: string) -> Restriction {
 
         any_char = true
 
-        if cast[u32] cp > 0x7f {
+        if cast[u32](cp) > 0x7f {
             ascii_only = false
         }
 
@@ -279,7 +279,7 @@ func script_restriction(s: string) -> Restriction {
 
         var i: i32 = 0
         while i < n {
-            if cast[u32] aug[cast[uint] i] < nslots {
+            if cast[u32](aug[cast[uint] i]) < nslots {
                 uni[aug[cast[uint] i]] = true
             }
             i += 1
@@ -292,7 +292,7 @@ func script_restriction(s: string) -> Restriction {
         if all_scripts {
             var i: i32 = 0
             while i < n {
-                if cast[u32] aug[cast[uint] i] < nslots {
+                if cast[u32](aug[cast[uint] i]) < nslots {
                     resolved[aug[cast[uint] i]] = true
                 }
                 i += 1
@@ -315,7 +315,7 @@ func script_restriction(s: string) -> Restriction {
 
             var i: i32 = 0
             while i < n {
-                if cast[u32] aug[cast[uint] i] == k {
+                if cast[u32](aug[cast[uint] i]) == k {
                     present = true
                 }
                 i += 1
@@ -354,7 +354,7 @@ func script_restriction(s: string) -> Restriction {
         return Restriction.highly_restrictive
     }
 
-    if cast[u32] ids.latin < nscripts and uni[ids.latin] {
+    if cast[u32](ids.latin) < nscripts and uni[ids.latin] {
         var others: u32 = 0
         var all_rec: bool = true
 
@@ -396,6 +396,6 @@ func script_restriction(s: string) -> Restriction {
 }
 
 func has_mixed_scripts(s: string) -> bool {
-    return cast[u32] script_restriction(s) >
+    return cast[u32](script_restriction(s)) >
         cast[u32] Restriction.single_script
 }

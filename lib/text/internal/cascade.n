@@ -140,7 +140,7 @@ func next(modify self: Cascade) -> Style_Run? {
         fg_rgb = nil, bg_rgb = nil, font_size = nil)
     var next: u32 = self.len
     var cur: string = self.s
-    while cast[u64] tag(cur) == str_tag_rich {
+    while cast[u64](tag(cur)) == str_tag_rich {
         let body: Ref[Rich_Body] = __string_rich_body(cur)
         if body.opaque {
             acc = (
@@ -174,7 +174,7 @@ func cascade_style_index(s: string, pos: u32, inclusive: bool = false)
         fg_rgb = nil, bg_rgb = nil, font_size = nil)
     let len: u32 = unsafe_cast[u32] byte_len(s)
     var cur: string = s
-    while cast[u64] tag(cur) == str_tag_rich {
+    while cast[u64](tag(cur)) == str_tag_rich {
         let body: Ref[Rich_Body] = __string_rich_body(cur)
         if body.opaque {
             acc = (

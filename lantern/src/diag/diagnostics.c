@@ -200,6 +200,21 @@ core_diag_help(core_diagnostics_t *d, core_string_t text)
                  (core_diag_location_t){}, text);
 }
 
+void
+core_diag_mark(core_diagnostics_t *d, core_diag_location_t location)
+{
+    add_part(d, CORE_DIAG_PART_MARK, (core_string_t){}, location,
+             (core_string_t){});
+}
+
+void
+core_diag_fix(core_diagnostics_t *d, core_diag_location_t location,
+              core_string_t lines)
+{
+    if (lines.data)
+        add_part(d, CORE_DIAG_PART_FIX, (core_string_t){}, location, lines);
+}
+
 bool
 core_diagnostic_set_message(core_diagnostics_t *d, size_t index,
                             core_string_t message)
@@ -652,17 +667,17 @@ render_snippet(core_buffer_t *out, render_state_t *state, core_string_t path,
     core_string_t text = cached_source(state, path);
     core_buffer_puts(out, "\n");
     uint32_t previous = 0;
-    for (size_t i = 0; i < marks->len; i++) {
-        const mark_t *mark = &marks->data[i];
-        if (previous && mark->line > previous + 1) {
+    for (size_t i = 0; i < marks->len;) {
+        uint32_t line = marks->data[i].line;
+        if (previous && line > previous + 1) {
             style(out, state, STYLE_GUTTER);
             core_buffer_puts(out, "    ");
             put_spaces(out, width);
             core_buffer_puts(out, " ...\n");
             style(out, state, STYLE_RESET);
         }
-        put_gutter(out, state, width, mark->line);
-        core_string_t source = source_line(text, mark->line);
+        put_gutter(out, state, width, line);
+        core_string_t source = source_line(text, line);
         if (source.u8_bytes) {
             core_buffer_puts(out, " ");
             put_display_line(out, source);
@@ -670,17 +685,64 @@ render_snippet(core_buffer_t *out, render_state_t *state, core_string_t path,
         core_buffer_puts(out, "\n");
         put_gutter(out, state, width, 0);
         core_buffer_puts(out, " ");
-        put_spaces(out, mark->start);
-        style(out, state, mark_style(mark, severity));
-        for (uint32_t c = mark->start; c < mark->end; c++)
-            core_buffer_puts(out, "^");
-        if (mark->label.u8_bytes) {
-            core_buffer_puts(out, " ");
-            core_buffer_append_string(out, mark->label);
+        uint32_t column = 0;
+        const mark_t *labelled = nullptr;
+        for (; i < marks->len && marks->data[i].line == line; i++) {
+            const mark_t *mark = &marks->data[i];
+            if (mark->start < column) continue;
+            put_spaces(out, mark->start - column);
+            style(out, state, mark_style(mark, severity));
+            for (uint32_t c = mark->start; c < mark->end; c++)
+                core_buffer_puts(out, "^");
+            style(out, state, STYLE_RESET);
+            column = mark->end;
+            if (mark->label.u8_bytes) labelled = mark;
         }
-        style(out, state, STYLE_RESET);
+        if (labelled) {
+            style(out, state, mark_style(labelled, severity));
+            core_buffer_puts(out, " ");
+            core_buffer_append_string(out, labelled->label);
+            style(out, state, STYLE_RESET);
+        }
         core_buffer_puts(out, "\n");
-        previous = mark->line;
+        previous = line;
+    }
+}
+
+static void
+put_fix(core_buffer_t *out, const render_state_t *state, uint32_t width,
+        const core_diag_part_t *part)
+{
+    uint32_t line = part->location.line;
+    size_t start = 0;
+    for (size_t at = 0; at <= part->text.u8_bytes; at++) {
+        if (at < part->text.u8_bytes && part->text.data[at] != '\n') continue;
+        put_gutter(out, state, width, line++);
+        core_buffer_puts(out, " ");
+        put_display_line(out, core_string_slice(part->text, start,
+                                                at - start));
+        core_buffer_puts(out, "\n");
+        start = at + 1;
+    }
+}
+
+static void
+add_part_marks(core_list_t(mark_t) *marks, render_state_t *state,
+               const core_diagnostic_t *item)
+{
+    core_string_t text = cached_source(state, item->path);
+    for (size_t i = 0; i < item->parts.len; i++)
+        if (item->parts.data[i].kind == CORE_DIAG_PART_MARK)
+            add_marks(marks, text, item->parts.data[i].location, true,
+                      (core_string_t){});
+    for (size_t i = 1; i < marks->len; i++) {
+        mark_t mark = marks->data[i];
+        size_t j = i;
+        for (; j > 0 && (marks->data[j - 1].line > mark.line
+                         || (marks->data[j - 1].line == mark.line
+                             && marks->data[j - 1].start > mark.start)); j--)
+            marks->data[j] = marks->data[j - 1];
+        marks->data[j] = mark;
     }
 }
 
@@ -763,7 +825,9 @@ render_default(core_buffer_t *out, render_state_t *state,
         ? span_width(item->location) : 1;
     for (size_t i = 0; i < item->parts.len; i++) {
         const core_diag_part_t *part = &item->parts.data[i];
-        if (part->kind != CORE_DIAG_PART_SPAN || !part->location.has_location)
+        if (part->kind == CORE_DIAG_PART_NOTE
+            || part->kind == CORE_DIAG_PART_HELP
+            || !part->location.has_location)
             continue;
         uint32_t w = span_width(part->location);
         if (w > width) width = w;
@@ -772,6 +836,7 @@ render_default(core_buffer_t *out, render_state_t *state,
     core_list_t(mark_t) marks = {};
     if (collect_marks(&marks, state, item->path, item->location, true,
                       item->label)) {
+        add_part_marks(&marks, state, item);
         render_snippet(out, state, item->path, &marks, width, item->severity);
         detailed = true;
     }
@@ -802,10 +867,12 @@ render_default(core_buffer_t *out, render_state_t *state,
     bool attached = false;
     for (size_t i = 0; i < item->parts.len; i++) {
         const core_diag_part_t *part = &item->parts.data[i];
-        if (part->kind == CORE_DIAG_PART_SPAN) continue;
+        if (part->kind == CORE_DIAG_PART_SPAN
+            || part->kind == CORE_DIAG_PART_MARK) continue;
         if (!attached && detailed) core_buffer_puts(out, "\n");
         attached = true;
-        put_attached(out, state, part);
+        if (part->kind == CORE_DIAG_PART_FIX) put_fix(out, state, width, part);
+        else put_attached(out, state, part);
     }
 }
 
@@ -827,6 +894,11 @@ render_terse(core_buffer_t *out, render_state_t *state,
     core_buffer_puts(out, "\n");
     for (size_t i = 0; i < item->parts.len; i++) {
         const core_diag_part_t *part = &item->parts.data[i];
+        if (part->kind == CORE_DIAG_PART_MARK) continue;
+        if (part->kind == CORE_DIAG_PART_FIX) {
+            put_fix(out, state, span_width(part->location), part);
+            continue;
+        }
         core_buffer_puts(out, "  ");
         if (part->kind == CORE_DIAG_PART_SPAN) {
             core_string_t path = part->path.u8_bytes ? part->path : item->path;
@@ -979,6 +1051,8 @@ core_diagnostics_render_json(const core_diagnostics_t *d)
         [CORE_DIAG_PART_SPAN] = CORE_STRING_STATIC("span"),
         [CORE_DIAG_PART_NOTE] = CORE_STRING_STATIC("note"),
         [CORE_DIAG_PART_HELP] = CORE_STRING_STATIC("help"),
+        [CORE_DIAG_PART_MARK] = CORE_STRING_STATIC("mark"),
+        [CORE_DIAG_PART_FIX] = CORE_STRING_STATIC("fix"),
     };
     size_t *order = d ? render_order(d, true) : nullptr;
     core_buffer_t *out = core_buffer_empty();

@@ -247,7 +247,7 @@ func find_block_object(base: Ref[byte], address: uint) -> Ref[internal.gc.core.O
         base, start * internal.gc.core.granule_bytes)
     let bytes:         uint = internal.gc.core.object_bytes(header)
     let granule_bytes: uint = internal.gc.core.granule_bytes
-    let rounded:       uint = (bytes + granule_bytes - 1) / granule_bytes * granule_bytes
+    let rounded:       uint = ((bytes + granule_bytes - 1) / granule_bytes) * granule_bytes
     if offset >= start * internal.gc.core.granule_bytes + rounded {
         return nil
     }

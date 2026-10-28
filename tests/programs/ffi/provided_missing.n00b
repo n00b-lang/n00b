@@ -14,7 +14,7 @@ binding {
 -]'ffi
 
 func descending(a: uint, b: uint) -> i32 {
-    return cast[i32]sorter.byte_at_raw(b) - cast[i32]sorter.byte_at_raw(a)
+    return cast[i32](sorter.byte_at_raw(b)) - cast[i32]sorter.byte_at_raw(a)
 }
 
 let items: Array[u8] = [3, 9, 1, 7]

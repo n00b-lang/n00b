@@ -1,0 +1,8 @@
+tests/diagnostics/front/precedence_division.n:4:25: error N00B-P0035: `/` followed by `*` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    4 | let divide_multiply = (a / b) * c
+    4 | let divide_multiply = a / (b * c)
+tests/diagnostics/front/precedence_division.n:5:23: error N00B-P0035: `/` followed by `/` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    5 | let divide_divide = (a / b) / c
+    5 | let divide_divide = a / (b / c)

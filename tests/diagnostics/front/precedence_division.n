@@ -1,0 +1,7 @@
+var a: int = 12
+var b: int = 3
+var c: int = 2
+let divide_multiply = a / b * c
+let divide_divide = a / b / c
+let multiply_divide = a * b / c
+let multiply_multiply = a * b * c

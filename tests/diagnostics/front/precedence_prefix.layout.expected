@@ -1,0 +1,44 @@
+tests/diagnostics/front/precedence_prefix.n:5:15: error: `not` followed by `==` is not allowed, because this could be read more than one way
+
+    5 | let negated = not p == q
+      |               ^^^   ^^
+
+  help: add parentheses to say which one you mean:
+    5 | let negated = (not p) == q
+    5 | let negated = not (p == q)
+
+tests/diagnostics/front/precedence_prefix.n:6:14: error: `!` followed by `==` is not allowed, because this could be read more than one way
+
+    6 | let symbol = !p == q
+      |              ^  ^^
+
+  help: add parentheses to say which one you mean:
+    6 | let symbol = (!p) == q
+    6 | let symbol = !(p == q)
+
+tests/diagnostics/front/precedence_prefix.n:7:15: error: `cast` followed by `/` is not allowed, because this could be read more than one way
+
+    7 | let divided = cast[f64] a / 2.0
+      |               ^^^^^^^^^   ^
+
+  help: add parentheses to say which one you mean:
+    7 | let divided = cast[f64](a) / 2.0
+    7 | let divided = cast[f64](a / 2.0)
+
+tests/diagnostics/front/precedence_prefix.n:8:15: error: `unsafe_cast` followed by `+` is not allowed, because this could be read more than one way
+
+    8 | let widened = unsafe_cast[i64] a + 1
+      |               ^^^^^^^^^^^^^^^^   ^
+
+  help: add parentheses to say which one you mean:
+    8 | let widened = unsafe_cast[i64](a) + 1
+    8 | let widened = unsafe_cast[i64](a + 1)
+
+tests/diagnostics/front/precedence_prefix.n:9:18: error: `ref` followed by `+` is not allowed, because this could be read more than one way
+
+    9 | let referenced = ref a + b
+      |                  ^^^   ^
+
+  help: add parentheses to say which one you mean:
+    9 | let referenced = ref(a) + b
+    9 | let referenced = ref(a + b)

@@ -1,0 +1,53 @@
+tests/diagnostics/front/precedence_bitwise_arith.n:5:21: error: `<<` followed by `-` is not allowed, because this could be read more than one way
+
+    5 | let shift_minus = 1 << n - 1
+      |                     ^^   ^
+
+  help: add parentheses to say which one you mean:
+    5 | let shift_minus = (1 << n) - 1
+    5 | let shift_minus = 1 << (n - 1)
+
+tests/diagnostics/front/precedence_bitwise_arith.n:6:18: error: `&` followed by `+` is not allowed, because this could be read more than one way
+
+    6 | let and_plus = a & b + 1
+      |                  ^   ^
+
+  help: add parentheses to say which one you mean:
+    6 | let and_plus = (a & b) + 1
+    6 | let and_plus = a & (b + 1)
+
+tests/diagnostics/front/precedence_bitwise_arith.n:7:16: error: `|` followed by `^` is not allowed, because this could be read more than one way
+
+    7 | let or_xor = a | b ^ c
+      |                ^   ^
+
+  help: add parentheses to say which one you mean:
+    7 | let or_xor = (a | b) ^ c
+    7 | let or_xor = a | (b ^ c)
+
+tests/diagnostics/front/precedence_bitwise_arith.n:8:21: error: `<<` followed by `<<` is not allowed, because this could be read more than one way
+
+    8 | let shift_shift = a << b << c
+      |                     ^^   ^^
+
+  help: add parentheses to say which one you mean:
+    8 | let shift_shift = (a << b) << c
+    8 | let shift_shift = a << (b << c)
+
+tests/diagnostics/front/precedence_bitwise_arith.n:9:20: error: `<<` followed by `>>` is not allowed, because this could be read more than one way
+
+    9 | let shift_back = a << b >> c
+      |                    ^^   ^^
+
+  help: add parentheses to say which one you mean:
+    9 | let shift_back = (a << b) >> c
+    9 | let shift_back = a << (b >> c)
+
+tests/diagnostics/front/precedence_bitwise_arith.n:10:16: error: `&` followed by `|` is not allowed, because this could be read more than one way
+
+    10 | let and_or = a & b | c
+       |                ^   ^
+
+  help: add parentheses to say which one you mean:
+    10 | let and_or = (a & b) | c
+    10 | let and_or = a & (b | c)

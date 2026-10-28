@@ -1,0 +1,30 @@
+tests/diagnostics/front/precedence_compare_chain.n:11:21: error: comparisons can't be chained
+
+    11 | let equal_chain = a == b == c
+       |                     ^^   ^^
+
+  help: compare twice:
+    11 | let equal_chain = a == b and b == c
+
+tests/diagnostics/front/precedence_compare_chain.n:12:21: error: comparisons can't be chained
+
+    12 | let mixed_chain = a < b == c
+       |                     ^   ^^
+
+  help: compare twice:
+    12 | let mixed_chain = a < b and b == c
+
+tests/diagnostics/front/precedence_compare_chain.n:13:6: error: comparisons can't be chained
+
+    13 | if 0 <= i < n {
+       |      ^^   ^
+
+  help: compare twice:
+    13 | if 0 <= i and i < n {
+
+tests/diagnostics/front/precedence_compare_chain.n:16:16: error: comparisons can't be chained
+
+    16 | let called = 0 <= middle() < n
+       |                ^^          ^
+
+  help: compare each pair separately, joined with `and`

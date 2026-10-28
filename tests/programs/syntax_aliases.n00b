@@ -1,9 +1,9 @@
 fn symbolic(first: bool, second: bool) -> bool {
-    return first && !second || first
+    return (first && !second) || first
 }
 
 function wordy(first: bool, second: bool) return: bool:
-    if first and not second or first:
+    if (first and not second) or first:
         return true
     elseif second:
         return false

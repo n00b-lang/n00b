@@ -21,11 +21,11 @@ const reads_nonlocal:      u64 = 0x1000000
 const writes_nonlocal:     u64 = 0x2000000
 
 func reads_parameter(index: u64) -> u64 {
-    return cast[u64] 1 << (32 + index)
+    return cast[u64](1) << (32 + index)
 }
 
 func writes_parameter(index: u64) -> u64 {
-    return cast[u64] 1 << (48 + index)
+    return cast[u64](1) << (48 + index)
 }
 
 func has_effect(effects: u64, effect: u64) -> bool {

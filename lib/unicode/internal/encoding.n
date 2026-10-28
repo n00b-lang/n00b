@@ -39,7 +39,7 @@ private func decode_step(s: string, pos: u32) -> Utf8_Step {
 }
 
 func utf8_decode(s: string, modify pos: u32) -> char fail: String_Error {
-    if cast[uint] pos >= byte_len(s) {
+    if cast[uint](pos) >= byte_len(s) {
         fail String_Error.index_oob
     }
 
@@ -174,7 +174,7 @@ func utf16_to_string(src: List[u16]) -> string fail: String_Error {
 
         var cp: u32 = cast[u32] src[i]
 
-        if cp >= 0xd800 and cp <= 0xdbff and i + 1 < cast[int] count and
+        if cp >= 0xd800 and cp <= 0xdbff and i + 1 < cast[int](count) and
             src[i + 1] >= 0xdc00 and src[i + 1] <= 0xdfff {
             cp = 0x10000 + ((cp - 0xd800) << 10) +
                 cast[u32] (src[i + 1] - 0xdc00)
@@ -211,7 +211,7 @@ func utf32_from_string(s: string) -> List[char] fail: String_Error {
     var pos: u32 = 0
     var idx: uint = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         let step: Utf8_Step = decode_step(s, pos)
 
         if step.adv != 0 {
@@ -238,7 +238,7 @@ func utf16_from_string(s: string) -> List[u16] fail: String_Error {
     var pos: u32 = 0
     var idx: uint = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         let step: Utf8_Step = decode_step(s, pos)
 
         if step.adv == 0 {

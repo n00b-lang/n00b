@@ -1,0 +1,8 @@
+var a: int = 7
+var b: int = 3
+var c: int = 2
+let twice = a % b % c
+let after_multiply = a * b % c
+let before_multiply = a % b * c
+let after_divide = a / b % c
+let after_add = a + b % c

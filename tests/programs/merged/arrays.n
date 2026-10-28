@@ -7,7 +7,7 @@ func fill(n: uint) -> uint {
     grid[1][2] = 7
     bytes[127] = 1
     require grid[0][0] == 0
-    return cells[0] + cast[uint] grid[1][2] + cast[uint] bytes[127]
+    return cells[0] + cast[uint](grid[1][2]) + cast[uint] bytes[127]
 }
 
 func assign_once() -> u8 {
@@ -170,7 +170,7 @@ func range_sum(n: uint, m: i32, items: Array[u8]) -> uint {
     for i: u8 from 0 until 6 {
         best = i
     }
-    return total + cast[uint] k + cast[uint] best
+    return total + cast[uint](k) + cast[uint] best
 }
 
 require range_sum(5, 3, [1, 2]) == 6 + 6 + 3 + 5

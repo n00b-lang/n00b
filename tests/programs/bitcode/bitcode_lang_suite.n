@@ -283,8 +283,8 @@ func operator_newlines_check() {
     require (1 <<
         2) ==
         4
-    require true and
-        true or
+    require (true and
+        true) or
         false
 }
 
@@ -448,9 +448,9 @@ func unsafe_arithmetic_check() {
     assert unsafe_add(peak, 1) == -2147483648
     assert mix(0xFFFFFFFFFFFFFFFF, 3) == folded
     let wide: u64 = 0x100000102
-    assert unsafe_cast[u8] wide == 2
+    assert unsafe_cast[u8](wide) == 2
     let negative: i64 = -1
-    assert unsafe_cast[u16] negative == 65535
+    assert unsafe_cast[u16](negative) == 65535
     let quotient: i32 = -9
     assert quotient / 4 == -2 and quotient % 4 == -1
 }
@@ -724,7 +724,7 @@ func promoted(entry: Entry?, items: Array[int]?) -> int {
         return 0
     }
     return twice(entry.value.get()) + entry.inner.value.get() +
-        cast[int]items.len() + items[1] + 1 + entry.value.get()
+        cast[int](items.len()) + items[1] + 1 + entry.value.get()
 }
 
 func looked_up(counts: Dict[string, int]) -> int {
@@ -1025,10 +1025,10 @@ func unspecialized_box_paths_check() {
     cps[1] = cast[char] 0x4e16
     cps[2] = cast[char] 0x1f600
     let chars = unspecialized_chars(cps)
-    require len(chars) == 3 and chars[0] == cast[char] 0x41
-        and chars[1] == cast[char] 0x4e16 and chars[2] == cast[char] 0x1f600
+    require len(chars) == 3 and chars[0] == cast[char](0x41)
+        and chars[1] == cast[char](0x4e16) and chars[2] == cast[char] 0x1f600
     let copied = unspecialized_copy(cps)
-    require copied[0] == cast[char] 0x41 and copied[2] == cast[char] 0x1f600
+    require copied[0] == cast[char](0x41) and copied[2] == cast[char] 0x1f600
     let text: string = "generic cell text"
     require unspecialized_cell(text) == text
     require unspecialized_cell(41) == 41
@@ -1351,18 +1351,18 @@ func f32_check() {
     require y - x == x
     let wide = cast[f64] y
     require wide == 3.0
-    require cast[f32] wide == y
+    require cast[f32](wide) == y
     let tenth: f64 = 0.1
     require cast[f64] (cast[f32] tenth) != tenth
     let count = 7
-    require cast[f32] count == 7.0
-    require cast[int] y == 3
+    require cast[f32](count) == 7.0
+    require cast[int](y) == 3
     require HALF + HALF == 1.0
     var sample: Sample
     sample.weight = 0.75
     sample.total = 2.5
     sample.count = 3
-    require sample.weight * cast[f32] sample.count == 2.25
+    require sample.weight * cast[f32](sample.count) == 2.25
     let values: Array[f32][3] = [0.5, 1.5, 2.0]
     require values[0] + values[1] + values[2] == 4.0
 }
@@ -1426,14 +1426,14 @@ func bake_foreign_check() {
     require root.total == 4
     require item_at(0).key == 1
     require item_at(3).value == 40
-    require unsafe_cast[uint] root.early == items + 32
+    require unsafe_cast[uint](root.early) == items + 32
     let codes: Ref[byte] = unsafe_cast[Ref[byte]] root.codes
     let third: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 8)
     let last: Ref[i32] = unsafe_cast[Ref[i32]] __gc_byte_offset(codes, 12)
     require third.__value == 7
     require last.__value == 0
-    require unsafe_cast[uint] item_at(0).label == unsafe_cast[uint] root.other
-    require unsafe_cast[uint] item_at(2).label == unsafe_cast[uint] root.other
+    require unsafe_cast[uint](item_at(0).label) == unsafe_cast[uint] root.other
+    require unsafe_cast[uint](item_at(2).label) == unsafe_cast[uint] root.other
     require __abi_baked_address(unsafe_cast[uint] root.other)
     let label: string? = foreign_text(item_at(1).label)
     require label != nil and label.get() == "odd"

@@ -118,8 +118,8 @@ func array_element(type_field: u32, payload: Ref[byte], index: i64,
         and internal.abi.packed_array_stride_bits(row) == 0
     let position: u64 = array_position(descriptor, index)
     let alignment_bits: u64 = cast[u64](row.alignment_bytes) * 8
-    let stride_bits: u64 = (row.size_bits + alignment_bits - 1) /
-        alignment_bits * alignment_bits
+    let stride_bits: u64 = ((row.size_bits + alignment_bits - 1) /
+        alignment_bits) * alignment_bits
     require stride_bits & 7 == 0
     element.__value = child
     return __gc_byte_offset(data.get(), position * (stride_bits / 8))
@@ -158,8 +158,8 @@ func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
     }
     let alignment: u64 = cast[u64](row.alignment_bytes)
     require alignment != 0 and alignment & (alignment - 1) == 0
-    let stride_bits: u64 = (row.size_bits + alignment * 8 - 1) /
-        (alignment * 8) * (alignment * 8)
+    let stride_bits: u64 = ((row.size_bits + alignment * 8 - 1) /
+        (alignment * 8)) * (alignment * 8)
     require stride_bits & 7 == 0
     __gc_memset(__gc_byte_offset(data.get(), index * (stride_bits / 8)), 0,
                 stride_bits / 8)
@@ -271,8 +271,8 @@ func array_locate(source: Ref[Any], index: i64,
         let alignment_bits: u64 = cast[u64](element.alignment_bytes) * 8
         require descriptor.flags == 0 and alignment_bits != 0
             and element.size_bits != 0
-        let stride_bits: u64 = (element.size_bits + alignment_bits - 1) /
-            alignment_bits * alignment_bits
+        let stride_bits: u64 = ((element.size_bits + alignment_bits - 1) /
+            alignment_bits) * alignment_bits
         location.address = __gc_byte_offset(data.get(),
                                             position * (stride_bits / 8))
         location.bit_offset = 0

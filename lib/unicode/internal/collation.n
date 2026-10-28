@@ -72,7 +72,7 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
         var k: u32 = 1
         while k < klen and contiguous {
             if ip < num_cps and
-                cast[u32] cps[ip] == generated.collation.contr_keys(ci, k) {
+                cast[u32](cps[ip]) == generated.collation.contr_keys(ci, k) {
                 pos[k] = ip
                 ip += 1
             }
@@ -113,7 +113,7 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
 
         while running and matched_k < klen {
             if ip < num_cps and
-                cast[u32] cps[ip] == generated.collation.contr_keys(ci, matched_k) {
+                cast[u32](cps[ip]) == generated.collation.contr_keys(ci, matched_k) {
                 pos[matched_k] = ip
                 ip += 1
                 matched_k += 1
@@ -152,7 +152,7 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
                     continue
                 }
 
-                if cast[u32] cps[s] == target {
+                if cast[u32](cps[s]) == target {
                     let this_ccc: u8 = cccs[s]
 
                     if this_ccc <= last_ccc {
@@ -228,8 +228,8 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
 
     var i: u16 = 0
     while i < count and written < max_ces {
-        let base: u32 = ce_off + 1 + cast[u32] i * 3
-        let at: uint = out_at + cast[uint] written * 3
+        let base: u32 = ce_off + 1 + cast[u32](i) * 3
+        let at: uint = out_at + cast[uint](written) * 3
 
         out[at] = generated.collation.contr_ce_data(base)
         out[at + 1] = generated.collation.contr_ce_data(base + 1)
@@ -244,8 +244,8 @@ private func try_contraction(cps: Array[char], cccs: Array[u8], num_cps: u32,
 private func is_core_han_block(cp: char) -> bool {
     var i: u32 = 0
     while i < generated.collation.core_han_range_count {
-        if cast[u32] cp >= generated.collation.core_han_ranges(i, 0) and
-            cast[u32] cp <= generated.collation.core_han_ranges(i, 1) {
+        if cast[u32](cp) >= generated.collation.core_han_ranges(i, 0) and
+            cast[u32](cp) <= generated.collation.core_han_ranges(i, 1) {
             return true
         }
 
@@ -258,8 +258,8 @@ private func is_core_han_block(cp: char) -> bool {
 private func implicit_range(cp: char) -> u32? {
     var i: u32 = 0
     while i < generated.collation.implicit_range_count {
-        if cast[u32] cp >= generated.collation.implicit_ranges(i, 0) and
-            cast[u32] cp <= generated.collation.implicit_ranges(i, 1) {
+        if cast[u32](cp) >= generated.collation.implicit_ranges(i, 0) and
+            cast[u32](cp) <= generated.collation.implicit_ranges(i, 1) {
             return i
         }
 
@@ -307,7 +307,7 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
     }
 
     let offset: u32 = generated.collation.ducet_stage2(
-        cast[u32] generated.collation.ducet_stage1(v >> 8) * 256 + (v & 0xff))
+        cast[u32](generated.collation.ducet_stage1(v >> 8)) * 256 + (v & 0xff))
 
     if offset == ce_none {
         if max_ces < 2 {
@@ -348,13 +348,13 @@ private func get_ces(cp: char, modify out: Array[u16], out_at: uint,
 
     var i: u16 = 0
     while i < count and written < max_ces {
-        let base: u32 = offset + 1 + cast[u32] i * 3
+        let base: u32 = offset + 1 + cast[u32](i) * 3
 
         if base + 2 >= generated.collation.ce_data_len {
             break
         }
 
-        let at: uint = out_at + cast[uint] written * 3
+        let at: uint = out_at + cast[uint](written) * 3
 
         out[at] = generated.collation.ce_data(base)
         out[at + 1] = generated.collation.ce_data(base + 1)
@@ -379,7 +379,7 @@ func sort_key(s: string) -> List[u8] {
     var num_cps: u32 = 0
     var pos: u32 = 0
 
-    while cast[uint] pos < byte_len {
+    while cast[uint](pos) < byte_len {
         try {
             cps[num_cps] = internal.encoding.utf8_decode(nfd, pos)!
         } fail(failure) {
@@ -401,9 +401,9 @@ func sort_key(s: string) -> List[u8] {
         j += 1
     }
 
-    var ce_cap: i32 = cast[i32] num_cps + 16
+    var ce_cap: i32 = cast[i32](num_cps) + 16
 
-    var ces: Array[u16] = new[Array[u16]](cast[int] ce_cap * 3)
+    var ces: Array[u16] = new[Array[u16]](cast[int](ce_cap) * 3)
     var total: i32 = 0
 
     var i: u32 = 0
@@ -420,9 +420,9 @@ func sort_key(s: string) -> List[u8] {
                 ncap *= 2
             }
 
-            var grown: Array[u16] = new[Array[u16]](cast[int] ncap * 3)
+            var grown: Array[u16] = new[Array[u16]](cast[int](ncap) * 3)
 
-            sys.abi.copy_items(grown, 0, ces, 0, cast[uint] total * 3)
+            sys.abi.copy_items(grown, 0, ces, 0, cast[uint](total) * 3)
             ces = grown
             ce_cap = ncap
         }
@@ -430,7 +430,7 @@ func sort_key(s: string) -> List[u8] {
         let remaining: i32 = ce_cap - total
 
         let n: i32 = try_contraction(cps, cccs, num_cps, i, ces,
-                                     cast[uint] total * 3, remaining, matched)
+                                     cast[uint](total) * 3, remaining, matched)
 
         if n > 0 {
             total += n
@@ -439,7 +439,7 @@ func sort_key(s: string) -> List[u8] {
             continue
         }
 
-        total += get_ces(cps[i], ces, cast[uint] total * 3, remaining)
+        total += get_ces(cps[i], ces, cast[uint](total) * 3, remaining)
         i += 1
     }
 

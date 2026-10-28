@@ -41,7 +41,7 @@ func is_identifier_allowed(cp: char) -> bool {
     }
 
     return generated.identifiers.id_status_stage2[
-        cast[u32] generated.identifiers.id_status_stage1(v >> 8) * 256 +
+        cast[u32](generated.identifiers.id_status_stage1(v >> 8)) * 256 +
         (v & 0xff)] == 1
 }
 
@@ -62,7 +62,7 @@ func is_valid_identifier(s: string) -> bool {
         return false
     }
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         try {
             if !is_xid_continue(internal.encoding.utf8_decode(s, pos)!) {
                 return false

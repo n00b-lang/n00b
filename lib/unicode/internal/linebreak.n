@@ -14,7 +14,7 @@ private func raw_lb_class(cp: char) -> internal.types.Lb {
     }
 
     return cast[internal.types.Lb] generated.linebreak.lb_stage2[
-        cast[u32] generated.linebreak.lb_stage1(v >> 8) * 256 + (v & 0xff)]
+        cast[u32](generated.linebreak.lb_stage1(v >> 8)) * 256 + (v & 0xff)]
 }
 
 private func resolve_lb(cp: char, cls: internal.types.Lb) -> internal.types.Lb {
@@ -91,7 +91,7 @@ private func is_break_context(cls: internal.types.Lb) -> bool {
 
 private func is_aksara(cls: internal.types.Lb, cp: char) -> bool {
     return cls == internal.types.Lb.ak or cls == internal.types.Lb.as or
-        (cast[u32] cp == dotted_circle and cls == internal.types.Lb.al)
+        (cast[u32](cp) == dotted_circle and cls == internal.types.Lb.al)
 }
 
 private func skip_cm_fwd(cls: Array[internal.types.Lb], n: u32, i: u32) -> u32 {
@@ -318,7 +318,7 @@ private func lb_rule(cps: Array[char],
         prev == internal.types.Lb.ba) {
         let pb: u32 = prev_base
 
-        if cast[u32] cps[pb] == hyphen or prev == internal.types.Lb.hy or
+        if cast[u32](cps[pb]) == hyphen or prev == internal.types.Lb.hy or
             prev == internal.types.Lb.hh {
             var valid: bool = pb == 0
 
@@ -483,7 +483,7 @@ private func lb_rule(cps: Array[char],
 
     if prev == internal.types.Lb.vi and i >= 2 and
         (cur == internal.types.Lb.ak or
-        (cast[u32] cps[i] == dotted_circle and cur == internal.types.Lb.al)) {
+        (cast[u32](cps[i]) == dotted_circle and cur == internal.types.Lb.al)) {
         let vi_base: u32 = prev_base
 
         if vi_base > 0 {
@@ -554,7 +554,7 @@ func linebreaks(s: string) -> List[u8] {
     var cps: Array[char] = new[Array[char]](cast[int] byte_len)
     var cls: Array[internal.types.Lb] = new[Array[internal.types.Lb]](cast[int] byte_len)
 
-    while cast[uint] pos < byte_len {
+    while cast[uint](pos) < byte_len {
         try {
             cps[n] = internal.encoding.utf8_decode(s, pos)!
             cls[n] = line_break(cps[n])

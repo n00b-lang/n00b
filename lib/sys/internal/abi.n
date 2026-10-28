@@ -251,7 +251,7 @@ func size_bytes(row: Ref[Type_Record]) -> uint {
     if row.size_bits % 8 != 0 {
         bytes += 1
     }
-    return (bytes + alignment - 1) / alignment * alignment
+    return ((bytes + alignment - 1) / alignment) * alignment
 }
 
 func alignment_bytes(row: Ref[Type_Record]) -> uint {

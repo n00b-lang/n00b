@@ -9,7 +9,7 @@ import generated.age
 import generated.script_extensions
 
 func script(cp: char) -> internal.types.Script {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return 0
     }
 
@@ -18,7 +18,7 @@ func script(cp: char) -> internal.types.Script {
 }
 
 func script_name(s: internal.types.Script) -> string {
-    if cast[u32] s >= generated.scripts.script_count {
+    if cast[u32](s) >= generated.scripts.script_count {
         return "Unknown"
     }
 
@@ -50,7 +50,7 @@ func block(cp: char) -> internal.types.Block {
 }
 
 func block_name(b: internal.types.Block) -> string {
-    if cast[u32] b > generated.blocks.block_count {
+    if cast[u32](b) > generated.blocks.block_count {
         return "No_Block"
     }
 
@@ -58,7 +58,7 @@ func block_name(b: internal.types.Block) -> string {
 }
 
 func bidi_class(cp: char) -> internal.types.Bidi_Class {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return internal.types.Bidi_Class.l
     }
 
@@ -67,7 +67,7 @@ func bidi_class(cp: char) -> internal.types.Bidi_Class {
 }
 
 func joining_type(cp: char) -> internal.types.Joining_Type {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return internal.types.Joining_Type.u
     }
 
@@ -76,7 +76,7 @@ func joining_type(cp: char) -> internal.types.Joining_Type {
 }
 
 func age(cp: char) -> internal.types.Age {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return 0
     }
 
@@ -85,7 +85,7 @@ func age(cp: char) -> internal.types.Age {
 }
 
 func age_name(a: internal.types.Age) -> string {
-    if cast[u32] a >= generated.age.age_count {
+    if cast[u32](a) >= generated.age.age_count {
         return "Unassigned"
     }
 
@@ -94,7 +94,7 @@ func age_name(a: internal.types.Age) -> string {
 
 func script_extensions(cp: char, modify scripts: Array[internal.types.Script],
                        max_scripts: i32) -> i32 {
-    if cast[u32] cp >= internal.properties.max_cp or max_scripts <= 0 {
+    if cast[u32](cp) >= internal.properties.max_cp or max_scripts <= 0 {
         return 0
     }
 

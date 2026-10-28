@@ -87,8 +87,8 @@ func sample(x: uint =
         1
     let at_least = 2 >=
         1
-    let logical = true and
-        false or
+    let logical = (true and
+        false) or
         true
     for index from 1 to
         3 {

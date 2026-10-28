@@ -213,6 +213,28 @@ N00B_DIAG(SYNTAX_TRAILING_COMMA, "N00B-P0034", WARNING,
     "A comma at the end of a declaration or import list reads as though\n"
     "the list continues on the next line. Inside brackets, and before a\n"
     "block, a trailing comma is fine.")
+N00B_DIAG(AMBIGUOUS_OPERATORS, "N00B-P0035", ERROR,
+    "two operators are mixed in a way that could be read more than one way",
+    "Operators only have an order between them where everyone already\n"
+    "agrees on it: `*` before `+`, arithmetic before comparisons,\n"
+    "comparisons before `and` and `or`. Everywhere else n00b refuses to\n"
+    "guess. `%` does not mix with `*`, `/` or another `%`; `/` does not take\n"
+    "a `*` or `/` after it; `&`, `|` and `^` each chain only with\n"
+    "themselves; shifts do not chain; bitwise operators do not mix with\n"
+    "arithmetic; and `and` does not mix with `or`. Add parentheses to say\n"
+    "which reading you mean.")
+N00B_DIAG(AMBIGUOUS_PREFIX, "N00B-P0036", ERROR,
+    "a prefix operator could apply to more than one operand",
+    "`not` before a comparison could negate just the left side or the\n"
+    "whole comparison. `cast[T]`, `unsafe_cast[T]` and `ref` read like\n"
+    "function calls, so when one is followed by a binary operator it could\n"
+    "apply to just the next operand or to the whole operation. Add\n"
+    "parentheses to say which reading you mean.")
+N00B_DIAG(CHAINED_COMPARISON, "N00B-P0037", ERROR,
+    "comparisons are chained",
+    "A comparison produces a `bool`, so `a < b < c` would compare that\n"
+    "`bool` with `c`. Compare each pair separately and join them with\n"
+    "`and`, as in `a < b and b < c`.")
 N00B_DIAG(IMPORT_NOT_FOUND, "N00B-M0001", ERROR,
     "an imported module cannot be found",
     "The module is not in the current directory, in a package root on\n"

@@ -207,7 +207,7 @@ private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
         if spec.common.zero_pad {
             pad = 0x30
         }
-        let diff: int = cast[int] spec.common.min_width - cast[int] w
+        let diff: int = cast[int](spec.common.min_width) - cast[int] w
         var i: int = 0
         while i < diff {
             push_front(hbuf, p, pad)
@@ -252,7 +252,7 @@ private func u128_divmod10(n: u128, out rem_out: u8) -> u128 {
         r = (r << 1) | cast[u8] ((n >> i) & 1)
         if r >= 10 {
             r -= 10
-            q = q | (cast[u128] 1 << i)
+            q = q | (cast[u128](1) << i)
         }
     }
     rem_out = r

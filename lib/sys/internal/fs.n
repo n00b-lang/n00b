@@ -19,7 +19,7 @@ func open_read(path: string) -> int fail: int {
     var bytes: Array[u8] = new[Array[u8]](1)
     try {
         bytes = to_cstring(path, copy = true,
-            buf = new[Array[u8]](cast[int] byte_len(path) + 1))!
+            buf = new[Array[u8]](cast[int](byte_len(path)) + 1))!
     } fail(failure) {
         fail einval
     }

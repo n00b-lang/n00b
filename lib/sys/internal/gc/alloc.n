@@ -267,7 +267,7 @@ func allocate_reserved(mutator: Ref[internal.gc.core.Mutator],
         payload_bytes > maximum - header_bytes - granule + 1 {
         return nil
     }
-    let bytes: uint = (header_bytes + payload_bytes + granule - 1) / granule * granule
+    let bytes: uint = ((header_bytes + payload_bytes + granule - 1) / granule) * granule
     if bytes > internal.gc.los.los_threshold or
         internal.gc.core.bump_room(bump) < bytes {
         return nil
@@ -504,7 +504,7 @@ inline func allocate_runtime_known_on_mutator_into(mutator: Ref[internal.gc.core
         payload_bytes > maximum - header_bytes - granule + 1 {
         return nil
     }
-    let bytes: uint = (header_bytes + payload_bytes + granule - 1) / granule * granule
+    let bytes: uint = ((header_bytes + payload_bytes + granule - 1) / granule) * granule
     if bytes > internal.gc.los.los_threshold or
         cast[uint](alignment) > internal.gc.core.granule_bytes {
         return allocate_large(mutator, type_index, payload_bytes,

@@ -211,7 +211,7 @@ func check_array_trace(heap: Ref[sys.gc.core.Heap],
                             mutator, ref mutator.small, trace.get().type_index,
                             sys.abi.size_bytes(array_row.get()),
                             sys.abi.alignment_bytes(array_row.get()), false)
-                        let data_bytes: uint = cast[uint]513 * sys.abi.size_bytes(node_row.get())
+                        let data_bytes: uint = cast[uint](513) * sys.abi.size_bytes(node_row.get())
                         let data: Ref[byte]? = sys.memory.map_zeroed(data_bytes,
                             sys.abi.alignment_bytes(node_row.get()))
                         let shape_bytes: uint = sys.abi.size_bytes(shape_row.get())
@@ -228,7 +228,7 @@ func check_array_trace(heap: Ref[sys.gc.core.Heap],
                                     value.data = data
                                     value.descriptor = shape
                                     let last: Ref[Node] = unsafe_cast[Ref[Node]] __gc_byte_offset(
-                                        data.get(), cast[uint]512 * sys.abi.size_bytes(node_row.get()))
+                                        data.get(), cast[uint](512) * sys.abi.size_bytes(node_row.get()))
                                     last.next = target
                                     let marker_map: Ref[byte]? = sys.memory.map_zeroed(
                                         sys.abi.size_bytes(marker_row.get()),
@@ -661,7 +661,7 @@ func gc_block() {
             require false
         }
         assert metadata.magic == 0x6d616e69
-        assert cast[u8] metadata.state == cast[u8] sys.gc.core.Block_State.retired
+        assert cast[u8](metadata.state) == cast[u8] sys.gc.core.Block_State.retired
         assert metadata.free_lines == 249
         assert metadata.sweep_epoch == epoch
         assert sys.gc.core.read_epoch(metadata) == epoch
@@ -1218,7 +1218,7 @@ func gc_los_pacing() {
                 var root: Ref[byte]? = first
                 require sys.gc.roots.push(mutator, ref root)
                 var index: uint = 0
-                while index < config.initial_heap_bytes / bytes * 3 {
+                while index < (config.initial_heap_bytes / bytes) * 3 {
                     let allocated: Ref[byte]? = sys.gc.alloc.allocate_large(
                         mutator, type_index, bytes, sys.gc.core.granule_bytes,
                         false)
@@ -1525,7 +1525,7 @@ func gc_roots() {
                             var registered: uint = heap.nglobals
                             item = 0
                             while item < many {
-                                let index: uint = item * 7919 % many
+                                let index: uint = (item * 7919) % many
                                 if index % 3 != 0 {
                                     sys.gc.roots.remove_global(heap,
                                         __gc_byte_offset(slots, index * slot_bytes))

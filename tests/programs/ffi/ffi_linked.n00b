@@ -255,7 +255,7 @@ func triple(value: i32) -> i32 {
 }
 
 func descending(a: uint, b: uint) -> i32 {
-    return cast[i32]sorter.byte_at_raw(b) - cast[i32]sorter.byte_at_raw(a)
+    return cast[i32](sorter.byte_at_raw(b)) - cast[i32]sorter.byte_at_raw(a)
 }
 
 func checked_double(value: i32) -> i32 {
