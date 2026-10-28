@@ -2748,7 +2748,37 @@ func theme_probe_main() {
     require text.theme_set_current("dracula")
 }
 
+func objects_allocated() -> u64 {
+    let mutator = sys.gc.alloc.mutator_for_native()
+    require mutator != nil
+    return mutator.get().objects_allocated
+}
+
+func joined(a: string, b: string) -> string {
+    return a + b
+}
+
+func short_string_checks() {
+    let left: string = "hello, "
+    let right: string = "world"
+    let before: u64 = objects_allocated()
+    let small: string = joined(left, right)
+    let piece: string = byte_slice(small, 7, 12)
+    let none: string = byte_slice(small, 5, 2)
+    let letter: string = from_char(cast[char] 0x20ac)
+    require objects_allocated() == before
+    require small == "hello, world" and piece == "world"
+    require byte_len(none) == 0 and letter == "€"
+    require joined("abcdefg", "hijklmn") == "abcdefghijklmn"
+    require joined("abcdefg", "hijklmno") == "abcdefghijklmno"
+    require joined("", "") == "" and joined("x", "") == "x"
+    require joined("caf", "é") == "café"
+    require encoding(joined("caf", "é")) == Str_Encoding.utf8
+    require encoding(byte_slice("é", 1, 2)) == Str_Encoding.binary
+}
+
 core_probe_main()
+short_string_checks()
 rstr_probe_main()
 raw_literal_probe_main()
 report("string_encoding_probe", string_encoding_probe())

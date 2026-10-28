@@ -443,37 +443,25 @@ func trace_array_elements(marker: Ref[internal.gc.core.Marker]?,
                           mutator: Ref[internal.gc.core.Mutator]?,
                           owner: Ref[internal.gc.core.Object_Header]?,
                           address: Ref[byte], data: Ref[byte],
-                          shape: Ref[internal.abi.Array_Descriptor_Header],
+                          backing: Ref[internal.gc.core.Array_Backing],
                           type_index: u32, start_index: u64) {
-    require shape.rank != 0 and shape.flat_rank != 0 and
-        shape.flat_rank <= shape.rank and start_index <= shape.total_count
-    let child_type: u32 = internal.gc.core.array_flat_element_index(
-        type_index, shape.flat_rank)
-    let element: Ref[internal.abi.Type_Record]? = internal.abi.type_at(child_type)
-    if element != nil {
-        if element.get().tracing_index == 0 {
-            return
-        }
-        let alignment: uint = internal.abi.alignment_bytes(element.get())
-        require alignment != 0
-        let element_bytes: uint = internal.abi.size_bytes(element.get())
-        let stride:        uint = ((element_bytes + alignment - 1) / alignment) * alignment
-        var end_index:     u64  = shape.total_count
-        if end_index - start_index > scan_chunk and marker != nil {
-            end_index = start_index + scan_chunk
-            push_continuation(marker.get(), owner, address, type_index,
-                              end_index)
-        }
-        var index: u64 = start_index
-        while index < end_index {
-            trace_value(marker, mutator, owner,
-                __gc_byte_offset(data, cast[uint](index) * stride),
-                child_type, 0)
-            index += 1
-        }
+    require start_index <= backing.shape.total_count
+    if backing.element.tracing_index == 0 {
         return
     }
-    require false
+    var end_index: u64 = backing.shape.total_count
+    if end_index - start_index > scan_chunk and marker != nil {
+        end_index = start_index + scan_chunk
+        push_continuation(marker.get(), owner, address, type_index,
+                          end_index)
+    }
+    var index: u64 = start_index
+    while index < end_index {
+        trace_value(marker, mutator, owner,
+            __gc_byte_offset(data, cast[uint](index) * backing.stride),
+            backing.element_index, 0)
+        index += 1
+    }
 }
 
 func trace_array(marker: Ref[internal.gc.core.Marker]?,
@@ -487,8 +475,12 @@ func trace_array(marker: Ref[internal.gc.core.Marker]?,
         visit_managed_pointer(marker, mutator, data)
         visit_managed_pointer(marker, mutator,
                               unsafe_cast[Ref[byte]] descriptor.get())
+        let resolved: internal.gc.core.Array_Backing? =
+            internal.gc.core.resolve_array_backing(type_index, descriptor.get())
+        require resolved != nil
+        var backing: internal.gc.core.Array_Backing = resolved.get()
         trace_array_elements(marker, mutator, owner, address, data.get(),
-                             descriptor.get(), type_index, start_index)
+                             ref backing, type_index, start_index)
         return
     }
     require data == nil and descriptor == nil
@@ -499,11 +491,15 @@ func trace_array_backing(marker: Ref[internal.gc.core.Marker]?,
                          owner: Ref[internal.gc.core.Object_Header],
                          address: Ref[byte], type_index: u32,
                          start_index: u64) {
-    let shape:  Ref[internal.abi.Array_Descriptor_Header] = internal.gc.core.array_descriptor_at(address)
-    let offset: uint                                     = internal.gc.core.array_backing_offset(type_index, shape)
-    require offset != 0 and cast[u64](offset) <= internal.gc.core.meta_payload_bytes(owner.meta)
+    let resolved: internal.gc.core.Array_Backing? =
+        internal.gc.core.resolve_array_backing(type_index,
+            internal.gc.core.array_descriptor_at(address))
+    require resolved != nil
+    var backing: internal.gc.core.Array_Backing = resolved.get()
+    require cast[u64](backing.data_offset) <= internal.gc.core.meta_payload_bytes(owner.meta)
     trace_array_elements(marker, mutator, owner, address,
-        __gc_byte_offset(address, offset), shape, type_index, start_index)
+        __gc_byte_offset(address, backing.data_offset), ref backing,
+        type_index, start_index)
 }
 
 func trace_value(marker: Ref[internal.gc.core.Marker]?,

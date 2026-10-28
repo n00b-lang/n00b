@@ -122,7 +122,7 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
                             mutator: Ref[internal.gc.core.Mutator],
                             type_index: u32, payload_bytes: uint,
                             alignment: uint, finalizable: bool,
-                            instance_descriptor : Ref[internal.abi.Array_Descriptor_Header]? = nil,
+                            backing : Ref[internal.gc.core.Array_Backing]? = nil,
                             slot : Ref[Ref[byte]?]? = nil) -> Ref[byte]? {
     if type_index == 0 {
         return nil
@@ -152,7 +152,7 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
     if finalizable {
         flags = flags | cast[u32](internal.gc.core.obj_final)
     }
-    if instance_descriptor != nil {
+    if backing != nil {
         flags = flags | cast[u32](internal.gc.core.obj_array_backing)
     }
     var epoch: u32 = heap.epoch
@@ -167,10 +167,10 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
         let reused: Ref[internal.gc.core.Los_Obj]       = obj.get()
         let header: Ref[internal.gc.core.Object_Header] = ref reused.hdr
         __gc_memset(header, 0, object_bytes)
-        if instance_descriptor != nil {
+        if backing != nil {
             require internal.gc.core.initialize_array_backing(
-                internal.gc.core.payload_of(header), payload_bytes, type_index,
-                instance_descriptor.get())
+                internal.gc.core.payload_of(header), payload_bytes,
+                backing.get())
         }
         header.meta = internal.gc.core.meta_make(payload_bytes, flags)
         __atomic_store(ref reused.marked, epoch)
@@ -185,10 +185,10 @@ func allocate_locked(heap: Ref[internal.gc.core.Heap],
             fresh.mapped_bytes = mapped_bytes
             fresh.bytes = total
             fresh.hdr.type_index = type_index
-            if instance_descriptor != nil {
+            if backing != nil {
                 require internal.gc.core.initialize_array_backing(
                     internal.gc.core.payload_of(ref fresh.hdr), payload_bytes,
-                    type_index, instance_descriptor.get())
+                    backing.get())
             }
             fresh.hdr.meta = internal.gc.core.meta_make(payload_bytes,
                 flags)
