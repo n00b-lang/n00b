@@ -695,6 +695,7 @@ typedef struct {
     core_list_t(n00bb_integer_guard_t) integer_guards;
     core_dict_t integer_edge_sites;
     core_dict_t constructor_types;
+    core_dict_t trait_dispatchers;
     core_dict_t integer_range_nodes;
     core_dict_t integer_tracked_symbols;
     core_dict_t failed_calls;

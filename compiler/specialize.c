@@ -307,6 +307,71 @@ fold_static_type_tests(ir_func_t *function, th_ctx *types)
     return feasible;
 }
 
+static ir_instr_t *
+dispatcher_arm_call(ir_block_t *arm)
+{
+    for (uint32_t i = 0; arm && i < arm->n_instrs; i++) {
+        ir_instr_t *call = arm->instrs[i];
+        if (call->op != IR_OP_CALL) continue;
+        ir_instr_t *next = i + 1 < arm->n_instrs ? arm->instrs[i + 1]
+                                                 : nullptr;
+        bool forwarded = next && (next->op == IR_OP_JUMP
+            || (next->op == IR_OP_COPY && next->n_operands == 1
+                && ir_operand_value(&next->operands[0]) == call->dest));
+        return forwarded ? call : nullptr;
+    }
+    return nullptr;
+}
+
+static bool
+resolve_dispatcher_call(ir_instr_t *call, ir_func_t *dispatcher,
+                        th_ctx *types)
+{
+    if (!ir_annot_get(&dispatcher->annots,
+                      CORE_STRING_STATIC("n00bb.closed_dispatcher"))
+        || call->n_operands < 2 || call->operands[1].kind != IR_OPD_VALUE)
+        return false;
+    th_type *subject = call_operand_type(call->operands[1].value, types);
+    if (!subject || !th_is_closed(types, subject)
+        || dynamic_subject(types, subject)) return false;
+    ir_block_t *block = ir_block_entry(dispatcher);
+    for (uint32_t guard = 0; block && guard <= dispatcher->n_blocks;
+         guard++) {
+        ir_instr_t *term = ir_block_terminator(block);
+        if (term && term->op == IR_OP_JUMP) {
+            ir_instr_t *arm = dispatcher_arm_call(ir_succ_at(term, 0));
+            if (!arm || arm->n_operands != call->n_operands) return false;
+            ir_value_t *callee = ir_operand_value(&arm->operands[0]);
+            ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
+                ? n00bb_cached_body(callee->owner) : nullptr;
+            if (!target) return false;
+            call->operands[0].value = callee;
+            return ir_instr_set_call_signature(call, target->type);
+        }
+        if (!term || term->op != IR_OP_BRANCH || term->n_operands != 3
+            || term->operands[0].kind != IR_OPD_VALUE) return false;
+        ir_value_t *condition = term->operands[0].value;
+        ir_instr_t *test = condition && condition->kind == IR_VAL_INSTR
+            ? condition->def : nullptr;
+        if (!test || test->op != IR_OP_TYPE_TEST || test->n_operands != 2
+            || test->operands[1].kind != IR_OPD_TYPE) return false;
+        bool accepts = th_env_type_pattern_accepts(types,
+            test->operands[1].type, subject);
+        block = ir_succ_at(term, accepts ? 0 : 1);
+        if (accepts) {
+            ir_instr_t *arm = dispatcher_arm_call(block);
+            if (!arm || arm->n_operands != call->n_operands) return false;
+            ir_value_t *callee = ir_operand_value(&arm->operands[0]);
+            ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
+                ? n00bb_cached_body(callee->owner) : nullptr;
+            if (!target) return false;
+            call->operands[0].value = callee;
+            return ir_instr_set_call_signature(call, target->type);
+        }
+    }
+    return false;
+}
+
 static bool
 primitive_operand_class(ir_class_t class)
 {
@@ -884,6 +949,11 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                 ir_value_t *callee = ir_operand_value(&call->operands[0]);
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
                     ? n00bb_cached_body(callee->owner) : nullptr;
+                if (target && !open_caller
+                    && resolve_dispatcher_call(call, target, caller_types)) {
+                    callee = ir_operand_value(&call->operands[0]);
+                    target = n00bb_cached_body(callee->owner);
+                }
                 const specialization_t *instance = target
                     ? instance_of(&specializations, target) : nullptr;
                 bool retargeted = instance && !call_fits_instance(call,

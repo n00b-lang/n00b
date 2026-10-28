@@ -12198,22 +12198,19 @@ closed_receiver_failure(th_ctx *types, const n00bb_link_use_site_t *site,
 }
 
 static ir_instr_t *
-n00bb_emit_closed_trait_call(ir_lower_context_t *context,
-                             n00bb_lower_context_t *lower,
-                             n00bb_trait_dispatch_plan_t *plan,
-                             parse_grammar_t *grammar,
-                             parse_sym_entry_t *requirement,
-                             parse_tree_t *formal_params,
-                             size_t parameter_count,
-                             th_type *signature,
-                             th_type *result_type,
-                             core_list_t(n00bb_ir_value_ptr_t) *values,
-                             core_list_t(n00bb_copyout_t) *copyouts,
-                             ir_span_t span)
+emit_closed_dispatch_chain(ir_lower_context_t *context,
+                           n00bb_lower_context_t *lower,
+                           n00bb_trait_dispatch_plan_t *plan,
+                           parse_grammar_t *grammar,
+                           parse_sym_entry_t *requirement,
+                           parse_tree_t *formal_params,
+                           size_t parameter_count,
+                           th_type *signature,
+                           th_type *result_type,
+                           core_list_t(n00bb_ir_value_ptr_t) *values,
+                           core_list_t(n00bb_copyout_t) *copyouts,
+                           ir_span_t span)
 {
-    if (!context || !lower || !plan || !plan->count || !requirement
-        || !signature || !result_type || !values || !values->len
-        || !values->data[0]) return nullptr;
     if (plan->direct) {
         n00bb_closed_trait_call_t emitted = n00bb_emit_closed_trait_arm(
             context, lower, &plan->entries[0], grammar, requirement,
@@ -12367,6 +12364,147 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
         return nullptr;
     read->span = span;
     return read;
+}
+
+static bool
+dispatch_outlinable(n00bb_trait_dispatch_plan_t *plan, th_type *signature,
+                    core_list_t(n00bb_ir_value_ptr_t) *values,
+                    core_list_t(n00bb_copyout_t) *copyouts)
+{
+    th_type *failure = th_func_error(signature);
+    if (plan->direct || (copyouts && copyouts->len)
+        || (failure && !th_is_nil(failure)) || th_func_rest(signature)
+        || th_func_nkw(signature)
+        || values->len != th_func_nparams(signature)) return false;
+    for (size_t i = 0; i < values->len; i++) {
+        const th_param *parameter = th_func_param(signature, i);
+        if (!values->data[i] || !parameter
+            || !th_mode_is_input_only(parameter->mode)) return false;
+    }
+    return true;
+}
+
+static ir_func_t *
+closed_dispatcher(ir_lower_context_t *context, n00bb_lower_context_t *lower,
+                  n00bb_trait_dispatch_plan_t *plan, parse_grammar_t *grammar,
+                  parse_sym_entry_t *requirement, parse_tree_t *formal_params,
+                  size_t parameter_count, th_type *signature,
+                  th_type *shared, size_t argument_count, ir_span_t span)
+{
+    n00bb_tu_state_t *state = tu_state(lower->unit);
+    th_ctx *types = ir_module_types(context->module);
+    th_param pair[] = {
+        {.mode = TH_IN, .type = shared},
+        {.mode = TH_IN, .type = signature},
+    };
+    th_type *bundle = shared ? th_type_clone_fresh(types,
+        th_func_with_error(types, th_name(types, CORE_STRING_STATIC("nil")),
+            th_name(types, CORE_STRING_STATIC("nil")), pair, 2, nullptr,
+            nullptr, 0)) : nullptr;
+    th_type *type = bundle ? th_func_param(bundle, 0)->type : nullptr;
+    signature = bundle ? th_func_param(bundle, 1)->type : nullptr;
+    if (!type || !signature) return nullptr;
+    th_type *result_type = th_func_ret(type);
+    core_buffer_t key_text = {0};
+    core_buffer_printf(&key_text, "%p:%016llx", (void *)requirement,
+                       (unsigned long long)th_hash(types, type));
+    for (size_t i = 0; i < plan->count; i++)
+        core_buffer_printf(&key_text, ":%p:%016llx",
+            (void *)plan->entries[i].implementation,
+            (unsigned long long)(plan->entries[i].receiver_type
+                ? th_hash(types, plan->entries[i].receiver_type) : 0));
+    uint64_t key = core_xxh3_64bits_raw(key_text.data, key_text.byte_len);
+    core_buffer_release(&key_text);
+    bool found = false;
+    ir_func_t *dispatcher = core_dict_get(&state->trait_dispatchers,
+        (const void *)(uintptr_t)key, &found);
+    if (found) return dispatcher;
+    char name_buffer[48];
+    core_string_t name = n00bb_format_name(name_buffer, sizeof(name_buffer),
+        "__n00bb_dispatch_%zu", core_dict_len(&state->trait_dispatchers));
+    dispatcher = ir_func_add(context->module, name, type, IR_LINK_INTERNAL);
+    if (!dispatcher || !ir_annot_set(lower->ir_context, &dispatcher->annots,
+            (ir_annot_t){.key = CORE_STRING_STATIC("n00bb.closed_dispatcher"),
+                         .kind = IR_ANNOT_BOOL, .b = true}))
+        return nullptr;
+    core_list_t(n00bb_ir_value_ptr_t) arguments =
+        core_list_new(n00bb_ir_value_ptr_t);
+    for (size_t i = 0; i < argument_count; i++) {
+        char argument_buffer[32];
+        core_string_t argument_name = n00bb_format_name(argument_buffer,
+            sizeof(argument_buffer), "dispatch_arg_%zu", i);
+        ir_value_t *argument = ir_param_add(dispatcher, argument_name,
+                                            th_func_param(type, i)->type);
+        if (!argument) {
+            core_list_free(arguments);
+            return nullptr;
+        }
+        core_list_push(arguments, argument);
+    }
+    ir_lower_context_t body = *context;
+    body.function = dispatcher;
+    body.block = ir_block_add(dispatcher, CORE_STRING_STATIC("entry"));
+    body.reachable = true;
+    ir_instr_t *read = body.block
+        ? emit_closed_dispatch_chain(&body, lower, plan, grammar, requirement,
+              formal_params, parameter_count, signature, result_type,
+              &arguments, nullptr, span)
+        : nullptr;
+    core_list_free(arguments);
+    context->next_value_id = body.next_value_id;
+    ir_instr_t *ret = read
+        ? ir_lower_emit_terminator(&body, IR_OP_RETURN, span) : nullptr;
+    if (!ret || (!th_is_nil(result_type)
+                 && !ir_instr_operand_value(ret, read->dest))) return nullptr;
+    core_dict_put(&state->trait_dispatchers, (const void *)(uintptr_t)key,
+                  dispatcher);
+    return dispatcher;
+}
+
+static ir_instr_t *
+n00bb_emit_closed_trait_call(ir_lower_context_t *context,
+                             n00bb_lower_context_t *lower,
+                             n00bb_trait_dispatch_plan_t *plan,
+                             parse_grammar_t *grammar,
+                             parse_sym_entry_t *requirement,
+                             parse_tree_t *formal_params,
+                             size_t parameter_count,
+                             th_type *signature,
+                             th_type *result_type,
+                             core_list_t(n00bb_ir_value_ptr_t) *values,
+                             core_list_t(n00bb_copyout_t) *copyouts,
+                             ir_span_t span)
+{
+    if (!context || !lower || !plan || !plan->count || !requirement
+        || !signature || !result_type || !values || !values->len
+        || !values->data[0]) return nullptr;
+    if (!dispatch_outlinable(plan, signature, values, copyouts))
+        return emit_closed_dispatch_chain(context, lower, plan, grammar,
+            requirement, formal_params, parameter_count, signature,
+            result_type, values, copyouts, span);
+    th_ctx *types = ir_module_types(context->module);
+    th_param *parameters = core_alloc_array(th_param, values->len);
+    for (size_t i = 0; i < values->len; i++)
+        parameters[i] = (th_param){.mode = TH_IN,
+                                   .type = values->data[i]->type};
+    th_type *shared = th_func_with_error(types, result_type,
+        th_name(types, CORE_STRING_STATIC("nil")), parameters, values->len,
+        nullptr, nullptr, 0);
+    core_free(parameters);
+    ir_func_t *dispatcher = shared ? closed_dispatcher(context, lower, plan,
+        grammar, requirement, formal_params, parameter_count, signature,
+        shared, values->len, span) : nullptr;
+    ir_instr_t *call = dispatcher
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    bool emitted = call
+        && ir_lower_set_temp_dest(context, call, CORE_STRING_STATIC("__n00bb_"),
+                                  result_type)
+        && ir_instr_operand_value(call,
+               ir_func_address(context->module, dispatcher));
+    for (size_t i = 0; emitted && i < values->len; i++)
+        emitted = ir_instr_operand_value(call, values->data[i]);
+    emitted = emitted && ir_instr_set_call_signature(call, shared);
+    return emitted ? call : nullptr;
 }
 
 static ir_value_t *
