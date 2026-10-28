@@ -1165,6 +1165,24 @@ ir_block_t *ir_block_add(ir_func_t *f, core_string_t name)
     return b;
 }
 
+ir_block_t *ir_block_add_entry(ir_func_t *f, core_string_t name)
+{
+    ir_block_t *b = ir_block_add(f, name);
+
+    if (!b) {
+        return nullptr;
+    }
+
+    for (uint32_t i = f->n_blocks - 1; i > 0; i--) {
+        f->blocks[i]        = f->blocks[i - 1];
+        f->blocks[i]->index = i;
+    }
+    f->blocks[0] = b;
+    b->index     = 0;
+
+    return b;
+}
+
 ir_block_t *ir_block_find(ir_func_t *f, core_string_t name)
 {
     if (!f || !name.data) {
