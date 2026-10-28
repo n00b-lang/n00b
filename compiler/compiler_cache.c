@@ -1820,6 +1820,16 @@ n00bb_cache_summary_assumptions_hold(const n00bb_cache_t *cache)
     return true;
 }
 
+bool
+n00bb_cache_owns(const n00bb_cache_t *cache, const ir_module_t *module)
+{
+    for (size_t e = 0; cache && module && e < cache->entries.len; e++)
+        for (size_t m = 0; m < cache->entries.data[e].members.len; m++)
+            if (cache->entries.data[e].members.data[m].module == module)
+                return true;
+    return false;
+}
+
 ir_module_t *
 n00bb_cache_module(const n00bb_cache_t *cache, core_string_t module)
 {

@@ -1,0 +1,23 @@
+object Cell {
+    value: 'T
+}
+
+func __init(self: Cell['T], value: 'T) {
+    self.value = value
+}
+
+object Tagged {
+    value: 'T
+}
+
+func __init(self: Tagged['T], value: 'T) {
+    self.value = value
+}
+
+func __equal(self: Tagged['T], other: Tagged['T]) -> bool {
+    return true
+}
+
+var items: List[int] = new[List[int]]()
+items.append(3)
+require len(items) == 1

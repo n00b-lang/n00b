@@ -418,12 +418,70 @@ static void test_reachable_function_walk_follows_live_function_references(void)
     closure_t closure = {0};
     check("reachable-function walking follows live calls and references",
           built && ir_walk_reachable_functions(&root, 1,
-              collect_reachable_function, &closure)
+              collect_reachable_function, nullptr, &closure)
               && closure.count == 4
               && closure.functions[0] == root
               && closure.functions[1] == middle
               && closure.functions[2] == referenced
               && closure.functions[3] == leaf);
+    ir_ctx_free(ctx);
+}
+
+typedef struct {
+    closure_t closure;
+    ir_func_t *declaration;
+    ir_func_t *implementation;
+} body_map_t;
+
+static ir_func_t *resolve_body(ir_func_t *function, void *user)
+{
+    body_map_t *map = user;
+    return function == map->declaration ? map->implementation : function;
+}
+
+static bool collect_through_bodies(ir_func_t *function, void *user)
+{
+    return collect_reachable_function(function, &((body_map_t *)user)->closure);
+}
+
+static void test_reachable_function_walk_scans_resolved_bodies(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_module_t *module = ir_module_new(ctx, S("bodies"), &ir_profile_bce,
+                                        S("host"));
+    th_type *signature = ir_type_parse(module, S("() -> void"));
+    ir_func_t *root = ir_func_add(module, S("root"), signature,
+                                  IR_LINK_EXTERNAL);
+    ir_func_t *declaration = ir_func_add(module, S("declaration"), signature,
+                                         IR_LINK_EXTERN);
+    ir_func_t *implementation = ir_func_add(module, S("implementation"),
+                                            signature, IR_LINK_INTERNAL);
+    ir_func_t *target = ir_func_add(module, S("target"), signature,
+                                    IR_LINK_INTERNAL);
+    ir_block_t *root_entry = ir_block_add(root, S("entry"));
+    ir_block_t *implementation_entry = ir_block_add(implementation,
+                                                    S("entry"));
+    ir_block_t *target_entry = ir_block_add(target, S("entry"));
+    ir_instr_t *root_call = ir_instr_add(root_entry, IR_OP_CALL);
+    ir_instr_t *implementation_call = ir_instr_add(implementation_entry,
+                                                   IR_OP_CALL);
+    bool built = root_call && implementation_call
+        && ir_instr_operand_value(root_call,
+                                  ir_func_address(module, declaration))
+        && ir_instr_operand_value(implementation_call,
+                                  ir_func_address(module, target))
+        && ir_instr_add(root_entry, IR_OP_RETURN)
+        && ir_instr_add(implementation_entry, IR_OP_RETURN)
+        && ir_instr_add(target_entry, IR_OP_RETURN);
+    body_map_t map = {.declaration = declaration,
+                      .implementation = implementation};
+    check("reachable-function walking scans the body a declaration resolves to",
+          built && ir_walk_reachable_functions(&root, 1,
+              collect_through_bodies, resolve_body, &map)
+              && map.closure.count == 3
+              && map.closure.functions[0] == root
+              && map.closure.functions[1] == declaration
+              && map.closure.functions[2] == target);
     ir_ctx_free(ctx);
 }
 
@@ -437,6 +495,7 @@ int main(void)
     test_one_visitor_refusing_children_affects_all();
     test_an_instruction_visitor_can_skip_operands();
     test_reachable_function_walk_follows_live_function_references();
+    test_reachable_function_walk_scans_resolved_bodies();
 
     return report("ir walk");
 }

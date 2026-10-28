@@ -118,6 +118,11 @@ instances() {
     if grep -q '^runtime store scc builtin\.' "$tmp/log"; then
         fail "shared stdlib: a second project stored its own builtin SCCs"
     fi
+
+    build work generic_values.n
+    build work generic_values.n
+    grep -q '^runtime reuse scc builtin\.containers\.list' "$tmp/log" \
+        || fail "generic values: the cached list module was not reused"
 }
 
 case $part in
