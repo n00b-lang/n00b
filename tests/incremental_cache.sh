@@ -66,6 +66,27 @@ edits() {
     grep -q '^runtime restart cached summary assumptions do not hold$' \
         "$tmp/log" || fail "summary edit: the optimistic build did not restart"
     expect_stored "summary edit" "helper leaf"
+
+    mkdir -p "$tmp/packages/alpha" "$tmp/packages/beta"
+    printf 'import alpha\n\nrequire alpha.read() == 7\n' \
+        >"$tmp/packages/main.n"
+    for package in alpha beta; do
+        printf 'import impl\n\npackage %s {\n    export impl\n}\n' \
+            "$package" >"$tmp/packages/$package/facade.n"
+    done
+    printf 'import beta\n\nfunc read() -> int {\n    return beta.seven()\n}\n' \
+        >"$tmp/packages/alpha/impl.n"
+    printf 'func seven() -> int {\n    return 7\n}\n' \
+        >"$tmp/packages/beta/impl.n"
+    build packages main.n
+    printf 'import beta\n\nfunc read() -> int {\n    return beta.seven() + 0\n}\n' \
+        >"$tmp/packages/alpha/impl.n"
+    N00BB_NO_PACKAGE_CACHE=1
+    export N00BB_NO_PACKAGE_CACHE
+    build packages main.n
+    unset N00BB_NO_PACKAGE_CACHE
+    grep -q '^comptime reuse scc alpha.facade$' "$tmp/log" \
+        || fail "stale package module: the alpha manifest was not reused"
 }
 
 shapes() {

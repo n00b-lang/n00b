@@ -410,7 +410,7 @@ rebind_call_node(n00bb_tu_state_t *state, parse_tree_t *node,
         parse_tree_set_sym(node, to);
     n00bb_link_use_site_t *site = link_use_site_for_node(state, node);
     if (site && site->symbol && canonical_symbol(site->symbol) == origin)
-        site->symbol = to;
+        link_use_site_bind(site, to);
 }
 
 static void

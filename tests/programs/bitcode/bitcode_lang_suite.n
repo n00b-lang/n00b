@@ -64,6 +64,12 @@ func gc_array_backing_check() {
     require values[1].value == 9
 }
 
+func literal_method_check() {
+    let five: u8 = 5
+    require 5.hash() == five.hash()
+    require (5).hash() == five.hash()
+}
+
 func bit_count_check() {
     let word: uint = 0x1000
     assert __count_leading_zeros(word) == 51
@@ -939,6 +945,105 @@ func callback_handler_ref_check() {
     require cb.call(41) == 42
 }
 
+func unspecialized_pair(first: 'T, second: 'T) -> List['T] {
+    let cb = callback[Transform](ref plus_one)
+    var items: List['T] = new[List['T]]()
+    items.append(first)
+    items.append(second)
+    return items
+}
+
+func unspecialized_chars(source: Array['C]) -> List['C] {
+    let cb = callback[Transform](ref plus_one)
+    return new[List['C]](source)
+}
+
+func unspecialized_copy(source: Array['C]) -> Array['C] {
+    let cb = callback[Transform](ref plus_one)
+    var target: Array['C] = new[Array['C]](cast[int] len(source))
+    sys.abi.copy_items(target, 0, source, 0, len(source))
+    return target
+}
+
+object Generic_Cell {
+    value: 'T
+    tag: int
+}
+
+func __init(self: Generic_Cell['T], value: 'T) {
+    self.value = value
+    self.tag = 7
+}
+
+func unspecialized_cell(value: 'T) -> 'T {
+    let cb = callback[Transform](ref plus_one)
+    let cell: Generic_Cell['T] = new[Generic_Cell['T]](value)
+    require cell.tag == 7
+    return cell.value
+}
+
+var unspecialized_stash: List[Boxed_Entry] = new[List[Boxed_Entry]]()
+
+func unspecialized_append(into: List['E], entry: 'E) {
+    let cb = callback[Transform](ref plus_one)
+    into.append(entry)
+}
+
+func fill_unspecialized_stash() {
+    var i = 0
+    while i < 8 {
+        let text = "boxed text that is long enough to need heap storage " + "x"
+        let e: Boxed_Entry = (value = i, other = cast[Any]text)
+        unspecialized_append(unspecialized_stash, e)
+        i = i + 1
+    }
+}
+
+func overwrite_stack(depth: int) -> int {
+    let a: int = depth * 3
+    let b: int = depth * 5
+    if depth == 0 {
+        return a + b
+    }
+    return overwrite_stack(depth - 1) + a - b
+}
+
+func stashed_text(other: Any) -> string {
+    return typecase other {
+        case string { -> other }
+        else { -> "" }
+    }
+}
+
+func unspecialized_box_paths_check() {
+    let numbers = unspecialized_pair(3, 4)
+    require len(numbers) == 2 and numbers[0] == 3 and numbers[1] == 4
+    let words = unspecialized_pair("left", "right")
+    require len(words) == 2 and words[1] == "right"
+    var cps: Array[char] = new[Array[char]](3)
+    cps[0] = cast[char] 0x41
+    cps[1] = cast[char] 0x4e16
+    cps[2] = cast[char] 0x1f600
+    let chars = unspecialized_chars(cps)
+    require len(chars) == 3 and chars[0] == cast[char] 0x41
+        and chars[1] == cast[char] 0x4e16 and chars[2] == cast[char] 0x1f600
+    let copied = unspecialized_copy(cps)
+    require copied[0] == cast[char] 0x41 and copied[2] == cast[char] 0x1f600
+    let text: string = "generic cell text"
+    require unspecialized_cell(text) == text
+    require unspecialized_cell(41) == 41
+    fill_unspecialized_stash()
+    require overwrite_stack(64) != 1
+    var i = 0
+    while i < 8 {
+        let entry = unspecialized_stash[i]
+        require entry.value == i
+        require stashed_text(entry.other)
+            == "boxed text that is long enough to need heap storage x"
+        i = i + 1
+    }
+}
+
 record Counter_State {
     count: int
 }
@@ -1517,6 +1622,7 @@ func start() -> nil {
     array_value_index_check()
     gc_array_backing_check()
     bit_count_check()
+    literal_method_check()
     ffi_borrow_check()
     integer_complement_check()
     nominal_cast_check()
@@ -1542,6 +1648,7 @@ func start() -> nil {
     option_get_field_arith_check()
     option_narrowing_check()
     callback_handler_ref_check()
+    unspecialized_box_paths_check()
     callback_state_check()
     callback_state_ref_check()
     callback_setup_check()

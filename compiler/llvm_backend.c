@@ -8536,6 +8536,44 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return result && save_result(state, instruction, result);
         }
         LLVMTypeRef source_native_type = LLVMTypeOf(source);
+        LLVMContextRef context = LLVMGetModuleContext(state->module);
+        LLVMTypeRef box = box_llvm_type(context);
+        th_type *source_reference = th_resolve(source_type);
+        th_type *referent = th_kind_of(source_reference) == TH_INDIRECTION
+            ? th_ind_referent(source_reference) : nullptr;
+        bool open_target = target == box
+            && !th_is_closed(ir_module_types(state->function->owner),
+                             instruction->dest->type)
+            && !ir_type_eq(state->function->owner, source_type,
+                           instruction->dest->type);
+        bool from_box = open_target && source_native_type == box;
+        bool from_reference = open_target && referent
+            && LLVMGetTypeKind(source_native_type) == LLVMPointerTypeKind;
+        LLVMValueRef index = from_box || from_reference
+            ? runtime_type_value(state, instruction->dest->type) : nullptr;
+        if (index && from_box) {
+            LLVMValueRef field = LLVMBuildExtractValue(state->builder,
+                source, 2, "nominal.box.field");
+            LLVMValueRef flags = LLVMBuildAnd(state->builder, field,
+                LLVMConstInt(LLVMTypeOf(field), UINT32_C(0x80000000), false),
+                "nominal.box.flags");
+            result = LLVMBuildInsertValue(state->builder, source,
+                LLVMBuildOr(state->builder, flags, index, "nominal.box.type"),
+                2, "nominal.box");
+            return result && save_result(state, instruction, result);
+        }
+        if (index && from_reference) {
+            LLVMValueRef bits = value_type(state->function->owner, referent,
+                                           context) == box
+                ? LLVMBuildExtractValue(state->builder,
+                      LLVMBuildLoad2(state->builder, box, source,
+                                     "nominal.referent.box"),
+                      3, "nominal.referent.bits")
+                : LLVMBuildPtrToInt(state->builder, source,
+                      LLVMInt64TypeInContext(context), "nominal.pointer.bits");
+            result = assemble_box(state, index, bits);
+            return result && save_result(state, instruction, result);
+        }
         if (source_native_type == target)
             return save_result(state, instruction, source);
         LLVMTargetDataRef layout = LLVMGetModuleDataLayout(state->module);

@@ -115,8 +115,7 @@ func array_element(type_field: u32, payload: Ref[byte], index: i64,
     require descriptor.rank != 0 and descriptor.flat_rank == 1
         and descriptor.flags == 0 and row.alignment_bytes != 0
         and row.size_bits != 0
-        and !(row.flags & 4 != 0 and row.semantic_width_bits != 0
-              and row.semantic_width_bits < 8)
+        and internal.abi.packed_array_stride_bits(row) == 0
     let position: u64 = array_position(descriptor, index)
     let alignment_bits: u64 = cast[u64](row.alignment_bytes) * 8
     let stride_bits: u64 = (row.size_bits + alignment_bits - 1) /
@@ -141,9 +140,9 @@ func array_clear_slot(payload: Ref[byte], type_index: u32, index: u64) {
     require descriptor.rank == 1 and descriptor.flat_rank == 1
         and descriptor.reserved_zero == 0 and index < descriptor.total_count
         and index < length
-    if row.flags & 4 != 0 {
-        let width: u64 = cast[u64](row.semantic_width_bits)
-        require width != 0 and width <= 128
+    let width: u64 = cast[u64](internal.abi.packed_array_stride_bits(row))
+    if width != 0 {
+        require width <= 128
             and descriptor.flags & 0xfffffff8 == 0
         let start: u64 = index * width + cast[u64](descriptor.flags & 7)
         var bit: u64 = 0
@@ -266,10 +265,8 @@ func array_locate(source: Ref[Any], index: i64,
     }
     let element: Ref[internal.abi.Type_Record] = type_row(child)
     location.type_index = child
-    var width: u64 = 0
-    if element.flags & 4 != 0 {
-        width = cast[u64](element.semantic_width_bits)
-    }
+    var width: u64 = cast[u64](internal.abi.packed_array_stride_bits(
+        element))
     if width == 0 {
         let alignment_bits: u64 = cast[u64](element.alignment_bytes) * 8
         require descriptor.flags == 0 and alignment_bits != 0
@@ -603,8 +600,9 @@ func reference_at(location: Ref[Location], slot: Ref[Any]) {
     }
     let storage: Ref[byte]? = view.payload
     require row.size_bits == 128 and storage != nil
-        and child.semantic_width_bits != 0
-        and location.width == cast[u64](child.semantic_width_bits)
+        and (location.width == child.size_bits
+             or (child.semantic_width_bits != 0
+                 and location.width == cast[u64](child.semantic_width_bits)))
         and location.bit_offset <= 7
     let bits: Ref[internal.abi.Bitptr_Value] =
         unsafe_cast[Ref[internal.abi.Bitptr_Value]] storage.get()

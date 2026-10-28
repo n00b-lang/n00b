@@ -2013,9 +2013,11 @@ discover_package_import(import_driver_t *driver,
                 claim_manifest_failure(driver, job, unit, importer);
             continue;
         }
-        if ((!state->interface_module
-                && !package_tree_may_declare(driver->grammar, tree,
-                                             logical->identifier)))
+        if (state->interface_module
+                ? !interface_may_declare_package(&driver->loader->interfaces,
+                      unit->module.identifier, logical->identifier)
+                : !package_tree_may_declare(driver->grammar, tree,
+                                            logical->identifier))
             continue;
         bool in_progress = false;
         if (!ensure_preprocessed_import(driver, driver->grammar,

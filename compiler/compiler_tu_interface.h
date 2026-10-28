@@ -19,6 +19,8 @@ const uint8_t *interface_owned_metadata(
     core_string_t key, uint32_t version, size_t *size);
 bool interface_restore_package_declarations(
     const n00bb_interface_context_t *context, core_translation_unit_t *unit);
+bool interface_may_declare_package(const n00bb_interface_context_t *context,
+                                   core_string_t module, core_string_t name);
 bool finish_semantic_unit(void *context, core_translation_unit_t *unit);
 ir_shape_t *function_parameter_shape(parse_sym_entry_t *symbol,
                                      size_t index);

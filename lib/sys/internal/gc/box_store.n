@@ -33,14 +33,56 @@ func escape_box(slot: Ref[Any]) {
 
 func escape_box_inner(slot: Ref[Any]) {
     let view: Ref[internal.abi.Box_Value] = internal.box.box_view(slot)
-    let storage: Ref[byte]? = view.payload
-    if storage == nil {
+    let index: u32 = view.type_field & 0x7fffffff
+    let row: Ref[internal.abi.Type_Record] = internal.box.type_row(index)
+    if row.kind == cast[u32](internal.abi.Type_Kind.box_type) {
+        let storage: Ref[byte]? = view.payload
+        if storage != nil {
+            escape_box(unsafe_cast[Ref[Any]] storage.get())
+        }
         return
     }
-    let row: Ref[internal.abi.Type_Record] = internal.box.type_row(
-        view.type_field & 0x7fffffff)
+    if row.kind != cast[u32](internal.abi.Type_Kind.record_type)
+        and row.kind != cast[u32](internal.abi.Type_Kind.tuple_type) {
+        return
+    }
+    if row.size_bits <= 64 {
+        escape_fields(__gc_byte_offset(unsafe_cast[Ref[byte]] slot, 8), row)
+        return
+    }
+    let storage: Ref[byte]? = view.payload
+    if storage != nil {
+        escape_fields(storage.get(), row)
+    }
+}
+
+func escape_nested(address: Ref[byte], type_index: u32) {
+    let row: Ref[internal.abi.Type_Record] = internal.box.type_row(type_index)
     if row.kind == cast[u32](internal.abi.Type_Kind.box_type) {
-        escape_box(unsafe_cast[Ref[Any]] storage.get())
+        escape_box(unsafe_cast[Ref[Any]] address)
+    }
+    elif row.kind == cast[u32](internal.abi.Type_Kind.record_type)
+        or row.kind == cast[u32](internal.abi.Type_Kind.tuple_type) {
+        escape_fields(address, row)
+    }
+}
+
+func escape_fields(address: Ref[byte], row: Ref[internal.abi.Type_Record]) {
+    var at: u32 = 0
+    while at < row.fields_or_arms.count {
+        let field: Ref[internal.abi.Field_Record] = internal.box.field_row(
+            row, at)
+        at += 1
+        if field.physical_runs.count != 1 {
+            continue
+        }
+        let run: Ref[internal.abi.Physical_Run_Record] = internal.box.run_at(
+            field.physical_runs, 0)
+        if run.bit_offset != 0 {
+            continue
+        }
+        escape_nested(__gc_byte_offset(address, run.byte_offset),
+                      field.child_type_index)
     }
 }
 
@@ -84,9 +126,9 @@ func array_alignment(leaf: Ref[internal.abi.Type_Record]) -> u64 {
 
 func array_data_bytes(leaf: Ref[internal.abi.Type_Record], count: u64,
                       origin_bits: u64, alignment: u64) -> u64 {
-    if leaf.flags & 4 != 0 and leaf.semantic_width_bits != 0 {
-        return (count * cast[u64](leaf.semantic_width_bits) + origin_bits
-                + 7) / 8
+    let packed: u64 = cast[u64](internal.abi.packed_array_stride_bits(leaf))
+    if packed != 0 {
+        return (count * packed + origin_bits + 7) / 8
     }
     let alignment_bits: u64 = alignment * 8
     return count * ((leaf.size_bits + alignment_bits - 1) / alignment_bits
@@ -221,8 +263,9 @@ func array_prefix(source: Ref[Any], count: u64, slot: Ref[Any]) {
 }
 
 func row_item_bits(leaf: Ref[internal.abi.Type_Record]) -> u64 {
-    if leaf.flags & 4 != 0 and leaf.semantic_width_bits != 0 {
-        return cast[u64](leaf.semantic_width_bits)
+    let packed: u64 = cast[u64](internal.abi.packed_array_stride_bits(leaf))
+    if packed != 0 {
+        return packed
     }
     let alignment_bits: u64 = cast[u64](leaf.alignment_bytes) * 8
     require alignment_bits != 0 and leaf.size_bits != 0
@@ -263,7 +306,7 @@ func array_row(source: Ref[Any], index: i64, slot: Ref[Any]) {
         and leaf.alignment_bytes != 0 and first_extent != 0
         and descriptor.total_count % first_extent == 0
     let row_count: u64 = descriptor.total_count / first_extent
-    let packed: bool = leaf.flags & 4 != 0 and leaf.semantic_width_bits != 0
+    let packed: bool = internal.abi.packed_array_stride_bits(leaf) != 0
     let bit_offset: u64 = position * row_count * row_item_bits(leaf) +
         cast[u64](descriptor.flags)
     var origin: u32 = 0
@@ -360,7 +403,7 @@ func array_replace_row(destination: Ref[Any], index: i64,
     }
     let leaf: Ref[internal.abi.Type_Record] = internal.box.type_row(
         leaf_index)
-    let packed: bool = leaf.flags & 4 != 0 and leaf.semantic_width_bits != 0
+    let packed: bool = internal.abi.packed_array_stride_bits(leaf) != 0
     let item_bits: u64 = row_item_bits(leaf)
     let row_bits: u64 = row_count * item_bits
     let destination_start: u64 = position * row_bits +
