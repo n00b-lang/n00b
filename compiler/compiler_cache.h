@@ -94,6 +94,7 @@ bool n00bb_cache_interface_has_module(const n00bb_cache_t *cache,
                                       size_t index, core_string_t module);
 ir_module_t *n00bb_cache_module(const n00bb_cache_t *cache,
                                 core_string_t module);
+bool n00bb_cache_owns(const n00bb_cache_t *cache, const ir_module_t *module);
 bool n00bb_cache_module_object(const n00bb_cache_t *cache,
                                core_string_t module,
                                n00bb_cache_module_object_t *object);

@@ -46,6 +46,8 @@ void ir_walk_stop(ir_walk_t *w);
 bool ir_walk_stopped(ir_walk_t *w);
 
 typedef bool (*ir_reachable_func_fn)(ir_func_t *function, void *user);
+typedef ir_func_t *(*ir_reachable_body_fn)(ir_func_t *function, void *user);
 
 bool ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
-                                 ir_reachable_func_fn visit, void *user);
+                                 ir_reachable_func_fn visit,
+                                 ir_reachable_body_fn body, void *user);

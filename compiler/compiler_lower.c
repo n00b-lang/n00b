@@ -21214,12 +21214,37 @@ build_initializer_graph(
                                   IR_EXEC_GRAPH_EDGE_SEQUENCE);
 }
 
+typedef struct {
+    core_list_t(n00bb_ir_func_ptr_t) *functions;
+    const n00bb_cache_t *cache;
+} reachable_collection_t;
+
 static bool
 collect_phase_reachable_function(ir_func_t *function, void *raw)
 {
-    core_list_t(n00bb_ir_func_ptr_t) *functions = raw;
-    core_list_push(*functions, function);
+    reachable_collection_t *collection = raw;
+    if (!n00bb_cache_owns(collection->cache, function->owner))
+        core_list_push(*collection->functions, function);
     return true;
+}
+
+static ir_func_t *
+reachable_function_body(ir_func_t *function, void *raw)
+{
+    (void)raw;
+    return n00bb_cached_body(function);
+}
+
+static bool
+walk_reachable_functions(const n00bb_link_analysis_t *analysis,
+                         core_list_t(n00bb_ir_func_ptr_t) *roots,
+                         core_list_t(n00bb_ir_func_ptr_t) *reachable)
+{
+    reachable->len = 0;
+    reachable_collection_t collection = {reachable, analysis->cache};
+    return ir_walk_reachable_functions(roots->data, roots->len,
+        collect_phase_reachable_function, reachable_function_body,
+        &collection);
 }
 
 ir_func_t *
@@ -21440,10 +21465,8 @@ build_reachable_functions(
         }
         core_list_push(roots, function);
     }
-    core_list_t(n00bb_ir_func_ptr_t) *reachable = &analysis->reachable_functions;
-    reachable->len = 0;
-    bool ok = ir_walk_reachable_functions(roots.data, roots.len,
-        collect_phase_reachable_function, reachable);
+    bool ok = walk_reachable_functions(analysis, &roots,
+                                       &analysis->reachable_functions);
     core_list_free(roots);
     return ok && build_emitted_functions(analysis);
 }
@@ -21521,18 +21544,17 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         if (generated || root) continue;
         for (size_t j = 0; module && j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);
-            if (function && function->n_blocks
-                && (th_is_closed(ir_module_types(module), function->type)
+            ir_func_t *body = function ? n00bb_cached_body(function) : nullptr;
+            if (body && body->n_blocks
+                && (th_is_closed(ir_module_types(body->owner), body->type)
                     || (!analysis->closed_world
                         && n00bb_compile_phase() != PARSE_SYM_PHASE_COMPTIME
-                        && polymorphic_backup_lowerable(module, function))))
-                core_list_push(roots, function);
+                        && polymorphic_backup_lowerable(body->owner, body))))
+                core_list_push(roots, body);
         }
     }
-    core_list_t(n00bb_ir_func_ptr_t) *emitted = &analysis->emitted_functions;
-    emitted->len = 0;
-    bool ok = ir_walk_reachable_functions(roots.data, roots.len,
-        collect_phase_reachable_function, emitted);
+    bool ok = walk_reachable_functions(analysis, &roots,
+                                       &analysis->emitted_functions);
     core_list_free(roots);
     return ok;
 }

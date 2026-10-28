@@ -2,7 +2,6 @@
 #include <string.h>
 
 #include "private/ir/internal.h"
-#include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/walk.h"
 
@@ -18,6 +17,9 @@ typedef struct {
 core_list_decl(slot_t);
 typedef ir_func_t *ir_walk_func_ptr_t;
 core_list_decl(ir_walk_func_ptr_t);
+typedef ir_block_t *ir_walk_block_ptr_t;
+core_list_decl(ir_walk_block_ptr_t);
+core_list_decl(bool);
 
 typedef core_list_t(slot_t) chain_t;
 
@@ -137,7 +139,8 @@ bool ir_walk_stopped(ir_walk_t *w)
 
 bool
 ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
-                            ir_reachable_func_fn visit, void *user)
+                            ir_reachable_func_fn visit,
+                            ir_reachable_body_fn body, void *user)
 {
     if ((!roots && root_count) || !visit) return false;
     core_list_t(ir_walk_func_ptr_t) functions =
@@ -150,16 +153,34 @@ ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
         if (ok && core_dict_add(&seen, roots[i], roots[i]))
             core_list_push(functions, roots[i]);
     }
+    core_list_t(ir_walk_block_ptr_t) blocks =
+        core_list_new(ir_walk_block_ptr_t);
+    core_list_t(bool) reached = core_list_new(bool);
     for (size_t i = 0; ok && i < functions.len; i++) {
-        ir_func_t *function = functions.data[i];
-        ok = visit(function, user);
-        size_t     scope = ir_analysis_scope_begin();
-        ir_doms_t *doms  = ok && function->n_blocks
-            ? ir_func_doms(function) : nullptr;
-        ok = ok && (!function->n_blocks || doms);
-        for (size_t b = 0; ok && b < function->n_blocks; b++) {
-            ir_block_t *block = function->blocks[b];
-            if (!ir_block_reachable(doms, block)) continue;
+        ok = visit(functions.data[i], user);
+        ir_func_t *function = body ? body(functions.data[i], user)
+                                   : functions.data[i];
+        ok = ok && function;
+        blocks.len = 0;
+        reached.len = 0;
+        for (uint32_t b = 0; ok && b < function->n_blocks; b++)
+            core_list_push(reached, false);
+        ir_block_t *entry = ok ? ir_block_entry(function) : nullptr;
+        if (entry) {
+            reached.data[entry->index] = true;
+            core_list_push(blocks, entry);
+        }
+        for (size_t b = 0; ok && b < blocks.len; b++) {
+            ir_block_t *block = blocks.data[b];
+            ir_instr_t *terminator = ir_block_terminator(block);
+            for (uint32_t o = 0; terminator && o < terminator->n_operands;
+                 o++) {
+                ir_block_t *to = ir_succ_of(&terminator->operands[o]);
+                if (to && !reached.data[to->index]) {
+                    reached.data[to->index] = true;
+                    core_list_push(blocks, to);
+                }
+            }
             for (size_t n = 0; n < block->n_instrs; n++) {
                 ir_instr_t *instruction = block->instrs[n];
                 if (!instruction) continue;
@@ -173,8 +194,9 @@ ir_walk_reachable_functions(ir_func_t *const *roots, size_t root_count,
                 }
             }
         }
-        ir_analysis_scope_end(scope);
     }
+    core_list_free(blocks);
+    core_list_free(reached);
     core_dict_free(&seen);
     core_list_free(functions);
     return ok;
