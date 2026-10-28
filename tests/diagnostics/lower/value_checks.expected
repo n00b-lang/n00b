@@ -32,3 +32,10 @@ tests/diagnostics/lower/value_checks.n:196:12: error N00B-S0004: `value` is read
 tests/diagnostics/lower/value_checks.n:206:9: error N00B-S0026: `abs` cannot fail, so this `!` has nothing to propagate
   tests/diagnostics/lower/value_checks.n:202:1: note: `abs` is declared here
   help: remove the `!`
+tests/diagnostics/lower/value_checks.n:221:21: error N00B-T0585: cannot cast `Tuple[u8, u8]` to `Tuple_Target`: a positional tuple never converts to a record or object
+  help: use a field tuple, which names each field: `(name = value, ...)`
+tests/diagnostics/lower/value_checks.n:226:21: error N00B-T0585: cannot cast `Tuple[y: u8]` to `Tuple_Target`: field `y` does not match
+tests/diagnostics/lower/value_checks.n:231:21: error N00B-T1034: `cast` cannot build `Tuple_Built` from a field tuple, because `Tuple_Built` has an `__init`
+  help: call its constructor, or write `unsafe_cast[Tuple_Built](...)` to build it without running the constructor
+tests/diagnostics/lower/value_checks.n:236:30: error N00B-T1034: `Tuple_Built` has an `__init`, so a field tuple cannot build it
+  help: call its constructor, or write `unsafe_cast[Tuple_Built](...)` to build it without running the constructor

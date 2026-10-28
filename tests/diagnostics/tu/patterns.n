@@ -1,0 +1,17 @@
+var untyped
+let (p_a, p_b, p_c) = (1, 2)
+let (named = p_d) = (1, 2)
+let (p_e, p_f) = (x = 1, y = 2)
+let (x = p_g, x = p_h) = (x = 1, y = 2)
+let (x = p_i, _) = (x = 1, y = 2)
+const (p_j, p_k) = (1, 2)
+var target_a = 0
+var target_b = ""
+(target_a, target_b) = (1, 2)
+for (loop_a, loop_b, loop_c) in [(1, 2)] {
+}
+let loop_count: int = 3
+for loop_d in loop_count {
+}
+for loop_e in (1, "two") {
+}

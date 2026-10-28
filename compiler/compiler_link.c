@@ -46,6 +46,8 @@ global_has_explicit_initializer(parse_grammar_t *grammar,
     if (symbol->has_comptime_value && symbol->comptime_value) return true;
     if (symbol->decl_node
         && child_nt(grammar, symbol->decl_node, CORE_STRING_STATIC("expression"))) return true;
+    if (nt_is(grammar, n00bb_pattern_owner(grammar, symbol->decl_node),
+              CORE_STRING_STATIC("variable-decl"))) return true;
     for (size_t i = 0; i < symbol->definition_count; i++) {
         parse_tree_t *definition = symbol->definition_nodes[i];
         if (!child_nt(grammar, definition, CORE_STRING_STATIC("expression"))) continue;
@@ -395,7 +397,7 @@ resolve_inferred_field_references(core_link_unit_t *link,
             n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
             parse_tree_t *node = site->node;
             if (!site->dotted_path || site->unresolved
-                || !nt_is(analysis->grammar, node, CORE_STRING_STATIC("postfix-expr"))
+                || !n00bb_postfix_node(analysis->grammar, node)
                 || core_tree_num_children(node) < 3
                 || !parse_tree_leaf_is(core_tree_child(node, 1),
                                        CORE_STRING_STATIC("."))
@@ -495,6 +497,9 @@ resolve_inferred_field_references(core_link_unit_t *link,
                     all_resolved = false;
                     continue;
                 }
+                if (n00bb_assignment_target(analysis->grammar, node,
+                                            nullptr))
+                    n00bb_report_tuple_immutable(unit, n00bb_node_span(node));
                 if (!bind_resolved_field_type(unit, state, node,
                                               member_type))
                     all_resolved = false;
@@ -654,7 +659,7 @@ diagnose_known_missing_record_fields(n00bb_link_analysis_t *analysis)
             n00bb_link_use_site_t *site = &state->link_use_sites.data[s];
             parse_tree_t *node = site->node;
             if (!site->dotted_path || site->unresolved
-                || !nt_is(analysis->grammar, node, CORE_STRING_STATIC("postfix-expr"))
+                || !n00bb_postfix_node(analysis->grammar, node)
                 || core_tree_num_children(node) < 3
                 || !parse_tree_leaf_is(core_tree_child(node, 1),
                                        CORE_STRING_STATIC("."))
@@ -1781,7 +1786,7 @@ n00bb_defer_overloaded_callee(parse_grammar_t *grammar,
                               parse_tree_t *node)
 {
     n00bb_tu_state_t *state = tu_state(unit);
-    parse_sym_entry_t *symbol = nt_is(grammar, node, CORE_STRING_STATIC("primary"))
+    parse_sym_entry_t *symbol = n00bb_primary_node(grammar, node)
         ? attached_symbol(grammar, unit, node) : nullptr;
     if (state && state->types && symbol
         && symbol->kind == PARSE_SYM_FUNCTION

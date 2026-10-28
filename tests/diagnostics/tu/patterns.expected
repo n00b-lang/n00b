@@ -1,0 +1,14 @@
+tests/diagnostics/tu/patterns.n:1:5: error N00B-T0586: cannot infer the type of `untyped`: it has no type or initial value, and nothing assigned to it settles one
+  help: give it a type, as in `var untyped: int`
+tests/diagnostics/tu/patterns.n:2:5: error N00B-T0537: this pattern has 3 elements, but `Tuple[{integer}, {integer}]` has 2
+tests/diagnostics/tu/patterns.n:3:6: error N00B-T0537: `Tuple[{integer}, {integer}]` is a positional tuple, so its elements have no names to unpack by
+tests/diagnostics/tu/patterns.n:4:6: error N00B-T0537: `Tuple[x: {integer}, y: {integer}]` has no field `p_e` to unpack
+tests/diagnostics/tu/patterns.n:5:15: error N00B-T0537: field `x` is unpacked more than once
+tests/diagnostics/tu/patterns.n:6:15: error N00B-T0537: `Tuple[x: {integer}, y: {integer}]` is unpacked by field name, so this element needs one: `name = ...`
+tests/diagnostics/tu/patterns.n:7:7: error N00B-T0537: a `const` cannot unpack a pattern; declare these names with `let`
+tests/diagnostics/tu/patterns.n:10:12: error N00B-T0537: this pattern assigns `{integer}` to `target_b`, which is `string`
+tests/diagnostics/tu/patterns.n:11:5: error N00B-T0537: this pattern has 3 elements, but `Tuple[{integer}, {integer}]` has 2
+tests/diagnostics/tu/patterns.n:14:15: error N00B-T0538: `loop_count` is `int`, which cannot be iterated
+  help: a `for` loop needs a value whose type implements the `Iterable` trait, such as a `List` or a range
+tests/diagnostics/tu/patterns.n:16:15: error N00B-T0538: `(1, "two")` is `Tuple[{integer}, string]`, which cannot be iterated
+  help: a tuple's elements can each have their own type, so a `for` loop cannot walk them; put values of one type in a `List` instead

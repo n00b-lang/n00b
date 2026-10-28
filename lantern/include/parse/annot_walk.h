@@ -55,6 +55,9 @@ void parse_annot_result_set_type_node_resolver(
 void parse_annot_result_set_symbol_type_hook(
     parse_annot_result_t *result, parse_infer_symbol_type_fn hook,
     void *context);
+void parse_annot_result_set_tuple_element_hook(
+    parse_annot_result_t *result, parse_infer_tuple_element_fn hook,
+    void *context);
 th_type *parse_annot_resolve_type_node(parse_annot_result_t *result,
                                        th_ctx *types,
                                        parse_grammar_t *grammar,

@@ -988,7 +988,7 @@ field_use_is_write(parse_grammar_t *grammar, parse_sym_entry_t *field,
         for (parse_tree_t *path = use; path != parent;
              path = parse_tree_parent(path)) {
             parse_tree_t *ancestor = parse_tree_parent(path);
-            if (nt_is(grammar, ancestor, CORE_STRING_STATIC("postfix-expr"))
+            if (n00bb_postfix_node(grammar, ancestor)
                 && core_tree_num_children(ancestor) > 1
                 && core_tree_child(ancestor, 0) == path) {
                 core_string_t trait = {0}, method = {0};
@@ -2082,6 +2082,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     ? site->dispatch_receiver_type
                     : receiver ? parse_tree_type(receiver) : nullptr;
                 if (th_is_poison(receiver_type)) continue;
+                if (n00bb_node_tuple_access(site->node)) continue;
                 parse_sym_entry_t *in_place = receiver_type
                     && nt_is(grammar, site->node, CORE_STRING_STATIC("binop-assign-stmt"))
                     ? resolve_in_place_method(link, unit, state, site,

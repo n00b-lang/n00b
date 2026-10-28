@@ -320,6 +320,36 @@ static bool merge_method_obligation(th_ctx *ctx, th_type *owner,
         && complete_method_failure(ctx, owner, slot, incoming, seen);
 }
 
+static bool defer_integer_method(th_ctx *ctx, th_type *var,
+                                 const th_constraint *method)
+{
+    core_list_push(ctx->integer_methods_pending,
+                   ((th_pending_method_t){var, *method}));
+    return true;
+}
+
+static void integer_methods_enter(th_ctx *ctx)
+{
+    ctx->integer_method_depth++;
+}
+
+static bool integer_methods_leave(th_ctx *ctx, bool ok)
+{
+    if (--ctx->integer_method_depth) return ok;
+    ctx->integer_method_depth = 1;
+    for (size_t i = 0; i < ctx->integer_methods_pending.len; i++) {
+        th_pending_method_t pending = ctx->integer_methods_pending.data[i];
+        th_type *var = th_resolve(pending.var);
+        if (ok && th_kind_of(var) == TH_VAR && th_var_is_integer(var, nullptr)
+            && !ctx->integer_method(ctx, var, &pending.method,
+                                    ctx->integer_method_user))
+            ok = false;
+    }
+    ctx->integer_methods_pending.len = 0;
+    ctx->integer_method_depth = 0;
+    return ok;
+}
+
 static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
                                   th_constraint c, core_dict_t *seen)
 {
@@ -356,7 +386,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
         var->revision++;
         return !ctx->integer_method || ctx->probe_depth
             || !th_var_is_integer(var, nullptr)
-            || ctx->integer_method(ctx, var, &c, ctx->integer_method_user);
+            || defer_integer_method(ctx, var, &c);
     }
 
     th_constraint *slot = con_same_slot(var, c);
@@ -417,8 +447,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     for (size_t i = 0; i < var->var.cons.len; i++) {
         th_constraint method = var->var.cons.data[i];
         if (method.kind == TH_CON_METHOD
-            && !ctx->integer_method(ctx, var, &method,
-                                    ctx->integer_method_user)) return false;
+            && !defer_integer_method(ctx, var, &method)) return false;
     }
     return true;
 }
@@ -427,9 +456,10 @@ bool th_var_constrain(th_ctx *ctx, th_type *var, th_constraint c)
 {
     core_dict_t seen;
     core_dict_init(&seen, nullptr, nullptr);
+    if (ctx) integer_methods_enter(ctx);
     bool result = th_var_constrain_seen(ctx, var, c, &seen);
     uni_seen_free(&seen);
-    return result;
+    return ctx ? integer_methods_leave(ctx, result) : result;
 }
 
 bool th_require_method_at(th_ctx *ctx, th_type *receiver, core_string_t name,
@@ -2857,7 +2887,7 @@ static void uni_seen_free(core_dict_t *seen)
     core_dict_free(seen);
 }
 
-th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
+static th_type *unify_copies(th_ctx *ctx, th_type *a, th_type *b)
 {
     if (!ctx || !a || !b) return nullptr;
     const th_type *sources[] = {a, b};
@@ -2909,7 +2939,7 @@ bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
     return unified;
 }
 
-th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
+static th_type *unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
 {
     if (!ctx || !a || !b) return nullptr;
 
@@ -2925,6 +2955,22 @@ th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
     th_type *r = th_apply_subst(ctx, a);
     th_normalize(r);
     return r;
+}
+
+th_type *th_unify(th_ctx *ctx, th_type *a, th_type *b)
+{
+    if (!ctx) return nullptr;
+    integer_methods_enter(ctx);
+    th_type *r = unify_copies(ctx, a, b);
+    return integer_methods_leave(ctx, r != nullptr) ? r : nullptr;
+}
+
+th_type *th_unify_in_place(th_ctx *ctx, th_type *a, th_type *b)
+{
+    if (!ctx) return nullptr;
+    integer_methods_enter(ctx);
+    th_type *r = unify_in_place(ctx, a, b);
+    return integer_methods_leave(ctx, r != nullptr) ? r : nullptr;
 }
 
 typedef struct {

@@ -55,6 +55,12 @@ static bool node_is_named(parse_grammar_t *grammar, parse_tree_t *node,
 #define node_is(grammar, node, lit) \
     node_is_named((grammar), (node), CORE_STRING_STATIC(lit))
 
+static bool postfix_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return node_is(grammar, node, "postfix-expr")
+        || node_is(grammar, node, "place");
+}
+
 static th_type *node_type(ictx *c, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
@@ -105,7 +111,7 @@ static th_type *transparent_expression_type(ictx *c, parse_tree_t *node)
 static parse_tree_t *method_call_parent(ictx *c)
 {
     parse_tree_t *parent = c->v->parent;
-    return node_is(c->v->grammar, parent, "postfix-expr") &&
+    return postfix_node(c->v->grammar, parent) &&
            core_tree_num_children(parent) >= 3 &&
            core_tree_child(parent, 0) == c->v->node &&
            core_tree_is_leaf(core_tree_child(parent, 1)) &&
@@ -116,7 +122,7 @@ static parse_tree_t *method_call_parent(ictx *c)
 
 static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
 {
-    if (!node_is(c->v->grammar, call, "postfix-expr") ||
+    if (!postfix_node(c->v->grammar, call) ||
         core_tree_num_children(call) < 3 ||
         !core_tree_is_leaf(core_tree_child(call, 1)) ||
         !parse_tree_leaf_is(core_tree_child(call, 1),
@@ -188,10 +194,10 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
 static bool
 call_has_member_callee(ictx *c, parse_tree_t *call)
 {
-    if (!node_is(c->v->grammar, call, "postfix-expr")
+    if (!postfix_node(c->v->grammar, call)
         || !core_tree_num_children(call)) return false;
     parse_tree_t *callee = core_tree_child(call, 0);
-    return node_is(c->v->grammar, callee, "postfix-expr")
+    return postfix_node(c->v->grammar, callee)
         && core_tree_num_children(callee) >= 3
         && core_tree_is_leaf(core_tree_child(callee, 1))
         && parse_tree_leaf_is(core_tree_child(callee, 1),
@@ -283,6 +289,22 @@ static parse_tree_t *assignment_target(parse_visit_t *visit)
             return core_tree_child(parent, 0) == child ? parent : nullptr;
         if (core_tree_num_children(parent) != 1) return nullptr;
     }
+}
+
+static bool bare_declared_target(parse_tree_t *node)
+{
+    while (node) {
+        parse_node_resolution_t resolution = parse_tree_resolution(node);
+        parse_sym_entry_t *symbol =
+            resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+                ? resolution.target.symbol : parse_tree_sym(node);
+        if (symbol)
+            return symbol->kind == PARSE_SYM_VARIABLE
+                && symbol->type_from_assignment;
+        node = !core_tree_is_leaf(node) && core_tree_num_children(node) == 1
+            ? core_tree_child(node, 0) : nullptr;
+    }
+    return false;
 }
 
 static bool indexed_target(parse_tree_t *node)
@@ -853,6 +875,17 @@ project(ictx *c, parse_infer_proj_t op, th_type *t,
             return element;
         }
         parse_tree_t *assignment = assignment_target(c->v);
+        th_type *receiver = th_resolve(t);
+        if (c->hooks.tuple_element && core_tree_num_children(result_node) >= 4
+            && th_builtin_applied(receiver, TH_BUILTIN_TUPLE,
+                                  th_named_nargs(receiver))) {
+            th_type *element = c->hooks.tuple_element(c->tc,
+                c->v->grammar, core_tree_child(result_node, 2), receiver,
+                assignment != nullptr, c->hooks.tuple_element_context);
+            if (element) return element;
+            c->failed = true;
+            return result;
+        }
         if (assignment) {
             th_type *call_shape = index_store_call_shape(c, result,
                                                          assignment);
@@ -1317,6 +1350,11 @@ eval(ictx *c, const parse_infer_expr_t *e)
             ? child(c, e->lhs->index) : nullptr;
         if (e->rhs && e->rhs->kind == PARSE_INFER_CHILD
             && indexed_target(child(c, e->rhs->index))) return target;
+        th_type *open = th_resolve(target);
+        if (open && th_kind_of(open) == TH_VAR && e->rhs
+            && e->rhs->kind == PARSE_INFER_CHILD
+            && bare_declared_target(child(c, e->rhs->index)))
+            return th_unify_in_place(c->tc, value, target);
         if (th_converts(c->tc, value, target, site, c->v->grammar)
             || th_custom_coerces(c->tc, value, target)) return target;
         return th_unify_in_place(c->tc, value, target);

@@ -50,8 +50,16 @@ void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
 void th_ctx_set_span(th_ctx *ctx, th_span_t span)
 {
     if (ctx) {
+        if (!span.file.data && span.start_line) span.file = ctx->source_file;
         ctx->span = span;
     }
+}
+
+void th_ctx_set_source_file(th_ctx *ctx, core_string_t file)
+{
+    if (ctx && (!ctx->source_file.data
+                || !core_string_eq(ctx->source_file, file)))
+        ctx->source_file = th_strdup(ctx, file);
 }
 
 void th_ctx_set_related(th_ctx *ctx, th_span_t span)

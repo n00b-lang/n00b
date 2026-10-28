@@ -2785,6 +2785,32 @@ report_syntax_spellings(pp_context_t *ctx,
     }
 }
 
+static void
+report_statement_trailing_comma(pp_context_t *ctx, parse_tree_t *node)
+{
+    if (ctx->options && ctx->options->disable_syntax_warnings) return;
+    parse_tree_t *last = node;
+    while (!core_tree_is_leaf(last) && core_tree_num_children(last))
+        last = core_tree_child(last, core_tree_num_children(last) - 1);
+    parse_token_info_t *token = core_tree_is_leaf(last)
+        ? parse_node_token(last) : nullptr;
+    if (!token || !parse_tree_leaf_is(last, CORE_STRING_STATIC(",")))
+        return;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(ctx->unit);
+    if (n00bb_report(diagnostics, ctx->unit, N00B_DIAG_SYNTAX_TRAILING_COMMA,
+            (core_diag_location_t){
+                .line = parse_token_line(token),
+                .column = parse_token_column(token),
+                .end_line = parse_token_endline(token),
+                .end_column = parse_token_endcol(token),
+                .has_location = true,
+            },
+            N00B_TEXT_TRAILING_COMMA_ENDS_STATEMENT, N00BB_NO_ARGS))
+        n00bb_report_help(diagnostics, N00B_TEXT_REMOVE_THE_COMMA,
+                          N00BB_NO_ARGS);
+}
+
 static parse_visit_outcome_t
 preprocess_discover(parse_visit_t *visit)
 {
@@ -2793,6 +2819,30 @@ preprocess_discover(parse_visit_t *visit)
     parse_tree_t *node = visit->node;
     if (ctx->failed) return PARSE_VISIT_ERROR;
     if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
+    if (is_name(ctx->grammar, node, "variable-decl")
+        || is_name(ctx->grammar, node, "import-stmt"))
+        report_statement_trailing_comma(ctx, node);
+    while (is_name(ctx->grammar, node, "place")
+           && core_tree_num_children(node) == 3
+           && is_name(ctx->grammar, core_tree_child(node, 1), "place")) {
+        parse_tree_t *close = core_tree_remove_child(node, 2);
+        parse_tree_t *inner = core_tree_remove_child(node, 1);
+        parse_tree_t *open = core_tree_remove_child(node, 0);
+        parse_tree_free(close);
+        parse_tree_free(open);
+        core_tree_node_value(node).rule_index =
+            core_tree_node_value(inner).rule_index;
+        while (core_tree_num_children(inner)) {
+            parse_tree_t *child = core_tree_remove_child(inner, 0);
+            if (!core_tree_add_child(node, child)) {
+                parse_tree_free(child);
+                parse_tree_free(inner);
+                pp_internal(ctx, node, "could not unwrap a parenthesized assignment target");
+                return PARSE_VISIT_ERROR;
+            }
+        }
+        parse_tree_free(inner);
+    }
     const core_string_t case_blocks[] = {
         CORE_STRING_STATIC("switch-case-block"),
         CORE_STRING_STATIC("typecase-case-block"),

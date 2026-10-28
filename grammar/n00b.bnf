@@ -123,6 +123,20 @@
 <for-range-var> ::= <for-binding>
 <for-var-list> ::= <for-binding>
 <for-var-list> ::= <for-binding> %"," <for-var-list>
+<for-var-list> ::= <binding-pattern>
+<for-var-list> ::= <binding-pattern> %"," <for-var-list>
+
+<binding-pattern> @nospace($1) ::= %"(" <pattern-items> %")"
+<pattern-items> ::= <pattern-item> %"," <pattern-items>
+                  | <pattern-item>
+                  | <pattern-item> %","
+<pattern-item> ::= <pattern-target>
+<pattern-item> ::= %IDENTIFIER <assign-op> <pattern-target>
+<pattern-target> ::= <pattern-binding> | <pattern-skip> | <binding-pattern>
+<pattern-binding> @declares($0) @infer("`t") ::= %IDENTIFIER
+<pattern-binding> @declares($0, $2) @infer("$0 unify $2") @nospace($1) ::=
+       %IDENTIFIER %":" <type-spec>
+<pattern-skip> ::= %_
 
 <for-binding> @declares($0) @infer("`t") ::= %IDENTIFIER
 <for-binding> @declares($1) @infer("`t") ::= %"let" %IDENTIFIER
@@ -292,7 +306,7 @@
 
 <assert-stmt> ::= (%"assert"|%"require") <expression>
 
-<import-stmt> ::= %"import" <module-import> (%"," <module-import>)*
+<import-stmt> ::= %"import" <module-import> (%"," <module-import>)* %","?
 <import-stmt> ::= %"import" <module-import> %"bring" <brought-names>
 <import-stmt> ::= %"bring" <brought-symbols> %"from" <module-source>
 <module-import> @declares($0, "module") ::= <module-source>
@@ -300,7 +314,7 @@
 <module-source> ::= <member-chain>
 <brought-symbols> ::= %"all"
 <brought-symbols> ::= <brought-names>
-<brought-names> ::= <brought-symbol> (%"," <brought-symbol>)*
+<brought-names> ::= <brought-symbol> (%"," <brought-symbol>)* %","?
 <brought-symbol> ::= %IDENTIFIER (%"as" %IDENTIFIER)?
 
 <package-decl> ::= %"package" <dotted-name> <package-body>
@@ -313,6 +327,7 @@
 <dotted-name> ::= <dotted-name> %"." %IDENTIFIER | %IDENTIFIER
 
 <variable-decl> ::= <member-visibility>? <declaration-prefix> <sym-decl-list>
+<variable-decl> ::= <member-visibility>? <declaration-prefix> <binding-pattern> <assign-op> <expression>
 
 <visible-inferred-assign> @visibility("private") ::= %"private" <assign-stmt>
 
@@ -322,6 +337,7 @@
 
 <sym-decl-list> ::= <sym-decl> %"," <sym-decl-list>
                   | <sym-decl>
+                  | <sym-decl> %","
 
 <sym-decl> @declares($0, $2) @assigns($0, $4) @infer("$4 converts ($0 unify $2)") @nospace($1) ::=
          %IDENTIFIER %":" <type-spec> <assign-op> <expression>
@@ -471,19 +487,35 @@
                     | %"(" <flagset-value> %")"
 <flagset-name> @varref($0) ::= %IDENTIFIER
 
-<assign-stmt> @assigns($0, $2) @infer("$2 converts $0") ::= <expression> <assign-op> <expression>
+<assign-stmt> @assigns($0, $2) @infer("$2 converts $0") ::= <place> <assign-op> <expression>
+<assign-stmt> ::= <assign-pattern> <assign-op> <expression>
+<assign-pattern> @nospace($1) ::= %"(" <assign-pattern-items> %")"
+<assign-pattern> @nospace($1) ::= %"(" <named-assign-pattern-item> %")"
+<assign-pattern-items> ::= <assign-pattern-item> %"," <assign-pattern-items>
+                        | <assign-pattern-item> %"," <assign-pattern-item>
+<assign-pattern-item> ::= <assign-pattern-target>
+                        | <named-assign-pattern-item>
+<named-assign-pattern-item> ::= %IDENTIFIER <assign-op> <assign-pattern-target>
+<assign-pattern-target> ::= <assign-target> | <pattern-skip> | <assign-pattern>
+<assign-target> @varref($0) @infer("lookup($0)") ::= %IDENTIFIER
+
+<place> @varref($0) @emit("reference") @infer("lookup($0)") @disambig(n00bb_penalize_nil_identifier, 100) ::= %IDENTIFIER
+<place> @emit("module_member") @infer("referent_member($0, __value)") @nospace ::= <postfix-expr> %"." %IDENTIFIER
+<place> @emit("call") @infer("element_of($0, __read, __write)") @nospace ::= <postfix-expr> %"[" <index-contents> %"]"
+<place> @emit("call") @infer("slice_of($0, __slice, __write_slice)") @nospace ::= <postfix-expr> %"[" <slice-contents> %"]"
+<place> @emit("identity", $1) @infer("$1") @nospace ::= %"(" <place> %")"
 <discard-stmt> ::= %_ <assign-op> <expression>
 
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __add, __add_assign)") ::= <expression> <plus-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __subtract, __subtract_assign)") ::= <expression> <minus-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __multiply, __multiply_assign)") ::= <expression> <multiply-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __divide, __divide_assign)") ::= <expression> <divide-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __remainder, __remainder_assign)") ::= <expression> <remainder-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_and, __bit_and_assign)") ::= <expression> <amp-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_or, __bit_or_assign)") ::= <expression> <pipe-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_xor, __bit_xor_assign)") ::= <expression> <xor-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_left, __shift_left_assign)") ::= <expression> <left-shift-assign-op> <expression>
-<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_right, __shift_right_assign)") ::= <expression> <right-shift-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __add, __add_assign)") ::= <place> <plus-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __subtract, __subtract_assign)") ::= <place> <minus-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __multiply, __multiply_assign)") ::= <place> <multiply-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __divide, __divide_assign)") ::= <place> <divide-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __remainder, __remainder_assign)") ::= <place> <remainder-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_and, __bit_and_assign)") ::= <place> <amp-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_or, __bit_or_assign)") ::= <place> <pipe-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __bit_xor, __bit_xor_assign)") ::= <place> <xor-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_left, __shift_left_assign)") ::= <place> <left-shift-assign-op> <expression>
+<binop-assign-stmt> @assigns($0, $2) @emit("compound_assign", $0, $2) @infer("$0 unify method_result($0, $2, __shift_right, __shift_right_assign)") ::= <place> <right-shift-assign-op> <expression>
 
 <expression-stmt> @discards($0) ::= <expression>
 
@@ -681,6 +713,8 @@
 
 <tuple-or-paren> @infer("`t") @nospace($1) @nospace($2) @nospace($4) ::= %"(" <expression> %"," <expr-comma-list> %")"
 <tuple-or-paren> @infer("$1") @nospace ::= %"(" <expression> %")"
+<tuple-or-paren> @infer("$1") @nospace ::= %"(" <expression> <trailing-paren>
+<trailing-paren> @nospace ::= %"," %")"
 <tuple-or-paren> @infer("`t") @nospace($1) @nospace($2) ::= %"(" <named-field-list> %")"
 
 <named-field-list> ::= <named-field> %"," <named-field-list>
@@ -694,6 +728,7 @@
 
 <expr-comma-list> ::= <expression> %"," <expr-comma-list>
                     | <expression>
+                    | <expression> %","
 
 <type-spec> ::= <one-tspec> <where-clause>?
 
@@ -714,6 +749,12 @@
 
 <tspec-application> @nospace ::=
     %"[" <tspec-list> %"]"
+<tspec-application> @nospace ::=
+    %"[" <tspec-field-list> %"]"
+
+<tspec-field-list> ::= <tspec-field> %"," <tspec-field-list>
+                    | <tspec-field>
+                    | <tspec-field> %","
 <array-dimensions> @disambig(n00bb_prefer_type_application, 100) ::=
     <array-dimension>+
 <array-dimension> @nospace ::= %"[" <expression>? %"]"
@@ -730,6 +771,7 @@
               | <union-tspec> %","
 
 <tspec-func> @nospace($1) @nospace($2) ::= %"(" <tspec-func-params> %")" <tspec-function-result>
+<tspec-func> @nospace($1) @nospace($2) @nospace($3) ::= %"(" <tspec-func-params> %"," %")" <tspec-function-result>
                | %"(" %")" <tspec-function-result>
 
 <tspec-function-result> ::= <return-type> <error-type>?
@@ -752,7 +794,7 @@
 <tspec-vargs> ::= %"*" <union-tspec>
 <tspec-kargs> ::= %"**" <tspec-field> (%"," <tspec-field>)*
 
-<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)*
+<where-clause> ::= %"where" <type-constraint> (%"," <type-constraint>)* %","?
 
 <type-constraint> ::= %TYPE_VAR %":" <constraint-list>
 

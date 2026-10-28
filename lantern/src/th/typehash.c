@@ -145,6 +145,7 @@ void th_ctx_free(th_ctx *ctx)
     core_list_free(ctx->promos);
     core_list_free(ctx->ifaces);
     core_list_free(ctx->type_records);
+    core_list_free(ctx->integer_methods_pending);
     free_index(ctx->builtin_heads);
     free_index(ctx->closed_type_records);
     free_index(ctx->open_type_records);
@@ -1647,6 +1648,12 @@ th_type *th_array_n(th_ctx *ctx, th_type *e, uint64_t n)
     t->seq.extent     = n;
 
     return t;
+}
+
+th_type *th_record_sorted(th_ctx *ctx, th_member *m, size_t n)
+{
+    if (n) qsort(m, n, sizeof(th_member), th_cmp_member);
+    return th_record(ctx, m, n);
 }
 
 th_type *th_record(th_ctx *ctx, const th_member *m, size_t n)

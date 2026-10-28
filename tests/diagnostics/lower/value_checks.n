@@ -204,3 +204,35 @@ fn abs(x: c_int) -> c_int
 
 require f(true) == 1
 require sys.abs(-3)! == 3
+
+record Tuple_Target {
+    x: int
+}
+
+record Tuple_Built {
+    x: int
+}
+
+func __init(modify self: Tuple_Built, x: int) {
+    self.x = x
+}
+
+func positional_cast() -> int {
+    let converted = cast[Tuple_Target]((1, 2))
+    return converted.x
+}
+
+func mismatched_cast() -> int {
+    let converted = cast[Tuple_Target]((y = 1))
+    return converted.x
+}
+
+func constructed_cast() -> int {
+    let converted = cast[Tuple_Built]((x = 1))
+    return converted.x
+}
+
+func constructed_literal() -> int {
+    let built: Tuple_Built = (x = 2)
+    return built.x
+}

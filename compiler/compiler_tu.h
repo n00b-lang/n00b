@@ -46,9 +46,19 @@ typedef struct {
     size_t index;
     core_string_t name;
     bool positional;
-} n00bb_loop_binding_projection_t;
+} n00bb_projection_step_t;
+core_list_decl(n00bb_projection_step_t);
+typedef struct {
+    n00bb_projection_step_t *steps;
+    size_t count;
+} n00bb_binding_projection_t;
 void collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                           core_list_t(parse_tree_ptr_t) *bindings);
+parse_tree_t *n00bb_pattern_owner(parse_grammar_t *grammar,
+                                  parse_tree_t *node);
+bool n00bb_bind_pattern(parse_grammar_t *grammar,
+                        core_translation_unit_t *unit, parse_tree_t *pattern,
+                        th_type *type);
 bool measure_static_shape_prefix(ir_shape_t *shape,
                                  uint32_t flat_prefix_rank);
 th_type *record_template_type(th_ctx *types, core_string_t name,
@@ -76,6 +86,8 @@ bool cache_iteration_plan(parse_grammar_t *grammar,
                           core_translation_unit_t *unit, parse_tree_t *loop,
                           th_type *source_type, th_type *cursor_type,
                           th_type *item_type);
+void resolve_declaration_patterns(parse_grammar_t *grammar,
+                                  core_translation_unit_t *unit);
 bool resolve_for_binding_types(parse_grammar_t *grammar,
                                core_translation_unit_t *unit);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
@@ -384,6 +396,10 @@ typedef struct {
     bool shape_literal_pending;
     bool shape_literal_resolved;
     bool overload_conversion_warning_reported;
+    bool tuple_index_known;
+    bool tuple_index_reported;
+    uint32_t tuple_index;
+    n00bb_binding_projection_t *projection;
 } n00bb_node_facts_t;
 typedef core_translation_unit_t *core_translation_unit_ptr_t;
 core_list_decl(core_translation_unit_ptr_t);
@@ -653,6 +669,8 @@ typedef struct {
     n00bb_lex_result_t *lex;
     parse_annot_result_t *annotations;
     core_list_t(parse_tree_ptr_t) module_top_level_statements;
+    core_list_t(parse_tree_ptr_t) assignment_patterns;
+    core_list_t(parse_tree_ptr_t) declaration_patterns;
     core_list_t(n00bb_literal_constant_t) literal_constants;
     core_list_t(parse_tree_ptr_t) array_type_nodes;
     core_list_t(n00bb_user_litmod_t) literal_modifiers;
@@ -676,6 +694,7 @@ typedef struct {
     core_list_t(n00bb_integer_edge_t) integer_edges;
     core_list_t(n00bb_integer_guard_t) integer_guards;
     core_dict_t integer_edge_sites;
+    core_dict_t constructor_types;
     core_dict_t integer_range_nodes;
     core_dict_t integer_tracked_symbols;
     core_dict_t failed_calls;
@@ -830,6 +849,10 @@ bool semantic_static_literal_value(parse_grammar_t *grammar,
                                    n00bb_tu_state_t *state,
                                    n00bb_static_value_t *out);
 th_type *static_record_shape(n00bb_tu_state_t *state, th_type *type);
+th_type *n00bb_record_shape(n00bb_tu_state_t *state, th_type *type);
+bool n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type);
+void n00bb_report_untyped_variables(parse_grammar_t *grammar,
+                                    core_translation_unit_t *unit);
 bool infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
                             n00bb_tu_state_t *state);
 bool contextualize_record_literal(parse_grammar_t *grammar,
@@ -1281,6 +1304,18 @@ n00bb_node_facts_t *n00bb_node_facts(parse_tree_t *node);
 n00bb_ordered_nodes_t *n00bb_node_ordered_nodes(parse_tree_t *node);
 n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
 parse_tree_t *n00bb_node_record_literal_origin(parse_tree_t *node);
+bool n00bb_node_tuple_index(parse_tree_t *node, uint32_t *index);
+bool n00bb_node_tuple_access(parse_tree_t *node);
+bool n00bb_tuple_type(th_type *type);
+void n00bb_report_not_iterable(core_translation_unit_t *unit,
+                               parse_tree_t *loop);
+parse_tree_t *n00bb_for_loop_at(core_translation_unit_t *unit, uint32_t line,
+                                uint32_t column);
+void n00bb_report_tuple_immutable(core_translation_unit_t *unit,
+                                  core_diag_location_t location);
+th_type *n00bb_tuple_element(th_ctx *types, parse_grammar_t *grammar,
+                             parse_tree_t *index, th_type *tuple, bool write,
+                             void *context);
 parse_sym_entry_t *bound_function_symbol(parse_tree_t *node);
 th_type *n00bb_reference_definition(th_ctx *types, th_type *type);
 th_type *n00bb_dereferenced_type(th_ctx *types, th_type *type);
@@ -1492,6 +1527,27 @@ nt_is(parse_grammar_t *grammar, parse_tree_t *node, core_string_t name)
 {
     return node && !core_tree_is_leaf(node)
         && core_string_eq(parse_tree_nt_name(grammar, node), name);
+}
+
+static inline bool
+n00bb_name_place(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, node, CORE_STRING_STATIC("place"))
+        && core_tree_num_children(node) == 1;
+}
+
+static inline bool
+n00bb_postfix_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, node, CORE_STRING_STATIC("postfix-expr"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("place"));
+}
+
+static inline bool
+n00bb_primary_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, node, CORE_STRING_STATIC("primary"))
+        || n00bb_name_place(grammar, node);
 }
 
 static inline parse_tree_t *

@@ -293,6 +293,7 @@ bool     th_indirection_attrs(core_string_t name, uint8_t *attrs);
 th_type *th_array(th_ctx *ctx, th_type *elem);
 th_type *th_array_n(th_ctx *ctx, th_type *elem, uint64_t extent);
 th_type *th_record(th_ctx *ctx, const th_member *members, size_t n);
+th_type *th_record_sorted(th_ctx *ctx, th_member *members, size_t n);
 th_type *th_trait(th_ctx *ctx, core_string_t qualified_name,
                   const th_member *methods, size_t n,
                   const th_trait_requirement *requirements, size_t nr);
@@ -386,6 +387,7 @@ bool    th_is_scheme(const th_type *type);
 core_string_t th_last_error(const th_ctx *ctx);
 
 void      th_ctx_set_span(th_ctx *ctx, th_span_t span);
+void      th_ctx_set_source_file(th_ctx *ctx, core_string_t file);
 void      th_ctx_set_related(th_ctx *ctx, th_span_t span);
 void      th_ctx_clear_related(th_ctx *ctx);
 th_span_t th_ctx_span(const th_ctx *ctx);

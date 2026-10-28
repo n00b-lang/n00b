@@ -89,7 +89,7 @@ dispatch_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
         return;
     }
     parse_tree_t *call = parse_tree_parent(node);
-    if (!nt_is(grammar, call, CORE_STRING_STATIC("postfix-expr"))
+    if (!n00bb_postfix_node(grammar, call)
         || core_tree_child(call, 0) != node) return;
     collect_positional_nodes(grammar,
         child_nt(grammar, call_arguments_node(grammar, call),
@@ -199,6 +199,18 @@ report_environment_failure(parse_grammar_t *grammar,
     th_error_t detail = {0};
     bool has_detail = error_count &&
         th_error_at(state->types, error_count - 1, &detail);
+    core_translation_unit_t *span_unit = nullptr;
+    for (size_t u = 0; has_detail && !span_unit && u < units->len; u++)
+        if (detail_spans_unit(&detail, units->data[u]))
+            span_unit = units->data[u];
+    parse_tree_t *loop = span_unit && detail.got
+        ? n00bb_for_loop_at(span_unit, detail.span.start_line,
+                            detail.span.start_col)
+        : nullptr;
+    if (loop) {
+        n00bb_report_not_iterable(span_unit, loop);
+        return;
+    }
     parse_tree_t *failure_site = nullptr;
     core_translation_unit_t *failure_unit = nullptr;
     th_type *failure_receiver = nullptr;
@@ -209,7 +221,8 @@ report_environment_failure(parse_grammar_t *grammar,
          && detail.got
          && !failure_site && u < units->len; u++) {
         n00bb_tu_state_t *owner = tu_state(units->data[u]);
-        if (!pass && !detail_spans_unit(&detail, units->data[u]))
+        if (span_unit ? units->data[u] != span_unit
+                      : !pass && !detail_spans_unit(&detail, units->data[u]))
             continue;
         for (size_t s = 0; owner && s < owner->link_use_sites.len;
              s++) {

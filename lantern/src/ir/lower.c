@@ -1518,6 +1518,154 @@ lower_type_is_reference_carrier(th_type *type)
 }
 
 static ir_lower_result_t
+lower_write_binding(ir_lower_context_t *context,
+                    ir_lower_symbol_binding_t *binding, ir_value_t *value,
+                    bool initializes, ir_span_t span)
+{
+    if (!initializes) {
+        ir_execution_phase_t phase = ir_func_execution_phase(
+            context->function);
+        ir_value_t *phase_binding = binding->address
+            ? binding->address : lower_binding_value(context, binding);
+        if (phase_binding && phase_binding->kind == IR_VAL_GLOBAL
+            && phase_binding->global)
+            initializes = !ir_global_can_write(phase_binding->global, phase)
+                && ir_global_can_initialize(phase_binding->global, phase);
+        else if (phase_binding)
+            initializes = !ir_value_can_write(phase_binding, phase)
+                && ir_value_can_initialize(phase_binding, phase);
+    }
+    if (binding->address) {
+        th_type *referent = th_ind_referent(binding->address->type);
+        value = ir_lower_value_as(context, value, referent, span);
+        if (!value || !referent || !ir_type_eq(context->module,
+                                               referent, value->type))
+            return lower_failure(context, IR_DIAG_TYPE_MISMATCH, span,
+                                 "assigned value does not match the stored type");
+        ir_instr_t *instruction = ir_instr_add(context->block,
+                                               IR_OP_STORE);
+        if (!instruction
+            || !ir_instr_set_binding_initialization(
+                instruction, initializes)
+            || !ir_instr_operand_value(instruction, binding->address)
+            || !ir_instr_operand_value(instruction, value))
+            return lower_failure(context, IR_DIAG_INTERNAL, span,
+                                 "could not emit an address-backed assignment");
+        instruction->span = span;
+    }
+    else if (binding->local) {
+        value = ir_lower_value_as(context, value, binding->local->type,
+                                  span);
+        if (!value || !ir_type_eq(context->module,
+                                  binding->local->type, value->type))
+            return lower_failure(context, IR_DIAG_TYPE_MISMATCH, span,
+                                 "assigned value does not match the local type");
+        ir_instr_t *instruction = ir_instr_add(context->block,
+                                               IR_OP_COPY);
+        if (!instruction
+            || !ir_instr_set_binding_initialization(
+                instruction, initializes)
+            || !ir_instr_set_dest_local(instruction, binding->local)
+            || !ir_instr_operand_value(instruction, value))
+            return lower_failure(context, IR_DIAG_INTERNAL, span,
+                                 "could not emit a local assignment");
+        instruction->span = span;
+        if (lower_type_is_reference_carrier(binding->local->type)) {
+            ir_value_t *destination = ir_local_value(
+                context->function, binding->local);
+            ir_annots_t *annots = destination
+                ? ir_value_annots(destination) : nullptr;
+            ir_annot_t *count = annots
+                ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_count"))
+                : nullptr;
+            ir_annot_t *complete = annots
+                ? ir_annot_get(annots, CORE_STRING_STATIC(
+                                           "ir.alias_analysis_complete"))
+                : nullptr;
+            ir_annot_t *unresolved = annots
+                ? ir_annot_get(annots,
+                               CORE_STRING_STATIC("ir.alias_unresolved"))
+                : nullptr;
+            bool can_complete = !unresolved
+                || (unresolved->kind == IR_ANNOT_BOOL && !unresolved->b);
+            ir_value_t *alias_value = value;
+            if (initializes && value->def
+                && value->def->op == IR_OP_ADDRESS_OF
+                && value->def->n_operands == 1) {
+                ir_value_t *addressed = ir_operand_value(
+                    &value->def->operands[0]);
+                if (addressed) alias_value = addressed;
+            }
+            ir_alias_target_t source = {.value = alias_value};
+            ir_execution_phase_t phase = ir_func_execution_phase(
+                context->function);
+            bool immutable_initialization = initializes && destination
+                && !ir_value_can_write(destination, phase);
+            bool already_complete = immutable_initialization && count
+                && count->kind == IR_ANNOT_INT && !count->i.neg
+                && count->i.mag && complete
+                && complete->kind == IR_ANNOT_BOOL && complete->b;
+            bool first_initialization = immutable_initialization
+                && (!count || (count->kind == IR_ANNOT_INT
+                    && !count->i.neg && !count->i.mag));
+            bool attached = already_complete ? true : first_initialization
+                ? ir_value_set_alias_targets(context->module->ctx,
+                    destination, &source, 1, true)
+                : ir_value_add_alias_target(context->module->ctx,
+                                            destination, source);
+            if (attached && immutable_initialization && !already_complete
+                && !first_initialization && can_complete)
+                attached = ir_value_complete_alias_targets(
+                    context->module->ctx, destination);
+            if (attached)
+                attached = lower_set_bool_annot(
+                    context->module->ctx, annots,
+                    CORE_STRING_STATIC("ir.alias_from_assignment"), true);
+            if (!attached)
+                return lower_failure(context, IR_DIAG_INTERNAL, span,
+                    "could not attach the local reference source");
+        }
+    }
+    else if (binding->value && binding->value->kind == IR_VAL_GLOBAL) {
+        value = binding->value->global
+            ? ir_lower_value_as(context, value,
+                                binding->value->global->type, span)
+            : value;
+        if (!value)
+            return lower_failure(context, IR_DIAG_INTERNAL, span,
+                                 "could not read through the assigned reference");
+        ir_instr_t *instruction = ir_instr_add(context->block,
+                                               IR_OP_GLOBAL_STORE);
+        if (!instruction || !ir_instr_operand_value(instruction,
+                                                     binding->value)
+            || !ir_instr_set_binding_initialization(
+                instruction, initializes)
+            || !ir_instr_operand_value(instruction, value))
+            return lower_failure(context, IR_DIAG_INTERNAL, span,
+                                 "could not emit a global assignment");
+        instruction->span = span;
+    }
+    else {
+        return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
+                             "assignment destination is not writable storage");
+    }
+    return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
+}
+
+ir_lower_result_t
+ir_lower_assign_symbol(ir_lower_context_t *context,
+                       parse_sym_entry_t *symbol, ir_value_t *value,
+                       bool initializes, ir_span_t span)
+{
+    ir_lower_symbol_binding_t *binding = context && symbol
+        ? lower_find_binding(context, symbol) : nullptr;
+    if (!binding || !value)
+        return lower_failure(context, IR_DIAG_VERIFY_PARSED, span,
+                             "assignment needs a bound destination and value");
+    return lower_write_binding(context, binding, value, initializes, span);
+}
+
+static ir_lower_result_t
 lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
                       parse_annotation_t *annotation, ir_span_t span)
 {
@@ -1548,134 +1696,8 @@ lower_tree_assignment(ir_lower_tree_state_t *state, parse_visit_t *visit,
     if (!binding || !found || !value)
         return lower_failure(state->context, IR_DIAG_VERIFY_PARSED, span,
                              "assignment needs a bound destination and value");
-    if (!initializes) {
-        ir_execution_phase_t phase = ir_func_execution_phase(
-            state->context->function);
-        ir_value_t *phase_binding = binding->address
-            ? binding->address : lower_binding_value(state->context, binding);
-        if (phase_binding && phase_binding->kind == IR_VAL_GLOBAL
-            && phase_binding->global)
-            initializes = !ir_global_can_write(phase_binding->global, phase)
-                && ir_global_can_initialize(phase_binding->global, phase);
-        else if (phase_binding)
-            initializes = !ir_value_can_write(phase_binding, phase)
-                && ir_value_can_initialize(phase_binding, phase);
-    }
-    if (binding->address) {
-        th_type *referent = th_ind_referent(binding->address->type);
-        value = ir_lower_value_as(state->context, value, referent, span);
-        if (!value || !referent || !ir_type_eq(state->context->module,
-                                               referent, value->type))
-            return lower_failure(state->context, IR_DIAG_TYPE_MISMATCH, span,
-                                 "assigned value does not match the stored type");
-        ir_instr_t *instruction = ir_instr_add(state->context->block,
-                                               IR_OP_STORE);
-        if (!instruction
-            || !ir_instr_set_binding_initialization(
-                instruction, initializes)
-            || !ir_instr_operand_value(instruction, binding->address)
-            || !ir_instr_operand_value(instruction, value))
-            return lower_failure(state->context, IR_DIAG_INTERNAL, span,
-                                 "could not emit an address-backed assignment");
-        instruction->span = span;
-    }
-    else if (binding->local) {
-        value = ir_lower_value_as(state->context, value, binding->local->type,
-                                  span);
-        if (!value || !ir_type_eq(state->context->module,
-                                  binding->local->type, value->type))
-            return lower_failure(state->context, IR_DIAG_TYPE_MISMATCH, span,
-                                 "assigned value does not match the local type");
-        ir_instr_t *instruction = ir_instr_add(state->context->block,
-                                               IR_OP_COPY);
-        if (!instruction
-            || !ir_instr_set_binding_initialization(
-                instruction, initializes)
-            || !ir_instr_set_dest_local(instruction, binding->local)
-            || !ir_instr_operand_value(instruction, value))
-            return lower_failure(state->context, IR_DIAG_INTERNAL, span,
-                                 "could not emit a local assignment");
-        instruction->span = span;
-        if (lower_type_is_reference_carrier(binding->local->type)) {
-            ir_value_t *destination = ir_local_value(
-                state->context->function, binding->local);
-            ir_annots_t *annots = destination
-                ? ir_value_annots(destination) : nullptr;
-            ir_annot_t *count = annots
-                ? ir_annot_get(annots, CORE_STRING_STATIC("ir.alias_count"))
-                : nullptr;
-            ir_annot_t *complete = annots
-                ? ir_annot_get(annots, CORE_STRING_STATIC(
-                                           "ir.alias_analysis_complete"))
-                : nullptr;
-            ir_annot_t *unresolved = annots
-                ? ir_annot_get(annots,
-                               CORE_STRING_STATIC("ir.alias_unresolved"))
-                : nullptr;
-            bool can_complete = !unresolved
-                || (unresolved->kind == IR_ANNOT_BOOL && !unresolved->b);
-            ir_value_t *alias_value = value;
-            if (initializes && value->def
-                && value->def->op == IR_OP_ADDRESS_OF
-                && value->def->n_operands == 1) {
-                ir_value_t *addressed = ir_operand_value(
-                    &value->def->operands[0]);
-                if (addressed) alias_value = addressed;
-            }
-            ir_alias_target_t source = {.value = alias_value};
-            ir_execution_phase_t phase = ir_func_execution_phase(
-                state->context->function);
-            bool immutable_initialization = initializes && destination
-                && !ir_value_can_write(destination, phase);
-            bool already_complete = immutable_initialization && count
-                && count->kind == IR_ANNOT_INT && !count->i.neg
-                && count->i.mag && complete
-                && complete->kind == IR_ANNOT_BOOL && complete->b;
-            bool first_initialization = immutable_initialization
-                && (!count || (count->kind == IR_ANNOT_INT
-                    && !count->i.neg && !count->i.mag));
-            bool attached = already_complete ? true : first_initialization
-                ? ir_value_set_alias_targets(state->context->module->ctx,
-                    destination, &source, 1, true)
-                : ir_value_add_alias_target(state->context->module->ctx,
-                                            destination, source);
-            if (attached && immutable_initialization && !already_complete
-                && !first_initialization && can_complete)
-                attached = ir_value_complete_alias_targets(
-                    state->context->module->ctx, destination);
-            if (attached)
-                attached = lower_set_bool_annot(
-                    state->context->module->ctx, annots,
-                    CORE_STRING_STATIC("ir.alias_from_assignment"), true);
-            if (!attached)
-                return lower_failure(state->context, IR_DIAG_INTERNAL, span,
-                    "could not attach the local reference source");
-        }
-    }
-    else if (binding->value && binding->value->kind == IR_VAL_GLOBAL) {
-        value = binding->value->global
-            ? ir_lower_value_as(state->context, value,
-                                binding->value->global->type, span)
-            : value;
-        if (!value)
-            return lower_failure(state->context, IR_DIAG_INTERNAL, span,
-                                 "could not read through the assigned reference");
-        ir_instr_t *instruction = ir_instr_add(state->context->block,
-                                               IR_OP_GLOBAL_STORE);
-        if (!instruction || !ir_instr_operand_value(instruction,
-                                                     binding->value)
-            || !ir_instr_set_binding_initialization(
-                instruction, initializes)
-            || !ir_instr_operand_value(instruction, value))
-            return lower_failure(state->context, IR_DIAG_INTERNAL, span,
-                                 "could not emit a global assignment");
-        instruction->span = span;
-    }
-    else {
-        return lower_failure(state->context, IR_DIAG_VERIFY_PARSED, span,
-                             "assignment destination is not writable storage");
-    }
-    return (ir_lower_result_t){.status = IR_LOWER_NO_VALUE};
+    return lower_write_binding(state->context, binding, value, initializes,
+                               span);
 }
 
 static bool

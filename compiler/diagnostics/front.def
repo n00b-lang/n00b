@@ -208,6 +208,11 @@ N00B_DIAG(INVALID_SYNTAX_PREFERENCE, "N00B-P0033", ERROR,
     "a `--syntax-preference` value is not a known class and spelling",
     "Write `--syntax-preference CLASS=SPELLING`, for example\n"
     "`--syntax-preference blocks={}`.")
+N00B_DIAG(SYNTAX_TRAILING_COMMA, "N00B-P0034", WARNING,
+    "a trailing comma ends a statement",
+    "A comma at the end of a declaration or import list reads as though\n"
+    "the list continues on the next line. Inside brackets, and before a\n"
+    "block, a trailing comma is fine.")
 N00B_DIAG(IMPORT_NOT_FOUND, "N00B-M0001", ERROR,
     "an imported module cannot be found",
     "The module is not in the current directory, in a package root on\n"

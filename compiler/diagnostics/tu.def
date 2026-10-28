@@ -246,10 +246,14 @@ N00B_DIAG(LITERAL_MODIFIER_SIGNATURE, "N00B-T0536", ERROR,
     "A literal modifier takes the literal as its one typed parameter (a\n"
     "fence may add `site: Literal_Site`), returns the value it builds, and\n"
     "declares `fail: string`.")
-N00B_DIAG(LOOP_BINDINGS_MISMATCH, "N00B-T0537", ERROR,
-    "the names in a `for` loop do not match the shape of its items",
-    "Loop names bind the positions of tuple items in order, or the fields of\n"
-    "record items by name. A single name binds the whole item.")
+N00B_DIAG(TUPLE_PATTERN, "N00B-T0537", ERROR,
+    "an unpacking pattern does not match the value it unpacks",
+    "A pattern unpacks a positional tuple by position, naming every element:\n"
+    "    var (a, b) = pair\n"
+    "and a field tuple or record by field name, in any order:\n"
+    "    var (x = left, y = top) = point\n"
+    "A bare name in a field pattern unpacks the field of that name, `_`\n"
+    "skips an element, and a single name binds the whole value.")
 N00B_DIAG(NOT_ITERABLE, "N00B-T0538", ERROR,
     "a `for` loop iterates over a value that cannot be iterated",
     "A `for` loop needs a value whose type implements the `Iterable` trait,\n"
@@ -407,3 +411,42 @@ N00B_DIAG(ATOMIC_UNSUPPORTED, "N00B-T0577", ERROR,
     "the target has no atomic operations for a type",
     "Atomic values must fit the atomic instructions of the target. Use a\n"
     "smaller element type, or protect the value with a lock.")
+N00B_DIAG(TUPLE_FIELD_REPEATED, "N00B-T0578", ERROR,
+    "a field tuple type names a field twice",
+    "Each field of a field tuple has its own name:\n"
+    "    var point: Tuple[x: int, y: int]")
+N00B_DIAG(TUPLE_NAMED_ARGUMENTS, "N00B-T0579", ERROR,
+    "a type other than Tuple is given named type arguments",
+    "Only `Tuple` takes named elements, which make a field tuple:\n"
+    "    var point: Tuple[x: int, y: int]\n"
+    "Other generic types take their type arguments by position.")
+N00B_DIAG(TUPLE_ONE_ELEMENT, "N00B-T0580", ERROR,
+    "a positional tuple type has one element",
+    "A value is its own one-tuple, so `(a)` and `a` are the same and\n"
+    "`Tuple[T]` is just `T`. Write the element type alone:\n"
+    "    var count: int")
+N00B_DIAG(TUPLE_IMMUTABLE, "N00B-T0581", ERROR,
+    "an element of a tuple is assigned",
+    "Tuples are values that cannot change in place. Build a new tuple and\n"
+    "assign it instead:\n"
+    "    point = (x = 3, y = point.y)")
+N00B_DIAG(TUPLE_INDEX_NOT_CONSTANT, "N00B-T0582", ERROR,
+    "a tuple is indexed by a value that is not a compile-time constant",
+    "The elements of a tuple can have different types, so the index has to\n"
+    "be known when the program is compiled:\n"
+    "    let pair = (1, \"one\")\n"
+    "    let name = pair[1]")
+N00B_DIAG(TUPLE_INDEX_RANGE, "N00B-T0583", ERROR,
+    "a tuple index is out of range",
+    "A tuple with n elements is indexed from 0 to n - 1.")
+N00B_DIAG(TUPLE_CAST, "N00B-T0585", ERROR,
+    "a tuple cast between incompatible shapes",
+    "`cast[T]` converts between a field tuple and a record or object whose\n"
+    "fields have the same names and compatible types, in either direction.\n"
+    "A positional tuple never converts to a record or object.")
+N00B_DIAG(VARIABLE_UNTYPED, "N00B-T0586", ERROR,
+    "a variable's type cannot be inferred",
+    "A variable declared without a type or an initial value takes its type\n"
+    "from what is later assigned to it. When nothing settles it, give it a\n"
+    "type:\n"
+    "    var count: int")

@@ -51,7 +51,7 @@ lvalue_spine_step(parse_grammar_t *grammar, parse_tree_t *parent,
     if (children == 1) return true;
     if (NT_IS(grammar, parent, "tuple-or-paren"))
         return children == 3 && core_tree_child(parent, 1) == child;
-    if (!NT_IS(grammar, parent, "postfix-expr") || children < 3
+    if (!n00bb_postfix_node(grammar, parent) || children < 3
         || core_tree_child(parent, 0) != child) return false;
     parse_tree_t *operator = core_tree_child(parent, 1);
     return parse_tree_leaf_is(operator, CORE_STRING_STATIC("."))
@@ -403,7 +403,7 @@ n00bb_variant_arm_payload_type(th_ctx *types, th_type *variant,
 static bool
 member_step(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return NT_IS(grammar, node, "postfix-expr")
+    return n00bb_postfix_node(grammar, node)
         && core_tree_num_children(node) == 3
         && parse_tree_leaf_is(core_tree_child(node, 1),
                               CORE_STRING_STATIC("."));
@@ -468,7 +468,7 @@ parse_sym_entry_t *
 variant_payload_arm(parse_grammar_t *grammar, core_translation_unit_t *unit,
                    parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "postfix-expr")
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return nullptr;
@@ -531,7 +531,7 @@ parse_sym_entry_t *
 variant_assignment_arm(parse_grammar_t *grammar,
                       core_translation_unit_t *unit, parse_tree_t *node)
 {
-    if (!unit || !NT_IS(grammar, node, "postfix-expr")
+    if (!unit || !n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return nullptr;
@@ -548,7 +548,7 @@ variant_assignment_arm(parse_grammar_t *grammar,
                                   CORE_STRING_STATIC("="));
             break;
         }
-        if (NT_IS(grammar, at, "postfix-expr")
+        if (n00bb_postfix_node(grammar, at)
             && core_tree_num_children(at)
             && core_tree_child(at, 0) == child) break;
         if (core_tree_num_children(at) != 1) break;
@@ -655,7 +655,7 @@ check_local_record_field_reference(parse_grammar_t *grammar,
                                    core_translation_unit_t *unit,
                                    parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "postfix-expr")
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))
@@ -761,19 +761,325 @@ collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
                       core_list_t(parse_tree_ptr_t) *bindings)
 {
     if (!node || core_tree_is_leaf(node)) return;
-    if (NT_IS(grammar, node, "for-binding")) {
+    if (NT_IS(grammar, node, "for-binding")
+        || NT_IS(grammar, node, "pattern-binding")
+        || NT_IS(grammar, node, "assign-target")) {
         core_list_push(*bindings, node);
         return;
     }
     if (!NT_IS(grammar, node, "for-var-list")
-        && !NT_IS(grammar, node, "for-range-var")) return;
-    for (size_t i = 0; i < core_tree_num_children(node); i++) {
+        && !NT_IS(grammar, node, "for-range-var")
+        && !NT_IS(grammar, node, "binding-pattern")
+        && !NT_IS(grammar, node, "pattern-items")
+        && !NT_IS(grammar, node, "pattern-item")
+        && !NT_IS(grammar, node, "pattern-target")
+        && !NT_IS(grammar, node, "assign-pattern")
+        && !NT_IS(grammar, node, "assign-pattern-items")
+        && !NT_IS(grammar, node, "assign-pattern-item")
+        && !NT_IS(grammar, node, "named-assign-pattern-item")
+        && !NT_IS(grammar, node, "assign-pattern-target")) return;
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        collect_for_bindings(grammar, core_tree_child(node, i), bindings);
+}
+
+parse_tree_t *
+n00bb_pattern_owner(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    if (!NT_IS(grammar, node, "pattern-binding")) return nullptr;
+    for (parse_tree_t *at = parse_tree_parent(node); at;
+         at = parse_tree_parent(at))
+        if (NT_IS(grammar, at, "for-stmt")
+            || NT_IS(grammar, at, "variable-decl")
+            || NT_IS(grammar, at, "assign-stmt")) return at;
+    return nullptr;
+}
+
+typedef struct {
+    parse_tree_t *name;
+    parse_tree_t *target;
+} pattern_item_t;
+core_list_decl(pattern_item_t);
+
+typedef struct {
+    parse_grammar_t *grammar;
+    core_translation_unit_t *unit;
+    n00bb_tu_state_t *state;
+    core_list_t(n00bb_projection_step_t) path;
+} pattern_binder_t;
+
+static void
+collect_pattern_items(parse_grammar_t *grammar, parse_tree_t *node,
+                      core_list_t(pattern_item_t) *items)
+{
+    for (size_t i = 0; node && i < core_tree_num_children(node); i++) {
         parse_tree_t *child = core_tree_child(node, i);
-        if (NT_IS(grammar, child, "for-var-list")
-            || NT_IS(grammar, child, "for-range-var")
-            || NT_IS(grammar, child, "for-binding"))
-            collect_for_bindings(grammar, child, bindings);
+        if (NT_IS(grammar, child, "pattern-items")
+            || NT_IS(grammar, child, "assign-pattern-items")
+            || NT_IS(grammar, child, "for-var-list"))
+            collect_pattern_items(grammar, child, items);
+        else if (NT_IS(grammar, child, "assign-pattern-item")
+                 && CHILD_NT(grammar, child, "named-assign-pattern-item"))
+            collect_pattern_items(grammar, child, items);
+        else if (NT_IS(grammar, child, "pattern-item")
+                 || NT_IS(grammar, child, "assign-pattern-item")
+                 || NT_IS(grammar, child, "named-assign-pattern-item")) {
+            parse_tree_t *target = CHILD_NT(grammar, child, "pattern-target");
+            if (!target)
+                target = CHILD_NT(grammar, child, "assign-pattern-target");
+            parse_tree_t *name = core_tree_num_children(child) == 3
+                ? core_tree_child(child, 0) : nullptr;
+            core_list_push(*items, ((pattern_item_t){
+                .name = name,
+                .target = target && core_tree_num_children(target)
+                    ? core_tree_child(target, 0) : nullptr,
+            }));
+        }
+        else if (NT_IS(grammar, child, "for-binding")
+                 || NT_IS(grammar, child, "binding-pattern"))
+            core_list_push(*items, ((pattern_item_t){.target = child}));
     }
+}
+
+static th_type *
+pattern_record_shape(core_translation_unit_t *unit, th_type *resolved)
+{
+    return n00bb_object_type(tu_state(unit)->types, resolved) ? nullptr
+        : n00bb_record_shape(tu_state(unit), resolved);
+}
+
+static core_string_t
+pattern_binding_name(parse_grammar_t *grammar, parse_tree_t *target)
+{
+    if (NT_IS(grammar, target, "assign-target"))
+        return parse_tree_leaf_text(core_tree_child(target, 0));
+    if (!NT_IS(grammar, target, "pattern-binding")
+        && !NT_IS(grammar, target, "for-binding")) return (core_string_t){0};
+    parse_sym_entry_t *symbol = parse_tree_sym(target);
+    return symbol ? symbol->name : (core_string_t){0};
+}
+
+static bool bind_pattern_items(pattern_binder_t *binder,
+                               core_list_t(pattern_item_t) *items,
+                               th_type *type, parse_tree_t *at);
+
+static bool
+report_pattern(pattern_binder_t *binder, parse_tree_t *at, n00bb_text_t text,
+               n00bb_args_t args)
+{
+    n00bb_report(core_translation_unit_diagnostics(binder->unit),
+        binder->unit, N00B_DIAG_TUPLE_PATTERN, link_source_location(at),
+        text, args);
+    return false;
+}
+
+static bool
+report_pattern_type(pattern_binder_t *binder, parse_tree_t *at,
+                    n00bb_text_t text, th_type *type, core_string_t name)
+{
+    core_string_t type_text = n00bb_print_type(binder->state->types, type);
+    return report_pattern(binder, at, text, name.data
+        ? N00BB_ARGS(ARG_TEXT(type_text), ARG_TEXT(name))
+        : N00BB_ARGS(ARG_TEXT(type_text)));
+}
+
+static n00bb_binding_projection_t *
+binder_projection(pattern_binder_t *binder)
+{
+    n00bb_binding_projection_t *projection = core_arena_alloc(
+        &binder->state->semantic_values, sizeof(*projection));
+    n00bb_projection_step_t *steps = binder->path.len
+        ? core_arena_alloc(&binder->state->semantic_values,
+                           binder->path.len * sizeof(*steps))
+        : nullptr;
+    if (!projection || (binder->path.len && !steps)) return nullptr;
+    for (size_t i = 0; i < binder->path.len; i++)
+        steps[i] = binder->path.data[i];
+    *projection = (n00bb_binding_projection_t){
+        .steps = steps,
+        .count = binder->path.len,
+    };
+    return projection;
+}
+
+static bool
+record_projection(pattern_binder_t *binder, parse_tree_t *target)
+{
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(binder->state,
+                                                        target);
+    if (facts) facts->projection = binder_projection(binder);
+    return facts && facts->projection;
+}
+
+static bool
+bind_assignment_target(pattern_binder_t *binder, parse_tree_t *target,
+                       th_type *type)
+{
+    parse_node_resolution_t resolution = parse_tree_resolution(target);
+    parse_sym_entry_t *symbol = resolution.kind
+            == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : parse_tree_sym(target);
+    core_string_t name = parse_tree_leaf_text(core_tree_child(target, 0));
+    if (!symbol || symbol->kind != PARSE_SYM_VARIABLE || !symbol->type)
+        return report_pattern(binder, target, N00B_TEXT_PATTERN_ASSIGN_TARGET,
+                              N00BB_ARGS(ARG_TEXT(name)));
+    th_ctx *types = binder->state->types;
+    th_type *declared = th_resolve(symbol->type);
+    bool fits = th_kind_of(declared) == TH_VAR
+        ? th_unify_in_place(types, symbol->type, type) != nullptr
+        : th_unify_probe(types, type, symbol->type)
+            || th_converts(types, type, symbol->type, nullptr,
+                           binder->grammar);
+    if (!fits) {
+        core_string_t from = n00bb_print_type(types, type);
+        core_string_t to = n00bb_print_type(types, symbol->type);
+        return report_pattern(binder, target, N00B_TEXT_PATTERN_ASSIGN_TYPE,
+            N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(from), ARG_TEXT(to)));
+    }
+    return record_projection(binder, target);
+}
+
+static bool
+bind_pattern_target(pattern_binder_t *binder, parse_tree_t *target,
+                    th_type *type)
+{
+    parse_grammar_t *grammar = binder->grammar;
+    if (!target || NT_IS(grammar, target, "pattern-skip")) return true;
+    if (NT_IS(grammar, target, "binding-pattern")
+        || NT_IS(grammar, target, "assign-pattern")) {
+        core_list_t(pattern_item_t) items = core_list_new(pattern_item_t);
+        collect_pattern_items(grammar, target, &items);
+        bool ok = bind_pattern_items(binder, &items, type, target);
+        core_list_free(items);
+        return ok;
+    }
+    if (NT_IS(grammar, target, "assign-target"))
+        return bind_assignment_target(binder, target, type);
+    parse_sym_entry_t *symbol = parse_tree_sym(target);
+    th_type *unified = symbol && type
+        ? th_unify_in_place(binder->state->types, symbol->type, type)
+        : nullptr;
+    if (!unified) return false;
+    symbol->type = unified;
+    parse_tree_set_type(target, unified);
+    return record_projection(binder, target);
+}
+
+
+static bool
+bind_pattern_items(pattern_binder_t *binder,
+                   core_list_t(pattern_item_t) *items, th_type *type,
+                   parse_tree_t *at)
+{
+    parse_grammar_t *grammar = binder->grammar;
+    if (items->len == 1 && !items->data[0].name)
+        return bind_pattern_target(binder, items->data[0].target, type);
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (th_is_poison(resolved)) return false;
+    size_t arity = th_named_nargs(resolved);
+    if (th_builtin_applied(resolved, TH_BUILTIN_TUPLE, arity)) {
+        for (size_t i = 0; i < items->len; i++)
+            if (items->data[i].name)
+                return report_pattern_type(binder, items->data[i].name,
+                    N00B_TEXT_PATTERN_POSITIONAL_NAME, type,
+                    (core_string_t){});
+        if (items->len != arity)
+            return report_pattern(binder, at, N00B_TEXT_PATTERN_ARITY,
+                N00BB_ARGS(ARG_NUMBER(items->len),
+                           ARG_TEXT(n00bb_print_type(binder->state->types,
+                                                     type)),
+                           ARG_NUMBER(arity)));
+        bool ok = true;
+        for (size_t i = 0; ok && i < items->len; i++) {
+            core_list_push(binder->path, ((n00bb_projection_step_t){
+                .index = i,
+                .positional = true,
+            }));
+            ok = bind_pattern_target(binder, items->data[i].target,
+                static_tuple_element_type(resolved, i, nullptr));
+            binder->path.len--;
+        }
+        return ok;
+    }
+    th_type *shape = pattern_record_shape(binder->unit, resolved);
+    if (!shape)
+        return report_pattern_type(binder, at, N00B_TEXT_PATTERN_NOT_TUPLE,
+                                   type, (core_string_t){});
+    bool ok = true;
+    for (size_t i = 0; ok && i < items->len; i++) {
+        pattern_item_t *item = &items->data[i];
+        core_string_t name = item->name ? parse_tree_leaf_text(item->name)
+            : pattern_binding_name(grammar, item->target);
+        parse_tree_t *site = item->name ? item->name : item->target;
+        if (!name.data)
+            return report_pattern_type(binder, site,
+                N00B_TEXT_PATTERN_NEEDS_NAME, type, (core_string_t){});
+        for (size_t j = 0; j < i; j++) {
+            pattern_item_t *earlier = &items->data[j];
+            core_string_t seen = earlier->name
+                ? parse_tree_leaf_text(earlier->name)
+                : pattern_binding_name(grammar, earlier->target);
+            if (core_string_eq(seen, name))
+                return report_pattern(binder, site,
+                    N00B_TEXT_PATTERN_REPEATED_FIELD,
+                    N00BB_ARGS(ARG_TEXT(name)));
+        }
+        th_type *field = record_lookup_text(nullptr, shape, name);
+        if (!field)
+            return report_pattern_type(binder, site,
+                N00B_TEXT_PATTERN_UNKNOWN_FIELD, type, name);
+        core_list_push(binder->path, ((n00bb_projection_step_t){
+            .name = name,
+        }));
+        ok = bind_pattern_target(binder, item->target, field);
+        binder->path.len--;
+    }
+    return ok;
+}
+
+static void
+poison_pattern_bindings(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                        parse_tree_t *pattern)
+{
+    core_list_t(parse_tree_ptr_t) bindings = core_list_new(parse_tree_ptr_t);
+    collect_for_bindings(grammar, pattern, &bindings);
+    for (size_t i = 0; i < bindings.len; i++) {
+        parse_sym_entry_t *symbol = parse_tree_sym(bindings.data[i]);
+        if (!symbol || NT_IS(grammar, bindings.data[i], "assign-target"))
+            continue;
+        symbol->type = th_poison(state->types);
+        parse_tree_set_type(bindings.data[i], symbol->type);
+    }
+    core_list_free(bindings);
+}
+
+bool
+n00bb_bind_pattern(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                   parse_tree_t *pattern, th_type *type)
+{
+    core_list_t(parse_tree_ptr_t) bindings = core_list_new(parse_tree_ptr_t);
+    collect_for_bindings(grammar, pattern, &bindings);
+    bool poisoned = false;
+    for (size_t i = 0; i < bindings.len && !poisoned; i++) {
+        parse_sym_entry_t *symbol = parse_tree_sym(bindings.data[i]);
+        poisoned = symbol && th_is_poison(symbol->type);
+    }
+    core_list_free(bindings);
+    if (poisoned) return false;
+    pattern_binder_t binder = {
+        .grammar = grammar,
+        .unit = unit,
+        .state = tu_state(unit),
+        .path = core_list_new(n00bb_projection_step_t),
+    };
+    core_list_t(pattern_item_t) items = core_list_new(pattern_item_t);
+    collect_pattern_items(grammar, pattern, &items);
+    bool ok = binder.state && bind_pattern_items(&binder, &items, type,
+                                                  pattern);
+    core_list_free(items);
+    core_list_free(binder.path);
+    if (!ok && binder.state)
+        poison_pattern_bindings(grammar, binder.state, pattern);
+    return ok;
 }
 
 static bool
@@ -783,192 +1089,61 @@ bind_for_item_type(parse_grammar_t *grammar,
 {
     parse_tree_t *vars = CHILD_NT(grammar, loop, "for-var-list");
     if (!vars) vars = CHILD_NT(grammar, loop, "for-range-var");
-    core_list_t(parse_tree_ptr_t) bindings = core_list_new(parse_tree_ptr_t);
-    collect_for_bindings(grammar, vars, &bindings);
-    th_type *resolved_item = item_type ? th_resolve(item_type) : nullptr;
-    th_type *resolved = resolved_item;
-    bool ordered_tuple = th_builtin_kind_of(resolved_item) == TH_BUILTIN_TUPLE;
-    bool named_tuple = resolved && th_kind_of(resolved) == TH_RECORD;
-    if (resolved && th_kind_of(resolved) == TH_NAMED && !ordered_tuple) {
-        th_type *definition = th_type_definition(tu_state(unit)->types,
-                                                  resolved);
-        if (!definition) {
-            parse_sym_entry_t *type_symbol = type_symbol_in_loaded_imports(
-                unit, tu_state(unit)->types, resolved, nullptr);
-            parse_scope_t *type_scope = type_symbol
-                ? type_symbol->member_scope : nullptr;
-            core_list_t(th_member) members = core_list_new(th_member);
-            core_list_t(parse_sym_entry_ptr_t) fields =
-                core_list_new(parse_sym_entry_ptr_t);
-            record_fields_in_source_order(type_scope, &fields);
-            for (size_t i = 0; i < fields.len; i++) {
-                parse_sym_entry_t *field = fields.data[i];
-                core_list_push(members, ((th_member){
-                    .name = field->name,
-                    .type = field->type,
-                }));
-            }
-            if (members.len) {
-                definition = th_record(tu_state(unit)->types,
-                    members.data, members.len);
-            }
-            core_list_free(fields);
-            core_list_free(members);
-        }
-        if (definition) {
-            resolved = th_resolve(definition);
-            named_tuple = th_kind_of(resolved) == TH_RECORD;
-        }
-    }
-    bool valid = bindings.len != 0;
-    bool unmatched_single_name = false;
-    size_t tuple_arity = ordered_tuple ? th_named_nargs(resolved_item) : 0;
-    if (ordered_tuple && bindings.len > 1) {
-        valid = tuple_arity == bindings.len;
-        for (size_t i = 0; i < bindings.len; i++) {
-            parse_tree_t *binding = bindings.data[i];
-            parse_sym_entry_t *symbol = parse_tree_sym(binding);
-            const th_arg *element = i < tuple_arity
-                ? th_named_arg(resolved_item, i) : nullptr;
-            th_type *unified = valid && symbol && element
-                && element->kind == TH_ARG_TYPE
-                ? th_unify_in_place(tu_state(unit)->types, symbol->type,
-                                    element->type) : nullptr;
-            if (!unified) {
-                valid = false;
-                break;
-            }
-            symbol->type = unified;
-            parse_tree_set_type(binding, unified);
-            n00bb_loop_binding_projection_t *projection = core_arena_alloc(
-                &tu_state(unit)->semantic_values, sizeof(*projection));
-            if (!projection) {
-                valid = false;
-                break;
-            }
-            *projection = (n00bb_loop_binding_projection_t){
-                .index = i,
-                .positional = true,
-            };
-            valid = parse_sym_set_binding(symbol,
-                CORE_STRING_STATIC("n00bb.loop-binding-projection"),
-                projection);
-        }
-    }
-    else if (named_tuple) {
-        for (size_t i = 0; valid && i < bindings.len; i++) {
-            parse_tree_t *binding = bindings.data[i];
-            parse_sym_entry_t *symbol = parse_tree_sym(binding);
-            const th_member *member = nullptr;
-            for (size_t f = 0; symbol && f < th_record_len(resolved); f++) {
-                const th_member *candidate = th_record_member(resolved, f);
-                if (candidate && core_string_eq(symbol->name,
-                                                candidate->name)) {
-                    member = candidate;
-                    break;
-                }
-            }
-            for (size_t prior = 0; symbol && prior < i; prior++) {
-                parse_sym_entry_t *earlier =
-                    parse_tree_sym(bindings.data[prior]);
-                if (earlier && core_string_eq(symbol->name, earlier->name)) {
-                    member = nullptr;
-                    break;
-                }
-            }
-            if (!member && bindings.len == 1) {
-                bool explicit_let = parse_sym_binding(symbol,
-                    CORE_STRING_STATIC("n00bb.explicit-loop-let")) != nullptr;
-                th_type *unified = symbol && item_type
-                    ? th_unify_in_place(tu_state(unit)->types, symbol->type,
-                                        item_type) : nullptr;
-                valid = unified != nullptr;
-                if (valid) {
-                    symbol->type = unified;
-                    parse_tree_set_type(binding, unified);
-                    unmatched_single_name = !explicit_let;
-                }
-                continue;
-            }
-            th_type *unified = symbol && member
-                ? th_unify_in_place(tu_state(unit)->types, symbol->type,
-                                    member->type) : nullptr;
-            valid = unified != nullptr;
-            if (valid) {
-                symbol->type = unified;
-                parse_tree_set_type(binding, unified);
-                n00bb_loop_binding_projection_t *projection =
-                    core_arena_alloc(&tu_state(unit)->semantic_values,
-                                     sizeof(*projection));
-                if (!projection) valid = false;
-                else {
-                    *projection = (n00bb_loop_binding_projection_t){
-                        .name = member->name,
-                    };
-                    valid = parse_sym_set_binding(symbol,
-                        CORE_STRING_STATIC(
-                            "n00bb.loop-binding-projection"), projection);
-                }
-            }
-        }
-    }
-    else if (bindings.len == 1) {
-        parse_tree_t *binding = bindings.data[0];
-        parse_sym_entry_t *symbol = parse_tree_sym(binding);
-        th_type *unified = symbol && item_type
-            ? th_unify_in_place(tu_state(unit)->types, symbol->type, item_type)
-            : nullptr;
-        valid = unified != nullptr;
-        if (valid) {
-            symbol->type = unified;
-            parse_tree_set_type(binding, unified);
-        }
-    }
-    else valid = false;
-    parse_sym_entry_t *single_symbol = bindings.len == 1
-        ? parse_tree_sym(bindings.data[0]) : nullptr;
-    bool warned = single_symbol && parse_sym_binding(single_symbol,
-        CORE_STRING_STATIC("n00bb.loop-whole-warning"));
-    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
-    if (valid && unmatched_single_name && !warned) {
-        core_string_t item_text = n00bb_print_type(tu_state(unit)->types,
-                                                   resolved);
-        if (n00bb_report(diagnostics, unit,
-            N00B_DIAG_LOOP_NAME_BINDS_WHOLE_ITEM,
-            link_source_location(bindings.data[0]),
-            N00B_TEXT_LOOP_NAME_IS_NOT_A,
-            N00BB_ARGS(ARG_TEXT(single_symbol->name), ARG_TEXT(item_text))))
-            n00bb_report_help(diagnostics, N00B_TEXT_WRITE_LET_TO_BIND_THE,
-                N00BB_ARGS(ARG_TEXT(single_symbol->name)));
-        parse_sym_set_binding(single_symbol,
-            CORE_STRING_STATIC("n00bb.loop-whole-warning"), single_symbol);
-    }
-    if (!valid && !resolved)
+    th_type *resolved = item_type ? th_resolve(item_type) : nullptr;
+    if (!resolved) {
         n00bb_tu_internal_error_unless_reported(unit, loop, "checking types",
             "loop item has no type");
-    else if (!valid) {
-        core_buffer_t names = {0};
-        for (size_t i = 0; i < bindings.len; i++) {
-            parse_sym_entry_t *symbol = parse_tree_sym(bindings.data[i]);
-            core_string_t name = symbol ? symbol->name
-                                        : CORE_STRING_STATIC("_");
-            core_buffer_printf(&names, "%s%.*s", i ? ", " : "",
-                               (int)name.u8_bytes, name.data);
-        }
-        core_string_t printed = n00bb_print_type(tu_state(unit)->types,
-                                                 resolved);
-        if (n00bb_report(diagnostics, unit, N00B_DIAG_LOOP_BINDINGS_MISMATCH,
-            link_source_location(bindings.len ? bindings.data[0] : loop),
-            N00B_TEXT_LOOP_NAMES_DO_NOT_MATCH,
-            N00BB_ARGS(ARG_TEXT(core_buffer_string(&names)),
-                       ARG_TEXT(printed))))
-            n00bb_report_help(diagnostics,
-                N00B_TEXT_NAME_EACH_TUPLE_POSITION_IN,
-                N00BB_NO_ARGS);
-        core_buffer_release(&names);
+        return false;
     }
-    core_list_free(bindings);
-    return valid;
+    parse_tree_t *single = vars && core_tree_num_children(vars) == 1
+        && NT_IS(grammar, core_tree_child(vars, 0), "for-binding")
+        ? core_tree_child(vars, 0) : nullptr;
+    parse_sym_entry_t *symbol = single ? parse_tree_sym(single) : nullptr;
+    th_type *shape = single && !th_builtin_applied(resolved, TH_BUILTIN_TUPLE,
+                                                   th_named_nargs(resolved))
+        ? pattern_record_shape(unit, resolved) : nullptr;
+    if (!single) {
+        n00bb_bind_pattern(grammar, unit, vars, item_type);
+        return true;
+    }
+    th_type *field = shape && symbol
+        ? record_lookup_text(nullptr, shape, symbol->name) : nullptr;
+    if (field) {
+        pattern_binder_t binder = {
+            .grammar = grammar,
+            .unit = unit,
+            .state = tu_state(unit),
+            .path = core_list_new(n00bb_projection_step_t),
+        };
+        core_list_push(binder.path, ((n00bb_projection_step_t){
+            .name = symbol->name,
+        }));
+        bool ok = bind_pattern_target(&binder, single, field);
+        core_list_free(binder.path);
+        return ok;
+    }
+    th_type *unified = symbol
+        ? th_unify_in_place(tu_state(unit)->types, symbol->type, item_type)
+        : nullptr;
+    if (!unified) return false;
+    symbol->type = unified;
+    parse_tree_set_type(single, unified);
+    bool explicit_let = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.explicit-loop-let")) != nullptr;
+    bool warned = parse_sym_binding(symbol,
+        CORE_STRING_STATIC("n00bb.loop-whole-warning")) != nullptr;
+    if (!shape || explicit_let || warned) return true;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t item_text = n00bb_print_type(tu_state(unit)->types,
+                                               resolved);
+    if (n00bb_report(diagnostics, unit, N00B_DIAG_LOOP_NAME_BINDS_WHOLE_ITEM,
+            link_source_location(single), N00B_TEXT_LOOP_NAME_IS_NOT_A,
+            N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(item_text))))
+        n00bb_report_help(diagnostics, N00B_TEXT_WRITE_LET_TO_BIND_THE,
+            N00BB_ARGS(ARG_TEXT(symbol->name)));
+    parse_sym_set_binding(symbol,
+        CORE_STRING_STATIC("n00bb.loop-whole-warning"), symbol);
+    return true;
 }
 
 bool
@@ -1244,6 +1419,90 @@ collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
     }
 }
 
+void
+resolve_declaration_patterns(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    for (size_t i = 0; state && i < state->declaration_patterns.len; i++) {
+        parse_tree_t *declaration = state->declaration_patterns.data[i];
+        parse_tree_t *pattern = CHILD_NT(grammar, declaration,
+                                         "binding-pattern");
+        parse_tree_t *prefix = CHILD_NT(grammar, declaration,
+                                        "declaration-prefix");
+        if (core_string_eq(first_token_text(CHILD_NT(grammar, prefix,
+                "binding-kind")), CORE_STRING_STATIC("const"))) {
+            n00bb_report(core_translation_unit_diagnostics(unit), unit,
+                N00B_DIAG_TUPLE_PATTERN, link_source_location(pattern),
+                N00B_TEXT_PATTERN_CONST, N00BB_NO_ARGS);
+            poison_pattern_bindings(grammar, state, pattern);
+            continue;
+        }
+        parse_tree_t *value = CHILD_NT(grammar, declaration, "expression");
+        (void)n00bb_bind_pattern(grammar, unit, pattern,
+                                 value ? parse_tree_type(value) : nullptr);
+    }
+    for (size_t i = 0; state && i < state->assignment_patterns.len; i++) {
+        parse_tree_t *assignment = state->assignment_patterns.data[i];
+        parse_tree_t *value = core_tree_child(assignment, 2);
+        (void)n00bb_bind_pattern(grammar, unit, core_tree_child(assignment, 0),
+                                 value ? parse_tree_type(value) : nullptr);
+    }
+}
+
+bool
+n00bb_tuple_type(th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    return th_builtin_applied(type, TH_BUILTIN_TUPLE, th_named_nargs(type))
+        || th_kind_of(type) == TH_RECORD;
+}
+
+void
+n00bb_report_not_iterable(core_translation_unit_t *unit, parse_tree_t *loop)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_grammar_t *grammar = state->grammar;
+    parse_tree_t *target = CHILD_NT(grammar, loop, "for-in-target-list");
+    parse_tree_t *source = CHILD_NT(grammar, target, "expression");
+    th_type *source_type = source ? parse_tree_type(source) : nullptr;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t spelled = source ? n00bb_value_spelling(unit, source)
+                                   : (core_string_t){};
+    core_string_t type_text = n00bb_print_type(state->types, source_type);
+    bool reported = spelled.data
+        ? n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
+            link_source_location(source),
+            N00B_TEXT_IS_WHICH_CANNOT_BE_ITERATED,
+            N00BB_ARGS(ARG_TEXT(spelled), ARG_TEXT(type_text)))
+        : n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
+            link_source_location(source ? source : loop),
+            N00B_TEXT_A_VALUE_OF_TYPE_CANNOT, N00BB_ARGS(ARG_TEXT(type_text)));
+    if (reported)
+        n00bb_report_help(diagnostics, n00bb_tuple_type(source_type)
+            ? N00B_TEXT_TUPLE_NOT_ITERABLE_HELP
+            : N00B_TEXT_A_FOR_LOOP_NEEDS_A, N00BB_NO_ARGS);
+    if (source) n00bb_poison_node(state, source);
+}
+
+parse_tree_t *
+n00bb_for_loop_at(core_translation_unit_t *unit, uint32_t line,
+                  uint32_t column)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->grammar && state->annotations
+        ? state->annotations->symtab : nullptr;
+    for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+         scope; scope = scope->all_next) {
+        if (!core_string_eq(scope->scope_tag, CORE_STRING_STATIC("for"))
+            || !scope->node
+            || !NT_IS(state->grammar, scope->node, "for-stmt")) continue;
+        core_diag_location_t at = link_source_location(scope->node);
+        if (at.line == line && at.column == column) return scope->node;
+    }
+    return nullptr;
+}
+
 bool
 resolve_for_binding_types(parse_grammar_t *grammar,
                           core_translation_unit_t *unit)
@@ -1268,27 +1527,12 @@ resolve_for_binding_types(parse_grammar_t *grammar,
                 continue;
             }
             th_type *cursor_type = nullptr;
-            th_type *resolved = resolved_iteration_item_type(
-                grammar, unit, scope->node, &cursor_type);
+            th_type *resolved = n00bb_tuple_type(source_type) ? nullptr
+                : resolved_iteration_item_type(grammar, unit, scope->node,
+                                               &cursor_type);
             if (resolved) item_type = resolved;
             if (!resolved) {
-                core_diagnostics_t *diagnostics =
-                    core_translation_unit_diagnostics(unit);
-                core_string_t spelled = n00bb_value_spelling(unit, source);
-                core_string_t type_text = n00bb_print_type(state->types,
-                                                           source_type);
-                bool reported = spelled.data
-                    ? n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
-                        link_source_location(source),
-                        N00B_TEXT_IS_WHICH_CANNOT_BE_ITERATED,
-                        N00BB_ARGS(ARG_TEXT(spelled), ARG_TEXT(type_text)))
-                    : n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
-                        link_source_location(source ? source : scope->node),
-                        N00B_TEXT_A_VALUE_OF_TYPE_CANNOT,
-                        N00BB_ARGS(ARG_TEXT(type_text)));
-                if (reported)
-                    n00bb_report_help(diagnostics, N00B_TEXT_A_FOR_LOOP_NEEDS_A,
-                        N00BB_NO_ARGS);
+                n00bb_report_not_iterable(unit, scope->node);
                 return false;
             }
             if (!cache_iteration_plan(grammar, unit, scope->node,
@@ -1783,7 +2027,8 @@ semantic_static_value_from_expression(parse_grammar_t *grammar,
                                         "named-field-list");
         if (fields) {
             th_type *shape = static_record_shape(state, type);
-            if (!shape || th_kind_of(shape) != TH_RECORD) return false;
+            if (!shape || th_kind_of(shape) != TH_RECORD
+                || n00bb_type_has_constructor(state->unit, type)) return false;
             core_list_t(parse_tree_ptr_t) source_fields =
                 core_list_new(parse_tree_ptr_t);
             bool ok = collect_ordered_children(fields, &source_fields);
@@ -3461,6 +3706,94 @@ static_record_shape(n00bb_tu_state_t *state, th_type *type)
     return shape;
 }
 
+th_type *
+n00bb_record_shape(n00bb_tu_state_t *state, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!state || !type) return nullptr;
+    if (th_kind_of(type) == TH_RECORD) return type;
+    bool variant = false;
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, nullptr, &variant, nullptr) || variant)
+        return nullptr;
+    th_type *shape = static_record_shape(state,
+        n00bb_object_type(state->types, type)
+            ? th_auto_deref(state->types, type) : type);
+    shape = shape ? th_resolve(shape) : nullptr;
+    return shape && th_kind_of(shape) == TH_RECORD ? shape : nullptr;
+}
+
+bool
+n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type)
+{
+    n00bb_tu_state_t *caller = unit ? tu_state(unit) : nullptr;
+    n00bb_link_analysis_t *analysis = caller ? caller->link_analysis : nullptr;
+    type = type ? th_resolve(type) : nullptr;
+    if (!analysis || !type || th_kind_of(type) != TH_NAMED) return false;
+    uint64_t key = th_hash(caller->types, type);
+    bool cached = false;
+    uintptr_t known = (uintptr_t)core_dict_get(&caller->constructor_types, key,
+                                              &cached);
+    if (cached) return known == 2;
+    bool found = false;
+    for (size_t i = 0; analysis && type && !found
+         && i < analysis->units.len; i++) {
+        core_translation_unit_t *owner = analysis->units.data[i];
+        n00bb_tu_state_t *state = tu_state(owner);
+        if (!state || !state->annotations) continue;
+        core_list_t(parse_scope_ptr_t) scopes = module_scopes(state);
+        for (size_t s = 0; !found && s < scopes.len; s++)
+            for (parse_sym_entry_t *symbol = scopes.data[s]->first_in_scope;
+                 !found && symbol; symbol = symbol->next_in_scope) {
+                if (symbol->kind != PARSE_SYM_FUNCTION
+                    || !core_string_eq(symbol->name,
+                                       CORE_STRING_STATIC("__init"))
+                    || !n00bb_member_visible_to(unit, owner, symbol))
+                    continue;
+                th_type *signature = constructor_signature_instance(
+                    caller->types, symbol);
+                const th_param *self = signature
+                    && th_kind_of(signature) == TH_FUNCTION
+                    && th_func_nparams(signature)
+                    ? th_func_param(signature, 0) : nullptr;
+                found = self && th_env_type_pattern_subsumes(self->type, type);
+            }
+        core_list_free(scopes);
+    }
+    core_dict_put(&caller->constructor_types, key, found ? 2 : 1);
+    return found;
+}
+
+void
+n00bb_report_untyped_variables(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    parse_symtab_t *symbols = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    for (parse_scope_t *scope = symbols ? symbols->all_scopes : nullptr; scope;
+         scope = scope->all_next)
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            parse_tree_t *declaration = symbol->decl_node;
+            th_type *type = symbol->type ? th_resolve(symbol->type) : nullptr;
+            if (symbol->kind != PARSE_SYM_VARIABLE || !declaration
+                || !NT_IS(grammar, declaration, "sym-decl")
+                || core_tree_num_children(declaration) != 1
+                || (type && th_kind_of(type) != TH_VAR)) continue;
+            core_string_t keyword = symbol->mutability == PARSE_SYM_IMMUTABLE
+                ? CORE_STRING_STATIC("let") : CORE_STRING_STATIC("var");
+            if (n00bb_report(diagnostics, unit, N00B_DIAG_VARIABLE_UNTYPED,
+                    link_source_location(declaration),
+                    N00B_TEXT_VARIABLE_UNTYPED,
+                    N00BB_ARGS(ARG_TEXT(symbol->name))))
+                n00bb_report_help(diagnostics, N00B_TEXT_VARIABLE_UNTYPED_HELP,
+                    N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(keyword)));
+            symbol->type = th_poison(state->types);
+        }
+}
+
 bool
 infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
                        n00bb_tu_state_t *state)
@@ -3501,7 +3834,8 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
             .type = field_type,
         }));
     }
-    th_type *record = th_record(state->types, members.data, members.len);
+    th_type *record = th_record_sorted(state->types, members.data,
+                                       members.len);
     core_list_free(members);
     if (!record) return false;
     th_type *existing = parse_tree_type(node);
@@ -3866,7 +4200,7 @@ remember_link_use_site(parse_grammar_t *grammar,
     bool dotted_path = dotted_symbol_path_node(grammar, node);
     bool variant_case_candidate = false;
     core_string_t variant_case_name = {0};
-    if (NT_IS(grammar, node, "primary")) {
+    if (n00bb_primary_node(grammar, node)) {
         for (parse_tree_t *at = parse_tree_parent(node); at;
              at = parse_tree_parent(at)) {
             if (!NT_IS(grammar, at, "case-expr-item")) continue;
@@ -3899,7 +4233,8 @@ remember_link_use_site(parse_grammar_t *grammar,
     core_string_t dispatch_trait = {0}, dispatch_method = {0};
     bool index_dispatch = index_dispatch_for_node(
         grammar, node, &dispatch_trait, &dispatch_method);
-    if (index_dispatch && parse_tree_is_index_address_access(node))
+    if (index_dispatch && (parse_tree_is_index_address_access(node)
+                           || n00bb_node_tuple_index(node, nullptr)))
         return;
     bool operator_dispatch = binary_operator_dispatch_for_node(
         grammar, node, &dispatch_trait, &dispatch_method)
@@ -4391,9 +4726,9 @@ n00bb_contextual_method_argument(parse_grammar_t *grammar,
     parse_tree_t *args = parse_tree_parent(parent);
     parse_tree_t *call = args ? parse_tree_parent(args) : nullptr;
     parse_tree_t *callee = NT_IS(grammar, args, "call-args")
-        && NT_IS(grammar, call, "postfix-expr")
+        && n00bb_postfix_node(grammar, call)
         && core_tree_num_children(call) ? core_tree_child(call, 0) : nullptr;
-    return NT_IS(grammar, callee, "postfix-expr")
+    return n00bb_postfix_node(grammar, callee)
         && core_tree_num_children(callee) >= 3
         && core_tree_is_leaf(core_tree_child(callee, 1))
         && parse_tree_leaf_is(core_tree_child(callee, 1),
@@ -4748,8 +5083,8 @@ integer_constant_symbol(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_node_resolution_t resolution = node && !core_tree_is_leaf(node)
         ? parse_tree_resolution(node) : (parse_node_resolution_t){0};
-    return (NT_IS(grammar, node, "primary")
-            || (NT_IS(grammar, node, "postfix-expr")
+    return (n00bb_primary_node(grammar, node)
+            || (n00bb_postfix_node(grammar, node)
                 && dotted_symbol_path_node(grammar, node)))
         && resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
         ? resolution.target.symbol : nullptr;
@@ -5171,6 +5506,7 @@ cache_return_source_fact(parse_grammar_t *grammar,
         CORE_STRING_STATIC("shift-expr"), CORE_STRING_STATIC("add-expr"),
         CORE_STRING_STATIC("mul-expr"), CORE_STRING_STATIC("unary-expr"),
         CORE_STRING_STATIC("postfix-expr"), CORE_STRING_STATIC("primary"),
+        CORE_STRING_STATIC("place"),
         CORE_STRING_STATIC("tuple-or-paren"),
     };
     bool expression_node = false;
@@ -5199,7 +5535,7 @@ cache_return_source_fact(parse_grammar_t *grammar,
             .kind = N00BB_RETURN_SOURCE_SLICE,
             .node = node,
         };
-    else if (NT_IS(grammar, node, "postfix-expr")
+    else if (n00bb_postfix_node(grammar, node)
              && core_tree_num_children(node) >= 3
              && (parse_tree_leaf_is(core_tree_child(node, 1),
                                    CORE_STRING_STATIC("."))
@@ -5236,7 +5572,7 @@ cache_return_source_fact(parse_grammar_t *grammar,
             };
     }
 
-    bool transparent_unwrap = NT_IS(grammar, node, "postfix-expr")
+    bool transparent_unwrap = n00bb_postfix_node(grammar, node)
         && core_tree_num_children(node) == 2
         && parse_tree_leaf_is(core_tree_child(node, 1),
                               CORE_STRING_STATIC("!"));
@@ -5366,7 +5702,7 @@ parse_tree_t *
 member_access_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
-    if (NT_IS(grammar, node, "postfix-expr")
+    if (n00bb_postfix_node(grammar, node)
         && core_tree_num_children(node) >= 3
         && core_tree_is_leaf(core_tree_child(node, 1))
         && parse_tree_leaf_is(core_tree_child(node, 1),
@@ -5396,7 +5732,7 @@ index_assignment_statement(parse_grammar_t *grammar, parse_tree_t *node,
         if ((NT_IS(grammar, parent, "assign-stmt")
              || NT_IS(grammar, parent, "binop-assign-stmt"))
             && core_tree_child(parent, 0) == at) return parent;
-        if (NT_IS(grammar, parent, "postfix-expr")
+        if (n00bb_postfix_node(grammar, parent)
             && core_tree_child(parent, 0) == at)
             *through_receiver = true;
         else if (core_tree_num_children(parent) != 1) return nullptr;
@@ -5408,7 +5744,7 @@ bool
 index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                         core_string_t *trait, core_string_t *method)
 {
-    if (!NT_IS(grammar, node, "postfix-expr")
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 4
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("["))) return false;
@@ -5467,7 +5803,7 @@ n00bb_index_reference_storage(parse_grammar_t *grammar, parse_tree_t *node)
         if (!parent) break;
         if (NT_IS(grammar, parent, "index-contents")
             || NT_IS(grammar, parent, "slice-contents")) return false;
-        if (NT_IS(grammar, parent, "postfix-expr")
+        if (n00bb_postfix_node(grammar, parent)
             && core_tree_child(parent, 0) != at) return false;
         if (!NT_IS(grammar, parent, "unary-expr")) continue;
         const parse_rule_t *rule = parse_tree_rule(grammar, parent);
@@ -5752,7 +6088,7 @@ attached_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
         return resolution.target.symbol;
-    bool simple_name = NT_IS(grammar, node, "primary")
+    bool simple_name = n00bb_primary_node(grammar, node)
         || (NT_IS(grammar, node, "member-chain")
             && !dotted_symbol_path_node(grammar, node));
     if (resolution.kind == PARSE_NODE_RESOLUTION_SCOPE && !simple_name)
@@ -5779,7 +6115,7 @@ dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node)
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return false;
     return NT_IS(grammar, node, "member-chain")
-        || NT_IS(grammar, node, "postfix-expr");
+        || n00bb_postfix_node(grammar, node);
 }
 
 bool
@@ -6337,7 +6673,7 @@ cache_wrapped_symbol_resolution(parse_grammar_t *grammar,
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
     if (rule && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL))
         return;
-    if (NT_IS(grammar, node, "primary")) {
+    if (n00bb_primary_node(grammar, node)) {
         n00bb_tu_state_t *state = tu_state(unit);
         if (parse_tree_resolution(node).kind == PARSE_NODE_RESOLUTION_NONE
             && state && state->annotations && state->annotations->symtab)
@@ -6431,7 +6767,7 @@ expected_expression_child_type(parse_grammar_t *grammar,
         ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_EMIT) : nullptr;
     bool identity = emit && core_string_eq(emit->emit_action,
                                             CORE_STRING_STATIC("identity"));
-    if (!identity && !NT_IS(grammar, parent, "primary")
+    if (!identity && !n00bb_primary_node(grammar, parent)
         && !NT_IS(grammar, parent, "literal-expr")) return nullptr;
     if (core_tree_num_children(parent) == 1
         && core_tree_child(parent, 0) == node)
@@ -6465,6 +6801,8 @@ prepare_initial_symbols(core_translation_unit_t *unit, th_ctx *types)
                                           unit);
     parse_annot_result_set_symbol_type_hook(state->annotations,
                                             n00bb_narrowed_symbol_type, unit);
+    parse_annot_result_set_tuple_element_hook(state->annotations,
+                                              n00bb_tuple_element, unit);
     parse_annot_result_set_node_callback(state->annotations,
                                          initial_symbol_node,
                                          state->annotations);
@@ -6658,6 +6996,63 @@ array_dimension_extent(parse_grammar_t *grammar, parse_tree_t *expression)
                                                 : IR_SHAPE_EXTENT_UNRESOLVED,
         .expression = expression,
     };
+}
+
+void
+n00bb_report_tuple_immutable(core_translation_unit_t *unit,
+                             core_diag_location_t location)
+{
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_IMMUTABLE, location,
+            N00B_TEXT_TUPLE_IMMUTABLE, N00BB_NO_ARGS))
+        n00bb_report_help(diagnostics, N00B_TEXT_TUPLE_IMMUTABLE_HELP,
+                          N00BB_NO_ARGS);
+}
+
+th_type *
+n00bb_tuple_element(th_ctx *types, parse_grammar_t *grammar,
+                    parse_tree_t *index, th_type *tuple, bool write,
+                    void *context)
+{
+    core_translation_unit_t *unit = context;
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_tree_t *access = parse_tree_parent(index);
+    n00bb_node_facts_t *facts = state && access
+        ? n00bb_ensure_node_facts(state, access) : nullptr;
+    if (!facts) return nullptr;
+    if (facts->tuple_index_known && !write)
+        return static_tuple_element_type(tuple, facts->tuple_index, nullptr);
+    parse_tree_t *expression = CHILD_NT(grammar, index, "expression");
+    size_t count = th_named_nargs(tuple);
+    uint64_t at = 0;
+    int64_t point = 0;
+    bool constant = fold_static_extent(grammar, expression, 0, &at);
+    if (!constant && n00bb_integer_point(expression, &point)) {
+        constant = true;
+        at = (uint64_t)point;
+    }
+    if (!write && constant && at < count) {
+        facts->tuple_index_known = true;
+        facts->tuple_index = (uint32_t)at;
+        return static_tuple_element_type(tuple, at, nullptr);
+    }
+    if (facts->tuple_index_reported) return th_poison(types);
+    facts->tuple_index_reported = true;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (write)
+        n00bb_report_tuple_immutable(unit, link_source_location(access));
+    else if (!constant) {
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_INDEX_NOT_CONSTANT,
+                link_source_location(index), N00B_TEXT_TUPLE_INDEX_NOT_CONSTANT,
+                N00BB_NO_ARGS))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_TUPLE_INDEX_NOT_CONSTANT_HELP, N00BB_NO_ARGS);
+    }
+    else
+        n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_INDEX_RANGE,
+            link_source_location(index), N00B_TEXT_TUPLE_INDEX_RANGE,
+            N00BB_ARGS(ARG_NUMBER(count), ARG_NUMBER(at)));
+    return th_poison(types);
 }
 
 bool
@@ -7790,7 +8185,7 @@ n00bb_report_value_type_mismatch(core_translation_unit_t *unit,
                    ARG_TEXT(wanted_text)));
     core_free(wanted_text.data);
     if (reported)
-        n00bb_report_label(diagnostics, N00B_TEXT_THIS_IS,
+        n00bb_report_label(diagnostics, N00B_TEXT_THIS_IS_2,
                            N00BB_ARGS(ARG_TEXT(actual_text)));
     core_free(actual_text.data);
     if (!reported) return;
@@ -9149,7 +9544,7 @@ parse_sym_entry_t *
 n00bb_atomic_load_symbol(parse_grammar_t *grammar,
                          core_translation_unit_t *unit, parse_tree_t *node)
 {
-    parse_sym_entry_t *symbol = NT_IS(grammar, node, "primary")
+    parse_sym_entry_t *symbol = n00bb_primary_node(grammar, node)
         ? attached_symbol(grammar, unit, node) : nullptr;
     return symbol && (symbol->kind == PARSE_SYM_VARIABLE
                       || symbol->kind == PARSE_SYM_PARAM)
@@ -10467,6 +10862,22 @@ n00bb_node_record_literal_origin(parse_tree_t *node)
     return facts ? facts->record_literal_origin : nullptr;
 }
 
+bool
+n00bb_node_tuple_index(parse_tree_t *node, uint32_t *index)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    if (!facts || !facts->tuple_index_known) return false;
+    if (index) *index = facts->tuple_index;
+    return true;
+}
+
+bool
+n00bb_node_tuple_access(parse_tree_t *node)
+{
+    n00bb_node_facts_t *facts = n00bb_node_facts(node);
+    return facts && (facts->tuple_index_known || facts->tuple_index_reported);
+}
+
 th_type *
 n00bb_reference_definition(th_ctx *types, th_type *type)
 {
@@ -11272,11 +11683,11 @@ parse_tree_t *
 simple_identifier_primary(parse_grammar_t *grammar, parse_tree_t *node)
 {
     if (!grammar || !node) return nullptr;
-    while (!core_tree_is_leaf(node) && !NT_IS(grammar, node, "primary")) {
+    while (!core_tree_is_leaf(node) && !n00bb_primary_node(grammar, node)) {
         if (core_tree_num_children(node) != 1) return nullptr;
         node = core_tree_child(node, 0);
     }
-    return NT_IS(grammar, node, "primary") ? node : nullptr;
+    return n00bb_primary_node(grammar, node) ? node : nullptr;
 }
 
 bool
@@ -11389,11 +11800,14 @@ static void
 apply_decl_binding(parse_grammar_t *grammar, parse_tree_t *node,
                    parse_sym_mutability_t mutability, bool threaded)
 {
-    if (!node || !NT_IS(grammar, node, "sym-decl")) return;
+    if (!node || (!NT_IS(grammar, node, "sym-decl")
+                  && !NT_IS(grammar, node, "pattern-binding"))) return;
     parse_sym_entry_t *symbol = parse_tree_sym(node);
     if (!symbol) return;
     symbol->mutability = mutability;
     symbol->is_thread_local = threaded;
+    symbol->type_from_assignment = NT_IS(grammar, node, "sym-decl")
+        && core_tree_num_children(node) == 1;
     bool function_local = scope_is_within_function(symbol->scope);
     parse_sym_set_storage_duration(symbol, threaded
         ? PARSE_SYM_STORAGE_THREAD
@@ -11451,6 +11865,50 @@ declared_symbol_node(parse_visit_t *visit, bool entering, void *context)
     if (!entering && visit->pn) apply_declaration_defaults(visit);
 }
 
+static bool
+report_literal_place(parse_grammar_t *grammar,
+                     parse_annot_result_t *annotations, parse_tree_t *place)
+{
+    if (!NT_IS(grammar, place, "place") || core_tree_num_children(place) < 3)
+        return false;
+    parse_tree_t *node = core_tree_child(place, 0);
+    while (node && !core_tree_is_leaf(node)) {
+        size_t children = core_tree_num_children(node);
+        if (NT_IS(grammar, node, "simple-lit")
+            || NT_IS(grammar, node, "embed-lit")
+            || NT_IS(grammar, node, "list-lit")
+            || NT_IS(grammar, node, "dict-or-set-lit")
+            || NT_IS(grammar, node, "literal-expr")
+            || (NT_IS(grammar, node, "tuple-or-paren")
+                && (children == 5
+                    || CHILD_NT(grammar, node, "named-field-list")))) {
+            if (n00bb_report(annotations->diagnostics,
+                    annotations->diagnostic_unit, N00B_DIAG_NOT_WRITABLE,
+                    link_source_location(node), N00B_TEXT_PLACE_LITERAL,
+                    N00BB_NO_ARGS))
+                n00bb_report_help(annotations->diagnostics,
+                    N00B_TEXT_PLACE_LITERAL_HELP, N00BB_NO_ARGS);
+            return true;
+        }
+        if (NT_IS(grammar, node, "postfix-expr") && children > 1) {
+            parse_tree_t *step = core_tree_child(node, 1);
+            if (parse_tree_leaf_is(step, CORE_STRING_STATIC("("))
+                || parse_tree_leaf_is(step, CORE_STRING_STATIC("!")))
+                return false;
+            node = core_tree_child(node, 0);
+        }
+        else if (NT_IS(grammar, node, "tuple-or-paren") && children >= 3)
+            node = core_tree_child(node, 1);
+        else if (NT_IS(grammar, node, "primary") && children == 3)
+            node = core_tree_child(node, 0);
+        else if (children == 1)
+            node = core_tree_child(node, 0);
+        else
+            return false;
+    }
+    return false;
+}
+
 void
 initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
 {
@@ -11474,7 +11932,8 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                 N00B_TEXT_REMOVE_PRIVATE_HERE,
                 N00BB_NO_ARGS);
     }
-    if (NT_IS(visit->grammar, visit->node, "sym-decl")
+    if ((NT_IS(visit->grammar, visit->node, "sym-decl")
+         || NT_IS(visit->grammar, visit->node, "pattern-binding"))
         && declared && declared->decl_node == visit->node
         && declared->shadowed
         && declared->shadowed->kind != PARSE_SYM_MODULE
@@ -11497,7 +11956,14 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
         return;
     }
 
-    if (NT_IS(visit->grammar, visit->node, "sym-decl")) {
+    bool declared_pattern = NT_IS(visit->grammar,
+        n00bb_pattern_owner(visit->grammar, visit->node), "variable-decl");
+    if (declared_pattern && declared
+        && !parse_sym_add_definition(declared, visit->node))
+        n00bb_internal_error(annotations->diagnostics,
+            annotations->diagnostic_unit, link_source_location(visit->node),
+            "resolving names", "could not record the binding definition site");
+    if (NT_IS(visit->grammar, visit->node, "sym-decl") || declared_pattern) {
         parse_tree_t *declaration = parse_tree_parent(visit->node);
         while (declaration && !NT_IS(visit->grammar, declaration,
                                     "variable-decl"))
@@ -11607,12 +12073,15 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                              PARSE_SYM_PHASE_NONE, PARSE_SYM_PHASE_BOTH);
     }
     else if ((NT_IS(visit->grammar, visit->node, "for-binding")
-              || NT_IS(visit->grammar, visit->node, "try-error-binding"))
+              || NT_IS(visit->grammar, visit->node, "try-error-binding")
+              || NT_IS(visit->grammar,
+                       n00bb_pattern_owner(visit->grammar, visit->node),
+                       "for-stmt"))
              && declared) {
         parse_sym_entry_t *symbol = declared;
-        if (NT_IS(visit->grammar, visit->node, "for-binding"))
-            symbol->mutability = PARSE_SYM_IMMUTABLE;
-        bool for_binding = NT_IS(visit->grammar, visit->node, "for-binding");
+        bool for_binding = !NT_IS(visit->grammar, visit->node,
+                                  "try-error-binding");
+        if (for_binding) symbol->mutability = PARSE_SYM_IMMUTABLE;
         parse_sym_set_phases(symbol, PARSE_SYM_PHASE_BOTH,
             !for_binding && symbol->mutability == PARSE_SYM_MUTABLE
                 ? PARSE_SYM_PHASE_BOTH : PARSE_SYM_PHASE_NONE,
@@ -11652,8 +12121,21 @@ initial_symbol_node(parse_visit_t *visit, bool entering, void *context)
                 symbol->visibility = first_token_text(visit->node);
         }
     }
+    else if (NT_IS(visit->grammar, visit->node, "binop-assign-stmt"))
+        (void)report_literal_place(visit->grammar, annotations,
+                                   core_tree_child(visit->node, 0));
+    else if (NT_IS(visit->grammar, visit->node, "variable-decl")) {
+        n00bb_tu_state_t *unit_state = tu_state(annotations->symtab->owner_unit);
+        if (unit_state && CHILD_NT(visit->grammar, visit->node,
+                                   "binding-pattern"))
+            core_list_push(unit_state->declaration_patterns, visit->node);
+    }
     else if (NT_IS(visit->grammar, visit->node, "assign-stmt")) {
         parse_tree_t *target = core_tree_child(visit->node, 0);
+        n00bb_tu_state_t *unit_state = tu_state(annotations->symtab->owner_unit);
+        if (NT_IS(visit->grammar, target, "assign-pattern") && unit_state)
+            core_list_push(unit_state->assignment_patterns, visit->node);
+        if (report_literal_place(visit->grammar, annotations, target)) return;
         core_string_t name = {0};
         if (!simple_identifier_expression(visit->grammar, target, &name))
             return;
@@ -11788,6 +12270,8 @@ free_tu_state(void *data)
     core_list_free(state->integer_shift_sites);
     core_dict_free(&state->integer_shift_seen);
     core_list_free(state->module_top_level_statements);
+    core_list_free(state->assignment_patterns);
+    core_list_free(state->declaration_patterns);
     core_list_free(state->literal_constants);
     core_list_free(state->array_type_nodes);
     for (size_t i = 0; i < state->literal_modifiers.len; i++) {
@@ -11810,6 +12294,7 @@ free_tu_state(void *data)
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->shared_state_types);
     core_dict_free(&state->integer_edge_sites);
+    core_dict_free(&state->constructor_types);
     core_dict_free(&state->integer_range_nodes);
     core_dict_free(&state->integer_tracked_symbols);
     core_dict_free(&state->failed_calls);
@@ -11838,6 +12323,8 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init(&state->shared_state_types, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
+    state->assignment_patterns = core_list_new(parse_tree_ptr_t);
+    state->declaration_patterns = core_list_new(parse_tree_ptr_t);
     state->literal_constants = core_list_new(n00bb_literal_constant_t);
     state->literal_backed_consts =
         core_list_new(n00bb_literal_backed_const_t);
@@ -11851,6 +12338,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->shape_literal_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
     core_dict_init(&state->integer_edge_sites, nullptr, nullptr);
+    core_dict_init(&state->constructor_types, nullptr, nullptr);
     core_dict_init(&state->integer_range_nodes, nullptr, nullptr);
     core_dict_init(&state->integer_shift_seen, nullptr, nullptr);
     core_dict_init(&state->integer_tracked_symbols, nullptr, nullptr);
@@ -12703,6 +13191,7 @@ probe_static_literal(parse_grammar_t *grammar, parse_tree_t *node,
         CORE_STRING_STATIC("shift-expr"), CORE_STRING_STATIC("add-expr"),
         CORE_STRING_STATIC("mul-expr"), CORE_STRING_STATIC("unary-expr"),
         CORE_STRING_STATIC("postfix-expr"), CORE_STRING_STATIC("primary"),
+        CORE_STRING_STATIC("place"),
     };
     while (node && probe->valid) {
         if (NT_IS(grammar, node, "simple-lit")
@@ -12848,7 +13337,7 @@ cache_trait_name_parts(parse_tree_t *node, size_t *count)
 parse_tree_t *
 n00bb_init_target(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "postfix-expr")
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("("))) return nullptr;
@@ -14788,7 +15277,7 @@ prepare_typecase_arm(parse_grammar_t *grammar, core_translation_unit_t *unit,
 bool
 apply_typecase_narrowing(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!NT_IS(grammar, node, "primary")) return true;
+    if (!n00bb_primary_node(grammar, node)) return true;
     parse_sym_entry_t *symbol = parse_tree_sym(node);
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
@@ -14894,6 +15383,68 @@ has_direct_leaf_text(parse_tree_t *node, core_string_t text)
 }
 
 static th_type *
+compose_field_tuple(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                    parse_tree_t *type_node, parse_tree_t *fields, bool tuple)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    if (!tuple) {
+        core_string_t name = n00bb_node_source_text(unit, type_node,
+            n00bb_text_form(N00B_TEXT_THIS_TYPE));
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_NAMED_ARGUMENTS,
+                link_source_location(fields), N00B_TEXT_TUPLE_NAMED_ARGUMENTS,
+                N00BB_ARGS(ARG_TEXT(name))))
+            n00bb_report_help(diagnostics,
+                N00B_TEXT_TUPLE_NAMED_ARGUMENTS_HELP, N00BB_NO_ARGS);
+        return th_poison(state->types);
+    }
+    core_list_t(th_member) members = core_list_new(th_member);
+    core_list_t(parse_tree_ptr_t) names = core_list_new(parse_tree_ptr_t);
+    bool valid = true;
+    for (size_t i = 0; valid && i < core_tree_num_children(fields); i++) {
+        parse_tree_t *field = core_tree_child(fields, i);
+        if (NT_IS(grammar, field, "tspec-field-list")) {
+            fields = field;
+            i = SIZE_MAX;
+            continue;
+        }
+        if (!NT_IS(grammar, field, "tspec-field")) continue;
+        parse_tree_t *name_node = core_tree_child(field, 0);
+        parse_tree_t *type = CHILD_NT(grammar, field, "union-tspec");
+        th_type *field_type = type ? parse_tree_type(type) : nullptr;
+        if (!field_type) {
+            core_list_free(members);
+            core_list_free(names);
+            return nullptr;
+        }
+        core_string_t name = parse_tree_leaf_text(name_node);
+        for (size_t j = 0; j < names.len; j++) {
+            if (!core_string_eq(parse_tree_leaf_text(names.data[j]), name))
+                continue;
+            if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_FIELD_REPEATED,
+                    link_source_location(name_node),
+                    N00B_TEXT_TUPLE_FIELD_REPEATED, N00BB_ARGS(ARG_TEXT(name))))
+                n00bb_report_secondary(diagnostics, unit,
+                    link_source_location(names.data[j]),
+                    N00B_TEXT_TUPLE_FIELD_FIRST, N00BB_ARGS(ARG_TEXT(name)));
+            valid = false;
+            break;
+        }
+        core_list_push(names, name_node);
+        core_list_push(members, ((th_member){
+            .name = store_semantic_string(state, name),
+            .type = field_type,
+        }));
+    }
+    th_type *result = valid
+        ? th_record_sorted(state->types, members.data, members.len)
+        : th_poison(state->types);
+    core_list_free(members);
+    core_list_free(names);
+    return result;
+}
+
+static th_type *
 compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
                       parse_tree_t *node)
 {
@@ -14968,6 +15519,11 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     }
     if (!application || !NT_IS(grammar, type_node, "member-chain"))
         return base;
+    bool tuple = member_chain_is_name(grammar, type_node,
+                                      CORE_STRING_STATIC("Tuple"));
+    parse_tree_t *fields = CHILD_NT(grammar, application, "tspec-field-list");
+    if (fields)
+        return compose_field_tuple(grammar, unit, type_node, fields, tuple);
     core_string_t name = {};
     bool is_variant = false;
     size_t declared_arity = 0;
@@ -14977,6 +15533,21 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
     core_list_t(th_arg) arguments = core_list_new(th_arg);
     bool valid = list && append_type_argument_pack(
         parse_tree_type(list), &arguments);
+    if (tuple && valid && arguments.len == 1) {
+        core_string_t element = arguments.data[0].kind == TH_ARG_TYPE
+            ? n00bb_print_type_for_user(state->types, arguments.data[0].type)
+            : core_string_dup(n00bb_text_form(N00B_TEXT_THIS_TYPE));
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_TUPLE_ONE_ELEMENT,
+                link_source_location(application), N00B_TEXT_TUPLE_ONE_ELEMENT,
+                N00BB_ARGS(ARG_TEXT(element))))
+            n00bb_report_help(diagnostics, N00B_TEXT_TUPLE_ONE_ELEMENT_HELP,
+                              N00BB_ARGS(ARG_TEXT(element)));
+        core_free(element.data);
+        core_list_free(arguments);
+        return th_poison(state->types);
+    }
     if (!declared_arity && !is_variant)
         declared_arity = th_generic_arity(state->types, name);
     if (valid && declared_arity && declared_arity != arguments.len) {

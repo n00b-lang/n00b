@@ -266,7 +266,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
         if (!core_tree_is_leaf(value) && !parse_tree_argument_type(value))
             parse_tree_set_argument_type(value, th_var(state->types));
     }
-    if (entering && NT_IS(grammar, node, "postfix-expr")
+    if (entering && n00bb_postfix_node(grammar, node)
         && core_tree_num_children(node) >= 3
         && parse_tree_leaf_is(core_tree_child(node, 1),
                               CORE_STRING_STATIC("("))
@@ -403,7 +403,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
     core_string_t literal_terminal = cache
         ? cache->literal_terminal : (core_string_t){0};
     if (entering) {
-        if (NT_IS(grammar, node, "postfix-expr"))
+        if (n00bb_postfix_node(grammar, node))
             parse_tree_set_index_address_access(node,
                 n00bb_index_reference_storage(grammar, node));
         if (field_record_declaration(grammar, node)) {
@@ -1781,6 +1781,7 @@ run_semantic_walk(parse_grammar_t *grammar, th_ctx *types,
     core_string_t package = n00bb_package_id(unit);
     if (!th_ctx_set_scope(types, unit->module.identifier, package))
         return false;
+    th_ctx_set_source_file(types, core_source_file_path(&unit->source));
     annotation_context_t context = {
         .grammar = grammar,
         .types = types,
@@ -1930,6 +1931,7 @@ declare_unit(parse_grammar_t *grammar, th_ctx *types,
     core_string_t package = n00bb_package_id(unit);
     if (!tree || !th_ctx_set_scope(types, unit->module.identifier, package)
         || !prepare_initial_symbols(unit, types)) return false;
+    th_ctx_set_source_file(types, core_source_file_path(&unit->source));
     state->semantic_annotation_started = true;
     parse_annot_result_set_node_callback(state->annotations,
                                          declared_symbol_node, nullptr);
