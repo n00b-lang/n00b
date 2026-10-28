@@ -439,11 +439,6 @@ N00B_DIAG(TUPLE_INDEX_NOT_CONSTANT, "N00B-T0582", ERROR,
 N00B_DIAG(TUPLE_INDEX_RANGE, "N00B-T0583", ERROR,
     "a tuple index is out of range",
     "A tuple with n elements is indexed from 0 to n - 1.")
-N00B_DIAG(TUPLE_CONSTRUCTOR, "N00B-T0584", ERROR,
-    "a field tuple builds a type that defines a constructor",
-    "A field tuple fills in a record or object field by field, which would\n"
-    "skip its constructor. Call the constructor instead, or write\n"
-    "`unsafe_cast[T](...)` when skipping it is intended.")
 N00B_DIAG(TUPLE_CAST, "N00B-T0585", ERROR,
     "a tuple cast between incompatible shapes",
     "`cast[T]` converts between a field tuple and a record or object whose\n"

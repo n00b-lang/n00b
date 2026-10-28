@@ -89,7 +89,7 @@ dispatch_argument_nodes(parse_grammar_t *grammar, parse_tree_t *node,
         return;
     }
     parse_tree_t *call = parse_tree_parent(node);
-    if (!(nt_is(grammar, call, CORE_STRING_STATIC("postfix-expr")) || nt_is(grammar, call, CORE_STRING_STATIC("place")))
+    if (!n00bb_postfix_node(grammar, call)
         || core_tree_child(call, 0) != node) return;
     collect_positional_nodes(grammar,
         child_nt(grammar, call_arguments_node(grammar, call),

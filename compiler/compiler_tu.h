@@ -693,6 +693,7 @@ typedef struct {
     core_list_t(n00bb_integer_edge_t) integer_edges;
     core_list_t(n00bb_integer_guard_t) integer_guards;
     core_dict_t integer_edge_sites;
+    core_dict_t constructor_types;
     core_dict_t integer_range_nodes;
     core_dict_t integer_tracked_symbols;
     core_dict_t failed_calls;
@@ -848,6 +849,7 @@ bool semantic_static_literal_value(parse_grammar_t *grammar,
                                    n00bb_static_value_t *out);
 th_type *static_record_shape(n00bb_tu_state_t *state, th_type *type);
 th_type *n00bb_field_tuple(th_ctx *types, th_member *members, size_t count);
+th_type *n00bb_record_shape(n00bb_tu_state_t *state, th_type *type);
 bool n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type);
 void n00bb_report_untyped_variables(parse_grammar_t *grammar,
                                     core_translation_unit_t *unit);
@@ -1524,6 +1526,20 @@ n00bb_name_place(parse_grammar_t *grammar, parse_tree_t *node)
 {
     return nt_is(grammar, node, CORE_STRING_STATIC("place"))
         && core_tree_num_children(node) == 1;
+}
+
+static inline bool
+n00bb_postfix_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, node, CORE_STRING_STATIC("postfix-expr"))
+        || nt_is(grammar, node, CORE_STRING_STATIC("place"));
+}
+
+static inline bool
+n00bb_primary_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return nt_is(grammar, node, CORE_STRING_STATIC("primary"))
+        || n00bb_name_place(grammar, node);
 }
 
 static inline parse_tree_t *

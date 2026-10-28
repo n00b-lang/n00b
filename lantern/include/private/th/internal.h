@@ -112,6 +112,12 @@ typedef struct {
 } th_env_metadata_record_t;
 
 core_list_decl(th_constraint);
+
+typedef struct {
+  th_type *var;
+  th_constraint method;
+} th_pending_method_t;
+core_list_decl(th_pending_method_t);
 core_list_decl(th_promo);
 core_list_decl(th_iface);
 core_list_decl(th_type_record_t);
@@ -243,7 +249,8 @@ struct th_ctx {
   th_integer_class_fn integer_class;
   th_integer_method_fn integer_method;
   void *integer_method_user;
-  core_list_t(th_type_ptr_t) integer_methods_active;
+  core_list_t(th_pending_method_t) integer_methods_pending;
+  uint32_t integer_method_depth;
   uint32_t integer_owner;
   size_t probe_depth;
   bool grounding_integers;

@@ -388,9 +388,11 @@ N00B_DIAG(UNION_VARIABLE, "N00B-T1033", ERROR,
     "Give the variable a concrete type, or declare a variant for the\n"
     "alternatives.")
 N00B_DIAG(RECORD_HAS_CONSTRUCTOR, "N00B-T1034", ERROR,
-    "a field literal is used for a record that has an `__init`",
-    "A record with an `__init` is built through it, so a field literal\n"
-    "does not convert implicitly. Write `cast[T](...)` or `new[T](...)`.")
+    "a field tuple builds a record or object that has an `__init`",
+    "A type with an `__init` is built through its constructor, so neither a\n"
+    "field tuple nor `cast[T]` fills it in field by field. Call the\n"
+    "constructor, or write `unsafe_cast[T](...)` when skipping it is\n"
+    "intended.")
 N00B_DIAG(UNION_DISCRIMINANT_TYPE, "N00B-T1036", ERROR,
     "a union discriminant is not an 8, 16 or 32-bit integer",
     "The field that selects a union arm must be an 8, 16 or 32-bit\n"

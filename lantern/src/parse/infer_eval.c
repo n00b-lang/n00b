@@ -55,6 +55,12 @@ static bool node_is_named(parse_grammar_t *grammar, parse_tree_t *node,
 #define node_is(grammar, node, lit) \
     node_is_named((grammar), (node), CORE_STRING_STATIC(lit))
 
+static bool postfix_node(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    return node_is(grammar, node, "postfix-expr")
+        || node_is(grammar, node, "place");
+}
+
 static th_type *node_type(ictx *c, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
@@ -105,7 +111,7 @@ static th_type *transparent_expression_type(ictx *c, parse_tree_t *node)
 static parse_tree_t *method_call_parent(ictx *c)
 {
     parse_tree_t *parent = c->v->parent;
-    return (node_is(c->v->grammar, parent, "postfix-expr") || node_is(c->v->grammar, parent, "place")) &&
+    return postfix_node(c->v->grammar, parent) &&
            core_tree_num_children(parent) >= 3 &&
            core_tree_child(parent, 0) == c->v->node &&
            core_tree_is_leaf(core_tree_child(parent, 1)) &&
@@ -116,7 +122,7 @@ static parse_tree_t *method_call_parent(ictx *c)
 
 static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
 {
-    if (!(node_is(c->v->grammar, call, "postfix-expr") || node_is(c->v->grammar, call, "place")) ||
+    if (!postfix_node(c->v->grammar, call) ||
         core_tree_num_children(call) < 3 ||
         !core_tree_is_leaf(core_tree_child(call, 1)) ||
         !parse_tree_leaf_is(core_tree_child(call, 1),
@@ -188,10 +194,10 @@ static th_type *call_shape(ictx *c, parse_tree_t *call, th_type *result)
 static bool
 call_has_member_callee(ictx *c, parse_tree_t *call)
 {
-    if (!(node_is(c->v->grammar, call, "postfix-expr") || node_is(c->v->grammar, call, "place"))
+    if (!postfix_node(c->v->grammar, call)
         || !core_tree_num_children(call)) return false;
     parse_tree_t *callee = core_tree_child(call, 0);
-    return (node_is(c->v->grammar, callee, "postfix-expr") || node_is(c->v->grammar, callee, "place"))
+    return postfix_node(c->v->grammar, callee)
         && core_tree_num_children(callee) >= 3
         && core_tree_is_leaf(core_tree_child(callee, 1))
         && parse_tree_leaf_is(core_tree_child(callee, 1),

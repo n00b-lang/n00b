@@ -51,7 +51,7 @@ lvalue_spine_step(parse_grammar_t *grammar, parse_tree_t *parent,
     if (children == 1) return true;
     if (NT_IS(grammar, parent, "tuple-or-paren"))
         return children == 3 && core_tree_child(parent, 1) == child;
-    if (!(NT_IS(grammar, parent, "postfix-expr") || NT_IS(grammar, parent, "place")) || children < 3
+    if (!n00bb_postfix_node(grammar, parent) || children < 3
         || core_tree_child(parent, 0) != child) return false;
     parse_tree_t *operator = core_tree_child(parent, 1);
     return parse_tree_leaf_is(operator, CORE_STRING_STATIC("."))
@@ -403,7 +403,7 @@ n00bb_variant_arm_payload_type(th_ctx *types, th_type *variant,
 static bool
 member_step(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    return (NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    return n00bb_postfix_node(grammar, node)
         && core_tree_num_children(node) == 3
         && parse_tree_leaf_is(core_tree_child(node, 1),
                               CORE_STRING_STATIC("."));
@@ -468,7 +468,7 @@ parse_sym_entry_t *
 variant_payload_arm(parse_grammar_t *grammar, core_translation_unit_t *unit,
                    parse_tree_t *node)
 {
-    if (!(NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return nullptr;
@@ -531,7 +531,7 @@ parse_sym_entry_t *
 variant_assignment_arm(parse_grammar_t *grammar,
                       core_translation_unit_t *unit, parse_tree_t *node)
 {
-    if (!unit || !(NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    if (!unit || !n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return nullptr;
@@ -548,7 +548,7 @@ variant_assignment_arm(parse_grammar_t *grammar,
                                   CORE_STRING_STATIC("="));
             break;
         }
-        if ((NT_IS(grammar, at, "postfix-expr") || NT_IS(grammar, at, "place"))
+        if (n00bb_postfix_node(grammar, at)
             && core_tree_num_children(at)
             && core_tree_child(at, 0) == child) break;
         if (core_tree_num_children(at) != 1) break;
@@ -655,7 +655,7 @@ check_local_record_field_reference(parse_grammar_t *grammar,
                                    core_translation_unit_t *unit,
                                    parse_tree_t *node)
 {
-    if (!(NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))
@@ -762,7 +762,8 @@ collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
 {
     if (!node || core_tree_is_leaf(node)) return;
     if (NT_IS(grammar, node, "for-binding")
-        || NT_IS(grammar, node, "pattern-binding")) {
+        || NT_IS(grammar, node, "pattern-binding")
+        || NT_IS(grammar, node, "assign-target")) {
         core_list_push(*bindings, node);
         return;
     }
@@ -771,7 +772,12 @@ collect_for_bindings(parse_grammar_t *grammar, parse_tree_t *node,
         && !NT_IS(grammar, node, "binding-pattern")
         && !NT_IS(grammar, node, "pattern-items")
         && !NT_IS(grammar, node, "pattern-item")
-        && !NT_IS(grammar, node, "pattern-target")) return;
+        && !NT_IS(grammar, node, "pattern-target")
+        && !NT_IS(grammar, node, "assign-pattern")
+        && !NT_IS(grammar, node, "assign-pattern-items")
+        && !NT_IS(grammar, node, "assign-pattern-item")
+        && !NT_IS(grammar, node, "named-assign-pattern-item")
+        && !NT_IS(grammar, node, "assign-pattern-target")) return;
     for (size_t i = 0; i < core_tree_num_children(node); i++)
         collect_for_bindings(grammar, core_tree_child(node, i), bindings);
 }
@@ -837,33 +843,8 @@ collect_pattern_items(parse_grammar_t *grammar, parse_tree_t *node,
 static th_type *
 pattern_record_shape(core_translation_unit_t *unit, th_type *resolved)
 {
-    if (!resolved) return nullptr;
-    if (th_kind_of(resolved) == TH_RECORD) return resolved;
-    if (th_kind_of(resolved) != TH_NAMED) return nullptr;
-    th_type *definition = th_type_definition(tu_state(unit)->types, resolved);
-    if (!definition) {
-        parse_sym_entry_t *type_symbol = type_symbol_in_loaded_imports(
-            unit, tu_state(unit)->types, resolved, nullptr);
-        parse_scope_t *type_scope = type_symbol
-            ? type_symbol->member_scope : nullptr;
-        core_list_t(th_member) members = core_list_new(th_member);
-        core_list_t(parse_sym_entry_ptr_t) fields =
-            core_list_new(parse_sym_entry_ptr_t);
-        record_fields_in_source_order(type_scope, &fields);
-        for (size_t i = 0; i < fields.len; i++)
-            core_list_push(members, ((th_member){
-                .name = fields.data[i]->name,
-                .type = fields.data[i]->type,
-            }));
-        if (members.len)
-            definition = th_record(tu_state(unit)->types, members.data,
-                                   members.len);
-        core_list_free(fields);
-        core_list_free(members);
-    }
-    definition = definition ? th_resolve(definition) : nullptr;
-    return definition && th_kind_of(definition) == TH_RECORD
-        ? definition : nullptr;
+    return n00bb_object_type(tu_state(unit)->types, resolved) ? nullptr
+        : n00bb_record_shape(tu_state(unit), resolved);
 }
 
 static core_string_t
@@ -911,6 +892,15 @@ binder_projection(pattern_binder_t *binder)
 }
 
 static bool
+record_projection(pattern_binder_t *binder, parse_tree_t *target)
+{
+    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(binder->state,
+                                                        target);
+    if (facts) facts->projection = binder_projection(binder);
+    return facts && facts->projection;
+}
+
+static bool
 bind_assignment_target(pattern_binder_t *binder, parse_tree_t *target,
                        th_type *type)
 {
@@ -935,11 +925,7 @@ bind_assignment_target(pattern_binder_t *binder, parse_tree_t *target,
         return report_pattern(binder, target, N00B_TEXT_PATTERN_ASSIGN_TYPE,
             N00BB_ARGS(ARG_TEXT(name), ARG_TEXT(from), ARG_TEXT(to)));
     }
-    n00bb_node_facts_t *facts = n00bb_ensure_node_facts(binder->state,
-                                                        target);
-    if (!facts) return false;
-    facts->projection = binder_projection(binder);
-    return facts->projection != nullptr;
+    return record_projection(binder, target);
 }
 
 static bool
@@ -965,11 +951,7 @@ bind_pattern_target(pattern_binder_t *binder, parse_tree_t *target,
     if (!unified) return false;
     symbol->type = unified;
     parse_tree_set_type(target, unified);
-    if (!binder->path.len) return true;
-    n00bb_binding_projection_t *projection = binder_projection(binder);
-    if (!projection) return false;
-    return parse_sym_set_binding(symbol,
-        CORE_STRING_STATIC("n00bb.pattern-projection"), projection);
+    return record_projection(binder, target);
 }
 
 
@@ -1052,7 +1034,8 @@ poison_pattern_bindings(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     collect_for_bindings(grammar, pattern, &bindings);
     for (size_t i = 0; i < bindings.len; i++) {
         parse_sym_entry_t *symbol = parse_tree_sym(bindings.data[i]);
-        if (!symbol) continue;
+        if (!symbol || NT_IS(grammar, bindings.data[i], "assign-target"))
+            continue;
         symbol->type = th_poison(state->types);
         parse_tree_set_type(bindings.data[i], symbol->type);
     }
@@ -3690,6 +3673,23 @@ static_record_shape(n00bb_tu_state_t *state, th_type *type)
 }
 
 th_type *
+n00bb_record_shape(n00bb_tu_state_t *state, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!state || !type) return nullptr;
+    if (th_kind_of(type) == TH_RECORD) return type;
+    bool variant = false;
+    if (th_kind_of(type) != TH_NAMED
+        || !th_named_info(type, nullptr, &variant, nullptr) || variant)
+        return nullptr;
+    th_type *shape = static_record_shape(state,
+        n00bb_object_type(state->types, type)
+            ? th_auto_deref(state->types, type) : type);
+    shape = shape ? th_resolve(shape) : nullptr;
+    return shape && th_kind_of(shape) == TH_RECORD ? shape : nullptr;
+}
+
+th_type *
 n00bb_field_tuple(th_ctx *types, th_member *members, size_t count)
 {
     if (count) qsort(members, count, sizeof(th_member), th_cmp_member);
@@ -3702,6 +3702,12 @@ n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type)
     n00bb_tu_state_t *caller = unit ? tu_state(unit) : nullptr;
     n00bb_link_analysis_t *analysis = caller ? caller->link_analysis : nullptr;
     type = type ? th_resolve(type) : nullptr;
+    if (!analysis || !type || th_kind_of(type) != TH_NAMED) return false;
+    uint64_t key = th_hash(caller->types, type);
+    bool cached = false;
+    uintptr_t known = (uintptr_t)core_dict_get(&caller->constructor_types, key,
+                                              &cached);
+    if (cached) return known == 2;
     bool found = false;
     for (size_t i = 0; analysis && type && !found
          && i < analysis->units.len; i++) {
@@ -3727,6 +3733,7 @@ n00bb_type_has_constructor(core_translation_unit_t *unit, th_type *type)
             }
         core_list_free(scopes);
     }
+    core_dict_put(&caller->constructor_types, key, found ? 2 : 1);
     return found;
 }
 
@@ -4172,7 +4179,7 @@ remember_link_use_site(parse_grammar_t *grammar,
     bool dotted_path = dotted_symbol_path_node(grammar, node);
     bool variant_case_candidate = false;
     core_string_t variant_case_name = {0};
-    if ((NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node))) {
+    if (n00bb_primary_node(grammar, node)) {
         for (parse_tree_t *at = parse_tree_parent(node); at;
              at = parse_tree_parent(at)) {
             if (!NT_IS(grammar, at, "case-expr-item")) continue;
@@ -4698,9 +4705,9 @@ n00bb_contextual_method_argument(parse_grammar_t *grammar,
     parse_tree_t *args = parse_tree_parent(parent);
     parse_tree_t *call = args ? parse_tree_parent(args) : nullptr;
     parse_tree_t *callee = NT_IS(grammar, args, "call-args")
-        && (NT_IS(grammar, call, "postfix-expr") || NT_IS(grammar, call, "place"))
+        && n00bb_postfix_node(grammar, call)
         && core_tree_num_children(call) ? core_tree_child(call, 0) : nullptr;
-    return (NT_IS(grammar, callee, "postfix-expr") || NT_IS(grammar, callee, "place"))
+    return n00bb_postfix_node(grammar, callee)
         && core_tree_num_children(callee) >= 3
         && core_tree_is_leaf(core_tree_child(callee, 1))
         && parse_tree_leaf_is(core_tree_child(callee, 1),
@@ -5055,8 +5062,8 @@ integer_constant_symbol(parse_grammar_t *grammar, parse_tree_t *node)
 {
     parse_node_resolution_t resolution = node && !core_tree_is_leaf(node)
         ? parse_tree_resolution(node) : (parse_node_resolution_t){0};
-    return ((NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node))
-            || ((NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    return (n00bb_primary_node(grammar, node)
+            || (n00bb_postfix_node(grammar, node)
                 && dotted_symbol_path_node(grammar, node)))
         && resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
         ? resolution.target.symbol : nullptr;
@@ -5507,7 +5514,7 @@ cache_return_source_fact(parse_grammar_t *grammar,
             .kind = N00BB_RETURN_SOURCE_SLICE,
             .node = node,
         };
-    else if ((NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    else if (n00bb_postfix_node(grammar, node)
              && core_tree_num_children(node) >= 3
              && (parse_tree_leaf_is(core_tree_child(node, 1),
                                    CORE_STRING_STATIC("."))
@@ -5544,7 +5551,7 @@ cache_return_source_fact(parse_grammar_t *grammar,
             };
     }
 
-    bool transparent_unwrap = (NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    bool transparent_unwrap = n00bb_postfix_node(grammar, node)
         && core_tree_num_children(node) == 2
         && parse_tree_leaf_is(core_tree_child(node, 1),
                               CORE_STRING_STATIC("!"));
@@ -5674,7 +5681,7 @@ parse_tree_t *
 member_access_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     if (!node || core_tree_is_leaf(node)) return nullptr;
-    if ((NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    if (n00bb_postfix_node(grammar, node)
         && core_tree_num_children(node) >= 3
         && core_tree_is_leaf(core_tree_child(node, 1))
         && parse_tree_leaf_is(core_tree_child(node, 1),
@@ -5704,7 +5711,7 @@ index_assignment_statement(parse_grammar_t *grammar, parse_tree_t *node,
         if ((NT_IS(grammar, parent, "assign-stmt")
              || NT_IS(grammar, parent, "binop-assign-stmt"))
             && core_tree_child(parent, 0) == at) return parent;
-        if ((NT_IS(grammar, parent, "postfix-expr") || NT_IS(grammar, parent, "place"))
+        if (n00bb_postfix_node(grammar, parent)
             && core_tree_child(parent, 0) == at)
             *through_receiver = true;
         else if (core_tree_num_children(parent) != 1) return nullptr;
@@ -5716,7 +5723,7 @@ bool
 index_dispatch_for_node(parse_grammar_t *grammar, parse_tree_t *node,
                         core_string_t *trait, core_string_t *method)
 {
-    if (!(NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 4
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("["))) return false;
@@ -5775,7 +5782,7 @@ n00bb_index_reference_storage(parse_grammar_t *grammar, parse_tree_t *node)
         if (!parent) break;
         if (NT_IS(grammar, parent, "index-contents")
             || NT_IS(grammar, parent, "slice-contents")) return false;
-        if ((NT_IS(grammar, parent, "postfix-expr") || NT_IS(grammar, parent, "place"))
+        if (n00bb_postfix_node(grammar, parent)
             && core_tree_child(parent, 0) != at) return false;
         if (!NT_IS(grammar, parent, "unary-expr")) continue;
         const parse_rule_t *rule = parse_tree_rule(grammar, parent);
@@ -6060,7 +6067,7 @@ attached_symbol(parse_grammar_t *grammar, core_translation_unit_t *unit,
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
         return resolution.target.symbol;
-    bool simple_name = (NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node))
+    bool simple_name = n00bb_primary_node(grammar, node)
         || (NT_IS(grammar, node, "member-chain")
             && !dotted_symbol_path_node(grammar, node));
     if (resolution.kind == PARSE_NODE_RESOLUTION_SCOPE && !simple_name)
@@ -6087,7 +6094,7 @@ dotted_symbol_path_node(parse_grammar_t *grammar, parse_tree_t *node)
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("."))) return false;
     return NT_IS(grammar, node, "member-chain")
-        || (NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"));
+        || n00bb_postfix_node(grammar, node);
 }
 
 bool
@@ -6645,7 +6652,7 @@ cache_wrapped_symbol_resolution(parse_grammar_t *grammar,
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
     if (rule && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL))
         return;
-    if ((NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node))) {
+    if (n00bb_primary_node(grammar, node)) {
         n00bb_tu_state_t *state = tu_state(unit);
         if (parse_tree_resolution(node).kind == PARSE_NODE_RESOLUTION_NONE
             && state && state->annotations && state->annotations->symtab)
@@ -6739,7 +6746,7 @@ expected_expression_child_type(parse_grammar_t *grammar,
         ? parse_rule_find_annot(grammar, rule, PARSE_ANNOT_EMIT) : nullptr;
     bool identity = emit && core_string_eq(emit->emit_action,
                                             CORE_STRING_STATIC("identity"));
-    if (!identity && !(NT_IS(grammar, parent, "primary") || n00bb_name_place(grammar, parent))
+    if (!identity && !n00bb_primary_node(grammar, parent)
         && !NT_IS(grammar, parent, "literal-expr")) return nullptr;
     if (core_tree_num_children(parent) == 1
         && core_tree_child(parent, 0) == node)
@@ -9505,7 +9512,7 @@ parse_sym_entry_t *
 n00bb_atomic_load_symbol(parse_grammar_t *grammar,
                          core_translation_unit_t *unit, parse_tree_t *node)
 {
-    parse_sym_entry_t *symbol = (NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node))
+    parse_sym_entry_t *symbol = n00bb_primary_node(grammar, node)
         ? attached_symbol(grammar, unit, node) : nullptr;
     return symbol && (symbol->kind == PARSE_SYM_VARIABLE
                       || symbol->kind == PARSE_SYM_PARAM)
@@ -11637,11 +11644,11 @@ parse_tree_t *
 simple_identifier_primary(parse_grammar_t *grammar, parse_tree_t *node)
 {
     if (!grammar || !node) return nullptr;
-    while (!core_tree_is_leaf(node) && !(NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node))) {
+    while (!core_tree_is_leaf(node) && !n00bb_primary_node(grammar, node)) {
         if (core_tree_num_children(node) != 1) return nullptr;
         node = core_tree_child(node, 0);
     }
-    return (NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node)) ? node : nullptr;
+    return n00bb_primary_node(grammar, node) ? node : nullptr;
 }
 
 bool
@@ -12241,6 +12248,7 @@ free_tu_state(void *data)
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->shared_state_types);
     core_dict_free(&state->integer_edge_sites);
+    core_dict_free(&state->constructor_types);
     core_dict_free(&state->integer_range_nodes);
     core_dict_free(&state->integer_tracked_symbols);
     core_dict_free(&state->failed_calls);
@@ -12283,6 +12291,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     state->shape_literal_nodes = core_list_new(parse_tree_ptr_t);
     core_dict_init(&state->flagset_values, nullptr, nullptr);
     core_dict_init(&state->integer_edge_sites, nullptr, nullptr);
+    core_dict_init(&state->constructor_types, nullptr, nullptr);
     core_dict_init(&state->integer_range_nodes, nullptr, nullptr);
     core_dict_init(&state->integer_shift_seen, nullptr, nullptr);
     core_dict_init(&state->integer_tracked_symbols, nullptr, nullptr);
@@ -13281,7 +13290,7 @@ cache_trait_name_parts(parse_tree_t *node, size_t *count)
 parse_tree_t *
 n00bb_init_target(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!(NT_IS(grammar, node, "postfix-expr") || NT_IS(grammar, node, "place"))
+    if (!n00bb_postfix_node(grammar, node)
         || core_tree_num_children(node) < 3
         || !parse_tree_leaf_is(core_tree_child(node, 1),
                                CORE_STRING_STATIC("("))) return nullptr;
@@ -15221,7 +15230,7 @@ prepare_typecase_arm(parse_grammar_t *grammar, core_translation_unit_t *unit,
 bool
 apply_typecase_narrowing(parse_grammar_t *grammar, parse_tree_t *node)
 {
-    if (!(NT_IS(grammar, node, "primary") || n00bb_name_place(grammar, node))) return true;
+    if (!n00bb_primary_node(grammar, node)) return true;
     parse_sym_entry_t *symbol = parse_tree_sym(node);
     parse_node_resolution_t resolution = parse_tree_resolution(node);
     if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
