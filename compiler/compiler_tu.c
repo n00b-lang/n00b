@@ -7990,6 +7990,16 @@ record_context_hook_signature(parse_grammar_t *grammar,
     parse_tree_set_type(hook, hook_type);
 }
 
+void
+link_use_site_bind(n00bb_link_use_site_t *site, parse_sym_entry_t *symbol)
+{
+    site->symbol = symbol;
+    if (!symbol || !symbol->scope
+        || !core_string_eq(symbol->scope->scope_tag,
+                           CORE_STRING_STATIC("trait")))
+        site->closed_dispatch = nullptr;
+}
+
 n00bb_link_use_site_t *
 link_use_site_for_node(n00bb_tu_state_t *state, parse_tree_t *node)
 {

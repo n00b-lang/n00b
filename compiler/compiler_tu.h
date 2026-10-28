@@ -1406,6 +1406,8 @@ void bind_declared_parameter(parse_grammar_t *grammar,
     n00bb_tu_state_t *state);
 n00bb_link_use_site_t *link_use_site_for_node(
     n00bb_tu_state_t *state, parse_tree_t *node);
+void link_use_site_bind(n00bb_link_use_site_t *site,
+    parse_sym_entry_t *symbol);
 bool append_link_use_site(n00bb_tu_state_t *state,
     n00bb_link_use_site_t site);
 n00bb_link_use_site_t *link_use_site_for_dispatch(

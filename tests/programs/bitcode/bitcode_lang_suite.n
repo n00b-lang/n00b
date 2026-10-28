@@ -64,6 +64,12 @@ func gc_array_backing_check() {
     require values[1].value == 9
 }
 
+func literal_method_check() {
+    let five: u8 = 5
+    require 5.hash() == five.hash()
+    require (5).hash() == five.hash()
+}
+
 func bit_count_check() {
     let word: uint = 0x1000
     assert __count_leading_zeros(word) == 51
@@ -1528,6 +1534,7 @@ func start() -> nil {
     array_value_index_check()
     gc_array_backing_check()
     bit_count_check()
+    literal_method_check()
     ffi_borrow_check()
     integer_complement_check()
     nominal_cast_check()

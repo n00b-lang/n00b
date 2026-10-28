@@ -133,7 +133,7 @@ resolve_linked_method(core_link_unit_t *link, n00bb_link_use_site_t *site,
     if (!symbol || symbol->kind != PARSE_SYM_FUNCTION
         || !parse_tree_set_resolution_symbol(site->node, symbol)
         || !parse_sym_add_use(symbol, site->node)) return nullptr;
-    site->symbol = symbol;
+    link_use_site_bind(site, symbol);
     return symbol;
 }
 
@@ -1644,7 +1644,7 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
         core_list_free(arguments);
         if (default_flagset) {
             site->constructor_call = false;
-            site->symbol = flagset_symbol;
+            link_use_site_bind(site, flagset_symbol);
             parse_tree_set_resolution_symbol(site->node, flagset_symbol);
             core_list_free(candidates);
             return true;
@@ -1770,7 +1770,7 @@ resolve_constructor_use_site(parse_grammar_t *grammar, core_link_unit_t *link,
         core_buffer_string(&declaration_key));
     core_buffer_release(&declaration_key);
     if (ok) {
-        site->symbol = symbol;
+        link_use_site_bind(site, symbol);
         parse_sym_add_use(symbol, site->node);
         ok = parse_tree_set_resolution_symbol(site->node, symbol);
     }
@@ -1882,7 +1882,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     ? parse_symtab_lookup_in(builtins->root, name) : nullptr;
                 if (n00bb_builtin_option_function(builtin)) {
                     if (!link_builtin_site(link, site, builtin)) return false;
-                    site->symbol = builtin;
+                    link_use_site_bind(site, builtin);
                     parse_sym_add_use(builtin, site->node);
                     if (!parse_tree_set_resolution_symbol(site->node,
                             builtin)) return false;
@@ -2154,7 +2154,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         ? resolve_linked_method(link, site, unit, &method)
                         : nullptr;
                 if (implementation) {
-                    site->symbol = implementation;
+                    link_use_site_bind(site, implementation);
                     parse_sym_add_use(implementation, site->node);
                     if (!site->secondary_dispatch
                         && !parse_tree_set_resolution_symbol(site->node,
@@ -2182,7 +2182,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                     if (!bind_deferred_method_failure(unit, state,
                             site->node, receiver_type,
                             site->dispatch_method, requirement)) return false;
-                    site->symbol = requirement;
+                    link_use_site_bind(site, requirement);
                     parse_sym_add_use(requirement, site->node);
                     if (!site->secondary_dispatch
                         && !parse_tree_set_resolution_symbol(site->node,
@@ -2244,7 +2244,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                                          receiver_type, method_name)
                     : nullptr;
                 if (implementation) {
-                    site->symbol = implementation;
+                    link_use_site_bind(site, implementation);
                     parse_sym_add_use(implementation, site->node);
                     if (!parse_tree_set_resolution_symbol(site->node,
                                                            implementation))
@@ -2277,7 +2277,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                         user_errors = true;
                         continue;
                     }
-                    site->symbol = requirement;
+                    link_use_site_bind(site, requirement);
                     parse_sym_add_use(requirement, site->node);
                     if (!parse_tree_set_resolution_symbol(site->node,
                                                            requirement))
@@ -2321,7 +2321,7 @@ resolve_inferred_trait_references(parse_grammar_t *grammar,
                 core_buffer_string(&key));
             core_buffer_release(&key);
             if (!resolved) return false;
-            site->symbol = symbol;
+            link_use_site_bind(site, symbol);
         }
     }
     return !user_errors && core_link_unit_validate(link)

@@ -164,7 +164,7 @@ resolve_variant_case_references(core_link_unit_t *link,
                 parse_sym_remove_use(previous, site->node);
             if (!parse_tree_set_resolution_symbol(site->node, arm)
                 || !parse_sym_add_use(arm, site->node)) return false;
-            site->symbol = arm;
+            link_use_site_bind(site, arm);
 
             core_translation_unit_t *owner = unit_for_symbol(
                 analysis->grammar, &analysis->units, arm);
@@ -554,7 +554,7 @@ resolve_inferred_field_references(core_link_unit_t *link,
                 parse_sym_remove_use(site->symbol, node);
             if (!parse_tree_set_resolution_symbol(node, field)
                 || !parse_sym_add_use(field, node)) return false;
-            site->symbol = field;
+            link_use_site_bind(site, field);
 
             core_buffer_t key = {0};
             if (!append_link_symbol_key(analysis->grammar, owner, field,
@@ -2626,15 +2626,15 @@ resolve_prelude_value(parse_grammar_t *grammar,
         state->annotations->symtab, site->scope,
         CORE_STRING_STATIC("builtin"), site->member_name);
     bool type_reference = is_type_reference_node(grammar, site->node);
-    if (n00bb_builtin_function(intrinsic)) site->symbol = intrinsic;
+    if (n00bb_builtin_function(intrinsic)) link_use_site_bind(site, intrinsic);
     else {
         core_list_t(parse_sym_entry_ptr_t) candidates =
             unqualified_import_candidates(unit, site->member_name,
                                           type_reference);
         bool conflict = report_conflicting_candidates(grammar, unit,
             site->node, site->member_name, &candidates, type_reference);
-        site->symbol = !conflict && candidates.len ? candidates.data[0]
-                                                   : nullptr;
+        link_use_site_bind(site, !conflict && candidates.len
+            ? candidates.data[0] : nullptr);
         core_list_free(candidates);
     }
     return !site->symbol
@@ -2652,7 +2652,7 @@ mark_flagset_operator_site(parse_grammar_t *grammar,
         || !n00bb_flagset_operator_site(grammar, unit, state, site->node))
         return false;
     if (site->symbol) parse_sym_remove_use(site->symbol, site->node);
-    site->symbol = nullptr;
+    link_use_site_bind(site, nullptr);
     site->reference = nullptr;
     site->dispatch_trait = (core_string_t){0};
     site->dispatch_method = (core_string_t){0};
@@ -2951,14 +2951,14 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
             parse_node_resolution_t resolution =
                 parse_tree_resolution(site->node);
             if (resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL)
-                site->symbol = resolution.target.symbol;
+                link_use_site_bind(site, resolution.target.symbol);
             else if (parse_tree_sym(site->node))
-                site->symbol = parse_tree_sym(site->node);
+                link_use_site_bind(site, parse_tree_sym(site->node));
             else if (!site->dotted_path && state->annotations
                      && state->annotations->symtab) {
-                site->symbol = parse_symtab_resolve_node(
+                link_use_site_bind(site, parse_symtab_resolve_node(
                     state->annotations->symtab, site->node,
-                    CORE_STRING_STATIC(""));
+                    CORE_STRING_STATIC("")));
                 if (!site->symbol
                     && !resolve_prelude_value(grammar, unit, state, site))
                     return false;
@@ -2970,7 +2970,7 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                 && !names_member_receiver(grammar, site->node)
                 && !names_imported_module(grammar, site->node)) {
                 parse_sym_entry_t *module = site->symbol;
-                site->symbol = nullptr;
+                link_use_site_bind(site, nullptr);
                 if (!resolve_prelude_value(grammar, unit, state, site))
                     return false;
                 for (parse_tree_t *at = site->symbol
@@ -2994,7 +2994,7 @@ resolve_imported_module_symbols(parse_grammar_t *grammar,
                     grammar, state, state->annotations->symtab,
                     site->scope, site->member_name);
                 if (type_symbol) {
-                    site->symbol = type_symbol;
+                    link_use_site_bind(site, type_symbol);
                     parse_tree_set_resolution_symbol(site->node,
                                                      type_symbol);
                 }
