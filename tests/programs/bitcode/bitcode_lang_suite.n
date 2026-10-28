@@ -1044,6 +1044,28 @@ func unspecialized_box_paths_check() {
     }
 }
 
+func hashed_unspecialized(x: 'T) -> u128 where 'T: Hash {
+    let cb = make_transform(ref plus_one)
+    return x.hash()
+}
+
+func cached_dispatch_check() {
+    let number: int = 5
+    let text: string = "five"
+    let real: f64 = 5.5
+    let small: u8 = 7
+    let flag: bool = true
+    var round = 0
+    while round < 3 {
+        require hashed_unspecialized(number) == number.hash()
+        require hashed_unspecialized(text) == text.hash()
+        require hashed_unspecialized(real) == real.hash()
+        require hashed_unspecialized(small) == small.hash()
+        require hashed_unspecialized(flag) == flag.hash()
+        round += 1
+    }
+}
+
 record Counter_State {
     count: int
 }
@@ -1649,6 +1671,7 @@ func start() -> nil {
     option_narrowing_check()
     callback_handler_ref_check()
     unspecialized_box_paths_check()
+    cached_dispatch_check()
     callback_state_check()
     callback_state_ref_check()
     callback_setup_check()

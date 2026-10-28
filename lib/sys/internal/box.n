@@ -418,6 +418,14 @@ func type_matches(actual: u32, program: Ref['S], words: uint) -> bool {
                          __gc_byte_offset(base, words * 8))
 }
 
+func dispatch_arm(site: uint, type_index: u32) -> u32 {
+    return __dispatch_arm(site, type_index)
+}
+
+func dispatch_record(site: uint, type_index: u32, arm: u32) {
+    __dispatch_record(site, type_index, arm)
+}
+
 func array_type_of(element: u32) -> u32 {
     let index: u32 = __abi_unary_type(
         cast[u32](internal.abi.Type_Kind.array_type), element)

@@ -549,6 +549,12 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_named_type"), u32,
             (th_type *[]){byte_reference, uint, byte_reference, u32}, 4)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__dispatch_arm"), u32,
+            (th_type *[]){uint, u32}, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__dispatch_record"), nil_type,
+            (th_type *[]){uint, u32, u32}, 3)
         && register_box_primitives(symtab, types, nil_type)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_bytes"), bytes_result, bytes_args, 2)

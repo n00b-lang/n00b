@@ -36,6 +36,8 @@ uint32_t n00b_builtin_abi_named_type(const uint8_t *name, uint64_t name_bytes,
                                      const uint32_t *arguments,
                                      uint32_t count);
 uint64_t n00b_builtin_abi_ref_address(const void *value);
+uint32_t n00b_builtin_dispatch_arm(uint64_t site, uint32_t type);
+void n00b_builtin_dispatch_record(uint64_t site, uint32_t type, uint32_t arm);
 const uint8_t *n00b_builtin_native_symbol_name(uint64_t address);
 
 #endif
