@@ -145,6 +145,7 @@ void th_ctx_free(th_ctx *ctx)
     core_list_free(ctx->promos);
     core_list_free(ctx->ifaces);
     core_list_free(ctx->type_records);
+    core_list_free(ctx->integer_methods_active);
     free_index(ctx->builtin_heads);
     free_index(ctx->closed_type_records);
     free_index(ctx->open_type_records);

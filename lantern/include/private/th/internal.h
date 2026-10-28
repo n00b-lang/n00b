@@ -243,6 +243,7 @@ struct th_ctx {
   th_integer_class_fn integer_class;
   th_integer_method_fn integer_method;
   void *integer_method_user;
+  core_list_t(th_type_ptr_t) integer_methods_active;
   uint32_t integer_owner;
   size_t probe_depth;
   bool grounding_integers;

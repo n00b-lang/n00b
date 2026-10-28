@@ -320,6 +320,18 @@ static bool merge_method_obligation(th_ctx *ctx, th_type *owner,
         && complete_method_failure(ctx, owner, slot, incoming, seen);
 }
 
+static bool run_integer_method(th_ctx *ctx, th_type *var,
+                               th_constraint *method)
+{
+    th_type *result = th_resolve(method->method.result);
+    for (size_t i = 0; i < ctx->integer_methods_active.len; i++)
+        if (ctx->integer_methods_active.data[i] == result) return true;
+    core_list_push(ctx->integer_methods_active, result);
+    bool ok = ctx->integer_method(ctx, var, method, ctx->integer_method_user);
+    ctx->integer_methods_active.len--;
+    return ok;
+}
+
 static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
                                   th_constraint c, core_dict_t *seen)
 {
@@ -356,7 +368,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
         var->revision++;
         return !ctx->integer_method || ctx->probe_depth
             || !th_var_is_integer(var, nullptr)
-            || ctx->integer_method(ctx, var, &c, ctx->integer_method_user);
+            || run_integer_method(ctx, var, &c);
     }
 
     th_constraint *slot = con_same_slot(var, c);
@@ -417,8 +429,7 @@ static bool th_var_constrain_seen(th_ctx *ctx, th_type *var,
     for (size_t i = 0; i < var->var.cons.len; i++) {
         th_constraint method = var->var.cons.data[i];
         if (method.kind == TH_CON_METHOD
-            && !ctx->integer_method(ctx, var, &method,
-                                    ctx->integer_method_user)) return false;
+            && !run_integer_method(ctx, var, &method)) return false;
     }
     return true;
 }

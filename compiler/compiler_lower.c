@@ -7587,12 +7587,11 @@ n00bb_lower_tuple_literal(ir_lower_context_t *context, parse_visit_t *visit,
     if (child_count == 3
         && nt_is(visit->grammar, core_tree_child(visit->node, 1),
                  CORE_STRING_STATIC("expression"))) {
-        bool compound = false;
-        if (n00bb_assignment_target(visit->grammar, visit->node, &compound))
-            return true;
         ir_value_t *value = ir_lower_node_value(context,
                                                 core_tree_child(visit->node, 1));
-        return value && ir_lower_set_node_value(context, visit->node, value);
+        if (value) return ir_lower_set_node_value(context, visit->node, value);
+        bool compound = false;
+        return n00bb_assignment_target(visit->grammar, visit->node, &compound);
     }
     if (child_count != 5
         || !nt_is(visit->grammar, core_tree_child(visit->node, 1),
