@@ -327,6 +327,52 @@ core_os_set_mode(int fd, unsigned mode)
     return true;
 }
 
+typedef struct {
+    DWORD flags;
+    HANDLE root;
+    DWORD bytes;
+    WCHAR name[];
+} posix_rename_t;
+
+enum {
+    rename_info_ex = 22,
+    rename_replace_if_exists = 0x1,
+    rename_posix_semantics = 0x2,
+};
+
+static bool
+posix_rename(const wchar_t *source, const wchar_t *target, DWORD *error)
+{
+    DWORD units = GetFullPathNameW(target, 0, nullptr, nullptr);
+    size_t bytes = units ? sizeof(posix_rename_t)
+        + (4 + (size_t)units) * sizeof(WCHAR) : 0;
+    posix_rename_t *info = bytes ? core_alloc_size(bytes, 1) : nullptr;
+    DWORD written = info ? GetFullPathNameW(target, units, info->name + 4,
+                                            nullptr) : 0;
+    HANDLE file = written && written < units
+        ? CreateFileW(source, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE
+                      | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                      FILE_FLAG_BACKUP_SEMANTICS
+                      | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)
+        : INVALID_HANDLE_VALUE;
+    bool renamed = false;
+    if (file != INVALID_HANDLE_VALUE) {
+        info->name[0] = L'\\';
+        info->name[1] = L'\\';
+        info->name[2] = L'?';
+        info->name[3] = L'\\';
+        info->flags = rename_replace_if_exists | rename_posix_semantics;
+        info->bytes = (4 + written) * sizeof(WCHAR);
+        renamed = SetFileInformationByHandle(file,
+            (FILE_INFO_BY_HANDLE_CLASS)rename_info_ex, info, (DWORD)bytes);
+        *error = renamed ? ERROR_SUCCESS : GetLastError();
+        CloseHandle(file);
+    }
+    else *error = info ? GetLastError() : ERROR_NOT_ENOUGH_MEMORY;
+    core_free(info);
+    return renamed;
+}
+
 bool
 core_os_rename_replace(core_string_t from, core_string_t to)
 {
@@ -338,8 +384,13 @@ core_os_rename_replace(core_string_t from, core_string_t to)
         && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)
         && (attributes & FILE_ATTRIBUTE_DIRECTORY))
         RemoveDirectoryW(target);
-    bool moved = source && target
-        && MoveFileExW(source, target, MOVEFILE_REPLACE_EXISTING);
+    DWORD error = ERROR_INVALID_NAME;
+    bool moved = source && target && posix_rename(source, target, &error);
+    if (!moved && source && target) {
+        moved = MoveFileExW(source, target, MOVEFILE_REPLACE_EXISTING);
+        error = moved ? ERROR_SUCCESS : GetLastError();
+    }
+    if (!moved) SetLastError(error);
     if (!moved) errno = core_os_errno(GetLastError());
     core_free(source);
     core_free(target);
