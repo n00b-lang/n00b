@@ -1306,6 +1306,11 @@ n00bb_litmod_site_t *n00bb_node_literal_site(parse_tree_t *node);
 parse_tree_t *n00bb_node_record_literal_origin(parse_tree_t *node);
 bool n00bb_node_tuple_index(parse_tree_t *node, uint32_t *index);
 bool n00bb_node_tuple_access(parse_tree_t *node);
+bool n00bb_tuple_type(th_type *type);
+void n00bb_report_not_iterable(core_translation_unit_t *unit,
+                               parse_tree_t *loop);
+parse_tree_t *n00bb_for_loop_at(core_translation_unit_t *unit, uint32_t line,
+                                uint32_t column);
 void n00bb_report_tuple_immutable(core_translation_unit_t *unit,
                                   core_diag_location_t location);
 th_type *n00bb_tuple_element(th_ctx *types, parse_grammar_t *grammar,

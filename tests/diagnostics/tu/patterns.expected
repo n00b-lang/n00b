@@ -8,3 +8,7 @@ tests/diagnostics/tu/patterns.n:6:15: error N00B-T0537: `Tuple[x: {integer}, y: 
 tests/diagnostics/tu/patterns.n:7:7: error N00B-T0537: a `const` cannot unpack a pattern; declare these names with `let`
 tests/diagnostics/tu/patterns.n:10:12: error N00B-T0537: this pattern assigns `{integer}` to `target_b`, which is `string`
 tests/diagnostics/tu/patterns.n:11:5: error N00B-T0537: this pattern has 3 elements, but `Tuple[{integer}, {integer}]` has 2
+tests/diagnostics/tu/patterns.n:14:15: error N00B-T0538: `loop_count` is `int`, which cannot be iterated
+  help: a `for` loop needs a value whose type implements the `Iterable` trait, such as a `List` or a range
+tests/diagnostics/tu/patterns.n:16:15: error N00B-T0538: `(1, "two")` is `Tuple[{integer}, string]`, which cannot be iterated
+  help: a tuple's elements can each have their own type, so a `for` loop cannot walk them; put values of one type in a `List` instead

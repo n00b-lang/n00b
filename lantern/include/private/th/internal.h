@@ -256,6 +256,7 @@ struct th_ctx {
   bool grounding_integers;
   uint8_t method_argument_coercions;
   th_span_t span;
+  core_string_t source_file;
   th_span_t related;
   bool has_related;
   bool probe_errors_discarded;

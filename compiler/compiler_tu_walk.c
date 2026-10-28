@@ -1781,6 +1781,7 @@ run_semantic_walk(parse_grammar_t *grammar, th_ctx *types,
     core_string_t package = n00bb_package_id(unit);
     if (!th_ctx_set_scope(types, unit->module.identifier, package))
         return false;
+    th_ctx_set_source_file(types, core_source_file_path(&unit->source));
     annotation_context_t context = {
         .grammar = grammar,
         .types = types,
@@ -1930,6 +1931,7 @@ declare_unit(parse_grammar_t *grammar, th_ctx *types,
     core_string_t package = n00bb_package_id(unit);
     if (!tree || !th_ctx_set_scope(types, unit->module.identifier, package)
         || !prepare_initial_symbols(unit, types)) return false;
+    th_ctx_set_source_file(types, core_source_file_path(&unit->source));
     state->semantic_annotation_started = true;
     parse_annot_result_set_node_callback(state->annotations,
                                          declared_symbol_node, nullptr);

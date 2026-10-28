@@ -1451,6 +1451,59 @@ resolve_declaration_patterns(parse_grammar_t *grammar,
 }
 
 bool
+n00bb_tuple_type(th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    return th_builtin_applied(type, TH_BUILTIN_TUPLE, th_named_nargs(type))
+        || th_kind_of(type) == TH_RECORD;
+}
+
+void
+n00bb_report_not_iterable(core_translation_unit_t *unit, parse_tree_t *loop)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_grammar_t *grammar = state->grammar;
+    parse_tree_t *target = CHILD_NT(grammar, loop, "for-in-target-list");
+    parse_tree_t *source = CHILD_NT(grammar, target, "expression");
+    th_type *source_type = source ? parse_tree_type(source) : nullptr;
+    core_diagnostics_t *diagnostics = core_translation_unit_diagnostics(unit);
+    core_string_t spelled = source ? n00bb_value_spelling(unit, source)
+                                   : (core_string_t){};
+    core_string_t type_text = n00bb_print_type(state->types, source_type);
+    bool reported = spelled.data
+        ? n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
+            link_source_location(source),
+            N00B_TEXT_IS_WHICH_CANNOT_BE_ITERATED,
+            N00BB_ARGS(ARG_TEXT(spelled), ARG_TEXT(type_text)))
+        : n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
+            link_source_location(source ? source : loop),
+            N00B_TEXT_A_VALUE_OF_TYPE_CANNOT, N00BB_ARGS(ARG_TEXT(type_text)));
+    if (reported)
+        n00bb_report_help(diagnostics, n00bb_tuple_type(source_type)
+            ? N00B_TEXT_TUPLE_NOT_ITERABLE_HELP
+            : N00B_TEXT_A_FOR_LOOP_NEEDS_A, N00BB_NO_ARGS);
+    if (source) n00bb_poison_node(state, source);
+}
+
+parse_tree_t *
+n00bb_for_loop_at(core_translation_unit_t *unit, uint32_t line,
+                  uint32_t column)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->grammar && state->annotations
+        ? state->annotations->symtab : nullptr;
+    for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+         scope; scope = scope->all_next) {
+        if (!core_string_eq(scope->scope_tag, CORE_STRING_STATIC("for"))
+            || !scope->node
+            || !NT_IS(state->grammar, scope->node, "for-stmt")) continue;
+        core_diag_location_t at = link_source_location(scope->node);
+        if (at.line == line && at.column == column) return scope->node;
+    }
+    return nullptr;
+}
+
+bool
 resolve_for_binding_types(parse_grammar_t *grammar,
                           core_translation_unit_t *unit)
 {
@@ -1474,33 +1527,12 @@ resolve_for_binding_types(parse_grammar_t *grammar,
                 continue;
             }
             th_type *cursor_type = nullptr;
-            th_type *source_shape = th_resolve(source_type);
-            bool tuple = th_builtin_applied(source_shape, TH_BUILTIN_TUPLE,
-                                            th_named_nargs(source_shape))
-                || th_kind_of(source_shape) == TH_RECORD;
-            th_type *resolved = tuple ? nullptr
+            th_type *resolved = n00bb_tuple_type(source_type) ? nullptr
                 : resolved_iteration_item_type(grammar, unit, scope->node,
                                                &cursor_type);
             if (resolved) item_type = resolved;
             if (!resolved) {
-                core_diagnostics_t *diagnostics =
-                    core_translation_unit_diagnostics(unit);
-                core_string_t spelled = n00bb_value_spelling(unit, source);
-                core_string_t type_text = n00bb_print_type(state->types,
-                                                           source_type);
-                bool reported = spelled.data
-                    ? n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
-                        link_source_location(source),
-                        N00B_TEXT_IS_WHICH_CANNOT_BE_ITERATED,
-                        N00BB_ARGS(ARG_TEXT(spelled), ARG_TEXT(type_text)))
-                    : n00bb_report(diagnostics, unit, N00B_DIAG_NOT_ITERABLE,
-                        link_source_location(source ? source : scope->node),
-                        N00B_TEXT_A_VALUE_OF_TYPE_CANNOT,
-                        N00BB_ARGS(ARG_TEXT(type_text)));
-                if (reported)
-                    n00bb_report_help(diagnostics, tuple
-                        ? N00B_TEXT_TUPLE_NOT_ITERABLE_HELP
-                        : N00B_TEXT_A_FOR_LOOP_NEEDS_A, N00BB_NO_ARGS);
+                n00bb_report_not_iterable(unit, scope->node);
                 return false;
             }
             if (!cache_iteration_plan(grammar, unit, scope->node,
