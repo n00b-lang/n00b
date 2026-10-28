@@ -75,7 +75,7 @@ private func high64(m: u128) -> u64 {
 }
 
 private func join128(low: u64, high: u64) -> u128 {
-    return (cast[u128] high << 64) | cast[u128] low
+    return (cast[u128](high) << 64) | cast[u128] low
 }
 
 private func mul128(a: u64, b: u64) -> u128 {
@@ -128,7 +128,7 @@ private func len_1to3(p: Ref[byte], len: uint) -> u128 {
     let c2: u64 = in8(p, len >> 1)
     let c3: u64 = in8(p, len - 1)
     let combined_low: u64 = (c1 << 16) | (c2 << 24) | c3 |
-        (cast[u64] len << 8)
+        (cast[u64](len) << 8)
     let combined_high: u64 = rotl32(swap32(combined_low), 13)
     let bitflip_low: u64 = key32(0) ^ key32(4)
     let bitflip_high: u64 = key32(8) ^ key32(12)

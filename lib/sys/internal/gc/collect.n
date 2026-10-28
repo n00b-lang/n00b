@@ -407,7 +407,7 @@ func mark_black_lines(block: Ref[internal.gc.core.Block_Metadata], epoch: u32) {
     let base:          Ref[byte] = internal.gc.core.block_base(block)
     let first_granule: uint      = internal.gc.core.header_lines() * internal.gc.core.line_bytes / internal.gc.core.granule_bytes
     let first_word:    uint      = first_granule / internal.gc.core.word_bits
-    let word_count:    uint      = internal.gc.core.block_bytes / internal.gc.core.granule_bytes / internal.gc.core.word_bits
+    let word_count:    uint      = (internal.gc.core.block_bytes / internal.gc.core.granule_bytes) / internal.gc.core.word_bits
     var word:          uint      = first_word
     while word < word_count {
         var bits: u64 = __atomic_load_relaxed(internal.gc.core.mark_word_at(base, word))
@@ -418,7 +418,7 @@ func mark_black_lines(block: Ref[internal.gc.core.Block_Metadata], epoch: u32) {
             let header:        Ref[internal.gc.core.Object_Header] = internal.gc.core.block_object_header_at(base, offset)
             let bytes:         uint                          = internal.gc.core.object_bytes(header)
             let granule_bytes: uint                          = internal.gc.core.granule_bytes
-            let rounded:       uint                          = (bytes + granule_bytes - 1) / granule_bytes * granule_bytes
+            let rounded:       uint                          = ((bytes + granule_bytes - 1) / granule_bytes) * granule_bytes
             internal.gc.core.mark_lines(base, offset, rounded, epoch)
             bits = bits & (bits - 1)
         }
@@ -436,7 +436,7 @@ func sweep_block(heap: Ref[internal.gc.core.Heap], block: Ref[internal.gc.core.B
 
     let first_granule: uint = internal.gc.core.header_lines() * internal.gc.core.line_bytes / internal.gc.core.granule_bytes
     let first_word:    uint = first_granule / internal.gc.core.word_bits
-    let word_count:    uint = internal.gc.core.block_bytes / internal.gc.core.granule_bytes / internal.gc.core.word_bits
+    let word_count:    uint = (internal.gc.core.block_bytes / internal.gc.core.granule_bytes) / internal.gc.core.word_bits
     var word:          uint = first_word
     while word < word_count {
         let starts: u64 = __atomic_load_relaxed(internal.gc.core.start_word_at(base, word))
@@ -565,7 +565,7 @@ func sweep_all(heap: Ref[internal.gc.core.Heap]) {
 
 func update_pacing(heap: Ref[internal.gc.core.Heap]) {
     let live:   uint = heap.last_marked_bytes
-    let scaled: f64  = cast[f64]live * heap.cfg.growth_factor
+    let scaled: f64  = cast[f64](live) * heap.cfg.growth_factor
     var target: uint = heap.cfg.initial_heap_bytes
     if scaled > cast[f64]target {
         let maximum: uint = ~cast[uint](0)
@@ -838,10 +838,10 @@ func maybe_collect(heap: Ref[internal.gc.core.Heap], request: uint) -> bool {
     if __atomic_load(ref heap.nworkers) != 0 {
         if __atomic_load(ref heap.cycle_active) {
             return phase == cast[u32](internal.gc.core.Phase.marking) and
-                used > heap.alloc_budget / 100 * concurrent_force_pct
+                used > (heap.alloc_budget / 100) * concurrent_force_pct
         }
         if phase != cast[u32](internal.gc.core.Phase.marking) and
-            used > heap.alloc_budget / 100 * concurrent_start_pct {
+            used > (heap.alloc_budget / 100) * concurrent_start_pct {
             request_cycle(heap)
         }
         return false

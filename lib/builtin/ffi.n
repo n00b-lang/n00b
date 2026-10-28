@@ -132,7 +132,7 @@ func __ffi_table_insert(modify table: Ffi_Table['T], value: 'T) -> u64 {
 }
 
 func __ffi_table_owner(table: Ffi_Table['T], handle: u64) -> uint {
-    let index = cast[int]handle - 1
+    let index = cast[int](handle) - 1
     if handle == 0 or index >= cast[int]table.owners.len() {
         return 0
     }
@@ -140,7 +140,7 @@ func __ffi_table_owner(table: Ffi_Table['T], handle: u64) -> uint {
 }
 
 func __ffi_table_get(table: Ffi_Table['T], handle: u64) -> 'T? {
-    let index = cast[int]handle - 1
+    let index = cast[int](handle) - 1
     if handle == 0 or index >= cast[int]table.slots.len() {
         return nil
     }
@@ -148,8 +148,8 @@ func __ffi_table_get(table: Ffi_Table['T], handle: u64) -> 'T? {
 }
 
 func __ffi_table_free(modify table: Ffi_Table['T], handle: u64) {
-    let index = cast[int]handle - 1
-    if handle == 0 or index >= cast[int]table.slots.len() or table.slots[index] == nil {
+    let index = cast[int](handle) - 1
+    if handle == 0 or index >= cast[int](table.slots.len()) or table.slots[index] == nil {
         return
     }
     table.slots[index] = nil

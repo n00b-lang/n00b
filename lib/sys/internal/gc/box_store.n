@@ -131,7 +131,7 @@ func array_data_bytes(leaf: Ref[internal.abi.Type_Record], count: u64,
         return (count * packed + origin_bits + 7) / 8
     }
     let alignment_bits: u64 = alignment * 8
-    return count * ((leaf.size_bits + alignment_bits - 1) / alignment_bits
+    return count * (((leaf.size_bits + alignment_bits - 1) / alignment_bits)
                     * alignment)
 }
 
@@ -269,7 +269,7 @@ func row_item_bits(leaf: Ref[internal.abi.Type_Record]) -> u64 {
     }
     let alignment_bits: u64 = cast[u64](leaf.alignment_bytes) * 8
     require alignment_bits != 0 and leaf.size_bits != 0
-    return (leaf.size_bits + alignment_bits - 1) / alignment_bits *
+    return ((leaf.size_bits + alignment_bits - 1) / alignment_bits) *
         alignment_bits
 }
 

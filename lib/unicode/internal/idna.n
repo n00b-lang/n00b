@@ -39,7 +39,7 @@ func idna_status(cp: char) -> u8 {
     }
 
     return generated.idna.idna_status_stage2[
-        cast[u32] generated.idna.idna_status_stage1(v >> 8) * 256 +
+        cast[u32](generated.idna.idna_status_stage1(v >> 8)) * 256 +
         (v & 0xff)]
 }
 
@@ -68,23 +68,23 @@ private func idna_map_lookup(cp: char) -> u32? {
 }
 
 private func puny_digit(d: i32) -> u8 {
-    var c: i32 = cast[i32] cast[u32] '0' + d - 26
+    var c: i32 = cast[i32](cast[u32] '0') + d - 26
     if d < 26 {
-        c = cast[i32] cast[u32] 'a' + d
+        c = cast[i32](cast[u32] 'a') + d
     }
     return cast[u8] c
 }
 
 private func puny_decode_digit(c: i32) -> i32 {
-    if c >= cast[i32] cast[u32] '0' and c <= cast[i32] cast[u32] '9' {
-        return c - cast[i32] cast[u32] '0' + 26
+    if c >= cast[i32](cast[u32] '0') and c <= cast[i32] cast[u32] '9' {
+        return c - cast[i32](cast[u32] '0') + 26
     }
 
-    if c >= cast[i32] cast[u32] 'a' and c <= cast[i32] cast[u32] 'z' {
+    if c >= cast[i32](cast[u32] 'a') and c <= cast[i32] cast[u32] 'z' {
         return c - cast[i32] cast[u32] 'a'
     }
 
-    if c >= cast[i32] cast[u32] 'A' and c <= cast[i32] cast[u32] 'Z' {
+    if c >= cast[i32](cast[u32] 'A') and c <= cast[i32] cast[u32] 'Z' {
         return c - cast[i32] cast[u32] 'A'
     }
 
@@ -129,7 +129,7 @@ private func puny_encode(input: Array[char], input_len: u32) -> string? {
 
     var i: u32 = 0
     while i < input_len {
-        if cast[u32] input[i] < 128 {
+        if cast[u32](input[i]) < 128 {
             internal.runebuf.push(out, input[i])
             b += 1
         }
@@ -151,8 +151,8 @@ private func puny_encode(input: Array[char], input_len: u32) -> string? {
 
         var i: u32 = 0
         while i < input_len {
-            if cast[i32] cast[u32] input[i] >= n and
-                cast[i32] cast[u32] input[i] < m {
+            if cast[i32](cast[u32] input[i]) >= n and
+                cast[i32](cast[u32] input[i]) < m {
                 m = cast[i32] cast[u32] input[i]
             }
             i += 1
@@ -167,7 +167,7 @@ private func puny_encode(input: Array[char], input_len: u32) -> string? {
 
         i = 0
         while i < input_len {
-            if cast[i32] cast[u32] input[i] < n {
+            if cast[i32](cast[u32] input[i]) < n {
                 if delta == puny_max {
                     return nil
                 }
@@ -175,7 +175,7 @@ private func puny_encode(input: Array[char], input_len: u32) -> string? {
                 delta += 1
             }
 
-            if cast[i32] cast[u32] input[i] == n {
+            if cast[i32](cast[u32] input[i]) == n {
                 var q: i32 = delta
                 var k: i32 = puny_base
                 var going: bool = true
@@ -290,14 +290,14 @@ private func puny_decode(input: Array[u8], input_at: uint, input_len: u32,
             kk += puny_base
         }
 
-        bias = puny_adapt(i - oldi, cast[i32] op + 1, oldi == 0)
+        bias = puny_adapt(i - oldi, cast[i32](op) + 1, oldi == 0)
 
-        if i / (cast[i32] op + 1) > puny_max - n {
+        if i / (cast[i32](op) + 1) > puny_max - n {
             return -1
         }
 
-        n += i / (cast[i32] op + 1)
-        i %= cast[i32] op + 1
+        n += i / (cast[i32](op) + 1)
+        i %= cast[i32](op) + 1
 
         if n > 0x10ffff or (n >= 0xd800 and n <= 0xdfff) {
             return -1
@@ -347,7 +347,7 @@ private func hyphens_ok(label: Array[char], n: u32) -> bool {
 private func contextj_ok(label: Array[char], n: u32) -> bool {
     var i: u32 = 0
     while i < n {
-        if cast[u32] label[i] != 0x200c and cast[u32] label[i] != 0x200d {
+        if cast[u32](label[i]) != 0x200c and cast[u32](label[i]) != 0x200d {
             i += 1
 
             continue
@@ -364,11 +364,11 @@ private func contextj_ok(label: Array[char], n: u32) -> bool {
             continue
         }
 
-        if cast[u32] label[i] == 0x200d {
+        if cast[u32](label[i]) == 0x200d {
             return false
         }
 
-        var j: i64 = cast[i64] i - 1
+        var j: i64 = cast[i64](i) - 1
 
         while j >= 0 and internal.charinfo.joining_type(
             label[cast[uint] j]) == internal.types.Joining_Type.t {
@@ -491,7 +491,7 @@ private func bidi_label_ok(label: Array[char], n: u32) -> bool {
         return false
     }
 
-    var last: i64 = cast[i64] n - 1
+    var last: i64 = cast[i64](n) - 1
 
     while last >= 0 and internal.charinfo.bidi_class(
         label[cast[uint] last]) == internal.types.Bidi_Class.nsm {
@@ -532,7 +532,7 @@ func idna_map(consume s: string) -> string fail: Idna_Error {
 
     var pos: u32 = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         var cp: char = cast[char] 0
 
         try {
@@ -604,7 +604,7 @@ private func resolve_label(label: Array[char], n: u32,
 
     var i: u32 = 0
     while i < n {
-        if cast[u32] label[i] >= 128 {
+        if cast[u32](label[i]) >= 128 {
             return -1
         }
         i += 1
@@ -626,7 +626,7 @@ private func resolve_label(label: Array[char], n: u32,
 
     var j: i32 = 0
     while j < nd {
-        if cast[u32] decoded[cast[uint] j] >= 128 {
+        if cast[u32](decoded[cast[uint] j]) >= 128 {
             any_wide = true
         }
         j += 1
@@ -640,7 +640,7 @@ private func resolve_label(label: Array[char], n: u32,
 }
 
 private func domain_is_bidi(norm: string, len: uint) -> bool {
-    let cap: u32 = cast[u32] len + 1
+    let cap: u32 = cast[u32](len) + 1
 
     var label: Array[char] = new[Array[char]](cast[int] cap)
     var dec: Array[char] = new[Array[char]](cast[int] cap)
@@ -654,7 +654,7 @@ private func domain_is_bidi(norm: string, len: uint) -> bool {
         var endlab: bool = false
 
         while !endlab {
-            if cast[uint] pos >= len {
+            if cast[uint](pos) >= len {
                 endlab = true
                 done = true
 
@@ -719,9 +719,9 @@ func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
     var pos: u32 = 0
     var done: bool = false
 
-    var label: Array[char] = new[Array[char]](cast[int] len + 1)
+    var label: Array[char] = new[Array[char]](cast[int](len) + 1)
 
-    let vcap: u32 = cast[u32] len + 1
+    let vcap: u32 = cast[u32](len) + 1
 
     var vbuf: Array[char] = new[Array[char]](cast[int] vcap)
     var vasc: Array[u8] = new[Array[u8]](cast[int] vcap)
@@ -731,7 +731,7 @@ func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
         var endlab: bool = false
 
         while !endlab {
-            if cast[uint] pos >= len {
+            if cast[uint](pos) >= len {
                 endlab = true
                 done = true
 
@@ -820,7 +820,7 @@ func idna_to_ascii(consume domain: string, check_hyphens: bool = true,
 
         i = 0
         while i < nlab {
-            if cast[u32] label[i] >= 128 {
+            if cast[u32](label[i]) >= 128 {
                 non_ascii = true
             }
             i += 1
@@ -896,9 +896,9 @@ func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
     var out: internal.runebuf.Char_Buf =
         new[internal.runebuf.Char_Buf](cast[u32] len)
 
-    var label: Array[char] = new[Array[char]](cast[int] len + 1)
-    var ascii: Array[u8] = new[Array[u8]](cast[int] len + 1)
-    var decoded: Array[char] = new[Array[char]](cast[int] len + 1)
+    var label: Array[char] = new[Array[char]](cast[int](len) + 1)
+    var ascii: Array[u8] = new[Array[u8]](cast[int](len) + 1)
+    var decoded: Array[char] = new[Array[char]](cast[int](len) + 1)
 
     var pos: u32 = 0
     var done: bool = false
@@ -909,7 +909,7 @@ func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
         var non_ascii: bool = false
 
         while !endlab {
-            if cast[uint] pos >= len {
+            if cast[uint](pos) >= len {
                 endlab = true
                 done = true
 
@@ -930,7 +930,7 @@ func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
                 continue
             }
 
-            if cast[u32] cp >= 128 {
+            if cast[u32](cp) >= 128 {
                 non_ascii = true
             }
 
@@ -956,7 +956,7 @@ func idna_to_unicode(consume domain: string) -> string fail: Idna_Error {
             }
 
             let n: i32 = puny_decode(ascii, 0, nlab - 4, decoded,
-                cast[u32] len + 1)
+                cast[u32](len) + 1)
 
             if n < 0 {
                 fail Idna_Error.punycode_error

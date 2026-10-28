@@ -9,7 +9,7 @@ import generated.proplist
 const max_cp = 0x110000
 
 func general_category(cp: char) -> internal.types.Gc {
-    if cast[u32] cp >= max_cp {
+    if cast[u32](cp) >= max_cp {
         return internal.types.Gc.cn
     }
 
@@ -18,7 +18,7 @@ func general_category(cp: char) -> internal.types.Gc {
 }
 
 func combining_class(cp: char) -> u8 {
-    if cast[u32] cp >= max_cp {
+    if cast[u32](cp) >= max_cp {
         return 0
     }
 
@@ -27,7 +27,7 @@ func combining_class(cp: char) -> u8 {
 }
 
 func east_asian_width(cp: char) -> internal.types.Eaw {
-    if cast[u32] cp >= max_cp {
+    if cast[u32](cp) >= max_cp {
         return internal.types.Eaw.n
     }
 
@@ -36,7 +36,7 @@ func east_asian_width(cp: char) -> internal.types.Eaw {
 }
 
 func has_property(cp: char, prop: internal.types.Property) -> bool {
-    if cast[u32] cp >= max_cp {
+    if cast[u32](cp) >= max_cp {
         return false
     }
 
@@ -83,7 +83,7 @@ func display_width(s: string) -> i32 {
     var width: i32 = 0
     var pos: u32 = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         try {
             width += char_width(internal.encoding.utf8_decode(s, pos)!)
         } fail(failure) {

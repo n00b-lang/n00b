@@ -8,7 +8,7 @@ import generated.wordbreak
 import generated.sentbreak
 
 func grapheme_break(cp: char) -> internal.types.Gcb {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return internal.types.Gcb.other
     }
 
@@ -17,7 +17,7 @@ func grapheme_break(cp: char) -> internal.types.Gcb {
 }
 
 func incb(cp: char) -> internal.types.Incb {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return internal.types.Incb.none
     }
 
@@ -109,7 +109,7 @@ private func next_char(it: internal.types.Break_Iter, modify pos: u32) -> char? 
 }
 
 func word_break(cp: char) -> internal.types.Wb {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return internal.types.Wb.other
     }
 
@@ -145,7 +145,7 @@ private func wb_lookahead_is(it: internal.types.Break_Iter,
     var found: bool = false
     var going: bool = true
 
-    while going and cast[uint] la < len {
+    while going and cast[uint](la) < len {
         let c: char? = next_char(it, la)
 
         if c == nil {
@@ -181,7 +181,7 @@ private func word_next(modify it: internal.types.Break_Iter, first_cp: char) -> 
 
     var running: bool = true
 
-    while running and cast[uint] it.byte_pos < len {
+    while running and cast[uint](it.byte_pos) < len {
         let save: u32 = it.byte_pos
         let n: char? = next_char(it, it.byte_pos)
 
@@ -358,7 +358,7 @@ private func word_next(modify it: internal.types.Break_Iter, first_cp: char) -> 
 }
 
 func sentence_break(cp: char) -> internal.types.Sb {
-    if cast[u32] cp >= internal.properties.max_cp {
+    if cast[u32](cp) >= internal.properties.max_cp {
         return internal.types.Sb.other
     }
 
@@ -390,7 +390,7 @@ private func sb8_finds_lower(it: internal.types.Break_Iter) -> bool {
     var found: bool = false
     var going: bool = true
 
-    while going and cast[uint] la < len {
+    while going and cast[uint](la) < len {
         let c: char? = next_char(it, la)
 
         if c == nil {
@@ -440,7 +440,7 @@ private func sentence_next(modify it: internal.types.Break_Iter,
 
     var running: bool = true
 
-    while running and cast[uint] it.byte_pos < len {
+    while running and cast[uint](it.byte_pos) < len {
         let save: u32 = it.byte_pos
         let n: char? = next_char(it, it.byte_pos)
 
@@ -585,7 +585,7 @@ private func sentence_next(modify it: internal.types.Break_Iter,
 func next(modify self: internal.types.Break_Iter) -> u32? {
     let len: uint = byte_len(self.text)
 
-    if cast[uint] self.byte_pos >= len {
+    if cast[uint](self.byte_pos) >= len {
         return nil
     }
 
@@ -618,7 +618,7 @@ func next(modify self: internal.types.Break_Iter) -> u32? {
 
     var running: bool = true
 
-    while running and cast[uint] self.byte_pos < len {
+    while running and cast[uint](self.byte_pos) < len {
         let save: u32 = self.byte_pos
         let n: char? = next_char(self, self.byte_pos)
 

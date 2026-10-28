@@ -82,7 +82,7 @@ inline func mark_object(marker: Ref[internal.gc.core.Marker], payload: Ref[byte]
         let header:        Ref[internal.gc.core.Object_Header] = internal.gc.core.header_of(payload.get())
         let granule_bytes: uint                          = internal.gc.core.granule_bytes
         let extent:        uint                          = internal.gc.core.object_bytes(header)
-        let bytes:         uint                          = (extent + granule_bytes - 1) / granule_bytes * granule_bytes
+        let bytes:         uint                          = ((extent + granule_bytes - 1) / granule_bytes) * granule_bytes
         let heap:          Ref[internal.gc.core.Heap]          = marker.heap
         let epoch:         u32                           = heap.mark_epoch
 
@@ -457,7 +457,7 @@ func trace_array_elements(marker: Ref[internal.gc.core.Marker]?,
         let alignment: uint = internal.abi.alignment_bytes(element.get())
         require alignment != 0
         let element_bytes: uint = internal.abi.size_bytes(element.get())
-        let stride:        uint = (element_bytes + alignment - 1) / alignment * alignment
+        let stride:        uint = ((element_bytes + alignment - 1) / alignment) * alignment
         var end_index:     u64  = shape.total_count
         if end_index - start_index > scan_chunk and marker != nil {
             end_index = start_index + scan_chunk
@@ -467,7 +467,7 @@ func trace_array_elements(marker: Ref[internal.gc.core.Marker]?,
         var index: u64 = start_index
         while index < end_index {
             trace_value(marker, mutator, owner,
-                __gc_byte_offset(data, cast[uint]index * stride),
+                __gc_byte_offset(data, cast[uint](index) * stride),
                 child_type, 0)
             index += 1
         }

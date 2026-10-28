@@ -4,7 +4,7 @@ struct Value:
 type ValueAlias = Value
 
 fn choose(first: bool, second: bool) return: int?:
-    if not first && second || first:
+    if (not first && second) || first:
         return None
     elseif second:
         return None

@@ -31,7 +31,7 @@ func compare_items(a: Array[u8], a_at: uint, b: Array[u8], b_at: uint,
         let left: u8 = a[a_at + i]
         let right: u8 = b[b_at + i]
         if left != right {
-            return cast[int] left - cast[int] right
+            return cast[int](left) - cast[int](right)
         }
         i += 1
     }

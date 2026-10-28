@@ -124,8 +124,57 @@ typedef struct {
 } pp_deferred_stmt_t;
 core_list_decl(pp_deferred_stmt_t);
 
+typedef enum {
+    PP_OP_NONE,
+    PP_OP_ADD,
+    PP_OP_MULTIPLY,
+    PP_OP_DIVIDE,
+    PP_OP_REMAINDER,
+    PP_OP_BIT_AND,
+    PP_OP_BIT_OR,
+    PP_OP_BIT_XOR,
+    PP_OP_SHIFT,
+    PP_OP_COMPARE,
+    PP_OP_AND,
+    PP_OP_OR,
+    PP_OP_BINARY_COUNT,
+    PP_OP_NOT = PP_OP_BINARY_COUNT,
+    PP_OP_PREFIX,
+    PP_OP_PAREN,
+    PP_OP_WORD,
+    PP_OP_SYMBOL,
+} pp_operator_t;
+
+static const struct {
+    core_string_t name;
+    pp_operator_t op;
+} operator_nonterms[] = {
+    {CORE_STRING_STATIC("plus-op"), PP_OP_ADD},
+    {CORE_STRING_STATIC("minus-op"), PP_OP_ADD},
+    {CORE_STRING_STATIC("multiply-op"), PP_OP_MULTIPLY},
+    {CORE_STRING_STATIC("divide-op"), PP_OP_DIVIDE},
+    {CORE_STRING_STATIC("remainder-op"), PP_OP_REMAINDER},
+    {CORE_STRING_STATIC("amp-op"), PP_OP_BIT_AND},
+    {CORE_STRING_STATIC("pipe-op"), PP_OP_BIT_OR},
+    {CORE_STRING_STATIC("xor-op"), PP_OP_BIT_XOR},
+    {CORE_STRING_STATIC("left-shift-op"), PP_OP_SHIFT},
+    {CORE_STRING_STATIC("right-shift-op"), PP_OP_SHIFT},
+    {CORE_STRING_STATIC("equality-op"), PP_OP_COMPARE},
+    {CORE_STRING_STATIC("compare-op"), PP_OP_COMPARE},
+    {CORE_STRING_STATIC("and-op"), PP_OP_AND},
+    {CORE_STRING_STATIC("or-op"), PP_OP_OR},
+    {CORE_STRING_STATIC("not-op"), PP_OP_NOT},
+    {CORE_STRING_STATIC("unary-expr"), PP_OP_PREFIX},
+    {CORE_STRING_STATIC("tuple-or-paren"), PP_OP_PAREN},
+};
+
+#define PP_OPERATOR_NONTERMS \
+    (sizeof(operator_nonterms) / sizeof(operator_nonterms[0]))
+
 typedef struct {
     parse_grammar_t *grammar;
+    parse_grammar_t *operator_grammar;
+    parse_nonterm_t *operators[PP_OPERATOR_NONTERMS];
     core_translation_unit_t *unit;
     core_list_t(pp_binding_t) bindings;
     core_list_t(core_string_t) owned_strings;
@@ -346,6 +395,24 @@ canonical_logical_spelling(core_string_t spelling)
     if (core_string_eq(spelling, CORE_STRING_STATIC("not")))
         return CORE_STRING_STATIC("!");
     return spelling;
+}
+
+static pp_operator_t
+nonterm_operator(const pp_context_t *ctx, parse_tree_t *node)
+{
+    parse_nonterm_t *nt = parse_tree_nonterm(ctx->grammar, node);
+    for (size_t i = 0; nt && i < PP_OPERATOR_NONTERMS; i++)
+        if (ctx->operators[i] == nt) return operator_nonterms[i].op;
+    return PP_OP_NONE;
+}
+
+static pp_operator_t
+binary_operator(const pp_context_t *ctx, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node) || core_tree_num_children(node) != 3)
+        return PP_OP_NONE;
+    pp_operator_t op = nonterm_operator(ctx, core_tree_child(node, 1));
+    return op < PP_OP_BINARY_COUNT ? op : PP_OP_NONE;
 }
 
 static bool
@@ -1068,22 +1135,6 @@ is_literal_node(parse_grammar_t *g, parse_tree_t *node)
         || is_name(g, node, "string-lit");
 }
 
-static bool
-is_binary_operator_node(parse_grammar_t *g, parse_tree_t *node)
-{
-    static const core_string_t names[] = {
-        CORE_STRING_STATIC("or-expr"), CORE_STRING_STATIC("and-expr"),
-        CORE_STRING_STATIC("equality-expr"),
-        CORE_STRING_STATIC("compare-expr"), CORE_STRING_STATIC("bitor-expr"),
-        CORE_STRING_STATIC("bitxor-expr"), CORE_STRING_STATIC("bitand-expr"),
-        CORE_STRING_STATIC("shift-expr"), CORE_STRING_STATIC("add-expr"),
-        CORE_STRING_STATIC("mul-expr"),
-    };
-    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
-        if (node_named(g, node, names[i])) return true;
-    return false;
-}
-
 static pp_kind_t
 binary_result_kind(core_string_t op, pp_kind_t left, pp_kind_t right)
 {
@@ -1603,8 +1654,7 @@ eval_expr(pp_context_t *ctx, parse_tree_t *node, pp_value_t *out)
             return eval_expr(ctx, core_tree_child(node, 0), out);
     }
 
-    if (is_binary_operator_node(ctx->grammar, node)
-        && core_tree_num_children(node) == 3) {
+    if (binary_operator(ctx, node)) {
         pp_value_t left, right;
         parse_tree_t *operator_node = core_tree_child(node, 1);
         core_string_t op = canonical_logical_spelling(
@@ -2613,6 +2663,40 @@ preprocess_after_exit(parse_visit_t *visit)
     return ctx->failed ? PARSE_VISIT_ERROR : PARSE_VISIT_CONTINUE;
 }
 
+typedef enum {
+    PP_MIX_OK,
+    PP_MIX_AMBIGUOUS,
+    PP_MIX_CHAINED,
+} pp_mix_t;
+
+#define PP_MIX_ARITHMETIC \
+    [PP_OP_ADD] = PP_MIX_AMBIGUOUS, [PP_OP_MULTIPLY] = PP_MIX_AMBIGUOUS, \
+    [PP_OP_DIVIDE] = PP_MIX_AMBIGUOUS, [PP_OP_REMAINDER] = PP_MIX_AMBIGUOUS
+#define PP_MIX_SHIFT [PP_OP_SHIFT] = PP_MIX_AMBIGUOUS
+#define PP_MIX_BITWISE \
+    [PP_OP_BIT_AND] = PP_MIX_AMBIGUOUS, [PP_OP_BIT_OR] = PP_MIX_AMBIGUOUS, \
+    [PP_OP_BIT_XOR] = PP_MIX_AMBIGUOUS, PP_MIX_SHIFT
+
+static const uint8_t operator_mix[PP_OP_BINARY_COUNT][PP_OP_BINARY_COUNT] = {
+    [PP_OP_MULTIPLY] = {[PP_OP_DIVIDE] = PP_MIX_AMBIGUOUS,
+                        [PP_OP_REMAINDER] = PP_MIX_AMBIGUOUS},
+    [PP_OP_DIVIDE] = {[PP_OP_DIVIDE] = PP_MIX_AMBIGUOUS,
+                      [PP_OP_REMAINDER] = PP_MIX_AMBIGUOUS},
+    [PP_OP_REMAINDER] = {[PP_OP_MULTIPLY] = PP_MIX_AMBIGUOUS,
+                         [PP_OP_DIVIDE] = PP_MIX_AMBIGUOUS,
+                         [PP_OP_REMAINDER] = PP_MIX_AMBIGUOUS},
+    [PP_OP_BIT_AND] = {PP_MIX_ARITHMETIC, [PP_OP_BIT_OR] = PP_MIX_AMBIGUOUS,
+                       [PP_OP_BIT_XOR] = PP_MIX_AMBIGUOUS, PP_MIX_SHIFT},
+    [PP_OP_BIT_OR] = {PP_MIX_ARITHMETIC, [PP_OP_BIT_AND] = PP_MIX_AMBIGUOUS,
+                      [PP_OP_BIT_XOR] = PP_MIX_AMBIGUOUS, PP_MIX_SHIFT},
+    [PP_OP_BIT_XOR] = {PP_MIX_ARITHMETIC, [PP_OP_BIT_AND] = PP_MIX_AMBIGUOUS,
+                       [PP_OP_BIT_OR] = PP_MIX_AMBIGUOUS, PP_MIX_SHIFT},
+    [PP_OP_SHIFT] = {PP_MIX_ARITHMETIC, PP_MIX_BITWISE},
+    [PP_OP_COMPARE] = {[PP_OP_COMPARE] = PP_MIX_CHAINED},
+    [PP_OP_AND] = {[PP_OP_OR] = PP_MIX_AMBIGUOUS},
+    [PP_OP_OR] = {[PP_OP_AND] = PP_MIX_AMBIGUOUS},
+};
+
 typedef struct {
     pp_context_t *ctx;
     core_list_t(pp_deferred_stmt_t) *imports;
@@ -2620,7 +2704,269 @@ typedef struct {
     uint32_t *spelling_lines;
     core_diag_location_t *spelling_sites;
     core_list_t(parse_tree_ptr_t) case_openers;
+    bool ambiguous;
 } pp_discovery_t;
+
+static parse_tree_t *
+bare_operand(parse_tree_t *node)
+{
+    while (node && !core_tree_is_leaf(node)
+           && core_tree_num_children(node) == 1
+           && !core_tree_is_leaf(core_tree_child(node, 0)))
+        node = core_tree_child(node, 0);
+    return node;
+}
+
+static pp_operator_t
+prefix_operator(pp_context_t *ctx, parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node) || core_tree_num_children(node) < 2
+        || nonterm_operator(ctx, node) != PP_OP_PREFIX)
+        return PP_OP_NONE;
+    parse_tree_t *first = core_tree_child(node, 0);
+    if (nonterm_operator(ctx, first) == PP_OP_NOT) return PP_OP_NOT;
+    if (core_tree_num_children(node) > 2
+        || core_string_eq(leaf_text(ctx, first), CORE_STRING_STATIC("ref")))
+        return PP_OP_WORD;
+    return PP_OP_SYMBOL;
+}
+
+static parse_tree_t *
+prefix_operand(parse_tree_t *node)
+{
+    return core_tree_child(node, core_tree_num_children(node) - 1);
+}
+
+static parse_tree_t *
+trailing_word_prefix(pp_context_t *ctx, parse_tree_t *node)
+{
+    for (node = bare_operand(node); node;) {
+        if (binary_operator(ctx, node)) {
+            node = bare_operand(core_tree_child(node, 2));
+            continue;
+        }
+        pp_operator_t prefix = prefix_operator(ctx, node);
+        if (prefix == PP_OP_NONE) return nullptr;
+        parse_tree_t *operand = bare_operand(prefix_operand(node));
+        if (prefix == PP_OP_WORD)
+            return nonterm_operator(ctx, operand) == PP_OP_PAREN
+                ? nullptr : node;
+        node = operand;
+    }
+    return nullptr;
+}
+
+static bool
+plain_operand(pp_context_t *ctx, parse_tree_t *node)
+{
+    node = bare_operand(node);
+    if (!node) return false;
+    size_t count = core_tree_is_leaf(node) ? 0 : core_tree_num_children(node);
+    if (count <= 1) return true;
+    parse_tree_t *marker = core_tree_child(node, 1);
+    if (!core_tree_is_leaf(marker)) return false;
+    core_string_t text = leaf_text(ctx, marker);
+    if (count == 3 && core_string_eq(text, CORE_STRING_STATIC(".")))
+        return plain_operand(ctx, core_tree_child(node, 0));
+    return count == 4 && core_string_eq(text, CORE_STRING_STATIC("["))
+        && plain_operand(ctx, core_tree_child(node, 0))
+        && plain_operand(ctx, core_tree_child(node, 2));
+}
+
+static size_t
+node_start(parse_tree_t *node)
+{
+    return parse_token_start_byte(parse_tree_find_first_terminal(node));
+}
+
+static size_t
+node_end(parse_tree_t *node)
+{
+    return parse_token_end_byte(last_terminal(node));
+}
+
+typedef struct {
+    size_t open;
+    size_t resume;
+    size_t close;
+    core_string_t opening;
+    core_string_t closing;
+} pp_fix_t;
+
+static void
+report_fix(pp_context_t *ctx, parse_tree_t *expression, pp_fix_t fix)
+{
+    core_string_t source = core_source_file_contents(&ctx->unit->source);
+    size_t size = core_source_file_size(&ctx->unit->source);
+    size_t start = node_start(expression);
+    size_t end = node_end(expression);
+    if (start > end || end > size || fix.open < start || fix.close > end)
+        return;
+    while (start && source.data[start - 1] != '\n') start--;
+    while (end < size && source.data[end] != '\n') end++;
+    if (end > start && source.data[end - 1] == '\r') end--;
+    core_buffer_t *text = core_buffer_empty();
+    core_buffer_append(text, source.data + start, fix.open - start);
+    core_buffer_append_string(text, fix.opening);
+    core_buffer_append(text, source.data + fix.resume, fix.close - fix.resume);
+    core_buffer_append_string(text, fix.closing);
+    core_buffer_append(text, source.data + fix.close, end - fix.close);
+    core_string_t lines = core_buffer_take_string(text);
+    core_diag_location_t at = node_location(expression);
+    core_diag_fix(core_translation_unit_diagnostics(ctx->unit),
+                  (core_diag_location_t){
+                      .line = at.line,
+                      .end_line = at.end_line,
+                      .has_location = true,
+                  }, lines);
+    core_free(lines.data);
+}
+
+static pp_fix_t
+parenthesize(size_t open, size_t resume, size_t close)
+{
+    return (pp_fix_t){
+        .open = open, .resume = resume, .close = close,
+        .opening = CORE_STRING_STATIC("("),
+        .closing = CORE_STRING_STATIC(")"),
+    };
+}
+
+static void
+report_ambiguity(pp_discovery_t *discovery, n00bb_diag_t id,
+                 core_diag_location_t first, core_diag_location_t second,
+                 core_string_t first_text, core_string_t second_text,
+                 parse_tree_t *expression, pp_fix_t left, pp_fix_t right)
+{
+    pp_context_t *ctx = discovery->ctx;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(ctx->unit);
+    discovery->ambiguous = true;
+    if (!n00bb_report(diagnostics, ctx->unit, id, first,
+            N00B_TEXT_AMBIGUOUS_OPERATORS,
+            N00BB_ARGS(ARG_TEXT(first_text), ARG_TEXT(second_text))))
+        return;
+    core_diag_mark(diagnostics, second);
+    n00bb_report_help(diagnostics, N00B_TEXT_AMBIGUOUS_OPERATORS_HELP,
+                      N00BB_NO_ARGS);
+    report_fix(ctx, expression, left);
+    report_fix(ctx, expression, right);
+}
+
+static void
+report_chained_comparison(pp_discovery_t *discovery, parse_tree_t *parent,
+                          parse_tree_t *first, parse_tree_t *second,
+                          parse_tree_t *middle)
+{
+    pp_context_t *ctx = discovery->ctx;
+    core_diagnostics_t *diagnostics =
+        core_translation_unit_diagnostics(ctx->unit);
+    discovery->ambiguous = true;
+    if (!n00bb_report(diagnostics, ctx->unit, N00B_DIAG_CHAINED_COMPARISON,
+            node_location(first), N00B_TEXT_CHAINED_COMPARISON,
+            N00BB_NO_ARGS))
+        return;
+    core_diag_mark(diagnostics, node_location(second));
+    if (!plain_operand(ctx, middle)) {
+        n00bb_report_help(diagnostics, N00B_TEXT_CHAINED_COMPARISON_SEPARATELY,
+                          N00BB_NO_ARGS);
+        return;
+    }
+    n00bb_report_help(diagnostics, N00B_TEXT_CHAINED_COMPARISON_HELP,
+                      N00BB_NO_ARGS);
+    core_buffer_t *joined = core_buffer_empty();
+    core_buffer_puts(joined, " and ");
+    core_buffer_append_string(joined, node_text(ctx, middle));
+    core_string_t opening = core_buffer_take_string(joined);
+    size_t at = node_end(middle);
+    report_fix(ctx, parent, (pp_fix_t){
+        .open = at, .resume = at, .close = at, .opening = opening,
+    });
+    core_free(opening.data);
+}
+
+static void
+report_operator_mix(pp_discovery_t *discovery, parse_tree_t *parent,
+                    parse_tree_t *child, bool left, pp_mix_t mix)
+{
+    parse_tree_t *first = core_tree_child(left ? child : parent, 1);
+    parse_tree_t *second = core_tree_child(left ? parent : child, 1);
+    if (mix == PP_MIX_CHAINED) {
+        report_chained_comparison(discovery, parent, first, second,
+                                  core_tree_child(child, left ? 2 : 0));
+        return;
+    }
+    size_t inner = left ? node_start(core_tree_child(child, 2))
+                        : node_end(core_tree_child(child, 0));
+    pp_fix_t grouped_left = left
+        ? parenthesize(node_start(child), node_start(child), node_end(child))
+        : parenthesize(node_start(parent), node_start(parent), inner);
+    pp_fix_t grouped_right = left
+        ? parenthesize(inner, inner, node_end(parent))
+        : parenthesize(node_start(child), node_start(child), node_end(child));
+    report_ambiguity(discovery, N00B_DIAG_AMBIGUOUS_OPERATORS,
+                     node_location(first), node_location(second),
+                     node_text(discovery->ctx, first),
+                     node_text(discovery->ctx, second), parent,
+                     grouped_left, grouped_right);
+}
+
+static void
+report_prefix_mix(pp_discovery_t *discovery, parse_tree_t *parent,
+                  parse_tree_t *prefix, pp_operator_t kind)
+{
+    size_t count = core_tree_num_children(prefix);
+    parse_tree_t *operand = prefix_operand(prefix);
+    core_diag_location_t first = node_location(core_tree_child(prefix, 0));
+    core_diag_location_t last =
+        node_location(core_tree_child(prefix, count - 2));
+    first.end_line = last.end_line;
+    first.end_column = last.end_column;
+    size_t start = node_start(operand);
+    size_t keyword_end = node_end(core_tree_child(prefix, count - 2));
+    pp_fix_t grouped_left = kind == PP_OP_NOT
+        ? parenthesize(node_start(prefix), node_start(prefix),
+                       node_end(prefix))
+        : parenthesize(keyword_end, start, node_end(prefix));
+    pp_fix_t grouped_right = kind == PP_OP_NOT
+        ? parenthesize(start, start, node_end(parent))
+        : parenthesize(keyword_end, start, node_end(parent));
+    parse_tree_t *second = core_tree_child(parent, 1);
+    report_ambiguity(discovery, N00B_DIAG_AMBIGUOUS_PREFIX, first,
+                     node_location(second),
+                     first_leaf_text(discovery->ctx, prefix),
+                     node_text(discovery->ctx, second), parent,
+                     grouped_left, grouped_right);
+}
+
+static void
+check_operator_mix(pp_discovery_t *discovery, parse_tree_t *node)
+{
+    pp_context_t *ctx = discovery->ctx;
+    pp_operator_t op = binary_operator(ctx, node);
+    if (!op) return;
+    parse_tree_t *left = bare_operand(core_tree_child(node, 0));
+    pp_operator_t left_op = binary_operator(ctx, left);
+    if (left_op && operator_mix[op][left_op]) {
+        report_operator_mix(discovery, node, left, true,
+                            operator_mix[op][left_op]);
+        return;
+    }
+    if (op == PP_OP_COMPARE && prefix_operator(ctx, left) == PP_OP_NOT) {
+        report_prefix_mix(discovery, node, left, PP_OP_NOT);
+        return;
+    }
+    parse_tree_t *word = trailing_word_prefix(ctx, left);
+    if (word) {
+        report_prefix_mix(discovery, node, word, PP_OP_WORD);
+        return;
+    }
+    parse_tree_t *right = bare_operand(core_tree_child(node, 2));
+    pp_operator_t right_op = binary_operator(ctx, right);
+    if (right_op && operator_mix[op][right_op])
+        report_operator_mix(discovery, node, right, false,
+                            operator_mix[op][right_op]);
+}
 
 static pp_spelling_t
 style_spelling(pp_context_t *ctx, parse_tree_t *node)
@@ -2819,6 +3165,7 @@ preprocess_discover(parse_visit_t *visit)
     parse_tree_t *node = visit->node;
     if (ctx->failed) return PARSE_VISIT_ERROR;
     if (!node || core_tree_is_leaf(node)) return PARSE_VISIT_CONTINUE;
+    check_operator_mix(discovery, node);
     if (is_name(ctx->grammar, node, "variable-decl")
         || is_name(ctx->grammar, node, "import-stmt"))
         report_statement_trailing_comma(ctx, node);
@@ -3068,7 +3415,8 @@ process_module(pp_context_t *ctx, core_translation_unit_t *unit,
     parse_walk_on_stage(discovery_walk, PARSE_WALK_PREPARE,
                         preprocess_discover, nullptr);
     parse_tree_walk_run(discovery_walk, tree);
-    if (parse_tree_walk_failed(discovery_walk)) ctx->failed = true;
+    if (parse_tree_walk_failed(discovery_walk) || discovery.ambiguous)
+        ctx->failed = true;
     parse_tree_walk_free(discovery_walk);
     core_list_free(discovery.case_openers);
     pp_walk_t evaluation = {
@@ -3120,6 +3468,12 @@ n00bb_preprocessor_run(n00bb_preprocessor_t *preprocessor,
     if (!preprocessor || !grammar || !tree || !unit) return false;
     pp_context_t *ctx = &preprocessor->context;
     ctx->grammar = grammar;
+    if (ctx->operator_grammar != grammar) {
+        for (size_t i = 0; i < PP_OPERATOR_NONTERMS; i++)
+            ctx->operators[i] = parse_find_nonterm(grammar,
+                                                   operator_nonterms[i].name);
+        ctx->operator_grammar = grammar;
+    }
     if (!ctx->module_stack.len) {
         ctx->cycle_warning_emitted = false;
         ctx->failed = false;

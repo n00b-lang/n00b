@@ -1,12 +1,12 @@
 inline func u32_at(data: Array[u8], i: u32) -> u32 {
     let b: u32 = i * 4
-    return cast[u32] data[b] | (cast[u32] data[b + 1] << 8) |
-        (cast[u32] data[b + 2] << 16) | (cast[u32] data[b + 3] << 24)
+    return cast[u32](data[b]) | (cast[u32](data[b + 1]) << 8) |
+        (cast[u32](data[b + 2]) << 16) | (cast[u32](data[b + 3]) << 24)
 }
 
 inline func stage_index(stage1: Array[u16], cp: char) -> u32 {
     let v: u32 = cast[u32] cp
-    return cast[u32] stage1[v >> 8] * 256 + (v & 0xff)
+    return cast[u32](stage1[v >> 8]) * 256 + (v & 0xff)
 }
 
 func sparse_lookup(index: Array[u32], index_len: u32, cp: char) -> u32? {

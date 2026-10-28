@@ -31,7 +31,7 @@ private func rebase(v: u64, lo: u64, hi: u64, shift: u64) -> u32 {
 
 func rich_reslice(s: string, since: u64, upto: u64, text: string,
                   shift: u64) -> string {
-    if cast[u64] tag(s) != str_tag_rich or upto <= since {
+    if cast[u64](tag(s)) != str_tag_rich or upto <= since {
         return text
     }
     let src: Ref[Rich_Body] = __string_rich_body(s)

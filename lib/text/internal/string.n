@@ -9,7 +9,7 @@ private func crlf_pairs(s: string, len: u64) -> u64 {
     var n: u64 = 0
     var i: u64 = 0
     while i + 1 < len {
-        if byte_at(s, i) == cast[u8] '\r' and byte_at(s, i + 1) == cast[u8] '\n' {
+        if byte_at(s, i) == cast[u8]('\r') and byte_at(s, i + 1) == cast[u8] '\n' {
             n += 1
         }
         i += 1
@@ -54,7 +54,7 @@ private func step_unit(s: string, unit: Index_Unit, enc: Str_Encoding,
     }
     if enc == Str_Encoding.ascii {
         if unit == Index_Unit.cluster {
-            if byte_at(s, i) == cast[u8] '\r' and i + 1 < len and
+            if byte_at(s, i) == cast[u8]('\r') and i + 1 < len and
                 byte_at(s, i + 1) == cast[u8] '\n' {
                 return i + 2
             }
@@ -183,7 +183,7 @@ func unit_to_byte(s: string, unit: Index_Unit, n: u64) -> u64 {
         var i: u64 = 0
         var k: u64 = 0
         while i < len and k < n {
-            if byte_at(s, i) == cast[u8] '\r' and i + 1 < len and
+            if byte_at(s, i) == cast[u8]('\r') and i + 1 < len and
                 byte_at(s, i + 1) == cast[u8] '\n' {
                 i += 2
             }
@@ -244,7 +244,7 @@ func byte_to_unit(s: string, unit: Index_Unit, at: u64) -> u64 {
         if nxt == nil {
             return k
         }
-        if cast[u64] nxt.get() > b {
+        if cast[u64](nxt.get()) > b {
             return k
         }
         k += 1
@@ -319,7 +319,7 @@ func slice(self: string, start: i64, end: i64,
         let count: u64 = unit_count(base, unit)
         b = normalize(b, count)
         if end < 0 {
-            e = end + cast[i64] count + 1
+            e = end + cast[i64](count) + 1
         }
         else {
             e = end
@@ -368,7 +368,7 @@ private func ascii_case(s: string, len: u64, up: bool) -> string {
     for i from 0 until len {
         let c: u8 = byte_at(s, i)
         if up {
-            if c >= cast[u8] 'a' and c <= cast[u8] 'z' {
+            if c >= cast[u8]('a') and c <= cast[u8] 'z' {
                 out[i] = c - 32
             }
             else {
@@ -376,7 +376,7 @@ private func ascii_case(s: string, len: u64, up: bool) -> string {
             }
         }
         else {
-            if c >= cast[u8] 'A' and c <= cast[u8] 'Z' {
+            if c >= cast[u8]('A') and c <= cast[u8] 'Z' {
                 out[i] = c + 32
             }
             else {
@@ -396,7 +396,7 @@ private func ascii_title(s: string, len: u64) -> string {
         let cp: char = cast[char] c
         let cased: bool = unicode.has_property(cp, unicode.Property.cased)
         if at_start and cased {
-            if c >= cast[u8] 'a' and c <= cast[u8] 'z' {
+            if c >= cast[u8]('a') and c <= cast[u8] 'z' {
                 out[i] = c - 32
             }
             else {
@@ -404,7 +404,7 @@ private func ascii_title(s: string, len: u64) -> string {
             }
         }
         else {
-            if c >= cast[u8] 'A' and c <= cast[u8] 'Z' {
+            if c >= cast[u8]('A') and c <= cast[u8] 'Z' {
                 out[i] = c + 32
             }
             else {
@@ -537,7 +537,7 @@ func at_end(self: Str_Cursor) -> bool {
 }
 
 private func ascii_cluster_next(s: string, len: u64, i: u64) -> u64 {
-    if byte_at(s, i) == cast[u8] '\r' and i + 1 < len and
+    if byte_at(s, i) == cast[u8]('\r') and i + 1 < len and
         byte_at(s, i + 1) == cast[u8] '\n' {
         return i + 2
     }
@@ -673,7 +673,7 @@ func prev(modify self: Str_Cursor) -> string? {
     else {
         if enc == Str_Encoding.ascii {
             if self.unit == Index_Unit.cluster and upto >= 2 and
-                byte_at(self.text, upto - 2) == cast[u8] '\r' and
+                byte_at(self.text, upto - 2) == cast[u8]('\r') and
                 byte_at(self.text, upto - 1) == cast[u8] '\n' {
                 since = upto - 2
             }
@@ -775,9 +775,9 @@ private func char_is_space(s: string, at: u64, out adv: u64) -> bool {
     let c: u8 = byte_at(s, at)
     if c < 0x80 {
         adv = 1
-        return c == cast[u8] ' ' or c == cast[u8] '\t' or
-            c == cast[u8] '\n' or c == cast[u8] '\r' or
-            c == cast[u8] '\f' or c == cast[u8] '\v'
+        return c == cast[u8](' ') or c == cast[u8]('\t') or
+            c == cast[u8]('\n') or c == cast[u8]('\r') or
+            c == cast[u8]('\f') or c == cast[u8] '\v'
     }
     var pos: u32 = cast[u32] at
     var decoded: char? = nil
@@ -786,7 +786,7 @@ private func char_is_space(s: string, at: u64, out adv: u64) -> bool {
     } fail(failure) {
         decoded = nil
     }
-    adv = cast[u64] pos - at
+    adv = cast[u64](pos) - at
     if decoded == nil {
         return false
     }

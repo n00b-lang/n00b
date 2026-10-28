@@ -12,14 +12,14 @@ func bitptr(r: Ref['T]) -> Bitptr {
 inline func bit_width(self: 'T) -> uint {
     var copy: 'T = self
     let place: Bitptr = bitptr(ref copy)
-    return cast[uint] place.end_bit - cast[uint] place.start_bit
+    return cast[uint](place.end_bit) - cast[uint] place.start_bit
 }
 
 inline func load_bits(self: 'T) -> u128 {
     var copy: 'T = self
     let place: Bitptr = bitptr(ref copy)
     let start: uint = cast[uint] place.start_bit
-    let width: uint = cast[uint] place.end_bit - start
+    let width: uint = cast[uint](place.end_bit) - start
     require width > 0 and width <= 128
     var bits: u128 = 0
     var i: uint = 0

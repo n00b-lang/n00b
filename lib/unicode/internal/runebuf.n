@@ -36,7 +36,7 @@ func to_string(self: Char_Buf) -> string {
         return empty_string()
     }
 
-    var out: Array[u8] = new[Array[u8]](cast[int] self.len * 4 + 1)
+    var out: Array[u8] = new[Array[u8]](cast[int](self.len) * 4 + 1)
     var pos: uint = 0
     var wide: bool = false
 

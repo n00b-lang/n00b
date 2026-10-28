@@ -61,7 +61,7 @@ private func count_wide_chars(chars: string) -> uint {
     var n: uint = 0
     var pos: u32 = 0
 
-    while cast[uint] pos < byte_len(chars) {
+    while cast[uint](pos) < byte_len(chars) {
         var got: char = cast[char] 0
 
         try {
@@ -70,7 +70,7 @@ private func count_wide_chars(chars: string) -> uint {
             break
         }
 
-        if cast[u32] got > 127 {
+        if cast[u32](got) > 127 {
             n += 1
         }
     }
@@ -86,7 +86,7 @@ func char_set(chars: string) -> internal.types.Char_Set {
 
     var pos: u32 = 0
 
-    while cast[uint] pos < byte_len(chars) {
+    while cast[uint](pos) < byte_len(chars) {
         var got: char = cast[char] 0
 
         try {
@@ -97,12 +97,12 @@ func char_set(chars: string) -> internal.types.Char_Set {
 
         let cp: char = got
 
-        if cast[u32] cp < 64 {
-            out.ascii_lo |= cast[u64] 1 << cast[u64] cp
+        if cast[u32](cp) < 64 {
+            out.ascii_lo |= cast[u64](1) << cast[u64] cp
         }
         else {
-            if cast[u32] cp < 128 {
-                out.ascii_hi |= cast[u64] 1 << cast[u64] (cast[u32] cp - 64)
+            if cast[u32](cp) < 128 {
+                out.ascii_hi |= cast[u64](1) << cast[u64] (cast[u32](cp) - 64)
             }
             else {
                 let pair: internal.types.Char_Pair = (lo = cp, hi = cp)
@@ -115,20 +115,20 @@ func char_set(chars: string) -> internal.types.Char_Set {
 }
 
 func holds(self: internal.types.Char_Set, cp: char) -> bool {
-    if cast[u32] cp < 64 {
-        return (self.ascii_lo & (cast[u64] 1 << cast[u64] cp)) != 0
+    if cast[u32](cp) < 64 {
+        return (self.ascii_lo & (cast[u64](1) << cast[u64] cp)) != 0
     }
 
-    if cast[u32] cp < 128 {
+    if cast[u32](cp) < 128 {
         return (self.ascii_hi &
-            (cast[u64] 1 << cast[u64] (cast[u32] cp - 64))) != 0
+            (cast[u64](1) << cast[u64] (cast[u32](cp) - 64))) != 0
     }
 
     var i: uint = 0
     while i < self.ranges.len() {
         let r: internal.types.Char_Pair = self.ranges[cast[int] i]
 
-        if cast[u32] cp >= cast[u32] r.lo and cast[u32] cp <= cast[u32] r.hi {
+        if cast[u32](cp) >= cast[u32](r.lo) and cast[u32](cp) <= cast[u32] r.hi {
             return true
         }
         i += 1
@@ -156,15 +156,15 @@ func matches(self: internal.types.Char_Filter, cp: char) -> bool {
     }
 
     if self.kind == internal.types.Char_Filter_Kind.gc {
-        return cast[u32] internal.properties.general_category(cp) == self.lo
+        return cast[u32](internal.properties.general_category(cp)) == self.lo
     }
 
     if self.kind == internal.types.Char_Filter_Kind.script {
-        return cast[u32] internal.charinfo.script(cp) == self.lo
+        return cast[u32](internal.charinfo.script(cp)) == self.lo
     }
 
     if self.kind == internal.types.Char_Filter_Kind.bidi {
-        return cast[u32] internal.charinfo.bidi_class(cp) == self.lo
+        return cast[u32](internal.charinfo.bidi_class(cp)) == self.lo
     }
 
     if self.kind == internal.types.Char_Filter_Kind.property {
@@ -173,14 +173,14 @@ func matches(self: internal.types.Char_Filter, cp: char) -> bool {
     }
 
     if self.kind == internal.types.Char_Filter_Kind.block {
-        return cast[u32] internal.charinfo.block(cp) == self.lo
+        return cast[u32](internal.charinfo.block(cp)) == self.lo
     }
 
     if self.kind == internal.types.Char_Filter_Kind.eaw {
-        return cast[u32] internal.properties.east_asian_width(cp) == self.lo
+        return cast[u32](internal.properties.east_asian_width(cp)) == self.lo
     }
 
-    return cast[u32] cp >= self.lo and cast[u32] cp <= self.hi
+    return cast[u32](cp) >= self.lo and cast[u32](cp) <= self.hi
 }
 
 private func filters_match(fv: List[internal.types.Char_Filter], n: uint,
@@ -244,7 +244,7 @@ func ranges(self: internal.types.Char_Filter)
 
             var i: u32 = 0
             while i < generated.blocks.block_count {
-                if cast[u32] generated.blocks.block_ids(i) == want {
+                if cast[u32](generated.blocks.block_ids(i)) == want {
                     internal.runebuf.push(acc,
                         cast[char] generated.blocks.block_ranges(i, 0))
                     internal.runebuf.push(acc,
@@ -283,8 +283,8 @@ func ranges(self: internal.types.Char_Filter)
 
     var i: uint = 0
     while i < runs {
-        pv[i] = (lo = acc.data[cast[u32] i * 2],
-                 hi = acc.data[cast[u32] i * 2 + 1])
+        pv[i] = (lo = acc.data[cast[u32](i) * 2],
+                 hi = acc.data[cast[u32](i) * 2 + 1])
         i += 1
     }
 
@@ -328,10 +328,10 @@ func char_query_any(filters: List[internal.types.Char_Filter]) -> List[char] {
 private func name_index_word(word: u32) -> u32 {
     let b: u32 = word * 4
 
-    return cast[u32] generated.names.name_index[b] |
-        (cast[u32] generated.names.name_index[b + 1] << 8) |
-        (cast[u32] generated.names.name_index[b + 2] << 16) |
-        (cast[u32] generated.names.name_index[b + 3] << 24)
+    return cast[u32](generated.names.name_index[b]) |
+        (cast[u32](generated.names.name_index[b + 1]) << 8) |
+        (cast[u32](generated.names.name_index[b + 2]) << 16) |
+        (cast[u32](generated.names.name_index[b + 3]) << 24)
 }
 
 private func name_index(off: u32) -> string {
@@ -373,10 +373,10 @@ func char_name(cp: char) -> string? {
 private func by_name_word(word: u32) -> u32 {
     let b: u32 = word * 4
 
-    return cast[u32] generated.names.name_by_name[b] |
-        (cast[u32] generated.names.name_by_name[b + 1] << 8) |
-        (cast[u32] generated.names.name_by_name[b + 2] << 16) |
-        (cast[u32] generated.names.name_by_name[b + 3] << 24)
+    return cast[u32](generated.names.name_by_name[b]) |
+        (cast[u32](generated.names.name_by_name[b + 1]) << 8) |
+        (cast[u32](generated.names.name_by_name[b + 2]) << 16) |
+        (cast[u32](generated.names.name_by_name[b + 3]) << 24)
 }
 
 private func name_order(a: string, b: string) -> i32 {
@@ -463,7 +463,7 @@ func block_by_name(name: string) -> internal.types.Block? {
 
 func gc_name(gc: internal.types.Gc) -> string {
     var got: string = "??"
-    if cast[uint] gc < gc_names.len() {
+    if cast[uint](gc) < gc_names.len() {
         got = gc_names[cast[uint] gc]
     }
 

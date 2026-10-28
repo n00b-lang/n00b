@@ -35,6 +35,8 @@ typedef enum {
     CORE_DIAG_PART_SPAN,
     CORE_DIAG_PART_NOTE,
     CORE_DIAG_PART_HELP,
+    CORE_DIAG_PART_MARK,
+    CORE_DIAG_PART_FIX,
 } core_diag_part_kind_t;
 
 typedef struct {
@@ -113,6 +115,10 @@ void core_diag_secondary_path(core_diagnostics_t *diagnostics,
                               core_string_t text);
 void core_diag_note(core_diagnostics_t *diagnostics, core_string_t text);
 void core_diag_help(core_diagnostics_t *diagnostics, core_string_t text);
+void core_diag_mark(core_diagnostics_t *diagnostics,
+                    core_diag_location_t location);
+void core_diag_fix(core_diagnostics_t *diagnostics,
+                   core_diag_location_t location, core_string_t lines);
 bool core_diagnostic_set_label(core_diagnostics_t *diagnostics, size_t index,
                                core_string_t text);
 bool core_diagnostic_add_part(core_diagnostics_t *diagnostics, size_t index,

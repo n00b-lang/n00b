@@ -77,7 +77,7 @@ func total(c: bool) -> uint {
     let extra: uint = if c { -> 1 } else { -> 0 }
     let small: u8 = if c { -> if c { -> 7 } else { -> 8 } } else { -> 0 }
     let s: u8 = branch_narrow(if c { -> 4 } else { -> 1 })
-    return n + extra + cast[uint] small + cast[uint] s + branch_pick(c, 3)
+    return n + extra + cast[uint](small) + cast[uint](s) + branch_pick(c, 3)
 }
 
 require total(true) == 15

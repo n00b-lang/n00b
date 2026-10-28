@@ -212,7 +212,7 @@ record Cell {
 }
 
 func weight(c: Cell) -> int {
-    return cast[int] c.width + cast[int] byte_len(c.label)
+    return cast[int](c.width) + cast[int] byte_len(c.label)
 }
 
 func cell_total() -> int {

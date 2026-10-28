@@ -385,7 +385,7 @@ func end_row(modify self: Table) {
     if !self.cols_locked {
         if num_cols == 0 {
             let row_cols: i64 = current_row_col_count(self)
-            while cast[i64] self.col_specs.len() < row_cols {
+            while cast[i64](self.col_specs.len()) < row_cols {
                 let spec: Table_Col_Spec = (mode = Col_Mode.fit, min = nil,
                                             max = nil, pref = nil,
                                             flex_multiple = 1, priority = 0,
@@ -412,7 +412,7 @@ func end_row(modify self: Table) {
         }
         used += cast[i64] cell.col_span
     }
-    if self.max_rows > 0 and cast[i64] self.rows.len() >= self.max_rows {
+    if self.max_rows > 0 and cast[i64](self.rows.len()) >= self.max_rows {
         let slot: i64 = self.total_added % self.max_rows
         self.rows[cast[int] slot] = self.current_row
         self.ring_base = (self.total_added + 1) % self.max_rows
@@ -504,7 +504,7 @@ func row_index(self: Table, requested_row: uint)
     if row >= n {
         fail Container_Err.range
     }
-    if self.max_rows > 0 and cast[i64] n >= self.max_rows {
+    if self.max_rows > 0 and cast[i64](n) >= self.max_rows {
         row = cast[uint]((self.ring_base + cast[i64] row) % self.max_rows)
     }
     return self.rows[cast[int] row]
@@ -552,7 +552,7 @@ func put_cell(modify self: Table, row: uint, cell_ix: uint, cell: Table_Cell)
     }
     row_val.cells[cast[int] cell_ix] = cell
     var slot: uint = row
-    if self.max_rows > 0 and cast[i64] self.rows.len() >= self.max_rows {
+    if self.max_rows > 0 and cast[i64](self.rows.len()) >= self.max_rows {
         slot = cast[uint]((self.ring_base + cast[i64] row) % self.max_rows)
     }
     self.rows[cast[int] slot] = row_val

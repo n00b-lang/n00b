@@ -26,27 +26,27 @@ enum Norm_Form {
 }
 
 private inline func hangul_is_syllable(cp: char) -> bool {
-    return cast[u32] cp >= hangul_s_base and
-        cast[u32] cp < hangul_s_base + hangul_s_count
+    return cast[u32](cp) >= hangul_s_base and
+        cast[u32](cp) < hangul_s_base + hangul_s_count
 }
 
 private inline func hangul_is_l(cp: char) -> bool {
-    return cast[u32] cp >= hangul_l_base and
-        cast[u32] cp < hangul_l_base + hangul_l_count
+    return cast[u32](cp) >= hangul_l_base and
+        cast[u32](cp) < hangul_l_base + hangul_l_count
 }
 
 private inline func hangul_is_v(cp: char) -> bool {
-    return cast[u32] cp >= hangul_v_base and
-        cast[u32] cp < hangul_v_base + hangul_v_count
+    return cast[u32](cp) >= hangul_v_base and
+        cast[u32](cp) < hangul_v_base + hangul_v_count
 }
 
 private inline func hangul_is_t(cp: char) -> bool {
-    return hangul_t_base < cast[u32] cp and
-        cast[u32] cp < hangul_t_base + hangul_t_count
+    return hangul_t_base < cast[u32](cp) and
+        cast[u32](cp) < hangul_t_base + hangul_t_count
 }
 
 private func hangul_decompose(cp: char, modify out: Array[char]) -> i32 {
-    let s_index: u32 = cast[u32] cp - hangul_s_base
+    let s_index: u32 = cast[u32](cp) - hangul_s_base
     let l: u32 = hangul_l_base + s_index / hangul_n_count
     let v: u32 = hangul_v_base +
         (s_index % hangul_n_count) / hangul_t_count
@@ -66,18 +66,18 @@ private func hangul_decompose(cp: char, modify out: Array[char]) -> i32 {
 
 private func hangul_compose(a: char, b: char) -> char {
     if hangul_is_l(a) and hangul_is_v(b) {
-        let l_index: u32 = cast[u32] a - hangul_l_base
-        let v_index: u32 = cast[u32] b - hangul_v_base
+        let l_index: u32 = cast[u32](a) - hangul_l_base
+        let v_index: u32 = cast[u32](b) - hangul_v_base
 
         return cast[char] (hangul_s_base +
             (l_index * hangul_v_count + v_index) * hangul_t_count)
     }
 
     if hangul_is_syllable(a) {
-        let s_index: u32 = cast[u32] a - hangul_s_base
+        let s_index: u32 = cast[u32](a) - hangul_s_base
 
         if s_index % hangul_t_count == 0 and hangul_is_t(b) {
-            return cast[char] (cast[u32] a + (cast[u32] b - hangul_t_base))
+            return cast[char] (cast[u32](a) + (cast[u32](b) - hangul_t_base))
         }
     }
 
@@ -139,11 +139,11 @@ private func get_compat_decomp(cp: char, modify out: Array[char]) -> i32 {
 private func compose_pair(a: char, b: char) -> char {
     let h: char = hangul_compose(a, b)
 
-    if cast[u32] h != 0 {
+    if cast[u32](h) != 0 {
         return h
     }
 
-    let key: u64 = (cast[u64] cast[u32] a << 21) | cast[u64] cast[u32] b
+    let key: u64 = (cast[u64](cast[u32] a) << 21) | cast[u64] cast[u32] b
     let slot: u32 = cast[u32] (key %
         cast[u64] generated.composition.comp_table_size)
 
@@ -157,7 +157,7 @@ private func compose_pair(a: char, b: char) -> char {
             return cast[char] 0
         }
 
-        if generated.composition.comp_starter(ix) == cast[u32] a and
+        if generated.composition.comp_starter(ix) == cast[u32](a) and
             generated.composition.comp_combining(ix) == cast[u32] b {
             return cast[char] generated.composition.comp_result(ix)
         }
@@ -299,7 +299,7 @@ private func canonical_compose(modify b: internal.runebuf.Char_Buf) {
             if !blocked {
                 let composed: char = compose_pair(b.data[starter_ix], cp)
 
-                if cast[u32] composed != 0 {
+                if cast[u32](composed) != 0 {
                     b.data[starter_ix] = composed
                     absorbed = true
                 }
@@ -335,7 +335,7 @@ private func decompose_string(s: string, modify b: internal.runebuf.Char_Buf,
     let len: uint = byte_len(s)
     var pos: u32 = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         try {
             decompose_into(internal.encoding.utf8_decode(s, pos)!, b, compat)
         } fail(failure) {
@@ -392,7 +392,7 @@ private func nqc_lookup(cp: char) -> u8 {
     }
 
     return generated.normprops.nqc_stage2[
-        cast[u32] generated.normprops.nqc_stage1(v >> 8) * 256 + (v & 0xff)]
+        cast[u32](generated.normprops.nqc_stage1(v >> 8)) * 256 + (v & 0xff)]
 }
 
 func is_nfc(s: string) -> bool {
@@ -406,7 +406,7 @@ func is_nfc(s: string) -> bool {
     var last_ccc: u8 = 0
     var maybe: bool = false
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         var cp: char = cast[char] 0
 
         try {
@@ -466,7 +466,7 @@ func is_nfd(s: string) -> bool {
     var pos: u32 = 0
     var last_ccc: u8 = 0
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         var cp: char = cast[char] 0
 
         try {

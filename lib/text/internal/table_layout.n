@@ -99,7 +99,7 @@ private func scan_column_preferences(table: internal.table.Table, width: i64)
     }
     var specs: List[internal.table.Table_Col_Spec] =
         sys.abi.list_with_length(cloned, n_specs)
-    let lr_pad: i64 = cast[i64] table.default_cell_props.pad_left +
+    let lr_pad: i64 = cast[i64](table.default_cell_props.pad_left) +
         cast[i64] table.default_cell_props.pad_right
     let n_rows: i64 = cast[i64] internal.table.row_count(table)
     let n_cols: i64 = cast[i64] internal.table.col_count(table)
@@ -237,7 +237,7 @@ private func compute_row_heights(modify table: internal.table.Table) {
                 internal.table.resolve_cell_props(table, r, cast[uint] col_ix,
                                                   cell = cell)
             var content_w: i64 = cell_width(table, col_ix, span) -
-                cast[i64] props.pad_left - cast[i64] props.pad_right
+                cast[i64](props.pad_left) - cast[i64] props.pad_right
             if content_w < 1 {
                 content_w = 1
             }
@@ -255,7 +255,7 @@ private func compute_row_heights(modify table: internal.table.Table) {
             if n_lines < 1 {
                 n_lines = 1
             }
-            let total_h: i64 = n_lines + cast[i64] props.pad_top +
+            let total_h: i64 = n_lines + cast[i64](props.pad_top) +
                 cast[i64] props.pad_bottom
             if total_h > max_h {
                 max_h = total_h

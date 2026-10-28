@@ -47,7 +47,7 @@ func body_of(s: string) -> Ref[text.Rich_Body] {
 }
 
 func is_rich(s: string) -> bool {
-    return cast[u64] tag(s) == str_tag_rich
+    return cast[u64](tag(s)) == str_tag_rich
 }
 
 func one_record() -> List[text.Style_Record] {
@@ -597,9 +597,9 @@ func transcode_probe() -> string? {
         return "1"
     }
 
-    if cps.len() != 4 or cp_index(cps, 0) != cast[char] 0x41 or
-       cp_index(cps, 1) != cast[char] 0x00e9 or
-       cp_index(cps, 2) != cast[char] 0x4e16 or
+    if cps.len() != 4 or cp_index(cps, 0) != cast[char](0x41) or
+       cp_index(cps, 1) != cast[char](0x00e9) or
+       cp_index(cps, 2) != cast[char](0x4e16) or
        cp_index(cps, 3) != cast[char] 0x1f600 {
         return "2"
     }
@@ -762,7 +762,7 @@ func unicode_encoding_probe() -> string? {
     var walked: bool = false
     try {
         walked = unicode.utf8_decode(mixed, pos)! == 'A' and
-                 unicode.utf8_decode(mixed, pos)! == cast[char] 0x00e9 and
+                 unicode.utf8_decode(mixed, pos)! == cast[char](0x00e9) and
                  unicode.utf8_decode(mixed, pos)! == cast[char] 0x4e16
     } fail(e) {
         walked = false
@@ -994,7 +994,7 @@ func unicode_encoding_probe() -> string? {
 
     let pair: unicode.Char_Pair = ri[0]
 
-    if pair.lo != cast[char] 0x1f1e6 or pair.hi != cast[char] 0x1f1ff {
+    if pair.lo != cast[char](0x1f1e6) or pair.hi != cast[char] 0x1f1ff {
         return "35"
     }
 
@@ -1132,7 +1132,7 @@ func unicode_encoding_probe() -> string? {
         return "53"
     }
 
-    if lba[1] != cast[u8] unicode.Lb_Action.none or
+    if lba[1] != cast[u8](unicode.Lb_Action.none) or
        lba[3] != cast[u8] unicode.Lb_Action.allowed {
         return "54"
     }
@@ -1350,7 +1350,7 @@ let all_themes: Array[text.Border_Theme] = [
 ]
 
 func glyph_set(c: char) -> bool {
-    return cast[u32] c != 0
+    return cast[u32](c) != 0
 }
 
 func border_probe_main() {
@@ -1366,21 +1366,21 @@ func border_probe_main() {
               glyph_set(t.right_t), "border_probe", "2")
         i += 1
     }
-    check(cast[u32] text.border_plain.horizontal == 0x2500 and
-          cast[u32] text.border_plain.vertical == 0x2502 and
-          cast[u32] text.border_plain.upper_left == 0x250c and
-          cast[u32] text.border_plain.cross == 0x253c, "border_probe", "3")
-    check(cast[u32] text.border_double.horizontal == 0x2550 and
-          cast[u32] text.border_double.cross == 0x256c, "border_probe", "4")
-    check(cast[u32] text.border_rounded.upper_left == 0x256d and
-          cast[u32] text.border_rounded.lower_right == 0x256f, "border_probe", "5")
+    check(cast[u32](text.border_plain.horizontal) == 0x2500 and
+          cast[u32](text.border_plain.vertical) == 0x2502 and
+          cast[u32](text.border_plain.upper_left) == 0x250c and
+          cast[u32](text.border_plain.cross) == 0x253c, "border_probe", "3")
+    check(cast[u32](text.border_double.horizontal) == 0x2550 and
+          cast[u32](text.border_double.cross) == 0x256c, "border_probe", "4")
+    check(cast[u32](text.border_rounded.upper_left) == 0x256d and
+          cast[u32](text.border_rounded.lower_right) == 0x256f, "border_probe", "5")
     check(text.border_ascii.horizontal == '-' and
           text.border_ascii.vertical == '|' and
           text.border_ascii.upper_left == '/' and
           text.border_ascii.upper_right == '\\' and
           text.border_ascii.cross == '+', "border_probe", "6")
     check(text.Border_Set.sides == text.Border_Set.left + text.Border_Set.right
-          and cast[u64] text.Border_Set.all == 0x3f, "border_probe", "7")
+          and cast[u64](text.Border_Set.all) == 0x3f, "border_probe", "7")
 }
 
 var rs_body: text.Rich_Body = (s = "hello world", style_info = one_record(),
@@ -1403,7 +1403,7 @@ func rich_static_checks() {
     let plain: string = builtin.text("not rich")
     check(!is_rich(plain) and byte_len(plain) == 8, "rich_static_probe", "8")
     check(byte_len(rs) == 11 and byte_len(rs_outer) == 11, "rich_static_probe", "9")
-    check(byte_at(rs, 0) == cast[u8] 'h' and byte_at(rs_outer, 0) == cast[u8] 'h',
+    check(byte_at(rs, 0) == cast[u8]('h') and byte_at(rs_outer, 0) == cast[u8] 'h',
           "rich_static_probe", "10")
     check(byte_len(buffer_from_string(rs_outer)) == 11, "rich_static_probe", "11")
 }
@@ -1864,7 +1864,7 @@ func check_utf8_units() {
     } fail(failure) {
         -> '\0'
     }
-    check(cast[u32] cp == 0x4e16, "text_string_probe", "11")
+    check(cast[u32](cp) == 0x4e16, "text_string_probe", "11")
     check(same_opt(slice_of(s, 1, 3, text.Index_Unit.char), "世z"),
           "text_string_probe", "12")
     check(index_of(s, 3, text.Index_Unit.char) == nil, "text_string_probe", "30")
@@ -2184,8 +2184,8 @@ func style_fields_probe_main() {
     check(plain_s.hash() != opaque_s.hash(), "style_fields_probe", "6")
     check(plain_s == plain_s and plain_s.hash() == plain_s.hash(), "style_fields_probe", "7")
 
-    check(cast[u64] tag(bold_outer_body.s) == str_tag_rich and
-          cast[u64] tag(italic_outer_body.s) == str_tag_rich, "style_fields_probe", "900")
+    check(cast[u64](tag(bold_outer_body.s)) == str_tag_rich and
+          cast[u64](tag(italic_outer_body.s)) == str_tag_rich, "style_fields_probe", "900")
     check(bold_outer != italic_outer and
           bold_outer.hash() != italic_outer.hash(), "style_fields_probe", "900")
 }
@@ -2243,7 +2243,7 @@ func rich_repr_probe_main() {
     check(repr_of(shrt) == "hi", "rich_repr_probe", "1")
 
     let lng: string = "abcdefghijklmnopqrstuvwxyz"
-    check(cast[u64] tag(lng) == str_tag_long, "rich_repr_probe", "2")
+    check(cast[u64](tag(lng)) == str_tag_long, "rich_repr_probe", "2")
     check(repr_of(lng) == "abcdefghijklmnopqrstuvwxyz", "rich_repr_probe", "3")
 
     let slice: string = byte_slice(lng, 3, 8)

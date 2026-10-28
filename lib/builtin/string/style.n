@@ -347,7 +347,7 @@ private func cmp_opt_style(left: Text_Style?, right: Text_Style?) -> int {
 }
 
 private func is_rich(s: string) -> bool {
-    return cast[u64] string.core.tag(s) == string.core.str_tag_rich
+    return cast[u64](string.core.tag(s)) == string.core.str_tag_rich
 }
 
 private func rich_body(s: string) -> Ref[Rich_Body] {
@@ -470,7 +470,7 @@ private func hash_opt_i8(o: i8?) -> u128 {
         let zero: u64 = 0
         return zero.hash()
     }
-    let word: u64 = cast[u64] unsafe_cast[u8] o.get() + 1
+    let word: u64 = cast[u64](unsafe_cast[u8] o.get()) + 1
     return word.hash()
 }
 
@@ -479,7 +479,7 @@ private func hash_opt_i16(o: i16?) -> u128 {
         let zero: u64 = 0
         return zero.hash()
     }
-    let word: u64 = cast[u64] unsafe_cast[u16] o.get() + 1
+    let word: u64 = cast[u64](unsafe_cast[u16] o.get()) + 1
     return word.hash()
 }
 
@@ -488,7 +488,7 @@ private func hash_opt_color(o: Color?) -> u128 {
         let zero: u64 = 0
         return zero.hash()
     }
-    let word: u64 = cast[u64] unsafe_cast[u32] o.get() + 1
+    let word: u64 = cast[u64](unsafe_cast[u32] o.get()) + 1
     return word.hash()
 }
 
@@ -501,8 +501,8 @@ private func hash_style(s: Text_Style) -> u128 {
         (tri_rank(s.reverse) << 10) |
         (tri_rank(s.dim) << 12) |
         (tri_rank(s.blink) << 14) |
-        (cast[u64] s.text_case << 16) |
-        (cast[u64] s.font_hint << 19)
+        (cast[u64](s.text_case) << 16) |
+        (cast[u64](s.font_hint) << 19)
     var acc: u128 = packed.hash()
     acc = hash_chain(acc, hash_opt_i8(s.font_index))
     acc = hash_chain(acc, hash_opt_i8(s.fg_palette_ix))
@@ -574,12 +574,12 @@ private func format_style_tag(fd: int, tag: string, closing: bool)
 }
 
 private func opens_here(r: Style_Record, pos: u64) -> bool {
-    return r.start_ix != nil and cast[u64] r.start_ix.get_or_else(0) == pos and
+    return r.start_ix != nil and cast[u64](r.start_ix.get_or_else(0)) == pos and
         r.style_tag != nil
 }
 
 private func closes_here(r: Style_Record, pos: u64) -> bool {
-    return r.end_ix != nil and cast[u64] r.end_ix.get_or_else(0) == pos and
+    return r.end_ix != nil and cast[u64](r.end_ix.get_or_else(0)) == pos and
         r.start_ix != nil and r.style_tag != nil
 }
 
@@ -645,7 +645,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
             let r: Style_Record = body.style_info[j]
             j += 1
             if !opens_here(r, i) or r.end_ix == nil or
-                cast[u64] r.end_ix.get_or_else(0) != best {
+                cast[u64](r.end_ix.get_or_else(0)) != best {
                 continue
             }
             out += format_style_tag(fd, r.style_tag.get_or_else(""), false)!
@@ -657,7 +657,7 @@ private func level_opens(fd: int, body: Ref[Rich_Body], pos: u64)
     while k < nrec {
         let r: Style_Record = body.style_info[k]
         k += 1
-        if r.start_ix != nil and cast[u64] r.start_ix.get_or_else(0) == i and
+        if r.start_ix != nil and cast[u64](r.start_ix.get_or_else(0)) == i and
             sub_arm(r.substitution) != sub_arm_none {
             out += format_substitution(fd, r)!
         }
@@ -699,7 +699,7 @@ private func level_closes(fd: int, body: Ref[Rich_Body], pos: u64)
             let r: Style_Record = body.style_info[j]
             j += 1
             if closes_here(r, i) and
-                cast[u64] r.start_ix.get_or_else(0) == best {
+                cast[u64](r.start_ix.get_or_else(0)) == best {
                 out += format_style_tag(fd, r.style_tag.get_or_else(""),
                                         true)!
             }
@@ -1127,7 +1127,7 @@ private func classify_tag(modify segments: List[Markup_Segment],
         var k: uint = 1
         while k < len {
             if string.core.byte_at(tag, k) == 0x3a {
-                format_spec = string.core.byte_slice(tag, cast[int] k + 1,
+                format_spec = string.core.byte_slice(tag, cast[int](k) + 1,
                                                      cast[int] len)
                 spec_len = k - 1
                 break
@@ -1175,7 +1175,7 @@ private func classify_tag(modify segments: List[Markup_Segment],
             return
         }
         segments.append(segment(Markup_Kind.subst, at, tag,
-            name = string.core.byte_slice(tag, 1, cast[int] spec_len + 1),
+            name = string.core.byte_slice(tag, 1, cast[int](spec_len) + 1),
             format_spec = format_spec))
         return
     }
@@ -1378,7 +1378,7 @@ private func build_style_records(segments: List[Markup_Segment])
                 pending.append(opened)
             }
             case Markup_Kind.prop_off, Markup_Kind.case_off, Markup_Kind.style_off, Markup_Kind.role_off {
-                var j: int = cast[int] pending.len() - 1
+                var j: int = cast[int](pending.len()) - 1
                 while j >= 0 {
                     if closes_pending(pending[j], seg) {
                         records.append(span_record(pending[j], seg.at))

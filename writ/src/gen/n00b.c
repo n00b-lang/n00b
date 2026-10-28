@@ -3691,7 +3691,7 @@ emit_export_holds(const n00b_t *g, writ_emit_t *emit)
     writ_emit_line(emit, "");
     writ_emit_open(emit, "func __export_text(text: string) -> uint");
     writ_emit_line(emit, "let source: Array[u8] = __text_byte_array(text)");
-    writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int]source.len() + 1)");
+    writ_emit_line(emit, "var bytes: Array[u8] = new[Array[u8]](cast[int](source.len()) + 1)");
     writ_emit_line(emit, "var k: uint = 0");
     writ_emit_open(emit, "while k < source.len()");
     writ_emit_line(emit, "bytes[k] = source[k]");

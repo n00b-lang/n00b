@@ -463,7 +463,7 @@ func array_backing_offset(type_index: u32,
         return 0
     }
 
-    return (descriptor_bytes + data_alignment - 1) / data_alignment * data_alignment
+    return ((descriptor_bytes + data_alignment - 1) / data_alignment) * data_alignment
 }
 
 func initialize_array_backing(payload      : Ref[byte],
@@ -500,7 +500,7 @@ func initialize_array_backing(payload      : Ref[byte],
         if alignment == 0 or element_bytes > ~cast[uint](0) - alignment + 1 {
             return false
         }
-        let stride: uint = (element_bytes + alignment - 1) / alignment * alignment
+        let stride: uint = ((element_bytes + alignment - 1) / alignment) * alignment
 
         if stride == 0 or shape.total_count > cast[uint]((payload_bytes - offset) / stride) {
             return false
@@ -867,7 +867,7 @@ func block_init(heap: Ref[Heap], blk: Ref[Block_Metadata]) {
     __atomic_store(ref blk.nfinal, 0)
     __atomic_store(ref blk.in_final, false)
 
-    let invalid_mark: u8 = cast[u8]((cast[uint]heap.epoch + 128) % 256)
+    let invalid_mark: u8 = cast[u8]((cast[uint](heap.epoch) + 128) % 256)
 
     __gc_memset(ref blk.line_marks[0],
                 cast[byte](invalid_mark),

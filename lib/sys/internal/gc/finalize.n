@@ -149,8 +149,8 @@ func dead_in_block(marker: Ref[internal.gc.core.Marker],
     let heap:       Ref[internal.gc.core.Heap] = marker.heap
     let epoch:      u32                  = heap.mark_epoch
     let have_marks: bool                 = __atomic_load(ref block.mark_epoch) == epoch
-    let first:      uint                 = internal.gc.core.header_lines() * internal.gc.core.line_bytes / internal.gc.core.granule_bytes / internal.gc.core.word_bits
-    let words:      uint                 = internal.gc.core.block_bytes / internal.gc.core.granule_bytes / internal.gc.core.word_bits
+    let first:      uint                 = (internal.gc.core.header_lines() * internal.gc.core.line_bytes / internal.gc.core.granule_bytes) / internal.gc.core.word_bits
+    let words:      uint                 = (internal.gc.core.block_bytes / internal.gc.core.granule_bytes) / internal.gc.core.word_bits
     let base:       Ref[byte]            = internal.gc.core.block_base(block)
     var index:      uint                 = first
     while index < words {

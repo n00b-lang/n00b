@@ -533,13 +533,13 @@
 <and-op> ::= %"and" | %"&&"
 
 <equality-expr> @emit("binary", $0, $2) @infer("bool") ::=
-    <compare-expr> <equality-op> <compare-expr>
+    <equality-expr> <equality-op> <compare-expr>
 <equality-expr> @emit("identity", $0) ::= <compare-expr>
 <equality-op> ::= %"=="
                 | %"!="
 
 <compare-expr> @emit("binary", $0, $2) @infer("compare($0, $2, __cmp, Comparison)") ::=
-    <bitor-expr> <compare-op> <bitor-expr>
+    <compare-expr> <compare-op> <bitor-expr>
 <compare-expr> @emit("identity", $0) ::= <bitor-expr>
 <compare-op> ::= %"<"
                | %"<="

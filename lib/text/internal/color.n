@@ -3,19 +3,19 @@ enum Color_Depth {
 }
 
 func color_red(c: Color) -> u8 {
-    return cast[u8]((unsafe_cast[u32] c >> 16) & 0xff)
+    return cast[u8]((unsafe_cast[u32](c) >> 16) & 0xff)
 }
 
 func color_green(c: Color) -> u8 {
-    return cast[u8]((unsafe_cast[u32] c >> 8) & 0xff)
+    return cast[u8]((unsafe_cast[u32](c) >> 8) & 0xff)
 }
 
 func color_blue(c: Color) -> u8 {
-    return cast[u8](unsafe_cast[u32] c & 0xff)
+    return cast[u8](unsafe_cast[u32](c) & 0xff)
 }
 
 func color_rgb(r: u8, g: u8, b: u8) -> Color {
-    return cast[Color]((cast[u32] r << 16) | (cast[u32] g << 8) | cast[u32] b)
+    return cast[Color]((cast[u32](r) << 16) | (cast[u32](g) << 8) | cast[u32] b)
 }
 
 private const cube_levels: Array[i32] = [0, 95, 135, 175, 215, 255]
@@ -24,7 +24,7 @@ private func cube_index(v: u8) -> u8 {
     var best: u8 = 0
     var best_dist: i32 = 0x7fffffff
     for i: u8 from 0 until 6 {
-        var d: i32 = cast[i32] v - cube_levels[i]
+        var d: i32 = cast[i32](v) - cube_levels[i]
         if d < 0 {
             d = -d
         }
@@ -53,7 +53,7 @@ func color_quantize_256(c: Color) -> u8 {
     let bi: u8 = cube_index(b)
     let cube_dist: i32 = dist_squared(r, g, b, cube_levels[ri],
                                       cube_levels[gi], cube_levels[bi])
-    let avg: i32 = (cast[i32] r + cast[i32] g + cast[i32] b) / 3
+    let avg: i32 = (cast[i32](r) + cast[i32](g) + cast[i32] b) / 3
     var gi2: i32 = (avg - 8) / 10
     if gi2 < 0 {
         gi2 = 0

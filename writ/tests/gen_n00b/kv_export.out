@@ -270,7 +270,7 @@ func __export_same(left: Array[u8], right: Array[u8]) -> bool {
 
 func __export_text(text: string) -> uint {
     let source: Array[u8] = __text_byte_array(text)
-    var bytes: Array[u8] = new[Array[u8]](cast[int]source.len() + 1)
+    var bytes: Array[u8] = new[Array[u8]](cast[int](source.len()) + 1)
     var k: uint = 0
     while k < source.len() {
         bytes[k] = source[k]

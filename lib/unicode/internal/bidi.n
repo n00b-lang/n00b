@@ -19,8 +19,8 @@ record Bidi {
 }
 
 private func is_isolate_init(t: u8) -> bool {
-    return t == cast[u8] internal.types.Bidi_Class.lri or
-        t == cast[u8] internal.types.Bidi_Class.rli or
+    return t == cast[u8](internal.types.Bidi_Class.lri) or
+        t == cast[u8](internal.types.Bidi_Class.rli) or
         t == cast[u8] internal.types.Bidi_Class.fsi
 }
 
@@ -42,7 +42,7 @@ private func determine_para_level(types: Array[u8], len: u32) -> u8 {
             return 0
         }
 
-        if t == cast[u8] internal.types.Bidi_Class.r or
+        if t == cast[u8](internal.types.Bidi_Class.r) or
             t == cast[u8] internal.types.Bidi_Class.al {
             return 1
         }
@@ -95,13 +95,13 @@ private func resolve_explicit(modify types: Array[u8], modify levels: Array[u8],
     while i < len {
         var kind: u8 = types[i]
 
-        if kind == cast[u8] internal.types.Bidi_Class.rle or
-            kind == cast[u8] internal.types.Bidi_Class.lre or
-            kind == cast[u8] internal.types.Bidi_Class.rlo or
+        if kind == cast[u8](internal.types.Bidi_Class.rle) or
+            kind == cast[u8](internal.types.Bidi_Class.lre) or
+            kind == cast[u8](internal.types.Bidi_Class.rlo) or
             kind == cast[u8] internal.types.Bidi_Class.lro {
             var new_level: u8 = 0
 
-            if kind == cast[u8] internal.types.Bidi_Class.rle or
+            if kind == cast[u8](internal.types.Bidi_Class.rle) or
                 kind == cast[u8] internal.types.Bidi_Class.rlo {
                 new_level = (cur_level + 1) | 1
             }
@@ -166,7 +166,7 @@ private func resolve_explicit(modify types: Array[u8], modify levels: Array[u8],
                                     seeking = false
                                 }
 
-                                if jt == cast[u8] internal.types.Bidi_Class.r or
+                                if jt == cast[u8](internal.types.Bidi_Class.r) or
                                     jt == cast[u8] internal.types.Bidi_Class.al {
                                     fsi_dir = cast[u8] internal.types.Bidi_Class.rli
                                     seeking = false
@@ -269,8 +269,8 @@ private func resolve_explicit(modify types: Array[u8], modify levels: Array[u8],
 
         levels[i] = cur_level
 
-        if cur_override != cast[u8] internal.types.Bidi_Class.on and
-            kind != cast[u8] internal.types.Bidi_Class.b and
+        if cur_override != cast[u8](internal.types.Bidi_Class.on) and
+            kind != cast[u8](internal.types.Bidi_Class.b) and
             kind != cast[u8] internal.types.Bidi_Class.bn {
             types[i] = cur_override
         }
@@ -281,13 +281,13 @@ private func resolve_explicit(modify types: Array[u8], modify levels: Array[u8],
 
 private func seq_type(types: Array[u8], seq: Array[u32], n: u32, k: u32,
                       sos: u8, eos: u8, delta: i32) -> u8 {
-    let j: i32 = cast[i32] k + delta
+    let j: i32 = cast[i32](k) + delta
 
     if j < 0 {
         return sos
     }
 
-    if cast[u32] j >= n {
+    if cast[u32](j) >= n {
         return eos
     }
 
@@ -322,8 +322,8 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
     while k < n {
         let t: u8 = types[seq[k]]
 
-        if t == cast[u8] internal.types.Bidi_Class.l or
-            t == cast[u8] internal.types.Bidi_Class.r or
+        if t == cast[u8](internal.types.Bidi_Class.l) or
+            t == cast[u8](internal.types.Bidi_Class.r) or
             t == cast[u8] internal.types.Bidi_Class.al {
             prev_strong = t
 
@@ -331,7 +331,7 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
             continue
         }
 
-        if t == cast[u8] internal.types.Bidi_Class.en and
+        if t == cast[u8](internal.types.Bidi_Class.en) and
             prev_strong == cast[u8] internal.types.Bidi_Class.al {
             types[seq[k]] = cast[u8] internal.types.Bidi_Class.an
         }
@@ -352,7 +352,7 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
     while k < n {
         let t: u8 = types[seq[k]]
 
-        if t != cast[u8] internal.types.Bidi_Class.es and
+        if t != cast[u8](internal.types.Bidi_Class.es) and
             t != cast[u8] internal.types.Bidi_Class.cs {
             k += 1
             continue
@@ -361,8 +361,8 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
         let pt: u8 = seq_type(types, seq, n, k, sos, eos, -1)
         let nt: u8 = seq_type(types, seq, n, k, sos, eos, 1)
 
-        if t == cast[u8] internal.types.Bidi_Class.es and
-            pt == cast[u8] internal.types.Bidi_Class.en and
+        if t == cast[u8](internal.types.Bidi_Class.es) and
+            pt == cast[u8](internal.types.Bidi_Class.en) and
             nt == cast[u8] internal.types.Bidi_Class.en {
             types[seq[k]] = cast[u8] internal.types.Bidi_Class.en
 
@@ -370,8 +370,8 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
             continue
         }
 
-        if t == cast[u8] internal.types.Bidi_Class.cs and pt == nt and
-            (pt == cast[u8] internal.types.Bidi_Class.en or
+        if t == cast[u8](internal.types.Bidi_Class.cs) and pt == nt and
+            (pt == cast[u8](internal.types.Bidi_Class.en) or
             pt == cast[u8] internal.types.Bidi_Class.an) {
             types[seq[k]] = pt
         }
@@ -398,7 +398,7 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
         if end < n {
             after = types[seq[end]]
         }
-        let is_en: bool = before == cast[u8] internal.types.Bidi_Class.en or
+        let is_en: bool = before == cast[u8](internal.types.Bidi_Class.en) or
             after == cast[u8] internal.types.Bidi_Class.en
 
         if is_en {
@@ -417,8 +417,8 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
     while k < n {
         let t: u8 = types[seq[k]]
 
-        if t == cast[u8] internal.types.Bidi_Class.es or
-            t == cast[u8] internal.types.Bidi_Class.et or
+        if t == cast[u8](internal.types.Bidi_Class.es) or
+            t == cast[u8](internal.types.Bidi_Class.et) or
             t == cast[u8] internal.types.Bidi_Class.cs {
             types[seq[k]] = cast[u8] internal.types.Bidi_Class.on
         }
@@ -432,7 +432,7 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
     while k < n {
         let t: u8 = types[seq[k]]
 
-        if t == cast[u8] internal.types.Bidi_Class.l or
+        if t == cast[u8](internal.types.Bidi_Class.l) or
             t == cast[u8] internal.types.Bidi_Class.r {
             last_strong = t
 
@@ -440,7 +440,7 @@ private func resolve_weak(modify types: Array[u8], seq: Array[u32], n: u32,
             continue
         }
 
-        if t == cast[u8] internal.types.Bidi_Class.en and
+        if t == cast[u8](internal.types.Bidi_Class.en) and
             last_strong == cast[u8] internal.types.Bidi_Class.l {
             types[seq[k]] = cast[u8] internal.types.Bidi_Class.l
         }
@@ -477,8 +477,8 @@ private func strong_class(t: u8) -> u8 {
         return cast[u8] internal.types.Bidi_Class.l
     }
 
-    if t == cast[u8] internal.types.Bidi_Class.r or
-        t == cast[u8] internal.types.Bidi_Class.an or
+    if t == cast[u8](internal.types.Bidi_Class.r) or
+        t == cast[u8](internal.types.Bidi_Class.an) or
         t == cast[u8] internal.types.Bidi_Class.en {
         return cast[u8] internal.types.Bidi_Class.r
     }
@@ -487,11 +487,11 @@ private func strong_class(t: u8) -> u8 {
 }
 
 private func canonical_bracket(cp: char) -> char {
-    if cast[u32] cp == 0x3008 {
+    if cast[u32](cp) == 0x3008 {
         return cast[char] 0x2329
     }
 
-    if cast[u32] cp == 0x3009 {
+    if cast[u32](cp) == 0x3009 {
         return cast[char] 0x232a
     }
 
@@ -662,7 +662,7 @@ private func resolve_brackets(cps: Array[char], modify types: Array[u8],
 
             k = open_ix + 1
             while k < n and
-                cast[u8] internal.charinfo.bidi_class(cps[seq[k]]) ==
+                cast[u8](internal.charinfo.bidi_class(cps[seq[k]])) ==
                 cast[u8] internal.types.Bidi_Class.nsm {
                 types[seq[k]] = resolved
                 k += 1
@@ -670,7 +670,7 @@ private func resolve_brackets(cps: Array[char], modify types: Array[u8],
 
             k = close_ix + 1
             while k < n and
-                cast[u8] internal.charinfo.bidi_class(cps[seq[k]]) ==
+                cast[u8](internal.charinfo.bidi_class(cps[seq[k]])) ==
                 cast[u8] internal.types.Bidi_Class.nsm {
                 types[seq[k]] = resolved
                 k += 1
@@ -682,10 +682,10 @@ private func resolve_brackets(cps: Array[char], modify types: Array[u8],
 }
 
 private func is_neutral(t: u8) -> bool {
-    return t == cast[u8] internal.types.Bidi_Class.b or
-        t == cast[u8] internal.types.Bidi_Class.s or
-        t == cast[u8] internal.types.Bidi_Class.ws or
-        t == cast[u8] internal.types.Bidi_Class.on or is_isolate_init(t) or
+    return t == cast[u8](internal.types.Bidi_Class.b) or
+        t == cast[u8](internal.types.Bidi_Class.s) or
+        t == cast[u8](internal.types.Bidi_Class.ws) or
+        t == cast[u8](internal.types.Bidi_Class.on) or is_isolate_init(t) or
         t == cast[u8] internal.types.Bidi_Class.pdi
 }
 
@@ -751,15 +751,15 @@ private func resolve_implicit(types: Array[u8], modify levels: Array[u8],
                 levels[i] += 1
             }
             else {
-                if types[i] == cast[u8] internal.types.Bidi_Class.an or
+                if types[i] == cast[u8](internal.types.Bidi_Class.an) or
                     types[i] == cast[u8] internal.types.Bidi_Class.en {
                     levels[i] += 2
                 }
             }
         }
         else {
-            if types[i] == cast[u8] internal.types.Bidi_Class.l or
-                types[i] == cast[u8] internal.types.Bidi_Class.en or
+            if types[i] == cast[u8](internal.types.Bidi_Class.l) or
+                types[i] == cast[u8](internal.types.Bidi_Class.en) or
                 types[i] == cast[u8] internal.types.Bidi_Class.an {
                 levels[i] += 1
             }
@@ -770,20 +770,20 @@ private func resolve_implicit(types: Array[u8], modify levels: Array[u8],
 }
 
 private func is_l1_reset(t: u8) -> bool {
-    return t == cast[u8] internal.types.Bidi_Class.ws or is_isolate_init(t) or
-        t == cast[u8] internal.types.Bidi_Class.pdi or
-        t == cast[u8] internal.types.Bidi_Class.bn or
-        t == cast[u8] internal.types.Bidi_Class.lre or
-        t == cast[u8] internal.types.Bidi_Class.rle or
-        t == cast[u8] internal.types.Bidi_Class.lro or
-        t == cast[u8] internal.types.Bidi_Class.rlo or
+    return t == cast[u8](internal.types.Bidi_Class.ws) or is_isolate_init(t) or
+        t == cast[u8](internal.types.Bidi_Class.pdi) or
+        t == cast[u8](internal.types.Bidi_Class.bn) or
+        t == cast[u8](internal.types.Bidi_Class.lre) or
+        t == cast[u8](internal.types.Bidi_Class.rle) or
+        t == cast[u8](internal.types.Bidi_Class.lro) or
+        t == cast[u8](internal.types.Bidi_Class.rlo) or
         t == cast[u8] internal.types.Bidi_Class.pdf
 }
 
 private func run_sequences(cps: Array[char], modify types: Array[u8],
                            levels: Array[u8], orig: Array[u8], len: u32,
                            para_level: u8) {
-    var keep: Array[u32] = new[Array[u32]](cast[int] len + 1)
+    var keep: Array[u32] = new[Array[u32]](cast[int](len) + 1)
     var nk: u32 = 0
 
     var i: u32 = 0
@@ -814,7 +814,7 @@ private func run_sequences(cps: Array[char], modify types: Array[u8],
             open_ix += 1
         }
         else {
-            if orig[keep[i]] == cast[u8] internal.types.Bidi_Class.pdi and
+            if orig[keep[i]] == cast[u8](internal.types.Bidi_Class.pdi) and
                 open_ix > 0 {
                 pdi_matched[i] = true
                 open_ix -= 1
@@ -833,7 +833,7 @@ private func run_sequences(cps: Array[char], modify types: Array[u8],
             continue
         }
 
-        if orig[keep[start]] == cast[u8] internal.types.Bidi_Class.pdi and
+        if orig[keep[start]] == cast[u8](internal.types.Bidi_Class.pdi) and
             pdi_matched[start] {
             start += 1
             continue
@@ -970,7 +970,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
     if byte_len != 0 and is_text(s) {
         var pos: u32 = 0
 
-        while cast[uint] pos < byte_len {
+        while cast[uint](pos) < byte_len {
             try {
                 p.cps[p.len] = internal.encoding.utf8_decode(s, pos)!
             } fail(failure) {
@@ -1008,7 +1008,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
     while i < p.len {
         let orig_class: u8 = cast[u8] internal.charinfo.bidi_class(p.cps[i])
 
-        if orig_class == cast[u8] internal.types.Bidi_Class.s or
+        if orig_class == cast[u8](internal.types.Bidi_Class.s) or
             orig_class == cast[u8] internal.types.Bidi_Class.b {
             p.levels[i] = p.para_level
 
@@ -1037,7 +1037,7 @@ func bidi_open(s: string, para_level: u8? = nil) -> Bidi {
     while going and j > 0 {
         let ot: u8 = cast[u8] internal.charinfo.bidi_class(p.cps[j - 1])
 
-        if is_l1_reset(ot) or ot == cast[u8] internal.types.Bidi_Class.s or
+        if is_l1_reset(ot) or ot == cast[u8](internal.types.Bidi_Class.s) or
             ot == cast[u8] internal.types.Bidi_Class.b {
             p.levels[j - 1] = p.para_level
             j -= 1
@@ -1092,10 +1092,10 @@ func reorder_visual(self: Bidi) -> List[i32] {
         i = 0
 
         while i < self.len {
-            if cast[u32] self.levels[i] >= level {
+            if cast[u32](self.levels[i]) >= level {
                 let start: u32 = i
 
-                while i < self.len and cast[u32] self.levels[i] >= level {
+                while i < self.len and cast[u32](self.levels[i]) >= level {
                     i += 1
                 }
 

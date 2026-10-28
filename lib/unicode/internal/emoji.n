@@ -39,7 +39,7 @@ private func is_emoji_start(cp: char) -> bool {
 }
 
 private func take_char(s: string, modify pos: u32) -> char? {
-    if cast[uint] pos >= byte_len(s) {
+    if cast[uint](pos) >= byte_len(s) {
         return nil
     }
 
@@ -54,7 +54,7 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
     var out: Emoji_Scan = (kind = Emoji_Type.none, seq_bytes = 0)
     let len: uint = byte_len(s)
 
-    if cast[uint] byte_pos >= len or !is_text(s) {
+    if cast[uint](byte_pos) >= len or !is_text(s) {
         return out
     }
 
@@ -82,20 +82,20 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
     var save: u32 = pos
     let nxt: char? = take_char(s, pos)
 
-    if nxt != nil and cast[u32] nxt.get() == cp_vs16 {
+    if nxt != nil and cast[u32](nxt.get()) == cp_vs16 {
         result = Emoji_Type.presentation_seq
     }
     else {
         pos = save
     }
 
-    if (cast[u32] cp >= cast[u32] '0' and cast[u32] cp <= cast[u32] '9') or
-        cast[u32] cp == cast[u32] '#' or cast[u32] cp == cast[u32] '*' {
+    if (cast[u32](cp) >= cast[u32]('0') and cast[u32](cp) <= cast[u32] '9') or
+        cast[u32](cp) == cast[u32]('#') or cast[u32](cp) == cast[u32] '*' {
         save = pos
 
         let k1: char? = take_char(s, pos)
 
-        if k1 != nil and cast[u32] k1.get() == cp_keycap {
+        if k1 != nil and cast[u32](k1.get()) == cp_keycap {
             result = Emoji_Type.keycap
         }
         else {
@@ -118,13 +118,13 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
         }
     }
 
-    if cast[u32] cp >= cp_ri_first and cast[u32] cp <= cp_ri_last {
+    if cast[u32](cp) >= cp_ri_first and cast[u32](cp) <= cp_ri_last {
         save = pos
 
         let ri: char? = take_char(s, pos)
 
-        if ri != nil and cast[u32] ri.get() >= cp_ri_first and
-            cast[u32] ri.get() <= cp_ri_last {
+        if ri != nil and cast[u32](ri.get()) >= cp_ri_first and
+            cast[u32](ri.get()) <= cp_ri_last {
             result = Emoji_Type.flag
         }
         else {
@@ -135,7 +135,7 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
     var had_zwj: bool = false
     var scanning: bool = true
 
-    while scanning and cast[uint] pos < len {
+    while scanning and cast[uint](pos) < len {
         save = pos
 
         let n: char? = take_char(s, pos)
@@ -158,7 +158,7 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
                 var vs_save: u32 = pos
                 let vs: char? = take_char(s, vs_save)
 
-                if vs != nil and cast[u32] vs.get() == cp_vs16 {
+                if vs != nil and cast[u32](vs.get()) == cp_vs16 {
                     pos = vs_save
                 }
 
@@ -186,19 +186,19 @@ func emoji_scan(s: string, byte_pos: u32) -> Emoji_Scan {
         if next >= cp_tag_low and next <= cp_tag_high {
             var tagging: bool = true
 
-            while tagging and cast[uint] pos < len {
+            while tagging and cast[uint](pos) < len {
                 let tag_save: u32 = pos
                 let tg: char? = take_char(s, pos)
 
-                if tg != nil and cast[u32] tg.get() == cp_tag_end {
+                if tg != nil and cast[u32](tg.get()) == cp_tag_end {
                     result = Emoji_Type.tag_seq
                     tagging = false
 
                     continue
                 }
 
-                if tg == nil or cast[u32] tg.get() < cp_tag_low or
-                    cast[u32] tg.get() > cp_tag_high {
+                if tg == nil or cast[u32](tg.get()) < cp_tag_low or
+                    cast[u32](tg.get()) > cp_tag_high {
                     pos = tag_save
                     tagging = false
                 }

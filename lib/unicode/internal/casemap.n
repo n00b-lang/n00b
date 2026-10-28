@@ -89,7 +89,7 @@ private func next_after_cased(cp: char, after_cased: bool) -> bool {
 private func followed_by_cased(s: string, len: uint, pos: u32) -> bool {
     var at: u32 = pos
 
-    while cast[uint] at < len {
+    while cast[uint](at) < len {
         var cp: char = cast[char] 0
 
         try {
@@ -115,7 +115,7 @@ private func followed_by_cased(s: string, len: uint, pos: u32) -> bool {
 private func map_final_sigma(cp: char, after_cased: bool, s: string,
                              len: uint, pos: u32,
                              modify out: internal.runebuf.Char_Buf) -> bool {
-    if cast[u32] cp != cp_capital_sigma or !after_cased or
+    if cast[u32](cp) != cp_capital_sigma or !after_cased or
         followed_by_cased(s, len, pos) {
         return false
     }
@@ -159,7 +159,7 @@ private func full_case_map(consume s: string,
     var pos: u32 = 0
     var after_cased: bool = false
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         var cp: char = cast[char] 0
 
         try {
@@ -223,7 +223,7 @@ func totitle(consume s: string) -> string {
     var at_start: bool = true
     var after_cased: bool = false
 
-    while cast[uint] pos < len {
+    while cast[uint](pos) < len {
         var cp: char = cast[char] 0
 
         try {

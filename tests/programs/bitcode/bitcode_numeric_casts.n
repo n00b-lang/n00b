@@ -1,14 +1,14 @@
 let unsigned: uint = 9007199254740993
-assert cast[f64] unsigned == 9007199254740992.0
+assert cast[f64](unsigned) == 9007199254740992.0
 let signed: i128 = -9007199254740993
-assert cast[f64] signed == -9007199254740992.0
+assert cast[f64](signed) == -9007199254740992.0
 let positive: f64 = 3.75
-assert cast[uint] positive == 3
+assert cast[uint](positive) == 3
 let negative: f64 = -3.75
-assert cast[i128] negative == -3
-assert cast[uint] -0.75 == 0
-assert cast[i8] -128.9 == -128
-assert cast[u8] 255.9 == 255
+assert cast[i128](negative) == -3
+assert cast[uint](-0.75) == 0
+assert cast[i8](-128.9) == -128
+assert cast[u8](255.9) == 255
 let dividend: f64 = -7.5
 assert dividend % 2.0 == -1.5
 assert 7.5 % -2.0 == 1.5

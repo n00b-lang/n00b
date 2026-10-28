@@ -1,0 +1,10 @@
+var a: bool = true
+var b: bool = false
+var c: bool = true
+var x: int = 1
+var y: int = 2
+let or_and = a or b and c
+let and_or = a and b or c
+let symbols = a || b && c
+let and_chain = a and b and c
+let compared = x < y and c

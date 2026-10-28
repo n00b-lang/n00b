@@ -1,0 +1,12 @@
+tests/diagnostics/front/precedence_logic.n:6:16: error N00B-P0035: `or` followed by `and` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    6 | let or_and = (a or b) and c
+    6 | let or_and = a or (b and c)
+tests/diagnostics/front/precedence_logic.n:7:16: error N00B-P0035: `and` followed by `or` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    7 | let and_or = (a and b) or c
+    7 | let and_or = a and (b or c)
+tests/diagnostics/front/precedence_logic.n:8:17: error N00B-P0035: `||` followed by `&&` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    8 | let symbols = (a || b) && c
+    8 | let symbols = a || (b && c)

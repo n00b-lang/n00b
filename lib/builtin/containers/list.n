@@ -28,14 +28,14 @@ func checked_index(self: List['T], index: int) -> int {
     if at < 0 {
         at += cast[int]self.count
     }
-    if at < 0 or cast[uint]at >= self.count {
+    if at < 0 or cast[uint](at) >= self.count {
         panic.index_out_of_range(index, self.count, "a list")
     }
     return at
 }
 
 private func check_range(self: List['T], start: int, end: int) {
-    if start < 0 or end < start or cast[uint]end > self.count {
+    if start < 0 or end < start or cast[uint](end) > self.count {
         panic.range_out_of_bounds(start, end, self.count, "a list")
     }
 }
@@ -159,7 +159,7 @@ func append(self: List['T], value: 'T,
 }
 
 func insert(self: List['T], index: int, value: 'T) {
-    if index < 0 or cast[uint]index > self.count {
+    if index < 0 or cast[uint](index) > self.count {
         panic.index_out_of_range(index, self.count + 1,
                                  "an insertion into a list")
     }

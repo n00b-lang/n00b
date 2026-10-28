@@ -1,0 +1,12 @@
+var n: int = 3
+var a: int = 1
+var b: int = 2
+var c: int = 4
+let shift_minus = 1 << n - 1
+let and_plus = a & b + 1
+let or_xor = a | b ^ c
+let shift_shift = a << b << c
+let shift_back = a << b >> c
+let and_or = a & b | c
+let or_chain = a | b | c
+let grouped = (1 << n) - 1

@@ -48,7 +48,7 @@ private func resolved_path(contents: string, site: litmod_site.Literal_Site)
         and string.core.byte_at(path, 0) == 0x2f {
         return path
     }
-    var slash: int = cast[int] string.core.byte_len(site.path) - 1
+    var slash: int = cast[int](string.core.byte_len(site.path)) - 1
     while slash >= 0 and string.core.byte_at(site.path, cast[u64] slash) != 0x2f {
         slash -= 1
     }
@@ -80,7 +80,7 @@ private func stride_bytes(row: Ref[abi.Type_Record]) -> uint {
     if row.size_bits % 8 != 0 {
         bytes += 1
     }
-    return (bytes + alignment - 1) / alignment * alignment
+    return ((bytes + alignment - 1) / alignment) * alignment
 }
 
 private func plain_data(row: Ref[abi.Type_Record]) -> bool {
@@ -94,7 +94,7 @@ private func open_file(path: string) -> int fail: string {
     var bytes: Array[u8] = new[Array[u8]](1)
     try {
         bytes = string.core.to_cstring(path, copy = true,
-            buf = new[Array[u8]](cast[int] string.core.byte_len(path) + 1))!
+            buf = new[Array[u8]](cast[int](string.core.byte_len(path)) + 1))!
     } fail(failure) {
         fail "'embed path is not a valid file name: " + path
     }

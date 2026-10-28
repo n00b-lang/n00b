@@ -20,9 +20,9 @@ private func name_is(got: string, want: string) -> bool {
 }
 
 private func blob_u32(b: Array[u8], off: u32) -> u32 {
-    return cast[u32] b[off] | (cast[u32] b[off + 1] << 8) |
-        (cast[u32] b[off + 2] << 16) |
-        (cast[u32] b[off + 3] << 24)
+    return cast[u32](b[off]) | (cast[u32](b[off + 1]) << 8) |
+        (cast[u32](b[off + 2]) << 16) |
+        (cast[u32](b[off + 3]) << 24)
 }
 
 private func run_break_suite(blob: Array[u8], kind: unicode.Break_Type)
@@ -162,7 +162,7 @@ private func run_line_suite(blob: Array[u8]) -> u32 {
 
         let acts: List[u8] = unicode.linebreaks(s)
 
-        if cast[u32] acts.len() != n {
+        if cast[u32](acts.len()) != n {
             failed += 1
 
             continue
@@ -327,7 +327,7 @@ private func run_bidi_suite(blob: Array[u8]) -> u32 {
 
         let levels: List[u8] = unicode.bidi.levels(p)
 
-        if cast[u32] levels.len() != n {
+        if cast[u32](levels.len()) != n {
             ok = false
         }
         else {

@@ -125,7 +125,7 @@ func add_child(self: Tree['N, 'L], child: Tree['N, 'L]) -> bool {
 
 func insert_child(self: Tree['N, 'L], index: int,
                   child: Tree['N, 'L]) -> bool {
-    if index < 0 or index > cast[int]self.children.count or
+    if index < 0 or index > cast[int](self.children.count) or
        !can_attach(self, child) {
         return false
     }

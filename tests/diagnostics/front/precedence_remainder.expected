@@ -1,0 +1,16 @@
+tests/diagnostics/front/precedence_remainder.n:4:15: error N00B-P0035: `%` followed by `%` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    4 | let twice = (a % b) % c
+    4 | let twice = a % (b % c)
+tests/diagnostics/front/precedence_remainder.n:5:24: error N00B-P0035: `*` followed by `%` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    5 | let after_multiply = (a * b) % c
+    5 | let after_multiply = a * (b % c)
+tests/diagnostics/front/precedence_remainder.n:6:25: error N00B-P0035: `%` followed by `*` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    6 | let before_multiply = (a % b) * c
+    6 | let before_multiply = a % (b * c)
+tests/diagnostics/front/precedence_remainder.n:7:22: error N00B-P0035: `/` followed by `%` is not allowed, because this could be read more than one way
+  help: add parentheses to say which one you mean:
+    7 | let after_divide = (a / b) % c
+    7 | let after_divide = a / (b % c)
