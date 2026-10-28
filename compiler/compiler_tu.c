@@ -1474,8 +1474,13 @@ resolve_for_binding_types(parse_grammar_t *grammar,
                 continue;
             }
             th_type *cursor_type = nullptr;
-            th_type *resolved = resolved_iteration_item_type(
-                grammar, unit, scope->node, &cursor_type);
+            th_type *source_shape = th_resolve(source_type);
+            bool tuple = th_builtin_applied(source_shape, TH_BUILTIN_TUPLE,
+                                            th_named_nargs(source_shape))
+                || th_kind_of(source_shape) == TH_RECORD;
+            th_type *resolved = tuple ? nullptr
+                : resolved_iteration_item_type(grammar, unit, scope->node,
+                                               &cursor_type);
             if (resolved) item_type = resolved;
             if (!resolved) {
                 core_diagnostics_t *diagnostics =
@@ -1493,8 +1498,9 @@ resolve_for_binding_types(parse_grammar_t *grammar,
                         N00B_TEXT_A_VALUE_OF_TYPE_CANNOT,
                         N00BB_ARGS(ARG_TEXT(type_text)));
                 if (reported)
-                    n00bb_report_help(diagnostics, N00B_TEXT_A_FOR_LOOP_NEEDS_A,
-                        N00BB_NO_ARGS);
+                    n00bb_report_help(diagnostics, tuple
+                        ? N00B_TEXT_TUPLE_NOT_ITERABLE_HELP
+                        : N00B_TEXT_A_FOR_LOOP_NEEDS_A, N00BB_NO_ARGS);
                 return false;
             }
             if (!cache_iteration_plan(grammar, unit, scope->node,

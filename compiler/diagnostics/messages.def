@@ -1413,6 +1413,7 @@ N00B_TEXT(TUPLE_IMMUTABLE, "cannot assign to an element of a tuple; tuples are i
 N00B_TEXT(TUPLE_IMMUTABLE_HELP, "build a new tuple and assign that instead")
 N00B_TEXT(TUPLE_INDEX_NOT_CONSTANT, "the compiler cannot tell which element this tuple index picks")
 N00B_TEXT(TUPLE_INDEX_NOT_CONSTANT_HELP, "each element can have its own type, so the index must have a single known value here, such as `0`")
+N00B_TEXT(TUPLE_NOT_ITERABLE_HELP, "a tuple's elements can each have their own type, so a `for` loop cannot walk them; put values of one type in a `List` instead")
 N00B_TEXT(TUPLE_CAST_CONSTRUCTOR, "`cast` cannot build `{0}` from a field tuple, because `{0}` has an `__init`")
 N00B_TEXT(TUPLE_CONSTRUCTOR_HELP, "call its constructor, or write `unsafe_cast[{0}](...)` to build it without running the constructor")
 N00B_TEXT(TUPLE_POSITIONAL_CAST, "cannot cast `{0}` to `{1}`: a positional tuple never converts to a record or object")
