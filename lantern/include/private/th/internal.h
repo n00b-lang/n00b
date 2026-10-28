@@ -133,7 +133,11 @@ core_list_decl(th_env_metadata_record_t);
 
 struct th_type {
   th_kind kind;
+  uint8_t ground;
+  bool hashed;
   uint64_t revision;
+  uint64_t hash;
+  th_normalizer hash_norm;
   union {
     struct {
       core_string_t name;
@@ -310,6 +314,8 @@ void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
 void *th_alloc(th_ctx *ctx, size_t n);
 uint64_t th_var_fresh_origin(void);
 core_string_t th_strdup(th_ctx *ctx, core_string_t s);
+size_t th_child_count(const th_type *t);
+th_type *th_child(const th_type *t, size_t i);
 int th_cmp_slice(const void *a, const void *b);
 int th_cmp_member(const void *a, const void *b);
 int th_cmp_kw(const void *a, const void *b);
