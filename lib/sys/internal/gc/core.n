@@ -496,7 +496,6 @@ func initialize_array_backing(payload      : Ref[byte],
         return false
     }
 
-    __gc_memset(payload, 0, payload_bytes)
     __gc_memcpy(payload, unsafe_cast[Ref[byte]] backing.shape, backing.descriptor_bytes)
     return true
 }
