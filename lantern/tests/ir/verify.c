@@ -596,6 +596,18 @@ static void test_entry_block_rules(void)
     check("the entry block is the first block by construction, so there is "
           "nothing to verify", ir_block_entry(f) == f->blocks[0]
                                    && ir_block_entry(f) == e);
+
+    ir_block_t *front = ir_block_add_entry(f, S("front"));
+    ir_instr_t *jump  = ir_instr_add(front, IR_OP_JUMP);
+
+    ir_instr_operand_block(jump, e);
+    check("a block added as the entry comes first and the rest shift down",
+          ir_block_entry(f) == front && front->index == 0
+              && f->blocks[1] == e && e->index == 1
+              && f->blocks[2]->index == 2
+              && ir_block_find(f, S("front")) == front);
+    check("a duplicate entry name is refused",
+          !ir_block_add_entry(f, S("front")) && f->n_blocks == 3);
     ir_ctx_free(ctx);
 }
 

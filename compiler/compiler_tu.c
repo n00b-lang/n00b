@@ -12305,6 +12305,7 @@ free_tu_state(void *data)
     core_dict_free(&state->shared_state_types);
     core_dict_free(&state->integer_edge_sites);
     core_dict_free(&state->constructor_types);
+    core_dict_free(&state->trait_dispatchers);
     core_dict_free(&state->integer_range_nodes);
     core_dict_free(&state->integer_tracked_symbols);
     core_dict_free(&state->failed_calls);
@@ -12349,6 +12350,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     core_dict_init(&state->flagset_values, nullptr, nullptr);
     core_dict_init(&state->integer_edge_sites, nullptr, nullptr);
     core_dict_init(&state->constructor_types, nullptr, nullptr);
+    core_dict_init(&state->trait_dispatchers, nullptr, nullptr);
     core_dict_init(&state->integer_range_nodes, nullptr, nullptr);
     core_dict_init(&state->integer_shift_seen, nullptr, nullptr);
     core_dict_init(&state->integer_tracked_symbols, nullptr, nullptr);

@@ -1468,11 +1468,73 @@ bool th_encode(th_ctx *ctx, th_type *t, const uint8_t **out, size_t *len)
     return true;
 }
 
+size_t th_child_count(const th_type *t)
+{
+    switch (t->kind) {
+    case TH_NAMED: return t->named.nargs;
+    case TH_INDIRECTION:
+    case TH_SEQUENCE:
+    case TH_BINDER: return 1;
+    case TH_RECORD: return t->record.n;
+    case TH_TRAIT: return t->trait.n + 2 * t->trait.nr;
+    case TH_FUNCTION: return 3 + t->fn.np + t->fn.nkw;
+    case TH_SUM: return t->sum.n;
+    default: return 0;
+    }
+}
+
+th_type *th_child(const th_type *t, size_t i)
+{
+    switch (t->kind) {
+    case TH_NAMED:
+        return t->named.args[i].kind == TH_ARG_TYPE
+            ? t->named.args[i].type : nullptr;
+    case TH_INDIRECTION: return t->ind.referent;
+    case TH_SEQUENCE: return t->seq.elem;
+    case TH_BINDER: return t->binder.body;
+    case TH_RECORD: return t->record.members[i].type;
+    case TH_TRAIT:
+        if (i < t->trait.n) return t->trait.methods[i].type;
+        i -= t->trait.n;
+        return i % 2 ? t->trait.requirements[i / 2].target
+                     : t->trait.requirements[i / 2].subject;
+    case TH_FUNCTION:
+        if (i == 0) return t->fn.ret;
+        if (i == 1) return t->fn.error;
+        if (i == 2) return t->fn.rest ? t->fn.rest->type : nullptr;
+        i -= 3;
+        return i < t->fn.np ? t->fn.params[i].type
+                            : t->fn.kw[i - t->fn.np].type;
+    case TH_SUM: return t->sum.arms[i];
+    default: return nullptr;
+    }
+}
+
+static bool th_ground(th_type *t)
+{
+    if (t->ground) return t->ground == 1;
+    if (t->kind == TH_VAR || t->kind == TH_BOUND || t->kind == TH_BINDER) {
+        t->ground = 2;
+        return false;
+    }
+    t->ground = 2;
+    bool ground = true;
+    size_t count = th_child_count(t);
+    for (size_t i = 0; ground && i < count; i++) {
+        th_type *child = th_child(t, i);
+        ground = !child || th_ground(child);
+    }
+    t->ground = ground ? 1 : 2;
+    return ground;
+}
+
 uint64_t th_hash(th_ctx *ctx, th_type *t)
 {
     const uint8_t *p;
     size_t         n;
 
+    bool ground = t && th_ground(t);
+    if (ground && t->hashed && t->hash_norm == ctx->norm) return t->hash;
     if (!th_encode(ctx, t, &p, &n)) {
         return 0;
     }
@@ -1485,7 +1547,13 @@ uint64_t th_hash(th_ctx *ctx, th_type *t)
     XXH3_128bits_update(&st, ver, sizeof ver);
     XXH3_128bits_update(&st, p, n);
 
-    return XXH3_128bits_digest(&st).low64;
+    uint64_t hash = XXH3_128bits_digest(&st).low64;
+    if (ground) {
+        t->hash = hash;
+        t->hash_norm = ctx->norm;
+        t->hashed = true;
+    }
+    return hash;
 }
 
 uint64_t th_arm_tag(core_string_t n)
@@ -1782,6 +1850,8 @@ th_type *th_record_stub(th_ctx *ctx)
 
 void th_record_fill(th_ctx *ctx, th_type *stub, const th_member *m, size_t n)
 {
+    stub->ground = 0;
+    stub->hashed = false;
     stub->record.n       = n;
     stub->record.members = nullptr;
 

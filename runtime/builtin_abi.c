@@ -4,6 +4,7 @@
 #else
 #include <dlfcn.h>
 #endif
+#include <stdatomic.h>
 #include "builtin_abi.h"
 
 const n00b_abi_type_v1 *
@@ -247,4 +248,66 @@ n00b_builtin_native_symbol_name(uint64_t address)
         || (uint64_t)(uintptr_t)info.dli_saddr != address) return NULL;
     return (const uint8_t *)info.dli_sname;
 #endif
+}
+
+enum {
+    DISPATCH_CACHE_SLOTS = 4096,
+    DISPATCH_CACHE_PROBES = 16,
+};
+
+typedef struct {
+    _Atomic uint64_t site;
+    _Atomic uint64_t entry;
+} dispatch_slot_t;
+
+static dispatch_slot_t dispatch_cache[DISPATCH_CACHE_SLOTS];
+
+static uint32_t
+dispatch_home(uint64_t site, uint32_t type)
+{
+    uint64_t mixed = site ^ ((uint64_t)type * UINT64_C(0x9e3779b97f4a7c15));
+    mixed ^= mixed >> 29;
+    mixed *= UINT64_C(0xbf58476d1ce4e5b9);
+    mixed ^= mixed >> 32;
+    return (uint32_t)mixed & (DISPATCH_CACHE_SLOTS - 1);
+}
+
+uint32_t
+n00b_builtin_dispatch_arm(uint64_t site, uint32_t type)
+{
+    uint32_t home = dispatch_home(site, type);
+    for (uint32_t probe = 0; site && probe < DISPATCH_CACHE_PROBES; probe++) {
+        dispatch_slot_t *slot =
+            &dispatch_cache[(home + probe) & (DISPATCH_CACHE_SLOTS - 1)];
+        uint64_t owner = atomic_load_explicit(&slot->site,
+                                              memory_order_acquire);
+        if (!owner) return 0;
+        if (owner != site) continue;
+        uint64_t entry = atomic_load_explicit(&slot->entry,
+                                              memory_order_acquire);
+        if (entry && (uint32_t)(entry >> 32) == type) return (uint32_t)entry;
+    }
+    return 0;
+}
+
+void
+n00b_builtin_dispatch_record(uint64_t site, uint32_t type, uint32_t arm)
+{
+    uint32_t home = dispatch_home(site, type);
+    for (uint32_t probe = 0; site && arm && probe < DISPATCH_CACHE_PROBES;
+         probe++) {
+        dispatch_slot_t *slot =
+            &dispatch_cache[(home + probe) & (DISPATCH_CACHE_SLOTS - 1)];
+        uint64_t owner = 0;
+        if (atomic_compare_exchange_strong_explicit(&slot->site, &owner, site,
+                memory_order_acq_rel, memory_order_acquire)) {
+            atomic_store_explicit(&slot->entry,
+                ((uint64_t)type << 32) | arm, memory_order_release);
+            return;
+        }
+        if (owner != site) continue;
+        uint64_t entry = atomic_load_explicit(&slot->entry,
+                                              memory_order_acquire);
+        if (entry && (uint32_t)(entry >> 32) == type) return;
+    }
 }

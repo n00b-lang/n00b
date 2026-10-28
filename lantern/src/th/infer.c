@@ -2107,9 +2107,49 @@ size_t th_free_vars(th_ctx *ctx, th_type *t, th_type ***out)
     return n;
 }
 
+typedef struct {
+    th_type *type;
+    size_t next;
+} closed_frame_t;
+
 bool th_is_closed(th_ctx *ctx, th_type *t)
 {
-    return th_free_vars(ctx, t, nullptr) == 0;
+    (void)ctx;
+    t = th_resolve(t);
+    if (!t) return true;
+    if (t->kind == TH_VAR) return false;
+    closed_frame_t local[64];
+    closed_frame_t *frames = local;
+    size_t depth = 0, capacity = 64;
+    frames[depth++] = (closed_frame_t){t, 0};
+    bool closed = true;
+    while (closed && depth) {
+        closed_frame_t *frame = &frames[depth - 1];
+        if (frame->next >= th_child_count(frame->type)) {
+            depth--;
+            continue;
+        }
+        th_type *child = th_resolve(th_child(frame->type, frame->next++));
+        if (!child || !th_child_count(child)) {
+            closed = !child || child->kind != TH_VAR;
+            continue;
+        }
+        bool cycle = false;
+        for (size_t i = 0; i < depth && !cycle; i++)
+            cycle = frames[i].type == child;
+        if (cycle) continue;
+        if (depth == capacity) {
+            closed_frame_t *grown = core_alloc_array(closed_frame_t,
+                                                     capacity * 2);
+            memcpy(grown, frames, depth * sizeof(*frames));
+            if (frames != local) core_free(frames);
+            frames = grown;
+            capacity *= 2;
+        }
+        frames[depth++] = (closed_frame_t){child, 0};
+    }
+    if (frames != local) core_free(frames);
+    return closed;
 }
 
 static bool type_contains(th_type *t,
@@ -2237,6 +2277,8 @@ static th_type *dup_shallow(th_ctx *ctx, const th_type *t)
     th_type *o = th_alloc(ctx, sizeof(th_type));
 
     *o = *t;
+    o->ground = 0;
+    o->hashed = false;
 
     return o;
 }

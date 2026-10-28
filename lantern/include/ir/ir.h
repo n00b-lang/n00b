@@ -720,6 +720,7 @@ bool         ir_value_can_finalize_on_edge(const ir_value_t *value,
                                             const ir_block_t *from,
                                             const ir_block_t *to);
 ir_block_t  *ir_block_add(ir_func_t *f, core_string_t name);
+ir_block_t  *ir_block_add_entry(ir_func_t *f, core_string_t name);
 ir_block_t  *ir_block_find(ir_func_t *f, core_string_t name);
 ir_block_t  *ir_block_entry(ir_func_t *f);
 ir_instr_t  *ir_block_terminator(ir_block_t *b);
