@@ -6,14 +6,14 @@ programs=$2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
-if "$compiler" check "$programs/shift_count_literal_overflow.n00b" \
+if "$compiler" check "$programs/shift_count_literal_overflow.n" \
     >"$tmp/static.out" 2>"$tmp/static.err"; then
     echo 'out-of-range literal shift count was accepted' >&2
     exit 1
 fi
 grep -q 'shift count .* is outside 0\.\.' "$tmp/static.err"
 
-"$compiler" lower --dump-ir "$programs/shift_count_proven.n00b" \
+"$compiler" lower --dump-ir "$programs/shift_count_proven.n" \
     >"$tmp/proven.ir" 2>"$tmp/proven.err"
 grep -q 'ubitint\[6\] = cast wrap' "$tmp/proven.ir"
 

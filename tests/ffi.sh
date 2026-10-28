@@ -7,7 +7,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 cd "$program_dir"
-if ! "$compiler" build --lto --output "$tmp/shim_call" shim_call.n00b \
+if ! "$compiler" build --lto --output "$tmp/shim_call" shim_call.n \
     >"$tmp/shim_call.log" 2>&1; then
     cat "$tmp/shim_call.log" >&2
     exit 1

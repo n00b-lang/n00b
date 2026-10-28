@@ -21,7 +21,7 @@ for case in private_type_consumer:N0004 private_field_consumer:N0006 \
     source=${case%%:*}
     code=${case#*:}
     if N00B_PATH="$program_dir" "$compiler" check \
-        "$program_dir/$source.n00b" >"$tmp/$source.out" 2>&1; then
+        "$program_dir/$source.n" >"$tmp/$source.out" 2>&1; then
         echo "$source unexpectedly checked" >&2
         exit 1
     fi

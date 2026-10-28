@@ -13,7 +13,7 @@ ar rcs libbake.a bake.o
 builds() {
     name=$1
     if ! "$compiler" build --contract-dir "$bake_dir" --link-object libbake.a \
-        --output "$name" "$bake_dir/$name.n00b" >"$name.log" 2>&1; then
+        --output "$name" "$bake_dir/$name.n" >"$name.log" 2>&1; then
         cat "$name.log" >&2
         exit 1
     fi
@@ -29,7 +29,7 @@ test "$(./bake_baked 2>&1)" = "baked ok"
 rm bake_spec.txt
 test "$(./bake_baked 2>&1)" = "recreated baked ok"
 
-if "$compiler" build --output undescribed "$bake_dir/undescribed.n00b" \
+if "$compiler" build --output undescribed "$bake_dir/undescribed.n" \
     >undescribed.log 2>&1; then
     echo "undescribed pointer was baked" >&2
     exit 1

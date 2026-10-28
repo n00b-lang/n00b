@@ -11,7 +11,7 @@ build_time_failure() {
     name=$1
     panic=$2
     location=$3
-    if "$compiler" build --output "$tmp/$name" "$program_dir/$name.n00b" \
+    if "$compiler" build --output "$tmp/$name" "$program_dir/$name.n" \
         >"$tmp/$name.out" 2>&1; then
         echo "$name unexpectedly built" >&2
         exit 1
@@ -37,40 +37,40 @@ runtime)
 litmod)
     N00B_PATH="$program_dir:$program_dir/.." \
         "$compiler" build --output "$tmp/litmod_suite" \
-        "$program_dir/bitcode_litmod_suite.n00b"
+        "$program_dir/bitcode_litmod_suite.n"
     "$tmp/litmod_suite" 2>"$tmp/litmod_declaration.out"
     test "$(cat "$tmp/litmod_declaration.out")" = \
         'hello|world|123|2a|1.5|last'
     ;;
 build-time)
     "$compiler" build --output "$tmp/script_once" \
-        "$program_dir/bitcode_script_once.n00b" >"$tmp/script_once_compile"
+        "$program_dir/bitcode_script_once.n" >"$tmp/script_once_compile"
     test ! -s "$tmp/script_once_compile"
     test "$("$tmp/script_once")" = "top"
     N00B_PATH="$program_dir" "$compiler" build --output "$tmp/importer" \
-        "$program_dir/bitcode_importer.n00b"
+        "$program_dir/bitcode_importer.n"
     if (ulimit -c 0; "$tmp/importer") >/dev/null 2>&1; then
         echo 'imported initializer was not executed' >&2
         exit 1
     fi
     "$compiler" build --native --output "$tmp/bootstrap_io" \
-        "$program_dir/bitcode_bootstrap_io.n00b" \
+        "$program_dir/bitcode_bootstrap_io.n" \
         >"$tmp/bootstrap_io_compile"
     test "$(cat "$tmp/bootstrap_io_compile")" = "compile"
     "$tmp/bootstrap_io" >"$tmp/bootstrap_io_runtime"
     test "$(cat "$tmp/bootstrap_io_runtime")" = \
         "runtime0123456789abcdef0123456789abcdef"
     build_time_failure bitcode_litmod_comptime_fail 'prelude failed' \
-        'bitcode_litmod_comptime_fail.n00b:7:5'
+        'bitcode_litmod_comptime_fail.n:7:5'
     grep -q 'error N00B-B0012: the build-time program' \
         "$tmp/bitcode_litmod_comptime_fail.out"
     build_time_failure bitcode_litmod_fence_nil_fail 'fence failed' \
-        'bitcode_litmod_fence_nil_fail.n00b:6:1'
+        'bitcode_litmod_fence_nil_fail.n:6:1'
     build_time_failure bitcode_litmod_string_fail 'bad literal' \
-        'bitcode_litmod_string_fail.n00b:7:12'
+        'bitcode_litmod_string_fail.n:7:12'
     build_time_failure bitcode_comptime_fail \
         'requirement `2 + 3 == 6` failed$' \
-        '^  --> .*bitcode_comptime_fail.n00b:2:13$'
+        '^  --> .*bitcode_comptime_fail.n:2:13$'
     grep -q 'error N00B-B0012: the build-time program' \
         "$tmp/bitcode_comptime_fail.out"
     ;;

@@ -51,7 +51,7 @@ awk -F'\t' -v releasing="$releasing" '
 ' tests/budget tests/n00b.tests lantern/tests/lantern.tests writ/tests/writ.tests \
     || status=1
 
-find tests/programs -type f \( -name '*.n' -o -name '*.n00b' \) | awk '
+find tests/programs -type f -name '*.n' | awk '
     FILENAME != "-" { refs = refs "\n" $0; next }
     function quote(text) { gsub(/[.+*?()\[\]{}|^$]/, "\\\\&", text); return text }
     {

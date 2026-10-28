@@ -1,2 +1,2 @@
-tests/diagnostics/packages/duplicate_declaration/facade.n00b:4:1: error N00B-M0015: package `duplicate_declaration` is declared more than once
-  tests/diagnostics/packages/duplicate_declaration/facade.n00b:1:1: note: `duplicate_declaration` is first declared here
+tests/diagnostics/packages/duplicate_declaration/facade.n:4:1: error N00B-M0015: package `duplicate_declaration` is declared more than once
+  tests/diagnostics/packages/duplicate_declaration/facade.n:1:1: note: `duplicate_declaration` is first declared here

@@ -13,7 +13,7 @@ builds() {
     name=$1
     shift
     if ! "$compiler" build --contract-dir "$contract_dir" "$@" \
-        --output "$tmp/$name" "$name.n00b" >"$tmp/$name.log" 2>&1; then
+        --output "$tmp/$name" "$name.n" >"$tmp/$name.log" 2>&1; then
         cat "$tmp/$name.log" >&2
         exit 1
     fi

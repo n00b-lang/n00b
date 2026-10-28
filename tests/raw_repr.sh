@@ -7,7 +7,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 
 runs() {
-    "$compiler" build --output "$tmp/$1" "$program_dir/bitcode_raw_repr_$1.n00b" \
+    "$compiler" build --output "$tmp/$1" "$program_dir/bitcode_raw_repr_$1.n" \
         2>"$tmp/$1.compile.err" || {
         cat "$tmp/$1.compile.err" >&2
         exit 1
@@ -44,7 +44,7 @@ if grep -Eq '^0{16}$' "$tmp/reference.stderr"; then
     exit 1
 fi
 
-if "$compiler" check "$program_dir/bitcode_raw_repr_out_of_range.n00b" \
+if "$compiler" check "$program_dir/bitcode_raw_repr_out_of_range.n" \
     >"$tmp/negative.stdout" 2>"$tmp/negative.stderr"; then
     exit 1
 fi
