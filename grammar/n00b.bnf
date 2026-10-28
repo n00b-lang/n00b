@@ -123,10 +123,8 @@
 <for-range-var> ::= <for-binding>
 <for-var-list> ::= <for-binding>
 <for-var-list> ::= <for-binding> %"," <for-var-list>
-<for-var-list> ::= <for-binding> %","
 <for-var-list> ::= <binding-pattern>
 <for-var-list> ::= <binding-pattern> %"," <for-var-list>
-<for-var-list> ::= <binding-pattern> %","
 
 <binding-pattern> @nospace($1) ::= %"(" <pattern-items> %")"
 <pattern-items> ::= <pattern-item> %"," <pattern-items>

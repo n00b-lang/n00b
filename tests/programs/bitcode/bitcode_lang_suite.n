@@ -1458,6 +1458,9 @@ func tuples_check() {
     require pair[1] == "one"
     const second = 1
     require tuple_pair()[second] == "four"
+    let known = 1
+    require pair[known] == "one"
+    require pair[known - 1] == 1
     require (7,) == 7
     let field = (x = 3, y = 4)
     require field.x + field.y == 7

@@ -28,7 +28,7 @@ let repeated: Tuple[x: int, x: int] = (x = 1)
 let listed: List[x: int] = []
 let lonely: Tuple[int] = 1
 let indexed = (1, "one")
-var where_at = 0
+var where_at = len([1, 2])
 let picked = indexed[where_at]
 let beyond = indexed[2]
 var ordered = (1, 2)

@@ -6987,7 +6987,12 @@ n00bb_tuple_element(th_ctx *types, parse_grammar_t *grammar,
     parse_tree_t *expression = CHILD_NT(grammar, index, "expression");
     size_t count = th_named_nargs(tuple);
     uint64_t at = 0;
+    int64_t point = 0;
     bool constant = fold_static_extent(grammar, expression, 0, &at);
+    if (!constant && n00bb_integer_point(expression, &point)) {
+        constant = true;
+        at = (uint64_t)point;
+    }
     if (!write && constant && at < count) {
         facts->tuple_index_known = true;
         facts->tuple_index = (uint32_t)at;
