@@ -12,6 +12,7 @@
 #include "parse/tree_util.h"
 #include "compiler_native_roots.h"
 #include "record_layout_request.h"
+#include "qualified_names.h"
 #include "lib/buffer.h"
 #include "lib/hash.h"
 
@@ -705,12 +706,7 @@ trait_name_matches(core_string_t qualified, core_string_t short_name)
     if (!qualified.data) return false;
     if (short_name.data && core_string_find_byte(short_name, '.') >= 0)
         return core_string_eq(qualified, short_name);
-    int64_t dot = core_string_rfind_byte(qualified, '.');
-    core_string_t name = dot >= 0
-        ? core_string_slice(qualified, (size_t)dot + 1,
-                            qualified.u8_bytes - (size_t)dot - 1)
-        : qualified;
-    return core_string_eq(name, short_name);
+    return core_string_eq(n00bb_name_leaf(qualified), short_name);
 }
 
 bool
@@ -719,11 +715,7 @@ has_trait_constraint(th_type *receiver, core_string_t trait_name)
     receiver = th_resolve(receiver);
     if (!receiver || th_kind_of(receiver) != TH_VAR || !trait_name.data)
         return false;
-    int64_t dot = core_string_rfind_byte(trait_name, '.');
-    core_string_t trait = dot >= 0
-        ? core_string_slice(trait_name, (size_t)dot + 1,
-                            trait_name.u8_bytes - (size_t)dot - 1)
-        : trait_name;
+    core_string_t trait = n00bb_name_leaf(trait_name);
     for (size_t i = 0; i < th_var_constraint_count(receiver); i++) {
         th_constraint constraint;
         if (th_var_constraint_at(receiver, i, &constraint)
@@ -3098,10 +3090,13 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     if (target_matches && !widens)
                         target_parameters[parameter_index].type = copied_argument;
                 }
+                bool target_fails = target_failure
+                    && !th_is_nil(target_failure);
                 th_type *target_shape = target_matches
                     ? th_func_with_error(types, copied_trait_result,
                         trait_failure_declared ? requirement_failure
-                                               : copied_function_failure,
+                            : target_fails ? copied_function_failure
+                            : target_failure,
                         target_parameters, target_parameter_count, nullptr,
                         nullptr, 0)
                     : nullptr;
@@ -3113,7 +3108,7 @@ resolve_generic_trait_specializations(core_link_unit_t *link,
                     report_call_type_error(call_unit, call_node, types,
                                            target_shape, target_signature,
                                            N00BB_CALL_SIGNATURE);
-                if (target_matches && !trait_failure_declared) {
+                if (target_matches && !trait_failure_declared && target_fails) {
                     th_type *resolved_failure = th_func_error(
                         matched_signature);
                     th_type *combined_failure = specialization

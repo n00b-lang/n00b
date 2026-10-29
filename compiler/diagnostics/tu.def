@@ -150,6 +150,12 @@ N00B_DIAG(UNION_BY_UNKNOWN_FIELD, "N00B-N0519", ERROR,
     "`union by` names something other than a plain field of the record",
     "`union by tag` selects the union arm using an integer field of the\n"
     "same record declared outside the union. Name such a field.")
+N00B_DIAG(LOOP_ITEM_DOES_NOT_FIT, "N00B-N0520", ERROR,
+    "a loop name is used as a type its items cannot become without loss",
+    "A loop name takes its type from the items it iterates over. It can be\n"
+    "used as a wider type, but not as one that might not hold every item.\n"
+    "Convert it explicitly where you need the narrower type:\n"
+    "    for size in sizes { store(cast[u8](size)) }")
 N00B_DIAG(GENERIC_ARITY, "N00B-T0515", ERROR,
     "a generic type is given the wrong number of type arguments",
     "A generic type takes exactly the type arguments its declaration lists:\n"

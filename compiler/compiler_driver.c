@@ -4664,7 +4664,8 @@ build_time_arguments(int argc, char **argv, char *compiler,
         bool output = core_string_eq(argument, CORE_STRING_STATIC("--output"))
             || core_string_eq(argument, CORE_STRING_STATIC("-o"))
             || core_string_eq(argument,
-                              CORE_STRING_STATIC("--emit-interface"));
+                              CORE_STRING_STATIC("--emit-interface"))
+            || core_string_eq(argument, CORE_STRING_STATIC("--effects-of"));
         bool dropped = (i == 1
                 && (core_string_eq(argument, CORE_STRING_STATIC("build"))
                     || core_string_eq(argument, CORE_STRING_STATIC("lower"))
@@ -4673,7 +4674,9 @@ build_time_arguments(int argc, char **argv, char *compiler,
                                       CORE_STRING_STATIC("library"))
                     || core_string_eq(argument,
                                       CORE_STRING_STATIC("compile"))))
-            || core_string_starts_with(argument, CORE_STRING_STATIC("--dump-"));
+            || core_string_starts_with(argument, CORE_STRING_STATIC("--dump-"))
+            || core_string_starts_with(argument,
+                                       CORE_STRING_STATIC("--effects-of="));
         core_free(argument.data);
         if (output) {
             i++;
@@ -5558,9 +5561,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         fprintf(stderr, "PROFILE jobs %.3f\n", now - profile_tick);
         profile_tick = now;
     }
-    if (located && link_analysis)
+    if (located && link_analysis) {
         link_analysis->dump_ranges = parse_cmdr_flag_present(args,
             CORE_STRING_STATIC("--dump-ranges"));
+        link_analysis->effects_of = build_time ? (core_string_t){0}
+            : parse_cmdr_flag_str(args, CORE_STRING_STATIC("--effects-of"));
+        link_analysis->effects_json = parse_cmdr_flag_present(args,
+            CORE_STRING_STATIC("--effects-json"));
+    }
     if (located && (lower_command || build_command || compile_command
                     || library_command))
         located = lower_requests_to_ir(grammar, link,

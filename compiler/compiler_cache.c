@@ -1996,7 +1996,7 @@ n00bb_cache_record_summaries(n00bb_cache_t *cache, core_link_unit_t *link,
         for (size_t f = 0; ok && f < functions.len; f++) {
             put_text(&input, ir_module_name(functions.data[f]->owner));
             put_text(&input, functions.data[f]->name);
-            ok = ir_summary_encode(ir_summary_of(summaries,
+            ok = ir_summary_encode_identity(ir_summary_of(summaries,
                                                  functions.data[f]), &input);
         }
         core_list_push(cache->summary_identities, ((cache_link_t){

@@ -309,6 +309,7 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *integer = th_name(types, CORE_STRING_STATIC("int"));
     th_type *open_args[] = {byte_reference, integer, u32};
     th_type *read_args[] = {integer, byte_reference, uint};
+    th_type *random_args[] = {byte_reference, uint};
     th_type *close_args[] = {integer};
     th_type *wait_item = th_var(types);
     th_type *wake_item = th_var(types);
@@ -337,6 +338,21 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *effects_args[] = {
         effects_subject ? th_ind(types, 0, effects_subject) : nullptr,
     };
+    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
+    th_type *text = th_name(types, CORE_STRING_STATIC("string"));
+    th_type *effect_subject = th_var(types);
+    th_type *reads_subject = th_var(types);
+    th_type *writes_subject = th_var(types);
+    th_type *has_effect_args[] = {
+        effect_subject ? th_ind(types, 0, effect_subject) : nullptr, text,
+    };
+    th_type *reads_args[] = {
+        reads_subject ? th_ind(types, 0, reads_subject) : nullptr, text,
+    };
+    th_type *writes_args[] = {
+        writes_subject ? th_ind(types, 0, writes_subject) : nullptr, text,
+    };
+    th_type *effect_args[] = {text};
     return register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_page_size"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -367,6 +383,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_read"), integer, read_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_random_bytes"), integer, random_args,
+            2)
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_close"), integer, close_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_exit"), nil_type, close_args, 1)
@@ -393,6 +412,15 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_effects"), u64, effects_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__function_has_effect"), boolean,
+            has_effect_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__function_reads"), boolean, reads_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__function_writes"), boolean, writes_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__effect"), nil_type, effect_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_stack_high_self"),
             optional_reference, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -417,6 +445,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             resume_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_now_ns"),
+            th_name(types, CORE_STRING_STATIC("uint")), nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__runtime_now_ns"),
             th_name(types, CORE_STRING_STATIC("uint")), nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_cpu_relax"), nil_type, nullptr, 0)

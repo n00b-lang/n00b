@@ -16,6 +16,7 @@
 #include "record_layout_request.h"
 #include "field_extent.h"
 #include "preprocessor.h"
+#include "qualified_names.h"
 #include "parse/tree_util.h"
 
 #define NT_IS(g, n, lit) nt_is((g), (n), CORE_STRING_STATIC(lit))
@@ -1082,6 +1083,14 @@ n00bb_bind_pattern(parse_grammar_t *grammar, core_translation_unit_t *unit,
     return ok;
 }
 
+bool
+n00bb_loop_item_converts(th_ctx *types, th_type *item, th_type *binding)
+{
+    return (is_integer_type(item) && is_integer_type(binding)
+            && n00bb_integer_type_promotes_to(item, binding))
+        || n00bb_value_coerces(types, item, binding);
+}
+
 static bool
 bind_for_item_type(parse_grammar_t *grammar,
                    core_translation_unit_t *unit, parse_tree_t *loop,
@@ -1122,9 +1131,29 @@ bind_for_item_type(parse_grammar_t *grammar,
         core_list_free(binder.path);
         return ok;
     }
+    th_ctx *types = tu_state(unit)->types;
+    th_type *declared = symbol && symbol->type ? th_resolve(symbol->type)
+                                               : nullptr;
+    bool converts = declared && th_is_closed(types, declared)
+        && th_is_closed(types, resolved)
+        && !th_unify_probe(types, declared, resolved)
+        && n00bb_loop_item_converts(types, resolved, declared);
+    if (converts) return true;
     th_type *unified = symbol
-        ? th_unify_in_place(tu_state(unit)->types, symbol->type, item_type)
+        ? th_unify_in_place(types, symbol->type, item_type)
         : nullptr;
+    if (!unified && symbol && declared) {
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        core_string_t used = n00bb_print_type(types, declared);
+        core_string_t items = n00bb_print_type(types, resolved);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_LOOP_ITEM_DOES_NOT_FIT,
+                link_source_location(single), N00B_TEXT_LOOP_ITEMS_DO_NOT_FIT,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(used),
+                           ARG_TEXT(items))))
+            n00bb_report_help(diagnostics, N00B_TEXT_CONVERT_LOOP_ITEM,
+                N00BB_ARGS(ARG_TEXT(symbol->name), ARG_TEXT(used)));
+    }
     if (!unified) return false;
     symbol->type = unified;
     parse_tree_set_type(single, unified);
@@ -1505,7 +1534,7 @@ n00bb_for_loop_at(core_translation_unit_t *unit, uint32_t line,
 
 bool
 resolve_for_binding_types(parse_grammar_t *grammar,
-                          core_translation_unit_t *unit)
+                          core_translation_unit_t *unit, bool closed_only)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     parse_symtab_t *symtab = state && state->annotations
@@ -1516,11 +1545,17 @@ resolve_for_binding_types(parse_grammar_t *grammar,
             || !scope->node || !NT_IS(grammar, scope->node, "for-stmt"))
             continue;
         th_type *item_type = parse_tree_type(scope->node);
+        if (closed_only
+            && !CHILD_NT(grammar, scope->node, "for-in-target-list"))
+            continue;
         if (CHILD_NT(grammar, scope->node, "for-in-target-list")) {
             parse_tree_t *target = CHILD_NT(grammar, scope->node,
                                              "for-in-target-list");
             parse_tree_t *source = CHILD_NT(grammar, target, "expression");
             th_type *source_type = parse_tree_type(source);
+            if (closed_only && (!source_type || th_is_poison(source_type)
+                    || !th_is_closed(state->types, source_type)))
+                continue;
             if (th_is_poison(source_type)) {
                 if (!bind_for_item_type(grammar, unit, scope->node,
                                         source_type)) return false;
@@ -14760,11 +14795,7 @@ alias_exported_by(n00bb_package_export_t *export, n00bb_litmod_alias_t *alias)
 {
     if (!export || export->module_export) return true;
     if (!export->litmod_alias) return false;
-    int64_t dot = core_string_rfind_byte(export->source_name, '.');
-    size_t start = dot < 0 ? 0 : (size_t)dot + 1;
-    return core_string_eq(core_string_slice(export->source_name, start,
-                              export->source_name.u8_bytes - start),
-                          alias->alias);
+    return core_string_eq(n00bb_name_leaf(export->source_name), alias->alias);
 }
 
 static bool

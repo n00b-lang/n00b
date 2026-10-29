@@ -802,16 +802,7 @@ call_carried(origins_t *state, const ir_instr_t *call, uint32_t slot,
 static ir_instr_t *
 output_call(const ir_instr_t *output)
 {
-    ir_value_t *source = output->n_operands ? operand_at(output, 0)
-                                            : nullptr;
-    ir_instr_t *call = source && source->kind == IR_VAL_INSTR ? source->def
-                                                              : nullptr;
-    if (call && call->op == IR_OP_VARIANT_PAYLOAD && call->n_operands) {
-        source = operand_at(call, 0);
-        call = source && source->kind == IR_VAL_INSTR ? source->def
-                                                      : nullptr;
-    }
-    return call && is_call(call) ? call : nullptr;
+    return (ir_instr_t *)ir_call_output_source(output, nullptr);
 }
 
 static uint32_t
@@ -884,8 +875,7 @@ fresh_copy(ir_instr_t *instruction)
 {
     if (instruction->op != IR_OP_COPY || instruction->n_operands != 1)
         return false;
-    if (ir_annot_get(&instruction->annots,
-                     CORE_STRING_STATIC("n00bb.literal_copy")))
+    if (ir_instr_is_fresh(instruction))
         return true;
     ir_annot_t *promoted = ir_annot_get(&instruction->annots,
         CORE_STRING_STATIC("ir.promoted_local_write"));

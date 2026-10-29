@@ -23,6 +23,7 @@
 #include "compiler_cache.h"
 #include "compiler_ffi.h"
 #include "cached_body.h"
+#include "qualified_names.h"
 #include "compiler_object_io.h"
 #include "abi_emit.h"
 #include "abi_link.h"
@@ -137,14 +138,6 @@ qualified_function_name(core_string_t module, core_string_t function)
     core_buffer_putc(name, '.');
     core_buffer_append_string(name, function);
     return core_buffer_take_string(name);
-}
-
-static bool
-name_matches_function(core_string_t name, core_string_t function)
-{
-    return core_string_starts_with(name, function)
-        && (name.u8_bytes == function.u8_bytes
-            || name.data[function.u8_bytes] == '#');
 }
 
 static bool
@@ -351,8 +344,8 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                 if (!body->n_blocks
                     || core_string_find(candidate->name,
                                         CORE_STRING_STATIC("$spec$")) >= 0
-                    || !name_matches_function(candidate->name,
-                                              view_text(function_name))
+                    || !n00bb_names_function(view_text(function_name),
+                                             candidate->name)
                     || th_hash(ir_module_types(runtime), body->type)
                         != signature->typehash) continue;
                 if (matched) { free(bindings); return false; }
@@ -416,8 +409,8 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                 ir_func_t *candidate = ir_func_at(runtime, f);
                 ir_func_t *body = n00bb_cached_body(candidate);
                 if (!body->n_blocks
-                    || !name_matches_function(candidate->name,
-                                              view_text(function_name))
+                    || !n00bb_names_function(view_text(function_name),
+                                             candidate->name)
                     || th_hash(ir_module_types(runtime), body->type)
                         != signature->typehash) continue;
                 if (matched) { valid = false; break; }

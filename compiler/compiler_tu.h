@@ -89,7 +89,8 @@ bool cache_iteration_plan(parse_grammar_t *grammar,
 void resolve_declaration_patterns(parse_grammar_t *grammar,
                                   core_translation_unit_t *unit);
 bool resolve_for_binding_types(parse_grammar_t *grammar,
-                               core_translation_unit_t *unit);
+                               core_translation_unit_t *unit,
+                               bool closed_only);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
                            core_list_t(n00bb_tree_ptr_t) *arguments);
 core_string_t call_keyword_name(parse_tree_t *argument);
@@ -304,6 +305,7 @@ typedef struct n00bb_static_value {
     } as;
 } n00bb_static_value_t;
 bool n00bb_integer_type_promotes_to(th_type *source, th_type *target);
+bool n00bb_loop_item_converts(th_ctx *types, th_type *item, th_type *binding);
 th_type *n00bb_common_integer_type(th_ctx *types, th_type *left,
                                    th_type *right);
 uint64_t n00bb_shift_receiver_width(th_type *type);

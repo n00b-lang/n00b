@@ -6,6 +6,7 @@
 
 #include "lib/alloc.h"
 #include "lib/list.h"
+#include "qualified_names.h"
 
 typedef struct {
     th_type *type;
@@ -66,12 +67,8 @@ add_receiver(th_ctx *ctx, const n00bb_abi_merged_table_t *types,
 static bool
 same_function_root(n00bb_abi_string_view_t encoded, core_string_t source)
 {
-    for (size_t i = 0; i < encoded.length; i++)
-        if (encoded.bytes[i] == '#') {
-            encoded.length = i;
-            break;
-        }
-    return same_string(encoded, source);
+    return source.data && n00bb_names_function(source, core_string_borrow(
+        (const char *)encoded.bytes, encoded.length));
 }
 
 static bool
@@ -101,18 +98,12 @@ function_index_for_method(th_ctx *ctx,
             n00bb_abi_string_view_t name;
             if (!n00bb_abi_object_string(view, &function->name, &name))
                 return false;
-            int64_t dot = method->qualified_name.data
-                ? core_string_rfind_byte(method->qualified_name, '.') : -1;
-            core_string_t qualified_leaf = dot >= 0
-                ? core_string_slice(method->qualified_name, (size_t)dot + 1,
-                    method->qualified_name.u8_bytes - (size_t)dot - 1)
-                : (core_string_t){};
-            int64_t hash_mark = qualified_leaf.data
-                ? core_string_find_byte(qualified_leaf, '#') : -1;
-            if (hash_mark >= 0) qualified_leaf.u8_bytes = (size_t)hash_mark;
+            core_string_t leaf = n00bb_name_leaf(method->qualified_name);
+            core_string_t qualified_leaf =
+                leaf.data != method->qualified_name.data
+                    ? n00bb_function_root(leaf) : (core_string_t){};
             bool named = same_function_root(name, method->root_name)
-                || (qualified_leaf.data
-                    && same_function_root(name, qualified_leaf));
+                || same_function_root(name, qualified_leaf);
             if (!named) continue;
             const n00b_abi_symbol_v1 *symbol = n00bb_abi_object_row(view,
                 N00B_ABI_TABLE_SYMBOL, function->symbol_index);
