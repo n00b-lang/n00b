@@ -4,6 +4,7 @@
 #include "compiler_link.h"
 #include "compiler_baked.h"
 #include "interface_summaries.h"
+#include "language_hooks.h"
 #include "storage_placement.h"
 #include "compiler_tu.h"
 #include "diagnostics.h"

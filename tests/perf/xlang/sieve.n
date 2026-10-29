@@ -1,0 +1,30 @@
+func count_primes(limit: int) -> int {
+    var composite: Array[bool] = new[Array[bool]](limit + 1)
+    var count = 0
+    var n = 2
+    while n <= limit {
+        if !composite[n] {
+            count += 1
+            var multiple = n * n
+            while multiple <= limit {
+                composite[multiple] = true
+                multiple += n
+            }
+        }
+        n += 1
+    }
+    return count
+}
+
+func run(rounds: int, limit: int) -> int {
+    var total = 0
+    var round = 0
+    while round < rounds {
+        total += count_primes(limit)
+        round += 1
+    }
+    return total
+}
+
+let scale = cast[int](__os_arg_count())
+require run(6 * scale, 2000000) == 893598

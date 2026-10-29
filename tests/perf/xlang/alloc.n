@@ -1,0 +1,29 @@
+record Node {
+    value: int
+    next:  Ref[Node]?
+}
+
+func run(rounds: int, length: int) -> int {
+    var total = 0
+    var round = 0
+    while round < rounds {
+        var head: Ref[Node]? = nil
+        var i = 0
+        while i < length {
+            var node: Node = (value = i, next = head)
+            head = ref node
+            i += 1
+        }
+        var cursor: Ref[Node]? = head
+        while cursor != nil {
+            let node: Ref[Node] = cursor.get()
+            total += node.value
+            cursor = node.next
+        }
+        round += 1
+    }
+    return total
+}
+
+let scale = cast[int](__os_arg_count())
+require run(60 * scale, 100000) == 299997000000

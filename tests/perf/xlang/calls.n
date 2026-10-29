@@ -1,0 +1,9 @@
+func fib(n: int) -> int {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+let scale = cast[int](__os_arg_count())
+require fib(34 + scale) == 9227465

@@ -22,7 +22,9 @@ Usage: ./build.sh [command] [args]
   bench               compile, then run lantern's benchmarks and gates
   perf [opts] [names] compile, then run the performance suite in tests/perf
                       (--baseline REV|COMPILER|RESULTS.json, --runs N,
-                      --threshold PCT); fails on regressions past threshold
+                      --threshold PCT); fails on regressions past threshold.
+                      --languages runs tests/perf/xlang with n00b and C at
+                      -O0 and -Ofast, plus Go and Python (--skip c|go|python)
   tu <file.c>         recompile exactly one source file
   install [opts]      compile, then install a toolchain and make it active
                       (--prefix DIR, --link, --add-to-path, --no-modify-path)

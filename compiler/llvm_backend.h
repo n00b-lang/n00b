@@ -107,6 +107,7 @@ typedef struct {
 
 char *n00bb_llvm_target_triple(core_string_t profile);
 void n00bb_llvm_set_profiling(bool enabled);
+void n00bb_llvm_set_opt_level(int level);
 bool n00bb_llvm_backend_link_bitcode(
     const n00bb_llvm_bitcode_input_t *inputs, size_t count,
     bool debug_enabled, bool native_cpu, bool emit_frame_maps,

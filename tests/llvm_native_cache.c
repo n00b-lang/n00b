@@ -30,15 +30,17 @@ int main(int argc, char **argv)
     core_string_t generic = CORE_STRING_STATIC("generic");
     core_string_t no_features = CORE_STRING_STATIC("");
     core_uint128_t key = n00bb_native_cache_key(cache, bitcode,
-        sizeof bitcode, triple, generic, no_features, false, true);
+        sizeof bitcode, triple, generic, no_features, false, 3, true);
     assert(key);
     assert(key != n00bb_native_cache_key(cache, bitcode,
         sizeof bitcode, triple, CORE_STRING_STATIC("native"), no_features,
-        false, true));
+        false, 3, true));
     assert(key != n00bb_native_cache_key(cache, bitcode,
-        sizeof bitcode, triple, generic, no_features, true, true));
+        sizeof bitcode, triple, generic, no_features, true, 3, true));
     assert(key != n00bb_native_cache_key(cache, bitcode,
-        sizeof bitcode, triple, generic, no_features, false, false));
+        sizeof bitcode, triple, generic, no_features, false, 0, true));
+    assert(key != n00bb_native_cache_key(cache, bitcode,
+        sizeof bitcode, triple, generic, no_features, false, 3, false));
     const char object[] = "native object fixture";
     core_buffer_t readback = {0};
     assert(!n00bb_native_cache_read(cache, key, &readback));

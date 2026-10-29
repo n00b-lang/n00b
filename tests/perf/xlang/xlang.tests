@@ -1,0 +1,7 @@
+# name	program
+calls	calls.n
+alloc	alloc.n
+containers	containers.n
+strings	strings.n
+short-strings	short_strings.n
+sieve	sieve.n

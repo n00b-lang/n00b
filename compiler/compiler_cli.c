@@ -172,6 +172,9 @@ static const parse_cmdr_flag_t GLOBAL_FLAGS[] = {
     DEV_KEYED_FLAG("--no-package-cache", NO_ALIAS, BOOL, false,
                    "rescan package directories instead of using the cache",
                    SETS(DEV_NO_PACKAGE_CACHE, true)),
+    DEV_KEYED_FLAG("--opt-level", NO_ALIAS, INT, true,
+                   "optimize generated code at LLVM O0 to O3 instead of the build's level",
+                   SETS(DEV_OPT_LEVEL, true)),
     END_FLAGS,
 };
 
