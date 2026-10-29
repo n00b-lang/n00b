@@ -470,6 +470,24 @@ sccs_release(core_list_t(cache_scc_t) *sccs)
     core_list_free(*sccs);
 }
 
+static void
+close_imports(core_list_t(cache_scc_t) *sccs)
+{
+    for (size_t s = 0; s < sccs->len; s++) {
+        cache_scc_t *scc = &sccs->data[s];
+        for (size_t k = 0; k < scc->imports.len; k++) {
+            const cache_scc_t *imported = &sccs->data[scc->imports.data[k]];
+            for (size_t j = 0; j < imported->imports.len; j++) {
+                size_t next = imported->imports.data[j];
+                bool seen = next == s;
+                for (size_t n = 0; !seen && n < scc->imports.len; n++)
+                    seen = scc->imports.data[n] == next;
+                if (!seen) core_list_push(scc->imports, next);
+            }
+        }
+    }
+}
+
 static bool
 collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs,
              bool lowered)
@@ -518,6 +536,7 @@ collect_sccs(core_link_unit_t *link, core_list_t(cache_scc_t) *sccs,
         scc_freshness(scc);
         if (lowered) inline_dependencies(sccs, scc, &scc->inlined);
     }
+    close_imports(sccs);
     return true;
 }
 
