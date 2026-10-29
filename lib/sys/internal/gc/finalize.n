@@ -1,5 +1,4 @@
 import internal.abi
-import internal.clock
 import internal.gc.alloc
 import internal.gc.core
 import internal.gc.heap
@@ -369,7 +368,7 @@ func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
         return
     }
 
-    let begun: u64 = internal.clock.now_ns()
+    let begun: u64 = __runtime_now_ns()
     let startup_limit: u64 = begun + startup_wait_ns
     var deadline: u64 = begun + stall_wait_ns
     __os_thread_capture_self(ref mutator.captured)
@@ -380,7 +379,7 @@ func backpressure(mutator: Ref[internal.gc.core.Mutator]) {
             internal.gc.sync.event_leave(ref heap.fin_progress)
             break
         }
-        let now: u64 = internal.clock.now_ns()
+        let now: u64 = __runtime_now_ns()
         if __atomic_load(ref heap.fin_thread) == thread_starting
             and now + stall_wait_ns <= startup_limit {
             deadline = now + stall_wait_ns

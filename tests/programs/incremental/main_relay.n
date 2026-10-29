@@ -1,0 +1,3 @@
+import relay
+
+require relay.relay(1) == 4

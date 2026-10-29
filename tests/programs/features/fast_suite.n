@@ -10,6 +10,7 @@ import sys.gc.registry
 import sys.gc.roots
 import sys.locks
 import sys.memory
+import sys.random
 import sys.threads
 
 record Point {
@@ -432,5 +433,53 @@ func gc_collect_main() {
     } else { require false }
 }
 
+func random_bytes_filled(n: int) -> bool fail: int {
+    var buffer: Array[u8] = new[Array[u8]](n)
+    sys.random.fill(buffer)!
+    if n < 64 {
+        return true
+    }
+    var nonzero: uint = 0
+    var at: uint = 0
+    while at < __array_length(buffer) {
+        if buffer[at] != 0 {
+            nonzero += 1
+        }
+        at += 1
+    }
+    return nonzero > __array_length(buffer) / 2
+}
+
+func random_integers_filled() -> bool fail: int {
+    var small: u8 = 0
+    var signed: i16 = 0
+    var wide: u128 = 0
+    var word: int = 0
+    sys.random.fill(small)!
+    sys.random.fill(signed)!
+    sys.random.fill(wide)!
+    sys.random.fill(word)!
+    var first: u64 = 0
+    var second: u64 = 0
+    sys.random.fill(first)!
+    sys.random.fill(second)!
+    return first != second
+}
+
+func random_main() -> bool {
+    try {
+        let sizes: Array[int] = [0, 1, 255, 256, 257, 100000]
+        for n in sizes {
+            if !random_bytes_filled(n)! {
+                return false
+            }
+        }
+        return random_integers_filled()!
+    } fail(code) {
+        return false
+    }
+}
+
 gc_collect_main()
+require random_main()
 __fd_write(2, "ok")

@@ -8,6 +8,7 @@ import containers.buffer
 import containers.errors
 import cursor
 import hashing
+import integer
 import containers.traits
 import io.debug
 import io.raw
@@ -167,6 +168,7 @@ package builtin {
     export containers.errors.Container_Err
     export cursor.Cursor
     export hashing.Hash
+    export integer.Integer
     export ffi.Fixup
     export containers.traits.Has_Length
     export containers.traits.Appendable

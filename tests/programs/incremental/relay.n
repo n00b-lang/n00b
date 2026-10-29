@@ -1,0 +1,5 @@
+import trapper
+
+func relay(n: int) -> int {
+    return trapper.bump(n) * 2
+}

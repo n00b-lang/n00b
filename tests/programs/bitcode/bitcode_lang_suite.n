@@ -1,5 +1,9 @@
 import sys.abi
+import sys.clock
 import sys.effects
+import sys.env
+import sys.fs
+import sys.random
 import sys.gc.core
 import sys.gc.alloc
 import sys.gc.heap
@@ -520,6 +524,118 @@ func function_effects_check() {
                                    sys.effects.may_io)
     require !sys.effects.has_effect(__function_effects(ref bump),
                                     sys.effects.may_io)
+    let printing = __function_effects(ref shout)
+    require sys.effects.has_effect(printing, sys.effects.may_output)
+    require !sys.effects.has_effect(printing, sys.effects.may_input)
+    let reading = __function_effects(ref sys.fs.read_file)
+    require sys.effects.has_effect(reading, sys.effects.may_input)
+    require !sys.effects.has_effect(reading, sys.effects.may_output)
+    require sys.effects.has_effect(__function_effects(ref sys.env.args),
+                                   sys.effects.reads_env)
+    require sys.effects.has_effect(__function_effects(ref sys.clock.now_ns),
+                                   sys.effects.reads_clock)
+    let allocating = __function_effects(ref effects_allocate)
+    require sys.effects.has_effect(allocating, sys.effects.may_allocate)
+    require !sys.effects.has_effect(allocating, sys.effects.reads_clock)
+    require !sys.effects.has_effect(allocating, sys.effects.reads_env)
+    require !sys.effects.has_effect(pure, sys.effects.reads_clock)
+    let random = __function_effects(ref effects_random)
+    require sys.effects.has_effect(random, sys.effects.reads_random)
+    require !sys.effects.has_effect(random, sys.effects.may_io)
+    require !sys.effects.has_effect(pure, sys.effects.reads_random)
+}
+
+func effects_random(modify buffer: Array[u8]) -> nil fail: int {
+    sys.random.fill(buffer)!
+}
+
+func effects_allocate(n: int) -> uint {
+    let values: Array[int] = new[Array[int]](n)
+    return __array_length(values)
+}
+
+func effects_spawn(entry: Ref[(Ref[byte]) -> Ref[byte]],
+                   argument: Ref[byte]) -> bool {
+    return __os_thread_start(entry, argument) == 0
+}
+
+func dict_size(table: Dict[string, int]) -> uint {
+    return table.len()
+}
+
+func dict_store(table: Dict[string, int], key: string) {
+    _ = table.put(key, 1)
+}
+
+func list_size(items: List[int]) -> uint {
+    return items.len()
+}
+
+const dict_size_reads_live: bool = __function_reads(ref dict_size,
+                                                    "table.index.live")
+const dict_size_reads_entries: bool = __function_reads(ref dict_size,
+                                                       "table.entries")
+
+func audited_step(n: int) -> int {
+    __effect("audit")
+    return n + 1
+}
+
+func audited_caller(n: int) -> int {
+    return audited_step(n) * 2
+}
+
+func unaudited(n: int) -> int {
+    return n * 2
+}
+
+func effect_paths_check() {
+    require audited_caller(1) == 4
+    require __function_has_effect(ref audited_step, "audit")
+    require __function_has_effect(ref audited_caller, "audit")
+    require !__function_has_effect(ref unaudited, "audit")
+    require dict_size_reads_live
+    require !dict_size_reads_entries
+    require __function_reads(ref dict_size, "table.index")
+    require !__function_writes(ref dict_size, "table")
+    require __function_writes(ref dict_store, "table.entries")
+    require __function_writes(ref dict_store, "table.index.used")
+    require __function_writes(ref dict_store, "table")
+    require !__function_writes(ref dict_store, "key")
+    require __function_reads(ref list_size, "items.count")
+    require !__function_reads(ref list_size, "items.items")
+    require __function_writes(ref effects_random, "buffer[]")
+    require __function_has_effect(ref shout, "may_output")
+    require !__function_has_effect(ref shout, "may_input")
+    require __function_has_effect(ref effects_random, "reads_random")
+    require !__function_has_effect(ref dict_size, "may_allocate")
+    require __function_has_effect(ref effects_spawn, "starts_threads")
+    require !__function_has_effect(ref effects_spawn, "may_input")
+    require !__function_has_effect(ref effects_spawn, "may_output")
+}
+
+func loop_item_wide(n: int) -> int {
+    return n
+}
+
+func loop_item_unsigned(n: uint) -> uint {
+    return n
+}
+
+func loop_items_widen_check() {
+    var total: int = 0
+    for n in [1, 2, 255, 256] {
+        total += loop_item_wide(n)
+    }
+    require total == 514
+    let bytes: Array[u8] = [3, 4]
+    var unsigned_total: uint = 0
+    for b in bytes {
+        unsigned_total += loop_item_unsigned(b)
+        total += loop_item_wide(b)
+    }
+    require unsigned_total == 7
+    require total == 521
 }
 
 record First {
@@ -1775,6 +1891,8 @@ func start() -> nil {
     unsafe_arithmetic_check()
     diverging_paths_check()
     function_effects_check()
+    effect_paths_check()
+    loop_items_widen_check()
     overloads_check()
     thread_global_pair_check()
     named_reference_check()

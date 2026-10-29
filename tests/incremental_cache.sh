@@ -89,6 +89,12 @@ edits() {
     unset N00B_NO_PACKAGE_CACHE
     grep -q '^comptime reuse scc alpha.facade$' "$tmp/log" \
         || fail "stale package module: the alpha manifest was not reused"
+
+    build work main_relay.n
+    printf '\n' | cat - "$tmp/work/trapper.n" >"$tmp/trapper.n"
+    mv "$tmp/trapper.n" "$tmp/work/trapper.n"
+    build work main_relay.n
+    expect_stored "line shift" "trapper"
 }
 
 shapes() {

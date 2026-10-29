@@ -39,12 +39,14 @@ uint64_t n00b_os_stack_address(void);
 size_t n00b_os_stack_red_zone_bytes(void);
 uint64_t n00b_os_frame_pointer_chain(void);
 uint64_t n00b_os_now_ns(void);
+uint64_t n00b_os_runtime_now_ns(void);
 void n00b_os_cpu_relax(void);
 void *n00b_os_map_zeroed(size_t bytes, size_t alignment);
 int32_t n00b_os_unmap(void *address, size_t bytes);
 int32_t n00b_os_protect(void *address, size_t bytes, uint32_t protection);
 int64_t n00b_os_open(const uint8_t *path, int64_t flags, uint32_t mode);
 int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count);
+int64_t n00b_os_random_bytes(uint8_t *buffer, uint64_t count);
 int64_t n00b_os_close(int64_t fd);
 [[noreturn]] void n00b_os_exit(int64_t code);
 int32_t n00b_os_futex_wait(uint8_t *word, uint32_t expected,

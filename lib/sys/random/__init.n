@@ -1,0 +1,5 @@
+import internal.random
+
+package sys.random {
+    export internal.random
+}
