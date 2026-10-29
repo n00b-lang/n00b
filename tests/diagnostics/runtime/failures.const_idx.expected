@@ -1,6 +1,6 @@
 panic: index 7 is out of range for a list of length 3
   --> tests/diagnostics/runtime/failures.n:31:13
 backtrace:
-  at checked_index (lib/builtin/containers/list.n:32:9)
+  at checked_index (lib/builtin/containers/list.n:48:9)
   at const_index (tests/diagnostics/runtime/failures.n:31:13)
   at run (tests/diagnostics/runtime/failures.n:109:9)

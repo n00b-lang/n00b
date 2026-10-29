@@ -4,13 +4,29 @@ import cursor
 import panic
 
 object List {
-    items: Array['T]
-    count: uint
+    items:  Array['T]
+    count:  uint
+    shared: bool
 }
 
 func __init(self: List['T], items : Array['T] = []) {
     self.items = items
     self.count = __array_length(items)
+    self.shared = false
+}
+
+private func detach(self: List['T]) {
+    if !self.shared {
+        return
+    }
+    var copy: Array['T] = new[Array['T]](cast[int]__array_length(self.items))
+    var at:   uint      = 0
+    while at < self.count {
+        copy[at] = self.items[at]
+        at += 1
+    }
+    self.items = copy
+    self.shared = false
 }
 
 func len(self: List['T]) -> uint {
@@ -45,7 +61,9 @@ func __read(self: List['T], index: int) -> 'T {
 }
 
 func __write(self: List['T], index: int, value: 'T) {
-    self.items[checked_index(self, index)] = value
+    let at: int = checked_index(self, index)
+    detach(self)
+    self.items[at] = value
 }
 
 func __slice(self: List['T], start_ix: int,
@@ -93,6 +111,7 @@ func __write_slice(self: List['T], start_ix: int?,
     let removed: uint = cast[uint](end - start)
     let length:  uint = self.count - removed + incoming
     ensure_capacity(self, length)
+    detach(self)
     if incoming > removed {
         let growth: uint = incoming - removed
         var tail:   uint = self.count
@@ -140,12 +159,14 @@ func ensure_capacity(self: List['T], needed: uint) {
         index += 1
     }
     self.items = next
+    self.shared = false
 }
 
 func append(self: List['T], value: 'T,
                    front : bool = false) {
     ensure_capacity(self, self.count + 1)
     if front {
+        detach(self)
         var index: uint = self.count
         while index > 0 {
             self.items[index] = self.items[index - 1]
@@ -164,6 +185,7 @@ func insert(self: List['T], index: int, value: 'T) {
                                  "an insertion into a list")
     }
     ensure_capacity(self, self.count + 1)
+    detach(self)
     var at: uint = self.count
     while at > cast[uint]index {
         self.items[at] = self.items[at - 1]
@@ -177,6 +199,7 @@ func pop(self: List['T], front : bool = false) -> 'T? {
     if self.count == 0 {
         return nil
     }
+    detach(self)
     var index: uint = self.count - 1
     if front {
         index = 0
@@ -206,6 +229,7 @@ func find(self: List['T], value: 'T) -> int? where 'T : Equal {
 
 func remove(self: List['T], value: 'T,
                    all : bool = true) -> uint where 'T : Equal {
+    detach(self)
     var read:    uint = 0
     var write:   uint = 0
     var removed: uint = 0
@@ -233,9 +257,11 @@ func remove(self: List['T], value: 'T,
 func clear(self: List['T]) {
     self.items = new[Array['T]](0)
     self.count = 0
+    self.shared = false
 }
 
 func to_array(consume self: List['T]) -> Array['T] {
+    detach(self)
     return __array_prefix(self.items, self.count)
 }
 
@@ -257,14 +283,9 @@ func __add(self: List['T], other: List['T]) -> List['T] {
 }
 
 func iter(self: List['T]) -> cursor.Cursor['T] {
-    var items: Array['T] = new[Array['T]](cast[int]self.count)
-    var at:    uint      = 0
-    while at < self.count {
-        items[at] = self.items[at]
-        at += 1
-    }
+    self.shared = true
     let view: containers.view.View['T] =
-        containers.view.__slice(items, 0, cast[int]self.count)
+        containers.view.__slice(self.items, 0, cast[int]self.count)
     return new[cursor.Cursor['T]](view)
 }
 
