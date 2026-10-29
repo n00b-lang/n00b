@@ -577,6 +577,8 @@ ir_value_t  *ir_func_reference(ir_module_t *m, ir_func_t *function);
 bool         ir_global_set_record_initializer(
     ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *values, size_t count);
+bool ir_global_adopt_static_initializer(ir_module_t *module,
+    ir_global_t *global, const ir_global_init_value_t *value);
 bool ir_global_set_static_initializer(
     ir_module_t *m, ir_global_t *global,
     const ir_global_init_value_t *value);
