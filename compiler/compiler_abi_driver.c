@@ -280,10 +280,27 @@ n00bb_linked_global_bindings(const n00bb_abi_object_view_t *view,
     return true;
 }
 
+static ir_func_t *
+linked_instance(const core_list_t(n00bb_specialization_t) *specializations,
+                core_string_t module_name, core_string_t function_name)
+{
+    if (!n00bb_specialization_module(module_name)) return nullptr;
+    for (size_t s = 0; s < specializations->len; s++) {
+        ir_func_t *instance = specializations->data[s].instance;
+        if (instance && instance->n_blocks
+            && core_string_eq(ir_module_name(instance->owner), module_name)
+            && core_string_eq(instance->name, function_name))
+            return instance;
+    }
+    return nullptr;
+}
+
 static bool
 n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
                               core_translation_unit_t *const *units,
                               size_t unit_count,
+                              const core_list_t(n00bb_specialization_t)
+                                  *specializations,
                               n00bb_llvm_function_binding_t **out,
                               size_t *out_count)
 {
@@ -307,11 +324,20 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
             ? n00bb_abi_object_row(view, N00B_ABI_TABLE_TYPE,
                                    symbol->type_index) : nullptr;
         n00bb_abi_string_view_t module_name = {0}, function_name = {0};
-        if (!signature || !module
+        if (!module
             || !n00bb_abi_object_string(view, &module->full_path,
                                          &module_name)
             || !n00bb_abi_object_string(view, &function->name,
                                          &function_name)) continue;
+        if (!function->symbol_index) {
+            ir_func_t *instance = linked_instance(specializations,
+                view_text(module_name), view_text(function_name));
+            if (instance) bindings[count++] = (n00bb_llvm_function_binding_t){
+                .function = instance, .index = i,
+            };
+            continue;
+        }
+        if (!signature) continue;
         ir_func_t *matched = nullptr;
         for (size_t u = 0; u < unit_count; u++) {
             n00bb_tu_state_t *state = tu_state(units[u]);
@@ -1437,7 +1463,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             if (ok) {
                 read_stage = "matching function indices";
                 ok = n00bb_linked_function_indices(&view, order.data,
-                    count, &function_indices, &function_index_count);
+                    count, &analysis->specializations, &function_indices,
+                    &function_index_count);
             }
             n00bb_abi_object_close(&view);
         }
@@ -2163,6 +2190,12 @@ emit_specialization_abi(core_link_unit_t *link,
     core_source_file_t source = {0};
     core_translation_unit_t unit = {0};
     parse_symtab_t *symbols = parse_symtab_new();
+    if (symbols) {
+        parse_symtab_push_scope_all(symbols, CORE_STRING_STATIC("module"));
+        parse_scope_t *scope = parse_symtab_current_scope(symbols,
+                                                          core_string_empty());
+        if (scope) scope->scope_tag = CORE_STRING_STATIC("module");
+    }
     n00bb_abi_artifact_t *artifact = core_alloc(n00bb_abi_artifact_t);
     n00bb_tu_state_t *generic_state = generic ? tu_state(generic) : nullptr;
     bool valid = generic_state && generic_state->lex

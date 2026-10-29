@@ -8,6 +8,7 @@
 
 #include "abi_ref_schema.h"
 #include "abi_string.h"
+#include "specialize.h"
 #include "lib/alloc.h"
 #include "lib/buffer.h"
 #include "lib/byteorder.h"
@@ -431,17 +432,6 @@ n00bb_abi_selected_objects_release(n00bb_abi_selected_objects_t *selected)
     *selected = (n00bb_abi_selected_objects_t){0};
 }
 
-static bool
-names_specialization_module(core_string_t module)
-{
-    static const char marker[] = "$spec$";
-    size_t marker_length = sizeof(marker) - 1;
-    for (size_t at = 0; module.data && at + marker_length <= module.u8_bytes;
-         at++)
-        if (!memcmp(module.data + at, marker, marker_length)) return true;
-    return false;
-}
-
 bool
 n00bb_abi_select_objects(core_link_unit_t *link,
                          const core_target_desc_t *target,
@@ -477,7 +467,7 @@ n00bb_abi_select_objects(core_link_unit_t *link,
         const core_indexed_entry_t *entry = candidate->module.data
             ? core_indexed_table_find(modules, &candidate->module) : nullptr;
         if (!entry) {
-            if (names_specialization_module(candidate->module))
+            if (n00bb_specialization_module(candidate->module))
                 extra_candidates[extra_count++] = candidate;
             continue;
         }
