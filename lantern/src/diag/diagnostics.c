@@ -310,6 +310,147 @@ core_diagnostics_merge(core_diagnostics_t *dst, const core_diagnostics_t *src)
     return true;
 }
 
+static void
+encode_u32(core_buffer_t *out, uint32_t value)
+{
+    uint8_t bytes[4] = {
+        (uint8_t)value, (uint8_t)(value >> 8),
+        (uint8_t)(value >> 16), (uint8_t)(value >> 24),
+    };
+    core_buffer_append(out, (const char *)bytes, sizeof(bytes));
+}
+
+static void
+encode_text(core_buffer_t *out, core_string_t text)
+{
+    encode_u32(out, (uint32_t)text.u8_bytes);
+    if (text.u8_bytes) core_buffer_append(out, text.data, text.u8_bytes);
+}
+
+static void
+encode_location(core_buffer_t *out, core_diag_location_t location)
+{
+    encode_u32(out, location.line);
+    encode_u32(out, location.column);
+    encode_u32(out, location.end_line);
+    encode_u32(out, location.end_column);
+    encode_u32(out, location.has_location);
+}
+
+void
+core_diagnostic_encode(core_buffer_t *out, const core_diagnostic_t *item)
+{
+    encode_u32(out, (uint32_t)item->severity);
+    encode_text(out, item->code);
+    encode_text(out, item->message);
+    encode_text(out, item->label);
+    encode_text(out, item->module);
+    encode_text(out, item->path);
+    encode_location(out, item->location);
+    encode_u32(out, (uint32_t)item->parts.len);
+    for (size_t p = 0; p < item->parts.len; p++) {
+        const core_diag_part_t *part = &item->parts.data[p];
+        encode_u32(out, (uint32_t)part->kind);
+        encode_text(out, part->text);
+        encode_text(out, part->path);
+        encode_location(out, part->location);
+    }
+}
+
+typedef struct {
+    const uint8_t *data;
+    size_t length;
+    size_t *at;
+    bool failed;
+} decoder_t;
+
+static uint32_t
+decode_u32(decoder_t *d)
+{
+    if (d->failed || d->length - *d->at < 4) {
+        d->failed = true;
+        return 0;
+    }
+    const uint8_t *bytes = d->data + *d->at;
+    *d->at += 4;
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8)
+        | ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+}
+
+static core_string_t
+decode_text(decoder_t *d)
+{
+    uint32_t length = decode_u32(d);
+    if (d->failed || d->length - *d->at < length) {
+        d->failed = true;
+        return (core_string_t){};
+    }
+    core_string_t text = length
+        ? core_string_dup(core_string_borrow((const char *)d->data + *d->at,
+                                             length))
+        : (core_string_t){};
+    *d->at += length;
+    return text;
+}
+
+static core_diag_location_t
+decode_location(decoder_t *d)
+{
+    core_diag_location_t location = {0};
+    location.line = decode_u32(d);
+    location.column = decode_u32(d);
+    location.end_line = decode_u32(d);
+    location.end_column = decode_u32(d);
+    location.has_location = decode_u32(d) != 0;
+    return location;
+}
+
+bool
+core_diagnostic_decode(const uint8_t *data, size_t length, size_t *at,
+                       core_diagnostic_t *out)
+{
+    if (!data || !at || !out || *at > length) return false;
+    decoder_t d = {.data = data, .length = length, .at = at};
+    *out = (core_diagnostic_t){
+        .severity = (core_diag_severity_t)decode_u32(&d),
+    };
+    out->code = decode_text(&d);
+    out->message = decode_text(&d);
+    out->label = decode_text(&d);
+    out->module = decode_text(&d);
+    out->path = decode_text(&d);
+    out->location = decode_location(&d);
+    uint32_t parts = decode_u32(&d);
+    for (uint32_t p = 0; !d.failed && p < parts; p++) {
+        core_diag_part_t part = {
+            .kind = (core_diag_part_kind_t)decode_u32(&d),
+        };
+        part.text = decode_text(&d);
+        part.path = decode_text(&d);
+        part.location = decode_location(&d);
+        core_list_push(out->parts, part);
+    }
+    if (d.failed) core_diagnostic_release(out);
+    return !d.failed;
+}
+
+void
+core_diagnostic_release(core_diagnostic_t *item)
+{
+    if (!item) return;
+    core_free(item->code.data);
+    core_free(item->message.data);
+    core_free(item->label.data);
+    core_free(item->module.data);
+    core_free(item->path.data);
+    for (size_t p = 0; p < item->parts.len; p++) {
+        core_free(item->parts.data[p].text.data);
+        core_free(item->parts.data[p].path.data);
+    }
+    core_list_free(item->parts);
+    *item = (core_diagnostic_t){};
+}
+
 size_t
 core_diagnostics_count(const core_diagnostics_t *d)
 {
@@ -962,7 +1103,17 @@ renders_before(const core_diagnostic_t *a, const core_diagnostic_t *b)
     if (path) return path < 0;
     if (a->location.line != b->location.line)
         return a->location.line < b->location.line;
-    return a->location.column < b->location.column;
+    if (a->location.column != b->location.column)
+        return a->location.column < b->location.column;
+    if (a->location.end_line != b->location.end_line)
+        return a->location.end_line < b->location.end_line;
+    if (a->location.end_column != b->location.end_column)
+        return a->location.end_column < b->location.end_column;
+    if (a->severity != b->severity) return a->severity < b->severity;
+    int order = core_string_cmp(a->code, b->code);
+    if (!order) order = core_string_cmp(a->message, b->message);
+    if (!order) order = core_string_cmp(a->label, b->label);
+    return order < 0;
 }
 
 static size_t *

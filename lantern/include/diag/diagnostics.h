@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "lib/buffer.h"
 #include "lib/list.h"
 #include "lib/string.h"
 
@@ -141,6 +142,11 @@ bool core_diagnostics_append(core_diagnostics_t *destination,
                              const core_diagnostic_t *diagnostic);
 bool core_diagnostics_merge(core_diagnostics_t *destination,
                             const core_diagnostics_t *source);
+void core_diagnostic_encode(core_buffer_t *out,
+                            const core_diagnostic_t *diagnostic);
+bool core_diagnostic_decode(const uint8_t *data, size_t length, size_t *at,
+                            core_diagnostic_t *out);
+void core_diagnostic_release(core_diagnostic_t *diagnostic);
 size_t core_diagnostics_count(const core_diagnostics_t *diagnostics);
 const core_diagnostic_t *core_diagnostics_at(
     const core_diagnostics_t *diagnostics, size_t index);
