@@ -123,6 +123,11 @@ instances() {
     build work generic_values.n
     grep -q '^runtime reuse scc builtin\.containers\.list' "$tmp/log" \
         || fail "generic values: the cached list module was not reused"
+
+    build work generic_fields.n
+    build work generic_fields.n
+    grep -q '^runtime reuse scc pairs$' "$tmp/log" \
+        || fail "generic fields: the cached pairs module was not reused"
 }
 
 case $part in

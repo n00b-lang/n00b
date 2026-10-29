@@ -217,8 +217,10 @@ record_scope_for_type(parse_grammar_t *grammar,
             symbol, N00BB_SIGNATURE_TYPEVARS_KEY);
         bool same_instance = th_hash(state->types, candidate)
             == th_hash(state->types, wanted);
-        bool generic_instance = symbol->decl_node
-            && field_record_declaration(grammar, symbol->decl_node)
+        bool record_like = symbol->decl_node
+            ? field_record_declaration(grammar, symbol->decl_node)
+            : n00bb_field_scope_tag(symbol->member_scope->scope_tag);
+        bool generic_instance = record_like
             && variables && variables->len == wanted_args;
         if (!same_instance && !generic_instance) continue;
         if (owner_out) *owner_out = symbol->owner_unit
