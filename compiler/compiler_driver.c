@@ -4384,6 +4384,25 @@ restart_with_strict_cache(char **argv, core_string_t argv0)
 }
 
 static void
+restart_with_summaries(char **argv, core_string_t argv0, n00bb_cache_t *cache)
+{
+    core_buffer_t hints = {0};
+    if (n00bb_cache_summary_hints(cache, &hints)) {
+        n00bb_handoff_set(&n00bb_handoff()->cache_summaries,
+                          core_buffer_string(&hints));
+        n00bb_cache_log_restart(CORE_STRING_STATIC(
+            "cached modules depend on summaries that changed"));
+        core_string_t compiler = core_os_executable_path(argv0);
+        if (compiler.data) exec_compiler(compiler, argv);
+        core_free(compiler.data);
+    }
+    core_buffer_release(&hints);
+    n00bb_cache_log_restart(CORE_STRING_STATIC(
+        "cached summary assumptions do not hold"));
+    restart_with_strict_cache(argv, argv0);
+}
+
+static void
 restart_with_build_time(char **argv, core_string_t argv0, bool literal)
 {
     core_string_t compiler = core_os_executable_path(argv0);
@@ -4427,23 +4446,6 @@ put_handoff_u32(core_buffer_t *out, uint32_t value)
     core_buffer_append(out, (const char *)&value, sizeof(value));
 }
 
-static void
-put_handoff_text(core_buffer_t *out, core_string_t text)
-{
-    put_handoff_u32(out, (uint32_t)text.u8_bytes);
-    if (text.u8_bytes) core_buffer_append(out, text.data, text.u8_bytes);
-}
-
-static void
-put_handoff_location(core_buffer_t *out, core_diag_location_t location)
-{
-    put_handoff_u32(out, location.line);
-    put_handoff_u32(out, location.column);
-    put_handoff_u32(out, location.end_line);
-    put_handoff_u32(out, location.end_column);
-    put_handoff_u32(out, location.has_location);
-}
-
 typedef struct {
     const uint8_t *data;
     size_t length;
@@ -4464,55 +4466,13 @@ read_handoff_u32(handoff_reader_t *r)
     return value;
 }
 
-static core_string_t
-read_handoff_text(handoff_reader_t *r)
-{
-    uint32_t length = read_handoff_u32(r);
-    if (r->failed || r->length - r->at < length) {
-        r->failed = true;
-        return (core_string_t){0};
-    }
-    core_string_t text = core_string_borrow((const char *)r->data + r->at,
-                                            length);
-    r->at += length;
-    return text;
-}
-
-static core_diag_location_t
-read_handoff_location(handoff_reader_t *r)
-{
-    core_diag_location_t location = {0};
-    location.line = read_handoff_u32(r);
-    location.column = read_handoff_u32(r);
-    location.end_line = read_handoff_u32(r);
-    location.end_column = read_handoff_u32(r);
-    location.has_location = read_handoff_u32(r) != 0;
-    return location;
-}
-
 static bool
 write_check_handoff(const core_diagnostics_t *errors)
 {
     core_buffer_t out = {0};
     put_handoff_u32(&out, (uint32_t)core_diagnostics_count(errors));
-    for (size_t i = 0; i < core_diagnostics_count(errors); i++) {
-        const core_diagnostic_t *item = core_diagnostics_at(errors, i);
-        put_handoff_u32(&out, (uint32_t)item->severity);
-        put_handoff_text(&out, item->code);
-        put_handoff_text(&out, item->message);
-        put_handoff_text(&out, item->label);
-        put_handoff_text(&out, item->module);
-        put_handoff_text(&out, item->path);
-        put_handoff_location(&out, item->location);
-        put_handoff_u32(&out, (uint32_t)item->parts.len);
-        for (size_t p = 0; p < item->parts.len; p++) {
-            const core_diag_part_t *part = &item->parts.data[p];
-            put_handoff_u32(&out, (uint32_t)part->kind);
-            put_handoff_text(&out, part->text);
-            put_handoff_text(&out, part->path);
-            put_handoff_location(&out, part->location);
-        }
-    }
+    for (size_t i = 0; i < core_diagnostics_count(errors); i++)
+        core_diagnostic_encode(&out, core_diagnostics_at(errors, i));
     core_string_t root = core_os_temp_root();
     core_buffer_t stem = {0};
     core_buffer_append_string(&stem, root);
@@ -4547,31 +4507,16 @@ merge_check_handoff(core_diagnostics_t *into)
     uint32_t count = read_handoff_u32(&r);
     bool merged = false;
     for (uint32_t i = 0; !r.failed && i < count; i++) {
-        core_diagnostic_t item = {
-            .severity = (core_diag_severity_t)read_handoff_u32(&r),
-            .code = read_handoff_text(&r),
-            .message = read_handoff_text(&r),
-            .label = read_handoff_text(&r),
-            .module = read_handoff_text(&r),
-            .path = read_handoff_text(&r),
-        };
-        item.location = read_handoff_location(&r);
-        uint32_t parts = read_handoff_u32(&r);
-        item.parts = core_list_new(core_diag_part_t);
-        for (uint32_t p = 0; !r.failed && p < parts; p++) {
-            core_diag_part_t part = {
-                .kind = (core_diag_part_kind_t)read_handoff_u32(&r),
-                .text = read_handoff_text(&r),
-                .path = read_handoff_text(&r),
-            };
-            part.location = read_handoff_location(&r);
-            core_list_push(item.parts, part);
+        core_diagnostic_t item = {0};
+        if (!core_diagnostic_decode(r.data, r.length, &r.at, &item)) {
+            r.failed = true;
+            break;
         }
-        if (!r.failed && !already_reported(into, &item)) {
+        if (!already_reported(into, &item)) {
             core_diagnostics_append(into, &item);
             merged = merged || diagnostic_is_error(&item);
         }
-        core_list_free(item.parts);
+        core_diagnostic_release(&item);
     }
     core_free(bytes);
     return merged;
@@ -5659,12 +5604,14 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     if (located && cache && !check_command) {
         bool recorded = n00bb_cache_record_summaries(cache, link,
                                                      link_analysis);
-        if (optimistic_cache && !build_time_reported
-            && (!recorded || !n00bb_cache_summary_assumptions_hold(cache))) {
+        if (optimistic_cache && !build_time_reported && !recorded) {
             n00bb_cache_log_restart(CORE_STRING_STATIC(
                 "cached summary assumptions do not hold"));
             restart_with_strict_cache(argv, argv0);
         }
+        if (optimistic_cache && !build_time_reported
+            && !n00bb_cache_summary_assumptions_hold(cache))
+            restart_with_summaries(argv, argv0, cache);
     }
     core_string_t header_output = parse_cmdr_flag_str(args,
         CORE_STRING_STATIC("--output"));

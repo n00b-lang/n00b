@@ -9,6 +9,7 @@
 #define CAPTURE_FULL CORE_STRING_STATIC("capture_full")
 #define CACHE_STRICT CORE_STRING_STATIC("cache_strict")
 #define CACHE_EXCLUDE CORE_STRING_STATIC("cache_exclude")
+#define CACHE_SUMMARIES CORE_STRING_STATIC("cache_summaries")
 #define PHASE_ORDER CORE_STRING_STATIC("phase_order")
 #define CHECK_RUNTIME_PHASE CORE_STRING_STATIC("check_runtime_phase")
 #define CHECK_DIAGNOSTICS CORE_STRING_STATIC("check_diagnostics")
@@ -76,6 +77,8 @@ load(void)
             handoff.cache_strict = number != 0;
         else if (core_string_eq(name, CACHE_EXCLUDE))
             n00bb_handoff_set(&handoff.cache_exclude, value);
+        else if (core_string_eq(name, CACHE_SUMMARIES))
+            n00bb_handoff_set(&handoff.cache_summaries, value);
         else if (core_string_eq(name, PHASE_ORDER) && numeric)
             handoff.phase_order = (n00bb_phase_order_t)number;
         else if (core_string_eq(name, CHECK_RUNTIME_PHASE))
@@ -115,6 +118,8 @@ n00bb_handoff_pass(void)
     if (record->cache_strict) put_number(&out, CACHE_STRICT, 1);
     if (record->cache_exclude.u8_bytes)
         put(&out, CACHE_EXCLUDE, record->cache_exclude);
+    if (record->cache_summaries.u8_bytes)
+        put(&out, CACHE_SUMMARIES, record->cache_summaries);
     if (record->phase_order != N00BB_PHASE_ORDER_DEFAULT)
         put_number(&out, PHASE_ORDER, record->phase_order);
     if (record->check_runtime_phase) put_number(&out, CHECK_RUNTIME_PHASE, 1);
