@@ -334,6 +334,71 @@ static void test_decoded_summaries_keep_heap_types(void)
     ir_ctx_free(ctx);
 }
 
+static void test_named_effects_survive_encoding(void)
+{
+    ir_ctx_t *ctx = ir_ctx_new();
+    ir_diags_t *d = ir_diags_new(ctx, nullptr);
+    ir_module_t *m = ir_module_parse(ctx, MOD(
+        "  func @f(%x: i32) -> i32 {\n"
+        "    block entry:\n"
+        "      %one: i32 = const 1\n"
+        "      %y: i32 = add %x, %one\n"
+        "      return %y\n"
+        "  }\n"), 0, PROFILES, 1, d);
+    check("the effect module parses", m != nullptr);
+    if (!m) return;
+    ir_module_establish(m, IR_PROP_PARSED | IR_PROP_TYPED | IR_PROP_SSA);
+    ir_func_t *f = ir_func_at(m, 0);
+    ir_summaries_t *summaries = ir_summaries_compute(&f, 1, nullptr);
+    ir_summary_t *summary = ir_summary_of(summaries, f);
+    check("a fresh summary names no effects",
+          ir_summary_effect_count(summary) == 0);
+    ir_summary_add_effect(summary, S("tainted"));
+    ir_summary_add_effect(summary, S("audited"));
+    ir_summary_add_effect(summary, S("tainted"));
+    check("named effects are kept once and in order",
+          ir_summary_effect_count(summary) == 2
+          && core_string_eq(ir_summary_effect_at(summary, 0), S("audited"))
+          && core_string_eq(ir_summary_effect_at(summary, 1), S("tainted")));
+    check("an unnamed effect is refused",
+          !ir_summary_add_effect(summary, (core_string_t){0}));
+    core_buffer_t encoded = {0};
+    check("named effects encode", ir_summary_encode(summary, &encoded));
+    ir_summary_t *decoded = ir_summary_decode(summaries, f,
+        (const uint8_t *)encoded.data, encoded.byte_len, nullptr, nullptr);
+    check("named effects decode",
+          decoded && ir_summary_effect_count(decoded) == 2
+          && ir_summary_has_effect(decoded, S("audited"))
+          && ir_summary_has_effect(decoded, S("tainted"))
+          && !ir_summary_has_effect(decoded, S("logged")));
+    text_table_t table = {0};
+    ir_summary_texts_t texts = {
+        .intern = intern_text, .lookup = lookup_text, .context = &table,
+    };
+    core_buffer_t referenced = {0};
+    ir_summary_t *resolved = ir_summary_encode_with(summary, &referenced,
+                                                    &texts)
+        ? ir_summary_decode_with(summaries, f,
+              (const uint8_t *)referenced.data, referenced.byte_len, nullptr,
+              nullptr, &texts)
+        : nullptr;
+    check("named effects survive a text table",
+          resolved && ir_summary_has_effect(resolved, S("tainted")));
+    core_buffer_t first = {0};
+    core_buffer_t second = {0};
+    check("the identity encoding covers named effects",
+          ir_summary_encode_identity(summary, &first)
+          && ir_summary_encode_identity(decoded, &second)
+          && core_string_eq(core_buffer_string(&first),
+                            core_buffer_string(&second)));
+    core_buffer_release(&first);
+    core_buffer_release(&second);
+    core_buffer_release(&referenced);
+    core_buffer_release(&encoded);
+    ir_summaries_free(summaries);
+    ir_ctx_free(ctx);
+}
+
 int main(void)
 {
     test_last_element_under_positive_length();
@@ -342,5 +407,6 @@ int main(void)
     test_monotone_loop_checks_move_before_the_loop();
     test_trap_summaries_leave_out_proven_checks();
     test_decoded_summaries_keep_heap_types();
+    test_named_effects_survive_encoding();
     return report("IR ABCD");
 }

@@ -2752,14 +2752,8 @@ static ir_rule_result_t rule_call_output(ir_module_t *m, ir_instr_t *in,
         return DECLINE;
     }
 
-    th_type *signature = ir_instr_call_signature(call);
-    if (!signature) signature = opd_type(call, 0);
-    signature = signature ? th_resolve(signature) : nullptr;
-    if (signature && th_kind_of(signature) == TH_INDIRECTION)
-        signature = th_ind_referent(signature);
-    if (signature && th_kind_of(signature) == TH_BINDER)
-        signature = th_binder_body(signature);
-    if (!signature || th_kind_of(signature) != TH_FUNCTION) return DECLINE;
+    th_type *signature = ir_call_function_type(call);
+    if (!signature) return DECLINE;
     if (call->op == IR_OP_CALL || call->op == IR_OP_CALLBACK_INVOKE) {
         th_type *error = th_func_error(signature);
         bool fallible = error

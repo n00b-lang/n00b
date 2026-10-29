@@ -586,18 +586,10 @@ index_is_inline_field(const ir_instr_t *instruction)
         || !field->block->owner || !field->block->owner->owner)
         return false;
     const ir_value_t *object = ir_operand_value(&field->operands[0]);
-    th_type *record = object ? th_ind_referent(object->type) : nullptr;
-    ir_module_t *module = field->block->owner->owner;
-    const ir_final_layout_t *layout = record
-        ? ir_layout_final(module, record, ir_module_target(module)) : nullptr;
-    if (!layout) return false;
-    for (size_t i = 0; i < layout->n_members; i++) {
-        const ir_final_member_layout_t *member = &layout->members[i];
-        if (member->name.data
-            && core_string_eq(member->name, field->operands[1].name))
-            return member->inline_element_count != 0;
-    }
-    return false;
+    bool known = false;
+    return ir_layout_member_inline(field->block->owner->owner,
+        object ? th_ind_referent(object->type) : nullptr,
+        field->operands[1].name, &known);
 }
 
 static bool

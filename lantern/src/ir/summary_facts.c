@@ -100,6 +100,13 @@ static const core_string_t flag_names[] = {
     CORE_STRING_STATIC("unbounded_recursion"),
     CORE_STRING_STATIC("calls_finalizers"),
     CORE_STRING_STATIC("starts_threads"),
+    CORE_STRING_STATIC("calls_callbacks"),
+    CORE_STRING_STATIC("reinterprets"),
+    CORE_STRING_STATIC("may_input"),
+    CORE_STRING_STATIC("may_output"),
+    CORE_STRING_STATIC("reads_env"),
+    CORE_STRING_STATIC("reads_clock"),
+    CORE_STRING_STATIC("reads_random"),
 };
 
 static const core_string_t access_names[] = {
@@ -565,6 +572,13 @@ ir_summary_facts_build(ir_summaries_t *summaries, ir_func_t *const *functions,
     add_rules(facts);
     core_datalog_run(facts->engine);
     return facts;
+}
+
+core_string_t
+ir_summary_flag_name(uint32_t bit)
+{
+    return bit < sizeof(flag_names) / sizeof(*flag_names)
+        ? flag_names[bit] : (core_string_t){0};
 }
 
 void

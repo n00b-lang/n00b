@@ -823,3 +823,68 @@ void ir_doms_free(ir_doms_t *d)
     core_arena_free(&d->arena);
     core_free(d);
 }
+
+struct ir_reach_t {
+    uint32_t count;
+    bool   **after;
+};
+
+ir_reach_t *ir_reach_new(const ir_func_t *f)
+{
+    ir_reach_t *r = core_alloc(ir_reach_t);
+    r->count = f->n_blocks;
+    r->after = core_alloc_array(bool *, r->count ? r->count : 1);
+    return r;
+}
+
+void ir_reach_free(ir_reach_t *r)
+{
+    if (!r) {
+        return;
+    }
+    for (uint32_t b = 0; b < r->count; b++) {
+        core_free(r->after[b]);
+    }
+    core_free(r->after);
+    core_free(r);
+}
+
+static const bool *reach_after(ir_reach_t *r, const ir_block_t *from)
+{
+    uint32_t count = r->count;
+    if (r->after[from->index]) {
+        return r->after[from->index];
+    }
+    bool        *seen    = core_alloc_array(bool, count ? count : 1);
+    ir_block_t **pending = core_alloc_array(ir_block_t *, count + 1);
+    uint32_t     top     = 0;
+    pending[top++]       = (ir_block_t *)from;
+    while (top) {
+        ir_instr_t *last = ir_block_terminator(pending[--top]);
+        for (uint32_t i = 0; last && i < ir_succ_count(last); i++) {
+            ir_block_t *next = ir_succ_at(last, i);
+            if (!next || next->index >= count || seen[next->index]) {
+                continue;
+            }
+            seen[next->index] = true;
+            pending[top++]    = next;
+        }
+    }
+    core_free(pending);
+    r->after[from->index] = seen;
+    return seen;
+}
+
+bool ir_instr_reaches(ir_reach_t *r, const ir_instr_t *from,
+                      const ir_instr_t *to)
+{
+    if (!r || !from || !to || !from->block || !to->block
+        || from->block->index >= r->count
+        || to->block->index >= r->count) {
+        return true;
+    }
+    if (from->block == to->block && from->index < to->index) {
+        return true;
+    }
+    return reach_after(r, from->block)[to->block->index];
+}

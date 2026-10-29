@@ -380,6 +380,19 @@ const ir_final_layout_t *ir_layout_final_visible(ir_module_t *m, th_type *t,
     return ir_layout_final(owner, t, target);
 }
 
+bool ir_layout_member_inline(ir_module_t *m, th_type *record,
+                             core_string_t name, bool *known)
+{
+    const ir_final_layout_t *layout = m && record
+        ? ir_layout_final(m, record, ir_module_target(m)) : nullptr;
+    *known = layout != nullptr;
+    for (size_t i = 0; layout && i < layout->n_members; i++)
+        if (layout->members[i].name.data
+            && core_string_eq(layout->members[i].name, name))
+            return layout->members[i].inline_element_count != 0;
+    return false;
+}
+
 static bool pin(ir_layout_val_t *v, uint64_t value);
 
 bool ir_layout_copy_final(ir_module_t *m, th_type *destination,

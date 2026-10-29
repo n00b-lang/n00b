@@ -38,6 +38,7 @@ ir_summary_facts_t *ir_summary_facts_build(ir_summaries_t *summaries,
                                            ir_func_t *const *functions,
                                            size_t count, bool provenance);
 void                ir_summary_facts_free(ir_summary_facts_t *facts);
+core_string_t       ir_summary_flag_name(uint32_t bit);
 core_datalog_engine_t *ir_summary_facts_engine(ir_summary_facts_t *facts);
 bool ir_summary_facts_side_effect(ir_summary_facts_t *facts,
                                   const ir_instr_t *call);

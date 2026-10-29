@@ -1437,6 +1437,79 @@ bool ir_instr_is_binding_initialization(const ir_instr_t *instruction)
         && initializes->b;
 }
 
+bool ir_instr_set_fresh(ir_instr_t *instruction)
+{
+    if (!instruction || (instruction->op != IR_OP_COPY
+                         && instruction->op != IR_OP_ALLOC)
+        || !instruction->block || !instruction->block->owner
+        || !instruction->block->owner->owner) return false;
+    ir_ctx_t *ctx = instruction->block->owner->owner->ctx;
+    return ir_annot_set(ctx, &instruction->annots, (ir_annot_t){
+               .key = CORE_STRING_STATIC("ir.fresh"),
+               .kind = IR_ANNOT_BOOL,
+               .b = true,
+           });
+}
+
+static const core_string_t effect_prefix = CORE_STRING_STATIC("ir.effect.");
+
+bool ir_func_add_effect(ir_func_t *function, core_string_t name)
+{
+    if (!function || !function->owner || !name.u8_bytes) return false;
+    ir_ctx_t      *ctx = function->owner->ctx;
+    core_buffer_t *key = core_buffer_empty();
+    core_buffer_append_string(key, effect_prefix);
+    core_buffer_append_string(key, name);
+    core_string_t text     = core_buffer_take_string(key);
+    core_string_t interned = ir_strdup(ctx, text);
+    core_free(text.data);
+    return interned.data && ir_annot_set(ctx, &function->annots, (ir_annot_t){
+               .key = interned, .kind = IR_ANNOT_BOOL, .b = true});
+}
+
+core_string_t ir_func_effect_at(const ir_func_t *function, uint32_t index)
+{
+    for (uint32_t a = 0; function && a < function->annots.n; a++) {
+        core_string_t key = function->annots.a[a].key;
+        if (key.u8_bytes <= effect_prefix.u8_bytes
+            || !core_string_starts_with(key, effect_prefix)
+            || index--) continue;
+        return core_string_slice(key, effect_prefix.u8_bytes,
+                                 key.u8_bytes - effect_prefix.u8_bytes);
+    }
+    return (core_string_t){0};
+}
+
+bool ir_instr_is_fresh(const ir_instr_t *instruction)
+{
+    if (!instruction || (instruction->op != IR_OP_COPY
+                         && instruction->op != IR_OP_ALLOC)) return false;
+    ir_annot_t *fresh = ir_annot_get(
+        (ir_annots_t *)&instruction->annots, CORE_STRING_STATIC("ir.fresh"));
+    return fresh && fresh->kind == IR_ANNOT_BOOL && fresh->b;
+}
+
+bool ir_instr_allocates_storage(const ir_instr_t *instruction)
+{
+    if (!instruction) return false;
+    switch (instruction->op) {
+    case IR_OP_ALLOC:
+    case IR_OP_ALLOCA:
+    case IR_OP_ALLOC_USING:
+    case IR_OP_ARRAY_NEW:
+    case IR_OP_ARRAY_NEW_USING:
+    case IR_OP_BOX:
+    case IR_OP_VARIANT_NEW:
+    case IR_OP_VARIANT_NEW_USING:
+        return true;
+    case IR_OP_AGGREGATE:
+        return instruction->dest && instruction->dest->type
+            && th_kind_of(th_resolve(instruction->dest->type)) == TH_SEQUENCE;
+    default:
+        return ir_instr_is_fresh(instruction);
+    }
+}
+
 bool ir_instr_set_shape_constraint(ir_instr_t *instruction,
                                    ir_shape_t *shape)
 {

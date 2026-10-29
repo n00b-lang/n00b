@@ -49,7 +49,16 @@ enum {
     IR_SUMMARY_STARTS_THREADS   = 1u << 12,
     IR_SUMMARY_CALLS_CALLBACKS  = 1u << 13,
     IR_SUMMARY_REINTERPRETS     = 1u << 14,
+    IR_SUMMARY_MAY_INPUT        = 1u << 15,
+    IR_SUMMARY_MAY_OUTPUT       = 1u << 16,
+    IR_SUMMARY_READS_ENV        = 1u << 17,
+    IR_SUMMARY_READS_CLOCK      = 1u << 18,
+    IR_SUMMARY_READS_RANDOM     = 1u << 19,
 };
+
+#define IR_SUMMARY_OBSERVES (IR_SUMMARY_MAY_INPUT | IR_SUMMARY_MAY_OUTPUT \
+                             | IR_SUMMARY_READS_ENV | IR_SUMMARY_READS_CLOCK \
+                             | IR_SUMMARY_READS_RANDOM)
 
 enum {
     IR_STRAP_EXPLICIT   = 1u << 0,
@@ -64,6 +73,13 @@ typedef struct {
     uint32_t line;
     uint32_t column;
 } ir_strap_site_t;
+
+typedef struct {
+    uint32_t      flag;
+    core_string_t callee;
+    uint32_t      line;
+    uint32_t      column;
+} ir_switness_t;
 
 typedef enum : uint8_t {
     IR_SINPUT_VALUE,
@@ -106,6 +122,7 @@ typedef enum : uint8_t {
     IR_SRETURN_GLOBAL,
     IR_SRETURN_FRESH_EXTERNAL,
     IR_SRETURN_UNKNOWN,
+    IR_SRETURN_FRESH,
 } ir_sreturn_kind_t;
 
 typedef struct {
@@ -178,6 +195,12 @@ ir_summary_t   *ir_summary_of(ir_summaries_t *summaries,
 ir_summary_t *ir_summary_new(ir_summaries_t *summaries,
                              const ir_func_t *function);
 void          ir_summary_set_flags(ir_summary_t *summary, uint32_t flags);
+bool          ir_summary_add_effect(ir_summary_t *summary, core_string_t name);
+uint32_t      ir_summary_effect_count(const ir_summary_t *summary);
+core_string_t ir_summary_effect_at(const ir_summary_t *summary,
+                                   uint32_t index);
+bool          ir_summary_has_effect(const ir_summary_t *summary,
+                                    core_string_t name);
 void          ir_summary_add_access(ir_summary_t *summary, ir_splace_t place,
                                     uint8_t flags);
 ir_summary_t *ir_summary_conservative(ir_summaries_t *summaries,
@@ -191,6 +214,8 @@ void                 ir_summary_set_trap_kinds(ir_summary_t *summary,
 uint32_t             ir_summary_trap_site_count(const ir_summary_t *summary);
 const ir_strap_site_t *ir_summary_trap_site_at(const ir_summary_t *summary,
                                                uint32_t index);
+const ir_switness_t  *ir_summary_witness_for(const ir_summary_t *summary,
+                                             uint32_t flag);
 uint32_t             ir_summary_access_count(const ir_summary_t *summary);
 const ir_saccess_t  *ir_summary_access_at(const ir_summary_t *summary,
                                           uint32_t index);
@@ -207,6 +232,7 @@ uint8_t      ir_summary_param_escape(const ir_summary_t *summary,
 void         ir_summary_set_param_escape(ir_summary_t *summary,
                                          uint32_t param, uint8_t flags);
 ir_sreturn_t ir_summary_return(const ir_summary_t *summary);
+bool         ir_summary_returns_fresh(const ir_summary_t *summary);
 void         ir_summary_set_return(ir_summary_t *summary,
                                    ir_sreturn_t returned);
 uint8_t      ir_summary_call_escape(ir_summaries_t *summaries,
@@ -216,6 +242,8 @@ typedef const ir_global_t *(*ir_summary_global_fn)(void *context,
                                                     core_string_t name);
 bool          ir_summary_encode(const ir_summary_t *summary,
                                 core_buffer_t *out);
+bool          ir_summary_encode_identity(const ir_summary_t *summary,
+                                         core_buffer_t *out);
 ir_summary_t *ir_summary_decode(ir_summaries_t *summaries,
                                 const ir_func_t *function,
                                 const uint8_t *data, size_t size,
@@ -251,7 +279,9 @@ bool         ir_summary_call_writes(ir_summaries_t *summaries,
                                     const ir_instr_t *call, uint32_t place);
 
 enum {
-    IR_SEFFECT_TRAPS_SHIFT       = 16,
+    IR_SEFFECT_FLAG_BITS         = 20,
+    IR_SEFFECT_FLAG_MASK         = (1u << IR_SEFFECT_FLAG_BITS) - 1,
+    IR_SEFFECT_TRAPS_SHIFT       = IR_SEFFECT_FLAG_BITS,
     IR_SEFFECT_READS_PARAM_SHIFT  = 32,
     IR_SEFFECT_WRITES_PARAM_SHIFT = 48,
 };
@@ -274,6 +304,42 @@ typedef struct {
     core_string_t  name;
     uint8_t        flags;
 } ir_sfield_t;
+
+enum {
+    IR_SPATH_READ  = 1u << 0,
+    IR_SPATH_WRITE = 1u << 1,
+    IR_SPATH_DEEP  = 1u << 2,
+};
+
+enum { IR_SPATH_STEPS = 4 };
+
+typedef struct {
+    ir_splace_kind_t   root;
+    uint32_t           param;
+    const ir_global_t *global;
+    uint8_t            depth;
+    uint8_t            flags;
+    uint8_t            output;
+    core_string_t      steps[IR_SPATH_STEPS];
+} ir_spath_t;
+
+typedef struct {
+    ir_spath_t to;
+    ir_spath_t from;
+} ir_sstore_t;
+
+uint32_t          ir_summary_path_count(const ir_summary_t *summary);
+const ir_spath_t *ir_summary_path_at(const ir_summary_t *summary,
+                                     uint32_t index);
+uint32_t           ir_summary_result_count(const ir_summary_t *summary);
+const ir_sstore_t *ir_summary_result_at(const ir_summary_t *summary,
+                                        uint32_t index);
+uint32_t           ir_summary_store_count(const ir_summary_t *summary);
+const ir_sstore_t *ir_summary_store_at(const ir_summary_t *summary,
+                                       uint32_t index);
+bool ir_summary_may_access(const ir_summary_t *summary,
+                           const ir_func_t *function, core_string_t query,
+                           bool write);
 
 uint32_t           ir_summary_field_count(const ir_summary_t *summary);
 const ir_sfield_t *ir_summary_field_at(const ir_summary_t *summary,

@@ -136,6 +136,8 @@ bool ir_layout_copy_final(ir_module_t *m, th_type *destination,
                           th_type *source, core_string_t target);
 const ir_final_layout_t *ir_layout_final(ir_module_t *m, th_type *t,
                                         core_string_t target);
+bool ir_layout_member_inline(ir_module_t *m, th_type *record,
+                             core_string_t name, bool *known);
 const ir_final_layout_t *ir_layout_final_visible(ir_module_t *m, th_type *t,
                                                 core_string_t target);
 bool ir_layout_final_byte_extent(const ir_final_layout_t *layout,

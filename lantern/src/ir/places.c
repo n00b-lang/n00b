@@ -540,6 +540,14 @@ follow(core_list_t(place_value_ptr_t) *pending, const ir_instr_t *in,
     }
 }
 
+static bool
+local_storage_root(const ir_value_t *value)
+{
+    if (value->kind == IR_VAL_LOCAL) return true;
+    if (value->kind != IR_VAL_INSTR || !value->def) return false;
+    return ir_instr_allocates_storage(value->def);
+}
+
 static void
 resolve_into(ir_places_t *places, const ir_value_t *address,
              core_list_t(uint32_t) *ids)
@@ -557,16 +565,11 @@ resolve_into(ir_places_t *places, const ir_value_t *address,
             continue;
         }
         const ir_instr_t *in = value->def;
-        switch (in->op) {
-        case IR_OP_ALLOCA:
-        case IR_OP_ALLOC:
-        case IR_OP_ALLOC_USING:
-        case IR_OP_ARRAY_NEW:
-        case IR_OP_ARRAY_NEW_USING:
-        case IR_OP_VARIANT_NEW:
-        case IR_OP_VARIANT_NEW_USING:
+        if (local_storage_root(value)) {
             add_id(ids, object_place(places, value));
-            break;
+            continue;
+        }
+        switch (in->op) {
         case IR_OP_ADDRESS_OF:
             if (in->n_operands == 1 && ir_operand_value(&in->operands[0]))
                 add_id(ids, storage_place(places,
@@ -745,24 +748,6 @@ collect_storage_uses(ir_places_t *places, ir_instr_t *in)
         record_storage(places, in, IR_ACCESS_STORE, in->dest_local->value);
 }
 
-static bool
-local_storage_root(const ir_value_t *value)
-{
-    if (value->kind == IR_VAL_LOCAL) return true;
-    if (value->kind != IR_VAL_INSTR || !value->def) return false;
-    switch (value->def->op) {
-    case IR_OP_ALLOCA:
-    case IR_OP_ALLOC:
-    case IR_OP_ALLOC_USING:
-    case IR_OP_ARRAY_NEW:
-    case IR_OP_ARRAY_NEW_USING:
-    case IR_OP_VARIANT_NEW:
-    case IR_OP_VARIANT_NEW_USING:
-        return true;
-    default:
-        return false;
-    }
-}
 
 static bool
 derives_address(ir_op_t op)

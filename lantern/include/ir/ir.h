@@ -544,6 +544,11 @@ th_type *ir_type_parse(ir_module_t *m, core_string_t text);
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
 size_t   ir_call_output_count(th_type *callable);
 th_type *ir_call_output_type(th_type *callable, size_t output_index);
+size_t   ir_call_output_param(th_type *callable, size_t output_index);
+size_t   ir_call_param_output(th_type *callable, size_t param);
+th_type *ir_call_function_type(const ir_instr_t *call);
+const ir_instr_t *ir_call_output_source(const ir_instr_t *output,
+                                        size_t *ordinal);
 uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
@@ -744,6 +749,11 @@ bool ir_allocation_has_only_local_uses(const ir_func_t *function,
 bool ir_instr_set_binding_initialization(ir_instr_t *instruction,
                                          bool initializes);
 bool ir_instr_is_binding_initialization(const ir_instr_t *instruction);
+bool ir_instr_set_fresh(ir_instr_t *instruction);
+bool ir_instr_is_fresh(const ir_instr_t *instruction);
+bool ir_instr_allocates_storage(const ir_instr_t *instruction);
+bool          ir_func_add_effect(ir_func_t *function, core_string_t name);
+core_string_t ir_func_effect_at(const ir_func_t *function, uint32_t index);
 bool ir_instr_set_shape_constraint(ir_instr_t *instruction,
                                    ir_shape_t *shape);
 typedef enum : uint8_t {
