@@ -72,30 +72,32 @@ inline func get(self: Dict['K, 'V], key: 'K) -> 'V? where 'K : hashing . Hash {
     if slot == nil {
         return nil
     }
-    let cell: containers.hash_index.Hash_Index_Slot =
-        index.slots[slot.get()]
-    return self.entries[cell.entry - 1].value
+    return self.entries[containers.hash_index.entry_at(index, slot.get())].value
 }
 
 func contains(self: Dict['K, 'V], key: 'K) -> bool where 'K : hashing . Hash {
     return containers.hash_index.find_slot(ref self.index, key_hash(key)) != nil
 }
 
-func insert_missing(self: Dict['K, 'V], key: 'K, value: 'V, hash: u128) {
+func insert_entry(self: Dict['K, 'V], key: 'K, value: 'V, hash: u128)
+                 -> uint? {
     ensure_entries(self, self.count + 1)
-    containers.hash_index.ensure_capacity(self.index, 1)
+    containers.hash_index.ensure_capacity(ref self.index, 1)
+    let existing: uint? =
+        containers.hash_index.insert_or_find(ref self.index, hash, self.count)
+    if existing != nil {
+        return existing
+    }
     let inserted: Entry['K, 'V] =
         (key = key, value = value, ordinal = self.next_ordinal)
     self.entries[self.count] = inserted
-    containers.hash_index.index_insert(self.index, hash, self.count)
     self.count += 1
     self.next_ordinal += 1
+    return nil
 }
 
 func replace_at(self: Dict['K, 'V], slot: uint, value: 'V) -> 'V {
-    let cell: containers.hash_index.Hash_Index_Slot =
-        self.index.slots[slot]
-    let at:    uint          = cell.entry - 1
+    let at:    uint          = containers.hash_index.entry_at(ref self.index, slot)
     let prior: Entry['K, 'V] = self.entries[at]
     self.entries[at] =
         (key = prior.key, value = value, ordinal = prior.ordinal)
@@ -104,36 +106,16 @@ func replace_at(self: Dict['K, 'V], slot: uint, value: 'V) -> 'V {
 
 func put(self: Dict['K, 'V], key: 'K, value: 'V)
         -> 'V? where 'K : hashing . Hash {
-    let hash:  u128  = key_hash(key)
-    let found: uint? = containers.hash_index.find_slot(ref self.index, hash)
-    if found != nil {
-        return replace_at(self, found.get(), value)
+    let existing: uint? = insert_entry(self, key, value, key_hash(key))
+    if existing != nil {
+        return replace_at(self, existing.get(), value)
     }
-    insert_missing(self, key, value, hash)
     return nil
 }
 
 inline func add(self: Dict['K, 'V], key: 'K, value: 'V)
                -> bool where 'K : hashing . Hash {
-    let hash: u128 = key_hash(key)
-    if self.count < __array_length(self.entries) and
-       containers.hash_index.has_room(self.index, 1) {
-        if !containers.hash_index.index_insert_unique_ref(
-            ref self.index, hash, self.count) {
-            return false
-        }
-        let inserted: Entry['K, 'V] =
-            (key = key, value = value, ordinal = self.next_ordinal)
-        self.entries[self.count] = inserted
-        self.count += 1
-        self.next_ordinal += 1
-        return true
-    }
-    if containers.hash_index.find_slot(ref self.index, hash) != nil {
-        return false
-    }
-    insert_missing(self, key, value, hash)
-    return true
+    return insert_entry(self, key, value, key_hash(key)) == nil
 }
 
 func replace(self: Dict['K, 'V], key: 'K, value: 'V)
@@ -153,16 +135,14 @@ inline func remove(self: Dict['K, 'V], key: 'K)
     if found == nil {
         return false
     }
-    let slot: containers.hash_index.Hash_Index_Slot =
-        self.index.slots[found.get()]
-    let removed: uint = slot.entry - 1
-    containers.hash_index.remove_at(self.index, found.get())
+    let removed: uint =
+        containers.hash_index.entry_at(ref self.index, found.get())
+    containers.hash_index.remove_at(ref self.index, found.get())
     let last: uint = self.count - 1
     if removed != last {
         let moved: Entry['K, 'V] = self.entries[last]
         self.entries[removed] = moved
-        containers.hash_index.replace_entry(self.index,
-            key_hash(moved.key), last, removed)
+        containers.hash_index.replace_entry(ref self.index, last, removed)
     }
     __array_clear(ref self.entries, last)
     self.count = last

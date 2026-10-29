@@ -50,25 +50,13 @@ inline func contains(self: Set['T], value: 'T) -> bool where 'T : hashing . Hash
 
 inline func add(self: Set['T], value: 'T)
                -> bool where 'T : hashing . Hash {
-    let hash: u128 = value.hash()
-    if self.count < __array_length(self.keys) and
-       containers.hash_index.has_room(self.index, 1) {
-        if !containers.hash_index.index_insert_unique_ref(
-            ref self.index, hash, self.count) {
-            return false
-        }
-        self.keys[self.count] = value
-        self.count += 1
-        return true
-    }
-    if containers.hash_index.find_slot(ref self.index, hash) != nil {
+    ensure_keys(self, self.count + 1)
+    containers.hash_index.ensure_capacity(ref self.index, 1)
+    if containers.hash_index.insert_or_find(ref self.index, value.hash(),
+                                            self.count) != nil {
         return false
     }
-    ensure_keys(self, self.count + 1)
-    containers.hash_index.ensure_capacity(self.index, 1)
     self.keys[self.count] = value
-    containers.hash_index.index_insert(self.index, hash,
-        self.count)
     self.count += 1
     return true
 }
@@ -81,16 +69,14 @@ inline func remove(self: Set['T], value: 'T)
     if found == nil {
         return false
     }
-    let slot: containers.hash_index.Hash_Index_Slot =
-        self.index.slots[found.get()]
-    let removed: uint = slot.entry - 1
-    containers.hash_index.remove_at(self.index, found.get())
+    let removed: uint =
+        containers.hash_index.entry_at(ref self.index, found.get())
+    containers.hash_index.remove_at(ref self.index, found.get())
     let last: uint = self.count - 1
     if removed != last {
         let moved: 'T = self.keys[last]
         self.keys[removed] = moved
-        containers.hash_index.replace_entry(self.index,
-            moved.hash(), last, removed)
+        containers.hash_index.replace_entry(ref self.index, last, removed)
     }
     __array_clear(ref self.keys, last)
     self.count = last

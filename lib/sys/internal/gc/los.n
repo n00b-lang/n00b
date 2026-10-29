@@ -4,7 +4,7 @@ import internal.gc.registry
 import internal.memory
 
 const los_threshold: uint = 8 * 1024
-const los_cache_object:     uint = 256 * 1024
+const los_cache_object:     uint = 64 * 1024 * 1024
 const los_cache_min:        uint = 8 * 1024 * 1024
 
 func mapping_bytes(payload_bytes: uint, alignment: uint) -> uint {
@@ -84,7 +84,7 @@ func release(heap: Ref[internal.gc.core.Heap], obj: Ref[internal.gc.core.Los_Obj
     heap.los_count -= 1
     heap.los_bytes -= obj.mapped_bytes
 
-    var limit: uint = heap.target_bytes / 8
+    var limit: uint = heap.target_bytes / 4
     if limit < los_cache_min {
         limit = los_cache_min
     }
