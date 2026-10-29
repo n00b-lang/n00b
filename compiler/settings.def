@@ -40,3 +40,4 @@ N00BB_SETTING(DEV_NO_NATIVE_CACHE, "dev", "no_native_cache", BOOL, "false",
     ENVIRONMENT("N00BB_NO_NATIVE_CACHE"))
 N00BB_SETTING(DEV_NO_PACKAGE_CACHE, "dev", "no_package_cache", BOOL, "false",
     ENVIRONMENT("N00BB_NO_PACKAGE_CACHE"))
+N00BB_SETTING(DEV_OPT_LEVEL, "dev", "opt_level", INT, "-1", RANGE(-1, 3))

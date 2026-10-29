@@ -1310,7 +1310,7 @@ shim_key(const n00bb_ffi_t *ffi, const n00bb_native_cache_t *cache, core_string_
         }
     }
     core_uint128_t key = n00bb_native_cache_key(cache, payload.data, payload.byte_len, triple,
-                                                CORE_STRING_STATIC("shim"), CORE_STRING_STATIC(""), false, false);
+                                                CORE_STRING_STATIC("shim"), CORE_STRING_STATIC(""), false, 0, false);
     core_buffer_release(&payload);
     return key;
 }

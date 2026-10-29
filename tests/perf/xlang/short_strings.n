@@ -1,0 +1,16 @@
+var sink: string = ""
+
+func run(rounds: int, tail: string) -> uint {
+    var total: uint = 0
+    var round = 0
+    while round < rounds {
+        let joined = "x" + tail
+        sink = joined
+        total += byte_len(joined)
+        round += 1
+    }
+    return total
+}
+
+let scale = cast[int](__os_arg_count())
+require run(12000000 * scale, "short tail") == 132000000

@@ -5220,6 +5220,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     n00bb_config_load(&invocation);
     n00bb_llvm_set_profiling(
         n00bb_setting_bool(N00BB_KEY_DEV_PROFILE_COMPILE));
+    n00bb_llvm_set_opt_level(
+        (int)n00bb_setting_int(N00BB_KEY_DEV_OPT_LEVEL));
     n00bb_install_crash_handler();
     n00bb_toolchain_init(argv0);
     bool handled = false;

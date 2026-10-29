@@ -19,6 +19,7 @@
 #include "llvm_native_cache.h"
 #include "n00b-abi-v1.h"
 #include "compiler_native_roots.h"
+#include "compiler_system.h"
 #include "runtime_panic.h"
 #include "llvm_diagnostics.h"
 #include <time.h>
@@ -305,6 +306,7 @@ struct n00bb_llvm_backend_t {
     const ir_module_t *source;
     bool lowered;
     bool debug_enabled;
+    uint8_t opt_level;
     core_string_t cpu_name;
     core_string_t cpu_features;
     const n00bb_llvm_type_index_t *type_indices;
@@ -12851,6 +12853,23 @@ set_native_layout(LLVMModuleRef module, core_string_t cpu,
     return ok;
 }
 
+static int opt_level_override = -1;
+
+void
+n00bb_llvm_set_opt_level(int level)
+{
+    opt_level_override = level;
+}
+
+static uint8_t
+resolved_opt_level(bool debug_enabled, core_string_t module)
+{
+    bool library = module.data && n00bb_system_module(module);
+    if (!library && opt_level_override >= 0 && opt_level_override <= 3)
+        return (uint8_t)opt_level_override;
+    return debug_enabled ? 2 : 3;
+}
+
 n00bb_llvm_backend_t *
 n00bb_llvm_backend_prepare(const ir_module_t *ir, bool debug_enabled,
                            bool native_cpu, core_diagnostics_t *diagnostics)
@@ -12868,6 +12887,7 @@ n00bb_llvm_backend_prepare(const ir_module_t *ir, bool debug_enabled,
                    native_type_key_eq);
     backend->native_types_ready = true;
     backend->debug_enabled = debug_enabled;
+    backend->opt_level = resolved_opt_level(debug_enabled, ir_module_name(ir));
     if (native_cpu) {
         backend->cpu_name = take_llvm_message(LLVMGetHostCPUName());
         backend->cpu_features = take_llvm_message(LLVMGetHostCPUFeatures());
@@ -14244,7 +14264,8 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
             cache_key = n00bb_native_cache_key(backend->native_cache,
                 LLVMGetBufferStart(preopt), LLVMGetBufferSize(preopt),
                 triple_text, backend->cpu_name, backend->cpu_features,
-                backend->debug_enabled, backend->emit_frame_maps);
+                backend->debug_enabled, backend->opt_level,
+                backend->emit_frame_maps);
             core_free(triple_text.data);
             LLVMDisposeMemoryBuffer(preopt);
             if (n00bb_native_cache_read(backend->native_cache, cache_key,
@@ -14275,8 +14296,10 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     char *feature_text = llvm_text(backend->cpu_features);
     LLVMTargetMachineRef machine = LLVMCreateTargetMachine(target, triple,
         cpu_text, feature_text,
-        backend->debug_enabled ? LLVMCodeGenLevelDefault
-                               : LLVMCodeGenLevelAggressive,
+        backend->opt_level == 0 ? LLVMCodeGenLevelNone
+            : backend->opt_level == 1 ? LLVMCodeGenLevelLess
+            : backend->opt_level == 2 ? LLVMCodeGenLevelDefault
+            : LLVMCodeGenLevelAggressive,
         LLVMRelocPIC,
         LLVMCodeModelDefault);
     core_free(cpu_text);
@@ -14305,9 +14328,11 @@ emit_native_module(n00bb_llvm_backend_t *backend, LLVMModuleRef module,
     LLVMDisposeMessage(layout_text);
     LLVMDisposeTargetData(layout);
     LLVMPassBuilderOptionsRef pass_options = LLVMCreatePassBuilderOptions();
+    static const char *const pipelines[] = {
+        "default<O0>", "default<O1>", "default<O2>", "default<O3>",
+    };
     LLVMErrorRef pass_error = LLVMRunPasses(module,
-        backend->debug_enabled ? "default<O2>" : "default<O3>", machine,
-                                            pass_options);
+        pipelines[backend->opt_level], machine, pass_options);
     LLVMDisposePassBuilderOptions(pass_options);
     if (pass_error) {
         char *pass_message = LLVMGetErrorMessage(pass_error);
@@ -14606,6 +14631,7 @@ n00bb_llvm_backend_link_bitcode(const n00bb_llvm_bitcode_input_t *inputs,
     if (ok) {
         n00bb_llvm_backend_t backend = {
             .debug_enabled = debug_enabled,
+            .opt_level = resolved_opt_level(debug_enabled, (core_string_t){0}),
             .emit_frame_maps = emit_frame_maps,
         };
         if (native_cpu) {

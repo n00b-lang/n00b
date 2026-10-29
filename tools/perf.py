@@ -107,8 +107,8 @@ def baseline_compiler(source, build, baseline):
     return os.path.join(root, "build", "n00b")
 
 
-def compile_benchmark(compiler, program, output, cache, env):
-    command = [compiler, "build", "--output", output, os.path.basename(program)]
+def compile_benchmark(compiler, program, output, cache, env, flags=()):
+    command = [compiler, "build", *flags, "--output", output, os.path.basename(program)]
     shutil.rmtree(cache, ignore_errors=True)
     environment = dict(env, N00B_CACHE=cache)
     directory = os.path.dirname(program)
@@ -118,15 +118,15 @@ def compile_benchmark(compiler, program, output, cache, env):
             "cold_compile_rss_mb": cold["rss_mb"], "warm_compile_s": warm["wall_s"]}
 
 
-def benchmarks(source, names):
-    manifest = os.path.join(source, "tests", "perf", "perf.tests")
+def benchmarks(directory, manifest, names):
+    manifest = os.path.join(directory, manifest)
     found = []
     with open(manifest) as rows:
         for line in rows:
             if line.startswith("#") or not line.strip():
                 continue
             name, program = line.rstrip("\n").split("\t")[:2]
-            found.append((name, os.path.join(source, "tests", "perf", program)))
+            found.append((name, os.path.join(directory, program)))
     known = {name for name, _ in found}
     unknown = [name for name in names if name not in known]
     if unknown:
@@ -134,24 +134,80 @@ def benchmarks(source, names):
     return [entry for entry in found if not names or entry[0] in names]
 
 
-def collect(compilers, selected, results, runs, size_tool):
+def n00b_builder(compiler, size_tool, flags=(), shared_cache=None):
+    def build(name, program, directory, env):
+        binary = os.path.join(directory, name)
+        if shared_cache:
+            command = [compiler, "build", *flags, "--output", binary, os.path.basename(program)]
+            measure(command, dict(env, N00B_CACHE=shared_cache), os.path.dirname(program))
+            entry = {}
+        else:
+            entry = compile_benchmark(compiler, program, binary,
+                                      os.path.join(directory, "cache-" + name), env, flags)
+        entry.update(section_sizes(binary, size_tool))
+        return entry, [binary]
+    return build
+
+
+def native_builder(compile_command):
+    def build(name, program, directory, env):
+        binary = os.path.join(directory, name)
+        built = subprocess.run(compile_command(os.path.splitext(program)[0], binary), env=env,
+                               capture_output=True, text=True)
+        if built.returncode:
+            fail(f"cannot build {name}\n{built.stdout[-4000:]}{built.stderr[-4000:]}")
+        return {}, [binary]
+    return build
+
+
+def interpreted_builder(interpreter, extension):
+    def build(name, program, directory, env):
+        return {}, [interpreter, os.path.splitext(program)[0] + extension]
+    return build
+
+
+def language_builders(source, build, skip):
+    include = os.path.join(source, "lantern", "include")
+    library = os.path.join(build, "lantern", "libir.a")
+    cc = config_value(build, "CC") or shutil.which("cc")
+    go = shutil.which("go")
+    python = shutil.which("python3")
+    def c_builder(*optimize):
+        return cc and native_builder(lambda stem, binary: [cc, "-std=c2x", *optimize, "-I",
+                                                           include, stem + ".c", library, "-o",
+                                                           binary])
+    available = {
+        "c-Ofast": c_builder("-O3", "-ffast-math"),
+        "c-O0": c_builder("-O0"),
+        "go": go and native_builder(lambda stem, binary: [go, "build", "-o", binary, stem + ".go"]),
+        "python": python and interpreted_builder(python, ".py"),
+    }
+    builders = {}
+    for language, builder in available.items():
+        if language.split("-")[0] in skip:
+            continue
+        if not builder:
+            print(f"perf: skipping {language}, no toolchain found", flush=True)
+            continue
+        builders[language] = builder
+    return builders
+
+
+def collect(builders, selected, results, runs):
     environment = {key: value for key, value in os.environ.items() if key != "N00B_CACHE"}
-    measured = {label: {} for label in compilers}
+    measured = {label: {} for label in builders}
     for name, program in selected:
         print(f"perf: {name}", flush=True)
-        binaries = {}
-        for label, compiler in compilers.items():
-            binary = os.path.join(results, label, name)
-            os.makedirs(os.path.dirname(binary), exist_ok=True)
-            entry = compile_benchmark(compiler, program, binary,
-                                      os.path.join(results, label, "cache-" + name), environment)
-            entry.update(section_sizes(binary, size_tool))
+        commands = {}
+        for label, builder in builders.items():
+            directory = os.path.join(results, label)
+            os.makedirs(directory, exist_ok=True)
+            entry, commands[label] = builder(name, program, directory, environment)
             entry["runs"] = []
             measured[label][name] = entry
-            binaries[label] = binary
         for _ in range(runs):
-            for label, binary in binaries.items():
-                measured[label][name]["runs"].append(measure([binary], environment))
+            for label, command in commands.items():
+                measured[label][name]["runs"].append(measure(command, environment))
     return measured
 
 
@@ -193,6 +249,32 @@ def report(rows):
         print(f"{name:16} {metric:20} {old:12.3f} {new:12.3f} {change:+8.1f}%{mark}")
 
 
+LANGUAGE_ROWS = (
+    ("current", "n00b -Ofast", "c-Ofast"),
+    ("n00b-O0", "n00b -O0", "c-O0"),
+    ("c-Ofast", "c -Ofast", "c-Ofast"),
+    ("c-O0", "c -O0", "c-O0"),
+    ("go", "go", "c-Ofast"),
+    ("python", "python", "c-Ofast"),
+)
+
+
+def report_languages(summaries):
+    print(f"\n{'benchmark':14} {'build':12} {'wall_s':>9} {'cpu_s':>9} {'rss_mb':>9} "
+          f"{'vs c':>8} {'vs go':>8}")
+    for name in summaries["current"]:
+        for label, title, c_label in LANGUAGE_ROWS:
+            if label not in summaries:
+                continue
+            entry = summaries[label][name]
+            ratios = [f"{entry['wall_s'] / summaries[other][name]['wall_s']:7.2f}x"
+                      if other in summaries and summaries[other][name]["wall_s"] else f"{'-':>8}"
+                      for other in (c_label, "go")]
+            print(f"{name:14} {title:12} {entry['wall_s']:9.3f} {entry['cpu_s']:9.3f} "
+                  f"{entry['rss_mb']:9.1f} {ratios[0]} {ratios[1]}")
+        print()
+
+
 def report_single(current):
     print(f"\n{'benchmark':16} {'metric':20} {'value':>12}")
     for name, entry in current.items():
@@ -206,40 +288,63 @@ def main():
     parser.add_argument("--source", required=True)
     parser.add_argument("--build", required=True)
     parser.add_argument("--baseline", help="jj revision, compiler path, or results JSON from an earlier run")
-    parser.add_argument("--runs", type=int, default=7)
-    parser.add_argument("--threshold", type=float, default=3.0)
+    parser.add_argument("--runs", type=int)
+    parser.add_argument("--threshold", type=float)
+    parser.add_argument("--languages", action="store_true",
+                        help="run the cross-language suite in tests/perf/xlang against C, Go and Python")
+    parser.add_argument("--skip", action="append", default=[], choices=("c", "go", "python"),
+                        help="leave a language out of --languages")
     parser.add_argument("names", nargs="*")
     options = parser.parse_args()
     source, build = os.path.abspath(options.source), os.path.abspath(options.build)
-    selected = benchmarks(source, options.names)
-    results = os.path.join(build, "perf-results")
-    shutil.rmtree(results, ignore_errors=True)
-    os.makedirs(results)
-    bindir = config_value(build, "LLVM_BINDIR")
-    size_tool = shutil.which("llvm-size", path=bindir) if bindir else shutil.which("llvm-size")
-    compilers = {"current": os.path.join(build, "n00b")}
+    if options.languages:
+        selected = benchmarks(os.path.join(source, "tests", "perf", "xlang"), "xlang.tests", options.names)
+        results = os.path.join(build, "perf-xlang-results")
+        flags, runs = ("--release",), options.runs or 3
+        threshold = options.threshold or 5.0
+    else:
+        selected = benchmarks(os.path.join(source, "tests", "perf"), "perf.tests", options.names)
+        results = os.path.join(build, "perf-results")
+        flags, runs = (), options.runs or 7
+        threshold = options.threshold or 3.0
     saved = None
     if options.baseline and options.baseline.endswith(".json"):
         with open(options.baseline) as stored:
             saved = json.load(stored)
-    elif options.baseline:
-        compilers = {"baseline": baseline_compiler(source, build, options.baseline), **compilers}
-    measured = collect(compilers, selected, results, options.runs, size_tool)
+    shutil.rmtree(results, ignore_errors=True)
+    os.makedirs(results)
+    bindir = config_value(build, "LLVM_BINDIR")
+    size_tool = shutil.which("llvm-size", path=bindir) if bindir else shutil.which("llvm-size")
+    def cache(label):
+        return os.path.join(build, "perf-xlang-cache", label) if options.languages else None
+    builders = {"current": n00b_builder(os.path.join(build, "n00b"), size_tool, flags,
+                                        cache("current"))}
+    if options.baseline and saved is None:
+        builders = {"baseline": n00b_builder(baseline_compiler(source, build, options.baseline),
+                                             size_tool, flags, cache("baseline")), **builders}
+    if options.languages:
+        builders["n00b-O0"] = n00b_builder(os.path.join(build, "n00b"), size_tool,
+                                           (*flags, "--opt-level", "0"), cache("n00b-O0"))
+        builders.update(language_builders(source, build, options.skip))
+    measured = collect(builders, selected, results, runs)
     summaries = {label: {name: summarize(entry) for name, entry in entries.items()}
                  for label, entries in measured.items()}
     for label, summary in summaries.items():
         with open(os.path.join(results, label + ".json"), "w") as out:
             json.dump(summary, out, indent=2)
+    if options.languages:
+        report_languages(summaries)
     baseline = saved if saved is not None else summaries.get("baseline")
     if baseline is None:
-        report_single(summaries["current"])
+        if not options.languages:
+            report_single(summaries["current"])
         print(f"\nperf: results in {results}")
         return
-    rows, regressions = compare(baseline, summaries["current"], options.threshold)
+    rows, regressions = compare(baseline, summaries["current"], threshold)
     report(rows)
     print(f"\nperf: results in {results}")
     if regressions:
-        print(f"perf: {len(regressions)} regression(s) over {options.threshold}%")
+        print(f"perf: {len(regressions)} regression(s) over {threshold}%")
         sys.exit(1)
 
 

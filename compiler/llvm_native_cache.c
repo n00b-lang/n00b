@@ -88,12 +88,12 @@ core_uint128_t
 n00bb_native_cache_key(const n00bb_native_cache_t *cache,
     const void *bitcode, size_t bitcode_bytes, core_string_t target_triple,
     core_string_t cpu, core_string_t features, bool debug_enabled,
-    bool frame_maps)
+    uint8_t opt_level, bool frame_maps)
 {
     if (!cache || !bitcode || !target_triple.data) return 0;
     unsigned version[3] = {0};
     LLVMGetVersion(&version[0], &version[1], &version[2]);
-    uint8_t flags[] = {debug_enabled, frame_maps};
+    uint8_t flags[] = {debug_enabled, opt_level, frame_maps};
     core_buffer_t input = {0};
     core_buffer_append(&input, (const char *)&cache->compiler_hash,
         sizeof cache->compiler_hash);
