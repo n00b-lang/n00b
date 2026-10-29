@@ -86,6 +86,7 @@ bool n00bb_cache_record_summaries(n00bb_cache_t *cache,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis);
 bool n00bb_cache_summary_assumptions_hold(const n00bb_cache_t *cache);
+bool n00bb_cache_summary_hints(const n00bb_cache_t *cache, core_buffer_t *out);
 typedef bool (*n00bb_cache_module_used_fn)(void *context,
                                            core_string_t module);
 bool n00bb_cache_load_ir(n00bb_cache_t *cache, ir_module_lookup_fn lookup,

@@ -10218,12 +10218,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 "callback.handler.unknown"),
                 "a callback handler is not a known n00b function");
         }
+        LLVMValueRef type_value = runtime_type_index_value(state,
+                                                           callback_type);
+        if (!type_value) break;
         LLVMValueRef callback = LLVMGetUndef(type);
         callback = LLVMBuildInsertValue(state->builder, callback,
             index_value, 0, "callback.handler");
         callback = LLVMBuildInsertValue(state->builder, callback,
-            runtime_type_index_value(state, callback_type), 1,
-            "callback.type");
+            type_value, 1, "callback.type");
         LLVMValueRef environment = setup_signature
             && operands[2].kind == IR_OPD_VALUE
             ? lowered_value(state, operands[2].value)
@@ -10420,6 +10422,14 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 || concrete == signature
                 || LLVMCountParamTypes(concrete) != count - 1)
                 continue;
+            LLVMValueRef handler_index = runtime_function_index_value(state,
+                binding->handler);
+            LLVMValueRef handler_type_index = runtime_type_index_value(state,
+                binding->callback_type);
+            if (!handler_index || !handler_type_index) {
+                state->failure_detail = (core_string_t){};
+                continue;
+            }
             core_buffer_t name = {0};
             append_function_symbol(&name, binding->handler);
             LLVMValueRef target = name.data
@@ -10448,11 +10458,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             }
             LLVMValueRef selected = LLVMBuildAnd(state->builder,
                 LLVMBuildICmp(state->builder, LLVMIntEQ, index,
-                    runtime_function_index_value(state, binding->handler),
-                    "callback.handler.match"),
+                    handler_index, "callback.handler.match"),
                 LLVMBuildICmp(state->builder, LLVMIntEQ,
-                    callback_type_index,
-                    runtime_type_index_value(state, binding->callback_type),
+                    callback_type_index, handler_type_index,
                     "callback.type.match"), "callback.match");
             LLVMBasicBlockRef yes = LLVMAppendBasicBlockInContext(context,
                 state->target_function, "callback.concrete");

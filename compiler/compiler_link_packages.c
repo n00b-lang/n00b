@@ -1775,7 +1775,8 @@ validate_package_interfaces(n00bb_link_analysis_t *analysis)
         for (size_t p = 0; p < state->package_declarations.len; p++) {
             n00bb_package_declaration_t *package =
                 &state->package_declarations.data[p];
-            warn_package_other_owner(unit, package);
+            if (!state->interface_module)
+                warn_package_other_owner(unit, package);
             for (size_t ou = 0; ou <= u; ou++) {
                 n00bb_tu_state_t *other_state = tu_state(
                     analysis->units.data[ou]);

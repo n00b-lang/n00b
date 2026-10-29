@@ -1,0 +1,4 @@
+import points
+import compare
+
+require compare.same(new[points.Point](1), new[points.Point](1))

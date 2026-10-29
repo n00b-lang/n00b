@@ -475,17 +475,15 @@ bool ir_global_static_initializer_valid(ir_module_t *module,
 {
     return module && global && ir_global_find(module, global->name) == global
         && global->has_static_initializer && global->static_initializer
-        && !global->is_extern
         && global_init_value_matches(module, global->static_initializer,
                                      global->type, 0);
 }
 
-bool ir_global_set_static_initializer(ir_module_t *module,
-                                      ir_global_t *global,
+static bool attach_static_initializer(ir_module_t *module, ir_global_t *global,
                                       const ir_global_init_value_t *value)
 {
     if (!module || !global || ir_global_find(module, global->name) != global
-        || global->is_extern || global->has_static_initializer
+        || global->has_static_initializer
         || !global_init_value_matches(module, value, global->type, 0))
         return false;
     ir_global_init_value_t *copy = ir_alloc(module->ctx, sizeof(*copy));
@@ -494,6 +492,21 @@ bool ir_global_set_static_initializer(ir_module_t *module,
     global->static_initializer = copy;
     global->has_static_initializer = true;
     return true;
+}
+
+bool ir_global_set_static_initializer(ir_module_t *module,
+                                      ir_global_t *global,
+                                      const ir_global_init_value_t *value)
+{
+    return global && !global->is_extern
+        && attach_static_initializer(module, global, value);
+}
+
+bool ir_global_adopt_static_initializer(ir_module_t *module,
+                                        ir_global_t *global,
+                                        const ir_global_init_value_t *value)
+{
+    return attach_static_initializer(module, global, value);
 }
 
 bool ir_global_set_phase_result_initializer(ir_module_t *module,

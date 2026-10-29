@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <string.h>
 
+#include "specialize.h"
 #include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
@@ -103,6 +104,96 @@ append_parameter_range(const n00bb_abi_type_signatures_t *signatures,
     return true;
 }
 
+typedef struct {
+    n00bb_abi_type_index_t *index;
+    const n00bb_abi_type_identity_rows_t *types;
+    const n00bb_abi_type_signatures_t *signatures;
+    uint32_t signature_stream_base;
+    uint32_t stream_base;
+    n00bb_abi_name_pool_t *names;
+    core_list_t(n00b_abi_function_v1) *rows;
+    core_list_t(ir_func_ptr_t) *bindings;
+    core_list_t(uint32_t) *stream;
+} row_builder_t;
+
+static bool
+append_function_row(row_builder_t *builder, ir_func_t *function,
+                    uint32_t type_index, uint32_t scope_index,
+                    uint32_t symbol_index, core_string_t row_name)
+{
+    const n00bb_abi_type_signatures_t *signatures = builder->signatures;
+    if (type_index >= builder->types->count
+        || builder->types->rows[type_index].kind != N00B_ABI_TYPE_FUNCTION
+        || !scope_index || builder->rows->len >= UINT32_MAX) return false;
+    uint32_t signature_index =
+        builder->types->rows[type_index].call_signature_index;
+    if (!signature_index || signature_index >= signatures->signature_count)
+        return false;
+    const n00b_abi_call_signature_v1 *signature =
+        &signatures->signatures[signature_index];
+    if (signature->type_index != type_index
+        || signature->keyword_parameters.count > sizeof(uint64_t) * CHAR_BIT)
+        return false;
+    n00b_abi_function_v1 row = {
+        .module_index = 1,
+        .scope_index = scope_index,
+        .symbol_index = symbol_index,
+        .success_type_index = signature->success_type_index,
+        .failure_type_index = signature->failure_type_index,
+        .variadic_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
+    };
+    if (!n00bb_abi_name_pool_encode(builder->names, row_name,
+            N00B_ABI_TABLE_FUNCTION, (uint32_t)builder->rows->len,
+            offsetof(n00b_abi_function_v1, name), &row.name)) return false;
+    core_list_t(uint32_t) *stream = builder->stream;
+    uint32_t stream_base = builder->stream_base;
+    size_t first = stream->len;
+    n00b_abi_range_v1 positional = {0};
+    if (!append_parameter_range(signatures, signature->positional_parameters,
+            builder->signature_stream_base, stream_base, stream,
+            &positional)) return false;
+    if (signature->rest_parameter_index) {
+        uint32_t rest = signature->rest_parameter_index;
+        if (rest >= signatures->parameter_count
+            || stream->len >= UINT32_MAX - stream_base) return false;
+        row.variadic_type_index = signatures->parameters[rest].type_index;
+        core_list_push(*stream, rest);
+    }
+    if (!append_parameter_range(signatures, signature->keyword_parameters,
+            builder->signature_stream_base, stream_base, stream,
+            &row.keywords)) return false;
+    if (stream->len != first) row.parameters = (n00b_abi_range_v1){
+        .first = stream_base + (uint32_t)first,
+        .count = (uint32_t)(stream->len - first),
+    };
+    if (row.keywords.count) row.valid_keyword_bits =
+        row.keywords.count == sizeof(uint64_t) * CHAR_BIT
+            ? UINT64_MAX : (UINT64_C(1) << row.keywords.count) - 1;
+    core_list_push(*builder->rows, row);
+    core_list_push(*builder->bindings, function);
+    return true;
+}
+
+static bool
+append_instances(row_builder_t *builder, ir_module_t *module,
+                 uint32_t scope_index)
+{
+    for (size_t i = 0; i < ir_func_count(module); i++) {
+        ir_func_t *function = ir_func_at(module, i);
+        if (!function) return false;
+        if (!function->n_blocks || ir_func_is_initializer(function)
+            || function->owner != module || !function->type) continue;
+        if (!th_is_closed(ir_module_types(module), function->type)) continue;
+        uint32_t type_index = 0;
+        if (!n00bb_abi_type_index_find(builder->index, function->type,
+                                        &type_index)
+            || !append_function_row(builder, function, type_index,
+                                    scope_index, 0, function->name))
+            return false;
+    }
+    return true;
+}
+
 bool
 n00bb_abi_function_rows_build(
     n00bb_abi_type_index_t *index,
@@ -124,6 +215,12 @@ n00bb_abi_function_rows_build(
     core_list_push(bindings, nullptr);
     bool valid = true;
     uint32_t initializer_index = 0;
+    row_builder_t builder = {
+        .index = index, .types = types, .signatures = signatures,
+        .signature_stream_base = signature_stream_base,
+        .stream_base = stream_base, .names = names,
+        .rows = &rows, .bindings = &bindings, .stream = &stream,
+    };
     for (size_t i = 1; valid && i < n00bb_abi_decl_symbol_count(declarations);
          i++) {
         parse_sym_entry_t *symbol = n00bb_abi_decl_symbol_at(declarations,
@@ -162,66 +259,17 @@ n00bb_abi_function_rows_build(
             valid = false;
             break;
         }
-        uint32_t signature_index = types->rows[type_index].call_signature_index;
-        if (!signature_index || signature_index >= signatures->signature_count) {
-            valid = false;
-            break;
-        }
-        const n00b_abi_call_signature_v1 *signature =
-            &signatures->signatures[signature_index];
-        if (signature->type_index != type_index
-            || signature->keyword_parameters.count
-                > sizeof(uint64_t) * CHAR_BIT) {
-            valid = false;
-            break;
-        }
-        n00b_abi_function_v1 row = {
-            .module_index = 1,
-            .scope_index = scope_index,
-            .symbol_index = (uint32_t)i,
-            .success_type_index = signature->success_type_index,
-            .failure_type_index = signature->failure_type_index,
-            .variadic_type_index = N00B_ABI_V1_NO_TYPE_INDEX,
-        };
         core_string_t row_name = (parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.litmod.declaration"))
             || function_symbol_needs_qualified_name(
                 ir_module_types(module), symbol))
             ? function->name : symbol->name;
-        valid = n00bb_abi_name_pool_encode(names, row_name,
-            N00B_ABI_TABLE_FUNCTION, (uint32_t)rows.len,
-            offsetof(n00b_abi_function_v1, name), &row.name);
-        size_t first = stream.len;
-        n00b_abi_range_v1 positional = {0};
-        if (valid) valid = append_parameter_range(signatures,
-            signature->positional_parameters, signature_stream_base,
-            stream_base, &stream, &positional);
-        if (valid && signature->rest_parameter_index) {
-            uint32_t rest = signature->rest_parameter_index;
-            if (rest >= signatures->parameter_count
-                || stream.len >= UINT32_MAX - stream_base)
-                valid = false;
-            else {
-                row.variadic_type_index = signatures->parameters[rest].type_index;
-                core_list_push(stream, rest);
-            }
-        }
-        if (valid) valid = append_parameter_range(signatures,
-            signature->keyword_parameters, signature_stream_base,
-            stream_base, &stream, &row.keywords);
-        if (valid && stream.len != first) row.parameters =
-            (n00b_abi_range_v1){
-                .first = stream_base + (uint32_t)first,
-                .count = (uint32_t)(stream.len - first),
-            };
-        if (valid && row.keywords.count) row.valid_keyword_bits =
-            row.keywords.count == sizeof(uint64_t) * CHAR_BIT
-                ? UINT64_MAX : (UINT64_C(1) << row.keywords.count) - 1;
-        if (valid) {
-            core_list_push(rows, row);
-            core_list_push(bindings, function);
-        }
+        valid = append_function_row(&builder, function, type_index,
+            scope_index, (uint32_t)i, row_name);
     }
+    if (valid && n00bb_specialization_module(ir_module_name(module)))
+        valid = append_instances(&builder, module,
+            n00bb_abi_decl_module_scope_index(declarations));
     if (valid) valid = append_module_initializer(index, types, declarations,
         module, names, &rows, &bindings, &initializer_index);
     if (valid) *out = (n00bb_abi_function_rows_t){

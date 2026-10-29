@@ -16,6 +16,7 @@ typedef struct {
     bool                capture_full;
     bool                cache_strict;
     core_string_t       cache_exclude;
+    core_string_t       cache_summaries;
     n00bb_phase_order_t phase_order;
     bool                check_runtime_phase;
     core_string_t       check_diagnostics;

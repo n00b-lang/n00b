@@ -63,7 +63,7 @@ edits() {
     printf 'func leaf_value() -> int {\n    let values: Array[int] = [40, 1]\n    return values[0] + values[1]\n}\n' \
         >"$tmp/work/leaf.n"
     build work main.n
-    grep -q '^runtime restart cached summary assumptions do not hold$' \
+    grep -q '^runtime restart cached modules depend on summaries that changed$' \
         "$tmp/log" || fail "summary edit: the optimistic build did not restart"
     expect_stored "summary edit" "helper leaf"
 
@@ -123,10 +123,36 @@ instances() {
     build work generic_values.n
     grep -q '^runtime reuse scc builtin\.containers\.list' "$tmp/log" \
         || fail "generic values: the cached list module was not reused"
+
+    build work generic_fields.n
+    build work generic_fields.n
+    grep -q '^runtime reuse scc pairs$' "$tmp/log" \
+        || fail "generic fields: the cached pairs module was not reused"
+}
+
+contexts() {
+    build work contexts.n
+    build work main.n
+    build work contexts.n
+    if grep -q 'store scc\|restart' "$tmp/log"; then
+        fail "dispatch context: switching back to contexts.n rebuilt cached SCCs"
+    fi
+    build work main.n
+    if grep -q 'store scc\|restart' "$tmp/log"; then
+        fail "dispatch context: switching back to main.n rebuilt cached SCCs"
+    fi
+
+    build work main_points.n
+    sed 's/return self.x == other.x/let probe: Array[int] = [self.x]\
+    return probe[0] == other.x/' "$tmp/work/points.n" >"$tmp/points.n"
+    mv "$tmp/points.n" "$tmp/work/points.n"
+    build work main_points.n
+    grep -q '^runtime store instance compare\.same$' "$tmp/log" \
+        || fail "owner summary edit: the compare.same instantiation was reused"
 }
 
 case $part in
-edits|shapes|instances) ;;
+edits|shapes|instances|contexts) ;;
 *) fail "unknown part $part" ;;
 esac
 prepare work

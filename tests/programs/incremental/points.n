@@ -1,0 +1,11 @@
+object Point {
+    x: int
+}
+
+func __init(self: Point, x: int) {
+    self.x = x
+}
+
+func __equal(self: Point, other: Point) -> bool {
+    return self.x == other.x
+}

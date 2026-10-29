@@ -21244,6 +21244,40 @@ build_n00bb_execution_graph(
 }
 
 static bool
+attach_cached_initializers(n00bb_link_analysis_t *analysis,
+                           core_translation_unit_t *unit,
+                           ir_ctx_t *ir_context)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    if (!state->interface_module) return true;
+    ir_module_t *cached = n00bb_cache_module(analysis->cache,
+                                             unit->module.identifier);
+    ir_module_t *module = unit_module(state);
+    static const core_string_t names[] = {
+        CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME),
+        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME),
+        CORE_STRING_STATIC(N00BB_SCRIPT_BODY_NAME),
+    };
+    for (size_t i = 0; cached && module && i < sizeof(names) / sizeof(*names);
+         i++) {
+        ir_func_t *function = ir_func_find(module, names[i]);
+        ir_func_t *body = ir_func_find(cached, names[i]);
+        if (function && !function->n_blocks && body && body->n_blocks
+            && !attach_cached_body(ir_context, function, body)) return false;
+    }
+    for (size_t i = 0; cached && module && i < ir_global_count(module); i++) {
+        ir_global_t *global = ir_global_at(module, i);
+        ir_global_t *original = global && !global->has_static_initializer
+            ? ir_global_find(cached, global->name) : nullptr;
+        if (original && original->has_static_initializer
+            && original->static_initializer
+            && !ir_global_adopt_static_initializer(module, global,
+                   original->static_initializer)) return false;
+    }
+    return true;
+}
+
+static bool
 lower_all_module_initializers(
     n00bb_link_analysis_t *analysis, ir_lowerer_t *lowerer,
     parse_grammar_t *grammar,
@@ -21259,7 +21293,8 @@ lower_all_module_initializers(
         core_translation_unit_t *unit = units->data[i];
         if (lower_module_initializer(lowerer, grammar, unit, units,
                                      ir_context)
-            && lower_literal_initializer(ir_context, unit))
+            && lower_literal_initializer(ir_context, unit)
+            && attach_cached_initializers(analysis, unit, ir_context))
             continue;
         lowered = false;
         tu_state(unit)->initializer_excluded = true;
@@ -22441,6 +22476,29 @@ index_module_globals(n00bb_link_analysis_t *analysis, core_dict_t *out)
     }
 }
 
+static core_translation_unit_t *
+global_owner_unit(n00bb_link_analysis_t *analysis, const ir_global_t *global)
+{
+    const ir_global_t *identity = ir_global_identity((ir_global_t *)global);
+    const ir_module_t *owner = identity ? identity->owner : nullptr;
+    core_string_t name = owner ? ir_module_name((ir_module_t *)owner)
+                               : (core_string_t){0};
+    for (size_t u = 0; name.data && u < analysis->units.len; u++) {
+        core_translation_unit_t *unit = analysis->units.data[u];
+        if (unit_module(tu_state(unit)) == owner
+            || core_string_eq(unit->module.identifier, name)) return unit;
+    }
+    return nullptr;
+}
+
+static bool
+initializers_known(n00bb_link_analysis_t *analysis,
+                   core_translation_unit_t *unit)
+{
+    return !tu_state(unit)->interface_module
+        || n00bb_cache_module(analysis->cache, unit->module.identifier);
+}
+
 static bool
 collect_initializer_reads(n00bb_link_analysis_t *analysis,
                           core_list_t(n00bb_initializer_read_t) *reads)
@@ -22457,26 +22515,28 @@ collect_initializer_reads(n00bb_link_analysis_t *analysis,
         core_translation_unit_t *unit = analysis->units.data[u];
         ir_module_t *module = unit_module(tu_state(unit));
         for (size_t k = 0; module && ok && k < n00bb_initializer_kinds(); k++) {
-            ir_func_t *initializer = ir_func_find(module, initializers[k]);
+            ir_func_t *initializer = n00bb_cached_body(
+                ir_func_find(module, initializers[k]));
             ir_summary_t *summary = initializer
                 ? ir_summary_of(analysis->summaries, initializer) : nullptr;
             for (uint32_t a = 0; summary
                  && a < ir_summary_access_count(summary); a++) {
                 const ir_saccess_t *access = ir_summary_access_at(summary, a);
+                const ir_global_t *identity = access->place.global
+                    ? ir_global_identity((ir_global_t *)access->place.global)
+                    : nullptr;
                 if (!(access->flags & IR_SACCESS_READS_ENTRY)
                     || (access->place.kind != IR_SPLACE_GLOBAL
                         && access->place.kind != IR_SPLACE_THREAD)
-                    || !access->place.global
-                    || access->place.global->has_static_initializer)
+                    || !identity || identity->has_static_initializer)
                     continue;
                 bool found = false;
                 parse_sym_entry_t *symbol = core_dict_get(&symbols,
                     (void *)access->place.global, &found);
-                core_link_declaration_t *declaration = found
-                    ? link_declaration_for_symbol(analysis, symbol) : nullptr;
-                core_translation_unit_t *target = declaration
-                    ? core_link_declaration_owner(declaration) : nullptr;
-                if (!target) continue;
+                core_translation_unit_t *target = found
+                    ? global_owner_unit(analysis, access->place.global)
+                    : nullptr;
+                if (!target || !initializers_known(analysis, target)) continue;
                 ir_global_t *global = (ir_global_t *)access->place.global;
                 ir_instr_t *read = first_uninitialized_read(
                     analysis, initializer, &access->place, IR_PATH_UNPASSED);
@@ -22529,6 +22589,39 @@ initializer_read_location(const n00bb_initializer_read_t *read)
     };
 }
 
+static bool
+initialized_dynamically(n00bb_link_analysis_t *analysis,
+                        const n00bb_initializer_read_t *read)
+{
+    const ir_global_t *global = ir_global_identity(read->global);
+    if (!global || global->has_static_initializer
+        || ir_global_storage_duration(global) == IR_STORAGE_DURATION_THREAD)
+        return false;
+    static const core_string_t initializers[] = {
+        CORE_STRING_STATIC(N00BB_LITERAL_INIT_NAME),
+        CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME),
+    };
+    ir_module_t *module = unit_module(tu_state(read->target));
+    for (size_t k = 0; module && k < n00bb_initializer_kinds(); k++) {
+        ir_func_t *initializer = n00bb_cached_body(
+            ir_func_find(module, initializers[k]));
+        ir_summary_t *summary = initializer
+            ? ir_summary_of(analysis->summaries, initializer) : nullptr;
+        for (uint32_t a = 0; summary
+             && a < ir_summary_access_count(summary); a++) {
+            const ir_saccess_t *access = ir_summary_access_at(summary, a);
+            if ((access->flags & IR_SACCESS_WRITE)
+                && (access->place.kind == IR_SPLACE_GLOBAL
+                    || access->place.kind == IR_SPLACE_THREAD)
+                && access->place.global
+                && ir_global_identity((ir_global_t *)access->place.global)
+                    == global)
+                return true;
+        }
+    }
+    return false;
+}
+
 static const n00bb_initializer_read_t *
 blocking_read(n00bb_link_analysis_t *analysis, core_link_unit_t *link,
               const core_list_t(n00bb_initializer_read_t) *reads,
@@ -22542,8 +22635,7 @@ blocking_read(n00bb_link_analysis_t *analysis, core_link_unit_t *link,
             || core_dict_contains(selected, read->target)
             || !core_link_unit_scc_of(link, read->target, &target_scc)
             || target_scc != scc
-            || !dynamic_initializer_declaration(analysis->grammar,
-                   link_declaration_for_symbol(analysis, read->symbol)))
+            || !initialized_dynamically(analysis, read))
             continue;
         return read;
     }
@@ -24220,6 +24312,17 @@ warn_shared_global_races(n00bb_link_analysis_t *analysis,
     for (size_t f = 0; f < main_roots.len; f++)
         if (core_dict_add(&seen, main_roots.data[f], 1))
             core_list_push(everything, main_roots.data[f]);
+    for (size_t f = 0; f < everything.len; f++) {
+        ir_func_t *function = everything.data[f];
+        for (uint32_t b = 0; b < function->n_blocks; b++)
+            for (uint32_t i = 0; i < function->blocks[b]->n_instrs; i++) {
+                ir_func_t *callee = n00bb_direct_call_target(
+                    function->blocks[b]->instrs[i]);
+                if (callee && callee->n_blocks
+                    && core_dict_add(&seen, callee, 1))
+                    core_list_push(everything, callee);
+            }
+    }
     core_dict_free(&seen);
     bool complete = true;
     core_list_t(entry_param_t) params = {0};
@@ -26237,8 +26340,8 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         core_list_new(n00bb_ir_func_ptr_t);
     for (size_t i = 0; i < units.len; i++) {
         ir_module_t *module = unit_module(tu_state(units.data[i]));
-        ir_func_t *initializer = module ? ir_func_find(module,
-            CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME)) : nullptr;
+        ir_func_t *initializer = module ? n00bb_cached_body(ir_func_find(
+            module, CORE_STRING_STATIC(N00BB_MODULE_INIT_NAME))) : nullptr;
         if (initializer) core_list_push(initializer_functions, initializer);
     }
     if (ok) ok = build_function_summaries(analysis, &initializer_functions,

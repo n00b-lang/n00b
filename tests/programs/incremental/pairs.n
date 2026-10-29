@@ -1,0 +1,4 @@
+record Pair {
+    left:  'T
+    right: 'T
+}

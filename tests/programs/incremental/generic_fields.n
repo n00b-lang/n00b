@@ -1,0 +1,4 @@
+import pairs
+
+let pair: pairs.Pair[int] = (left = 1, right = 2)
+require pair.left + pair.right == 3

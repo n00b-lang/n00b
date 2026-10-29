@@ -3,7 +3,7 @@ dev test 2
 pr wall 90
 pr test 20
 dev tests 214
-pr tests 86
+pr tests 87
 release lto-n00b
 release ffi
 release array-uint-index-n00b
@@ -24,6 +24,7 @@ exempt generics-text-n00b 21
 exempt ffi-zlib-litmod 21
 exempt incremental-cache-shapes 31
 exempt incremental-cache-instances 38
+exempt incremental-cache-contexts 40
 exempt bitcode-build-time 28
 exempt resharp-import 600
 exempt resharp-transport-plain 1800

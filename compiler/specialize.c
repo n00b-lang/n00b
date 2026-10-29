@@ -215,19 +215,6 @@ report_growing_instantiation(n00bb_specialization_failure_t *report,
     report->located = true;
 }
 
-static bool has_callback_operation(const ir_func_t *function)
-{
-    for (uint32_t b = 0; b < function->n_blocks; b++) {
-        const ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; i < block->n_instrs; i++) {
-            ir_op_t op = block->instrs[i]->op;
-            if (op == IR_OP_CALLBACK_CREATE || op == IR_OP_CALLBACK_INVOKE)
-                return true;
-        }
-    }
-    return false;
-}
-
 static th_type *
 call_operand_type(ir_value_t *value, th_ctx *types)
 {
@@ -885,6 +872,85 @@ call_fits_instance(ir_instr_t *call, const specialization_t *instance,
     return true;
 }
 
+typedef struct {
+    ir_ctx_t *context;
+    specializations_t *specializations;
+    core_list_t(n00bb_specialization_t) *instances;
+    core_list_t(n00bb_ir_func_ptr_t) *functions;
+    core_list_t(n00bb_specialization_request_t) *requests;
+    core_buffer_t *failure;
+} specialize_state_t;
+
+static bool
+retarget_reference(specialize_state_t *state, ir_func_t *caller,
+                   size_t parent, ir_value_t **slot, th_type *signature)
+{
+    ir_value_t *reference = *slot;
+    ir_func_t *target = reference && reference->kind == IR_VAL_FUNC
+        ? n00bb_cached_body(reference->owner) : nullptr;
+    if (!target || !target->n_blocks || !signature) return true;
+    th_ctx *types = ir_module_types(target->owner);
+    if (th_is_closed(types, target->type) || !th_is_closed(types, signature))
+        return true;
+    uint64_t hash = th_hash(types, signature);
+    ir_func_t *copy = find_instance(state->specializations, target, hash,
+                                    types);
+    if (!copy) {
+        core_list_t(type_binding_t) bindings = {0};
+        bool matched = match_type(types, target->type, signature, &bindings)
+            && bindings.len;
+        copy = matched ? instantiate(state->context, target, signature,
+            &bindings, types, state->failure) : nullptr;
+        core_list_free(bindings);
+        if (!matched) return true;
+        if (!copy) return false;
+        add_specialization(state->specializations,
+            ((specialization_t){target, copy, signature, parent}));
+        core_list_push(*state->instances,
+            ((n00bb_specialization_t){target, copy, signature}));
+        core_list_push(*state->functions, copy);
+    }
+    core_list_push(*state->requests,
+        ((n00bb_specialization_request_t){caller->owner, copy}));
+    ir_value_t *bound = ir_func_address(copy->owner, copy);
+    if (!bound) {
+        if (state->failure) {
+            core_string_t module = ir_module_name(copy->owner);
+            core_buffer_printf(state->failure,
+                "could not bind specialized function %.*s.%.*s",
+                (int)module.u8_bytes, module.data,
+                (int)copy->name.u8_bytes, copy->name.data);
+        }
+        return false;
+    }
+    *slot = bound;
+    return true;
+}
+
+static bool
+specialize_callback(specialize_state_t *state, ir_func_t *caller,
+                    size_t parent, ir_instr_t *creation)
+{
+    th_type *handler_signature = nullptr;
+    th_type *setup_signature = nullptr;
+    if (!ir_instr_callback_contract(creation, nullptr, &handler_signature,
+                                    &setup_signature)) return true;
+    uint32_t at = setup_signature ? 1 : 0;
+    if (setup_signature && creation->n_operands
+        && creation->operands[0].kind == IR_OPD_VALUE
+        && !retarget_reference(state, caller, parent,
+               &creation->operands[0].value, setup_signature)) return false;
+    if (creation->n_operands <= at
+        || creation->operands[at].kind != IR_OPD_VALUE) return true;
+    ir_value_t *reference = creation->operands[at].value;
+    ir_instr_t *retained = reference && reference->kind == IR_VAL_INSTR
+        ? reference->def : nullptr;
+    if (!retained || retained->op != IR_OP_RETAIN_REF
+        || retained->n_operands != 1
+        || retained->operands[0].kind != IR_OPD_VALUE) return true;
+    return retarget_reference(state, caller, parent,
+        &retained->operands[0].value, handler_signature);
+}
 
 bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) *functions,
@@ -903,6 +969,11 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
     core_dict_init(&inline_bodies, nullptr, nullptr);
     method_index_t methods = {.functions = functions};
     core_dict_init_string(&methods.by_name);
+    specialize_state_t state = {
+        .context = context, .specializations = &specializations,
+        .instances = instances, .functions = functions,
+        .requests = requests, .failure = failure,
+    };
     bool valid = true;
     for (size_t i = 0; i < instances->len; i++)
         add_specialization(&specializations, ((specialization_t){
@@ -945,6 +1016,12 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
             ir_block_t *block = caller->blocks[b];
             for (uint32_t i = 0; valid && i < block->n_instrs; i++) {
                 ir_instr_t *call = block->instrs[i];
+                if (call->op == IR_OP_CALLBACK_CREATE) {
+                    if (!open_caller)
+                        valid = specialize_callback(&state, caller, parent,
+                                                    call);
+                    continue;
+                }
                 if (call->op != IR_OP_CALL || !call->n_operands) continue;
                 ir_value_t *callee = ir_operand_value(&call->operands[0]);
                 ir_func_t *target = callee && callee->kind == IR_VAL_FUNC
@@ -972,7 +1049,7 @@ bool n00bb_specialize_calls(ir_ctx_t *context,
                         core_list_push(*functions, target);
                     continue;
                 }
-                th_type *actual = open_caller || has_callback_operation(target)
+                th_type *actual = open_caller
                     ? nullptr : concrete_call_signature(call, target, types,
                                                         retargeted);
                 core_list_t(type_binding_t) bindings = {0};

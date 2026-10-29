@@ -4,6 +4,7 @@
 #include "ir/ir.h"
 #include "lib/buffer.h"
 #include "lib/list.h"
+#include "lib/string.h"
 
 typedef ir_func_t *n00bb_ir_func_ptr_t;
 core_list_decl(n00bb_ir_func_ptr_t);
@@ -35,6 +36,12 @@ typedef struct {
     ir_span_t span;
     bool located;
 } n00bb_specialization_failure_t;
+
+static inline bool
+n00bb_specialization_module(core_string_t module)
+{
+    return core_string_find(module, CORE_STRING_STATIC("$spec$")) >= 0;
+}
 
 bool n00bb_specialize_calls(ir_ctx_t *context,
     core_list_t(n00bb_ir_func_ptr_t) *functions,

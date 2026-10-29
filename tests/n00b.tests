@@ -112,6 +112,7 @@ unicode-conformance	pr	13	cd "$SRC/tests/programs/unicode" && sh "$SRC/tests/pro
 storage-facts-n00b	pr	5	sh "$SRC/tests/storage_facts.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_storage_facts.n"
 incremental-cache-shapes	pr	31	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" shapes
 incremental-cache-instances	pr	38	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" instances
+incremental-cache-contexts	pr	40	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" contexts
 closed-world-n00b	pr	11	sh "$SRC/tests/closed_world.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_closed_world.n"
 raw-repr-overrides	pr	17	sh "$SRC/tests/raw_repr.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" overrides
 bitcode-build-time	pr	28	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" build-time
