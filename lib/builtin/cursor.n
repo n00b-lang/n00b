@@ -21,7 +21,7 @@ func iter(self: Array['T]) -> Cursor['T] {
     return new[Cursor['T]](view)
 }
 
-func next(modify self: Cursor['T]) -> 'T? {
+inline func next(modify self: Cursor['T]) -> 'T? {
     if self.index >= cast[int]containers.view.len(self.view) {
         return nil
     }

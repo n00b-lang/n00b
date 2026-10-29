@@ -1,6 +1,7 @@
 #include "runtime_native_roots.h"
 
 static const uint32_t allocator_unmanaged_parameters[] = {0};
+static const uint32_t array_allocator_unmanaged_parameters[] = {0, 4};
 
 const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
     {"sys.internal.gc.alloc.allocate_runtime", "n00b_gc_allocate", nullptr, 0},
@@ -8,6 +9,10 @@ const n00bb_runtime_native_root_t n00bb_runtime_native_roots[] = {
         allocator_unmanaged_parameters,
         sizeof(allocator_unmanaged_parameters)
             / sizeof(allocator_unmanaged_parameters[0])},
+    {"sys.internal.gc.alloc.allocate_array_on_mutator", nullptr,
+        array_allocator_unmanaged_parameters,
+        sizeof(array_allocator_unmanaged_parameters)
+            / sizeof(array_allocator_unmanaged_parameters[0])},
     {"sys.internal.gc.alloc.mutator_for_native", "n00b_gc_mutator", nullptr, 0},
     {"sys.internal.gc.alloc.enter_blocking_from",
         "n00b_gc_enter_blocking_from", nullptr, 0},

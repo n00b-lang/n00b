@@ -124,6 +124,8 @@ type_category(ir_module_t *module, th_type *type,
             row->semantic_width_bits = machine.width;
             if (machine.class == IR_CLASS_SINT)
                 row->flags |= N00B_ABI_TYPE_FLAG_SIGNED;
+            if (machine.class == IR_CLASS_BOOL)
+                row->flags |= N00B_ABI_TYPE_FLAG_BOOL;
         }
         return true;
     }

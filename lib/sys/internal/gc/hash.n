@@ -23,6 +23,9 @@ record Index_Tab layout(c) {
     n:     uint
 }
 
+var hash_slot_size:      uint = 0
+var hash_slot_alignment: uint = 0
+
 func hash_slot_record() -> Ref[internal.abi.Type_Record] {
     let probe: Ref[Hash_Slot]?               = nil
     let row:   Ref[internal.abi.Type_Record]? = internal.abi.optional_reference_target(typeof(probe))
@@ -30,6 +33,20 @@ func hash_slot_record() -> Ref[internal.abi.Type_Record] {
         return row.get()
     }
     require false
+}
+
+func resolve_hash_slot() {
+    let row: Ref[internal.abi.Type_Record] = hash_slot_record()
+    hash_slot_alignment = internal.abi.alignment_bytes(row)
+    hash_slot_size = internal.abi.size_bytes(row)
+}
+
+inline func hash_slot_bytes() -> uint {
+    return hash_slot_size
+}
+
+inline func hash_slot_align() -> uint {
+    return hash_slot_alignment
 }
 
 func hash_slot_at(slots: Ref[Hash_Slot], index: uint, stride: uint) -> Ref[Hash_Slot] {
@@ -55,7 +72,7 @@ inline func tab_lookup(tab: Ref[Hash_Tab], key: uint) -> Ref[byte]? {
         return nil
     }
     let allocated: Ref[Hash_Slot] = tab_slots(tab)
-    let stride:    uint           = internal.abi.size_bytes(hash_slot_record())
+    let stride:    uint           = hash_slot_bytes()
     let mask:      uint           = (1 << tab.bits) - 1
     var index:     uint           = tab_home(tab, key)
     while true {
@@ -72,7 +89,7 @@ inline func tab_lookup(tab: Ref[Hash_Tab], key: uint) -> Ref[byte]? {
 
 func tab_insert(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
     let slots:  Ref[Hash_Slot] = tab_slots(tab)
-    let stride: uint           = internal.abi.size_bytes(hash_slot_record())
+    let stride: uint           = hash_slot_bytes()
     let mask:   uint           = (1 << tab.bits) - 1
     var index:  uint           = tab_home(tab, key)
     while true {
@@ -88,7 +105,7 @@ func tab_insert(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
 }
 
 func tab_reserve(tab: Ref[Hash_Tab], more: uint) -> bool {
-    let stride: uint = internal.abi.size_bytes(hash_slot_record())
+    let stride: uint = hash_slot_bytes()
     while tab.slots == nil or (tab.n + more) * 2 > (1 << tab.bits) {
         let old:   Ref[Hash_Slot]? = tab.slots
         var count: uint            = 0
@@ -98,7 +115,7 @@ func tab_reserve(tab: Ref[Hash_Tab], more: uint) -> bool {
             bits = tab.bits + 1
         }
         let new_count: uint       = 1 << bits
-        let alignment: uint       = internal.abi.alignment_bytes(hash_slot_record())
+        let alignment: uint       = hash_slot_align()
         let mapped:    Ref[byte]? = internal.memory.map_zeroed(new_count * stride, alignment)
         if mapped != nil {
             tab.slots = unsafe_cast[Ref[Hash_Slot]] mapped.get()
@@ -126,7 +143,7 @@ func tab_reserve(tab: Ref[Hash_Tab], more: uint) -> bool {
 
 func tab_find(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) -> Ref[Hash_Slot] {
     let slots:  Ref[Hash_Slot] = tab_slots(tab)
-    let stride: uint           = internal.abi.size_bytes(hash_slot_record())
+    let stride: uint           = hash_slot_bytes()
     let mask:   uint           = (1 << tab.bits) - 1
     var index:  uint           = tab_home(tab, key)
     while true {
@@ -145,7 +162,7 @@ func tab_find(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) -> Ref[Hash_Slot] {
 
 func tab_delete(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
     let slots:        Ref[Hash_Slot] = tab_slots(tab)
-    let stride:       uint           = internal.abi.size_bytes(hash_slot_record())
+    let stride:       uint           = hash_slot_bytes()
     let first:        Ref[Hash_Slot] = tab_find(tab, key, val)
     let displacement: int            = __gc_byte_diff(first, slots)
     require displacement >= 0
@@ -197,7 +214,7 @@ func tab_delete(tab: Ref[Hash_Tab], key: uint, val: Ref[byte]) {
 func tab_free(tab: Ref[Hash_Tab]) {
     let slots: Ref[Hash_Slot]? = tab.slots
     if slots != nil {
-        let stride: uint = internal.abi.size_bytes(hash_slot_record())
+        let stride: uint = hash_slot_bytes()
         internal.memory.unmap(slots.get(), (1 << tab.bits) * stride)
     }
     tab.slots = nil

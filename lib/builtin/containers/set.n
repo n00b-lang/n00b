@@ -4,7 +4,6 @@ import cursor
 
 object Set {
     keys:  Array['T]
-    count: uint
     index: containers.hash_index.Hash_Index
 }
 
@@ -22,17 +21,47 @@ func ensure_keys(self: Set['T], needed: uint) {
     }
     var next: Array['T] = new[Array['T]](cast[int]next_capacity)
     var at:   uint      = 0
-    while at < self.count {
+    while at < self.index.used {
         next[at] = self.keys[at]
         at += 1
     }
     self.keys = next
 }
 
+func compact(self: Set['T]) {
+    let used:  uint = self.index.used
+    var write: uint = 0
+    var read:  uint = 0
+    while read < used {
+        if !containers.hash_index.is_dead(ref self.index, read) {
+            if write != read {
+                self.keys[write] = self.keys[read]
+            }
+            write += 1
+        }
+        read += 1
+    }
+    while read > write {
+        read -= 1
+        __array_clear(ref self.keys, read)
+    }
+    containers.hash_index.compact(ref self.index)
+}
+
+inline func prepare(self: Set['T]) {
+    if self.index.used == __array_length(self.keys) {
+        if containers.hash_index.should_compact(ref self.index) {
+            compact(self)
+        } else {
+            ensure_keys(self, self.index.used + 1)
+        }
+    }
+    containers.hash_index.reserve(ref self.index, 1)
+}
+
 func __init(self: Set['T], items : Array['T] = [])
            where 'T : hashing . Hash {
     self.keys = new[Array['T]](0)
-    self.count = 0
     self.index = new[containers.hash_index.Hash_Index]()
     for value in items {
         _ = add(self, value)
@@ -40,76 +69,51 @@ func __init(self: Set['T], items : Array['T] = [])
 }
 
 func len(self: Set['T]) -> uint {
-    return self.count
+    return self.index.live
 }
 
 inline func contains(self: Set['T], value: 'T) -> bool where 'T : hashing . Hash {
-    return containers.hash_index.find_slot(ref self.index,
-        value.hash()) != nil
+    return containers.hash_index.find(ref self.index, value.hash()) != nil
 }
 
 inline func add(self: Set['T], value: 'T)
                -> bool where 'T : hashing . Hash {
-    let hash: u128 = value.hash()
-    if self.count < __array_length(self.keys) and
-       containers.hash_index.has_room(self.index, 1) {
-        if !containers.hash_index.index_insert_unique_ref(
-            ref self.index, hash, self.count) {
-            return false
-        }
-        self.keys[self.count] = value
-        self.count += 1
-        return true
-    }
-    if containers.hash_index.find_slot(ref self.index, hash) != nil {
+    prepare(self)
+    if containers.hash_index.insert(ref self.index, value.hash()) != nil {
         return false
     }
-    ensure_keys(self, self.count + 1)
-    containers.hash_index.ensure_capacity(self.index, 1)
-    self.keys[self.count] = value
-    containers.hash_index.index_insert(self.index, hash,
-        self.count)
-    self.count += 1
+    self.keys[self.index.used - 1] = value
     return true
 }
 
 inline func remove(self: Set['T], value: 'T)
                   -> bool where 'T : hashing . Hash {
-    let hash:  u128  = value.hash()
-    let found: uint? = containers.hash_index.find_slot(
-        ref self.index, hash)
+    let found: uint? = containers.hash_index.find_slot(ref self.index,
+                                                       value.hash())
     if found == nil {
         return false
     }
-    let slot: containers.hash_index.Hash_Index_Slot =
-        self.index.slots[found.get()]
-    let removed: uint = slot.entry - 1
-    containers.hash_index.remove_at(self.index, found.get())
-    let last: uint = self.count - 1
-    if removed != last {
-        let moved: 'T = self.keys[last]
-        self.keys[removed] = moved
-        containers.hash_index.replace_entry(self.index,
-            moved.hash(), last, removed)
-    }
-    __array_clear(ref self.keys, last)
-    self.count = last
+    let removed: uint = containers.hash_index.remove_at(ref self.index,
+                                                        found.get())
+    __array_clear(ref self.keys, removed)
     return true
 }
 
 func clear(self: Set['T]) {
     self.keys = new[Array['T]](0)
-    self.count = 0
     self.index = new[containers.hash_index.Hash_Index]()
 }
 
 func iter(self: Set['T]) -> cursor.Cursor['T] {
-    let count: int       = cast[int]self.count
-    var items: Array['T] = new[Array['T]](count)
-    var at:    int       = 0
-    while at < count {
-        items[at] = self.keys[at]
-        at += 1
+    var items: Array['T] = new[Array['T]](cast[int]self.index.live)
+    var write: uint      = 0
+    var read:  uint      = 0
+    while read < self.index.used {
+        if !containers.hash_index.is_dead(ref self.index, read) {
+            items[write] = self.keys[read]
+            write += 1
+        }
+        read += 1
     }
     return cursor.iter(items)
 }

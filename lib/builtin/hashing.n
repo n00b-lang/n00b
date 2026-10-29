@@ -137,7 +137,19 @@ private func len_1to3(p: Ref[byte], len: uint) -> u128 {
 }
 
 private func len_4to8(p: Ref[byte], len: uint) -> u128 {
-    let input: u64 = in32(p, 0) | (in32(p, len - 4) << 32)
+    return word_4to8(in32(p, 0) | (in32(p, len - 4) << 32), len)
+}
+
+private inline func hash_word(bits: u64) -> u128 {
+    return word_4to8(bits, 8)
+}
+
+private inline func hash_half_word(bits: u32) -> u128 {
+    let low: u64 = cast[u64] bits
+    return word_4to8(low | (low << 32), 4)
+}
+
+private func word_4to8(input: u64, len: uint) -> u128 {
     let keyed: u64 = input ^ (key64(16) ^ key64(24))
     let m: u128 = mul128(keyed,
         unsafe_add(prime64_1, unsafe_shl(cast[u64] len, 2)))
@@ -340,10 +352,10 @@ inline func hash(self: char) -> u128 {
     return hash_value(self)
 }
 inline func hash(self: int) -> u128 {
-    return hash_value(self)
+    return hash_word(unsafe_cast[u64] self)
 }
 inline func hash(self: uint) -> u128 {
-    return hash_value(self)
+    return hash_word(unsafe_cast[u64] self)
 }
 inline func hash(self: i8) -> u128 {
     return hash_value(self)
@@ -352,7 +364,7 @@ inline func hash(self: i16) -> u128 {
     return hash_value(self)
 }
 inline func hash(self: i32) -> u128 {
-    return hash_value(self)
+    return hash_half_word(unsafe_cast[u32] self)
 }
 inline func hash(self: i128) -> u128 {
     return hash_value(self)
@@ -364,7 +376,7 @@ inline func hash(self: u16) -> u128 {
     return hash_value(self)
 }
 inline func hash(self: u32) -> u128 {
-    return hash_value(self)
+    return hash_half_word(self)
 }
 inline func hash(self: u128) -> u128 {
     return hash_value(self)

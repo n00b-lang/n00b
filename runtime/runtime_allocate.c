@@ -11,8 +11,8 @@ extern void *n00b_gc_allocate(uint32_t type_index, uint64_t byte_size,
                               uint32_t alignment,
                               const void *instance_descriptor);
 
-static uint64_t
-physical_memory_bytes(void)
+uint64_t
+n00b_os_physical_memory(void)
 {
     static _Atomic uint64_t cached;
     uint64_t bytes = atomic_load_explicit(&cached, memory_order_relaxed);
@@ -38,10 +38,16 @@ void *n00b_allocate(uint32_t allocator, uint32_t type_index,
     if (allocator != N00B_ABI_ALLOCATOR_GC)
         n00bb_runtime_fail(N00BB_FAILURE_INVARIANT,
                            N00BB_INVARIANT_UNKNOWN_ALLOCATOR);
-    if (byte_size > physical_memory_bytes())
+    if (byte_size > n00b_os_physical_memory())
         n00bb_runtime_fail(N00BB_FAILURE_OUT_OF_MEMORY, byte_size);
     void *result = n00b_gc_allocate(type_index, byte_size, alignment,
                                     instance_descriptor);
     if (!result) n00bb_runtime_fail(N00BB_FAILURE_OUT_OF_MEMORY, byte_size);
     return result;
+}
+
+void *n00b_gc_allocate_bytes(uint32_t type_index, uint64_t byte_size)
+{
+    return n00b_allocate(N00B_ABI_ALLOCATOR_GC, type_index, byte_size, 1,
+                         NULL);
 }

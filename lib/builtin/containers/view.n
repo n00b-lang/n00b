@@ -18,7 +18,7 @@ func __slice(self: Array['T], start_ix: int, end_ix: int) -> View['T] {
     return new[View['T]](snapshot, start_ix, end_ix)
 }
 
-func __read(self: View['T], index: int) -> 'T {
+inline func __read(self: View['T], index: int) -> 'T {
     let length: int = self.end_ix - self.start_ix
     if index < 0 or index >= length {
         panic.index_out_of_range(index, cast[uint] length, "a view")
@@ -26,6 +26,6 @@ func __read(self: View['T], index: int) -> 'T {
     return self.items[self.start_ix + index]
 }
 
-func len(self: View['T]) -> uint {
+inline func len(self: View['T]) -> uint {
     return cast[uint](self.end_ix - self.start_ix)
 }

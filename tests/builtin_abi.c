@@ -7,7 +7,7 @@ static_assert(sizeof(n00b_abi_range_v1) == 8);
 static_assert(sizeof(n00b_abi_string_v1) == 16);
 static_assert(sizeof(n00b_abi_type_v1) == 144);
 static_assert(sizeof(n00b_abi_field_v1) == 88);
-static_assert(sizeof(n00b_abi_trace_v1) == 40);
+static_assert(sizeof(n00b_abi_trace_v1) == 48);
 static_assert(sizeof(n00b_abi_trace_child_v1) == 56);
 static_assert(sizeof(n00b_abi_trace_arm_v1) == 16);
 static_assert(sizeof(n00b_abi_tag_extractor_v1) == 32);
@@ -29,6 +29,9 @@ int main(void)
     assert(!n00b_builtin_abi_frame_layout(0));
     assert(!n00b_builtin_abi_bytes(0, UINT32_MAX));
     assert(n00b_builtin_abi_range_index(0, 0, 0) == -1);
+    assert(!n00b_builtin_abi_table_base(N00B_ABI_TABLE_TRACE));
+    assert(!n00b_builtin_abi_table_count(N00B_ABI_TABLE_TRACE));
+    assert(!n00b_builtin_abi_table_record_bytes(N00B_ABI_TABLE_TRACE));
     uint8_t body[] = {1, 2, 3};
     n00b_abi_string_v1 text = {0};
     text.short_value.selector = 3;

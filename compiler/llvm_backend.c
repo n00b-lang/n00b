@@ -3663,6 +3663,42 @@ inline_index_base_type(lower_state_t *state, const ir_value_t *base,
     return nullptr;
 }
 
+static LLVMValueRef mutator_array_allocation(lower_state_t *state,
+                                             LLVMValueRef type_index,
+                                             LLVMValueRef bytes,
+                                             uint32_t alignment,
+                                             LLVMValueRef descriptor);
+
+static LLVMValueRef
+gc_array_storage(lower_state_t *state, LLVMValueRef type_index,
+                 LLVMValueRef bytes, uint32_t alignment,
+                 LLVMValueRef descriptor)
+{
+    if (!type_index) return nullptr;
+    if (state->mutator)
+        return mutator_array_allocation(state, type_index, bytes, alignment,
+                                        descriptor);
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
+    LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5, false);
+    const char *allocator_name = "n00b_allocate";
+    LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
+        allocator_name);
+    if (!allocator) allocator = LLVMAddFunction(state->module,
+        allocator_name, signature);
+    if (!allocator || LLVMGlobalGetValueType(allocator) != signature)
+        return nullptr;
+    LLVMValueRef arguments[] = {
+        LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false), type_index, bytes,
+        LLVMConstInt(i32, alignment, false), descriptor,
+    };
+    return LLVMBuildCall2(state->builder, signature, allocator, arguments, 5,
+                          "array.storage");
+}
+
 static bool
 array_requires_flat_storage(const ir_instr_t *instruction)
 {
@@ -3739,32 +3775,14 @@ dynamic_array(lower_state_t *state, ir_instr_t *instruction)
 
     LLVMValueRef descriptor = array_descriptor(state, count);
     LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
-    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-    LLVMTypeRef allocator_params[] = {i32, i32, i64, i32, pointer};
-    LLVMTypeRef allocator_type = LLVMFunctionType(pointer,
-        allocator_params, 5, false);
-    const char *allocator_name = "n00b_allocate";
-    LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
-        allocator_name);
-    if (!allocator)
-        allocator = LLVMAddFunction(state->module, allocator_name,
-                                    allocator_type);
-    LLVMValueRef allocator_args[] = {
-        LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
+    LLVMValueRef storage = gc_array_storage(state,
         runtime_type_index_value(state, type),
-        LLVMConstInt(i64, byte_size, false),
-        LLVMConstInt(i32, alignment, false), descriptor,
-    };
-    LLVMValueRef storage = LLVMBuildCall2(state->builder, allocator_type,
-        allocator, allocator_args, 5, "array.storage");
+        LLVMConstInt(i64, byte_size, false), alignment, descriptor);
+    if (!storage) return nullptr;
     LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
     LLVMValueRef data = LLVMBuildGEP2(state->builder,
         LLVMInt8TypeInContext(context), storage, &offset, 1, "array.data");
-    if (packed_width)
-        LLVMBuildMemSet(state->builder, data, LLVMConstNull(
-            LLVMInt8TypeInContext(context)),
-            LLVMConstInt(i64, payload_bytes ? payload_bytes : 1, false), 1);
     for (size_t i = 0; i < instruction->n_operands; i++) {
         ir_operand_t *operand = &instruction->operands[i];
         LLVMValueRef item = aggregate_operand_value(state, operand);
@@ -3856,7 +3874,6 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMTypeRef i8 = LLVMInt8TypeInContext(context);
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
-    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
     ir_shape_measure_t measure = {0};
     if (!ir_shape_element_count(shape, &measure) || !measure.value)
         return nullptr;
@@ -3929,29 +3946,12 @@ new_array(lower_state_t *state, ir_instr_t *instruction)
     LLVMValueRef bytes = LLVMBuildAdd(state->builder,
         LLVMConstInt(i64, data_offset, false), allocated_bytes,
         "array.new.total.bytes");
-    LLVMTypeRef parameters[] = {i32, i32, i64, i32, pointer};
-    LLVMTypeRef signature = LLVMFunctionType(pointer, parameters, 5, false);
-    const char *allocator_name = "n00b_allocate";
-    LLVMValueRef allocator = LLVMGetNamedFunction(state->module,
-        allocator_name);
-    if (!allocator) allocator = LLVMAddFunction(state->module,
-        allocator_name, signature);
-    if (!allocator || LLVMGlobalGetValueType(allocator) != signature)
-        return nullptr;
-    LLVMValueRef arguments[] = {
-        LLVMConstInt(i32, N00B_ABI_ALLOCATOR_GC, false),
-        runtime_type_index_value(state, type), bytes,
-        LLVMConstInt(i32, alignment, false), descriptor,
-    };
-    LLVMValueRef storage = LLVMBuildCall2(state->builder, signature,
-        allocator, arguments, 5, "array.new.storage");
-    LLVMBuildMemCpy(state->builder, storage, 8, descriptor, 8,
-        LLVMConstInt(i64, descriptor_bytes, false));
+    LLVMValueRef storage = gc_array_storage(state,
+        runtime_type_index_value(state, type), bytes, alignment, descriptor);
+    if (!storage) return nullptr;
     LLVMValueRef offset = LLVMConstInt(i64, data_offset, false);
     LLVMValueRef data = LLVMBuildGEP2(state->builder, i8, storage, &offset,
         1, "array.new.data");
-    LLVMBuildMemSet(state->builder, data, LLVMConstNull(i8), data_bytes,
-        (unsigned)alignment);
     LLVMValueRef array = LLVMBuildInsertValue(state->builder,
         LLVMGetUndef(result_type), data, 0, "array.new.with.data");
     return LLVMBuildInsertValue(state->builder, array, storage, 1,
@@ -4124,8 +4124,6 @@ rectangular_suffix_address(lower_state_t *state, LLVMValueRef data,
     LLVMValueRef descriptor_offset = LLVMConstInt(i64, value_bytes, false);
     LLVMValueRef suffix = LLVMBuildGEP2(state->builder, i8, wrapper,
         &descriptor_offset, 1, "array.suffix.descriptor");
-    LLVMBuildMemSet(state->builder, suffix, LLVMConstNull(i8),
-        LLVMConstInt(i64, descriptor_bytes, false), 8);
     LLVMValueRef slot = LLVMBuildStructGEP2(state->builder, header, suffix,
         0, "array.suffix.total.slot");
     LLVMBuildStore(state->builder, row_count, slot);
@@ -5130,8 +5128,30 @@ allocation_mutator(lower_state_t *state)
 }
 
 static LLVMValueRef
-mutator_allocation(lower_state_t *state, LLVMValueRef type_index, uint64_t bytes,
-                   uint32_t alignment, bool finalizable)
+mutator_allocator_call(lower_state_t *state, const char *name,
+                       LLVMTypeRef *params, LLVMValueRef *args, unsigned count)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef allocator_type = LLVMFunctionType(pointer, params, count,
+                                                  false);
+    LLVMValueRef allocator = LLVMGetNamedFunction(state->module, name);
+    if (!allocator)
+        allocator = LLVMAddFunction(state->module, name, allocator_type);
+    LLVMValueRef result = LLVMBuildCall2(state->builder, allocator_type,
+                                         allocator, args, count, "storage");
+    failure_operand_t requested = unsigned_operand(args[2]);
+    emit_failure_if(state, LLVMBuildIsNull(state->builder, result,
+        "allocation.failed"), &(failure_t){
+            .kind = N00BB_FAILURE_OUT_OF_MEMORY,
+            .operands = &requested, .operand_count = 1,
+        });
+    return result;
+}
+
+static LLVMValueRef
+mutator_allocation(lower_state_t *state, LLVMValueRef type_index,
+                   LLVMValueRef bytes, uint32_t alignment, bool finalizable)
 {
     LLVMValueRef mutator = allocation_mutator(state);
     if (!mutator) return nullptr;
@@ -5141,30 +5161,39 @@ mutator_allocation(lower_state_t *state, LLVMValueRef type_index, uint64_t bytes
     LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
     LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
     LLVMTypeRef params[] = {pointer, i32, i64, i32, i1, pointer, pointer};
-    LLVMTypeRef allocator_type = LLVMFunctionType(pointer, params, 7, false);
-    const char *name =
-        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator";
-    LLVMValueRef allocator = LLVMGetNamedFunction(state->module, name);
-    if (!allocator)
-        allocator = LLVMAddFunction(state->module, name, allocator_type);
     LLVMValueRef args[] = {
         mutator,
         type_index,
-        LLVMConstInt(i64, bytes, false),
+        bytes,
         LLVMConstInt(i32, alignment, false),
         LLVMConstInt(i1, finalizable, false),
         LLVMConstNull(pointer),
         mutator,
     };
-    LLVMValueRef result = LLVMBuildCall2(state->builder, allocator_type,
-                                         allocator, args, 7, "storage");
-    failure_operand_t requested = unsigned_operand(args[2]);
-    emit_failure_if(state, LLVMBuildIsNull(state->builder, result,
-        "allocation.failed"), &(failure_t){
-            .kind = N00BB_FAILURE_OUT_OF_MEMORY,
-            .operands = &requested, .operand_count = 1,
-        });
-    return result;
+    return mutator_allocator_call(state,
+        "sys.internal.gc.alloc.allocate_runtime_known_on_mutator$gc_mutator",
+        params, args, 7);
+}
+
+static LLVMValueRef
+mutator_array_allocation(lower_state_t *state, LLVMValueRef type_index,
+                         LLVMValueRef bytes, uint32_t alignment,
+                         LLVMValueRef descriptor)
+{
+    LLVMValueRef mutator = allocation_mutator(state);
+    if (!mutator) return nullptr;
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef pointer = LLVMPointerTypeInContext(context, 0);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    LLVMTypeRef i64 = LLVMInt64TypeInContext(context);
+    LLVMTypeRef params[] = {pointer, i32, i64, i32, pointer, pointer};
+    LLVMValueRef args[] = {
+        mutator, type_index, bytes, LLVMConstInt(i32, alignment, false),
+        descriptor, mutator,
+    };
+    return mutator_allocator_call(state,
+        "sys.internal.gc.alloc.allocate_array_on_mutator$gc_mutator",
+        params, args, 6);
 }
 
 static uint32_t
@@ -5471,19 +5500,66 @@ native_call_outcome_signature(const ir_value_t *value, unsigned depth)
 }
 
 static bool
-store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
+gc_barrier_free(lower_state_t *state, th_type *type)
 {
-    if (!type) return backend_error(state->diagnostics,
-        "GC barrier store has no value type");
     th_type *atomic_element = atomic_element_type(type);
     ir_class_t category = ir_machine_of(state->function->owner,
                                        atomic_element ? atomic_element : type)
                               .class;
-    if (category == IR_CLASS_VOID || category == IR_CLASS_BOOL
+    return category == IR_CLASS_VOID || category == IR_CLASS_BOOL
         || category == IR_CLASS_SINT || category == IR_CLASS_UINT
         || category == IR_CLASS_FLOAT
         || n00bb_frame_pointer_free_value(state->function->owner,
-               atomic_element ? atomic_element : type)) return true;
+               atomic_element ? atomic_element : type);
+}
+
+static LLVMBasicBlockRef
+gc_barrier_armed(lower_state_t *state)
+{
+    LLVMContextRef context = LLVMGetModuleContext(state->module);
+    LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
+    core_string_t name = CORE_STRING_STATIC(
+        "sys$internal$gc$core$marking_heaps");
+    LLVMValueRef counter = named_global(state->module, name);
+    if (!counter) counter = add_global(state->module, i32, name);
+    if (!counter) return nullptr;
+    LLVMValueRef armed = LLVMBuildLoad2(state->builder, i32, counter,
+                                        "barrier.armed");
+    LLVMSetOrdering(armed, LLVMAtomicOrderingSequentiallyConsistent);
+    LLVMSetAlignment(armed, 4);
+    LLVMValueRef function = LLVMGetBasicBlockParent(
+        LLVMGetInsertBlock(state->builder));
+    LLVMBasicBlockRef slow = LLVMAppendBasicBlockInContext(context,
+        function, "barrier.slow");
+    LLVMBasicBlockRef done = LLVMAppendBasicBlockInContext(context,
+        function, "barrier.done");
+    LLVMBuildCondBr(state->builder, LLVMBuildICmp(state->builder,
+        LLVMIntNE, armed, LLVMConstNull(i32), "barrier.marking"), slow,
+        done);
+    LLVMPositionBuilderAtEnd(state->builder, slow);
+    return done;
+}
+
+static bool emit_gc_barrier(lower_state_t *state, LLVMValueRef value,
+                            th_type *type);
+
+static bool
+store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
+{
+    if (!type) return backend_error(state->diagnostics,
+        "GC barrier store has no value type");
+    if (gc_barrier_free(state, type)) return true;
+    LLVMBasicBlockRef done = gc_barrier_armed(state);
+    if (!done || !emit_gc_barrier(state, value, type)) return false;
+    LLVMBuildBr(state->builder, done);
+    LLVMPositionBuilderAtEnd(state->builder, done);
+    return true;
+}
+
+static bool
+emit_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
+{
+    if (gc_barrier_free(state, type)) return true;
     LLVMContextRef context = LLVMGetModuleContext(state->module);
     if (LLVMTypeOf(value) == box_llvm_type(context)) {
         LLVMValueRef slot = entry_alloca(state, box_llvm_type(context));
@@ -5544,7 +5620,7 @@ store_gc_barrier(lower_state_t *state, LLVMValueRef value, th_type *type)
                            atomic_field ? atomic_field : field)) continue;
                 LLVMValueRef part = aggregate_element(state, value,
                     shape.slots[i].element, "barrier.field");
-                if (!part || !store_gc_barrier(state, part, field)) {
+                if (!part || !emit_gc_barrier(state, part, field)) {
                     record_shape_release(&shape);
                     return false;
                 }
@@ -8861,7 +8937,9 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             }
             result = mutator_allocation(state,
                                         runtime_type_index_value(state,
-                                            operands[0].type), bytes,
+                                            operands[0].type),
+                                        LLVMConstInt(LLVMInt64TypeInContext(
+                                            context), bytes, false),
                                         layout->alignment_bytes,
                                         binding->finalizable);
             if (!result) break;
@@ -10088,7 +10166,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
         if (!handler) break;
         uint32_t handler_index = handler->kind == IR_VAL_FUNC
             ? runtime_function_index(state, handler->owner) : 0;
-        if (handler->kind == IR_VAL_FUNC && !handler_index) break;
+        if (handler->kind == IR_VAL_FUNC && !handler_index) {
+            state->failure_detail = FAILURE_DETAIL(
+                "the callback handler has no ABI function index");
+            break;
+        }
         th_type *callback_type = instruction->dest->type;
         th_type *failure = setup_signature
             ? th_func_error(setup_signature) : nullptr;
@@ -10108,7 +10190,11 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             callback_type, context) : nullptr;
         if (!callback_index || !type
             || LLVMGetTypeKind(type) != LLVMStructTypeKind
-            || LLVMCountStructElementTypes(type) != 3) break;
+            || LLVMCountStructElementTypes(type) != 3) {
+            state->failure_detail = FAILURE_DETAIL(
+                "the callback type has no ABI type index or callback layout");
+            break;
+        }
         LLVMTypeRef i32 = LLVMInt32TypeInContext(context);
         LLVMValueRef index_value = handler_index
             ? runtime_function_index_value(state, handler->owner) : nullptr;
@@ -10724,6 +10810,23 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
                 lowered_value(state, operands[1].value),
                 operands[1].value->type, instruction->dest->type);
             return result && save_result(state, instruction, result);
+        }
+        if (native && native->kind == IR_ANNOT_STR && native->s.data
+            && state->mutator && count == 3 && instruction->dest
+            && operands[1].kind == IR_OPD_VALUE
+            && operands[2].kind == IR_OPD_VALUE
+            && core_string_eq(native->s,
+                   CORE_STRING_STATIC("n00b_gc_allocate_bytes"))) {
+            LLVMValueRef type_index = lowered_value(state, operands[1].value);
+            LLVMValueRef bytes = lowered_value(state, operands[2].value);
+            LLVMContextRef context = LLVMGetModuleContext(state->module);
+            if (type_index && bytes
+                && LLVMTypeOf(type_index) == LLVMInt32TypeInContext(context)
+                && LLVMTypeOf(bytes) == LLVMInt64TypeInContext(context)) {
+                result = mutator_allocation(state, type_index, bytes, 1,
+                                            false);
+                return result && save_result(state, instruction, result);
+            }
         }
         bool mutator_call = !native && target
             && pointer_set_has(state->mutator_functions, target);
@@ -12570,7 +12673,6 @@ lower_module(LLVMModuleRef target, const ir_module_t *source,
             ok = collect_inline_callees(function, &inline_callees,
                                         diagnostics);
         }
-        break;
     }
     for (size_t i = 0; ok && i < inline_callees.items.len; i++) {
         ir_func_t *function = inline_callees.items.data[i];

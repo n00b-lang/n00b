@@ -22,7 +22,7 @@ tests/diagnostics/tu/type_checks.n:50:17: error N00B-T0552: the receiver of `__f
 tests/diagnostics/tu/type_checks.n:53:12: error N00B-T0500: `0xff & 0x0f` is an integer, but `f` returns `i32`
   tests/diagnostics/tu/type_checks.n:52:13: note: the return type of `f` is declared here
 tests/diagnostics/tu/type_checks.n:57:12: error N00B-T0515: `Dict` takes 2 type arguments, but 1 is given
-  lib/builtin/containers/dict.n:21:8: note: `Dict` is declared here
+  lib/builtin/containers/dict.n:20:8: note: `Dict` is declared here
   help: add the missing type argument
 tests/diagnostics/tu/type_checks.n:61:16: error N00B-T0515: `Box` takes 1 type argument, but 2 are given
   tests/diagnostics/tu/type_checks.n:58:8: note: `Box` is declared here

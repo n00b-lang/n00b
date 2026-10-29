@@ -340,10 +340,6 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                                                  fields_or_arms))
                     target_kind = member_table_kind(
                         ((const n00b_abi_type_v1 *)bytes)->kind);
-                if (kind == N00B_ABI_TABLE_SCC
-                    && field->offset == offsetof(n00b_abi_scc_v1,
-                                                 lexical_order))
-                    target_kind = UINT32_MAX;
                 if (!target_kind) return invalid_record(error, kind, row,
                                                         offset);
                 if (target_kind == UINT32_MAX) continue;
@@ -1190,6 +1186,29 @@ trace_children_claim(const n00b_abi_snapshot_v1 *snapshot,
 }
 
 static bool
+trace_pointer_words_valid(const n00b_abi_snapshot_v1 *snapshot,
+                          const n00b_abi_type_v1 *type,
+                          n00b_abi_range_v1 words)
+{
+    if (!words.count) return true;
+    if (type->kind != N00B_ABI_TYPE_RECORD && type->kind != N00B_ABI_TYPE_TUPLE
+        && type->kind != N00B_ABI_TYPE_REFERENCE
+        && type->kind != N00B_ABI_TYPE_OBJECT
+        && type->kind != N00B_ABI_TYPE_OPTION
+        && type->kind != N00B_ABI_TYPE_WRAPPER
+        && type->kind != N00B_ABI_TYPE_ATOMIC) return false;
+    uint64_t size_bytes = type->size_bits / 8;
+    for (uint32_t i = 0; i < words.count; i++) {
+        uint32_t offset = 0;
+        if (n00b_abi_v1_index_at(snapshot, words, i, &offset) != 1
+            || offset % sizeof(void *)
+            || size_bytes < sizeof(void *)
+            || offset > size_bytes - sizeof(void *)) return false;
+    }
+    return true;
+}
+
+static bool
 trace_fields_complete(const n00b_abi_snapshot_v1 *snapshot,
                       const n00b_abi_type_v1 *parent,
                       const n00b_abi_trace_v1 *trace,
@@ -1594,7 +1613,9 @@ metadata_traces_valid(const n00b_abi_snapshot_v1 *snapshot,
         const n00b_abi_layout_v1 *layout = type->layout_index
             ? n00b_abi_v1_layout(snapshot, type->layout_index) : nullptr;
         valid = trace && trace->type_index == i && !seen[trace_index]
-            && !trace->reserved_zero && layout;
+            && !trace->reserved_zero && layout
+            && trace_pointer_words_valid(snapshot, type,
+                                         trace->pointer_words);
         if (valid && (type->kind == N00B_ABI_TYPE_RECORD
                       || type->kind == N00B_ABI_TYPE_TUPLE))
             valid = !trace->child_trace_index

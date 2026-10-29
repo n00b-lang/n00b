@@ -145,7 +145,7 @@ func remove_child(self: Tree['N, 'L], index: int) -> Tree['N, 'L]? {
         at += count
     }
     while at + 1 < count {
-        self.children.items[at] = self.children.items[at + 1]
+        self.children[at] = self.children[at + 1]
         at += 1
     }
     _ = containers.list.pop(self.children)

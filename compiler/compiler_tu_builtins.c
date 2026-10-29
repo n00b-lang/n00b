@@ -351,6 +351,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_arg_count"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_physical_memory"), uint, nullptr, 0)
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_arg_at"), optional_reference,
             env_at_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -508,6 +510,7 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *reference = item ? th_ind(types, 0, item) : nullptr;
     th_type *address_args[] = {reference};
     th_type *storage_args[] = {u32};
+    th_type *allocate_args[] = {typespec, uint};
     th_type *baked_args[] = {th_name(types, CORE_STRING_STATIC("uint"))};
     return register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_baked_address"),
@@ -536,6 +539,17 @@ register_builtin_abi_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_string_backing_at"),
             bytes_result, &byte_reference, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__gc_allocate_bytes"), byte_reference,
+            allocate_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_table_base"), bytes_result,
+            storage_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_table_count"), u32, storage_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__abi_table_record_bytes"), u32,
+            storage_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__abi_range_index"), i64, range_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,

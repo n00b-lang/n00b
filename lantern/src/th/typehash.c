@@ -1510,21 +1510,45 @@ th_type *th_child(const th_type *t, size_t i)
     }
 }
 
+typedef struct {
+    th_type *t;
+    size_t   n;
+    size_t   next;
+    bool     ground;
+} th_gframe;
+
+core_option_decl(th_gframe);
+core_list_decl(th_gframe);
+
+static bool ground_enter(th_type *t, core_list_t(th_gframe) *stack)
+{
+    if (t->ground) return t->ground == 1;
+    t->ground = 2;
+    if (t->kind == TH_VAR || t->kind == TH_BOUND || t->kind == TH_BINDER)
+        return false;
+    core_list_push(*stack, ((th_gframe){t, th_child_count(t), 0, true}));
+    return true;
+}
+
 static bool th_ground(th_type *t)
 {
     if (t->ground) return t->ground == 1;
-    if (t->kind == TH_VAR || t->kind == TH_BOUND || t->kind == TH_BINDER) {
-        t->ground = 2;
-        return false;
+    core_list_t(th_gframe) stack = core_list_new(th_gframe);
+    bool ground = ground_enter(t, &stack);
+    while (stack.len) {
+        th_gframe *top = &stack.data[stack.len - 1];
+        if (top->ground && top->next < top->n) {
+            th_type *child = th_child(top->t, top->next++);
+            if (child && !ground_enter(child, &stack))
+                stack.data[stack.len - 1].ground = false;
+            continue;
+        }
+        th_gframe done = core_option_get(core_list_pop(th_gframe, stack));
+        done.t->ground = done.ground ? 1 : 2;
+        ground = done.ground;
+        if (stack.len && !done.ground) stack.data[stack.len - 1].ground = false;
     }
-    t->ground = 2;
-    bool ground = true;
-    size_t count = th_child_count(t);
-    for (size_t i = 0; ground && i < count; i++) {
-        th_type *child = th_child(t, i);
-        ground = !child || th_ground(child);
-    }
-    t->ground = ground ? 1 : 2;
+    core_list_free(stack);
     return ground;
 }
 

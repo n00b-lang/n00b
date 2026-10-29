@@ -639,7 +639,7 @@ func begin_epoch_locked(heap: Ref[internal.gc.core.Heap]) {
 
 func end_epoch_locked(heap: Ref[internal.gc.core.Heap]) {
     assert heap.pool_full == nil and heap.pool_active == 0
-    __atomic_store(ref heap.marking, false)
+    internal.gc.core.set_marking(heap, false)
     heap.black_alloc = false
     heap.epoch = heap.mark_epoch
     __atomic_store(ref heap.nunswept, heap.nblocks)
@@ -750,7 +750,7 @@ func start_marking_locked(heap: Ref[internal.gc.core.Heap]) {
     internal.gc.mark.marker_flush(ref marker)
     internal.gc.mark.marker_stats(ref marker)
 
-    __atomic_store(ref heap.marking, true)
+    internal.gc.core.set_marking(heap, true)
     __atomic_store(ref heap.phase, cast[u32](internal.gc.core.Phase.marking))
     start_world(heap)
 }

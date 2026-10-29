@@ -1648,6 +1648,7 @@ allocation_flags(const ir_func_t *f, const ir_instr_t *in)
         return in->dest && th_is_closed(ir_module_types(f->owner),
                                         in->dest->type)
             ? IR_SUMMARY_MAY_ALLOCATE | IR_SUMMARY_MAY_COLLECT
+                | IR_SUMMARY_ALLOCATES_DIRECT
             : IR_SUMMARY_MAY_ALLOCATE;
     case IR_OP_ALLOC_USING:
     case IR_OP_ARRAY_NEW_USING:
