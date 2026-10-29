@@ -27,6 +27,7 @@ enum Storage_Kind {
 }
 
 const type_flag_bits: u32 = 1 << 4
+const type_flag_bool: u32 = 1 << 7
 
 record Array_Descriptor_Header layout(c) {
     total_count:   u64
@@ -77,8 +78,49 @@ const table_native:        u32 = 19
 const type_flag_opaque:    u32 = 1 << 1
 const extent_count_field:  u32 = 1
 const extent_sentinel:     u32 = 2
+const table_trace:         u32 = 10
+const table_trace_child:   u32 = 11
+const table_tag_extractor: u32 = 13
+const table_u32_stream:    u32 = 32
 
-func type_at(index: u32) -> Ref[Type_Record]? {
+var type_rows:               Ref[byte]? = nil
+var type_row_bytes:          uint       = 0
+var type_row_count:          u32        = 0
+var trace_rows:              Ref[byte]? = nil
+var trace_row_bytes:         uint       = 0
+var trace_row_count:         u32        = 0
+var trace_child_rows:        Ref[byte]? = nil
+var trace_child_row_bytes:   uint       = 0
+var trace_child_row_count:   u32        = 0
+var tag_extractor_rows:      Ref[byte]? = nil
+var tag_extractor_row_bytes: uint       = 0
+var tag_extractor_row_count: u32        = 0
+var u32_rows:                Ref[byte]? = nil
+var u32_row_count:           u32        = 0
+
+func cache_tables() {
+    type_rows = __abi_table_base(table_type)
+    type_row_bytes = cast[uint](__abi_table_record_bytes(table_type))
+    type_row_count = __abi_table_count(table_type)
+    trace_rows = __abi_table_base(table_trace)
+    trace_row_bytes = cast[uint](__abi_table_record_bytes(table_trace))
+    trace_row_count = __abi_table_count(table_trace)
+    trace_child_rows = __abi_table_base(table_trace_child)
+    trace_child_row_bytes = cast[uint](__abi_table_record_bytes(table_trace_child))
+    trace_child_row_count = __abi_table_count(table_trace_child)
+    tag_extractor_rows = __abi_table_base(table_tag_extractor)
+    tag_extractor_row_bytes = cast[uint](__abi_table_record_bytes(table_tag_extractor))
+    tag_extractor_row_count = __abi_table_count(table_tag_extractor)
+    u32_rows = __abi_table_base(table_u32_stream)
+    u32_row_count = __abi_table_count(table_u32_stream)
+}
+
+inline func type_at(index: u32) -> Ref[Type_Record]? {
+    let rows: Ref[byte]? = type_rows
+    if index < type_row_count and rows != nil {
+        return unsafe_cast[Ref[Type_Record]] __gc_byte_offset(rows.get(),
+            cast[uint](index) * type_row_bytes)
+    }
     return __abi_type(index)
 }
 
@@ -98,11 +140,21 @@ func physical_run_at(index: u32) -> Ref[Physical_Run_Record]? {
     return __abi_physical_run(index)
 }
 
-func trace_at(index: u32) -> Ref[Trace_Record]? {
+inline func trace_at(index: u32) -> Ref[Trace_Record]? {
+    let rows: Ref[byte]? = trace_rows
+    if index < trace_row_count and rows != nil {
+        return unsafe_cast[Ref[Trace_Record]] __gc_byte_offset(rows.get(),
+            cast[uint](index) * trace_row_bytes)
+    }
     return __abi_trace(index)
 }
 
-func trace_child_at(index: u32) -> Ref[Trace_Child_Record]? {
+inline func trace_child_at(index: u32) -> Ref[Trace_Child_Record]? {
+    let rows: Ref[byte]? = trace_child_rows
+    if index < trace_child_row_count and rows != nil {
+        return unsafe_cast[Ref[Trace_Child_Record]] __gc_byte_offset(rows.get(),
+            cast[uint](index) * trace_child_row_bytes)
+    }
     return __abi_trace_child(index)
 }
 
@@ -110,7 +162,12 @@ func trace_arm_at(index: u32) -> Ref[Trace_Arm_Record]? {
     return __abi_trace_arm(index)
 }
 
-func tag_extractor_at(index: u32) -> Ref[Tag_Extractor_Record]? {
+inline func tag_extractor_at(index: u32) -> Ref[Tag_Extractor_Record]? {
+    let rows: Ref[byte]? = tag_extractor_rows
+    if index < tag_extractor_row_count and rows != nil {
+        return unsafe_cast[Ref[Tag_Extractor_Record]] __gc_byte_offset(
+            rows.get(), cast[uint](index) * tag_extractor_row_bytes)
+    }
     return __abi_tag_extractor(index)
 }
 
@@ -212,7 +269,13 @@ func string_bytes(address: Ref[byte]) -> Ref[byte]? {
     return string_backing_at(address)
 }
 
-func range_index(range: Range, ordinal: u32) -> i64 {
+inline func range_index(range: Range, ordinal: u32) -> i64 {
+    let rows: Ref[byte]? = u32_rows
+    if ordinal < range.count and rows != nil and
+        cast[u64](range.first) + cast[u64](range.count) <= cast[u64](u32_row_count) {
+        let at: uint = (cast[uint](range.first) + cast[uint](ordinal)) * 4
+        return cast[i64]((unsafe_cast[Ref[u32]] __gc_byte_offset(rows.get(), at)).__value)
+    }
     return __abi_range_index(range.first, range.count, ordinal)
 }
 
@@ -258,15 +321,12 @@ func alignment_bytes(row: Ref[Type_Record]) -> uint {
     return row.alignment_bytes
 }
 
-func packed_array_stride_bits(row: Ref[Type_Record]) -> uint {
+inline func packed_array_stride_bits(row: Ref[Type_Record]) -> uint {
     if row.flags & type_flag_bits != 0 {
         return row.semantic_width_bits
     }
-    let boolean: Ref[Type_Record]? = type_for(typeof(false))
-    if boolean != nil {
-        if boolean.get().typehash == row.typehash {
-            return 1
-        }
+    if row.flags & type_flag_bool != 0 {
+        return 1
     }
     return 0
 }

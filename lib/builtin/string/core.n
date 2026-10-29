@@ -7,6 +7,11 @@ private record String_Words layout(c) {
     selector: u64
 }
 
+private record Short_Words layout(c) {
+    low:  u64
+    high: u64
+}
+
 private record Byte_Array_Value layout(c) {
     data:       Ref[byte]
     descriptor: Ref[Byte_Array_Shape]
@@ -127,6 +132,25 @@ private func short_from(first: Ref[byte], first_n: uint, second: Ref[byte],
     return made
 }
 
+private inline func short_bits(s: Ref[string], n: uint) -> u128 {
+    let cells: Ref[Short_Words] = unsafe_cast[Ref[Short_Words]] s
+    let bits: u128 = cast[u128](cells.low) | (cast[u128](cells.high) << 64)
+    return bits & ((cast[u128](1) << (n * 8)) - 1)
+}
+
+private inline func short_join(left: Ref[string], left_n: uint,
+                               right: Ref[string], n: uint,
+                               encoding: u8) -> string {
+    let bits: u128 = short_bits(left, left_n) |
+        (short_bits(right, n - left_n) << (left_n * 8))
+    var made: string = ""
+    let cells: Ref[Short_Words] = unsafe_cast[Ref[Short_Words]] ref made
+    cells.low = cast[u64](bits & 0xffffffffffffffff)
+    cells.high = cast[u64](bits >> 64) |
+        (cast[u64](n | (cast[uint](encoding) << 4)) << 56)
+    return made
+}
+
 private func empty_with(encoding: u8) -> string {
     var none: u64 = 0
     let source: Ref[byte] = unsafe_cast[Ref[byte]] ref none
@@ -153,9 +177,22 @@ private func __string_make(bytes: Ref[Array[u8]], at: uint, n: uint,
         view.selector = long_selector(n, encoding, str_tag_span)
         return made
     }
-    var copy: Array[u8] = new[Array[u8]](cast[int] n)
-    copy_array_bytes(unsafe_cast[Ref[byte]] ref copy[0], bytes.__value, at, n)
-    view.data = unsafe_cast[Ref[byte]] ref copy[0]
+    let copy: Ref[byte] = long_bytes(n)
+    copy_array_bytes(copy, bytes.__value, at, n)
+    view.data = copy
+    view.selector = long_selector(n, encoding, str_tag_long)
+    return made
+}
+
+private func long_bytes(n: uint) -> Ref[byte] {
+    let probe: u8 = 0
+    return __gc_allocate_bytes(typeof(probe), n)
+}
+
+private func adopt_long(data: Ref[byte], n: uint, encoding: u8) -> string {
+    var made: string = ""
+    let view: Ref[String_Words] = words(ref made)
+    view.data = data
     view.selector = long_selector(n, encoding, str_tag_long)
     return made
 }
@@ -325,17 +362,21 @@ func __add(self: string, other: string) -> string {
     let right_length: uint = __string_byte_len(right)
     let n: uint = left_length + right_length
     let joined: Str_Encoding = widen_encoding(encoding(left), encoding(right))
+    if n <= str_short_cap and __string_tag(left) == 0 and
+        __string_tag(right) == 0 {
+        return short_join(ref left, left_length, ref right, n,
+                          cast[u8] joined)
+    }
     if n <= str_short_cap {
         return short_from(__string_data(ref left), left_length,
                           __string_data(ref right), right_length,
                           cast[u8] joined)
     }
-    var bytes: Array[u8] = new[Array[u8]](cast[int] n)
-    let target: Ref[byte] = unsafe_cast[Ref[byte]] ref bytes[0]
+    let target: Ref[byte] = long_bytes(n)
     copy_bytes(target, __string_data(ref left), left_length)
     copy_bytes(__gc_byte_offset(target, cast[int] left_length),
                __string_data(ref right), right_length)
-    return adopt_bytes(ref bytes, n, cast[u8] joined)
+    return adopt_long(target, n, cast[u8] joined)
 }
 
 private func either_rich(left: string, right: string) -> bool {
@@ -637,7 +678,8 @@ func byte_slice(self: string, start: int, end: int) -> string {
             enc = Str_Encoding.binary
         }
     }
-    if cast[u64](__string_tag(base)) == str_tag_short {
+    if cast[u64](__string_tag(base)) == str_tag_short or
+        slice_len <= str_short_cap {
         let source: Ref[byte] = __gc_byte_offset(__string_data(ref base),
                                                  cast[int] first)
         return short_from(source, slice_len, source, 0, cast[u8] enc)

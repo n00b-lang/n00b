@@ -2672,9 +2672,6 @@ n00bb_abi_remap_row(const n00bb_abi_selected_objects_t *selected,
         n00b_abi_range_v1 range;
         memcpy(&range, bytes + field->offset, sizeof(range));
         uint32_t target = field->target_kind;
-        if (kind == N00B_ABI_TABLE_SCC
-            && field->offset == offsetof(n00b_abi_scc_v1, lexical_order))
-            target = UINT32_MAX;
         if (kind == N00B_ABI_TABLE_TYPE
             && field->offset == offsetof(n00b_abi_type_v1, fields_or_arms))
             target = type_member_kind((const n00b_abi_type_v1 *)source);
@@ -3404,6 +3401,109 @@ complete_merged_traces(n00bb_abi_merged_rows_t *merged)
         valid = merged_trace_complete(&build, i) != LINK_TRACE_INVALID;
     core_free(states);
     return valid;
+}
+
+constexpr uint32_t link_pointer_words_max = 64;
+constexpr uint32_t link_pointer_depth_max = 8;
+
+typedef struct {
+    uint32_t offsets[link_pointer_words_max];
+    uint32_t count;
+} link_pointer_words_t;
+
+static bool
+merged_pointer_word(const n00bb_abi_merged_rows_t *merged,
+                    uint32_t type_index)
+{
+    for (uint32_t depth = 0; depth < link_pointer_depth_max; depth++) {
+        const n00b_abi_type_v1 *type = n00bb_abi_merged_row(merged,
+            N00B_ABI_TABLE_TYPE, type_index);
+        if (!type) return false;
+        if (type->kind == N00B_ABI_TYPE_REFERENCE
+            || type->kind == N00B_ABI_TYPE_OBJECT) return true;
+        if (type->kind == N00B_ABI_TYPE_OPTION) {
+            const n00b_abi_layout_v1 *layout = type->layout_index
+                ? n00bb_abi_merged_row(merged, N00B_ABI_TABLE_LAYOUT,
+                    type->layout_index) : nullptr;
+            const n00b_abi_tag_extractor_v1 *tag =
+                layout && layout->tag_extractor_index
+                ? n00bb_abi_merged_row(merged, N00B_ABI_TABLE_TAG_EXTRACTOR,
+                    layout->tag_extractor_index) : nullptr;
+            if (!tag || tag->unit_byte_offset
+                || (tag->kind != N00B_ABI_TAG_POINTER_NULL
+                    && tag->kind != N00B_ABI_TAG_BITPTR_DEPTH)) return false;
+        }
+        else if (type->kind != N00B_ABI_TYPE_WRAPPER
+                 && type->kind != N00B_ABI_TYPE_ATOMIC) return false;
+        if (type->components.count != 1
+            || !merged_index_at(merged, type->components, 0, &type_index))
+            return false;
+    }
+    return false;
+}
+
+static bool
+merged_flatten_trace(const n00bb_abi_merged_rows_t *merged,
+                     uint32_t type_index, uint64_t base, uint32_t depth,
+                     link_pointer_words_t *words)
+{
+    if (merged_pointer_word(merged, type_index)) {
+        if (words->count == link_pointer_words_max || base > UINT32_MAX)
+            return false;
+        words->offsets[words->count++] = (uint32_t)base;
+        return true;
+    }
+    const n00b_abi_type_v1 *type = n00bb_abi_merged_row(merged,
+        N00B_ABI_TABLE_TYPE, type_index);
+    if (!type || depth == link_pointer_depth_max || !type->tracing_index
+        || (type->kind != N00B_ABI_TYPE_RECORD
+            && type->kind != N00B_ABI_TYPE_TUPLE)) return false;
+    const n00b_abi_trace_v1 *trace = n00bb_abi_merged_row(merged,
+        N00B_ABI_TABLE_TRACE, type->tracing_index);
+    if (!trace || trace->arms.count) return false;
+    for (uint32_t i = 0; i < trace->fixed_children.count; i++) {
+        uint32_t child_index = 0;
+        const n00b_abi_trace_child_v1 *child =
+            merged_index_at(merged, trace->fixed_children, i, &child_index)
+            ? n00bb_abi_merged_row(merged, N00B_ABI_TABLE_TRACE_CHILD,
+                child_index) : nullptr;
+        if (!child || child->extent_form != N00B_ABI_EXTENT_NONE
+            || child->stride_bits % 8) return false;
+        uint64_t repeats = child->repeat_count ? child->repeat_count : 1;
+        if (repeats > link_pointer_words_max) return false;
+        for (uint64_t r = 0; r < repeats; r++)
+            if (!merged_flatten_trace(merged, child->child_type_index,
+                    base + child->byte_offset + r * (child->stride_bits / 8),
+                    depth + 1, words)) return false;
+    }
+    return true;
+}
+
+static bool
+flatten_merged_traces(n00bb_abi_merged_rows_t *merged)
+{
+    n00bb_abi_merged_table_t *traces = merged_table_mut(merged,
+        N00B_ABI_TABLE_TRACE);
+    n00bb_abi_merged_table_t *stream = merged_table_mut(merged,
+        N00B_ABI_TABLE_U32_STREAM);
+    if (!traces || !stream
+        || traces->record_bytes != sizeof(n00b_abi_trace_v1)) return false;
+    for (uint32_t i = 1; i < traces->record_count; i++) {
+        n00b_abi_trace_v1 *trace = (n00b_abi_trace_v1 *)(traces->records
+            + (size_t)i * traces->record_bytes);
+        link_pointer_words_t words = {0};
+        if (trace->pointer_words.count
+            || !merged_flatten_trace(merged, trace->type_index, 0, 0, &words)
+            || !words.count) continue;
+        n00b_abi_range_v1 range = {
+            .first = stream->record_count, .count = words.count,
+        };
+        for (uint32_t w = 0; w < words.count; w++)
+            if (!merged_row_append(stream, &words.offsets[w], nullptr))
+                return false;
+        trace->pointer_words = range;
+    }
+    return true;
 }
 
 const void *
@@ -4440,6 +4540,7 @@ n00bb_abi_merge_rows(const n00bb_abi_selected_objects_t *selected,
     if (valid) valid = remap_summary_names(selected, plan, &built,
                                            origins, schema_count);
     if (valid) valid = complete_merged_traces(&built);
+    if (valid) valid = flatten_merged_traces(&built);
     core_free(scratch);
     for (size_t i = 0; i < schema_count; i++) {
         if (rebased_row_bytes(built.tables[i].kind))

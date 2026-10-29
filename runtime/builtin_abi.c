@@ -178,6 +178,26 @@ n00b_builtin_abi_range_index(uint32_t first, uint32_t count,
         ordinal, &result) == 1 ? (int64_t)result : -1;
 }
 
+const uint8_t *
+n00b_builtin_abi_table_base(uint32_t kind)
+{
+    return n00b_abi_v1_record(n00b_abi_v1_current_snapshot(), kind, 0, NULL);
+}
+
+uint32_t
+n00b_builtin_abi_table_count(uint32_t kind)
+{
+    return n00b_abi_v1_table_count(n00b_abi_v1_current_snapshot(), kind);
+}
+
+uint32_t
+n00b_builtin_abi_table_record_bytes(uint32_t kind)
+{
+    uint32_t bytes = 0;
+    (void)n00b_abi_v1_record(n00b_abi_v1_current_snapshot(), kind, 0, &bytes);
+    return bytes;
+}
+
 int32_t
 n00b_builtin_abi_type_specializes(uint32_t type, uint32_t general)
 {

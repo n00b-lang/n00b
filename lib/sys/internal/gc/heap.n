@@ -153,7 +153,10 @@ func get_stats(heap: Ref[internal.gc.core.Heap]) -> internal.gc.core.Stats {
 }
 
 func create(config: Ref[internal.gc.core.Config]?) -> Ref[internal.gc.core.Heap]? {
+    internal.abi.cache_tables()
     internal.gc.core.resolve_layout()
+    internal.gc.hash.resolve_hash_slot()
+    internal.gc.core.resolve_request_limit()
     let row:    Ref[internal.abi.Type_Record] = heap_record()
     let mapped: Ref[byte]?                   = internal.memory.map_zeroed(
         internal.abi.size_bytes(row), internal.abi.alignment_bytes(row))

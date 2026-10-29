@@ -205,6 +205,7 @@ typedef enum {
     N00B_ABI_TYPE_FLAG_BITS = 1u << 4,
     N00B_ABI_TYPE_FLAG_PLAIN_REF = 1u << 5,
     N00B_ABI_TYPE_FLAG_TYPE_INDEX = 1u << 6,
+    N00B_ABI_TYPE_FLAG_BOOL = 1u << 7,
 } n00b_abi_type_flag_v1;
 
 typedef enum {
@@ -528,6 +529,7 @@ typedef struct {
     n00b_abi_range_v1 fixed_children;
     n00b_abi_range_v1 arms;
     uint64_t option_bit_offset;
+    n00b_abi_range_v1 pointer_words;
 } n00b_abi_trace_v1;
 
 typedef enum {
@@ -1005,7 +1007,7 @@ _Static_assert(sizeof(n00b_abi_arm_v1) == 96, "arm width");
 _Static_assert(sizeof(n00b_abi_tag_extractor_v1) == 32, "tag width");
 _Static_assert(offsetof(n00b_abi_tag_extractor_v1, kind) == 28,
                "tag kind offset");
-_Static_assert(sizeof(n00b_abi_trace_v1) == 40, "trace width");
+_Static_assert(sizeof(n00b_abi_trace_v1) == 48, "trace width");
 _Static_assert(sizeof(n00b_abi_trace_child_v1) == 56, "trace child width");
 _Static_assert(sizeof(n00b_abi_trace_arm_v1) == 16, "trace arm width");
 _Static_assert(sizeof(n00b_abi_function_v1) == 96, "function width");

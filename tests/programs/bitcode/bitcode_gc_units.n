@@ -148,6 +148,8 @@ func check_record_trace(heap: Ref[sys.gc.core.Heap],
             let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(
                 node_row.get().tracing_index)
             if trace != nil {
+                assert trace.get().pointer_words.count == 1
+                assert sys.abi.range_index(trace.get().pointer_words, 0) == 0
                 let node_payload: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.small, trace.get().type_index,
                     sys.abi.size_bytes(node_row.get()),
@@ -272,6 +274,7 @@ func check_inline_trace(heap: Ref[sys.gc.core.Heap],
             let trace: Ref[sys.abi.Trace_Record]? = sys.abi.trace_at(
                 record_row.get().tracing_index)
             if trace != nil {
+                assert trace.get().pointer_words.count == 0
                 let payload: Ref[byte]? = sys.gc.alloc.allocate_reserved(
                     mutator, ref mutator.small, trace.get().type_index,
                     sys.abi.size_bytes(record_row.get()),

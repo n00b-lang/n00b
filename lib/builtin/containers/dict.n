@@ -13,16 +13,13 @@ record Item {
 }
 
 record Entry {
-    key:     'K
-    value:   'V
-    ordinal: uint
+    key:   'K
+    value: 'V
 }
 
 object Dict {
-    entries:      Array[Entry['K, 'V]]
-    count:        uint
-    index:        containers.hash_index.Hash_Index
-    next_ordinal: uint
+    entries: Array[Entry['K, 'V]]
+    index:   containers.hash_index.Hash_Index
 }
 
 func key_hash(key: 'K) -> u128 where 'K : hashing . Hash {
@@ -44,63 +41,83 @@ func ensure_entries(self: Dict['K, 'V], needed: uint) {
     var next: Array[Entry['K, 'V]] =
         new[Array[Entry['K, 'V]]](cast[int]next_capacity)
     var at: uint = 0
-    while at < self.count {
+    while at < self.index.used {
         next[at] = self.entries[at]
         at += 1
     }
     self.entries = next
 }
 
+func compact(self: Dict['K, 'V]) {
+    let used:  uint = self.index.used
+    var write: uint = 0
+    var read:  uint = 0
+    while read < used {
+        if !containers.hash_index.is_dead(ref self.index, read) {
+            if write != read {
+                self.entries[write] = self.entries[read]
+            }
+            write += 1
+        }
+        read += 1
+    }
+    while read > write {
+        read -= 1
+        __array_clear(ref self.entries, read)
+    }
+    containers.hash_index.compact(ref self.index)
+}
+
+inline func prepare(self: Dict['K, 'V]) {
+    if self.index.used == __array_length(self.entries) {
+        if containers.hash_index.should_compact(ref self.index) {
+            compact(self)
+        } else {
+            ensure_entries(self, self.index.used + 1)
+        }
+    }
+    containers.hash_index.reserve(ref self.index, 1)
+}
+
 func __init(self: Dict['K, 'V], pairs : Array[Tuple['K, 'V]] = [])
            where 'K : hashing . Hash {
     self.entries = new[Array[Entry['K, 'V]]](0)
-    self.count = 0
     self.index = new[containers.hash_index.Hash_Index]()
-    self.next_ordinal = 0
     for key, value in pairs {
         _ = put(self, key, value)
     }
 }
 
 func len(self: Dict['K, 'V]) -> uint {
-    return self.count
+    return self.index.live
 }
 
 inline func get(self: Dict['K, 'V], key: 'K) -> 'V? where 'K : hashing . Hash {
-    let index: Ref[containers.hash_index.Hash_Index] = ref self.index
-    let slot:  uint? = containers.hash_index.find_slot(index, key_hash(key))
-    if slot == nil {
+    let entry: uint? = containers.hash_index.find(ref self.index, key_hash(key))
+    if entry == nil {
         return nil
     }
-    return self.entries[containers.hash_index.entry_at(index, slot.get())].value
+    return self.entries[entry.get()].value
 }
 
 func contains(self: Dict['K, 'V], key: 'K) -> bool where 'K : hashing . Hash {
-    return containers.hash_index.find_slot(ref self.index, key_hash(key)) != nil
+    return containers.hash_index.find(ref self.index, key_hash(key)) != nil
 }
 
-func insert_entry(self: Dict['K, 'V], key: 'K, value: 'V, hash: u128)
-                 -> uint? {
-    ensure_entries(self, self.count + 1)
-    containers.hash_index.ensure_capacity(ref self.index, 1)
-    let existing: uint? =
-        containers.hash_index.insert_or_find(ref self.index, hash, self.count)
+inline func insert_entry(self: Dict['K, 'V], key: 'K, value: 'V, hash: u128)
+                        -> uint? {
+    prepare(self)
+    let existing: uint? = containers.hash_index.insert(ref self.index, hash)
     if existing != nil {
         return existing
     }
-    let inserted: Entry['K, 'V] =
-        (key = key, value = value, ordinal = self.next_ordinal)
-    self.entries[self.count] = inserted
-    self.count += 1
-    self.next_ordinal += 1
+    self.entries[self.index.used - 1] = (key = key, value = value)
     return nil
 }
 
-func replace_at(self: Dict['K, 'V], slot: uint, value: 'V) -> 'V {
-    let at:    uint          = containers.hash_index.entry_at(ref self.index, slot)
-    let prior: Entry['K, 'V] = self.entries[at]
-    self.entries[at] =
-        (key = prior.key, value = value, ordinal = prior.ordinal)
+inline func replace_at(self: Dict['K, 'V], entry: uint, value: 'V) -> 'V {
+    let prior: Entry['K, 'V] = self.entries[entry]
+    self.entries[entry] = (key = prior.key, value = value)
     return prior.value
 }
 
@@ -120,7 +137,7 @@ inline func add(self: Dict['K, 'V], key: 'K, value: 'V)
 
 func replace(self: Dict['K, 'V], key: 'K, value: 'V)
             -> bool where 'K : hashing . Hash {
-    let found: uint? = containers.hash_index.find_slot(ref self.index, key_hash(key))
+    let found: uint? = containers.hash_index.find(ref self.index, key_hash(key))
     if found == nil {
         return false
     }
@@ -130,30 +147,20 @@ func replace(self: Dict['K, 'V], key: 'K, value: 'V)
 
 inline func remove(self: Dict['K, 'V], key: 'K)
                   -> bool where 'K : hashing . Hash {
-    let hash:  u128  = key_hash(key)
-    let found: uint? = containers.hash_index.find_slot(ref self.index, hash)
+    let found: uint? = containers.hash_index.find_slot(ref self.index,
+                                                       key_hash(key))
     if found == nil {
         return false
     }
-    let removed: uint =
-        containers.hash_index.entry_at(ref self.index, found.get())
-    containers.hash_index.remove_at(ref self.index, found.get())
-    let last: uint = self.count - 1
-    if removed != last {
-        let moved: Entry['K, 'V] = self.entries[last]
-        self.entries[removed] = moved
-        containers.hash_index.replace_entry(ref self.index, last, removed)
-    }
-    __array_clear(ref self.entries, last)
-    self.count = last
+    let removed: uint = containers.hash_index.remove_at(ref self.index,
+                                                        found.get())
+    __array_clear(ref self.entries, removed)
     return true
 }
 
 func clear(self: Dict['K, 'V]) {
     self.entries = new[Array[Entry['K, 'V]]](0)
-    self.count = 0
     self.index = new[containers.hash_index.Hash_Index]()
-    self.next_ordinal = 0
 }
 
 func __read(self: Dict['K, 'V], key: 'K) -> 'V? where 'K : hashing . Hash {
@@ -166,36 +173,34 @@ func __write(self: Dict['K, 'V], key: 'K, value: 'V)
 }
 
 func iter(self: Dict['K, 'V]) -> cursor.Cursor[Item['K, 'V]] {
-    let count: int                 = cast[int]self.count
-    var pairs: Array[Item['K, 'V]] = new[Array[Item['K, 'V]]](count)
-    var at:    int                 = 0
-    while at < count {
-        let entry: Entry['K, 'V] = self.entries[at]
-        pairs[at] = (key = entry.key, value = entry.value)
-        at += 1
+    var pairs: Array[Item['K, 'V]] =
+        new[Array[Item['K, 'V]]](cast[int]self.index.live)
+    var write: uint = 0
+    var read:  uint = 0
+    while read < self.index.used {
+        if !containers.hash_index.is_dead(ref self.index, read) {
+            let entry: Entry['K, 'V] = self.entries[read]
+            pairs[write] = (key = entry.key, value = entry.value)
+            write += 1
+        }
+        read += 1
     }
     return cursor.iter(pairs)
 }
 
 func snapshot_entries(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
-    let count:   int                  = cast[int]self.count
-    var entries: Array[Entry['K, 'V]] = new[Array[Entry['K, 'V]]](count)
-    var at:      int                  = 0
-    while at < count {
-        entries[at] = self.entries[at]
-        at += 1
+    var entries: Array[Entry['K, 'V]] =
+        new[Array[Entry['K, 'V]]](cast[int]self.index.live)
+    var write: uint = 0
+    var read:  uint = 0
+    while read < self.index.used {
+        if !containers.hash_index.is_dead(ref self.index, read) {
+            entries[write] = self.entries[read]
+            write += 1
+        }
+        read += 1
     }
     return entries
-}
-
-func compare_insertion(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
-    if left.ordinal < right.ordinal {
-        return Comparison.less
-    }
-    if left.ordinal > right.ordinal {
-        return Comparison.greater
-    }
-    return Comparison.equal
 }
 
 func compare_key(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
@@ -226,14 +231,6 @@ func compare_value(left: Entry['K, 'V], right: Entry['K, 'V]) -> Comparison {
     }
 }
 
-func entries_in_insertion_order(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
-    var entries: Array[Entry['K, 'V]]                   = snapshot_entries(self)
-    let by:      sort.Comparator[Entry['K, 'V]] =
-        callback[sort.Comparator](ref compare_insertion)
-    sort.sort_by(entries, by)
-    return entries
-}
-
 func entries_in_key_order(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
     var entries: Array[Entry['K, 'V]]                   = snapshot_entries(self)
     let by:      sort.Comparator[Entry['K, 'V]] =
@@ -251,11 +248,8 @@ func entries_in_value_order(self: Dict['K, 'V]) -> Array[Entry['K, 'V]] {
 }
 
 func ordered_entries(self: Dict['K, 'V], order: Sort_Order) -> Array[Entry['K, 'V]] {
-    if order == Sort_Order.none {
+    if order == Sort_Order.none or order == Sort_Order.insertion {
         return snapshot_entries(self)
-    }
-    if order == Sort_Order.insertion {
-        return entries_in_insertion_order(self)
     }
     if order == Sort_Order.key {
         return entries_in_key_order(self)
@@ -288,21 +282,21 @@ func value_view(entries: Array[Entry['K, 'V]], count: int)
 func keys(self: Dict['K, 'V],
                  sort_order : Sort_Order = Sort_Order.none)
          -> containers.view.View['K] {
-    if sort_order == Sort_Order.none {
-        return key_view(self.entries, cast[int]self.count)
+    let count: int = cast[int]self.index.live
+    if sort_order == Sort_Order.none and self.index.used == self.index.live {
+        return key_view(self.entries, count)
     }
-    return key_view(ordered_entries(self, sort_order),
-                    cast[int]self.count)
+    return key_view(ordered_entries(self, sort_order), count)
 }
 
 func values(self: Dict['K, 'V],
                    sort_order : Sort_Order = Sort_Order.none)
            -> containers.view.View['V] {
-    if sort_order == Sort_Order.none {
-        return value_view(self.entries, cast[int]self.count)
+    let count: int = cast[int]self.index.live
+    if sort_order == Sort_Order.none and self.index.used == self.index.live {
+        return value_view(self.entries, count)
     }
-    return value_view(ordered_entries(self, sort_order),
-                      cast[int]self.count)
+    return value_view(ordered_entries(self, sort_order), count)
 }
 
 alias litmod d = dict

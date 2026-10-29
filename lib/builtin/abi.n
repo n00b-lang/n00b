@@ -81,6 +81,7 @@ record Trace_Record layout(c) {
     fixed_children:      Range
     arms:                Range
     option_bit_offset:   u64
+    pointer_words:       Range
 }
 
 record Trace_Child_Record layout(c) {

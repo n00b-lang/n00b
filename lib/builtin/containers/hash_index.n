@@ -1,195 +1,237 @@
-record Hash_Index_Slot {
-    entry: u32
-    tag:   u32
-}
+const group_slots: uint = 8
+const ctrl_empty:  u64  = 0x80
+const ctrl_dead:   u64  = 0xfe
+const byte_lsbs:   u64  = 0x0101010101010101
+const byte_msbs:   u64  = 0x8080808080808080
+const byte_bit1:   u64  = 0x0202020202020202
+const empty_group: u64  = 0x8080808080808080
 
 record Hash_Index {
-    slots:  Array[Hash_Index_Slot]
-    hashes: Array[u128]
-    count:  uint
+    ctrl:        Array[u64]
+    slots:       Array[u32]
+    hashes:      Array[u128]
+    dead:        Array[u64]
+    used:        uint
+    live:        uint
+    growth_left: uint
 }
 
 func __init(modify self: Hash_Index) {
-    self.slots = new[Array[Hash_Index_Slot]](0)
+    self.ctrl = new[Array[u64]](0)
+    self.slots = new[Array[u32]](0)
     self.hashes = new[Array[u128]](0)
-    self.count = 0
+    self.dead = new[Array[u64]](0)
+    self.used = 0
+    self.live = 0
+    self.growth_left = 0
 }
 
-inline func capacity(self: Hash_Index) -> uint {
-    return __array_length(self.slots)
+inline func mix(hash: u128) -> u64 {
+    return cast[u64](hash & 0xffffffffffffffff) ^ cast[u64](hash >> 64)
 }
 
-inline func tag_of(hash: u128) -> u32 {
-    return cast[u32]((hash ^ (hash >> 64)) & 0xffffffff)
+inline func tag_of(mixed: u64) -> u64 {
+    return mixed & 0x7f
 }
 
-inline func distance(at: uint, tag: u32, size: uint) -> uint {
-    return (at + size - (cast[uint](tag) & (size - 1))) & (size - 1)
+inline func match_tag(word: u64, tag: u64) -> u64 {
+    let x: u64 = word ^ (tag * byte_lsbs)
+    return unsafe_sub(x, byte_lsbs) & ~x & byte_msbs
 }
 
-inline func entry_at(index: Ref[Hash_Index], slot: uint) -> uint {
-    return cast[uint](index.slots[slot].entry) - 1
+inline func match_empty(word: u64) -> u64 {
+    return word & byte_msbs & ~((word & byte_bit1) << 6)
 }
 
-inline func find_slot(index: Ref[Hash_Index], hash: u128) -> uint? {
-    let size: uint = __array_length(index.slots)
-    if size == 0 {
+inline func match_free(word: u64) -> u64 {
+    return word & byte_msbs
+}
+
+inline func first_lane(bits: u64) -> uint {
+    return cast[uint](__count_trailing_zeros(bits)) >> 3
+}
+
+inline func set_ctrl(self: Ref[Hash_Index], slot: uint, value: u64) {
+    let group: uint = slot / group_slots
+    let shift: u64  = cast[u64]((slot % group_slots) * 8)
+    let word:  u64  = self.ctrl[group]
+    self.ctrl[group] = (word & ~(cast[u64](0xff) << shift)) | (value << shift)
+}
+
+inline func ctrl_at(self: Ref[Hash_Index], slot: uint) -> u64 {
+    let shift: u64 = cast[u64]((slot % group_slots) * 8)
+    return (self.ctrl[slot / group_slots] >> shift) & 0xff
+}
+
+inline func entry_at(self: Ref[Hash_Index], slot: uint) -> uint {
+    return cast[uint](self.slots[slot])
+}
+
+inline func is_dead(self: Ref[Hash_Index], entry: uint) -> bool {
+    if __array_length(self.dead) == 0 {
+        return false
+    }
+    return ((self.dead[entry >> 6] >> cast[u64](entry & 63)) & 1) != 0
+}
+
+inline func find_slot(self: Ref[Hash_Index], hash: u128) -> uint? {
+    let groups: uint = __array_length(self.ctrl)
+    if groups == 0 {
         return nil
     }
-    let tag:      u32  = tag_of(hash)
-    var at:       uint = cast[uint](tag) & (size - 1)
-    var traveled: uint = 0
-    while traveled < size {
-        let slot: Hash_Index_Slot = index.slots[at]
-        if slot.entry == 0 {
-            return nil
-        }
-        if slot.tag == tag and index.hashes[cast[uint](slot.entry) - 1] == hash {
-            return at
-        }
-        if distance(at, slot.tag, size) < traveled {
-            return nil
-        }
-        at = (at + 1) & (size - 1)
-        traveled += 1
-    }
-    return nil
-}
-
-inline func place(index: Ref[Hash_Index], slot: Hash_Index_Slot) {
-    let size:     uint            = __array_length(index.slots)
-    var current:  Hash_Index_Slot = slot
-    var at:       uint            = cast[uint](current.tag) & (size - 1)
-    var traveled: uint            = 0
+    let mixed: u64  = mix(hash)
+    let tag:   u64  = tag_of(mixed)
+    let mask:  uint = groups - 1
+    var group: uint = cast[uint](mixed >> 7) & mask
+    var step:  uint = 0
     while true {
-        let existing: Hash_Index_Slot = index.slots[at]
-        if existing.entry == 0 {
-            index.slots[at] = current
-            return
+        let word: u64 = self.ctrl[group]
+        var bits: u64 = match_tag(word, tag)
+        while bits != 0 {
+            let slot: uint = group * group_slots + first_lane(bits)
+            if self.hashes[cast[uint](self.slots[slot])] == hash {
+                return slot
+            }
+            bits = bits & (bits - 1)
         }
-        let existing_distance: uint = distance(at, existing.tag, size)
-        if existing_distance < traveled {
-            index.slots[at] = current
-            current = existing
-            traveled = existing_distance
-        }
-        at = (at + 1) & (size - 1)
-        traveled += 1
-    }
-}
-
-inline func insert_or_find(index: Ref[Hash_Index], hash: u128,
-                           entry: uint) -> uint? {
-    let size: uint = __array_length(index.slots)
-    require size > index.count and entry < __array_length(index.hashes)
-    let tag:             u32             = tag_of(hash)
-    var current:         Hash_Index_Slot = (entry = cast[u32](entry + 1), tag = tag)
-    var at:              uint            = cast[uint](tag) & (size - 1)
-    var traveled:        uint            = 0
-    var check_duplicate: bool            = true
-    while traveled < size {
-        let existing: Hash_Index_Slot = index.slots[at]
-        if existing.entry == 0 {
-            index.slots[at] = current
-            index.hashes[entry] = hash
-            index.count += 1
+        if match_empty(word) != 0 {
             return nil
         }
-        if check_duplicate and existing.tag == tag and
-           index.hashes[cast[uint](existing.entry) - 1] == hash {
-            return at
-        }
-        let existing_distance: uint = distance(at, existing.tag, size)
-        if existing_distance < traveled {
-            index.slots[at] = current
-            current = existing
-            traveled = existing_distance
-            check_duplicate = false
-        }
-        at = (at + 1) & (size - 1)
-        traveled += 1
+        step += 1
+        group = (group + step) & mask
     }
     require false
 }
 
-func ensure_capacity(self: Ref[Hash_Index], additional: uint) {
-    let needed: uint = self.count + additional
+inline func find(self: Ref[Hash_Index], hash: u128) -> uint? {
+    let slot: uint? = find_slot(self, hash)
+    if slot == nil {
+        return nil
+    }
+    return cast[uint](self.slots[slot.get()])
+}
+
+inline func place(self: Ref[Hash_Index], mixed: u64, entry: uint) -> bool {
+    let mask:  uint = __array_length(self.ctrl) - 1
+    var group: uint = cast[uint](mixed >> 7) & mask
+    var step:  uint = 0
+    while true {
+        let free: u64 = match_free(self.ctrl[group])
+        if free != 0 {
+            let slot:  uint = group * group_slots + first_lane(free)
+            let fresh: bool = ctrl_at(self, slot) == ctrl_empty
+            set_ctrl(self, slot, tag_of(mixed))
+            self.slots[slot] = cast[u32] entry
+            return fresh
+        }
+        step += 1
+        group = (group + step) & mask
+    }
+    require false
+}
+
+inline func insert(self: Ref[Hash_Index], hash: u128) -> uint? {
+    require self.growth_left > 0 and self.used < __array_length(self.hashes)
+    let existing: uint? = find(self, hash)
+    if existing != nil {
+        return existing
+    }
+    let entry: uint = self.used
+    if place(self, mix(hash), entry) {
+        self.growth_left -= 1
+    }
+    self.hashes[entry] = hash
+    self.used = entry + 1
+    self.live += 1
+    return nil
+}
+
+func rebuild(self: Ref[Hash_Index], wanted: uint) {
+    var slots: uint = group_slots
+    while slots - slots / 8 < wanted {
+        slots *= 2
+    }
+    let groups: uint = slots / group_slots
+    self.ctrl = new[Array[u64]](cast[int] groups)
+    self.slots = new[Array[u32]](cast[int] slots)
+    var group: uint = 0
+    while group < groups {
+        self.ctrl[group] = empty_group
+        group += 1
+    }
+    var entry: uint = 0
+    while entry < self.used {
+        if !is_dead(self, entry) {
+            _ = place(self, mix(self.hashes[entry]), entry)
+        }
+        entry += 1
+    }
+    self.growth_left = slots - slots / 8 - self.live
+}
+
+func reserve(self: Ref[Hash_Index], additional: uint) {
+    let needed: uint = self.used + additional
     let stored: uint = __array_length(self.hashes)
     if needed > stored {
         var next_stored: uint = 16
-        if stored != 0 {
-            next_stored = stored * 2
-        }
         while next_stored < needed {
             next_stored *= 2
         }
         require next_stored <= 0xffffffff
         var hashes: Array[u128] = new[Array[u128]](cast[int] next_stored)
         var at: uint = 0
-        while at < self.count {
+        while at < self.used {
             hashes[at] = self.hashes[at]
             at += 1
         }
         self.hashes = hashes
-    }
-    let size: uint = __array_length(self.slots)
-    if size != 0 and needed * 4 <= size * 3 {
-        return
-    }
-    var next_size: uint = 16
-    if size != 0 {
-        next_size = size * 2
-    }
-    while needed * 4 > next_size * 3 {
-        next_size *= 2
-    }
-    let previous: Array[Hash_Index_Slot] = self.slots
-    self.slots = new[Array[Hash_Index_Slot]](cast[int] next_size)
-    var at: uint = 0
-    while at < size {
-        let slot: Hash_Index_Slot = previous[at]
-        if slot.entry != 0 {
-            place(self, slot)
+        if __array_length(self.dead) != 0 {
+            var dead: Array[u64] = new[Array[u64]](cast[int]((next_stored + 63) / 64))
+            var word: uint = 0
+            while word < __array_length(self.dead) {
+                dead[word] = self.dead[word]
+                word += 1
+            }
+            self.dead = dead
         }
-        at += 1
+    }
+    if self.growth_left < additional {
+        rebuild(self, self.live + additional + self.live / 2)
     }
 }
 
-inline func remove_at(self: Ref[Hash_Index], slot: uint) {
-    let size: uint = __array_length(self.slots)
-    require size > 0 and self.slots[slot].entry != 0
-    var hole: uint = slot
-    var next: uint = (hole + 1) & (size - 1)
-    while true {
-        let occupied: Hash_Index_Slot = self.slots[next]
-        if occupied.entry == 0 or distance(next, occupied.tag, size) == 0 {
-            break
+func compact(self: Ref[Hash_Index]) {
+    var write: uint = 0
+    var read:  uint = 0
+    while read < self.used {
+        if !is_dead(self, read) {
+            self.hashes[write] = self.hashes[read]
+            write += 1
         }
-        self.slots[hole] = occupied
-        hole = next
-        next = (next + 1) & (size - 1)
+        read += 1
     }
-    let empty: Hash_Index_Slot = (entry = 0, tag = 0)
-    self.slots[hole] = empty
-    self.count -= 1
+    self.used = write
+    self.dead = new[Array[u64]](0)
+    rebuild(self, self.live + 1 + self.live / 2)
 }
 
-inline func replace_entry(self: Ref[Hash_Index], old_entry: uint,
-                          new_entry: uint) {
-    let size: uint = __array_length(self.slots)
-    require size > 0
-    let hash: u128 = self.hashes[old_entry]
-    let tag:  u32  = tag_of(hash)
-    var at:   uint = cast[uint](tag) & (size - 1)
-    while true {
-        let slot: Hash_Index_Slot = self.slots[at]
-        require slot.entry != 0
-        if cast[uint](slot.entry) == old_entry + 1 {
-            let target: Ref[Hash_Index_Slot] = ref self.slots[at]
-            target.entry = cast[u32](new_entry + 1)
-            self.hashes[new_entry] = hash
-            return
-        }
-        at = (at + 1) & (size - 1)
+inline func should_compact(self: Ref[Hash_Index]) -> bool {
+    let removed: uint = self.used - self.live
+    return removed != 0 and removed * 4 >= self.used
+}
+
+inline func remove_at(self: Ref[Hash_Index], slot: uint) -> uint {
+    let entry: uint = cast[uint](self.slots[slot])
+    if match_empty(self.ctrl[slot / group_slots]) != 0 {
+        set_ctrl(self, slot, ctrl_empty)
+        self.growth_left += 1
+    } else {
+        set_ctrl(self, slot, ctrl_dead)
     }
+    if __array_length(self.dead) == 0 {
+        self.dead = new[Array[u64]](cast[int]((__array_length(self.hashes) + 63) / 64))
+    }
+    self.dead[entry >> 6] = self.dead[entry >> 6] | (cast[u64](1) << cast[u64](entry & 63))
+    self.live -= 1
+    return entry
 }

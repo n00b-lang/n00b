@@ -513,6 +513,22 @@ func trace_value(marker: Ref[internal.gc.core.Marker]?,
             row.kind == cast[u32](internal.abi.Type_Kind.foreign_type) {
             return
         }
+        if start_index == 0 {
+            let flat: Ref[internal.abi.Trace_Record]? = internal.abi.trace_at(row.tracing_index)
+            if flat != nil {
+                let words: internal.abi.Range = flat.get().pointer_words
+                if words.count != 0 {
+                    var word: u32 = 0
+                    while word < words.count {
+                        let at: Ref[byte] = __gc_byte_offset(address,
+                            cast[uint](internal.abi.range_index(words, word)))
+                        visit_managed_pointer(marker, mutator, __atomic_load(pointer_word_at(at)))
+                        word += 1
+                    }
+                    return
+                }
+            }
+        }
         if row.kind == cast[u32](internal.abi.Type_Kind.array_type) {
             if owner != nil {
                 if address == internal.gc.core.payload_of(owner.get()) and

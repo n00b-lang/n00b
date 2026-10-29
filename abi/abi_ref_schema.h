@@ -123,6 +123,9 @@ typedef struct {
 #define ABI_RAW_RANGE(K, T, F, STREAM) \
     {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
      N00B_ABI_TABLE_##STREAM, 0}
+#define ABI_VALUE_RANGE(K, T, F) \
+    {N00B_ABI_TABLE_##K, offsetof(n00b_abi_##T##_v1, F), \
+     N00B_ABI_TABLE_U32_STREAM, UINT32_MAX}
 
 static const abi_range_column_t abi_range_columns[] = {
     ABI_RANGE(PACKAGE, package, modules, U32_STREAM, MODULE),
@@ -130,7 +133,7 @@ static const abi_range_column_t abi_range_columns[] = {
     ABI_RANGE(MODULE, module, static_storage, U32_STREAM, STORAGE),
     ABI_RANGE(MODULE, module, tls_storage, U32_STREAM, STORAGE),
     ABI_RANGE(SCC, scc, members, U32_STREAM, MODULE),
-    ABI_RAW_RANGE(SCC, scc, lexical_order, U32_STREAM),
+    ABI_VALUE_RANGE(SCC, scc, lexical_order),
     ABI_RANGE(TYPE, type, components, U32_STREAM, TYPE),
     ABI_RAW_RANGE(TYPE, type, fields_or_arms, U32_STREAM),
     ABI_RANGE(TYPE, type, constraints, U32_STREAM, CONSTRAINT),
@@ -145,6 +148,7 @@ static const abi_range_column_t abi_range_columns[] = {
     ABI_RANGE(ARM, arm, field.physical_runs, U32_STREAM, PHYSICAL_RUN),
     ABI_RANGE(TRACE, trace, fixed_children, U32_STREAM, TRACE_CHILD),
     ABI_RANGE(TRACE, trace, arms, U32_STREAM, TRACE_ARM),
+    ABI_VALUE_RANGE(TRACE, trace, pointer_words),
     ABI_RANGE(TRACE_ARM, trace_arm, children, U32_STREAM, TRACE_CHILD),
     ABI_RANGE(FUNCTION, function, parameters, U32_STREAM, PARAMETER),
     ABI_RANGE(FUNCTION, function, keywords, U32_STREAM, PARAMETER),
@@ -171,3 +175,4 @@ static const abi_range_column_t abi_range_columns[] = {
 
 #undef ABI_RANGE
 #undef ABI_RAW_RANGE
+#undef ABI_VALUE_RANGE

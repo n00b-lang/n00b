@@ -188,7 +188,7 @@ func los_find(heap: Ref[internal.gc.core.Heap], address: uint) -> Ref[internal.g
         return nil
     }
     let slots:  Ref[internal.gc.hash.Hash_Slot] = internal.gc.hash.tab_slots(table)
-    let stride: uint                           = internal.abi.size_bytes(internal.gc.hash.hash_slot_record())
+    let stride: uint                           = internal.gc.hash.hash_slot_bytes()
     let bit:    uint                           = 1
     let mask:   uint                           = (bit << table.bits) - 1
     while levels != 0 {

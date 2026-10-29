@@ -1,7 +1,7 @@
 tests/diagnostics/modules/independent_modules/first.n:2:12: error N00B-T0500: `"x"` is `string`, but `a` returns `int`
   tests/diagnostics/modules/independent_modules/first.n:1:13: note: the return type of `a` is declared here
 tests/diagnostics/modules/independent_modules/first.n:6:16: error N00B-T0515: `Dict` takes 2 type arguments, but 1 is given
-  lib/builtin/containers/dict.n:21:8: note: `Dict` is declared here
+  lib/builtin/containers/dict.n:20:8: note: `Dict` is declared here
   help: add the missing type argument
 tests/diagnostics/modules/independent_modules/second.n:2:12: error N00B-T0500: `"y"` is `string`, but `b` returns `int`
   tests/diagnostics/modules/independent_modules/second.n:1:13: note: the return type of `b` is declared here

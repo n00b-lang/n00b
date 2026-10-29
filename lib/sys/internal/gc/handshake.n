@@ -361,7 +361,7 @@ func run_handshake_cycle(heap: Ref[internal.gc.core.Heap]) {
         owned = block.own_next
     }
     heap.black_alloc = true
-    __atomic_store(ref heap.marking, true)
+    internal.gc.core.set_marking(heap, true)
     __atomic_store(ref heap.phase, cast[u32](internal.gc.core.Phase.marking))
     internal.gc.heap.unlock(heap)
 

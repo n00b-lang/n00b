@@ -29,6 +29,9 @@ const uint8_t *n00b_builtin_abi_string_backing_at(const void *address);
 const uint8_t *n00b_builtin_abi_bytes(uint32_t first, uint32_t count);
 int64_t n00b_builtin_abi_range_index(uint32_t first, uint32_t count,
                                       uint32_t ordinal);
+const uint8_t *n00b_builtin_abi_table_base(uint32_t kind);
+uint32_t n00b_builtin_abi_table_count(uint32_t kind);
+uint32_t n00b_builtin_abi_table_record_bytes(uint32_t kind);
 uint32_t n00b_builtin_abi_unary_type(uint32_t kind, uint32_t element);
 int32_t n00b_builtin_abi_type_specializes(uint32_t type, uint32_t general);
 uint32_t n00b_builtin_abi_type_argument_type(uint32_t index);

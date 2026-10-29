@@ -24,10 +24,17 @@ const final_batch:       uint = 256
 const packet_chunk:      uint = 64
 const write_buffer_cap:  uint = 128
 const lock_slots:        u32  = 64
+const max_element_bits:  u64  = 1 << 56
 
 var object_header_size:         uint = 0
 var block_header_line_count:    uint = 0
 var array_header_size:          uint = 0
+var marking_heaps:              Atomic[u32] = 0
+var request_limit:              uint = 0xffffffffffffffff
+
+func resolve_request_limit() {
+    request_limit = __os_physical_memory()
+}
 
 record Array_Backing {
     shape:            Ref[internal.abi.Array_Descriptor_Header]
@@ -374,6 +381,19 @@ inline func meta_make(payload_bytes: uint, flags: u32) -> uint {
     return (payload_bytes << meta_flag_bits) | (cast[uint](flags) & meta_flag_mask)
 }
 
+func set_marking(heap: Ref[Heap], on: bool) {
+    if on {
+        __atomic_fetch_add(ref marking_heaps, 1)
+        if __atomic_exchange(ref heap.marking, true) {
+            __atomic_fetch_sub(ref marking_heaps, 1)
+        }
+        return
+    }
+    if __atomic_exchange(ref heap.marking, false) {
+        __atomic_fetch_sub(ref marking_heaps, 1)
+    }
+}
+
 inline func meta_payload_bytes(meta: uint) -> uint {
     return meta >> meta_flag_bits
 }
@@ -416,14 +436,32 @@ func array_descriptor_bytes(shape: Ref[internal.abi.Array_Descriptor_Header]
     return array_header_size + cast[uint](shape.rank) * 8
 }
 
-func resolve_array_backing(type_index: u32,
-                           shape     : Ref[internal.abi.Array_Descriptor_Header]
-                          ) -> Array_Backing? {
+inline func array_element_index(type_index: u32, flat_rank: u32) -> u32 {
+    if flat_rank != 1 {
+        return array_flat_element_index(type_index, flat_rank)
+    }
+    let array: Ref[internal.abi.Type_Record]? = internal.abi.type_at(type_index)
+    if array == nil {
+        return 0
+    }
+    if array.get().kind != cast[u32](internal.abi.Type_Kind.array_type) {
+        return 0
+    }
+    let component: i64 = internal.abi.range_index(array.get().components, 0)
+    if component <= 0 {
+        return 0
+    }
+    return cast[u32](component)
+}
+
+inline func resolve_array_backing(type_index: u32,
+                                  shape     : Ref[internal.abi.Array_Descriptor_Header]
+                                 ) -> Array_Backing? {
     if shape.rank == 0 or shape.flat_rank == 0 or shape.flat_rank > shape.rank {
         return nil
     }
 
-    let element_index: u32 = array_flat_element_index(type_index, shape.flat_rank)
+    let element_index: u32 = array_element_index(type_index, shape.flat_rank)
     let found: Ref[internal.abi.Type_Record]? = internal.abi.type_at(element_index)
 
     if element_index == 0 or found == nil {
@@ -431,33 +469,28 @@ func resolve_array_backing(type_index: u32,
     }
 
     let element:   Ref[internal.abi.Type_Record] = found.get()
-    let alignment: uint = internal.abi.alignment_bytes(element)
+    let alignment: uint = cast[uint](element.alignment_bytes)
 
-    if alignment == 0 or (alignment & (alignment - 1)) != 0 {
+    if alignment == 0 or (alignment & (alignment - 1)) != 0 or
+        element.size_bits > max_element_bits {
         return nil
     }
 
-    let maximum:          uint = ~cast[uint](0)
-    let element_bytes:    uint = internal.abi.size_bytes(element)
-    let descriptor_bytes: uint = array_descriptor_bytes(shape)
-    var data_alignment:   uint = alignment
+    let mask:             uint = alignment - 1
+    var data_mask:        uint = 7
+    let element_bytes:    uint = cast[uint]((element.size_bits + 7) >> 3)
+    let descriptor_bytes: uint = array_header_size + cast[uint](shape.rank) * 8
 
-    if data_alignment < 8 {
-        data_alignment = 8
-    }
-
-    if descriptor_bytes == 0 or descriptor_bytes > maximum - data_alignment + 1 or
-        element_bytes > maximum - alignment + 1 {
-        return nil
+    if mask > data_mask {
+        data_mask = mask
     }
 
     let backing: Array_Backing = (shape = shape, element_index = element_index,
         element = element,
-        stride = ((element_bytes + alignment - 1) / alignment) * alignment,
+        stride = (element_bytes + mask) & ~mask,
         packed_bits = internal.abi.packed_array_stride_bits(element),
         descriptor_bytes = descriptor_bytes,
-        data_offset = ((descriptor_bytes + data_alignment - 1) / data_alignment)
-            * data_alignment)
+        data_offset = (descriptor_bytes + data_mask) & ~data_mask)
     return backing
 }
 
