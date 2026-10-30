@@ -57,6 +57,8 @@ typedef struct {
     uint32_t      column;
 } ir_switness_t;
 
+enum { IR_SWITNESS_UNKNOWN = 1u << 31 };
+
 typedef struct {
     uint32_t      origin;
     core_string_t module;

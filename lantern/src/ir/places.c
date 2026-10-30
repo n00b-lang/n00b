@@ -294,10 +294,10 @@ pointee(th_type *type)
     return nullptr;
 }
 
-static bool
+static const ir_instr_t *
 reinterprets(ir_reinterpretations_t *registry, const ir_func_t *f)
 {
-    bool found = false;
+    const ir_instr_t *found = nullptr;
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
@@ -313,8 +313,8 @@ reinterprets(ir_reinterpretations_t *registry, const ir_func_t *f)
                     && th_kind_of(th_resolve(in->dest->type))
                            != TH_INDIRECTION)
                 || same_type(f->owner, from, to)) continue;
-            found = true;
-            if (!registry) return true;
+            if (!found) found = in;
+            if (!registry) return found;
             note_pair(registry, f->owner, from, to);
         }
     }
@@ -325,6 +325,12 @@ bool
 ir_reinterpretations_note_function(ir_ctx_t *ctx, const ir_func_t *f)
 {
     return f && reinterprets(ctx ? reinterpretations(ctx) : nullptr, f);
+}
+
+const ir_instr_t *
+ir_reinterpretation_site(const ir_func_t *f)
+{
+    return f ? reinterprets(nullptr, f) : nullptr;
 }
 
 static uint64_t

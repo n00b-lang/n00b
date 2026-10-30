@@ -22320,8 +22320,27 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         fputs("  returns fresh-external\n", stdout);
     else if (ir_summary_returns_fresh(summary))
         fputs("  returns fresh\n", stdout);
-    else if (returned.kind == IR_SRETURN_UNKNOWN)
-        fputs("  returns unknown\n", stdout);
+    else if (returned.kind == IR_SRETURN_UNKNOWN) {
+        text_list_t sources = core_list_new(core_string_t);
+        for (uint32_t r = 0; r < ir_summary_result_count(summary); r++) {
+            const ir_sstore_t *pair = ir_summary_result_at(summary, r);
+            if (!pair->to.output && !pair->to.depth)
+                add_text(&sources, function, summary, &pair->from);
+        }
+        qsort(sources.data, sources.len, sizeof(core_string_t),
+              compare_texts);
+        core_buffer_t line = {0};
+        core_buffer_puts(&line, "  returns");
+        for (size_t s = 0; s < sources.len; s++) {
+            core_buffer_putc(&line, ' ');
+            core_buffer_append_string(&line, sources.data[s]);
+            core_free((void *)sources.data[s].data);
+        }
+        if (!sources.len) core_buffer_puts(&line, " ?");
+        core_buffer_putc(&line, '\n');
+        dump_text(&line);
+        core_list_free(sources);
+    }
     if (for_reader) {
         reader_table(function, summary, IR_SFLOW_RESULTS);
         reader_table(function, summary, IR_SFLOW_STORES);
@@ -22437,7 +22456,9 @@ static uint32_t
 witness_chain(n00bb_link_analysis_t *analysis, const ir_summary_t *summary,
               uint32_t flag, const ir_switness_t **chain)
 {
-    const ir_switness_t *witness = summary && ir_summary_flags(summary) & flag
+    const ir_switness_t *witness = summary
+            && (flag == IR_SWITNESS_UNKNOWN
+                || ir_summary_flags(summary) & flag)
         ? ir_summary_witness_for(summary, flag) : nullptr;
     uint32_t depth = 0;
     while (witness && depth < WITNESS_DEPTH) {
@@ -22453,11 +22474,14 @@ static void
 dump_witness_chains(n00bb_link_analysis_t *analysis, ir_func_t *function)
 {
     ir_summary_t *summary = ir_summary_of(analysis->summaries, function);
-    for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++) {
+    for (uint32_t b = 0; b <= IR_SEFFECT_FLAG_BITS; b++) {
+        bool     unknown = b == IR_SEFFECT_FLAG_BITS;
+        uint32_t flag    = unknown ? IR_SWITNESS_UNKNOWN : 1u << b;
         const ir_switness_t *chain[WITNESS_DEPTH];
-        uint32_t depth = witness_chain(analysis, summary, 1u << b, chain);
+        uint32_t depth = witness_chain(analysis, summary, flag, chain);
         if (!depth) continue;
-        core_string_t name = ir_summary_flag_name(b);
+        core_string_t name = unknown ? CORE_STRING_STATIC("unknown")
+                                     : ir_summary_flag_name(b);
         fprintf(stdout, "  why %.*s:", (int)name.u8_bytes, name.data);
         for (uint32_t d = 0; d < depth; d++) {
             const ir_switness_t *witness = chain[d];
@@ -22500,13 +22524,16 @@ json_why(core_buffer_t *out, n00bb_link_analysis_t *analysis,
 {
     core_buffer_puts(out, ",\"why\":{");
     bool first = true;
-    for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++) {
+    for (uint32_t b = 0; b <= IR_SEFFECT_FLAG_BITS; b++) {
+        bool     unknown = b == IR_SEFFECT_FLAG_BITS;
+        uint32_t flag    = unknown ? IR_SWITNESS_UNKNOWN : 1u << b;
         const ir_switness_t *chain[WITNESS_DEPTH];
-        uint32_t depth = witness_chain(analysis, summary, 1u << b, chain);
+        uint32_t depth = witness_chain(analysis, summary, flag, chain);
         if (!depth) continue;
         if (!first) core_buffer_putc(out, ',');
         first = false;
-        core_buffer_append_quoted(out, ir_summary_flag_name(b));
+        core_buffer_append_quoted(out, unknown ? CORE_STRING_STATIC("unknown")
+                                               : ir_summary_flag_name(b));
         core_buffer_puts(out, ":[");
         for (uint32_t d = 0; d < depth; d++) {
             if (d) core_buffer_putc(out, ',');

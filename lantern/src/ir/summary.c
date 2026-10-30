@@ -1500,9 +1500,20 @@ static void
 adjust_flags(ir_summaries_t *summaries, ir_summary_t *summary)
 {
     const ir_summary_hooks_t *hooks = summaries->hooks;
-    if (hooks && hooks->adjust)
-        summary->flags = hooks->adjust(hooks->context, summary->function,
-                                       summary->flags);
+    if (!hooks || !hooks->adjust) return;
+    uint32_t before = summary->flags;
+    summary->flags  = hooks->adjust(hooks->context, summary->function,
+                                    summary->flags);
+    const ir_func_t *f     = summary->function;
+    uint32_t         added = summary->flags & ~before;
+    for (uint32_t b = 0; f && added && b < IR_SEFFECT_FLAG_BITS; b++)
+        if (added & 1u << b && !ir_summary_witness_for(summary, 1u << b))
+            core_list_push(summary->witnesses, ((ir_switness_t){
+                .flag   = 1u << b,
+                .name   = CORE_STRING_STATIC("declared by the compiler"),
+                .line   = f->span.start_line,
+                .column = f->span.start_col,
+            }));
 }
 
 static ir_summary_t *
@@ -2900,18 +2911,47 @@ unpassed_exits(flow_query_t *q, ir_func_t *f, const ir_path_exits_t *whole)
     return unpassed;
 }
 
+static const ir_instr_t *
+exit_site(ir_summaries_t *summaries, const ir_func_t *f, uint32_t flag,
+          ir_func_t **callee)
+{
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (flag == IR_SUMMARY_MAY_FAIL) {
+                if (in->op == IR_OP_FAIL) return in;
+                continue;
+            }
+            if (in->op == IR_OP_TRAP || in->op == IR_OP_UNREACHABLE)
+                return in;
+            if (!is_call(in)) continue;
+            call_targets_t targets;
+            resolve_targets(summaries, in, &targets);
+            for (size_t t = 0; !*callee && t < targets.targets.len; t++)
+                if (target_summary(summaries, targets.targets.data[t])->flags
+                    & (IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES))
+                    *callee = targets.targets.data[t];
+            core_list_free(targets.targets);
+            if (*callee) return in;
+        }
+    return nullptr;
+}
+
 static void
 summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
                    ir_func_t *f)
 {
-    summary->flags = ir_reinterpretations_note_function(nullptr, f)
-        ? IR_SUMMARY_REINTERPRETS : 0;
+    summary->flags = 0;
     for (uint32_t e = 0;; e++) {
         core_string_t effect = ir_func_effect_at(f, e);
         if (!effect.u8_bytes) break;
         (void)ir_summary_add_effect(summary, effect);
     }
     summary->witnesses.len = 0;
+    const ir_instr_t *reinterpret = ir_reinterpretation_site(f);
+    if (reinterpret)
+        add_flags(summary, IR_SUMMARY_REINTERPRETS, reinterpret, nullptr,
+                  (core_string_t){0});
     ir_places_t *places = ir_func_places(f);
     ir_sites_t  *sites  = ir_func_sites(f);
     ir_ranges_t *prove_ranges = (!summaries->hooks
@@ -2944,13 +2984,19 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
     }
     flow_query_t    q = {.summaries = summaries, .f = f, .places = places};
     ir_path_exits_t exits;
-    if (places && ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, &q, &exits)) {
-        if (!exits.returned) summary->flags |= IR_SUMMARY_NO_RETURN;
-        if (exits.failed) summary->flags |= IR_SUMMARY_MAY_FAIL;
-        if (!exits.returned && !exits.failed)
-            summary->flags |= IR_SUMMARY_DIVERGES;
+    uint32_t        ends = IR_SUMMARY_MAY_FAIL;
+    if (places && ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, &q, &exits))
+        ends = (exits.returned ? 0 : IR_SUMMARY_NO_RETURN)
+            | (exits.failed ? IR_SUMMARY_MAY_FAIL : 0)
+            | (!exits.returned && !exits.failed ? IR_SUMMARY_DIVERGES : 0);
+    for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++) {
+        uint32_t flag = 1u << b;
+        if (!(ends & flag) || (summary->flags & flag)) continue;
+        ir_func_t        *callee = nullptr;
+        const ir_instr_t *site   = exit_site(summaries, f, flag, &callee);
+        if (site) add_flags(summary, flag, site, callee, (core_string_t){0});
+        else summary->flags |= flag;
     }
-    else summary->flags |= IR_SUMMARY_MAY_FAIL;
     adjust_flags(summaries, summary);
 }
 
@@ -3372,9 +3418,35 @@ typedef struct {
     uint32_t               nodes;
     ir_pdg_t              *pdg;
     const ir_points_to_hooks_t *hooks;
+    ir_switness_t               unknown;
+    uint64_t                    unknown_at;
 } pt_t;
 
 static bool copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own);
+
+static uint64_t
+unknown_position(const ir_instr_t *in)
+{
+    return in ? ((uint64_t)(in->block ? in->block->index : 0) << 32
+                 | in->index) + 1
+              : UINT64_MAX;
+}
+
+static void
+note_unknown(pt_t *pt, core_string_t reason, ir_func_t *callee)
+{
+    uint64_t at = unknown_position(pt->at);
+    if (pt->unknown_at && pt->unknown_at <= at) return;
+    pt->unknown_at = at;
+    pt->unknown    = (ir_switness_t){
+        .flag   = IR_SWITNESS_UNKNOWN,
+        .callee = callee,
+        .module = callee ? ir_module_name(callee->owner) : (core_string_t){0},
+        .name   = callee ? callee->name : reason,
+        .line   = pt->at ? pt->at->span.start_line : 0,
+        .column = pt->at ? pt->at->span.start_col : 0,
+    };
+}
 
 enum { PT_NO_READER = UINT32_MAX, PT_EXTERNAL_WRITES_KEY = 2 };
 
@@ -3593,6 +3665,14 @@ deep_item(pt_loc_t loc)
 }
 
 static void
+unresolved(pt_t *pt, pt_set_t *into)
+{
+    note_unknown(pt, CORE_STRING_STATIC("an operand the analysis cannot "
+                                        "resolve"), nullptr);
+    set_add(into, deep_item(unknown_loc()));
+}
+
+static void
 loc_push(pt_loc_t *loc, core_string_t step)
 {
     if (loc_deep(loc)) return;
@@ -3752,10 +3832,13 @@ variable_site(pt_t *pt, const ir_value_t *value)
     if (pt->sites.len == before || !tracks(pt, value->type))
         return site;
     uint32_t  param = value->index;
-    pt_item_t item  = item_at(
-        param < pt->f->n_params && pt->f->params[param] == value
-            ? external_loc(IR_SPLACE_PARAM, param, nullptr)
-            : unknown_loc());
+    bool      own   = param < pt->f->n_params && pt->f->params[param] == value;
+    pt_item_t item  = item_at(own ? external_loc(IR_SPLACE_PARAM, param,
+                                                 nullptr)
+                                  : unknown_loc());
+    if (!own)
+        note_unknown(pt, CORE_STRING_STATIC("an operand the analysis cannot "
+                                            "resolve"), nullptr);
     if (!pointer_type(pt, value->type)) item.flow = PT_DERIVED;
     set_add(&pt->sites.data[site].contents, item);
     return site;
@@ -4020,7 +4103,7 @@ pt_read(pt_t *pt, const ir_value_t *value, pt_set_t *into)
     case IR_VAL_PARAM:
     case IR_VAL_LOCAL: {
         if (value->kind == IR_VAL_LOCAL && !value->local) {
-            set_add(into, deep_item(unknown_loc()));
+            unresolved(pt, into);
             return;
         }
         uint32_t site = variable_site(pt, value);
@@ -4772,7 +4855,7 @@ argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
     }
     default:
         if (argument.value) pt_read(pt, argument.value, into);
-        else set_add(into, deep_item(unknown_loc()));
+        else unresolved(pt, into);
         return;
     }
 }
@@ -5249,6 +5332,7 @@ call_result(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
 {
     if (!call->dest || !tracks(pt, call->dest->type)) return;
     if (!callee->results_known) {
+        note_unknown(pt, (core_string_t){0}, (ir_func_t *)callee->function);
         set_add(into, deep_item(unknown_loc()));
         return;
     }
@@ -5371,6 +5455,8 @@ pt_call(pt_t *pt, const ir_instr_t *call)
     pt_set_t result = (pt_set_t){0};
     call_reach(pt, call, callees, &reach);
     if (callees->targets.unknown) {
+        note_unknown(pt, CORE_STRING_STATIC("a call whose target is unknown"),
+                     nullptr);
         pt_loc_t unknown = unknown_loc();
         for (uint32_t o = 1; o < call->n_operands; o++) {
             pt_set_t items = (pt_set_t){0};
@@ -5404,13 +5490,10 @@ call_output(pt_t *pt, const ir_instr_t *output, pt_set_t *into)
                                        : nullptr;
     size_t param = signature ? ir_call_output_param(signature, ordinal)
                              : SIZE_MAX;
-    if (param == SIZE_MAX || ordinal + 1 >= IR_SOUTPUT_STATUS) {
-        set_add(into, deep_item(unknown_loc()));
-        return;
-    }
-    const pt_callees_t *callees = callees_of(pt, call);
+    const pt_callees_t *callees = param == SIZE_MAX
+        || ordinal + 1 >= IR_SOUTPUT_STATUS ? nullptr : callees_of(pt, call);
     if (!callees) {
-        set_add(into, deep_item(unknown_loc()));
+        unresolved(pt, into);
         return;
     }
     if (callees->known)
@@ -5663,6 +5746,8 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_CAST:
     case IR_OP_BITCAST:
         if (launders(pt, in)) {
+            note_unknown(pt, CORE_STRING_STATIC("pointer made from an integer"),
+                         nullptr);
             pt_loc_t unknown = unknown_loc();
             pt_read(pt, base, &first);
             pt_publish(pt, &first, &unknown);
@@ -5671,7 +5756,11 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         else if (base && (pointer_type(pt, base->type)
                           || defines_data(pt, in)))
             pt_read(pt, base, &out);
-        else set_add(&out, deep_item(unknown_loc()));
+        else {
+            note_unknown(pt, CORE_STRING_STATIC("a cast to a pointer"),
+                         nullptr);
+            set_add(&out, deep_item(unknown_loc()));
+        }
         break;
     case IR_OP_PHI:
     case IR_OP_SELECT:
@@ -5690,7 +5779,11 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_FIELD:
         pt_address(pt, base, &first);
         if (named) address_step(&first, in->operands[1].name, &out);
-        else set_add(&out, deep_item(unknown_loc()));
+        else {
+            note_unknown(pt, CORE_STRING_STATIC("a field chosen at run time"),
+                         nullptr);
+            set_add(&out, deep_item(unknown_loc()));
+        }
         break;
     case IR_OP_INDEX:
         pt_elements(pt, base, &out);
@@ -6085,7 +6178,14 @@ static void
 record_call(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call)
 {
     const pt_callees_t *callees = callees_of(pt, call);
+    for (size_t t = 0; t < callees->callees.len; t++)
+        if (ir_summary_witness_for(callees->callees.data[t],
+                                   IR_SWITNESS_UNKNOWN))
+            note_unknown(pt, (core_string_t){0},
+                         (ir_func_t *)callees->callees.data[t]->function);
     if (callees->targets.unknown) {
+        note_unknown(pt, CORE_STRING_STATIC("a call whose target is unknown"),
+                     nullptr);
         add_unknown_path(summary, IR_SPATH_ACCESS);
         pt_set_t to   = (pt_set_t){0};
         pt_set_t from = (pt_set_t){0};
@@ -6744,6 +6844,49 @@ name_heaps(pt_t *pt, ir_summary_t *summary)
         }
 }
 
+static bool
+unknown_root(const ir_spath_t *path)
+{
+    return path->root == IR_SPLACE_UNKNOWN;
+}
+
+static bool
+pairs_unknown(const pair_list_t *pairs)
+{
+    for (size_t i = 0; i < pairs->len; i++)
+        if (unknown_root(&pairs->data[i].to)
+            || unknown_root(&pairs->data[i].from)) return true;
+    return false;
+}
+
+static bool
+flows_unknown(const flow_table_t *flows)
+{
+    for (size_t i = 0; i < flows->sources.len; i++)
+        if (unknown_root(flows->sources.data[i])) return true;
+    for (size_t i = 0; i < flows->dests.len; i++)
+        if (unknown_root(flows->dests.data[i].to)) return true;
+    return false;
+}
+
+static bool
+exports_unknown(const ir_summary_t *summary)
+{
+    for (size_t i = 0; i < summary->paths.len; i++)
+        if (unknown_root(&summary->paths.data[i])) return true;
+    return pairs_unknown(&summary->results) || pairs_unknown(&summary->stores)
+        || flows_unknown(&summary->flows[IR_SFLOW_RESULTS])
+        || flows_unknown(&summary->flows[IR_SFLOW_STORES]);
+}
+
+static void
+explain_unknown(ir_summary_t *summary, const ir_switness_t *witness)
+{
+    if (!exports_unknown(summary)
+        || ir_summary_witness_for(summary, IR_SWITNESS_UNKNOWN)) return;
+    core_list_push(summary->witnesses, *witness);
+}
+
 static void
 summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
                 ir_func_t *f)
@@ -6757,9 +6900,14 @@ summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
         summarize_results(&pt, summary);
         describe_heap(&pt, summary, &pt.described);
         name_heaps(&pt, summary);
+        if (pt.unknown_at) explain_unknown(summary, &pt.unknown);
     }
-    else
+    else {
         add_unknown_path(summary, IR_SPATH_ACCESS);
+        explain_unknown(summary, &(ir_switness_t){
+            .flag = IR_SWITNESS_UNKNOWN,
+            .name = CORE_STRING_STATIC("the analysis did not converge")});
+    }
     pt_free(&pt);
 }
 
@@ -7149,6 +7297,105 @@ member_callers(ir_summaries_t *summaries, ir_func_t *const *members,
     return callers;
 }
 
+static bool
+witness_key(const ir_summary_t *summary, uint32_t key)
+{
+    return key == IR_SWITNESS_UNKNOWN ? exports_unknown(summary)
+                                      : (summary->flags & key) != 0;
+}
+
+static void
+set_witness(ir_summary_t *summary, const ir_switness_t *witness)
+{
+    for (size_t i = 0; i < summary->witnesses.len; i++)
+        if (summary->witnesses.data[i].flag == witness->flag) {
+            summary->witnesses.data[i] = *witness;
+            return;
+        }
+    core_list_push(summary->witnesses, *witness);
+}
+
+static size_t
+member_index(ir_func_t *const *members, size_t count, const ir_func_t *f)
+{
+    for (size_t i = 0; i < count; i++)
+        if (members[i] == f) return i;
+    return count;
+}
+
+static bool
+witness_through(ir_summaries_t *summaries, ir_func_t *const *members,
+                size_t count, const bool *done, uint32_t key, size_t at)
+{
+    ir_func_t    *f       = members[at];
+    ir_summary_t *summary = ir_summary_of(summaries, f);
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (!is_call(in)) continue;
+            call_targets_t targets;
+            resolve_targets(summaries, in, &targets);
+            ir_func_t *found = nullptr;
+            for (size_t t = 0; !found && t < targets.targets.len; t++) {
+                ir_func_t *target = targets.targets.data[t];
+                size_t     member = member_index(members, count, target);
+                if (member < count && !done[member]) continue;
+                if (witness_key(member < count
+                                    ? ir_summary_of(summaries, target)
+                                    : target_summary(summaries, target),
+                                key))
+                    found = target;
+            }
+            core_list_free(targets.targets);
+            if (!found) continue;
+            set_witness(summary, &(ir_switness_t){
+                .flag   = key,
+                .callee = found,
+                .module = ir_module_name(found->owner),
+                .name   = found->name,
+                .line   = in->span.start_line,
+                .column = in->span.start_col,
+            });
+            return true;
+        }
+    return false;
+}
+
+static void
+ground_key(ir_summaries_t *summaries, ir_func_t *const *members,
+           size_t count, uint32_t key, bool *done)
+{
+    bool pending = false;
+    for (size_t i = 0; i < count; i++) {
+        const ir_summary_t  *summary = ir_summary_of(summaries, members[i]);
+        const ir_switness_t *witness = ir_summary_witness_for(summary, key);
+        done[i] = !witness_key(summary, key)
+            || (witness && (!witness->callee
+                            || member_index(members, count, witness->callee)
+                                   == count));
+        pending |= !done[i];
+    }
+    for (bool changed = pending; changed;) {
+        changed = false;
+        for (size_t i = 0; i < count; i++)
+            if (!done[i]
+                && witness_through(summaries, members, count, done, key, i))
+                changed = done[i] = true;
+    }
+}
+
+static void
+ground_witnesses(ir_summaries_t *summaries, ir_func_t *const *members,
+                 size_t count)
+{
+    bool *done = core_alloc_array(bool, count);
+    for (uint32_t b = 0; b <= IR_SEFFECT_FLAG_BITS; b++)
+        ground_key(summaries, members, count,
+                   b == IR_SEFFECT_FLAG_BITS ? IR_SWITNESS_UNKNOWN : 1u << b,
+                   done);
+    core_free(done);
+}
+
 static void
 solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
@@ -7244,6 +7491,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             summary->flags |= IR_SUMMARY_UNBOUNDED_RECURSION;
         ir_analysis_scope_end(scope);
     }
+    if (!summaries->escapes_only) ground_witnesses(summaries, members, count);
 }
 
 static void

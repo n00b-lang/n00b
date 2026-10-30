@@ -63,7 +63,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   reads builtin.hashing.secret[]...
   escapes self referent
   traps explicit bounds unwrap arithmetic
-  returns unknown
+  returns self.entries[].value
   output result data[self.entries[].value] control[key... self.index.ctrl self.index.ctrl[] self.index.hashes[] self.index.slots[]]
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
@@ -85,7 +85,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
-  returns unknown
+  returns self.entries[].value
   output result data[self.entries self.entries[].value] control[key... self.index.ctrl self.index.ctrl[] self.index.dead self.index.dead[] self.index.growth_left self.index.hashes self.index.hashes[] self.index.live self.index.slots[] self.index.used]
   output (new in builtin.containers.dict.ensure_entries:42:9)[] data[self.entries self.entries[]] control[]
   output (new in builtin.containers.dict.ensure_entries:42:9)[]... data[self.entries] control[]

@@ -58,6 +58,7 @@ void               ir_places_free(ir_places_t *places);
 void               ir_reinterpretations_open(ir_ctx_t *ctx);
 bool               ir_reinterpretations_note_function(ir_ctx_t *ctx,
                                                       const ir_func_t *f);
+const ir_instr_t  *ir_reinterpretation_site(const ir_func_t *f);
 void               ir_reinterpretations_note_unseen(ir_ctx_t *ctx);
 void               ir_reinterpretations_seal(ir_ctx_t *ctx);
 bool               ir_places_types_overlap(ir_module_t *module, th_type *a,
