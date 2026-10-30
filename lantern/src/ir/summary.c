@@ -194,14 +194,6 @@ release_pairs(pair_list_t *pairs)
 }
 
 static void
-release_witnesses(ir_summary_t *summary)
-{
-    for (size_t i = 0; i < summary->witnesses.len; i++)
-        core_free(summary->witnesses.data[i].callee.data);
-    summary->witnesses.len = 0;
-}
-
-static void
 summary_free(ir_summary_t *summary)
 {
     for (size_t i = 0; i < summary->effects.len; i++)
@@ -213,7 +205,6 @@ summary_free(ir_summary_t *summary)
     core_list_free(summary->results);
     release_pairs(&summary->stores);
     core_list_free(summary->stores);
-    release_witnesses(summary);
     core_list_free(summary->witnesses);
     core_list_free(summary->trap_sites);
     core_list_free(summary->inputs);
@@ -991,32 +982,39 @@ const ir_switness_t *ir_summary_witness_for(const ir_summary_t *s,
     return nullptr;
 }
 
-static void
-note_witnesses(ir_summary_t *summary, uint32_t before, const ir_instr_t *in,
-               core_string_t callee)
+void
+ir_switness_callee_text(const ir_switness_t *witness, core_buffer_t *out)
 {
-    uint32_t added = summary->flags & ~before;
+    if (witness->module.u8_bytes) {
+        core_buffer_append(out, witness->module.data, witness->module.u8_bytes);
+        core_buffer_append(out, ".", 1);
+    }
+    int64_t overload = core_string_find_byte(witness->name, '#');
+    core_buffer_append(out, witness->name.data,
+                       overload >= 0 ? (size_t)overload
+                                     : witness->name.u8_bytes);
+}
+
+static void
+add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
+          ir_func_t *callee, core_string_t name)
+{
+    uint32_t added = flags & ~summary->flags;
+    summary->flags |= flags;
     for (uint32_t b = 0; added && b < IR_SEFFECT_FLAG_BITS; b++) {
         uint32_t flag = 1u << b;
         if (!(added & flag) || ir_summary_witness_for(summary, flag))
             continue;
         core_list_push(summary->witnesses, ((ir_switness_t){
             .flag   = flag,
-            .callee = callee.u8_bytes ? core_string_dup(callee)
-                                      : (core_string_t){0},
+            .callee = callee,
+            .module = callee ? ir_module_name(callee->owner)
+                             : (core_string_t){0},
+            .name   = callee ? callee->name : name,
             .line   = in ? in->span.start_line : 0,
             .column = in ? in->span.start_col : 0,
         }));
     }
-}
-
-static void
-add_flags(ir_summary_t *summary, uint32_t flags, const ir_instr_t *in,
-          core_string_t callee)
-{
-    uint32_t before = summary->flags;
-    summary->flags |= flags;
-    note_witnesses(summary, before, in, callee);
 }
 
 static core_string_t
@@ -2471,20 +2469,20 @@ ir_splace_global(const ir_global_t *global)
 }
 
 static void
-compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
+compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
              const ir_instr_t *call)
 {
     call_targets_t targets;
     resolve_targets(summaries, call, &targets);
     if (call->op == IR_OP_CALLBACK_INVOKE)
-        add_flags(summary, IR_SUMMARY_CALLS_CALLBACKS, call,
+        add_flags(summary, IR_SUMMARY_CALLS_CALLBACKS, call, nullptr,
                   (core_string_t){0});
     if (targets.unknown) {
         add_flags(summary, IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
                       | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
                       | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
                       | IR_SUMMARY_OBSERVES,
-                  call, CORE_STRING_STATIC("?"));
+                  call, nullptr, CORE_STRING_STATIC("?"));
         summary->traps |= IR_STRAP_ALL;
         core_list_free(targets.targets);
         return;
@@ -2501,8 +2499,8 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary, ir_func_t *f,
                | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
                | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_OBSERVES);
         if (flags & ~summary->flags)
-            add_flags(summary, flags, call, qualified_name(summaries,
-                f->owner->ctx, targets.targets.data[t]));
+            add_flags(summary, flags, call, targets.targets.data[t],
+                      (core_string_t){0});
         (void)merge_effects(summary, callee);
     }
     core_list_free(targets.targets);
@@ -2582,7 +2580,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         if (!effect.u8_bytes) break;
         (void)ir_summary_add_effect(summary, effect);
     }
-    release_witnesses(summary);
+    summary->witnesses.len = 0;
     ir_places_t *places = ir_func_places(f);
     ir_sites_t  *sites  = ir_func_sites(f);
     ir_ranges_t *prove_ranges = (!summaries->hooks
@@ -2595,7 +2593,7 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
             || (prove_ranges && ir_range_trap_proven(prove_ranges,
                                                      site->instr))) continue;
         uint8_t kind = trap_kind(site->instr);
-        add_flags(summary, IR_SUMMARY_MAY_TRAP, site->instr,
+        add_flags(summary, IR_SUMMARY_MAY_TRAP, site->instr, nullptr,
                   (core_string_t){0});
         summary->traps |= kind;
         core_list_push(summary->trap_sites, ((ir_strap_site_t){
@@ -2608,8 +2606,9 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         ir_block_t *block = f->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
             ir_instr_t *in = block->instrs[i];
-            if (is_call(in)) compose_call(summaries, summary, f, in);
-            add_flags(summary, allocation_flags(f, in), in, (core_string_t){0});
+            if (is_call(in)) compose_call(summaries, summary, in);
+            add_flags(summary, allocation_flags(f, in), in, nullptr,
+                      (core_string_t){0});
         }
     }
     flow_query_t    q = {.summaries = summaries, .f = f, .places = places};
@@ -6266,12 +6265,9 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 next->flags = summary->flags;
                 (void)merge_effects(next, summary);
                 merge_paths(next, summary);
-                for (size_t w = 0; w < summary->witnesses.len; w++) {
-                    ir_switness_t witness = summary->witnesses.data[w];
-                    witness.callee = witness.callee.u8_bytes
-                        ? core_string_dup(witness.callee) : witness.callee;
-                    core_list_push(next->witnesses, witness);
-                }
+                for (size_t w = 0; w < summary->witnesses.len; w++)
+                    core_list_push(next->witnesses,
+                                   summary->witnesses.data[w]);
                 summarize_escapes(summaries, next, members[i]);
                 summarize_divergence(summaries, next, members[i]);
             }
@@ -6696,7 +6692,8 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
     for (size_t i = 0; positions && i < summary->witnesses.len; i++) {
         const ir_switness_t *witness = &summary->witnesses.data[i];
         put_u32(out, witness->flag);
-        put_text(out, texts, witness->callee);
+        put_text(out, texts, witness->module);
+        put_text(out, texts, witness->name);
         put_u32(out, witness->line);
         put_u32(out, witness->column);
     }
@@ -6727,7 +6724,8 @@ typedef struct {
     size_t         size;
     size_t         at;
     bool           failed;
-    const ir_summary_texts_t *texts;
+    const ir_summary_texts_t    *texts;
+    const ir_summary_resolver_t *resolver;
     th_ctx        *types;
 } summary_reader_t;
 
@@ -6771,12 +6769,13 @@ get_text(summary_reader_t *r)
 }
 
 static const ir_global_t *
-get_global(summary_reader_t *r, ir_summary_global_fn resolve, void *context)
+get_global(summary_reader_t *r)
 {
     core_string_t module = get_text(r);
     core_string_t name   = get_text(r);
-    return !r->failed && module.data && name.data && resolve
-        ? resolve(context, module, name) : nullptr;
+    return !r->failed && module.data && name.data && r->resolver
+        && r->resolver->global
+        ? r->resolver->global(r->resolver->context, module, name) : nullptr;
 }
 
 static void
@@ -6788,12 +6787,11 @@ get_place_type(summary_reader_t *r, th_ctx *types, ir_splace_t *place)
 }
 
 static ir_splace_t
-get_splace(summary_reader_t *r, th_ctx *types, ir_summary_global_fn resolve,
-           void *context)
+get_splace(summary_reader_t *r, th_ctx *types)
 {
     ir_splace_t place = {.kind = get_u8(r)};
     place.param  = get_u32(r);
-    place.global = get_global(r, resolve, context);
+    place.global = get_global(r);
     if (place.kind > IR_SPLACE_UNKNOWN) r->failed = true;
     if (place.global) place.type = place.global->type;
     get_place_type(r, types, &place);
@@ -6844,11 +6842,11 @@ get_flow(summary_reader_t *r, ir_sflow_t *flow)
 }
 
 static ir_spath_t
-get_path(summary_reader_t *r, ir_summary_global_fn resolve, void *context)
+get_path(summary_reader_t *r)
 {
     ir_spath_t path = {.root = (ir_splace_kind_t)get_u8(r)};
     path.param  = get_u32(r);
-    path.global = get_global(r, resolve, context);
+    path.global = get_global(r);
     core_string_t type = get_text(r);
     if (r->types && type.u8_bytes)
         path.type = ir_type_from_text(r->types, type);
@@ -6865,35 +6863,58 @@ get_path(summary_reader_t *r, ir_summary_global_fn resolve, void *context)
 }
 
 static void
-get_paths(summary_reader_t *r, ir_summary_global_fn resolve, void *context,
-          path_list_t *paths)
+get_paths(summary_reader_t *r, path_list_t *paths)
 {
     uint32_t count = get_u32(r);
     for (uint32_t i = 0; !r->failed && i < count; i++) {
-        ir_spath_t path = get_path(r, resolve, context);
+        ir_spath_t path = get_path(r);
         if (!r->failed) add_path_to(paths, &path);
     }
 }
 
 static void
-get_pairs(summary_reader_t *r, ir_summary_global_fn resolve, void *context,
-          pair_list_t *pairs)
+get_pairs(summary_reader_t *r, pair_list_t *pairs)
 {
     uint32_t count = get_u32(r);
     for (uint32_t i = 0; !r->failed && i < count; i++) {
-        ir_spath_t to   = get_path(r, resolve, context);
-        ir_spath_t from = get_path(r, resolve, context);
+        ir_spath_t to   = get_path(r);
+        ir_spath_t from = get_path(r);
         if (!r->failed) add_pair(pairs, &to, &from);
     }
+}
+
+static core_string_t
+get_owned_text(summary_reader_t *r, const ir_func_t *function)
+{
+    core_string_t text = get_text(r);
+    return text.u8_bytes && function && !r->failed
+        ? ir_strdup(function->owner->ctx, text) : (core_string_t){0};
+}
+
+static ir_switness_t
+get_witness(summary_reader_t *r, const ir_func_t *function)
+{
+    ir_switness_t witness = {.flag = get_u32(r)};
+    witness.module = get_owned_text(r, function);
+    witness.name   = get_owned_text(r, function);
+    witness.line   = get_u32(r);
+    witness.column = get_u32(r);
+    const ir_summary_resolver_t *resolver = r->resolver;
+    if (witness.module.data && witness.name.data && resolver
+        && resolver->function)
+        witness.callee = resolver->function(resolver->context,
+                                            witness.module, witness.name);
+    return witness;
 }
 
 static ir_summary_t *
 decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
                const uint8_t *data, size_t size,
-               ir_summary_global_fn resolve, void *context,
+               const ir_summary_resolver_t *resolver,
                const ir_summary_texts_t *texts)
 {
-    summary_reader_t r = {.data = data, .size = size, .texts = texts};
+    summary_reader_t r = {.data = data, .size = size, .texts = texts,
+                          .resolver = resolver};
     if (!data || size < 5 || (texts && !texts->lookup)
         || memcmp(data, texts ? "IRSN" : "IRSM", 4)
         || data[4] != SUMMARY_CODEC_VERSION) return nullptr;
@@ -6916,13 +6937,10 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
     for (uint32_t i = 0; !r.failed && i < inputs; i++) {
         ir_sinput_t input = {.kind = get_u8(&r)};
         input.param = get_u32(&r);
-        input.place = get_splace(&r, types, resolve, context);
-        core_string_t callee = get_text(&r);
+        input.place = get_splace(&r, types);
+        core_string_t callee = get_owned_text(&r, function);
         if (input.kind > IR_SINPUT_CALL) r.failed = true;
-        if (input.kind == IR_SINPUT_CALL)
-            input.callee = callee.data && function
-                ? ir_strdup(function->owner->ctx, callee)
-                : (core_string_t){0};
+        if (input.kind == IR_SINPUT_CALL) input.callee = callee;
         if ((input.kind == IR_SINPUT_PLACE
              && input.place.kind == IR_SPLACE_UNKNOWN)
             || (input.kind == IR_SINPUT_CALL && !input.callee.data))
@@ -6932,7 +6950,7 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
     uint32_t outputs = get_u32(&r);
     for (uint32_t i = 0; !r.failed && i < outputs; i++) {
         ir_soutput_t output = {.kind = get_u8(&r)};
-        output.place         = get_splace(&r, types, resolve, context);
+        output.place         = get_splace(&r, types);
         output.data_first    = get_u32(&r);
         output.data_count    = get_u32(&r);
         output.control_first = get_u32(&r);
@@ -6959,22 +6977,16 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
         if (!name.u8_bytes || !ir_summary_add_effect(summary, name))
             r.failed = true;
     }
-    get_paths(&r, resolve, context, &summary->paths);
+    get_paths(&r, &summary->paths);
     uint8_t results = get_u8(&r);
     summary->results_known    = results & 1;
     summary->returns_external = results >> 1 & 1;
-    get_pairs(&r, resolve, context, &summary->results);
-    get_pairs(&r, resolve, context, &summary->stores);
+    get_pairs(&r, &summary->results);
+    get_pairs(&r, &summary->stores);
     uint32_t witnesses = get_u32(&r);
     for (uint32_t i = 0; !r.failed && i < witnesses; i++) {
-        ir_switness_t witness = {.flag = get_u32(&r)};
-        core_string_t callee = get_text(&r);
-        witness.line   = get_u32(&r);
-        witness.column = get_u32(&r);
-        witness.callee = callee.u8_bytes ? core_string_dup(callee)
-                                         : (core_string_t){0};
+        ir_switness_t witness = get_witness(&r, function);
         if (!r.failed) core_list_push(summary->witnesses, witness);
-        else core_free(witness.callee.data);
     }
     if (r.failed || r.at != r.size) {
         summary_free(summary);
@@ -6987,19 +6999,19 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
 ir_summary_t *
 ir_summary_decode(ir_summaries_t *summaries, const ir_func_t *function,
                   const uint8_t *data, size_t size,
-                  ir_summary_global_fn resolve, void *context)
+                  const ir_summary_resolver_t *resolver)
 {
-    return decode_summary(summaries, function, data, size, resolve, context,
+    return decode_summary(summaries, function, data, size, resolver,
                           nullptr);
 }
 
 ir_summary_t *
 ir_summary_decode_with(ir_summaries_t *summaries, const ir_func_t *function,
                        const uint8_t *data, size_t size,
-                       ir_summary_global_fn resolve, void *context,
+                       const ir_summary_resolver_t *resolver,
                        const ir_summary_texts_t *texts)
 {
-    return texts ? decode_summary(summaries, function, data, size, resolve,
-                                  context, texts)
+    return texts ? decode_summary(summaries, function, data, size, resolver,
+                                  texts)
                  : nullptr;
 }

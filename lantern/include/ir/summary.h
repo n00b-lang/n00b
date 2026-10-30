@@ -49,7 +49,9 @@ typedef struct {
 
 typedef struct {
     uint32_t      flag;
-    core_string_t callee;
+    ir_func_t    *callee;
+    core_string_t module;
+    core_string_t name;
     uint32_t      line;
     uint32_t      column;
 } ir_switness_t;
@@ -187,6 +189,8 @@ const ir_strap_site_t *ir_summary_trap_site_at(const ir_summary_t *summary,
                                                uint32_t index);
 const ir_switness_t  *ir_summary_witness_for(const ir_summary_t *summary,
                                              uint32_t flag);
+void                 ir_switness_callee_text(const ir_switness_t *witness,
+                                             core_buffer_t *out);
 uint32_t             ir_summary_input_count(const ir_summary_t *summary);
 const ir_sinput_t   *ir_summary_input_at(const ir_summary_t *summary,
                                          uint32_t index);
@@ -205,9 +209,13 @@ void         ir_summary_set_return(ir_summary_t *summary,
                                    ir_sreturn_t returned);
 uint8_t      ir_summary_call_escape(ir_summaries_t *summaries,
                                     const ir_instr_t *call, uint32_t param);
-typedef const ir_global_t *(*ir_summary_global_fn)(void *context,
-                                                    core_string_t module,
-                                                    core_string_t name);
+typedef struct {
+    const ir_global_t *(*global)(void *context, core_string_t module,
+                                 core_string_t name);
+    ir_func_t *(*function)(void *context, core_string_t module,
+                           core_string_t name);
+    void *context;
+} ir_summary_resolver_t;
 bool          ir_summary_encode(const ir_summary_t *summary,
                                 core_buffer_t *out);
 bool          ir_summary_encode_identity(const ir_summary_t *summary,
@@ -215,7 +223,7 @@ bool          ir_summary_encode_identity(const ir_summary_t *summary,
 ir_summary_t *ir_summary_decode(ir_summaries_t *summaries,
                                 const ir_func_t *function,
                                 const uint8_t *data, size_t size,
-                                ir_summary_global_fn resolve, void *context);
+                                const ir_summary_resolver_t *resolver);
 typedef struct {
     uint32_t (*intern)(void *context, core_string_t text);
     core_string_t (*lookup)(void *context, uint32_t reference);
@@ -227,8 +235,7 @@ bool          ir_summary_encode_with(const ir_summary_t *summary,
 ir_summary_t *ir_summary_decode_with(ir_summaries_t *summaries,
                                      const ir_func_t *function,
                                      const uint8_t *data, size_t size,
-                                     ir_summary_global_fn resolve,
-                                     void *context,
+                                     const ir_summary_resolver_t *resolver,
                                      const ir_summary_texts_t *texts);
 bool         ir_summary_call_diverges(ir_summaries_t *summaries,
                                       const ir_instr_t *call);

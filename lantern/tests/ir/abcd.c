@@ -311,7 +311,7 @@ static void test_decoded_summaries_keep_heap_types(void)
     core_buffer_t encoded = {0};
     check("the summary encodes", ir_summary_encode(summary, &encoded));
     ir_summary_t *decoded = ir_summary_decode(summaries, f,
-        (const uint8_t *)encoded.data, encoded.byte_len, nullptr, nullptr);
+        (const uint8_t *)encoded.data, encoded.byte_len, nullptr);
     th_type *heap = heap_type(f, summary);
     th_type *kept = heap_type(f, decoded);
     th_ctx *types = ir_module_types(m);
@@ -328,13 +328,13 @@ static void test_decoded_summaries_keep_heap_types(void)
           && table.count > 0);
     ir_summary_t *resolved = ir_summary_decode_with(summaries, f,
         (const uint8_t *)referenced.data, referenced.byte_len, nullptr,
-        nullptr, &texts);
+        &texts);
     th_type *named = heap_type(f, resolved);
     check("a table-encoded heap place keeps its type",
           named && th_hash(types, named) == th_hash(types, heap));
     check("table encodings need a table to decode",
           !ir_summary_decode(summaries, f, (const uint8_t *)referenced.data,
-                             referenced.byte_len, nullptr, nullptr));
+                             referenced.byte_len, nullptr));
     core_buffer_release(&referenced);
     core_buffer_release(&encoded);
     ir_summaries_free(summaries);
@@ -372,7 +372,7 @@ static void test_named_effects_survive_encoding(void)
     core_buffer_t encoded = {0};
     check("named effects encode", ir_summary_encode(summary, &encoded));
     ir_summary_t *decoded = ir_summary_decode(summaries, f,
-        (const uint8_t *)encoded.data, encoded.byte_len, nullptr, nullptr);
+        (const uint8_t *)encoded.data, encoded.byte_len, nullptr);
     check("named effects decode",
           decoded && ir_summary_effect_count(decoded) == 2
           && ir_summary_has_effect(decoded, S("audited"))
@@ -387,7 +387,7 @@ static void test_named_effects_survive_encoding(void)
                                                     &texts)
         ? ir_summary_decode_with(summaries, f,
               (const uint8_t *)referenced.data, referenced.byte_len, nullptr,
-              nullptr, &texts)
+              &texts)
         : nullptr;
     check("named effects survive a text table",
           resolved && ir_summary_has_effect(resolved, S("tainted")));

@@ -22257,22 +22257,6 @@ push_effects_of_roots(n00bb_link_analysis_t *analysis,
     }
 }
 
-static ir_func_t *
-function_named_exactly(n00bb_link_analysis_t *analysis,
-                       core_string_t qualified)
-{
-    for (size_t u = 0; u < analysis->units.len; u++) {
-        n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
-        core_string_t member;
-        ir_func_t *function = state && state->ir_module
-                && n00bb_name_member(qualified,
-                                    ir_module_name(state->ir_module), &member)
-            ? ir_func_find(state->ir_module, member) : nullptr;
-        if (function) return n00bb_cached_body(function);
-    }
-    return nullptr;
-}
-
 enum { WITNESS_DEPTH = 16 };
 
 static uint32_t
@@ -22284,8 +22268,7 @@ witness_chain(n00bb_link_analysis_t *analysis, const ir_summary_t *summary,
     uint32_t depth = 0;
     while (witness && depth < WITNESS_DEPTH) {
         chain[depth++] = witness;
-        ir_func_t *next = witness->callee.u8_bytes
-            ? function_named_exactly(analysis, witness->callee) : nullptr;
+        ir_func_t *next = n00bb_cached_body(witness->callee);
         witness = next ? ir_summary_witness_for(
             ir_summary_of(analysis->summaries, next), flag) : nullptr;
     }
@@ -22304,13 +22287,16 @@ dump_witness_chains(n00bb_link_analysis_t *analysis, ir_func_t *function)
         fprintf(stdout, "  why %.*s:", (int)name.u8_bytes, name.data);
         for (uint32_t d = 0; d < depth; d++) {
             const ir_switness_t *witness = chain[d];
-            if (!witness->callee.u8_bytes)
+            core_buffer_t callee = {0};
+            ir_switness_callee_text(witness, &callee);
+            if (!callee.byte_len)
                 fprintf(stdout, "%s here (%u:%u)", d ? " ->" : "",
                         witness->line, witness->column);
             else
                 fprintf(stdout, "%s %.*s (%u:%u)", d ? " ->" : "",
-                        (int)witness->callee.u8_bytes, witness->callee.data,
+                        (int)callee.byte_len, callee.data,
                         witness->line, witness->column);
+            core_buffer_release(&callee);
         }
         fputc('\n', stdout);
     }
@@ -22351,10 +22337,13 @@ json_why(core_buffer_t *out, n00bb_link_analysis_t *analysis,
         for (uint32_t d = 0; d < depth; d++) {
             if (d) core_buffer_putc(out, ',');
             core_buffer_puts(out, "{\"callee\":");
-            if (chain[d]->callee.u8_bytes)
-                core_buffer_append_quoted(out, chain[d]->callee);
+            core_buffer_t callee = {0};
+            ir_switness_callee_text(chain[d], &callee);
+            if (callee.byte_len)
+                core_buffer_append_quoted(out, core_buffer_string(&callee));
             else
                 core_buffer_puts(out, "null");
+            core_buffer_release(&callee);
             core_buffer_printf(out, ",\"line\":%u,\"column\":%u}",
                                chain[d]->line, chain[d]->column);
         }

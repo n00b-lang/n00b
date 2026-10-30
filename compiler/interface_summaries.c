@@ -186,19 +186,31 @@ interface_index(n00bb_link_analysis_t *analysis)
     return index;
 }
 
-static const ir_global_t *
-resolve_global(void *context, core_string_t module, core_string_t name)
+static ir_module_t *
+unit_module_named(n00bb_link_analysis_t *analysis, core_string_t module)
 {
-    n00bb_link_analysis_t *analysis = context;
     for (size_t u = 0; u < analysis->units.len; u++) {
         n00bb_tu_state_t *state = tu_state(analysis->units.data[u]);
         ir_module_t *candidate = state ? state->ir_module : nullptr;
-        if (!candidate || !core_string_eq(ir_module_name(candidate), module))
-            continue;
-        ir_global_t *global = ir_global_find(candidate, name);
-        return global ? ir_global_identity(global) : nullptr;
+        if (candidate && core_string_eq(ir_module_name(candidate), module))
+            return candidate;
     }
     return nullptr;
+}
+
+static const ir_global_t *
+resolve_global(void *context, core_string_t module, core_string_t name)
+{
+    ir_module_t *owner = unit_module_named(context, module);
+    ir_global_t *global = owner ? ir_global_find(owner, name) : nullptr;
+    return global ? ir_global_identity(global) : nullptr;
+}
+
+static ir_func_t *
+resolve_function(void *context, core_string_t module, core_string_t name)
+{
+    ir_module_t *owner = unit_module_named(context, module);
+    return owner ? ir_func_find(owner, name) : nullptr;
 }
 
 ir_summary_t *
@@ -217,8 +229,12 @@ n00bb_interface_summary(n00bb_link_analysis_t *analysis,
     bool found = false;
     interface_summary_t *entry = core_dict_get(
         &interface_index(analysis)->by_function, &probe, &found);
+    ir_summary_resolver_t resolver = {
+        .global = resolve_global, .function = resolve_function,
+        .context = analysis,
+    };
     return found ? ir_summary_decode(summaries, function, entry->data,
-                                     entry->size, resolve_global, analysis)
+                                     entry->size, &resolver)
                  : nullptr;
 }
 
