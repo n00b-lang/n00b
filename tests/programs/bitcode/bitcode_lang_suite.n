@@ -1875,7 +1875,22 @@ func index_write_check() {
     require items[0] == 8 and items[1] == 5
 }
 
+func list_from_items(items: Array[int], n: uint) -> List[int] {
+    let list: List[int] = new[List[int]](items = items)
+    list.count = n
+    return list
+}
+
+func local_reference_store_check() {
+    var items: Array[int] = new[Array[int]](3)
+    items[0] = 7
+    items[1] = 9
+    let list: List[int] = list_from_items(items, 2)
+    require list.len() == 2 and list[1] == 9
+}
+
 func start() -> nil {
+    local_reference_store_check()
     array_value_index_check()
     gc_array_backing_check()
     bit_count_check()

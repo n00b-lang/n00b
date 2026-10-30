@@ -658,7 +658,8 @@ static bool store_target_root_has_no_known_aliases(
                        CORE_STRING_STATIC("ir.alias_analysis_complete"))
         : nullptr;
     return value
-        && (value->kind == IR_VAL_PARAM || value->kind == IR_VAL_GLOBAL)
+        && (value->kind == IR_VAL_PARAM || value->kind == IR_VAL_GLOBAL
+            || value->kind == IR_VAL_LOCAL)
         && count && count->kind == IR_ANNOT_INT && !count->i.neg
         && !count->i.mag
         && complete && complete->kind == IR_ANNOT_BOOL;
