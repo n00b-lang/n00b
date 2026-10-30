@@ -34,17 +34,18 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         for (uint32_t p = 0; p < 8; p++) {
             uint8_t flags = 0;
             if (native->reads & N00BB_AXIOM_PARAM(p))
-                flags |= IR_SACCESS_READ | IR_SACCESS_READS_ENTRY;
+                flags |= IR_SPATH_READ | IR_SPATH_READS_ENTRY;
             if (native->writes & N00BB_AXIOM_PARAM(p))
-                flags |= IR_SACCESS_WRITE;
+                flags |= IR_SPATH_WRITE;
             if (flags)
-                ir_summary_add_access(summary, (ir_splace_t){
-                    .kind = IR_SPLACE_PARAM, .param = p}, flags);
+                ir_summary_add_path(summary, &(ir_spath_t){
+                    .root = IR_SPLACE_PARAM, .param = p,
+                    .flags = flags | IR_SPATH_DEEP | IR_SPATH_ROOT});
         }
         if (native->effects & IR_SUMMARY_CALLS_UNKNOWN)
-            ir_summary_add_access(summary,
-                (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
-                IR_SACCESS_READ | IR_SACCESS_WRITE | IR_SACCESS_READS_ENTRY);
+            ir_summary_add_path(summary, &(ir_spath_t){
+                .root = IR_SPLACE_UNKNOWN,
+                .flags = IR_SPATH_ACCESS | IR_SPATH_DEEP});
         for (uint32_t p = 0; (native->effects & N00BB_AXIOM_ENTRY_FLAGS)
              && p < th_func_nparams(function->type); p++)
             ir_summary_set_param_escape(summary, p,
@@ -60,9 +61,10 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
     if (!n00bb_axiom_pure_native(function)) return nullptr;
     ir_summary_t *summary = ir_summary_new(summaries, function);
     for (uint32_t p = 0; p < th_func_nparams(function->type); p++)
-        ir_summary_add_access(summary, (ir_splace_t){
-            .kind = IR_SPLACE_PARAM, .param = p},
-            IR_SACCESS_READ | IR_SACCESS_READS_ENTRY);
+        ir_summary_add_path(summary, &(ir_spath_t){
+            .root = IR_SPLACE_PARAM, .param = p,
+            .flags = IR_SPATH_READ | IR_SPATH_READS_ENTRY | IR_SPATH_DEEP
+                | IR_SPATH_ROOT});
     ir_summary_set_return(summary,
         (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
     ir_sflow_t flow;

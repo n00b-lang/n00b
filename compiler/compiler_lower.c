@@ -21776,20 +21776,28 @@ merge_entry(ir_summary_t *into, ir_summaries_t *summaries,
                                | ir_summary_flags(summary));
     ir_summary_set_trap_kinds(into, ir_summary_trap_kinds(into)
                                     | ir_summary_trap_kinds(summary));
-    for (uint32_t a = 0; a < ir_summary_access_count(summary); a++) {
-        const ir_saccess_t *access = ir_summary_access_at(summary, a);
-        ir_splace_t place = access->place;
-        if (place.kind == IR_SPLACE_PARAM && callback)
-            place = (ir_splace_t){.kind = IR_SPLACE_UNKNOWN};
-        else if (place.kind == IR_SPLACE_PARAM) {
-            th_type *type = place.param < function->n_params
-                ? th_resolve(function->params[place.param]->type) : nullptr;
-            if (!type || th_kind_of(type) != TH_INDIRECTION) continue;
-            place = (ir_splace_t){.kind = IR_SPLACE_HEAP,
-                                  .type = th_ind_referent(type)};
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        ir_splace_t       places[2];
+        uint32_t          count = ir_summary_path_places(function, path,
+                                                         places);
+        for (uint32_t p = 0; p < count; p++) {
+            ir_splace_t place = places[p];
+            if (place.kind == IR_SPLACE_PARAM && callback)
+                place = (ir_splace_t){.kind = IR_SPLACE_UNKNOWN};
+            else if (place.kind == IR_SPLACE_PARAM) {
+                th_type *type = place.param < function->n_params
+                    ? th_resolve(function->params[place.param]->type)
+                    : nullptr;
+                if (!type || th_kind_of(type) != TH_INDIRECTION) continue;
+                place = (ir_splace_t){.kind = IR_SPLACE_HEAP,
+                                      .type = th_ind_referent(type)};
+            }
+            ir_spath_t merged = ir_spath_of_place(&place,
+                                                  path->flags
+                                                      & IR_SPATH_ACCESS);
+            ir_summary_add_path(into, &merged);
         }
-        ir_summary_add_access(into, place, access->flags
-            & (IR_SACCESS_READ | IR_SACCESS_WRITE | IR_SACCESS_READS_ENTRY));
     }
     return true;
 }
@@ -21825,9 +21833,9 @@ n00bb_summary_entries(void *context, ir_summaries_t *summaries,
                                  slot == 2);
     core_list_free(entries);
     if (merged_all && (!analysis->closed_world || analysis->may_link_further))
-        ir_summary_add_access(merged, (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
-                              IR_SACCESS_READ | IR_SACCESS_WRITE
-                                  | IR_SACCESS_READS_ENTRY);
+        ir_summary_add_path(merged, &(ir_spath_t){
+            .root = IR_SPLACE_UNKNOWN,
+            .flags = IR_SPATH_ACCESS | IR_SPATH_DEEP});
     analysis->entry_summaries[slot] = merged_all ? merged : nullptr;
     return analysis->entry_summaries[slot];
 }
@@ -21981,8 +21989,15 @@ static void
 dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
                       bool for_reader)
 {
-    static const char *const access_names[] = {
-        "read", "write", "must-success", "must-failure", "reads-entry"};
+    static const struct {
+        uint8_t     flag;
+        const char *name;
+    } outcomes[] = {
+        {IR_SPATH_ROOT, "root"},
+        {IR_SPATH_MUST_SUCCESS, "must-success"},
+        {IR_SPATH_MUST_FAILURE, "must-failure"},
+        {IR_SPATH_READS_ENTRY, "reads-entry"},
+    };
     ir_summary_t *summary = ir_summary_of(summaries, function);
     if (!summary) return;
     core_string_t owner = ir_module_name(function->owner);
@@ -22012,16 +22027,30 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         fprintf(stdout, "  effect %.*s\n", (int)effect.u8_bytes,
                 effect.data);
     }
-    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
-        const ir_spath_t *path = ir_summary_path_at(summary, i);
+    ir_spath_list_t merged = core_list_new(ir_spath_t);
+    if (for_reader) ir_summary_merged_paths(summary, &merged);
+    uint32_t paths = for_reader ? (uint32_t)merged.len
+                                : ir_summary_path_count(summary);
+    for (uint32_t i = 0; i < paths; i++) {
+        const ir_spath_t *path = for_reader ? &merged.data[i]
+                                            : ir_summary_path_at(summary, i);
         fprintf(stdout, "  %s%s ",
                 path->flags & IR_SPATH_READ ? "reads" : "",
                 path->flags & IR_SPATH_WRITE
                     ? path->flags & IR_SPATH_READ ? "+writes" : "writes"
                     : "");
         dump_spath(function, path);
+        for (size_t n = 0; !for_reader && n < sizeof(outcomes)
+                                                  / sizeof(*outcomes); n++)
+            if (path->flags & outcomes[n].flag)
+                fprintf(stdout, " %s", outcomes[n].name);
+        if (!for_reader && path->type) {
+            core_string_t type = n00bb_print_type_brief(types, path->type);
+            fprintf(stdout, " : %.*s", (int)type.u8_bytes, type.data);
+        }
         fputc('\n', stdout);
     }
+    ir_spath_list_release(&merged);
     for (uint32_t p = 0; p < function->n_params; p++) {
         uint8_t escape = ir_summary_param_escape(summary, p);
         if (!escape) continue;
@@ -22061,16 +22090,6 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         fputs("  returns fresh\n", stdout);
     else if (returned.kind == IR_SRETURN_UNKNOWN)
         fputs("  returns unknown\n", stdout);
-    for (uint32_t a = 0; !for_reader && a < ir_summary_access_count(summary);
-         a++) {
-        const ir_saccess_t *access = ir_summary_access_at(summary, a);
-        fputs("  ", stdout);
-        dump_splace(types, &access->place);
-        for (uint32_t b = 0; b < 5; b++)
-            if (access->flags & (1u << b))
-                fprintf(stdout, " %s", access_names[b]);
-        fputc('\n', stdout);
-    }
     const uint32_t *deps = ir_summary_dependences(summary);
     for (uint32_t o = 0; o < ir_summary_output_count(summary); o++) {
         const ir_soutput_t *output = ir_summary_output_at(summary, o);
@@ -22351,14 +22370,17 @@ json_function(core_buffer_t *out, n00bb_link_analysis_t *analysis,
         core_buffer_append_quoted(out, ir_summary_effect_at(summary, e));
     }
     core_buffer_puts(out, "],\"accesses\":[");
-    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
-        const ir_spath_t *path = ir_summary_path_at(summary, i);
+    ir_spath_list_t merged = core_list_new(ir_spath_t);
+    ir_summary_merged_paths(summary, &merged);
+    for (size_t i = 0; i < merged.len; i++) {
+        const ir_spath_t *path = &merged.data[i];
         core_buffer_printf(out, "%s{", i ? "," : "");
         json_path(out, function, path);
         json_bool(out, "reads", path->flags & IR_SPATH_READ, true);
         json_bool(out, "writes", path->flags & IR_SPATH_WRITE, true);
         core_buffer_putc(out, '}');
     }
+    ir_spath_list_release(&merged);
     core_buffer_puts(out, "],\"escapes\":[");
     for (uint32_t p = 0, n = 0; p < function->n_params; p++) {
         uint8_t escape = ir_summary_param_escape(summary, p);
@@ -23057,6 +23079,29 @@ initializers_known(n00bb_link_analysis_t *analysis,
         || n00bb_cache_module(analysis->cache, unit->module.identifier);
 }
 
+static const ir_global_t *
+path_global(const ir_spath_t *path)
+{
+    return (path->root == IR_SPLACE_GLOBAL || path->root == IR_SPLACE_THREAD)
+            && path->global
+        ? ir_global_identity((ir_global_t *)path->global) : nullptr;
+}
+
+static const ir_global_t *
+entry_read_global(const ir_summary_t *summary, uint32_t index)
+{
+    const ir_spath_t  *path   = ir_summary_path_at(summary, index);
+    const ir_global_t *global = path->flags & IR_SPATH_READS_ENTRY
+        ? path_global(path) : nullptr;
+    for (uint32_t i = 0; global && i < index; i++) {
+        const ir_spath_t *earlier = ir_summary_path_at(summary, i);
+        if ((earlier->flags & IR_SPATH_READS_ENTRY)
+            && path_global(earlier) == global)
+            return nullptr;
+    }
+    return global;
+}
+
 static bool
 collect_initializer_reads(n00bb_link_analysis_t *analysis,
                           core_list_t(n00bb_initializer_read_t) *reads)
@@ -23077,27 +23122,20 @@ collect_initializer_reads(n00bb_link_analysis_t *analysis,
                 ir_func_find(module, initializers[k]));
             ir_summary_t *summary = initializer
                 ? ir_summary_of(analysis->summaries, initializer) : nullptr;
-            for (uint32_t a = 0; summary
-                 && a < ir_summary_access_count(summary); a++) {
-                const ir_saccess_t *access = ir_summary_access_at(summary, a);
-                const ir_global_t *identity = access->place.global
-                    ? ir_global_identity((ir_global_t *)access->place.global)
-                    : nullptr;
-                if (!(access->flags & IR_SACCESS_READS_ENTRY)
-                    || (access->place.kind != IR_SPLACE_GLOBAL
-                        && access->place.kind != IR_SPLACE_THREAD)
-                    || !identity || identity->has_static_initializer)
-                    continue;
+            for (uint32_t i = 0; summary
+                 && i < ir_summary_path_count(summary); i++) {
+                const ir_global_t *identity = entry_read_global(summary, i);
+                if (!identity || identity->has_static_initializer) continue;
                 bool found = false;
                 parse_sym_entry_t *symbol = core_dict_get(&symbols,
-                    (void *)access->place.global, &found);
+                    (void *)identity, &found);
                 core_translation_unit_t *target = found
-                    ? global_owner_unit(analysis, access->place.global)
-                    : nullptr;
+                    ? global_owner_unit(analysis, identity) : nullptr;
                 if (!target || !initializers_known(analysis, target)) continue;
-                ir_global_t *global = (ir_global_t *)access->place.global;
-                ir_instr_t *read = first_uninitialized_read(
-                    analysis, initializer, &access->place, IR_PATH_UNPASSED);
+                ir_global_t *global = (ir_global_t *)identity;
+                ir_splace_t  place  = ir_splace_global(global);
+                ir_instr_t  *read   = first_uninitialized_read(
+                    analysis, initializer, &place, IR_PATH_UNPASSED);
                 if (read)
                     core_list_push(*reads, ((n00bb_initializer_read_t){
                         .source = unit, .target = target, .symbol = symbol,
@@ -23148,6 +23186,18 @@ initializer_read_location(const n00bb_initializer_read_t *read)
 }
 
 static bool
+summary_writes_global(const ir_summary_t *summary, const ir_global_t *global)
+{
+    global = global ? ir_global_identity((ir_global_t *)global) : nullptr;
+    for (uint32_t i = 0; summary && i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if ((path->flags & IR_SPATH_WRITE) && path_global(path) == global)
+            return true;
+    }
+    return false;
+}
+
+static bool
 initialized_dynamically(n00bb_link_analysis_t *analysis,
                         const n00bb_initializer_read_t *read)
 {
@@ -23163,19 +23213,10 @@ initialized_dynamically(n00bb_link_analysis_t *analysis,
     for (size_t k = 0; module && k < n00bb_initializer_kinds(); k++) {
         ir_func_t *initializer = n00bb_cached_body(
             ir_func_find(module, initializers[k]));
-        ir_summary_t *summary = initializer
-            ? ir_summary_of(analysis->summaries, initializer) : nullptr;
-        for (uint32_t a = 0; summary
-             && a < ir_summary_access_count(summary); a++) {
-            const ir_saccess_t *access = ir_summary_access_at(summary, a);
-            if ((access->flags & IR_SACCESS_WRITE)
-                && (access->place.kind == IR_SPLACE_GLOBAL
-                    || access->place.kind == IR_SPLACE_THREAD)
-                && access->place.global
-                && ir_global_identity((ir_global_t *)access->place.global)
-                    == global)
-                return true;
-        }
+        if (initializer
+            && summary_writes_global(ir_summary_of(analysis->summaries,
+                                                   initializer), global))
+            return true;
     }
     return false;
 }
@@ -25730,17 +25771,10 @@ initializer_read_node(const n00bb_initializer_read_t *read)
 static bool
 global_has_writer(n00bb_link_analysis_t *analysis, ir_global_t *global)
 {
-    ir_splace_t place = ir_splace_global(global);
-    for (size_t f = 0; f < analysis->emitted_functions.len; f++) {
-        ir_summary_t *summary = ir_summary_of(analysis->summaries,
-            analysis->emitted_functions.data[f]);
-        for (uint32_t a = 0; summary
-             && a < ir_summary_access_count(summary); a++) {
-            const ir_saccess_t *access = ir_summary_access_at(summary, a);
-            if ((access->flags & IR_SACCESS_WRITE)
-                && ir_splace_eq(&access->place, &place)) return true;
-        }
-    }
+    for (size_t f = 0; f < analysis->emitted_functions.len; f++)
+        if (summary_writes_global(ir_summary_of(analysis->summaries,
+                analysis->emitted_functions.data[f]), global))
+            return true;
     return false;
 }
 

@@ -2,6 +2,7 @@
 
 #include "ir/analyses.h"
 #include "ir/doms.h"
+#include "ir/operands.h"
 #include "ir/places.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
@@ -96,15 +97,19 @@ source_of(ir_summaries_t *summaries, ir_func_t *const *roots, size_t count,
     for (size_t f = 0; f < source.reach.functions.len; f++) {
         ir_func_t    *function = source.reach.functions.data[f];
         ir_summary_t *summary  = ir_summary_of(summaries, function);
-        for (uint32_t a = 0; a < ir_summary_access_count(summary); a++) {
-            const ir_saccess_t *access = ir_summary_access_at(summary, a);
-            if (access->place.kind != IR_SPLACE_PARAM) {
-                add_place(&source.places, &access->place, hooks);
-                continue;
+        for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+            ir_splace_t places[2];
+            uint32_t    count = ir_summary_path_places(
+                function, ir_summary_path_at(summary, i), places);
+            for (uint32_t p = 0; p < count; p++) {
+                if (places[p].kind != IR_SPLACE_PARAM) {
+                    add_place(&source.places, &places[p], hooks);
+                    continue;
+                }
+                if (!entry || function != entry->entry) continue;
+                for (uint32_t g = 0; g < entry->argument_count; g++)
+                    add_place(&source.places, &entry->arguments[g], hooks);
             }
-            if (!entry || function != entry->entry) continue;
-            for (uint32_t g = 0; g < entry->argument_count; g++)
-                add_place(&source.places, &entry->arguments[g], hooks);
         }
     }
     return source;
@@ -323,15 +328,15 @@ callee_writes(void *context, const ir_func_t *target,
 {
     (void)target;
     call_write_t *walk = context;
-    for (uint32_t a = 0; !walk->found && a < ir_summary_access_count(summary);
-         a++) {
-        const ir_saccess_t *access = ir_summary_access_at(summary, a);
-        uint32_t operand = access->place.param + 1;
-        if (!(access->flags & IR_SACCESS_WRITE)
-            || access->place.kind != IR_SPLACE_PARAM
-            || operand >= walk->call->n_operands) continue;
-        walk->found = argument_conflicts(walk,
-            ir_operand_value(&walk->call->operands[operand]));
+    for (uint32_t i = 0; !walk->found && i < ir_summary_path_count(summary);
+         i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if (!(path->flags & IR_SPATH_WRITE) || path->root != IR_SPLACE_PARAM)
+            continue;
+        ir_call_arg_t argument = ir_call_argument(walk->call, path->param);
+        if (argument.role == IR_ARG_VALUE || argument.role == IR_ARG_FRESH
+            || argument.role == IR_ARG_UNMAPPED)
+            walk->found = argument_conflicts(walk, argument.value);
     }
     if (walk->found && walk->hooks->atomic
         && walk->hooks->atomic(walk->hooks->context, walk->call,

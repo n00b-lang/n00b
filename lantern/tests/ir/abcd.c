@@ -273,6 +273,23 @@ lookup_text(void *context, uint32_t reference)
         ? table->texts[reference - 1] : (core_string_t){0};
 }
 
+static th_type *heap_type(const ir_func_t *f, const ir_summary_t *summary)
+{
+    th_type *type = nullptr;
+
+    for (uint32_t i = 0; summary && i < ir_summary_path_count(summary); i++) {
+        ir_splace_t places[2];
+        uint32_t    count = ir_summary_path_places(
+            f, ir_summary_path_at(summary, i), places);
+
+        for (uint32_t p = 0; p < count; p++)
+            if (places[p].kind == IR_SPLACE_HEAP && places[p].type)
+                type = places[p].type;
+    }
+
+    return type;
+}
+
 static void test_decoded_summaries_keep_heap_types(void)
 {
     ir_ctx_t *ctx = ir_ctx_new();
@@ -295,14 +312,8 @@ static void test_decoded_summaries_keep_heap_types(void)
     check("the summary encodes", ir_summary_encode(summary, &encoded));
     ir_summary_t *decoded = ir_summary_decode(summaries, f,
         (const uint8_t *)encoded.data, encoded.byte_len, nullptr, nullptr);
-    th_type *heap = nullptr;
-    th_type *kept = nullptr;
-    for (uint32_t a = 0; a < ir_summary_access_count(summary); a++)
-        if (ir_summary_access_at(summary, a)->place.kind == IR_SPLACE_HEAP)
-            heap = ir_summary_access_at(summary, a)->place.type;
-    for (uint32_t a = 0; a < ir_summary_access_count(decoded); a++)
-        if (ir_summary_access_at(decoded, a)->place.kind == IR_SPLACE_HEAP)
-            kept = ir_summary_access_at(decoded, a)->place.type;
+    th_type *heap = heap_type(f, summary);
+    th_type *kept = heap_type(f, decoded);
     th_ctx *types = ir_module_types(m);
     check("the summary writes a typed heap place", heap != nullptr);
     check("the decoded heap place keeps its type",
@@ -318,11 +329,7 @@ static void test_decoded_summaries_keep_heap_types(void)
     ir_summary_t *resolved = ir_summary_decode_with(summaries, f,
         (const uint8_t *)referenced.data, referenced.byte_len, nullptr,
         nullptr, &texts);
-    th_type *named = nullptr;
-    for (uint32_t a = 0; resolved && a < ir_summary_access_count(resolved);
-         a++)
-        if (ir_summary_access_at(resolved, a)->place.kind == IR_SPLACE_HEAP)
-            named = ir_summary_access_at(resolved, a)->place.type;
+    th_type *named = heap_type(f, resolved);
     check("a table-encoded heap place keeps its type",
           named && th_hash(types, named) == th_hash(types, heap));
     check("table encodings need a table to decode",

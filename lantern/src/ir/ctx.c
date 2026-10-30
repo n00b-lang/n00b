@@ -787,6 +787,11 @@ ir_typeslot_t *ir_type_slot(ir_module_t *m, th_type *t)
     return type_find(m, ir_type_id(m, t));
 }
 
+ir_typeslot_t *ir_type_slot_find(ir_module_t *m, th_type *t)
+{
+    return m && t ? type_find(m, ir_type_id(m, t)) : nullptr;
+}
+
 ir_typeslot_t *ir_type_slot_at(ir_module_t *m, size_t i)
 {
     return m && i < m->n_types ? &m->types[i] : nullptr;

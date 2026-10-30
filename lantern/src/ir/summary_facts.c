@@ -1,6 +1,7 @@
 #include "ir/summary_facts.h"
 
 #include "ir/analyses.h"
+#include "ir/operands.h"
 #include "lib/alloc.h"
 #include "lib/dict.h"
 #include "lib/hash.h"
@@ -109,12 +110,15 @@ static const core_string_t flag_names[] = {
     CORE_STRING_STATIC("reads_random"),
 };
 
-static const core_string_t access_names[] = {
-    CORE_STRING_STATIC("read"),
-    CORE_STRING_STATIC("write"),
-    CORE_STRING_STATIC("must_success"),
-    CORE_STRING_STATIC("must_failure"),
-    CORE_STRING_STATIC("reads_entry"),
+static const struct {
+    uint8_t       flag;
+    core_string_t name;
+} access_names[] = {
+    {IR_SPATH_READ, CORE_STRING_STATIC("read")},
+    {IR_SPATH_WRITE, CORE_STRING_STATIC("write")},
+    {IR_SPATH_MUST_SUCCESS, CORE_STRING_STATIC("must_success")},
+    {IR_SPATH_MUST_FAILURE, CORE_STRING_STATIC("must_failure")},
+    {IR_SPATH_READS_ENTRY, CORE_STRING_STATIC("reads_entry")},
 };
 
 static const core_string_t field_names[] = {
@@ -332,14 +336,22 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
         && (ir_summary_trap_kinds(summary) & IR_STRAP_EXPLICIT))
         fact(facts, REL_FLAG, symbol,
              constant(facts, CORE_STRING_STATIC("traps_explicit")), 0);
-    for (uint32_t a = 0; a < ir_summary_access_count(summary); a++) {
-        const ir_saccess_t *access = ir_summary_access_at(summary, a);
-        core_datalog_symbol_t place = place_symbol(facts, &access->place);
-        for (uint32_t bit = 0;
-             bit < sizeof(access_names) / sizeof(*access_names); bit++)
-            if (access->flags & (1u << bit))
-                fact(facts, REL_ACCESS, symbol, place,
-                     constant(facts, access_names[bit]));
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        ir_splace_t       places[2];
+        uint32_t          count = ir_summary_path_places(
+            ir_summary_function(summary), path, places);
+        for (uint32_t p = 0; p < count; p++) {
+            core_datalog_symbol_t place = place_symbol(facts, &places[p]);
+            uint8_t flags = places[p].kind == IR_SPLACE_HEAP
+                    || places[p].kind == IR_SPLACE_UNKNOWN
+                ? path->flags & IR_SPATH_ACCESS : path->flags;
+            for (size_t n = 0;
+                 n < sizeof(access_names) / sizeof(*access_names); n++)
+                if (flags & access_names[n].flag)
+                    fact(facts, REL_ACCESS, symbol, place,
+                         constant(facts, access_names[n].name));
+        }
     }
 }
 
@@ -454,13 +466,13 @@ add_callee(void *context, const ir_func_t *target, const ir_summary_t *summary)
     ir_summary_facts_t *facts = visit->facts;
     core_datalog_symbol_t callee = function_symbol(facts, target, summary);
     fact(facts, REL_CALL_TARGET, visit->site, callee, 0);
-    for (uint32_t a = 0; summary && a < ir_summary_access_count(summary);
-         a++) {
-        const ir_saccess_t *access = ir_summary_access_at(summary, a);
-        if (access->place.kind == IR_SPLACE_PARAM
-            && access->place.param + 1 >= visit->call->n_operands)
+    for (uint32_t i = 0; summary && i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if (path->root == IR_SPLACE_PARAM
+            && ir_call_argument(visit->call, path->param).role
+                   == IR_ARG_ABSENT)
             fact(facts, REL_ADDRESSABLE_ARGUMENT, visit->site,
-                 integer(facts, access->place.param), 0);
+                 integer(facts, path->param), 0);
     }
     for (uint32_t o = 1; summary && o < visit->call->n_operands; o++)
         if (ir_summary_param_escape(summary, o - 1) & IR_SESCAPE_ADDRESS)

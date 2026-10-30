@@ -562,9 +562,40 @@ test_nested_construction(void)
     done(&r);
 }
 
+static void
+test_scalar_globals(void)
+{
+    run_t r = load(MOD(
+        "  global @count: i32\n\n"
+        "  func @bump() -> i32 {\n"
+        "    block entry:\n"
+        "      %one: i32 = const 1\n"
+        "      %next: i32 = add @count, %one\n"
+        "      global.store @count, %next\n"
+        "      return %next\n"
+        "  }\n"
+        "  func @peek() -> i32 {\n"
+        "    block entry:\n"
+        "      return @count\n"
+        "  }\n"
+        "  func @loaded() -> i32 {\n"
+        "    block entry:\n"
+        "      %v: i32 = load @count\n"
+        "      return %v\n"
+        "  }\n"));
+    expect(&r, "a scalar global used as a value is read, and stored is written",
+           S("bump"), S("rw count"));
+    expect(&r, "a scalar global returned by value is read", S("peek"),
+           S("r count"));
+    expect(&r, "and so is one loaded through its address", S("loaded"),
+           S("r count"));
+    done(&r);
+}
+
 int
 main(void)
 {
+    test_scalar_globals();
     test_nested_construction();
     test_fresh_construction();
     test_writes_before_publication();

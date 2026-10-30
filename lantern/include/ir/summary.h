@@ -4,6 +4,7 @@
 #include "ir/ir.h"
 #include "ir/places.h"
 #include "ir/sites.h"
+#include "lib/list.h"
 
 typedef enum : uint8_t {
     IR_SPLACE_PARAM,
@@ -19,19 +20,6 @@ typedef struct {
     const ir_global_t *global;
     th_type           *type;
 } ir_splace_t;
-
-enum {
-    IR_SACCESS_READ         = 1u << 0,
-    IR_SACCESS_WRITE        = 1u << 1,
-    IR_SACCESS_MUST_SUCCESS = 1u << 2,
-    IR_SACCESS_MUST_FAILURE = 1u << 3,
-    IR_SACCESS_READS_ENTRY  = 1u << 4,
-};
-
-typedef struct {
-    ir_splace_t place;
-    uint8_t     flags;
-} ir_saccess_t;
 
 enum {
     IR_SUMMARY_MAY_FAIL         = 1u << 0,
@@ -201,8 +189,6 @@ core_string_t ir_summary_effect_at(const ir_summary_t *summary,
                                    uint32_t index);
 bool          ir_summary_has_effect(const ir_summary_t *summary,
                                     core_string_t name);
-void          ir_summary_add_access(ir_summary_t *summary, ir_splace_t place,
-                                    uint8_t flags);
 ir_summary_t *ir_summary_conservative(ir_summaries_t *summaries,
                                       const ir_func_t *function);
 
@@ -216,9 +202,6 @@ const ir_strap_site_t *ir_summary_trap_site_at(const ir_summary_t *summary,
                                                uint32_t index);
 const ir_switness_t  *ir_summary_witness_for(const ir_summary_t *summary,
                                              uint32_t flag);
-uint32_t             ir_summary_access_count(const ir_summary_t *summary);
-const ir_saccess_t  *ir_summary_access_at(const ir_summary_t *summary,
-                                          uint32_t index);
 uint32_t             ir_summary_input_count(const ir_summary_t *summary);
 const ir_sinput_t   *ir_summary_input_at(const ir_summary_t *summary,
                                          uint32_t index);
@@ -306,10 +289,18 @@ typedef struct {
 } ir_sfield_t;
 
 enum {
-    IR_SPATH_READ  = 1u << 0,
-    IR_SPATH_WRITE = 1u << 1,
-    IR_SPATH_DEEP  = 1u << 2,
+    IR_SPATH_READ         = 1u << 0,
+    IR_SPATH_WRITE        = 1u << 1,
+    IR_SPATH_DEEP         = 1u << 2,
+    IR_SPATH_MUST_SUCCESS = 1u << 3,
+    IR_SPATH_MUST_FAILURE = 1u << 4,
+    IR_SPATH_READS_ENTRY  = 1u << 5,
+    IR_SPATH_TYPED        = 1u << 6,
+    IR_SPATH_ROOT         = 1u << 7,
 };
+
+#define IR_SPATH_ACCESS (IR_SPATH_READ | IR_SPATH_WRITE | IR_SPATH_READS_ENTRY)
+#define IR_SPATH_MUST   (IR_SPATH_MUST_SUCCESS | IR_SPATH_MUST_FAILURE)
 
 enum { IR_SPATH_STEPS = 4 };
 
@@ -317,11 +308,15 @@ typedef struct {
     ir_splace_kind_t   root;
     uint32_t           param;
     const ir_global_t *global;
+    th_type           *type;
     uint8_t            depth;
     uint8_t            flags;
     uint8_t            output;
     core_string_t      steps[IR_SPATH_STEPS];
 } ir_spath_t;
+
+core_list_decl(ir_spath_t);
+typedef core_list_t(ir_spath_t) ir_spath_list_t;
 
 typedef struct {
     ir_spath_t to;
@@ -331,6 +326,15 @@ typedef struct {
 uint32_t          ir_summary_path_count(const ir_summary_t *summary);
 const ir_spath_t *ir_summary_path_at(const ir_summary_t *summary,
                                      uint32_t index);
+void              ir_summary_add_path(ir_summary_t *summary,
+                                      const ir_spath_t *path);
+uint32_t          ir_summary_path_places(const ir_func_t *function,
+                                         const ir_spath_t *path,
+                                         ir_splace_t places[2]);
+ir_spath_t        ir_spath_of_place(const ir_splace_t *place, uint8_t flags);
+void              ir_summary_merged_paths(const ir_summary_t *summary,
+                                          ir_spath_list_t *into);
+void              ir_spath_list_release(ir_spath_list_t *paths);
 uint32_t           ir_summary_result_count(const ir_summary_t *summary);
 const ir_sstore_t *ir_summary_result_at(const ir_summary_t *summary,
                                         uint32_t index);
