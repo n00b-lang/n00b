@@ -175,8 +175,6 @@ ir_sreturn_t ir_summary_return(const ir_summary_t *summary);
 bool         ir_summary_returns_fresh(const ir_summary_t *summary);
 void         ir_summary_set_return(ir_summary_t *summary,
                                    ir_sreturn_t returned);
-uint8_t      ir_summary_call_escape(ir_summaries_t *summaries,
-                                    const ir_instr_t *call, uint32_t param);
 typedef struct {
     const ir_global_t *(*global)(void *context, core_string_t module,
                                  core_string_t name);

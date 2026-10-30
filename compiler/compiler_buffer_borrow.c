@@ -1633,33 +1633,19 @@ escaped_view(analysis_t *analysis, ir_instr_t *instruction, uint64_t views)
         }
         return found;
     }
-    uint32_t value_at = 0;
-    switch (instruction->op) {
-    case IR_OP_GLOBAL_STORE:
-        return instruction->n_operands >= 2
-            ? view_reference(analysis, instruction,
-                             operand_at(instruction, 1), false, views)
-            : nullptr;
-    case IR_OP_STORE:
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-        value_at = 1;
-        break;
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-        value_at = 2;
-        break;
-    default:
+    if (!ir_op_transfers(instruction->op)) return nullptr;
+    int32_t  source   = ir_op_source_operand(instruction->op);
+    uint32_t value_at = (uint32_t)(source >= 0
+        ? source : ir_op_stored_operand(instruction->op));
+    uint32_t address  = (uint32_t)ir_op_address_operand(instruction->op);
+    if (instruction->n_operands <= value_at) return nullptr;
+    if (instruction->op != IR_OP_GLOBAL_STORE
+        && !outlives_call(analysis, instruction,
+                          operand_at(instruction, address)))
         return nullptr;
-    }
-    if (instruction->n_operands <= value_at
-        || !outlives_call(analysis, instruction, operand_at(instruction, 0)))
-        return nullptr;
-    bool copies = instruction->op == IR_OP_MEMCPY
-        || instruction->op == IR_OP_MEMMOVE;
     return view_reference(analysis, instruction,
-                          operand_at(instruction, value_at), copies, views);
+                          operand_at(instruction, value_at), source >= 0,
+                          views);
 }
 
 static void

@@ -1282,9 +1282,8 @@ ir_summary_effect_bits(const ir_summary_t *summary)
     return bits;
 }
 
-uint8_t
-ir_summary_call_escape(ir_summaries_t *summaries, const ir_instr_t *call,
-                       uint32_t param)
+static uint8_t
+call_escape(ir_summaries_t *summaries, const ir_instr_t *call, uint32_t param)
 {
     call_targets_t targets;
     resolve_targets(summaries, call, &targets);
@@ -1653,12 +1652,38 @@ hold_in_local(escape_walk_t *walk, const ir_value_t *target)
 
 
 static bool
+memory_use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
+{
+    uint8_t access  = ir_op_memory_access(use->op);
+    int32_t at      = (int32_t)index;
+    int32_t address = ir_op_address_operand(use->op);
+    if (access & IR_MEM_RELEASE) return true;
+    if (!(access & IR_MEM_WRITE) || at == address) return false;
+    if (at == ir_op_source_operand(use->op)) {
+        walk->referent = true;
+        return false;
+    }
+    if (use->op == IR_OP_STORE && at == ir_op_stored_operand(use->op))
+        return !hold_in_local(walk, referenced(use, (uint32_t)address));
+    return true;
+}
+
+static bool
+storage_memory_escapes(const ir_instr_t *use, uint32_t index)
+{
+    uint8_t access = ir_op_memory_access(use->op);
+    if (!access || (access & IR_MEM_RELEASE)) return true;
+    return (access & IR_MEM_WRITE)
+        && (int32_t)index != ir_op_address_operand(use->op);
+}
+
+static bool
 use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
 {
     const ir_operand_t *operand = &use->operands[index];
+    if (ir_op_memory_access(use->op))
+        return memory_use_escapes(walk, use, index);
     switch (use->op) {
-    case IR_OP_LOAD:
-    case IR_OP_SEQUENCE_GET:
     case IR_OP_SEQUENCE_LENGTH:
     case IR_OP_SEQUENCE_SHAPE_CHECK:
     case IR_OP_EQ:
@@ -1672,22 +1697,9 @@ use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
     case IR_OP_OPTION_IS_NIL:
     case IR_OP_VARIANT_TAG:
     case IR_OP_PREFETCH:
-    case IR_OP_MEMCMP:
     case IR_OP_BRANCH:
     case IR_OP_SWITCH:
         return false;
-    case IR_OP_STORE:
-        return index != 0 && !hold_in_local(walk, referenced(use, 0));
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-        return index != 0;
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-        if (index == 1) walk->referent = true;
-        return index > 1;
-    case IR_OP_MEMSET:
-        return index > 1;
     case IR_OP_INDEX:
         if (index == 0 && use->dest && operand->value
             && th_kind_of(th_resolve(operand->value->type)) == TH_INDIRECTION
@@ -1751,8 +1763,7 @@ use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
             operand->value->type).class == IR_CLASS_PTR;
     case IR_OP_CALL:
         if (!positional_argument(use, index)) return true;
-        uint8_t escape = ir_summary_call_escape(walk->summaries, use,
-                                                index - 1);
+        uint8_t escape = call_escape(walk->summaries, use, index - 1);
         if (escape & IR_SESCAPE_ADDRESS) return true;
         if (escape & IR_SESCAPE_REFERENT) walk->referent = true;
         if (use->dest
@@ -1775,16 +1786,11 @@ storage_use_escapes(escape_walk_t *walk, const ir_instr_t *use,
     case IR_OP_SEQUENCE_GET:
         if (use->dest) derive(walk, use->dest);
         return false;
-    case IR_OP_STORE:
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_MEMSET:
-        return index != 0;
     case IR_OP_SEQUENCE_LENGTH:
     case IR_OP_SEQUENCE_SHAPE_CHECK:
     case IR_OP_EQ:
     case IR_OP_NE:
     case IR_OP_PREFETCH:
-    case IR_OP_MEMCMP:
         return false;
     case IR_OP_CONSUME:
         return index == 0;
@@ -1808,14 +1814,14 @@ storage_use_escapes(escape_walk_t *walk, const ir_instr_t *use,
         return false;
     case IR_OP_CALL:
         if (!positional_argument(use, index)) return true;
-        if (ir_summary_call_escape(walk->summaries, use, index - 1))
+        if (call_escape(walk->summaries, use, index - 1))
             return true;
         if (use->dest
             && call_returns_parameter(walk->summaries, use, index - 1))
             track(walk, use->dest, true);
         return false;
     default:
-        return true;
+        return storage_memory_escapes(use, index);
     }
 }
 

@@ -66,7 +66,7 @@ typedef enum : uint8_t {
     IR_OPD_MISSING,
 } ir_opdkind_t;
 
-#define IR_OP(id, spelling, lo, hi, res, pat, mods, flags) IR_OP_##id,
+#define IR_OP(id, spelling, lo, hi, res, pat, mods, flags, mem) IR_OP_##id,
 
 typedef enum : uint16_t {
 #include "ir_ops.def"
@@ -74,6 +74,22 @@ typedef enum : uint16_t {
 } ir_op_t;
 
 #undef IR_OP
+
+enum {
+    IR_MEM_READ       = 1u << 0,
+    IR_MEM_WRITE      = 1u << 1,
+    IR_MEM_RELEASE    = 1u << 2,
+    IR_MEM_READ_WRITE = IR_MEM_READ | IR_MEM_WRITE,
+    IR_MEM_ENDS       = IR_MEM_WRITE | IR_MEM_RELEASE,
+};
+
+typedef struct {
+    uint8_t access;
+    int8_t  address;
+    int8_t  stored;
+    int8_t  source;
+    bool    element;
+} ir_opmem_t;
 
 typedef struct {
     core_string_t spelling;
@@ -83,6 +99,7 @@ typedef struct {
     core_string_t pattern;
     uint8_t      mods;
     uint8_t      flags;
+    ir_opmem_t   memory;
 } ir_opinfo_t;
 
 const ir_opinfo_t *ir_op_info(ir_op_t op);
@@ -105,11 +122,6 @@ bool               ir_opinfo_accepts_mod(const ir_opinfo_t *i,
 bool               ir_op_spelling_is_namespaced(core_string_t spelling,
                                                 core_string_t profile);
 bool               ir_mod_exists(core_string_t name);
-
-enum {
-    IR_MEM_READ  = 1u << 0,
-    IR_MEM_WRITE = 1u << 1,
-};
 
 uint8_t ir_op_memory_access(ir_op_t op);
 int32_t ir_op_address_operand(ir_op_t op);

@@ -216,6 +216,10 @@ static void test_memory_roles(void)
     check("memset writes without transferring a value",
           ir_op_memory_access(IR_OP_MEMSET) == IR_MEM_WRITE
               && !ir_op_transfers(IR_OP_MEMSET));
+    check("dealloc and finalize end the object at their address",
+          (ir_op_memory_access(IR_OP_DEALLOC) & IR_MEM_RELEASE)
+              && (ir_op_memory_access(IR_OP_FINALIZE) & IR_MEM_RELEASE)
+              && !(ir_op_memory_access(IR_OP_MEMSET) & IR_MEM_RELEASE));
     check("a stored value is not an address operand",
           !ir_op_is_address_operand(IR_OP_STORE, 1));
     check("arithmetic has no memory role",
