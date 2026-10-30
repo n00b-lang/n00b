@@ -182,18 +182,41 @@ report_modifier_without_literal(core_translation_unit_t *unit,
         N00BB_NO_ARGS);
 }
 
-static void
-check_effect_call(parse_grammar_t *grammar, core_translation_unit_t *unit,
-                  parse_tree_t *node)
+static bool
+call_node(parse_grammar_t *grammar, parse_tree_t *node)
 {
     const parse_rule_t *rule = parse_tree_rule(grammar, node);
-    if (!rule || !parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
-        || !core_tree_num_children(node)) return;
+    return rule && parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
+        && core_tree_num_children(node);
+}
+
+static void
+mark_unobserved_calls(parse_grammar_t *grammar, n00bb_tu_state_t *state,
+                      parse_tree_t *node)
+{
+    if (!node || core_tree_is_leaf(node)) return;
+    n00bb_node_facts_t *facts = call_node(grammar, node)
+        ? n00bb_ensure_node_facts(state, node) : nullptr;
+    if (facts) facts->unobserved = true;
+    for (size_t i = 0; i < core_tree_num_children(node); i++)
+        mark_unobserved_calls(grammar, state, core_tree_child(node, i));
+}
+
+static void
+check_builtin_call(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                   parse_tree_t *node)
+{
+    if (!call_node(grammar, node)) return;
     parse_sym_entry_t *symbol = attached_symbol(grammar, unit,
                                                 core_tree_child(node, 0));
+    if (!n00bb_builtin_native_function(symbol)) return;
+    if (core_string_eq(symbol->name, CORE_STRING_STATIC("__unobserved"))) {
+        mark_unobserved_calls(grammar, tu_state(unit),
+                              call_arguments_node(grammar, node));
+        return;
+    }
     core_string_t name = {0};
-    if (!n00bb_builtin_native_function(symbol)
-        || !core_string_eq(symbol->name, CORE_STRING_STATIC("__effect"))
+    if (!core_string_eq(symbol->name, CORE_STRING_STATIC("__effect"))
         || (n00bb_call_literal_argument(grammar, tu_state(unit), node, 0, 1,
                                         &name)
             && name.u8_bytes))
@@ -327,7 +350,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             grammar, unit, node, parent))
         return;
     if (entering) n00bb_range_enter_node(grammar, state, node, parent);
-    else check_effect_call(grammar, unit, node);
+    else check_builtin_call(grammar, unit, node);
     bool invalid_field_access = !entering
         && check_local_record_field_reference(grammar, unit, node);
     bool variant_payload = !entering

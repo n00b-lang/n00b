@@ -401,6 +401,7 @@ typedef struct {
     bool overload_conversion_warning_reported;
     bool tuple_index_known;
     bool tuple_index_reported;
+    bool unobserved;
     uint32_t tuple_index;
     n00bb_binding_projection_t *projection;
 } n00bb_node_facts_t;
@@ -877,6 +878,9 @@ parse_tree_t *call_arguments_node(parse_grammar_t *grammar,
 void collect_positional_nodes(parse_grammar_t *grammar,
                               parse_tree_t *node,
                               core_list_t(n00bb_tree_ptr_t) *arguments);
+parse_tree_t *n00bb_call_positional_argument(parse_grammar_t *grammar,
+                                             parse_tree_t *call, size_t index,
+                                             size_t arity);
 bool n00bb_call_literal_argument(parse_grammar_t *grammar,
                                  n00bb_tu_state_t *state, parse_tree_t *call,
                                  size_t index, size_t arity,

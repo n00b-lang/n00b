@@ -355,6 +355,8 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         writes_subject ? th_ind(types, 0, writes_subject) : nullptr, text,
     };
     th_type *effect_args[] = {text};
+    th_type *unobserved = th_var(types);
+    th_type *unobserved_args[] = {unobserved};
     return register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_page_size"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -423,6 +425,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__effect"), nil_type, effect_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__unobserved"), unobserved,
+            unobserved_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_stack_high_self"),
             optional_reference, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -447,9 +452,6 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             resume_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_now_ns"),
-            th_name(types, CORE_STRING_STATIC("uint")), nullptr, 0)
-        && register_builtin_native_function(symtab, types, nil_type,
-            CORE_STRING_STATIC("__runtime_now_ns"),
             th_name(types, CORE_STRING_STATIC("uint")), nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_cpu_relax"), nil_type, nullptr, 0)

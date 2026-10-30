@@ -1035,11 +1035,6 @@ uint64_t n00b_os_now_ns(void)
     return os_now_ns();
 }
 
-uint64_t n00b_os_runtime_now_ns(void)
-{
-    return os_now_ns();
-}
-
 void n00b_os_cpu_relax(void)
 {
 #if defined(_WIN32)

@@ -39,7 +39,6 @@ uint64_t n00b_os_stack_address(void);
 size_t n00b_os_stack_red_zone_bytes(void);
 uint64_t n00b_os_frame_pointer_chain(void);
 uint64_t n00b_os_now_ns(void);
-uint64_t n00b_os_runtime_now_ns(void);
 void n00b_os_cpu_relax(void);
 void *n00b_os_map_zeroed(size_t bytes, size_t alignment);
 int32_t n00b_os_unmap(void *address, size_t bytes);

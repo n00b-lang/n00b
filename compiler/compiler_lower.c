@@ -13383,6 +13383,16 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             ? (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr}
             : lower_internal(context, span, "could not record an effect");
     }
+    if (native_builtin
+        && core_string_eq(symbol->name, CORE_STRING_STATIC("__unobserved"))) {
+        parse_tree_t *argument = n00bb_call_positional_argument(
+            visit->grammar, call_node, 0, 1);
+        ir_value_t *value = argument
+            ? ir_lower_node_value(context, argument) : nullptr;
+        return value ? (ir_lower_result_t){IR_LOWER_VALUE, value}
+                     : lower_internal(context, span,
+                           "__unobserved has no lowered argument");
+    }
     if (native_builtin) {
         const core_string_t *native_name = parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.abi.native"));
@@ -14444,12 +14454,17 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         copyouts = core_list_new(n00bb_copyout_t);
     }
     instruction->span = span;
-    if (query && !annotate_effects_query(lower->ir_context, instruction,
-                                         query_subject, query_name)) {
+    n00bb_node_facts_t *call_facts = n00bb_node_facts(call_node);
+    if ((query && !annotate_effects_query(lower->ir_context, instruction,
+                                          query_subject, query_name))
+        || (call_facts && call_facts->unobserved
+            && !ir_annot_set(lower->ir_context, &instruction->annots,
+                   (ir_annot_t){.key = CORE_STRING_STATIC("ir.unobserved"),
+                                .kind = IR_ANNOT_BOOL, .b = true}))) {
         core_list_free(values);
         core_list_free(copyouts);
         return lower_internal(context, span,
-                           "could not record the effect query subject");
+                           "could not annotate the call's effects");
     }
     ir_shape_t *return_shape = parse_sym_binding(symbol,
         CORE_STRING_STATIC("ir.return-shape"));

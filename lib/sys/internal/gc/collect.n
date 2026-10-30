@@ -24,7 +24,7 @@ func stop_world(heap: Ref[internal.gc.core.Heap]) {
     internal.gc.sync.ticket_lock(ref heap.fin)
     heap.fin_held = true
     __atomic_store(ref heap.stw, true)
-    heap.pause_start = __runtime_now_ns()
+    heap.pause_start = __unobserved(__os_now_ns())
     internal.gc.world.stop(heap)
 }
 
@@ -39,7 +39,7 @@ func start_world(heap: Ref[internal.gc.core.Heap]) {
     __atomic_store(ref heap.stw, false)
     heap.fin_held = false
     internal.gc.sync.ticket_unlock(ref heap.fin)
-    heap.last_pause_ns = __runtime_now_ns() - heap.pause_start
+    heap.last_pause_ns = __unobserved(__os_now_ns()) - heap.pause_start
     heap.pauses += 1
     heap.total_pause_ns += heap.last_pause_ns
     if heap.last_pause_ns > heap.max_pause_ns {
@@ -58,7 +58,7 @@ func start_world(heap: Ref[internal.gc.core.Heap]) {
 func emit_cycle(heap: Ref[internal.gc.core.Heap], kind: i32) {
     var info: internal.gc.core.Cycle_Info = heap.cycle
     info.kind = kind
-    info.duration_ns = __runtime_now_ns() - heap.cycle_start
+    info.duration_ns = __unobserved(__os_now_ns()) - heap.cycle_start
     info.rounds = cast[u32](heap.hs_rounds) - info.rounds
     info.stragglers = cast[u32](heap.hs_stragglers) - info.stragglers
     let ready: Ref[(internal.gc.core.Cycle_Info, Ref[byte]?) -> nil]? = heap.cfg.on_cycle
@@ -633,7 +633,7 @@ func begin_epoch_locked(heap: Ref[internal.gc.core.Heap]) {
     heap.cycle.epoch = heap.mark_epoch
     heap.cycle.rounds = cast[u32](heap.hs_rounds)
     heap.cycle.stragglers = cast[u32](heap.hs_stragglers)
-    heap.cycle_start = __runtime_now_ns()
+    heap.cycle_start = __unobserved(__os_now_ns())
 }
 
 func end_epoch_locked(heap: Ref[internal.gc.core.Heap]) {

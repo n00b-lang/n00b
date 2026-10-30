@@ -2468,12 +2468,24 @@ ir_splace_global(const ir_global_t *global)
         .type   = global->type};
 }
 
+static bool
+call_unobserved(const ir_instr_t *call)
+{
+    for (uint32_t a = 0; a < call->annots.n; a++)
+        if (call->annots.a[a].kind == IR_ANNOT_BOOL && call->annots.a[a].b
+            && core_string_eq(call->annots.a[a].key,
+                              CORE_STRING_STATIC("ir.unobserved")))
+            return true;
+    return false;
+}
+
 static void
 compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
              const ir_instr_t *call)
 {
     call_targets_t targets;
     resolve_targets(summaries, call, &targets);
+    uint32_t observes = call_unobserved(call) ? 0 : IR_SUMMARY_OBSERVES;
     if (call->op == IR_OP_CALLBACK_INVOKE)
         add_flags(summary, IR_SUMMARY_CALLS_CALLBACKS, call, nullptr,
                   (core_string_t){0});
@@ -2481,7 +2493,7 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
         add_flags(summary, IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
                       | IR_SUMMARY_MAY_BLOCK | IR_SUMMARY_CALLS_UNKNOWN
                       | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
-                      | IR_SUMMARY_OBSERVES,
+                      | observes,
                   call, nullptr, CORE_STRING_STATIC("?"));
         summary->traps |= IR_STRAP_ALL;
         core_list_free(targets.targets);
@@ -2497,7 +2509,7 @@ compose_call(ir_summaries_t *summaries, ir_summary_t *summary,
                | IR_SUMMARY_MAY_IO | IR_SUMMARY_MAY_COLLECT
                | IR_SUMMARY_ALLOCATES_DIRECT | IR_SUMMARY_CALLS_FINALIZERS
                | IR_SUMMARY_STARTS_THREADS | IR_SUMMARY_REINTERPRETS
-               | IR_SUMMARY_CALLS_CALLBACKS | IR_SUMMARY_OBSERVES);
+               | IR_SUMMARY_CALLS_CALLBACKS | observes);
         if (flags & ~summary->flags)
             add_flags(summary, flags, call, targets.targets.data[t],
                       (core_string_t){0});

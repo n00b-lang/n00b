@@ -1939,21 +1939,31 @@ semantic_static_scalar_value(parse_grammar_t *grammar, parse_tree_t *literal,
     return false;
 }
 
-bool
-n00bb_call_literal_argument(parse_grammar_t *grammar,
-                            n00bb_tu_state_t *state, parse_tree_t *call,
-                            size_t index, size_t arity, core_string_t *out)
+parse_tree_t *
+n00bb_call_positional_argument(parse_grammar_t *grammar, parse_tree_t *call,
+                               size_t index, size_t arity)
 {
     parse_tree_t *arguments = call ? call_arguments_node(grammar, call)
                                    : nullptr;
     if (!arguments || CHILD_NT(grammar, arguments, "keyword-args"))
-        return false;
+        return nullptr;
     core_list_t(n00bb_tree_ptr_t) positional =
         core_list_new(n00bb_tree_ptr_t);
     collect_positional_nodes(grammar,
         CHILD_NT(grammar, arguments, "positional-args"), &positional);
     parse_tree_t *argument = positional.len == arity && index < arity
         ? positional.data[index] : nullptr;
+    core_list_free(positional);
+    return argument;
+}
+
+bool
+n00bb_call_literal_argument(parse_grammar_t *grammar,
+                            n00bb_tu_state_t *state, parse_tree_t *call,
+                            size_t index, size_t arity, core_string_t *out)
+{
+    parse_tree_t *argument = n00bb_call_positional_argument(grammar, call,
+                                                            index, arity);
     n00bb_static_literal_probe_t probe = find_static_literal(grammar,
                                                               argument);
     n00bb_static_value_t value = {0};
@@ -1963,7 +1973,6 @@ n00bb_call_literal_argument(parse_grammar_t *grammar,
                                         state, &value)
         && value.kind == N00BB_STATIC_VALUE_STRING;
     if (found) *out = value.as.string;
-    core_list_free(positional);
     return found;
 }
 

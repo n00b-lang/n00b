@@ -508,6 +508,10 @@ func shout() {
     __fd_write(2, "")
 }
 
+func quiet_clock() -> uint {
+    return __unobserved(sys.clock.now_ns())
+}
+
 const square_effects: u64 = __function_effects(ref effects_square)
 const square_is_quiet: bool = !sys.effects.has_effect(square_effects,
                                                       sys.effects.may_io)
@@ -534,6 +538,9 @@ func function_effects_check() {
                                    sys.effects.reads_env)
     require sys.effects.has_effect(__function_effects(ref sys.clock.now_ns),
                                    sys.effects.reads_clock)
+    require !sys.effects.has_effect(__function_effects(ref quiet_clock),
+                                    sys.effects.reads_clock)
+    require quiet_clock() != 0
     let allocating = __function_effects(ref effects_allocate)
     require sys.effects.has_effect(allocating, sys.effects.may_allocate)
     require !sys.effects.has_effect(allocating, sys.effects.reads_clock)

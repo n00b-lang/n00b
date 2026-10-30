@@ -239,7 +239,7 @@ func any_pending(heap: Ref[internal.gc.core.Heap]) -> bool {
 }
 
 func handshake(heap: Ref[internal.gc.core.Heap], kind: internal.gc.core.Handshake_Kind) {
-    let started: u64  = __runtime_now_ns()
+    let started: u64  = __unobserved(__os_now_ns())
     var claimed: uint = 0
 
     internal.gc.sync.ticket_lock(ref heap.lock)
@@ -276,7 +276,7 @@ func handshake(heap: Ref[internal.gc.core.Heap], kind: internal.gc.core.Handshak
     let limit: u64 = cast[u64](heap.cfg.handshake_timeout_us) * 1000
     while true {
         let seq:    u32 = internal.gc.sync.event_enter(ref heap.hs_answered)
-        let waited: u64 = __runtime_now_ns() - started
+        let waited: u64 = __unobserved(__os_now_ns()) - started
         if !any_pending(heap) or waited >= limit {
             internal.gc.sync.event_leave(ref heap.hs_answered)
             break
