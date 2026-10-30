@@ -768,9 +768,184 @@ test_points_to_view(void)
     done(&r);
 }
 
+static void
+render_splace(core_buffer_t *out, const ir_func_t *f, const ir_splace_t *place)
+{
+    if (place->kind == IR_SPLACE_PARAM && place->param < f->n_params)
+        core_buffer_append_string(out, f->params[place->param]->name);
+    else if (place->kind == IR_SPLACE_HEAP)
+        core_buffer_puts(out, "heap");
+    else if (place->global)
+        core_buffer_append_string(out, place->global->name);
+    else
+        core_buffer_puts(out, "?");
+}
+
+static void
+render_input(core_buffer_t *out, const ir_func_t *f, const ir_sinput_t *input)
+{
+    switch (input->kind) {
+    case IR_SINPUT_VALUE:
+        core_buffer_append_string(out, f->params[input->param]->name);
+        break;
+    case IR_SINPUT_REFERENT:
+        core_buffer_putc(out, '*');
+        core_buffer_append_string(out, f->params[input->param]->name);
+        break;
+    case IR_SINPUT_PLACE:
+        render_splace(out, f, &input->place);
+        break;
+    case IR_SINPUT_UNKNOWN:
+        core_buffer_putc(out, '?');
+        break;
+    case IR_SINPUT_CALL:
+        core_buffer_puts(out, "call ");
+        core_buffer_append_string(out, input->callee);
+        break;
+    }
+}
+
+static core_string_t
+render_inputs(const ir_func_t *f, const ir_summary_t *summary,
+              uint32_t first, uint32_t count)
+{
+    const uint32_t *deps   = ir_summary_dependences(summary);
+    core_string_t  *inputs = core_alloc_array(core_string_t, count + 1);
+    for (uint32_t k = 0; k < count; k++) {
+        core_buffer_t *one = core_buffer_empty();
+        render_input(one, f, ir_summary_input_at(summary, deps[first + k]));
+        inputs[k] = core_buffer_take_string(one);
+    }
+    qsort(inputs, count, sizeof(*inputs), compare_lines);
+    core_buffer_t *out = core_buffer_empty();
+    for (uint32_t k = 0; k < count; k++) {
+        if (k) core_buffer_putc(out, ' ');
+        core_buffer_append_string(out, inputs[k]);
+    }
+    core_free(inputs);
+    return core_buffer_take_string(out);
+}
+
+static core_string_t
+dependences_of(run_t *r, core_string_t name)
+{
+    ir_func_t    *f       = r->m ? ir_func_find(r->m, name) : nullptr;
+    ir_summary_t *summary = f && r->summaries
+        ? ir_summary_of(r->summaries, f) : nullptr;
+    if (!summary) return S("<no summary>");
+    uint32_t       count = ir_summary_output_count(summary);
+    core_string_t *lines = core_alloc_array(core_string_t, count + 1);
+    for (uint32_t o = 0; o < count; o++) {
+        const ir_soutput_t *output = ir_summary_output_at(summary, o);
+        core_buffer_t      *line   = core_buffer_empty();
+        if (output->kind == IR_SOUTPUT_RESULT)
+            core_buffer_puts(line, "result");
+        else if (output->kind == IR_SOUTPUT_FAILURE)
+            core_buffer_puts(line, "failure");
+        else
+            render_splace(line, f, &output->place);
+        core_buffer_puts(line, " <- ");
+        core_buffer_append_string(line, render_inputs(
+            f, summary, output->data_first, output->data_count));
+        core_buffer_puts(line, " | ");
+        core_buffer_append_string(line, render_inputs(
+            f, summary, output->control_first, output->control_count));
+        lines[o] = core_buffer_take_string(line);
+    }
+    qsort(lines, count, sizeof(*lines), compare_lines);
+    core_buffer_t *out = core_buffer_empty();
+    for (uint32_t o = 0; o < count; o++) {
+        if (o) core_buffer_puts(out, "; ");
+        core_buffer_append_string(out, lines[o]);
+    }
+    core_free(lines);
+    return core_buffer_take_string(out);
+}
+
+static void
+expect_dependences(run_t *r, const char *what, core_string_t function,
+                   core_string_t expected)
+{
+    core_string_t actual = dependences_of(r, function);
+    bool same = core_string_eq(actual, expected);
+    check(what, same);
+    if (!same)
+        fprintf(stderr, "    expected: %.*s\n    actual:   %.*s\n",
+                (int)expected.u8_bytes, expected.data,
+                (int)actual.u8_bytes, actual.data);
+}
+
+static void
+test_value_dependences(void)
+{
+    run_t r = load(MOD(TYPES
+        "  func @sum(%a: i32, %b: i32) -> i32 {\n"
+        "    block entry:\n"
+        "      %s: i32 = add trap %a, %b\n"
+        "      return %s\n"
+        "  }\n"
+        "  func @deref(%p: ref[R]) -> i32 {\n"
+        "    block entry:\n"
+        "      %x: ref[i32] = field %p, \"x\"\n"
+        "      %v: i32 = load %x\n"
+        "      return %v\n"
+        "  }\n"
+        "  func @choose(%c: bool, %a: i32) -> i32 {\n"
+        "    block entry:\n"
+        "      branch %c, left, right\n"
+        "    block left:\n"
+        "      %one: i32 = const 1\n"
+        "      jump join\n"
+        "    block right:\n"
+        "      jump join\n"
+        "    block join:\n"
+        "      %v: i32 = phi [left: %one], [right: %a]\n"
+        "      return %v\n"
+        "  }\n"
+        "  func @set(%p: ref[R], %a: i32) -> nil {\n"
+        "    block entry:\n"
+        "      %x: ref[i32] = field %p, \"x\"\n"
+        "      store %x, %a\n"
+        "      %none: nil = nil\n"
+        "      return %none\n"
+        "  }\n"
+        "  func @through_callee(%a: i32) -> i32 {\n"
+        "    block entry:\n"
+        "      %o: ref[R] = alloc R\n"
+        "      %none: nil = call @set, %o, %a\n"
+        "      %x: ref[i32] = field %o, \"x\"\n"
+        "      %v: i32 = load %x\n"
+        "      return %v\n"
+        "  }\n"
+        "  func @through_local(%a: i32) -> i32 {\n"
+        "    local $s: V\n"
+        "    block entry:\n"
+        "      %addr: ref[V] = address.of $s\n"
+        "      %n: ref[i32] = field %addr, \"n\"\n"
+        "      store %n, %a\n"
+        "      %c: V = copy $s\n"
+        "      %v: i32 = extract %c, \"n\"\n"
+        "      return %v\n"
+        "  }\n"));
+    expect_dependences(&r, "a result depends on the parameters it combines",
+                       S("sum"), S("result <- a b | "));
+    expect_dependences(&r, "a loaded result depends on the referent and "
+                       "the address", S("deref"), S("result <- *p p | "));
+    expect_dependences(&r, "today a phi does not record the branch that "
+                       "chose it (D6)", S("choose"), S("result <- a | "));
+    expect_dependences(&r, "a written place depends on the stored value",
+                       S("set"), S("p <- a p | ; result <-  | "));
+    expect_dependences(&r, "a value written by a callee reaches the result",
+                       S("through_callee"), S("result <- a heap | "));
+    expect_dependences(&r, "today a value stored into a local's field is "
+                       "lost (D1)", S("through_local"), S("result <-  | "));
+    done(&r);
+}
+
 int
 main(void)
 {
+    test_value_dependences();
     test_scalar_globals();
     test_nested_construction();
     test_fresh_construction();

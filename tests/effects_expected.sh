@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+strip_outputs=yes
+if [ "$1" = --with-outputs ]; then
+    strip_outputs=
+    shift
+fi
 compiler=$1
 program=$2
 expected=$3
@@ -14,8 +19,8 @@ if ! "$compiler" check --effects-of "$names" "$program" \
     cat "$tmp/errors" >&2
     exit 1
 fi
-grep -v -e '^  trap ' -e '^  output ' -e '^  why ' "$tmp/report" \
-    >"$tmp/actual" || true
+grep -v -e '^  trap ' -e '^  why ' ${strip_outputs:+-e '^  output '} \
+    "$tmp/report" >"$tmp/actual" || true
 diff -u "$expected" "$tmp/actual" >&2
 for pattern do
     if ! grep -Eq "$pattern" "$tmp/report"; then
