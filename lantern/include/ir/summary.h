@@ -273,14 +273,10 @@ typedef struct {
 core_list_decl(ir_spath_t);
 typedef core_list_t(ir_spath_t) ir_spath_list_t;
 
-typedef struct {
-    ir_spath_t to;
-    ir_spath_t from;
-} ir_sstore_t;
-
 typedef enum : uint8_t {
     IR_SFLOW_DATA,
     IR_SFLOW_CONTROL,
+    IR_SFLOW_ALIAS,
 } ir_sflow_kind_t;
 
 typedef enum : uint8_t {
@@ -304,16 +300,7 @@ bool              ir_summary_path_inline(const ir_func_t *function,
 void              ir_summary_merged_paths(const ir_summary_t *summary,
                                           ir_spath_list_t *into);
 void              ir_spath_list_release(ir_spath_list_t *paths);
-uint32_t           ir_summary_result_count(const ir_summary_t *summary);
-const ir_sstore_t *ir_summary_result_at(const ir_summary_t *summary,
-                                        uint32_t index);
-void               ir_summary_add_result(ir_summary_t *summary,
-                                         const ir_spath_t *to,
-                                         const ir_spath_t *from);
-uint32_t           ir_summary_store_count(const ir_summary_t *summary);
-const ir_sstore_t *ir_summary_store_at(const ir_summary_t *summary,
-                                       uint32_t index);
-int                ir_spath_compare(const ir_spath_t *a, const ir_spath_t *b);
+int               ir_spath_compare(const ir_spath_t *a, const ir_spath_t *b);
 
 uint32_t          ir_summary_flow_count(const ir_summary_t *summary,
                                         ir_sflow_table_t table);

@@ -701,24 +701,33 @@ derive_stores(const ir_func_t *function, const ir_summary_t *summary,
 {
     uint64_t heap[N00BB_FLOW_KINDS] = {0};
     bool escaped = false, leaked = false;
-    uint32_t count = ir_summary_store_count(summary);
-    for (uint32_t i = 0; i < count; i++) {
-        const ir_sstore_t *store = ir_summary_store_at(summary, i);
-        if (store->to.root == IR_SPLACE_HEAP)
-            add_source(heap, function, &store->from);
-    }
-    for (uint32_t i = 0; i < count; i++) {
-        const ir_sstore_t *store = ir_summary_store_at(summary, i);
-        const ir_spath_t *to = &store->to, *from = &store->from;
-        bool leak = external_root(to->root);
-        if (!leak && to->root != IR_SPLACE_PARAM) continue;
-        if (to->root == IR_SPLACE_PARAM && from->root == IR_SPLACE_PARAM
-            && from->param == to->param) continue;
-        add_source(out->escapes, function, from);
-        if (leak) add_source(out->leaks, function, from);
-        escaped |= from->root == IR_SPLACE_HEAP;
-        leaked |= leak && from->root == IR_SPLACE_HEAP;
-    }
+    uint32_t dests   = ir_summary_flow_count(summary, IR_SFLOW_STORES);
+    uint32_t sources = ir_summary_flow_source_count(summary, IR_SFLOW_STORES);
+    for (int pass = 0; pass < 2; pass++)
+        for (uint32_t d = 0; d < dests; d++)
+            for (uint32_t s = 0; s < sources; s++) {
+                if (!ir_summary_flow_has(summary, IR_SFLOW_STORES, d, s,
+                                         IR_SFLOW_ALIAS)) continue;
+                const ir_spath_t *to   = ir_summary_flow_to(summary,
+                                                            IR_SFLOW_STORES,
+                                                            d);
+                const ir_spath_t *from = ir_summary_flow_source(
+                    summary, IR_SFLOW_STORES, s);
+                if (!pass) {
+                    if (to->root == IR_SPLACE_HEAP)
+                        add_source(heap, function, from);
+                    continue;
+                }
+                bool leak = external_root(to->root);
+                if (!leak && to->root != IR_SPLACE_PARAM) continue;
+                if (to->root == IR_SPLACE_PARAM
+                    && from->root == IR_SPLACE_PARAM
+                    && from->param == to->param) continue;
+                add_source(out->escapes, function, from);
+                if (leak) add_source(out->leaks, function, from);
+                escaped |= from->root == IR_SPLACE_HEAP;
+                leaked |= leak && from->root == IR_SPLACE_HEAP;
+            }
     for (int kind = 0; kind < N00BB_FLOW_KINDS; kind++) {
         if (escaped) out->escapes[kind] |= heap[kind];
         if (leaked) out->leaks[kind] |= heap[kind];

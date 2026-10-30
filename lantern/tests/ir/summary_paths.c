@@ -124,17 +124,36 @@ render_flows(const ir_func_t *f, const ir_summary_t *summary,
     for (uint32_t d = 0; d < ir_summary_flow_count(summary, table); d++)
         for (uint32_t s = 0; s < ir_summary_flow_source_count(summary, table);
              s++)
-            for (int k = 0; k < 2; k++) {
-                ir_sflow_kind_t kind = k ? IR_SFLOW_CONTROL : IR_SFLOW_DATA;
+            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_ALIAS; kind++) {
                 if (!ir_summary_flow_has(summary, table, d, s, kind)) continue;
                 const ir_spath_t *to   = ir_summary_flow_to(summary, table, d);
                 const ir_spath_t *from = ir_summary_flow_source(summary, table,
                                                                 s);
-                char mark = k ? '^' : '~';
+                char mark = kind == IR_SFLOW_DATA ? '~'
+                          : kind == IR_SFLOW_CONTROL ? '^'
+                          : table == IR_SFLOW_RESULTS ? '=' : '-';
                 core_list_push(*lines, table == IR_SFLOW_RESULTS
                     ? render_result(f, to, from, mark)
                     : render_store(f, to, from, mark));
             }
+}
+
+static bool
+only_store(const ir_summary_t *summary, const ir_spath_t **to,
+           const ir_spath_t **from)
+{
+    uint32_t found = 0;
+    for (uint32_t d = 0;
+         summary && d < ir_summary_flow_count(summary, IR_SFLOW_STORES); d++)
+        for (uint32_t s = 0;
+             s < ir_summary_flow_source_count(summary, IR_SFLOW_STORES); s++)
+            if (ir_summary_flow_has(summary, IR_SFLOW_STORES, d, s,
+                                    IR_SFLOW_ALIAS)) {
+                *to   = ir_summary_flow_to(summary, IR_SFLOW_STORES, d);
+                *from = ir_summary_flow_source(summary, IR_SFLOW_STORES, s);
+                found++;
+            }
+    return found == 1;
 }
 
 static core_string_t
@@ -147,15 +166,6 @@ paths_of(run_t *r, core_string_t name)
     core_list_t(core_string_t) lines = core_list_new(core_string_t);
     for (uint32_t i = 0; i < ir_summary_path_count(summary); i++)
         core_list_push(lines, render_access(f, ir_summary_path_at(summary, i)));
-    for (uint32_t i = 0; i < ir_summary_result_count(summary); i++) {
-        const ir_sstore_t *result = ir_summary_result_at(summary, i);
-        core_list_push(lines, render_result(f, &result->to, &result->from,
-                                            '='));
-    }
-    for (uint32_t i = 0; i < ir_summary_store_count(summary); i++) {
-        const ir_sstore_t *store = ir_summary_store_at(summary, i);
-        core_list_push(lines, render_store(f, &store->to, &store->from, '-'));
-    }
     render_flows(f, summary, IR_SFLOW_RESULTS, &lines);
     render_flows(f, summary, IR_SFLOW_STORES, &lines);
     qsort(lines.data, lines.len, sizeof(*lines.data), compare_lines);
@@ -605,22 +615,20 @@ test_callee_stores(void)
         "  }\n"));
     ir_func_t *link = ir_func_find(r.m, S("link"));
     ir_summary_t *summary = link ? ir_summary_of(r.summaries, link) : nullptr;
-    const ir_sstore_t *store = summary && ir_summary_store_count(summary) == 1
-        ? ir_summary_store_at(summary, 0) : nullptr;
+    const ir_spath_t *to = nullptr, *from = nullptr;
     check("a store summary names where an argument was put",
-          store && store->to.root == IR_SPLACE_PARAM && store->to.param == 0
-              && store->to.depth == 1
-              && core_string_eq(store->to.steps[0], S("next"))
-              && store->from.root == IR_SPLACE_PARAM
-              && store->from.param == 1 && !store->from.depth);
+          only_store(summary, &to, &from) && to->root == IR_SPLACE_PARAM
+              && to->param == 0 && to->depth == 1
+              && core_string_eq(to->steps[0], S("next"))
+              && from->root == IR_SPLACE_PARAM && from->param == 1
+              && !from->depth);
     expect(&r, "what a callee stores into a local is followed", S("f"),
            S("r p.x; ~ p.x"));
     ir_func_t *g = ir_func_find(r.m, S("g"));
     summary = g ? ir_summary_of(r.summaries, g) : nullptr;
-    store = summary && ir_summary_store_count(summary) == 1
-        ? ir_summary_store_at(summary, 0) : nullptr;
     check("and a callee's store is restated in the caller's terms",
-          store && store->to.param == 0 && store->from.param == 1);
+          only_store(summary, &to, &from) && to->param == 0
+              && from->param == 1);
     done(&r);
 }
 

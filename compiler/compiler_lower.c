@@ -21992,12 +21992,14 @@ static void dump_spath(const ir_func_t *function, const ir_summary_t *summary,
 static void
 dump_flows(const ir_func_t *function, const ir_summary_t *summary)
 {
-    static const ir_sflow_kind_t kinds[] = {IR_SFLOW_DATA, IR_SFLOW_CONTROL};
+    static const ir_sflow_kind_t kinds[] = {IR_SFLOW_ALIAS, IR_SFLOW_DATA,
+                                            IR_SFLOW_CONTROL};
+    static const char *const labels[] = {"", "data ", "control "};
     for (int t = 0; t < 2; t++) {
         ir_sflow_table_t table = t ? IR_SFLOW_STORES : IR_SFLOW_RESULTS;
         for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++) {
             const ir_spath_t *to = ir_summary_flow_to(summary, table, f);
-            for (int k = 0; k < 2; k++)
+            for (int k = 0; k < 3; k++)
                 for (uint32_t s = 0;
                      s < ir_summary_flow_source_count(summary, table); s++) {
                     if (!ir_summary_flow_has(summary, table, f, s, kinds[k]))
@@ -22011,7 +22013,7 @@ dump_flows(const ir_func_t *function, const ir_summary_t *summary)
                         dump_spath(function, summary, to);
                         fputs(" <- ", stdout);
                     }
-                    fputs(k ? "control " : "data ", stdout);
+                    fputs(labels[k], stdout);
                     dump_spath(function, summary, from);
                     if (from->flags & IR_SPATH_ROOT) fputs(" root", stdout);
                     fputc('\n', stdout);
@@ -22074,16 +22076,7 @@ collect_output(const ir_func_t *function, const ir_summary_t *summary,
                ir_sflow_table_t table, const ir_spath_t *to,
                text_list_t *data, text_list_t *control)
 {
-    bool     results = table == IR_SFLOW_RESULTS;
-    uint32_t count   = results ? ir_summary_result_count(summary)
-                               : ir_summary_store_count(summary);
-    for (uint32_t i = 0; i < count; i++) {
-        const ir_sstore_t *pair = results ? ir_summary_result_at(summary, i)
-                                          : ir_summary_store_at(summary, i);
-        bool same = results ? pair->to.output == to->output
-                            : !ir_spath_compare(&pair->to, to);
-        if (same) add_text(data, function, summary, &pair->from);
-    }
+    bool results = table == IR_SFLOW_RESULTS;
     for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++) {
         const ir_spath_t *dest = ir_summary_flow_to(summary, table, f);
         if (results ? dest->output != to->output
@@ -22092,7 +22085,8 @@ collect_output(const ir_func_t *function, const ir_summary_t *summary,
         for (uint32_t s = 0; s < ir_summary_flow_source_count(summary, table);
              s++) {
             const ir_spath_t *from = ir_summary_flow_source(summary, table, s);
-            if (ir_summary_flow_has(summary, table, f, s, IR_SFLOW_DATA))
+            if (ir_summary_flow_has(summary, table, f, s, IR_SFLOW_DATA)
+                || ir_summary_flow_has(summary, table, f, s, IR_SFLOW_ALIAS))
                 add_text(data, function, summary, from);
             else if (ir_summary_flow_has(summary, table, f, s,
                                          IR_SFLOW_CONTROL))
@@ -22147,11 +22141,6 @@ reader_table(const ir_func_t *function, const ir_summary_t *summary,
     bool            results = table == IR_SFLOW_RESULTS;
     ir_spath_list_t dests   = core_list_new(ir_spath_t);
     if (results) core_list_push(dests, (ir_spath_t){0});
-    uint32_t count = results ? ir_summary_result_count(summary)
-                             : ir_summary_store_count(summary);
-    for (uint32_t i = 0; i < count; i++)
-        core_list_push(dests, results ? ir_summary_result_at(summary, i)->to
-                                      : ir_summary_store_at(summary, i)->to);
     for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++)
         core_list_push(dests, *ir_summary_flow_to(summary, table, f));
     if (results)
@@ -22259,24 +22248,6 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         fputc('\n', stdout);
     }
     ir_spath_list_release(&merged);
-    for (uint32_t i = 0; !for_reader && i < ir_summary_result_count(summary);
-         i++) {
-        const ir_sstore_t *result = ir_summary_result_at(summary, i);
-        fprintf(stdout, "  result %u ", result->to.output);
-        dump_spath(function, summary, &result->from);
-        if (result->from.flags & IR_SPATH_ROOT) fputs(" root", stdout);
-        fputc('\n', stdout);
-    }
-    for (uint32_t i = 0; !for_reader && i < ir_summary_store_count(summary);
-         i++) {
-        const ir_sstore_t *store = ir_summary_store_at(summary, i);
-        fputs("  store ", stdout);
-        dump_spath(function, summary, &store->to);
-        fputs(" <- ", stdout);
-        dump_spath(function, summary, &store->from);
-        if (store->from.flags & IR_SPATH_ROOT) fputs(" root", stdout);
-        fputc('\n', stdout);
-    }
     if (!for_reader) dump_flows(function, summary);
     for (uint32_t p = 0; p < function->n_params; p++) {
         uint8_t escape = ir_summary_param_escape(summary, p);
@@ -22322,10 +22293,18 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         fputs("  returns fresh\n", stdout);
     else if (returned.kind == IR_SRETURN_UNKNOWN) {
         text_list_t sources = core_list_new(core_string_t);
-        for (uint32_t r = 0; r < ir_summary_result_count(summary); r++) {
-            const ir_sstore_t *pair = ir_summary_result_at(summary, r);
-            if (!pair->to.output && !pair->to.depth)
-                add_text(&sources, function, summary, &pair->from);
+        for (uint32_t f = 0;
+             f < ir_summary_flow_count(summary, IR_SFLOW_RESULTS); f++) {
+            const ir_spath_t *to = ir_summary_flow_to(summary,
+                                                      IR_SFLOW_RESULTS, f);
+            for (uint32_t s = 0; !to->output && !to->depth
+                 && s < ir_summary_flow_source_count(summary,
+                                                     IR_SFLOW_RESULTS); s++)
+                if (ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
+                                        IR_SFLOW_ALIAS))
+                    add_text(&sources, function, summary,
+                             ir_summary_flow_source(summary,
+                                                    IR_SFLOW_RESULTS, s));
         }
         qsort(sources.data, sources.len, sizeof(core_string_t),
               compare_texts);
@@ -22613,17 +22592,27 @@ json_function(core_buffer_t *out, n00bb_link_analysis_t *analysis,
     core_buffer_putc(out, ']');
     json_bool(out, "returns_fresh", ir_summary_returns_fresh(summary), true);
     core_buffer_puts(out, ",\"returns\":[");
-    for (uint32_t r = 0; r < ir_summary_result_count(summary); r++) {
-        const ir_sstore_t *result = ir_summary_result_at(summary, r);
-        core_buffer_t at = {0};
-        steps_text(&at, &result->to);
-        core_buffer_printf(out, "%s{\"output\":%u,\"at\":", r ? "," : "",
-                           (unsigned)result->to.output);
-        core_buffer_append_quoted(out, core_buffer_string(&at));
-        core_buffer_release(&at);
-        core_buffer_putc(out, ',');
-        json_path(out, function, summary, &result->from);
-        core_buffer_putc(out, '}');
+    bool first = true;
+    for (uint32_t f = 0; f < ir_summary_flow_count(summary, IR_SFLOW_RESULTS);
+         f++) {
+        const ir_spath_t *to = ir_summary_flow_to(summary, IR_SFLOW_RESULTS, f);
+        for (uint32_t s = 0;
+             s < ir_summary_flow_source_count(summary, IR_SFLOW_RESULTS);
+             s++) {
+            if (!ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
+                                     IR_SFLOW_ALIAS)) continue;
+            core_buffer_t at = {0};
+            steps_text(&at, to);
+            core_buffer_printf(out, "%s{\"output\":%u,\"at\":",
+                               first ? "" : ",", (unsigned)to->output);
+            first = false;
+            core_buffer_append_quoted(out, core_buffer_string(&at));
+            core_buffer_release(&at);
+            core_buffer_putc(out, ',');
+            json_path(out, function, summary,
+                      ir_summary_flow_source(summary, IR_SFLOW_RESULTS, s));
+            core_buffer_putc(out, '}');
+        }
     }
     core_buffer_putc(out, ']');
     json_why(out, analysis, summary);

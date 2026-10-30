@@ -341,12 +341,6 @@ add_result_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
     if (returned.kind == IR_SRETURN_PARAM)
         fact(facts, REL_RETURN_ALIAS, symbol, integer(facts, returned.param),
              0);
-    for (uint32_t r = 0; r < ir_summary_result_count(summary); r++) {
-        const ir_sstore_t *result = ir_summary_result_at(summary, r);
-        if (!result->to.output && result->from.root == IR_SPLACE_PARAM)
-            fact(facts, REL_DEPENDENCE, symbol,
-                 integer(facts, result->from.param), 0);
-    }
     uint32_t sources = ir_summary_flow_source_count(summary,
                                                     IR_SFLOW_RESULTS);
     for (uint32_t f = 0; f < ir_summary_flow_count(summary, IR_SFLOW_RESULTS);
@@ -356,8 +350,10 @@ add_result_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
             const ir_spath_t *source = ir_summary_flow_source(
                 summary, IR_SFLOW_RESULTS, s);
             if (source->root == IR_SPLACE_PARAM
-                && ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
-                                       IR_SFLOW_DATA))
+                && (ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
+                                        IR_SFLOW_DATA)
+                    || ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
+                                           IR_SFLOW_ALIAS)))
                 fact(facts, REL_DEPENDENCE, symbol,
                      integer(facts, source->param), 0);
         }

@@ -84,9 +84,11 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
             (ir_sreturn_t){.kind = native->returns, .param = 0});
         for (uint32_t p = 0; p < 8; p++)
             if (native->holds & N00BB_AXIOM_PARAM(p))
-                ir_summary_add_result(summary, &(ir_spath_t){0},
+                ir_summary_add_flow(summary, IR_SFLOW_RESULTS,
+                    &(ir_spath_t){0},
                     &(ir_spath_t){.root = IR_SPLACE_PARAM, .param = p,
-                                  .flags = IR_SPATH_DEEP});
+                                  .flags = IR_SPATH_DEEP},
+                    IR_SFLOW_ALIAS);
         native_flows(summary, function, native->effects, native->reads,
                      native->writes);
         return summary;
