@@ -649,6 +649,125 @@ test_scalar_globals(void)
     done(&r);
 }
 
+static const ir_value_t *
+value_named(const ir_func_t *f, core_string_t name)
+{
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (in->dest && core_string_eq(in->dest->name, name))
+                return in->dest;
+        }
+    return nullptr;
+}
+
+static const ir_instr_t *
+instr_of(const ir_func_t *f, ir_op_t op)
+{
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++)
+            if (f->blocks[b]->instrs[i]->op == op)
+                return f->blocks[b]->instrs[i];
+    return nullptr;
+}
+
+static bool
+names_param(const ir_pto_list_t *objects, uint32_t param)
+{
+    for (size_t i = 0; i < objects->len; i++)
+        if ((objects->data[i].kind == IR_PTO_PARAM
+             || objects->data[i].kind == IR_PTO_CONTENTS)
+            && objects->data[i].param == param)
+            return true;
+    return false;
+}
+
+static ir_pt_fresh_t
+copies_are_fresh(void *context, const ir_instr_t *in)
+{
+    (void)context;
+    return in->op == IR_OP_COPY ? IR_PT_FRESH_HOLDING : IR_PT_FRESH_NONE;
+}
+
+static void
+test_points_to_view(void)
+{
+    run_t r = load(MOD(TYPES
+        "  func @set(%r: ref[R]) -> nil {\n"
+        "    block entry:\n"
+        "      %x: ref[i32] = field %r, \"x\"\n"
+        "      %one: i32 = const 1\n"
+        "      store %x, %one\n"
+        "      %none: nil = nil\n"
+        "      return %none\n"
+        "  }\n"
+        "  func @through(%p: ref[R], %q: ref[R]) -> nil {\n"
+        "    block entry:\n"
+        "      %slot: ref[ref[R]] = alloc ref[R]\n"
+        "      store %slot, %p\n"
+        "      %held: ref[R] = load %slot\n"
+        "      %wrapped: ref[R] = copy %q\n"
+        "      %r: nil = call @set, %held\n"
+        "      return %r\n"
+        "  }\n"
+        "  func @publish(%out: ref[ref[R]]) -> nil {\n"
+        "    block entry:\n"
+        "      %fresh: ref[R] = alloc R\n"
+        "      store %out, %fresh\n"
+        "      %none: nil = nil\n"
+        "      return %none\n"
+        "  }\n"));
+    ir_func_t *through = r.m ? ir_func_find(r.m, S("through")) : nullptr;
+    ir_func_t *publish = r.m ? ir_func_find(r.m, S("publish")) : nullptr;
+    check("the view fixtures load", through && publish);
+    if (!through || !publish) {
+        done(&r);
+        return;
+    }
+    const ir_points_to_hooks_t hooks = {.fresh = copies_are_fresh};
+    ir_points_to_t *view = ir_points_to_new(r.summaries, through, &hooks);
+    check("the view solves", view != nullptr);
+    ir_pto_list_t objects = core_list_new(ir_pto_t);
+    ir_points_to_value(view, nullptr, value_named(through, S("held")),
+                       &objects);
+    check("a value loaded from a slot names the stored parameter",
+          names_param(&objects, 0) && !names_param(&objects, 1));
+    objects.len = 0;
+    ir_points_to_loaded(view, nullptr, value_named(through, S("slot")),
+                        &objects);
+    check("loading through the slot reaches the same parameter",
+          names_param(&objects, 0));
+    objects.len = 0;
+    const ir_value_t *wrapped = value_named(through, S("wrapped"));
+    ir_points_to_value(view, nullptr, wrapped, &objects);
+    check("a fresh copy is its own object",
+          objects.len == 1 && objects.data[0].kind == IR_PTO_STORAGE
+              && objects.data[0].instr == wrapped->def);
+    ir_points_to_reach(view, &objects, false);
+    check("which holds what it copied", names_param(&objects, 1));
+    objects.len = 0;
+    check("a known callee's writes map into the caller",
+          ir_points_to_call_writes(view, instr_of(through, IR_OP_CALL), 0,
+                                   &objects)
+              && names_param(&objects, 0) && !names_param(&objects, 1));
+    objects.len = 0;
+    check("a trusted argument's writes are left out",
+          ir_points_to_call_writes(view, instr_of(through, IR_OP_CALL), 1,
+                                   &objects)
+              && !names_param(&objects, 0));
+    ir_points_to_free(view);
+    view = ir_points_to_new(r.summaries, publish, nullptr);
+    ir_pto_t fresh = {.kind  = IR_PTO_STORAGE,
+                      .instr = instr_of(publish, IR_OP_ALLOC)};
+    const ir_instr_t *where = nullptr;
+    check("a stored object escapes at the store",
+          view && ir_points_to_escapes(view, &fresh, &where)
+              && where == instr_of(publish, IR_OP_STORE));
+    ir_points_to_free(view);
+    core_list_free(objects);
+    done(&r);
+}
+
 int
 main(void)
 {
@@ -668,5 +787,6 @@ main(void)
     test_cycles_widen();
     test_globals_and_elements();
     test_returned_fresh_objects();
+    test_points_to_view();
     return report("IR summary paths");
 }

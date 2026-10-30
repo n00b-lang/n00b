@@ -349,4 +349,71 @@ uint8_t ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
                                 const ir_splace_t *place, uint8_t entry,
                                 const ir_instr_t *in);
 
+typedef enum {
+    IR_PT_FRESH_NONE,
+    IR_PT_FRESH_EMPTY,
+    IR_PT_FRESH_HOLDING,
+} ir_pt_fresh_t;
+
+typedef struct {
+    void          *context;
+    ir_pt_fresh_t (*fresh)(void *context, const ir_instr_t *in);
+    bool           callee_globals_unknown;
+} ir_points_to_hooks_t;
+
+typedef enum {
+    IR_PTO_STORAGE,
+    IR_PTO_PARAM,
+    IR_PTO_CONTENTS,
+    IR_PTO_GLOBAL,
+    IR_PTO_UNKNOWN,
+} ir_pto_kind_t;
+
+typedef struct {
+    ir_pto_kind_t      kind;
+    uint32_t           param;
+    const ir_instr_t  *instr;
+    const ir_value_t  *value;
+    const ir_local_t  *local;
+    const ir_global_t *global;
+} ir_pto_t;
+
+core_list_decl(ir_pto_t);
+typedef core_list_t(ir_pto_t) ir_pto_list_t;
+
+typedef struct ir_points_to_t ir_points_to_t;
+
+typedef void (*ir_points_to_holder_fn)(void *context, const ir_value_t *value,
+                                       const ir_local_t *local);
+
+ir_points_to_t   *ir_points_to_new(ir_summaries_t *summaries,
+                                   const ir_func_t *function,
+                                   const ir_points_to_hooks_t *hooks);
+void              ir_points_to_free(ir_points_to_t *points_to);
+void              ir_points_to_value(ir_points_to_t *points_to,
+                                     const ir_instr_t *at,
+                                     const ir_value_t *value,
+                                     ir_pto_list_t *into);
+void              ir_points_to_loaded(ir_points_to_t *points_to,
+                                      const ir_instr_t *at,
+                                      const ir_value_t *value,
+                                      ir_pto_list_t *into);
+void              ir_points_to_reach(ir_points_to_t *points_to,
+                                     ir_pto_list_t *objects, bool contents);
+bool              ir_points_to_call_writes(ir_points_to_t *points_to,
+                                           const ir_instr_t *call,
+                                           uint64_t trusted,
+                                           ir_pto_list_t *into);
+bool              ir_points_to_escapes(ir_points_to_t *points_to,
+                                       const ir_pto_t *object,
+                                       const ir_instr_t **where);
+void              ir_points_to_holders(ir_points_to_t *points_to,
+                                       const ir_pto_t *object,
+                                       ir_points_to_holder_fn holder,
+                                       void *context);
+bool              ir_pto_eq(const ir_pto_t *a, const ir_pto_t *b);
+bool              ir_pto_add(ir_pto_list_t *objects, ir_pto_t object);
+bool              ir_pto_has(const ir_pto_list_t *objects,
+                             const ir_pto_t *object);
+
 #endif

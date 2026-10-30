@@ -26517,7 +26517,6 @@ report_view_candidates(parse_grammar_t *grammar,
                 report_view_candidate(unit, symbol, parameter);
             }
             core_list_free(parameters);
-            n00bb_flow_release(&flow);
         }
     core_list_free(scopes);
     core_list_free(taken);
