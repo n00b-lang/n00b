@@ -1,0 +1,13 @@
+func narrow(n: u8) -> u8 {
+    return n
+}
+
+func start() -> nil {
+    var total: u8 = 0
+    for n in [1, 2, 70000] {
+        total += narrow(n)
+    }
+    if total == 0 {
+        return
+    }
+}

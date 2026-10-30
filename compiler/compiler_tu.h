@@ -305,7 +305,8 @@ typedef struct n00bb_static_value {
     } as;
 } n00bb_static_value_t;
 bool n00bb_integer_type_promotes_to(th_type *source, th_type *target);
-bool n00bb_loop_item_converts(th_ctx *types, th_type *item, th_type *binding);
+bool n00bb_check_loop_item_conversions(parse_grammar_t *grammar,
+                                       core_translation_unit_t *unit);
 th_type *n00bb_common_integer_type(th_ctx *types, th_type *left,
                                    th_type *right);
 uint64_t n00bb_shift_receiver_width(th_type *type);

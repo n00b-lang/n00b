@@ -2868,9 +2868,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
                            "could not destructure the iteration item");
             return false;
         }
-        th_ctx *types = ir_module_types(context->module);
-        if (local && !ir_type_eq(context->module, value->type, local->type)
-            && n00bb_loop_item_converts(types, value->type, local->type))
+        if (local && !ir_type_eq(context->module, value->type, local->type))
             value = n00bb_materialize(context, binding->decl_node, value,
                                       local->type, span);
         if (!value) {
