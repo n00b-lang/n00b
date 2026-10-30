@@ -324,6 +324,12 @@ ir_func_abcd(ir_func_t *f)
     return slot->abcd;
 }
 
+uint64_t
+ir_func_fingerprint(const ir_func_t *f)
+{
+    return fingerprint(f);
+}
+
 void
 ir_func_release_analyses(ir_func_t *f)
 {

@@ -22088,8 +22088,7 @@ collect_output(const ir_func_t *function, const ir_summary_t *summary,
             if (ir_summary_flow_has(summary, table, f, s, IR_SFLOW_DATA)
                 || ir_summary_flow_has(summary, table, f, s, IR_SFLOW_ALIAS))
                 add_text(data, function, summary, from);
-            else if (ir_summary_flow_has(summary, table, f, s,
-                                         IR_SFLOW_CONTROL))
+            if (ir_summary_flow_has(summary, table, f, s, IR_SFLOW_CONTROL))
                 add_text(control, function, summary, from);
         }
     }
