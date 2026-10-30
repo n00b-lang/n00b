@@ -86,3 +86,11 @@ unicode.internal.properties.general_category: (char) -> Gc
   reads unicode.generated.categories.gc_stage1_values[]
   reads unicode.generated.categories.gc_stage2[]
   traps explicit bounds arithmetic
+unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
+  effects may_trap may_allocate may_collect allocates_direct
+  reads+writes self.data[]
+  writes self.len
+  writes self.data
+  writes self.cap
+  escapes self referent
+  traps bounds arithmetic

@@ -17,10 +17,13 @@ flow_probe.via_array: (int) -> int
   output result data[x] control[]
 flow_probe.split: (modify Pair, int, int) -> int
   effects none
+  writes p.a
+  writes p.b
   output result data[x] control[]
   output result 1 data[x y] control[]
 flow_probe.set_a: (modify Pair, int) -> nil
   effects none
+  writes p.a
   output result data[] control[]
   output result 1 data[p.b x] control[]
 flow_probe.heap_fields: (int, int) -> int

@@ -162,3 +162,15 @@ unicode.internal.properties.general_category: (char) -> Gc
   reads unicode.generated.categories.gc_stage2[]
   traps explicit bounds arithmetic
   output result data[] control[cp]
+unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
+  effects may_trap may_allocate may_collect allocates_direct
+  reads+writes self.data[]
+  writes self.len
+  writes self.data
+  writes self.cap
+  escapes self referent
+  traps bounds arithmetic
+  output result data[] control[]
+  output result 1 data[(new in unicode.internal.runebuf.push:22:31) cp... self self.cap self.cap... self.data[]... self.len] control[self.data[] self.len]
+  output (new in unicode.internal.runebuf.push:22:31)[] data[cp self.cap self.data[]] control[]
+  output self.data[] data[cp] control[]

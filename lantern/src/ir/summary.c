@@ -3346,6 +3346,7 @@ typedef struct {
     core_dict_t            source_indices;
     core_dict_t            flow_nodes;
     core_dict_t            heap_sites;
+    core_dict_t            copy_ins;
     core_dict_t            flow_groups;
     core_list_t(pt_external_writes_t) external_writes;
     core_list_t(uint32_t)  described;
@@ -3372,6 +3373,8 @@ typedef struct {
     ir_pdg_t              *pdg;
     const ir_points_to_hooks_t *hooks;
 } pt_t;
+
+static bool copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own);
 
 enum { PT_NO_READER = UINT32_MAX, PT_EXTERNAL_WRITES_KEY = 2 };
 
@@ -4774,10 +4777,34 @@ argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
     }
 }
 
+static void pt_address(pt_t *pt, const ir_value_t *value, pt_set_t *into);
+
+static void
+map_own_storage(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
+                pt_set_t *into)
+{
+    ir_call_arg_t argument = ir_call_argument(call, path->param);
+    if (!ir_call_argument_writes(&argument)) return;
+    pt_set_t address = (pt_set_t){0};
+    pt_address(pt, argument.value, &address);
+    for (size_t i = 0; i < address.len; i++) {
+        if (!is_address(&address.data[i])) continue;
+        pt_loc_t loc = address.data[i].loc;
+        loc_extend(&loc, path->steps, path->depth,
+                   path->flags & IR_SPATH_DEEP);
+        set_add(into, item_at(loc));
+    }
+    core_list_free(address);
+}
+
 static void
 map_param_path(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                pt_set_t *into)
 {
+    if (path->output) {
+        map_own_storage(pt, call, path, into);
+        return;
+    }
     pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
     bool deep = path->flags & IR_SPATH_DEEP;
@@ -5919,13 +5946,20 @@ record_loc(pt_t *pt, ir_summary_t *summary, const pt_loc_t *loc,
 {
     if (pt->summaries->escapes_only && !(flags & IR_SPATH_WRITE)) return;
     path_list_t names = core_list_new(ir_spath_t);
-    name_loc(pt, loc, &names, nullptr);
+    pt_loc_t    at    = {.site = PT_EXTERNAL};
+    bool        own   = copy_in_param(pt, loc->site, &at.path);
+    if (own) {
+        loc_extend(&at, loc->path.steps, loc->path.depth, loc_deep(loc));
+        add_path_to(&names, &at.path);
+    }
+    else name_loc(pt, loc, &names, nullptr);
     for (size_t n = 0; n < names.len; n++) {
         ir_spath_t path = names.data[n];
         path.flags |= flags;
         path.type   = carried;
         if (pt->contextual) apply_context(pt, &path);
-        if (loc->site != PT_EXTERNAL)
+        if (own) path.flags |= IR_SPATH_ROOT;
+        else if (loc->site != PT_EXTERNAL)
             path.flags &= (uint8_t)~IR_SPATH_ROOT;
         if (!constant_read(&path)) add_function_path(summary, pt->f, &path);
     }
@@ -6403,6 +6437,49 @@ summarize_results(pt_t *pt, ir_summary_t *summary)
 }
 
 static void
+note_copy_ins(pt_t *pt)
+{
+    const ir_func_t *f       = pt->f;
+    size_t           outputs = ir_call_output_count(f->type);
+    for (uint32_t b = 0; outputs && b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            if (in->op != IR_OP_RETURN) continue;
+            for (size_t o = 0; o < outputs; o++) {
+                size_t operand = ir_return_output_operand(f->owner, f->type,
+                                                          o);
+                size_t param   = ir_call_output_param(f->type, o);
+                const ir_value_t *value = operand < in->n_operands
+                    ? referenced(in, (uint32_t)operand) : nullptr;
+                const ir_instr_t *copy  = value
+                    && value->kind == IR_VAL_INSTR ? value->def : nullptr;
+                if (!copy || copy->op != IR_OP_COPY || !copy->n_operands
+                    || param >= f->n_params) continue;
+                const ir_local_t *local = ir_operand_local(&copy->operands[0]);
+                if (local)
+                    core_dict_put(&pt->copy_ins, (void *)local,
+                                  (void *)((uintptr_t)(o + 1) << 32
+                                           | (uintptr_t)param));
+            }
+        }
+}
+
+static bool
+copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own)
+{
+    if (site == PT_EXTERNAL || !pt->sites.data[site].local) return false;
+    bool      found = false;
+    uintptr_t entry = (uintptr_t)core_dict_get(
+        (core_dict_t *)&pt->copy_ins, (void *)pt->sites.data[site].local,
+        &found);
+    if (!found || (entry >> 32) >= UINT8_MAX) return false;
+    *own = (ir_spath_t){.root   = IR_SPLACE_PARAM,
+                        .param  = (uint32_t)entry,
+                        .output = (uint8_t)(entry >> 32)};
+    return true;
+}
+
+static void
 pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
         bool value_flow)
 {
@@ -6420,6 +6497,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->source_indices, nullptr, nullptr);
     core_dict_init(&pt->flow_nodes, flow_node_hash, flow_node_eq);
     core_dict_init(&pt->heap_sites, heap_site_hash, heap_site_eq);
+    core_dict_init(&pt->copy_ins, nullptr, nullptr);
     core_dict_init(&pt->resolved, resolved_hash, resolved_eq);
     core_dict_init(&pt->flow_groups, nullptr, nullptr);
     core_dict_init(&pt->call_index, nullptr, nullptr);
@@ -6450,6 +6528,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
         }
     pt->dirty = core_alloc_array(bool, pt->order.len ? pt->order.len : 1);
     note_load_uses(pt);
+    note_copy_ins(pt);
     flow_build(pt);
 }
 
@@ -6516,6 +6595,7 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_nodes);
     core_dict_foreach(&pt->heap_sites, entry) core_free(entry->key);
     core_dict_free(&pt->heap_sites);
+    core_dict_free(&pt->copy_ins);
     core_dict_foreach(&pt->resolved, entry) {
         resolved_t *resolved = entry->value;
         core_list_free(resolved->items);
