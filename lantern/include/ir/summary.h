@@ -57,36 +57,6 @@ typedef struct {
     uint32_t      column;
 } ir_switness_t;
 
-typedef enum : uint8_t {
-    IR_SINPUT_VALUE,
-    IR_SINPUT_REFERENT,
-    IR_SINPUT_PLACE,
-    IR_SINPUT_UNKNOWN,
-    IR_SINPUT_CALL,
-} ir_sinput_kind_t;
-
-typedef struct {
-    ir_sinput_kind_t kind;
-    uint32_t         param;
-    ir_splace_t      place;
-    core_string_t    callee;
-} ir_sinput_t;
-
-typedef enum : uint8_t {
-    IR_SOUTPUT_RESULT,
-    IR_SOUTPUT_FAILURE,
-    IR_SOUTPUT_PLACE,
-} ir_soutput_kind_t;
-
-typedef struct {
-    ir_soutput_kind_t kind;
-    ir_splace_t       place;
-    uint32_t          data_first;
-    uint32_t          data_count;
-    uint32_t          control_first;
-    uint32_t          control_count;
-} ir_soutput_t;
-
 enum {
     IR_SESCAPE_ADDRESS  = 1u << 0,
     IR_SESCAPE_REFERENT = 1u << 1,
@@ -160,13 +130,6 @@ const ir_switness_t  *ir_summary_witness_for(const ir_summary_t *summary,
                                              uint32_t flag);
 void                 ir_switness_callee_text(const ir_switness_t *witness,
                                              core_buffer_t *out);
-uint32_t             ir_summary_input_count(const ir_summary_t *summary);
-const ir_sinput_t   *ir_summary_input_at(const ir_summary_t *summary,
-                                         uint32_t index);
-uint32_t             ir_summary_output_count(const ir_summary_t *summary);
-const ir_soutput_t  *ir_summary_output_at(const ir_summary_t *summary,
-                                          uint32_t index);
-const uint32_t      *ir_summary_dependences(const ir_summary_t *summary);
 
 uint8_t      ir_summary_param_escape(const ir_summary_t *summary,
                                      uint32_t param);
