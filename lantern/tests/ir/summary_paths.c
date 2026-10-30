@@ -297,6 +297,63 @@ test_returned_parameters_alias(void)
 }
 
 static void
+test_overwritten_locals(void)
+{
+    run_t r = load(MOD(TYPES
+        "  func @f(%p: ref[R], %q: ref[R]) -> nil {\n"
+        "    local $s: ref[R]\n"
+        "    block entry:\n"
+        "      $s = copy %p\n"
+        "      $s = copy %q\n"
+        "      %t: ref[R] = copy $s\n"
+        "      %x: ref[i32] = field %t, \"x\"\n"
+        "      %one: i32 = const 1\n"
+        "      store %x, %one\n"
+        "      %none: nil = nil\n"
+        "      return %none\n"
+        "  }\n"
+        "  func @g(%p: ref[R], %q: ref[R], %c: bool) -> nil {\n"
+        "    local $s: ref[R]\n"
+        "    block entry:\n"
+        "      $s = copy %p\n"
+        "      branch %c, left, join\n"
+        "    block left:\n"
+        "      $s = copy %q\n"
+        "      jump join\n"
+        "    block join:\n"
+        "      %t: ref[R] = copy $s\n"
+        "      %x: ref[i32] = field %t, \"x\"\n"
+        "      %one: i32 = const 1\n"
+        "      store %x, %one\n"
+        "      %none: nil = nil\n"
+        "      return %none\n"
+        "  }\n"
+        "  func @h(%p: ref[R], %q: ref[R], %n: i32) -> nil {\n"
+        "    local $v: V\n"
+        "    block entry:\n"
+        "      %init: V = aggregate %p, %n\n"
+        "      $v = copy %init\n"
+        "      %at: ref[V] = address.of $v\n"
+        "      %a: ref[ref[R]] = field %at, \"a\"\n"
+        "      store %a, %q\n"
+        "      %w: V = copy $v\n"
+        "      %held: ref[R] = extract %w, \"a\"\n"
+        "      %x: ref[i32] = field %held, \"x\"\n"
+        "      %one: i32 = const 1\n"
+        "      store %x, %one\n"
+        "      %none: nil = nil\n"
+        "      return %none\n"
+        "  }\n"));
+    expect(&r, "a local overwritten before its read holds only the new value",
+           S("f"), S("w q.x"));
+    expect(&r, "an overwrite on one arm keeps both values at the join",
+           S("g"), S("w p.x; w q.x"));
+    expect(&r, "an overwritten field of a record local holds the new value",
+           S("h"), S("w q.x"));
+    done(&r);
+}
+
+static void
 test_callees_write_through_locals(void)
 {
     run_t r = load(MOD(TYPES
@@ -606,6 +663,7 @@ main(void)
     test_by_value_records();
     test_fresh_interiors_stay_local();
     test_returned_parameters_alias();
+    test_overwritten_locals();
     test_callees_write_through_locals();
     test_cycles_widen();
     test_globals_and_elements();
