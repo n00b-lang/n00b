@@ -547,8 +547,6 @@ same_path_list(const path_list_t *a, const path_list_t *b)
     return true;
 }
 
-enum { STORE_LIMIT = 64 };
-
 static int
 compare_paths(const ir_spath_t *a, const ir_spath_t *b)
 {
@@ -588,12 +586,6 @@ static void
 add_pair(pair_list_t *pairs, const ir_spath_t *to, const ir_spath_t *from)
 {
     ir_sstore_t pair = {.to = canonical_path(to), .from = canonical_path(from)};
-    if (pairs->len >= STORE_LIMIT) {
-        pair.to.depth    = 0;
-        pair.to.flags   |= IR_SPATH_DEEP;
-        pair.from.depth  = 0;
-        pair.from.flags |= IR_SPATH_DEEP;
-    }
     for (size_t i = 0; i < pairs->len; i++)
         if (pair_covers(&pairs->data[i], &pair)) return;
     size_t kept = 0;
