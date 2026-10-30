@@ -712,26 +712,8 @@ record_storage(ir_places_t *places, ir_instr_t *in, ir_access_kind_t kind,
 static bool
 address_operand(const ir_instr_t *in, uint32_t operand)
 {
-    switch (in->op) {
-    case IR_OP_ADDRESS_OF:
-    case IR_OP_LOAD:
-    case IR_OP_STORE:
-    case IR_OP_GLOBAL_STORE:
-    case IR_OP_SEQUENCE_GET:
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_MEMSET:
-    case IR_OP_DEALLOC:
-    case IR_OP_FINALIZE:
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-        return operand == 0;
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-    case IR_OP_MEMCMP:
-        return operand <= 1;
-    default:
-        return false;
-    }
+    return (in->op == IR_OP_ADDRESS_OF && operand == 0)
+        || ir_op_is_address_operand(in->op, operand);
 }
 
 static void
@@ -836,36 +818,15 @@ collect_accesses(ir_places_t *places, ir_func_t *f)
             ir_instr_t *in    = block->instrs[i];
             size_t      start = places->accesses.len;
             collect_storage_uses(places, in);
-            switch (in->op) {
-            case IR_OP_LOAD:
-            case IR_OP_SEQUENCE_GET:
-                record_access(places, in, IR_ACCESS_LOAD, 0);
-                break;
-            case IR_OP_STORE:
-            case IR_OP_GLOBAL_STORE:
-            case IR_OP_SEQUENCE_SET:
-            case IR_OP_MEMSET:
-            case IR_OP_DEALLOC:
-            case IR_OP_FINALIZE:
-                record_access(places, in, IR_ACCESS_STORE, 0);
-                break;
-            case IR_OP_MEMCPY:
-            case IR_OP_MEMMOVE:
-                record_access(places, in, IR_ACCESS_STORE, 0);
-                record_access(places, in, IR_ACCESS_LOAD, 1);
-                break;
-            case IR_OP_MEMCMP:
-                record_access(places, in, IR_ACCESS_LOAD, 0);
-                record_access(places, in, IR_ACCESS_LOAD, 1);
-                break;
-            case IR_OP_ATOMIC_RMW:
-            case IR_OP_ATOMIC_CAS:
-                record_access(places, in, IR_ACCESS_LOAD, 0);
-                record_access(places, in, IR_ACCESS_STORE, 0);
-                break;
-            default:
-                break;
-            }
+            uint8_t memory = ir_op_memory_access(in->op);
+            int32_t address = ir_op_address_operand(in->op);
+            int32_t source = ir_op_source_operand(in->op);
+            if (memory & IR_MEM_READ)
+                record_access(places, in, IR_ACCESS_LOAD, (uint32_t)address);
+            if (memory & IR_MEM_WRITE)
+                record_access(places, in, IR_ACCESS_STORE, (uint32_t)address);
+            if (source >= 0)
+                record_access(places, in, IR_ACCESS_LOAD, (uint32_t)source);
             if (places->accesses.len > start)
                 core_dict_put(&places->by_instr, in,
                               (void *)(uintptr_t)(start + 1));

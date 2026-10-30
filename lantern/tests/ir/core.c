@@ -107,6 +107,64 @@ static void test_ops(void)
               && (ir_op_info(IR_OP_DIV)->mods & IR_MOD_DIVZERO));
 }
 
+static bool role_fits(ir_op_t op, int32_t operand)
+{
+    const ir_opinfo_t *info = ir_op_info(op);
+
+    return operand < 0
+        || ((uint32_t)operand < info->min_operands
+            && ir_op_operand_kind(op, (uint32_t)operand) == IR_OPD_VALUE);
+}
+
+static void test_memory_roles(void)
+{
+    bool fits = true;
+
+    for (uint16_t i = 0; i < IR_OP_COUNT; i++) {
+        ir_op_t op = (ir_op_t)i;
+
+        if (!ir_op_memory_access(op)) {
+            fits = fits && ir_op_address_operand(op) < 0
+                && ir_op_stored_operand(op) < 0
+                && ir_op_source_operand(op) < 0;
+            continue;
+        }
+        fits = fits && ir_op_address_operand(op) >= 0
+            && role_fits(op, ir_op_address_operand(op))
+            && role_fits(op, ir_op_stored_operand(op))
+            && role_fits(op, ir_op_source_operand(op));
+    }
+    check("memory roles name required value operands", fits);
+    check("store writes its value through its address",
+          ir_op_memory_access(IR_OP_STORE) == IR_MEM_WRITE
+              && ir_op_address_operand(IR_OP_STORE) == 0
+              && ir_op_stored_operand(IR_OP_STORE) == 1
+              && ir_op_transfers(IR_OP_STORE));
+    check("sequence.set stores its third operand into an element",
+          ir_op_stored_operand(IR_OP_SEQUENCE_SET) == 2
+              && ir_op_addresses_element(IR_OP_SEQUENCE_SET));
+    check("atomics read and write their address",
+          ir_op_memory_access(IR_OP_ATOMIC_CAS)
+              == (IR_MEM_READ | IR_MEM_WRITE));
+    check("memcpy copies from its source address",
+          ir_op_source_operand(IR_OP_MEMCPY) == 1
+              && ir_op_stored_operand(IR_OP_MEMCPY) < 0
+              && ir_op_transfers(IR_OP_MEMCPY));
+    check("memcmp reads two addresses and transfers nothing",
+          ir_op_is_address_operand(IR_OP_MEMCMP, 0)
+              && ir_op_is_address_operand(IR_OP_MEMCMP, 1)
+              && !ir_op_is_address_operand(IR_OP_MEMCMP, 2)
+              && !ir_op_transfers(IR_OP_MEMCMP));
+    check("memset writes without transferring a value",
+          ir_op_memory_access(IR_OP_MEMSET) == IR_MEM_WRITE
+              && !ir_op_transfers(IR_OP_MEMSET));
+    check("a stored value is not an address operand",
+          !ir_op_is_address_operand(IR_OP_STORE, 1));
+    check("arithmetic has no memory role",
+          !ir_op_memory_access(IR_OP_ADD)
+              && !ir_op_is_address_operand(IR_OP_ADD, 0));
+}
+
 static void test_props(void)
 {
     ir_ctx_t    *ctx = ir_ctx_new();
@@ -824,6 +882,7 @@ static void test_function_type_clone(void)
 int main(void)
 {
     test_ops();
+    test_memory_roles();
     test_props();
     test_types();
     test_a_type_has_no_size_limit();

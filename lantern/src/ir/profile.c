@@ -400,9 +400,9 @@ static const ir_rule_t synth_rules[] = {
 
 static const ir_opinfo_t synth_ext_ops[] = {
     {CORE_STRING_STATIC("synth.concat"), 2, 2, IR_RES_ANNOTATED,
-     CORE_STRING_STATIC("vv"), 0, IR_OPF_HASRESULT},
+     CORE_STRING_STATIC("vv"), 0, IR_OPF_HASRESULT, {0, -1, -1, -1, false}},
     {CORE_STRING_STATIC("synth.trace"), 0, IR_VAR_ARITY, IR_RES_NONE,
-     CORE_STRING_STATIC("v*"), 0, IR_OPF_SIDEEFFECT},
+     CORE_STRING_STATIC("v*"), 0, IR_OPF_SIDEEFFECT, {0, -1, -1, -1, false}},
 };
 
 static const ir_scalar_t synth_scalars[] = {

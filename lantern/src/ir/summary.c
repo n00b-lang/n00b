@@ -5158,65 +5158,45 @@ holds_nothing(ir_op_t op)
     }
 }
 
+static const ir_value_t *
+role_value(const ir_instr_t *in, int32_t operand)
+{
+    return operand >= 0 && (uint32_t)operand < in->n_operands
+        ? used_value(&in->operands[operand]) : nullptr;
+}
+
 static bool
 stored_sets(pt_t *pt, const ir_instr_t *in, pt_set_t *to, pt_set_t *from)
 {
-    const ir_value_t *target = in->n_operands
-        ? used_value(&in->operands[0]) : nullptr;
-    const ir_value_t *source = nullptr;
-    switch (in->op) {
-    case IR_OP_STORE:
-    case IR_OP_GLOBAL_STORE:
-        source = in->n_operands > 1 ? used_value(&in->operands[1]) : nullptr;
-        break;
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-        source = in->n_operands > 2 ? used_value(&in->operands[2]) : nullptr;
-        break;
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE: {
-        pt_set_t address = core_list_new(pt_item_t);
-        pt_set_t copied  = core_list_new(pt_item_t);
-        if (in->n_operands > 1)
-            pt_read(pt, used_value(&in->operands[1]), &address);
-        pt_load(pt, &address, &copied);
-        for (size_t i = 0; i < copied.len; i++)
-            set_add(from, item_under(nullptr, 0, true, copied.data[i]));
-        core_list_free(address);
-        core_list_free(copied);
-        pt_read(pt, target, to);
-        return true;
-    }
-    default:
-        return false;
-    }
-    if (in->op == IR_OP_SEQUENCE_SET) {
+    if (!ir_op_transfers(in->op)) return false;
+    const ir_value_t *target = role_value(in, ir_op_address_operand(in->op));
+    if (ir_op_addresses_element(in->op)) {
         if (!pt_elements(pt, target, to)) return false;
     }
     else
         pt_read(pt, target, to);
-    pt_read(pt, source, from);
+    int32_t stored = ir_op_stored_operand(in->op);
+    if (stored >= 0) {
+        pt_read(pt, role_value(in, stored), from);
+        return true;
+    }
+    pt_set_t address = core_list_new(pt_item_t);
+    pt_set_t copied  = core_list_new(pt_item_t);
+    pt_read(pt, role_value(in, ir_op_source_operand(in->op)), &address);
+    pt_load(pt, &address, &copied);
+    for (size_t i = 0; i < copied.len; i++)
+        set_add(from, item_under(nullptr, 0, true, copied.data[i]));
+    core_list_free(address);
+    core_list_free(copied);
     return true;
 }
 
 static bool
 step_matters(pt_t *pt, const ir_instr_t *in)
 {
-    switch (in->op) {
-    case IR_OP_STORE:
-    case IR_OP_GLOBAL_STORE:
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-    case IR_OP_CALL:
-    case IR_OP_CALLBACK_INVOKE:
+    if (ir_op_transfers(in->op) || in->op == IR_OP_CALL
+        || in->op == IR_OP_CALLBACK_INVOKE)
         return true;
-    default:
-        break;
-    }
     if (in->dest_kind == IR_DEST_LOCAL && in->dest_local)
         return pointer_type(pt, in->dest_local->type);
     return in->dest && pointer_type(pt, in->dest->type);
@@ -5340,19 +5320,6 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         else for (size_t i = 0; i < first.len; i++) set_add(&out,
                                                             first.data[i]);
         break;
-    case IR_OP_STORE:
-    case IR_OP_GLOBAL_STORE:
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-        if (stored_sets(pt, in, &first, &other)) pt_store(pt, &first, &other);
-        break;
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-        stored_sets(pt, in, &first, &other);
-        pt_load(pt, &first, &out);
-        pt_store(pt, &first, &other);
-        break;
     case IR_OP_CALL:
     case IR_OP_CALLBACK_INVOKE:
         pt_call(pt, in);
@@ -5361,6 +5328,13 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         call_output(pt, in, &out);
         break;
     default: {
+        if (ir_op_transfers(in->op)) {
+            if (!stored_sets(pt, in, &first, &other)) break;
+            if (ir_op_memory_access(in->op) & IR_MEM_READ)
+                pt_load(pt, &first, &out);
+            pt_store(pt, &first, &other);
+            break;
+        }
         if (holds_nothing(in->op)) break;
         bool pointers = false;
         for (uint32_t o = 0; !pointers && o < in->n_operands; o++) {
@@ -5566,36 +5540,26 @@ record_instr(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in)
         if (pt_elements(pt, base, &first))
             record_set(pt, summary, &first, IR_SPATH_READ);
         break;
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_STORE:
-    case IR_OP_GLOBAL_STORE:
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-        if (!stored_sets(pt, in, &first, &second)) break;
-        record_set(pt, summary, &first,
-                   in->op == IR_OP_ATOMIC_RMW || in->op == IR_OP_ATOMIC_CAS
-                       ? IR_SPATH_READ | IR_SPATH_WRITE : IR_SPATH_WRITE);
-        if (in->op == IR_OP_MEMCPY || in->op == IR_OP_MEMMOVE)
-            record_operand(pt, summary, in, 1, IR_SPATH_READ);
-        record_stores(pt, summary, &first, &second);
-        break;
-    case IR_OP_MEMSET:
-    case IR_OP_DEALLOC:
-    case IR_OP_FINALIZE:
-        record_operand(pt, summary, in, 0, IR_SPATH_WRITE);
-        break;
-    case IR_OP_MEMCMP:
-        record_operand(pt, summary, in, 0, IR_SPATH_READ);
-        record_operand(pt, summary, in, 1, IR_SPATH_READ);
-        break;
     case IR_OP_CALL:
     case IR_OP_CALLBACK_INVOKE:
         record_call(pt, summary, in);
         break;
-    default:
+    default: {
+        uint8_t access = ir_op_memory_access(in->op);
+        uint8_t flags  = (access & IR_MEM_READ ? IR_SPATH_READ : 0)
+                      | (access & IR_MEM_WRITE ? IR_SPATH_WRITE : 0);
+        bool transfers = ir_op_transfers(in->op);
+        if (!access || (transfers && !stored_sets(pt, in, &first, &second)))
+            break;
+        if (transfers) record_set(pt, summary, &first, flags);
+        else record_operand(pt, summary, in,
+                            (uint32_t)ir_op_address_operand(in->op), flags);
+        int32_t source = ir_op_source_operand(in->op);
+        if (source >= 0)
+            record_operand(pt, summary, in, (uint32_t)source, IR_SPATH_READ);
+        if (transfers) record_stores(pt, summary, &first, &second);
         break;
+    }
     }
     core_list_free(first);
     core_list_free(second);

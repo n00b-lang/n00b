@@ -106,6 +106,19 @@ bool               ir_op_spelling_is_namespaced(core_string_t spelling,
                                                 core_string_t profile);
 bool               ir_mod_exists(core_string_t name);
 
+enum {
+    IR_MEM_READ  = 1u << 0,
+    IR_MEM_WRITE = 1u << 1,
+};
+
+uint8_t ir_op_memory_access(ir_op_t op);
+int32_t ir_op_address_operand(ir_op_t op);
+int32_t ir_op_stored_operand(ir_op_t op);
+int32_t ir_op_source_operand(ir_op_t op);
+bool    ir_op_addresses_element(ir_op_t op);
+bool    ir_op_transfers(ir_op_t op);
+bool    ir_op_is_address_operand(ir_op_t op, uint32_t operand);
+
 typedef enum : uint16_t {
     IR_PROP_PARSED       = 0x0001,
     IR_PROP_TYPED        = 0x0002,

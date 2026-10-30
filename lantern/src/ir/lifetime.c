@@ -218,13 +218,8 @@ forwarding_alias_input(const ir_instr_t *instruction, uint32_t operand)
 static bool
 non_escaping_pointer_use(const ir_instr_t *instruction, uint32_t operand)
 {
+    if (ir_op_is_address_operand(instruction->op, operand)) return true;
     switch (instruction->op) {
-    case IR_OP_LOAD:
-        return operand == 0;
-    case IR_OP_STORE:
-        return operand == 1;
-    case IR_OP_FINALIZE:
-    case IR_OP_DEALLOC:
     case IR_OP_DIFF:
     case IR_OP_EQ:
     case IR_OP_NE:
