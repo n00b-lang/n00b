@@ -22202,7 +22202,7 @@ dump_function_summaries(n00bb_link_analysis_t *analysis)
 {
     for (size_t f = 0; f < analysis->reachable_functions.len; f++)
         dump_function_summary(analysis->summaries,
-                              analysis->reachable_functions.data[f], false);
+            n00bb_cached_body(analysis->reachable_functions.data[f]), false);
 }
 
 static int
