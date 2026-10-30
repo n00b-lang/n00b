@@ -127,6 +127,7 @@ struct ir_summaries_t {
     core_list_t(summary_ptr_t) owned;
     core_dict_t               by_function;
     core_dict_t               names;
+    core_dict_t               type_memos;
     bool                      escapes_only;
 };
 
@@ -2124,7 +2125,50 @@ typedef struct {
     ir_places_t       *places;
     const ir_splace_t *target;
     const ir_spath_t  *leaf;
+    core_dict_t       *path_places;
 } flow_query_t;
+
+typedef struct {
+    uint8_t     *counts;
+    ir_splace_t *places;
+} path_places_t;
+
+static uint32_t
+query_path_places(flow_query_t *q, const ir_summary_t *s, size_t index,
+                  ir_splace_t places[2])
+{
+    if (!q->path_places)
+        return ir_summary_path_places(s->function, &s->paths.data[index],
+                                      places);
+    bool           found  = false;
+    path_places_t *cached = core_dict_get(q->path_places, (void *)s, &found);
+    if (!found) {
+        size_t count   = s->paths.len;
+        cached         = core_alloc(path_places_t);
+        cached->counts = core_alloc_array(uint8_t, count ? count : 1);
+        cached->places = core_alloc_array(ir_splace_t, 2 * (count ? count
+                                                                  : 1));
+        for (size_t i = 0; i < count; i++)
+            cached->counts[i] = (uint8_t)ir_summary_path_places(s->function,
+                &s->paths.data[i], &cached->places[2 * i]);
+        core_dict_put(q->path_places, (void *)s, cached);
+    }
+    places[0] = cached->places[2 * index];
+    places[1] = cached->places[2 * index + 1];
+    return cached->counts[index];
+}
+
+static void
+path_places_free(core_dict_t *cache)
+{
+    core_dict_foreach(cache, item) {
+        path_places_t *cached = item->value;
+        core_free(cached->counts);
+        core_free(cached->places);
+        core_free(cached);
+    }
+    core_dict_free(cache);
+}
 
 static bool
 argument_is(flow_query_t *q, const ir_instr_t *call, uint32_t param,
@@ -2157,8 +2201,7 @@ target_access_flags(flow_query_t *q, const ir_instr_t *call,
     for (size_t i = 0; q->target && i < s->paths.len; i++) {
         const ir_spath_t *path = &s->paths.data[i];
         ir_splace_t       places[2];
-        uint32_t          count = ir_summary_path_places(s->function, path,
-                                                         places);
+        uint32_t          count = query_path_places(q, s, i, places);
         for (uint32_t p = 0; p < count; p++) {
             const ir_splace_t *place = &places[p];
             bool matches = place->kind == IR_SPLACE_PARAM
@@ -2187,7 +2230,7 @@ target_access_flags(flow_query_t *q, const ir_instr_t *call,
             const ir_spath_t *path = &entry->paths.data[i];
             ir_splace_t       places[2];
             uint32_t          count = path->root == IR_SPLACE_PARAM ? 0
-                : ir_summary_path_places(entry->function, path, places);
+                : query_path_places(q, entry, i, places);
             for (uint32_t p = 0; p < count; p++)
                 if (access_touches(q->summaries, &places[p], q->target))
                     flags |= path->flags & IR_SPATH_ACCESS;
@@ -2379,8 +2422,11 @@ ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
     size_t       scope  = ir_analysis_scope_begin();
     ir_memssa_t *memssa = ir_func_memssa(f);
     ir_doms_t   *doms   = ir_func_doms(f);
+    core_dict_t  cache;
+    core_dict_init(&cache, nullptr, nullptr);
     flow_query_t q      = {.summaries = summaries, .f = f,
-                           .places = ir_func_places(f), .target = place};
+                           .places = ir_func_places(f), .target = place,
+                           .path_places = &cache};
     uint8_t state = memssa && doms && q.places
         ? state_before_leaf(&q, memssa, doms, entry, in) : 0;
     if (state & IR_PATH_UNPASSED) {
@@ -2396,6 +2442,7 @@ ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
         }
         core_list_free(leaves);
     }
+    path_places_free(&cache);
     ir_analysis_scope_end(scope);
     return state;
 }
@@ -2636,11 +2683,11 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
 }
 
 static bool
-path_touches(const ir_func_t *f, const ir_spath_t *path,
+path_touches(flow_query_t *q, const ir_summary_t *s, size_t index,
              const ir_splace_t *place)
 {
     ir_splace_t places[2];
-    uint32_t    count = ir_summary_path_places(f, path, places);
+    uint32_t    count = query_path_places(q, s, index, places);
     for (uint32_t p = 0; p < count; p++)
         if (named_place(&places[p]) && ir_splace_eq(&places[p], place))
             return true;
@@ -2664,23 +2711,27 @@ summarize_writes(ir_summaries_t *summaries, ir_summary_t *summary,
                  ir_func_t *f)
 {
     ir_places_t *places = ir_func_places(f);
-    flow_query_t q      = {.summaries = summaries, .f = f, .places = places};
+    core_dict_t  cache;
+    core_dict_init(&cache, nullptr, nullptr);
+    flow_query_t q = {.summaries = summaries, .f = f, .places = places,
+                      .path_places = &cache};
     for (size_t i = 0; places && i < summary->paths.len; i++) {
         ir_splace_t targets[2];
         uint32_t    count = summary->paths.data[i].flags & IR_SPATH_WRITE
-            ? ir_summary_path_places(f, &summary->paths.data[i], targets) : 0;
+            ? query_path_places(&q, summary, i, targets) : 0;
         for (uint32_t t = 0; t < count; t++) {
             bool seen = !named_place(&targets[t]);
             for (size_t j = 0; !seen && j < i; j++)
                 seen = (summary->paths.data[j].flags & IR_SPATH_WRITE)
-                    && path_touches(f, &summary->paths.data[j], &targets[t]);
+                    && path_touches(&q, summary, j, &targets[t]);
             uint8_t must = seen ? 0 : must_write(&q, f, &targets[t]);
             for (size_t j = i; must && j < summary->paths.len; j++)
                 if ((summary->paths.data[j].flags & IR_SPATH_WRITE)
-                    && path_touches(f, &summary->paths.data[j], &targets[t]))
+                    && path_touches(&q, summary, j, &targets[t]))
                     summary->paths.data[j].flags |= must;
         }
     }
+    path_places_free(&cache);
 }
 
 typedef struct {
@@ -4236,11 +4287,47 @@ typedef struct {
 core_list_decl(pt_callees_t);
 
 typedef struct {
-    th_type      *record;
     core_string_t name;
     bool          inside;
 } pt_member_t;
 core_list_decl(pt_member_t);
+typedef core_list_t(pt_member_t) member_list_t;
+
+typedef struct {
+    core_dict_t pointer_types;
+    core_dict_t members;
+} type_memo_t;
+
+static type_memo_t *
+type_memo(ir_summaries_t *summaries, const ir_module_t *module)
+{
+    bool         found = false;
+    type_memo_t *memo  = core_dict_get(&summaries->type_memos,
+                                       (void *)module, &found);
+    if (found) return memo;
+    memo = core_alloc(type_memo_t);
+    core_dict_init(&memo->pointer_types, nullptr, nullptr);
+    core_dict_init(&memo->members, nullptr, nullptr);
+    core_dict_put(&summaries->type_memos, (void *)module, memo);
+    return memo;
+}
+
+static void
+type_memos_free(core_dict_t *memos)
+{
+    core_dict_foreach(memos, item) {
+        type_memo_t *memo = item->value;
+        core_dict_foreach(&memo->members, entry) {
+            member_list_t *members = entry->value;
+            core_list_free(*members);
+            core_free(members);
+        }
+        core_dict_free(&memo->members);
+        core_dict_free(&memo->pointer_types);
+        core_free(memo);
+    }
+    core_dict_free(memos);
+}
 
 typedef struct {
     ir_splace_t place;
@@ -4256,7 +4343,7 @@ typedef struct {
     core_list_t(pt_set_t)  values;
     core_dict_t            site_index;
     core_list_t(pt_site_t) sites;
-    core_dict_t            pointer_types;
+    type_memo_t           *types;
     core_dict_t            load_uses;
     ir_reach_t            *reach;
     core_list_t(uint32_t)  aliased;
@@ -4265,7 +4352,6 @@ typedef struct {
     core_list_t(pt_callees_t) calls;
     pt_set_t               scratch[3];
     pt_set_t               seen;
-    core_list_t(pt_member_t) members;
     ir_places_t           *places;
     ir_memssa_t           *memssa;
     core_list_t(pt_access_t) context;
@@ -4433,10 +4519,10 @@ pointer_type(pt_t *pt, th_type *type)
 {
     if (!type) return true;
     bool  found  = false;
-    void *cached = core_dict_get(&pt->pointer_types, type, &found);
+    void *cached = core_dict_get(&pt->types->pointer_types, type, &found);
     if (found) return cached != nullptr;
     bool pointers = holds_pointers(pt->f, type, 0);
-    core_dict_put(&pt->pointer_types, type, pointers ? type : nullptr);
+    core_dict_put(&pt->types->pointer_types, type, pointers ? type : nullptr);
     return pointers;
 }
 
@@ -4745,12 +4831,19 @@ member_inline(const ir_func_t *f, pt_t *pt, th_type *record,
               core_string_t name)
 {
     if (!pt) return inline_member(f, record, name, false);
-    for (size_t m = 0; m < pt->members.len; m++)
-        if (pt->members.data[m].record == record
-            && core_string_eq(pt->members.data[m].name, name))
-            return pt->members.data[m].inside;
+    bool           found   = false;
+    member_list_t *members = core_dict_get(&pt->types->members, record,
+                                           &found);
+    for (size_t m = 0; members && m < members->len; m++)
+        if (core_string_eq(members->data[m].name, name))
+            return members->data[m].inside;
+    if (!members) {
+        members  = core_alloc(member_list_t);
+        *members = core_list_new(pt_member_t);
+        core_dict_put(&pt->types->members, record, members);
+    }
     bool inside = inline_member(f, record, name, false);
-    core_list_push(pt->members, ((pt_member_t){record, name, inside}));
+    core_list_push(*members, ((pt_member_t){name, inside}));
     return inside;
 }
 
@@ -6092,14 +6185,13 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f)
     };
     core_dict_init(&pt->value_index, nullptr, nullptr);
     core_dict_init(&pt->site_index, nullptr, nullptr);
-    core_dict_init(&pt->pointer_types, nullptr, nullptr);
+    pt->types = type_memo(summaries, f->owner);
     core_dict_init(&pt->load_uses, nullptr, nullptr);
     core_dict_init(&pt->call_index, nullptr, nullptr);
     pt->reach     = ir_reach_new(f);
     pt->aliased   = core_list_new(uint32_t);
     pt->described = core_list_new(uint32_t);
     pt->seen      = core_list_new(pt_item_t);
-    pt->members   = core_list_new(pt_member_t);
     pt->context   = core_list_new(pt_access_t);
     for (size_t s = 0; s < 3; s++) pt->scratch[s] = core_list_new(pt_item_t);
     pt->calls     = core_list_new(pt_callees_t);
@@ -6123,7 +6215,6 @@ pt_free(pt_t *pt)
     core_list_free(pt->sites);
     core_dict_free(&pt->value_index);
     core_dict_free(&pt->site_index);
-    core_dict_free(&pt->pointer_types);
     core_dict_free(&pt->load_uses);
     ir_reach_free(pt->reach);
     for (size_t i = 0; i < pt->calls.len; i++) {
@@ -6135,7 +6226,6 @@ pt_free(pt_t *pt)
     core_list_free(pt->aliased);
     core_list_free(pt->described);
     core_list_free(pt->seen);
-    core_list_free(pt->members);
     core_list_free(pt->context);
     for (size_t s = 0; s < 3; s++) core_list_free(pt->scratch[s]);
 }
@@ -6248,6 +6338,40 @@ summarize_flow(ir_summaries_t *summaries, ir_summary_t *next,
     next->flow = flow;
 }
 
+typedef core_list_t(uint32_t) member_callers_t;
+
+static member_callers_t *
+member_callers(ir_summaries_t *summaries, ir_func_t *const *members,
+               size_t count)
+{
+    member_callers_t *callers = core_alloc_array(member_callers_t, count);
+    core_dict_t       index;
+    core_dict_init(&index, nullptr, nullptr);
+    for (size_t i = 0; i < count; i++) {
+        callers[i] = core_list_new(uint32_t);
+        core_dict_put(&index, members[i], (void *)(uintptr_t)(i + 1));
+    }
+    for (size_t i = 0; i < count; i++) {
+        core_list_t(summary_func_ptr_t) callees =
+            core_list_new(summary_func_ptr_t);
+        direct_callees(summaries, members[i], &callees);
+        for (size_t c = 0; c < callees.len; c++) {
+            bool      found = false;
+            uintptr_t at    = (uintptr_t)core_dict_get(&index,
+                                                       callees.data[c],
+                                                       &found);
+            member_callers_t *list = found ? &callers[at - 1] : nullptr;
+            bool seen = !list;
+            for (size_t k = 0; !seen && k < list->len; k++)
+                seen = list->data[k] == i;
+            if (!seen) core_list_push(*list, (uint32_t)i);
+        }
+        core_list_free(callees);
+    }
+    core_dict_free(&index);
+    return callers;
+}
+
 static void
 solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
@@ -6258,19 +6382,16 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
         summary->results_known = summaries->escapes_only;
         core_dict_put(&summaries->by_function, members[i], summary);
     }
-    bool cyclic = count > 1;
-    for (size_t i = 0; !cyclic && i < count; i++) {
-        core_list_t(summary_func_ptr_t) callees =
-            core_list_new(summary_func_ptr_t);
-        direct_callees(summaries, members[i], &callees);
-        for (size_t c = 0; c < callees.len; c++)
-            cyclic |= callees.data[c] == members[i];
-        core_list_free(callees);
-    }
+    member_callers_t *callers = member_callers(summaries, members, count);
+    bool cyclic = count > 1 || callers[0].len;
+    bool *dirty = core_alloc_array(bool, count);
+    bool *next_dirty = core_alloc_array(bool, count);
+    for (size_t i = 0; i < count; i++) dirty[i] = true;
     bool changed = false;
     for (uint32_t round = 0; round < 64; round++) {
         changed = false;
         for (size_t i = 0; i < count; i++) {
+            if (!dirty[i]) continue;
             ir_summary_t *summary = ir_summary_of(summaries, members[i]);
             ir_summary_t *next    = ir_summary_new(nullptr, members[i]);
             if (summaries->escapes_only) {
@@ -6292,14 +6413,18 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 ir_analysis_scope_end(scope);
             }
             summarize_flow(summaries, next, summary, members[i]);
-            if (cyclic
+            bool differs = cyclic
                 && (next->flags != summary->flags
                     || next->traps != summary->traps
                     || !same_effects(next, summary)
                     || !same_paths(next, summary)
                     || !same_dependences(next, summary)
-                    || !ir_sflow_eq(&next->flow, &summary->flow)))
-                changed = true;
+                    || !ir_sflow_eq(&next->flow, &summary->flow));
+            for (size_t c = 0; differs && c < callers[i].len; c++) {
+                uint32_t caller = callers[i].data[c];
+                if (caller <= i || !dirty[caller]) next_dirty[caller] = true;
+            }
+            changed |= differs;
             ir_summary_t previous = *summary;
             *summary = *next;
             *next    = previous;
@@ -6309,7 +6434,15 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             changed = false;
             break;
         }
+        bool *swap = dirty;
+        dirty      = next_dirty;
+        next_dirty = swap;
+        for (size_t i = 0; i < count; i++) next_dirty[i] = false;
     }
+    for (size_t i = 0; i < count; i++) core_list_free(callers[i]);
+    core_free(callers);
+    core_free(dirty);
+    core_free(next_dirty);
     for (size_t i = 0; changed && i < count; i++)
         core_dict_put(&summaries->by_function, members[i],
                       ir_summary_conservative(summaries, members[i]));
@@ -6477,6 +6610,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     summaries->owned = core_list_new(summary_ptr_t);
     core_dict_init(&summaries->by_function, nullptr, nullptr);
     core_dict_init(&summaries->names, nullptr, nullptr);
+    core_dict_init(&summaries->type_memos, nullptr, nullptr);
     collect_reinterpretations(summaries, functions, count);
     tarjan_t t = {.summaries = summaries,
                   .stack = core_list_new(summary_func_ptr_t)};
@@ -6519,6 +6653,7 @@ ir_summaries_free(ir_summaries_t *summaries)
     core_list_free(summaries->owned);
     core_dict_free(&summaries->by_function);
     core_dict_free(&summaries->names);
+    type_memos_free(&summaries->type_memos);
     core_free(summaries);
 }
 
