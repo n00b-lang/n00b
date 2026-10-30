@@ -242,6 +242,11 @@ enum {
 
 enum { IR_SPATH_STEPS = 4 };
 
+enum {
+    IR_SOUTPUT_STATUS  = UINT8_MAX - 1,
+    IR_SOUTPUT_FAILURE = UINT8_MAX,
+};
+
 typedef struct {
     ir_splace_kind_t   root;
     uint32_t           param;

@@ -52,3 +52,23 @@ flow_probe.caller: (int) -> int
   effects may_trap may_allocate may_collect allocates_direct
   traps bounds arithmetic
   output result data[x] control[]
+flow_probe.get_a: (Pair) -> int
+  effects none
+  output result data[p.a] control[]
+flow_probe.by_value: (Pair) -> int
+  effects none
+  output result data[p.a] control[]
+flow_probe.pick: (Pair, int) -> int fail: int
+  effects may_fail
+  output result data[p.a] control[k]
+  output failure data[p.b] control[k]
+flow_probe.relay: (Pair, int) -> int fail: int
+  effects may_fail
+  output result data[p.a] control[k]
+  output failure data[p.b] control[k]
+flow_probe.handled: (Pair, int) -> int
+  effects none
+  output result data[p.a p.b] control[k]
+flow_probe.caught: (Pair, int) -> bool
+  effects none
+  output result data[] control[k]

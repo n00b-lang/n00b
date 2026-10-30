@@ -4,6 +4,7 @@ sys.internal.fs.read_file: (string) -> Array[u8] fail: int
   traps explicit bounds unwrap arithmetic
   returns fresh
   output result data[(may_input) (new#99ef) path.data... path.selector path[]] control[path.data path.selector]
+  output failure data[(may_input) path.data... path.selector path[]] control[path.data path.selector]
   output (new#99ef)... data[(may_input) path.data... path.selector path[]] control[]
 sys.internal.env.args: () -> List[string]
   effects may_trap may_allocate may_collect allocates_direct reinterprets reads_env
@@ -37,12 +38,14 @@ sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
   traps bounds
   output result data[] control[]
   output result 1 data[buffer] control[(reads_random) buffer buffer[]]
+  output failure data[(reads_random) buffer buffer[]] control[]
   output buffer[]... data[(reads_random) buffer buffer[]] control[]
 sys.internal.random.fill: (modify 'T) -> nil fail: int
   effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
   traps bounds arithmetic
   output result data[] control[]
   output result 1 data[(new#079f) (new#418b) (new#718b) (new#7ccd) (new#8027) (new#8e8b) (new#a46b) (new#b593) (new#f1c3) (new#fa95) (reads_random) value] control[value]
+  output failure data[(reads_random)] control[]
   output (new#8e8b)... data[(reads_random)] control[]
   output (new#f1c3)... data[(reads_random)] control[]
   output (new#718b)... data[(reads_random)] control[]

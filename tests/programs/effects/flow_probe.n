@@ -74,9 +74,52 @@ func caller(x: int) -> int {
     return arr[0]
 }
 
+func get_a(p: Pair) -> int {
+    return p.a
+}
+
+func by_value(p: Pair) -> int {
+    return get_a(p)
+}
+
+func pick(p: Pair, k: int) -> int fail: int {
+    if k > 3 {
+        fail p.b
+    }
+    return p.a
+}
+
+func relay(p: Pair, k: int) -> int fail: int {
+    let v: int = pick(p, k)!
+    return v
+}
+
+func handled(p: Pair, k: int) -> int {
+    var r: int = 0
+    try {
+        r = pick(p, k)!
+    } fail(e) {
+        r = e
+    }
+    return r
+}
+
+func caught(p: Pair, k: int) -> bool {
+    var matched = false
+    try {
+        _ = pick(p, k)!
+    } fail(e) {
+        matched = true
+    }
+    return matched
+}
+
 func start() -> nil {
     var p: Pair = (a = 1, b = 2)
     var pairs: Array[Pair] = new[Array[Pair]](1)
+    _ = by_value(p)
+    _ = handled(p, 5)
+    _ = caught(p, 5)
     _ = inc(1)
     _ = choose(true, 1)
     _ = via_scalar(1)

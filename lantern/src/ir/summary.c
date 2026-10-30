@@ -4124,6 +4124,21 @@ project(const pt_set_t *from, core_string_t step, pt_set_t *into)
     }
 }
 
+static void
+variant_arm(const pt_set_t *from, core_string_t arm, pt_set_t *into)
+{
+    for (size_t i = 0; i < from->len; i++) {
+        pt_item_t item = from->data[i];
+        if (item.depth) {
+            if (!core_string_eq(item.steps[0], arm)) continue;
+            for (uint8_t s = 1; s < item.depth; s++)
+                item.steps[s - 1] = item.steps[s];
+            item.depth--;
+        }
+        set_add(into, item);
+    }
+}
+
 static bool
 is_address(const pt_item_t *item)
 {
@@ -4865,9 +4880,13 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         if (!steps_prefix(item.depth, item.steps, path->depth, path->steps))
             continue;
         if (item.flow != PT_SAME) {
-            pt_item_t whole = deep_item(item.loc);
-            whole.flow = item.flow;
-            set_add(into, whole);
+            pt_item_t part = item.deep ? deep_item(item.loc)
+                                       : item_at(item.loc);
+            if (!item.deep)
+                loc_extend(&part.loc, path->steps + item.depth,
+                           path->depth - item.depth, deep);
+            part.flow = item.flow;
+            set_add(into, part);
             continue;
         }
         pt_item_t at = item_at(item.loc);
@@ -5171,13 +5190,46 @@ apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee)
     if (pt->value_flow) flow_stores(pt, call, callee, nullptr);
 }
 
+static const core_string_t outcome_arms[] = {
+    CORE_STRING_STATIC("ok"),
+    CORE_STRING_STATIC("error"),
+    CORE_STRING_STATIC("tag"),
+};
+
+static bool
+fallible_call(pt_t *pt, const ir_instr_t *call)
+{
+    th_type *signature = ir_call_function_type(call);
+    signature = signature ? th_resolve(signature) : nullptr;
+    th_type *error = signature && th_kind_of(signature) == TH_FUNCTION
+        ? th_func_error(signature) : nullptr;
+    return error && ir_machine_of(pt->f->owner, error).class != IR_CLASS_VOID;
+}
+
 static void
 call_result(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
             pt_set_t *into)
 {
     if (!call->dest || !tracks(pt, call->dest->type)) return;
-    if (callee->results_known) mapped_output(pt, call, callee, 0, into);
-    else set_add(into, deep_item(unknown_loc()));
+    if (!callee->results_known) {
+        set_add(into, deep_item(unknown_loc()));
+        return;
+    }
+    if (!fallible_call(pt, call)) {
+        mapped_output(pt, call, callee, 0, into);
+        return;
+    }
+    static const uint8_t outputs[] = {0, IR_SOUTPUT_FAILURE,
+                                      IR_SOUTPUT_STATUS};
+    pt_set_t items = (pt_set_t){0};
+    for (size_t a = 0; a < 3; a++) {
+        items.len = 0;
+        mapped_output(pt, call, callee, outputs[a], &items);
+        for (size_t i = 0; i < items.len; i++)
+            set_add(into, item_under(&outcome_arms[a], 1, false,
+                                     items.data[i]));
+    }
+    core_list_free(items);
 }
 
 static void
@@ -5315,7 +5367,7 @@ call_output(pt_t *pt, const ir_instr_t *output, pt_set_t *into)
                                        : nullptr;
     size_t param = signature ? ir_call_output_param(signature, ordinal)
                              : SIZE_MAX;
-    if (param == SIZE_MAX || ordinal >= UINT8_MAX) {
+    if (param == SIZE_MAX || ordinal + 1 >= IR_SOUTPUT_STATUS) {
         set_add(into, deep_item(unknown_loc()));
         return;
     }
@@ -5565,7 +5617,6 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_TYPE_NARROW:
     case IR_OP_OPTION_SOME:
     case IR_OP_OPTION_GET:
-    case IR_OP_VARIANT_PAYLOAD:
     case IR_OP_BUFFER_AS_STRING:
     case IR_OP_ATOMIC_WRAP:
     case IR_OP_BOX_RAW:
@@ -5627,6 +5678,21 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_EXTRACT_INDEX:
         pt_read(pt, base, &first);
         project(&first, element_step, &out);
+        break;
+    case IR_OP_VARIANT_PAYLOAD:
+        pt_read(pt, base, &first);
+        if (named) variant_arm(&first, in->operands[1].name, &out);
+        else for (size_t i = 0; i < first.len; i++)
+            set_add(&out, first.data[i]);
+        break;
+    case IR_OP_VARIANT_TAG:
+        if (pt->value_flow) {
+            pt_read(pt, base, &first);
+            variant_arm(&first, outcome_arms[2], &out);
+        }
+        else if (base && pointer_type(pt, base->type))
+            spread_operands(pt, in, &out);
+        else set_add(&out, deep_item(unknown_loc()));
         break;
     case IR_OP_INSERT:
         pt_read(pt, base, &out);
@@ -6281,7 +6347,8 @@ summarize_results(pt_t *pt, ir_summary_t *summary)
     const ir_func_t *f = pt->f;
     summary->results_known = true;
     size_t   count   = ir_call_output_count(f->type);
-    uint32_t outputs = count < UINT8_MAX ? (uint32_t)count + 1 : UINT8_MAX;
+    uint32_t outputs = count < IR_SOUTPUT_STATUS ? (uint32_t)count + 1
+                                                 : IR_SOUTPUT_STATUS;
     for (uint32_t output = returns_value(f) ? 0 : 1; output < outputs;
          output++) {
         size_t operand = output
@@ -6298,6 +6365,31 @@ summarize_results(pt_t *pt, ir_summary_t *summary)
         summarize_output(pt, summary, &returned, (uint8_t)output);
         core_list_free(returned);
     }
+    pt_set_t failed = (pt_set_t){0};
+    pt_set_t status = (pt_set_t){0};
+    bool     fails  = false;
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
+        ir_block_t *block = f->blocks[b];
+        if (!block->n_instrs) continue;
+        const ir_instr_t *exit = block->instrs[block->n_instrs - 1];
+        if (exit->op != IR_OP_FAIL) continue;
+        fails = true;
+        pt_read(pt, referenced(exit, 0), &failed);
+        reach_control(pt, block, &failed);
+    }
+    for (uint32_t b = 0; fails && b < f->n_blocks; b++) {
+        ir_block_t *block = f->blocks[b];
+        const ir_instr_t *exit = block->n_instrs
+            ? block->instrs[block->n_instrs - 1] : nullptr;
+        if (exit && (exit->op == IR_OP_FAIL || exit->op == IR_OP_RETURN))
+            reach_control(pt, block, &status);
+    }
+    if (fails) {
+        summarize_output(pt, summary, &failed, IR_SOUTPUT_FAILURE);
+        summarize_output(pt, summary, &status, IR_SOUTPUT_STATUS);
+    }
+    core_list_free(failed);
+    core_list_free(status);
 }
 
 static void

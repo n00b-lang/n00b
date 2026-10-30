@@ -22086,7 +22086,9 @@ reader_output(const ir_func_t *function, const ir_summary_t *summary,
     }
     core_buffer_t line = {0};
     core_buffer_puts(&line, "  output ");
-    if (results && to->output)
+    if (results && to->output == IR_SOUTPUT_FAILURE)
+        core_buffer_puts(&line, "failure");
+    else if (results && to->output)
         core_buffer_printf(&line, "result %u", to->output);
     else if (results)
         core_buffer_puts(&line, "result");
@@ -22127,7 +22129,8 @@ reader_table(const ir_func_t *function, const ir_summary_t *summary,
             dests.data[i] = (ir_spath_t){.output = dests.data[i].output};
     qsort(dests.data, dests.len, sizeof(ir_spath_t), compare_spaths);
     for (size_t i = 0; i < dests.len; i++)
-        if (!i || compare_spaths(&dests.data[i - 1], &dests.data[i]))
+        if ((!i || compare_spaths(&dests.data[i - 1], &dests.data[i]))
+            && !(results && dests.data[i].output == IR_SOUTPUT_STATUS))
             reader_output(function, summary, table, &dests.data[i]);
     core_list_free(dests);
 }
