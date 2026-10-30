@@ -92,6 +92,7 @@ struct ir_summaries_t {
     core_list_t(summary_ptr_t) owned;
     core_dict_t               by_function;
     core_dict_t               type_memos;
+    core_dict_t               engines;
     bool                      escapes_only;
 };
 
@@ -2404,10 +2405,12 @@ field_chain(const ir_value_t *address, ir_op_t step, ir_spath_t *path)
     return address;
 }
 
+typedef struct pt_t pt_t;
+
 typedef struct {
     ir_summaries_t    *summaries;
     ir_func_t         *f;
-    ir_places_t       *places;
+    pt_t              *pt;
     const ir_splace_t *target;
     const ir_spath_t  *leaf;
     core_dict_t       *path_places;
@@ -2455,22 +2458,9 @@ path_places_free(core_dict_t *cache)
     core_dict_free(cache);
 }
 
-static bool
-argument_is(flow_query_t *q, const ir_instr_t *call, uint32_t param,
-            const ir_splace_t *want)
-{
-    uint32_t operand = param + 1;
-    if (operand >= call->n_operands) return false;
-    const ir_value_t *arg = ir_operand_value(&call->operands[operand]);
-    const uint32_t   *ids = nullptr;
-    uint32_t          n   = 0;
-    if (!argument_places(q->places, q->f, arg, &ids, &n) || n != 1)
-        return false;
-    ir_splace_t mapped;
-    return portable_place(q->f, ir_place_at(q->places, ids[0]), &mapped)
-        && mapped.kind != IR_SPLACE_HEAP && mapped.kind != IR_SPLACE_UNKNOWN
-        && ir_splace_eq(&mapped, want);
-}
+static bool writes_target(flow_query_t *q, const ir_instr_t *in);
+static bool argument_is(flow_query_t *q, const ir_instr_t *call,
+                        const ir_spath_t *path, const ir_splace_t *want);
 
 static bool
 named_place(const ir_splace_t *place)
@@ -2490,7 +2480,7 @@ target_access_flags(flow_query_t *q, const ir_instr_t *call,
         for (uint32_t p = 0; p < count; p++) {
             const ir_splace_t *place = &places[p];
             bool matches = place->kind == IR_SPLACE_PARAM
-                ? argument_is(q, call, place->param, q->target)
+                ? argument_is(q, call, path, q->target)
                 : place->kind == IR_SPLACE_UNKNOWN
                 ? unseen_reaches(q->summaries, q->target)
                 : named_place(place) && ir_splace_eq(place, q->target);
@@ -2566,49 +2556,6 @@ call_effect(flow_query_t *q, const ir_instr_t *call, ir_path_outcome_t outcome)
     return effect;
 }
 
-static bool
-stores_target(flow_query_t *q, const ir_instr_t *in)
-{
-    uint32_t first = 0;
-    uint32_t count = q->target ? ir_places_accesses_of(q->places, in, &first)
-                               : 0;
-    for (uint32_t a = first; a < first + count; a++) {
-        const ir_access_t *access = ir_places_access_at(q->places, a);
-        if (access->kind != IR_ACCESS_STORE
-            || !access->whole || access->count != 1) continue;
-        ir_splace_t mapped;
-        if (portable_place(q->f, ir_place_at(q->places,
-                ir_places_access_places(q->places, access)[0]), &mapped)
-            && named_place(&mapped) && ir_splace_eq(&mapped, q->target))
-            return true;
-    }
-    return false;
-}
-
-static bool
-field_store_covers(flow_query_t *q, const ir_instr_t *in)
-{
-    if (!q->target || !q->leaf || !q->leaf->depth || in->op != IR_OP_STORE
-        || !in->n_operands) return false;
-    ir_spath_t        path    = {0};
-    const ir_value_t *address = field_chain(
-        ir_operand_value(&in->operands[0]), IR_OP_FIELD, &path);
-    if (!path.depth || !steps_prefix(path.depth, path.steps, q->leaf->depth,
-                                     q->leaf->steps)) return false;
-    const uint32_t *ids = nullptr;
-    uint32_t        n   = 0;
-    ir_splace_t     mapped;
-    return address && ir_places_of(q->places, address, &ids, &n) && n == 1
-        && portable_place(q->f, ir_place_at(q->places, ids[0]), &mapped)
-        && named_place(&mapped) && ir_splace_eq(&mapped, q->target);
-}
-
-static bool
-writes_target(flow_query_t *q, const ir_instr_t *in)
-{
-    return stores_target(q, in) || field_store_covers(q, in);
-}
-
 static uint8_t
 flow_step(void *context, const ir_instr_t *in, ir_path_outcome_t outcome)
 {
@@ -2665,55 +2612,20 @@ ir_summary_effect(const ir_summary_t *summary, const ir_splace_t *place,
     return callee_effect(summary, flags, outcome);
 }
 
-static bool
-arm_dominates(ir_doms_t *doms, ir_block_t *arm, ir_block_t *from)
-{
-    return arm && ir_pred_count(doms, arm) == 1 && ir_dominates(doms, arm, from);
-}
-
-static ir_path_outcome_t
-call_arm(ir_doms_t *doms, const ir_instr_t *call, ir_block_t *from)
-{
-    ir_instr_t *terminator      = ir_block_terminator(call->block);
-    bool        true_is_success = false;
-    if (ir_call_outcome_branch(terminator, &true_is_success) != call)
-        return IR_PATH_ANY;
-    ir_block_t *on_true  = ir_succ_of(&terminator->operands[1]);
-    ir_block_t *on_false = ir_succ_of(&terminator->operands[2]);
-    ir_block_t *success  = true_is_success ? on_true : on_false;
-    ir_block_t *failure  = true_is_success ? on_false : on_true;
-    if (success == failure) return IR_PATH_ANY;
-    if (arm_dominates(doms, success, from)) return IR_PATH_SUCCESS;
-    if (arm_dominates(doms, failure, from)) return IR_PATH_FAILURE;
-    return IR_PATH_ANY;
-}
-
-typedef struct {
-    uint32_t    def;
-    uint8_t     effect;
-    ir_block_t *from;
-} walk_item_t;
-core_list_decl(walk_item_t);
-
-static uint8_t state_before_leaf(flow_query_t *q, ir_memssa_t *memssa,
-                                 ir_doms_t *doms, uint8_t entry,
-                                 const ir_instr_t *in);
+static pt_t *function_engine(ir_summaries_t *summaries, ir_func_t *f);
 
 uint8_t
 ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
                         const ir_splace_t *place, uint8_t entry,
                         const ir_instr_t *in)
 {
-    size_t       scope  = ir_analysis_scope_begin();
-    ir_memssa_t *memssa = ir_func_memssa(f);
-    ir_doms_t   *doms   = ir_func_doms(f);
-    core_dict_t  cache;
+    pt_t *pt = function_engine(summaries, f);
+    if (!pt) return IR_PATH_UNPASSED;
+    core_dict_t cache;
     core_dict_init(&cache, nullptr, nullptr);
-    flow_query_t q      = {.summaries = summaries, .f = f,
-                           .places = ir_func_places(f), .target = place,
-                           .path_places = &cache};
-    uint8_t state = memssa && doms && q.places
-        ? state_before_leaf(&q, memssa, doms, entry, in) : 0;
+    flow_query_t q = {.summaries = summaries, .f = f, .pt = pt,
+                      .target = place, .path_places = &cache};
+    uint8_t state = ir_paths_state(f, entry, flow_step, &q, in);
     if (state & IR_PATH_UNPASSED) {
         ir_spath_t  read   = read_path(place, in);
         path_list_t leaves = place_leaves(f, place);
@@ -2722,70 +2634,12 @@ ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
             if (!paths_overlap(&leaves.data[l], &read)) continue;
             q.leaf = &leaves.data[l];
             state  = combine_leaf(state,
-                state_before_leaf(&q, memssa, doms, entry, in), first);
+                ir_paths_state(f, entry, flow_step, &q, in), first);
             first  = false;
         }
         core_list_free(leaves);
     }
     path_places_free(&cache);
-    ir_analysis_scope_end(scope);
-    return state;
-}
-
-static uint8_t
-state_before_leaf(flow_query_t *q, ir_memssa_t *memssa, ir_doms_t *doms,
-                  uint8_t entry, const ir_instr_t *in)
-{
-    uint32_t start = ir_memssa_def_before(memssa, in);
-    uint8_t  state = 0;
-    core_dict_t seen;
-    core_dict_init(&seen, nullptr, nullptr);
-    core_list_t(walk_item_t) work = core_list_new(walk_item_t);
-    if (start != UINT32_MAX)
-        core_list_push(work, ((walk_item_t){.def = start,
-                                            .effect = IR_PATH_UNPASSED,
-                                            .from = in->block}));
-    while (work.len) {
-        walk_item_t item = work.data[--work.len];
-        uintptr_t key = ((uintptr_t)item.def << 34)
-            | ((uintptr_t)item.from->index << 2) | item.effect;
-        if (!core_dict_add(&seen, (void *)(key + 1), (void *)(key + 1)))
-            continue;
-        const ir_memdef_t *def    = ir_memssa_def(memssa, item.def);
-        uint8_t            effect = item.effect;
-        switch (def->kind) {
-        case IR_MEMDEF_ENTRY:
-            state |= ir_path_apply(entry, effect);
-            continue;
-        case IR_MEMDEF_PHI:
-            for (uint32_t i = 0; i < ir_memssa_phi_count(memssa, item.def);
-                 i++) {
-                ir_block_t *pred = ir_pred_at(doms, def->block, i);
-                core_list_push(work, ((walk_item_t){
-                    .def    = ir_memssa_phi_incoming(memssa, item.def, i),
-                    .effect = effect,
-                    .from   = pred ? pred : def->block}));
-            }
-            continue;
-        case IR_MEMDEF_STORE:
-            if (writes_target(q, def->instr)) effect = IR_PATH_PASSED;
-            break;
-        case IR_MEMDEF_CALL:
-            if (is_call(def->instr))
-                effect = ir_path_apply(call_effect(q, def->instr,
-                    call_arm(doms, def->instr, item.from)), effect);
-            break;
-        case IR_MEMDEF_ELEMENT_PHI:
-            continue;
-        }
-        if (effect == IR_PATH_PASSED) state |= IR_PATH_PASSED;
-        else if (effect)
-            core_list_push(work, ((walk_item_t){
-                .def = ir_memssa_def_prev(memssa, item.def),
-                .effect = effect, .from = item.from}));
-    }
-    core_list_free(work);
-    core_dict_free(&seen);
     return state;
 }
 
@@ -2952,7 +2806,6 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
     if (reinterpret)
         add_flags(summary, IR_SUMMARY_REINTERPRETS, reinterpret, nullptr,
                   (core_string_t){0});
-    ir_places_t *places = ir_func_places(f);
     ir_sites_t  *sites  = ir_func_sites(f);
     ir_ranges_t *prove_ranges = (!summaries->hooks
                                  || !summaries->hooks->defer_trap_proofs)
@@ -2982,10 +2835,10 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
                       (core_string_t){0});
         }
     }
-    flow_query_t    q = {.summaries = summaries, .f = f, .places = places};
+    flow_query_t    q = {.summaries = summaries, .f = f};
     ir_path_exits_t exits;
     uint32_t        ends = IR_SUMMARY_MAY_FAIL;
-    if (places && ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, &q, &exits))
+    if (ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, &q, &exits))
         ends = (exits.returned ? 0 : IR_SUMMARY_NO_RETURN)
             | (exits.failed ? IR_SUMMARY_MAY_FAIL : 0)
             | (!exits.returned && !exits.failed ? IR_SUMMARY_DIVERGES : 0);
@@ -3025,15 +2878,14 @@ must_write(flow_query_t *q, ir_func_t *f, const ir_splace_t *target)
 }
 
 static void
-summarize_writes(ir_summaries_t *summaries, ir_summary_t *summary,
-                 ir_func_t *f)
+summarize_writes(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt,
+                 ir_summary_t *summary)
 {
-    ir_places_t *places = ir_func_places(f);
     core_dict_t  cache;
     core_dict_init(&cache, nullptr, nullptr);
-    flow_query_t q = {.summaries = summaries, .f = f, .places = places,
+    flow_query_t q = {.summaries = summaries, .f = f, .pt = pt,
                       .path_places = &cache};
-    for (size_t i = 0; places && i < summary->paths.len; i++) {
+    for (size_t i = 0; i < summary->paths.len; i++) {
         ir_splace_t targets[2];
         uint32_t    count = summary->paths.data[i].flags & IR_SPATH_WRITE
             ? query_path_places(&q, summary, i, targets) : 0;
@@ -3361,12 +3213,6 @@ type_memos_free(core_dict_t *memos)
     core_dict_free(memos);
 }
 
-typedef struct {
-    ir_splace_t place;
-    bool        load;
-    bool        entry;
-} pt_access_t;
-core_list_decl(pt_access_t);
 
 typedef struct {
     pt_loc_t at;
@@ -3377,6 +3223,21 @@ typedef core_list_t(pt_external_write_t) pt_external_writes_t;
 core_list_decl(pt_external_writes_t);
 
 typedef struct {
+    ir_splace_t place;
+    bool        load;
+} pt_access_t;
+core_list_decl(pt_access_t);
+
+typedef struct {
+    core_list_t(ir_spath_t) cells;
+    core_dict_t             gens;
+    uint64_t               *in;
+    uint64_t               *state;
+    uint32_t                words;
+    bool                    built;
+} pt_entry_t;
+
+struct pt_t {
     ir_summaries_t        *summaries;
     const ir_func_t       *f;
     core_dict_t            value_index;
@@ -3404,7 +3265,6 @@ typedef struct {
     core_list_t(uint64_t) *resolving;
     uint64_t               generation;
     ir_places_t           *places;
-    ir_memssa_t           *memssa;
     core_list_t(pt_access_t) context;
     bool                   contextual;
     const ir_instr_t      *at;
@@ -3420,7 +3280,8 @@ typedef struct {
     const ir_points_to_hooks_t *hooks;
     ir_switness_t               unknown;
     uint64_t                    unknown_at;
-} pt_t;
+    pt_entry_t                  entry;
+};
 
 static bool copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own);
 
@@ -5604,6 +5465,185 @@ stored_sets(pt_t *pt, const ir_instr_t *in, pt_set_t *to, pt_set_t *from)
     return true;
 }
 
+static bool
+named_path(pt_t *pt, const pt_loc_t *loc, ir_spath_t *path)
+{
+    if (loc->site == PT_EXTERNAL) {
+        *path = loc->path;
+        return true;
+    }
+    pt_loc_t own = {.site = PT_EXTERNAL};
+    if (!copy_in_param(pt, loc->site, &own.path)) return false;
+    loc_extend(&own, loc->path.steps, loc->path.depth, loc_deep(loc));
+    *path = own.path;
+    return true;
+}
+
+static bool
+definite_path(pt_t *pt, const pt_set_t *addresses, ir_spath_t *path)
+{
+    return addresses->len == 1 && is_address(&addresses->data[0])
+        && !loc_deep(&addresses->data[0].loc)
+        && named_path(pt, &addresses->data[0].loc, path)
+        && path->root != IR_SPLACE_UNKNOWN;
+}
+
+static bool
+covers_place(const ir_spath_t *path, const ir_splace_t *place,
+             const ir_spath_t *leaf)
+{
+    if (path->root != place->kind) return false;
+    bool same = false;
+    switch (place->kind) {
+    case IR_SPLACE_PARAM:
+        same = path->param == place->param;
+        break;
+    case IR_SPLACE_GLOBAL:
+    case IR_SPLACE_THREAD:
+        same = path->global && place->global
+            && ir_global_identity((ir_global_t *)path->global)
+                   == ir_global_identity((ir_global_t *)place->global);
+        break;
+    default:
+        break;
+    }
+    return same && (leaf ? steps_prefix(path->depth, path->steps,
+                                        leaf->depth, leaf->steps)
+                         : !path->depth);
+}
+
+static bool
+definite_store(pt_t *pt, const ir_instr_t *in, ir_spath_t *path)
+{
+    if (!ir_op_transfers(in->op) || ir_op_addresses_element(in->op)
+        || !(ir_op_memory_access(in->op) & IR_MEM_WRITE)) return false;
+    const ir_instr_t *at = pt->at;
+    pt->at = in;
+    pt_set_t addresses = (pt_set_t){0};
+    pt_address(pt, role_value(in, ir_op_address_operand(in->op)), &addresses);
+    bool definite = definite_path(pt, &addresses, path);
+    core_list_free(addresses);
+    pt->at = at;
+    return definite;
+}
+
+static void
+entry_build(pt_t *pt)
+{
+    pt_entry_t      *entry = &pt->entry;
+    const ir_func_t *f     = pt->f;
+    entry->built = true;
+    entry->cells = core_list_new(ir_spath_t);
+    core_dict_init(&entry->gens, nullptr, nullptr);
+    for (uint32_t b = 0; b < f->n_blocks; b++)
+        for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in = f->blocks[b]->instrs[i];
+            ir_spath_t        path;
+            if (!definite_store(pt, in, &path)) continue;
+            path.flags = 0;
+            size_t cell = 0;
+            while (cell < entry->cells.len
+                   && compare_paths(&entry->cells.data[cell], &path))
+                cell++;
+            if (cell == entry->cells.len) core_list_push(entry->cells, path);
+            core_dict_put(&entry->gens, (void *)in,
+                          (void *)(uintptr_t)(cell + 1));
+        }
+    entry->words = (uint32_t)((entry->cells.len + 63) / 64);
+    if (!entry->words) return;
+    size_t size = (size_t)entry->words * f->n_blocks;
+    entry->in    = core_alloc_array(uint64_t, size);
+    entry->state = core_alloc_array(uint64_t, entry->words);
+    memset(entry->in, 0xff, size * sizeof(uint64_t));
+    memset(entry->in, 0, entry->words * sizeof(uint64_t));
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (uint32_t b = 0; b < f->n_blocks; b++) {
+            const ir_block_t *block = f->blocks[b];
+            memcpy(entry->state, &entry->in[(size_t)b * entry->words],
+                   entry->words * sizeof(uint64_t));
+            for (uint32_t i = 0; i < block->n_instrs; i++) {
+                uintptr_t cell = (uintptr_t)core_dict_get(
+                    &entry->gens, (void *)block->instrs[i], nullptr);
+                if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
+            }
+            ir_instr_t *last = block->n_instrs
+                ? block->instrs[block->n_instrs - 1] : nullptr;
+            for (uint32_t s = 0; last && s < ir_succ_count(last); s++) {
+                ir_block_t *next = ir_succ_at(last, s);
+                uint64_t   *in   = next && next->index
+                    ? &entry->in[(size_t)next->index * entry->words]
+                    : nullptr;
+                for (uint32_t w = 0; in && w < entry->words; w++) {
+                    uint64_t met = in[w] & entry->state[w];
+                    changed |= met != in[w];
+                    in[w] = met;
+                }
+            }
+        }
+    }
+}
+
+static bool
+written_before(pt_t *pt, const ir_instr_t *at, const ir_spath_t *read)
+{
+    if (!at || !at->block) return false;
+    if (!pt->entry.built) entry_build(pt);
+    pt_entry_t *entry = &pt->entry;
+    if (!entry->words) return false;
+    memcpy(entry->state, &entry->in[(size_t)at->block->index * entry->words],
+           entry->words * sizeof(uint64_t));
+    for (uint32_t i = 0; i < at->index; i++) {
+        uintptr_t cell = (uintptr_t)core_dict_get(
+            &entry->gens, (void *)at->block->instrs[i], nullptr);
+        if (cell--) entry->state[cell / 64] |= 1ull << (cell % 64);
+    }
+    for (size_t c = 0; c < entry->cells.len; c++) {
+        const ir_spath_t *cell = &entry->cells.data[c];
+        if ((entry->state[c / 64] >> (c % 64) & 1)
+            && !compare_path_roots(cell, read)
+            && steps_prefix(cell->depth, cell->steps, read->depth,
+                            read->steps))
+            return true;
+    }
+    return false;
+}
+
+static bool
+writes_target(flow_query_t *q, const ir_instr_t *in)
+{
+    ir_spath_t path;
+    return q->target && definite_store(q->pt, in, &path)
+        && covers_place(&path, q->target, q->leaf);
+}
+
+static bool
+argument_is(flow_query_t *q, const ir_instr_t *call, const ir_spath_t *path,
+            const ir_splace_t *want)
+{
+    pt_t             *pt    = q->pt;
+    const ir_instr_t *at    = pt->at;
+    pt_set_t          items = (pt_set_t){0};
+    pt->at = call;
+    if (path->output) {
+        ir_spath_t own = {.root   = IR_SPLACE_PARAM, .param = path->param,
+                          .output = path->output};
+        map_own_storage(pt, call, &own, &items);
+    }
+    else {
+        argument_items(pt, call, path->param, &items);
+        for (size_t i = 0; i < items.len; i++)
+            if (items.data[i].flow != PT_SAME || items.data[i].depth)
+                items.len = 0;
+    }
+    ir_spath_t mapped;
+    bool matches = definite_path(pt, &items, &mapped)
+        && covers_place(&mapped, want, nullptr);
+    core_list_free(items);
+    pt->at = at;
+    return matches;
+}
+
 static const ir_value_t *
 branch_condition(ir_block_t *block)
 {
@@ -5977,15 +6017,12 @@ note_context(pt_t *pt, const ir_instr_t *in)
         const ir_access_t *access = ir_places_access_at(pt->places, a);
         const uint32_t    *ids    = ir_places_access_places(pt->places,
                                                             access);
-        bool load  = access->kind == IR_ACCESS_LOAD;
-        bool entry = load && pt->memssa
-            && ir_memssa_reads_entry(pt->memssa, a);
+        bool load = access->kind == IR_ACCESS_LOAD;
         for (uint32_t p = 0; p < access->count; p++) {
             ir_splace_t mapped;
             if (portable_place(pt->f, ir_place_at(pt->places, ids[p]),
                                &mapped))
-                core_list_push(pt->context,
-                               ((pt_access_t){mapped, load, entry}));
+                core_list_push(pt->context, ((pt_access_t){mapped, load}));
         }
     }
 }
@@ -6015,7 +6052,6 @@ apply_context(pt_t *pt, ir_spath_t *path)
         if (!(access->load ? read : write)) continue;
         for (uint32_t p = 0; p < count; p++) {
             if (!context_matches(&access->place, &places[p])) continue;
-            if (access->entry) path->flags |= IR_SPATH_READS_ENTRY;
             if (named_place(&places[p])) {
                 root = true;
                 continue;
@@ -6051,6 +6087,13 @@ record_loc(pt_t *pt, ir_summary_t *summary, const pt_loc_t *loc,
         path.flags |= flags;
         path.type   = carried;
         if (pt->contextual) apply_context(pt, &path);
+        if (path.flags & IR_SPATH_READ) {
+            bool entry = (pt->contextual
+                          || (flags & IR_SPATH_READS_ENTRY))
+                && !written_before(pt, pt->at, &path);
+            path.flags = (uint8_t)((path.flags & ~IR_SPATH_READS_ENTRY)
+                                   | (entry ? IR_SPATH_READS_ENTRY : 0));
+        }
         if (own) path.flags |= IR_SPATH_ROOT;
         else if (loc->site != PT_EXTERNAL)
             path.flags &= (uint8_t)~IR_SPATH_ROOT;
@@ -6064,9 +6107,11 @@ static void
 record_set(pt_t *pt, ir_summary_t *summary, const pt_set_t *addresses,
            uint8_t flags, th_type *carried)
 {
-    for (size_t i = 0; i < addresses->len; i++)
-        if (is_address(&addresses->data[i]))
-            record_loc(pt, summary, &addresses->data[i].loc, flags, carried);
+    for (size_t i = 0; i < addresses->len; i++) {
+        const pt_item_t *address = &addresses->data[i];
+        if (is_address(address))
+            record_loc(pt, summary, &address->loc, flags, carried);
+    }
 }
 
 static void
@@ -6605,9 +6650,9 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     pt->aliased   = core_list_new(uint32_t);
     pt->described = core_list_new(uint32_t);
     pt->seen      = (pt_set_t){0};
-    pt->context   = core_list_new(pt_access_t);
     for (size_t s = 0; s < 3; s++) pt->scratch[s] = (pt_set_t){0};
     pt->calls     = core_list_new(pt_callees_t);
+    pt->context   = core_list_new(pt_access_t);
     pt->flow      = (pt_flow_t){
         .defs  = core_list_new(flow_def_t),
         .steps = core_list_new(flow_step_t),
@@ -6673,6 +6718,7 @@ pt_free(pt_t *pt)
         core_list_free(pt->calls.data[i].callees);
     }
     core_list_free(pt->calls);
+    core_list_free(pt->context);
     core_dict_free(&pt->call_index);
     core_list_free(pt->aliased);
     for (size_t r = 0; r < pt->external_writes.len; r++)
@@ -6696,6 +6742,12 @@ pt_free(pt_t *pt)
     core_dict_foreach(&pt->heap_sites, entry) core_free(entry->key);
     core_dict_free(&pt->heap_sites);
     core_dict_free(&pt->copy_ins);
+    if (pt->entry.built) {
+        core_list_free(pt->entry.cells);
+        core_dict_free(&pt->entry.gens);
+        core_free(pt->entry.in);
+        core_free(pt->entry.state);
+    }
     core_dict_foreach(&pt->resolved, entry) {
         resolved_t *resolved = entry->value;
         core_list_free(resolved->items);
@@ -6707,7 +6759,6 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_groups);
     core_list_free(pt->described);
     core_list_free(pt->seen);
-    core_list_free(pt->context);
     for (size_t s = 0; s < 3; s++) core_list_free(pt->scratch[s]);
     flow_free(&pt->flow);
     core_list_free(pt->order);
@@ -6745,6 +6796,23 @@ pt_solve(pt_t *pt)
         spread_escapes(pt);
         if (!pt->pending) return true;
     }
+}
+
+static pt_t *
+function_engine(ir_summaries_t *summaries, ir_func_t *f)
+{
+    bool  found = false;
+    pt_t *pt    = core_dict_get(&summaries->engines, f, &found);
+    if (found) return pt;
+    pt = core_alloc(pt_t);
+    pt_init(pt, summaries, f, false);
+    if (!pt_solve(pt)) {
+        pt_free(pt);
+        core_free(pt);
+        pt = nullptr;
+    }
+    core_dict_put(&summaries->engines, f, pt);
+    return pt;
 }
 
 static void
@@ -6895,12 +6963,13 @@ summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
     pt_init(&pt, summaries, f, !summaries->escapes_only);
     if (pt_solve(&pt)) {
         pt.places = ir_func_places(f);
-        pt.memssa = summaries->escapes_only ? nullptr : ir_func_memssa(f);
         pt_record(&pt, summary);
         summarize_results(&pt, summary);
         describe_heap(&pt, summary, &pt.described);
         name_heaps(&pt, summary);
         if (pt.unknown_at) explain_unknown(summary, &pt.unknown);
+        if (!summaries->escapes_only)
+            summarize_writes(summaries, f, &pt, summary);
     }
     else {
         add_unknown_path(summary, IR_SPATH_ACCESS);
@@ -7426,8 +7495,6 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             if (summaries->escapes_only)
                 next->contained = contained_parameters(summaries,
                                                        members[i]);
-            else
-                summarize_writes(summaries, next, members[i]);
             ir_analysis_scope_end(scope);
             if (cyclic) {
                 join_flows(&next->flows[IR_SFLOW_RESULTS],
@@ -7639,6 +7706,7 @@ compute_summaries(ir_func_t *const *functions, size_t count,
     summaries->owned = core_list_new(summary_ptr_t);
     core_dict_init(&summaries->by_function, nullptr, nullptr);
     core_dict_init(&summaries->type_memos, nullptr, nullptr);
+    core_dict_init(&summaries->engines, nullptr, nullptr);
     collect_reinterpretations(summaries, functions, count);
     tarjan_t t = {.summaries = summaries,
                   .stack = core_list_new(summary_func_ptr_t)};
@@ -7681,6 +7749,11 @@ ir_summaries_free(ir_summaries_t *summaries)
     core_list_free(summaries->owned);
     core_dict_free(&summaries->by_function);
     type_memos_free(&summaries->type_memos);
+    core_dict_foreach(&summaries->engines, entry) {
+        if (entry->value) pt_free(entry->value);
+        core_free(entry->value);
+    }
+    core_dict_free(&summaries->engines);
     core_free(summaries);
 }
 

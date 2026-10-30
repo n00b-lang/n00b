@@ -25793,8 +25793,8 @@ validate_missing_returns(n00bb_link_analysis_t *analysis)
         ir_summary_facts_t *facts = ir_summary_of(analysis->summaries,
                                                   site->function)
             ? group_facts(analysis, site->function, false) : nullptr;
-        if (!facts || !ir_paths_reach(site->function, diverging_call_step,
-                                      facts, site->trap))
+        if (!facts || !ir_paths_state(site->function, IR_PATH_UNPASSED,
+                                      diverging_call_step, facts, site->trap))
             continue;
         core_diagnostics_t *diagnostics =
             core_translation_unit_diagnostics(site->unit);

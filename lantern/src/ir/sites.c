@@ -297,21 +297,20 @@ ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
     return solved;
 }
 
-bool
-ir_paths_reach(ir_func_t *f, ir_path_step_fn step, void *context,
-               const ir_instr_t *at)
+uint8_t
+ir_paths_state(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
+               void *context, const ir_instr_t *at)
 {
     ir_path_exits_t exits;
-    uint8_t *incoming = paths_solve(f, IR_PATH_UNPASSED, step, context,
-                                    &exits);
-    if (!incoming) return true;
+    uint8_t *incoming = paths_solve(f, entry, step, context, &exits);
+    if (!incoming) return IR_PATH_UNPASSED;
     uint8_t state = incoming[at->block->index];
     for (uint32_t i = 0; state && i < at->index; i++)
         state = ir_path_apply(state, step_of(step, context,
                                              at->block->instrs[i],
                                              IR_PATH_ANY));
     core_free(incoming);
-    return state != 0;
+    return state;
 }
 
 static uint8_t *
