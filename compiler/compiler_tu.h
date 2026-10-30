@@ -876,6 +876,10 @@ parse_tree_t *call_arguments_node(parse_grammar_t *grammar,
 void collect_positional_nodes(parse_grammar_t *grammar,
                               parse_tree_t *node,
                               core_list_t(n00bb_tree_ptr_t) *arguments);
+bool n00bb_call_literal_argument(parse_grammar_t *grammar,
+                                 n00bb_tu_state_t *state, parse_tree_t *call,
+                                 size_t index, size_t arity,
+                                 core_string_t *out);
 core_string_t *cache_trait_name_parts(parse_tree_t *node, size_t *count);
 parse_tree_t *n00bb_init_target(parse_grammar_t *grammar,
                                 parse_tree_t *node);

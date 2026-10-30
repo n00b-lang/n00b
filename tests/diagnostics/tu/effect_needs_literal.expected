@@ -1,0 +1,1 @@
+tests/diagnostics/tu/effect_needs_literal.n:2:5: error N00B-T1026: `__effect` takes one string literal

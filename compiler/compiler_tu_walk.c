@@ -183,6 +183,29 @@ report_modifier_without_literal(core_translation_unit_t *unit,
 }
 
 static void
+check_effect_call(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                  parse_tree_t *node)
+{
+    const parse_rule_t *rule = parse_tree_rule(grammar, node);
+    if (!rule || !parse_rule_find_annot(grammar, rule, PARSE_ANNOT_CALL)
+        || !core_tree_num_children(node)) return;
+    parse_sym_entry_t *symbol = attached_symbol(grammar, unit,
+                                                core_tree_child(node, 0));
+    core_string_t name = {0};
+    if (!n00bb_builtin_native_function(symbol)
+        || !core_string_eq(symbol->name, CORE_STRING_STATIC("__effect"))
+        || (n00bb_call_literal_argument(grammar, tu_state(unit), node, 0, 1,
+                                        &name)
+            && name.u8_bytes))
+        return;
+    n00bb_report(core_translation_unit_diagnostics(unit), unit,
+        N00B_DIAG_BUILTIN_ARGUMENTS, link_source_location(node),
+        N00B_TEXT_BUILTIN_EXPECTS,
+        N00BB_ARGS(ARG_TEXT(symbol->name),
+                   ARG_PHRASE_ID(N00B_TEXT_PHRASE_TAKES_ONE_STRING_LITERAL)));
+}
+
+static void
 report_type_declaration_form(core_translation_unit_t *unit,
                              parse_tree_t *node)
 {
@@ -304,6 +327,7 @@ semantic_annotation_node(void *context, core_translation_unit_t *unit,
             grammar, unit, node, parent))
         return;
     if (entering) n00bb_range_enter_node(grammar, state, node, parent);
+    else check_effect_call(grammar, unit, node);
     bool invalid_field_access = !entering
         && check_local_record_field_reference(grammar, unit, node);
     bool variant_payload = !entering

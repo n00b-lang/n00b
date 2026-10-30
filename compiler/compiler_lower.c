@@ -1268,31 +1268,35 @@ report_let_reassigned(ir_lower_context_t *context, parse_tree_t *target,
         N00BB_ARGS(ARG_TEXT(symbol->name)));
 }
 
-static const ir_value_t *
-value_source(const ir_value_t *value)
+static const core_string_t effects_subject_key =
+    CORE_STRING_STATIC("n00bb.effects.subject");
+static const core_string_t effects_name_key =
+    CORE_STRING_STATIC("n00bb.effects.name");
+
+static bool
+effects_query_builtin(const parse_sym_entry_t *symbol)
 {
-    for (uint32_t depth = 0; value && depth < 8; depth++) {
-        const ir_instr_t *source = value->kind == IR_VAL_INSTR
-            ? value->def : nullptr;
-        if (!source || source->n_operands != 1
-            || source->operands[0].kind != IR_OPD_VALUE
-            || (source->op != IR_OP_RETAIN_REF && source->op != IR_OP_COPY
-                && source->op != IR_OP_ADDRESS_OF)) return value;
-        value = source->operands[0].value;
-    }
-    return nullptr;
+    static const core_string_t queries[] = {
+        CORE_STRING_STATIC("__function_effects"),
+        CORE_STRING_STATIC("__function_has_effect"),
+        CORE_STRING_STATIC("__function_reads"),
+        CORE_STRING_STATIC("__function_writes"),
+    };
+    for (size_t q = 0; q < sizeof(queries) / sizeof(*queries); q++)
+        if (core_string_eq(symbol->name, queries[q])) return true;
+    return false;
 }
 
-static core_string_t
-literal_text(const ir_value_t *value)
+static bool
+annotate_effects_query(ir_ctx_t *ctx, ir_instr_t *call, ir_value_t *subject,
+                       core_string_t name)
 {
-    value = value_source(value);
-    const ir_instr_t *source = value && value->kind == IR_VAL_INSTR
-        ? value->def : nullptr;
-    return source && source->op == IR_OP_CONST && source->const_bytes
-        ? core_string_borrow((const char *)source->const_bytes,
-                             source->const_byte_len)
-        : (core_string_t){0};
+    return (!subject || ir_annot_set(ctx, &call->annots, (ir_annot_t){
+                .key = effects_subject_key, .kind = IR_ANNOT_VALUE,
+                .v = subject}))
+        && (!name.u8_bytes || ir_annot_set(ctx, &call->annots, (ir_annot_t){
+                .key = effects_name_key, .kind = IR_ANNOT_STR,
+                .s = ir_strdup(ctx, name)}));
 }
 
 static ir_lower_result_t
@@ -13370,6 +13374,17 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
             return lower_internal(context, span,
                 "could not retain builtin trait method requirement");
     }
+    if (native_builtin
+        && core_string_eq(symbol->name, CORE_STRING_STATIC("__effect"))) {
+        core_string_t effect = {0};
+        if (!n00bb_call_literal_argument(visit->grammar, caller_state,
+                                         call_node, 0, 1, &effect))
+            return lower_internal(context, span,
+                "__effect reached lowering without a literal name");
+        return ir_func_add_effect(context->function, effect)
+            ? (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr}
+            : lower_internal(context, span, "could not record an effect");
+    }
     if (native_builtin) {
         const core_string_t *native_name = parse_sym_binding(symbol,
             CORE_STRING_STATIC("n00bb.abi.native"));
@@ -13788,6 +13803,14 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         if (array) core_list_push(values, array);
         else collected = false;
     }
+    bool query = native_builtin && effects_query_builtin(symbol);
+    ir_value_t *query_subject = query && parameter_count
+        && argument_by_parameter[0]
+        ? ir_lower_node_value(context, argument_by_parameter[0]) : nullptr;
+    core_string_t query_name = {0};
+    if (query && parameter_count == 2)
+        (void)n00bb_call_literal_argument(visit->grammar, caller_state,
+                                          call_node, 1, 2, &query_name);
     core_free(argument_types);
     core_list_free(actuals);
     core_list_free(rest_values);
@@ -13800,25 +13823,6 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         return lower_failed_after(context, span, CORE_STRING_STATIC(
             "call arguments could not be prepared for their parameter "
             "modes"));
-    }
-    if (native_builtin && core_string_eq(symbol->name,
-            CORE_STRING_STATIC("__effect"))) {
-        core_string_t name = values.len == 1 && !copyouts.len
-            ? literal_text(values.data[0]) : (core_string_t){0};
-        bool valid = name.u8_bytes != 0;
-        ir_instr_t *nothing = valid
-            && ir_func_add_effect(context->function, name)
-            ? ir_lower_emit_instruction(context, IR_OP_NIL, span) : nullptr;
-        bool emitted = nothing
-            && ir_lower_set_temp_dest(context, nothing,
-                                      CORE_STRING_STATIC("__n00bb_"),
-                                      result_type);
-        core_list_free(values);
-        core_list_free(copyouts);
-        return emitted
-            ? (ir_lower_result_t){IR_LOWER_VALUE, nothing->dest}
-            : lower_builtin_failure(context, valid, span, symbol,
-                N00B_TEXT_PHRASE_TAKES_ONE_STRING_LITERAL);
     }
     if (native_builtin && core_string_eq(symbol->name,
             CORE_STRING_STATIC("__array_length"))) {
@@ -14442,6 +14446,13 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         copyouts = core_list_new(n00bb_copyout_t);
     }
     instruction->span = span;
+    if (query && !annotate_effects_query(lower->ir_context, instruction,
+                                         query_subject, query_name)) {
+        core_list_free(values);
+        core_list_free(copyouts);
+        return lower_internal(context, span,
+                           "could not record the effect query subject");
+    }
     ir_shape_t *return_shape = parse_sym_binding(symbol,
         CORE_STRING_STATIC("ir.return-shape"));
     if (!has_error && !n00bb_emit_sequence_shape_check(context,
@@ -21517,26 +21528,21 @@ typedef enum {
     EFFECTS_QUERY_WRITES,
 } effects_query_t;
 
-static const ir_value_t *
-query_operand_source(const ir_instr_t *call, uint32_t operand)
-{
-    return operand < call->n_operands
-            && call->operands[operand].kind == IR_OPD_VALUE
-        ? value_source(call->operands[operand].value) : nullptr;
-}
-
 static ir_func_t *
-effects_subject(const ir_instr_t *call)
+effects_subject(ir_instr_t *call)
 {
-    const ir_value_t *value = query_operand_source(call, 1);
+    ir_annot_t *subject = ir_annot_get(&call->annots, effects_subject_key);
+    ir_value_t *value = subject && subject->kind == IR_ANNOT_VALUE
+        ? subject->v : nullptr;
     return value && value->kind == IR_VAL_FUNC && value->owner
         ? n00bb_cached_body(value->owner) : nullptr;
 }
 
 static core_string_t
-query_text(const ir_instr_t *call)
+query_text(ir_instr_t *call)
 {
-    return literal_text(query_operand_source(call, 2));
+    ir_annot_t *name = ir_annot_get(&call->annots, effects_name_key);
+    return name && name->kind == IR_ANNOT_STR ? name->s : (core_string_t){0};
 }
 
 static effects_query_t
@@ -21572,7 +21578,7 @@ summary_has_effect(const ir_summary_t *summary, core_string_t name)
 }
 
 static uint64_t
-effects_answer(n00bb_link_analysis_t *analysis, const ir_instr_t *in,
+effects_answer(n00bb_link_analysis_t *analysis, ir_instr_t *in,
                effects_query_t query)
 {
     ir_func_t *subject = effects_subject(in);
