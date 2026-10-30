@@ -798,14 +798,23 @@ ir_summary_conservative(ir_summaries_t *summaries, const ir_func_t *function)
     return summary;
 }
 
-static bool
-returns_reference(const ir_summary_t *summary)
+static bool holds_pointers(const ir_func_t *f, th_type *type, uint32_t depth);
+
+static th_type *
+summary_callable(const ir_summary_t *summary)
 {
     th_type *callable = summary->function
         ? th_resolve(summary->function->type) : nullptr;
-    if (!callable || th_kind_of(callable) != TH_FUNCTION) return true;
-    th_type *ret = th_func_ret(callable);
-    return ret && th_kind_of(th_resolve(ret)) == TH_INDIRECTION;
+    return callable && th_kind_of(callable) == TH_FUNCTION ? callable
+                                                           : nullptr;
+}
+
+static bool
+returns_pointers(const ir_summary_t *summary)
+{
+    th_type *callable = summary_callable(summary);
+    return !callable
+        || holds_pointers(summary->function, th_func_ret(callable), 0);
 }
 
 static uint8_t
@@ -834,11 +843,10 @@ ir_summary_param_escape(const ir_summary_t *summary, uint32_t param)
         const ir_spath_t *to     = &summary->results.data[i].to;
         bool              direct = !to->depth
             && !(to->flags & IR_SPATH_DEEP);
-        bool              own    = direct
-            && (to->output ? callable
-                    && ir_call_output_param(callable, to->output - 1u)
-                           == param
-                : returns_reference(summary));
+        bool              own    = to->output
+            ? direct && callable
+                && ir_call_output_param(callable, to->output - 1u) == param
+            : returns_pointers(summary);
         escape |= escape_from(&summary->results.data[i].from, param, !own);
     }
     return escape;
@@ -876,7 +884,7 @@ ir_summary_return(const ir_summary_t *summary)
     if (!summary || !summary->results_known)
         return (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN};
     ir_sreturn_t returned = {.kind = IR_SRETURN_NONE};
-    if (!returns_reference(summary)) return returned;
+    if (!returns_pointers(summary)) return returned;
     for (size_t i = 0; i < summary->results.len; i++) {
         const ir_sstore_t *result = &summary->results.data[i];
         if (result->to.output || result->to.depth) continue;
@@ -1493,20 +1501,30 @@ ir_summary_place_of(const ir_func_t *function, const ir_place_t *place,
 }
 
 static bool
+returns_parameter_address(const ir_summary_t *summary, uint32_t param)
+{
+    if (!summary || !summary->results_known) return true;
+    for (size_t i = 0; i < summary->results.len; i++) {
+        const ir_sstore_t *result = &summary->results.data[i];
+        if (result->to.output) continue;
+        if (result->from.root == IR_SPLACE_UNKNOWN
+            || escape_from(&result->from, param, true)
+                & IR_SESCAPE_ADDRESS)
+            return true;
+    }
+    return false;
+}
+
+static bool
 call_returns_parameter(ir_summaries_t *summaries, const ir_instr_t *call,
                        uint32_t param)
 {
     call_targets_t targets;
     resolve_targets(summaries, call, &targets);
     bool returns = targets.unknown;
-    for (size_t t = 0; !targets.unknown && t < targets.targets.len; t++) {
-        ir_sreturn_t returned = ir_summary_return(
-            target_summary(summaries, targets.targets.data[t]));
-        returns |= returned.kind == IR_SRETURN_UNKNOWN
-            || returned.kind == IR_SRETURN_FRESH
-            || (returned.kind == IR_SRETURN_PARAM
-                && returned.param == param);
-    }
+    for (size_t t = 0; !returns && t < targets.targets.len; t++)
+        returns = returns_parameter_address(
+            target_summary(summaries, targets.targets.data[t]), param);
     core_list_free(targets.targets);
     return returns;
 }
@@ -4162,15 +4180,24 @@ typedef struct {
 core_list_decl(flow_def_t);
 
 typedef struct {
-    core_dict_t             writes;
-    core_dict_t             positions;
-    core_dict_t             def_ranges;
-    core_list_t(flow_def_t) defs;
-    uint64_t               *block_in;
-    uint64_t               *state;
-    uint32_t                words;
-    bool                    stale;
-    pt_set_t                items;
+    uint32_t index;
+    uint32_t first;
+    uint32_t count;
+} flow_step_t;
+core_list_decl(flow_step_t);
+
+typedef struct {
+    core_dict_t              writes;
+    core_dict_t              positions;
+    core_list_t(flow_def_t)  defs;
+    core_list_t(flow_step_t) steps;
+    uint32_t                *block_steps;
+    uint64_t                *kills;
+    uint64_t                *block_in;
+    uint64_t                *state;
+    uint32_t                 words;
+    bool                     stale;
+    pt_set_t                 items;
 } pt_flow_t;
 
 typedef struct {
@@ -4609,23 +4636,32 @@ write_kill(const pt_write_t *write)
 }
 
 static void
-flow_apply(pt_flow_t *flow, const ir_instr_t *in, uint64_t *state)
+flow_apply(const pt_flow_t *flow, const flow_step_t *step, uint64_t *state)
 {
-    bool      found = false;
-    uintptr_t range = (uintptr_t)core_dict_get(&flow->def_ranges, in, &found);
-    if (!found) return;
-    uint32_t first = (uint32_t)(range >> 32), count = (uint32_t)range;
-    for (uint32_t d = first; d < first + count; d++) {
+    for (uint32_t d = step->first; d < step->first + step->count; d++) {
+        const uint64_t *kill = &flow->kills[(size_t)d * flow->words];
+        for (uint32_t w = 0; w < flow->words; w++) state[w] &= ~kill[w];
+    }
+    for (uint32_t d = step->first; d < step->first + step->count; d++)
+        state[d / 64] |= UINT64_C(1) << (d % 64);
+}
+
+static void
+flow_kills(pt_flow_t *flow)
+{
+    core_free(flow->kills);
+    flow->kills = core_alloc_array(uint64_t,
+                                   flow->defs.len * flow->words + 1);
+    for (size_t d = 0; d < flow->defs.len; d++) {
         const flow_def_t *def = &flow->defs.data[d];
         if (def->kill == FLOW_KILL_NONE) continue;
+        uint64_t *kill = &flow->kills[d * flow->words];
         for (size_t e = 0; e < flow->defs.len; e++)
             if (flow->defs.data[e].site == def->site
                 && (def->kill == FLOW_KILL_SITE
                     || core_string_eq(flow->defs.data[e].cell, def->cell)))
-                state[e / 64] &= ~(UINT64_C(1) << (e % 64));
+                kill[e / 64] |= UINT64_C(1) << (e % 64);
     }
-    for (uint32_t d = first; d < first + count; d++)
-        state[d / 64] |= UINT64_C(1) << (d % 64);
 }
 
 static void
@@ -4633,10 +4669,12 @@ flow_build(pt_t *pt)
 {
     pt_flow_t       *flow = &pt->flow;
     const ir_func_t *f    = pt->f;
-    flow->defs.len = 0;
-    core_dict_free(&flow->def_ranges);
-    core_dict_init(&flow->def_ranges, nullptr, nullptr);
-    for (uint32_t b = 0; b < f->n_blocks; b++)
+    flow->defs.len  = 0;
+    flow->steps.len = 0;
+    core_free(flow->block_steps);
+    flow->block_steps = core_alloc_array(uint32_t, f->n_blocks + 1);
+    for (uint32_t b = 0; b < f->n_blocks; b++) {
+        flow->block_steps[b] = (uint32_t)flow->steps.len;
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in     = f->blocks[b]->instrs[i];
             bool              found  = false;
@@ -4662,11 +4700,14 @@ flow_build(pt_t *pt)
                 }
             }
             if (flow->defs.len != first)
-                core_dict_put(&flow->def_ranges, in, (void *)(
-                    (uintptr_t)first << 32
-                    | (uintptr_t)(flow->defs.len - first)));
+                core_list_push(flow->steps, ((flow_step_t){
+                    .index = i, .first = first,
+                    .count = (uint32_t)flow->defs.len - first}));
         }
+    }
+    flow->block_steps[f->n_blocks] = (uint32_t)flow->steps.len;
     flow->words = (uint32_t)((flow->defs.len + 63) / 64) + 1;
+    flow_kills(flow);
     core_free(flow->block_in);
     core_free(flow->state);
     flow->block_in = core_alloc_array(uint64_t,
@@ -4678,8 +4719,9 @@ flow_build(pt_t *pt)
             ir_block_t *block = f->blocks[b];
             memcpy(flow->state, &flow->block_in[(size_t)b * flow->words],
                    flow->words * sizeof(uint64_t));
-            for (uint32_t i = 0; i < block->n_instrs; i++)
-                flow_apply(flow, block->instrs[i], flow->state);
+            for (uint32_t s = flow->block_steps[b];
+                 s < flow->block_steps[b + 1]; s++)
+                flow_apply(flow, &flow->steps.data[s], flow->state);
             ir_instr_t *last = block->n_instrs
                 ? block->instrs[block->n_instrs - 1] : nullptr;
             for (uint32_t s = 0; last && s < ir_succ_count(last); s++) {
@@ -4709,12 +4751,13 @@ site_contents(pt_t *pt, uint32_t site)
                                                 &found);
     if (!found) return &entry->contents;
     if (flow->stale) flow_build(pt);
-    uint32_t    block = (uint32_t)(at >> 32), index = (uint32_t)at;
-    ir_block_t *owner = pt->f->blocks[block];
+    uint32_t block = (uint32_t)(at >> 32), index = (uint32_t)at;
     memcpy(flow->state, &flow->block_in[(size_t)block * flow->words],
            flow->words * sizeof(uint64_t));
-    for (uint32_t i = 0; i < index; i++)
-        flow_apply(flow, owner->instrs[i], flow->state);
+    for (uint32_t s = flow->block_steps[block];
+         s < flow->block_steps[block + 1]
+         && flow->steps.data[s].index < index; s++)
+        flow_apply(flow, &flow->steps.data[s], flow->state);
     flow->items.len = 0;
     for (size_t d = 0; d < flow->defs.len; d++) {
         const flow_def_t *def = &flow->defs.data[d];
@@ -6060,6 +6103,7 @@ static void
 record_loc(pt_t *pt, ir_summary_t *summary, const pt_loc_t *loc,
            uint8_t flags, th_type *carried)
 {
+    if (pt->summaries->escapes_only && !(flags & IR_SPATH_WRITE)) return;
     path_list_t names = core_list_new(ir_spath_t);
     name_loc(pt, loc, &names, nullptr);
     for (size_t n = 0; n < names.len; n++) {
@@ -6427,11 +6471,11 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f)
     pt->calls     = core_list_new(pt_callees_t);
     pt->flow      = (pt_flow_t){
         .defs  = core_list_new(flow_def_t),
+        .steps = core_list_new(flow_step_t),
         .items = core_list_new(pt_item_t),
     };
     core_dict_init(&pt->flow.writes, nullptr, nullptr);
     core_dict_init(&pt->flow.positions, nullptr, nullptr);
-    core_dict_init(&pt->flow.def_ranges, nullptr, nullptr);
     pt->order  = core_list_new(summary_instr_ptr_t);
     pt->reader = PT_NO_READER;
     core_dict_init(&pt->readers, nullptr, nullptr);
@@ -6460,9 +6504,11 @@ flow_free(pt_flow_t *flow)
     }
     core_dict_free(&flow->writes);
     core_dict_free(&flow->positions);
-    core_dict_free(&flow->def_ranges);
     core_list_free(flow->defs);
+    core_list_free(flow->steps);
     core_list_free(flow->items);
+    core_free(flow->block_steps);
+    core_free(flow->kills);
     core_free(flow->block_in);
     core_free(flow->state);
 }
@@ -6953,6 +6999,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
         summary->flags = IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES;
+        summary->results_known = true;
         core_dict_put(&summaries->by_function, members[i], summary);
     }
     member_callers_t *callers = member_callers(summaries, members, count);
