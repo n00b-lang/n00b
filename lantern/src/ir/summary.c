@@ -4078,20 +4078,13 @@ add_field(ir_summary_t *summary, th_type *record, core_string_t name,
 static uint8_t
 field_pointer_use(const ir_instr_t *use, uint32_t operand)
 {
-    switch (use->op) {
-    case IR_OP_LOAD:
+    if ((int32_t)operand == ir_op_source_operand(use->op))
         return IR_SFIELD_READ;
-    case IR_OP_STORE:
-        return operand == 0 ? IR_SFIELD_WRITE
-                            : IR_SFIELD_READ | IR_SFIELD_WRITE;
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-        return operand == 0 ? IR_SFIELD_WRITE : IR_SFIELD_READ;
-    case IR_OP_MEMSET:
-        return IR_SFIELD_WRITE;
-    default:
+    if ((int32_t)operand != ir_op_address_operand(use->op))
         return IR_SFIELD_READ | IR_SFIELD_WRITE;
-    }
+    uint8_t access = ir_op_memory_access(use->op);
+    return (access & IR_MEM_READ ? IR_SFIELD_READ : 0)
+         | (access & IR_MEM_WRITE ? IR_SFIELD_WRITE : 0);
 }
 
 static bool
