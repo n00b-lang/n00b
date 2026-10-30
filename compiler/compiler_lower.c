@@ -22051,6 +22051,24 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         fputc('\n', stdout);
     }
     ir_spath_list_release(&merged);
+    for (uint32_t i = 0; !for_reader && i < ir_summary_result_count(summary);
+         i++) {
+        const ir_sstore_t *result = ir_summary_result_at(summary, i);
+        fprintf(stdout, "  result %u ", result->to.output);
+        dump_spath(function, &result->from);
+        if (result->from.flags & IR_SPATH_ROOT) fputs(" root", stdout);
+        fputc('\n', stdout);
+    }
+    for (uint32_t i = 0; !for_reader && i < ir_summary_store_count(summary);
+         i++) {
+        const ir_sstore_t *store = ir_summary_store_at(summary, i);
+        fputs("  store ", stdout);
+        dump_spath(function, &store->to);
+        fputs(" <- ", stdout);
+        dump_spath(function, &store->from);
+        if (store->from.flags & IR_SPATH_ROOT) fputs(" root", stdout);
+        fputc('\n', stdout);
+    }
     for (uint32_t p = 0; p < function->n_params; p++) {
         uint8_t escape = ir_summary_param_escape(summary, p);
         if (!escape) continue;

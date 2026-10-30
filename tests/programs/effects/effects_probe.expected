@@ -1,7 +1,6 @@
 sys.internal.fs.read_file: (string) -> Array[u8] fail: int
   effects may_fail may_trap may_allocate may_block may_io may_collect allocates_direct reinterprets may_input
   reads path.data...
-  escapes path referent
   traps explicit bounds unwrap arithmetic
   returns fresh
 sys.internal.env.args: () -> List[string]
@@ -30,7 +29,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   reads self.entries[]
   reads key...
   reads builtin.hashing.secret[]...
-  escapes key address
+  escapes self referent
   traps explicit bounds unwrap arithmetic
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
@@ -48,6 +47,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   reads+writes self.index.slots[]
   reads key...
   reads builtin.hashing.secret[]...
+  escapes self referent
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
@@ -59,6 +59,7 @@ builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   reads self.index.dead[]
   reads self.entries
   reads self.entries[]
+  escapes self referent
   traps bounds arithmetic
 builtin.containers.list.len: (List['T]) -> uint
   effects none
@@ -76,6 +77,7 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   reads spans.items
   reads spans.items[]
   escapes text address
+  escapes spans referent
   traps explicit bounds unwrap arithmetic
 unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
