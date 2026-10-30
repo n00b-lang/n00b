@@ -1742,6 +1742,11 @@ use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
     case IR_OP_ENUM_VALUE:
         return false;
     case IR_OP_CAST:
+        if (use->dest && ir_machine_of(walk->function->owner,
+                use->dest->type).class == IR_CLASS_PTR) {
+            derive(walk, use->dest);
+            return false;
+        }
         return !operand->value || ir_machine_of(walk->function->owner,
             operand->value->type).class == IR_CLASS_PTR;
     case IR_OP_CALL:
@@ -1787,6 +1792,10 @@ storage_use_escapes(escape_walk_t *walk, const ir_instr_t *use,
     case IR_OP_INDEX:
     case IR_OP_OFFSET:
     case IR_OP_BITCAST:
+    case IR_OP_NOMINAL_CAST:
+    case IR_OP_TYPE_NARROW:
+    case IR_OP_OPTION_SOME:
+    case IR_OP_OPTION_GET:
     case IR_OP_PHI:
     case IR_OP_SELECT:
         if (use->op == IR_OP_SELECT && index == 0) return false;
