@@ -7127,10 +7127,10 @@ array_dimension_extent(parse_grammar_t *grammar, parse_tree_t *expression)
             .kind = IR_SHAPE_EXTENT_STATIC,
             .static_value = value,
         };
-    parse_scope_t *scope = parse_tree_scope(expression);
+    if (!scope_is_within_function(parse_tree_scope(expression)))
+        return (ir_shape_extent_t){.kind = IR_SHAPE_EXTENT_UNRESOLVED};
     return (ir_shape_extent_t){
-        .kind = scope_is_within_function(scope) ? IR_SHAPE_EXTENT_RUNTIME
-                                                : IR_SHAPE_EXTENT_UNRESOLVED,
+        .kind       = IR_SHAPE_EXTENT_RUNTIME,
         .expression = expression,
     };
 }
