@@ -22,26 +22,8 @@ typedef struct {
 } ir_splace_t;
 
 enum {
-    IR_SUMMARY_MAY_FAIL         = 1u << 0,
-    IR_SUMMARY_MAY_TRAP         = 1u << 1,
-    IR_SUMMARY_MAY_ALLOCATE     = 1u << 2,
-    IR_SUMMARY_MAY_BLOCK        = 1u << 3,
-    IR_SUMMARY_DIVERGES         = 1u << 4,
-    IR_SUMMARY_CALLS_UNKNOWN    = 1u << 5,
-    IR_SUMMARY_MAY_IO           = 1u << 6,
-    IR_SUMMARY_NO_RETURN        = 1u << 7,
-    IR_SUMMARY_MAY_COLLECT      = 1u << 8,
-    IR_SUMMARY_ALLOCATES_DIRECT = 1u << 9,
-    IR_SUMMARY_UNBOUNDED_RECURSION = 1u << 10,
-    IR_SUMMARY_CALLS_FINALIZERS = 1u << 11,
-    IR_SUMMARY_STARTS_THREADS   = 1u << 12,
-    IR_SUMMARY_CALLS_CALLBACKS  = 1u << 13,
-    IR_SUMMARY_REINTERPRETS     = 1u << 14,
-    IR_SUMMARY_MAY_INPUT        = 1u << 15,
-    IR_SUMMARY_MAY_OUTPUT       = 1u << 16,
-    IR_SUMMARY_READS_ENV        = 1u << 17,
-    IR_SUMMARY_READS_CLOCK      = 1u << 18,
-    IR_SUMMARY_READS_RANDOM     = 1u << 19,
+#define IR_EFFECT_FLAG(id, name, bit) IR_SUMMARY_##id = 1u << bit,
+#include "ir/summary_effects.def"
 };
 
 #define IR_SUMMARY_OBSERVES (IR_SUMMARY_MAY_INPUT | IR_SUMMARY_MAY_OUTPUT \
@@ -49,11 +31,14 @@ enum {
                              | IR_SUMMARY_READS_RANDOM)
 
 enum {
-    IR_STRAP_EXPLICIT   = 1u << 0,
-    IR_STRAP_BOUNDS     = 1u << 1,
-    IR_STRAP_UNWRAP     = 1u << 2,
-    IR_STRAP_ARITHMETIC = 1u << 3,
-    IR_STRAP_ALL        = 0xf,
+#define IR_EFFECT_TRAP(id, name, bit) IR_STRAP_##id = 1u << bit,
+#include "ir/summary_effects.def"
+};
+
+enum {
+    IR_STRAP_ALL = 0
+#define IR_EFFECT_TRAP(id, name, bit) | IR_STRAP_##id
+#include "ir/summary_effects.def"
 };
 
 typedef struct {
@@ -262,14 +247,30 @@ bool         ir_summary_call_writes(ir_summaries_t *summaries,
                                     const ir_instr_t *call, uint32_t place);
 
 enum {
-    IR_SEFFECT_FLAG_BITS         = 20,
-    IR_SEFFECT_FLAG_MASK         = (1u << IR_SEFFECT_FLAG_BITS) - 1,
-    IR_SEFFECT_TRAPS_SHIFT       = IR_SEFFECT_FLAG_BITS,
-    IR_SEFFECT_READS_PARAM_SHIFT  = 32,
-    IR_SEFFECT_WRITES_PARAM_SHIFT = 48,
+    IR_SEFFECT_FLAG_BITS = 0
+#define IR_EFFECT_FLAG(id, name, bit) + 1
+#include "ir/summary_effects.def"
 };
-#define IR_SEFFECT_READS_NONLOCAL  (UINT64_C(1) << 24)
-#define IR_SEFFECT_WRITES_NONLOCAL (UINT64_C(1) << 25)
+
+enum {
+    IR_SEFFECT_TRAP_BITS = 0
+#define IR_EFFECT_TRAP(id, name, bit) + 1
+#include "ir/summary_effects.def"
+};
+
+enum {
+    IR_SEFFECT_FLAG_MASK   = (1u << IR_SEFFECT_FLAG_BITS) - 1,
+    IR_SEFFECT_TRAPS_SHIFT = IR_SEFFECT_FLAG_BITS,
+#define IR_EFFECT_NONLOCAL(id, name, bit) IR_SEFFECT_##id##_BIT = bit,
+#define IR_EFFECT_PARAMETER(id, name, shift) IR_SEFFECT_##id##_SHIFT = shift,
+#include "ir/summary_effects.def"
+};
+#define IR_SEFFECT_READS_NONLOCAL  (UINT64_C(1) << IR_SEFFECT_READS_NONLOCAL_BIT)
+#define IR_SEFFECT_WRITES_NONLOCAL (UINT64_C(1) << IR_SEFFECT_WRITES_NONLOCAL_BIT)
+
+core_string_t ir_summary_flag_name(uint32_t bit);
+core_string_t ir_summary_trap_name(uint32_t bit);
+bool          ir_summary_effect_lookup(core_string_t name, uint64_t *bits);
 
 ir_summary_t *ir_summary_for(ir_summaries_t *summaries, ir_func_t *function);
 const ir_summary_t *ir_summary_entries(ir_summaries_t *summaries,

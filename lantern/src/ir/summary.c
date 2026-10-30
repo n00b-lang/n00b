@@ -260,6 +260,55 @@ ir_summary_effect_at(const ir_summary_t *summary, uint32_t index)
         ? summary->effects.data[index] : (core_string_t){0};
 }
 
+static const core_string_t flag_names[] = {
+#define IR_EFFECT_FLAG(id, name, bit) [bit] = CORE_STRING_STATIC(#name),
+#include "ir/summary_effects.def"
+};
+
+static const core_string_t trap_names[] = {
+#define IR_EFFECT_TRAP(id, name, bit) [bit] = CORE_STRING_STATIC(#name),
+#include "ir/summary_effects.def"
+};
+
+static const struct {
+    core_string_t name;
+    uint64_t      bits;
+} effect_names[] = {
+#define IR_EFFECT_FLAG(id, name, bit) \
+    {CORE_STRING_STATIC(#name), UINT64_C(1) << bit},
+#define IR_EFFECT_TRAP(id, name, bit) \
+    {CORE_STRING_STATIC("traps_" #name), \
+     UINT64_C(1) << (IR_SEFFECT_TRAPS_SHIFT + bit)},
+#define IR_EFFECT_NONLOCAL(id, name, bit) \
+    {CORE_STRING_STATIC(#name), UINT64_C(1) << bit},
+#include "ir/summary_effects.def"
+};
+
+core_string_t
+ir_summary_flag_name(uint32_t bit)
+{
+    return bit < sizeof(flag_names) / sizeof(*flag_names)
+        ? flag_names[bit] : (core_string_t){0};
+}
+
+core_string_t
+ir_summary_trap_name(uint32_t bit)
+{
+    return bit < sizeof(trap_names) / sizeof(*trap_names)
+        ? trap_names[bit] : (core_string_t){0};
+}
+
+bool
+ir_summary_effect_lookup(core_string_t name, uint64_t *bits)
+{
+    for (size_t i = 0; i < sizeof(effect_names) / sizeof(*effect_names); i++)
+        if (core_string_eq(effect_names[i].name, name)) {
+            *bits = effect_names[i].bits;
+            return true;
+        }
+    return false;
+}
+
 bool
 ir_summary_has_effect(const ir_summary_t *summary, core_string_t name)
 {

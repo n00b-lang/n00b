@@ -87,29 +87,6 @@ static const struct {
     [REL_RECORD_READ]          = {CORE_STRING_STATIC("record_read"), 1},
 };
 
-static const core_string_t flag_names[] = {
-    CORE_STRING_STATIC("may_fail"),
-    CORE_STRING_STATIC("may_trap"),
-    CORE_STRING_STATIC("may_allocate"),
-    CORE_STRING_STATIC("may_block"),
-    CORE_STRING_STATIC("diverges"),
-    CORE_STRING_STATIC("calls_unknown"),
-    CORE_STRING_STATIC("may_io"),
-    CORE_STRING_STATIC("no_return"),
-    CORE_STRING_STATIC("may_collect"),
-    CORE_STRING_STATIC("allocates_direct"),
-    CORE_STRING_STATIC("unbounded_recursion"),
-    CORE_STRING_STATIC("calls_finalizers"),
-    CORE_STRING_STATIC("starts_threads"),
-    CORE_STRING_STATIC("calls_callbacks"),
-    CORE_STRING_STATIC("reinterprets"),
-    CORE_STRING_STATIC("may_input"),
-    CORE_STRING_STATIC("may_output"),
-    CORE_STRING_STATIC("reads_env"),
-    CORE_STRING_STATIC("reads_clock"),
-    CORE_STRING_STATIC("reads_random"),
-};
-
 static const struct {
     uint8_t       flag;
     core_string_t name;
@@ -328,10 +305,10 @@ add_summary_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
                   const ir_summary_t *summary, uint32_t mask)
 {
     uint32_t flags = ir_summary_flags(summary) & mask;
-    for (uint32_t bit = 0; bit < sizeof(flag_names) / sizeof(*flag_names);
-         bit++)
+    for (uint32_t bit = 0; bit < IR_SEFFECT_FLAG_BITS; bit++)
         if (flags & (1u << bit))
-            fact(facts, REL_FLAG, symbol, constant(facts, flag_names[bit]), 0);
+            fact(facts, REL_FLAG, symbol,
+                 constant(facts, ir_summary_flag_name(bit)), 0);
     if ((flags & IR_SUMMARY_MAY_TRAP)
         && (ir_summary_trap_kinds(summary) & IR_STRAP_EXPLICIT))
         fact(facts, REL_FLAG, symbol,
@@ -584,13 +561,6 @@ ir_summary_facts_build(ir_summaries_t *summaries, ir_func_t *const *functions,
     add_rules(facts);
     core_datalog_run(facts->engine);
     return facts;
-}
-
-core_string_t
-ir_summary_flag_name(uint32_t bit)
-{
-    return bit < sizeof(flag_names) / sizeof(*flag_names)
-        ? flag_names[bit] : (core_string_t){0};
 }
 
 void

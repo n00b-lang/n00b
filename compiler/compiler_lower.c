@@ -21565,10 +21565,10 @@ effects_query(const ir_instr_t *in)
 static bool
 summary_has_effect(const ir_summary_t *summary, core_string_t name)
 {
-    for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++)
-        if (core_string_eq(ir_summary_flag_name(b), name))
-            return ir_summary_flags(summary) & (1u << b);
-    return ir_summary_has_effect(summary, name);
+    uint64_t bits = 0;
+    return ir_summary_effect_lookup(name, &bits)
+        ? (ir_summary_effect_bits(summary) & bits) != 0
+        : ir_summary_has_effect(summary, name);
 }
 
 static uint64_t
@@ -21943,9 +21943,6 @@ dump_param(const ir_func_t *function, uint32_t p)
     dump_text(&out);
 }
 
-static const char *const trap_names[] = {
-    "explicit", "bounds", "unwrap", "arithmetic"};
-
 static void
 steps_text(core_buffer_t *out, const ir_spath_t *path)
 {
@@ -22081,16 +22078,21 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
     uint8_t traps = ir_summary_trap_kinds(summary);
     if (traps) {
         fputs("  traps", stdout);
-        for (uint32_t t = 0; t < 4; t++)
-            if (traps & (1u << t)) fprintf(stdout, " %s", trap_names[t]);
+        for (uint32_t t = 0; t < IR_SEFFECT_TRAP_BITS; t++)
+            if (traps & (1u << t)) {
+                core_string_t name = ir_summary_trap_name(t);
+                fprintf(stdout, " %.*s", (int)name.u8_bytes, name.data);
+            }
         fputc('\n', stdout);
     }
     for (uint32_t s = 0; s < ir_summary_trap_site_count(summary); s++) {
         const ir_strap_site_t *site = ir_summary_trap_site_at(summary, s);
-        for (uint32_t t = 0; t < 4; t++)
-            if (site->kind == 1u << t)
-                fprintf(stdout, "  trap %s %u:%u\n", trap_names[t],
-                        site->line, site->column);
+        for (uint32_t t = 0; t < IR_SEFFECT_TRAP_BITS; t++)
+            if (site->kind == 1u << t) {
+                core_string_t name = ir_summary_trap_name(t);
+                fprintf(stdout, "  trap %.*s %u:%u\n", (int)name.u8_bytes,
+                        name.data, site->line, site->column);
+            }
     }
     ir_sreturn_t returned = ir_summary_return(summary);
     if (returned.kind == IR_SRETURN_PARAM) {
@@ -22413,10 +22415,11 @@ json_function(core_buffer_t *out, n00bb_link_analysis_t *analysis,
         core_buffer_putc(out, '}');
     }
     core_buffer_puts(out, "],\"traps\":[");
-    for (uint32_t t = 0, n = 0; t < 4; t++)
-        if (ir_summary_trap_kinds(summary) & (1u << t))
-            core_buffer_printf(out, "%s\"%s\"", n++ ? "," : "",
-                               trap_names[t]);
+    for (uint32_t t = 0, n = 0; t < IR_SEFFECT_TRAP_BITS; t++)
+        if (ir_summary_trap_kinds(summary) & (1u << t)) {
+            if (n++) core_buffer_putc(out, ',');
+            core_buffer_append_quoted(out, ir_summary_trap_name(t));
+        }
     core_buffer_putc(out, ']');
     json_bool(out, "returns_fresh", ir_summary_returns_fresh(summary), true);
     core_buffer_puts(out, ",\"returns\":[");
@@ -24045,22 +24048,23 @@ static core_string_t
 describe_flag(core_string_t flag)
 {
     static const struct {
-        core_string_t flag;
+        uint64_t bit;
         n00bb_text_t text;
     } phrases[] = {
-        {CORE_STRING_STATIC("diverges"), N00B_TEXT_FLAG_DIVERGES},
-        {CORE_STRING_STATIC("calls_unknown"), N00B_TEXT_FLAG_CALLS_UNKNOWN},
-        {CORE_STRING_STATIC("may_fail"), N00B_TEXT_FLAG_MAY_FAIL},
-        {CORE_STRING_STATIC("may_trap"), N00B_TEXT_FLAG_MAY_TRAP},
-        {CORE_STRING_STATIC("may_block"), N00B_TEXT_FLAG_MAY_BLOCK},
-        {CORE_STRING_STATIC("may_io"), N00B_TEXT_FLAG_MAY_IO},
-        {CORE_STRING_STATIC("calls_finalizers"),
-         N00B_TEXT_FLAG_CALLS_FINALIZERS},
-        {CORE_STRING_STATIC("starts_threads"), N00B_TEXT_FLAG_STARTS_THREADS},
+        {IR_SUMMARY_DIVERGES, N00B_TEXT_FLAG_DIVERGES},
+        {IR_SUMMARY_CALLS_UNKNOWN, N00B_TEXT_FLAG_CALLS_UNKNOWN},
+        {IR_SUMMARY_MAY_FAIL, N00B_TEXT_FLAG_MAY_FAIL},
+        {IR_SUMMARY_MAY_TRAP, N00B_TEXT_FLAG_MAY_TRAP},
+        {IR_SUMMARY_MAY_BLOCK, N00B_TEXT_FLAG_MAY_BLOCK},
+        {IR_SUMMARY_MAY_IO, N00B_TEXT_FLAG_MAY_IO},
+        {IR_SUMMARY_CALLS_FINALIZERS, N00B_TEXT_FLAG_CALLS_FINALIZERS},
+        {IR_SUMMARY_STARTS_THREADS, N00B_TEXT_FLAG_STARTS_THREADS},
     };
-    for (size_t p = 0; p < sizeof(phrases) / sizeof(*phrases); p++)
-        if (core_string_eq(phrases[p].flag, flag))
-            return n00bb_text(phrases[p].text, N00BB_NO_ARGS);
+    uint64_t bits = 0;
+    if (ir_summary_effect_lookup(flag, &bits))
+        for (size_t p = 0; p < sizeof(phrases) / sizeof(*phrases); p++)
+            if (phrases[p].bit == bits)
+                return n00bb_text(phrases[p].text, N00BB_NO_ARGS);
     return n00bb_text(N00B_TEXT_FLAG_OTHER, N00BB_ARGS(ARG_TEXT(flag)));
 }
 
