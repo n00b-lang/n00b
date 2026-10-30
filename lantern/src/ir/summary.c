@@ -39,6 +39,7 @@ struct ir_summary_t {
     bool                       results_known;
     bool                       returns_external;
     uint8_t                    pointer_result;
+    uint64_t                   contained;
     core_list_t(ir_sstore_t)   results;
     core_list_t(ir_sstore_t)   stores;
     uint8_t                    traps;
@@ -848,6 +849,8 @@ ir_summary_param_escape(const ir_summary_t *summary, uint32_t param)
             : returns_pointers(summary);
         escape |= escape_from(&summary->results.data[i].from, param, !own);
     }
+    if (param < 64 && summary->contained >> param & 1)
+        escape &= (uint8_t)~IR_SESCAPE_ADDRESS;
     return escape;
 }
 
@@ -1857,6 +1860,22 @@ holds_reference(const ir_func_t *f, const ir_value_t *value)
     default:
         return true;
     }
+}
+
+static uint64_t
+contained_parameters(ir_summaries_t *summaries, const ir_func_t *f)
+{
+    uint64_t contained = 0;
+    for (uint32_t p = 0; p < f->n_params && p < 64; p++) {
+        if (!holds_reference(f, f->params[p])) continue;
+        escape_walk_t walk = {
+            .summaries = summaries, .function = f, .param = p,
+            .values = core_list_new(escape_value_t),
+        };
+        if (!walk_escapes(&walk, f->params[p])) contained |= UINT64_C(1) << p;
+        core_list_free(walk.values);
+    }
+    return contained;
 }
 
 void
@@ -4455,7 +4474,7 @@ item_at(pt_loc_t loc)
 static pt_item_t
 held_at(pt_loc_t loc)
 {
-    return (pt_item_t){.held = !loc.path.depth, .loc = loc};
+    return (pt_item_t){.held = true, .loc = loc};
 }
 
 static pt_item_t
@@ -4908,6 +4927,8 @@ address_step(const pt_set_t *from, core_string_t step, pt_set_t *into)
         if (!is_address(&item)) continue;
         item.depth = 0;
         item.deep  = false;
+        item.held  = false;
+        item.slot  = false;
         loc_push(&item.loc, step);
         set_add(into, item);
     }
@@ -4922,6 +4943,8 @@ pointer_offset(const pt_set_t *from, pt_set_t *into)
         uint8_t depth = item.loc.path.depth;
         item.depth = 0;
         item.deep  = false;
+        item.held  = false;
+        item.slot  = false;
         if (!depth || !core_string_eq(item.loc.path.steps[depth - 1],
                                       element_step))
             loc_push(&item.loc, element_step);
@@ -4978,10 +5001,13 @@ pt_load(pt_t *pt, const pt_set_t *addresses, pt_set_t *into)
     for (size_t i = 0; i < addresses->len; i++) {
         const pt_item_t *address = &addresses->data[i];
         if (!is_address(address)) continue;
-        if (address->loc.site == PT_EXTERNAL)
-            set_add(into, held_at(address->loc));
-        else
+        if (address->loc.site != PT_EXTERNAL) {
             content_at(pt, &address->loc, into);
+            continue;
+        }
+        pt_item_t loaded = held_at(address->loc);
+        if (address->held) loaded.loc.path.flags |= IR_SPATH_DEEP;
+        set_add(into, loaded);
     }
 }
 
@@ -5474,8 +5500,10 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         else loc_extend(&at.loc, path->steps + item.depth,
                         path->depth - item.depth, deep);
         at.deep = deep;
-        set_add(into, at);
-        if (at.loc.site == PT_EXTERNAL) continue;
+        if (path->flags & IR_SPATH_ROOT) {
+            set_add(into, at);
+            if (!deep) continue;
+        }
         pt_set_t address = (pt_set_t){0};
         set_add(&address, at);
         pt_load(pt, &address, into);
@@ -6377,7 +6405,8 @@ describe_values(pt_t *pt, const pt_set_t *values, const ir_spath_t *base,
         name_loc(pt, &item->loc, &from, pending);
         for (size_t f = 0; f < from.len; f++) {
             if (item->loc.site == PT_EXTERNAL)
-                from.data[f].flags |= (item->held ? IR_SPATH_DEEP : 0)
+                from.data[f].flags |=
+                    (item->held && !item->loc.path.depth ? IR_SPATH_DEEP : 0)
                     | (!item->held || item->slot ? IR_SPATH_ROOT : 0);
             add_pair(into, &to, &from.data[f]);
         }
@@ -7021,7 +7050,10 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 summarize_divergence(summaries, next, members[i]);
             else summarize_function(summaries, next, members[i]);
             summarize_paths(summaries, next, members[i]);
-            if (!summaries->escapes_only) {
+            if (summaries->escapes_only)
+                next->contained = contained_parameters(summaries,
+                                                       members[i]);
+            else {
                 summarize_writes(summaries, next, members[i]);
                 summarize_dependences(summaries, next, members[i]);
             }
@@ -7029,6 +7061,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             bool differs = cyclic
                 && (next->flags != summary->flags
                     || next->traps != summary->traps
+                    || next->contained != summary->contained
                     || !same_effects(next, summary)
                     || !same_paths(next, summary)
                     || !same_dependences(next, summary));
@@ -7414,6 +7447,8 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
     put_paths(out, texts, types, &summary->paths);
     put_u8(out, (uint8_t)(summary->results_known
                           | summary->returns_external << 1));
+    put_u32(out, (uint32_t)summary->contained);
+    put_u32(out, (uint32_t)(summary->contained >> 32));
     put_pairs(out, texts, types, &summary->results);
     put_pairs(out, texts, types, &summary->stores);
     put_u32(out, positions ? (uint32_t)summary->witnesses.len : 0);
@@ -7668,6 +7703,8 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
     uint8_t results = get_u8(&r);
     summary->results_known    = results & 1;
     summary->returns_external = results >> 1 & 1;
+    uint64_t contained        = get_u32(&r);
+    summary->contained        = contained | (uint64_t)get_u32(&r) << 32;
     get_pairs(&r, &summary->results);
     get_pairs(&r, &summary->stores);
     uint32_t witnesses = get_u32(&r);
