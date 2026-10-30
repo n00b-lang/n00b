@@ -17,6 +17,7 @@ core_list_decl(ir_splace_t);
 typedef core_list_t(ir_splace_t) place_list_t;
 core_list_decl(ir_strap_site_t);
 core_list_decl(ir_switness_t);
+core_list_decl(ir_sheap_t);
 core_list_decl(ir_sstore_t);
 core_list_decl(uint8_t);
 typedef ir_func_t *summary_func_ptr_t;
@@ -59,6 +60,7 @@ struct ir_summary_t {
     uint8_t                    traps;
     core_list_t(ir_strap_site_t) trap_sites;
     core_list_t(ir_switness_t) witnesses;
+    core_list_t(ir_sheap_t)    heaps;
     core_list_t(ir_sfield_t)   fields;
     core_list_t(core_string_t) effects;
     core_list_t(ir_spath_t)    paths;
@@ -121,6 +123,7 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
     summary->fields      = core_list_new(ir_sfield_t);
     summary->trap_sites  = core_list_new(ir_strap_site_t);
     summary->witnesses   = core_list_new(ir_switness_t);
+    summary->heaps       = core_list_new(ir_sheap_t);
     summary->effects     = core_list_new(core_string_t);
     summary->paths       = core_list_new(ir_spath_t);
     summary->results     = core_list_new(ir_sstore_t);
@@ -171,6 +174,7 @@ summary_free(ir_summary_t *summary)
     flow_table_free(&summary->flows[IR_SFLOW_RESULTS]);
     flow_table_free(&summary->flows[IR_SFLOW_STORES]);
     core_list_free(summary->witnesses);
+    core_list_free(summary->heaps);
     core_list_free(summary->trap_sites);
     core_list_free(summary->fields);
     core_free(summary);
@@ -1343,6 +1347,12 @@ const ir_switness_t *ir_summary_witness_for(const ir_summary_t *s,
 {
     for (size_t i = 0; s && i < s->witnesses.len; i++)
         if (s->witnesses.data[i].flag == flag) return &s->witnesses.data[i];
+    return nullptr;
+}
+const ir_sheap_t *ir_summary_heap_for(const ir_summary_t *s, uint32_t origin)
+{
+    for (size_t i = 0; s && i < s->heaps.len; i++)
+        if (s->heaps.data[i].origin == origin) return &s->heaps.data[i];
     return nullptr;
 }
 
@@ -6570,6 +6580,91 @@ pt_record(pt_t *pt, ir_summary_t *summary)
 }
 
 static void
+note_heap(ir_summary_t *summary, const ir_spath_t *path)
+{
+    if (path->root != IR_SPLACE_HEAP || !path->param
+        || ir_summary_heap_for(summary, path->param)) return;
+    core_list_push(summary->heaps, ((ir_sheap_t){.origin = path->param}));
+}
+
+static void
+note_pair_heaps(ir_summary_t *summary, const pair_list_t *pairs)
+{
+    for (size_t i = 0; i < pairs->len; i++) {
+        note_heap(summary, &pairs->data[i].to);
+        note_heap(summary, &pairs->data[i].from);
+    }
+}
+
+static void
+note_flow_heaps(ir_summary_t *summary, const flow_table_t *flows)
+{
+    for (size_t i = 0; i < flows->sources.len; i++)
+        note_heap(summary, flows->sources.data[i]);
+    for (size_t i = 0; i < flows->dests.len; i++)
+        note_heap(summary, flows->dests.data[i].to);
+}
+
+static bool
+heap_from_callees(const pt_t *pt, ir_sheap_t *heap)
+{
+    for (size_t c = 0; c < pt->calls.len; c++) {
+        const pt_callees_t *callees = &pt->calls.data[c];
+        for (size_t t = 0; t < callees->callees.len; t++) {
+            const ir_sheap_t *named = ir_summary_heap_for(
+                callees->callees.data[t], heap->origin);
+            if (!named || !named->name.u8_bytes) continue;
+            *heap = *named;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+name_heaps(pt_t *pt, ir_summary_t *summary)
+{
+    summary->heaps.len = 0;
+    for (size_t i = 0; i < summary->paths.len; i++)
+        note_heap(summary, &summary->paths.data[i]);
+    note_pair_heaps(summary, &summary->results);
+    note_pair_heaps(summary, &summary->stores);
+    note_flow_heaps(summary, &summary->flows[IR_SFLOW_RESULTS]);
+    note_flow_heaps(summary, &summary->flows[IR_SFLOW_STORES]);
+    size_t unnamed = 0;
+    for (size_t h = 0; h < summary->heaps.len; h++)
+        unnamed += !heap_from_callees(pt, &summary->heaps.data[h]);
+    const ir_func_t *f      = pt->f;
+    core_string_t    module = f->owner ? ir_module_name(f->owner)
+                                       : (core_string_t){0};
+    for (size_t s = 0; unnamed && s < pt->sites.len; s++) {
+        const pt_site_t *site = &pt->sites.data[s];
+        if (!site->local && !site->value) continue;
+        ir_sheap_t *heap = (ir_sheap_t *)ir_summary_heap_for(summary,
+                                                            site->origin);
+        if (!heap || heap->name.u8_bytes) continue;
+        ir_span_t span = site->local ? site->local->span : f->span;
+        *heap = (ir_sheap_t){
+            .origin = heap->origin, .module = module, .name = f->name,
+            .line = span.start_line, .column = span.start_col,
+        };
+        unnamed--;
+    }
+    for (uint32_t b = 0; unnamed && b < f->n_blocks; b++)
+        for (uint32_t i = 0; unnamed && i < f->blocks[b]->n_instrs; i++) {
+            const ir_instr_t *in     = f->blocks[b]->instrs[i];
+            ir_sheap_t       *heap   = (ir_sheap_t *)ir_summary_heap_for(
+                summary, instr_origin(pt, in));
+            if (!heap || heap->name.u8_bytes) continue;
+            *heap = (ir_sheap_t){
+                .origin = heap->origin, .module = module, .name = f->name,
+                .line = in->span.start_line, .column = in->span.start_col,
+            };
+            unnamed--;
+        }
+}
+
+static void
 summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
                 ir_func_t *f)
 {
@@ -6581,6 +6676,7 @@ summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
         pt_record(&pt, summary);
         summarize_results(&pt, summary);
         describe_heap(&pt, summary, &pt.described);
+        name_heaps(&pt, summary);
     }
     else
         add_unknown_path(summary, IR_SPATH_ACCESS);
@@ -7403,6 +7499,15 @@ encode_summary(const ir_summary_t *summary, core_buffer_t *out,
         put_u32(out, witness->line);
         put_u32(out, witness->column);
     }
+    put_u32(out, positions ? (uint32_t)summary->heaps.len : 0);
+    for (size_t i = 0; positions && i < summary->heaps.len; i++) {
+        const ir_sheap_t *heap = &summary->heaps.data[i];
+        put_u32(out, heap->origin);
+        put_text(out, texts, heap->module);
+        put_text(out, texts, heap->name);
+        put_u32(out, heap->line);
+        put_u32(out, heap->column);
+    }
     return true;
 }
 
@@ -7631,6 +7736,15 @@ decode_summary(ir_summaries_t *summaries, const ir_func_t *function,
     for (uint32_t i = 0; !r.failed && i < witnesses; i++) {
         ir_switness_t witness = get_witness(&r, function);
         if (!r.failed) core_list_push(summary->witnesses, witness);
+    }
+    uint32_t heaps = get_u32(&r);
+    for (uint32_t i = 0; !r.failed && i < heaps; i++) {
+        ir_sheap_t heap = {.origin = get_u32(&r)};
+        heap.module = get_owned_text(&r, function);
+        heap.name   = get_owned_text(&r, function);
+        heap.line   = get_u32(&r);
+        heap.column = get_u32(&r);
+        if (!r.failed) core_list_push(summary->heaps, heap);
     }
     if (r.failed || r.at != r.size) {
         summary_free(summary);

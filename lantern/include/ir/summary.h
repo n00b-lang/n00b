@@ -57,6 +57,14 @@ typedef struct {
     uint32_t      column;
 } ir_switness_t;
 
+typedef struct {
+    uint32_t      origin;
+    core_string_t module;
+    core_string_t name;
+    uint32_t      line;
+    uint32_t      column;
+} ir_sheap_t;
+
 enum {
     IR_SESCAPE_ADDRESS  = 1u << 0,
     IR_SESCAPE_REFERENT = 1u << 1,
@@ -130,6 +138,8 @@ const ir_switness_t  *ir_summary_witness_for(const ir_summary_t *summary,
                                              uint32_t flag);
 void                 ir_switness_callee_text(const ir_switness_t *witness,
                                              core_buffer_t *out);
+const ir_sheap_t     *ir_summary_heap_for(const ir_summary_t *summary,
+                                          uint32_t origin);
 
 uint8_t      ir_summary_param_escape(const ir_summary_t *summary,
                                      uint32_t param);
