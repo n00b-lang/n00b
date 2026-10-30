@@ -91,27 +91,50 @@ render_access(const ir_func_t *f, const ir_spath_t *path)
 }
 
 static core_string_t
-render_result(const ir_func_t *f, const ir_sstore_t *result)
+render_result(const ir_func_t *f, const ir_spath_t *to, const ir_spath_t *from,
+              char mark)
 {
     core_buffer_t *out = core_buffer_empty();
-    core_buffer_putc(out, '=');
-    if (result->to.output)
-        core_buffer_printf(out, "%u", (unsigned)result->to.output);
-    render_steps(out, &result->to);
+    core_buffer_putc(out, mark);
+    if (to->output) core_buffer_printf(out, "%u", (unsigned)to->output);
+    render_steps(out, to);
     core_buffer_putc(out, ' ');
-    render_place(out, f, &result->from);
+    render_place(out, f, from);
     return core_buffer_take_string(out);
 }
 
 static core_string_t
-render_store(const ir_func_t *f, const ir_sstore_t *store)
+render_store(const ir_func_t *f, const ir_spath_t *to, const ir_spath_t *from,
+             char mark)
 {
     core_buffer_t *out = core_buffer_empty();
     core_buffer_puts(out, "s ");
-    render_place(out, f, &store->to);
-    core_buffer_puts(out, " <- ");
-    render_place(out, f, &store->from);
+    render_place(out, f, to);
+    core_buffer_printf(out, " <%c ", mark);
+    render_place(out, f, from);
     return core_buffer_take_string(out);
+}
+
+core_list_decl(core_string_t);
+
+static void
+render_flows(const ir_func_t *f, const ir_summary_t *summary,
+             ir_sflow_table_t table, core_list_t(core_string_t) *lines)
+{
+    for (uint32_t d = 0; d < ir_summary_flow_count(summary, table); d++)
+        for (uint32_t s = 0; s < ir_summary_flow_source_count(summary, table);
+             s++)
+            for (int k = 0; k < 2; k++) {
+                ir_sflow_kind_t kind = k ? IR_SFLOW_CONTROL : IR_SFLOW_DATA;
+                if (!ir_summary_flow_has(summary, table, d, s, kind)) continue;
+                const ir_spath_t *to   = ir_summary_flow_to(summary, table, d);
+                const ir_spath_t *from = ir_summary_flow_source(summary, table,
+                                                                s);
+                char mark = k ? '^' : '~';
+                core_list_push(*lines, table == IR_SFLOW_RESULTS
+                    ? render_result(f, to, from, mark)
+                    : render_store(f, to, from, mark));
+            }
 }
 
 static core_string_t
@@ -121,25 +144,27 @@ paths_of(run_t *r, core_string_t name)
     ir_summary_t *summary = f && r->summaries
         ? ir_summary_of(r->summaries, f) : nullptr;
     if (!summary) return S("<no summary>");
-    uint32_t paths   = ir_summary_path_count(summary);
-    uint32_t results = ir_summary_result_count(summary);
-    uint32_t stores  = ir_summary_store_count(summary);
-    uint32_t count   = paths + results + stores;
-    core_string_t *lines = core_alloc_array(core_string_t, count + 1);
-    for (uint32_t i = 0; i < paths; i++)
-        lines[i] = render_access(f, ir_summary_path_at(summary, i));
-    for (uint32_t i = 0; i < results; i++)
-        lines[paths + i] = render_result(f, ir_summary_result_at(summary, i));
-    for (uint32_t i = 0; i < stores; i++)
-        lines[paths + results + i] = render_store(
-            f, ir_summary_store_at(summary, i));
-    qsort(lines, count, sizeof(*lines), compare_lines);
-    core_buffer_t *out = core_buffer_empty();
-    for (uint32_t i = 0; i < count; i++) {
-        if (i) core_buffer_puts(out, "; ");
-        core_buffer_append_string(out, lines[i]);
+    core_list_t(core_string_t) lines = core_list_new(core_string_t);
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++)
+        core_list_push(lines, render_access(f, ir_summary_path_at(summary, i)));
+    for (uint32_t i = 0; i < ir_summary_result_count(summary); i++) {
+        const ir_sstore_t *result = ir_summary_result_at(summary, i);
+        core_list_push(lines, render_result(f, &result->to, &result->from,
+                                            '='));
     }
-    core_free(lines);
+    for (uint32_t i = 0; i < ir_summary_store_count(summary); i++) {
+        const ir_sstore_t *store = ir_summary_store_at(summary, i);
+        core_list_push(lines, render_store(f, &store->to, &store->from, '-'));
+    }
+    render_flows(f, summary, IR_SFLOW_RESULTS, &lines);
+    render_flows(f, summary, IR_SFLOW_STORES, &lines);
+    qsort(lines.data, lines.len, sizeof(*lines.data), compare_lines);
+    core_buffer_t *out = core_buffer_empty();
+    for (size_t i = 0; i < lines.len; i++) {
+        if (i) core_buffer_puts(out, "; ");
+        core_buffer_append_string(out, lines.data[i]);
+    }
+    core_list_free(lines);
     return core_buffer_take_string(out);
 }
 
@@ -202,7 +227,7 @@ test_slots_hold_what_was_stored(void)
         "      return %v\n"
         "  }\n"));
     expect(&r, "a pointer read back from a slot names its source", S("f"),
-           S("r p.x"));
+           S("r p.x; ~ p.x"));
     done(&r);
 }
 
@@ -230,9 +255,9 @@ test_by_value_records(void)
         "      return %r\n"
         "  }\n"));
     expect(&r, "a by-value record's own fields are not memory", S("f"),
-           S("r v.a.x"));
+           S("r v.a.x; ~ v.a.x; ~ v.n"));
     expect(&r, "and the caller sees the read through its copy",
-           S("caller"), S("r p; r p.a.x"));
+           S("caller"), S("r p; r p.a.x; ~ p.a.x; ~ p.n"));
     done(&r);
 }
 
@@ -263,7 +288,7 @@ test_fresh_interiors_stay_local(void)
     expect(&r, "a fresh object's own fields are not reported", S("quiet"),
            S("= new"));
     expect(&r, "what was stored into a fresh object is followed",
-           S("holds"), S("r p.x"));
+           S("holds"), S("r p.x; ~ p.x"));
     done(&r);
 }
 
@@ -354,6 +379,51 @@ test_overwritten_locals(void)
 }
 
 static void
+test_overwritten_fields_of_copies(void)
+{
+    run_t r = load(MOD(TYPES
+        "  func @k(%v: V, %m: i32) -> V {\n"
+        "    local $s: V\n"
+        "    block entry:\n"
+        "      $s = copy %v\n"
+        "      %at: ref[V] = address.of $s\n"
+        "      %n: ref[i32] = field %at, \"n\"\n"
+        "      store %n, %m\n"
+        "      %w: V = copy $s\n"
+        "      return %w\n"
+        "  }\n"
+        "  type P = (a: i32, b: i32)\n"
+        "  func @scalars(%v: P, %m: i32) -> P {\n"
+        "    local $s: P\n"
+        "    block entry:\n"
+        "      $s = copy %v\n"
+        "      %at: ref[P] = address.of $s\n"
+        "      %b: ref[i32] = field %at, \"b\"\n"
+        "      store %b, %m\n"
+        "      %w: P = copy $s\n"
+        "      return %w\n"
+        "  }\n"
+        "  func @modify(inout %v: P, %m: i32) -> nil {\n"
+        "    local $s: P\n"
+        "    block entry:\n"
+        "      $s = copy %v\n"
+        "      %early: P = copy $s\n"
+        "      %at: ref[P] = address.of $s\n"
+        "      %b: ref[i32] = field %at, \"b\"\n"
+        "      store %b, %m\n"
+        "      %w: P = copy $s\n"
+        "      return %w\n"
+        "  }\n"));
+    expect(&r, "a field written into a copy replaces only that field",
+           S("k"), S("= v; ~.n m"));
+    expect(&r, "and the same holds for a record of scalars",
+           S("scalars"), S("~.a v.a; ~.b m"));
+    expect(&r, "and for a modified parameter's copy-out",
+           S("modify"), S("~.a v.a; ~.b m"));
+    done(&r);
+}
+
+static void
 test_callees_write_through_locals(void)
 {
     run_t r = load(MOD(TYPES
@@ -423,7 +493,7 @@ test_globals_and_elements(void)
         "      return %v\n"
         "  }\n"));
     expect(&r, "global roots and element steps are named", S("f"),
-           S("r g; r g.items; r g.items[]; r g.items[].x"));
+           S("r g; r g.items; r g.items[]; r g.items[].x; ~ g.items[].x"));
     done(&r);
 }
 
@@ -480,7 +550,7 @@ test_published_objects(void)
     expect(&r, "an object stored in a global is written through its name",
            S("f"), S("s g <- new; w g; w g.x"));
     expect(&r, "a pointer made from an integer reaches anything",
-           S("forged"), S("r ?..."));
+           S("forged"), S("r ?...; ~ ?..."));
     done(&r);
 }
 
@@ -544,7 +614,7 @@ test_callee_stores(void)
               && store->from.root == IR_SPLACE_PARAM
               && store->from.param == 1 && !store->from.depth);
     expect(&r, "what a callee stores into a local is followed", S("f"),
-           S("r p.x"));
+           S("r p.x; ~ p.x"));
     ir_func_t *g = ir_func_find(r.m, S("g"));
     summary = g ? ir_summary_of(r.summaries, g) : nullptr;
     store = summary && ir_summary_store_count(summary) == 1
@@ -576,7 +646,7 @@ test_fresh_construction(void)
     expect(&r, "a constructor's copy-out names what it holds", S("init"),
            S("=1 self; =1.a a"));
     expect(&r, "and the caller reads it from the constructed storage",
-           S("make"), S("r p.x"));
+           S("make"), S("r p.x; ~ p.x"));
     done(&r);
 }
 
@@ -641,11 +711,11 @@ test_scalar_globals(void)
         "      return %v\n"
         "  }\n"));
     expect(&r, "a scalar global used as a value is read, and stored is written",
-           S("bump"), S("rw count"));
+           S("bump"), S("rw count; s count <~ count; ~ count"));
     expect(&r, "a scalar global returned by value is read", S("peek"),
-           S("r count"));
+           S("r count; ~ count"));
     expect(&r, "and so is one loaded through its address", S("loaded"),
-           S("r count"));
+           S("r count; ~ count..."));
     done(&r);
 }
 
@@ -958,6 +1028,7 @@ main(void)
     test_fresh_interiors_stay_local();
     test_returned_parameters_alias();
     test_overwritten_locals();
+    test_overwritten_fields_of_copies();
     test_callees_write_through_locals();
     test_cycles_widen();
     test_globals_and_elements();

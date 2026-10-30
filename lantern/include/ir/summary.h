@@ -12,6 +12,7 @@ typedef enum : uint8_t {
     IR_SPLACE_THREAD,
     IR_SPLACE_HEAP,
     IR_SPLACE_UNKNOWN,
+    IR_SPLACE_SOURCE,
 } ir_splace_kind_t;
 
 typedef struct {
@@ -297,6 +298,16 @@ typedef struct {
     ir_spath_t from;
 } ir_sstore_t;
 
+typedef enum : uint8_t {
+    IR_SFLOW_DATA,
+    IR_SFLOW_CONTROL,
+} ir_sflow_kind_t;
+
+typedef enum : uint8_t {
+    IR_SFLOW_RESULTS,
+    IR_SFLOW_STORES,
+} ir_sflow_table_t;
+
 uint32_t          ir_summary_path_count(const ir_summary_t *summary);
 const ir_spath_t *ir_summary_path_at(const ir_summary_t *summary,
                                      uint32_t index);
@@ -322,6 +333,24 @@ void               ir_summary_add_result(ir_summary_t *summary,
 uint32_t           ir_summary_store_count(const ir_summary_t *summary);
 const ir_sstore_t *ir_summary_store_at(const ir_summary_t *summary,
                                        uint32_t index);
+
+uint32_t          ir_summary_flow_count(const ir_summary_t *summary,
+                                        ir_sflow_table_t table);
+const ir_spath_t *ir_summary_flow_to(const ir_summary_t *summary,
+                                     ir_sflow_table_t table, uint32_t flow);
+uint32_t          ir_summary_flow_source_count(const ir_summary_t *summary,
+                                               ir_sflow_table_t table);
+const ir_spath_t *ir_summary_flow_source(const ir_summary_t *summary,
+                                         ir_sflow_table_t table,
+                                         uint32_t source);
+bool              ir_summary_flow_has(const ir_summary_t *summary,
+                                      ir_sflow_table_t table, uint32_t flow,
+                                      uint32_t source, ir_sflow_kind_t kind);
+void              ir_summary_add_flow(ir_summary_t *summary,
+                                      ir_sflow_table_t table,
+                                      const ir_spath_t *to,
+                                      const ir_spath_t *from,
+                                      ir_sflow_kind_t kind);
 bool ir_summary_may_access(const ir_summary_t *summary,
                            const ir_func_t *function, core_string_t query,
                            bool write);

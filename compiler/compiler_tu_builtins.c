@@ -19,6 +19,37 @@ n00bb_axiom_of_symbol(parse_sym_entry_t *symbol)
     return nullptr;
 }
 
+static void
+native_flows(ir_summary_t *summary, const ir_func_t *function,
+             uint32_t effects, uint32_t reads, uint32_t writes)
+{
+    core_list_t(ir_spath_t) inputs = core_list_new(ir_spath_t);
+    uint32_t params = (uint32_t)th_func_nparams(function->type);
+    for (uint32_t p = 0; p < params; p++) {
+        core_list_push(inputs, ((ir_spath_t){
+            .root = IR_SPLACE_PARAM, .param = p, .flags = IR_SPATH_ROOT}));
+        if (p >= 8 || (reads & N00BB_AXIOM_PARAM(p)))
+            core_list_push(inputs, ((ir_spath_t){
+                .root = IR_SPLACE_PARAM, .param = p,
+                .flags = IR_SPATH_DEEP}));
+    }
+    for (uint32_t bit = 0; bit < 32; bit++)
+        if (effects & IR_SUMMARY_OBSERVES & (1u << bit))
+            core_list_push(inputs, ((ir_spath_t){
+                .root = IR_SPLACE_SOURCE, .param = bit}));
+    for (size_t i = 0; i < inputs.len; i++) {
+        ir_summary_add_flow(summary, IR_SFLOW_RESULTS, &(ir_spath_t){0},
+                            &inputs.data[i], IR_SFLOW_DATA);
+        for (uint32_t p = 0; p < params && p < 8; p++)
+            if (writes & N00BB_AXIOM_PARAM(p))
+                ir_summary_add_flow(summary, IR_SFLOW_STORES, &(ir_spath_t){
+                        .root = IR_SPLACE_PARAM, .param = p,
+                        .flags = IR_SPATH_DEEP},
+                    &inputs.data[i], IR_SFLOW_DATA);
+    }
+    core_list_free(inputs);
+}
+
 ir_summary_t *
 n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
 {
@@ -56,6 +87,8 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
                 ir_summary_add_result(summary, &(ir_spath_t){0},
                     &(ir_spath_t){.root = IR_SPLACE_PARAM, .param = p,
                                   .flags = IR_SPATH_DEEP});
+        native_flows(summary, function, native->effects, native->reads,
+                     native->writes);
         return summary;
     }
     if (!n00bb_axiom_pure_native(function)) return nullptr;
@@ -67,6 +100,7 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
                 | IR_SPATH_ROOT});
     ir_summary_set_return(summary,
         (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
+    native_flows(summary, function, 0, UINT32_MAX, 0);
     return summary;
 }
 

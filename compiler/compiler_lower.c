@@ -21932,6 +21932,10 @@ splace_text(core_buffer_t *out, th_ctx *types, const ir_splace_t *place)
     case IR_SPLACE_UNKNOWN:
         core_buffer_puts(out, "unknown");
         break;
+    case IR_SPLACE_SOURCE:
+        core_buffer_puts(out, "source ");
+        core_buffer_append_string(out, ir_summary_flag_name(place->param));
+        break;
     }
 }
 
@@ -22009,6 +22013,11 @@ spath_text(core_buffer_t *out, const ir_func_t *function,
 {
     if (path->root == IR_SPLACE_PARAM)
         param_text(out, function, path->param);
+    else if (path->root == IR_SPLACE_SOURCE) {
+        core_buffer_puts(out, "(");
+        core_buffer_append_string(out, ir_summary_flag_name(path->param));
+        core_buffer_puts(out, ")");
+    }
     else if (path->root == IR_SPLACE_HEAP)
         core_buffer_puts(out, "(new)");
     else if (path->global)
@@ -22020,6 +22029,39 @@ spath_text(core_buffer_t *out, const ir_func_t *function,
     else
         core_buffer_puts(out, "?");
     steps_text(out, path);
+}
+
+static void dump_spath(const ir_func_t *function, const ir_spath_t *path);
+
+static void
+dump_flows(const ir_func_t *function, const ir_summary_t *summary)
+{
+    static const ir_sflow_kind_t kinds[] = {IR_SFLOW_DATA, IR_SFLOW_CONTROL};
+    for (int t = 0; t < 2; t++) {
+        ir_sflow_table_t table = t ? IR_SFLOW_STORES : IR_SFLOW_RESULTS;
+        for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++) {
+            const ir_spath_t *to = ir_summary_flow_to(summary, table, f);
+            for (int k = 0; k < 2; k++)
+                for (uint32_t s = 0;
+                     s < ir_summary_flow_source_count(summary, table); s++) {
+                    if (!ir_summary_flow_has(summary, table, f, s, kinds[k]))
+                        continue;
+                    const ir_spath_t *from =
+                        ir_summary_flow_source(summary, table, s);
+                    if (table == IR_SFLOW_RESULTS)
+                        fprintf(stdout, "  result %u ", to->output);
+                    else {
+                        fputs("  store ", stdout);
+                        dump_spath(function, to);
+                        fputs(" <- ", stdout);
+                    }
+                    fputs(k ? "control " : "data ", stdout);
+                    dump_spath(function, from);
+                    if (from->flags & IR_SPATH_ROOT) fputs(" root", stdout);
+                    fputc('\n', stdout);
+                }
+        }
+    }
 }
 
 static void
@@ -22114,6 +22156,7 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         if (store->from.flags & IR_SPATH_ROOT) fputs(" root", stdout);
         fputc('\n', stdout);
     }
+    if (!for_reader) dump_flows(function, summary);
     for (uint32_t p = 0; p < function->n_params; p++) {
         uint8_t escape = ir_summary_param_escape(summary, p);
         if (!escape) continue;
@@ -24070,6 +24113,7 @@ describe_summary_place(const ir_splace_t *place)
     case IR_SPLACE_HEAP:
         return n00bb_text(N00B_TEXT_PLACE_HEAP, N00BB_NO_ARGS);
     case IR_SPLACE_UNKNOWN:
+    case IR_SPLACE_SOURCE:
         break;
     }
     return n00bb_text(N00B_TEXT_PLACE_UNOWNED, N00BB_NO_ARGS);
