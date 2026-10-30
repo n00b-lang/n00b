@@ -21911,29 +21911,26 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
 }
 
 static void
-dump_splace(th_ctx *types, const ir_splace_t *place)
+splace_text(core_buffer_t *out, th_ctx *types, const ir_splace_t *place)
 {
     switch (place->kind) {
     case IR_SPLACE_PARAM:
-        fprintf(stdout, "param %u", place->param);
+        core_buffer_printf(out, "param %u", place->param);
         break;
     case IR_SPLACE_GLOBAL:
-    case IR_SPLACE_THREAD: {
-        core_string_t name = place->global ? place->global->name
-                                           : CORE_STRING_STATIC("<external>");
-        fprintf(stdout, "%s %.*s",
-                place->kind == IR_SPLACE_THREAD ? "thread" : "global",
-                (int)name.u8_bytes, name.data);
+    case IR_SPLACE_THREAD:
+        if (place->kind == IR_SPLACE_THREAD) core_buffer_puts(out, "thread ");
+        else core_buffer_puts(out, "global ");
+        core_buffer_append_string(out, place->global
+            ? place->global->name : CORE_STRING_STATIC("<external>"));
         break;
-    }
-    case IR_SPLACE_HEAP: {
-        core_string_t text = place->type ? th_print(types, place->type)
-                                         : CORE_STRING_STATIC("<any>");
-        fprintf(stdout, "heap %.*s", (int)text.u8_bytes, text.data);
+    case IR_SPLACE_HEAP:
+        core_buffer_puts(out, "heap ");
+        core_buffer_append_string(out, place->type
+            ? th_print(types, place->type) : CORE_STRING_STATIC("<any>"));
         break;
-    }
     case IR_SPLACE_UNKNOWN:
-        fputs("unknown", stdout);
+        core_buffer_puts(out, "unknown");
         break;
     }
 }
@@ -21952,6 +21949,38 @@ dump_text(core_buffer_t *out)
 {
     fprintf(stdout, "%.*s", (int)out->byte_len, out->data ? out->data : "");
     core_buffer_release(out);
+}
+
+static void
+input_text(core_buffer_t *out, th_ctx *types, const ir_func_t *function,
+           const ir_sinput_t *input)
+{
+    switch (input->kind) {
+    case IR_SINPUT_VALUE:
+        param_text(out, function, input->param);
+        break;
+    case IR_SINPUT_REFERENT:
+        core_buffer_putc(out, '*');
+        param_text(out, function, input->param);
+        break;
+    case IR_SINPUT_PLACE:
+        splace_text(out, types, &input->place);
+        break;
+    case IR_SINPUT_UNKNOWN:
+        core_buffer_puts(out, "unknown");
+        break;
+    case IR_SINPUT_CALL:
+        core_buffer_puts(out, "call ");
+        core_buffer_append_string(out, input->callee);
+        break;
+    }
+}
+
+static int
+compare_texts(const void *left, const void *right)
+{
+    return core_string_cmp(*(const core_string_t *)left,
+                           *(const core_string_t *)right);
 }
 
 static void
@@ -22132,44 +22161,39 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
     const uint32_t *deps = ir_summary_dependences(summary);
     for (uint32_t o = 0; o < ir_summary_output_count(summary); o++) {
         const ir_soutput_t *output = ir_summary_output_at(summary, o);
-        fputs("  output ", stdout);
-        if (output->kind == IR_SOUTPUT_RESULT) fputs("result", stdout);
-        else if (output->kind == IR_SOUTPUT_FAILURE) fputs("failure", stdout);
-        else dump_splace(types, &output->place);
+        core_buffer_t       line   = {0};
+        core_buffer_puts(&line, "  output ");
+        if (output->kind == IR_SOUTPUT_RESULT)
+            core_buffer_puts(&line, "result");
+        else if (output->kind == IR_SOUTPUT_FAILURE)
+            core_buffer_puts(&line, "failure");
+        else splace_text(&line, types, &output->place);
         for (int pass = 0; pass < 2; pass++) {
             uint32_t first = pass ? output->control_first
                                   : output->data_first;
             uint32_t count = pass ? output->control_count
                                   : output->data_count;
-            fputs(pass ? " control[" : " data[", stdout);
+            core_string_t *inputs = core_alloc_array(core_string_t,
+                                                     count + 1);
             for (uint32_t k = 0; k < count; k++) {
-                const ir_sinput_t *input = ir_summary_input_at(summary,
-                    deps[first + k]);
-                if (k) fputc(' ', stdout);
-                switch (input->kind) {
-                case IR_SINPUT_VALUE:
-                    dump_param(function, input->param);
-                    break;
-                case IR_SINPUT_REFERENT:
-                    fputc('*', stdout);
-                    dump_param(function, input->param);
-                    break;
-                case IR_SINPUT_PLACE:
-                    dump_splace(types, &input->place);
-                    break;
-                case IR_SINPUT_UNKNOWN:
-                    fputs("unknown", stdout);
-                    break;
-                case IR_SINPUT_CALL:
-                    fprintf(stdout, "call %.*s",
-                            (int)input->callee.u8_bytes,
-                            input->callee.data);
-                    break;
-                }
+                core_buffer_t *one = core_buffer_empty();
+                input_text(one, types, function,
+                           ir_summary_input_at(summary, deps[first + k]));
+                inputs[k] = core_buffer_take_string(one);
             }
-            fputc(']', stdout);
+            qsort(inputs, count, sizeof(*inputs), compare_texts);
+            if (pass) core_buffer_puts(&line, " control[");
+            else core_buffer_puts(&line, " data[");
+            for (uint32_t k = 0; k < count; k++) {
+                if (k) core_buffer_putc(&line, ' ');
+                core_buffer_append_string(&line, inputs[k]);
+                core_free((void *)inputs[k].data);
+            }
+            core_buffer_putc(&line, ']');
+            core_free(inputs);
         }
-        fputc('\n', stdout);
+        core_buffer_putc(&line, '\n');
+        dump_text(&line);
     }
 }
 
