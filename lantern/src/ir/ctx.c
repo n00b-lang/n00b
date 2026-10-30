@@ -930,6 +930,20 @@ size_t ir_call_param_output(th_type *callable, size_t param)
                                                                  : SIZE_MAX;
 }
 
+bool ir_callable_returns_value(ir_module_t *m, th_type *callable)
+{
+    callable = callable ? th_resolve(callable) : nullptr;
+    th_type *ret = callable && th_kind_of(callable) == TH_FUNCTION
+        ? th_func_ret(callable) : nullptr;
+    return ret && ir_machine_of(m, ret).class != IR_CLASS_VOID;
+}
+
+size_t ir_return_output_operand(ir_module_t *m, th_type *callable,
+                                size_t output_index)
+{
+    return (ir_callable_returns_value(m, callable) ? 1 : 0) + output_index;
+}
+
 th_type *ir_call_output_type(th_type *callable, size_t output_index)
 {
     callable = th_resolve(callable);

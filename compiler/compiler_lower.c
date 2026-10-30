@@ -23756,12 +23756,9 @@ returned_alias_target(ir_instr_t *call, ir_sreturn_t returned)
         return ir_global_address(returned.global->owner,
                                  (ir_global_t *)returned.global);
     if (returned.kind != IR_SRETURN_PARAM
-        || returned.param + 1 >= call->n_operands) return nullptr;
-    for (uint32_t i = 1; i <= returned.param + 1; i++)
-        if (call->operands[i].kind != IR_OPD_VALUE
-            && call->operands[i].kind != IR_OPD_FRESH
-            && call->operands[i].kind != IR_OPD_OUT) return nullptr;
-    return call->operands[returned.param + 1].value;
+        || !ir_call_arguments_positional(call, returned.param))
+        return nullptr;
+    return (ir_value_t *)ir_call_argument(call, returned.param).value;
 }
 
 typedef struct {

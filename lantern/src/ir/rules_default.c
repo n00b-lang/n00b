@@ -23,20 +23,13 @@ static th_type *opd_type(ir_instr_t *in, uint32_t i)
 
     const ir_operand_t *o = &in->operands[i];
 
-    switch (o->kind) {
-    case IR_OPD_VALUE:
-    case IR_OPD_SPREAD:
-    case IR_OPD_FRESH:
-        return o->value ? o->value->type : nullptr;
-    case IR_OPD_NAMED_ARG:
-        return o->named.value ? o->named.value->type : nullptr;
-    case IR_OPD_PHI_ARM:
-        return o->phi.value ? o->phi.value->type : nullptr;
-    case IR_OPD_TYPE:
+    if (o->kind == IR_OPD_TYPE) {
         return o->type;
-    default:
-        return nullptr;
     }
+
+    const ir_value_t *v = ir_operand_value(o);
+
+    return v ? v->type : nullptr;
 }
 
 static th_type *declared(ir_instr_t *in)
@@ -108,13 +101,7 @@ static void blame_at(ir_diags_t *d, ir_diag_t *dg, ir_instr_t *in,
         return;
     }
 
-    const ir_operand_t *o = &in->operands[i];
-    const ir_value_t   *v = o->kind == IR_OPD_VALUE      ? o->value
-                          : o->kind == IR_OPD_SPREAD    ? o->value
-                          : o->kind == IR_OPD_FRESH     ? o->value
-                          : o->kind == IR_OPD_NAMED_ARG  ? o->named.value
-                          : o->kind == IR_OPD_PHI_ARM    ? o->phi.value
-                                                         : nullptr;
+    const ir_value_t *v = ir_operand_value(&in->operands[i]);
 
     if (v && v->def && ir_span_known(v->def->span)) {
         ir_diag_secondary(d, dg, v->def->span, IR_DETAIL(label));
@@ -3021,20 +3008,11 @@ static ir_rule_result_t rule_return(ir_module_t *m, ir_instr_t *in,
         return DECLINE;
     }
 
-    bool is_void = ir_machine_of(m, ret).class == IR_CLASS_VOID;
+    bool is_void = !ir_callable_returns_value(m, f->type);
 
-    size_t output_count = 0;
-    for (size_t i = 0; i < th_func_nparams(f->type); i++) {
-        const th_param *parameter = th_func_param(f->type, i);
-        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
-    }
-    for (size_t i = 0; i < th_func_nkw(f->type); i++) {
-        const th_kwparam *parameter = th_func_kw(f->type, i);
-        if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
-    }
+    size_t output_count = ir_call_output_count(f->type);
     const th_param *rest = th_func_rest(f->type);
-    if (rest && th_mode_produces_output(rest->mode)) output_count++;
-    uint32_t result_offset = is_void ? 0 : 1;
+    uint32_t result_offset = (uint32_t)ir_return_output_operand(m, f->type, 0);
     if (in->n_operands != result_offset + output_count) {
         complain(m, d, IR_DIAG_TYPE_MISMATCH, in, "this return",
                  "%.*s returns one value for each out or modify parameter",

@@ -317,19 +317,9 @@ ir_func_t *ir_trait_receiver_adapter_add(ir_module_t *module,
   function->owner = implementation;
   ir_instr_t *call = ir_instr_add(entry, IR_OP_CALL);
   th_type *result_type = th_func_ret(implementation->type);
-  bool returns_void = ir_machine_of(module, result_type).class == IR_CLASS_VOID;
-  size_t output_count = 0;
-  for (size_t i = 0; i < count; i++) {
-    const th_param *parameter = th_func_param(implementation->type, i);
-    if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
-  }
-  for (size_t i = 0; i < th_func_nkw(implementation->type); i++) {
-    const th_kwparam *parameter = th_func_kw(implementation->type, i);
-    if (parameter && th_mode_produces_output(parameter->mode)) output_count++;
-  }
+  bool returns_void = !ir_callable_returns_value(module, implementation->type);
+  size_t output_count = ir_call_output_count(implementation->type);
   const th_param *implementation_rest = th_func_rest(implementation->type);
-  if (implementation_rest && th_mode_produces_output(implementation_rest->mode))
-    output_count++;
   bool carries_result = !returns_void || output_count;
   if (!call || (carries_result &&
                 !ir_instr_set_dest(call, CORE_STRING_STATIC("call_result"),

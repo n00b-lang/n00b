@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "ir/ir.h"
+#include "ir/operands.h"
 #include "lib/buffer.h"
 #include "harness.h"
 
@@ -114,6 +115,63 @@ static bool role_fits(ir_op_t op, int32_t operand)
     return operand < 0
         || ((uint32_t)operand < info->min_operands
             && ir_op_operand_kind(op, (uint32_t)operand) == IR_OPD_VALUE);
+}
+
+static void test_call_arguments(void)
+{
+    ir_ctx_t    *ctx = ir_ctx_new();
+    ir_module_t *m   = ir_module_new(ctx, S("m"), &ir_profile_bce, S("test"));
+    th_type     *i32 = ir_type_parse(m, S("i32"));
+    ir_func_t   *callee = ir_func_add(m, S("callee"),
+                                      ir_type_parse(m, S("(i32) -> i32")),
+                                      IR_LINK_EXTERNAL);
+    ir_func_t   *caller = ir_func_add(m, S("caller"),
+                                      ir_type_parse(m, S("(i32) -> i32")),
+                                      IR_LINK_EXTERNAL);
+    ir_value_t  *p      = ir_param_add(caller, S("p"), i32);
+    ir_block_t  *entry  = ir_block_add(caller, S("entry"));
+    ir_instr_t  *alloc  = ir_instr_add(entry, IR_OP_ALLOC);
+    bool allocated = alloc
+        && ir_instr_set_dest(alloc, S("slot"), ir_type_parse(m, S("ref[i32]")))
+        && ir_instr_operand_type(alloc, i32);
+    ir_value_t  *slot   = allocated ? alloc->dest : nullptr;
+    ir_instr_t  *call   = ir_instr_add(entry, IR_OP_CALL);
+    bool built = slot && call
+        && ir_instr_operand_value(call, ir_func_address(m, callee))
+        && ir_instr_operand_value(call, p) && ir_instr_operand_out(call)
+        && ir_instr_operand_fresh(call, slot)
+        && ir_instr_operand_missing(call);
+
+    check("a call with every argument role is built", built);
+    check("the callee operand is not an argument",
+          ir_call_argument_count(call) == 4);
+
+    ir_call_arg_t value   = ir_call_argument(call, 0);
+    ir_call_arg_t out     = ir_call_argument(call, 1);
+    ir_call_arg_t fresh   = ir_call_argument(call, 2);
+    ir_call_arg_t missing = ir_call_argument(call, 3);
+    ir_call_arg_t absent  = ir_call_argument(call, 4);
+
+    check("a value argument carries its value",
+          value.role == IR_ARG_VALUE && value.value == p && value.operand == 1);
+    check("an out argument is written by the callee",
+          out.role == IR_ARG_OUT && ir_call_argument_writes(&out));
+    check("a fresh argument names the storage it constructs into",
+          fresh.role == IR_ARG_FRESH && fresh.value == slot
+              && ir_call_argument_writes(&fresh));
+    check("a defaulted argument is missing",
+          missing.role == IR_ARG_MISSING && !missing.value);
+    check("a parameter past the operands is absent",
+          absent.role == IR_ARG_ABSENT);
+    check("value, out and fresh arguments are positional",
+          ir_call_arguments_positional(call, 2));
+    check("a missing argument is not",
+          !ir_call_arguments_positional(call, 3));
+    check("a callable returning i32 returns a value",
+          ir_callable_returns_value(m, callee->type)
+              && ir_return_output_operand(m, callee->type, 0) == 1);
+
+    ir_ctx_free(ctx);
 }
 
 static void test_memory_roles(void)
@@ -883,6 +941,7 @@ int main(void)
 {
     test_ops();
     test_memory_roles();
+    test_call_arguments();
     test_props();
     test_types();
     test_a_type_has_no_size_limit();

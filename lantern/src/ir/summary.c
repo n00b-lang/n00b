@@ -4,6 +4,7 @@
 #include "ir/analyses.h"
 #include "ir/doms.h"
 #include "ir/layout.h"
+#include "ir/operands.h"
 #include "ir/summary.h"
 #include "ir/text.h"
 #include "ir/typelang.h"
@@ -1055,8 +1056,14 @@ ir_summary_for(ir_summaries_t *summaries, ir_func_t *function)
 
 static bool is_call(const ir_instr_t *in);
 static th_type *record_of(const ir_func_t *f, th_type *type);
-static const ir_value_t *used_value(const ir_operand_t *operand);
 static bool returns_value(const ir_func_t *f);
+
+static const ir_value_t *
+referenced(const ir_instr_t *in, uint32_t operand)
+{
+    return operand < in->n_operands
+        ? ir_operand_referenced_value(&in->operands[operand]) : nullptr;
+}
 
 static bool
 holds_pointers(const ir_func_t *f, th_type *type, uint32_t depth)
@@ -1452,8 +1459,6 @@ derive(escape_walk_t *walk, const ir_value_t *value)
     track(walk, value, false);
 }
 
-static const ir_value_t *used_value(const ir_operand_t *operand);
-
 static bool
 inline_elements(const ir_func_t *f, const ir_value_t *base)
 {
@@ -1463,20 +1468,13 @@ inline_elements(const ir_func_t *f, const ir_value_t *base)
 static bool
 positional_argument(const ir_instr_t *call, uint32_t index)
 {
-    if (index == 0) return false;
-    for (uint32_t i = 1; i <= index; i++) {
-        ir_opdkind_t kind = call->operands[i].kind;
-        if (kind != IR_OPD_VALUE && kind != IR_OPD_FRESH
-            && kind != IR_OPD_OUT) return false;
-    }
-    return true;
+    return index && ir_call_arguments_positional(call, index - 1);
 }
 
 static bool
 returns_value(const ir_func_t *f)
 {
-    th_type *success = th_func_ret(f->type);
-    return success && ir_machine_of(f->owner, success).class != IR_CLASS_VOID;
+    return ir_callable_returns_value(f->owner, f->type);
 }
 
 static bool
@@ -1511,12 +1509,10 @@ hold_in_local(escape_walk_t *walk, const ir_value_t *target)
         case IR_OP_OFFSET:
         case IR_OP_BITCAST:
         case IR_OP_COPY:
-            target = def->n_operands ? used_value(&def->operands[0])
-                                     : nullptr;
+            target = referenced(def, 0);
             continue;
         case IR_OP_ADDRESS_OF: {
-            const ir_value_t *local = def->n_operands
-                ? used_value(&def->operands[0]) : nullptr;
+            const ir_value_t *local = referenced(def, 0);
             if (!local || (local->kind != IR_VAL_LOCAL
                            && local->kind != IR_VAL_PARAM)) return false;
             if (!derived(walk, local))
@@ -1535,24 +1531,6 @@ hold_in_local(escape_walk_t *walk, const ir_value_t *target)
     return false;
 }
 
-static const ir_value_t *
-used_value(const ir_operand_t *operand)
-{
-    switch (operand->kind) {
-    case IR_OPD_VALUE:
-    case IR_OPD_SPREAD:
-    case IR_OPD_ARG:
-    case IR_OPD_OUT:
-    case IR_OPD_FRESH:
-        return operand->value;
-    case IR_OPD_PHI_ARM:
-        return operand->phi.value;
-    case IR_OPD_NAMED_ARG:
-        return operand->named.value;
-    default:
-        return nullptr;
-    }
-}
 
 static bool
 use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
@@ -1579,7 +1557,7 @@ use_escapes(escape_walk_t *walk, const ir_instr_t *use, uint32_t index)
     case IR_OP_SWITCH:
         return false;
     case IR_OP_STORE:
-        return index != 0 && !hold_in_local(walk, used_value(&use->operands[0]));
+        return index != 0 && !hold_in_local(walk, referenced(use, 0));
     case IR_OP_SEQUENCE_SET:
     case IR_OP_ATOMIC_RMW:
     case IR_OP_ATOMIC_CAS:
@@ -1725,7 +1703,7 @@ walk_escapes(escape_walk_t *walk, const ir_value_t *start)
             for (uint32_t i = 0; i < block->n_instrs; i++) {
                 const ir_instr_t *use = block->instrs[i];
                 for (uint32_t k = 0; k < use->n_operands; k++)
-                    if (used_value(&use->operands[k]) == value
+                    if (referenced(use, k) == value
                         && (storage ? storage_use_escapes(walk, use, k)
                                     : use_escapes(walk, use, k)))
                         return true;
@@ -1774,7 +1752,7 @@ referent_escapes(ir_summaries_t *summaries, const ir_func_t *f,
             const ir_instr_t *use = block->instrs[i];
             if ((use->op != IR_OP_LOAD && use->op != IR_OP_SEQUENCE_GET)
                 || !use->n_operands || !use->dest
-                || !derived(walk, used_value(&use->operands[0]))
+                || !derived(walk, referenced(use, 0))
                 || !holds_reference(f, use->dest))
                 continue;
             if (ir_address_escapes(summaries, f, use->dest)) return true;
@@ -1805,7 +1783,7 @@ returned_source(ir_summaries_t *summaries, const ir_func_t *f,
     const ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def
                                                         : nullptr;
     if (def && def->op == IR_OP_ADDRESS_OF && def->n_operands == 1) {
-        const ir_value_t *target = used_value(&def->operands[0]);
+        const ir_value_t *target = referenced(def, 0);
         if (target && target->kind == IR_VAL_GLOBAL && target->global)
             return (ir_sreturn_t){.kind = IR_SRETURN_GLOBAL,
                                   .global = target->global};
@@ -4701,25 +4679,23 @@ static void
 argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
                pt_set_t *into)
 {
-    if (param + 1 >= call->n_operands) return;
-    const ir_operand_t *operand = &call->operands[param + 1];
-    switch (operand->kind) {
-    case IR_OPD_MISSING:
-    case IR_OPD_OUT:
+    ir_call_arg_t argument = ir_call_argument(call, param);
+    switch (argument.role) {
+    case IR_ARG_ABSENT:
+    case IR_ARG_MISSING:
+    case IR_ARG_OUT:
         return;
-    case IR_OPD_FRESH: {
+    case IR_ARG_FRESH: {
         pt_set_t address = core_list_new(pt_item_t);
-        pt_read(pt, operand->value, &address);
+        pt_read(pt, argument.value, &address);
         pt_load(pt, &address, into);
         core_list_free(address);
         return;
     }
-    default: {
-        const ir_value_t *value = used_value(operand);
-        if (value) pt_read(pt, value, into);
+    default:
+        if (argument.value) pt_read(pt, argument.value, into);
         else set_add(into, deep_item(unknown_loc()));
         return;
-    }
     }
 }
 
@@ -4802,7 +4778,7 @@ call_reach(pt_t *pt, const ir_instr_t *call, const pt_callees_t *callees,
     pt_set_t items = core_list_new(pt_item_t);
     for (uint32_t o = call->op == IR_OP_CALL ? 1 : 0; o < call->n_operands;
          o++)
-        pt_read(pt, used_value(&call->operands[o]), &items);
+        pt_read(pt, referenced(call, o), &items);
     for (size_t i = 0; i < items.len; i++)
         set_add(into, deep_item(items.data[i].loc));
     core_list_free(items);
@@ -4976,8 +4952,8 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
         }
         core_list_free(locs);
     }
-    for (uint32_t param = 0; written.len && param + 1 < call->n_operands;
-         param++) {
+    for (uint32_t param = 0;
+         written.len && param < ir_call_argument_count(call); param++) {
         if (!ir_summary_param_escape(callee, param)) continue;
         pt_set_t items = core_list_new(pt_item_t);
         argument_items(pt, call, param, &items);
@@ -5016,14 +4992,13 @@ written_outputs(pt_t *pt, const ir_instr_t *call,
                 const pt_callees_t *callees, const pt_set_t *reach,
                 ir_summary_t *summary)
 {
-    for (uint32_t param = 0; param + 1 < call->n_operands; param++) {
-        const ir_operand_t *operand = &call->operands[param + 1];
-        if (operand->kind != IR_OPD_FRESH && operand->kind != IR_OPD_OUT)
-            continue;
+    for (uint32_t param = 0; param < ir_call_argument_count(call); param++) {
+        ir_call_arg_t argument = ir_call_argument(call, param);
+        if (!ir_call_argument_writes(&argument)) continue;
         uint8_t  output  = output_ordinal(call, param);
         pt_set_t address = core_list_new(pt_item_t);
         pt_set_t values  = core_list_new(pt_item_t);
-        pt_read(pt, operand->value, &address);
+        pt_read(pt, argument.value, &address);
         if (output && callees->known)
             callee_outputs(pt, call, callees, output, &values);
         else if (reach)
@@ -5053,7 +5028,7 @@ pt_call(pt_t *pt, const ir_instr_t *call)
         pt_loc_t unknown = unknown_loc();
         for (uint32_t o = 1; o < call->n_operands; o++) {
             pt_set_t items = core_list_new(pt_item_t);
-            pt_read(pt, used_value(&call->operands[o]), &items);
+            pt_read(pt, referenced(call, o), &items);
             pt_publish(pt, &items, &unknown);
             for (size_t i = 0; i < items.len; i++)
                 if (items.data[i].loc.site != PT_EXTERNAL) {
@@ -5107,7 +5082,7 @@ allocate(pt_t *pt, const ir_instr_t *in, pt_set_t *into)
     bool sequence = in->op == IR_OP_AGGREGATE || in->op == IR_OP_ARRAY_NEW
         || in->op == IR_OP_ARRAY_NEW_USING;
     for (uint32_t o = 0; in->op != IR_OP_COPY && o < in->n_operands; o++) {
-        pt_read(pt, used_value(&in->operands[o]), &items);
+        pt_read(pt, referenced(in, o), &items);
         for (size_t i = 0; i < items.len; i++)
             pt_add(pt, &pt->sites.data[site].contents,
                    item_under(&element_step, sequence ? 1 : 0, !sequence,
@@ -5123,7 +5098,7 @@ spread_operands(pt_t *pt, const ir_instr_t *in, pt_set_t *into)
 {
     pt_set_t items = core_list_new(pt_item_t);
     for (uint32_t o = 0; o < in->n_operands; o++)
-        pt_read(pt, used_value(&in->operands[o]), &items);
+        pt_read(pt, referenced(in, o), &items);
     for (size_t i = 0; i < items.len; i++)
         set_add(into, item_under(nullptr, 0, true, items.data[i]));
     core_list_free(items);
@@ -5161,8 +5136,7 @@ holds_nothing(ir_op_t op)
 static const ir_value_t *
 role_value(const ir_instr_t *in, int32_t operand)
 {
-    return operand >= 0 && (uint32_t)operand < in->n_operands
-        ? used_value(&in->operands[operand]) : nullptr;
+    return operand >= 0 ? referenced(in, (uint32_t)operand) : nullptr;
 }
 
 static bool
@@ -5210,10 +5184,8 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     pt_set_t first = pt->scratch[1];
     pt_set_t other = pt->scratch[2];
     out.len = first.len = other.len = 0;
-    const ir_value_t *base = in->n_operands ? used_value(&in->operands[0])
-                                            : nullptr;
-    const ir_value_t *third = in->n_operands > 2
-        ? used_value(&in->operands[2]) : nullptr;
+    const ir_value_t *base  = referenced(in, 0);
+    const ir_value_t *third = referenced(in, 2);
     bool named = in->n_operands > 1 && in->operands[1].kind == IR_OPD_NAME;
     if (ir_instr_allocates_storage(in)) allocate(pt, in, &out);
     else switch (in->op) {
@@ -5255,7 +5227,7 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_OPTION_GET_OR_ELSE:
         for (uint32_t o = in->op == IR_OP_SELECT ? 1 : 0; o < in->n_operands;
              o++)
-            pt_read(pt, used_value(&in->operands[o]), &out);
+            pt_read(pt, referenced(in, o), &out);
         break;
     case IR_OP_FIELD:
         pt_read(pt, base, &first);
@@ -5269,7 +5241,7 @@ pt_step(pt_t *pt, const ir_instr_t *in)
     case IR_OP_ADD:
     case IR_OP_SUB:
         for (uint32_t o = 0; o < in->n_operands; o++)
-            pt_read(pt, used_value(&in->operands[o]), &first);
+            pt_read(pt, referenced(in, o), &first);
         pointer_offset(&first, &out);
         break;
     case IR_OP_EXTRACT:
@@ -5297,7 +5269,7 @@ pt_step(pt_t *pt, const ir_instr_t *in)
             const th_member *member = record && o < th_record_len(record)
                 ? th_record_member(record, o) : nullptr;
             first.len = 0;
-            pt_read(pt, used_value(&in->operands[o]), &first);
+            pt_read(pt, referenced(in, o), &first);
             for (size_t i = 0; i < first.len; i++)
                 set_add(&out, member ? item_under(&member->name, 1, false,
                                                   first.data[i])
@@ -5338,7 +5310,7 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         if (holds_nothing(in->op)) break;
         bool pointers = false;
         for (uint32_t o = 0; !pointers && o < in->n_operands; o++) {
-            const ir_value_t *operand = used_value(&in->operands[o]);
+            const ir_value_t *operand = referenced(in, o);
             pointers = operand && pointer_type(pt, operand->type);
         }
         if (pointers) spread_operands(pt, in, &out);
@@ -5379,7 +5351,7 @@ note_load_uses(pt_t *pt)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in = f->blocks[b]->instrs[i];
             for (uint32_t o = 0; o < in->n_operands; o++) {
-                const ir_value_t *used = used_value(&in->operands[o]);
+                const ir_value_t *used = referenced(in, o);
                 if (!used || used->kind != IR_VAL_INSTR || !used->def
                     || used->def->op != IR_OP_LOAD) continue;
                 bool extracted = in->op == IR_OP_EXTRACT && o == 0
@@ -5436,7 +5408,7 @@ record_operand(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in,
 {
     if (operand >= in->n_operands) return;
     pt_set_t addresses = core_list_new(pt_item_t);
-    pt_read(pt, used_value(&in->operands[operand]), &addresses);
+    pt_read(pt, referenced(in, operand), &addresses);
     record_set(pt, summary, &addresses, flags);
     core_list_free(addresses);
 }
@@ -5463,7 +5435,8 @@ record_callee_stores(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call,
             else
                 set_add(&to, item_at(path_loc(&path)));
         }
-        for (uint32_t param = 0; param + 1 < call->n_operands; param++)
+        for (uint32_t param = 0; param < ir_call_argument_count(call);
+             param++)
             if (ir_summary_param_escape(callee, param)) {
                 pt_set_t items = core_list_new(pt_item_t);
                 argument_items(pt, call, param, &items);
@@ -5519,8 +5492,7 @@ record_instr(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in)
 {
     pt_set_t first  = core_list_new(pt_item_t);
     pt_set_t second = core_list_new(pt_item_t);
-    const ir_value_t *base = in->n_operands ? used_value(&in->operands[0])
-                                            : nullptr;
+    const ir_value_t *base = referenced(in, 0);
     switch (in->op) {
     case IR_OP_LOAD:
         if (whole_load(pt, in))
@@ -5531,7 +5503,7 @@ record_instr(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in)
             && base->def->op == IR_OP_LOAD && base->def->n_operands
             && !whole_load(pt, base->def) && in->n_operands > 1
             && in->operands[1].kind == IR_OPD_NAME) {
-            pt_read(pt, used_value(&base->def->operands[0]), &first);
+            pt_read(pt, referenced(base->def, 0), &first);
             address_step(&first, in->operands[1].name, &second);
             record_set(pt, summary, &second, IR_SPATH_READ);
         }
@@ -5666,22 +5638,18 @@ summarize_results(pt_t *pt, ir_summary_t *summary)
 {
     const ir_func_t *f = pt->f;
     summary->results_known = true;
-    uint32_t first_output = returns_value(f) ? 1 : 0;
-    uint32_t outputs      = 1;
-    for (size_t i = 0; i < th_func_nparams(f->type); i++) {
-        const th_param *formal = th_func_param(f->type, i);
-        if (formal && th_mode_produces_output(formal->mode)) outputs++;
-    }
-    if (outputs > UINT8_MAX) outputs = UINT8_MAX;
-    for (uint32_t output = first_output ? 0 : 1; output < outputs;
+    size_t   count   = ir_call_output_count(f->type);
+    uint32_t outputs = count < UINT8_MAX ? (uint32_t)count + 1 : UINT8_MAX;
+    for (uint32_t output = returns_value(f) ? 0 : 1; output < outputs;
          output++) {
-        uint32_t operand  = output ? first_output + output - 1 : 0;
+        size_t operand = output
+            ? ir_return_output_operand(f->owner, f->type, output - 1) : 0;
         pt_set_t returned = core_list_new(pt_item_t);
         for (uint32_t b = 0; b < f->n_blocks; b++)
             for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
                 const ir_instr_t *in = f->blocks[b]->instrs[i];
                 if (in->op == IR_OP_RETURN && operand < in->n_operands)
-                    pt_read(pt, used_value(&in->operands[operand]),
+                    pt_read(pt, referenced(in, operand),
                             &returned);
             }
         summarize_output(pt, summary, &returned, (uint8_t)output);

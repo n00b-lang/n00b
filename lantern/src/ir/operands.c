@@ -19,6 +19,71 @@ ir_operand_used_value(const ir_instr_t *in, uint32_t index)
 }
 
 const ir_value_t *
+ir_operand_referenced_value(const ir_operand_t *operand)
+{
+    switch (operand->kind) {
+    case IR_OPD_ARG:
+    case IR_OPD_OUT:
+        return operand->value;
+    default:
+        return ir_operand_value(operand);
+    }
+}
+
+uint32_t
+ir_call_argument_count(const ir_instr_t *call)
+{
+    return call && call->n_operands ? call->n_operands - 1 : 0;
+}
+
+ir_call_arg_t
+ir_call_argument(const ir_instr_t *call, uint32_t param)
+{
+    uint32_t operand = param + 1;
+    if (!call || operand >= call->n_operands)
+        return (ir_call_arg_t){.role = IR_ARG_ABSENT, .operand = operand};
+    const ir_operand_t *o = &call->operands[operand];
+    ir_arg_role_t role = IR_ARG_UNMAPPED;
+    switch (o->kind) {
+    case IR_OPD_VALUE:
+    case IR_OPD_ARG:
+        role = IR_ARG_VALUE;
+        break;
+    case IR_OPD_OUT:
+        role = IR_ARG_OUT;
+        break;
+    case IR_OPD_FRESH:
+        role = IR_ARG_FRESH;
+        break;
+    case IR_OPD_MISSING:
+        role = IR_ARG_MISSING;
+        break;
+    default:
+        break;
+    }
+    return (ir_call_arg_t){.role = role, .operand = operand,
+                           .value = ir_operand_referenced_value(o)};
+}
+
+bool
+ir_call_argument_writes(const ir_call_arg_t *argument)
+{
+    return argument->role == IR_ARG_OUT || argument->role == IR_ARG_FRESH;
+}
+
+bool
+ir_call_arguments_positional(const ir_instr_t *call, uint32_t through)
+{
+    for (uint32_t param = 0; param <= through; param++) {
+        ir_call_arg_t argument = ir_call_argument(call, param);
+        if (argument.role != IR_ARG_VALUE
+            && !ir_call_argument_writes(&argument))
+            return false;
+    }
+    return true;
+}
+
+const ir_value_t *
 ir_value_uncopied(const ir_value_t *value)
 {
     for (uint32_t i = 0; value && value->def && i < 64; i++) {

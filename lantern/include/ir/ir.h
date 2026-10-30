@@ -559,6 +559,9 @@ size_t   ir_call_output_count(th_type *callable);
 th_type *ir_call_output_type(th_type *callable, size_t output_index);
 size_t   ir_call_output_param(th_type *callable, size_t output_index);
 size_t   ir_call_param_output(th_type *callable, size_t param);
+bool     ir_callable_returns_value(ir_module_t *m, th_type *callable);
+size_t   ir_return_output_operand(ir_module_t *m, th_type *callable,
+                                  size_t output_index);
 th_type *ir_call_function_type(const ir_instr_t *call);
 const ir_instr_t *ir_call_output_source(const ir_instr_t *output,
                                         size_t *ordinal);
