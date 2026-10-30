@@ -3,32 +3,60 @@ sys.internal.fs.read_file: (string) -> Array[u8] fail: int
   reads path.data...
   traps explicit bounds unwrap arithmetic
   returns fresh
-  output result data[call sys.internal.fs.n00b_os_open call sys.internal.fs.n00b_os_read call sys.internal.fs.n00b_os_seek global builtin.string.core.length_mask global builtin.string.core.str_tag_long global builtin.string.core.str_tag_short global builtin.string.core.tag_shift global sys.internal.fs.einval global sys.internal.fs.seek_end global sys.internal.fs.seek_set heap array[u8] heap byte heap string path] control[call sys.internal.fs.n00b_os_close call sys.internal.fs.n00b_os_open call sys.internal.fs.n00b_os_read call sys.internal.fs.n00b_os_seek global builtin.string.core.length_mask global builtin.string.core.str_tag_long global builtin.string.core.str_tag_short global builtin.string.core.tag_shift global sys.internal.fs.einval global sys.internal.fs.seek_end global sys.internal.fs.seek_set heap array[u8] heap byte heap string path]
-  output failure data[call sys.internal.fs.n00b_os_close call sys.internal.fs.n00b_os_open call sys.internal.fs.n00b_os_read call sys.internal.fs.n00b_os_seek global builtin.string.core.length_mask global builtin.string.core.str_tag_long global builtin.string.core.str_tag_short global builtin.string.core.tag_shift global sys.internal.fs.einval global sys.internal.fs.seek_end global sys.internal.fs.seek_set heap array[u8] heap byte heap string path] control[call sys.internal.fs.n00b_os_close call sys.internal.fs.n00b_os_open call sys.internal.fs.n00b_os_read call sys.internal.fs.n00b_os_seek global builtin.string.core.length_mask global builtin.string.core.str_tag_long global builtin.string.core.str_tag_short global builtin.string.core.tag_shift global sys.internal.fs.einval global sys.internal.fs.seek_end global sys.internal.fs.seek_set heap array[u8] heap byte heap string path]
+  output result data[(may_input) (new#99ef) path.data... path.selector path[]] control[path.data path.selector]
+  output (new#99ef)... data[(may_input) path.data... path.selector path[]] control[]
 sys.internal.env.args: () -> List[string]
   effects may_trap may_allocate may_collect allocates_direct reinterprets reads_env
   traps explicit bounds unwrap arithmetic
   returns fresh
-  output result data[global __n00bb_litmod_800_value] control[]
+  output result data[(new#3ea3)] control[]
+  output (new#af4f)[] data[(reads_env)] control[]
+  output (new#70fb) data[(new#70fb) (new#9597)] control[]
+  output (new#70fb)[] data[(new#70fb)[] (new#9597)[] (reads_env)] control[]
+  output (new#70fb)[][] data[(reads_env)] control[]
+  output (new#70fb)[].data data[(new#cc0f)[] (new#f321) (reads_env)] control[]
+  output (new#70fb)[].selector data[(reads_env)] control[]
+  output (new#3ea3).items data[(new#70fb) (new#9597)] control[]
+  output (new#3ea3).items[] data[(new#70fb)[] (new#9597)[] (reads_env)] control[]
+  output (new#3ea3).items[][] data[(reads_env)] control[]
+  output (new#3ea3).items[].data data[(new#cc0f)[] (new#f321) (reads_env)] control[]
+  output (new#3ea3).items[].selector data[(reads_env)] control[]
+  output (new#9597) data[(new#70fb) (new#9597)] control[]
+  output (new#9597)[] data[(new#70fb)[] (new#9597)[] (reads_env)] control[]
+  output (new#9597)[][] data[(reads_env)] control[]
+  output (new#9597)[].data data[(new#cc0f)[] (new#f321) (reads_env)] control[]
+  output (new#9597)[].selector data[(reads_env)] control[]
+  output (new#f321)[] data[(reads_env)] control[]
+  output (new#cc0f) data[(new#af4f)] control[]
 sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
-  output result data[call sys.internal.clock.n00b_os_now_ns] control[]
+  output result data[(reads_clock)] control[]
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
   effects may_fail may_trap may_block may_collect reinterprets reads_random
   writes buffer[]...
   traps bounds
-  output result data[buffer call sys.internal.random.n00b_os_random_bytes] control[buffer call sys.internal.random.n00b_os_random_bytes]
-  output failure data[buffer call sys.internal.random.n00b_os_random_bytes] control[buffer call sys.internal.random.n00b_os_random_bytes]
-  output heap <any> data[buffer call sys.internal.random.n00b_os_random_bytes] control[buffer]
+  output result data[] control[]
+  output result 1 data[buffer] control[(reads_random) buffer buffer[]]
+  output buffer[]... data[(reads_random) buffer buffer[]] control[]
 sys.internal.random.fill: (modify 'T) -> nil fail: int
   effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
   traps bounds arithmetic
-  output result data[value] control[call sys.internal.random.n00b_os_random_bytes]
-  output failure data[call sys.internal.random.n00b_os_random_bytes] control[call sys.internal.random.n00b_os_random_bytes]
+  output result data[] control[]
+  output result 1 data[(new#079f) (new#418b) (new#718b) (new#7ccd) (new#8027) (new#8e8b) (new#a46b) (new#b593) (new#f1c3) (new#fa95) (reads_random) value] control[value]
+  output (new#8e8b)... data[(reads_random)] control[]
+  output (new#f1c3)... data[(reads_random)] control[]
+  output (new#718b)... data[(reads_random)] control[]
+  output (new#b593)... data[(reads_random)] control[]
+  output (new#fa95)... data[(reads_random)] control[]
+  output (new#079f)... data[(reads_random)] control[]
+  output (new#418b)... data[(reads_random)] control[]
+  output (new#a46b)... data[(reads_random)] control[]
+  output (new#8027)... data[(reads_random)] control[]
+  output (new#7ccd)... data[(reads_random)] control[]
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
   reads self.index.live
-  output result data[heap builtin.containers.dict.Dict[`a, `b] self] control[]
+  output result data[self.index.live] control[]
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads self.index.ctrl
@@ -42,7 +70,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   escapes self referent
   traps explicit bounds unwrap arithmetic
   returns unknown
-  output result data[call builtin.bitptr.n00bb_bitptr call builtin.hashing.n00b_builtin_abi_ref_address call builtin.hashing.n00bb_load_le_u32 call builtin.hashing.n00bb_load_le_u64 global builtin.containers.hash_index.byte_bit1 global builtin.containers.hash_index.byte_lsbs global builtin.containers.hash_index.byte_msbs global builtin.containers.hash_index.group_slots global builtin.hashing.merge_accs_start global builtin.hashing.midsize_last global builtin.hashing.midsize_start global builtin.hashing.prime32_2 global builtin.hashing.prime64_1 global builtin.hashing.prime64_2 global builtin.hashing.prime64_3 global builtin.hashing.prime64_4 global builtin.hashing.secret global builtin.hashing.secret_size global builtin.hashing.secret_size_min global builtin.hashing.stripe_len global builtin.hashing.u32_mask global builtin.hashing.u64_mask global builtin.string.core.length_mask global builtin.string.core.str_tag_rich global builtin.string.core.tag_shift global builtin.string.style.sub_arm_argname global builtin.string.style.sub_arm_none global builtin.string.style.sub_arm_position heap Option[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap Option[string] heap `a heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[`a] heap array[`a] heap array[builtin.containers.dict.Entry[`a, `b]] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[uint] heap builtin.containers.dict.Dict[`a, `b] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[builtin.string.style.Style_Record] heap builtin.containers.set.Set[`a] heap builtin.containers.set.Set[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.view.View[`a] heap builtin.cursor.Cursor[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.string.core.Byte_Array_Shape heap builtin.string.core.String_Words heap builtin.string.style.Rich_Body heap byte heap byte heap byte heap string heap string heap string heap string heap variant builtin.string.style.Sub_Spec key self unknown] control[call builtin.bitptr.n00bb_bitptr call builtin.hashing.n00b_builtin_abi_ref_address call builtin.hashing.n00bb_load_le_u32 call builtin.hashing.n00bb_load_le_u64 global builtin.containers.hash_index.byte_bit1 global builtin.containers.hash_index.byte_lsbs global builtin.containers.hash_index.byte_msbs global builtin.containers.hash_index.group_slots global builtin.hashing.merge_accs_start global builtin.hashing.midsize_last global builtin.hashing.midsize_start global builtin.hashing.prime32_2 global builtin.hashing.prime64_1 global builtin.hashing.prime64_2 global builtin.hashing.prime64_3 global builtin.hashing.prime64_4 global builtin.hashing.secret global builtin.hashing.secret_size global builtin.hashing.secret_size_min global builtin.hashing.stripe_len global builtin.hashing.u32_mask global builtin.hashing.u64_mask global builtin.string.core.length_mask global builtin.string.core.str_tag_rich global builtin.string.core.tag_shift global builtin.string.style.sub_arm_argname global builtin.string.style.sub_arm_none global builtin.string.style.sub_arm_position heap Option[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap Option[string] heap `a heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[`a] heap array[`a] heap array[builtin.containers.dict.Entry[`a, `b]] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[uint] heap builtin.containers.dict.Dict[`a, `b] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[builtin.string.style.Style_Record] heap builtin.containers.set.Set[`a] heap builtin.containers.set.Set[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.view.View[`a] heap builtin.cursor.Cursor[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.string.core.Byte_Array_Shape heap builtin.string.core.String_Words heap builtin.string.style.Rich_Body heap byte heap byte heap byte heap string heap string heap string heap string heap variant builtin.string.style.Sub_Spec key self unknown]
+  output result data[self.entries[].value] control[key... self.index.ctrl self.index.ctrl[] self.index.hashes[] self.index.slots[]]
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads+writes self.index.used
@@ -64,8 +92,26 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   escapes value address
   traps explicit bounds unwrap arithmetic
   returns unknown
-  output result data[call builtin.bitptr.n00bb_bitptr call builtin.containers.dict.__n00bb_array_clear call builtin.hashing.n00b_builtin_abi_ref_address call builtin.hashing.n00bb_load_le_u32 call builtin.hashing.n00bb_load_le_u64 global builtin.containers.hash_index.byte_bit1 global builtin.containers.hash_index.byte_lsbs global builtin.containers.hash_index.byte_msbs global builtin.containers.hash_index.ctrl_empty global builtin.containers.hash_index.empty_group global builtin.containers.hash_index.group_slots global builtin.hashing.merge_accs_start global builtin.hashing.midsize_last global builtin.hashing.midsize_start global builtin.hashing.prime32_2 global builtin.hashing.prime64_1 global builtin.hashing.prime64_2 global builtin.hashing.prime64_3 global builtin.hashing.prime64_4 global builtin.hashing.secret global builtin.hashing.secret_size global builtin.hashing.secret_size_min global builtin.hashing.stripe_len global builtin.hashing.u32_mask global builtin.hashing.u64_mask global builtin.string.core.length_mask global builtin.string.core.str_tag_rich global builtin.string.core.tag_shift global builtin.string.style.sub_arm_argname global builtin.string.style.sub_arm_none global builtin.string.style.sub_arm_position heap Option[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap Option[string] heap `a heap `a heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[`a] heap array[`a] heap array[builtin.containers.dict.Entry[`a, `b]] heap array[builtin.containers.dict.Entry[`a, `b]] heap array[uint] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[builtin.string.style.Style_Record] heap builtin.containers.set.Set[`a] heap builtin.containers.set.Set[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.view.View[`a] heap builtin.cursor.Cursor[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.string.core.Byte_Array_Shape heap builtin.string.core.String_Words heap builtin.string.style.Rich_Body heap byte heap byte heap byte heap string heap string heap string heap string heap variant builtin.string.style.Sub_Spec key self unknown value] control[call builtin.bitptr.n00bb_bitptr call builtin.containers.dict.__n00bb_array_clear call builtin.hashing.n00b_builtin_abi_ref_address call builtin.hashing.n00bb_load_le_u32 call builtin.hashing.n00bb_load_le_u64 global builtin.containers.hash_index.byte_bit1 global builtin.containers.hash_index.byte_lsbs global builtin.containers.hash_index.byte_msbs global builtin.containers.hash_index.ctrl_empty global builtin.containers.hash_index.empty_group global builtin.containers.hash_index.group_slots global builtin.hashing.merge_accs_start global builtin.hashing.midsize_last global builtin.hashing.midsize_start global builtin.hashing.prime32_2 global builtin.hashing.prime64_1 global builtin.hashing.prime64_2 global builtin.hashing.prime64_3 global builtin.hashing.prime64_4 global builtin.hashing.secret global builtin.hashing.secret_size global builtin.hashing.secret_size_min global builtin.hashing.stripe_len global builtin.hashing.u32_mask global builtin.hashing.u64_mask global builtin.string.core.length_mask global builtin.string.core.str_tag_rich global builtin.string.core.tag_shift global builtin.string.style.sub_arm_argname global builtin.string.style.sub_arm_none global builtin.string.style.sub_arm_position heap Option[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap Option[string] heap `a heap `a heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[`a] heap array[`a] heap array[builtin.containers.dict.Entry[`a, `b]] heap array[uint] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[builtin.string.style.Style_Record] heap builtin.containers.set.Set[`a] heap builtin.containers.set.Set[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.view.View[`a] heap builtin.cursor.Cursor[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.string.core.Byte_Array_Shape heap builtin.string.core.String_Words heap builtin.string.style.Rich_Body heap byte heap byte heap byte heap string heap string heap string heap string heap variant builtin.string.style.Sub_Spec key self unknown value]
-  output heap <any> data[call builtin.bitptr.n00bb_bitptr call builtin.containers.dict.__n00bb_array_clear call builtin.hashing.n00b_builtin_abi_ref_address call builtin.hashing.n00bb_load_le_u32 call builtin.hashing.n00bb_load_le_u64 global builtin.containers.hash_index.byte_bit1 global builtin.containers.hash_index.byte_lsbs global builtin.containers.hash_index.byte_msbs global builtin.containers.hash_index.ctrl_empty global builtin.containers.hash_index.empty_group global builtin.containers.hash_index.group_slots global builtin.hashing.merge_accs_start global builtin.hashing.midsize_last global builtin.hashing.midsize_start global builtin.hashing.prime32_2 global builtin.hashing.prime64_1 global builtin.hashing.prime64_2 global builtin.hashing.prime64_3 global builtin.hashing.prime64_4 global builtin.hashing.secret global builtin.hashing.secret_size global builtin.hashing.secret_size_min global builtin.hashing.stripe_len global builtin.hashing.u32_mask global builtin.hashing.u64_mask global builtin.string.core.length_mask global builtin.string.core.str_tag_rich global builtin.string.core.tag_shift global builtin.string.style.sub_arm_argname global builtin.string.style.sub_arm_none global builtin.string.style.sub_arm_position heap Option[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap Option[string] heap `a heap `a heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[`a] heap array[`a] heap array[builtin.containers.dict.Entry[`a, `b]] heap array[uint] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[builtin.string.style.Style_Record] heap builtin.containers.set.Set[`a] heap builtin.containers.set.Set[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.view.View[`a] heap builtin.cursor.Cursor[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.string.core.Byte_Array_Shape heap builtin.string.core.String_Words heap builtin.string.style.Rich_Body heap byte heap byte heap byte heap string heap string heap string heap string heap variant builtin.string.style.Sub_Spec key self unknown value] control[call builtin.bitptr.n00bb_bitptr call builtin.containers.dict.__n00bb_array_clear call builtin.hashing.n00b_builtin_abi_ref_address call builtin.hashing.n00bb_load_le_u32 call builtin.hashing.n00bb_load_le_u64 global builtin.containers.hash_index.byte_bit1 global builtin.containers.hash_index.byte_lsbs global builtin.containers.hash_index.byte_msbs global builtin.containers.hash_index.ctrl_empty global builtin.containers.hash_index.empty_group global builtin.containers.hash_index.group_slots global builtin.hashing.merge_accs_start global builtin.hashing.midsize_last global builtin.hashing.midsize_start global builtin.hashing.prime32_2 global builtin.hashing.prime64_1 global builtin.hashing.prime64_2 global builtin.hashing.prime64_3 global builtin.hashing.prime64_4 global builtin.hashing.secret global builtin.hashing.secret_size global builtin.hashing.secret_size_min global builtin.hashing.stripe_len global builtin.hashing.u32_mask global builtin.hashing.u64_mask global builtin.string.core.length_mask global builtin.string.core.str_tag_rich global builtin.string.core.tag_shift global builtin.string.style.sub_arm_argname global builtin.string.style.sub_arm_none global builtin.string.style.sub_arm_position heap Option[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap Option[string] heap `a heap `a heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap `a where `K: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap array[`a] heap array[`a] heap array[builtin.containers.dict.Entry[`a, `b]] heap array[uint] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] heap builtin.containers.dict.Dict[`a, `b] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[`a] heap builtin.containers.list.List[builtin.string.style.Style_Record] heap builtin.containers.set.Set[`a] heap builtin.containers.set.Set[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.containers.view.View[`a] heap builtin.cursor.Cursor[`a] where `a: builtin.hashing.Hash + method(hash: u128, args: () -> u128 fail: nil) heap builtin.string.core.Byte_Array_Shape heap builtin.string.core.String_Words heap builtin.string.style.Rich_Body heap byte heap byte heap byte heap string heap string heap string heap string heap variant builtin.string.style.Sub_Spec key self unknown value]
+  output result data[self.entries self.entries[].value] control[key... self.index.ctrl self.index.ctrl[] self.index.dead self.index.dead[] self.index.growth_left self.index.hashes self.index.hashes[] self.index.live self.index.slots[] self.index.used]
+  output self.entries data[(new#8f17)] control[]
+  output self.entries... data[self.entries] control[]
+  output self.entries[] data[self.entries[]] control[]
+  output self.index.ctrl data[(new#871f)] control[]
+  output self.index.dead data[(new#79cf) (new#befb)] control[]
+  output self.index.growth_left data[self.entries self.index.growth_left self.index.live] control[]
+  output self.index.hashes data[(new#b34f)] control[]
+  output self.index.live data[self.entries self.index.live] control[]
+  output self.index.slots data[(new#91fb)] control[]
+  output self.index.used data[self.entries self.index.used] control[self.index.dead self.index.dead[]]
+  output self.entries[].key data[key self.entries[].key] control[]
+  output self.entries[].value data[value] control[]
+  output self.index.ctrl[] data[key... self.entries self.index.ctrl self.index.ctrl[] self.index.hashes[]] control[]
+  output self.index.hashes[] data[key... self.entries self.index.hashes[]] control[]
+  output self.index.slots[] data[self.entries self.index.used] control[self.index.dead self.index.dead[]]
+  output (new#8f17)[] data[self.entries self.entries[]] control[]
+  output (new#8f17)[]... data[self.entries] control[]
+  output (new#79cf)[] data[self.entries self.index.dead[]] control[]
+  output (new#b34f)[] data[key... self.entries self.index.hashes[]] control[]
 builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   effects may_trap may_allocate
   reads self.index.live
@@ -76,11 +122,14 @@ builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   reads self.entries[]
   escapes self referent
   traps bounds arithmetic
-  output result data[] control[]
+  output result data[(new#38e5) self.entries[].key... self.entries[].value... self.index.live...] control[]
+  output (new#38e5)[] data[self.index.live] control[]
+  output (new#38e5)[].key data[self.entries[].key] control[]
+  output (new#38e5)[].value data[self.entries[].value] control[]
 builtin.containers.list.len: (List['T]) -> uint
   effects none
   reads self.count
-  output result data[heap builtin.containers.list.List[`a] self] control[]
+  output result data[self.count] control[]
 builtin.containers.list.iter: (List['T]) -> Cursor['T]
   effects may_trap
   writes self.shared
@@ -88,8 +137,7 @@ builtin.containers.list.iter: (List['T]) -> Cursor['T]
   reads self.count
   escapes self referent
   traps arithmetic
-  output result data[] control[]
-  output param 0 data[] control[]
+  output result data[self.count self.items] control[]
 text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads spans.count
@@ -98,10 +146,25 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   escapes text address
   escapes spans referent
   traps explicit bounds unwrap arithmetic
-  output result data[global builtin.string.core.str_tag_rich global builtin.string.core.tag_shift heap builtin.string.style.Rich_Body text] control[]
+  output result data[(new#ce55)] control[]
+  output (new#70fb)[] data[(new#70fb)[] (new#9597)[] (new#c5db)[] spans.items[].end... spans.items[].start... spans.items[].tag...] control[]
+  output (new#70fb)[].end_ix data[spans.items[].end] control[]
+  output (new#70fb)[].start_ix data[spans.items[].start] control[]
+  output (new#70fb)[].style_tag data[spans.items[].tag] control[]
+  output (new#ce55).s data[text] control[]
+  output (new#ce55).style_info data[(new#ed7b)] control[]
+  output (new#9597)[] data[(new#70fb)[] (new#9597)[] (new#c5db)[]] control[]
+  output (new#9597)[].end_ix data[spans.items[].end] control[]
+  output (new#9597)[].start_ix data[spans.items[].start] control[]
+  output (new#9597)[].style_tag data[spans.items[].tag] control[]
+  output (new#ed7b).items data[(new#70fb) (new#9597) (new#c5db)] control[]
+  output (new#c5db)[] data[(new#70fb)[] (new#9597)[] (new#c5db)[]] control[]
+  output (new#c5db)[].end_ix data[spans.items[].end] control[]
+  output (new#c5db)[].start_ix data[spans.items[].start] control[]
+  output (new#c5db)[].style_tag data[spans.items[].tag] control[]
 unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
   reads unicode.generated.categories.gc_stage1_values[]
   reads unicode.generated.categories.gc_stage2[]
   traps explicit bounds arithmetic
-  output result data[cp global unicode.generated.categories.gc_stage1_values global unicode.generated.categories.gc_stage2] control[cp global unicode.generated.categories.gc_stage1_values global unicode.generated.categories.gc_stage2]
+  output result data[] control[cp]

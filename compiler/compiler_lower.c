@@ -21911,35 +21911,6 @@ n00bb_summary_global_reachable(void *context, const ir_global_t *global)
 }
 
 static void
-splace_text(core_buffer_t *out, th_ctx *types, const ir_splace_t *place)
-{
-    switch (place->kind) {
-    case IR_SPLACE_PARAM:
-        core_buffer_printf(out, "param %u", place->param);
-        break;
-    case IR_SPLACE_GLOBAL:
-    case IR_SPLACE_THREAD:
-        if (place->kind == IR_SPLACE_THREAD) core_buffer_puts(out, "thread ");
-        else core_buffer_puts(out, "global ");
-        core_buffer_append_string(out, place->global
-            ? place->global->name : CORE_STRING_STATIC("<external>"));
-        break;
-    case IR_SPLACE_HEAP:
-        core_buffer_puts(out, "heap ");
-        core_buffer_append_string(out, place->type
-            ? th_print(types, place->type) : CORE_STRING_STATIC("<any>"));
-        break;
-    case IR_SPLACE_UNKNOWN:
-        core_buffer_puts(out, "unknown");
-        break;
-    case IR_SPLACE_SOURCE:
-        core_buffer_puts(out, "source ");
-        core_buffer_append_string(out, ir_summary_flag_name(place->param));
-        break;
-    }
-}
-
-static void
 param_text(core_buffer_t *out, const ir_func_t *function, uint32_t p)
 {
     core_string_t name = p < function->n_params && function->params[p]
@@ -21953,38 +21924,6 @@ dump_text(core_buffer_t *out)
 {
     fprintf(stdout, "%.*s", (int)out->byte_len, out->data ? out->data : "");
     core_buffer_release(out);
-}
-
-static void
-input_text(core_buffer_t *out, th_ctx *types, const ir_func_t *function,
-           const ir_sinput_t *input)
-{
-    switch (input->kind) {
-    case IR_SINPUT_VALUE:
-        param_text(out, function, input->param);
-        break;
-    case IR_SINPUT_REFERENT:
-        core_buffer_putc(out, '*');
-        param_text(out, function, input->param);
-        break;
-    case IR_SINPUT_PLACE:
-        splace_text(out, types, &input->place);
-        break;
-    case IR_SINPUT_UNKNOWN:
-        core_buffer_puts(out, "unknown");
-        break;
-    case IR_SINPUT_CALL:
-        core_buffer_puts(out, "call ");
-        core_buffer_append_string(out, input->callee);
-        break;
-    }
-}
-
-static int
-compare_texts(const void *left, const void *right)
-{
-    return core_string_cmp(*(const core_string_t *)left,
-                           *(const core_string_t *)right);
 }
 
 static void
@@ -22018,6 +21957,8 @@ spath_text(core_buffer_t *out, const ir_func_t *function,
         core_buffer_append_string(out, ir_summary_flag_name(path->param));
         core_buffer_puts(out, ")");
     }
+    else if (path->root == IR_SPLACE_HEAP && path->param)
+        core_buffer_printf(out, "(new#%04x)", path->param & 0xffff);
     else if (path->root == IR_SPLACE_HEAP)
         core_buffer_puts(out, "(new)");
     else if (path->global)
@@ -22070,6 +22011,125 @@ dump_spath(const ir_func_t *function, const ir_spath_t *path)
     core_buffer_t out = {0};
     spath_text(&out, function, path);
     dump_text(&out);
+}
+
+typedef core_list_t(core_string_t) text_list_t;
+
+static int
+compare_texts(const void *left, const void *right)
+{
+    return core_string_cmp(*(const core_string_t *)left,
+                           *(const core_string_t *)right);
+}
+
+static void
+add_text(text_list_t *texts, const ir_func_t *function,
+         const ir_spath_t *path)
+{
+    core_buffer_t *text = core_buffer_empty();
+    spath_text(text, function, path);
+    core_string_t added = core_buffer_take_string(text);
+    for (size_t i = 0; i < texts->len; i++)
+        if (core_string_eq(texts->data[i], added)) {
+            core_free((void *)added.data);
+            return;
+        }
+    core_list_push(*texts, added);
+}
+
+static void
+put_texts(core_buffer_t *line, core_string_t label, text_list_t *texts)
+{
+    qsort(texts->data, texts->len, sizeof(core_string_t), compare_texts);
+    core_buffer_puts(line, " ");
+    core_buffer_append_string(line, label);
+    core_buffer_puts(line, "[");
+    for (size_t i = 0; i < texts->len; i++) {
+        if (i) core_buffer_putc(line, ' ');
+        core_buffer_append_string(line, texts->data[i]);
+        core_free((void *)texts->data[i].data);
+    }
+    core_buffer_puts(line, "]");
+    texts->len = 0;
+}
+
+static void
+reader_output(const ir_func_t *function, const ir_summary_t *summary,
+              ir_sflow_table_t table, const ir_spath_t *to)
+{
+    text_list_t data    = core_list_new(core_string_t);
+    text_list_t control = core_list_new(core_string_t);
+    bool        results = table == IR_SFLOW_RESULTS;
+    uint32_t    count   = results ? ir_summary_result_count(summary)
+                                  : ir_summary_store_count(summary);
+    for (uint32_t i = 0; i < count; i++) {
+        const ir_sstore_t *pair = results ? ir_summary_result_at(summary, i)
+                                          : ir_summary_store_at(summary, i);
+        bool same = results ? pair->to.output == to->output
+                            : !ir_spath_compare(&pair->to, to);
+        if (same) add_text(&data, function, &pair->from);
+    }
+    for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++) {
+        const ir_spath_t *dest = ir_summary_flow_to(summary, table, f);
+        if (results ? dest->output != to->output
+                    : ir_spath_compare(dest, to) != 0)
+            continue;
+        for (uint32_t s = 0; s < ir_summary_flow_source_count(summary, table);
+             s++) {
+            const ir_spath_t *from = ir_summary_flow_source(summary, table, s);
+            if (ir_summary_flow_has(summary, table, f, s, IR_SFLOW_DATA))
+                add_text(&data, function, from);
+            else if (ir_summary_flow_has(summary, table, f, s,
+                                         IR_SFLOW_CONTROL))
+                add_text(&control, function, from);
+        }
+    }
+    core_buffer_t line = {0};
+    core_buffer_puts(&line, "  output ");
+    if (results && to->output)
+        core_buffer_printf(&line, "result %u", to->output);
+    else if (results)
+        core_buffer_puts(&line, "result");
+    else
+        spath_text(&line, function, to);
+    put_texts(&line, CORE_STRING_STATIC("data"), &data);
+    put_texts(&line, CORE_STRING_STATIC("control"), &control);
+    core_buffer_putc(&line, '\n');
+    dump_text(&line);
+    core_list_free(data);
+    core_list_free(control);
+}
+
+static int
+compare_spaths(const void *left, const void *right)
+{
+    const ir_spath_t *a = left, *b = right;
+    if (a->output != b->output) return a->output < b->output ? -1 : 1;
+    return ir_spath_compare(a, b);
+}
+
+static void
+reader_table(const ir_func_t *function, const ir_summary_t *summary,
+             ir_sflow_table_t table)
+{
+    bool            results = table == IR_SFLOW_RESULTS;
+    ir_spath_list_t dests   = core_list_new(ir_spath_t);
+    if (results) core_list_push(dests, (ir_spath_t){0});
+    uint32_t count = results ? ir_summary_result_count(summary)
+                             : ir_summary_store_count(summary);
+    for (uint32_t i = 0; i < count; i++)
+        core_list_push(dests, results ? ir_summary_result_at(summary, i)->to
+                                      : ir_summary_store_at(summary, i)->to);
+    for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++)
+        core_list_push(dests, *ir_summary_flow_to(summary, table, f));
+    if (results)
+        for (size_t i = 0; i < dests.len; i++)
+            dests.data[i] = (ir_spath_t){.output = dests.data[i].output};
+    qsort(dests.data, dests.len, sizeof(ir_spath_t), compare_spaths);
+    for (size_t i = 0; i < dests.len; i++)
+        if (!i || compare_spaths(&dests.data[i - 1], &dests.data[i]))
+            reader_output(function, summary, table, &dests.data[i]);
+    core_list_free(dests);
 }
 
 static void
@@ -22201,42 +22261,9 @@ dump_function_summary(ir_summaries_t *summaries, ir_func_t *function,
         fputs("  returns fresh\n", stdout);
     else if (returned.kind == IR_SRETURN_UNKNOWN)
         fputs("  returns unknown\n", stdout);
-    const uint32_t *deps = ir_summary_dependences(summary);
-    for (uint32_t o = 0; o < ir_summary_output_count(summary); o++) {
-        const ir_soutput_t *output = ir_summary_output_at(summary, o);
-        core_buffer_t       line   = {0};
-        core_buffer_puts(&line, "  output ");
-        if (output->kind == IR_SOUTPUT_RESULT)
-            core_buffer_puts(&line, "result");
-        else if (output->kind == IR_SOUTPUT_FAILURE)
-            core_buffer_puts(&line, "failure");
-        else splace_text(&line, types, &output->place);
-        for (int pass = 0; pass < 2; pass++) {
-            uint32_t first = pass ? output->control_first
-                                  : output->data_first;
-            uint32_t count = pass ? output->control_count
-                                  : output->data_count;
-            core_string_t *inputs = core_alloc_array(core_string_t,
-                                                     count + 1);
-            for (uint32_t k = 0; k < count; k++) {
-                core_buffer_t *one = core_buffer_empty();
-                input_text(one, types, function,
-                           ir_summary_input_at(summary, deps[first + k]));
-                inputs[k] = core_buffer_take_string(one);
-            }
-            qsort(inputs, count, sizeof(*inputs), compare_texts);
-            if (pass) core_buffer_puts(&line, " control[");
-            else core_buffer_puts(&line, " data[");
-            for (uint32_t k = 0; k < count; k++) {
-                if (k) core_buffer_putc(&line, ' ');
-                core_buffer_append_string(&line, inputs[k]);
-                core_free((void *)inputs[k].data);
-            }
-            core_buffer_putc(&line, ']');
-            core_free(inputs);
-        }
-        core_buffer_putc(&line, '\n');
-        dump_text(&line);
+    if (for_reader) {
+        reader_table(function, summary, IR_SFLOW_RESULTS);
+        reader_table(function, summary, IR_SFLOW_STORES);
     }
 }
 

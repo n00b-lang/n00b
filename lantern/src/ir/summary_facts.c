@@ -265,6 +265,7 @@ place_key(ir_summary_facts_t *facts, const ir_splace_t *place,
         return place->type ? (const void *)th_resolve(place->type)
                            : (const void *)facts;
     case IR_SPLACE_UNKNOWN:
+    case IR_SPLACE_SOURCE:
         break;
     }
     *index = nullptr;
@@ -340,17 +341,25 @@ add_result_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
     if (returned.kind == IR_SRETURN_PARAM)
         fact(facts, REL_RETURN_ALIAS, symbol, integer(facts, returned.param),
              0);
-    const uint32_t *dependences = ir_summary_dependences(summary);
-    for (uint32_t o = 0; o < ir_summary_output_count(summary); o++) {
-        const ir_soutput_t *output = ir_summary_output_at(summary, o);
-        if (output->kind != IR_SOUTPUT_RESULT) continue;
-        for (uint32_t d = 0; d < output->data_count; d++) {
-            const ir_sinput_t *input = ir_summary_input_at(summary,
-                dependences[output->data_first + d]);
-            if (input && (input->kind == IR_SINPUT_VALUE
-                          || input->kind == IR_SINPUT_REFERENT))
+    for (uint32_t r = 0; r < ir_summary_result_count(summary); r++) {
+        const ir_sstore_t *result = ir_summary_result_at(summary, r);
+        if (!result->to.output && result->from.root == IR_SPLACE_PARAM)
+            fact(facts, REL_DEPENDENCE, symbol,
+                 integer(facts, result->from.param), 0);
+    }
+    uint32_t sources = ir_summary_flow_source_count(summary,
+                                                    IR_SFLOW_RESULTS);
+    for (uint32_t f = 0; f < ir_summary_flow_count(summary, IR_SFLOW_RESULTS);
+         f++) {
+        if (ir_summary_flow_to(summary, IR_SFLOW_RESULTS, f)->output) continue;
+        for (uint32_t s = 0; s < sources; s++) {
+            const ir_spath_t *source = ir_summary_flow_source(
+                summary, IR_SFLOW_RESULTS, s);
+            if (source->root == IR_SPLACE_PARAM
+                && ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
+                                       IR_SFLOW_DATA))
                 fact(facts, REL_DEPENDENCE, symbol,
-                     integer(facts, input->param), 0);
+                     integer(facts, source->param), 0);
         }
     }
 }
