@@ -180,6 +180,10 @@ typedef struct {
     bool *contents_hold_buffer;
     uint32_t contents_len;
     uint32_t contents_cap;
+    pointer_map_t flow_index;
+    n00bb_flow_t **flows;
+    uint32_t flows_len;
+    uint32_t flows_cap;
     th_ctx *types;
     bool failed;
 } contents_table_t;
@@ -381,6 +385,12 @@ contents_table_free(contents_table_t *table)
     free(table->contents_base);
     free(table->contents_hold_buffer);
     pointer_map_free(&table->contents_index);
+    for (uint32_t i = 0; i < table->flows_len; i++) {
+        n00bb_flow_release(table->flows[i]);
+        core_free(table->flows[i]);
+    }
+    free(table->flows);
+    pointer_map_free(&table->flow_index);
 }
 
 static uint64_t
@@ -406,25 +416,49 @@ carried_count(const ir_func_t *function)
     return 1 + (signature ? (uint32_t)ir_call_output_count(signature) : 0);
 }
 
-bool
-n00bb_buffer_native_flow(const ir_func_t *function, ir_sflow_t *out)
+void
+n00bb_flow_release(n00bb_flow_t *flow)
 {
-    if (n00bb_native_calls_n00b(function)) {
-        *out = ir_sflow_opaque();
-        return true;
-    }
-    uint32_t n_carried = carried_count(function);
-    *out = (ir_sflow_t){
-        .n_carried = n_carried,
-        .carried = core_alloc_array(ir_scarried_t, n_carried),
+    core_free(flow->carried);
+    flow->carried   = nullptr;
+    flow->n_carried = 0;
+}
+
+static n00bb_flow_t
+flow_opaque(void)
+{
+    n00bb_flow_t flow = {
+        .receives = UINT64_MAX, .receives_fresh = true,
+        .receives_nonlocal = true, .writes_nonlocal = true, .opaque = true,
     };
-    for (uint32_t slot = 0; slot < n_carried; slot++)
-        out->carried[slot] = (ir_scarried_t){
-            .from = {UINT64_MAX, UINT64_MAX}, .fresh = true,
-        };
-    out->writes[IR_SFLOW_SELF] = axiom_writes(function);
-    out->mutates[IR_SFLOW_SELF] = axiom_writes(function);
-    return true;
+    for (int kind = 0; kind < N00BB_FLOW_KINDS; kind++)
+        flow.writes[kind] = flow.mutates[kind] = flow.escapes[kind]
+            = flow.leaks[kind] = UINT64_MAX;
+    return flow;
+}
+
+static const n00bb_flow_t *
+cached_flow(contents_table_t *table, const ir_summary_t *summary)
+{
+    uint32_t slot = 0;
+    if (pointer_map_get(&table->flow_index, summary, &slot))
+        return table->flows[slot];
+    if (table->flows_len == table->flows_cap) {
+        uint32_t cap = table->flows_cap ? table->flows_cap * 2 : 64;
+        n00bb_flow_t **flows = realloc(table->flows, cap * sizeof(*flows));
+        if (!flows) return nullptr;
+        table->flows     = flows;
+        table->flows_cap = cap;
+    }
+    n00bb_flow_t *flow = core_alloc(n00bb_flow_t);
+    n00bb_summary_flow(summary, flow);
+    if (!pointer_map_put(&table->flow_index, summary, table->flows_len)) {
+        n00bb_flow_release(flow);
+        core_free(flow);
+        return nullptr;
+    }
+    table->flows[table->flows_len++] = flow;
+    return flow;
 }
 
 static ir_value_t *
@@ -453,9 +487,6 @@ typedef struct {
     size_t len;
     size_t cap;
     root_set_t escaped;
-    root_set_t leaked;
-    root_set_t received;
-    uint64_t receives;
     bool constants;
     bool failed;
 } origins_t;
@@ -640,37 +671,24 @@ reached_parameter(const contents_table_t *table, const ir_value_t *root,
 {
     if (root == &nonlocal_root) return nullptr;
     if (root->kind == IR_VAL_PARAM) {
-        *kind = IR_SFLOW_SELF;
+        *kind = N00BB_FLOW_SELF;
         return root;
     }
     const ir_value_t *base = contents_base(table, root);
     if (base && base->kind == IR_VAL_PARAM) {
-        *kind = IR_SFLOW_CONTENTS;
+        *kind = N00BB_FLOW_CONTENTS;
         return base;
     }
     return nullptr;
 }
 
 static bool
-record_escape(origins_t *state, const root_set_t *roots, bool leak,
-              bool *changed)
+record_escape(origins_t *state, const root_set_t *roots, bool *changed)
 {
     root_set_t expanded = {0};
     bool ok = root_set_union(&expanded, roots, nullptr)
         && expand_contents(state, &expanded)
-        && root_set_union(&state->escaped, &expanded, changed)
-        && (!leak || root_set_union(&state->leaked, &expanded, changed));
-    free(expanded.items);
-    return ok;
-}
-
-static bool
-record_received(origins_t *state, const root_set_t *roots, bool *changed)
-{
-    root_set_t expanded = {0};
-    bool ok = root_set_union(&expanded, roots, nullptr)
-        && expand_contents(state, &expanded)
-        && root_set_union(&state->received, &expanded, changed);
+        && root_set_union(&state->escaped, &expanded, changed);
     free(expanded.items);
     return ok;
 }
@@ -689,15 +707,9 @@ escape_into(origins_t *state, ir_value_t *target, const root_set_t *stored,
         if (stored->items[i] != target && stored->items[i] != contents)
             ok = root_set_add(&leaving, stored->items[i], nullptr);
     int kind = 0;
-    const ir_value_t *parameter = reached_parameter(state->table, target,
-                                                    &kind);
-    if (parameter && leaving.len) {
-        state->receives |= parameter_bit(parameter);
-        ok = ok && record_received(state, &leaving, changed);
-    }
-    if (parameter || target == &nonlocal_root)
-        ok = ok && record_escape(state, &leaving, target == &nonlocal_root,
-                                 changed);
+    if (reached_parameter(state->table, target, &kind)
+        || target == &nonlocal_root)
+        ok = ok && record_escape(state, &leaving, changed);
     else {
         root_set_t *held = origin_slot(state, target, true);
         ok = ok && held && root_set_union(held, &leaving, changed);
@@ -717,15 +729,13 @@ receive_into(origins_t *state, const root_set_t *targets,
         const ir_value_t *parameter = reached_parameter(state->table,
                                                         target, &kind);
         if (target == &nonlocal_root)
-            ok = record_escape(state, incoming, true, changed);
+            ok = record_escape(state, incoming, changed);
         else if (is_location(target)) {
             root_set_t *memory = location_memory(state, target);
             ok = memory && root_set_union(memory, incoming, changed);
         }
-        else if (parameter) {
-            state->receives |= parameter_bit(parameter);
-            ok = record_received(state, incoming, changed);
-        }
+        else if (parameter)
+            continue;
         else {
             root_set_t *held = origin_slot(state, target, true);
             ok = held && root_set_union(held, incoming, changed);
@@ -735,30 +745,31 @@ receive_into(origins_t *state, const root_set_t *targets,
 }
 
 typedef struct {
-    const ir_sflow_t *flow;
+    const ir_summary_t *summary;
     uint32_t targets;
-} callee_flow_t;
+} callee_summary_t;
 
 static void
-collect_callee_flow(void *context, const ir_func_t *target,
-                    const ir_summary_t *summary)
+collect_callee_summary(void *context, const ir_func_t *target,
+                       const ir_summary_t *summary)
 {
     (void)target;
-    callee_flow_t *callee = context;
-    callee->flow = callee->targets++ ? nullptr : ir_summary_flow(summary);
+    callee_summary_t *callee = context;
+    callee->summary = callee->targets++ ? nullptr : summary;
 }
 
-static const ir_sflow_t *
+static const n00bb_flow_t *
 call_effects(origins_t *state, const ir_instr_t *call)
 {
-    callee_flow_t callee = {0};
+    callee_summary_t callee = {0};
     return ir_summary_call_callees(state->summaries, call,
-                                   collect_callee_flow, &callee)
-        ? callee.flow : nullptr;
+                                   collect_callee_summary, &callee)
+        && callee.summary ? cached_flow(state->table, callee.summary)
+                          : nullptr;
 }
 
 static uint32_t
-first_argument(const ir_instr_t *call, const ir_sflow_t *effects)
+first_argument(const ir_instr_t *call, const n00bb_flow_t *effects)
 {
     return call->op == IR_OP_CALL || (effects && !effects->opaque) ? 1 : 0;
 }
@@ -767,8 +778,8 @@ static bool
 call_carried(origins_t *state, const ir_instr_t *call, uint32_t slot,
              ir_value_t *fresh, root_set_t *into)
 {
-    const ir_sflow_t *effects = call_effects(state, call);
-    const ir_scarried_t *carried = effects && !effects->opaque
+    const n00bb_flow_t *effects = call_effects(state, call);
+    const n00bb_carried_t *carried = effects && !effects->opaque
         && slot < effects->n_carried ? &effects->carried[slot] : nullptr;
     uint32_t first = first_argument(call, effects);
     bool ok = true;
@@ -781,11 +792,11 @@ call_carried(origins_t *state, const ir_instr_t *call, uint32_t slot,
             && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         if (ok && (!carried
-                   || effect_bit(carried->from, index, IR_SFLOW_SELF)))
+                   || effect_bit(carried->from, index, N00BB_FLOW_SELF)))
             ok = root_set_union(into, &roots, nullptr);
         if (ok && contents_carry_references(state, argument)
             && (!carried
-                || effect_bit(carried->from, index, IR_SFLOW_CONTENTS)))
+                || effect_bit(carried->from, index, N00BB_FLOW_CONTENTS)))
             ok = root_set_union(into, &contents, nullptr);
         free(roots.items);
         free(contents.items);
@@ -819,7 +830,7 @@ static bool
 transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
               bool *changed)
 {
-    const ir_sflow_t *effects = call_effects(state, instruction);
+    const n00bb_flow_t *effects = call_effects(state, instruction);
     bool opaque = !effects || effects->opaque;
     uint32_t first = first_argument(instruction, effects);
     root_set_t kept = {0};
@@ -833,13 +844,12 @@ transfer_call(origins_t *state, ir_instr_t *instruction, root_set_t *result,
             && reached_roots(state, &roots, &contents);
         uint32_t index = i - first;
         bool carry = contents_carry_references(state, argument);
-        for (int kind = 0; ok && kind < IR_SFLOW_KINDS; kind++) {
-            if (kind == IR_SFLOW_CONTENTS && !carry) continue;
-            root_set_t *reached = kind == IR_SFLOW_SELF ? &roots : &contents;
+        for (int kind = 0; ok && kind < N00BB_FLOW_KINDS; kind++) {
+            if (kind == N00BB_FLOW_CONTENTS && !carry) continue;
+            root_set_t *reached = kind == N00BB_FLOW_SELF ? &roots : &contents;
             if (!opaque && !effect_bit(effects->escapes, index, kind))
                 continue;
-            bool leak = opaque || effect_bit(effects->leaks, index, kind);
-            ok = record_escape(state, reached, leak, changed)
+            ok = record_escape(state, reached, changed)
                 && root_set_union(&kept, reached, nullptr);
         }
         free(roots.items);
@@ -959,7 +969,7 @@ transfer(origins_t *state, ir_instr_t *instruction, bool *changed)
         if (instruction->n_operands < 2) break;
         root_set_t stored = {0};
         ok = seed_value(state, operand_at(instruction, 1), &stored, nullptr)
-            && record_escape(state, &stored, true, changed);
+            && record_escape(state, &stored, changed);
         free(stored.items);
         break;
     }
@@ -1018,8 +1028,6 @@ origins_free(origins_t *state)
     free(state->origins);
     free(state->memory);
     free(state->escaped.items);
-    free(state->leaked.items);
-    free(state->received.items);
     pointer_map_free(&state->slots);
 }
 
@@ -1046,7 +1054,7 @@ call_write_roots(origins_t *state, ir_instr_t *instruction,
                  uint64_t trusted, root_set_t *written, root_set_t *mutated,
                  bool *writes_nonlocal)
 {
-    const ir_sflow_t *effects = call_effects(state, instruction);
+    const n00bb_flow_t *effects = call_effects(state, instruction);
     bool opaque = !effects || effects->opaque;
     if (opaque || effects->writes_nonlocal) *writes_nonlocal = true;
     uint32_t first = first_argument(instruction, effects);
@@ -1061,13 +1069,13 @@ call_write_roots(origins_t *state, ir_instr_t *instruction,
             && !n00bb_type_reaches_shared_state(state->types, argument->type))
             continue;
         bool write_self = written
-            && (opaque || effect_bit(writes, index, IR_SFLOW_SELF));
+            && (opaque || effect_bit(writes, index, N00BB_FLOW_SELF));
         bool write_contents = written
-            && (opaque || effect_bit(writes, index, IR_SFLOW_CONTENTS));
+            && (opaque || effect_bit(writes, index, N00BB_FLOW_CONTENTS));
         bool mutate_self = mutated
-            && (opaque || effect_bit(mutates, index, IR_SFLOW_SELF));
+            && (opaque || effect_bit(mutates, index, N00BB_FLOW_SELF));
         bool mutate_contents = mutated
-            && (opaque || effect_bit(mutates, index, IR_SFLOW_CONTENTS));
+            && (opaque || effect_bit(mutates, index, N00BB_FLOW_CONTENTS));
         if (!write_self && !write_contents && !mutate_self
             && !mutate_contents) continue;
         root_set_t roots = {0}, contents = {0};
@@ -1152,159 +1160,203 @@ instruction_write_roots(origins_t *state, ir_instr_t *instruction,
 }
 
 static bool
-summarize_carried(origins_t *state, const ir_instr_t *exit,
-                  ir_scarried_t *carried, root_set_t *fresh,
-                  uint32_t n_carried)
+external_root(ir_splace_kind_t root)
 {
-    uint32_t outputs = exit->op == IR_OP_RETURN ? n_carried - 1 : 0;
-    uint32_t result_at = exit->n_operands > outputs
-        ? exit->n_operands - outputs : 0;
-    bool ok = true;
-    for (uint32_t o = 0; ok && o < exit->n_operands; o++) {
-        uint32_t slot = o < result_at ? 0 : 1 + o - result_at;
-        if (slot >= n_carried) slot = 0;
-        root_set_t roots = {0};
-        ok = seed_value(state, operand_at(exit, o), &roots, nullptr)
-            && expand_contents(state, &roots);
-        int kind = 0;
-        for (uint32_t r = 0; ok && r < roots.len; r++) {
-            ir_value_t *root = roots.items[r];
-            const ir_value_t *parameter = reached_parameter(state->table,
-                                                            root, &kind);
-            if (root == &nonlocal_root) carried[slot].nonlocal = true;
-            else if (parameter)
-                carried[slot].from[kind] |= parameter_bit(parameter);
-            else {
-                carried[slot].fresh = true;
-                ok = root_set_add(&fresh[slot], root, nullptr);
-                if (root_set_has(&state->escaped, root))
-                    carried[slot].from[IR_SFLOW_CONTENTS] |= state->receives;
-                if (root_set_has(&state->leaked, root))
-                    carried[slot].nonlocal = true;
-                if (root_set_has(&state->received, root))
-                    carried[slot].shared = true;
-            }
-        }
-        free(roots.items);
-    }
-    return ok;
+    return root == IR_SPLACE_GLOBAL || root == IR_SPLACE_THREAD
+        || root == IR_SPLACE_UNKNOWN;
+}
+
+static uint64_t
+path_parameter_bit(const ir_func_t *function, const ir_spath_t *path)
+{
+    return path->param < function->n_params && function->params[path->param]
+        ? parameter_bit(function->params[path->param]) : UINT64_MAX;
 }
 
 static void
-mark_shared(ir_scarried_t *carried, const root_set_t *fresh,
-            uint32_t n_carried)
+add_source(uint64_t *from, const ir_func_t *function, const ir_spath_t *path)
 {
-    for (uint32_t s = 0; s < n_carried; s++)
-        for (uint32_t t = 0; t < n_carried && !carried[s].shared; t++)
-            for (uint32_t r = 0; t != s && r < fresh[s].len; r++)
-                if (root_set_has(&fresh[t], fresh[s].items[r])) {
-                    carried[s].shared = true;
-                    break;
-                }
+    if (path->root != IR_SPLACE_PARAM) return;
+    uint64_t bit = path_parameter_bit(function, path);
+    if (!path->depth && (path->flags & IR_SPATH_ROOT))
+        from[N00BB_FLOW_SELF] |= bit;
+    if (path->depth || (path->flags & IR_SPATH_DEEP))
+        from[N00BB_FLOW_CONTENTS] |= bit;
 }
 
 static bool
-has_reference_parameter(th_ctx *types, const ir_func_t *function)
+path_in_buffer_state(th_ctx *types, const ir_func_t *function,
+                     const ir_spath_t *path)
 {
-    th_type *signature = function_signature(function);
-    for (size_t p = 0; signature && p < th_func_nparams(signature); p++) {
-        const th_param *parameter = th_func_param(signature, p);
-        if (!parameter || type_may_contain_reference_alias(types,
-                                                           parameter->type))
+    th_type *type = nullptr;
+    for (uint8_t d = 0; d <= path->depth; d++) {
+        type = ir_summary_path_type(function, path, d);
+        type = type ? th_resolve(type) : nullptr;
+        if (!type || is_buffer_type(type) || may_be_buffer_state(type)
+            || (th_kind_of(type) == TH_INDIRECTION
+                && may_be_buffer_state(th_ind_referent(type))))
             return true;
     }
-    const th_param *rest = signature ? th_func_rest(signature) : nullptr;
-    return !signature || rest;
+    return (path->flags & IR_SPATH_DEEP)
+        && type_may_hold_buffer(types, type, 0);
 }
 
-bool
-n00bb_buffer_flow(void *context, ir_summaries_t *summaries,
-                  ir_func_t *function, const ir_sflow_t *previous,
-                  ir_sflow_t *out)
+static void
+derive_writes(th_ctx *types, const ir_func_t *function,
+              const ir_summary_t *summary, n00bb_flow_t *out)
 {
-    (void)context;
-    th_ctx *types = ir_module_types(function->owner);
-    contents_table_t table = {.types = types};
-    origins_t state = {
-        .function = function, .types = types, .table = &table,
-        .summaries = summaries,
-    };
-    uint32_t n_carried = carried_count(function);
-    *out = (ir_sflow_t){
-        .writes = {previous->writes[IR_SFLOW_SELF],
-                   previous->writes[IR_SFLOW_CONTENTS]},
-        .mutates = {previous->mutates[IR_SFLOW_SELF],
-                    previous->mutates[IR_SFLOW_CONTENTS]},
-        .n_carried = n_carried,
-        .carried = core_alloc_array(ir_scarried_t, n_carried),
-    };
-    out->writes[IR_SFLOW_SELF] |= axiom_writes(function);
-    out->mutates[IR_SFLOW_SELF] |= axiom_writes(function);
-    bool ok = origins_solve(&state);
-    uint64_t *writes = out->writes;
-    ir_scarried_t *carried = out->carried;
-    root_set_t *fresh = calloc(n_carried, sizeof(*fresh));
-    ok = ok && fresh;
-    bool writes_nonlocal = false;
-    bool track_mutation = has_reference_parameter(types, function);
-    int kind = 0;
-    for (uint32_t b = 0; ok && b < function->n_blocks; b++) {
-        ir_block_t *block = function->blocks[b];
-        for (uint32_t i = 0; ok && i < block->n_instrs; i++) {
-            ir_instr_t *instruction = block->instrs[i];
-            root_set_t roots = {0}, mutated = {0};
-            bool nonlocal = false;
-            ok = instruction_write_roots(&state, instruction, 0, &roots,
-                track_mutation ? &mutated : nullptr, &nonlocal);
-            if (nonlocal) writes_nonlocal = true;
-            for (uint32_t r = 0; ok && r < roots.len; r++) {
-                const ir_value_t *parameter
-                    = reached_parameter(&table, roots.items[r], &kind);
-                if (roots.items[r] == &nonlocal_root) writes_nonlocal = true;
-                else if (parameter) writes[kind] |= parameter_bit(parameter);
-            }
-            for (uint32_t r = 0; ok && r < mutated.len; r++) {
-                const ir_value_t *parameter
-                    = reached_parameter(&table, mutated.items[r], &kind);
-                if (parameter)
-                    out->mutates[kind] |= parameter_bit(parameter);
-            }
-            free(mutated.items);
-            if (ok && (instruction->op == IR_OP_RETURN
-                       || instruction->op == IR_OP_FAIL))
-                ok = summarize_carried(&state, instruction, carried, fresh,
-                                       n_carried);
-            free(roots.items);
+    for (uint32_t i = 0; i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        if (!(path->flags & IR_SPATH_WRITE)) continue;
+        bool buffer = !(path->flags & IR_SPATH_TYPED)
+            || path_in_buffer_state(types, function, path);
+        if (external_root(path->root)) {
+            out->writes_nonlocal |= buffer;
+            continue;
         }
+        if (path->root != IR_SPLACE_PARAM) continue;
+        uint64_t bit    = path_parameter_bit(function, path);
+        bool     inside = ir_summary_path_inline(function, path);
+        bool     deep   = path->flags & IR_SPATH_DEEP;
+        bool     self   = inside || deep;
+        bool     beyond = !inside || deep;
+        out->mutates[N00BB_FLOW_SELF] |= self ? bit : 0;
+        out->mutates[N00BB_FLOW_CONTENTS] |= beyond ? bit : 0;
+        if (!buffer) continue;
+        out->writes[N00BB_FLOW_SELF] |= self ? bit : 0;
+        out->writes[N00BB_FLOW_CONTENTS] |= beyond ? bit : 0;
     }
-    for (uint32_t r = 0; ok && r < state.escaped.len; r++) {
-        const ir_value_t *parameter
-            = reached_parameter(&table, state.escaped.items[r], &kind);
-        if (parameter) out->escapes[kind] |= parameter_bit(parameter);
+}
+
+typedef struct {
+    uint64_t from[N00BB_FLOW_KINDS];
+    bool     nonlocal;
+    bool     escaped;
+    bool     leaked;
+    bool     received;
+} heap_flow_t;
+
+static void
+derive_stores(const ir_func_t *function, const ir_summary_t *summary,
+              n00bb_flow_t *out, heap_flow_t *heap)
+{
+    uint32_t count = ir_summary_store_count(summary);
+    for (uint32_t i = 0; i < count; i++) {
+        const ir_sstore_t *store = ir_summary_store_at(summary, i);
+        if (store->to.root != IR_SPLACE_HEAP) continue;
+        add_source(heap->from, function, &store->from);
+        heap->nonlocal |= external_root(store->from.root);
     }
-    for (uint32_t r = 0; ok && r < state.leaked.len; r++) {
-        const ir_value_t *parameter
-            = reached_parameter(&table, state.leaked.items[r], &kind);
-        if (parameter) out->leaks[kind] |= parameter_bit(parameter);
+    for (uint32_t i = 0; i < count; i++) {
+        const ir_sstore_t *store = ir_summary_store_at(summary, i);
+        const ir_spath_t *to = &store->to, *from = &store->from;
+        bool leak = external_root(to->root);
+        if (!leak && to->root != IR_SPLACE_PARAM) continue;
+        if (to->root == IR_SPLACE_PARAM && from->root == IR_SPLACE_PARAM
+            && from->param == to->param) continue;
+        add_source(out->escapes, function, from);
+        if (leak) add_source(out->leaks, function, from);
+        if (from->root == IR_SPLACE_HEAP) {
+            heap->escaped = true;
+            heap->leaked |= leak;
+        }
+        if (to->root != IR_SPLACE_PARAM) continue;
+        out->receives |= path_parameter_bit(function, to);
+        out->receives_fresh |= from->root == IR_SPLACE_HEAP;
+        out->receives_nonlocal |= external_root(from->root);
+        heap->received |= from->root == IR_SPLACE_HEAP;
     }
-    out->receives = state.receives;
-    for (uint32_t r = 0; ok && r < state.received.len; r++) {
-        ir_value_t *root = state.received.items[r];
-        if (root == &nonlocal_root
-            || root_set_has(&state.leaked, root))
-            out->receives_nonlocal = true;
-        if (root != &nonlocal_root
-            && !reached_parameter(&table, root, &kind))
-            out->receives_fresh = true;
+    for (int kind = 0; kind < N00BB_FLOW_KINDS; kind++) {
+        if (heap->escaped) out->escapes[kind] |= heap->from[kind];
+        if (heap->leaked) out->leaks[kind] |= heap->from[kind];
     }
-    out->writes_nonlocal = writes_nonlocal;
-    if (ok) mark_shared(carried, fresh, n_carried);
-    for (uint32_t s = 0; fresh && s < n_carried; s++)
-        free(fresh[s].items);
-    free(fresh);
-    origins_free(&state);
-    contents_table_free(&table);
-    return ok;
+}
+
+static void
+derive_unknown_writes(const ir_summary_t *summary, n00bb_flow_t *out)
+{
+    bool written = false;
+    for (uint32_t i = 0; !written && i < ir_summary_path_count(summary); i++) {
+        const ir_spath_t *path = ir_summary_path_at(summary, i);
+        written = path->root == IR_SPLACE_UNKNOWN
+            && (path->flags & IR_SPATH_WRITE);
+    }
+    if (!written) return;
+    uint64_t self    = out->leaks[N00BB_FLOW_SELF];
+    uint64_t reached = self | out->leaks[N00BB_FLOW_CONTENTS];
+    out->mutates[N00BB_FLOW_SELF] |= self;
+    out->writes[N00BB_FLOW_SELF] |= self;
+    out->mutates[N00BB_FLOW_CONTENTS] |= reached;
+    out->writes[N00BB_FLOW_CONTENTS] |= reached;
+    out->receives |= reached;
+    out->receives_fresh |= reached != 0;
+    out->receives_nonlocal |= reached != 0;
+}
+
+static void
+derive_carried(const ir_func_t *function, const ir_summary_t *summary,
+               const heap_flow_t *heap, n00bb_flow_t *out)
+{
+    uint32_t fresh_slots = 0;
+    for (uint32_t i = 0; i < ir_summary_result_count(summary); i++) {
+        const ir_sstore_t *result = ir_summary_result_at(summary, i);
+        uint32_t slot = result->to.output < out->n_carried
+            ? result->to.output : 0;
+        n00bb_carried_t *carried = &out->carried[slot];
+        add_source(carried->from, function, &result->from);
+        carried->nonlocal |= external_root(result->from.root);
+        if (result->from.root != IR_SPLACE_HEAP) continue;
+        if (!carried->fresh) fresh_slots++;
+        carried->fresh = true;
+        for (int kind = 0; kind < N00BB_FLOW_KINDS; kind++)
+            carried->from[kind] |= heap->from[kind];
+        if (heap->escaped)
+            carried->from[N00BB_FLOW_CONTENTS] |= out->receives;
+        carried->nonlocal |= heap->nonlocal || heap->leaked;
+        carried->shared |= heap->received;
+    }
+    for (uint32_t s = 0; fresh_slots > 1 && s < out->n_carried; s++)
+        if (out->carried[s].fresh) out->carried[s].shared = true;
+}
+
+static void
+mark_native_results(const ir_func_t *function, n00bb_flow_t *out)
+{
+    if (function->n_blocks) return;
+    for (uint32_t s = 0; s < out->n_carried; s++) {
+        n00bb_carried_t *carried = &out->carried[s];
+        if (carried->from[N00BB_FLOW_SELF] || carried->from[N00BB_FLOW_CONTENTS]
+            || carried->nonlocal || carried->fresh)
+            continue;
+        *carried = (n00bb_carried_t){
+            .from = {UINT64_MAX, UINT64_MAX}, .fresh = true,
+        };
+    }
+}
+
+void
+n00bb_summary_flow(const ir_summary_t *summary, n00bb_flow_t *out)
+{
+    const ir_func_t *function = summary ? ir_summary_function(summary)
+                                        : nullptr;
+    if (!function || !ir_summary_results_known(summary)
+        || n00bb_native_calls_n00b(function)) {
+        *out = flow_opaque();
+        return;
+    }
+    uint32_t n_carried = carried_count(function);
+    *out = (n00bb_flow_t){
+        .n_carried = n_carried,
+        .carried = core_alloc_array(n00bb_carried_t, n_carried),
+    };
+    out->writes[N00BB_FLOW_SELF] = axiom_writes(function);
+    out->mutates[N00BB_FLOW_SELF] = axiom_writes(function);
+    derive_writes(ir_module_types(function->owner), function, summary, out);
+    heap_flow_t heap = {0};
+    derive_stores(function, summary, out, &heap);
+    derive_unknown_writes(summary, out);
+    derive_carried(function, summary, &heap, out);
+    mark_native_results(function, out);
 }
 
 typedef struct {
@@ -1780,7 +1832,7 @@ check_instruction(walk_t *walk, ir_instr_t *instruction)
     }
     bool call = is_call(instruction);
     if (!call && !writes_memory(instruction)) return true;
-    const ir_sflow_t *effects = call
+    const n00bb_flow_t *effects = call
         ? call_effects(window->origins, instruction) : nullptr;
     if (call && (!effects || effects->opaque)) {
         blame(walk, instruction, N00B_TEXT_BORROW_UNKNOWN_CALL_WRITES);
@@ -2188,7 +2240,7 @@ escaped_view(origins_t *state, ir_instr_t *instruction, uint64_t views,
 {
     *ok = true;
     if (is_call(instruction)) {
-        const ir_sflow_t *effects = call_effects(state, instruction);
+        const n00bb_flow_t *effects = call_effects(state, instruction);
         bool opaque = !effects || effects->opaque;
         uint32_t first = first_argument(instruction, effects);
         uint64_t trusted = call_view_inputs(instruction);
@@ -2198,10 +2250,10 @@ escaped_view(origins_t *state, ir_instr_t *instruction, uint64_t views,
             uint32_t index = i - first;
             if (index < 64 && trusted >> index & 1) continue;
             bool escapes = opaque
-                || effect_bit(effects->escapes, index, IR_SFLOW_SELF)
-                || effect_bit(effects->escapes, index, IR_SFLOW_CONTENTS)
-                || effect_bit(effects->leaks, index, IR_SFLOW_SELF)
-                || effect_bit(effects->leaks, index, IR_SFLOW_CONTENTS);
+                || effect_bit(effects->escapes, index, N00BB_FLOW_SELF)
+                || effect_bit(effects->escapes, index, N00BB_FLOW_CONTENTS)
+                || effect_bit(effects->leaks, index, N00BB_FLOW_SELF)
+                || effect_bit(effects->leaks, index, N00BB_FLOW_CONTENTS);
             if (escapes)
                 found = view_reference(state, operand_at(instruction, i),
                                        false, views, ok);

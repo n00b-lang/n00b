@@ -106,29 +106,6 @@ typedef struct {
     const ir_global_t *global;
 } ir_sreturn_t;
 
-enum { IR_SFLOW_SELF, IR_SFLOW_CONTENTS, IR_SFLOW_KINDS };
-
-typedef struct {
-    uint64_t from[IR_SFLOW_KINDS];
-    bool     nonlocal;
-    bool     fresh;
-    bool     shared;
-} ir_scarried_t;
-
-typedef struct {
-    uint64_t       writes[IR_SFLOW_KINDS];
-    uint64_t       mutates[IR_SFLOW_KINDS];
-    uint64_t       escapes[IR_SFLOW_KINDS];
-    uint64_t       leaks[IR_SFLOW_KINDS];
-    uint64_t       receives;
-    bool           receives_fresh;
-    bool           receives_nonlocal;
-    bool           writes_nonlocal;
-    bool           opaque;
-    uint32_t       n_carried;
-    ir_scarried_t *carried;
-} ir_sflow_t;
-
 typedef struct ir_summary_t  ir_summary_t;
 typedef struct ir_summaries_t ir_summaries_t;
 
@@ -142,21 +119,11 @@ typedef struct {
                            const ir_func_t *function);
     uint32_t (*adjust)(void *context, const ir_func_t *function,
                        uint32_t flags);
-    bool (*flow)(void *context, ir_summaries_t *summaries,
-                 ir_func_t *function, const ir_sflow_t *previous,
-                 ir_sflow_t *out);
     const ir_summary_t *(*entries)(void *context, ir_summaries_t *summaries,
                                    uint32_t flag);
     bool (*global_reachable)(void *context, const ir_global_t *global);
     bool defer_trap_proofs;
 } ir_summary_hooks_t;
-
-const ir_sflow_t *ir_summary_flow(const ir_summary_t *summary);
-void              ir_summary_set_flow(ir_summary_t *summary,
-                                      const ir_sflow_t *flow);
-void              ir_sflow_release(ir_sflow_t *flow);
-bool              ir_sflow_eq(const ir_sflow_t *a, const ir_sflow_t *b);
-ir_sflow_t        ir_sflow_opaque(void);
 
 ir_summaries_t *ir_summaries_compute(ir_func_t *const *functions,
                                      size_t count,
@@ -180,6 +147,7 @@ ir_summary_t *ir_summary_conservative(ir_summaries_t *summaries,
                                       const ir_func_t *function);
 
 const ir_func_t     *ir_summary_function(const ir_summary_t *summary);
+bool                 ir_summary_results_known(const ir_summary_t *summary);
 uint32_t             ir_summary_flags(const ir_summary_t *summary);
 uint8_t              ir_summary_trap_kinds(const ir_summary_t *summary);
 void                 ir_summary_set_trap_kinds(ir_summary_t *summary,
@@ -340,12 +308,19 @@ uint32_t          ir_summary_path_places(const ir_func_t *function,
                                          const ir_spath_t *path,
                                          ir_splace_t places[2]);
 ir_spath_t        ir_spath_of_place(const ir_splace_t *place, uint8_t flags);
+th_type          *ir_summary_path_type(const ir_func_t *function,
+                                       const ir_spath_t *path, uint8_t depth);
+bool              ir_summary_path_inline(const ir_func_t *function,
+                                         const ir_spath_t *path);
 void              ir_summary_merged_paths(const ir_summary_t *summary,
                                           ir_spath_list_t *into);
 void              ir_spath_list_release(ir_spath_list_t *paths);
 uint32_t           ir_summary_result_count(const ir_summary_t *summary);
 const ir_sstore_t *ir_summary_result_at(const ir_summary_t *summary,
                                         uint32_t index);
+void               ir_summary_add_result(ir_summary_t *summary,
+                                         const ir_spath_t *to,
+                                         const ir_spath_t *from);
 uint32_t           ir_summary_store_count(const ir_summary_t *summary);
 const ir_sstore_t *ir_summary_store_at(const ir_summary_t *summary,
                                        uint32_t index);

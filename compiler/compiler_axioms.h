@@ -31,6 +31,7 @@ typedef struct {
     uint8_t           writes;
     uint8_t           entries;
     uint8_t           roles;
+    uint8_t           holds;
     bool              collection_free;
     ir_sreturn_kind_t returns;
 } n00bb_axiom_t;

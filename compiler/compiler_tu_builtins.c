@@ -1,5 +1,4 @@
 #include "compiler_axioms.h"
-#include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
 #include "enum_value.h"
 #include "ir/summary.h"
@@ -52,10 +51,11 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
                 IR_SESCAPE_ADDRESS | IR_SESCAPE_REFERENT);
         ir_summary_set_return(summary,
             (ir_sreturn_t){.kind = native->returns, .param = 0});
-        ir_sflow_t flow;
-        n00bb_buffer_native_flow(function, &flow);
-        ir_summary_set_flow(summary, &flow);
-        ir_sflow_release(&flow);
+        for (uint32_t p = 0; p < 8; p++)
+            if (native->holds & N00BB_AXIOM_PARAM(p))
+                ir_summary_add_result(summary, &(ir_spath_t){0},
+                    &(ir_spath_t){.root = IR_SPLACE_PARAM, .param = p,
+                                  .flags = IR_SPATH_DEEP});
         return summary;
     }
     if (!n00bb_axiom_pure_native(function)) return nullptr;
@@ -67,10 +67,6 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
                 | IR_SPATH_ROOT});
     ir_summary_set_return(summary,
         (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
-    ir_sflow_t flow;
-    n00bb_buffer_native_flow(function, &flow);
-    ir_summary_set_flow(summary, &flow);
-    ir_sflow_release(&flow);
     return summary;
 }
 

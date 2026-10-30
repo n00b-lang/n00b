@@ -23452,7 +23452,6 @@ bind_summary_hooks(n00bb_link_analysis_t *analysis, bool defer_trap_proofs)
         .call_targets = n00bb_summary_call_targets,
         .axiom = n00bb_summary_axiom,
         .adjust = n00bb_summary_adjust,
-        .flow = n00bb_buffer_flow,
         .entries = n00bb_summary_entries,
         .global_reachable = n00bb_summary_global_reachable,
         .defer_trap_proofs = defer_trap_proofs,
@@ -26447,16 +26446,19 @@ report_view_candidate(core_translation_unit_t *unit,
 }
 
 static bool
-view_candidate(n00bb_tu_state_t *state, const ir_sflow_t *flow,
+view_candidate(n00bb_tu_state_t *state, const n00bb_flow_t *flow,
                parse_sym_entry_t *parameter, uint32_t index)
 {
     th_mode mode = parameter->has_mode ? parameter->mode : TH_IN;
     return mode == TH_IN && index < 64 && parameter->type
         && !parse_sym_binding(parameter, n00bb_view_blocked_binding)
         && n00bb_unit_type_reaches_shared_state(state, parameter->type)
-        && !((flow->mutates[IR_SFLOW_SELF] | flow->mutates[IR_SFLOW_CONTENTS]
-              | flow->escapes[IR_SFLOW_SELF] | flow->escapes[IR_SFLOW_CONTENTS]
-              | flow->leaks[IR_SFLOW_SELF] | flow->leaks[IR_SFLOW_CONTENTS])
+        && !((flow->mutates[N00BB_FLOW_SELF]
+              | flow->mutates[N00BB_FLOW_CONTENTS]
+              | flow->escapes[N00BB_FLOW_SELF]
+              | flow->escapes[N00BB_FLOW_CONTENTS]
+              | flow->leaks[N00BB_FLOW_SELF]
+              | flow->leaks[N00BB_FLOW_CONTENTS])
              >> index & 1);
 }
 
@@ -26481,11 +26483,12 @@ report_view_candidates(parse_grammar_t *grammar,
                 continue;
             ir_func_t *function = link_ir_function_for_symbol(
                 state->link_analysis, symbol);
-            ir_summary_t *summary = function
+            ir_summary_t *summary = function && function->n_blocks
                 ? ir_summary_of(summaries, function) : nullptr;
-            const ir_sflow_t *flow = summary ? ir_summary_flow(summary)
-                                             : nullptr;
-            if (!flow || flow->opaque || !function->n_blocks) continue;
+            if (!summary) continue;
+            n00bb_flow_t flow;
+            n00bb_summary_flow(summary, &flow);
+            if (flow.opaque) continue;
             core_list_t(parse_sym_entry_ptr_t) parameters =
                 core_list_new(parse_sym_entry_ptr_t);
             parse_sym_entry_t *rest = nullptr;
@@ -26501,7 +26504,7 @@ report_view_candidates(parse_grammar_t *grammar,
                 th_mode mode = parameter->has_mode ? parameter->mode
                                                    : TH_IN;
                 if (!th_mode_accepts_input(mode)) continue;
-                if (!view_candidate(state, flow, parameter, input++))
+                if (!view_candidate(state, &flow, parameter, input++))
                     continue;
                 if (!scanned) {
                     taken = taken_functions(state->ir_module);
@@ -26514,6 +26517,7 @@ report_view_candidates(parse_grammar_t *grammar,
                 report_view_candidate(unit, symbol, parameter);
             }
             core_list_free(parameters);
+            n00bb_flow_release(&flow);
         }
     core_list_free(scopes);
     core_list_free(taken);
