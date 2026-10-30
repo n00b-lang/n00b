@@ -458,15 +458,6 @@ path_covers(const ir_spath_t *prefix, const ir_spath_t *path)
     return true;
 }
 
-static bool
-path_absorbs(const ir_spath_t *into, const ir_spath_t *path)
-{
-    return path_covers(into, path)
-        && (!(path->flags & ~into->flags & ~IR_SPATH_TYPED)
-            || (into->depth == path->depth
-                && !((into->flags ^ path->flags) & IR_SPATH_DEEP)));
-}
-
 static ir_spath_t
 canonical_path(const ir_spath_t *path)
 {
@@ -483,7 +474,7 @@ add_path_to(path_list_t *paths, const ir_spath_t *path)
     size_t first, last;
     root_range(paths, &copy, &first, &last);
     for (size_t i = first; i < last; i++)
-        if (path_absorbs(&paths->data[i], &copy)) {
+        if (path_covers(&paths->data[i], &copy)) {
             merge_path_into(&paths->data[i], &copy);
             return;
         }
@@ -4532,8 +4523,8 @@ site_of(pt_t *pt, const void *key, th_type *type, bool elements)
     uint32_t site = (uint32_t)pt->sites.len;
     core_list_push(pt->sites, ((pt_site_t){
         .key = key, .type = type, .elements = elements,
-        .contents = core_list_new(pt_item_t),
-        .aliases  = core_list_new(pt_item_t)}));
+        .contents = (pt_set_t){0},
+        .aliases  = (pt_set_t){0}}));
     core_dict_put(&pt->site_index, key, (void *)(uintptr_t)site);
     return site;
 }
@@ -4610,7 +4601,7 @@ note_write(pt_t *pt, uint32_t site, const pt_loc_t *at, bool deep,
     if (!write) {
         core_list_push(*writes, ((pt_write_t){
             .site = site, .path = path, .deep = deep,
-            .items = core_list_new(pt_item_t)}));
+            .items = (pt_set_t){0}}));
         write       = &writes->data[writes->len - 1];
         flow->stale = true;
     }
@@ -4830,7 +4821,7 @@ value_set(pt_t *pt, const ir_value_t *value)
     void *index = core_dict_get(&pt->value_index, value, &found);
     if (!found) {
         index = (void *)(uintptr_t)pt->values.len;
-        core_list_push(pt->values, core_list_new(pt_item_t));
+        core_list_push(pt->values, (pt_set_t){0});
         core_dict_put(&pt->value_index, value, index);
     }
     return &pt->values.data[(uintptr_t)index];
@@ -4869,7 +4860,7 @@ pt_define(pt_t *pt, const ir_instr_t *in, const pt_set_t *items)
     for (size_t i = 0; fresh == IR_PT_FRESH_HOLDING && i < items->len; i++)
         pt_add(pt, &pt->sites.data[site].contents, contents_key(site),
                item_under(nullptr, 0, true, items->data[i]));
-    pt_set_t object = core_list_new(pt_item_t);
+    pt_set_t object = (pt_set_t){0};
     set_add(&object, item_at(site_loc(site)));
     define_items(pt, in, &object);
     core_list_free(object);
@@ -5038,7 +5029,7 @@ pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values)
 static bool
 pt_elements(pt_t *pt, const ir_value_t *base, pt_set_t *into)
 {
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     pt_address(pt, base, &items);
     th_type *type   = base && base->type ? th_resolve(base->type) : nullptr;
     bool     memory = true;
@@ -5048,7 +5039,7 @@ pt_elements(pt_t *pt, const ir_value_t *base, pt_set_t *into)
         if (referent && th_kind_of(referent) == TH_SEQUENCE
             && !th_seq_extent(referent, &extent)
             && !inline_field(pt->f, base, false)) {
-            pt_set_t loaded = core_list_new(pt_item_t);
+            pt_set_t loaded = (pt_set_t){0};
             pt_load(pt, &items, &loaded);
             core_list_free(items);
             items = loaded;
@@ -5350,7 +5341,7 @@ argument_items(pt_t *pt, const ir_instr_t *call, uint32_t param,
     case IR_ARG_OUT:
         return;
     case IR_ARG_FRESH: {
-        pt_set_t address = core_list_new(pt_item_t);
+        pt_set_t address = (pt_set_t){0};
         pt_read(pt, argument.value, &address);
         pt_load(pt, &address, into);
         core_list_free(address);
@@ -5367,7 +5358,7 @@ static void
 map_param_path(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                pt_set_t *into)
 {
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
     bool deep = path->flags & IR_SPATH_DEEP;
     for (size_t i = 0; i < items.len; i++) {
@@ -5419,7 +5410,7 @@ static void
 call_reach(pt_t *pt, const ir_instr_t *call, const pt_callees_t *callees,
            pt_set_t *into)
 {
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     for (uint32_t o = call->op == IR_OP_CALL ? 1 : 0; o < call->n_operands;
          o++)
         pt_read(pt, referenced(call, o), &items);
@@ -5453,7 +5444,7 @@ static void
 map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                 pt_set_t *into)
 {
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     argument_items(pt, call, path->param, &items);
     bool deep = path->flags & IR_SPATH_DEEP;
     for (size_t i = 0; i < items.len; i++) {
@@ -5477,7 +5468,7 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         at.deep = deep;
         set_add(into, at);
         if (at.loc.site == PT_EXTERNAL) continue;
-        pt_set_t address = core_list_new(pt_item_t);
+        pt_set_t address = (pt_set_t){0};
         set_add(&address, at);
         pt_load(pt, &address, into);
         core_list_free(address);
@@ -5510,7 +5501,7 @@ mapped_output(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     for (size_t r = 0; r < callee->results.len; r++) {
         const ir_sstore_t *result = &callee->results.data[r];
         if (result->to.output != output) continue;
-        pt_set_t values = core_list_new(pt_item_t);
+        pt_set_t values = (pt_set_t){0};
         map_location(pt, call, &result->from, true, &values);
         for (size_t v = 0; v < values.len; v++)
             set_add(into, item_under(result->to.steps, result->to.depth,
@@ -5532,8 +5523,8 @@ static void
 apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee)
 {
     for (size_t s = 0; s < callee->stores.len; s++) {
-        pt_set_t to   = core_list_new(pt_item_t);
-        pt_set_t from = core_list_new(pt_item_t);
+        pt_set_t to   = (pt_set_t){0};
+        pt_set_t from = (pt_set_t){0};
         mapped_store(pt, call, &callee->stores.data[s], &to, &from);
         pt_store(pt, &to, &from);
         core_list_free(to);
@@ -5559,11 +5550,11 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
         call_result(pt, call, callee, result);
         return;
     }
-    pt_set_t written = core_list_new(pt_item_t);
+    pt_set_t written = (pt_set_t){0};
     for (size_t p = 0; p < callee->paths.len; p++) {
         const ir_spath_t *path = &callee->paths.data[p];
         if (!(path->flags & IR_SPATH_WRITE)) continue;
-        pt_set_t locs = core_list_new(pt_item_t);
+        pt_set_t locs = (pt_set_t){0};
         if (path->root == IR_SPLACE_PARAM) map_param_path(pt, call, path,
                                                           &locs);
         else set_add(&locs, item_at(path_loc(pt, path)));
@@ -5581,7 +5572,7 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     for (uint32_t param = 0;
          written.len && param < ir_call_argument_count(call); param++) {
         if (!ir_summary_param_escape(callee, param)) continue;
-        pt_set_t items = core_list_new(pt_item_t);
+        pt_set_t items = (pt_set_t){0};
         argument_items(pt, call, param, &items);
         for (size_t w = 0; w < written.len; w++)
             pt_publish(pt, &items, &written.data[w].loc);
@@ -5623,8 +5614,8 @@ written_outputs(pt_t *pt, const ir_instr_t *call,
         ir_call_arg_t argument = ir_call_argument(call, param);
         if (!ir_call_argument_writes(&argument)) continue;
         uint8_t  output  = output_ordinal(call, param);
-        pt_set_t address = core_list_new(pt_item_t);
-        pt_set_t values  = core_list_new(pt_item_t);
+        pt_set_t address = (pt_set_t){0};
+        pt_set_t values  = (pt_set_t){0};
         pt_address(pt, argument.value, &address);
         if (output && callees->known)
             callee_outputs(pt, call, callees, output, &values);
@@ -5648,13 +5639,13 @@ static void
 pt_call(pt_t *pt, const ir_instr_t *call)
 {
     const pt_callees_t *callees = callees_of(pt, call);
-    pt_set_t reach  = core_list_new(pt_item_t);
-    pt_set_t result = core_list_new(pt_item_t);
+    pt_set_t reach  = (pt_set_t){0};
+    pt_set_t result = (pt_set_t){0};
     call_reach(pt, call, callees, &reach);
     if (callees->targets.unknown) {
         pt_loc_t unknown = unknown_loc();
         for (uint32_t o = 1; o < call->n_operands; o++) {
-            pt_set_t items = core_list_new(pt_item_t);
+            pt_set_t items = (pt_set_t){0};
             pt_read(pt, referenced(call, o), &items);
             pt_publish(pt, &items, &unknown);
             for (size_t i = 0; i < items.len; i++)
@@ -5705,7 +5696,7 @@ static void
 allocate(pt_t *pt, const ir_instr_t *in, pt_set_t *into)
 {
     uint32_t site  = allocation_site(pt, in);
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     bool sequence = in->op == IR_OP_AGGREGATE || in->op == IR_OP_ARRAY_NEW
         || in->op == IR_OP_ARRAY_NEW_USING;
     for (uint32_t o = 0; in->op != IR_OP_COPY && o < in->n_operands; o++) {
@@ -5723,7 +5714,7 @@ allocate(pt_t *pt, const ir_instr_t *in, pt_set_t *into)
 static void
 spread_operands(pt_t *pt, const ir_instr_t *in, pt_set_t *into)
 {
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     for (uint32_t o = 0; o < in->n_operands; o++)
         pt_read(pt, referenced(in, o), &items);
     for (size_t i = 0; i < items.len; i++)
@@ -5790,8 +5781,8 @@ stored_sets(pt_t *pt, const ir_instr_t *in, pt_set_t *to, pt_set_t *from)
         pt_read(pt, role_value(in, stored), from);
         return true;
     }
-    pt_set_t address = core_list_new(pt_item_t);
-    pt_set_t copied  = core_list_new(pt_item_t);
+    pt_set_t address = (pt_set_t){0};
+    pt_set_t copied  = (pt_set_t){0};
     pt_address(pt, role_value(in, ir_op_source_operand(in->op)), &address);
     pt_load(pt, &address, &copied);
     for (size_t i = 0; i < copied.len; i++)
@@ -6146,7 +6137,7 @@ record_operand(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in,
                uint32_t operand, uint8_t flags)
 {
     if (operand >= in->n_operands) return;
-    pt_set_t addresses = core_list_new(pt_item_t);
+    pt_set_t addresses = (pt_set_t){0};
     pt_address(pt, referenced(in, operand), &addresses);
     record_set(pt, summary, &addresses, flags, nullptr);
     core_list_free(addresses);
@@ -6156,8 +6147,8 @@ static void
 record_callee_stores(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call,
                      const ir_summary_t *callee)
 {
-    pt_set_t to   = core_list_new(pt_item_t);
-    pt_set_t from = core_list_new(pt_item_t);
+    pt_set_t to   = (pt_set_t){0};
+    pt_set_t from = (pt_set_t){0};
     if (callee->results_known)
         for (size_t s = 0; s < callee->stores.len; s++) {
             to.len   = 0;
@@ -6177,7 +6168,7 @@ record_callee_stores(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call,
         for (uint32_t param = 0; param < ir_call_argument_count(call);
              param++)
             if (ir_summary_param_escape(callee, param)) {
-                pt_set_t items = core_list_new(pt_item_t);
+                pt_set_t items = (pt_set_t){0};
                 argument_items(pt, call, param, &items);
                 for (size_t i = 0; i < items.len; i++)
                     set_add(&from, deep_item(items.data[i].loc));
@@ -6228,8 +6219,8 @@ record_call(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call)
     const pt_callees_t *callees = callees_of(pt, call);
     if (callees->targets.unknown) {
         add_unknown_path(summary, IR_SPATH_ACCESS);
-        pt_set_t to   = core_list_new(pt_item_t);
-        pt_set_t from = core_list_new(pt_item_t);
+        pt_set_t to   = (pt_set_t){0};
+        pt_set_t from = (pt_set_t){0};
         set_add(&to, item_at(unknown_loc()));
         call_reach(pt, call, callees, &from);
         record_stores(pt, summary, &to, &from);
@@ -6252,7 +6243,7 @@ record_call(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call)
                 continue;
             }
             rebase_access(pt, call, path->param, &carried);
-            pt_set_t locs = core_list_new(pt_item_t);
+            pt_set_t locs = (pt_set_t){0};
             map_param_path(pt, call, path, &locs);
             record_set(pt, summary, &locs, carried.flags, carried.type);
             core_list_free(locs);
@@ -6266,8 +6257,8 @@ record_call(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call)
 static void
 record_instr(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in)
 {
-    pt_set_t first  = core_list_new(pt_item_t);
-    pt_set_t second = core_list_new(pt_item_t);
+    pt_set_t first  = (pt_set_t){0};
+    pt_set_t second = (pt_set_t){0};
     const ir_value_t *base = referenced(in, 0);
     pt->contextual = true;
     note_context(pt, in);
@@ -6436,7 +6427,7 @@ summarize_results(pt_t *pt, ir_summary_t *summary)
          output++) {
         size_t operand = output
             ? ir_return_output_operand(f->owner, f->type, output - 1) : 0;
-        pt_set_t returned = core_list_new(pt_item_t);
+        pt_set_t returned = (pt_set_t){0};
         for (uint32_t b = 0; b < f->n_blocks; b++)
             for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
                 const ir_instr_t *in = f->blocks[b]->instrs[i];
@@ -6465,14 +6456,14 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f)
     pt->reach     = ir_reach_new(f);
     pt->aliased   = core_list_new(uint32_t);
     pt->described = core_list_new(uint32_t);
-    pt->seen      = core_list_new(pt_item_t);
+    pt->seen      = (pt_set_t){0};
     pt->context   = core_list_new(pt_access_t);
-    for (size_t s = 0; s < 3; s++) pt->scratch[s] = core_list_new(pt_item_t);
+    for (size_t s = 0; s < 3; s++) pt->scratch[s] = (pt_set_t){0};
     pt->calls     = core_list_new(pt_callees_t);
     pt->flow      = (pt_flow_t){
         .defs  = core_list_new(flow_def_t),
         .steps = core_list_new(flow_step_t),
-        .items = core_list_new(pt_item_t),
+        .items = (pt_set_t){0},
     };
     core_dict_init(&pt->flow.writes, nullptr, nullptr);
     core_dict_init(&pt->flow.positions, nullptr, nullptr);
@@ -6723,7 +6714,7 @@ ir_points_to_value(ir_points_to_t *points_to, const ir_instr_t *at,
                    const ir_value_t *value, ir_pto_list_t *into)
 {
     pt_t    *pt    = &points_to->pt;
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     pt->at = at;
     pt_read(pt, value, &items);
     pt->at = nullptr;
@@ -6736,8 +6727,8 @@ ir_points_to_loaded(ir_points_to_t *points_to, const ir_instr_t *at,
                     const ir_value_t *value, ir_pto_list_t *into)
 {
     pt_t    *pt        = &points_to->pt;
-    pt_set_t addresses = core_list_new(pt_item_t);
-    pt_set_t loaded    = core_list_new(pt_item_t);
+    pt_set_t addresses = (pt_set_t){0};
+    pt_set_t loaded    = (pt_set_t){0};
     pt->at = at;
     pt_read(pt, value, &addresses);
     pt_load(pt, &addresses, &loaded);
@@ -6798,7 +6789,7 @@ argument_reach(ir_points_to_t *points_to, const ir_instr_t *call,
                uint64_t trusted, ir_pto_list_t *into)
 {
     pt_t    *pt    = &points_to->pt;
-    pt_set_t items = core_list_new(pt_item_t);
+    pt_set_t items = (pt_set_t){0};
     for (uint32_t p = 0; p < ir_call_argument_count(call); p++)
         if (p >= 64 || !(trusted >> p & 1)) argument_items(pt, call, p,
                                                            &items);
@@ -6819,7 +6810,7 @@ ir_points_to_call_writes(ir_points_to_t *points_to, const ir_instr_t *call,
     const pt_callees_t *callees = callees_of(pt, call);
     if (!callees || callees->targets.unknown) return false;
     pt->at = call;
-    pt_set_t written = core_list_new(pt_item_t);
+    pt_set_t written = (pt_set_t){0};
     for (size_t c = 0; c < callees->callees.len; c++) {
         const ir_summary_t *callee = callees->callees.data[c];
         for (size_t p = 0; p < callee->paths.len; p++) {
@@ -6999,7 +6990,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     for (size_t i = 0; i < count; i++) {
         ir_summary_t *summary = ir_summary_new(summaries, members[i]);
         summary->flags = IR_SUMMARY_NO_RETURN | IR_SUMMARY_DIVERGES;
-        summary->results_known = true;
+        summary->results_known = summaries->escapes_only;
         core_dict_put(&summaries->by_function, members[i], summary);
     }
     member_callers_t *callers = member_callers(summaries, members, count);

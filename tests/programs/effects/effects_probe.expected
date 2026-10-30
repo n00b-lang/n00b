@@ -35,7 +35,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads+writes self.index.used
-  reads+writes self.entries
+  reads+writes self.entries...
   reads+writes self.index.hashes
   reads+writes self.index.growth_left
   reads+writes self.index.hashes[]
@@ -46,8 +46,6 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   writes self.index.slots
   reads+writes self.index.ctrl[]
   reads+writes self.index.slots[]
-  reads+writes self.entries[]
-  writes self.entries...
   reads key...
   reads builtin.hashing.secret[]...
   escapes self referent
