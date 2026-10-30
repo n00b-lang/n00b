@@ -38,6 +38,7 @@ struct ir_summary_t {
     core_list_t(uint32_t)      dependences;
     bool                       results_known;
     bool                       returns_external;
+    uint8_t                    pointer_result;
     core_list_t(ir_sstore_t)   results;
     core_list_t(ir_sstore_t)   stores;
     uint8_t                    traps;
@@ -800,12 +801,19 @@ summary_callable(const ir_summary_t *summary)
                                                            : nullptr;
 }
 
+enum { POINTER_RESULT_UNKNOWN, POINTER_RESULT_NO, POINTER_RESULT_YES };
+
 static bool
 returns_pointers(const ir_summary_t *summary)
 {
+    if (summary->pointer_result != POINTER_RESULT_UNKNOWN)
+        return summary->pointer_result == POINTER_RESULT_YES;
     th_type *callable = summary_callable(summary);
-    return !callable
+    bool     pointers = !callable
         || holds_pointers(summary->function, th_func_ret(callable), 0);
+    ((ir_summary_t *)summary)->pointer_result = pointers ? POINTER_RESULT_YES
+                                                         : POINTER_RESULT_NO;
+    return pointers;
 }
 
 static uint8_t
@@ -6257,6 +6265,9 @@ record_call(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call)
 static void
 record_instr(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in)
 {
+    if (pt->summaries->escapes_only && !is_call(in)
+        && !(ir_op_memory_access(in->op) & IR_MEM_WRITE) && !launders(pt, in))
+        return;
     pt_set_t first  = (pt_set_t){0};
     pt_set_t second = (pt_set_t){0};
     const ir_value_t *base = referenced(in, 0);
@@ -6588,7 +6599,7 @@ summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
     pt_init(&pt, summaries, f);
     if (pt_solve(&pt)) {
         pt.places = ir_func_places(f);
-        pt.memssa = ir_func_memssa(f);
+        pt.memssa = summaries->escapes_only ? nullptr : ir_func_memssa(f);
         pt_record(&pt, summary);
         summarize_results(&pt, summary);
         describe_heap(&pt, summary, &pt.described);
