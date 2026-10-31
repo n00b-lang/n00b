@@ -113,6 +113,7 @@ storage-facts-n00b	pr	5	sh "$SRC/tests/storage_facts.sh" "$BUILD/n00b" "$SRC/tes
 incremental-cache-shapes	pr	31	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" shapes
 incremental-cache-instances	pr	38	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" instances
 incremental-cache-contexts	pr	40	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" contexts
+incremental-cache-lto	pr	70	sh "$SRC/tests/incremental_cache.sh" "$BUILD/n00b" "$SRC/tests/programs/incremental" lto
 closed-world-n00b	pr	11	sh "$SRC/tests/closed_world.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode/bitcode_closed_world.n"
 raw-repr-overrides	pr	17	sh "$SRC/tests/raw_repr.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" overrides
 bitcode-build-time	pr	28	sh "$SRC/tests/bitcode.sh" "$BUILD/n00b" "$SRC/tests/programs/bitcode" build-time

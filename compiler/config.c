@@ -1075,6 +1075,13 @@ n00bb_config_load(const n00bb_invocation_t *invocation)
     for (size_t i = 0; i < config.settings.len; i++)
         apply_environment(&config.settings.data[i]);
     if (invocation && invocation->end > 1) apply_flags(invocation->parsed);
+    setting_t *lto = &config.settings.data[N00BB_KEY_BUILD_LTO];
+    const setting_t *release = &config.settings.data[N00BB_KEY_BUILD_RELEASE];
+    if (lto->source == N00BB_SETTING_FROM_DEFAULT && !config.quiet) {
+        lto->value.boolean = release->value.boolean;
+        core_free(lto->origin.data);
+        lto->origin = core_string_dup(release->key);
+    }
     n00bb_cache_set_root(n00bb_setting_string(
         N00BB_KEY_PATHS_CACHE));
 }
@@ -1204,6 +1211,10 @@ print_source(core_buffer_t *out, const setting_t *setting)
         core_buffer_puts(out, "default");
         if (is_text(setting->spec->type) && !setting->value.text.u8_bytes)
             core_buffer_puts(out, ", chosen automatically");
+        if (setting->origin.u8_bytes) {
+            core_buffer_puts(out, ", follows ");
+            core_buffer_append_string(out, setting->origin);
+        }
         break;
     case N00BB_SETTING_FROM_USER_FILE:
     case N00BB_SETTING_FROM_PROJECT_FILE:

@@ -8,6 +8,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 N00B_CACHE="$tmp/cache"
 export N00B_CACHE
+build_flags=
 
 fail() {
     echo "$1" >&2
@@ -23,8 +24,8 @@ prepare() {
 
 build() {
     rm -f "$tmp/log"
-    if ! (cd "$tmp/$1" && N00BB_CACHE_LOG="$tmp/log" "$compiler" build \
-            --output program "$2" >"$tmp/build.out" 2>&1); then
+    if ! (cd "$tmp/$1" && N00B_CACHE_LOG="$tmp/log" "$compiler" build \
+            $build_flags --output program "$2" >"$tmp/build.out" 2>&1); then
         cat "$tmp/build.out" >&2
         fail "build of $2 failed"
     fi
@@ -81,10 +82,10 @@ edits() {
     build packages main.n
     printf 'import beta\n\nfunc read() -> int {\n    return beta.seven() + 0\n}\n' \
         >"$tmp/packages/alpha/impl.n"
-    N00BB_NO_PACKAGE_CACHE=1
-    export N00BB_NO_PACKAGE_CACHE
+    N00B_NO_PACKAGE_CACHE=1
+    export N00B_NO_PACKAGE_CACHE
     build packages main.n
-    unset N00BB_NO_PACKAGE_CACHE
+    unset N00B_NO_PACKAGE_CACHE
     grep -q '^comptime reuse scc alpha.facade$' "$tmp/log" \
         || fail "stale package module: the alpha manifest was not reused"
 }
@@ -151,8 +152,36 @@ contexts() {
         || fail "owner summary edit: the compare.same instantiation was reused"
 }
 
+lto() {
+    build_flags=--lto
+    build work main.n
+    grep -q '^runtime store scc leaf$' "$tmp/log" \
+        || fail "first lto build: leaf bitcode was not stored"
+
+    build work main.n
+    expect_stored "unchanged lto rebuild" ""
+    grep -q '^runtime reuse scc leaf$' "$tmp/log" \
+        || fail "unchanged lto rebuild: leaf was not reused"
+    if grep -q '^runtime store instance ' "$tmp/log"; then
+        fail "unchanged lto rebuild stored an instantiation"
+    fi
+
+    sed 's/return 41/return 40 + 1/' "$tmp/work/leaf.n" >"$tmp/leaf.n"
+    mv "$tmp/leaf.n" "$tmp/work/leaf.n"
+    build work main.n
+    expect_stored "lto leaf body edit" "leaf"
+
+    build_flags=
+    build work main.n
+    expect_stored "native build after lto edit" "leaf"
+
+    build_flags=--lto
+    build work main.n
+    expect_stored "lto build after native" ""
+}
+
 case $part in
-edits|shapes|instances|contexts) ;;
+edits|shapes|instances|contexts|lto) ;;
 *) fail "unknown part $part" ;;
 esac
 prepare work

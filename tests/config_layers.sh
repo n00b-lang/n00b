@@ -73,6 +73,14 @@ expect_match "flag" '^cache = "flag-cache" +# flag --cache$'
 expect_match "flag" '^jobs = 7 +# flag --jobs$'
 expect_match "flag" '^hints = false +# flag --no-hints$'
 
+setting
+expect_match "lto default" '^lto = false +# default, follows build.release$'
+setting --release
+expect_match "lto with release" '^lto = true +# default, follows build.release$'
+printf '[build]\nlto = false\n' >"$project"
+setting --release
+expect_match "lto set in project" "^lto = false +# $native_project:2\$"
+
 printf '[build]\njob = 3\n[diagnostcs]\nterse = true\n' >"$project"
 n00b --terse-diagnostics config >"$tmp/out" 2>&1
 status=$?

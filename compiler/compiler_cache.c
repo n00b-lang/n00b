@@ -222,6 +222,13 @@ objects_optional(void)
 }
 
 static core_string_t
+object_kind(void)
+{
+    return n00bb_setting_bool(N00BB_KEY_BUILD_LTO)
+        ? CORE_STRING_STATIC("bitcode") : CORE_STRING_STATIC("native");
+}
+
+static core_string_t
 phase_name(void)
 {
     bool comptime = n00bb_compile_phase() == PARSE_SYM_PHASE_COMPTIME;
@@ -365,7 +372,7 @@ static void
 append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
 {
     static const n00bb_setting_id_t settings[] = {
-        N00BB_KEY_BUILD_RELEASE, N00BB_KEY_BUILD_NATIVE, N00BB_KEY_BUILD_LTO,
+        N00BB_KEY_BUILD_RELEASE, N00BB_KEY_BUILD_NATIVE,
         N00BB_KEY_BUILD_UNCHECKED_WIDE_NARROWING, N00BB_KEY_BUILD_PANIC_TRAP,
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
@@ -989,8 +996,7 @@ entry_validate(n00bb_cache_t *cache, cache_entry_t *entry)
                          (core_string_t){0});
     for (size_t m = 0; ok && !objects_optional() && m < entry->members.len;
          m++)
-        ok = phase_section(entry, CORE_STRING_STATIC("native"),
-                           entry->members.data[m].name)
+        ok = phase_section(entry, object_kind(), entry->members.data[m].name)
             && phase_section(entry, CORE_STRING_STATIC("abi"),
                              entry->members.data[m].name);
     uint64_t *imports = core_alloc_array(uint64_t,
@@ -1352,8 +1358,7 @@ n00bb_cache_open(core_string_t root_path, parse_cmdr_result_t *args,
 {
     if (!root_path.data || !root_path.u8_bytes || root_path.data[0] == '<'
         || !triple.data
-        || n00bb_setting_bool(N00BB_KEY_DEV_NO_OBJECT_CACHE)
-        || n00bb_setting_bool(N00BB_KEY_BUILD_LTO))
+        || n00bb_setting_bool(N00BB_KEY_DEV_NO_OBJECT_CACHE))
         return nullptr;
     n00bb_cache_t *cache = core_alloc(n00bb_cache_t);
     if (!cache) return nullptr;
@@ -1897,7 +1902,7 @@ n00bb_cache_objectless_modules(const n00bb_cache_t *cache, core_buffer_t *out)
         if (entry->load != ENTRY_VALID) continue;
         for (size_t m = 0; m < entry->members.len; m++) {
             core_string_t name = entry->members.data[m].name;
-            if (phase_section(entry, CORE_STRING_STATIC("native"), name)
+            if (phase_section(entry, object_kind(), name)
                 && phase_section(entry, CORE_STRING_STATIC("abi"), name))
                 continue;
             if (out->byte_len) core_buffer_putc(out, ',');
@@ -2079,16 +2084,15 @@ n00bb_cache_module_object(const n00bb_cache_t *cache, core_string_t module,
     const cache_entry_t *entry = nullptr;
     const cache_member_t *member = module.data
         ? loaded_member(cache, module, &entry) : nullptr;
-    const cache_section_t *native = member
-        ? phase_section(entry, CORE_STRING_STATIC("native"), member->name)
-        : nullptr;
+    const cache_section_t *code = member
+        ? phase_section(entry, object_kind(), member->name) : nullptr;
     const cache_section_t *abi = member
         ? phase_section(entry, CORE_STRING_STATIC("abi"), member->name)
         : nullptr;
-    if (!native || !abi) return false;
+    if (!code || !abi) return false;
     *object = (n00bb_cache_module_object_t){
         .module = member->name,
-        .native = native->data, .native_bytes = native->length,
+        .object = code->data, .object_bytes = code->length,
         .abi = abi->data, .abi_bytes = abi->length,
     };
     return true;
@@ -2716,13 +2720,13 @@ store_scc(const n00bb_cache_t *cache, const n00bb_link_analysis_t *analysis,
         core_string_t module = scc->members.data[m]->module.identifier;
         const n00bb_cache_module_object_t *object = module_object(objects,
             object_count, module);
-        bool present = object && object->native && object->abi;
+        bool present = object && object->object && object->abi;
         ok = present || objects_optional();
         if (!ok) break;
         if (present) {
-            module_section_name(&name, CORE_STRING_STATIC("native"), module);
+            module_section_name(&name, object_kind(), module);
             ok = sections_set(&sections, core_buffer_string(&name),
-                              object->native, object->native_bytes);
+                              object->object, object->object_bytes);
             module_section_name(&name, CORE_STRING_STATIC("abi"), module);
             ok = ok && sections_set(&sections, core_buffer_string(&name),
                                     object->abi, object->abi_bytes);
@@ -3012,10 +3016,15 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
     if (!cache || !item || !object) return false;
     const ir_module_t *module = item->instance->owner;
     const cache_instance_t *found = loaded_instance(cache, module);
+    core_buffer_t name = {0};
+    phase_section_name(&name, object_kind());
     uint64_t key = 0;
     if (!found) {
         if (!prepare_sccs(cache, link, analysis)
-            || !instance_key(cache, item, &key)) return false;
+            || !instance_key(cache, item, &key)) {
+            core_buffer_release(&name);
+            return false;
+        }
         core_buffer_t path = {0};
         object_path(cache, key, &path);
         uint8_t *bytes = nullptr;
@@ -3024,26 +3033,26 @@ n00bb_cache_instance_object(n00bb_cache_t *cache, core_link_unit_t *link,
             .module = module, .sections = core_list_new(cache_section_t),
         };
         bool ok = read_file(core_buffer_string(&path), &bytes, &length)
-            && sections_parse(bytes, length, &loaded.sections);
+            && sections_parse(bytes, length, &loaded.sections)
+            && section_named(&loaded.sections, core_buffer_string(&name));
         core_free(bytes);
         core_buffer_release(&path);
         if (!ok) {
             sections_release(&loaded.sections);
+            core_buffer_release(&name);
             return false;
         }
         core_list_push(cache->instances, loaded);
         found = &cache->instances.data[cache->instances.len - 1];
         log_instance(CORE_STRING_STATIC("reuse"), item);
     }
-    core_buffer_t name = {0};
-    phase_section_name(&name, CORE_STRING_STATIC("native"));
-    const cache_section_t *native = section_named(&found->sections,
+    const cache_section_t *code = section_named(&found->sections,
         core_buffer_string(&name));
     core_buffer_release(&name);
-    if (!native) return false;
+    if (!code) return false;
     *object = (n00bb_cache_module_object_t){
         .module = ir_module_name(module),
-        .native = native->data, .native_bytes = native->length,
+        .object = code->data, .object_bytes = code->length,
     };
     return true;
 }
@@ -3066,9 +3075,9 @@ store_instance(n00bb_cache_t *cache, const n00bb_specialization_t *item,
     }
     core_free(existing);
     core_buffer_t name = {0};
-    phase_section_name(&name, CORE_STRING_STATIC("native"));
+    phase_section_name(&name, object_kind());
     bool ok = sections_set(&sections, core_buffer_string(&name),
-                           object->native, object->native_bytes);
+                           object->object, object->object_bytes);
     core_buffer_release(&name);
     core_buffer_t serialized = {0};
     if (ok) sections_serialize(&sections, &serialized);
@@ -3127,7 +3136,7 @@ n00bb_cache_store(n00bb_cache_t *cache, core_link_unit_t *link,
         if (loaded_instance(cache, item->instance->owner)) continue;
         const n00bb_cache_module_object_t *object = module_object(objects,
             object_count, ir_module_name(item->instance->owner));
-        if (object && object->native)
+        if (object && object->object)
             ok = store_instance(cache, item, object);
         if (object && ok)
             log_instance(CORE_STRING_STATIC("store"), item);

@@ -46,8 +46,8 @@ def normalize(text, scratch):
 def environment(cache, module_path):
     env = dict(os.environ)
     env["N00B_CACHE"] = cache
-    for key in ("N00BB_NO_OBJECT_CACHE", "N00BB_NO_NATIVE_CACHE",
-                "N00BB_NO_PACKAGE_CACHE", "N00BB_CACHE_LOG"):
+    for key in ("N00B_NO_OBJECT_CACHE", "N00B_NO_NATIVE_CACHE",
+                "N00B_NO_PACKAGE_CACHE", "N00B_CACHE_LOG"):
         env.pop(key, None)
     if module_path:
         env["N00B_PATH"] = module_path

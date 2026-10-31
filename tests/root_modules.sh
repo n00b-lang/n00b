@@ -24,9 +24,9 @@ echo generated >a/gen/notes.txt
 echo generated >build/notes.txt
 for cache in on off; do
     if [ "$cache" = on ]; then
-        run() { env -u N00BB_NO_PACKAGE_CACHE "$compiler" "$@"; }
+        run() { env -u N00B_NO_PACKAGE_CACHE "$compiler" "$@"; }
     else
-        run() { N00BB_NO_PACKAGE_CACHE=1 "$compiler" "$@"; }
+        run() { N00B_NO_PACKAGE_CACHE=1 "$compiler" "$@"; }
     fi
     if ! run check a.b.mod >"$tmp/deep.log" 2>&1; then
         cat "$tmp/deep.log" >&2

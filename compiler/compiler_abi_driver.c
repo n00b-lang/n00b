@@ -831,6 +831,11 @@ static bool
 complete_module_object(const module_emission_t *emission,
                        module_object_t *item)
 {
+    if (item->cached && emission->lto) {
+        core_buffer_append(item->bitcode, (const char *)item->cached,
+                           item->cached_bytes);
+        return true;
+    }
     if (item->cached) {
         bool ok = n00bb_native_frames_add(emission->native_frames,
                                           item->cached, item->cached_bytes);
@@ -854,21 +859,21 @@ complete_module_object(const module_emission_t *emission,
     }
     core_buffer_t object = item->object;
     item->object = (core_buffer_t){0};
-    if (ok && emission->lto) {
-        *item->bitcode = object;
-        return true;
-    }
     if (ok && emission->kept && item->artifact) {
         uint8_t *copy = malloc(object.byte_len ? object.byte_len : 1);
         if (copy) {
             if (object.byte_len) memcpy(copy, object.data, object.byte_len);
             core_list_push(*emission->kept, ((n00bb_cache_module_object_t){
                 .module = ir_module_name(item->module),
-                .native = copy, .native_bytes = object.byte_len,
+                .object = copy, .object_bytes = object.byte_len,
                 .abi = item->artifact->object,
                 .abi_bytes = item->artifact->object_bytes,
             }));
         }
+    }
+    if (ok && emission->lto) {
+        *item->bitcode = object;
+        return true;
     }
     if (ok) ok = n00bb_native_frames_add(emission->native_frames,
         object.data, object.byte_len);
@@ -1567,7 +1572,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     core_list_t(n00bb_cache_module_object_t) kept =
         core_list_new(n00bb_cache_module_object_t);
     module_emission_t emission = {
-        .kept = lto ? nullptr : &kept,
+        .kept = &kept,
         .analysis = analysis, .args = args,
         .debug_enabled = debug_enabled, .native_cpu = native_cpu,
         .lto = lto, .native_cache = native_cache,
@@ -1612,8 +1617,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         if (tu_state(order.data[i])->interface_module
             && n00bb_cache_module_object(analysis->cache,
                 ir_module_name(item->module), &cached)) {
-            item->cached = cached.native;
-            item->cached_bytes = cached.native_bytes;
+            item->cached = cached.object;
+            item->cached_bytes = cached.object_bytes;
             item->ok = true;
         }
         else ok = begin_module_object(&emission, item,
@@ -1633,10 +1638,10 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .bitcode = lto ? &lto_modules[count + i] : nullptr,
         };
         n00bb_cache_module_object_t cached = {0};
-        if (!lto && n00bb_cache_instance_object(analysis->cache, link,
+        if (n00bb_cache_instance_object(analysis->cache, link,
                 analysis, &analysis->specializations.data[i], &cached)) {
-            item->cached = cached.native;
-            item->cached_bytes = cached.native_bytes;
+            item->cached = cached.object;
+            item->cached_bytes = cached.object_bytes;
             item->ok = true;
         }
         else {
@@ -1881,11 +1886,11 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         free(native_arguments);
         free(arguments);
     } else ok = false;
-    if (ok && !lto)
+    if (ok)
         (void)n00bb_cache_store(analysis->cache, link, analysis, kept.data,
                                 kept.len);
     for (size_t i = 0; i < kept.len; i++)
-        free((void *)kept.data[i].native);
+        free((void *)kept.data[i].object);
     core_list_free(kept);
     release_output(&plan);
     core_free(archive);
