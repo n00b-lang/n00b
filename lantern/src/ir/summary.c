@@ -2788,6 +2788,14 @@ typedef struct {
     bool                    built;
 } pt_entry_t;
 
+typedef struct {
+    core_string_t tokens[2 * IR_SPATH_STEPS + 1];
+    uint8_t       count;
+    bool          deep;
+} pt_region_t;
+core_list_decl(pt_region_t);
+typedef core_list_t(pt_region_t) region_list_t;
+
 struct pt_t {
     ir_summaries_t        *summaries;
     const ir_func_t       *f;
@@ -6451,6 +6459,11 @@ pt_free(pt_t *pt)
     core_dict_foreach(&pt->heap_sites, entry) core_free(entry->key);
     core_dict_free(&pt->heap_sites);
     core_dict_free(&pt->copy_ins);
+    core_dict_foreach(&pt->escaped, entry) {
+        region_list_t *regions = entry->value;
+        core_list_free(*regions);
+        core_free(regions);
+    }
     core_dict_free(&pt->escaped);
     core_list_free(pt->published);
     if (pt->entry.built) {
@@ -6537,68 +6550,198 @@ function_engine(ir_summaries_t *summaries, ir_func_t *f)
     return engine->pt;
 }
 
-typedef enum : uint8_t {
-    ESCAPE_OBJECT,
-    ESCAPE_REFERENT,
-    ESCAPE_SELF,
-    ESCAPE_BEYOND,
-} escape_part_t;
+static const core_string_t cross_mark = CORE_STRING_STATIC("*");
 
-static bool
-leaves_root(pt_t *pt, const pt_loc_t *loc)
+static uint32_t
+crossings(pt_t *pt, const pt_loc_t *loc)
 {
-    if (!loc->path.depth) return false;
-    bool    known  = false;
-    uint8_t inside = loc->site == PT_EXTERNAL
-        ? inline_depth(pt->f, pt, root_object_type(pt->f, &loc->path), false,
-                       &loc->path, &known)
-        : inline_prefix(pt, &pt->sites.data[loc->site], &loc->path, &known);
-    return known && inside < loc->path.depth;
-}
-
-static void *
-escape_key(const pt_loc_t *loc, escape_part_t part)
-{
-    uintptr_t base = loc->site == PT_EXTERNAL ? external_key(&loc->path)
-                                              : loc->site;
-    return (void *)(base << 2 | part);
-}
-
-static bool
-escaped_part(pt_t *pt, const pt_loc_t *loc, escape_part_t part)
-{
-    return core_dict_contains(&pt->escaped, escape_key(loc, part));
+    const ir_spath_t *path     = &loc->path;
+    th_type          *type     = nullptr;
+    bool              elements = false;
+    if (loc->site == PT_EXTERNAL)
+        type = root_object_type(pt->f, path);
+    else {
+        type     = pt->sites.data[loc->site].type;
+        elements = pt->sites.data[loc->site].elements;
+    }
+    uint32_t mask  = 0;
+    uint8_t  start = 0;
+    if (elements && path->depth) {
+        th_type *sequence = defined_type(pt->f, type);
+        if (!core_string_eq(path->steps[0], element_step) || !sequence
+            || th_kind_of(sequence) != TH_SEQUENCE) return mask;
+        type  = th_seq_elem(sequence);
+        start = 1;
+    }
+    bool inline_elements = false;
+    bool out_of_line     = false;
+    for (uint8_t i = start; type && i < path->depth; i++) {
+        core_string_t step    = path->steps[i];
+        th_type      *current = defined_type(pt->f, type);
+        if (!current) return mask;
+        bool pointer = th_kind_of(current) == TH_INDIRECTION
+            || (th_kind_of(current) != TH_SEQUENCE
+                && ir_machine_of(pt->f->owner, type).class == IR_CLASS_PTR);
+        if (pointer) {
+            mask |= 1u << i;
+            if (core_string_eq(step, value_step)) {
+                type = th_kind_of(current) == TH_INDIRECTION
+                    ? th_ind_referent(current) : nullptr;
+                inline_elements = false;
+                continue;
+            }
+            if (th_kind_of(current) == TH_INDIRECTION)
+                current = defined_type(pt->f, th_ind_referent(current));
+            if (!current) return mask;
+        }
+        uint64_t extent = 0;
+        switch (th_kind_of(current)) {
+        case TH_SEQUENCE:
+            if (!core_string_eq(step, element_step)) return mask;
+            if (out_of_line
+                || (!inline_elements && !th_seq_extent(current, &extent)))
+                mask |= 1u << i;
+            type            = th_seq_elem(current);
+            inline_elements = false;
+            out_of_line     = false;
+            break;
+        case TH_RECORD: {
+            bool known = false;
+            type = th_record_lookup(current, step);
+            inline_elements = type
+                && member_inline(pt->f, pt, current, step, &known);
+            out_of_line = type && known && !inline_elements;
+            break;
+        }
+        default:
+            return mask;
+        }
+    }
+    return mask;
 }
 
 static uint8_t
-escape_parts(pt_t *pt, const pt_item_t *item)
+region_tokens(pt_t *pt, const pt_item_t *item, core_string_t *tokens)
 {
-    bool beyond = leaves_root(pt, &item->loc);
-    if (item->loc.site != PT_EXTERNAL)
-        return 1u << (beyond ? ESCAPE_REFERENT : ESCAPE_OBJECT);
-    return ((!item->held || item->slot) && !beyond ? 1u << ESCAPE_SELF : 0)
-        | (item->held || beyond ? 1u << ESCAPE_BEYOND : 0);
+    const pt_loc_t *loc   = &item->loc;
+    uint32_t        mask  = crossings(pt, loc);
+    uint8_t         count = 0;
+    for (uint8_t i = 0; i < loc->path.depth; i++) {
+        if (mask >> i & 1) tokens[count++] = cross_mark;
+        if (!core_string_eq(loc->path.steps[i], value_step))
+            tokens[count++] = loc->path.steps[i];
+    }
+    if (item->held && loc->site == PT_EXTERNAL) tokens[count++] = cross_mark;
+    return count;
+}
+
+static void *
+region_key(const pt_loc_t *loc)
+{
+    return (void *)(loc->site == PT_EXTERNAL ? external_key(&loc->path)
+                                             : (uintptr_t)loc->site << 2 | 1);
+}
+
+static bool
+has_mark(const core_string_t *tokens, uint8_t from, uint8_t to)
+{
+    for (uint8_t i = from; i < to; i++)
+        if (core_string_eq(tokens[i], cross_mark)) return true;
+    return false;
+}
+
+static bool
+regions_overlap(const pt_region_t *escaped, const core_string_t *tokens,
+                uint8_t count, bool deep)
+{
+    uint8_t common = escaped->count < count ? escaped->count : count;
+    for (uint8_t i = 0; i < common; i++)
+        if (!core_string_eq(escaped->tokens[i], tokens[i])) return false;
+    if (count > escaped->count)
+        return escaped->deep || !has_mark(tokens, common, count);
+    if (escaped->count > count)
+        return deep || !has_mark(escaped->tokens, common, escaped->count);
+    return true;
+}
+
+static region_list_t *
+regions_of(pt_t *pt, const pt_loc_t *loc, bool create)
+{
+    bool           found   = false;
+    region_list_t *regions = core_dict_get(&pt->escaped, region_key(loc),
+                                           &found);
+    if (found || !create) return found ? regions : nullptr;
+    regions  = core_alloc(region_list_t);
+    *regions = core_list_new(pt_region_t);
+    core_dict_put(&pt->escaped, region_key(loc), regions);
+    return regions;
+}
+
+static bool
+add_region(pt_t *pt, const pt_loc_t *loc, const core_string_t *tokens,
+           uint8_t count, bool deep)
+{
+    region_list_t *regions = regions_of(pt, loc, true);
+    for (size_t r = 0; r < regions->len; r++) {
+        const pt_region_t *have   = &regions->data[r];
+        bool               prefix = have->count <= count;
+        for (uint8_t i = 0; prefix && i < have->count; i++)
+            prefix = core_string_eq(have->tokens[i], tokens[i]);
+        if (prefix && (!deep || have->deep)
+            && (have->deep || !has_mark(tokens, have->count, count)))
+            return false;
+    }
+    pt_region_t region = {.count = count, .deep = deep};
+    for (uint8_t i = 0; i < count; i++) region.tokens[i] = tokens[i];
+    core_list_push(*regions, region);
+    return true;
+}
+
+static void escape_item(pt_t *pt, const pt_item_t *item,
+                        pt_set_t *work);
+
+static void
+escape_contents(pt_t *pt, uint32_t site, const core_string_t *tokens,
+                uint8_t inside, pt_set_t *work)
+{
+    const pt_set_t *contents = &pt->sites.data[site].contents;
+    for (size_t i = 0; i < contents->len; i++) {
+        pt_item_t held = contents->data[i];
+        if (held.flow != PT_SAME) continue;
+        uint8_t common = held.depth < inside ? held.depth : inside;
+        bool    match  = true;
+        for (uint8_t s = 0; match && s < common; s++)
+            match = core_string_eq(held.steps[s], tokens[s]);
+        if (!match) continue;
+        held.depth = 0;
+        held.deep  = true;
+        held.loc.path.flags |= IR_SPATH_DEEP;
+        set_add(work, held);
+    }
 }
 
 static void
-escape_items(pt_t *pt, const pt_set_t *items, core_list_t(uint32_t) *work)
+escape_item(pt_t *pt, const pt_item_t *item, pt_set_t *work)
 {
-    for (size_t i = 0; i < items->len; i++) {
-        const pt_item_t *item = &items->data[i];
-        if (item->flow != PT_SAME) continue;
-        uint8_t parts = escape_parts(pt, item);
-        bool    fresh = false;
-        for (escape_part_t part = ESCAPE_OBJECT; part <= ESCAPE_BEYOND;
-             part++) {
-            if (!(parts >> part & 1) || escaped_part(pt, &item->loc, part))
-                continue;
-            void *key = escape_key(&item->loc, part);
-            core_dict_put(&pt->escaped, key, key);
-            fresh = true;
-        }
-        if (fresh && item->loc.site != PT_EXTERNAL)
-            core_list_push(*work, item->loc.site);
+    if (item->flow != PT_SAME) return;
+    if (item->held && item->slot) {
+        pt_item_t self = *item;
+        self.held = false;
+        self.slot = false;
+        escape_item(pt, &self, work);
     }
+    core_string_t tokens[2 * IR_SPATH_STEPS + 1];
+    uint8_t       count = region_tokens(pt, item, tokens);
+    bool          deep  = item->deep || loc_deep(&item->loc);
+    if (item->loc.site == PT_EXTERNAL) {
+        add_region(pt, &item->loc, tokens, count, deep);
+        return;
+    }
+    uint8_t inside = 0;
+    while (inside < count && !core_string_eq(tokens[inside], cross_mark))
+        inside++;
+    if (add_region(pt, &item->loc, tokens, count, deep))
+        escape_contents(pt, item->loc.site, tokens, inside, work);
 }
 
 static void
@@ -6606,24 +6749,21 @@ escaped_build(pt_t *pt)
 {
     if (pt->escaped_built) return;
     pt->escaped_built = true;
-    const ir_func_t      *f     = pt->f;
-    core_list_t(uint32_t) work  = core_list_new(uint32_t);
-    pt_set_t              items = (pt_set_t){0};
+    const ir_func_t *f     = pt->f;
+    pt_set_t         work  = (pt_set_t){0};
     for (size_t p = 0; p < pt->published.len; p++)
-        core_list_push(items, pt->published.data[p]);
+        set_add(&work, pt->published.data[p]);
     for (uint32_t b = 0; b < f->n_blocks; b++)
         for (uint32_t i = 0; i < f->blocks[b]->n_instrs; i++) {
             const ir_instr_t *in = f->blocks[b]->instrs[i];
             if (in->op != IR_OP_RETURN && in->op != IR_OP_FAIL) continue;
             for (uint32_t o = 0; o < in->n_operands; o++)
-                pt_read(pt, referenced(in, o), &items);
+                pt_read(pt, referenced(in, o), &work);
         }
-    escape_items(pt, &items, &work);
     while (work.len) {
-        uint32_t site = work.data[--work.len];
-        escape_items(pt, &pt->sites.data[site].contents, &work);
+        pt_item_t item = work.data[--work.len];
+        escape_item(pt, &item, &work);
     }
-    core_list_free(items);
     core_list_free(work);
 }
 
@@ -6631,14 +6771,23 @@ static bool
 item_escapes(pt_t *pt, const pt_item_t *item)
 {
     if (item->flow != PT_SAME) return false;
-    const pt_loc_t *loc    = &item->loc;
-    bool            beyond = leaves_root(pt, loc);
-    if (loc->site != PT_EXTERNAL)
-        return escaped_part(pt, loc, ESCAPE_OBJECT)
-            || (beyond && escaped_part(pt, loc, ESCAPE_REFERENT));
-    if (loc->path.root == IR_SPLACE_UNKNOWN) return true;
-    return escaped_part(pt, loc, ESCAPE_SELF)
-        || ((item->held || beyond) && escaped_part(pt, loc, ESCAPE_BEYOND));
+    if (item->loc.site == PT_EXTERNAL
+        && item->loc.path.root == IR_SPLACE_UNKNOWN) return true;
+    if (item->held && item->slot) {
+        pt_item_t self = *item;
+        self.held = false;
+        self.slot = false;
+        if (item_escapes(pt, &self)) return true;
+    }
+    const region_list_t *regions = regions_of(pt, &item->loc, false);
+    if (!regions) return false;
+    core_string_t tokens[2 * IR_SPATH_STEPS + 1];
+    uint8_t       count = region_tokens(pt, item, tokens);
+    bool          deep  = item->deep || loc_deep(&item->loc);
+    for (size_t r = 0; r < regions->len; r++)
+        if (regions_overlap(&regions->data[r], tokens, count, deep))
+            return true;
+    return false;
 }
 
 static bool
