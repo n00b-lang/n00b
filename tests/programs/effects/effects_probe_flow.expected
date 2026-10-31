@@ -12,18 +12,12 @@ sys.internal.env.args: () -> List[string]
   traps explicit bounds unwrap arithmetic
   returns fresh
   output result data[(new in sys.internal.env.args:33:29)] control[]
-  output (new in builtin.containers.list.detach:22:27).__len data[(reads_env)] control[]
-  output (new in builtin.containers.list.detach:22:27)[] data[(new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.detach:22:27)[]... data[(reads_env)] control[]
   output (new in builtin.containers.list.detach:22:27)[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[]] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[] data[(new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[]... data[(reads_env)] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[]] control[]
   output (new in builtin.string.core.long_bytes:189:12)[] data[(reads_env)] control[]
   output (new in sys.internal.env.args:33:29).items data[(new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
-  output (new in sys.internal.env.args:33:29).items[] data[(new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
-  output (new in sys.internal.env.args:33:29).items[]... data[(reads_env)] control[]
-  output (new in sys.internal.env.args:33:29).items[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[]] control[]
   output (new in sys.internal.env.c_string:14:28)[] data[(reads_env)] control[]
 sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
@@ -137,27 +131,20 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   reads spans.count
   reads spans.items
   reads spans.items[]
-  escapes text address
+  escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
   output result data[(new in text.internal.rich.rich_string:9:9)] control[]
-  output (new in builtin.containers.list.__init:12:49)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.__init:12:49)[].end_ix data[spans.items[].end] control[]
   output (new in builtin.containers.list.__init:12:49)[].start_ix data[spans.items[].start] control[]
   output (new in builtin.containers.list.__init:12:49)[].style_tag data[spans.items[].tag] control[]
-  output (new in builtin.containers.list.detach:22:27)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.detach:22:27)[].end_ix data[spans.items[].end] control[]
   output (new in builtin.containers.list.detach:22:27)[].start_ix data[spans.items[].start] control[]
   output (new in builtin.containers.list.detach:22:27)[].style_tag data[spans.items[].tag] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[].end_ix data[spans.items[].end] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[].start_ix data[spans.items[].start] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[].style_tag data[spans.items[].tag] control[]
   output (new in text.internal.rich.rich_string:9:51).items data[(new in builtin.containers.list.__init:12:49) (new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
-  output (new in text.internal.rich.rich_string:9:51).items[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
-  output (new in text.internal.rich.rich_string:9:51).items[].end_ix data[spans.items[].end] control[]
-  output (new in text.internal.rich.rich_string:9:51).items[].start_ix data[spans.items[].start] control[]
-  output (new in text.internal.rich.rich_string:9:51).items[].style_tag data[spans.items[].tag] control[]
   output (new in text.internal.rich.rich_string:9:9).s data[text] control[]
   output (new in text.internal.rich.rich_string:9:9).style_info data[(new in text.internal.rich.rich_string:9:51)] control[]
 unicode.internal.properties.general_category: (char) -> Gc

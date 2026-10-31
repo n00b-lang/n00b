@@ -1194,7 +1194,8 @@ escape_from(const ir_spath_t *from, uint32_t param, bool address)
     uint8_t escape = 0;
     if (address && !from->depth && (from->flags & IR_SPATH_ROOT))
         escape |= IR_SESCAPE_ADDRESS;
-    if (from->depth || (from->flags & IR_SPATH_DEEP))
+    if (from->depth || (from->flags & (IR_SPATH_DEEP | IR_SPATH_ROOT))
+                           != IR_SPATH_ROOT)
         escape |= IR_SESCAPE_REFERENT;
     return escape;
 }
@@ -1267,6 +1268,7 @@ result_source(const ir_summary_t *summary, const ir_spath_t *from)
                              .global = from->global}
             : (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN};
     case IR_SPLACE_HEAP:
+        if (!(from->flags & IR_SPATH_ROOT)) break;
         return (ir_sreturn_t){.kind = summary->returns_external
                                   ? IR_SRETURN_FRESH_EXTERNAL
                                   : IR_SRETURN_FRESH};
@@ -1307,7 +1309,8 @@ ir_summary_returns_fresh(const ir_summary_t *summary)
     alias_cursor_t    results = aliases_of(summary, IR_SFLOW_RESULTS);
     while (next_alias(&results, &to, &from)) {
         if (to->output) continue;
-        if (from->root != IR_SPLACE_HEAP) return false;
+        if (from->root != IR_SPLACE_HEAP || !(from->flags & IR_SPATH_ROOT))
+            return false;
         fresh = true;
     }
     alias_cursor_t stores = aliases_of(summary, IR_SFLOW_STORES);
@@ -1914,10 +1917,10 @@ ir_summary_set_return(ir_summary_t *summary, ir_sreturn_t returned)
         break;
     case IR_SRETURN_FRESH_EXTERNAL:
         summary->returns_external = true;
-        from = (ir_spath_t){.root = IR_SPLACE_HEAP};
+        from = (ir_spath_t){.root = IR_SPLACE_HEAP, .flags = IR_SPATH_ROOT};
         break;
     case IR_SRETURN_FRESH:
-        from = (ir_spath_t){.root = IR_SPLACE_HEAP};
+        from = (ir_spath_t){.root = IR_SPLACE_HEAP, .flags = IR_SPATH_ROOT};
         break;
     case IR_SRETURN_UNKNOWN:
         break;
@@ -3043,12 +3046,9 @@ global_loc(const ir_global_t *global)
 }
 
 static pt_loc_t
-path_loc(const pt_t *pt, const ir_spath_t *path)
+path_loc(const ir_spath_t *path)
 {
-    bool opaque = pt->hooks && pt->hooks->callee_globals_unknown
-        && (path->root == IR_SPLACE_GLOBAL || path->root == IR_SPLACE_THREAD);
-    if (opaque || path->root == IR_SPLACE_HEAP
-        || path->root == IR_SPLACE_UNKNOWN)
+    if (path->root == IR_SPLACE_HEAP || path->root == IR_SPLACE_UNKNOWN)
         return unknown_loc();
     pt_loc_t loc = {.site = PT_EXTERNAL, .path = *path};
     loc.path.flags &= IR_SPATH_DEEP;
@@ -3598,6 +3598,25 @@ local_site(pt_t *pt, const ir_local_t *local)
     return site;
 }
 
+static bool
+by_value(ir_module_t *module, th_type *type)
+{
+    if (th_builtin_kind(ir_ctx_types(module->ctx), type) == TH_BUILTIN_STRING)
+        return true;
+    th_type *shape  = definition_in(module, type);
+    uint64_t extent = 0;
+    if (!shape) return false;
+    switch (th_kind_of(shape)) {
+    case TH_RECORD:
+    case TH_SUM:
+        return true;
+    case TH_SEQUENCE:
+        return th_seq_extent(shape, &extent);
+    default:
+        return false;
+    }
+}
+
 static uint32_t
 variable_site(pt_t *pt, const ir_value_t *value)
 {
@@ -3614,6 +3633,7 @@ variable_site(pt_t *pt, const ir_value_t *value)
     pt_item_t item  = item_at(own ? external_loc(IR_SPLACE_PARAM, param,
                                                  nullptr)
                                   : unknown_loc());
+    item.held = own && value->type && by_value(pt->f->owner, value->type);
     if (!own)
         note_unknown(pt, CORE_STRING_STATIC("an operand the analysis cannot "
                                             "resolve"), nullptr);
@@ -3625,12 +3645,12 @@ variable_site(pt_t *pt, const ir_value_t *value)
 static uint32_t
 allocation_site(pt_t *pt, const ir_instr_t *in)
 {
-    th_type *type = in->dest ? th_resolve(in->dest->type) : nullptr;
-    if (type && th_kind_of(type) == TH_INDIRECTION)
-        return site_of(pt, in, th_ind_referent(type), false,
+    th_type *type  = in->dest ? th_resolve(in->dest->type) : nullptr;
+    th_type *shape = type ? defined_type(pt->f, type) : nullptr;
+    if (shape && th_kind_of(shape) == TH_INDIRECTION)
+        return site_of(pt, in, th_ind_referent(shape), false,
                        instr_origin(pt, in));
-    th_type *sequence = defined_type(pt->f, type);
-    bool elements = sequence && th_kind_of(sequence) == TH_SEQUENCE;
+    bool elements = shape && th_kind_of(shape) == TH_SEQUENCE;
     return site_of(pt, in, elements ? type : nullptr, elements,
                    instr_origin(pt, in));
 }
@@ -3968,7 +3988,7 @@ pt_define(pt_t *pt, const ir_instr_t *in, const pt_set_t *items)
         define_items(pt, in, items);
         return;
     }
-    uint32_t site = site_of(pt, in, nullptr, false, instr_origin(pt, in));
+    uint32_t site = allocation_site(pt, in);
     for (size_t i = 0; fresh == IR_PT_FRESH_HOLDING && i < items->len; i++)
         pt_add(pt, &pt->sites.data[site].contents, contents_key(site),
                item_under(nullptr, 0, true, items->data[i]));
@@ -4552,13 +4572,23 @@ pt_elements(pt_t *pt, const ir_value_t *base, pt_set_t *into)
 }
 
 static bool
-member_inline(const ir_func_t *f, pt_t *pt, th_type *record,
+layout_member_inline(const ir_func_t *f, th_type *named, th_type *record,
+                     core_string_t name, bool *known)
+{
+    bool         inside = ir_layout_member_inline(f->owner, record, name,
+                                                  known);
+    ir_module_t *owner  = *known || !named
+        ? nullptr : ir_type_definition_owner(f->owner, named);
+    if (owner && owner != f->owner)
+        inside = ir_layout_member_inline(owner, record, name, known);
+    return *known && inside;
+}
+
+static bool
+member_inline(const ir_func_t *f, pt_t *pt, th_type *named, th_type *record,
               core_string_t name, bool *known)
 {
-    if (!pt) {
-        bool inside = ir_layout_member_inline(f->owner, record, name, known);
-        return *known && inside;
-    }
+    if (!pt) return layout_member_inline(f, named, record, name, known);
     bool           found   = false;
     member_list_t *members = core_dict_get(&pt->types->members, record,
                                            &found);
@@ -4572,8 +4602,7 @@ member_inline(const ir_func_t *f, pt_t *pt, th_type *record,
         *members = core_list_new(pt_member_t);
         core_dict_put(&pt->types->members, record, members);
     }
-    bool inside = ir_layout_member_inline(f->owner, record, name, known);
-    inside      = *known && inside;
+    bool inside = layout_member_inline(f, named, record, name, known);
     core_list_push(*members, ((pt_member_t){name, inside, *known}));
     return inside;
 }
@@ -4635,7 +4664,7 @@ inline_depth(const ir_func_t *f, pt_t *pt, th_type *type, bool sequence_root,
                 *known = false;
                 return i;
             }
-            inline_elements = member_inline(f, pt, current, step,
+            inline_elements = member_inline(f, pt, type, current, step,
                                             &layout_known);
             type            = member;
             break;
@@ -4714,25 +4743,16 @@ root_object_type(const ir_func_t *f, const ir_spath_t *path)
 static bool
 held_pointer(pt_t *pt, const pt_item_t *held)
 {
-    if (!held->held || held->loc.site != PT_EXTERNAL) return true;
+    uint32_t site = held->loc.site;
+    if (!held->held || (site != PT_EXTERNAL && site >= pt->sites.len))
+        return true;
     ir_module_t *module = pt->f->owner;
-    th_type     *slot   = end_type(module,
-                                   root_object_type(pt->f, &held->loc.path),
-                                   &held->loc.path);
-    if (!slot || ir_machine_of(module, slot).class == IR_CLASS_PTR)
-        return true;
-    th_type *type   = definition_in(module, slot);
-    uint64_t extent = 0;
-    if (!type) return true;
-    switch (th_kind_of(type)) {
-    case TH_RECORD:
-    case TH_SUM:
-        return false;
-    case TH_SEQUENCE:
-        return !th_seq_extent(type, &extent);
-    default:
-        return true;
-    }
+    th_type     *root   = site == PT_EXTERNAL
+        ? root_object_type(pt->f, &held->loc.path)
+        : pt->sites.data[site].type;
+    th_type     *slot   = end_type(module, root, &held->loc.path);
+    return !slot || ir_machine_of(module, slot).class == IR_CLASS_PTR
+        || !by_value(module, slot);
 }
 
 bool
@@ -4879,7 +4899,8 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
                             inline_tail && !held.deep, into))
                 continue;
             if (!held_pointer(pt, &held)) {
-                set_add(into, deepened(&held));
+                set_add(into, held.held && !stepped ? item_at(loc)
+                                                    : deepened(&held));
                 continue;
             }
             if (held.deep) {
@@ -5182,7 +5203,7 @@ call_reach(pt_t *pt, const ir_instr_t *call, const pt_callees_t *callees,
         for (size_t p = 0; p < callee->paths.len; p++) {
             const ir_spath_t *path = &callee->paths.data[p];
             if ((path->flags & IR_SPATH_READ) && path->root != IR_SPLACE_PARAM) {
-                pt_item_t read = deep_item(path_loc(pt, path));
+                pt_item_t read = deep_item(path_loc(path));
                 read.held = read.loc.path.root != IR_SPLACE_UNKNOWN;
                 set_add(into, read);
             }
@@ -5419,14 +5440,15 @@ map_location(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
                        path->flags & IR_SPATH_DEEP);
         else extend_tail(&loc, path->steps, path->depth,
                          path->flags & IR_SPATH_DEEP, inline_tail);
-        set_add(into, item_at(loc));
+        set_add(into, value && !(path->flags & IR_SPATH_ROOT) ? held_at(loc)
+                                                              : item_at(loc));
     }
     else if (path->root == IR_SPLACE_PARAM && value)
         map_param_value(pt, call, path, mode == MAP_DERIVED, into);
     else if (path->root == IR_SPLACE_PARAM)
         map_param_place(pt, call, path, inline_tail, into);
     else {
-        pt_loc_t loc = path_loc(pt, path);
+        pt_loc_t loc = path_loc(path);
         if (inline_tail && loc_deep(&loc)
             && loc.path.root != IR_SPLACE_UNKNOWN)
             loc.path.flags |= SPATH_INLINE;
@@ -5731,7 +5753,7 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
         pt_set_t locs = (pt_set_t){0};
         if (path->root == IR_SPLACE_PARAM) map_param_path(pt, call, path,
                                                           &locs);
-        else set_add(&locs, item_at(path_loc(pt, path)));
+        else set_add(&locs, item_at(path_loc(path)));
         for (size_t l = 0; l < locs.len; l++) {
             if (locs.data[l].loc.site != PT_EXTERNAL) {
                 write_reach(pt, &locs.data[l].loc, reach);
@@ -6679,7 +6701,7 @@ record_callee_stores(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call,
             if (path->root == IR_SPLACE_PARAM)
                 map_param_path(pt, call, path, &to);
             else
-                set_add(&to, item_at(path_loc(pt, path)));
+                set_add(&to, item_at(path_loc(path)));
         }
         for (uint32_t param = 0; param < ir_call_argument_count(call);
              param++)
@@ -6762,7 +6784,7 @@ record_call(pt_t *pt, ir_summary_t *summary, const ir_instr_t *call)
                     & (IR_SPATH_ACCESS | IR_SPATH_TYPED | IR_SPATH_ROOT),
                 .type  = path->type};
             if (path->root != IR_SPLACE_PARAM) {
-                pt_loc_t loc = path_loc(pt, path);
+                pt_loc_t loc = path_loc(path);
                 record_loc(pt, summary, &loc, carried.flags, carried.type);
                 continue;
             }
@@ -7022,10 +7044,12 @@ describe_values(pt_t *pt, const pt_set_t *values, const ir_spath_t *base,
             name->flags &= (uint8_t)~SPATH_INLINE;
             if (item->loc.site == PT_EXTERNAL)
                 name->flags |=
-                    (item->held && !item->loc.path.depth ? IR_SPATH_DEEP : 0)
+                    (item->held && !item->loc.path.depth
+                             && item->flow != PT_SAME ? IR_SPATH_DEEP : 0)
                     | (!item->held ? IR_SPATH_ROOT : 0);
-            else if (name->root != IR_SPLACE_HEAP
-                     && !(name->flags & IR_SPATH_DEEP)) {
+            else if (name->root == IR_SPLACE_HEAP)
+                name->flags |= !item->held ? IR_SPATH_ROOT : 0;
+            else if (!(name->flags & IR_SPATH_DEEP)) {
                 if (name->depth
                     && core_string_eq(name->steps[name->depth - 1],
                                       value_step))
@@ -7452,6 +7476,7 @@ crossings(pt_t *pt, const pt_loc_t *loc)
     bool out_of_line     = false;
     for (uint32_t i = start; type && i < path->depth; i++) {
         core_string_t step    = path->steps[i];
+        th_type      *named   = type;
         th_type      *current = defined_type(pt->f, type);
         if (!current) return mask;
         bool pointer = th_kind_of(current) == TH_INDIRECTION
@@ -7469,8 +7494,10 @@ crossings(pt_t *pt, const pt_loc_t *loc)
                 inline_elements = false;
                 continue;
             }
-            if (th_kind_of(current) == TH_INDIRECTION)
-                current = defined_type(pt->f, th_ind_referent(current));
+            if (th_kind_of(current) == TH_INDIRECTION) {
+                named   = th_ind_referent(current);
+                current = defined_type(pt->f, named);
+            }
             if (!current) return mask;
         }
         uint64_t extent = 0;
@@ -7488,7 +7515,7 @@ crossings(pt_t *pt, const pt_loc_t *loc)
             bool known = false;
             type = th_record_lookup(current, step);
             inline_elements = type
-                && member_inline(pt->f, pt, current, step, &known);
+                && member_inline(pt->f, pt, named, current, step, &known);
             out_of_line = type && known && !inline_elements;
             break;
         }
@@ -8060,7 +8087,7 @@ ir_points_to_call_writes(ir_points_to_t *points_to, const ir_instr_t *call,
             }
             else if (path->root == IR_SPLACE_UNKNOWN)
                 argument_reach(points_to, call, trusted, into);
-            else set_add(&written, item_at(path_loc(pt, path)));
+            else set_add(&written, item_at(path_loc(path)));
         }
     }
     pt->at = nullptr;

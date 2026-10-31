@@ -353,7 +353,6 @@ typedef enum {
 typedef struct {
     void          *context;
     ir_pt_fresh_t (*fresh)(void *context, const ir_instr_t *in);
-    bool           callee_globals_unknown;
 } ir_points_to_hooks_t;
 
 typedef enum {

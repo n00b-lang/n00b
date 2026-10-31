@@ -78,7 +78,7 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   reads spans.count
   reads spans.items
   reads spans.items[]
-  escapes text address
+  escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
 unicode.internal.properties.general_category: (char) -> Gc

@@ -498,7 +498,7 @@ static bool
 analysis_solve(analysis_t *analysis)
 {
     static const ir_points_to_hooks_t hooks = {
-        .fresh = borrow_fresh, .callee_globals_unknown = true,
+        .fresh = borrow_fresh,
     };
     analysis->points_to = ir_points_to_new(analysis->summaries,
                                            analysis->function, &hooks);
