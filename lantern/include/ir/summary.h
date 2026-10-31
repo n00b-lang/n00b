@@ -65,6 +65,8 @@ typedef struct {
     core_string_t name;
     uint32_t      line;
     uint32_t      column;
+    th_type      *type;
+    bool          elements;
 } ir_sheap_t;
 
 enum {
@@ -371,6 +373,7 @@ typedef struct {
     const ir_value_t  *value;
     const ir_local_t  *local;
     const ir_global_t *global;
+    uint32_t           origin;
 } ir_pto_t;
 
 core_list_decl(ir_pto_t);
