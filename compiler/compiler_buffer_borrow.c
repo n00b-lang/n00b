@@ -656,7 +656,7 @@ path_in_buffer_state(th_ctx *types, const ir_func_t *function,
                      const ir_spath_t *path)
 {
     th_type *type = nullptr;
-    for (uint8_t d = 0; d <= path->depth; d++) {
+    for (uint32_t d = 0; d <= path->depth; d++) {
         type = ir_summary_path_type(function, path, d);
         type = type ? th_resolve(type) : nullptr;
         if (!type || is_buffer_type(type) || may_be_buffer_state(type)

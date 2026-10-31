@@ -54,7 +54,7 @@ compare_lines(const void *left, const void *right)
 static void
 render_steps(core_buffer_t *out, const ir_spath_t *path)
 {
-    for (uint8_t s = 0; s < path->depth; s++) {
+    for (uint32_t s = 0; s < path->depth; s++) {
         if (!core_string_eq(path->steps[s], S("[]")))
             core_buffer_putc(out, '.');
         core_buffer_append_string(out, path->steps[s]);

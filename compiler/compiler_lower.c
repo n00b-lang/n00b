@@ -21937,7 +21937,7 @@ dump_param(const ir_func_t *function, uint32_t p)
 static void
 steps_text(core_buffer_t *out, const ir_spath_t *path)
 {
-    for (uint8_t s = 0; s < path->depth; s++) {
+    for (uint32_t s = 0; s < path->depth; s++) {
         core_string_t step = path->steps[s];
         if (!core_string_eq(step, CORE_STRING_STATIC("[]")))
             core_buffer_putc(out, '.');

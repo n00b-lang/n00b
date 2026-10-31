@@ -35,30 +35,116 @@ static const core_string_t element_step = CORE_STRING_STATIC("[]");
 static const core_string_t value_step   = CORE_STRING_STATIC("__value");
 static const core_string_t length_step  = CORE_STRING_STATIC("__len");
 
+typedef struct {
+    const core_string_t *steps;
+    uint32_t             depth;
+} step_run_t;
+
 static pthread_mutex_t step_lock = PTHREAD_MUTEX_INITIALIZER;
 static core_dict_t     step_table;
+static core_dict_t     run_table;
 static bool            step_table_ready;
 
-static core_string_t
-step_intern(core_string_t step)
+static core_hash_value_t
+run_hash(void *key)
 {
-    if (!step.u8_bytes) return step;
-    pthread_mutex_lock(&step_lock);
+    const step_run_t *run = key;
+    return core_hash_raw((void *)run->steps,
+                         run->depth * sizeof(core_string_t));
+}
+
+static bool
+run_eq(const void *a, const void *b)
+{
+    const step_run_t *x = a, *y = b;
+    return x->depth == y->depth
+        && !memcmp(x->steps, y->steps, x->depth * sizeof(core_string_t));
+}
+
+static core_string_t
+step_intern_locked(core_string_t step)
+{
     if (!step_table_ready) {
         core_dict_init_string(&step_table);
+        core_dict_init(&run_table, run_hash, run_eq);
         core_dict_put(&step_table, (void *)&element_step,
                       (void *)&element_step);
         core_dict_put(&step_table, (void *)&value_step, (void *)&value_step);
+        core_dict_put(&step_table, (void *)&length_step,
+                      (void *)&length_step);
         step_table_ready = true;
     }
+    if (!step.u8_bytes) return step;
     bool           found = false;
     core_string_t *canon = core_dict_get(&step_table, &step, &found);
     if (!found) {
         canon = core_dict_string_key_copy(step);
         core_dict_put(&step_table, canon, canon);
     }
-    pthread_mutex_unlock(&step_lock);
     return *canon;
+}
+
+static core_string_t
+step_intern(core_string_t step)
+{
+    if (!step.u8_bytes) return step;
+    pthread_mutex_lock(&step_lock);
+    core_string_t canon = step_intern_locked(step);
+    pthread_mutex_unlock(&step_lock);
+    return canon;
+}
+
+static const core_string_t *
+steps_join(const core_string_t *head, uint32_t head_depth,
+           const core_string_t *tail, uint32_t tail_depth)
+{
+    uint32_t depth = head_depth + tail_depth;
+    if (!depth) return nullptr;
+    core_string_t  local[8];
+    core_string_t *built = depth <= 8 ? local
+                                      : core_alloc_array(core_string_t, depth);
+    pthread_mutex_lock(&step_lock);
+    for (uint32_t s = 0; s < head_depth; s++)
+        built[s] = step_intern_locked(head[s]);
+    for (uint32_t s = 0; s < tail_depth; s++)
+        built[head_depth + s] = step_intern_locked(tail[s]);
+    step_run_t  probe = {built, depth};
+    bool        found = false;
+    step_run_t *run   = core_dict_get(&run_table, &probe, &found);
+    if (!found) {
+        core_string_t *owned = built;
+        if (built == local) {
+            owned = core_alloc_array(core_string_t, depth);
+            memcpy(owned, local, depth * sizeof(core_string_t));
+        }
+        built  = local;
+        run    = core_alloc(step_run_t);
+        *run   = (step_run_t){owned, depth};
+        core_dict_put(&run_table, run, run);
+    }
+    pthread_mutex_unlock(&step_lock);
+    if (built != local) core_free(built);
+    return run->steps;
+}
+
+static const core_string_t *
+steps_make(const core_string_t *steps, uint32_t depth)
+{
+    return steps_join(steps, depth, nullptr, 0);
+}
+
+static const core_string_t *
+steps_append(const core_string_t *steps, uint32_t depth, core_string_t step)
+{
+    return steps_join(steps, depth, &step, 1);
+}
+
+static void
+path_push(ir_spath_t *path, core_string_t step)
+{
+    if (path->flags & IR_SPATH_DEEP) return;
+    path->steps = steps_append(path->steps, path->depth, step);
+    path->depth++;
 }
 
 static inline bool
@@ -296,8 +382,6 @@ merge_effects(ir_summary_t *into, const ir_summary_t *from)
     return true;
 }
 
-enum { PATH_LIMIT = 16 };
-
 static bool
 named_root(ir_splace_kind_t root)
 {
@@ -352,7 +436,7 @@ same_path_target(const ir_spath_t *a, const ir_spath_t *b)
     if (!same_path_root(a, b) || a->depth != b->depth
         || !same_access_kind(a, b))
         return false;
-    for (uint8_t s = 0; s < a->depth; s++)
+    for (uint32_t s = 0; s < a->depth; s++)
         if (!core_string_eq(a->steps[s], b->steps[s])) return false;
     return true;
 }
@@ -405,60 +489,20 @@ merge_path_into(ir_spath_t *into, const ir_spath_t *from)
     if (typed) into->flags |= IR_SPATH_TYPED;
 }
 
-static size_t
-compact_range(path_list_t *paths, size_t first, size_t last)
-{
-    size_t kept = first;
-    for (size_t i = first; i < last; i++) {
-        ir_spath_t path = paths->data[i];
-        size_t j = first;
-        while (j < kept && !same_path_target(&paths->data[j], &path))
-            j++;
-        if (j == kept) {
-            paths->data[kept++] = path;
-            continue;
-        }
-        merge_path_into(&paths->data[j], &path);
-    }
-    size_t removed = last - kept;
-    for (size_t i = last; removed && i < paths->len; i++)
-        paths->data[i - removed] = paths->data[i];
-    paths->len -= removed;
-    return kept;
-}
-
-static void
-widen_range(path_list_t *paths, size_t first, size_t last)
-{
-    while (last - first > PATH_LIMIT) {
-        uint8_t deepest = 0;
-        for (size_t i = first; i < last; i++)
-            if (paths->data[i].depth > deepest)
-                deepest = paths->data[i].depth;
-        if (!deepest) return;
-        for (size_t i = first; i < last; i++) {
-            ir_spath_t *path = &paths->data[i];
-            if (path->depth != deepest) continue;
-            path->depth--;
-            path->flags |= IR_SPATH_DEEP;
-        }
-        last = compact_range(paths, first, last);
-    }
-}
-
 static bool
-steps_prefix(uint8_t depth, const core_string_t *steps, uint8_t other_depth,
+steps_prefix(uint32_t depth, const core_string_t *steps, uint32_t other_depth,
              const core_string_t *other)
 {
     if (depth > other_depth) return false;
-    for (uint8_t s = 0; s < depth; s++)
+    if (steps == other) return true;
+    for (uint32_t s = 0; s < depth; s++)
         if (!step_eq(steps[s], other[s])) return false;
     return true;
 }
 
 static bool
-steps_cover(uint8_t depth, bool deep, const core_string_t *steps,
-            uint8_t other_depth, bool other_deep, const core_string_t *other)
+steps_cover(uint32_t depth, bool deep, const core_string_t *steps,
+            uint32_t other_depth, bool other_deep, const core_string_t *other)
 {
     if ((depth < other_depth && !deep)
         || (depth == other_depth && other_deep && !deep)) return false;
@@ -481,9 +525,8 @@ path_covers(const ir_spath_t *prefix, const ir_spath_t *path)
         || ((prefix->flags ^ path->flags) & IR_SPATH_ROOT)
         || (outer && !same_type(outer, heap_type_of(path))))
         return false;
-    for (uint8_t s = 0; s < prefix->depth; s++)
-        if (!step_eq(prefix->steps[s], path->steps[s])) return false;
-    return true;
+    return steps_prefix(prefix->depth, prefix->steps, path->depth,
+                        path->steps);
 }
 
 static ir_spath_t
@@ -519,11 +562,8 @@ add_path_to(path_list_t *paths, const ir_spath_t *path)
     for (size_t i = last; kept < last && i < paths->len; i++)
         paths->data[kept + i - last] = paths->data[i];
     paths->len -= last - kept;
-    last = kept;
-    for (uint8_t s = 0; s < copy.depth; s++)
-        copy.steps[s] = step_intern(path->steps[s]);
-    core_list_insert(*paths, last, copy);
-    widen_range(paths, first, last + 1);
+    copy.steps = steps_make(copy.steps, copy.depth);
+    core_list_insert(*paths, kept, copy);
 }
 
 static void
@@ -549,7 +589,7 @@ compare_paths(const ir_spath_t *a, const ir_spath_t *b)
     int order = compare_path_roots(a, b);
     if (order) return order;
     if (a->depth != b->depth) return a->depth < b->depth ? -1 : 1;
-    for (uint8_t s = 0; s < a->depth; s++) {
+    for (uint32_t s = 0; s < a->depth; s++) {
         order = core_string_cmp(a->steps[s], b->steps[s]);
         if (order) return order;
     }
@@ -584,7 +624,7 @@ spath_hash(void *key)
         (uint64_t)path->root | (uint64_t)path->output << 8
             | (uint64_t)path->depth << 16 | (uint64_t)path->flags << 24};
     core_hash_value_t hash = core_hash_raw(head, sizeof(head));
-    for (uint8_t s = 0; s < path->depth; s++)
+    for (uint32_t s = 0; s < path->depth; s++)
         hash = hash * 31 + core_string_hash(path->steps[s]);
     return hash;
 }
@@ -626,8 +666,7 @@ owned_path(const ir_spath_t *path)
 {
     ir_spath_t *owned = core_alloc(ir_spath_t);
     *owned = *path;
-    for (uint8_t s = 0; s < owned->depth; s++)
-        owned->steps[s] = step_intern(owned->steps[s]);
+    owned->steps = steps_make(owned->steps, owned->depth);
     return owned;
 }
 
@@ -1010,30 +1049,26 @@ ir_summary_path_at(const ir_summary_t *summary, uint32_t index)
         ? &summary->paths.data[index] : nullptr;
 }
 
-static uint8_t
-parse_query_path(core_string_t text, core_string_t *root,
-                 core_string_t steps[IR_SPATH_STEPS])
+static void
+parse_query_path(core_string_t text, core_string_t *root, ir_spath_t *path)
 {
-    uint8_t depth = 0;
-    size_t  start = 0;
-    bool    named = false;
+    size_t start = 0;
+    bool   named = false;
     for (size_t at = 0; at <= text.u8_bytes; at++) {
         char byte = at < text.u8_bytes ? text.data[at] : '.';
         if (byte != '.' && byte != '[') continue;
         core_string_t token = core_string_slice(text, start, at - start);
         if (token.u8_bytes) {
             if (!named) *root = token;
-            else if (depth < IR_SPATH_STEPS) steps[depth++] = token;
+            else path_push(path, token);
             named = true;
         }
         if (byte == '[') {
-            if (depth < IR_SPATH_STEPS)
-                steps[depth++] = element_step;
+            path_push(path, element_step);
             if (at + 1 < text.u8_bytes && text.data[at + 1] == ']') at++;
         }
         start = at + 1;
     }
-    return depth;
 }
 
 static bool
@@ -1061,7 +1096,7 @@ ir_summary_may_access(const ir_summary_t *summary, const ir_func_t *function,
     }
     core_string_t root   = {0};
     ir_spath_t    wanted = {0};
-    wanted.depth = parse_query_path(query, &root, wanted.steps);
+    parse_query_path(query, &root, &wanted);
     for (size_t i = 0; i < summary->paths.len; i++) {
         const ir_spath_t *path = &summary->paths.data[i];
         if (!(path->flags & mode)) continue;
@@ -1899,8 +1934,6 @@ is_call(const ir_instr_t *in)
     return in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE;
 }
 
-enum { FIELD_LEAVES = 64 };
-
 static th_type *
 definition_in(ir_module_t *module, th_type *type)
 {
@@ -1936,54 +1969,50 @@ record_of(const ir_func_t *f, th_type *type)
         ? type : nullptr;
 }
 
-static bool
+static void
 collect_leaves(const ir_func_t *f, th_type *type, ir_spath_t prefix,
                path_list_t *out)
 {
-    th_type *record = prefix.depth < IR_SPATH_STEPS ? record_of(f, type)
-                                                    : nullptr;
+    th_type *record = record_of(f, type);
     if (!record) {
-        if (out->len >= FIELD_LEAVES) return false;
         core_list_push(*out, prefix);
-        return true;
+        return;
     }
     for (size_t i = 0; i < th_record_len(record); i++) {
         const th_member *member = th_record_member(record, i);
         ir_spath_t       next   = prefix;
-        next.steps[next.depth++] = member->name;
-        if (!collect_leaves(f, member->type, next, out)) return false;
+        path_push(&next, member->name);
+        collect_leaves(f, member->type, next, out);
     }
-    return true;
 }
 
 static path_list_t
 place_leaves(const ir_func_t *f, const ir_splace_t *place)
 {
     path_list_t leaves = core_list_new(ir_spath_t);
-    if (!collect_leaves(f, place->type, (ir_spath_t){0}, &leaves)) {
-        leaves.len = 0;
-        core_list_push(leaves, ((ir_spath_t){0}));
-    }
+    collect_leaves(f, place->type, (ir_spath_t){0}, &leaves);
     return leaves;
 }
 
 static const ir_value_t *
 field_chain(const ir_value_t *address, ir_op_t step, ir_spath_t *path)
 {
-    core_string_t names[IR_SPATH_STEPS];
-    uint8_t       depth = 0;
+    core_list_t(core_string_t) names = core_list_new(core_string_t);
     while (address && address->kind == IR_VAL_INSTR && address->def
            && address->def->op == step && address->def->n_operands == 2
            && address->def->operands[1].kind == IR_OPD_NAME) {
-        if (depth + path->depth == IR_SPATH_STEPS) return nullptr;
-        names[depth++] = address->def->operands[1].name;
+        core_list_push(names, address->def->operands[1].name);
         address = ir_operand_value(&address->def->operands[0]);
     }
-    for (uint8_t i = path->depth; i > 0; i--)
-        path->steps[i - 1 + depth] = path->steps[i - 1];
-    for (uint8_t i = 0; i < depth; i++)
-        path->steps[i] = names[depth - 1 - i];
-    path->depth += depth;
+    for (size_t i = 0; i < names.len / 2; i++) {
+        core_string_t swap              = names.data[i];
+        names.data[i]                   = names.data[names.len - 1 - i];
+        names.data[names.len - 1 - i]   = swap;
+    }
+    path->steps = steps_join(names.data, (uint32_t)names.len, path->steps,
+                             path->depth);
+    path->depth += (uint32_t)names.len;
+    core_list_free(names);
     return address;
 }
 
@@ -2155,7 +2184,7 @@ read_path(const ir_splace_t *place, const ir_instr_t *in)
     if (in->op == IR_OP_EXTRACT) {
         if (in->n_operands != 2 || in->operands[1].kind != IR_OPD_NAME)
             return path;
-        path.steps[path.depth++] = in->operands[1].name;
+        path_push(&path, in->operands[1].name);
     }
     const ir_value_t *address = field_chain(
         ir_operand_value(&in->operands[0]),
@@ -2195,6 +2224,8 @@ ir_summary_effect(const ir_summary_t *summary, const ir_splace_t *place,
 }
 
 static pt_t *function_engine(ir_summaries_t *summaries, ir_func_t *f);
+static pt_t *pt_enter(pt_t *pt);
+static void  pt_leave(pt_t *outer);
 
 uint8_t
 ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
@@ -2203,6 +2234,7 @@ ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
 {
     pt_t *pt = function_engine(summaries, f);
     if (!pt) return IR_PATH_UNPASSED;
+    pt_t *outer = pt_enter(pt);
     core_dict_t cache;
     core_dict_init(&cache, nullptr, nullptr);
     flow_query_t q = {.summaries = summaries, .f = f, .pt = pt,
@@ -2222,6 +2254,7 @@ ir_summary_state_before(ir_summaries_t *summaries, ir_func_t *f,
         core_list_free(leaves);
     }
     path_places_free(&cache);
+    pt_leave(outer);
     return state;
 }
 
@@ -2653,10 +2686,7 @@ generic_argument(ir_summaries_t *summaries, const ir_instr_t *in,
     return generic;
 }
 
-enum {
-    PT_EXTERNAL = UINT32_MAX,
-    PT_ROUNDS   = 64,
-};
+enum { PT_EXTERNAL = UINT32_MAX };
 
 typedef struct {
     ir_spath_t path;
@@ -2670,13 +2700,13 @@ typedef enum : uint8_t {
 } pt_flow_kind_t;
 
 typedef struct {
-    uint8_t           depth;
-    bool              deep;
-    bool              held;
-    pt_flow_kind_t    flow;
-    core_string_t     steps[IR_SPATH_STEPS];
-    pt_loc_t          loc;
-    const ir_instr_t *origin;
+    uint32_t             depth;
+    bool                 deep;
+    bool                 held;
+    pt_flow_kind_t       flow;
+    const core_string_t *steps;
+    pt_loc_t             loc;
+    const ir_instr_t    *origin;
 } pt_item_t;
 core_list_decl(pt_item_t);
 typedef core_list_t(pt_item_t) pt_set_t;
@@ -2768,6 +2798,7 @@ typedef core_list_t(pt_member_t) member_list_t;
 typedef struct {
     core_dict_t pointer_types;
     core_dict_t members;
+    core_dict_t definitions;
 } type_memo_t;
 
 static type_memo_t *
@@ -2780,6 +2811,7 @@ type_memo(ir_summaries_t *summaries, const ir_module_t *module)
     memo = core_alloc(type_memo_t);
     core_dict_init(&memo->pointer_types, nullptr, nullptr);
     core_dict_init(&memo->members, nullptr, nullptr);
+    core_dict_init(&memo->definitions, nullptr, nullptr);
     core_dict_put(&summaries->type_memos, (void *)module, memo);
     return memo;
 }
@@ -2796,6 +2828,7 @@ type_memos_free(core_dict_t *memos)
         }
         core_dict_free(&memo->members);
         core_dict_free(&memo->pointer_types);
+        core_dict_free(&memo->definitions);
         core_free(memo);
     }
     core_dict_free(memos);
@@ -2826,9 +2859,9 @@ typedef struct {
 } pt_entry_t;
 
 typedef struct {
-    core_string_t tokens[2 * IR_SPATH_STEPS + 1];
-    uint8_t       count;
-    bool          deep;
+    const core_string_t *tokens;
+    uint32_t             count;
+    bool                 deep;
 } pt_region_t;
 core_list_decl(pt_region_t);
 typedef core_list_t(pt_region_t) region_list_t;
@@ -2865,6 +2898,7 @@ struct pt_t {
     core_dict_t            call_index;
     core_list_t(pt_callees_t) calls;
     pt_set_t               scratch[3];
+    flow_bits_t            crossed;
     pt_set_t               seen;
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;
@@ -3084,11 +3118,12 @@ step_order(core_string_t a, core_string_t b)
 }
 
 static int
-steps_order(const core_string_t *a, uint8_t a_depth, const core_string_t *b,
-            uint8_t b_depth)
+steps_order(const core_string_t *a, uint32_t a_depth, const core_string_t *b,
+            uint32_t b_depth)
 {
-    uint8_t common = a_depth < b_depth ? a_depth : b_depth;
-    for (uint8_t s = 0; s < common; s++) {
+    if (a == b) return a_depth == b_depth ? 0 : a_depth < b_depth ? -1 : 1;
+    uint32_t common = a_depth < b_depth ? a_depth : b_depth;
+    for (uint32_t s = 0; s < common; s++) {
         int order = step_order(a[s], b[s]);
         if (order) return order;
     }
@@ -3124,19 +3159,19 @@ item_order(const pt_item_t *a, const pt_item_t *b)
 }
 
 static int
-place_order(const pt_item_t *x, const pt_item_t *key, uint8_t depth,
+place_order(const pt_item_t *x, const pt_item_t *key, uint32_t depth,
             bool prefix)
 {
     int order = group_order(x, key);
     if (order) return order;
-    uint8_t own = x->loc.path.depth;
+    uint32_t own = x->loc.path.depth;
     if (prefix && own > depth) own = depth;
     return steps_order(x->loc.path.steps, own, key->loc.path.steps, depth);
 }
 
 static size_t
 place_bound(const pt_set_t *set, size_t low, size_t high,
-            const pt_item_t *key, uint8_t depth, bool prefix, bool upper)
+            const pt_item_t *key, uint32_t depth, bool prefix, bool upper)
 {
     while (low < high) {
         size_t middle = low + (high - low) / 2;
@@ -3149,9 +3184,12 @@ place_bound(const pt_set_t *set, size_t low, size_t high,
 
 enum { SET_SCAN = 16 };
 
+static void trim_repeats(pt_item_t *item);
+
 static bool
 set_add(pt_set_t *set, pt_item_t item)
 {
+    trim_repeats(&item);
     size_t start = object_bound(set, &item.loc, false);
     size_t end   = object_bound(set, &item.loc, true);
     size_t low = start, high = end;
@@ -3161,7 +3199,7 @@ set_add(pt_set_t *set, pt_item_t item)
     }
     else {
         const ir_spath_t *path = &item.loc.path;
-        for (uint8_t k = 0; k <= path->depth; k++) {
+        for (uint32_t k = 0; k <= path->depth; k++) {
             size_t from = place_bound(set, start, end, &item, k, false,
                                       false);
             size_t to   = place_bound(set, from, end, &item, k, false, true);
@@ -3195,9 +3233,25 @@ set_add(pt_set_t *set, pt_item_t item)
     return true;
 }
 
+static void typed_placement(pt_t *pt, uint32_t site, pt_item_t *item);
+
+static void
+trim_repeats(pt_item_t *item)
+{
+    for (uint32_t s = 1; s < item->depth; s++)
+        for (uint32_t t = 0; t < s; t++)
+            if (step_eq(item->steps[s], item->steps[t])) {
+                item->depth = s;
+                item->deep  = true;
+                return;
+            }
+}
+
 static void
 pt_add(pt_t *pt, pt_set_t *set, uintptr_t key, pt_item_t item)
 {
+    if ((key & 3) == 1) typed_placement(pt, (uint32_t)(key >> 2), &item);
+    trim_repeats(&item);
     if (set_add(set, item)) pt_notify(pt, key);
 }
 
@@ -3238,6 +3292,129 @@ unresolved(pt_t *pt, pt_set_t *into)
     set_add(into, deep_item(unknown_loc()));
 }
 
+static _Thread_local pt_t *active_pt;
+
+static pt_t *
+pt_enter(pt_t *pt)
+{
+    pt_t *outer = active_pt;
+    active_pt   = pt;
+    return outer;
+}
+
+static void
+pt_leave(pt_t *outer)
+{
+    active_pt = outer;
+}
+
+static th_type *root_object_type(const ir_func_t *f, const ir_spath_t *path);
+
+static th_type *
+memo_defined(const pt_t *pt, th_type *type)
+{
+    if (!type) return nullptr;
+    bool     found   = false;
+    th_type *defined = core_dict_get(&pt->types->definitions, type, &found);
+    if (found) return defined;
+    defined = defined_type(pt->f, type);
+    core_dict_put(&pt->types->definitions, type, defined);
+    return defined;
+}
+
+static th_type *
+loc_type(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
+{
+    th_type *type = loc->site == PT_EXTERNAL
+        ? root_object_type(pt->f, &loc->path)
+        : pt->sites.data[loc->site].type;
+    for (uint32_t s = 0; type && s < depth; s++) {
+        th_type      *current = memo_defined(pt, type);
+        core_string_t step    = loc->path.steps[s];
+        if (!current) return nullptr;
+        if (step_eq(step, value_step)) {
+            type = th_kind_of(current) == TH_INDIRECTION
+                ? th_ind_referent(current) : nullptr;
+            continue;
+        }
+        if (th_kind_of(current) == TH_INDIRECTION)
+            current = memo_defined(pt, th_ind_referent(current));
+        if (!current) return nullptr;
+        if (step_eq(step, element_step))
+            type = th_kind_of(current) == TH_SEQUENCE
+                ? th_seq_elem(current) : nullptr;
+        else
+            type = th_kind_of(current) == TH_RECORD
+                ? th_record_lookup(current, step) : nullptr;
+    }
+    return memo_defined(pt, type);
+}
+
+static th_type *
+owner_type(const pt_t *pt, th_type *type)
+{
+    if (type && th_kind_of(type) == TH_INDIRECTION)
+        type = memo_defined(pt, th_ind_referent(type));
+    return type;
+}
+
+static void
+typed_placement(pt_t *pt, uint32_t site, pt_item_t *item)
+{
+    const pt_site_t *entry = &pt->sites.data[site];
+    th_type         *type  = entry->type;
+    uint32_t         s     = 0;
+    if (!type || !item->depth) return;
+    if (entry->elements) {
+        th_type *sequence = memo_defined(pt, type);
+        if (!sequence || th_kind_of(sequence) != TH_SEQUENCE) return;
+        if (step_eq(item->steps[0], length_step) && item->depth == 1) return;
+        if (!step_eq(item->steps[0], element_step)) s = 0;
+        else {
+            type = th_seq_elem(sequence);
+            s    = 1;
+        }
+        if (!s) {
+            item->depth = 0;
+            item->deep  = true;
+            return;
+        }
+    }
+    for (; s < item->depth; s++) {
+        th_type *current = memo_defined(pt, type);
+        if (!current) return;
+        core_string_t step = item->steps[s];
+        th_kind       kind = th_kind_of(current);
+        if (kind == TH_SUM || kind == TH_NAMED || kind == TH_VAR
+            || kind == TH_BOUND || kind == TH_BINDER) return;
+        th_type *next = nullptr;
+        if (kind == TH_SEQUENCE && step_eq(step, element_step))
+            next = th_seq_elem(current);
+        else if (kind == TH_SEQUENCE && step_eq(step, length_step)
+                 && s + 1 == item->depth)
+            return;
+        else if (kind == TH_RECORD)
+            next = th_record_lookup(current, step);
+        if (!next) break;
+        type = next;
+    }
+    if (s < item->depth) {
+        item->depth = s;
+        item->deep  = true;
+    }
+}
+
+static bool
+recursive_step(const pt_loc_t *loc, uint32_t at)
+{
+    if (!active_pt) return true;
+    th_type *there = owner_type(active_pt, loc_type(active_pt, loc, at));
+    th_type *here  = there
+        ? owner_type(active_pt, loc_type(active_pt, loc, loc->path.depth))
+        : nullptr;    return !here || same_type(here, there)
+        || ir_type_eq(active_pt->f->owner, here, there);
+}
+
 static void
 loc_push(pt_loc_t *loc, core_string_t step)
 {
@@ -3246,18 +3423,19 @@ loc_push(pt_loc_t *loc, core_string_t step)
     if (loc->path.depth && !step_eq(step, value_step)
         && step_eq(loc->path.steps[loc->path.depth - 1], value_step))
         loc->path.depth--;
-    bool repeated = loc->path.depth == IR_SPATH_STEPS;
-    for (uint8_t s = 0; !repeated && s < loc->path.depth; s++)
-        repeated = step_eq(loc->path.steps[s], step);
+    bool repeated = false;
+    for (uint32_t s = 0; !repeated && s < loc->path.depth; s++)
+        repeated = step_eq(loc->path.steps[s], step)
+            && recursive_step(loc, s);
     if (repeated) loc->path.flags |= IR_SPATH_DEEP;
-    else loc->path.steps[loc->path.depth++] = step;
+    else path_push(&loc->path, step);
 }
 
 static void
-loc_extend(pt_loc_t *loc, const core_string_t *steps, uint8_t depth,
+loc_extend(pt_loc_t *loc, const core_string_t *steps, uint32_t depth,
            bool deep)
 {
-    for (uint8_t s = 0; s < depth; s++) loc_push(loc, steps[s]);
+    for (uint32_t s = 0; s < depth; s++) loc_push(loc, steps[s]);
     if (deep) loc->path.flags |= IR_SPATH_DEEP;
 }
 
@@ -3274,7 +3452,7 @@ location_of(const pt_item_t *address)
 }
 
 static void
-extend_through(pt_loc_t *next, const core_string_t *steps, uint8_t depth,
+extend_through(pt_loc_t *next, const core_string_t *steps, uint32_t depth,
                bool deep)
 {
     if (depth && core_string_eq(steps[0], value_step)) {
@@ -3285,7 +3463,7 @@ extend_through(pt_loc_t *next, const core_string_t *steps, uint8_t depth,
 }
 
 static void
-extend_tail(pt_loc_t *loc, const core_string_t *steps, uint8_t depth,
+extend_tail(pt_loc_t *loc, const core_string_t *steps, uint32_t depth,
             bool deep, bool inline_tail)
 {
     extend_through(loc, steps, depth, false);
@@ -3296,19 +3474,16 @@ extend_tail(pt_loc_t *loc, const core_string_t *steps, uint8_t depth,
 }
 
 static pt_item_t
-item_under(const core_string_t *steps, uint8_t depth, bool deep,
+item_under(const core_string_t *steps, uint32_t depth, bool deep,
            pt_item_t item)
 {
+    uint32_t  tail   = deep ? 0 : item.depth;
     pt_item_t placed = {.loc = item.loc, .deep = deep || item.deep,
-                        .held = item.held, .flow = item.flow};
-    for (uint8_t s = 0; s < depth; s++) placed.steps[placed.depth++] = steps[s];
-    for (uint8_t s = 0; !deep && s < item.depth; s++) {
-        if (placed.depth == IR_SPATH_STEPS) {
-            placed.deep = true;
-            break;
-        }
-        placed.steps[placed.depth++] = item.steps[s];
-    }
+                        .held = item.held, .flow = item.flow,
+                        .depth = depth + tail};
+    placed.steps = depth ? steps_join(steps, depth, item.steps, tail)
+                         : item.steps;
+    trim_repeats(&placed);
     return placed;
 }
 
@@ -3673,8 +3848,8 @@ site_contents(pt_t *pt, uint32_t site)
             if (def->member && !item->depth && !item->deep) {
                 pt_item_t part = *item;
                 loc_push(&part.loc, def->cell);
-                part.steps[0] = def->cell;
-                part.depth    = 1;
+                part.steps = steps_make(&def->cell, 1);
+                part.depth = 1;
                 set_add(&flow->items, part);
             }
             else if (def->kill == FLOW_KILL_CELL || item->deep
@@ -3810,8 +3985,7 @@ project(const pt_set_t *from, core_string_t step, pt_set_t *into)
         pt_item_t item = from->data[i];
         if (item.depth) {
             if (!core_string_eq(item.steps[0], step)) continue;
-            for (uint8_t s = 1; s < item.depth; s++)
-                item.steps[s - 1] = item.steps[s];
+            item.steps++;
             item.depth--;
             set_add(into, item);
             continue;
@@ -3830,8 +4004,7 @@ variant_arm(const pt_set_t *from, core_string_t arm, pt_set_t *into)
         pt_item_t item = from->data[i];
         if (item.depth) {
             if (!core_string_eq(item.steps[0], arm)) continue;
-            for (uint8_t s = 1; s < item.depth; s++)
-                item.steps[s - 1] = item.steps[s];
+            item.steps++;
             item.depth--;
         }
         set_add(into, item);
@@ -3877,7 +4050,7 @@ pointer_offset(pt_t *pt, const pt_set_t *from, pt_set_t *into)
             continue;
         }
         bool    held  = item.held;
-        uint8_t depth = item.loc.path.depth;
+        uint32_t depth = item.loc.path.depth;
         item.loc   = location_of(&item);
         item.depth = 0;
         item.deep  = false;
@@ -3902,15 +4075,15 @@ alias_visible(pt_t *pt, const pt_alias_t *alias)
 }
 
 static bool alias_through(const pt_item_t *alias, const core_string_t *steps,
-                          uint8_t depth, bool deep, pt_loc_t *out);
-static uint32_t crossings(pt_t *pt, const pt_loc_t *loc);
+                          uint32_t depth, bool deep, pt_loc_t *out);
+static const flow_bits_t *crossings(pt_t *pt, const pt_loc_t *loc);
 
 static bool
-crosses(pt_t *pt, const pt_loc_t *loc, uint8_t from, uint8_t to)
+crosses(pt_t *pt, const pt_loc_t *loc, uint32_t from, uint32_t to)
 {
-    uint32_t mask = crossings(pt, loc);
-    for (uint8_t i = from; i < to; i++)
-        if (mask >> i & 1) return true;
+    const flow_bits_t *mask = crossings(pt, loc);
+    for (uint32_t i = from; i < to; i++)
+        if (bit_has(mask, i)) return true;
     return false;
 }
 
@@ -3968,7 +4141,7 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
         contents_into(pt, loc, site_contents(pt, loc->site), into);
     else set_merge(into, stored_at(pt, loc));
     const core_string_t *at    = loc->path.steps;
-    uint8_t              depth = loc->path.depth;
+    uint32_t             depth = loc->path.depth;
     const alias_list_t *aliases = &pt->sites.data[loc->site].aliases;
     for (size_t a = 0; a < aliases->len; a++) {
         if (!alias_visible(pt, &aliases->data[a])) continue;
@@ -3984,7 +4157,7 @@ contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
               pt_set_t *into)
 {
     const core_string_t *at       = loc->path.steps;
-    uint8_t              depth    = loc->path.depth;
+    uint32_t             depth    = loc->path.depth;
     bool                 derived  = false;
     for (size_t i = 0; i < contents->len; i++) {
         const pt_item_t *held  = &contents->data[i];
@@ -4000,16 +4173,15 @@ contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
         }
         if (under) {
             pt_item_t item = *held;
-            for (uint8_t s = depth; s < held->depth; s++)
-                item.steps[s - depth] = held->steps[s];
+            item.steps = held->steps + depth;
             item.depth = held->depth - depth;
             set_add(into, item);
             continue;
         }
         if (held->held && !held_pointer(pt, held)) {
-            pt_item_t item = held_at(held->loc);
-            item.flow   = held->flow;
-            item.origin = held->origin;
+            pt_item_t item = *held;
+            item.steps = nullptr;
+            item.depth = 0;
             loc_extend(&item.loc, at + held->depth, depth - held->depth,
                        false);
             set_add(into, item);
@@ -4019,7 +4191,7 @@ contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
             set_add(into, deepened(held));
             continue;
         }
-        pt_item_t item = item_at(held->loc);
+        pt_item_t item = item_at(location_of(held));
         item.flow = held->flow;
         extend_through(&item.loc, at + held->depth, depth - held->depth,
                        false);
@@ -4247,9 +4419,11 @@ pt_alias(pt_t *pt, const pt_item_t *target, pt_loc_t alias,
         item.deep            = true;
     }
     else {
-        item.deep = loc_deep(&target->loc);
-        for (uint8_t s = 0; s < target->loc.path.depth; s++)
-            item.steps[item.depth++] = target->loc.path.steps[s];
+        item.deep  = loc_deep(&target->loc);
+        item.steps = steps_join(item.steps, item.depth,
+                                target->loc.path.steps,
+                                target->loc.path.depth);
+        item.depth += target->loc.path.depth;
     }
     alias_list_t *aliases = &pt->sites.data[site].aliases;
     uintptr_t     root    = external_key(&alias.path);
@@ -4297,7 +4471,7 @@ pt_alias(pt_t *pt, const pt_item_t *target, pt_loc_t alias,
 
 static bool
 alias_through(const pt_item_t *alias, const core_string_t *steps,
-              uint8_t depth, bool deep, pt_loc_t *out)
+              uint32_t depth, bool deep, pt_loc_t *out)
 {
     *out = alias->loc;
     if (steps_prefix(alias->depth, alias->steps, depth, steps)) {
@@ -4404,11 +4578,11 @@ member_inline(const ir_func_t *f, pt_t *pt, th_type *record,
     return inside;
 }
 
-static uint8_t
+static uint32_t
 inline_depth(const ir_func_t *f, pt_t *pt, th_type *type, bool sequence_root,
              const ir_spath_t *at, bool *known)
 {
-    uint8_t start = 0;
+    uint32_t start = 0;
     *known = type != nullptr;
     if (!type) return 0;
     if (sequence_root && at->depth == 1
@@ -4426,7 +4600,7 @@ inline_depth(const ir_func_t *f, pt_t *pt, th_type *type, bool sequence_root,
     }
     bool inline_elements = false;
     bool layout_known    = true;
-    for (uint8_t i = start; i < at->depth; i++) {
+    for (uint32_t i = start; i < at->depth; i++) {
         th_type      *current  = defined_type(f, type);
         core_string_t step     = at->steps[i];
         bool          elements = core_string_eq(step, element_step);
@@ -4475,7 +4649,7 @@ inline_depth(const ir_func_t *f, pt_t *pt, th_type *type, bool sequence_root,
     return at->depth;
 }
 
-static uint8_t
+static uint32_t
 inline_prefix(pt_t *pt, const pt_site_t *site, const ir_spath_t *at,
               bool *known)
 {
@@ -4485,7 +4659,7 @@ inline_prefix(pt_t *pt, const pt_site_t *site, const ir_spath_t *at,
 static th_type *
 end_type(ir_module_t *module, th_type *type, const ir_spath_t *path)
 {
-    for (uint8_t s = 0; type && s < path->depth; s++) {
+    for (uint32_t s = 0; type && s < path->depth; s++) {
         th_type *current = definition_in(module, type);
         if (!current) return nullptr;
         if (core_string_eq(path->steps[s], element_step))
@@ -4570,7 +4744,7 @@ ir_summary_path_inline(const ir_func_t *function, const ir_spath_t *path)
     th_type *defined = function && root ? defined_type(function, root)
                                         : nullptr;
     bool     known   = true;
-    uint8_t  inside  = function && root
+    uint32_t inside  = function && root
         ? inline_depth(function, nullptr, root,
                        defined && th_kind_of(defined) == TH_SEQUENCE, path,
                        &known)
@@ -4580,7 +4754,7 @@ ir_summary_path_inline(const ir_func_t *function, const ir_spath_t *path)
 
 th_type *
 ir_summary_path_type(const ir_func_t *function, const ir_spath_t *path,
-                     uint8_t depth)
+                     uint32_t depth)
 {
     th_type *root = path->root == IR_SPLACE_UNKNOWN
         ? (path->flags & IR_SPATH_TYPED ? path->type : nullptr)
@@ -4633,7 +4807,7 @@ ir_summary_path_places(const ir_func_t *function, const ir_spath_t *path,
     }
     th_type *root   = root_object_type(function, path);
     bool     known  = true;
-    uint8_t  inside = path->depth;
+    uint32_t inside = path->depth;
     if (path->depth && function && root)
         inside = inline_depth(function, nullptr, root, false, path, &known);
     else if (path->depth)
@@ -4655,7 +4829,7 @@ ir_summary_path_places(const ir_func_t *function, const ir_spath_t *path,
 }
 
 static bool
-held_target(const pt_item_t *item, uint8_t remaining, bool deep,
+held_target(const pt_item_t *item, uint32_t remaining, bool deep,
             bool inline_tail, pt_set_t *into)
 {
     if (!item->held || remaining || item->loc.site != PT_EXTERNAL)
@@ -4679,10 +4853,10 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
     bool inline_tail = loc.path.flags & SPATH_INLINE;
     bool through     = deep && !inline_tail;
     if (!set_add(seen, item_at(loc))) return;
-    bool    known  = false;
-    uint8_t inside = inline_prefix(pt, &pt->sites.data[loc.site], &loc.path,
-                                   &known);
-    bool    local  = !known || inside == loc.path.depth;
+    bool     known  = false;
+    uint32_t inside = inline_prefix(pt, &pt->sites.data[loc.site], &loc.path,
+                                    &known);
+    bool     local  = !known || inside == loc.path.depth;
     if (local) set_add(into, item_at(loc));
     if (local && known && !through) return;
     pt_depend(pt, contents_key(loc.site));
@@ -4693,7 +4867,7 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
         if (steps_prefix(held.depth, held.steps, loc.path.depth,
                          loc.path.steps)) {
             const core_string_t *rest    = loc.path.steps + held.depth;
-            uint8_t              count   = loc.path.depth - held.depth;
+            uint32_t             count   = loc.path.depth - held.depth;
             bool                 stepped = count
                 && core_string_eq(rest[0], value_step);
             if (stepped) {
@@ -4709,7 +4883,7 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
                 continue;
             }
             if (held.deep) {
-                for (uint8_t k = 0; k <= count; k++) {
+                for (uint32_t k = 0; k <= count; k++) {
                     pt_loc_t part = next;
                     extend_tail(&part, rest + k, count - k, deep,
                                 inline_tail);
@@ -4932,7 +5106,7 @@ map_param_place(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         if (steps_prefix(item->depth, item->steps, path->depth,
                          path->steps)) {
             const core_string_t *rest  = path->steps + item->depth;
-            uint8_t              count = path->depth - item->depth;
+            uint32_t             count = path->depth - item->depth;
             if (held_target(item, count, deep || item->deep,
                             inline_tail && !item->deep, into)) continue;
             if (item->held
@@ -5148,8 +5322,7 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
                             item.steps)) {
             if (deep) item = deepened(&item);
             else {
-                for (uint8_t s = path->depth; s < item.depth; s++)
-                    item.steps[s - path->depth] = item.steps[s];
+                item.steps += path->depth;
                 item.depth -= path->depth;
             }
             set_add(into, item);
@@ -6673,14 +6846,6 @@ record_instr(pt_t *pt, ir_summary_t *summary, const ir_instr_t *in)
 typedef core_list_t(uint32_t) site_list_t;
 
 static void
-path_push(ir_spath_t *path, core_string_t step)
-{
-    if (path->flags & IR_SPATH_DEEP) return;
-    if (path->depth == IR_SPATH_STEPS) path->flags |= IR_SPATH_DEEP;
-    else path->steps[path->depth++] = step_intern(step);
-}
-
-static void
 name_loc(pt_t *pt, const pt_loc_t *loc, path_list_t *into,
          site_list_t *pending)
 {
@@ -6695,7 +6860,7 @@ name_loc(pt_t *pt, const pt_loc_t *loc, path_list_t *into,
                            .param = pt->sites.data[loc->site].origin,
                            .flags = loc->path.flags
                                & (IR_SPATH_DEEP | SPATH_INLINE)};
-        for (uint8_t s = 0; s < loc->path.depth; s++)
+        for (uint32_t s = 0; s < loc->path.depth; s++)
             path_push(&heap, loc->path.steps[s]);
         add_path_to(into, &heap);
         core_list_push(*pending, loc->site);
@@ -6764,18 +6929,27 @@ site_sources(pt_t *pt, const pt_loc_t *loc)
                                                   at.path.depth,
                                                   at.path.steps);
             if (!under && !over) continue;
+            bool                 narrow = !under && !held->deep
+                && held->flow == PT_SAME && held->held
+                && !held_pointer(pt, held);
+            const core_string_t *rest   = at.path.steps + held->depth;
+            uint32_t             count  = narrow
+                ? at.path.depth - held->depth : 0;
             if (held->loc.site != PT_EXTERNAL) {
                 pt_loc_t next = held->loc;
-                if (held->flow == PT_SAME) {
+                if (held->flow == PT_SAME && !narrow) {
                     next.path.depth  = 0;
                     next.path.flags |= IR_SPATH_DEEP;
                     next.path.flags &= (uint8_t)~SPATH_INLINE;
                 }
+                else loc_extend(&next, rest, count, false);
                 core_list_push(work, item_at(next));
                 continue;
             }
             if (constant_source(held)) continue;
-            ir_spath_t from = held->loc.path;
+            pt_loc_t extended = held->loc;
+            loc_extend(&extended, rest, count, false);
+            ir_spath_t from = extended.path;
             from.flags &= IR_SPATH_DEEP;
             if (!node) from.flags |= IR_SPATH_DEEP;
             from.flags |= (held->held && !held->loc.path.depth
@@ -6805,7 +6979,7 @@ value_dest(const ir_spath_t *base, const pt_item_t *item)
 {
     ir_spath_t to = *base;
     if (to.flags & IR_SPATH_DEEP) return to;
-    for (uint8_t s = 0; s < item->depth; s++) path_push(&to, item->steps[s]);
+    for (uint32_t s = 0; s < item->depth; s++) path_push(&to, item->steps[s]);
     if (item->deep || (to.flags & IR_SPATH_DEEP))
         to.flags |= IR_SPATH_DEEP | SPATH_INLINE;
     return to;
@@ -7057,9 +7231,11 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
                           (void *)((uintptr_t)b << 32 | i));
         }
     pt->dirty = core_alloc_array(bool, pt->order.len ? pt->order.len : 1);
+    pt_t *outer = pt_enter(pt);
     note_load_uses(pt);
     note_copy_ins(pt);
     flow_build(pt);
+    pt_leave(outer);
 }
 
 static void
@@ -7181,6 +7357,7 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->flow_groups);
     core_list_free(pt->described);
     core_list_free(pt->seen);
+    core_list_free(pt->crossed);
     for (size_t s = 0; s < 3; s++) core_list_free(pt->scratch[s]);
     flow_free(&pt->flow);
     core_list_free(pt->order);
@@ -7193,12 +7370,11 @@ pt_free(pt_t *pt)
     core_free(pt->dirty);
 }
 
-static bool
+static void
 pt_solve(pt_t *pt)
 {
-    size_t count  = pt->order.len;
-    size_t budget = (size_t)PT_ROUNDS * (count ? count : 1);
-    size_t work   = 0;
+    pt_t  *outer = pt_enter(pt);
+    size_t count = pt->order.len;
     for (size_t i = 0; i < count; i++) pt->dirty[i] = true;
     pt->pending = count != 0;
     for (;;) {
@@ -7206,7 +7382,6 @@ pt_solve(pt_t *pt)
             pt->pending = false;
             for (size_t i = 0; i < count; i++) {
                 if (!pt->dirty[i]) continue;
-                if (work++ == budget) return false;
                 pt->dirty[i] = false;
                 pt->reader   = (uint32_t)i;
                 pt->at       = pt->order.data[i];
@@ -7216,8 +7391,9 @@ pt_solve(pt_t *pt)
         pt->reader = PT_NO_READER;
         pt->at     = nullptr;
         spread_escapes(pt);
-        if (!pt->pending) return true;
+        if (!pt->pending) break;
     }
+    pt_leave(outer);
 }
 
 static void
@@ -7244,13 +7420,13 @@ function_engine(ir_summaries_t *summaries, ir_func_t *f)
     engine->fingerprint = now;
     engine->pt          = core_alloc(pt_t);
     pt_init(engine->pt, summaries, f, false);
-    if (!pt_solve(engine->pt)) engine_release(engine);
+    pt_solve(engine->pt);
     return engine->pt;
 }
 
 static const core_string_t cross_mark = CORE_STRING_STATIC("*");
 
-static uint32_t
+static const flow_bits_t *
 crossings(pt_t *pt, const pt_loc_t *loc)
 {
     const ir_spath_t *path     = &loc->path;
@@ -7262,8 +7438,9 @@ crossings(pt_t *pt, const pt_loc_t *loc)
         type     = pt->sites.data[loc->site].type;
         elements = pt->sites.data[loc->site].elements;
     }
-    uint32_t mask  = 0;
-    uint8_t  start = 0;
+    flow_bits_t *mask  = &pt->crossed;
+    uint32_t     start = 0;
+    mask->len = 0;
     if (elements && path->depth) {
         th_type *sequence = defined_type(pt->f, type);
         if (!core_string_eq(path->steps[0], element_step) || !sequence
@@ -7273,17 +7450,19 @@ crossings(pt_t *pt, const pt_loc_t *loc)
     }
     bool inline_elements = false;
     bool out_of_line     = false;
-    for (uint8_t i = start; type && i < path->depth; i++) {
+    for (uint32_t i = start; type && i < path->depth; i++) {
         core_string_t step    = path->steps[i];
         th_type      *current = defined_type(pt->f, type);
         if (!current) return mask;
         bool pointer = th_kind_of(current) == TH_INDIRECTION
             || (th_kind_of(current) != TH_SEQUENCE
                 && ir_machine_of(pt->f->owner, type).class == IR_CLASS_PTR);
-        if (!pointer && core_string_eq(step, value_step))
-            return mask | 1u << i;
+        if (!pointer && core_string_eq(step, value_step)) {
+            bit_set(mask, i);
+            return mask;
+        }
         if (pointer) {
-            mask |= 1u << i;
+            bit_set(mask, i);
             if (core_string_eq(step, value_step)) {
                 type = th_kind_of(current) == TH_INDIRECTION
                     ? th_ind_referent(current) : nullptr;
@@ -7300,7 +7479,7 @@ crossings(pt_t *pt, const pt_loc_t *loc)
             if (!core_string_eq(step, element_step)) return mask;
             if (out_of_line
                 || (!inline_elements && !th_seq_extent(current, &extent)))
-                mask |= 1u << i;
+                bit_set(mask, i);
             type            = th_seq_elem(current);
             inline_elements = false;
             out_of_line     = false;
@@ -7320,19 +7499,23 @@ crossings(pt_t *pt, const pt_loc_t *loc)
     return mask;
 }
 
-static uint8_t
-region_tokens(pt_t *pt, const pt_item_t *item, core_string_t *tokens)
+static const core_string_t *
+region_tokens(pt_t *pt, const pt_item_t *item, uint32_t *count)
 {
-    const pt_loc_t *loc   = &item->loc;
-    uint32_t        mask  = crossings(pt, loc);
-    uint8_t         count = 0;
-    for (uint8_t i = 0; i < loc->path.depth; i++) {
-        if (mask >> i & 1) tokens[count++] = cross_mark;
+    const pt_loc_t    *loc    = &item->loc;
+    const flow_bits_t *mask   = crossings(pt, loc);
+    core_list_t(core_string_t) tokens = core_list_new(core_string_t);
+    for (uint32_t i = 0; i < loc->path.depth; i++) {
+        if (bit_has(mask, i)) core_list_push(tokens, cross_mark);
         if (!core_string_eq(loc->path.steps[i], value_step))
-            tokens[count++] = loc->path.steps[i];
+            core_list_push(tokens, loc->path.steps[i]);
     }
-    if (item->held && loc->site == PT_EXTERNAL) tokens[count++] = cross_mark;
-    return count;
+    if (item->held && loc->site == PT_EXTERNAL)
+        core_list_push(tokens, cross_mark);
+    *count = (uint32_t)tokens.len;
+    const core_string_t *run = steps_make(tokens.data, *count);
+    core_list_free(tokens);
+    return run;
 }
 
 static void *
@@ -7343,19 +7526,19 @@ region_key(const pt_loc_t *loc)
 }
 
 static bool
-has_mark(const core_string_t *tokens, uint8_t from, uint8_t to)
+has_mark(const core_string_t *tokens, uint32_t from, uint32_t to)
 {
-    for (uint8_t i = from; i < to; i++)
+    for (uint32_t i = from; i < to; i++)
         if (core_string_eq(tokens[i], cross_mark)) return true;
     return false;
 }
 
 static bool
 regions_overlap(const pt_region_t *escaped, const core_string_t *tokens,
-                uint8_t count, bool deep)
+                uint32_t count, bool deep)
 {
-    uint8_t common = escaped->count < count ? escaped->count : count;
-    for (uint8_t i = 0; i < common; i++)
+    uint32_t common = escaped->count < count ? escaped->count : count;
+    for (uint32_t i = 0; i < common; i++)
         if (!core_string_eq(escaped->tokens[i], tokens[i])) return false;
     if (count > escaped->count)
         return escaped->deep || !has_mark(tokens, common, count);
@@ -7379,21 +7562,20 @@ regions_of(pt_t *pt, const pt_loc_t *loc, bool create)
 
 static bool
 add_region(pt_t *pt, const pt_loc_t *loc, const core_string_t *tokens,
-           uint8_t count, bool deep)
+           uint32_t count, bool deep)
 {
     region_list_t *regions = regions_of(pt, loc, true);
     for (size_t r = 0; r < regions->len; r++) {
         const pt_region_t *have   = &regions->data[r];
         bool               prefix = have->count <= count;
-        for (uint8_t i = 0; prefix && i < have->count; i++)
+        for (uint32_t i = 0; prefix && i < have->count; i++)
             prefix = core_string_eq(have->tokens[i], tokens[i]);
         if (prefix && (!deep || have->deep)
             && (have->deep || !has_mark(tokens, have->count, count)))
             return false;
     }
-    pt_region_t region = {.count = count, .deep = deep};
-    for (uint8_t i = 0; i < count; i++) region.tokens[i] = tokens[i];
-    core_list_push(*regions, region);
+    core_list_push(*regions, ((pt_region_t){.tokens = tokens, .count = count,
+                                            .deep = deep}));
     return true;
 }
 
@@ -7402,15 +7584,15 @@ static void escape_item(pt_t *pt, const pt_item_t *item,
 
 static void
 escape_contents(pt_t *pt, uint32_t site, const core_string_t *tokens,
-                uint8_t inside, pt_set_t *work)
+                uint32_t inside, pt_set_t *work)
 {
     const pt_set_t *contents = &pt->sites.data[site].contents;
     for (size_t i = 0; i < contents->len; i++) {
         pt_item_t held = contents->data[i];
         if (held.flow != PT_SAME) continue;
-        uint8_t common = held.depth < inside ? held.depth : inside;
-        bool    match  = true;
-        for (uint8_t s = 0; match && s < common; s++)
+        uint32_t common = held.depth < inside ? held.depth : inside;
+        bool     match  = true;
+        for (uint32_t s = 0; match && s < common; s++)
             match = core_string_eq(held.steps[s], tokens[s]);
         if (!match) continue;
         held.depth = 0;
@@ -7424,14 +7606,14 @@ static void
 escape_item(pt_t *pt, const pt_item_t *item, pt_set_t *work)
 {
     if (item->flow != PT_SAME) return;
-    core_string_t tokens[2 * IR_SPATH_STEPS + 1];
-    uint8_t       count = region_tokens(pt, item, tokens);
-    bool          deep  = item->deep || loc_deep(&item->loc);
+    uint32_t             count  = 0;
+    const core_string_t *tokens = region_tokens(pt, item, &count);
+    bool                 deep   = item->deep || loc_deep(&item->loc);
     if (item->loc.site == PT_EXTERNAL) {
         add_region(pt, &item->loc, tokens, count, deep);
         return;
     }
-    uint8_t inside = 0;
+    uint32_t inside = 0;
     while (inside < count && !core_string_eq(tokens[inside], cross_mark))
         inside++;
     if (add_region(pt, &item->loc, tokens, count, deep))
@@ -7469,9 +7651,9 @@ item_escapes(pt_t *pt, const pt_item_t *item)
         && item->loc.path.root == IR_SPLACE_UNKNOWN) return true;
     const region_list_t *regions = regions_of(pt, &item->loc, false);
     if (!regions) return false;
-    core_string_t tokens[2 * IR_SPATH_STEPS + 1];
-    uint8_t       count = region_tokens(pt, item, tokens);
-    bool          deep  = item->deep || loc_deep(&item->loc);
+    uint32_t             count  = 0;
+    const core_string_t *tokens = region_tokens(pt, item, &count);
+    bool                 deep   = item->deep || loc_deep(&item->loc);
     for (size_t r = 0; r < regions->len; r++)
         if (regions_overlap(&regions->data[r], tokens, count, deep))
             return true;
@@ -7484,6 +7666,7 @@ engine_escapes(ir_summaries_t *summaries, const ir_func_t *f,
 {
     pt_t *pt = function_engine(summaries, (ir_func_t *)f);
     if (!pt) return true;
+    pt_t *outer = pt_enter(pt);
     escaped_build(pt);
     pt_set_t items   = (pt_set_t){0};
     bool     escapes = false;
@@ -7491,6 +7674,7 @@ engine_escapes(ir_summaries_t *summaries, const ir_func_t *f,
     for (size_t i = 0; !escapes && i < items.len; i++)
         escapes = item_escapes(pt, &items.data[i]);
     core_list_free(items);
+    pt_leave(outer);
     return escapes;
 }
 
@@ -7627,22 +7811,17 @@ summarize_paths(ir_summaries_t *summaries, ir_summary_t *summary,
 {
     pt_t pt;
     pt_init(&pt, summaries, f, !summaries->escapes_only);
-    if (pt_solve(&pt)) {
-        pt.places = ir_func_places(f);
-        pt_record(&pt, summary);
-        summarize_results(&pt, summary);
-        describe_heap(&pt, summary, &pt.described);
-        name_heaps(&pt, summary);
-        if (pt.unknown_at) explain_unknown(summary, &pt.unknown);
-        if (!summaries->escapes_only)
-            summarize_writes(summaries, f, &pt, summary);
-    }
-    else {
-        add_unknown_path(summary, IR_SPATH_ACCESS);
-        explain_unknown(summary, &(ir_switness_t){
-            .flag = IR_SWITNESS_UNKNOWN,
-            .name = CORE_STRING_STATIC("the analysis did not converge")});
-    }
+    pt_t *outer = pt_enter(&pt);
+    pt_solve(&pt);
+    pt.places = ir_func_places(f);
+    pt_record(&pt, summary);
+    summarize_results(&pt, summary);
+    describe_heap(&pt, summary, &pt.described);
+    name_heaps(&pt, summary);
+    if (pt.unknown_at) explain_unknown(summary, &pt.unknown);
+    if (!summaries->escapes_only)
+        summarize_writes(summaries, f, &pt, summary);
+    pt_leave(outer);
     pt_free(&pt);
 }
 
@@ -7751,9 +7930,8 @@ ir_points_to_new(ir_summaries_t *summaries, const ir_func_t *function,
     ir_points_to_t *points_to = core_alloc(ir_points_to_t);
     pt_init(&points_to->pt, summaries, function, false);
     points_to->pt.hooks = hooks;
-    if (pt_solve(&points_to->pt)) return points_to;
-    ir_points_to_free(points_to);
-    return nullptr;
+    pt_solve(&points_to->pt);
+    return points_to;
 }
 
 void
@@ -7770,11 +7948,13 @@ ir_points_to_value(ir_points_to_t *points_to, const ir_instr_t *at,
 {
     pt_t    *pt    = &points_to->pt;
     pt_set_t items = (pt_set_t){0};
+    pt_t    *outer = pt_enter(pt);
     pt->at = at;
     pt_read(pt, value, &items);
     pt->at = nullptr;
     items_objects(pt, &items, into);
     core_list_free(items);
+    pt_leave(outer);
 }
 
 void
@@ -7784,6 +7964,7 @@ ir_points_to_loaded(ir_points_to_t *points_to, const ir_instr_t *at,
     pt_t    *pt        = &points_to->pt;
     pt_set_t addresses = (pt_set_t){0};
     pt_set_t loaded    = (pt_set_t){0};
+    pt_t    *outer     = pt_enter(pt);
     pt->at = at;
     pt_read(pt, value, &addresses);
     pt_load(pt, &addresses, &loaded);
@@ -7791,6 +7972,7 @@ ir_points_to_loaded(ir_points_to_t *points_to, const ir_instr_t *at,
     items_objects(pt, &loaded, into);
     core_list_free(addresses);
     core_list_free(loaded);
+    pt_leave(outer);
 }
 
 static bool
@@ -7864,6 +8046,7 @@ ir_points_to_call_writes(ir_points_to_t *points_to, const ir_instr_t *call,
     pt_t               *pt      = &points_to->pt;
     const pt_callees_t *callees = callees_of(pt, call);
     if (!callees || callees->targets.unknown) return false;
+    pt_t *outer = pt_enter(pt);
     pt->at = call;
     pt_set_t written = (pt_set_t){0};
     for (size_t c = 0; c < callees->callees.len; c++) {
@@ -7883,6 +8066,7 @@ ir_points_to_call_writes(ir_points_to_t *points_to, const ir_instr_t *call,
     pt->at = nullptr;
     items_objects(pt, &written, into);
     core_list_free(written);
+    pt_leave(outer);
     return true;
 }
 
@@ -8479,8 +8663,8 @@ put_path(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
         ? ir_types_text(types, path->type) : (core_string_t){0});
     put_u8(out, path->flags);
     put_u8(out, path->output);
-    put_u8(out, path->depth);
-    for (uint8_t s = 0; s < path->depth; s++)
+    put_u32(out, path->depth);
+    for (uint32_t s = 0; s < path->depth; s++)
         put_text(out, texts, path->steps[s]);
 }
 
@@ -8660,13 +8844,19 @@ get_path(summary_reader_t *r)
         path.type = ir_type_from_text(r->types, type);
     path.flags  = get_u8(r);
     path.output = get_u8(r);
-    path.depth  = get_u8(r);
-    if (path.depth > IR_SPATH_STEPS || path.root > IR_SPLACE_SOURCE)
-        r->failed = true;
-    for (uint8_t s = 0; !r->failed && s < path.depth; s++) {
-        path.steps[s] = get_text(r);
-        if (!path.steps[s].u8_bytes) r->failed = true;
+    uint32_t depth = get_u32(r);
+    if (path.root > IR_SPLACE_SOURCE) r->failed = true;
+    core_list_t(core_string_t) steps = core_list_new(core_string_t);
+    for (uint32_t s = 0; !r->failed && s < depth; s++) {
+        core_string_t step = get_text(r);
+        if (!step.u8_bytes) r->failed = true;
+        else core_list_push(steps, step);
     }
+    if (!r->failed) {
+        path.depth = depth;
+        path.steps = steps_make(steps.data, depth);
+    }
+    core_list_free(steps);
     return path;
 }
 

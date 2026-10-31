@@ -254,22 +254,20 @@ enum {
 #define IR_SPATH_ACCESS (IR_SPATH_READ | IR_SPATH_WRITE | IR_SPATH_READS_ENTRY)
 #define IR_SPATH_MUST   (IR_SPATH_MUST_SUCCESS | IR_SPATH_MUST_FAILURE)
 
-enum { IR_SPATH_STEPS = 4 };
-
 enum {
     IR_SOUTPUT_STATUS  = UINT8_MAX - 1,
     IR_SOUTPUT_FAILURE = UINT8_MAX,
 };
 
 typedef struct {
-    ir_splace_kind_t   root;
-    uint32_t           param;
-    const ir_global_t *global;
-    th_type           *type;
-    uint8_t            depth;
-    uint8_t            flags;
-    uint8_t            output;
-    core_string_t      steps[IR_SPATH_STEPS];
+    ir_splace_kind_t     root;
+    uint32_t             param;
+    const ir_global_t   *global;
+    th_type             *type;
+    uint32_t             depth;
+    uint8_t              flags;
+    uint8_t              output;
+    const core_string_t *steps;
 } ir_spath_t;
 
 core_list_decl(ir_spath_t);
@@ -296,7 +294,7 @@ uint32_t          ir_summary_path_places(const ir_func_t *function,
                                          ir_splace_t places[2]);
 ir_spath_t        ir_spath_of_place(const ir_splace_t *place, uint8_t flags);
 th_type          *ir_summary_path_type(const ir_func_t *function,
-                                       const ir_spath_t *path, uint8_t depth);
+                                       const ir_spath_t *path, uint32_t depth);
 bool              ir_summary_path_inline(const ir_func_t *function,
                                          const ir_spath_t *path);
 void              ir_summary_merged_paths(const ir_summary_t *summary,
