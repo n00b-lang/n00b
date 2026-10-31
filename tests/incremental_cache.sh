@@ -4,6 +4,7 @@ set -eu
 compiler=$1
 sources=$2
 part=$3
+lto_flag=${4:-}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 N00B_CACHE="$tmp/cache"
@@ -153,7 +154,8 @@ contexts() {
 }
 
 lto() {
-    build_flags=--lto
+    test -n "$lto_flag" || fail "the lto part needs the lto flag as its fourth argument"
+    build_flags=$lto_flag
     build work main.n
     grep -q '^runtime store scc leaf$' "$tmp/log" \
         || fail "first lto build: leaf bitcode was not stored"
@@ -175,7 +177,7 @@ lto() {
     build work main.n
     expect_stored "native build after lto edit" "leaf"
 
-    build_flags=--lto
+    build_flags=$lto_flag
     build work main.n
     expect_stored "lto build after native" ""
 }
