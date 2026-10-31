@@ -83,14 +83,30 @@ ir_call_arguments_positional(const ir_instr_t *call, uint32_t through)
     return true;
 }
 
+static bool
+mutable_storage(const ir_value_t *value)
+{
+    if (value->kind == IR_VAL_LOCAL)
+        return !value->local || value->local->mutability == IR_MUT_MUTABLE;
+    return value->kind == IR_VAL_GLOBAL
+        && (!value->global || value->global->mutability == IR_MUT_MUTABLE);
+}
+
+static const ir_value_t *
+copied_from(const ir_value_t *value)
+{
+    const ir_instr_t *definition = value->def;
+    if (!definition || definition->op != IR_OP_COPY) return nullptr;
+    const ir_value_t *source = ir_value_operand(definition, 0);
+    return source == value ? nullptr : source;
+}
+
 const ir_value_t *
 ir_value_uncopied(const ir_value_t *value)
 {
-    for (uint32_t i = 0; value && value->def && i < 64; i++) {
-        const ir_instr_t *definition = value->def;
-        if (definition->op != IR_OP_COPY) break;
-        const ir_value_t *source = ir_value_operand(definition, 0);
-        if (!source || source == value) break;
+    for (uint32_t i = 0; value && i < 64; i++) {
+        const ir_value_t *source = copied_from(value);
+        if (!source || mutable_storage(source)) break;
         value = source;
     }
     return value;
@@ -100,11 +116,9 @@ bool
 ir_value_stable(const ir_value_t *value)
 {
     const ir_value_t *source = ir_value_uncopied(value);
-    if (source && source->kind == IR_VAL_GLOBAL)
-        return source->global && source->global->mutability != IR_MUT_MUTABLE;
-    if (value && value->kind == IR_VAL_LOCAL)
-        return value->local && value->local->mutability != IR_MUT_MUTABLE;
-    return value != nullptr;
+    if (!source) return false;
+    const ir_value_t *storage = copied_from(source);
+    return !mutable_storage(storage ? storage : source);
 }
 
 bool

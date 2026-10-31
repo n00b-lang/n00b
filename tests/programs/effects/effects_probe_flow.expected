@@ -3,29 +3,26 @@ sys.internal.fs.read_file: (string) -> Array[u8] fail: int
   reads path.data...
   traps explicit bounds unwrap arithmetic
   returns fresh
-  output result data[(may_input) (new in sys.internal.fs.read_file:76:27) path.data... path.selector path[]] control[path.data path.selector]
-  output failure data[(may_input) path.data... path.selector path[]] control[path.data path.selector]
-  output (new in sys.internal.fs.read_file:76:27)[]... data[(may_input) path.data... path.selector path[]] control[]
+  output result data[(may_input) (new in sys.internal.fs.read_file:76:27) path.data.__value... path.data[] path[]] control[path.data path.selector]
+  output failure data[(may_input) path.data.__value... path.data[] path[]] control[path.data path.selector]
+  output (new in sys.internal.fs.read_file:76:27).__len data[(may_input) path.data.__value... path.data[] path[]] control[path.data path.selector]
+  output (new in sys.internal.fs.read_file:76:27)[]... data[(may_input) path.data.__value... path.data[] path[]] control[path.data path.selector]
 sys.internal.env.args: () -> List[string]
   effects may_trap may_allocate may_collect allocates_direct reinterprets reads_env
   traps explicit bounds unwrap arithmetic
   returns fresh
   output result data[(new in sys.internal.env.args:33:29)] control[]
-  output (new in builtin.containers.list.detach:22:27) data[(new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
+  output (new in builtin.containers.list.detach:22:27).__len data[(reads_env)] control[]
   output (new in builtin.containers.list.detach:22:27)[] data[(new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[] (reads_env)] control[]
-  output (new in builtin.containers.list.detach:22:27)[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[] (reads_env)] control[]
-  output (new in builtin.containers.list.detach:22:27)[].selector data[(reads_env)] control[]
+  output (new in builtin.containers.list.detach:22:27)[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[]] control[]
   output (new in builtin.containers.list.detach:22:27)[][] data[(reads_env)] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28) data[(new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[] data[(new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[] (reads_env)] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[] (reads_env)] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[].selector data[(reads_env)] control[]
+  output (new in builtin.containers.list.ensure_capacity:154:28)[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[]] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[][] data[(reads_env)] control[]
   output (new in builtin.string.core.long_bytes:189:12)[] data[(reads_env)] control[]
   output (new in sys.internal.env.args:33:29).items data[(new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
   output (new in sys.internal.env.args:33:29).items[] data[(new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[] (reads_env)] control[]
-  output (new in sys.internal.env.args:33:29).items[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[] (reads_env)] control[]
-  output (new in sys.internal.env.args:33:29).items[].selector data[(reads_env)] control[]
+  output (new in sys.internal.env.args:33:29).items[].data data[(new in builtin.string.core.long_bytes:189:12) (new in sys.internal.env.c_string:14:28)[]] control[]
   output (new in sys.internal.env.args:33:29).items[][] data[(reads_env)] control[]
   output (new in sys.internal.env.c_string:14:28)[] data[(reads_env)] control[]
 sys.internal.clock.now_ns: () -> uint
@@ -36,9 +33,9 @@ sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
   writes buffer[]...
   traps bounds
   output result data[] control[]
-  output result 1 data[buffer] control[(reads_random) buffer buffer[]]
-  output failure data[(reads_random) buffer buffer[]] control[]
-  output buffer[]... data[(reads_random) buffer buffer[]] control[]
+  output result 1 data[buffer] control[(reads_random) buffer.__len buffer[]]
+  output failure data[(reads_random) buffer.__len buffer[]] control[]
+  output buffer[]... data[(reads_random) buffer.__len buffer[]] control[]
 sys.internal.random.fill: (modify 'T) -> nil fail: int
   effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
   traps bounds arithmetic
@@ -63,7 +60,7 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   escapes self referent
   traps explicit bounds unwrap arithmetic
   returns self.entries[].value
-  output result data[self.entries[].value] control[key... self.index.ctrl self.index.ctrl[] self.index.hashes[] self.index.slots[]]
+  output result data[self.entries[].value] control[key... self.index.ctrl.__len self.index.ctrl[] self.index.hashes[] self.index.slots[]]
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads+writes self.index.used
@@ -84,27 +81,31 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
-  returns self.entries[].value
-  output result data[self.entries self.entries[].value] control[key... self.index.ctrl self.index.ctrl[] self.index.dead self.index.dead[] self.index.growth_left self.index.hashes self.index.hashes[] self.index.live self.index.slots[] self.index.used]
-  output (new in builtin.containers.dict.ensure_entries:42:9)[] data[self.entries self.entries[]] control[]
+  returns self.entries[].value value
+  output result data[key... self.entries self.entries[]... self.entries[].value value value...] control[self.index.ctrl.__len self.index.ctrl[] self.index.dead.__len self.index.dead[] self.index.growth_left self.index.hashes.__len self.index.hashes[] self.index.live self.index.slots[] self.index.used]
+  output (new in builtin.containers.dict.ensure_entries:42:9).__len data[self.entries self.entries.__len] control[]
+  output (new in builtin.containers.dict.ensure_entries:42:9)[] data[key... self.entries[] self.entries[]...] control[]
   output (new in builtin.containers.dict.ensure_entries:42:9)[]... data[self.entries] control[]
-  output (new in builtin.containers.hash_index.reserve:181:35)[] data[key... self.entries self.index.hashes[]] control[]
-  output (new in builtin.containers.hash_index.reserve:189:36)[] data[self.entries self.index.dead[]] control[]
+  output (new in builtin.containers.dict.ensure_entries:42:9)[].key data[key key... self.entries self.entries[]...] control[]
+  output (new in builtin.containers.dict.ensure_entries:42:9)[].value data[value] control[]
+  output (new in builtin.containers.hash_index.reserve:181:35)[] data[key... self.index.hashes[]] control[]
+  output (new in builtin.containers.hash_index.reserve:189:36)[] data[self.index.dead[]] control[]
   output self.entries data[(new in builtin.containers.dict.ensure_entries:42:9)] control[]
   output self.entries... data[self.entries] control[]
-  output self.entries[] data[self.entries[]] control[]
+  output self.entries[] data[key... self.entries[] self.entries[]...] control[]
   output self.entries[].key data[key self.entries[].key] control[]
+  output self.entries[].key... data[key... self.entries[]...] control[]
   output self.entries[].value data[value] control[]
   output self.index.ctrl data[(new in builtin.containers.hash_index.rebuild:155:17)] control[]
-  output self.index.ctrl[] data[key... self.entries self.index.ctrl self.index.ctrl[] self.index.hashes[]] control[]
+  output self.index.ctrl[] data[key... self.index.ctrl.__len self.index.ctrl[] self.index.hashes[]] control[]
   output self.index.dead data[(new in builtin.containers.hash_index.compact:214:17) (new in builtin.containers.hash_index.reserve:189:36)] control[]
-  output self.index.growth_left data[self.entries self.index.growth_left self.index.live] control[]
+  output self.index.growth_left data[self.index.growth_left self.index.live] control[]
   output self.index.hashes data[(new in builtin.containers.hash_index.reserve:181:35)] control[]
-  output self.index.hashes[] data[key... self.entries self.index.hashes[]] control[]
-  output self.index.live data[self.entries self.index.live] control[]
+  output self.index.hashes[] data[key... self.index.hashes[]] control[]
+  output self.index.live data[self.index.live] control[]
   output self.index.slots data[(new in builtin.containers.hash_index.rebuild:156:18)] control[]
-  output self.index.slots[] data[self.entries self.index.used] control[self.index.dead self.index.dead[]]
-  output self.index.used data[self.entries self.index.used] control[self.index.dead self.index.dead[]]
+  output self.index.slots[] data[self.index.used] control[self.index.dead.__len self.index.dead[]]
+  output self.index.used data[self.index.used] control[self.index.dead.__len self.index.dead[]]
 builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   effects may_trap may_allocate
   reads self.index.live
@@ -115,8 +116,8 @@ builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   reads self.entries[]
   escapes self referent
   traps bounds arithmetic
-  output result data[(new in builtin.containers.dict.iter:177:9) self.entries[].key... self.entries[].value... self.index.live...] control[]
-  output (new in builtin.containers.dict.iter:177:9)[] data[self.index.live] control[]
+  output result data[(new in builtin.containers.dict.iter:177:9) self.index.live...] control[]
+  output (new in builtin.containers.dict.iter:177:9).__len data[self.index.live] control[]
   output (new in builtin.containers.dict.iter:177:9)[].key data[self.entries[].key] control[]
   output (new in builtin.containers.dict.iter:177:9)[].value data[self.entries[].value] control[]
 builtin.containers.list.len: (List['T]) -> uint
@@ -140,20 +141,20 @@ text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   escapes spans referent
   traps explicit bounds unwrap arithmetic
   output result data[(new in text.internal.rich.rich_string:9:9)] control[]
-  output (new in builtin.containers.list.__init:12:49)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[] spans.items[].end... spans.items[].start... spans.items[].tag...] control[]
+  output (new in builtin.containers.list.__init:12:49)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.__init:12:49)[].end_ix data[spans.items[].end] control[]
   output (new in builtin.containers.list.__init:12:49)[].start_ix data[spans.items[].start] control[]
   output (new in builtin.containers.list.__init:12:49)[].style_tag data[spans.items[].tag] control[]
-  output (new in builtin.containers.list.detach:22:27)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[] spans.items[].end... spans.items[].start... spans.items[].tag...] control[]
+  output (new in builtin.containers.list.detach:22:27)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.detach:22:27)[].end_ix data[spans.items[].end] control[]
   output (new in builtin.containers.list.detach:22:27)[].start_ix data[spans.items[].start] control[]
   output (new in builtin.containers.list.detach:22:27)[].style_tag data[spans.items[].tag] control[]
-  output (new in builtin.containers.list.ensure_capacity:154:28)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[] spans.items[].end... spans.items[].start... spans.items[].tag...] control[]
+  output (new in builtin.containers.list.ensure_capacity:154:28)[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[].end_ix data[spans.items[].end] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[].start_ix data[spans.items[].start] control[]
   output (new in builtin.containers.list.ensure_capacity:154:28)[].style_tag data[spans.items[].tag] control[]
   output (new in text.internal.rich.rich_string:9:51).items data[(new in builtin.containers.list.__init:12:49) (new in builtin.containers.list.detach:22:27) (new in builtin.containers.list.ensure_capacity:154:28)] control[]
-  output (new in text.internal.rich.rich_string:9:51).items[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[] spans.items[].end... spans.items[].start... spans.items[].tag...] control[]
+  output (new in text.internal.rich.rich_string:9:51).items[] data[(new in builtin.containers.list.__init:12:49)[] (new in builtin.containers.list.detach:22:27)[] (new in builtin.containers.list.ensure_capacity:154:28)[]] control[]
   output (new in text.internal.rich.rich_string:9:51).items[].end_ix data[spans.items[].end] control[]
   output (new in text.internal.rich.rich_string:9:51).items[].start_ix data[spans.items[].start] control[]
   output (new in text.internal.rich.rich_string:9:51).items[].style_tag data[spans.items[].tag] control[]
@@ -174,6 +175,7 @@ unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   escapes self referent
   traps bounds arithmetic
   output result data[] control[]
-  output result 1 data[(new in unicode.internal.runebuf.push:22:31) cp... self self.cap self.cap... self.data[]... self.len] control[self.data[] self.len]
-  output (new in unicode.internal.runebuf.push:22:31)[] data[cp self.cap self.data[]] control[]
+  output result 1 data[(new in unicode.internal.runebuf.push:22:31) cp... self self.cap self.data[]... self.len] control[self.data[] self.len]
+  output (new in unicode.internal.runebuf.push:22:31).__len data[self.cap] control[]
+  output (new in unicode.internal.runebuf.push:22:31)[] data[cp self.data[]] control[]
   output self.data[] data[cp] control[]

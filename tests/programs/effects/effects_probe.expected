@@ -52,7 +52,7 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
-  returns self.entries[].value
+  returns self.entries[].value value
 builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   effects may_trap may_allocate
   reads self.index.live

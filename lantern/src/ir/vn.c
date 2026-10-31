@@ -353,6 +353,7 @@ instruction_number(ir_value_numbers_t *n, const ir_instr_t *in, th_ctx *types)
 {
     if (in->op == IR_OP_COPY && in->n_operands == 1
         && in->operands[0].kind == IR_OPD_VALUE) {
+        if (reads_variable_storage(in)) return fresh(n);
         uint32_t number = operand_number(n, in->operands[0].value);
         return number ? number : fresh(n);
     }

@@ -10,7 +10,7 @@ coarseness.lookup: (Dict[int, int], int) -> int?
   escapes table referent
   traps explicit bounds unwrap arithmetic
   returns table.entries[].value
-  output result data[table.entries[].value] control[key... table.index.ctrl table.index.ctrl[] table.index.hashes[] table.index.slots[]]
+  output result data[table.entries[].value] control[key... table.index.ctrl.__len table.index.ctrl[] table.index.hashes[] table.index.slots[]]
 coarseness.hash_str: (string) -> u128
   effects may_trap may_allocate may_collect allocates_direct reinterprets
   reads s.data...
