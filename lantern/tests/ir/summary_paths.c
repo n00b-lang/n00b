@@ -124,12 +124,13 @@ render_flows(const ir_func_t *f, const ir_summary_t *summary,
     for (uint32_t d = 0; d < ir_summary_flow_count(summary, table); d++)
         for (uint32_t s = 0; s < ir_summary_flow_source_count(summary, table);
              s++)
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_ALIAS; kind++) {
+            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
                 if (!ir_summary_flow_has(summary, table, d, s, kind)) continue;
                 const ir_spath_t *to   = ir_summary_flow_to(summary, table, d);
                 const ir_spath_t *from = ir_summary_flow_source(summary, table,
                                                                 s);
-                char mark = kind == IR_SFLOW_DATA ? '~'
+                char mark = kind == IR_SFLOW_DATA || kind == IR_SFLOW_COPY
+                          ? '~'
                           : kind == IR_SFLOW_CONTROL ? '^'
                           : table == IR_SFLOW_RESULTS ? '=' : '-';
                 core_list_push(*lines, table == IR_SFLOW_RESULTS
@@ -723,7 +724,7 @@ test_scalar_globals(void)
     expect(&r, "a scalar global returned by value is read", S("peek"),
            S("r count; ~ count"));
     expect(&r, "and so is one loaded through its address", S("loaded"),
-           S("r count; ~ count..."));
+           S("r count; ~ count"));
     done(&r);
 }
 

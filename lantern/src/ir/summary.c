@@ -162,6 +162,7 @@ typedef struct {
     flow_bits_t data;
     flow_bits_t control;
     flow_bits_t alias;
+    flow_bits_t copy;
 } flow_dest_t;
 core_list_decl(flow_dest_t);
 
@@ -654,6 +655,7 @@ flow_table_free(flow_table_t *table)
         core_list_free(table->dests.data[d].data);
         core_list_free(table->dests.data[d].control);
         core_list_free(table->dests.data[d].alias);
+        core_list_free(table->dests.data[d].copy);
     }
     core_list_free(table->sources);
     core_list_free(table->dests);
@@ -696,7 +698,7 @@ flow_dest(flow_table_t *table, const ir_spath_t *to)
     core_list_push(table->dests, ((flow_dest_t){
         .to = owned, .data = core_list_new(uint64_t),
         .control = core_list_new(uint64_t),
-        .alias = core_list_new(uint64_t)}));
+        .alias = core_list_new(uint64_t), .copy = core_list_new(uint64_t)}));
     core_dict_put(&table->dest_index, owned, (void *)index);
     return &table->dests.data[index];
 }
@@ -731,14 +733,15 @@ static flow_bits_t *
 kind_bits(flow_dest_t *dest, ir_sflow_kind_t kind)
 {
     return kind == IR_SFLOW_DATA ? &dest->data
-         : kind == IR_SFLOW_CONTROL ? &dest->control : &dest->alias;
+         : kind == IR_SFLOW_CONTROL ? &dest->control
+         : kind == IR_SFLOW_ALIAS ? &dest->alias : &dest->copy;
 }
 
 static uint32_t
 dest_count(const flow_dest_t *dest)
 {
     return bit_count(&dest->data) + bit_count(&dest->control)
-        + bit_count(&dest->alias);
+        + bit_count(&dest->alias) + bit_count(&dest->copy);
 }
 
 static void
@@ -773,7 +776,7 @@ join_flows(flow_table_t *into, const flow_table_t *from)
     for (size_t d = 0; d < from->dests.len; d++) {
         flow_dest_t *dest = &from->dests.data[d];
         for (uint32_t s = 0; s < from->sources.len; s++)
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_ALIAS; kind++)
+            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++)
                 if (bit_has(kind_bits(dest, kind), s))
                     flow_add(into, dest->to, from->sources.data[s], kind);
     }
@@ -845,10 +848,13 @@ flow_covered(flow_table_t *table, const index_list_t *dests,
         for (size_t t = 0; t < sources[s].len; t++) {
             uint32_t source = sources[s].data[t];
             bool     self   = dests[d].data[e] == d && source == s;
-            if (kind == IR_SFLOW_ALIAS) {
-                if (!self && bit_has(&dest->alias, source)) return true;
+            if (kind == IR_SFLOW_ALIAS || kind == IR_SFLOW_COPY) {
+                if (!self && (bit_has(&dest->alias, source)
+                              || bit_has(kind_bits(dest, kind), source)))
+                    return true;
                 continue;
             }
+            if (!self && bit_has(&dest->copy, source)) return true;
             if (bit_has(&dest->data, source)
                 && !(self && kind == IR_SFLOW_DATA)) return true;
             if (kind == IR_SFLOW_CONTROL && !self
@@ -900,12 +906,15 @@ prune_flows(flow_table_t *table)
         flow_dest_t *dest = &table->dests.data[d];
         kept[d] = (flow_dest_t){.data    = core_list_new(uint64_t),
                                 .control = core_list_new(uint64_t),
-                                .alias   = core_list_new(uint64_t)};
+                                .alias   = core_list_new(uint64_t),
+                                .copy    = core_list_new(uint64_t)};
         for (uint32_t s = 0; s < source_count; s++) {
-            bool data = bit_has(&dest->data, s);
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_ALIAS; kind++) {
+            bool copy = bit_has(&dest->copy, s);
+            bool data = copy || bit_has(&dest->data, s);
+            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
                 if (!bit_has(kind_bits(dest, kind), s)
                     || (kind == IR_SFLOW_CONTROL && data)
+                    || (kind == IR_SFLOW_DATA && copy)
                     || flow_covered(table, dests, sources, d, s, kind))
                     continue;
                 bit_set(kind_bits(&kept[d], kind), s);
@@ -927,7 +936,7 @@ prune_flows(flow_table_t *table)
         uint32_t     d    = dest_order[i];
         flow_dest_t *dest = nullptr;
         for (uint32_t s = 0; s < source_count; s++)
-            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_ALIAS; kind++) {
+            for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
                 if (!bit_has(kind_bits(&kept[d], kind), s)) continue;
                 if (!dest) dest = flow_dest(&pruned, to[d]);
                 bit_set(kind_bits(dest, kind), renumber[s]);
@@ -937,6 +946,7 @@ prune_flows(flow_table_t *table)
         core_list_free(kept[d].data);
         core_list_free(kept[d].control);
         core_list_free(kept[d].alias);
+        core_list_free(kept[d].copy);
     }
     core_free(kept);
     core_free(used);
@@ -973,7 +983,8 @@ same_flows(const flow_table_t *a, const flow_table_t *b)
         const flow_dest_t *want = &b->dests.data[other];
         if (!same_flow_bits(a, &have->data, b, &want->data)
             || !same_flow_bits(a, &have->control, b, &want->control)
-            || !same_flow_bits(a, &have->alias, b, &want->alias))
+            || !same_flow_bits(a, &have->alias, b, &want->alias)
+            || !same_flow_bits(a, &have->copy, b, &want->copy))
             return false;
     }
     return true;
@@ -2698,6 +2709,7 @@ typedef struct {
 
 typedef enum : uint8_t {
     PT_SAME,
+    PT_COPY,
     PT_DERIVED,
     PT_CONTROL,
 } pt_flow_kind_t;
@@ -3525,7 +3537,8 @@ constant_global(const ir_global_t *global)
 static ir_sflow_kind_t
 flow_kind(pt_flow_kind_t flow)
 {
-    return flow == PT_CONTROL ? IR_SFLOW_CONTROL : IR_SFLOW_DATA;
+    return flow == PT_CONTROL ? IR_SFLOW_CONTROL
+         : flow == PT_COPY ? IR_SFLOW_COPY : IR_SFLOW_DATA;
 }
 
 
@@ -3637,7 +3650,7 @@ variable_site(pt_t *pt, const ir_value_t *value)
     if (!own)
         note_unknown(pt, CORE_STRING_STATIC("an operand the analysis cannot "
                                             "resolve"), nullptr);
-    if (!pointer_type(pt, value->type)) item.flow = PT_DERIVED;
+    if (!pointer_type(pt, value->type)) item.flow = PT_COPY;
     set_add(&pt->sites.data[site].contents, item);
     return site;
 }
@@ -3960,7 +3973,7 @@ define_items(pt_t *pt, const ir_instr_t *in, const pt_set_t *items)
         uint32_t site = local_site(pt, in->dest_local);
         for (size_t i = 0; i < items->len; i++) {
             pt_item_t item = items->data[i];
-            if (data && item.flow == PT_SAME) item.flow = PT_DERIVED;
+            if (data && item.flow == PT_SAME) item.flow = PT_COPY;
             if (constant_item(&item)) continue;
             pt_add(pt, &pt->sites.data[site].contents, contents_key(site),
                    item);
@@ -3973,7 +3986,7 @@ define_items(pt_t *pt, const ir_instr_t *in, const pt_set_t *items)
     bool data = target && !pointer_type(pt, in->dest->type);
     for (size_t i = 0; target && i < items->len; i++) {
         pt_item_t item = items->data[i];
-        if (data && item.flow == PT_SAME) item.flow = PT_DERIVED;
+        if (data && item.flow == PT_SAME) item.flow = PT_COPY;
         if (constant_item(&item)) continue;
         pt_add(pt, target, (uintptr_t)in->dest, item);
     }
@@ -4187,7 +4200,7 @@ contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
                                               depth, at);
         if (!under && !over) continue;
         if (loc_deep(loc) || (held->deep && !under)) {
-            if (held->flow == PT_SAME) set_add(into, deepened(held));
+            if (held->flow <= PT_COPY) set_add(into, deepened(held));
             else derived = pt->value_flow;
             continue;
         }
@@ -5352,7 +5365,9 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         if (!steps_prefix(item.depth, item.steps, path->depth, path->steps))
             continue;
         if (item.flow != PT_SAME) {
+            bool      copy = item.flow == PT_COPY && item.held;
             pt_item_t part = item.deep ? deepened(&item)
+                           : copy      ? held_at(item.loc)
                                        : item_at(item.loc);
             if (!item.deep)
                 loc_extend(&part.loc, path->steps + item.depth,
@@ -5639,8 +5654,16 @@ flowed_items(pt_t *pt, mapped_sources_t *mapped, const uint32_t *groups,
 {
     const flow_dest_t *dest = &mapped->flows->dests.data[d];
     for (uint32_t s = 0; s < mapped->flows->sources.len; s++) {
-        if (!bit_has(&dest->alias, s)) continue;
-        set_merge(into, source_items(pt, mapped, s, MAP_VALUE));
+        if (bit_has(&dest->alias, s))
+            set_merge(into, source_items(pt, mapped, s, MAP_VALUE));
+        else if (groups && bit_has(&dest->copy, s)) {
+            const pt_set_t *items = source_items(pt, mapped, s, MAP_VALUE);
+            for (size_t i = 0; i < items->len; i++) {
+                pt_item_t item = items->data[i];
+                if (item.flow < PT_COPY) item.flow = PT_COPY;
+                set_add(into, item);
+            }
+        }
     }
     if (groups && (dest->data.len || dest->control.len))
         set_add(into, flow_node_item(pt, mapped, groups[d], d));
@@ -6331,9 +6354,12 @@ pt_step(pt_t *pt, const ir_instr_t *in)
             pt_publish(pt, &first, &unknown);
             if (pt->value_flow) pt_read(pt, base, &out);
         }
-        else if (base && (pointer_type(pt, base->type)
-                          || defines_data(pt, in)))
+        else if (base && pointer_type(pt, base->type))
             pt_read(pt, base, &out);
+        else if (base && defines_data(pt, in)) {
+            pt_read(pt, base, &out);
+            derive_items(&out, PT_DERIVED);
+        }
         else {
             note_unknown(pt, CORE_STRING_STATIC("a cast to a pointer"),
                          nullptr);
@@ -6372,6 +6398,7 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         if (defines_data(pt, in)) {
             for (uint32_t o = 0; o < in->n_operands; o++)
                 pt_read(pt, referenced(in, o), &out);
+            derive_items(&out, PT_DERIVED);
             break;
         }
         for (uint32_t o = 0; o < in->n_operands; o++)
@@ -6466,6 +6493,7 @@ pt_step(pt_t *pt, const ir_instr_t *in)
         if (defines_data(pt, in)) {
             for (uint32_t o = 0; o < in->n_operands; o++)
                 pt_read(pt, referenced(in, o), &out);
+            derive_items(&out, PT_DERIVED);
             break;
         }
         bool pointers = false;
@@ -6952,7 +6980,7 @@ site_sources(pt_t *pt, const pt_loc_t *loc)
                                                   at.path.steps);
             if (!under && !over) continue;
             bool                 narrow = !under && !held->deep
-                && held->flow == PT_SAME && held->held
+                && held->flow <= PT_COPY && held->held
                 && !held_pointer(pt, held);
             const core_string_t *rest   = at.path.steps + held->depth;
             uint32_t             count  = narrow
@@ -6977,7 +7005,9 @@ site_sources(pt_t *pt, const pt_loc_t *loc)
             from.flags |= (held->held && !held->loc.path.depth
                                ? IR_SPATH_DEEP : 0)
                 | (!held->held ? IR_SPATH_ROOT : 0);
-            flow_add(cached, &all, &from, flow_kind(held->flow));
+            flow_add(cached, &all, &from, held->flow == PT_CONTROL
+                                              ? IR_SFLOW_CONTROL
+                                              : IR_SFLOW_DATA);
         }
         const alias_list_t *aliases = &pt->sites.data[at.site].aliases;
         for (size_t a = 0; a < aliases->len; a++) {
@@ -7045,7 +7075,7 @@ describe_values(pt_t *pt, const pt_set_t *values, const ir_spath_t *base,
             if (item->loc.site == PT_EXTERNAL)
                 name->flags |=
                     (item->held && !item->loc.path.depth
-                             && item->flow != PT_SAME ? IR_SPATH_DEEP : 0)
+                             && item->flow > PT_COPY ? IR_SPATH_DEEP : 0)
                     | (!item->held ? IR_SPATH_ROOT : 0);
             else if (name->root == IR_SPLACE_HEAP)
                 name->flags |= !item->held ? IR_SPATH_ROOT : 0;
@@ -8727,6 +8757,7 @@ put_flows(core_buffer_t *out, const ir_summary_texts_t *texts, th_ctx *types,
         put_bits(out, &flows->dests.data[d].data);
         put_bits(out, &flows->dests.data[d].control);
         put_bits(out, &flows->dests.data[d].alias);
+        put_bits(out, &flows->dests.data[d].copy);
     }
 }
 
@@ -8929,6 +8960,7 @@ get_flows(summary_reader_t *r, flow_table_t *flows)
         get_bits(r, flows, &to, &sources, IR_SFLOW_DATA);
         get_bits(r, flows, &to, &sources, IR_SFLOW_CONTROL);
         get_bits(r, flows, &to, &sources, IR_SFLOW_ALIAS);
+        get_bits(r, flows, &to, &sources, IR_SFLOW_COPY);
     }
     core_list_free(sources);
 }

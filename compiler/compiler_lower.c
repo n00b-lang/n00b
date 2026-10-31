@@ -21992,14 +21992,14 @@ static void dump_spath(const ir_func_t *function, const ir_summary_t *summary,
 static void
 dump_flows(const ir_func_t *function, const ir_summary_t *summary)
 {
-    static const ir_sflow_kind_t kinds[] = {IR_SFLOW_ALIAS, IR_SFLOW_DATA,
-                                            IR_SFLOW_CONTROL};
-    static const char *const labels[] = {"", "data ", "control "};
+    static const ir_sflow_kind_t kinds[] = {IR_SFLOW_ALIAS, IR_SFLOW_COPY,
+                                            IR_SFLOW_DATA, IR_SFLOW_CONTROL};
+    static const char *const labels[] = {"", "copy ", "data ", "control "};
     for (int t = 0; t < 2; t++) {
         ir_sflow_table_t table = t ? IR_SFLOW_STORES : IR_SFLOW_RESULTS;
         for (uint32_t f = 0; f < ir_summary_flow_count(summary, table); f++) {
             const ir_spath_t *to = ir_summary_flow_to(summary, table, f);
-            for (int k = 0; k < 3; k++)
+            for (int k = 0; k < 4; k++)
                 for (uint32_t s = 0;
                      s < ir_summary_flow_source_count(summary, table); s++) {
                     if (!ir_summary_flow_has(summary, table, f, s, kinds[k]))
@@ -22086,7 +22086,8 @@ collect_output(const ir_func_t *function, const ir_summary_t *summary,
              s++) {
             const ir_spath_t *from = ir_summary_flow_source(summary, table, s);
             if (ir_summary_flow_has(summary, table, f, s, IR_SFLOW_DATA)
-                || ir_summary_flow_has(summary, table, f, s, IR_SFLOW_ALIAS))
+                || ir_summary_flow_has(summary, table, f, s, IR_SFLOW_ALIAS)
+                || ir_summary_flow_has(summary, table, f, s, IR_SFLOW_COPY))
                 add_text(data, function, summary, from);
             if (ir_summary_flow_has(summary, table, f, s, IR_SFLOW_CONTROL))
                 add_text(control, function, summary, from);

@@ -277,6 +277,7 @@ typedef enum : uint8_t {
     IR_SFLOW_DATA,
     IR_SFLOW_CONTROL,
     IR_SFLOW_ALIAS,
+    IR_SFLOW_COPY,
 } ir_sflow_kind_t;
 
 typedef enum : uint8_t {

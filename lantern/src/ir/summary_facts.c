@@ -353,7 +353,9 @@ add_result_facts(ir_summary_facts_t *facts, core_datalog_symbol_t symbol,
                 && (ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
                                         IR_SFLOW_DATA)
                     || ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
-                                           IR_SFLOW_ALIAS)))
+                                           IR_SFLOW_ALIAS)
+                    || ir_summary_flow_has(summary, IR_SFLOW_RESULTS, f, s,
+                                           IR_SFLOW_COPY)))
                 fact(facts, REL_DEPENDENCE, symbol,
                      integer(facts, source->param), 0);
         }
