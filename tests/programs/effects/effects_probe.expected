@@ -21,12 +21,12 @@ builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   reads self.index.live
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
-  reads self.index.ctrl
-  reads self.index.ctrl[]
-  reads self.index.slots[]
-  reads self.index.hashes[]
   reads self.entries
   reads self.entries[]
+  reads self.index.ctrl
+  reads self.index.ctrl[]
+  reads self.index.hashes[]
+  reads self.index.slots[]
   reads key...
   reads builtin.hashing.secret[]...
   escapes self referent
@@ -34,17 +34,17 @@ builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   returns self.entries[].value
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
-  reads+writes self.index.used
   reads+writes self.entries...
-  reads+writes self.index.hashes
-  reads+writes self.index.growth_left
-  reads+writes self.index.hashes[]
-  reads+writes self.index.dead
-  reads self.index.dead[]
-  reads+writes self.index.live
   reads+writes self.index.ctrl
+  reads+writes self.index.dead
+  reads+writes self.index.growth_left
+  reads+writes self.index.hashes
+  reads+writes self.index.live
   writes self.index.slots
+  reads+writes self.index.used
   reads+writes self.index.ctrl[]
+  reads self.index.dead[]
+  reads+writes self.index.hashes[]
   reads+writes self.index.slots[]
   reads key...
   reads builtin.hashing.secret[]...
@@ -55,12 +55,12 @@ builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   returns self.entries[].value value
 builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   effects may_trap may_allocate
-  reads self.index.live
-  reads self.index.used
-  reads self.index.dead
-  reads self.index.dead[]
   reads self.entries
   reads self.entries[]
+  reads self.index.dead
+  reads self.index.live
+  reads self.index.used
+  reads self.index.dead[]
   escapes self referent
   traps bounds arithmetic
 builtin.containers.list.len: (List['T]) -> uint
@@ -68,9 +68,9 @@ builtin.containers.list.len: (List['T]) -> uint
   reads self.count
 builtin.containers.list.iter: (List['T]) -> Cursor['T]
   effects may_trap
-  writes self.shared
-  reads self.items
   reads self.count
+  reads self.items
+  writes self.shared
   escapes self referent
   traps arithmetic
 text.internal.rich.rich_string: (string, List[Style_Span]) -> string
@@ -89,8 +89,8 @@ unicode.internal.properties.general_category: (char) -> Gc
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
   reads+writes self.data[]
-  writes self.len
-  writes self.data
   writes self.cap
+  writes self.data
+  writes self.len
   escapes self referent
   traps bounds arithmetic

@@ -192,6 +192,7 @@ struct ir_summary_t {
 static void flow_table_init(flow_table_t *table);
 static void flow_table_free(flow_table_t *table);
 static bool same_flows(const flow_table_t *a, const flow_table_t *b);
+static int  compare_paths(const ir_spath_t *a, const ir_spath_t *b);
 
 static uint8_t
 trap_kind(const ir_instr_t *in)
@@ -563,8 +564,10 @@ add_path_to(path_list_t *paths, const ir_spath_t *path)
     for (size_t i = last; kept < last && i < paths->len; i++)
         paths->data[kept + i - last] = paths->data[i];
     paths->len -= last - kept;
+    size_t at = first;
+    while (at < kept && compare_paths(&paths->data[at], &copy) <= 0) at++;
     copy.steps = steps_make(copy.steps, copy.depth);
-    core_list_insert(*paths, kept, copy);
+    core_list_insert(*paths, at, copy);
 }
 
 static void
@@ -2476,6 +2479,8 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         if (!(ends & flag) || (summary->flags & flag)) continue;
         ir_func_t        *callee = nullptr;
         const ir_instr_t *site   = exit_site(summaries, f, flag, &callee);
+        if (!site && flag == IR_SUMMARY_NO_RETURN)
+            site = exit_site(summaries, f, IR_SUMMARY_MAY_FAIL, &callee);
         if (site) add_flags(summary, flag, site, callee, (core_string_t){0});
         else summary->flags |= flag;
     }
@@ -2914,6 +2919,7 @@ struct pt_t {
     core_list_t(pt_callees_t) calls;
     pt_set_t               scratch[3];
     flow_bits_t            crossed;
+    uint32_t               crossed_known;
     pt_set_t               seen;
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;
@@ -3199,29 +3205,44 @@ enum { SET_SCAN = 16 };
 static void trim_repeats(pt_item_t *item);
 
 static bool
+set_lookup(const pt_set_t *set, const pt_item_t *item, size_t *low,
+           size_t *high)
+{
+    size_t start = object_bound(set, &item->loc, false);
+    size_t end   = object_bound(set, &item->loc, true);
+    *low  = start;
+    *high = end;
+    if (end - start <= SET_SCAN) {
+        for (size_t i = start; i < end; i++)
+            if (item_covers(&set->data[i], item)) return true;
+        return false;
+    }
+    const ir_spath_t *path = &item->loc.path;
+    for (uint32_t k = 0; k <= path->depth; k++) {
+        size_t from = place_bound(set, start, end, item, k, false, false);
+        size_t to   = place_bound(set, from, end, item, k, false, true);
+        for (size_t i = from; i < to; i++)
+            if (item_covers(&set->data[i], item)) return true;
+    }
+    bool wide = loc_deep(&item->loc) && !(path->flags & SPATH_INLINE);
+    *low  = place_bound(set, start, end, item, path->depth, wide, false);
+    *high = place_bound(set, *low, end, item, path->depth, wide, true);
+    return false;
+}
+
+static int
+set_order(const pt_item_t *a, const pt_item_t *b)
+{
+    int order = object_order(&a->loc, &b->loc);
+    return order ? order : item_order(a, b);
+}
+
+static bool
 set_add(pt_set_t *set, pt_item_t item)
 {
     trim_repeats(&item);
-    size_t start = object_bound(set, &item.loc, false);
-    size_t end   = object_bound(set, &item.loc, true);
-    size_t low = start, high = end;
-    if (end - start <= SET_SCAN) {
-        for (size_t i = start; i < end; i++)
-            if (item_covers(&set->data[i], &item)) return false;
-    }
-    else {
-        const ir_spath_t *path = &item.loc.path;
-        for (uint32_t k = 0; k <= path->depth; k++) {
-            size_t from = place_bound(set, start, end, &item, k, false,
-                                      false);
-            size_t to   = place_bound(set, from, end, &item, k, false, true);
-            for (size_t i = from; i < to; i++)
-                if (item_covers(&set->data[i], &item)) return false;
-        }
-        bool wide = loc_deep(&item.loc) && !(path->flags & SPATH_INLINE);
-        low  = place_bound(set, start, end, &item, path->depth, wide, false);
-        high = place_bound(set, low, end, &item, path->depth, wide, true);
-    }
+    size_t low = 0, high = 0;
+    if (set_lookup(set, &item, &low, &high)) return false;
     size_t kept = low;
     for (size_t i = low; i < high; i++)
         if (!item_covers(&item, &set->data[i]))
@@ -3230,12 +3251,11 @@ set_add(pt_set_t *set, pt_item_t item)
         memmove(&set->data[kept], &set->data[high],
                 (set->len - high) * sizeof(pt_item_t));
         set->len -= high - kept;
-        end      -= high - kept;
     }
-    size_t at = start, top = end;
+    size_t at = 0, top = set->len;
     while (at < top) {
         size_t middle = at + (top - at) / 2;
-        if (item_order(&set->data[middle], &item) < 0) at = middle + 1;
+        if (set_order(&set->data[middle], &item) < 0) at = middle + 1;
         else top = middle;
     }
     core_list_push(*set, item);
@@ -4129,7 +4149,46 @@ set_merge(pt_set_t *into, const pt_set_t *from)
             core_list_push(*into, from->data[i]);
         return;
     }
-    for (size_t i = 0; i < from->len; i++) set_add(into, from->data[i]);
+    if (from->len == 1) {
+        set_add(into, from->data[0]);
+        return;
+    }
+    bool    *dropped = core_alloc_array(bool, into->len);
+    pt_set_t added   = (pt_set_t){0};
+    for (size_t i = 0; i < into->len; i++) dropped[i] = false;
+    size_t same = 0;
+    for (size_t f = 0; f < from->len; f++) {
+        const pt_item_t *item = &from->data[f];
+        while (same < into->len && set_order(&into->data[same], item) < 0)
+            same++;
+        if (same < into->len && !set_order(&into->data[same], item)
+            && item_covers(&into->data[same], item)) continue;
+        size_t low = 0, high = 0;
+        if (set_lookup(into, item, &low, &high)) continue;
+        for (size_t i = low; i < high; i++)
+            if (!dropped[i] && item_covers(item, &into->data[i]))
+                dropped[i] = true;
+        core_list_push(added, *item);
+    }
+    if (added.len) {
+        pt_set_t merged = (pt_set_t){0};
+        size_t   i = 0, a = 0;
+        while (i < into->len || a < added.len) {
+            if (i < into->len && dropped[i]) {
+                i++;
+                continue;
+            }
+            bool take_added = a < added.len
+                && (i == into->len
+                    || set_order(&added.data[a], &into->data[i]) < 0);
+            core_list_push(merged, take_added ? added.data[a++]
+                                              : into->data[i++]);
+        }
+        core_list_free(*into);
+        *into = merged;
+    }
+    core_list_free(added);
+    core_free(dropped);
 }
 
 typedef struct {
@@ -7478,7 +7537,9 @@ function_engine(ir_summaries_t *summaries, ir_func_t *f)
     return engine->pt;
 }
 
-static const core_string_t cross_mark = CORE_STRING_STATIC("*");
+static const core_string_t cross_mark    = CORE_STRING_STATIC("*");
+static const core_string_t unknown_mark  = CORE_STRING_STATIC("?");
+static const core_string_t unknown_cross = CORE_STRING_STATIC("?*");
 
 static const flow_bits_t *
 crossings(pt_t *pt, const pt_loc_t *loc)
@@ -7494,7 +7555,8 @@ crossings(pt_t *pt, const pt_loc_t *loc)
     }
     flow_bits_t *mask  = &pt->crossed;
     uint32_t     start = 0;
-    mask->len = 0;
+    mask->len          = 0;
+    pt->crossed_known  = 0;
     if (elements && path->depth) {
         th_type *sequence = defined_type(pt->f, type);
         if (!core_string_eq(path->steps[0], element_step) || !sequence
@@ -7502,18 +7564,22 @@ crossings(pt_t *pt, const pt_loc_t *loc)
         type  = th_seq_elem(sequence);
         start = 1;
     }
-    bool inline_elements = false;
-    bool out_of_line     = false;
-    for (uint32_t i = start; type && i < path->depth; i++) {
+    bool     inline_elements = false;
+    bool     out_of_line     = false;
+    uint32_t i               = start;
+    for (; type && i < path->depth; i++) {
         core_string_t step    = path->steps[i];
         th_type      *named   = type;
         th_type      *current = defined_type(pt->f, type);
+        pt->crossed_known     = i;
         if (!current) return mask;
         bool pointer = th_kind_of(current) == TH_INDIRECTION
             || (th_kind_of(current) != TH_SEQUENCE
                 && ir_machine_of(pt->f->owner, type).class == IR_CLASS_PTR);
+        pt->crossed_known = i + 1;
         if (!pointer && core_string_eq(step, value_step)) {
             bit_set(mask, i);
+            pt->crossed_known = path->depth;
             return mask;
         }
         if (pointer) {
@@ -7529,6 +7595,13 @@ crossings(pt_t *pt, const pt_loc_t *loc)
                 current = defined_type(pt->f, named);
             }
             if (!current) return mask;
+            if (core_string_eq(step, element_step)
+                && th_kind_of(current) != TH_SEQUENCE) {
+                type            = named;
+                inline_elements = false;
+                out_of_line     = false;
+                continue;
+            }
         }
         uint64_t extent = 0;
         switch (th_kind_of(current)) {
@@ -7553,22 +7626,26 @@ crossings(pt_t *pt, const pt_loc_t *loc)
             return mask;
         }
     }
+    pt->crossed_known = i < path->depth ? i : path->depth;
     return mask;
 }
 
 static const core_string_t *
 region_tokens(pt_t *pt, const pt_item_t *item, uint32_t *count)
 {
-    const pt_loc_t    *loc    = &item->loc;
-    const flow_bits_t *mask   = crossings(pt, loc);
+    const pt_loc_t    *loc   = &item->loc;
+    const flow_bits_t *mask  = crossings(pt, loc);
+    uint32_t           known = pt->crossed_known;
     core_list_t(core_string_t) tokens = core_list_new(core_string_t);
-    for (uint32_t i = 0; i < loc->path.depth; i++) {
+    for (uint32_t i = 0; i < known; i++) {
         if (bit_has(mask, i)) core_list_push(tokens, cross_mark);
         if (!core_string_eq(loc->path.steps[i], value_step))
             core_list_push(tokens, loc->path.steps[i]);
     }
-    if (item->held && loc->site == PT_EXTERNAL)
-        core_list_push(tokens, cross_mark);
+    bool held = item->held && loc->site == PT_EXTERNAL;
+    if (known < loc->path.depth)
+        core_list_push(tokens, held ? unknown_cross : unknown_mark);
+    else if (held) core_list_push(tokens, cross_mark);
     *count = (uint32_t)tokens.len;
     const core_string_t *run = steps_make(tokens.data, *count);
     core_list_free(tokens);
@@ -7586,8 +7663,16 @@ static bool
 has_mark(const core_string_t *tokens, uint32_t from, uint32_t to)
 {
     for (uint32_t i = from; i < to; i++)
-        if (core_string_eq(tokens[i], cross_mark)) return true;
+        if (core_string_eq(tokens[i], cross_mark)
+            || core_string_eq(tokens[i], unknown_cross)) return true;
     return false;
+}
+
+static bool
+unknown_token(core_string_t token)
+{
+    return core_string_eq(token, unknown_mark)
+        || core_string_eq(token, unknown_cross);
 }
 
 static bool
@@ -7595,8 +7680,11 @@ regions_overlap(const pt_region_t *escaped, const core_string_t *tokens,
                 uint32_t count, bool deep)
 {
     uint32_t common = escaped->count < count ? escaped->count : count;
-    for (uint32_t i = 0; i < common; i++)
+    for (uint32_t i = 0; i < common; i++) {
+        if (unknown_token(escaped->tokens[i]) || unknown_token(tokens[i]))
+            return true;
         if (!core_string_eq(escaped->tokens[i], tokens[i])) return false;
+    }
     if (count > escaped->count)
         return escaped->deep || !has_mark(tokens, common, count);
     if (escaped->count > count)
@@ -7625,10 +7713,13 @@ add_region(pt_t *pt, const pt_loc_t *loc, const core_string_t *tokens,
     for (size_t r = 0; r < regions->len; r++) {
         const pt_region_t *have   = &regions->data[r];
         bool               prefix = have->count <= count;
+        bool               within = !have->deep;
         for (uint32_t i = 0; prefix && i < have->count; i++)
             prefix = core_string_eq(have->tokens[i], tokens[i]);
-        if (prefix && (!deep || have->deep)
-            && (have->deep || !has_mark(tokens, have->count, count)))
+        for (uint32_t i = have->count; prefix && within && i < count; i++)
+            within = !core_string_eq(tokens[i], cross_mark)
+                  && !unknown_token(tokens[i]);
+        if (prefix && (!deep || have->deep) && (have->deep || within))
             return false;
     }
     core_list_push(*regions, ((pt_region_t){.tokens = tokens, .count = count,
@@ -7671,7 +7762,8 @@ escape_item(pt_t *pt, const pt_item_t *item, pt_set_t *work)
         return;
     }
     uint32_t inside = 0;
-    while (inside < count && !core_string_eq(tokens[inside], cross_mark))
+    while (inside < count && !core_string_eq(tokens[inside], cross_mark)
+           && !unknown_token(tokens[inside]))
         inside++;
     if (add_region(pt, &item->loc, tokens, count, deep))
         escape_contents(pt, item->loc.site, tokens, inside, work);
@@ -8380,6 +8472,21 @@ ground_witnesses(ir_summaries_t *summaries, ir_func_t *const *members,
 }
 
 static void
+join_rounds(ir_summary_t *next, const ir_summary_t *previous)
+{
+    uint32_t shrinking = IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN;
+    next->flags = ((next->flags | previous->flags) & ~shrinking)
+                | (next->flags & previous->flags & shrinking);
+    next->traps |= previous->traps;
+    next->returns_external |= previous->returns_external;
+    merge_effects(next, previous);
+    join_flows(&next->flows[IR_SFLOW_RESULTS],
+               &previous->flows[IR_SFLOW_RESULTS]);
+    join_flows(&next->flows[IR_SFLOW_STORES],
+               &previous->flows[IR_SFLOW_STORES]);
+}
+
+static void
 solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
                 size_t count)
 {
@@ -8394,8 +8501,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     bool *dirty = core_alloc_array(bool, count);
     bool *next_dirty = core_alloc_array(bool, count);
     for (size_t i = 0; i < count; i++) dirty[i] = true;
-    bool changed = false;
-    for (uint32_t round = 0; round < 64; round++) {
+    for (bool changed = true; changed;) {
         changed = false;
         for (size_t i = 0; i < count; i++) {
             if (!dirty[i]) continue;
@@ -8407,12 +8513,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             else summarize_function(summaries, next, members[i]);
             summarize_paths(summaries, next, members[i]);
             ir_analysis_scope_end(scope);
-            if (cyclic) {
-                join_flows(&next->flows[IR_SFLOW_RESULTS],
-                           &summary->flows[IR_SFLOW_RESULTS]);
-                join_flows(&next->flows[IR_SFLOW_STORES],
-                           &summary->flows[IR_SFLOW_STORES]);
-            }
+            if (cyclic) join_rounds(next, summary);
             prune_flows(&next->flows[IR_SFLOW_RESULTS]);
             prune_flows(&next->flows[IR_SFLOW_STORES]);
             bool differs = cyclic
@@ -8430,10 +8531,7 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             *next    = previous;
             summary_free(next);
         }
-        if (!cyclic || !changed) {
-            changed = false;
-            break;
-        }
+        if (!cyclic) break;
         bool *swap = dirty;
         dirty      = next_dirty;
         next_dirty = swap;
@@ -8443,14 +8541,6 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
     core_free(callers);
     core_free(dirty);
     core_free(next_dirty);
-    for (size_t i = 0; changed && i < count; i++) {
-        ir_summary_t *last = ir_summary_of(summaries, members[i]);
-        ir_summary_t *wide = ir_summary_conservative(summaries, members[i]);
-        wide->flags |= last->flags & ~(IR_SUMMARY_DIVERGES
-                                       | IR_SUMMARY_NO_RETURN
-                                       | IR_SUMMARY_UNBOUNDED_RECURSION);
-        core_dict_put(&summaries->by_function, members[i], wide);
-    }
     for (size_t i = 0; !summaries->escapes_only && i < count; i++)
         summarize_fields(summaries, ir_summary_of(summaries, members[i]),
                          members[i]);
