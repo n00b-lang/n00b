@@ -2905,7 +2905,10 @@ struct pt_t {
     bool                   positional;
     core_dict_t            external_index;
     core_dict_t            site_sources;
-    core_dict_t            source_indices;
+    flow_table_t           source_names;
+    core_dict_t            source_maps;
+    core_list_t(uint64_t)  source_stack;
+    uint32_t               source_order;
     core_dict_t            flow_nodes;
     core_dict_t            heap_sites;
     core_dict_t            copy_ins;
@@ -6988,101 +6991,212 @@ name_loc(pt_t *pt, const pt_loc_t *loc, path_list_t *into,
     }
 }
 
-static const uint32_t *
-source_indices(pt_t *pt, const flow_table_t *sources, flow_table_t *flows)
+static uint32_t
+summary_source(pt_t *pt, flow_table_t *flows, uint32_t name)
 {
-    bool         found = false;
-    core_dict_t *inner = core_dict_get(&pt->source_indices, flows, &found);
-    if (!found) {
-        inner = core_alloc(core_dict_t);
-        core_dict_init(inner, nullptr, nullptr);
-        core_dict_put(&pt->source_indices, flows, inner);
+    bool                   found = false;
+    core_list_t(uint32_t) *map   = core_dict_get(&pt->source_maps, flows,
+                                                 &found);
+    if (!map) {
+        map  = core_alloc(core_list_t(uint32_t));
+        *map = core_list_new(uint32_t);
+        core_dict_put(&pt->source_maps, flows, map);
     }
-    void     *key     = (void *)sources;
-    uint32_t *indices = core_dict_get(inner, key, &found);
-    if (found) return indices;
-    indices = core_alloc_array(uint32_t, sources->sources.len + 1);
-    for (size_t s = 0; s < sources->sources.len; s++)
-        indices[s] = flow_source(flows, sources->sources.data[s]);
-    core_dict_put(inner, key, indices);
-    return indices;
+    while (map->len <= name) core_list_push(*map, UINT32_MAX);
+    if (map->data[name] == UINT32_MAX)
+        map->data[name] = flow_source(flows,
+                                      pt->source_names.sources.data[name]);
+    return map->data[name];
 }
 
-static const flow_table_t *
-site_sources(pt_t *pt, const pt_loc_t *loc)
+typedef struct {
+    pt_loc_t    loc;
+    flow_bits_t data;
+    flow_bits_t control;
+    uint32_t    order;
+    uint32_t    low;
+    bool        open;
+    bool        done;
+} site_sources_t;
+
+static void
+bits_or(flow_bits_t *into, const flow_bits_t *from)
 {
-    bool          found  = false;
-    flow_table_t *cached = core_dict_get(&pt->site_sources, (void *)loc,
-                                         &found);
-    if (found) return cached;
-    cached = core_alloc(flow_table_t);
-    flow_table_init(cached);
-    pt_loc_t *key = core_alloc(pt_loc_t);
-    *key = *loc;
-    core_dict_put(&pt->site_sources, key, cached);
-    const ir_spath_t all  = {0};
-    pt_set_t         seen = (pt_set_t){0};
-    pt_set_t         work = (pt_set_t){0};
-    core_list_push(work, item_at(*loc));
-    while (work.len) {
-        pt_loc_t at = work.data[--work.len].loc;
-        if (!set_add(&seen, item_at(at))) continue;
-        bool            node     = pt->sites.data[at.site].node;
-        const pt_set_t *contents = &pt->sites.data[at.site].contents;
-        for (size_t c = 0; c < contents->len; c++) {
-            const pt_item_t *held  = &contents->data[c];
-            bool             under = steps_prefix(at.path.depth,
-                                                  at.path.steps, held->depth,
-                                                  held->steps);
-            bool             over  = steps_prefix(held->depth, held->steps,
-                                                  at.path.depth,
-                                                  at.path.steps);
-            if (!under && !over) continue;
-            bool                 narrow = !under && !held->deep
-                && held->flow <= PT_COPY && held->held
-                && !held_pointer(pt, held);
-            const core_string_t *rest   = at.path.steps + held->depth;
-            uint32_t             count  = narrow
-                ? at.path.depth - held->depth : 0;
-            if (held->loc.site != PT_EXTERNAL) {
-                pt_loc_t next = held->loc;
-                if (held->flow == PT_SAME && !narrow) {
-                    next.path.depth  = 0;
-                    next.path.flags |= IR_SPATH_DEEP;
-                    next.path.flags &= (uint8_t)~SPATH_INLINE;
-                }
-                else loc_extend(&next, rest, count, false);
-                core_list_push(work, item_at(next));
+    while (into->len < from->len) core_list_push(*into, UINT64_C(0));
+    for (size_t w = 0; w < from->len; w++) into->data[w] |= from->data[w];
+}
+
+static void
+source_named(pt_t *pt, site_sources_t *entry, const ir_spath_t *from,
+             bool control)
+{
+    ir_spath_t key  = canonical_path(from);
+    uint32_t   name = flow_source(&pt->source_names, &key);
+    bit_set(control ? &entry->control : &entry->data, name);
+}
+
+static void
+sources_at(pt_t *pt, pt_loc_t at, site_sources_t *entry, pt_set_t *next)
+{
+    bool            node     = pt->sites.data[at.site].node;
+    const pt_set_t *contents = &pt->sites.data[at.site].contents;
+    for (size_t c = 0; c < contents->len; c++) {
+        const pt_item_t *held  = &contents->data[c];
+        bool             under = steps_prefix(at.path.depth, at.path.steps,
+                                              held->depth, held->steps);
+        bool             over  = steps_prefix(held->depth, held->steps,
+                                              at.path.depth, at.path.steps);
+        if (!under && !over) continue;
+        bool                 narrow = !under && !held->deep
+            && held->flow <= PT_COPY && held->held && !held_pointer(pt, held);
+        const core_string_t *rest   = at.path.steps + held->depth;
+        uint32_t             count  = narrow
+            ? at.path.depth - held->depth : 0;
+        if (held->loc.site != PT_EXTERNAL) {
+            pt_loc_t reached = held->loc;
+            if (held->flow == PT_SAME && !narrow) {
+                reached.path.depth  = 0;
+                reached.path.flags |= IR_SPATH_DEEP;
+                reached.path.flags &= (uint8_t)~SPATH_INLINE;
+            }
+            else loc_extend(&reached, rest, count, false);
+            core_list_push(*next, item_at(reached));
+            continue;
+        }
+        if (constant_source(held)) continue;
+        pt_loc_t extended = held->loc;
+        loc_extend(&extended, rest, count, false);
+        ir_spath_t from = extended.path;
+        from.flags &= IR_SPATH_DEEP;
+        if (!node) from.flags |= IR_SPATH_DEEP;
+        from.flags |= (held->held && !held->loc.path.depth ? IR_SPATH_DEEP : 0)
+            | (!held->held ? IR_SPATH_ROOT : 0);
+        source_named(pt, entry, &from, held->flow == PT_CONTROL);
+    }
+    const alias_list_t *aliases = &pt->sites.data[at.site].aliases;
+    for (size_t a = 0; a < aliases->len; a++) {
+        pt_loc_t through;
+        if (!alias_through(&aliases->data[a].item, at.path.steps,
+                           at.path.depth, loc_deep(&at), &through))
+            continue;
+        ir_spath_t from = through.path;
+        from.flags &= IR_SPATH_DEEP;
+        if (!node || !from.depth) from.flags |= IR_SPATH_DEEP;
+        source_named(pt, entry, &from, false);
+    }
+}
+
+static site_sources_t *
+sources_entry(pt_t *pt, const pt_loc_t *loc)
+{
+    bool            found = false;
+    site_sources_t *entry = core_dict_get(&pt->site_sources, (void *)loc,
+                                          &found);
+    if (found) return entry;
+    entry      = core_alloc(site_sources_t);
+    entry->loc = *loc;
+    core_dict_put(&pt->site_sources, &entry->loc, entry);
+    return entry;
+}
+
+static void
+close_sources(pt_t *pt, site_sources_t *root)
+{
+    size_t first = pt->source_stack.len;
+    while ((site_sources_t *)(uintptr_t)pt->source_stack.data[first - 1]
+           != root)
+        first--;
+    first--;
+    for (size_t m = first + 1; m < pt->source_stack.len; m++) {
+        site_sources_t *member =
+            (site_sources_t *)(uintptr_t)pt->source_stack.data[m];
+        bits_or(&root->data, &member->data);
+        bits_or(&root->control, &member->control);
+    }
+    for (size_t m = first; m < pt->source_stack.len; m++) {
+        site_sources_t *member =
+            (site_sources_t *)(uintptr_t)pt->source_stack.data[m];
+        if (member != root) {
+            member->data.len    = 0;
+            member->control.len = 0;
+            bits_or(&member->data, &root->data);
+            bits_or(&member->control, &root->control);
+        }
+        member->open = false;
+        member->done = true;
+    }
+    pt->source_stack.len = first;
+}
+
+typedef struct {
+    site_sources_t *entry;
+    pt_set_t        next;
+    size_t          at;
+} source_frame_t;
+core_list_decl(source_frame_t);
+
+static void
+open_sources(pt_t *pt, core_list_t(source_frame_t) *frames,
+             site_sources_t *entry)
+{
+    entry->order = entry->low = ++pt->source_order;
+    entry->open  = true;
+    core_list_push(pt->source_stack, (uint64_t)(uintptr_t)entry);
+    source_frame_t frame = {.entry = entry, .next = (pt_set_t){0}};
+    sources_at(pt, entry->loc, entry, &frame.next);
+    core_list_push(*frames, frame);
+}
+
+static void
+reached_sources(site_sources_t *entry, const site_sources_t *child,
+                bool returned)
+{
+    if (returned) {
+        if (child->low < entry->low) entry->low = child->low;
+    }
+    else if (child->open && child->order < entry->low)
+        entry->low = child->order;
+    if (!child->done) return;
+    bits_or(&entry->data, &child->data);
+    bits_or(&entry->control, &child->control);
+}
+
+static void
+compute_sources(pt_t *pt, site_sources_t *root)
+{
+    core_list_t(source_frame_t) frames = core_list_new(source_frame_t);
+    open_sources(pt, &frames, root);
+    while (frames.len) {
+        source_frame_t *frame = &frames.data[frames.len - 1];
+        site_sources_t *entry = frame->entry;
+        if (frame->at < frame->next.len) {
+            site_sources_t *child =
+                sources_entry(pt, &frame->next.data[frame->at].loc);
+            if (child != entry && !child->order) {
+                open_sources(pt, &frames, child);
                 continue;
             }
-            if (constant_source(held)) continue;
-            pt_loc_t extended = held->loc;
-            loc_extend(&extended, rest, count, false);
-            ir_spath_t from = extended.path;
-            from.flags &= IR_SPATH_DEEP;
-            if (!node) from.flags |= IR_SPATH_DEEP;
-            from.flags |= (held->held && !held->loc.path.depth
-                               ? IR_SPATH_DEEP : 0)
-                | (!held->held ? IR_SPATH_ROOT : 0);
-            flow_add(cached, &all, &from, held->flow == PT_CONTROL
-                                              ? IR_SFLOW_CONTROL
-                                              : IR_SFLOW_DATA);
+            if (child != entry) reached_sources(entry, child, false);
+            frame->at++;
+            continue;
         }
-        const alias_list_t *aliases = &pt->sites.data[at.site].aliases;
-        for (size_t a = 0; a < aliases->len; a++) {
-            pt_loc_t through;
-            if (!alias_through(&aliases->data[a].item, at.path.steps,
-                               at.path.depth, loc_deep(&at), &through))
-                continue;
-            ir_spath_t from = through.path;
-            from.flags &= IR_SPATH_DEEP;
-            if (!node || !from.depth) from.flags |= IR_SPATH_DEEP;
-            flow_add(cached, &all, &from, IR_SFLOW_DATA);
-        }
+        core_list_free(frame->next);
+        frames.len--;
+        if (entry->low == entry->order) close_sources(pt, entry);
+        if (!frames.len) break;
+        source_frame_t *parent = &frames.data[frames.len - 1];
+        reached_sources(parent->entry, entry, true);
+        parent->at++;
     }
-    core_list_free(work);
-    core_list_free(seen);
-    return cached;
+    core_list_free(frames);
+}
+
+static const site_sources_t *
+site_sources(pt_t *pt, const pt_loc_t *loc)
+{
+    site_sources_t *entry = sources_entry(pt, loc);
+    if (!entry->done) compute_sources(pt, entry);
+    return entry;
 }
 
 static ir_spath_t
@@ -7097,59 +7211,81 @@ value_dest(const ir_spath_t *base, const pt_item_t *item)
 }
 
 static void
-describe_values(pt_t *pt, const pt_set_t *values, const ir_spath_t *base,
-                flow_table_t *flows, site_list_t *pending)
+describe_names(pt_t *pt, const pt_item_t *item, flow_table_t *flows,
+               site_list_t *pending, core_list_t(uint64_t) *parts)
 {
+    path_list_t from    = core_list_new(ir_spath_t);
+    site_list_t ignored = core_list_new(uint32_t);
+    name_loc(pt, &item->loc, &from,
+             item->flow == PT_SAME || !pending ? pending : &ignored);
+    core_list_free(ignored);
+    ir_sflow_kind_t kind = item->flow == PT_SAME ? IR_SFLOW_ALIAS
+                                                 : flow_kind(item->flow);
+    for (size_t f = 0; f < from.len; f++) {
+        ir_spath_t *name = &from.data[f];
+        name->flags &= (uint8_t)~SPATH_INLINE;
+        if (item->loc.site == PT_EXTERNAL)
+            name->flags |=
+                (item->held && !item->loc.path.depth && item->flow > PT_COPY
+                     ? IR_SPATH_DEEP : 0)
+                | (!item->held ? IR_SPATH_ROOT : 0);
+        else if (name->root == IR_SPLACE_HEAP)
+            name->flags |= !item->held ? IR_SPATH_ROOT : 0;
+        else if (!(name->flags & IR_SPATH_DEEP)) {
+            if (name->depth
+                && core_string_eq(name->steps[name->depth - 1], value_step))
+                name->depth--;
+            else name->flags |= IR_SPATH_ROOT;
+        }
+        ir_spath_t key = canonical_path(name);
+        core_list_push(*parts,
+                       (uint64_t)flow_source(flows, &key) << 8 | kind);
+    }
+    core_list_free(from);
+}
+
+static void
+describe_values(pt_t *pt, const pt_set_t *values, const ir_spath_t *bases,
+                size_t count, flow_table_t *flows, site_list_t *pending)
+{
+    if (!count) return;
+    core_list_t(uint64_t) parts = core_list_new(uint64_t);
     for (size_t i = 0; i < values->len; i++) {
         const pt_item_t *item = &values->data[i];
         if (constant_item(item)) continue;
+        parts.len = 0;
         if (item->flow != PT_SAME && item->loc.site != PT_EXTERNAL) {
-            const flow_table_t *sources = site_sources(pt, &item->loc);
-            if (!flows || !sources->dests.len) continue;
-            ir_spath_t to = value_dest(base, item);
+            const site_sources_t *sources = site_sources(pt, &item->loc);
+            const flow_bits_t    *data    = &sources->data;
+            const flow_bits_t    *control = &sources->control;
+            size_t words = data->len > control->len ? data->len : control->len;
+            for (size_t w = 0; w < words; w++) {
+                uint64_t set = (w < data->len ? data->data[w] : 0)
+                    | (w < control->len ? control->data[w] : 0);
+                for (; set; set &= set - 1) {
+                    uint32_t s = (uint32_t)(w * 64 + __builtin_ctzll(set));
+                    ir_sflow_kind_t kind = bit_has(data, s)
+                            && item->flow != PT_CONTROL
+                        ? IR_SFLOW_DATA : IR_SFLOW_CONTROL;
+                    core_list_push(parts,
+                                   (uint64_t)summary_source(pt, flows, s)
+                                           << 8
+                                       | kind);
+                }
+            }
+        }
+        else describe_names(pt, item, flows, pending, &parts);
+        for (size_t b = 0; parts.len && b < count; b++) {
+            ir_spath_t to = value_dest(&bases[b], item);
             to = canonical_path(&to);
-            flow_dest_t       *dest    = nullptr;
-            const uint32_t    *indices = source_indices(pt, sources, flows);
-            const flow_dest_t *all     = &sources->dests.data[0];
-            for (uint32_t s = 0; s < sources->sources.len; s++) {
-                bool data    = bit_has(&all->data, s);
-                bool control = bit_has(&all->control, s);
-                if (!data && !control) continue;
-                if (!dest) dest = flow_dest(flows, &to);
-                bit_set(data && item->flow != PT_CONTROL ? &dest->data
-                                                         : &dest->control,
-                        indices[s]);
-            }
-            continue;
+            flow_dest_t *dest = flow_dest(flows, &to);
+            for (size_t p = 0; p < parts.len; p++)
+                bit_set(kind_bits(dest, (ir_sflow_kind_t)(parts.data[p]
+                                                          & 0xff)),
+                        (uint32_t)(parts.data[p] >> 8));
         }
-        ir_spath_t       to   = value_dest(base, item);
-        path_list_t from    = core_list_new(ir_spath_t);
-        site_list_t ignored = core_list_new(uint32_t);
-        name_loc(pt, &item->loc, &from,
-                 item->flow == PT_SAME || !pending ? pending : &ignored);
-        core_list_free(ignored);
-        for (size_t f = 0; f < from.len; f++) {
-            ir_spath_t *name = &from.data[f];
-            name->flags &= (uint8_t)~SPATH_INLINE;
-            if (item->loc.site == PT_EXTERNAL)
-                name->flags |=
-                    (item->held && !item->loc.path.depth
-                             && item->flow > PT_COPY ? IR_SPATH_DEEP : 0)
-                    | (!item->held ? IR_SPATH_ROOT : 0);
-            else if (name->root == IR_SPLACE_HEAP)
-                name->flags |= !item->held ? IR_SPATH_ROOT : 0;
-            else if (!(name->flags & IR_SPATH_DEEP)) {
-                if (name->depth
-                    && core_string_eq(name->steps[name->depth - 1],
-                                      value_step))
-                    name->depth--;
-                else name->flags |= IR_SPATH_ROOT;
-            }
-            flow_add(flows, &to, &from.data[f], item->flow == PT_SAME
-                         ? IR_SFLOW_ALIAS : flow_kind(item->flow));
-        }
-        core_list_free(from);
     }
+    core_list_free(parts);
 }
 
 static void
@@ -7164,7 +7300,7 @@ describe_heap(pt_t *pt, ir_summary_t *summary, site_list_t *pending)
         core_dict_put(&seen, key, key);
         ir_spath_t heap = {.root  = IR_SPLACE_HEAP,
                            .param = pt->sites.data[site].origin};
-        describe_values(pt, &pt->sites.data[site].contents, &heap,
+        describe_values(pt, &pt->sites.data[site].contents, &heap, 1,
                         &summary->flows[IR_SFLOW_STORES], pending);
     }
     core_dict_free(&seen);
@@ -7175,8 +7311,8 @@ summarize_output(pt_t *pt, ir_summary_t *summary, const pt_set_t *returned,
                  uint8_t output)
 {
     ir_spath_t base = {.output = output};
-    describe_values(pt, returned, &base, &summary->flows[IR_SFLOW_RESULTS],
-                    &pt->described);
+    describe_values(pt, returned, &base, 1,
+                    &summary->flows[IR_SFLOW_RESULTS], &pt->described);
 }
 
 static void
@@ -7190,9 +7326,8 @@ record_stores(pt_t *pt, ir_summary_t *summary, const pt_set_t *addresses,
             pt_loc_t at = location_of(&addresses->data[i]);
             name_loc(pt, &at, &to, nullptr);
         }
-    for (size_t t = 0; t < to.len; t++)
-        describe_values(pt, values, &to.data[t],
-                        &summary->flows[IR_SFLOW_STORES], &pt->described);
+    describe_values(pt, values, to.data, to.len,
+                    &summary->flows[IR_SFLOW_STORES], &pt->described);
     core_list_free(to);
 }
 
@@ -7310,7 +7445,8 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->stored, resolved_hash, resolved_eq);
     core_dict_init(&pt->valued, valued_hash, valued_eq);
     core_dict_init(&pt->site_sources, resolved_hash, resolved_eq);
-    core_dict_init(&pt->source_indices, nullptr, nullptr);
+    flow_table_init(&pt->source_names);
+    core_dict_init(&pt->source_maps, nullptr, nullptr);
     core_dict_init(&pt->flow_nodes, flow_node_hash, flow_node_eq);
     core_dict_init(&pt->heap_sites, heap_site_hash, heap_site_eq);
     core_dict_init(&pt->copy_ins, nullptr, nullptr);
@@ -7429,18 +7565,20 @@ pt_free(pt_t *pt)
     core_list_free(pt->external_writes);
     core_dict_free(&pt->external_index);
     core_dict_foreach(&pt->site_sources, entry) {
-        flow_table_free(entry->value);
-        core_free(entry->value);
-        core_free(entry->key);
+        site_sources_t *sources = entry->value;
+        core_list_free(sources->data);
+        core_list_free(sources->control);
+        core_free(sources);
     }
     core_dict_free(&pt->site_sources);
-    core_dict_foreach(&pt->source_indices, entry) {
-        core_dict_foreach((core_dict_t *)entry->value, inner)
-            core_free(inner->value);
-        core_dict_free(entry->value);
-        core_free(entry->value);
+    flow_table_free(&pt->source_names);
+    core_dict_foreach(&pt->source_maps, entry) {
+        core_list_t(uint32_t) *map = entry->value;
+        core_list_free(*map);
+        core_free(map);
     }
-    core_dict_free(&pt->source_indices);
+    core_dict_free(&pt->source_maps);
+    core_list_free(pt->source_stack);
     core_dict_foreach(&pt->flow_nodes, entry) core_free(entry->key);
     core_dict_free(&pt->flow_nodes);
     core_dict_foreach(&pt->heap_sites, entry) core_free(entry->key);
