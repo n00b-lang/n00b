@@ -17,8 +17,8 @@
 
 typedef struct {
     core_string_t module;
-    const uint8_t *native;
-    size_t native_bytes;
+    const uint8_t *object;
+    size_t object_bytes;
     const uint8_t *abi;
     size_t abi_bytes;
 } n00bb_cache_module_object_t;

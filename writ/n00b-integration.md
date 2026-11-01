@@ -483,8 +483,8 @@ runtime and comptime IR, and recorded specialization requests.
   without the assumption (`N00BB_CACHE_STRICT`) when it fails.
 - **Instantiations** are cached separately, keyed by the generic's SCC
   and the type arguments.
-- `--lto` and `N00BB_NO_OBJECT_CACHE` turn the cache off.
-  `N00BB_CACHE_LOG=FILE` records each reuse and store.
+- `--lto` and `N00B_NO_OBJECT_CACHE` turn the cache off.
+  `N00B_CACHE_LOG=FILE` records each reuse and store.
 - The generated module of an `'ffi` literal and the root SCC are never
   cached.
 

@@ -242,11 +242,17 @@ def compare(baseline, current, threshold):
     return rows, regressions
 
 
-def report(rows):
-    print(f"\n{'benchmark':16} {'metric':20} {'baseline':>12} {'current':>12} {'change':>9}")
+def build_title(flags):
+    return " ".join(("n00b", *flags)) if flags else "n00b (debug)"
+
+
+def report(rows, title):
+    print(f"\n{'benchmark':16} {'build':16} {'metric':20} {'baseline':>12} {'current':>12} "
+          f"{'change':>9}")
     for name, metric, old, new, change, flagged in rows:
         mark = "  REGRESSION" if flagged else ""
-        print(f"{name:16} {metric:20} {old:12.3f} {new:12.3f} {change:+8.1f}%{mark}")
+        print(f"{name:16} {title:16} {metric:20} {old:12.3f} {new:12.3f} "
+              f"{change:+8.1f}%{mark}")
 
 
 LANGUAGE_ROWS = (
@@ -275,12 +281,12 @@ def report_languages(summaries):
         print()
 
 
-def report_single(current):
-    print(f"\n{'benchmark':16} {'metric':20} {'value':>12}")
+def report_single(current, title):
+    print(f"\n{'benchmark':16} {'build':16} {'metric':20} {'value':>12}")
     for name, entry in current.items():
         for metric in RUN_METRICS + COMPILE_METRICS + SIZE_METRICS:
             if metric in entry:
-                print(f"{name:16} {metric:20} {entry[metric]:12.3f}")
+                print(f"{name:16} {title:16} {metric:20} {entry[metric]:12.3f}")
 
 
 def main():
@@ -337,11 +343,11 @@ def main():
     baseline = saved if saved is not None else summaries.get("baseline")
     if baseline is None:
         if not options.languages:
-            report_single(summaries["current"])
+            report_single(summaries["current"], build_title(flags))
         print(f"\nperf: results in {results}")
         return
     rows, regressions = compare(baseline, summaries["current"], threshold)
-    report(rows)
+    report(rows, build_title(flags))
     print(f"\nperf: results in {results}")
     if regressions:
         print(f"perf: {len(regressions)} regression(s) over {threshold}%")

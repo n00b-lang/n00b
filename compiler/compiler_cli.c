@@ -81,6 +81,9 @@
     KEYED_FLAG("--lto", NO_ALIAS, BOOL, false, \
                "optimize runtime modules and C support together", \
                SETS(BUILD_LTO, true)), \
+    KEYED_FLAG("--no-lto", NO_ALIAS, BOOL, false, \
+               "skip the whole-program optimization --release enables", \
+               SETS(BUILD_LTO, false)), \
     KEYED_FLAG("--panic-trap", NO_ALIAS, BOOL, false, \
                "raise SIGTRAP on a runtime failure instead of exiting with " \
                "101", \
