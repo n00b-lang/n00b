@@ -1296,6 +1296,45 @@ lower_builtin_failure(ir_lower_context_t *context, bool valid, ir_span_t span,
         N00BB_ARGS(ARG_TEXT(name), ARG_PHRASE_ID(expectation)));
 }
 
+static ir_value_t *
+option_present(ir_lower_context_t *context, ir_value_t *option,
+               th_type *bool_type, ir_span_t span)
+{
+    ir_instr_t *test = ir_lower_emit_instruction(context, IR_OP_OPTION_IS_NIL,
+                                                 span);
+    if (!test || !ir_lower_set_temp_dest(context, test,
+                                         CORE_STRING_STATIC("__n00bb_"),
+                                         bool_type)
+        || !ir_instr_operand_value(test, option)) return nullptr;
+    ir_instr_t *false_value = ir_lower_emit_instruction(context, IR_OP_CONST,
+                                                        span);
+    if (!false_value || !ir_lower_set_temp_dest(context, false_value,
+                                                CORE_STRING_STATIC("__n00bb_"),
+                                                bool_type)
+        || !ir_instr_operand_int(false_value, 0)) return nullptr;
+    ir_instr_t *present = ir_lower_emit_instruction(context, IR_OP_EQ, span);
+    return present && ir_lower_set_temp_dest(context, present,
+                                             CORE_STRING_STATIC("__n00bb_"),
+                                             bool_type)
+        && ir_instr_operand_value(present, test->dest)
+        && ir_instr_operand_value(present, false_value->dest)
+        ? present->dest : nullptr;
+}
+
+static ir_value_t *
+condition_value(ir_lower_context_t *context, parse_tree_t *node)
+{
+    ir_value_t *value = ir_lower_node_value(context, node);
+    th_type *element = nullptr;
+    if (!value || !n00bb_option_type_element(value->type, &element)
+        || !th_zero_size(ir_module_types(context->module), element))
+        return value;
+    ir_value_t *present = option_present(context, value,
+        th_name(ir_module_types(context->module), CORE_STRING_STATIC("bool")),
+        lower_span_for_tree(context, node));
+    return present ? present : value;
+}
+
 static ir_lower_result_t
 lower_condition_error(ir_lower_context_t *context, parse_tree_t *condition,
                       ir_value_t *value, n00bb_text_t construct)
@@ -3220,8 +3259,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 bool is_or = nt_is(visit->grammar, frame->node,
                                    CORE_STRING_STATIC("or-expr"));
                 if (frame->jumping && !nested) {
-                    ir_value_t *operand = ir_lower_node_value(context,
-                        arm->condition);
+                    ir_value_t *operand = condition_value(context,
+                                                          arm->condition);
                     th_type *bool_type = th_name(
                         tu_state(lower->unit)->types,
                         CORE_STRING_STATIC("bool"));
@@ -3241,8 +3280,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 context->reachable = true;
                 return true;
             }
-            ir_value_t *condition =
-                ir_lower_node_value(context, arm->condition);
+            ir_value_t *condition = condition_value(context, arm->condition);
             th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
             if (!condition || !bool_type
                 || !ir_type_eq(context->module, condition->type, bool_type)) {
@@ -3287,8 +3325,7 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 ir_span_t span = lower_span_for_tree(context, frame->node);
                 parse_tree_t *operand_node =
                     condition_core(visit->grammar, visit->node);
-                ir_value_t *operand = ir_lower_node_value(context,
-                                                          operand_node);
+                ir_value_t *operand = condition_value(context, operand_node);
                 th_type *bool_type = th_name(tu_state(lower->unit)->types,
                                              CORE_STRING_STATIC("bool"));
                 if (!operand || !bool_type || !ir_type_eq(context->module,
@@ -3398,8 +3435,8 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                 context->reachable = true;
                 return true;
             }
-            ir_value_t *condition = ir_lower_node_value(
-                context, frame->condition);
+            ir_value_t *condition = condition_value(context,
+                                                    frame->condition);
             th_type *bool_type = th_name(tu_state(lower->unit)->types, CORE_STRING_STATIC("bool"));
             if (!condition || !bool_type
                 || !ir_type_eq(context->module, condition->type, bool_type)) {
@@ -6071,6 +6108,13 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
             core_free(type.data);
             return (ir_lower_result_t){.status = IR_LOWER_FAILED};
         }
+        if (op != IR_OP_EQ) {
+            ir_value_t *present = option_present(context, option,
+                                                 result_type, span);
+            return present ? (ir_lower_result_t){IR_LOWER_VALUE, present}
+                : lower_internal(context, span,
+                                 "could not lower option inequality with nil");
+        }
         ir_instr_t *test = ir_lower_emit_instruction(context,
                                                      IR_OP_OPTION_IS_NIL,
                                                      span);
@@ -6079,24 +6123,7 @@ n00bb_lower_binary(ir_lower_context_t *context, parse_visit_t *visit,
             || !ir_instr_operand_value(test, option))
             return lower_internal(context, span,
                                "could not lower option comparison with nil");
-        if (op == IR_OP_EQ)
-            return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
-        ir_instr_t *false_value = ir_lower_emit_instruction(context,
-                                                             IR_OP_CONST,
-                                                             span);
-        bool constant_ok = false_value
-            && ir_lower_set_temp_dest(context, false_value,
-                                      CORE_STRING_STATIC("__n00bb_"), result_type)
-            && ir_instr_operand_int(false_value, 0);
-        ir_instr_t *negated = constant_ok
-            ? ir_lower_emit_instruction(context, IR_OP_EQ, span) : nullptr;
-        if (!negated || !ir_lower_set_temp_dest(context, negated,
-                                                CORE_STRING_STATIC("__n00bb_"), result_type)
-            || !ir_instr_operand_value(negated, test->dest)
-            || !ir_instr_operand_value(negated, false_value->dest))
-            return lower_internal(context, span,
-                               "could not lower option inequality with nil");
-        return (ir_lower_result_t){IR_LOWER_VALUE, negated->dest};
+        return (ir_lower_result_t){IR_LOWER_VALUE, test->dest};
     }
     if (left_nil && right_nil && equality) {
         ir_instr_t *same = ir_lower_emit_instruction(context, IR_OP_CONST,
@@ -18041,6 +18068,8 @@ zero_fixed_shape_initializer(ir_module_t *module, th_type *type,
             items[i].kind = IR_GLOBAL_INIT_BOOL;
         else if (category == IR_CLASS_FLOAT)
             items[i].kind = IR_GLOBAL_INIT_FLOAT;
+        else if (category == IR_CLASS_VOID)
+            items[i].kind = IR_GLOBAL_INIT_NIL;
         else valid = false;
     }
     if (!valid) {
@@ -20207,7 +20236,7 @@ n00bb_lower_assert_statement(ir_lower_context_t *context,
     }
 
     ir_value_t *condition = expression
-        ? ir_lower_node_value(context, expression) : nullptr;
+        ? condition_value(context, expression) : nullptr;
     th_type *bool_type = n00bb_ir_builtin_type(context->module, CORE_STRING_STATIC("bool"));
     if (!condition || !bool_type
         || !ir_type_eq(context->module, condition->type, bool_type)) {

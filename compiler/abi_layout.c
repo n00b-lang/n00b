@@ -623,7 +623,7 @@ n00bb_abi_publish_record_layout(
                 ok = false;
                 break;
             }
-            if (!stride || members[i].inline_element_count
+            if (stride && members[i].inline_element_count
                 > UINT64_MAX / stride) {
                 ok = false;
                 break;

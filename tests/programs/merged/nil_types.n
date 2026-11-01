@@ -1,0 +1,224 @@
+variant Cson {
+    nil_item:  nil
+    int_item:  i128
+    fp_item:   float
+    str_item:  string
+    list_item: List['T]
+    dict_item: Dict[string, 'T]
+}
+
+record Pair {
+    a: int
+    b: nil
+}
+
+record Box {
+    value: 'T
+}
+
+record Empty {
+}
+
+record Flags {
+    first:  nil?
+    second: nil?
+    tail:   byte
+}
+
+record Slots {
+    units: Array[nil][4]
+    count: int
+}
+
+var marker: nil
+var global_grid: Array[nil][2][3]
+var empty_global: Box[nil]
+
+func unbox(b: Box['T]) -> 'T {
+    return b.value
+}
+
+func put(modify slot: 'T, value: 'T) {
+    slot = value
+}
+
+func fill(out slot: 'T, value: 'T) {
+    slot = value
+}
+
+func cson_keys(c: Cson[nil]) -> uint {
+    switch c {
+        case dict_item { return c.dict_item.len() }
+        else { return 0 }
+    }
+}
+
+func cson_check() {
+    var names = new[Dict[string, nil]]()
+    names["a"] = nil
+    names.put("b", nil)
+    names["a"] = nil
+    let c: Cson[nil] = (dict_item = names)
+    switch c {
+        case dict_item {
+            let d = c.dict_item
+            require d.len() == 2
+            require d.contains("a")
+            require !d.contains("z")
+            let hit = d["a"]
+            let miss = d["z"]
+            require hit != nil
+            require miss == nil
+            d.remove("a")
+            require d.len() == 1
+        }
+        else { require false }
+    }
+    require cson_keys(c) == 1
+
+    var units = new[List[nil]]()
+    units.append(nil)
+    units.append(nil)
+    let l: Cson[nil] = (list_item = units)
+    switch l {
+        case list_item {
+            require l.list_item.len() == 2
+            require l.list_item[1] == nil
+        }
+        else { require false }
+    }
+}
+
+func container_check() {
+    let literal: Dict[string, nil] = {"a": nil, "b": nil}
+    require literal.len() == 2
+    let inferred = {"x": nil}
+    require inferred["x"]
+
+    var keyed = new[Dict[nil, int]]()
+    require !keyed.contains(nil)
+    keyed.put(nil, 3)
+    keyed.put(nil, 4)
+    require keyed.len() == 1
+    let only = keyed[nil]
+    require only != nil
+    require only.get() == 4
+
+    var units: Set[nil] = new[Set[nil]]()
+    require units.add(nil)
+    require !units.add(nil)
+    require units.len() == 1
+    var seen = 0
+    for unit in units {
+        require unit == nil
+        seen += 1
+    }
+    require seen == 1
+
+    let nils: Array[nil] = [nil, nil, nil]
+    require nils.len() == 3
+
+    var counter = new[List[nil]]()
+    counter.append(nil)
+    counter.append(nil)
+    var count = 0
+    for item in counter {
+        require item == nil
+        count += 1
+    }
+    require count == 2
+}
+
+func set_check() {
+    let a: Set[int] = {1, 2, 3}
+    let b: Set[int] = {3, 4}
+    require a.contains(2)
+    require !a.contains(9)
+    require (a + b).len() == 4
+    require (a - b).len() == 2
+    require (a & b).len() == 1
+    require (a ^ b).len() == 3
+    var total = 0
+    for v in a { total += v }
+    require total == 6
+    var words = new[Set[string]]()
+    require words.add("x")
+    require words.remove("x")
+    require words.len() == 0
+}
+
+func storage_check() {
+    var p: Pair
+    p.a = 3
+    p.b = nil
+    require p.a == 3
+    require p.b == nil
+
+    var b: Box[nil]
+    b.value = nil
+    require unbox(b) == nil
+
+    var n: nil = nil
+    put(n, nil)
+    fill(n, nil)
+    require n == nil
+
+    var e: Empty
+    var empties = new[List[Empty]]()
+    empties.append(e)
+    require empties.len() == 1
+
+    let present = {"k": nil}["k"]
+    var f: Flags
+    f.first = present
+    f.second = {"k": nil}["missing"]
+    f.tail = 7
+    require f.first != nil
+    require f.second == nil
+    require f.tail == 7
+}
+
+func fixed_array_check() {
+    var grid: Array[nil][4][4]
+    grid[1][2] = nil
+    require grid[1][2] == nil
+    var flat: Array[nil][3]
+    flat[0] = nil
+    require flat[2] == nil
+    var slots: Slots
+    slots.units[3] = nil
+    slots.count = 9
+    require slots.units[0] == nil
+    require slots.count == 9
+    var sized = new[Array[nil]](5)
+    sized[4] = nil
+    var copied = sized
+    copied[0] = nil
+    require copied.len() == 5
+    global_grid[1][2] = nil
+    require global_grid[0][0] == nil
+}
+
+func condition_check() {
+    let d = {"a": nil}
+    let hit = d["a"]
+    let miss = d["z"]
+    var seen = 0
+    if hit { seen += 1 }
+    if miss { seen += 10 }
+    if hit and miss == nil { seen += 100 }
+    while miss { seen += 1000 }
+    require hit
+    require seen == 101
+}
+
+marker = nil
+empty_global.value = nil
+require marker == nil
+cson_check()
+container_check()
+set_check()
+storage_check()
+fixed_array_check()
+condition_check()
+__fd_write(2, "ok")

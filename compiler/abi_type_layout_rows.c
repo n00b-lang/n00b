@@ -631,7 +631,6 @@ build_member_row(n00bb_abi_type_index_t *index,
                                                          &row->child_type_index)
             || (member->inline_element_count
                 && (!member->inline_element_type
-                    || !member->inline_element_stride_bits
                     || !n00bb_abi_type_index_find(index,
                         member->inline_element_type,
                         &row->inline_element_type_index)))

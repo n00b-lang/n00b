@@ -419,16 +419,23 @@ metadata_references_valid(const n00b_abi_snapshot_v1 *snapshot,
                 const n00b_abi_field_v1 *field = member_kind
                     == N00B_ABI_TABLE_FIELD ? member
                     : &((const n00b_abi_arm_v1 *)member)->field;
+                const n00b_abi_type_v1 *element = field->inline_element_count
+                    ? n00b_abi_v1_type(snapshot,
+                                       field->inline_element_type_index)
+                    : nullptr;
                 if (field->inline_reserved_zero
-                    || (!!field->inline_element_count
-                        != !!field->inline_element_type_index)
-                    || (!!field->inline_element_count
-                        != !!field->inline_element_stride_bits)
+                    || (!field->inline_element_count
+                        && (field->inline_element_type_index
+                            || field->inline_element_stride_bits))
                     || (field->inline_element_count
-                        && (field->logical_bit_offset > type->size_bits
-                            || (field->inline_element_count - 1)
-                                > (UINT64_MAX - field->logical_bit_offset)
-                                    / field->inline_element_stride_bits)))
+                        && (!element
+                            || (!field->inline_element_stride_bits
+                                && element->size_bits)
+                            || field->logical_bit_offset > type->size_bits
+                            || (field->inline_element_stride_bits
+                                && (field->inline_element_count - 1)
+                                    > (UINT64_MAX - field->logical_bit_offset)
+                                        / field->inline_element_stride_bits))))
                     return invalid_record(error, member_kind,
                                           member_index, 0);
             }
@@ -1912,8 +1919,7 @@ metadata_frame_layouts_valid(const n00b_abi_snapshot_v1 *snapshot,
                     frame->shadow_frame_type_index);
                 uint64_t payload_bytes = frame->frame_byte_extent
                     - N00B_ABI_FRAME_ROOT_OFFSET;
-                valid = payload && payload->size_bits
-                    && payload->layout_index
+                valid = payload && payload->layout_index
                     && (payload->size_bits / 8 < payload_bytes
                         || (payload->size_bits / 8 == payload_bytes
                             && !(payload->size_bits % 8)))

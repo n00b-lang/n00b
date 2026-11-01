@@ -371,6 +371,7 @@ th_type *th_option(th_ctx *ctx, th_type *item);
 th_type *th_option_item(const th_type *type);
 th_type *th_nil(th_ctx *ctx);
 bool     th_is_nil(const th_type *type);
+bool     th_zero_size(th_ctx *ctx, th_type *type);
 
 void     th_normalize(th_type *type);
 bool     th_encode(th_ctx *ctx, th_type *type, const uint8_t **out,

@@ -450,3 +450,9 @@ N00B_DIAG(VARIABLE_UNTYPED, "N00B-T0586", ERROR,
     "from what is later assigned to it. When nothing settles it, give it a\n"
     "type:\n"
     "    var count: int")
+N00B_DIAG(REF_ZERO_SIZE, "N00B-T0587", ERROR,
+    "a reference to a type that takes no storage",
+    "`nil`, and any type built only from `nil`, has a single value and takes\n"
+    "no storage, so there is nothing for a reference to point at. Use the\n"
+    "value itself:\n"
+    "    var marker: nil")

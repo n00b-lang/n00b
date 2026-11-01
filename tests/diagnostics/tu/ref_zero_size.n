@@ -1,0 +1,8 @@
+record Marker {
+    unit: nil
+}
+
+var to_nil: Ref[nil]
+var to_marker: Ref[Marker]
+var to_pair: Ref[Tuple[nil, nil]]
+var foreign_nil: Foreign[nil]

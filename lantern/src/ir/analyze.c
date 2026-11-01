@@ -96,7 +96,8 @@ static bool analyze_operand(ir_visit_t *vi)
     ir_local_t *l = ir_operand_local(vi->operand);
 
     if (l && !ir_local_read_earlier(vi->instr, vi->index, l)
-        && ir_rd_maybe_unset(a->rd, vi->instr, l)) {
+        && ir_rd_maybe_unset(a->rd, vi->instr, l)
+        && !th_zero_size(vi->func->owner->ctx->types, l->type)) {
         ir_annot_t *copyout = ir_annot_get(&vi->instr->annots,
             CORE_STRING_STATIC("ir.copyout_read"));
         bool returned = vi->instr->op == IR_OP_RETURN
