@@ -3585,19 +3585,46 @@ derive_items(pt_set_t *items, pt_flow_kind_t flow)
         if (items->data[i].flow < flow) items->data[i].flow = flow;
 }
 
+static size_t
+put_decimal(char *out, uint32_t value)
+{
+    char   digits[10];
+    size_t count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value);
+    for (size_t i = 0; i < count; i++) out[i] = digits[count - 1 - i];
+    return count;
+}
+
+static size_t
+put_bytes(char *out, core_string_t text)
+{
+    if (text.u8_bytes) memcpy(out, text.data, text.u8_bytes);
+    return text.u8_bytes;
+}
+
 static uint32_t
 origin_of(const ir_func_t *f, core_string_t name, uint32_t block,
           uint32_t index)
 {
-    core_buffer_t key = {0};
-    if (f->owner) core_buffer_append_string(&key, ir_module_name(f->owner));
-    core_buffer_putc(&key, 0);
-    core_buffer_append_string(&key, f->name);
-    core_buffer_putc(&key, 0);
-    core_buffer_append_string(&key, name);
-    core_buffer_printf(&key, ":%u:%u", block, index);
-    uint64_t hash = core_xxh3_64bits_raw(key.data, key.byte_len);
-    core_buffer_release(&key);
+    core_string_t module = f->owner ? ir_module_name(f->owner)
+                                    : (core_string_t){0};
+    size_t need = module.u8_bytes + f->name.u8_bytes + name.u8_bytes + 24;
+    char   local[256];
+    char  *key = need <= sizeof local ? local : core_alloc_array(char, need);
+    size_t at  = put_bytes(key, module);
+    key[at++]  = 0;
+    at        += put_bytes(key + at, f->name);
+    key[at++]  = 0;
+    at        += put_bytes(key + at, name);
+    key[at++]  = ':';
+    at        += put_decimal(key + at, block);
+    key[at++]  = ':';
+    at        += put_decimal(key + at, index);
+    uint64_t hash = core_xxh3_64bits_raw(key, at);
+    if (key != local) core_free(key);
     return (uint32_t)(hash ^ hash >> 32) | 1;
 }
 
@@ -3625,11 +3652,22 @@ site_of(pt_t *pt, const void *key, th_type *type, bool elements,
     return site;
 }
 
+static bool
+known_site(pt_t *pt, const void *key, uint32_t *site)
+{
+    bool  found = false;
+    void *index = core_dict_get(&pt->site_index, key, &found);
+    *site       = (uint32_t)(uintptr_t)index;
+    return found;
+}
+
 static uint32_t
 local_site(pt_t *pt, const ir_local_t *local)
 {
-    uint32_t site = site_of(pt, local, local->type, false,
-                            origin_of(pt->f, local->name, UINT32_MAX, 0));
+    uint32_t site = 0;
+    if (known_site(pt, local, &site)) return site;
+    site = site_of(pt, local, local->type, false,
+                   origin_of(pt->f, local->name, UINT32_MAX, 0));
     pt->sites.data[site].local = local;
     return site;
 }
@@ -3657,13 +3695,13 @@ static uint32_t
 variable_site(pt_t *pt, const ir_value_t *value)
 {
     if (value->kind == IR_VAL_LOCAL) return local_site(pt, value->local);
-    size_t   before = pt->sites.len;
-    uint32_t site   = site_of(pt, value, value->type, false,
-                              origin_of(pt->f, (core_string_t){0},
-                                        UINT32_MAX - 1, value->index));
+    uint32_t site = 0;
+    if (known_site(pt, value, &site)) return site;
+    site = site_of(pt, value, value->type, false,
+                   origin_of(pt->f, (core_string_t){0}, UINT32_MAX - 1,
+                             value->index));
     pt->sites.data[site].value = value;
-    if (pt->sites.len == before || !tracks(pt, value->type))
-        return site;
+    if (!tracks(pt, value->type)) return site;
     uint32_t  param = value->index;
     bool      own   = param < pt->f->n_params && pt->f->params[param] == value;
     pt_item_t item  = item_at(own ? external_loc(IR_SPLACE_PARAM, param,
