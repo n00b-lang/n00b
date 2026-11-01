@@ -547,6 +547,7 @@ path_covers(const ir_spath_t *prefix, const ir_spath_t *path)
     th_type *outer = heap_type_of(prefix);
     if (prefix->depth > path->depth
         || (prefix->depth < path->depth && !(prefix->flags & IR_SPATH_DEEP))
+        || ((path->flags & IR_SPATH_DEEP) && !(prefix->flags & IR_SPATH_DEEP))
         || ((prefix->flags ^ path->flags) & IR_SPATH_ROOT)
         || (outer && !same_type(outer, heap_type_of(path))))
         return false;
@@ -563,26 +564,48 @@ canonical_path(const ir_spath_t *path)
     return copy;
 }
 
+static bool
+same_place(const ir_spath_t *a, const ir_spath_t *b)
+{
+    uint8_t shape = IR_SPATH_DEEP | IR_SPATH_ROOT;
+    return !compare_path_roots(a, b) && a->depth == b->depth
+        && ((a->flags ^ b->flags) & shape) == 0
+        && steps_prefix(a->depth, a->steps, b->depth, b->steps);
+}
+
+static bool
+access_covers(const ir_spath_t *a, const ir_spath_t *b)
+{
+    uint8_t may  = IR_SPATH_READ | IR_SPATH_WRITE | IR_SPATH_READS_ENTRY;
+    uint8_t must = IR_SPATH_MUST_SUCCESS | IR_SPATH_MUST_FAILURE;
+    return !(b->flags & must) && !(b->flags & may & ~a->flags)
+        && path_covers(a, b);
+}
+
 static void
 add_path_to(path_list_t *paths, const ir_spath_t *path)
 {
     ir_spath_t copy = canonical_path(path);
     size_t first, last;
     root_range(paths, &copy, &first, &last);
-    for (size_t i = first; i < last; i++)
-        if (path_covers(&paths->data[i], &copy)) {
-            merge_path_into(&paths->data[i], &copy);
+    for (size_t i = first; i < last; i++) {
+        if (!same_place(&paths->data[i], &copy)) continue;
+        ir_spath_t merged = paths->data[i];
+        merge_path_into(&merged, &copy);
+        if (merged.flags == paths->data[i].flags
+            && merged.type == paths->data[i].type)
             return;
-        }
+        copy = merged;
+        core_list_delete(*paths, i);
+        root_range(paths, &copy, &first, &last);
+        break;
+    }
+    for (size_t i = first; i < last; i++)
+        if (access_covers(&paths->data[i], &copy)) return;
     size_t kept = first;
     for (size_t i = first; i < last; i++) {
         ir_spath_t *old = &paths->data[i];
-        if (path_covers(&copy, old)
-            && !(old->flags & ~copy.flags & ~IR_SPATH_TYPED)) {
-            if (!merge_type(&copy, old)) copy.flags &= ~IR_SPATH_TYPED;
-        }
-        else
-            paths->data[kept++] = *old;
+        if (!access_covers(&copy, old)) paths->data[kept++] = *old;
     }
     for (size_t i = last; kept < last && i < paths->len; i++)
         paths->data[kept + i - last] = paths->data[i];
