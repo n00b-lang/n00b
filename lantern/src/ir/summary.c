@@ -502,13 +502,31 @@ steps_prefix(uint32_t depth, const core_string_t *steps, uint32_t other_depth,
     return true;
 }
 
+static int32_t
+steps_within(uint32_t depth, const core_string_t *steps, uint32_t other_depth,
+             const core_string_t *other)
+{
+    if (steps_prefix(depth, steps, other_depth, other)) return (int32_t)depth;
+    if (depth && step_eq(steps[depth - 1], value_step) && other_depth >= depth
+        && steps_prefix(depth - 1, steps, other_depth, other))
+        return (int32_t)depth - 1;
+    return -1;
+}
+
 static bool
 steps_cover(uint32_t depth, bool deep, const core_string_t *steps,
             uint32_t other_depth, bool other_deep, const core_string_t *other)
 {
-    if ((depth < other_depth && !deep)
-        || (depth == other_depth && other_deep && !deep)) return false;
-    return steps_prefix(depth, steps, other_depth, other);
+    if (deep) return steps_within(depth, steps, other_depth, other) >= 0;
+    return depth == other_depth && !other_deep
+        && steps_prefix(depth, steps, other_depth, other);
+}
+
+static int32_t
+path_within(const ir_spath_t *outer, const ir_spath_t *inner)
+{
+    return steps_within(outer->depth, outer->steps, inner->depth,
+                        inner->steps);
 }
 
 static bool
@@ -2042,6 +2060,9 @@ typedef struct {
     const ir_splace_t *target;
     const ir_spath_t  *leaf;
     core_dict_t       *path_places;
+    core_dict_t       *stores;
+    core_dict_t       *effects;
+    ir_splace_t        effects_place;
 } flow_query_t;
 
 typedef struct {
@@ -2097,6 +2118,12 @@ named_place(const ir_splace_t *place)
 }
 
 static uint8_t
+place_flags(const ir_spath_t *path)
+{
+    return path->depth ? path->flags & (uint8_t)~IR_SPATH_MUST : path->flags;
+}
+
+static uint8_t
 target_access_flags(flow_query_t *q, const ir_instr_t *call,
                     const ir_summary_t *s)
 {
@@ -2113,7 +2140,7 @@ target_access_flags(flow_query_t *q, const ir_instr_t *call,
                 ? unseen_reaches(q->summaries, q->target)
                 : named_place(place) && ir_splace_eq(place, q->target);
             if (matches)
-                flags |= named_place(place) ? path->flags
+                flags |= named_place(place) ? place_flags(path)
                                             : path->flags & IR_SPATH_ACCESS;
         }
     }
@@ -2185,10 +2212,29 @@ call_effect(flow_query_t *q, const ir_instr_t *call, ir_path_outcome_t outcome)
 }
 
 static uint8_t
+cached_call_effect(flow_query_t *q, const ir_instr_t *call,
+                   ir_path_outcome_t outcome)
+{
+    if (!q->effects) return call_effect(q, call, outcome);
+    if (!ir_splace_eq(&q->effects_place, q->target)) {
+        core_dict_free(q->effects);
+        core_dict_init(q->effects, nullptr, nullptr);
+        q->effects_place = *q->target;
+    }
+    void     *key   = (void *)((uintptr_t)call | (uintptr_t)outcome);
+    bool      found = false;
+    uintptr_t cached = (uintptr_t)core_dict_get(q->effects, key, &found);
+    if (found) return (uint8_t)cached;
+    uint8_t effect = call_effect(q, call, outcome);
+    core_dict_put(q->effects, key, (void *)(uintptr_t)effect);
+    return effect;
+}
+
+static uint8_t
 flow_step(void *context, const ir_instr_t *in, ir_path_outcome_t outcome)
 {
     flow_query_t *q = context;
-    if (is_call(in)) return call_effect(q, in, outcome);
+    if (is_call(in)) return cached_call_effect(q, in, outcome);
     return writes_target(q, in) ? IR_PATH_PASSED : IR_PATH_UNPASSED;
 }
 
@@ -2235,7 +2281,7 @@ ir_summary_effect(const ir_summary_t *summary, const ir_splace_t *place,
                                                    places);
         for (uint32_t p = 0; p < count; p++)
             if (named_place(&places[p]) && ir_splace_eq(&places[p], place))
-                flags |= summary->paths.data[i].flags;
+                flags |= place_flags(&summary->paths.data[i]);
     }
     return callee_effect(summary, flags, outcome);
 }
@@ -2382,19 +2428,25 @@ unpassed_exits(flow_query_t *q, ir_func_t *f, const ir_path_exits_t *whole)
 {
     uint8_t unpassed = exit_unpassed(whole);
     if (!unpassed) return 0;
-    path_list_t leaves = place_leaves(f, q->target);
-    if (leaves.data[0].depth) {
-        unpassed = 0;
-        for (size_t l = 0; l < leaves.len; l++) {
-            ir_path_exits_t exits;
-            q->leaf = &leaves.data[l];
-            unpassed |= ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, q, &exits)
-                ? exit_unpassed(&exits) : UNPASSED_RETURN | UNPASSED_FAIL;
-        }
-        q->leaf = nullptr;
+    const ir_spath_t *within = q->leaf;
+    path_list_t       leaves = place_leaves(f, q->target);
+    bool              split  = false;
+    uint8_t           parts  = 0;
+    for (size_t l = 0; leaves.data[0].depth && l < leaves.len; l++) {
+        const ir_spath_t *leaf = &leaves.data[l];
+        if (within && (leaf->depth <= within->depth
+                       || !steps_prefix(within->depth, within->steps,
+                                        leaf->depth, leaf->steps)))
+            continue;
+        ir_path_exits_t exits;
+        split   = true;
+        q->leaf = leaf;
+        parts  |= ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, q, &exits)
+            ? exit_unpassed(&exits) : UNPASSED_RETURN | UNPASSED_FAIL;
     }
+    q->leaf = within;
     core_list_free(leaves);
-    return unpassed;
+    return split ? parts : unpassed;
 }
 
 static const ir_instr_t *
@@ -2500,11 +2552,12 @@ path_touches(flow_query_t *q, const ir_summary_t *s, size_t index,
 }
 
 static uint8_t
-must_write(flow_query_t *q, ir_func_t *f, const ir_splace_t *target)
+must_write(flow_query_t *q, ir_func_t *f, const ir_splace_t *target,
+           const ir_spath_t *leaf)
 {
     ir_path_exits_t exits;
     q->target = target;
-    q->leaf   = nullptr;
+    q->leaf   = leaf;
     if (!ir_paths_flow(f, IR_PATH_UNPASSED, flow_step, q, &exits)) return 0;
     uint8_t unpassed = unpassed_exits(q, f, &exits);
     return (unpassed & UNPASSED_RETURN ? 0 : IR_SPATH_MUST_SUCCESS)
@@ -2515,10 +2568,13 @@ static void
 summarize_writes(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt,
                  ir_summary_t *summary)
 {
-    core_dict_t  cache;
+    core_dict_t  cache, stores, effects;
     core_dict_init(&cache, nullptr, nullptr);
+    core_dict_init(&stores, nullptr, nullptr);
+    core_dict_init(&effects, nullptr, nullptr);
     flow_query_t q = {.summaries = summaries, .f = f, .pt = pt,
-                      .path_places = &cache};
+                      .path_places = &cache, .stores = &stores,
+                      .effects = &effects};
     for (size_t i = 0; i < summary->paths.len; i++) {
         ir_splace_t targets[2];
         uint32_t    count = summary->paths.data[i].flags & IR_SPATH_WRITE
@@ -2528,14 +2584,30 @@ summarize_writes(ir_summaries_t *summaries, ir_func_t *f, pt_t *pt,
             for (size_t j = 0; !seen && j < i; j++)
                 seen = (summary->paths.data[j].flags & IR_SPATH_WRITE)
                     && path_touches(&q, summary, j, &targets[t]);
-            uint8_t must = seen ? 0 : must_write(&q, f, &targets[t]);
+            uint8_t must = seen ? 0
+                                : must_write(&q, f, &targets[t], nullptr);
             for (size_t j = i; must && j < summary->paths.len; j++)
                 if ((summary->paths.data[j].flags & IR_SPATH_WRITE)
                     && path_touches(&q, summary, j, &targets[t]))
                     summary->paths.data[j].flags |= must;
         }
     }
+    for (size_t i = 0; i < summary->paths.len; i++) {
+        ir_spath_t *path = &summary->paths.data[i];
+        ir_splace_t targets[2];
+        uint32_t    count = (path->flags & IR_SPATH_WRITE) && path->depth
+                && !(path->flags & IR_SPATH_DEEP)
+                && (path->flags & IR_SPATH_MUST) != IR_SPATH_MUST
+            ? query_path_places(&q, summary, i, targets) : 0;
+        for (uint32_t t = 0; t < count; t++)
+            if (named_place(&targets[t]))
+                path->flags |= must_write(&q, f, &targets[t], path);
+    }
     path_places_free(&cache);
+    core_dict_foreach(&stores, entry)
+        if (entry->value) core_free(entry->value);
+    core_dict_free(&stores);
+    core_dict_free(&effects);
 }
 
 
@@ -2756,7 +2828,7 @@ core_list_decl(pt_site_t);
 typedef struct {
     uint32_t   site;
     ir_spath_t path;
-    bool       deep;
+    bool       weak;
     pt_set_t   items;
 } pt_write_t;
 core_list_decl(pt_write_t);
@@ -2783,12 +2855,15 @@ typedef struct {
     uint32_t index;
     uint32_t first;
     uint32_t count;
+    bool     block;
 } flow_step_t;
 core_list_decl(flow_step_t);
 
 typedef struct {
     core_dict_t              writes;
     core_dict_t              positions;
+    core_dict_t              pending;
+    core_dict_t              released;
     core_list_t(flow_def_t)  defs;
     core_list_t(flow_step_t) steps;
     uint32_t                *block_steps;
@@ -3095,6 +3170,7 @@ static bool
 item_covers(const pt_item_t *a, const pt_item_t *b)
 {
     return a->origin == b->origin && a->flow <= b->flow
+        && (a->flow == PT_SAME) == (b->flow == PT_SAME)
         && a->held == b->held && !object_order(&a->loc, &b->loc)
         && steps_cover(a->depth, a->deep, a->steps, b->depth, b->deep,
                        b->steps)
@@ -3203,6 +3279,19 @@ place_bound(const pt_set_t *set, size_t low, size_t high,
     return low;
 }
 
+static size_t
+step_bound(const pt_set_t *set, size_t low, size_t high, uint32_t at,
+           core_string_t step, bool upper)
+{
+    while (low < high) {
+        size_t middle = low + (high - low) / 2;
+        int    order  = step_order(set->data[middle].loc.path.steps[at], step);
+        if (order < 0 || (upper && !order)) low = middle + 1;
+        else high = middle;
+    }
+    return low;
+}
+
 enum { SET_SCAN = 16 };
 
 static void trim_repeats(pt_item_t *item);
@@ -3221,15 +3310,33 @@ set_lookup(const pt_set_t *set, const pt_item_t *item, size_t *low,
         return false;
     }
     const ir_spath_t *path = &item->loc.path;
-    for (uint32_t k = 0; k <= path->depth; k++) {
-        size_t from = place_bound(set, start, end, item, k, false, false);
-        size_t to   = place_bound(set, from, end, item, k, false, true);
-        for (size_t i = from; i < to; i++)
-            if (item_covers(&set->data[i], item)) return true;
+    size_t from  = place_bound(set, start, end, item, 0, true, false);
+    size_t to    = place_bound(set, from, end, item, 0, true, true);
+    size_t   exact = from, below = from, outer = from;
+    uint32_t k     = 0;
+    for (;; k++) {
+        for (exact = from;
+             exact < to && set->data[exact].loc.path.depth == k; exact++)
+            if (item_covers(&set->data[exact], item)) return true;
+        if (k == path->depth || exact == to) break;
+        below = exact;
+        outer = to;
+        if (!step_eq(path->steps[k], value_step)) {
+            size_t value = step_bound(set, exact, to, k, value_step, false);
+            for (size_t i = value;
+                 i < to && set->data[i].loc.path.depth == k + 1
+                 && step_eq(set->data[i].loc.path.steps[k], value_step); i++)
+                if (item_covers(&set->data[i], item)) return true;
+        }
+        from = step_bound(set, exact, to, k, path->steps[k], false);
+        to   = step_bound(set, from, to, k, path->steps[k], true);
     }
     bool wide = loc_deep(&item->loc) && !(path->flags & SPATH_INLINE);
-    *low  = place_bound(set, start, end, item, path->depth, wide, false);
-    *high = place_bound(set, *low, end, item, path->depth, wide, true);
+    bool full = from < to && set->data[from].loc.path.depth >= path->depth;
+    bool pointee = wide && k == path->depth && k
+        && step_eq(path->steps[k - 1], value_step);
+    *low  = pointee ? below : from;
+    *high = pointee ? outer : !full ? from : wide ? to : exact;
     return false;
 }
 
@@ -3744,46 +3851,56 @@ write_has_cell(const pt_write_t *write, core_string_t cell)
     return false;
 }
 
-static void
-note_write(pt_t *pt, uint32_t site, const pt_loc_t *at, bool deep,
-           pt_item_t item)
+static pt_write_t *
+note_target(pt_t *pt, const ir_instr_t *in, uint32_t site, const pt_loc_t *at,
+            bool weak)
 {
-    if (!pt->at || !pt->sites.data[site].local) return;
+    if (!in || !pt->sites.data[site].local) return nullptr;
     pt_flow_t   *flow   = &pt->flow;
     bool         found  = false;
-    pt_writes_t *writes = core_dict_get(&flow->writes, pt->at, &found);
+    pt_writes_t *writes = core_dict_get(&flow->writes, in, &found);
     if (!writes) {
         writes  = core_alloc(pt_writes_t);
         *writes = core_list_new(pt_write_t);
-        core_dict_put(&flow->writes, pt->at, writes);
+        core_dict_put(&flow->writes, in, writes);
     }
     pt_write_t *write = nullptr;
     for (size_t w = 0; !write && w < writes->len; w++)
         if (writes->data[w].site == site) write = &writes->data[w];
     ir_spath_t path = at ? at->path : (ir_spath_t){0};
-    deep |= at && loc_deep(at);
+    weak |= at && loc_deep(at);
     if (!write) {
         core_list_push(*writes, ((pt_write_t){
-            .site = site, .path = path, .deep = deep,
+            .site = site, .path = path, .weak = weak,
             .items = (pt_set_t){0}}));
-        write       = &writes->data[writes->len - 1];
         flow->stale = true;
+        return &writes->data[writes->len - 1];
     }
-    else if (!write->deep
-             && (deep || write->path.depth != path.depth
-                 || !steps_prefix(path.depth, path.steps, write->path.depth,
-                                  write->path.steps))) {
-        write->deep = true;
+    if (!write->weak
+        && (weak || write->path.depth != path.depth
+            || !steps_prefix(path.depth, path.steps, write->path.depth,
+                             write->path.steps))) {
+        write->weak = true;
         flow->stale = true;
+        pt_notify(pt, contents_key(site));
     }
-    if (!write_has_cell(write, item_cell(&item))) flow->stale = true;
+    return write;
+}
+
+static void
+note_write(pt_t *pt, uint32_t site, const pt_loc_t *at, bool weak,
+           pt_item_t item)
+{
+    pt_write_t *write = note_target(pt, pt->at, site, at, weak);
+    if (!write) return;
+    if (!write_has_cell(write, item_cell(&item))) pt->flow.stale = true;
     if (set_add(&write->items, item)) pt_notify(pt, contents_key(site));
 }
 
 static flow_kill_t
 write_kill(const pt_write_t *write)
 {
-    if (write->deep) return FLOW_KILL_NONE;
+    if (write->weak) return FLOW_KILL_NONE;
     if (!write->path.depth) return FLOW_KILL_SITE;
     return write->path.depth == 1
             && !core_string_eq(write->path.steps[0], element_step)
@@ -3793,6 +3910,7 @@ write_kill(const pt_write_t *write)
 static void
 flow_apply(const pt_flow_t *flow, const flow_step_t *step, uint64_t *state)
 {
+    if (step->block) memset(state, 0, flow->words * sizeof(uint64_t));
     for (uint32_t d = step->first; d < step->first + step->count; d++) {
         const uint64_t *kill = &flow->kills[(size_t)d * flow->words];
         for (uint32_t w = 0; w < flow->words; w++) state[w] &= ~kill[w];
@@ -3865,11 +3983,21 @@ flow_build(pt_t *pt)
                                 ? write->path.steps[0] : cell,
                             .kill = kill, .pointers = record != nullptr}));
                 }
+                if (kill != FLOW_KILL_NONE && flow->defs.len == start)
+                    core_list_push(flow->defs, ((flow_def_t){
+                        .instr = in, .record = (uint32_t)r,
+                        .site = write->site,
+                        .cell = kill == FLOW_KILL_CELL
+                            ? write->path.steps[0] : (core_string_t){0},
+                        .kill = kill}));
             }
-            if (flow->defs.len != first)
+            bool block = false;
+            core_dict_get(&flow->pending, in, &block);
+            if (flow->defs.len != first || block)
                 core_list_push(flow->steps, ((flow_step_t){
                     .index = i, .first = first,
-                    .count = (uint32_t)flow->defs.len - first}));
+                    .count = (uint32_t)flow->defs.len - first,
+                    .block = block}));
         }
     }
     flow->block_steps[f->n_blocks] = (uint32_t)flow->steps.len;
@@ -3907,17 +4035,13 @@ flow_build(pt_t *pt)
     flow->stale = false;
 }
 
-static const pt_set_t *
-site_contents(pt_t *pt, uint32_t site)
+static bool
+flow_state_at(pt_t *pt, const ir_instr_t *in)
 {
-    pt_site_t *entry = &pt->sites.data[site];
-    if (!entry->local || !pt->at) return &entry->contents;
-    pt->positional = true;
     pt_flow_t *flow  = &pt->flow;
     bool       found = false;
-    uintptr_t  at    = (uintptr_t)core_dict_get(&flow->positions, pt->at,
-                                                &found);
-    if (!found) return &entry->contents;
+    uintptr_t  at    = (uintptr_t)core_dict_get(&flow->positions, in, &found);
+    if (!found) return false;
     if (flow->stale) flow_build(pt);
     uint32_t block = (uint32_t)(at >> 32), index = (uint32_t)at;
     memcpy(flow->state, &flow->block_in[(size_t)block * flow->words],
@@ -3926,6 +4050,40 @@ site_contents(pt_t *pt, uint32_t site)
          s < flow->block_steps[block + 1]
          && flow->steps.data[s].index < index; s++)
         flow_apply(flow, &flow->steps.data[s], flow->state);
+    return true;
+}
+
+static void
+settle_writes(pt_t *pt, const ir_instr_t *in)
+{
+    pt_flow_t *flow    = &pt->flow;
+    bool       pending = false;
+    core_dict_get(&flow->pending, in, &pending);
+    if (!pending) return;
+    if (flow_state_at(pt, in))
+        for (size_t d = 0; d < flow->defs.len; d++)
+            if (flow->state[d / 64] >> (d % 64) & 1)
+                pt_notify(pt, contents_key(flow->defs.data[d].site));
+    core_dict_remove(&flow->pending, in);
+    flow->stale = true;
+}
+
+static bool
+strong_writer(pt_t *pt, const ir_instr_t *in)
+{
+    bool released = false;
+    core_dict_get(&pt->flow.released, in, &released);
+    return !released;
+}
+
+static const pt_set_t *
+site_contents(pt_t *pt, uint32_t site)
+{
+    pt_site_t *entry = &pt->sites.data[site];
+    if (!entry->local || !pt->at) return &entry->contents;
+    pt->positional = true;
+    pt_flow_t *flow = &pt->flow;
+    if (!flow_state_at(pt, pt->at)) return &entry->contents;
     flow->items.len = 0;
     for (size_t d = 0; d < flow->defs.len; d++) {
         const flow_def_t *def = &flow->defs.data[d];
@@ -4289,9 +4447,8 @@ static void
 contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
               pt_set_t *into)
 {
-    const core_string_t *at       = loc->path.steps;
-    uint32_t             depth    = loc->path.depth;
-    bool                 derived  = false;
+    const core_string_t *at    = loc->path.steps;
+    uint32_t             depth = loc->path.depth;
     for (size_t i = 0; i < contents->len; i++) {
         const pt_item_t *held  = &contents->data[i];
         bool             under = steps_prefix(depth, at, held->depth,
@@ -4300,8 +4457,7 @@ contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
                                               depth, at);
         if (!under && !over) continue;
         if (loc_deep(loc) || (held->deep && !under)) {
-            if (held->flow <= PT_COPY) set_add(into, deepened(held));
-            else derived = pt->value_flow;
+            set_add(into, deepened(held));
             continue;
         }
         if (under) {
@@ -4329,12 +4485,6 @@ contents_into(pt_t *pt, const pt_loc_t *loc, const pt_set_t *contents,
         extend_through(&item.loc, at + held->depth, depth - held->depth,
                        false);
         set_add(into, item);
-    }
-    if (derived) {
-        pt_item_t node = item_at(*loc);
-        node.loc.path.flags &= (uint8_t)~SPATH_INLINE;
-        node.flow            = PT_DERIVED;
-        set_add(into, node);
     }
 }
 
@@ -4373,18 +4523,16 @@ written_at(pt_t *pt, const pt_loc_t *loc, uintptr_t key, pt_set_t *into)
         const ir_spath_t          *at    = &write->at.path;
         if (!any && at->root != IR_SPLACE_UNKNOWN
             && !same_path_root(at, read)) continue;
-        bool unknown = any || at->root == IR_SPLACE_UNKNOWN;
-        bool under   = steps_prefix(read->depth, read->steps, at->depth,
-                                    at->steps);
-        bool over    = steps_prefix(at->depth, at->steps, read->depth,
-                                    read->steps);
-        if (!under && !over && !unknown) continue;
-        if (under && !over && !unknown && !(read->flags & IR_SPATH_DEEP)
-            && crosses(pt, &write->at, read->depth, at->depth)) continue;
+        bool    unknown = any || at->root == IR_SPLACE_UNKNOWN;
+        int32_t under   = path_within(read, at);
+        bool    over    = path_within(at, read) >= 0;
+        if (under < 0 && !over && !unknown) continue;
+        if (under >= 0 && !over && !unknown && !(read->flags & IR_SPATH_DEEP)
+            && crosses(pt, &write->at, (uint32_t)under, at->depth)) continue;
         pt_item_t node = item_at(site_loc(write->site));
         node.flow = PT_DERIVED;
-        set_add(into, under && !unknown
-            ? item_under(at->steps + read->depth, at->depth - read->depth,
+        set_add(into, under >= 0 && !unknown
+            ? item_under(at->steps + under, at->depth - (uint32_t)under,
                          at->flags & IR_SPATH_DEEP, node)
             : item_under(nullptr, 0, true, node));
     }
@@ -4453,31 +4601,30 @@ aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
             const ir_spath_t *at    = &alias.loc.path;
             if (!same_path_root(at, read) || !alias_visible(pt, entry))
                 continue;
-            bool under = steps_prefix(read->depth, read->steps, at->depth,
-                                      at->steps);
-            bool over  = steps_prefix(at->depth, at->steps, read->depth,
-                                      read->steps);
-            if (!under && !over) continue;
+            int32_t under = path_within(read, at);
+            int32_t over  = path_within(at, read);
+            if (under < 0 && over < 0) continue;
             pt_item_t target = item_at(site_loc(site));
             loc_extend(&target.loc, alias.steps, alias.depth, alias.deep);
             bool loose = loc_deep(&alias.loc);
-            if (under) {
+            if (under >= 0) {
                 if (!loc_deep(loc)
-                    && crosses(pt, &alias.loc, read->depth, at->depth))
+                    && crosses(pt, &alias.loc, (uint32_t)under, at->depth))
                     continue;
                 pt_loc_t slot = alias.loc;
                 slot.path.flags &= (uint8_t)~IR_SPATH_DEEP;
                 loc_push(&slot, value_step);
-                bool inside = loose && !crosses(pt, &slot, at->depth,
-                                                at->depth + 1);
-                set_add(into, item_under(at->steps + read->depth,
-                                         at->depth - read->depth, inside,
+                bool inside = loose
+                    && (loc_deep(loc)
+                        || !crosses(pt, &slot, at->depth, at->depth + 1));
+                set_add(into, item_under(at->steps + under,
+                                         at->depth - (uint32_t)under, inside,
                                          target));
                 continue;
             }
-            if (over && !loose)
-                extend_through(&target.loc, read->steps + at->depth,
-                               read->depth - at->depth, false);
+            if (!loose)
+                extend_through(&target.loc, read->steps + over,
+                               read->depth - (uint32_t)over, false);
             else {
                 set_add(into, item_under(nullptr, 0, true, target));
                 target.loc.path.flags |= IR_SPATH_DEEP;
@@ -4637,8 +4784,10 @@ pt_publish(pt_t *pt, const pt_set_t *values, const pt_loc_t *at)
 }
 
 static void
-pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values)
+pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values,
+         bool must)
 {
+    bool weak = !must || addresses->len != 1;
     for (size_t i = 0; i < addresses->len; i++) {
         pt_loc_t at = location_of(&addresses->data[i]);
         if (!is_address(&addresses->data[i])) continue;
@@ -4647,12 +4796,13 @@ pt_store(pt_t *pt, const pt_set_t *addresses, const pt_set_t *values)
             note_external_write(pt, &at, values);
             continue;
         }
+        note_target(pt, pt->at, at.site, &at, weak);
         for (size_t v = 0; v < values->len; v++) {
             pt_item_t item = item_under(at.path.steps, at.path.depth,
                                         loc_deep(&at), values->data[v]);
             pt_add(pt, &pt->sites.data[at.site].contents,
                    contents_key(at.site), item);
-            note_write(pt, at.site, &at, false, item);
+            note_write(pt, at.site, &at, weak, item);
         }
     }
 }
@@ -5465,9 +5615,8 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         if (!steps_prefix(item.depth, item.steps, path->depth, path->steps))
             continue;
         if (item.flow != PT_SAME) {
-            bool      copy = item.flow == PT_COPY && item.held;
             pt_item_t part = item.deep ? deepened(&item)
-                           : copy      ? held_at(item.loc)
+                           : item.held ? held_at(item.loc)
                                        : item_at(item.loc);
             if (!item.deep)
                 loc_extend(&part.loc, path->steps + item.depth,
@@ -5792,29 +5941,62 @@ mapped_output(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(values);
 }
 
-static void
+static bool
+must_dest(const ir_summary_t *callee, const ir_spath_t *to)
+{
+    if (to->flags & IR_SPATH_DEEP) return false;
+    bool returns = !(callee->flags & (IR_SUMMARY_DIVERGES
+                                      | IR_SUMMARY_NO_RETURN));
+    bool fails   = callee->flags & IR_SUMMARY_MAY_FAIL;
+    for (size_t p = 0; p < callee->paths.len; p++) {
+        const ir_spath_t *path = &callee->paths.data[p];
+        if (!(path->flags & IR_SPATH_WRITE) || (path->flags & IR_SPATH_DEEP)
+            || !same_path_root(path, to) || path->depth != to->depth
+            || !steps_prefix(path->depth, path->steps, to->depth, to->steps))
+            continue;
+        return (!returns || (path->flags & IR_SPATH_MUST_SUCCESS))
+            && (!fails || (path->flags & IR_SPATH_MUST_FAILURE));
+    }
+    return false;
+}
+
+static bool
+sole_callee(pt_t *pt, const ir_instr_t *call)
+{
+    const pt_callees_t *callees = callees_of(pt, call);
+    return callees && !callees->targets.unknown && callees->callees.len == 1
+        && callees->callees.data[0]->results_known;
+}
+
+static bool
 apply_stores(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
              ir_summary_t *summary)
 {
-    const flow_table_t *flows  = &callee->flows[IR_SFLOW_STORES];
-    const uint32_t     *groups = pt->value_flow
+    const flow_table_t *flows   = &callee->flows[IR_SFLOW_STORES];
+    const uint32_t     *groups  = pt->value_flow
         ? flow_groups_of(pt, callee, IR_SFLOW_STORES) : nullptr;
-    pt_set_t            to     = (pt_set_t){0};
-    pt_set_t            from   = (pt_set_t){0};
+    bool                sole    = !summary && sole_callee(pt, call)
+        && strong_writer(pt, call);
+    bool                settled = true;
+    pt_set_t            to      = (pt_set_t){0};
+    pt_set_t            from    = (pt_set_t){0};
     mapped_sources_t    mapped;
     mapped_sources_init(&mapped, call, callee, IR_SFLOW_STORES);
     for (size_t d = 0; d < flows->dests.len; d++) {
         to.len   = 0;
         from.len = 0;
+        bool must = sole && must_dest(callee, flows->dests.data[d].to);
         flowed_items(pt, &mapped, groups, d, &from);
-        if (!from.len) continue;
+        if (!from.len && !must) continue;
         map_location(pt, call, callee, flows->dests.data[d].to, MAP_PLACE,
                      &to);
+        settled = settled && (!must || to.len);
         if (summary) record_stores(pt, summary, &to, &from);
-        else pt_store(pt, &to, &from);
+        else pt_store(pt, &to, &from, must);
     }
     core_list_free(to);
     core_list_free(from);
+    return settled;
 }
 
 static const core_string_t outcome_arms[] = {
@@ -5860,14 +6042,14 @@ call_result(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     core_list_free(items);
 }
 
-static void
+static bool
 call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
              const pt_set_t *reach, pt_set_t *result)
 {
     if (callee->results_known) {
-        apply_stores(pt, call, callee, nullptr);
+        bool settled = apply_stores(pt, call, callee, nullptr);
         call_result(pt, call, callee, result);
-        return;
+        return settled;
     }
     pt_set_t written = (pt_set_t){0};
     for (size_t p = 0; p < callee->paths.len; p++) {
@@ -5899,6 +6081,7 @@ call_escapes(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
     }
     core_list_free(written);
     call_result(pt, call, callee, result);
+    return true;
 }
 
 static uint8_t
@@ -5924,11 +6107,12 @@ callee_outputs(pt_t *pt, const ir_instr_t *call,
         mapped_output(pt, call, callees->callees.data[t], output, into);
 }
 
-static void
+static bool
 written_outputs(pt_t *pt, const ir_instr_t *call,
                 const pt_callees_t *callees, const pt_set_t *reach,
                 ir_summary_t *summary)
 {
+    bool settled = true;
     for (uint32_t param = 0; param < ir_call_argument_count(call); param++) {
         ir_call_arg_t argument = ir_call_argument(call, param);
         if (!ir_call_argument_writes(&argument)) continue;
@@ -5943,15 +6127,17 @@ written_outputs(pt_t *pt, const ir_instr_t *call,
                 set_add(&values, reach->data[r]);
         else
             call_reach(pt, call, callees, &values);
+        settled = settled && address.len;
         if (summary) {
             record_set(pt, summary, &address, IR_SPATH_WRITE, nullptr);
             record_stores(pt, summary, &address, &values);
         }
         else
-            pt_store(pt, &address, &values);
+            pt_store(pt, &address, &values, strong_writer(pt, call));
         core_list_free(address);
         core_list_free(values);
     }
+    return settled;
 }
 
 static void
@@ -5980,9 +6166,12 @@ pt_call(pt_t *pt, const ir_instr_t *call)
         }
         set_add(&result, deep_item(unknown));
     }
+    bool settled = true;
     for (size_t t = 0; t < callees->callees.len; t++)
-        call_escapes(pt, call, callees->callees.data[t], &reach, &result);
-    written_outputs(pt, call, callees, &reach, nullptr);
+        settled = call_escapes(pt, call, callees->callees.data[t], &reach,
+                               &result) && settled;
+    settled = written_outputs(pt, call, callees, &reach, nullptr) && settled;
+    if (settled) settle_writes(pt, call);
     pt_define(pt, call, &result);
     core_list_free(reach);
     core_list_free(result);
@@ -6088,6 +6277,12 @@ launders(pt_t *pt, const ir_instr_t *in)
 }
 
 static bool
+must_store(const ir_instr_t *in)
+{
+    return in->op == IR_OP_STORE || in->op == IR_OP_GLOBAL_STORE;
+}
+
+static bool
 stored_sets(pt_t *pt, const ir_instr_t *in, pt_set_t *to, pt_set_t *from)
 {
     if (!ir_op_transfers(in->op)) return false;
@@ -6164,7 +6359,7 @@ static bool
 definite_store(pt_t *pt, const ir_instr_t *in, ir_spath_t *path)
 {
     if (!ir_op_transfers(in->op) || ir_op_addresses_element(in->op)
-        || !(ir_op_memory_access(in->op) & IR_MEM_WRITE)) return false;
+        || in->op == IR_OP_ATOMIC_CAS) return false;
     const ir_instr_t *at = pt->at;
     pt->at = in;
     pt_set_t addresses = (pt_set_t){0};
@@ -6249,9 +6444,7 @@ written_before(pt_t *pt, const ir_instr_t *at, const ir_spath_t *read)
     for (size_t c = 0; c < entry->cells.len; c++) {
         const ir_spath_t *cell = &entry->cells.data[c];
         if ((entry->state[c / 64] >> (c % 64) & 1)
-            && !compare_path_roots(cell, read)
-            && steps_prefix(cell->depth, cell->steps, read->depth,
-                            read->steps))
+            && !compare_path_roots(cell, read) && path_within(cell, read) >= 0)
             return true;
     }
     return false;
@@ -6260,9 +6453,20 @@ written_before(pt_t *pt, const ir_instr_t *at, const ir_spath_t *read)
 static bool
 writes_target(flow_query_t *q, const ir_instr_t *in)
 {
+    if (!q->target) return false;
     ir_spath_t path;
-    return q->target && definite_store(q->pt, in, &path)
-        && covers_place(&path, q->target, q->leaf);
+    if (!q->stores)
+        return definite_store(q->pt, in, &path)
+            && covers_place(&path, q->target, q->leaf);
+    bool        found  = false;
+    ir_spath_t *stored = core_dict_get(q->stores, (void *)in, &found);
+    if (!found) {
+        stored = definite_store(q->pt, in, &path) ? core_alloc(ir_spath_t)
+                                                  : nullptr;
+        if (stored) *stored = path;
+        core_dict_put(q->stores, (void *)in, stored);
+    }
+    return stored && covers_place(stored, q->target, q->leaf);
 }
 
 static bool
@@ -6586,7 +6790,9 @@ pt_step(pt_t *pt, const ir_instr_t *in)
             if (!stored_sets(pt, in, &first, &other)) break;
             if (ir_op_memory_access(in->op) & IR_MEM_READ)
                 pt_load(pt, &first, &out);
-            pt_store(pt, &first, &other);
+            pt_store(pt, &first, &other,
+                     must_store(in) && strong_writer(pt, in));
+            if (first.len) settle_writes(pt, in);
             break;
         }
         if (holds_nothing(in->op)) break;
@@ -7449,6 +7655,37 @@ note_copy_ins(pt_t *pt)
 }
 
 static bool
+writes_definitely(pt_t *pt, const ir_instr_t *call)
+{
+    for (uint32_t param = 0; param < ir_call_argument_count(call); param++) {
+        ir_call_arg_t argument = ir_call_argument(call, param);
+        if (ir_call_argument_writes(&argument)) return true;
+    }
+    if (!sole_callee(pt, call)) return false;
+    const ir_summary_t *callee = callees_of(pt, call)->callees.data[0];
+    const flow_table_t *flows  = &callee->flows[IR_SFLOW_STORES];
+    for (size_t d = 0; d < flows->dests.len; d++)
+        if (must_dest(callee, flows->dests.data[d].to)) return true;
+    return false;
+}
+
+static void
+note_writers(pt_t *pt)
+{
+    for (size_t o = 0; o < pt->order.len; o++) {
+        const ir_instr_t *in = pt->order.data[o];
+        if (in->dest_kind == IR_DEST_LOCAL && in->dest_local
+            && tracks(pt, in->dest_local->type))
+            note_target(pt, in, local_site(pt, in->dest_local), nullptr,
+                        false);
+        if (must_store(in)
+            || ((in->op == IR_OP_CALL || in->op == IR_OP_CALLBACK_INVOKE)
+                && writes_definitely(pt, in)))
+            core_dict_put(&pt->flow.pending, (void *)in, (void *)1);
+    }
+}
+
+static bool
 copy_in_param(const pt_t *pt, uint32_t site, ir_spath_t *own)
 {
     if (site == PT_EXTERNAL || !pt->sites.data[site].local) return false;
@@ -7506,6 +7743,8 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     };
     core_dict_init(&pt->flow.writes, nullptr, nullptr);
     core_dict_init(&pt->flow.positions, nullptr, nullptr);
+    core_dict_init(&pt->flow.pending, nullptr, nullptr);
+    core_dict_init(&pt->flow.released, nullptr, nullptr);
     pt->order  = core_list_new(summary_instr_ptr_t);
     pt->reader = PT_NO_READER;
     core_dict_init(&pt->readers, nullptr, nullptr);
@@ -7521,6 +7760,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     pt_t *outer = pt_enter(pt);
     note_load_uses(pt);
     note_copy_ins(pt);
+    note_writers(pt);
     flow_build(pt);
     pt_leave(outer);
 }
@@ -7537,6 +7777,8 @@ flow_free(pt_flow_t *flow)
     }
     core_dict_free(&flow->writes);
     core_dict_free(&flow->positions);
+    core_dict_free(&flow->pending);
+    core_dict_free(&flow->released);
     core_list_free(flow->defs);
     core_list_free(flow->steps);
     core_list_free(flow->items);
@@ -7659,6 +7901,22 @@ pt_free(pt_t *pt)
     core_free(pt->dirty);
 }
 
+static bool
+release_writers(pt_t *pt)
+{
+    pt_flow_t *flow = &pt->flow;
+    if (!core_dict_len(&flow->pending)) return false;
+    for (size_t o = 0; o < pt->order.len; o++) {
+        const ir_instr_t *in      = pt->order.data[o];
+        bool              pending = false;
+        core_dict_get(&flow->pending, in, &pending);
+        if (!pending) continue;
+        core_dict_put(&flow->released, (void *)in, (void *)1);
+        settle_writes(pt, in);
+    }
+    return true;
+}
+
 static void
 pt_solve(pt_t *pt)
 {
@@ -7679,6 +7937,7 @@ pt_solve(pt_t *pt)
         }
         pt->reader = PT_NO_READER;
         pt->at     = nullptr;
+        if (release_writers(pt)) continue;
         spread_escapes(pt);
         if (!pt->pending) break;
     }

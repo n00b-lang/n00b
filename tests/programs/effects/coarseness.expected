@@ -18,7 +18,7 @@ coarseness.hash_str: (string) -> u128
   reads s.selector
   reads builtin.hashing.secret[]...
   traps explicit bounds unwrap arithmetic
-  output result data[s... s.data.__value... s.data.s... s.data.style_info.items[].substitution... s.data[] s.selector s[]] control[]
+  output result data[s... s.data.__value... s.selector s[]] control[]
 coarseness.len_of: (List[int]) -> uint
   effects none
   reads items.count
