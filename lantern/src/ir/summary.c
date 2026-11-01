@@ -5158,9 +5158,12 @@ resolve_into(pt_t *pt, pt_loc_t loc, pt_set_t *into, pt_set_t *seen)
                 count--;
             }
             if (!count && !stepped && !through) continue;
-            if (held_target(&held, count, deep || held.deep,
-                            inline_tail && !held.deep, into))
+            if (held.held && !count && held.loc.site == PT_EXTERNAL) {
+                extend_tail(&next, nullptr, 0, deep || held.deep,
+                            inline_tail && !held.deep);
+                set_add(into, item_at(next));
                 continue;
+            }
             if (!held_pointer(pt, &held)) {
                 set_add(into, held.held && !stepped ? item_at(loc)
                                                     : deepened(&held));
