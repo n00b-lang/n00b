@@ -3843,11 +3843,15 @@ item_cell(const pt_item_t *item)
 }
 
 static bool
-write_has_cell(const pt_write_t *write, core_string_t cell)
+write_has_cell(const pt_write_t *write, const pt_item_t *item)
 {
-    for (size_t i = 0; i < write->items.len; i++)
-        if (core_string_eq(item_cell(&write->items.data[i]), cell))
+    core_string_t cell = item_cell(item);
+    for (size_t i = 0; i < write->items.len; i++) {
+        const pt_item_t *held = &write->items.data[i];
+        if ((held->flow == PT_SAME) == (item->flow == PT_SAME)
+            && core_string_eq(item_cell(held), cell))
             return true;
+    }
     return false;
 }
 
@@ -3893,7 +3897,7 @@ note_write(pt_t *pt, uint32_t site, const pt_loc_t *at, bool weak,
 {
     pt_write_t *write = note_target(pt, pt->at, site, at, weak);
     if (!write) return;
-    if (!write_has_cell(write, item_cell(&item))) pt->flow.stale = true;
+    if (!write_has_cell(write, &item)) pt->flow.stale = true;
     if (set_add(&write->items, item)) pt_notify(pt, contents_key(site));
 }
 
