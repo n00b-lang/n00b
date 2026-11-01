@@ -5630,22 +5630,35 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         uint8_t   mode   = (path->flags & IR_SPATH_ROOT ? VALUE_ROOT : 0)
             | (deep ? VALUE_DEEP : 0) | (derived ? VALUE_DERIVED : 0);
         pt_item_t at     = coarse ? deepened(&item) : item_at(item.loc);
+        bool      lost   = coarse;
         if (!coarse) {
             if (path->depth == item.depth) at.held = item.held;
             else at.loc = location_of(&item);
+            lost = path->depth != item.depth
+                && (item.deep || loc_deep(&at.loc));
             if (item.deep) at.loc.path.flags |= IR_SPATH_DEEP;
-            else extend_through(&at.loc, path->steps + item.depth,
-                                path->depth - item.depth, deep);
+            else if (!lost) {
+                extend_through(&at.loc, path->steps + item.depth,
+                               path->depth - item.depth, false);
+                lost = loc_deep(&at.loc);
+                if (deep) at.loc.path.flags |= IR_SPATH_DEEP;
+            }
             at.deep = deep;
         }
-        if (!coarse && path->depth != item.depth) {
-            resolved_value(pt, at.loc, mode, into);
-            continue;
+        lost = lost && path->depth != item.depth;
+        pt_set_t value = (pt_set_t){0};
+        if (!coarse && path->depth != item.depth)
+            resolved_value(pt, at.loc, mode, lost ? &value : into);
+        else {
+            pt_set_t places = (pt_set_t){0};
+            set_add(&places, at);
+            places_value(pt, &places, coarse, mode, lost ? &value : into);
+            core_list_free(places);
         }
-        pt_set_t places = (pt_set_t){0};
-        set_add(&places, at);
-        places_value(pt, &places, coarse, mode, into);
-        core_list_free(places);
+        for (size_t v = 0; v < value.len; v++)
+            set_add(into, value.data[v].depth ? deepened(&value.data[v])
+                                              : value.data[v]);
+        core_list_free(value);
     }
     core_list_free(items);
 }
