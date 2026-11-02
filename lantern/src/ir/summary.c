@@ -43,6 +43,7 @@ typedef struct {
 static pthread_mutex_t step_lock = PTHREAD_MUTEX_INITIALIZER;
 static core_dict_t     step_table;
 static core_dict_t     run_table;
+static core_dict_t     run_starts;
 static bool            step_table_ready;
 
 static core_hash_value_t
@@ -61,20 +62,25 @@ run_eq(const void *a, const void *b)
         && !memcmp(x->steps, y->steps, x->depth * sizeof(core_string_t));
 }
 
+static void
+step_tables_ready(void)
+{
+    if (step_table_ready) return;
+    core_dict_init_string(&step_table);
+    core_dict_init(&run_table, run_hash, run_eq);
+    core_dict_init(&run_starts, nullptr, nullptr);
+    core_dict_put(&step_table, (void *)&element_step, (void *)&element_step);
+    core_dict_put(&step_table, (void *)&value_step, (void *)&value_step);
+    core_dict_put(&step_table, (void *)&length_step, (void *)&length_step);
+    step_table_ready = true;
+}
+
 static core_string_t
 step_intern_locked(core_string_t step)
 {
-    if (!step_table_ready) {
-        core_dict_init_string(&step_table);
-        core_dict_init(&run_table, run_hash, run_eq);
-        core_dict_put(&step_table, (void *)&element_step,
-                      (void *)&element_step);
-        core_dict_put(&step_table, (void *)&value_step, (void *)&value_step);
-        core_dict_put(&step_table, (void *)&length_step,
-                      (void *)&length_step);
-        step_table_ready = true;
-    }
-    if (!step.u8_bytes) return step;
+    if (!step.u8_bytes || step.data == value_step.data
+        || step.data == element_step.data || step.data == length_step.data)
+        return step;
     bool           found = false;
     core_string_t *canon = core_dict_get(&step_table, &step, &found);
     if (!found) {
@@ -94,8 +100,15 @@ steps_join(const core_string_t *head, uint32_t head_depth,
     core_string_t *built = depth <= 8 ? local
                                       : core_alloc_array(core_string_t, depth);
     pthread_mutex_lock(&step_lock);
-    for (uint32_t s = 0; s < head_depth; s++)
-        built[s] = step_intern_locked(head[s]);
+    step_tables_ready();
+    bool      started = false;
+    uintptr_t run_len = head_depth ? (uintptr_t)core_dict_get(
+        &run_starts, (void *)head, &started) : 0;
+    if (started && run_len >= head_depth)
+        memcpy(built, head, head_depth * sizeof(core_string_t));
+    else
+        for (uint32_t s = 0; s < head_depth; s++)
+            built[s] = step_intern_locked(head[s]);
     for (uint32_t s = 0; s < tail_depth; s++)
         built[head_depth + s] = step_intern_locked(tail[s]);
     step_run_t  probe = {built, depth};
@@ -111,6 +124,7 @@ steps_join(const core_string_t *head, uint32_t head_depth,
         run    = core_alloc(step_run_t);
         *run   = (step_run_t){owned, depth};
         core_dict_put(&run_table, run, run);
+        core_dict_put(&run_starts, owned, (void *)(uintptr_t)depth);
     }
     pthread_mutex_unlock(&step_lock);
     if (built != local) core_free(built);
@@ -183,6 +197,7 @@ struct ir_summary_t {
 static void flow_table_init(flow_table_t *table, const ir_func_t *function);
 static void flow_table_free(flow_table_t *table);
 static bool pointer_class(ir_module_t *module, th_type *type);
+static th_type *pointee_type(ir_module_t *module, th_type *type);
 static bool same_flows(const flow_table_t *a, const flow_table_t *b);
 static int  compare_paths(const ir_spath_t *a, const ir_spath_t *b);
 
@@ -798,9 +813,26 @@ pointer_slot(const flow_table_t *table, const ir_spath_t *path)
     return slot && pointer_class(f->owner, slot) ? slot : nullptr;
 }
 
+static th_type *
+pointee_slot(const flow_table_t *table, th_type *slot)
+{
+    ir_module_t *module = table->function->owner;
+    th_type     *next   = pointee_type(module, slot);
+    return next && next != slot && pointer_class(module, next)
+            && !ir_type_eq(module, next, slot)
+        ? next : nullptr;
+}
+
 static void
-canonical_sources(const flow_table_t *table, const ir_spath_t *from,
-                  ir_sflow_kind_t kind, path_list_t *out)
+emit_source(flow_table_t *table, const ir_spath_t *path, ir_sflow_kind_t kind,
+            core_list_t(uint64_t) *parts)
+{
+    core_list_push(*parts, (uint64_t)flow_source(table, path) << 8 | kind);
+}
+
+static void
+canonical_sources(flow_table_t *table, const ir_spath_t *from,
+                  ir_sflow_kind_t kind, core_list_t(uint64_t) *parts)
 {
     ir_spath_t key  = canonical_path(from);
     uint32_t   base = kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT)
@@ -809,7 +841,7 @@ canonical_sources(const flow_table_t *table, const ir_spath_t *from,
         ir_spath_t pointer = key;
         pointer.depth  = base;
         pointer.flags &= (uint8_t)~(IR_SPATH_ROOT | IR_SPATH_DEEP);
-        core_list_push(*out, pointer);
+        emit_source(table, &pointer, kind, parts);
         if (!(from->flags & IR_SPATH_DEEP)) return;
         key.flags &= (uint8_t)~IR_SPATH_ROOT;
     }
@@ -820,30 +852,35 @@ canonical_sources(const flow_table_t *table, const ir_spath_t *from,
     while (slot) {
         ir_spath_t pointer = key;
         pointer.flags &= (uint8_t)~IR_SPATH_DEEP;
-        core_list_push(*out, pointer);
+        emit_source(table, &pointer, kind, parts);
         key.steps = steps_append(key.steps, key.depth, value_step);
         key.depth++;
-        th_type *next = pointer_slot(table, &key);
-        slot = next && next != slot
-                && !ir_type_eq(table->function->owner, next, slot)
-            ? next : nullptr;
+        slot = pointee_slot(table, slot);
     }
-    core_list_push(*out, key);
+    emit_source(table, &key, kind, parts);
+}
+
+static void
+flow_put(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
+         ir_sflow_kind_t kind)
+{
+    ir_spath_t   key_to = canonical_path(to);
+    uint32_t     source = flow_source(table, from);
+    flow_dest_t *dest   = flow_dest(table, &key_to);
+    bit_set(kind_bits(dest, kind), source);
 }
 
 static void
 flow_add(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
          ir_sflow_kind_t kind)
 {
-    path_list_t keys = core_list_new(ir_spath_t);
-    canonical_sources(table, from, kind, &keys);
-    ir_spath_t key_to = canonical_path(to);
-    for (size_t k = 0; k < keys.len; k++) {
-        uint32_t     source = flow_source(table, &keys.data[k]);
-        flow_dest_t *dest   = flow_dest(table, &key_to);
-        bit_set(kind_bits(dest, kind), source);
-    }
-    core_list_free(keys);
+    core_list_t(uint64_t) parts = core_list_new(uint64_t);
+    canonical_sources(table, from, kind, &parts);
+    ir_spath_t   key_to = canonical_path(to);
+    flow_dest_t *dest   = flow_dest(table, &key_to);
+    for (size_t p = 0; p < parts.len; p++)
+        bit_set(kind_bits(dest, kind), (uint32_t)(parts.data[p] >> 8));
+    core_list_free(parts);
 }
 
 static bool
@@ -869,7 +906,7 @@ join_flows(flow_table_t *into, const flow_table_t *from)
         for (uint32_t s = 0; s < from->sources.len; s++)
             for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++)
                 if (bit_has(kind_bits(dest, kind), s))
-                    flow_add(into, dest->to, from->sources.data[s], kind);
+                    flow_put(into, dest->to, from->sources.data[s], kind);
     }
 }
 
@@ -1331,8 +1368,7 @@ returns_pointers(const ir_summary_t *summary)
     return pointers;
 }
 
-static th_type *pointee_type(ir_module_t *module, th_type *type);
-static bool     generic_type(th_type *type);
+static bool generic_type(th_type *type);
 
 static uint8_t
 escape_from(const ir_spath_t *from, uint32_t param, bool address)
@@ -2942,7 +2978,14 @@ typedef struct {
     ir_spath_t path;
     uint32_t   site;
 } pt_loc_t;
-core_list_decl(pt_loc_t);
+
+typedef struct stored_t stored_t;
+
+typedef struct {
+    pt_loc_t  loc;
+    stored_t *entry;
+} pt_frame_t;
+core_list_decl(pt_frame_t);
 
 typedef enum : uint8_t {
     PT_SAME,
@@ -3211,8 +3254,7 @@ struct pt_t {
     flow_bits_t            crossed;
     uint32_t               crossed_known;
     pt_set_t               seen;
-    core_list_t(pt_loc_t)  reading;
-    uint32_t               cuts;
+    core_list_t(pt_frame_t) reading;
     core_dict_t            resolved;
     core_list_t(uint64_t) *resolving;
     uint64_t               generation;
@@ -3597,7 +3639,43 @@ drop_covered(pt_set_t *set, const pt_item_t *item, size_t low, size_t high)
     set->len -= high - kept;
 }
 
-static bool insert_item(pt_set_t *set, pt_item_t item);
+static bool
+insert_item(pt_set_t *set, const pt_item_t *item)
+{
+    size_t low = 0, high = 0;
+    if (set_lookup(set, item, &low, &high)) return false;
+    bool same = item->flow == PT_SAME;
+    if (same && item->kind == PT_ADDRESS) {
+        pt_item_t reach = *item;
+        reach.kind = PT_CONTENTS;
+        reach.loc.path.depth = address_base(item);
+        reach.loc.path.flags |= IR_SPATH_DEEP;
+        reach.loc.path.flags &= (uint8_t)~SPATH_INLINE;
+        size_t from = 0, to = 0;
+        if (set_lookup(set, &reach, &from, &to)) return false;
+    }
+    else if (same && (item->loc.path.flags & IR_SPATH_DEEP)
+             && !(item->loc.path.flags & SPATH_INLINE)) {
+        pt_item_t address = *item;
+        address.kind = PT_ADDRESS;
+        size_t from = 0, to = 0;
+        set_lookup(set, &address, &from, &to);
+        drop_covered(set, item, from, to);
+        set_lookup(set, item, &low, &high);
+    }
+    drop_covered(set, item, low, high);
+    size_t at = 0, top = set->len;
+    while (at < top) {
+        size_t middle = at + (top - at) / 2;
+        if (set_order(&set->data[middle], item) < 0) at = middle + 1;
+        else top = middle;
+    }
+    core_list_push(*set, *item);
+    memmove(&set->data[at + 1], &set->data[at],
+            (set->len - 1 - at) * sizeof(pt_item_t));
+    set->data[at] = *item;
+    return true;
+}
 
 static bool
 set_add(const pt_t *pt, pt_set_t *set, pt_item_t item)
@@ -3619,63 +3697,26 @@ set_add(const pt_t *pt, pt_set_t *set, pt_item_t item)
             pointer.loc.path.depth  = base;
             pointer.loc.path.flags &= (uint8_t)~(IR_SPATH_DEEP
                                                  | SPATH_INLINE);
-            added |= insert_item(set, pointer);
+            added |= insert_item(set, &pointer);
             if (!loc_deep(&item.loc)) return added;
             item.kind = PT_CONTENTS;
             continue;
         }
-        if (!pointer_reach(pt, &item)) return insert_item(set, item) || added;
+        if (!pointer_reach(pt, &item)) return insert_item(set, &item) || added;
         pt_item_t pointer = item;
         pointer.loc.path.flags &= (uint8_t)~IR_SPATH_DEEP;
         pt_item_t pointee = pointer;
         loc_push(pt, &pointee.loc, value_step);
         if (loc_deep(&pointee.loc)
             || pointee.loc.path.depth != item.loc.path.depth + 1)
-            return insert_item(set, item) || added;
+            return insert_item(set, &item) || added;
         canonical_item(pt, &pointer);
-        added |= insert_item(set, pointer);
+        added |= insert_item(set, &pointer);
         item = pointee;
         item.loc.path.flags |= IR_SPATH_DEEP;
     }
 }
 
-static bool
-insert_item(pt_set_t *set, pt_item_t item)
-{
-    size_t low = 0, high = 0;
-    if (set_lookup(set, &item, &low, &high)) return false;
-    bool same = item.flow == PT_SAME;
-    if (same && item.kind == PT_ADDRESS) {
-        pt_item_t reach = item;
-        reach.kind = PT_CONTENTS;
-        reach.loc.path.depth = address_base(&item);
-        reach.loc.path.flags |= IR_SPATH_DEEP;
-        reach.loc.path.flags &= (uint8_t)~SPATH_INLINE;
-        size_t from = 0, to = 0;
-        if (set_lookup(set, &reach, &from, &to)) return false;
-    }
-    else if (same && (item.loc.path.flags & IR_SPATH_DEEP)
-             && !(item.loc.path.flags & SPATH_INLINE)) {
-        pt_item_t address = item;
-        address.kind = PT_ADDRESS;
-        size_t from = 0, to = 0;
-        set_lookup(set, &address, &from, &to);
-        drop_covered(set, &item, from, to);
-        set_lookup(set, &item, &low, &high);
-    }
-    drop_covered(set, &item, low, high);
-    size_t at = 0, top = set->len;
-    while (at < top) {
-        size_t middle = at + (top - at) / 2;
-        if (set_order(&set->data[middle], &item) < 0) at = middle + 1;
-        else top = middle;
-    }
-    core_list_push(*set, item);
-    memmove(&set->data[at + 1], &set->data[at],
-            (set->len - 1 - at) * sizeof(pt_item_t));
-    set->data[at] = item;
-    return true;
-}
 
 static void typed_placement(pt_t *pt, uint32_t site, pt_item_t *item);
 
@@ -3734,6 +3775,15 @@ anywhere_below(pt_item_t item)
     item.steps = nullptr;
     item.depth = 0;
     return item;
+}
+
+static void
+merge_widened(const pt_t *pt, pt_set_t *into, pt_set_t *items, bool below)
+{
+    for (size_t i = 0; i < items->len; i++)
+        set_add(pt, into, below ? anywhere_below(items->data[i])
+                                : deepened(&items->data[i]));
+    core_list_free(*items);
 }
 
 static void
@@ -4775,17 +4825,27 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
     core_free(dropped);
 }
 
-typedef struct {
+struct stored_t {
     pt_loc_t loc;
     uint64_t generation;
     pt_set_t items;
     bool     partial;
-} stored_t;
+    bool     busy;
+};
 
 static core_hash_value_t resolved_hash(void *key);
 static bool              resolved_eq(const void *a, const void *b);
 static void contents_into(pt_t *pt, const pt_loc_t *loc,
                           const pt_set_t *contents, pt_set_t *into);
+
+static void
+cut_above(pt_t *pt, size_t frame)
+{
+    for (size_t f = frame + 1; f < pt->reading.len; f++) {
+        stored_t *entry = pt->reading.data[f].entry;
+        if (entry) entry->partial = true;
+    }
+}
 
 static const pt_set_t *
 stored_at(pt_t *pt, const pt_loc_t *loc)
@@ -4797,16 +4857,27 @@ stored_at(pt_t *pt, const pt_loc_t *loc)
         *entry = (stored_t){.loc = *loc};
         core_dict_put(&pt->stored, &entry->loc, entry);
     }
+    if (entry->busy) {
+        for (size_t f = pt->reading.len; f > 0; f--)
+            if (pt->reading.data[f - 1].entry == entry) {
+                cut_above(pt, f - 1);
+                break;
+            }
+        return &entry->items;
+    }
     bool      known   = false;
     uintptr_t changed = (uintptr_t)core_dict_get(
         &pt->changed, (void *)contents_key(loc->site), &known);
     if (!found || entry->partial || changed > entry->generation) {
-        uint32_t cuts     = pt->cuts;
-        entry->items.len  = 0;
+        entry->items.len = 0;
+        entry->partial   = false;
+        entry->busy      = true;
+        core_list_push(pt->reading, ((pt_frame_t){*loc, entry}));
         contents_into(pt, loc, &pt->sites.data[loc->site].contents,
                       &entry->items);
+        pt->reading.len--;
+        entry->busy       = false;
         entry->generation = pt->generation;
-        entry->partial    = pt->cuts != cuts;
     }
     return &entry->items;
 }
@@ -4825,8 +4896,9 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
     for (size_t a = 0; a < aliases->len; a++) {
         if (!alias_visible(pt, &aliases->data[a])) continue;
         pt_loc_t through;
-        if (!alias_through(pt, &aliases->data[a].item, at, depth, loc_deep(loc),
-                           &through)) continue;
+        if (!alias_through(pt, &aliases->data[a].item, at, depth,
+                           loc_deep(loc), &through))
+            continue;
         set_add(pt, into, contents_item(through));
     }
 }
@@ -4834,12 +4906,12 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
 static bool
 begin_reading(pt_t *pt, const pt_loc_t *loc)
 {
-    for (size_t r = 0; r < pt->reading.len; r++)
-        if (resolved_eq(&pt->reading.data[r], loc)) {
-            pt->cuts++;
+    for (size_t f = pt->reading.len; f > 0; f--)
+        if (resolved_eq(&pt->reading.data[f - 1].loc, loc)) {
+            cut_above(pt, f - 1);
             return false;
         }
-    core_list_push(pt->reading, *loc);
+    core_list_push(pt->reading, ((pt_frame_t){*loc, nullptr}));
     return true;
 }
 
@@ -5025,9 +5097,7 @@ aliased_at(pt_t *pt, const uint32_t *sites, size_t count,
                     pt_set_t reached = (pt_set_t){0};
                     target.loc.path.flags |= IR_SPATH_DEEP;
                     content_at(pt, &target.loc, &reached);
-                    for (size_t r = 0; r < reached.len; r++)
-                        set_add(pt, into, anywhere_below(reached.data[r]));
-                    core_list_free(reached);
+                    merge_widened(pt, into, &reached, true);
                 }
                 continue;
             }
@@ -5921,9 +5991,7 @@ call_reach(pt_t *pt, const ir_instr_t *call, const pt_callees_t *callees,
     for (uint32_t o = call->op == IR_OP_CALL ? 1 : 0; o < call->n_operands;
          o++)
         pt_read(pt, referenced(call, o), &items);
-    for (size_t i = 0; i < items.len; i++)
-        set_add(pt, into, deepened(&items.data[i]));
-    core_list_free(items);
+    merge_widened(pt, into, &items, false);
     if (callees->targets.unknown) set_add(pt, into, deep_item(unknown_loc()));
     for (size_t t = 0; t < callees->callees.len; t++) {
         const ir_summary_t *callee = callees->callees.data[t];
@@ -5998,9 +6066,7 @@ places_value(pt_t *pt, pt_set_t *places, uint8_t mode, pt_set_t *into)
     }
     pt_set_t loaded = (pt_set_t){0};
     pt_load(pt, places, &loaded);
-    for (size_t i = 0; i < loaded.len; i++)
-        set_add(pt, into, deepened(&loaded.data[i]));
-    core_list_free(loaded);
+    merge_widened(pt, into, &loaded, false);
 }
 
 typedef struct {
@@ -6109,9 +6175,7 @@ map_param_value(pt_t *pt, const ir_instr_t *call, const ir_spath_t *path,
         if (deep) loc.path.flags |= IR_SPATH_DEEP;
         pt_set_t value = (pt_set_t){0};
         resolved_value(pt, loc, mode, lost ? &value : into);
-        for (size_t v = 0; v < value.len; v++)
-            set_add(pt, into, anywhere_below(value.data[v]));
-        core_list_free(value);
+        merge_widened(pt, into, &value, true);
     }
     core_list_free(items);
 }
@@ -6173,12 +6237,7 @@ map_location(pt_t *pt, const ir_instr_t *call, const ir_summary_t *callee,
                          path->flags & IR_SPATH_DEEP, inline_tail);
         if (!value || root) set_add(pt, into, item_at(loc));
         else if (mode == MAP_DERIVED) set_add(pt, into, contents_item(loc));
-        else {
-            pt_set_t address = (pt_set_t){0};
-            set_add(pt, &address, item_at(loc));
-            pt_load(pt, &address, into);
-            core_list_free(address);
-        }
+        else content_at(pt, &loc, into);
     }
     else if (path->root == IR_SPLACE_PARAM && value)
         map_param_value(pt, call, path, mode == MAP_DERIVED, into);
@@ -7733,19 +7792,6 @@ typedef struct {
 } source_map_t;
 
 static void
-push_sources(flow_table_t *flows, const ir_spath_t *from,
-             ir_sflow_kind_t kind, core_list_t(uint64_t) *parts)
-{
-    path_list_t keys = core_list_new(ir_spath_t);
-    canonical_sources(flows, from, kind, &keys);
-    for (size_t k = 0; k < keys.len; k++)
-        core_list_push(*parts, (uint64_t)flow_source(flows, &keys.data[k])
-                                       << 8
-                                   | kind);
-    core_list_free(keys);
-}
-
-static void
 summary_sources(pt_t *pt, flow_table_t *flows, uint32_t name,
                 ir_sflow_kind_t kind, core_list_t(uint64_t) *parts)
 {
@@ -7759,14 +7805,14 @@ summary_sources(pt_t *pt, flow_table_t *flows, uint32_t name,
     }
     while (map->spans.len <= name) core_list_push(map->spans, UINT64_MAX);
     if (map->spans.data[name] == UINT64_MAX) {
-        core_list_t(uint64_t) found_parts = core_list_new(uint64_t);
-        push_sources(flows, pt->source_names.sources.data[name],
-                     IR_SFLOW_DATA, &found_parts);
+        size_t first = parts->len;
+        canonical_sources(flows, pt->source_names.sources.data[name], kind,
+                          parts);
         map->spans.data[name] = (uint64_t)map->pool.len << 32
-                              | found_parts.len;
-        for (size_t p = 0; p < found_parts.len; p++)
-            core_list_push(map->pool, (uint32_t)(found_parts.data[p] >> 8));
-        core_list_free(found_parts);
+                              | (parts->len - first);
+        for (size_t p = first; p < parts->len; p++)
+            core_list_push(map->pool, (uint32_t)(parts->data[p] >> 8));
+        return;
     }
     uint64_t span  = map->spans.data[name];
     uint32_t start = (uint32_t)(span >> 32);
@@ -8033,7 +8079,7 @@ describe_names(pt_t *pt, const pt_item_t *item, flow_table_t *flows,
         else if (name->root == IR_SPLACE_HEAP)
             name->flags |= item->kind == PT_ADDRESS ? IR_SPATH_ROOT : 0;
         else if (!(name->flags & IR_SPATH_DEEP)) address_name(name, true);
-        push_sources(flows, name, kind, parts);
+        canonical_sources(flows, name, kind, parts);
     }
     core_list_free(from);
 }
@@ -10001,7 +10047,7 @@ get_bits(summary_reader_t *r, flow_table_t *flows, const ir_spath_t *to,
             if (!(word >> b & 1)) continue;
             size_t source = (size_t)w * 64 + b;
             if (source >= sources->len) r->failed = true;
-            else flow_add(flows, to, &sources->data[source], kind);
+            else flow_put(flows, to, &sources->data[source], kind);
         }
     }
 }
