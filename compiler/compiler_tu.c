@@ -1775,11 +1775,11 @@ cache_iteration_plan(parse_grammar_t *grammar,
 enum { N00BB_FINALIZE_DEPTH = 16 };
 
 static th_type *
-finalize_record_shape(n00bb_tu_state_t *state, th_type *type)
+finalize_record_shape(n00bb_tu_state_t *state, th_type *type, bool open)
 {
     th_type *resolved = type ? th_resolve(type) : nullptr;
     if (!resolved || th_is_poison(resolved)
-        || !th_is_closed(state->types, resolved)
+        || (!open && !th_is_closed(state->types, resolved))
         || n00bb_object_type(state->types, resolved)) return nullptr;
     th_type *shape = th_kind_of(resolved) == TH_NAMED
         ? th_type_definition(state->types, resolved) : resolved;
@@ -1804,47 +1804,62 @@ n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
 
 static bool
 type_finalized_within(core_translation_unit_t *unit, th_type *type,
-                      size_t depth)
+                      bool open, size_t depth)
 {
     n00bb_tu_state_t *state = tu_state(unit);
     th_type *resolved = type ? th_resolve(type) : nullptr;
     if (!resolved || depth >= N00BB_FINALIZE_DEPTH) return false;
+    if (open && th_kind_of(resolved) == TH_VAR) return true;
     th_type *item = th_option_item(resolved);
-    if (item) return type_finalized_within(unit, item, depth + 1);
+    if (item) return type_finalized_within(unit, item, open, depth + 1);
     size_t count = 0;
     if (static_tuple_element_type(resolved, 0, &count)) {
         for (size_t i = 0; i < count; i++)
             if (type_finalized_within(unit,
-                    static_tuple_element_type(resolved, i, nullptr),
+                    static_tuple_element_type(resolved, i, nullptr), open,
                     depth + 1)) return true;
         return false;
     }
-    th_type *shape = finalize_record_shape(state, resolved);
+    th_type *shape = finalize_record_shape(state, resolved, open);
     if (!shape) return false;
     if (n00bb_type_finalizer(unit, resolved, nullptr)) return true;
     for (size_t i = 0; i < th_record_len(shape); i++) {
         const th_member *member = th_record_member(shape, i);
         if (member && member->type
-            && type_finalized_within(unit, member->type, depth + 1))
+            && type_finalized_within(unit, member->type, open, depth + 1))
             return true;
     }
     return false;
 }
 
-bool
-n00bb_type_finalized(core_translation_unit_t *unit, th_type *type)
+static bool
+type_finalized_cached(core_translation_unit_t *unit, th_type *type,
+                      bool open)
 {
     n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
     th_type *key = type ? th_resolve(type) : nullptr;
     if (!state || !key) return false;
-    bool found = false;
+    uintptr_t known = open ? 4 : 1;
+    uintptr_t yes = open ? 8 : 2;
     uintptr_t cached = (uintptr_t)core_dict_get(&state->finalized_types, key,
-                                                &found);
-    if (found) return cached == 2;
-    bool finalized = type_finalized_within(unit, key, 0);
-    core_dict_put(&state->finalized_types, key, (void *)(uintptr_t)(
-        finalized ? 2 : 1));
+                                                nullptr);
+    if (cached & known) return (cached & yes) != 0;
+    bool finalized = type_finalized_within(unit, key, open, 0);
+    cached |= known | (finalized ? yes : 0);
+    core_dict_put(&state->finalized_types, key, (void *)cached);
     return finalized;
+}
+
+bool
+n00bb_type_finalized(core_translation_unit_t *unit, th_type *type)
+{
+    return type_finalized_cached(unit, type, false);
+}
+
+bool
+n00bb_type_may_finalize(core_translation_unit_t *unit, th_type *type)
+{
+    return type_finalized_cached(unit, type, true);
 }
 
 bool

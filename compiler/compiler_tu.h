@@ -96,6 +96,7 @@ bool resolve_for_binding_types(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                bool closed_only);
 bool n00bb_type_finalized(core_translation_unit_t *unit, th_type *type);
+bool n00bb_type_may_finalize(core_translation_unit_t *unit, th_type *type);
 bool n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
                           th_env_method_t *method);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,

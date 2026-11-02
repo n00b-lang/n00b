@@ -451,6 +451,7 @@ typedef struct {
     parse_tree_t *node;
     ir_local_t *result;
     ir_block_t *continuation;
+    uint64_t order;
     bool active;
     bool value_written;
 } n00bb_value_block_frame_t;
@@ -471,6 +472,12 @@ typedef struct {
     bool active;
 } n00bb_try_frame_t;
 core_list_decl(n00bb_try_frame_t);
+
+static bool n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
+                                       parse_tree_t *exit_node,
+                                       uint64_t stop_order,
+                                       n00bb_try_frame_t *handler,
+                                       bool success, uint64_t before_order);
 
 typedef struct {
     parse_sym_entry_t *context_symbol;
@@ -598,6 +605,7 @@ typedef struct {
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_final_frame_t) finals;
     size_t final_base;
+    bool borrowed_write;
     core_list_t(n00bb_copyout_t) parameters_to_copy_out;
     core_list_t(n00bb_pending_copyouts_t) pending_call_copyouts;
     core_list_t(n00bb_narrowed_root_t) narrowed_roots;
@@ -1855,14 +1863,20 @@ n00bb_set_owned(ir_lower_context_t *context, n00bb_final_frame_t *frame,
         && ir_instr_operand_value(copy, constant->dest);
 }
 
+static ir_value_t *n00bb_emit_temp(ir_lower_context_t *context, ir_op_t op,
+                                   th_type *type, ir_value_t *operand,
+                                   ir_span_t span);
+
 static ir_value_t *
 n00bb_final_address(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                     ir_span_t span)
 {
     ir_value_t *address = ir_lower_bound_address(context, symbol);
-    ir_local_t *local = address ? nullptr
-        : ir_lower_bound_local(context, symbol);
-    if (!address && local) address = ir_lower_local_address(context, local);
+    if (address)
+        return n00bb_emit_temp(context, IR_OP_COPY, address->type, address,
+                               span);
+    ir_local_t *local = ir_lower_bound_local(context, symbol);
+    if (local) address = ir_lower_local_address(context, local);
     if (address) return address;
     ir_value_t *binding = local ? nullptr
         : ir_lower_bound_value(context, symbol);
@@ -2012,6 +2026,44 @@ n00bb_emit_finalizer_call(ir_lower_context_t *context,
 }
 
 static bool
+n00bb_emit_open_finalize(ir_lower_context_t *context, ir_value_t *address,
+                         th_type *type, ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *nil_type = th_name(types, CORE_STRING_STATIC("nil"));
+    th_param parameter = {.mode = TH_CONSUME, .type = th_ind(types, 0, type)};
+    th_type *signature = parameter.type
+        ? th_func_with_error(types, nil_type, nil_type, &parameter, 1,
+                             nullptr, nullptr, 0) : nullptr;
+    char buffer[64];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_finalize_open#%016llx",
+        (unsigned long long)th_hash(types, type));
+    ir_func_t *placeholder = ir_func_find(context->module, name);
+    if (!placeholder && signature) {
+        placeholder = ir_func_add(context->module, name, signature,
+                                  IR_LINK_INTERNAL);
+        ir_block_t *entry = placeholder
+            && ir_param_add(placeholder, CORE_STRING_STATIC("self"),
+                            parameter.type)
+            ? ir_block_add(placeholder, CORE_STRING_STATIC("entry"))
+            : nullptr;
+        if (!entry || !ir_instr_add(entry, IR_OP_RETURN)) return false;
+    }
+    ir_value_t *callee = placeholder
+        ? ir_func_address(context->module, placeholder) : nullptr;
+    ir_value_t *consumed = callee
+        ? n00bb_emit_consume_value(context, address, nullptr, span) : nullptr;
+    ir_instr_t *call = consumed
+        ? ir_lower_emit_instruction(context, IR_OP_CALL, span) : nullptr;
+    return call && ir_lower_set_temp_dest(context, call,
+            CORE_STRING_STATIC("__n00bb_finalized_"), nil_type)
+        && ir_instr_operand_value(call, callee)
+        && ir_instr_operand_value(call, consumed)
+        && ir_instr_set_call_signature(call, signature);
+}
+
+static bool
 n00bb_emit_finalize_fields(ir_lower_context_t *context, ir_value_t *address,
                            ir_span_t span, size_t depth)
 {
@@ -2027,7 +2079,7 @@ n00bb_emit_finalize_fields(ir_lower_context_t *context, ir_value_t *address,
          && i < th_record_len(shape); i++) {
         const th_member *member = th_record_member(shape, i);
         if (!member || !member->type
-            || !n00bb_type_finalized(lower->unit, member->type)) continue;
+            || !n00bb_type_may_finalize(lower->unit, member->type)) continue;
         ir_value_t *field = n00bb_final_field(context, address, member->name,
                                               span);
         if (!field || !n00bb_emit_finalize_value(context, field, member->type,
@@ -2043,8 +2095,11 @@ n00bb_emit_finalize_value(ir_lower_context_t *context, ir_value_t *address,
 {
     n00bb_lower_context_t *lower = context->user;
     th_type *resolved = type ? th_resolve(type) : nullptr;
-    if (!resolved || depth >= N00BB_FINALIZE_DEPTH
-        || !n00bb_type_finalized(lower->unit, resolved)) return true;
+    if (!resolved || depth >= N00BB_FINALIZE_DEPTH) return true;
+    if (!th_is_closed(ir_module_types(context->module), resolved))
+        return !n00bb_type_may_finalize(lower->unit, resolved)
+            || n00bb_emit_open_finalize(context, address, resolved, span);
+    if (!n00bb_type_finalized(lower->unit, resolved)) return true;
     th_type *item = th_option_item(resolved);
     size_t count = 0;
     if (item || static_tuple_element_type(resolved, 0, &count)) {
@@ -2160,6 +2215,12 @@ n00bb_temporary_scope(parse_grammar_t *grammar, parse_tree_t *node)
             || nt_is(grammar, at, CORE_STRING_STATIC("top-level-stmt")))
             return at;
         parse_tree_t *parent = parse_tree_parent(at);
+        if (parent && core_tree_num_children(parent) == 3
+            && (core_tree_child(parent, 0) == at
+                || core_tree_child(parent, 2) == at)
+            && (nt_is(grammar, parent, CORE_STRING_STATIC("or-expr"))
+                || nt_is(grammar, parent, CORE_STRING_STATIC("and-expr"))))
+            return at;
         if (parent && nt_is(grammar, at, CORE_STRING_STATIC("expression"))
             && (nt_is(grammar, parent, CORE_STRING_STATIC("if-stmt"))
                 || nt_is(grammar, parent, CORE_STRING_STATIC("elif-clause"))
@@ -2185,7 +2246,7 @@ n00bb_node_value(ir_lower_context_t *context, parse_tree_t *node,
             && outcome->def->op == IR_OP_CALL;
     }
     if (!produced || n00bb_temporary_frame(lower, value)
-        || !n00bb_type_finalized(lower->unit, value->type)) return true;
+        || !n00bb_type_may_finalize(lower->unit, value->type)) return true;
     parse_tree_t *scope = n00bb_temporary_scope(lower->grammar, node);
     if (!scope) return true;
     ir_span_t span = lower_span_for_tree(context, node);
@@ -2221,7 +2282,9 @@ n00bb_local_escapes(const parse_sym_entry_t *symbol)
     for (size_t i = 0; i < symbol->aliased_by_count; i++) {
         const parse_sym_alias_t *alias = &symbol->aliased_by[i];
         if (alias->escapes || !alias->other
-            || alias->other->storage_duration != PARSE_SYM_STORAGE_AUTOMATIC)
+            || (alias->other->storage_duration != PARSE_SYM_STORAGE_AUTOMATIC
+                && alias->other->storage_duration
+                    != PARSE_SYM_STORAGE_DYNAMIC))
             return true;
     }
     return false;
@@ -2264,15 +2327,17 @@ n00bb_begin_final_frame(ir_lower_context_t *context,
              && i < th_record_len(shape); i++) {
             const th_member *member = th_record_member(shape, i);
             any |= member && member->type
-                && n00bb_type_finalized(lower->unit, member->type);
+                && n00bb_type_may_finalize(lower->unit, member->type);
         }
         if (!any) return true;
     }
-    else if (!n00bb_type_finalized(lower->unit, type)) return true;
+    else if (!n00bb_type_may_finalize(lower->unit, type)) return true;
     parse_tree_t *scope = symbol->scope ? symbol->scope->node : nullptr;
     if (!scope || (!parameter
         && !nt_is(lower->grammar, scope, CORE_STRING_STATIC("body"))
-        && !nt_is(lower->grammar, scope, CORE_STRING_STATIC("try-body"))))
+        && !nt_is(lower->grammar, scope, CORE_STRING_STATIC("try-body"))
+        && !nt_is(lower->grammar, scope,
+                  CORE_STRING_STATIC("block-value-expr"))))
         return true;
     th_type *bool_type = n00bb_ir_builtin_type(context->module,
                                                CORE_STRING_STATIC("bool"));
@@ -2333,6 +2398,8 @@ n00bb_lower_statement_scope(ir_lower_context_t *context, parse_visit_t *visit,
                             bool entering, void *state)
 {
     (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    if (!entering && lower) lower->borrowed_write = false;
     return entering
         || n00bb_finish_final_scope(context, visit->node, visit->node);
 }
@@ -2368,8 +2435,12 @@ n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
                                          whole))
             || (index && core_string_eq(source_text_of(lower->unit, index),
                                         whole));
-        if (!place || call || !n00bb_type_finalized(lower->unit, type))
+        if (!place || call) return true;
+        if (!n00bb_type_finalized(lower->unit, type)) {
+            lower->borrowed_write = n00bb_type_may_finalize(lower->unit,
+                                                            type);
             return true;
+        }
         core_string_t type_text = lower_type_text(context, type);
         lower_report(context, N00B_DIAG_FINALIZED_COPY, span,
             N00B_TEXT_FINALIZED_VALUE_COPIED,
@@ -2380,6 +2451,8 @@ n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
         core_free(type_text.data);
         return false;
     }
+    if (ir_lower_bound_address(context, frame->symbol))
+        return n00bb_set_owned(context, frame, false, span);
     ir_local_t *local = ir_lower_bound_local(context, frame->symbol);
     ir_value_t *binding = local
         ? ir_local_value(context->function, local)
@@ -2403,11 +2476,14 @@ static bool
 n00bb_write_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                     bool written)
 {
-    n00bb_final_frame_t *frame = n00bb_final_frame(context->user, symbol);
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_final_frame_t *frame = n00bb_final_frame(lower, symbol);
+    bool borrowed = written && lower && lower->borrowed_write;
+    if (written && lower) lower->borrowed_write = false;
     if (!frame || !context->reachable) return true;
     if (!written)
         return n00bb_emit_scope_finalize(context, frame, symbol->decl_node);
-    return n00bb_set_owned(context, frame, true,
+    return n00bb_set_owned(context, frame, !borrowed,
                            lower_span_for_tree(context, symbol->decl_node));
 }
 
@@ -3827,13 +3903,14 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
         && (!visit->annot || !core_string_eq(visit->annot->scope_tag,
                                              CORE_STRING_STATIC("block")))))
         return true;
-    if (!entering && !logical_rhs
+    if (!entering
         && !n00bb_finish_final_scope(context, visit->node, visit->node))
         return false;
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("block-value-expr"))) {
         if (entering) {
             n00bb_value_block_frame_t frame = {
                 .node = visit->node,
+                .order = ++lower->next_control_order,
                 .active = context->reachable,
             };
             if (frame.active) {
@@ -5948,6 +6025,12 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
             ir_value_t *value = expression
                 ? n00bb_result_value(context, expression, frame->result)
                 : nullptr;
+            if (value && (!n00bb_move_source(context, visit->grammar,
+                                             expression)
+                || !n00bb_emit_scoped_cleanups(context, visit->node,
+                                               frame->order, nullptr, true,
+                                               UINT64_MAX)))
+                return false;
             ir_instr_t *store = value
                 ? ir_lower_emit_instruction(context, IR_OP_COPY,
                     lower_span_for_tree(context, visit->node)) : nullptr;
@@ -7897,7 +7980,8 @@ collect_sequence_literal_values(ir_lower_context_t *context,
     if (!cached) return false;
     for (size_t i = 0; i < cached->count; i++) {
         ir_value_t *value = ir_lower_node_value(context, cached->nodes[i]);
-        if (!value) return false;
+        if (!value || !n00bb_move_source(context, visit->grammar,
+                                         cached->nodes[i])) return false;
         core_list_push(*values, value);
     }
     return true;
@@ -10704,14 +10788,12 @@ n00bb_emit_context_exit(ir_lower_context_t *context,
 
 static bool
 n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
-                           parse_tree_t *exit_node,
-                           n00bb_loop_frame_t *stop_before,
+                           parse_tree_t *exit_node, uint64_t stop_order,
                            n00bb_try_frame_t *handler, bool success,
                            uint64_t before_order)
 {
     n00bb_lower_context_t *lower = context->user;
     ir_span_t span = lower_span_for_tree(context, exit_node);
-    uint64_t stop_order = stop_before ? stop_before->order : 0;
     uint64_t before = before_order;
     for (;;) {
         n00bb_loop_frame_t *loop = nullptr;
@@ -10789,7 +10871,8 @@ n00bb_emit_scoped_success(ir_lower_context_t *context,
                           parse_tree_t *exit_node,
                           n00bb_loop_frame_t *stop_before)
 {
-    return n00bb_emit_scoped_cleanups(context, exit_node, stop_before,
+    return n00bb_emit_scoped_cleanups(context, exit_node,
+                                      stop_before ? stop_before->order : 0,
                                       nullptr, true, UINT64_MAX);
 }
 
@@ -10820,7 +10903,7 @@ n00bb_emit_with_failure_before(ir_lower_context_t *context,
             break;
         }
     }
-    return n00bb_emit_scoped_cleanups(context, exit_node, nullptr, handler,
+    return n00bb_emit_scoped_cleanups(context, exit_node, 0, handler,
                                       false, before_order);
 }
 
@@ -20972,6 +21055,15 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
             lowered = ir_lower_tree(lowerer, &context, grammar,
                                     roots->data[i]);
             if (lowered.status == IR_LOWER_FAILED) break;
+            parse_tree_t *statement = roots->data[i];
+            while (statement && !nt_is(grammar, statement,
+                                       CORE_STRING_STATIC("top-level-stmt")))
+                statement = parse_tree_parent(statement);
+            if (statement && !n00bb_finish_final_scope(&context, statement,
+                                                       roots->data[i])) {
+                lowered.status = IR_LOWER_FAILED;
+                break;
+            }
         }
     }
     else lowered = ir_lower_tree(lowerer, &context, grammar, body);
@@ -27858,6 +27950,12 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
             nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("expression"), n00bb_lower_statement_scope,
+            nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("or-expr"), n00bb_lower_statement_scope,
+            nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("and-expr"), n00bb_lower_statement_scope,
             nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("postfix-expr"), n00bb_lower_field_receiver,
