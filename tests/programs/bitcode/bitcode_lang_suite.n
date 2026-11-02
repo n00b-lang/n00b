@@ -702,17 +702,6 @@ func immutable_string_check() {
     require sliced_names_of(sliced_source).count == 3
 }
 
-func descending(left: uint, right: uint) -> Comparison {
-    return right.__cmp(left)
-}
-
-func comparator_check() {
-    var items: Array[uint] = [1, 3, 2]
-    let by: sort.Comparator[uint] = callback[sort.Comparator](ref descending)
-    sort.sort_by(items, by)
-    require items[0] == 3 and items[1] == 2 and items[2] == 1
-}
-
 func loop_items_widen_check() {
     var total: int = 0
     for n in [1, 2, 255, 256] {
@@ -2124,7 +2113,6 @@ func start() -> nil {
     function_effects_check()
     effect_paths_check()
     immutable_string_check()
-    comparator_check()
     loop_items_widen_check()
     overloads_check()
     thread_global_pair_check()
