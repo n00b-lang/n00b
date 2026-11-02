@@ -58,8 +58,8 @@ ir_instr_t *ir_call_outcome_branch(const ir_instr_t *terminator,
 uint8_t     ir_path_apply(uint8_t state, uint8_t effect);
 bool        ir_paths_flow(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
                           void *context, ir_path_exits_t *exits);
-bool        ir_paths_reach(ir_func_t *f, ir_path_step_fn step, void *context,
-                           const ir_instr_t *at);
+uint8_t     ir_paths_state(ir_func_t *f, uint8_t entry, ir_path_step_fn step,
+                           void *context, const ir_instr_t *at);
 
 typedef bool (*ir_call_diverges_fn)(void *context, const ir_instr_t *call);
 typedef bool (*ir_const_varies_fn)(void *context, const ir_instr_t *constant);

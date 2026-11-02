@@ -14,6 +14,12 @@ typedef struct {
 } init_site_t;
 core_list_decl(init_site_t);
 
+typedef struct {
+    ir_instr_t *allocation;
+    bool        local;
+} placed_alloc_t;
+core_list_decl(placed_alloc_t);
+
 static ir_instr_t *
 placed_instruction(ir_block_t *block, uint32_t at, ir_span_t span, ir_op_t op,
                    th_type *type)
@@ -288,6 +294,7 @@ static bool
 annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
                      ir_func_t *function)
 {
+    core_list_t(placed_alloc_t) found = core_list_new(placed_alloc_t);
     for (uint32_t b = 0; b < function->n_blocks; b++) {
         ir_block_t *block = function->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
@@ -296,13 +303,19 @@ annotate_allocations(ir_ctx_t *context, ir_summaries_t *summaries,
             if (allocation->op != IR_OP_ALLOC || !allocation->dest
                 || ir_instr_storage_class(allocation, &required).data
                 || required) continue;
-            bool local = !ir_address_escapes(summaries, function,
-                                             allocation->dest);
-            if (!ir_annot_set(context, &allocation->annots, (ir_annot_t){
-                    .key = CORE_STRING_STATIC("ir.allocation_local"),
-                    .kind = IR_ANNOT_BOOL, .b = local})) return false;
+            core_list_push(found, ((placed_alloc_t){
+                .allocation = allocation,
+                .local      = !ir_address_escapes(summaries, function,
+                                                  allocation->dest)}));
         }
     }
+    bool ok = true;
+    for (size_t a = 0; ok && a < found.len; a++)
+        ok = ir_annot_set(context, &found.data[a].allocation->annots,
+            (ir_annot_t){.key  = CORE_STRING_STATIC("ir.allocation_local"),
+                         .kind = IR_ANNOT_BOOL, .b = found.data[a].local});
+    core_list_free(found);
+    if (!ok) return false;
     return true;
 }
 

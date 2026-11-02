@@ -1468,9 +1468,7 @@ static bool con_check_constraints(th_ctx *ctx, const th_type *var,
                         matched = th_unify(ctx, (th_type *)bt,
                                             (th_type *)cand) != nullptr;
                         ctx->errors.len = probe.errors;
-                        if (!matched)
-                            ctx->pending_environment_constraints.len =
-                                probe.pending_environment_constraints;
+                        if (!matched) th_probe_drop_constraints(ctx, &probe);
                         ctx->err = probe.err;
                         th_probe_end(ctx, &probe);
                     }
@@ -2962,6 +2960,7 @@ bool th_unifies(th_ctx *ctx, th_type *a, th_type *b)
     if (!ctx || !a || !b) return false;
     th_probe_t probe = th_probe_begin(ctx);
     bool unified = th_unify(ctx, a, b) != nullptr;
+    th_probe_drop_constraints(ctx, &probe);
     th_probe_end(ctx, &probe);
     return unified;
 }
@@ -2976,6 +2975,7 @@ bool th_unify_probe(th_ctx *ctx, th_type *a, th_type *b)
         ctx->errors.len = probe.errors;
         ctx->err = probe.err;
     }
+    th_probe_drop_constraints(ctx, &probe);
     th_probe_end(ctx, &probe);
     ctx->err = err;
     return unified;

@@ -70,6 +70,12 @@ th_probe_t th_probe_begin(th_ctx *ctx)
     };
 }
 
+void th_probe_drop_constraints(th_ctx *ctx, const th_probe_t *probe)
+{
+    ctx->pending_environment_constraints.len =
+        probe->pending_environment_constraints;
+}
+
 bool th_probe_end(th_ctx *ctx, const th_probe_t *probe)
 {
     ctx->probe_depth = probe->depth;

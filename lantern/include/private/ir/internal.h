@@ -92,6 +92,7 @@ struct ir_descentry_t {
 };
 
 ir_typeslot_t *ir_type_slot(ir_module_t *m, th_type *t);
+ir_typeslot_t *ir_type_slot_find(ir_module_t *m, th_type *t);
 void ir_profile_install_builtins(ir_ctx_t *ctx, const ir_profile_t *p);
 ir_typeslot_t *ir_type_slot_at(ir_module_t *m, size_t i);
 

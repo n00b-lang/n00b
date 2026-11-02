@@ -71,9 +71,9 @@ mix(uint64_t state, uint64_t word)
 }
 
 static uint64_t
-mix_annots(uint64_t h, const ir_annots_t *annots)
+mix_annots(uint64_t h, const ir_annots_t *annots, bool with)
 {
-    for (uint32_t i = 0; i < annots->n; i++) {
+    for (uint32_t i = 0; with && i < annots->n; i++) {
         if (annots->a[i].derived_from) continue;
         h = mix(h, core_xxh3_64bits_raw(&annots->a[i], sizeof(ir_annot_t)));
     }
@@ -81,12 +81,12 @@ mix_annots(uint64_t h, const ir_annots_t *annots)
 }
 
 static uint64_t
-mix_value(uint64_t h, const ir_value_t *value)
+mix_value(uint64_t h, const ir_value_t *value, bool annots)
 {
     if (!value) return mix(h, 0);
     h = mix(h, (uint64_t)(uintptr_t)value);
     h = mix(h, (uint64_t)(uintptr_t)value->type);
-    return mix_annots(h, &value->annots);
+    return mix_annots(h, &value->annots, annots);
 }
 
 static uint64_t
@@ -102,21 +102,21 @@ mix_outside_types(uint64_t h, const ir_instr_t *in)
 }
 
 static uint64_t
-fingerprint(const ir_func_t *f)
+fingerprint(const ir_func_t *f, bool annots)
 {
     uint64_t h = mix(0, f->n_blocks);
     h = mix(h, (uint64_t)(uintptr_t)f->type);
-    h = mix_annots(h, &f->annots);
+    h = mix_annots(h, &f->annots, annots);
     h = mix(h, f->n_params);
     for (uint32_t p = 0; p < f->n_params; p++)
-        h = mix_value(h, f->params[p]);
+        h = mix_value(h, f->params[p], annots);
     h = mix(h, f->n_locals);
     for (uint32_t l = 0; l < f->n_locals; l++) {
         const ir_local_t *local = f->locals[l];
         h = mix(h, (uint64_t)(uintptr_t)local);
         h = mix(h, (uint64_t)(uintptr_t)local->type);
         h = mix(h, local->address_taken);
-        if (local->value) h = mix_annots(h, &local->value->annots);
+        if (local->value) h = mix_annots(h, &local->value->annots, annots);
     }
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         const ir_block_t *block = f->blocks[b];
@@ -127,7 +127,7 @@ fingerprint(const ir_func_t *f)
             h = mix(h, (uint64_t)(uintptr_t)in);
             h = mix(h, in->op);
             h = mix(h, in->dest_kind);
-            h = mix_value(h, in->dest);
+            h = mix_value(h, in->dest, annots);
             h = mix(h, (uint64_t)(uintptr_t)in->dest_local);
             h = mix(h, in->n_operands);
             if (in->n_operands)
@@ -140,7 +140,7 @@ fingerprint(const ir_func_t *f)
                     in->n_mods * sizeof(core_string_t)));
             h = mix(h, (uint64_t)(uintptr_t)in->const_bytes);
             h = mix(h, in->const_byte_len);
-            h = mix_annots(h, &in->annots);
+            h = mix_annots(h, &in->annots, annots);
         }
     }
     return h;
@@ -185,7 +185,7 @@ static struct ir_func_analyses_t *
 current_slot(ir_func_t *f)
 {
     struct ir_func_analyses_t *slot = slot_of(f);
-    uint64_t now = fingerprint(f);
+    uint64_t now = fingerprint(f, true);
     if (now == slot->fingerprint) {
         if (slot->epoch != summary_epoch) release_summary_dependents(slot);
         return slot;
@@ -322,6 +322,12 @@ ir_func_abcd(ir_func_t *f)
         building = outer;
     }
     return slot->abcd;
+}
+
+uint64_t
+ir_func_shape(const ir_func_t *f)
+{
+    return fingerprint(f, false);
 }
 
 void

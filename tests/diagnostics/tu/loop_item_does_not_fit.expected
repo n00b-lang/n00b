@@ -1,0 +1,2 @@
+tests/diagnostics/tu/loop_item_does_not_fit.n:6:9: error N00B-N0520: `n` is used as `u8`, but its items are `int`, which may not fit
+  help: convert `n` explicitly where `u8` is needed

@@ -29,4 +29,11 @@ typedef bool (*ir_dom_fn)(ir_block_t *b, void *thunk);
 void ir_dom_walk(ir_doms_t *d, ir_block_t *from, ir_dom_fn pre,
                  ir_dom_fn post, void *thunk);
 
+typedef struct ir_reach_t ir_reach_t;
+
+ir_reach_t *ir_reach_new(const ir_func_t *f);
+void        ir_reach_free(ir_reach_t *r);
+bool        ir_instr_reaches(ir_reach_t *r, const ir_instr_t *from,
+                             const ir_instr_t *to);
+
 #endif

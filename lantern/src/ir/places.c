@@ -294,10 +294,10 @@ pointee(th_type *type)
     return nullptr;
 }
 
-static bool
+static const ir_instr_t *
 reinterprets(ir_reinterpretations_t *registry, const ir_func_t *f)
 {
-    bool found = false;
+    const ir_instr_t *found = nullptr;
     for (uint32_t b = 0; b < f->n_blocks; b++) {
         ir_block_t *block = f->blocks[b];
         for (uint32_t i = 0; i < block->n_instrs; i++) {
@@ -313,8 +313,8 @@ reinterprets(ir_reinterpretations_t *registry, const ir_func_t *f)
                     && th_kind_of(th_resolve(in->dest->type))
                            != TH_INDIRECTION)
                 || same_type(f->owner, from, to)) continue;
-            found = true;
-            if (!registry) return true;
+            if (!found) found = in;
+            if (!registry) return found;
             note_pair(registry, f->owner, from, to);
         }
     }
@@ -325,6 +325,12 @@ bool
 ir_reinterpretations_note_function(ir_ctx_t *ctx, const ir_func_t *f)
 {
     return f && reinterprets(ctx ? reinterpretations(ctx) : nullptr, f);
+}
+
+const ir_instr_t *
+ir_reinterpretation_site(const ir_func_t *f)
+{
+    return f ? reinterprets(nullptr, f) : nullptr;
 }
 
 static uint64_t
@@ -540,6 +546,14 @@ follow(core_list_t(place_value_ptr_t) *pending, const ir_instr_t *in,
     }
 }
 
+static bool
+local_storage_root(const ir_value_t *value)
+{
+    if (value->kind == IR_VAL_LOCAL) return true;
+    if (value->kind != IR_VAL_INSTR || !value->def) return false;
+    return ir_instr_allocates_storage(value->def);
+}
+
 static void
 resolve_into(ir_places_t *places, const ir_value_t *address,
              core_list_t(uint32_t) *ids)
@@ -557,16 +571,11 @@ resolve_into(ir_places_t *places, const ir_value_t *address,
             continue;
         }
         const ir_instr_t *in = value->def;
-        switch (in->op) {
-        case IR_OP_ALLOCA:
-        case IR_OP_ALLOC:
-        case IR_OP_ALLOC_USING:
-        case IR_OP_ARRAY_NEW:
-        case IR_OP_ARRAY_NEW_USING:
-        case IR_OP_VARIANT_NEW:
-        case IR_OP_VARIANT_NEW_USING:
+        if (local_storage_root(value)) {
             add_id(ids, object_place(places, value));
-            break;
+            continue;
+        }
+        switch (in->op) {
         case IR_OP_ADDRESS_OF:
             if (in->n_operands == 1 && ir_operand_value(&in->operands[0]))
                 add_id(ids, storage_place(places,
@@ -709,26 +718,8 @@ record_storage(ir_places_t *places, ir_instr_t *in, ir_access_kind_t kind,
 static bool
 address_operand(const ir_instr_t *in, uint32_t operand)
 {
-    switch (in->op) {
-    case IR_OP_ADDRESS_OF:
-    case IR_OP_LOAD:
-    case IR_OP_STORE:
-    case IR_OP_GLOBAL_STORE:
-    case IR_OP_SEQUENCE_GET:
-    case IR_OP_SEQUENCE_SET:
-    case IR_OP_MEMSET:
-    case IR_OP_DEALLOC:
-    case IR_OP_FINALIZE:
-    case IR_OP_ATOMIC_RMW:
-    case IR_OP_ATOMIC_CAS:
-        return operand == 0;
-    case IR_OP_MEMCPY:
-    case IR_OP_MEMMOVE:
-    case IR_OP_MEMCMP:
-        return operand <= 1;
-    default:
-        return false;
-    }
+    return (in->op == IR_OP_ADDRESS_OF && operand == 0)
+        || ir_op_is_address_operand(in->op, operand);
 }
 
 static void
@@ -745,24 +736,6 @@ collect_storage_uses(ir_places_t *places, ir_instr_t *in)
         record_storage(places, in, IR_ACCESS_STORE, in->dest_local->value);
 }
 
-static bool
-local_storage_root(const ir_value_t *value)
-{
-    if (value->kind == IR_VAL_LOCAL) return true;
-    if (value->kind != IR_VAL_INSTR || !value->def) return false;
-    switch (value->def->op) {
-    case IR_OP_ALLOCA:
-    case IR_OP_ALLOC:
-    case IR_OP_ALLOC_USING:
-    case IR_OP_ARRAY_NEW:
-    case IR_OP_ARRAY_NEW_USING:
-    case IR_OP_VARIANT_NEW:
-    case IR_OP_VARIANT_NEW_USING:
-        return true;
-    default:
-        return false;
-    }
-}
 
 static bool
 derives_address(ir_op_t op)
@@ -851,36 +824,15 @@ collect_accesses(ir_places_t *places, ir_func_t *f)
             ir_instr_t *in    = block->instrs[i];
             size_t      start = places->accesses.len;
             collect_storage_uses(places, in);
-            switch (in->op) {
-            case IR_OP_LOAD:
-            case IR_OP_SEQUENCE_GET:
-                record_access(places, in, IR_ACCESS_LOAD, 0);
-                break;
-            case IR_OP_STORE:
-            case IR_OP_GLOBAL_STORE:
-            case IR_OP_SEQUENCE_SET:
-            case IR_OP_MEMSET:
-            case IR_OP_DEALLOC:
-            case IR_OP_FINALIZE:
-                record_access(places, in, IR_ACCESS_STORE, 0);
-                break;
-            case IR_OP_MEMCPY:
-            case IR_OP_MEMMOVE:
-                record_access(places, in, IR_ACCESS_STORE, 0);
-                record_access(places, in, IR_ACCESS_LOAD, 1);
-                break;
-            case IR_OP_MEMCMP:
-                record_access(places, in, IR_ACCESS_LOAD, 0);
-                record_access(places, in, IR_ACCESS_LOAD, 1);
-                break;
-            case IR_OP_ATOMIC_RMW:
-            case IR_OP_ATOMIC_CAS:
-                record_access(places, in, IR_ACCESS_LOAD, 0);
-                record_access(places, in, IR_ACCESS_STORE, 0);
-                break;
-            default:
-                break;
-            }
+            uint8_t memory = ir_op_memory_access(in->op);
+            int32_t address = ir_op_address_operand(in->op);
+            int32_t source = ir_op_source_operand(in->op);
+            if (memory & IR_MEM_READ)
+                record_access(places, in, IR_ACCESS_LOAD, (uint32_t)address);
+            if (memory & IR_MEM_WRITE)
+                record_access(places, in, IR_ACCESS_STORE, (uint32_t)address);
+            if (source >= 0)
+                record_access(places, in, IR_ACCESS_LOAD, (uint32_t)source);
             if (places->accesses.len > start)
                 core_dict_put(&places->by_instr, in,
                               (void *)(uintptr_t)(start + 1));

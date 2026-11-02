@@ -1,0 +1,43 @@
+trait Integer {
+    func from_bits(self: 'T, bits: u128) -> 'T
+}
+
+inline func from_bits(self: int, bits: u128) -> int {
+    return unsafe_cast[int](bits)
+}
+
+inline func from_bits(self: uint, bits: u128) -> uint {
+    return unsafe_cast[uint](bits)
+}
+
+inline func from_bits(self: i8, bits: u128) -> i8 {
+    return unsafe_cast[i8](bits)
+}
+
+inline func from_bits(self: i16, bits: u128) -> i16 {
+    return unsafe_cast[i16](bits)
+}
+
+inline func from_bits(self: i32, bits: u128) -> i32 {
+    return unsafe_cast[i32](bits)
+}
+
+inline func from_bits(self: i128, bits: u128) -> i128 {
+    return unsafe_cast[i128](bits)
+}
+
+inline func from_bits(self: u8, bits: u128) -> u8 {
+    return unsafe_cast[u8](bits)
+}
+
+inline func from_bits(self: u16, bits: u128) -> u16 {
+    return unsafe_cast[u16](bits)
+}
+
+inline func from_bits(self: u32, bits: u128) -> u32 {
+    return unsafe_cast[u32](bits)
+}
+
+inline func from_bits(self: u128, bits: u128) -> u128 {
+    return bits
+}

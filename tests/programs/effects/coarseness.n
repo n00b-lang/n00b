@@ -1,0 +1,19 @@
+func lookup(table: Dict[int, int], key: int) -> int? {
+    return table.get(key)
+}
+
+func hash_str(s: string) -> u128 {
+    return s.hash()
+}
+
+func len_of(items: List[int]) -> uint {
+    return items.len()
+}
+
+func start() -> nil {
+    var table: Dict[int, int] = {}
+    _ = lookup(table, 1)
+    _ = hash_str("a")
+    var items: List[int] = []
+    _ = len_of(items)
+}

@@ -1,0 +1,7 @@
+func audited(name: string) -> nil {
+    __effect(name)
+}
+
+func start() -> nil {
+    audited("x")
+}

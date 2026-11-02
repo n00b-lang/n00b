@@ -1,0 +1,49 @@
+#ifndef IR_EFFECT_FLAG
+#define IR_EFFECT_FLAG(id, name, bit)
+#endif
+#ifndef IR_EFFECT_TRAP
+#define IR_EFFECT_TRAP(id, name, bit)
+#endif
+#ifndef IR_EFFECT_NONLOCAL
+#define IR_EFFECT_NONLOCAL(id, name, bit)
+#endif
+#ifndef IR_EFFECT_PARAMETER
+#define IR_EFFECT_PARAMETER(id, name, shift)
+#endif
+
+IR_EFFECT_FLAG(MAY_FAIL,            may_fail,            0)
+IR_EFFECT_FLAG(MAY_TRAP,            may_trap,            1)
+IR_EFFECT_FLAG(MAY_ALLOCATE,        may_allocate,        2)
+IR_EFFECT_FLAG(MAY_BLOCK,           may_block,           3)
+IR_EFFECT_FLAG(DIVERGES,            diverges,            4)
+IR_EFFECT_FLAG(CALLS_UNKNOWN,       calls_unknown,       5)
+IR_EFFECT_FLAG(MAY_IO,              may_io,              6)
+IR_EFFECT_FLAG(NO_RETURN,           no_return,           7)
+IR_EFFECT_FLAG(MAY_COLLECT,         may_collect,         8)
+IR_EFFECT_FLAG(ALLOCATES_DIRECT,    allocates_direct,    9)
+IR_EFFECT_FLAG(UNBOUNDED_RECURSION, unbounded_recursion, 10)
+IR_EFFECT_FLAG(CALLS_FINALIZERS,    calls_finalizers,    11)
+IR_EFFECT_FLAG(STARTS_THREADS,      starts_threads,      12)
+IR_EFFECT_FLAG(CALLS_CALLBACKS,     calls_callbacks,     13)
+IR_EFFECT_FLAG(REINTERPRETS,        reinterprets,        14)
+IR_EFFECT_FLAG(MAY_INPUT,           may_input,           15)
+IR_EFFECT_FLAG(MAY_OUTPUT,          may_output,          16)
+IR_EFFECT_FLAG(READS_ENV,           reads_env,           17)
+IR_EFFECT_FLAG(READS_CLOCK,         reads_clock,         18)
+IR_EFFECT_FLAG(READS_RANDOM,        reads_random,        19)
+
+IR_EFFECT_TRAP(EXPLICIT,   explicit,   0)
+IR_EFFECT_TRAP(BOUNDS,     bounds,     1)
+IR_EFFECT_TRAP(UNWRAP,     unwrap,     2)
+IR_EFFECT_TRAP(ARITHMETIC, arithmetic, 3)
+
+IR_EFFECT_NONLOCAL(READS_NONLOCAL,  reads_nonlocal,  24)
+IR_EFFECT_NONLOCAL(WRITES_NONLOCAL, writes_nonlocal, 25)
+
+IR_EFFECT_PARAMETER(READS_PARAM,  reads_parameter,  32)
+IR_EFFECT_PARAMETER(WRITES_PARAM, writes_parameter, 48)
+
+#undef IR_EFFECT_FLAG
+#undef IR_EFFECT_TRAP
+#undef IR_EFFECT_NONLOCAL
+#undef IR_EFFECT_PARAMETER

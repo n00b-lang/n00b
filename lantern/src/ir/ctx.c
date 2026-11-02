@@ -787,6 +787,11 @@ ir_typeslot_t *ir_type_slot(ir_module_t *m, th_type *t)
     return type_find(m, ir_type_id(m, t));
 }
 
+ir_typeslot_t *ir_type_slot_find(ir_module_t *m, th_type *t)
+{
+    return m && t ? type_find(m, ir_type_id(m, t)) : nullptr;
+}
+
 ir_typeslot_t *ir_type_slot_at(ir_module_t *m, size_t i)
 {
     return m && i < m->n_types ? &m->types[i] : nullptr;
@@ -862,6 +867,86 @@ size_t ir_call_output_count(th_type *callable)
     const th_param *rest = th_func_rest(callable);
     if (rest && th_mode_produces_output(rest->mode)) output_count++;
     return output_count;
+}
+
+th_type *ir_call_function_type(const ir_instr_t *call)
+{
+    if (!call) return nullptr;
+    th_type *signature = ir_instr_call_signature(call);
+    if (!signature && call->n_operands) {
+        const ir_value_t *callee = ir_operand_value(&call->operands[0]);
+        signature = callee ? callee->type : nullptr;
+    }
+    signature = signature ? th_resolve(signature) : nullptr;
+    if (signature && th_kind_of(signature) == TH_INDIRECTION)
+        signature = th_resolve(th_ind_referent(signature));
+    if (signature && th_kind_of(signature) == TH_BINDER)
+        signature = th_binder_body(signature);
+    return signature && th_kind_of(signature) == TH_FUNCTION ? signature
+                                                             : nullptr;
+}
+
+const ir_instr_t *ir_call_output_source(const ir_instr_t *output,
+                                        size_t *ordinal)
+{
+    if (!output || output->op != IR_OP_CALL_OUTPUT || output->n_operands != 2
+        || output->operands[1].kind != IR_OPD_CONST
+        || output->operands[1].lit.is_float
+        || output->operands[1].lit.i.neg
+        || output->operands[1].lit.i.mag > SIZE_MAX) return nullptr;
+    const ir_value_t *source = ir_operand_value(&output->operands[0]);
+    const ir_instr_t *call = source && source->kind == IR_VAL_INSTR
+        ? source->def : nullptr;
+    if (call && call->op == IR_OP_VARIANT_PAYLOAD) {
+        source = call->n_operands ? ir_operand_value(&call->operands[0])
+                                  : nullptr;
+        call = source && source->kind == IR_VAL_INSTR ? source->def : nullptr;
+    }
+    if (!call || (call->op != IR_OP_CALL
+                  && call->op != IR_OP_CALLBACK_INVOKE)) return nullptr;
+    if (ordinal) *ordinal = (size_t)output->operands[1].lit.i.mag;
+    return call;
+}
+
+size_t ir_call_output_param(th_type *callable, size_t output_index)
+{
+    callable = th_resolve(callable);
+    if (!callable || th_kind_of(callable) != TH_FUNCTION) return SIZE_MAX;
+    for (size_t i = 0; i < th_func_nparams(callable); i++) {
+        const th_param *parameter = th_func_param(callable, i);
+        if (parameter && th_mode_produces_output(parameter->mode)
+            && !output_index--) return i;
+    }
+    return SIZE_MAX;
+}
+
+size_t ir_call_param_output(th_type *callable, size_t param)
+{
+    callable = th_resolve(callable);
+    if (!callable || th_kind_of(callable) != TH_FUNCTION
+        || param >= th_func_nparams(callable)) return SIZE_MAX;
+    size_t output = 0;
+    for (size_t i = 0; i < param; i++) {
+        const th_param *parameter = th_func_param(callable, i);
+        output += parameter && th_mode_produces_output(parameter->mode);
+    }
+    const th_param *parameter = th_func_param(callable, param);
+    return parameter && th_mode_produces_output(parameter->mode) ? output
+                                                                 : SIZE_MAX;
+}
+
+bool ir_callable_returns_value(ir_module_t *m, th_type *callable)
+{
+    callable = callable ? th_resolve(callable) : nullptr;
+    th_type *ret = callable && th_kind_of(callable) == TH_FUNCTION
+        ? th_func_ret(callable) : nullptr;
+    return ret && ir_machine_of(m, ret).class != IR_CLASS_VOID;
+}
+
+size_t ir_return_output_operand(ir_module_t *m, th_type *callable,
+                                size_t output_index)
+{
+    return (ir_callable_returns_value(m, callable) ? 1 : 0) + output_index;
 }
 
 th_type *ir_call_output_type(th_type *callable, size_t output_index)

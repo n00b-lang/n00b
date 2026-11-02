@@ -218,13 +218,8 @@ forwarding_alias_input(const ir_instr_t *instruction, uint32_t operand)
 static bool
 non_escaping_pointer_use(const ir_instr_t *instruction, uint32_t operand)
 {
+    if (ir_op_is_address_operand(instruction->op, operand)) return true;
     switch (instruction->op) {
-    case IR_OP_LOAD:
-        return operand == 0;
-    case IR_OP_STORE:
-        return operand == 1;
-    case IR_OP_FINALIZE:
-    case IR_OP_DEALLOC:
     case IR_OP_DIFF:
     case IR_OP_EQ:
     case IR_OP_NE:
@@ -827,8 +822,8 @@ call_argument_is_noescape(const ir_instr_t *call, uint32_t operand_index,
     ir_func_t *callee = call->operands[0].value->owner;
     if (!callee || operand_index > callee->n_params)
         return false;
-    for (uint32_t i = 1; i <= operand_index; i++)
-        if (call->operands[i].kind != IR_OPD_VALUE)
+    for (uint32_t param = 0; param < operand_index; param++)
+        if (ir_call_argument(call, param).role != IR_ARG_VALUE)
             return false;
     ir_value_t *parameter = callee->params[operand_index - 1];
     ir_summary_t *summary = ir_summary_of(ir_analysis_summaries(), callee);
@@ -889,24 +884,8 @@ address_has_only_local_uses(const ir_func_t *function,
                 const ir_instr_t *use = block->instrs[j];
                 for (uint32_t k = 0; local && k < use->n_operands; k++) {
                     const ir_operand_t *operand = &use->operands[k];
-                    const ir_value_t *referenced = nullptr;
-                    switch (operand->kind) {
-                    case IR_OPD_VALUE:
-                    case IR_OPD_SPREAD:
-                    case IR_OPD_ARG:
-                    case IR_OPD_OUT:
-                    case IR_OPD_FRESH:
-                        referenced = operand->value;
-                        break;
-                    case IR_OPD_PHI_ARM:
-                        referenced = operand->phi.value;
-                        break;
-                    case IR_OPD_NAMED_ARG:
-                        referenced = operand->named.value;
-                        break;
-                    default:
-                        break;
-                    }
+                    const ir_value_t *referenced =
+                        ir_operand_referenced_value(operand);
                     if (referenced != addresses.data[cursor]) continue;
                     if (operand->kind == IR_OPD_FRESH
                         && use->op == IR_OP_CALL) continue;
@@ -917,9 +896,7 @@ address_has_only_local_uses(const ir_func_t *function,
                         local = false;
                         break;
                     }
-                    if (use->op == IR_OP_LOAD || use->op == IR_OP_STORE
-                        || use->op == IR_OP_SEQUENCE_SET)
-                        continue;
+                    if (ir_op_is_address_operand(use->op, k)) continue;
                     bool projection = use->op == IR_OP_FIELD
                         || use->op == IR_OP_INDEX
                         || use->op == IR_OP_OFFSET

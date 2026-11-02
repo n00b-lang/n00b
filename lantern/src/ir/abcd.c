@@ -79,8 +79,7 @@ struct ir_abcd_t {
     core_list_t(instr_ptr_t)    effects;
     core_list_t(callee_bound_t) callees;
     uint32_t                    call_depth;
-    bool                      **reach;
-    uint32_t                    reach_count;
+    ir_reach_t                 *reach;
     core_dict_t                 offsets_of;
     core_dict_t                 checks_of;
 };
@@ -223,41 +222,12 @@ origin_matches_access(ir_abcd_t *a, const sequence_origin_t *origin,
     return same_sequence(a, origin->sequence, base, addressed(access));
 }
 
-static const bool *
-successors_reach(ir_abcd_t *a, const ir_block_t *from)
-{
-    uint32_t count = a->f->n_blocks;
-    if (!a->reach) {
-        a->reach = core_alloc_array(bool *, count ? count : 1);
-        a->reach_count = count;
-    }
-    if (a->reach[from->index]) return a->reach[from->index];
-    bool *seen = core_alloc_array(bool, count ? count : 1);
-    core_list_t(instr_ptr_t) pending = core_list_new(instr_ptr_t);
-    ir_instr_t *end = ir_block_terminator((ir_block_t *)from);
-    if (end) core_list_push(pending, end);
-    while (pending.len) {
-        const ir_instr_t *terminator = pending.data[--pending.len];
-        for (uint32_t i = 0; i < ir_succ_count((ir_instr_t *)terminator);
-             i++) {
-            ir_block_t *next = ir_succ_at((ir_instr_t *)terminator, i);
-            if (!next || next->index >= count || seen[next->index]) continue;
-            seen[next->index] = true;
-            ir_instr_t *last = ir_block_terminator(next);
-            if (last) core_list_push(pending, last);
-        }
-    }
-    core_list_free(pending);
-    a->reach[from->index] = seen;
-    return seen;
-}
-
 static bool
 instruction_reaches(ir_abcd_t *a, const ir_instr_t *from,
                     const ir_instr_t *to)
 {
-    if (from->block == to->block && from->index < to->index) return true;
-    return successors_reach(a, from->block)[to->block->index];
+    if (!a->reach) a->reach = ir_reach_new(a->f);
+    return ir_instr_reaches(a->reach, from, to);
 }
 
 static bool
@@ -1663,9 +1633,7 @@ void
 ir_abcd_free(ir_abcd_t *a)
 {
     if (!a) return;
-    for (uint32_t b = 0; a->reach && b < a->reach_count; b++)
-        core_free(a->reach[b]);
-    core_free(a->reach);
+    ir_reach_free(a->reach);
     free_index(&a->offsets_of);
     free_index(&a->checks_of);
     core_list_free(a->lengths);

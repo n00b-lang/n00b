@@ -69,11 +69,8 @@ static bool same_target(core_string_t a, core_string_t b)
     return a.data && b.data ? core_string_eq(a, b) : !a.data && !b.data;
 }
 
-static ir_descriptor_t *layout_of_exact(ir_module_t *m, th_type *t,
-                                        core_string_t target)
+static ir_descriptor_t *slot_layout(ir_typeslot_t *s, core_string_t target)
 {
-    ir_typeslot_t *s = ir_type_slot(m, t);
-
     if (!s) {
         return nullptr;
     }
@@ -85,6 +82,12 @@ static ir_descriptor_t *layout_of_exact(ir_module_t *m, th_type *t,
     }
 
     return nullptr;
+}
+
+static ir_descriptor_t *layout_of_exact(ir_module_t *m, th_type *t,
+                                        core_string_t target)
+{
+    return slot_layout(ir_type_slot(m, t), target);
 }
 
 ir_descriptor_t *ir_layout_of(ir_module_t *m, th_type *t,
@@ -378,6 +381,23 @@ const ir_final_layout_t *ir_layout_final_visible(ir_module_t *m, th_type *t,
     ir_module_t *owner = m && t ? ir_type_definition_owner(m, t) : nullptr;
     if (!owner || owner == m) return nullptr;
     return ir_layout_final(owner, t, target);
+}
+
+bool ir_layout_member_inline(ir_module_t *m, th_type *record,
+                             core_string_t name, bool *known)
+{
+    core_string_t    target = m ? ir_module_target(m) : (core_string_t){0};
+    ir_descriptor_t *d      = m && record
+        ? slot_layout(ir_type_slot_find(m, record),
+                      target.data ? target : m->target)
+        : nullptr;
+    const ir_final_layout_t *layout = d ? d->final : nullptr;
+    *known = layout != nullptr;
+    for (size_t i = 0; layout && i < layout->n_members; i++)
+        if (layout->members[i].name.data
+            && core_string_eq(layout->members[i].name, name))
+            return layout->members[i].inline_element_count != 0;
+    return false;
 }
 
 static bool pin(ir_layout_val_t *v, uint64_t value);

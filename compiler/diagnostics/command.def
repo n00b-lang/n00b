@@ -119,6 +119,12 @@ N00B_DIAG(CONTRACT_DIR_MISSING, "N00B-C0034", WARNING,
     "`--contract-dir` and the `paths.contract_dirs` setting add directories\n"
     "of writ contracts for 'ffi literals. A directory that does not exist is\n"
     "skipped; fix the path or drop it.")
+N00B_DIAG(EFFECTS_OF_UNKNOWN_FUNCTION, "N00B-C0035", ERROR,
+    "`--effects-of` names no function in the program",
+    "`--effects-of` takes a function's qualified name: its module, a dot,\n"
+    "and the function, for example `sys.fs.read_file`. The function has to\n"
+    "be in the program, either in one of its modules or in a module it\n"
+    "imports.")
 N00B_DIAG(PROCESS_START_FAILED, "N00B-C0040", ERROR,
     "`n00b run` cannot start the compiler or the built program",
     "The message names the program and the reason the operating system\n"

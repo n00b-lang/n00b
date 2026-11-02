@@ -526,6 +526,8 @@ typedef struct n00bb_link_analysis_t {
     n00bb_interface_summaries_t *interface_summaries;
     core_list_t(core_translation_unit_ptr_t) initializer_order;
     bool dump_ranges;
+    core_string_t effects_of;
+    bool effects_json;
     th_env *environment;
     th_env *export_environment;
     th_env *interface_environment;

@@ -307,6 +307,7 @@ typedef struct {
 void th_var_cons_push(th_type *var, th_constraint constraint);
 th_probe_t th_probe_begin(th_ctx *ctx);
 bool th_probe_end(th_ctx *ctx, const th_probe_t *probe);
+void th_probe_drop_constraints(th_ctx *ctx, const th_probe_t *probe);
 
 void th_err(th_ctx *ctx, th_err_kind kind, core_string_t constraint,
             th_type *expected, th_type *got, core_string_t message);

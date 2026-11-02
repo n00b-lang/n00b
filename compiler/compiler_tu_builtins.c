@@ -1,5 +1,4 @@
 #include "compiler_axioms.h"
-#include "compiler_buffer_borrow.h"
 #include "compiler_tu.h"
 #include "enum_value.h"
 #include "ir/summary.h"
@@ -20,6 +19,37 @@ n00bb_axiom_of_symbol(parse_sym_entry_t *symbol)
     return nullptr;
 }
 
+static void
+native_flows(ir_summary_t *summary, const ir_func_t *function,
+             uint32_t effects, uint32_t reads, uint32_t writes)
+{
+    core_list_t(ir_spath_t) inputs = core_list_new(ir_spath_t);
+    uint32_t params = (uint32_t)th_func_nparams(function->type);
+    for (uint32_t p = 0; p < params; p++) {
+        core_list_push(inputs, ((ir_spath_t){
+            .root = IR_SPLACE_PARAM, .param = p}));
+        if (p >= 8 || (reads & N00BB_AXIOM_PARAM(p)))
+            core_list_push(inputs, ((ir_spath_t){
+                .root = IR_SPLACE_PARAM, .param = p,
+                .flags = IR_SPATH_DEEP}));
+    }
+    for (uint32_t bit = 0; bit < 32; bit++)
+        if (effects & IR_SUMMARY_OBSERVES & (1u << bit))
+            core_list_push(inputs, ((ir_spath_t){
+                .root = IR_SPLACE_SOURCE, .param = bit}));
+    for (size_t i = 0; i < inputs.len; i++) {
+        ir_summary_add_flow(summary, IR_SFLOW_RESULTS, &(ir_spath_t){0},
+                            &inputs.data[i], IR_SFLOW_DATA);
+        for (uint32_t p = 0; p < params && p < 8; p++)
+            if (writes & N00BB_AXIOM_PARAM(p))
+                ir_summary_add_flow(summary, IR_SFLOW_STORES, &(ir_spath_t){
+                        .root = IR_SPLACE_PARAM, .param = p,
+                        .flags = IR_SPATH_DEEP},
+                    &inputs.data[i], IR_SFLOW_DATA);
+    }
+    core_list_free(inputs);
+}
+
 ir_summary_t *
 n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
 {
@@ -34,41 +64,62 @@ n00bb_native_axiom(ir_summaries_t *summaries, const ir_func_t *function)
         for (uint32_t p = 0; p < 8; p++) {
             uint8_t flags = 0;
             if (native->reads & N00BB_AXIOM_PARAM(p))
-                flags |= IR_SACCESS_READ | IR_SACCESS_READS_ENTRY;
+                flags |= IR_SPATH_READ | IR_SPATH_READS_ENTRY;
             if (native->writes & N00BB_AXIOM_PARAM(p))
-                flags |= IR_SACCESS_WRITE;
+                flags |= IR_SPATH_WRITE;
             if (flags)
-                ir_summary_add_access(summary, (ir_splace_t){
-                    .kind = IR_SPLACE_PARAM, .param = p}, flags);
+                ir_summary_add_path(summary, &(ir_spath_t){
+                    .root = IR_SPLACE_PARAM, .param = p,
+                    .flags = flags | IR_SPATH_DEEP | IR_SPATH_ROOT});
         }
         if (native->effects & IR_SUMMARY_CALLS_UNKNOWN)
-            ir_summary_add_access(summary,
-                (ir_splace_t){.kind = IR_SPLACE_UNKNOWN},
-                IR_SACCESS_READ | IR_SACCESS_WRITE | IR_SACCESS_READS_ENTRY);
+            ir_summary_add_path(summary, &(ir_spath_t){
+                .root = IR_SPLACE_UNKNOWN,
+                .flags = IR_SPATH_ACCESS | IR_SPATH_DEEP});
         for (uint32_t p = 0; (native->effects & N00BB_AXIOM_ENTRY_FLAGS)
              && p < th_func_nparams(function->type); p++)
             ir_summary_set_param_escape(summary, p,
                 IR_SESCAPE_ADDRESS | IR_SESCAPE_REFERENT);
         ir_summary_set_return(summary,
             (ir_sreturn_t){.kind = native->returns, .param = 0});
-        ir_sflow_t flow;
-        n00bb_buffer_native_flow(function, &flow);
-        ir_summary_set_flow(summary, &flow);
-        ir_sflow_release(&flow);
+        for (uint32_t p = 0; p < 8; p++)
+            if (native->holds & N00BB_AXIOM_PARAM(p))
+                ir_summary_add_flow(summary, IR_SFLOW_RESULTS,
+                    &(ir_spath_t){0},
+                    &(ir_spath_t){.root = IR_SPLACE_PARAM, .param = p,
+                                  .flags = IR_SPATH_DEEP},
+                    IR_SFLOW_ALIAS);
+        native_flows(summary, function, native->effects, native->reads,
+                     native->writes);
         return summary;
     }
-    if (!n00bb_axiom_pure_native(function)) return nullptr;
+    bool foreign = n00bb_axiom_foreign_native(function);
+    if (!foreign && !n00bb_axiom_pure_native(function)) return nullptr;
     ir_summary_t *summary = ir_summary_new(summaries, function);
-    for (uint32_t p = 0; p < th_func_nparams(function->type); p++)
-        ir_summary_add_access(summary, (ir_splace_t){
-            .kind = IR_SPLACE_PARAM, .param = p},
-            IR_SACCESS_READ | IR_SACCESS_READS_ENTRY);
+    if (foreign) {
+        ir_summary_set_flags(summary, IR_SUMMARY_MAY_FAIL
+            | IR_SUMMARY_MAY_TRAP | IR_SUMMARY_MAY_ALLOCATE
+            | IR_SUMMARY_MAY_BLOCK
+            | IR_SUMMARY_CALLS_UNKNOWN | IR_SUMMARY_MAY_IO
+            | IR_SUMMARY_MAY_COLLECT | IR_SUMMARY_OBSERVES);
+        ir_summary_set_trap_kinds(summary, IR_STRAP_ALL);
+    }
+    for (uint32_t p = 0; p < th_func_nparams(function->type); p++) {
+        ir_summary_add_path(summary, &(ir_spath_t){
+            .root = IR_SPLACE_PARAM, .param = p,
+            .flags = IR_SPATH_READ | IR_SPATH_READS_ENTRY | IR_SPATH_DEEP
+                | IR_SPATH_ROOT});
+        const th_param *formal = th_func_param(function->type, p);
+        th_type *type = formal && formal->type ? th_resolve(formal->type)
+                                               : nullptr;
+        if (foreign && type && th_kind_of(type) == TH_INDIRECTION)
+            ir_summary_add_path(summary, &(ir_spath_t){
+                .root = IR_SPLACE_PARAM, .param = p,
+                .flags = IR_SPATH_WRITE | IR_SPATH_ROOT});
+    }
     ir_summary_set_return(summary,
         (ir_sreturn_t){.kind = IR_SRETURN_UNKNOWN, .param = 0});
-    ir_sflow_t flow;
-    n00bb_buffer_native_flow(function, &flow);
-    ir_summary_set_flow(summary, &flow);
-    ir_sflow_release(&flow);
+    native_flows(summary, function, 0, UINT32_MAX, 0);
     return summary;
 }
 
@@ -277,6 +328,7 @@ register_native_declarations(parse_annot_result_t *annotations, th_ctx *types,
             return false;
         if (natives.items[i].pure)
             n00bb_axiom_note_pure_native(natives.items[i].symbol);
+        else n00bb_axiom_note_foreign_native(natives.items[i].symbol);
     }
     return true;
 }
@@ -309,6 +361,7 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *integer = th_name(types, CORE_STRING_STATIC("int"));
     th_type *open_args[] = {byte_reference, integer, u32};
     th_type *read_args[] = {integer, byte_reference, uint};
+    th_type *random_args[] = {byte_reference, uint};
     th_type *close_args[] = {integer};
     th_type *wait_item = th_var(types);
     th_type *wake_item = th_var(types);
@@ -337,6 +390,23 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
     th_type *effects_args[] = {
         effects_subject ? th_ind(types, 0, effects_subject) : nullptr,
     };
+    th_type *boolean = th_name(types, CORE_STRING_STATIC("bool"));
+    th_type *text = th_name(types, CORE_STRING_STATIC("string"));
+    th_type *effect_subject = th_var(types);
+    th_type *reads_subject = th_var(types);
+    th_type *writes_subject = th_var(types);
+    th_type *has_effect_args[] = {
+        effect_subject ? th_ind(types, 0, effect_subject) : nullptr, text,
+    };
+    th_type *reads_args[] = {
+        reads_subject ? th_ind(types, 0, reads_subject) : nullptr, text,
+    };
+    th_type *writes_args[] = {
+        writes_subject ? th_ind(types, 0, writes_subject) : nullptr, text,
+    };
+    th_type *effect_args[] = {text};
+    th_type *unobserved = th_var(types);
+    th_type *unobserved_args[] = {unobserved};
     return register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_page_size"), uint, nullptr, 0)
         && register_builtin_native_function(symtab, types, nil_type,
@@ -367,6 +437,9 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_read"), integer, read_args, 3)
         && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__os_random_bytes"), integer, random_args,
+            2)
+        && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_close"), integer, close_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_exit"), nil_type, close_args, 1)
@@ -392,6 +465,18 @@ register_builtin_os_symbols(parse_symtab_t *symtab, th_ctx *types,
             thread_start_args, 2)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__function_effects"), u64, effects_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__function_has_effect"), boolean,
+            has_effect_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__function_reads"), boolean, reads_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__function_writes"), boolean, writes_args, 2)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__effect"), nil_type, effect_args, 1)
+        && register_builtin_native_function(symtab, types, nil_type,
+            CORE_STRING_STATIC("__unobserved"), unobserved,
+            unobserved_args, 1)
         && register_builtin_native_function(symtab, types, nil_type,
             CORE_STRING_STATIC("__os_thread_stack_high_self"),
             optional_reference, nullptr, 0)

@@ -1,0 +1,23 @@
+func fill(modify buffer: Array[u8]) -> nil fail: int {
+    let count: uint = __array_length(buffer)
+    if count == 0 {
+        return
+    }
+    let result: int = __os_random_bytes(unsafe_cast[Ref[byte]] ref buffer[0],
+                                        count)
+    if result < 0 {
+        fail result
+    }
+}
+
+func fill(modify value: 'T) -> nil fail: int where 'T : Integer {
+    var bytes: Array[u8] = new[Array[u8]](16)
+    fill(bytes)!
+    var bits: u128 = 0
+    var at: uint = 0
+    while at < 16 {
+        bits = (bits << 8) | cast[u128](bytes[at])
+        at += 1
+    }
+    value = value.from_bits(bits)
+}

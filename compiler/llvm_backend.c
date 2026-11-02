@@ -1750,16 +1750,7 @@ lowered_block(lower_state_t *state, const ir_block_t *block)
 static const ir_instr_t *
 call_output_source(const ir_instr_t *output)
 {
-    if (!output || output->op != IR_OP_CALL_OUTPUT
-        || output->n_operands != 2
-        || output->operands[0].kind != IR_OPD_VALUE
-        || !output->operands[0].value) return nullptr;
-    const ir_instr_t *call = output->operands[0].value->def;
-    if (call && call->op == IR_OP_VARIANT_PAYLOAD)
-        call = call->n_operands
-            && call->operands[0].kind == IR_OPD_VALUE
-            && call->operands[0].value
-            ? call->operands[0].value->def : nullptr;
+    const ir_instr_t *call = ir_call_output_source(output, nullptr);
     return call && call->op == IR_OP_CALL ? call : nullptr;
 }
 
@@ -7791,8 +7782,7 @@ lower_instruction(lower_state_t *state, ir_instr_t *instruction)
             return true;
         result = lowered_value(state, operands[0].value);
         if (result && instruction->dest
-            && ir_annot_get(&instruction->annots,
-                            CORE_STRING_STATIC("n00bb.literal_copy")))
+            && ir_instr_is_fresh(instruction))
             result = copy_literal_value(state, result,
                                         instruction->dest->type);
         ir_annot_t *promoted_write = ir_annot_get(&instruction->annots,

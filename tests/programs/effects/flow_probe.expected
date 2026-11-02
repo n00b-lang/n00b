@@ -1,0 +1,77 @@
+flow_probe.inc: (int) -> int
+  effects may_trap
+  traps arithmetic
+  output result data[x] control[]
+flow_probe.choose: (bool, int) -> int
+  effects none
+  output result data[a] control[c]
+flow_probe.via_scalar: (int) -> int
+  effects none
+  output result data[x] control[]
+flow_probe.via_local: (int, int) -> int
+  effects none
+  output result data[x] control[]
+flow_probe.via_array: (int) -> int
+  effects may_trap may_allocate may_collect allocates_direct
+  traps bounds arithmetic
+  output result data[x] control[]
+flow_probe.split: (modify Pair, int, int) -> int
+  effects none
+  writes p.a
+  writes p.b
+  output result data[x] control[]
+  output result 1 data[x y] control[]
+flow_probe.set_a: (modify Pair, int) -> nil
+  effects none
+  writes p.a
+  output result data[] control[]
+  output result 1 data[p.b x] control[]
+flow_probe.heap_fields: (int, int) -> int
+  effects may_trap may_allocate may_collect allocates_direct
+  traps bounds arithmetic
+  output result data[x] control[]
+flow_probe.heap_overwrite: (int, int) -> int
+  effects may_trap may_allocate may_collect allocates_direct
+  traps bounds arithmetic
+  output result data[x y] control[]
+flow_probe.param_fields: (modify Array[Pair], int, int) -> int
+  effects may_trap
+  reads arr.__value[]
+  reads+writes arr.__value[].a
+  writes arr.__value[].b
+  traps bounds
+  output result data[arr.__value[].a x] control[]
+  output result 1 data[arr] control[]
+  output arr.__value[].a data[x] control[]
+  output arr.__value[].b data[y] control[]
+flow_probe.put: (modify Array[int], int) -> nil
+  effects may_trap
+  writes arr.__value[]
+  traps bounds
+  output result data[] control[]
+  output result 1 data[arr] control[]
+  output arr.__value[] data[x] control[]
+flow_probe.caller: (int) -> int
+  effects may_trap may_allocate may_collect allocates_direct
+  traps bounds arithmetic
+  output result data[x] control[]
+flow_probe.get_a: (Pair) -> int
+  effects none
+  output result data[p.a] control[]
+flow_probe.by_value: (Pair) -> int
+  effects none
+  output result data[p.a] control[]
+flow_probe.pick: (Pair, int) -> int fail: int
+  effects may_fail
+  output result data[p.a] control[k]
+  output failure data[p.b] control[k]
+flow_probe.relay: (Pair, int) -> int fail: int
+  effects may_fail
+  output result data[p.a] control[k]
+  output failure data[p.b] control[k]
+flow_probe.handled: (Pair, int) -> int
+  effects none
+  output result data[p.a p.b] control[k]
+flow_probe.caught: (Pair, int) -> bool
+  effects none
+  output result data[] control[k]

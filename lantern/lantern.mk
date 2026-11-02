@@ -32,7 +32,7 @@ $(BUILD)/lantern/pp: $(LANTERN_OBJ)/lantern/src/pp/main.o $(LANTERN_LIB)
 $(LANTERN_OBJ)/lantern/src/pp/main.o: CC_EXTRA := -DPP_GRAMMAR_DIR="\"$(NATIVE_SRC)/lantern/grammars\""
 
 LANTERN_TESTS := ir/core ir/lower ir/lifetime ir/storage_origin ir/exec_graph \
-    ir/shape ir/span ir/rule ir/typing ir/ranges ir/vn ir/abcd ir/verify \
+    ir/shape ir/span ir/rule ir/typing ir/ranges ir/vn ir/abcd ir/summary_paths ir/verify \
     ir/grammar ir/layout ir/promote ir/structure ir/cli ir/pdg ir/walk \
     ir/typemap ir/text ir/diag ir/typelang ir/grammar_accept ir/public \
     ir/scale \

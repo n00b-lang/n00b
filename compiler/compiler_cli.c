@@ -55,7 +55,13 @@
     DEV_FLAG("--dump-layout", NO_ALIAS, BOOL, false, \
              "dump target layouts for named types"), \
     DEV_FLAG("--dump-ranges", NO_ALIAS, BOOL, false, \
-             "dump AST and IR integer ranges at shared expressions")
+             "dump AST and IR integer ranges at shared expressions"), \
+    DEV_FLAG("--effects-of", NO_ALIAS, WORD, true, \
+             "show what MODULE.FUNCTION does: its effects, the fields it " \
+             "reads and writes, and where its result comes from; " \
+             "separate several names with commas"), \
+    DEV_FLAG("--effects-json", NO_ALIAS, BOOL, false, \
+             "print the --effects-of report as JSON")
 #define NO_COMPTIME_FLAG \
     FLAG("--no-comptime", NO_ALIAS, BOOL, false, \
          "skip the comptime phase; a program that needs build-time values fails")

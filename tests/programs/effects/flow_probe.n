@@ -1,0 +1,134 @@
+record Pair {
+    a: int
+    b: int
+}
+
+func inc(x: int) -> int {
+    return x + 1
+}
+
+func choose(c: bool, a: int) -> int {
+    var v: int = a
+    if c {
+        v = 1
+    }
+    return v
+}
+
+func via_scalar(x: int) -> int {
+    var n: int = 0
+    n = x
+    return n
+}
+
+func via_local(x: int, y: int) -> int {
+    var q: Pair = (a = 0, b = 0)
+    q.a = x
+    q.b = y
+    return q.a
+}
+
+func via_array(x: int) -> int {
+    var a: Array[int] = new[Array[int]](2)
+    a[0] = x
+    return a[0]
+}
+
+func split(modify p: Pair, x: int, y: int) -> int {
+    p.a = x
+    p.b = y
+    return p.a
+}
+
+func set_a(modify p: Pair, x: int) -> nil {
+    p.a = x
+}
+
+func heap_fields(x: int, y: int) -> int {
+    var arr: Array[Pair] = new[Array[Pair]](1)
+    arr[0].a = x
+    arr[0].b = y
+    return arr[0].a
+}
+
+func heap_overwrite(x: int, y: int) -> int {
+    var arr: Array[int] = new[Array[int]](1)
+    arr[0] = x
+    arr[0] = y
+    return arr[0]
+}
+
+func param_fields(modify arr: Array[Pair], x: int, y: int) -> int {
+    arr[0].a = x
+    arr[0].b = y
+    return arr[0].a
+}
+
+func put(modify arr: Array[int], x: int) -> nil {
+    arr[0] = x
+}
+
+func caller(x: int) -> int {
+    var arr: Array[int] = new[Array[int]](1)
+    put(arr, x)
+    return arr[0]
+}
+
+func get_a(p: Pair) -> int {
+    return p.a
+}
+
+func by_value(p: Pair) -> int {
+    return get_a(p)
+}
+
+func pick(p: Pair, k: int) -> int fail: int {
+    if k > 3 {
+        fail p.b
+    }
+    return p.a
+}
+
+func relay(p: Pair, k: int) -> int fail: int {
+    let v: int = pick(p, k)!
+    return v
+}
+
+func handled(p: Pair, k: int) -> int {
+    var r: int = 0
+    try {
+        r = pick(p, k)!
+    } fail(e) {
+        r = e
+    }
+    return r
+}
+
+func caught(p: Pair, k: int) -> bool {
+    var matched = false
+    try {
+        _ = pick(p, k)!
+    } fail(e) {
+        matched = true
+    }
+    return matched
+}
+
+func start() -> nil {
+    var p: Pair = (a = 1, b = 2)
+    var pairs: Array[Pair] = new[Array[Pair]](1)
+    _ = by_value(p)
+    _ = handled(p, 5)
+    _ = caught(p, 5)
+    _ = inc(1)
+    _ = choose(true, 1)
+    _ = via_scalar(1)
+    _ = via_local(1, 2)
+    _ = via_array(1)
+    _ = split(p, 3, 4)
+    set_a(p, 5)
+    _ = heap_fields(1, 2)
+    _ = heap_overwrite(1, 2)
+    _ = param_fields(pairs, 1, 2)
+    _ = caller(p.a + pairs[0].b)
+}

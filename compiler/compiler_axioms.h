@@ -31,6 +31,7 @@ typedef struct {
     uint8_t           writes;
     uint8_t           entries;
     uint8_t           roles;
+    uint8_t           holds;
     bool              collection_free;
     ir_sreturn_kind_t returns;
 } n00bb_axiom_t;
@@ -48,6 +49,8 @@ const n00bb_axiom_t *n00bb_axiom_of_symbol(parse_sym_entry_t *symbol);
 bool                 n00bb_axiom_function_has(const ir_func_t *function,
                                               uint8_t role);
 void                 n00bb_axiom_note_pure_native(core_string_t symbol);
+void                 n00bb_axiom_note_foreign_native(core_string_t symbol);
 bool                 n00bb_axiom_pure_native(const ir_func_t *function);
+bool                 n00bb_axiom_foreign_native(const ir_func_t *function);
 
 #endif

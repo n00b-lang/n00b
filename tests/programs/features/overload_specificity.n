@@ -1,5 +1,24 @@
+import overload_imported
+
 record Box {
     value: int
+}
+
+func imported_overloads() -> bool fail: int {
+    var number: u32 = 0
+    overload_imported.put(number)!
+    var bytes: Array[u8] = new[Array[u8]](1)
+    overload_imported.put(bytes)!
+    let hash: u128 = overload_imported.hashed(number)!
+    return number == 7 and bytes[0] == 9 and hash != 0
+}
+
+func imported_overloads_hold() -> bool {
+    try {
+        return imported_overloads()!
+    } fail(code) {
+        return false
+    }
 }
 
 func concrete_first(item: Box) -> int {
@@ -62,4 +81,5 @@ require exact_over_conversion(buffer) == 1
 require shared_type(1, "a") == 2
 require constrained(1) == 2
 require constrained("a") == 1
+require imported_overloads_hold()
 __fd_write(2, "ok")

@@ -1,0 +1,11 @@
+func put(modify value: 'T) -> nil fail: int where 'T : Integer {
+    value = value.from_bits(cast[u128](7))
+}
+
+func put(modify buffer: Array[u8]) -> nil fail: int {
+    buffer[0] = 9
+}
+
+func hashed(value: 'T) -> u128 fail: int where 'T : Hash {
+    return value.hash()
+}

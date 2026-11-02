@@ -66,7 +66,7 @@ typedef enum : uint8_t {
     IR_OPD_MISSING,
 } ir_opdkind_t;
 
-#define IR_OP(id, spelling, lo, hi, res, pat, mods, flags) IR_OP_##id,
+#define IR_OP(id, spelling, lo, hi, res, pat, mods, flags, mem) IR_OP_##id,
 
 typedef enum : uint16_t {
 #include "ir_ops.def"
@@ -74,6 +74,22 @@ typedef enum : uint16_t {
 } ir_op_t;
 
 #undef IR_OP
+
+enum {
+    IR_MEM_READ       = 1u << 0,
+    IR_MEM_WRITE      = 1u << 1,
+    IR_MEM_RELEASE    = 1u << 2,
+    IR_MEM_READ_WRITE = IR_MEM_READ | IR_MEM_WRITE,
+    IR_MEM_ENDS       = IR_MEM_WRITE | IR_MEM_RELEASE,
+};
+
+typedef struct {
+    uint8_t access;
+    int8_t  address;
+    int8_t  stored;
+    int8_t  source;
+    bool    element;
+} ir_opmem_t;
 
 typedef struct {
     core_string_t spelling;
@@ -83,6 +99,7 @@ typedef struct {
     core_string_t pattern;
     uint8_t      mods;
     uint8_t      flags;
+    ir_opmem_t   memory;
 } ir_opinfo_t;
 
 const ir_opinfo_t *ir_op_info(ir_op_t op);
@@ -105,6 +122,14 @@ bool               ir_opinfo_accepts_mod(const ir_opinfo_t *i,
 bool               ir_op_spelling_is_namespaced(core_string_t spelling,
                                                 core_string_t profile);
 bool               ir_mod_exists(core_string_t name);
+
+uint8_t ir_op_memory_access(ir_op_t op);
+int32_t ir_op_address_operand(ir_op_t op);
+int32_t ir_op_stored_operand(ir_op_t op);
+int32_t ir_op_source_operand(ir_op_t op);
+bool    ir_op_addresses_element(ir_op_t op);
+bool    ir_op_transfers(ir_op_t op);
+bool    ir_op_is_address_operand(ir_op_t op, uint32_t operand);
 
 typedef enum : uint16_t {
     IR_PROP_PARSED       = 0x0001,
@@ -544,6 +569,14 @@ th_type *ir_type_parse(ir_module_t *m, core_string_t text);
 th_type *ir_call_outcome_type(ir_module_t *m, th_type *callable);
 size_t   ir_call_output_count(th_type *callable);
 th_type *ir_call_output_type(th_type *callable, size_t output_index);
+size_t   ir_call_output_param(th_type *callable, size_t output_index);
+size_t   ir_call_param_output(th_type *callable, size_t param);
+bool     ir_callable_returns_value(ir_module_t *m, th_type *callable);
+size_t   ir_return_output_operand(ir_module_t *m, th_type *callable,
+                                  size_t output_index);
+th_type *ir_call_function_type(const ir_instr_t *call);
+const ir_instr_t *ir_call_output_source(const ir_instr_t *output,
+                                        size_t *ordinal);
 uint64_t ir_type_id(ir_module_t *m, th_type *t);
 bool     ir_type_eq(ir_module_t *m, th_type *a, th_type *b);
 size_t   ir_type_count(const ir_module_t *m);
@@ -744,6 +777,11 @@ bool ir_allocation_has_only_local_uses(const ir_func_t *function,
 bool ir_instr_set_binding_initialization(ir_instr_t *instruction,
                                          bool initializes);
 bool ir_instr_is_binding_initialization(const ir_instr_t *instruction);
+bool ir_instr_set_fresh(ir_instr_t *instruction);
+bool ir_instr_is_fresh(const ir_instr_t *instruction);
+bool ir_instr_allocates_storage(const ir_instr_t *instruction);
+bool          ir_func_add_effect(ir_func_t *function, core_string_t name);
+core_string_t ir_func_effect_at(const ir_func_t *function, uint32_t index);
 bool ir_instr_set_shape_constraint(ir_instr_t *instruction,
                                    ir_shape_t *shape);
 typedef enum : uint8_t {

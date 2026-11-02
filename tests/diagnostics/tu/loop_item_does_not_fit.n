@@ -1,0 +1,12 @@
+func take(n: u8) -> bool {
+    return n > 0
+}
+
+func scan(values: Array[int]) -> bool {
+    for n in values {
+        if !take(n) {
+            return false
+        }
+    }
+    return true
+}

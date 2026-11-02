@@ -2,20 +2,25 @@
 
 #define VAR IR_VAR_ARITY
 
-#define IR_OP(id, spelling, lo, hi, res, pat, mods, flags)                     \
+#define IR_OP(id, spelling, lo, hi, res, pat, mods, flags, mem)                \
     [IR_OP_##id] = {CORE_STRING_STATIC(spelling), lo, hi, IR_RES_##res,        \
-                    CORE_STRING_STATIC(pat), mods, (flags)},
+                    CORE_STRING_STATIC(pat), mods, (flags), mem},
 
 #define HASRESULT  IR_OPF_HASRESULT
 #define SIDEEFFECT IR_OPF_SIDEEFFECT
 #define TERMINATOR IR_OPF_TERMINATOR
 #define COMPTIME   IR_OPF_COMPTIME
+#define NOMEM      {0, -1, -1, -1, false}
+#define MEM(access, address, stored, source, element)                          \
+    {IR_MEM_##access, address, stored, source, element}
 
 static const ir_opinfo_t table[IR_OP_COUNT] = {
 #include "ir/ir_ops.def"
 };
 
 #undef IR_OP
+#undef NOMEM
+#undef MEM
 #undef HASRESULT
 #undef SIDEEFFECT
 #undef TERMINATOR
@@ -243,6 +248,55 @@ bool ir_op_accepts_operands(ir_op_t op, uint32_t n)
 bool ir_op_is_extension(ir_op_t op)
 {
     return op >= IR_OP_COUNT;
+}
+
+static const ir_opmem_t *memory_of(ir_op_t op)
+{
+    return op < IR_OP_COUNT && table[op].memory.access ? &table[op].memory
+                                                       : nullptr;
+}
+
+uint8_t ir_op_memory_access(ir_op_t op)
+{
+    const ir_opmem_t *m = memory_of(op);
+    return m ? m->access : 0;
+}
+
+int32_t ir_op_address_operand(ir_op_t op)
+{
+    const ir_opmem_t *m = memory_of(op);
+    return m ? m->address : -1;
+}
+
+int32_t ir_op_stored_operand(ir_op_t op)
+{
+    const ir_opmem_t *m = memory_of(op);
+    return m ? m->stored : -1;
+}
+
+int32_t ir_op_source_operand(ir_op_t op)
+{
+    const ir_opmem_t *m = memory_of(op);
+    return m ? m->source : -1;
+}
+
+bool ir_op_addresses_element(ir_op_t op)
+{
+    const ir_opmem_t *m = memory_of(op);
+    return m && m->element;
+}
+
+bool ir_op_transfers(ir_op_t op)
+{
+    const ir_opmem_t *m = memory_of(op);
+    return m && (m->access & IR_MEM_WRITE) && (m->stored >= 0 || m->source >= 0);
+}
+
+bool ir_op_is_address_operand(ir_op_t op, uint32_t operand)
+{
+    const ir_opmem_t *m = memory_of(op);
+    return m && ((int32_t)operand == m->address
+                 || (int32_t)operand == m->source);
 }
 
 bool ir_op_spelling_is_namespaced(core_string_t spelling,

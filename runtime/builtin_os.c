@@ -181,6 +181,12 @@ static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
                                0, 0, 0);
 }
 
+static int64_t os_random_raw(uint8_t *buffer, uint64_t count)
+{
+    return n00b_linux_syscall6(__NR_getrandom, (long)buffer, (long)count, 0,
+                               0, 0, 0);
+}
+
 static int64_t os_close_raw(int64_t fd)
 {
     return n00b_linux_syscall6(__NR_close, (long)fd, 0, 0, 0, 0, 0);
@@ -290,6 +296,7 @@ static bool os_on_stack_raw(const void *address, uint64_t bytes)
 #include <mach-o/dyld.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <termios.h>
@@ -363,6 +370,12 @@ static int64_t os_open_raw(const uint8_t *path, int64_t flags, uint32_t mode)
 static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
 {
     return os_errno_result(read((int)fd, buffer, (size_t)count));
+}
+
+static int64_t os_random_raw(uint8_t *buffer, uint64_t count)
+{
+    size_t chunk = count > 256 ? 256 : (size_t)count;
+    return getentropy(buffer, chunk) == 0 ? (int64_t)chunk : -(int64_t)errno;
 }
 
 static int64_t os_close_raw(int64_t fd)
@@ -618,6 +631,23 @@ static int64_t os_read_raw(int64_t fd, uint8_t *buffer, uint64_t count)
     return os_errno_result(_read((int)fd, buffer, chunk));
 }
 
+typedef BOOL (WINAPI *os_process_prng_t)(PBYTE data, SIZE_T bytes);
+
+static int64_t os_random_raw(uint8_t *buffer, uint64_t count)
+{
+    static _Atomic(os_process_prng_t) cached;
+    os_process_prng_t prng = atomic_load(&cached);
+    if (!prng) {
+        HMODULE module = LoadLibraryW(L"bcryptprimitives.dll");
+        prng = module ? (os_process_prng_t)(void *)GetProcAddress(module,
+                                                     "ProcessPrng")
+                      : NULL;
+        atomic_store(&cached, prng);
+    }
+    if (!prng) return -38;
+    return prng(buffer, (SIZE_T)count) ? (int64_t)count : -5;
+}
+
 static int64_t os_close_raw(int64_t fd)
 {
     return os_errno_result(_close((int)fd));
@@ -839,6 +869,20 @@ int64_t n00b_os_read(int64_t fd, uint8_t *buffer, uint64_t count)
 {
     if (!count) return 0;
     return buffer ? os_read_raw(fd, buffer, count) : -14;
+}
+
+int64_t n00b_os_random_bytes(uint8_t *buffer, uint64_t count)
+{
+    if (count && !buffer) return -14;
+    uint64_t done = 0;
+    while (done < count) {
+        int64_t got = os_random_raw(buffer + done, count - done);
+        if (got == -4) continue;
+        if (got < 0) return got;
+        if (got == 0) return -5;
+        done += (uint64_t)got;
+    }
+    return 0;
 }
 
 int64_t n00b_os_close(int64_t fd)
