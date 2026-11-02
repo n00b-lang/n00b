@@ -495,7 +495,7 @@ typedef struct {
     parse_tree_t *scope;
     parse_sym_entry_t *symbol;
     ir_local_t *owned;
-    size_t site;
+    const n00bb_finalize_plan_t *plan;
     uint64_t order;
 } n00bb_final_frame_t;
 core_list_decl(n00bb_final_frame_t);
@@ -1874,6 +1874,30 @@ n00bb_final_address(ir_lower_context_t *context, parse_sym_entry_t *symbol,
     return bound ? take->dest : nullptr;
 }
 
+static ir_value_t *
+n00bb_final_field(ir_lower_context_t *context, ir_value_t *address,
+                  core_string_t name, ir_span_t span)
+{
+    th_ctx *types = ir_module_types(context->module);
+    th_type *record = th_ind_referent(th_resolve(address->type));
+    th_type *shape = record && th_kind_of(th_resolve(record)) == TH_NAMED
+        ? th_type_definition(types, th_resolve(record)) : record;
+    shape = shape ? th_resolve(shape) : nullptr;
+    th_type *field = nullptr;
+    for (size_t i = 0; shape && th_kind_of(shape) == TH_RECORD
+         && i < th_record_len(shape); i++) {
+        const th_member *member = th_record_member(shape, i);
+        if (member && core_string_eq(member->name, name)) field = member->type;
+    }
+    th_type *pointer_type = field ? th_ind(types, 0, field) : nullptr;
+    ir_instr_t *at = pointer_type
+        ? ir_lower_emit_instruction(context, IR_OP_FIELD, span) : nullptr;
+    return at && ir_lower_set_temp_dest(context, at,
+            CORE_STRING_STATIC("__n00bb_finalized_field_"), pointer_type)
+        && ir_instr_operand_value(at, address)
+        && ir_instr_operand_name(at, name) ? at->dest : nullptr;
+}
+
 static bool
 n00bb_emit_scope_finalize(ir_lower_context_t *context,
                           n00bb_final_frame_t *frame, parse_tree_t *source)
@@ -1895,11 +1919,19 @@ n00bb_emit_scope_finalize(ir_lower_context_t *context,
     }
     branch->span = span;
     context->block = finalize;
-    ir_value_t *address = n00bb_set_owned(context, frame, false, span)
+    ir_value_t *base = n00bb_set_owned(context, frame, false, span)
         ? n00bb_final_address(context, frame->symbol, span) : nullptr;
-    if (!address || !n00bb_emit_site_trait_call(context, frame->site,
-            address, TH_CONSUME, nil_type, nullptr, source)
-        || !n00bb_emit_jump(context, join, span)) {
+    bool ok = base != nullptr;
+    for (size_t s = 0; ok && s < frame->plan->count; s++) {
+        const n00bb_finalize_step_t *step = &frame->plan->steps[s];
+        ir_value_t *address = base;
+        for (size_t d = 0; address && d < step->depth; d++)
+            address = n00bb_final_field(context, address, step->path[d],
+                                        span);
+        ok = address && n00bb_emit_site_trait_call(context, step->site,
+            address, TH_CONSUME, nil_type, nullptr, source);
+    }
+    if (!ok || !n00bb_emit_jump(context, join, span)) {
         lower_internal(context, span, "could not finalize a local");
         return false;
     }
@@ -1910,7 +1942,6 @@ n00bb_emit_scope_finalize(ir_lower_context_t *context,
 static bool
 n00bb_local_escapes(const parse_sym_entry_t *symbol)
 {
-    if (symbol->alias_unresolved) return true;
     for (size_t i = 0; i < symbol->aliased_by_count; i++) {
         const parse_sym_alias_t *alias = &symbol->aliased_by[i];
         if (alias->escapes || !alias->other
@@ -1925,13 +1956,12 @@ n00bb_begin_final_frame(ir_lower_context_t *context,
                         parse_sym_entry_t *symbol, ir_span_t span)
 {
     n00bb_lower_context_t *lower = context->user;
-    size_t site = 0;
-    if (!lower || !context->reachable
+    const n00bb_finalize_plan_t *plan = n00bb_scope_finalize_plan(symbol);
+    if (!lower || !context->reachable || !plan
         || symbol->storage_duration == PARSE_SYM_STORAGE_DYNAMIC
         || (symbol->selected_storage_class.data
             && symbol->selected_storage_class.u8_bytes)
-        || n00bb_local_escapes(symbol)
-        || !n00bb_scope_finalize_site(symbol, &site)) return true;
+        || n00bb_local_escapes(symbol)) return true;
     bool parameter = symbol->kind == PARSE_SYM_PARAM;
     parse_tree_t *scope = symbol->scope ? symbol->scope->node : nullptr;
     if (!scope || (!parameter
@@ -1949,7 +1979,7 @@ n00bb_begin_final_frame(ir_lower_context_t *context,
         .scope = scope,
         .symbol = symbol,
         .owned = owned,
-        .site = site,
+        .plan = plan,
         .order = ++lower->next_control_order,
     };
     if (!owned || !core_list_try_push(lower->finals, frame)
@@ -1974,6 +2004,55 @@ n00bb_finish_final_scope(ir_lower_context_t *context,
             && !n00bb_emit_scope_finalize(context, frame, source))
             return false;
         lower->finals.len--;
+    }
+    return true;
+}
+
+static bool
+n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
+                  parse_tree_t *source)
+{
+    n00bb_lower_context_t *lower = context->user;
+    if (!source || !lower || !context->reachable) return true;
+    parse_tree_t *lvalue = n00bb_simple_lvalue(source);
+    n00bb_final_frame_t *frame = lvalue
+        ? n00bb_final_frame(lower, attached_symbol(grammar, lower->unit,
+                                                   lvalue))
+        : nullptr;
+    ir_span_t span = lower_span_for_tree(context, source);
+    if (!frame) {
+        th_type *type = parse_tree_type(source);
+        parse_tree_t *member = member_access_node(grammar, source);
+        parse_tree_t *index = n00bb_index_expression_node(grammar, source);
+        core_string_t whole = source_text_of(lower->unit, source);
+        bool place = lvalue
+            || (member && core_string_eq(source_text_of(lower->unit, member),
+                                         whole))
+            || (index && core_string_eq(source_text_of(lower->unit, index),
+                                        whole));
+        if (!place || !n00bb_type_finalized(lower->unit, type)) return true;
+        core_string_t type_text = lower_type_text(context, type);
+        lower_report(context, N00B_DIAG_FINALIZED_COPY, span,
+            N00B_TEXT_FINALIZED_VALUE_COPIED,
+            N00BB_ARGS(ARG_TEXT(type_text),
+                       ARG_TEXT(source_text_of(lower->unit, source))));
+        lower_help(context, N00B_TEXT_MOVE_THE_WHOLE_VARIABLE,
+                   N00BB_NO_ARGS);
+        core_free(type_text.data);
+        return false;
+    }
+    ir_local_t *local = ir_lower_bound_local(context, frame->symbol);
+    ir_value_t *binding = local
+        ? ir_local_value(context->function, local)
+        : ir_lower_bound_value(context, frame->symbol);
+    ir_instr_t *consume = binding
+        ? ir_lower_emit_instruction(context, IR_OP_CONSUME, span) : nullptr;
+    if (!consume || !ir_lower_set_temp_dest(context, consume,
+            CORE_STRING_STATIC("__n00bb_moved_"), binding->type)
+        || !ir_instr_operand_value(consume, binding)
+        || !n00bb_set_owned(context, frame, false, span)) {
+        lower_internal(context, span, "could not move a finalized local");
+        return false;
     }
     return true;
 }
@@ -5508,14 +5587,7 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                     expected, lower_span_for_tree(context, visit->node)))
                 return false;
         }
-        parse_tree_t *returned = expression
-            ? n00bb_simple_lvalue(expression) : nullptr;
-        n00bb_final_frame_t *moved = returned && lower
-            ? n00bb_final_frame(lower, attached_symbol(visit->grammar,
-                                                       lower->unit, returned))
-            : nullptr;
-        if (moved && !n00bb_set_owned(context, moved, false,
-                lower_span_for_tree(context, visit->node)))
+        if (!n00bb_move_source(context, visit->grammar, expression))
             return false;
         return n00bb_emit_with_success(context, visit->node);
     }
@@ -7574,7 +7646,9 @@ n00bb_lower_named_field_parts(ir_lower_context_t *context,
             }
             ir_value_t *value = expression
                 ? ir_lower_node_value(context, expression) : nullptr;
-            if (!expression || !value) return false;
+            if (!expression || !value
+                || !n00bb_move_source(context, visit->grammar, expression))
+                return false;
             core_list_push(parts->expressions, expression);
             core_list_push(parts->values, value);
         }
@@ -16521,7 +16595,7 @@ n00bb_materialize_assignment_source(ir_lower_context_t *context,
             "could not materialize the assigned value");
         return false;
     }
-    return true;
+    return n00bb_move_source(context, visit->grammar, source);
 }
 
 
