@@ -2633,7 +2633,7 @@ exit_site(ir_summaries_t *summaries, const ir_func_t *f, uint32_t flag,
 
 static void
 summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
-                   ir_func_t *f)
+                   ir_func_t *f, const uint32_t *settled)
 {
     summary->flags = 0;
     for (uint32_t e = 0;; e++) {
@@ -2682,6 +2682,9 @@ summarize_function(ir_summaries_t *summaries, ir_summary_t *summary,
         ends = (exits.returned ? 0 : IR_SUMMARY_NO_RETURN)
             | (exits.failed ? IR_SUMMARY_MAY_FAIL : 0)
             | (!exits.returned && !exits.failed ? IR_SUMMARY_DIVERGES : 0);
+    if (settled)
+        ends = (ends & ~(uint32_t)(IR_SUMMARY_DIVERGES | IR_SUMMARY_NO_RETURN))
+             | *settled;
     for (uint32_t b = 0; b < IR_SEFFECT_FLAG_BITS; b++) {
         uint32_t flag = 1u << b;
         if (!(ends & flag) || (summary->flags & flag)) continue;
@@ -3389,14 +3392,18 @@ address_base(const pt_item_t *item)
 static bool
 item_covers(const pt_item_t *a, const pt_item_t *b)
 {
-    bool reach = a->flow == PT_SAME && (a->loc.path.flags & IR_SPATH_DEEP)
-        && !(a->loc.path.flags & SPATH_INLINE);
-    bool cross = reach && a->kind == PT_CONTENTS && b->kind == PT_ADDRESS
-        && steps_prefix(a->loc.path.depth, a->loc.path.steps,
-                        address_base(b), b->loc.path.steps);
-    return a->origin == b->origin && (a->kind == b->kind || cross)
-        && (a->flow == PT_SAME) == (b->flow == PT_SAME) && a->flow <= b->flow
-        && !object_order(&a->loc, &b->loc)
+    if (a->origin != b->origin || a->flow > b->flow
+        || (a->flow == PT_SAME) != (b->flow == PT_SAME))
+        return false;
+    if (a->kind != b->kind
+        && !(a->flow == PT_SAME && a->kind == PT_CONTENTS
+             && b->kind == PT_ADDRESS
+             && (a->loc.path.flags & IR_SPATH_DEEP)
+             && !(a->loc.path.flags & SPATH_INLINE)
+             && steps_prefix(a->loc.path.depth, a->loc.path.steps,
+                             address_base(b), b->loc.path.steps)))
+        return false;
+    return !object_order(&a->loc, &b->loc)
         && steps_cover(a->depth, a->deep, a->steps, b->depth, b->deep,
                        b->steps)
         && place_covers(&a->loc.path, &b->loc.path);
@@ -7804,16 +7811,19 @@ aggregate_slot(pt_t *pt, const ir_spath_t *path)
 }
 
 static void
+address_name(ir_spath_t *name, bool shorthand)
+{
+    if (shorthand && name->depth && !(name->flags & IR_SPATH_DEEP)
+        && step_eq(name->steps[name->depth - 1], value_step))
+        name->depth--;
+    else name->flags |= IR_SPATH_ROOT;
+}
+
+static void
 external_name(pt_t *pt, const pt_item_t *item, ir_spath_t *name)
 {
     if (item->kind == PT_ADDRESS) {
-        if (item->flow == PT_SAME && name->depth
-            && !(name->flags & IR_SPATH_DEEP)
-            && step_eq(name->steps[name->depth - 1], value_step)) {
-            name->depth--;
-            return;
-        }
-        name->flags |= IR_SPATH_ROOT;
+        address_name(name, item->flow == PT_SAME);
         return;
     }
     if (!item->loc.path.depth && item->flow > PT_COPY
@@ -8022,12 +8032,7 @@ describe_names(pt_t *pt, const pt_item_t *item, flow_table_t *flows,
         if (item->loc.site == PT_EXTERNAL) external_name(pt, item, name);
         else if (name->root == IR_SPLACE_HEAP)
             name->flags |= item->kind == PT_ADDRESS ? IR_SPATH_ROOT : 0;
-        else if (!(name->flags & IR_SPATH_DEEP)) {
-            if (name->depth
-                && core_string_eq(name->steps[name->depth - 1], value_step))
-                name->depth--;
-            else name->flags |= IR_SPATH_ROOT;
-        }
+        else if (!(name->flags & IR_SPATH_DEEP)) address_name(name, true);
         push_sources(flows, name, kind, parts);
     }
     core_list_free(from);
@@ -9474,11 +9479,10 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             size_t scope = ir_analysis_scope_begin();
             if (summaries->escapes_only)
                 summarize_divergence(summaries, next, members[i]);
-            else summarize_function(summaries, next, members[i]);
+            else summarize_function(summaries, next, members[i],
+                                    cyclic ? &settled[i] : nullptr);
             summarize_paths(summaries, next, members[i]);
             ir_analysis_scope_end(scope);
-            if (cyclic && !summaries->escapes_only)
-                next->flags = (next->flags & ~shrinking) | settled[i];
             if (cyclic) join_rounds(next, summary);
             prune_flows(&next->flows[IR_SFLOW_RESULTS]);
             prune_flows(&next->flows[IR_SFLOW_STORES]);
