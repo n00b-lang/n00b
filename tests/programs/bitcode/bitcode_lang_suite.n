@@ -1897,6 +1897,28 @@ func hash_container_order_check() {
     require counted == members.len()
 }
 
+record Field_Inner {
+    k: uint
+}
+
+record Field_Item {
+    n:     uint
+    inner: Field_Inner
+}
+
+func index_field_write_check() {
+    var items: List[Field_Item] = new[List[Field_Item]]()
+    let inner: Field_Inner = (k = 0)
+    let item: Field_Item = (n = 1, inner = inner)
+    items.append(item)
+    items.append(item)
+    items[0].n = 5
+    items[1].n += 10
+    items[0].inner.k = 7
+    require items[0].n == 5 and items[1].n == 11
+    require items[0].inner.k == 7 and items[1].inner.k == 0
+}
+
 func index_write_check() {
     var items = [1, 2]
     items[0] = 7
@@ -1969,6 +1991,7 @@ func start() -> nil {
     pass_statement_check()
     tuples_check()
     index_write_check()
+    index_field_write_check()
     hash_container_order_check()
     __fd_write(2, "ok")
 }
