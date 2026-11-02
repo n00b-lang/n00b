@@ -3,7 +3,7 @@ dev test 2
 pr wall 90
 pr test 20
 dev tests 214
-pr tests 89
+pr tests 90
 release lto-n00b
 release ffi
 release array-uint-index-n00b
@@ -29,6 +29,7 @@ exempt incremental-cache-instances 38
 exempt incremental-cache-contexts 40
 exempt incremental-cache-lto 70
 exempt bitcode-build-time 28
+exempt langtools-suite 40
 exempt resharp-import 600
 exempt resharp-transport-plain 1800
 exempt resharp-transport-features 1800
