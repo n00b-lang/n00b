@@ -16418,6 +16418,85 @@ n00bb_record_field_address(ir_lower_context_t *context,
     return nullptr;
 }
 
+// A container element reached through `__read` has no address. Assigning
+// to one of its fields copies the element into a temporary, updates the
+// field there, and stores the temporary back through `__write`.
+typedef struct {
+    parse_tree_t *index_node;
+    ir_local_t *element;
+} n00bb_index_writeback_t;
+
+static ir_value_t *
+n00bb_index_writeback_place(ir_lower_context_t *context,
+                            parse_grammar_t *grammar,
+                            core_translation_unit_t *unit, parse_tree_t *node,
+                            n00bb_index_writeback_t *writeback, ir_span_t span)
+{
+    parse_tree_t *index = n00bb_index_expression_node(grammar, node);
+    if (index) {
+        th_type *element_type = parse_tree_type(index);
+        ir_value_t *element = element_type
+            ? ir_lower_node_value(context, index) : nullptr;
+        // `__read` may return an option (a dictionary's missing key); the
+        // field is updated in the present value, which the option proof
+        // checks just as it does for a field read.
+        th_type *present = nullptr;
+        if (element && n00bb_option_type_element(element_type, &present)) {
+            element = n00bb_emit_wrapping(context, IR_OP_OPTION_GET, element,
+                                          present, span);
+            element_type = present;
+        }
+        char name_buffer[48];
+        core_string_t name = n00bb_format_name(name_buffer,
+            sizeof(name_buffer), "__n00bb_index_element_%llu",
+            (unsigned long long)context->next_value_id++);
+        ir_local_t *local = element
+            ? ir_local_add(context->function, name, element_type) : nullptr;
+        if (!local || !n00bb_emit_local_write(context, local, element, span))
+            return nullptr;
+        writeback->index_node = index;
+        writeback->element = local;
+        th_type *pointer_type = th_ind(ir_module_types(context->module), 0,
+                                       element_type);
+        ir_instr_t *take = pointer_type
+            ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
+            : nullptr;
+        return take && ir_lower_set_temp_dest(context, take,
+                CORE_STRING_STATIC("__n00bb_element_address_"), pointer_type)
+            && ir_instr_operand_local(take, local) ? take->dest : nullptr;
+    }
+    parse_tree_t *member = member_access_node(grammar, node);
+    parse_sym_entry_t *field = member
+        ? attached_symbol(grammar, unit, member) : nullptr;
+    if (!field || !field->is_field || !field->type
+        || !core_tree_num_children(member)) return nullptr;
+    ir_value_t *base = n00bb_index_writeback_place(context, grammar, unit,
+        core_tree_child(member, 0), writeback, span);
+    th_type *member_type = parse_tree_type(member);
+    th_type *pointer_type = base ? th_ind(ir_module_types(context->module), 0,
+        member_type ? member_type : field->type) : nullptr;
+    ir_instr_t *address = pointer_type
+        ? ir_lower_emit_instruction(context, IR_OP_FIELD, span) : nullptr;
+    return address && ir_lower_set_temp_dest(context, address,
+            CORE_STRING_STATIC("__n00bb_field_address_"), pointer_type)
+        && ir_instr_operand_value(address, base)
+        && ir_instr_operand_name(address, field->name)
+        ? address->dest : nullptr;
+}
+
+static bool
+n00bb_index_writeback_finish(ir_lower_context_t *context,
+                             parse_grammar_t *grammar, parse_tree_t *site,
+                             const n00bb_index_writeback_t *writeback,
+                             ir_span_t span)
+{
+    if (!writeback->index_node) return true;
+    ir_value_t *updated = n00bb_emit_local_read(context, writeback->element,
+                                                span);
+    return updated && n00bb_lower_index_store_at(context, grammar, site,
+        writeback->index_node, nullptr, updated);
+}
+
 static bool
 n00bb_is_narrowed_use(ir_lower_context_t *context, parse_tree_t *node,
                       th_type *storage)
@@ -16762,6 +16841,10 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
     ir_span_t span = lower_span_for_tree(context, visit->node);
     ir_value_t *address = n00bb_record_field_address(context, visit->grammar,
         lower->unit, target, span);
+    n00bb_index_writeback_t writeback = {0};
+    if (!address)
+        address = n00bb_index_writeback_place(context, visit->grammar,
+            lower->unit, target, &writeback, span);
     th_type *resolved_field_type = address
         ? th_ind_referent(address->type) : field->type;
     ir_value_t *value = source
@@ -16801,7 +16884,8 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
             "could not emit the record field store");
         return false;
     }
-    return true;
+    return n00bb_index_writeback_finish(context, visit->grammar, visit->node,
+                                        &writeback, span);
 }
 
 static bool
@@ -17455,11 +17539,18 @@ n00bb_lower_compound_assignment(ir_lower_context_t *context,
         stored = n00bb_lower_index_store_at(context, visit->grammar,
             visit->node, target, core_tree_child(visit->node, 2), updated);
     else if (updated && field_target) {
+        core_translation_unit_t *unit = lower ? lower->unit : nullptr;
         ir_value_t *field_address = n00bb_record_field_address(context,
-            visit->grammar, lower ? lower->unit : nullptr, target, span);
+            visit->grammar, unit, target, span);
+        n00bb_index_writeback_t writeback = {0};
+        if (!field_address)
+            field_address = n00bb_index_writeback_place(context,
+                visit->grammar, unit, target, &writeback, span);
         stored = field_address
             && n00bb_emit_indirect_write(context, field_address, updated,
-                                         span);
+                                         span)
+            && n00bb_index_writeback_finish(context, visit->grammar,
+                                            visit->node, &writeback, span);
     }
     else if (updated)
         stored = n00bb_emit_indirect_write(context, address, updated, span);

@@ -4256,6 +4256,27 @@ index_is_method_receiver(parse_grammar_t *grammar,
         && !call_receiver_is_module(grammar, unit, index_node);
 }
 
+// `xs[i].field = v` (or `xs[i].a.b op= v`): the element is read, updated
+// and written back, so the index needs `__write` as well as `__read`.
+static bool
+index_is_field_assignment_root(parse_grammar_t *grammar,
+                               parse_tree_t *index_node)
+{
+    bool through_member = false;
+    parse_tree_t *at = index_node;
+    for (parse_tree_t *parent = parse_tree_parent(at); parent;
+         at = parent, parent = parse_tree_parent(at)) {
+        if ((NT_IS(grammar, parent, "assign-stmt")
+             || NT_IS(grammar, parent, "binop-assign-stmt"))
+            && core_tree_child(parent, 0) == at) return through_member;
+        if (member_access_node(grammar, parent) == parent
+            && core_tree_child(parent, 0) == at)
+            through_member = true;
+        else if (core_tree_num_children(parent) != 1) return false;
+    }
+    return false;
+}
+
 bool
 index_is_copyout_argument(parse_grammar_t *grammar,
                           core_translation_unit_t *unit,
@@ -4457,7 +4478,8 @@ remember_link_use_site(parse_grammar_t *grammar,
     }
     bool copyout = index_dispatch
         && (index_is_compound_target(grammar, node)
-            || index_is_copyout_argument(grammar, unit, node));
+            || index_is_copyout_argument(grammar, unit, node)
+            || index_is_field_assignment_root(grammar, node));
     bool receiver = index_dispatch && !copyout
         && index_is_method_receiver(grammar, unit, node);
     if ((copyout || receiver)
