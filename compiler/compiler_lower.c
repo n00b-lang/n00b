@@ -491,6 +491,15 @@ typedef struct {
 } n00bb_with_frame_t;
 core_list_decl(n00bb_with_frame_t);
 
+typedef struct {
+    parse_tree_t *scope;
+    parse_sym_entry_t *symbol;
+    ir_local_t *owned;
+    size_t site;
+    uint64_t order;
+} n00bb_final_frame_t;
+core_list_decl(n00bb_final_frame_t);
+
 
 typedef struct {
     parse_sym_entry_t *symbol;
@@ -560,6 +569,7 @@ typedef struct {
     int32_t file_id;
     size_t with_count;
     size_t try_count;
+    size_t final_base;
     bool reachable;
 } n00bb_literal_frame_t;
 
@@ -582,6 +592,8 @@ typedef struct {
     core_list_t(n00bb_value_block_frame_t) value_blocks;
     core_list_t(n00bb_try_frame_t) tries;
     core_list_t(n00bb_with_frame_t) withs;
+    core_list_t(n00bb_final_frame_t) finals;
+    size_t final_base;
     core_list_t(n00bb_copyout_t) parameters_to_copy_out;
     core_list_t(n00bb_pending_copyouts_t) pending_call_copyouts;
     core_list_t(n00bb_narrowed_root_t) narrowed_roots;
@@ -606,10 +618,10 @@ static ir_instr_t *n00bb_emit_closed_trait_call(
     core_list_t(n00bb_ir_value_ptr_t) *values,
     core_list_t(n00bb_copyout_t) *copyouts, ir_span_t span);
 
-static ir_value_t *n00bb_emit_iteration_trait_call(
-    ir_lower_context_t *context, n00bb_loop_frame_t *frame,
-    size_t site_index, ir_value_t *receiver, th_mode receiver_mode,
-    th_type *return_type, ir_value_t **copyout_value, parse_tree_t *source);
+static ir_value_t *n00bb_emit_site_trait_call(
+    ir_lower_context_t *context, size_t site_index, ir_value_t *receiver,
+    th_mode receiver_mode, th_type *return_type,
+    ir_value_t **copyout_value, parse_tree_t *source);
 static bool n00bb_emit_iteration_cleanup(ir_lower_context_t *context,
                                           n00bb_loop_frame_t *frame,
                                           parse_tree_t *source);
@@ -1804,6 +1816,180 @@ local_binding_mutability(const parse_sym_entry_t *symbol)
         ? IR_MUT_IMMUTABLE : IR_MUT_MUTABLE;
 }
 
+static bool n00bb_emit_jump(ir_lower_context_t *context, ir_block_t *target,
+                            ir_span_t span);
+static th_type *n00bb_ir_builtin_type(ir_module_t *module,
+                                      core_string_t name);
+
+static n00bb_final_frame_t *
+n00bb_final_frame(n00bb_lower_context_t *lower,
+                  const parse_sym_entry_t *symbol)
+{
+    for (size_t i = lower ? lower->finals.len : 0;
+         symbol && i > lower->final_base; i--)
+        if (lower->finals.data[i - 1].symbol == symbol)
+            return &lower->finals.data[i - 1];
+    return nullptr;
+}
+
+static bool
+n00bb_set_owned(ir_lower_context_t *context, n00bb_final_frame_t *frame,
+                bool owned, ir_span_t span)
+{
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    ir_instr_t *constant = bool_type
+        ? ir_lower_emit_instruction(context, IR_OP_CONST, span) : nullptr;
+    if (!constant || !ir_lower_set_temp_dest(context, constant,
+            CORE_STRING_STATIC("__n00bb_"), bool_type)
+        || !ir_instr_operand_int(constant, owned ? 1 : 0)) return false;
+    ir_instr_t *copy = ir_lower_emit_instruction(context, IR_OP_COPY, span);
+    return copy && ir_instr_set_dest_local(copy, frame->owned)
+        && ir_instr_operand_value(copy, constant->dest);
+}
+
+static ir_value_t *
+n00bb_final_address(ir_lower_context_t *context, parse_sym_entry_t *symbol,
+                    ir_span_t span)
+{
+    ir_value_t *address = ir_lower_bound_address(context, symbol);
+    ir_local_t *local = address ? nullptr
+        : ir_lower_bound_local(context, symbol);
+    if (!address && local) address = ir_lower_local_address(context, local);
+    if (address) return address;
+    ir_value_t *binding = local ? nullptr
+        : ir_lower_bound_value(context, symbol);
+    th_type *referent = local ? local->type
+        : binding ? binding->type : nullptr;
+    th_type *pointer_type = referent
+        ? th_ind(ir_module_types(context->module), 0, referent) : nullptr;
+    ir_instr_t *take = pointer_type
+        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
+        : nullptr;
+    if (!take || !ir_lower_set_temp_dest(context, take,
+            CORE_STRING_STATIC("__n00bb_finalized_"), pointer_type))
+        return nullptr;
+    bool bound = local ? ir_instr_operand_local(take, local)
+        : ir_instr_operand_value(take, binding);
+    return bound ? take->dest : nullptr;
+}
+
+static bool
+n00bb_emit_scope_finalize(ir_lower_context_t *context,
+                          n00bb_final_frame_t *frame, parse_tree_t *source)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_span_t span = lower_span_for_tree(context, source);
+    th_type *nil_type = th_name(ir_module_types(context->module),
+                                CORE_STRING_STATIC("nil"));
+    ir_value_t *owned = ir_local_value(context->function, frame->owned);
+    ir_block_t *finalize = n00bb_branch_block(context, lower, "finalize");
+    ir_block_t *join = n00bb_branch_block(context, lower, "finalized");
+    ir_instr_t *branch = finalize && join && owned
+        ? ir_instr_add(context->block, IR_OP_BRANCH) : nullptr;
+    if (!nil_type || !branch || !ir_instr_operand_value(branch, owned)
+        || !ir_instr_operand_block(branch, finalize)
+        || !ir_instr_operand_block(branch, join)) {
+        lower_internal(context, span, "could not test a finalized local");
+        return false;
+    }
+    branch->span = span;
+    context->block = finalize;
+    ir_value_t *address = n00bb_set_owned(context, frame, false, span)
+        ? n00bb_final_address(context, frame->symbol, span) : nullptr;
+    if (!address || !n00bb_emit_site_trait_call(context, frame->site,
+            address, TH_CONSUME, nil_type, nullptr, source)
+        || !n00bb_emit_jump(context, join, span)) {
+        lower_internal(context, span, "could not finalize a local");
+        return false;
+    }
+    context->block = join;
+    return true;
+}
+
+static bool
+n00bb_local_escapes(const parse_sym_entry_t *symbol)
+{
+    if (symbol->alias_unresolved) return true;
+    for (size_t i = 0; i < symbol->aliased_by_count; i++) {
+        const parse_sym_alias_t *alias = &symbol->aliased_by[i];
+        if (alias->escapes || !alias->other
+            || alias->other->storage_duration != PARSE_SYM_STORAGE_AUTOMATIC)
+            return true;
+    }
+    return false;
+}
+
+static bool
+n00bb_begin_final_frame(ir_lower_context_t *context,
+                        parse_sym_entry_t *symbol, ir_span_t span)
+{
+    n00bb_lower_context_t *lower = context->user;
+    size_t site = 0;
+    if (!lower || !context->reachable
+        || symbol->storage_duration == PARSE_SYM_STORAGE_DYNAMIC
+        || (symbol->selected_storage_class.data
+            && symbol->selected_storage_class.u8_bytes)
+        || n00bb_local_escapes(symbol)
+        || !n00bb_scope_finalize_site(symbol, &site)) return true;
+    bool parameter = symbol->kind == PARSE_SYM_PARAM;
+    parse_tree_t *scope = symbol->scope ? symbol->scope->node : nullptr;
+    if (!scope || (!parameter
+        && !nt_is(lower->grammar, scope, CORE_STRING_STATIC("body"))
+        && !nt_is(lower->grammar, scope, CORE_STRING_STATIC("try-body"))))
+        return true;
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    char buffer[48];
+    core_string_t name = n00bb_format_name(buffer, sizeof(buffer),
+        "__n00bb_owned_%llu", (unsigned long long)context->next_value_id++);
+    ir_local_t *owned = bool_type
+        ? ir_local_add(context->function, name, bool_type) : nullptr;
+    n00bb_final_frame_t frame = {
+        .scope = scope,
+        .symbol = symbol,
+        .owned = owned,
+        .site = site,
+        .order = ++lower->next_control_order,
+    };
+    if (!owned || !core_list_try_push(lower->finals, frame)
+        || !n00bb_set_owned(context,
+            &lower->finals.data[lower->finals.len - 1], parameter, span)) {
+        lower_internal(context, span, "could not track a finalized local");
+        return false;
+    }
+    return true;
+}
+
+static bool
+n00bb_finish_final_scope(ir_lower_context_t *context,
+                         parse_tree_t *scope, parse_tree_t *source)
+{
+    n00bb_lower_context_t *lower = context->user;
+    while (lower && lower->finals.len > lower->final_base
+           && lower->finals.data[lower->finals.len - 1].scope == scope) {
+        n00bb_final_frame_t *frame =
+            &lower->finals.data[lower->finals.len - 1];
+        if (context->reachable
+            && !n00bb_emit_scope_finalize(context, frame, source))
+            return false;
+        lower->finals.len--;
+    }
+    return true;
+}
+
+static bool
+n00bb_write_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol,
+                    bool written)
+{
+    n00bb_final_frame_t *frame = n00bb_final_frame(context->user, symbol);
+    if (!frame || !context->reachable) return true;
+    if (!written)
+        return n00bb_emit_scope_finalize(context, frame, symbol->decl_node);
+    return n00bb_set_owned(context, frame, true,
+                           lower_span_for_tree(context, symbol->decl_node));
+}
+
 static bool
 n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                  ir_local_t *local, ir_span_t span)
@@ -1815,7 +2001,8 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
     bool dynamic = symbol->storage_duration == PARSE_SYM_STORAGE_DYNAMIC;
     if ((!storage_class.data || !storage_class.u8_bytes) && !dynamic) {
         return ir_lower_bind_local(context, symbol, local)
-            && n00bb_mark_binding_reentry(context, symbol);
+            && n00bb_mark_binding_reentry(context, symbol)
+            && n00bb_begin_final_frame(context, symbol, span);
     }
     parse_sym_set_storage_duration(symbol, PARSE_SYM_STORAGE_DYNAMIC);
     th_type *address_type = th_ind(ir_module_types(context->module), 0,
@@ -1831,7 +2018,8 @@ n00bb_bind_local(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                                           symbol->storage_class_required))
         && ir_lower_bind_local_storage(context, symbol, local,
                                        allocation->dest)
-        && n00bb_mark_binding_reentry(context, symbol);
+        && n00bb_mark_binding_reentry(context, symbol)
+        && n00bb_begin_final_frame(context, symbol, span);
 }
 
 static ir_value_t *
@@ -2768,7 +2956,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
         return false;
     }
 
-    ir_value_t *cursor = n00bb_emit_iteration_trait_call(context, frame,
+    ir_value_t *cursor = n00bb_emit_site_trait_call(context,
         frame->iteration_plan->iter_site, source, TH_IN,
         frame->iteration_plan->cursor_type, nullptr, frame->node);
     if (!cursor) {
@@ -2806,7 +2994,7 @@ n00bb_lower_container_body_enter(ir_lower_context_t *context,
     th_type *option_type = th_option(ir_module_types(context->module),
                                      frame->iteration_plan->item_type);
     ir_value_t *option = current && option_type
-        ? n00bb_emit_iteration_trait_call(context, frame,
+        ? n00bb_emit_site_trait_call(context,
             frame->iteration_plan->next_site, current, TH_INOUT,
             option_type, &frame->iteration_cursor_value, frame->node)
         : nullptr;
@@ -3216,6 +3404,9 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
         && (!visit->annot || !core_string_eq(visit->annot->scope_tag,
                                              CORE_STRING_STATIC("block")))))
         return true;
+    if (!entering && !logical_rhs
+        && !n00bb_finish_final_scope(context, visit->node, visit->node))
+        return false;
     if (nt_is(visit->grammar, visit->node, CORE_STRING_STATIC("block-value-expr"))) {
         if (entering) {
             n00bb_value_block_frame_t frame = {
@@ -5317,6 +5508,15 @@ n00bb_lower_jump_annotation(ir_lower_context_t *context, parse_visit_t *visit,
                     expected, lower_span_for_tree(context, visit->node)))
                 return false;
         }
+        parse_tree_t *returned = expression
+            ? n00bb_simple_lvalue(expression) : nullptr;
+        n00bb_final_frame_t *moved = returned && lower
+            ? n00bb_final_frame(lower, attached_symbol(visit->grammar,
+                                                       lower->unit, returned))
+            : nullptr;
+        if (moved && !n00bb_set_owned(context, moved, false,
+                lower_span_for_tree(context, visit->node)))
+            return false;
         return n00bb_emit_with_success(context, visit->node);
     }
     if (core_string_eq(name, CORE_STRING_STATIC("value-stmt"))) {
@@ -8715,6 +8915,8 @@ n00bb_restore_literal_context(ir_lower_context_t *context,
     context->reachable = frame.reachable;
     lower->withs.len = frame.with_count;
     lower->tries.len = frame.try_count;
+    lower->finals.len = lower->final_base;
+    lower->final_base = frame.final_base;
     lower->has_active_literal = false;
 }
 
@@ -8980,11 +9182,13 @@ n00bb_lower_static_litmod(ir_lower_context_t *context,
             .file_id = context->file_id,
             .with_count = lower->withs.len,
             .try_count = lower->tries.len,
+            .final_base = lower->final_base,
             .reachable = context->reachable,
         };
         lower->has_active_literal = true;
         lower->withs.len = 0;
         lower->tries.len = 0;
+        lower->final_base = lower->finals.len;
         context->module = module;
         context->function = producer;
         context->block = entry;
@@ -10120,6 +10324,25 @@ n00bb_emit_scoped_cleanups(ir_lower_context_t *context,
                 with_item = item;
                 with_order = item->order;
             }
+        }
+        n00bb_final_frame_t *final = nullptr;
+        for (size_t i = lower->finals.len; i > lower->final_base; i--) {
+            n00bb_final_frame_t *candidate = &lower->finals.data[i - 1];
+            if (candidate->order <= stop_order
+                || candidate->order >= before
+                || !node_is_within(exit_node, candidate->scope)
+                || (handler && node_is_within(handler->node,
+                                              candidate->scope))
+                || (final && candidate->order <= final->order))
+                continue;
+            final = candidate;
+        }
+        if (final && (!loop || final->order > loop->order)
+            && (!with_item || final->order > with_order)) {
+            before = final->order;
+            if (!n00bb_emit_scope_finalize(context, final, exit_node))
+                return false;
+            continue;
         }
         if (!loop && !with_item) break;
         if (loop && (!with_item || loop->order > with_order)) {
@@ -12529,13 +12752,12 @@ n00bb_emit_closed_trait_call(ir_lower_context_t *context,
 }
 
 static ir_value_t *
-n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
-                                n00bb_loop_frame_t *frame,
-                                size_t site_index, ir_value_t *receiver,
-                                th_mode receiver_mode,
-                                th_type *return_type,
-                                ir_value_t **copyout_value,
-                                parse_tree_t *source)
+n00bb_emit_site_trait_call(ir_lower_context_t *context,
+                           size_t site_index, ir_value_t *receiver,
+                           th_mode receiver_mode,
+                           th_type *return_type,
+                           ir_value_t **copyout_value,
+                           parse_tree_t *source)
 {
     n00bb_lower_context_t *lower = context ? context->user : nullptr;
     n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
@@ -12545,7 +12767,7 @@ n00bb_emit_iteration_trait_call(ir_lower_context_t *context,
             ? &state->link_use_sites.data[site_index] : nullptr;
     parse_sym_entry_t *symbol = site ? site->symbol : nullptr;
     ir_span_t span = lower_span_for_tree(context, source);
-    if (!lower || !state || !analysis || !frame || !site || !symbol
+    if (!lower || !state || !analysis || !site || !symbol
         || !receiver || !return_type)
         return (lower_internal(context, span,
             "iteration trait call has incomplete semantic bindings"), nullptr);
@@ -12686,7 +12908,7 @@ n00bb_emit_iteration_cleanup(ir_lower_context_t *context,
         || !frame->iteration_cursor_value) return true;
     th_type *nil_type = th_name(ir_module_types(context->module), CORE_STRING_STATIC("nil"));
     return nil_type
-        && n00bb_emit_iteration_trait_call(context, frame,
+        && n00bb_emit_site_trait_call(context,
             frame->iteration_plan->cleanup_site,
             frame->iteration_cursor_value, TH_CONSUME, nil_type,
             nullptr, source) != nullptr;
@@ -12752,8 +12974,13 @@ n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
         }
     }
 
-    return n00bb_emit_consume_value(context, value, binding,
-                                    lower_span_for_tree(context, argument));
+    ir_span_t span = lower_span_for_tree(context, argument);
+    ir_value_t *consumed = n00bb_emit_consume_value(context, value, binding,
+                                                    span);
+    n00bb_final_frame_t *frame = n00bb_final_frame(context->user, symbol);
+    if (consumed && frame && !n00bb_set_owned(context, frame, false, span))
+        return nullptr;
+    return consumed;
 }
 
 static ir_value_t *
@@ -19911,6 +20138,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .value_blocks = core_list_new(n00bb_value_block_frame_t),
         .tries = core_list_new(n00bb_try_frame_t),
         .withs = core_list_new(n00bb_with_frame_t),
+        .finals = core_list_new(n00bb_final_frame_t),
         .parameters_to_copy_out = core_list_new(n00bb_copyout_t),
         .pending_call_copyouts = core_list_new(n00bb_pending_copyouts_t),
         .narrowed_roots = core_list_new(n00bb_narrowed_root_t),
@@ -19927,6 +20155,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .file_id = file_id,
         .user = &lower_data,
         .bind_missing = bind_missing_external,
+        .write_binding = n00bb_write_binding,
         .reachable = true,
     };
     size_t failures = lower_failures(&context);
@@ -20048,7 +20277,10 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                     goto cleanup;
                 }
             }
-            else if (!ir_lower_bind_value(&context, parameter, value)) {
+            else if (!ir_lower_bind_value(&context, parameter, value)
+                     || !n00bb_begin_final_frame(&context, parameter,
+                            lower_span_for_tree(&context,
+                                                parameter->decl_node))) {
                 goto cleanup;
             }
             continue;
@@ -20256,7 +20488,9 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                                        expression_result_data))
             goto cleanup;
         if (context.reachable) {
-            if (!n00bb_emit_success_return(&context, lowered.value,
+            if (!n00bb_finish_final_scope(&context, lower_data.finals.len
+                        ? lower_data.finals.data[0].scope : nullptr, body)
+                || !n00bb_emit_success_return(&context, lowered.value,
                     &lower_data.parameters_to_copy_out,
                     lower_span_for_tree(&context, body))) goto cleanup;
         }
@@ -20303,7 +20537,10 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
                 <= failures + lower_data.skipped_failures;
             goto cleanup;
         }
-        if (!n00bb_emit_with_success(&context, body)) goto cleanup;
+        if (!n00bb_emit_with_success(&context, body)
+            || !n00bb_finish_final_scope(&context, lower_data.finals.len
+                    ? lower_data.finals.data[0].scope : nullptr, body))
+            goto cleanup;
         ir_span_t implicit_return = ir_module_span(module);
         implicit_return.implied = true;
         if (!n00bb_emit_success_return(&context, nullptr,
@@ -20335,6 +20572,7 @@ cleanup:
         core_list_free(lower_data.withs.data[w].items);
     }
     core_list_free(lower_data.withs);
+    core_list_free(lower_data.finals);
     for (size_t i = 0; i < lower_data.pending_call_copyouts.len; i++)
         core_list_free(lower_data.pending_call_copyouts.data[i].items);
     core_list_free(lower_data.pending_call_copyouts);

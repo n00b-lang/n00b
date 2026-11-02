@@ -138,6 +138,14 @@ n00bb_link_stage_semantics(core_link_unit_t *link, uint32_t stage_kind,
             th_env_free(environment);
             return CORE_LINK_STAGE_RESULT_FAILED;
     }
+    for (size_t i = 0; i < units->len; i++)
+        if (!register_scope_finalizers(analysis->grammar, units->data[i])) {
+            report_stage_failure(units->data, units->len, units->data[i],
+                "finding finalized locals",
+                "could not record the finalizers of the program's locals");
+            th_env_free(environment);
+            return CORE_LINK_STAGE_RESULT_FAILED;
+        }
     if (!resolve_variant_case_references(link, analysis)) {
         report_stage_failure(units->data, units->len, units->data[0],
             "resolving switch cases",

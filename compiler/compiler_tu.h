@@ -95,6 +95,10 @@ void resolve_declaration_patterns(parse_grammar_t *grammar,
 bool resolve_for_binding_types(parse_grammar_t *grammar,
                                core_translation_unit_t *unit,
                                bool closed_only);
+bool register_scope_finalizers(parse_grammar_t *grammar,
+                               core_translation_unit_t *unit);
+bool n00bb_scope_finalize_site(const parse_sym_entry_t *symbol,
+                               size_t *site);
 void collect_keyword_nodes(parse_grammar_t *grammar, parse_tree_t *node,
                            core_list_t(n00bb_tree_ptr_t) *arguments);
 core_string_t call_keyword_name(parse_tree_t *argument);

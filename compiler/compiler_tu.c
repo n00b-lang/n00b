@@ -1772,6 +1772,90 @@ cache_iteration_plan(parse_grammar_t *grammar,
     return true;
 }
 
+#define N00BB_FINALIZE_SITE_KEY CORE_STRING_STATIC("n00bb.finalize-site")
+
+static bool
+scope_finalizable_type(n00bb_tu_state_t *state, th_type *type)
+{
+    th_type *resolved = type ? th_resolve(type) : nullptr;
+    if (!resolved || th_is_poison(resolved)
+        || !th_is_closed(state->types, resolved)
+        || n00bb_object_type(state->types, resolved)) return false;
+    th_type *shape = th_kind_of(resolved) == TH_NAMED
+        ? th_type_definition(state->types, resolved) : resolved;
+    if (!shape || th_kind_of(th_resolve(shape)) != TH_RECORD) return false;
+    th_type *reference = th_ind(state->types, 0, resolved);
+    th_env_method_t method = {0};
+    return reference && th_env_method_resolve(state->types, reference,
+        CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
+        &method) == TH_ENV_METHOD_FOUND;
+}
+
+bool
+n00bb_scope_finalize_site(const parse_sym_entry_t *symbol, size_t *site)
+{
+    void *bound = symbol
+        ? parse_sym_binding(symbol, N00BB_FINALIZE_SITE_KEY) : nullptr;
+    if (!bound) return false;
+    if (site) *site = (size_t)(uintptr_t)bound - 1;
+    return true;
+}
+
+static parse_tree_t *
+scope_finalizer_site_node(parse_grammar_t *grammar, parse_tree_t *declaration,
+                          bool parameter)
+{
+    core_string_t wrapper = parameter ? CORE_STRING_STATIC("param-decl")
+                                      : CORE_STRING_STATIC("body-stmt");
+    for (parse_tree_t *at = declaration; at; at = parse_tree_parent(at))
+        if (nt_is(grammar, at, wrapper)) return at;
+    return nullptr;
+}
+
+bool
+register_scope_finalizers(parse_grammar_t *grammar,
+                          core_translation_unit_t *unit)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    parse_symtab_t *symtab = state && state->annotations
+        ? state->annotations->symtab : nullptr;
+    for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+         scope; scope = scope->all_next) {
+        if (!scope_is_within_function(scope)) continue;
+        for (parse_sym_entry_t *symbol = scope->first_in_scope; symbol;
+             symbol = symbol->next_in_scope) {
+            bool local = symbol->kind == PARSE_SYM_VARIABLE
+                && symbol->storage_duration != PARSE_SYM_STORAGE_MODULE;
+            bool owned = symbol->kind == PARSE_SYM_PARAM
+                && core_string_eq(symbol->direction,
+                                  CORE_STRING_STATIC("consume"));
+            parse_tree_t *node = (local || owned) && symbol->decl_node
+                ? scope_finalizer_site_node(grammar, symbol->decl_node, owned)
+                : nullptr;
+            if (!node || n00bb_scope_finalize_site(symbol, nullptr)
+                || !scope_finalizable_type(state, symbol->type)) continue;
+            n00bb_link_use_site_t site = {
+                .node = node,
+                .scope = scope,
+                .function_owner = enclosing_function_symbol(grammar,
+                    symbol->decl_node),
+                .dispatch_trait = CORE_STRING_STATIC("Finalize"),
+                .dispatch_method = CORE_STRING_STATIC("__finalize"),
+                .dispatch_receiver_type = th_ind(state->types, 0,
+                                                 symbol->type),
+                .secondary_dispatch = true,
+                .semantic_dispatch = true,
+            };
+            size_t index = state->link_use_sites.len;
+            if (!append_link_use_site(state, site)
+                || !parse_sym_set_binding(symbol, N00BB_FINALIZE_SITE_KEY,
+                                          (void *)(uintptr_t)(index + 1)))
+                return false;
+        }
+    }
+    return true;
+}
+
 bool
 n00bb_switch_case_integer(parse_grammar_t *grammar, parse_tree_t *node,
                          ir_lit_t *value)
