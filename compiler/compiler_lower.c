@@ -13275,7 +13275,12 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         || callback_call || builtin_trait_call;
     core_translation_unit_t *callee_unit = !no_function_body && lower
         ? unit_for_symbol(visit->grammar, lower->units, symbol) : nullptr;
-    if (!no_function_body && !callee_unit)
+    // A primitive's operator method (`n.__cmp(m)` on a `uint`) has no
+    // source body; it is synthesized below from its trait requirement.
+    parse_sym_entry_t *builtin_operator = trait_call
+        ? parse_sym_binding(symbol, CORE_STRING_STATIC("n00bb.builtin-operator"))
+        : nullptr;
+    if (!no_function_body && !callee_unit && !builtin_operator)
         return lower_internal(context, span,
                               "call target is outside the imported modules");
     n00bb_tu_state_t *callee_state = callee_unit
@@ -13284,13 +13289,11 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         ? link_ir_function_for_symbol(
             tu_state(lower->unit)->link_analysis, symbol)
         : nullptr;
-    if (!callee_function && trait_call && symbol
-        && parse_sym_binding(symbol,
-            CORE_STRING_STATIC("n00bb.builtin-operator"))) {
+    if (!callee_function && builtin_operator) {
         th_type *receiver_type = receiver_node
             ? parse_tree_type(receiver_node) : nullptr;
         callee_function = n00bb_closed_builtin_operator(context, symbol,
-            symbol, receiver_type);
+            builtin_operator, receiver_type);
         if (callee_function) {
             callee_unit = lower->unit;
             callee_state = caller_state;
@@ -13729,7 +13732,8 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         parse_sym_entry_t *formal = nullptr;
         uint8_t flags = 0;
         th_mode mode = TH_IN;
-        bool has_formal = builtin_trait_call || byte_offset_builtin
+        bool has_formal = builtin_trait_call || builtin_operator
+            || byte_offset_builtin
             || byte_diff_builtin || unsafe_arithmetic || bit_count_builtin
             || gc_memory_builtin
             || volatile_load_builtin
@@ -14397,7 +14401,7 @@ n00bb_lower_call(ir_lower_context_t *context, parse_visit_t *visit,
         for (size_t i = 0; signature_ok && i < parameter_count; i++) {
             const th_param *parameter = th_func_param(signature, i);
             th_mode mode = parameter ? parameter->mode : TH_IN;
-            if (!builtin_trait_call && !native_builtin
+            if (!builtin_trait_call && !native_builtin && !builtin_operator
                 && !function_parameter_info(visit->grammar, symbol,
                     formal_params, i, nullptr, nullptr,nullptr,
                     &mode)) {
