@@ -1585,6 +1585,26 @@ n00bb_for_loop_at(core_translation_unit_t *unit, uint32_t line,
     return nullptr;
 }
 
+static th_type *
+loop_source_field_type(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                       parse_tree_t *source)
+{
+    parse_tree_t *member = member_access_node(grammar, source);
+    if (!member || core_tree_num_children(member) < 3) return nullptr;
+    parse_tree_t *receiver = core_tree_child(member, 0);
+    th_type *receiver_type = parse_tree_type(receiver);
+    parse_sym_entry_t *symbol = attached_symbol(grammar, unit, receiver);
+    if ((!receiver_type || th_kind_of(th_resolve(receiver_type)) == TH_VAR)
+        && symbol && symbol->type)
+        receiver_type = symbol->type;
+    th_type *shape = receiver_type
+        ? n00bb_record_shape(tu_state(unit), th_resolve(receiver_type))
+        : nullptr;
+    return shape ? record_lookup_text(nullptr, shape,
+                       first_token_text(core_tree_child(member, 2)))
+                 : nullptr;
+}
+
 static bool
 resolve_for_binding(parse_grammar_t *grammar, core_translation_unit_t *unit,
                     parse_tree_t *loop, bool closed_only, bool defer_open,
@@ -1600,6 +1620,13 @@ resolve_for_binding(parse_grammar_t *grammar, core_translation_unit_t *unit,
         if (closed_only && (!source_type || th_is_poison(source_type)
                 || !th_is_closed(state->types, source_type)))
             return true;
+        if (defer_open && source_type
+            && th_kind_of(th_resolve(source_type)) == TH_VAR) {
+            th_type *field = loop_source_field_type(grammar, unit, source);
+            if (field && th_unify_probe(state->types, source_type, field))
+                source_type = th_unify_in_place(state->types, source_type,
+                                                field);
+        }
         if (defer_open && source_type
             && th_kind_of(th_resolve(source_type)) == TH_VAR) {
             *deferred = true;

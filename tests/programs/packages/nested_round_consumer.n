@@ -1,0 +1,22 @@
+import nested_items
+
+func total(text: string) -> uint {
+    var sum: uint = 0
+    for round: uint from 0 until 2 {
+        try {
+            return nested_items.reports(text)!
+        } fail(failures) {
+            for let report in failures {
+                if report.fixes.len() == 0 {
+                    return 0
+                }
+                for let fix in report.fixes {
+                    sum += fix.at
+                }
+            }
+        }
+    }
+    return sum
+}
+
+require total("") == 6
