@@ -115,6 +115,10 @@ record_loc(pt_t *pt, ir_summary_t *summary, const pt_loc_t *loc,
         if (own) path.flags |= IR_SPATH_ROOT;
         else if (loc->site != PT_EXTERNAL)
             path.flags &= (uint8_t)~IR_SPATH_ROOT;
+        if ((path.flags & IR_SPATH_WRITE) && string_bytes_path(pt, &path)) {
+            path.flags &= (uint8_t)~IR_SPATH_WRITE;
+            if (!(path.flags & IR_SPATH_READ)) continue;
+        }
         if (!constant_read(&path)) add_function_path(summary, pt->f, &path);
     }
     core_list_free(names);
