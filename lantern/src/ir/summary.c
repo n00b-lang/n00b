@@ -3814,7 +3814,6 @@ recursive_object(pt_loc_t *loc)
             && !(earlier
                  && ir_type_eq(active_pt->f->owner, earlier, object)))
             continue;
-        loc->path.depth = k;
         loc->path.flags |= IR_SPATH_DEEP;
         return true;
     }
@@ -4424,8 +4423,11 @@ pt_read(pt_t *pt, const ir_value_t *value, pt_set_t *into)
             pt_load(pt, &address, into);
             core_list_free(address);
         }
-        else if (!constant_global(value->global))
-            set_add(into, contents_item(global_loc(value->global)));
+        else if (!constant_global(value->global)) {
+            pt_item_t copy = contents_item(global_loc(value->global));
+            copy.flow = PT_COPY;
+            set_add(into, copy);
+        }
         return;
     case IR_VAL_PARAM:
     case IR_VAL_LOCAL: {
@@ -5344,30 +5346,6 @@ slot_pointer(pt_t *pt, const pt_item_t *item)
     }
 }
 
-static void
-collapse_reach(pt_loc_t *loc)
-{
-    ir_spath_t *path = &loc->path;
-    if (!active_pt || !(path->flags & IR_SPATH_DEEP)
-        || (path->flags & SPATH_INLINE) || !path->depth)
-        return;
-    th_type *slot   = loc_type(active_pt, loc, path->depth);
-    th_type *object = slot ? memo_defined(active_pt,
-                                          pointee_type(active_pt->f->owner,
-                                                       slot))
-                           : nullptr;
-    if (!object) return;
-    for (uint32_t k = 1; k < path->depth; k++) {
-        if (!step_eq(path->steps[k - 1], value_step)) continue;
-        th_type *earlier = loc_type(active_pt, loc, k);
-        if (!same_type(earlier, object)
-            && !(earlier
-                 && ir_type_eq(active_pt->f->owner, earlier, object)))
-            continue;
-        path->depth = k;
-        return;
-    }
-}
 
 static bool
 known_pointer(pt_t *pt, const pt_loc_t *loc)
@@ -5405,7 +5383,6 @@ canonical_item(pt_item_t *item)
     if (active_pt && (path->flags & SPATH_INLINE)
         && flat_slot(active_pt, &item->loc))
         path->flags &= (uint8_t)~(IR_SPATH_DEEP | SPATH_INLINE);
-    collapse_reach(&item->loc);
     if (item->loc.site != PT_EXTERNAL) return;
     if (item->flow != PT_SAME) return;
     if (item->kind != PT_CONTENTS || loc_deep(&item->loc) || !active_pt
@@ -9459,9 +9436,11 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
         changed = false;
         for (size_t i = 0; i < count; i++) {
             ir_summary_t *summary = ir_summary_of(summaries, members[i]);
+            ir_summary_t *probe   = ir_summary_new(nullptr, members[i]);
             uint32_t      before  = summary->flags & shrinking;
-            summarize_divergence(summaries, summary, members[i]);
-            uint32_t after = summary->flags & before;
+            summarize_divergence(summaries, probe, members[i]);
+            uint32_t after = probe->flags & before;
+            summary_free(probe);
             summary->flags = (summary->flags & ~shrinking) | after;
             settled[i]     = after;
             changed |= after != before;

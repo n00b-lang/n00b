@@ -27,7 +27,7 @@ native_flows(ir_summary_t *summary, const ir_func_t *function,
     uint32_t params = (uint32_t)th_func_nparams(function->type);
     for (uint32_t p = 0; p < params; p++) {
         core_list_push(inputs, ((ir_spath_t){
-            .root = IR_SPLACE_PARAM, .param = p, .flags = IR_SPATH_ROOT}));
+            .root = IR_SPLACE_PARAM, .param = p}));
         if (p >= 8 || (reads & N00BB_AXIOM_PARAM(p)))
             core_list_push(inputs, ((ir_spath_t){
                 .root = IR_SPLACE_PARAM, .param = p,

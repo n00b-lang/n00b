@@ -1,6 +1,6 @@
 sys.internal.fs.read_file: (string) -> Array[u8] fail: int
   effects may_fail may_trap may_allocate may_block may_io may_collect allocates_direct reinterprets may_input
-  reads path.data...
+  reads path.data.__value...
   traps explicit bounds unwrap arithmetic
   returns fresh
 sys.internal.env.args: () -> List[string]
@@ -11,84 +11,86 @@ sys.internal.clock.now_ns: () -> uint
   effects may_collect reads_clock
 sys.internal.random.fill: (modify Array[u8]) -> nil fail: int
   effects may_fail may_trap may_block may_collect reinterprets reads_random
-  writes buffer[]...
+  writes buffer.__value[]...
   traps bounds
 sys.internal.random.fill: (modify 'T) -> nil fail: int
   effects may_fail may_trap may_allocate may_block may_collect allocates_direct reinterprets reads_random
   traps bounds arithmetic
 builtin.containers.dict.len: (Dict['K, 'V]) -> uint
   effects none
-  reads self.index.live
+  reads self.__value.index.live
 builtin.containers.dict.get: (Dict['K, 'V], 'K) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
-  reads self.entries
-  reads self.entries[]
-  reads self.index.ctrl
-  reads self.index.ctrl[]
-  reads self.index.hashes[]
-  reads self.index.slots[]
+  reads self.__value.entries
+  reads self.__value.index.ctrl
+  reads self.__value.entries.__value[]
+  reads self.__value.index.ctrl.__value[]
+  reads self.__value.index.hashes.__value[]
+  reads self.__value.index.slots.__value[]
   reads key...
-  reads builtin.hashing.secret[]...
+  reads builtin.hashing.secret.__value[]...
   escapes self referent
   traps explicit bounds unwrap arithmetic
-  returns self.entries[].value
+  returns self.__value.entries.__value[].value
 builtin.containers.dict.put: (Dict['K, 'V], 'K, 'V) -> 'V?
   effects may_trap may_allocate may_collect allocates_direct reinterprets
-  reads+writes self.entries...
-  reads+writes self.index.ctrl
-  reads+writes self.index.dead
-  reads+writes self.index.growth_left
-  reads+writes self.index.hashes
-  reads+writes self.index.live
-  writes self.index.slots
-  reads+writes self.index.used
-  reads+writes self.index.ctrl[]
-  reads self.index.dead[]
-  reads+writes self.index.hashes[]
-  reads+writes self.index.slots[]
+  writes self.__value.entries...
+  reads+writes self.__value.entries
+  reads+writes self.__value.index.ctrl
+  reads+writes self.__value.index.dead
+  reads+writes self.__value.index.growth_left
+  reads+writes self.__value.index.hashes
+  reads+writes self.__value.index.live
+  writes self.__value.index.slots
+  reads+writes self.__value.index.used
+  reads+writes self.__value.entries.__value[]
+  reads+writes self.__value.index.ctrl.__value[]
+  reads self.__value.index.dead.__value[]
+  reads+writes self.__value.index.hashes.__value[]
+  reads+writes self.__value.index.slots.__value[]
   reads key...
-  reads builtin.hashing.secret[]...
+  reads builtin.hashing.secret.__value[]...
   escapes self referent
   escapes key address
   escapes value address
   traps explicit bounds unwrap arithmetic
-  returns self.entries[].value value
+  returns self.__value.entries.__value[].value value
 builtin.containers.dict.iter: (Dict['K, 'V]) -> Cursor[Item['K, 'V]]
   effects may_trap may_allocate
-  reads self.entries
-  reads self.entries[]
-  reads self.index.dead
-  reads self.index.live
-  reads self.index.used
-  reads self.index.dead[]
+  reads self.__value.entries
+  reads self.__value.index.dead
+  reads self.__value.index.live
+  reads self.__value.index.used
+  reads self.__value.entries.__value[]
+  reads self.__value.index.dead.__value[]
   escapes self referent
   traps bounds arithmetic
 builtin.containers.list.len: (List['T]) -> uint
   effects none
-  reads self.count
+  reads self.__value.count
 builtin.containers.list.iter: (List['T]) -> Cursor['T]
   effects may_trap
-  reads self.count
-  reads self.items
-  writes self.shared
+  reads self.__value.count
+  reads self.__value.items
+  writes self.__value.shared
   escapes self referent
   traps arithmetic
 text.internal.rich.rich_string: (string, List[Style_Span]) -> string
   effects may_trap may_allocate may_collect allocates_direct reinterprets
-  reads spans.count
-  reads spans.items
-  reads spans.items[]
+  reads spans.__value.count
+  reads spans.__value.items
+  reads spans.__value.items.__value[]
   escapes text referent
   escapes spans referent
   traps explicit bounds unwrap arithmetic
 unicode.internal.properties.general_category: (char) -> Gc
   effects may_trap
-  reads unicode.generated.categories.gc_stage1_values[]
-  reads unicode.generated.categories.gc_stage2[]
+  reads unicode.generated.categories.gc_stage1_values.__value[]
+  reads unicode.generated.categories.gc_stage2.__value[]
   traps explicit bounds arithmetic
 unicode.internal.runebuf.push: (modify Char_Buf, char) -> nil
   effects may_trap may_allocate may_collect allocates_direct
-  reads+writes self.data[]
+  reads+writes self.data.__value[]
   writes self.cap
   writes self.data
   writes self.len

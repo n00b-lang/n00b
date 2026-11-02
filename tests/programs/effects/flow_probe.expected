@@ -36,21 +36,21 @@ flow_probe.heap_overwrite: (int, int) -> int
   output result data[x y] control[]
 flow_probe.param_fields: (modify Array[Pair], int, int) -> int
   effects may_trap
-  reads arr[]
-  reads+writes arr[].a
-  writes arr[].b
+  reads arr.__value[]
+  reads+writes arr.__value[].a
+  writes arr.__value[].b
   traps bounds
-  output result data[arr[].a x] control[]
+  output result data[arr.__value[].a x] control[]
   output result 1 data[arr] control[]
-  output arr[].a data[x] control[]
-  output arr[].b data[y] control[]
+  output arr.__value[].a data[x] control[]
+  output arr.__value[].b data[y] control[]
 flow_probe.put: (modify Array[int], int) -> nil
   effects may_trap
-  writes arr[]
+  writes arr.__value[]
   traps bounds
   output result data[] control[]
   output result 1 data[arr] control[]
-  output arr[] data[x] control[]
+  output arr.__value[] data[x] control[]
 flow_probe.caller: (int) -> int
   effects may_trap may_allocate may_collect allocates_direct
   traps bounds arithmetic

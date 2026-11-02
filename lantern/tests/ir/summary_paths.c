@@ -220,7 +220,7 @@ test_joins_keep_every_arm(void)
         "      return %none\n"
         "  }\n"));
     expect(&r, "a phi and a select reach both of their arms", S("f"),
-           S("rw p.x; rw q.x"));
+           S("rw p.__value.x; rw q.__value.x"));
     done(&r);
 }
 
@@ -238,7 +238,7 @@ test_slots_hold_what_was_stored(void)
         "      return %v\n"
         "  }\n"));
     expect(&r, "a pointer read back from a slot names its source", S("f"),
-           S("r p.x; ~ p.x"));
+           S("r p.__value.x; ~ p.__value.x"));
     done(&r);
 }
 
@@ -266,9 +266,9 @@ test_by_value_records(void)
         "      return %r\n"
         "  }\n"));
     expect(&r, "a by-value record's own fields are not memory", S("f"),
-           S("r v.a.x; ~ v.a.x; ~ v.n"));
+           S("r v.a.__value.x; ~ v.a.__value.x; ~ v.n"));
     expect(&r, "and the caller sees the read through its copy",
-           S("caller"), S("r p; r p.a.x; ~ p.a.x; ~ p.n"));
+           S("caller"), S("r p.__value; r p.__value.a.__value.x; ~ p.__value.a.__value.x; ~ p.__value.n"));
     done(&r);
 }
 
@@ -299,7 +299,7 @@ test_fresh_interiors_stay_local(void)
     expect(&r, "a fresh object's own fields are not reported", S("quiet"),
            S("= new"));
     expect(&r, "what was stored into a fresh object is followed",
-           S("holds"), S("r p.x; ~ p.x"));
+           S("holds"), S("r p.__value.x; ~ p.__value.x"));
     done(&r);
 }
 
@@ -326,7 +326,7 @@ test_returned_parameters_alias(void)
         "      return %r\n"
         "  }\n"));
     expect(&r, "a call that returns its argument aliases it", S("f"),
-           S("w p.x"));
+           S("w p.__value.x"));
     expect(&r, "and its result names the argument, not a fresh object",
            S("wrap"), S("= p"));
     done(&r);
@@ -381,11 +381,11 @@ test_overwritten_locals(void)
         "      return %none\n"
         "  }\n"));
     expect(&r, "a local overwritten before its read holds only the new value",
-           S("f"), S("w q.x"));
+           S("f"), S("w q.__value.x"));
     expect(&r, "an overwrite on one arm keeps both values at the join",
-           S("g"), S("w p.x; w q.x"));
+           S("g"), S("w p.__value.x; w q.__value.x"));
     expect(&r, "an overwritten field of a record local holds the new value",
-           S("h"), S("w q.x"));
+           S("h"), S("w q.__value.x"));
     done(&r);
 }
 
@@ -463,7 +463,7 @@ test_callees_write_through_locals(void)
     expect(&r, "a callee writing a local slot is not reported", S("local"),
            S(""));
     expect(&r, "a callee writing through a held pointer is", S("through"),
-           S("w p.x"));
+           S("w p.__value.x"));
     done(&r);
 }
 
@@ -485,7 +485,7 @@ test_cycles_widen(void)
         "      return %none\n"
         "  }\n"));
     expect(&r, "a loop through a link widens to a deep path", S("walk"),
-           S("r p.next..."));
+           S("r p.__value.next..."));
     done(&r);
 }
 
@@ -504,7 +504,7 @@ test_globals_and_elements(void)
         "      return %v\n"
         "  }\n"));
     expect(&r, "global roots and element steps are named", S("f"),
-           S("r g; r g.items; r g.items[]; r g.items[].x; ~ g.items[].x"));
+           S("r g; r g.__value.items; r g.__value.items.__value[]...; ~ g.__value.items.__value[]; ~ g.__value.items.__value[].__value..."));
     done(&r);
 }
 
@@ -533,7 +533,7 @@ test_returned_fresh_objects(void)
     expect(&r, "a fresh object holding an argument says what it holds",
            S("keeps"), S("= new; s new.next <- p"));
     expect(&r, "and what it holds is followed by the caller", S("f"),
-           S("w p.x"));
+           S("w p.__value.x"));
     done(&r);
 }
 
@@ -559,7 +559,7 @@ test_published_objects(void)
         "      return %v\n"
         "  }\n"));
     expect(&r, "an object stored in a global is written through its name",
-           S("f"), S("s g <- new; w g; w g.x"));
+           S("f"), S("s g <- new; w g; w g.__value.x"));
     expect(&r, "a pointer made from an integer reaches anything",
            S("forged"), S("r ?...; ~ ?..."));
     done(&r);
@@ -584,7 +584,7 @@ test_writes_before_publication(void)
         "      return %nothing\n"
         "  }\n"));
     expect(&r, "only writes after an object is published are seen",
-           S("f"), S("s p.next <- new; w p.next; w p.next.items"));
+           S("f"), S("s p.__value.next <- new; w p.__value.next; w p.__value.next..."));
     done(&r);
 }
 
@@ -619,12 +619,13 @@ test_callee_stores(void)
     const ir_spath_t *to = nullptr, *from = nullptr;
     check("a store summary names where an argument was put",
           only_store(summary, &to, &from) && to->root == IR_SPLACE_PARAM
-              && to->param == 0 && to->depth == 1
-              && core_string_eq(to->steps[0], S("next"))
+              && to->param == 0 && to->depth == 2
+              && core_string_eq(to->steps[0], S("__value"))
+              && core_string_eq(to->steps[1], S("next"))
               && from->root == IR_SPLACE_PARAM && from->param == 1
               && !from->depth);
     expect(&r, "what a callee stores into a local is followed", S("f"),
-           S("r p.x; ~ p.x"));
+           S("r p.__value.x; ~ p.__value.x"));
     ir_func_t *g = ir_func_find(r.m, S("g"));
     summary = g ? ir_summary_of(r.summaries, g) : nullptr;
     check("and a callee's store is restated in the caller's terms",
@@ -655,7 +656,7 @@ test_fresh_construction(void)
     expect(&r, "a constructor's copy-out names what it holds", S("init"),
            S("=1 self; =1.a a"));
     expect(&r, "and the caller reads it from the constructed storage",
-           S("make"), S("r p.x; ~ p.x"));
+           S("make"), S("r p.__value.x; ~ p.__value.x"));
     done(&r);
 }
 
@@ -935,11 +936,11 @@ test_value_dependences(void)
     expect_flows(&r, "a result depends on the parameters it combines",
                  S("sum"), S("~ a; ~ b"));
     expect_flows(&r, "a loaded result depends on the field it reads",
-                 S("deref"), S("~ p.x"));
+                 S("deref"), S("~ p.__value.x"));
     expect_flows(&r, "a phi depends on the branch that chose it (D6)",
                  S("choose"), S("^ c; ~ a"));
     expect_flows(&r, "a written field depends on the stored value",
-                 S("set"), S("s p.x <~ a"));
+                 S("set"), S("s p.__value.x <~ a"));
     expect_flows(&r, "a value written by a callee reaches the result",
                  S("through_callee"), S("~ a"));
     expect_flows(&r, "a value stored into a local's field reaches the "
