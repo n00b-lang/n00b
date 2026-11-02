@@ -1,0 +1,404 @@
+import langtools
+import sys.fs
+import sys.env
+
+var failures: uint = 0
+
+func check(ok: bool, probe: string) {
+    if !ok {
+        __fd_write(2, "FAIL " + probe + "\n")
+        failures += 1
+    }
+}
+
+func span(start: uint, end: uint) -> langtools.Span {
+    return new[langtools.Span](start_byte = start, end_byte = end,
+        start_col = cast[u32](start) + 1, end_col = cast[u32](end) + 1)
+}
+
+func load(text: string) -> langtools.Grammar? {
+    try {
+        return langtools.load_ebnf(text, source_name = "test.bnf")!
+    } fail(diags) {
+        return nil
+    }
+}
+
+func codes(text: string) -> string {
+    try {
+        let g: langtools.Grammar = langtools.load_ebnf(text)!
+        return "loaded"
+    } fail(diags) {
+        var out: List[string] = new[List[string]]()
+        for let d in diags {
+            out.append(d.code)
+        }
+        return join(out, " ")
+    }
+}
+
+func diagnostics(text: string) -> List[langtools.Diagnostic] {
+    try {
+        let g: langtools.Grammar = langtools.load_ebnf(text)!
+        return new[List[langtools.Diagnostic]]()
+    } fail(diags) {
+        return diags
+    }
+}
+
+func diag_checks() {
+    var d: langtools.Diagnostic = new[langtools.Diagnostic]("ebnf/test",
+        "something broke", span(4, 7))
+    d.help = "try harder"
+    let src: langtools.Source = (name = "x.bnf", text = "abc def ghi\nnext")
+    check(langtools.render(d, src) ==
+          "x.bnf:1:5: error: something broke [ebnf/test]\n\n" +
+          "    1 | abc def ghi\n      |     ^^^\n\n  help: try harder\n",
+          "render")
+
+    var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
+    let replace: langtools.Fix = (message = "a", span = span(0, 3),
+                                  replacement = "XYZ")
+    let insert_one: langtools.Fix = (message = "b", span = span(0, 0),
+                                     replacement = "1")
+    let insert_two: langtools.Fix = (message = "c", span = span(0, 0),
+                                     replacement = "2")
+    let overlap: langtools.Fix = (message = "d", span = span(1, 5),
+                                  replacement = "!")
+    fixes.append(replace)
+    fixes.append(insert_one)
+    fixes.append(overlap)
+    fixes.append(insert_two)
+    check(langtools.apply_fixes("abc def", fixes) == "12XYZ def",
+          "apply_fixes orders inserts first and skips overlaps")
+
+    var names: List[string] = new[List[string]]()
+    names.append("term")
+    names.append("expression")
+    names.append("s")
+    let trem: string? = langtools.closest_match("trem", names)
+    check(trem != nil and trem.get() == "term", "closest_match transposition")
+    let expresion: string? = langtools.closest_match("expresion", names)
+    check(expresion != nil and expresion.get() == "expression",
+          "closest_match deletion")
+    check(langtools.closest_match("a", names) == nil,
+          "closest_match leaves short names alone")
+}
+
+func id_checks() {
+    check(langtools.raw_token_id(langtools.literal_token_id("+")) == 0x2b,
+          "single codepoint id")
+    check(langtools.raw_token_id(langtools.literal_token_id("é")) == 0xe9,
+          "non-ASCII codepoint id")
+    check(langtools.raw_token_id(langtools.literal_token_id(">>=")) ==
+          313332964004109437735777710839930297445, "XXH3-128 id")
+    check(langtools.raw_token_id(langtools.class_token_id(0)) == 0x110001,
+          "first declared class id")
+    check(langtools.literal_token_id("if") == langtools.literal_token_id("if"),
+          "Token_Id equality")
+    check(langtools.is_identifier_shaped("match") and
+          langtools.is_identifier_shaped("_x1") and
+          !langtools.is_identifier_shaped("+=") and
+          !langtools.is_identifier_shaped("1x"), "identifier shape")
+}
+
+const feature_grammar: string = [-
+# features
+identifier: %NAME
+tokens: %NUMBER
+trivia: %COMMENT
+elastic: %NEWLINE
+start: <stmt>
+
+<expr> ::= <term> (("+" | %"-") <term>)*
+<term> ::= %NUMBER | %"(" <expr> %")"
+         | %NAME
+<stmt> ::= %"let" %NAME "=" <expr> %NEWLINE?
+<stmt> ::= "match" <expr> %"\u{e9}\t"+
+-]
+
+func feature_checks() {
+    let loaded: langtools.Grammar? = load(feature_grammar)
+    check(loaded != nil, "feature grammar loads")
+    if loaded == nil {
+        return
+    }
+    let g: langtools.Grammar = loaded.get()
+    check(g.rules.len() == 3, "rule count")
+    check(langtools.start_rule(g).name == "stmt", "start directive")
+    let stmt: langtools.Rule? = langtools.find_rule(g, "stmt")
+    check(stmt != nil and stmt.get().alts.len() == 2 and
+          stmt.get().defs.len() == 2, "merged definitions")
+    check(langtools.identifier_class(g).name == "NAME", "identifier directive")
+    check(langtools.raw_token_id(langtools.identifier_class(g).id) ==
+          0x110000, "identifier id")
+    let number: langtools.Token_Class? = langtools.find_class(g, "NUMBER")
+    let comment: langtools.Token_Class? = langtools.find_class(g, "COMMENT")
+    let newline: langtools.Token_Class? = langtools.find_class(g, "NEWLINE")
+    check(number != nil and
+          langtools.raw_token_id(number.get().id) == 0x110001,
+          "first declared class")
+    check(comment != nil and
+          comment.get().policy == langtools.Token_Policy.trivia and
+          langtools.raw_token_id(comment.get().id) == 0x110002,
+          "trivia class")
+    check(newline != nil and
+          newline.get().policy == langtools.Token_Policy.elastic,
+          "elastic class")
+    check(langtools.is_hard_keyword(g, "let"), "hard keyword")
+    check(langtools.is_soft_keyword(g, "match"), "soft keyword")
+    check(!langtools.is_soft_keyword(g, "+") and !langtools.is_hard_keyword(g, "+"),
+          "punctuation is not a keyword")
+    check(langtools.find_literal(g, "é\t") != nil, "escapes decode")
+
+    let text: string = langtools.format_grammar(g, show_ids = true)
+    let again: langtools.Grammar? = load(langtools.format_grammar(g))
+    check(again != nil and
+          langtools.format_grammar(again.get(), show_ids = true) == text,
+          "format round trip")
+}
+
+let literal_grammar: langtools.Grammar = [-
+tokens: %NUMBER
+start: <sum>
+<sum> ::= %NUMBER ("+" %NUMBER)*
+-]'bnf
+
+func literal_checks() {
+    check(langtools.start_rule(literal_grammar).name == "sum",
+          "bnf literal start")
+    check(literal_grammar.rules.len() == 1 and
+          langtools.find_class(literal_grammar, "NUMBER") != nil,
+          "bnf literal contents")
+}
+
+func bad_input_checks() {
+    check(codes("<a> ::= %\"x\" ;\n") == "ebnf/unexpected-character",
+          "unexpected-character")
+    check(codes("<a> ::= \"x\n") == "ebnf/unterminated-literal",
+          "unterminated-literal")
+    check(codes("<a> ::= \"\" %\"y\"\n") == "ebnf/empty-literal",
+          "empty-literal")
+    check(codes("<a> ::= \"\\q\"\n") == "ebnf/bad-escape", "bad-escape")
+    check(codes("<a> ::= \"\\u{d800}\"\n") == "ebnf/bad-escape",
+          "bad-escape surrogate")
+    check(codes("<1> ::= %\"x\"\n") == "ebnf/expected-rule-name " +
+          "ebnf/no-rules ebnf/unexpected-character " +
+          "ebnf/unexpected-character ebnf/unexpected-token",
+          "expected-rule-name")
+    check(codes("<a ::= %\"x\"\n") == "ebnf/unclosed-angle", "unclosed-angle")
+    check(codes("<a> %\"x\"\n") == "ebnf/expected-assign", "expected-assign")
+    check(codes("<a> ::= ( %\"x\"\n") == "ebnf/unbalanced-paren",
+          "unbalanced-paren open")
+    check(codes("<a> ::= %\"x\" )\n") == "ebnf/unbalanced-paren",
+          "unbalanced-paren close")
+    check(codes("<a> ::= %\"x\" | | %\"y\"\n") == "ebnf/empty-alternative",
+          "empty-alternative")
+    check(codes("<a> ::= %\"x\" |\n") == "ebnf/empty-alternative",
+          "trailing pipe")
+    check(codes("<a> ::= ? %\"x\"\n") == "ebnf/misplaced-quantifier",
+          "leading quantifier")
+    check(codes("<a> ::= %\"x\"?*\n") == "ebnf/misplaced-quantifier",
+          "stacked quantifier")
+    check(codes("<a> ::= % %\"x\"\n") == "ebnf/bad-percent", "bad-percent")
+    check(codes("@lexer(\"x.lex\")\n<a> ::= %\"x\"\n") ==
+          "ebnf/annotation-not-supported", "annotation-not-supported")
+    check(codes("<a> ::= __DIGIT %\"x\"\n") ==
+          "ebnf/char-class-not-supported", "char-class-not-supported")
+    check(codes("tokns: %X\n<a> ::= %\"x\"\n") == "ebnf/unknown-directive",
+          "unknown-directive")
+    check(codes("start: <a>\nstart: <a>\n<a> ::= %\"x\"\n") ==
+          "ebnf/duplicate-directive", "duplicate-directive")
+    check(codes("<a> ::= %NUMBR\n") == "ebnf/undeclared-token-class",
+          "undeclared-token-class")
+    check(codes("tokens: %X, %X\n<a> ::= %X\n") == "ebnf/duplicate-token-class",
+          "duplicate-token-class")
+    check(codes("identifier: %NAME\ntokens: %NAME\n<a> ::= %NAME\n") ==
+          "ebnf/duplicate-token-class", "identifier declared twice")
+    check(codes("tokens: %X\ntrivia: %X\n<a> ::= %X\n") ==
+          "ebnf/conflicting-token-policy", "conflicting-token-policy")
+    check(codes("trivia: %C\n<a> ::= %C\n") == "ebnf/trivia-in-rule",
+          "trivia-in-rule")
+    check(codes("<a> ::= <bb>\n<b> ::= %\"x\"\n") == "ebnf/undefined-rule",
+          "undefined-rule")
+    check(codes("start: <c>\n<a> ::= %\"x\"\n") == "ebnf/undefined-start",
+          "undefined-start")
+    check(codes("tokens: %X\n") == "ebnf/no-rules", "no-rules")
+    check(codes("<a> ::= foo\n") == "ebnf/bare-name ebnf/undefined-rule",
+          "bare-name")
+    check(codes("<a> ::= %\"x\" ::= %\"y\"\n") == "ebnf/unexpected-token",
+          "unexpected-token")
+
+    var many: List[string] = new[List[string]]()
+    for i: uint from 0 until 120 {
+        many.append("@x\n")
+    }
+    many.append("<a> ::= %\"x\"\n")
+    let capped: List[langtools.Diagnostic] = diagnostics(join(many, ""))
+    check(capped.len() == 101 and
+          capped[100].code == "ebnf/too-many-errors", "too-many-errors")
+
+    let typo: List[langtools.Diagnostic] =
+        diagnostics("<expr> ::= <trem> | <trem>\n<term> ::= %\"x\"\n")
+    check(typo.len() == 1 and typo[0].fixes.len() == 2,
+          "did-you-mean fixes every use")
+}
+
+const broken_grammar: string = [-
+@lexer("x.lex")
+<a> @hardline ::= <bb> | foo
+<b> ::= %NUMBER
+<foo> ::= %"y"
+-]
+
+func fix_checks() {
+    let broken: string = broken_grammar
+    var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
+    for let d in diagnostics(broken) {
+        for let f in d.fixes {
+            fixes.append(f)
+        }
+    }
+    let repaired: string = langtools.apply_fixes(broken, fixes)
+    check(load(repaired) != nil, "fixes repair the grammar")
+}
+
+func lex_checks() {
+    let loaded: langtools.Grammar? = load(feature_grammar)
+    if loaded == nil {
+        return
+    }
+    let g: langtools.Grammar = loaded.get()
+    let source: string = "let match + é\t ;; x"
+    let ctx: langtools.Lex_Context = new[langtools.Lex_Context](g, source)
+    let name: langtools.Token_Id? = ctx.classes["NAME"]
+    let comment: langtools.Token_Id? = ctx.classes["COMMENT"]
+    check(name != nil and comment != nil, "context class ids")
+    if name == nil or comment == nil {
+        return
+    }
+    let hard: langtools.Token = langtools.emit(ctx, 0, 3, class = name.get())
+    check(hard.id == langtools.literal_token_id("let") and hard.alt_id == nil,
+          "hard keyword re-labelled")
+    let soft: langtools.Token = langtools.emit(ctx, 4, 9, class = name.get())
+    check(soft.id == name.get() and soft.alt_id != nil and
+          soft.alt_id.get() == langtools.literal_token_id("match"),
+          "soft keyword alternate id")
+    let plus: langtools.Token = langtools.emit(ctx, 10, 11)
+    check(langtools.raw_token_id(plus.id) == 0x2b, "unclassed codepoint")
+    let fixed: langtools.Token = langtools.emit(ctx, 12, 15)
+    check(fixed.id == langtools.literal_token_id("é\t"), "unclassed hash")
+    let trivia: langtools.Token = langtools.emit(ctx, 16, 18,
+                                                 class = comment.get())
+    check(trivia.flags.trivia and !trivia.flags.elastic, "trivia flag")
+    let plain: langtools.Token = langtools.emit(ctx, 19, 20, class = name.get())
+    check(plain.id == name.get() and plain.alt_id == nil, "plain identifier")
+}
+
+func read_text(path: string) -> string? {
+    try {
+        var bytes: Array[u8] = sys.fs.read_file(path)!
+        return from_raw(ref bytes, __array_length(bytes))
+    } fail(code) {
+        return nil
+    }
+}
+
+func base_name(path: string) -> string {
+    var at: uint = byte_len(path)
+    while at > 0 and byte_at(path, at - 1) != 0x2f {
+        at -= 1
+    }
+    return byte_slice(path, at, byte_len(path))
+}
+
+func lantern_counts() -> Dict[string, Tuple[uint, uint]] {
+    var counts: Dict[string, Tuple[uint, uint]] =
+        new[Dict[string, Tuple[uint, uint]]]()
+    counts["bce.bnf"] = (229, 897)
+    counts["c_ncc.bnf"] = (165, 680)
+    counts["cel.bnf"] = (21, 54)
+    counts["csharp.bnf"] = (294, 706)
+    counts["go.bnf"] = (134, 258)
+    counts["java.bnf"] = (246, 506)
+    counts["javascript.bnf"] = (181, 477)
+    counts["kotlin.bnf"] = (166, 330)
+    counts["lua.bnf"] = (55, 117)
+    counts["php.bnf"] = (159, 427)
+    counts["python.bnf"] = (195, 419)
+    counts["ruby.bnf"] = (172, 446)
+    counts["rust.bnf"] = (216, 547)
+    counts["swift.bnf"] = (308, 636)
+    counts["typescript.bnf"] = (241, 562)
+    counts["n00b.bnf"] = (300, 626)
+    counts["lex.bnf"] = (5, 7)
+    counts["infer.bnf"] = (22, 48)
+    return counts
+}
+
+func convert(path: string, original: string) -> langtools.Grammar? {
+    var text: string = original
+    for round: uint from 0 until 20 {
+        try {
+            return langtools.load_ebnf(text, source_name = path)!
+        } fail(diags) {
+            var fixes: List[langtools.Fix] = new[List[langtools.Fix]]()
+            for let d in diags {
+                if d.fixes.len() == 0 and d.code != "ebnf/too-many-errors" {
+                    check(false, path + ": no fix for " + d.code)
+                    return nil
+                }
+                for let f in d.fixes {
+                    fixes.append(f)
+                }
+            }
+            text = langtools.apply_fixes(text, fixes)
+        }
+    }
+    check(false, path + ": fixes did not converge")
+    return nil
+}
+
+func corpus_check(path: string, expected: Dict[string, Tuple[uint, uint]]) {
+    let text: string? = read_text(path)
+    if text == nil {
+        check(false, path + ": cannot read")
+        return
+    }
+    let loaded: langtools.Grammar? = convert(path, text.get())
+    if loaded == nil {
+        return
+    }
+    let g: langtools.Grammar = loaded.get()
+    var alts: uint = 0
+    for let rule in g.rules {
+        alts += rule.alts.len()
+    }
+    let want: Tuple[uint, uint]? = expected[base_name(path)]
+    check(want != nil, path + ": expected counts")
+    check(want == nil or (want.get()[0] == g.rules.len()
+                          and want.get()[1] == alts),
+          path + ": counts match Lantern")
+    let formatted: string = langtools.format_grammar(g, show_ids = true)
+    let again: langtools.Grammar? = load(langtools.format_grammar(g))
+    check(again != nil and
+          langtools.format_grammar(again.get(), show_ids = true) == formatted,
+          path + ": round trip")
+}
+
+diag_checks()
+id_checks()
+feature_checks()
+literal_checks()
+bad_input_checks()
+fix_checks()
+lex_checks()
+let expected: Dict[string, Tuple[uint, uint]] = lantern_counts()
+let args: List[string] = sys.env.args()
+check(args.len() > 1, "corpus grammars given")
+for i: uint from 1 until args.len() {
+    corpus_check(args[i], expected)
+}
+if failures == 0 {
+    __fd_write(2, "ok")
+}

@@ -1895,6 +1895,20 @@ func tuples_check() {
     require tuple_global_c == "three"
 }
 
+func buffer_holds(b: Buffer, expected: string) -> bool {
+    let view: string = b
+    return view == expected
+}
+
+func ascii_check() {
+    require is_ascii_digit('7') and !is_ascii_digit('a')
+    require is_ascii_letter('Q') and !is_ascii_letter('_')
+    let eleven: u32? = hex_digit_value('b')
+    require eleven != nil and eleven.get() == 11
+    require hex_digit_value('g') == nil
+    require buffer_holds(new[Buffer](hex = "41 4a:4B"), "AJK")
+}
+
 func integer_text_check() {
     let count: uint = 42
     let delta: int = -17
@@ -2128,6 +2142,7 @@ func start() -> nil {
     char_switch_check()
     hash_container_order_check()
     integer_text_check()
+    ascii_check()
     loop_field_index_check()
     __fd_write(2, "ok")
 }
