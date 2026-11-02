@@ -323,7 +323,8 @@ static bool promote_func_body(P *p, ir_func_t *f)
         }
         und[l] = fresh(p, u, f->locals[l]);
 
-        if (warn[l]) {
+        if (warn[l] && !th_zero_size(f->owner->ctx->types,
+                                     f->locals[l]->type)) {
             warn_unset(p, f->locals[l]);
         }
     }

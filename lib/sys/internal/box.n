@@ -114,7 +114,6 @@ func array_element(type_field: u32, payload: Ref[byte], index: i64,
     let descriptor: Ref[internal.abi.Array_Descriptor_Header] = header.get()
     require descriptor.rank != 0 and descriptor.flat_rank == 1
         and descriptor.flags == 0 and row.alignment_bytes != 0
-        and row.size_bits != 0
         and internal.abi.packed_array_stride_bits(row) == 0
     let position: u64 = array_position(descriptor, index)
     let alignment_bits: u64 = cast[u64](row.alignment_bytes) * 8
@@ -178,7 +177,7 @@ func component_of(type_field: u32, kind: internal.abi.Type_Kind) -> u32 {
                                                       & 0x7fffffff)
     require row.kind == cast[u32](kind) and row.components.count == 1
     let child: i64 = internal.abi.range_index(row.components, 0)
-    require child > 0
+    require child >= 0
     return cast[u32] child
 }
 
@@ -270,7 +269,6 @@ func array_locate(source: Ref[Any], index: i64,
     if width == 0 {
         let alignment_bits: u64 = cast[u64](element.alignment_bytes) * 8
         require descriptor.flags == 0 and alignment_bits != 0
-            and element.size_bits != 0
         let stride_bits: u64 = ((element.size_bits + alignment_bits - 1) /
             alignment_bits) * alignment_bits
         location.address = __gc_byte_offset(data.get(),

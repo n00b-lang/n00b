@@ -96,6 +96,7 @@ records-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/
 calls-n00b	pr	30	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/calls.n"
 generics-n00b	pr	18	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/generics.n"
 generics-text-n00b	pr	21	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/generics_text.n"
+nil-types-n00b	pr	30	sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/merged/nil_types.n"
 consts-literals-n00b	pr	5	N00B_PATH="$SRC/tests/programs/consts_literals" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/consts_literals/consts_literals.n"
 static-encoding-n00b	pr	15	N00B_PATH="$SRC/tests/programs/static_encoding" sh "$SRC/tests/builtin_os_n00b.sh" "$BUILD/n00b" "$SRC/tests/programs/static_encoding/static_encoding.n"
 static-encoding-baked-n00b	pr	7	N00B_PATH="$SRC/tests/programs/static_encoding" sh "$SRC/tests/no_build_time_run.sh" "$BUILD/n00b" "$SRC/tests/programs/static_encoding/static_encoding.n" 2

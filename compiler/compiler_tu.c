@@ -2385,11 +2385,16 @@ unify_literal_items(th_ctx *types, literal_item_group_t *group,
         }
         return true;
     }
-    bool has_nil = false;
-    for (size_t i = 0; i < group->items.len; i++)
+    bool has_nil = false, all_nil = group->items.len != 0;
+    for (size_t i = 0; i < group->items.len; i++) {
         has_nil |= th_is_nil(group->items.data[i]);
+        all_nil &= th_is_nil(group->items.data[i]);
+    }
+    if (all_nil && th_kind_of(declared) == TH_VAR)
+        return th_unify_in_place(types, group->slot, th_nil(types));
     th_type *payload = nullptr;
-    if (!n00bb_option_type_element(group->slot, &payload) && has_nil) {
+    if (!n00bb_option_type_element(group->slot, &payload) && has_nil
+        && !th_is_nil(declared)) {
         payload = th_var(types);
         if (!th_unify_in_place(types, group->slot,
                                th_option(types, payload))) {
@@ -3856,6 +3861,18 @@ infer_anonymous_record(parse_grammar_t *grammar, parse_tree_t *node,
 static th_type *literal_union_shape(th_ctx *types, uint64_t record_hash,
                                     th_type *literal, th_type *definition);
 
+static th_type *
+record_literal_shape(n00bb_tu_state_t *state, th_type **expected)
+{
+    th_type *payload = nullptr;
+    if (n00bb_option_type_element(*expected, &payload)) *expected = payload;
+    th_type *shape = static_record_shape(state,
+        n00bb_object_type(state->types, *expected)
+            ? th_auto_deref(state->types, *expected) : *expected);
+    return shape && th_kind_of(th_resolve(shape)) == TH_RECORD
+        ? shape : nullptr;
+}
+
 bool
 contextualize_record_literal(parse_grammar_t *grammar,
                              core_translation_unit_t *unit,
@@ -3863,16 +3880,11 @@ contextualize_record_literal(parse_grammar_t *grammar,
                              parse_tree_t *expression, th_type *expected)
 {
     if (!expression || !expected) return true;
-    th_type *payload = nullptr;
-    if (n00bb_option_type_element(expected, &payload)) expected = payload;
     parse_tree_t *literal = n00bb_node_record_literal_origin(expression);
     parse_tree_t *fields = literal
         ? CHILD_NT(grammar, literal, "named-field-list") : nullptr;
-    th_type *definition = static_record_shape(state,
-        n00bb_object_type(state->types, expected)
-            ? th_auto_deref(state->types, expected) : expected);
-    if (!fields || !definition
-        || th_kind_of(th_resolve(definition)) != TH_RECORD) return true;
+    th_type *definition = record_literal_shape(state, &expected);
+    if (!fields || !definition) return true;
     bool variant = false;
     (void)th_named_info(th_resolve(expected), nullptr, &variant, nullptr);
     n00bb_ordered_nodes_t *ordered = n00bb_node_ordered_nodes(fields);
@@ -10031,9 +10043,12 @@ record_literal_as_named(parse_grammar_t *grammar, n00bb_tu_state_t *state,
     if (!node || core_tree_is_leaf(node)
         || th_kind_of(th_resolve(actual)) != TH_RECORD
         || th_kind_of(th_resolve(expected)) != TH_NAMED) return nullptr;
-    if (grammar && state->unit)
-        return contextualize_record_literal(grammar, state->unit, state, node,
+    if (grammar && state->unit) {
+        th_type *target = expected;
+        return record_literal_shape(state, &target)
+            && contextualize_record_literal(grammar, state->unit, state, node,
                                             expected) ? expected : nullptr;
+    }
     th_type *definition = th_type_definition(state->types, expected);
     if (!definition || th_kind_of(th_resolve(definition)) != TH_RECORD)
         return nullptr;
@@ -15591,6 +15606,20 @@ compose_base_type_core(parse_grammar_t *grammar, core_translation_unit_t *unit,
                                    arguments.len)
         : nullptr;
     core_list_free(arguments);
+    uint8_t attrs = 0;
+    th_type *referent = applied && th_ind_attrs(applied, &attrs)
+        && !(attrs & TH_FOREIGN) ? th_ind_referent(applied) : nullptr;
+    if (referent && th_zero_size(state->types, referent)) {
+        core_string_t spelled = n00bb_print_type(state->types, referent);
+        core_diagnostics_t *diagnostics =
+            core_translation_unit_diagnostics(unit);
+        if (n00bb_report(diagnostics, unit, N00B_DIAG_REF_ZERO_SIZE,
+                link_source_location(application), N00B_TEXT_REF_ZERO_SIZE,
+                N00BB_ARGS(ARG_TEXT(spelled))))
+            n00bb_report_help(diagnostics, N00B_TEXT_REF_ZERO_SIZE_HELP,
+                              N00BB_NO_ARGS);
+        return th_poison(state->types);
+    }
     return applied;
 }
 

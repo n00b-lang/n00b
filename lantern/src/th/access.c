@@ -312,6 +312,33 @@ bool th_is_nil(const th_type *type)
         && intrinsic_builtin(named) == &TH_INTRINSIC_NIL;
 }
 
+bool th_zero_size(th_ctx *ctx, th_type *type)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type) return false;
+    if (th_is_nil(type)) return true;
+    th_builtin_kind_t builtin = th_builtin_kind_of(type);
+    if ((th_kind_of(type) != TH_RECORD && th_kind_of(type) != TH_NAMED)
+        || (builtin != TH_BUILTIN_NONE && builtin != TH_BUILTIN_TUPLE))
+        return false;
+    th_type *definition = th_kind_of(type) == TH_RECORD ? type
+        : th_type_definition(ctx, type);
+    definition = definition ? th_resolve(definition) : nullptr;
+    if (definition && th_kind_of(definition) == TH_RECORD) {
+        for (size_t i = 0; i < th_record_len(definition); i++)
+            if (!th_zero_size(ctx, th_record_member(definition, i)->type))
+                return false;
+        return true;
+    }
+    if (builtin != TH_BUILTIN_TUPLE) return false;
+    for (size_t i = 0; i < th_named_nargs(type); i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        if (!argument || argument->kind != TH_ARG_TYPE
+            || !th_zero_size(ctx, argument->type)) return false;
+    }
+    return true;
+}
+
 th_type *th_option(th_ctx *ctx, th_type *item)
 {
     th_arg argument = {.kind = TH_ARG_TYPE, .type = item};

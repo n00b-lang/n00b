@@ -342,6 +342,9 @@ func hash_value(self: 'T) -> u128 {
     return xxh3_128_at(unsafe_cast[Ref[byte]] ref canonical, (width + 7) / 8)
 }
 
+inline func hash(self: nil) -> u128 {
+    return hash_word(0)
+}
 inline func hash(self: bool) -> u128 {
     return hash_value(self)
 }

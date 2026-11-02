@@ -1,0 +1,2 @@
+tests/diagnostics/coercion/named_tuple_scalar.n:2:18: error N00B-T0500: `labeled` is `Tuple[label: string]`, which does not convert to `int`
+tests/diagnostics/coercion/named_tuple_scalar.n:6:22: error N00B-T0500: `local` is `Tuple[label: string]`, which does not convert to `int`

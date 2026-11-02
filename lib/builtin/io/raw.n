@@ -20,6 +20,9 @@ func raw_repr(self: string, fd: i32) -> i32 {
 
 func raw_repr(self: 'T, fd: i32) -> i32 {
     typecase self {
+        case nil {
+            return string.core.__fd_write(fd, "nil")
+        }
         case bool {
             if self {
                 return string.core.__fd_write(fd, "True")

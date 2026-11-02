@@ -1228,7 +1228,9 @@ n00bb_type_bracket_disambiguator(void *opaque, core_string_t predicate,
             || core_string_eq(spelling, CORE_STRING_STATIC("None"));
     }
     return core_string_eq(predicate,
-        CORE_STRING_STATIC("n00bb_prefer_type_application"));
+               CORE_STRING_STATIC("n00bb_prefer_type_application"))
+        || core_string_eq(predicate,
+               CORE_STRING_STATIC("n00bb_prefer_dict_entries"));
 }
 
 static bool

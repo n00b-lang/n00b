@@ -3,7 +3,7 @@ dev test 2
 pr wall 90
 pr test 20
 dev tests 214
-pr tests 88
+pr tests 89
 release lto-n00b
 release ffi
 release array-uint-index-n00b
@@ -22,6 +22,7 @@ exempt gc-units-n00b 30
 exempt lang-suite-n00b 28
 exempt calls-n00b 30
 exempt generics-text-n00b 21
+exempt nil-types-n00b 30
 exempt ffi-zlib-litmod 21
 exempt incremental-cache-shapes 31
 exempt incremental-cache-instances 38

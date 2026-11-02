@@ -1340,6 +1340,8 @@ n00bb_abi_storage_rows_build(
             && byte_length <= SIZE_MAX - buffer->byte_len
             && byte_length <= UINT64_MAX - buffer->byte_len;
         if (!valid) break;
+        if (!byte_length && !buffer->byte_len)
+            core_buffer_append(buffer, "", 1);
         n00b_abi_storage_v1 row = {
             .module_index = 1,
             .symbol_index = (uint32_t)i,

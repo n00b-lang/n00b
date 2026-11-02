@@ -707,7 +707,7 @@
 # dictionary/set choice made by the parser.
 <dict-or-set-lit> @emit("brace_literal") @infer("`t") ::=
        %"{" <dict-entries> %"}"
-<dict-or-set-lit> @emit("brace_literal") @infer("`t") ::=
+<dict-or-set-lit> @emit("brace_literal") @infer("`t") @disambig(n00bb_prefer_dict_entries, 100) ::=
        %"{" <set-entries> %"}"
 <dict-or-set-lit> @emit("brace_literal") @infer("`t") @constrain($0, Dict_Like) ::=
        %"{" %":" %"}"
@@ -767,9 +767,9 @@
 <tspec-field-list> ::= <tspec-field> %"," <tspec-field-list>
                     | <tspec-field>
                     | <tspec-field> %","
-<array-dimensions> @disambig(n00bb_prefer_type_application, 100) ::=
-    <array-dimension>+
-<array-dimension> @nospace ::= %"[" <expression>? %"]"
+<array-dimensions> ::= <array-dimension>+
+<array-dimension> @nospace @disambig(n00bb_prefer_type_application, 100) ::=
+    %"[" <expression>? %"]"
 
 <tspec-tvar> @nospace ::= %TYPE_VAR
 

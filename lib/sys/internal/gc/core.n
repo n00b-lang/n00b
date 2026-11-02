@@ -415,7 +415,7 @@ func array_flat_element_index(type_index: u32, flat_rank: u32) -> u32 {
                 return 0
             }
             let component: int = internal.abi.range_index(array.get().components, 0)
-            if component <= 0 {
+            if component < 0 {
                 return 0
             }
             current = cast[u32](component)
@@ -448,7 +448,7 @@ inline func array_element_index(type_index: u32, flat_rank: u32) -> u32 {
         return 0
     }
     let component: i64 = internal.abi.range_index(array.get().components, 0)
-    if component <= 0 {
+    if component < 0 {
         return 0
     }
     return cast[u32](component)
@@ -464,7 +464,7 @@ inline func resolve_array_backing(type_index: u32,
     let element_index: u32 = array_element_index(type_index, shape.flat_rank)
     let found: Ref[internal.abi.Type_Record]? = internal.abi.type_at(element_index)
 
-    if element_index == 0 or found == nil {
+    if found == nil {
         return nil
     }
 
@@ -525,7 +525,7 @@ func initialize_array_backing(payload      : Ref[byte],
         if required_bytes > cast[u128](payload_bytes - offset) {
             return false
         }
-    } elif backing.stride == 0 or count > cast[u64]((payload_bytes - offset) / backing.stride) {
+    } elif backing.stride != 0 and count > cast[u64]((payload_bytes - offset) / backing.stride) {
         return false
     }
 

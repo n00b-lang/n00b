@@ -298,11 +298,12 @@ bool ir_layout_publish_final(ir_module_t *m, th_type *t, core_string_t target,
         if (!member->name.data || !member->type
             || ((member->inline_element_count != 0)
                 != (member->inline_element_type != nullptr))
-            || ((member->inline_element_count != 0)
-                != (member->inline_element_stride_bits != 0))
+            || (!member->inline_element_count
+                && member->inline_element_stride_bits)
             || (member->inline_element_count
-                && (member->inline_element_count > UINT64_MAX
-                    / member->inline_element_stride_bits
+                && ((member->inline_element_stride_bits
+                     && member->inline_element_count > UINT64_MAX
+                        / member->inline_element_stride_bits)
                     || member->bit_offset > layout->intrinsic_bits
                     || member->inline_element_count
                         * member->inline_element_stride_bits

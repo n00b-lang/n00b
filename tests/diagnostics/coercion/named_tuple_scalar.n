@@ -1,0 +1,7 @@
+let labeled = (label = "hello")
+let count: int = labeled
+
+func local_case() {
+    let local = (label = "hello")
+    let total: int = local
+}

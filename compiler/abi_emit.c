@@ -1182,7 +1182,14 @@ publish_catalog_record_specializations(n00bb_abi_type_index_t *index,
                 || !th_is_closed(ir_module_types(module), type)
                 || ir_layout_final(module, type, target->triple)) continue;
             th_type *definition = ir_type_definition(module, type);
-            if (!definition || th_kind_of(definition) != TH_RECORD) continue;
+            if (!definition || th_kind_of(definition) != TH_RECORD) {
+                bool handled = false;
+                (void)n00bb_abi_publish_direct_layout(module, type, target,
+                                                      &handled);
+                progress |= ir_layout_final(module, type, target->triple)
+                    != nullptr;
+                continue;
+            }
             parse_sym_entry_t *symbol = type_owner
                 ? type_owner(type_owner_context, type) : nullptr;
             if (symbol && parse_sym_binding(symbol,
