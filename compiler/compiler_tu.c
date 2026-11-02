@@ -1834,7 +1834,17 @@ type_finalized_within(core_translation_unit_t *unit, th_type *type,
 bool
 n00bb_type_finalized(core_translation_unit_t *unit, th_type *type)
 {
-    return unit && tu_state(unit) && type_finalized_within(unit, type, 0);
+    n00bb_tu_state_t *state = unit ? tu_state(unit) : nullptr;
+    th_type *key = type ? th_resolve(type) : nullptr;
+    if (!state || !key) return false;
+    bool found = false;
+    uintptr_t cached = (uintptr_t)core_dict_get(&state->finalized_types, key,
+                                                &found);
+    if (found) return cached == 2;
+    bool finalized = type_finalized_within(unit, key, 0);
+    core_dict_put(&state->finalized_types, key, (void *)(uintptr_t)(
+        finalized ? 2 : 1));
+    return finalized;
 }
 
 bool
@@ -12634,6 +12644,7 @@ free_tu_state(void *data)
     core_list_free(state->shape_literal_nodes);
     core_dict_free(&state->flagset_values);
     core_dict_free(&state->shared_state_types);
+    core_dict_free(&state->finalized_types);
     core_dict_free(&state->integer_edge_sites);
     core_dict_free(&state->constructor_types);
     core_dict_free(&state->trait_dispatchers);
@@ -12663,6 +12674,7 @@ n00bb_tu_state_new(core_translation_unit_t *unit, n00bb_lex_result_t *lex,
     memset(state, 0, sizeof(*state));
     core_arena_init(&state->semantic_values, 1024);
     core_dict_init(&state->shared_state_types, nullptr, nullptr);
+    core_dict_init(&state->finalized_types, nullptr, nullptr);
     state->link_use_sites = core_list_new(n00bb_link_use_site_t);
     state->module_top_level_statements = core_list_new(parse_tree_ptr_t);
     state->assignment_patterns = core_list_new(parse_tree_ptr_t);

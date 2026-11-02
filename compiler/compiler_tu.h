@@ -752,6 +752,7 @@ typedef struct {
     bool type_symbols_indexed;
     core_dict_t type_symbol_index;
     parse_tree_t *flagset_scope;
+    core_dict_t finalized_types;
 } n00bb_tu_state_t;
 static inline parse_tree_t *
 n00bb_tu_parsed_tree(const n00bb_tu_state_t *state)

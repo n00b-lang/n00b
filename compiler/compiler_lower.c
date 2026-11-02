@@ -496,7 +496,10 @@ typedef struct {
     parse_sym_entry_t *symbol;
     ir_local_t *owned;
     th_type *type;
+    ir_local_t *storage;
+    ir_value_t *value;
     bool fields;
+    bool moved;
     uint64_t order;
 } n00bb_final_frame_t;
 core_list_decl(n00bb_final_frame_t);
@@ -1946,6 +1949,19 @@ n00bb_finalize_temporary(ir_lower_context_t *context, th_type *type)
 }
 
 static ir_value_t *
+n00bb_storage_address(ir_lower_context_t *context, ir_local_t *storage,
+                      ir_span_t span)
+{
+    th_type *pointer_type = th_ind(ir_module_types(context->module), 0,
+                                   storage->type);
+    ir_instr_t *take = ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF,
+                                                 span);
+    return take && ir_lower_set_temp_dest(context, take,
+            CORE_STRING_STATIC("__n00bb_finalizing_"), pointer_type)
+        && ir_instr_operand_local(take, storage) ? take->dest : nullptr;
+}
+
+static ir_value_t *
 n00bb_emit_temp(ir_lower_context_t *context, ir_op_t op, th_type *type,
                 ir_value_t *operand, ir_span_t span)
 {
@@ -1962,17 +1978,11 @@ n00bb_finalize_copy(ir_lower_context_t *context, ir_value_t *value,
     ir_local_t *local = n00bb_finalize_temporary(context, type);
     ir_instr_t *copy = local
         ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
-    th_type *pointer_type = th_ind(ir_module_types(context->module), 0,
-                                   type);
-    ir_instr_t *take = copy && ir_instr_set_dest_local(copy, local)
+    ir_value_t *address = copy && ir_instr_set_dest_local(copy, local)
         && ir_instr_operand_value(copy, value)
-        ? ir_lower_emit_instruction(context, IR_OP_ADDRESS_OF, span)
-        : nullptr;
-    return take && ir_lower_set_temp_dest(context, take,
-            CORE_STRING_STATIC("__n00bb_finalizing_"), pointer_type)
-        && ir_instr_operand_local(take, local)
-        && n00bb_emit_finalize_value(context, take->dest, type, span,
-                                     depth + 1);
+        ? n00bb_storage_address(context, local, span) : nullptr;
+    return address && n00bb_emit_finalize_value(context, address, type, span,
+                                                depth + 1);
 }
 
 static bool
@@ -2109,8 +2119,9 @@ n00bb_emit_scope_finalize(ir_lower_context_t *context,
         ok = self && n00bb_emit_finalize_fields(context, self, span, 0);
     }
     else if (ok) {
-        ir_value_t *address = n00bb_final_address(context, frame->symbol,
-                                                  span);
+        ir_value_t *address = frame->storage
+            ? n00bb_storage_address(context, frame->storage, span)
+            : n00bb_final_address(context, frame->symbol, span);
         ok = address && n00bb_emit_finalize_value(context, address,
                                                   frame->type, span, 0);
     }
@@ -2119,6 +2130,88 @@ n00bb_emit_scope_finalize(ir_lower_context_t *context,
         return false;
     }
     context->block = join;
+    return true;
+}
+
+static n00bb_final_frame_t *
+n00bb_temporary_frame(n00bb_lower_context_t *lower, const ir_value_t *value)
+{
+    while (value) {
+        for (size_t i = lower ? lower->finals.len : 0;
+             i > lower->final_base; i--)
+            if (!lower->finals.data[i - 1].symbol
+                && lower->finals.data[i - 1].value == value)
+                return &lower->finals.data[i - 1];
+        const ir_instr_t *def = value->kind == IR_VAL_INSTR
+            ? value->def : nullptr;
+        bool wrapper = def && def->n_operands == 1
+            && (def->op == IR_OP_OPTION_SOME || def->op == IR_OP_CAST
+                || def->op == IR_OP_COPY || def->op == IR_OP_CONSUME);
+        value = wrapper ? ir_operand_value(&def->operands[0]) : nullptr;
+    }
+    return nullptr;
+}
+
+static parse_tree_t *
+n00bb_temporary_scope(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    for (parse_tree_t *at = node; at; at = parse_tree_parent(at)) {
+        if (nt_is(grammar, at, CORE_STRING_STATIC("body-stmt"))
+            || nt_is(grammar, at, CORE_STRING_STATIC("top-level-stmt")))
+            return at;
+        parse_tree_t *parent = parse_tree_parent(at);
+        if (parent && nt_is(grammar, at, CORE_STRING_STATIC("expression"))
+            && (nt_is(grammar, parent, CORE_STRING_STATIC("if-stmt"))
+                || nt_is(grammar, parent, CORE_STRING_STATIC("elif-clause"))
+                || nt_is(grammar, parent, CORE_STRING_STATIC("while-stmt"))))
+            return at;
+        if (nt_is(grammar, at, CORE_STRING_STATIC("func-def"))) break;
+    }
+    return nullptr;
+}
+
+static bool
+n00bb_node_value(ir_lower_context_t *context, parse_tree_t *node,
+                 ir_value_t *value)
+{
+    n00bb_lower_context_t *lower = context->user;
+    ir_instr_t *def = value->kind == IR_VAL_INSTR ? value->def : nullptr;
+    if (!lower || !def || !context->reachable || !lower->grammar) return true;
+    bool produced = def->op == IR_OP_CALL
+        || def->op == IR_OP_CALLBACK_INVOKE || def->op == IR_OP_AGGREGATE;
+    if (def->op == IR_OP_VARIANT_PAYLOAD && def->n_operands) {
+        ir_value_t *outcome = ir_operand_value(&def->operands[0]);
+        produced = outcome && outcome->kind == IR_VAL_INSTR && outcome->def
+            && outcome->def->op == IR_OP_CALL;
+    }
+    if (!produced || n00bb_temporary_frame(lower, value)
+        || !n00bb_type_finalized(lower->unit, value->type)) return true;
+    parse_tree_t *scope = n00bb_temporary_scope(lower->grammar, node);
+    if (!scope) return true;
+    ir_span_t span = lower_span_for_tree(context, node);
+    th_type *bool_type = n00bb_ir_builtin_type(context->module,
+                                               CORE_STRING_STATIC("bool"));
+    ir_local_t *storage = n00bb_finalize_temporary(context, value->type);
+    ir_local_t *owned = bool_type
+        ? n00bb_finalize_temporary(context, bool_type) : nullptr;
+    ir_instr_t *copy = storage && owned
+        ? ir_lower_emit_instruction(context, IR_OP_COPY, span) : nullptr;
+    n00bb_final_frame_t frame = {
+        .scope = scope,
+        .owned = owned,
+        .type = value->type,
+        .storage = storage,
+        .value = value,
+        .order = ++lower->next_control_order,
+    };
+    if (!copy || !ir_instr_set_dest_local(copy, storage)
+        || !ir_instr_operand_value(copy, value)
+        || !core_list_try_push(lower->finals, frame)
+        || !n00bb_set_owned(context,
+            &lower->finals.data[lower->finals.len - 1], true, span)) {
+        lower_internal(context, span, "could not track a temporary value");
+        return false;
+    }
     return true;
 }
 
@@ -2221,16 +2314,27 @@ n00bb_finish_final_scope(ir_lower_context_t *context,
                          parse_tree_t *scope, parse_tree_t *source)
 {
     n00bb_lower_context_t *lower = context->user;
-    while (lower && lower->finals.len > lower->final_base
-           && lower->finals.data[lower->finals.len - 1].scope == scope) {
-        n00bb_final_frame_t *frame =
-            &lower->finals.data[lower->finals.len - 1];
-        if (context->reachable
-            && !n00bb_emit_scope_finalize(context, frame, source))
+    for (size_t i = lower ? lower->finals.len : 0;
+         scope && i > lower->final_base; i--) {
+        if (lower->finals.data[i - 1].scope != scope) continue;
+        if (context->reachable && !lower->finals.data[i - 1].moved
+            && !n00bb_emit_scope_finalize(context, &lower->finals.data[i - 1],
+                                          source))
             return false;
+        for (size_t j = i; j < lower->finals.len; j++)
+            lower->finals.data[j - 1] = lower->finals.data[j];
         lower->finals.len--;
     }
     return true;
+}
+
+static bool
+n00bb_lower_statement_scope(ir_lower_context_t *context, parse_visit_t *visit,
+                            bool entering, void *state)
+{
+    (void)state;
+    return entering
+        || n00bb_finish_final_scope(context, visit->node, visit->node);
 }
 
 static bool
@@ -2239,6 +2343,13 @@ n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
 {
     n00bb_lower_context_t *lower = context->user;
     if (!source || !lower || !context->reachable) return true;
+    n00bb_final_frame_t *temporary = n00bb_temporary_frame(lower,
+        ir_lower_node_value(context, source));
+    if (temporary) {
+        temporary->moved = true;
+        return n00bb_set_owned(context, temporary, false,
+                               lower_span_for_tree(context, source));
+    }
     parse_tree_t *lvalue = n00bb_simple_lvalue(source);
     n00bb_final_frame_t *frame = lvalue
         ? n00bb_final_frame(lower, attached_symbol(grammar, lower->unit,
@@ -11885,6 +11996,21 @@ n00bb_lower_module_member(ir_lower_context_t *context, parse_visit_t *visit,
             return (ir_lower_result_t){IR_LOWER_NO_VALUE, nullptr};
         parse_tree_t *base_node = core_tree_num_children(visit->node)
             ? core_tree_child(visit->node, 0) : nullptr;
+        if (base_node && referent_access_node(visit->grammar, base_node)) {
+            ir_value_t *address = n00bb_record_field_address(context,
+                visit->grammar, lower->unit, visit->node, span);
+            ir_instr_t *load = address
+                ? ir_lower_emit_instruction(context, IR_OP_LOAD, span)
+                : nullptr;
+            if (!load || !ir_lower_set_temp_dest(context, load,
+                CORE_STRING_STATIC("__n00bb_"), result_type)
+                || !ir_instr_operand_value(load, address)
+                || !n00bb_set_reference_access(lower->ir_context,
+                                               load->dest, result_type))
+                return lower_internal(context, span,
+                    "could not load a field through a reference");
+            return (ir_lower_result_t){IR_LOWER_VALUE, load->dest};
+        }
         ir_value_t *base = base_node
             ? ir_lower_node_value(context, base_node) : nullptr;
         parse_sym_entry_t *base_symbol = base_node && lower
@@ -13309,7 +13435,10 @@ n00bb_emit_consume(ir_lower_context_t *context, parse_grammar_t *grammar,
     ir_span_t span = lower_span_for_tree(context, argument);
     ir_value_t *consumed = n00bb_emit_consume_value(context, value, binding,
                                                     span);
-    n00bb_final_frame_t *frame = n00bb_final_frame(context->user, symbol);
+    n00bb_final_frame_t *frame = symbol
+        ? n00bb_final_frame(context->user, symbol)
+        : n00bb_temporary_frame(context->user, value);
+    if (frame && !symbol) frame->moved = true;
     if (consumed && frame && !n00bb_set_owned(context, frame, false, span))
         return nullptr;
     return consumed;
@@ -17519,6 +17648,23 @@ n00bb_suppress_dereferences(ir_lower_context_t *context,
 }
 
 static bool
+n00bb_lower_field_receiver(ir_lower_context_t *context, parse_visit_t *visit,
+                           bool entering, void *state)
+{
+    (void)state;
+    n00bb_lower_context_t *lower = context->user;
+    if (!entering || !lower || core_tree_num_children(visit->node) != 3)
+        return true;
+    parse_node_resolution_t resolution = parse_tree_resolution(visit->node);
+    parse_sym_entry_t *field = resolution.kind == PARSE_NODE_RESOLUTION_SYMBOL
+        ? resolution.target.symbol : nullptr;
+    parse_tree_t *receiver = core_tree_child(visit->node, 0);
+    if (!field || !field->is_field
+        || !referent_access_node(visit->grammar, receiver)) return true;
+    return n00bb_suppress_dereferences(context, visit->grammar, visit->node);
+}
+
+static bool
 n00bb_lower_record_field_assignment(ir_lower_context_t *context,
                                     parse_visit_t *visit,
                                     parse_tree_t *target,
@@ -20507,6 +20653,7 @@ lower_ir_body(ir_lowerer_t *lowerer, parse_grammar_t *grammar,
         .user = &lower_data,
         .bind_missing = bind_missing_external,
         .write_binding = n00bb_write_binding,
+        .node_value = n00bb_node_value,
         .reachable = true,
     };
     size_t failures = lower_failures(&context);
@@ -27691,7 +27838,22 @@ lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
         && ir_lowerer_register_nt_visit(lowerer,
             CORE_STRING_STATIC("variable-decl"), n00bb_lower_pattern, nullptr)
         && ir_lowerer_register_nt_visit(lowerer,
-            CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr);
+            CORE_STRING_STATIC("assign-stmt"), n00bb_lower_pattern, nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("body-stmt"), n00bb_lower_statement_scope,
+            nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("top-level-stmt"), n00bb_lower_statement_scope,
+            nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("expression"), n00bb_lower_statement_scope,
+            nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("postfix-expr"), n00bb_lower_field_receiver,
+            nullptr)
+        && ir_lowerer_register_nt_visit(lowerer,
+            CORE_STRING_STATIC("place"), n00bb_lower_field_receiver,
+            nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_SCOPE_OPEN,
                                          n00bb_lower_with_scope, nullptr);
     ok = ok && ir_lowerer_register_visit(lowerer, PARSE_ANNOT_OPERATOR,

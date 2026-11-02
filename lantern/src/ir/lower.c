@@ -390,7 +390,8 @@ ir_lower_set_node_value(ir_lower_context_t *context, parse_tree_t *node,
         || !lower_value_accessible(context, value))
         return false;
     core_dict_put(&state->values, node, value);
-    return true;
+    return !value || !context->node_value
+        || context->node_value(context, node, value);
 }
 
 bool
@@ -1818,6 +1819,13 @@ lower_tree_node(parse_visit_t *visit)
     }
     state->terminated |= result.status == IR_LOWER_TERMINATED;
     core_dict_put(&state->values, visit->node, result.value);
+    if (result.value && state->context->node_value
+        && !state->context->node_value(state->context, visit->node,
+                                       result.value)) {
+        state->failed = true;
+        parse_tree_walk_stop(visit->walk);
+        return false;
+    }
     return true;
 }
 
