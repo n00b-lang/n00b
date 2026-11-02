@@ -61,3 +61,17 @@ reported 'N00B-M0019'
 reported 'N00B-M0008: `builtin.containers.list` is a source module of package `builtin`'
 reported 'N00B-N0004: `counter` is not exported'
 reported 'N00B-M0020: `beta.read` belongs to package `beta`'
+
+# The modules of `cyclic` import each other; explaining a hidden or missing
+# member must not loop through that cycle.
+if "$compiler" check cyclic_hidden_consumer.n >"$tmp/cyclic.log" 2>&1; then
+    echo 'the cyclic package consumer checked' >&2
+    exit 1
+fi
+grep -Fq 'N00B-N0004: `hidden` is not exported to this package by module `cyclic`' \
+    "$tmp/cyclic.log" \
+    && grep -Fq '`cyclic` has no member `nowhere`' "$tmp/cyclic.log" \
+    && ! grep -Fq 'internal compiler error' "$tmp/cyclic.log" || {
+    cat "$tmp/cyclic.log" >&2
+    exit 1
+}

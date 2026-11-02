@@ -1,0 +1,6 @@
+import left
+import right
+
+package cyclic {
+    export left.shown
+}

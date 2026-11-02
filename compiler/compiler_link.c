@@ -1782,10 +1782,16 @@ member_name_node(parse_tree_t *node)
     return count >= 3 ? core_tree_child(node, count - 1) : node;
 }
 
+// Modules of one package can import each other in cycles, so the walk
+// remembers which modules it has already searched.
 static parse_sym_entry_t *
-hidden_module_declaration(core_translation_unit_t *imported,
-                          core_string_t member, bool type_member)
+hidden_declaration_in(core_translation_unit_t *imported, core_string_t member,
+                      bool type_member,
+                      core_list_t(core_translation_unit_ptr_t) *seen)
 {
+    for (size_t i = 0; i < seen->len; i++)
+        if (seen->data[i] == imported) return nullptr;
+    core_list_push(*seen, imported);
     n00bb_tu_state_t *state = tu_state(imported);
     parse_scope_t *scopes[] = {type_member ? type_module_scope(state)
                                            : module_scope(state),
@@ -1809,11 +1815,23 @@ hidden_module_declaration(core_translation_unit_t *imported,
             || !core_string_starts_with(name, package)
             || name.data[package.u8_bytes] != '.')
             continue;
-        parse_sym_entry_t *symbol = hidden_module_declaration(inner, member,
-                                                              type_member);
+        parse_sym_entry_t *symbol = hidden_declaration_in(inner, member,
+                                                          type_member, seen);
         if (symbol) return symbol;
     }
     return nullptr;
+}
+
+static parse_sym_entry_t *
+hidden_module_declaration(core_translation_unit_t *imported,
+                          core_string_t member, bool type_member)
+{
+    core_list_t(core_translation_unit_ptr_t) seen =
+        core_list_new(core_translation_unit_ptr_t);
+    parse_sym_entry_t *symbol = hidden_declaration_in(imported, member,
+                                                      type_member, &seen);
+    core_list_free(seen);
+    return symbol;
 }
 
 static void
