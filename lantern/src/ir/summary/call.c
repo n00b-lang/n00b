@@ -1,9 +1,5 @@
 #include "internal.h"
 
-typedef struct {
-    core_list_t(uint64_t) *resolving;
-    bool                   positional;
-} pt_memo_frame_t;
 
 typedef enum : uint8_t {
     MAP_PLACE,
@@ -124,6 +120,21 @@ resolved_eq(const void *a, const void *b)
 {
     const pt_loc_t *x = a, *y = b;
     return x->site == y->site && !compare_paths(&x->path, &y->path);
+}
+
+static core_hash_value_t
+content_hash(void *key)
+{
+    const content_key_t *content = key;
+    return resolved_hash((void *)&content->loc) * 31
+        + (core_hash_value_t)(uintptr_t)content->at;
+}
+
+static bool
+content_eq(const void *a, const void *b)
+{
+    const content_key_t *x = a, *y = b;
+    return x->at == y->at && resolved_eq(&x->loc, &y->loc);
 }
 
 static bool

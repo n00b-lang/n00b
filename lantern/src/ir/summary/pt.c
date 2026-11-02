@@ -331,6 +331,7 @@ set_merge(const pt_t *pt, pt_set_t *into, const pt_set_t *from)
 static void
 cut_above(pt_t *pt, size_t frame)
 {
+    pt->cuts++;
     for (size_t f = frame + 1; f < pt->reading.len; f++) {
         stored_t *entry = pt->reading.data[f].entry;
         if (entry) entry->partial = true;
@@ -373,7 +374,7 @@ stored_at(pt_t *pt, const pt_loc_t *loc)
 }
 
 static void
-content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
+content_compute(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
 {
     pt_depend(pt, contents_key(loc->site));
     pt_depend(pt, aliases_key(loc->site));
@@ -391,6 +392,35 @@ content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
             continue;
         set_add(pt, into, contents_item(through));
     }
+}
+
+static void
+content_at(pt_t *pt, const pt_loc_t *loc, pt_set_t *into)
+{
+    if (pt->reading.len) {
+        content_compute(pt, loc, into);
+        return;
+    }
+    content_key_t   probe = {*loc, pt->at};
+    bool            found = false;
+    content_memo_t *entry = core_dict_get(&pt->contents_memo, &probe,
+                                          &found);
+    if (!found) {
+        entry  = core_alloc(content_memo_t);
+        *entry = (content_memo_t){.key = probe};
+        core_dict_put(&pt->contents_memo, &entry->key, entry);
+    }
+    if (memo_stale(pt, &entry->memo)) {
+        pt_memo_frame_t frame;
+        uint64_t        cuts = pt->cuts;
+        memo_begin(pt, &entry->memo, &frame);
+        entry->items.len = 0;
+        content_compute(pt, loc, &entry->items);
+        memo_end(pt, &entry->memo, &frame);
+        if (pt->cuts != cuts) entry->memo.computed = false;
+    }
+    memo_use(pt, &entry->memo);
+    set_merge(pt, into, &entry->items);
 }
 
 static bool

@@ -269,6 +269,8 @@ struct pt_t {
     core_dict_t            changed;
     core_dict_t            mapped;
     core_dict_t            stored;
+    core_dict_t            contents_memo;
+    uint64_t               cuts;
     core_dict_t            valued;
     bool                   positional;
     core_dict_t            external_index;
@@ -341,6 +343,17 @@ typedef struct {
 } resolved_t;
 
 typedef struct {
+    pt_loc_t          loc;
+    const ir_instr_t *at;
+} content_key_t;
+
+typedef struct {
+    content_key_t key;
+    pt_set_t      items;
+    pt_memo_t     memo;
+} content_memo_t;
+
+typedef struct {
     pt_loc_t  loc;
     uint8_t   mode;
     pt_set_t  items;
@@ -396,6 +409,16 @@ static th_type *root_object_type(const ir_func_t *f, const ir_spath_t *path,
                                  const pt_t *pt);
 
 static bool resolved_eq(const void *a, const void *b);
+
+typedef struct {
+    core_list_t(uint64_t) *resolving;
+    bool                   positional;
+} pt_memo_frame_t;
+
+static bool memo_stale(pt_t *pt, const pt_memo_t *memo);
+static void memo_begin(pt_t *pt, pt_memo_t *memo, pt_memo_frame_t *frame);
+static void memo_end(pt_t *pt, pt_memo_t *memo, const pt_memo_frame_t *frame);
+static void memo_use(pt_t *pt, pt_memo_t *memo);
 
 static void record_set(pt_t *pt, ir_summary_t *summary,
                        const pt_set_t *addresses, uint8_t flags,
