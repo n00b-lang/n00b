@@ -354,7 +354,9 @@ static bool
 guards_constant(const analysis_t *analysis, const ir_pto_t *object)
 {
     return analysis->constants && object->kind == IR_PTO_GLOBAL
-        && object->global && object->global->mutability == IR_MUT_CONST;
+        && object->global && object->global->mutability == IR_MUT_CONST
+        && n00bb_type_reaches_shared_state(analysis->types,
+                                           object->global->type);
 }
 
 static bool
@@ -1514,6 +1516,22 @@ view_inputs(th_type *signature)
 }
 
 static uint64_t
+mutable_view_inputs(th_ctx *types, th_type *signature)
+{
+    uint64_t views = view_inputs(signature);
+    uint32_t inputs = 0;
+    for (size_t i = 0; signature && i < th_func_nparams(signature); i++) {
+        const th_param *formal = th_func_param(signature, i);
+        if (!formal || !th_mode_accepts_input(formal->mode)) continue;
+        if (inputs < 64
+            && !n00bb_type_reaches_shared_state(types, formal->type))
+            views &= ~(UINT64_C(1) << inputs);
+        inputs++;
+    }
+    return views;
+}
+
+static uint64_t
 call_view_inputs(const ir_instr_t *call)
 {
     ir_value_t *callee = call->op == IR_OP_CALL && call->n_operands
@@ -1535,8 +1553,7 @@ references_constant(th_ctx *types, const ir_func_t *function)
             for (uint32_t o = 0; o < instruction->n_operands; o++) {
                 ir_value_t *operand = operand_at(instruction, o);
                 if (is_constant_global(operand) && operand->type
-                    && type_may_contain_reference_alias(types,
-                                                        operand->type))
+                    && n00bb_type_reaches_shared_state(types, operand->type))
                     return true;
             }
         }
@@ -1745,7 +1762,7 @@ n00bb_buffer_borrow_pass(ir_module_t *module, ir_summaries_t *summaries,
     for (size_t g = 0; !shared_constants && g < ir_global_count(module); g++) {
         ir_global_t *global = ir_global_at(module, g);
         shared_constants = global && global->mutability == IR_MUT_CONST
-            && type_may_contain_reference_alias(types, global->type);
+            && n00bb_type_reaches_shared_state(types, global->type);
     }
     for (size_t f = 0; f < ir_func_count(module); f++) {
         ir_func_t *function = ir_func_at(module, f);
@@ -1758,7 +1775,8 @@ n00bb_buffer_borrow_pass(ir_module_t *module, ir_summaries_t *summaries,
             ok = false;
         ir_points_to_free(analysis.points_to);
         analysis.points_to = nullptr;
-        uint64_t views = view_inputs(function_signature(function));
+        uint64_t views = mutable_view_inputs(types,
+                                             function_signature(function));
         analysis.constants = shared_constants
             && references_constant(types, function);
         if ((views || analysis.constants)

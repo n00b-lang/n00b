@@ -553,6 +553,25 @@ root_object_type(const ir_func_t *f, const ir_spath_t *path, const pt_t *pt)
 }
 
 static bool
+string_bytes_path(const pt_t *pt, const ir_spath_t *path)
+{
+    const ir_func_t *f = pt->f;
+    th_type *type = named_root(path->root)
+        ? path->global ? path->global->type : nullptr
+        : path->root == IR_SPLACE_PARAM && path->param < f->n_params
+            && f->params[path->param]
+        ? f->params[path->param]->type : nullptr;
+    th_ctx *types = ir_ctx_types(f->owner->ctx);
+    for (uint32_t s = 0; type && s < path->depth; s++) {
+        if (th_builtin_kind(types, type) == TH_BUILTIN_STRING
+            && core_string_eq(path->steps[s], CORE_STRING_STATIC("data")))
+            return true;
+        type = step_through(pt, f->owner, type, path->steps[s]);
+    }
+    return false;
+}
+
+static bool
 slot_pointer(const pt_t *pt, const pt_item_t *item)
 {
     uint32_t          site = item->loc.site;

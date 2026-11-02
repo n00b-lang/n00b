@@ -9,6 +9,7 @@ import sys.gc.alloc
 import sys.gc.heap
 import sys.gc.los
 import containers.dict
+import sort
 
 const HALF: f32 = 0.5
 const extent: uint = 4
@@ -657,6 +658,48 @@ func loop_item_wide(n: int) -> int {
 
 func loop_item_unsigned(n: uint) -> uint {
     return n
+}
+
+object Sliced_Names {
+    src:   string
+    index: Dict[string, uint]
+    count: uint
+}
+
+func __init(self: Sliced_Names, text: string) {
+    self.src = text
+    self.index = new[Dict[string, uint]]()
+    self.count = 0
+}
+
+func add_sliced_names(names: Sliced_Names) {
+    var at: uint = 0
+    while at < byte_len(names.src) {
+        names.index[byte_slice(names.src, at, at + 1)] = names.count
+        names.count += 1
+        at += 1
+    }
+    var order: Array[uint] = new[Array[uint]](cast[int] names.count)
+    sort.sort(order)
+}
+
+func count_sliced_names(text: string) -> uint {
+    var names: Sliced_Names = new[Sliced_Names](text)
+    add_sliced_names(names)
+    return names.count
+}
+
+func sliced_names_of(view text: string) -> Sliced_Names {
+    var names: Sliced_Names = new[Sliced_Names](text)
+    add_sliced_names(names)
+    return names
+}
+
+const sliced_source: string = "abc"
+
+func immutable_string_check() {
+    require count_sliced_names(sliced_source) == 3
+    require sliced_names_of(sliced_source).count == 3
 }
 
 func loop_items_widen_check() {
@@ -2021,6 +2064,7 @@ func start() -> nil {
     diverging_paths_check()
     function_effects_check()
     effect_paths_check()
+    immutable_string_check()
     loop_items_widen_check()
     overloads_check()
     thread_global_pair_check()
