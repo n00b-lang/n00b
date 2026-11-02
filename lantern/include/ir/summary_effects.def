@@ -31,14 +31,15 @@ IR_EFFECT_FLAG(MAY_OUTPUT,          may_output,          16)
 IR_EFFECT_FLAG(READS_ENV,           reads_env,           17)
 IR_EFFECT_FLAG(READS_CLOCK,         reads_clock,         18)
 IR_EFFECT_FLAG(READS_RANDOM,        reads_random,        19)
+IR_EFFECT_FLAG(LINKS,               links,               20)
 
 IR_EFFECT_TRAP(EXPLICIT,   explicit,   0)
 IR_EFFECT_TRAP(BOUNDS,     bounds,     1)
 IR_EFFECT_TRAP(UNWRAP,     unwrap,     2)
 IR_EFFECT_TRAP(ARITHMETIC, arithmetic, 3)
 
-IR_EFFECT_NONLOCAL(READS_NONLOCAL,  reads_nonlocal,  24)
-IR_EFFECT_NONLOCAL(WRITES_NONLOCAL, writes_nonlocal, 25)
+IR_EFFECT_NONLOCAL(READS_NONLOCAL,  reads_nonlocal,  25)
+IR_EFFECT_NONLOCAL(WRITES_NONLOCAL, writes_nonlocal, 26)
 
 IR_EFFECT_PARAMETER(READS_PARAM,  reads_parameter,  32)
 IR_EFFECT_PARAMETER(WRITES_PARAM, writes_parameter, 48)
