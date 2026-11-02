@@ -3055,6 +3055,7 @@ typedef struct {
     core_dict_t fields;
     core_dict_t slots;
     core_dict_t pointers;
+    core_dict_t known;
 } type_memo_t;
 
 typedef struct {
@@ -3092,6 +3093,7 @@ type_memo(ir_summaries_t *summaries, const ir_module_t *module)
     core_dict_init(&memo->fields, nullptr, nullptr);
     core_dict_init(&memo->slots, slot_key_hash, slot_key_eq);
     core_dict_init(&memo->pointers, slot_key_hash, slot_key_eq);
+    core_dict_init(&memo->known, slot_key_hash, slot_key_eq);
     core_dict_put(&summaries->type_memos, (void *)module, memo);
     return memo;
 }
@@ -3126,6 +3128,10 @@ type_memos_free(core_dict_t *memos)
             core_free(entry->key);
         }
         core_dict_free(&memo->pointers);
+        core_dict_foreach(&memo->known, entry) {
+            core_free(entry->key);
+        }
+        core_dict_free(&memo->known);
         core_free(memo);
     }
     core_dict_free(memos);
@@ -3788,11 +3794,25 @@ step_type(const pt_t *pt, th_type *type, core_string_t step)
 }
 
 static th_type *
+loc_root_type(const pt_t *pt, const pt_loc_t *loc)
+{
+    const ir_spath_t *path = &loc->path;
+    if (loc->site != PT_EXTERNAL) return pt->sites.data[loc->site].type;
+    if (named_root(path->root))
+        return path->global ? path->global->type : nullptr;
+    const ir_func_t *f = pt->f;
+    if (path->root != IR_SPLACE_PARAM || path->param >= f->n_params
+        || !f->params[path->param])
+        return nullptr;
+    th_type *type    = f->params[path->param]->type;
+    th_type *defined = memo_defined(pt, type);
+    return defined ? defined : type ? th_resolve(type) : nullptr;
+}
+
+static th_type *
 loc_type(const pt_t *pt, const pt_loc_t *loc, uint32_t depth)
 {
-    th_type *type = loc->site == PT_EXTERNAL
-        ? root_object_type(pt->f, &loc->path)
-        : pt->sites.data[loc->site].type;
+    th_type *type = loc_root_type(pt, loc);
     if (!type || !depth) return memo_defined(pt, type);
     slot_key_t probe = {type, loc->path.steps, depth};
     bool       found = false;
@@ -3880,11 +3900,9 @@ recursive_object(pt_loc_t *loc, th_type *slot)
                                                        slot))
                            : nullptr;
     if (!object) return false;
-    th_type *earlier = loc_type(active_pt, loc, 0);
-    for (uint32_t k = 1; earlier && k <= loc->path.depth; k++) {
-        earlier = step_type(active_pt, earlier, loc->path.steps[k - 1]);
+    for (uint32_t k = 1; k <= loc->path.depth; k++) {
         if (!step_eq(loc->path.steps[k - 1], value_step)) continue;
-        th_type *defined = memo_defined(active_pt, earlier);
+        th_type *defined = loc_type(active_pt, loc, k);
         if (!same_type(defined, object)
             && !(defined
                  && ir_type_eq(active_pt->f->owner, defined, object)))
@@ -5421,9 +5439,7 @@ slot_pointer(pt_t *pt, const pt_item_t *item)
         return true;
     if (path->depth && step_eq(path->steps[path->depth - 1], length_step))
         return false;
-    th_type   *root  = site == PT_EXTERNAL
-        ? root_object_type(pt->f, path)
-        : pt->sites.data[site].type;
+    th_type   *root  = loc_root_type(pt, &item->loc);
     slot_key_t probe = {root, path->steps, path->depth};
     bool       found = false;
     void      *known = core_dict_get(&pt->types->pointers, &probe, &found);
@@ -5439,10 +5455,19 @@ slot_pointer(pt_t *pt, const pt_item_t *item)
 static bool
 known_pointer(pt_t *pt, const pt_loc_t *loc)
 {
-    th_type *slot = loc_type(pt, loc, loc->path.depth);
-    return slot && (pointee_type(pt->f->owner, slot)
-                    || ir_machine_of(pt->f->owner, slot).class
-                           == IR_CLASS_PTR);
+    slot_key_t probe = {loc_root_type(pt, loc), loc->path.steps,
+                        loc->path.depth};
+    bool       found = false;
+    void      *known = core_dict_get(&pt->types->known, &probe, &found);
+    if (found) return known != nullptr;
+    th_type *slot    = loc_type(pt, loc, loc->path.depth);
+    bool     pointer = slot && (pointee_type(pt->f->owner, slot)
+                                || ir_machine_of(pt->f->owner, slot).class
+                                       == IR_CLASS_PTR);
+    slot_key_t *key = core_alloc(slot_key_t);
+    *key = probe;
+    core_dict_put(&pt->types->known, key, pointer ? (void *)key : nullptr);
+    return pointer;
 }
 
 static bool
