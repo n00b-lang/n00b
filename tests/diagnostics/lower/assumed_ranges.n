@@ -1,0 +1,24 @@
+func parameter_to_signed(n: uint) -> int {
+    return n
+}
+
+func parameter_to_unsigned(n: int) -> uint {
+    return n
+}
+
+func count_to_signed(xs: List[string]) -> int {
+    var count = 0
+    for x in xs {
+        count += byte_len(x)
+    }
+    return count
+}
+
+func parameter_to_narrow(n: uint) -> i32 {
+    return n
+}
+
+func proven_to_signed() -> int {
+    let big: uint = 0xffffffffffffffff
+    return big
+}

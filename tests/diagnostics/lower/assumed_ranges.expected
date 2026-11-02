@@ -1,0 +1,4 @@
+tests/diagnostics/lower/assumed_ranges.n:18:12: warning N00B-T0525: integer values 0..18446744073709551615 may not fit in `i32`
+  note: the program stops with a panic when a value does not fit
+tests/diagnostics/lower/assumed_ranges.n:23:12: error N00B-T0524: integer value 18446744073709551615 does not fit in `int`
+  help: use a wider integer type, or a value inside the range of `int`

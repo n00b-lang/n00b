@@ -33,6 +33,10 @@ core_list_decl(th_trait_requirement);
 typedef th_type *th_type_ptr_t;
 core_list_decl(th_type_ptr_t);
 typedef struct {
+    bool lo;
+    bool hi;
+} n00bb_range_assumed_t;
+typedef struct {
     uint32_t parameter_count;
     ir_shape_t **parameters;
 } n00bb_callable_shapes_t;
@@ -391,6 +395,7 @@ typedef struct {
     parse_tree_t *record_literal_origin;
     ir_interval_t integer_range;
     bool integer_range_known;
+    n00bb_range_assumed_t integer_range_assumed;
     size_t first_link_use_site;
     size_t last_link_use_site;
     bool static_literal;
@@ -414,6 +419,7 @@ core_list_decl(parse_scope_ptr_t);
 typedef struct {
     parse_sym_entry_t *symbol;
     ir_interval_t range;
+    n00bb_range_assumed_t assumed;
 } n00bb_symbol_range_t;
 core_list_decl(n00bb_symbol_range_t);
 
@@ -1021,8 +1027,16 @@ bool cache_alias_edges(parse_grammar_t *grammar, parse_tree_t *node,
 bool n00bb_current_integer_range(parse_tree_t *node, ir_interval_t *range);
 bool n00bb_set_integer_range(n00bb_tu_state_t *state, parse_tree_t *node,
                              ir_interval_t range);
+n00bb_range_assumed_t n00bb_integer_range_assumed(parse_tree_t *node);
+n00bb_range_assumed_t n00bb_range_assumed_apply(ir_op_t op,
+                                                n00bb_range_assumed_t left,
+                                                n00bb_range_assumed_t right);
+void n00bb_set_integer_range_assumed(n00bb_tu_state_t *state,
+                                     parse_tree_t *node,
+                                     n00bb_range_assumed_t assumed);
 void n00bb_settle_symbol_range(n00bb_tu_state_t *state, parse_tree_t *node,
-                               ir_interval_t range);
+                               ir_interval_t range,
+                               n00bb_range_assumed_t assumed);
 void n00bb_integer_boundary(n00bb_tu_state_t *state, parse_tree_t *node,
                             th_type *target);
 void n00bb_report_integer_misfit(n00bb_tu_state_t *state, parse_tree_t *node,

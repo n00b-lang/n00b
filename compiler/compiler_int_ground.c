@@ -19,7 +19,7 @@ typedef struct {
     bool wide;
     bool frozen;
     bool fed;
-    bool unbounded;
+    n00bb_range_assumed_t assumed;
     bool grown;
     bool seeded;
     ir_int_t seed_lo;
@@ -758,15 +758,28 @@ seed_type(const n00bb_integer_seed_t *seed)
 }
 
 static bool
+any_assumed(n00bb_range_assumed_t assumed)
+{
+    return assumed.lo || assumed.hi;
+}
+
+static void
+add_assumed(n00bb_range_assumed_t *into, n00bb_range_assumed_t from)
+{
+    into->lo = into->lo || from.lo;
+    into->hi = into->hi || from.hi;
+}
+
+static bool
 node_term_interval(range_node_t *node, n00bb_integer_term_t term,
-                   ir_interval_t *out, bool *unbounded)
+                   ir_interval_t *out, n00bb_range_assumed_t *assumed)
 {
     if (node) {
         *out = (ir_interval_t){node->lo, node->hi};
-        *unbounded = *unbounded || node->unbounded;
+        add_assumed(assumed, node->assumed);
         return node->known;
     }
-    *unbounded = true;
+    *assumed = (n00bb_range_assumed_t){true, true};
     if (n00bb_type_interval(term.type ? th_resolve(term.type) : nullptr, out))
         return true;
     if (term.type && th_kind_of(th_resolve(term.type)) == TH_VAR)
@@ -777,17 +790,18 @@ node_term_interval(range_node_t *node, n00bb_integer_term_t term,
 
 static bool
 term_interval(range_graph_t *graph, n00bb_integer_term_t term,
-              ir_interval_t *out, bool *unbounded)
+              ir_interval_t *out, n00bb_range_assumed_t *assumed)
 {
-    return node_term_interval(find_node(graph, term), term, out, unbounded);
+    return node_term_interval(find_node(graph, term), term, out, assumed);
 }
 
 static bool
-widen(range_node_t *node, ir_interval_t range, bool unbounded)
+widen(range_node_t *node, ir_interval_t range, n00bb_range_assumed_t assumed)
 {
     if (node->frozen) return false;
-    bool flagged = unbounded && !node->unbounded;
-    node->unbounded = node->unbounded || unbounded;
+    bool flagged = (assumed.lo && !node->assumed.lo)
+        || (assumed.hi && !node->assumed.hi);
+    add_assumed(&node->assumed, assumed);
     ir_interval_t bounds = {0};
     if (node->kind != N00BB_INTEGER_TERM_TYPE
         && n00bb_type_interval(node->type, &bounds)
@@ -808,10 +822,11 @@ widen(range_node_t *node, ir_interval_t range, bool unbounded)
         if (node->kind != N00BB_INTEGER_TERM_TYPE
             && n00bb_type_interval(node->type, &bounds))
             (void)ir_interval_meet(grown, bounds, &grown);
+        node->assumed.lo = node->assumed.lo || grown.lo != node->lo;
+        node->assumed.hi = node->assumed.hi || grown.hi != node->hi;
         node->lo = grown.lo;
         node->hi = grown.hi;
         node->frozen = true;
-        node->unbounded = true;
         node->grown = true;
         return true;
     }
@@ -835,10 +850,10 @@ guarded(range_graph_t *graph, const flow_edge_t *flow,
     const n00bb_integer_edge_t *edge = flow->edge;
     for (uint32_t g = 0; g < edge->guard_count; g++) {
         const n00bb_integer_guard_t *guard = edge_guard(flow->state, edge, g);
-        bool unbounded = false;
+        n00bb_range_assumed_t assumed = {0};
         ir_interval_t bound = {0};
         if (guard->symbol != symbol
-            || !term_interval(graph, guard->bound, &bound, &unbounded))
+            || !term_interval(graph, guard->bound, &bound, &assumed))
             continue;
         if (!ir_interval_meet(*range, guard_limit(guard->op, bound), range))
             return false;
@@ -858,21 +873,29 @@ unbounded_cap(ir_interval_t out, ir_interval_t left, ir_interval_t right)
 
 static bool
 edge_output(range_graph_t *graph, const flow_edge_t *flow,
-            ir_interval_t *out, bool *unbounded)
+            ir_interval_t *out, n00bb_range_assumed_t *assumed)
 {
     const n00bb_integer_edge_t *edge = flow->edge;
     bool binary = edge->right.kind != N00BB_INTEGER_TERM_NONE;
     ir_interval_t left = {0}, right = {0};
-    if (!node_term_interval(flow->left, edge->left, &left, unbounded)
+    n00bb_range_assumed_t left_assumed = {0}, right_assumed = {0};
+    if (!node_term_interval(flow->left, edge->left, &left, &left_assumed)
         || !guarded(graph, flow, edge->left_symbol, &left))
         return false;
-    if (!binary) right = left;
-    else if (!node_term_interval(flow->right, edge->right, &right, unbounded)
+    if (!binary) {
+        right = left;
+        right_assumed = left_assumed;
+    }
+    else if (!node_term_interval(flow->right, edge->right, &right,
+                                 &right_assumed)
              || !guarded(graph, flow, edge->right_symbol, &right))
         return false;
     *out = edge->op == IR_OP_COPY ? left
         : ir_interval_apply(edge->op, left, right);
-    if (*unbounded && edge->op != IR_OP_COPY && edge->op != IR_OP_MUL)
+    *assumed = n00bb_range_assumed_apply(edge->op, left_assumed,
+                                         right_assumed);
+    if ((any_assumed(left_assumed) || any_assumed(right_assumed))
+        && edge->op != IR_OP_COPY && edge->op != IR_OP_MUL)
         *out = unbounded_cap(*out, left, right);
     return true;
 }
@@ -882,11 +905,11 @@ node_interval(range_graph_t *graph, n00bb_tu_state_t *state,
               parse_tree_t *node, ir_interval_t *out)
 {
     if (node && n00bb_current_integer_range(node, out)) return true;
-    bool unbounded = false;
+    n00bb_range_assumed_t assumed = {0};
     n00bb_integer_term_t term = node ? n00bb_integer_term_of(state, node)
                                      : (n00bb_integer_term_t){0};
     return term.kind != N00BB_INTEGER_TERM_NONE
-        && term_interval(graph, term, out, &unbounded);
+        && term_interval(graph, term, out, &assumed);
 }
 
 static bool
@@ -972,11 +995,11 @@ self_increment(range_graph_t *graph, flow_edge_t *flow, ir_interval_t *step)
     ir_int_t count = 1;
     if (edge->loop && !trip_count(graph, flow->state, edge->loop, &count))
         return false;
-    bool unbounded = false;
+    n00bb_range_assumed_t assumed = {0};
     ir_interval_t other = {0};
     if (!node_term_interval(from_left ? flow->right : flow->left,
                             from_left ? edge->right : edge->left, &other,
-                            &unbounded)
+                            &assumed)
         || !guarded(graph, flow, from_left ? edge->right_symbol
                                            : edge->left_symbol, &other))
         return false;
@@ -1018,7 +1041,7 @@ narrow(range_graph_t *graph, flow_t *flow)
             if (!result || !result->grown) continue;
             size_t slot = (size_t)(result - graph->nodes.data);
             ir_interval_t out = {0}, step = {0};
-            bool unbounded = false;
+            n00bb_range_assumed_t assumed = {0};
             bool self = edge->left == result || edge->right == result;
             if (self && trip[slot] != TRIP_FAILED) {
                 if (self_increment(graph, edge, &step)) {
@@ -1028,7 +1051,7 @@ narrow(range_graph_t *graph, flow_t *flow)
                 }
                 else trip[slot] = TRIP_FAILED;
             }
-            if (!edge_output(graph, edge, &out, &unbounded)) continue;
+            if (!edge_output(graph, edge, &out, &assumed)) continue;
             fresh[slot] = reached[slot] ? ir_interval_join(fresh[slot], out)
                                         : out;
             reached[slot] = true;
@@ -1143,9 +1166,9 @@ settle(range_graph_t *graph, flow_t *flow, uint64_t *now, uint64_t *next,
             now[w] &= now[w] - 1;
             flow_edge_t *edge = &flow->edges.data[e];
             ir_interval_t out = {0};
-            bool unbounded = false;
-            if (!edge->result || !edge_output(graph, edge, &out, &unbounded)
-                || !widen(edge->result, out, unbounded)) continue;
+            n00bb_range_assumed_t assumed = {0};
+            if (!edge->result || !edge_output(graph, edge, &out, &assumed)
+                || !widen(edge->result, out, assumed)) continue;
             changed = true;
             size_t slot = (size_t)(edge->result - graph->nodes.data);
             for (uint32_t r = flow->reader_start[slot];
@@ -1187,7 +1210,7 @@ solve(range_graph_t *graph, flow_t *flow)
             node->lo = fallback.lo;
             node->hi = fallback.hi;
             node->known = true;
-            node->unbounded = true;
+            node->assumed = (n00bb_range_assumed_t){true, true};
         }
     }
     core_free(now);
@@ -1247,7 +1270,7 @@ collect_nodes(range_graph_t *graph, core_translation_unit_t *const *units,
         node->hi = bounds.hi;
         node->known = true;
         node->frozen = true;
-        node->unbounded = true;
+        node->assumed = (n00bb_range_assumed_t){true, true};
     }
 }
 
@@ -1276,13 +1299,16 @@ annotate_ranges(range_graph_t *graph, n00bb_tu_state_t *state,
     }
     if (!entry || !entry->known) return;
     ir_interval_t solved = {entry->lo, entry->hi};
-    n00bb_settle_symbol_range(state, node, solved);
+    n00bb_settle_symbol_range(state, node, solved, entry->assumed);
     if (entry->kind == N00BB_INTEGER_TERM_SYMBOL)
         guard_site_range(state, node, &solved);
     ir_interval_t current = {0};
     if (n00bb_current_integer_range(node, &current)
         && !ir_interval_meet(current, solved, &solved)) return;
     (void)n00bb_set_integer_range(state, node, solved);
+    n00bb_set_integer_range_assumed(state, node, (n00bb_range_assumed_t){
+        entry->assumed.lo && solved.lo == entry->lo,
+        entry->assumed.hi && solved.hi == entry->hi});
 }
 
 void
@@ -1291,6 +1317,15 @@ n00bb_integer_boundary(n00bb_tu_state_t *state, parse_tree_t *node,
 {
     if (state && node && target)
         core_dict_put(&state->integer_boundary_sites, node, target);
+}
+
+static bool
+proven_narrowing(ir_interval_t range, ir_interval_t bounds,
+                 n00bb_range_assumed_t assumed)
+{
+    bool wide = bounds.hi >= INT64_MAX;
+    return (range.lo < bounds.lo && !(wide && assumed.lo))
+        || (range.hi > bounds.hi && !(wide && assumed.hi));
 }
 
 static bool
@@ -1314,7 +1349,8 @@ check_boundaries(n00bb_tu_state_t *state)
                 false, range, target);
             ok = false;
         }
-        else if (range.lo < bounds.lo || range.hi > bounds.hi)
+        else if (proven_narrowing(range, bounds,
+                     n00bb_integer_range_assumed(entry->key)))
             n00bb_report_integer_narrowing(state, entry->key, range, target);
     }
     core_dict_free(&state->integer_boundary_sites);

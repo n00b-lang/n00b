@@ -2,8 +2,6 @@ tests/diagnostics/lower/analysis_checks.n:7:5: error N00B-S0015: this `assert` c
   tests/diagnostics/lower/analysis_checks.n:7:12: note: the side effect starts here
   tests/diagnostics/lower/analysis_checks.n:3:5: note: `counter` is written here
   help: `assert` conditions do not run in release builds; compute the value before the `assert`
-tests/diagnostics/lower/analysis_checks.n:8:12: warning N00B-T0525: integer values 0..18446744073709551615 may not fit in `int`
-  note: the program stops with a panic when a value does not fit
 tests/diagnostics/lower/analysis_checks.n:15:1: error N00B-S0015: this `assert` condition has a side effect: it calls `fill`; `fill` writes through its argument 1; argument 1 is the address of the caller's own storage
   tests/diagnostics/lower/analysis_checks.n:15:8: note: the side effect starts here
   help: `assert` conditions do not run in release builds; compute the value before the `assert`
