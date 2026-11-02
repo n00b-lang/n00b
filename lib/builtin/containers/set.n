@@ -35,7 +35,7 @@ func clear(self: Set['T]) {
 }
 
 func iter(self: Set['T]) -> cursor.Cursor['T] {
-    return cursor.iter(containers.dict.keys(self.items))
+    return cursor.iter(containers.dict.insertion_keys(self.items))
 }
 
 func is_subset(left: Set['T], right: Set['T]) -> bool where 'T : hashing . Hash {

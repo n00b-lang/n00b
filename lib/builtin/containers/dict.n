@@ -279,14 +279,22 @@ func value_view(entries: Array[Entry['K, 'V]], count: int)
     return new[containers.view.View['V]](items, 0, count)
 }
 
+func insertion_keys(self: Dict['K, 'V]) -> containers.view.View['K] {
+    let count: int = cast[int]self.index.live
+    if self.index.used == self.index.live {
+        return key_view(self.entries, count)
+    }
+    return key_view(snapshot_entries(self), count)
+}
+
 func keys(self: Dict['K, 'V],
                  sort_order : Sort_Order = Sort_Order.none)
          -> containers.view.View['K] {
-    let count: int = cast[int]self.index.live
-    if sort_order == Sort_Order.none and self.index.used == self.index.live {
-        return key_view(self.entries, count)
+    if sort_order == Sort_Order.none {
+        return insertion_keys(self)
     }
-    return key_view(ordered_entries(self, sort_order), count)
+    return key_view(ordered_entries(self, sort_order),
+                    cast[int]self.index.live)
 }
 
 func values(self: Dict['K, 'V],
