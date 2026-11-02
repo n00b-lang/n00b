@@ -1,0 +1,23 @@
+record Fix {
+    at: uint
+}
+
+record Report {
+    code:  string
+    fixes: List[Fix]
+}
+
+func reports(text: string) -> uint fail: List[Report] {
+    if text == "" {
+        var fixes: List[Fix] = new[List[Fix]]()
+        let first: Fix = (at = 1)
+        let second: Fix = (at = 2)
+        fixes.append(first)
+        fixes.append(second)
+        let report: Report = (code = "empty", fixes = fixes)
+        var all: List[Report] = new[List[Report]]()
+        all.append(report)
+        fail all
+    }
+    return 0
+}

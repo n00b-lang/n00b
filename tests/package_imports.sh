@@ -75,3 +75,9 @@ grep -Fq 'N00B-N0004: `hidden` is not exported to this package by module `cyclic
     cat "$tmp/cyclic.log" >&2
     exit 1
 }
+
+"$compiler" build --output "$tmp/nested" nested_loop_consumer.n \
+    >"$tmp/nested.log" 2>&1 && "$tmp/nested" || {
+    cat "$tmp/nested.log" >&2
+    exit 1
+}
