@@ -1,5 +1,40 @@
+import bitptr
+import io.format
+
 trait Integer {
     func from_bits(self: 'T, bits: u128) -> 'T
+}
+
+private func is_signed(value: 'T) -> bool {
+    typecase value {
+        case i8 { return true }
+        case i16 { return true }
+        case i32 { return true }
+        case int { return true }
+        case i128 { return true }
+        else { return false }
+    }
+}
+
+private func integer_text(value: 'T, as_hex: bool) -> string {
+    let bits: u128 = bitptr.load_bits(value)
+    let width: uint = bitptr.bit_width(value)
+    if is_signed(value) and (bits >> cast[u128](width - 1)) & 1 == 1 {
+        var mask: u128 = ~cast[u128](0)
+        if width < 128 {
+            mask = (cast[u128](1) << cast[u128](width)) - 1
+        }
+        return io.format.integer_text(((~bits) & mask) + 1, true, as_hex)
+    }
+    return io.format.integer_text(bits, false, as_hex)
+}
+
+func decimal(value: 'T) -> string where 'T : Integer {
+    return integer_text(value, false)
+}
+
+func hex(value: 'T) -> string where 'T : Integer {
+    return integer_text(value, true)
 }
 
 inline func from_bits(self: int, bits: u128) -> int {

@@ -41,15 +41,20 @@ const default_repr_options: Repr_Options = (
 private const intbuf_len: uint = 54
 private const hexbuf_len: uint = 36
 
+private func text_of(bytes: Ref[Array[u8]], at: uint, n: uint,
+                     encoding: string.core.Str_Encoding) -> string {
+    let whole: string = string.core.from_raw(bytes, cast[int] (at + n),
+        copy = false, encoding = encoding)
+    return string.core.byte_slice(whole, cast[int] at, cast[int] (at + n))
+}
+
 private func write_raw(fd: int, bytes: Ref[Array[u8]], at: uint, n: uint)
     -> uint fail: int {
     if n == 0 {
         return 0
     }
-    let whole: string = string.core.from_raw(bytes, cast[int] (at + n), copy = false,
-                                 encoding = string.core.Str_Encoding.binary)
     let wrote: i32 = string.core.__fd_write(cast[i32] fd,
-        string.core.byte_slice(whole, cast[int] at, cast[int] (at + n)))
+        text_of(bytes, at, n, string.core.Str_Encoding.binary))
     if wrote < 0 {
         fail cast[int] wrote
     }
@@ -168,8 +173,8 @@ func format_string(fd: int, s: string, common: Repr_Options? = nil)
     return format_bytes(fd, ref bytes, string.core.byte_len(s), common = common)!
 }
 
-private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
-                        ptr_style: bool) -> uint fail: int {
+private func hex_text(n: u128, spec: Int_Format, neg: bool,
+                      ptr_style: bool) -> string {
     var value: u128 = n
     let size: uint = buffer_len(hexbuf_len, spec)
     var hbuf: Array[u8] = new[Array[u8]](cast[int] size)
@@ -239,8 +244,7 @@ private func format_hex(n: u128, spec: Int_Format, fd: int, neg: bool,
             push_front(hbuf, p, 0x2b)
         }
     }
-    write_raw(fd, ref hbuf, p, end - p)!
-    return w
+    return text_of(ref hbuf, p, end - p, string.core.Str_Encoding.ascii)
 }
 
 private func u128_divmod10(n: u128, out rem_out: u8) -> u128 {
@@ -259,8 +263,7 @@ private func u128_divmod10(n: u128, out rem_out: u8) -> u128 {
     return q
 }
 
-private func format_dec(n: u128, spec: Int_Format, fd: int, neg: bool)
-    -> uint fail: int {
+private func dec_text(n: u128, spec: Int_Format, neg: bool) -> string {
     var value: u128 = n
     let size: uint = buffer_len(intbuf_len, spec)
     var buf: Array[u8] = new[Array[u8]](cast[int] size)
@@ -307,13 +310,32 @@ private func format_dec(n: u128, spec: Int_Format, fd: int, neg: bool)
             }
         }
     }
-    write_raw(fd, ref buf, p, end - p)!
-    return cast[uint] w
+    return text_of(ref buf, p, end - p, string.core.Str_Encoding.ascii)
 }
 
 func format_uint(n: u128, spec: Int_Format, fd: int) -> uint fail: int {
+    var text: string = dec_text(n, spec, false)
     if spec.hex {
-        return format_hex(n, spec, fd, false, false)!
+        text = hex_text(n, spec, false, false)
     }
-    return format_dec(n, spec, fd, false)!
+    let wrote: i32 = string.core.__fd_write(cast[i32] fd, text)
+    if wrote < 0 {
+        fail cast[int] wrote
+    }
+    return string.core.byte_len(text)
+}
+
+const decimal_format: Int_Format = (common = default_repr_options,
+    sep_policy = Format_Num_Sep.none, plus_policy = Format_Plus.never,
+    is_signed = false, hex = false, add_prefix = false)
+
+const hex_format: Int_Format = (common = default_repr_options,
+    sep_policy = Format_Num_Sep.none, plus_policy = Format_Plus.never,
+    is_signed = false, hex = true, add_prefix = true)
+
+func integer_text(magnitude: u128, negative: bool, as_hex: bool) -> string {
+    if as_hex {
+        return hex_text(magnitude, hex_format, negative, false)
+    }
+    return dec_text(magnitude, decimal_format, negative)
 }
