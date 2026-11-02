@@ -295,6 +295,11 @@ N00B_DIAG(BUFFER_BORROW_OUTLIVED, "N00B-S0066", ERROR,
     "copied, so the `Buffer` must not change while the `string` is in use.\n"
     "Consume the buffer with `to_string(b)`, or copy it with\n"
     "`to_string(buffer_from_string(b))`.")
+N00B_DIAG(SWITCH_SUBJECT_UNSUPPORTED, "N00B-S0067", ERROR,
+    "a `switch` cannot match values of this type",
+    "A `switch` matches integers, characters, booleans, enums and variants.\n"
+    "Compare other values, such as strings, floating-point numbers or\n"
+    "records, with `if` and `elif`.")
 N00B_DIAG(CONDITION_NOT_BOOL, "N00B-T1000", ERROR,
     "a condition is not a `bool`",
     "Conditions of `if`, `while`, `assert` and `require`, and the operands\n"

@@ -1726,10 +1726,33 @@ n00bb_switch_case_integer(parse_grammar_t *grammar, parse_tree_t *node,
     bool saw_sign = false;
     parse_tree_t *literal = n00bb_simple_switch_literal(
         grammar, node, &negative, &saw_sign);
-    if (!literal || !n00bb_parse_switch_integer(
-            first_token_text(literal), value)) return false;
+    if (!literal) return false;
+    if (!n00bb_parse_switch_integer(first_token_text(literal), value)) {
+        // A character literal case (`case 'n'`) matches its scalar value.
+        parse_token_info_t *token = parse_tree_find_first_terminal(literal);
+        core_option_t(core_string_t) text = token
+            ? parse_token_value(token) : core_option_none(core_string_t);
+        uint32_t scalar = 0;
+        if (saw_sign || !core_option_is_set(text)
+            || !n00bb_decode_char_literal(core_option_get(text), &scalar))
+            return false;
+        *value = (ir_lit_t){.mag = scalar};
+        return true;
+    }
     if (negative) value->neg = true;
     return true;
+}
+
+bool
+n00bb_switch_case_is_char(parse_grammar_t *grammar, parse_tree_t *node)
+{
+    bool negative = false;
+    bool saw_sign = false;
+    parse_tree_t *literal = n00bb_simple_switch_literal(
+        grammar, node, &negative, &saw_sign);
+    core_string_t text = literal ? first_token_text(literal)
+                                 : (core_string_t){0};
+    return text.u8_bytes && text.data[0] == '\'';
 }
 
 

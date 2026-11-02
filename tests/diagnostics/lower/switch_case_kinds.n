@@ -1,0 +1,78 @@
+func by_number(n: uint) -> uint {
+    switch n {
+        case 'a' { return 1 }
+        else { return 0 }
+    }
+}
+
+func by_char(c: char) -> uint {
+    switch c {
+        case 97 { return 1 }
+        case 'b' to 'z' { return 2 }
+        else { return 0 }
+    }
+}
+
+func by_flag(b: bool) -> uint {
+    switch b {
+        case 1 { return 1 }
+        else { return 0 }
+    }
+}
+
+func number_by_flag(n: uint) -> uint {
+    switch n {
+        case true { return 1 }
+        else { return 0 }
+    }
+}
+
+func number_by_text(n: uint) -> uint {
+    switch n {
+        case "one" { return 1 }
+        else { return 0 }
+    }
+}
+
+func number_by_float(n: uint) -> uint {
+    switch n {
+        case 1.5 { return 1 }
+        else { return 0 }
+    }
+}
+
+func by_float(f: f64) -> uint {
+    switch f {
+        case 1.5 { return 1 }
+        else { return 0 }
+    }
+}
+
+func by_text(s: string) -> uint {
+    switch s {
+        case "one" { return 1 }
+        else { return 0 }
+    }
+}
+
+record Point {
+    x: uint
+}
+
+func by_point(p: Point, q: Point) -> uint {
+    switch p {
+        case q { return 1 }
+        else { return 0 }
+    }
+}
+
+let origin: Point = (x = 0)
+require by_number(97) == 1
+require by_char('q') == 2
+require by_flag(true) == 1
+require number_by_flag(1) == 1
+require number_by_text(1) == 1
+require number_by_float(1) == 1
+require by_float(1.5) == 1
+require by_text("one") == 1
+require by_point(origin, origin) == 1

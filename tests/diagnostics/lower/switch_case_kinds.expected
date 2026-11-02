@@ -1,0 +1,12 @@
+tests/diagnostics/lower/switch_case_kinds.n:3:14: error N00B-T0500: this case is a character, but the `switch` value is `uint`
+tests/diagnostics/lower/switch_case_kinds.n:10:14: error N00B-T0500: this case is an integer, but the `switch` value is `char`
+tests/diagnostics/lower/switch_case_kinds.n:18:14: error N00B-T0500: this case is an integer, but the `switch` value is `bool`
+tests/diagnostics/lower/switch_case_kinds.n:25:14: error N00B-T0500: this case is a boolean, but the `switch` value is `uint`
+tests/diagnostics/lower/switch_case_kinds.n:32:14: error N00B-T0500: this case is `string`, but the `switch` value is `uint`
+tests/diagnostics/lower/switch_case_kinds.n:39:14: error N00B-T0500: this case is `f64`, but the `switch` value is `uint`
+tests/diagnostics/lower/switch_case_kinds.n:45:12: error N00B-S0067: a `switch` cannot match `f64` values
+  help: compare them with `if` and `elif` instead
+tests/diagnostics/lower/switch_case_kinds.n:52:12: error N00B-S0067: a `switch` cannot match `string` values
+  help: compare them with `if` and `elif` instead
+tests/diagnostics/lower/switch_case_kinds.n:63:12: error N00B-S0067: a `switch` cannot match `Point` values
+  help: compare them with `if` and `elif` instead

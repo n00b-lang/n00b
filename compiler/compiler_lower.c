@@ -3194,6 +3194,16 @@ n00bb_switch_integer_scrutinee(ir_lower_context_t *context,
                                n00bb_lower_context_t *lower,
                                ir_value_t *scrutinee, ir_span_t span);
 
+typedef enum {
+    N00BB_SWITCH_KIND_OTHER,
+    N00BB_SWITCH_KIND_INTEGER,
+    N00BB_SWITCH_KIND_CHAR,
+    N00BB_SWITCH_KIND_BOOL,
+} n00bb_switch_kind_t;
+
+static n00bb_switch_kind_t
+n00bb_switch_subject_kind(ir_lower_context_t *context, th_type *subject);
+
 static bool
 n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
                         bool entering, void *state)
@@ -3546,6 +3556,24 @@ n00bb_lower_branch_body(ir_lower_context_t *context, parse_visit_t *visit,
             if (!frame->emitted) {
                 ir_value_t *scrutinee = ir_lower_node_value(
                     context, frame->scrutinee);
+                n00bb_tu_state_t *subject_state = tu_state(lower->unit);
+                bool supported = !scrutinee || frame->variant_switch
+                    || n00bb_switch_subject_kind(context, scrutinee->type)
+                        != N00BB_SWITCH_KIND_OTHER
+                    || (subject_state && n00bb_enum_type_symbol(
+                        subject_state->link_analysis, scrutinee->type));
+                if (!supported) {
+                    core_string_t subject_text = lower_type_text(context,
+                        scrutinee->type);
+                    lower_report(context, N00B_DIAG_SWITCH_SUBJECT_UNSUPPORTED,
+                        lower_span_for_tree(context, frame->scrutinee),
+                        N00B_TEXT_A_SWITCH_CANNOT_MATCH,
+                        N00BB_ARGS(ARG_TEXT(subject_text)));
+                    lower_help(context, N00B_TEXT_COMPARE_THEM_WITH_IF,
+                               N00BB_NO_ARGS);
+                    core_free(subject_text.data);
+                    return false;
+                }
                 bool has_chain = false;
                 for (size_t c = 0; c < frame->cases.len; c++)
                     for (size_t p = 0;
@@ -3972,6 +4000,71 @@ n00bb_prune_enum_case(ir_lower_context_t *context, parse_visit_t *visit,
     return ir_lower_prune_node(context, visit->node);
 }
 
+static n00bb_switch_kind_t
+n00bb_switch_subject_kind(ir_lower_context_t *context, th_type *subject)
+{
+    if (!subject) return N00BB_SWITCH_KIND_OTHER;
+    if (n00bb_scalar_role_is(subject, IR_ROLE_CHAR))
+        return N00BB_SWITCH_KIND_CHAR;
+    if (ir_machine_of(context->module, subject).class == IR_CLASS_BOOL)
+        return N00BB_SWITCH_KIND_BOOL;
+    uint64_t width = 0;
+    bool is_signed = false;
+    return n00bb_integer_representation(subject, &width, &is_signed)
+        ? N00BB_SWITCH_KIND_INTEGER : N00BB_SWITCH_KIND_OTHER;
+}
+
+static core_string_t
+n00bb_switch_kind_text(n00bb_switch_kind_t kind)
+{
+    return kind == N00BB_SWITCH_KIND_CHAR ? CORE_STRING_STATIC("a character")
+        : kind == N00BB_SWITCH_KIND_BOOL ? CORE_STRING_STATIC("a boolean")
+        : CORE_STRING_STATIC("an integer");
+}
+
+static void
+n00bb_switch_case_mismatch(ir_lower_context_t *context, parse_tree_t *pattern,
+                           core_string_t case_text, th_type *subject)
+{
+    core_string_t subject_text = lower_type_text(context, subject);
+    lower_report(context, N00B_DIAG_VALUE_TYPE_MISMATCH,
+        lower_span_for_tree(context, pattern),
+        N00B_TEXT_THIS_CASE_IS_BUT_THE_SWITCH,
+        N00BB_ARGS(ARG_TEXT(case_text), ARG_TEXT(subject_text)));
+    core_free(subject_text.data);
+}
+
+// An integer, character or boolean literal case must be the same kind of
+// value as the switch it belongs to.
+static bool
+n00bb_switch_literal_kind_matches(ir_lower_context_t *context,
+                                  const n00bb_switch_frame_t *frame,
+                                  parse_tree_t *pattern,
+                                  n00bb_switch_kind_t case_kind)
+{
+    th_type *subject = frame->scrutinee
+        ? parse_tree_type(frame->scrutinee) : nullptr;
+    n00bb_switch_kind_t subject_kind =
+        n00bb_switch_subject_kind(context, subject);
+    if (!subject || subject_kind == case_kind) return true;
+    // Enums switch on their ordinal; any other type has no literal cases.
+    n00bb_lower_context_t *lower = context->user;
+    n00bb_tu_state_t *state = lower ? tu_state(lower->unit) : nullptr;
+    if (subject_kind == N00BB_SWITCH_KIND_OTHER && state
+        && n00bb_enum_type_symbol(state->link_analysis, subject))
+        return true;
+    n00bb_switch_case_mismatch(context, pattern,
+                               n00bb_switch_kind_text(case_kind), subject);
+    return false;
+}
+
+static n00bb_switch_kind_t
+n00bb_switch_literal_kind(parse_grammar_t *grammar, parse_tree_t *pattern)
+{
+    return n00bb_switch_case_is_char(grammar, pattern)
+        ? N00BB_SWITCH_KIND_CHAR : N00BB_SWITCH_KIND_INTEGER;
+}
+
 static bool
 n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                      n00bb_switch_frame_t *frame, ir_lower_context_t *context)
@@ -4030,6 +4123,16 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                         core_list_free(item.patterns);
                         return false;
                     }
+                    if (!n00bb_switch_literal_kind_matches(context, frame,
+                            bounds[0], n00bb_switch_literal_kind(grammar,
+                                                                 bounds[0]))
+                        || !n00bb_switch_literal_kind_matches(context, frame,
+                            bounds[1], n00bb_switch_literal_kind(grammar,
+                                                                 bounds[1]))) {
+                        core_list_free(stack);
+                        core_list_free(item.patterns);
+                        return false;
+                    }
                     core_list_push(item.patterns, pattern);
                 }
                 else {
@@ -4040,17 +4143,31 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                     parse_tree_t *expression = child_nt(
                         grammar, current, CORE_STRING_STATIC("expression"));
                     bool literal_pattern = false;
+                    n00bb_switch_kind_t literal_kind = N00BB_SWITCH_KIND_OTHER;
                     if (core_string_eq(text, CORE_STRING_STATIC("true"))) {
                         value.mag = 1;
                         literal_pattern = true;
+                        literal_kind = N00BB_SWITCH_KIND_BOOL;
                     }
                     else if (core_string_eq(text,
                                             CORE_STRING_STATIC("false"))) {
                         value.mag = 0;
                         literal_pattern = true;
+                        literal_kind = N00BB_SWITCH_KIND_BOOL;
                     }
-                    else literal_pattern = n00bb_switch_case_integer(
-                        grammar, current, &value);
+                    else if (n00bb_switch_case_integer(grammar, current,
+                                                       &value)) {
+                        literal_pattern = true;
+                        literal_kind = n00bb_switch_literal_kind(grammar,
+                                                                 current);
+                    }
+                    if (literal_pattern
+                        && !n00bb_switch_literal_kind_matches(context, frame,
+                            current, literal_kind)) {
+                        core_list_free(stack);
+                        core_list_free(item.patterns);
+                        return false;
+                    }
                     parse_sym_entry_t *variant_arm = nullptr;
                     core_string_t variant_arm_name = {0};
                     n00bb_lower_context_t *lower = context->user;
@@ -4076,6 +4193,28 @@ n00bb_switch_collect(parse_grammar_t *grammar, parse_tree_t *node,
                             value.mag = th_arm_tag(variant_arm_name);
                             literal_pattern = true;
                         }
+                    }
+                    // A non-literal case (a string, a constant) is compared
+                    // with the switch value, so it must have the same type.
+                    th_type *subject_type = frame->scrutinee
+                        ? parse_tree_type(frame->scrutinee) : nullptr;
+                    th_type *case_type = !literal_pattern && expression
+                        ? parse_tree_type(expression) : nullptr;
+                    if (case_type && subject_type
+                        && !ir_type_eq(context->module, case_type,
+                                       subject_type)) {
+                        core_string_t case_text = lower_type_text(context,
+                                                                  case_type);
+                        core_buffer_t quoted = {0};
+                        core_buffer_printf(&quoted, "`%.*s`",
+                            (int)case_text.u8_bytes, case_text.data);
+                        n00bb_switch_case_mismatch(context, current,
+                            core_buffer_string(&quoted), subject_type);
+                        core_buffer_release(&quoted);
+                        core_free(case_text.data);
+                        core_list_free(stack);
+                        core_list_free(item.patterns);
+                        return false;
                     }
                     if (!literal_pattern && !expression) {
                         lower_report(context,
