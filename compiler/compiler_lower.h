@@ -42,6 +42,9 @@ bool bind_link_declarations_to_ir(parse_grammar_t *grammar,
                                   core_link_unit_t *link,
                                   n00bb_link_analysis_t *analysis,
                                   uint32_t producer_stage);
+bool n00bb_const_has_static_value(parse_grammar_t *grammar,
+                                  core_translation_unit_t *unit,
+                                  parse_sym_entry_t *symbol);
 bool lower_requests_to_ir(parse_grammar_t *grammar, core_link_unit_t *link,
                           n00bb_link_analysis_t *analysis,
                           ir_ctx_t *ir_context,

@@ -4836,6 +4836,26 @@ build_time_needs_own_front_end(const n00bb_link_analysis_t *analysis)
 }
 
 static bool
+build_time_work_possible(const n00bb_link_analysis_t *analysis)
+{
+    for (size_t i = 0; i < analysis->units.len; i++) {
+        n00bb_tu_state_t *state = tu_state(analysis->units.data[i]);
+        if (!state || state->build_time_use.has_location) return true;
+        if (state->interface_module) continue;
+        if (state->literal_site_nodes.len) return true;
+        parse_scope_t *scope = module_scope(state);
+        for (parse_sym_entry_t *symbol = scope ? scope->first_in_scope
+                                               : nullptr;
+             symbol; symbol = symbol->next_in_scope)
+            if (symbol->kind == PARSE_SYM_VARIABLE
+                && symbol->mutability == PARSE_SYM_CONST
+                && !n00bb_const_has_static_value(analysis->grammar,
+                       analysis->units.data[i], symbol)) return true;
+    }
+    return false;
+}
+
+static bool
 load_build_time_capture(n00bb_link_analysis_t *analysis,
                         core_diagnostics_t *diagnostics)
 {
@@ -5540,7 +5560,8 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
         if (stale.byte_len) restart_excluding_cached(argv, argv0, &stale);
         core_buffer_release(&stale);
     }
-    if (located && deferred_build_time && link_analysis)
+    if (located && deferred_build_time && link_analysis
+        && build_time_work_possible(link_analysis))
     {
         located = fork_build_time_stage(argc, argv, argv0, cli,
             &invocation.parsed, link, link_analysis, cli_diagnostics,

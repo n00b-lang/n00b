@@ -18478,6 +18478,27 @@ zero_member_initializer(core_translation_unit_t *unit, ir_module_t *module,
     return true;
 }
 
+bool
+n00bb_const_has_static_value(parse_grammar_t *grammar,
+                             core_translation_unit_t *unit,
+                             parse_sym_entry_t *symbol)
+{
+    if (symbol->has_comptime_value && symbol->comptime_value) return true;
+    parse_tree_t *declaration = symbol->decl_node;
+    parse_tree_t *initializer = nt_is(grammar, declaration,
+            CORE_STRING_STATIC("sym-decl"))
+        ? child_nt(grammar, declaration, CORE_STRING_STATIC("expression"))
+        : nullptr;
+    n00bb_tu_state_t *state = tu_state(unit);
+    th_type *static_type = initializer
+        ? static_global_type(grammar, unit, symbol) : nullptr;
+    n00bb_static_value_t value;
+    return state && initializer
+        && semantic_static_value_from_expression(grammar, initializer,
+               static_type, state, &value, 0)
+        && static_value_matches_type(&value, static_type, state, 0);
+}
+
 static bool
 initialize_static_global(parse_grammar_t *grammar,
                          core_translation_unit_t *unit,
