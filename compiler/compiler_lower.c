@@ -605,7 +605,6 @@ typedef struct {
     core_list_t(n00bb_with_frame_t) withs;
     core_list_t(n00bb_final_frame_t) finals;
     size_t final_base;
-    bool borrowed_write;
     core_list_t(n00bb_copyout_t) parameters_to_copy_out;
     core_list_t(n00bb_pending_copyouts_t) pending_call_copyouts;
     core_list_t(n00bb_narrowed_root_t) narrowed_roots;
@@ -2398,8 +2397,6 @@ n00bb_lower_statement_scope(ir_lower_context_t *context, parse_visit_t *visit,
                             bool entering, void *state)
 {
     (void)state;
-    n00bb_lower_context_t *lower = context->user;
-    if (!entering && lower) lower->borrowed_write = false;
     return entering
         || n00bb_finish_final_scope(context, visit->node, visit->node);
 }
@@ -2437,9 +2434,15 @@ n00bb_move_source(ir_lower_context_t *context, parse_grammar_t *grammar,
                                         whole));
         if (!place || call) return true;
         if (!n00bb_type_finalized(lower->unit, type)) {
-            lower->borrowed_write = n00bb_type_may_finalize(lower->unit,
-                                                            type);
-            return true;
+            ir_value_t *copied = n00bb_type_may_finalize(lower->unit, type)
+                ? ir_lower_node_value(context, source) : nullptr;
+            ir_instr_t *def = copied && copied->kind == IR_VAL_INSTR
+                ? copied->def : nullptr;
+            return !def || ir_annot_set(lower->ir_context, &def->annots,
+                (ir_annot_t){
+                    .key = CORE_STRING_STATIC("n00bb.place_copy"),
+                    .kind = IR_ANNOT_STR,
+                    .s = source_text_of(lower->unit, source)});
         }
         core_string_t type_text = lower_type_text(context, type);
         lower_report(context, N00B_DIAG_FINALIZED_COPY, span,
@@ -2476,14 +2479,11 @@ static bool
 n00bb_write_binding(ir_lower_context_t *context, parse_sym_entry_t *symbol,
                     bool written)
 {
-    n00bb_lower_context_t *lower = context->user;
-    n00bb_final_frame_t *frame = n00bb_final_frame(lower, symbol);
-    bool borrowed = written && lower && lower->borrowed_write;
-    if (written && lower) lower->borrowed_write = false;
+    n00bb_final_frame_t *frame = n00bb_final_frame(context->user, symbol);
     if (!frame || !context->reachable) return true;
     if (!written)
         return n00bb_emit_scope_finalize(context, frame, symbol->decl_node);
-    return n00bb_set_owned(context, frame, !borrowed,
+    return n00bb_set_owned(context, frame, true,
                            lower_span_for_tree(context, symbol->decl_node));
 }
 
@@ -16555,7 +16555,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                     "could not lower generic array indexed assignment");
                 return false;
             }
-            return true;
+            return n00bb_move_source(context, grammar, source);
         }
         ir_value_t *address = n00bb_addressable_expression_address(
             context, grammar, lower->unit, index_node, span);
@@ -16576,7 +16576,7 @@ n00bb_lower_index_store_at(ir_lower_context_t *context,
                 "could not lower builtin array indexed assignment");
             return false;
         }
-        return true;
+        return n00bb_move_source(context, grammar, source);
     }
     size_t argument_count = slice ? 5 : 3;
     ir_value_t *arguments[5] = {
@@ -17840,7 +17840,8 @@ n00bb_lower_record_field_assignment(ir_lower_context_t *context,
         return false;
     }
     return n00bb_index_writeback_finish(context, visit->grammar, visit->node,
-                                        &writeback, span);
+                                        &writeback, span)
+        && n00bb_move_source(context, visit->grammar, source);
 }
 
 static bool
@@ -17888,7 +17889,7 @@ n00bb_lower_referent_assignment(ir_lower_context_t *context,
                     "could not emit the store through a reference");
         return false;
     }
-    return true;
+    return n00bb_move_source(context, visit->grammar, source);
 }
 
 static bool
@@ -22157,7 +22158,9 @@ build_reachable_functions(
         if (!module_name.data) continue;
         for (size_t j = 0; j < ir_func_count(module); j++) {
             ir_func_t *function = ir_func_at(module, j);
-            if (!function || !function_has_body(function)) continue;
+            if (!function || !function_has_body(function)
+                || !th_is_closed(ir_module_types(module), function->type))
+                continue;
             if (core_string_eq(function->name,
                                CORE_STRING_STATIC("__finalize"))
                 || core_string_starts_with(function->name,
@@ -22309,6 +22312,8 @@ build_emitted_functions(n00bb_link_analysis_t *analysis)
         core_list_push(roots, analysis->reachable_functions.data[i]);
     for (size_t i = 0; i < analysis->specializations.len; i++)
         core_list_push(roots, analysis->specializations.data[i].instance);
+    for (size_t i = 0; i < analysis->boxed_finalizers.len; i++)
+        core_list_push(roots, analysis->boxed_finalizers.data[i].function);
     for (size_t i = 0; i < analysis->units.len; i++) {
         core_translation_unit_t *unit = analysis->units.data[i];
         n00bb_tu_state_t *state = tu_state(unit);

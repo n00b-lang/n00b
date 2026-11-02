@@ -713,6 +713,16 @@ func ref_differ(left: Ref['T], right: Ref['T]) -> bool {
     return !reference_equal(__box_of(left), __box_of(right))
 }
 
+func finalize_ref(target: Ref['T]) {
+    var location: Location = (address = nil, type_index = 0, reserved = 0,
+                              bit_offset = 0, width = 0)
+    reference_locate(__box_of(target), ref location)
+    if location.address != nil and location.bit_offset == 0 {
+        __finalize_boxed(location.type_index & 0x7fffffff,
+                         location.address.get())
+    }
+}
+
 func ref_get(target: Ref['T]) -> 'T {
     var location: Location = (address = nil, type_index = 0, reserved = 0,
                               bit_offset = 0, width = 0)

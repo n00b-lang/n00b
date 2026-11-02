@@ -361,10 +361,32 @@ n00bb_linked_function_indices(const n00bb_abi_object_view_t *view,
     return true;
 }
 
+static ir_func_t *
+n00bb_finalizer_instance(const core_list_t(n00bb_specialization_t)
+                             *specializations,
+                         ir_func_t *generic, uint64_t typehash)
+{
+    ir_func_t *body = n00bb_cached_body(generic);
+    for (size_t i = 0; specializations && i < specializations->len; i++) {
+        const n00bb_specialization_t *entry = &specializations->data[i];
+        ir_func_t *instance = entry->instance;
+        const th_param *self = instance && (entry->generic == body
+                || entry->generic == generic)
+            ? th_func_param(instance->type, 0) : nullptr;
+        th_type *referent = self ? th_ind_referent(th_resolve(self->type))
+                                 : nullptr;
+        if (referent && th_hash(ir_module_types(instance->owner), referent)
+                == typehash) return instance;
+    }
+    return nullptr;
+}
+
 static bool
 n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                         core_translation_unit_t *const *units,
                         size_t unit_count,
+                        const core_list_t(n00bb_specialization_t)
+                            *specializations,
                         n00bb_llvm_finalizer_binding_t **out,
                         size_t *out_count)
 {
@@ -418,6 +440,10 @@ n00bb_linked_finalizers(const n00bb_abi_object_view_t *view,
                 matched = candidate;
             }
         }
+        if (valid && matched
+            && !th_is_closed(ir_module_types(matched->owner), matched->type))
+            matched = n00bb_finalizer_instance(specializations, matched,
+                                               type->typehash);
         valid = valid && matched;
         if (valid) bindings[count++] = (n00bb_llvm_finalizer_binding_t){
             .type_index = i, .function = matched,
@@ -631,6 +657,8 @@ typedef struct {
     size_t metadata_bytes;
     const n00bb_llvm_finalizer_binding_t *finalizers;
     size_t finalizer_count;
+    const n00bb_llvm_finalizer_binding_t *boxed_finalizers;
+    size_t boxed_finalizer_count;
 } module_entry_t;
 
 typedef struct {
@@ -705,8 +733,10 @@ begin_module_object(const module_emission_t *emission, module_object_t *item,
             emission->function_indices, emission->function_index_count)
         && n00bb_llvm_backend_bind_globals(backend,
             emission->global_bindings, emission->global_binding_count)
-        && (!entry || n00bb_llvm_backend_bind_finalizers(backend,
-            entry->finalizers, entry->finalizer_count));
+        && (!entry || (n00bb_llvm_backend_bind_finalizers(backend,
+                entry->finalizers, entry->finalizer_count)
+            && n00bb_llvm_backend_bind_boxed_finalizers(backend,
+                entry->boxed_finalizers, entry->boxed_finalizer_count)));
     const core_string_t *initializers = entry ? entry->initializers : nullptr;
     size_t initializer_count = entry ? entry->initializer_count : 0;
     size_t metadata_bytes = entry ? entry->metadata_bytes : 0;
@@ -1416,6 +1446,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
     size_t global_binding_count = 0;
     n00bb_llvm_finalizer_binding_t *finalizers = nullptr;
     size_t finalizer_count = 0;
+    n00bb_llvm_finalizer_binding_t *boxed_finalizers = nullptr;
+    size_t boxed_finalizer_count = 0;
     n00bb_llvm_function_binding_t *function_indices = nullptr;
     size_t function_index_count = 0;
     const char *build_stage = "linking ABI metadata";
@@ -1457,7 +1489,28 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             if (ok) {
                 read_stage = "matching finalizers";
                 ok = n00bb_linked_finalizers(&view, order.data, count,
-                    &finalizers, &finalizer_count);
+                    &analysis->specializations, &finalizers,
+                    &finalizer_count);
+            }
+            if (ok && analysis->boxed_finalizers.len) {
+                read_stage = "matching boxed finalizers";
+                boxed_finalizers = calloc(analysis->boxed_finalizers.len,
+                                          sizeof(*boxed_finalizers));
+                ok = boxed_finalizers != nullptr;
+                for (size_t b = 0; ok && b < analysis->boxed_finalizers.len;
+                     b++) {
+                    n00bb_boxed_finalizer_t boxed =
+                        analysis->boxed_finalizers.data[b];
+                    for (uint32_t t = 1; t < type_index_count; t++)
+                        if (type_indices[t].typehash == boxed.typehash) {
+                            boxed_finalizers[boxed_finalizer_count++] =
+                                (n00bb_llvm_finalizer_binding_t){
+                                    .type_index = t,
+                                    .function = boxed.function,
+                                };
+                            break;
+                        }
+                }
             }
             if (ok) {
                 read_stage = "matching function indices";
@@ -1599,6 +1652,8 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
             .initializer_count = initializer_count,
             .metadata_bytes = metadata.size,
             .finalizers = finalizers, .finalizer_count = finalizer_count,
+            .boxed_finalizers = boxed_finalizers,
+            .boxed_finalizer_count = boxed_finalizer_count,
         };
         module_object_t *item = module_emitter_slot(&emitter);
         *item = (module_object_t){
@@ -1910,6 +1965,7 @@ n00bb_build_executable(core_link_unit_t *link, n00bb_link_analysis_t *analysis,
         core_free(global_bindings[i].native_name.data);
     free(global_bindings);
     free(finalizers);
+    free(boxed_finalizers);
     free(function_indices);
     n00bb_native_cache_close(native_cache);
     n00bb_native_frames_free(native_frames);

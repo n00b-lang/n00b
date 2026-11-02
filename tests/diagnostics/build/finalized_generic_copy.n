@@ -1,0 +1,27 @@
+record Guard {
+    id: int
+}
+
+func __finalize(consume self: Ref[Guard]) {
+}
+
+record Holder {
+    item: 'T
+}
+
+func first(view holder: Holder['T]) -> 'T {
+    return holder.item
+}
+
+func plain() -> int {
+    let holder: Holder[int] = (item = 3)
+    return first(holder)
+}
+
+func guarded() -> int {
+    let holder: Holder[Guard] = (item = (id = 1))
+    return first(holder).id
+}
+
+require plain() == 3
+require guarded() == 1

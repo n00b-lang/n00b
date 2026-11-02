@@ -1797,7 +1797,8 @@ n00bb_type_finalizer(core_translation_unit_t *unit, th_type *type,
     th_env_method_t found = {0};
     bool resolved = reference && th_env_method_resolve(state->types,
         reference, CORE_STRING_STATIC("Finalize"),
-        CORE_STRING_STATIC("__finalize"), &found) == TH_ENV_METHOD_FOUND;
+        CORE_STRING_STATIC("__finalize"), &found) == TH_ENV_METHOD_FOUND
+        && !n00bb_generic_generated_finalizer(found.qualified_name);
     if (resolved && method) *method = found;
     return resolved;
 }

@@ -1059,6 +1059,17 @@ register_builtin_gc_symbols(parse_symtab_t *symtab, th_ctx *types,
     invoke->type = invoke_signature;
     invoke->error_type = nil_type;
     invoke->callable_contract = invoke_contract;
+    parse_sym_entry_t *boxed = parse_symtab_add(symtab,
+        CORE_STRING_STATIC("builtin"), CORE_STRING_STATIC("__finalize_boxed"),
+        PARSE_SYM_FUNCTION, nullptr);
+    if (!boxed || !parse_sym_set_binding(boxed,
+            CORE_STRING_STATIC("n00bb.abi.native"),
+            (void *)builtin_native_name(
+                CORE_STRING_STATIC("__finalize_boxed"))))
+        return false;
+    boxed->type = invoke_signature;
+    boxed->error_type = nil_type;
+    boxed->callable_contract = invoke_contract;
     return true;
 }
 

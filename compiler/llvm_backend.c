@@ -318,6 +318,8 @@ struct n00bb_llvm_backend_t {
     size_t global_binding_count;
     const n00bb_llvm_finalizer_binding_t *finalizers;
     size_t finalizer_count;
+    const n00bb_llvm_finalizer_binding_t *boxed_finalizers;
+    size_t boxed_finalizer_count;
     pointer_set_t reachable;
     bool reachable_bound;
     ir_storage_origin_t *storage_origin;
@@ -13051,6 +13053,18 @@ n00bb_llvm_backend_bind_finalizers(
     return true;
 }
 
+bool
+n00bb_llvm_backend_bind_boxed_finalizers(
+    n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_finalizer_binding_t *finalizers, size_t count)
+{
+    if (!backend || (count && !finalizers) || backend->lowered)
+        return false;
+    backend->boxed_finalizers = finalizers;
+    backend->boxed_finalizer_count = count;
+    return true;
+}
+
 struct n00bb_llvm_callback_bindings_t {
     core_list_t(callback_binding_t) list;
 };
@@ -13236,8 +13250,10 @@ n00bb_llvm_backend_write_bitcode(n00bb_llvm_backend_t *backend,
 }
 
 static bool
-emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
-                      core_diagnostics_t *diagnostics)
+emit_finalizer_dispatch(n00bb_llvm_backend_t *backend, const char *name,
+                        const n00bb_llvm_finalizer_binding_t *bindings,
+                        size_t binding_count, bool trap_unbound,
+                        core_diagnostics_t *diagnostics)
 {
     LLVMModuleRef module = backend->module;
     LLVMContextRef context = backend->context;
@@ -13246,9 +13262,8 @@ emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
     LLVMTypeRef arguments[] = {i32, pointer};
     LLVMTypeRef signature = LLVMFunctionType(
         LLVMVoidTypeInContext(context), arguments, 2, false);
-    LLVMValueRef bridge = LLVMGetNamedFunction(module, "n00b_gc_finalize");
-    if (!bridge) bridge = LLVMAddFunction(module, "n00b_gc_finalize",
-                                          signature);
+    LLVMValueRef bridge = LLVMGetNamedFunction(module, name);
+    if (!bridge) bridge = LLVMAddFunction(module, name, signature);
     if (!bridge || LLVMCountBasicBlocks(bridge))
         return backend_error(diagnostics,
             "could not define the native finalizer bridge");
@@ -13260,11 +13275,10 @@ emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
                                                                "unbound");
     LLVMPositionBuilderAtEnd(builder, entry);
     LLVMValueRef branch = LLVMBuildSwitch(builder, LLVMGetParam(bridge, 0),
-        missing, (unsigned)backend->finalizer_count);
+        missing, (unsigned)binding_count);
     bool valid = true;
-    for (size_t i = 0; valid && i < backend->finalizer_count; i++) {
-        const n00bb_llvm_finalizer_binding_t *binding =
-            &backend->finalizers[i];
+    for (size_t i = 0; valid && i < binding_count; i++) {
+        const n00bb_llvm_finalizer_binding_t *binding = &bindings[i];
         ir_func_t *function = binding->function;
         LLVMTypeRef target_signature = function
             ? function_type(module, function) : nullptr;
@@ -13312,8 +13326,10 @@ emit_finalizer_bridge(n00bb_llvm_backend_t *backend,
         LLVMBuildRetVoid(builder);
     }
     LLVMPositionBuilderAtEnd(builder, missing);
-    emit_runtime_invariant(builder, module,
-                           N00BB_INVARIANT_UNKNOWN_FINALIZER);
+    if (trap_unbound)
+        emit_runtime_invariant(builder, module,
+                               N00BB_INVARIANT_UNKNOWN_FINALIZER);
+    else LLVMBuildRetVoid(builder);
     LLVMDisposeBuilder(builder);
     return valid || backend_error(diagnostics,
         "finalizer bridge target has an invalid native signature");
@@ -14051,7 +14067,12 @@ prepare_image(n00bb_llvm_backend_t *backend,
     if (initializer_count
         && !emit_tls_address_resolver(backend, diagnostics)) return false;
     if (initializer_count
-        && !emit_finalizer_bridge(backend, diagnostics)) return false;
+        && (!emit_finalizer_dispatch(backend, "n00b_gc_finalize",
+                backend->finalizers, backend->finalizer_count, true,
+                diagnostics)
+            || !emit_finalizer_dispatch(backend, "n00bb_finalize_boxed",
+                backend->boxed_finalizers, backend->boxed_finalizer_count,
+                false, diagnostics))) return false;
     if (initializer_count) {
         LLVMTypeRef result = LLVMInt32TypeInContext(context);
         LLVMTypeRef entry_params[] = {

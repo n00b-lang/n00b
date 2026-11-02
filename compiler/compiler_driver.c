@@ -5073,7 +5073,8 @@ specialize_emitted(n00bb_link_analysis_t *analysis,
     while (ok && callers.len) {
         ok = n00bb_specialize_calls(analysis->ir_context, &callers,
                 seeds, seed_count, &analysis->specializations,
-                &analysis->specialization_requests, failure)
+                &analysis->specialization_requests,
+                &analysis->boxed_finalizers, failure)
             && build_reachable_functions(analysis, &analysis->units,
                                          diagnostics);
         seed_count = 0;
@@ -5126,16 +5127,27 @@ specialize_calls(n00bb_link_analysis_t *analysis,
         if (core_string_eq(analysis->units.data[i]->module.identifier,
                            failure.module))
             site = analysis->units.data[i];
-    if (!ok && failure.located)
-        n00bb_report(site ? core_translation_unit_diagnostics(site)
-                          : diagnostics, site,
-            N00B_DIAG_GENERIC_SPECIALIZATION_FAILED, (core_diag_location_t){
-                .line = failure.span.start_line,
-                .column = failure.span.start_col,
-                .end_line = failure.span.end_line,
-                .end_column = failure.span.end_col,
-                .has_location = site && failure.span.start_line != 0,
-            }, N00B_TEXT_GROWING_INSTANTIATION,
+    core_diag_location_t failure_location = {
+        .line = failure.span.start_line,
+        .column = failure.span.start_col,
+        .end_line = failure.span.end_line,
+        .end_column = failure.span.end_col,
+        .has_location = site && failure.span.start_line != 0,
+    };
+    core_diagnostics_t *failure_diagnostics = site
+        ? core_translation_unit_diagnostics(site) : diagnostics;
+    if (!ok && failure.located && failure.finalized_copy) {
+        n00bb_report(failure_diagnostics, site, N00B_DIAG_FINALIZED_COPY,
+            failure_location, N00B_TEXT_GENERIC_FINALIZED_COPY,
+            N00BB_ARGS(ARG_TEXT(failure.function), ARG_TEXT(failure.after),
+                       ARG_TEXT(failure.before)));
+        n00bb_report_help(failure_diagnostics,
+                          N00B_TEXT_MOVE_THE_WHOLE_VARIABLE, N00BB_NO_ARGS);
+    }
+    else if (!ok && failure.located)
+        n00bb_report(failure_diagnostics, site,
+            N00B_DIAG_GENERIC_SPECIALIZATION_FAILED, failure_location,
+            N00B_TEXT_GROWING_INSTANTIATION,
             N00BB_ARGS(ARG_TEXT(failure.function), ARG_TEXT(failure.before),
                        ARG_TEXT(failure.after)));
     else if (!ok && failure.message.byte_len)

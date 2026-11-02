@@ -871,6 +871,7 @@ N00B_TEXT(CONSUME_ELEMENT, "`{0}` is an element of a container, but only a whole
 N00B_TEXT(CONSUME_FIELD, "`{0}` is a field, but only a whole variable or a temporary value can be consumed")
 N00B_TEXT(FINALIZED_VALUE_COPIED, "`{0}` has a finalizer, so it cannot be copied out of `{1}`")
 N00B_TEXT(MOVE_THE_WHOLE_VARIABLE, "move the whole variable instead, or build a new value")
+N00B_TEXT(GENERIC_FINALIZED_COPY, "'{0}' copies `{1}`, which is a `{2}` here; `{2}` has a finalizer, so it cannot be copied out of a field or element")
 N00B_TEXT(NO_VALUE_WHILE_BUILDING, "`{0}` has no value while the program is being built, so it cannot be read here")
 N00B_TEXT(NO_VALUE_WHEN_RUNNING, "`{0}` has no value when the program runs, so it cannot be read here")
 N00B_TEXT(BREAK_NAMES_NO_LABEL, "`break {0}` names no enclosing loop, `switch` or `typecase` labeled `{0}`")

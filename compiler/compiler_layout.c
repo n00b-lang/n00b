@@ -717,6 +717,25 @@ publish_declared_aggregate_layouts(n00bb_link_analysis_t *analysis)
     return valid;
 }
 
+static bool
+borrow_owner_layouts(ir_module_t *module, th_type *type,
+                     core_string_t target, size_t depth)
+{
+    type = type ? th_resolve(type) : nullptr;
+    if (!type || depth > 16 || th_kind_of(type) != TH_NAMED) return true;
+    for (size_t i = 0; i < th_named_nargs(type); i++) {
+        const th_arg *argument = th_named_arg(type, i);
+        if (argument && argument->kind == TH_ARG_TYPE
+            && !borrow_owner_layouts(module, argument->type, target,
+                                     depth + 1)) return false;
+    }
+    if (ir_layout_final(module, type, target)) return true;
+    ir_module_t *owner = ir_type_definition_owner(module, type);
+    const ir_final_layout_t *layout = owner && owner != module
+        ? ir_layout_final(owner, type, target) : nullptr;
+    return !layout || ir_layout_publish_final(module, type, target, layout);
+}
+
 bool
 publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
 {
@@ -733,8 +752,21 @@ publish_interned_variant_layouts(n00bb_link_analysis_t *analysis)
                 if (!channels[c] || !th_is_closed(ir_module_types(module),
                                                  channels[c])) continue;
                 bool handled = false;
-                if (!n00bb_abi_publish_direct_layout(module,
+                if (!borrow_owner_layouts(module, channels[c],
+                        analysis->target.triple, 0)
+                    || !n00bb_abi_publish_direct_layout(module,
                         channels[c], &analysis->target, &handled))
+                    return false;
+            }
+            for (size_t p = 0; p < th_func_nparams(function->type); p++) {
+                const th_param *parameter = th_func_param(function->type, p);
+                bool handled = false;
+                if (parameter && parameter->type
+                    && th_is_closed(ir_module_types(module), parameter->type)
+                    && (!borrow_owner_layouts(module, parameter->type,
+                            analysis->target.triple, 0)
+                        || !n00bb_abi_publish_direct_layout(module,
+                            parameter->type, &analysis->target, &handled)))
                     return false;
             }
             for (size_t b = 0; b < function->n_blocks; b++) {

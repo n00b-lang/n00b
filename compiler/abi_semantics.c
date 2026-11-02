@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ir/typelang.h"
 #include "lib/alloc.h"
 #include "lib/list.h"
 #include "qualified_names.h"
@@ -299,6 +300,25 @@ add_dispatch(n00bb_abi_merged_rows_t *merged,
     return true;
 }
 
+static bool
+generated_finalizer_instance(const n00bb_abi_semantics_t *facts,
+                             th_ctx *ctx, th_type *reference)
+{
+    uint64_t wanted = th_hash(ctx, reference);
+    for (size_t m = 0; m < facts->module_count; m++) {
+        ir_module_t *module = (ir_module_t *)facts->modules[m];
+        for (size_t f = 0; module && f < ir_func_count(module); f++) {
+            ir_func_t *function = ir_func_at(module, f);
+            const th_param *self = function && function->n_blocks
+                && n00bb_generic_generated_finalizer(function->name)
+                ? th_func_param(function->type, 0) : nullptr;
+            if (self && th_hash(ir_module_types(module), self->type)
+                    == wanted) return true;
+        }
+    }
+    return false;
+}
+
 bool
 n00bb_abi_link_semantic_rows(
     const n00bb_abi_selected_objects_t *selected,
@@ -426,10 +446,17 @@ n00bb_abi_link_semantic_rows(
         receiver_t receiver = receivers.data[i];
         n00b_abi_type_v1 *row = (void *)(types->records
             + (size_t)receiver.index * types->record_bytes);
-        if (!row->owner_module_index) continue;
+        uint32_t owner = row->owner_module_index;
+        th_type *head = owner ? nullptr
+            : n00bb_generic_head(ctx, receiver.type);
+        uint32_t parent = head ? type_index(types, th_hash(ctx, head)) : 0;
+        if (parent && parent != receiver.index)
+            owner = ((const n00b_abi_type_v1 *)(types->records
+                + (size_t)parent * types->record_bytes))->owner_module_index;
+        if (!owner) continue;
         th_type *reference = th_ind(ctx, 0, receiver.type);
         if (!reference || !scope_for_type_owner(ctx, selected, plan,
-                                                 row->owner_module_index)) {
+                                                 owner)) {
             valid = false;
             break;
         }
@@ -437,7 +464,11 @@ n00bb_abi_link_semantic_rows(
         th_env_method_status_t status = th_env_method_resolve(ctx, reference,
             CORE_STRING_STATIC("Finalize"), CORE_STRING_STATIC("__finalize"),
             &method);
-        if (status == TH_ENV_METHOD_NOT_FOUND) continue;
+        if (status == TH_ENV_METHOD_NOT_FOUND
+            || (status == TH_ENV_METHOD_FOUND
+                && n00bb_generic_generated_finalizer(method.qualified_name)
+                && !generated_finalizer_instance(facts, ctx, reference)))
+            continue;
         uint32_t function_index = 0;
         valid = status == TH_ENV_METHOD_FOUND
             && function_index_for_method(ctx, selected, plan, &method,

@@ -39,4 +39,11 @@ n00bb_names_function(core_string_t root, core_string_t function)
     return core_string_eq(n00bb_function_root(function), root);
 }
 
+static inline bool
+n00bb_generic_generated_finalizer(core_string_t name)
+{
+    return name.data
+        && core_string_find(name, CORE_STRING_STATIC("#n00bb_generic_")) >= 0;
+}
+
 #endif

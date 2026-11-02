@@ -56,6 +56,9 @@ bool n00bb_llvm_backend_bind_globals(
 bool n00bb_llvm_backend_bind_finalizers(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_finalizer_binding_t *finalizers, size_t count);
+bool n00bb_llvm_backend_bind_boxed_finalizers(
+    n00bb_llvm_backend_t *backend,
+    const n00bb_llvm_finalizer_binding_t *finalizers, size_t count);
 bool n00bb_llvm_backend_bind_function_indices(
     n00bb_llvm_backend_t *backend,
     const n00bb_llvm_function_binding_t *functions, size_t count);

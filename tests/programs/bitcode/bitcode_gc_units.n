@@ -1,4 +1,5 @@
 import sys.abi
+import sys.box
 import sys.clock
 import sys.gc.alloc
 import sys.gc.collect
@@ -2608,6 +2609,73 @@ func gc_generated_object_finalizer() {
     require gcfin_count == 1 and gcfin_seen == 8
 }
 
+object Gcfin_Generic_Box {
+    f: 'T
+}
+
+object Gcfin_User_Box {
+    f: 'T
+}
+
+var gcfin_user_count: int = 0
+
+func __finalize(consume self: Ref[Gcfin_User_Box['T]]) {
+    gcfin_user_count += 1
+}
+
+func gc_generic_object_finalizer() {
+    gcfin_count = 0
+    let probe: Ref[Gcfin_Generic_Box[Gcfin_Value]]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(probe))
+    require row != nil
+    require row.get().__value.finalizer_function_index != 0
+    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
+                                                       row.get())
+    let word: Ref[int] = unsafe_cast[Ref[int]] placed[1]
+    word.__value = 9
+    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
+    require gcfin_count == 1 and gcfin_seen == 9
+    let plain: Ref[Gcfin_Generic_Box[int]]? = nil
+    let plain_row: Ref[sys.abi.Type_Record]? =
+        sys.abi.optional_reference_target(typeof(plain))
+    require plain_row == nil
+        or plain_row.get().__value.finalizer_function_index == 0
+}
+
+func gc_user_generic_object_finalizer() {
+    gcfin_user_count = 0
+    let probe: Ref[Gcfin_User_Box[int]]? = nil
+    let row: Ref[sys.abi.Type_Record]? = sys.abi.optional_reference_target(
+        typeof(probe))
+    require row != nil
+    require row.get().__value.finalizer_function_index != 0
+    let placed: Tuple[i64, Ref[byte]] = gcfin_storage(typeof(probe),
+                                                       row.get())
+    __gc_invoke_finalizer(cast[u32] placed[0], placed[1])
+    require gcfin_user_count == 1
+}
+
+func gc_boxed_finalizer_dispatch() {
+    gcfin_count = 0
+    var value: Gcfin_Value = (v = 11)
+    __finalize_boxed(sys.box.type_field_of(value) & 0x7fffffff,
+                     unsafe_cast[Ref[byte]] (ref value))
+    require gcfin_count == 1 and gcfin_seen == 11
+    var held: Gcfin_Holder = (tag = 1, f = (v = 12))
+    __finalize_boxed(sys.box.type_field_of(held) & 0x7fffffff,
+                     unsafe_cast[Ref[byte]] (ref held))
+    require gcfin_count == 2 and gcfin_seen == 12
+    var maybe: Gcfin_Value? = (v = 13)
+    __finalize_boxed(sys.box.type_field_of(maybe) & 0x7fffffff,
+                     unsafe_cast[Ref[byte]] (ref maybe))
+    require gcfin_count == 3 and gcfin_seen == 13
+    var plain: int = 4
+    __finalize_boxed(sys.box.type_field_of(plain) & 0x7fffffff,
+                     unsafe_cast[Ref[byte]] (ref plain))
+    require gcfin_count == 3
+}
+
 func gc_known_finalizer() {
     let value: Ref[Finalized_Record] = construct_finalized()
     require value.__value.payload == 42
@@ -2722,5 +2790,8 @@ gc_finalize_ref()
 gc_known_finalizer()
 gc_generated_record_finalizer()
 gc_generated_object_finalizer()
+gc_generic_object_finalizer()
+gc_user_generic_object_finalizer()
+gc_boxed_finalizer_dispatch()
 gc_destroy_blocked_finalizer()
 __fd_write(2, "ok")
