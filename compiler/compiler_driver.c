@@ -5193,7 +5193,10 @@ n00bb_compiler_main(int argc, char **argv, core_string_t argv0)
     parse_cmdr_result_t *args = invocation.parsed;
 
     closed_world_build = parse_cmdr_flag_present(args,
-        CORE_STRING_STATIC("--closed-world"));
+            CORE_STRING_STATIC("--closed-world"))
+        || (n00bb_setting_bool(N00BB_KEY_BUILD_LTO)
+            && !parse_cmdr_flag_present(args,
+                   CORE_STRING_STATIC("--no-closed-world")));
     function_summaries_build = parse_cmdr_flag_present(args,
         CORE_STRING_STATIC("--function-summaries"));
     bool requested_native = parse_cmdr_flag_present(args,

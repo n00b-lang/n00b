@@ -374,6 +374,7 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
     static const n00bb_setting_id_t settings[] = {
         N00BB_KEY_BUILD_RELEASE, N00BB_KEY_BUILD_NATIVE,
         N00BB_KEY_BUILD_UNCHECKED_WIDE_NARROWING, N00BB_KEY_BUILD_PANIC_TRAP,
+        N00BB_KEY_BUILD_LTO,
     };
     for (size_t i = 0; i < sizeof(settings) / sizeof(*settings); i++)
         put_u32(out, n00bb_setting_bool(settings[i]));
@@ -382,6 +383,7 @@ append_flags(core_buffer_t *out, parse_cmdr_result_t *args)
         CORE_STRING_STATIC("--gc-conservative-stacks"),
         CORE_STRING_STATIC("--no-specialize"),
         CORE_STRING_STATIC("--closed-world"),
+        CORE_STRING_STATIC("--no-closed-world"),
         CORE_STRING_STATIC("--function-summaries"),
     };
     for (size_t i = 0; i < sizeof(flags) / sizeof(*flags); i++)
