@@ -2969,6 +2969,12 @@ literal_element_layout_matches(ir_module_t *module, th_type *type,
                 LLVMGetTypeContext(native), (unsigned)unit_bits),
                 (unsigned)(stride_bits / unit_bits));
     }
+    // A distinct type (`type X = u128`) has its definition's layout.
+    th_type *distinct = ir_type_definition(module, type);
+    if (distinct && th_kind_of(th_resolve(distinct)) == TH_NAMED
+        && th_resolve(distinct) != type)
+        return literal_element_layout_matches(module, distinct, native,
+                                              target);
     ir_machine_t machine = ir_machine_of(module, type);
     if (machine.class == IR_CLASS_VOID) return empty_struct_type(native);
     if (machine.class == IR_CLASS_BOOL)
