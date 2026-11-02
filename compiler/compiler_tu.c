@@ -1585,6 +1585,43 @@ n00bb_for_loop_at(core_translation_unit_t *unit, uint32_t line,
     return nullptr;
 }
 
+static bool
+resolve_for_binding(parse_grammar_t *grammar, core_translation_unit_t *unit,
+                    parse_tree_t *loop, bool closed_only, bool defer_open,
+                    bool *deferred)
+{
+    n00bb_tu_state_t *state = tu_state(unit);
+    th_type *item_type = parse_tree_type(loop);
+    parse_tree_t *target = CHILD_NT(grammar, loop, "for-in-target-list");
+    if (closed_only && !target) return true;
+    if (target) {
+        parse_tree_t *source = CHILD_NT(grammar, target, "expression");
+        th_type *source_type = parse_tree_type(source);
+        if (closed_only && (!source_type || th_is_poison(source_type)
+                || !th_is_closed(state->types, source_type)))
+            return true;
+        if (defer_open && source_type
+            && th_kind_of(th_resolve(source_type)) == TH_VAR) {
+            *deferred = true;
+            return true;
+        }
+        if (th_is_poison(source_type))
+            return bind_for_item_type(grammar, unit, loop, source_type);
+        th_type *cursor_type = nullptr;
+        th_type *resolved = n00bb_tuple_type(source_type) ? nullptr
+            : resolved_iteration_item_type(grammar, unit, loop,
+                                           &cursor_type);
+        if (resolved) item_type = resolved;
+        if (!resolved) {
+            n00bb_report_not_iterable(unit, loop);
+            return false;
+        }
+        if (!cache_iteration_plan(grammar, unit, loop, source_type,
+                                  cursor_type, resolved)) return false;
+    }
+    return bind_for_item_type(grammar, unit, loop, item_type);
+}
+
 bool
 resolve_for_binding_types(parse_grammar_t *grammar,
                           core_translation_unit_t *unit, bool closed_only)
@@ -1592,44 +1629,32 @@ resolve_for_binding_types(parse_grammar_t *grammar,
     n00bb_tu_state_t *state = tu_state(unit);
     parse_symtab_t *symtab = state && state->annotations
         ? state->annotations->symtab : nullptr;
-    for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
-         scope; scope = scope->all_next) {
-        if (!core_string_eq(scope->scope_tag, CORE_STRING_STATIC("for"))
-            || !scope->node || !NT_IS(grammar, scope->node, "for-stmt"))
-            continue;
-        th_type *item_type = parse_tree_type(scope->node);
-        if (closed_only
-            && !CHILD_NT(grammar, scope->node, "for-in-target-list"))
-            continue;
-        if (CHILD_NT(grammar, scope->node, "for-in-target-list")) {
-            parse_tree_t *target = CHILD_NT(grammar, scope->node,
-                                             "for-in-target-list");
-            parse_tree_t *source = CHILD_NT(grammar, target, "expression");
-            th_type *source_type = parse_tree_type(source);
-            if (closed_only && (!source_type || th_is_poison(source_type)
-                    || !th_is_closed(state->types, source_type)))
+    core_dict_t done;
+    core_dict_init(&done, nullptr, nullptr);
+    bool ok = true;
+    bool defer = !closed_only;
+    for (bool pending = true; ok && pending;) {
+        pending = false;
+        bool progress = false;
+        for (parse_scope_t *scope = symtab ? symtab->all_scopes : nullptr;
+             ok && scope; scope = scope->all_next) {
+            if (!core_string_eq(scope->scope_tag, CORE_STRING_STATIC("for"))
+                || !scope->node || !NT_IS(grammar, scope->node, "for-stmt")
+                || core_dict_contains(&done, scope->node))
                 continue;
-            if (th_is_poison(source_type)) {
-                if (!bind_for_item_type(grammar, unit, scope->node,
-                                        source_type)) return false;
-                continue;
+            bool deferred = false;
+            ok = resolve_for_binding(grammar, unit, scope->node, closed_only,
+                                     defer, &deferred);
+            if (deferred) pending = true;
+            else {
+                core_dict_put(&done, scope->node, scope->node);
+                progress = true;
             }
-            th_type *cursor_type = nullptr;
-            th_type *resolved = n00bb_tuple_type(source_type) ? nullptr
-                : resolved_iteration_item_type(grammar, unit, scope->node,
-                                               &cursor_type);
-            if (resolved) item_type = resolved;
-            if (!resolved) {
-                n00bb_report_not_iterable(unit, scope->node);
-                return false;
-            }
-            if (!cache_iteration_plan(grammar, unit, scope->node,
-                    source_type, cursor_type, resolved)) return false;
         }
-        if (!bind_for_item_type(grammar, unit, scope->node, item_type))
-            return false;
+        if (!progress) defer = false;
     }
-    return true;
+    core_dict_free(&done);
+    return ok;
 }
 
 th_type *

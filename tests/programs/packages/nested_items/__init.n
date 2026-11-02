@@ -1,0 +1,5 @@
+import impl
+
+package nested_items {
+    export impl
+}
