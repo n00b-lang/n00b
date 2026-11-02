@@ -837,6 +837,7 @@ core_string_t named_field_identifier(parse_grammar_t *grammar,
                                      parse_tree_t *field);
 bool n00bb_switch_case_integer(parse_grammar_t *grammar,
                                parse_tree_t *node, ir_lit_t *value);
+bool n00bb_switch_case_is_char(parse_grammar_t *grammar, parse_tree_t *node);
 th_type *static_sequence_element_type(th_type *type);
 th_type *static_tuple_element_type(th_type *type, size_t index,
                                    size_t *count);
