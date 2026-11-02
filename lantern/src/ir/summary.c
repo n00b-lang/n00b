@@ -161,6 +161,7 @@ typedef struct {
     core_dict_t              source_index;
     core_list_t(flow_dest_t) dests;
     core_dict_t              dest_index;
+    const ir_func_t         *function;
 } flow_table_t;
 
 struct ir_summary_t {
@@ -179,8 +180,9 @@ struct ir_summary_t {
     core_list_t(ir_spath_t)    paths;
 };
 
-static void flow_table_init(flow_table_t *table);
+static void flow_table_init(flow_table_t *table, const ir_func_t *function);
 static void flow_table_free(flow_table_t *table);
+static bool pointer_class(ir_module_t *module, th_type *type);
 static bool same_flows(const flow_table_t *a, const flow_table_t *b);
 static int  compare_paths(const ir_spath_t *a, const ir_spath_t *b);
 
@@ -241,8 +243,8 @@ ir_summary_new(ir_summaries_t *summaries, const ir_func_t *function)
     summary->heaps       = core_list_new(ir_sheap_t);
     summary->effects     = core_list_new(core_string_t);
     summary->paths       = core_list_new(ir_spath_t);
-    flow_table_init(&summary->flows[IR_SFLOW_RESULTS]);
-    flow_table_init(&summary->flows[IR_SFLOW_STORES]);
+    flow_table_init(&summary->flows[IR_SFLOW_RESULTS], function);
+    flow_table_init(&summary->flows[IR_SFLOW_STORES], function);
     if (summaries) core_list_push(summaries->owned, summary);
     return summary;
 }
@@ -676,10 +678,11 @@ spath_eq(const void *a, const void *b)
 }
 
 static void
-flow_table_init(flow_table_t *table)
+flow_table_init(flow_table_t *table, const ir_func_t *function)
 {
-    table->sources = core_list_new(spath_ptr_t);
-    table->dests   = core_list_new(flow_dest_t);
+    table->sources  = core_list_new(spath_ptr_t);
+    table->dests    = core_list_new(flow_dest_t);
+    table->function = function;
     core_dict_init(&table->source_index, spath_hash, spath_eq);
     core_dict_init(&table->dest_index, spath_hash, spath_eq);
 }
@@ -783,29 +786,64 @@ dest_count(const flow_dest_t *dest)
         + bit_count(&dest->alias) + bit_count(&dest->copy);
 }
 
+static th_type *
+pointer_slot(const flow_table_t *table, const ir_spath_t *path)
+{
+    const ir_func_t *f = table->function;
+    if (!f || !(path->flags & IR_SPATH_DEEP) || (path->flags & IR_SPATH_ROOT)
+        || path->root == IR_SPLACE_UNKNOWN || path->root == IR_SPLACE_HEAP
+        || path->root == IR_SPLACE_SOURCE)
+        return nullptr;
+    th_type *slot = ir_summary_path_type(f, path, path->depth);
+    return slot && pointer_class(f->owner, slot) ? slot : nullptr;
+}
+
+static void
+canonical_sources(const flow_table_t *table, const ir_spath_t *from,
+                  ir_sflow_kind_t kind, path_list_t *out)
+{
+    ir_spath_t key  = canonical_path(from);
+    uint32_t   base = kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT)
+        ? last_deref(from) : UINT32_MAX;
+    if (base != UINT32_MAX) {
+        ir_spath_t pointer = key;
+        pointer.depth  = base;
+        pointer.flags &= (uint8_t)~(IR_SPATH_ROOT | IR_SPATH_DEEP);
+        core_list_push(*out, pointer);
+        if (!(from->flags & IR_SPATH_DEEP)) return;
+        key.flags &= (uint8_t)~IR_SPATH_ROOT;
+    }
+    else if (kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT)
+             && (from->flags & IR_SPATH_DEEP))
+        key.flags &= (uint8_t)~IR_SPATH_ROOT;
+    th_type *slot = pointer_slot(table, &key);
+    while (slot) {
+        ir_spath_t pointer = key;
+        pointer.flags &= (uint8_t)~IR_SPATH_DEEP;
+        core_list_push(*out, pointer);
+        key.steps = steps_append(key.steps, key.depth, value_step);
+        key.depth++;
+        th_type *next = pointer_slot(table, &key);
+        slot = next && next != slot
+                && !ir_type_eq(table->function->owner, next, slot)
+            ? next : nullptr;
+    }
+    core_list_push(*out, key);
+}
+
 static void
 flow_add(flow_table_t *table, const ir_spath_t *to, const ir_spath_t *from,
          ir_sflow_kind_t kind)
 {
-    ir_spath_t   key_to   = canonical_path(to);
-    ir_spath_t   key_from = canonical_path(from);
-    uint32_t     base     = kind != IR_SFLOW_ALIAS
-                                    && (from->flags & IR_SPATH_ROOT)
-                              ? last_deref(from) : UINT32_MAX;
-    if (base != UINT32_MAX) {
-        ir_spath_t pointer = key_from;
-        pointer.depth  = base;
-        pointer.flags &= (uint8_t)~(IR_SPATH_ROOT | IR_SPATH_DEEP);
-        flow_add(table, to, &pointer, kind);
-        if (!(from->flags & IR_SPATH_DEEP)) return;
-        key_from.flags &= (uint8_t)~IR_SPATH_ROOT;
+    path_list_t keys = core_list_new(ir_spath_t);
+    canonical_sources(table, from, kind, &keys);
+    ir_spath_t key_to = canonical_path(to);
+    for (size_t k = 0; k < keys.len; k++) {
+        uint32_t     source = flow_source(table, &keys.data[k]);
+        flow_dest_t *dest   = flow_dest(table, &key_to);
+        bit_set(kind_bits(dest, kind), source);
     }
-    else if (kind != IR_SFLOW_ALIAS && (from->flags & IR_SPATH_ROOT)
-             && (from->flags & IR_SPATH_DEEP))
-        key_from.flags &= (uint8_t)~IR_SPATH_ROOT;
-    uint32_t     source   = flow_source(table, &key_from);
-    flow_dest_t *dest     = flow_dest(table, &key_to);
-    bit_set(kind_bits(dest, kind), source);
+    core_list_free(keys);
 }
 
 static bool
@@ -945,51 +983,6 @@ sorted_paths(spath_ptr_t *paths, uint32_t count)
 }
 
 static bool
-dependence_address(const ir_spath_t *from)
-{
-    return (from->flags & IR_SPATH_ROOT)
-        && (first_deref(from->steps, from->depth) < from->depth
-            || (from->flags & IR_SPATH_DEEP));
-}
-
-typedef struct {
-    uint32_t        dest, source;
-    ir_sflow_kind_t kind;
-} moved_flow_t;
-
-core_list_decl(moved_flow_t);
-typedef core_list_t(moved_flow_t) moved_list_t;
-
-static void
-take_source(flow_table_t *table, uint32_t s, bool alias, moved_list_t *moved)
-{
-    for (uint32_t d = 0; d < table->dests.len; d++) {
-        flow_dest_t *dest = &table->dests.data[d];
-        for (int kind = IR_SFLOW_DATA; kind <= IR_SFLOW_COPY; kind++) {
-            if (kind == IR_SFLOW_ALIAS && !alias) continue;
-            flow_bits_t *bits = kind_bits(dest, kind);
-            if (!bit_has(bits, s)) continue;
-            bits->data[s / 64] &= ~(UINT64_C(1) << (s % 64));
-            core_list_push(*moved, ((moved_flow_t){d, s, kind}));
-        }
-    }
-}
-
-static void
-canonical_dependences(flow_table_t *table)
-{
-    moved_list_t moved = core_list_new(moved_flow_t);
-    for (uint32_t s = 0; s < table->sources.len; s++)
-        if (dependence_address(table->sources.data[s]))
-            take_source(table, s, false, &moved);
-    for (size_t m = 0; m < moved.len; m++)
-        flow_add(table, table->dests.data[moved.data[m].dest].to,
-                 table->sources.data[moved.data[m].source],
-                 moved.data[m].kind);
-    core_list_free(moved);
-}
-
-static bool
 pointee_reach_of(const ir_spath_t *reach, const ir_spath_t *pointer)
 {
     if (!(reach->flags & IR_SPATH_DEEP) || !same_path_root(reach, pointer))
@@ -1032,7 +1025,6 @@ pointer_covered(flow_table_t *table, const index_list_t *dests, uint32_t d,
 static void
 prune_flows(flow_table_t *table)
 {
-    canonical_dependences(table);
     uint32_t      dest_count   = (uint32_t)table->dests.len;
     uint32_t      source_count = (uint32_t)table->sources.len;
     spath_ptr_t  *to = core_alloc_array(spath_ptr_t, dest_count + 1);
@@ -1068,7 +1060,7 @@ prune_flows(flow_table_t *table)
                                               source_count);
     uint32_t     *renumber     = core_alloc_array(uint32_t, source_count + 1);
     flow_table_t  pruned;
-    flow_table_init(&pruned);
+    flow_table_init(&pruned, table->function);
     for (uint32_t i = 0; i < source_count; i++)
         if (used[source_order[i]])
             renumber[source_order[i]] =
@@ -1340,7 +1332,6 @@ returns_pointers(const ir_summary_t *summary)
 }
 
 static th_type *pointee_type(ir_module_t *module, th_type *type);
-static bool     pointer_class(ir_module_t *module, th_type *type);
 static bool     generic_type(th_type *type);
 
 static uint8_t
@@ -5460,23 +5451,34 @@ canonical_item(pt_item_t *item)
     if (!loc_deep(&item->loc)) item->kind = PT_ADDRESS;
 }
 
+static bool
+param_object(const ir_func_t *function, const ir_spath_t *path,
+             ir_spath_t *object, th_type **root)
+{
+    *object = *path;
+    *root   = root_object_type(function, path, nullptr);
+    th_type *pointee = path->root == IR_SPLACE_PARAM && *root && function
+        ? pointee_type(function->owner, *root) : nullptr;
+    if (!pointee) return true;
+    *root = defined_type(function, pointee);
+    if (path->depth && step_eq(path->steps[0], value_step)) {
+        object->steps++;
+        object->depth--;
+        return true;
+    }
+    return !path->depth && (path->flags & IR_SPATH_DEEP);
+}
+
 bool
 ir_summary_path_inline(const ir_func_t *function, const ir_spath_t *path)
 {
     if (path->flags & IR_SPATH_DEEP) return false;
     if (!path->depth) return true;
-    th_type   *root    = root_object_type(function, path, nullptr);
-    th_type   *pointee = path->root == IR_SPLACE_PARAM && root && function
-        ? pointee_type(function->owner, root) : nullptr;
-    ir_spath_t object  = *path;
-    if (pointee) {
-        if (!step_eq(path->steps[0], value_step)) return false;
-        object.steps++;
-        object.depth--;
-        if (!object.depth) return true;
-        root = pointee;
-        path = &object;
-    }
+    ir_spath_t object;
+    th_type   *root = nullptr;
+    if (!param_object(function, path, &object, &root)) return false;
+    if (!object.depth) return true;
+    path = &object;
     th_type *defined = function && root ? defined_type(function, root)
                                         : nullptr;
     bool     known   = true;
@@ -5542,23 +5544,10 @@ ir_summary_path_places(const ir_func_t *function, const ir_spath_t *path,
     default:
         break;
     }
-    ir_spath_t referent = *path;
-    th_type   *root     = root_object_type(function, path, nullptr);
-    ir_module_t *owner   = function ? function->owner : nullptr;
-    th_type     *pointee = path->root == IR_SPLACE_PARAM && root
-        ? pointee_type(owner, root) : nullptr;
-    if (pointee) {
-        if (path->depth && step_eq(path->steps[0], value_step)) {
-            referent.steps++;
-            referent.depth--;
-        }
-        else if (!path->depth && !(path->flags & IR_SPATH_ROOT))
-            referent.flags |= IR_SPATH_ROOT;
-        else
-            return 0;
-        root = defined_type(function, pointee);
-        path = &referent;
-    }
+    ir_spath_t referent;
+    th_type   *root = nullptr;
+    if (!param_object(function, path, &referent, &root)) return 0;
+    path = &referent;
     bool     known  = true;
     uint32_t inside = path->depth;
     if (path->depth && function && root)
@@ -7728,22 +7717,51 @@ name_loc(pt_t *pt, const pt_loc_t *loc, path_list_t *into,
     }
 }
 
-static uint32_t
-summary_source(pt_t *pt, flow_table_t *flows, uint32_t name)
+typedef struct {
+    core_list_t(uint64_t) spans;
+    core_list_t(uint32_t) pool;
+} source_map_t;
+
+static void
+push_sources(flow_table_t *flows, const ir_spath_t *from,
+             ir_sflow_kind_t kind, core_list_t(uint64_t) *parts)
 {
-    bool                   found = false;
-    core_list_t(uint32_t) *map   = core_dict_get(&pt->source_maps, flows,
-                                                 &found);
+    path_list_t keys = core_list_new(ir_spath_t);
+    canonical_sources(flows, from, kind, &keys);
+    for (size_t k = 0; k < keys.len; k++)
+        core_list_push(*parts, (uint64_t)flow_source(flows, &keys.data[k])
+                                       << 8
+                                   | kind);
+    core_list_free(keys);
+}
+
+static void
+summary_sources(pt_t *pt, flow_table_t *flows, uint32_t name,
+                ir_sflow_kind_t kind, core_list_t(uint64_t) *parts)
+{
+    bool          found = false;
+    source_map_t *map   = core_dict_get(&pt->source_maps, flows, &found);
     if (!map) {
-        map  = core_alloc(core_list_t(uint32_t));
-        *map = core_list_new(uint32_t);
+        map  = core_alloc(source_map_t);
+        *map = (source_map_t){.spans = core_list_new(uint64_t),
+                              .pool  = core_list_new(uint32_t)};
         core_dict_put(&pt->source_maps, flows, map);
     }
-    while (map->len <= name) core_list_push(*map, UINT32_MAX);
-    if (map->data[name] == UINT32_MAX)
-        map->data[name] = flow_source(flows,
-                                      pt->source_names.sources.data[name]);
-    return map->data[name];
+    while (map->spans.len <= name) core_list_push(map->spans, UINT64_MAX);
+    if (map->spans.data[name] == UINT64_MAX) {
+        core_list_t(uint64_t) found_parts = core_list_new(uint64_t);
+        push_sources(flows, pt->source_names.sources.data[name],
+                     IR_SFLOW_DATA, &found_parts);
+        map->spans.data[name] = (uint64_t)map->pool.len << 32
+                              | found_parts.len;
+        for (size_t p = 0; p < found_parts.len; p++)
+            core_list_push(map->pool, (uint32_t)(found_parts.data[p] >> 8));
+        core_list_free(found_parts);
+    }
+    uint64_t span  = map->spans.data[name];
+    uint32_t start = (uint32_t)(span >> 32);
+    for (uint32_t p = 0; p < (uint32_t)span; p++)
+        core_list_push(*parts, (uint64_t)map->pool.data[start + p] << 8 | kind);
 }
 
 typedef struct {
@@ -8007,9 +8025,7 @@ describe_names(pt_t *pt, const pt_item_t *item, flow_table_t *flows,
                 name->depth--;
             else name->flags |= IR_SPATH_ROOT;
         }
-        ir_spath_t key = canonical_path(name);
-        core_list_push(*parts,
-                       (uint64_t)flow_source(flows, &key) << 8 | kind);
+        push_sources(flows, name, kind, parts);
     }
     core_list_free(from);
 }
@@ -8037,10 +8053,7 @@ describe_values(pt_t *pt, const pt_set_t *values, const ir_spath_t *bases,
                     ir_sflow_kind_t kind = bit_has(data, s)
                             && item->flow != PT_CONTROL
                         ? IR_SFLOW_DATA : IR_SFLOW_CONTROL;
-                    core_list_push(parts,
-                                   (uint64_t)summary_source(pt, flows, s)
-                                           << 8
-                                       | kind);
+                    summary_sources(pt, flows, s, kind, &parts);
                 }
             }
         }
@@ -8246,7 +8259,7 @@ pt_init(pt_t *pt, ir_summaries_t *summaries, const ir_func_t *f,
     core_dict_init(&pt->stored, resolved_hash, resolved_eq);
     core_dict_init(&pt->valued, valued_hash, valued_eq);
     core_dict_init(&pt->site_sources, resolved_hash, resolved_eq);
-    flow_table_init(&pt->source_names);
+    flow_table_init(&pt->source_names, nullptr);
     core_dict_init(&pt->source_maps, nullptr, nullptr);
     core_dict_init(&pt->flow_nodes, flow_node_hash, flow_node_eq);
     core_dict_init(&pt->heap_sites, heap_site_hash, heap_site_eq);
@@ -8379,8 +8392,9 @@ pt_free(pt_t *pt)
     core_dict_free(&pt->site_sources);
     flow_table_free(&pt->source_names);
     core_dict_foreach(&pt->source_maps, entry) {
-        core_list_t(uint32_t) *map = entry->value;
-        core_list_free(*map);
+        source_map_t *map = entry->value;
+        core_list_free(map->spans);
+        core_list_free(map->pool);
         core_free(map);
     }
     core_dict_free(&pt->source_maps);
@@ -9428,34 +9442,6 @@ join_rounds(ir_summary_t *next, const ir_summary_t *previous)
                &previous->flows[IR_SFLOW_STORES]);
 }
 
-static void
-split_pointer_sources(const ir_func_t *f, flow_table_t *table)
-{
-    moved_list_t moved = core_list_new(moved_flow_t);
-    for (uint32_t s = 0; s < table->sources.len; s++) {
-        const ir_spath_t *from = table->sources.data[s];
-        if (!(from->flags & IR_SPATH_DEEP) || (from->flags & IR_SPATH_ROOT)
-            || from->root == IR_SPLACE_UNKNOWN || from->root == IR_SPLACE_HEAP
-            || from->root == IR_SPLACE_SOURCE)
-            continue;
-        th_type *slot = ir_summary_path_type(f, from, from->depth);
-        if (!slot || !pointee_type(f ? f->owner : nullptr, slot)) continue;
-        take_source(table, s, true, &moved);
-    }
-    for (size_t m = 0; m < moved.len; m++) {
-        const ir_spath_t *from = table->sources.data[moved.data[m].source];
-        ir_spath_t pointer = *from;
-        pointer.flags &= (uint8_t)~IR_SPATH_DEEP;
-        ir_spath_t pointee = pointer;
-        pointee.steps = steps_append(from->steps, from->depth, value_step);
-        pointee.depth = from->depth + 1;
-        pointee.flags |= IR_SPATH_DEEP;
-        const ir_spath_t *to = table->dests.data[moved.data[m].dest].to;
-        flow_add(table, to, &pointer, moved.data[m].kind);
-        flow_add(table, to, &pointee, moved.data[m].kind);
-    }
-    core_list_free(moved);
-}
 
 static void
 solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
@@ -9503,8 +9489,6 @@ solve_component(ir_summaries_t *summaries, ir_func_t *const *members,
             ir_analysis_scope_end(scope);
             if (cyclic && !summaries->escapes_only)
                 next->flags = (next->flags & ~shrinking) | settled[i];
-            split_pointer_sources(members[i], &next->flows[IR_SFLOW_RESULTS]);
-            split_pointer_sources(members[i], &next->flows[IR_SFLOW_STORES]);
             if (cyclic) join_rounds(next, summary);
             prune_flows(&next->flows[IR_SFLOW_RESULTS]);
             prune_flows(&next->flows[IR_SFLOW_STORES]);
