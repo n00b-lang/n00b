@@ -1852,6 +1852,22 @@ func tuples_check() {
     require tuple_global_c == "three"
 }
 
+func integer_text_check() {
+    let count: uint = 42
+    let delta: int = -17
+    let full: u8 = 255
+    let lowest: i8 = -128
+    let widest: u128 = 0xffffffffffffffffffffffffffffffff
+    let deepest: i128 = -170141183460469231731687303715884105728
+    require decimal(count) == "42" and decimal(delta) == "-17"
+    require decimal(full) == "255" and decimal(lowest) == "-128"
+    require decimal(widest) == "340282366920938463463374607431768211455"
+    require decimal(deepest) == "-170141183460469231731687303715884105728"
+    require hex(full) == "0xff" and hex(delta) == "-0x11"
+    require hex(cast[u32] 0x110000) == "0x110000"
+    require "count=" + decimal(count) == "count=42"
+}
+
 func hash_container_order_check() {
     var table: Dict[string, int] = new[Dict[string, int]]()
     _ = table.put("a", 1)
@@ -2033,5 +2049,6 @@ func start() -> nil {
     primitive_operator_method_check()
     char_switch_check()
     hash_container_order_check()
+    integer_text_check()
     __fd_write(2, "ok")
 }

@@ -1,4 +1,5 @@
 import abi
+import integer
 import string.core
 import litmod_site
 
@@ -16,13 +17,6 @@ private inline func open_read_flags() -> int {
     } else {
         return 0
     }
-}
-
-private func decimal(n: uint) -> string {
-    if n < 10 {
-        return string.core.from_char(cast[char] (0x30 + n))
-    }
-    return decimal(n / 10) + string.core.from_char(cast[char] (0x30 + n % 10))
 }
 
 private func blank(b: u8) -> bool {
@@ -149,8 +143,9 @@ fence litmod embed(contents: string, site: litmod_site.Literal_Site)
     let size: uint = file_size(fd, path)!
     if size % stride != 0 {
         __os_close(fd)
-        fail path + " is " + decimal(size) + " bytes, not a whole number of " +
-            decimal(stride) + "-byte " + name + " elements"
+        fail path + " is " + integer.decimal(size) +
+            " bytes, not a whole number of " + integer.decimal(stride) +
+            "-byte " + name + " elements"
     }
     items = new[Array['E]](cast[int] (size / stride))
     if size > 0 {

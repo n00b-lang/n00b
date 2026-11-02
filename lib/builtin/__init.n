@@ -12,6 +12,7 @@ import integer
 import containers.traits
 import io.debug
 import io.raw
+import io.format
 import ffi
 import panic
 import string.core
@@ -177,6 +178,8 @@ package builtin {
     export containers.traits.TreeLike
     export io.debug.raw_debug
     export io.raw.Raw_Repr
+    export integer.decimal
+    export integer.hex
     export litmod_site.Literal_Site
     export embed.embed
     export panic.os_failure to sys
