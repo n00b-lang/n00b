@@ -1868,6 +1868,40 @@ func integer_text_check() {
     require "count=" + decimal(count) == "count=42"
 }
 
+record Indexed_Group {
+    index: uint
+    sites: List[uint]
+}
+
+func indexed_groups(n: uint) -> List[Indexed_Group] {
+    var out: List[Indexed_Group] = new[List[Indexed_Group]]()
+    var sites: List[uint] = new[List[uint]]()
+    sites.append(n + 5)
+    out.append((index = n, sites = sites))
+    return out
+}
+
+func loop_field_index_check() {
+    var names: List[string] = new[List[string]]()
+    names.append("a")
+    names.append("bb")
+    var total: uint = 0
+    for let group in indexed_groups(1) {
+        let name: string = names[group.index]
+        for let site in group.sites {
+            total += site + byte_len(name)
+        }
+    }
+    for let group in indexed_groups(0) {
+        total += group.sites[0] + byte_len(names[group.index])
+    }
+    let order: Array[uint] = [1, 0, 1]
+    for given in order {
+        total += byte_len(names[given])
+    }
+    require total == 19
+}
+
 func hash_container_order_check() {
     var table: Dict[string, int] = new[Dict[string, int]]()
     _ = table.put("a", 1)
@@ -2050,5 +2084,6 @@ func start() -> nil {
     char_switch_check()
     hash_container_order_check()
     integer_text_check()
+    loop_field_index_check()
     __fd_write(2, "ok")
 }
